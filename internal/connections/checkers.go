@@ -182,7 +182,8 @@ func digitalOceanGrant(credential []byte) (g oauth.Grant, ok bool, err error) {
 
 // IsGrant implements GrantChecker.
 func (DigitalOceanChecker) IsGrant(credential []byte) bool {
-	_, isGrant, _ := digitalOceanGrant(credential)
+	// A grant that doesn't parse is still a grant; Parse says what's wrong.
+	_, isGrant, _ := digitalOceanGrant(credential) //nolint:errcheck // only whether it's a grant matters here
 	return isGrant
 }
 
@@ -220,7 +221,7 @@ func (d DigitalOceanChecker) Check(ctx context.Context, credential []byte, setti
 		return Check{}, err
 	}
 	token := strings.TrimSpace(string(credential))
-	if g, isGrant, _ := digitalOceanGrant(credential); isGrant {
+	if g, isGrant, _ := digitalOceanGrant(credential); isGrant { //nolint:errcheck // Parse refused a bad grant above
 		token = g.AccessToken
 	}
 	a, err := d.Client.Account(ctx, token)

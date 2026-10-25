@@ -64,7 +64,8 @@ func (g *renewGate) enter(ctx context.Context, key string) (leave func(), err er
 	g.mu.Unlock()
 	forget := func() {
 		g.mu.Lock()
-		if q.users--; q.users == 0 {
+		q.users--
+		if q.users == 0 {
 			delete(g.queue, key)
 		}
 		g.mu.Unlock()
@@ -154,12 +155,12 @@ func (s *Service) renew(ctx context.Context, c *Connection, held oauth.Grant, ah
 	}
 	defer leave()
 	// Whoever went first has most likely renewed it already.
-	if latest, err := s.readGrant(ctx, c); err == nil && !latest.Due(s.now(), ahead) {
+	if latest, readErr := s.readGrant(ctx, c); readErr == nil && !latest.Due(s.now(), ahead) {
 		return latest, false, nil
 	}
 	var lapsed *Connection
 	var why string
-	err = s.grants.WithConnectionLock(ctx, c.OrgID, c.ID, func() error {
+	lockErr := s.grants.WithConnectionLock(ctx, c.OrgID, c.ID, func() error {
 		current, err := s.store.GetConnection(ctx, c.OrgID, c.ID)
 		if err != nil {
 			return err
@@ -207,7 +208,7 @@ func (s *Service) renew(ctx context.Context, c *Connection, held oauth.Grant, ah
 		if fresh.Account == nil {
 			fresh.Account = latest.Account
 		}
-		raw, err := json.Marshal(fresh)
+		raw, err := json.Marshal(fresh) // #nosec G117 -- the grant is the credential, bound for Vault, never a response.
 		if err != nil {
 			return fmt.Errorf("encode the renewed sign-in: %w", err)
 		}
@@ -219,8 +220,8 @@ func (s *Service) renew(ctx context.Context, c *Connection, held oauth.Grant, ah
 		g, renewed = fresh, true
 		return nil
 	})
-	if err != nil {
-		return oauth.Grant{}, false, err
+	if lockErr != nil {
+		return oauth.Grant{}, false, lockErr
 	}
 	if why != "" {
 		if lapsed != nil && s.Lapsed != nil {

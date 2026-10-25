@@ -73,7 +73,7 @@ func NewService(store Store, secrets Secrets, checkers map[string]Checker, authz
 	if warn == nil {
 		warn = func(string, error) {}
 	}
-	grants, _ := store.(grantStore)
+	grants, _ := store.(grantStore) //nolint:errcheck // a store that can't lock leaves grants nil, as documented
 	return &Service{store: store, secrets: secrets, checkers: checkers, authz: authz, audit: audit, now: time.Now, warn: warn, grants: grants, renewals: newRenewGate(maxRenewals)}
 }
 
@@ -175,8 +175,8 @@ func (s *Service) create(ctx context.Context, p security.Principal, cloud, name 
 	if err != nil {
 		return nil, err
 	}
-	if err := refusePastedGrant(checker, cred, method); err != nil {
-		return nil, err
+	if refuseErr := refusePastedGrant(checker, cred, method); refuseErr != nil {
+		return nil, refuseErr
 	}
 	res, err := s.check(ctx, cloud, checker, cred, settings)
 	if err != nil {
@@ -245,18 +245,18 @@ func (s *Service) Recheck(ctx context.Context, p security.Principal, id string) 
 	var cred []byte
 	if c.Method == MethodOAuth {
 		// Check the grant a deployment would get, renewed if it's due.
-		g, err := s.usableGrant(ctx, c)
-		if errors.Is(err, ErrNotReady) {
+		g, grantErr := s.usableGrant(ctx, c)
+		if errors.Is(grantErr, ErrNotReady) {
 			if c, err = s.store.GetConnection(ctx, p.OrgID, id); err != nil {
 				return nil, err
 			}
 			s.record(ctx, "cloud_connection.check", p, c)
 			return c, nil
 		}
-		if err != nil {
-			return nil, err
+		if grantErr != nil {
+			return nil, grantErr
 		}
-		if cred, err = json.Marshal(g); err != nil {
+		if cred, err = json.Marshal(g); err != nil { // #nosec G117 -- the grant is the credential, bound for Vault, never a response.
 			return nil, fmt.Errorf("encode sign-in grant: %w", err)
 		}
 	} else if cred, err = s.secrets.Reveal(ctx, p.OrgID, c.ID); err != nil {
@@ -318,8 +318,8 @@ func (s *Service) replace(ctx context.Context, p security.Principal, id string, 
 	if err != nil {
 		return nil, err
 	}
-	if err := refusePastedGrant(checker, cred, method); err != nil {
-		return nil, err
+	if refuseErr := refusePastedGrant(checker, cred, method); refuseErr != nil {
+		return nil, refuseErr
 	}
 	before := AccountIdentity(c.Cloud, c.Account, c.Details)
 	if legacyPersonalVercel(c) {
@@ -408,9 +408,9 @@ func (s *Service) Credential(ctx context.Context, orgID, id string) (*Connection
 	}
 	var cred []byte
 	if c.Method == MethodOAuth {
-		g, err := s.usableGrant(ctx, c)
-		if err != nil {
-			return nil, nil, err
+		g, grantErr := s.usableGrant(ctx, c)
+		if grantErr != nil {
+			return nil, nil, grantErr
 		}
 		cred = []byte(g.AccessToken)
 	} else if cred, err = s.secrets.Reveal(ctx, orgID, id); err != nil {

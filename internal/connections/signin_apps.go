@@ -2,6 +2,7 @@ package connections
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -176,14 +177,14 @@ func (s *Service) app(ctx context.Context, orgID, cloud string) (oauth.App, erro
 		return cfg, nil
 	}
 	stored, err := s.Apps.GetApp(ctx, orgID, cloud)
-	if err == ErrNotFound {
+	if errors.Is(err, ErrNotFound) {
 		return oauth.App{}, ErrNoApp
 	}
 	if err != nil {
 		return oauth.App{}, err
 	}
 	secret, err := s.AppSecrets.Reveal(ctx, orgID, cloud)
-	if err == ErrNotFound {
+	if errors.Is(err, ErrNotFound) {
 		return oauth.App{}, ErrNoApp
 	}
 	if err != nil {

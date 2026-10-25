@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/xraph/chronicle"
@@ -24,6 +25,7 @@ import (
 	"github.com/xraph/loomplane/internal/clouds/azure"
 	"github.com/xraph/loomplane/internal/clouds/digitalocean"
 	"github.com/xraph/loomplane/internal/clouds/gcp"
+	"github.com/xraph/loomplane/internal/clouds/oauth"
 	"github.com/xraph/loomplane/internal/clouds/render"
 	"github.com/xraph/loomplane/internal/clouds/vercel"
 	"github.com/xraph/loomplane/internal/config"
@@ -119,12 +121,26 @@ func (e *Extension) Register(fapp forge.App) error {
 			checkers[p.Cloud()] = connections.PluginChecker{Client: p.Client}
 		}
 	}
+	store := connections.NewPgStore(pgdriver.Unwrap(db))
 	e.svc = connections.NewService(
-		connections.NewPgStore(pgdriver.Unwrap(db)), secrets,
+		store, secrets,
 		checkers,
 		authz, auditor{chronicle: audit, appID: e.cfg.Identity.AppID, log: log},
 		func(msg string, err error) { log.Warn(msg, forge.F("error", err.Error())) },
 	)
+	// Signing in. An org's own sign-in app secrets share the credentials'
+	// key but live under a Vault app of their own.
+	e.svc.Apps = store
+	e.svc.AppSecrets = connections.NewVaultSecretsFor(
+		secret.NewService(vaultpg.New(db), enc, secret.WithAppID(connections.OAuthAppsVaultAppID)), connections.OAuthAppsVaultAppID)
+	e.svc.Providers = map[string]connections.Provider{
+		connections.DigitalOcean: digitalocean.New(e.cfg.Clouds.DigitalOceanEndpoint),
+	}
+	e.svc.ConfigApps = map[string]oauth.App{}
+	for cloud, app := range e.cfg.Clouds.OAuth {
+		e.svc.ConfigApps[cloud] = oauth.App{ClientID: app.ClientID, ClientSecret: app.ClientSecret}
+	}
+	e.svc.CallbackURL = callbackURL(e.cfg.PublicURL)
 	mail, err := forge.InjectType[*notifications.Service](c)
 	if err != nil {
 		return fmt.Errorf("connections needs the notification delivery extension: %w", err)
@@ -148,14 +164,21 @@ func (e *Extension) Start(context.Context) error {
 	return nil
 }
 
+// callbackURL is where every cloud sends people back to after they sign
+// in. The dashboard serves it.
+func callbackURL(publicURL string) string {
+	return strings.TrimRight(publicURL, "/") + "/integrations/oauth/callback"
+}
+
 // fail maps a service error to its HTTP response.
 func fail(err error) error {
 	switch {
 	case errors.Is(err, connections.ErrNotFound):
 		return forge.NewHTTPError(http.StatusNotFound, err.Error())
-	case errors.Is(err, connections.ErrExists), errors.Is(err, connections.ErrInUse), errors.Is(err, connections.ErrChanged):
+	case errors.Is(err, connections.ErrExists), errors.Is(err, connections.ErrInUse), errors.Is(err, connections.ErrChanged),
+		errors.Is(err, connections.ErrAppLocked):
 		return forge.NewHTTPError(http.StatusConflict, err.Error())
-	case errors.Is(err, connections.ErrInvalid):
+	case errors.Is(err, connections.ErrInvalid), errors.Is(err, connections.ErrNoApp):
 		return forge.NewHTTPError(http.StatusUnprocessableEntity, err.Error())
 	case errors.Is(err, connections.ErrUnavailable):
 		return forge.NewHTTPError(http.StatusServiceUnavailable, err.Error())

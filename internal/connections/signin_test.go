@@ -236,6 +236,19 @@ func TestStartSignInNeedsAnApp(t *testing.T) {
 	}
 }
 
+// A Loomplane without a callback URL can't send anyone to sign in, so it
+// says so before recording anything.
+func TestStartSignInNeedsACallbackURL(t *testing.T) {
+	r := newSignInRig(t)
+	r.s.CallbackURL = ""
+	if _, err := r.s.StartSignIn(t.Context(), starter, SignInInput{Cloud: DigitalOcean, Name: "Acme"}); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("got %v", err)
+	}
+	if len(r.apps.signIns) != 0 {
+		t.Fatalf("stored a sign-in without a callback URL: %v", r.apps.signIns)
+	}
+}
+
 func TestCompleteSignInCreatesAnOAuthConnection(t *testing.T) {
 	r := newSignInRig(t)
 	state := r.start(t, starter, SignInInput{Cloud: DigitalOcean, Name: "Acme"})
@@ -282,8 +295,8 @@ func TestCompleteSignInIsSingleUseAndBoundToItsStarter(t *testing.T) {
 		"another user": {OrgID: "org", UserID: "bob"},
 		"another org":  {OrgID: "elsewhere", UserID: "ada"},
 	} {
-		state := r.start(t, starter, SignInInput{Cloud: DigitalOcean, Name: "Acme " + name})
-		if _, err := r.s.CompleteSignIn(t.Context(), p, CompleteInput{State: state, Code: "code-team-1"}); !errors.Is(err, ErrInvalid) {
+		theirs := r.start(t, starter, SignInInput{Cloud: DigitalOcean, Name: "Acme " + name})
+		if _, err := r.s.CompleteSignIn(t.Context(), p, CompleteInput{State: theirs, Code: "code-team-1"}); !errors.Is(err, ErrInvalid) {
 			t.Fatalf("%s: %v", name, err)
 		}
 	}
@@ -375,11 +388,11 @@ func TestDigitalOceanCheckerReadsAGrant(t *testing.T) {
 		t.Fatalf("parse: %+v %v", parsed, err)
 	}
 	solo, _ := json.Marshal(oauth.Grant{AccessToken: "at-solo", Account: map[string]string{"account_uuid": "acct-2", "email": "bob@example.com"}})
-	if parsed, err := checker.Parse(solo, nil); err != nil || parsed.Account != "bob@example.com" || parsed.Details["team_uuid"] != "" {
+	if parsed, err = checker.Parse(solo, nil); err != nil || parsed.Account != "bob@example.com" || parsed.Details["team_uuid"] != "" {
 		t.Fatalf("solo parse: %+v %v", parsed, err)
 	}
 	for _, bad := range []string{`{"access_token":""}`, `{"access_token":`, `{}`} {
-		if _, err := checker.Parse([]byte(bad), nil); !errors.Is(err, ErrInvalid) {
+		if _, err = checker.Parse([]byte(bad), nil); !errors.Is(err, ErrInvalid) {
 			t.Errorf("%s: %v", bad, err)
 		}
 	}

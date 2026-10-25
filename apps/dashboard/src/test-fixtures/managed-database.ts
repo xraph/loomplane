@@ -49,6 +49,7 @@ export function managedDatabaseFixture(target: "rds" | "cloud-sql") {
     generation: 1,
     name: "Selected account",
     cloud: provider.cloud,
+    method: "token",
     status: "ready",
     orgId: "org",
     account: aws ? "123456789012" : "project-a",

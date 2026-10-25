@@ -43,6 +43,11 @@ func (s *Service) StartSignIn(ctx context.Context, p security.Principal, in Sign
 	if err := s.authz.Require(ctx, p, security.CloudAccountManage, ""); err != nil {
 		return nil, err
 	}
+	// The cloud sends people back to the callback URL. Without one, a
+	// sign-in could never finish, so none is recorded.
+	if s.CallbackURL == "" {
+		return nil, fmt.Errorf("%w: Loomplane has no callback URL for sign-ins; set public_url", ErrUnavailable)
+	}
 	cloud := strings.TrimSpace(in.Cloud)
 	if err := s.provider(cloud); err != nil {
 		return nil, err
@@ -109,8 +114,8 @@ func (s *Service) CompleteSignIn(ctx context.Context, p security.Principal, in C
 	if !s.now().Before(pending.ExpiresAt) {
 		return nil, fmt.Errorf("%w: this sign-in expired; start again", ErrInvalid)
 	}
-	if err := s.provider(pending.Cloud); err != nil {
-		return nil, err
+	if providerErr := s.provider(pending.Cloud); providerErr != nil {
+		return nil, providerErr
 	}
 	app, err := s.app(ctx, p.OrgID, pending.Cloud)
 	if err != nil {
@@ -123,7 +128,7 @@ func (s *Service) CompleteSignIn(ctx context.Context, p security.Principal, in C
 	case err != nil:
 		return nil, fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
-	cred, err := json.Marshal(grant)
+	cred, err := json.Marshal(grant) // #nosec G117 -- the grant is the credential, bound for Vault, never a response.
 	if err != nil {
 		return nil, fmt.Errorf("encode sign-in grant: %w", err)
 	}

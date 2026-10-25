@@ -10,7 +10,7 @@
 import { query, mutation } from '@forge-go/client-core';
 import { ops } from './ops';
 
-import type { APIKeyList, ActivitySummary, Analysis, AnalysisGraph, AnalysisList, Backup, BackupList, BindingList, CatalogKindList, CatalogconnectEndpoint, CloudProjectGrantList, CloudSyncList, CloudTargetList, CloudinfraRoute, ConnectedRepositoryList, Connection, ConnectionList, ConnectionsCloudList, DeliveryList, DeployedList, Deployment, DeploymentList, DomainOperationList, DomainRouteList, EndpointList, Environment, EnvironmentCloud, EnvironmentConnections, EnvironmentList, GitHubInstallation, GitHubStatus, IdentitySession, InfrastructureStatus, LogPage, ManifestDraft, NativeInventory, NativePITRWindow, NativeRecoveryCopies, NativeRecoverySources, NativeRestore, NativeRetentionPolicy, NativeRetentionPolicyState, NativeRetirement, NativeRetirementPage, NotificationList, Operation, OperationList, OrgInvitationList, OrgMemberList, Plan, PlanList, PlanningCloudList, Policy, PolicyList, Pool, PoolList, Preferences, Preview, Profile, Project, ProjectList, ProjectView, ProjectZoneList, ProviderList, PublicConfig, Resolution, Restore, RestoreList, RetentionPolicy, RetentionPolicyHistory, RetentionPolicyState, RetentionPreview, Retirement, RetirementHistory, RetirementPage, Revision, RevisionList, RouteOperation, Server, ServerList, ServerOptions, ServerUsage, Snapshot, Source, SourceList, SpendReport, StorageVolumeList, Sync, Target, TrafficReport, Variable, VariableList, WebhookEndpointList, Zone, ZoneList } from './types';
+import type { APIKeyList, ActivitySummary, Analysis, AnalysisGraph, AnalysisList, Backup, BackupList, BindingList, CatalogKindList, CatalogconnectEndpoint, CloudProjectGrantList, CloudSyncList, CloudTargetList, CloudinfraRoute, ConnectedRepositoryList, Connection, ConnectionList, ConnectionsCloudList, DeliveryList, DeployedList, Deployment, DeploymentList, DomainOperationList, DomainRouteList, EndpointList, Environment, EnvironmentCloud, EnvironmentConnections, EnvironmentList, GitHubInstallation, GitHubStatus, IdentitySession, InfrastructureStatus, LogPage, ManifestDraft, NativeInventory, NativePITRWindow, NativeRecoveryCopies, NativeRecoverySources, NativeRestore, NativeRetentionPolicy, NativeRetentionPolicyState, NativeRetirement, NativeRetirementPage, NotificationList, Operation, OperationList, OrgInvitationList, OrgMemberList, Plan, PlanList, PlanningCloudList, Policy, PolicyList, Pool, PoolList, Preferences, Preview, Profile, Project, ProjectList, ProjectView, ProjectZoneList, ProviderList, PublicConfig, Resolution, Restore, RestoreList, RetentionPolicy, RetentionPolicyHistory, RetentionPolicyState, RetentionPreview, Retirement, RetirementHistory, RetirementPage, Revision, RevisionList, RouteOperation, Server, ServerList, ServerOptions, ServerUsage, SignInAppList, Snapshot, Source, SourceList, SpendReport, StorageVolumeList, Sync, Target, TrafficReport, Variable, VariableList, WebhookEndpointList, Zone, ZoneList } from './types';
 
 export const useActivityGet = query<ActivitySummary>(ops['activity.get']);
 export const useAnalysesGet = query<Analysis>(ops['analyses.get']);
@@ -23,6 +23,9 @@ export const useCatalogEndpointsCreate = mutation<CatalogconnectEndpoint, Catalo
 export const useCatalogEndpointsCheck = mutation(ops['catalogEndpoints.check']);
 export const useCatalogEndpointsDelete = mutation(ops['catalogEndpoints.delete']);
 export const useCatalogKindsList = query<CatalogKindList>(ops['catalogKinds.list']);
+export const useCloudSignInAppsList = query<SignInAppList>(ops['cloudSignInApps.list']);
+export const useCloudSignInAppsSet = mutation(ops['cloudSignInApps.set']);
+export const useCloudSignInAppsDelete = mutation(ops['cloudSignInApps.delete']);
 export const useOrganizationCloudsList = query<PlanningCloudList>(ops['organizationClouds.list']);
 export const useOrganizationCloudsCreate = mutation<Profile, Profile>(ops['organizationClouds.create']);
 export const useOrganizationCloudChangesApply = mutation<Sync, Sync>(ops['organizationCloudChanges.apply']);
@@ -68,6 +71,8 @@ export const useOrganizationCloudTargetsDelete = mutation(ops['organizationCloud
 export const useConnectionCloudsList = query<ConnectionsCloudList>(ops['connectionClouds.list']);
 export const useConnectionsList = query<ConnectionList>(ops['connections.list']);
 export const useConnectionsCreate = mutation<Connection, Connection>(ops['connections.create']);
+export const useConnectionSignInsStart = mutation(ops['connectionSignIns.start']);
+export const useConnectionSignInsComplete = mutation<Connection, Connection>(ops['connectionSignIns.complete']);
 export const useConnectionsGet = query<Connection>(ops['connections.get']);
 export const useConnectionsDelete = mutation(ops['connections.delete']);
 export const useConnectionsCheck = mutation<Connection, Connection>(ops['connections.check']);
