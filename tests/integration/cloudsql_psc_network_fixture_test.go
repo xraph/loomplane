@@ -65,11 +65,12 @@ func (f *sourceNetworkFixture) serve(w http.ResponseWriter, r *http.Request) boo
 		}
 		return v
 	}
-	prefix := "projects/app-project/regions/europe-west1"
+	parts := strings.Split(f.endpoint.ForwardingRule, "/")
+	prefix := strings.Join(parts[:4], "/")
 	if strings.HasPrefix(r.URL.Path, "/compute/") {
 		path := strings.TrimPrefix(r.URL.Path, "/compute/v1/")
 		if path == f.endpoint.ProvisionSubnetwork {
-			reply(map[string]any{"kind": "compute#subnetwork", "id": "234", "name": "psc", "selfLink": path, "region": prefix, "network": f.endpoint.Network, "ipCidrRange": "10.20.0.0/28", "purpose": "PRIVATE", "state": "READY", "stackType": "IPV4_ONLY"})
+			reply(map[string]any{"kind": "compute#subnetwork", "id": "234", "name": path[strings.LastIndex(path, "/")+1:], "selfLink": path, "region": prefix, "network": f.endpoint.Network, "ipCidrRange": "10.20.0.0/28", "purpose": "PRIVATE", "state": "READY", "stackType": "IPV4_ONLY"})
 			return true
 		}
 		if strings.HasSuffix(path, "/operations") {
@@ -106,6 +107,7 @@ func (f *sourceNetworkFixture) serve(w http.ResponseWriter, r *http.Request) boo
 				}
 				f.objects[target] = obj
 			} else {
+				f.counts["request-delete-"+kind]++
 				if f.objects[path] == nil {
 					w.WriteHeader(404)
 					return true
