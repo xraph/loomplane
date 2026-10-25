@@ -5,6 +5,9 @@ import {
   useFabriqRebuildsList,
 } from "@/client/forge/loomplane/hooks"
 import { useMutation, useQuery } from "@/client/hooks"
+import { ago } from "@/lib/fabriq"
+import { StatePill, stackTones } from "./fabriq-stack"
+import { useFabriqStack } from "./use-fabriq-stack"
 import { FabriqError } from "./fabriq-error"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -18,12 +21,9 @@ export const engineNames = {
   elasticsearch: "Elasticsearch",
 } as const
 
-export function FabriqEngines({
-  projectId,
-  environmentId,
-  resource,
-  config,
-}: CatalogPanelProps) {
+export function FabriqEngines(props: CatalogPanelProps) {
+  const { projectId, environmentId, resource, config } = props
+  const { parts, now } = useFabriqStack(props)
   const { can } = useOrganization()
   const path = { projectId, environmentId, resource }
   const jobs = useQuery(useFabriqRebuildsList, { path })
@@ -78,6 +78,7 @@ export function FabriqEngines({
         </Alert>
       )}
       {Object.entries(engineNames).map(([id, name]) => {
+        const part = parts.find((part) => part.id === id)!
         const choice = choices[id]
         const enabled = !!choice && choice.mode !== "off"
         const projection =
@@ -105,42 +106,62 @@ export function FabriqEngines({
           <section
             key={id}
             aria-label={name}
-            className="min-w-0 rounded-xl border bg-card p-3"
+            className="grid min-w-0 gap-2 rounded-xl border border-border-panel bg-card px-3.5 py-3"
           >
-            <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
               <div>
-                <h2 className="text-sm font-semibold">{name}</h2>
-                <p className="text-xs break-all text-muted-foreground">
+                <h2 className="text-[15px] leading-[normal] font-semibold">
+                  {part.name}
+                </h2>
+                <p className="text-[12.5px] leading-[1.5] break-all text-muted-foreground">
                   {origin}
                 </p>
               </div>
-              {projection && enabled && can("deployment:create") && (
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={
-                    !jobs.data ||
-                    jobs.status === "error" ||
-                    create.isPending ||
-                    busy ||
-                    (last?.status === "failed" && !last.retryable)
-                  }
-                  onClick={() => void rebuild(projection)}
-                >
-                  {last?.status === "failed" && last.retryable
-                    ? "Retry rebuild"
-                    : "Rebuild from Postgres"}
-                </Button>
-              )}
+              <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+                <StatePill tone={stackTones[part.state]}>
+                  {part.state}
+                </StatePill>
+                {projection && enabled && can("deployment:create") && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-8 rounded-[9px] px-3 text-[12.5px]"
+                    disabled={
+                      !jobs.data ||
+                      jobs.status === "error" ||
+                      create.isPending ||
+                      busy ||
+                      (last?.status === "failed" && !last.retryable)
+                    }
+                    onClick={() => void rebuild(projection)}
+                  >
+                    {last?.status === "failed" && last.retryable
+                      ? "Retry rebuild"
+                      : "Rebuild from Postgres"}
+                  </Button>
+                )}
+              </div>
             </div>
-            {projection && (
-              <p className="mt-2 text-xs text-muted-foreground">
-                Rebuilt from Postgres. No separate backups.
-              </p>
-            )}
+            <p className="text-xs leading-[1.5] text-muted-foreground">
+              {projection && enabled
+                ? "Rebuilt from Postgres. No separate backups."
+                : id === "postgres"
+                  ? part.detail.replace(
+                      "TimescaleDB, pgvector, PostGIS.",
+                      "TimescaleDB, pgvector and PostGIS."
+                    )
+                  : part.detail}
+            </p>
             {last && (
-              <div className="mt-2 grid gap-1 text-xs">
-                <span role="status">{last.status}</span>
+              <div className="grid gap-2 border-t border-border-divider pt-2 text-xs leading-[1.5] text-muted-foreground">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span>
+                    Last rebuild: <span role="status">{last.status}</span>
+                  </span>
+                  <time dateTime={last.createdAt}>
+                    {ago(last.createdAt, now)}
+                  </time>
+                </div>
                 {last.output && (
                   <pre className="max-h-44 overflow-auto rounded bg-subtle p-2 break-all whitespace-pre-wrap">
                     {last.output}

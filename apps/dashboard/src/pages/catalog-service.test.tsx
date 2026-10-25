@@ -600,3 +600,24 @@ test("changing resources selects the destination's default tab", async () => {
   ).toBeVisible()
   expect(screen.getByRole("tabpanel")).toBeVisible()
 })
+
+test("Fabriq library opens its worker panel and keeps the environment in the subtitle", async () => {
+  serve({
+    bindings: {
+      production: [
+        binding("fabriq", { kind: "fabriq-library", provider: "server" }),
+      ],
+    },
+  })
+  open("fabriq", "env_prod")
+  expect(
+    await screen.findByRole("tab", { name: "Library", selected: true })
+  ).toBeVisible()
+  const header = screen.getByRole("banner")
+  expect(
+    await within(header).findByText("Fabriq library · production")
+  ).toBeVisible()
+  expect(within(header).queryByText("production", { exact: true })).toBeNull()
+  expect(screen.queryByRole("tab", { name: "Tenants and keys" })).toBeNull()
+  expect(screen.queryByRole("button", { name: "Open Fabriq admin" })).toBeNull()
+})

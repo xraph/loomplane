@@ -197,3 +197,60 @@ test("settings keeps the draft retryable when planning fails", async () => {
   expect(review).toBeEnabled()
   expect(state.navigate).not.toHaveBeenCalled()
 })
+
+test("engines show deployed state and evidence without inventing a verified restore", async () => {
+  api()
+  const props = withGraph()
+  props.components = props.components.filter(
+    (b) => b.name !== "fabriq--falkordb"
+  )
+  mount(<FabriqEngines {...props} />)
+  const graph = screen.getByRole("region", { name: "FalkorDB" })
+  expect(within(graph).getByText("Not running")).toBeVisible()
+  const postgres = screen.getByRole("region", { name: "Postgres" })
+  expect(
+    await within(postgres).findByText(/Backups daily, no restore verified yet/)
+  ).toBeVisible()
+  expect(within(postgres).getByText("Postgres 16")).toBeVisible()
+  expect(within(postgres).getByText("Running")).toBeVisible()
+  const search = screen.getByRole("region", { name: "Elasticsearch" })
+  expect(
+    within(search).getByText(
+      "Search projections. Turn on in Settings; rebuilt from Postgres."
+    )
+  ).toBeVisible()
+})
+
+test("settings explains the projections before reviewing deployment", () => {
+  api()
+  mount(<FabriqSettings {...panelProps()} />)
+  expect(
+    screen.getByText("Graph projections. Rebuilt from Postgres, so no backups.")
+  ).toBeVisible()
+  expect(
+    screen.getByText(
+      "Search projections. Rebuilt from Postgres, so no backups."
+    )
+  ).toBeVisible()
+  expect(screen.getByRole("button", { name: "Review plan" })).toBeDisabled()
+})
+
+test("engine state does not claim health for linked resources or external endpoints", async () => {
+  api()
+  const props = panelProps()
+  props.config.composition!.dependencies.postgres = {
+    mode: "external",
+    external: "own-db",
+  }
+  props.config.composition!.dependencies.redis = {
+    mode: "resource",
+    resource: "shared-cache",
+  }
+  mount(<FabriqEngines {...props} />)
+  const postgres = screen.getByRole("region", { name: "Postgres" })
+  const redis = screen.getByRole("region", { name: "Redis" })
+  expect(within(postgres).getByText("External")).toBeVisible()
+  expect(within(postgres).queryByText("Running")).toBeNull()
+  expect(within(redis).getByText("Linked")).toBeVisible()
+  expect(within(redis).queryByText("Running")).toBeNull()
+})

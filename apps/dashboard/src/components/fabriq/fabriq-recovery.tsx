@@ -3,6 +3,7 @@ import {
   type CatalogPanelProps,
   type ResourceConfigView,
 } from "@/lib/catalog-kinds"
+import { FabriqEmpty } from "./fabriq-empty"
 import { ServiceRecovery } from "@/pages/service-catalog"
 
 export function recoveryEngines(config: ResourceConfigView) {
@@ -26,6 +27,7 @@ export function recoveryEngines(config: ResourceConfigView) {
 }
 
 export function FabriqRecovery(props: CatalogPanelProps) {
+  const engines = recoveryEngines(props.config)
   const kubernetes = props.binding.provider === "kubernetes"
   return (
     <div className="grid gap-3">
@@ -34,28 +36,32 @@ export function FabriqRecovery(props: CatalogPanelProps) {
           Backups for these engines aren't available on Kubernetes yet.
         </p>
       )}
-      {recoveryEngines(props.config).map((engine) => (
+      {engines.map((engine) => (
         <section
           key={engine.name}
           aria-label={`${engine.name} recovery`}
           className="min-w-0 space-y-2"
         >
-          <h2 className="text-sm font-semibold">{engine.name}</h2>
+          {(engine.external || kubernetes || !engine.resource) && (
+            <h2 className="text-[15px] font-semibold">{engine.name}</h2>
+          )}
           {engine.external ? (
             <p className="text-sm text-muted-foreground">
               Not managed by Loomplane: no backups or restores.
             </p>
           ) : !kubernetes && engine.resource ? (
             <ServiceRecovery
+              embeddedTitle={engine.name}
               project={props.projectId}
               environment={props.environmentId}
               resource={engine.resource}
             />
           ) : (
             !kubernetes && (
-              <p role="status" className="text-sm text-muted-foreground">
-                Recovery will appear after this engine is provisioned.
-              </p>
+              <FabriqEmpty
+                title="Engine not provisioned"
+                description="Recovery will appear after this engine is provisioned."
+              />
             )
           )}
         </section>
@@ -64,6 +70,21 @@ export function FabriqRecovery(props: CatalogPanelProps) {
         FalkorDB and Elasticsearch are rebuilt from Postgres. Use the Engines
         tab to rebuild their projections.
       </p>
+      {!kubernetes && !engines.some((engine) => engine.external) && (
+        <details className="grid gap-2 rounded-xl border border-border-panel bg-card px-3.5 py-3 text-[12.5px] leading-[1.5] text-muted-foreground">
+          <summary className="cursor-pointer focus-visible:outline-2 focus-visible:outline-ring">
+            Other targets and engine sources
+          </summary>
+          <p className="mt-2">
+            <strong>Kubernetes:</strong> Backups for these engines aren't
+            available on Kubernetes yet.
+          </p>
+          <p className="mt-2">
+            <strong>External endpoint:</strong> Not managed by Loomplane: no
+            backups or restores.
+          </p>
+        </details>
+      )}
     </div>
   )
 }

@@ -258,3 +258,15 @@ test.each([
     expect(screen.queryByText(/Backups daily/)).not.toBeInTheDocument()
   }
 )
+
+test("library worker uses the approved copy with reported entity counts only", () => {
+  expect(
+    detail(stackParts({ ...docker, library: true }), "worker")?.detail
+  ).toBe("Stock worker. 6 dynamic entity types loaded.")
+  expect(
+    detail(
+      stackParts({ ...docker, library: true, entityTypes: undefined }),
+      "worker"
+    )?.detail
+  ).toBe("Stock worker.")
+})

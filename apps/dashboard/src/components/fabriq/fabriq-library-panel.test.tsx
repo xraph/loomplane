@@ -53,3 +53,14 @@ test("library panel lists conditional credentials and the stock worker limitatio
   ])
   expect(module?.actions).toBeUndefined()
 })
+
+test("library explains conditional credentials without exposing their values", () => {
+  serve()
+  mount(<FabriqLibraryPanel {...panelProps({ kind: "fabriq-library" })} />)
+  expect(
+    screen.getByText(
+      "FalkorDB and Elasticsearch credentials are included when you enable those engines."
+    )
+  ).toBeVisible()
+  expect(screen.queryByText("FABRIQ_FALKORDB_PASSWORD")).toBeNull()
+})

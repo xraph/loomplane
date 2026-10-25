@@ -1,3 +1,4 @@
+import { useFabriqSubtitle } from "@/components/fabriq/use-fabriq-subtitle"
 import { FabriqIcon } from "@/components/fabriq/fabriq-icon"
 import { FabriqLibraryPanel } from "@/components/fabriq/fabriq-library-panel"
 import { FabriqEngines } from "@/components/fabriq/fabriq-engines"
@@ -8,6 +9,10 @@ import { defineCatalogKind } from "@/lib/catalog-kinds"
 export default defineCatalogKind({
   kind: "fabriq-library",
   title: "Fabriq library",
+  deployedLabel: "Running",
+  serviceLayout: "compact",
+  defaultPanel: "library",
+  subtitle: useFabriqSubtitle,
   group: "data",
   icon: FabriqIcon,
   hidden: true,

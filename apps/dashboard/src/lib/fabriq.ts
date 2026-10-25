@@ -1,5 +1,7 @@
 // What the Add Fabriq dialog decides: how apps use Fabriq, where each
 // engine comes from, and the words that describe it.
+import { agoDay } from "@/lib/relative-time"
+export { ago, agoDay, createdLabel } from "@/lib/relative-time"
 import { statusOf } from "@/client/errors"
 import type { CheckResult } from "@/client/forge/loomplane/types"
 import type { AddCatalogServiceInput } from "@/lib/catalog-add"
@@ -108,72 +110,6 @@ export function validTenantId(id: string): boolean {
   return tenantPattern.test(id)
 }
 
-const minute = 60_000
-const hour = 60 * minute
-
-/**
- * ago says how long before now a time was: "just now", "2 minutes ago",
- * "1 hour ago", "yesterday", "3 days ago", then the date once it is more
- * than a month back. A time it can't read comes back as it was given.
- */
-export function ago(iso: string, now: number): string {
-  const then = new Date(iso).getTime()
-  if (Number.isNaN(then)) return iso
-  const elapsed = now - then
-  if (elapsed < 45_000) return "just now"
-  if (elapsed < hour)
-    return plural(Math.max(1, Math.round(elapsed / minute)), "minute")
-  if (elapsed < 24 * hour) return plural(Math.round(elapsed / hour), "hour")
-  const days = daysBetween(then, now)
-  if (days <= 1) return "yesterday"
-  if (days < 31) return `${days} days ago`
-  return dateOf(then)
-}
-
-/**
- * agoDay is ago at the grain of a calendar day, for a thing that happens
- * daily: "today", "yesterday", "3 days ago".
- */
-export function agoDay(iso: string, now: number): string {
-  const then = new Date(iso).getTime()
-  if (Number.isNaN(then)) return iso
-  const days = daysBetween(then, now)
-  if (days <= 0) return "today"
-  if (days === 1) return "yesterday"
-  if (days < 31) return `${days} days ago`
-  return dateOf(then)
-}
-
-/**
- * createdLabel is when a tenant was created as its table shows it: "Just
- * now" for one made a moment ago, else the date.
- */
-export function createdLabel(iso: string, now: number): string {
-  const then = new Date(iso).getTime()
-  if (Number.isNaN(then)) return iso
-  return now - then < 45_000 ? "Just now" : dateOf(then)
-}
-
-function plural(n: number, unit: string): string {
-  return `${n} ${unit}${n === 1 ? "" : "s"} ago`
-}
-
-// Whole calendar days in the reader's zone, so 23:50 yesterday is one day
-// ago at 00:10, not ten minutes.
-function daysBetween(then: number, now: number): number {
-  const day = (t: number) => {
-    const d = new Date(t)
-    return Date.UTC(d.getFullYear(), d.getMonth(), d.getDate())
-  }
-  return Math.round((day(now) - day(then)) / (24 * hour))
-}
-
-const dateFormat = new Intl.DateTimeFormat(undefined, { dateStyle: "medium" })
-
-function dateOf(t: number): string {
-  return dateFormat.format(new Date(t))
-}
-
 /**
  * unreachableReason is why Fabriq can't be reached, when a failed call says
  * so: the API answers 503 with "Fabriq isn't reachable right now: <reason>"
@@ -202,7 +138,8 @@ function sentence(text: string): string {
   return /[.!?]$/.test(s) ? s : `${s}.`
 }
 
-export type StackState = "Running" | "Completed" | "Off" | "Not running"
+export type StackState =
+  "Running" | "Completed" | "Off" | "Not running" | "External" | "Linked"
 
 export type StackPart = {
   id:
@@ -234,6 +171,7 @@ export type StackInput = {
   now: number
   /** Which parts are deployed and in step. A part left out counts as deployed. */
   down?: StackPart["id"][]
+  linked?: Partial<Record<StackPart["id"], "External" | "Linked">>
   falkordb: boolean
   elasticsearch: boolean
   /** How many migrations Fabriq reports applied, when it reports them. */
@@ -277,7 +215,7 @@ function backupSchedule(input: StackInput): string {
  */
 export function stackParts(input: StackInput): StackPart[] {
   const state = (id: StackPart["id"], running: StackState): StackState =>
-    input.down?.includes(id) ? "Not running" : running
+    input.linked?.[id] ?? (input.down?.includes(id) ? "Not running" : running)
   const entityTypes =
     input.entityTypes === undefined
       ? ""
@@ -345,8 +283,7 @@ export function stackParts(input: StackInput): StackPart[] {
             id: "worker",
             name: "Fabriq worker",
             state: state("worker", "Running"),
-            detail:
-              "Stock worker for dynamic entity types. Syncs every 15 seconds.",
+            detail: `Stock worker.${entityTypes}`,
           }
         : part
     )

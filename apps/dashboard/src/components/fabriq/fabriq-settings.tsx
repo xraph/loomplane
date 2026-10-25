@@ -84,7 +84,7 @@ export function FabriqSettings({
   }
   return (
     <section aria-label="Optional projections" className="grid gap-3">
-      <p className="text-sm text-muted-foreground">
+      <p className="text-[12.5px] leading-[1.5] text-muted-foreground">
         Choose the projections you need. Changes take effect after you approve
         and deploy the plan.
       </p>
@@ -105,10 +105,19 @@ export function FabriqSettings({
       {Object.entries(projections).map(([id, title]) => (
         <label
           key={id}
-          className="flex items-center justify-between gap-3 rounded-xl border bg-card p-3"
+          className="flex items-center justify-between gap-4 rounded-xl border border-border-panel bg-card px-3.5 py-3"
         >
-          <span className="text-sm font-medium">{title}</span>
+          <span>
+            <span className="text-[15px] leading-[normal] font-semibold">
+              {title}
+            </span>
+            <span className="block text-[12.5px] leading-[1.5] text-muted-foreground">
+              {id === "falkordb" ? "Graph" : "Search"} projections. Rebuilt from
+              Postgres, so no backups.
+            </span>
+          </span>
           <Switch
+            className="data-[size=default]:h-5"
             aria-label={title}
             checked={changes[id] ?? current(id)}
             disabled={busy || !allowed}
@@ -128,6 +137,7 @@ export function FabriqSettings({
           Nothing changes on the target until you deploy.
         </span>
         <Button
+          className="h-8 rounded-[9px] px-3 text-[12.5px]"
           disabled={
             busy ||
             !environment ||
