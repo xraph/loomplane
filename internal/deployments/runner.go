@@ -187,6 +187,10 @@ type Plans interface {
 	// RecordDeployed records the commit of one repository now deployed in
 	// an environment, which the next plan holds the repository at.
 	RecordDeployed(ctx context.Context, orgID string, d *planning.DeployedSource) error
+	// RecordRelease records, in one transaction, the manifest revision a
+	// succeeded deployment's plan was made from and the commit of every
+	// repository it moved.
+	RecordRelease(ctx context.Context, orgID string, r *planning.DeployedRelease) error
 }
 
 // Credentials reveals a connection's credential.
@@ -1687,25 +1691,33 @@ func (r *Runner) Finish(ctx context.Context, orgID, deploymentID, reason string)
 }
 
 // recordDeployed records the commit of each repository a deployment's plan
-// moved as what its environment runs.
+// moved, and the manifest revision the plan was made from, as what its
+// environment runs, in one write. A rollback records like any release, so
+// the restored manifest becomes the environment's. A Cloud sync and a
+// catalog plan record nothing: neither releases the environment's
+// repositories or manifest.
 func (r *Runner) recordDeployed(ctx context.Context, d *Deployment, at time.Time) error {
 	plan, err := r.plans.GetPlan(ctx, d.OrgID, d.PlanID)
 	if err != nil {
 		return err
 	}
-	if plan.CloudSyncID != "" {
+	if plan.CloudSyncID != "" || plan.Catalog {
 		return nil
 	}
+	release := &planning.DeployedRelease{
+		EnvironmentID: d.EnvironmentID, PlanID: d.PlanID, ManifestID: plan.ManifestID, ManifestRevision: plan.ManifestRevision,
+		DeployedAt: at, Sources: make([]*planning.DeployedSource, 0, len(plan.Sources)),
+	}
 	for _, ps := range plan.Sources {
-		if !ps.InScope {
-			continue
+		if ps.InScope {
+			release.Sources = append(release.Sources, &planning.DeployedSource{
+				EnvironmentID: d.EnvironmentID, SourceID: ps.SourceID, AnalysisID: ps.AnalysisID, CommitSHA: ps.CommitSHA,
+				PlanID: d.PlanID, DeployedAt: at,
+			})
 		}
-		if err := r.plans.RecordDeployed(ctx, d.OrgID, &planning.DeployedSource{
-			EnvironmentID: d.EnvironmentID, SourceID: ps.SourceID, AnalysisID: ps.AnalysisID, CommitSHA: ps.CommitSHA,
-			PlanID: d.PlanID, DeployedAt: at,
-		}); err != nil {
-			return fmt.Errorf("record what's deployed: %w", err)
-		}
+	}
+	if err := r.plans.RecordRelease(ctx, d.OrgID, release); err != nil {
+		return fmt.Errorf("record what's deployed: %w", err)
 	}
 	return nil
 }

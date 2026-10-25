@@ -128,12 +128,27 @@ type fakePlans struct {
 	plan     *planning.Plan
 	bindings map[string]*planning.Binding
 	deployed []planning.DeployedSource
+	// releases are the RecordRelease writes, and single counts the
+	// RecordDeployed ones.
+	releases []planning.DeployedRelease
+	single   int
 }
 
 func (f *fakePlans) RecordDeployed(_ context.Context, _ string, d *planning.DeployedSource) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.single++
 	f.deployed = append(f.deployed, *d)
+	return nil
+}
+
+func (f *fakePlans) RecordRelease(_ context.Context, _ string, r *planning.DeployedRelease) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.releases = append(f.releases, *r)
+	for _, d := range r.Sources {
+		f.deployed = append(f.deployed, *d)
+	}
 	return nil
 }
 
@@ -642,6 +657,52 @@ func TestRunner_recordsWhatsDeployedOnlyOnSuccess(t *testing.T) {
 	}
 	if len(plans.deployed) != 0 {
 		t.Fatalf("a failed deployment recorded %+v", plans.deployed)
+	}
+}
+
+func TestRunner_recordsEveryMovedSourceInOneWrite(t *testing.T) {
+	ctx := t.Context()
+	at := time.Date(2026, 10, 24, 9, 0, 0, 0, time.UTC)
+	plan := threeRepos()
+	plan.ManifestID, plan.ManifestRevision = "man_5", 5
+	r, _, plans := newRunner(t, plan, &recorder{}, fakeVariables{})
+	r.now = func() time.Time { return at }
+	id, _, err := r.Start(ctx, "org_1", "plan_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = r.Finish(ctx, "org_1", id, ""); err != nil {
+		t.Fatal(err)
+	}
+	if plans.single != 0 || len(plans.releases) != 1 {
+		t.Fatalf("RecordDeployed %d times, RecordRelease %d times", plans.single, len(plans.releases))
+	}
+	got := plans.releases[0]
+	if got.EnvironmentID != "env_1" || got.PlanID != "plan_1" || got.ManifestID != "man_5" || got.ManifestRevision != 5 || !got.DeployedAt.Equal(at) {
+		t.Fatalf("release %+v", got)
+	}
+	moved := make([]string, 0, len(got.Sources))
+	for _, d := range got.Sources {
+		moved = append(moved, d.SourceID+"@"+d.CommitSHA)
+	}
+	if !slices.Equal(moved, []string{"src_web@" + shaWeb, "src_api@" + shaAPI}) {
+		t.Fatalf("moved %v", moved)
+	}
+
+	// A catalog plan moves no repository and isn't a release of the
+	// environment's manifest, so it records nothing.
+	catalog := webAndAPI()
+	catalog.Catalog, catalog.Sources = true, nil
+	r, _, plans = newRunner(t, catalog, &recorder{}, fakeVariables{})
+	id, _, err = r.Start(ctx, "org_1", "plan_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = r.Finish(ctx, "org_1", id, ""); err != nil {
+		t.Fatal(err)
+	}
+	if len(plans.releases) != 0 || plans.single != 0 {
+		t.Fatalf("a catalog plan recorded %+v", plans.releases)
 	}
 }
 
