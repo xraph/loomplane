@@ -2,7 +2,10 @@ package recovery
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/xraph/loomplane/internal/planning"
@@ -17,6 +20,22 @@ type NativePITRBounds struct {
 	Protocol int       `json:"protocol"`
 	Earliest time.Time `json:"earliest"`
 	Latest   time.Time `json:"latest"`
+	// SettingsDigest pins Cloud SQL clone isolation to the reviewed source settings.
+	SettingsDigest string `json:"settings_digest,omitempty"`
+}
+
+func validNativePITRIdentity(provider string, bounds *NativePITRBounds) bool {
+	if bounds == nil || bounds.Protocol != 1 {
+		return false
+	}
+	if provider == "rds" {
+		return bounds.SettingsDigest == ""
+	}
+	if provider != "cloud-sql" || len(bounds.SettingsDigest) != sha256.Size*2 || strings.ToLower(bounds.SettingsDigest) != bounds.SettingsDigest {
+		return false
+	}
+	_, err := hex.DecodeString(bounds.SettingsDigest)
+	return err == nil
 }
 
 // NativePITRWindow is a dedicated window response, separate from snapshots.
@@ -86,7 +105,7 @@ func (p NativePoint) SelectTime(provider string, at *time.Time) (NativePoint, er
 		}
 		return cloneNativePoint(p), nil
 	}
-	if provider != "rds" && provider != "cloud-sql" || at == nil || at.IsZero() || p.PITR == nil || p.PITR.Protocol != 1 {
+	if at == nil || at.IsZero() || !validNativePITRIdentity(provider, p.PITR) {
 		return NativePoint{}, ErrInvalid
 	}
 	_, offset := at.Zone()

@@ -89,5 +89,8 @@ func checkNativePoint(provider string, selected NativePoint, current *NativePoin
 }
 
 func sameNativePointIdentity(a, b NativePoint) bool {
-	return (a.Kind != "pitr" || a.PITR != nil && b.PITR != nil && a.PITR.Protocol == 1 && b.PITR.Protocol == 1) && a.ProviderID != "" && !a.CreatedAt.IsZero() && a.ProviderID == b.ProviderID && a.Name == b.Name && a.CreatedAt.Equal(b.CreatedAt) && a.Kind == b.Kind && a.Engine == b.Engine && a.Version == b.Version && a.Encrypted == b.Encrypted && a.KMSKey == b.KMSKey
+	if a.Kind == "pitr" && (a.PITR == nil || b.PITR == nil || a.PITR.Protocol != 1 || b.PITR.Protocol != 1 || a.PITR.SettingsDigest != b.PITR.SettingsDigest) {
+		return false
+	}
+	return a.ProviderID != "" && !a.CreatedAt.IsZero() && a.ProviderID == b.ProviderID && a.Name == b.Name && a.CreatedAt.Equal(b.CreatedAt) && a.Kind == b.Kind && a.Engine == b.Engine && a.Version == b.Version && a.Encrypted == b.Encrypted && a.KMSKey == b.KMSKey
 }

@@ -17119,6 +17119,9 @@
           },
           "protocol": {
             "type": "integer"
+          },
+          "settings_digest": {
+            "type": "string"
           }
         }
       },

@@ -1156,6 +1156,7 @@ export interface NativePITRBounds {
   earliest: string;
   latest: string;
   protocol: number;
+  settingsDigest?: string;
 }
 
 export interface NativePITRWindow {

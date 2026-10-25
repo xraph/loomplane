@@ -31,7 +31,7 @@ func (s *PgStore) RefreshNativePITR(ctx context.Context, org, id string, fetch N
 		return nil, err
 	}
 	now := time.Now().UTC()
-	if observed == nil || observed.Kind != "pitr" || observed.PITR == nil || observed.PITR.Protocol != 1 || observed.RestoreTime != nil || observed.ExpiresAt != nil || observed.Status != "available" || observed.ProviderID == "" || observed.Name == "" || observed.Engine == "" || observed.Version == "" || observed.CreatedAt.IsZero() || observed.PITR.Earliest.IsZero() || observed.PITR.Earliest.Before(observed.CreatedAt) || !observed.PITR.Earliest.Before(observed.PITR.Latest) || observed.PITR.Latest.After(now) || observed.SourceID != "" && observed.SourceID != id {
+	if observed == nil || observed.Kind != "pitr" || !validNativePITRIdentity(source.Provider, observed.PITR) || observed.RestoreTime != nil || observed.ExpiresAt != nil || observed.Status != "available" || observed.ProviderID == "" || observed.Name == "" || observed.Engine == "" || observed.Version == "" || observed.CreatedAt.IsZero() || observed.PITR.Earliest.IsZero() || observed.PITR.Earliest.Before(observed.CreatedAt) || !observed.PITR.Earliest.Before(observed.PITR.Latest) || observed.PITR.Latest.After(now) || observed.SourceID != "" && observed.SourceID != id {
 		return nil, ErrNativePITRUnavailable
 	}
 	point := cloneNativePoint(*observed)
