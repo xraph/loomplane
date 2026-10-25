@@ -46,6 +46,7 @@ type SQLPSCProvisionState struct {
 	Subnet         SQLApplicationNetwork `json:"subnet"`
 	Address        PSCComputeState       `json:"address"`
 	ForwardingRule PSCComputeState       `json:"forwarding_rule"`
+	DNS            SQLPSCSourceDNSState  `json:"dns,omitempty"`
 }
 
 // SQLPSCProvisionedEndpoint identifies owned network resources. DNS and SQL
@@ -55,6 +56,43 @@ type SQLPSCProvisionedEndpoint struct {
 }
 
 var errPSCProvision = errors.New("cloud sql PSC endpoint provisioning does not match its saved source and route")
+
+// EnsureSQLPSCSourceEndpoint provisions the owned private route and its DNS
+// records. Resolver reachability and SQL authentication remain separate gates.
+func (s *Session) EnsureSQLPSCSourceEndpoint(ctx context.Context, spec SQLPSCProvisionSpec, checkpoint *SQLPSCProvisionState, save func(SQLPSCProvisionState) error, check func(context.Context) error) (*SQLPSCProvisionedEndpoint, error) {
+	if checkpoint != nil && checkpoint.DNS != (SQLPSCSourceDNSState{}) && (!checkpoint.Address.Complete || !checkpoint.ForwardingRule.Complete) {
+		return nil, errPSCProvision
+	}
+	endpoint, err := s.EnsureSQLPSCSourceForwardingRule(ctx, spec, checkpoint, save, check)
+	if err != nil {
+		return nil, err
+	}
+	guard := func(ctx context.Context) error {
+		witness := *checkpoint
+		observed, readErr := s.EnsureSQLPSCSourceForwardingRule(ctx, spec, &witness, func(SQLPSCProvisionState) error { return errPSCProvision }, check)
+		if readErr != nil {
+			return readErr
+		}
+		if *observed != *endpoint {
+			return errPSCProvision
+		}
+		return nil
+	}
+	dns := checkpoint.DNS
+	saveDNS := func(next SQLPSCSourceDNSState) error {
+		updated := *checkpoint
+		updated.DNS = next
+		if saveErr := save(updated); saveErr != nil {
+			return saveErr
+		}
+		*checkpoint = updated
+		return nil
+	}
+	if dnsErr := s.ensurePSCSourceDNS(ctx, checkpoint.Scope, spec.Endpoint.ConsumerProject, spec.Endpoint.Network, *endpoint, &dns, saveDNS, guard); dnsErr != nil {
+		return nil, dnsErr
+	}
+	return endpoint, nil
+}
 
 // EnsureSQLPSCSourceForwardingRule reserves an address and creates a forwarding
 // rule without enabling inherited SQL endpoint automation or public ingress.

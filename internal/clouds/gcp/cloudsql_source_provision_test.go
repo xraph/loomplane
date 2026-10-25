@@ -11,7 +11,7 @@ import (
 )
 
 func TestPSCSourceForwardingRulePersistsBeforeMutationAndResumes(t *testing.T) {
-	for _, scenario := range []string{"create", "lost-address-response", "lost-rule-response", "checkpoint-refused", "revoked-after-intent", "outside-private-subnet", "lost-address-missing-operation", "lost-address-duplicate-operation", "checkpoint-after-operation", "pending", "foreign-address", "source-replaced", "subnet-replaced", "address-replaced-before-rule", "operation-replaced", "endpoint-replaced", "denied"} {
+	for _, scenario := range []string{"dns-create", "dns-lost-zone", "dns-lost-change", "dns-source-replaced", "dns-endpoint-replaced", "create", "lost-address-response", "lost-rule-response", "checkpoint-refused", "revoked-after-intent", "outside-private-subnet", "lost-address-missing-operation", "lost-address-duplicate-operation", "checkpoint-after-operation", "pending", "foreign-address", "source-replaced", "subnet-replaced", "address-replaced-before-rule", "operation-replaced", "endpoint-replaced", "denied"} {
 		t.Run(scenario, func(t *testing.T) {
 			in, fields := pscPITRInstance(t)
 			physical, err := in.Incarnation("source-project", "us-central1", "source-db")
@@ -32,8 +32,13 @@ func TestPSCSourceForwardingRulePersistsBeforeMutationAndResumes(t *testing.T) {
 			broken := false
 			revoked, checkpointRejected := false, false
 			subnetID := "123"
+			dnsFixture := &pscDNSFixture{t: t, scenario: strings.TrimPrefix(scenario, "dns-"), network: route, endpoint: SQLPSCProvisionedEndpoint{DNSName: "source-db.us-central1.sql.goog."}, saved: func() SQLPSCSourceDNSState { return saved.DNS }}
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
+				if strings.HasPrefix(r.URL.Path, "/dns/") {
+					dnsFixture.ServeHTTP(w, r)
+					return
+				}
 				path := strings.TrimPrefix(r.URL.Path, "/compute/v1/")
 				if r.URL.Path == "/v1/projects/source-project/instances/source-db" {
 					_ = json.NewEncoder(w).Encode(fields)
@@ -161,6 +166,12 @@ func TestPSCSourceForwardingRulePersistsBeforeMutationAndResumes(t *testing.T) {
 						}
 					}
 				}
+				if scenario == "dns-source-replaced" && next.DNS.ZoneRequest != "" {
+					fields["createTime"] = "2026-10-25T00:00:00Z"
+				}
+				if scenario == "dns-endpoint-replaced" && next.DNS.RecordRequest != "" {
+					objects[rulePath]["id"] = "999"
+				}
 				saved = next
 				return nil
 			}
@@ -170,13 +181,26 @@ func TestPSCSourceForwardingRulePersistsBeforeMutationAndResumes(t *testing.T) {
 				}
 				return nil
 			}
-			got, err := session.EnsureSQLPSCSourceForwardingRule(t.Context(), spec, &state, save, guard)
-			if strings.HasPrefix(scenario, "lost-") || scenario == "checkpoint-after-operation" {
+			ensure := session.EnsureSQLPSCSourceForwardingRule
+			if strings.HasPrefix(scenario, "dns-") {
+				ensure = session.EnsureSQLPSCSourceEndpoint
+			}
+			got, err := ensure(t.Context(), spec, &state, save, guard)
+			if strings.HasPrefix(scenario, "lost-") || strings.HasPrefix(scenario, "dns-lost-") || scenario == "checkpoint-after-operation" {
 				if err == nil {
 					t.Fatal("lost response did not stop provision")
 				}
 				state = saved
-				got, err = session.EnsureSQLPSCSourceForwardingRule(t.Context(), spec, &state, save, guard)
+				got, err = ensure(t.Context(), spec, &state, save, guard)
+			}
+			if scenario == "dns-source-replaced" || scenario == "dns-endpoint-replaced" {
+				if err == nil || dnsFixture.recordWrites != 0 || scenario == "dns-source-replaced" && dnsFixture.zoneWrites != 0 {
+					t.Fatal("DNS consumed replaced source or endpoint", err, dnsFixture.zoneWrites, dnsFixture.recordWrites)
+				}
+				return
+			}
+			if strings.HasPrefix(scenario, "dns-") && (!saved.DNS.Complete || dnsFixture.zoneWrites != 1 || dnsFixture.recordWrites != 1) {
+				t.Fatal("combined endpoint omitted DNS", err, saved.DNS)
 			}
 			if scenario == "lost-address-missing-operation" || scenario == "lost-address-duplicate-operation" {
 				if err == nil || writes["addresses"] != 1 || writes["forwardingRules"] != 0 {
@@ -210,7 +234,7 @@ func TestPSCSourceForwardingRulePersistsBeforeMutationAndResumes(t *testing.T) {
 				state.Address.Complete = false
 				operations["projects/app-project/regions/us-central1/operations/create-addresses"]["id"] = "999"
 			}
-			_, err = session.EnsureSQLPSCSourceForwardingRule(t.Context(), spec, &state, save, guard)
+			_, err = ensure(t.Context(), spec, &state, save, guard)
 			if (scenario == "endpoint-replaced" || scenario == "operation-replaced") != (err != nil) {
 				t.Fatal("incorrect restart identity check", err)
 			}
