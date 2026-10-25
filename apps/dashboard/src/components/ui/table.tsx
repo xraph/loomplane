@@ -31,7 +31,7 @@ function Table({
         className={cn(
           "w-full caption-bottom text-[13px]",
           columns &&
-            "block [&_tbody_tr:hover]:bg-surface-muted [&_td]:min-w-0 [&_td]:p-0 [&_td]:[overflow-wrap:anywhere] [&_td]:whitespace-normal [&_th]:h-auto [&_th]:p-0 [&_thead_tr]:py-[9px] [&_tr]:grid [&_tr]:grid-cols-(--table-columns) [&_tr]:items-center [&_tr]:gap-3 [&_tr]:border-border-divider [&_tr]:px-4 [&_tr]:py-2.5 [&>tbody]:block [&>thead]:block",
+            "block [&_tbody_tr]:border-b-0 [&_tbody_tr+tr]:border-t [&_tbody_tr:hover]:bg-surface-muted [&_td]:min-w-0 [&_td]:p-0 [&_td]:[overflow-wrap:anywhere] [&_td]:whitespace-normal [&_th]:h-auto [&_th]:p-0 [&_thead_tr]:py-[9px] [&_tr]:grid [&_tr]:grid-cols-(--table-columns) [&_tr]:items-center [&_tr]:gap-3 [&_tr]:border-border-divider [&_tr]:px-4 [&_tr]:py-2.5 [&>tbody]:block [&>thead]:block",
           className
         )}
         style={{ "--table-columns": columns, ...style } as React.CSSProperties}
@@ -57,7 +57,7 @@ function TableBody({ className, ...props }: React.ComponentProps<"tbody">) {
     <tbody
       data-slot="table-body"
       role="rowgroup"
-      className={cn("[&_tr:last-child]:border-0", className)}
+      className={cn("[&_tr:last-child]:border-b-0", className)}
       {...props}
     />
   )

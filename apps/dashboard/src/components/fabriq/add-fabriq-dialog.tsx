@@ -546,7 +546,7 @@ export function AddFabriqDialog({
               <Button
                 type="button"
                 variant="outline"
-                className="h-9 border-input px-3.5 hover:bg-accent"
+                className="h-[38px] border-input px-3.5 hover:bg-accent"
                 disabled={pending}
                 onClick={onClose}
               >
@@ -599,7 +599,8 @@ function Pick({
       >
         <SelectTrigger
           aria-labelledby={id}
-          className="h-9 w-full rounded-[9px] px-2.5"
+          size="lg"
+          className="w-full rounded-[9px] px-2.5"
         >
           <SelectValue placeholder={empty} />
         </SelectTrigger>

@@ -183,7 +183,7 @@ export function FabriqServices({
                     <span className="grid gap-0.5">
                       <span className="font-medium">{key.service}</span>
                       {environment && (
-                        <span className="text-xs text-muted-foreground">
+                        <span className="text-xs leading-[normal] text-muted-foreground">
                           {environment}
                         </span>
                       )}
