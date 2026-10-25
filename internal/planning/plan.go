@@ -40,6 +40,21 @@ const (
 	StatusFailed     = "failed"
 )
 
+// Plan kinds. A release deploys the manifest; a promotion deploys what
+// another environment runs; a rollback restores an earlier release.
+const (
+	KindRelease   = "release"
+	KindPromotion = "promotion" // made with CreatePlanInput.From
+	KindRollback  = "rollback"
+)
+
+// Rollback triggers.
+const (
+	TriggerManual = "manual" // a person asked; approved like any plan
+	TriggerWatch  = "watch"  // a post-deploy watch breached; approved automatically
+	TriggerCanary = "canary" // reserved for the canary controller; approved automatically
+)
+
 // Errors the service and stores return.
 var (
 	ErrNotFound      = errors.New("plan not found")
@@ -179,6 +194,66 @@ type ServiceConfig struct {
 	// Component is the catalog component the service runs, when a
 	// composed catalog kind runs one as a service.
 	Component *ComponentConfig `json:"component,omitempty"`
+	// Artifact is an image (or provider revision) this action deploys
+	// instead of building. It is excluded from change detection.
+	Artifact *ReusedArtifact `json:"artifact,omitempty"`
+}
+
+// ReusedArtifact names a build another release already made, which a
+// promotion or rollback deploys as it is.
+type ReusedArtifact struct {
+	Reference        string `json:"reference,omitempty"` // repository@sha256:<64 hex>
+	Digest           string `json:"digest,omitempty"`
+	Revision         string `json:"revision,omitempty"` // provider revision, DigitalOcean deployment ID
+	CommitSHA        string `json:"commit_sha"`
+	FromEnvironment  string `json:"from_environment"`
+	FromDeploymentID string `json:"from_deployment_id"`
+}
+
+// ArtifactChoice says, for one service of a promotion or rollback, whether
+// it reuses an earlier build or builds again.
+type ArtifactChoice struct {
+	Service   string `json:"service"`
+	Reused    bool   `json:"reused"`
+	Reference string `json:"reference,omitempty"`
+	Revision  string `json:"revision,omitempty"`
+	From      string `json:"from,omitempty"`   // environment the image came from
+	Reason    string `json:"reason,omitempty"` // why it builds again, for people
+}
+
+// Rollback is what a rollback plan undoes and what it restores.
+type Rollback struct {
+	Reason              string    `json:"reason"`
+	Trigger             string    `json:"trigger"`
+	TargetDeploymentID  string    `json:"target_deployment_id"` // the release being undone
+	TargetPlanID        string    `json:"target_plan_id"`
+	RestoreDeploymentID string    `json:"restore_deployment_id"` // the release whose state comes back
+	RestorePlanID       string    `json:"restore_plan_id"`
+	RestoreFinishedAt   time.Time `json:"restore_finished_at"`
+	WatchID             string    `json:"watch_id,omitempty"`
+}
+
+// Leftover is something a rollback leaves as the bad release made it.
+type Leftover struct {
+	Subject     Subject `json:"subject"`
+	Name        string  `json:"name"`
+	Op          Op      `json:"op"` // what restoring the previous release would have done
+	DataBearing bool    `json:"data_bearing"`
+	Reason      string  `json:"reason"`
+}
+
+// DataBearing reports whether an action's subject holds data that does not
+// move with it: every resource except a stateless composed component, and
+// a service running a catalog recipe or a catalog component with storage.
+func DataBearing(a Action) bool {
+	switch a.Subject {
+	case ResourceSubject:
+		return a.Resource == nil || a.Resource.Component == nil || a.Resource.Component.Protection != recipes.ProtectionNone
+	case ServiceSubject:
+		return a.Service != nil && (a.Service.Catalog != nil ||
+			(a.Service.Component != nil && a.Service.Component.Protection != recipes.ProtectionNone))
+	}
+	return false
 }
 
 // BuildTarget pins the builder, registry and image reviewed in a plan.
@@ -354,6 +429,29 @@ type Result struct {
 	// Connections are the cloud connections the plan deploys with, by
 	// cloud.
 	Connections map[string]string `json:"connections"`
+	// Leftovers are what a rollback leaves as the bad release made it.
+	Leftovers []Leftover `json:"leftovers,omitempty"`
+	// Artifacts say which services a promotion or rollback reuses.
+	Artifacts []ArtifactChoice `json:"artifacts,omitempty"`
+}
+
+// recount sets the summary from the actions.
+func (r *Result) recount() {
+	r.Summary = Summary{}
+	for _, a := range r.Actions {
+		switch a.Op {
+		case Create:
+			r.Summary.Create++
+		case Update:
+			r.Summary.Update++
+		case Replace:
+			r.Summary.Replace++
+		case Delete:
+			r.Summary.Delete++
+		case Keep:
+			r.Summary.Keep++
+		}
+	}
 }
 
 // PlanSource pins one repository of a plan to the analysis it was planned
@@ -372,6 +470,9 @@ type PlanSource struct {
 	// InScope says whether the plan moves this repository. One it holds
 	// stays at what's deployed.
 	InScope bool `json:"in_scope"`
+	// FromPlanID is the From environment's plan that deployed this commit,
+	// "" when it was inferred from bindings.
+	FromPlanID string `json:"from_plan_id,omitempty"`
 }
 
 // DeployedSource is the commit of one repository deployed in one
@@ -401,14 +502,26 @@ type DeployedRepository struct {
 // Plan is one plan for one environment of a project, pinned to one commit
 // of each repository and the manifest revision it was made from.
 type Plan struct {
-	CloudSyncID   string `json:"cloud_sync_id,omitempty"`
-	Catalog       bool   `json:"catalog"`
-	ID            string `json:"id" forge:"id"`
-	OrgID         string `json:"org_id"`
-	ProjectID     string `json:"project_id"`
-	EnvironmentID string `json:"environment_id"`
-	Environment   string `json:"environment"`
-	Status        string `json:"status"`
+	CloudSyncID string `json:"cloud_sync_id,omitempty"`
+	Catalog     bool   `json:"catalog"`
+	// Kind is KindRelease, KindPromotion or KindRollback. JSON tags of the
+	// fields below equal their column names: the realtime trigger
+	// serialises rows with to_jsonb.
+	Kind string `json:"kind"`
+	// From is the environment a promotion deploys from, "" for any other
+	// plan, and FromEnvironmentID its ID.
+	From              string `json:"from_environment"`
+	FromEnvironmentID string `json:"from_environment_id"`
+	// Rollback is set on a rollback and nil otherwise.
+	Rollback      *Rollback        `json:"rollback"`
+	Leftovers     []Leftover       `json:"leftovers"`
+	Artifacts     []ArtifactChoice `json:"artifacts"`
+	ID            string           `json:"id" forge:"id"`
+	OrgID         string           `json:"org_id"`
+	ProjectID     string           `json:"project_id"`
+	EnvironmentID string           `json:"environment_id"`
+	Environment   string           `json:"environment"`
+	Status        string           `json:"status"`
 	// Revision is a digest of everything the plan was made from and
 	// everything it would do. Approving names it.
 	Revision         string       `json:"revision"`
@@ -442,6 +555,7 @@ func (p *Plan) setResult(r *Result) {
 	p.CloudSyncID = r.CloudSyncID
 	p.Actions, p.Problems, p.Warnings = r.Actions, r.Problems, r.Warnings
 	p.Summary, p.Executable, p.Connections = r.Summary, r.Executable, r.Connections
+	p.Leftovers, p.Artifacts = r.Leftovers, r.Artifacts
 }
 
 func (p *Plan) normalize() {
@@ -466,6 +580,15 @@ func (p *Plan) normalize() {
 	}
 	if p.Connections == nil {
 		p.Connections = map[string]string{}
+	}
+	if p.Leftovers == nil {
+		p.Leftovers = []Leftover{}
+	}
+	if p.Artifacts == nil {
+		p.Artifacts = []ArtifactChoice{}
+	}
+	if p.Rollback != nil {
+		p.Rollback.RestoreFinishedAt = p.Rollback.RestoreFinishedAt.UTC()
 	}
 }
 

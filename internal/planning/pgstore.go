@@ -37,18 +37,25 @@ var _ Store = (*PgStore)(nil)
 
 const planColumns = `id, org_id, project_id, environment_id, environment, status, revision,
 	manifest_id, manifest_revision, result, executable, error,
-	created_by, created_at, planned_at, expires_at, decided_by, decided_at, decision_note, catalog`
+	created_by, created_at, planned_at, expires_at, decided_by, decided_at, decision_note, catalog,
+	kind, from_environment, from_environment_id, rollback`
 
 // open lists the statuses of a plan that hasn't been settled.
 const open = `('planning', 'ready')`
 
 func scanPlan(row pgx.Row) (*Plan, error) {
 	var p Plan
-	var result []byte
+	var result, rollbackSpec []byte
 	if err := row.Scan(&p.ID, &p.OrgID, &p.ProjectID, &p.EnvironmentID, &p.Environment, &p.Status, &p.Revision,
 		&p.ManifestID, &p.ManifestRevision, &result, &p.Executable, &p.Error,
-		&p.CreatedBy, &p.CreatedAt, &p.PlannedAt, &p.ExpiresAt, &p.DecidedBy, &p.DecidedAt, &p.DecisionNote, &p.Catalog); err != nil {
+		&p.CreatedBy, &p.CreatedAt, &p.PlannedAt, &p.ExpiresAt, &p.DecidedBy, &p.DecidedAt, &p.DecisionNote, &p.Catalog,
+		&p.Kind, &p.From, &p.FromEnvironmentID, &rollbackSpec); err != nil {
 		return nil, err
+	}
+	if len(rollbackSpec) > 0 {
+		if err := json.Unmarshal(rollbackSpec, &p.Rollback); err != nil {
+			return nil, fmt.Errorf("decode plan rollback: %w", err)
+		}
 	}
 	if len(result) > 0 {
 		var r Result
@@ -85,11 +92,21 @@ func (s *PgStore) CreatePlan(ctx context.Context, p *Plan) (superseded []string,
 	if err != nil {
 		return nil, err
 	}
+	kind := p.Kind
+	if kind == "" {
+		kind = KindRelease
+	}
+	var rollbackSpec []byte
+	if p.Rollback != nil {
+		if rollbackSpec, err = json.Marshal(p.Rollback); err != nil {
+			return nil, fmt.Errorf("encode plan rollback: %w", err)
+		}
+	}
 	_, err = tx.Exec(ctx, `INSERT INTO loomplane_plans (id, org_id, project_id, environment_id, environment, status,
-		manifest_id, manifest_revision, created_by, created_at, catalog)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)`,
+		manifest_id, manifest_revision, created_by, created_at, catalog, kind, from_environment, from_environment_id, rollback)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
 		p.ID, p.OrgID, p.ProjectID, p.EnvironmentID, p.Environment, p.Status,
-		p.ManifestID, p.ManifestRevision, p.CreatedBy, p.CreatedAt, p.Catalog)
+		p.ManifestID, p.ManifestRevision, p.CreatedBy, p.CreatedAt, p.Catalog, kind, p.From, p.FromEnvironmentID, rollbackSpec)
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation {
 		return nil, ErrConflict
@@ -99,9 +116,9 @@ func (s *PgStore) CreatePlan(ctx context.Context, p *Plan) (superseded []string,
 	}
 	for _, ps := range p.Sources {
 		if _, err = tx.Exec(ctx, `INSERT INTO loomplane_plan_sources
-			(plan_id, source_id, alias, repository, root, ref, analysis_id, commit_sha, in_scope)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
-			p.ID, ps.SourceID, ps.Alias, ps.Repository, ps.Root, ps.Ref, ps.AnalysisID, ps.CommitSHA, ps.InScope); err != nil {
+			(plan_id, source_id, alias, repository, root, ref, analysis_id, commit_sha, in_scope, from_plan_id)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)`,
+			p.ID, ps.SourceID, ps.Alias, ps.Repository, ps.Root, ps.Ref, ps.AnalysisID, ps.CommitSHA, ps.InScope, ps.FromPlanID); err != nil {
 			return nil, fmt.Errorf("insert plan source %s: %w", ps.Alias, err)
 		}
 	}
@@ -188,7 +205,7 @@ func (s *PgStore) withSources(ctx context.Context, plans ...*Plan) error {
 		ids[i], by[p.ID] = p.ID, p
 		p.Sources = []PlanSource{}
 	}
-	rows, err := s.db.Query(ctx, `SELECT plan_id, source_id, alias, repository, root, ref, analysis_id, commit_sha, in_scope
+	rows, err := s.db.Query(ctx, `SELECT plan_id, source_id, alias, repository, root, ref, analysis_id, commit_sha, in_scope, from_plan_id
 		FROM loomplane_plan_sources WHERE plan_id = ANY($1) ORDER BY plan_id, alias COLLATE "C"`, ids)
 	if err != nil {
 		return fmt.Errorf("load plan sources: %w", err)
@@ -197,7 +214,7 @@ func (s *PgStore) withSources(ctx context.Context, plans ...*Plan) error {
 	for rows.Next() {
 		var planID string
 		var ps PlanSource
-		if err := rows.Scan(&planID, &ps.SourceID, &ps.Alias, &ps.Repository, &ps.Root, &ps.Ref, &ps.AnalysisID, &ps.CommitSHA, &ps.InScope); err != nil {
+		if err := rows.Scan(&planID, &ps.SourceID, &ps.Alias, &ps.Repository, &ps.Root, &ps.Ref, &ps.AnalysisID, &ps.CommitSHA, &ps.InScope, &ps.FromPlanID); err != nil {
 			return fmt.Errorf("scan plan source: %w", err)
 		}
 		by[planID].Sources = append(by[planID].Sources, ps)
@@ -244,7 +261,7 @@ func (s *PgStore) FinishPlanning(ctx context.Context, p *Plan) (bool, error) {
 	result, err := json.Marshal(Result{
 		CloudSyncID: p.CloudSyncID,
 		Actions:     p.Actions, Problems: p.Problems, Warnings: p.Warnings, Summary: p.Summary, Executable: p.Executable,
-		Connections: p.Connections,
+		Connections: p.Connections, Leftovers: p.Leftovers, Artifacts: p.Artifacts,
 	})
 	if err != nil {
 		return false, fmt.Errorf("encode plan: %w", err)
