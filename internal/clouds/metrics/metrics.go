@@ -133,6 +133,12 @@ type Measurement struct {
 	// Statistic is what Latency is, P95 or Average, or empty when the
 	// cloud reports none.
 	Statistic string
+	// Errors are 5xx counts, in the cloud's own buckets. Empty with
+	// ErrorsCounted set means none fell.
+	Errors []Point
+	// ErrorsCounted is whether the cloud reported error counts at all, so
+	// no errors can be told from errors nobody counted.
+	ErrorsCounted bool
 }
 
 // Spend is what an account has cost this calendar month so far.
