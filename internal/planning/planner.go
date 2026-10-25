@@ -164,6 +164,7 @@ func Compute(in Input) *Result {
 	p.planDatabaseGateway()
 	p.checkTargetPlacements()
 	p.checkCloudSQLApplications()
+	p.checkServerGPUs()
 	p.readdress()
 	for p.routedReplacements() {
 		p.readdress()
@@ -482,6 +483,13 @@ func (p *planner) planResources() {
 		if p.kinds().Composed(r.Kind) {
 			composed = append(composed, name)
 			continue
+		}
+		if set.GPU != nil {
+			title := r.Kind
+			if engine, ok := p.kinds().Engine(r.Kind); ok {
+				title = engine.Title
+			}
+			p.unusedGPU(name, title)
 		}
 		for _, dep := range slices.Sorted(maps.Keys(r.Uses)) {
 			p.problem(Finding{
