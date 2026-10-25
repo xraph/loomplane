@@ -16,6 +16,8 @@ import (
 )
 
 type cloudSQLState struct {
+	PSC             *cloudSQLPSCOwnership   `json:"psc,omitempty"`
+	PSCCleanup      *gcp.SQLPSCCleanupState `json:"psc_cleanup,omitempty"`
 	Version         int                     `json:"cloud_sql_checkpoint"`
 	Scope           databaseCheckpointScope `json:"scope"`
 	Stage           string                  `json:"stage"`
@@ -49,7 +51,8 @@ func readCloudSQLState(job *Job, cfg *planning.ResourceConfig, project, region, 
 		stages = []string{"remove", "removed"}
 	}
 	if len(job.Resume) == 0 {
-		return state, nil
+		restoreErr := state.restorePSC(cfg, job.Binding, false)
+		return state, restoreErr
 	}
 	var restored cloudSQLState
 	if err := decodeDatabaseCheckpoint(job.Resume, &restored); err != nil {
@@ -63,7 +66,7 @@ func readCloudSQLState(job *Job, cfg *planning.ResourceConfig, project, region, 
 	}
 	state = &restored
 	state.checkpoint = job.Checkpoint
-	if (state.Version != 2 && state.Version != 3) || state.Scope != scope || !slices.Contains(stages, state.Stage) ||
+	if (state.Version != 2 && state.Version != 3 && state.Version != 4) || state.Scope != scope || !slices.Contains(stages, state.Stage) ||
 		(state.Operation != "" && !state.Uncertain) || ((state.Stage == "ready" || state.Stage == "removed") && state.Uncertain) {
 		return nil, errors.New("cloud sql checkpoint does not match the original account, resource and operation")
 	}
@@ -76,7 +79,7 @@ func readCloudSQLState(job *Job, cfg *planning.ResourceConfig, project, region, 
 	if state.Version == 2 && (state.RequestedAt != nil || state.Caller != "" || state.RecoveredCreate != nil) {
 		return nil, errors.New("cloud sql v2 checkpoint has unexpected recovery evidence")
 	}
-	if state.Version == 3 && (state.Uncertain && (state.RequestedAt == nil || state.RequestedAt.IsZero() || state.Caller == "") || !state.Uncertain && (state.RequestedAt != nil || state.Caller != "")) {
+	if state.Version >= 3 && (state.Uncertain && (state.RequestedAt == nil || state.RequestedAt.IsZero() || state.Caller == "") || !state.Uncertain && (state.RequestedAt != nil || state.Caller != "")) {
 		return nil, errors.New("cloud sql checkpoint has incomplete original request context")
 	}
 	if proof := state.RecoveredCreate; proof != nil {
@@ -87,10 +90,11 @@ func readCloudSQLState(job *Job, cfg *planning.ResourceConfig, project, region, 
 			return nil, errors.New("cloud sql checkpoint original create request changed")
 		}
 	}
-	if state.Uncertain && state.Operation == "" && (state.Version != 3 || state.Stage != "instance" || mode != "apply" || job.Binding != nil) {
+	if state.Uncertain && state.Operation == "" && (state.Version < 3 || state.Stage != "instance" || mode != "apply" || job.Binding != nil) {
 		return nil, errors.New("cloud sql checkpoint has an uncertain request without a captured operation; reconcile the original cloud operation before retrying")
 	}
-	return state, nil
+	restoreErr := state.restorePSC(cfg, job.Binding, true)
+	return state, restoreErr
 }
 
 func (s *cloudSQLState) save() error {
@@ -108,7 +112,7 @@ func (s *cloudSQLState) track(caller string) gcp.SQLMutation {
 				return errors.New("cloud sql request has no original caller identity")
 			}
 			now := time.Now().UTC()
-			s.Version, s.Uncertain, s.RequestedAt, s.Caller = 3, true, &now, caller
+			s.Version, s.Uncertain, s.RequestedAt, s.Caller = max(3, s.Version), true, &now, caller
 			return s.save()
 		},
 		Started: func(op string) error { s.Operation = op; return s.save() },
@@ -180,7 +184,7 @@ func (s *cloudSQLState) recoverCreate(ctx context.Context, client *gcp.Session, 
 	if !s.Uncertain || s.Operation != "" {
 		return nil
 	}
-	if s.Version != 3 || s.Stage != "instance" || s.Scope.Mode != "apply" || s.RequestedAt == nil || s.Caller == "" {
+	if s.Version < 3 || s.Stage != "instance" || s.Scope.Mode != "apply" || s.RequestedAt == nil || s.Caller == "" {
 		return errors.New("cloud sql checkpoint has an uncertain request without original create evidence")
 	}
 	proof, err := client.FindSQLCreate(ctx, gcp.SQLCreateRequest{Instance: s.Scope.Instance, Region: s.Scope.Region, PhysicalID: s.ResourceID, Intent: s.Intent, DatabaseVersion: version, RequestedAt: *s.RequestedAt, Caller: s.Caller})

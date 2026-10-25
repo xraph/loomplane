@@ -34,7 +34,8 @@ export function sameCloudSQLSourceEndpoint(
     !!actual &&
     actual.consumerProject === expected.consumerProject &&
     actual.network === expected.network &&
-    actual.forwardingRule === expected.forwardingRule
+    actual.forwardingRule === expected.forwardingRule &&
+    (actual.provisionSubnetwork ?? "") === (expected.provisionSubnetwork ?? "")
   )
 }
 
@@ -45,6 +46,13 @@ export function cloudSQLSourceEndpointValid(
   if (!endpoint) return false
   return (
     cloudSQLNetworkValid(endpoint) &&
+    (endpoint.provisionSubnetwork === undefined ||
+      cloudSQLRegionalResourceValid(
+        endpoint.provisionSubnetwork,
+        endpoint.consumerProject,
+        region,
+        "subnetworks"
+      )) &&
     cloudSQLRegionalResourceValid(
       endpoint.forwardingRule,
       endpoint.consumerProject,

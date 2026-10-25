@@ -78,10 +78,16 @@ it("saves and approves only the requested PSC source endpoint", async () => {
       id: "postgresql-17-cloud-sql-psc",
       access: "cloud-sql-psc-connector",
     },
-    cloudSqlPsc: { ...pscEndpoint },
+    cloudSqlPsc: {
+      ...pscEndpoint,
+      provisionSubnetwork:
+        "projects/project-a/regions/us-central1/subnetworks/psc",
+    },
   }
   fixture.plan.actions[0].resource!.managed!.profile = managed.profile
-  fixture.plan.actions[0].resource!.managed!.cloudSqlPsc = { ...pscEndpoint }
+  fixture.plan.actions[0].resource!.managed!.cloudSqlPsc = {
+    ...managed.cloudSqlPsc!,
+  }
   await deployDatabase(
     {
       name: "Private orders",
@@ -98,6 +104,9 @@ it("saves and approves only the requested PSC source endpoint", async () => {
     calls.find((call) => call.path.endsWith("/manifest"))?.body.yaml
   )
   expect(yaml).toContain("    cloud_sql_psc:\n")
+  expect(yaml).toContain(
+    '      provision_subnetwork: "projects/project-a/regions/us-central1/subnetworks/psc"'
+  )
   expect(yaml).toContain(
     `      consumer_project: "${pscEndpoint.consumerProject}"`
   )

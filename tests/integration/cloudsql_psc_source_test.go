@@ -29,7 +29,7 @@ func (sourceFixtureDNS) LookupNetIP(context.Context, string, string) ([]netip.Ad
 }
 
 func TestCloudSQLPSCSourceRequiresSQLBeforePublishing(t *testing.T) {
-	for _, scenario := range []string{"verified", "endpoint-missing", "transport-retry", "bad-password", "changed-endpoint"} {
+	for _, scenario := range []string{"provision", "provision-lost-rule", "provision-transport-retry", "provision-remove-retry", "verified", "endpoint-missing", "transport-retry", "bad-password", "changed-endpoint"} {
 		t.Run(scenario, func(t *testing.T) {
 			dsn := freshDatabase(t)
 			admin, err := pgx.Connect(t.Context(), dsn)
@@ -51,15 +51,23 @@ func TestCloudSQLPSCSourceRequiresSQLBeforePublishing(t *testing.T) {
 				t.Fatal(err)
 			}
 			endpoint := manageddb.CloudSQLSourceEndpoint{ConsumerProject: "app-project", Network: "projects/app-project/global/networks/apps", ForwardingRule: "projects/app-project/regions/europe-west1/forwardingRules/database"}
+			automatic := strings.HasPrefix(scenario, "provision")
+			if automatic {
+				endpoint.ProvisionSubnetwork = "projects/app-project/regions/europe-west1/subnetworks/psc"
+			}
+			network := newSourceNetworkFixture(t, endpoint, instance, scenario)
 			job.Action.Resource.Managed = &planning.ManagedDatabaseConfig{Profile: *profile, ConnectionID: job.Connection.ID, AccountIdentity: connections.AccountIdentity(job.Connection.Cloud, job.Connection.Account, job.Connection.Details), CloudSQLPSC: endpoint}
 			const attachment = "https://www.googleapis.com/compute/v1/projects/sql-tenant/regions/europe-west1/serviceAttachments/source"
-			created, endpointReady, transportReady := false, scenario != "endpoint-missing", scenario != "transport-retry"
+			created, endpointReady, transportReady := false, scenario != "endpoint-missing", scenario != "transport-retry" && scenario != "provision-transport-retry"
 			endpointID := "123456789"
 			counts := map[string]int{}
 			var settings map[string]any
 			var password string
 			google.deploy = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
+				if automatic && network.serve(w, r) {
+					return
+				}
 				if r.URL.Path == "/compute/v1/"+endpoint.ForwardingRule {
 					if !endpointReady {
 						w.WriteHeader(404)
@@ -78,6 +86,12 @@ func TestCloudSQLPSCSourceRequiresSQLBeforePublishing(t *testing.T) {
 				}
 				stage, operation := "instance", "CREATE"
 				switch {
+				case r.Method == http.MethodDelete:
+					stage, operation = "remove", "DELETE"
+					if r.URL.Query().Get("enableFinalBackup") != "true" {
+						t.Error("missing final backup")
+					}
+					created = false
 				case strings.HasSuffix(r.URL.Path, "/databases"):
 					stage, operation = "database", "CREATE_DATABASE"
 				case strings.HasSuffix(r.URL.Path, "/users"):
@@ -94,7 +108,7 @@ func TestCloudSQLPSCSourceRequiresSQLBeforePublishing(t *testing.T) {
 					if _, sqlErr := admin.Exec(t.Context(), "SELECT set_config('loomplane.test_password',$1,false)", actual); sqlErr != nil {
 						t.Error(sqlErr)
 					}
-					if _, sqlErr := admin.Exec(t.Context(), `DO $test$ BEGIN CREATE ROLE app LOGIN; EXECUTE format('ALTER ROLE app PASSWORD %L',current_setting('loomplane.test_password')); END $test$`); sqlErr != nil {
+					if _, sqlErr := admin.Exec(t.Context(), `DO $test$ BEGIN IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='app') THEN CREATE ROLE app LOGIN; END IF; EXECUTE format('ALTER ROLE app PASSWORD %L',current_setting('loomplane.test_password')); END $test$`); sqlErr != nil {
 						t.Error(sqlErr)
 					}
 				default:
@@ -112,6 +126,7 @@ func TestCloudSQLPSCSourceRequiresSQLBeforePublishing(t *testing.T) {
 				fmt.Fprintf(w, `{"kind":"sql#operation","name":%q,"status":"DONE","targetProject":"acme-prod","targetId":%q,"operationType":%q}`, stage, instance, operation)
 			})
 			var saved []byte
+			network.checkpoint = func() []byte { return saved }
 			job.Checkpoint = func(raw []byte) error { saved = append([]byte(nil), raw...); return nil }
 			factoryCalls := 0
 			executor := &deployments.CloudSQL{Google: gcp.New(google.srv.URL).WithDNSResolver(sourceFixtureDNS{}), PSCConnector: func(context.Context, *gcp.Session, string, string) (gcp.SQLConnector, error) {
@@ -127,7 +142,7 @@ func TestCloudSQLPSCSourceRequiresSQLBeforePublishing(t *testing.T) {
 				}}, nil
 			}}
 			outcome, err := executor.Apply(t.Context(), job)
-			if scenario == "endpoint-missing" || scenario == "transport-retry" {
+			if scenario == "endpoint-missing" || scenario == "transport-retry" || scenario == "provision-lost-rule" || scenario == "provision-transport-retry" {
 				if err == nil {
 					t.Fatal("unverified source succeeded")
 				}
@@ -151,7 +166,7 @@ func TestCloudSQLPSCSourceRequiresSQLBeforePublishing(t *testing.T) {
 				return
 			}
 			if err != nil {
-				t.Fatal(err)
+				t.Fatal(err, network.counts, string(saved))
 			}
 			kept, err := job.Recall(t.Context(), deployments.ResourceURL)
 			if err != nil || len(kept) == 0 || factoryCalls == 0 || counts["instance"] != 1 || counts["database"] != 1 || counts["user"] != 1 || strings.Contains(string(saved), password) {
@@ -166,8 +181,64 @@ func TestCloudSQLPSCSourceRequiresSQLBeforePublishing(t *testing.T) {
 				t.Fatal(err)
 			}
 			binding := &planning.Binding{Provider: "cloud-sql", Region: "europe-west1", ConnectionID: job.Connection.ID, Config: raw, ExternalID: outcome.ExternalID, PhysicalID: outcome.PhysicalID}
+			if automatic {
+				if err := json.Unmarshal([]byte(outcome.OwnedResources), &binding.OwnedResources); err != nil || len(binding.OwnedResources["cloud_sql_psc"]) == 0 {
+					t.Fatal("source ownership missing", err)
+				}
+				network.assertCreates()
+				job.Binding, job.Resume = binding, nil
+				again, applyErr := executor.Apply(t.Context(), job)
+				if applyErr != nil || again.OwnedResources != outcome.OwnedResources {
+					t.Fatal("bound ownership changed on reapply", applyErr)
+				}
+				network.assertCreates()
+			}
 			if observed, observeErr := executor.Observe(t.Context(), job.Connection, job.Credential, binding); observeErr != nil || !observed.Exists {
 				t.Fatal("verified source observation failed", observeErr)
+			}
+			if automatic {
+				originalConfig := job.Action.Resource
+				changedConfig := *originalConfig
+				changedManaged := *originalConfig.Managed
+				changedManaged.CloudSQLPSC.ForwardingRule += "-other"
+				changedConfig.Managed = &changedManaged
+				changedBinding := *binding
+				changedBinding.Config, _ = json.Marshal(changedConfig)
+				job.Action.Resource, job.Binding, job.Resume = &changedConfig, &changedBinding, nil
+				beforeSQL, _ := json.Marshal(counts)
+				beforeNetwork, _ := json.Marshal(network.counts)
+				job.Forget = func(context.Context) error { t.Error("changed ownership forgot credentials"); return nil }
+				if _, err := executor.Apply(t.Context(), job); err == nil {
+					t.Fatal("changed rule applied")
+				}
+				if _, err := executor.Observe(t.Context(), job.Connection, job.Credential, &changedBinding); err == nil {
+					t.Fatal("changed rule observed")
+				}
+				if err := executor.Remove(t.Context(), job, &changedBinding); err == nil {
+					t.Fatal("changed rule removed")
+				}
+				afterSQL, _ := json.Marshal(counts)
+				afterNetwork, _ := json.Marshal(network.counts)
+				if string(beforeSQL) != string(afterSQL) || string(beforeNetwork) != string(afterNetwork) {
+					t.Fatal("changed ownership reached provider mutation")
+				}
+				job.Action.Resource = originalConfig
+				job.Binding, job.Resume = binding, nil
+				forgotten := false
+				job.Forget = func(context.Context) error { forgotten = true; return nil }
+				removeErr := executor.Remove(t.Context(), job, binding)
+				if scenario == "provision-remove-retry" {
+					if removeErr == nil || forgotten || created {
+						t.Fatal("cleanup failure lost retention", removeErr, forgotten, created)
+					}
+					job.Resume = saved
+					removeErr = executor.Remove(t.Context(), job, binding)
+				}
+				if removeErr != nil || !forgotten || counts["remove"] != 1 {
+					t.Fatal("owned removal did not finish", removeErr, forgotten, counts)
+				}
+				network.assertRemoved()
+				return
 			}
 			endpointReady = false
 			if _, observeErr := executor.Observe(t.Context(), job.Connection, job.Credential, binding); observeErr == nil {

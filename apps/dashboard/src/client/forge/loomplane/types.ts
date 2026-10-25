@@ -384,6 +384,7 @@ export interface CloudSQLSourceEndpoint {
   consumerProject: string;
   forwardingRule: string;
   network: string;
+  provisionSubnetwork?: string;
 }
 
 export interface CloudSyncEvent {

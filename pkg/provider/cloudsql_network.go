@@ -38,15 +38,20 @@ func (n CloudSQLApplicationNetwork) Valid(region string) bool {
 	return network.Valid() && cloudSQLNetwork.MatchString(region) && len(parts) == 6 && parts[0] == "projects" && parts[1] == n.ConsumerProject && parts[2] == "regions" && parts[3] == region && parts[4] == "subnetworks" && cloudSQLNetwork.MatchString(parts[5])
 }
 
-// CloudSQLSourceEndpoint names an externally managed manual PSC endpoint.
+// CloudSQLSourceEndpoint selects a PSC endpoint. An omitted provision subnet
+// keeps the endpoint externally managed; a subnet opts into owned provisioning.
 // This contract uses a VPC host project, without a Shared VPC service override.
 type CloudSQLSourceEndpoint struct {
-	ConsumerProject string `json:"consumer_project" yaml:"consumer_project"`
-	Network         string `json:"network" yaml:"network"`
-	ForwardingRule  string `json:"forwarding_rule" yaml:"forwarding_rule"`
+	ConsumerProject     string `json:"consumer_project" yaml:"consumer_project"`
+	Network             string `json:"network" yaml:"network"`
+	ForwardingRule      string `json:"forwarding_rule" yaml:"forwarding_rule"`
+	ProvisionSubnetwork string `json:"provision_subnetwork,omitempty" yaml:"provision_subnetwork,omitempty"`
 }
 
 func (e CloudSQLSourceEndpoint) Valid(region string) bool {
+	if e.ProvisionSubnetwork != "" && !(CloudSQLApplicationNetwork{ConsumerProject: e.ConsumerProject, Network: e.Network, Subnetwork: e.ProvisionSubnetwork}).Valid(region) {
+		return false
+	}
 	network := CloudSQLRecoveryNetwork{ConsumerProject: e.ConsumerProject, Network: e.Network}
 	parts := strings.Split(e.ForwardingRule, "/")
 	return network.Valid() && cloudSQLNetwork.MatchString(region) && len(parts) == 6 && parts[0] == "projects" && parts[1] == e.ConsumerProject && parts[2] == "regions" && parts[3] == region && parts[4] == "forwardingRules" && cloudSQLNetwork.MatchString(parts[5])

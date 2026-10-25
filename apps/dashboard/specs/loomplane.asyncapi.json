@@ -3816,6 +3816,9 @@
           },
           "network": {
             "type": "string"
+          },
+          "provision_subnetwork": {
+            "type": "string"
           }
         }
       },

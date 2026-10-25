@@ -16,6 +16,9 @@ func (e cloudSQLPSCCredentialError) Unwrap() error { return e.cause }
 func (c *CloudSQL) verifyPSCSource(ctx context.Context, client *gcp.Session, job *Job, state *cloudSQLState, spec gcp.SQLInstanceSpec, expected *gcp.SQLSourceEndpoint, database, password string) error {
 	guard := state.guarded(client, job.Binding == nil).Check
 	check := func(ctx context.Context) error {
+		if err := state.PSC.verify(ctx, client, job.Action.Resource, spec.Name, state.ResourceID, state.pscCheck); err != nil {
+			return err
+		}
 		observed, err := client.ReadSQLPITRSourceEndpoint(ctx, spec, state.ResourceID, job.Action.Resource.Managed.CloudSQLPSC, guard)
 		if err != nil {
 			return err

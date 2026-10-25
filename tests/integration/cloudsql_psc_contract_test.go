@@ -65,6 +65,9 @@ func TestCloudSQLPSCReviewedEndpointPublishedContract(t *testing.T) {
 			t.Fatal(route, "missing optional endpoint review")
 		}
 		endpoint := spec.Components.Schemas["CloudSQLSourceEndpoint"]
+		if endpoint.Properties["provision_subnetwork"]["type"] != "string" || slices.Contains(endpoint.Required, "provision_subnetwork") {
+			t.Fatal(route, "missing explicit optional provisioning subnet")
+		}
 		for _, field := range []string{"consumer_project", "network", "forwarding_rule"} {
 			if endpoint.Properties[field]["type"] != "string" || !slices.Contains(endpoint.Required, field) {
 				t.Fatal(route, "incomplete endpoint contract", field)

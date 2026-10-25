@@ -225,7 +225,7 @@ export async function deployDatabase(
   }
   const psc = managed?.cloudSqlPsc
   const pscYaml = psc
-    ? `    cloud_sql_psc:\n      consumer_project: ${JSON.stringify(psc.consumerProject)}\n      network: ${JSON.stringify(psc.network)}\n      forwarding_rule: ${JSON.stringify(psc.forwardingRule)}\n`
+    ? `    cloud_sql_psc:\n      consumer_project: ${JSON.stringify(psc.consumerProject)}\n      network: ${JSON.stringify(psc.network)}\n      forwarding_rule: ${JSON.stringify(psc.forwardingRule)}\n${psc.provisionSubnetwork ? `      provision_subnetwork: ${JSON.stringify(psc.provisionSubnetwork)}\n` : ""}`
     : ""
   const manifest = await saveManifest({
     path: { id: project.id },
