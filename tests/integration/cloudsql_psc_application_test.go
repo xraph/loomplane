@@ -262,22 +262,13 @@ resources:
 	denied := &client{t: t, base: c.base, key: c.key, token: readKey.Secret}
 	denied.must(http.StatusForbidden, http.MethodPost, "/api/v1/plans/"+plan.ID+"/approve", map[string]string{"revision": plan.Revision}, nil)
 	activePlan.Store(plan.ID)
-	workflowID := plan.ID
-	retries := map[string]int{}
 	waitDeployment := func(path string) deploymentBody {
 		t.Helper()
 		var d deploymentBody
 		deadline := time.Now().Add(3 * readyTimeout)
 		for time.Now().Before(deadline) {
 			if c.do(http.MethodGet, path, nil, &d) != http.StatusNotFound && d.Status != "" && d.Status != "running" {
-				// The deployment row settles before Dispatch acknowledges its final activity.
-				var settled bool
-				if err := durable.QueryRow(t.Context(), "SELECT state = 'completed' FROM dispatch_executions WHERE namespace='loomplane' AND workflow_id=$1", workflowID).Scan(&settled); err != nil {
-					t.Fatal(err)
-				}
-				if settled {
-					return d
-				}
+				return d
 			}
 			time.Sleep(50 * time.Millisecond)
 		}
@@ -285,7 +276,6 @@ resources:
 		return d
 	}
 	approve := func() deploymentBody {
-		workflowID = plan.ID
 		c.must(http.StatusOK, http.MethodPost, "/api/v1/plans/"+plan.ID+"/approve", map[string]string{"revision": plan.Revision}, nil)
 		return waitDeployment("/api/v1/plans/" + plan.ID + "/deployment")
 	}
@@ -295,8 +285,6 @@ resources:
 		app = startApp()
 		c.base, denied.base = app.srv.URL, app.srv.URL
 		denied.must(http.StatusForbidden, http.MethodPost, "/api/v1/deployments/"+d.ID+"/retry", nil, nil)
-		retries[d.ID]++
-		workflowID = fmt.Sprintf("%s.retry.%d", d.ID, retries[d.ID])
 		c.must(http.StatusOK, http.MethodPost, "/api/v1/deployments/"+d.ID+"/retry", nil, &d)
 		return waitDeployment("/api/v1/deployments/" + d.ID)
 	}

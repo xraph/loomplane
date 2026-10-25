@@ -22,6 +22,7 @@ import (
 	"github.com/xraph/loomplane/internal/clouds/server"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/gateway"
+	"github.com/xraph/loomplane/internal/orchestration"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/telemetry"
 	"github.com/xraph/loomplane/pkg/provider"
@@ -1553,6 +1554,9 @@ func (r *Runner) Finish(ctx context.Context, orgID, deploymentID, reason string)
 	if err != nil {
 		return err
 	}
+	if done, replayErr := r.replayFinalization(ctx, d, reason); done || replayErr != nil {
+		return replayErr
+	}
 	if d.Status == StatusPaused || d.Status == StatusCancelled {
 		return nil
 	}
@@ -1565,7 +1569,7 @@ func (r *Runner) Finish(ctx context.Context, orgID, deploymentID, reason string)
 	if reason != "" {
 		status = StatusFailed
 		for _, s := range d.Steps {
-			if s.Status == StepPending {
+			if s.Status == StepPending && orchestration.FinalizationKey(ctx) == "" {
 				s.Status, s.Message = StepSkipped, "Skipped after an earlier step failed"
 				if err := r.store.UpdateStep(ctx, orgID, d.ID, s); err != nil {
 					return err
