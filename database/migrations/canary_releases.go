@@ -67,7 +67,7 @@ var canaryReleasesDown = []string{
 	`ALTER TABLE loomplane_deployments DROP COLUMN IF EXISTS canary`,
 	`ALTER TABLE loomplane_deployment_workflow_runs DROP CONSTRAINT IF EXISTS loomplane_deployment_workflow_runs_build`,
 	`DO $$ BEGIN
- IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='loomplane_deployment_workflow_runs'::regclass AND conname='loomplane_deployment_workflow_runs_check') THEN
-  ALTER TABLE loomplane_deployment_workflow_runs ADD CONSTRAINT loomplane_deployment_workflow_runs_check CHECK (coalesce(request->>'build_id' IN ('deployment-v2','deployment-v3'), false));
+ IF NOT EXISTS(SELECT 1 FROM pg_constraint WHERE conrelid='loomplane_deployment_workflow_runs'::regclass AND conname='loomplane_deployment_workflow_runs_request_check') THEN
+  ALTER TABLE loomplane_deployment_workflow_runs ADD CONSTRAINT loomplane_deployment_workflow_runs_request_check CHECK (coalesce(request->>'build_id' IN ('deployment-v2','deployment-v3'), false));
  END IF; END $$`,
 }

@@ -156,6 +156,11 @@ func (m *memStore) SetCanary(_ context.Context, _, id string, c *Canary) error {
 func (m *memStore) RecordVerdict(_ context.Context, v *CanaryVerdict) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	d, ok := m.d[v.DeploymentID]
+	if !ok || d.OrgID != v.OrgID {
+		return ErrNotFound
+	}
+	v.ID, v.ProjectID = VerdictID(v.DeploymentID, v.ActionID, v.Step, v.Attempt), d.ProjectID
 	if m.verdicts == nil {
 		m.verdicts = map[string]CanaryVerdict{}
 	}
