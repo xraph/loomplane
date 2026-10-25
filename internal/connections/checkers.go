@@ -23,8 +23,8 @@ import (
 // GCPChecker checks Google Cloud service account keys.
 type GCPChecker struct{ Client *gcp.Client }
 
-// Parse implements Checker. The one setting is billing_export, the
-// BigQuery table Cloud Billing exports to, which spend is read from.
+// Parse implements Checker. Billing export and a native recovery VPC are
+// optional. Neither changes the identity derived from the service account.
 func (g GCPChecker) Parse(credential []byte, settings map[string]string) (Check, error) {
 	key, err := gcp.ParseKey(credential)
 	if err != nil {
@@ -32,10 +32,17 @@ func (g GCPChecker) Parse(credential []byte, settings map[string]string) (Check,
 	}
 	details := map[string]string{"project_id": key.ProjectID, "service_account": key.ClientEmail}
 	if table := strings.TrimSpace(settings[gcp.BillingExportSetting]); table != "" {
-		if err := gcp.CheckBillingTable(table); err != nil {
-			return Check{}, fmt.Errorf("%w: %w", ErrInvalid, err)
+		if billingErr := gcp.CheckBillingTable(table); billingErr != nil {
+			return Check{}, fmt.Errorf("%w: %w", ErrInvalid, billingErr)
 		}
 		details[gcp.BillingExportSetting] = table
+	}
+	route, err := manageddb.CloudSQLRecoverySettings(settings)
+	if err != nil {
+		return Check{}, fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
+	for field, value := range route.Settings() {
+		details[field] = value
 	}
 	return Check{Account: key.ProjectID, Details: details}, nil
 }

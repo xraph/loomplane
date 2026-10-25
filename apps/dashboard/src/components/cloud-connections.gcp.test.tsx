@@ -79,3 +79,33 @@ it("leaves the billing export out when it's empty", async () => {
   await waitFor(() => expect(submitted).toBeDefined())
   expect(submitted?.settings).toBeUndefined()
 })
+
+it("sends the reviewed recovery VPC alongside the billing export", async () => {
+  let submitted: Record<string, unknown> | undefined
+  stub((body) => (submitted = body))
+  render(
+    <ClientProvider client={forgeClient}>
+      <ConnectDialog open cloud="gcp" onOpenChange={vi.fn()} />
+    </ClientProvider>
+  )
+  const user = userEvent.setup()
+  await user.type(screen.getByLabelText(/^Name$/i), "Recovery GCP")
+  await user.click(screen.getByLabelText(/Service account key/i))
+  await user.paste(key)
+  await user.type(
+    screen.getByLabelText(/Billing export table/i),
+    "shop.billing.costs"
+  )
+  await user.click(screen.getByText("Private Cloud SQL recovery (optional)"))
+  await user.type(
+    screen.getByLabelText("Recovery consumer VPC"),
+    " projects/recovery-consumer/global/networks/worker "
+  )
+  await user.click(screen.getByRole("button", { name: "Check and connect" }))
+  await waitFor(() => expect(submitted).toBeDefined())
+  expect(submitted?.settings).toEqual({
+    billing_export: "shop.billing.costs",
+    cloud_sql_recovery_network:
+      "projects/recovery-consumer/global/networks/worker",
+  })
+})

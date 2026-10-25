@@ -367,6 +367,11 @@ export interface CloudProjectGrantList {
   grants: (ProjectGrant | null)[];
 }
 
+export interface CloudSQLRecoveryNetwork {
+  consumerProject: string;
+  network: string;
+}
+
 export interface CloudSyncEvent {
   attempt: number;
   cloudId: string;
@@ -1203,6 +1208,7 @@ export interface NativeRestoreTarget {
   accountIdentity: string;
   cloudId?: string;
   cloudRevision?: number;
+  cloudSqlNetwork?: CloudSQLRecoveryNetwork;
   connectionId: string;
   grantRevision?: number;
   nativeAccount?: string;

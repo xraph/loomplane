@@ -9049,6 +9049,21 @@
         "type": "object",
         "x-forge-envelope": "grants"
       },
+      "CloudSQLRecoveryNetwork": {
+        "type": "object",
+        "required": [
+          "consumer_project",
+          "network"
+        ],
+        "properties": {
+          "consumer_project": {
+            "type": "string"
+          },
+          "network": {
+            "type": "string"
+          }
+        }
+      },
       "CloudSyncList": {
         "properties": {
           "next": {
@@ -11853,6 +11868,9 @@
           },
           "cloud_revision": {
             "type": "integer"
+          },
+          "cloud_sql_network": {
+            "$ref": "#/components/schemas/CloudSQLRecoveryNetwork"
           },
           "connection_id": {
             "type": "string"
