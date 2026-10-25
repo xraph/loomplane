@@ -26,6 +26,13 @@ export interface APIKeyList {
   keys: APIKey[];
 }
 
+export interface Accelerator {
+  count: number;
+  kind: string;
+  memoryGib: number;
+  vendor: string;
+}
+
 export interface AccountSpend {
   cloud: string;
   connectionId: string;
@@ -952,6 +959,43 @@ export interface Finding {
   name?: string;
   path?: string;
   subject?: string;
+}
+
+export interface GPUDevice {
+  index: number;
+  kind: string;
+  memoryMib: number;
+  product: string;
+  uuid: string;
+}
+
+export interface GPUInventory {
+  checkedAt: string;
+  devices?: GPUDevice[];
+  message?: string;
+  nodes?: GPUNodeGroup[];
+  status: string;
+}
+
+export interface GPUNodeGroup {
+  hourlyPriceKnown: boolean;
+  hourlyUsd: number;
+  instanceType?: string;
+  kind: string;
+  memoryGib: number;
+  nodeSelector?: Record<string, any>;
+  nodes: number;
+  perNode: number;
+  product?: string;
+  tolerations?: GPUToleration[];
+  total: number;
+}
+
+export interface GPUToleration {
+  effect: string;
+  key: string;
+  operator: string;
+  value?: string;
 }
 
 export interface GatewayList {
@@ -2313,8 +2357,11 @@ export interface Server {
 }
 
 export interface ServerImage {
+  accelerators?: string[];
+  architecture?: string;
   bootstrap: boolean;
   id: string;
+  minDiskGb?: number;
   name: string;
   regions: string[];
 }
@@ -2361,8 +2408,11 @@ export interface ServerRegion {
 }
 
 export interface ServerSize {
+  accelerator?: Accelerator;
+  architectures?: string[];
   cpus: number;
   diskGb: number;
+  hourlyPriceKnown?: boolean;
   hourlyUsd: number;
   id: string;
   memoryMib: number;

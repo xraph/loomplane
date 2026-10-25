@@ -1002,6 +1002,25 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly connectionGpus = {
+    /**
+     * GPUs a server or cluster connection can see, read live
+     */
+    get: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.GPUInventory> => {
+      let __path = `/api/v1/connections/${encodeURIComponent(String(id))}/gpus`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["GPUInventory"],
+      };
+
+      return this.request<types.GPUInventory>(config);
+    },
+
+  };
+
   public readonly connectionSignIns = {
     /**
      * Finish a sign-in with what the cloud sent back to the callback

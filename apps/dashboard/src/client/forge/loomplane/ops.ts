@@ -625,6 +625,13 @@ export const ops = {
     bodyCodec: CODECS['ReplaceInputBody'],
     responseCodec: CODECS['Connection'],
   },
+  'connectionGpus.get': {
+    method: 'GET',
+    path: '/api/v1/connections/{id}/gpus',
+    provides: [],
+    invalidates: [],
+    responseCodec: CODECS['GPUInventory'],
+  },
   'connectionStorage.list': {
     method: 'GET',
     path: '/api/v1/connections/{id}/storage',

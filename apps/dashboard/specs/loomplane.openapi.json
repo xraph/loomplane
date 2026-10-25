@@ -2175,6 +2175,38 @@
         }
       }
     },
+    "/api/v1/connections/{id}/gpus": {
+      "get": {
+        "tags": [
+          "Cloud connections"
+        ],
+        "summary": "GPUs a server or cluster connection can see, read live",
+        "operationId": "connectionGpus.get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "GPU inventory",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GPUInventory"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/connections/{id}/storage": {
       "get": {
         "tags": [
@@ -8800,6 +8832,29 @@
           }
         }
       },
+      "Accelerator": {
+        "type": "object",
+        "required": [
+          "kind",
+          "vendor",
+          "count",
+          "memory_gib"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "memory_gib": {
+            "type": "integer"
+          },
+          "vendor": {
+            "type": "string"
+          }
+        }
+      },
       "Action": {
         "type": "object",
         "required": [
@@ -11662,6 +11717,137 @@
             "type": "string"
           },
           "subject": {
+            "type": "string"
+          }
+        }
+      },
+      "GPUDevice": {
+        "type": "object",
+        "required": [
+          "index",
+          "uuid",
+          "kind",
+          "product",
+          "memory_mib"
+        ],
+        "properties": {
+          "index": {
+            "type": "integer"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "memory_mib": {
+            "type": "integer"
+          },
+          "product": {
+            "type": "string"
+          },
+          "uuid": {
+            "type": "string"
+          }
+        }
+      },
+      "GPUInventory": {
+        "type": "object",
+        "required": [
+          "status",
+          "checked_at"
+        ],
+        "properties": {
+          "checked_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "devices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GPUDevice"
+            }
+          },
+          "message": {
+            "type": "string"
+          },
+          "nodes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GPUNodeGroup"
+            }
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "GPUNodeGroup": {
+        "type": "object",
+        "required": [
+          "kind",
+          "memory_gib",
+          "nodes",
+          "per_node",
+          "total",
+          "hourly_usd",
+          "hourly_price_known"
+        ],
+        "properties": {
+          "hourly_price_known": {
+            "type": "boolean"
+          },
+          "hourly_usd": {
+            "type": "number"
+          },
+          "instance_type": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "memory_gib": {
+            "type": "integer"
+          },
+          "node_selector": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "nodes": {
+            "type": "integer"
+          },
+          "per_node": {
+            "type": "integer"
+          },
+          "product": {
+            "type": "string"
+          },
+          "tolerations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GPUToleration"
+            }
+          },
+          "total": {
+            "type": "integer"
+          }
+        }
+      },
+      "GPUToleration": {
+        "type": "object",
+        "required": [
+          "key",
+          "operator",
+          "effect"
+        ],
+        "properties": {
+          "effect": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "operator": {
+            "type": "string"
+          },
+          "value": {
             "type": "string"
           }
         }
@@ -16297,11 +16483,23 @@
           "bootstrap"
         ],
         "properties": {
+          "accelerators": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "architecture": {
+            "type": "string"
+          },
           "bootstrap": {
             "type": "boolean"
           },
           "id": {
             "type": "string"
+          },
+          "min_disk_gb": {
+            "type": "integer"
           },
           "name": {
             "type": "string"
@@ -16473,11 +16671,23 @@
           "regions"
         ],
         "properties": {
+          "accelerator": {
+            "$ref": "#/components/schemas/Accelerator"
+          },
+          "architectures": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
           "cpus": {
             "type": "integer"
           },
           "disk_gb": {
             "type": "integer"
+          },
+          "hourly_price_known": {
+            "type": "boolean"
           },
           "hourly_usd": {
             "type": "number"
