@@ -173,21 +173,49 @@ func TestRealtimePlanEventCarriesPromotionFields(t *testing.T) {
 	p.Status, p.Revision, p.PlannedAt, p.ExpiresAt = StatusReady, "rev", &now, &now
 	p.Connections = map[string]string{}
 	p.Leftovers = []Leftover{{Subject: ResourceSubject, Name: "db", Op: Delete, DataBearing: true, Reason: "kept"}}
+	p.Artifacts = []ArtifactChoice{{Service: "api", Reused: true, From: "staging"}}
 	if ok, err := store.FinishPlanning(ctx, p); err != nil || !ok {
 		t.Fatalf("finish: %v %v", ok, err)
 	}
-	var data []byte
-	if err := pg.QueryRow(ctx, `SELECT data FROM loomplane_events WHERE org_id = 'org' AND type = 'plan.updated' AND entity_id = 'plan_ev'
-		ORDER BY sequence DESC LIMIT 1`).Scan(&data); err != nil {
+	latest := func(id string) map[string]json.RawMessage {
+		var data []byte
+		if err := pg.QueryRow(ctx, `SELECT data FROM loomplane_events WHERE org_id = 'org' AND type = 'plan.updated' AND entity_id = $1
+			ORDER BY sequence DESC LIMIT 1`, id).Scan(&data); err != nil {
+			t.Fatal(err)
+		}
+		var doc map[string]json.RawMessage
+		if err := json.Unmarshal(data, &doc); err != nil {
+			t.Fatal(err)
+		}
+		return doc
+	}
+	doc := latest("plan_ev")
+	var artifacts []ArtifactChoice
+	if err := json.Unmarshal(doc["artifacts"], &artifacts); err != nil || len(artifacts) != 1 {
+		t.Fatalf("artifacts %s: %v", doc["artifacts"], err)
+	}
+
+	// A plan with neither still carries both keys, as empty lists.
+	q := &Plan{
+		ID: "plan_bare", OrgID: "org", ProjectID: "proj", EnvironmentID: "env_a", Environment: "staging",
+		Status: StatusPlanning, ManifestID: "man_1", ManifestRevision: 1, CreatedBy: "usr", CreatedAt: now,
+	}
+	if _, err := store.CreatePlan(ctx, q); err != nil {
 		t.Fatal(err)
 	}
-	var doc map[string]json.RawMessage
-	if err := json.Unmarshal(data, &doc); err != nil {
-		t.Fatal(err)
+	q.Status, q.Revision, q.PlannedAt, q.ExpiresAt, q.Connections = StatusReady, "rev", &now, &now, map[string]string{}
+	if ok, err := store.FinishPlanning(ctx, q); err != nil || !ok {
+		t.Fatalf("finish bare: %v %v", ok, err)
+	}
+	bare := latest("plan_bare")
+	for _, key := range []string{"leftovers", "artifacts"} {
+		if string(bare[key]) != "[]" {
+			t.Fatalf("bare plan event %s = %s", key, bare[key])
+		}
 	}
 	for _, key := range []string{"kind", "from_environment", "rollback", "leftovers"} {
 		if _, ok := doc[key]; !ok {
-			t.Fatalf("event data has no %q: %s", key, data)
+			t.Fatalf("event data has no %q: %v", key, doc)
 		}
 	}
 	if string(doc["kind"]) != `"rollback"` || string(doc["from_environment"]) != `"staging"` {

@@ -63,3 +63,16 @@ func TestRecountMatchesActions(t *testing.T) {
 		t.Fatalf("summary %+v, want %+v", r.Summary, want)
 	}
 }
+
+func TestNormalizeDefaultsKindToRelease(t *testing.T) {
+	p := &Plan{}
+	p.normalize()
+	if p.Kind != KindRelease {
+		t.Fatalf("kind %q", p.Kind)
+	}
+	p = &Plan{Kind: KindPromotion}
+	p.normalize()
+	if p.Kind != KindPromotion {
+		t.Fatalf("kind %q", p.Kind)
+	}
+}

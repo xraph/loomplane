@@ -1,11 +1,13 @@
 package migrations
 
+import "strings"
+
 // A plan records its kind (release, promotion or rollback), the environment
 // a promotion deploys from, and a rollback's spec. A plan source remembers
 // the plan of the source environment that deployed its commit. Each
 // environment also keeps the manifest revision its last release was planned
 // from, which a promotion uses. Plans made before this read as releases.
-var planPromotionRollbackUp = []string{
+var planPromotionRollbackUp = append([]string{
 	`ALTER TABLE loomplane_plans ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'release'
 		CHECK (kind IN ('release','promotion','rollback'))`,
 	`ALTER TABLE loomplane_plans ADD COLUMN IF NOT EXISTS from_environment TEXT NOT NULL DEFAULT ''`,
@@ -32,9 +34,9 @@ var planPromotionRollbackUp = []string{
 			AND coalesce(p.result->>'cloud_sync_id', '') = '' AND NOT p.catalog
 		ORDER BY d.environment_id, d.finished_at DESC
 		ON CONFLICT (environment_id) DO NOTHING`,
-}
+}, planEventFunctions(true)...)
 
-var planPromotionRollbackDown = []string{
+var planPromotionRollbackDown = append(planEventFunctions(false), []string{
 	`DROP TABLE IF EXISTS loomplane_environment_manifests`,
 	`DROP INDEX IF EXISTS loomplane_plans_rollback_target`,
 	`ALTER TABLE loomplane_plan_sources DROP COLUMN IF EXISTS from_plan_id`,
@@ -42,4 +44,25 @@ var planPromotionRollbackDown = []string{
 	`ALTER TABLE loomplane_plans DROP COLUMN IF EXISTS from_environment_id`,
 	`ALTER TABLE loomplane_plans DROP COLUMN IF EXISTS from_environment`,
 	`ALTER TABLE loomplane_plans DROP COLUMN IF EXISTS kind`,
+}...)
+
+// planEventFunctions returns the two realtime trigger functions that build a
+// plan event, as they stand in realtimeUp. With leftovers, a plan event
+// defaults leftovers and artifacts to [] as it does actions and problems,
+// because a result leaves them out when empty. Without, the functions are
+// as realtimeUp defines them.
+func planEventFunctions(leftovers bool) []string {
+	const defaults = `'summary','{}'::jsonb)`
+	var out []string
+	for _, stmt := range realtimeUp {
+		if !strings.Contains(stmt, "FUNCTION loomplane_state_event_trigger()") &&
+			!strings.Contains(stmt, "FUNCTION loomplane_parent_event_trigger()") {
+			continue
+		}
+		if leftovers {
+			stmt = strings.ReplaceAll(stmt, defaults, `'summary','{}'::jsonb,'leftovers','[]'::jsonb,'artifacts','[]'::jsonb)`)
+		}
+		out = append(out, stmt)
+	}
+	return out
 }
