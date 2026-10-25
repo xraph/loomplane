@@ -60,6 +60,16 @@ type Projects interface {
 // found. discovery.PgStore is the real one.
 type Analyses = discovery.Graphs
 
+// CommitAnalyzer finds or queues an analysis of one exact commit of a
+// source, for a promotion from an environment whose release of that
+// commit wasn't recorded. *discovery.CommitAnalyzer is the real one.
+type CommitAnalyzer interface {
+	// AnalyzeCommit returns a succeeded or in-flight analysis of exactly
+	// commitSHA, or queues one pinned to it.
+	AnalyzeCommit(ctx context.Context, orgID string, src *discovery.Source, commitSHA, createdBy string) (*discovery.Analysis, error)
+	Analysis(ctx context.Context, orgID, id string) (*discovery.Analysis, error)
+}
+
 // Manifests reads manifest revisions.
 type Manifests interface {
 	Latest(ctx context.Context, orgID, projectID string) (*manifests.Revision, error)
@@ -110,6 +120,7 @@ type Service struct {
 	store             Store
 	projects          Projects
 	analyses          Analyses
+	commits           CommitAnalyzer
 	manifests         Manifests
 	providers         *provider.Registry
 	clouds            Connections
@@ -118,6 +129,7 @@ type Service struct {
 	audit             projects.Auditor
 	window            time.Duration
 	now               func() time.Time
+	sleep             func(ctx context.Context, d time.Duration) error
 	warn              func(msg string, err error)
 	telemetry         *telemetry.Recorder
 	dbTrust           func() ([]plane.TrustKey, error)
@@ -137,8 +149,12 @@ type Deps struct {
 	Store             Store
 	Projects          Projects
 	Analyses          Analyses
-	Manifests         Manifests
-	Providers         *provider.Registry
+	// Commits analyzes a commit a promotion's source environment runs
+	// that nothing analyzed. Nil refuses such a promotion with
+	// ErrNoAnalysis.
+	Commits   CommitAnalyzer
+	Manifests Manifests
+	Providers *provider.Registry
 	// Connections are the organization's cloud accounts. Nil means none,
 	// so no plan that needs one is executable.
 	Connections Connections
@@ -178,9 +194,9 @@ func NewService(d Deps) *Service {
 	return &Service{
 		capacityTemplates: d.CapacityTemplates, capacity: d.Capacity, capacityPrincipal: d.CapacityPrincipal,
 		appliedInputs: d.AppliedInputs, cloudSyncWorkflow: d.CloudSyncWorkflow,
-		cloudProfiles: d.CloudProfiles, store: d.Store, projects: d.Projects, analyses: d.Analyses, manifests: d.Manifests,
+		cloudProfiles: d.CloudProfiles, store: d.Store, projects: d.Projects, analyses: d.Analyses, commits: d.Commits, manifests: d.Manifests,
 		providers: d.Providers, clouds: d.Connections, authz: d.Authz, workflow: d.Workflow, audit: d.Audit,
-		window: d.Window, now: time.Now, warn: warn, telemetry: d.Telemetry, dbTrust: d.DatabaseGatewayTrust,
+		window: d.Window, now: time.Now, sleep: waitFor, warn: warn, telemetry: d.Telemetry, dbTrust: d.DatabaseGatewayTrust,
 		kinds: d.Kinds, endpoints: d.Endpoints, dialer: d.Dialer,
 	}
 }
@@ -265,7 +281,7 @@ func (s *Service) createFrom(ctx context.Context, p security.Principal, projectI
 	if err != nil {
 		return nil, err
 	}
-	pinned, deployed, err := s.pinFrom(ctx, p.OrgID, projectID, env, source, in.Scope)
+	pinned, deployed, err := s.pinFrom(ctx, p, projectID, env, source, in.Scope)
 	if err != nil {
 		return nil, err
 	}
@@ -928,13 +944,16 @@ func (s *Service) Plan(ctx context.Context, orgID, planID string) (string, error
 	if plan.Status != StatusPlanning {
 		return plan.Status, nil
 	}
+	failure, err := s.awaitAnalyses(ctx, plan)
+	if err != nil {
+		return "", err
+	}
+	if failure != "" {
+		return s.failPlanning(ctx, orgID, planID, failure)
+	}
 	result, revision, err := s.compute(ctx, plan)
 	if permanent(err) {
-		if ferr := s.store.FailPlanning(ctx, orgID, planID, err.Error(), s.now().UTC()); ferr != nil {
-			return "", ferr
-		}
-		s.telemetry.Planned(StatusFailed)
-		return StatusFailed, nil
+		return s.failPlanning(ctx, orgID, planID, err.Error())
 	}
 	if err != nil {
 		return "", err
@@ -958,6 +977,15 @@ func (s *Service) Plan(ctx context.Context, orgID, planID string) (string, error
 	}
 	s.telemetry.Planned(plan.Status)
 	return plan.Status, nil
+}
+
+// failPlanning settles a plan that can never be planned as failed, saying why.
+func (s *Service) failPlanning(ctx context.Context, orgID, planID, reason string) (string, error) {
+	if err := s.store.FailPlanning(ctx, orgID, planID, reason, s.now().UTC()); err != nil {
+		return "", err
+	}
+	s.telemetry.Planned(StatusFailed)
+	return StatusFailed, nil
 }
 
 func (s *Service) status(ctx context.Context, orgID, planID string) (string, error) {

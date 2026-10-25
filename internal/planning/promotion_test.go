@@ -32,6 +32,7 @@ type promoStore struct {
 	plans    map[string]*Plan
 	deployed map[string][]*DeployedSource // by environment ID
 	manifest map[string]*DeployedManifest // by environment ID
+	bindings map[string][]*Binding        // by environment ID
 }
 
 func clonePlan(p *Plan) *Plan {
@@ -87,8 +88,10 @@ func (s *promoStore) DeployedState(_ context.Context, _, environmentID string) (
 	return s.manifest[environmentID], slices.Clone(s.deployed[environmentID]), nil
 }
 
-func (s *promoStore) ListBindings(context.Context, string, string) ([]*Binding, error) {
-	return nil, nil
+func (s *promoStore) ListBindings(_ context.Context, _, environmentID string) ([]*Binding, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.bindings[environmentID]), nil
 }
 
 func (s *promoStore) EnvironmentConnections(context.Context, string, string) (map[string]string, error) {
@@ -158,12 +161,15 @@ func (allowAll) Require(context.Context, security.Principal, security.Permission
 }
 
 // promoWorkflow plans each plan as soon as it starts, so Create returns it
-// planned.
+// planned, or still planning while an analysis it pins runs. The real
+// workflow retries that.
 type promoWorkflow struct{ svc *Service }
 
 func (w *promoWorkflow) Start(ctx context.Context, orgID, planID string, _ time.Duration) error {
-	_, err := w.svc.Plan(ctx, orgID, planID)
-	return err
+	if _, err := w.svc.Plan(ctx, orgID, planID); err != nil && !errors.Is(err, ErrAnalysisPending) {
+		return err
+	}
+	return nil
 }
 
 func (*promoWorkflow) Decide(context.Context, string, string, orchestration.Decision) error {
@@ -399,8 +405,34 @@ func TestCreateFrom_holdsSourcesTheSourceEnvironmentDoesntRun(t *testing.T) {
 
 	w.store.deployed[envProduction] = w.store.deployed[envProduction][1:] // web only
 	_, err := w.create(t, CreatePlanInput{Environment: "production", From: "staging"})
-	if !errors.Is(err, ErrNeverDeployed) || !strings.Contains(err.Error(), "api") || !strings.Contains(err.Error(), "production") {
+	if !errors.Is(err, ErrNeverDeployed) || !strings.Contains(err.Error(), "api has never been deployed to production, and staging doesn't run it either") {
 		t.Fatalf("err %v", err)
+	}
+}
+
+func TestCreateFrom_saysWhenTheScopeLeavesOutANeverDeployedSource(t *testing.T) {
+	w := promotionWorld(t)
+	w.store.deployed[envProduction] = w.store.deployed[envProduction][1:] // web only
+	_, err := w.create(t, CreatePlanInput{Environment: "production", From: "staging", Scope: []string{"web"}})
+	if !errors.Is(err, ErrNeverDeployed) || !strings.Contains(err.Error(), "api has never been deployed to production and is outside the scope of this promotion") ||
+		strings.Contains(err.Error(), "doesn't run it") {
+		t.Fatalf("err %v", err)
+	}
+}
+
+func TestCreateFrom_refusesWhenTheSourcePlanIsGoneOrDoesntListTheSource(t *testing.T) {
+	w := promotionWorld(t)
+	delete(w.store.plans, "plan_s1")
+	_, err := w.create(t, CreatePlanInput{Environment: "production", From: "staging", Scope: []string{"web"}})
+	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "web") || !strings.Contains(err.Error(), "plan_s1") {
+		t.Fatalf("plan gone: err %v", err)
+	}
+
+	w = promotionWorld(t)
+	w.store.plans["plan_s1"].Sources = w.store.plans["plan_s1"].Sources[:1] // api only
+	_, err = w.create(t, CreatePlanInput{Environment: "production", From: "staging"})
+	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "web") || !strings.Contains(err.Error(), "plan_s1") {
+		t.Fatalf("source not listed: err %v", err)
 	}
 }
 
@@ -495,5 +527,33 @@ func TestPinsMatchSource(t *testing.T) {
 	ok, diffs, err = w.svc.PinsMatchSource(ctx, "org", release)
 	if err != nil || !ok || diffs != nil {
 		t.Fatalf("without From: %v %q %v", ok, diffs, err)
+	}
+}
+
+// Two releases of one environment write their source rows in the same
+// order, so they wait on each other instead of deadlocking.
+func TestReleaseSourceRows_areInSourceOrder(t *testing.T) {
+	r := &DeployedRelease{EnvironmentID: "env", PlanID: "plan_1", Sources: []*DeployedSource{
+		{SourceID: "src_web", AnalysisID: "anl_w", CommitSHA: "w"},
+		{SourceID: "src_api", AnalysisID: "anl_a", CommitSHA: "a"},
+		{SourceID: "src_db", AnalysisID: "anl_d", CommitSHA: "d"},
+	}}
+	at := time.Date(2026, 10, 24, 9, 0, 0, 0, time.UTC)
+	values, args := releaseSourceRows("org", r, at)
+	if want := "($1, $2, $3, $4, $5, $6, $7), ($8, $9, $10, $11, $12, $13, $14), ($15, $16, $17, $18, $19, $20, $21)"; values != want {
+		t.Fatalf("values %s", values)
+	}
+	var order []any
+	for i := 1; i < len(args); i += 7 {
+		order = append(order, args[i])
+	}
+	if want := []any{"src_api", "src_db", "src_web"}; !reflect.DeepEqual(order, want) {
+		t.Fatalf("rows in order %v, want %v", order, want)
+	}
+	if want := []any{"env", "src_api", "org", "anl_a", "a", "plan_1", at}; !reflect.DeepEqual(args[:7], want) {
+		t.Fatalf("first row %v", args[:7])
+	}
+	if r.Sources[0].SourceID != "src_web" {
+		t.Fatal("sorted the caller's sources")
 	}
 }
