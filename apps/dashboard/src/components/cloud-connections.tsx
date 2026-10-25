@@ -78,6 +78,7 @@ import {
 import { formatDate } from "@/lib/format"
 import { cloudCatalogue, cloudPurposes } from "@/lib/integrations"
 import { useOrganization } from "@/lib/organization"
+import { rememberSignInCloud } from "@/lib/sign-in-cloud"
 import { cn } from "@/lib/utils"
 
 export function CloudConnections({ className }: { className?: string }) {
@@ -183,6 +184,40 @@ function CloudTile({
   )
 }
 
+/**
+ * needsSignInAgain is whether a signed-in connection can't be used as it is.
+ * Signing in again is how it recovers, whether the sign-in lapsed or the
+ * cloud refused it.
+ */
+export function needsSignInAgain(c: Connection): boolean {
+  return (
+    c.status === "sign_in_needed" ||
+    (c.method === "oauth" && c.status !== "ready")
+  )
+}
+
+/**
+ * useSignInAgain starts a new sign-in for an existing connection. When it
+ * finishes it replaces the connection's credential. The name stays as it
+ * is, so none is sent.
+ */
+export function useSignInAgain() {
+  const start = useMutation(useConnectionSignInsStart)
+  const signInAgain = async (c: Connection) => {
+    try {
+      const started = await start.mutateAsync({
+        body: { cloud: c.cloud, name: "", connectionId: c.id },
+      })
+      rememberSignInCloud(cloudLabel(c.cloud))
+      // The generated hook doesn't type this response.
+      window.location.assign((started as SignIn).authorizeUrl)
+    } catch (err) {
+      toast.error(messageOf(err, "Sign-in couldn't be started."))
+    }
+  }
+  return { signInAgain, pending: start.isPending }
+}
+
 export const statusLabels: Record<string, string> = {
   ready: "Ready",
   incomplete: "Missing permissions",
@@ -198,6 +233,7 @@ function ConnectionRow({
   mayManage: boolean
 }) {
   const check = useMutation(useConnectionsCheck)
+  const { signInAgain, pending: signingIn } = useSignInAgain()
   const [replacing, setReplacing] = useState(false)
   const [removing, setRemoving] = useState(false)
   const roles = rolesFor(c.missing)
@@ -247,6 +283,17 @@ function ConnectionRow({
           </span>
         </div>
         {check.isPending && <Spinner className="text-muted-foreground" />}
+        {mayManage && needsSignInAgain(c) && (
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={signingIn}
+            onClick={() => void signInAgain(c)}
+          >
+            {signingIn && <Spinner />}
+            Sign in again
+          </Button>
+        )}
         {mayManage && (
           <DropdownMenu>
             <DropdownMenuTrigger
@@ -427,13 +474,13 @@ function ConnectForm({
   const available = useQuery(useConnectionCloudsList)
   const extras = (available.data?.clouds ?? []).filter((c) => !c.builtin)
   const extra = extras.find((c) => c.cloud === cloud)
-  // Signing in is offered first when the cloud supports it here. A person
-  // who wants a token picks it for one cloud, and the choice resets if they
+  // Signing in is offered first when the cloud supports it here, for a new
+  // connection or in place of an existing one's credential. A person who
+  // wants a token picks it for one cloud, and the choice resets if they
   // switch clouds.
   const entry = (available.data?.clouds ?? []).find((c) => c.cloud === cloud)
   const [tokenFor, setTokenFor] = useState<string | null>(null)
-  const signIn =
-    !replacing && !!entry?.methods.includes("oauth") && tokenFor !== cloud
+  const signIn = !!entry?.methods.includes("oauth") && tokenFor !== cloud
   const [extraSettings, setExtraSettings] = useState<Record<string, string>>(
     () => ({ ...(replacing?.details ?? {}) }) as Record<string, string>
   )
@@ -478,9 +525,14 @@ function ConnectForm({
 
   const startSignIn = async () => {
     try {
+      // Signing in for an existing connection replaces its credential and
+      // keeps its name, so none is sent.
       const started = await signInStart.mutateAsync({
-        body: { cloud, name: name.trim() },
+        body: replacing
+          ? { cloud, name: "", connectionId: replacing.id }
+          : { cloud, name: name.trim() },
       })
+      rememberSignInCloud(entry?.title ?? cloudLabel(cloud))
       // The generated hook doesn't type this response.
       window.location.assign((started as SignIn).authorizeUrl)
     } catch (err) {
