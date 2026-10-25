@@ -17,8 +17,11 @@ import (
 type lockingStore struct {
 	*memStore
 	mu    sync.Mutex
-	lock  sync.Mutex
+	held  map[string]*sync.Mutex
 	locks int
+	// entrants counts callers inside WithConnectionLock or waiting on it,
+	// as a pooled database connection would be; most is its peak.
+	entrants, most int
 }
 
 func (l *lockingStore) GetConnection(ctx context.Context, org, id string) (*Connection, error) {
@@ -33,13 +36,34 @@ func (l *lockingStore) UpdateConnection(ctx context.Context, c *Connection) erro
 	return l.memStore.UpdateConnection(ctx, c)
 }
 
-func (l *lockingStore) WithConnectionLock(_ context.Context, _, _ string, fn func() error) error {
-	l.lock.Lock()
-	defer l.lock.Unlock()
+func (l *lockingStore) WithConnectionLock(_ context.Context, org, id string, fn func() error) error {
 	l.mu.Lock()
+	if l.held == nil {
+		l.held = map[string]*sync.Mutex{}
+	}
+	key := org + "/" + id
+	if l.held[key] == nil {
+		l.held[key] = &sync.Mutex{}
+	}
+	lock := l.held[key]
 	l.locks++
+	l.entrants++
+	l.most = max(l.most, l.entrants)
 	l.mu.Unlock()
+	defer func() {
+		l.mu.Lock()
+		l.entrants--
+		l.mu.Unlock()
+	}()
+	lock.Lock()
+	defer lock.Unlock()
 	return fn()
+}
+
+func (l *lockingStore) stats() (locks, most int) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.locks, l.most
 }
 
 func (l *lockingStore) OAuthConnections(context.Context) ([]*Connection, error) {
@@ -82,9 +106,19 @@ type renewer struct {
 	grants map[string]oauth.Grant
 	errs   map[string]error
 	delay  time.Duration
+	// started hears of each call, if set; block holds every call until
+	// it's closed.
+	started chan struct{}
+	block   chan struct{}
 }
 
 func (r *renewer) Refresh(_ context.Context, app oauth.App, refreshToken string) (oauth.Grant, error) {
+	if r.started != nil {
+		r.started <- struct{}{}
+	}
+	if r.block != nil {
+		<-r.block
+	}
 	time.Sleep(r.delay)
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -390,5 +424,103 @@ func TestRefreshNeedsTheConnectionLock(t *testing.T) {
 	}
 	if _, err := r.s.RefreshDue(t.Context()); !errors.Is(err, ErrUnavailable) {
 		t.Fatalf("refresh due: %v", err)
+	}
+}
+
+func TestOnlyOneCallerPerConnectionWaitsOnTheDatabaseLock(t *testing.T) {
+	r := newRefreshRig(t)
+	r.signedIn(t, "conn_do", "at-1", r.clock.Add(time.Hour))
+	r.renewer.grants["rt-at-1"] = oauth.Grant{AccessToken: "at-2", RefreshToken: "rt-at-2", Expiry: r.clock.Add(30 * 24 * time.Hour)}
+	r.renewer.delay = 30 * time.Millisecond
+	var wg sync.WaitGroup
+	errs := make([]error, 32)
+	for i := range errs {
+		wg.Go(func() { _, _, errs[i] = r.s.Credential(t.Context(), "org", "conn_do") })
+	}
+	wg.Wait()
+	for i, err := range errs {
+		if err != nil {
+			t.Fatalf("caller %d: %v", i, err)
+		}
+	}
+	if _, most := r.locked.stats(); most != 1 {
+		t.Fatalf("%d callers held or waited on the database lock at once", most)
+	}
+	if r.renewer.calls != 1 {
+		t.Fatalf("refreshed %d times", r.renewer.calls)
+	}
+}
+
+func TestACallerGivingUpInTheQueueLeavesPromptly(t *testing.T) {
+	r := newRefreshRig(t)
+	r.signedIn(t, "conn_do", "at-1", r.clock.Add(time.Hour))
+	r.renewer.grants["rt-at-1"] = oauth.Grant{AccessToken: "at-2", RefreshToken: "rt-at-2", Expiry: r.clock.Add(30 * 24 * time.Hour)}
+	r.renewer.started, r.renewer.block = make(chan struct{}, 1), make(chan struct{})
+	leader := make(chan error, 1)
+	go func() {
+		_, _, err := r.s.Credential(t.Context(), "org", "conn_do")
+		leader <- err
+	}()
+	<-r.renewer.started
+
+	ctx, cancel := context.WithCancel(t.Context())
+	follower := make(chan error, 1)
+	go func() {
+		_, _, err := r.s.Credential(ctx, "org", "conn_do")
+		follower <- err
+	}()
+	time.Sleep(20 * time.Millisecond)
+	cancel()
+	select {
+	case err := <-follower:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("follower: %v", err)
+		}
+	case <-time.After(time.Second):
+		close(r.renewer.block)
+		t.Fatal("a cancelled caller stayed queued")
+	}
+	if locks, _ := r.locked.stats(); locks != 1 {
+		t.Fatalf("the cancelled caller reached the database lock: %d entries", locks)
+	}
+	close(r.renewer.block)
+	if err := <-leader; err != nil {
+		t.Fatal(err)
+	}
+	// The slots it waited for are free again.
+	r.signedIn(t, "conn_do", "at-5", r.clock.Add(time.Hour))
+	r.renewer.grants["rt-at-5"] = oauth.Grant{AccessToken: "at-6", Expiry: r.clock.Add(30 * 24 * time.Hour)}
+	r.renewer.started = nil
+	if _, cred, err := r.s.Credential(t.Context(), "org", "conn_do"); err != nil || string(cred) != "at-6" {
+		t.Fatalf("after: %q %v", cred, err)
+	}
+}
+
+func TestRenewalsAcrossConnectionsAreCapped(t *testing.T) {
+	r := newRefreshRig(t)
+	r.renewer.delay = 50 * time.Millisecond
+	ids := make([]string, 3*maxRenewals)
+	for i := range ids {
+		ids[i] = "conn_" + string(rune('a'+i))
+		token := "tok-" + ids[i]
+		r.signedIn(t, ids[i], token, r.clock.Add(time.Hour))
+		r.renewer.grants["rt-"+token] = oauth.Grant{AccessToken: token + "-2", Expiry: r.clock.Add(30 * 24 * time.Hour)}
+	}
+	var wg sync.WaitGroup
+	for _, id := range ids {
+		for range 3 {
+			wg.Go(func() {
+				if _, cred, err := r.s.Credential(t.Context(), "org", id); err != nil || string(cred) != "tok-"+id+"-2" {
+					t.Errorf("%s: %q %v", id, cred, err)
+				}
+			})
+		}
+	}
+	wg.Wait()
+	if _, most := r.locked.stats(); most > maxRenewals || most < 2 {
+		t.Fatalf("%d renewals held or waited on the database at once; the cap is %d", most, maxRenewals)
+	}
+	if r.renewer.calls != len(ids) {
+		t.Fatalf("refreshed %d times for %d connections", r.renewer.calls, len(ids))
 	}
 }

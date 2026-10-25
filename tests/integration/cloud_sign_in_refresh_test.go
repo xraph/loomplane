@@ -62,9 +62,7 @@ func newRefreshFixture(t *testing.T) *refreshFixture {
 	}
 	t.Cleanup(func() { _ = pg.Close() })
 	f := &refreshFixture{store: connections.NewPgStore(pg), secrets: &infraSecrets{values: map[string][]byte{}}, renewer: &countingRenewer{}}
-	f.svc = connections.NewService(f.store, f.secrets, nil, nil, nil, func(msg string, err error) { t.Logf("warn: %s: %v", msg, err) })
-	f.svc.Providers = map[string]connections.Provider{connections.DigitalOcean: f.renewer}
-	f.svc.ConfigApps = map[string]oauth.App{connections.DigitalOcean: {ClientID: "id", ClientSecret: "secret"}}
+	f.svc = f.process(t)
 	now := time.Now().UTC()
 	c := &connections.Connection{ID: "conn_1", OrgID: "org_1", Cloud: connections.DigitalOcean, Name: "Main", Method: connections.MethodOAuth,
 		Account: "Acme", Details: map[string]string{"team_uuid": "team-1"}, Status: connections.StatusReady, CreatedAt: now, UpdatedAt: now}
@@ -78,14 +76,26 @@ func newRefreshFixture(t *testing.T) *refreshFixture {
 	return f
 }
 
+// process is a Service as another Loomplane process would have it: its
+// own in-process queue, sharing only the database and Vault.
+func (f *refreshFixture) process(t *testing.T) *connections.Service {
+	svc := connections.NewService(f.store, f.secrets, nil, nil, nil, func(msg string, err error) { t.Logf("warn: %s: %v", msg, err) })
+	svc.Providers = map[string]connections.Provider{connections.DigitalOcean: f.renewer}
+	svc.ConfigApps = map[string]oauth.App{connections.DigitalOcean: {ClientID: "id", ClientSecret: "secret"}}
+	return svc
+}
+
 func TestCredentialRefreshesOnceAcrossConcurrentCallers(t *testing.T) {
 	f := newRefreshFixture(t)
 	var wg sync.WaitGroup
 	creds := make([]string, 8)
 	errs := make([]error, 8)
 	for i := range 8 {
+		// Each caller is its own process, so only the advisory lock
+		// stands between them.
+		svc := f.process(t)
 		wg.Go(func() {
-			_, cred, err := f.svc.Credential(t.Context(), "org_1", "conn_1")
+			_, cred, err := svc.Credential(t.Context(), "org_1", "conn_1")
 			creds[i], errs[i] = string(cred), err
 		})
 	}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/xraph/loomplane/internal/clouds/oauth"
@@ -17,12 +18,75 @@ const refreshAhead = 24 * time.Hour
 // sign-in, so one nobody deploys with still stays fresh.
 const backgroundAhead = 7 * 24 * time.Hour
 
+// maxRenewals caps the renewals one process runs against the database at
+// once. Each holds a pooled connection for its lock and borrows another
+// for its queries, so this keeps renewals to half the default pool of 16.
+const maxRenewals = 4
+
 // grantStore is what renewing a sign-in needs from the database: one lock
 // per connection, shared with credential replacement, and every sign-in
 // that could need renewing. *PgStore has it.
 type grantStore interface {
 	OAuthConnections(ctx context.Context) ([]*Connection, error)
 	WithConnectionLock(ctx context.Context, orgID, id string, fn func() error) error
+}
+
+// renewGate queues renewals in the process before they reach the
+// database. A caller waiting on the database lock holds a pooled
+// connection, so without it many callers of one connection could take
+// the whole pool and leave none for the caller holding the lock.
+type renewGate struct {
+	mu    sync.Mutex
+	queue map[string]*renewQueue
+	slots chan struct{}
+}
+
+// renewQueue lets one caller of a connection through at a time.
+type renewQueue struct {
+	turn  chan struct{}
+	users int
+}
+
+func newRenewGate(slots int) *renewGate {
+	return &renewGate{queue: map[string]*renewQueue{}, slots: make(chan struct{}, slots)}
+}
+
+// enter waits for key's turn and then for a free slot, or for ctx to end.
+// The caller calls leave when done.
+func (g *renewGate) enter(ctx context.Context, key string) (leave func(), err error) {
+	g.mu.Lock()
+	q := g.queue[key]
+	if q == nil {
+		q = &renewQueue{turn: make(chan struct{}, 1)}
+		g.queue[key] = q
+	}
+	q.users++
+	g.mu.Unlock()
+	forget := func() {
+		g.mu.Lock()
+		if q.users--; q.users == 0 {
+			delete(g.queue, key)
+		}
+		g.mu.Unlock()
+	}
+	select {
+	case q.turn <- struct{}{}:
+	case <-ctx.Done():
+		forget()
+		return nil, ctx.Err()
+	}
+	select {
+	case g.slots <- struct{}{}:
+	case <-ctx.Done():
+		<-q.turn
+		forget()
+		return nil, ctx.Err()
+	}
+	return func() {
+		<-g.slots
+		<-q.turn
+		forget()
+	}, nil
 }
 
 // RefreshReport counts what one pass over the sign-ins did.
@@ -56,6 +120,9 @@ func (s *Service) usableGrant(ctx context.Context, c *Connection) (oauth.Grant, 
 		return g, nil
 	case errors.Is(err, ErrNotReady), errors.Is(err, ErrChanged):
 		return oauth.Grant{}, err
+	case ctx.Err() != nil:
+		// The caller gave up, so it needs no token.
+		return oauth.Grant{}, ctx.Err()
 	case held.Expiry.After(s.now()):
 		s.warn("renew the sign-in of "+c.ID+"; using its unexpired token", err)
 		return held, nil
@@ -67,17 +134,28 @@ func (s *Service) usableGrant(ctx context.Context, c *Connection) (oauth.Grant, 
 }
 
 // renew trades held's refresh token for a new grant if held expires
-// within ahead. It does so under the connection's lock and reads Vault
-// again first, so of several callers only the first spends the refresh
-// token and the rest use what it stored. renewed reports whether this
+// within ahead. Callers in this process queue in s.renewals first, so at
+// most one per connection waits on the database. It then takes the
+// connection's lock and reads Vault again, so of several callers in any
+// process only the first spends the refresh token and the rest use what
+// it stored. renewed reports whether this
 // call renewed it. A refusal, or a cloud without a sign-in app, marks the
 // connection sign_in_needed and is ErrNotReady.
 func (s *Service) renew(ctx context.Context, c *Connection, held oauth.Grant, ahead time.Duration) (g oauth.Grant, renewed bool, err error) {
 	if !held.Due(s.now(), ahead) {
 		return held, false, nil
 	}
-	if s.grants == nil {
+	if s.grants == nil || s.renewals == nil {
 		return oauth.Grant{}, false, fmt.Errorf("%w: renewing a sign-in needs the database", ErrUnavailable)
+	}
+	leave, err := s.renewals.enter(ctx, c.OrgID+"/"+c.ID)
+	if err != nil {
+		return oauth.Grant{}, false, err
+	}
+	defer leave()
+	// Whoever went first has most likely renewed it already.
+	if latest, err := s.readGrant(ctx, c); err == nil && !latest.Due(s.now(), ahead) {
+		return latest, false, nil
 	}
 	var lapsed *Connection
 	var why string

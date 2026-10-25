@@ -63,6 +63,8 @@ type Service struct {
 	// grants renews sign-ins. It's nil when the store can't lock a
 	// connection, and then nothing is renewed.
 	grants grantStore
+	// renewals queues renewals before they take a database connection.
+	renewals *renewGate
 }
 
 // NewService returns a Service. checkers maps each cloud to its checker;
@@ -72,7 +74,7 @@ func NewService(store Store, secrets Secrets, checkers map[string]Checker, authz
 		warn = func(string, error) {}
 	}
 	grants, _ := store.(grantStore)
-	return &Service{store: store, secrets: secrets, checkers: checkers, authz: authz, audit: audit, now: time.Now, warn: warn, grants: grants}
+	return &Service{store: store, secrets: secrets, checkers: checkers, authz: authz, audit: audit, now: time.Now, warn: warn, grants: grants, renewals: newRenewGate(maxRenewals)}
 }
 
 // CreateInput connects a cloud account.
