@@ -62,16 +62,30 @@ var errPSCProvision = errors.New("cloud sql PSC endpoint provisioning does not m
 // EnsureSQLPSCSourceEndpoint provisions the owned private route and its DNS
 // records. Resolver reachability and SQL authentication remain separate gates.
 func (s *Session) EnsureSQLPSCSourceEndpoint(ctx context.Context, spec SQLPSCProvisionSpec, checkpoint *SQLPSCProvisionState, save func(SQLPSCProvisionState) error, check func(context.Context) error) (*SQLPSCProvisionedEndpoint, error) {
+	return s.pscSourceEndpoint(ctx, spec, checkpoint, save, check, true)
+}
+
+// ReconcileSQLPSCSourceEndpoint recovers attempted operations without creating
+// missing resources. The returned endpoint may be partial and is not a readiness
+// check. Missing operation evidence leaves reconciliation blocked.
+func (s *Session) ReconcileSQLPSCSourceEndpoint(ctx context.Context, spec SQLPSCProvisionSpec, checkpoint *SQLPSCProvisionState, save func(SQLPSCProvisionState) error, check func(context.Context) error) (*SQLPSCProvisionedEndpoint, error) {
+	return s.pscSourceEndpoint(ctx, spec, checkpoint, save, check, false)
+}
+
+func (s *Session) pscSourceEndpoint(ctx context.Context, spec SQLPSCProvisionSpec, checkpoint *SQLPSCProvisionState, save func(SQLPSCProvisionState) error, check func(context.Context) error, provision bool) (*SQLPSCProvisionedEndpoint, error) {
 	if checkpoint != nil && checkpoint.DNS != (SQLPSCSourceDNSState{}) && (!checkpoint.Address.Complete || !checkpoint.ForwardingRule.Complete) {
 		return nil, errPSCProvision
 	}
-	endpoint, err := s.EnsureSQLPSCSourceForwardingRule(ctx, spec, checkpoint, save, check)
+	endpoint, err := s.pscSourceForwardingRule(ctx, spec, checkpoint, save, check, provision)
 	if err != nil {
 		return nil, err
 	}
+	if !checkpoint.ForwardingRule.Complete {
+		return endpoint, nil
+	}
 	guard := func(ctx context.Context) error {
 		witness := *checkpoint
-		observed, readErr := s.EnsureSQLPSCSourceForwardingRule(ctx, spec, &witness, func(SQLPSCProvisionState) error { return errPSCProvision }, check)
+		observed, readErr := s.pscSourceForwardingRule(ctx, spec, &witness, func(SQLPSCProvisionState) error { return errPSCProvision }, check, provision)
 		if readErr != nil {
 			return readErr
 		}
@@ -90,7 +104,7 @@ func (s *Session) EnsureSQLPSCSourceEndpoint(ctx context.Context, spec SQLPSCPro
 		*checkpoint = updated
 		return nil
 	}
-	if dnsErr := s.ensurePSCSourceDNS(ctx, checkpoint.Scope, spec.Endpoint.ConsumerProject, spec.Endpoint.Network, *endpoint, &dns, saveDNS, guard); dnsErr != nil {
+	if dnsErr := s.pscSourceDNS(ctx, checkpoint.Scope, spec.Endpoint.ConsumerProject, spec.Endpoint.Network, *endpoint, &dns, saveDNS, guard, provision); dnsErr != nil {
 		return nil, dnsErr
 	}
 	return endpoint, nil
@@ -99,6 +113,10 @@ func (s *Session) EnsureSQLPSCSourceEndpoint(ctx context.Context, spec SQLPSCPro
 // EnsureSQLPSCSourceForwardingRule reserves an address and creates a forwarding
 // rule without enabling inherited SQL endpoint automation or public ingress.
 func (s *Session) EnsureSQLPSCSourceForwardingRule(ctx context.Context, spec SQLPSCProvisionSpec, checkpoint *SQLPSCProvisionState, save func(SQLPSCProvisionState) error, check func(context.Context) error) (*SQLPSCProvisionedEndpoint, error) {
+	return s.pscSourceForwardingRule(ctx, spec, checkpoint, save, check, true)
+}
+
+func (s *Session) pscSourceForwardingRule(ctx context.Context, spec SQLPSCProvisionSpec, checkpoint *SQLPSCProvisionState, save func(SQLPSCProvisionState) error, check func(context.Context) error, provision bool) (*SQLPSCProvisionedEndpoint, error) {
 	route := provider.CloudSQLApplicationNetwork{ConsumerProject: spec.Endpoint.ConsumerProject, Network: spec.Endpoint.Network, Subnetwork: spec.Subnetwork}
 	if checkpoint == nil || save == nil || check == nil || !spec.Endpoint.Valid(spec.Source.Region) || !route.Valid(spec.Source.Region) {
 		return nil, errPSCProvision
@@ -162,6 +180,9 @@ func (s *Session) EnsureSQLPSCSourceForwardingRule(ctx context.Context, spec SQL
 		}
 	}
 
+	if !state.Address.Complete && state.ForwardingRule != (PSCComputeState{}) {
+		return nil, errPSCProvision
+	}
 	guard := func(ctx context.Context) error {
 		if err := check(ctx); err != nil {
 			return err
@@ -198,9 +219,14 @@ func (s *Session) EnsureSQLPSCSourceForwardingRule(ctx context.Context, spec SQL
 		return nil
 	}
 	addressBody := map[string]any{"name": addressName, "description": description, "addressType": "INTERNAL", "purpose": "GCE_ENDPOINT", "ipVersion": "IPV4", "subnetwork": route.Subnetwork, "networkTier": "PREMIUM"}
-	if err := s.ensurePSCCompute(ctx, prefix, addressPath, scope, state.Address, addressBody, readAddress, func(next PSCComputeState) error { updated := state; updated.Address = next; return persist(updated) }, guard); err != nil {
+	if err := s.ensurePSCCompute(ctx, prefix, addressPath, scope, state.Address, addressBody, readAddress, func(next PSCComputeState) error { updated := state; updated.Address = next; return persist(updated) }, guard, provision); err != nil {
 		return nil, err
 	}
+	endpoint := &SQLPSCProvisionedEndpoint{DNSName: source.DNSName, ServiceAttachment: attachment}
+	if !state.Address.Complete {
+		return endpoint, nil
+	}
+	endpoint.AddressID, endpoint.Address = address.ID, address.Address
 	var rule sqlManualForwardingRule
 	readRule := func(id string) error {
 		var observed struct {
@@ -232,8 +258,11 @@ func (s *Session) EnsureSQLPSCSourceForwardingRule(ctx context.Context, spec SQL
 		updated := state
 		updated.ForwardingRule = next
 		return persist(updated)
-	}, ruleGuard); err != nil {
+	}, ruleGuard, provision); err != nil {
 		return nil, err
+	}
+	if !state.ForwardingRule.Complete {
+		return endpoint, nil
 	}
 	for {
 		if err := guard(ctx); err != nil {
@@ -247,7 +276,7 @@ func (s *Session) EnsureSQLPSCSourceForwardingRule(ctx context.Context, spec SQL
 		}
 		pending := rule.Status == "PENDING"
 		checked := rule
-		if pending {
+		if pending || !provision && rule.Status == "CLOSED" {
 			checked.Status = "ACCEPTED"
 		}
 		if !checked.matches(spec.Endpoint, spec.Source.Region, attachment) {
@@ -256,7 +285,7 @@ func (s *Session) EnsureSQLPSCSourceForwardingRule(ctx context.Context, spec SQL
 		if err := guard(ctx); err != nil {
 			return nil, err
 		}
-		if !pending {
+		if !pending || !provision {
 			return &SQLPSCProvisionedEndpoint{AddressID: address.ID, ForwardingRuleID: rule.ID, Address: address.Address, DNSName: source.DNSName, ServiceAttachment: attachment}, nil
 		}
 		if err := s.wait(ctx); err != nil {
@@ -339,7 +368,7 @@ func (op pscComputeOperation) matchesMutation(prefix, path, request, verb string
 	return op.Kind == "compute#operation" && positiveComputeID(op.ID) && validSQLPathID(op.Name) && op.RequestID == request && op.Type == verb && computeResource(op.Target) == path && computeResource(op.Region) == prefix && slices.Contains([]string{"PENDING", "RUNNING", "DONE"}, op.Status) && (state.Operation == "" || state.Operation == op.Name && state.OperationID == op.ID) && (state.ResourceID == "" || state.ResourceID == op.TargetID) && (op.TargetID == "" && op.Status != "DONE" || positiveComputeID(op.TargetID))
 }
 
-func (s *Session) ensurePSCCompute(ctx context.Context, prefix, path, scope string, state PSCComputeState, body map[string]any, verify func(string) error, save func(PSCComputeState) error, check func(context.Context) error) error {
+func (s *Session) ensurePSCCompute(ctx context.Context, prefix, path, scope string, state PSCComputeState, body map[string]any, verify func(string) error, save func(PSCComputeState) error, check func(context.Context) error, provision bool) error {
 	request := uuid.NewSHA1(uuid.NameSpaceURL, []byte(scope+"/"+path)).String()
 	if state.RequestID != "" && state.RequestID != request || !state.Attempted && state != (PSCComputeState{}) || state.Attempted && state.RequestID == "" || state.Operation == "" && (state.OperationID != "" || state.ResourceID != "" || state.Complete) || state.Operation != "" && (!validSQLPathID(state.Operation) || !positiveComputeID(state.OperationID)) || state.ResourceID != "" && !positiveComputeID(state.ResourceID) || state.Complete && state.ResourceID == "" {
 		return errPSCProvision
@@ -366,6 +395,9 @@ func (s *Session) ensurePSCCompute(ctx context.Context, prefix, path, scope stri
 	var op pscComputeOperation
 	switch {
 	case !state.Attempted:
+		if !provision {
+			return check(ctx)
+		}
 		var existing json.RawMessage
 		err := s.do(ctx, http.MethodGet, s.c.url("compute.googleapis.com", "/compute/v1/"+path), nil, &existing)
 		if err == nil {

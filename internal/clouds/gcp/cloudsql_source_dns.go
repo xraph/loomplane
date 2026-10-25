@@ -102,6 +102,10 @@ func validPSCRequest(id string) bool {
 }
 
 func (s *Session) ensurePSCSourceDNS(ctx context.Context, networkScope, project, network string, endpoint SQLPSCProvisionedEndpoint, checkpoint *SQLPSCSourceDNSState, save func(SQLPSCSourceDNSState) error, check func(context.Context) error) error {
+	return s.pscSourceDNS(ctx, networkScope, project, network, endpoint, checkpoint, save, check, true)
+}
+
+func (s *Session) pscSourceDNS(ctx context.Context, networkScope, project, network string, endpoint SQLPSCProvisionedEndpoint, checkpoint *SQLPSCSourceDNSState, save func(SQLPSCSourceDNSState) error, check func(context.Context) error, provision bool) error {
 	ip, ipErr := netip.ParseAddr(endpoint.Address)
 	parts := strings.Split(network, "/")
 	if checkpoint == nil || save == nil || check == nil || networkScope == "" || !validSQLPathID(project) || len(parts) != 5 || parts[0] != "projects" || parts[1] != project || parts[2] != "global" || parts[3] != "networks" || !validSQLPathID(parts[4]) || !positiveComputeID(endpoint.AddressID) || !positiveComputeID(endpoint.ForwardingRuleID) || !validSQLPSCName(endpoint.DNSName) || ipErr != nil || !ip.Is4() || !ip.IsPrivate() {
@@ -147,6 +151,9 @@ func (s *Session) ensurePSCSourceDNS(ctx context.Context, networkScope, project,
 	if state.ZoneID == "" {
 		var zone pscDNSZone
 		if state.ZoneRequest == "" {
+			if !provision {
+				return check(ctx)
+			}
 			_, err := readZone(want.Name)
 			if err == nil {
 				return errPSCProvision
@@ -224,6 +231,9 @@ func (s *Session) ensurePSCSourceDNS(ctx context.Context, networkScope, project,
 	if state.RecordRequest == "" {
 		if err := s.verifyPSCRecords(ctx, zoneURL, want.DNSName, nil, zoneGuard); err != nil {
 			return err
+		}
+		if !provision {
+			return zoneGuard()
 		}
 		next := state
 		next.RecordRequest = uuid.NewString()
