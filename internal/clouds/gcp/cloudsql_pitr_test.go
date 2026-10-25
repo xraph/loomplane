@@ -191,7 +191,7 @@ func TestSQLPITRWindowBindsFreshBoundsToOneIsolatedIncarnation(t *testing.T) {
 }
 
 func TestSQLPITRCloneUsesReviewedTimeAndCapturedOperation(t *testing.T) {
-	for _, scenario := range []string{"clone", "resume", "existing", "foreign-project", "unsafe-source", "changed-settings", "expired-time", "missing-operation", "foreign-operation", "failed-operation", "wrong-kind", "missing-timing", "reused-name", "unsafe-copy", "inspect-failure", "checkpoint-failure", "capture-failure", "guard-failure"} {
+	for _, scenario := range []string{"clone", "deleted", "deleted-resume", "deleted-time-changed", "deleted-settings-changed", "resume", "existing", "foreign-project", "unsafe-source", "changed-settings", "expired-time", "missing-operation", "foreign-operation", "failed-operation", "wrong-kind", "missing-timing", "reused-name", "unsafe-copy", "inspect-failure", "checkpoint-failure", "capture-failure", "guard-failure"} {
 		t.Run(scenario, func(t *testing.T) {
 			source, _ := pscPITRInstance(t)
 			pin, err := source.Incarnation("source-project", "us-central1", "source-db")
@@ -206,10 +206,22 @@ func TestSQLPITRCloneUsesReviewedTimeAndCapturedOperation(t *testing.T) {
 			now := time.Now().UTC().Add(-time.Minute)
 			op := map[string]any{"kind": "sql#operation", "name": "clone-original", "status": "DONE", "targetProject": "source-project", "targetId": "recovery-copy", "operationType": "CLONE", "insertTime": now.Add(-time.Second), "endTime": now.Add(time.Second)}
 			writes, inspected := 0, 0
-			captured, before := scenario == "resume" || scenario == "missing-operation", false
+			captured, before := scenario == "resume" || scenario == "deleted-resume" || scenario == "missing-operation", false
 			exists := captured || scenario == "existing"
+			deleted := SQLDeletedPITRSource{Backup: "projects/source-project/backups/final-source", DeletedAt: now.Add(time.Second)}
 			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
+				if strings.HasSuffix(r.URL.Path, "/backups/final-source") {
+					body := deletedPITRBackup(t, deleted.DeletedAt)
+					if scenario == "deleted-time-changed" {
+						body["instanceDeletionTime"] = deleted.DeletedAt.Add(time.Second)
+					}
+					if scenario == "deleted-settings-changed" {
+						body["instanceSettings"].(map[string]any)["settings"].(map[string]any)["settingsVersion"] = "43"
+					}
+					_ = json.NewEncoder(w).Encode(body)
+					return
+				}
 				if strings.Contains(r.URL.Path, "/operations/") {
 					if !captured {
 						t.Error("operation polled before durable capture")
@@ -239,7 +251,14 @@ func TestSQLPITRCloneUsesReviewedTimeAndCapturedOperation(t *testing.T) {
 						t.Error(decodeErr)
 					}
 					clone := body["cloneContext"]
-					if len(body) != 1 || len(clone) != 3 || clone["kind"] != "sql#cloneContext" || clone["destinationInstanceName"] != "recovery-copy" || clone["pointInTime"] != at.Format(time.RFC3339Nano) {
+					fields := 3
+					if scenario == "deleted" {
+						fields++
+						if clone["sourceInstanceDeletionTime"] != deleted.DeletedAt.Format(time.RFC3339Nano) {
+							t.Error("clone lost deleted source context", body)
+						}
+					}
+					if len(body) != 1 || len(clone) != fields || clone["kind"] != "sql#cloneContext" || clone["destinationInstanceName"] != "recovery-copy" || clone["pointInTime"] != at.Format(time.RFC3339Nano) {
 						t.Error("clone lost exact UTC selection or invented settings overrides", body)
 					}
 					exists = true
@@ -261,6 +280,11 @@ func TestSQLPITRCloneUsesReviewedTimeAndCapturedOperation(t *testing.T) {
 				}
 				_, fields := pscPITRInstance(t)
 				if strings.HasSuffix(r.URL.Path, "/source-db") {
+					if strings.HasPrefix(scenario, "deleted") {
+						t.Error("deleted clone read reusable source name")
+						w.WriteHeader(500)
+						return
+					}
 					if scenario == "unsafe-source" {
 						fields["settings"].(map[string]any)["ipConfiguration"].(map[string]any)["ipv4Enabled"] = true
 					}
@@ -311,21 +335,26 @@ func TestSQLPITRCloneUsesReviewedTimeAndCapturedOperation(t *testing.T) {
 				}
 				return nil
 			}}
-			if scenario == "resume" || scenario == "missing-operation" {
+			if scenario == "resume" || scenario == "deleted-resume" || scenario == "missing-operation" {
 				track.Resume = "clone-original"
 			}
 			if scenario == "foreign-project" {
 				s.key.ProjectID = "another-project"
 			}
-			in, err := s.CloneSQLPointInTime(t.Context(), pscPITRSpec(), pin, digest, at, target, track)
-			if scenario == "clone" || scenario == "resume" {
+			var in *SQLInstance
+			if strings.HasPrefix(scenario, "deleted") {
+				in, err = s.CloneSQLDeletedPointInTime(t.Context(), pscPITRSpec(), pin, digest, deleted, at, target, track)
+			} else {
+				in, err = s.CloneSQLPointInTime(t.Context(), pscPITRSpec(), pin, digest, at, target, track)
+			}
+			if scenario == "clone" || scenario == "resume" || scenario == "deleted" || scenario == "deleted-resume" {
 				if err != nil || in == nil || inspected != 1 {
 					t.Fatalf("captured clone did not complete: %+v %v inspected=%d", in, err, inspected)
 				}
 			} else if err == nil || in != nil {
 				t.Fatalf("unsafe clone succeeded: %+v %v", in, err)
 			}
-			if scenario == "existing" || scenario == "foreign-project" || scenario == "unsafe-source" || scenario == "changed-settings" || scenario == "expired-time" || scenario == "missing-operation" || scenario == "resume" || scenario == "checkpoint-failure" || scenario == "guard-failure" {
+			if scenario == "deleted-resume" || scenario == "deleted-time-changed" || scenario == "deleted-settings-changed" || scenario == "existing" || scenario == "foreign-project" || scenario == "unsafe-source" || scenario == "changed-settings" || scenario == "expired-time" || scenario == "missing-operation" || scenario == "resume" || scenario == "checkpoint-failure" || scenario == "guard-failure" {
 				if writes != 0 {
 					t.Fatal("unsafe or resumed clone sent a mutation", writes)
 				}

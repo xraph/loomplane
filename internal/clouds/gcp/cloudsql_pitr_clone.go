@@ -13,6 +13,20 @@ import (
 // isolation. This first protocol keeps the project, region and capacity fixed.
 // It never patches the source or adopts an existing destination by name.
 func (s *Session) CloneSQLPointInTime(ctx context.Context, source SQLInstanceSpec, physical, digest string, at time.Time, target SQLInstanceSpec, track SQLMutation) (*SQLInstance, error) {
+	return s.cloneSQLPointInTime(ctx, source, physical, digest, nil, at, target, track)
+}
+
+// CloneSQLDeletedPointInTime retains explicit deletion context throughout the
+// same checkpointed clone protocol used for a live source.
+func (s *Session) CloneSQLDeletedPointInTime(ctx context.Context, source SQLInstanceSpec, physical, digest string, deleted SQLDeletedPITRSource, at time.Time, target SQLInstanceSpec, track SQLMutation) (*SQLInstance, error) {
+	_, offset := deleted.DeletedAt.Zone()
+	if _, err := s.sqlBackupID(deleted.Backup); err != nil || deleted.DeletedAt.IsZero() || offset != 0 || deleted.DeletedAt.After(time.Now()) || !at.Before(deleted.DeletedAt) {
+		return nil, ErrSQLPITRUnavailable
+	}
+	return s.cloneSQLPointInTime(ctx, source, physical, digest, &deleted, at, target, track)
+}
+
+func (s *Session) cloneSQLPointInTime(ctx context.Context, source SQLInstanceSpec, physical, digest string, deleted *SQLDeletedPITRSource, at time.Time, target SQLInstanceSpec, track SQLMutation) (*SQLInstance, error) {
 	_, offset := at.Zone()
 	raw, decodeErr := hex.DecodeString(digest)
 	if decodeErr != nil || len(raw) != 32 || at.IsZero() || offset != 0 || !sqlNativeName(source.Name) || !sqlNativeName(target.Name) || len(source.Name) > 63 || len(target.Name) > 63 || target.Name == source.Name || source.Region == "" || source.Region != target.Region || source.Tier != target.Tier || source.DatabaseVersion != "POSTGRES_17" || source.DatabaseVersion != target.DatabaseVersion || source.Storage == nil || target.Storage == nil || *source.Storage != *target.Storage || target.Existing || target.Intent == "" || target.Inspect == nil || track.Check == nil {
@@ -48,17 +62,30 @@ func (s *Session) CloneSQLPointInTime(ctx context.Context, source SQLInstanceSpe
 	if err := s.mutateSQL(ctx, target.Name, "Restoring the selected time into an isolated copy", track, func(op *sqlOperation) (bool, error) {
 		// This runs after the uncertain request has been durably saved. Validate
 		// current source settings and rolling bounds immediately before POST.
-		window, err := s.ReadSQLPITRWindow(ctx, source.Region, source.Name, physical, source)
+		var window *SQLPITRWindow
+		var err error
+		if deleted == nil {
+			window, err = s.ReadSQLPITRWindow(ctx, source.Region, source.Name, physical, source)
+		} else {
+			window, err = s.ReadSQLDeletedPITRWindow(ctx, source.Region, source.Name, physical, deleted.Backup, source)
+		}
 		if err != nil {
 			return false, err
 		}
 		if window.SettingsDigest != digest || at.Before(window.Earliest) || !at.Before(window.Latest) {
 			return false, ErrSQLPITRUnavailable
 		}
+		if deleted != nil && (window.DeletedSource == nil || window.DeletedSource.Backup != deleted.Backup || !window.DeletedSource.DeletedAt.Equal(deleted.DeletedAt)) {
+			return false, ErrSQLPITRUnavailable
+		}
 		if err := track.check(ctx); err != nil {
 			return false, err
 		}
-		body := map[string]any{"cloneContext": map[string]string{"kind": "sql#cloneContext", "destinationInstanceName": target.Name, "pointInTime": at.UTC().Format(time.RFC3339Nano)}}
+		clone := map[string]string{"kind": "sql#cloneContext", "destinationInstanceName": target.Name, "pointInTime": at.UTC().Format(time.RFC3339Nano)}
+		if deleted != nil {
+			clone["sourceInstanceDeletionTime"] = deleted.DeletedAt.UTC().Format(time.RFC3339Nano)
+		}
+		body := map[string]any{"cloneContext": clone}
 		return false, s.do(ctx, http.MethodPost, s.sqlPath("/instances/"+url.PathEscape(source.Name)+"/clone"), body, op)
 	}, "CLONE"); err != nil {
 		return nil, err

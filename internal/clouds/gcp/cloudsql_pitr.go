@@ -23,6 +23,7 @@ type SQLPITRWindow struct {
 	CreatedAt      time.Time
 	Earliest       time.Time
 	Latest         time.Time
+	DeletedSource  *SQLDeletedPITRSource
 }
 
 // PITRIsolation assesses settings inherited by the standard clone API. The
@@ -97,18 +98,13 @@ func (s *Session) ReadSQLPITRWindow(ctx context.Context, region, name, physical 
 	if err != nil {
 		return nil, err
 	}
-	var window struct {
-		Kind     string    `json:"kind"`
-		Earliest time.Time `json:"earliestRecoveryTime"`
-		Latest   time.Time `json:"latestRecoveryTime"`
-	}
-	query := url.Values{"location": {region}}
-	if readErr := s.do(ctx, http.MethodGet, s.sqlPath("/instances/"+url.PathEscape(name)+"/getLatestRecoveryTime")+"?"+query.Encode(), nil, &window); readErr != nil {
-		return nil, readErr
-	}
 	created, err := time.Parse(time.RFC3339Nano, in.CreateTime)
-	if err != nil || window.Kind != "sql#getLatestRecoveryTime" || window.Earliest.IsZero() || !window.Earliest.Before(window.Latest) || window.Latest.After(time.Now()) || window.Earliest.Before(created) {
+	if err != nil {
 		return nil, ErrSQLPITRUnavailable
+	}
+	window, err := s.readSQLPITRBounds(ctx, region, name, created, nil)
+	if err != nil {
+		return nil, err
 	}
 	_, current, err := s.readSQLPITRSource(ctx, region, name, physical, spec)
 	if err != nil {
@@ -117,5 +113,25 @@ func (s *Session) ReadSQLPITRWindow(ctx context.Context, region, name, physical 
 	if current != digest {
 		return nil, ErrSQLPITRUnavailable
 	}
-	return &SQLPITRWindow{PhysicalID: physical, SettingsDigest: digest, CreatedAt: created.UTC(), Earliest: window.Earliest.UTC(), Latest: window.Latest.UTC()}, nil
+	window.PhysicalID, window.SettingsDigest = physical, digest
+	return window, nil
+}
+
+func (s *Session) readSQLPITRBounds(ctx context.Context, region, name string, created time.Time, deleted *SQLDeletedPITRSource) (*SQLPITRWindow, error) {
+	var observed struct {
+		Kind     string    `json:"kind"`
+		Earliest time.Time `json:"earliestRecoveryTime"`
+		Latest   time.Time `json:"latestRecoveryTime"`
+	}
+	query := url.Values{"location": {region}}
+	if deleted != nil {
+		query.Set("sourceInstanceDeletionTime", deleted.DeletedAt.UTC().Format(time.RFC3339Nano))
+	}
+	if err := s.do(ctx, http.MethodGet, s.sqlPath("/instances/"+url.PathEscape(name)+"/getLatestRecoveryTime")+"?"+query.Encode(), nil, &observed); err != nil {
+		return nil, err
+	}
+	if observed.Kind != "sql#getLatestRecoveryTime" || observed.Earliest.IsZero() || !observed.Earliest.Before(observed.Latest) || observed.Latest.After(time.Now()) || observed.Earliest.Before(created) || deleted != nil && observed.Latest.After(deleted.DeletedAt) {
+		return nil, ErrSQLPITRUnavailable
+	}
+	return &SQLPITRWindow{CreatedAt: created.UTC(), Earliest: observed.Earliest.UTC(), Latest: observed.Latest.UTC(), DeletedSource: deleted}, nil
 }

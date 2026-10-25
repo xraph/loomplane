@@ -33,6 +33,7 @@ type sqlBackup struct {
 	DatabaseVersion string     `json:"databaseVersion"`
 	KMSKey          string     `json:"kmsKey"`
 	ExpiresAt       *time.Time `json:"expiryTime"`
+	DeletedAt       *time.Time `json:"instanceDeletionTime"`
 	Interval        struct {
 		Start time.Time `json:"startTime"`
 		End   time.Time `json:"endTime"`
