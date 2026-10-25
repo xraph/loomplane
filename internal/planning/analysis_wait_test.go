@@ -82,24 +82,30 @@ func (c *fakeClock) sleep(_ context.Context, d time.Duration) error {
 	return nil
 }
 
-// stagingService is a staging service's binding, built from repo at commitSHA.
-func stagingService(t *testing.T, name, repo, commitSHA string) *Binding {
+// stagingService is a staging service's binding, built from repo at
+// commitSHA and deployed by planID.
+func stagingService(t *testing.T, name, repo, commitSHA, planID string) *Binding {
 	t.Helper()
 	config, err := json.Marshal(ServiceConfig{Repo: repo, CommitSHA: commitSHA})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return &Binding{ID: "bnd_" + name, EnvironmentID: envStaging, Subject: ServiceSubject, Name: name, Config: config, CommitSHA: commitSHA}
+	return &Binding{ID: "bnd_" + name, EnvironmentID: envStaging, Subject: ServiceSubject, Name: name, Config: config, CommitSHA: commitSHA, PlanID: planID}
 }
 
 // unrecordedWorld is promotionWorld where staging's release of api wasn't
-// recorded, but its api service runs bbb. Analyses are queued through a
-// fake, and a fake clock does the waiting.
+// recorded, but its api service runs bbb, which plan_s0 deployed from
+// services/api on release-api. Analyses are queued through a fake, and a
+// fake clock does the waiting.
 func unrecordedWorld(t *testing.T) (*promoWorld, *fakeCommits, *fakeClock) {
 	t.Helper()
 	w := promotionWorld(t)
 	w.store.deployed[envStaging] = w.store.deployed[envStaging][1:] // web only
-	w.store.bindings = map[string][]*Binding{envStaging: {stagingService(t, "api", "api", bbb)}}
+	w.store.plans["plan_s0"] = &Plan{
+		ID: "plan_s0", OrgID: "org", ProjectID: "proj", EnvironmentID: envStaging, Environment: "staging", Status: StatusApproved,
+		Sources: []PlanSource{{SourceID: "src_api", Alias: "api", Repository: "acme/api", Root: "services/api", Ref: "release-api", CommitSHA: bbb, InScope: true}},
+	}
+	w.store.bindings = map[string][]*Binding{envStaging: {stagingService(t, "api", "api", bbb, "plan_s0")}}
 	commits := &fakeCommits{analyses: map[string]*discovery.Analysis{}}
 	clock := &fakeClock{at: time.Date(2026, 10, 24, 9, 0, 0, 0, time.UTC)}
 	w.svc.commits, w.svc.now, w.svc.sleep = commits, clock.now, clock.sleep
@@ -129,12 +135,74 @@ func TestCreateFrom_queuesAnAnalysisForACommitWithoutOne(t *testing.T) {
 	if got := pins(plan.Sources); !reflect.DeepEqual(got, want) {
 		t.Fatalf("pins %+v, want %+v", got, want)
 	}
+	// The root and branch are the deploying plan's, not the source's own.
+	if api := plan.Sources[0]; api.Root != "services/api" || api.Ref != "release-api" {
+		t.Fatalf("api root %q ref %q", api.Root, api.Ref)
+	}
+}
+
+func TestCreateFrom_refusesABindingPinWithoutItsDeployingPlan(t *testing.T) {
+	tests := []struct {
+		name  string
+		setup func(*promoWorld)
+		want  string
+	}{
+		{
+			name:  "no plan named",
+			setup: func(w *promoWorld) { w.store.bindings[envStaging][0].PlanID = "" },
+			want:  "service api runs api at bbbbbbb, but its binding names no plan",
+		},
+		{
+			name:  "plan gone",
+			setup: func(w *promoWorld) { delete(w.store.plans, "plan_s0") },
+			want:  "plan plan_s0, which deployed api at bbbbbbb, is gone",
+		},
+		{
+			name:  "plan doesn't list the source",
+			setup: func(w *promoWorld) { w.store.plans["plan_s0"].Sources[0].SourceID = "src_other" },
+			want:  "plan plan_s0, which deployed api at bbbbbbb, doesn't list it",
+		},
+		{
+			name: "plans disagree",
+			setup: func(w *promoWorld) {
+				// plan_s1 deployed api from the repository root.
+				w.store.bindings[envStaging] = append(w.store.bindings[envStaging], stagingService(t, "worker", "api", bbb, "plan_s1"))
+			},
+			want: "plans plan_s0 and plan_s1, which deployed api at bbbbbbb, disagree on its root and branch",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			t.Parallel()
+			w, commits, _ := unrecordedWorld(t)
+			tt.setup(w)
+			_, err := w.create(t, CreatePlanInput{Environment: "production", From: "staging"})
+			if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), tt.want) {
+				t.Fatalf("err %v, want %q", err, tt.want)
+			}
+			if len(commits.calls) != 0 {
+				t.Fatalf("analyzed %q", commits.calls)
+			}
+		})
+	}
+}
+
+func TestCreateFrom_bindingPinsAgreeAcrossPlans(t *testing.T) {
+	t.Parallel()
+	w, _, _ := unrecordedWorld(t)
+	w.store.plans["plan_s2"] = clonePlan(w.store.plans["plan_s0"])
+	w.store.plans["plan_s2"].ID = "plan_s2"
+	w.store.bindings[envStaging] = append(w.store.bindings[envStaging], stagingService(t, "worker", "api", bbb, "plan_s2"))
+	plan := w.promotePlanning(t)
+	if api := plan.Sources[0]; api.Root != "services/api" || api.Ref != "release-api" || api.FromPlanID != "" {
+		t.Fatalf("api %+v", api)
+	}
 }
 
 func TestCreateFrom_refusesWhenSourceBindingsDisagree(t *testing.T) {
 	t.Parallel()
 	w, commits, _ := unrecordedWorld(t)
-	w.store.bindings[envStaging] = append(w.store.bindings[envStaging], stagingService(t, "worker", "api", ccc))
+	w.store.bindings[envStaging] = append(w.store.bindings[envStaging], stagingService(t, "worker", "api", ccc, "plan_s0"))
 	_, err := w.create(t, CreatePlanInput{Environment: "production", From: "staging"})
 	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "bbbbbbb") || !strings.Contains(err.Error(), "ccccccc") {
 		t.Fatalf("err %v", err)
@@ -165,7 +233,7 @@ func TestCreateFrom_runsWhatOnlyBindingsShow(t *testing.T) {
 	t.Parallel()
 	w, commits, _ := unrecordedWorld(t)
 	delete(w.store.deployed, envStaging) // nothing recorded at all
-	w.store.bindings[envStaging] = append(w.store.bindings[envStaging], stagingService(t, "web", "web", ccc))
+	w.store.bindings[envStaging] = append(w.store.bindings[envStaging], stagingService(t, "web", "web", ccc, "plan_s1"))
 	plan := w.promotePlanning(t)
 	if len(commits.calls) != 2 || len(plan.Sources) != 2 || plan.Sources[1].CommitSHA != ccc || plan.Sources[1].FromPlanID != "" {
 		t.Fatalf("calls %q pins %+v", commits.calls, pins(plan.Sources))
@@ -173,7 +241,7 @@ func TestCreateFrom_runsWhatOnlyBindingsShow(t *testing.T) {
 
 	// Bindings without a commit, or of a repository the project doesn't
 	// have, run nothing.
-	w.store.bindings[envStaging] = []*Binding{stagingService(t, "api", "api", ""), stagingService(t, "old", "old", bbb)}
+	w.store.bindings[envStaging] = []*Binding{stagingService(t, "api", "api", "", "plan_s0"), stagingService(t, "old", "old", bbb, "plan_s0")}
 	if _, err := w.create(t, CreatePlanInput{Environment: "production", From: "staging"}); !errors.Is(err, ErrNotRunning) {
 		t.Fatalf("err %v", err)
 	}
@@ -274,7 +342,7 @@ func TestPinsMatchSource_readsBindingsForAnUnrecordedSource(t *testing.T) {
 	if err != nil || !ok || len(diffs) != 0 {
 		t.Fatalf("unchanged: %v %q %v", ok, diffs, err)
 	}
-	w.store.bindings[envStaging] = []*Binding{stagingService(t, "api", "api", ccc)}
+	w.store.bindings[envStaging] = []*Binding{stagingService(t, "api", "api", ccc, "plan_s0")}
 	ok, diffs, err = w.svc.PinsMatchSource(t.Context(), "org", plan)
 	if err != nil || ok || len(diffs) != 1 || diffs[0] != "api: staging runs "+ccc+", the plan pins "+bbb {
 		t.Fatalf("after api moved: %v %q %v", ok, diffs, err)
