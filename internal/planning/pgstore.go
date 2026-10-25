@@ -449,6 +449,19 @@ func (s *PgStore) ListBindings(ctx context.Context, orgID, environmentID string)
 	return out, nil
 }
 
+// GetBinding returns one binding of the organization, or ErrNotFound.
+func (s *PgStore) GetBinding(ctx context.Context, orgID, id string) (*Binding, error) {
+	b, err := scanBinding(s.db.QueryRow(ctx, `SELECT `+bindingColumns+` FROM loomplane_bindings
+		WHERE org_id = $1 AND id = $2`, orgID, id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get binding: %w", err)
+	}
+	return b, nil
+}
+
 func scanBinding(row pgx.Row) (*Binding, error) {
 	var b Binding
 	var cfg, replaced []byte
