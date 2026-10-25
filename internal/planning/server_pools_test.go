@@ -95,6 +95,11 @@ func TestPoolRelocationPreservesAppliedInputsAndPrivateBoundary(t *testing.T) {
 	if len(moved.Routes) != 1 || moved.Routes[0].ID != route.ID || moved.Op != Replace || !reflect.DeepEqual(moved.Service.AppliedInputs, cfg.AppliedInputs) || moved.Service.CommitSHA != "original" {
 		t.Fatal("relocation replaced serving snapshots")
 	}
+	// In a canary environment a relocated service deploys all at once, as
+	// compute's relocation branch pins it.
+	if planRelease(releaseInput(t, releaseYAML(canaryRelease)), result); warning(result, "canary-unavailable", "api") == nil || result.Release.Ramps("service:api") {
+		t.Fatalf("relocation in a canary environment: %+v, warnings %+v", result.Release, result.Warnings)
+	}
 	withoutRegistry := append([]ConnectionOption{}, options[:2]...)
 	blocked := appliedCloudPlan([]*Binding{binding}, assigned, "", withoutRegistry, providers.Registry(), map[string]CloudPlacement{"api": pin})
 	if blocked.Executable {

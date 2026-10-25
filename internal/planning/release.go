@@ -112,6 +112,8 @@ func planRelease(in Input, r *Result) {
 func noCanary(in Input, r *Result, a Action) string {
 	cfg := a.Service
 	switch {
+	// Defensive: Cloud sync plans are made without planRelease and store
+	// no release, but one that ever carries a release must not ramp.
 	case r.CloudSyncID != "":
 		return "a Cloud sync moves services as they are"
 	case a.Op == Create:

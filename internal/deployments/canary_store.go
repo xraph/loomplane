@@ -8,6 +8,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/releasehealth"
 )
 
@@ -150,19 +151,10 @@ func (s *PgStore) RecentCanaries(ctx context.Context, orgID, projectID, environm
 	return out, nil
 }
 
-// RampingCanary implements CanaryStore.
+// RampingCanary implements CanaryStore. Planning blocks new plans with the
+// same read, so it's planning's.
 func (s *PgStore) RampingCanary(ctx context.Context, orgID, environmentID string) (string, error) {
-	var id string
-	err := s.db.QueryRow(ctx, `SELECT id FROM loomplane_deployments
-		WHERE org_id = $1 AND environment_id = $2 AND status = 'running' AND canary->>'status' = ANY($3::text[])
-		ORDER BY started_at DESC, id DESC LIMIT 1`, orgID, environmentID, canaryActive).Scan(&id)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return "", nil
-	}
-	if err != nil {
-		return "", fmt.Errorf("find ramping canary: %w", err)
-	}
-	return id, nil
+	return planning.NewPgStore(s.db).RampingCanary(ctx, orgID, environmentID)
 }
 
 // CanaryBinding implements CanaryStore.
