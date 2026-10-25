@@ -26,9 +26,13 @@ import (
 )
 
 func TestNativeCloudSQLPITRCopyBackend(t *testing.T) {
-	for _, scenario := range []string{"complete", "network-restart", "network-timeout", "lost-clone-operation", "lost-network-operation", "failed-clone", "cleanup-replaced", "network-drift", "source-changed"} {
+	for _, scenario := range []string{"complete", "network-restart", "network-timeout", "admin-timeout", "lost-clone-operation", "lost-network-operation", "lost-admin-operation", "failed-clone", "cleanup-replaced", "delete-timeout", "lost-delete-operation", "credentials-replaced", "network-drift", "source-changed"} {
 		t.Run(scenario, func(t *testing.T) { runCloudSQLPITRCopy(t, scenario) })
 	}
+}
+
+func TestNativeCloudSQLPITRHTTPCLIAndDispatchRetainsExactTime(t *testing.T) {
+	runCloudSQLPITRCopy(t, "http-cli-dispatch")
 }
 
 func runCloudSQLPITRCopy(t *testing.T, scenario string) {
@@ -95,6 +99,14 @@ func runCloudSQLPITRCopy(t *testing.T, scenario string) {
 		switch {
 		case r.URL.Path == "/token":
 			fmt.Fprint(w, `{"access_token":"test-token","token_type":"Bearer","expires_in":3600}`)
+		case r.URL.Path == "/v3/projects/source-project:testIamPermissions":
+			var input struct {
+				Permissions []string `json:"permissions"`
+			}
+			if decodeErr := json.NewDecoder(r.Body).Decode(&input); decodeErr != nil {
+				t.Error(decodeErr)
+			}
+			_ = json.NewEncoder(w).Encode(input)
 		case r.Method == http.MethodGet && path == "instances/source-database":
 			observed := source
 			if sourceChanged {
@@ -191,6 +203,17 @@ func runCloudSQLPITRCopy(t *testing.T, scenario string) {
 	backend := &deployments.NativeDatabases{Google: gcp.New(server.URL), Credentials: accounts, Secrets: vault, SQLConnector: func(context.Context, *gcp.Session, string, string) (gcp.SQLConnector, error) {
 		return nativeFixtureConnector{dial: sql.verifier.Dial}, nil
 	}}
+	if scenario == "http-cli-dispatch" {
+		runCloudSQLPITRHTTP(t, f, sql, binding, cfg, server.URL, selected, backend.SQLConnector)
+		mu.Lock()
+		defer mu.Unlock()
+		for _, operation := range []string{"clone", "network", "admin", "delete"} {
+			if writes[operation] != 1 {
+				t.Fatal("HTTP/CLI workflow repeated a provider mutation", writes)
+			}
+		}
+		return
+	}
 	point, err := f.store.RefreshNativePITR(t.Context(), "org", sourceID, func(ctx context.Context, _ *recovery.NativeSource) (*recovery.NativePoint, error) {
 		return backend.NativePITRWindow(ctx, &binding)
 	})
@@ -209,6 +232,8 @@ func runCloudSQLPITRCopy(t *testing.T, scenario string) {
 	var saved struct {
 		Scope, Stage, Operation string
 		CloneOperation          string `json:"clone_operation"`
+		DeleteOperation         string `json:"delete_operation"`
+		CredentialVersion       int64  `json:"credential_version"`
 	}
 	t.Cleanup(func() {
 		for _, role := range []string{"lp_recovery_" + saved.Scope[:min(32, len(saved.Scope))], "postgres"} {
@@ -221,7 +246,7 @@ func runCloudSQLPITRCopy(t *testing.T, scenario string) {
 	rejected := errors.New("checkpoint interrupted")
 	principal := security.Principal{OrgID: "org", UserID: "operator"}
 	control := recovery.NativeCopyControl{NativeWorkerControl: recovery.NativeWorkerControl{Check: func(ctx context.Context) error {
-		if scenario == "network-timeout" && saved.Operation == "network-operation" && !injected {
+		if (scenario == "network-timeout" && saved.Operation == "network-operation" || scenario == "admin-timeout" && saved.Operation == "admin-operation") && !injected {
 			injected = true
 			return context.DeadlineExceeded
 		}
@@ -230,7 +255,7 @@ func runCloudSQLPITRCopy(t *testing.T, scenario string) {
 		if decodeErr := json.Unmarshal(raw, &saved); decodeErr != nil {
 			return decodeErr
 		}
-		fail := scenario == "network-restart" && saved.Stage == "admin" || scenario == "lost-clone-operation" && saved.Operation == "clone-operation" || scenario == "lost-network-operation" && saved.Operation == "network-operation"
+		fail := scenario == "network-restart" && saved.Stage == "admin" || scenario == "lost-clone-operation" && saved.Operation == "clone-operation" || scenario == "lost-network-operation" && saved.Operation == "network-operation" || scenario == "lost-admin-operation" && saved.Operation == "admin-operation"
 		if fail && !injected {
 			injected = true
 			return rejected
@@ -253,9 +278,9 @@ func runCloudSQLPITRCopy(t *testing.T, scenario string) {
 		mu.Unlock()
 	}
 	result, err := backend.RestoreNative(t.Context(), principal, *claimed, control)
-	if scenario == "network-timeout" {
+	if scenario == "network-timeout" || scenario == "admin-timeout" {
 		if !errors.Is(err, recovery.ErrNativePending) {
-			t.Fatal("captured network timeout was terminal", err)
+			t.Fatal("captured provider timeout was terminal", err)
 		}
 		if finishErr := f.store.FinishNativeRestore(t.Context(), claimed, result, time.Second, err); finishErr != nil {
 			t.Fatal(finishErr)
@@ -267,7 +292,8 @@ func runCloudSQLPITRCopy(t *testing.T, scenario string) {
 		claimed = resumed
 		result, err = backend.RestoreNative(t.Context(), principal, *claimed, control)
 	}
-	if scenario == "network-restart" || strings.HasPrefix(scenario, "lost-") {
+	lostSetup := scenario == "lost-clone-operation" || scenario == "lost-network-operation" || scenario == "lost-admin-operation"
+	if scenario == "network-restart" || lostSetup {
 		if !errors.Is(err, rejected) {
 			t.Fatal("checkpoint interruption ignored", err)
 		}
@@ -276,13 +302,17 @@ func runCloudSQLPITRCopy(t *testing.T, scenario string) {
 			t.Fatal(readErr)
 		}
 		result, err = backend.RestoreNative(t.Context(), principal, *retained, control)
-		if strings.HasPrefix(scenario, "lost-") {
+		if lostSetup {
 			if err == nil || result.SQLVerified {
 				t.Fatal("uncaptured mutation was replayed")
 			}
 			mu.Lock()
 			defer mu.Unlock()
-			if writes["clone"] != 1 || writes["network"] > 1 || writes["admin"] != 0 {
+			adminWrites := 0
+			if scenario == "lost-admin-operation" {
+				adminWrites = 1
+			}
+			if writes["clone"] != 1 || writes["network"] > 1 || writes["admin"] != adminWrites {
 				t.Fatal("uncertain operation duplicated", writes)
 			}
 			return
@@ -320,6 +350,19 @@ func runCloudSQLPITRCopy(t *testing.T, scenario string) {
 		t.Fatal("clone witness lost or password published")
 	}
 	if scenario != "failed-clone" {
+		if scenario == "credentials-replaced" {
+			mu.Lock()
+			original := copied.CreateTime
+			copied.CreateTime = now.Add(time.Minute).Format(time.RFC3339Nano)
+			mu.Unlock()
+			creds, accessErr := backend.NativeCredentials(t.Context(), principal, *stored, func(context.Context) error { return nil })
+			if accessErr == nil || creds != nil {
+				t.Fatal("replacement received the original PITR reader credentials", accessErr)
+			}
+			mu.Lock()
+			copied.CreateTime = original
+			mu.Unlock()
+		}
 		creds, accessErr := backend.NativeCredentials(t.Context(), principal, *stored, func(context.Context) error { return nil })
 		if accessErr != nil || creds == nil {
 			t.Fatal("PITR reader inaccessible", accessErr)
@@ -353,9 +396,58 @@ func runCloudSQLPITRCopy(t *testing.T, scenario string) {
 		copied.CreateTime = now.Add(time.Minute).Format(time.RFC3339Nano)
 		mu.Unlock()
 	}
-	removed, err := backend.DeleteNative(t.Context(), principal, *cleanup, recovery.NativeWorkerControl{Check: func(ctx context.Context) error { return f.store.CheckNativeLease(ctx, cleanup, "deleting") }, Save: func(ctx context.Context, raw json.RawMessage) error {
+	cleanupInterrupted := false
+	cleanupControl := recovery.NativeWorkerControl{Check: func(ctx context.Context) error {
+		if scenario == "delete-timeout" && saved.DeleteOperation == "delete-operation" && !cleanupInterrupted {
+			cleanupInterrupted = true
+			return context.DeadlineExceeded
+		}
+		return f.store.CheckNativeLease(ctx, cleanup, "deleting")
+	}, Save: func(ctx context.Context, raw json.RawMessage) error {
+		if decodeErr := json.Unmarshal(raw, &saved); decodeErr != nil {
+			return decodeErr
+		}
+		if scenario == "lost-delete-operation" && saved.DeleteOperation == "delete-operation" && !cleanupInterrupted {
+			cleanupInterrupted = true
+			return rejected
+		}
 		return f.store.SaveNativeCheckpoint(ctx, cleanup, raw)
-	}})
+	}}
+	removed, err := backend.DeleteNative(t.Context(), principal, *cleanup, cleanupControl)
+	if scenario == "delete-timeout" || scenario == "lost-delete-operation" {
+		if err == nil || removed.ConfirmedAbsent {
+			t.Fatal("interrupted cleanup claimed success", err)
+		}
+		key := deployments.ResourceKey("org", "environment", "native-copy:"+cleanup.ID, "credentials")
+		if _, readErr := vault.GetVersion(t.Context(), key, saved.CredentialVersion); readErr != nil {
+			t.Fatal("interrupted cleanup removed its credentials", readErr)
+		}
+		if finishErr := f.store.FinishNativeCleanup(t.Context(), cleanup, err); finishErr != nil {
+			t.Fatal(finishErr)
+		}
+		if _, requestErr := f.store.RequestNativeCleanup(t.Context(), "org", cleanup.ID, "operator", func(context.Context) error { return nil }); requestErr != nil {
+			t.Fatal(requestErr)
+		}
+		cleanup, err = f.store.ClaimNativeCleanup(t.Context(), "org", cleanup.ID, "pitr-cleaner-resumed")
+		if err != nil {
+			t.Fatal(err)
+		}
+		removed, err = backend.DeleteNative(t.Context(), principal, *cleanup, cleanupControl)
+		if scenario == "lost-delete-operation" {
+			if err == nil || removed.ConfirmedAbsent {
+				t.Fatal("uncaptured delete was silently adopted", err)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if writes["delete"] != 1 {
+				t.Fatal("uncertain delete replayed", writes)
+			}
+			if _, readErr := vault.GetVersion(t.Context(), key, saved.CredentialVersion); readErr != nil {
+				t.Fatal("uncertain delete retry discarded credentials", readErr)
+			}
+			return
+		}
+	}
 	mu.Lock()
 	defer mu.Unlock()
 	if scenario == "cleanup-replaced" {
@@ -369,5 +461,16 @@ func runCloudSQLPITRCopy(t *testing.T, scenario string) {
 	}
 	if scenario != "failed-clone" && (writes["network"] != 1 || writes["admin"] != 1) {
 		t.Fatal("copy setup replayed", writes)
+	}
+	key := deployments.ResourceKey("org", "environment", "native-copy:"+cleanup.ID, "credentials")
+	if _, readErr := vault.GetVersion(t.Context(), key, saved.CredentialVersion); readErr == nil {
+		t.Fatal("confirmed absence retained readable credentials")
+	}
+	if err = f.store.FinishNativeCleanup(t.Context(), cleanup, nil); err != nil {
+		t.Fatal(err)
+	}
+	deleted, readErr := f.store.GetNativeRestore(t.Context(), "org", cleanup.ID)
+	if readErr != nil || deleted.Status != "deleted" {
+		t.Fatal("confirmed cleanup did not persist deleted status", readErr)
 	}
 }
