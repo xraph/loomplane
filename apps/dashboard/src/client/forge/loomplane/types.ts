@@ -373,6 +373,12 @@ export interface CloudSQLRecoveryNetwork {
   network: string;
 }
 
+export interface CloudSQLSourceEndpoint {
+  consumerProject: string;
+  forwardingRule: string;
+  network: string;
+}
+
 export interface CloudSyncEvent {
   attempt: number;
   cloudId: string;
@@ -1021,6 +1027,7 @@ export interface LogPage {
 
 export interface ManagedDatabaseConfig {
   accountIdentity: string;
+  cloudSqlPsc?: CloudSQLSourceEndpoint;
   connectionId: string;
   profile: ManagedDatabaseProfile;
 }

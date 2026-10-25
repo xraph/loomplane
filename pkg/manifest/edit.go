@@ -287,6 +287,16 @@ func WithResource(doc []byte, name string, r Resource) ([]byte, error) {
 	if r.Version != "" {
 		value.Content = append(value.Content, scalar("version"), scalar(r.Version))
 	}
+	if r.Region != "" {
+		value.Content = append(value.Content, scalar("region"), scalar(r.Region))
+	}
+	if r.CloudSQLPSC != nil {
+		endpoint := &yaml.Node{}
+		if err := endpoint.Encode(r.CloudSQLPSC); err != nil {
+			return nil, err
+		}
+		value.Content = append(value.Content, scalar("cloud_sql_psc"), endpoint)
+	}
 	if len(r.Uses) > 0 {
 		uses := &yaml.Node{Kind: yaml.MappingNode}
 		for _, dep := range sortedKeys(r.Uses) {

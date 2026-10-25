@@ -459,6 +459,10 @@ func (p *planner) planResources() {
 		if !manifest.On(set.Enabled) || p.noLinkKind(name, base, r) {
 			continue
 		}
+		if r.CloudSQLPSC != nil && (r.Kind != "postgres" || set.Provider != "cloud-sql" || r.Version != "17" || !r.CloudSQLPSC.Valid(set.Region)) {
+			p.problem(Finding{Code: "managed-profile-invalid", Subject: ResourceSubject, Name: name, Path: base + ".cloud_sql_psc", Message: "PSC requires PostgreSQL 17 on Cloud SQL and a manual endpoint in the database region."})
+			continue
+		}
 		if p.kinds().Composed(r.Kind) {
 			composed = append(composed, name)
 			continue
@@ -1648,6 +1652,10 @@ func (p *planner) link(name string, a *Action) {
 					p.problem(Finding{Code: "database-across-targets", Subject: ServiceSubject, Name: name, Path: base, Message: message})
 					continue
 				}
+			}
+			if dep.Resource != nil && dep.Resource.Managed != nil && dep.Resource.Managed.CloudSQLPSC != (provider.CloudSQLSourceEndpoint{}) {
+				p.problem(Finding{Code: "cloud-sql-psc-transport-unavailable", Subject: ServiceSubject, Name: name, Path: base, Message: "Application transport for this PSC database is not available yet. Deploy the source separately."})
+				continue
 			}
 			if composed[i] {
 				p.linkComposition(a, need, outputs[i], options, count)

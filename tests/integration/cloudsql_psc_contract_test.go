@@ -1,0 +1,53 @@
+//go:build integration
+
+package integration
+
+import (
+	"encoding/json"
+	"net/http"
+	"os"
+	"path/filepath"
+	"slices"
+	"testing"
+
+	"github.com/xraph/loomplane/internal/config"
+)
+
+func TestCloudSQLPSCReviewedEndpointPublishedContract(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Database.URL = freshDatabase(t)
+	cfg.Storage.URL = "file://" + t.TempDir()
+	app := start(t, cfg)
+	defer app.stop()
+	c := &client{t: t, base: app.srv.URL, key: cfg.Identity.PublishableKey}
+	for _, route := range []string{"/openapi.json", "/asyncapi.json"} {
+		var raw json.RawMessage
+		c.must(http.StatusOK, http.MethodGet, route, nil, &raw)
+		var spec struct {
+			Components struct {
+				Schemas map[string]struct {
+					Properties map[string]map[string]any `json:"properties"`
+					Required   []string                  `json:"required"`
+				} `json:"schemas"`
+			} `json:"components"`
+		}
+		if err := json.Unmarshal(raw, &spec); err != nil {
+			t.Fatal(err)
+		}
+		managed := spec.Components.Schemas["ManagedDatabaseConfig"]
+		if managed.Properties["cloud_sql_psc"]["$ref"] != "#/components/schemas/CloudSQLSourceEndpoint" || slices.Contains(managed.Required, "cloud_sql_psc") {
+			t.Fatal(route, "missing optional endpoint review")
+		}
+		endpoint := spec.Components.Schemas["CloudSQLSourceEndpoint"]
+		for _, field := range []string{"consumer_project", "network", "forwarding_rule"} {
+			if endpoint.Properties[field]["type"] != "string" || !slices.Contains(endpoint.Required, field) {
+				t.Fatal(route, "incomplete endpoint contract", field)
+			}
+		}
+		if dir := os.Getenv("LOOMPLANE_TEST_CONTRACT_OUTPUT"); dir != "" {
+			if err := os.WriteFile(filepath.Join(dir, filepath.Base(route)), raw, 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+}

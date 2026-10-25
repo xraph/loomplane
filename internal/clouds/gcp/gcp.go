@@ -117,9 +117,20 @@ type Client struct {
 	base     *http.Client
 	// poll is how often a long-running operation is checked.
 	poll     time.Duration
-	resolver interface {
-		LookupNetIP(context.Context, string, string) ([]netip.Addr, error)
-	}
+	resolver DNSResolver
+}
+
+// DNSResolver resolves a provider-owned PSC name from the verifier network.
+// Only trusted Go integrations choose it; HTTP input cannot replace DNS checks.
+type DNSResolver interface {
+	LookupNetIP(context.Context, string, string) ([]netip.Addr, error)
+}
+
+// WithDNSResolver returns an independent client configuration for a verifier.
+func (c *Client) WithDNSResolver(resolver DNSResolver) *Client {
+	configured := *c
+	configured.resolver = resolver
+	return &configured
 }
 
 // New returns a Client. An empty endpoint means Google's own hosts; any

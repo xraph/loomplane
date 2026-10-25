@@ -20,7 +20,7 @@ func (f sourceDNSLookup) LookupNetIP(ctx context.Context, network, host string) 
 }
 
 func TestSQLPITRManualEndpointBindsSourceNetworkAndDNS(t *testing.T) {
-	for _, scenario := range []string{"accepted", "wrong-target", "wrong-network", "wrong-rule", "wrong-region", "public-address", "pending", "missing-id", "dns-other-address", "dns-extra-address", "dns-error", "source-replaced", "settings-changed", "endpoint-replaced", "revoked", "invalid-contract", "foreign-attachment-host", "late-revoked", "nil-guard", "invalid-dns-name", "empty-dns-answer"} {
+	for _, scenario := range []string{"accepted", "extra-consumer", "automatic-dns", "wrong-target", "wrong-network", "wrong-rule", "wrong-region", "public-address", "pending", "missing-id", "dns-other-address", "dns-extra-address", "dns-error", "source-replaced", "settings-changed", "endpoint-replaced", "revoked", "invalid-contract", "foreign-attachment-host", "late-revoked", "nil-guard", "invalid-dns-name", "empty-dns-answer"} {
 		t.Run(scenario, func(t *testing.T) {
 			in, fields := pscPITRInstance(t)
 			physical, err := in.Incarnation("source-project", "us-central1", "source-db")
@@ -31,8 +31,14 @@ func TestSQLPITRManualEndpointBindsSourceNetworkAndDNS(t *testing.T) {
 			const endpointPath = "projects/app-project/regions/us-central1/forwardingRules/database"
 			const networkPath = "projects/app-project/global/networks/apps"
 			fields["pscServiceAttachmentLink"], fields["dnsName"] = attachment, "source-db.us-central1.sql.goog."
+			psc := fields["settings"].(map[string]any)["ipConfiguration"].(map[string]any)["pscConfig"].(map[string]any)
+			psc["allowedConsumerProjects"] = []string{"app-project"}
 			rule := map[string]any{"kind": "compute#forwardingRule", "id": "1234567890123456789", "name": "database", "selfLink": "https://www.googleapis.com/compute/v1/" + endpointPath, "region": "https://www.googleapis.com/compute/v1/projects/app-project/regions/us-central1", "network": "https://www.googleapis.com/compute/v1/" + networkPath, "target": attachment, "IPAddress": "10.20.0.8", "pscConnectionStatus": "ACCEPTED"}
 			switch scenario {
+			case "extra-consumer":
+				psc["allowedConsumerProjects"] = []string{"app-project", "another-project"}
+			case "automatic-dns":
+				psc["pscAutoDnsEnabled"] = true
 			case "invalid-dns-name":
 				fields["dnsName"] = "attacker.invalid"
 			case "wrong-target":

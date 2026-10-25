@@ -30,7 +30,7 @@ func pscPITRSpec() SQLInstanceSpec {
 }
 
 func TestSQLPITRIsolationRefusesInheritedNetworkAndCapacityExposure(t *testing.T) {
-	for _, scenario := range []string{"psc-only", "public", "missing-ipv4", "missing-network", "no-psc", "psc-disabled", "outbound-attachment", "auto-endpoint", "auto-policy", "psa", "google-path", "authorized-network", "data-api", "unknown-data-api", "connector-disabled", "public-address", "missing-version", "wrong-engine", "wrong-edition", "replica", "disk-growth", "autoresize", "backups-disabled", "logs-disabled", "retention-changed"} {
+	for _, scenario := range []string{"psc-only", "public", "missing-ipv4", "missing-network", "no-psc", "psc-disabled", "outbound-attachment", "auto-endpoint", "auto-dns", "auto-policy", "psa", "google-path", "authorized-network", "data-api", "unknown-data-api", "connector-disabled", "public-address", "missing-version", "wrong-engine", "wrong-edition", "replica", "disk-growth", "autoresize", "backups-disabled", "logs-disabled", "retention-changed"} {
 		t.Run(scenario, func(t *testing.T) {
 			_, fields := pscPITRInstance(t)
 			settings := fields["settings"].(map[string]any)
@@ -52,6 +52,8 @@ func TestSQLPITRIsolationRefusesInheritedNetworkAndCapacityExposure(t *testing.T
 				psc["networkAttachmentUri"] = "projects/source-project/regions/us-central1/networkAttachments/production"
 			case "auto-endpoint":
 				psc["pscAutoConnections"] = []any{map[string]string{"consumerNetwork": "projects/source-project/global/networks/production"}}
+			case "auto-dns":
+				psc["pscAutoDnsEnabled"] = true
 			case "auto-policy":
 				psc["pscAutoConnectionPolicyEnabled"] = true
 			case "psa":

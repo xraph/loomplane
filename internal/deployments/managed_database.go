@@ -14,7 +14,7 @@ func managedDatabaseReview(cfg *planning.ResourceConfig, conn *connections.Conne
 	if cfg == nil || cfg.Managed == nil {
 		return nil
 	}
-	profile, err := manageddb.Postgres(target, cfg.Version)
+	profile, err := manageddb.PostgresSource(target, cfg.Version, cfg.Region, cfg.Managed.CloudSQLPSC)
 	if err != nil || cfg.Kind != "postgres" || cfg.Provider != target || cfg.Managed.Profile != *profile {
 		return fmt.Errorf("managed database review changed: request a fresh reviewed profile")
 	}

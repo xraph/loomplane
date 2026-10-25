@@ -4,7 +4,6 @@ import (
 	"context"
 	"net/http"
 	"net/netip"
-	"slices"
 	"strconv"
 	"strings"
 
@@ -77,7 +76,7 @@ func (s *Session) ReadSQLPITRSourceEndpoint(ctx context.Context, spec SQLInstanc
 	}
 	attachment := computeResource(in.PSCServiceAttachment)
 	parts := strings.Split(attachment, "/")
-	if len(parts) != 6 || parts[0] != "projects" || !validSQLPathID(parts[1]) || parts[2] != "regions" || parts[3] != spec.Region || parts[4] != "serviceAttachments" || !sqlNativeName(parts[5]) || !validSQLPSCName(in.DNSName) || !slices.Contains(in.Settings.IPConfiguration.PSC.AllowedProjects, endpoint.ConsumerProject) {
+	if len(parts) != 6 || parts[0] != "projects" || !validSQLPathID(parts[1]) || parts[2] != "regions" || parts[3] != spec.Region || parts[4] != "serviceAttachments" || !sqlNativeName(parts[5]) || !validSQLPSCName(in.DNSName) || !in.Settings.IPConfiguration.PSC.manualSourceConsumer(endpoint.ConsumerProject) {
 		return nil, ErrSQLPITRUnavailable
 	}
 	readEndpoint := func() (sqlManualForwardingRule, error) {

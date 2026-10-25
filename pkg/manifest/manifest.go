@@ -21,6 +21,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	providercontract "github.com/xraph/loomplane/pkg/provider"
+
 	"gopkg.in/yaml.v3"
 )
 
@@ -207,6 +209,8 @@ type Size struct {
 
 // Resource is a backing service the application needs, such as Postgres.
 type Resource struct {
+	// CloudSQLPSC opts a PostgreSQL 17 source into a reviewed manual PSC endpoint.
+	CloudSQLPSC *providercontract.CloudSQLSourceEndpoint `json:"cloud_sql_psc,omitempty" yaml:"cloud_sql_psc,omitempty"`
 	// Kind is what it is: postgres, mysql, redis and so on, the names
 	// repository analysis uses.
 	Kind     string `json:"kind" yaml:"kind"`
@@ -480,6 +484,9 @@ func (m *Manifest) Validate() error {
 		}
 		checkToken(add, path+".provider", "provider", r.Provider)
 		checkToken(add, path+".region", "region", r.Region)
+		if r.CloudSQLPSC != nil && (r.Provider != "cloud-sql" || r.Kind != "postgres" || r.Version != "17" || !r.CloudSQLPSC.Valid(r.Region)) {
+			add(path+".cloud_sql_psc", "requires explicit cloud-sql PostgreSQL 17 placement and a manual PSC endpoint in the resource region")
+		}
 		if r.Version != "" && !versionRE.MatchString(r.Version) {
 			add(path+".version", "%q isn't a version", r.Version)
 		}

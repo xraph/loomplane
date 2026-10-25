@@ -56,6 +56,17 @@ func CloudSQLPSCPostgres(version string) (*provider.ManagedDatabaseProfile, erro
 	return p, nil
 }
 
+// PostgresSource selects an explicit source contract without changing defaults.
+func PostgresSource(target, version, region string, endpoint CloudSQLSourceEndpoint) (*provider.ManagedDatabaseProfile, error) {
+	if endpoint == (CloudSQLSourceEndpoint{}) {
+		return Postgres(target, version)
+	}
+	if target != "cloud-sql" || !endpoint.Valid(region) {
+		return nil, fmt.Errorf("cloud sql PSC requires a manual endpoint in the reviewed region")
+	}
+	return CloudSQLPSCPostgres(version)
+}
+
 // Profiles lists only managed profiles the standalone catalog can request.
 func Profiles(target string) []provider.ManagedDatabaseProfile {
 	p, err := Postgres(target, "17")

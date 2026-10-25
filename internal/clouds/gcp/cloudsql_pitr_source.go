@@ -3,6 +3,7 @@ package gcp
 import (
 	"context"
 	"slices"
+	"strings"
 
 	"github.com/xraph/loomplane/internal/manageddb"
 )
@@ -12,7 +13,7 @@ import (
 // A returned instance still needs endpoint, DNS and SQL verification.
 func (s *Session) EnsureSQLPITRSource(ctx context.Context, spec SQLInstanceSpec, endpoint manageddb.CloudSQLSourceEndpoint, track SQLMutation) (*SQLInstance, error) {
 	profile, err := manageddb.CloudSQLPSCPostgres("17")
-	if err != nil || !endpoint.Valid(spec.Region) || !sqlNativeName(spec.Name) || len(spec.Name) > 63 || spec.DatabaseVersion != "POSTGRES_17" || spec.Tier != profile.ComputeClass || spec.Storage == nil || spec.Storage.SizeGB != profile.StorageGB || spec.Storage.Type != profile.StorageType || spec.Storage.RetainedBackups != profile.BackupRetentionValue || spec.Storage.RecoveryDays != profile.PointInTimeRecoveryDays || !sqlNativeName(spec.Intent) || len(spec.Intent) > 63 || spec.Inspect == nil || track.Check == nil {
+	if err != nil || !endpoint.Valid(spec.Region) || !sqlNativeName(spec.Name) || len(spec.Name) > 63 || spec.DatabaseVersion != "POSTGRES_17" || spec.Tier != profile.ComputeClass || spec.Storage == nil || spec.Storage.SizeGB != profile.StorageGB || spec.Storage.Type != profile.StorageType || spec.Storage.RetainedBackups != profile.BackupRetentionValue || spec.Storage.RecoveryDays != profile.PointInTimeRecoveryDays || !validSQLSourceIntent(spec.Intent) || spec.Inspect == nil || track.Check == nil {
 		return nil, ErrSQLPITRUnavailable
 	}
 	if guardErr := track.check(ctx); guardErr != nil {
@@ -44,7 +45,7 @@ func (s *Session) EnsureSQLPITRSource(ctx context.Context, spec SQLInstanceSpec,
 			return isolationErr
 		}
 		psc := in.Settings.IPConfiguration.PSC
-		if len(psc.AllowedProjects) != 1 || psc.AllowedProjects[0] != endpoint.ConsumerProject || psc.AutoDNS {
+		if !psc.manualSourceConsumer(endpoint.ConsumerProject) {
 			return ErrSQLPITRUnavailable
 		}
 		return track.check(ctx)
@@ -52,4 +53,14 @@ func (s *Session) EnsureSQLPITRSource(ctx context.Context, spec SQLInstanceSpec,
 	spec.pscConsumerProject = endpoint.ConsumerProject
 	track.strictIdentity = true
 	return s.EnsureSQLInstance(ctx, spec, track)
+}
+
+func (psc *SQLPSCSettings) manualSourceConsumer(project string) bool {
+	return psc != nil && psc.Enabled && !psc.AutoDNS && len(psc.AutoConnections) == 0 && len(psc.AllowedProjects) == 1 && psc.AllowedProjects[0] == project
+}
+
+func validSQLSourceIntent(intent string) bool {
+	return intent != "" && len(intent) <= 63 && strings.IndexFunc(intent, func(r rune) bool {
+		return r != '-' && r != '_' && (r < 'a' || r > 'z') && (r < '0' || r > '9')
+	}) < 0
 }

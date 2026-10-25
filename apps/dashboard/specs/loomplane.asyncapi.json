@@ -1893,6 +1893,9 @@
           "account_identity": {
             "type": "string"
           },
+          "cloud_sql_psc": {
+            "$ref": "#/components/schemas/CloudSQLSourceEndpoint"
+          },
           "connection_id": {
             "type": "string"
           },
@@ -3787,6 +3790,25 @@
             "items": {
               "type": "string"
             }
+          }
+        }
+      },
+      "CloudSQLSourceEndpoint": {
+        "type": "object",
+        "required": [
+          "consumer_project",
+          "network",
+          "forwarding_rule"
+        ],
+        "properties": {
+          "consumer_project": {
+            "type": "string"
+          },
+          "forwarding_rule": {
+            "type": "string"
+          },
+          "network": {
+            "type": "string"
           }
         }
       }

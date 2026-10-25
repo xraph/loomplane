@@ -14,7 +14,7 @@ import (
 )
 
 func TestSQLPITRSourceCreatesOnlyManualPSCIngress(t *testing.T) {
-	for _, scenario := range []string{"create", "resume", "legacy-public", "bad-profile", "missing-guard", "checkpoint-failed", "foreign-operation", "observed-public", "missing-inspector", "inspector-refused", "source-label-mismatch", "consumer-project-changed", "denied", "existing-denied"} {
+	for _, scenario := range []string{"create", "resume", "legacy-public", "bad-profile", "missing-guard", "checkpoint-failed", "foreign-operation", "observed-public", "missing-inspector", "inspector-refused", "source-label-mismatch", "consumer-project-changed", "denied", "existing-denied", "numeric-intent"} {
 		t.Run(scenario, func(t *testing.T) {
 			_, fields := pscPITRInstance(t)
 			settings := fields["settings"].(map[string]any)
@@ -68,6 +68,10 @@ func TestSQLPITRSourceCreatesOnlyManualPSCIngress(t *testing.T) {
 			spec.Storage.RetainedBackups = 7
 			inspections := 0
 			spec.Intent, spec.Inspect = "source-intent", func(*SQLInstance) error { inspections++; return nil }
+			if scenario == "numeric-intent" {
+				spec.Intent = strings.Repeat("1", 60)
+				settings["userLabels"] = map[string]string{"managed-by": "loomplane", SQLIntentLabel: spec.Intent}
+			}
 			track := SQLMutation{Before: func() error {
 				if scenario == "checkpoint-failed" {
 					return errors.New("store unavailable")
@@ -92,7 +96,7 @@ func TestSQLPITRSourceCreatesOnlyManualPSCIngress(t *testing.T) {
 				track.Check = func(context.Context) error { return errors.New("access revoked") }
 			}
 			_, err := s.EnsureSQLPITRSource(t.Context(), spec, manageddb.CloudSQLSourceEndpoint{ConsumerProject: "app-project", Network: "projects/app-project/global/networks/apps", ForwardingRule: "projects/app-project/regions/us-central1/forwardingRules/database"}, track)
-			good := scenario == "create" || scenario == "resume"
+			good := scenario == "create" || scenario == "resume" || scenario == "numeric-intent"
 			if good != (err == nil) {
 				t.Fatalf("source contract: %v", err)
 			}

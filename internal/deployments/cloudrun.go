@@ -80,6 +80,9 @@ func (c *CloudRun) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 	if a.Service == nil {
 		return nil, fmt.Errorf("%w: cloud run runs services, not %s", ErrNoExecutor, a.Subject)
 	}
+	if err := checkCloudRunSQLTransport(job.Attach); err != nil {
+		return nil, err
+	}
 	// What's bound has to be this connection's before anything is built.
 	if _, err := boundInstance(infrastructure.WithPrincipal(ctx, principal(job)), c.Ctrl, job, c.provider(job)); err != nil {
 		return nil, err

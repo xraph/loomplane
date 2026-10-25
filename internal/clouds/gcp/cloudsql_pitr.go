@@ -41,7 +41,7 @@ func (in *SQLInstance) PITRIsolation(spec SQLInstanceSpec) (string, error) {
 		return "", ErrSQLPITRUnavailable
 	}
 	network := settings.IPConfiguration
-	if len(network.PSC.AutoConnections) != 0 {
+	if len(network.PSC.AutoConnections) != 0 || network.PSC.AutoDNS {
 		return "", ErrSQLPITRUnavailable
 	}
 	projects := slices.Clone(network.PSC.AllowedProjects)
