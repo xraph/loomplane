@@ -32,6 +32,12 @@ var imageDigest = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
 // digest it got, which a release can't record or a rollback redeploy.
 var errNoDigest = errors.New("the build reported no image digest")
 
+// unpinnedWarning says a service runs its image by tag because the
+// connection may not read the digest its build pushed.
+func unpinnedWarning(name, permission string) error {
+	return fmt.Errorf("%s runs its image by tag: the connection lacks %s, so Loomplane couldn't read the digest the build pushed. Until it has it, promoting or rolling back %s builds it again", name, permission, name)
+}
+
 // byDigest names image, a repository and tag, by the digest a build
 // pushed it under instead of its tag.
 func byDigest(image, digest string) (string, error) {

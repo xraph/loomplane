@@ -40,13 +40,15 @@ The project ID comes from the key. Only the project and the service account's em
 
 | Used for | Permissions Loomplane checks |
 |---|---|
-| Builds | `cloudbuild.builds.create`, `cloudbuild.builds.get`, `artifactregistry.repositories.create`, `artifactregistry.repositories.get` |
+| Builds | `cloudbuild.builds.create`, `cloudbuild.builds.get`, `artifactregistry.repositories.create`, `artifactregistry.repositories.get`. Recommended, not checked: `artifactregistry.tags.get` |
 | Cloud Run | `run.services.create`, `run.services.get`, `run.services.update`, `run.services.setIamPolicy`, `run.operations.get`, `iam.serviceAccounts.actAs` |
 | Secrets | `secretmanager.secrets.create`, `secretmanager.secrets.setIamPolicy`, `secretmanager.versions.add` |
 | Cloud SQL | `cloudsql.instances.create`, `cloudsql.instances.delete`, `cloudsql.instances.get`, `cloudsql.databases.create`, `cloudsql.users.create`, `cloudsql.users.update` |
 | Memorystore | `redis.instances.create`, `redis.instances.delete`, `redis.instances.get`, `redis.instances.getAuthString` |
 | Cloud Storage | `storage.buckets.create`, `storage.buckets.delete`, `storage.buckets.get`, `storage.buckets.getIamPolicy`, `storage.buckets.setIamPolicy`, `storage.objects.create`, `storage.objects.delete`, `storage.objects.list` |
 | Project | `resourcemanager.projects.get` |
+
+Loomplane deploys each image by the digest its build pushed and records it with the release, so a promotion can deploy the exact image staging ran and a rollback the image the previous release ran. Cloud Build reports the digest of an image built from a Dockerfile. A service without one is built with buildpacks, which push the image themselves, and Loomplane reads its digest from Artifact Registry with `artifactregistry.tags.get`. Without that permission you can still deploy: the service runs its image by tag, the step warns you, and promoting or rolling back that service builds it again.
 
 Build logs come from Cloud Logging, so the account also needs permission to read there. Without it the deployment still works and the logs show as unavailable.
 

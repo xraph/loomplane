@@ -13,6 +13,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"go.jetify.com/typeid/v2"
@@ -945,7 +946,17 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 			}
 		}
 	}
+	// What an executor warns about while it deploys reaches the step once
+	// it has deployed, since its progress may update the step meanwhile.
+	var applyMu sync.Mutex
+	var applyWarnings []string
+	job.warn = func(err error) {
+		applyMu.Lock()
+		defer applyMu.Unlock()
+		applyWarnings = append(applyWarnings, err.Error())
+	}
 	out, err := exec.Apply(ctx, job)
+	job.warn = nil
 	if elsewhere := (*ElsewhereError)(nil); errors.As(err, &elsewhere) {
 		return r.deployedElsewhere(ctx, current, elsewhere)
 	}
@@ -953,6 +964,7 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 		return err
 	}
 	step.URL, step.Image, step.Revision = out.URL, out.Image, out.Revision
+	step.Warnings = append(step.Warnings, applyWarnings...)
 	if out.URL != "" && a.Service != nil && a.Service.Public {
 		progress(StepVerifying, "Checking "+out.URL+" answers")
 		if verr := r.verifyService(ctx, out.URL, a); verr != nil {

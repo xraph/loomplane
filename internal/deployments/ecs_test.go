@@ -87,9 +87,17 @@ func TestTarToZip_dropsTheTopDirectory(t *testing.T) {
 	}
 }
 
+// ECR's answers to reading a pushed image's digest, besides the digest
+// itself.
+const (
+	ecrNotFound = ""       // ImageNotFoundException
+	ecrDenied   = "denied" // AccessDeniedException
+	ecrNoImage  = "none"   // an answer that lists no image
+)
+
 // ecrFake is the AWS behind an ECS build that CodeBuild has started:
-// CodeBuild finishes it, and ECR holds the image it pushed with digest,
-// unless digest is empty.
+// CodeBuild finishes it, and ECR answers for the image it pushed with
+// digest, or as one of the modes above says.
 func ecrFake(t *testing.T, digest string) *httptest.Server {
 	t.Helper()
 	const uri = "123456789012.dkr.ecr.eu-west-1.amazonaws.com/loomplane/api-23456789"
@@ -105,7 +113,16 @@ func ecrFake(t *testing.T, digest string) *httptest.Server {
 			_, _ = w.Write([]byte(`{"builds":[{"id":"loomplane:1","buildStatus":"SUCCEEDED"}]}`))
 		case strings.HasSuffix(target, ".DescribeImages"):
 			ids, _ := in["imageIds"].([]any)
-			if digest == "" || in["repositoryName"] != "loomplane/api-23456789" || len(ids) != 1 || ids[0].(map[string]any)["imageTag"] != doApproved[:12] {
+			switch digest {
+			case ecrDenied:
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte(`{"__type":"AccessDeniedException","message":"not authorized to perform: ecr:DescribeImages"}`))
+				return
+			case ecrNoImage:
+				_, _ = w.Write([]byte(`{"imageDetails":[]}`))
+				return
+			}
+			if digest == ecrNotFound || in["repositoryName"] != "loomplane/api-23456789" || len(ids) != 1 || ids[0].(map[string]any)["imageTag"] != doApproved[:12] {
 				w.WriteHeader(http.StatusBadRequest)
 				_, _ = w.Write([]byte(`{"__type":"ImageNotFoundException","message":"The image requested does not exist"}`))
 				return
@@ -122,6 +139,12 @@ func ecrFake(t *testing.T, digest string) *httptest.Server {
 
 func ecsBuild(t *testing.T, digest string) (string, error) {
 	t.Helper()
+	image, _, err := ecsBuildState(t, digest)
+	return image, err
+}
+
+func ecsBuildState(t *testing.T, digest string) (string, *ecsState, error) {
+	t.Helper()
 	srv := ecrFake(t, digest)
 	exec := &ECS{AWS: aws.New(srv.URL)}
 	job := azureJob(t, apiConfig())
@@ -132,7 +155,8 @@ func ecsBuild(t *testing.T, digest string) (string, error) {
 	}
 	// CodeBuild already started the build.
 	state := &ecsState{BuildID: "loomplane:1", LogAttempt: "attempt"}
-	return exec.build(t.Context(), s, job, state, func() {})
+	image, err := exec.build(t.Context(), s, job, state, func() {})
+	return image, state, err
 }
 
 func TestECS_deploysTheBuiltImageByDigest(t *testing.T) {
@@ -140,5 +164,21 @@ func TestECS_deploysTheBuiltImageByDigest(t *testing.T) {
 	image, err := ecsBuild(t, digest)
 	if want := "123456789012.dkr.ecr.eu-west-1.amazonaws.com/loomplane/api-23456789@" + digest; err != nil || image != want {
 		t.Fatalf("built %q, %v; want %s", image, err, want)
+	}
+}
+
+// A connection that may not read ECR's digests deploys the image by tag,
+// as before images were pinned, and says why.
+func TestECS_deploysByTagWhenItMayNotReadTheDigest(t *testing.T) {
+	image, state, err := ecsBuildState(t, ecrDenied)
+	if want := "123456789012.dkr.ecr.eu-west-1.amazonaws.com/loomplane/api-23456789:" + doApproved[:12]; err != nil || image != want {
+		t.Fatalf("built %q, %v; want %s", image, err, want)
+	}
+	if state.Unpinned != "ecr:DescribeImages" {
+		t.Fatalf("checkpoint %+v", state)
+	}
+	if got := unpinnedWarning("api", state.Unpinned).Error(); !strings.Contains(got, "ecr:DescribeImages") ||
+		!strings.Contains(got, "promoting or rolling back api builds it again") {
+		t.Fatalf("warning %q", got)
 	}
 }

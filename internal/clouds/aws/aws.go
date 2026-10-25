@@ -182,6 +182,17 @@ func IsNotFound(err error) bool {
 	return strings.Contains(code, "NotFound") || code == "NoSuchEntity" || code == "RepositoryNotFoundException"
 }
 
+// IsAccessDenied reports whether AWS refused a request for want of a
+// permission.
+func IsAccessDenied(err error) bool {
+	var ae smithy.APIError
+	if !errors.As(err, &ae) {
+		return false
+	}
+	code := ae.ErrorCode()
+	return code == "AccessDenied" || code == "AccessDeniedException"
+}
+
 // IsExists reports whether err is AWS saying something already exists.
 func IsExists(err error) bool {
 	var ae smithy.APIError

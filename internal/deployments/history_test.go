@@ -193,6 +193,8 @@ func TestHistory_releasedImagesWalkBack(t *testing.T) {
 		BuildTarget: &planning.BuildTarget{Registry: "conn_reg"}}
 	webAction := serviceAction("web", "create", "server", "", web)
 	webAction.ConnectionID = "conn_s"
+	keptWeb := serviceAction("web", "keep", "server", "", web)
+	keptWeb.AdoptCloudPlacement = true
 	db := planning.Action{ID: "resource:db", Op: planning.Create, Subject: planning.ResourceSubject, Name: "db", Provider: "cloud-sql"}
 	for _, r := range []historyRelease{
 		{plan: "plan_1", deployment: "dep_1", env: "env_b", status: StatusSucceeded, finished: at(10, 0),
@@ -206,11 +208,11 @@ func TestHistory_releasedImagesWalkBack(t *testing.T) {
 		{plan: "plan_2", deployment: "dep_2", env: "env_b", status: StatusFailed, finished: at(11, 0),
 			actions: []planning.Action{serviceAction("api", "update", "cloud-run", "europe-west1", api("bbb2222"))},
 			steps:   []Step{serviceStep("api", "update", StepFailed, "europe-west1-docker.pkg.dev/shop/loomplane/api-x@"+digest("2"), "")}},
-		// web is kept as it was, so this release has no step for it.
+		// web is kept as it was. Adopting its placement is a step that
+		// deploys nothing.
 		{plan: "plan_3", deployment: "dep_3", env: "env_b", status: StatusSucceeded, finished: at(12, 0),
-			actions: []planning.Action{serviceAction("api", "update", "cloud-run", "europe-west1", api("ccc3333")),
-				serviceAction("web", "keep", "server", "", web)},
-			steps: []Step{serviceStep("api", "update", StepSucceeded, apiImage3, apiImage3)}},
+			actions: []planning.Action{serviceAction("api", "update", "cloud-run", "europe-west1", api("ccc3333")), keptWeb},
+			steps:   []Step{serviceStep("api", "update", StepSucceeded, apiImage3, apiImage3), serviceStep("web", "keep", StepSucceeded, "", "")}},
 	} {
 		r.record(ctx, t, h, pg)
 	}
@@ -263,5 +265,15 @@ func TestHistory_aDeletedServiceRanNothing(t *testing.T) {
 	}
 	if got, err = h.ReleasedImages(ctx, "org", "env_b", at(10, 30)); err != nil || got["api"].Image != image {
 		t.Fatalf("released images before the delete %+v, %v", got, err)
+	}
+}
+
+// Without the provider registry, History can't name the connection an
+// image was deployed with, so it refuses rather than leave it empty.
+func TestHistory_releasedImagesNeedTheProviders(t *testing.T) {
+	ctx, h, _ := historyDB(t)
+	h.Providers = nil
+	if _, err := h.ReleasedImages(ctx, "org", "env_b", at(12, 0)); err == nil || !strings.Contains(err.Error(), "provider registry") {
+		t.Fatalf("err %v", err)
 	}
 }
