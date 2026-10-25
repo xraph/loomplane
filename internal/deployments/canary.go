@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/releasehealth"
 )
 
@@ -25,8 +26,9 @@ const (
 )
 
 // canaryActive are the statuses of a canary that still holds its
-// environment: nothing else may deploy there until it settles.
-var canaryActive = []string{CanaryPending, CanaryRamping, CanaryPromoting, CanaryReverting}
+// environment: nothing else may deploy there until it settles. Planning
+// owns the list, since it blocks new plans with it.
+var canaryActive = planning.ActiveCanaryStatuses()
 
 // Canary is a deployment's canary release: the weights it ramps through,
 // where it is, and each service it ramps. It's stored on the deployment.

@@ -53,4 +53,11 @@ func TestCanaryVerdictTakesItsDeploymentsScope(t *testing.T) {
 	if err = f.sql.QueryRow(ctx, `SELECT org_id, project_id FROM loomplane_events WHERE type = 'canary_verdict.updated'`).Scan(&org, &project); err != nil || org != plan.OrgID || project != plan.ProjectID {
 		t.Fatalf("event scope %q %q: %v", org, project, err)
 	}
+	// The ramping canary holds its environment, read through planning's query.
+	if err = st.SetCanary(ctx, plan.OrgID, "dep_v", &deployments.Canary{Status: deployments.CanaryRamping, Step: 0}); err != nil {
+		t.Fatal(err)
+	}
+	if id, rampErr := st.RampingCanary(ctx, plan.OrgID, plan.EnvironmentID); rampErr != nil || id != "dep_v" {
+		t.Fatalf("ramping canary: %q, %v", id, rampErr)
+	}
 }

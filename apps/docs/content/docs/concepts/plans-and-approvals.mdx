@@ -33,7 +33,7 @@ When the environment declares a `release` block in `loomplane.yaml`, the plan sh
 
 A release with a canary is still one decision. You approve the plan once, and the [canary](/docs/concepts/canary-releases) ramps, holds and judges each step by itself. Nobody approves individual steps.
 
-Only an update of a running HTTP service on Cloud Run, ECS behind a load balancer or Azure Container Apps can ramp. Every other service in a canary environment gets a `canary-unavailable` warning that says why (it's new, it's moving, it's a worker, its target has no traffic weighting Loomplane can drive) and deploys all at once. In a `blue_green` environment, a service with no route release to switch over gets a `blue-green-unavailable` warning and deploys the way it does today.
+Only an update of something already running can ramp: an HTTP service on Cloud Run, a service behind the load balancer on ECS, or an app with ingress or a static site on Azure Container Apps. Every other service in a canary environment gets a `canary-unavailable` warning that says why (it's new, it's moving, it's a worker, its target has no traffic weighting Loomplane can drive) and deploys all at once. In a `blue_green` environment, a service with no route release to switch over gets a `blue-green-unavailable` warning and deploys the way it does today.
 
 While a canary ramps in an environment, a new plan for it is blocked with a `canary-in-progress` problem that names the deployment. Plan again once it finishes. A plan that was ready before the ramp started comes back stale if you approve it during the ramp, so two deployments never fight over one service's traffic.
 

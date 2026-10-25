@@ -394,6 +394,7 @@ type rampingStore struct {
 	approvalStore
 	ramping  string
 	err      error
+	note     string
 	asked    []string
 	finished *Plan
 }
@@ -401,6 +402,11 @@ type rampingStore struct {
 func (s *rampingStore) RampingCanary(_ context.Context, orgID, environmentID string) (string, error) {
 	s.asked = append(s.asked, orgID+"/"+environmentID)
 	return s.ramping, s.err
+}
+
+func (s *rampingStore) Decide(_ context.Context, _, _, status, _, note string, _ time.Time) (bool, error) {
+	s.settled, s.note = status, note
+	return true, nil
 }
 
 func (s *rampingStore) FinishPlanning(_ context.Context, p *Plan) (bool, error) {
@@ -477,8 +483,8 @@ func TestPlanIsBlockedWhileACanaryRamps(t *testing.T) {
 	}
 
 	status, err := service.ApplyDecision(t.Context(), "org", "plan_1", orchestration.Decision{Approve: true, Revision: revision, By: "usr_1"})
-	if err != nil || status != StatusStale || store.settled != StatusStale {
-		t.Fatalf("approve during the ramp: %q, %v, settled %q", status, err, store.settled)
+	if err != nil || status != StatusStale || store.settled != StatusStale || store.note != f.Message {
+		t.Fatalf("approve during the ramp: %q, %v, settled %q with %q", status, err, store.settled, store.note)
 	}
 
 	planning := *plan

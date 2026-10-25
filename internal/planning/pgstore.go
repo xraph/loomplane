@@ -256,17 +256,22 @@ func (s *PgStore) FinishPlanning(ctx context.Context, p *Plan) (bool, error) {
 	return affected(tag)
 }
 
-// RampingCanary returns the deployment whose canary still holds the
-// environment, or "" when none does. A plan made meanwhile is blocked, so
-// two deployments never move one service's traffic at once. The canary is
-// stored on the deployment row; the statuses are deployments'
-// canaryActive.
+// ActiveCanaryStatuses are the statuses of a deployment's canary that still
+// hold its environment: nothing else may deploy there until it settles.
+// deployments names each one; this is the one list of which are active.
+func ActiveCanaryStatuses() []string {
+	return []string{"pending", "ramping", "promoting", "reverting"}
+}
+
+// RampingCanary returns the running deployment whose canary still holds the
+// environment, the newest when there are several, or "" when none does. A
+// plan made meanwhile is blocked, so two deployments never move one
+// service's traffic at once. deployments.PgStore reads it through here.
 func (s *PgStore) RampingCanary(ctx context.Context, orgID, environmentID string) (string, error) {
 	var id string
 	err := s.db.QueryRow(ctx, `SELECT id FROM loomplane_deployments
-		WHERE org_id = $1 AND environment_id = $2 AND status = 'running'
-			AND canary->>'status' IN ('pending', 'ramping', 'promoting', 'reverting')
-		ORDER BY started_at DESC, id DESC LIMIT 1`, orgID, environmentID).Scan(&id)
+		WHERE org_id = $1 AND environment_id = $2 AND status = 'running' AND canary->>'status' = ANY($3::text[])
+		ORDER BY started_at DESC, id DESC LIMIT 1`, orgID, environmentID, ActiveCanaryStatuses()).Scan(&id)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", nil
 	}

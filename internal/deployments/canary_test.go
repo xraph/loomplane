@@ -123,3 +123,12 @@ func TestReopenResetsTheCanary(t *testing.T) {
 		t.Fatalf("verdicts after reopen: %v %v", v, err)
 	}
 }
+
+// Planning owns which canary statuses hold an environment; they must be
+// this package's names for them.
+func TestActiveCanaryStatusesAreDeploymentStatuses(t *testing.T) {
+	want := []string{CanaryPending, CanaryRamping, CanaryPromoting, CanaryReverting}
+	if !slices.Equal(canaryActive, want) {
+		t.Fatalf("active canary statuses %v, want %v", canaryActive, want)
+	}
+}
