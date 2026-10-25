@@ -68,7 +68,7 @@ func TestAzure_buildsTheApprovedSourceAndRunsItOnContainerApps(t *testing.T) {
 		t.Fatal(err)
 	}
 	registry := azure.RegistryName(azuretest.Subscription, "loomplane")
-	image := registry + ".azurecr.io/api-23456789:" + doApproved[:12]
+	image := registry + ".azurecr.io/api-23456789@" + azuretest.Digest("api-23456789:"+doApproved[:12])
 	name := AzureName(job)
 	if name != "api-production-23456789" || out.Image != image || out.Revision != image ||
 		!strings.HasSuffix(out.ExternalID, "/resourceGroups/loomplane/providers/Microsoft.App/containerApps/"+name) ||
@@ -186,6 +186,47 @@ func TestAzure_aFailedBuildDeploysNothing(t *testing.T) {
 	}
 }
 
+func TestAzure_deploysTheBuiltImageByDigest(t *testing.T) {
+	f := azuretest.New(t)
+	job := azureJob(t, apiConfig())
+	var saved azureState
+	job.Checkpoint = func(data []byte) error { return json.Unmarshal(data, &saved) }
+	out, err := (&Azure{Client: azure.New(f.URL())}).Apply(t.Context(), job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// ACR Tasks names the image the run pushed, with its digest.
+	want := azure.RegistryName(azuretest.Subscription, "loomplane") + ".azurecr.io/api-23456789@" + azuretest.Digest("api-23456789:"+doApproved[:12])
+	if out.Image != want || out.Revision != want || saved.Image != want {
+		t.Fatalf("outcome %+v, checkpoint %+v, want %s", out, saved, want)
+	}
+	f.Lock()
+	defer f.Unlock()
+	c := f.Apps[AzureName(job)]["properties"].(map[string]any)["template"].(map[string]any)["containers"].([]any)[0].(map[string]any)
+	if c["image"] != want {
+		t.Fatalf("the app runs %v", c["image"])
+	}
+}
+
+// A step that checkpointed its image by tag, before images were pinned
+// by digest, deploys that image when it's retried.
+func TestAzure_aTagFromAnOlderAttemptStillDeploys(t *testing.T) {
+	f := azuretest.New(t)
+	f.NoDigest = true
+	tagged := azure.RegistryName(azuretest.Subscription, "loomplane") + ".azurecr.io/api-23456789:" + doApproved[:12]
+	job := azureJob(t, apiConfig())
+	job.Resume, _ = json.Marshal(azureState{RunID: "cb1", Repo: "api-23456789:" + doApproved[:12], Image: tagged})
+	out, err := (&Azure{Client: azure.New(f.URL())}).Apply(t.Context(), job)
+	if err != nil || out.Image != tagged {
+		t.Fatalf("outcome %+v, %v", out, err)
+	}
+	f.Lock()
+	defer f.Unlock()
+	if len(f.Tasks) != 0 {
+		t.Fatalf("built again: %v", f.Tasks)
+	}
+}
+
 func TestAzure_buildsWithoutADockerfileUsingBuildpacks(t *testing.T) {
 	f := azuretest.New(t)
 	exec := &Azure{Client: azure.New(f.URL())}
@@ -198,7 +239,7 @@ func TestAzure_buildsWithoutADockerfileUsingBuildpacks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	image := azure.RegistryName(azuretest.Subscription, "loomplane") + ".azurecr.io/api-23456789:" + doApproved[:12]
+	image := azure.RegistryName(azuretest.Subscription, "loomplane") + ".azurecr.io/api-23456789@" + azuretest.Digest("api-23456789:"+doApproved[:12])
 	if out.Image != image {
 		t.Fatalf("image %q, want %q", out.Image, image)
 	}

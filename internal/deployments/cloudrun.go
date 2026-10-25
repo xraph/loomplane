@@ -239,7 +239,26 @@ func (c *CloudRun) build(ctx context.Context, s *gcp.Session, job *Job, state *c
 	if buildErr != nil {
 		return "", buildErr
 	}
-	return image, nil
+	return pushedImage(ctx, s, a.Region, image, imageName(job), tag, build)
+}
+
+// pushedImage is the image a build pushed, by digest: what Cloud Build
+// reports for an image it pushed, or what Artifact Registry's tag points
+// at for one the build pushed itself, as pack does.
+func pushedImage(ctx context.Context, s *gcp.Session, region, image, name, tag string, build *gcp.BuildStatus) (string, error) {
+	for _, pushed := range build.Results.Images {
+		if pushed.Name == image && pushed.Digest != "" {
+			return byDigest(image, pushed.Digest)
+		}
+	}
+	digest, err := s.ImageDigest(ctx, region, imageRepository, name, tag)
+	if gcp.IsNotFound(err) {
+		return "", errNoDigest
+	}
+	if err != nil {
+		return "", fmt.Errorf("read the image's digest: %w", err)
+	}
+	return byDigest(image, digest)
 }
 
 // imageName names the service's image, unique within the project.

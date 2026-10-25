@@ -952,7 +952,7 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 	if err != nil {
 		return err
 	}
-	step.URL, step.Image = out.URL, out.Image
+	step.URL, step.Image, step.Revision = out.URL, out.Image, out.Revision
 	if out.URL != "" && a.Service != nil && a.Service.Public {
 		progress(StepVerifying, "Checking "+out.URL+" answers")
 		if verr := r.verifyService(ctx, out.URL, a); verr != nil {

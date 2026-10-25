@@ -301,6 +301,14 @@ type Run struct {
 		RunID           string `json:"runId"`
 		Status          string `json:"status"`
 		RunErrorMessage string `json:"runErrorMessage"`
+		// OutputImages are the images a finished run pushed, each with
+		// the digest the registry stored it under.
+		OutputImages []struct {
+			Registry   string `json:"registry"`
+			Repository string `json:"repository"`
+			Tag        string `json:"tag"`
+			Digest     string `json:"digest"`
+		} `json:"outputImages"`
 	} `json:"properties"`
 }
 
@@ -352,27 +360,27 @@ func (s *Session) StartBuild(ctx context.Context, b BuildRequest) (string, error
 }
 
 // WaitBuild polls a run until it finishes, and fails unless it
-// succeeded.
-func (s *Session) WaitBuild(ctx context.Context, runID string) error {
+// succeeded. A run that succeeded names the images it pushed.
+func (s *Session) WaitBuild(ctx context.Context, runID string) (*Run, error) {
 	path := s.registryPath() + "/runs/" + url.PathEscape(runID)
 	for {
 		var run Run
 		if _, err := s.do(ctx, http.MethodGet, path, tasksVersion, nil, &run); err != nil {
-			return err
+			return nil, err
 		}
 		if run.Done() {
 			if run.Properties.Status == "Succeeded" {
-				return nil
+				return &run, nil
 			}
 			detail := strings.TrimSpace(run.Properties.RunErrorMessage)
 			if detail == "" {
 				detail = strings.ToLower(run.Properties.Status)
 			}
-			return fmt.Errorf("ACR Tasks run %s: %s. Its log is under Services, Tasks, Runs in the container registry %s", runID, detail, RegistryName(s.cred.SubscriptionID, s.cred.ResourceGroup))
+			return nil, fmt.Errorf("ACR Tasks run %s: %s. Its log is under Services, Tasks, Runs in the container registry %s", runID, detail, RegistryName(s.cred.SubscriptionID, s.cred.ResourceGroup))
 		}
 		progress(ctx, "Building on ACR Tasks ("+strings.ToLower(run.Properties.Status)+")")
 		if err := s.wait(ctx); err != nil {
-			return err
+			return nil, err
 		}
 	}
 }

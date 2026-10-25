@@ -28,6 +28,23 @@ const imageSourceLabel = "loomplane.source"
 
 var imageDigest = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
 
+// errNoDigest is a build that pushed its image without saying which
+// digest it got, which a release can't record or a rollback redeploy.
+var errNoDigest = errors.New("the build reported no image digest")
+
+// byDigest names image, a repository and tag, by the digest a build
+// pushed it under instead of its tag.
+func byDigest(image, digest string) (string, error) {
+	if !imageDigest.MatchString(digest) {
+		return "", errNoDigest
+	}
+	repo := image
+	if i := strings.LastIndex(image, ":"); i > strings.LastIndex(image, "/") {
+		repo = image[:i]
+	}
+	return repo + "@" + digest, nil
+}
+
 // ImageArtifact is persisted in the executor checkpoint. Credentials remain
 // in Vault; this records the reviewed source, placement and completed image.
 type ImageArtifact struct {

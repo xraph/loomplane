@@ -100,6 +100,10 @@ type Step struct {
 	URL string `json:"url"`
 	// Image is what a container step deployed.
 	Image string `json:"image"`
+	// Revision is what went live, as the executor reported it: the image
+	// reference, or a provider's own revision such as a DigitalOcean
+	// deployment. A rollback redeploys it.
+	Revision string `json:"revision,omitempty"`
 	// Warnings are what went wrong without failing the step, such as an
 	// old one an earlier move left that couldn't be removed this time.
 	Warnings   []string   `json:"warnings,omitempty"`
