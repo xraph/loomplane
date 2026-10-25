@@ -6,11 +6,15 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"encoding/json"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
 	"github.com/xraph/loomplane/internal/clouds/aws"
+	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/planning"
 )
 
@@ -80,5 +84,61 @@ func TestTarToZip_dropsTheTopDirectory(t *testing.T) {
 	}
 	if len(names) != 2 || !names["go.mod"] || !names["services/api/main.go"] {
 		t.Fatalf("zip holds %v", names)
+	}
+}
+
+// ecrFake is the AWS behind an ECS build that CodeBuild has started:
+// CodeBuild finishes it, and ECR holds the image it pushed with digest,
+// unless digest is empty.
+func ecrFake(t *testing.T, digest string) *httptest.Server {
+	t.Helper()
+	const uri = "123456789012.dkr.ecr.eu-west-1.amazonaws.com/loomplane/api-23456789"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/x-amz-json-1.1")
+		var in map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&in)
+		target := r.Header.Get("X-Amz-Target")
+		switch {
+		case strings.HasSuffix(target, ".DescribeRepositories"):
+			_, _ = w.Write([]byte(`{"repositories":[{"repositoryName":"loomplane/api-23456789","repositoryUri":"` + uri + `"}]}`))
+		case strings.HasSuffix(target, ".BatchGetBuilds"):
+			_, _ = w.Write([]byte(`{"builds":[{"id":"loomplane:1","buildStatus":"SUCCEEDED"}]}`))
+		case strings.HasSuffix(target, ".DescribeImages"):
+			ids, _ := in["imageIds"].([]any)
+			if digest == "" || in["repositoryName"] != "loomplane/api-23456789" || len(ids) != 1 || ids[0].(map[string]any)["imageTag"] != doApproved[:12] {
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = w.Write([]byte(`{"__type":"ImageNotFoundException","message":"The image requested does not exist"}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"imageDetails":[{"repositoryName":"loomplane/api-23456789","imageDigest":"` + digest + `"}]}`))
+		default:
+			t.Errorf("asked %s", target)
+			w.WriteHeader(http.StatusBadRequest)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+func ecsBuild(t *testing.T, digest string) (string, error) {
+	t.Helper()
+	srv := ecrFake(t, digest)
+	exec := &ECS{AWS: aws.New(srv.URL)}
+	job := azureJob(t, apiConfig())
+	job.Connection = &connections.Connection{ID: "conn_a", Cloud: connections.AWS, Account: "123456789012", Details: map[string]string{"region": "eu-west-1"}}
+	s, err := exec.session(job, []byte(`{"access_key_id":"AKIATESTTESTTESTTEST","secret_access_key":"secret-test-secret-test"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// CodeBuild already started the build.
+	state := &ecsState{BuildID: "loomplane:1", LogAttempt: "attempt"}
+	return exec.build(t.Context(), s, job, state, func() {})
+}
+
+func TestECS_deploysTheBuiltImageByDigest(t *testing.T) {
+	digest := "sha256:" + strings.Repeat("e5", 32)
+	image, err := ecsBuild(t, digest)
+	if want := "123456789012.dkr.ecr.eu-west-1.amazonaws.com/loomplane/api-23456789@" + digest; err != nil || image != want {
+		t.Fatalf("built %q, %v; want %s", image, err, want)
 	}
 }

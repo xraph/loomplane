@@ -1886,3 +1886,29 @@ func TestReleaseCopiesTheBinding(t *testing.T) {
 		t.Fatalf("the copy shares with the binding: %+v", b)
 	}
 }
+
+// revisioned is an executor whose outcome names a digest reference and a
+// provider revision, as DigitalOcean's deployment ID is.
+type revisioned struct{ *recorder }
+
+func (r revisioned) Apply(ctx context.Context, job *Job) (*Outcome, error) {
+	out, err := r.recorder.Apply(ctx, job)
+	if out != nil {
+		out.Image, out.Revision = "i@sha256:"+strings.Repeat("0", 64), "dep_do_9"
+	}
+	return out, err
+}
+
+func TestRunner_recordsTheRevisionOnTheStep(t *testing.T) {
+	exec := revisioned{&recorder{url: answering(t, http.StatusOK)}}
+	r, store, _ := newRunner(t, webAndAPI(), exec, nil)
+	id, err := runAll(t, r, webAndAPI())
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, _ := store.GetDeployment(t.Context(), "org_1", id)
+	api := d.Step("service:api")
+	if api == nil || api.Image != "i@sha256:"+strings.Repeat("0", 64) || api.Revision != "dep_do_9" {
+		t.Fatalf("api step %+v", api)
+	}
+}

@@ -5,6 +5,7 @@ package integration
 import (
 	"context"
 	"crypto/sha1"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -13,6 +14,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -28,12 +30,16 @@ import (
 // Storage, Artifact Registry, Cloud Build and Cloud Run. A build works
 // once, then succeeds; a rollout is done when it's first checked.
 type fakeCloud struct {
-	mu       sync.Mutex
-	base     string
-	uploads  map[string][]byte
-	repos    map[string]bool
-	builds   []map[string]any
-	polls    map[string]int
+	mu      sync.Mutex
+	base    string
+	uploads map[string][]byte
+	repos   map[string]bool
+	builds  []map[string]any
+	polls   map[string]int
+	// pushes are the images each build pushes, by build ID, and pushed
+	// what Artifact Registry holds once they succeed.
+	pushes   map[string]string
+	pushed   map[string]bool
 	services map[string]map[string]any
 	patches  int
 	public   map[string]bool
@@ -62,6 +68,7 @@ type fakeCloud struct {
 func newFakeCloud(base string) *fakeCloud {
 	return &fakeCloud{
 		base: base, uploads: map[string][]byte{}, repos: map[string]bool{}, polls: map[string]int{},
+		pushes: map[string]string{}, pushed: map[string]bool{},
 		services: map[string]map[string]any{}, public: map[string]bool{}, failed: map[string]bool{},
 		secrets: map[string][][]byte{}, readers: map[string][]string{},
 		sql: map[string]map[string]any{}, databases: map[string][]string{}, passwords: map[string]string{},
@@ -123,6 +130,14 @@ func (f *fakeCloud) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodPost && p == "/v1/projects/acme-prod/locations/us-central1/repositories":
 		f.repos[r.URL.Query().Get("repositoryId")] = true
 		reply(map[string]any{"name": "op"})
+	case r.Method == http.MethodGet && strings.HasPrefix(p, "/v1/projects/acme-prod/locations/us-central1/repositories/loomplane/packages/"):
+		pkg, tag, _ := strings.Cut(strings.TrimPrefix(p, "/v1/projects/acme-prod/locations/us-central1/repositories/loomplane/packages/"), "/tags/")
+		ref := "us-central1-docker.pkg.dev/acme-prod/loomplane/" + pkg + ":" + tag
+		if !f.pushed[ref] {
+			notFound()
+			return
+		}
+		reply(map[string]any{"name": strings.TrimPrefix(p, "/v1/"), "version": "projects/acme-prod/locations/us-central1/repositories/loomplane/packages/" + pkg + "/versions/" + fakeDigest(ref)})
 	case r.Method == http.MethodGet && strings.HasPrefix(p, "/v1/projects/acme-prod/locations/us-central1/repositories/"):
 		if !f.repos[strings.TrimPrefix(p, "/v1/projects/acme-prod/locations/us-central1/repositories/")] {
 			notFound()
@@ -135,6 +150,7 @@ func (f *fakeCloud) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		f.builds = append(f.builds, b)
 		id := fmt.Sprintf("build-%d", len(f.builds))
 		f.failed[id] = f.failBuilds
+		f.pushes[id] = buildPushes(b)
 		reply(map[string]any{"metadata": map[string]any{"build": map[string]any{"id": id}}})
 	case r.Method == http.MethodPost && p == "/v2/entries:list":
 		// A build may succeed without logging.viewer. Keep this separate
@@ -151,7 +167,17 @@ func (f *fakeCloud) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		case f.polls[id] > 1:
 			status = "SUCCESS"
 		}
-		reply(map[string]any{"id": id, "status": status, "statusDetail": "step 0 exited 1", "logUrl": "https://console/" + id})
+		build := map[string]any{"id": id, "status": status, "statusDetail": "step 0 exited 1", "logUrl": "https://console/" + id}
+		if status == "SUCCESS" {
+			// Cloud Build reports the images it pushed; pack pushes its own.
+			ref := f.pushes[id]
+			f.pushed[ref] = true
+			n, _ := strconv.Atoi(strings.TrimPrefix(id, "build-"))
+			if images, _ := f.builds[n-1]["images"].([]any); len(images) > 0 {
+				build["results"] = map[string]any{"images": []any{map[string]any{"name": ref, "digest": fakeDigest(ref)}}}
+			}
+		}
+		reply(build)
 	case r.Method == http.MethodGet && strings.HasPrefix(p, "/v2/projects/acme-prod/locations/us-central1/operations/"):
 		reply(map[string]any{"name": strings.TrimPrefix(p, "/v2/"), "done": true})
 	case strings.HasPrefix(p, runPrefix):
@@ -198,6 +224,37 @@ func (f *fakeCloud) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	default:
 		notFound()
 	}
+}
+
+// fakeDigest is the digest a fake registry stores an image under.
+func fakeDigest(ref string) string {
+	sum := sha256.Sum256([]byte(ref))
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+// pinned is ref, a repository and tag, by the digest a fake registry
+// stores it under.
+func pinned(ref string) string {
+	repo := ref[:strings.LastIndex(ref, ":")]
+	return repo + "@" + fakeDigest(ref)
+}
+
+// buildPushes is the image a Cloud Build pushes: the one it lists, or
+// the one its pack step publishes.
+func buildPushes(b map[string]any) string {
+	if images, _ := b["images"].([]any); len(images) > 0 {
+		ref, _ := images[0].(string)
+		return ref
+	}
+	steps, _ := b["steps"].([]any)
+	for _, step := range steps {
+		args, _ := step.(map[string]any)["args"].([]any)
+		if len(args) > 1 && args[0] == "build" {
+			ref, _ := args[1].(string)
+			return ref
+		}
+	}
+	return ""
 }
 
 // memorystore is Memorystore for Redis: an instance is creating the first
@@ -350,6 +407,7 @@ type deploymentBody struct {
 		Message  string `json:"message"`
 		URL      string `json:"url"`
 		Image    string `json:"image"`
+		Revision string `json:"revision"`
 	} `json:"steps"`
 }
 
@@ -438,7 +496,7 @@ func TestDeploy_aGoServiceRunsOnCloudRun(t *testing.T) {
 	}
 	step := d.Steps[0]
 	if !strings.HasPrefix(step.URL, google.srv.URL+"/run/") ||
-		!strings.HasPrefix(step.Image, "us-central1-docker.pkg.dev/acme-prod/loomplane/api-") || !strings.HasSuffix(step.Image, ":"+exampleSHA[:12]) {
+		!strings.HasPrefix(step.Image, "us-central1-docker.pkg.dev/acme-prod/loomplane/api-") || !strings.Contains(step.Image, "@sha256:") {
 		t.Fatalf("step %+v", step)
 	}
 
@@ -452,7 +510,9 @@ func TestDeploy_aGoServiceRunsOnCloudRun(t *testing.T) {
 		t.Fatalf("uploaded %d bytes, not the tarball", len(upload))
 	}
 	steps := build["steps"].([]any)[0].(map[string]any)
-	if steps["dir"] != "acme-mono-fedcba9/services/api" || build["images"].([]any)[0] != step.Image {
+	// The step deploys and records what the build pushed, by digest.
+	if tagged := build["images"].([]any)[0].(string); steps["dir"] != "acme-mono-fedcba9/services/api" ||
+		!strings.HasSuffix(tagged, ":"+exampleSHA[:12]) || pinned(tagged) != step.Image || step.Revision != step.Image {
 		t.Fatalf("build %+v", build)
 	}
 	ctr := cloud.container(t)

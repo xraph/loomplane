@@ -52,7 +52,9 @@ var (
 	// ErrRejected is a key AWS refused.
 	ErrRejected = errors.New("aws refused the access key")
 
-	errNotFound = errors.New("not found")
+	// ErrNotFound is something AWS doesn't have, such as an image tag no
+	// push made.
+	ErrNotFound = errors.New("not found")
 )
 
 var (
@@ -169,7 +171,7 @@ func refused(err error) bool {
 
 // IsNotFound reports whether err is AWS saying something doesn't exist.
 func IsNotFound(err error) bool {
-	if errors.Is(err, errNotFound) {
+	if errors.Is(err, ErrNotFound) {
 		return true
 	}
 	var ae smithy.APIError

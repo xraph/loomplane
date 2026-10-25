@@ -161,7 +161,14 @@ func (e *ECS) build(ctx context.Context, s *aws.Session, job *Job, state *ecsSta
 	if buildErr != nil {
 		return "", buildErr
 	}
-	return image, nil
+	digest, digestErr := s.ImageDigest(ctx, "loomplane/"+imageName(job), tag)
+	if errors.Is(digestErr, aws.ErrNotFound) {
+		return "", errNoDigest
+	}
+	if digestErr != nil {
+		return "", digestErr
+	}
+	return byDigest(image, digest)
 }
 
 // codeBuildPolicy lets CodeBuild read the sources, push to Loomplane's

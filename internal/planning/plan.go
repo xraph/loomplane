@@ -561,6 +561,48 @@ type DeployedRepository struct {
 	DeployedAt time.Time `json:"deployed_at"`
 }
 
+// ReleaseRecord is one succeeded deployment of an environment: a release
+// a rollback can return to. Kind is its plan's kind.
+type ReleaseRecord struct {
+	DeploymentID string
+	PlanID       string
+	Kind         string
+	Status       string
+	StartedAt    time.Time
+	FinishedAt   time.Time
+}
+
+// ReleasedImage is what one service ran after a release: the image it
+// deployed, by digest when the executor recorded one, and where.
+type ReleasedImage struct {
+	Service      string
+	Provider     string
+	ConnectionID string
+	Region       string
+	// Registry is the registry connection the image was pushed through,
+	// for a server or Kubernetes service built by Loomplane.
+	Registry  string
+	CommitSHA string
+	// Image is a digest reference when the executor recorded one.
+	Image string
+	// Revision is the provider's own revision at that release.
+	Revision     string
+	DeploymentID string
+	PlanID       string
+	FinishedAt   time.Time
+}
+
+// ReleaseHistory reads an environment's releases and what they ran.
+type ReleaseHistory interface {
+	// Releases returns an environment's succeeded deployments finished
+	// before `before` (zero: no bound), newest first, leaving out Cloud
+	// sync and catalog plans.
+	Releases(ctx context.Context, orgID, environmentID string, before time.Time, limit int) ([]ReleaseRecord, error)
+	// ReleasedImages returns, per service action name, the newest
+	// succeeded step at or before upTo.
+	ReleasedImages(ctx context.Context, orgID, environmentID string, upTo time.Time) (map[string]ReleasedImage, error)
+}
+
 // Plan is one plan for one environment of a project, pinned to one commit
 // of each repository and the manifest revision it was made from.
 type Plan struct {
