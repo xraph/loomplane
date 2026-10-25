@@ -1,0 +1,21 @@
+---
+title: Canary releases
+description: Loomplane shifts traffic to a new version in steps, using each cloud's own weighting, and reads health from that cloud's own monitoring.
+---
+
+Loomplane shifts traffic to a new version with each cloud's own traffic weighting, so it never sits in the path of your application's requests. It reads health from the cloud's own monitoring, so what it judges is what the cloud already reports.
+
+## Where canaries run
+
+| Provider | Canary | Weighting | Requests | 5xx | Latency | Per revision | Note |
+|---|---|---|---|---|---|---|---|
+| `cloud-run` | Yes | Revision traffic | Yes | Yes | p95 | Yes | Traffic is split with revision traffic percentages on the service. |
+| `ecs-fargate` | Yes | ALB target groups | Yes | Yes | p95 | Yes | Traffic is split with weighted target groups on the ALB listener, for services behind the public or internal ALB. Service Connect calls stay on the baseline. |
+| `azure-container-apps` | Yes | Revision traffic | Yes | Yes | Average | Yes | Traffic is split with revision traffic weights, in multiple revisions mode, for apps with ingress. |
+| `kubernetes` | No | None | No | No | None | No | Services use a plain Ingress with no Gateway API, so there is no traffic weighting to drive. |
+| `server` | No | None | No | No | None | No | Route releases are a DNS cutover, so traffic moves all at once. |
+| `render` | No | None | Yes | Yes | p95 | No | Render has no traffic weighting. Its metrics are per service, not per revision. |
+| `vercel` | No | None | No | No | None | No | Vercel has no traffic weighting Loomplane drives. |
+| `digitalocean` | No | None | No | No | None | No | DigitalOcean has no traffic weighting. |
+
+Services on any other target deploy all at once, and the plan says so.
