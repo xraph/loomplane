@@ -60,7 +60,12 @@ func (SSHRuntime) Inspect(ctx context.Context, raw []byte, settings map[string]s
 		storageBytes = &storage.TotalBytes
 		freeStorageBytes = &storage.FreeBytes
 	}
-	return RuntimeHealth{StorageBytes: storageBytes, FreeStorageBytes: freeStorageBytes, EffectiveCPUMillis: effectiveCPU, EffectiveMemoryBytes: effectiveMemory, DockerID: details["docker_id"], Architecture: details["architecture"], CPUs: cpus, MemoryBytes: memory, CheckedAt: time.Now().UTC()}, nil
+	health := RuntimeHealth{StorageBytes: storageBytes, FreeStorageBytes: freeStorageBytes, EffectiveCPUMillis: effectiveCPU, EffectiveMemoryBytes: effectiveMemory, DockerID: details["docker_id"], Architecture: details["architecture"], CPUs: cpus, MemoryBytes: memory, CheckedAt: time.Now().UTC()}
+	// GPUs reports a failed read as status unknown, so a GPU-less host never fails inspection.
+	if inv, gpuErr := client.GPUs(ctx); gpuErr == nil {
+		health.GPUs, health.GPURuntime, health.GPUMessage = inv.Devices, inv.Status, inv.Message
+	}
+	return health, nil
 }
 
 // Enrollment contains only the host's public key. The bearer token is accepted

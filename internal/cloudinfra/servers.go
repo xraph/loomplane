@@ -46,15 +46,18 @@ type Server struct {
 
 // RuntimeHealth comes from the pinned Docker daemon, never a provider size slug.
 type RuntimeHealth struct {
-	StorageBytes         *int64    `json:"storage_bytes"`
-	FreeStorageBytes     *int64    `json:"free_storage_bytes"`
-	EffectiveCPUMillis   int64     `json:"effective_cpu_millis"`
-	EffectiveMemoryBytes int64     `json:"effective_memory_bytes"`
-	DockerID             string    `json:"docker_id"`
-	Architecture         string    `json:"architecture"`
-	CPUs                 int       `json:"cpus"`
-	MemoryBytes          int64     `json:"memory_bytes"`
-	CheckedAt            time.Time `json:"checked_at"`
+	StorageBytes         *int64               `json:"storage_bytes"`
+	FreeStorageBytes     *int64               `json:"free_storage_bytes"`
+	EffectiveCPUMillis   int64                `json:"effective_cpu_millis"`
+	EffectiveMemoryBytes int64                `json:"effective_memory_bytes"`
+	DockerID             string               `json:"docker_id"`
+	Architecture         string               `json:"architecture"`
+	CPUs                 int                  `json:"cpus"`
+	MemoryBytes          int64                `json:"memory_bytes"`
+	GPUs                 []provider.GPUDevice `json:"gpus,omitempty"`
+	GPURuntime           string               `json:"gpu_runtime,omitempty"` // a provider.GPUStatus* value
+	GPUMessage           string               `json:"gpu_message,omitempty"`
+	CheckedAt            time.Time            `json:"checked_at"`
 }
 
 // ServerInput describes exactly one reviewed lifecycle change. Adoption refers

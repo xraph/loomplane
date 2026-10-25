@@ -3,6 +3,7 @@ package connections
 import (
 	"context"
 	"fmt"
+	"maps"
 
 	"github.com/xraph/loomplane/internal/clouds/kubernetes"
 	"github.com/xraph/loomplane/internal/clouds/registry"
@@ -30,6 +31,15 @@ func (ServerChecker) Check(ctx context.Context, raw []byte, settings map[string]
 	}
 	defer c.Close()
 	details, missing, err := c.Check(ctx)
+	if err == nil {
+		// GPUs reports a failed read as status unknown, so it never fails the check.
+		if inv, gpuErr := c.GPUs(ctx); gpuErr == nil {
+			if details == nil {
+				details = map[string]string{}
+			}
+			maps.Copy(details, inv.Details())
+		}
+	}
 	return Check{Account: cfg.User + "@" + cfg.Address, Details: details, Missing: missing}, err
 }
 
