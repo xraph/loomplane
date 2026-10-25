@@ -2,6 +2,7 @@ package connections
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -55,6 +56,13 @@ type Service struct {
 	// AppSecrets keeps sign-in app secrets, keyed by organization and cloud.
 	AppSecrets Secrets
 	Apps       AppStore
+	// Lapsed hears about a signed-in connection the cloud stopped
+	// honoring. It may be nil.
+	Lapsed func(ctx context.Context, c *Connection)
+
+	// grants renews sign-ins. It's nil when the store can't lock a
+	// connection, and then nothing is renewed.
+	grants grantStore
 }
 
 // NewService returns a Service. checkers maps each cloud to its checker;
@@ -63,7 +71,8 @@ func NewService(store Store, secrets Secrets, checkers map[string]Checker, authz
 	if warn == nil {
 		warn = func(string, error) {}
 	}
-	return &Service{store: store, secrets: secrets, checkers: checkers, authz: authz, audit: audit, now: time.Now, warn: warn}
+	grants, _ := store.(grantStore)
+	return &Service{store: store, secrets: secrets, checkers: checkers, authz: authz, audit: audit, now: time.Now, warn: warn, grants: grants}
 }
 
 // CreateInput connects a cloud account.
@@ -231,8 +240,24 @@ func (s *Service) Recheck(ctx context.Context, p security.Principal, id string) 
 	if err != nil {
 		return nil, err
 	}
-	cred, err := s.secrets.Reveal(ctx, p.OrgID, c.ID)
-	if err != nil {
+	var cred []byte
+	if c.Method == MethodOAuth {
+		// Check the grant a deployment would get, renewed if it's due.
+		g, err := s.usableGrant(ctx, c)
+		if errors.Is(err, ErrNotReady) {
+			if c, err = s.store.GetConnection(ctx, p.OrgID, id); err != nil {
+				return nil, err
+			}
+			s.record(ctx, "cloud_connection.check", p, c)
+			return c, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		if cred, err = json.Marshal(g); err != nil {
+			return nil, fmt.Errorf("encode sign-in grant: %w", err)
+		}
+	} else if cred, err = s.secrets.Reveal(ctx, p.OrgID, c.ID); err != nil {
 		return nil, err
 	}
 	now := s.now().UTC()
@@ -368,7 +393,9 @@ func (s *Service) Delete(ctx context.Context, p security.Principal, id string) e
 
 // Credential returns a ready connection and its credential, for a
 // deployment. It checks no role: only Loomplane's own workflow calls it,
-// for a plan someone was allowed to approve.
+// for a plan someone was allowed to approve. A signed-in connection's
+// credential is its access token, renewed first if it expires within a
+// day.
 func (s *Service) Credential(ctx context.Context, orgID, id string) (*Connection, []byte, error) {
 	c, err := s.store.GetConnection(ctx, orgID, id)
 	if err != nil {
@@ -377,8 +404,14 @@ func (s *Service) Credential(ctx context.Context, orgID, id string) (*Connection
 	if c.Message == replacementInProgressMessage || (c.Status != StatusReady && !RegistryPullReady(c)) {
 		return nil, nil, fmt.Errorf("%w: %s is %s", ErrNotReady, c.Name, c.Status)
 	}
-	cred, err := s.secrets.Reveal(ctx, orgID, id)
-	if err != nil {
+	var cred []byte
+	if c.Method == MethodOAuth {
+		g, err := s.usableGrant(ctx, c)
+		if err != nil {
+			return nil, nil, err
+		}
+		cred = []byte(g.AccessToken)
+	} else if cred, err = s.secrets.Reveal(ctx, orgID, id); err != nil {
 		return nil, nil, err
 	}
 	// A replacement may start between reading the row and reading Vault.
