@@ -47,6 +47,7 @@ function fixture({
   noTargets = false,
   removed = false,
   provider = "cloud-sql",
+  cloudSQLPITR = false,
 } = {}) {
   const reviews: Record<string, unknown>[] = []
   const creates: Record<string, unknown>[] = []
@@ -102,8 +103,16 @@ function fixture({
     project_id: "project",
     runtime: "managed",
     provider,
-    region: provider === "rds" ? "us-east-1" : "europe-west1",
-    connection_id: provider === "rds" ? "source-account" : "recovery-account",
+    region:
+      provider === "rds"
+        ? "us-east-1"
+        : cloudSQLPITR
+          ? "us-central1"
+          : "europe-west1",
+    connection_id:
+      provider === "rds" || cloudSQLPITR
+        ? "source-account"
+        : "recovery-account",
     revision: 2,
   }
   const baseCopy = {
@@ -119,8 +128,18 @@ function fixture({
     expires_at: "2099-01-01T00:00:00Z",
     target: {
       provider,
-      region: provider === "rds" ? "us-east-1" : "europe-west1",
-      native_project: provider === "rds" ? undefined : "recovery-project",
+      region:
+        provider === "rds"
+          ? "us-east-1"
+          : cloudSQLPITR
+            ? "us-central1"
+            : "europe-west1",
+      native_project:
+        provider === "rds"
+          ? undefined
+          : cloudSQLPITR
+            ? "source-project"
+            : "recovery-project",
       native_account: provider === "rds" ? "123456789012" : undefined,
     },
   }
@@ -165,7 +184,7 @@ function fixture({
       }
       if (url.pathname.endsWith("/pitr-window"))
         return reply(
-          provider === "rds"
+          provider === "rds" || cloudSQLPITR
             ? {
                 source_id: "source",
                 provider,
@@ -235,6 +254,16 @@ function fixture({
             ? []
             : [
                 target,
+                ...(cloudSQLPITR
+                  ? [
+                      {
+                        ...target,
+                        id: "wrong-region",
+                        display_name: "Wrong region",
+                        region: "europe-west1",
+                      },
+                    ]
+                  : []),
                 {
                   ...target,
                   id: "rds",
@@ -261,12 +290,13 @@ function fixture({
             provider,
             cloud_id: "cloud",
             target_id: "recovery",
-            region: provider === "rds" ? "us-east-1" : "europe-west1",
-            native_project: provider === "rds" ? undefined : "recovery-project",
+            region: target.region,
+            native_project: baseCopy.target.native_project,
             native_account: provider === "rds" ? "123456789012" : undefined,
-            connection_id:
-              provider === "rds" ? "source-account" : "recovery-account",
-            account_identity: "gcp:recovery-project",
+            connection_id: target.connection_id,
+            account_identity: cloudSQLPITR
+              ? "gcp:source-project"
+              : "gcp:recovery-project",
             cloud_revision: 1,
             target_revision: 2,
             grant_revision: 3,
@@ -1039,4 +1069,60 @@ it("keeps the exact reviewed PITR time through uncertain admission and copy hist
   expect(
     await screen.findByText("PITR time 2026-10-21T12:00:03Z")
   ).toBeVisible()
+})
+
+it("reviews Cloud SQL PITR on the source connection and region with network isolation", async () => {
+  const f = fixture({ cloudSQLPITR: true })
+  const user = userEvent.setup()
+  show()
+  await user.click(
+    await screen.findByRole("button", { name: "Read PITR window" })
+  )
+  await user.type(
+    await screen.findByLabelText("Restore time in UTC"),
+    "2026-10-21T12:00:03.123456789Z"
+  )
+  await user.click(screen.getByRole("button", { name: "Review PITR copy" }))
+  const dialog = await screen.findByRole("dialog", {
+    name: "Review native copy",
+  })
+  await user.click(
+    within(dialog).getByRole("combobox", { name: "Destination Cloud" })
+  )
+  await user.click(await screen.findByRole("option", { name: "Recovery" }))
+  await user.click(
+    await within(dialog).findByRole("combobox", { name: "Destination target" })
+  )
+  expect(
+    screen.queryByRole("option", { name: /Wrong region/ })
+  ).not.toBeInTheDocument()
+  await user.click(await screen.findByRole("option", { name: /Recovery SQL/ }))
+  expect(
+    within(dialog).getByText(
+      /source project and region.*separate recovery network/i
+    )
+  ).toBeVisible()
+  expect(
+    within(dialog).queryByText(/a separate recovery project/i)
+  ).not.toBeInTheDocument()
+  await user.click(
+    within(dialog).getByRole("button", { name: "Review capacity and charges" })
+  )
+  expect(
+    await within(dialog).findByText(
+      "Reviewed PITR time: 2026-10-21T12:00:03.123456789Z"
+    )
+  ).toBeVisible()
+  await user.click(within(dialog).getByRole("checkbox"))
+  await user.click(
+    within(dialog).getByRole("button", { name: "Create temporary copy" })
+  )
+  await waitFor(() =>
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
+  )
+  expect(f.reviews[0]).toMatchObject({
+    target_id: "recovery",
+    restore_time: "2026-10-21T12:00:03.123456789Z",
+  })
+  expect(f.creates).toHaveLength(1)
 })

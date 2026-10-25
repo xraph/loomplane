@@ -10,8 +10,8 @@ import type { NativeSource } from "@/client/forge/loomplane/types"
 import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { QueryError } from "@/components/query-error"
+import { CloudSelect as Select } from "@/components/cloud-targets/cloud-select"
 import {
-  Select,
   SelectContent,
   SelectItem,
   SelectTrigger,
@@ -84,8 +84,9 @@ function NativeRecoveryContent({
         Saved provider observations, separate from Trove exports. A snapshot
         listed here has not been restore-tested. You can review temporary Cloud
         SQL and RDS PostgreSQL 17 copies below. Native retention has a separate
-        review. RDS PITR copies use an explicit UTC time from the current
-        provider window.
+        review. PITR copies use an explicit UTC time from the current provider
+        window. Cloud SQL PITR requires an isolated PSC source and a separate
+        recovery network in the source project and region.
       </p>
       <NativeCopyHistory
         key={copyVersion}
