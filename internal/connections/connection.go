@@ -170,3 +170,10 @@ type Checker interface {
 	// service records it as failed.
 	Check(ctx context.Context, credential []byte, settings map[string]string) (Check, error)
 }
+
+// GrantChecker is a Checker for a cloud that can be signed in to. It tells
+// a sign-in grant from a pasted credential, so a grant only ever reaches
+// Vault through a sign-in.
+type GrantChecker interface {
+	IsGrant(credential []byte) bool
+}

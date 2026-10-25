@@ -180,6 +180,12 @@ func digitalOceanGrant(credential []byte) (g oauth.Grant, ok bool, err error) {
 	return g, true, nil
 }
 
+// IsGrant implements GrantChecker.
+func (DigitalOceanChecker) IsGrant(credential []byte) bool {
+	_, isGrant, _ := digitalOceanGrant(credential)
+	return isGrant
+}
+
 // Parse implements Checker. A grant says which account and team it's for.
 func (d DigitalOceanChecker) Parse(credential []byte, _ map[string]string) (Check, error) {
 	g, isGrant, err := digitalOceanGrant(credential)

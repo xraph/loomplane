@@ -398,3 +398,19 @@ func TestDigitalOceanCheckerReadsAGrant(t *testing.T) {
 		t.Fatalf("revoked grant: %v", err)
 	}
 }
+
+func TestPastingAGrantIsRefused(t *testing.T) {
+	r := newSignInRig(t)
+	tokenConnection(r)
+	r.secrets.puts = 0
+	grant := ` {"access_token":"dop_v1_team","account":{"team_uuid":"team-1"}}`
+	if _, err := r.s.Create(t.Context(), starter, CreateInput{Cloud: DigitalOcean, Name: "Pasted", Credential: grant}); !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "not JSON") {
+		t.Fatalf("create: %v", err)
+	}
+	if _, err := r.s.Replace(t.Context(), starter, "conn_do", ReplaceInput{Credential: grant}); !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "not JSON") {
+		t.Fatalf("replace: %v", err)
+	}
+	if r.secrets.puts != 0 || string(r.secrets.kept["org/conn_do"]) != "dop_v1_team" || len(r.store.rows) != 1 {
+		t.Fatalf("vault=%q puts=%d rows=%d", r.secrets.kept["org/conn_do"], r.secrets.puts, len(r.store.rows))
+	}
+}

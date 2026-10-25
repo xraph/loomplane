@@ -116,6 +116,15 @@ func (s *Service) check(ctx context.Context, cloud string, c Checker, credential
 	}
 }
 
+// refusePastedGrant keeps Method true to what Vault holds: a pasted
+// credential that is really a sign-in grant is refused.
+func refusePastedGrant(c Checker, cred []byte, method string) error {
+	if g, ok := c.(GrantChecker); ok && method == MethodToken && g.IsGrant(cred) {
+		return fmt.Errorf("%w: paste the API token itself, not JSON", ErrInvalid)
+	}
+	return nil
+}
+
 func apply(c *Connection, res Check, now time.Time) {
 	c.Account, c.Details, c.Missing, c.Message = res.Account, res.Details, res.Missing, ""
 	c.Status = StatusReady
@@ -153,6 +162,9 @@ func (s *Service) create(ctx context.Context, p security.Principal, cloud, name 
 	}
 	name, err = validName(name)
 	if err != nil {
+		return nil, err
+	}
+	if err := refusePastedGrant(checker, cred, method); err != nil {
 		return nil, err
 	}
 	res, err := s.check(ctx, cloud, checker, cred, settings)
@@ -277,6 +289,9 @@ func (s *Service) replace(ctx context.Context, p security.Principal, id string, 
 	}
 	checker, err := s.checker(c.Cloud)
 	if err != nil {
+		return nil, err
+	}
+	if err := refusePastedGrant(checker, cred, method); err != nil {
 		return nil, err
 	}
 	before := AccountIdentity(c.Cloud, c.Account, c.Details)
