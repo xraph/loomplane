@@ -162,20 +162,24 @@ export function FabriqServices({
         </FabriqEmpty>
       ) : (
         <div className="overflow-hidden rounded-xl border">
-          <Table className="min-w-[760px]">
+          <Table
+            columns="minmax(0, 0.9fr) minmax(0, 1.1fr) 120px 150px 170px"
+            scrollLabel="Service keys"
+            className="min-w-[760px]"
+          >
             <TableHeader>
               <TableRow className="bg-subtle hover:bg-subtle">
-                <Head className="pl-4">Service</Head>
+                <Head>Service</Head>
                 <Head>Key</Head>
-                <Head className="w-[120px]">Tenant</Head>
-                <Head className="w-[150px]">Last used</Head>
-                <Head className="w-[170px] pr-4 text-right">Actions</Head>
+                <Head>Tenant</Head>
+                <Head>Last used</Head>
+                <Head className="text-right">Actions</Head>
               </TableRow>
             </TableHeader>
             <TableBody>
               {keys.data.keys.map((key) => (
                 <TableRow key={key.service}>
-                  <TableCell className="py-2.5 pl-4">
+                  <TableCell>
                     <span className="grid gap-0.5">
                       <span className="font-medium">{key.service}</span>
                       {environment && (
@@ -194,7 +198,7 @@ export function FabriqServices({
                   <TableCell className="text-[12.5px]">
                     {lastUsed(key, now)}
                   </TableCell>
-                  <TableCell className="pr-4">
+                  <TableCell>
                     {canManage &&
                       (key.state === "active" || key.state === "rotating") && (
                         <span className="flex justify-end gap-1.5">

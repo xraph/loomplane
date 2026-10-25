@@ -3,10 +3,7 @@
 // that opens the admin console.
 import { LayersIcon } from "lucide-react"
 
-import {
-  useConnectionsList,
-  useEnvironmentsList,
-} from "@/client/forge/loomplane/hooks"
+import { useConnectionsList } from "@/client/forge/loomplane/hooks"
 import { useQuery } from "@/client/hooks"
 import { FabriqEngines } from "@/components/fabriq/fabriq-engines"
 import { FabriqRecovery } from "@/components/fabriq/fabriq-recovery"
@@ -23,14 +20,11 @@ import { defineCatalogKind, type CatalogPanelProps } from "@/lib/catalog-kinds"
  * runs. The service page calls it on every render for this kind, always
  * from the same place, so it may read the names it needs.
  */
-function useFabriqSubtitle(props: CatalogPanelProps): string {
-  const environments = useQuery(useEnvironmentsList, {
-    path: { id: props.projectId },
-  })
+function useFabriqSubtitle(
+  props: CatalogPanelProps,
+  environment: string
+): string {
   const connections = useQuery(useConnectionsList)
-  const environment = environments.data?.environments.find(
-    (e) => e.id === props.environmentId
-  )?.name
   const target = connections.data?.connections.find(
     (c) => c.id === props.binding.connectionId
   )?.name
@@ -53,8 +47,13 @@ export default defineCatalogKind({
   kind: "fabriq",
   title: "Fabriq",
   deployedLabel: "Running",
+  headerVariant: "inline",
   group: "data",
-  icon: LayersIcon,
+  icon: ({ className }) => (
+    <LayersIcon
+      className={`${className ?? ""} text-[#2F5C78] dark:text-sky-300`}
+    />
+  ),
   blurb:
     "One click sets up the whole stack. Swap any engine for one you already run.",
   features: ["Hosted server or library", "Admin console", "Postgres recovery"],

@@ -61,7 +61,7 @@ test("the module adds the tab, the button and the subtitle", async () => {
   ])
   expect(fabriq.actions).toBe(OpenAdminButton)
   serve()
-  const Subtitle = () => <p>{fabriq.subtitle!(panelProps())}</p>
+  const Subtitle = () => <p>{fabriq.subtitle!(panelProps(), "production")}</p>
   mount(<Subtitle />)
   expect(
     await screen.findByText("Hosted Fabriq server · production · edge-1")

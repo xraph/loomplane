@@ -162,19 +162,23 @@ export function FabriqTenants({
         </FabriqEmpty>
       ) : (
         <div className="overflow-hidden rounded-xl border">
-          <Table className="min-w-[640px]">
+          <Table
+            columns="minmax(0, 1fr) 170px 140px 130px"
+            scrollLabel="Tenant rows"
+            className="min-w-[640px]"
+          >
             <TableHeader>
               <TableRow className="bg-subtle hover:bg-subtle">
-                <Head className="pl-4">Tenant</Head>
-                <Head className="w-[170px]">Created</Head>
-                <Head className="w-[140px]">Default for</Head>
-                <Head className="w-[130px] pr-4 text-right">Actions</Head>
+                <Head>Tenant</Head>
+                <Head>Created</Head>
+                <Head>Default for</Head>
+                <Head className="text-right">Actions</Head>
               </TableRow>
             </TableHeader>
             <TableBody>
               {tenants.data.tenants.map((tenant) => (
                 <TableRow key={tenant.id}>
-                  <TableCell className="py-2.5 pl-4 font-mono font-medium">
+                  <TableCell className="font-mono font-medium">
                     {tenant.id}
                   </TableCell>
                   <TableCell className="text-[12.5px]">
@@ -183,7 +187,7 @@ export function FabriqTenants({
                   <TableCell className="text-[12.5px]">
                     {defaultFor(tenant.id)}
                   </TableCell>
-                  <TableCell className="pr-4 text-right">
+                  <TableCell className="text-right">
                     <OpenInAdmin
                       projectId={projectId}
                       environmentId={environmentId}

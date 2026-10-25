@@ -223,6 +223,7 @@ function serve({
       }
     }
     if (url.pathname.endsWith("/catalog/kinds")) body = { kinds: [] }
+    if (url.pathname.endsWith("/connections")) body = { connections: [] }
     if (url.pathname.endsWith("/service-backups")) body = { backups: [] }
     if (url.pathname.endsWith("/service-restores")) body = { restores: [] }
     if (url.pathname.endsWith("/backup-policies")) body = { policies: [] }
@@ -489,4 +490,31 @@ test("a module's deployed label preserves drift warnings", async () => {
     cleanup()
     forgeClient.clear()
   }
+})
+
+test("Fabriq puts the environment in its instance subtitle once", async () => {
+  serve({
+    bindings: {
+      production: [binding("fabriq", { kind: "fabriq", provider: "server" })],
+    },
+  })
+  open("fabriq", "env_prod")
+  const header = await screen.findByRole("banner")
+  expect(
+    await within(header).findByText("Hosted Fabriq server · production")
+  ).toBeVisible()
+  expect(
+    within(header).queryByText("production", { exact: true })
+  ).not.toBeInTheDocument()
+  expect(within(header).getByText("Running")).toBeVisible()
+  expect(
+    within(header).getByRole("button", { name: "Open Fabriq admin" })
+  ).toBeVisible()
+})
+
+test("the default catalog header retains its environment badge", async () => {
+  serve({ bindings: { production: composed } })
+  open("app", "env_prod")
+  const header = await screen.findByRole("banner")
+  expect(within(header).getByText("production", { exact: true })).toBeVisible()
 })

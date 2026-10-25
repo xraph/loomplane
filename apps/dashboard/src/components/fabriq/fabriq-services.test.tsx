@@ -200,3 +200,17 @@ test("services say when Fabriq isn't reachable", async () => {
   ).toBeVisible()
   expect(screen.queryByRole("table")).toBeNull()
 })
+
+test("services scrolling is keyboard accessible and keeps table semantics", async () => {
+  serve()
+  mount(<FabriqServices {...panelProps()} />)
+  const region = await screen.findByRole("region", { name: "Service keys" })
+  const table = within(region).getByRole("table")
+  for (const heading of within(table).getAllByRole("columnheader"))
+    expect(heading).toHaveAttribute("scope", "col")
+  screen.getByRole("button", { name: "Link a service" }).focus()
+  await userEvent.tab()
+  expect(region).toHaveFocus()
+  await userEvent.tab()
+  expect(table).toContainElement(document.activeElement as HTMLElement)
+})

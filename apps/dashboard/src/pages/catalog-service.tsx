@@ -285,26 +285,68 @@ function Header({
   const Actions = module?.actions
   // A module's subtitle says which instance this is, so it stands in for
   // the catalog's description of the kind.
-  const subtitle = module?.subtitle?.(props)
+  const subtitle = module?.subtitle?.(props, environment)
+  const inline = module?.headerVariant === "inline"
   return (
-    <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
-      <div className="flex min-w-0 flex-1 items-start gap-4 sm:items-center">
+    <header
+      className={
+        inline
+          ? "flex flex-wrap items-center gap-x-3.5 gap-y-3"
+          : "flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4"
+      }
+    >
+      <div
+        className={
+          inline
+            ? "contents"
+            : "flex min-w-0 flex-1 items-start gap-4 sm:items-center"
+        }
+      >
         <ProductIcon
           product={module?.logo}
           fallback={kindIcon(module)}
           label={title}
           size="xl"
+          className={inline ? "rounded-[12px] ring-inset" : undefined}
         />
-        <div className="grid min-w-0 flex-1 gap-1">
-          <h1 className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-[22px] leading-tight font-semibold tracking-[-0.025em] md:text-2xl">
+        <div
+          className={
+            inline
+              ? "grid min-w-0 flex-[1_1_300px] gap-[3px]"
+              : "grid min-w-0 flex-1 gap-1"
+          }
+        >
+          <h1
+            className={
+              inline
+                ? "flex flex-wrap items-baseline gap-x-2 gap-y-1 text-2xl leading-[1.2] font-semibold tracking-[-0.025em]"
+                : "flex flex-wrap items-baseline gap-x-2 gap-y-1 text-[22px] leading-tight font-semibold tracking-[-0.025em] md:text-2xl"
+            }
+          >
             <span className="min-w-0 break-all">{resource}</span>
-            <span className="text-sm font-normal text-muted-foreground">
+            <span
+              className={
+                inline
+                  ? "font-mono text-[13px] font-normal text-muted-foreground"
+                  : "text-sm font-normal text-muted-foreground"
+              }
+            >
               {title}
-              {version && <span className="ml-1.5 font-mono">{version}</span>}
+              {version && (
+                <span className={inline ? "ml-1" : "ml-1.5 font-mono"}>
+                  {version}
+                </span>
+              )}
             </span>
           </h1>
           {subtitle ? (
-            <p className="text-[13.5px] leading-relaxed text-pretty text-muted-foreground">
+            <p
+              className={
+                inline
+                  ? "text-[13px] text-pretty text-muted-foreground"
+                  : "text-[13.5px] leading-relaxed text-pretty text-muted-foreground"
+              }
+            >
               {subtitle}
             </p>
           ) : (
@@ -316,15 +358,30 @@ function Header({
           )}
         </div>
       </div>
-      <div className="flex flex-wrap items-center gap-2 sm:shrink-0">
-        <span className="inline-flex h-5 items-center rounded-full bg-muted px-2 text-xs font-medium text-muted-foreground capitalize">
-          {environment}
-        </span>
-        <StatusPill tone={state.drift ? "waiting" : "live"}>
+      <div
+        className={
+          inline ? "contents" : "flex flex-wrap items-center gap-2 sm:shrink-0"
+        }
+      >
+        {(!inline || !subtitle) && (
+          <span className="inline-flex h-5 items-center rounded-full bg-muted px-2 text-xs font-medium text-muted-foreground capitalize">
+            {environment}
+          </span>
+        )}
+        <StatusPill
+          tone={state.drift ? "waiting" : "live"}
+          className={inline ? "h-auto px-[9px] py-0.5" : undefined}
+        >
           {state.drift ? state.label : (module?.deployedLabel ?? state.label)}
         </StatusPill>
         {Actions && (
-          <div className="flex flex-wrap items-center gap-2 sm:ml-2">
+          <div
+            className={
+              inline
+                ? "flex flex-wrap items-center gap-2"
+                : "flex flex-wrap items-center gap-2 sm:ml-2"
+            }
+          >
             <Actions {...props} />
           </div>
         )}
