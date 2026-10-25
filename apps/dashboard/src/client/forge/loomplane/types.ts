@@ -189,6 +189,7 @@ export interface Binding {
   name: string;
   observedAt?: string;
   orgId: string;
+  ownedResources?: Record<string, any>;
   physicalId?: string;
   planId: string;
   projectId: string;

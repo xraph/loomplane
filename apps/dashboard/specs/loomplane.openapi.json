@@ -8901,6 +8901,10 @@
           "org_id": {
             "type": "string"
           },
+          "owned_resources": {
+            "type": "object",
+            "additionalProperties": true
+          },
           "physical_id": {
             "type": "string"
           },

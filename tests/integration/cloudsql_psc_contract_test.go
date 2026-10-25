@@ -46,6 +46,10 @@ func TestCloudSQLPSCReviewedEndpointPublishedContract(t *testing.T) {
 				t.Fatal("missing optional PSC credential transport")
 			}
 		}
+		binding := spec.Components.Schemas["Binding"]
+		if binding.Properties["owned_resources"]["type"] != "object" || slices.Contains(binding.Required, "owned_resources") {
+			t.Fatal(route, "missing optional binding ownership object", binding.Properties["owned_resources"])
+		}
 		service := spec.Components.Schemas["ServiceConfig"]
 		if service.Properties["cloud_sql_network"]["$ref"] != "#/components/schemas/CloudSQLApplicationNetwork" || slices.Contains(service.Required, "cloud_sql_network") {
 			t.Fatal(route, "missing optional application route review")

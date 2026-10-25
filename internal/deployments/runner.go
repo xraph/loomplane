@@ -159,9 +159,10 @@ func linkField(link planning.EnvLink) (string, error) {
 type Outcome struct {
 	// ExternalID is what the provider calls it: a Ctrl Plane instance or a
 	// Vercel project.
-	ExternalID string
-	PhysicalID string
-	URL        string
+	ExternalID     string
+	PhysicalID     string
+	OwnedResources string
+	URL            string
 	// Image is the container image a build produced.
 	Image string
 	// Revision is what went live, which a drift check compares with:
@@ -1450,6 +1451,12 @@ func (r *Runner) released(ctx context.Context, d *Deployment, b *planning.Bindin
 func cloneBinding(b *planning.Binding) *planning.Binding {
 	c := *b
 	c.Config = slices.Clone(b.Config)
+	if b.OwnedResources != nil {
+		c.OwnedResources = make(map[string]json.RawMessage, len(b.OwnedResources))
+		for key, value := range b.OwnedResources {
+			c.OwnedResources[key] = slices.Clone(value)
+		}
+	}
 	if b.ObservedAt != nil {
 		at := *b.ObservedAt
 		c.ObservedAt = &at
@@ -1484,10 +1491,27 @@ func (r *Runner) bind(ctx context.Context, d *Deployment, a planning.Action, cur
 		ConnectionID: connID, Revision: out.Revision, CommitSHA: commitFor(d, a),
 		PlanID: d.PlanID, CreatedAt: now, UpdatedAt: now,
 	}
+	if out.OwnedResources != "" {
+		if err := json.Unmarshal([]byte(out.OwnedResources), &b.OwnedResources); err != nil || b.OwnedResources == nil {
+			return nil, errors.New("provider ownership must be a JSON object")
+		}
+	}
+	if _, ownershipErr := b.OwnsResources(); ownershipErr != nil {
+		return nil, ownershipErr
+	}
 	var left []planning.Binding
 	if current != nil {
 		b.ID, b.CreatedAt = current.ID, current.CreatedAt
 		left = slices.Clone(current.Replaced)
+		owned, ownershipErr := current.OwnsResources()
+		if ownershipErr != nil {
+			return nil, ownershipErr
+		}
+		if owned {
+			old := *current
+			old.Replaced = nil
+			left = append(left, old)
+		}
 	} else {
 		id, err := typeid.Generate("bind")
 		if err != nil {
@@ -1506,6 +1530,9 @@ func (r *Runner) bind(ctx context.Context, d *Deployment, a planning.Action, cur
 			return nil, identityErr
 		}
 		duplicate := slices.ContainsFunc(b.Replaced, func(o planning.Binding) bool { return bindingIdentity(&o) == bindingIdentity(&old) })
+		if same && !b.RetainsOwnership(&old) {
+			return nil, errors.New("the provider discarded existing resource ownership; binding update is blocked")
+		}
 		if same || duplicate {
 			continue
 		}
