@@ -13,7 +13,8 @@ import (
 
 type fakeAppStore struct {
 	AppStore
-	apps map[string]*StoredApp
+	apps    map[string]*StoredApp
+	signIns map[string]*PendingSignIn
 }
 
 func (f *fakeAppStore) key(org, cloud string) string { return org + "/" + cloud }

@@ -132,17 +132,30 @@ func (s *Service) Create(ctx context.Context, p security.Principal, in CreateInp
 	if err := s.authz.Require(ctx, p, security.CloudAccountManage, ""); err != nil {
 		return nil, err
 	}
-	cloud := strings.TrimSpace(in.Cloud)
+	return s.create(ctx, p, in.Cloud, in.Name, []byte(strings.TrimSpace(in.Credential)), in.Settings, MethodToken)
+}
+
+func validName(name string) (string, error) {
+	name = strings.TrimSpace(name)
+	if name == "" || utf8.RuneCountInString(name) > maxName {
+		return "", fmt.Errorf("%w: give it a name of at most %d characters", ErrInvalid, maxName)
+	}
+	return name, nil
+}
+
+// create checks cred with its cloud and stores a new connection that got
+// its credential by method. The caller has checked the principal's role.
+func (s *Service) create(ctx context.Context, p security.Principal, cloud, name string, cred []byte, settings map[string]string, method string) (*Connection, error) {
+	cloud = strings.TrimSpace(cloud)
 	checker, err := s.checker(cloud)
 	if err != nil {
 		return nil, err
 	}
-	name := strings.TrimSpace(in.Name)
-	if name == "" || utf8.RuneCountInString(name) > maxName {
-		return nil, fmt.Errorf("%w: give it a name of at most %d characters", ErrInvalid, maxName)
+	name, err = validName(name)
+	if err != nil {
+		return nil, err
 	}
-	cred := []byte(strings.TrimSpace(in.Credential))
-	res, err := s.check(ctx, cloud, checker, cred, in.Settings)
+	res, err := s.check(ctx, cloud, checker, cred, settings)
 	if err != nil {
 		return nil, err
 	}
@@ -151,7 +164,7 @@ func (s *Service) Create(ctx context.Context, p security.Principal, in CreateInp
 		return nil, fmt.Errorf("generate connection id: %w", err)
 	}
 	now := s.now().UTC()
-	c := &Connection{ID: id.String(), OrgID: p.OrgID, Cloud: cloud, Name: name, CreatedBy: p.UserID, CreatedAt: now}
+	c := &Connection{ID: id.String(), OrgID: p.OrgID, Cloud: cloud, Name: name, Method: method, CreatedBy: p.UserID, CreatedAt: now}
 	apply(c, res, now)
 	// The secret first: a row without its secret would look connected and
 	// fail every deployment, where a secret without its row is unreachable
@@ -243,10 +256,18 @@ func (s *Service) Recheck(ctx context.Context, p security.Principal, id string) 
 // Replace swaps a connection's credential for a new one the cloud
 // accepts, such as a rotated key. It keeps the connection's ID, so
 // nothing that names the connection has to change.
+// A pasted credential turns off a connection's sign-in.
 func (s *Service) Replace(ctx context.Context, p security.Principal, id string, in ReplaceInput) (*Connection, error) {
 	if err := s.authz.Require(ctx, p, security.CloudAccountManage, ""); err != nil {
 		return nil, err
 	}
+	return s.replace(ctx, p, id, []byte(strings.TrimSpace(in.Credential)), in.Settings, MethodToken)
+}
+
+// replace swaps connection id's credential for cred, which got there by
+// method, if the cloud accepts it for the same account. The caller has
+// checked the principal's role.
+func (s *Service) replace(ctx context.Context, p security.Principal, id string, cred []byte, settings map[string]string, method string) (*Connection, error) {
 	c, err := s.store.GetConnection(ctx, p.OrgID, id)
 	if err != nil {
 		return nil, err
@@ -273,11 +294,9 @@ func (s *Service) Replace(ctx context.Context, p security.Principal, id string, 
 		}
 		before = AccountIdentity(c.Cloud, oldCheck.Account, oldCheck.Details)
 	}
-	settings := in.Settings
 	if settings == nil {
 		settings = c.Details
 	}
-	cred := []byte(strings.TrimSpace(in.Credential))
 	res, err := s.check(ctx, c.Cloud, checker, cred, settings)
 	if err != nil {
 		return nil, err
@@ -291,6 +310,7 @@ func (s *Service) Replace(ctx context.Context, p security.Principal, id string, 
 		if err := s.secrets.Put(ctx, p.OrgID, c.ID, cred); err != nil {
 			return err
 		}
+		c.Method = method
 		apply(c, res, s.now().UTC())
 		return s.store.UpdateConnection(ctx, c)
 	}
