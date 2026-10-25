@@ -81,11 +81,16 @@ func (l *lockingStore) OAuthConnections(context.Context) ([]*Connection, error) 
 type lockingSecrets struct {
 	*memSecrets
 	mu sync.Mutex
+	// unbounded counts writes whose context had no deadline.
+	unbounded int
 }
 
 func (l *lockingSecrets) Put(ctx context.Context, org, id string, v []byte) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if _, ok := ctx.Deadline(); !ok {
+		l.unbounded++
+	}
 	return l.memSecrets.Put(ctx, org, id, v)
 }
 
@@ -110,9 +115,15 @@ type renewer struct {
 	// it's closed.
 	started chan struct{}
 	block   chan struct{}
+	// during runs inside each call, as the cloud answers. honorCancel
+	// makes a call fail once its context ends, as an HTTP client does.
+	during      func()
+	honorCancel bool
+	// unbounded counts calls whose context had no deadline.
+	unbounded int
 }
 
-func (r *renewer) Refresh(_ context.Context, app oauth.App, refreshToken string) (oauth.Grant, error) {
+func (r *renewer) Refresh(ctx context.Context, app oauth.App, refreshToken string) (oauth.Grant, error) {
 	if r.started != nil {
 		r.started <- struct{}{}
 	}
@@ -120,8 +131,17 @@ func (r *renewer) Refresh(_ context.Context, app oauth.App, refreshToken string)
 		<-r.block
 	}
 	time.Sleep(r.delay)
+	if r.during != nil {
+		r.during()
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if _, ok := ctx.Deadline(); !ok {
+		r.unbounded++
+	}
+	if r.honorCancel && ctx.Err() != nil {
+		return oauth.Grant{}, ctx.Err()
+	}
 	r.calls++
 	r.tokens = append(r.tokens, refreshToken)
 	r.apps = append(r.apps, app)
@@ -139,6 +159,8 @@ type refreshRig struct {
 	mu      sync.Mutex
 	lapsed  []*Connection
 	warned  []string
+	// attached counts Lapsed calls whose context a caller could cancel.
+	attached int
 }
 
 func newRefreshRig(t *testing.T) *refreshRig {
@@ -155,9 +177,12 @@ func newRefreshRig(t *testing.T) *refreshRig {
 	r.s.now = old.now
 	r.s.Providers = map[string]Provider{DigitalOcean: r.renewer}
 	r.s.ConfigApps, r.s.CallbackURL, r.s.Apps, r.s.AppSecrets = old.ConfigApps, old.CallbackURL, old.Apps, old.AppSecrets
-	r.s.Lapsed = func(_ context.Context, c *Connection) {
+	r.s.Lapsed = func(ctx context.Context, c *Connection) {
 		r.mu.Lock()
 		defer r.mu.Unlock()
+		if ctx.Done() != nil {
+			r.attached++
+		}
 		r.lapsed = append(r.lapsed, c)
 	}
 	return r
@@ -328,6 +353,11 @@ func TestRefusedRefreshNeedsSignIn(t *testing.T) {
 	if len(r.lapsed) != 1 || r.lapsed[0].ID != "conn_do" || r.lapsed[0].Status != StatusSignInNeeded {
 		t.Fatalf("lapsed: %v", r.lapsed)
 	}
+	// The connection is already marked, so a caller giving up now must not
+	// lose the notice.
+	if r.attached != 0 {
+		t.Fatal("Lapsed ran on a context the caller could cancel")
+	}
 	if _, _, err := r.s.Credential(t.Context(), "org", "conn_do"); !errors.Is(err, ErrNotReady) {
 		t.Fatalf("again: %v", err)
 	}
@@ -372,6 +402,74 @@ func TestRecheckRenewsASignInFirst(t *testing.T) {
 	}
 	if c.Status != StatusSignInNeeded || r.store.rows["conn_do"].Status != StatusSignInNeeded || len(r.lapsed) != 1 {
 		t.Fatalf("connection %+v, lapsed %d", c, len(r.lapsed))
+	}
+}
+
+// Revoking Loomplane in the cloud kills the access token at once, before
+// it's due for renewal. Checking it again must ask for a sign-in, not
+// call the connection refused.
+func TestRecheckOfARevokedSignInNeedsSignIn(t *testing.T) {
+	r := newRefreshRig(t)
+	r.signedIn(t, "conn_do", "revoked", r.clock.Add(30*24*time.Hour))
+	c, err := r.s.Recheck(t.Context(), starter, "conn_do")
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := r.store.rows["conn_do"]
+	for _, got := range []Connection{*c, row} {
+		if got.Status != StatusSignInNeeded || !strings.Contains(got.Message, "refused the sign-in") || got.Generation != 3 {
+			t.Fatalf("connection: %+v", got)
+		}
+		if strings.Contains(got.Message, "revoked") {
+			t.Fatalf("a token leaked: %q", got.Message)
+		}
+	}
+	if r.renewer.calls != 0 {
+		t.Fatalf("a grant a month from expiry was renewed %d times", r.renewer.calls)
+	}
+	if len(r.lapsed) != 1 || r.lapsed[0].ID != "conn_do" || r.attached != 0 {
+		t.Fatalf("lapsed %v, %d on a cancellable context", r.lapsed, r.attached)
+	}
+	if n := len(r.audit.actions); n == 0 || r.audit.actions[n-1] != "cloud_connection.check" {
+		t.Fatalf("audit: %v", r.audit.actions)
+	}
+
+	// Checking again changes nothing and tells nobody twice.
+	if c, err = r.s.Recheck(t.Context(), starter, "conn_do"); err != nil || c.Status != StatusSignInNeeded {
+		t.Fatalf("again: %+v %v", c, err)
+	}
+	if len(r.lapsed) != 1 {
+		t.Fatalf("lapsed %d times", len(r.lapsed))
+	}
+
+	// A refused token connection is still refused, not a sign-in.
+	tokenConnection(r.signInRig)
+	r.secrets.kept["org/conn_do"] = []byte("dop_v1_revoked")
+	if c, err = r.s.Recheck(t.Context(), starter, "conn_do"); err != nil || c.Status != StatusFailed {
+		t.Fatalf("token connection: %+v %v", c, err)
+	}
+	if len(r.lapsed) != 1 {
+		t.Fatalf("a token connection lapsed: %v", r.lapsed)
+	}
+}
+
+// DigitalOcean spends the old refresh token as soon as it answers, so a
+// caller giving up mid-renewal must not lose the new one.
+func TestARenewalTheCallerAbandonsIsStillKept(t *testing.T) {
+	r := newRefreshRig(t)
+	r.signedIn(t, "conn_do", "at-1", r.clock.Add(time.Hour))
+	r.renewer.grants["rt-at-1"] = oauth.Grant{AccessToken: "at-2", RefreshToken: "rt-at-2", Expiry: r.clock.Add(30 * 24 * time.Hour)}
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	r.renewer.during, r.renewer.honorCancel = cancel, true
+	// The caller gave up, so what it gets back doesn't matter. What Vault
+	// keeps does.
+	_, _, _ = r.s.Credential(ctx, "org", "conn_do")
+	if g := r.kept(t, "conn_do"); g.RefreshToken != "rt-at-2" || g.AccessToken != "at-2" {
+		t.Fatalf("vault holds %+v", g)
+	}
+	if r.renewer.unbounded != 0 || r.vault.unbounded != 0 {
+		t.Fatalf("unbounded calls: refresh %d, vault %d", r.renewer.unbounded, r.vault.unbounded)
 	}
 }
 

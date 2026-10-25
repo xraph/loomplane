@@ -18,6 +18,11 @@ const refreshAhead = 24 * time.Hour
 // sign-in, so one nobody deploys with still stays fresh.
 const backgroundAhead = 7 * 24 * time.Hour
 
+// renewTimeout bounds asking the cloud for a new grant, and keeping it,
+// once neither may be abandoned with the caller. The lock is held
+// throughout, so neither may wait forever either.
+const renewTimeout = 30 * time.Second
+
 // maxRenewals caps the renewals one process runs against the database at
 // once. Each holds a pooled connection for its lock and borrows another
 // for its queries, so this keeps renewals to half the default pool of 16.
@@ -189,7 +194,11 @@ func (s *Service) renew(ctx context.Context, c *Connection, held oauth.Grant, ah
 		if !ok {
 			return fmt.Errorf("%w: Loomplane has no sign-in for %s", ErrUnavailable, c.Cloud)
 		}
-		fresh, err := provider.Refresh(ctx, app, latest.RefreshToken)
+		// The cloud may spend the old refresh token before its answer is
+		// read, so a caller giving up must not cut the answer off.
+		refreshCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), renewTimeout)
+		defer cancel()
+		fresh, err := provider.Refresh(refreshCtx, app, latest.RefreshToken)
 		if errors.Is(err, oauth.ErrRefused) {
 			why = fmt.Sprintf("%s no longer accepts this sign-in. Sign in again.", c.Cloud)
 			lapsed, err = s.needSignIn(ctx, current, why)
@@ -214,7 +223,9 @@ func (s *Service) renew(ctx context.Context, c *Connection, held oauth.Grant, ah
 		}
 		// The cloud has spent the old refresh token, so a caller giving up
 		// now must not stop the new one being kept.
-		if err := s.secrets.Put(context.WithoutCancel(ctx), c.OrgID, c.ID, raw); err != nil {
+		putCtx, cancelPut := context.WithTimeout(context.WithoutCancel(ctx), renewTimeout)
+		defer cancelPut()
+		if err := s.secrets.Put(putCtx, c.OrgID, c.ID, raw); err != nil {
 			return err
 		}
 		g, renewed = fresh, true
@@ -224,9 +235,7 @@ func (s *Service) renew(ctx context.Context, c *Connection, held oauth.Grant, ah
 		return oauth.Grant{}, false, lockErr
 	}
 	if why != "" {
-		if lapsed != nil && s.Lapsed != nil {
-			s.Lapsed(ctx, lapsed)
-		}
+		s.tellLapsed(ctx, lapsed)
 		return oauth.Grant{}, false, fmt.Errorf("%w: %s", ErrNotReady, why)
 	}
 	return g, renewed, nil
@@ -244,6 +253,44 @@ func (s *Service) needSignIn(ctx context.Context, c *Connection, why string) (*C
 		return nil, err
 	}
 	return c, nil
+}
+
+// tellLapsed passes a connection needSignIn changed to Lapsed. The change
+// is already saved, so a caller giving up now must not lose the notice.
+func (s *Service) tellLapsed(ctx context.Context, c *Connection) {
+	if c != nil && s.Lapsed != nil {
+		s.Lapsed(context.WithoutCancel(ctx), c)
+	}
+}
+
+// signInRefused marks c as needing a new sign-in after the cloud refused
+// its token, under the connection's lock, unless it changed since c was
+// read. It returns the connection as it is now, and whether this call
+// changed it.
+func (s *Service) signInRefused(ctx context.Context, c *Connection, why string, checked time.Time) (current, lapsed *Connection, err error) {
+	mark := func() error {
+		latest, getErr := s.store.GetConnection(ctx, c.OrgID, c.ID)
+		if getErr != nil {
+			return getErr
+		}
+		if latest.Method != MethodOAuth || latest.Generation != c.Generation || latest.Message == replacementInProgressMessage {
+			return ErrChanged
+		}
+		if latest.Status != StatusSignInNeeded {
+			// needSignIn saves only a change, so only a change is stamped.
+			latest.CheckedAt = &checked
+		}
+		current = latest
+		var markErr error
+		lapsed, markErr = s.needSignIn(ctx, latest, why)
+		return markErr
+	}
+	if s.grants == nil {
+		err = mark()
+	} else {
+		err = s.grants.WithConnectionLock(ctx, c.OrgID, c.ID, mark)
+	}
+	return current, lapsed, err
 }
 
 // RefreshDue renews every sign-in that expires within a week, so one
