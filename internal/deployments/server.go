@@ -134,6 +134,7 @@ func (e *OwnedTarget) serverSession(org, connection string) server.Session {
 		if err != nil {
 			return nil, err
 		}
+		recorded := cfg.RecordedDetails(c.Details)
 		dial := e.ServerDial
 		if dial == nil {
 			dial = server.Dial
@@ -143,7 +144,7 @@ func (e *OwnedTarget) serverSession(org, connection string) server.Session {
 			return nil, err
 		}
 		details, missing, err := client.Check(ctx)
-		if err != nil || len(missing) > 0 || !reflect.DeepEqual(planning.ReviewedConnectionSettings(e.Cloud, details), planning.ReviewedConnectionSettings(e.Cloud, c.Details)) {
+		if err != nil || len(missing) > 0 || !reflect.DeepEqual(planning.ReviewedConnectionSettings(e.Cloud, details), planning.ReviewedConnectionSettings(e.Cloud, recorded)) {
 			_ = client.Close()
 			if err != nil {
 				return nil, err
