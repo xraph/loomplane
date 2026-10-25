@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -98,6 +99,10 @@ func TestAppMetrics(t *testing.T) {
 			if q.Get("aggregation") != "Total" || q.Get("interval") != "PT30M" {
 				t.Errorf("requests asked %s", r.URL.RawQuery)
 			}
+			if q.Get("$filter") != "" {
+				_, _ = w.Write([]byte(`{"value":[]}`))
+				return
+			}
 			// Two series, a null, a missing total and an offset time.
 			_, _ = w.Write([]byte(`{"value":[{"name":{"value":"Requests"},"timeseries":[
 				{"data":[{"timeStamp":"2026-10-24T12:00:00Z","total":12},{"timeStamp":"2026-10-24T12:30:00Z","total":null},{"timeStamp":"2026-10-24T13:00:00Z"}]},
@@ -125,6 +130,84 @@ func TestAppMetrics(t *testing.T) {
 	}
 	if m.Latency != 84.5 || m.Statistic != metrics.Average {
 		t.Errorf("latency %v %q, want 84.5 average", m.Latency, m.Statistic)
+	}
+}
+
+// revisionFake records the $filter each metric was asked with, keyed by
+// metric name and, for Requests, whether it was the error read.
+func revisionFake(t *testing.T) (*Session, map[string]string) {
+	t.Helper()
+	filters := map[string]string{}
+	s, _ := monitorSession(t, func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		key := q.Get("metricnames")
+		if strings.Contains(q.Get("$filter"), "statusCodeCategory") {
+			key = "errors"
+		}
+		filters[key] = q.Get("$filter")
+		switch key {
+		case "errors":
+			_, _ = w.Write([]byte(`{"value":[{"timeseries":[{"data":[{"timeStamp":"2026-10-24T12:00:00Z","total":2}]}]}]}`))
+		case "Requests":
+			_, _ = w.Write([]byte(`{"value":[{"timeseries":[{"data":[{"timeStamp":"2026-10-24T12:00:00Z","total":40}]}]}]}`))
+		default:
+			_, _ = w.Write([]byte(`{"value":[{"timeseries":[{"data":[{"timeStamp":"2026-10-24T12:00:00Z","average":10}]}]}]}`))
+		}
+	})
+	return s, filters
+}
+
+func TestRevisionMetricsFiltersRequestsAndErrors(t *testing.T) {
+	s, filters := revisionFake(t)
+	win := metrics.Day.Window(time.Date(2026, 10, 24, 13, 10, 0, 0, time.UTC))
+	m, err := s.RevisionMetrics(t.Context(), appID, "api--c1a2b3c4-0", win)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rev := "revisionName eq 'api--c1a2b3c4-0'"
+	want := map[string]string{
+		"Requests":     rev,
+		"errors":       rev + " and statusCodeCategory eq '5xx'",
+		"ResponseTime": rev,
+	}
+	if !reflect.DeepEqual(filters, want) {
+		t.Errorf("filters %v, want %v", filters, want)
+	}
+	if !m.ErrorsCounted || len(m.Errors) != 1 || m.Errors[0].V != 2 || len(m.Requests) != 1 || m.Requests[0].V != 40 {
+		t.Errorf("%+v", m)
+	}
+	if m.Latency != 10 || m.Statistic != metrics.Average {
+		t.Errorf("latency %v %q", m.Latency, m.Statistic)
+	}
+}
+
+func TestAppMetricsHasNoFilter(t *testing.T) {
+	s, filters := revisionFake(t)
+	if _, err := s.AppMetrics(t.Context(), appID, metrics.Day.Window(time.Now())); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"Requests": "", "errors": "statusCodeCategory eq '5xx'", "ResponseTime": ""}
+	if !reflect.DeepEqual(filters, want) {
+		t.Errorf("filters %v, want %v", filters, want)
+	}
+}
+
+func TestRevisionMetricsUsesOneMinuteGrain(t *testing.T) {
+	var got []string
+	s, _ := monitorSession(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("metricnames") == "Requests" {
+			got = append(got, r.URL.Query().Get("interval"))
+		}
+		_, _ = w.Write([]byte(`{"value":[]}`))
+	})
+	start := time.Date(2026, 10, 24, 13, 0, 0, 0, time.UTC)
+	win := metrics.Window{Start: start, End: start.Add(10 * time.Minute), Step: time.Minute}
+	if _, err := s.RevisionMetrics(t.Context(), appID, "api--c1a2b3c4-0", win); err != nil {
+		t.Fatal(err)
+	}
+	// Requests and errors both read at the one-minute grain.
+	if !reflect.DeepEqual(got, []string{"PT1M", "PT1M"}) {
+		t.Errorf("intervals %v, want PT1M twice", got)
 	}
 }
 
