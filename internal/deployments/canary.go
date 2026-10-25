@@ -61,6 +61,58 @@ type CanaryService struct {
 	Refs map[string]string `json:"refs,omitempty"`
 }
 
+// CanaryTarget is a candidate an executor started beside its service's
+// baseline: both revisions, as releasehealth reads them, the image the
+// candidate runs, and the executor's own handles.
+type CanaryTarget struct {
+	Baseline, Candidate string
+	Image               string
+	Refs                map[string]string
+}
+
+// Weighted is an executor whose target splits a service's traffic with its
+// own native weighting, so a canary can ramp there. Each call may run again
+// after a crash or a timeout, so each must be safe to repeat.
+type Weighted interface {
+	Executor
+	// ApplyCandidate starts the action's candidate beside what runs, taking
+	// no traffic, and returns both. It builds the image as Apply does, in
+	// one build step per executor, so a later change can start the
+	// candidate from a reviewed artifact instead. A candidate an earlier
+	// attempt left is replaced.
+	ApplyCandidate(ctx context.Context, job *Job) (*CanaryTarget, error)
+	// SetWeights gives the candidate candidatePercent of the traffic and
+	// the baseline the rest. At 0 the candidate stays attached.
+	SetWeights(ctx context.Context, job *Job, t CanaryTarget, candidatePercent int) error
+	// Promote makes the candidate what runs, with all of the traffic, and
+	// returns what Apply would have, which the runner binds.
+	Promote(ctx context.Context, job *Job, t CanaryTarget) (*Outcome, error)
+	// Revert gives the baseline all of the traffic and removes the
+	// candidate. Where the cloud keeps one template per service, as Cloud
+	// Run and Azure Container Apps do, it restores the baseline's template
+	// too, so the template, the traffic and the binding agree again and a
+	// drift check finds nothing changed.
+	Revert(ctx context.Context, job *Job, t CanaryTarget) error
+}
+
+// target is the candidate s names.
+func (s CanaryService) target() CanaryTarget {
+	return CanaryTarget{Baseline: s.Baseline, Candidate: s.Candidate, Image: s.Image, Refs: s.Refs}
+}
+
+// service returns the canary's service for an action, or nil.
+func (c *Canary) service(actionID string) *CanaryService {
+	if c == nil {
+		return nil
+	}
+	for i := range c.Services {
+		if c.Services[i].ActionID == actionID {
+			return &c.Services[i]
+		}
+	}
+	return nil
+}
+
 // reopen starts the canary over for a retry: back to pending before the
 // first step, with no candidate. Baselines and provider handles stay, since
 // the retry ramps from the same baseline.

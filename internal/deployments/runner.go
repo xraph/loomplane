@@ -26,6 +26,7 @@ import (
 	"github.com/xraph/loomplane/internal/gateway"
 	"github.com/xraph/loomplane/internal/orchestration"
 	"github.com/xraph/loomplane/internal/planning"
+	"github.com/xraph/loomplane/internal/releasehealth"
 	"github.com/xraph/loomplane/internal/telemetry"
 	"github.com/xraph/loomplane/pkg/provider"
 )
@@ -227,6 +228,7 @@ type Runner struct {
 	authz          Authorizer
 	backupPolicies BackupPolicyInstaller
 	resources      ResourceSecrets
+	health         releasehealth.Reader
 	dbGateways     DatabaseGatewayStore
 	dbTrust        func() ([]plane.TrustKey, error)
 	publicURL      string
@@ -278,6 +280,9 @@ type RunnerDeps struct {
 	// Observers hear of each service binding a deployment writes or
 	// deletes. What they fail at only warns.
 	Observers []ReleaseObserver
+	// Health reads a service's health from its cloud's own monitoring,
+	// which a canary is judged on. It may be nil when nothing ramps.
+	Health releasehealth.Reader
 }
 
 // Release is a service binding a deployment step wrote, or deleted
@@ -306,7 +311,7 @@ func NewRunner(d RunnerDeps) *Runner {
 		authz: d.Authz, backupPolicies: d.BackupPolicies,
 		capacity: d.Capacity, cloudSyncAuth: d.CloudSyncAuth, routes: d.Routes,
 		cloudProfiles: d.CloudProfiles, store: d.Store, plans: d.Plans, credentials: d.Credentials, variables: d.Variables,
-		sources: d.Sources, providers: d.Providers, executors: d.Executors, catalogHooks: d.CatalogHooks, observers: d.Observers, resources: d.Resources, telemetry: d.Telemetry, logs: d.Logs,
+		sources: d.Sources, providers: d.Providers, executors: d.Executors, catalogHooks: d.CatalogHooks, observers: d.Observers, resources: d.Resources, health: d.Health, telemetry: d.Telemetry, logs: d.Logs,
 		dbGateways: d.DatabaseGateways, dbTrust: d.DatabaseGatewayTrust, publicURL: d.PublicURL,
 		http: &http.Client{Timeout: 15 * time.Second}, now: time.Now, verifyWait: 3 * time.Minute,
 	}
@@ -375,6 +380,9 @@ func (r *Runner) Start(ctx context.Context, orgID, planID string) (deploymentID 
 			order = append(order, nil)
 		}
 		order[len(order)-1] = append(order[len(order)-1], a.ID)
+	}
+	if d.Canary, err = r.newCanary(ctx, plan, d); err != nil {
+		return "", nil, err
 	}
 	if d, err = r.store.CreateDeployment(ctx, d); err != nil {
 		return "", nil, err
@@ -559,7 +567,8 @@ func (r *Runner) Run(ctx context.Context, orgID, deploymentID, actionID string, 
 	if step == nil {
 		return fmt.Errorf("%w: deployment %s has no step %s", ErrNotFound, deploymentID, actionID)
 	}
-	if step.Status == StepSucceeded {
+	// A ramping step's candidate is up: the ramp settles the step.
+	if step.Status == StepSucceeded || step.Status == StepRamping {
 		return nil
 	}
 	plan, err := r.plans.GetPlan(ctx, orgID, d.PlanID)
@@ -711,6 +720,9 @@ func (r *Runner) Run(ctx context.Context, orgID, deploymentID, actionID string, 
 			err = errors.Join(err, uerr)
 		}
 		return err
+	}
+	if step.Status == StepRamping {
+		return r.store.UpdateStep(ctx, orgID, d.ID, *step)
 	}
 	finished := r.now().UTC()
 	r.telemetry.StepFinished(action.Provider, string(action.Op), StepSucceeded, finished.Sub(now))
@@ -948,6 +960,13 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 		return fmt.Errorf("%s was provisioned through connection %s, not %s, which this plan deploys with. Loomplane doesn't move data between connections, so it won't provision %s through this one. Plan again to see what to do",
 			a.Name, current.ConnectionID, connID, a.Name)
 	}
+	// A service the canary ramps starts its candidate beside what runs,
+	// which a move has nothing to start beside. The planner never ramps
+	// one.
+	ramps := d.Canary.service(a.ID) != nil
+	if ramps && moving {
+		return fmt.Errorf("%s moves, so it can't ramp as a canary. Plan again", a.Name)
+	}
 	job.Checkpoint = func(data []byte) error {
 		rc.Apply = data
 		return heartbeat(rc.encode())
@@ -994,6 +1013,9 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 				return fenceErr
 			}
 		}
+	}
+	if ramps {
+		return r.deployCandidate(ctx, d, exec, job, step)
 	}
 	out, err := exec.Apply(ctx, job)
 	if elsewhere := (*ElsewhereError)(nil); errors.As(err, &elsewhere) {
@@ -1635,9 +1657,11 @@ func (r *Runner) bind(ctx context.Context, d *Deployment, a planning.Action, cur
 }
 
 // Finish settles a deployment: failed with reason, or succeeded. Steps
-// still pending after a failure are marked skipped. A success records the
-// commit of each repository it moved as what the environment runs; a
-// repository the plan held keeps what it had.
+// still pending after a failure are marked skipped, and steps still
+// ramping failed. A canary still reverting after a failure couldn't be
+// reverted, and one still promoting couldn't be promoted. A success
+// records the commit of each repository it moved as what the environment
+// runs; a repository the plan held keeps what it had.
 func (r *Runner) Finish(ctx context.Context, orgID, deploymentID, reason string) error {
 	d, err := r.store.GetDeployment(ctx, orgID, deploymentID)
 	if err != nil {
@@ -1658,12 +1682,24 @@ func (r *Runner) Finish(ctx context.Context, orgID, deploymentID, reason string)
 	if reason != "" {
 		status = StatusFailed
 		for _, s := range d.Steps {
-			if s.Status == StepPending && orchestration.FinalizationKey(ctx) == "" {
-				s.Status, s.Message = StepSkipped, "Skipped after an earlier step failed"
-				if err := r.store.UpdateStep(ctx, orgID, d.ID, s); err != nil {
-					return err
-				}
+			if orchestration.FinalizationKey(ctx) != "" {
+				continue
 			}
+			switch s.Status {
+			case StepPending:
+				s.Status, s.Message = StepSkipped, "Skipped after an earlier step failed"
+			case StepRamping:
+				finished := r.now().UTC()
+				s.Status, s.Message, s.FinishedAt = StepFailed, reason, &finished
+			default:
+				continue
+			}
+			if err := r.store.UpdateStep(ctx, orgID, d.ID, s); err != nil {
+				return err
+			}
+		}
+		if err := r.settleCanary(ctx, d); err != nil {
+			return err
 		}
 	}
 	now := r.now().UTC()

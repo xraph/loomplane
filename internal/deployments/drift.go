@@ -27,6 +27,12 @@ type DriftChecker struct {
 	Store       DriftStore
 	Credentials Credentials
 	Executors   map[string]Executor
+	// Canaries tells whether a running canary ramps a binding. Such a
+	// binding is skipped: its candidate may show in what's live while the
+	// binding still names the baseline, which isn't drift. It may be nil.
+	Canaries interface {
+		CanaryBinding(ctx context.Context, orgID, bindingID string) (bool, error)
+	}
 	// Warn logs a binding that couldn't be checked. It may be nil.
 	Warn func(msg string, err error)
 	// Telemetry counts what drifted. It may be nil.
@@ -59,6 +65,16 @@ func (c *DriftChecker) Check(ctx context.Context) (DriftReport, error) {
 			return rep, err
 		}
 		for _, b := range page {
+			if c.Canaries != nil {
+				ramps, err := c.Canaries.CanaryBinding(ctx, b.OrgID, b.ID)
+				if err != nil {
+					return rep, err
+				}
+				if ramps {
+					rep.Skipped++
+					continue
+				}
+			}
 			drift, msg, ok := c.check(ctx, b, warn)
 			if !ok {
 				rep.Skipped++
