@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from "./routes/__root"
 import { Route as IndexRouteImport } from "./routes/index"
 import { Route as ActivityRouteImport } from "./routes/activity"
 import { Route as ApiKeysRouteImport } from "./routes/api-keys"
+import { Route as CloudSignInRouteImport } from "./routes/cloud-sign-in"
 import { Route as ForgotPasswordRouteImport } from "./routes/forgot-password"
 import { Route as InfrastructureRouteImport } from "./routes/infrastructure"
 import { Route as MembersRouteImport } from "./routes/members"
@@ -50,6 +51,11 @@ const ActivityRoute = ActivityRouteImport.update({
 const ApiKeysRoute = ApiKeysRouteImport.update({
   id: "/api-keys",
   path: "/api-keys",
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CloudSignInRoute = CloudSignInRouteImport.update({
+  id: "/cloud-sign-in",
+  path: "/cloud-sign-in",
   getParentRoute: () => rootRouteImport,
 } as any)
 const ForgotPasswordRoute = ForgotPasswordRouteImport.update({
@@ -178,6 +184,7 @@ export interface FileRoutesByFullPath {
   "/": typeof IndexRoute
   "/activity": typeof ActivityRoute
   "/api-keys": typeof ApiKeysRoute
+  "/cloud-sign-in": typeof CloudSignInRoute
   "/forgot-password": typeof ForgotPasswordRoute
   "/infrastructure": typeof InfrastructureRoute
   "/members": typeof MembersRoute
@@ -207,6 +214,7 @@ export interface FileRoutesByTo {
   "/": typeof IndexRoute
   "/activity": typeof ActivityRoute
   "/api-keys": typeof ApiKeysRoute
+  "/cloud-sign-in": typeof CloudSignInRoute
   "/forgot-password": typeof ForgotPasswordRoute
   "/infrastructure": typeof InfrastructureRoute
   "/members": typeof MembersRoute
@@ -237,6 +245,7 @@ export interface FileRoutesById {
   "/": typeof IndexRoute
   "/activity": typeof ActivityRoute
   "/api-keys": typeof ApiKeysRoute
+  "/cloud-sign-in": typeof CloudSignInRoute
   "/forgot-password": typeof ForgotPasswordRoute
   "/infrastructure": typeof InfrastructureRoute
   "/members": typeof MembersRoute
@@ -268,6 +277,7 @@ export interface FileRouteTypes {
     | "/"
     | "/activity"
     | "/api-keys"
+    | "/cloud-sign-in"
     | "/forgot-password"
     | "/infrastructure"
     | "/members"
@@ -297,6 +307,7 @@ export interface FileRouteTypes {
     | "/"
     | "/activity"
     | "/api-keys"
+    | "/cloud-sign-in"
     | "/forgot-password"
     | "/infrastructure"
     | "/members"
@@ -326,6 +337,7 @@ export interface FileRouteTypes {
     | "/"
     | "/activity"
     | "/api-keys"
+    | "/cloud-sign-in"
     | "/forgot-password"
     | "/infrastructure"
     | "/members"
@@ -356,6 +368,7 @@ export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ActivityRoute: typeof ActivityRoute
   ApiKeysRoute: typeof ApiKeysRoute
+  CloudSignInRoute: typeof CloudSignInRoute
   ForgotPasswordRoute: typeof ForgotPasswordRoute
   InfrastructureRoute: typeof InfrastructureRoute
   MembersRoute: typeof MembersRoute
@@ -403,6 +416,13 @@ declare module "@tanstack/react-router" {
       path: "/api-keys"
       fullPath: "/api-keys"
       preLoaderRoute: typeof ApiKeysRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    "/cloud-sign-in": {
+      id: "/cloud-sign-in"
+      path: "/cloud-sign-in"
+      fullPath: "/cloud-sign-in"
+      preLoaderRoute: typeof CloudSignInRouteImport
       parentRoute: typeof rootRouteImport
     }
     "/forgot-password": {
@@ -580,6 +600,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ActivityRoute: ActivityRoute,
   ApiKeysRoute: ApiKeysRoute,
+  CloudSignInRoute: CloudSignInRoute,
   ForgotPasswordRoute: ForgotPasswordRoute,
   InfrastructureRoute: InfrastructureRoute,
   MembersRoute: MembersRoute,
