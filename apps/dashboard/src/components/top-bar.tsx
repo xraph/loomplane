@@ -4,7 +4,6 @@
 import { MonitorIcon, MoonIcon, SearchIcon, SunIcon } from "lucide-react"
 import { Fragment, type ReactElement, type ReactNode } from "react"
 
-import { AccentPicker } from "@/components/accent-picker"
 import { useTheme } from "@/components/theme-provider"
 import {
   Breadcrumb,
@@ -22,7 +21,8 @@ import {
   DropdownMenuRadioItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { Kbd } from "@/components/ui/kbd"
+import { Kbd, KbdGroup } from "@/components/ui/kbd"
+import { Separator } from "@/components/ui/separator"
 import { SidebarTrigger } from "@/components/ui/sidebar"
 import { cn } from "@/lib/utils"
 
@@ -43,17 +43,17 @@ export function TopBar({
   after?: ReactNode
 }) {
   return (
-    <header className="sticky top-0 z-20 flex min-h-[57px] shrink-0 flex-wrap items-center gap-x-3 gap-y-2.5 border-b border-border-tab bg-background px-4 py-2.5">
-      <SidebarTrigger className="size-8 rounded-lg text-caption" />
+    <header className="sticky top-0 z-20 flex h-[52px] shrink-0 items-center gap-2 border-b bg-background/85 px-3 backdrop-blur-xl supports-[backdrop-filter]:bg-background/75 md:px-4">
+      <SidebarTrigger className="-ml-1" />
+      <Separator
+        orientation="vertical"
+        className="mr-1 data-[orientation=vertical]:h-4"
+      />
       <Breadcrumb className="min-w-0">
-        <BreadcrumbList className="flex-nowrap gap-1.5 text-[13.5px] leading-[normal] sm:gap-1.5">
+        <BreadcrumbList className="flex-nowrap">
           {crumbs.map((c, i) => (
             <Fragment key={i}>
-              {i > 0 && (
-                <BreadcrumbSeparator className="hidden text-[#b9b1aa] md:block dark:text-muted-foreground">
-                  /
-                </BreadcrumbSeparator>
-              )}
+              {i > 0 && <BreadcrumbSeparator className="hidden md:block" />}
               {/* Every crumb but the last can shrink to an ellipsis, and on
                   narrow screens only the last shows, so the bar stays one
                   line. */}
@@ -80,19 +80,20 @@ export function TopBar({
           ))}
         </BreadcrumbList>
       </Breadcrumb>
-      <div className="ml-auto flex flex-wrap items-center justify-end gap-3">
+      <div className="ml-auto flex items-center gap-1.5">
         {before}
         <Button
           variant="outline"
           size="sm"
           onClick={onSearch}
-          className="hidden h-[34px] min-w-60 justify-start gap-2.5 rounded-[10px] bg-subtle pr-2 pl-3 text-[13px] text-caption shadow-none md:inline-flex"
+          className="hidden w-64 justify-start rounded-[10px] bg-subtle pl-3 text-muted-foreground shadow-none md:inline-flex"
         >
           <SearchIcon />
           Search or run a command
-          <Kbd className="ml-auto h-auto rounded-md border border-input bg-background px-1.5 py-0.5 font-mono text-[11px] leading-[normal] text-label">
-            ⌘K
-          </Kbd>
+          <KbdGroup className="ml-auto">
+            <Kbd>⌘</Kbd>
+            <Kbd>K</Kbd>
+          </KbdGroup>
         </Button>
         <Button
           variant="ghost"
@@ -103,7 +104,6 @@ export function TopBar({
         >
           <SearchIcon />
         </Button>
-        <AccentPicker />
         <ThemeMenu />
         {after}
       </div>

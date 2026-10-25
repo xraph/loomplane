@@ -14,7 +14,7 @@
 /*
  * The theme started as shadcn preset b1YmpVjlo (nova on Base UI, Geist) and
  * now carries Loomplane's own look: warm neutrals, one primary color picked
- * by your preference or build default (data-accent on <html>), and four status
+ * in code (src/lib/accent.ts sets data-accent on <html>), and four status
  * colors that never follow it. Weld is work waiting on someone, overdye is
  * work that's live, flight is work moving, and destructive is work that
  * failed. Each status has a bar shade (the token itself), an ink shade for
@@ -228,9 +228,9 @@
 :root,
 [data-accent="graphite"] {
   --brand-ring: rgb(26 22 20 / 10%);
-  --brand: #1c1714;
+  --brand: oklch(0.209 0.01 52.9);
   --brand-foreground: oklch(1 0 0);
-  --brand-ink: #3a332e;
+  --brand-ink: oklch(0.327 0.013 57.8);
   --brand-tint: oklch(0.944 0.003 67.8);
   --brand-soft: oklch(0.974 0.002 67.8);
   --brand-line: oklch(0.839 0.011 67.7);
@@ -239,37 +239,11 @@
   --brand-to: oklch(0.181 0.005 39.3);
 }
 
-[data-accent="copper"] {
-  --brand-ring: rgb(201 139 94 / 16%);
-  --brand: #8a5230;
-  --brand-foreground: #ffffff;
-  --brand-ink: #8a5230;
-  --brand-tint: #f4e8de;
-  --brand-soft: #fbf6f2;
-  --brand-line: #d9b596;
-  --brand-from: #c6875a;
-  --brand-via: #8e5532;
-  --brand-to: #5e3720;
-}
-
-[data-accent="sage"] {
-  --brand-ring: rgb(94 155 118 / 16%);
-  --brand: #2f6b48;
-  --brand-foreground: #ffffff;
-  --brand-ink: #2f6b48;
-  --brand-tint: #e5f0e9;
-  --brand-soft: #f2f8f4;
-  --brand-line: #a8cdb6;
-  --brand-from: #7fb894;
-  --brand-via: #2f6b48;
-  --brand-to: #1c4430;
-}
-
 [data-accent="ocean"] {
   --brand-ring: rgb(79 134 168 / 16%);
-  --brand: #2f5c78;
+  --brand: oklch(0.455 0.068 238);
   --brand-foreground: oklch(1 0 0);
-  --brand-ink: #2f5c78;
+  --brand-ink: oklch(0.455 0.068 238);
   --brand-tint: oklch(0.943 0.014 231.2);
   --brand-soft: oklch(0.97 0.007 233.6);
   --brand-line: oklch(0.811 0.04 235.3);
@@ -280,9 +254,9 @@
 
 [data-accent="plum"] {
   --brand-ring: rgb(150 100 170 / 16%);
-  --brand: #6b3f7a;
+  --brand: oklch(0.445 0.106 317.1);
   --brand-foreground: oklch(1 0 0);
-  --brand-ink: #6b3f7a;
+  --brand-ink: oklch(0.445 0.106 317.1);
   --brand-tint: oklch(0.94 0.02 318.4);
   --brand-soft: oklch(0.97 0.011 316.5);
   --brand-line: oklch(0.795 0.064 316.7);
@@ -325,28 +299,6 @@
   --brand-tint: oklch(0.26 0.055 317);
   --brand-soft: oklch(0.19 0.03 317);
   --brand-line: oklch(0.5 0.07 317);
-}
-
-.dark[data-accent="copper"],
-[data-accent="copper"] .dark {
-  --brand-ring: color-mix(in oklch, var(--brand) 18%, transparent);
-  --brand: oklch(0.77 0.1 55);
-  --brand-foreground: oklch(0.2 0.03 55);
-  --brand-ink: oklch(0.8 0.085 55);
-  --brand-tint: oklch(0.26 0.045 55);
-  --brand-soft: oklch(0.19 0.025 55);
-  --brand-line: oklch(0.5 0.07 55);
-}
-
-.dark[data-accent="sage"],
-[data-accent="sage"] .dark {
-  --brand-ring: color-mix(in oklch, var(--brand) 18%, transparent);
-  --brand: oklch(0.77 0.1 155);
-  --brand-foreground: oklch(0.2 0.03 155);
-  --brand-ink: oklch(0.8 0.085 155);
-  --brand-tint: oklch(0.26 0.045 155);
-  --brand-soft: oklch(0.19 0.025 155);
-  --brand-line: oklch(0.5 0.07 155);
 }
 
 @layer base {
