@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/card"
 import { Spinner } from "@/components/ui/spinner"
 import { Link, useNavigate } from "@/lib/router"
+import { signInCloud } from "@/lib/sign-in-cloud"
 import { cn } from "@/lib/utils"
 
 export interface OAuthCallbackProps {
@@ -61,8 +62,12 @@ export function OAuthCallback({
       .catch(() => undefined) // shown from the mutation's own error state
   }, [ready, complete, invalidate, navigate, state, code])
 
+  // The cloud's own words come from the link, which anyone can craft, so
+  // they're shown as the cloud's and kept short.
+  const cloud = signInCloud() || "The cloud"
+  const said = errorDescription.trim().slice(0, 300)
   const failure = error
-    ? errorDescription || "The cloud didn't sign you in."
+    ? `${cloud} didn't sign you in, so nothing was connected.`
     : !ready
       ? "The cloud didn't send a sign-in back, so nothing was connected."
       : complete.status === "error"
@@ -91,7 +96,14 @@ export function OAuthCallback({
             {failure ? (
               <>
                 <Alert variant="destructive">
-                  <AlertDescription>{failure}</AlertDescription>
+                  <AlertDescription className="grid gap-1">
+                    <p>{failure}</p>
+                    {error && said && (
+                      <p className="text-muted-foreground">
+                        {`${cloud} said: ${said}`}
+                      </p>
+                    )}
+                  </AlertDescription>
                 </Alert>
                 <div>
                   <Link
