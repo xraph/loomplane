@@ -400,17 +400,9 @@ func lockDescription(ps []PlanSource) []string {
 // as it is then. It never fails: the plan as it was is a fine answer.
 func (s *Service) settle(ctx context.Context, plan *Plan) *Plan {
 	status := plan.Status
-	deadline := time.NewTimer(settleWait)
-	defer deadline.Stop()
-	tick := time.NewTicker(settlePoll)
-	defer tick.Stop()
-	for {
-		select {
-		case <-ctx.Done():
+	for deadline := s.now().Add(settleWait); s.now().Before(deadline); {
+		if s.sleep(ctx, settlePoll) != nil {
 			return plan
-		case <-deadline.C:
-			return plan
-		case <-tick.C:
 		}
 		got, err := s.store.GetPlan(ctx, plan.OrgID, plan.ID)
 		if err != nil {
@@ -420,6 +412,7 @@ func (s *Service) settle(ctx context.Context, plan *Plan) *Plan {
 			return got
 		}
 	}
+	return plan
 }
 
 // List returns a page of a project's plans older than before, newest

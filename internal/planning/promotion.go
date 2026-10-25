@@ -103,7 +103,12 @@ func (s *Service) pinFrom(ctx context.Context, p security.Principal, projectID s
 			if s.commits == nil {
 				return nil, nil, fmt.Errorf("%w: %s runs %s at %s, which nothing has analyzed", ErrNoAnalysis, from.Name, src.Alias, short(commit))
 			}
+			// FromPlanID stays empty: no recorded release names one plan,
+			// and awaitAnalyses waits on exactly these pins.
 			ps.CommitSHA = commit
+			if berr := s.copyFromBindings(ctx, orgID, plans, &ps, shown[src.Alias][commit]); berr != nil {
+				return nil, nil, berr
+			}
 			queue = append(queue, unanalyzed{len(out), src})
 		default:
 			d := deployed[src.ID]
@@ -117,7 +122,7 @@ func (s *Service) pinFrom(ctx context.Context, p security.Principal, projectID s
 		}
 		out = append(out, ps)
 	}
-	// Analyses are queued last, once nothing else can refuse the plan.
+	// Analyses are queued last, once pinning can't refuse it.
 	for _, q := range queue {
 		ps := &out[q.i]
 		a, aerr := s.commits.AnalyzeCommit(ctx, orgID, q.src, ps.CommitSHA, p.UserID)
@@ -131,10 +136,10 @@ func (s *Service) pinFrom(ctx context.Context, p security.Principal, projectID s
 }
 
 // bindingCommits is, by repository alias, the commits an environment's
-// services run as their bindings show them, each with the services that
-// run it.
-func bindingCommits(bindings []*Binding) map[string]map[string][]string {
-	out := map[string]map[string][]string{}
+// services run as their bindings show them, each with the bindings of the
+// services that run it.
+func bindingCommits(bindings []*Binding) map[string]map[string][]*Binding {
+	out := map[string]map[string][]*Binding{}
 	for _, b := range bindings {
 		if b.Subject != ServiceSubject {
 			continue
@@ -151,21 +156,25 @@ func bindingCommits(bindings []*Binding) map[string]map[string][]string {
 			continue
 		}
 		if out[cfg.Repo] == nil {
-			out[cfg.Repo] = map[string][]string{}
+			out[cfg.Repo] = map[string][]*Binding{}
 		}
-		out[cfg.Repo][commit] = append(out[cfg.Repo][commit], b.Name)
+		out[cfg.Repo][commit] = append(out[cfg.Repo][commit], b)
 	}
 	return out
 }
 
 // oneCommit is the one commit env's services run of alias, as
 // bindingCommits found them, which has to be a full SHA to analyze.
-func oneCommit(env, alias string, commits map[string][]string) (string, error) {
+func oneCommit(env, alias string, commits map[string][]*Binding) (string, error) {
 	if len(commits) > 1 {
 		shas := slices.Sorted(maps.Keys(commits))
 		named := make([]string, 0, len(shas))
 		for _, sha := range shas {
-			services := slices.Sorted(slices.Values(commits[sha]))
+			services := make([]string, 0, len(commits[sha]))
+			for _, b := range commits[sha] {
+				services = append(services, b.Name)
+			}
+			slices.Sort(services)
 			named = append(named, fmt.Sprintf("%s (%s)", short(sha), strings.Join(services, ", ")))
 		}
 		return "", fmt.Errorf("%w: %s runs %s at more than one commit, %s; deploy one commit of it to %s first",
@@ -185,27 +194,75 @@ func oneCommit(env, alias string, commits map[string][]string) (string, error) {
 // doesn't list the source, is refused: the source's current root and
 // branch may not be what that commit was built from.
 func (s *Service) copyFromPlan(ctx context.Context, orgID string, plans map[string]*Plan, ps *PlanSource) error {
-	plan, seen := plans[ps.FromPlanID]
+	deployed, err := s.deployedBy(ctx, orgID, plans, ps.FromPlanID, ps)
+	if err != nil {
+		return err
+	}
+	ps.Root, ps.Ref = deployed.Root, deployed.Ref
+	return nil
+}
+
+// copyFromBindings gives ps the root and branch of the plans that deployed
+// the services running its commit, as their bindings name them. Each of
+// those plans has to exist, list the source and agree on both, or the
+// pin is refused, as copyFromPlan refuses.
+func (s *Service) copyFromBindings(ctx context.Context, orgID string, plans map[string]*Plan, ps *PlanSource, bindings []*Binding) error {
+	var ids []string
+	for _, b := range bindings {
+		if b.PlanID == "" {
+			return fmt.Errorf("%w: service %s runs %s at %s, but its binding names no plan that deployed it, so its root and branch aren't known",
+				ErrInvalid, b.Name, ps.Alias, short(ps.CommitSHA))
+		}
+		if !slices.Contains(ids, b.PlanID) {
+			ids = append(ids, b.PlanID)
+		}
+	}
+	slices.Sort(ids)
+	var first *PlanSource
+	for _, id := range ids {
+		deployed, err := s.deployedBy(ctx, orgID, plans, id, ps)
+		if err != nil {
+			return err
+		}
+		switch {
+		case first == nil:
+			first = deployed
+		case deployed.Root != first.Root || deployed.Ref != first.Ref:
+			return fmt.Errorf("%w: plans %s and %s, which deployed %s at %s, disagree on its root and branch",
+				ErrInvalid, ids[0], id, ps.Alias, short(ps.CommitSHA))
+		}
+	}
+	if first == nil {
+		return fmt.Errorf("%w: no plan is known to have deployed %s at %s, so its root and branch aren't known", ErrInvalid, ps.Alias, short(ps.CommitSHA))
+	}
+	ps.Root, ps.Ref = first.Root, first.Ref
+	return nil
+}
+
+// deployedBy is ps's source as plan planID, which deployed it, listed it.
+// plans caches the plans read so far; a plan that's gone, or that doesn't
+// list the source, is ErrInvalid.
+func (s *Service) deployedBy(ctx context.Context, orgID string, plans map[string]*Plan, planID string, ps *PlanSource) (*PlanSource, error) {
+	plan, seen := plans[planID]
 	if !seen {
 		var err error
-		plan, err = s.store.GetPlan(ctx, orgID, ps.FromPlanID)
+		plan, err = s.store.GetPlan(ctx, orgID, planID)
 		if errors.Is(err, ErrNotFound) {
 			plan, err = nil, nil
 		}
 		if err != nil {
-			return fmt.Errorf("read the plan that deployed %s: %w", ps.Alias, err)
+			return nil, fmt.Errorf("read the plan that deployed %s: %w", ps.Alias, err)
 		}
-		plans[ps.FromPlanID] = plan
+		plans[planID] = plan
 	}
 	if plan == nil {
-		return fmt.Errorf("%w: plan %s, which deployed %s at %s, is gone, so its root and branch aren't known", ErrInvalid, ps.FromPlanID, ps.Alias, short(ps.CommitSHA))
+		return nil, fmt.Errorf("%w: plan %s, which deployed %s at %s, is gone, so its root and branch aren't known", ErrInvalid, planID, ps.Alias, short(ps.CommitSHA))
 	}
 	i := slices.IndexFunc(plan.Sources, func(o PlanSource) bool { return o.SourceID == ps.SourceID })
 	if i < 0 {
-		return fmt.Errorf("%w: plan %s, which deployed %s at %s, doesn't list it, so its root and branch aren't known", ErrInvalid, ps.FromPlanID, ps.Alias, short(ps.CommitSHA))
+		return nil, fmt.Errorf("%w: plan %s, which deployed %s at %s, doesn't list it, so its root and branch aren't known", ErrInvalid, planID, ps.Alias, short(ps.CommitSHA))
 	}
-	ps.Root, ps.Ref = plan.Sources[i].Root, plan.Sources[i].Ref
-	return nil
+	return &plan.Sources[i], nil
 }
 
 // promotionWarnings says when a promotion doesn't use the latest manifest
