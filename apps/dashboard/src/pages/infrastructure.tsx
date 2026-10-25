@@ -71,6 +71,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
+import { SpendAccounts } from "@/components/usage"
 import { cloudLabel } from "@/lib/clouds"
 import { relative } from "@/lib/format"
 import { ProjectIcon, projectStyle } from "@/lib/project-style"
@@ -192,18 +193,12 @@ export function Infrastructure() {
               Spend this month
             </CardTitle>
             <CardDescription>
-              Spend arrives with billing from your cloud connections: what each
-              cloud charges, against a budget you set.
+              What each connected account has cost this month, read from the
+              cloud&apos;s own billing.
             </CardDescription>
           </CardHeader>
-          <CardContent className="flex items-center gap-5">
-            <div
-              aria-hidden="true"
-              className="canvas-dots size-24 shrink-0 rounded-full opacity-60"
-            />
-            <span className="text-[26px] font-semibold tracking-tight text-muted-foreground">
-              None yet
-            </span>
+          <CardContent>
+            <SpendAccounts />
           </CardContent>
         </Card>
 

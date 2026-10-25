@@ -7815,6 +7815,57 @@
           }
         }
       }
+    },
+    "/api/v1/usage/spend": {
+      "get": {
+        "tags": [
+          "Usage"
+        ],
+        "summary": "What each connected account has cost this month, read from the cloud's own billing, and why any account can't say",
+        "operationId": "usage.spend",
+        "responses": {
+          "200": {
+            "description": "Spend",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpendReport"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/usage/traffic": {
+      "get": {
+        "tags": [
+          "Usage"
+        ],
+        "summary": "Requests and latency of every service you can see, read from each cloud's own monitoring, beside the stretch before",
+        "operationId": "usage.traffic",
+        "parameters": [
+          {
+            "name": "range",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Traffic",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrafficReport"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -16634,6 +16685,248 @@
             "type": "string"
           },
           "unavailable_reason": {
+            "type": "string"
+          }
+        }
+      },
+      "SpendReport": {
+        "type": "object",
+        "required": [
+          "month",
+          "totals",
+          "accounts",
+          "sources"
+        ],
+        "properties": {
+          "accounts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AccountSpend"
+            }
+          },
+          "month": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UsageSource"
+            }
+          },
+          "totals": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Amount"
+            }
+          }
+        }
+      },
+      "AccountSpend": {
+        "type": "object",
+        "required": [
+          "connection_id",
+          "cloud",
+          "name",
+          "currency",
+          "total",
+          "days"
+        ],
+        "properties": {
+          "cloud": {
+            "type": "string"
+          },
+          "connection_id": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "days": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Point"
+            }
+          },
+          "name": {
+            "type": "string"
+          },
+          "total": {
+            "type": "number"
+          }
+        }
+      },
+      "Point": {
+        "type": "object",
+        "required": [
+          "t",
+          "v"
+        ],
+        "properties": {
+          "t": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "v": {
+            "type": "number"
+          }
+        }
+      },
+      "UsageSource": {
+        "properties": {
+          "cloud": {
+            "type": "string"
+          },
+          "connection_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "services": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "connection_id",
+          "cloud",
+          "name",
+          "status"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/internal/usage.Source"
+      },
+      "Amount": {
+        "type": "object",
+        "required": [
+          "currency",
+          "total",
+          "days",
+          "undated"
+        ],
+        "properties": {
+          "currency": {
+            "type": "string"
+          },
+          "days": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Point"
+            }
+          },
+          "total": {
+            "type": "number"
+          },
+          "undated": {
+            "type": "number"
+          }
+        }
+      },
+      "TrafficReport": {
+        "type": "object",
+        "required": [
+          "range",
+          "start",
+          "end",
+          "step",
+          "requests",
+          "total",
+          "previous_total",
+          "services",
+          "sources"
+        ],
+        "properties": {
+          "end": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "previous_total": {
+            "type": "number"
+          },
+          "range": {
+            "type": "string"
+          },
+          "requests": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Point"
+            }
+          },
+          "services": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ServiceTraffic"
+            }
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UsageSource"
+            }
+          },
+          "start": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "step": {
+            "type": "integer"
+          },
+          "total": {
+            "type": "number"
+          }
+        }
+      },
+      "ServiceTraffic": {
+        "type": "object",
+        "required": [
+          "binding_id",
+          "project_id",
+          "environment_id",
+          "name",
+          "provider",
+          "requests",
+          "previous_requests",
+          "latency",
+          "previous_latency"
+        ],
+        "properties": {
+          "binding_id": {
+            "type": "string"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "latency": {
+            "type": "number"
+          },
+          "name": {
+            "type": "string"
+          },
+          "previous_latency": {
+            "type": "number"
+          },
+          "previous_requests": {
+            "type": "number"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "requests": {
+            "type": "number"
+          },
+          "statistic": {
             "type": "string"
           }
         }

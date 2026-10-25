@@ -1821,6 +1821,20 @@ export const ops = {
     invalidates: [],
     responseCodec: CODECS['IdentitySession'],
   },
+  'usage.spend': {
+    method: 'GET',
+    path: '/api/v1/usage/spend',
+    provides: [],
+    invalidates: [],
+    responseCodec: CODECS['SpendReport'],
+  },
+  'usage.traffic': {
+    method: 'GET',
+    path: '/api/v1/usage/traffic',
+    provides: [],
+    invalidates: [],
+    responseCodec: CODECS['TrafficReport'],
+  },
   'variables.list': {
     method: 'GET',
     path: '/api/v1/variables',

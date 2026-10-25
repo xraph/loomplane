@@ -51,6 +51,8 @@ Credentials live in Vault, encrypted with a key derived from your secret key. A 
 | [Azure](/docs/clouds/azure) | A service principal's client secret, with tenant, client and subscription IDs |
 | [Your own servers](/docs/clouds/your-own-servers) | An SSH key and host key, or a Kubernetes kubeconfig |
 
+The same credential reads what the account costs and how its services are doing, when the cloud reports it. [Spend, latency and traffic](/docs/clouds/spend-and-traffic) lists what each cloud gives you and the permission it needs.
+
 ## Clouds and targets
 
 A Cloud (the organization-level object, with a capital C) groups named targets so your manifest can say `cloud_target: frontend` without carrying an account ID. You can also pick targets by tag. [Cloud targets](/docs/clouds/cloud-targets) covers that, and [Adopting and moving services](/docs/clouds/adopting-and-moving) covers changing accounts later.

@@ -31,6 +31,7 @@ import {
 } from "@/components/ui/empty"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
+import { AccountSpend } from "@/components/usage"
 import { cloudLabel } from "@/lib/clouds"
 import { formatDate, relative } from "@/lib/format"
 import { cloudPurposes } from "@/lib/integrations"
@@ -195,23 +196,7 @@ export function CloudAccount({ id }: { id: string }) {
                 value={cloudLabel(c.cloud)}
                 note={cloudPurposes[c.cloud] ?? "Services Loomplane deploys"}
               />
-              <section className="flex items-center gap-4 rounded-xl bg-card p-4 ring-1 ring-border">
-                <div
-                  aria-hidden="true"
-                  className="canvas-dots size-16 shrink-0 rounded-full opacity-60"
-                />
-                <div className="grid gap-1">
-                  <span className="text-[12.5px] text-muted-foreground">
-                    Spend this month
-                  </span>
-                  <span className="text-lg font-semibold text-muted-foreground">
-                    None yet
-                  </span>
-                  <span className="text-[12.5px] leading-snug text-muted-foreground">
-                    Arrives with billing access
-                  </span>
-                </div>
-              </section>
+              <AccountSpend connectionId={id} />
             </div>
 
             <section className="overflow-hidden rounded-xl bg-card ring-1 ring-border">

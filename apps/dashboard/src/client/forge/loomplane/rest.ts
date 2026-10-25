@@ -3762,6 +3762,49 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly usage = {
+    /**
+     * What each connected account has cost this month, read from the cloud's own billing, and why any account can't say
+     */
+    spend: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.SpendReport> => {
+      let __path = `/api/v1/usage/spend`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["SpendReport"],
+      };
+
+      return this.request<types.SpendReport>(config);
+    },
+
+    /**
+     * Requests and latency of every service you can see, read from each cloud's own monitoring, beside the stretch before
+     */
+    traffic: async (range?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.TrafficReport> => {
+      let __path = `/api/v1/usage/traffic`;
+      const queryParams: Record<string, any> = {};
+      if (range !== undefined) {
+        queryParams['range'] = range;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["TrafficReport"],
+      };
+
+      return this.request<types.TrafficReport>(config);
+    },
+
+  };
+
   public readonly variables = {
     /**
      * Set an organization-wide variable, for every environment or for one by name

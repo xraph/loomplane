@@ -1,7 +1,7 @@
 // The overview: what's waiting on you and what went out last, how often and
-// how fast the organization ships, and where it runs. Spend, latency and
-// traffic share one card that says what they're waiting for until Loomplane
-// reads those numbers.
+// how fast the organization ships, what it costs, how its services are
+// doing, and where it runs. Spend, latency and traffic come from each
+// connected cloud's own billing and monitoring.
 import { useAuth } from "@authsome/ui-react"
 import { CheckIcon, PlusIcon, ShieldCheckIcon } from "lucide-react"
 import { type ReactNode, useCallback, useMemo } from "react"
@@ -16,10 +16,12 @@ import { useDecision } from "@/components/approval"
 import { CloudGlyph } from "@/components/cloud-glyph"
 import { DotBarChart, GlowBarChart } from "@/components/dots"
 import { Page, PageHeading } from "@/components/page"
+import { Figure, Panel, PanelHead } from "@/components/panel"
 import { QueryError } from "@/components/query-error"
 import { ChangeChips, StatusPill, Thread } from "@/components/runs"
 import { useShell } from "@/components/shell"
 import { SiteHeader } from "@/components/site-header"
+import { LatencyCard, SpendCard, TrafficCard } from "@/components/usage"
 import { Button } from "@/components/ui/button"
 import { Kbd } from "@/components/ui/kbd"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -138,7 +140,12 @@ export function Overview() {
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)_minmax(0,1fr)]">
           <DeploysCard />
           <PlanToLive />
-          <MetricsPending />
+          <SpendCard className="md:col-span-2 lg:col-span-1" />
+        </div>
+
+        <div className="grid gap-4 lg:grid-cols-[minmax(0,10fr)_minmax(0,7fr)]">
+          <TrafficCard />
+          <LatencyCard />
         </div>
 
         <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,10fr)_minmax(0,7fr)]">
@@ -156,47 +163,6 @@ export function Overview() {
 /* ------------------------------------------------------------------------ */
 /* Shared card parts                                                          */
 
-function Panel({
-  className,
-  dashed = false,
-  children,
-  ...props
-}: React.ComponentProps<"section"> & { dashed?: boolean }) {
-  return (
-    <section
-      className={cn(
-        "flex min-w-0 flex-col rounded-[14px] px-4 py-3.5",
-        dashed
-          ? "border border-dashed border-border bg-subtle"
-          : "bg-card ring-1 ring-border",
-        className
-      )}
-      {...props}
-    >
-      {children}
-    </section>
-  )
-}
-
-function PanelHead({
-  title,
-  aside,
-  className,
-}: {
-  title: ReactNode
-  aside?: ReactNode
-  className?: string
-}) {
-  return (
-    <div className={cn("flex items-baseline justify-between gap-3", className)}>
-      <h2 className="text-[13px] font-semibold">{title}</h2>
-      {aside && (
-        <span className="shrink-0 text-xs text-muted-foreground">{aside}</span>
-      )}
-    </div>
-  )
-}
-
 function Eyebrow({
   className,
   children,
@@ -213,19 +179,6 @@ function Eyebrow({
     >
       {children}
     </span>
-  )
-}
-
-function Figure({ value, note }: { value: ReactNode; note?: ReactNode }) {
-  return (
-    <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-      <span className="font-mono text-[26px] leading-none font-medium tracking-[-0.02em] tabular-nums">
-        {value}
-      </span>
-      {note && (
-        <span className="text-[12.5px] text-muted-foreground">{note}</span>
-      )}
-    </div>
   )
 }
 
@@ -559,39 +512,6 @@ function PlanToLive() {
           <GlowBarChart data={days} label="Went live" ticks="ends" />
         </>
       )}
-    </Panel>
-  )
-}
-
-const pendingMetrics = ["Cloud spend", "p95 latency", "Traffic"]
-
-/** MetricsPending holds the place of the numbers Loomplane doesn't read yet. */
-function MetricsPending() {
-  return (
-    <Panel
-      dashed
-      aria-label="Spend, latency and traffic"
-      className="gap-3 md:col-span-2 lg:col-span-1"
-    >
-      <PanelHead title="Spend, latency and traffic" />
-      <p className="text-[12.5px] leading-normal text-muted-foreground">
-        These show up once Loomplane reads billing and metrics from your cloud
-        accounts. Build minutes aren&apos;t metered yet.
-      </p>
-      <dl className="grid gap-1.5 text-[12.5px]">
-        {pendingMetrics.map((m) => (
-          <div key={m} className="flex items-center justify-between gap-3">
-            <dt>{m}</dt>
-            <dd className="text-muted-foreground">Not connected</dd>
-          </div>
-        ))}
-      </dl>
-      <Link
-        to="/integrations"
-        className="mt-auto self-start text-[12.5px] font-medium text-brand-ink hover:underline"
-      >
-        Connect metrics
-      </Link>
     </Panel>
   )
 }

@@ -26,6 +26,15 @@ export interface APIKeyList {
   keys: APIKey[];
 }
 
+export interface AccountSpend {
+  cloud: string;
+  connectionId: string;
+  currency: string;
+  days: Point[];
+  name: string;
+  total: number;
+}
+
 export interface Action {
   adoptCloudPlacement?: boolean;
   changes?: Change[];
@@ -69,6 +78,13 @@ export interface AddSourceInputBody {
   ref?: string;
   repository: string;
   root?: string;
+}
+
+export interface Amount {
+  currency: string;
+  days: Point[];
+  total: number;
+  undated: number;
 }
 
 export interface Analysis {
@@ -1477,6 +1493,11 @@ export interface PlanningSummary {
   update: number;
 }
 
+export interface Point {
+  t: string;
+  v: number;
+}
+
 export interface Policy {
   createdBy: string;
   enabled: boolean;
@@ -2259,6 +2280,19 @@ export interface ServiceConfig {
   workload: string;
 }
 
+export interface ServiceTraffic {
+  bindingId: string;
+  environmentId: string;
+  latency: number;
+  name: string;
+  previousLatency: number;
+  previousRequests: number;
+  projectId: string;
+  provider: string;
+  requests: number;
+  statistic?: string;
+}
+
 export interface SetDefaultPlacementInputBody {
   defaultPlacement: ({
   connectionId: string;
@@ -2332,6 +2366,13 @@ export interface SourceState {
   latest?: Analysis;
   shown?: Analysis;
   source: Source;
+}
+
+export interface SpendReport {
+  accounts: AccountSpend[];
+  month: string;
+  sources: UsageSource[];
+  totals: Amount[];
 }
 
 export interface StartAnalysisInputBody {
@@ -2427,6 +2468,18 @@ export interface Target {
   updatedAt: string;
 }
 
+export interface TrafficReport {
+  end: string;
+  previousTotal: number;
+  range: string;
+  requests: Point[];
+  services: ServiceTraffic[];
+  sources: UsageSource[];
+  start: string;
+  step: number;
+  total: number;
+}
+
 export interface UpdateInputBody {
   name: string;
   revision: number;
@@ -2453,6 +2506,15 @@ export interface UpdateTargetInputBody {
 export interface UpdateVariableInputBody {
   secret?: boolean;
   value: string;
+}
+
+export interface UsageSource {
+  cloud: string;
+  connectionId: string;
+  name: string;
+  reason?: string;
+  services?: string[];
+  status: string;
 }
 
 export interface Use {
