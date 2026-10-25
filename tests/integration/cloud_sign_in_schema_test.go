@@ -5,11 +5,14 @@ package integration
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/xraph/grove/drivers/pgdriver"
+	"github.com/xraph/grove/migrate"
 
 	"github.com/xraph/loomplane/database/migrations"
 	"github.com/xraph/loomplane/internal/ops"
@@ -71,5 +74,66 @@ func TestCloudSignInSchema(t *testing.T) {
 	}
 	if kindDefault != "'deployment'::text" {
 		t.Fatalf("outbox kind default = %q, want 'deployment'", kindDefault)
+	}
+}
+
+// Webhook endpoints made before connection.sign_in_needed existed hear it
+// after the upgrade. Endpoints Loomplane didn't make are left alone, and
+// running the backfill again changes nothing.
+func TestCloudSignInWebhookBackfill(t *testing.T) {
+	dsn := freshDatabase(t)
+	ctx := context.Background()
+	// On a new database Loomplane's group runs before Relay's makes
+	// relay_endpoints, so the backfill must cope with the table missing.
+	if err := ops.Migrate(ctx, dsn, migrations.All()); err != nil {
+		t.Fatal(err)
+	}
+	var backfill *migrate.Migration
+	for _, m := range migrations.Group().Migrations() {
+		if m.Name == "cloud_sign_in_webhooks" {
+			backfill = m
+		}
+	}
+	if backfill == nil || backfill.Version != "20261103000200" {
+		t.Fatalf("cloud_sign_in_webhooks migration: %+v", backfill)
+	}
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx)
+	if _, err = conn.Exec(ctx, `INSERT INTO relay_endpoints (id, tenant_id, url, event_types) VALUES
+		('ep_old', 'org_1', 'https://example.com/a', ARRAY['deployment.succeeded','deployment.failed']),
+		('ep_new', 'org_1', 'https://example.com/b', ARRAY['deployment.succeeded','deployment.failed','connection.sign_in_needed']),
+		('ep_other', 'org_1', 'https://example.com/c', ARRAY['invoice.*'])`); err != nil {
+		t.Fatal(err)
+	}
+	pg := pgdriver.New()
+	if err = pg.Open(ctx, dsn); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = pg.Close() }()
+	exec, err := migrate.NewExecutorFor(pg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err = backfill.Up(ctx, exec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	want := map[string][]string{
+		"ep_old":   {"deployment.succeeded", "deployment.failed", "connection.sign_in_needed"},
+		"ep_new":   {"deployment.succeeded", "deployment.failed", "connection.sign_in_needed"},
+		"ep_other": {"invoice.*"},
+	}
+	for id, types := range want {
+		var got []string
+		if err = conn.QueryRow(ctx, `SELECT event_types FROM relay_endpoints WHERE id = $1`, id).Scan(&got); err != nil {
+			t.Fatal(err)
+		}
+		if strings.Join(got, ",") != strings.Join(types, ",") {
+			t.Fatalf("%s hears %v, want %v", id, got, types)
+		}
 	}
 }

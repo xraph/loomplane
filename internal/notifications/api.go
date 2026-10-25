@@ -180,6 +180,14 @@ func (s *Service) MarkRead(ctx context.Context, p security.Principal, value stri
 	}
 	return s.mailStore.MarkRead(ctx, parsed)
 }
+
+// webhookEventTypes is every event a webhook endpoint hears. Endpoints made
+// before connection.sign_in_needed existed get it from the
+// cloud_sign_in_webhooks migration.
+func webhookEventTypes() []string {
+	return []string{"deployment.succeeded", "deployment.failed", connectionSignInNeeded}
+}
+
 func publicEndpoint(ep *endpoint.Endpoint) WebhookEndpoint {
 	return WebhookEndpoint{ID: ep.ID.String(), URL: ep.URL, Description: ep.Description, Enabled: ep.Enabled, CreatedAt: ep.CreatedAt}
 }
@@ -227,7 +235,7 @@ func (s *Service) CreateEndpoint(ctx context.Context, p security.Principal, in W
 	if count >= 100 {
 		return WebhookEndpointSecret{}, ErrInvalid
 	}
-	ep := &endpoint.Endpoint{ID: relayid.NewEndpointID(), TenantID: p.OrgID, ScopeAppID: s.cfg.Identity.AppID, ScopeOrgID: p.OrgID, URL: in.URL, Description: in.Description, Secret: signature.GenerateSecret(), EventTypes: []string{"deployment.succeeded", "deployment.failed"}, RateLimit: 5, Enabled: true}
+	ep := &endpoint.Endpoint{ID: relayid.NewEndpointID(), TenantID: p.OrgID, ScopeAppID: s.cfg.Identity.AppID, ScopeOrgID: p.OrgID, URL: in.URL, Description: in.Description, Secret: signature.GenerateSecret(), EventTypes: webhookEventTypes(), RateLimit: 5, Enabled: true}
 	ep.CreatedAt = time.Now().UTC()
 	ep.UpdatedAt = ep.CreatedAt
 	if err := s.relayStore.CreateEndpoint(ctx, ep); err != nil {

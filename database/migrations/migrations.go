@@ -121,6 +121,7 @@ func Group() *migrate.Group {
 		WorkloadRegistrationsMigration(),
 		NotificationsMigration(),
 		statements("20261103000100", "cloud_sign_in", cloudSignInUp, cloudSignInDown),
+		statements("20261103000200", "cloud_sign_in_webhooks", cloudSignInWebhooksUp, cloudSignInWebhooksDown),
 	)
 	return g
 }
