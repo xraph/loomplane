@@ -13,6 +13,7 @@ import (
 )
 
 type finalizationStore interface {
+	StaleFinishActivity(context.Context, string, string) (bool, error)
 	FinishedActivity(context.Context, string, string, string) (int, bool, error)
 }
 
@@ -21,12 +22,15 @@ func (r *Runner) replayFinalization(ctx context.Context, d *Deployment, reason s
 	if key == "" {
 		return false, nil
 	}
-	if stale, err := staleFinalization(ctx, d); stale || err != nil {
-		return stale, err
-	}
 	store, ok := r.store.(finalizationStore)
 	if !ok {
 		return false, errors.New("durable deployment finalization is unavailable")
+	}
+	if stale, err := store.StaleFinishActivity(ctx, d.OrgID, d.ID); stale || err != nil {
+		return stale, err
+	}
+	if stale, err := staleFinalization(ctx, d); stale || err != nil {
+		return stale, err
 	}
 	generation, found, err := store.FinishedActivity(ctx, d.OrgID, d.ID, key)
 	if err != nil || !found {
@@ -60,6 +64,11 @@ func (s *PgStore) finishActivity(ctx context.Context, org, id, key, status, reas
 	var raw []byte
 	if scanErr := tx.QueryRow(ctx, `SELECT status,retries,steps,plan_id FROM loomplane_deployments WHERE org_id=$1 AND id=$2 FOR UPDATE`, org, id).Scan(&current, &generation, &raw, &plan); scanErr != nil {
 		return scanErr
+	}
+	if stale, sharedErr := staleSharedFinalization(ctx, tx, org, id, true); sharedErr != nil {
+		return sharedErr
+	} else if stale {
+		return tx.Commit()
 	}
 	if stale, fenceErr := staleFinalization(ctx, &Deployment{ID: id, PlanID: plan, Retries: generation}); fenceErr != nil {
 		return fenceErr
