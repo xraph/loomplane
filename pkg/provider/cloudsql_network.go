@@ -24,6 +24,20 @@ func (n CloudSQLRecoveryNetwork) Valid() bool {
 	return len(parts) == 5 && parts[0] == "projects" && parts[1] == n.ConsumerProject && cloudSQLProject.MatchString(parts[1]) && parts[2] == "global" && parts[3] == "networks" && cloudSQLNetwork.MatchString(parts[4])
 }
 
+// CloudSQLApplicationNetwork selects the VPC and regional subnet used by an
+// application. The subnet must belong to the VPC's host project.
+type CloudSQLApplicationNetwork struct {
+	ConsumerProject string `json:"consumer_project" yaml:"consumer_project"`
+	Network         string `json:"network" yaml:"network"`
+	Subnetwork      string `json:"subnetwork" yaml:"subnetwork"`
+}
+
+func (n CloudSQLApplicationNetwork) Valid(region string) bool {
+	network := CloudSQLRecoveryNetwork{ConsumerProject: n.ConsumerProject, Network: n.Network}
+	parts := strings.Split(n.Subnetwork, "/")
+	return network.Valid() && cloudSQLNetwork.MatchString(region) && len(parts) == 6 && parts[0] == "projects" && parts[1] == n.ConsumerProject && parts[2] == "regions" && parts[3] == region && parts[4] == "subnetworks" && cloudSQLNetwork.MatchString(parts[5])
+}
+
 // CloudSQLSourceEndpoint names an externally managed manual PSC endpoint.
 // This contract uses a VPC host project, without a Shared VPC service override.
 type CloudSQLSourceEndpoint struct {
