@@ -184,6 +184,11 @@ type CreatePlanInput struct {
 	// Scope names the repositories the plan moves. Empty means all of
 	// them; the rest stay at what's deployed.
 	Scope []string `json:"scope,omitempty"`
+	// From is the environment to promote from. Each in-scope source is
+	// pinned to the commit (and analysis) that environment's last
+	// successful deployment of it recorded, and the plan uses the manifest
+	// revision that environment last deployed with; the rest are held.
+	From string `json:"from,omitempty"`
 }
 
 // DecideInput approves or rejects a plan.
@@ -208,6 +213,9 @@ func (s *Service) Create(ctx context.Context, p security.Principal, projectID st
 	if err != nil {
 		return nil, err
 	}
+	if from := strings.TrimSpace(in.From); from != "" {
+		return s.createFrom(ctx, p, projectID, env, from, in)
+	}
 	rev, err := s.manifests.Latest(ctx, p.OrgID, projectID)
 	if errors.Is(err, manifests.ErrNotFound) {
 		return nil, ErrNoManifest
@@ -226,16 +234,61 @@ func (s *Service) Create(ctx context.Context, p security.Principal, projectID st
 			return nil, err
 		}
 	}
+	return s.start(ctx, p, &Plan{
+		OrgID: p.OrgID, ProjectID: projectID, EnvironmentID: env.ID, Environment: env.Name,
+		Sources: pinned, Catalog: in.Catalog, ManifestID: rev.ID, ManifestRevision: rev.Revision,
+	})
+}
 
+// createFrom plans env from what the from environment runs: its commits
+// and the manifest revision it last deployed with.
+func (s *Service) createFrom(ctx context.Context, p security.Principal, projectID string, env *projects.Environment, from string, in CreatePlanInput) (*Plan, error) {
+	switch {
+	case in.Catalog:
+		return nil, fmt.Errorf("%w: a standalone catalog plan can't promote from another environment", ErrInvalid)
+	case from == env.Name:
+		return nil, fmt.Errorf("%w: %s can't promote from itself", ErrInvalid, env.Name)
+	}
+	source, err := s.environment(ctx, p.OrgID, projectID, from)
+	if err != nil {
+		return nil, err
+	}
+	pinned, deployed, err := s.pinFrom(ctx, p.OrgID, projectID, env, source, in.Scope)
+	if err != nil {
+		return nil, err
+	}
+	var rev *manifests.Revision
+	if deployed != nil {
+		if rev, err = s.manifests.Get(ctx, p.OrgID, deployed.ManifestID); err != nil {
+			return nil, fmt.Errorf("load manifest revision %d, which %s deployed with: %w", deployed.ManifestRevision, source.Name, err)
+		}
+		if rev.Manifest == nil {
+			return nil, fmt.Errorf("%w: manifest revision %d, which %s deployed with, no longer parses", ErrInvalid, rev.Revision, source.Name)
+		}
+	} else {
+		rev, err = s.manifests.Latest(ctx, p.OrgID, projectID)
+		if errors.Is(err, manifests.ErrNotFound) {
+			return nil, ErrNoManifest
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	return s.start(ctx, p, &Plan{
+		OrgID: p.OrgID, ProjectID: projectID, EnvironmentID: env.ID, Environment: env.Name,
+		Kind: KindPromotion, From: source.Name, FromEnvironmentID: source.ID,
+		Sources: pinned, ManifestID: rev.ID, ManifestRevision: rev.Revision,
+	})
+}
+
+// start stores a new plan, superseding the environment's open plan, and
+// starts planning it.
+func (s *Service) start(ctx context.Context, p security.Principal, plan *Plan) (*Plan, error) {
 	id, err := typeid.Generate("plan")
 	if err != nil {
 		return nil, fmt.Errorf("generate plan id: %w", err)
 	}
-	plan := &Plan{
-		ID: id.String(), OrgID: p.OrgID, ProjectID: projectID, EnvironmentID: env.ID, Environment: env.Name,
-		Status: StatusPlanning, Sources: pinned, Catalog: in.Catalog,
-		ManifestID: rev.ID, ManifestRevision: rev.Revision, CreatedBy: p.UserID, CreatedAt: s.now().UTC(),
-	}
+	plan.ID, plan.Status, plan.CreatedBy, plan.CreatedAt = id.String(), StatusPlanning, p.UserID, s.now().UTC()
 	plan.normalize()
 	superseded, err := s.store.CreatePlan(ctx, plan)
 	if err != nil {
@@ -257,10 +310,11 @@ func (s *Service) Create(ctx context.Context, p security.Principal, projectID st
 	}
 	if s.audit != nil {
 		s.audit.Record(ctx, projects.AuditEvent{
-			Action: "plan.create", Severity: "info", ProjectID: projectID, Principal: p,
+			Action: "plan.create", Severity: "info", ProjectID: plan.ProjectID, Principal: p,
 			Attributes: map[string]any{
-				"plan_id": plan.ID, "environment": env.Name, "sources": lockDescription(pinned),
+				"plan_id": plan.ID, "environment": plan.Environment, "sources": lockDescription(plan.Sources),
 				"manifest_revision": plan.ManifestRevision, "superseded": superseded,
+				"kind": plan.Kind, "from": plan.From,
 			},
 		})
 	}
@@ -517,6 +571,10 @@ type revisionInput struct {
 	Manifest      string        `json:"manifest"`
 	Deployed      []deployedRef `json:"deployed"`
 	Result        *Result       `json:"result"`
+	// From and Rollback are left out when empty, so a release's revision
+	// is what it was before promotions and rollbacks.
+	From     string    `json:"from,omitempty"`
+	Rollback *Rollback `json:"rollback,omitempty"`
 }
 
 type deployedRef struct {
@@ -650,9 +708,15 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 		result.Executable = false
 	}
 	s.checkBackupPreview(ctx, plan, result)
+	warnings, err := s.promotionWarnings(ctx, plan, rev.Revision)
+	if err != nil {
+		return nil, "", err
+	}
+	result.Warnings = append(result.Warnings, warnings...)
 	in := revisionInput{
 		EnvironmentID: plan.EnvironmentID, Environment: plan.Environment, Sources: plan.Sources,
 		Manifest: rev.Digest, Deployed: make([]deployedRef, 0, len(bindings)), Result: result,
+		From: plan.From, Rollback: plan.Rollback,
 	}
 	for _, b := range bindings {
 		in.Deployed = append(in.Deployed, deployedRef{

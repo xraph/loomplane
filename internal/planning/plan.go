@@ -67,6 +67,7 @@ var (
 	ErrUnavailable   = errors.New("plans can't be decided right now; try again")
 	ErrNoSources     = errors.New("this project has no repositories; add one first")
 	ErrNeverDeployed = errors.New("a repository this plan holds back has never been deployed here")
+	ErrNotRunning    = errors.New("the environment you promote from runs nothing yet; deploy it first")
 )
 
 // Op is what an action does.
@@ -487,6 +488,31 @@ type DeployedSource struct {
 	DeployedAt    time.Time `json:"deployed_at"`
 }
 
+// DeployedManifest is the manifest revision an environment's last recorded
+// release was planned from.
+type DeployedManifest struct {
+	EnvironmentID    string    `json:"environment_id"`
+	ManifestID       string    `json:"manifest_id"`
+	ManifestRevision int       `json:"manifest_revision"`
+	PlanID           string    `json:"plan_id"`
+	DeployedAt       time.Time `json:"deployed_at"`
+}
+
+// DeployedRelease is what a succeeded deployment records, in one
+// transaction: the manifest revision its plan was made from and the commit
+// of each repository it moved. Every row it writes is the release's
+// environment, plan and time.
+type DeployedRelease struct {
+	EnvironmentID string
+	PlanID        string
+	// ManifestID is empty for a release that doesn't move the
+	// environment's manifest, which then records only its sources.
+	ManifestID       string
+	ManifestRevision int
+	DeployedAt       time.Time
+	Sources          []*DeployedSource
+}
+
 // DeployedRepository is what's deployed of one of a project's live
 // repositories in an environment, named for people: a scope picker locks
 // on every repository without one, since a plan can't hold it.
@@ -700,6 +726,13 @@ type Store interface {
 	// RecordDeployed records d as what's deployed of its repository in
 	// its environment, replacing what was.
 	RecordDeployed(ctx context.Context, orgID string, d *DeployedSource) error
+	// RecordRelease records a succeeded release in one transaction: its
+	// manifest revision and the commit of every repository it moved.
+	RecordRelease(ctx context.Context, orgID string, r *DeployedRelease) error
+	// DeployedState returns the manifest revision an environment last
+	// released (nil when none is recorded) and the commit of each of its
+	// repositories, read in one snapshot.
+	DeployedState(ctx context.Context, orgID, environmentID string) (*DeployedManifest, []*DeployedSource, error)
 }
 
 // Digest returns a hex SHA-256 of v's JSON. Go's JSON is deterministic for

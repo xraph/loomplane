@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -223,7 +224,17 @@ func (s *PgStore) withSources(ctx context.Context, plans ...*Plan) error {
 
 // DeployedSources implements Store.
 func (s *PgStore) DeployedSources(ctx context.Context, orgID, environmentID string) ([]*DeployedSource, error) {
-	rows, err := s.db.Query(ctx, `SELECT environment_id, source_id, analysis_id, commit_sha, plan_id, deployed_at
+	return deployedSources(ctx, s.db, orgID, environmentID)
+}
+
+// rowQuerier is a database or a transaction.
+type rowQuerier interface {
+	Query(ctx context.Context, query string, args ...any) (driver.Rows, error)
+	QueryRow(ctx context.Context, query string, args ...any) driver.Row
+}
+
+func deployedSources(ctx context.Context, db rowQuerier, orgID, environmentID string) ([]*DeployedSource, error) {
+	rows, err := db.Query(ctx, `SELECT environment_id, source_id, analysis_id, commit_sha, plan_id, deployed_at
 		FROM loomplane_environment_sources WHERE org_id = $1 AND environment_id = $2 ORDER BY source_id`, orgID, environmentID)
 	if err != nil {
 		return nil, fmt.Errorf("list deployed sources: %w", err)
@@ -251,6 +262,81 @@ func (s *PgStore) RecordDeployed(ctx context.Context, orgID string, d *DeployedS
 			plan_id = EXCLUDED.plan_id, deployed_at = EXCLUDED.deployed_at`,
 		d.EnvironmentID, d.SourceID, orgID, d.AnalysisID, d.CommitSHA, d.PlanID, d.DeployedAt.UTC()); err != nil {
 		return fmt.Errorf("record deployed source: %w", err)
+	}
+	return nil
+}
+
+// DeployedState implements Store. Both reads run in one repeatable-read
+// transaction, so they see the same releases.
+func (s *PgStore) DeployedState(ctx context.Context, orgID, environmentID string) (manifest *DeployedManifest, sources []*DeployedSource, err error) {
+	tx, err := s.db.BeginTx(ctx, &driver.TxOptions{IsolationLevel: driver.LevelRepeatableRead, ReadOnly: true})
+	if err != nil {
+		return nil, nil, fmt.Errorf("begin: %w", err)
+	}
+	defer func() { err = rollback(tx, err) }()
+	var m DeployedManifest
+	err = tx.QueryRow(ctx, `SELECT environment_id, manifest_id, manifest_revision, plan_id, deployed_at
+		FROM loomplane_environment_manifests WHERE org_id = $1 AND environment_id = $2`, orgID, environmentID).
+		Scan(&m.EnvironmentID, &m.ManifestID, &m.ManifestRevision, &m.PlanID, &m.DeployedAt)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		err = nil
+	case err != nil:
+		return nil, nil, fmt.Errorf("get deployed manifest: %w", err)
+	default:
+		m.DeployedAt = m.DeployedAt.UTC()
+		manifest = &m
+	}
+	if sources, err = deployedSources(ctx, tx, orgID, environmentID); err != nil {
+		return nil, nil, err
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, nil, fmt.Errorf("commit: %w", err)
+	}
+	return manifest, sources, nil
+}
+
+// RecordRelease implements Store: the manifest row and every source row
+// are written in one transaction, each source by one statement.
+func (s *PgStore) RecordRelease(ctx context.Context, orgID string, r *DeployedRelease) (err error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("begin: %w", err)
+	}
+	defer func() { err = rollback(tx, err) }()
+	at := r.DeployedAt.UTC()
+	if r.ManifestID != "" {
+		if _, err = tx.Exec(ctx, `INSERT INTO loomplane_environment_manifests
+				(environment_id, org_id, manifest_id, manifest_revision, plan_id, deployed_at)
+			VALUES ($1, $2, $3, $4, $5, $6)
+			ON CONFLICT (environment_id) DO UPDATE SET
+				manifest_id = EXCLUDED.manifest_id, manifest_revision = EXCLUDED.manifest_revision,
+				plan_id = EXCLUDED.plan_id, deployed_at = EXCLUDED.deployed_at
+			WHERE loomplane_environment_manifests.org_id = EXCLUDED.org_id`,
+			r.EnvironmentID, orgID, r.ManifestID, r.ManifestRevision, r.PlanID, at); err != nil {
+			return fmt.Errorf("record deployed manifest: %w", err)
+		}
+	}
+	if len(r.Sources) > 0 {
+		const columns = 7
+		values := make([]string, 0, len(r.Sources))
+		args := make([]any, 0, columns*len(r.Sources))
+		for i, d := range r.Sources {
+			n := i * columns
+			values = append(values, fmt.Sprintf("($%d, $%d, $%d, $%d, $%d, $%d, $%d)", n+1, n+2, n+3, n+4, n+5, n+6, n+7))
+			args = append(args, r.EnvironmentID, d.SourceID, orgID, d.AnalysisID, d.CommitSHA, r.PlanID, at)
+		}
+		if _, err = tx.Exec(ctx, `INSERT INTO loomplane_environment_sources
+				(environment_id, source_id, org_id, analysis_id, commit_sha, plan_id, deployed_at)
+			VALUES `+strings.Join(values, ", ")+`
+			ON CONFLICT (environment_id, source_id) DO UPDATE SET
+				analysis_id = EXCLUDED.analysis_id, commit_sha = EXCLUDED.commit_sha,
+				plan_id = EXCLUDED.plan_id, deployed_at = EXCLUDED.deployed_at`, args...); err != nil {
+			return fmt.Errorf("record deployed sources: %w", err)
+		}
+	}
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("commit: %w", err)
 	}
 	return nil
 }

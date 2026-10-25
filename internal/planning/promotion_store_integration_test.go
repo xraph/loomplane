@@ -226,3 +226,83 @@ func TestRealtimePlanEventCarriesPromotionFields(t *testing.T) {
 		t.Fatalf("leftovers %s: %v", doc["leftovers"], err)
 	}
 }
+
+// A release's manifest and every source it moved are written together, so
+// a reader sees all of one release or all of another, never a mix.
+func TestPgStore_recordReleaseIsOneSnapshot(t *testing.T) {
+	ctx, store, pg := promotionDB(t)
+	for _, stmt := range []string{
+		`INSERT INTO loomplane_project_sources (id, org_id, project_id, alias, repository, created_by, created_at, updated_at) VALUES
+			('src_web', 'org', 'proj', 'web', 'acme/web', 'usr', now(), now()),
+			('src_api', 'org', 'proj', 'api', 'acme/api', 'usr', now(), now())`,
+		`INSERT INTO loomplane_analyses (id, org_id, project_id, status, repository, commit_sha, source_id, alias, created_by, created_at) VALUES
+			('anl_web', 'org', 'proj', 'succeeded', 'acme/web', 'w', 'src_web', 'web', 'usr', now()),
+			('anl_api', 'org', 'proj', 'succeeded', 'acme/api', 'a', 'src_api', 'api', 'usr', now())`,
+	} {
+		if _, err := pg.Exec(ctx, stmt); err != nil {
+			t.Fatalf("%s: %v", stmt, err)
+		}
+	}
+	manifest, sources, err := store.DeployedState(ctx, "org", "env_b")
+	if err != nil || manifest != nil || len(sources) != 0 {
+		t.Fatalf("before any release: %+v %+v %v", manifest, sources, err)
+	}
+
+	const releases = 200
+	done := make(chan error, 1)
+	go func() {
+		for n := 1; n <= releases; n++ {
+			sha := fmt.Sprint(n)
+			if werr := store.RecordRelease(ctx, "org", &DeployedRelease{
+				EnvironmentID: "env_b", PlanID: "plan_old", ManifestID: "man_1", ManifestRevision: n, DeployedAt: time.Now(),
+				Sources: []*DeployedSource{
+					{SourceID: "src_web", AnalysisID: "anl_web", CommitSHA: sha},
+					{SourceID: "src_api", AnalysisID: "anl_api", CommitSHA: sha},
+				},
+			}); werr != nil {
+				done <- werr
+				return
+			}
+		}
+		done <- nil
+	}()
+	reads := 0
+	for finished := false; !finished; {
+		select {
+		case err = <-done:
+			if err != nil {
+				t.Fatal(err)
+			}
+			finished = true
+		default:
+		}
+		manifest, sources, err = store.DeployedState(ctx, "org", "env_b")
+		if err != nil {
+			t.Fatal(err)
+		}
+		reads++
+		if manifest == nil {
+			if len(sources) != 0 {
+				t.Fatalf("sources %+v without a manifest", sources)
+			}
+			continue
+		}
+		want := fmt.Sprint(manifest.ManifestRevision)
+		if len(sources) != 2 || sources[0].CommitSHA != want || sources[1].CommitSHA != want {
+			got := make([]string, 0, len(sources))
+			for _, d := range sources {
+				got = append(got, d.SourceID+"@"+d.CommitSHA)
+			}
+			t.Fatalf("read %d: manifest revision %d with sources %v", reads, manifest.ManifestRevision, got)
+		}
+	}
+	if manifest == nil || manifest.ManifestRevision != releases || manifest.PlanID != "plan_old" || manifest.ManifestID != "man_1" {
+		t.Fatalf("last read %+v", manifest)
+	}
+	for _, d := range sources {
+		if d.EnvironmentID != "env_b" || d.PlanID != "plan_old" || d.CommitSHA != fmt.Sprint(releases) {
+			t.Fatalf("source %+v", d)
+		}
+	}
+	t.Logf("%d reads", reads)
+}
