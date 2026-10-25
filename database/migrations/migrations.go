@@ -120,6 +120,7 @@ func Group() *migrate.Group {
 		WorkloadControllersMigration(),
 		WorkloadRegistrationsMigration(),
 		NotificationsMigration(),
+		statements("20261103000100", "cloud_sign_in", cloudSignInUp, cloudSignInDown),
 	)
 	return g
 }
