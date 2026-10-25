@@ -80,6 +80,10 @@ func (s *Session) CloneSQLPointInTime(ctx context.Context, source SQLInstanceSpe
 // and its target creation timing. Inherited source labels are not ownership.
 // A failed terminal clone can still leave a copy that must be disposed of.
 func (s *Session) InspectSQLPITRForCleanup(ctx context.Context, target SQLInstanceSpec, operation string, check func(context.Context) error) (*SQLInstance, error) {
+	return s.inspectSQLPITRCopy(ctx, target, operation, check, true)
+}
+
+func (s *Session) inspectSQLPITRCopy(ctx context.Context, target SQLInstanceSpec, operation string, check func(context.Context) error, allowFailed bool) (*SQLInstance, error) {
 	if !validSQLPathID(operation) || !sqlNativeName(target.Name) || target.Region == "" || target.DatabaseVersion != "POSTGRES_17" || target.Inspect == nil || check == nil {
 		return nil, errors.New("cloud sql PITR cleanup requires the saved clone operation and target")
 	}
@@ -98,6 +102,9 @@ func (s *Session) InspectSQLPITRForCleanup(ctx context.Context, target SQLInstan
 			return nil, errors.New("cloud sql clone operation has incomplete metadata")
 		}
 		if op.Status == "DONE" {
+			if op.Error != nil && !allowFailed {
+				return nil, errors.New("cloud sql clone operation failed")
+			}
 			break
 		}
 		if err := s.wait(ctx); err != nil {

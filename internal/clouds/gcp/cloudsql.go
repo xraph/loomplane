@@ -29,6 +29,7 @@ type SQLInstance struct {
 	IPAddresses     []json.RawMessage `json:"ipAddresses"`
 	Settings        struct {
 		Version              string              `json:"settingsVersion"`
+		DeletionProtection   bool                `json:"deletionProtectionEnabled"`
 		Edition              string              `json:"edition"`
 		Availability         string              `json:"availabilityType"`
 		DataAPIAccess        string              `json:"dataApiAccess"`
@@ -60,6 +61,8 @@ type SQLPSCSettings struct {
 	NetworkAttachment string            `json:"networkAttachmentUri"`
 	AutoConnections   []json.RawMessage `json:"pscAutoConnections"`
 	AutoPolicy        bool              `json:"pscAutoConnectionPolicyEnabled"`
+	AutoDNS           bool              `json:"pscAutoDnsEnabled"`
+	WriteEndpointDNS  bool              `json:"pscWriteEndpointDnsEnabled"`
 }
 
 // SQLBackupSettings records the effective standard log recovery configuration.

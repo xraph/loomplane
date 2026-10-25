@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
-	"strconv"
 	"time"
 )
 
@@ -30,20 +29,19 @@ type SQLPITRWindow struct {
 // source must have no inherited consumer endpoint automation or outbound path.
 // Existing manual consumer endpoints refer to a different service attachment.
 func (in *SQLInstance) PITRIsolation(spec SQLInstanceSpec) (string, error) {
-	if in == nil || in.Kind != "sql#instance" || in.DatabaseVersion != "POSTGRES_17" || spec.DatabaseVersion != in.DatabaseVersion || in.Name != spec.Name || in.Region != spec.Region || in.State != "RUNNABLE" || in.MasterInstance != "" || len(in.IPAddresses) != 0 {
+	if err := in.checkPITRBase(spec); err != nil {
+		return "", err
+	}
+	if in.State != "RUNNABLE" {
 		return "", ErrSQLPITRUnavailable
 	}
 	settings := in.Settings
-	version, err := strconv.ParseInt(settings.Version, 10, 64)
-	if err != nil || version <= 0 || settings.Edition != "ENTERPRISE" || settings.Availability != "ZONAL" || settings.Tier != spec.Tier || settings.ConnectorEnforcement != "REQUIRED" || !slices.Contains([]string{"", "DATA_API_ACCESS_UNSPECIFIED", "DISALLOW_DATA_API"}, settings.DataAPIAccess) {
-		return "", ErrSQLPITRUnavailable
-	}
 	disk, backup := spec.Storage, settings.Backup
-	if disk == nil || disk.SizeGB < 10 || disk.Type != "PD_SSD" || disk.RecoveryDays < 1 || disk.RecoveryDays > 7 || settings.DataDiskSizeGB != int64(disk.SizeGB) || settings.DataDiskType != disk.Type || settings.StorageAutoResize == nil || *settings.StorageAutoResize || backup == nil || !backup.Enabled || !backup.PITREnabled || backup.RecoveryDays != disk.RecoveryDays {
+	if disk.RecoveryDays < 1 || disk.RecoveryDays > 7 || backup == nil || !backup.Enabled || !backup.PITREnabled || backup.RecoveryDays != disk.RecoveryDays {
 		return "", ErrSQLPITRUnavailable
 	}
 	network := settings.IPConfiguration
-	if network == nil || network.IPv4Enabled == nil || *network.IPv4Enabled || len(network.AuthorizedNetworks) != 0 || network.PrivateNetwork != "" || network.PrivateGooglePath || network.PSC == nil || !network.PSC.Enabled || network.PSC.NetworkAttachment != "" || len(network.PSC.AutoConnections) != 0 || network.PSC.AutoPolicy {
+	if len(network.PSC.AutoConnections) != 0 {
 		return "", ErrSQLPITRUnavailable
 	}
 	projects := slices.Clone(network.PSC.AllowedProjects)
