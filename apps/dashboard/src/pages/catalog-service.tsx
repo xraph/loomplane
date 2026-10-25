@@ -95,7 +95,7 @@ export function CatalogService({
           { label: resource },
         ]}
       />
-      <Page>
+      <Page className="has-[[data-catalog-layout=compact]]:max-w-[1180px] has-[[data-catalog-layout=compact]]:gap-4 has-[[data-catalog-layout=compact]]:px-7 has-[[data-catalog-layout=compact]]:pt-[22px] has-[[data-catalog-layout=compact]]:pb-8 has-[[data-catalog-layout=compact]]:[&>a]:-mb-1.5">
         <Link
           to="/projects/$id"
           params={{ id: projectId }}
@@ -194,6 +194,11 @@ function InEnvironment({
       (a, b) => (a.panel.order ?? 0) - (b.panel.order ?? 0) || a.index - b.index
     )
     .map(({ panel }) => panel)
+  const preferredPanel = panels.find(
+    (panel) => panel.id === module?.defaultPanel
+  )
+  const defaultTab = preferredPanel ? `panel:${preferredPanel.id}` : "overview"
+  const compact = module?.serviceLayout === "compact"
   return (
     <>
       <Header
@@ -205,8 +210,13 @@ function InEnvironment({
         version={versionOf(binding, config)}
         props={props}
       />
-      <Tabs defaultValue="overview">
-        <TabsList variant="line" className="mb-3 max-w-full overflow-x-auto">
+      <Tabs defaultValue={defaultTab} className={compact ? "gap-4" : undefined}>
+        <TabsList
+          variant="line"
+          density={compact ? "compact" : "default"}
+          aria-label={compact ? `${module.title} sections` : undefined}
+          className={compact ? "max-w-full" : "mb-3 max-w-full overflow-x-auto"}
+        >
           <TabsTrigger value="overview">Overview</TabsTrigger>
           {panels.map((panel) => (
             <PanelTab key={`${kind}:${panel.id}`} panel={panel} props={props} />
@@ -286,9 +296,10 @@ function Header({
   // A module's subtitle says which instance this is, so it stands in for
   // the catalog's description of the kind.
   const subtitle = module?.subtitle?.(props, environment)
-  const inline = module?.headerVariant === "inline"
+  const inline = module?.serviceLayout === "compact"
   return (
     <header
+      data-catalog-layout={module?.serviceLayout}
       className={
         inline
           ? "flex flex-wrap items-center gap-x-3.5 gap-y-3"

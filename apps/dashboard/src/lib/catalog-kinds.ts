@@ -101,8 +101,10 @@ export type CatalogKindModule = {
   panels: CatalogPanel[]
   /** The normal deployed state. Drift warnings always take precedence. */
   deployedLabel?: string
-  /** Inline headers wrap each item and show the environment in the subtitle. */
-  headerVariant?: "inline"
+  /** Compact page with an inline header and environment in its subtitle. */
+  serviceLayout?: "compact"
+  /** Panel ID to open first, falling back to Overview when unavailable. */
+  defaultPanel?: string
   /** Buttons at the right of the service page's header. */
   actions?: ComponentType<CatalogPanelProps>
   /** Drawn in place of a product logo when the kind has none. */

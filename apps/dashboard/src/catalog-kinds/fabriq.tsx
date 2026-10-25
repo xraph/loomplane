@@ -47,7 +47,8 @@ export default defineCatalogKind({
   kind: "fabriq",
   title: "Fabriq",
   deployedLabel: "Running",
-  headerVariant: "inline",
+  serviceLayout: "compact",
+  defaultPanel: "keys",
   group: "data",
   icon: ({ className }) => (
     <LayersIcon
