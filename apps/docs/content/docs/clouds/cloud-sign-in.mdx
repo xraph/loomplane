@@ -55,10 +55,12 @@ Config wins. Once it's set, the settings page shows that the app comes from conf
 
 DigitalOcean access tokens last 30 days. Loomplane refreshes the grant when it uses it, and again every 6 hours in the background, so a connection in regular use never gets near the end.
 
-A refresh can still be refused. Someone removed the OAuth application, or revoked Loomplane's access from the DigitalOcean account. When that happens the connection shows **Sign-in needed** and nothing deploys through it. Choose **Sign in again** and approve once more. The connection keeps its ID, so your projects and environments carry on without changes.
+A refresh can still be refused. Someone removed the OAuth application, or revoked Loomplane's access from the DigitalOcean account. Revoking kills the access token straight away, but Loomplane only finds out the next time it refreshes the grant or you choose **Check again** on the connection, so a deployment that runs in between fails with DigitalOcean's own error.
 
-The person who made the connection and the organization's owners and admins hear about it, in the inbox, by email and as a `connection.sign_in_needed` webhook. You get one notice per lapse, not one per refresh attempt.
+Once Loomplane knows, the connection shows **Sign-in needed** and nothing deploys through it. Choose **Sign in again**, either on the connection's page or on its row in the **Clouds** list under **Integrations**, and approve once more. The button shows on any signed-in connection that isn't ready. The connection keeps its ID, so your projects and environments carry on without changes.
+
+The person who made the connection and the organization's owners and admins hear about it in the inbox, and by email if mail is set up. Every webhook endpoint gets a `connection.sign_in_needed` event too, including endpoints you made before sign-in existed. You get one notice per lapse, not one per refresh attempt.
 
 ## Switch between a token and a sign-in
 
-A token connection can move to a sign-in. Open the connection, choose **Replace credential**, pick **Sign in with DigitalOcean** and approve on DigitalOcean. The reverse works too: replace a signed-in connection with a token. Either way the ID stays, so nothing that refers to the connection breaks.
+A token connection can move to a sign-in. Open the connection and choose **Replace credential**. The dialog offers **Sign in with DigitalOcean** first, and once you approve on DigitalOcean you land back on the connection, signed in. The reverse works too: pick **Use a token instead** in the same dialog and paste one. Either way the ID stays and the team has to be the one the connection already uses, so nothing that refers to the connection breaks.
