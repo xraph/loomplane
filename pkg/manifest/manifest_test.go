@@ -287,6 +287,9 @@ func TestSchema_matchesTypes(t *testing.T) {
 		{"link", props(defs["link"]), Link{}},
 		{"link settings", props(defs["link"].(map[string]any)["properties"].(map[string]any)["environments"].(map[string]any)["additionalProperties"]), LinkSettings{}},
 		{"route", props(defs["route"]), Route{}},
+		{"environment", props(defs["environment"]), Environment{}},
+		{"release", props(defs["release"]), Release{}},
+		{"thresholds", props(defs["thresholds"]), Thresholds{}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

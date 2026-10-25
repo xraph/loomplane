@@ -79,6 +79,8 @@ For larger setups, give your targets names or tags in an organization Cloud and 
 
 Services, resources and gateways accept an `environments` map that overrides `provider`, `region` or `enabled` for one environment. A service also takes the other settings (scale, size, port and so on) there. It can't override `source`, `kind`, `build`, `needs` or `need_options`.
 
+An `environments.<name>.release` block sets how that environment's releases go live: all at once, blue/green or as a canary with its steps, hold and health thresholds. See [Canary releases](/docs/concepts/canary-releases) and the [loomplane.yaml reference](/docs/reference/loomplane-yaml#environments).
+
 ## Version 2
 
 Existing workflows use `version: 1`, and generated manifests do too. Version 2 adds an optional `federation` section that records federation proposals. Its plans stay blocked until the destination agents, network drivers and policy enforcement pass qualification.

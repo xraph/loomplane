@@ -257,6 +257,36 @@ A link needs more than a connection's check asks for. The Google Cloud key needs
 
 Removing a link from the manifest takes it down on both clouds, Google's side first. A link with a tunnel down shows as drift, and the next plan brings back what's missing.
 
+## environments
+
+`environments.<name>.release` says how that environment's releases go live. An environment without a release block deploys the way it always has. The block is for version 1 manifests: a version 2 manifest that carries one is refused until federation and releases work together.
+
+| Field | Type | Meaning |
+|---|---|---|
+| `strategy` | `direct`, `blue_green` or `canary` | Required. `canary` moves traffic to the new version in steps |
+| `steps` | list of 1 to 10 integers | Canary only. Traffic percentages, strictly increasing, each 1 to 100, ending at 100. Default `[5, 25, 50, 100]` |
+| `hold` | duration | Canary only. How long to watch each step, in whole minutes from `1m` to `24h`, such as `10m` or `1h30m`. Default `10m` |
+| `thresholds.error_rate` | percentage | Highest share of failed requests a step may show. Above 0% and at most 100%. Default `1%` |
+| `thresholds.error_rate_delta` | percentage | How far above the current version's failure share a step may be. Above 0% and at most 100%. Default `0.5%` |
+| `thresholds.p95_latency_ratio` | number | How many times the current version's p95 latency a step may reach, from 1 to 10. Default `1.3` |
+| `min_requests` | integer | The fewest requests a step needs before its health counts, 1 to 1,000,000. Default `200` |
+
+Percentages are written with a percent sign, such as `1%` or `0.5%`. Thresholds and `min_requests` are allowed with every strategy, because the post-deploy watch reads the same block. `steps` and `hold` are refused with any strategy but `canary`. Environment names follow the same rule as other names.
+
+```yaml
+environments:
+  production:
+    release:
+      strategy: canary
+      steps: [5, 25, 50, 100]
+      hold: 10m
+      thresholds:
+        error_rate: 1%
+        error_rate_delta: 0.5%
+        p95_latency_ratio: 1.3
+      min_requests: 200
+```
+
 ## ignore
 
 `resources` lists kinds analysis found that the application doesn't use, so plans stop asking about them.
