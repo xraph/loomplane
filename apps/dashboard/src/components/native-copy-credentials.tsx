@@ -63,7 +63,9 @@ function CredentialsDialog({
             checked again when you reveal it.{" "}
             {copy.target.provider === "rds"
               ? "Connect over the reviewed private route with RDS CA verification."
-              : "You need your own authorized Cloud SQL connector identity."}{" "}
+              : copy.restoreTime
+                ? "Use your own authorized Cloud SQL connector identity with PSC selected (Cloud SQL Auth Proxy --psc) from the reviewed recovery network."
+                : "You need your own authorized Cloud SQL connector identity."}{" "}
             An open SQL session can outlive the login expiry.
           </DialogDescription>
         </DialogHeader>

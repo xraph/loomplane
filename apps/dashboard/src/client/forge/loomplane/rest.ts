@@ -1741,6 +1741,150 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly fabriq = {
+    /**
+     * A hosted Fabriq's stack: its release, entity types and migrations, and whether its console answers
+     */
+    status: async (projectId: string, environmentId: string, resource: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Status> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/fabriq/${encodeURIComponent(String(resource))}`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Status"],
+      };
+
+      return this.request<types.Status>(config);
+    },
+
+  };
+
+  public readonly fabriqKeys = {
+    /**
+     * The Fabriq key of each service that needs it or had one; never a key itself, only its prefix
+     */
+    list: async (projectId: string, environmentId: string, resource: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.FabriqKeyList> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/fabriq/${encodeURIComponent(String(resource))}/keys`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["FabriqKeyList"],
+      };
+
+      return this.request<types.FabriqKeyList>(config);
+    },
+
+    /**
+     * Revoke a service's Fabriq keys now; its next release gets a new one while it still needs Fabriq
+     */
+    revoke: async (projectId: string, environmentId: string, resource: string, service: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ConsumerKey> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/fabriq/${encodeURIComponent(String(resource))}/keys/${encodeURIComponent(String(service))}/revoke`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ConsumerKey"],
+      };
+
+      return this.request<types.ConsumerKey>(config);
+    },
+
+    /**
+     * Issue a service a new Fabriq key, which its next release takes and then revokes the old one
+     */
+    rotate: async (projectId: string, environmentId: string, resource: string, service: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ConsumerKey> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/fabriq/${encodeURIComponent(String(resource))}/keys/${encodeURIComponent(String(service))}/rotate`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ConsumerKey"],
+      };
+
+      return this.request<types.ConsumerKey>(config);
+    },
+
+  };
+
+  public readonly fabriqRebuilds = {
+    /**
+     * Rebuild a FalkorDB or Elasticsearch projection from Postgres; while one is queued or running, return it
+     */
+    create: async (projectId: string, environmentId: string, resource: string, body: types.RebuildInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Rebuild> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/fabriq/${encodeURIComponent(String(resource))}/rebuilds`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["RebuildInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Rebuild"],
+      };
+
+      return this.request<types.Rebuild>(config);
+    },
+
+    /**
+     * A hosted Fabriq's latest projection rebuilds, newest first
+     */
+    list: async (projectId: string, environmentId: string, resource: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RebuildList> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/fabriq/${encodeURIComponent(String(resource))}/rebuilds`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["RebuildList"],
+      };
+
+      return this.request<types.RebuildList>(config);
+    },
+
+  };
+
+  public readonly fabriqTenants = {
+    /**
+     * Create a tenant in a hosted Fabriq, or find it
+     */
+    create: async (projectId: string, environmentId: string, resource: string, body: types.TenantInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Tenant> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/fabriq/${encodeURIComponent(String(resource))}/tenants`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["TenantInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Tenant"],
+      };
+
+      return this.request<types.Tenant>(config);
+    },
+
+    /**
+     * A hosted Fabriq's tenants, by id
+     */
+    list: async (projectId: string, environmentId: string, resource: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.TenantList> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/fabriq/${encodeURIComponent(String(resource))}/tenants`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["TenantList"],
+      };
+
+      return this.request<types.TenantList>(config);
+    },
+
+  };
+
   public readonly github = {
     /**
      * Connect a GitHub App installation, from what GitHub's install redirect carried back

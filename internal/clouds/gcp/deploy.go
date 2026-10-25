@@ -230,10 +230,17 @@ type RunNetworkInterface struct {
 // RunVolume is a volume a revision mounts: here, the Cloud SQL
 // connector's socket directory.
 type RunVolume struct {
-	Name             string `json:"name"`
+	Name             string       `json:"name"`
+	EmptyDir         *RunEmptyDir `json:"emptyDir,omitempty"`
 	CloudSQLInstance *struct {
 		Instances []string `json:"instances"`
 	} `json:"cloudSqlInstance,omitempty"`
+}
+
+// RunEmptyDir bounds a shared in-memory volume.
+type RunEmptyDir struct {
+	Medium    string `json:"medium"`
+	SizeLimit string `json:"sizeLimit"`
 }
 
 // RunVolumeMount mounts a volume into a container.
@@ -250,11 +257,28 @@ type RunScaling struct {
 
 // RunContainer is a service's container.
 type RunContainer struct {
-	Image     string           `json:"image"`
-	Env       []RunEnv         `json:"env,omitempty"`
-	Ports     []RunPort        `json:"ports,omitempty"`
-	Resources *RunResources    `json:"resources,omitempty"`
-	Mounts    []RunVolumeMount `json:"volumeMounts,omitempty"`
+	Name         string           `json:"name,omitempty"`
+	Args         []string         `json:"args,omitempty"`
+	DependsOn    []string         `json:"dependsOn,omitempty"`
+	StartupProbe *RunProbe        `json:"startupProbe,omitempty"`
+	Image        string           `json:"image"`
+	Env          []RunEnv         `json:"env,omitempty"`
+	Ports        []RunPort        `json:"ports,omitempty"`
+	Resources    *RunResources    `json:"resources,omitempty"`
+	Mounts       []RunVolumeMount `json:"volumeMounts,omitempty"`
+}
+
+// RunProbe checks a container before its dependants start.
+type RunProbe struct {
+	HTTPGet          RunHTTPGet `json:"httpGet"`
+	TimeoutSeconds   int        `json:"timeoutSeconds"`
+	PeriodSeconds    int        `json:"periodSeconds"`
+	FailureThreshold int        `json:"failureThreshold"`
+}
+
+type RunHTTPGet struct {
+	Path string `json:"path"`
+	Port int    `json:"port"`
 }
 
 // RunEnv is one variable: a value, or a reference to a secret.
@@ -279,7 +303,8 @@ type RunPort struct {
 
 // RunResources limits a container.
 type RunResources struct {
-	Limits map[string]string `json:"limits,omitempty"`
+	Limits  map[string]string `json:"limits,omitempty"`
+	CPUIdle bool              `json:"cpuIdle,omitempty"`
 }
 
 // RunCondition is a service's readiness.

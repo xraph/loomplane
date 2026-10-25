@@ -37,6 +37,7 @@ export interface AccountSpend {
 
 export interface Action {
   adoptCloudPlacement?: boolean;
+  backupEveryHours?: number;
   changes?: Change[];
   cloudAdoption?: CloudAdoption;
   compensation?: CloudCompensation;
@@ -373,6 +374,23 @@ export interface CloudProjectGrantList {
   grants: (ProjectGrant | null)[];
 }
 
+export interface CloudSQLApplicationNetwork {
+  consumerProject: string;
+  network: string;
+  subnetwork: string;
+}
+
+export interface CloudSQLRecoveryNetwork {
+  consumerProject: string;
+  network: string;
+}
+
+export interface CloudSQLSourceEndpoint {
+  consumerProject: string;
+  forwardingRule: string;
+  network: string;
+}
+
 export interface CloudSyncEvent {
   attempt: number;
   cloudId: string;
@@ -522,6 +540,17 @@ export interface ConnectionsCreateInputBody {
   credential: string;
   name: string;
   settings?: Record<string, any>;
+}
+
+export interface ConsumerKey {
+  createdAt?: string;
+  lastUsedAt?: string;
+  lastUsedKnown: boolean;
+  prefix?: string;
+  revokedAt?: string;
+  service: string;
+  state: string;
+  tenant: string;
 }
 
 export interface ConsumerOption {
@@ -855,6 +884,10 @@ export interface Evidence {
   source?: string;
 }
 
+export interface FabriqKeyList {
+  keys: ConsumerKey[];
+}
+
 export interface Federation {
   accessGrants?: Record<string, any>;
   destinations?: Record<string, any>;
@@ -1012,6 +1045,7 @@ export interface LogPage {
 
 export interface ManagedDatabaseConfig {
   accountIdentity: string;
+  cloudSqlPsc?: CloudSQLSourceEndpoint;
   connectionId: string;
   profile: ManagedDatabaseProfile;
 }
@@ -1112,6 +1146,7 @@ export interface NativeCopyCredentials {
   database: string;
   expiresAt: string;
   password: string;
+  privateServiceConnect?: boolean;
   provider: string;
   username: string;
 }
@@ -1147,6 +1182,9 @@ export interface NativePITRBounds {
   earliest: string;
   latest: string;
   protocol: number;
+  settingsDigest?: string;
+  sourceBackup?: string;
+  sourceDeletedAt?: string;
 }
 
 export interface NativePITRWindow {
@@ -1215,6 +1253,7 @@ export interface NativeRestoreTarget {
   accountIdentity: string;
   cloudId?: string;
   cloudRevision?: number;
+  cloudSqlNetwork?: CloudSQLRecoveryNetwork;
   connectionId: string;
   grantRevision?: number;
   nativeAccount?: string;
@@ -1738,6 +1777,26 @@ export interface RealtimeSend {
   op: string;
   orgId: string;
   projectIds?: string[];
+}
+
+export interface Rebuild {
+  createdAt: string;
+  createdBy: string;
+  finishedAt?: string;
+  id: string;
+  output: string;
+  projection: string;
+  retryable: boolean;
+  status: string;
+}
+
+export interface RebuildInputBody {
+  projection: string;
+  requestId: string;
+}
+
+export interface RebuildList {
+  rebuilds: Rebuild[];
 }
 
 export interface Recipe {
@@ -2264,6 +2323,7 @@ export interface ServiceConfig {
   buildTarget?: BuildTarget;
   catalog?: Recipe;
   cloudPlacement?: CloudPlacement;
+  cloudSqlNetwork?: CloudSQLApplicationNetwork;
   commitSha?: string;
   component?: ComponentConfig;
   context?: string;
@@ -2415,6 +2475,17 @@ export interface StartAnalysisInputBody {
   sources?: string[];
 }
 
+export interface Status {
+  entityTypes: number;
+  keysReportUse: boolean;
+  kind: string;
+  migrations: number;
+  migrationsKnown: boolean;
+  reachable: boolean;
+  reason?: string;
+  version: string;
+}
+
 export interface Step {
   actionId: string;
   finishedAt?: string;
@@ -2501,6 +2572,20 @@ export interface Target {
   runtime: string;
   tags: string[];
   updatedAt: string;
+}
+
+export interface Tenant {
+  createdAt: string;
+  id: string;
+  label: string;
+}
+
+export interface TenantInputBody {
+  tenantId: string;
+}
+
+export interface TenantList {
+  tenants: Tenant[];
 }
 
 export interface TrafficReport {

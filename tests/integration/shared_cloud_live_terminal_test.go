@@ -41,7 +41,7 @@ type liveTerminalSnapshot struct {
 
 func liveTerminalStatus(value string) string {
 	switch value {
-	case "preview", "pending", "running", "waiting", "succeeded", "failed", "ready", "creating", "provisioning", "deleting", "deleted", "disconnected", "in-progress", "completed", "errored":
+	case "cleanup_pending", "routing_pending", "planning", "approved", "blocked", "stale", "canceled", "paused", "reverting", "reverted", "preview", "pending", "running", "waiting", "succeeded", "failed", "ready", "creating", "provisioning", "deleting", "deleted", "disconnected", "in-progress", "completed", "errored":
 		return value
 	default:
 		return "unknown"

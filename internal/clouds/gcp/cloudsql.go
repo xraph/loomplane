@@ -17,15 +17,25 @@ import (
 
 // SQLInstance is the part of a Cloud SQL instance Loomplane reads.
 type SQLInstance struct {
-	Kind            string `json:"kind"`
-	Name            string `json:"name"`
-	Project         string `json:"project"`
-	Region          string `json:"region"`
-	CreateTime      string `json:"createTime"`
-	ConnectionName  string `json:"connectionName"`
-	DatabaseVersion string `json:"databaseVersion"`
-	State           string `json:"state"`
-	Settings        struct {
+	Kind                 string            `json:"kind"`
+	Name                 string            `json:"name"`
+	Project              string            `json:"project"`
+	Region               string            `json:"region"`
+	CreateTime           string            `json:"createTime"`
+	ConnectionName       string            `json:"connectionName"`
+	DatabaseVersion      string            `json:"databaseVersion"`
+	State                string            `json:"state"`
+	MasterInstance       string            `json:"masterInstanceName"`
+	PSCServiceAttachment string            `json:"pscServiceAttachmentLink"`
+	DNSName              string            `json:"dnsName"`
+	IPAddresses          []json.RawMessage `json:"ipAddresses"`
+	Settings             struct {
+		Version              string              `json:"settingsVersion"`
+		DeletionProtection   bool                `json:"deletionProtectionEnabled"`
+		Edition              string              `json:"edition"`
+		Availability         string              `json:"availabilityType"`
+		DataAPIAccess        string              `json:"dataApiAccess"`
+		Backup               *SQLBackupSettings  `json:"backupConfiguration"`
 		UserLabels           map[string]string   `json:"userLabels"`
 		Tier                 string              `json:"tier"`
 		DataDiskSizeGB       int64               `json:"dataDiskSizeGb,string"`
@@ -41,9 +51,27 @@ type SQLIPConfiguration struct {
 	IPv4Enabled        *bool             `json:"ipv4Enabled"`
 	AuthorizedNetworks []json.RawMessage `json:"authorizedNetworks"`
 	PrivateNetwork     string            `json:"privateNetwork"`
-	PSC                *struct {
-		Enabled bool `json:"pscEnabled"`
-	} `json:"pscConfig"`
+	PrivateGooglePath  bool              `json:"enablePrivatePathForGoogleCloudServices"`
+	PSC                *SQLPSCSettings   `json:"pscConfig"`
+}
+
+// SQLPSCSettings includes inherited ingress automation and outbound access.
+// A PSC-enabled instance alone does not establish clone isolation.
+type SQLPSCSettings struct {
+	Enabled           bool              `json:"pscEnabled"`
+	AllowedProjects   []string          `json:"allowedConsumerProjects"`
+	NetworkAttachment string            `json:"networkAttachmentUri"`
+	AutoConnections   []json.RawMessage `json:"pscAutoConnections"`
+	AutoPolicy        bool              `json:"pscAutoConnectionPolicyEnabled"`
+	AutoDNS           bool              `json:"pscAutoDnsEnabled"`
+	WriteEndpointDNS  bool              `json:"pscWriteEndpointDnsEnabled"`
+}
+
+// SQLBackupSettings records the effective standard log recovery configuration.
+type SQLBackupSettings struct {
+	Enabled      bool  `json:"enabled"`
+	PITREnabled  bool  `json:"pointInTimeRecoveryEnabled"`
+	RecoveryDays int32 `json:"transactionLogRetentionDays"`
 }
 
 // SQLInstanceSpec is what Loomplane creates an instance from.
@@ -60,6 +88,8 @@ type SQLInstanceSpec struct {
 	Intent string
 	// Inspect validates and durably captures each observed incarnation.
 	Inspect func(*SQLInstance) error
+	// Set only by EnsureSQLPITRSource after checking the isolated source contract.
+	pscConsumerProject string
 }
 
 // SQLStorageSettings are the native disk and recovery settings requested at creation.
@@ -242,6 +272,10 @@ func (s *Session) EnsureSQLInstance(ctx context.Context, spec SQLInstanceSpec, t
 				"enabled": true, "pointInTimeRecoveryEnabled": true, "transactionLogRetentionDays": disk.RecoveryDays,
 				"backupRetentionSettings": map[string]any{"retentionUnit": "COUNT", "retainedBackups": disk.RetainedBackups},
 			}
+		}
+		if spec.pscConsumerProject != "" {
+			settings["connectorEnforcement"], settings["dataApiAccess"] = "REQUIRED", "DISALLOW_DATA_API"
+			settings["ipConfiguration"] = sqlPSCIPConfiguration(spec.pscConsumerProject)
 		}
 		err = s.mutateSQL(ctx, spec.Name, "Creating the database instance", track, func(op *sqlOperation) (bool, error) {
 			createErr := s.do(ctx, http.MethodPost, s.sqlPath("/instances"), map[string]any{

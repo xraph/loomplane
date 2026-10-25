@@ -473,3 +473,79 @@ it("does not silently replace the default cloud account with a server after prof
     screen.getByRole("button", { name: "Deploy PostgreSQL" })
   ).toBeDisabled()
 })
+
+it("keeps embedded recovery scoped and opens the shared schedule and restore workflows", async () => {
+  const writes: { path: string; body: unknown }[] = []
+  vi.stubGlobal(
+    "fetch",
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input)
+      if (init?.method === "POST" || init?.method === "PUT") {
+        writes.push({ path, body: JSON.parse(String(init.body)) })
+        return response({ id: "accepted" }, 202)
+      }
+      if (path.endsWith("/environments"))
+        return response({ environments: [{ id: "prod", name: "production" }] })
+      if (path.includes("/bindings"))
+        return response({
+          bindings: [
+            {
+              id: "binding",
+              name: "database",
+              subject: "resource",
+              provider: "server",
+              environment_id: "prod",
+              config: { kind: "redis", catalog: { id: "redis-8.2" } },
+            },
+          ],
+        })
+      if (path.endsWith("/service-backups"))
+        return response({
+          backups: [
+            {
+              id: "backup",
+              name: "database",
+              environment_id: "prod",
+              status: "succeeded",
+              bytes: 512,
+              created_at: "2026-10-20T12:00:00Z",
+            },
+          ],
+        })
+      return response({ policies: [], restores: [] })
+    }
+  )
+  render(
+    <ClientProvider client={forgeClient}>
+      <ServiceRecovery
+        project="p"
+        environment="prod"
+        resource="database"
+        embeddedTitle="Redis"
+      />
+    </ClientProvider>
+  )
+  expect(await screen.findByRole("heading", { name: "Redis" })).toBeVisible()
+  expect(
+    screen.queryByRole("combobox", { name: "Recovery environment" })
+  ).toBeNull()
+  expect(screen.queryByRole("button", { name: "Cloud snapshots" })).toBeNull()
+  expect(screen.getByRole("columnheader", { name: "Created" })).toBeVisible()
+  expect(screen.getByRole("columnheader", { name: "Size" })).toBeVisible()
+  expect(screen.getByText("Not tested")).toBeVisible()
+  await userEvent.click(screen.getByRole("button", { name: "Schedule" }))
+  expect(screen.getByRole("dialog", { name: "Backup schedule" })).toBeVisible()
+  await userEvent.click(screen.getByRole("button", { name: "Enable backups" }))
+  await vi.waitFor(() => expect(writes).toHaveLength(1))
+  expect(writes[0].body).toEqual({
+    environment: "production",
+    resource: "database",
+    every_hours: 24,
+    enabled: true,
+  })
+  await userEvent.keyboard("{Escape}")
+  await userEvent.click(screen.getByRole("button", { name: "Restore copy" }))
+  await vi.waitFor(() => expect(writes).toHaveLength(2))
+  expect(writes[1].path).toMatch(/service-backups\/backup\/restore$/)
+  expect(writes[1].body).toEqual({ request_id: expect.any(String) })
+})

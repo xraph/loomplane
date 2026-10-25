@@ -550,16 +550,19 @@ export function ServiceRecovery({
   project,
   environment,
   resource,
+  embeddedTitle,
 }: {
   project: string
   environment?: string
   resource?: string
+  embeddedTitle?: string
 }) {
   if (!environment)
     return (
       <Recovery
         key={`${project}:${resource ?? ""}`}
         project={project}
+        embeddedTitle={embeddedTitle}
         initialEnvironment="production"
         initialResource={resource ?? ""}
       />
@@ -567,6 +570,7 @@ export function ServiceRecovery({
   return (
     <PreselectedRecovery
       project={project}
+      embeddedTitle={embeddedTitle}
       environment={environment}
       resource={resource ?? ""}
     />
@@ -579,10 +583,12 @@ function PreselectedRecovery({
   project,
   environment,
   resource,
+  embeddedTitle,
 }: {
   project: string
   environment: string
   resource: string
+  embeddedTitle?: string
 }) {
   const environments = useQuery(useEnvironmentsList, { path: { id: project } })
   if (environments.status === "error")
@@ -608,6 +614,7 @@ function PreselectedRecovery({
     <Recovery
       key={`${environment}:${resource}`}
       project={project}
+      embeddedTitle={embeddedTitle}
       initialEnvironment={name}
       initialResource={resource}
     />
@@ -618,11 +625,14 @@ function Recovery({
   project,
   initialEnvironment,
   initialResource,
+  embeddedTitle,
 }: {
   project: string
   initialEnvironment: string
   initialResource: string
+  embeddedTitle?: string
 }) {
+  const CopiesContainer = embeddedTitle ? "details" : "div"
   const [showNative, setShowNative] = useState(false)
   const { can } = useOrganization()
   const environments = useQuery(useEnvironmentsList, { path: { id: project } })
@@ -754,7 +764,7 @@ function Recovery({
     return (
       <div className="grid min-w-0 gap-4">
         <div className="flex flex-wrap items-center gap-2">
-          {environmentSelect}
+          {!embeddedTitle && environmentSelect}
         </div>
         <NativeRecovery
           key={`${project}:${environmentID}:${resource}`}
@@ -765,68 +775,100 @@ function Recovery({
       </div>
     )
   return (
-    <div className="grid min-w-0 gap-4">
-      <div className="flex flex-wrap items-center gap-2">
-        {environmentSelect}
-        <Button
-          size="sm"
-          variant="outline"
-          aria-expanded={showNative}
-          onClick={() => setShowNative((current) => !current)}
-        >
-          Cloud snapshots
-        </Button>
-        {resources.length > 0 && (
-          <Select
-            value={selected}
-            disabled={busy}
-            onValueChange={(value) => setResource(value ?? "")}
-          >
-            <SelectTrigger aria-label="Database" className="w-44">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {resources.map((name) => (
-                <SelectItem key={name} value={name}>
-                  {name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
+    <div className={cn("grid min-w-0", embeddedTitle ? "gap-3" : "gap-4")}>
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        {embeddedTitle && (
+          <div>
+            <h2 className="text-[15px] leading-[normal] font-semibold">
+              {embeddedTitle}
+            </h2>
+            <p className="text-[12.5px] leading-[1.5] text-muted-foreground">
+              {selected || resource} ·{" "}
+              {policy?.enabled
+                ? policy.everyHours === 24
+                  ? "Daily backups"
+                  : `Backups every ${policy.everyHours} hours`
+                : policy
+                  ? "Backups paused"
+                  : "Manual backups"}
+            </p>
+          </div>
         )}
-        {selected && live && can("service_backup:manage") && (
-          <>
-            <Button size="sm" disabled={busy} onClick={backupNow}>
-              Back up now
+        <div className="flex flex-wrap items-center gap-2">
+          {!embeddedTitle && environmentSelect}
+          {!embeddedTitle && (
+            <Button
+              size="sm"
+              variant="outline"
+              aria-expanded={showNative}
+              onClick={() => setShowNative((current) => !current)}
+            >
+              Cloud snapshots
             </Button>
-            <BackupSchedule
-              key={`${environment}:${selected}:${policy?.everyHours}:${policy?.enabled}`}
-              policy={policy}
+          )}
+          {!embeddedTitle && resources.length > 0 && (
+            <Select
+              value={selected}
               disabled={busy}
-              save={(everyHours, enabled) =>
-                void action("policy", () =>
-                  policySet.mutateAsync({
-                    path: { id: project },
-                    body: {
-                      environment,
-                      resource: selected,
-                      everyHours,
-                      enabled,
-                    },
-                  })
-                )
-              }
+              onValueChange={(value) => setResource(value ?? "")}
+            >
+              <SelectTrigger aria-label="Database" className="w-44">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {resources.map((name) => (
+                  <SelectItem key={name} value={name}>
+                    {name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          )}
+          {selected && live && can("service_backup:manage") && (
+            <>
+              <Button
+                size="sm"
+                className={
+                  embeddedTitle
+                    ? "h-8 rounded-[9px] px-3 text-[12.5px]"
+                    : undefined
+                }
+                disabled={busy}
+                onClick={backupNow}
+              >
+                Back up now
+              </Button>
+              <BackupSchedule
+                compact={!!embeddedTitle}
+                key={`${environment}:${selected}:${policy?.everyHours}:${policy?.enabled}`}
+                policy={policy}
+                disabled={busy}
+                save={(everyHours, enabled) =>
+                  void action("policy", () =>
+                    policySet.mutateAsync({
+                      path: { id: project },
+                      body: {
+                        environment,
+                        resource: selected,
+                        everyHours,
+                        enabled,
+                      },
+                    })
+                  )
+                }
+              />
+            </>
+          )}
+          {selected && points.length > 0 && (
+            <BackupRetentionReview
+              compact={!!embeddedTitle}
+              key={`${environment}:${selected}`}
+              project={project}
+              points={points}
+              onChanged={refreshBackups}
             />
-          </>
-        )}
-        {selected && points.length > 0 && (
-          <BackupRetentionReview
-            key={`${environment}:${selected}`}
-            project={project}
-            points={points}
-            onChanged={refreshBackups}
-          />
-        )}
+          )}
+        </div>
       </div>
       {showNative && (
         <NativeRecovery
@@ -839,7 +881,7 @@ function Recovery({
       {managedRecovery ? (
         <CatalogEmpty
           title="Managed database recovery"
-          description="Open Cloud snapshots for captured RDS and Cloud SQL history and temporary Cloud SQL PostgreSQL 17 copies. PITR and RDS restore controls remain in your cloud account."
+          description="Open Cloud snapshots for captured RDS and Cloud SQL history, temporary PostgreSQL 17 copies and point-in-time recovery. Available actions depend on the source profile and recovery target."
         >
           <Button
             variant="outline"
@@ -862,15 +904,22 @@ function Recovery({
               copies remain available.
             </p>
           )}
-          <div className="text-sm text-muted-foreground">
-            {policy?.enabled
-              ? `Backups every ${policy.everyHours} hours. Next: ${formatDate(policy.nextAt)}.`
-              : "Backups run when requested."}{" "}
-            Manage deletion separately in Review retention.{" "}
-            {policy?.lastError && (
-              <span className="text-destructive">{policy.lastError}</span>
-            )}
-          </div>
+          {!embeddedTitle && (
+            <div className="text-sm text-muted-foreground">
+              {policy?.enabled
+                ? `Backups every ${policy.everyHours} hours. Next: ${formatDate(policy.nextAt)}.`
+                : "Backups run when requested."}{" "}
+              Manage deletion separately in Review retention.{" "}
+              {policy?.lastError && (
+                <span className="text-destructive">{policy.lastError}</span>
+              )}
+            </div>
+          )}
+          {embeddedTitle && policy?.lastError && (
+            <p role="alert" className="text-xs text-destructive">
+              {policy.lastError}
+            </p>
+          )}
           {!points.length ? (
             <CatalogEmpty
               title="No recovery points yet"
@@ -883,15 +932,42 @@ function Recovery({
               )}
             </CatalogEmpty>
           ) : (
-            <div className="min-w-0 overflow-x-auto rounded-lg border">
-              <Table>
+            <div
+              className={cn(
+                "min-w-0 overflow-hidden border",
+                embeddedTitle
+                  ? "rounded-[14px] border-border-panel"
+                  : "rounded-lg"
+              )}
+            >
+              <Table
+                scrollLabel={
+                  embeddedTitle ? `${embeddedTitle} backups` : undefined
+                }
+                className={
+                  embeddedTitle
+                    ? "min-w-[640px] text-[12.5px] [&_td]:px-4 [&_td]:py-2.5 [&_th]:h-auto [&_th]:bg-surface-muted [&_th]:px-4 [&_th]:py-[9px] [&_th]:text-[11.5px] [&_th]:font-medium [&_th]:tracking-[0.04em] [&_th]:text-caption [&_th]:uppercase [&_tr]:border-border-divider"
+                    : undefined
+                }
+              >
                 <TableHeader>
                   <TableRow>
                     <TableHead>Backup</TableHead>
-                    <TableHead className="hidden sm:table-cell">
-                      Status
-                    </TableHead>
-                    <TableHead className="hidden sm:table-cell">
+                    {embeddedTitle ? (
+                      <>
+                        <TableHead>Created</TableHead>
+                        <TableHead>Size</TableHead>
+                      </>
+                    ) : (
+                      <TableHead className="hidden sm:table-cell">
+                        Status
+                      </TableHead>
+                    )}
+                    <TableHead
+                      className={
+                        embeddedTitle ? undefined : "hidden sm:table-cell"
+                      }
+                    >
                       Restore evidence
                     </TableHead>
                     <TableHead className="text-right">Actions</TableHead>
@@ -900,6 +976,7 @@ function Recovery({
                 <TableBody>
                   {points.map((b) => (
                     <RecoveryPointRow
+                      compact={!!embeddedTitle}
                       key={b.id}
                       project={project}
                       backup={b}
@@ -926,11 +1003,21 @@ function Recovery({
           )}
         </>
       )}
-      {!managedRecovery && (
-        <div className="min-w-0">
-          <h3 className="mb-2 text-sm font-semibold">
-            Isolated recovery copies
-          </h3>
+      {!managedRecovery && (!embeddedTitle || copies.length > 0) && (
+        <CopiesContainer
+          className="min-w-0"
+          open={embeddedTitle && active ? true : undefined}
+        >
+          {embeddedTitle ? (
+            <summary className="cursor-pointer text-xs text-muted-foreground focus-visible:outline-2 focus-visible:outline-ring">
+              Isolated recovery copies ({copies.length})
+              {active ? " · In progress" : ""}
+            </summary>
+          ) : (
+            <h3 className="mb-2 text-sm font-semibold">
+              Isolated recovery copies
+            </h3>
+          )}
           <p className="mb-3 text-sm text-muted-foreground">
             Copies use a private network, never replace a live database, and are
             scheduled for removal after 24 hours. Database checks do not test
@@ -1013,7 +1100,7 @@ function Recovery({
               </Table>
             </div>
           )}
-        </div>
+        </CopiesContainer>
       )}
       <AlertDialog
         open={!!deleting}

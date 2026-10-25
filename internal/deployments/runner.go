@@ -207,30 +207,35 @@ type Runner struct {
 	capacity CapacityResolver
 	routes   ReleaseRoutes
 
-	cloudSyncAuth CloudSyncAuthorizer
-	cloudProfiles cloudprofiles.Resolver
-	store         Store
-	plans         Plans
-	credentials   Credentials
-	variables     Variables
-	sources       Sources
-	providers     *provider.Registry
-	executors     map[string]Executor
-	catalogHooks  map[string]CatalogHooks
-	observers     []ReleaseObserver
-	resources     ResourceSecrets
-	telemetry     *telemetry.Recorder
-	logs          LogSink
-	http          *http.Client
-	now           func() time.Time
+	cloudSyncAuth  CloudSyncAuthorizer
+	cloudProfiles  cloudprofiles.Resolver
+	store          Store
+	plans          Plans
+	credentials    Credentials
+	variables      Variables
+	sources        Sources
+	providers      *provider.Registry
+	executors      map[string]Executor
+	catalogHooks   map[string]CatalogHooks
+	observers      []ReleaseObserver
+	authz          Authorizer
+	backupPolicies BackupPolicyInstaller
+	resources      ResourceSecrets
+	telemetry      *telemetry.Recorder
+	logs           LogSink
+	http           *http.Client
+	now            func() time.Time
 	// verifyWait is how long a deployed service has to answer.
 	verifyWait time.Duration
 }
 
 // RunnerDeps are what a Runner needs.
 type RunnerDeps struct {
-	Capacity CapacityResolver
-	Routes   ReleaseRoutes
+	// Authz and BackupPolicies recheck and install reviewed backup defaults.
+	Authz          Authorizer
+	BackupPolicies BackupPolicyInstaller
+	Capacity       CapacityResolver
+	Routes         ReleaseRoutes
 
 	CloudSyncAuth CloudSyncAuthorizer
 	CloudProfiles cloudprofiles.Resolver
@@ -279,6 +284,7 @@ type ReleaseObserver interface {
 // NewRunner returns a Runner.
 func NewRunner(d RunnerDeps) *Runner {
 	return &Runner{
+		authz: d.Authz, backupPolicies: d.BackupPolicies,
 		capacity: d.Capacity, cloudSyncAuth: d.CloudSyncAuth, routes: d.Routes,
 		cloudProfiles: d.CloudProfiles, store: d.Store, plans: d.Plans, credentials: d.Credentials, variables: d.Variables,
 		sources: d.Sources, providers: d.Providers, executors: d.Executors, catalogHooks: d.CatalogHooks, observers: d.Observers, resources: d.Resources, telemetry: d.Telemetry, logs: d.Logs,
@@ -300,6 +306,9 @@ func (r *Runner) Start(ctx context.Context, orgID, planID string) (deploymentID 
 	}
 	if plan.Status != planning.StatusApproved || !plan.Executable {
 		return "", nil, nil
+	}
+	if checkErr := r.checkBackupPolicies(ctx, plan, plan.Actions); checkErr != nil {
+		return "", nil, checkErr
 	}
 	if available, e := r.ReleaseAvailable(ctx, orgID, planID); e != nil {
 		return "", nil, e
@@ -555,6 +564,12 @@ func (r *Runner) Run(ctx context.Context, orgID, deploymentID, actionID string, 
 	if action.Compensation != nil && action.Provider == "server" && action.Compensation.ServerAttempt && ctx.Value(compensationRunKey{}) == nil {
 		return r.runCloudCompensation(ctx, d, plan, action, step, heartbeat)
 	}
+	if checkErr := r.checkBackupPolicies(ctx, plan, []planning.Action{action}); checkErr != nil {
+		return checkErr
+	}
+	if action.BackupEveryHours != 0 && d.StartedBy != plan.DecidedBy {
+		return errors.New("default backup schedule approver changed")
+	}
 	poolLock, err := r.beginPoolExecution(ctx, plan, action)
 	if err != nil {
 		return err
@@ -577,8 +592,8 @@ func (r *Runner) Run(ctx context.Context, orgID, deploymentID, actionID string, 
 	if admission != nil {
 		defer func() { _ = admission.Rollback() }() //nolint:errcheck // releasing a read-only admission lock
 	}
-	if err := r.authorizeSync(ctx, plan); err != nil {
-		return err
+	if checkErr := r.authorizeSync(ctx, plan); checkErr != nil {
+		return checkErr
 	}
 	retainCheckpoint := poolAction(action) || plan.CloudSyncID != "" || r.retainsCheckpoint(action.Provider) || (step.Replaced != nil && r.retainsCheckpoint(step.Replaced.Provider))
 	// The first move has not populated Step.Replaced yet. Its original provider
@@ -614,7 +629,11 @@ func (r *Runner) Run(ctx context.Context, orgID, deploymentID, actionID string, 
 		step.Status, step.Message = status, message
 		_ = r.store.UpdateStep(context.WithoutCancel(ctx), orgID, d.ID, *step) //nolint:errcheck // progress is best effort; the step's end is recorded
 	}
-	if err := r.run(ctx, d, plan, action, step, resume, heartbeat, progress, poolLock); err != nil {
+	err = r.run(ctx, d, plan, action, step, resume, heartbeat, progress, poolLock)
+	if err == nil {
+		err = r.installBackupPolicy(ctx, d, action)
+	}
+	if err != nil {
 		if signal := capacityEffectSignal(err); signal != nil {
 			return signal
 		}

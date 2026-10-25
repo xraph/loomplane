@@ -169,7 +169,7 @@ func uploadTemporary(ctx context.Context, title string, run func(context.Context
 	return errors.Join(err, <-done)
 }
 func (s *postgresPod) database() nativepg.Database {
-	return nativepg.Database{Name: s.labels[nativepg.LabelDatabase], Recovery: s.labels[nativepg.LabelRecovery] != "", Run: s.run, Upload: s.upload}
+	return nativepg.Database{Name: s.labels[nativepg.LabelDatabase], Recovery: s.labels[nativepg.LabelRecovery] != "", Extensions: nativepg.ParseExtensions(s.labels[nativepg.LabelExtensions]), Run: s.run, Upload: s.upload}
 }
 func (r *Runtime) ConfigurePostgres(ctx context.Context, iid id.ID, labels map[string]string, password string) error {
 	if err := nativepg.ValidatePassword(password); err != nil {

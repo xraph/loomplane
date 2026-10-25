@@ -95,7 +95,7 @@ export function CatalogService({
           { label: resource },
         ]}
       />
-      <Page>
+      <Page className="has-[[data-catalog-layout=compact]]:max-w-[1180px] has-[[data-catalog-layout=compact]]:gap-4 has-[[data-catalog-layout=compact]]:px-7 has-[[data-catalog-layout=compact]]:pt-[22px] has-[[data-catalog-layout=compact]]:pb-8 has-[[data-catalog-layout=compact]]:leading-[normal] has-[[data-catalog-layout=compact]]:[&>a]:-mb-1.5">
         <Link
           to="/projects/$id"
           params={{ id: projectId }}
@@ -194,6 +194,11 @@ function InEnvironment({
       (a, b) => (a.panel.order ?? 0) - (b.panel.order ?? 0) || a.index - b.index
     )
     .map(({ panel }) => panel)
+  const preferredPanel = panels.find(
+    (panel) => panel.id === module?.defaultPanel
+  )
+  const defaultTab = preferredPanel ? `panel:${preferredPanel.id}` : "overview"
+  const compact = module?.serviceLayout === "compact"
   return (
     <>
       <Header
@@ -205,8 +210,13 @@ function InEnvironment({
         version={versionOf(binding, config)}
         props={props}
       />
-      <Tabs defaultValue="overview">
-        <TabsList variant="line" className="mb-3 max-w-full overflow-x-auto">
+      <Tabs defaultValue={defaultTab} className={compact ? "gap-4" : undefined}>
+        <TabsList
+          variant="line"
+          density={compact ? "compact" : "default"}
+          aria-label={compact ? `${module.title} sections` : undefined}
+          className={compact ? "max-w-full" : "mb-3 max-w-full overflow-x-auto"}
+        >
           <TabsTrigger value="overview">Overview</TabsTrigger>
           {panels.map((panel) => (
             <PanelTab key={`${kind}:${panel.id}`} panel={panel} props={props} />
@@ -285,26 +295,71 @@ function Header({
   const Actions = module?.actions
   // A module's subtitle says which instance this is, so it stands in for
   // the catalog's description of the kind.
-  const subtitle = module?.subtitle?.(props)
+  const subtitle = module?.subtitle?.(props, environment)
+  const inline = module?.serviceLayout === "compact"
   return (
-    <header className="flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4">
-      <div className="flex min-w-0 flex-1 items-start gap-4 sm:items-center">
+    <header
+      data-catalog-layout={module?.serviceLayout}
+      className={
+        inline
+          ? "flex flex-wrap items-center gap-x-3.5 gap-y-3"
+          : "flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4"
+      }
+    >
+      <div
+        className={
+          inline
+            ? "contents"
+            : "flex min-w-0 flex-1 items-start gap-4 sm:items-center"
+        }
+      >
         <ProductIcon
           product={module?.logo}
           fallback={kindIcon(module)}
           label={title}
           size="xl"
+          className={
+            inline ? "rounded-[12px] ring-border-panel ring-inset" : undefined
+          }
         />
-        <div className="grid min-w-0 flex-1 gap-1">
-          <h1 className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-[22px] leading-tight font-semibold tracking-[-0.025em] md:text-2xl">
+        <div
+          className={
+            inline
+              ? "grid min-w-0 flex-[1_1_300px] gap-[3px]"
+              : "grid min-w-0 flex-1 gap-1"
+          }
+        >
+          <h1
+            className={
+              inline
+                ? "flex flex-wrap items-baseline gap-x-2 gap-y-1 text-2xl leading-[1.2] font-semibold tracking-[-0.025em]"
+                : "flex flex-wrap items-baseline gap-x-2 gap-y-1 text-[22px] leading-tight font-semibold tracking-[-0.025em] md:text-2xl"
+            }
+          >
             <span className="min-w-0 break-all">{resource}</span>
-            <span className="text-sm font-normal text-muted-foreground">
+            <span
+              className={
+                inline
+                  ? "font-mono text-[13px] font-normal text-muted-foreground"
+                  : "text-sm font-normal text-muted-foreground"
+              }
+            >
               {title}
-              {version && <span className="ml-1.5 font-mono">{version}</span>}
+              {version && (
+                <span className={inline ? "ml-1" : "ml-1.5 font-mono"}>
+                  {version}
+                </span>
+              )}
             </span>
           </h1>
           {subtitle ? (
-            <p className="text-[13.5px] leading-relaxed text-pretty text-muted-foreground">
+            <p
+              className={
+                inline
+                  ? "text-[13px] text-pretty text-muted-foreground"
+                  : "text-[13.5px] leading-relaxed text-pretty text-muted-foreground"
+              }
+            >
               {subtitle}
             </p>
           ) : (
@@ -316,15 +371,34 @@ function Header({
           )}
         </div>
       </div>
-      <div className="flex flex-wrap items-center gap-2 sm:shrink-0">
-        <span className="inline-flex h-5 items-center rounded-full bg-muted px-2 text-xs font-medium text-muted-foreground capitalize">
-          {environment}
-        </span>
-        <StatusPill tone={state.drift ? "waiting" : "live"}>
-          {state.label}
+      <div
+        className={
+          inline ? "contents" : "flex flex-wrap items-center gap-2 sm:shrink-0"
+        }
+      >
+        {(!inline || !subtitle) && (
+          <span className="inline-flex h-5 items-center rounded-full bg-muted px-2 text-xs font-medium text-muted-foreground capitalize">
+            {environment}
+          </span>
+        )}
+        <StatusPill
+          tone={state.drift ? "waiting" : "live"}
+          className={
+            inline
+              ? "h-auto px-[9px] py-0.5 leading-[normal] [&>span]:bg-current"
+              : undefined
+          }
+        >
+          {state.drift ? state.label : (module?.deployedLabel ?? state.label)}
         </StatusPill>
         {Actions && (
-          <div className="flex flex-wrap items-center gap-2 sm:ml-2">
+          <div
+            className={
+              inline
+                ? "flex flex-wrap items-center gap-2"
+                : "flex flex-wrap items-center gap-2 sm:ml-2"
+            }
+          >
             <Actions {...props} />
           </div>
         )}

@@ -207,6 +207,9 @@ func (p *Provider) apply(ctx context.Context, instanceID id.ID, spec cpprovider.
 	if minScale > 0 || maxScale > 0 {
 		run.Template.Scaling = &gcp.RunScaling{Min: minScale, Max: maxScale}
 	}
+	if transportErr := applyPSCTransport(&run.Template, labels, s.Key().ProjectID, p.region); transportErr != nil {
+		return nil, transportErr
+	}
 	svc, err := s.ApplyService(ctx, p.region, name, run)
 	if err != nil {
 		return nil, err

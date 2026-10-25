@@ -43,3 +43,17 @@ func TestNativeCredentialsSavePrivatelyWithoutPrintingOrOverwriting(t *testing.T
 		t.Fatal("invalid or existing destination contacted credential API", calls)
 	}
 }
+
+func TestNativePSCCredentialsRetainRequiredTransport(t *testing.T) {
+	app, out := recoveryCLI(t, func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"copy_id":"copy","provider":"cloud-sql","private_service_connect":true,"connection_name":"source:region:copy","database":"orders","username":"reader","password":"kept-private-reader","expires_at":"2099-01-01T00:00:00Z","checked_at":"2026-10-25T00:00:00Z"}`)
+	})
+	file := filepath.Join(t.TempDir(), "psc.json")
+	if err := app.Run([]string{"backups", "native-copies", "credentials", "copy", "--out", file}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(file)
+	if err != nil || !strings.Contains(string(raw), `"private_service_connect": true`) || !strings.Contains(out.String(), "--psc") || strings.Contains(out.String(), "kept-private-reader") {
+		t.Fatal("PSC transport instructions missing or secret exposed", err)
+	}
+}

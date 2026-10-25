@@ -116,8 +116,8 @@ func (n *NativeDatabases) restoreRDSCopy(ctx context.Context, p security.Princip
 			if pointErr != nil {
 				return recovery.NativeRestoreResult{}, pointErr
 			}
-			if point == nil || point.ProviderID != r.Point.ProviderID || !point.CreatedAt.Equal(r.Point.CreatedAt) || point.Kind != r.Point.Kind || point.Engine != r.Point.Engine || point.Version != r.Point.Version || point.KMSKey != r.Point.KMSKey || !point.Encrypted || point.Status != "available" {
-				return recovery.NativeRestoreResult{}, recovery.ErrConflict
+			if selectionErr := checkNativeCopySelection(r, point); selectionErr != nil {
+				return recovery.NativeRestoreResult{}, selectionErr
 			}
 		}
 		if _, restoreErr := restoreRDSRecovery(ctx, client, s.rdsSpec(r, cfg), s.rdsMutation(ctx, c.NativeWorkerControl, false)); restoreErr != nil {

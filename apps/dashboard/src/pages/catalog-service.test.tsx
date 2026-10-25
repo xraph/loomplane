@@ -223,6 +223,10 @@ function serve({
       }
     }
     if (url.pathname.endsWith("/catalog/kinds")) body = { kinds: [] }
+    if (url.pathname.endsWith("/connections")) body = { connections: [] }
+    if (url.pathname.endsWith("/fabriq/fabriq")) body = { reachable: false }
+    if (url.pathname.endsWith("/tenants")) body = { tenants: [] }
+    if (url.pathname.endsWith("/keys")) body = { keys: [] }
     if (url.pathname.endsWith("/service-backups")) body = { backups: [] }
     if (url.pathname.endsWith("/service-restores")) body = { restores: [] }
     if (url.pathname.endsWith("/backup-policies")) body = { policies: [] }
@@ -233,7 +237,7 @@ function serve({
 }
 
 function open(resource: string, environmentId: string) {
-  render(
+  return render(
     <ClientProvider client={forgeClient}>
       <CatalogService
         projectId="p"
@@ -454,4 +458,166 @@ test("icon is used when there is no product logo", async () => {
   const logoed = await screen.findByRole("banner")
   expect(within(logoed).queryByTestId("logoed-icon")).not.toBeInTheDocument()
   expect(within(logoed).getByTitle("Logoed")).toBeInTheDocument()
+})
+
+defineCatalogKind({
+  kind: "running-state",
+  title: "Running state",
+  group: "data",
+  blurb: "A service with a running-state label.",
+  features: [],
+  panels: [],
+  deployedLabel: "Running",
+})
+
+test("a module's deployed label preserves drift warnings", async () => {
+  for (const [drift, label] of [
+    ["", "Running"],
+    ["missing", "Deleted outside Loomplane"],
+    ["changed", "Changed outside Loomplane"],
+  ]) {
+    serve({
+      bindings: {
+        production: [
+          {
+            ...binding("fabriq", { kind: "running-state", provider: "server" }),
+            drift,
+          },
+        ],
+      },
+    })
+    open("fabriq", "env_prod")
+    expect(
+      within(await screen.findByRole("banner")).getByText(label)
+    ).toBeInTheDocument()
+    cleanup()
+    forgeClient.clear()
+  }
+})
+
+test("Fabriq puts the environment in its instance subtitle once", async () => {
+  serve({
+    bindings: {
+      production: [binding("fabriq", { kind: "fabriq", provider: "server" })],
+    },
+  })
+  open("fabriq", "env_prod")
+  const header = await screen.findByRole("banner")
+  expect(
+    await within(header).findByText("Hosted Fabriq server · production")
+  ).toBeVisible()
+  expect(
+    within(header).queryByText("production", { exact: true })
+  ).not.toBeInTheDocument()
+  expect(within(header).getByText("Running")).toBeVisible()
+  expect(
+    within(header).getByRole("button", { name: "Open Fabriq admin" })
+  ).toBeVisible()
+})
+
+test("the default catalog header retains its environment badge", async () => {
+  serve({ bindings: { production: composed } })
+  open("app", "env_prod")
+  const header = await screen.findByRole("banner")
+  expect(within(header).getByText("production", { exact: true })).toBeVisible()
+})
+
+defineCatalogKind({
+  kind: "preferred-panel",
+  title: "Preferred panel",
+  group: "data",
+  blurb: "A kind with a preferred landing panel.",
+  features: [],
+  defaultPanel: "details",
+  panels: [
+    {
+      id: "details",
+      title: "Details",
+      component: () => <p>Instance details</p>,
+      when: (props) => props.config.provider === "server",
+    },
+  ],
+})
+
+test("Fabriq opens Tenants and keys and still lets you select Overview", async () => {
+  serve({
+    bindings: {
+      production: [binding("fabriq", { kind: "fabriq", provider: "server" })],
+    },
+  })
+  open("fabriq", "env_prod")
+  expect(
+    await screen.findByRole("tab", { name: "Tenants and keys", selected: true })
+  ).toBeVisible()
+  expect(
+    within(screen.getByRole("tabpanel")).getByRole("heading", { name: "Stack" })
+  ).toBeVisible()
+  await userEvent.click(screen.getByRole("tab", { name: "Overview" }))
+  expect(
+    screen.getByRole("tab", { name: "Overview", selected: true })
+  ).toBeVisible()
+})
+
+test.each([
+  ["server", "Details"],
+  ["kubernetes", "Overview"],
+])(
+  "the preferred panel resolves only when available on %s",
+  async (provider, selected) => {
+    serve({
+      bindings: {
+        production: [binding("service", { kind: "preferred-panel", provider })],
+      },
+    })
+    open("service", "env_prod")
+    expect(
+      await screen.findByRole("tab", { name: selected, selected: true })
+    ).toBeVisible()
+    expect(screen.getByRole("tabpanel")).toBeVisible()
+  }
+)
+
+test("changing resources selects the destination's default tab", async () => {
+  serve({
+    bindings: {
+      production: [
+        binding("service", { kind: "preferred-panel", provider: "server" }),
+        ...composed,
+      ],
+    },
+  })
+  const view = open("service", "env_prod")
+  expect(
+    await screen.findByRole("tab", { name: "Details", selected: true })
+  ).toBeVisible()
+  view.rerender(
+    <ClientProvider client={forgeClient}>
+      <CatalogService projectId="p" resource="app" environmentId="env_prod" />
+    </ClientProvider>
+  )
+  expect(
+    await screen.findByRole("tab", { name: "Overview", selected: true })
+  ).toBeVisible()
+  expect(screen.getByRole("tabpanel")).toBeVisible()
+})
+
+test("Fabriq library opens its worker panel and keeps the environment in the subtitle", async () => {
+  serve({
+    bindings: {
+      production: [
+        binding("fabriq", { kind: "fabriq-library", provider: "server" }),
+      ],
+    },
+  })
+  open("fabriq", "env_prod")
+  expect(
+    await screen.findByRole("tab", { name: "Library", selected: true })
+  ).toBeVisible()
+  const header = screen.getByRole("banner")
+  expect(
+    await within(header).findByText("Fabriq library · production")
+  ).toBeVisible()
+  expect(within(header).queryByText("production", { exact: true })).toBeNull()
+  expect(screen.queryByRole("tab", { name: "Tenants and keys" })).toBeNull()
+  expect(screen.queryByRole("button", { name: "Open Fabriq admin" })).toBeNull()
 })

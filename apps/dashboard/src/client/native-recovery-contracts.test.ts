@@ -49,3 +49,27 @@ it("keeps explicit native copy scope and cursor values on the wire", async () =>
   expect(query.get("resource")).toBe("orders&reports")
   expect(page.nextBefore).toBe("next")
 })
+
+it("decodes the reviewed Cloud SQL PSC network into the generated client", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () =>
+      Response.json({
+        id: "copy",
+        target: {
+          provider: "cloud-sql",
+          cloud_sql_network: {
+            consumer_project: "recovery-consumer",
+            network: "projects/recovery-consumer/global/networks/worker",
+          },
+        },
+      })
+    )
+  )
+  const client = new RESTClient({ baseURL: "https://loomplane.example" })
+  const copy = await client.nativeRecoveryCopies.get("copy")
+  expect(copy.target.cloudSqlNetwork).toEqual({
+    consumerProject: "recovery-consumer",
+    network: "projects/recovery-consumer/global/networks/worker",
+  })
+})

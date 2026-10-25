@@ -7,7 +7,12 @@ import {
   useManifestsEdit as editManifest,
   usePlansCreate as createPlan,
 } from "@/client/forge/loomplane/hooks"
-import type { KindInfo, Plan } from "@/client/forge/loomplane/types"
+import type {
+  Connection,
+  KindInfo,
+  Manifest,
+  Plan,
+} from "@/client/forge/loomplane/types"
 import type { DependencyChoice } from "@/lib/service-recovery"
 
 export type AddCatalogServiceInput = {
@@ -118,4 +123,43 @@ export function usesOf(
     else if (pick?.mode === "new" && !on) uses[dep.name] = { enabled: true }
   }
   return Object.keys(uses).length ? uses : undefined
+}
+
+/** A checked connection a service can run on, and the provider it means. */
+export type Target = {
+  connection: Connection
+  provider: AddCatalogServiceInput["provider"]
+}
+
+/** targetsFor lists the checked connections a kind can run on. */
+export function targetsFor(
+  info: Pick<KindInfo, "targets">,
+  connections: Connection[]
+): Target[] {
+  return connections.flatMap((c): Target[] => {
+    if (c.status !== "ready" || !info.targets.includes(c.cloud)) return []
+    if (!["amd64", "arm64"].includes(c.details.architecture)) return []
+    if (c.cloud === "server") return [{ connection: c, provider: "server" }]
+    if (c.cloud === "kubernetes" && c.details.namespace)
+      return [{ connection: c, provider: "kubernetes" }]
+    return []
+  })
+}
+
+/** takenNames is everything already named in a manifest. */
+export function takenNames(manifest: Manifest): Set<string> {
+  return new Set(
+    [
+      manifest.services,
+      manifest.resources,
+      manifest.gateways,
+      manifest.links,
+    ].flatMap((section) => Object.keys(section ?? {}))
+  )
+}
+
+/** freeName is base, or the first base-N, that isn't taken. */
+export function freeName(base: string, taken: Set<string>): string {
+  if (!taken.has(base)) return base
+  for (let n = 2; ; n++) if (!taken.has(`${base}-${n}`)) return `${base}-${n}`
 }

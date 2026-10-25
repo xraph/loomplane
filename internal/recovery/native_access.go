@@ -14,14 +14,15 @@ var ErrNativeAccessUnavailable = errors.New("native copy credentials could not b
 // NativeCopyCredentials is an explicit secret response, never an entity or a
 // durable recovery record. It excludes administrator and cloud account secrets.
 type NativeCopyCredentials struct {
-	CopyID         string    `json:"copy_id"`
-	Provider       string    `json:"provider"`
-	ConnectionName string    `json:"connection_name"`
-	Database       string    `json:"database"`
-	Username       string    `json:"username"`
-	Password       string    `json:"password"`
-	ExpiresAt      time.Time `json:"expires_at"`
-	CheckedAt      time.Time `json:"checked_at"`
+	CopyID                string    `json:"copy_id"`
+	Provider              string    `json:"provider"`
+	ConnectionName        string    `json:"connection_name"`
+	PrivateServiceConnect bool      `json:"private_service_connect,omitempty"`
+	Database              string    `json:"database"`
+	Username              string    `json:"username"`
+	Password              string    `json:"password"`
+	ExpiresAt             time.Time `json:"expires_at"`
+	CheckedAt             time.Time `json:"checked_at"`
 }
 
 type NativeAccessBackend interface {
@@ -72,6 +73,9 @@ func (s *NativeService) CopyCredentials(ctx context.Context, p security.Principa
 			return checkErr
 		}
 		if credentials == nil || credentials.CopyID != id || credentials.Provider != locked.Target.Provider || credentials.ConnectionName != locked.ExternalID || credentials.Database == "" || credentials.Username == "" || credentials.Password == "" || !credentials.ExpiresAt.Equal(locked.ExpiresAt) || credentials.CheckedAt.Before(started) || credentials.CheckedAt.After(time.Now()) {
+			return ErrNativeAccessUnavailable
+		}
+		if credentials.PrivateServiceConnect != (locked.Target.Provider == "cloud-sql" && locked.Point.Kind == "pitr") {
 			return ErrNativeAccessUnavailable
 		}
 		out = credentials

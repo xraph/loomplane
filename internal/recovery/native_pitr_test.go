@@ -2,6 +2,7 @@ package recovery
 
 import (
 	"context"
+	"strings"
 	"testing"
 	"time"
 
@@ -84,6 +85,7 @@ func TestNativePITRSelectionKeepsExplicitTimeAndSnapshotMode(t *testing.T) {
 				at = at.Add(time.Nanosecond)
 			case "google-fractional":
 				provider = "cloud-sql"
+				point.PITR.SettingsDigest = strings.Repeat("a", 64)
 				at = at.Add(time.Nanosecond)
 			case "unknown-protocol":
 				point.PITR.Protocol = 2

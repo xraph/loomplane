@@ -187,13 +187,15 @@ type File struct {
 // Dependency is a resource a composition connects to: one Loomplane
 // provisions, one already in the manifest, or an external endpoint.
 type Dependency struct {
-	Name     string       `json:"name"` // "postgres", "redis", "falkordb"
-	Title    string       `json:"title"`
-	Kinds    []string     `json:"kinds"`             // manifest kinds accepted for a connected resource; Kinds[0] is provisioned for "new"
-	Version  string       `json:"version,omitempty"` // version of Kinds[0] to provision; "" is that kind's default
-	Optional bool         `json:"optional,omitempty"`
-	Default  bool         `json:"default,omitempty"`  // optional only: on unless uses.<name>.enabled is false
-	External *Requirement `json:"external,omitempty"` // nil: external endpoints are refused
+	// BackupEveryHours installs a default on new managed dependencies, by target.
+	BackupEveryHours map[string]int `json:"backup_every_hours,omitempty"`
+	Name             string         `json:"name"` // "postgres", "redis", "falkordb"
+	Title            string         `json:"title"`
+	Kinds            []string       `json:"kinds"`             // manifest kinds accepted for a connected resource; Kinds[0] is provisioned for "new"
+	Version          string         `json:"version,omitempty"` // version of Kinds[0] to provision; "" is that kind's default
+	Optional         bool           `json:"optional,omitempty"`
+	Default          bool           `json:"default,omitempty"`  // optional only: on unless uses.<name>.enabled is false
+	External         *Requirement   `json:"external,omitempty"` // nil: external endpoints are refused
 }
 
 // Requirement is what an external endpoint must offer.
@@ -332,6 +334,7 @@ func (k Kind) clone() Kind {
 	for i := range k.Dependencies {
 		d := &k.Dependencies[i]
 		d.Kinds = slices.Clone(d.Kinds)
+		d.BackupEveryHours = maps.Clone(d.BackupEveryHours)
 		if d.External != nil {
 			ext := *d.External
 			ext.Extensions = slices.Clone(ext.Extensions)

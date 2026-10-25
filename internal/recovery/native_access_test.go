@@ -52,6 +52,7 @@ func (a *nativeAccessTestTarget) CheckNativeTarget(context.Context, *NativeResto
 }
 
 type nativeAccessTestBackend struct {
+	psc    bool
 	calls  int
 	change func()
 	err    error
@@ -68,10 +69,10 @@ func (b *nativeAccessTestBackend) NativeCredentials(ctx context.Context, _ secur
 	if b.err != nil {
 		return &NativeCopyCredentials{Password: "must-not-return"}, b.err
 	}
-	return &NativeCopyCredentials{CopyID: r.ID, Provider: "cloud-sql", ConnectionName: r.ExternalID, Database: "orders", Username: "lp_recovery_reader", Password: "private-reader", ExpiresAt: r.ExpiresAt, CheckedAt: time.Now().UTC()}, nil
+	return &NativeCopyCredentials{CopyID: r.ID, Provider: "cloud-sql", PrivateServiceConnect: b.psc, ConnectionName: r.ExternalID, Database: "orders", Username: "lp_recovery_reader", Password: "private-reader", ExpiresAt: r.ExpiresAt, CheckedAt: time.Now().UTC()}, nil
 }
 func TestNativeCredentialAccessRequiresCurrentAuthorityAndNeverReturnsPartialSecrets(t *testing.T) {
-	for _, scenario := range []string{"allowed", "read-only", "no-secret-authority", "foreign", "expired", "missing-proof", "cleanup", "target-change", "revoked-during-check", "read-revoked-during-check", "provider-failure"} {
+	for _, scenario := range []string{"allowed", "psc-allowed", "psc-missing-transport", "snapshot-wrong-transport", "read-only", "no-secret-authority", "foreign", "expired", "missing-proof", "cleanup", "target-change", "revoked-during-check", "read-revoked-during-check", "provider-failure"} {
 		t.Run(scenario, func(t *testing.T) {
 			now := time.Now().UTC()
 			verified := now.Add(-time.Second)
@@ -82,6 +83,13 @@ func TestNativeCredentialAccessRequiresCurrentAuthorityAndNeverReturnsPartialSec
 			backend := &nativeAccessTestBackend{}
 			p := security.Principal{OrgID: "org", UserID: "operator"}
 			switch scenario {
+			case "psc-allowed":
+				store.r.Point.Kind = "pitr"
+				backend.psc = true
+			case "psc-missing-transport":
+				store.r.Point.Kind = "pitr"
+			case "snapshot-wrong-transport":
+				backend.psc = true
 			case "read-only":
 				auth.denied = security.RestoreManage
 			case "no-secret-authority":
@@ -105,7 +113,7 @@ func TestNativeCredentialAccessRequiresCurrentAuthorityAndNeverReturnsPartialSec
 			}
 			s := NativeService{Copies: store, Authz: auth, Projects: nativeAccessProjects{}, Admission: target, AccessBackend: backend}
 			credentials, err := s.CopyCredentials(t.Context(), p, "copy")
-			if scenario == "allowed" {
+			if scenario == "allowed" || scenario == "psc-allowed" {
 				if err != nil || credentials == nil || credentials.Password != "private-reader" || backend.calls != 1 {
 					t.Fatal("authorized reader access failed", err)
 				}
@@ -114,7 +122,7 @@ func TestNativeCredentialAccessRequiresCurrentAuthorityAndNeverReturnsPartialSec
 			if err == nil || credentials != nil {
 				t.Fatal("unsafe access returned credentials", scenario, err)
 			}
-			if scenario != "revoked-during-check" && scenario != "read-revoked-during-check" && scenario != "provider-failure" && backend.calls != 0 {
+			if scenario != "psc-missing-transport" && scenario != "snapshot-wrong-transport" && scenario != "revoked-during-check" && scenario != "read-revoked-during-check" && scenario != "provider-failure" && backend.calls != 0 {
 				t.Fatal("denied access reached provider", scenario)
 			}
 			if scenario == "provider-failure" && err.Error() == backend.err.Error() {

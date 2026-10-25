@@ -178,3 +178,44 @@ it("keeps deletion details open when its backup becomes retired", async () => {
     screen.getByRole("dialog", { name: "Backup deletion" })
   ).toBeInTheDocument()
 })
+
+it.each([
+  ["succeeded", "Verified today"],
+  ["retired", "Previously verified today"],
+])(
+  "uses compact dates while retaining %s restore evidence",
+  (status, evidence) => {
+    render(
+      <ClientProvider client={forgeClient}>
+        <Table>
+          <TableBody>
+            <RecoveryPointRow
+              compact
+              project="project"
+              backup={
+                {
+                  id: "point",
+                  name: "database",
+                  status,
+                  bytes: 124000000,
+                  createdAt: new Date(Date.now() - 7200000).toISOString(),
+                  restoredAt: new Date().toISOString(),
+                } as Backup
+              }
+              busy={false}
+              onRestore={vi.fn()}
+              onRetry={vi.fn()}
+              onChanged={async () => undefined}
+            />
+          </TableBody>
+        </Table>
+      </ClientProvider>
+    )
+    expect(screen.getByText("2 hours ago")).toBeVisible()
+    expect(screen.getByText("124 MB")).toBeVisible()
+    expect(screen.getByText(evidence)).toBeVisible()
+    expect(
+      screen.queryByRole("button", { name: "Restore copy" }) !== null
+    ).toBe(status === "succeeded")
+  }
+)

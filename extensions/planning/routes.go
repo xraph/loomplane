@@ -301,7 +301,7 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 			}
 		}
 	}
-	return nil
+	return e.fabriqRoutes(r, guard)
 }
 
 func principal(c forge.Context) (security.Principal, error) {

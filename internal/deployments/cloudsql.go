@@ -11,6 +11,7 @@ import (
 	"github.com/xraph/loomplane/internal/clouds/gcp"
 	"github.com/xraph/loomplane/internal/clouds/progress"
 	"github.com/xraph/loomplane/internal/connections"
+	"github.com/xraph/loomplane/internal/manageddb"
 	"github.com/xraph/loomplane/internal/planning"
 )
 
@@ -33,6 +34,9 @@ var sqlVersions = map[string]string{
 // a socket Cloud Run mounts, so the instance needs no authorized networks.
 type CloudSQL struct {
 	Google *gcp.Client
+	// PSCConnector replaces transport only for trusted Go integrations. Source,
+	// endpoint and SQL checks always run; production uses Google's PSC dialer.
+	PSCConnector func(context.Context, *gcp.Session, string, string) (gcp.SQLConnector, error)
 }
 
 var _ Executor = (*CloudSQL)(nil)
@@ -133,8 +137,13 @@ func (c *CloudSQL) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 		spec.Storage = &gcp.SQLStorageSettings{SizeGB: request.StorageGB, Type: request.StorageType, RetainedBackups: request.BackupRetentionValue, RecoveryDays: request.PointInTimeRecoveryDays}
 	}
 	var in *gcp.SQLInstance
+	psc := cfg.Managed != nil && cfg.Managed.CloudSQLPSC != (manageddb.CloudSQLSourceEndpoint{})
 	if state.Stage == "instance" {
-		in, err = s.EnsureSQLInstance(ctx, spec, state.guarded(s, job.Binding == nil))
+		if psc {
+			in, err = s.EnsureSQLPITRSource(ctx, spec, cfg.Managed.CloudSQLPSC, state.guarded(s, job.Binding == nil))
+		} else {
+			in, err = s.EnsureSQLInstance(ctx, spec, state.guarded(s, job.Binding == nil))
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -152,6 +161,13 @@ func (c *CloudSQL) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 	}
 	if in.DatabaseVersion != version || in.State != "RUNNABLE" {
 		return nil, errors.New("cloud sql instance no longer matches the saved deployment")
+	}
+	var endpoint *gcp.SQLSourceEndpoint
+	if psc {
+		endpoint, err = s.ReadSQLPITRSourceEndpoint(ctx, spec, state.ResourceID, cfg.Managed.CloudSQLPSC, state.guarded(s, job.Binding == nil).Check)
+		if err != nil {
+			return nil, err
+		}
 	}
 	db := databaseName(job.Action.Name)
 	if state.Stage == "database" {
@@ -172,10 +188,18 @@ func (c *CloudSQL) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 	}
 	if state.Stage == "user" {
 		if err = s.SetUser(ctx, instance, sqlUser, password, state.guarded(s, job.Binding == nil)); err != nil {
+			if psc {
+				return nil, cloudSQLPSCCredentialError{err}
+			}
 			return nil, fmt.Errorf("set the database user: %w", err)
 		}
 		if saveErr := state.advance("ready"); saveErr != nil {
 			return nil, saveErr
+		}
+	}
+	if psc {
+		if err := c.verifyPSCSource(ctx, s, job, state, spec, endpoint, db, password); err != nil {
+			return nil, err
 		}
 	}
 	if err := job.Keep(ctx, ResourceURL, []byte(databaseURL(cfg.Kind, password, db, in.ConnectionName))); err != nil {
@@ -302,6 +326,12 @@ func (c *CloudSQL) Observe(ctx context.Context, conn *connections.Connection, cr
 	}
 	if b.PhysicalID != "" && pin != b.PhysicalID {
 		return nil, errors.New("cloud sql incarnation changed")
+	}
+	if cfg.Managed != nil && cfg.Managed.CloudSQLPSC != (manageddb.CloudSQLSourceEndpoint{}) {
+		spec := cloudSQLPITRSourceSpec(cfg, instance)
+		if _, err := s.ReadSQLPITRSourceEndpoint(ctx, spec, b.PhysicalID, cfg.Managed.CloudSQLPSC, func(ctx context.Context) error { return ctx.Err() }); err != nil {
+			return nil, err
+		}
 	}
 	return &Observation{Exists: true, Revision: in.DatabaseVersion}, nil
 }

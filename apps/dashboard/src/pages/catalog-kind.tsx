@@ -24,7 +24,6 @@ import {
   useProjectsList,
 } from "@/client/forge/loomplane/hooks"
 import type {
-  Connection,
   Environment,
   KindInfo,
   Manifest,
@@ -63,7 +62,10 @@ import {
 } from "@/components/zero-state"
 import {
   addCatalogService,
+  freeName,
   initialDependencyPicks,
+  takenNames,
+  targetsFor,
   usesOf,
   type AddCatalogServiceInput,
   type DependencyPicks,
@@ -244,23 +246,6 @@ function WhatYouGet({
       </p>
     </aside>
   )
-}
-
-type Target = {
-  connection: Connection
-  provider: AddCatalogServiceInput["provider"]
-}
-
-// The checked connections a kind can run on, and the provider each means.
-function targetsFor(info: KindInfo, connections: Connection[]): Target[] {
-  return connections.flatMap((c): Target[] => {
-    if (c.status !== "ready" || !info.targets.includes(c.cloud)) return []
-    if (!["amd64", "arm64"].includes(c.details.architecture)) return []
-    if (c.cloud === "server") return [{ connection: c, provider: "server" }]
-    if (c.cloud === "kubernetes" && c.details.namespace)
-      return [{ connection: c, provider: "kubernetes" }]
-    return []
-  })
 }
 
 function AddForm({
@@ -495,23 +480,6 @@ function ProjectForm({
       manifest={current.data.manifest}
     />
   )
-}
-
-// Everything already named in a manifest; a new resource needs another name.
-function takenNames(manifest: Manifest): Set<string> {
-  return new Set(
-    [
-      manifest.services,
-      manifest.resources,
-      manifest.gateways,
-      manifest.links,
-    ].flatMap((section) => Object.keys(section ?? {}))
-  )
-}
-
-function freeName(base: string, taken: Set<string>): string {
-  if (!taken.has(base)) return base
-  for (let n = 2; ; n++) if (!taken.has(`${base}-${n}`)) return `${base}-${n}`
 }
 
 const nameRE = /^[a-z][a-z0-9-]{0,39}$/

@@ -315,7 +315,7 @@ func TestExpansionEnrollmentAndWakeRetry(t *testing.T) {
 		t.Fatal(err)
 	}
 	o.Enrolled = true
-	o.HostKey = "fixture-host-key"
+	o.HostKey = infraFixtureHostKey(t)
 	if err = f.store.SaveOperation(t.Context(), o); err != nil {
 		t.Fatal(err)
 	}

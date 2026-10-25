@@ -7,14 +7,15 @@ import (
 )
 
 type NativeCopyCredentials struct {
-	CopyID         string    `json:"copy_id"`
-	Provider       string    `json:"provider"`
-	ConnectionName string    `json:"connection_name"`
-	Database       string    `json:"database"`
-	Username       string    `json:"username"`
-	Password       string    `json:"password"`
-	ExpiresAt      time.Time `json:"expires_at"`
-	CheckedAt      time.Time `json:"checked_at"`
+	CopyID                string    `json:"copy_id"`
+	Provider              string    `json:"provider"`
+	ConnectionName        string    `json:"connection_name"`
+	PrivateServiceConnect bool      `json:"private_service_connect,omitempty"`
+	Database              string    `json:"database"`
+	Username              string    `json:"username"`
+	Password              string    `json:"password"`
+	ExpiresAt             time.Time `json:"expires_at"`
+	CheckedAt             time.Time `json:"checked_at"`
 }
 
 func (c *Client) NativeRecoveryCopyCredentials(ctx context.Context, id string) (*NativeCopyCredentials, error) {

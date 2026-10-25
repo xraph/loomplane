@@ -328,6 +328,7 @@ func (b *ImageBuilder) builderSession(ctx context.Context, job *Job) (*connectio
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	recorded := config.RecordedDetails(builder.Details)
 	dial := b.Dial
 	if dial == nil {
 		dial = server.Dial
@@ -337,7 +338,7 @@ func (b *ImageBuilder) builderSession(ctx context.Context, job *Job) (*connectio
 		return nil, nil, nil, err
 	}
 	details, missing, err := client.Check(ctx)
-	if err != nil || len(missing) > 0 || !reflect.DeepEqual(target.BuilderSettings, planning.ReviewedConnectionSettings(connections.Server, details)) {
+	if err != nil || len(missing) > 0 || !reflect.DeepEqual(planning.ReviewedConnectionSettings(connections.Server, recorded), planning.ReviewedConnectionSettings(connections.Server, details)) {
 		_ = client.Close()
 		return nil, nil, nil, errors.New("the builder identity or Docker capabilities changed; restore the recorded connection")
 	}

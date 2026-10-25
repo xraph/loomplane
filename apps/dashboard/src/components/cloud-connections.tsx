@@ -12,6 +12,11 @@ import { type FormEvent, useRef, useState } from "react"
 import { toast } from "sonner"
 
 import {
+  CloudSQLRecoveryFields,
+  cloudSQLRecoverySettings,
+} from "@/components/cloudsql-recovery-fields"
+
+import {
   RDSRecoveryFields,
   rdsRecoverySettings,
 } from "@/components/rds-recovery-fields"
@@ -552,6 +557,10 @@ function ConnectForm({
         .map(([k, v]) => [k, v.trim()])
         .filter(([, v]) => v !== "")
     )
+    const gcpSettings = {
+      ...cloudSQLRecoverySettings(extraSettings),
+      ...(billingExport.trim() ? { billing_export: billingExport.trim() } : {}),
+    }
     const settings = extra
       ? trimmed
       : cloud === "vercel" && team.trim()
@@ -564,8 +573,8 @@ function ConnectForm({
                 ? { certificate_arn: certificate.trim() }
                 : {}),
             }
-          : cloud === "gcp" && billingExport.trim()
-            ? { billing_export: billingExport.trim() }
+          : cloud === "gcp" && Object.keys(gcpSettings).length
+            ? gcpSettings
             : undefined
     // An AWS key is two values; Loomplane stores them together.
     const secret =
@@ -732,6 +741,10 @@ function ConnectForm({
                     project and BigQuery Data Viewer on the dataset.
                   </FieldDescription>
                 </Field>
+                <CloudSQLRecoveryFields
+                  value={extraSettings}
+                  onChange={setExtraSettings}
+                />
               </>
             ) : cloud === "aws" ? (
               <>

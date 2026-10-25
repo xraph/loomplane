@@ -14,19 +14,25 @@ type RDSRecoveryNetwork struct {
 	VerifierGroupID string `json:"verifier_group_id"`
 }
 
+type CloudSQLRecoveryNetwork struct {
+	ConsumerProject string `json:"consumer_project"`
+	Network         string `json:"network"`
+}
+
 type NativeRecoveryTarget struct {
-	NativeAccount   string             `json:"native_account,omitempty"`
-	RDSNetwork      RDSRecoveryNetwork `json:"rds_network,omitempty,omitzero"`
-	Provider        string             `json:"provider"`
-	ConnectionID    string             `json:"connection_id"`
-	AccountIdentity string             `json:"account_identity"`
-	NativeProject   string             `json:"native_project,omitempty"`
-	Region          string             `json:"region"`
-	CloudID         string             `json:"cloud_id,omitempty"`
-	TargetID        string             `json:"target_id,omitempty"`
-	CloudRevision   int64              `json:"cloud_revision,omitempty"`
-	TargetRevision  int64              `json:"target_revision,omitempty"`
-	GrantRevision   int64              `json:"grant_revision,omitempty"`
+	NativeAccount   string                  `json:"native_account,omitempty"`
+	RDSNetwork      RDSRecoveryNetwork      `json:"rds_network,omitempty,omitzero"`
+	CloudSQLNetwork CloudSQLRecoveryNetwork `json:"cloud_sql_network,omitempty,omitzero"`
+	Provider        string                  `json:"provider"`
+	ConnectionID    string                  `json:"connection_id"`
+	AccountIdentity string                  `json:"account_identity"`
+	NativeProject   string                  `json:"native_project,omitempty"`
+	Region          string                  `json:"region"`
+	CloudID         string                  `json:"cloud_id,omitempty"`
+	TargetID        string                  `json:"target_id,omitempty"`
+	CloudRevision   int64                   `json:"cloud_revision,omitempty"`
+	TargetRevision  int64                   `json:"target_revision,omitempty"`
+	GrantRevision   int64                   `json:"grant_revision,omitempty"`
 }
 
 type NativeRecoveryCapacity struct {
