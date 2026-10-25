@@ -60,10 +60,17 @@ func (c *Client) GPUs(ctx context.Context) (provider.GPUInventory, error) {
 			}, nil
 		}
 		nodes = append(nodes, list.Items...)
-		if list.Continue == "" {
+		opts.Continue = list.Continue
+		if opts.Continue == "" {
 			break
 		}
-		opts.Continue = list.Continue
+	}
+	if opts.Continue != "" {
+		return provider.GPUInventory{
+			Status:    provider.GPUStatusUnknown,
+			Message:   "This cluster has more nodes than Loomplane reads in one check, so it can't tell which have GPUs.",
+			CheckedAt: now,
+		}, nil
 	}
 	inv := gpuInventory(nodes)
 	inv.CheckedAt = now
@@ -83,7 +90,7 @@ type gpuGroupAcc struct {
 func gpuInventory(nodes []corev1.Node) provider.GPUInventory {
 	groups := map[gpuGroupKey]*gpuGroupAcc{}
 	var order []gpuGroupKey
-	gpuNodes := 0
+	gpuNodes, allocNodes := 0, 0
 	for i := range nodes {
 		node := &nodes[i]
 		alloc := int64(0)
@@ -99,6 +106,9 @@ func gpuInventory(nodes []corev1.Node) provider.GPUInventory {
 			continue
 		}
 		gpuNodes++
+		if alloc > 0 {
+			allocNodes++
+		}
 		key := gpuGroupKey{kind, selKey, selValue}
 		acc := groups[key]
 		if acc == nil {
@@ -154,6 +164,9 @@ func gpuInventory(nodes []corev1.Node) provider.GPUInventory {
 	switch {
 	case ready:
 		inv.Status = provider.GPUStatusReady
+	case allocNodes > 0:
+		inv.Status = provider.GPUStatusUnknown
+		inv.Message = "This cluster has GPUs, but no node label says which kind. Add the nvidia.com/gpu.product label (GPU feature discovery adds it) so Loomplane can place work on them."
 	case gpuNodes > 0:
 		inv.Status = provider.GPUStatusNoDevicePlugin
 		inv.Message = "These nodes have NVIDIA GPUs but nothing advertises nvidia.com/gpu. Install the NVIDIA device plugin or GPU Operator, then check the connection again."

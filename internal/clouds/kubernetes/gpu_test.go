@@ -79,8 +79,28 @@ func TestGPUInventoryStates(t *testing.T) {
 
 func TestGPUInventoryUnlabelledNodeCannotPlace(t *testing.T) {
 	inv := gpuInventory([]corev1.Node{gpuNode("gpu", nil, 2)})
-	if inv.Status == provider.GPUStatusReady || len(inv.Nodes) != 1 || inv.Nodes[0].Kind != "" || len(inv.Nodes[0].NodeSelector) != 0 {
+	if inv.Status != provider.GPUStatusUnknown || !strings.Contains(inv.Message, "no node label says which kind") || len(inv.Nodes) != 1 || inv.Nodes[0].Kind != "" || len(inv.Nodes[0].NodeSelector) != 0 {
 		t.Fatalf("unlabelled GPU node: %+v", inv)
+	}
+}
+
+func TestGPUInventoryNoAllocatableStaysNoDevicePlugin(t *testing.T) {
+	inv := gpuInventory([]corev1.Node{gpuNode("gpu", nil, 0, corev1.Taint{Key: "x"}), gpuNode("lbl", map[string]string{"nvidia.com/gpu.product": "Tesla-T4"}, 0)})
+	if inv.Status != provider.GPUStatusNoDevicePlugin || !strings.Contains(inv.Message, "nothing advertises") {
+		t.Fatalf("%+v", inv)
+	}
+}
+
+func TestGPUsNodeListPageCapIsUnknown(t *testing.T) {
+	c := gpuFake(true)
+	pages := 0
+	c.Kube.(*fake.Clientset).PrependReactor("list", "nodes", func(clienttesting.Action) (bool, runtime.Object, error) {
+		pages++
+		return true, &corev1.NodeList{ListMeta: metav1.ListMeta{Continue: "more"}}, nil
+	})
+	inv, err := c.GPUs(t.Context())
+	if err != nil || inv.Status != provider.GPUStatusUnknown || !strings.Contains(inv.Message, "more nodes") || pages != 10 {
+		t.Fatalf("%+v %v pages=%d", inv, err, pages)
 	}
 }
 
