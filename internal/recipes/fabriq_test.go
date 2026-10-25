@@ -302,7 +302,7 @@ func TestFabriqKindResolvesInOrder(t *testing.T) {
 func TestFabriqKindDependencies(t *testing.T) {
 	kind, _ := recipes.Default().Kind("fabriq")
 	want := []recipes.Dependency{
-		{Name: "postgres", Title: "Postgres 16", Kinds: []string{"timescaledb"}, Version: "16", External: &recipes.Requirement{
+		{BackupEveryHours: map[string]int{"server": 24}, Name: "postgres", Title: "Postgres 16", Kinds: []string{"timescaledb"}, Version: "16", External: &recipes.Requirement{
 			Engine: "postgres", MinVersion: "16", Extensions: []string{"timescaledb", "vector", "postgis"},
 			Preload: []string{"timescaledb"}, CreateRole: true, TLS: []string{"disable", "require", "verify-full"},
 		}},

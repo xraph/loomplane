@@ -386,6 +386,7 @@ func (e *Extension) Register(fapp forge.App) error {
 		return nil
 	}
 	runner := deployments.NewRunner(deployments.RunnerDeps{
+		Authz: authz, BackupPolicies: e.backups,
 		Logs: logStore, Routes: routeService, Capacity: e.plans,
 		CloudProfiles: e.cloudStore, CloudSyncAuth: e.plans,
 		Store: deployStore, Plans: planStore, Credentials: clouds, Variables: variables,

@@ -365,6 +365,11 @@ func validateKind(k Kind) []error {
 		if d.Default && !d.Optional {
 			f.add("dependency %q is on by default but not optional", d.Name)
 		}
+		for target, hours := range d.BackupEveryHours {
+			if !slices.Contains(k.Targets, target) || hours < 1 || hours > 168 {
+				f.add("dependency %q backup default for %q must use a supported target and an interval of 1 to 168 hours", d.Name, target)
+			}
+		}
 		if d.External != nil {
 			validateRequirement(f, d.Name, *d.External)
 		}

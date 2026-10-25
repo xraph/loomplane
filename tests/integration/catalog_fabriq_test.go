@@ -102,6 +102,7 @@ func runFabriqCatalog(t *testing.T, f catalogFixture, provider string) {
 				raw, _ := json.Marshal(deployment.Steps)
 				t.Fatalf("Fabriq deployment %s: %s", deployment.Status, raw)
 			}
+			assertFabriqDefaultBackups(t, f, c, project.ID, provider)
 			var bindings struct{ Bindings []planning.Binding }
 			c.must(http.StatusOK, http.MethodGet, base+"/bindings?environment=production", nil, &bindings)
 			var parent *planning.Binding

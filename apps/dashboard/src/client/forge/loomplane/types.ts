@@ -37,6 +37,7 @@ export interface AccountSpend {
 
 export interface Action {
   adoptCloudPlacement?: boolean;
+  backupEveryHours?: number;
   changes?: Change[];
   cloudAdoption?: CloudAdoption;
   compensation?: CloudCompensation;

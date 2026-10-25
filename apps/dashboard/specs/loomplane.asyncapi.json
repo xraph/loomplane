@@ -968,6 +968,9 @@
           "adopt_cloud_placement": {
             "type": "boolean"
           },
+          "backup_every_hours": {
+            "type": "integer"
+          },
           "changes": {
             "type": "array",
             "items": {

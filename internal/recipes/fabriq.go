@@ -107,7 +107,7 @@ func init() {
 			"rebuild-graph": fabriq, "rebuild-search": fabriq, "admin": admin,
 		}}},
 		Dependencies: []Dependency{
-			{Name: "postgres", Title: "Postgres 16", Kinds: []string{"timescaledb"}, Version: "16", External: &Requirement{
+			{Name: "postgres", Title: "Postgres 16", Kinds: []string{"timescaledb"}, Version: "16", BackupEveryHours: map[string]int{"server": 24}, External: &Requirement{
 				Engine: "postgres", MinVersion: "16", Extensions: []string{"timescaledb", "vector", "postgis"},
 				Preload: []string{"timescaledb"}, CreateRole: true, TLS: []string{"disable", "require", "verify-full"},
 			}},
