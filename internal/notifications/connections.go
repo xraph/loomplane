@@ -172,9 +172,8 @@ func lapseSourceKey(item *outboxItem) string {
 // memberAddress returns the address of a user who is still a member of the
 // organization. A connection belongs to the organization, so there is no
 // project to check.
-func (s *Service) memberAddress(ctx context.Context, p security.Principal) (string, bool, error) {
-	var email string
-	err := s.pg.QueryRow(ctx, `SELECT u.email FROM authsome_users u JOIN authsome_members m ON m.user_id=u.id WHERE m.org_id=$1 AND u.id=$2 AND u.app_id=$3 AND u.deleted_at IS NULL AND NOT u.banned`, p.OrgID, p.UserID, s.cfg.Identity.AppID).Scan(&email)
+func (s *Service) memberAddress(ctx context.Context, p security.Principal) (email string, member bool, err error) {
+	err = s.pg.QueryRow(ctx, `SELECT u.email FROM authsome_users u JOIN authsome_members m ON m.user_id=u.id WHERE m.org_id=$1 AND u.id=$2 AND u.app_id=$3 AND u.deleted_at IS NULL AND NOT u.banned`, p.OrgID, p.UserID, s.cfg.Identity.AppID).Scan(&email)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "", false, nil
 	}

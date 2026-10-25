@@ -408,7 +408,7 @@ func FromSource(src Getter) (Config, error) {
 	r.str(&c.Clouds.DigitalOceanEndpoint, "clouds.digitalocean_endpoint")
 	r.str(&c.Clouds.AzureEndpoint, "clouds.azure_endpoint")
 	r.str(&c.Clouds.AWSEndpoint, "clouds.aws_endpoint")
-	r.oauthApps(&c.Clouds.OAuth, "clouds.oauth")
+	c.Clouds.OAuth = r.oauthApps(c.Clouds.OAuth, "clouds.oauth")
 	r.plugins(&c.Providers.Plugins, "providers.plugins")
 	r.names(&c.Providers.Paused, "providers.paused")
 	r.boolean(&c.Federation.Enabled, "federation.enabled")
@@ -622,7 +622,7 @@ func (r *reader) prefixes(dst *[]netip.Prefix, key string) {
 
 // oauthApps reads <key>.<cloud>.client_id and client_secret for each cloud
 // that can sign in. A cloud with only one of the two is an error.
-func (r *reader) oauthApps(dst *map[string]OAuthApp, key string) {
+func (r *reader) oauthApps(dst map[string]OAuthApp, key string) map[string]OAuthApp {
 	for _, cloud := range oauthClouds {
 		var app OAuthApp
 		r.str(&app.ClientID, key+"."+cloud+".client_id")
@@ -637,11 +637,12 @@ func (r *reader) oauthApps(dst *map[string]OAuthApp, key string) {
 			r.errs = append(r.errs, fmt.Errorf("%s.%s.client_secret is required when client_id is set", key, cloud))
 			continue
 		}
-		if *dst == nil {
-			*dst = map[string]OAuthApp{}
+		if dst == nil {
+			dst = map[string]OAuthApp{}
 		}
-		(*dst)[cloud] = app
+		dst[cloud] = app
 	}
+	return dst
 }
 
 func (r *reader) str(dst *string, key string) {

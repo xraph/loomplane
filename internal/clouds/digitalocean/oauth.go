@@ -81,7 +81,9 @@ func (c *Client) token(ctx context.Context, form url.Values) (oauth.Grant, error
 			Error       string `json:"error"`
 			Description string `json:"error_description"`
 		}
-		_ = json.Unmarshal(data, &e) // a body that isn't JSON leaves e empty
+		if err := json.Unmarshal(data, &e); err != nil {
+			e.Error, e.Description = "", "" // a body that isn't JSON says nothing
+		}
 		if res.StatusCode == http.StatusBadRequest || res.StatusCode == http.StatusUnauthorized {
 			if e.Error == "invalid_grant" || e.Error == "invalid_client" {
 				return oauth.Grant{}, fmt.Errorf("%w: digitalocean answered %d: %s", oauth.ErrRefused, res.StatusCode, e.Error)

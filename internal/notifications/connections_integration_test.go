@@ -84,9 +84,9 @@ func TestConnectionLapseNotifiesItsMakerAndAdmins(t *testing.T) {
 		t.Fatalf("undelivered rows: %d %v", pending, err)
 	}
 	for _, user := range users {
-		list, err := svc.List(ctx, security.Principal{OrgID: "org-c", UserID: user})
-		if err != nil {
-			t.Fatal(err)
+		list, listErr := svc.List(ctx, security.Principal{OrgID: "org-c", UserID: user})
+		if listErr != nil {
+			t.Fatal(listErr)
 		}
 		if len(list.Items) != 1 {
 			t.Fatalf("%s inbox: %+v", user, list)
