@@ -54,6 +54,8 @@ type CanaryService struct {
 	Provider  string `json:"provider"`
 	BindingID string `json:"binding_id"`
 	// Baseline and Candidate are revisions, as releasehealth reads them.
+	// Candidate is empty while no candidate is up: before it starts, once
+	// a revert removed it, and after a retry reopens the canary.
 	Baseline  string `json:"baseline,omitempty"`
 	Candidate string `json:"candidate,omitempty"`
 	Image     string `json:"image,omitempty"`
