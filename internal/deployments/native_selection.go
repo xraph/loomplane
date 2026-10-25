@@ -61,3 +61,28 @@ func (n *NativeDatabases) CheckNativeSnapshot(ctx context.Context, b *planning.B
 	fresh := nativeSQLPoint(*point, key.ProjectID, cfg.Kind, selected.Version)
 	return &fresh, nil
 }
+
+// checkNativeCopySelection is the last worker-side check of a fresh selection.
+// Captured operations resume from their checkpoint without selecting again.
+func checkNativeCopySelection(r recovery.NativeRestore, current *recovery.NativePoint) error {
+	selected := r.Point
+	if current == nil || current.ProviderID != selected.ProviderID || current.Name != selected.Name || !current.CreatedAt.Equal(selected.CreatedAt) || current.Kind != selected.Kind || current.Engine != selected.Engine || current.Version != selected.Version || current.KMSKey != selected.KMSKey || !current.Encrypted {
+		return recovery.ErrConflict
+	}
+	status := "available"
+	if r.Target.Provider == "cloud-sql" && selected.Kind != "pitr" {
+		status = "SUCCESSFUL"
+	}
+	if current.Status != status {
+		return recovery.ErrConflict
+	}
+	if selected.Kind == "pitr" {
+		if selected.PITR == nil || current.PITR == nil || current.PITR.Protocol != selected.PITR.Protocol || current.PITR.SettingsDigest != selected.PITR.SettingsDigest {
+			return recovery.ErrConflict
+		}
+		if _, err := current.SelectTime(r.Target.Provider, selected.RestoreTime); err != nil {
+			return err
+		}
+	}
+	return nil
+}

@@ -24,7 +24,7 @@ afterEach(() => {
 })
 
 const source = { id: "source", name: "orders", provider: "rds" } as NativeSource
-function show(body: unknown, status = 200) {
+function show(body: unknown, status = 200, current = source) {
   vi.stubGlobal(
     "fetch",
     async () =>
@@ -35,7 +35,7 @@ function show(body: unknown, status = 200) {
   )
   render(
     <ClientProvider client={forgeClient}>
-      <NativePITR source={source} onAccepted={() => {}} />
+      <NativePITR source={current} onAccepted={() => {}} />
     </ClientProvider>
   )
 }
@@ -70,6 +70,44 @@ it("requires an explicit covered UTC second and passes it unchanged to review", 
   await user.click(review)
   expect(await screen.findByRole("dialog")).toHaveTextContent(
     "2026-10-21T12:00:03Z"
+  )
+})
+
+it("preserves Cloud SQL nanoseconds and compares both window edges exactly", async () => {
+  const user = userEvent.setup()
+  show(
+    {
+      source_id: "source",
+      provider: "cloud-sql",
+      available: true,
+      point_id: "window",
+      earliest: "2026-10-21T12:00:03.123456787Z",
+      latest: "2026-10-21T12:00:03.123456789Z",
+    },
+    200,
+    { ...source, provider: "cloud-sql" }
+  )
+  await user.click(screen.getByRole("button", { name: "Read PITR window" }))
+  const input = await screen.findByLabelText("Restore time in UTC")
+  const review = screen.getByRole("button", { name: "Review PITR copy" })
+  for (const value of [
+    "2026-10-21T12:00:03.123456786Z",
+    "2026-10-21T12:00:03.123456789Z",
+    "2026-10-21T12:00:03.1234567881Z",
+    "2026-02-30T12:00:03Z",
+  ]) {
+    await user.clear(input)
+    await user.type(input, value)
+    expect(review).toBeDisabled()
+  }
+  await user.clear(input)
+  await user.type(input, "2026-10-21T12:00:03.123456787Z")
+  expect(review).toBeEnabled()
+  await user.clear(input)
+  await user.type(input, "2026-10-21T12:00:03.123456788Z")
+  await user.click(review)
+  expect(await screen.findByRole("dialog")).toHaveTextContent(
+    "2026-10-21T12:00:03.123456788Z"
   )
 })
 

@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { useOrganization } from "@/lib/organization"
+import { coveredPITRTime } from "@/lib/native-pitr-time"
 
 export function NativePITR({
   source,
@@ -46,18 +47,11 @@ function PITRWindow({
   const [at, setAt] = useState("")
   const [reviewing, setReviewing] = useState(false)
   const window = query.data
-  const time = Date.parse(at)
   const valid =
     query.status === "success" &&
     !!window?.available &&
     !!window.pointId &&
-    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/.test(at) &&
-    Number.isFinite(time) &&
-    new Date(time).toISOString().replace(".000Z", "Z") === at &&
-    !!window.earliest &&
-    !!window.latest &&
-    time >= Date.parse(window.earliest) &&
-    time < Date.parse(window.latest)
+    coveredPITRTime(at, window.earliest, window.latest, source.provider)
   return (
     <div className="grid min-w-0 gap-2 rounded-md border p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
@@ -114,9 +108,11 @@ function PITRWindow({
                 </Button>
               </div>
               <p className="text-xs text-muted-foreground">
-                Choose a whole UTC second within this window. The provider
-                checks the window again before creation. No time is selected
-                automatically.
+                {source.provider === "cloud-sql"
+                  ? "Choose a UTC time within this window, with up to nine fractional digits."
+                  : "Choose a whole UTC second within this window."}{" "}
+                The provider checks the window again before creation. No time is
+                selected automatically.
               </p>
             </>
           )}

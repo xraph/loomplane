@@ -328,9 +328,7 @@ func (c *CloudSQL) Observe(ctx context.Context, conn *connections.Connection, cr
 		return nil, errors.New("cloud sql incarnation changed")
 	}
 	if cfg.Managed != nil && cfg.Managed.CloudSQLPSC != (manageddb.CloudSQLSourceEndpoint{}) {
-		profile := cfg.Managed.Profile
-		spec := gcp.SQLInstanceSpec{Name: instance, Region: region, DatabaseVersion: "POSTGRES_17", Tier: profile.ComputeClass,
-			Storage: &gcp.SQLStorageSettings{SizeGB: profile.StorageGB, Type: profile.StorageType, RetainedBackups: profile.BackupRetentionValue, RecoveryDays: profile.PointInTimeRecoveryDays}}
+		spec := cloudSQLPITRSourceSpec(cfg, instance)
 		if _, err := s.ReadSQLPITRSourceEndpoint(ctx, spec, b.PhysicalID, cfg.Managed.CloudSQLPSC, func(ctx context.Context) error { return ctx.Err() }); err != nil {
 			return nil, err
 		}

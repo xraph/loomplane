@@ -34,6 +34,12 @@ func TestCloudSQLPSCReviewedEndpointPublishedContract(t *testing.T) {
 		if err := json.Unmarshal(raw, &spec); err != nil {
 			t.Fatal(err)
 		}
+		if route == "/openapi.json" {
+			credentials := spec.Components.Schemas["NativeCopyCredentials"]
+			if credentials.Properties["private_service_connect"]["type"] != "boolean" || slices.Contains(credentials.Required, "private_service_connect") {
+				t.Fatal("missing optional PSC credential transport")
+			}
+		}
 		managed := spec.Components.Schemas["ManagedDatabaseConfig"]
 		if managed.Properties["cloud_sql_psc"]["$ref"] != "#/components/schemas/CloudSQLSourceEndpoint" || slices.Contains(managed.Required, "cloud_sql_psc") {
 			t.Fatal(route, "missing optional endpoint review")

@@ -98,6 +98,12 @@ func NativeSQLCopyConfig(source planning.Binding, point NativePoint, target Nati
 	if source.Provider == "rds" {
 		return nativeRDSCopyConfig(source, point, target)
 	}
+	if point.Kind == "pitr" {
+		return nativeCloudSQLPITRCopyConfig(source, point, target)
+	}
+	if point.PITR != nil || point.RestoreTime != nil {
+		return nil, ErrInvalid
+	}
 	var cfg planning.ResourceConfig
 	profile, err := manageddb.Postgres("cloud-sql", "17")
 	parts := strings.Split(point.ProviderID, "/")

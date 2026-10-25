@@ -969,6 +969,25 @@ it("explains the private RDS TLS route before revealing reader credentials", asy
   )
 })
 
+it("requires PSC from the recovery network for a Cloud SQL PITR reader", async () => {
+  const f = fixture()
+  f.seedCopy({
+    status: "succeeded",
+    verified_at: new Date().toISOString(),
+    restore_time: "2026-10-22T12:00:03.123456789Z",
+  })
+  show()
+  await userEvent.click(
+    await screen.findByRole("button", { name: "Reader credentials" })
+  )
+  const dialog = await screen.findByRole("dialog", {
+    name: "Recovery copy credentials",
+  })
+  expect(
+    within(dialog).getByText(/--psc.*recovery network/i)
+  ).toBeInTheDocument()
+})
+
 it("keeps the exact reviewed PITR time through uncertain admission and copy history", async () => {
   const f = fixture({ provider: "rds" })
   f.control.loseCreate = true

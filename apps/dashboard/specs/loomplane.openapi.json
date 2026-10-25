@@ -12014,6 +12014,9 @@
           "password": {
             "type": "string"
           },
+          "private_service_connect": {
+            "type": "boolean"
+          },
           "provider": {
             "type": "string"
           },

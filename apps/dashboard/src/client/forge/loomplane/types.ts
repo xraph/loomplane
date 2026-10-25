@@ -1128,6 +1128,7 @@ export interface NativeCopyCredentials {
   database: string;
   expiresAt: string;
   password: string;
+  privateServiceConnect?: boolean;
   provider: string;
   username: string;
 }
