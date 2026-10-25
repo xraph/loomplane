@@ -180,7 +180,7 @@ func TestSpendAddsUpEachCurrencyAndSaysWhyAnAccountIsMissing(t *testing.T) {
 	}
 	for id, want := range map[string]string{
 		"aws": Reporting, "az": Reporting, "eu": Reporting,
-		"gcp": Unavailable, "stale": Unavailable, "site": Unavailable, "broken": Failed,
+		"gcp": Unavailable, "stale": Unavailable, "site": Unsupported, "broken": Failed,
 	} {
 		if status[id].Status != want {
 			t.Errorf("%s is %q, want %q (%s)", id, status[id].Status, want, status[id].Reason)
@@ -379,7 +379,7 @@ func TestTrafficSaysWhichServicesCantReportAndWhy(t *testing.T) {
 	var failed, vercel, stale bool
 	for _, src := range rep.Sources {
 		failed = failed || src.Status == Failed && src.ConnectionID == "gcp" && len(src.Services) == 1 && src.Services[0] == "c"
-		vercel = vercel || src.Status == Unavailable && src.ConnectionID == "site" && src.Reason != "" && src.Cloud == connections.Vercel
+		vercel = vercel || src.Status == Unsupported && src.ConnectionID == "site" && src.Reason != "" && src.Cloud == connections.Vercel
 		stale = stale || src.Status == Unavailable && src.ConnectionID == "stale" && src.Reason != ""
 	}
 	if !failed || !vercel || !stale {

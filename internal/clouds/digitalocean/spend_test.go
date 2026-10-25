@@ -54,7 +54,12 @@ func TestMonthToDate_forbiddenIsUnavailable(t *testing.T) {
 		reply(w, http.StatusForbidden, map[string]any{"id": "Forbidden", "message": "You are not authorized to perform this operation"})
 	})
 	_, err := c.MonthToDate(context.Background(), "dop_v1_good", time.Now())
-	if reason, ok := metrics.IsUnavailable(err); !ok || reason != "Give the token billing read access so Loomplane can read what the team costs" {
+	// A token with every scope is still refused when the person who made
+	// it can't see billing, so the reason says what DigitalOcean said and
+	// names the role, not just the scope.
+	want := "DigitalOcean refused the balance: You are not authorized to perform this operation. " +
+		"A token has its creator's role, so make it as a team owner, admin or biller, with billing:read."
+	if reason, ok := metrics.IsUnavailable(err); !ok || reason != want {
 		t.Fatalf("%v", err)
 	}
 }

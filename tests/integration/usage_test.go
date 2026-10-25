@@ -72,7 +72,7 @@ func TestUsage_readsSpendAndTrafficFromConnectedClouds(t *testing.T) {
 	for _, s := range spend.Sources {
 		statuses[s.Name] = s.Status
 	}
-	if statuses["DigitalOcean"] != usage.Reporting || statuses["Render"] != usage.Unavailable {
+	if statuses["DigitalOcean"] != usage.Reporting || statuses["Render"] != usage.Unsupported {
 		t.Fatalf("sources %+v", spend.Sources)
 	}
 

@@ -15,13 +15,15 @@ None of it passes through Loomplane. Your traffic goes straight to your services
 | AWS | Cost Explorer, for the whole account | CloudWatch, from the load balancer in front of each ECS service | p95 | `cloudwatch:GetMetricData` and `ce:GetCostAndUsage` |
 | Azure | Cost Management, for the resource group Loomplane deploys into | Azure Monitor | Average | Monitoring Reader and Cost Management Reader on the resource group. Contributor already covers both |
 | Render | Not available | Render's metrics API | p95 | Nothing more: the API key does it |
-| DigitalOcean | The team's balance, month to date | Not available | Not available | A custom-scoped token needs `billing:read` |
+| DigitalOcean | The team's balance, month to date | Not available | Not available | `billing:read`, on a token made by a team owner, admin or biller |
 | Vercel | Not available | Not available | Not available | |
 | Your own servers and clusters | Not available | Not available | Not available | |
 
 Azure Container Apps only reports a mean response time, so Azure services show `avg` beside their latency, never `p95`. Loomplane doesn't combine percentiles across services either, because averaging two services' p95s doesn't give you a p95 for both. The latency card lists each service with its own number.
 
-Vercel and Render don't report what an account costs through their APIs. Services on your own servers and clusters report to whatever monitoring you run there, and Loomplane doesn't read it.
+A token has the role of the person who made it, so a DigitalOcean token with every scope is still refused the balance when its maker can't see billing. The card shows what DigitalOcean said.
+
+Vercel and Render don't report what an account costs through their APIs, so the card mentions them once and moves on. Services on your own servers and clusters report to whatever monitoring you run there, and Loomplane doesn't read it.
 
 ## Turn on Google Cloud spend
 

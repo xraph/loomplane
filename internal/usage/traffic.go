@@ -189,7 +189,7 @@ func (s *Service) measureBoth(ctx context.Context, c *connections.Connection, b 
 		if reason == "" {
 			reason = s.Title(b.Provider) + " doesn't report requests or latency through an API Loomplane reads."
 		}
-		m.err = &metrics.UnavailableError{Reason: reason}
+		m.err = &unsupportedError{reason: reason}
 		return m
 	}
 	if m.current, m.err = s.measure(ctx, meter, c, b, w); m.err != nil {

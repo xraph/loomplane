@@ -153,7 +153,7 @@ func (s *Service) readSpend(ctx context.Context, c *connections.Connection, now,
 		if reason == "" {
 			reason = s.Title(c.Cloud) + " doesn't report spend through an API Loomplane reads."
 		}
-		return nil, &metrics.UnavailableError{Reason: reason}
+		return nil, &unsupportedError{reason: reason}
 	}
 	key := fmt.Sprintf("spend|%s|%s|%d|%s", c.OrgID, c.ID, c.Generation, month.Format(time.DateOnly))
 	return cached(s.cache, key, spendTTL, func() (*metrics.Spend, error) {

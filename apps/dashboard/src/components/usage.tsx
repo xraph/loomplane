@@ -20,7 +20,7 @@ import {
   headline,
   latencyLabel,
   money,
-  notReporting,
+  usageNotes,
   timeTicks,
 } from "@/lib/usage"
 import { cn } from "@/lib/utils"
@@ -40,33 +40,88 @@ function dayLabel(t: string) {
   })
 }
 
-/** UsageNotes says which connections aren't reporting, and why. */
-export function UsageNotes({ sources }: { sources: UsageSource[] }) {
-  const notes = notReporting(sources)
-  if (notes.length === 0) return null
+/** joined writes a list the way a sentence does: a, b and c. */
+function joined(items: string[]): string {
+  if (items.length < 2) return items.join("")
+  return `${items.slice(0, -1).join(", ")} and ${items.at(-1)}`
+}
+
+/**
+ * UsageNotes says which connections aren't reporting and what to do,
+ * each reason once. Clouds with no API for it get one quiet line, since
+ * there's nothing to do. A card shows `limit` reasons and points at the
+ * rest: on Infrastructure for spend, or in place.
+ */
+export function UsageNotes({
+  sources,
+  what,
+  limit = Infinity,
+}: {
+  sources: UsageSource[]
+  /** What the card shows, for the line about clouds with no API. */
+  what: string
+  limit?: number
+}) {
+  const [open, setOpen] = useState(false)
+  const { fix, unsupported } = usageNotes(sources)
+  if (fix.length === 0 && unsupported.length === 0) return null
+  const shown = open ? fix : fix.slice(0, limit)
+  const hidden = fix.length - shown.length
   return (
     <ul
       aria-label="Not reporting"
       className="mt-auto grid gap-1.5 border-t pt-3 text-[12.5px] leading-snug"
     >
-      {notes.map((n) => (
-        <li key={n.key} className="text-muted-foreground">
-          {n.connectionId ? (
-            <Link
-              to="/clouds/accounts/$id"
-              params={{ id: n.connectionId }}
-              className="font-medium text-foreground hover:underline"
-            >
-              {n.name}
-            </Link>
-          ) : (
-            <span className="font-medium text-foreground">{n.name}</span>
-          )}
-          {n.services.length > 0 && <> ({n.services.join(", ")})</>}
+      {shown.map((n) => (
+        <li key={n.key} className="line-clamp-3 text-muted-foreground">
+          {n.accounts.map((a, i) => (
+            <span key={a.connectionId || i}>
+              {i > 0 && (i === n.accounts.length - 1 ? " and " : ", ")}
+              {a.connectionId ? (
+                <Link
+                  to="/clouds/accounts/$id"
+                  params={{ id: a.connectionId }}
+                  className="font-medium text-foreground hover:underline"
+                >
+                  {a.name}
+                </Link>
+              ) : (
+                <span className="font-medium text-foreground">{a.name}</span>
+              )}
+            </span>
+          ))}
+          {n.services.length > 0 && <> ({joined(n.services)})</>}
           {": "}
           <span className={cn(n.failed && "text-weld")}>{n.reason}</span>
         </li>
       ))}
+      {hidden > 0 && (
+        <li className="text-muted-foreground">
+          And{" "}
+          {what === "spend" ? (
+            <Link
+              to="/infrastructure"
+              className="font-medium text-foreground hover:underline"
+            >
+              {hidden} more
+            </Link>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setOpen(true)}
+              className="font-medium text-foreground hover:underline"
+            >
+              {hidden} more
+            </button>
+          )}
+        </li>
+      )}
+      {unsupported.length > 0 && (
+        <li className="text-muted-foreground/80">
+          {joined(unsupported)} {unsupported.length === 1 ? "doesn't" : "don't"}{" "}
+          report {what} through an API Loomplane reads.
+        </li>
+      )}
     </ul>
   )
 }
@@ -139,7 +194,7 @@ function SpendBody({ report }: { report: SpendReport }) {
           {money(lead.undated, lead.currency)} isn&apos;t broken down by day
         </p>
       )}
-      <UsageNotes sources={report.sources} />
+      <UsageNotes sources={report.sources} what="spend" limit={2} />
     </>
   )
 }
@@ -206,7 +261,7 @@ export function LatencyCard({ className }: { className?: string }) {
               })}
             </ul>
           )}
-          <UsageNotes sources={r.sources} />
+          <UsageNotes sources={r.sources} what="latency" limit={2} />
         </>
       )}
     </Panel>
@@ -293,7 +348,7 @@ export function TrafficCard({ className }: { className?: string }) {
               formatValue={(v) => compact.format(v)}
             />
           )}
-          <UsageNotes sources={r.sources} />
+          <UsageNotes sources={r.sources} what="requests" limit={2} />
         </>
       )}
     </Panel>
@@ -353,7 +408,7 @@ export function SpendAccounts() {
           </tbody>
         </table>
       )}
-      <UsageNotes sources={r.sources} />
+      <UsageNotes sources={r.sources} what="spend" />
     </div>
   )
 }

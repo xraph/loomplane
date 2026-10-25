@@ -100,7 +100,15 @@ const (
 	Unavailable = "unavailable"
 	// Failed is a source that didn't answer this time.
 	Failed = "failed"
+	// Unsupported is a source whose cloud has no API for this, so there's
+	// nothing to fix. Reason says so.
+	Unsupported = "unsupported"
 )
+
+// unsupportedError is a cloud that has no API for what was asked.
+type unsupportedError struct{ reason string }
+
+func (u *unsupportedError) Error() string { return u.reason }
 
 // Source is a connection the numbers came from, or would have.
 type Source struct {
@@ -136,6 +144,10 @@ const failedReason = "The cloud didn't answer. Loomplane asks again in a minute.
 func classify(err error) (status, reason string) {
 	if err == nil {
 		return Reporting, ""
+	}
+	var u *unsupportedError
+	if errors.As(err, &u) {
+		return Unsupported, u.reason
 	}
 	if r, ok := metrics.IsUnavailable(err); ok {
 		return Unavailable, r

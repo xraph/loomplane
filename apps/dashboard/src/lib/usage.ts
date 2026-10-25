@@ -2,6 +2,7 @@
 // and monitoring. These helpers turn the usage API's reports into what the
 // cards say.
 import type { Amount, UsageSource } from "@/client/forge/loomplane/types"
+import { cloudLabel } from "@/lib/clouds"
 
 /** money writes an amount in its currency, with cents below a hundred. */
 export function money(total: number, currency: string): string {
@@ -46,32 +47,47 @@ export function latencyLabel(statistic: string | undefined): string {
 
 export type UsageNote = {
   key: string
-  connectionId: string
-  name: string
   reason: string
   /** failed is a cloud that didn't answer, rather than one that can't. */
   failed: boolean
+  accounts: { connectionId: string; name: string }[]
   services: string[]
 }
 
-/** notReporting is what to tell someone about the sources that are quiet. */
-export function notReporting(sources: UsageSource[]): UsageNote[] {
-  const notes = new Map<string, UsageNote>()
+/**
+ * usageNotes is what to tell someone about the quiet sources: what they
+ * can fix, each reason once for every account it applies to, and the
+ * clouds with no API for it at all, which there's nothing to do about.
+ */
+export function usageNotes(sources: UsageSource[]): {
+  fix: UsageNote[]
+  unsupported: string[]
+} {
+  const fix = new Map<string, UsageNote>()
+  const unsupported = new Set<string>()
   for (const s of sources) {
     if (s.status === "reporting") continue
-    const key = `${s.connectionId}:${s.reason ?? ""}`
-    const note = notes.get(key) ?? {
-      key,
-      connectionId: s.connectionId,
-      name: s.name || "A removed connection",
-      reason: s.reason ?? "",
+    if (s.status === "unsupported") {
+      unsupported.add(cloudLabel(s.cloud))
+      continue
+    }
+    const reason = s.reason ?? ""
+    const note = fix.get(reason) ?? {
+      key: reason,
+      reason,
       failed: s.status === "failed",
+      accounts: [],
       services: [],
     }
+    if (!note.accounts.some((a) => a.connectionId === s.connectionId))
+      note.accounts.push({
+        connectionId: s.connectionId,
+        name: s.name || "A removed connection",
+      })
     note.services.push(...(s.services ?? []))
-    notes.set(key, note)
+    fix.set(reason, note)
   }
-  return [...notes.values()]
+  return { fix: [...fix.values()], unsupported: [...unsupported].sort() }
 }
 
 const hour = 3_600_000

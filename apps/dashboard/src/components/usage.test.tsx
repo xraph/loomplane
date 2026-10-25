@@ -139,7 +139,7 @@ const traffic = (range: string, total: number) => ({
       connection_id: "site",
       cloud: "vercel",
       name: "Site",
-      status: "unavailable",
+      status: "unsupported",
       reason:
         "Vercel doesn't report requests or latency through an API Loomplane reads.",
       services: ["web"],
@@ -221,7 +221,9 @@ it("ranks services by latency and never calls an average a p95", async () => {
   expect(rows[1]).toHaveTextContent("avg")
   expect(rows[1]).not.toHaveTextContent("p95")
   expect(
-    within(card).getByText(/Vercel doesn't report requests/)
+    within(card).getByText(
+      "Vercel doesn't report latency through an API Loomplane reads."
+    )
   ).toBeInTheDocument()
 })
 
@@ -294,4 +296,61 @@ it("says how much of the month has no daily breakdown", async () => {
   expect(
     within(card).getByText("$185 isn't broken down by day")
   ).toBeInTheDocument()
+})
+
+const source = (
+  connection_id: string,
+  cloud: string,
+  status: string,
+  reason = ""
+) => ({ connection_id, cloud, name: connection_id, status, reason })
+
+it("says a shared reason once and folds clouds with no API into one line", async () => {
+  const role = "Make the token as an owner."
+  spend = {
+    month: spend.month,
+    totals: [],
+    accounts: [],
+    sources: [
+      source("Digital Ocean", "digitalocean", "unavailable", role),
+      source("Billing", "digitalocean", "unavailable", role),
+      source("Rendering", "render", "unsupported", "Render has no API."),
+      source("Personal", "vercel", "unsupported", "Vercel has no API."),
+      source("Test", "vercel", "unsupported", "Vercel has no API."),
+    ],
+  }
+  wrap(<SpendCard />)
+  const card = await screen.findByRole("region", { name: "Cloud spend" })
+  const notes = await within(card).findAllByRole("listitem")
+  expect(notes).toHaveLength(2)
+  expect(
+    within(notes[0]!).getByRole("link", { name: "Digital Ocean" })
+  ).toBeInTheDocument()
+  expect(
+    within(notes[0]!).getByRole("link", { name: "Billing" })
+  ).toBeInTheDocument()
+  expect(within(card).getAllByText(role)).toHaveLength(1)
+  expect(notes[1]).toHaveTextContent(
+    "Render and Vercel don't report spend through an API Loomplane reads."
+  )
+})
+
+it("shows two things to fix on the overview and points at the rest", async () => {
+  spend = {
+    month: spend.month,
+    totals: [],
+    accounts: [],
+    sources: ["a", "b", "c", "d"].map((id) =>
+      source(id, "gcp", "unavailable", `Fix ${id}.`)
+    ),
+  }
+  wrap(<SpendCard />)
+  const card = await screen.findByRole("region", { name: "Cloud spend" })
+  expect(await within(card).findByText("Fix a.")).toBeInTheDocument()
+  expect(within(card).getByText("Fix b.")).toBeInTheDocument()
+  expect(within(card).queryByText("Fix c.")).not.toBeInTheDocument()
+  expect(within(card).getByRole("link", { name: "2 more" })).toHaveAttribute(
+    "href",
+    "/infrastructure"
+  )
 })

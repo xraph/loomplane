@@ -6,7 +6,7 @@ import {
   headline,
   latencyLabel,
   money,
-  notReporting,
+  usageNotes,
   timeTicks,
 } from "@/lib/usage"
 
@@ -42,44 +42,51 @@ it("never calls an average a p95", () => {
   expect(latencyLabel(undefined)).toBe("")
 })
 
-it("lists only the sources that aren't reporting, each reason once", () => {
+it("says each reason once, for every account it applies to", () => {
   const src = (
     connectionId: string,
+    cloud: string,
     status: string,
     reason = "",
     services?: string[]
   ): UsageSource => ({
     connectionId,
-    cloud: "gcp",
+    cloud,
     name: connectionId,
     status,
     reason,
     services,
   })
-  const notes = notReporting([
-    src("a", "reporting"),
-    src("b", "unavailable", "Grant Monitoring Viewer", ["api"]),
-    src("b", "unavailable", "Grant Monitoring Viewer", ["web"]),
-    src("c", "failed", "The cloud didn't answer."),
+  const role = "Make the token as an owner."
+  const { fix, unsupported } = usageNotes([
+    src("ok", "aws", "reporting"),
+    src("do", "digitalocean", "unavailable", role, ["api"]),
+    src("billing", "digitalocean", "unavailable", role, ["web"]),
+    src("gcp", "gcp", "failed", "The cloud didn't answer."),
+    src("v1", "vercel", "unsupported", "Vercel has no API."),
+    src("v2", "vercel", "unsupported", "Vercel has no API."),
+    src("r", "render", "unsupported", "Render has no API."),
   ])
-  expect(notes).toEqual([
+  expect(fix).toEqual([
     {
-      key: "b:Grant Monitoring Viewer",
-      connectionId: "b",
-      name: "b",
-      reason: "Grant Monitoring Viewer",
+      key: role,
+      reason: role,
       failed: false,
+      accounts: [
+        { connectionId: "do", name: "do" },
+        { connectionId: "billing", name: "billing" },
+      ],
       services: ["api", "web"],
     },
     {
-      key: "c:The cloud didn't answer.",
-      connectionId: "c",
-      name: "c",
+      key: "The cloud didn't answer.",
       reason: "The cloud didn't answer.",
       failed: true,
+      accounts: [{ connectionId: "gcp", name: "gcp" }],
       services: [],
     },
   ])
+  expect(unsupported).toEqual(["Render", "Vercel"])
 })
 
 it("puts one time tick on each edge worth naming, never two on one day", () => {
