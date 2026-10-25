@@ -760,6 +760,7 @@ export interface EditInputBody {
 };
   placement?: {
   build?: Build;
+  cloudSqlNetwork?: CloudSQLApplicationNetwork;
   cloudTags?: string[];
   cloudTarget?: string;
   enabled?: boolean;

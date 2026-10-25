@@ -3,6 +3,10 @@ import type {
   ManagedDatabaseProfile,
   Provider,
 } from "@/client/forge/loomplane/types"
+import {
+  cloudSQLNetworkValid,
+  cloudSQLRegionalResourceValid,
+} from "@/lib/cloudsql-network"
 import type { DatabaseProvider } from "@/lib/catalog-targets"
 
 export type ManagedDatabaseProvider = "rds" | "cloud-sql"
@@ -39,26 +43,14 @@ export function cloudSQLSourceEndpointValid(
   region: string
 ) {
   if (!endpoint) return false
-  const projectPattern = /^[a-z][a-z0-9-]{4,28}[a-z0-9]$/
-  const namePattern = /^[a-z]([a-z0-9-]{0,61}[a-z0-9])?$/
-  const network = endpoint.network.split("/")
-  const rule = endpoint.forwardingRule.split("/")
   return (
-    projectPattern.test(endpoint.consumerProject) &&
-    namePattern.test(region) &&
-    network.length === 5 &&
-    network[0] === "projects" &&
-    network[1] === endpoint.consumerProject &&
-    network[2] === "global" &&
-    network[3] === "networks" &&
-    namePattern.test(network[4]) &&
-    rule.length === 6 &&
-    rule[0] === "projects" &&
-    rule[1] === endpoint.consumerProject &&
-    rule[2] === "regions" &&
-    rule[3] === region &&
-    rule[4] === "forwardingRules" &&
-    namePattern.test(rule[5])
+    cloudSQLNetworkValid(endpoint) &&
+    cloudSQLRegionalResourceValid(
+      endpoint.forwardingRule,
+      endpoint.consumerProject,
+      region,
+      "forwardingRules"
+    )
   )
 }
 

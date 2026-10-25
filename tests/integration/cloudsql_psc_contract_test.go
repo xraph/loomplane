@@ -35,6 +35,12 @@ func TestCloudSQLPSCReviewedEndpointPublishedContract(t *testing.T) {
 			t.Fatal(err)
 		}
 		if route == "/openapi.json" {
+			placement := spec.Components.Schemas["EditInputBody"].Properties["placement"]
+			properties, _ := placement["properties"].(map[string]any)
+			network, _ := properties["cloud_sql_network"].(map[string]any)
+			if network["$ref"] != "#/components/schemas/CloudSQLApplicationNetwork" {
+				t.Fatal("missing application route placement edit", placement)
+			}
 			credentials := spec.Components.Schemas["NativeCopyCredentials"]
 			if credentials.Properties["private_service_connect"]["type"] != "boolean" || slices.Contains(credentials.Required, "private_service_connect") {
 				t.Fatal("missing optional PSC credential transport")

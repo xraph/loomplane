@@ -10762,6 +10762,9 @@
               },
               "target": {
                 "type": "string"
+              },
+              "cloud_sql_network": {
+                "$ref": "#/components/schemas/CloudSQLApplicationNetwork"
               }
             }
           },
