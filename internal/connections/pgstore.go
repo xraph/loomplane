@@ -25,13 +25,13 @@ func NewPgStore(db *pgdriver.PgDB) *PgStore { return &PgStore{db: db} }
 var _ Store = (*PgStore)(nil)
 
 const columns = `id, org_id, cloud, name, account, details, status, missing, message,
-	checked_at, created_by, created_at, updated_at, generation`
+	checked_at, created_by, created_at, updated_at, generation, method`
 
 func scan(row pgx.Row) (*Connection, error) {
 	var c Connection
 	var details, missing []byte
 	if err := row.Scan(&c.ID, &c.OrgID, &c.Cloud, &c.Name, &c.Account, &details, &c.Status, &missing, &c.Message,
-		&c.CheckedAt, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt, &c.Generation); err != nil {
+		&c.CheckedAt, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt, &c.Generation, &c.Method); err != nil {
 		return nil, err
 	}
 	if err := json.Unmarshal(details, &c.Details); err != nil {
@@ -62,9 +62,9 @@ func (s *PgStore) CreateConnection(ctx context.Context, c *Connection) error {
 		return fmt.Errorf("encode connection: %w", err)
 	}
 	_, err = s.db.Exec(ctx, `INSERT INTO loomplane_cloud_connections (`+columns+`)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
 		c.ID, c.OrgID, c.Cloud, c.Name, c.Account, details, c.Status, missing, c.Message,
-		c.CheckedAt, c.CreatedBy, c.CreatedAt, c.UpdatedAt, c.Generation)
+		c.CheckedAt, c.CreatedBy, c.CreatedAt, c.UpdatedAt, c.Generation, c.Method)
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation {
 		return ErrExists
@@ -130,9 +130,9 @@ func (s *PgStore) UpdateConnection(ctx context.Context, c *Connection) error {
 		return fmt.Errorf("encode connection: %w", err)
 	}
 	tag, err := s.db.Exec(ctx, `UPDATE loomplane_cloud_connections
-		SET account = $3, details = $4, status = $5, missing = $6, message = $7, checked_at = $8, updated_at = $9, generation = $10
+		SET account = $3, details = $4, status = $5, missing = $6, message = $7, checked_at = $8, updated_at = $9, generation = $10, method = $12
 		WHERE org_id = $1 AND id = $2 AND generation = $11`,
-		c.OrgID, c.ID, c.Account, details, c.Status, missing, c.Message, c.CheckedAt, c.UpdatedAt, generation, c.Generation)
+		c.OrgID, c.ID, c.Account, details, c.Status, missing, c.Message, c.CheckedAt, c.UpdatedAt, generation, c.Generation, c.Method)
 	if err != nil {
 		return fmt.Errorf("update connection: %w", err)
 	}

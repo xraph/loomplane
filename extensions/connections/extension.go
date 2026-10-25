@@ -168,3 +168,16 @@ func (a auditor) Record(ctx context.Context, action string, p security.Principal
 		a.log.Error("record audit event", forge.F("action", action), forge.F("error", err.Error()))
 	}
 }
+
+// RecordApp implements connections.AppAuditor. It records the cloud and the
+// client ID, never the secret.
+func (a auditor) RecordApp(ctx context.Context, action string, p security.Principal, cloud, clientID string) {
+	b := a.chronicle.Warning(ctx, action, "cloud_signin_app", cloud).
+		Category("cloud_connections").AppID(a.appID).TenantID(p.OrgID).UserID(p.UserID).Outcome("success").
+		Meta("cloud", cloud).Meta("client_id", clientID)
+	if err := b.Record(); err != nil {
+		a.log.Error("record audit event", forge.F("action", action), forge.F("error", err.Error()))
+	}
+}
+
+var _ connections.AppAuditor = auditor{}

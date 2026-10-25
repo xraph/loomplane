@@ -12,6 +12,7 @@ import (
 
 	"go.jetify.com/typeid/v2"
 
+	"github.com/xraph/loomplane/internal/clouds/oauth"
 	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/internal/telemetry"
 )
@@ -46,6 +47,14 @@ type Service struct {
 	warn     func(msg string, err error)
 	// Telemetry counts credential checks. It may be nil.
 	Telemetry *telemetry.Recorder
+
+	// Signing in to a cloud. The extension sets these.
+	Providers   map[string]Provider
+	ConfigApps  map[string]oauth.App
+	CallbackURL string
+	// AppSecrets keeps sign-in app secrets, keyed by organization and cloud.
+	AppSecrets Secrets
+	Apps       AppStore
 }
 
 // NewService returns a Service. checkers maps each cloud to its checker;
