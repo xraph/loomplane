@@ -7,9 +7,11 @@ import { toast } from "sonner"
 import { messageOf, statusOf } from "@/client/errors"
 import {
   useConnectionsCheck,
+  useConnectionSignInsStart,
   useConnectionsGet,
   useProjectsList,
 } from "@/client/forge/loomplane/hooks"
+import type { SignIn } from "@/client/forge/loomplane/types"
 import { useMutation, useQuery } from "@/client/hooks"
 import { CloudGlyph } from "@/components/cloud-glyph"
 import {
@@ -44,6 +46,7 @@ const tone: Record<string, Tone> = {
   ready: "live",
   incomplete: "waiting",
   failed: "failed",
+  sign_in_needed: "waiting",
 }
 
 export function CloudAccount({ id }: { id: string }) {
@@ -52,6 +55,7 @@ export function CloudAccount({ id }: { id: string }) {
   const person = usePeople()
   const connection = useQuery(useConnectionsGet, { path: { id } })
   const check = useMutation(useConnectionsCheck)
+  const signInAgain = useMutation(useConnectionSignInsStart)
   const running = useRunning()
   const projects = useQuery(useProjectsList)
   const [replacing, setReplacing] = useState(false)
@@ -75,6 +79,21 @@ export function CloudAccount({ id }: { id: string }) {
       )
     } catch (err) {
       toast.error(messageOf(err, "The connection couldn't be checked."))
+    }
+  }
+
+  const signIn = async () => {
+    if (!c) return
+    try {
+      // A new sign-in for this connection replaces its credential. The name
+      // stays as it is, so none is sent.
+      const started = await signInAgain.mutateAsync({
+        body: { cloud: c.cloud, name: "", connectionId: c.id },
+      })
+      // The generated hook doesn't type this response.
+      window.location.assign((started as SignIn).authorizeUrl)
+    } catch (err) {
+      toast.error(messageOf(err, "Sign-in couldn't be started."))
     }
   }
 
@@ -148,6 +167,15 @@ export function CloudAccount({ id }: { id: string }) {
               </div>
               {manage && (
                 <div className="flex flex-wrap gap-2">
+                  {c.status === "sign_in_needed" && (
+                    <Button
+                      disabled={signInAgain.isPending}
+                      onClick={() => void signIn()}
+                    >
+                      {signInAgain.isPending && <Spinner />}
+                      Sign in again
+                    </Button>
+                  )}
                   <Button
                     variant="outline"
                     disabled={check.isPending}

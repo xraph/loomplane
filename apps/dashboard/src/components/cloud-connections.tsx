@@ -22,10 +22,11 @@ import {
   useConnectionCloudsList,
   useConnectionsCreate,
   useConnectionsDelete,
+  useConnectionSignInsStart,
   useConnectionsList,
   useConnectionsReplace,
 } from "@/client/forge/loomplane/hooks"
-import type { Connection } from "@/client/forge/loomplane/types"
+import type { Connection, SignIn } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
 import { CloudGlyph } from "@/components/cloud-glyph"
 import { MetricCard } from "@/components/metric-card"
@@ -186,6 +187,7 @@ export const statusLabels: Record<string, string> = {
   ready: "Ready",
   incomplete: "Missing permissions",
   failed: "Refused",
+  sign_in_needed: "Sign-in needed",
 }
 
 function ConnectionRow({
@@ -417,6 +419,7 @@ function ConnectForm({
 }) {
   const create = useMutation(useConnectionsCreate)
   const replace = useMutation(useConnectionsReplace)
+  const signInStart = useMutation(useConnectionSignInsStart)
   const invalidate = useInvalidate()
   const file = useRef<HTMLInputElement>(null)
   const [cloud, setCloud] = useState<string>(replacing?.cloud ?? initial)
@@ -424,6 +427,13 @@ function ConnectForm({
   const available = useQuery(useConnectionCloudsList)
   const extras = (available.data?.clouds ?? []).filter((c) => !c.builtin)
   const extra = extras.find((c) => c.cloud === cloud)
+  // Signing in is offered first when the cloud supports it here. A person
+  // who wants a token picks it for one cloud, and the choice resets if they
+  // switch clouds.
+  const entry = (available.data?.clouds ?? []).find((c) => c.cloud === cloud)
+  const [tokenFor, setTokenFor] = useState<string | null>(null)
+  const signIn =
+    !replacing && !!entry?.methods.includes("oauth") && tokenFor !== cloud
   const [extraSettings, setExtraSettings] = useState<Record<string, string>>(
     () => ({ ...(replacing?.details ?? {}) }) as Record<string, string>
   )
@@ -443,7 +453,7 @@ function ConnectForm({
     (replacing?.details.billing_export as string | undefined) ?? ""
   )
   const [error, setError] = useState("")
-  const busy = create.isPending || replace.isPending
+  const busy = create.isPending || replace.isPending || signInStart.isPending
 
   const close = (next: boolean) => {
     if (!next) {
@@ -466,9 +476,25 @@ function ConnectForm({
     setCredential(text)
   }
 
+  const startSignIn = async () => {
+    try {
+      const started = await signInStart.mutateAsync({
+        body: { cloud, name: name.trim() },
+      })
+      // The generated hook doesn't type this response.
+      window.location.assign((started as SignIn).authorizeUrl)
+    } catch (err) {
+      setError(messageOf(err, "Sign-in couldn't be started."))
+    }
+  }
+
   const submit = async (e: FormEvent) => {
     e.preventDefault()
     setError("")
+    if (signIn) {
+      await startSignIn()
+      return
+    }
     const trimmed = Object.fromEntries(
       Object.entries(extraSettings)
         .map(([k, v]) => [k, v.trim()])
@@ -578,7 +604,21 @@ function ConnectForm({
                 </Field>
               </>
             )}
-            {cloud === "gcp" ? (
+            {signIn ? (
+              <div className="grid justify-items-start gap-2">
+                <Button type="submit" disabled={busy}>
+                  {busy && <Spinner />}
+                  Sign in with {entry?.title ?? cloud}
+                </Button>
+                <button
+                  type="button"
+                  className="text-sm text-muted-foreground underline underline-offset-4 hover:text-foreground"
+                  onClick={() => setTokenFor(cloud)}
+                >
+                  Use a token instead
+                </button>
+              </div>
+            ) : cloud === "gcp" ? (
               <>
                 <Field>
                   <FieldLabel htmlFor="connection-key">
@@ -802,10 +842,12 @@ function ConnectForm({
             >
               Cancel
             </Button>
-            <Button type="submit" disabled={busy}>
-              {busy && <Spinner />}
-              {replacing ? "Check and replace" : "Check and connect"}
-            </Button>
+            {!signIn && (
+              <Button type="submit" disabled={busy}>
+                {busy && <Spinner />}
+                {replacing ? "Check and replace" : "Check and connect"}
+              </Button>
+            )}
           </DialogFooter>
         </form>
       </DialogContent>

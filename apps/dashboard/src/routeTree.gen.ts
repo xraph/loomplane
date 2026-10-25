@@ -36,6 +36,7 @@ import { Route as ServicesIndexRouteImport } from "./routes/services.index"
 import { Route as ServicesKindRouteImport } from "./routes/services.$kind"
 import { Route as CloudsAccountsIdRouteImport } from "./routes/clouds.accounts.$id"
 import { Route as IntegrationsGithubSetupRouteImport } from "./routes/integrations.github.setup"
+import { Route as IntegrationsOauthCallbackRouteImport } from "./routes/integrations.oauth.callback"
 import { Route as ProjectsIdCatalogResourceRouteImport } from "./routes/projects.$id_.catalog.$resource"
 
 const IndexRoute = IndexRouteImport.update({
@@ -173,6 +174,12 @@ const IntegrationsGithubSetupRoute = IntegrationsGithubSetupRouteImport.update({
   path: "/integrations/github/setup",
   getParentRoute: () => rootRouteImport,
 } as any)
+const IntegrationsOauthCallbackRoute =
+  IntegrationsOauthCallbackRouteImport.update({
+    id: "/integrations/oauth/callback",
+    path: "/integrations/oauth/callback",
+    getParentRoute: () => rootRouteImport,
+  } as any)
 const ProjectsIdCatalogResourceRoute =
   ProjectsIdCatalogResourceRouteImport.update({
     id: "/projects/$id_/catalog/$resource",
@@ -208,6 +215,7 @@ export interface FileRoutesByFullPath {
   "/services/": typeof ServicesIndexRoute
   "/clouds/accounts/$id": typeof CloudsAccountsIdRoute
   "/integrations/github/setup": typeof IntegrationsGithubSetupRoute
+  "/integrations/oauth/callback": typeof IntegrationsOauthCallbackRoute
   "/projects/$id/catalog/$resource": typeof ProjectsIdCatalogResourceRoute
 }
 export interface FileRoutesByTo {
@@ -238,6 +246,7 @@ export interface FileRoutesByTo {
   "/services": typeof ServicesIndexRoute
   "/clouds/accounts/$id": typeof CloudsAccountsIdRoute
   "/integrations/github/setup": typeof IntegrationsGithubSetupRoute
+  "/integrations/oauth/callback": typeof IntegrationsOauthCallbackRoute
   "/projects/$id/catalog/$resource": typeof ProjectsIdCatalogResourceRoute
 }
 export interface FileRoutesById {
@@ -269,6 +278,7 @@ export interface FileRoutesById {
   "/services/": typeof ServicesIndexRoute
   "/clouds/accounts/$id": typeof CloudsAccountsIdRoute
   "/integrations/github/setup": typeof IntegrationsGithubSetupRoute
+  "/integrations/oauth/callback": typeof IntegrationsOauthCallbackRoute
   "/projects/$id_/catalog/$resource": typeof ProjectsIdCatalogResourceRoute
 }
 export interface FileRouteTypes {
@@ -301,6 +311,7 @@ export interface FileRouteTypes {
     | "/services/"
     | "/clouds/accounts/$id"
     | "/integrations/github/setup"
+    | "/integrations/oauth/callback"
     | "/projects/$id/catalog/$resource"
   fileRoutesByTo: FileRoutesByTo
   to:
@@ -331,6 +342,7 @@ export interface FileRouteTypes {
     | "/services"
     | "/clouds/accounts/$id"
     | "/integrations/github/setup"
+    | "/integrations/oauth/callback"
     | "/projects/$id/catalog/$resource"
   id:
     | "__root__"
@@ -361,6 +373,7 @@ export interface FileRouteTypes {
     | "/services/"
     | "/clouds/accounts/$id"
     | "/integrations/github/setup"
+    | "/integrations/oauth/callback"
     | "/projects/$id_/catalog/$resource"
   fileRoutesById: FileRoutesById
 }
@@ -392,6 +405,7 @@ export interface RootRouteChildren {
   ServicesIndexRoute: typeof ServicesIndexRoute
   CloudsAccountsIdRoute: typeof CloudsAccountsIdRoute
   IntegrationsGithubSetupRoute: typeof IntegrationsGithubSetupRoute
+  IntegrationsOauthCallbackRoute: typeof IntegrationsOauthCallbackRoute
   ProjectsIdCatalogResourceRoute: typeof ProjectsIdCatalogResourceRoute
 }
 
@@ -586,6 +600,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof IntegrationsGithubSetupRouteImport
       parentRoute: typeof rootRouteImport
     }
+    "/integrations/oauth/callback": {
+      id: "/integrations/oauth/callback"
+      path: "/integrations/oauth/callback"
+      fullPath: "/integrations/oauth/callback"
+      preLoaderRoute: typeof IntegrationsOauthCallbackRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     "/projects/$id_/catalog/$resource": {
       id: "/projects/$id_/catalog/$resource"
       path: "/projects/$id/catalog/$resource"
@@ -624,6 +645,7 @@ const rootRouteChildren: RootRouteChildren = {
   ServicesIndexRoute: ServicesIndexRoute,
   CloudsAccountsIdRoute: CloudsAccountsIdRoute,
   IntegrationsGithubSetupRoute: IntegrationsGithubSetupRoute,
+  IntegrationsOauthCallbackRoute: IntegrationsOauthCallbackRoute,
   ProjectsIdCatalogResourceRoute: ProjectsIdCatalogResourceRoute,
 }
 export const routeTree = rootRouteImport
