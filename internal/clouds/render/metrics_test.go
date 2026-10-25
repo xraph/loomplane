@@ -113,6 +113,29 @@ func TestServiceMetricsCountsFiveHundreds(t *testing.T) {
 	}
 }
 
+func TestServiceMetrics_refusedStatusReadKeepsRequestsAndLatency(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/metrics/http-requests" && r.URL.Query().Get("aggregateBy") != "":
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"message":"bad aggregateBy"}`))
+		case r.URL.Path == "/metrics/http-requests":
+			_, _ = w.Write([]byte(`[{"labels":[],"values":[{"timestamp":"2026-10-24T12:00:00Z","value":9}]}]`))
+		default:
+			_, _ = w.Write([]byte(`[{"labels":[],"values":[{"timestamp":"2026-10-23T13:30:00Z","value":150}]}]`))
+		}
+	}))
+	defer srv.Close()
+	m, err := New(srv.URL).ServiceMetrics(t.Context(), key, "srv-1", metrics.Day.Window(time.Now()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.ErrorsCounted || len(m.Errors) != 0 || len(m.Requests) != 1 || m.Requests[0].V != 9 || m.Latency != 150 || m.Statistic != metrics.P95 {
+		t.Fatalf("%+v", m)
+	}
+}
+
 func TestServiceMetrics_severalLatencyBucketsTakeTheLargest(t *testing.T) {
 	latency := `[{"labels":[],"values":[{"timestamp":"2026-10-23T13:30:00Z","value":180},{"timestamp":"2026-10-24T01:30:00Z","value":340},{"timestamp":"2026-10-24T07:30:00Z","value":95}]}]`
 	m, err := metricsFake(t, nil, `[]`, latency).ServiceMetrics(t.Context(), key, "srv-1", metrics.Day.Window(time.Now()))

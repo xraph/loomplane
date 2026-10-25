@@ -28,8 +28,10 @@ type series struct {
 	} `json:"values"`
 }
 
-// ServiceMetrics reads a service's requests, 5xx counts and p95 latency over w from
-// Render's metrics API. id is the service's ID.
+// ServiceMetrics reads a service's requests, 5xx counts and p95 latency
+// over w from Render's metrics API. id is the service's ID. The 5xx counts
+// are best-effort: if Render refuses the by-status read, the requests and
+// latency still come back, with ErrorsCounted false.
 func (c *Client) ServiceMetrics(ctx context.Context, key Key, id string, w metrics.Window) (*metrics.Measurement, error) {
 	query := func(resolution time.Duration) url.Values {
 		return url.Values{
@@ -43,25 +45,26 @@ func (c *Client) ServiceMetrics(ctx context.Context, key Key, id string, w metri
 	if err := c.metric(ctx, key, "/metrics/http-requests", query(w.Step), &requests); err != nil {
 		return nil, err
 	}
-	// The same metric by status code gives the 5xx counts.
+	m := &metrics.Measurement{Requests: sumSeries(requests)}
+	// The same metric by status code gives the 5xx counts. Should Render
+	// refuse it, the request and latency numbers stand without errors.
 	byStatus := query(w.Step)
 	byStatus.Set("aggregateBy", "statusCode")
 	var statuses []series
-	if err := c.metric(ctx, key, "/metrics/http-requests", byStatus, &statuses); err != nil {
-		return nil, err
-	}
-	var failed []series
-	for _, s := range statuses {
-		for _, l := range s.Labels {
-			if l.Field == "statusCode" && strings.HasPrefix(l.Value, "5") {
-				failed = append(failed, s)
+	if err := c.metric(ctx, key, "/metrics/http-requests", byStatus, &statuses); err == nil {
+		var failed []series
+		for _, s := range statuses {
+			for _, l := range s.Labels {
+				if l.Field == "statusCode" && strings.HasPrefix(l.Value, "5") {
+					failed = append(failed, s)
+					break
+				}
 			}
 		}
+		// Render answered for status codes, so an empty series means none fell.
+		m.ErrorsCounted = true
+		m.Errors = sumSeries(failed)
 	}
-	// Render answered for status codes, so an empty series means none fell.
-	m := &metrics.Measurement{ErrorsCounted: true}
-	m.Requests = sumSeries(requests)
-	m.Errors = sumSeries(failed)
 
 	// One bucket the width of the window makes Render's p95 the window's.
 	q := query(w.End.Sub(w.Start))
