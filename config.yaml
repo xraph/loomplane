@@ -121,6 +121,13 @@ clouds:
   render_endpoint: "${LOOMPLANE_RENDER_ENDPOINT:-}"
   digitalocean_endpoint: "${LOOMPLANE_DIGITALOCEAN_ENDPOINT:-}"
   azure_endpoint: "${LOOMPLANE_AZURE_ENDPOINT:-}"
+  # Loomplane's sign-in app at each cloud, so people can connect by signing
+  # in. Leave both empty to keep token entry only. Keep the secret in the
+  # environment.
+  oauth:
+    digitalocean:
+      client_id: "${LOOMPLANE_DIGITALOCEAN_OAUTH_CLIENT_ID:-}"
+      client_secret: "${LOOMPLANE_DIGITALOCEAN_OAUTH_CLIENT_SECRET:-}"
 
 providers:
   # Deployment targets that run as their own services, built with
