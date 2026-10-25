@@ -202,9 +202,24 @@ func (e *Extension) Register(fapp forge.App) error {
 	e.deploys = deployments.NewService(deployStore, authz, e.deployments, auditor)
 	e.deploys.Projects = prj
 	e.activity = activity.NewService(pg, authz)
+	transports := &deployments.NativeSQLTransports{}
+	if forge.HasType[*deployments.NativeSQLTransports](c) {
+		var transportErr error
+		transports, transportErr = forge.InjectType[*deployments.NativeSQLTransports](c)
+		if transportErr != nil {
+			return transportErr
+		}
+		if transports == nil {
+			return fmt.Errorf("native SQL transport dependency is nil")
+		}
+	}
+	google := gcp.New(e.cfg.Clouds.GoogleEndpoint)
+	if transports.CloudSQLDNS != nil {
+		google = google.WithDNSResolver(transports.CloudSQLDNS)
+	}
 	executors := map[string]deployments.Executor{
 		"cloud-run": &deployments.CloudRun{
-			Google:      gcp.New(e.cfg.Clouds.GoogleEndpoint),
+			Google:      google,
 			Ctrl:        deployments.CtrlPlane{Providers: cp.Providers(), Instances: cp.Instances, Deploys: cp.Deploys},
 			Credentials: clouds,
 		},
@@ -217,7 +232,7 @@ func (e *Extension) Register(fapp forge.App) error {
 		"cross-cloud-vpn": &deployments.VPN{
 			Google: gcp.New(e.cfg.Clouds.GoogleEndpoint), AWS: aws.New(e.cfg.Clouds.AWSEndpoint), Credentials: clouds,
 		},
-		"cloud-sql":     &deployments.CloudSQL{Google: gcp.New(e.cfg.Clouds.GoogleEndpoint)},
+		"cloud-sql":     &deployments.CloudSQL{Google: google, PSCConnector: transports.CloudSQL},
 		"cloud-storage": &deployments.CloudStorage{Google: gcp.New(e.cfg.Clouds.GoogleEndpoint)},
 		"memorystore":   &deployments.Memorystore{Google: gcp.New(e.cfg.Clouds.GoogleEndpoint)},
 		"rds":           &deployments.RDS{AWS: aws.New(e.cfg.Clouds.AWSEndpoint)},
@@ -345,17 +360,11 @@ func (e *Extension) Register(fapp forge.App) error {
 	})
 
 	routeService.CapacityDemandAuthority = e.plans
-	nativeDatabases := &deployments.NativeDatabases{AWS: aws.New(e.cfg.Clouds.AWSEndpoint), Google: gcp.New(e.cfg.Clouds.GoogleEndpoint), Credentials: clouds, Secrets: resourceSecrets}
-	if forge.HasType[*deployments.NativeSQLTransports](c) {
-		transports, transportErr := forge.InjectType[*deployments.NativeSQLTransports](c)
-		if transportErr != nil {
-			return transportErr
-		}
-		if transports == nil {
-			return fmt.Errorf("native SQL transport dependency is nil")
-		}
-		nativeDatabases.RDSConnector, nativeDatabases.SQLConnector = transports.RDS, transports.CloudSQL
+	nativeDatabases := &deployments.NativeDatabases{
+		AWS: aws.New(e.cfg.Clouds.AWSEndpoint), Google: google, Credentials: clouds, Secrets: resourceSecrets,
+		RDSConnector: transports.RDS, SQLConnector: transports.CloudSQL,
 	}
+
 	if err := e.setupBackups(fapp, pg, prj, planStore, authz, recovery.Targets{connections.Server: serverTarget, connections.Kubernetes: clusterTarget}, nativeDatabases, auditor); err != nil {
 		return err
 	}
