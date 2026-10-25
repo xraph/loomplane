@@ -1480,6 +1480,15 @@ func (p *planner) serviceConfig(name, base string, gs *graph.Service, prov *prov
 	if cfg.HealthPath == "" && cfg.Framework == "forge" {
 		cfg.HealthPath = "/_/health"
 	}
+	if set.CloudSQLNetwork != nil {
+		network := *set.CloudSQLNetwork
+		cfg.CloudSQLNetwork = &network
+		if prov.Name != "cloud-run" || !network.Valid(cfg.Region) {
+			p.problem(Finding{Code: "cloud-sql-network-invalid", Subject: ServiceSubject, Name: name, Path: base + ".cloud_sql_network", Message: "Choose a canonical VPC and subnet in this Cloud Run service's region."})
+		} else {
+			p.problem(Finding{Code: "cloud-sql-psc-transport-unavailable", Subject: ServiceSubject, Name: name, Path: base + ".cloud_sql_network", Message: "PSC application route verification and credential delivery are not available yet."})
+		}
+	}
 	if set.Public != nil {
 		cfg.Public = *set.Public
 	}

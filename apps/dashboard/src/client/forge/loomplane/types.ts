@@ -368,6 +368,12 @@ export interface CloudProjectGrantList {
   grants: (ProjectGrant | null)[];
 }
 
+export interface CloudSQLApplicationNetwork {
+  consumerProject: string;
+  network: string;
+  subnetwork: string;
+}
+
 export interface CloudSQLRecoveryNetwork {
   consumerProject: string;
   network: string;
@@ -2305,6 +2311,7 @@ export interface ServiceConfig {
   buildTarget?: BuildTarget;
   catalog?: Recipe;
   cloudPlacement?: CloudPlacement;
+  cloudSqlNetwork?: CloudSQLApplicationNetwork;
   commitSha?: string;
   component?: ComponentConfig;
   context?: string;

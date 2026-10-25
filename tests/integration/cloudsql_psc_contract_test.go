@@ -40,6 +40,16 @@ func TestCloudSQLPSCReviewedEndpointPublishedContract(t *testing.T) {
 				t.Fatal("missing optional PSC credential transport")
 			}
 		}
+		service := spec.Components.Schemas["ServiceConfig"]
+		if service.Properties["cloud_sql_network"]["$ref"] != "#/components/schemas/CloudSQLApplicationNetwork" || slices.Contains(service.Required, "cloud_sql_network") {
+			t.Fatal(route, "missing optional application route review")
+		}
+		applicationNetwork := spec.Components.Schemas["CloudSQLApplicationNetwork"]
+		for _, field := range []string{"consumer_project", "network", "subnetwork"} {
+			if applicationNetwork.Properties[field]["type"] != "string" || !slices.Contains(applicationNetwork.Required, field) {
+				t.Fatal(route, "incomplete application route contract", field)
+			}
+		}
 		managed := spec.Components.Schemas["ManagedDatabaseConfig"]
 		if managed.Properties["cloud_sql_psc"]["$ref"] != "#/components/schemas/CloudSQLSourceEndpoint" || slices.Contains(managed.Required, "cloud_sql_psc") {
 			t.Fatal(route, "missing optional endpoint review")

@@ -93,6 +93,9 @@ func applyPSCTransport(template *gcp.RunTemplate, labels map[string]string, proj
 	// test must pass before the proxy reports that it has started.
 	args := make([]string, 0, 8+len(transport.Instances))
 	args = append(args, "--psc", "--unix-socket="+PSCSocketDirectory, "--health-check", "--run-connection-test", "--http-address=0.0.0.0", "--http-port="+strconv.Itoa(healthPort), "--lazy-refresh", "--structured-logs")
+	if len(args)+len(transport.Instances) > 1000 {
+		return fmt.Errorf("cloud sql PSC transport exceeds Cloud Run's 1000 argument limit")
+	}
 	template.Containers = append(template.Containers, gcp.RunContainer{
 		Name: pscContainer, Image: pscProxyImage,
 		Args: append(args, transport.Instances...), Mounts: []gcp.RunVolumeMount{mount},

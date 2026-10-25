@@ -16076,6 +16076,9 @@
           },
           "workload": {
             "type": "string"
+          },
+          "cloud_sql_network": {
+            "$ref": "#/components/schemas/CloudSQLApplicationNetwork"
           }
         }
       },
@@ -17635,6 +17638,25 @@
             "type": "string"
           },
           "network": {
+            "type": "string"
+          }
+        }
+      },
+      "CloudSQLApplicationNetwork": {
+        "type": "object",
+        "required": [
+          "consumer_project",
+          "network",
+          "subnetwork"
+        ],
+        "properties": {
+          "consumer_project": {
+            "type": "string"
+          },
+          "network": {
+            "type": "string"
+          },
+          "subnetwork": {
             "type": "string"
           }
         }

@@ -284,6 +284,10 @@
         "enabled": {
           "description": "False leaves the service out.",
           "type": "boolean"
+        },
+        "cloud_sql_network": {
+          "description": "VPC and regional subnet for Cloud Run PSC database connections.",
+          "$ref": "#/$defs/cloudSQLApplicationNetwork"
         }
       }
     },
@@ -379,13 +383,21 @@
       "additionalProperties": false,
       "allOf": [
         {
-          "if": { "required": ["cloud_sql_psc"] },
+          "if": {
+            "required": ["cloud_sql_psc"]
+          },
           "then": {
             "required": ["provider", "version", "region"],
             "properties": {
-              "kind": { "const": "postgres" },
-              "provider": { "const": "cloud-sql" },
-              "version": { "const": "17" }
+              "kind": {
+                "const": "postgres"
+              },
+              "provider": {
+                "const": "cloud-sql"
+              },
+              "version": {
+                "const": "17"
+              }
             }
           }
         }
@@ -397,7 +409,10 @@
           "required": ["consumer_project", "network", "forwarding_rule"],
           "additionalProperties": false,
           "properties": {
-            "consumer_project": { "type": "string", "minLength": 6 },
+            "consumer_project": {
+              "type": "string",
+              "minLength": 6
+            },
             "network": {
               "type": "string",
               "pattern": "^projects/[^/]+/global/networks/[^/]+$"
@@ -760,6 +775,25 @@
         }
       },
       "required": ["service", "destination"]
+    },
+    "cloudSQLApplicationNetwork": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["consumer_project", "network", "subnetwork"],
+      "properties": {
+        "consumer_project": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{4,28}[a-z0-9]$"
+        },
+        "network": {
+          "type": "string",
+          "pattern": "^projects/[a-z][a-z0-9-]{4,28}[a-z0-9]/global/networks/[a-z]([a-z0-9-]{0,61}[a-z0-9])?$"
+        },
+        "subnetwork": {
+          "type": "string",
+          "pattern": "^projects/[a-z][a-z0-9-]{4,28}[a-z0-9]/regions/[a-z][a-z0-9-]*/subnetworks/[a-z]([a-z0-9-]{0,61}[a-z0-9])?$"
+        }
+      }
     }
   },
   "allOf": [

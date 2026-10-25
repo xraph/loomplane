@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -252,5 +253,25 @@ func TestPSCProviderDeclaresDefaultIngressAndValidProbe(t *testing.T) {
 	probe := proxy["startupProbe"].(map[string]any)
 	if probe["timeoutSeconds"].(float64) >= probe["periodSeconds"].(float64) {
 		t.Errorf("probe timeout must be less than its interval: %+v", probe)
+	}
+}
+
+func TestPSCProviderRejectsExcessiveProxyArguments(t *testing.T) {
+	p, captured := pscProviderFixture(t)
+	var transport PSCTransport
+	if err := json.Unmarshal([]byte(reviewedPSC), &transport); err != nil {
+		t.Fatal(err)
+	}
+	transport.Instances = make([]string, 993)
+	for i := range transport.Instances {
+		transport.Instances[i] = "app-project:us-central1:database-" + strconv.Itoa(i)
+	}
+	raw, err := json.Marshal(transport)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = p.Provision(t.Context(), cpprovider.ProvisionRequest{InstanceID: id.New(id.PrefixInstance), Labels: map[string]string{LabelPublic: "true", LabelCloudSQLPSC: string(raw)}, Services: []cpprovider.ServiceSpec{{Name: "main", Image: "app:fixture"}}})
+	if err == nil || len(captured()) != 0 {
+		t.Fatalf("excessive proxy arguments reached Cloud Run: error=%v writes=%d", err, len(captured()))
 	}
 }

@@ -168,6 +168,8 @@ type ServiceConfig struct {
 	// PrivateEgress sends the service's traffic to private addresses into
 	// its cloud's network, and over a link to the other cloud.
 	PrivateEgress bool `json:"private_egress,omitempty"`
+	// CloudSQLNetwork is the reviewed application route for PSC attachments.
+	CloudSQLNetwork *provider.CloudSQLApplicationNetwork `json:"cloud_sql_network,omitempty"`
 	// Env are the variables Loomplane sets so the service finds what it
 	// needs. The values exist only once those things are deployed.
 	Env []EnvLink `json:"env,omitempty"`
