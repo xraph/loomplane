@@ -1,0 +1,360 @@
+{
+  "loomplane_analyses": [
+    {
+      "id": "analysis-1",
+      "ref": "main",
+      "alias": "app",
+      "error": "",
+      "graph": {
+        "edges": [],
+        "notes": [],
+        "version": 2,
+        "packages": [],
+        "services": [
+          {
+            "id": "svc:go:services/api",
+            "kind": "http-service",
+            "name": "api",
+            "path": "services/api",
+            "unit": "go:services/api",
+            "runtime": "go 1.26",
+            "commands": {},
+            "evidence": [
+              {
+                "line": 5,
+                "path": "services/api/main.go",
+                "detail": "func main() { _ = http.ListenAndServe(\":8080\", nil) }"
+              }
+            ],
+            "ecosystem": "go",
+            "framework": "net/http",
+            "unit_name": "example.com/acme/api",
+            "confidence": "likely",
+            "deployable": true,
+            "entrypoint": "services/api"
+          }
+        ],
+        "resources": [],
+        "workspaces": [],
+        "build_systems": []
+      },
+      "org_id": "org",
+      "status": "succeeded",
+      "summary": {},
+      "attempts": 0,
+      "source_id": "canary-source",
+      "commit_sha": "c000000000000000000000000000000000000001",
+      "created_at": "2026-10-26T21:46:59.437376+00:00",
+      "created_by": "usr",
+      "project_id": "proj",
+      "repository": "acme/app",
+      "started_at": null,
+      "finished_at": null
+    },
+    {
+      "id": "analysis-2",
+      "ref": "main",
+      "alias": "app",
+      "error": "",
+      "graph": {
+        "edges": [],
+        "notes": [],
+        "version": 2,
+        "packages": [],
+        "services": [
+          {
+            "id": "svc:go:services/api",
+            "kind": "http-service",
+            "name": "api",
+            "path": "services/api",
+            "unit": "go:services/api",
+            "runtime": "go 1.26",
+            "commands": {},
+            "evidence": [
+              {
+                "line": 5,
+                "path": "services/api/main.go",
+                "detail": "func main() { _ = http.ListenAndServe(\":8080\", nil) }"
+              }
+            ],
+            "ecosystem": "go",
+            "framework": "net/http",
+            "unit_name": "example.com/acme/api",
+            "confidence": "likely",
+            "deployable": true,
+            "entrypoint": "services/api"
+          }
+        ],
+        "resources": [],
+        "workspaces": [],
+        "build_systems": []
+      },
+      "org_id": "org",
+      "status": "succeeded",
+      "summary": {},
+      "attempts": 0,
+      "source_id": "canary-source",
+      "commit_sha": "c000000000000000000000000000000000000002",
+      "created_at": "2026-10-26T21:46:59.816074+00:00",
+      "created_by": "usr",
+      "project_id": "proj",
+      "repository": "acme/app",
+      "started_at": null,
+      "finished_at": null
+    }
+  ],
+  "loomplane_bindings": [
+    {
+      "id": "bind_01m5x2wnrfe5kvtr6k5wy847xe",
+      "url": "",
+      "name": "api",
+      "drift": "",
+      "config": {
+        "port": 8080,
+        "repo": "app",
+        "public": true,
+        "region": "us-central1",
+        "source": "services/api",
+        "service": "svc:app:go:services/api",
+        "provider": "cloud-run",
+        "workload": "http-service",
+        "ecosystem": "go",
+        "execution": "container",
+        "framework": "net/http",
+        "commit_sha": "c000000000000000000000000000000000000001",
+        "applied_inputs": {
+          "source": {
+            "ref": "main",
+            "root": "",
+            "alias": "app",
+            "in_scope": true,
+            "source_id": "canary-source",
+            "commit_sha": "c000000000000000000000000000000000000001",
+            "repository": "acme/app",
+            "analysis_id": "analysis-1"
+          },
+          "artifact_key": "sources/org/proj/app/c000000000000000000000000000000000000001.tar.gz"
+        }
+      },
+      "engine": "ctrlplane",
+      "org_id": "org",
+      "region": "us-central1",
+      "plan_id": "plan_01m5x2wngze9y86bc1r652p65n",
+      "subject": "service",
+      "provider": "cloud-run",
+      "replaced": [],
+      "revision": "registry/api:c000000000000000000000000000000000000001",
+      "commit_sha": "c000000000000000000000000000000000000001",
+      "created_at": "2026-10-26T21:46:59.727176+00:00",
+      "project_id": "proj",
+      "updated_at": "2026-10-26T21:46:59.727176+00:00",
+      "external_id": "projects/acme-prod/services/api",
+      "observed_at": null,
+      "physical_id": "",
+      "connection_id": "gcp",
+      "drift_message": "",
+      "environment_id": "env"
+    }
+  ],
+  "loomplane_environment_connections": [],
+  "loomplane_environment_sources": [
+    {
+      "org_id": "org",
+      "plan_id": "plan_01m5x2wngze9y86bc1r652p65n",
+      "source_id": "canary-source",
+      "commit_sha": "c000000000000000000000000000000000000001",
+      "analysis_id": "analysis-1",
+      "deployed_at": "2026-10-26T21:46:59.77002+00:00",
+      "environment_id": "env"
+    }
+  ],
+  "loomplane_manifests": [
+    {
+      "id": "canary-manifest",
+      "body": "version: 1\nservices:\n  api:\n    source: go:services/api\n    provider: cloud-run\n    port: 8080\n",
+      "digest": "canary-manifest",
+      "org_id": "org",
+      "revision": 1,
+      "created_at": "2026-10-26T21:46:59.428449+00:00",
+      "created_by": "usr",
+      "project_id": "proj"
+    }
+  ],
+  "loomplane_plan_sources": [
+    {
+      "ref": "main",
+      "root": "",
+      "alias": "app",
+      "plan_id": "plan_01m5x2wngze9y86bc1r652p65n",
+      "in_scope": true,
+      "source_id": "canary-source",
+      "commit_sha": "c000000000000000000000000000000000000001",
+      "repository": "acme/app",
+      "analysis_id": "analysis-1"
+    },
+    {
+      "ref": "main",
+      "root": "",
+      "alias": "app",
+      "plan_id": "plan_01m5x2wnw2emev3wtwq4m8my2h",
+      "in_scope": true,
+      "source_id": "canary-source",
+      "commit_sha": "c000000000000000000000000000000000000002",
+      "repository": "acme/app",
+      "analysis_id": "analysis-2"
+    }
+  ],
+  "loomplane_plans": [
+    {
+      "id": "plan_01m5x2wngze9y86bc1r652p65n",
+      "error": "",
+      "org_id": "org",
+      "result": {
+        "actions": [
+          {
+            "id": "service:api",
+            "op": "create",
+            "name": "api",
+            "step": 2,
+            "engine": "ctrlplane",
+            "reason": "Nothing runs api in production yet.",
+            "region": "us-central1",
+            "creates": "Cloud Run service",
+            "service": {
+              "port": 8080,
+              "repo": "app",
+              "public": true,
+              "region": "us-central1",
+              "source": "services/api",
+              "service": "svc:app:go:services/api",
+              "provider": "cloud-run",
+              "workload": "http-service",
+              "ecosystem": "go",
+              "execution": "container",
+              "framework": "net/http",
+              "commit_sha": "c000000000000000000000000000000000000001"
+            },
+            "subject": "service",
+            "provider": "cloud-run"
+          }
+        ],
+        "summary": {
+          "keep": 0,
+          "create": 1,
+          "delete": 0,
+          "update": 0,
+          "replace": 0
+        },
+        "problems": [],
+        "warnings": [],
+        "executable": true,
+        "connections": {
+          "gcp": "gcp"
+        }
+      },
+      "status": "approved",
+      "catalog": false,
+      "revision": "8fcd74bfc365fdc585fb861f08676c9e58e1ad9b0aade49df691fb1b3cf75f90",
+      "created_at": "2026-10-26T21:46:59.487039+00:00",
+      "created_by": "usr",
+      "decided_at": "2026-10-26T21:46:59.637979+00:00",
+      "decided_by": "usr",
+      "executable": true,
+      "expires_at": "2026-10-26T22:46:59.51281+00:00",
+      "planned_at": "2026-10-26T21:46:59.51281+00:00",
+      "project_id": "proj",
+      "environment": "production",
+      "manifest_id": "canary-manifest",
+      "decision_note": "",
+      "environment_id": "env",
+      "manifest_revision": 1
+    },
+    {
+      "id": "plan_01m5x2wnw2emev3wtwq4m8my2h",
+      "error": "",
+      "org_id": "org",
+      "result": {
+        "actions": [
+          {
+            "id": "service:api",
+            "op": "update",
+            "name": "api",
+            "step": 2,
+            "engine": "ctrlplane",
+            "reason": "api has new code.",
+            "region": "us-central1",
+            "changes": [
+              {
+                "to": "c000000",
+                "from": "c000000",
+                "field": "commit"
+              }
+            ],
+            "creates": "Cloud Run service",
+            "service": {
+              "port": 8080,
+              "repo": "app",
+              "public": true,
+              "region": "us-central1",
+              "source": "services/api",
+              "service": "svc:app:go:services/api",
+              "provider": "cloud-run",
+              "workload": "http-service",
+              "ecosystem": "go",
+              "execution": "container",
+              "framework": "net/http",
+              "commit_sha": "c000000000000000000000000000000000000002"
+            },
+            "subject": "service",
+            "provider": "cloud-run"
+          }
+        ],
+        "summary": {
+          "keep": 0,
+          "create": 0,
+          "delete": 0,
+          "update": 1,
+          "replace": 0
+        },
+        "problems": [],
+        "warnings": [],
+        "executable": true,
+        "connections": {
+          "gcp": "gcp"
+        }
+      },
+      "status": "ready",
+      "catalog": false,
+      "revision": "2b79569a730c013c799fe20b4f41b19c2f7942b875b2383d6ffc790f9b34b879",
+      "created_at": "2026-10-26T21:46:59.842288+00:00",
+      "created_by": "usr",
+      "decided_at": null,
+      "decided_by": "",
+      "executable": true,
+      "expires_at": "2026-10-26T22:46:59.871355+00:00",
+      "planned_at": "2026-10-26T21:46:59.871355+00:00",
+      "project_id": "proj",
+      "environment": "production",
+      "manifest_id": "canary-manifest",
+      "decision_note": "",
+      "environment_id": "env",
+      "manifest_revision": 1
+    }
+  ],
+  "loomplane_project_sources": [
+    {
+      "id": "canary-source",
+      "ref": "main",
+      "root": "",
+      "alias": "app",
+      "org_id": "org",
+      "created_at": "2026-10-26T21:46:59.420838+00:00",
+      "created_by": "usr",
+      "project_id": "proj",
+      "removed_at": null,
+      "repository": "acme/app",
+      "updated_at": "2026-10-26T21:46:59.420838+00:00"
+    }
+  ],
+  "plan_id": "plan_01m5x2wnw2emev3wtwq4m8my2h"
+}
