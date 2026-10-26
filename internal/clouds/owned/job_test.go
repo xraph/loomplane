@@ -6,17 +6,15 @@ import (
 	"testing"
 )
 
-// leaks reports four bytes of a sensitive part of a secret that output
-// shows outside its redactions.
+// leaks reports a sensitive piece of a secret that output shows outside
+// its redactions.
 func leaks(output string, secrets map[string]string) string {
 	shown := strings.Split(output, "[redacted]")
 	for _, value := range secrets {
-		for _, part := range sensitiveParts(value) {
-			for start := 0; start+4 <= len(part); start++ {
-				for _, text := range shown {
-					if piece := part[start : start+4]; strings.Contains(text, piece) {
-						return piece
-					}
+		for _, piece := range sensitivePieces(value) {
+			for _, text := range shown {
+				if strings.Contains(text, piece) {
+					return piece
 				}
 			}
 		}
@@ -82,13 +80,14 @@ func TestJobOutputHidesAURLsPasswordAndNotTheRest(t *testing.T) {
 	if output := JobOutput([]byte("using "+dsn+"\n"), secrets); output != "using [redacted]\n" {
 		t.Fatalf("whole: %q", output)
 	}
-	// Split, only its password is.
+	// Split, only its password and path are. What of its path its scheme
+	// spells too stays, so naming the scheme stays readable.
 	at := strings.Index(dsn, "Value")
 	output := tailed(secrets, "connecting to postgres://db:5432\n", "dial "+dsn[:at], "warn: slow\n", dsn[at:]+"\n")
 	if piece := leaks(output, secrets); piece != "" {
 		t.Fatalf("output %q shows %q", output, piece)
 	}
-	want := "connecting to postgres://db:5432\ndial postgresql://loomplane:[redacted]warn: slow\n[redacted]@lp-inst-db:5432/app__postgres?sslmode=disable\n"
+	want := "connecting to postgres://db:5432\ndial postgresql://loomplane:[redacted]warn: slow\n[redacted]@lp-inst-db:5432[redacted]tgres?sslmode=disable\n"
 	if output != want {
 		t.Fatalf("output: %q", output)
 	}
