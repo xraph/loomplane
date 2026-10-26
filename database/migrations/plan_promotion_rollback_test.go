@@ -4,6 +4,7 @@ package migrations
 
 import (
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -47,4 +48,48 @@ func TestEnvironmentManifestsBackfill(t *testing.T) {
 	}
 	down(t, db, "plan_promotion_rollback")
 	up(t, db, "plan_promotion_rollback")
+}
+
+// Up rebuilds both plan event trigger functions from persist_realtime_events
+// with the leftovers and artifacts defaults, and down puts back exactly what
+// persist_realtime_events defines.
+func TestPlanPromotionRollback_redefinesThePlanEventFunctions(t *testing.T) {
+	conn, db := scratch(t)
+	up(t, db, "create_projects", "create_analyses", "create_variables", "add_project_style", "create_planning",
+		"create_cloud_connections", "create_deployments", "add_binding_url", "create_project_sources", "create_plan_sources",
+		"add_deployment_sources", "standalone_catalog_plans", "persist_realtime_events")
+	bodies := func() []string {
+		return strs(t, conn, `SELECT prosrc FROM pg_proc
+			WHERE proname IN ('loomplane_parent_event_trigger','loomplane_state_event_trigger') ORDER BY proname`)
+	}
+	defined := []string{functionBody(t, parentEventTriggerFunction), functionBody(t, stateEventTriggerFunction)}
+	if got := bodies(); !slices.Equal(got, defined) {
+		t.Fatalf("persist_realtime_events left %q", got)
+	}
+
+	up(t, db, "plan_promotion_rollback")
+	const leftovers = `'summary','{}'::jsonb,'leftovers','[]'::jsonb,'artifacts','[]'::jsonb)`
+	want := make([]string, len(defined))
+	for i, body := range defined {
+		want[i] = strings.ReplaceAll(body, `'summary','{}'::jsonb)`, leftovers)
+	}
+	if got := bodies(); !slices.Equal(got, want) {
+		t.Fatalf("after up %q, want %q", got, want)
+	}
+
+	down(t, db, "plan_promotion_rollback")
+	if got := bodies(); !slices.Equal(got, defined) {
+		t.Fatalf("after down %q, want %q", got, defined)
+	}
+}
+
+// functionBody is what Postgres keeps as prosrc for a CREATE FUNCTION
+// statement quoted with $$.
+func functionBody(t *testing.T, stmt string) string {
+	t.Helper()
+	start, end := strings.Index(stmt, "$$"), strings.LastIndex(stmt, "$$")
+	if start < 0 || end <= start {
+		t.Fatalf("no $$ body in %.60s", stmt)
+	}
+	return stmt[start+2 : end]
 }
