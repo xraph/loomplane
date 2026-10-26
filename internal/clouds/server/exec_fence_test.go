@@ -28,9 +28,13 @@ func TestEffectHelperCompletesFencedDatabaseExec(t *testing.T) {
 		t.Skip("Python 3 helper")
 	}
 	for _, tc := range []struct {
-		name                     string
-		frame                    string
-		running, detach, tty     bool
+		name                 string
+		frame                string
+		running, detach, tty bool
+		// exitPending answers the first inspect after the stream with the
+		// exec still running and no exit code, as Docker does until it has
+		// processed the exit event.
+		exitPending              bool
 		clean, completesResponse bool
 	}{
 		{name: "complete", frame: "\x01\x00\x00\x00\x00\x00\x00\x02ok", clean: true, completesResponse: true},
@@ -38,6 +42,7 @@ func TestEffectHelperCompletesFencedDatabaseExec(t *testing.T) {
 		{name: "truncated_header", frame: "\x01\x00"},
 		{name: "truncated_payload", frame: "\x01\x00\x00\x00\x00\x00\x00\x05no"},
 		{name: "still_running", running: true},
+		{name: "exit_code_pending", frame: "\x01\x00\x00\x00\x00\x00\x00\x02ok", exitPending: true, clean: true, completesResponse: true},
 		{name: "detached", detach: true, clean: true},
 		{name: "tty", tty: true, clean: true},
 	} {
@@ -56,13 +61,17 @@ func TestEffectHelperCompletesFencedDatabaseExec(t *testing.T) {
 				t.Fatal(err)
 			}
 			container, execution := strings.Repeat("a", 64), strings.Repeat("b", 64)
-			var starts atomic.Int32
+			var starts, receipts atomic.Int32
 			api := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch r.URL.Path {
 				case "/info":
 					_ = json.NewEncoder(w).Encode(map[string]string{"ID": daemon})
 				case "/exec/" + execution + "/json":
-					_ = json.NewEncoder(w).Encode(map[string]any{"ContainerID": container, "Running": starts.Load() > 0 && tc.running, "ExitCode": 0, "ProcessConfig": map[string]any{"tty": tc.tty, "privileged": false, "entrypoint": "pg_isready", "arguments": []string{"-U", "postgres"}}})
+					running, exitCode := starts.Load() > 0 && tc.running, any(0)
+					if starts.Load() > 0 && tc.exitPending && receipts.Add(1) == 1 {
+						running, exitCode = true, nil
+					}
+					_ = json.NewEncoder(w).Encode(map[string]any{"ContainerID": container, "Running": running, "ExitCode": exitCode, "ProcessConfig": map[string]any{"tty": tc.tty, "privileged": false, "entrypoint": "pg_isready", "arguments": []string{"-U", "postgres"}}})
 				case "/exec/" + execution + "/start":
 					if _, readErr := io.Copy(io.Discard, r.Body); readErr != nil {
 						t.Error(readErr)

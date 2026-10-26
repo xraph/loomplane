@@ -202,10 +202,13 @@ def main():
     chunk=r.read(min(65536,remaining));assert chunk
     remaining-=len(chunk);output(chunk)
   c.close();c=UnixHTTP('docker')
+  # Docker leaves ExitCode null until it has processed the exit event, which
+  # can land just after the stream closes. Only a finished exec has one.
   for attempt in range(120):
    c.request('GET',inspect);finished=c.getresponse();receipt=json.loads(finished.read());assert finished.status==200
-   assert receipt['ContainerID']==container and isinstance(receipt['ExitCode'],int)
-   if not receipt['Running']: break
+   assert receipt['ContainerID']==container
+   if not receipt['Running']:
+    assert isinstance(receipt['ExitCode'],int);break
    time.sleep(0.25)
   assert not receipt['Running']
  elif r.chunked:
