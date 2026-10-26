@@ -184,11 +184,15 @@ export type StackInput = {
 
 const postgresExtensions = "TimescaleDB, pgvector, PostGIS."
 
+/** What the Postgres card and the Add Fabriq dialog say about backups on a cluster. */
+export const kubernetesBackupsSentence =
+  "Backups on Kubernetes aren’t available yet."
+
 function postgresDetail(input: StackInput): string {
   if (input.postgres === "linked")
     return `${postgresExtensions} Connected to your engine. See Recovery for its backup options.`
   if (input.provider === "kubernetes")
-    return `${postgresExtensions} Backups on Kubernetes aren’t available yet.`
+    return `${postgresExtensions} ${kubernetesBackupsSentence}`
   const schedule = backupSchedule(input)
   if (input.restoreStatus === "loading")
     return `${postgresExtensions} ${schedule}.`
