@@ -3,11 +3,7 @@
 package integration
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
-	"errors"
-	"fmt"
 	"net/http"
 	"strings"
 	"testing"
@@ -19,11 +15,16 @@ import (
 	"github.com/xraph/loomplane/internal/config"
 )
 
-// A lock on Dispatch's task table that outlasts the durable worker's
-// store timeout makes its next store call time out, the way an
-// overloaded Postgres did. Loomplane doesn't set the worker's timing, so
-// this relies on Dispatch's defaults: a 30-second lease and a store
-// timeout of min(5s, lease/4).
+// A Dispatch store call that outlasts the durable worker's store timeout
+// stops the worker, the way an overloaded Postgres did, and the
+// supervisor in internal/platform has to replace it. Loomplane doesn't
+// set the worker's timing, so this relies on Dispatch v1.9.2's defaults: a
+// 30-second lease and a store timeout of min(5s, lease/4).
+//
+// The deployment and capacity workers share one health check with the
+// same message, so the health check only proves a worker stopped and was
+// replaced, not which one. New plans run on the capacity build, so the
+// plans prove the worker that runs them kept working.
 func TestDispatch_aStoreTimeoutDoesNotStopDurableWork(t *testing.T) {
 	last := time.Now()
 	took := func(what string) {
@@ -103,6 +104,10 @@ func TestDispatch_aStoreTimeoutDoesNotStopDurableWork(t *testing.T) {
 		if (p.Status != "blocked" && p.Status != "ready") || p.Error != "" {
 			t.Fatalf("plan %s ended %q: %s", id, p.Status, p.Error)
 		}
+		// Only a plan the planner ran has actions or problems.
+		if len(p.Actions)+len(p.Problems) == 0 {
+			t.Fatalf("plan %s settled %q without being computed: %+v", id, p.Status, p)
+		}
 	}
 	planned(create())
 	took("the first plan")
@@ -112,53 +117,30 @@ func TestDispatch_aStoreTimeoutDoesNotStopDurableWork(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = conn.Close(context.Background()) }()
-	// lockTasks locks Dispatch's task table, and gives up straight away
-	// when still is false once the lock is held. Otherwise it holds the
-	// lock until a Dispatch query is waiting on it and the durable worker
-	// has stopped on the timeout, which proves the failure was injected.
-	lockTasks := func(still func(pgx.Tx) bool) bool {
+	// healthy fails unless the dispatch health check passes now, so a
+	// worker that was already down can't count as the injected failure.
+	healthy := func() {
 		t.Helper()
-		tx, txErr := conn.Begin(t.Context())
-		if txErr != nil {
-			t.Fatal(txErr)
+		if health := jobs.Health(t.Context()); health != nil {
+			t.Fatalf("dispatch unhealthy before the injected failure: %v", health)
 		}
-		defer func() { _ = tx.Rollback(context.Background()) }()
-		if _, txErr = tx.Exec(t.Context(), "SET LOCAL lock_timeout = '30s'"); txErr != nil {
-			t.Fatal(txErr)
-		}
-		if _, txErr = tx.Exec(t.Context(), "LOCK TABLE dispatch_execution_tasks IN ACCESS EXCLUSIVE MODE"); txErr != nil {
-			t.Fatal(txErr)
-		}
-		if still != nil && !still(tx) {
-			return false
-		}
-		waiting, stopped := false, false
-		deadline := time.Now().Add(20 * time.Second)
-		for !waiting || !stopped {
+	}
+	// injected waits until waiting() shows the store call stuck in
+	// Postgres and the health check reports a stopped worker.
+	injected := func(what string, waiting func() bool) {
+		t.Helper()
+		seen, stopped := false, false
+		deadline := time.Now().Add(30 * time.Second)
+		for !seen || !stopped {
 			if time.Now().After(deadline) {
-				t.Fatalf("no injected failure after 20s: a query waiting on the lock %t, the worker stopped %t", waiting, stopped)
+				t.Fatalf("no injected failure after 30s: %s %t, a worker stopped %t", what, seen, stopped)
 			}
-			if _, txErr = tx.Exec(t.Context(), "SELECT pg_stat_clear_snapshot()"); txErr != nil {
-				t.Fatal(txErr)
-			}
-			var blocked int
-			if txErr = tx.QueryRow(t.Context(), `SELECT count(*) FROM pg_stat_activity WHERE datname=current_database()
-				AND pid<>pg_backend_pid() AND wait_event_type='Lock' AND query LIKE '%dispatch_execution_tasks%'`).Scan(&blocked); txErr != nil {
-				t.Fatal(txErr)
-			}
-			waiting = waiting || blocked > 0
+			seen = seen || waiting()
 			if health := jobs.Health(t.Context()); health != nil && strings.Contains(health.Error(), "durable workflow worker stopped") {
 				stopped = true
 			}
 			time.Sleep(50 * time.Millisecond)
 		}
-		// Both workers' claims waited on the same lock; give the second
-		// timeout a moment to land too.
-		time.Sleep(500 * time.Millisecond)
-		if txErr = tx.Commit(t.Context()); txErr != nil {
-			t.Fatal(txErr)
-		}
-		return true
 	}
 	// replaced waits for the health check to pass again. A stopped worker
 	// never runs again, so that means the supervisor replaced it.
@@ -167,97 +149,113 @@ func TestDispatch_aStoreTimeoutDoesNotStopDurableWork(t *testing.T) {
 		deadline := time.Now().Add(30 * time.Second)
 		for jobs.Health(t.Context()) != nil {
 			if time.Now().After(deadline) {
-				t.Fatalf("dispatch still unhealthy after the lock was released: %v", jobs.Health(t.Context()))
+				t.Fatalf("dispatch still unhealthy after the injected failure: %v", jobs.Health(t.Context()))
 			}
 			time.Sleep(100 * time.Millisecond)
 		}
 	}
 
-	// The worker times out while it's idle; a plan made afterwards is planned.
-	lockTasks(nil)
+	// The worker times out while it's idle: a lock on the task table makes
+	// its next claim wait past the store timeout. A plan made once the lock
+	// is gone is planned.
+	healthy()
+	tx, err := conn.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = tx.Rollback(context.Background()) }()
+	if _, err = tx.Exec(t.Context(), "SET LOCAL lock_timeout = '30s'"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(t.Context(), "LOCK TABLE dispatch_execution_tasks IN ACCESS EXCLUSIVE MODE"); err != nil {
+		t.Fatal(err)
+	}
+	injected("a query waiting on the lock", func() bool {
+		if _, clearErr := tx.Exec(t.Context(), "SELECT pg_stat_clear_snapshot()"); clearErr != nil {
+			t.Fatal(clearErr)
+		}
+		var n int
+		if scanErr := tx.QueryRow(t.Context(), `SELECT count(*) FROM pg_stat_activity WHERE datname=current_database()
+			AND pid<>pg_backend_pid() AND wait_event_type='Lock' AND query LIKE '%dispatch_execution_tasks%'`).Scan(&n); scanErr != nil {
+			t.Fatal(scanErr)
+		}
+		return n > 0
+	})
+	// Both workers' claims waited on the same lock; give the second
+	// timeout a moment to land too.
+	time.Sleep(500 * time.Millisecond)
+	if err = tx.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 	planned(create())
 	replaced()
 	took("the idle timeout")
 
-	// The worker times out while it holds a plan's activity. That plan is
-	// planned once its lease runs out and a replacement claims it again.
-	inFlight := ""
-	for attempt := 0; attempt < 5 && inFlight == ""; attempt++ {
-		posted := make(chan error, 1)
-		go func() { posted <- postPlan(t.Context(), c, base) }()
-		id := claimedPlanActivity(t, conn, posted)
-		if id != "" && lockTasks(func(tx pgx.Tx) bool {
-			var claimed bool
-			scanErr := tx.QueryRow(t.Context(), `SELECT EXISTS (SELECT 1 FROM dispatch_execution_tasks WHERE workflow_id=$1
-				AND kind='activity' AND NOT done AND lease_until > clock_timestamp())`, id).Scan(&claimed)
-			if scanErr != nil {
-				t.Fatal(scanErr)
-			}
-			return claimed
-		}) {
-			inFlight = id
-			t.Logf("held the lock while a worker held plan %s's activity (attempt %d)", id, attempt+1)
-		}
-		if postErr := <-posted; postErr != nil {
-			t.Fatal(postErr)
-		}
+	// The worker times out with a plan in flight: a trigger stalls the
+	// write that marks a plan's activity done, so the claim and the
+	// planner run and only that commit outlasts the store timeout. The
+	// planner has saved the plan by then, so the plan's status can't show
+	// recovery. Its Dispatch run has to complete instead, which takes a
+	// second attempt at the activity once the stalled claim's lease runs
+	// out. Earlier plans have all settled, so the trigger can only catch
+	// the one made here.
+	healthy()
+	dropStall := func(ctx context.Context, db *pgx.Conn) error {
+		_, dropErr := db.Exec(ctx, `DROP TRIGGER IF EXISTS loomplane_test_stall ON dispatch_execution_tasks;
+			DROP FUNCTION IF EXISTS loomplane_test_stall()`)
+		return dropErr
 	}
-	if inFlight == "" {
-		t.Fatal("never caught a plan's activity while it was claimed")
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if db, connErr := pgx.Connect(ctx, cfg.Database.URL); connErr == nil {
+			_ = dropStall(ctx, db)
+			_ = db.Close(ctx)
+		}
+	})
+	defer func() { _ = dropStall(context.Background(), conn) }()
+	if _, err = conn.Exec(t.Context(), `CREATE FUNCTION loomplane_test_stall() RETURNS trigger LANGUAGE plpgsql AS $$
+		BEGIN PERFORM pg_sleep(10); RETURN NEW; END $$`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = conn.Exec(t.Context(), `CREATE TRIGGER loomplane_test_stall BEFORE UPDATE ON dispatch_execution_tasks FOR EACH ROW
+		WHEN (NEW.done AND NOT OLD.done AND NEW.kind = 'activity' AND starts_with(NEW.workflow_id, 'plan_'))
+		EXECUTE FUNCTION loomplane_test_stall()`); err != nil {
+		t.Fatal(err)
+	}
+	inFlight := create()
+	injected("the activity's completion sleeping in the trigger", func() bool {
+		var n int
+		if scanErr := conn.QueryRow(t.Context(), `SELECT count(*) FROM pg_stat_activity WHERE datname=current_database()
+			AND wait_event='PgSleep'`).Scan(&n); scanErr != nil {
+			t.Fatal(scanErr)
+		}
+		return n > 0
+	})
+	if err = dropStall(t.Context(), conn); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(90 * time.Second)
+	for {
+		var state string
+		var attempt int64
+		if err = conn.QueryRow(t.Context(), `SELECT e.state, max(k.attempt) FROM dispatch_executions e
+			JOIN dispatch_execution_tasks k USING (namespace, workflow_id, run_id)
+			WHERE e.workflow_id=$1 AND k.kind='activity' GROUP BY e.state`, inFlight).Scan(&state, &attempt); err != nil {
+			t.Fatal(err)
+		}
+		if state == "completed" {
+			if attempt < 2 {
+				t.Fatalf("plan %s's run completed without retrying its stalled activity (attempt %d)", inFlight, attempt)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("plan %s's Dispatch run still %s after the store timeout", inFlight, state)
+		}
+		time.Sleep(200 * time.Millisecond)
 	}
 	planned(inFlight)
 	replaced()
 	took("the in-flight timeout")
-}
-
-// postPlan asks for a plan without failing the test, so it can run on
-// its own goroutine while the test watches Dispatch's task table.
-func postPlan(ctx context.Context, c *client, base string) error {
-	body, err := json.Marshal(map[string]string{"environment": "production"})
-	if err != nil {
-		return err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.base+base+"/plans", bytes.NewReader(body))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("X-Publishable-Key", c.key)
-	req.Header.Set("Authorization", "Bearer "+c.token)
-	res, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return err
-	}
-	_ = res.Body.Close()
-	if res.StatusCode != http.StatusCreated {
-		return fmt.Errorf("create plan: status %d", res.StatusCode)
-	}
-	return nil
-}
-
-// claimedPlanActivity returns the plan whose activity a worker holds now,
-// or "" if the plan request ended without one being seen.
-func claimedPlanActivity(t *testing.T, conn *pgx.Conn, posted <-chan error) string {
-	t.Helper()
-	settled := time.Time{}
-	for {
-		var id string
-		err := conn.QueryRow(t.Context(), `SELECT workflow_id FROM dispatch_execution_tasks WHERE starts_with(workflow_id, 'plan_')
-			AND kind='activity' AND NOT done AND lease_until > clock_timestamp() LIMIT 1`).Scan(&id)
-		switch {
-		case err == nil:
-			return id
-		case !errors.Is(err, pgx.ErrNoRows):
-			t.Fatal(err)
-		}
-		if settled.IsZero() && len(posted) > 0 {
-			settled = time.Now()
-		}
-		// The request can return before the activity is claimed, so keep
-		// looking for a moment after it does.
-		if !settled.IsZero() && time.Since(settled) > 2*time.Second {
-			return ""
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
 }
