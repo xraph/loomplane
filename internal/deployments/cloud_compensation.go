@@ -233,33 +233,25 @@ func (r *Runner) resolveCompensationPending(ctx context.Context, job *Job, step 
 	if step.StartedAt == nil && len(step.Checkpoint) == 0 && step.Replaced == nil {
 		return r.releaseCompensationReservation(ctx, job)
 	}
-	if job.Action.Op != planning.Replace {
+	if !r.canResolvePendingAction(job.Action) {
 		return nil
 	}
-	pending, ok := r.executors[job.Action.Provider].(PendingCloudResource)
-	if !ok {
-		return errors.New("original executor cannot resolve its unfinished resource")
-	}
 	rc := readReplaceCheckpoint(step.Checkpoint)
-	job.Resume = rc.Apply
-	id, err := pending.PendingCloudResource(ctx, job)
+	checkpoint := r.pendingCheckpoint(ctx, job, step, heartbeat)
+	bound, err := r.resolvePendingIdentity(ctx, job, rc, checkpoint)
 	if err != nil {
 		return err
 	}
-	if id != "" && id != c.Source.ExternalID && id != c.Candidate.ExternalID {
-		raw, encodeErr := json.Marshal(job.Action.Service)
-		if encodeErr != nil {
-			return encodeErr
+	protected := false
+	for _, serving := range []*planning.Binding{&c.Source, &c.Candidate} {
+		same, err := r.sameBindingResource(ctx, job.Deployment.OrgID, bound, serving)
+		if err != nil {
+			return err
 		}
-		bound := &planning.Binding{OrgID: job.Deployment.OrgID, ProjectID: job.Deployment.ProjectID, EnvironmentID: job.Deployment.EnvironmentID, Name: job.Action.Name, Subject: job.Action.Subject, Provider: job.Action.Provider, ConnectionID: job.Action.ConnectionID, ExternalID: id, Config: raw, PlanID: job.Plan.ID}
-		rc.PendingResource = id
-		checkpoint := func(data []byte) error {
-			step.Checkpoint = data
-			if saveErr := r.store.UpdateStep(ctx, job.Deployment.OrgID, job.Deployment.ID, *step); saveErr != nil {
-				return saveErr
-			}
-			return heartbeat(data)
-		}
+		protected = protected || same
+	}
+	id := bound.ExternalID
+	if id != "" && !protected {
 		if done, removeErr := r.removeOne(ctx, job, bound, rc, checkpoint); removeErr != nil {
 			return removeErr
 		} else if !done {

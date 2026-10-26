@@ -37,16 +37,11 @@ type SQLPSCCleanupState struct {
 // reconciled through its provisioning checkpoint. Cleanup does not read the
 // reusable SQL instance name or delete an external manual route.
 func (s *Session) DeleteSQLPSCSourceEndpoint(ctx context.Context, spec SQLPSCProvisionSpec, owned SQLPSCProvisionState, endpoint SQLPSCProvisionedEndpoint, checkpoint *SQLPSCCleanupState, save func(SQLPSCCleanupState) error, check func(context.Context) error) error {
-	if checkpoint == nil || save == nil || check == nil || !spec.Endpoint.Valid(spec.Source.Region) || owned.Version != 2 || owned.SourceProject != s.key.ProjectID || owned.SourcePhysicalID != spec.PhysicalID || s.checkSQLBackupSource(spec.Source.Region, spec.Source.Name, spec.PhysicalID) != nil || !validPSCScope(owned.Scope) || !validPSCDeletionOwnership(spec, owned, endpoint) || !validSQLPSCName(endpoint.DNSName) {
+	if checkpoint == nil || save == nil || check == nil {
 		return errPSCProvision
 	}
-	route := owned.Subnet.Route
-	if !route.Valid(spec.Source.Region) || route.ConsumerProject != spec.Endpoint.ConsumerProject || route.Network != spec.Endpoint.Network || route.Subnetwork != spec.Subnetwork {
-		return errPSCProvision
-	}
-	attachment := strings.Split(endpoint.ServiceAttachment, "/")
-	if len(attachment) != 6 || attachment[0] != "projects" || !validSQLPathID(attachment[1]) || attachment[2] != "regions" || attachment[3] != spec.Source.Region || attachment[4] != "serviceAttachments" || !sqlNativeName(attachment[5]) {
-		return errPSCProvision
+	if err := s.ValidateSQLPSCCleanupOwnership(spec, owned, endpoint); err != nil {
+		return err
 	}
 	raw, err := json.Marshal([]any{s.key.ProjectID, spec.Source.Name, spec.Source.Region, spec.PhysicalID, spec.Endpoint, spec.Subnetwork, owned, endpoint})
 	if err != nil {
@@ -324,4 +319,20 @@ func (s *Session) deletePSCCompute(ctx context.Context, prefix, path, id string,
 func pscMutationRejected(err error) bool {
 	var native *APIError
 	return errors.As(err, &native) && (native.Status == 400 || native.Status == 401 || native.Status == 403 || native.Status == 409)
+}
+
+// ValidateSQLPSCCleanupOwnership checks a recovered prefix before source deletion.
+func (s *Session) ValidateSQLPSCCleanupOwnership(spec SQLPSCProvisionSpec, owned SQLPSCProvisionState, endpoint SQLPSCProvisionedEndpoint) error {
+	if !spec.Endpoint.Valid(spec.Source.Region) || owned.Version != 2 || owned.SourceProject != s.key.ProjectID || owned.SourcePhysicalID != spec.PhysicalID || s.checkSQLBackupSource(spec.Source.Region, spec.Source.Name, spec.PhysicalID) != nil || !validPSCScope(owned.Scope) || !validPSCDeletionOwnership(spec, owned, endpoint) || !validSQLPSCName(endpoint.DNSName) {
+		return errPSCProvision
+	}
+	route := owned.Subnet.Route
+	if !route.Valid(spec.Source.Region) || route.ConsumerProject != spec.Endpoint.ConsumerProject || route.Network != spec.Endpoint.Network || route.Subnetwork != spec.Subnetwork {
+		return errPSCProvision
+	}
+	attachment := strings.Split(endpoint.ServiceAttachment, "/")
+	if len(attachment) != 6 || attachment[0] != "projects" || !validSQLPathID(attachment[1]) || attachment[2] != "regions" || attachment[3] != spec.Source.Region || attachment[4] != "serviceAttachments" || !sqlNativeName(attachment[5]) {
+		return errPSCProvision
+	}
+	return nil
 }

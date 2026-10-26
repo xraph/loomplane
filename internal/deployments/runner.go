@@ -61,6 +61,7 @@ type Observation struct {
 
 // Job is one action to carry out, with everything its executor needs.
 type Job struct {
+	pendingIdentity  *PendingCloudIdentity
 	cleanupSyncID    string
 	BuildCredentials Credentials
 	Logs             LogSink
@@ -1045,12 +1046,13 @@ func moves(b *planning.Binding, a planning.Action, connID string) bool {
 // its own. Removing is the external ID of what Remove's progress is for,
 // since an action can have more than one old one to remove.
 type replaceCheckpoint struct {
-	PendingResource string `json:"pending_resource,omitempty"`
-	Replace         bool   `json:"replace"`
-	Apply           []byte `json:"apply,omitempty"`
-	Remove          []byte `json:"remove,omitempty"`
-	Removing        string `json:"removing,omitempty"`
-	RemovingScope   string `json:"removing_scope,omitempty"`
+	PendingIdentity *PendingCloudIdentity `json:"pending_identity,omitempty"`
+	PendingResource string                `json:"pending_resource,omitempty"`
+	Replace         bool                  `json:"replace"`
+	Apply           []byte                `json:"apply,omitempty"`
+	Remove          []byte                `json:"remove,omitempty"`
+	Removing        string                `json:"removing,omitempty"`
+	RemovingScope   string                `json:"removing_scope,omitempty"`
 }
 
 // readReplaceCheckpoint reads what an earlier attempt at an action saved.
@@ -1283,7 +1285,7 @@ func (r *Runner) removeOne(ctx context.Context, job *Job, old *planning.Binding,
 	if fenceErr != nil {
 		return false, fenceErr
 	}
-	if err := exec.Remove(removalCtx, &gone, old); err != nil {
+	if err := removePendingOrBound(removalCtx, exec, &gone, old); err != nil {
 		if deleting {
 			return false, untracked(fmt.Errorf("remove the old %s on %s: %w", a.Name, placement(old.Provider, old.Region), err))
 		}

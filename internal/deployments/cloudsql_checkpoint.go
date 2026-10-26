@@ -51,7 +51,7 @@ func readCloudSQLState(job *Job, cfg *planning.ResourceConfig, project, region, 
 		stages = []string{"remove", "removed"}
 	}
 	if len(job.Resume) == 0 {
-		restoreErr := state.restorePSC(cfg, job.Binding, false)
+		restoreErr := state.restoreCloudSQLPSC(job, cfg, false)
 		return state, restoreErr
 	}
 	var restored cloudSQLState
@@ -93,7 +93,7 @@ func readCloudSQLState(job *Job, cfg *planning.ResourceConfig, project, region, 
 	if state.Uncertain && state.Operation == "" && (state.Version < 3 || state.Stage != "instance" || mode != "apply" || job.Binding != nil) {
 		return nil, errors.New("cloud sql checkpoint has an uncertain request without a captured operation; reconcile the original cloud operation before retrying")
 	}
-	restoreErr := state.restorePSC(cfg, job.Binding, true)
+	restoreErr := state.restoreCloudSQLPSC(job, cfg, true)
 	return state, restoreErr
 }
 
@@ -193,4 +193,11 @@ func (s *cloudSQLState) recoverCreate(ctx context.Context, client *gcp.Session, 
 	}
 	s.ResourceID, s.Operation, s.RecoveredCreate = proof.PhysicalID, proof.Operation, proof
 	return s.save()
+}
+
+func (s *cloudSQLState) restoreCloudSQLPSC(job *Job, cfg *planning.ResourceConfig, resumed bool) error {
+	if s.Scope.Mode == "remove" && job.pendingIdentity != nil {
+		return s.restorePendingPSC(cfg, job.Binding, resumed, job.pendingIdentity)
+	}
+	return s.restorePSC(cfg, job.Binding, resumed)
 }
