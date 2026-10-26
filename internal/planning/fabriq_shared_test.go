@@ -35,7 +35,7 @@ func TestTwoFabriqsRefuseOneDatabase(t *testing.T) {
 			if len(shared) != 1 || shared[0].Name != "orders" || r.Executable {
 				t.Fatalf("shared: %+v (executable %v)", shared, r.Executable)
 			}
-			want := "orders's Postgres is already used by Fabriq billing. Each Fabriq needs its own database."
+			want := "orders's Postgres server is already used by Fabriq billing. Each Fabriq needs its own Postgres server: point one of them at another server."
 			if shared[0].Message != want || !strings.HasPrefix(shared[0].Path, "resources.orders.uses.postgres.") {
 				t.Fatalf("finding: %+v", shared[0])
 			}
@@ -55,36 +55,62 @@ func TestFabriqsWithTheirOwnDatabasesPlan(t *testing.T) {
 	}
 }
 
+// The same manifest planned in a second environment is the commonest way
+// two Fabriqs meet on one server, since uses.postgres.external can't vary
+// by environment. The finding says where the other one runs.
 func TestFabriqRefusesAnEndpointAnotherEnvironmentsFabriqUses(t *testing.T) {
 	doc := "version: 1\nresources:\n  orders: {kind: fabriq, provider: server, target: " + targetA + ", uses: {postgres: {external: " + prodPG + "}}}\n"
-	r := Compute(Input{
-		Environment: "production", Graph: infrastructureGraph(), Manifest: parse(t, doc), Providers: providers.Registry(),
-		Connections: composedConnections(t), Kinds: recipes.Default(),
-		FabriqPostgres: map[string]string{prodPG: "events", otherPG: "audit"},
-	})
-	shared := sharedFindings(r)
-	if len(shared) != 1 || shared[0].Message != "orders's Postgres is already used by Fabriq events. Each Fabriq needs its own database." {
-		t.Fatalf("shared: %+v", shared)
+	remedy := " Each Fabriq needs its own Postgres server: turn Fabriq off in one environment or point it at another server."
+	cases := map[string]struct {
+		user FabriqUser
+		want string
+	}{
+		"the same manifest in staging":  {FabriqUser{Name: "orders", Environment: "staging"}, "orders's Postgres server is already used by Fabriq orders in staging."},
+		"another project":               {FabriqUser{Name: "events", Environment: "production", Other: true, Project: "shop"}, "orders's Postgres server is already used by Fabriq events in project shop (production)."},
+		"an environment without a name": {FabriqUser{Name: "events"}, "orders's Postgres server is already used by Fabriq events in another environment."},
+		"a project without a name":      {FabriqUser{Name: "events", Environment: "staging", Other: true}, "orders's Postgres server is already used by Fabriq events in another project."},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			r := Compute(Input{
+				Environment: "production", Graph: infrastructureGraph(), Manifest: parse(t, doc), Providers: providers.Registry(),
+				Connections: composedConnections(t), Kinds: recipes.Default(),
+				FabriqPostgres: map[string]FabriqUser{prodPG: c.user, otherPG: {Name: "audit", Environment: "staging"}},
+			})
+			shared := sharedFindings(r)
+			if len(shared) != 1 || shared[0].Message != c.want+remedy || r.Executable {
+				t.Fatalf("shared: %+v", shared)
+			}
+		})
 	}
 }
 
 func TestFabriqPostgresReadsOtherEnvironmentsBindings(t *testing.T) {
-	bound := func(env, name, kind string, choice DependencyChoice) *Binding {
+	bound := func(project, env, name, kind string, choice DependencyChoice) *OrgResource {
 		raw, err := json.Marshal(ResourceConfig{Provider: "server", Kind: kind, Composition: &CompositionConfig{Kind: kind, Dependencies: map[string]DependencyChoice{"postgres": choice}}})
 		if err != nil {
 			t.Fatal(err)
 		}
-		return &Binding{ID: env + "-" + name, EnvironmentID: env, Subject: ResourceSubject, Name: name, Config: raw}
+		return &OrgResource{
+			Binding:     &Binding{ID: env + "-" + name, ProjectID: project, EnvironmentID: env, Subject: ResourceSubject, Name: name, Config: raw},
+			Environment: env + " name", Project: project + " name",
+		}
 	}
-	external := DependencyChoice{Mode: DependencyExternal, External: prodPG}
-	got := FabriqPostgres([]*Binding{
-		bound("staging", "events", "fabriq", external),
+	external := func(id string) DependencyChoice { return DependencyChoice{Mode: DependencyExternal, External: id} }
+	got := FabriqPostgres([]*OrgResource{
+		bound("shop", "staging", "events", "fabriq", external(prodPG)),
 		// This environment's own bindings are the manifest's business.
-		bound("production", "orders", "fabriq", DependencyChoice{Mode: DependencyExternal, External: otherPG}),
-		bound("staging", "lib", "fabriq-library", DependencyChoice{Mode: DependencyNew, Resource: "lib--postgres"}),
-		bound("staging", "app", "sample", DependencyChoice{Mode: DependencyExternal, External: otherPG}),
-	}, "production")
-	if want := map[string]string{prodPG: "events"}; !reflect.DeepEqual(got, want) {
-		t.Fatalf("got %v", got)
+		bound("shop", "production", "orders", "fabriq", external(otherPG)),
+		bound("shop", "staging", "lib", "fabriq-library", DependencyChoice{Mode: DependencyNew, Resource: "lib--postgres"}),
+		bound("shop", "staging", "app", "sample", external(otherPG)),
+		bound("blog", "blog-prod", "posts", "fabriq", external(otherPG)),
+	}, "shop", "production")
+	want := map[string]FabriqUser{
+		prodPG: {Name: "events", Environment: "staging name"},
+		// Another project's Fabriq is named with its project.
+		otherPG: {Name: "posts", Environment: "blog-prod name", Project: "blog name", Other: true},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("got %+v", got)
 	}
 }

@@ -587,7 +587,7 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 	if err != nil {
 		return nil, "", err
 	}
-	fabriqPostgres, err := s.fabriqPostgres(ctx, plan.OrgID, plan.EnvironmentID)
+	fabriqPostgres, err := s.fabriqPostgres(ctx, plan)
 	if err != nil {
 		return nil, "", err
 	}

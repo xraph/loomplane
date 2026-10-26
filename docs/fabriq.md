@@ -12,6 +12,8 @@ Choose **Connect existing** for Postgres or Redis. You can select a compatible r
 
 An external Postgres must be version 16 or newer, have the `timescaledb`, `vector` and `postgis` extensions installed, preload TimescaleDB and allow the connecting role to create roles. Fabriq uses that connection for migrations and creates its own application role. Redis must be version 7 or newer; TLS Redis endpoints are not supported by this profile yet. The connection check runs from the selected target.
 
+Each Fabriq needs a Postgres server of its own, because it creates the server-wide `fabriq_app` role. A second database on the same server isn't enough, so if you run Fabriq in more than one environment, point each one at a different server.
+
 External engines remain yours to operate. Loomplane does not back them up or restore them. A project resource keeps its own recovery controls.
 
 ## Connect a service to hosted Fabriq

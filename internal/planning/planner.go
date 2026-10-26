@@ -58,8 +58,8 @@ type Input struct {
 	Endpoints map[string]EndpointCheck
 	// FabriqPostgres are the external endpoints that Fabriq resources in
 	// the organization's other environments connect as their Postgres, each
-	// with the name of one that does. A Fabriq here can't connect them too.
-	FabriqPostgres map[string]string
+	// with one that does. A Fabriq here can't connect them too.
+	FabriqPostgres map[string]FabriqUser
 }
 
 // ConnectionOption is a cloud connection a plan could deploy with.
