@@ -123,6 +123,7 @@ export interface AnalysisList {
 export interface AppInputBody {
   clientId: string;
   clientSecret: string;
+  slug?: string;
 }
 
 export interface AppliedInputs {
@@ -340,6 +341,7 @@ export interface CloudForm {
   help?: string;
   methods: string[];
   settings?: Setting[];
+  signInSettings?: Setting[];
   title: string;
 }
 
@@ -525,6 +527,7 @@ export interface Connection {
   missing: string[];
   name: string;
   orgId: string;
+  signedInBy?: string;
   status: string;
   updatedAt: string;
 }
@@ -2385,11 +2388,14 @@ export interface Setting {
 
 export interface SignIn {
   authorizeUrl: string;
+  state: string;
 }
 
 export interface SignInApp {
   clientId?: string;
   cloud: string;
+  problem?: string;
+  slug?: string;
   source: string;
   updatedAt?: string;
   updatedBy?: string;
@@ -2404,6 +2410,7 @@ export interface SignInInputBody {
   cloud: string;
   connectionId?: string;
   name: string;
+  settings?: Record<string, any>;
 }
 
 export interface Size {

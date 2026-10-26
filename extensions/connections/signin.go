@@ -80,7 +80,7 @@ func (e *Extension) setSignInApp(c forge.Context) error {
 	}
 	var in connections.AppInput
 	if err = c.BindJSON(&in); err != nil {
-		return forge.NewHTTPError(http.StatusBadRequest, `the body must be JSON: {"client_id": "...", "client_secret": "..."}`)
+		return forge.NewHTTPError(http.StatusBadRequest, `the body must be JSON: {"client_id": "...", "client_secret": "...", "slug": "..."}, with slug for Vercel only`)
 	}
 	app, err := e.svc.SetSignInApp(c.Request().Context(), p, c.Param("cloud"), in)
 	if err != nil {
@@ -111,7 +111,7 @@ func (e *Extension) startSignIn(c forge.Context) error {
 	}
 	var in connections.SignInInput
 	if err = c.BindJSON(&in); err != nil {
-		return forge.NewHTTPError(http.StatusBadRequest, `the body must be JSON: {"cloud": "digitalocean", "name": "..."}`)
+		return forge.NewHTTPError(http.StatusBadRequest, `the body must be JSON: {"cloud": "gcp", "name": "...", "settings": {"project_id": "..."}}`)
 	}
 	out, err := e.svc.StartSignIn(c.Request().Context(), p, in)
 	if err != nil {

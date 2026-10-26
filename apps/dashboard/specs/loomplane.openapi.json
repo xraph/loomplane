@@ -9546,6 +9546,12 @@
               "$ref": "#/components/schemas/Setting"
             }
           },
+          "sign_in_settings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Setting"
+            }
+          },
           "title": {
             "type": "string"
           }
@@ -10067,6 +10073,9 @@
             "type": "string"
           },
           "org_id": {
+            "type": "string"
+          },
+          "signed_in_by": {
             "type": "string"
           },
           "status": {
@@ -17874,6 +17883,12 @@
           "cloud": {
             "type": "string"
           },
+          "problem": {
+            "type": "string"
+          },
+          "slug": {
+            "type": "string"
+          },
           "source": {
             "type": "string"
           },
@@ -17897,6 +17912,9 @@
           },
           "client_secret": {
             "type": "string"
+          },
+          "slug": {
+            "type": "string"
           }
         }
       },
@@ -17915,16 +17933,24 @@
           },
           "name": {
             "type": "string"
+          },
+          "settings": {
+            "type": "object",
+            "additionalProperties": true
           }
         }
       },
       "SignIn": {
         "type": "object",
         "required": [
-          "authorize_url"
+          "authorize_url",
+          "state"
         ],
         "properties": {
           "authorize_url": {
+            "type": "string"
+          },
+          "state": {
             "type": "string"
           }
         }

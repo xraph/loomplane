@@ -3,14 +3,17 @@
 package integration
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
 	"strings"
+	"sync/atomic"
 	"testing"
 
+	"github.com/xraph/loomplane/internal/clouds/gcp"
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/connections"
 )
@@ -192,4 +195,199 @@ func TestCloudSignIn_digitalOceanEndToEnd(t *testing.T) {
 	}
 	c.must(http.StatusUnprocessableEntity, http.MethodPut, "/api/v1/cloud-sign-in/apps/nowhere",
 		connections.AppInput{ClientID: clientID, ClientSecret: clientSecret}, nil)
+}
+
+// An organization sets up its own Google app, signs in to a project it
+// names first, and gets a ready connection that says who signed in. No
+// grant, verifier or app secret ever comes back over the API.
+func TestCloudSignIn_googleEndToEnd(t *testing.T) {
+	const (
+		clientID     = "g-app.apps.googleusercontent.com"
+		clientSecret = "g-app-secret-0123"
+		firstToken   = "ya29.first-access"
+		freshToken   = "ya29.fresh-access"
+		refreshToken = "1//refresh-ada"
+	)
+	cfg := config.Defaults()
+	callback := strings.TrimRight(cfg.PublicURL, "/") + "/integrations/oauth/callback"
+	enc := base64.RawURLEncoding.EncodeToString
+	// verifier is the PKCE verifier Google got, set on the fake's goroutine.
+	var verifier atomic.Value
+	google := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/token":
+			if err := r.ParseForm(); err != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			f := r.PostForm
+			switch f.Get("grant_type") {
+			case "authorization_code":
+				if f.Get("code") != "ok" || f.Get("code_verifier") == "" || f.Get("client_id") != clientID ||
+					f.Get("client_secret") != clientSecret || f.Get("redirect_uri") != callback {
+					t.Errorf("code exchange form %v", f)
+					w.WriteHeader(http.StatusBadRequest)
+					_, _ = w.Write([]byte(`{"error":"invalid_grant"}`))
+					return
+				}
+				verifier.Store(f.Get("code_verifier"))
+				_ = json.NewEncoder(w).Encode(map[string]any{
+					"access_token": firstToken, "refresh_token": refreshToken, "expires_in": 3599,
+					"id_token": enc([]byte(`{"alg":"RS256"}`)) + "." + enc([]byte(`{"sub":"1078","email":"ada@example.com"}`)) + ".sig",
+				})
+			case "refresh_token":
+				if f.Get("refresh_token") != refreshToken {
+					w.WriteHeader(http.StatusBadRequest)
+					_, _ = w.Write([]byte(`{"error":"invalid_grant"}`))
+					return
+				}
+				_, _ = w.Write([]byte(`{"access_token":"` + freshToken + `","expires_in":3599,"token_type":"Bearer"}`))
+			default:
+				t.Errorf("token grant %q", f.Get("grant_type"))
+				w.WriteHeader(http.StatusBadRequest)
+			}
+		case "/v3/projects/shop-prod:testIamPermissions":
+			if auth := r.Header.Get("Authorization"); auth != "Bearer "+freshToken && auth != "Bearer "+firstToken {
+				w.WriteHeader(http.StatusUnauthorized)
+				_, _ = w.Write([]byte(`{"error":{"message":"Request had invalid authentication credentials."}}`))
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"permissions": gcp.Permissions})
+		default:
+			t.Errorf("asked Google %s %s", r.Method, r.URL)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer google.Close()
+	cfg.Database.URL = freshDatabase(t)
+	cfg.Clouds.GoogleEndpoint = google.URL
+	cfg.Storage.URL = "file://" + t.TempDir()
+	r := start(t, cfg)
+	defer r.stop()
+	c := &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
+	signedIn(t, c)
+
+	var set json.RawMessage
+	c.must(http.StatusOK, http.MethodPut, "/api/v1/cloud-sign-in/apps/gcp",
+		connections.AppInput{ClientID: clientID, ClientSecret: clientSecret}, &set)
+	if strings.Contains(string(set), clientSecret) {
+		t.Fatalf("setting an app returned its secret: %s", set)
+	}
+
+	var forms struct {
+		Clouds []struct {
+			Cloud          string   `json:"cloud"`
+			Methods        []string `json:"methods"`
+			SignInSettings []struct {
+				Key      string `json:"key"`
+				Label    string `json:"label"`
+				Required bool   `json:"required"`
+			} `json:"sign_in_settings"`
+		} `json:"clouds"`
+	}
+	c.must(http.StatusOK, http.MethodGet, "/api/v1/connection-clouds", nil, &forms)
+	found := false
+	for _, f := range forms.Clouds {
+		if f.Cloud != connections.GCP {
+			continue
+		}
+		found = true
+		if strings.Join(f.Methods, ",") != "oauth,token" {
+			t.Fatalf("gcp methods %v", f.Methods)
+		}
+		if len(f.SignInSettings) != 1 || f.SignInSettings[0].Key != "project_id" || f.SignInSettings[0].Label != "Project ID" || !f.SignInSettings[0].Required {
+			t.Fatalf("gcp sign-in settings %+v", f.SignInSettings)
+		}
+	}
+	if !found {
+		t.Fatal("connection-clouds has no gcp")
+	}
+
+	var signIn connections.SignIn
+	c.must(http.StatusOK, http.MethodPost, "/api/v1/connections/sign-ins",
+		connections.SignInInput{Cloud: connections.GCP, Name: "Shop", Settings: map[string]string{"project_id": "shop-prod"}}, &signIn)
+	u, err := url.Parse(signIn.AuthorizeURL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	q := u.Query()
+	if !strings.HasPrefix(signIn.AuthorizeURL, google.URL+"/o/oauth2/v2/auth?") || q.Get("client_id") != clientID ||
+		q.Get("redirect_uri") != callback || q.Get("state") == "" || q.Get("state") != signIn.State || q.Get("code_challenge") == "" {
+		t.Fatalf("authorize url %s, state %q", signIn.AuthorizeURL, signIn.State)
+	}
+
+	var raw json.RawMessage
+	c.must(http.StatusCreated, http.MethodPost, "/api/v1/connections/sign-ins/complete",
+		connections.CompleteInput{State: signIn.State, Code: "ok"}, &raw)
+	var conn connections.Connection
+	if err = json.Unmarshal(raw, &conn); err != nil {
+		t.Fatal(err)
+	}
+	if conn.Method != connections.MethodOAuth || conn.Status != connections.StatusReady || conn.Account != "shop-prod" {
+		t.Fatalf("connection %+v", conn)
+	}
+	if conn.SignedInBy == "" || conn.SignedInBy != conn.CreatedBy || conn.Details["signed_in_as"] != "ada@example.com" || conn.Details["project_id"] != "shop-prod" {
+		t.Fatalf("who signed in: by %q, created by %q, details %v", conn.SignedInBy, conn.CreatedBy, conn.Details)
+	}
+	sent, _ := verifier.Load().(string)
+	if sent == "" {
+		t.Fatal("Google never got a PKCE verifier")
+	}
+	bodies := []string{string(set), string(raw), c.raw("/api/v1/connections/" + conn.ID), c.raw("/api/v1/connections"),
+		c.raw("/api/v1/cloud-sign-in/apps"), c.raw("/api/v1/connection-clouds")}
+	for _, body := range bodies {
+		for _, leak := range []string{"refresh_token", "client_secret", "access_token", firstToken, freshToken, refreshToken, clientSecret, sent} {
+			if strings.Contains(body, leak) {
+				t.Fatalf("a response contains %q: %s", leak, body)
+			}
+		}
+	}
+}
+
+// A Vercel app is installed by its slug, so one without is refused, and
+// the slug saved comes back and names the install page.
+func TestCloudSignIn_vercelAppNeedsASlug(t *testing.T) {
+	cfg := config.Defaults()
+	vercel := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("asked Vercel %s %s", r.Method, r.URL)
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer vercel.Close()
+	cfg.Database.URL = freshDatabase(t)
+	cfg.Clouds.VercelEndpoint = vercel.URL
+	cfg.Storage.URL = "file://" + t.TempDir()
+	r := start(t, cfg)
+	defer r.stop()
+	c := &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
+	signedIn(t, c)
+
+	c.must(http.StatusUnprocessableEntity, http.MethodPut, "/api/v1/cloud-sign-in/apps/vercel",
+		connections.AppInput{ClientID: "oac_app", ClientSecret: "vercel-app-secret"}, nil)
+	var set connections.SignInApp
+	c.must(http.StatusOK, http.MethodPut, "/api/v1/cloud-sign-in/apps/vercel",
+		connections.AppInput{ClientID: "oac_app", ClientSecret: "vercel-app-secret", Slug: "loomplane-acme"}, &set)
+	if set.Slug != "loomplane-acme" || set.Source != connections.AppFromOrganization {
+		t.Fatalf("set %+v", set)
+	}
+	var list struct {
+		Apps []connections.SignInApp `json:"apps"`
+	}
+	c.must(http.StatusOK, http.MethodGet, "/api/v1/cloud-sign-in/apps", nil, &list)
+	slug := ""
+	for _, a := range list.Apps {
+		if a.Cloud == connections.Vercel {
+			slug = a.Slug
+		}
+	}
+	if slug != "loomplane-acme" {
+		t.Fatalf("vercel slug %q in %+v", slug, list.Apps)
+	}
+	var signIn connections.SignIn
+	c.must(http.StatusOK, http.MethodPost, "/api/v1/connections/sign-ins",
+		connections.SignInInput{Cloud: connections.Vercel, Name: "Vercel"}, &signIn)
+	if !strings.Contains(signIn.AuthorizeURL, "/integrations/loomplane-acme/new?") || signIn.State == "" ||
+		!strings.Contains(signIn.AuthorizeURL, "state="+url.QueryEscape(signIn.State)) {
+		t.Fatalf("install url %s, state %q", signIn.AuthorizeURL, signIn.State)
+	}
 }
