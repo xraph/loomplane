@@ -32,6 +32,7 @@ import type { Action, Finding, Plan } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
 import { FailedDeploymentCleanup } from "@/components/failed-deployment-cleanup"
 import { ApprovalCard } from "@/components/approval"
+import { CanaryPanel } from "@/components/canary"
 import { Page } from "@/components/page"
 import {
   Code,
@@ -206,6 +207,13 @@ function Loaded({
             setTab("logs")
           }}
         />
+        {(run.plan.release?.strategy === "canary" ||
+          run.deployment?.canary) && (
+          <CanaryPanel
+            deploymentId={run.deployment?.id}
+            release={run.plan.release}
+          />
+        )}
         {run.status === "waiting" && <ApprovalCard run={run} />}
         {run.status === "blocked" && <BlockedAlert run={run} />}
         <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_300px]">
