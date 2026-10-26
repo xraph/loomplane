@@ -24,6 +24,7 @@ import (
 	"github.com/xraph/loomplane/internal/clouds/gcp"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/planning"
+	"github.com/xraph/loomplane/pkg/provider"
 )
 
 const (
@@ -1243,5 +1244,40 @@ func TestCloudRunCanaryKeepsTheCandidateWhenAnEarlierOneWontGo(t *testing.T) {
 	}
 	if split := e.g.split(); !maps.Equal(split, map[string]int{runBaseline: 100}) {
 		t.Fatalf("traffic %v", split)
+	}
+}
+
+// A service that reaches Cloud SQL through a PSC route is refused before
+// anything is read or written: its candidate would start without the
+// route's sidecar, and Promote would make that revision serve everything.
+func TestCloudRunCanaryRefusesACloudSQLPSCRoute(t *testing.T) {
+	psc, err := json.Marshal(planning.ResourceConfig{
+		Provider: "cloud-sql", Kind: "postgres",
+		Managed: &planning.ManagedDatabaseConfig{Profile: provider.ManagedDatabaseProfile{Access: "cloud-sql-psc-connector"}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, route := range map[string]func(*Job){
+		"reviewed network": func(j *Job) {
+			j.Action.Service.CloudSQLNetwork = &provider.CloudSQLApplicationNetwork{ConsumerProject: runProject, Network: "default", Subnetwork: "projects/" + runProject + "/regions/" + runRegion + "/subnetworks/default"}
+		},
+		"attached database": func(j *Job) {
+			j.Attach = []*planning.Binding{{Provider: "cloud-sql", Name: "db", ExternalID: runProject + ":" + runRegion + ":db", Config: psc}}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newRunCanaryEnv(t)
+			route(e.job)
+			_, err := e.exec.ApplyCandidate(t.Context(), e.job)
+			for _, want := range []string{"api can't run a canary", "Private Service Connect", "direct or blue_green"} {
+				if err == nil || !strings.Contains(err.Error(), want) {
+					t.Fatalf("error %v doesn't say %q", err, want)
+				}
+			}
+			if len(e.g.calls) != 0 || len(e.ctrl.updates) != 0 {
+				t.Fatalf("a refused canary called %v and updated %v", e.g.calls, e.ctrl.updates)
+			}
+		})
 	}
 }

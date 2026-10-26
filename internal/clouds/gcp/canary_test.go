@@ -378,6 +378,14 @@ func TestRevisionRunsComparesTheWholeRelease(t *testing.T) {
 		"port":           func(t *RunTemplate) { t.Containers[0].Ports[0].ContainerPort = 9090 },
 		"cloud sql":      func(t *RunTemplate) { t.Volumes[0].CloudSQLInstance.Instances = []string{"shop:europe-west1:other"} },
 		"vpc":            func(t *RunTemplate) { t.VPCAccess = nil },
+		"arguments":      func(t *RunTemplate) { t.Containers[0].Args = []string{"--slow"} },
+		"dependencies":   func(t *RunTemplate) { t.Containers[0].DependsOn = []string{"cloud-sql-psc"} },
+		"in-memory volume": func(t *RunTemplate) {
+			t.Volumes = append(t.Volumes, RunVolume{Name: "psc", EmptyDir: &RunEmptyDir{Medium: "MEMORY", SizeLimit: "16Mi"}})
+		},
+		"sidecar": func(t *RunTemplate) {
+			t.Containers = append(t.Containers, RunContainer{Name: "cloud-sql-psc", Image: "proxy:1"})
+		},
 	} {
 		running := release()
 		change(&running)

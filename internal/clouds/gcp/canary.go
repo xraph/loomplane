@@ -42,10 +42,12 @@ type RunRevision struct {
 	VPCAccess      *RunVPCAccess  `json:"vpcAccess,omitempty"`
 }
 
-// Runs reports whether the revision runs what t would make: the same
-// image, the same plain variables, the same secrets at the same versions,
-// the same ports, size and scaling, the same Cloud SQL instances and VPC
-// egress, and the same service account. A release on the same commit has
+// Runs reports whether the revision runs what t would make: one container
+// with the same image, arguments and dependencies, the same plain
+// variables, the same secrets at the same versions, the same ports, size
+// and scaling, the same Cloud SQL instances, in-memory volumes and VPC
+// egress, and the same service account. A sidecar, such as a Cloud SQL
+// PSC transport's, makes two containers, which never match. A release on the same commit has
 // the same image, so the image alone can't tell a revision runs it.
 // Anything Cloud Run filled in that t leaves to its defaults reads as a
 // difference, which is the safe way to be wrong.
@@ -72,19 +74,26 @@ func defaultAccount(want, got string) bool {
 
 // releaseShape is what a revision runs, in a form two of them compare by.
 type releaseShape struct {
-	Image    string
-	Env      map[string]string
-	Secrets  map[string]string // name: secret:version
-	Ports    []int
-	Limits   map[string]string
-	Mounts   map[string]string
-	Min, Max int
-	CloudSQL map[string]string // volume: instances, sorted
-	VPC      string
+	Image     string
+	Args      []string
+	DependsOn []string
+	Env       map[string]string
+	Secrets   map[string]string // name: secret:version
+	Ports     []int
+	Limits    map[string]string
+	Mounts    map[string]string
+	Min, Max  int
+	CloudSQL  map[string]string // volume: instances, sorted
+	EmptyDir  map[string]string // volume: medium and size limit
+	VPC       string
 }
 
 func shapeOf(c RunContainer, scaling *RunScaling, volumes []RunVolume, vpc *RunVPCAccess) releaseShape {
-	s := releaseShape{Image: c.Image, Env: map[string]string{}, Secrets: map[string]string{}, Mounts: map[string]string{}, Limits: map[string]string{}, CloudSQL: map[string]string{}}
+	s := releaseShape{
+		Image: c.Image, Args: c.Args, DependsOn: c.DependsOn,
+		Env: map[string]string{}, Secrets: map[string]string{}, Mounts: map[string]string{}, Limits: map[string]string{},
+		CloudSQL: map[string]string{}, EmptyDir: map[string]string{},
+	}
 	for _, e := range c.Env {
 		if e.ValueSource != nil {
 			s.Secrets[e.Name] = RevisionName(e.ValueSource.SecretKeyRef.Secret) + ":" + e.ValueSource.SecretKeyRef.Version
@@ -107,6 +116,9 @@ func shapeOf(c RunContainer, scaling *RunScaling, volumes []RunVolume, vpc *RunV
 	for _, v := range volumes {
 		if v.CloudSQLInstance != nil {
 			s.CloudSQL[v.Name] = strings.Join(slices.Sorted(slices.Values(v.CloudSQLInstance.Instances)), ",")
+		}
+		if v.EmptyDir != nil {
+			s.EmptyDir[v.Name] = v.EmptyDir.Medium + ":" + v.EmptyDir.SizeLimit
 		}
 	}
 	if vpc != nil {

@@ -17,6 +17,7 @@ import (
 	"github.com/xraph/loomplane/internal/clouds/cloudrun"
 	"github.com/xraph/loomplane/internal/clouds/gcp"
 	"github.com/xraph/loomplane/internal/infrastructure"
+	"github.com/xraph/loomplane/internal/planning"
 )
 
 // A Cloud Run canary runs the candidate as a revision of the instance's
@@ -474,11 +475,16 @@ func instanceTemplate(inst *instance.Instance) (*gcp.RunService, error) {
 // ApplyCandidate implements Weighted. It checks the service account may
 // read and delete revisions, builds the image as Apply does, stores the
 // secrets as Apply does, as new versions only the candidate reads, then
-// starts the candidate as a revision beside the baseline.
+// starts the candidate as a revision beside the baseline. A service with a
+// Cloud SQL PSC route is refused before anything is read or written: its
+// candidate would start without the route's sidecar and checks.
 func (c *CloudRun) ApplyCandidate(ctx context.Context, job *Job) (*CanaryTarget, error) {
 	a := job.Action
 	if a.Service == nil {
 		return nil, fmt.Errorf("%w: cloud run runs services, not %s", ErrNoExecutor, a.Subject)
+	}
+	if pscRoute(job) {
+		return nil, fmt.Errorf("%s can't run a canary: it reaches Cloud SQL through a Private Service Connect route, which a canary candidate doesn't carry. Release this environment direct or blue_green", a.Name)
 	}
 	key := c.provider(job)
 	pctx := infrastructure.WithPrincipal(ctx, principal(job))
@@ -544,6 +550,20 @@ func (c *CloudRun) ApplyCandidate(ctx context.Context, job *Job) (*CanaryTarget,
 	}
 	t := cr.target(image, secrets)
 	return &t, nil
+}
+
+// pscRoute reports whether the job's service reaches Cloud SQL through a
+// Private Service Connect route: one it was reviewed with, or a binding it
+// attaches that's served that way. A binding that can't be read counts as
+// one, so a canary is refused rather than started without the route.
+func pscRoute(job *Job) bool {
+	if job.Action.Service.CloudSQLNetwork != nil {
+		return true
+	}
+	return slices.ContainsFunc(job.Attach, func(b *planning.Binding) bool {
+		_, psc, err := cloudRunPSCBinding(b)
+		return psc || err != nil
+	})
 }
 
 // canaryPermissions refuses a canary whose service account may not read

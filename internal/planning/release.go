@@ -66,6 +66,10 @@ const (
 	// codeCanaryAppWide blocks a canary on Container Apps whose release
 	// changes what Container Apps applies to every revision at once.
 	codeCanaryAppWide = "canary-app-wide-change" //nolint:gosec // G101: a finding code, not a credential
+	// codeCanaryDatabaseRoute blocks a canary for a service that reaches
+	// Cloud SQL through a Private Service Connect route, which a candidate
+	// doesn't carry.
+	codeCanaryDatabaseRoute = "canary-unsupported-database-route"
 )
 
 // planRelease pins the environment's release on r, and says which service
@@ -96,6 +100,11 @@ func planRelease(in Input, r *Result) {
 		case manifest.StrategyCanary:
 			reason := noCanary(in, r, a)
 			if reason == "" {
+				if code, message := unsupportedCanary(a); code != "" {
+					r.Problems = append(r.Problems, Finding{Code: code, Subject: ServiceSubject, Name: a.Name, Path: "services." + a.Name, Message: message})
+					r.Executable = false
+					continue
+				}
 				if changed := appWideChanges(a); len(changed) > 0 {
 					r.Problems = append(r.Problems, Finding{
 						Code: codeCanaryAppWide, Subject: ServiceSubject, Name: a.Name, Path: "services." + a.Name,
@@ -176,6 +185,18 @@ func noCanary(in Input, r *Result, a Action) string {
 		}
 	}
 	return ""
+}
+
+// unsupportedCanary blocks a canary for a service that could otherwise
+// ramp but whose candidate Loomplane can't start beside what runs: one
+// that reaches Cloud SQL through a Private Service Connect route, whose
+// sidecar and checks a candidate doesn't carry. It returns the finding's
+// code and message, or "" when nothing blocks it.
+func unsupportedCanary(a Action) (code, message string) {
+	if a.Service.CloudSQLNetwork != nil {
+		return codeCanaryDatabaseRoute, a.Name + " can't run a canary: it reaches Cloud SQL through a Private Service Connect route, which a canary candidate doesn't carry. Release this environment direct or blue_green."
+	}
+	return "", ""
 }
 
 // appWideFields are the service settings that make a container app's
