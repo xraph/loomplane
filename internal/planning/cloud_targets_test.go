@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 
@@ -401,5 +402,73 @@ func TestRoutedReleaseOntoAPoolCarriesGPUs(t *testing.T) {
 	}
 	if len(resolver.requests) != 1 || resolver.requests[0].GPUKind != "nvidia-l4" || resolver.requests[0].GPUs != 1 {
 		t.Fatalf("routed overlap requests: %+v", resolver.requests)
+	}
+}
+
+// An accepted move re-previews the service on its destination with the
+// old size's CPU and memory, as the move was reviewed, but with the GPUs
+// the new size asks for: the runtime labels the container with those.
+func TestAcceptedPoolMoveReservesTheNewGPURequest(t *testing.T) {
+	pooled := edgeHostTarget()
+	pooled.PoolID = "pool"
+	old := ServiceConfig{Size: &manifest.Size{CPU: 4, Memory: 16384, GPU: &manifest.GPU{Kind: "nvidia-l4", Count: 2}}, CloudPlacement: &CloudPlacement{CloudID: "cloud_1", TargetID: "t1", PoolID: "pool", ServerID: "host-old", GPUKind: "nvidia-l4", GPUs: 2}}
+	raw, err := json.Marshal(old)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bindings := []*Binding{{ID: "binding", Subject: ServiceSubject, Name: "api", Provider: "server", ConnectionID: targetA, Config: raw}}
+	resolver := &stickyResolver{}
+	s := NewService(Deps{Store: stickyStore{resolver: resolver}})
+	plan := &Plan{ID: "plan", OrgID: "org", ProjectID: "project", EnvironmentID: "env", Environment: "production"}
+	if _, err = s.resolvePools(t.Context(), plan, parse(t, gpuPoolService), edgeAssignment(pooled), bindings, nil, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(resolver.requests) != 2 {
+		t.Fatalf("move requests: %+v", resolver.requests)
+	}
+	moved := resolver.requests[1]
+	if moved.DestinationServerID != "host" || moved.StickyServerID != "host-old" || moved.GPUKind != "nvidia-l4" || moved.GPUs != 1 {
+		t.Fatalf("move re-preview: %+v", moved)
+	}
+}
+
+// A pooled service whose reservation holds a different GPU count or kind
+// from its runtime request can't be applied.
+func TestPoolGPUMismatchIsAProblem(t *testing.T) {
+	assigned := &cloudprofiles.Assignment{OrgID: "org", ProjectID: "project", EnvironmentID: "env", CloudID: "cloud", CloudRevision: 1, Revision: 1, GrantRevision: 1, Targets: []cloudprofiles.Target{{ID: "target", OrgID: "org", CloudID: "cloud", Name: "shared", Provider: "server", Runtime: "server", PoolID: "pool", Revision: 1}}}
+	options := []ConnectionOption{{ID: "runtime", Cloud: "server", Ready: true, Pooled: true, Details: map[string]string{"docker_id": "daemon", "architecture": "amd64"}}}
+	for name, tc := range map[string]struct {
+		manifest  string
+		kind      string
+		gpus      int64
+		want      string
+		wantFound bool
+	}{
+		"matching":        {"gpu: {kind: nvidia-l4, count: 1}", "nvidia-l4", 1, "", false},
+		"fewer reserved":  {"gpu: {kind: nvidia-l4, count: 2}", "nvidia-l4", 1, "web asks for 2 nvidia-l4 GPUs, but its pool reservation holds 1 nvidia-l4 GPU. Plan again.", true},
+		"other kind":      {"gpu: {kind: nvidia-l4, count: 1}", "nvidia-t4", 1, "web asks for 1 nvidia-l4 GPU, but its pool reservation holds 1 nvidia-t4 GPU. Plan again.", true},
+		"CPU reservation": {"gpu: {kind: nvidia-l4, count: 1}", "", 0, "web asks for 1 nvidia-l4 GPU, but its pool reservation holds no GPUs. Plan again.", true},
+		"CPU service":     {"", "nvidia-l4", 1, "web asks for no GPUs, but its pool reservation holds 1 nvidia-l4 GPU. Plan again.", true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			size := "size: {cpu: 4, memory: 16384}"
+			if tc.manifest != "" {
+				size = "size: {cpu: 4, memory: 16384, " + tc.manifest + "}"
+			}
+			m := parse(t, "version: 1\nservices:\n  web: {source: cmd/api, public: false, cloud_target: shared, "+size+"}\n")
+			pool := &cloudinfra.Placement{PoolID: "pool", PoolRevision: 3, ServerID: "host", ServerRevision: 2, ConnectionID: "runtime", ConnectionGeneration: 1, CPUMillis: 4000, MemoryBytes: 16384 << 20, GPUKind: tc.kind, GPUs: tc.gpus}
+			resolved, pins, err := ResolveCloudTargets(m, "production", assigned, options, map[string]*cloudinfra.Placement{"web": pool})
+			if err != nil {
+				t.Fatal(err)
+			}
+			result := Compute(Input{Environment: "production", Graph: cloudTargetGraph(), Manifest: resolved, Providers: providers.Registry(), Connections: options, CloudPlacements: pins})
+			i := slices.IndexFunc(result.Problems, func(f Finding) bool { return f.Code == "gpu-pool-mismatch" })
+			if (i >= 0) != tc.wantFound || !tc.wantFound && !result.Executable {
+				t.Fatalf("problems: %+v", result.Problems)
+			}
+			if tc.wantFound && (result.Problems[i].Message != tc.want || result.Problems[i].Path != "services.web.size.gpu" || result.Executable) {
+				t.Fatalf("mismatch finding: %+v executable=%v", result.Problems[i], result.Executable)
+			}
+		})
 	}
 }

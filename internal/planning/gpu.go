@@ -262,6 +262,40 @@ func (p *planner) serviceGPU(name, base string, prov *provider.Provider, set man
 	cfg.GPU = p.gpuPlacement(ServiceSubject, name, path, c, provider.GPURequest{Kind: set.Size.GPU.Kind, Count: set.Size.GPU.Count}, 0)
 }
 
+// checkPoolGPUs refuses a pooled service whose pool reservation holds a
+// different GPU kind or count from the one its container asks for. The
+// runtime assigns devices by the service's GPU request, so a reservation
+// for fewer would let it take devices another reservation counts on.
+func (p *planner) checkPoolGPUs() {
+	for _, a := range p.actions {
+		if a.Service == nil || a.Op == Delete || a.Op == Keep {
+			continue
+		}
+		pin := a.Service.CloudPlacement
+		if pin == nil || pin.PoolID == "" {
+			continue
+		}
+		kind, count := "", int64(0)
+		if g := a.Service.GPU; g != nil {
+			kind, count = g.Kind, int64(g.Count)
+		}
+		if pin.GPUKind == kind && pin.GPUs == count {
+			continue
+		}
+		p.problem(Finding{Code: "gpu-pool-mismatch", Subject: ServiceSubject, Name: a.Name, Path: "services." + a.Name + ".size.gpu", Message: fmt.Sprintf("%s asks for %s, but its pool reservation holds %s. Plan again.", a.Name, gpuCountText(kind, count), gpuCountText(pin.GPUKind, pin.GPUs))})
+	}
+}
+
+func gpuCountText(kind string, count int64) string {
+	switch {
+	case count == 0:
+		return "no GPUs"
+	case count == 1:
+		return "1 " + kind + " GPU"
+	}
+	return fmt.Sprintf("%d %s GPUs", count, kind)
+}
+
 // pooled reports whether a service runs on a Cloud pool or waits for pool
 // capacity.
 func (p *planner) pooled(name string, cfg *ServiceConfig) bool {

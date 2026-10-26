@@ -611,7 +611,9 @@ func (s *Service) resolvePools(ctx context.Context, plan *Plan, m *manifest.Mani
 				if err != nil {
 					return nil, err
 				}
-				req.GPUKind, req.GPUs = ServerGPUs(old.Size)
+				// The GPUs stay the new size's: the runtime labels the
+				// container with them, so the reservation must hold the
+				// same count on the destination.
 				req.DestinationServerID = out[name].ServerID
 				out[name], err = resolver.PreviewPlacement(ctx, req)
 			}

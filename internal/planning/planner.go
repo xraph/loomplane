@@ -2595,6 +2595,7 @@ func (p *planner) finish() *Result {
 	}
 	p.checkHTTPS(connections)
 	p.checkRegions(connections)
+	p.checkPoolGPUs()
 	r := &Result{Actions: make([]Action, 0, len(p.actions)), Problems: p.problems, Warnings: p.warnings, Connections: connections}
 	for _, a := range p.actions {
 		r.Actions = append(r.Actions, *a)
