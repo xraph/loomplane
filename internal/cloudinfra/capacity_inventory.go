@@ -30,6 +30,10 @@ type CapacityRecord struct {
 	Resources           CapacityResources    `json:"resources"`
 	Observation         *CapacityObservation `json:"observation,omitempty"`
 	CheckedAt           time.Time            `json:"checked_at"`
+	// GPUKind and GPUs count a server's GPUs. A nil GPUs is a count
+	// Loomplane couldn't read, which is never taken as zero.
+	GPUKind string `json:"gpu_kind,omitempty"`
+	GPUs    *int64 `json:"gpus,omitempty"`
 }
 type CapacityInventoryStore interface {
 	BeginCapacityRefresh(context.Context, string, string) (int64, error)
@@ -149,6 +153,15 @@ func (s *Service) refreshCapacity(ctx context.Context, org, cloud string) (*Capa
 			v = checked
 		}
 		record := CapacityRecord{Kind: "server", Provider: v.Provider, AccountID: v.AccountID, ResourceID: "server:" + v.ResourceID, ServerID: v.ID, ServerStateRevision: v.StateRevision, CheckedAt: v.Health.CheckedAt, Resources: CapacityResources{Servers: number(1)}, Observation: capacityObservation(v.Health)}
+		var created *Operation
+		if len(v.Health.GPUs) == 0 && v.Health.GPURuntime != provider.GPUStatusNone && v.CreationOperationID != "" {
+			o, e := s.Store.GetOperation(ctx, org, cloud, v.CreationOperationID)
+			if e != nil && !errors.Is(e, ErrNotFound) {
+				return nil, e
+			}
+			created = o
+		}
+		record.GPUKind, record.GPUs = serverGPUFacts(v, created)
 		if v.Status != "ready" {
 			record.Observation = nil
 		}
@@ -399,6 +412,10 @@ func summarizeCapacity(records []CapacityRecord, pools []*Pool, policy CapacityP
 	}
 	out.Records = records
 	out.ObservedStorageBytes = out.Observed.StorageBytes
+	var err error
+	if out.GPUs, err = summarizeGPUs(records, policy); err != nil {
+		return nil, err
+	}
 	return out, nil
 }
 
@@ -537,6 +554,9 @@ func (s *PgStore) SaveCapacityInventory(ctx context.Context, org, cloud string, 
 		if _, e := sumResources(capacityResources(ResourceVector{}), r.Resources); e != nil {
 			return e
 		}
+		if !recordGPUsValid(r) {
+			return ErrInvalid
+		}
 
 		key := recordKey(r)
 		if seen[key] {
@@ -547,7 +567,7 @@ func (s *PgStore) SaveCapacityInventory(ctx context.Context, org, cloud string, 
 		if e != nil {
 			return e
 		}
-		_, err = tx.Exec(ctx, `INSERT INTO loomplane_cloud_capacity_inventory(org_id,cloud_id,id,server_id,provider,account_id,resource_id,servers,cpu_millis,memory_bytes,storage_bytes,observed_storage_bytes,checked_at,body) VALUES($1,$2,$3,nullif($4,''),$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`, org, cloud, inventoryID(r), r.ServerID, r.Provider, r.AccountID, r.ResourceID, r.Resources.Servers, r.Resources.CPUMillis, r.Resources.MemoryBytes, r.Resources.StorageBytes, observedStorage(r), r.CheckedAt, raw)
+		_, err = tx.Exec(ctx, `INSERT INTO loomplane_cloud_capacity_inventory(org_id,cloud_id,id,server_id,provider,account_id,resource_id,servers,cpu_millis,memory_bytes,storage_bytes,observed_storage_bytes,checked_at,body,gpu_kind,gpus) VALUES($1,$2,$3,nullif($4,''),$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`, org, cloud, inventoryID(r), r.ServerID, r.Provider, r.AccountID, r.ResourceID, r.Resources.Servers, r.Resources.CPUMillis, r.Resources.MemoryBytes, r.Resources.StorageBytes, observedStorage(r), r.CheckedAt, raw, r.GPUKind, r.GPUs)
 		if err != nil {
 			return storeError(err)
 		}

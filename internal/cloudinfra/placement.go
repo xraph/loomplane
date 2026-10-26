@@ -57,6 +57,9 @@ func (s *PgStore) PreviewPlacement(ctx context.Context, in PlacementRequest) (*P
 	if in.Replicas != 1 || in.CPUMillis <= 0 || in.MemoryBytes <= 0 {
 		return nil, fmt.Errorf("%w: pool services need one bounded replica", ErrInvalid)
 	}
+	if !gpuShapeValid(ResourceVector{GPUKind: in.GPUKind, GPUs: in.GPUs}) {
+		return nil, fmt.Errorf("%w: a GPU request needs one kind and a count", ErrInvalid)
+	}
 	var allowed bool
 	if err := s.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_cloud_targets t JOIN loomplane_cloud_project_grants g ON g.org_id=t.org_id AND g.cloud_id=t.cloud_id AND g.project_id=$2 AND NOT g.revoked WHERE t.org_id=$1 AND t.cloud_id=$3 AND t.id=$4 AND t.revision=$5 AND ($8 OR t.pool_id=$6) AND EXISTS(SELECT 1 FROM loomplane_environments e WHERE e.org_id=$1 AND e.project_id=$2 AND e.id=$7) AND (cardinality(g.target_ids)=0 OR t.id=ANY(g.target_ids)))`, in.OrgID, in.ProjectID, in.CloudID, in.TargetID, in.TargetRevision, in.PoolID, in.EnvironmentID, in.TargetChange).Scan(&allowed); err != nil {
 		return nil, err
@@ -74,6 +77,9 @@ func (s *PgStore) PreviewPlacement(ctx context.Context, in PlacementRequest) (*P
 	p, err := s.GetPool(ctx, in.OrgID, in.CloudID, in.PoolID)
 	if err != nil {
 		return nil, err
+	}
+	if fitErr := gpuWorkFitsPool(p.AcceleratorKind, in.GPUKind, in.GPUs); fitErr != nil {
+		return nil, fitErr
 	}
 	if in.DestinationServerID == "" && in.StickyServerID != "" {
 		var destination string
@@ -124,25 +130,35 @@ func (s *PgStore) PreviewPlacement(ctx context.Context, in PlacementRequest) (*P
 			}
 			continue
 		}
-		var cpu, mem int64
+		// A GPU pool's kind is checked above, so here only the server's own
+		// devices, runtime and free budget can turn GPU work away.
+		if in.GPUs > 0 {
+			if err = usableGPUs(v, p.AcceleratorKind, m); err != nil {
+				if selected != "" {
+					return nil, err
+				}
+				continue
+			}
+		}
+		var cpu, mem, gpus int64
 		planned := append([]PlannedPlacement{}, in.Planned...)
-		planned = append(planned, PlannedPlacement{OrgID: in.OrgID, ProjectID: in.ProjectID, EnvironmentID: in.EnvironmentID, Service: in.Service, Placement: Placement{Allocation: in.Allocation, ServerID: v.ID, CPUMillis: in.CPUMillis, MemoryBytes: in.MemoryBytes}})
+		planned = append(planned, PlannedPlacement{OrgID: in.OrgID, ProjectID: in.ProjectID, EnvironmentID: in.EnvironmentID, Service: in.Service, Placement: Placement{Allocation: in.Allocation, ServerID: v.ID, CPUMillis: in.CPUMillis, MemoryBytes: in.MemoryBytes, GPUKind: in.GPUKind, GPUs: in.GPUs}})
 		raw, marshalErr := json.Marshal(planned)
 		if marshalErr != nil {
 			return nil, marshalErr
 		}
-		err = s.db.QueryRow(ctx, `SELECT cpu,memory FROM loomplane_server_capacity($1,$2,$3::jsonb)`, v.ID, in.EnvironmentID, raw).Scan(&cpu, &mem)
+		err = s.db.QueryRow(ctx, `SELECT c.cpu,c.memory,loomplane_server_gpus($1,$2,$3::jsonb) FROM loomplane_server_capacity($1,$2,$3::jsonb) c`, v.ID, in.EnvironmentID, raw).Scan(&cpu, &mem, &gpus)
 		if err != nil {
 			return nil, err
 		}
-		if cpu > m.CPUMillis || mem > m.MemoryBytes {
+		if cpu > m.CPUMillis || mem > m.MemoryBytes || gpus > m.GPUs {
 			continue
 		}
 		var generation int64
 		if err = s.db.QueryRow(ctx, `SELECT generation FROM loomplane_cloud_connections WHERE org_id=$1 AND id=$2 AND status='ready'`, in.OrgID, v.RuntimeConnectionID).Scan(&generation); err != nil {
 			continue
 		}
-		return &Placement{Allocation: in.Allocation, PoolID: p.ID, PoolRevision: p.Revision, ServerID: v.ID, ServerRevision: v.Revision, ConnectionID: v.RuntimeConnectionID, ConnectionGeneration: generation, CPUMillis: in.CPUMillis, MemoryBytes: in.MemoryBytes}, nil
+		return &Placement{Allocation: in.Allocation, PoolID: p.ID, PoolRevision: p.Revision, ServerID: v.ID, ServerRevision: v.Revision, ConnectionID: v.RuntimeConnectionID, ConnectionGeneration: generation, CPUMillis: in.CPUMillis, MemoryBytes: in.MemoryBytes, GPUKind: in.GPUKind, GPUs: in.GPUs}, nil
 	}
 	return nil, fmt.Errorf("%w: no compatible capacity for the reviewed workload; current placements stay pinned", ErrConflict)
 }
@@ -150,7 +166,11 @@ func (s *PgStore) PreviewPlacement(ctx context.Context, in PlacementRequest) (*P
 // ValidatePlacement checks the persisted reservation before runtime execution.
 func (s *PgStore) ValidatePlacement(ctx context.Context, org, project, env, plan, service string, p Placement) error {
 	var raw []byte
-	err := s.db.QueryRow(ctx, `SELECT r.body FROM loomplane_capacity_reservations r JOIN loomplane_cloud_servers s ON s.org_id=r.org_id AND s.id=r.server_id WHERE r.org_id=$1 AND r.project_id=$2 AND r.environment_id=$3 AND r.plan_id=$4 AND r.service=$5 AND r.server_id=$6 AND s.status='ready' AND s.runtime_connection_id=r.connection_id AND (s.body->'health'->>'checked_at')::timestamptz>=now()-interval '15 minutes' AND (SELECT cpu FROM loomplane_server_capacity(s.id))<=(s.body->'health'->>'effective_cpu_millis')::bigint AND (SELECT memory FROM loomplane_server_capacity(s.id))<=(s.body->'health'->>'effective_memory_bytes')::bigint AND (s.body->'health'->>'effective_cpu_millis')::bigint>=r.cpu_millis AND (s.body->'health'->>'effective_memory_bytes')::bigint>=r.memory_bytes`, org, project, env, plan, service, p.ServerID).Scan(&raw)
+	// GPU work also needs a ready GPU runtime and the server's GPU
+	// reservations within its budget. The pinned kind and count are in the
+	// body the trigger copied them from, so the comparison below covers them.
+	err := s.db.QueryRow(ctx, `SELECT r.body FROM loomplane_capacity_reservations r JOIN loomplane_cloud_servers s ON s.org_id=r.org_id AND s.id=r.server_id WHERE r.org_id=$1 AND r.project_id=$2 AND r.environment_id=$3 AND r.plan_id=$4 AND r.service=$5 AND r.server_id=$6 AND s.status='ready' AND s.runtime_connection_id=r.connection_id AND (s.body->'health'->>'checked_at')::timestamptz>=now()-interval '15 minutes' AND (SELECT cpu FROM loomplane_server_capacity(s.id))<=(s.body->'health'->>'effective_cpu_millis')::bigint AND (SELECT memory FROM loomplane_server_capacity(s.id))<=(s.body->'health'->>'effective_memory_bytes')::bigint AND (s.body->'health'->>'effective_cpu_millis')::bigint>=r.cpu_millis AND (s.body->'health'->>'effective_memory_bytes')::bigint>=r.memory_bytes
+ AND (r.gpus=0 OR (s.body->'health'->>'gpu_runtime'='ready' AND EXISTS(SELECT 1 FROM loomplane_server_pool_members m WHERE m.org_id=r.org_id AND m.pool_id=r.pool_id AND m.server_id=r.server_id AND loomplane_server_gpus(s.id)<=m.gpus)))`, org, project, env, plan, service, p.ServerID).Scan(&raw)
 	if err != nil {
 		return storeError(err)
 	}
@@ -160,6 +180,20 @@ func (s *PgStore) ValidatePlacement(ctx context.Context, org, project, env, plan
 	}
 	if saved != p {
 		return ErrConflict
+	}
+	return nil
+}
+
+// gpuWorkFitsPool turns CPU work away from a GPU pool and GPU work away from
+// a CPU pool. GPU work of another kind just finds no server with room.
+func gpuWorkFitsPool(poolKind, kind string, gpus int64) error {
+	switch {
+	case poolKind != "" && gpus == 0:
+		return fmt.Errorf("%w: a GPU pool takes only GPU workloads", ErrInvalid)
+	case poolKind == "" && gpus > 0:
+		return fmt.Errorf("%w: a CPU pool takes no GPU workloads", ErrInvalid)
+	case gpus > 0 && kind != poolKind:
+		return fmt.Errorf("%w: this pool's servers have %s GPUs; the workload asks for %s", ErrConflict, poolKind, kind)
 	}
 	return nil
 }

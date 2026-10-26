@@ -220,6 +220,16 @@ func (s *PgStore) reserveInfrastructureCapacity(ctx context.Context, tx driver.T
 	if b := checkCapacityLimit(p, d, used, delta, capacityResources(p.Limits), "hard_limit"); b != nil {
 		return b, nil
 	}
+	// GPU ceilings are per kind, counted from inventory plus pending growth.
+	if delta.GPUs > 0 {
+		counted, countErr := cloudGPUs(records, reservations, d.CloudID, delta.GPUKind)
+		if countErr != nil {
+			return nil, countErr
+		}
+		if b := checkGPULimit(p, d, delta.GPUKind, counted, delta.GPUs); b != nil {
+			return b, nil
+		}
+	}
 	for _, pool := range p.Pools {
 		var member bool
 		if checkErr := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_server_pool_members WHERE org_id=$1 AND pool_id=$2 AND server_id=$3)`, d.OrgID, pool.PoolID, o.ServerID).Scan(&member); checkErr != nil {
@@ -586,7 +596,21 @@ func operationCapacityDelta(ctx context.Context, tx driver.Tx, o *Operation, p *
 				return ResourceVector{}, &CapacityAdmissionError{Block: *capacityBlock(p, d, "stale_inventory", "server")}
 			}
 		}
+		target := delta
 		delta = positiveCapacityDelta(delta, ResourceVector{Servers: *facts[0], CPUMillis: *facts[1], MemoryBytes: *facts[2], StorageBytes: *facts[3]})
+		// A resize onto GPUs adds the devices the server doesn't have yet.
+		if target.GPUs > 0 {
+			if r.GPUs == nil {
+				return ResourceVector{}, &CapacityAdmissionError{Block: *capacityBlock(p, d, "stale_inventory", "gpus:"+target.GPUKind)}
+			}
+			have := int64(0)
+			if r.GPUKind == target.GPUKind {
+				have = *r.GPUs
+			}
+			if target.GPUs > have {
+				delta.GPUKind, delta.GPUs = target.GPUKind, target.GPUs-have
+			}
+		}
 	}
 	return delta, nil
 }

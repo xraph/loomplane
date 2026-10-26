@@ -218,25 +218,27 @@ func (s *PgStore) SavePool(ctx context.Context, p *Pool, previous int64) error {
 			return fmt.Errorf("%w: existing direct workloads need explicit migration before pooling", ErrConflict)
 		}
 		var other bool
-		if checkErr := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_server_pool_members WHERE org_id=$1 AND server_id=$2 AND pool_id<>$3 AND (cpu_millis<>$4 OR memory_bytes<>$5))`, p.OrgID, m.ServerID, p.ID, m.CPUMillis, m.MemoryBytes).Scan(&other); checkErr != nil {
+		if checkErr := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_server_pool_members WHERE org_id=$1 AND server_id=$2 AND pool_id<>$3 AND (cpu_millis<>$4 OR memory_bytes<>$5 OR gpus<>$6))`, p.OrgID, m.ServerID, p.ID, m.CPUMillis, m.MemoryBytes, m.GPUs).Scan(&other); checkErr != nil {
 			return checkErr
-		}
-		if !other {
-			// GPU budgets live in the pool body until the member table has a column for them.
-			if checkErr := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_server_pools p CROSS JOIN LATERAL jsonb_array_elements(coalesce(p.body->'members','[]')) m WHERE p.org_id=$1 AND p.id<>$3 AND m->>'server_id'=$2 AND coalesce((m->>'gpus')::bigint,0)<>$4)`, p.OrgID, m.ServerID, p.ID, m.GPUs).Scan(&other); checkErr != nil {
-				return checkErr
-			}
 		}
 		if other {
 			return fmt.Errorf("%w: a server must use the same budget in every pool", ErrInvalid)
 		}
-		var cpu, mem int64
-		if checkErr := tx.QueryRow(ctx, `SELECT cpu,memory FROM loomplane_server_capacity($1)`, m.ServerID).Scan(&cpu, &mem); checkErr != nil {
+		var cpu, mem, gpus int64
+		if checkErr := tx.QueryRow(ctx, `SELECT c.cpu,c.memory,loomplane_server_gpus($1) FROM loomplane_server_capacity($1) c`, m.ServerID).Scan(&cpu, &mem, &gpus); checkErr != nil {
 			return checkErr
 		}
-		if cpu > m.CPUMillis || mem > m.MemoryBytes {
+		if cpu > m.CPUMillis || mem > m.MemoryBytes || gpus > m.GPUs {
 			return fmt.Errorf("%w: budget is below reserved capacity", ErrConflict)
 		}
+	}
+	// Reservations already in the pool keep their GPU kind, CPU work included.
+	var mismatched bool
+	if checkErr := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_capacity_reservations WHERE org_id=$1 AND pool_id=$2 AND gpu_kind<>$3)`, p.OrgID, p.ID, p.AcceleratorKind).Scan(&mismatched); checkErr != nil {
+		return checkErr
+	}
+	if mismatched {
+		return fmt.Errorf("%w: drain and clean workloads before changing the pool's GPU kind", ErrConflict)
 	}
 	var busy bool
 	if checkErr := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_capacity_reservations WHERE org_id=$1 AND pool_id=$2 AND NOT(server_id=ANY($3::text[])))`, p.OrgID, p.ID, memberIDs(p.Members)).Scan(&busy); checkErr != nil {
@@ -271,7 +273,7 @@ func (s *PgStore) SavePool(ctx context.Context, p *Pool, previous int64) error {
 		return err
 	}
 	for _, m := range p.Members {
-		if _, err = tx.Exec(ctx, `INSERT INTO loomplane_server_pool_members(org_id,pool_id,server_id,cpu_millis,memory_bytes,draining) VALUES($1,$2,$3,$4,$5,$6)`, p.OrgID, p.ID, m.ServerID, m.CPUMillis, m.MemoryBytes, m.Draining); err != nil {
+		if _, err = tx.Exec(ctx, `INSERT INTO loomplane_server_pool_members(org_id,pool_id,server_id,cpu_millis,memory_bytes,draining,gpus) VALUES($1,$2,$3,$4,$5,$6,$7)`, p.OrgID, p.ID, m.ServerID, m.CPUMillis, m.MemoryBytes, m.Draining, m.GPUs); err != nil {
 			return storeError(err)
 		}
 	}

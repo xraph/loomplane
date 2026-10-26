@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/xraph/loomplane/internal/clouds/gpusizes"
 	"github.com/xraph/loomplane/pkg/provider"
 )
 
@@ -251,4 +252,142 @@ func sizeServesDemand(pool PoolExpansionPolicy, demand ResourceVector, size prov
 		return kind == ""
 	}
 	return kind == want && count >= demand.GPUs
+}
+
+// serverGPUFacts reads the GPUs an inventory record counts for a server. A
+// health check that listed devices wins, then one that found no GPU at all.
+// Without either, the reviewed size counts: the create operation's capacity
+// target when it bought the server's current size, else a reference GPU size.
+// Anything else returns a nil count, which callers never read as zero.
+func serverGPUFacts(v *Server, created *Operation) (kind string, gpus *int64) {
+	if devices := v.Health.GPUs; len(devices) > 0 {
+		kind = devices[0].Kind
+		for _, d := range devices {
+			if d.Kind == "" || d.Kind != kind {
+				return "", nil
+			}
+		}
+		return kind, number(int64(len(devices)))
+	}
+	if v.Health.GPURuntime == provider.GPUStatusNone {
+		return "", number(0)
+	}
+	if created != nil && created.Input.Kind == "create" && created.Input.Size == v.Size && created.CapacityTarget != nil && gpuShapeValid(*created.CapacityTarget) {
+		return created.CapacityTarget.GPUKind, number(created.CapacityTarget.GPUs)
+	}
+	if size, _, ok := gpusizes.Lookup(v.Size); ok && v.Size != "" {
+		if k, n := sizeGPUs(size); k != "" {
+			return k, number(n)
+		}
+	}
+	return "", nil
+}
+
+// recordGPUsValid keeps a record's GPU facts in the shape the inventory table checks.
+func recordGPUsValid(r CapacityRecord) bool {
+	if r.GPUs == nil {
+		return r.GPUKind == ""
+	}
+	return *r.GPUs >= 0 && (*r.GPUs == 0) == (r.GPUKind == "")
+}
+
+// inventoryGPUs counts the GPUs of each kind on the Cloud's inventoried
+// servers, once per server. known is false when any server's count is unknown.
+func inventoryGPUs(records []CapacityRecord) (counts map[string]int64, known bool, err error) {
+	counts, known = map[string]int64{}, true
+	seen := map[string]bool{}
+	for _, r := range records {
+		if r.Kind != "server" {
+			continue
+		}
+		key := r.ServerID
+		if key == "" {
+			key = recordKey(r)
+		}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		if !recordGPUsValid(r) {
+			return nil, false, ErrInvalid
+		}
+		if r.GPUs == nil {
+			known = false
+			continue
+		}
+		if *r.GPUs > 0 {
+			if counts[r.GPUKind] > math.MaxInt64-*r.GPUs {
+				return nil, false, ErrInvalid
+			}
+			counts[r.GPUKind] += *r.GPUs
+		}
+	}
+	return counts, known, nil
+}
+
+// cloudGPUs counts a Cloud's GPUs of kind for its ceiling: inventoried servers
+// plus infrastructure reservations not yet in inventory. It returns nil when a
+// server's count is unknown.
+func cloudGPUs(records []CapacityRecord, reservations []scopedCapacityReservation, cloud, kind string) (*int64, error) {
+	counts, known, err := inventoryGPUs(records)
+	if err != nil || !known {
+		return nil, err
+	}
+	total := counts[kind]
+	for _, r := range reservations {
+		if r.cloud != cloud || r.reservation.Delta.GPUKind != kind || r.reservation.Delta.GPUs <= 0 {
+			continue
+		}
+		if total > math.MaxInt64-r.reservation.Delta.GPUs {
+			return nil, ErrInvalid
+		}
+		total += r.reservation.Delta.GPUs
+	}
+	return &total, nil
+}
+
+// summarizeGPUs lists every GPU kind the inventory holds or the policy caps.
+// Provisioned is null for every kind while any server's count is unknown.
+func summarizeGPUs(records []CapacityRecord, policy CapacityPolicy) ([]GPUUsage, error) {
+	counts, known, err := inventoryGPUs(records)
+	if err != nil {
+		return nil, err
+	}
+	var out []GPUUsage
+	for kind, n := range counts {
+		out = withGPUKind(out, kind)
+		if known {
+			gpuUsageFor(out, kind).Provisioned = number(n)
+		}
+	}
+	for _, l := range policy.GPULimits {
+		out = withGPUKind(out, l.Kind)
+		gpuUsageFor(out, l.Kind).Limit = number(l.Maximum)
+	}
+	if known {
+		for i := range out {
+			if out[i].Provisioned == nil {
+				out[i].Provisioned = number(0)
+			}
+		}
+	}
+	slices.SortFunc(out, func(a, b GPUUsage) int { return strings.Compare(a.Kind, b.Kind) })
+	return out, nil
+}
+
+// withGPUKind adds an empty row for kind unless one is already there.
+func withGPUKind(rows []GPUUsage, kind string) []GPUUsage {
+	if gpuUsageFor(rows, kind) != nil {
+		return rows
+	}
+	return append(rows, GPUUsage{Kind: kind})
+}
+
+func gpuUsageFor(rows []GPUUsage, kind string) *GPUUsage {
+	for i := range rows {
+		if rows[i].Kind == kind {
+			return &rows[i]
+		}
+	}
+	return nil
 }
