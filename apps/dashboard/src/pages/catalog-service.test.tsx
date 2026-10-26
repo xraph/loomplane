@@ -5,6 +5,7 @@ import { useState } from "react"
 import { afterEach, expect, test, vi } from "vitest"
 
 import { forgeClient } from "@/client/runtime"
+import { toneClass } from "@/components/runs"
 import { defineCatalogKind } from "@/lib/catalog-kinds"
 import { CatalogService } from "@/pages/catalog-service"
 
@@ -554,7 +555,12 @@ test.each([
       serve({ bindings: { production: bindings } })
       open("fabriq", "env_prod")
       const header = await screen.findByRole("banner")
-      expect(await within(header).findByText(label)).toBeVisible()
+      const pill = await within(header).findByText(label)
+      expect(pill).toBeVisible()
+      // The pill wears the tone the Stack gives the same state.
+      const tone = label === "Running" ? "live" : "waiting"
+      expect(pill).toHaveClass(toneClass[tone].tint, toneClass[tone].ink)
+      expect(pill.querySelector("span")).toHaveClass(toneClass[tone].dot)
       expect(
         within(header).queryByText(
           label === "Running" ? "Not running" : "Running"

@@ -292,6 +292,7 @@ function Header({
   props: CatalogPanelProps
 }) {
   const state = stateOf(props.binding)
+  const deployed = deployedState(module, props, state)
   const Actions = module?.actions
   // A module's subtitle says which instance this is, so it stands in for
   // the catalog's description of the kind.
@@ -382,14 +383,14 @@ function Header({
           </span>
         )}
         <StatusPill
-          tone={state.drift ? "waiting" : "live"}
+          tone={deployed.tone}
           className={
             inline
               ? "h-auto px-[9px] py-0.5 leading-[normal] [&>span]:bg-current"
               : undefined
           }
         >
-          {state.drift ? state.label : deployedLabel(module, props, state)}
+          {deployed.label}
         </StatusPill>
         {Actions && (
           <div
@@ -643,13 +644,17 @@ function Details({
 
 type State = { label: string; drift: boolean }
 
-function deployedLabel(
+function deployedState(
   module: CatalogKindModule | undefined,
   props: CatalogPanelProps,
   state: State
-): string {
-  const label = module?.deployedLabel
-  return typeof label === "function" ? label(props) : (label ?? state.label)
+): { label: string; tone: "live" | "waiting" } {
+  if (state.drift) return { label: state.label, tone: "waiting" }
+  const named =
+    typeof module?.deployedLabel === "function"
+      ? module.deployedLabel(props)
+      : (module?.deployedLabel ?? state.label)
+  return typeof named === "string" ? { label: named, tone: "live" } : named
 }
 
 function stateOf(binding: Binding): State {

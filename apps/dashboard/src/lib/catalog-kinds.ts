@@ -101,9 +101,14 @@ export type CatalogKindModule = {
   panels: CatalogPanel[]
   /**
    * The normal deployed state, or a function that names it from what is
-   * deployed. Drift warnings always take precedence.
+   * deployed, with the tone its pill wears (live unless it says waiting).
+   * Drift warnings always take precedence.
    */
-  deployedLabel?: string | ((props: CatalogPanelProps) => string)
+  deployedLabel?:
+    | string
+    | ((
+        props: CatalogPanelProps
+      ) => string | { label: string; tone: "live" | "waiting" })
   /** Compact page with an inline header and environment in its subtitle. */
   serviceLayout?: "compact"
   /** Panel ID to open first, falling back to Overview when unavailable. */
