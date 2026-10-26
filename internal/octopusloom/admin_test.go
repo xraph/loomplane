@@ -47,7 +47,7 @@ func TestAdminSendsTheTokenHeaderOnly(t *testing.T) {
 	if _, err := a.FarpServices(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := a.farp(ctx, http.MethodDelete, "/_farp/v1/deregister/lp-svc-billing", nil, nil, http.StatusNoContent, http.StatusNotFound); err != nil {
+	if err := a.Deregister(ctx, "lp-svc-billing"); err != nil {
 		t.Fatal(err)
 	}
 

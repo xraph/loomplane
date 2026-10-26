@@ -187,12 +187,21 @@ func (s *Syncer) syncLocked(ctx context.Context, ref GatewayRef, open ChannelOpe
 		run.removeStaleRoutes,
 		run.removeStaleUpstreams,
 		run.pushFarpBinding,
+		func(ctx context.Context) error { return run.syncRegistrations(ctx, s.now()) },
 	} {
 		if err := step(ctx); err != nil {
 			return s.pending(ctx, g, run, msgUnavailable, err)
 		}
 	}
 	return s.finish(ctx, g, run)
+}
+
+// now is the Syncer's clock.
+func (s *Syncer) now() time.Time {
+	if s.Now != nil {
+		return s.Now()
+	}
+	return time.Now()
 }
 
 // desired builds what g should hold. found is false when the gateway's own
@@ -253,6 +262,9 @@ func (s *Syncer) pending(ctx context.Context, g *Gateway, run *syncRun, msg stri
 	if run != nil {
 		res.Restarted, res.Restored = run.restarted, run.restored
 		state.OwnedUpstreams = sortedUnion(g.State.OwnedUpstreams, run.putUpstreams)
+		if run.registrations != nil {
+			state.Registrations = run.registrations
+		}
 	}
 	err := fmt.Errorf("sync Octopus gateway %s: %w", g.Resource, cause)
 	if saveErr := s.Store.SaveSyncState(ctx, g.GatewayRef, g.AppliedGeneration, state); saveErr != nil {
@@ -274,10 +286,6 @@ func (s *Syncer) failed(ctx context.Context, g *Gateway, msg string, cause error
 
 // finish records a sync that reached Octopus throughout.
 func (s *Syncer) finish(ctx context.Context, g *Gateway, run *syncRun) (SyncResult, error) {
-	now := time.Now
-	if s.Now != nil {
-		now = s.Now
-	}
 	desiredUpstreams := make([]string, 0, len(run.desired.Upstreams))
 	for _, u := range run.desired.Upstreams {
 		desiredUpstreams = append(desiredUpstreams, u.Name)
@@ -292,10 +300,16 @@ func (s *Syncer) finish(ctx context.Context, g *Gateway, run *syncRun) (SyncResu
 	}
 	state := SyncState{
 		StartTime:      run.info.StartTime,
-		SyncedAt:       now(),
+		SyncedAt:       s.now(),
 		OwnedUpstreams: sortedUnion(desiredUpstreams, run.keepOwned),
 		RouteErrors:    routeErrors,
 		Registrations:  g.State.Registrations,
+	}
+	if run.registrations != nil {
+		state.Registrations = run.registrations
+	}
+	if len(state.Registrations) == 0 {
+		state.Registrations = nil
 	}
 	res := SyncResult{State: SyncApplied, Generation: g.Generation, Restarted: run.restarted, Restored: run.restored}
 	applied := g.Generation
@@ -347,9 +361,13 @@ type syncRun struct {
 	// upstreams the removed routes sent to.
 	wanted, replaced, deleted map[string]bool
 	orphaned                  map[string]bool
-	routeErrors               map[string]string
-	rejected                  int
-	problems                  []string
+	// registrations are the gateway's FARP registrations as this sync leaves
+	// them; nil until syncRegistrations runs, which a Kubernetes gateway
+	// never does.
+	registrations map[string]Registered
+	routeErrors   map[string]string
+	rejected      int
+	problems      []string
 }
 
 func newSyncRun(admin *Admin, g *Gateway, d Desired, routes []*Route) *syncRun {

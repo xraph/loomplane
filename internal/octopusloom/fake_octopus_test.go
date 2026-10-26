@@ -47,8 +47,11 @@ type fakeOctopus struct {
 	// status makes "METHOD /path" answer with that status and failBody.
 	status   map[string]int
 	failBody string
-	requests []fakeRequest
-	closed   int
+	// farpStatus makes the FARP call "METHOD instance-id", such as
+	// "POST lp-svc-billing", answer with that status.
+	farpStatus map[string]int
+	requests   []fakeRequest
+	closed     int
 }
 
 // fakeRoute is a route as the fake holds it. NoRouteID reports the entries
@@ -70,7 +73,7 @@ func newFakeOctopus(t *testing.T) *fakeOctopus {
 		t: t, startTime: "2026-10-21 10:00:00",
 		routes: map[string]*fakeRoute{}, upstreams: map[string]UpstreamBody{},
 		binding: []string{}, instances: map[string]json.RawMessage{},
-		conflicts: map[string]string{}, status: map[string]int{},
+		conflicts: map[string]string{}, status: map[string]int{}, farpStatus: map[string]int{},
 	}
 	f.srv = httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(f.srv.Close)
@@ -423,9 +426,17 @@ func (f *fakeOctopus) serveFarp(w http.ResponseWriter, method, rest string, raw 
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": "instance.id is required"})
 			return
 		}
+		if code, ok := f.farpStatus["POST "+body.Instance.ID]; ok {
+			writeJSON(w, code, map[string]string{"error": "refused"})
+			return
+		}
 		f.instances[body.Instance.ID] = raw
 		writeJSON(w, http.StatusCreated, map[string]string{"instance_id": body.Instance.ID})
 	case method == http.MethodPut && strings.HasPrefix(rest, "heartbeat/"):
+		if code, ok := f.farpStatus["PUT "+strings.TrimPrefix(rest, "heartbeat/")]; ok {
+			writeJSON(w, code, map[string]string{"error": "refused"})
+			return
+		}
 		if _, ok := f.instances[strings.TrimPrefix(rest, "heartbeat/")]; !ok {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown instance"})
 			return
@@ -433,6 +444,10 @@ func (f *fakeOctopus) serveFarp(w http.ResponseWriter, method, rest string, raw 
 		writeJSON(w, http.StatusOK, map[string]string{"status": "healthy"})
 	case method == http.MethodDelete && strings.HasPrefix(rest, "deregister/"):
 		id := strings.TrimPrefix(rest, "deregister/")
+		if code, ok := f.farpStatus["DELETE "+id]; ok {
+			writeJSON(w, code, map[string]string{"error": "refused"})
+			return
+		}
 		if _, ok := f.instances[id]; !ok {
 			writeJSON(w, http.StatusNotFound, map[string]string{"error": "unknown instance"})
 			return

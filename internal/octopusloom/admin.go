@@ -294,14 +294,65 @@ func (a *Admin) FarpServices(ctx context.Context) ([]FarpService, error) {
 	return out, err
 }
 
+// ErrUnknownInstance is Octopus answering 404 to a heartbeat: it doesn't
+// know the instance, as after a restart, and the service registers again.
+var ErrUnknownInstance = errors.New("octopus does not know this FARP instance")
+
+// farpInstance is the instance of a FARP registration.
+type farpInstance struct {
+	ID          string            `json:"id"`
+	ServiceName string            `json:"service_name"`
+	Address     string            `json:"address"`
+	Port        int               `json:"port"`
+	Metadata    map[string]string `json:"metadata"`
+}
+
+// Register sends POST /_farp/v1/register for r. Octopus replaces that
+// service's FARP routes and upstream, so it is also how a new release is
+// announced. The manifest is null: Octopus reads it from the service.
+func (a *Admin) Register(ctx context.Context, r Registration) error {
+	metadata := r.Metadata
+	if metadata == nil {
+		metadata = map[string]string{}
+	}
+	body := struct {
+		Instance farpInstance `json:"instance"`
+		Manifest any          `json:"manifest"`
+	}{Instance: farpInstance{ID: r.InstanceID, ServiceName: r.Service, Address: r.Address, Port: r.Port, Metadata: metadata}}
+	_, err := a.farp(ctx, http.MethodPost, "/_farp/v1/register", body, http.StatusOK, http.StatusCreated)
+	return err
+}
+
+// Heartbeat sends PUT /_farp/v1/heartbeat/{id}. A 404 is ErrUnknownInstance.
+func (a *Admin) Heartbeat(ctx context.Context, instanceID string) error {
+	body := struct {
+		Status string `json:"status"`
+	}{"healthy"}
+	status, err := a.farp(ctx, http.MethodPut, "/_farp/v1/heartbeat/"+url.PathEscape(instanceID), body, http.StatusOK, http.StatusNotFound)
+	if err != nil {
+		return err
+	}
+	if status == http.StatusNotFound {
+		return ErrUnknownInstance
+	}
+	return nil
+}
+
+// Deregister sends DELETE /_farp/v1/deregister/{id}. An instance Octopus
+// doesn't know is deregistered already.
+func (a *Admin) Deregister(ctx context.Context, instanceID string) error {
+	_, err := a.farp(ctx, http.MethodDelete, "/_farp/v1/deregister/"+url.PathEscape(instanceID), nil, http.StatusOK, http.StatusNoContent, http.StatusNotFound)
+	return err
+}
+
 // admin sends an admin API request with the admin token.
 func (a *Admin) admin(ctx context.Context, method, path string, body, out any, accept ...int) (int, error) {
 	return a.call(ctx, adminTokenHeader, a.adminToken, method, path, body, out, accept)
 }
 
 // farp sends a FARP request with the FARP token.
-func (a *Admin) farp(ctx context.Context, method, path string, body, out any, accept ...int) (int, error) {
-	return a.call(ctx, farpTokenHeader, a.farpToken, method, path, body, out, accept)
+func (a *Admin) farp(ctx context.Context, method, path string, body any, accept ...int) (int, error) {
+	return a.call(ctx, farpTokenHeader, a.farpToken, method, path, body, nil, accept)
 }
 
 // call sends one JSON request to http://component/path on the channel,
