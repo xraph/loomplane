@@ -74,8 +74,10 @@ var (
 	ErrNoApp = errors.New("this cloud's sign-in isn't set up")
 )
 
-// DetailCanaryMissing is the detail listing, comma separated, the
-// actions an AWS key lacks that only a canary release on ECS needs.
+// DetailCanaryMissing is the detail listing, comma separated, what a
+// credential lacks that only a canary release needs: the actions an AWS
+// key lacks for one on ECS, or the permissions a Google Cloud service
+// account lacks for one on Cloud Run.
 const DetailCanaryMissing = "canary_missing"
 
 // Connection is one cloud account an organization deploys to.

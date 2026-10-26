@@ -150,6 +150,29 @@ func (p *Provider) apply(ctx context.Context, instanceID id.ID, spec cpprovider.
 		return nil, err
 	}
 	name := ServiceName(instanceID)
+	run, err := Service(spec, labels)
+	if err != nil {
+		return nil, err
+	}
+	if transportErr := applyPSCTransport(&run.Template, labels, s.Key().ProjectID, p.region); transportErr != nil {
+		return nil, transportErr
+	}
+	svc, err := s.ApplyService(ctx, p.region, name, run)
+	if err != nil {
+		return nil, err
+	}
+	if err := SetInvokers(ctx, s, p.region, name, labels); err != nil {
+		return nil, err
+	}
+	return svc, nil
+}
+
+// Service is the Cloud Run service an instance's spec and labels make. It
+// sets no traffic and doesn't name its revision, so Cloud Run names the
+// new revision and sends it all of the traffic once it's ready. It leaves
+// out a Cloud SQL PSC transport, which needs the project and region:
+// apply adds that, and a canary refuses a service that has one.
+func Service(spec cpprovider.ServiceSpec, labels map[string]string) (gcp.RunService, error) {
 	container := gcp.RunContainer{Image: spec.Image}
 	for _, k := range slices.Sorted(maps.Keys(spec.Env)) {
 		container.Env = append(container.Env, gcp.RunEnv{Name: k, Value: spec.Env[k]})
@@ -161,7 +184,7 @@ func (p *Provider) apply(ctx context.Context, instanceID id.ID, spec cpprovider.
 		}
 		secret, version, ok := strings.Cut(labels[l], ":")
 		if !ok {
-			return nil, fmt.Errorf("label %s names no secret version: %q", l, labels[l])
+			return gcp.RunService{}, fmt.Errorf("label %s names no secret version: %q", l, labels[l])
 		}
 		ref := &gcp.RunValueSource{}
 		ref.SecretKeyRef.Secret, ref.SecretKeyRef.Version = secret, version
@@ -207,25 +230,21 @@ func (p *Provider) apply(ctx context.Context, instanceID id.ID, spec cpprovider.
 	if minScale > 0 || maxScale > 0 {
 		run.Template.Scaling = &gcp.RunScaling{Min: minScale, Max: maxScale}
 	}
-	if transportErr := applyPSCTransport(&run.Template, labels, s.Key().ProjectID, p.region); transportErr != nil {
-		return nil, transportErr
-	}
-	svc, err := s.ApplyService(ctx, p.region, name, run)
-	if err != nil {
-		return nil, err
-	}
-	// A private service takes calls from the project's own services only,
-	// which run as its runtime account.
+	return run, nil
+}
+
+// SetInvokers sets who may call the service the labels describe. A
+// private service takes calls from the project's own services only,
+// which run as its runtime account.
+func SetInvokers(ctx context.Context, s *gcp.Session, region, name string, labels map[string]string) error {
 	invoker := gcp.Public
 	if labels[LabelPublic] != "true" {
+		var err error
 		if invoker, err = s.RuntimeAccount(ctx); err != nil {
-			return nil, fmt.Errorf("find the runtime service account: %w", err)
+			return fmt.Errorf("find the runtime service account: %w", err)
 		}
 	}
-	if err := s.SetInvokers(ctx, p.region, name, invoker); err != nil {
-		return nil, err
-	}
-	return svc, nil
+	return s.SetInvokers(ctx, region, name, invoker)
 }
 
 func endpoints(svc *gcp.RunService, labels map[string]string) []cpprovider.Endpoint {
