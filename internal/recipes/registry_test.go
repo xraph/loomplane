@@ -182,6 +182,10 @@ func TestRegisterRejectsInvalidKinds(t *testing.T) {
 			c := component(k, "migrate")
 			c.Volume, c.Protection = &recipes.Volume{MountPath: "/data"}, recipes.ProtectionRebuildable
 		}},
+		{"volume without a Kubernetes size on a kind that runs there", "Kubernetes size", func(k *recipes.Kind) {
+			c := component(k, "api")
+			c.Volume, c.Protection = &recipes.Volume{MountPath: "/data"}, recipes.ProtectionRebuildable
+		}},
 		{"native protection on a component", "native", func(k *recipes.Kind) { component(k, "api").Protection = recipes.ProtectionNative }},
 		{"port both routable and control", "both", func(k *recipes.Kind) { component(k, "api").Ports[1].Routable = true }},
 		{"routable tcp port", "routable", func(k *recipes.Kind) {
@@ -828,5 +832,20 @@ func TestKindInfoListsConsumerOptions(t *testing.T) {
 	}
 	if strings.Contains(string(b), "consumer_options") {
 		t.Fatalf("empty consumer options are listed: %s", b)
+	}
+}
+
+// A volume needs a Kubernetes size only on a kind that runs on Kubernetes:
+// servers ignore it.
+func TestServerOnlyKindNeedsNoKubernetesVolumeSize(t *testing.T) {
+	k := recipestest.Sample()
+	k.Targets = []string{"server"}
+	for i := range k.Components {
+		if k.Components[i].Name == "api" {
+			k.Components[i].Volume, k.Components[i].Protection = &recipes.Volume{MountPath: "/data"}, recipes.ProtectionRebuildable
+		}
+	}
+	if err := recipes.NewRegistry().Register(k); err != nil {
+		t.Fatal(err)
 	}
 }

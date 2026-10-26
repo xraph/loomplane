@@ -410,6 +410,11 @@ func validateKind(k Kind) []error {
 		if slices.Contains(k.Targets, "kubernetes") && slices.ContainsFunc(k.Components[i].Ports, func(p Port) bool { return p.Protocol == "memcached" }) {
 			f.add("component %q uses Memcached readiness, which is qualified only on server targets", k.Components[i].Name)
 		}
+		// A volume's PVC request is its Kubernetes size; zero would plan
+		// and then fail to apply.
+		if v := k.Components[i].Volume; v != nil && v.KubernetesSizeMB == 0 && slices.Contains(k.Targets, "kubernetes") {
+			f.add("component %q has a volume with no Kubernetes size, and the kind runs on Kubernetes; set KubernetesSizeMB", k.Components[i].Name)
+		}
 	}
 	if cycle := afterCycle(k.Components, components); cycle != nil {
 		f.add("components %s form a cycle through after", strings.Join(cycle, " -> "))
