@@ -32,7 +32,8 @@ type CapacityDemandWakeup interface {
 }
 
 func expansionDemandFits(host, reserve, used, demand ResourceVector) bool {
-	if !nonnegativeCapacity(demand) || demand.Servers != 0 {
+	// A GPU host takes only work of its kind, and a CPU host takes no GPU work.
+	if !nonnegativeCapacity(demand) || demand.Servers != 0 || demand.GPUKind != host.GPUKind {
 		return false
 	}
 	total, err := addCapacity(reserve, used)

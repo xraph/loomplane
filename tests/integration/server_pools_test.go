@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -23,6 +24,7 @@ import (
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/pkg/manifest"
+	"github.com/xraph/loomplane/pkg/provider"
 )
 
 type poolFixture struct {
@@ -686,5 +688,49 @@ func TestServerPoolsOrdinaryApprovalStillNeedsConcretePlacement(t *testing.T) {
 	f.plan(t, "missing-host", req, candidate)
 	if accepted, approveErr := f.plans.Decide(t.Context(), "org", "missing-host", "approved", "usr", "", time.Now()); approveErr == nil || accepted {
 		t.Fatal("ordinary approval omitted its concrete host reservation")
+	}
+}
+
+func TestServerPoolsGPUMembers(t *testing.T) {
+	f := newPoolFixture(t)
+	now := time.Now().UTC()
+	if err := connections.NewPgStore(f.db).CreateConnection(t.Context(), &connections.Connection{ID: "runtime-gpu", OrgID: "org", Cloud: "server", Name: "runtime-gpu", Account: "runtime-gpu", Details: map[string]string{"docker_id": "runtime-gpu", "architecture": "amd64"}, Status: "ready", CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	server := &cloudinfra.Server{ID: "server-gpu", OrgID: "org", CloudID: "cloud", ConnectionID: "runtime-gpu", RuntimeConnectionID: "runtime-gpu", Ownership: "adopted", Provider: "generic", AccountID: "runtime-gpu", Status: "ready", Revision: 1, CreatedAt: now, UpdatedAt: now, Health: cloudinfra.RuntimeHealth{DockerID: "runtime-gpu", Architecture: "amd64", CPUs: 16, MemoryBytes: 64 << 30, EffectiveCPUMillis: 16000, EffectiveMemoryBytes: 64 << 30, GPURuntime: "ready", GPUs: []provider.GPUDevice{{Index: 0, UUID: "GPU-0", Kind: "nvidia-l4"}, {Index: 1, UUID: "GPU-1", Kind: "nvidia-l4"}}, CheckedAt: now}}
+	if err := f.store.SaveServer(t.Context(), server); err != nil {
+		t.Fatal(err)
+	}
+	member := cloudinfra.PoolMember{ServerID: "server-gpu", CPUMillis: 8000, MemoryBytes: 32 << 30, GPUs: 3}
+	gpuPool := &cloudinfra.Pool{ID: "gpu-pool", OrgID: "org", CloudID: "cloud", Name: "L4", Revision: 1, AcceleratorKind: "nvidia-l4", Members: []cloudinfra.PoolMember{member}}
+	if err := f.store.SavePool(t.Context(), gpuPool, 0); !errors.Is(err, cloudinfra.ErrInvalid) {
+		t.Fatalf("three L4s on a two-L4 server: %v", err)
+	}
+	gpuPool.Members[0].GPUs = 2
+	if err := f.store.SavePool(t.Context(), gpuPool, 0); err != nil {
+		t.Fatal(err)
+	}
+	saved, err := f.store.GetPool(t.Context(), "org", "cloud", "gpu-pool")
+	if err != nil || saved.AcceleratorKind != "nvidia-l4" || saved.Members[0].GPUs != 2 {
+		t.Fatalf("saved GPU pool: %+v %v", saved, err)
+	}
+	// The same server can't give a different GPU budget to another pool, GPU or CPU.
+	other := &cloudinfra.Pool{ID: "gpu-pool-2", OrgID: "org", CloudID: "cloud", Name: "L4 half", Revision: 1, AcceleratorKind: "nvidia-l4", Members: []cloudinfra.PoolMember{{ServerID: "server-gpu", CPUMillis: 8000, MemoryBytes: 32 << 30, GPUs: 1}}}
+	if err = f.store.SavePool(t.Context(), other, 0); err == nil || !strings.Contains(err.Error(), "same budget in every pool") {
+		t.Fatalf("second GPU budget: %v", err)
+	}
+	cpu := &cloudinfra.Pool{ID: "cpu-pool", OrgID: "org", CloudID: "cloud", Name: "CPU", Revision: 1, Members: []cloudinfra.PoolMember{{ServerID: "server-gpu", CPUMillis: 8000, MemoryBytes: 32 << 30}}}
+	if err = f.store.SavePool(t.Context(), cpu, 0); err == nil || !strings.Contains(err.Error(), "same budget in every pool") {
+		t.Fatalf("GPU server in a CPU pool with no GPU budget: %v", err)
+	}
+	// A server whose container runtime can't use its GPUs can't join a GPU pool.
+	server.Health.GPURuntime = "toolkit_missing"
+	server.Revision = 2
+	if err = f.store.SaveServer(t.Context(), server); err != nil {
+		t.Fatal(err)
+	}
+	gpuPool.Revision = 2
+	if err = f.store.SavePool(t.Context(), gpuPool, 1); !errors.Is(err, cloudinfra.ErrConflict) || !strings.Contains(err.Error(), "GPU runtime") {
+		t.Fatalf("toolkit missing: %v", err)
 	}
 }

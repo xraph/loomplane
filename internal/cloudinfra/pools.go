@@ -11,6 +11,7 @@ import (
 	"go.jetify.com/typeid/v2"
 
 	"github.com/xraph/loomplane/internal/security"
+	"github.com/xraph/loomplane/pkg/provider"
 )
 
 // Pool groups compatible runtimes. Membership does not create a private network.
@@ -21,6 +22,8 @@ type Pool struct {
 	Name     string       `json:"name"`
 	Revision int64        `json:"revision"`
 	Members  []PoolMember `json:"members"`
+	// AcceleratorKind "" is a CPU pool. A GPU pool holds servers with this kind.
+	AcceleratorKind string `json:"accelerator_kind,omitempty"`
 }
 
 // PoolMember carries an explicitly reviewed usable host budget.
@@ -29,11 +32,13 @@ type PoolMember struct {
 	CPUMillis   int64  `json:"cpu_millis"`
 	MemoryBytes int64  `json:"memory_bytes"`
 	Draining    bool   `json:"draining"`
+	GPUs        int64  `json:"gpus,omitempty"` // budget of the pool's kind on this server
 }
 type PoolInput struct {
-	Name     string       `json:"name"`
-	Revision int64        `json:"revision"`
-	Members  []PoolMember `json:"members"`
+	Name            string       `json:"name"`
+	Revision        int64        `json:"revision"`
+	Members         []PoolMember `json:"members"`
+	AcceleratorKind string       `json:"accelerator_kind,omitempty"`
 }
 type PoolStore interface {
 	GetPool(context.Context, string, string, string) (*Pool, error)
@@ -65,6 +70,9 @@ func (s *Service) SavePool(ctx context.Context, p security.Principal, cloud, id 
 	if strings.TrimSpace(in.Name) == "" || len(in.Name) > 64 || len(in.Members) > 100 {
 		return nil, ErrInvalid
 	}
+	if err := validatePoolGPUs(in); err != nil {
+		return nil, err
+	}
 	if len(in.Members) == 0 {
 		policies, available := s.Store.(CapacityPolicyStore)
 		if !available || id == "" {
@@ -74,9 +82,12 @@ func (s *Service) SavePool(ctx context.Context, p security.Principal, cloud, id 
 		if policyErr != nil {
 			return nil, policyErr
 		}
-		_, configured := expansionPool(policy, id)
+		template, configured := expansionPool(policy, id)
 		if !policy.Enabled || !configured {
 			return nil, ErrInvalid
+		}
+		if template.AcceleratorKind != in.AcceleratorKind {
+			return nil, fmt.Errorf("%w: the pool's GPU kind must match its expansion template", ErrInvalid)
 		}
 	}
 	if id == "" {
@@ -89,7 +100,7 @@ func (s *Service) SavePool(ctx context.Context, p security.Principal, cloud, id 
 		}
 		id = v.String()
 	}
-	pool := &Pool{ID: id, OrgID: p.OrgID, CloudID: cloud, Name: strings.TrimSpace(in.Name), Revision: in.Revision + 1, Members: append([]PoolMember{}, in.Members...)}
+	pool := &Pool{ID: id, OrgID: p.OrgID, CloudID: cloud, Name: strings.TrimSpace(in.Name), Revision: in.Revision + 1, Members: append([]PoolMember{}, in.Members...), AcceleratorKind: in.AcceleratorKind}
 	slices.SortFunc(pool.Members, func(a, b PoolMember) int { return strings.Compare(a.ServerID, b.ServerID) })
 	for i, m := range pool.Members {
 		if m.ServerID == "" || i > 0 && pool.Members[i-1].ServerID == m.ServerID {
@@ -181,6 +192,9 @@ func (s *PgStore) SavePool(ctx context.Context, p *Pool, previous int64) error {
 		if checkErr := usable(&v, m, time.Now()); checkErr != nil {
 			return checkErr
 		}
+		if checkErr := usableGPUs(&v, p.AcceleratorKind, m); checkErr != nil {
+			return checkErr
+		}
 		var unmanaged bool
 		if checkErr := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_bindings WHERE (config->'target_settings'->>'docker_id'=$1 OR connection_id IN(SELECT id FROM loomplane_cloud_connections WHERE details->>'docker_id'=$1)) AND coalesce(config->'cloud_placement'->>'pool_id','')='') OR EXISTS(SELECT 1 FROM loomplane_plans p CROSS JOIN LATERAL jsonb_array_elements(coalesce(p.result->'actions','[]')) a WHERE p.status='approved' AND (a->'service'->'target_settings'->>'docker_id'=$1 OR a->>'connection_id' IN(SELECT id FROM loomplane_cloud_connections WHERE details->>'docker_id'=$1)) AND coalesce(a->'service'->'cloud_placement'->>'pool_id','')='' AND NOT EXISTS(SELECT 1 FROM loomplane_deployments d WHERE d.plan_id=p.id AND d.status='succeeded'))`, v.Health.DockerID).Scan(&unmanaged); checkErr != nil {
 			return checkErr
@@ -191,6 +205,12 @@ func (s *PgStore) SavePool(ctx context.Context, p *Pool, previous int64) error {
 		var other bool
 		if checkErr := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_server_pool_members WHERE org_id=$1 AND server_id=$2 AND pool_id<>$3 AND (cpu_millis<>$4 OR memory_bytes<>$5))`, p.OrgID, m.ServerID, p.ID, m.CPUMillis, m.MemoryBytes).Scan(&other); checkErr != nil {
 			return checkErr
+		}
+		if !other {
+			// GPU budgets live in the pool body until the member table has a column for them.
+			if checkErr := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_server_pools p CROSS JOIN LATERAL jsonb_array_elements(coalesce(p.body->'members','[]')) m WHERE p.org_id=$1 AND p.id<>$3 AND m->>'server_id'=$2 AND coalesce((m->>'gpus')::bigint,0)<>$4)`, p.OrgID, m.ServerID, p.ID, m.GPUs).Scan(&other); checkErr != nil {
+				return checkErr
+			}
 		}
 		if other {
 			return fmt.Errorf("%w: a server must use the same budget in every pool", ErrInvalid)
@@ -259,6 +279,47 @@ func usable(v *Server, m PoolMember, now time.Time) error {
 	}
 	if m.CPUMillis <= 0 || m.MemoryBytes <= 0 || m.CPUMillis > h.EffectiveCPUMillis || m.MemoryBytes > h.EffectiveMemoryBytes {
 		return fmt.Errorf("%w: usable budget exceeds effective host limits", ErrInvalid)
+	}
+	return nil
+}
+
+// validatePoolGPUs checks a pool's GPU kind and member budgets before any
+// server is read: a CPU pool gives no GPUs, a GPU pool gives each member some.
+func validatePoolGPUs(in PoolInput) error {
+	if in.AcceleratorKind != "" && !nvidiaKind(in.AcceleratorKind) {
+		return fmt.Errorf("%w: a GPU pool needs a known NVIDIA kind", ErrInvalid)
+	}
+	for _, m := range in.Members {
+		if in.AcceleratorKind == "" && m.GPUs != 0 {
+			return fmt.Errorf("%w: a CPU pool member has no GPU budget", ErrInvalid)
+		}
+		if in.AcceleratorKind != "" && m.GPUs <= 0 {
+			return fmt.Errorf("%w: a GPU pool member needs a GPU budget", ErrInvalid)
+		}
+	}
+	return nil
+}
+
+// usableGPUs checks a GPU pool member against the server's last health check:
+// enough devices of the pool's kind, and a container runtime that can use them.
+func usableGPUs(v *Server, kind string, m PoolMember) error {
+	if kind == "" {
+		if m.GPUs != 0 {
+			return fmt.Errorf("%w: a CPU pool member has no GPU budget", ErrInvalid)
+		}
+		return nil
+	}
+	var have int64
+	for _, d := range v.Health.GPUs {
+		if d.Kind == kind {
+			have++
+		}
+	}
+	if m.GPUs <= 0 || m.GPUs > have {
+		return fmt.Errorf("%w: GPU budget exceeds the server's %s GPUs", ErrInvalid, kind)
+	}
+	if v.Health.GPURuntime != provider.GPUStatusReady {
+		return fmt.Errorf("%w: the server's GPU runtime isn't ready", ErrConflict)
 	}
 	return nil
 }

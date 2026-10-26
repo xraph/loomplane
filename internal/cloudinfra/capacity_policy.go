@@ -100,7 +100,7 @@ func nonnegativeCapacity(v ResourceVector) bool {
 			return false
 		}
 	}
-	return true
+	return gpuShapeValid(v)
 }
 func capacityFits(v, limit ResourceVector) bool {
 	a, b := capacityValues(v), capacityValues(limit)
@@ -109,7 +109,7 @@ func capacityFits(v, limit ResourceVector) bool {
 			return false
 		}
 	}
-	return true
+	return gpusFit(v, limit)
 }
 func addCapacity(a, b ResourceVector) (ResourceVector, error) {
 	av, bv := capacityValues(a), capacityValues(b)
@@ -120,18 +120,29 @@ func addCapacity(a, b ResourceVector) (ResourceVector, error) {
 		}
 		out[i] = n + bv[i]
 	}
-	return ResourceVector{out[0], out[1], out[2], out[3]}, nil
+	kind, gpus, err := addGPUs(a, b)
+	if err != nil {
+		return ResourceVector{}, err
+	}
+	return ResourceVector{Servers: out[0], CPUMillis: out[1], MemoryBytes: out[2], StorageBytes: out[3], GPUKind: kind, GPUs: gpus}, nil
 }
 func multiplyCapacity(v ResourceVector, n int64) (ResourceVector, error) {
-	values := capacityValues(v)
-	out := [4]int64{}
+	values := append(capacityValues(v), v.GPUs)
+	out := [5]int64{}
 	for i, value := range values {
 		if value < 0 || n < 0 || (value > 0 && n > math.MaxInt64/value) {
 			return ResourceVector{}, ErrInvalid
 		}
 		out[i] = value * n
 	}
-	return ResourceVector{out[0], out[1], out[2], out[3]}, nil
+	if !gpuShapeValid(v) {
+		return ResourceVector{}, ErrInvalid
+	}
+	kind := v.GPUKind
+	if out[4] == 0 {
+		kind = ""
+	}
+	return ResourceVector{Servers: out[0], CPUMillis: out[1], MemoryBytes: out[2], StorageBytes: out[3], GPUKind: kind, GPUs: out[4]}, nil
 }
 func validateCapacityPolicyShape(policy CapacityPolicy) error {
 	if !nonnegativeCapacity(policy.Limits) || len(policy.Pools) > 100 || len(policy.FrontendLimits) > 1000 {
@@ -150,7 +161,7 @@ func validateCapacityPolicyShape(policy CapacityPolicy) error {
 			return ErrInvalid
 		}
 		pools[pool.PoolID] = true
-		if pool.Limits != nil && (!nonnegativeCapacity(*pool.Limits) || !capacityFits(*pool.Limits, policy.Limits)) {
+		if pool.Limits != nil && (!nonnegativeCapacity(*pool.Limits) || !capacityFits(withoutGPUs(*pool.Limits), policy.Limits)) {
 			return fmt.Errorf("%w: pool ceilings exceed Cloud ceilings", ErrInvalid)
 		}
 		if policy.Enabled && (pool.ConnectionID == "" || pool.Region == "" || pool.Image == "" || (pool.Architecture != "amd64" && pool.Architecture != "arm64") || len(pool.AllowedSizes) == 0 || len(pool.AllowedSizes) > 100 || pool.MaxServers > policy.Limits.Servers) {
@@ -171,12 +182,14 @@ func validateCapacityPolicyShape(policy CapacityPolicy) error {
 		}
 		targets[limit.TargetID] = true
 	}
-	return nil
+	return validateGPUPolicyShape(policy)
 }
 
 type bootstrapChoice struct {
-	size      string
+	size string
+	// resources holds the four counted dimensions; gpus counts the pool's kind.
 	resources ResourceVector
+	gpus      int64
 }
 
 // Bootstrap minima use one complete offered size per pool. The bounded search
@@ -190,19 +203,28 @@ func validateCapacityPolicyChoices(policy *CapacityPolicy, options map[string]pr
 	}
 	choices := make([][]bootstrapChoice, len(policy.Pools))
 	for i, pool := range policy.Pools {
+		if err := validateGPUPoolCeiling(policy, pool); err != nil {
+			return err
+		}
 		catalog := options[pool.PoolID]
 		sizes := slices.Clone(pool.AllowedSizes)
 		slices.Sort(sizes)
 		for _, id := range sizes {
-			if err := validateOptions(catalog, ServerInput{Region: pool.Region, Size: id, Image: pool.Image}); err != nil {
-				return fmt.Errorf("%w: unavailable expansion template", ErrInvalid)
-			}
 			var size provider.ServerSize
 			for _, candidate := range catalog.Sizes {
 				if candidate.ID == id {
 					size = candidate
 					break
 				}
+			}
+			// GPU rules come first so a GPU size on a plain image says why.
+			if size.ID != "" {
+				if err := validatePoolSizeAccelerator(pool, catalog, size); err != nil {
+					return err
+				}
+			}
+			if err := validateOptions(catalog, ServerInput{Region: pool.Region, Size: id, Image: pool.Image}); err != nil {
+				return fmt.Errorf("%w: unavailable expansion template", ErrInvalid)
 			}
 			cpu, err := multiplyCapacity(ResourceVector{CPUMillis: int64(size.CPUs)}, 1000)
 			if err != nil {
@@ -227,8 +249,13 @@ func validateCapacityPolicyChoices(policy *CapacityPolicy, options map[string]pr
 			if err != nil {
 				return err
 			}
-			if capacityFits(total, policy.Limits) && (pool.Limits == nil || capacityFits(total, *pool.Limits)) {
-				choices[i] = append(choices[i], bootstrapChoice{id, total})
+			_, perServer := sizeGPUs(size)
+			gpus, err := multiplyCapacity(ResourceVector{GPUKind: pool.AcceleratorKind, GPUs: perServer}, pool.MinServers)
+			if err != nil {
+				return err
+			}
+			if capacityFits(total, policy.Limits) && (pool.Limits == nil || capacityFits(total, withoutGPUs(*pool.Limits))) && bootstrapGPUsFit(policy, pool, gpus.GPUs) {
+				choices[i] = append(choices[i], bootstrapChoice{id, total, gpus.GPUs})
 			}
 		}
 		if len(choices[i]) == 0 {
@@ -237,11 +264,13 @@ func validateCapacityPolicyChoices(policy *CapacityPolicy, options map[string]pr
 	}
 	// Bound work for large catalogs. Failure means the configuration is unproven.
 	attempts := 0
+	gpuTotals := map[string]int64{}
 	var fit func(int, ResourceVector) bool
 	fit = func(i int, total ResourceVector) bool {
 		if i == len(choices) {
 			return true
 		}
+		kind := policy.Pools[i].AcceleratorKind
 		for _, choice := range choices[i] {
 			attempts++
 			if attempts > 10000 {
@@ -251,10 +280,19 @@ func validateCapacityPolicyChoices(policy *CapacityPolicy, options map[string]pr
 			if err != nil || !capacityFits(next, policy.Limits) {
 				continue
 			}
+			before := gpuTotals[kind]
+			if choice.gpus > 0 {
+				limit, _ := gpuLimit(policy, kind)
+				if choice.gpus > limit-before {
+					continue
+				}
+			}
+			gpuTotals[kind] = before + choice.gpus
 			policy.Pools[i].BootstrapSize = choice.size
 			if fit(i+1, next) {
 				return true
 			}
+			gpuTotals[kind] = before
 		}
 		return false
 	}
@@ -262,4 +300,16 @@ func validateCapacityPolicyChoices(policy *CapacityPolicy, options map[string]pr
 		return fmt.Errorf("%w: minimum needs a supported homogeneous bootstrap allocation within Cloud ceilings", ErrInvalid)
 	}
 	return nil
+}
+
+// bootstrapGPUsFit checks one pool's minimum against its own and the Cloud's GPU ceilings.
+func bootstrapGPUsFit(policy *CapacityPolicy, pool PoolExpansionPolicy, gpus int64) bool {
+	if gpus == 0 {
+		return true
+	}
+	if pool.Limits != nil && pool.Limits.GPUs > 0 && gpus > pool.Limits.GPUs {
+		return false
+	}
+	limit, _ := gpuLimit(policy, pool.AcceleratorKind)
+	return gpus <= limit
 }

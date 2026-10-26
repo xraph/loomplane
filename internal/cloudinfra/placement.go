@@ -20,6 +20,8 @@ type PlacementRequest struct {
 	OrgID, ProjectID, EnvironmentID, CloudID, TargetID, PoolID, Service string
 	TargetRevision                                                      int64
 	CPUMillis, MemoryBytes                                              int64
+	GPUKind                                                             string
+	GPUs                                                                int64
 	Architecture                                                        string
 	StickyServerID                                                      string
 	DestinationServerID                                                 string
@@ -47,6 +49,8 @@ type Placement struct {
 	ConnectionGeneration int64  `json:"connection_generation"`
 	CPUMillis            int64  `json:"cpu_millis"`
 	MemoryBytes          int64  `json:"memory_bytes"`
+	GPUKind              string `json:"gpu_kind,omitempty"`
+	GPUs                 int64  `json:"gpus,omitempty"`
 }
 
 func (s *PgStore) PreviewPlacement(ctx context.Context, in PlacementRequest) (*Placement, error) {

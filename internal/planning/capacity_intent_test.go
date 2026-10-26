@@ -2,6 +2,7 @@ package planning
 
 import (
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 
@@ -125,4 +126,41 @@ type futureTemplateValidator struct{}
 
 func (futureTemplateValidator) ValidateCapacityTemplate(context.Context, security.Principal, cloudinfra.CapacityDemand, cloudinfra.PoolExpansionPolicy) (*cloudinfra.CapacityTemplatePin, error) {
 	return &cloudinfra.CapacityTemplatePin{ConnectionGeneration: 1, AccountID: "provider"}, nil
+}
+
+// storedCPUIntent is an approved intent body as written before capacity had a
+// GPU dimension. Loading re-hashes it, so new fields must not change its digest.
+const storedCPUIntent = `{"demand":{"org_id":"org","cloud_id":"cloud","pool_id":"pool","target_id":"target","project_id":"project","environment_id":"env","plan_id":"plan","service":"web","architecture":"amd64","sticky_server_id":"","resources":{"servers":0,"cpu_millis":1000,"memory_bytes":536870912,"storage_bytes":0},"local_data":false,"policy_revision":1,"intent_hash":"0d0956b300639d27557fa45861fa51c4b811b62fad91b325c1590a42c2d8bc11"},"provider_pin":{"connection_generation":1,"account_id":"account"},"template":{"bootstrap_size":"","pool_id":"pool","connection_id":"provider","region":"region","architecture":"amd64","image":"image","allowed_sizes":["size"],"min_servers":0,"max_servers":0,"limits":null,"system_reserve":{"servers":0,"cpu_millis":250,"memory_bytes":268435456,"storage_bytes":0}},"template_hash":"055c8bb206dec8b49e1c053a12faddd5118161c0b4220eaf839bd2b09d68c87d","commit_sha":"commit","assignment_revision":2,"cloud_revision":3,"target_revision":5,"grant_revision":4,"target_name":""}`
+
+func TestStoredCPUIntentDigestUnchanged(t *testing.T) {
+	var intent CapacityIntent
+	if err := json.Unmarshal([]byte(storedCPUIntent), &intent); err != nil {
+		t.Fatal(err)
+	}
+	saved := intent.Demand.IntentHash
+	intent.Demand.IntentHash = ""
+	if hash, err := Digest(intent); err != nil || hash != saved {
+		t.Fatalf("stored intent digest moved: %s, want %s (%v)", hash, saved, err)
+	}
+	if hash, err := capacityTemplateHash(intent.Template); err != nil || hash != intent.TemplateHash {
+		t.Fatalf("stored template hash moved: %s, want %s (%v)", hash, intent.TemplateHash, err)
+	}
+	intent.Demand.IntentHash = saved
+	raw, err := json.Marshal(intent)
+	if err != nil || string(raw) != storedCPUIntent {
+		t.Fatalf("stored intent re-encodes differently:\n%s\n%s", raw, storedCPUIntent)
+	}
+
+	// A fresh intent for the same CPU workload still hashes the same way.
+	p, a, target, req, policy := intentFixture()
+	policy.Pools[0].SystemReserve = cloudinfra.ResourceVector{CPUMillis: 250, MemoryBytes: 256 << 20}
+	fresh, err := newCapacityIntent(p, a, target, req, policy, "app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh.ProviderPin = cloudinfra.CapacityTemplatePin{AccountID: "account", ConnectionGeneration: 1}
+	fresh.Demand.IntentHash = ""
+	if hash, hashErr := Digest(fresh); hashErr != nil || hash != saved {
+		t.Fatalf("fresh CPU intent digest moved: %s, want %s (%v)", hash, saved, hashErr)
+	}
 }

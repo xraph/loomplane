@@ -8,11 +8,15 @@ import (
 )
 
 // ResourceVector uses CPU milliseconds and bytes. Zero is a measured value.
+// It carries at most one GPU kind: GPUs 0 means GPUKind "". The GPU fields are
+// omitted when empty so stored CPU-only vectors keep their digests.
 type ResourceVector struct {
-	Servers      int64 `json:"servers"`
-	CPUMillis    int64 `json:"cpu_millis"`
-	MemoryBytes  int64 `json:"memory_bytes"`
-	StorageBytes int64 `json:"storage_bytes"`
+	Servers      int64  `json:"servers"`
+	CPUMillis    int64  `json:"cpu_millis"`
+	MemoryBytes  int64  `json:"memory_bytes"`
+	StorageBytes int64  `json:"storage_bytes"`
+	GPUKind      string `json:"gpu_kind,omitempty"`
+	GPUs         int64  `json:"gpus,omitempty"`
 }
 
 type CapacityPolicy struct {
@@ -25,21 +29,31 @@ type CapacityPolicy struct {
 	Limits                   ResourceVector        `json:"limits"`
 	Pools                    []PoolExpansionPolicy `json:"pools"`
 	FrontendLimits           []FrontendLimit       `json:"frontend_limits"`
+	GPULimits                []GPULimit            `json:"gpu_limits,omitempty"`
+}
+
+// GPULimit caps the GPUs of one kind across every server in a Cloud. A kind
+// without a limit can't grow, since GPU servers cost far more than CPU ones.
+type GPULimit struct {
+	Kind    string `json:"kind"`
+	Maximum int64  `json:"maximum"`
 }
 
 type PoolExpansionPolicy struct {
 	// BootstrapSize is the server-validated homogeneous minimum allocation.
-	BootstrapSize string          `json:"bootstrap_size"`
-	PoolID        string          `json:"pool_id"`
-	ConnectionID  string          `json:"connection_id"`
-	Region        string          `json:"region"`
-	Architecture  string          `json:"architecture"`
-	Image         string          `json:"image"`
-	AllowedSizes  []string        `json:"allowed_sizes"`
-	MinServers    int64           `json:"min_servers"`
-	MaxServers    int64           `json:"max_servers"`
-	Limits        *ResourceVector `json:"limits"`
-	SystemReserve ResourceVector  `json:"system_reserve"`
+	BootstrapSize string `json:"bootstrap_size"`
+	PoolID        string `json:"pool_id"`
+	// AcceleratorKind "" is a CPU pool. A GPU pool only grows by sizes of this kind.
+	AcceleratorKind string          `json:"accelerator_kind,omitempty"`
+	ConnectionID    string          `json:"connection_id"`
+	Region          string          `json:"region"`
+	Architecture    string          `json:"architecture"`
+	Image           string          `json:"image"`
+	AllowedSizes    []string        `json:"allowed_sizes"`
+	MinServers      int64           `json:"min_servers"`
+	MaxServers      int64           `json:"max_servers"`
+	Limits          *ResourceVector `json:"limits"`
+	SystemReserve   ResourceVector  `json:"system_reserve"`
 }
 
 // Maximum nil permits unlimited frontends, while zero blocks new frontends.
@@ -156,4 +170,14 @@ type CapacityUsage struct {
 	ObservedStorageBytes *int64                    `json:"observed_storage_bytes"`
 	CheckedAt            time.Time                 `json:"checked_at"`
 	Fresh                bool                      `json:"fresh"`
+	GPUs                 []GPUUsage                `json:"gpus"`
+}
+
+// GPUUsage counts one GPU kind. Provisioned and Limit are null when unknown.
+type GPUUsage struct {
+	Kind        string `json:"kind"`
+	Provisioned *int64 `json:"provisioned"`
+	Pending     int64  `json:"pending"`
+	Reserved    int64  `json:"reserved"`
+	Limit       *int64 `json:"limit"`
 }

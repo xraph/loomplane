@@ -523,7 +523,8 @@ func checkPoolCapacityEdit(ctx context.Context, tx driver.Tx, pool *Pool) error 
 		case r.PoolID == pool.ID || oldIDs[r.ServerID]:
 			old, err = sumResources(old, capacityResources(r.Delta))
 		case newIDs[r.ServerID]:
-			delta, err = addCapacity(delta, r.Delta)
+			// The pool edit checks the four counted dimensions; GPU kinds may differ.
+			delta, err = addCapacity(delta, withoutGPUs(r.Delta))
 		default:
 			continue
 		}
