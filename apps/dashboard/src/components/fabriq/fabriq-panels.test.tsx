@@ -1,6 +1,8 @@
 import { screen, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, expect, test, vi } from "vitest"
+import { useManifestsCurrent } from "@/client/forge/loomplane/hooks"
+import { useInvalidate } from "@/client/hooks"
 import { forgeClient } from "@/client/runtime"
 import { FabriqEngines } from "./fabriq-engines"
 import { FabriqRecovery, recoveryEngines } from "./fabriq-recovery"
@@ -295,6 +297,76 @@ test("settings keeps the draft retryable when planning fails", async () => {
   )
   expect(review).toBeEnabled()
   expect(state.navigate).not.toHaveBeenCalled()
+})
+
+test("settings retries only the plan after a failure, once a refetch shows the change applied", async () => {
+  const writes = api()
+  const base = fetch
+  let edited = false
+  let planCalls = 0
+  vi.stubGlobal(
+    "fetch",
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = new URL(String(input), "http://localhost").pathname
+      if (path.endsWith("/manifest/edits")) edited = true
+      if (path.endsWith("/projects/p/plans") && ++planCalls === 1) {
+        writes.push({
+          method: "POST",
+          path,
+          body: JSON.parse(String(init?.body)),
+        })
+        return json({ error: "Planner unavailable" }, 503)
+      }
+      if (edited && path.endsWith("/projects/p/manifest"))
+        return json({
+          id: "rev_2",
+          revision: 2,
+          yaml: "version: 1",
+          manifest: {
+            version: 1,
+            resources: { fabriq: { uses: { falkordb: { enabled: true } } } },
+          },
+        })
+      return base(input, init)
+    }
+  )
+  function Refetch() {
+    const invalidate = useInvalidate()
+    return (
+      <button onClick={() => void invalidate.refetch(useManifestsCurrent)}>
+        Reload manifest
+      </button>
+    )
+  }
+  mount(
+    <>
+      <FabriqSettings {...panelProps()} />
+      <Refetch />
+    </>
+  )
+  await userEvent.click(screen.getByRole("switch", { name: "FalkorDB" }))
+  const review = screen.getByRole("button", { name: "Review plan" })
+  await vi.waitFor(() => expect(review).toBeEnabled())
+  await userEvent.click(review)
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    /Planner unavailable/
+  )
+  // The manifest now holds the change, so the switch matches it.
+  await userEvent.click(screen.getByRole("button", { name: "Reload manifest" }))
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  await vi.waitFor(() => expect(review).toBeEnabled())
+  await userEvent.click(review)
+  await vi.waitFor(() =>
+    expect(state.navigate).toHaveBeenCalledWith({
+      to: "/deployments/$id",
+      params: { id: "plan-1" },
+    })
+  )
+  // One edit only: the retry planned without writing it again.
+  expect(writes.filter((w) => w.path.endsWith("/manifest/edits"))).toHaveLength(
+    1
+  )
+  expect(planCalls).toBe(2)
 })
 
 test("engines show deployed state and evidence without inventing a verified restore", async () => {

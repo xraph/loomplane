@@ -48,6 +48,10 @@ export function FabriqSettings({
   const plan = useMutation(usePlansCreate)
   const [changes, setChanges] = useState<Record<string, boolean>>({})
   const [error, setError] = useState("")
+  // Set when planning failed after the manifest edits were written. The
+  // manifest then holds the change, so a refetch leaves nothing pending, and
+  // the next review only has to plan.
+  const [planOnly, setPlanOnly] = useState(false)
   const submitting = useRef(false)
   const descriptions = useId()
   const environment = environments.data?.environments.find(
@@ -73,12 +77,15 @@ export function FabriqSettings({
     if (submitting.current || !environment || !allowed) return
     submitting.current = true
     setError("")
+    let written = planOnly
     try {
-      for (const [dependency, enabled] of pending)
+      for (const [dependency, enabled] of pending) {
         await edit.mutateAsync({
           path: { id: projectId },
           body: { setUse: { resource, dependency, use: { enabled } } },
         })
+        written = true
+      }
       const doc = manifest.data?.manifest
       const catalog =
         doc?.version === 1 &&
@@ -89,8 +96,10 @@ export function FabriqSettings({
         path: { id: projectId },
         body: { environment, ...(catalog ? { catalog: true } : {}) },
       })
+      setPlanOnly(false)
       await navigate({ to: "/deployments/$id", params: { id: result.id } })
     } catch (cause) {
+      setPlanOnly(written)
       setError(
         `The manifest may already contain your changes. Review again to retry planning. ${messageOf(cause, "The plan couldn't start.")}`
       )
@@ -182,7 +191,7 @@ export function FabriqSettings({
             !environment ||
             !manifest.data ||
             manifest.status === "error" ||
-            !pending.length ||
+            !(pending.length || planOnly) ||
             !allowed
           }
           onClick={() => void review()}
