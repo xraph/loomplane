@@ -48,7 +48,7 @@ Each GPU node also needs a label that says what kind of GPU it has. Loomplane tr
 
 If none is there, it falls back to the cloud's `node.kubernetes.io/instance-type` label, which only works when Loomplane knows that instance size. A cluster with GPUs but no label that names the kind shows a message asking you to add `nvidia.com/gpu.product`. A cluster with no GPU nodes shows **No GPU nodes**.
 
-You don't have to touch taints. Loomplane copies the taints on the matching GPU nodes into tolerations on the pod. A GPU pod gets an `nvidia.com/gpu` limit and a node selector built from the label above, so it only lands on the kind you asked for.
+You don't have to touch taints. Loomplane turns the taints that every matching GPU node carries into tolerations on the pod. A taint on only some of those nodes isn't tolerated, and neither are the ones Kubernetes sets for a node's state (cordoned, not ready, unreachable), so a GPU pod never lands on a cordoned node or stays on a dead one. A GPU pod gets an `nvidia.com/gpu` limit and a node selector built from the label above, so it only lands on the kind you asked for. Wherever Loomplane lists GPU targets, a cluster's count reads as GPUs per node, not GPUs free, because Loomplane doesn't count what the cluster's other pods are using.
 
 Anything persistent that Loomplane runs on the cluster needs a storage class with a `Retain` reclaim policy and a declared binding mode, and that covers catalog databases and any other volume, not only a model weight cache. Pick the class on the connection and Loomplane checks it. If the cluster has no such class, the plan is refused until you add one.
 
@@ -69,17 +69,18 @@ Each container gets its own GPUs, picked when the service is deployed. Two workl
 
 ## DigitalOcean GPU Droplets
 
-DigitalOcean is the only cloud where Loomplane creates GPU servers today. You add them through a pool, the same way you add other [DigitalOcean Droplets](/docs/clouds/digitalocean#droplets-and-dns).
+DigitalOcean is the only cloud where Loomplane creates GPU servers today. Open your Cloud, go to **Servers** and choose **Create server** with a DigitalOcean account that can provision. The size list has a **GPU** group, and each GPU size shows its GPUs, the memory on each one and the hourly price. Pick one and the image list narrows to GPU-ready images, which ship the driver. **Review server** shows the estimated hourly and monthly cost before you approve anything, and the price stays on the server afterwards.
 
-Loomplane picks a GPU-ready image, which ships the driver. At first boot it installs Docker only if the image doesn't have it, then installs the NVIDIA Container Toolkit and points Docker at it. The hourly price shows on the review before you approve anything, and stays on the server afterwards.
+At first boot Loomplane installs Docker only if the image doesn't have it, then installs the NVIDIA Container Toolkit and points Docker at it.
 
 If the toolkit setup fails, the server says so, takes no GPU work and keeps costing money. Nothing retries by itself. The message gives you the commands to run (the `nvidia-ctk` steps above) and then **Check again**, or you can delete the server.
 
-Pools have a few GPU rules:
+You can put a GPU server in a pool from **Pools and reservations**. Give the pool a GPU kind and each server a GPU budget, which is how many of its GPUs the pool may hand out. A GPU pool refuses CPU work, and a CPU pool can't hold GPU budgets.
 
-- A pool can be restricted to one GPU kind. A GPU pool refuses CPU work, and a CPU pool refuses GPU sizes.
-- Your Cloud has a GPU ceiling for each kind, and each GPU pool has its own ceiling for its kind. The pool's can't exceed the Cloud's.
-- Set the Cloud ceiling first. A kind with no Cloud ceiling allows no GPUs at all, and a pool's ceiling can't go above the Cloud's.
+Pools can also grow by creating GPU Droplets themselves, inside a GPU ceiling for each kind. You configure that growth and those ceilings through the Cloud's capacity policy, which has no screen in the dashboard yet. When they are set, a few rules apply:
+
+- A kind with no Cloud ceiling allows no GPUs at all.
+- Each GPU pool has its own ceiling for its kind, and it can't go above the Cloud's.
 - If one server's GPUs can't be read, growth of GPU capacity pauses until a check on that server succeeds. Nothing buys another GPU on a guess.
 
 ## AWS, GCP and Azure
