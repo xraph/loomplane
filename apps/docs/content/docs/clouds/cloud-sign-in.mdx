@@ -1,0 +1,66 @@
+---
+title: Connect a cloud by signing in
+description: Register an OAuth app once, then connect DigitalOcean with a sign-in instead of a pasted token.
+---
+
+import { Step, Steps } from 'fumadocs-ui/components/steps';
+
+A pasted token works, but it's yours to copy, store and rotate. Signing in swaps that for a grant DigitalOcean hands to Loomplane after you approve it, and Loomplane renews the grant on its own. Today DigitalOcean is the one cloud that connects this way.
+
+## Register the OAuth app
+
+You do this once per organization, and you need to be an owner or admin.
+
+<Steps>
+<Step>
+
+In Loomplane, open **Settings**, then **Cloud sign-in**. The page shows a callback URL, which is your public URL followed by `/integrations/oauth/callback`. Copy it.
+
+</Step>
+<Step>
+
+In DigitalOcean, open **API**, then **OAuth Applications**, and make a new application. Paste the callback URL as the callback. Loomplane asks for the `read write` scope, so the application needs to allow it.
+
+</Step>
+<Step>
+
+Copy the application's client ID and client secret back into the Cloud sign-in page and save. The secret is kept encrypted and never shown again, so replace it there if you lose track of it.
+
+</Step>
+</Steps>
+
+The callback has to match exactly, down to `https` and the host. If you change `LOOMPLANE_PUBLIC_URL` later, update the application in DigitalOcean too.
+
+## Sign in
+
+Open **Integrations**, choose **DigitalOcean** and pick **Sign in with DigitalOcean**. You approve Loomplane on DigitalOcean's page, pick the team, and land back in Loomplane with the connection ready. The connection belongs to the team you approved, the same as a token does. **Use a token instead** sits underneath if you'd rather paste one.
+
+## Set the app in config instead
+
+If you run Loomplane yourself and want one app for every organization, put it in `config.yaml` or the environment:
+
+```yaml
+clouds:
+  oauth:
+    digitalocean:
+      client_id: your-client-id
+      client_secret: your-client-secret
+```
+
+The same two values read from `LOOMPLANE_DIGITALOCEAN_OAUTH_CLIENT_ID` and `LOOMPLANE_DIGITALOCEAN_OAUTH_CLIENT_SECRET`. Set both or neither, because one without the other stops startup.
+
+Config wins. Once it's set, the settings page shows that the app comes from config and locks it for every organization, so nobody can point their own at something else.
+
+## When a sign-in lapses
+
+DigitalOcean access tokens last 30 days. Loomplane refreshes the grant when it uses it, and again every 6 hours in the background, so a connection in regular use never gets near the end.
+
+A refresh can still be refused. Someone removed the OAuth application, or revoked Loomplane's access from the DigitalOcean account. Revoking kills the access token straight away, but Loomplane only finds out the next time it refreshes the grant or you choose **Check again** on the connection, so a deployment that runs in between fails with DigitalOcean's own error.
+
+Once Loomplane knows, the connection shows **Sign-in needed** and nothing deploys through it. Choose **Sign in again**, either on the connection's page or on its row in the **Clouds** list under **Integrations**, and approve once more. The button shows on any signed-in connection that isn't ready. The connection keeps its ID, so your projects and environments carry on without changes.
+
+The person who made the connection and the organization's owners and admins hear about it in the inbox, and by email if mail is set up. Every webhook endpoint gets a `connection.sign_in_needed` event too, including endpoints you made before sign-in existed. You get one notice per lapse, not one per refresh attempt.
+
+## Switch between a token and a sign-in
+
+A token connection can move to a sign-in. Open the connection and choose **Replace credential**. The dialog offers **Sign in with DigitalOcean** first, and once you approve on DigitalOcean you land back on the connection, signed in. The reverse works too: pick **Use a token instead** in the same dialog and paste one. Either way the ID stays and the team has to be the one the connection already uses, so nothing that refers to the connection breaks.

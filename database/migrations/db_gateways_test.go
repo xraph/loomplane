@@ -3,28 +3,15 @@
 package migrations
 
 import (
-	"net/url"
 	"strings"
 	"testing"
 
-	"github.com/xraph/grove/drivers/pgdriver"
-	"github.com/xraph/grove/drivers/pgdriver/pgmigrate"
 	"github.com/xraph/grove/migrate"
 )
 
 func TestMigrationReplay(t *testing.T) {
-	conn := scratch(t)
+	conn, ex := scratch(t)
 	ctx := t.Context()
-	u, err := url.Parse(conn.Config().ConnString())
-	if err != nil {
-		t.Fatal(err)
-	}
-	u.Path = "/" + conn.Config().Database
-	db := pgdriver.New()
-	if err = db.Open(ctx, u.String()); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
 	// Apply everything else first, so db_gateways is the last applied
 	// migration and one rollback undoes exactly it, whatever lands above it.
 	others := migrate.NewGroup(GroupName)
@@ -33,10 +20,10 @@ func TestMigrationReplay(t *testing.T) {
 			others.MustRegister(step)
 		}
 	}
-	if _, err = migrate.NewOrchestrator(pgmigrate.New(db), others).Migrate(ctx); err != nil {
+	if _, err := migrate.NewOrchestrator(ex, others).Migrate(ctx); err != nil {
 		t.Fatalf("up others: %v", err)
 	}
-	o := migrate.NewOrchestrator(pgmigrate.New(db), Group())
+	o := migrate.NewOrchestrator(ex, Group())
 
 	tables := func() []string {
 		return strs(t, conn, `SELECT table_name FROM information_schema.tables WHERE table_schema='public' AND table_name LIKE 'loomplane_db_gateway%' ORDER BY 1`)
@@ -54,7 +41,7 @@ func TestMigrationReplay(t *testing.T) {
 		return true
 	}
 
-	if _, err = o.Migrate(ctx); err != nil {
+	if _, err := o.Migrate(ctx); err != nil {
 		t.Fatalf("up: %v", err)
 	}
 	if got := tables(); !same(got) {
@@ -78,13 +65,9 @@ func TestMigrationReplay(t *testing.T) {
 }
 
 func TestDBGatewaysConstraints(t *testing.T) {
-	conn := scratch(t)
-	exec(t, conn, projectsUp...)
-	exec(t, conn, dbGatewaysUp...)
-	// Not transactional, so every prefix of the statements must repeat.
-	for i := range dbGatewaysUp {
-		exec(t, conn, dbGatewaysUp[:i+1]...)
-	}
+	conn, ex := scratch(t)
+	// Running the up again changes nothing.
+	up(t, ex, "create_projects", "db_gateways", "db_gateways")
 	exec(t, conn, `INSERT INTO loomplane_projects(id,org_id,name,slug,status,created_by,created_at,updated_at) VALUES('p','o','P','p','active','u',now(),now())`)
 	exec(t, conn, `INSERT INTO loomplane_environments(id,org_id,project_id,name,kind,created_at,updated_at) VALUES('e','o','p','prod','production',now(),now())`)
 
@@ -120,7 +103,6 @@ func TestDBGatewaysConstraints(t *testing.T) {
 	if got := strs(t, conn, `SELECT id FROM loomplane_db_gateway_routes`); len(got) != 0 {
 		t.Fatalf("routes outlived their gateway: %v", got)
 	}
-	exec(t, conn, dbGatewaysDown...)
-	exec(t, conn, dbGatewaysDown...)
-	exec(t, conn, dbGatewaysUp...)
+	down(t, ex, "db_gateways", "db_gateways")
+	up(t, ex, "db_gateways")
 }

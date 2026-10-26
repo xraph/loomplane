@@ -417,3 +417,26 @@ func TestTrafficMeasuresEachWindowOnceWhileItsCached(t *testing.T) {
 		t.Fatalf("%d measurements after five minutes, want 4", meter.calls)
 	}
 }
+
+func TestSpendTellsALapsedSignInToSignInAgain(t *testing.T) {
+	cons := &fakeConnections{list: []*connections.Connection{
+		conn("lapsed", connections.AWS, connections.StatusSignInNeeded),
+		conn("stale", connections.AWS, connections.StatusIncomplete),
+	}}
+	reader := &fakeSpender{fn: func(*connections.Connection, []byte) (*metrics.Spend, error) { return &metrics.Spend{}, nil }}
+	s := service(Deps{Connections: cons, Authz: fakeAuthz{}, Spenders: map[string]SpendReader{connections.AWS: reader}})
+	rep, err := s.Spend(t.Context(), viewer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	reasons := map[string]string{}
+	for _, src := range rep.Sources {
+		reasons[src.ConnectionID] = src.Reason
+	}
+	if want := "Sign in to this connection again: its sign-in lapsed."; reasons["lapsed"] != want {
+		t.Errorf("lapsed reason %q, want %q", reasons["lapsed"], want)
+	}
+	if want := "Recheck this connection: it's incomplete, and Loomplane only reads with a ready one"; reasons["stale"] != want {
+		t.Errorf("stale reason %q, want %q", reasons["stale"], want)
+	}
+}

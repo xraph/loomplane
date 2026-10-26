@@ -26,11 +26,21 @@ const VaultKeyLabel = "loomplane/vault cloud credentials v1"
 // organization's and the connection's IDs, both from Loomplane's records
 // and never from what a caller sent.
 type VaultSecrets struct {
-	svc *secret.Service
+	svc   *secret.Service
+	appID string
 }
 
 // NewVaultSecrets returns VaultSecrets over a Vault secret service.
-func NewVaultSecrets(svc *secret.Service) *VaultSecrets { return &VaultSecrets{svc: svc} }
+func NewVaultSecrets(svc *secret.Service) *VaultSecrets { return NewVaultSecretsFor(svc, VaultAppID) }
+
+// OAuthAppsVaultAppID is the Vault app sign-in app secrets are kept under.
+const OAuthAppsVaultAppID = "loomplane-oauth-apps"
+
+// NewVaultSecretsFor returns VaultSecrets that keep their secrets under
+// the given Vault app ID.
+func NewVaultSecretsFor(svc *secret.Service, appID string) *VaultSecrets {
+	return &VaultSecrets{svc: svc, appID: appID}
+}
 
 var _ Secrets = (*VaultSecrets)(nil)
 
@@ -38,7 +48,7 @@ func vaultKey(orgID, connectionID string) string { return orgID + "/" + connecti
 
 // Put implements Secrets.
 func (v *VaultSecrets) Put(ctx context.Context, orgID, connectionID string, credential []byte) error {
-	if _, err := v.svc.Set(ctx, vaultKey(orgID, connectionID), credential, VaultAppID); err != nil {
+	if _, err := v.svc.Set(ctx, vaultKey(orgID, connectionID), credential, v.appID); err != nil {
 		return fmt.Errorf("store credential: %w", err)
 	}
 	return nil
@@ -46,7 +56,7 @@ func (v *VaultSecrets) Put(ctx context.Context, orgID, connectionID string, cred
 
 // Reveal implements Secrets.
 func (v *VaultSecrets) Reveal(ctx context.Context, orgID, connectionID string) ([]byte, error) {
-	sec, err := v.svc.Get(ctx, vaultKey(orgID, connectionID), VaultAppID)
+	sec, err := v.svc.Get(ctx, vaultKey(orgID, connectionID), v.appID)
 	if errors.Is(err, core.ErrSecretNotFound) {
 		return nil, ErrNotFound
 	}
@@ -58,7 +68,7 @@ func (v *VaultSecrets) Reveal(ctx context.Context, orgID, connectionID string) (
 
 // Delete implements Secrets. One that's already gone is not an error.
 func (v *VaultSecrets) Delete(ctx context.Context, orgID, connectionID string) error {
-	err := v.svc.Delete(ctx, vaultKey(orgID, connectionID), VaultAppID)
+	err := v.svc.Delete(ctx, vaultKey(orgID, connectionID), v.appID)
 	if err != nil && !errors.Is(err, core.ErrSecretNotFound) {
 		return fmt.Errorf("delete credential: %w", err)
 	}

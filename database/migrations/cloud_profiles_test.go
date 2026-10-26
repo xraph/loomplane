@@ -5,16 +5,11 @@ package migrations
 import "testing"
 
 func TestCloudProfilesMigration(t *testing.T) {
-	conn := scratch(t)
-	exec(t, conn, projectsUp...)
-	exec(t, conn, cloudConnectionsUp...)
+	conn, db := scratch(t)
+	up(t, db, "create_projects", "create_cloud_connections")
 	exec(t, conn, `CREATE UNIQUE INDEX loomplane_environments_scope_id ON loomplane_environments(org_id,project_id,id)`, `CREATE UNIQUE INDEX loomplane_connections_org_id ON loomplane_cloud_connections(org_id,id)`)
-	// Central migrations are not transactional. Every prefix must be safe
-	// to repeat after a process failure, and down must permit a clean up.
-	for i := range cloudProfilesUp {
-		exec(t, conn, cloudProfilesUp[:i+1]...)
-	}
-	exec(t, conn, cloudProfilesUp...)
+	// Running the up again changes nothing, and down must permit a clean up.
+	up(t, db, "create_cloud_profiles", "create_cloud_profiles")
 	exec(t, conn, `INSERT INTO loomplane_projects(id,org_id,name,slug,status,created_by,created_at,updated_at) VALUES('p','o','Project','project','ready','u',now(),now())`)
 	exec(t, conn, `INSERT INTO loomplane_environments(id,org_id,project_id,name,kind,created_at,updated_at) VALUES('e','o','p','prod','production',now(),now())`)
 	exec(t, conn, `INSERT INTO loomplane_cloud_connections(id,org_id,cloud,name,account,status,created_by,created_at,updated_at) VALUES('c','o','gcp','Account','project','ready','u',now(),now())`)
@@ -38,7 +33,6 @@ func TestCloudProfilesMigration(t *testing.T) {
 	exec(t, conn, `UPDATE loomplane_cloud_profiles SET name='Renamed',revision=2 WHERE id='cloud'`)
 	exec(t, conn, `UPDATE loomplane_cloud_targets SET display_name='Renamed',revision=2 WHERE id='target'`)
 	exec(t, conn, `UPDATE loomplane_cloud_assignments SET revision=2 WHERE environment_id='e'`)
-	exec(t, conn, cloudProfilesDown...)
-	exec(t, conn, cloudProfilesDown...)
-	exec(t, conn, cloudProfilesUp...)
+	down(t, db, "create_cloud_profiles", "create_cloud_profiles")
+	up(t, db, "create_cloud_profiles")
 }

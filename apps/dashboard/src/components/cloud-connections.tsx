@@ -27,10 +27,11 @@ import {
   useConnectionCloudsList,
   useConnectionsCreate,
   useConnectionsDelete,
+  useConnectionSignInsStart,
   useConnectionsList,
   useConnectionsReplace,
 } from "@/client/forge/loomplane/hooks"
-import type { Connection } from "@/client/forge/loomplane/types"
+import type { Connection, SignIn } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
 import { CloudGlyph } from "@/components/cloud-glyph"
 import { MetricCard } from "@/components/metric-card"
@@ -82,6 +83,7 @@ import {
 import { formatDate } from "@/lib/format"
 import { cloudCatalogue, cloudPurposes } from "@/lib/integrations"
 import { useOrganization } from "@/lib/organization"
+import { rememberSignInCloud } from "@/lib/sign-in-cloud"
 import { cn } from "@/lib/utils"
 
 export function CloudConnections({ className }: { className?: string }) {
@@ -187,10 +189,45 @@ function CloudTile({
   )
 }
 
+/**
+ * needsSignInAgain is whether a signed-in connection can't be used as it is.
+ * Signing in again is how it recovers, whether the sign-in lapsed or the
+ * cloud refused it.
+ */
+export function needsSignInAgain(c: Connection): boolean {
+  return (
+    c.status === "sign_in_needed" ||
+    (c.method === "oauth" && c.status !== "ready")
+  )
+}
+
+/**
+ * useSignInAgain starts a new sign-in for an existing connection. When it
+ * finishes it replaces the connection's credential. The name stays as it
+ * is, so none is sent.
+ */
+export function useSignInAgain() {
+  const start = useMutation(useConnectionSignInsStart)
+  const signInAgain = async (c: Connection) => {
+    try {
+      const started = await start.mutateAsync({
+        body: { cloud: c.cloud, name: "", connectionId: c.id },
+      })
+      rememberSignInCloud(cloudLabel(c.cloud))
+      // The generated hook doesn't type this response.
+      window.location.assign((started as SignIn).authorizeUrl)
+    } catch (err) {
+      toast.error(messageOf(err, "Sign-in couldn't be started."))
+    }
+  }
+  return { signInAgain, pending: start.isPending }
+}
+
 export const statusLabels: Record<string, string> = {
   ready: "Ready",
   incomplete: "Missing permissions",
   failed: "Refused",
+  sign_in_needed: "Sign-in needed",
 }
 
 function ConnectionRow({
@@ -201,6 +238,7 @@ function ConnectionRow({
   mayManage: boolean
 }) {
   const check = useMutation(useConnectionsCheck)
+  const { signInAgain, pending: signingIn } = useSignInAgain()
   const [replacing, setReplacing] = useState(false)
   const [removing, setRemoving] = useState(false)
   const roles = rolesFor(c.missing)
@@ -250,6 +288,17 @@ function ConnectionRow({
           </span>
         </div>
         {check.isPending && <Spinner className="text-muted-foreground" />}
+        {mayManage && needsSignInAgain(c) && (
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={signingIn}
+            onClick={() => void signInAgain(c)}
+          >
+            {signingIn && <Spinner />}
+            Sign in again
+          </Button>
+        )}
         {mayManage && (
           <DropdownMenu>
             <DropdownMenuTrigger
@@ -422,6 +471,7 @@ function ConnectForm({
 }) {
   const create = useMutation(useConnectionsCreate)
   const replace = useMutation(useConnectionsReplace)
+  const signInStart = useMutation(useConnectionSignInsStart)
   const invalidate = useInvalidate()
   const file = useRef<HTMLInputElement>(null)
   const [cloud, setCloud] = useState<string>(replacing?.cloud ?? initial)
@@ -429,6 +479,13 @@ function ConnectForm({
   const available = useQuery(useConnectionCloudsList)
   const extras = (available.data?.clouds ?? []).filter((c) => !c.builtin)
   const extra = extras.find((c) => c.cloud === cloud)
+  // Signing in is offered first when the cloud supports it here, for a new
+  // connection or in place of an existing one's credential. A person who
+  // wants a token picks it for one cloud, and the choice resets if they
+  // switch clouds.
+  const entry = (available.data?.clouds ?? []).find((c) => c.cloud === cloud)
+  const [tokenFor, setTokenFor] = useState<string | null>(null)
+  const signIn = !!entry?.methods.includes("oauth") && tokenFor !== cloud
   const [extraSettings, setExtraSettings] = useState<Record<string, string>>(
     () => ({ ...(replacing?.details ?? {}) }) as Record<string, string>
   )
@@ -448,7 +505,7 @@ function ConnectForm({
     (replacing?.details.billing_export as string | undefined) ?? ""
   )
   const [error, setError] = useState("")
-  const busy = create.isPending || replace.isPending
+  const busy = create.isPending || replace.isPending || signInStart.isPending
 
   const close = (next: boolean) => {
     if (!next) {
@@ -471,9 +528,30 @@ function ConnectForm({
     setCredential(text)
   }
 
+  const startSignIn = async () => {
+    try {
+      // Signing in for an existing connection replaces its credential and
+      // keeps its name, so none is sent.
+      const started = await signInStart.mutateAsync({
+        body: replacing
+          ? { cloud, name: "", connectionId: replacing.id }
+          : { cloud, name: name.trim() },
+      })
+      rememberSignInCloud(entry?.title ?? cloudLabel(cloud))
+      // The generated hook doesn't type this response.
+      window.location.assign((started as SignIn).authorizeUrl)
+    } catch (err) {
+      setError(messageOf(err, "Sign-in couldn't be started."))
+    }
+  }
+
   const submit = async (e: FormEvent) => {
     e.preventDefault()
     setError("")
+    if (signIn) {
+      await startSignIn()
+      return
+    }
     const trimmed = Object.fromEntries(
       Object.entries(extraSettings)
         .map(([k, v]) => [k, v.trim()])
@@ -587,7 +665,21 @@ function ConnectForm({
                 </Field>
               </>
             )}
-            {cloud === "gcp" ? (
+            {signIn ? (
+              <div className="grid justify-items-start gap-2">
+                <Button type="submit" disabled={busy}>
+                  {busy && <Spinner />}
+                  Sign in with {entry?.title ?? cloud}
+                </Button>
+                <button
+                  type="button"
+                  className="text-sm text-muted-foreground underline underline-offset-4 hover:text-foreground"
+                  onClick={() => setTokenFor(cloud)}
+                >
+                  Use a token instead
+                </button>
+              </div>
+            ) : cloud === "gcp" ? (
               <>
                 <Field>
                   <FieldLabel htmlFor="connection-key">
@@ -815,10 +907,12 @@ function ConnectForm({
             >
               Cancel
             </Button>
-            <Button type="submit" disabled={busy}>
-              {busy && <Spinner />}
-              {replacing ? "Check and replace" : "Check and connect"}
-            </Button>
+            {!signIn && (
+              <Button type="submit" disabled={busy}>
+                {busy && <Spinner />}
+                {replacing ? "Check and replace" : "Check and connect"}
+              </Button>
+            )}
           </DialogFooter>
         </form>
       </DialogContent>

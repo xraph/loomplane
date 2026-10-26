@@ -1,6 +1,8 @@
 package connections
 
 import (
+	"context"
+	"errors"
 	"net/http"
 
 	"github.com/xraph/forge"
@@ -31,6 +33,9 @@ type CloudForm struct {
 	Credential string        `json:"credential,omitempty"`
 	Help       string        `json:"help,omitempty"`
 	Settings   []sdk.Setting `json:"settings,omitempty"`
+	// Methods are the ways to connect it: oauth when the organization can
+	// sign in to the cloud, and token always.
+	Methods []string `json:"methods"`
 }
 
 // CloudList is the body of GET /api/v1/connection-clouds.
@@ -38,7 +43,7 @@ type CloudList struct {
 	Clouds []CloudForm `json:"clouds"`
 }
 
-func (e *Extension) clouds() (CloudList, error) {
+func (e *Extension) clouds(ctx context.Context, p security.Principal) (CloudList, error) {
 	out := CloudList{Clouds: []CloudForm{
 		{Cloud: connections.GCP, Title: "Google Cloud", Builtin: true},
 		{Cloud: connections.Vercel, Title: "Vercel", Builtin: true},
@@ -91,15 +96,47 @@ func (e *Extension) clouds() (CloudList, error) {
 			Cloud: p.Cloud(), Title: f.Title, Credential: f.Credential, Help: f.Help, Settings: f.Settings,
 		})
 	}
+	signIn, err := e.signInClouds(ctx, p)
+	if err != nil {
+		return out, err
+	}
+	for i := range out.Clouds {
+		out.Clouds[i].Methods = []string{connections.MethodToken}
+		if signIn[out.Clouds[i].Cloud] {
+			out.Clouds[i].Methods = []string{connections.MethodOAuth, connections.MethodToken}
+		}
+	}
+	return out, nil
+}
+
+// signInClouds are the clouds the principal's organization can sign in
+// to: those with an app, from configuration or the organization's own.
+// Someone who may not read the apps just isn't offered sign-in.
+func (e *Extension) signInClouds(ctx context.Context, p security.Principal) (map[string]bool, error) {
+	apps, err := e.svc.SignInApps(ctx, p)
+	if errors.Is(err, security.ErrForbidden) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]bool{}
+	for _, a := range apps {
+		out[a.Cloud] = a.Source != connections.AppFromNone
+	}
 	return out, nil
 }
 
 func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 	g := r.Group("/api/v1", forge.WithGroupMiddleware(guard...), forge.WithGroupTags("Cloud connections"))
 	if err := g.GET("/connection-clouds", func(c forge.Context) error {
-		list, err := e.clouds()
+		p, err := principal(c)
 		if err != nil {
 			return err
+		}
+		list, err := e.clouds(c.Request().Context(), p)
+		if err != nil {
+			return fail(err)
 		}
 		return c.JSON(http.StatusOK, list)
 	},
@@ -151,6 +188,9 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 		forge.WithRequestSchema(connections.ReplaceInput{}),
 		forge.WithResponseSchema(http.StatusOK, "The connection", connections.Connection{}),
 	); err != nil {
+		return err
+	}
+	if err := e.signInRoutes(r, guard); err != nil {
 		return err
 	}
 	return g.DELETE("/connections/:id", e.delete,
