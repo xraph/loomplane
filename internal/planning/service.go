@@ -121,6 +121,7 @@ type Service struct {
 	projects          Projects
 	analyses          Analyses
 	commits           CommitAnalyzer
+	history           ReleaseHistory
 	manifests         Manifests
 	providers         *provider.Registry
 	clouds            Connections
@@ -152,7 +153,11 @@ type Deps struct {
 	// Commits analyzes a commit a promotion's source environment runs
 	// that nothing analyzed. Nil refuses such a promotion with
 	// ErrNoAnalysis.
-	Commits   CommitAnalyzer
+	Commits CommitAnalyzer
+	// History reads what an environment's releases ran, so a promotion
+	// deploys the From environment's images where it can. Nil disables
+	// image reuse: every service builds again.
+	History   ReleaseHistory
 	Manifests Manifests
 	Providers *provider.Registry
 	// Connections are the organization's cloud accounts. Nil means none,
@@ -194,7 +199,7 @@ func NewService(d Deps) *Service {
 	return &Service{
 		capacityTemplates: d.CapacityTemplates, capacity: d.Capacity, capacityPrincipal: d.CapacityPrincipal,
 		appliedInputs: d.AppliedInputs, cloudSyncWorkflow: d.CloudSyncWorkflow,
-		cloudProfiles: d.CloudProfiles, store: d.Store, projects: d.Projects, analyses: d.Analyses, commits: d.Commits, manifests: d.Manifests,
+		cloudProfiles: d.CloudProfiles, store: d.Store, projects: d.Projects, analyses: d.Analyses, commits: d.Commits, history: d.History, manifests: d.Manifests,
 		providers: d.Providers, clouds: d.Connections, authz: d.Authz, workflow: d.Workflow, audit: d.Audit,
 		window: d.Window, now: time.Now, sleep: waitFor, warn: warn, telemetry: d.Telemetry, dbTrust: d.DatabaseGatewayTrust,
 		kinds: d.Kinds, endpoints: d.Endpoints, dialer: d.Dialer,
@@ -749,6 +754,13 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 		return nil, "", err
 	}
 	result.Warnings = append(result.Warnings, warnings...)
+	released, reuse, err := s.releasedImages(ctx, plan)
+	if err != nil {
+		return nil, "", fmt.Errorf("read what %s ran: %w", plan.From, err)
+	}
+	if reuse {
+		s.applyArtifacts(plan, result, released, plan.From)
+	}
 	in := revisionInput{
 		EnvironmentID: plan.EnvironmentID, Environment: plan.Environment, Sources: plan.Sources,
 		Manifest: rev.Digest, Deployed: make([]deployedRef, 0, len(bindings)), Result: result,

@@ -101,8 +101,10 @@ func (e *ECS) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 		save()
 	})
 	if state.Image == "" {
-		if state.Image, err = e.build(ctx, s, job, &state, save); err != nil {
-			return nil, err
+		if state.Image = reusedImage(job); state.Image == "" {
+			if state.Image, err = e.build(ctx, s, job, &state, save); err != nil {
+				return nil, err
+			}
 		}
 		save()
 	}
