@@ -371,3 +371,28 @@ it("keeps a Vercel sign-in's state for its callback", async () => {
   expect(kept.state).toBe("st1")
   expect(typeof kept.at).toBe("number")
 })
+
+it("keeps a replaced connection's sign-in settings read-only", async () => {
+  signInSettings = [{ key: "project_id", label: "Project ID", required: true }]
+  const posted: Posted[] = []
+  stub(["oauth", "token"], posted)
+  replaceDialog({ ...tokenConnection, details: { project_id: "shop-prod" } })
+  const user = userEvent.setup()
+  const project = (await screen.findByLabelText(
+    /Project ID/
+  )) as HTMLInputElement
+  expect(project.value).toBe("shop-prod")
+  expect(project.readOnly).toBe(true)
+  await user.type(project, "-other")
+  expect(project.value).toBe("shop-prod")
+  await user.click(
+    screen.getByRole("button", { name: "Sign in with DigitalOcean" })
+  )
+  await waitFor(() => expect(posted).toHaveLength(1))
+  expect(posted[0]!.body).toEqual({
+    cloud: "digitalocean",
+    name: "",
+    connection_id: "conn_do",
+    settings: { project_id: "shop-prod" },
+  })
+})

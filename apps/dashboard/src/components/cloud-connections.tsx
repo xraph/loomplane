@@ -687,6 +687,8 @@ function ConnectForm({
                   <FieldLabel htmlFor={`sign-in-${f.key}`}>
                     {f.label}
                   </FieldLabel>
+                  {/* The server keeps a replaced connection's own
+                      placement, so it can't be changed here. */}
                   <Input
                     id={`sign-in-${f.key}`}
                     value={signInValue(f.key)}
@@ -696,11 +698,20 @@ function ConnectForm({
                         [f.key]: e.target.value,
                       })
                     }
+                    readOnly={!!replacing}
                     autoComplete="off"
                     required={f.required}
                   />
                 </Field>
               ))}
+            {signIn &&
+              replacing &&
+              (entry?.signInSettings ?? []).length > 0 && (
+                <FieldDescription>
+                  A new sign-in keeps this connection where it is. To deploy
+                  somewhere else, make a new connection.
+                </FieldDescription>
+              )}
             {signIn ? (
               <div className="grid justify-items-start gap-2">
                 <Button type="submit" disabled={busy}>
