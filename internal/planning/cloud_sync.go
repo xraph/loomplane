@@ -427,7 +427,7 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 					}
 				}
 			}
-			if a.Op != Keep && a.Service.Gateway == nil {
+			if a.Op != Keep && !a.Service.Generated() {
 				if s.appliedInputs == nil {
 					preview.Blockers = append(preview.Blockers, a.Name+": applied input verification is unavailable")
 				} else if e = s.appliedInputs.CheckAppliedInputs(ctx, p.OrgID, env.ID, a.Service); e != nil {
@@ -562,7 +562,7 @@ func (s *Service) ApplyCloudChange(ctx context.Context, p security.Principal, pr
 			return nil, decodeErr
 		}
 		for _, action := range plan.Actions {
-			if action.Op == Keep || action.Service == nil || action.Service.Gateway != nil {
+			if action.Op == Keep || action.Service == nil || action.Service.Generated() {
 				continue
 			}
 			if s.appliedInputs == nil {

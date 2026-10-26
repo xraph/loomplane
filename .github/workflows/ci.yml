@@ -79,6 +79,10 @@ jobs:
         with:
           go-version-file: go.mod
       - run: python3 -m unittest discover -s scripts -p test_integration_cohorts.py
+      # A cold -race build of the suite can take longer than the cohort
+      # script's 300 second discovery bound on a slow runner. Building it
+      # here fills the build cache, so that bound times discovery alone.
+      - run: go test -race -tags=integration -c -o /dev/null ./tests/integration/
       - run: python3 scripts/integration-cohorts.py --shard ${{ matrix.shard }} --shards 8
 
   dashboard:

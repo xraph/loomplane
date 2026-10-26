@@ -31,13 +31,13 @@ func TestAppliedVariablesSurviveRetryAndRefreshGeneratedLinks(t *testing.T) {
 	r := NewRunner(RunnerDeps{Variables: vars, Resources: secrets})
 	d := &Deployment{ID: "dep", OrgID: "org", ProjectID: "project", EnvironmentID: "env", Environment: "production"}
 	a := planning.Action{ID: "service:web", Name: "web", Service: &planning.ServiceConfig{Service: "svc", Env: []planning.EnvLink{{Key: "API", From: "api"}, {Key: "OVERRIDE", From: "api"}}}}
-	if err := r.captureAppliedVariables(ctx, d, &a, nil); err != nil {
+	if err := r.captureAppliedVariables(ctx, d, &a, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	ref := a.Service.AppliedInputs.Variables
 	vars["svc"]["SECRET_TOKEN"] = "new-secret"
 	retry := planning.Action{ID: a.ID, Service: &planning.ServiceConfig{Service: "svc", Env: a.Service.Env}}
-	if err := r.captureAppliedVariables(ctx, d, &retry, nil); err != nil {
+	if err := r.captureAppliedVariables(ctx, d, &retry, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	if retry.Service.AppliedInputs.Variables != ref {
