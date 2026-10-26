@@ -50,6 +50,7 @@ func (s *PgStore) Snapshot(ctx context.Context, org string, projects, deployment
 		{"loomplane_bindings", "binding.updated", "project_id", `to_jsonb(r)-'replaced'`, "", 512},
 		{"loomplane_deployments", "deployment.updated", "project_id", `to_jsonb(r)`, ` AND (cardinality($3::text[])=0 OR r.id=ANY($3))`, 128},
 		{"loomplane_cloud_connections", "connection.updated", "", `to_jsonb(r)`, "", 256},
+		{"loomplane_canary_verdicts", "canary_verdict.updated", "project_id", `to_jsonb(r)`, ` AND r.deployment_id=ANY($3)`, 256},
 		{"loomplane_log_checkpoints", "build.collection", "project_id", `to_jsonb(r)-'cursor' || jsonb_build_object('id',r.deployment_id||'/'||r.action_id||'/'||r.attempt||'/'||r.operation_id)`, ` AND r.deployment_id=ANY($3)`, 256},
 	} {
 		query := fmt.Sprintf(`SELECT %s FROM %s r WHERE r.org_id=$1`, kind.expression, kind.table)
@@ -60,7 +61,7 @@ func (s *PgStore) Snapshot(ctx context.Context, org string, projects, deployment
 		}
 		query += kind.filter
 		// All parameters stay typed even on a table with no deployment filter.
-		query += ` AND ($3::text[] IS NULL OR TRUE) ORDER BY coalesce(to_jsonb(r)->>'updated_at',to_jsonb(r)->>'created_at',to_jsonb(r)->>'started_at') DESC NULLS LAST LIMIT $4`
+		query += ` AND ($3::text[] IS NULL OR TRUE) ORDER BY coalesce(to_jsonb(r)->>'updated_at',to_jsonb(r)->>'created_at',to_jsonb(r)->>'started_at',to_jsonb(r)->>'decided_at') DESC NULLS LAST LIMIT $4`
 		rows, queryErr := tx.Query(ctx, query, org, projects, deployments, kind.limit+1)
 		if queryErr != nil {
 			return nil, queryErr

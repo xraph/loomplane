@@ -467,6 +467,7 @@ func (e *Extension) Register(fapp forge.App) error {
 		Telemetry:            metrics,
 		CatalogHooks:         catalogHooks,
 		Observers:            observers,
+		Health:               &deployments.HealthReader{Bindings: planStore, Credentials: clouds, Meters: revisionMeters(executors)},
 	})
 	// Deleting a project or environment takes its database gateways' records
 	// with it, and this deletes their keys from Vault and warns about a

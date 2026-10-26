@@ -235,6 +235,15 @@ export class RealtimeEventsSSEClient extends EventEmitter {
           }
         });
 
+        this.eventSource.addEventListener('canary_verdict.updated', (event: MessageEvent) => {
+          try {
+            const data: types.CanaryVerdict = decode(JSON.parse(event.data), "CanaryVerdict");
+            this.emit('canary_verdict.updated', data);
+          } catch (error) {
+            this.emit('error', error);
+          }
+        });
+
         this.eventSource.addEventListener('cloud.deleted', (event: MessageEvent) => {
           try {
             const data: types.Profile = decode(JSON.parse(event.data), "Profile");
@@ -557,6 +566,22 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    */
   offBuildLog(handler: (data: types.Log) => void): void {
     this.off('build.log', handler);
+  }
+
+  /**
+   * Register a handler for canary_verdict.updated events.
+   * @param handler - Function to call when canary_verdict.updated event is received
+   */
+  onCanaryVerdictUpdated(handler: (data: types.CanaryVerdict) => void): void {
+    this.on('canary_verdict.updated', handler);
+  }
+
+  /**
+   * Remove a handler for canary_verdict.updated events.
+   * @param handler - The handler to remove
+   */
+  offCanaryVerdictUpdated(handler: (data: types.CanaryVerdict) => void): void {
+    this.off('canary_verdict.updated', handler);
   }
 
   /**

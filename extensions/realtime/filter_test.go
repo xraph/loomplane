@@ -86,3 +86,28 @@ func TestFilterCloudSyncTargetDetailsStayPrivateForProjectSubscribers(t *testing
 		t.Fatalf("manager event details changed: %+v %v", got, err)
 	}
 }
+
+func TestRealtimeCanaryVerdictPermission(t *testing.T) {
+	if got := permission("canary_verdict.updated"); got != security.DeploymentRead {
+		t.Fatalf("canary_verdict.updated needs %s", got)
+	}
+	input := []store.Event{
+		{ProjectID: "proj_a", Type: "canary_verdict.updated", Data: json.RawMessage(`{"deployment_id":"dep_a"}`)},
+		{ProjectID: "proj_a", Type: "canary_verdict.updated", Data: json.RawMessage(`{"deployment_id":"dep_b"}`)},
+	}
+	p := security.Principal{OrgID: "org_a", UserID: "usr_a"}
+	e := &Extension{authz: permissionFixture{}}
+	got, err := e.filter(t.Context(), p, Subscription{ProjectIDs: []string{"proj_a"}, DeploymentIDs: []string{"dep_a"}}, input)
+	if err != nil || len(got) != 1 || string(got[0].Data) != `{"deployment_id":"dep_a"}` {
+		t.Fatalf("subscription naming dep_a: %+v %v", got, err)
+	}
+	got, err = e.filter(t.Context(), p, Subscription{ProjectIDs: []string{"proj_a"}}, input)
+	if err != nil || len(got) != 0 {
+		t.Fatalf("subscription without the deployment: %+v %v", got, err)
+	}
+	e.authz = permissionFixture{denied: security.DeploymentRead}
+	got, err = e.filter(t.Context(), p, Subscription{DeploymentIDs: []string{"dep_a"}}, input)
+	if err != nil || len(got) != 0 {
+		t.Fatalf("without deployment:read: %+v %v", got, err)
+	}
+}

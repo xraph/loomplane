@@ -290,6 +290,28 @@ export interface BuildTarget {
   registrySettings?: Record<string, any>;
 }
 
+export interface CanaryVerdict {
+  actionId: string;
+  attempt: number;
+  baseline: Health;
+  baselineFallback: boolean;
+  candidate: Health;
+  decidedAt: string;
+  deploymentId: string;
+  id: string;
+  orgId: string;
+  projectId: string;
+  reason: string;
+  retry: number;
+  service: string;
+  step: number;
+  thresholds: Thresholds;
+  verdict: string;
+  weight: number;
+  windowEnd: string;
+  windowStart: string;
+}
+
 export interface CapacityBlock {
   cloudId: string;
   counted: number;
@@ -1353,6 +1375,15 @@ export interface HandoffInputBody {
 
 export interface HandoffReleaseInputBody {
   drainSeconds: number;
+}
+
+export interface Health {
+  available: boolean;
+  errors: number;
+  latencyMs: number;
+  reason?: string;
+  requests: number;
+  statistic?: string;
 }
 
 export interface Held {
@@ -3346,6 +3377,13 @@ export interface TenantInputBody {
 
 export interface TenantList {
   tenants: Tenant[];
+}
+
+export interface Thresholds {
+  errorRate: number;
+  errorRateDelta: number;
+  minRequests: number;
+  p95LatencyRatio: number;
 }
 
 export interface TrafficReport {
