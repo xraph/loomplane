@@ -5,10 +5,12 @@ package planning
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,6 +18,7 @@ import (
 	"github.com/xraph/grove/drivers/pgdriver"
 
 	"github.com/xraph/loomplane/database/migrations"
+	"github.com/xraph/loomplane/internal/discovery"
 	"github.com/xraph/loomplane/internal/ops"
 )
 
@@ -305,4 +308,32 @@ func TestPgStore_recordReleaseIsOneSnapshot(t *testing.T) {
 		}
 	}
 	t.Logf("%d reads", reads)
+}
+
+// A promotion's pinned analysis round-trips, and never counts as the
+// source's running analysis, so Start and pushes still analyze the branch.
+func TestDiscoveryPgStore_pinnedAnalysesDontBlockTheBranch(t *testing.T) {
+	ctx, _, pg := promotionDB(t)
+	analyses := discovery.NewPgStore(pg)
+	now := time.Now().UTC()
+	pinned := &discovery.Analysis{ID: "anl_pinned", OrgID: "org", ProjectID: "proj", SourceID: "src_1", Source: "mono",
+		Status: discovery.StatusQueued, Repository: "acme/mono", Ref: strings.Repeat("a", 40), Pinned: true, CreatedBy: "usr", CreatedAt: now}
+	if err := analyses.CreateAnalysis(ctx, pinned); err != nil {
+		t.Fatal(err)
+	}
+	got, err := analyses.GetAnalysis(ctx, "org", "anl_pinned")
+	if err != nil || !got.Pinned {
+		t.Fatalf("stored %+v %v", got, err)
+	}
+	if a, err := analyses.ActiveAnalysis(ctx, "org", "src_1", now.Add(-time.Hour)); !errors.Is(err, discovery.ErrNotFound) {
+		t.Fatalf("a pinned analysis blocks the branch: %+v %v", a, err)
+	}
+	branch := &discovery.Analysis{ID: "anl_branch", OrgID: "org", ProjectID: "proj", SourceID: "src_1", Source: "mono",
+		Status: discovery.StatusQueued, Repository: "acme/mono", CreatedBy: "usr", CreatedAt: now.Add(-time.Minute)}
+	if err = analyses.CreateAnalysis(ctx, branch); err != nil {
+		t.Fatal(err)
+	}
+	if a, err := analyses.ActiveAnalysis(ctx, "org", "src_1", now.Add(-time.Hour)); err != nil || a.ID != "anl_branch" || a.Pinned {
+		t.Fatalf("running branch analysis %+v %v", a, err)
+	}
 }

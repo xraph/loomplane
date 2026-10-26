@@ -321,6 +321,23 @@ func TestCreateFrom_pinsWhatTheSourceEnvironmentRunsNotTheNewestAnalysis(t *test
 	}
 }
 
+// A promotion that had to analyze staging's older commit leaves that
+// analysis newest, but it is pinned, so the next ordinary plan still pins
+// the branch's latest analysis.
+func TestCreate_passesOverAPromotionsPinnedAnalysis(t *testing.T) {
+	w := promotionWorld(t)
+	pinned := &discovery.Analysis{ID: "anl_p", SourceID: "src_web", Status: discovery.StatusSucceeded, Ref: "aaa", CommitSHA: "aaa", Pinned: true}
+	w.analyses.analyses["src_web"] = append([]*discovery.Analysis{pinned}, w.analyses.analyses["src_web"]...)
+	release, err := w.create(t, CreatePlanInput{Environment: "production"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []pin{{"api", "anl_2", "bbb", "", true}, {"web", "anl_9", "fff", "", true}}
+	if got := pins(release.Sources); !reflect.DeepEqual(got, want) {
+		t.Fatalf("pins %+v, want %+v", got, want)
+	}
+}
+
 func TestCreateFrom_usesTheManifestTheSourceEnvironmentDeployedWith(t *testing.T) {
 	w := promotionWorld(t)
 	plan := w.promote(t)

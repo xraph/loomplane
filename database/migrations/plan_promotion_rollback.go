@@ -4,7 +4,8 @@ import "strings"
 
 // A plan records its kind (release, promotion or rollback), the environment
 // a promotion deploys from, and a rollback's spec. A plan source remembers
-// the plan of the source environment that deployed its commit. Each
+// the plan of the source environment that deployed its commit, and an
+// analysis whether a promotion pinned it to one commit. Each
 // environment also keeps the manifest revision its last release was planned
 // from, which a promotion uses. Plans made before this read as releases.
 var planPromotionRollbackUp = append([]string{
@@ -14,6 +15,7 @@ var planPromotionRollbackUp = append([]string{
 	`ALTER TABLE loomplane_plans ADD COLUMN IF NOT EXISTS from_environment_id TEXT NOT NULL DEFAULT ''`,
 	`ALTER TABLE loomplane_plans ADD COLUMN IF NOT EXISTS rollback JSONB`,
 	`ALTER TABLE loomplane_plan_sources ADD COLUMN IF NOT EXISTS from_plan_id TEXT NOT NULL DEFAULT ''`,
+	`ALTER TABLE loomplane_analyses ADD COLUMN IF NOT EXISTS pinned BOOLEAN NOT NULL DEFAULT false`,
 	`CREATE INDEX IF NOT EXISTS loomplane_plans_rollback_target
 		ON loomplane_plans (org_id, (rollback->>'target_plan_id')) WHERE kind = 'rollback'`,
 	`CREATE TABLE IF NOT EXISTS loomplane_environment_manifests (
@@ -39,6 +41,7 @@ var planPromotionRollbackUp = append([]string{
 var planPromotionRollbackDown = append(planEventFunctions(false), []string{
 	`DROP TABLE IF EXISTS loomplane_environment_manifests`,
 	`DROP INDEX IF EXISTS loomplane_plans_rollback_target`,
+	`ALTER TABLE loomplane_analyses DROP COLUMN IF EXISTS pinned`,
 	`ALTER TABLE loomplane_plan_sources DROP COLUMN IF EXISTS from_plan_id`,
 	`ALTER TABLE loomplane_plans DROP COLUMN IF EXISTS rollback`,
 	`ALTER TABLE loomplane_plans DROP COLUMN IF EXISTS from_environment_id`,

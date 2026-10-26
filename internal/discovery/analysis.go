@@ -44,6 +44,11 @@ type Analysis struct {
 	Ref string `json:"ref"`
 	// CommitSHA is the exact commit analyzed, once it's resolved.
 	CommitSHA string `json:"commit_sha"`
+	// Pinned marks an analysis of one exact commit that a promotion asked
+	// for. It serves that promotion only: it is never a source's latest
+	// analysis, so plans, the project graph, and the one-analysis-at-a-time
+	// rule for Start and pushes all pass over it.
+	Pinned bool `json:"pinned"`
 	// Error says why a failed analysis failed, for people.
 	Error      string        `json:"error"`
 	Summary    graph.Summary `json:"summary"`
@@ -81,7 +86,7 @@ type Store interface {
 	// ListSourceAnalyses returns a source's latest analyses, newest first.
 	ListSourceAnalyses(ctx context.Context, orgID, sourceID string, limit int) ([]*Analysis, error)
 	// ActiveAnalysis returns the source's analysis that's still running
-	// and started after since, or ErrNotFound.
+	// and started after since, or ErrNotFound. Pinned analyses don't count.
 	ActiveAnalysis(ctx context.Context, orgID, sourceID string, since time.Time) (*Analysis, error)
 
 	// CreateSource attaches a source. An alias the project has used before,
