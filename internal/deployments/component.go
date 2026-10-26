@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -245,7 +246,9 @@ func (e *OwnedTarget) applyComponent(ctx context.Context, job *Job) (*Outcome, e
 	copyJob.Action.Resource = nil
 	copyJob.Action.Service = componentService(cfg)
 	copyJob.Env, copyJob.Secrets = maps.Clone(run.Env), secret
-	copyJob.files = files
+	if filesErr := e.withFiles(&copyJob, files); filesErr != nil {
+		return nil, filesErr
+	}
 	out, err := e.Apply(ctx, &copyJob)
 	if err != nil {
 		return nil, err
@@ -402,7 +405,9 @@ func (e *OwnedTarget) runJob(ctx context.Context, job *Job, kind recipes.Kind, j
 	copyJob.Action.Resource = nil
 	copyJob.Action.Service = componentService(cfg)
 	copyJob.Env, copyJob.Secrets = maps.Clone(run.Env), secret
-	copyJob.files = files
+	if filesErr := e.withFiles(&copyJob, files); filesErr != nil {
+		return result, filesErr
+	}
 	sp, labels := ownedSpec(&copyJob, component.Image, state)
 	defer func() {
 		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
@@ -537,16 +542,36 @@ func (e *OwnedTarget) renderFiles(ctx context.Context, kind recipes.Kind, run Co
 	return files, nil
 }
 
-// filesRevision is a digest of rendered files: each one's path, mode and
-// bytes, in path order.
-func filesRevision(files []runtimeFile) string {
-	sum := sha256.New()
+// FilesRevisionKeyLabel names the key, derived from secret_key, that
+// keys the digest of a component's rendered files in its revision label.
+const FilesRevisionKeyLabel = "loomplane/catalog files revision v1"
+
+// filesRevision is a digest of rendered files, keyed by the installation:
+// each one's path, mode and bytes, in path order. A file can hold a
+// secret, and the label is readable wherever the container is, so an
+// unkeyed digest would let anyone who reads it test guesses offline.
+func filesRevision(key []byte, files []runtimeFile) string {
+	sum := hmac.New(sha256.New, key)
 	for _, f := range files {
 		// Writing to a hash never fails.
 		_, _ = fmt.Fprintf(sum, "%s\x00%o\x00%d\x00", f.Path, f.Mode, len(f.Data))
 		_, _ = sum.Write(f.Data)
 	}
 	return hex.EncodeToString(sum.Sum(nil))[:16]
+}
+
+// withFiles gives a component's job its rendered files and their keyed
+// digest. Files need the installation's key; none need nothing.
+func (e *OwnedTarget) withFiles(job *Job, files []runtimeFile) error {
+	job.files, job.filesRevision = files, ""
+	if len(files) == 0 {
+		return nil
+	}
+	if len(e.FilesRevisionKey) == 0 {
+		return errors.New("a component with files needs the installation's files revision key")
+	}
+	job.filesRevision = filesRevision(e.FilesRevisionKey, files)
+	return nil
 }
 
 // keepRuntimeFiles keeps a component's rendered files beside its runtime

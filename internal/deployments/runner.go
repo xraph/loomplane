@@ -123,6 +123,8 @@ type Job struct {
 	// files are a catalog component's rendered files, which an owned
 	// target keeps in Vault beside its runtime values.
 	files []runtimeFile
+	// filesRevision is files' digest, keyed by the installation.
+	filesRevision string
 	// replacing is a Remove of what an action ran as before it moved.
 	// What's kept under the action's name is the replacement's then.
 	replacing bool

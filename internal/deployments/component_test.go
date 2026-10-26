@@ -381,6 +381,7 @@ func newComponentFixture(t *testing.T, kinds *recipes.Registry) *componentFixtur
 		Cloud: connections.Server, Ctrl: CtrlPlane{Providers: providers, Instances: instances, Deploys: &ownedDeploys{}},
 		Secrets: f.secrets, Backend: func(string, string) owned.Backend { return f.backend },
 		Kinds: kinds, Hooks: map[string]CatalogHooks{"sample": f.hooks},
+		FilesRevisionKey: []byte("component-fixture-revision-key"),
 	}
 	return f
 }
@@ -1151,7 +1152,9 @@ func TestComponentFilesComeFromHooksAndStayInVault(t *testing.T) {
 	revision := func(mode fs.FileMode, data string) string {
 		copyJob := *api
 		copyJob.Action.Resource, copyJob.Action.Service = nil, componentService(api.Action.Resource)
-		copyJob.files = []runtimeFile{{Path: sampleConfig, Mode: mode, Data: []byte(data)}}
+		if filesErr := f.target.withFiles(&copyJob, []runtimeFile{{Path: sampleConfig, Mode: mode, Data: []byte(data)}}); filesErr != nil {
+			t.Fatal(filesErr)
+		}
 		_, l := ownedSpec(&copyJob, "", ownedState{})
 		return l[owned.LabelRevision]
 	}
@@ -1756,5 +1759,41 @@ func TestUnreachableDeleteForgetsWhatACompositionKept(t *testing.T) {
 				})
 			}
 		}
+	}
+}
+
+// The files digest in a component's revision label is keyed by the
+// installation, so the label can't be used to guess a low-entropy file
+// offline. Without a key a component with files doesn't start.
+func TestComponentFilesRevisionIsKeyedByTheInstallation(t *testing.T) {
+	const content = "admin_password: 1234\n"
+	revision := func(key []byte) (string, error) {
+		f := newComponentFixture(t, sampleWithFiles(t))
+		f.target.FilesRevisionKey = key
+		f.target.Hooks["sample"] = &fileHooks{files: map[string][]byte{sampleConfig: []byte(content)}}
+		f.secrets.m[resourceKey("org", "env", "app--postgres", "url")] = []byte(postgresURL)
+		out, err := f.target.Apply(t.Context(), f.componentJob(t, "api", newPostgres))
+		if err != nil {
+			return "", err
+		}
+		_, labels, _ := f.started(t, out)
+		return labels[owned.LabelRevision], nil
+	}
+	one, err := revision([]byte("installation-one-revision-key-32"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, _ := revision([]byte("installation-one-revision-key-32"))
+	other, _ := revision([]byte("installation-two-revision-key-32"))
+	digest, _ := strings.CutPrefix(one, "dep/resource:app--api/")
+	sum := sha256.New()
+	_, _ = fmt.Fprintf(sum, "%s\x00%o\x00%d\x00", sampleConfig, owned.DefaultFileMode, len(content))
+	_, _ = sum.Write([]byte(content))
+	unkeyed := hex.EncodeToString(sum.Sum(nil))[:16]
+	if one != again || one == other || digest == one || len(digest) != 16 || digest == unkeyed {
+		t.Fatalf("revisions %q, %q, %q; unkeyed %q", one, again, other, unkeyed)
+	}
+	if _, err := revision(nil); err == nil || !strings.Contains(err.Error(), "key") {
+		t.Fatalf("a component with files started without a revision key: %v", err)
 	}
 }
