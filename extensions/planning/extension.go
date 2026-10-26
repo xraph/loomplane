@@ -56,6 +56,8 @@ import (
 	"github.com/xraph/loomplane/internal/clouds/vercel"
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/connections"
+	"github.com/xraph/loomplane/internal/dbgateway"
+	"github.com/xraph/loomplane/internal/dbgateway/plane"
 	"github.com/xraph/loomplane/internal/deployments"
 	"github.com/xraph/loomplane/internal/discovery"
 	"github.com/xraph/loomplane/internal/environments"
@@ -280,6 +282,10 @@ func (e *Extension) Register(fapp forge.App) error {
 	}
 	resourceSecrets := deployments.NewVaultResourceSecrets(
 		secret.NewService(vaultpg.New(db), resourceEnc, secret.WithAppID(deployments.ResourceVaultAppID)))
+	// The database gateway reads resource addresses through the same one.
+	if err = forge.ProvideValue(c, resourceSecrets); err != nil {
+		return fmt.Errorf("provide the resource secrets: %w", err)
+	}
 	// An external endpoint's DSN is a resource credential too.
 	e.endpoints = catalogconnect.NewService(catalogconnect.NewPgStore(pg), resourceSecrets, authz)
 	e.endpoints.Audit = endpointAuditor{chronicle: audit, appID: e.cfg.Identity.AppID, log: log}
@@ -353,7 +359,7 @@ func (e *Extension) Register(fapp forge.App) error {
 		Store: planStore, Projects: prj, Analyses: discovery.NewPgStore(pg), Manifests: e.manifests,
 		CloudProfiles: e.cloudStore, CloudSyncWorkflow: e.deployments,
 		Providers: catalog, Connections: clouds, Authz: authz, Workflow: e.deployments, Audit: auditor,
-		Window: e.cfg.Planning.ApprovalWindow, Telemetry: metrics,
+		Window: e.cfg.Planning.ApprovalWindow, Telemetry: metrics, DatabaseGatewayTrust: databaseGatewayTrust(c),
 		Warn:      func(msg string, err error) { log.Warn(msg, forge.F("error", err.Error())) },
 		Endpoints: checker,
 		Dialer:    dialer,
@@ -394,6 +400,7 @@ func (e *Extension) Register(fapp forge.App) error {
 		}
 		return nil
 	}
+	gatewayStore := dbgateway.NewStore(pg)
 	runner := deployments.NewRunner(deployments.RunnerDeps{
 		Authz: authz, BackupPolicies: e.backups,
 		Logs: logStore, Routes: routeService, Capacity: e.plans,
@@ -402,12 +409,26 @@ func (e *Extension) Register(fapp forge.App) error {
 		Sources: &deployments.GitHubSources{
 			GitHub: repositories.NewGitHub(e.cfg.GitHub.APIURL), Tokens: github, Artifacts: e.artifacts,
 		},
-		Providers:    catalog,
-		Executors:    executors,
-		Resources:    resourceSecrets,
-		Telemetry:    metrics,
-		CatalogHooks: catalogHooks,
-		Observers:    observers,
+		Providers:            catalog,
+		Executors:            executors,
+		Resources:            resourceSecrets,
+		DatabaseGateways:     gatewayStore,
+		DatabaseGatewayTrust: databaseGatewayTrust(c),
+		PublicURL:            e.cfg.PublicURL,
+		Telemetry:            metrics,
+		CatalogHooks:         catalogHooks,
+		Observers:            observers,
+	})
+	// Deleting a project or environment takes its database gateways' records
+	// with it, and this deletes their keys from Vault and warns about a
+	// gateway still running in a cloud.
+	projectSvc, injectErr := forge.InjectType[*projects.Service](c)
+	if injectErr != nil {
+		return fmt.Errorf("planning needs the projects extension: %w", injectErr)
+	}
+	projectSvc.AddReaper(&deployments.DatabaseGatewayReaper{
+		Gateways: gatewayStore, Bindings: planStore, Environments: prj, Secrets: resourceSecrets, Executors: executors,
+		Warn: func(msg string, err error) { log.Warn(msg, forge.F("error", err.Error())) },
 	})
 	if err := e.poolRecoveryRoutes(fapp.Router(), guard, cloudinfra.NewService(cloudinfra.Deps{Store: cloudinfra.NewPgStore(pg), Clouds: e.cloudStore, Authz: authz, PoolCleanup: runner})); err != nil {
 		return err
@@ -439,6 +460,25 @@ func (e *Extension) Register(fapp forge.App) error {
 		return err
 	}
 	return e.routes(fapp.Router(), guard)
+}
+
+// databaseGatewayTrust returns the trust keys of the database gateway
+// service, looked up when a gateway is planned or deploys: the database gateway extension
+// registers after this one and provides the service then. A service that
+// isn't there is a wiring error, which it reports; one with no signing key
+// gives no keys, which the deploy reports as that. A key outside its window
+// gives the service's reason, so the deploy fails saying the key expired.
+func databaseGatewayTrust(c forge.Container) func() ([]plane.TrustKey, error) {
+	return func() ([]plane.TrustKey, error) {
+		svc, err := forge.InjectType[*dbgateway.Service](c)
+		if err != nil {
+			return nil, fmt.Errorf("the database gateway extension isn't registered: %w", err)
+		}
+		if err = svc.Ready(); err != nil && !errors.Is(err, dbgateway.ErrNotConfigured) {
+			return nil, err
+		}
+		return svc.TrustKeys(), nil
+	}
 }
 
 // Start schedules the drift check. Dispatch runs the workflow and the

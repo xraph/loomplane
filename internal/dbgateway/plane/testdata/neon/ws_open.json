@@ -1,0 +1,11 @@
+{
+  "path": "/v2",
+  "query": {
+    "address": [
+      "orders.us-east-1.db.example.com:5432"
+    ]
+  },
+  "frames_base64": [
+    "AAAAcQADAAB1c2VyAGFwcABkYXRhYmFzZQBvcmRlcnMAYXBwbGljYXRpb25fbmFtZQBwa2c6bnBtLyU0MG5lb25kYXRhYmFzZS9zZXJ2ZXJsZXNzQDEuMi4wAGNsaWVudF9lbmNvZGluZwBVVEY4AABwAAAAB3B3AFEAAAANU0VMRUNUIDEA"
+  ]
+}

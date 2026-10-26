@@ -1,0 +1,10 @@
+{
+  "name": "neon-capture",
+  "private": true,
+  "type": "module",
+  "description": "Records what @neondatabase/serverless sends to a custom endpoint. Used by neon_capture_test.go.",
+  "dependencies": {
+    "@neondatabase/serverless": "1.2.0",
+    "ws": "8.22.0"
+  }
+}

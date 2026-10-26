@@ -1,0 +1,33 @@
+// Command dbgateway is a Loomplane database gateway: a Postgres wire and
+// HTTP front door that routes each connection to the right database in
+// your cloud. Loomplane generates this program and builds it on your
+// cloud's builder, so it runs on your infrastructure and your queries
+// never pass through Loomplane. Everything it needs arrives in variables;
+// see plane.ConfigFromEnv.
+package main
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"os/signal"
+	"syscall"
+
+	"loomplane.dev/dbgateway/plane"
+)
+
+func main() {
+	cfg, err := plane.ConfigFromEnv(os.Getenv)
+	if err != nil {
+		// The error names the variable and never its value.
+		fmt.Fprintln(os.Stderr, "dbgateway:", err)
+		os.Exit(1)
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, os.Interrupt)
+	err = plane.Run(ctx, cfg)
+	stop()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "dbgateway:", err)
+		os.Exit(1)
+	}
+}
