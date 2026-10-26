@@ -74,9 +74,10 @@ func (g GCPChecker) Parse(credential []byte, settings map[string]string) (Check,
 }
 
 // Check implements Checker: it asks Google which of the permissions a
-// deployment needs the service account, or the person, holds. A keyless
-// handout first trades a minted token for the service account's, which a
-// trust that isn't set up refuses.
+// deployment needs the service account, or the person, holds, and which
+// of those only a canary needs. A keyless handout first trades a minted
+// token for the service account's, which a trust that isn't set up
+// refuses.
 func (g GCPChecker) Check(ctx context.Context, credential []byte, settings map[string]string) (Check, error) {
 	c, err := g.Parse(credential, settings)
 	if err != nil {
@@ -90,8 +91,27 @@ func (g GCPChecker) Check(ctx context.Context, credential []byte, settings map[s
 	if err != nil {
 		return Check{}, err
 	}
-	if c.Missing, err = s.Missing(ctx); err != nil {
+	// A signed-in person needs a little more than a service account does.
+	needed := gcp.Permissions
+	if key.User {
+		needed = gcp.UserPermissions
+	}
+	missing, err := s.MissingOf(ctx, append(slices.Clone(needed), gcp.CanaryPermissions...))
+	if err != nil {
 		return Check{}, err
+	}
+	// An account without what only a canary needs is still complete: a
+	// canary release on Cloud Run refuses to start instead.
+	var canary []string
+	for _, m := range missing {
+		if slices.Contains(gcp.CanaryPermissions, m) {
+			canary = append(canary, m)
+		} else {
+			c.Missing = append(c.Missing, m)
+		}
+	}
+	if len(canary) > 0 {
+		c.Details[DetailCanaryMissing] = strings.Join(canary, ",")
 	}
 	return c, nil
 }

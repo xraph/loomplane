@@ -59,8 +59,8 @@ const (
 	// codeCanaryInProgress blocks a plan while a canary ramps in its
 	// environment.
 	codeCanaryInProgress = "canary-in-progress"
-	// codeCanaryPermissions blocks a canary on ECS whose connection's key
-	// can't split a listener's traffic.
+	// codeCanaryPermissions blocks a canary on ECS or Cloud Run whose
+	// connection's credential can't split the service's traffic.
 	codeCanaryPermissions = "canary-permissions"
 )
 
@@ -92,10 +92,14 @@ func planRelease(in Input, r *Result) {
 		case manifest.StrategyCanary:
 			reason := noCanary(in, r, a)
 			if reason == "" {
-				if conn, missing := canaryMissing(in, r, a); missing != "" {
+				if conn, cloud, missing := canaryMissing(in, r, a); missing != "" {
+					credential := "the key of "
+					if cloud == "gcp" {
+						credential = "the service account of "
+					}
 					r.Problems = append(r.Problems, Finding{
-						Code: codeCanaryPermissions, Subject: ServiceSubject, Name: a.Name, Path: "connections.aws",
-						Message: a.Name + " can't run a canary: the key of " + conn + " isn't allowed " + strings.ReplaceAll(missing, ",", ", ") +
+						Code: codeCanaryPermissions, Subject: ServiceSubject, Name: a.Name, Path: "connections." + cloud,
+						Message: a.Name + " can't run a canary: " + credential + conn + " isn't allowed " + strings.ReplaceAll(missing, ",", ", ") +
 							". Grant them and check the connection again under Integrations, or release this environment direct or blue_green, which don't need them.",
 					})
 					r.Executable = false
@@ -161,23 +165,29 @@ func noCanary(in Input, r *Result, a Action) string {
 	return ""
 }
 
-// canaryMissing names the connection an ECS action deploys with, and
-// lists, comma separated, what its key lacks to ramp a canary, as its
-// last check found. A connection checked before canaries existed lists
-// nothing, and the canary checks again when it starts.
-func canaryMissing(in Input, r *Result, a Action) (connection, missing string) {
-	if a.Provider != "ecs-fargate" {
-		return "", ""
+// canaryClouds are the clouds whose canaries need more than an ordinary
+// deploy, by provider.
+var canaryClouds = map[string]string{"ecs-fargate": "aws", "cloud-run": "gcp"}
+
+// canaryMissing names the connection an ECS or Cloud Run action deploys
+// with and its cloud, and lists, comma separated, what its credential
+// lacks to ramp a canary, as its last check found. A connection checked
+// before canaries existed lists nothing, and the canary checks again when
+// it starts.
+func canaryMissing(in Input, r *Result, a Action) (connection, cloud, missing string) {
+	cloud, ok := canaryClouds[a.Provider]
+	if !ok {
+		return "", "", ""
 	}
 	id := a.ConnectionID
 	if id == "" {
-		id = r.Connections["aws"]
+		id = r.Connections[cloud]
 	}
 	i := slices.IndexFunc(in.Connections, func(c ConnectionOption) bool { return c.ID == id })
 	if id == "" || i < 0 {
-		return "", ""
+		return "", "", ""
 	}
-	return in.Connections[i].Name, in.Connections[i].Details[connections.DetailCanaryMissing]
+	return in.Connections[i].Name, cloud, in.Connections[i].Details[connections.DetailCanaryMissing]
 }
 
 // providerTitle names a provider for people, or by its name when the

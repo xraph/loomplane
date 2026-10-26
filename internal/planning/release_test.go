@@ -267,3 +267,29 @@ func TestCanaryOnECSNeedsTheCanaryPermissions(t *testing.T) {
 		t.Fatalf("a direct release: executable %v, problems %+v", r.Executable, r.Problems)
 	}
 }
+
+func TestCanaryOnCloudRunNeedsTheCanaryPermissions(t *testing.T) {
+	in := releaseInput(t, releaseYAML(canaryRelease))
+	in.Connections = []ConnectionOption{{ID: "conn_g", Name: "Prod", Cloud: "gcp", Ready: true, Details: map[string]string{
+		connections.DetailCanaryMissing: "run.revisions.delete,run.revisions.get",
+	}}}
+	api := serviceAction("api", "cloud-run", Update, ServiceConfig{Public: true, Port: 8080})
+	r := &Result{Actions: []Action{api}, Connections: map[string]string{"gcp": "conn_g"}, Executable: true}
+	planRelease(in, r)
+	if r.Executable || r.Release.Ramps(api.ID) || len(r.Problems) != 1 {
+		t.Fatalf("executable %v, release %+v, problems %+v", r.Executable, r.Release, r.Problems)
+	}
+	p := r.Problems[0]
+	for _, want := range []string{"the service account of Prod", "run.revisions.delete, run.revisions.get", "direct or blue_green"} {
+		if p.Code != codeCanaryPermissions || p.Name != "api" || p.Path != "connections.gcp" || !strings.Contains(p.Message, want) {
+			t.Fatalf("problem %+v doesn't say %q", p, want)
+		}
+	}
+
+	in.Connections[0].Details = map[string]string{}
+	r = &Result{Actions: []Action{api}, Connections: map[string]string{"gcp": "conn_g"}, Executable: true}
+	planRelease(in, r)
+	if !r.Executable || !r.Release.Ramps(api.ID) || len(r.Problems) != 0 {
+		t.Fatalf("executable %v, release %+v, problems %+v", r.Executable, r.Release, r.Problems)
+	}
+}

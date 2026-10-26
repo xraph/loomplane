@@ -399,19 +399,25 @@ func (s *Session) send(req *http.Request, out any) error {
 // person lacks. Any caller may ask this of any project, so it works
 // before anything else does.
 func (s *Session) Missing(ctx context.Context) ([]string, error) {
-	var out struct {
-		Permissions []string `json:"permissions"`
-	}
 	needed := Permissions
 	if s.key.User {
 		needed = UserPermissions
 	}
+	return s.MissingOf(ctx, needed)
+}
+
+// MissingOf returns which of permissions the service account, or the
+// signed-in person, lacks on its project.
+func (s *Session) MissingOf(ctx context.Context, permissions []string) ([]string, error) {
+	var out struct {
+		Permissions []string `json:"permissions"`
+	}
 	url := s.c.url("cloudresourcemanager.googleapis.com", "/v3/projects/"+s.key.ProjectID+":testIamPermissions")
-	if err := s.do(ctx, http.MethodPost, url, map[string]any{"permissions": needed}, &out); err != nil {
+	if err := s.do(ctx, http.MethodPost, url, map[string]any{"permissions": permissions}, &out); err != nil {
 		return nil, err
 	}
 	var missing []string
-	for _, p := range needed {
+	for _, p := range permissions {
 		if !slices.Contains(out.Permissions, p) {
 			missing = append(missing, p)
 		}
