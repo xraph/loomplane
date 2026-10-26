@@ -20,7 +20,8 @@ import (
 // PgStore is the Postgres Store. The schema is migration group "loomplane"
 // (database/migrations).
 type PgStore struct {
-	db *pgdriver.PgDB
+	frontendWake cloudinfra.CapacityCloudWakeup
+	db           *pgdriver.PgDB
 }
 
 // NewPgStore returns a Store over db.

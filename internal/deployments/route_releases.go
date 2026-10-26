@@ -226,11 +226,15 @@ func (r *Runner) finalizeReleaseAction(ctx context.Context, d *Deployment, plan 
 
 func (r *Runner) beginWorkloadAttempt(ctx context.Context, d *Deployment, a planning.Action, finalizing bool) (context.Context, func(bool) error, error) {
 	st, ok := r.store.(*PgStore)
-	if !ok || (a.Provider != "server" && (a.Compensation == nil || !a.Compensation.ServerAttempt)) || (a.Op == planning.Keep && a.Compensation == nil) {
+	if !ok || (a.Provider != "server" && (a.Service == nil || !cloudinfra.ManagedFrontend(a.Provider, a.Service.Workload, a.Service.Execution)) && (a.Compensation == nil || !a.Compensation.ServerAttempt)) || (a.Op == planning.Keep && a.Compensation == nil) {
 		return ctx, func(bool) error { return nil }, nil
 	}
 	infra := cloudinfra.NewPgStore(st.db)
-	attempt, err := infra.BeginWorkloadAttempt(ctx, cloudinfra.WorkloadAttempt{Org: d.OrgID, Project: d.ProjectID, Environment: d.EnvironmentID, Service: a.Name, Plan: d.PlanID, Deployment: d.ID}, a.Routes, finalizing)
+	completedFrontendPlan := ""
+	if a.Compensation != nil && !a.Compensation.ServerAttempt && a.Service != nil && cloudinfra.ManagedFrontend(a.Provider, a.Service.Workload, a.Service.Execution) {
+		completedFrontendPlan = a.Compensation.PlanID
+	}
+	attempt, err := infra.BeginWorkloadAttempt(ctx, cloudinfra.WorkloadAttempt{Org: d.OrgID, Project: d.ProjectID, Environment: d.EnvironmentID, Service: a.Name, Plan: d.PlanID, Deployment: d.ID}, a.Routes, finalizing, completedFrontendPlan)
 	if err != nil {
 		return ctx, nil, err
 	}

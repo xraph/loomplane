@@ -549,6 +549,18 @@ func (r *Runner) Run(ctx context.Context, orgID, deploymentID, actionID string, 
 	if err != nil {
 		return err
 	}
+	if deferredPlan(plan) {
+		if checkErr := legacyCapacityGuard(ctx, plan); checkErr != nil {
+			return checkErr
+		}
+		wait, checkErr := r.AssessCapacity(ctx, orgID, deploymentID)
+		if checkErr != nil {
+			return checkErr
+		}
+		if wait != nil {
+			return ErrCapacityPaused
+		}
+	}
 	execution, err := r.executionPlan(ctx, plan)
 	if err != nil {
 		return err
@@ -1120,10 +1132,18 @@ func (r *Runner) deleteBound(ctx context.Context, job *Job, exec Executor, bound
 		if fenceErr != nil {
 			return fenceErr
 		}
+		if err := validateFrontendCleanup(exec, job, bound); err != nil {
+			return err
+		}
 		job.warn = warn
 		err := exec.Remove(removalCtx, job, bound)
 		job.warn = nil
 		if err != nil {
+			return err
+		}
+	}
+	if !unreachable {
+		if err := r.confirmFrontendRemoval(ctx, exec, job, bound); err != nil {
 			return err
 		}
 	}
@@ -1285,11 +1305,17 @@ func (r *Runner) removeOne(ctx context.Context, job *Job, old *planning.Binding,
 	if fenceErr != nil {
 		return false, fenceErr
 	}
+	if err := validateFrontendCleanup(exec, &gone, old); err != nil {
+		return false, err
+	}
 	if err := removePendingOrBound(removalCtx, exec, &gone, old); err != nil {
 		if deleting {
 			return false, untracked(fmt.Errorf("remove the old %s on %s: %w", a.Name, placement(old.Provider, old.Region), err))
 		}
 		return false, fmt.Errorf("remove the %s it replaces on %s: %w", a.Name, placement(old.Provider, old.Region), err)
+	}
+	if err := r.confirmFrontendRemoval(ctx, exec, &gone, old); err != nil {
+		return false, err
 	}
 	return true, nil
 }

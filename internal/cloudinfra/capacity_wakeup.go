@@ -15,3 +15,8 @@ func (s *Service) wakeCapacityCloud(ctx context.Context, org, cloud, change stri
 		}
 	}
 }
+
+func (s *Service) WakeCapacityCloud(ctx context.Context, org, cloud, change string) error {
+	s.wakeCapacityCloud(ctx, org, cloud, change)
+	return nil
+}

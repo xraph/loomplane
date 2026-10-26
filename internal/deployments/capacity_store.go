@@ -154,8 +154,33 @@ func (s *PgStore) capacityTransition(ctx context.Context, org, id string, expect
 			}
 		}
 	}
+	var frontendClouds []string
+	if status == StatusCancelled && s.frontendWake != nil {
+		rows, queryErr := tx.Query(ctx, `SELECT DISTINCT cloud_id FROM loomplane_frontend_uses WHERE org_id=$1 AND plan_id=$2`, org, d.PlanID)
+		if queryErr != nil {
+			return nil, queryErr
+		}
+		for rows.Next() {
+			var cloud string
+			if scanErr := rows.Scan(&cloud); scanErr != nil {
+				rows.Close()
+				return nil, scanErr
+			}
+			frontendClouds = append(frontendClouds, cloud)
+		}
+		queryErr = rows.Err()
+		rows.Close()
+		if queryErr != nil {
+			return nil, queryErr
+		}
+	}
 	if commitErr := tx.Commit(); commitErr != nil {
 		return nil, commitErr
+	}
+	for _, cloud := range frontendClouds {
+		if wakeErr := s.frontendWake.WakeCapacityCloud(ctx, org, cloud, fmt.Sprintf("frontend-cancel/%s/%d", id, d.CapacityRevision)); wakeErr != nil {
+			continue
+		}
 	}
 	return d, nil
 }
