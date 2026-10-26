@@ -34,7 +34,7 @@ This uses the same harness, ownership record and cleanup as `make acceptance-inf
 
 The test runs on the kind cluster first, then on the SSH/Docker server. On each, it adds the kind to a project, plans, approves and applies it. The kind provisions a Postgres, runs a `migrate` job that records one row, and starts an `api` that refuses to start without that row and answers `/readyz` only after a short warm-up. The test checks the declared readiness probe on the runtime object and reads the api's control port through the admin proxy and through `CatalogAccess.InternalChannel`. Then it removes the resource. Every binding has to go, with the containers on the server and the workloads, Services, Secrets and ConfigMaps on the cluster, and the Postgres data volume has to stay, as database retention says. On kind, the test makes a retained storage class first, since the default one deletes its volumes.
 
-Only the kind leg passes today. The server leg is wired the same way, but a first deployment to a server hangs on the host-admission lock on main: the admission transaction holds a share lock on the connection row while the step update's connection-use trigger asks for an update lock on it. Until that's fixed, expect the server subtest to wait out its 20 minute deadline and fail, and the app's shutdown to hang after it. You can stop it then; `run.py` still cleans up.
+Both legs pass. If other containers on your machine come and go while it runs, the last cleanup step can still fail: it checks that every container that existed before the run is still there, and someone else's may have gone. By then the run's own cluster, builder and network are already removed, so read the test result above the traceback.
 
 ### Verify the dashboard flow on Vercel
 
