@@ -26,6 +26,18 @@ const (
 	Registry     = "registry"
 )
 
+// cloudTitles name the clouds that can be signed in to as people know
+// them, as the API's list of clouds does.
+var cloudTitles = map[string]string{GCP: "Google Cloud", Azure: "Microsoft Azure", Vercel: "Vercel", DigitalOcean: "DigitalOcean"}
+
+// cloudTitle is what a message to people calls cloud.
+func cloudTitle(cloud string) string {
+	if title, ok := cloudTitles[cloud]; ok {
+		return title
+	}
+	return cloud
+}
+
 // Methods say how a connection got its credential: someone pasted it, or
 // signed in to the cloud.
 const (
@@ -88,8 +100,11 @@ type Connection struct {
 	Message   string     `json:"message"`
 	CheckedAt *time.Time `json:"checked_at"`
 	CreatedBy string     `json:"created_by"`
-	CreatedAt time.Time  `json:"created_at"`
-	UpdatedAt time.Time  `json:"updated_at"`
+	// SignedInBy is the Loomplane user who signed in to the cloud, for a
+	// connection made that way. Empty for a pasted token.
+	SignedInBy string    `json:"signed_in_by,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 func (c *Connection) normalize() {

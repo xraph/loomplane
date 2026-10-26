@@ -133,3 +133,50 @@ it("shows the callback URL to register", async () => {
   expect(await screen.findByText(callbackUrl)).toBeTruthy()
   expect(screen.getByRole("button", { name: "Copy callback URL" })).toBeTruthy()
 })
+
+it("asks for the Vercel integration slug", async () => {
+  let body: Record<string, unknown> | undefined
+  stub([{ cloud: "vercel", source: "none" }], (b) => {
+    body = b
+  })
+  const user = userEvent.setup()
+  renderPage()
+  await user.click(await screen.findByRole("button", { name: "Set up" }))
+  const dialog = await screen.findByRole("dialog")
+  await user.type(within(dialog).getByLabelText("Client ID"), "id")
+  await user.type(within(dialog).getByLabelText("Client secret"), "sec")
+  await user.type(within(dialog).getByLabelText("Integration slug"), " my-app ")
+  await user.click(within(dialog).getByRole("button", { name: "Save" }))
+  await waitFor(() =>
+    expect(body).toEqual({
+      client_id: "id",
+      client_secret: "sec",
+      slug: "my-app",
+    })
+  )
+})
+
+it("shows a sign-in app's problem", async () => {
+  stub([
+    {
+      cloud: "vercel",
+      source: "organization",
+      client_id: "v",
+      problem: "The integration slug is missing.",
+    },
+  ])
+  renderPage()
+  expect(
+    await screen.findByText("The integration slug is missing.")
+  ).toBeTruthy()
+})
+
+it("warns about Google testing mode", async () => {
+  stub([{ cloud: "gcp", source: "none" }])
+  renderPage()
+  expect(
+    await screen.findByText(
+      "While your Google OAuth app is in testing, Google ends sign-ins after 7 days. Publish the app to keep them."
+    )
+  ).toBeTruthy()
+})

@@ -22,7 +22,7 @@ export function RDSRecoveryFields({
   onChange: (value: Record<string, string>) => void
 }) {
   return (
-    <details className="text-sm">
+    <details className="text-[13px]">
       <summary className="cursor-pointer">
         Private RDS recovery (optional)
       </summary>

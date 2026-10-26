@@ -6,9 +6,11 @@ import {
 } from "@/client/forge/loomplane/hooks"
 import { useMutation, useQuery } from "@/client/hooks"
 import { ago } from "@/lib/fabriq"
-import { StatePill, stackTones } from "./fabriq-stack"
+import { stackTones } from "./fabriq-stack"
 import { useFabriqStack } from "./use-fabriq-stack"
 import { FabriqError } from "./fabriq-error"
+import { Panel } from "@/components/panel"
+import { StatusPill } from "@/components/runs"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { dependencyChoices, type CatalogPanelProps } from "@/lib/catalog-kinds"
@@ -103,29 +105,22 @@ export function FabriqEngines(props: CatalogPanelProps) {
               ? `Project resource: ${choice.resource}`
               : `Provisioned by Loomplane: ${choice.resource}`
         return (
-          <section
-            key={id}
-            aria-label={name}
-            className="grid min-w-0 gap-2 rounded-xl border border-border-panel bg-card px-3.5 py-3"
-          >
+          <Panel key={id} aria-label={name} className="gap-2">
             <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
               <div>
-                <h2 className="text-[15px] leading-[normal] font-semibold">
-                  {part.name}
-                </h2>
-                <p className="text-[12.5px] leading-[1.5] break-all text-muted-foreground">
+                <h2 className="text-[14px] font-semibold">{part.name}</h2>
+                <p className="text-[12.5px] break-all text-muted-foreground">
                   {origin}
                 </p>
               </div>
               <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
-                <StatePill tone={stackTones[part.state]}>
+                <StatusPill tone={stackTones[part.state]}>
                   {part.state}
-                </StatePill>
+                </StatusPill>
                 {projection && enabled && can("deployment:create") && (
                   <Button
                     size="sm"
                     variant="outline"
-                    className="h-8 rounded-[9px] px-3 text-[12.5px]"
                     disabled={
                       !jobs.data ||
                       jobs.status === "error" ||
@@ -142,7 +137,7 @@ export function FabriqEngines(props: CatalogPanelProps) {
                 )}
               </div>
             </div>
-            <p className="text-xs leading-[1.5] text-muted-foreground">
+            <p className="text-xs text-muted-foreground">
               {projection && enabled
                 ? "Rebuilt from Postgres. No separate backups."
                 : id === "postgres"
@@ -153,7 +148,7 @@ export function FabriqEngines(props: CatalogPanelProps) {
                   : part.detail}
             </p>
             {last && (
-              <div className="grid gap-2 border-t border-border-divider pt-2 text-xs leading-[1.5] text-muted-foreground">
+              <div className="grid gap-2 border-t pt-2 text-xs text-muted-foreground">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <span>
                     Last rebuild: <span role="status">{last.status}</span>
@@ -163,13 +158,13 @@ export function FabriqEngines(props: CatalogPanelProps) {
                   </time>
                 </div>
                 {last.output && (
-                  <pre className="max-h-44 overflow-auto rounded bg-subtle p-2 break-all whitespace-pre-wrap">
+                  <pre className="max-h-44 overflow-auto rounded-lg bg-subtle p-2 font-mono break-all whitespace-pre-wrap">
                     {last.output}
                   </pre>
                 )}
               </div>
             )}
-          </section>
+          </Panel>
         )
       })}
     </div>

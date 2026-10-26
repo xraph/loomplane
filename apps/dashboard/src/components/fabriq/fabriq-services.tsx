@@ -19,8 +19,7 @@ import {
 import type { ConsumerKey } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
 import { FabriqError } from "@/components/fabriq/fabriq-error"
-import { Head } from "@/components/fabriq/fabriq-tenants"
-import { StatePill } from "@/components/fabriq/fabriq-stack"
+import { StatusPill } from "@/components/runs"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
   AlertDialog,
@@ -32,6 +31,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
+import { Card } from "@/components/ui/card"
 import {
   Select,
   SelectContent,
@@ -44,6 +44,7 @@ import {
   Table,
   TableBody,
   TableCell,
+  TableHead,
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
@@ -116,15 +117,10 @@ export function FabriqServices({
             <Button
               type="button"
               size="sm"
-              className="h-8 border-0 px-3 text-[12.5px] shadow-none hover:bg-primary hover:brightness-[1.12] has-data-[icon=inline-start]:pl-3"
               aria-expanded={linking}
               onClick={() => setLinking(!linking)}
             >
-              <PlusIcon
-                className="size-[13px]"
-                data-icon="inline-start"
-                aria-hidden
-              />
+              <PlusIcon data-icon="inline-start" aria-hidden />
               Link a service
             </Button>
           )}
@@ -161,19 +157,15 @@ export function FabriqServices({
           )}
         </FabriqEmpty>
       ) : (
-        <div className="overflow-hidden rounded-[14px] border border-border-panel">
-          <Table
-            columns="minmax(0, 0.9fr) minmax(0, 1.1fr) 120px 150px 170px"
-            scrollLabel="Service keys"
-            className="min-w-[760px]"
-          >
+        <Card className="py-0">
+          <Table className="min-w-[760px]">
             <TableHeader>
-              <TableRow className="bg-surface-muted hover:bg-surface-muted">
-                <Head>Service</Head>
-                <Head>Key</Head>
-                <Head>Tenant</Head>
-                <Head>Last used</Head>
-                <Head className="text-right">Actions</Head>
+              <TableRow className="hover:bg-transparent">
+                <TableHead>Service</TableHead>
+                <TableHead>Key</TableHead>
+                <TableHead>Tenant</TableHead>
+                <TableHead>Last used</TableHead>
+                <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -183,7 +175,7 @@ export function FabriqServices({
                     <span className="grid gap-0.5">
                       <span className="font-medium">{key.service}</span>
                       {environment && (
-                        <span className="text-xs leading-[normal] text-muted-foreground">
+                        <span className="text-xs text-muted-foreground">
                           {environment}
                         </span>
                       )}
@@ -195,7 +187,7 @@ export function FabriqServices({
                   <TableCell className="font-mono text-[12.5px]">
                     {key.tenant}
                   </TableCell>
-                  <TableCell className="text-[12.5px] text-label">
+                  <TableCell className="text-[12.5px] text-muted-foreground">
                     {lastUsed(key, now)}
                   </TableCell>
                   <TableCell>
@@ -207,7 +199,6 @@ export function FabriqServices({
                               type="button"
                               variant="outline"
                               size="sm"
-                              className="h-7 rounded-lg border-input text-xs hover:bg-accent"
                               disabled={busy === key.service}
                               onClick={() => void rotateKey(key.service)}
                             >
@@ -216,9 +207,8 @@ export function FabriqServices({
                           )}
                           <Button
                             type="button"
-                            variant="outline"
+                            variant="destructive"
                             size="sm"
-                            className="h-7 rounded-lg border-border-destructive text-xs text-destructive hover:bg-accent"
                             disabled={busy === key.service}
                             onClick={() => setRevoking(key.service)}
                           >
@@ -231,9 +221,9 @@ export function FabriqServices({
               ))}
             </TableBody>
           </Table>
-        </div>
+        </Card>
       )}
-      <span className="text-xs leading-normal text-muted-foreground">
+      <span className="text-xs text-muted-foreground">
         Loomplane keeps its own operator key to manage tenants and keys. It is
         never shown or given to a service.
       </span>
@@ -284,16 +274,15 @@ function KeyCell({ value }: { value: ConsumerKey }) {
       {value.prefix && (
         <span className="font-mono text-[12.5px]">{value.prefix}…</span>
       )}
-      {value.state === "active" && <StatePill tone="live">Active</StatePill>}
+      {value.state === "active" && <StatusPill tone="live">Active</StatusPill>}
       {value.state === "rotating" && (
-        <StatePill
-          tone="waiting"
-          title="The new key takes effect on the service's next release."
-        >
-          Rotating
-        </StatePill>
+        <span title="The new key takes effect on the service's next release.">
+          <StatusPill tone="waiting">Rotating</StatusPill>
+        </span>
       )}
-      {value.state === "revoked" && <StatePill tone="quiet">Revoked</StatePill>}
+      {value.state === "revoked" && (
+        <StatusPill tone="quiet">Revoked</StatusPill>
+      )}
     </span>
   )
 }
@@ -364,7 +353,7 @@ function LinkService({
   return (
     <form
       onSubmit={(event) => void submit(event)}
-      className="flex flex-wrap items-end gap-2.5 rounded-[12px] border border-border-panel bg-surface-muted px-3.5 py-3"
+      className="flex flex-wrap items-end gap-2.5 rounded-xl bg-subtle p-3 ring-1 ring-border"
     >
       <Pick
         label="Service"
@@ -381,13 +370,12 @@ function LinkService({
         empty="No tenant"
         onChange={setTenant}
       />
-      <span className="flex-[1_1_220px] text-xs leading-[1.45] text-muted-foreground">
+      <span className="flex-[1_1_220px] text-xs text-muted-foreground">
         Takes effect on the service&apos;s next release. The app can still pick
         another tenant per request.
       </span>
       <Button
         type="submit"
-        className="rounded-[9px] border-0 px-[13px] text-[12.5px] shadow-none hover:bg-primary hover:brightness-[1.12]"
         disabled={!chosenService || !chosenTenant || edit.isPending}
       >
         Link service
@@ -418,8 +406,8 @@ function Pick({
 }) {
   const id = useId()
   return (
-    <div className="grid flex-[1_1_180px] gap-[5px]">
-      <span id={id} className="text-[12.5px] font-medium text-label">
+    <div className="grid flex-[1_1_180px] gap-1.5">
+      <span id={id} className="text-[12.5px] font-medium">
         {label}
       </span>
       <Select
@@ -430,10 +418,7 @@ function Pick({
       >
         <SelectTrigger
           aria-labelledby={id}
-          className={cn(
-            "h-[34px] w-full rounded-[9px] bg-background px-2.5",
-            mono && "font-mono"
-          )}
+          className={cn("w-full bg-background", mono && "font-mono")}
         >
           <SelectValue placeholder={empty} />
         </SelectTrigger>

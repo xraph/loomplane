@@ -100,13 +100,17 @@ func (e *Extension) Register(fapp forge.App) error {
 	}
 	secrets := connections.NewVaultSecrets(secret.NewService(vaultpg.New(db), enc, secret.WithAppID(connections.VaultAppID)))
 	log := e.Logger()
+	// The clouds that can be signed in to check and sign in through the
+	// same client, so both reach the same endpoint.
+	gcpClient, vercelClient := gcp.New(e.cfg.Clouds.GoogleEndpoint), vercel.New(e.cfg.Clouds.VercelEndpoint)
+	doClient, azureClient := digitalocean.New(e.cfg.Clouds.DigitalOceanEndpoint), azure.New(e.cfg.Clouds.AzureEndpoint)
 	checkers := map[string]connections.Checker{
-		connections.GCP:          connections.GCPChecker{Client: gcp.New(e.cfg.Clouds.GoogleEndpoint)},
-		connections.Vercel:       connections.VercelChecker{Client: vercel.New(e.cfg.Clouds.VercelEndpoint)},
+		connections.GCP:          connections.GCPChecker{Client: gcpClient},
+		connections.Vercel:       connections.VercelChecker{Client: vercelClient},
 		connections.AWS:          connections.AWSChecker{Client: aws.New(e.cfg.Clouds.AWSEndpoint)},
 		connections.Render:       connections.RenderChecker{Client: render.New(e.cfg.Clouds.RenderEndpoint)},
-		connections.DigitalOcean: connections.DigitalOceanChecker{Client: digitalocean.New(e.cfg.Clouds.DigitalOceanEndpoint)},
-		connections.Azure:        connections.AzureChecker{Client: azure.New(e.cfg.Clouds.AzureEndpoint)},
+		connections.DigitalOcean: connections.DigitalOceanChecker{Client: doClient},
+		connections.Azure:        connections.AzureChecker{Client: azureClient},
 		connections.Server:       connections.ServerChecker{},
 		connections.Kubernetes:   connections.KubernetesChecker{},
 		connections.Registry:     connections.RegistryChecker{},
@@ -134,11 +138,14 @@ func (e *Extension) Register(fapp forge.App) error {
 	e.svc.AppSecrets = connections.NewVaultSecretsFor(
 		secret.NewService(vaultpg.New(db), enc, secret.WithAppID(connections.OAuthAppsVaultAppID)), connections.OAuthAppsVaultAppID)
 	e.svc.Providers = map[string]connections.Provider{
-		connections.DigitalOcean: digitalocean.New(e.cfg.Clouds.DigitalOceanEndpoint),
+		connections.DigitalOcean: doClient,
+		connections.Vercel:       vercelClient,
+		connections.GCP:          gcpClient,
+		connections.Azure:        azureClient,
 	}
 	e.svc.ConfigApps = map[string]oauth.App{}
 	for cloud, app := range e.cfg.Clouds.OAuth {
-		e.svc.ConfigApps[cloud] = oauth.App{ClientID: app.ClientID, ClientSecret: app.ClientSecret}
+		e.svc.ConfigApps[cloud] = oauth.App{ClientID: app.ClientID, ClientSecret: app.ClientSecret, Slug: app.Slug}
 	}
 	e.svc.CallbackURL = callbackURL(e.cfg.PublicURL)
 	mail, err := forge.InjectType[*notifications.Service](c)

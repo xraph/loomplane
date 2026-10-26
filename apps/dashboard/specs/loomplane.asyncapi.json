@@ -3260,6 +3260,9 @@
           "org_id": {
             "type": "string"
           },
+          "signed_in_by": {
+            "type": "string"
+          },
           "status": {
             "type": "string"
           },

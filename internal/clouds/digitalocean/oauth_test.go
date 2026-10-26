@@ -43,7 +43,7 @@ func tokenServer(t *testing.T, status int, body string, got *url.Values) *Client
 
 func TestAuthorizeURLAsksForReadWrite(t *testing.T) {
 	c := New("")
-	u, err := url.Parse(c.AuthorizeURL(testApp, "https://lp.example/cb", "st8"))
+	u, err := url.Parse(c.AuthorizeURL(testApp, oauth.AuthorizeRequest{Redirect: "https://lp.example/cb", State: "st8"}))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,7 +60,7 @@ func TestAuthorizeURLAsksForReadWrite(t *testing.T) {
 }
 
 func TestAuthorizeURLUsesTheTestEndpoint(t *testing.T) {
-	if got := New("http://127.0.0.1:1/").AuthorizeURL(testApp, "r", "s"); !strings.HasPrefix(got, "http://127.0.0.1:1/v1/oauth/authorize?") {
+	if got := New("http://127.0.0.1:1/").AuthorizeURL(testApp, oauth.AuthorizeRequest{Redirect: "r", State: "s"}); !strings.HasPrefix(got, "http://127.0.0.1:1/v1/oauth/authorize?") {
 		t.Errorf("url %s", got)
 	}
 }
@@ -69,7 +69,7 @@ func TestExchangeReadsTheGrantAndItsTeam(t *testing.T) {
 	var form url.Values
 	c := tokenServer(t, 200, tokenReply, &form)
 	before := time.Now()
-	g, err := c.Exchange(context.Background(), testApp, "https://lp.example/cb", "the-code")
+	g, err := c.Exchange(context.Background(), testApp, oauth.CodeRequest{Redirect: "https://lp.example/cb", Code: "the-code"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -96,7 +96,7 @@ func TestExchangeReadsTheGrantAndItsTeam(t *testing.T) {
 func TestRefreshSpendsTheRefreshToken(t *testing.T) {
 	var form url.Values
 	c := tokenServer(t, 200, tokenReply, &form)
-	g, err := c.Refresh(context.Background(), testApp, "dor_v1_old")
+	g, err := c.Refresh(context.Background(), testApp, oauth.Grant{AccessToken: "dop_v1_old", RefreshToken: "dor_v1_old"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -116,24 +116,63 @@ func TestRefreshSpendsTheRefreshToken(t *testing.T) {
 
 func TestRefreshRefusedIsErrRefused(t *testing.T) {
 	var form url.Values
-	for _, tc := range []struct {
-		status int
-		body   string
-	}{
-		{400, `{"error":"invalid_grant","error_description":"expired"}`},
-		{401, `{"error":"invalid_client"}`},
-	} {
-		c := tokenServer(t, tc.status, tc.body, &form)
-		if _, err := c.Refresh(context.Background(), testApp, "dor_v1_old"); !errors.Is(err, oauth.ErrRefused) {
-			t.Errorf("%d: %v", tc.status, err)
-		}
+	c := tokenServer(t, 400, `{"error":"invalid_grant","error_description":"expired"}`, &form)
+	if _, err := c.Refresh(context.Background(), testApp, oauth.Grant{AccessToken: "dop_v1_old", RefreshToken: "dor_v1_old"}); !errors.Is(err, oauth.ErrRefused) {
+		t.Errorf("400: %v", err)
 	}
-	c := tokenServer(t, 500, `{"error":"server_error"}`, &form)
-	_, err := c.Refresh(context.Background(), testApp, "dor_v1_old")
+	c = tokenServer(t, 500, `{"error":"server_error"}`, &form)
+	_, err := c.Refresh(context.Background(), testApp, oauth.Grant{AccessToken: "dop_v1_old", RefreshToken: "dor_v1_old"})
 	if err == nil || errors.Is(err, oauth.ErrRefused) {
 		t.Errorf("500: %v", err)
 	}
 	if err != nil && (strings.Contains(err.Error(), "csecret") || strings.Contains(err.Error(), "dor_v1_old")) {
 		t.Errorf("error leaks a secret: %v", err)
+	}
+}
+
+// A rotated or deleted client secret is the app's fault, not the grant's:
+// signing in again with the same app wouldn't help.
+func TestRefreshInvalidClientIsAppRejected(t *testing.T) {
+	var form url.Values
+	for _, tc := range []struct {
+		status int
+		body   string
+	}{
+		{401, `{"error":"invalid_client"}`},
+		{400, `{"error":"unauthorized_client"}`},
+	} {
+		c := tokenServer(t, tc.status, tc.body, &form)
+		_, err := c.Refresh(context.Background(), testApp, oauth.Grant{AccessToken: "dop_v1_old", RefreshToken: "dor_v1_old"})
+		if !errors.Is(err, oauth.ErrAppRejected) || errors.Is(err, oauth.ErrRefused) {
+			t.Errorf("%d %s: %v", tc.status, tc.body, err)
+		}
+		if err != nil && strings.Contains(err.Error(), "csecret") {
+			t.Errorf("error leaks the client secret: %v", err)
+		}
+	}
+}
+
+func TestProbeAsksForTheAccount(t *testing.T) {
+	var path, auth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path, auth = r.URL.Path, r.Header.Get("Authorization")
+		if auth != "Bearer dop_v1_live" {
+			w.WriteHeader(http.StatusUnauthorized)
+			_, _ = w.Write([]byte(`{"id":"Unauthorized","message":"Unable to authenticate you"}`))
+			return
+		}
+		_, _ = w.Write([]byte(`{"account":{"uuid":"acct-1","team":{"uuid":"team-1","name":"Acme"}}}`))
+	}))
+	t.Cleanup(srv.Close)
+	c := New(srv.URL)
+	if err := c.Probe(context.Background(), testApp, oauth.Grant{AccessToken: "dop_v1_live", RefreshToken: "dor_v1_live"}); err != nil {
+		t.Fatal(err)
+	}
+	if path != "/v2/account" || auth != "Bearer dop_v1_live" {
+		t.Fatalf("probe asked %s with %q", path, auth)
+	}
+	err := c.Probe(context.Background(), testApp, oauth.Grant{AccessToken: "dop_v1_revoked"})
+	if !errors.Is(err, oauth.ErrRefused) || strings.Contains(err.Error(), "dop_v1_revoked") {
+		t.Fatalf("revoked: %v", err)
 	}
 }

@@ -2,7 +2,6 @@ package connections
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
@@ -127,10 +126,29 @@ func (s *Service) check(ctx context.Context, cloud string, c Checker, credential
 	}
 }
 
+// pastedGrantAdvice is a GrantChecker that says, in its cloud's words,
+// what to do instead of pasting a sign-in's grant.
+type pastedGrantAdvice interface {
+	PastedGrant() string
+}
+
+// PastedGrant implements pastedGrantAdvice.
+func (GCPChecker) PastedGrant() string {
+	return "paste a service account key, or sign in to Google instead of pasting a signed-in key"
+}
+
+// PastedGrant implements pastedGrantAdvice.
+func (AzureChecker) PastedGrant() string {
+	return "paste a service principal's client secret, or sign in to Azure instead of pasting a signed-in key"
+}
+
 // refusePastedGrant keeps Method true to what Vault holds: a pasted
 // credential that is really a sign-in grant is refused.
 func refusePastedGrant(c Checker, cred []byte, method string) error {
 	if g, ok := c.(GrantChecker); ok && method == MethodToken && g.IsGrant(cred) {
+		if a, ok := c.(pastedGrantAdvice); ok {
+			return fmt.Errorf("%w: %s", ErrInvalid, a.PastedGrant())
+		}
 		return fmt.Errorf("%w: paste the API token itself, not JSON", ErrInvalid)
 	}
 	return nil
@@ -152,7 +170,7 @@ func (s *Service) Create(ctx context.Context, p security.Principal, in CreateInp
 	if err := s.authz.Require(ctx, p, security.CloudAccountManage, ""); err != nil {
 		return nil, err
 	}
-	return s.create(ctx, p, in.Cloud, in.Name, []byte(strings.TrimSpace(in.Credential)), in.Settings, MethodToken)
+	return s.create(ctx, p, in.Cloud, in.Name, []byte(strings.TrimSpace(in.Credential)), nil, in.Settings, MethodToken)
 }
 
 func validName(name string) (string, error) {
@@ -164,8 +182,10 @@ func validName(name string) (string, error) {
 }
 
 // create checks cred with its cloud and stores a new connection that got
-// its credential by method. The caller has checked the principal's role.
-func (s *Service) create(ctx context.Context, p security.Principal, cloud, name string, cred []byte, settings map[string]string, method string) (*Connection, error) {
+// its credential by method. checked is what the check gets instead of
+// cred, such as a sign-in's handout; nil checks cred. The caller has
+// checked the principal's role.
+func (s *Service) create(ctx context.Context, p security.Principal, cloud, name string, cred, checked []byte, settings map[string]string, method string) (*Connection, error) {
 	cloud = strings.TrimSpace(cloud)
 	checker, err := s.checker(cloud)
 	if err != nil {
@@ -178,7 +198,10 @@ func (s *Service) create(ctx context.Context, p security.Principal, cloud, name 
 	if refuseErr := refusePastedGrant(checker, cred, method); refuseErr != nil {
 		return nil, refuseErr
 	}
-	res, err := s.check(ctx, cloud, checker, cred, settings)
+	if checked == nil {
+		checked = cred
+	}
+	res, err := s.check(ctx, cloud, checker, checked, settings)
 	if err != nil {
 		return nil, err
 	}
@@ -188,6 +211,7 @@ func (s *Service) create(ctx context.Context, p security.Principal, cloud, name 
 	}
 	now := s.now().UTC()
 	c := &Connection{ID: id.String(), OrgID: p.OrgID, Cloud: cloud, Name: name, Method: method, CreatedBy: p.UserID, CreatedAt: now}
+	c.SignedInBy = signer(p, method)
 	apply(c, res, now)
 	// The secret first: a row without its secret would look connected and
 	// fail every deployment, where a secret without its row is unreachable
@@ -223,7 +247,8 @@ func (s *Service) Get(ctx context.Context, p security.Principal, id string) (*Co
 
 // Recheck asks the cloud again, such as after granting the permissions an
 // incomplete connection lacked. A credential the cloud now refuses marks
-// the connection failed, or sign_in_needed if it was a sign-in; a cloud it
+// the connection failed. A sign-in the cloud no longer honors, or whose
+// sign-in app it refuses, marks it sign_in_needed instead. A cloud it
 // can't reach changes nothing.
 func (s *Service) Recheck(ctx context.Context, p security.Principal, id string) (*Connection, error) {
 	if err := s.authz.Require(ctx, p, security.CloudAccountManage, ""); err != nil {
@@ -245,8 +270,12 @@ func (s *Service) Recheck(ctx context.Context, p security.Principal, id string) 
 	}
 	var cred []byte
 	if c.Method == MethodOAuth {
-		// Check the grant a deployment would get, renewed if it's due.
-		g, grantErr := s.usableGrant(ctx, c)
+		// Check what a deployment would get.
+		g, grantErr := s.deployGrant(ctx, c)
+		if grantErr == nil {
+			cred, grantErr = s.checkable(ctx, c, g)
+			grantErr = s.handoutWithoutApp(ctx, c, grantErr)
+		}
 		if errors.Is(grantErr, ErrNotReady) {
 			if c, err = s.store.GetConnection(ctx, p.OrgID, id); err != nil {
 				return nil, err
@@ -257,9 +286,6 @@ func (s *Service) Recheck(ctx context.Context, p security.Principal, id string) 
 		if grantErr != nil {
 			return nil, grantErr
 		}
-		if cred, err = json.Marshal(g); err != nil { // #nosec G117 -- the grant is the credential, bound for Vault, never a response.
-			return nil, fmt.Errorf("encode sign-in grant: %w", err)
-		}
 	} else if cred, err = s.secrets.Reveal(ctx, p.OrgID, c.ID); err != nil {
 		return nil, err
 	}
@@ -269,18 +295,29 @@ func (s *Service) Recheck(ctx context.Context, p security.Principal, id string) 
 		// A failed legacy upgrade preserves the old row as well as its token.
 		return nil, err
 	}
+	var why string
 	switch {
-	case errors.Is(err, ErrInvalid) && c.Method == MethodOAuth:
+	case c.Method != MethodOAuth || err == nil:
+	case errors.Is(err, oauth.ErrAppRejected):
+		// Signing in again with the same app won't help, so the app
+		// shows the problem too.
+		why = s.appRejected(ctx, c.OrgID, c.Cloud)
+	case refusedSignIn(err):
 		// Revoking Loomplane in the cloud kills the access token at once,
-		// so a refused grant asks for a new sign-in. The account is the
-		// same, so the generation stays.
-		current, lapsed, markErr := s.signInRefused(ctx, c, fmt.Sprintf("%s refused the sign-in. Sign in again.", c.Cloud), now)
+		// so a refused grant asks for a new sign-in.
+		why = fmt.Sprintf("%s refused the sign-in. Sign in again.", cloudTitle(c.Cloud))
+	}
+	if why != "" {
+		// The account is the same, so the generation stays.
+		current, lapsed, markErr := s.signInRefused(ctx, c, why, &now)
 		if markErr != nil {
 			return nil, markErr
 		}
 		s.tellLapsed(ctx, lapsed)
 		s.record(ctx, "cloud_connection.check", p, current)
 		return current, nil
+	}
+	switch {
 	case errors.Is(err, ErrInvalid):
 		c.Status, c.Message, c.CheckedAt, c.UpdatedAt = StatusFailed, strings.TrimPrefix(err.Error(), ErrInvalid.Error()+": "), &now, now
 	case err != nil:
@@ -312,13 +349,23 @@ func (s *Service) Replace(ctx context.Context, p security.Principal, id string, 
 	if err := s.authz.Require(ctx, p, security.CloudAccountManage, ""); err != nil {
 		return nil, err
 	}
-	return s.replace(ctx, p, id, []byte(strings.TrimSpace(in.Credential)), in.Settings, MethodToken)
+	return s.replace(ctx, p, id, []byte(strings.TrimSpace(in.Credential)), nil, in.Settings, MethodToken)
+}
+
+// signer is who a credential that got there by method is the sign-in of:
+// the person signing in, or no one for a token.
+func signer(p security.Principal, method string) string {
+	if method == MethodOAuth {
+		return p.UserID
+	}
+	return ""
 }
 
 // replace swaps connection id's credential for cred, which got there by
-// method, if the cloud accepts it for the same account. The caller has
-// checked the principal's role.
-func (s *Service) replace(ctx context.Context, p security.Principal, id string, cred []byte, settings map[string]string, method string) (*Connection, error) {
+// method, if the cloud accepts it for the same account. checked is what
+// the check gets instead of cred, as for create. The caller has checked
+// the principal's role.
+func (s *Service) replace(ctx context.Context, p security.Principal, id string, cred, checked []byte, settings map[string]string, method string) (*Connection, error) {
 	c, err := s.store.GetConnection(ctx, p.OrgID, id)
 	if err != nil {
 		return nil, err
@@ -351,7 +398,10 @@ func (s *Service) replace(ctx context.Context, p security.Principal, id string, 
 	if settings == nil {
 		settings = c.Details
 	}
-	res, err := s.check(ctx, c.Cloud, checker, cred, settings)
+	if checked == nil {
+		checked = cred
+	}
+	res, err := s.check(ctx, c.Cloud, checker, checked, settings)
 	if err != nil {
 		return nil, err
 	}
@@ -365,6 +415,7 @@ func (s *Service) replace(ctx context.Context, p security.Principal, id string, 
 			return err
 		}
 		c.Method = method
+		c.SignedInBy = signer(p, method)
 		apply(c, res, s.now().UTC())
 		return s.store.UpdateConnection(ctx, c)
 	}
@@ -409,7 +460,7 @@ func (s *Service) Delete(ctx context.Context, p security.Principal, id string) e
 // deployment. It checks no role: only Loomplane's own workflow calls it,
 // for a plan someone was allowed to approve. A signed-in connection's
 // credential is its access token, renewed first if it expires within a
-// day.
+// day, or its handout, for a cloud whose sessions renew themselves.
 func (s *Service) Credential(ctx context.Context, orgID, id string) (*Connection, []byte, error) {
 	c, err := s.store.GetConnection(ctx, orgID, id)
 	if err != nil {
@@ -420,11 +471,17 @@ func (s *Service) Credential(ctx context.Context, orgID, id string) (*Connection
 	}
 	var cred []byte
 	if c.Method == MethodOAuth {
-		g, grantErr := s.usableGrant(ctx, c)
+		g, grantErr := s.deployGrant(ctx, c)
 		if grantErr != nil {
 			return nil, nil, grantErr
 		}
-		cred = []byte(g.AccessToken)
+		if _, ok := s.Providers[c.Cloud].(Handout); ok {
+			if cred, err = s.checkable(ctx, c, g); err != nil {
+				return nil, nil, s.handoutWithoutApp(ctx, c, err)
+			}
+		} else {
+			cred = []byte(g.AccessToken)
+		}
 	} else if cred, err = s.secrets.Reveal(ctx, orgID, id); err != nil {
 		return nil, nil, err
 	}

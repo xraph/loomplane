@@ -720,7 +720,7 @@ export function LogViewer({
             className="py-3 font-mono text-[12.5px] leading-[1.7]"
           >
             {visible.length === 0 ? (
-              <p className="px-4 py-10 text-center font-sans text-sm text-(--terminal-muted)">
+              <p className="px-4 py-10 text-center font-sans text-[13px] text-(--terminal-muted)">
                 {lines.length === 0
                   ? empty
                   : "No lines match. Clear the filter or pick another step."}

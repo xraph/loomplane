@@ -98,6 +98,11 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
       title: "Deployments",
       icon: <DeploymentsIcon />,
       isActive: path.startsWith("/deployments"),
+      badge: waiting > 0 && (
+        <span className="rounded-full bg-weld-tint px-1.5 font-mono text-[11px] text-weld-ink tabular-nums">
+          {waiting}
+        </span>
+      ),
       items: [
         {
           title: "All deployments",
@@ -108,19 +113,23 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
           title: "In flight",
           link: <Link to="/deployments" search={{ status: "live" }} />,
           isActive: status === "live",
-          badge: live || undefined,
+          badge: live > 0 && <span className="text-flight-ink">{live}</span>,
         },
         {
           title: "Needs approval",
           link: <Link to="/deployments" search={{ status: "waiting" }} />,
           isActive: status === "waiting",
-          badge: waiting || undefined,
+          badge: waiting > 0 && (
+            <span className="text-weld-ink">{waiting}</span>
+          ),
         },
         {
           title: "Failed",
           link: <Link to="/deployments" search={{ status: "failed" }} />,
           isActive: status === "failed",
-          badge: failed || undefined,
+          badge: failed > 0 && (
+            <span className="text-destructive">{failed}</span>
+          ),
         },
       ],
     },
@@ -206,7 +215,7 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
           onNew={can("project:create") ? openNewProject : undefined}
         />
       </SidebarContent>
-      <SidebarFooter>
+      <SidebarFooter className="border-t border-sidebar-border">
         <Account />
       </SidebarFooter>
       <SidebarRail />

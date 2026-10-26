@@ -21,6 +21,7 @@ import {
   SidebarMenuSubButton,
   SidebarMenuSubItem,
 } from "@/components/ui/sidebar"
+import { cn } from "@/lib/utils"
 
 export type NavSubItem = {
   title: string
@@ -75,7 +76,20 @@ export function NavMain({
               >
                 {item.icon}
                 <span>{item.title}</span>
-                <ChevronRightIcon className="ml-auto text-muted-foreground transition-transform duration-200 group-data-open/collapsible:rotate-90" />
+                {/* A closed section still says when something in it waits. */}
+                {item.badge && (
+                  <span className="ml-auto group-data-open/collapsible:hidden">
+                    {item.badge}
+                  </span>
+                )}
+                <ChevronRightIcon
+                  className={cn(
+                    "text-muted-foreground transition-transform duration-200 group-data-open/collapsible:rotate-90",
+                    item.badge
+                      ? "group-data-open/collapsible:ml-auto"
+                      : "ml-auto"
+                  )}
+                />
               </CollapsibleTrigger>
               <CollapsibleContent>
                 <SidebarMenuSub>
@@ -91,7 +105,7 @@ export function NavMain({
                       >
                         <span>{sub.title}</span>
                         {sub.badge && (
-                          <span className="ml-auto text-xs text-muted-foreground tabular-nums">
+                          <span className="ml-auto font-mono text-[11.5px] text-muted-foreground tabular-nums">
                             {sub.badge}
                           </span>
                         )}
