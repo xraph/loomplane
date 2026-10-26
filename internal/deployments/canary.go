@@ -203,8 +203,8 @@ type CanaryStore interface {
 	// RecentCanaries returns up to limit of an environment's deployments
 	// that ran a canary, newest first.
 	RecentCanaries(ctx context.Context, orgID, projectID, environmentID string, limit int) ([]*Deployment, error)
-	// RampingCanary returns the running deployment whose canary still holds
-	// the environment, or "".
+	// RampingCanary returns the running or paused deployment whose canary
+	// still holds the environment, or "".
 	RampingCanary(ctx context.Context, orgID, environmentID string) (string, error)
 	// CanaryBinding reports whether a canary that still holds its
 	// environment ramps the binding.

@@ -240,10 +240,10 @@ func (m *memStore) RecentCanaries(_ context.Context, org, project, environment s
 	return out[:min(limit, len(out))], nil
 }
 
-// holdsCanary is a running deployment whose canary still holds its
-// environment.
+// holdsCanary is a running or paused deployment whose canary still holds
+// its environment.
 func holdsCanary(d *Deployment) bool {
-	return d.Status == StatusRunning && d.Canary != nil && slices.Contains(canaryActive, d.Canary.Status)
+	return (d.Status == StatusRunning || d.Status == StatusPaused) && d.Canary != nil && slices.Contains(canaryActive, d.Canary.Status)
 }
 
 func (m *memStore) RampingCanary(_ context.Context, org, environment string) (string, error) {

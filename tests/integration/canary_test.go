@@ -29,6 +29,7 @@ import (
 	"github.com/xraph/grove/migrate"
 
 	"github.com/xraph/loomplane/database/migrations"
+	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/clouds/metrics"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/deployments"
@@ -835,6 +836,69 @@ func TestCanaryBlocksANewPlanUntilItSettles(t *testing.T) {
 	ready := f.plan(t)
 	if ready.Status != planning.StatusReady || !ready.Executable || canaryInProgress(ready.Problems) != nil || !ready.Release.Ramps("service:api") {
 		t.Fatalf("plan after the canary settled: %s %+v", ready.Status, ready.Problems)
+	}
+}
+
+// candidateLive is Cloud Run with a candidate revision in what's live, as
+// a canary paused mid-ramp may leave it.
+type candidateLive struct{ *canaryWeighted }
+
+func (candidateLive) Observe(context.Context, *connections.Connection, []byte, *planning.Binding) (*deployments.Observation, error) {
+	return &deployments.Observation{Exists: true, Revision: "registry/api:candidate"}, nil
+}
+
+// A canary deployment paused for capacity still holds its environment, as
+// the environment guard says: a new plan is blocked, and drift leaves the
+// binding it ramps alone, since what's live may show its candidate. Once
+// the canary settles, the same check finds the drift.
+func TestAPausedCanaryStillHoldsItsEnvironment(t *testing.T) {
+	f := newCanaryFixture(t, canaryManifest)
+	ctx := t.Context()
+	f.release(t)
+	if d := f.approve(t, f.plan(t)); d.Status != deployments.StatusSucceeded {
+		t.Fatalf("first deployment: %+v", d)
+	}
+	f.release(t)
+	api := f.binding(t)
+	f.deployment(t, "dep_paused", rampingCanary(api.ID))
+	paused, err := f.store.SetCapacityWait(ctx, "org", "dep_paused", 0, []cloudinfra.CapacityBlock{{Reason: "provisioning", Resource: "cpu", Retryable: true}}, time.Now())
+	if err != nil || paused.Status != deployments.StatusPaused {
+		t.Fatalf("pause: %+v %v", paused, err)
+	}
+	if id, rampErr := f.store.RampingCanary(ctx, "org", "env"); rampErr != nil || id != "dep_paused" {
+		t.Fatalf("ramping while paused: %q %v", id, rampErr)
+	}
+	blocked := f.plan(t)
+	message := "A canary release is ramping in production (deployment dep_paused). Plan again once it finishes."
+	if finding := canaryInProgress(blocked.Problems); blocked.Status != planning.StatusBlocked || blocked.Executable || finding == nil || finding.Message != message {
+		t.Fatalf("plan while the canary is paused: %s, executable %v, problems %+v", blocked.Status, blocked.Executable, blocked.Problems)
+	}
+
+	drift := &deployments.DriftChecker{
+		Store: f.plans, Credentials: &syncAccounts{store: connections.NewPgStore(f.db)},
+		Executors: map[string]deployments.Executor{"cloud-run": candidateLive{f.exec}}, Canaries: f.store,
+	}
+	rep, err := drift.Check(ctx)
+	if err != nil || rep.Drifted != 0 {
+		t.Fatalf("drift while paused: %+v %v", rep, err)
+	}
+	if b := f.binding(t); b.Drift != "" {
+		t.Fatalf("api drifted while its canary was paused: %q %q", b.Drift, b.DriftMessage)
+	}
+
+	c := rampingCanary(api.ID)
+	c.Status, c.Weight = deployments.CanaryRolledBack, 0
+	if err = f.store.SetCanary(ctx, "org", "dep_paused", c); err != nil {
+		t.Fatal(err)
+	}
+	if id, rampErr := f.store.RampingCanary(ctx, "org", "env"); rampErr != nil || id != "" {
+		t.Fatalf("ramping once settled: %q %v", id, rampErr)
+	}
+	if rep, err = drift.Check(ctx); err != nil || rep.Drifted != 1 {
+		t.Fatalf("drift once settled: %+v %v", rep, err)
+	}
+	if b := f.binding(t); b.Drift != planning.DriftChanged {
+		t.Fatalf("api's drift once its canary settled: %q", b.Drift)
 	}
 }
 
