@@ -120,6 +120,16 @@ func TestHealthReaderUnavailableWithoutErrorCounts(t *testing.T) {
 	}
 }
 
+func TestHealthReaderUnavailableWithoutAMeasurement(t *testing.T) {
+	h, err := healthReader("gcp", &fakeMeter{}).Health(context.Background(), "org-a", "b1", "", healthWindow())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if h.Available || h.Reason == "" {
+		t.Fatalf("got %+v", h)
+	}
+}
+
 func TestHealthReaderNoMeterForProvider(t *testing.T) {
 	h, err := healthReader("kubernetes", nil).Health(context.Background(), "org-a", "b1", "", healthWindow())
 	if err != nil {
