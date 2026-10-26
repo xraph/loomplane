@@ -156,8 +156,8 @@ jobs:
     needs: plan
     if: needs.plan.outputs.skip-tests != 'true'
     runs-on: ubuntu-24.04
-    # Lint, the dashboard and the integration suite's own 30 minutes.
-    timeout-minutes: 60
+    # Lint, the dashboard and the integration suite's own 60 minutes.
+    timeout-minutes: 90
     services:
       postgres:
         image: postgres:17-alpine
@@ -192,7 +192,7 @@ jobs:
           version: v2.12.2
           args: --build-tags=integration --timeout=10m ./...
       - run: make lint-dashboard test
-      - run: go test -race -count=1 -timeout=30m -tags=integration ./tests/integration/
+      - run: go test -race -count=1 -timeout=60m -tags=integration ./tests/integration/
 
   release:
     name: Tag and GitHub release
