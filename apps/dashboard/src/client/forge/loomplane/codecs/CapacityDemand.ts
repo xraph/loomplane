@@ -1,0 +1,4 @@
+import type { Codec } from '../codec-runtime';
+import { codec_ResourceVector } from './ResourceVector';
+
+export const codec_CapacityDemand: Codec = {"kind": "object", "fields": {"architecture": {"ts": "architecture"}, "cloud_id": {"ts": "cloudId"}, "environment_id": {"ts": "environmentId"}, "intent_hash": {"ts": "intentHash"}, "local_data": {"ts": "localData"}, "org_id": {"ts": "orgId"}, "plan_id": {"ts": "planId"}, "policy_revision": {"ts": "policyRevision"}, "pool_id": {"ts": "poolId"}, "project_id": {"ts": "projectId"}, "resources": {"ts": "resources", "codec": () => codec_ResourceVector}, "service": {"ts": "service"}, "sticky_server_id": {"ts": "stickyServerId"}, "target_id": {"ts": "targetId"}}, "required": ["architecture", "cloud_id", "environment_id", "intent_hash", "local_data", "org_id", "plan_id", "policy_revision", "pool_id", "project_id", "resources", "service", "sticky_server_id", "target_id"]};

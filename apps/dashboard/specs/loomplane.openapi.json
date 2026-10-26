@@ -5,61 +5,8 @@
     "description": "Loomplane's API: organizations' projects, environments and infrastructure.",
     "version": "0.1.0-dev"
   },
-  "servers": [
-    {
-      "url": "http://localhost:8780",
-      "description": "Development server"
-    },
-    {
-      "url": "http://localhost:8780"
-    }
-  ],
+  "servers": [],
   "paths": {
-    "/_/health": {
-      "get": {
-        "responses": {
-          "200": {
-            "description": "Success"
-          }
-        }
-      }
-    },
-    "/_/health/live": {
-      "get": {
-        "responses": {
-          "200": {
-            "description": "Success"
-          }
-        }
-      }
-    },
-    "/_/health/ready": {
-      "get": {
-        "responses": {
-          "200": {
-            "description": "Success"
-          }
-        }
-      }
-    },
-    "/_/info": {
-      "get": {
-        "responses": {
-          "200": {
-            "description": "Success"
-          }
-        }
-      }
-    },
-    "/_/metrics": {
-      "get": {
-        "responses": {
-          "200": {
-            "description": "Success"
-          }
-        }
-      }
-    },
     "/api/v1/activity": {
       "get": {
         "tags": [
@@ -3004,6 +2951,37 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/NativeInventory"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/native-recovery-sources/{id}/pitr-window": {
+      "get": {
+        "tags": [
+          "Service backups"
+        ],
+        "operationId": "nativeRecoverySources.pitrWindow",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current provider PITR window for the captured source",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/NativePITRWindow"
                 }
               }
             }
@@ -6059,7 +6037,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Source"
+                  "$ref": "#/components/schemas/DiscoverySource"
                 }
               }
             }
@@ -6147,7 +6125,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/Source"
+                  "$ref": "#/components/schemas/DiscoverySource"
                 }
               }
             }
@@ -6663,6 +6641,452 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/CatalogproxySession"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{projectId}/environments/{environmentId}/fabriq/{resource}": {
+      "get": {
+        "tags": [
+          "Fabriq"
+        ],
+        "summary": "A hosted Fabriq's stack: its release, entity types and migrations, and whether its console answers",
+        "operationId": "fabriq.status",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "description": "Path parameter: projectId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "environmentId",
+            "in": "path",
+            "description": "Path parameter: environmentId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "resource",
+            "in": "path",
+            "description": "Path parameter: resource",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The status, with reachable false and a reason when Fabriq doesn't answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Status"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{projectId}/environments/{environmentId}/fabriq/{resource}/keys": {
+      "get": {
+        "tags": [
+          "Fabriq"
+        ],
+        "summary": "The Fabriq key of each service that needs it or had one; never a key itself, only its prefix",
+        "operationId": "fabriqKeys.list",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "description": "Path parameter: projectId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "environmentId",
+            "in": "path",
+            "description": "Path parameter: environmentId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "resource",
+            "in": "path",
+            "description": "Path parameter: resource",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Keys",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FabriqKeyList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{projectId}/environments/{environmentId}/fabriq/{resource}/keys/{service}/revoke": {
+      "post": {
+        "tags": [
+          "Fabriq"
+        ],
+        "summary": "Revoke a service's Fabriq keys now; its next release gets a new one while it still needs Fabriq",
+        "operationId": "fabriqKeys.revoke",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "description": "Path parameter: projectId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "environmentId",
+            "in": "path",
+            "description": "Path parameter: environmentId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "resource",
+            "in": "path",
+            "description": "Path parameter: resource",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "service",
+            "in": "path",
+            "description": "Path parameter: service",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The service's key, revoked",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsumerKey"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{projectId}/environments/{environmentId}/fabriq/{resource}/keys/{service}/rotate": {
+      "post": {
+        "tags": [
+          "Fabriq"
+        ],
+        "summary": "Issue a service a new Fabriq key, which its next release takes and then revokes the old one",
+        "operationId": "fabriqKeys.rotate",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "description": "Path parameter: projectId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "environmentId",
+            "in": "path",
+            "description": "Path parameter: environmentId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "resource",
+            "in": "path",
+            "description": "Path parameter: resource",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "service",
+            "in": "path",
+            "description": "Path parameter: service",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The service's key, rotating",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ConsumerKey"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{projectId}/environments/{environmentId}/fabriq/{resource}/rebuilds": {
+      "get": {
+        "tags": [
+          "Fabriq"
+        ],
+        "summary": "A hosted Fabriq's latest projection rebuilds, newest first",
+        "operationId": "fabriqRebuilds.list",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "description": "Path parameter: projectId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "environmentId",
+            "in": "path",
+            "description": "Path parameter: environmentId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "resource",
+            "in": "path",
+            "description": "Path parameter: resource",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Rebuilds",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RebuildList"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Fabriq"
+        ],
+        "summary": "Rebuild a FalkorDB or Elasticsearch projection from Postgres; while one is queued or running, return it",
+        "operationId": "fabriqRebuilds.create",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "description": "Path parameter: projectId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "environmentId",
+            "in": "path",
+            "description": "Path parameter: environmentId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "resource",
+            "in": "path",
+            "description": "Path parameter: resource",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RebuildInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "The rebuild",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Rebuild"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{projectId}/environments/{environmentId}/fabriq/{resource}/tenants": {
+      "get": {
+        "tags": [
+          "Fabriq"
+        ],
+        "summary": "A hosted Fabriq's tenants, by id",
+        "operationId": "fabriqTenants.list",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "description": "Path parameter: projectId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "environmentId",
+            "in": "path",
+            "description": "Path parameter: environmentId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "resource",
+            "in": "path",
+            "description": "Path parameter: resource",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Tenants",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TenantList"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Fabriq"
+        ],
+        "summary": "Create a tenant in a hosted Fabriq, or find it",
+        "operationId": "fabriqTenants.create",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "description": "Path parameter: projectId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "environmentId",
+            "in": "path",
+            "description": "Path parameter: environmentId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "resource",
+            "in": "path",
+            "description": "Path parameter: resource",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TenantInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The tenant, which was there already",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Tenant"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "The new tenant",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Tenant"
                 }
               }
             }
@@ -7628,6 +8052,57 @@
         }
       }
     },
+    "/api/v1/usage/spend": {
+      "get": {
+        "tags": [
+          "Usage"
+        ],
+        "summary": "What each connected account has cost this month, read from the cloud's own billing, and why any account can't say",
+        "operationId": "usage.spend",
+        "responses": {
+          "200": {
+            "description": "Spend",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SpendReport"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/usage/traffic": {
+      "get": {
+        "tags": [
+          "Usage"
+        ],
+        "summary": "Requests and latency of every service you can see, read from each cloud's own monitoring, beside the stretch before",
+        "operationId": "usage.traffic",
+        "parameters": [
+          {
+            "name": "range",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Traffic",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrafficReport"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/variables": {
       "get": {
         "tags": [
@@ -7748,570 +8223,6 @@
           }
         }
       }
-    },
-    "/asyncapi": {
-      "get": {
-        "responses": {
-          "200": {
-            "description": "Success"
-          }
-        }
-      }
-    },
-    "/asyncapi.json": {
-      "get": {
-        "responses": {
-          "200": {
-            "description": "Success"
-          }
-        }
-      }
-    },
-    "/openapi.json": {
-      "get": {
-        "responses": {
-          "200": {
-            "description": "Success"
-          }
-        }
-      }
-    },
-    "/swagger": {
-      "get": {
-        "responses": {
-          "200": {
-            "description": "Success"
-          }
-        }
-      }
-    },
-    "/api/v1/native-recovery-sources/{id}/pitr-window": {
-      "get": {
-        "tags": [
-          "Service backups"
-        ],
-        "operationId": "nativeRecoverySources.pitrWindow",
-        "parameters": [
-          {
-            "name": "id",
-            "in": "path",
-            "description": "Path parameter: id",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Current provider PITR window for the captured source",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/NativePITRWindow"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/usage/spend": {
-      "get": {
-        "tags": [
-          "Usage"
-        ],
-        "summary": "What each connected account has cost this month, read from the cloud's own billing, and why any account can't say",
-        "operationId": "usage.spend",
-        "responses": {
-          "200": {
-            "description": "Spend",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/SpendReport"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/usage/traffic": {
-      "get": {
-        "tags": [
-          "Usage"
-        ],
-        "summary": "Requests and latency of every service you can see, read from each cloud's own monitoring, beside the stretch before",
-        "operationId": "usage.traffic",
-        "parameters": [
-          {
-            "name": "range",
-            "in": "query",
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Traffic",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TrafficReport"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/projects/{projectId}/environments/{environmentId}/fabriq/{resource}": {
-      "get": {
-        "tags": [
-          "Fabriq"
-        ],
-        "summary": "A hosted Fabriq's stack: its release, entity types and migrations, and whether its console answers",
-        "operationId": "fabriq.status",
-        "parameters": [
-          {
-            "name": "projectId",
-            "in": "path",
-            "description": "Path parameter: projectId",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "environmentId",
-            "in": "path",
-            "description": "Path parameter: environmentId",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "resource",
-            "in": "path",
-            "description": "Path parameter: resource",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "The status, with reachable false and a reason when Fabriq doesn't answer",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Status"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/projects/{projectId}/environments/{environmentId}/fabriq/{resource}/keys": {
-      "get": {
-        "tags": [
-          "Fabriq"
-        ],
-        "summary": "The Fabriq key of each service that needs it or had one; never a key itself, only its prefix",
-        "operationId": "fabriqKeys.list",
-        "parameters": [
-          {
-            "name": "projectId",
-            "in": "path",
-            "description": "Path parameter: projectId",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "environmentId",
-            "in": "path",
-            "description": "Path parameter: environmentId",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "resource",
-            "in": "path",
-            "description": "Path parameter: resource",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Keys",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/FabriqKeyList"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/projects/{projectId}/environments/{environmentId}/fabriq/{resource}/keys/{service}/revoke": {
-      "post": {
-        "tags": [
-          "Fabriq"
-        ],
-        "summary": "Revoke a service's Fabriq keys now; its next release gets a new one while it still needs Fabriq",
-        "operationId": "fabriqKeys.revoke",
-        "parameters": [
-          {
-            "name": "projectId",
-            "in": "path",
-            "description": "Path parameter: projectId",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "environmentId",
-            "in": "path",
-            "description": "Path parameter: environmentId",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "resource",
-            "in": "path",
-            "description": "Path parameter: resource",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "service",
-            "in": "path",
-            "description": "Path parameter: service",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "The service's key, revoked",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ConsumerKey"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/projects/{projectId}/environments/{environmentId}/fabriq/{resource}/keys/{service}/rotate": {
-      "post": {
-        "tags": [
-          "Fabriq"
-        ],
-        "summary": "Issue a service a new Fabriq key, which its next release takes and then revokes the old one",
-        "operationId": "fabriqKeys.rotate",
-        "parameters": [
-          {
-            "name": "projectId",
-            "in": "path",
-            "description": "Path parameter: projectId",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "environmentId",
-            "in": "path",
-            "description": "Path parameter: environmentId",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "resource",
-            "in": "path",
-            "description": "Path parameter: resource",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "service",
-            "in": "path",
-            "description": "Path parameter: service",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "The service's key, rotating",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ConsumerKey"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/projects/{projectId}/environments/{environmentId}/fabriq/{resource}/rebuilds": {
-      "get": {
-        "tags": [
-          "Fabriq"
-        ],
-        "summary": "A hosted Fabriq's latest projection rebuilds, newest first",
-        "operationId": "fabriqRebuilds.list",
-        "parameters": [
-          {
-            "name": "projectId",
-            "in": "path",
-            "description": "Path parameter: projectId",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "environmentId",
-            "in": "path",
-            "description": "Path parameter: environmentId",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "resource",
-            "in": "path",
-            "description": "Path parameter: resource",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Rebuilds",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/RebuildList"
-                }
-              }
-            }
-          }
-        }
-      },
-      "post": {
-        "tags": [
-          "Fabriq"
-        ],
-        "summary": "Rebuild a FalkorDB or Elasticsearch projection from Postgres; while one is queued or running, return it",
-        "operationId": "fabriqRebuilds.create",
-        "parameters": [
-          {
-            "name": "projectId",
-            "in": "path",
-            "description": "Path parameter: projectId",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "environmentId",
-            "in": "path",
-            "description": "Path parameter: environmentId",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "resource",
-            "in": "path",
-            "description": "Path parameter: resource",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "description": "Request body",
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/RebuildInputBody"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "202": {
-            "description": "The rebuild",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Rebuild"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/api/v1/projects/{projectId}/environments/{environmentId}/fabriq/{resource}/tenants": {
-      "get": {
-        "tags": [
-          "Fabriq"
-        ],
-        "summary": "A hosted Fabriq's tenants, by id",
-        "operationId": "fabriqTenants.list",
-        "parameters": [
-          {
-            "name": "projectId",
-            "in": "path",
-            "description": "Path parameter: projectId",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "environmentId",
-            "in": "path",
-            "description": "Path parameter: environmentId",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "resource",
-            "in": "path",
-            "description": "Path parameter: resource",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Tenants",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/TenantList"
-                }
-              }
-            }
-          }
-        }
-      },
-      "post": {
-        "tags": [
-          "Fabriq"
-        ],
-        "summary": "Create a tenant in a hosted Fabriq, or find it",
-        "operationId": "fabriqTenants.create",
-        "parameters": [
-          {
-            "name": "projectId",
-            "in": "path",
-            "description": "Path parameter: projectId",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "environmentId",
-            "in": "path",
-            "description": "Path parameter: environmentId",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          },
-          {
-            "name": "resource",
-            "in": "path",
-            "description": "Path parameter: resource",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "requestBody": {
-          "description": "Request body",
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/TenantInputBody"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "200": {
-            "description": "The tenant, which was there already",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Tenant"
-                }
-              }
-            }
-          },
-          "201": {
-            "description": "The new tenant",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Tenant"
-                }
-              }
-            }
-          }
-        }
-      }
     }
   },
   "components": {
@@ -8372,6 +8283,40 @@
             "items": {
               "$ref": "#/components/schemas/APIKey"
             }
+          }
+        }
+      },
+      "AccountSpend": {
+        "type": "object",
+        "required": [
+          "connection_id",
+          "cloud",
+          "name",
+          "currency",
+          "total",
+          "days"
+        ],
+        "properties": {
+          "cloud": {
+            "type": "string"
+          },
+          "connection_id": {
+            "type": "string"
+          },
+          "currency": {
+            "type": "string"
+          },
+          "days": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Point"
+            }
+          },
+          "name": {
+            "type": "string"
+          },
+          "total": {
+            "type": "number"
           }
         }
       },
@@ -8538,6 +8483,32 @@
           }
         }
       },
+      "Amount": {
+        "type": "object",
+        "required": [
+          "currency",
+          "total",
+          "days",
+          "undated"
+        ],
+        "properties": {
+          "currency": {
+            "type": "string"
+          },
+          "days": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Point"
+            }
+          },
+          "total": {
+            "type": "number"
+          },
+          "undated": {
+            "type": "number"
+          }
+        }
+      },
       "Analysis": {
         "type": "object",
         "required": [
@@ -8550,6 +8521,7 @@
           "repository",
           "ref",
           "commit_sha",
+          "pinned",
           "error",
           "summary",
           "created_by",
@@ -8578,6 +8550,9 @@
           },
           "org_id": {
             "type": "string"
+          },
+          "pinned": {
+            "type": "boolean"
           },
           "project_id": {
             "type": "string"
@@ -8691,6 +8666,33 @@
         ],
         "properties": {
           "review": {
+            "type": "string"
+          }
+        }
+      },
+      "ArtifactChoice": {
+        "type": "object",
+        "required": [
+          "service",
+          "reused"
+        ],
+        "properties": {
+          "from": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "reference": {
+            "type": "string"
+          },
+          "reused": {
+            "type": "boolean"
+          },
+          "revision": {
+            "type": "string"
+          },
+          "service": {
             "type": "string"
           }
         }
@@ -9008,6 +9010,201 @@
           "registry_settings": {
             "type": "object",
             "additionalProperties": true
+          }
+        }
+      },
+      "CapacityBlock": {
+        "type": "object",
+        "required": [
+          "reason",
+          "resource",
+          "cloud_id",
+          "pool_id",
+          "target_id",
+          "limit",
+          "counted",
+          "requested",
+          "policy_revision",
+          "retryable"
+        ],
+        "properties": {
+          "cloud_id": {
+            "type": "string"
+          },
+          "counted": {
+            "type": "integer"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "policy_revision": {
+            "type": "integer"
+          },
+          "pool_id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "requested": {
+            "type": "integer"
+          },
+          "resource": {
+            "type": "string"
+          },
+          "retryable": {
+            "type": "boolean"
+          },
+          "target_id": {
+            "type": "string"
+          }
+        }
+      },
+      "CapacityDemand": {
+        "type": "object",
+        "required": [
+          "org_id",
+          "cloud_id",
+          "pool_id",
+          "target_id",
+          "project_id",
+          "environment_id",
+          "plan_id",
+          "service",
+          "architecture",
+          "sticky_server_id",
+          "resources",
+          "local_data",
+          "policy_revision",
+          "intent_hash"
+        ],
+        "properties": {
+          "architecture": {
+            "type": "string"
+          },
+          "cloud_id": {
+            "type": "string"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "intent_hash": {
+            "type": "string"
+          },
+          "local_data": {
+            "type": "boolean"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "plan_id": {
+            "type": "string"
+          },
+          "policy_revision": {
+            "type": "integer"
+          },
+          "pool_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "resources": {
+            "$ref": "#/components/schemas/ResourceVector"
+          },
+          "service": {
+            "type": "string"
+          },
+          "sticky_server_id": {
+            "type": "string"
+          },
+          "target_id": {
+            "type": "string"
+          }
+        }
+      },
+      "CapacityIntent": {
+        "type": "object",
+        "required": [
+          "demand",
+          "provider_pin",
+          "template",
+          "template_hash",
+          "commit_sha",
+          "assignment_revision",
+          "cloud_revision",
+          "target_revision",
+          "grant_revision",
+          "target_name"
+        ],
+        "properties": {
+          "assignment_revision": {
+            "type": "integer"
+          },
+          "cloud_revision": {
+            "type": "integer"
+          },
+          "commit_sha": {
+            "type": "string"
+          },
+          "demand": {
+            "$ref": "#/components/schemas/CapacityDemand"
+          },
+          "grant_revision": {
+            "type": "integer"
+          },
+          "provider_pin": {
+            "$ref": "#/components/schemas/CapacityTemplatePin"
+          },
+          "target_name": {
+            "type": "string"
+          },
+          "target_revision": {
+            "type": "integer"
+          },
+          "template": {
+            "$ref": "#/components/schemas/PoolExpansionPolicy"
+          },
+          "template_hash": {
+            "type": "string"
+          }
+        }
+      },
+      "CapacityTemplatePin": {
+        "type": "object",
+        "required": [
+          "connection_generation",
+          "account_id"
+        ],
+        "properties": {
+          "account_id": {
+            "type": "string"
+          },
+          "connection_generation": {
+            "type": "integer"
+          }
+        }
+      },
+      "CapacityWait": {
+        "type": "object",
+        "required": [
+          "revision",
+          "blocks",
+          "created_at"
+        ],
+        "properties": {
+          "blocks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CapacityBlock"
+            }
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "revision": {
+            "type": "integer"
           }
         }
       },
@@ -9502,6 +9699,25 @@
         "type": "object",
         "x-forge-envelope": "grants"
       },
+      "CloudSQLApplicationNetwork": {
+        "type": "object",
+        "required": [
+          "consumer_project",
+          "network",
+          "subnetwork"
+        ],
+        "properties": {
+          "consumer_project": {
+            "type": "string"
+          },
+          "network": {
+            "type": "string"
+          },
+          "subnetwork": {
+            "type": "string"
+          }
+        }
+      },
       "CloudSQLRecoveryNetwork": {
         "type": "object",
         "required": [
@@ -9513,6 +9729,28 @@
             "type": "string"
           },
           "network": {
+            "type": "string"
+          }
+        }
+      },
+      "CloudSQLSourceEndpoint": {
+        "type": "object",
+        "required": [
+          "consumer_project",
+          "network",
+          "forwarding_rule"
+        ],
+        "properties": {
+          "consumer_project": {
+            "type": "string"
+          },
+          "forwarding_rule": {
+            "type": "string"
+          },
+          "network": {
+            "type": "string"
+          },
+          "provision_subnetwork": {
             "type": "string"
           }
         }
@@ -9960,6 +10198,42 @@
         "type": "object",
         "x-forge-type": "github.com/xraph/loomplane/internal/connections.CreateInput"
       },
+      "ConsumerKey": {
+        "type": "object",
+        "required": [
+          "service",
+          "tenant",
+          "state",
+          "last_used_known"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string"
+          },
+          "last_used_at": {
+            "type": "string"
+          },
+          "last_used_known": {
+            "type": "boolean"
+          },
+          "prefix": {
+            "type": "string"
+          },
+          "revoked_at": {
+            "type": "string"
+          },
+          "service": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "state": {
+            "type": "string"
+          },
+          "tenant": {
+            "type": "string"
+          }
+        }
+      },
       "ConsumerOption": {
         "type": "object",
         "required": [
@@ -10019,6 +10293,9 @@
             "type": "boolean"
           },
           "environment": {
+            "type": "string"
+          },
+          "from": {
             "type": "string"
           },
           "scope": {
@@ -10442,6 +10719,9 @@
           "started_at"
         ],
         "properties": {
+          "capacity_wait": {
+            "$ref": "#/components/schemas/CapacityWait"
+          },
           "commit_sha": {
             "type": "string"
           },
@@ -10541,6 +10821,60 @@
         ],
         "type": "object",
         "x-forge-envelope": "deployments"
+      },
+      "DiscoverySource": {
+        "properties": {
+          "alias": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "ref": {
+            "type": "string"
+          },
+          "removed_at": {
+            "type": "string"
+          },
+          "repository": {
+            "type": "string"
+          },
+          "root": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "org_id",
+          "project_id",
+          "alias",
+          "repository",
+          "root",
+          "ref",
+          "created_by",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/internal/discovery.Source"
       },
       "DomainOperationList": {
         "type": "object",
@@ -10731,6 +11065,9 @@
               "build": {
                 "$ref": "#/components/schemas/Build"
               },
+              "cloud_sql_network": {
+                "$ref": "#/components/schemas/CloudSQLApplicationNetwork"
+              },
               "cloud_tags": {
                 "type": "array",
                 "items": {
@@ -10766,9 +11103,6 @@
               },
               "target": {
                 "type": "string"
-              },
-              "cloud_sql_network": {
-                "$ref": "#/components/schemas/CloudSQLApplicationNetwork"
               }
             }
           },
@@ -11098,6 +11432,21 @@
             "type": "string"
           }
         }
+      },
+      "FabriqKeyList": {
+        "properties": {
+          "keys": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConsumerKey"
+            }
+          }
+        },
+        "required": [
+          "keys"
+        ],
+        "type": "object",
+        "x-forge-envelope": "keys"
       },
       "Federation": {
         "type": "object",
@@ -11576,6 +11925,33 @@
             "items": {
               "type": "string"
             }
+          }
+        }
+      },
+      "Leftover": {
+        "type": "object",
+        "required": [
+          "subject",
+          "name",
+          "op",
+          "data_bearing",
+          "reason"
+        ],
+        "properties": {
+          "data_bearing": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "op": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
           }
         }
       },
@@ -12123,6 +12499,71 @@
           },
           "source": {
             "$ref": "#/components/schemas/NativeSource"
+          }
+        }
+      },
+      "NativePITRBounds": {
+        "type": "object",
+        "required": [
+          "protocol",
+          "earliest",
+          "latest"
+        ],
+        "properties": {
+          "earliest": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "latest": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "protocol": {
+            "type": "integer"
+          },
+          "settings_digest": {
+            "type": "string"
+          },
+          "source_backup": {
+            "type": "string"
+          },
+          "source_deleted_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "NativePITRWindow": {
+        "type": "object",
+        "required": [
+          "source_id",
+          "provider",
+          "available"
+        ],
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "earliest": {
+            "type": "string"
+          },
+          "latest": {
+            "type": "string"
+          },
+          "observed_at": {
+            "type": "string"
+          },
+          "point_id": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "source_id": {
+            "type": "string"
+          },
+          "unavailable_reason": {
+            "type": "string"
           }
         }
       },
@@ -12755,6 +13196,10 @@
           "updated_at"
         ],
         "properties": {
+          "absence_confirmed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
           "account_id": {
             "type": "string"
           },
@@ -12773,6 +13218,13 @@
           "bootstrap_expires_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "capacity_checked_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "capacity_target": {
+            "$ref": "#/components/schemas/ResourceVector"
           },
           "cloud_id": {
             "type": "string"
@@ -13114,6 +13566,11 @@
         "type": "object",
         "required": [
           "catalog",
+          "kind",
+          "from_environment",
+          "from_environment_id",
+          "leftovers",
+          "artifacts",
           "id",
           "org_id",
           "project_id",
@@ -13141,6 +13598,12 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/Action"
+            }
+          },
+          "artifacts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ArtifactChoice"
             }
           },
           "catalog": {
@@ -13184,9 +13647,24 @@
           "expires_at": {
             "type": "string"
           },
+          "from_environment": {
+            "type": "string"
+          },
+          "from_environment_id": {
+            "type": "string"
+          },
           "id": {
             "type": "string",
             "x-forge-id": true
+          },
+          "kind": {
+            "type": "string"
+          },
+          "leftovers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Leftover"
+            }
           },
           "manifest_id": {
             "type": "string"
@@ -13211,6 +13689,9 @@
           },
           "revision": {
             "type": "string"
+          },
+          "rollback": {
+            "$ref": "#/components/schemas/Rollback"
           },
           "sources": {
             "type": "array",
@@ -13300,6 +13781,9 @@
             "type": "string"
           },
           "commit_sha": {
+            "type": "string"
+          },
+          "from_plan_id": {
             "type": "string"
           },
           "in_scope": {
@@ -13404,6 +13888,22 @@
         ],
         "type": "object",
         "x-forge-type": "github.com/xraph/loomplane/internal/planning.Summary"
+      },
+      "Point": {
+        "type": "object",
+        "required": [
+          "t",
+          "v"
+        ],
+        "properties": {
+          "t": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "v": {
+            "type": "number"
+          }
+        }
       },
       "Policy": {
         "type": "object",
@@ -13527,6 +14027,59 @@
           },
           "revision": {
             "type": "integer"
+          }
+        }
+      },
+      "PoolExpansionPolicy": {
+        "type": "object",
+        "required": [
+          "bootstrap_size",
+          "pool_id",
+          "connection_id",
+          "region",
+          "architecture",
+          "image",
+          "allowed_sizes",
+          "min_servers",
+          "max_servers",
+          "system_reserve"
+        ],
+        "properties": {
+          "allowed_sizes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "architecture": {
+            "type": "string"
+          },
+          "bootstrap_size": {
+            "type": "string"
+          },
+          "connection_id": {
+            "type": "string"
+          },
+          "image": {
+            "type": "string"
+          },
+          "limits": {
+            "$ref": "#/components/schemas/ResourceVector"
+          },
+          "max_servers": {
+            "type": "integer"
+          },
+          "min_servers": {
+            "type": "integer"
+          },
+          "pool_id": {
+            "type": "string"
+          },
+          "region": {
+            "type": "string"
+          },
+          "system_reserve": {
+            "$ref": "#/components/schemas/ResourceVector"
           }
         }
       },
@@ -14139,6 +14692,76 @@
           }
         }
       },
+      "Rebuild": {
+        "type": "object",
+        "required": [
+          "id",
+          "projection",
+          "status",
+          "output",
+          "created_by",
+          "retryable",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "type": "string"
+          },
+          "finished_at": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "output": {
+            "type": "string"
+          },
+          "projection": {
+            "type": "string"
+          },
+          "retryable": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "RebuildInputBody": {
+        "type": "object",
+        "required": [
+          "projection",
+          "request_id"
+        ],
+        "properties": {
+          "projection": {
+            "type": "string"
+          },
+          "request_id": {
+            "type": "string"
+          }
+        }
+      },
+      "RebuildList": {
+        "properties": {
+          "rebuilds": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Rebuild"
+            }
+          }
+        },
+        "required": [
+          "rebuilds"
+        ],
+        "type": "object",
+        "x-forge-envelope": "rebuilds"
+      },
       "Recipe": {
         "type": "object",
         "required": [
@@ -14521,6 +15144,29 @@
           },
           "version": {
             "type": "string"
+          }
+        }
+      },
+      "ResourceVector": {
+        "type": "object",
+        "required": [
+          "servers",
+          "cpu_millis",
+          "memory_bytes",
+          "storage_bytes"
+        ],
+        "properties": {
+          "cpu_millis": {
+            "type": "integer"
+          },
+          "memory_bytes": {
+            "type": "integer"
+          },
+          "servers": {
+            "type": "integer"
+          },
+          "storage_bytes": {
+            "type": "integer"
           }
         }
       },
@@ -15068,6 +15714,37 @@
           }
         }
       },
+      "ReusedArtifact": {
+        "type": "object",
+        "required": [
+          "commit_sha",
+          "from_environment",
+          "from_deployment_id"
+        ],
+        "properties": {
+          "architecture": {
+            "type": "string"
+          },
+          "commit_sha": {
+            "type": "string"
+          },
+          "digest": {
+            "type": "string"
+          },
+          "from_deployment_id": {
+            "type": "string"
+          },
+          "from_environment": {
+            "type": "string"
+          },
+          "reference": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
+          }
+        }
+      },
       "Revision": {
         "type": "object",
         "required": [
@@ -15126,6 +15803,45 @@
         ],
         "type": "object",
         "x-forge-envelope": "revisions"
+      },
+      "Rollback": {
+        "type": "object",
+        "required": [
+          "reason",
+          "trigger",
+          "target_deployment_id",
+          "target_plan_id",
+          "restore_deployment_id",
+          "restore_plan_id",
+          "restore_finished_at"
+        ],
+        "properties": {
+          "reason": {
+            "type": "string"
+          },
+          "restore_deployment_id": {
+            "type": "string"
+          },
+          "restore_finished_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "restore_plan_id": {
+            "type": "string"
+          },
+          "target_deployment_id": {
+            "type": "string"
+          },
+          "target_plan_id": {
+            "type": "string"
+          },
+          "trigger": {
+            "type": "string"
+          },
+          "watch_id": {
+            "type": "string"
+          }
+        }
       },
       "RouteBinding": {
         "type": "object",
@@ -15428,7 +16144,13 @@
           "effective_memory_bytes": {
             "type": "integer"
           },
+          "free_storage_bytes": {
+            "type": "integer"
+          },
           "memory_bytes": {
+            "type": "integer"
+          },
+          "storage_bytes": {
             "type": "integer"
           }
         }
@@ -15597,11 +16319,17 @@
           "bootstrap"
         ],
         "properties": {
+          "architecture": {
+            "type": "string"
+          },
           "bootstrap": {
             "type": "boolean"
           },
           "id": {
             "type": "string"
+          },
+          "min_disk_gb": {
+            "type": "integer"
           },
           "name": {
             "type": "string"
@@ -15773,11 +16501,20 @@
           "regions"
         ],
         "properties": {
+          "architectures": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
           "cpus": {
             "type": "integer"
           },
           "disk_gb": {
             "type": "integer"
+          },
+          "hourly_price_known": {
+            "type": "boolean"
           },
           "hourly_usd": {
             "type": "number"
@@ -15987,17 +16724,26 @@
           "applied_inputs": {
             "$ref": "#/components/schemas/AppliedInputs"
           },
+          "artifact": {
+            "$ref": "#/components/schemas/ReusedArtifact"
+          },
           "build": {
             "type": "string"
           },
           "build_target": {
             "$ref": "#/components/schemas/BuildTarget"
           },
+          "capacity_intent": {
+            "$ref": "#/components/schemas/CapacityIntent"
+          },
           "catalog": {
             "$ref": "#/components/schemas/Recipe"
           },
           "cloud_placement": {
             "$ref": "#/components/schemas/CloudPlacement"
+          },
+          "cloud_sql_network": {
+            "$ref": "#/components/schemas/CloudSQLApplicationNetwork"
           },
           "commit_sha": {
             "type": "string"
@@ -16083,9 +16829,52 @@
           },
           "workload": {
             "type": "string"
+          }
+        }
+      },
+      "ServiceTraffic": {
+        "type": "object",
+        "required": [
+          "binding_id",
+          "project_id",
+          "environment_id",
+          "name",
+          "provider",
+          "requests",
+          "previous_requests",
+          "latency",
+          "previous_latency"
+        ],
+        "properties": {
+          "binding_id": {
+            "type": "string"
           },
-          "cloud_sql_network": {
-            "$ref": "#/components/schemas/CloudSQLApplicationNetwork"
+          "environment_id": {
+            "type": "string"
+          },
+          "latency": {
+            "type": "number"
+          },
+          "name": {
+            "type": "string"
+          },
+          "previous_latency": {
+            "type": "number"
+          },
+          "previous_requests": {
+            "type": "number"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "requests": {
+            "type": "number"
+          },
+          "statistic": {
+            "type": "string"
           }
         }
       },
@@ -16209,59 +16998,6 @@
           }
         }
       },
-      "Source": {
-        "type": "object",
-        "required": [
-          "id",
-          "org_id",
-          "project_id",
-          "alias",
-          "repository",
-          "root",
-          "ref",
-          "created_by",
-          "created_at",
-          "updated_at"
-        ],
-        "properties": {
-          "alias": {
-            "type": "string"
-          },
-          "created_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "created_by": {
-            "type": "string"
-          },
-          "id": {
-            "type": "string",
-            "x-forge-id": true
-          },
-          "org_id": {
-            "type": "string"
-          },
-          "project_id": {
-            "type": "string"
-          },
-          "ref": {
-            "type": "string"
-          },
-          "removed_at": {
-            "type": "string"
-          },
-          "repository": {
-            "type": "string"
-          },
-          "root": {
-            "type": "string"
-          },
-          "updated_at": {
-            "type": "string",
-            "format": "date-time"
-          }
-        }
-      },
       "SourceArtifact": {
         "type": "object",
         "required": [
@@ -16290,7 +17026,7 @@
           "sources": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/Source"
+              "$ref": "#/components/schemas/DiscoverySource"
             }
           }
         },
@@ -16339,7 +17075,40 @@
             "$ref": "#/components/schemas/Analysis"
           },
           "source": {
-            "$ref": "#/components/schemas/Source"
+            "$ref": "#/components/schemas/DiscoverySource"
+          }
+        }
+      },
+      "SpendReport": {
+        "type": "object",
+        "required": [
+          "month",
+          "totals",
+          "accounts",
+          "sources"
+        ],
+        "properties": {
+          "accounts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AccountSpend"
+            }
+          },
+          "month": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UsageSource"
+            }
+          },
+          "totals": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Amount"
+            }
           }
         }
       },
@@ -16354,6 +17123,44 @@
             "items": {
               "type": "string"
             }
+          }
+        }
+      },
+      "Status": {
+        "type": "object",
+        "required": [
+          "kind",
+          "version",
+          "reachable",
+          "entity_types",
+          "migrations",
+          "migrations_known",
+          "keys_report_use"
+        ],
+        "properties": {
+          "entity_types": {
+            "type": "integer"
+          },
+          "keys_report_use": {
+            "type": "boolean"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "migrations": {
+            "type": "integer"
+          },
+          "migrations_known": {
+            "type": "boolean"
+          },
+          "reachable": {
+            "type": "boolean"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
           }
         }
       },
@@ -16394,6 +17201,9 @@
             "type": "integer"
           },
           "provider": {
+            "type": "string"
+          },
+          "revision": {
             "type": "string"
           },
           "started_at": {
@@ -16681,6 +17491,107 @@
           }
         }
       },
+      "Tenant": {
+        "type": "object",
+        "required": [
+          "id",
+          "label",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "label": {
+            "type": "string"
+          }
+        }
+      },
+      "TenantInputBody": {
+        "type": "object",
+        "required": [
+          "tenant_id"
+        ],
+        "properties": {
+          "tenant_id": {
+            "type": "string"
+          }
+        }
+      },
+      "TenantList": {
+        "properties": {
+          "tenants": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Tenant"
+            }
+          }
+        },
+        "required": [
+          "tenants"
+        ],
+        "type": "object",
+        "x-forge-envelope": "tenants"
+      },
+      "TrafficReport": {
+        "type": "object",
+        "required": [
+          "range",
+          "start",
+          "end",
+          "step",
+          "requests",
+          "total",
+          "previous_total",
+          "services",
+          "sources"
+        ],
+        "properties": {
+          "end": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "previous_total": {
+            "type": "number"
+          },
+          "range": {
+            "type": "string"
+          },
+          "requests": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Point"
+            }
+          },
+          "services": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ServiceTraffic"
+            }
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UsageSource"
+            }
+          },
+          "start": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "step": {
+            "type": "integer"
+          },
+          "total": {
+            "type": "number"
+          }
+        }
+      },
       "UpdateInputBody": {
         "type": "object",
         "required": [
@@ -16758,6 +17669,39 @@
             "type": "string"
           }
         }
+      },
+      "UsageSource": {
+        "properties": {
+          "cloud": {
+            "type": "string"
+          },
+          "connection_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "services": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "status": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "connection_id",
+          "cloud",
+          "name",
+          "status"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/internal/usage.Source"
       },
       "Use": {
         "type": "object",
@@ -17114,560 +18058,6 @@
           },
           "revision": {
             "type": "integer"
-          }
-        }
-      },
-      "NativePITRBounds": {
-        "type": "object",
-        "required": [
-          "protocol",
-          "earliest",
-          "latest"
-        ],
-        "properties": {
-          "earliest": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "latest": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "protocol": {
-            "type": "integer"
-          },
-          "settings_digest": {
-            "type": "string"
-          },
-          "source_backup": {
-            "type": "string"
-          },
-          "source_deleted_at": {
-            "type": "string",
-            "format": "date-time"
-          }
-        }
-      },
-      "NativePITRWindow": {
-        "type": "object",
-        "required": [
-          "source_id",
-          "provider",
-          "available"
-        ],
-        "properties": {
-          "available": {
-            "type": "boolean"
-          },
-          "earliest": {
-            "type": "string"
-          },
-          "latest": {
-            "type": "string"
-          },
-          "observed_at": {
-            "type": "string"
-          },
-          "point_id": {
-            "type": "string"
-          },
-          "provider": {
-            "type": "string"
-          },
-          "source_id": {
-            "type": "string"
-          },
-          "unavailable_reason": {
-            "type": "string"
-          }
-        }
-      },
-      "SpendReport": {
-        "type": "object",
-        "required": [
-          "month",
-          "totals",
-          "accounts",
-          "sources"
-        ],
-        "properties": {
-          "accounts": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/AccountSpend"
-            }
-          },
-          "month": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "sources": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/UsageSource"
-            }
-          },
-          "totals": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/Amount"
-            }
-          }
-        }
-      },
-      "AccountSpend": {
-        "type": "object",
-        "required": [
-          "connection_id",
-          "cloud",
-          "name",
-          "currency",
-          "total",
-          "days"
-        ],
-        "properties": {
-          "cloud": {
-            "type": "string"
-          },
-          "connection_id": {
-            "type": "string"
-          },
-          "currency": {
-            "type": "string"
-          },
-          "days": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/Point"
-            }
-          },
-          "name": {
-            "type": "string"
-          },
-          "total": {
-            "type": "number"
-          }
-        }
-      },
-      "Point": {
-        "type": "object",
-        "required": [
-          "t",
-          "v"
-        ],
-        "properties": {
-          "t": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "v": {
-            "type": "number"
-          }
-        }
-      },
-      "UsageSource": {
-        "properties": {
-          "cloud": {
-            "type": "string"
-          },
-          "connection_id": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
-          },
-          "reason": {
-            "type": "string"
-          },
-          "services": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "status": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "connection_id",
-          "cloud",
-          "name",
-          "status"
-        ],
-        "type": "object",
-        "x-forge-type": "github.com/xraph/loomplane/internal/usage.Source"
-      },
-      "Amount": {
-        "type": "object",
-        "required": [
-          "currency",
-          "total",
-          "days",
-          "undated"
-        ],
-        "properties": {
-          "currency": {
-            "type": "string"
-          },
-          "days": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/Point"
-            }
-          },
-          "total": {
-            "type": "number"
-          },
-          "undated": {
-            "type": "number"
-          }
-        }
-      },
-      "TrafficReport": {
-        "type": "object",
-        "required": [
-          "range",
-          "start",
-          "end",
-          "step",
-          "requests",
-          "total",
-          "previous_total",
-          "services",
-          "sources"
-        ],
-        "properties": {
-          "end": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "previous_total": {
-            "type": "number"
-          },
-          "range": {
-            "type": "string"
-          },
-          "requests": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/Point"
-            }
-          },
-          "services": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/ServiceTraffic"
-            }
-          },
-          "sources": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/UsageSource"
-            }
-          },
-          "start": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "step": {
-            "type": "integer"
-          },
-          "total": {
-            "type": "number"
-          }
-        }
-      },
-      "ServiceTraffic": {
-        "type": "object",
-        "required": [
-          "binding_id",
-          "project_id",
-          "environment_id",
-          "name",
-          "provider",
-          "requests",
-          "previous_requests",
-          "latency",
-          "previous_latency"
-        ],
-        "properties": {
-          "binding_id": {
-            "type": "string"
-          },
-          "environment_id": {
-            "type": "string"
-          },
-          "latency": {
-            "type": "number"
-          },
-          "name": {
-            "type": "string"
-          },
-          "previous_latency": {
-            "type": "number"
-          },
-          "previous_requests": {
-            "type": "number"
-          },
-          "project_id": {
-            "type": "string"
-          },
-          "provider": {
-            "type": "string"
-          },
-          "requests": {
-            "type": "number"
-          },
-          "statistic": {
-            "type": "string"
-          }
-        }
-      },
-      "ConsumerKey": {
-        "type": "object",
-        "required": [
-          "service",
-          "tenant",
-          "state",
-          "last_used_known"
-        ],
-        "properties": {
-          "created_at": {
-            "type": "string"
-          },
-          "last_used_at": {
-            "type": "string"
-          },
-          "last_used_known": {
-            "type": "boolean"
-          },
-          "prefix": {
-            "type": "string"
-          },
-          "revoked_at": {
-            "type": "string"
-          },
-          "service": {
-            "type": "string",
-            "x-forge-id": true
-          },
-          "state": {
-            "type": "string"
-          },
-          "tenant": {
-            "type": "string"
-          }
-        }
-      },
-      "FabriqKeyList": {
-        "properties": {
-          "keys": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/ConsumerKey"
-            }
-          }
-        },
-        "required": [
-          "keys"
-        ],
-        "type": "object",
-        "x-forge-envelope": "keys"
-      },
-      "Rebuild": {
-        "type": "object",
-        "required": [
-          "id",
-          "projection",
-          "status",
-          "output",
-          "created_by",
-          "retryable",
-          "created_at"
-        ],
-        "properties": {
-          "created_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "created_by": {
-            "type": "string"
-          },
-          "finished_at": {
-            "type": "string"
-          },
-          "id": {
-            "type": "string",
-            "x-forge-id": true
-          },
-          "output": {
-            "type": "string"
-          },
-          "projection": {
-            "type": "string"
-          },
-          "retryable": {
-            "type": "boolean"
-          },
-          "status": {
-            "type": "string"
-          }
-        }
-      },
-      "RebuildInputBody": {
-        "type": "object",
-        "required": [
-          "projection",
-          "request_id"
-        ],
-        "properties": {
-          "projection": {
-            "type": "string"
-          },
-          "request_id": {
-            "type": "string"
-          }
-        }
-      },
-      "RebuildList": {
-        "properties": {
-          "rebuilds": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/Rebuild"
-            }
-          }
-        },
-        "required": [
-          "rebuilds"
-        ],
-        "type": "object",
-        "x-forge-envelope": "rebuilds"
-      },
-      "Status": {
-        "type": "object",
-        "required": [
-          "kind",
-          "version",
-          "reachable",
-          "entity_types",
-          "migrations",
-          "migrations_known",
-          "keys_report_use"
-        ],
-        "properties": {
-          "entity_types": {
-            "type": "integer"
-          },
-          "keys_report_use": {
-            "type": "boolean"
-          },
-          "kind": {
-            "type": "string"
-          },
-          "migrations": {
-            "type": "integer"
-          },
-          "migrations_known": {
-            "type": "boolean"
-          },
-          "reachable": {
-            "type": "boolean"
-          },
-          "reason": {
-            "type": "string"
-          },
-          "version": {
-            "type": "string"
-          }
-        }
-      },
-      "Tenant": {
-        "type": "object",
-        "required": [
-          "id",
-          "label",
-          "created_at"
-        ],
-        "properties": {
-          "created_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "id": {
-            "type": "string",
-            "x-forge-id": true
-          },
-          "label": {
-            "type": "string"
-          }
-        }
-      },
-      "TenantInputBody": {
-        "type": "object",
-        "required": [
-          "tenant_id"
-        ],
-        "properties": {
-          "tenant_id": {
-            "type": "string"
-          }
-        }
-      },
-      "TenantList": {
-        "properties": {
-          "tenants": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/Tenant"
-            }
-          }
-        },
-        "required": [
-          "tenants"
-        ],
-        "type": "object",
-        "x-forge-envelope": "tenants"
-      },
-      "CloudSQLSourceEndpoint": {
-        "type": "object",
-        "required": [
-          "consumer_project",
-          "network",
-          "forwarding_rule"
-        ],
-        "properties": {
-          "consumer_project": {
-            "type": "string"
-          },
-          "forwarding_rule": {
-            "type": "string"
-          },
-          "network": {
-            "type": "string"
-          },
-          "provision_subnetwork": {
-            "type": "string"
-          }
-        }
-      },
-      "CloudSQLApplicationNetwork": {
-        "type": "object",
-        "required": [
-          "consumer_project",
-          "network",
-          "subnetwork"
-        ],
-        "properties": {
-          "consumer_project": {
-            "type": "string"
-          },
-          "network": {
-            "type": "string"
-          },
-          "subnetwork": {
-            "type": "string"
           }
         }
       }

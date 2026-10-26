@@ -58,7 +58,3 @@ This API supports the following authentication methods:
 - **WebSocket Endpoints**: 1
 - **SSE Endpoints**: 1
 
-### Servers
-
-- **http://localhost:8780**: Development server
-

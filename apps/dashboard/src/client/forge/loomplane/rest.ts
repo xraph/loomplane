@@ -3839,7 +3839,7 @@ export class RESTClient extends Client {
     /**
      * Attach a repository, or a directory of one, after checking Loomplane can read it
      */
-    create: async (id: string, body: types.AddSourceInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Source> => {
+    create: async (id: string, body: types.AddSourceInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.DiscoverySource> => {
       let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/sources`;
       const config: RequestConfig = {
         method: 'POST',
@@ -3848,10 +3848,10 @@ export class RESTClient extends Client {
         bodyCodec: CODECS["AddSourceInputBody"],
         signal: options?.signal,
         retry: options?.retry,
-        responseCodec: CODECS["Source"],
+        responseCodec: CODECS["DiscoverySource"],
       };
 
-      return this.request<types.Source>(config);
+      return this.request<types.DiscoverySource>(config);
     },
 
     /**
@@ -3889,7 +3889,7 @@ export class RESTClient extends Client {
     /**
      * Change the directory or branch a source reads
      */
-    update: async (id: string, alias: string, body: types.UpdateSourceInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Source> => {
+    update: async (id: string, alias: string, body: types.UpdateSourceInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.DiscoverySource> => {
       let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/sources/${encodeURIComponent(String(alias))}`;
       const config: RequestConfig = {
         method: 'PATCH',
@@ -3898,10 +3898,10 @@ export class RESTClient extends Client {
         bodyCodec: CODECS["UpdateSourceInputBody"],
         signal: options?.signal,
         retry: options?.retry,
-        responseCodec: CODECS["Source"],
+        responseCodec: CODECS["DiscoverySource"],
       };
 
-      return this.request<types.Source>(config);
+      return this.request<types.DiscoverySource>(config);
     },
 
   };
