@@ -75,14 +75,26 @@ You have to act here. Open the service in the cloud, check how it splits traffic
 
 ## Where a canary can't run
 
-A service gets no canary when its target has no native weighting (see the table above). The plan still goes ahead and the service deploys all at once. The approval card lists a warning for each such service, and it doesn't say "Approving starts a canary" for them.
+Only an update of something already running can ramp. A service gets no canary when:
+
+- it's new, so there's nothing to compare it with, or it's moving to another target
+- it's a worker, so it takes no HTTP traffic
+- its domain routes switch over by DNS
+- it runs on a Cloud target
+- it's on ECS and takes no HTTP traffic or isn't behind the load balancer, or it's on Azure Container Apps and has no ingress
+- its target has no native weighting (see the table above)
+
+The plan still goes ahead and those services deploy all at once. The approval card lists a warning for each one that says why, and it doesn't say "Approving starts a canary" for them.
 
 Two refusals block the plan instead, and the plan shows them as problems you have to fix before anyone can approve:
 
 - On ECS, Cloud Run or Azure Container Apps, the connection's credential may lack the permissions to split the service's traffic.
 - On Azure Container Apps, a release that changes app-wide ingress settings can't ramp, because those apply to every revision at once. Release that change with `direct` or `blue_green` first.
 
-A third one only shows up when the canary starts. If an earlier canary left a traffic split on a Cloud Run service, the new canary refuses to start, and the deployment fails with a message that says so. Clear the split in the cloud, then retry.
+Two more only show up when the canary starts, and the deployment fails with a message that says which:
+
+- An earlier canary couldn't roll back and left the traffic split on a Cloud Run service or an Azure container app. The new canary can't tell which revision is the real one to compare against. Retry or roll back that deployment, or release once with `direct`, which gives the latest revision all of the traffic.
+- On Azure Container Apps, the release changes the registry the app pulls from or the identity it pulls as. Those are app-wide like ingress, but Loomplane only knows them once it has set the release up. Release that change with `direct` or `blue_green` first.
 
 ## One canary per environment
 
