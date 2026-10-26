@@ -220,10 +220,23 @@ type DecideInput struct {
 	Note     string `json:"note,omitempty"`
 }
 
+// refuseAutomation keeps Loomplane automation off the paths people take.
+// Its role lets it approve a deployment, so the code, not only Warden,
+// limits it to the automatic rollback.
+func refuseAutomation(p security.Principal) error {
+	if p.IsSystem() {
+		return fmt.Errorf("%w: %s only rolls back automatically", security.ErrForbidden, security.SystemActorName)
+	}
+	return nil
+}
+
 // Create plans an environment from the project's current manifest, the
 // latest analysis of each repository it moves, and what's deployed of each
 // it holds. It supersedes the environment's open plan, if any.
 func (s *Service) Create(ctx context.Context, p security.Principal, projectID string, in CreatePlanInput) (*Plan, error) {
+	if err := refuseAutomation(p); err != nil {
+		return nil, err
+	}
 	if err := s.authz.Require(ctx, p, security.DeploymentCreate, projectID); err != nil {
 		return nil, err
 	}
@@ -466,6 +479,9 @@ func (s *Service) Reject(ctx context.Context, p security.Principal, id string, i
 }
 
 func (s *Service) decide(ctx context.Context, p security.Principal, id string, approve bool, in DecideInput) (*Plan, error) {
+	if err := refuseAutomation(p); err != nil {
+		return nil, err
+	}
 	if err := s.authz.Require(ctx, p, security.DeploymentApprove, ""); err != nil {
 		return nil, err
 	}
@@ -1053,6 +1069,9 @@ type ManifestDraft struct {
 // It saves nothing: the caller reviews it and saves it as the first
 // revision.
 func (s *Service) DraftManifest(ctx context.Context, p security.Principal, projectID string) (*ManifestDraft, error) {
+	if err := refuseAutomation(p); err != nil {
+		return nil, err
+	}
 	if err := s.authz.Require(ctx, p, security.ProjectRead, projectID); err != nil {
 		return nil, err
 	}
@@ -1100,6 +1119,9 @@ type ChooseConnectionInput struct {
 // ChooseConnection sets which connection an environment deploys to a
 // cloud with. It's an admin's choice, like connecting the account.
 func (s *Service) ChooseConnection(ctx context.Context, p security.Principal, projectID, environment, cloud string, in ChooseConnectionInput) (map[string]string, error) {
+	if err := refuseAutomation(p); err != nil {
+		return nil, err
+	}
 	if err := s.authz.Require(ctx, p, security.CloudAccountManage, projectID); err != nil {
 		return nil, err
 	}

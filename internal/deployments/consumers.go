@@ -118,7 +118,7 @@ func (r *Runner) consumerChannel(d *Deployment, resource string) func(ctx contex
 			return nil, err
 		}
 		ref := ComponentRef{ResourceRef: ResourceRef{ProjectID: d.ProjectID, EnvironmentID: d.EnvironmentID, Resource: resource}, Component: component, Port: port}
-		return openComponentChannel(ctx, r.executors, bindings, security.Principal{OrgID: d.OrgID, UserID: d.StartedBy}, ref)
+		return openComponentChannel(ctx, r.executors, bindings, security.ActorPrincipal(d.OrgID, d.StartedBy), ref)
 	}
 }
 

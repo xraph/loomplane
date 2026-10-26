@@ -77,11 +77,17 @@ func (a *AuthProvider) Authenticate(ctx context.Context, token string) (*cpauth.
 	if err != nil || userID == "" || orgID == "" {
 		return nil, cpauth.ErrUnauthorized
 	}
+	// No session acts as Loomplane automation.
+	if _, system := security.IsSystemSubject(userID); system {
+		return nil, cpauth.ErrUnauthorized
+	}
 	return ClaimsFor(security.Principal{UserID: userID, OrgID: orgID}), nil
 }
 
 // Authorize implements cpauth.Provider by asking Warden: reading anything
-// needs infrastructure:read, any other action infrastructure:modify.
+// needs infrastructure:read, any other action infrastructure:modify. Claims
+// naming the organization's Loomplane automation come only from
+// WithPrincipal (Authenticate refuses them), so they're checked as it.
 func (a *AuthProvider) Authorize(ctx context.Context, req cpauth.AuthzRequest) (bool, error) {
 	_, authz := a.bound()
 	if authz == nil {
@@ -92,7 +98,7 @@ func (a *AuthProvider) Authorize(ctx context.Context, req cpauth.AuthzRequest) (
 	case "read", "get", "list", "watch", "view":
 		perm = security.InfrastructureRead
 	}
-	err := authz.Require(ctx, security.Principal{UserID: req.SubjectID, OrgID: req.TenantID}, perm, req.ResourceID)
+	err := authz.Require(ctx, security.ActorPrincipal(req.TenantID, req.SubjectID), perm, req.ResourceID)
 	switch {
 	case err == nil:
 		return true, nil
