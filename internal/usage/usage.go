@@ -160,6 +160,9 @@ func classify(err error) (status, reason string) {
 func (s *Service) credential(ctx context.Context, c *connections.Connection) (*connections.Connection, []byte, error) {
 	live, cred, err := s.Connections.Credential(ctx, c.OrgID, c.ID)
 	if errors.Is(err, connections.ErrNotReady) {
+		if c.Status == connections.StatusSignInNeeded {
+			return nil, nil, metrics.Unavailablef("Sign in to this connection again: its sign-in lapsed.")
+		}
 		return nil, nil, metrics.Unavailablef("Recheck this connection: it's %s, and Loomplane only reads with a ready one", c.Status)
 	}
 	return live, cred, err

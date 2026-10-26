@@ -429,6 +429,7 @@ func (e *Extension) Register(fapp forge.App) error {
 		Store: planStore, Credentials: clouds, Executors: executors, Telemetry: metrics,
 		Warn: func(msg string, err error) { log.Warn(msg, forge.F("error", err.Error())) },
 	}))
+	engine.Register(e.engineOf(), orchestration.ConnectionRefreshJob(clouds))
 	if err := e.backupRoutes(fapp.Router(), guard); err != nil {
 		return err
 	}
@@ -465,6 +466,13 @@ func (e *Extension) Start(ctx context.Context) error {
 		if err := engine.RegisterCron(ctx, e.engineOf(), def); err != nil {
 			return fmt.Errorf("schedule the drift check: %w", err)
 		}
+	}
+	refresh := &cron.Definition[orchestration.ConnectionRefreshPayload]{
+		Name: orchestration.CronConnectionRefresh, Schedule: "@every 6h",
+		JobName: orchestration.JobConnectionRefresh, Queue: orchestration.Queue,
+	}
+	if err := engine.RegisterCron(ctx, e.engineOf(), refresh); err != nil {
+		return fmt.Errorf("schedule the sign-in refresh: %w", err)
 	}
 	if err := e.scheduleBackupReconciliation(ctx); err != nil {
 		return err

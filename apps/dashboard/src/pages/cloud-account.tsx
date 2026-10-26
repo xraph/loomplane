@@ -14,8 +14,10 @@ import { useMutation, useQuery } from "@/client/hooks"
 import { CloudGlyph } from "@/components/cloud-glyph"
 import {
   ConnectDialog,
+  needsSignInAgain,
   RemoveDialog,
   statusLabels,
+  useSignInAgain,
 } from "@/components/cloud-connections"
 import { Page } from "@/components/page"
 import { EnvBadge, StatusPill, type Tone } from "@/components/runs"
@@ -44,6 +46,7 @@ const tone: Record<string, Tone> = {
   ready: "live",
   incomplete: "waiting",
   failed: "failed",
+  sign_in_needed: "waiting",
 }
 
 export function CloudAccount({ id }: { id: string }) {
@@ -52,6 +55,7 @@ export function CloudAccount({ id }: { id: string }) {
   const person = usePeople()
   const connection = useQuery(useConnectionsGet, { path: { id } })
   const check = useMutation(useConnectionsCheck)
+  const { signInAgain, pending: signingIn } = useSignInAgain()
   const running = useRunning()
   const projects = useQuery(useProjectsList)
   const [replacing, setReplacing] = useState(false)
@@ -148,6 +152,15 @@ export function CloudAccount({ id }: { id: string }) {
               </div>
               {manage && (
                 <div className="flex flex-wrap gap-2">
+                  {needsSignInAgain(c) && (
+                    <Button
+                      disabled={signingIn}
+                      onClick={() => void signInAgain(c)}
+                    >
+                      {signingIn && <Spinner />}
+                      Sign in again
+                    </Button>
+                  )}
                   <Button
                     variant="outline"
                     disabled={check.isPending}
