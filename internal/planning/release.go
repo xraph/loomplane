@@ -70,6 +70,9 @@ const (
 	// Cloud SQL through a Private Service Connect route, which a candidate
 	// doesn't carry.
 	codeCanaryDatabaseRoute = "canary-unsupported-database-route"
+	// codeCanaryDatabaseGateway blocks a canary for the environment's
+	// database gateway, which is replaced in one go.
+	codeCanaryDatabaseGateway = "canary-unsupported-database-gateway"
 )
 
 // planRelease pins the environment's release on r, and says which service
@@ -188,12 +191,16 @@ func noCanary(in Input, r *Result, a Action) string {
 }
 
 // unsupportedCanary blocks a canary for a service that could otherwise
-// ramp but whose candidate Loomplane can't start beside what runs: one
-// that reaches Cloud SQL through a Private Service Connect route, whose
-// sidecar and checks a candidate doesn't carry. It returns the finding's
-// code and message, or "" when nothing blocks it.
+// ramp but whose candidate Loomplane can't start beside what runs: the
+// database gateway, whose record, keys and routes follow each release in
+// one go, and a service that reaches Cloud SQL through a Private Service
+// Connect route, whose sidecar and checks a candidate doesn't carry. It
+// returns the finding's code and message, or "" when nothing blocks it.
 func unsupportedCanary(a Action) (code, message string) {
-	if a.Service.CloudSQLNetwork != nil {
+	switch cfg := a.Service; {
+	case cfg.DatabaseGateway != nil:
+		return codeCanaryDatabaseGateway, a.Name + " can't run a canary: it's the environment's database gateway, which Loomplane replaces in one go. Release this environment direct or blue_green."
+	case cfg.CloudSQLNetwork != nil:
 		return codeCanaryDatabaseRoute, a.Name + " can't run a canary: it reaches Cloud SQL through a Private Service Connect route, which a canary candidate doesn't carry. Release this environment direct or blue_green."
 	}
 	return "", ""

@@ -156,6 +156,12 @@ func (r *Runner) changeCanary(ctx context.Context, orgID, deploymentID string, c
 	})
 }
 
+// errCanaryDatabaseGateway refuses to ramp the database gateway, from a
+// plan approved before plans refused it.
+func errCanaryDatabaseGateway(name string) error {
+	return fmt.Errorf("%s can't run a canary: it's the environment's database gateway, which Loomplane replaces in one go. Release this environment direct or blue_green", name)
+}
+
 // errCanarySettled leaves a canary that settled as it is: a change
 // returns it to store nothing, and its caller takes it as done.
 var errCanarySettled = errors.New("the canary has settled")
@@ -191,6 +197,10 @@ func (r *Runner) canaryJob(ctx context.Context, d *Deployment, plan *planning.Pl
 		return nil, fmt.Errorf("the plan has no action %s", svc.ActionID)
 	}
 	a := execution.Actions[i]
+	// deployInputs would record the database gateway and mint its keys.
+	if a.Service != nil && a.Service.DatabaseGateway != nil {
+		return nil, errCanaryDatabaseGateway(a.Name)
+	}
 	exec, ok := r.executors[a.Provider].(Weighted)
 	if !ok {
 		return nil, fmt.Errorf("%w: %s can't ramp %s as a canary", ErrNoExecutor, a.Provider, a.Name)

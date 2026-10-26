@@ -904,6 +904,12 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 	if ramps && moving {
 		return fmt.Errorf("%s moves, so it can't ramp as a canary. Plan again", a.Name)
 	}
+	// The database gateway's record, keys and routes follow each release
+	// in one go, so it never ramps. This refuses before deployInputs
+	// records anything for it.
+	if ramps && a.Service != nil && a.Service.DatabaseGateway != nil {
+		return errCanaryDatabaseGateway(a.Name)
+	}
 	job.Checkpoint = func(data []byte) error {
 		rc.Apply = data
 		return heartbeat(rc.encode())
