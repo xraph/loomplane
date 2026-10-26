@@ -52,6 +52,14 @@ Build logs come from Cloud Logging, so the account also needs permission to read
 
 Joining a Cloud Run service to AWS through a link needs Compute Network Admin (`roles/compute.networkAdmin`) as well. See [Gateways and networking](/docs/concepts/gateways-and-networking#links).
 
+## Sign in instead of a key
+
+If your organization has registered a Google OAuth client, the connect dialog offers **Sign in with Google Cloud** first and **Use a token instead** underneath. Type the project ID, then sign in to Google and approve. Loomplane asks for `openid`, `email` and `https://www.googleapis.com/auth/cloud-platform`.
+
+The connection acts as you, so your own IAM roles in the project are what it can do. Loomplane checks them against the table above, the same as it checks a key, and lists anything you're missing. The connection shows the Google account it signed in as and who in Loomplane did it. If that person leaves your organization, the connection asks for a new sign-in within 6 hours and anyone who manages cloud accounts can sign in again as themselves.
+
+Publish the OAuth app. While it's in testing, Google ends every sign-in after 7 days. [Connect a cloud by signing in](/docs/clouds/cloud-sign-in) covers registering the client and what happens if Google stops accepting the sign-in.
+
 ## Use it in a manifest
 
 ```yaml

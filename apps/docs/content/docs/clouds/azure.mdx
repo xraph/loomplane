@@ -50,6 +50,14 @@ The subscription needs `Microsoft.App` and `Microsoft.ContainerRegistry`. Loompl
 
 The subscription and resource group are the connection's account. You can replace the secret, or switch to another principal with access to the same group, and nothing that uses the connection has to change.
 
+## Sign in instead of a secret
+
+If your organization has registered an Azure app for sign-in, the connect dialog offers **Sign in with Microsoft Azure** first and **Use a token instead** underneath. Type the tenant ID and subscription ID, and a resource group if you don't want `loomplane`, then sign in to Microsoft and approve. The app needs the delegated `user_impersonation` permission for Azure Service Management, and the callback as a Web redirect URI.
+
+The connection acts as you, so you need a role on the resource group that covers what a deployment does, such as Contributor. Loomplane checks your role assignments the same way it checks a service principal's, and what [How apps pull images](#how-apps-pull-images) says about Owner and Role Based Access Control Administrator applies to you too. The connection shows which Microsoft account it acts as, and which Loomplane member signed in. When that member leaves your organization, the next background run (they're 6 hours apart) asks for a new sign-in, and anyone who manages cloud accounts can do it with their own account.
+
+Microsoft's refresh token lasts 90 days from its last use, and Loomplane renews it every 6 hours. [Connect a cloud by signing in](/docs/clouds/cloud-sign-in) covers registering the app and what happens if Azure stops accepting the sign-in.
+
 ## Use it in a manifest
 
 ```yaml
