@@ -773,6 +773,13 @@ export const ops = {
     invalidates: [],
     responseCodec: CODECS['ConnectedRepositoryList'],
   },
+  'gpuTargets.list': {
+    method: 'GET',
+    path: '/api/v1/gpu-targets',
+    provides: [],
+    invalidates: [],
+    responseCodec: CODECS['GPUTargetList'],
+  },
   'infrastructure.get': {
     method: 'GET',
     path: '/api/v1/infrastructure',

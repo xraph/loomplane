@@ -62,6 +62,7 @@ import (
 	"github.com/xraph/loomplane/internal/discovery"
 	"github.com/xraph/loomplane/internal/environments"
 	"github.com/xraph/loomplane/internal/fabriqloom"
+	"github.com/xraph/loomplane/internal/gpus"
 	"github.com/xraph/loomplane/internal/manifests"
 	"github.com/xraph/loomplane/internal/orchestration"
 	"github.com/xraph/loomplane/internal/planning"
@@ -462,6 +463,12 @@ func (e *Extension) Register(fapp forge.App) error {
 	if err := e.usageRoutes(fapp.Router(), guard, readings); err != nil {
 		return err
 	}
+	targets := gpus.NewService(gpus.Deps{
+		Connections: clouds, Bindings: planStore, Options: routeService, Servers: cloudinfra.NewPgStore(pg), Authz: authz,
+	})
+	if err := e.gpuTargetRoutes(fapp.Router(), guard, targets); err != nil {
+		return err
+	}
 	return e.routes(fapp.Router(), guard)
 }
 
@@ -592,7 +599,7 @@ func fail(err error) error {
 		errors.Is(err, planning.ErrNoSources), errors.Is(err, planning.ErrNeverDeployed):
 		return forge.NewHTTPError(http.StatusPreconditionFailed, err.Error())
 	case errors.Is(err, cloudprofiles.ErrInvalid), errors.Is(err, recovery.ErrInvalid), errors.Is(err, planning.ErrInvalid), errors.Is(err, manifests.ErrInvalid), errors.Is(err, manifest.ErrInvalid),
-		errors.Is(err, catalogconnect.ErrInvalid), errors.Is(err, deployments.ErrNotControlPort), errors.Is(err, catalogproxy.ErrInvalid), errors.Is(err, usage.ErrInvalid):
+		errors.Is(err, catalogconnect.ErrInvalid), errors.Is(err, deployments.ErrNotControlPort), errors.Is(err, catalogproxy.ErrInvalid), errors.Is(err, usage.ErrInvalid), errors.Is(err, gpus.ErrInvalid):
 		return forge.NewHTTPError(http.StatusUnprocessableEntity, err.Error())
 	case errors.Is(err, planning.ErrUnavailable):
 		return forge.NewHTTPError(http.StatusServiceUnavailable, err.Error())

@@ -242,3 +242,52 @@ func TestReservationRecoveryClientUsesAcceptedAuthority(t *testing.T) {
 		})
 	}
 }
+
+// The client keeps what the API says about GPUs: a server's accelerator and
+// hourly price, a preview's, and the GPUs pools, placements and workloads hold.
+func TestInfrastructureClientCarriesGPUs(t *testing.T) {
+	var server CloudServer
+	if err := json.Unmarshal([]byte(`{"id":"s","accelerator":{"kind":"nvidia-l4","vendor":"nvidia","count":1,"memory_gib":24},"hourly_usd":0.76,"hourly_price_known":true,"priced_size":"gpu-l4x1",
+		"health":{"gpus":[{"index":0,"uuid":"GPU-0","kind":"nvidia-l4","product":"NVIDIA L4","memory_mib":23034}],"gpu_runtime":"toolkit_missing","gpu_message":"Install the toolkit"}}`), &server); err != nil {
+		t.Fatal(err)
+	}
+	if server.Accelerator == nil || server.Accelerator.Kind != "nvidia-l4" || server.HourlyUSD != 0.76 || !server.HourlyPriceKnown || server.PricedSize != "gpu-l4x1" ||
+		len(server.Health.GPUs) != 1 || server.Health.GPURuntime != "toolkit_missing" || server.Health.GPUMessage == "" {
+		t.Fatalf("server %+v", server)
+	}
+	var op InfrastructureOperation
+	if err := json.Unmarshal([]byte(`{"estimated_hourly_usd":3.39,"hourly_price_known":true,"accelerator":{"kind":"nvidia-h100-80gb","vendor":"nvidia","count":1,"memory_gib":80}}`), &op); err != nil {
+		t.Fatal(err)
+	}
+	if !op.HourlyPriceKnown || op.Accelerator == nil || op.Accelerator.MemoryGiB != 80 {
+		t.Fatalf("operation %+v", op)
+	}
+	var usage ServerUsage
+	if err := json.Unmarshal([]byte(`{"reserved_gpus":2,"workloads":[{"service":"llm","gpus":2}]}`), &usage); err != nil {
+		t.Fatal(err)
+	}
+	if usage.ReservedGPUs != 2 || len(usage.Workloads) != 1 || usage.Workloads[0].GPUs != 2 {
+		t.Fatalf("usage %+v", usage)
+	}
+	var pool Pool
+	if err := json.Unmarshal([]byte(`{"id":"p","accelerator_kind":"nvidia-l4","members":[{"server_id":"s","gpus":2}]}`), &pool); err != nil {
+		t.Fatal(err)
+	}
+	if pool.AcceleratorKind != "nvidia-l4" || pool.Members[0].GPUs != 2 {
+		t.Fatalf("pool %+v", pool)
+	}
+	var placement Placement
+	if err := json.Unmarshal([]byte(`{"gpu_kind":"nvidia-l4","gpus":1}`), &placement); err != nil {
+		t.Fatal(err)
+	}
+	if placement.GPUKind != "nvidia-l4" || placement.GPUs != 1 {
+		t.Fatalf("placement %+v", placement)
+	}
+	raw, err := json.Marshal(PoolInput{Name: "gpu", Revision: 1, AcceleratorKind: "nvidia-l4", Members: []PoolMember{{ServerID: "s", CPUMillis: 1000, MemoryBytes: 1 << 30, GPUs: 2}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := `{"name":"gpu","revision":1,"members":[{"server_id":"s","cpu_millis":1000,"memory_bytes":1073741824,"draining":false,"gpus":2}],"accelerator_kind":"nvidia-l4"}`; string(raw) != want {
+		t.Fatalf("pool input %s, want %s", raw, want)
+	}
+}

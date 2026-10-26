@@ -2613,6 +2613,50 @@
         }
       }
     },
+    "/api/v1/gpu-targets": {
+      "get": {
+        "tags": [
+          "GPUs"
+        ],
+        "summary": "Where GPUs can run and what they cost per hour",
+        "operationId": "gpuTargets.list",
+        "parameters": [
+          {
+            "name": "min_memory_gib",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "count",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "GPUTargetList",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GPUTargetList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/infrastructure": {
       "get": {
         "tags": [
@@ -11830,6 +11874,89 @@
           }
         }
       },
+      "GPUTarget": {
+        "type": "object",
+        "required": [
+          "source",
+          "connection_id",
+          "name",
+          "cloud",
+          "accelerator",
+          "free",
+          "fits",
+          "hourly_usd",
+          "hourly_price_known",
+          "price_estimate"
+        ],
+        "properties": {
+          "accelerator": {
+            "$ref": "#/components/schemas/Accelerator"
+          },
+          "cloud": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "connection_id": {
+            "type": "string"
+          },
+          "fits": {
+            "type": "boolean"
+          },
+          "free": {
+            "type": "integer"
+          },
+          "hourly_price_known": {
+            "type": "boolean"
+          },
+          "hourly_usd": {
+            "type": "number"
+          },
+          "message": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "price_estimate": {
+            "type": "boolean"
+          },
+          "regions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "size_id": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          }
+        }
+      },
+      "GPUTargetList": {
+        "type": "object",
+        "required": [
+          "targets",
+          "unreachable"
+        ],
+        "properties": {
+          "targets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GPUTarget"
+            }
+          },
+          "unreachable": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UnreachableAccount"
+            }
+          }
+        }
+      },
       "GPUToleration": {
         "type": "object",
         "required": [
@@ -13576,6 +13703,13 @@
           "updated_at"
         ],
         "properties": {
+          "absence_confirmed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "accelerator": {
+            "$ref": "#/components/schemas/Accelerator"
+          },
           "account_id": {
             "type": "string"
           },
@@ -13594,6 +13728,13 @@
           "bootstrap_expires_at": {
             "type": "string",
             "format": "date-time"
+          },
+          "capacity_checked_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "capacity_target": {
+            "$ref": "#/components/schemas/ResourceVector"
           },
           "cloud_id": {
             "type": "string"
@@ -13624,6 +13765,9 @@
           },
           "host_key": {
             "type": "string"
+          },
+          "hourly_price_known": {
+            "type": "boolean"
           },
           "id": {
             "type": "string",
@@ -13912,6 +14056,12 @@
             "type": "string"
           },
           "cpu_millis": {
+            "type": "integer"
+          },
+          "gpu_kind": {
+            "type": "string"
+          },
+          "gpus": {
             "type": "integer"
           },
           "memory_bytes": {
@@ -14327,6 +14477,9 @@
           "members"
         ],
         "properties": {
+          "accelerator_kind": {
+            "type": "string"
+          },
           "cloud_id": {
             "type": "string"
           },
@@ -14359,6 +14512,9 @@
           "members"
         ],
         "properties": {
+          "accelerator_kind": {
+            "type": "string"
+          },
           "members": {
             "type": "array",
             "items": {
@@ -14375,6 +14531,9 @@
                 },
                 "draining": {
                   "type": "boolean"
+                },
+                "gpus": {
+                  "type": "integer"
                 },
                 "memory_bytes": {
                   "type": "integer"
@@ -14433,6 +14592,9 @@
           },
           "draining": {
             "type": "boolean"
+          },
+          "gpus": {
+            "type": "integer"
           },
           "memory_bytes": {
             "type": "integer"
@@ -15342,6 +15504,35 @@
           },
           "version": {
             "type": "string"
+          }
+        }
+      },
+      "ResourceVector": {
+        "type": "object",
+        "required": [
+          "servers",
+          "cpu_millis",
+          "memory_bytes",
+          "storage_bytes"
+        ],
+        "properties": {
+          "cpu_millis": {
+            "type": "integer"
+          },
+          "gpu_kind": {
+            "type": "string"
+          },
+          "gpus": {
+            "type": "integer"
+          },
+          "memory_bytes": {
+            "type": "integer"
+          },
+          "servers": {
+            "type": "integer"
+          },
+          "storage_bytes": {
+            "type": "integer"
           }
         }
       },
@@ -16311,7 +16502,25 @@
           "effective_memory_bytes": {
             "type": "integer"
           },
+          "free_storage_bytes": {
+            "type": "integer"
+          },
+          "gpu_message": {
+            "type": "string"
+          },
+          "gpu_runtime": {
+            "type": "string"
+          },
+          "gpus": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GPUDevice"
+            }
+          },
           "memory_bytes": {
+            "type": "integer"
+          },
+          "storage_bytes": {
             "type": "integer"
           }
         }
@@ -16409,6 +16618,9 @@
           "updated_at"
         ],
         "properties": {
+          "accelerator": {
+            "$ref": "#/components/schemas/Accelerator"
+          },
           "account_id": {
             "type": "string"
           },
@@ -16431,6 +16643,12 @@
           "health": {
             "$ref": "#/components/schemas/RuntimeHealth"
           },
+          "hourly_price_known": {
+            "type": "boolean"
+          },
+          "hourly_usd": {
+            "type": "number"
+          },
           "id": {
             "type": "string",
             "x-forge-id": true
@@ -16442,6 +16660,9 @@
             "type": "string"
           },
           "ownership": {
+            "type": "string"
+          },
+          "priced_size": {
             "type": "string"
           },
           "provider": {
@@ -16717,6 +16938,7 @@
           "draining",
           "reserved_cpu_millis",
           "reserved_memory_bytes",
+          "reserved_gpus",
           "workloads"
         ],
         "properties": {
@@ -16724,6 +16946,9 @@
             "type": "boolean"
           },
           "reserved_cpu_millis": {
+            "type": "integer"
+          },
+          "reserved_gpus": {
             "type": "integer"
           },
           "reserved_memory_bytes": {
@@ -16758,7 +16983,8 @@
           "phase",
           "active",
           "cpu_millis",
-          "memory_bytes"
+          "memory_bytes",
+          "gpus"
         ],
         "properties": {
           "active": {
@@ -16777,6 +17003,9 @@
             "type": "string"
           },
           "execution_revision": {
+            "type": "integer"
+          },
+          "gpus": {
             "type": "integer"
           },
           "memory_bytes": {
@@ -18288,6 +18517,25 @@
           },
           "total": {
             "type": "number"
+          }
+        }
+      },
+      "UnreachableAccount": {
+        "type": "object",
+        "required": [
+          "connection_id",
+          "name",
+          "message"
+        ],
+        "properties": {
+          "connection_id": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
           }
         }
       },

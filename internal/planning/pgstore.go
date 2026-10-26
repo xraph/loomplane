@@ -555,3 +555,37 @@ func (s *PgStore) SetEnvironmentConnection(ctx context.Context, orgID, projectID
 	}
 	return nil
 }
+
+// GPUBindings sums the GPUs the organization's current bindings hold, by
+// connection and kind: a service's gpu, or a catalog component's. GPU
+// targets subtract them from what a server has.
+func (s *PgStore) GPUBindings(ctx context.Context, orgID string) (map[string]map[string]int, error) {
+	rows, err := s.db.Query(ctx, `SELECT connection_id, g->>'kind', sum(floor((g->>'count')::numeric))::bigint
+		FROM (SELECT connection_id, coalesce(nullif(config->'gpu', 'null'::jsonb), nullif(config->'component'->'gpu', 'null'::jsonb)) AS g
+			FROM loomplane_bindings WHERE org_id = $1 AND connection_id <> '' AND jsonb_typeof(config) = 'object') b
+		WHERE jsonb_typeof(g) = 'object' AND coalesce(g->>'kind', '') <> '' AND jsonb_typeof(g->'count') = 'number'
+		GROUP BY 1, 2`, orgID)
+	if err != nil {
+		return nil, fmt.Errorf("sum the GPUs bindings hold: %w", err)
+	}
+	defer rows.Close() // read-only; Err below reports iteration failures
+	out := map[string]map[string]int{}
+	for rows.Next() {
+		var connection, kind string
+		var count int64
+		if err := rows.Scan(&connection, &kind, &count); err != nil {
+			return nil, fmt.Errorf("sum the GPUs bindings hold: %w", err)
+		}
+		if count <= 0 {
+			continue
+		}
+		if out[connection] == nil {
+			out[connection] = map[string]int{}
+		}
+		out[connection][kind] = int(count)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("sum the GPUs bindings hold: %w", err)
+	}
+	return out, nil
+}

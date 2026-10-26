@@ -170,13 +170,14 @@ type Service struct {
 	now               func() time.Time
 	expansionSchedule *expansionSchedule
 	catalogs          *catalogCache
+	options           *optionsCache
 }
 
 func NewService(d Deps) *Service {
 	if d.Runtime == nil {
 		d.Runtime = SSHRuntime{}
 	}
-	return &Service{Deps: d, now: time.Now, expansionSchedule: &expansionSchedule{}, catalogs: &catalogCache{entries: map[string]catalogEntry{}}}
+	return &Service{Deps: d, now: time.Now, expansionSchedule: &expansionSchedule{}, catalogs: &catalogCache{entries: map[string]catalogEntry{}}, options: &optionsCache{entries: map[string]optionsEntry{}}}
 }
 
 func (s *Service) warn(msg string, err error) {

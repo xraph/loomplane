@@ -30,17 +30,27 @@ type CloudServer struct {
 	Health              RuntimeHealth `json:"health"`
 	CreatedAt           time.Time     `json:"created_at"`
 	UpdatedAt           time.Time     `json:"updated_at"`
+	// Accelerator and the hourly price come from the catalog size the server
+	// was bought or resized to. A price that isn't known is never $0.
+	Accelerator      *provider.Accelerator `json:"accelerator,omitempty"`
+	HourlyUSD        float64               `json:"hourly_usd,omitempty"`
+	HourlyPriceKnown bool                  `json:"hourly_price_known,omitempty"`
+	PricedSize       string                `json:"priced_size,omitempty"`
 }
 
 // RuntimeHealth mirrors the public infrastructure API contract.
 type RuntimeHealth struct {
-	EffectiveCPUMillis   int64     `json:"effective_cpu_millis"`
-	EffectiveMemoryBytes int64     `json:"effective_memory_bytes"`
-	DockerID             string    `json:"docker_id"`
-	Architecture         string    `json:"architecture"`
-	CPUs                 int       `json:"cpus"`
-	MemoryBytes          int64     `json:"memory_bytes"`
-	CheckedAt            time.Time `json:"checked_at"`
+	EffectiveCPUMillis   int64  `json:"effective_cpu_millis"`
+	EffectiveMemoryBytes int64  `json:"effective_memory_bytes"`
+	DockerID             string `json:"docker_id"`
+	Architecture         string `json:"architecture"`
+	CPUs                 int    `json:"cpus"`
+	MemoryBytes          int64  `json:"memory_bytes"`
+	// GPUs are the devices Docker reports; GPURuntime is a provider.GPUStatus* value.
+	GPUs       []provider.GPUDevice `json:"gpus,omitempty"`
+	GPURuntime string               `json:"gpu_runtime,omitempty"`
+	GPUMessage string               `json:"gpu_message,omitempty"`
+	CheckedAt  time.Time            `json:"checked_at"`
 }
 
 // ServerInput mirrors the public infrastructure API contract.
@@ -60,6 +70,8 @@ type ServerInput struct {
 // InfrastructureOperation mirrors the public infrastructure API contract.
 type InfrastructureOperation struct {
 	EstimatedHourlyUSD   float64                         `json:"estimated_hourly_usd"`
+	HourlyPriceKnown     bool                            `json:"hourly_price_known,omitempty"`
+	Accelerator          *provider.Accelerator           `json:"accelerator,omitempty"`
 	StateRevision        int64                           `json:"state_revision"`
 	ID                   string                          `json:"id" forge:"id"`
 	OrgID                string                          `json:"org_id"`
@@ -101,6 +113,8 @@ type Pool struct {
 	Name     string       `json:"name"`
 	Revision int64        `json:"revision"`
 	Members  []PoolMember `json:"members"`
+	// AcceleratorKind "" is a CPU pool. A GPU pool holds servers with this kind.
+	AcceleratorKind string `json:"accelerator_kind,omitempty"`
 }
 
 // PoolMember mirrors the public infrastructure API contract.
@@ -109,13 +123,15 @@ type PoolMember struct {
 	CPUMillis   int64  `json:"cpu_millis"`
 	MemoryBytes int64  `json:"memory_bytes"`
 	Draining    bool   `json:"draining"`
+	GPUs        int64  `json:"gpus,omitempty"` // budget of the pool's kind on this server
 }
 
 // PoolInput mirrors the public infrastructure API contract.
 type PoolInput struct {
-	Name     string       `json:"name"`
-	Revision int64        `json:"revision"`
-	Members  []PoolMember `json:"members"`
+	Name            string       `json:"name"`
+	Revision        int64        `json:"revision"`
+	Members         []PoolMember `json:"members"`
+	AcceleratorKind string       `json:"accelerator_kind,omitempty"`
 }
 
 // DrainReview mirrors the public infrastructure API contract.
@@ -157,6 +173,8 @@ type Placement struct {
 	ConnectionGeneration int64  `json:"connection_generation"`
 	CPUMillis            int64  `json:"cpu_millis"`
 	MemoryBytes          int64  `json:"memory_bytes"`
+	GPUKind              string `json:"gpu_kind,omitempty"`
+	GPUs                 int64  `json:"gpus,omitempty"`
 }
 
 // ServerWorkload mirrors the public infrastructure API contract.
@@ -173,6 +191,7 @@ type ServerWorkload struct {
 	Active            bool   `json:"active"`
 	CPUMillis         int64  `json:"cpu_millis"`
 	MemoryBytes       int64  `json:"memory_bytes"`
+	GPUs              int64  `json:"gpus"`
 }
 
 // RetainedPoolStorage mirrors the public infrastructure API contract.
@@ -190,6 +209,7 @@ type ServerUsage struct {
 	Draining            bool                  `json:"draining"`
 	ReservedCPUMillis   int64                 `json:"reserved_cpu_millis"`
 	ReservedMemoryBytes int64                 `json:"reserved_memory_bytes"`
+	ReservedGPUs        int64                 `json:"reserved_gpus"`
 	Workloads           []ServerWorkload      `json:"workloads"`
 }
 

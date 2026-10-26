@@ -2083,6 +2083,39 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly gpuTargets = {
+    /**
+     * Where GPUs can run and what they cost per hour
+     */
+    list: async (minMemoryGib?: number | undefined, count?: number | undefined, kind?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.GPUTargetList> => {
+      let __path = `/api/v1/gpu-targets`;
+      const queryParams: Record<string, any> = {};
+      if (minMemoryGib !== undefined) {
+        queryParams['min_memory_gib'] = minMemoryGib;
+      }
+      if (count !== undefined) {
+        queryParams['count'] = count;
+      }
+      if (kind !== undefined) {
+        queryParams['kind'] = kind;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["GPUTargetList"],
+      };
+
+      return this.request<types.GPUTargetList>(config);
+    },
+
+  };
+
   public readonly infrastructure = {
     /**
      * What Ctrl Plane can deploy to
