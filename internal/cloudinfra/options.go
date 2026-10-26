@@ -50,19 +50,23 @@ type optionsCache struct {
 // sizes an account could create. Reads are kept ten minutes per connection
 // generation. Callers mustn't change what it returns.
 func (s *Service) AccountServerOptions(ctx context.Context, org, connection string) (provider.ServerOptions, error) {
+	now := s.now()
+	// A ready connection's row names its generation without a Vault
+	// reveal, so a cached read never touches the credential.
+	if s.RuntimeConnections != nil {
+		if c, readErr := s.RuntimeConnections.GetConnection(ctx, org, connection); readErr == nil && c.Status == connections.StatusReady {
+			if entry, ok := s.cachedOptions(optionsKey(org, c), now); ok {
+				return entry.options, entry.err
+			}
+		}
+	}
 	conn, raw, err := s.Connections.Credential(ctx, org, connection)
 	if err != nil {
 		return provider.ServerOptions{}, err
 	}
-	key := fmt.Sprintf("%s/%s/%d", org, conn.ID, conn.Generation)
-	now := s.now()
-	if s.options != nil {
-		s.options.mu.Lock()
-		entry, ok := s.options.entries[key]
-		s.options.mu.Unlock()
-		if ok && (entry.err == nil && now.Sub(entry.at) < optionsTTL || entry.err != nil && now.Sub(entry.at) < optionsFailureTTL) {
-			return entry.options, entry.err
-		}
+	key := optionsKey(org, conn)
+	if entry, ok := s.cachedOptions(key, now); ok {
+		return entry.options, entry.err
 	}
 	options, err := s.readServerOptions(ctx, conn, raw)
 	if ctx.Err() != nil {
@@ -79,6 +83,22 @@ func (s *Service) AccountServerOptions(ctx context.Context, org, connection stri
 		s.options.mu.Unlock()
 	}
 	return options, err
+}
+
+func optionsKey(org string, c *connections.Connection) string {
+	return fmt.Sprintf("%s/%s/%d", org, c.ID, c.Generation)
+}
+
+// cachedOptions is the entry for key when it's still fresh at now.
+func (s *Service) cachedOptions(key string, now time.Time) (optionsEntry, bool) {
+	if s.options == nil {
+		return optionsEntry{}, false
+	}
+	s.options.mu.Lock()
+	entry, ok := s.options.entries[key]
+	s.options.mu.Unlock()
+	fresh := ok && (entry.err == nil && now.Sub(entry.at) < optionsTTL || entry.err != nil && now.Sub(entry.at) < optionsFailureTTL)
+	return entry, fresh
 }
 
 // readServerOptions reads an account's sizes, regions and images from its provider.

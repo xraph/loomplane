@@ -88,3 +88,64 @@ func TestAccountServerOptionsNeedAnOptionsAdapter(t *testing.T) {
 		t.Fatalf("missing connection: %v", err)
 	}
 }
+
+// revealCounter counts Vault reveals through Credential.
+type revealCounter struct {
+	optionsAccount
+	reveals int
+}
+
+func (a *revealCounter) Credential(ctx context.Context, org, id string) (*connections.Connection, []byte, error) {
+	a.reveals++
+	c, raw, err := a.optionsAccount.Credential(ctx, org, id)
+	if c != nil {
+		c.Status = connections.StatusReady
+	}
+	return c, raw, err
+}
+
+// accountRows reads the account's row, as the connections store does.
+type accountRows struct {
+	connections.Store
+	account *revealCounter
+	status  string
+}
+
+func (r accountRows) GetConnection(_ context.Context, org, id string) (*connections.Connection, error) {
+	if id != "do" {
+		return nil, connections.ErrNotFound
+	}
+	return &connections.Connection{ID: id, OrgID: org, Cloud: connections.DigitalOcean, Status: r.status, Generation: r.account.generation}, nil
+}
+
+// A cached read checks the account's generation from its row and never
+// reveals the credential. A new generation, or a connection that isn't
+// ready, goes through Credential again.
+func TestAccountServerOptionsCacheHitSkipsTheReveal(t *testing.T) {
+	adapters := NewAdapters()
+	catalog := &countingCatalog{}
+	if err := adapters.RegisterServer(connections.DigitalOcean, catalog); err != nil {
+		t.Fatal(err)
+	}
+	account := &revealCounter{optionsAccount: optionsAccount{generation: 1}}
+	rows := &accountRows{account: account, status: connections.StatusReady}
+	s := NewService(Deps{Connections: account, RuntimeConnections: rows, Adapters: adapters})
+	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+	s.now = func() time.Time { return now }
+	for range 3 {
+		if _, err := s.AccountServerOptions(t.Context(), "org", "do"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if account.reveals != 1 || catalog.calls != 1 {
+		t.Fatalf("cached reads: %d reveals, %d reads", account.reveals, catalog.calls)
+	}
+	account.generation = 2
+	if _, err := s.AccountServerOptions(t.Context(), "org", "do"); err != nil || account.reveals != 2 || catalog.calls != 2 {
+		t.Fatalf("new generation: %v, %d reveals, %d reads", err, account.reveals, catalog.calls)
+	}
+	rows.status = connections.StatusIncomplete
+	if _, err := s.AccountServerOptions(t.Context(), "org", "do"); err != nil || account.reveals != 3 || catalog.calls != 2 {
+		t.Fatalf("not ready: %v, %d reveals, %d reads", err, account.reveals, catalog.calls)
+	}
+}
