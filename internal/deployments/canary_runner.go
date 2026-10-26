@@ -333,7 +333,7 @@ func (r *Runner) CanaryRevert(ctx context.Context, orgID, deploymentID, reason s
 		return err
 	}
 	switch {
-	case d.Canary == nil || d.Canary.Status == CanaryRolledBack:
+	case d.Canary == nil || d.Canary.Status == CanaryRolledBack || d.Canary.Status == CanaryPromoteFailed:
 		return nil
 	case d.Canary.Status != CanaryPending && d.Canary.Status != CanaryRamping && d.Canary.Status != CanaryReverting:
 		return fmt.Errorf("the canary is %s, so it can't be reverted", d.Canary.Status)
@@ -388,8 +388,15 @@ func (r *Runner) CanaryRevert(ctx context.Context, orgID, deploymentID, reason s
 	if len(storeErrs) > 0 {
 		return errors.Join(storeErrs...)
 	}
+	// A service an earlier attempt promoted keeps the release, so the
+	// deployment is split between old and new: not a rollback.
+	partial := slices.ContainsFunc(d.Canary.Services, func(svc CanaryService) bool { return promoted(d, svc) })
 	_, err = r.updateCanary(ctx, orgID, deploymentID, func(c *Canary) error {
-		c.Status, c.Weight = CanaryRolledBack, 0
+		if partial {
+			c.Status = CanaryPromoteFailed
+		} else {
+			c.Status, c.Weight = CanaryRolledBack, 0
+		}
 		return nil
 	})
 	return err
@@ -410,7 +417,9 @@ func (r *Runner) revert(ctx context.Context, d *Deployment, plan *planning.Plan,
 
 // settleCanary ends the canary of a deployment that failed, from what its
 // services show, so a failed deployment never shows a canary still in
-// flight. One still promoting couldn't be promoted. Otherwise, a candidate
+// flight. One still promoting couldn't be promoted, and one with a service
+// an earlier attempt promoted is split between old and new, which a
+// rollback can't be. Otherwise, a candidate
 // still up means traffic may still be split, so the revert failed; with
 // none up, every binding names what runs, and the canary rolled back.
 func (r *Runner) settleCanary(ctx context.Context, d *Deployment, reason string) error {
@@ -424,9 +433,10 @@ func (r *Runner) settleCanary(ctx context.Context, d *Deployment, reason string)
 		return nil
 	}
 	up := slices.ContainsFunc(c.Services, func(svc CanaryService) bool { return svc.Candidate != "" && !promoted(d, svc) })
+	partial := slices.ContainsFunc(c.Services, func(svc CanaryService) bool { return promoted(d, svc) })
 	_, err := r.updateCanary(ctx, d.OrgID, d.ID, func(c *Canary) error {
 		switch {
-		case c.Status == CanaryPromoting:
+		case c.Status == CanaryPromoting || partial:
 			c.Status = CanaryPromoteFailed
 		case up:
 			c.Status = CanaryRevertFailed
