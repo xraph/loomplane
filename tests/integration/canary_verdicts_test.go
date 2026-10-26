@@ -32,7 +32,7 @@ func TestCanaryVerdictTakesItsDeploymentsScope(t *testing.T) {
 	if err := st.RecordVerdict(ctx, first); err != nil {
 		t.Fatal(err)
 	}
-	if first.ID != "dep_v/service:api/1/0" || first.ProjectID != plan.ProjectID {
+	if first.ID != "dep_v/0/service:api/1/0" || first.ProjectID != plan.ProjectID {
 		t.Fatalf("recorded as %q in project %q", first.ID, first.ProjectID)
 	}
 	if err := st.RecordVerdict(ctx, verdict(plan.OrgID, "another-id", "retried")); err != nil {

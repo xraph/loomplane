@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/xraph/loomplane/internal/orchestration"
 	"github.com/xraph/loomplane/internal/releasehealth"
 )
 
@@ -111,7 +112,7 @@ func TestJudgeActivityPass(t *testing.T) {
 	for _, v := range vs {
 		if v.Step != 0 || v.Attempt != 2 || v.Weight != 5 || v.Verdict != releasehealth.Pass ||
 			v.Thresholds != releasehealth.DefaultThresholds() || v.WindowStart != heldWindow.Start || v.WindowEnd != heldWindow.End ||
-			v.ID != VerdictID(id, v.ActionID, 0, 2) || v.ProjectID != "proj_1" || v.DecidedAt.IsZero() || v.Candidate.Requests != 300 {
+			v.ID != VerdictID(id, 0, v.ActionID, 0, 2) || v.ProjectID != "proj_1" || v.DecidedAt.IsZero() || v.Candidate.Requests != 300 {
 			t.Fatalf("verdict %+v", v)
 		}
 	}
@@ -240,27 +241,170 @@ func TestRevertAfterAPromotionIsPromoteFailed(t *testing.T) {
 	if d.Canary.Status != CanaryPromoteFailed || d.Step("service:api").Status != StepSucceeded || d.Step("service:web").Status != StepFailed {
 		t.Fatalf("canary %s, api %s, web %s", d.Canary.Status, d.Step("service:api").Status, d.Step("service:web").Status)
 	}
+	if c := d.Canary; c.Weight != 0 {
+		t.Fatalf("weight %d after the revert", c.Weight)
+	}
 	if err = r.CanaryRevert(t.Context(), plan.OrgID, id, "again"); err != nil {
 		t.Fatalf("a repeated revert: %v", err)
 	}
 }
 
-func TestFinishAfterAPromotionIsPromoteFailed(t *testing.T) {
-	plan := withWeb(canaryPlan())
-	r, store, _, _ := newCanaryRunner(t, plan)
-	id, err := startCanary(t, r, plan)
-	if err != nil {
+func TestFinishAfterAPromotionSettlesFromWhatsLeft(t *testing.T) {
+	promoteAPI := func(t *testing.T, store *memStore, id string) {
+		t.Helper()
+		api := getDeployment(t, store, id).Step("service:api")
+		api.Status = StepSucceeded
+		if err := store.UpdateStep(t.Context(), "org_1", id, *api); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Run("split traffic is a failed revert", func(t *testing.T) {
+		plan := withWeb(canaryPlan())
+		r, store, _, _ := newCanaryRunner(t, plan)
+		id, err := startCanary(t, r, plan)
+		if err != nil {
+			t.Fatal(err)
+		}
+		promoteAPI(t, store, id)
+		if err = r.Finish(t.Context(), plan.OrgID, id, "The workflow stopped"); err != nil {
+			t.Fatal(err)
+		}
+		if c := getDeployment(t, store, id).Canary; c.Status != CanaryRevertFailed {
+			t.Fatalf("canary %s", c.Status)
+		}
+	})
+	t.Run("nothing up is a failed promotion", func(t *testing.T) {
+		plan := withWeb(canaryPlan())
+		r, store, _, _ := newCanaryRunner(t, plan)
+		id, err := startCanary(t, r, plan)
+		if err != nil {
+			t.Fatal(err)
+		}
+		promoteAPI(t, store, id)
+		c := getDeployment(t, store, id).Canary
+		c.service("service:web").Candidate = ""
+		if err = store.SetCanary(t.Context(), plan.OrgID, id, c); err != nil {
+			t.Fatal(err)
+		}
+		if err = r.Finish(t.Context(), plan.OrgID, id, "The workflow stopped"); err != nil {
+			t.Fatal(err)
+		}
+		if c = getDeployment(t, store, id).Canary; c.Status != CanaryPromoteFailed {
+			t.Fatalf("canary %s", c.Status)
+		}
+	})
+}
+
+// racingStore has another attempt's verdict in place by the time the
+// judgement records its own.
+type racingStore struct {
+	*memStore
+	other CanaryVerdict
+}
+
+func (s *racingStore) RecordVerdict(ctx context.Context, v *CanaryVerdict) error {
+	if v.ActionID == s.other.ActionID {
+		o := s.other
+		o.OrgID, o.DeploymentID, o.Retry, o.Step, o.Attempt = v.OrgID, v.DeploymentID, v.Retry, v.Step, v.Attempt
+		if err := s.memStore.RecordVerdict(ctx, &o); err != nil {
+			return err
+		}
+	}
+	return s.memStore.RecordVerdict(ctx, v)
+}
+
+func TestJudgeAnswersWithTheStoredVerdict(t *testing.T) {
+	r, store, h, id := judgeSetup(t, false)
+	r.store = &racingStore{memStore: store, other: CanaryVerdict{ActionID: "service:api", Service: "api", Verdict: releasehealth.Fail, Reason: "too slow"}}
+	h.both("api", healthy(1000, 1), healthy(300, 1))
+	j, err := r.CanaryJudge(t.Context(), "org_1", id, 0, 0, heldWindow)
+	if err != nil || j.Verdict != "fail" || j.Reason != "api: too slow" {
+		t.Fatalf("judgement %+v, %v", j, err)
+	}
+}
+
+func TestJudgeAfterARetryJudgesAfresh(t *testing.T) {
+	r, store, h, id := judgeSetup(t, false)
+	h.both("api", healthy(1000, 1), healthy(300, 60))
+	first, err := r.CanaryJudge(t.Context(), "org_1", id, 0, 0, heldWindow)
+	if err != nil || first.Verdict != "fail" {
+		t.Fatalf("first %+v, %v", first, err)
+	}
+	if err = r.Finish(t.Context(), "org_1", id, "The canary failed"); err != nil {
 		t.Fatal(err)
 	}
+	if ok, rerr := store.Reopen(t.Context(), "org_1", id); !ok || rerr != nil {
+		t.Fatalf("reopen: %v %v", ok, rerr)
+	}
+	ctx := orchestration.CanaryContext(t.Context())
+	// Start the candidate again, as run does on the retry.
+	if err = r.Run(ctx, "org_1", id, "service:api", nil, func([]byte) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = r.CanaryWeigh(ctx, "org_1", id, 0, 5); err != nil {
+		t.Fatal(err)
+	}
+	h.both("api", healthy(1000, 1), healthy(300, 1))
+	second, err := r.CanaryJudge(ctx, "org_1", id, 0, 0, heldWindow)
+	if err != nil || second.Verdict != "pass" {
+		t.Fatalf("second %+v, %v", second, err)
+	}
+	vs, _ := store.Verdicts(t.Context(), "org_1", id)
+	if len(vs) != 2 || vs[0].Retry != 0 || vs[1].Retry != 1 || vs[1].Verdict != releasehealth.Pass {
+		t.Fatalf("verdicts %+v", vs)
+	}
+}
+
+func TestJudgeFallbackOnlyFromAnEarlierStepsOwnBaseline(t *testing.T) {
+	r, store, h, id := judgeSetup(t, false)
+	rec := func(step, weight int, baseline releasehealth.Health, fallback bool) {
+		t.Helper()
+		if err := store.RecordVerdict(t.Context(), &CanaryVerdict{OrgID: "org_1", DeploymentID: id, ActionID: "service:api", Service: "api",
+			Step: step, Weight: weight, Verdict: releasehealth.Pass, Baseline: baseline, BaselineFallback: fallback}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	rec(1, 25, healthy(800, 1), false)
+	rec(2, 50, healthy(900, 1), true) // substituted: it isn't a reading of step 2
+	h.both("api", healthy(0, 0), healthy(500, 2))
+	j, err := r.CanaryJudge(t.Context(), "org_1", id, 3, 1, heldWindow)
+	if err != nil || j.Verdict != "pass" || !strings.Contains(j.Reason, "baseline from 25%") {
+		t.Fatalf("judgement %+v, %v", j, err)
+	}
+	vs, _ := store.Verdicts(t.Context(), "org_1", id)
+	if last := vs[len(vs)-1]; !last.BaselineFallback || last.Baseline.Requests != 800 || last.Attempt != 1 {
+		t.Fatalf("verdict %+v", last)
+	}
+}
+
+func TestJudgeWithoutABaselineRevisionIsInconclusive(t *testing.T) {
+	r, store, h, id := judgeSetup(t, false)
+	c := getDeployment(t, store, id).Canary
+	c.service("service:api").Baseline = ""
+	if err := store.SetCanary(t.Context(), "org_1", id, c); err != nil {
+		t.Fatal(err)
+	}
+	h.both("api", healthy(1000, 1), healthy(300, 1))
+	j, err := r.CanaryJudge(t.Context(), "org_1", id, 0, 0, heldWindow)
+	if err != nil || j.Verdict != "inconclusive" {
+		t.Fatalf("judgement %+v, %v", j, err)
+	}
+	for _, read := range h.reads {
+		if read.revision == "" {
+			t.Fatalf("read the whole service: %+v", read)
+		}
+	}
+}
+
+func TestJudgeWithEveryServicePromotedPasses(t *testing.T) {
+	r, store, _, id := judgeSetup(t, false)
 	api := getDeployment(t, store, id).Step("service:api")
 	api.Status = StepSucceeded
-	if err = store.UpdateStep(t.Context(), plan.OrgID, id, *api); err != nil {
+	if err := store.UpdateStep(t.Context(), "org_1", id, *api); err != nil {
 		t.Fatal(err)
 	}
-	if err = r.Finish(t.Context(), plan.OrgID, id, "The workflow stopped"); err != nil {
-		t.Fatal(err)
-	}
-	if c := getDeployment(t, store, id).Canary; c.Status != CanaryPromoteFailed {
-		t.Fatalf("canary %s", c.Status)
+	j, err := r.CanaryJudge(t.Context(), "org_1", id, 0, 1, heldWindow)
+	if err != nil || j.Verdict != "pass" || j.Reason != "every service is already promoted" {
+		t.Fatalf("judgement %+v, %v", j, err)
 	}
 }

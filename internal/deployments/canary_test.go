@@ -68,7 +68,7 @@ func TestMemStoreRecordVerdictIsIdempotent(t *testing.T) {
 	for _, v := range got {
 		ids = append(ids, v.ID+" "+v.Reason)
 	}
-	want := []string{"dep/service:api/0/0 start", "dep/service:api/0/1 held", "dep/service:api/1/0 api", "dep/service:web/1/0 first"}
+	want := []string{"dep/0/service:api/0/0 start", "dep/0/service:api/0/1 held", "dep/0/service:api/1/0 api", "dep/0/service:web/1/0 first"}
 	if !slices.Equal(ids, want) {
 		t.Fatalf("verdicts %v, want %v", ids, want)
 	}
@@ -96,7 +96,7 @@ func TestReopenResetsTheCanary(t *testing.T) {
 		Canary: &Canary{Status: CanaryRolledBack, Steps: []int{10, 50, 100}, Step: 2, Weight: 50, Reason: "error rate",
 			Services: []CanaryService{{ActionID: "service:api", Baseline: "rev-1", Candidate: "x", Image: "img:2"}}},
 	}}}
-	if err := m.RecordVerdict(ctx, &CanaryVerdict{ID: VerdictID("dep", "service:api", 2, 0), OrgID: "org", DeploymentID: "dep", ActionID: "service:api", Step: 2, Verdict: releasehealth.Fail}); err != nil {
+	if err := m.RecordVerdict(ctx, &CanaryVerdict{ID: VerdictID("dep", 0, "service:api", 2, 0), OrgID: "org", DeploymentID: "dep", ActionID: "service:api", Step: 2, Verdict: releasehealth.Fail}); err != nil {
 		t.Fatal(err)
 	}
 	ok, err := m.Reopen(ctx, "org", "dep")

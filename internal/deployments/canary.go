@@ -39,7 +39,10 @@ type Canary struct {
 	Thresholds  releasehealth.Thresholds `json:"thresholds"`
 	// Step indexes Steps; -1 before the first.
 	Step int `json:"step"`
-	// Weight is the candidate's percent of traffic now.
+	// Weight is the percent of traffic the candidates still up take now. A
+	// service already promoted runs the release in full whatever Weight
+	// says, so when services diverge Weight describes only the unpromoted
+	// ones: 0 once they are reverted.
 	Weight int `json:"weight"`
 	// Reason says why the canary rolled back or failed.
 	Reason    string          `json:"reason,omitempty"`
@@ -128,30 +131,36 @@ func (c *Canary) reopen() {
 // CanaryVerdict is the judgement of one canary step's window for one
 // service: pass, fail or inconclusive, with the health it was judged on.
 type CanaryVerdict struct {
-	// ID is "<deployment>/<action>/<step>/<attempt>" (VerdictID).
-	ID           string                   `json:"id"`
-	OrgID        string                   `json:"org_id"`
-	ProjectID    string                   `json:"project_id"`
-	DeploymentID string                   `json:"deployment_id"`
-	ActionID     string                   `json:"action_id"`
-	Service      string                   `json:"service"`
-	Step         int                      `json:"step"`
-	Attempt      int                      `json:"attempt"`
-	Weight       int                      `json:"weight"`
-	Verdict      releasehealth.Verdict    `json:"verdict"`
-	Reason       string                   `json:"reason"`
-	Baseline     releasehealth.Health     `json:"baseline"`
-	Candidate    releasehealth.Health     `json:"candidate"`
-	Thresholds   releasehealth.Thresholds `json:"thresholds"`
-	WindowStart  time.Time                `json:"window_start"`
-	WindowEnd    time.Time                `json:"window_end"`
-	DecidedAt    time.Time                `json:"decided_at"`
+	// ID is "<deployment>/<retry>/<action>/<step>/<attempt>" (VerdictID).
+	ID           string `json:"id"`
+	OrgID        string `json:"org_id"`
+	ProjectID    string `json:"project_id"`
+	DeploymentID string `json:"deployment_id"`
+	// Retry is the deployment's Retries when it was judged: a retried
+	// deployment ramps again, and judges afresh.
+	Retry    int                   `json:"retry"`
+	ActionID string                `json:"action_id"`
+	Service  string                `json:"service"`
+	Step     int                   `json:"step"`
+	Attempt  int                   `json:"attempt"`
+	Weight   int                   `json:"weight"`
+	Verdict  releasehealth.Verdict `json:"verdict"`
+	Reason   string                `json:"reason"`
+	// BaselineFallback marks a baseline taken from an earlier step because
+	// the baseline served too little traffic in this window.
+	BaselineFallback bool                     `json:"baseline_fallback"`
+	Baseline         releasehealth.Health     `json:"baseline"`
+	Candidate        releasehealth.Health     `json:"candidate"`
+	Thresholds       releasehealth.Thresholds `json:"thresholds"`
+	WindowStart      time.Time                `json:"window_start"`
+	WindowEnd        time.Time                `json:"window_end"`
+	DecidedAt        time.Time                `json:"decided_at"`
 }
 
-// VerdictID is a verdict's ID. It's deterministic, so a retried judgement
+// VerdictID is a verdict's ID. It's deterministic, so a repeated judgement
 // writes the verdict it already wrote.
-func VerdictID(deploymentID, actionID string, step, attempt int) string {
-	return fmt.Sprintf("%s/%s/%d/%d", deploymentID, actionID, step, attempt)
+func VerdictID(deploymentID string, retry int, actionID string, step, attempt int) string {
+	return fmt.Sprintf("%s/%d/%s/%d/%d", deploymentID, retry, actionID, step, attempt)
 }
 
 // CanaryReport is a deployment's canary and its verdicts so far.
@@ -183,7 +192,7 @@ type CanaryStore interface {
 	// verdict is stored. It sets v.ID, and v.ProjectID from the deployment,
 	// and returns ErrNotFound when the deployment isn't in v.OrgID.
 	RecordVerdict(ctx context.Context, v *CanaryVerdict) error
-	// Verdicts returns a deployment's verdicts by step, attempt and action.
+	// Verdicts returns a deployment's verdicts by retry, step, attempt and action.
 	Verdicts(ctx context.Context, orgID, deploymentID string) ([]CanaryVerdict, error)
 	// RecentCanaries returns up to limit of an environment's deployments
 	// that ran a canary, newest first.

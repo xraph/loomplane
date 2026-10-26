@@ -24,8 +24,9 @@ func init() {
 // A canary keeps its state on the deployment it ramps (status, the step it
 // is on, the candidate's weight and each service's baseline and candidate
 // revisions) and a verdict per judged window in loomplane_canary_verdicts.
-// Verdict IDs are "<deployment>/<action>/<step>/<attempt>", so a retried
-// judgement writes the row it already wrote. Each verdict row is a realtime
+// Verdict IDs are "<deployment>/<retry>/<action>/<step>/<attempt>", so a
+// repeated judgement writes the row it already wrote while a retried
+// deployment judges afresh. Each verdict row is a realtime
 // canary_verdict event. Deployment workflow build deployment-v4 ramps
 // canaries, so its runs are accepted alongside v2 and v3.
 var canaryReleasesUp = []string{
@@ -33,14 +34,15 @@ var canaryReleasesUp = []string{
 	`CREATE TABLE IF NOT EXISTS loomplane_canary_verdicts (
  id TEXT PRIMARY KEY, org_id TEXT NOT NULL, project_id TEXT NOT NULL,
  deployment_id TEXT NOT NULL REFERENCES loomplane_deployments(id) ON DELETE CASCADE,
- action_id TEXT NOT NULL, service TEXT NOT NULL,
+ retry INT NOT NULL DEFAULT 0 CHECK (retry >= 0), action_id TEXT NOT NULL, service TEXT NOT NULL,
  step INT NOT NULL CHECK (step >= 0), attempt INT NOT NULL CHECK (attempt >= 0),
  weight INT NOT NULL CHECK (weight BETWEEN 0 AND 100),
  verdict TEXT NOT NULL CHECK (verdict IN ('pass','fail','inconclusive')), reason TEXT NOT NULL,
+ baseline_fallback BOOLEAN NOT NULL DEFAULT false,
  baseline JSONB NOT NULL, candidate JSONB NOT NULL, thresholds JSONB NOT NULL,
  window_start TIMESTAMPTZ NOT NULL, window_end TIMESTAMPTZ NOT NULL, decided_at TIMESTAMPTZ NOT NULL,
- UNIQUE (deployment_id, action_id, step, attempt))`,
-	`CREATE INDEX IF NOT EXISTS loomplane_canary_verdicts_deployment ON loomplane_canary_verdicts (org_id, deployment_id, step, attempt)`,
+ UNIQUE (deployment_id, retry, action_id, step, attempt))`,
+	`CREATE INDEX IF NOT EXISTS loomplane_canary_verdicts_deployment ON loomplane_canary_verdicts (org_id, deployment_id, retry, step, attempt)`,
 	`CREATE OR REPLACE TRIGGER loomplane_state_event AFTER INSERT OR UPDATE OR DELETE ON loomplane_canary_verdicts FOR EACH ROW EXECUTE FUNCTION loomplane_state_event_trigger('canary_verdict')`,
 	`DO $$ DECLARE name TEXT; BEGIN
  FOR name IN SELECT conname FROM pg_constraint WHERE conrelid='loomplane_deployment_workflow_runs'::regclass AND contype='c'

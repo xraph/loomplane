@@ -51,7 +51,7 @@ func (s *PgStore) SetCanary(ctx context.Context, orgID, deploymentID string, c *
 // deployment's: a deployment outside v.OrgID records nothing and returns
 // ErrNotFound.
 func (s *PgStore) RecordVerdict(ctx context.Context, v *CanaryVerdict) error {
-	v.ID = VerdictID(v.DeploymentID, v.ActionID, v.Step, v.Attempt)
+	v.ID = VerdictID(v.DeploymentID, v.Retry, v.ActionID, v.Step, v.Attempt)
 	baseline, err := json.Marshal(v.Baseline)
 	if err != nil {
 		return fmt.Errorf("encode baseline health: %w", err)
@@ -67,11 +67,11 @@ func (s *PgStore) RecordVerdict(ctx context.Context, v *CanaryVerdict) error {
 	var project string
 	err = s.db.QueryRow(ctx, `WITH d AS (SELECT org_id, project_id, id FROM loomplane_deployments WHERE org_id = $2 AND id = $3),
 		ins AS (INSERT INTO loomplane_canary_verdicts (`+verdictColumns+`)
-			SELECT $1, d.org_id, d.project_id, d.id, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16 FROM d
+			SELECT $1, d.org_id, d.project_id, d.id, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18 FROM d
 			ON CONFLICT (id) DO NOTHING)
 		SELECT project_id FROM d`,
 		v.ID, v.OrgID, v.DeploymentID, v.ActionID, v.Service, v.Step, v.Attempt, v.Weight, string(v.Verdict),
-		v.Reason, baseline, candidate, thresholds, v.WindowStart, v.WindowEnd, v.DecidedAt).Scan(&project)
+		v.Reason, baseline, candidate, thresholds, v.WindowStart, v.WindowEnd, v.DecidedAt, v.Retry, v.BaselineFallback).Scan(&project)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
@@ -83,14 +83,14 @@ func (s *PgStore) RecordVerdict(ctx context.Context, v *CanaryVerdict) error {
 }
 
 const verdictColumns = `id, org_id, project_id, deployment_id, action_id, service, step, attempt, weight, verdict,
-	reason, baseline, candidate, thresholds, window_start, window_end, decided_at`
+	reason, baseline, candidate, thresholds, window_start, window_end, decided_at, retry, baseline_fallback`
 
 func scanVerdict(row pgx.Row) (CanaryVerdict, error) {
 	var v CanaryVerdict
 	var verdict string
 	var baseline, candidate, thresholds []byte
 	if err := row.Scan(&v.ID, &v.OrgID, &v.ProjectID, &v.DeploymentID, &v.ActionID, &v.Service, &v.Step, &v.Attempt, &v.Weight, &verdict,
-		&v.Reason, &baseline, &candidate, &thresholds, &v.WindowStart, &v.WindowEnd, &v.DecidedAt); err != nil {
+		&v.Reason, &baseline, &candidate, &thresholds, &v.WindowStart, &v.WindowEnd, &v.DecidedAt, &v.Retry, &v.BaselineFallback); err != nil {
 		return v, err
 	}
 	v.Verdict = releasehealth.Verdict(verdict)
@@ -109,7 +109,7 @@ func scanVerdict(row pgx.Row) (CanaryVerdict, error) {
 // Verdicts implements CanaryStore.
 func (s *PgStore) Verdicts(ctx context.Context, orgID, deploymentID string) ([]CanaryVerdict, error) {
 	rows, err := s.db.Query(ctx, `SELECT `+verdictColumns+` FROM loomplane_canary_verdicts
-		WHERE org_id = $1 AND deployment_id = $2 ORDER BY step, attempt, action_id`, orgID, deploymentID)
+		WHERE org_id = $1 AND deployment_id = $2 ORDER BY retry, step, attempt, action_id`, orgID, deploymentID)
 	if err != nil {
 		return nil, fmt.Errorf("list verdicts: %w", err)
 	}

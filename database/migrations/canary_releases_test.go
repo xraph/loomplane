@@ -42,11 +42,11 @@ func TestCanaryReleasesMigration(t *testing.T) {
 	exec(t, conn, `UPDATE loomplane_deployments SET canary='{"status":"ramping"}' WHERE id='dep_1'`)
 
 	verdict := func(id, verdict string, weight int) string {
-		return `INSERT INTO loomplane_canary_verdicts (id,org_id,project_id,deployment_id,action_id,service,step,attempt,weight,verdict,reason,baseline,candidate,thresholds,window_start,window_end,decided_at)
- VALUES ('` + id + `','org','proj','dep_1','service:api','api',0,0,` + strconv.Itoa(weight) + `,'` + verdict + `','ok','{}','{}','{}',now(),now(),now())`
+		return `INSERT INTO loomplane_canary_verdicts (id,org_id,project_id,deployment_id,retry,action_id,service,step,attempt,weight,verdict,reason,baseline,candidate,thresholds,window_start,window_end,decided_at)
+ VALUES ('` + id + `','org','proj','dep_1',0,'service:api','api',0,0,` + strconv.Itoa(weight) + `,'` + verdict + `','ok','{}','{}','{}',now(),now(),now())`
 	}
-	exec(t, conn, verdict("dep_1/service:api/0/0", "pass", 10))
-	if got := strs(t, conn, `SELECT type||'|'||entity_id||'|'||project_id FROM loomplane_events WHERE type LIKE 'canary_verdict.%'`); len(got) != 1 || got[0] != "canary_verdict.updated|dep_1/service:api/0/0|proj" {
+	exec(t, conn, verdict("dep_1/0/service:api/0/0", "pass", 10))
+	if got := strs(t, conn, `SELECT type||'|'||entity_id||'|'||project_id FROM loomplane_events WHERE type LIKE 'canary_verdict.%'`); len(got) != 1 || got[0] != "canary_verdict.updated|dep_1/0/service:api/0/0|proj" {
 		t.Fatalf("verdict events: %v", got)
 	}
 	for _, sql := range []string{verdict("v_maybe", "maybe", 10), verdict("v_heavy", "pass", 101)} {
