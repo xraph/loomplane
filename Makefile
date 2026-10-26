@@ -1,6 +1,7 @@
 .PHONY: help up down stack dev dev-api dev-dashboard build build-api build-dashboard run vuln fuzz build-cli build-agent \
 	image helm-lint k8s-manifest test-kubernetes test test-go test-dashboard test-integration acceptance acceptance-infrastructure acceptance-catalog lint lint-go lint-dashboard \
-	gen-client check-client setup clean
+	lint-fix fmt fmt-go fmt-dashboard vet gen-client check-client setup clean \
+	h b r t ti c f l lf v d
 
 .DEFAULT_GOAL := help
 
@@ -15,6 +16,9 @@ TEST_DATABASE_URL ?= postgres://loomplane:loomplane@localhost:55532/loomplane?ss
 
 help: ## List the targets
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z_-]+:.*?##/ { printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
+	@echo
+	@echo "  Shortcuts: h help, b build, r run, t test, ti test-integration, c clean,"
+	@echo "  f fmt, l lint, lf lint-fix, v vet, d dev"
 
 setup: ## Install Go modules and the dashboard's packages
 	go mod download
@@ -97,6 +101,21 @@ lint: lint-go lint-dashboard ## Lint Go and the dashboard
 lint-go: ## golangci-lint, integration tests included
 	golangci-lint run --build-tags=integration ./...
 
+lint-fix: ## Lint Go and the dashboard, applying the fixes each linter can make
+	golangci-lint run --fix --build-tags=integration ./...
+	pnpm --dir $(DASHBOARD_DIR) lint --fix
+
+fmt: fmt-go fmt-dashboard ## Format Go and the dashboard
+
+fmt-go: ## gofmt and goimports, with the settings in .golangci.yml
+	golangci-lint fmt ./...
+
+fmt-dashboard: ## Prettier over the dashboard's TypeScript
+	pnpm --dir $(DASHBOARD_DIR) format
+
+vet: ## go vet, integration tests included
+	go vet -tags=integration ./...
+
 vuln: ## Check Loomplane and its dependencies for known vulnerabilities it reaches
 	go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
 
@@ -124,3 +143,16 @@ check-client: ## Fail if the generated clients drifted from the specs
 
 clean: ## Remove build output
 	rm -rf bin $(DASHBOARD_DIR)/dist .forge
+
+# Short aliases. Each forwards to the long target, which carries the recipe.
+h: help
+b: build
+r: run
+t: test
+ti: test-integration
+c: clean
+f: fmt
+l: lint
+lf: lint-fix
+v: vet
+d: dev

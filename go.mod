@@ -40,7 +40,7 @@ require (
 	github.com/xraph/chronicle v1.9.1
 	github.com/xraph/confy v1.1.0
 	github.com/xraph/ctrlplane v1.8.1
-	github.com/xraph/dispatch v1.9.2
+	github.com/xraph/dispatch v1.9.3
 	github.com/xraph/forge v1.13.0
 	github.com/xraph/forge/extensions/conduit v1.13.0
 	github.com/xraph/go-utils v1.5.0
