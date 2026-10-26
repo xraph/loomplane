@@ -17,6 +17,8 @@ import type {
   Provider,
 } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
+import { CloudSQLApplicationFields } from "@/components/cloudsql-application-fields"
+import { cloudSQLApplicationNetworkValid } from "@/lib/cloudsql-network"
 import { QueryError } from "@/components/query-error"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -218,6 +220,18 @@ function TargetRow({
   const dirty = Object.keys(changes).length > 0
   const disabled = !can("project:update") || save.isPending
   useDeploymentDraft(dirty, onPendingChange)
+  const cloudRun = row.section === "services" && value.provider === "cloud-run"
+  const route = value.cloudSqlNetwork ?? {
+    consumerProject: "",
+    network: "",
+    subnetwork: "",
+  }
+  const routeEmpty =
+    !route.consumerProject && !route.network && !route.subnetwork
+  const routeValid =
+    !cloudRun ||
+    routeEmpty ||
+    cloudSQLApplicationNetworkValid(route, value.region)
   const owned =
     row.section === "services" &&
     (selected?.cloud === "server" || selected?.cloud === "kubernetes")
@@ -231,6 +245,7 @@ function TargetRow({
     setSaved(false)
   }
   const submit = async () => {
+    if (!routeValid) return
     setError(undefined)
     onPendingChange?.(true)
     try {
@@ -345,7 +360,7 @@ function TargetRow({
             variant="outline"
 
             aria-label={`Save ${row.name} placement`}
-            disabled={disabled || (value.enabled && !offered)}
+            disabled={disabled || !routeValid || (value.enabled && !offered)}
             onClick={() => void submit()}
           >
             Save
@@ -362,6 +377,15 @@ function TargetRow({
               change({
                 provider: v,
                 region: "",
+                ...(value.cloudSqlNetwork
+                  ? {
+                      cloudSqlNetwork: {
+                        consumerProject: "",
+                        network: "",
+                        subnetwork: "",
+                      },
+                    }
+                  : {}),
                 ...(owned || v === "server" || v === "kubernetes"
                   ? { target: "", endpoint: {} }
                   : {}),
@@ -420,6 +444,22 @@ function TargetRow({
           </datalist>
         </label>
       </div>
+      {cloudRun && (
+        <>
+          <CloudSQLApplicationFields
+            name={row.name}
+            value={route}
+            disabled={disabled}
+            onChange={(cloudSqlNetwork) => change({ cloudSqlNetwork })}
+          />
+          {!routeValid && (
+            <p role="alert" className="text-xs text-destructive">
+              Choose a canonical VPC and subnet in the same host project and
+              service region, or clear both fields to restore inheritance.
+            </p>
+          )}
+        </>
+      )}
       {owned && (
         <div className="grid min-w-0 gap-2 sm:grid-cols-2 xl:grid-cols-3">
           <ConnectionChoice

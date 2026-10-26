@@ -611,7 +611,7 @@ func (d *Deployments) deployAction(ctx context.Context, info drt.ActivityInfo, i
 	return []byte("{}"), dep.Run(ctx, in.OrgID, in.DeploymentID, in.ActionID, info.HeartbeatDetails(), heartbeat)
 }
 
-func (d *Deployments) deployFinish(ctx context.Context, _ drt.ActivityInfo, input []byte) ([]byte, error) {
+func (d *Deployments) deployFinish(ctx context.Context, info drt.ActivityInfo, input []byte) ([]byte, error) {
 	var in deployInput
 	if err := json.Unmarshal(input, &in); err != nil {
 		return nil, err
@@ -619,6 +619,9 @@ func (d *Deployments) deployFinish(ctx context.Context, _ drt.ActivityInfo, inpu
 	dep, err := d.boundDeployer()
 	if err != nil {
 		return nil, err
+	}
+	if info.Key.Namespace != "" && info.Key.WorkflowID != "" && info.Key.RunID != "" && info.CommandID != "" {
+		ctx = context.WithValue(ctx, finalizationKey{}, finalizationIdentity{key: info.IdempotencyKey(), workflow: info.Key.WorkflowID})
 	}
 	return []byte("{}"), dep.Finish(ctx, in.OrgID, in.DeploymentID, in.Reason)
 }

@@ -38,7 +38,11 @@ Use **Open Fabriq admin** to open a short-lived console session through Loomplan
 
 ## Recovery
 
-On Docker, the Recovery tab opens the existing backup and isolated restore controls for the stack's Postgres and Redis resources. You can configure a backup schedule and verify a restore into a separate copy. TimescaleDB restores preserve extension-owned objects, hypertables and application ownership.
+On Docker, a new Fabriq Postgres is scheduled for a backup every 24 hours, starting 24 hours after its policy is installed. This applies to hosted and library mode. The schedule appears in the deployment plan, and you need backup management permission to approve it. Installation follows the database binding; if it fails, the deployment step fails and can be retried. A retry preserves any schedule you have already changed or paused.
+
+Open Recovery to change or pause the schedule, request a backup, or verify a restore into a separate copy. The Stack card reads the saved policy and reports paused schedules, changed intervals and scheduling errors. A successful backup does not count as a verified restore. TimescaleDB restores preserve extension-owned objects, hypertables and application ownership.
+
+The daily default applies only to newly provisioned Postgres. Existing Fabriq stacks and linked project resources keep their current policies, and external databases remain yours to back up. Redis has backup and isolated restore controls on Docker, but no automatic daily policy. Configure its schedule separately if you need one.
 
 These engines do not have catalog backups on Kubernetes yet. The panel says so. FalkorDB and Elasticsearch use projection rebuilds instead of separate backups. The Redis profile persists AOF every second and caps memory at 128 MiB with `noeviction`; writes fail when it runs out of space, so watch capacity before relying on it for a large outbox.
 

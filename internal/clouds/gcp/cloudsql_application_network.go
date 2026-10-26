@@ -36,29 +36,45 @@ type sqlApplicationSubnet struct {
 	State     string `json:"state"`
 }
 
-var cloudRunSubnetRanges = []netip.Prefix{
+var privateSubnetRanges = []netip.Prefix{
 	netip.MustParsePrefix("10.0.0.0/8"), netip.MustParsePrefix("172.16.0.0/12"), netip.MustParsePrefix("192.168.0.0/16"),
-	netip.MustParsePrefix("100.64.0.0/10"), netip.MustParsePrefix("240.0.0.0/4"),
 }
 
-func (s sqlApplicationSubnet) matches(route provider.CloudSQLApplicationNetwork, region string) bool {
+var cloudRunSubnetRanges = append([]netip.Prefix{
+	netip.MustParsePrefix("100.64.0.0/10"), netip.MustParsePrefix("240.0.0.0/4"),
+}, privateSubnetRanges...)
+
+func (s sqlApplicationSubnet) matchesRoute(route provider.CloudSQLApplicationNetwork, region string) bool {
 	id, idErr := strconv.ParseUint(s.ID, 10, 64)
 	prefix, prefixErr := netip.ParsePrefix(s.IPCIDR)
-	if idErr != nil || id == 0 || strconv.FormatUint(id, 10) != s.ID || prefixErr != nil || !prefix.Addr().Is4() || prefix.Bits() > 26 || prefix != prefix.Masked() {
+	if idErr != nil || id == 0 || strconv.FormatUint(id, 10) != s.ID || prefixErr != nil || !prefix.Addr().Is4() || prefix != prefix.Masked() {
 		return false
 	}
-	allowed := false
-	for _, pool := range cloudRunSubnetRanges {
-		if prefix.Bits() >= pool.Bits() && pool.Contains(prefix.Addr()) {
-			allowed = true
-			break
-		}
-	}
 	parts := strings.Split(route.Subnetwork, "/")
-	return allowed && s.Kind == "compute#subnetwork" && s.Name == parts[5] && computeResource(s.SelfLink) == route.Subnetwork &&
+	return s.Kind == "compute#subnetwork" && s.Name == parts[5] && computeResource(s.SelfLink) == route.Subnetwork &&
 		computeResource(s.Network) == route.Network && computeResource(s.Region) == "projects/"+route.ConsumerProject+"/regions/"+region &&
 		(s.Purpose == "PRIVATE" || s.Purpose == "PRIVATE_RFC_1918") &&
 		(s.StackType == "" || s.StackType == "IPV4_ONLY" || s.StackType == "IPV4_IPV6") && s.State == "READY"
+}
+
+func (s sqlApplicationSubnet) matches(route provider.CloudSQLApplicationNetwork, region string) bool {
+	if !s.matchesRoute(route, region) {
+		return false
+	}
+	prefix, err := netip.ParsePrefix(s.IPCIDR)
+	if err != nil || prefix.Bits() > 26 {
+		return false
+	}
+	return subnetWithin(prefix, cloudRunSubnetRanges)
+}
+
+func subnetWithin(prefix netip.Prefix, pools []netip.Prefix) bool {
+	for _, pool := range pools {
+		if prefix.Bits() >= pool.Bits() && pool.Contains(prefix.Addr()) {
+			return true
+		}
+	}
+	return false
 }
 
 // ReadSQLApplicationNetwork observes only the declared subnet. It never creates

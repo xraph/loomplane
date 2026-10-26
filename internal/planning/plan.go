@@ -489,6 +489,8 @@ type Binding struct {
 	// PhysicalID identifies the immutable provider incarnation when the adapter
 	// can verify it. ExternalID may be a reusable native name.
 	PhysicalID string `json:"physical_id,omitempty"`
+	// OwnedResources holds non-secret provider identities needed for later cleanup.
+	OwnedResources map[string]json.RawMessage `json:"owned_resources,omitempty"`
 	// Config is the ServiceConfig or ResourceConfig last applied.
 	Config json.RawMessage `json:"config"`
 	// URL is where a deployed service answers, which the services that

@@ -64,6 +64,134 @@ function response(body: unknown, status = 200) {
   })
 }
 
+it.each(["manual", "provision"])(
+  "requires an explicit regional PSC endpoint before deploying its profile: %s",
+  async (mode) => {
+    const user = userEvent.setup()
+    const fixture = managedDatabaseFixture("cloud-sql")
+    const psc = {
+      ...fixture.profile,
+      id: "postgresql-17-cloud-sql-psc",
+      access: "cloud-sql-psc-connector",
+    }
+    fixture.provider.provisions![0].managedProfiles!.push(psc)
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const path = String(input)
+      return response(
+        managedWire(
+          path.endsWith("/projects")
+            ? { projects: [] }
+            : path.endsWith("/providers")
+              ? { providers: [fixture.provider] }
+              : {
+                  connections: [
+                    fixture.connection,
+                    {
+                      ...fixture.connection,
+                      id: "second",
+                      name: "Second account",
+                      accountIdentity: "second-account",
+                      details: { project_id: "project-b" },
+                    },
+                  ],
+                }
+        )
+      )
+    })
+    const deploy = vi
+      .spyOn(catalog, "deployDatabase")
+      .mockResolvedValue("project")
+    mount()
+    const button = await screen.findByRole("button", {
+      name: "Deploy PostgreSQL",
+    })
+    expect(button).toBeEnabled()
+    expect(
+      screen.getByRole("combobox", { name: "Connection mode" })
+    ).toHaveTextContent("Cloud SQL connector")
+    await user.click(screen.getByRole("combobox", { name: "Connection mode" }))
+    await user.click(
+      await screen.findByRole("option", {
+        name: "Private Service Connect (PSC)",
+      })
+    )
+    expect(button).toBeDisabled()
+    await user.click(screen.getByLabelText("VPC network"))
+    await user.paste("projects/project-a/global/networks/apps")
+    await user.click(screen.getByLabelText("PSC forwarding rule"))
+    await user.paste(
+      "projects/project-a/regions/us-central1/forwardingRules/database"
+    )
+    expect(button).toBeEnabled()
+    await user.click(screen.getByRole("radio", { name: /Second account/ }))
+    await user.click(screen.getByRole("combobox", { name: "Connection mode" }))
+    await user.click(
+      await screen.findByRole("option", {
+        name: "Private Service Connect (PSC)",
+      })
+    )
+    expect(screen.getByLabelText("VPC network")).toHaveValue("")
+    expect(screen.getByLabelText("PSC forwarding rule")).toHaveValue("")
+    expect(button).toBeDisabled()
+    await user.click(screen.getByRole("radio", { name: /Selected account/ }))
+    await user.click(screen.getByRole("combobox", { name: "Connection mode" }))
+    await user.click(
+      await screen.findByRole("option", {
+        name: "Private Service Connect (PSC)",
+      })
+    )
+    await user.click(screen.getByRole("combobox", { name: "Region" }))
+    await user.click(
+      await screen.findByRole("option", { name: "europe-west1" })
+    )
+    expect(button).toBeDisabled()
+    await user.clear(screen.getByLabelText("PSC forwarding rule"))
+    await user.click(screen.getByLabelText("PSC forwarding rule"))
+    await user.paste(
+      "projects/project-a/regions/europe-west1/forwardingRules/database"
+    )
+    if (mode === "provision") {
+      await user.click(
+        screen.getByRole("checkbox", {
+          name: "Create endpoint and private DNS",
+        })
+      )
+      expect(button).toBeDisabled()
+      await user.click(screen.getByLabelText("PSC subnet"))
+      await user.paste("projects/project-a/regions/us-central1/subnetworks/psc")
+      expect(button).toBeDisabled()
+      await user.clear(screen.getByLabelText("PSC subnet"))
+      await user.paste(
+        "projects/project-a/regions/europe-west1/subnetworks/psc"
+      )
+      expect(button).toBeEnabled()
+    }
+    await user.click(button)
+    expect(deploy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        managed: expect.objectContaining({
+          profile: psc,
+          region: "europe-west1",
+          cloudSqlPsc: {
+            consumerProject: "project-a",
+            network: "projects/project-a/global/networks/apps",
+            forwardingRule:
+              "projects/project-a/regions/europe-west1/forwardingRules/database",
+            ...(mode === "provision"
+              ? {
+                  provisionSubnetwork:
+                    "projects/project-a/regions/europe-west1/subnetworks/psc",
+                }
+              : {}),
+          },
+        }),
+      }),
+      expect.any(Function),
+      expect.any(Function)
+    )
+  }
+)
+
 for (const target of ["rds", "cloud-sql"] as const) {
   it(`shows ${target} account, requested storage and provider backups without a Docker schedule`, async () => {
     const fixture = managedDatabaseFixture(target)

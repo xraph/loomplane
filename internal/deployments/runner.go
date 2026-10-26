@@ -22,6 +22,7 @@ import (
 	"github.com/xraph/loomplane/internal/clouds/server"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/gateway"
+	"github.com/xraph/loomplane/internal/orchestration"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/telemetry"
 	"github.com/xraph/loomplane/pkg/provider"
@@ -60,6 +61,7 @@ type Observation struct {
 
 // Job is one action to carry out, with everything its executor needs.
 type Job struct {
+	pendingIdentity  *PendingCloudIdentity
 	cleanupSyncID    string
 	BuildCredentials Credentials
 	Logs             LogSink
@@ -159,9 +161,10 @@ func linkField(link planning.EnvLink) (string, error) {
 type Outcome struct {
 	// ExternalID is what the provider calls it: a Ctrl Plane instance or a
 	// Vercel project.
-	ExternalID string
-	PhysicalID string
-	URL        string
+	ExternalID     string
+	PhysicalID     string
+	OwnedResources string
+	URL            string
 	// Image is the container image a build produced.
 	Image string
 	// Revision is what went live, which a drift check compares with:
@@ -1043,12 +1046,13 @@ func moves(b *planning.Binding, a planning.Action, connID string) bool {
 // its own. Removing is the external ID of what Remove's progress is for,
 // since an action can have more than one old one to remove.
 type replaceCheckpoint struct {
-	PendingResource string `json:"pending_resource,omitempty"`
-	Replace         bool   `json:"replace"`
-	Apply           []byte `json:"apply,omitempty"`
-	Remove          []byte `json:"remove,omitempty"`
-	Removing        string `json:"removing,omitempty"`
-	RemovingScope   string `json:"removing_scope,omitempty"`
+	PendingIdentity *PendingCloudIdentity `json:"pending_identity,omitempty"`
+	PendingResource string                `json:"pending_resource,omitempty"`
+	Replace         bool                  `json:"replace"`
+	Apply           []byte                `json:"apply,omitempty"`
+	Remove          []byte                `json:"remove,omitempty"`
+	Removing        string                `json:"removing,omitempty"`
+	RemovingScope   string                `json:"removing_scope,omitempty"`
 }
 
 // readReplaceCheckpoint reads what an earlier attempt at an action saved.
@@ -1281,7 +1285,7 @@ func (r *Runner) removeOne(ctx context.Context, job *Job, old *planning.Binding,
 	if fenceErr != nil {
 		return false, fenceErr
 	}
-	if err := exec.Remove(removalCtx, &gone, old); err != nil {
+	if err := removePendingOrBound(removalCtx, exec, &gone, old); err != nil {
 		if deleting {
 			return false, untracked(fmt.Errorf("remove the old %s on %s: %w", a.Name, placement(old.Provider, old.Region), err))
 		}
@@ -1450,6 +1454,12 @@ func (r *Runner) released(ctx context.Context, d *Deployment, b *planning.Bindin
 func cloneBinding(b *planning.Binding) *planning.Binding {
 	c := *b
 	c.Config = slices.Clone(b.Config)
+	if b.OwnedResources != nil {
+		c.OwnedResources = make(map[string]json.RawMessage, len(b.OwnedResources))
+		for key, value := range b.OwnedResources {
+			c.OwnedResources[key] = slices.Clone(value)
+		}
+	}
 	if b.ObservedAt != nil {
 		at := *b.ObservedAt
 		c.ObservedAt = &at
@@ -1484,10 +1494,27 @@ func (r *Runner) bind(ctx context.Context, d *Deployment, a planning.Action, cur
 		ConnectionID: connID, Revision: out.Revision, CommitSHA: commitFor(d, a),
 		PlanID: d.PlanID, CreatedAt: now, UpdatedAt: now,
 	}
+	if out.OwnedResources != "" {
+		if err := json.Unmarshal([]byte(out.OwnedResources), &b.OwnedResources); err != nil || b.OwnedResources == nil {
+			return nil, errors.New("provider ownership must be a JSON object")
+		}
+	}
+	if _, ownershipErr := b.OwnsResources(); ownershipErr != nil {
+		return nil, ownershipErr
+	}
 	var left []planning.Binding
 	if current != nil {
 		b.ID, b.CreatedAt = current.ID, current.CreatedAt
 		left = slices.Clone(current.Replaced)
+		owned, ownershipErr := current.OwnsResources()
+		if ownershipErr != nil {
+			return nil, ownershipErr
+		}
+		if owned {
+			old := *current
+			old.Replaced = nil
+			left = append(left, old)
+		}
 	} else {
 		id, err := typeid.Generate("bind")
 		if err != nil {
@@ -1506,6 +1533,9 @@ func (r *Runner) bind(ctx context.Context, d *Deployment, a planning.Action, cur
 			return nil, identityErr
 		}
 		duplicate := slices.ContainsFunc(b.Replaced, func(o planning.Binding) bool { return bindingIdentity(&o) == bindingIdentity(&old) })
+		if same && !b.RetainsOwnership(&old) {
+			return nil, errors.New("the provider discarded existing resource ownership; binding update is blocked")
+		}
 		if same || duplicate {
 			continue
 		}
@@ -1526,6 +1556,9 @@ func (r *Runner) Finish(ctx context.Context, orgID, deploymentID, reason string)
 	if err != nil {
 		return err
 	}
+	if done, replayErr := r.replayFinalization(ctx, d, reason); done || replayErr != nil {
+		return replayErr
+	}
 	if d.Status == StatusPaused || d.Status == StatusCancelled {
 		return nil
 	}
@@ -1538,7 +1571,7 @@ func (r *Runner) Finish(ctx context.Context, orgID, deploymentID, reason string)
 	if reason != "" {
 		status = StatusFailed
 		for _, s := range d.Steps {
-			if s.Status == StepPending {
+			if s.Status == StepPending && orchestration.FinalizationKey(ctx) == "" {
 				s.Status, s.Message = StepSkipped, "Skipped after an earlier step failed"
 				if err := r.store.UpdateStep(ctx, orgID, d.ID, s); err != nil {
 					return err

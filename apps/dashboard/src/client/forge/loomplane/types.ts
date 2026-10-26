@@ -194,6 +194,7 @@ export interface Binding {
   name: string;
   observedAt?: string;
   orgId: string;
+  ownedResources?: Record<string, any>;
   physicalId?: string;
   planId: string;
   projectId: string;
@@ -389,6 +390,7 @@ export interface CloudSQLSourceEndpoint {
   consumerProject: string;
   forwardingRule: string;
   network: string;
+  provisionSubnetwork?: string;
 }
 
 export interface CloudSyncEvent {
@@ -772,6 +774,7 @@ export interface EditInputBody {
 };
   placement?: {
   build?: Build;
+  cloudSqlNetwork?: CloudSQLApplicationNetwork;
   cloudTags?: string[];
   cloudTarget?: string;
   enabled?: boolean;

@@ -26,13 +26,33 @@ import (
 // GroupName is the migration group for Loomplane's own tables.
 const GroupName = "loomplane"
 
-// Group builds Loomplane's migration group. A constructor rather than a
-// package variable filled by init(), so tests and the app each get a fresh
-// group.
+// App is where generated migrations register. Run
+//
+//	forge db create-go <name>
+//
+// and you get database/migrations/<version>_<name>.go, which registers
+// itself here from init(). You don't edit this file to add a migration.
+//
+// One catch until 2026-11-02. The hand-registered versions in Group run
+// ahead of the clock, and grove orders a group by version alone, so a
+// timestamp taken before then sorts before them. If your migration needs a
+// table one of them creates, give it a version after that one and rename
+// the file to match, or a fresh database fails on the missing table.
+var App = migrate.NewGroup(GroupName)
+
+// Group builds Loomplane's migration group: everything in App plus the
+// older migrations registered below. It's a constructor, and it copies App's
+// migrations, because tests lift migrations out of the result into groups of
+// their own and grove's Register writes to every migration it's handed.
 func Group() *migrate.Group {
 	g := migrate.NewGroup(GroupName)
+	for _, m := range App.Migrations() {
+		generated := *m
+		g.MustRegister(&generated)
+	}
 	g.MustRegister(
-		statements("20261115000100", "fabriq", fabriqUp, fabriqDown),
+		// Hand-registered migrations from before generated files. Every
+		// database that ran them recorded these versions, so leave them be.
 		statements("20261101001100", "deployment_workflow_runs", deploymentWorkflowRunsUp, deploymentWorkflowRunsDown),
 		statements("20261102000300", "native_retention_policy_connections", nativeRetentionPolicyConnectionsUp, nativeRetentionPolicyConnectionsDown),
 		statements("20261101001000", "deployment_capacity_wait", deploymentCapacityWaitUp, deploymentCapacityWaitDown),
@@ -118,6 +138,7 @@ func Group() *migrate.Group {
 		statements("20261020000900", "shared_clouds", sharedCloudsUp, sharedCloudsDown),
 		statements("20261020000401", "cloud_events", cloudEventsUp, cloudEventsDown),
 		statements("20261019000100", "plan_source_refs", planSourceRefsUp, planSourceRefsDown),
+		statements("20261115000100", "fabriq", fabriqUp, fabriqDown),
 		WorkloadControllersMigration(),
 		WorkloadRegistrationsMigration(),
 		NotificationsMigration(),

@@ -35,10 +35,20 @@ func TestCloudSQLPSCReviewedEndpointPublishedContract(t *testing.T) {
 			t.Fatal(err)
 		}
 		if route == "/openapi.json" {
+			placement := spec.Components.Schemas["EditInputBody"].Properties["placement"]
+			properties, _ := placement["properties"].(map[string]any)
+			network, _ := properties["cloud_sql_network"].(map[string]any)
+			if network["$ref"] != "#/components/schemas/CloudSQLApplicationNetwork" {
+				t.Fatal("missing application route placement edit", placement)
+			}
 			credentials := spec.Components.Schemas["NativeCopyCredentials"]
 			if credentials.Properties["private_service_connect"]["type"] != "boolean" || slices.Contains(credentials.Required, "private_service_connect") {
 				t.Fatal("missing optional PSC credential transport")
 			}
+		}
+		binding := spec.Components.Schemas["Binding"]
+		if binding.Properties["owned_resources"]["type"] != "object" || slices.Contains(binding.Required, "owned_resources") {
+			t.Fatal(route, "missing optional binding ownership object", binding.Properties["owned_resources"])
 		}
 		service := spec.Components.Schemas["ServiceConfig"]
 		if service.Properties["cloud_sql_network"]["$ref"] != "#/components/schemas/CloudSQLApplicationNetwork" || slices.Contains(service.Required, "cloud_sql_network") {
@@ -55,6 +65,9 @@ func TestCloudSQLPSCReviewedEndpointPublishedContract(t *testing.T) {
 			t.Fatal(route, "missing optional endpoint review")
 		}
 		endpoint := spec.Components.Schemas["CloudSQLSourceEndpoint"]
+		if endpoint.Properties["provision_subnetwork"]["type"] != "string" || slices.Contains(endpoint.Required, "provision_subnetwork") {
+			t.Fatal(route, "missing explicit optional provisioning subnet")
+		}
 		for _, field := range []string{"consumer_project", "network", "forwarding_rule"} {
 			if endpoint.Properties[field]["type"] != "string" || !slices.Contains(endpoint.Required, field) {
 				t.Fatal(route, "incomplete endpoint contract", field)

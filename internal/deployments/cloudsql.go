@@ -162,6 +162,9 @@ func (c *CloudSQL) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 	if in.DatabaseVersion != version || in.State != "RUNNABLE" {
 		return nil, errors.New("cloud sql instance no longer matches the saved deployment")
 	}
+	if provisionErr := state.ensurePSC(ctx, s, cfg); provisionErr != nil {
+		return nil, provisionErr
+	}
 	var endpoint *gcp.SQLSourceEndpoint
 	if psc {
 		endpoint, err = s.ReadSQLPITRSourceEndpoint(ctx, spec, state.ResourceID, cfg.Managed.CloudSQLPSC, state.guarded(s, job.Binding == nil).Check)
@@ -206,7 +209,11 @@ func (c *CloudSQL) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 		return nil, err
 	}
 
-	return &Outcome{ExternalID: in.ConnectionName, PhysicalID: state.ResourceID, Revision: in.DatabaseVersion}, nil
+	owned, ownershipErr := state.ownership(job.Binding)
+	if ownershipErr != nil {
+		return nil, ownershipErr
+	}
+	return &Outcome{ExternalID: in.ConnectionName, PhysicalID: state.ResourceID, Revision: in.DatabaseVersion, OwnedResources: owned}, nil
 }
 
 func originalSQLPassword(ctx context.Context, job *Job) (string, error) {
@@ -265,7 +272,9 @@ func (c *CloudSQL) Remove(ctx context.Context, job *Job, b *planning.Binding) er
 	if err != nil {
 		return err
 	}
-	state, err := readCloudSQLState(job, cfg, key.ProjectID, region, instance, "remove")
+	removing := *job
+	removing.Binding = b
+	state, err := readCloudSQLState(&removing, cfg, key.ProjectID, region, instance, "remove")
 	if err != nil {
 		return err
 	}
@@ -289,6 +298,19 @@ func (c *CloudSQL) Remove(ctx context.Context, job *Job, b *planning.Binding) er
 		}
 	}
 
+	if state.PSC != nil {
+		client, sessionErr := c.Google.Session(ctx, key)
+		if sessionErr != nil {
+			return sessionErr
+		}
+		cleanup := gcp.SQLPSCCleanupState{}
+		if state.PSCCleanup != nil {
+			cleanup = *state.PSCCleanup
+		}
+		if err := client.DeleteSQLPSCSourceEndpoint(ctx, cloudSQLProvisionSpec(cfg, instance, state.ResourceID), state.PSC.Provision, state.PSC.Endpoint, &cleanup, func(next gcp.SQLPSCCleanupState) error { state.PSCCleanup = &next; return state.save() }, state.pscCheck); err != nil {
+			return err
+		}
+	}
 	return job.Forget(ctx)
 }
 
@@ -304,6 +326,10 @@ func (c *CloudSQL) Observe(ctx context.Context, conn *connections.Connection, cr
 	}
 	if cfg.Managed != nil && key.ProjectID != conn.Details["project_id"] {
 		return nil, fmt.Errorf("managed database review changed: the credential belongs to a different project")
+	}
+	owned, err := bindingCloudSQLPSC(cfg, b, key.ProjectID)
+	if err != nil {
+		return nil, err
 	}
 	s, err := c.Google.Session(ctx, key)
 	if err != nil {
@@ -326,6 +352,9 @@ func (c *CloudSQL) Observe(ctx context.Context, conn *connections.Connection, cr
 	}
 	if b.PhysicalID != "" && pin != b.PhysicalID {
 		return nil, errors.New("cloud sql incarnation changed")
+	}
+	if err := owned.verify(ctx, s, cfg, instance, b.PhysicalID, func(ctx context.Context) error { return ctx.Err() }); err != nil {
+		return nil, err
 	}
 	if cfg.Managed != nil && cfg.Managed.CloudSQLPSC != (manageddb.CloudSQLSourceEndpoint{}) {
 		spec := cloudSQLPITRSourceSpec(cfg, instance)

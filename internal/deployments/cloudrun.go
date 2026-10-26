@@ -71,6 +71,7 @@ var (
 type cloudRunState struct {
 	PSC        *cloudRunPSCState `json:"psc,omitempty"`
 	BuildID    string            `json:"build_id,omitempty"`
+	BuildRetry int               `json:"build_retry,omitempty"`
 	Image      string            `json:"image,omitempty"`
 	LogAttempt string            `json:"log_attempt,omitempty"`
 }
@@ -177,6 +178,23 @@ func (c *CloudRun) build(ctx context.Context, s *gcp.Session, job *Job, state *c
 		return "", err
 	}
 	image := gcp.ImageName(project, a.Region, imageRepository, imageName(job), tag)
+	retry := 0
+	if job.Deployment != nil {
+		retry = job.Deployment.Retries
+	}
+	if state.BuildID != "" && state.BuildRetry < retry {
+		// An explicit retry may replace a confirmed failed build. A running
+		// or unreadable operation still owns its checkpoint and must resume.
+		previous, readErr := s.GetBuild(ctx, state.BuildID)
+		if readErr != nil {
+			return "", readErr
+		}
+		if previous.Done() && previous.Status != "SUCCESS" {
+			state.BuildID, state.LogAttempt = "", ""
+			state.BuildRetry = retry
+			save()
+		}
+	}
 	if state.BuildID == "" {
 		job.Progress(StepBuilding, "Uploading the source to Cloud Build")
 		bucket := project + "_loomplane"
@@ -205,6 +223,7 @@ func (c *CloudRun) build(ctx context.Context, s *gcp.Session, job *Job, state *c
 		if state.BuildID, err = s.StartBuild(ctx, b); err != nil {
 			return "", fmt.Errorf("start the build: %w", err)
 		}
+		state.BuildRetry = retry
 		save()
 	}
 	job.Progress(StepBuilding, "Building on Cloud Build")

@@ -347,3 +347,17 @@ func (s *Session) DeleteSQLInstance(ctx context.Context, name string, track SQLM
 		return false, err
 	}, "DELETE")
 }
+
+// AwaitSQLMutation observes a captured operation without issuing another write.
+func (s *Session) AwaitSQLMutation(ctx context.Context, instance, operation, kind string, check func(context.Context) error) error {
+	if !validSQLPathID(operation) || !slices.Contains([]string{"CREATE", "CREATE_DATABASE", "CREATE_USER"}, kind) || check == nil {
+		return errors.New("original Cloud SQL mutation identity is required")
+	}
+	types := []string{kind}
+	if kind == "CREATE_USER" {
+		types = append(types, "UPDATE_USER")
+	}
+	return s.mutateSQL(ctx, instance, "Waiting for the original database operation", SQLMutation{Resume: operation, Check: check, strictIdentity: true}, func(*sqlOperation) (bool, error) {
+		return false, errors.New("recovery cannot start a Cloud SQL mutation")
+	}, types...)
+}

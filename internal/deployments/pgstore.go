@@ -12,6 +12,7 @@ import (
 	"github.com/xraph/grove/drivers/pgdriver"
 
 	"github.com/xraph/loomplane/internal/cloudinfra"
+	"github.com/xraph/loomplane/internal/orchestration"
 	"github.com/xraph/loomplane/internal/page"
 	"github.com/xraph/loomplane/internal/planning"
 )
@@ -197,6 +198,9 @@ func (s *PgStore) UpdateStep(ctx context.Context, orgID, id string, step Step) (
 // Finish implements Store. A deployment that's already settled stays as
 // it is.
 func (s *PgStore) Finish(ctx context.Context, orgID, id, status, reason string, at time.Time) error {
+	if key := orchestration.FinalizationKey(ctx); key != "" {
+		return s.finishActivity(ctx, orgID, id, key, status, reason, at)
+	}
 	if _, err := s.db.Exec(ctx, `UPDATE loomplane_deployments SET status = $3, error = $4, finished_at = $5
 		WHERE org_id = $1 AND id = $2 AND status = 'running'`, orgID, id, status, reason, at); err != nil {
 		return fmt.Errorf("finish deployment: %w", err)

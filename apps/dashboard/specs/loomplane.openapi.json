@@ -9062,6 +9062,10 @@
           "org_id": {
             "type": "string"
           },
+          "owned_resources": {
+            "type": "object",
+            "additionalProperties": true
+          },
           "physical_id": {
             "type": "string"
           },
@@ -10934,6 +10938,9 @@
               },
               "target": {
                 "type": "string"
+              },
+              "cloud_sql_network": {
+                "$ref": "#/components/schemas/CloudSQLApplicationNetwork"
               }
             }
           },
@@ -17810,6 +17817,9 @@
             "type": "string"
           },
           "network": {
+            "type": "string"
+          },
+          "provision_subnetwork": {
             "type": "string"
           }
         }

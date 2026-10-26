@@ -87,9 +87,11 @@ func (f *pscApplicationDeploys) Deploy(ctx context.Context, req deploy.DeployReq
 }
 
 func TestCloudRunPSCApplyDeliversSecretsThroughCheckedRoute(t *testing.T) {
-	for _, scenario := range []string{"fresh", "resume", "update", "after-update", "subnet-replaced", "after-build", "after-secrets", "checkpoint-failed", "malformed-checkpoint", "removed-psc"} {
+	for _, scenario := range []string{"fresh", "resume", "build-retry", "build-retry-checkpoint-failed", "update", "after-update", "subnet-replaced", "after-build", "after-secrets", "checkpoint-failed", "malformed-checkpoint", "removed-psc"} {
 		t.Run(scenario, func(t *testing.T) {
 			job := cloudRunPSCJob(t)
+			buildRetry := strings.HasPrefix(scenario, "build-retry")
+			retryCheckpointRejected := false
 			profile := job.Plan.Actions[0].Resource.Managed.Profile
 			route := job.Action.Service.CloudSQLNetwork
 			const attachment = "projects/sql-tenant/regions/us-central1/serviceAttachments/database"
@@ -121,6 +123,8 @@ func TestCloudRunPSCApplyDeliversSecretsThroughCheckedRoute(t *testing.T) {
 				case r.URL.Path == "/v1/projects/app-project/builds":
 					buildWrites++
 					_, _ = w.Write([]byte(`{"metadata":{"build":{"id":"fixture-build"}}}`))
+				case r.URL.Path == "/v1/projects/app-project/builds/failed":
+					_, _ = w.Write([]byte(`{"id":"failed","status":"FAILURE"}`))
 				case r.URL.Path == "/v1/projects/app-project/builds/fixture-build":
 					if scenario == "after-build" {
 						subnetID = "789"
@@ -201,10 +205,24 @@ func TestCloudRunPSCApplyDeliversSecretsThroughCheckedRoute(t *testing.T) {
 				t.Fatal(checkErr)
 			}
 			state.Image = "image:fixture"
+			if buildRetry {
+				state.Image, state.BuildID = "", "failed"
+				job.Deployment.Retries = 1
+			}
 			if saveErr := save(); saveErr != nil {
 				t.Fatal(saveErr)
 			}
 			job.Checkpoint = func(raw []byte) error {
+				if scenario == "build-retry-checkpoint-failed" {
+					var checkpoint cloudRunState
+					if decodeErr := json.Unmarshal(raw, &checkpoint); decodeErr != nil {
+						return decodeErr
+					}
+					if checkpoint.BuildID == "" && checkpoint.BuildRetry == 1 {
+						retryCheckpointRejected = true
+						return errors.New("lease revoked")
+					}
+				}
 				if scenario == "checkpoint-failed" {
 					return errors.New("lease revoked")
 				}
@@ -212,8 +230,10 @@ func TestCloudRunPSCApplyDeliversSecretsThroughCheckedRoute(t *testing.T) {
 				return nil
 			}
 			job.Progress = func(string, string) {}
-			if scenario == "fresh" || scenario == "after-build" {
-				job.Resume = nil
+			if scenario == "fresh" || scenario == "after-build" || buildRetry {
+				if !buildRetry {
+					job.Resume = nil
+				}
 				job.SourceID = "0123456789abcdef"
 				job.Action.Service.Image = "services/api/Dockerfile"
 				source := monoTarball(t)
@@ -251,9 +271,12 @@ func TestCloudRunPSCApplyDeliversSecretsThroughCheckedRoute(t *testing.T) {
 			outcome, err := executor.Apply(t.Context(), job)
 			mu.Lock()
 			defer mu.Unlock()
-			if scenario != "resume" && scenario != "fresh" && scenario != "update" {
+			if scenario != "resume" && scenario != "fresh" && scenario != "build-retry" && scenario != "update" {
 				if err == nil || len(rollout) > 0 {
 					t.Fatal("unsafe rollout accepted", err)
+				}
+				if scenario == "build-retry-checkpoint-failed" && (!retryCheckpointRejected || buildWrites != 0) {
+					t.Fatal("replacement build crossed rejected checkpoint", retryCheckpointRejected, buildWrites)
 				}
 				if scenario == "after-update" && deploys.calls != 0 {
 					t.Fatal("replacement after metadata update reached deployment")
@@ -266,7 +289,7 @@ func TestCloudRunPSCApplyDeliversSecretsThroughCheckedRoute(t *testing.T) {
 			if err != nil || outcome == nil || len(rollout) == 0 {
 				t.Fatal("checked application not deployed", err)
 			}
-			if scenario == "fresh" && buildWrites != 1 || scenario == "resume" && buildWrites != 0 {
+			if (scenario == "fresh" || scenario == "build-retry") && buildWrites != 1 || scenario == "resume" && buildWrites != 0 {
 				t.Fatal("wrong build count", buildWrites)
 			}
 			if scenario == "update" && deploys.calls != 1 {

@@ -1,4 +1,5 @@
 import type { ManagedDatabaseProfile } from "@/client/forge/loomplane/types"
+import { managedDatabaseAccessLabel } from "@/lib/managed-catalog"
 
 export function ManagedDatabaseSettings({
   profile,
@@ -12,14 +13,7 @@ export function ManagedDatabaseSettings({
       `${profile.storageGb} GiB ${profile.storageType}${profile.storageEncrypted ? ", encrypted" : ", unencrypted"}`,
     ],
     ["Availability", profile.availability.replaceAll("-", " ")],
-    [
-      "Access",
-      profile.access === "private-vpc"
-        ? "Private VPC"
-        : profile.access === "cloud-sql-connector"
-          ? "Cloud SQL connector"
-          : profile.access,
-    ],
+    ["Access", managedDatabaseAccessLabel(profile.access)],
     [
       "Provider backups",
       `${profile.backupRetentionValue} ${profile.backupRetentionUnit === "count" ? "copies" : "days"}`,
@@ -50,8 +44,8 @@ export function ManagedDatabaseSettings({
       </dl>
       <p className="text-xs text-muted-foreground">
         These settings are creation requests, not proof of a successful restore.
-        Native restore and PITR controls are not yet available in Loomplane.
-        Review provider charges before deploying.
+        Recovery shows provider backups and, for eligible source profiles,
+        point-in-time recovery. Review provider charges before deploying.
       </p>
     </div>
   )
