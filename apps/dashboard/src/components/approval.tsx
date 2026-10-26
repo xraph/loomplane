@@ -27,6 +27,7 @@ import {
 import { Button } from "@/components/ui/button"
 import { Spinner } from "@/components/ui/spinner"
 import { Textarea } from "@/components/ui/textarea"
+import { canaryLine, canaryFindings } from "@/lib/canary"
 import { relative } from "@/lib/format"
 import { useOrganization } from "@/lib/organization"
 import { Link } from "@/lib/router"
@@ -201,6 +202,8 @@ export function ApprovalCard({ run }: { run: Run }) {
   const p = run.plan
   const s = p.summary
   const removes = s.delete + s.replace
+  const { ramping, release } = canaryLine(p)
+  const refused = canaryFindings(p)
   return (
     <section
       aria-label="Approve this deploy"
@@ -221,6 +224,31 @@ export function ApprovalCard({ run }: { run: Run }) {
           {p.warnings.length > 0 &&
             ` ${p.warnings.length} ${p.warnings.length === 1 ? "warning is" : "warnings are"} worth a look in the plan.`}
         </p>
+        {ramping.length > 0 && (
+          <p className="text-[13.5px] font-medium">
+            Approving starts a canary
+            <span className="font-normal text-muted-foreground">
+              {" "}
+              for {ramping.join(", ")}. {release}
+            </span>
+          </p>
+        )}
+        {refused.length > 0 && (
+          <ul
+            aria-label="Canary refusals"
+            className="grid gap-1 text-[13px] text-weld-ink"
+          >
+            {refused.map((f) => (
+              <li key={`${f.code}:${f.name}`} className="flex gap-1.5">
+                <TriangleAlertIcon
+                  aria-hidden="true"
+                  className="mt-0.5 size-3.5 shrink-0"
+                />
+                {f.message}
+              </li>
+            ))}
+          </ul>
+        )}
         <ChangeChips run={run} />
       </div>
       {can("deployment:approve") && (

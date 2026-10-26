@@ -81,6 +81,7 @@ const stepProgress: Record<string, number> = {
   building: 0.3,
   deploying: 0.65,
   verifying: 0.9,
+  ramping: 0.8,
 }
 
 const stepDetail: Record<string, string> = {
@@ -88,6 +89,7 @@ const stepDetail: Record<string, string> = {
   building: "Building",
   deploying: "Deploying",
   verifying: "Verifying",
+  ramping: "Taking a share of traffic",
   succeeded: "Done",
   failed: "Failed",
   skipped: "Skipped",
@@ -104,6 +106,7 @@ function stepState(status: string): ThreadState {
     case "building":
     case "deploying":
     case "verifying":
+    case "ramping":
       return "running"
     default:
       return "pending"
