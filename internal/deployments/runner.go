@@ -1585,6 +1585,14 @@ func (r *Runner) bind(ctx context.Context, d *Deployment, a planning.Action, cur
 	var cfg any = a.Service
 	if a.Subject == planning.ResourceSubject {
 		cfg = a.Resource
+	} else if a.Service != nil && a.Service.Artifact != nil {
+		// An image reused from another environment belongs to the plan
+		// that chose it, never to the binding: an action rebuilt from the
+		// binding later, by a Cloud sync move or a pool relocation, builds
+		// its commit for wherever it goes.
+		svc := *a.Service
+		svc.Artifact = nil
+		cfg = &svc
 	}
 	raw, err := json.Marshal(cfg)
 	if err != nil {
