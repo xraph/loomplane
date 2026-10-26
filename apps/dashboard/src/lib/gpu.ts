@@ -34,3 +34,78 @@ export function formatMonthly(usd: number): string {
   const monthly = Math.round(usd * hoursPerMonth)
   return `about $${monthly.toLocaleString("en-US")}/mo`
 }
+
+// A price Loomplane doesn't know reads as unknown, never as $0.
+export function priceKnown(
+  usd: number | undefined,
+  known: boolean | undefined
+): usd is number {
+  return known === true && typeof usd === "number"
+}
+
+export function hourlyOrUnknown(
+  usd: number | undefined,
+  known: boolean | undefined
+): string {
+  return priceKnown(usd, known)
+    ? formatHourly(usd, true)
+    : formatHourly(0, false)
+}
+
+// "1× NVIDIA H100 80GB": how many GPUs of a kind one server or node has.
+export function acceleratorLabel(a: { count: number; kind: string }): string {
+  return `${a.count}× ${gpuTitle(a.kind)}`
+}
+
+type GpuServer = {
+  size: string
+  accelerator?: { count: number; kind: string }
+  hourlyUsd?: number
+  hourlyPriceKnown?: boolean
+  pricedSize?: string
+  health: {
+    gpuRuntime?: string
+    gpus?: { kind: string }[]
+  }
+}
+
+// The GPUs a server has: its devices once a check listed them, else what its
+// size bought. Several kinds show as one label each, joined.
+export function serverGpuLabel(s: GpuServer): string {
+  const devices = s.health.gpus ?? []
+  if (!devices.length)
+    return s.accelerator ? acceleratorLabel(s.accelerator) : ""
+  const counts = new Map<string, number>()
+  for (const d of devices) counts.set(d.kind, (counts.get(d.kind) ?? 0) + 1)
+  return [...counts]
+    .map(([kind, count]) =>
+      kind
+        ? acceleratorLabel({ count, kind })
+        : `${count}× GPU, kind not labelled`
+    )
+    .join(", ")
+}
+
+// A server's hourly price, unless it was priced for a size it no longer has.
+export function serverHourly(s: GpuServer): number | undefined {
+  if (!priceKnown(s.hourlyUsd, s.hourlyPriceKnown)) return undefined
+  if (s.pricedSize && s.pricedSize !== s.size) return undefined
+  return s.hourlyUsd
+}
+
+// How many GPUs of kind a server's last check listed.
+export function serverGpusOfKind(s: GpuServer, kind: string): number {
+  return (s.health.gpus ?? []).filter((d) => d.kind === kind).length
+}
+
+// Whether Loomplane can't count a server's GPUs, the way the capacity
+// ledger decides it: no listed devices (or devices of mixed or missing
+// kinds), no check that found none, and no GPU size to go by. While any
+// server in a Cloud is like this, the Cloud adds no GPU servers.
+export function gpusUnread(s: GpuServer): boolean {
+  const devices = s.health.gpus ?? []
+  if (devices.length)
+    return devices.some((d) => !d.kind || d.kind !== devices[0]!.kind)
+  if (s.health.gpuRuntime === "none") return false
+  return !s.accelerator
+}

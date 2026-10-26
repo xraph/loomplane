@@ -7,6 +7,7 @@ import {
   SelectContent,
   SelectItem,
 } from "@/components/ui/select"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Field as FormField, FieldLabel } from "@/components/ui/field"
 import { useState } from "react"
@@ -23,6 +24,7 @@ import type {
 import { useMutation, useQuery } from "@/client/hooks"
 import { Link } from "@/lib/router"
 import { messageOf } from "@/client/errors"
+import { gpuTitle, gpusUnread, serverGpusOfKind } from "@/lib/gpu"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import {
@@ -56,6 +58,10 @@ export function Pools({
   const [moving, setMoving] = useState<Pool | null>(null)
   const [recovering, setRecovering] = useState(false)
   const list = pools.data?.pools.filter((p): p is Pool => !!p) ?? []
+  // One server whose GPUs can't be counted stops all GPU growth in the Cloud.
+  const unread = list.some((p) => p.acceleratorKind)
+    ? servers.filter(gpusUnread).map((s) => s.name)
+    : []
   return (
     <section className="grid gap-3" aria-label="Server pools">
       <CloudSectionHead
@@ -83,6 +89,14 @@ export function Pools({
           </Button>
         </>
       </CloudSectionHead>
+      {unread.length > 0 && (
+        <Alert>
+          <AlertDescription>
+            The GPUs on {unread.join(", ")} couldn't be read, so Loomplane won't
+            add GPU servers to this Cloud until a health check there succeeds.
+          </AlertDescription>
+        </Alert>
+      )}
       {pools.status === "error" ? (
         <QueryError
           error={pools.error}
@@ -106,6 +120,8 @@ export function Pools({
                   {p.members.length} members ·{" "}
                   {p.members.filter((m) => m.draining).length} draining ·
                   revision {p.revision}
+                  {p.acceleratorKind &&
+                    ` · ${p.members.reduce((n, m) => n + (m.gpus ?? 0), 0)} ${gpuTitle(p.acceleratorKind)} GPUs`}
                 </p>
               </div>
               <div className="flex flex-wrap gap-2">
@@ -173,7 +189,35 @@ function PoolEditor({
     name: pool?.name ?? "",
     revision: pool?.revision ?? 0,
     members: pool?.members ?? [],
+    ...(pool?.acceleratorKind ? { acceleratorKind: pool.acceleratorKind } : {}),
   })
+  const kind = input.acceleratorKind ?? ""
+  const memberServers = servers.filter((s) =>
+    input.members.some((m) => m.serverId === s.id)
+  )
+  const kinds = [
+    ...new Set([
+      ...memberServers.flatMap((s) =>
+        (s.health.gpus ?? []).map((d) => d.kind).filter(Boolean)
+      ),
+      ...(kind ? [kind] : []),
+    ]),
+  ].sort()
+  // A GPU pool holds only servers with its kind, each with a GPU budget no
+  // bigger than what it has. A CPU pool holds no GPU budgets.
+  const chooseKind = (next: string) =>
+    setInput({
+      ...input,
+      acceleratorKind: next || undefined,
+      members: next
+        ? input.members.flatMap((m) => {
+            const server = servers.find((s) => s.id === m.serverId)
+            const have = server ? serverGpusOfKind(server, next) : 0
+            if (!have) return []
+            return [{ ...m, gpus: m.gpus && m.gpus <= have ? m.gpus : have }]
+          })
+        : input.members.map((m) => ({ ...m, gpus: undefined })),
+    })
   const [error, setError] = useState("")
   const busy = create.isPending || update.isPending
   const save = async () => {
@@ -212,6 +256,24 @@ function PoolEditor({
             onChange={(e) => setInput({ ...input, name: e.target.value })}
           />
         </Field>
+        <Field label="GPU kind">
+          <Select
+            value={kind}
+            onValueChange={(e) => chooseKind(String(e ?? ""))}
+          >
+            <SelectTrigger aria-label="GPU kind" className={"w-full min-w-0"}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="">None</SelectItem>
+              {kinds.map((k) => (
+                <SelectItem key={k} value={k}>
+                  {gpuTitle(k)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </Field>
         {servers
           .filter(
             (s) =>
@@ -220,6 +282,8 @@ function PoolEditor({
           )
           .map((s) => {
             const member = input.members.find((m) => m.serverId === s.id)
+            const have = kind ? serverGpusOfKind(s, kind) : 0
+            const blocked = !member && !!kind && !have
             return (
               <div key={s.id} className="grid gap-2 rounded-lg bg-muted p-3">
                 <FormField
@@ -229,6 +293,7 @@ function PoolEditor({
                   <FieldLabel className="contents">
                     <Checkbox
                       checked={!!member}
+                      disabled={blocked}
                       onCheckedChange={(e) =>
                         setInput({
                           ...input,
@@ -240,6 +305,7 @@ function PoolEditor({
                                   cpuMillis: s.health.effectiveCpuMillis,
                                   memoryBytes: s.health.effectiveMemoryBytes,
                                   draining: s.draining,
+                                  ...(kind ? { gpus: have } : {}),
                                 },
                               ]
                             : input.members.filter((m) => m.serverId !== s.id),
@@ -249,6 +315,11 @@ function PoolEditor({
                     {s.name}
                   </FieldLabel>
                 </FormField>
+                {blocked && (
+                  <p className="text-xs text-muted-foreground">
+                    No {gpuTitle(kind)} GPUs
+                  </p>
+                )}
                 {member && (
                   <div className="grid gap-2 sm:grid-cols-2">
                     <Field label="CPU budget (millicores)">
@@ -291,6 +362,27 @@ function PoolEditor({
                         }
                       />
                     </Field>
+                    {kind && (
+                      <Field label="GPU budget">
+                        <Input
+                          type="number"
+                          min={1}
+                          max={have}
+                          aria-label={`GPU budget for ${s.name}`}
+                          value={member.gpus ?? 0}
+                          onChange={(e) =>
+                            setInput({
+                              ...input,
+                              members: input.members.map((m) =>
+                                m.serverId === s.id
+                                  ? { ...m, gpus: Number(e.target.value) }
+                                  : m
+                              ),
+                            })
+                          }
+                        />
+                      </Field>
+                    )}
                     <FormField
                       orientation="horizontal"
                       className="flex items-center gap-2 text-xs"

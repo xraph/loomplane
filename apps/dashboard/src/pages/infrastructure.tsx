@@ -13,6 +13,7 @@ import {
 import type { Binding, Connection } from "@/client/forge/loomplane/types"
 import { useQuery } from "@/client/hooks"
 import { CloudGlyph } from "@/components/cloud-glyph"
+import { InfrastructureGpus } from "@/components/gpu-targets"
 import { InfrastructureIcon } from "@/components/icons"
 import { Page, PageHeading } from "@/components/page"
 import { Panel } from "@/components/panel"
@@ -173,6 +174,8 @@ export function Infrastructure() {
             </div>
           )}
         </section>
+
+        <InfrastructureGpus />
 
         {error !== undefined && (
           <QueryError
