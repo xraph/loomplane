@@ -140,6 +140,16 @@ test("times read as a person would say them", () => {
   expect(ago("not a time", noon)).toBe("not a time")
 })
 
+test("times near a bucket edge move up instead of reading 60 minutes or 24 hours", () => {
+  expect(ago(before(59 * minute), noon)).toBe("59 minutes ago")
+  expect(ago(before(59.5 * minute), noon)).toBe("1 hour ago")
+  expect(ago(before(89 * minute), noon)).toBe("1 hour ago")
+  expect(ago(before(23 * hour), noon)).toBe("23 hours ago")
+  expect(ago(before(23.4 * hour), noon)).toBe("23 hours ago")
+  expect(ago(before(23.6 * hour), noon)).toBe("yesterday")
+  expect(ago(before(24 * hour), noon)).toBe("yesterday")
+})
+
 test("services that need a Fabriq, and those that don't", () => {
   const services = {
     web: {

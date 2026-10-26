@@ -11,9 +11,12 @@ export function ago(iso: string, now: number): string {
   if (Number.isNaN(then)) return iso
   const elapsed = now - then
   if (elapsed < 45_000) return "just now"
-  if (elapsed < hour)
-    return plural(Math.max(1, Math.round(elapsed / minute)), "minute")
-  if (elapsed < 24 * hour) return plural(Math.round(elapsed / hour), "hour")
+  // Round within a bucket, and move up a bucket when rounding reaches its
+  // edge: 59.5 minutes is "1 hour ago", 23.6 hours is "yesterday".
+  const minutes = Math.max(1, Math.round(elapsed / minute))
+  if (minutes < 60) return plural(minutes, "minute")
+  const hours = Math.round(elapsed / hour)
+  if (hours < 24) return plural(hours, "hour")
   const days = daysBetween(then, now)
   if (days <= 1) return "yesterday"
   if (days < 31) return `${days} days ago`
