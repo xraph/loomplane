@@ -84,15 +84,20 @@ func (s *Session) pscSourceEndpoint(ctx context.Context, spec SQLPSCProvisionSpe
 		return endpoint, nil
 	}
 	guard := func(ctx context.Context) error {
+		if err := check(ctx); err != nil {
+			return err
+		}
 		witness := *checkpoint
-		observed, readErr := s.pscSourceForwardingRule(ctx, spec, &witness, func(SQLPSCProvisionState) error { return errPSCProvision }, check, provision)
+		// Both Compute stages are complete. This scan only reads their pinned
+		// identities, so fence the scan without persisting at every nested read.
+		observed, readErr := s.pscSourceForwardingRule(ctx, spec, &witness, func(SQLPSCProvisionState) error { return errPSCProvision }, func(ctx context.Context) error { return ctx.Err() }, provision)
 		if readErr != nil {
 			return readErr
 		}
 		if *observed != *endpoint {
 			return errPSCProvision
 		}
-		return nil
+		return check(ctx)
 	}
 	dns := checkpoint.DNS
 	saveDNS := func(next SQLPSCSourceDNSState) error {

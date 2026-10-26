@@ -11,7 +11,7 @@ import (
 )
 
 func TestPSCSourceForwardingRulePersistsBeforeMutationAndResumes(t *testing.T) {
-	for _, scenario := range []string{"legacy-checkpoint", "dns-create", "dns-lost-zone", "dns-lost-change", "dns-source-replaced", "dns-endpoint-replaced", "create", "lost-address-response", "lost-rule-response", "checkpoint-refused", "revoked-after-intent", "outside-private-subnet", "lost-address-missing-operation", "lost-address-duplicate-operation", "checkpoint-after-operation", "pending", "foreign-address", "source-replaced", "subnet-replaced", "address-replaced-before-rule", "operation-replaced", "endpoint-replaced", "denied"} {
+	for _, scenario := range []string{"legacy-checkpoint", "dns-check-budget", "dns-lease-revoked-during-read", "dns-create", "dns-lost-zone", "dns-lost-change", "dns-source-replaced", "dns-endpoint-replaced", "create", "lost-address-response", "lost-rule-response", "checkpoint-refused", "revoked-after-intent", "outside-private-subnet", "lost-address-missing-operation", "lost-address-duplicate-operation", "checkpoint-after-operation", "pending", "foreign-address", "source-replaced", "subnet-replaced", "address-replaced-before-rule", "operation-replaced", "endpoint-replaced", "denied"} {
 		t.Run(scenario, func(t *testing.T) {
 			in, fields := pscPITRInstance(t)
 			physical, err := in.Incarnation("source-project", "us-central1", "source-db")
@@ -31,6 +31,7 @@ func TestPSCSourceForwardingRulePersistsBeforeMutationAndResumes(t *testing.T) {
 			operations := map[string]map[string]any{}
 			broken := false
 			revoked, checkpointRejected := false, false
+			checks := 0
 			subnetID := "123"
 			dnsFixture := &pscDNSFixture{t: t, scenario: strings.TrimPrefix(scenario, "dns-"), network: route, endpoint: SQLPSCProvisionedEndpoint{DNSName: "source-db.us-central1.sql.goog."}, saved: func() SQLPSCSourceDNSState { return saved.DNS }}
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -41,6 +42,9 @@ func TestPSCSourceForwardingRulePersistsBeforeMutationAndResumes(t *testing.T) {
 				}
 				path := strings.TrimPrefix(r.URL.Path, "/compute/v1/")
 				if r.URL.Path == "/v1/projects/source-project/instances/source-db" {
+					if scenario == "dns-lease-revoked-during-read" && saved.DNS.ZoneRequest != "" {
+						revoked = true
+					}
 					_ = json.NewEncoder(w).Encode(fields)
 					return
 				}
@@ -176,6 +180,10 @@ func TestPSCSourceForwardingRulePersistsBeforeMutationAndResumes(t *testing.T) {
 				return nil
 			}
 			guard := func(context.Context) error {
+				checks++
+				if scenario == "dns-check-budget" && checks > 250 {
+					return errors.New("nested ownership reads exhausted the durable lease-check budget")
+				}
 				if revoked {
 					return errors.New("authority revoked")
 				}
@@ -192,6 +200,12 @@ func TestPSCSourceForwardingRulePersistsBeforeMutationAndResumes(t *testing.T) {
 				}
 				state = saved
 				got, err = ensure(t.Context(), spec, &state, save, guard)
+			}
+			if scenario == "dns-lease-revoked-during-read" {
+				if err == nil || !revoked || dnsFixture.zoneWrites != 0 || dnsFixture.recordWrites != 0 {
+					t.Fatal("DNS mutated after lease revocation during ownership reads", err, revoked, dnsFixture.zoneWrites, dnsFixture.recordWrites)
+				}
+				return
 			}
 			if scenario == "dns-source-replaced" || scenario == "dns-endpoint-replaced" {
 				if err == nil || dnsFixture.recordWrites != 0 || scenario == "dns-source-replaced" && dnsFixture.zoneWrites != 0 {
@@ -226,6 +240,10 @@ func TestPSCSourceForwardingRulePersistsBeforeMutationAndResumes(t *testing.T) {
 			if err != nil || got == nil || got.Address != "10.20.0.8" || got.ForwardingRuleID != "789" || got.ServiceAttachment != attachment || writes["addresses"] != 1 || writes["forwardingRules"] != 1 {
 				t.Fatal("owned endpoint not provisioned", got, err, writes)
 			}
+			if scenario == "dns-check-budget" {
+				t.Logf("creation lease checks: %d", checks)
+				checks = 0
+			}
 			state = saved
 			if scenario == "legacy-checkpoint" {
 				state.Version = 1
@@ -242,6 +260,9 @@ func TestPSCSourceForwardingRulePersistsBeforeMutationAndResumes(t *testing.T) {
 			_, err = ensure(t.Context(), spec, &state, save, guard)
 			if (scenario == "endpoint-replaced" || scenario == "operation-replaced") != (err != nil) {
 				t.Fatal("incorrect restart identity check", err)
+			}
+			if scenario == "dns-check-budget" {
+				t.Logf("replay lease checks: %d", checks)
 			}
 			if writes["addresses"] != 1 || writes["forwardingRules"] != 1 {
 				t.Fatal("replayed network mutation", writes)
