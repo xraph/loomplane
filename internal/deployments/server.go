@@ -696,10 +696,7 @@ func (e *OwnedTarget) Remove(ctx context.Context, job *Job, b *planning.Binding)
 		if e.Secrets == nil {
 			return ErrNoCredential
 		}
-		if err := e.Secrets.Delete(ctx, resourceKey(b.OrgID, b.EnvironmentID, b.Name, componentAddressField)); err != nil {
-			return err
-		}
-		return e.forgetPublished(ctx, b, resource.Component)
+		return e.forgetComponent(ctx, b, resource.Component)
 	}
 	return nil
 }

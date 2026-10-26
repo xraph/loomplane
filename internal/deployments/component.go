@@ -1265,10 +1265,21 @@ func (e *OwnedTarget) removeComposition(ctx context.Context, job *Job, b *planni
 		return ErrNoCredential
 	}
 	e.endSessions(ctx, job, b)
-	if err := e.hooks(c.Kind).Removed(ctx, ComposedResource{OrgID: b.OrgID, ProjectID: b.ProjectID, EnvironmentID: b.EnvironmentID, Resource: b.Name, Kind: c.Kind}); err != nil {
+	if err := e.hooks(c.Kind).Removed(ctx, composedResource(b, c)); err != nil {
 		return err
 	}
-	fields := []string{ResourceURL}
+	return e.forgetComposition(ctx, b, c)
+}
+
+func composedResource(b *planning.Binding, c *planning.CompositionConfig) ComposedResource {
+	return ComposedResource{OrgID: b.OrgID, ProjectID: b.ProjectID, EnvironmentID: b.EnvironmentID, Resource: b.Name, Kind: c.Kind}
+}
+
+// forgetComposition forgets a composed resource's address, outputs and
+// generated secrets.
+func (e *OwnedTarget) forgetComposition(ctx context.Context, b *planning.Binding, c *planning.CompositionConfig) error {
+	fields := make([]string, 0, 1+len(c.Outputs)+len(c.Secrets))
+	fields = append(fields, ResourceURL)
 	for _, output := range c.Outputs {
 		fields = append(fields, "output:"+output.Name)
 	}
@@ -1281,6 +1292,15 @@ func (e *OwnedTarget) removeComposition(ctx context.Context, job *Job, b *planni
 		}
 	}
 	return nil
+}
+
+// forgetComponent forgets a component's address and, for a
+// dependency-only kind's, what it published under its own name.
+func (e *OwnedTarget) forgetComponent(ctx context.Context, b *planning.Binding, c *planning.ComponentConfig) error {
+	if err := e.Secrets.Delete(ctx, resourceKey(b.OrgID, b.EnvironmentID, b.Name, componentAddressField)); err != nil {
+		return err
+	}
+	return e.forgetPublished(ctx, b, c)
 }
 
 // endSessions ends the admin sessions open on a composed resource being
@@ -1297,16 +1317,37 @@ func (e *OwnedTarget) endSessions(ctx context.Context, job *Job, b *planning.Bin
 
 var _ unreachableRemover = (*OwnedTarget)(nil)
 
-// removedUnreachable ends the admin sessions open on a composed resource
-// whose connection is gone, which nothing else of it can be reached
-// through. Anything else, and a removal that forgets nothing (see
-// forgetsKept), has nothing to end.
-func (e *OwnedTarget) removedUnreachable(ctx context.Context, job *Job, b *planning.Binding) {
+// removedUnreachable ends what Loomplane keeps for a composed resource,
+// one of its components or a dependency-only action whose connection is
+// gone, which nothing of it can be reached through: the admin sessions
+// open on a composed resource, its kind's Removed hook, which needs no
+// connection, and the values kept under its name. A hook that fails only
+// warns, since nothing would retry it. Anything else, and a removal that
+// forgets nothing (see forgetsKept), has nothing to end.
+func (e *OwnedTarget) removedUnreachable(ctx context.Context, job *Job, b *planning.Binding) error {
 	resource := boundResource(b)
-	if resource == nil || resource.Composition == nil || job.Deployment == nil || job.Deployment.OrgID != b.OrgID || !forgetsKept(job) {
-		return
+	if resource == nil || (resource.Composition == nil && resource.Component == nil) || job.Deployment == nil || job.Deployment.OrgID != b.OrgID || !forgetsKept(job) {
+		return nil
 	}
+	if c := resource.Component; c != nil {
+		if c.Component.Role == recipes.RoleJob {
+			// A job keeps no address and publishes nothing.
+			return nil
+		}
+		if e.Secrets == nil {
+			return ErrNoCredential
+		}
+		return e.forgetComponent(ctx, b, c)
+	}
+	if e.Secrets == nil {
+		return ErrNoCredential
+	}
+	c := resource.Composition
 	e.endSessions(ctx, job, b)
+	if err := e.hooks(c.Kind).Removed(ctx, composedResource(b, c)); err != nil {
+		job.Warn(fmt.Errorf("cleaning up after %s failed, and its connection is gone, so Loomplane won't try again: %w", b.Name, err))
+	}
+	return e.forgetComposition(ctx, b, c)
 }
 
 // forgetsKept reports whether removing what a job's action names forgets

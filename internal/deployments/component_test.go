@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"maps"
@@ -1689,5 +1690,71 @@ func TestComponentVolumeSizeIsOnlyRequestedOnKubernetes(t *testing.T) {
 				t.Fatalf("volume size on %s: %+v", target.provider, spec.Volumes)
 			}
 		})
+	}
+}
+
+type failingRemovedHooks struct{ recordedHooks }
+
+func (h *failingRemovedHooks) Removed(ctx context.Context, res ComposedResource) error {
+	_ = h.recordedHooks.Removed(ctx, res)
+	return errors.New("the kind's cleanup is down")
+}
+
+// A delete whose connection is gone still runs the kind's Removed hook,
+// which needs no connection, and forgets what the composition, its
+// components and a dependency-only action kept. A replace forgets nothing.
+func TestUnreachableDeleteForgetsWhatACompositionKept(t *testing.T) {
+	kinds := graphKinds(t, nil)
+	sample, _ := kinds.Kind("sample")
+	parentFields := []string{"url", "output:admin", "secret:admin-password"}
+	parentConfig := &planning.ResourceConfig{
+		Provider: "server", Target: "conn", TargetSettings: map[string]string{"architecture": "amd64"}, Kind: "sample", Version: "1",
+		Composition: &planning.CompositionConfig{Kind: "sample", Version: "1", Revision: "1", Dependencies: newPostgres, Outputs: sample.Outputs, Secrets: sample.Secrets},
+	}
+	for _, tt := range []struct {
+		name    string
+		job     func(*componentFixture) *Job
+		fields  []string
+		removed int
+	}{
+		{"composed parent", func(f *componentFixture) *Job { return f.job("app", parentConfig) }, parentFields, 1},
+		{"component", func(f *componentFixture) *Job { return f.componentJob(t, "api", newPostgres) }, []string{"address"}, 0},
+		{"dependency-only action", func(f *componentFixture) *Job { return f.graphJob(t) }, []string{"address", "url", "output:host", "secret:password"}, 0},
+	} {
+		for _, op := range []planning.Op{planning.Replace, planning.Delete} {
+			for _, hookFails := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s %s hook fails %v", tt.name, op, hookFails), func(t *testing.T) {
+					f := newComponentFixture(t, kinds)
+					hooks := &failingRemovedHooks{}
+					if hookFails {
+						f.target.Hooks["sample"] = hooks
+					}
+					job := tt.job(f)
+					job.Action.Op = op
+					for _, field := range tt.fields {
+						f.secrets.m[ResourceKey("org", "env", job.Action.Name, field)] = []byte("kept")
+					}
+					var warnings []string
+					job.warn = func(err error) { warnings = append(warnings, err.Error()) }
+					if err := f.target.removedUnreachable(t.Context(), job, bound(job, &Outcome{ExternalID: "catalog/" + job.Action.Name})); err != nil {
+						t.Fatal(err)
+					}
+					deleting := op == planning.Delete
+					for _, field := range tt.fields {
+						if _, kept := f.secrets.m[ResourceKey("org", "env", job.Action.Name, field)]; kept == deleting {
+							t.Errorf("%s kept %v after an unreachable %s", field, kept, op)
+						}
+					}
+					ran := len(f.hooks.removed) + len(hooks.removed)
+					if want := tt.removed; !deleting && ran != 0 || deleting && ran != want {
+						t.Errorf("Removed hook ran %d times", ran)
+					}
+					warned := slices.ContainsFunc(warnings, func(w string) bool { return strings.Contains(w, "the kind's cleanup is down") })
+					if warned != (deleting && hookFails && tt.removed > 0) {
+						t.Errorf("warnings %q", warnings)
+					}
+				})
+			}
+		}
 	}
 }

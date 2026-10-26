@@ -1105,8 +1105,11 @@ func (r *Runner) deleteBound(ctx context.Context, job *Job, exec Executor, bound
 		// What Loomplane itself keeps open on it still ends.
 		if remover, ok := exec.(unreachableRemover); ok {
 			job.warn = warn
-			remover.removedUnreachable(ctx, job, bound)
+			err := remover.removedUnreachable(ctx, job, bound)
 			job.warn = nil
+			if err != nil {
+				return err
+			}
 		}
 		if err := job.Forget(ctx); err != nil {
 			return err
@@ -1137,7 +1140,7 @@ func (r *Runner) deleteBound(ctx context.Context, job *Job, exec Executor, bound
 // unreachableRemover is an executor with something of its own to end when
 // what it deployed is deleted through a connection that's gone.
 type unreachableRemover interface {
-	removedUnreachable(ctx context.Context, job *Job, b *planning.Binding)
+	removedUnreachable(ctx context.Context, job *Job, b *planning.Binding) error
 }
 
 // removeReplaced removes what an action ran as before it moved, which its
