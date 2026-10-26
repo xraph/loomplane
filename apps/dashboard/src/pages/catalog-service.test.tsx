@@ -495,12 +495,37 @@ test("a module's deployed label preserves drift warnings", async () => {
   }
 })
 
-test("Fabriq puts the environment in its instance subtitle once", async () => {
-  serve({
-    bindings: {
-      production: [binding("fabriq", { kind: "fabriq", provider: "server" })],
-    },
+function fabriqBindings(
+  kind: "fabriq" | "fabriq-library",
+  process: "server" | "worker" | undefined,
+  drift = ""
+) {
+  const parent = binding("fabriq", {
+    kind,
+    provider: "server",
+    composition: { kind, version: "1.9", dependencies: {} },
   })
+  if (!process) return [parent]
+  return [
+    parent,
+    {
+      ...binding(`fabriq--${process}`, {
+        kind,
+        provider: "server",
+        component: {
+          kind,
+          resource: "fabriq",
+          protection: "none",
+          component: { name: process, role: "process" },
+        },
+      }),
+      drift,
+    },
+  ]
+}
+
+test("Fabriq puts the environment in its instance subtitle once", async () => {
+  serve({ bindings: { production: fabriqBindings("fabriq", "server") } })
   open("fabriq", "env_prod")
   const header = await screen.findByRole("banner")
   expect(
@@ -514,6 +539,32 @@ test("Fabriq puts the environment in its instance subtitle once", async () => {
     within(header).getByRole("button", { name: "Open Fabriq admin" })
   ).toBeVisible()
 })
+
+test.each([
+  ["fabriq", "server"],
+  ["fabriq-library", "worker"],
+] as const)(
+  "a %s header says Running only while its %s is deployed",
+  async (kind, process) => {
+    for (const [bindings, label] of [
+      [fabriqBindings(kind, process), "Running"],
+      [fabriqBindings(kind, undefined), "Not running"],
+      [fabriqBindings(kind, process, "missing"), "Not running"],
+    ] as const) {
+      serve({ bindings: { production: bindings } })
+      open("fabriq", "env_prod")
+      const header = await screen.findByRole("banner")
+      expect(await within(header).findByText(label)).toBeVisible()
+      expect(
+        within(header).queryByText(
+          label === "Running" ? "Not running" : "Running"
+        )
+      ).toBeNull()
+      cleanup()
+      forgeClient.clear()
+    }
+  }
+)
 
 test("the default catalog header retains its environment badge", async () => {
   serve({ bindings: { production: composed } })

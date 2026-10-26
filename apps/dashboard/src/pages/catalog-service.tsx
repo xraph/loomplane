@@ -389,7 +389,7 @@ function Header({
               : undefined
           }
         >
-          {state.drift ? state.label : (module?.deployedLabel ?? state.label)}
+          {state.drift ? state.label : deployedLabel(module, props, state)}
         </StatusPill>
         {Actions && (
           <div
@@ -642,6 +642,15 @@ function Details({
 }
 
 type State = { label: string; drift: boolean }
+
+function deployedLabel(
+  module: CatalogKindModule | undefined,
+  props: CatalogPanelProps,
+  state: State
+): string {
+  const label = module?.deployedLabel
+  return typeof label === "function" ? label(props) : (label ?? state.label)
+}
 
 function stateOf(binding: Binding): State {
   if (binding.drift === "missing")

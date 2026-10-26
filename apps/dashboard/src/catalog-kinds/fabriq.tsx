@@ -2,6 +2,7 @@
 // dialog, and its service page adds the Tenants and keys tab and the button
 // that opens the admin console.
 import { useFabriqSubtitle } from "@/components/fabriq/use-fabriq-subtitle"
+import { fabriqDeployedLabel } from "@/components/fabriq/fabriq-state"
 import { FabriqIcon } from "@/components/fabriq/fabriq-icon"
 import { FabriqEngines } from "@/components/fabriq/fabriq-engines"
 import { FabriqRecovery } from "@/components/fabriq/fabriq-recovery"
@@ -26,7 +27,7 @@ function KeysPanel(props: CatalogPanelProps) {
 export default defineCatalogKind({
   kind: "fabriq",
   title: "Fabriq",
-  deployedLabel: "Running",
+  deployedLabel: fabriqDeployedLabel,
   serviceLayout: "compact",
   defaultPanel: "keys",
   group: "data",

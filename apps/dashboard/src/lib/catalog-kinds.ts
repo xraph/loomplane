@@ -99,8 +99,11 @@ export type CatalogKindModule = {
   blurb: string
   features: string[]
   panels: CatalogPanel[]
-  /** The normal deployed state. Drift warnings always take precedence. */
-  deployedLabel?: string
+  /**
+   * The normal deployed state, or a function that names it from what is
+   * deployed. Drift warnings always take precedence.
+   */
+  deployedLabel?: string | ((props: CatalogPanelProps) => string)
   /** Compact page with an inline header and environment in its subtitle. */
   serviceLayout?: "compact"
   /** Panel ID to open first, falling back to Overview when unavailable. */

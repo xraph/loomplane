@@ -1,4 +1,5 @@
 import { useFabriqSubtitle } from "@/components/fabriq/use-fabriq-subtitle"
+import { fabriqDeployedLabel } from "@/components/fabriq/fabriq-state"
 import { FabriqIcon } from "@/components/fabriq/fabriq-icon"
 import { FabriqLibraryPanel } from "@/components/fabriq/fabriq-library-panel"
 import { FabriqEngines } from "@/components/fabriq/fabriq-engines"
@@ -9,7 +10,7 @@ import { defineCatalogKind } from "@/lib/catalog-kinds"
 export default defineCatalogKind({
   kind: "fabriq-library",
   title: "Fabriq library",
-  deployedLabel: "Running",
+  deployedLabel: fabriqDeployedLabel,
   serviceLayout: "compact",
   defaultPanel: "library",
   subtitle: useFabriqSubtitle,
