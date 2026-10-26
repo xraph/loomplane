@@ -49,23 +49,33 @@ var planPromotionRollbackDown = append(planEventFunctions(false), []string{
 	`ALTER TABLE loomplane_plans DROP COLUMN IF EXISTS kind`,
 }...)
 
-// planEventFunctions returns the two realtime trigger functions that build a
-// plan event, as they stand in realtimeUp. With leftovers, a plan event
-// defaults leftovers and artifacts to [] as it does actions and problems,
-// because a result leaves them out when empty. Without, the functions are
-// as realtimeUp defines them.
+// planEventFunctions returns the CREATE OR REPLACE FUNCTION statements of
+// the two realtime trigger functions that build a plan event,
+// loomplane_state_event_trigger and loomplane_parent_event_trigger, as they
+// stand in realtimeUp. With leftovers, a plan event defaults leftovers and
+// artifacts to [] as it does actions and problems, because a result leaves
+// them out when empty. Without, the functions are as realtimeUp defines
+// them. It panics, when the package loads, if realtimeUp no longer has
+// both functions or either no longer builds a plan event the way this
+// expects, rather than migrate a database without the defaults.
 func planEventFunctions(leftovers bool) []string {
 	const defaults = `'summary','{}'::jsonb)`
 	var out []string
 	for _, stmt := range realtimeUp {
-		if !strings.Contains(stmt, "FUNCTION loomplane_state_event_trigger()") &&
-			!strings.Contains(stmt, "FUNCTION loomplane_parent_event_trigger()") {
+		if !strings.HasPrefix(stmt, "CREATE OR REPLACE FUNCTION loomplane_state_event_trigger()") &&
+			!strings.HasPrefix(stmt, "CREATE OR REPLACE FUNCTION loomplane_parent_event_trigger()") {
 			continue
 		}
 		if leftovers {
+			if strings.Count(stmt, defaults) == 0 {
+				panic("plan_promotion_rollback: a realtime trigger function no longer builds a plan event with " + defaults)
+			}
 			stmt = strings.ReplaceAll(stmt, defaults, `'summary','{}'::jsonb,'leftovers','[]'::jsonb,'artifacts','[]'::jsonb)`)
 		}
 		out = append(out, stmt)
+	}
+	if len(out) != 2 {
+		panic("plan_promotion_rollback: realtimeUp no longer defines both plan event trigger functions")
 	}
 	return out
 }

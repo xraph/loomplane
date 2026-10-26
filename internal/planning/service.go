@@ -417,10 +417,13 @@ func lockDescription(ps []PlanSource) []string {
 }
 
 // settle waits a moment for the workflow to move a plan on, and returns it
-// as it is then. It never fails: the plan as it was is a fine answer.
+// as it is then. It never fails: the plan as it was is a fine answer. It
+// polls at most settleWait/settlePoll times as well as until the clock
+// passes settleWait, so a test that stops the clock still returns.
 func (s *Service) settle(ctx context.Context, plan *Plan) *Plan {
 	status := plan.Status
-	for deadline := s.now().Add(settleWait); s.now().Before(deadline); {
+	deadline := s.now().Add(settleWait)
+	for polls := 0; polls < int(settleWait/settlePoll) && s.now().Before(deadline); polls++ {
 		if s.sleep(ctx, settlePoll) != nil {
 			return plan
 		}
