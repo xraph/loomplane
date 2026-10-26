@@ -586,7 +586,7 @@ func ownedSpec(job *Job, image string, state ownedState) (sp cpprovider.ServiceS
 		sp.Ports = []cpprovider.PortSpec{{Container: cfg.Catalog.Port(), Protocol: "tcp"}}
 	}
 	if cfg.Component != nil {
-		componentSpec(&sp, labels, cfg.Component)
+		componentSpec(&sp, labels, cfg.Component, cfg.Provider)
 		if cfg.Provider == "server" {
 			for i := range sp.Volumes {
 				sp.Volumes[i].SizeMB = 0
@@ -620,6 +620,13 @@ func ownedSpec(job *Job, image string, state ownedState) (sp cpprovider.ServiceS
 	if cfg.Size != nil {
 		sp.Resources.CPUMillis = int(cfg.Size.CPU * 1000)
 		sp.Resources.MemoryMB = cfg.Size.Memory
+	}
+	if cfg.Component == nil {
+		shm := 0
+		if cfg.Size != nil {
+			shm = cfg.Size.Shm
+		}
+		gpuSpec(&sp, labels, cfg.GPU, shm, nil, cfg.Provider)
 	}
 	if labels[owned.LabelScaleMin] != labels[owned.LabelScaleMax] {
 		labels[owned.LabelManageHPA] = "true"
