@@ -51,6 +51,9 @@ func TestCloudRunExplicitRetryRestartsOnlyTerminalFailedBuild(t *testing.T) {
 				case strings.HasSuffix(r.URL.Path, "/builds") && r.Method == http.MethodPost:
 					starts.Add(1)
 					_, _ = io.WriteString(w, `{"metadata":{"build":{"id":"retried"}}}`)
+				case strings.Contains(r.URL.Path, "/tags/"):
+					// Artifact Registry names the digest the build pushed.
+					_, _ = io.WriteString(w, `{"version":"x/versions/sha256:`+strings.Repeat("ab", 32)+`"}`)
 				default:
 					_, _ = io.WriteString(w, `{}`)
 				}

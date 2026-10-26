@@ -130,6 +130,9 @@ func TestCloudRunPSCApplyDeliversSecretsThroughCheckedRoute(t *testing.T) {
 						subnetID = "789"
 					}
 					_, _ = w.Write([]byte(`{"status":"SUCCESS"}`))
+				case strings.Contains(r.URL.Path, "/tags/"):
+					// Artifact Registry names the digest the build pushed.
+					_, _ = w.Write([]byte(`{"version":"x/versions/sha256:` + strings.Repeat("ab", 32) + `"}`))
 				case r.URL.Path == "/storage/v1/b" || strings.HasPrefix(r.URL.Path, "/upload/storage/") || strings.Contains(r.URL.Path, "/repositories"):
 					_, _ = w.Write([]byte(`{}`))
 				case r.URL.Path == "/token":
