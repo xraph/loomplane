@@ -355,6 +355,7 @@ func TestUnverifiedPlacementsNameResourcesOnTheCloud(t *testing.T) {
 		"another target only": {edgeAssignment(elsewhere), hostedConnections(t), false},
 		"a pool target":       {edgeAssignment(pooled), hostedConnections(t), false},
 		"no assignment":       {nil, hostedConnections(t), false},
+		"connection missing":  {edgeAssignment(edgeHostTarget()), hostedConnections(t)[1:], true},
 	} {
 		if got := unverifiedPlacements(m, "production", []string{"edge"}, tt.assignment, tt.options)["edge"]; got != tt.want {
 			t.Errorf("%s: unverified %v, want %v", name, got, tt.want)

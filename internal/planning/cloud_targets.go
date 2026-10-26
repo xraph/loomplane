@@ -159,8 +159,9 @@ func composedPlacements(m *manifest.Manifest, environment string, names []string
 
 // unverifiedPlacements are the named composed resources whose target is a
 // direct-connection target of the assignment's Cloud that composedPlacements
-// still doesn't place: the Cloud's or the target's revisions aren't
-// reviewed, or the target's connection has no verified account.
+// still doesn't place: the Cloud's or the target's revision isn't
+// reviewed, or the target's connection is missing or has no verified
+// account.
 func unverifiedPlacements(m *manifest.Manifest, environment string, names []string, assignment *cloudprofiles.Assignment, options []ConnectionOption) map[string]bool {
 	out := map[string]bool{}
 	if assignment == nil {

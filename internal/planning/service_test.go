@@ -338,7 +338,7 @@ func TestCreatePlanPlacesComposedResourceOnTheMatchingCloudTarget(t *testing.T) 
 	unreviewed := edgeHost
 	unreviewed.Revision = 0
 	// On a target of the Cloud, but not verified: it says so.
-	const unverified = "edge is on a target of this environment's Cloud, but the Cloud's revisions or the target connection's account aren't verified, so it can't take domain routes yet. Check the target's connection, then plan again."
+	const unverified = "edge is on a target of this environment's Cloud, but the Cloud's or the target's revision, or the target connection's account, isn't verified, so it can't take domain routes yet. Check the target's connection, then plan again."
 	t.Run("an unreviewed target", func(t *testing.T) {
 		s, p, _ := edgeService(t, doc, unreviewed)
 		r, _, planErr := s.compute(t.Context(), p)
