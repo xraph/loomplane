@@ -101,8 +101,9 @@ func (s *Service) registerEventTypes(ctx context.Context) error {
 	for _, status := range []string{"succeeded", "failed"} {
 		definitions = append(definitions, catalog.WebhookDefinition{Name: "deployment." + status, Description: "A deployment attempt completed", Group: "deployment", Version: "2026-10-18"})
 	}
-	definitions = append(definitions, catalog.WebhookDefinition{Name: connectionSignInNeeded, Description: "A cloud connection needs signing in again", Group: "connection", Version: "2026-10-25"})
-	definitions = append(definitions, catalog.WebhookDefinition{Name: "domain.renewal_upcoming", Description: "A registered domain renews soon", Group: "domain", Version: "2026-11-05"})
+	definitions = append(definitions,
+		catalog.WebhookDefinition{Name: connectionSignInNeeded, Description: "A cloud connection needs signing in again", Group: "connection", Version: "2026-10-25"},
+		catalog.WebhookDefinition{Name: "domain.renewal_upcoming", Description: "A registered domain renews soon", Group: "domain", Version: "2026-11-05"})
 	for _, status := range registrationStatuses {
 		definitions = append(definitions, catalog.WebhookDefinition{Name: "domain.registration_" + status, Description: "A domain registration ended", Group: "domain", Version: "2026-11-05"})
 	}
