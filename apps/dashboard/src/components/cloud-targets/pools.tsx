@@ -58,7 +58,7 @@ export function Pools({
   const [moving, setMoving] = useState<Pool | null>(null)
   const [recovering, setRecovering] = useState(false)
   const list = pools.data?.pools.filter((p): p is Pool => !!p) ?? []
-  // One server whose GPUs can't be counted stops all GPU growth in the Cloud.
+  // A ready server whose GPUs can't be counted can hold back GPU growth.
   const unread = list.some((p) => p.acceleratorKind)
     ? servers.filter(gpusUnread).map((s) => s.name)
     : []
@@ -92,8 +92,7 @@ export function Pools({
       {unread.length > 0 && (
         <Alert>
           <AlertDescription>
-            The GPUs on {unread.join(", ")} couldn't be read, so Loomplane won't
-            add GPU servers to this Cloud until a health check there succeeds.
+            {`The GPUs on ${unread.join(", ")} couldn't be read. Loomplane may not add GPU servers to this Cloud until a check succeeds.`}
           </AlertDescription>
         </Alert>
       )}
@@ -218,6 +217,15 @@ function PoolEditor({
           })
         : input.members.map((m) => ({ ...m, gpus: undefined })),
     })
+  const gpusOf = (serverId: string) => {
+    const server = servers.find((s) => s.id === serverId)
+    return server && kind ? serverGpusOfKind(server, kind) : 0
+  }
+  // A budget is a whole number from one to the server's GPUs of the kind.
+  const badBudget = (gpus: number | undefined, have: number) =>
+    !Number.isInteger(gpus) || (gpus ?? 0) < 1 || (gpus ?? 0) > have
+  const budgetsValid =
+    !kind || input.members.every((m) => !badBudget(m.gpus, gpusOf(m.serverId)))
   const [error, setError] = useState("")
   const busy = create.isPending || update.isPending
   const save = async () => {
@@ -363,25 +371,40 @@ function PoolEditor({
                       />
                     </Field>
                     {kind && (
-                      <Field label="GPU budget">
-                        <Input
-                          type="number"
-                          min={1}
-                          max={have}
-                          aria-label={`GPU budget for ${s.name}`}
-                          value={member.gpus ?? 0}
-                          onChange={(e) =>
-                            setInput({
-                              ...input,
-                              members: input.members.map((m) =>
-                                m.serverId === s.id
-                                  ? { ...m, gpus: Number(e.target.value) }
-                                  : m
-                              ),
-                            })
-                          }
-                        />
-                      </Field>
+                      <div className="grid gap-1">
+                        <Field label="GPU budget">
+                          <Input
+                            type="number"
+                            min={1}
+                            max={have}
+                            step={1}
+                            aria-label={`GPU budget for ${s.name}`}
+                            aria-invalid={badBudget(member.gpus, have)}
+                            value={member.gpus ?? ""}
+                            onChange={(e) =>
+                              setInput({
+                                ...input,
+                                members: input.members.map((m) =>
+                                  m.serverId === s.id
+                                    ? {
+                                        ...m,
+                                        gpus:
+                                          e.target.value === ""
+                                            ? undefined
+                                            : Number(e.target.value),
+                                      }
+                                    : m
+                                ),
+                              })
+                            }
+                          />
+                        </Field>
+                        {badBudget(member.gpus, have) && (
+                          <p className="text-xs text-destructive">
+                            {`Between 1 and ${have} GPUs`}
+                          </p>
+                        )}
+                      </div>
                     )}
                     <FormField
                       orientation="horizontal"
@@ -413,7 +436,12 @@ function PoolEditor({
             Cancel
           </Button>
           <Button
-            disabled={busy || !input.name.trim() || !input.members.length}
+            disabled={
+              busy ||
+              !input.name.trim() ||
+              !input.members.length ||
+              !budgetsValid
+            }
             onClick={() => void save()}
           >
             Save pool budgets

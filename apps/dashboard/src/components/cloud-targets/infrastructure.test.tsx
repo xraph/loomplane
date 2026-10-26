@@ -679,6 +679,15 @@ function gpuFixture({
               regions: ["tor1"],
             },
             {
+              id: "s-unpriced",
+              cpus: 1,
+              memory_mib: 1024,
+              disk_gb: 25,
+              hourly_usd: 0,
+              monthly_usd: 0,
+              regions: ["tor1"],
+            },
+            {
               id: "gpu-h100x1-80gb",
               cpus: 20,
               memory_mib: 245760,
@@ -969,8 +978,130 @@ it("says why a GPU pool can't grow while a server's GPUs are unread", async () =
   show(<Servers cloud={cloud as never} />)
   expect(
     await screen.findByText(
-      "The GPUs on gpu-box couldn't be read, so Loomplane won't add GPU servers to this Cloud until a health check there succeeds."
+      "The GPUs on gpu-box couldn't be read. Loomplane may not add GPU servers to this Cloud until a check succeeds."
     )
   ).toBeInTheDocument()
   expect(screen.getByText(/2 NVIDIA L4 GPUs/)).toBeInTheDocument()
+})
+
+const gpuPool = {
+  id: "p",
+  name: "inference",
+  revision: 2,
+  accelerator_kind: "nvidia-l4",
+  members: [
+    {
+      server_id: "gpu",
+      cpu_millis: 8000,
+      memory_bytes: 34359738368,
+      draining: false,
+      gpus: 2,
+    },
+  ],
+}
+const readGpuBox = {
+  id: "gpu",
+  name: "gpu-box",
+  status: "ready",
+  ownership: "adopted",
+  health: {
+    ...gpuHealth,
+    gpu_runtime: "ready",
+    gpus: [l4Device(0), l4Device(1)],
+  },
+}
+
+it("shows no GPU hint when every ready server's GPUs were read", async () => {
+  gpuFixture({
+    servers: [
+      readGpuBox,
+      {
+        id: "cpu",
+        name: "cpu-box",
+        status: "ready",
+        ownership: "adopted",
+        health: { ...gpuHealth, gpu_runtime: "none" },
+      },
+    ],
+    pools: [gpuPool],
+  })
+  show(<Servers cloud={cloud as never} />)
+  expect(await screen.findByText(/2 NVIDIA L4 GPUs/)).toBeInTheDocument()
+  expect(screen.queryByText(/couldn't be read/)).not.toBeInTheDocument()
+})
+
+it("doesn't blame a provisioning or never-probed CPU server for GPU growth", async () => {
+  gpuFixture({
+    servers: [
+      readGpuBox,
+      {
+        id: "new",
+        name: "new-box",
+        status: "provisioning",
+        ownership: "managed",
+        size: "s-2vcpu-4gb",
+        health: { ...gpuHealth, gpu_runtime: "unknown" },
+      },
+      {
+        id: "old",
+        name: "old-cpu",
+        status: "ready",
+        ownership: "managed",
+        size: "s-2vcpu-4gb",
+        health: gpuHealth,
+      },
+    ],
+    pools: [gpuPool],
+  })
+  show(<Servers cloud={cloud as never} />)
+  expect(await screen.findByText(/2 NVIDIA L4 GPUs/)).toBeInTheDocument()
+  expect(await screen.findByText("old-cpu")).toBeInTheDocument()
+  expect(screen.queryByText(/couldn't be read/)).not.toBeInTheDocument()
+})
+
+it("prices CPU sizes the same way, unknown when the price is", async () => {
+  gpuFixture()
+  const user = userEvent.setup()
+  show(<Servers cloud={cloud as never} />)
+  await openCreate(user)
+  await user.click(await screen.findByRole("combobox", { name: "Server size" }))
+  expect(
+    await screen.findByRole("option", {
+      name: "s-2vcpu-4gb · 2 CPU · 4096 MiB · $0.04/hr",
+    })
+  ).toBeInTheDocument()
+  expect(
+    screen.getByRole("option", {
+      name: "s-unpriced · 1 CPU · 1024 MiB · price unknown",
+    })
+  ).toBeInTheDocument()
+  expect(screen.queryByRole("option", { name: /\$0\/h|undefined/ })).toBeNull()
+})
+
+it("keeps a GPU budget between one and the server's GPUs", async () => {
+  gpuFixture({ servers: [readGpuBox] })
+  const user = userEvent.setup()
+  show(<Servers cloud={cloud as never} />)
+  await user.click(await screen.findByRole("button", { name: "Add pool" }))
+  await user.type(screen.getByRole("textbox", { name: "Pool name" }), "gpus")
+  await user.click(screen.getByRole("checkbox", { name: "gpu-box" }))
+  await user.click(screen.getByRole("combobox", { name: "GPU kind" }))
+  await user.click(await screen.findByRole("option", { name: "NVIDIA L4" }))
+  const budget = screen.getByRole("spinbutton", {
+    name: "GPU budget for gpu-box",
+  })
+  const save = screen.getByRole("button", { name: "Save pool budgets" })
+  await user.clear(budget)
+  await user.type(budget, "3")
+  expect(budget).toHaveAttribute("aria-invalid", "true")
+  expect(screen.getByText("Between 1 and 2 GPUs")).toBeInTheDocument()
+  expect(save).toBeDisabled()
+  await user.clear(budget)
+  await user.type(budget, "0")
+  expect(budget).toHaveAttribute("aria-invalid", "true")
+  expect(save).toBeDisabled()
+  await user.clear(budget)
+  await user.type(budget, "2")
+  expect(budget).not.toHaveAttribute("aria-invalid", "true")
+  expect(save).toBeEnabled()
 })

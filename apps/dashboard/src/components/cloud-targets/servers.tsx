@@ -695,7 +695,7 @@ function ServerOptions({
               .filter((s) => !s.accelerator)
               .map((s) => (
                 <SelectItem key={s.id} value={s.id}>
-                  {s.id} · {s.cpus} CPU · {s.memoryMib} MiB · ${s.hourlyUsd}/h
+                  {`${s.id} · ${s.cpus} CPU · ${s.memoryMib} MiB · ${hourlyOrUnknown(s.hourlyUsd, s.hourlyPriceKnown)}`}
                 </SelectItem>
               ))}
             {sizes.some((s) => s.accelerator) && (

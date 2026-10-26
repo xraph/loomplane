@@ -58,6 +58,7 @@ export function acceleratorLabel(a: { count: number; kind: string }): string {
 }
 
 type GpuServer = {
+  status?: string
   size: string
   accelerator?: { count: number; kind: string }
   hourlyUsd?: number
@@ -98,14 +99,17 @@ export function serverGpusOfKind(s: GpuServer, kind: string): number {
   return (s.health.gpus ?? []).filter((d) => d.kind === kind).length
 }
 
-// Whether Loomplane can't count a server's GPUs, the way the capacity
-// ledger decides it: no listed devices (or devices of mixed or missing
-// kinds), no check that found none, and no GPU size to go by. While any
-// server in a Cloud is like this, the Cloud adds no GPU servers.
+// Whether a ready server looks like it has GPUs Loomplane couldn't count:
+// its devices are of mixed or missing kinds, or a check reported a GPU
+// status without listing any and its size names no GPUs. A server that was
+// never asked about GPUs, on a size without them, is a CPU server. The
+// capacity ledger holds back GPU growth while it can't count a server.
 export function gpusUnread(s: GpuServer): boolean {
+  if (s.status !== "ready") return false
   const devices = s.health.gpus ?? []
   if (devices.length)
     return devices.some((d) => !d.kind || d.kind !== devices[0]!.kind)
-  if (s.health.gpuRuntime === "none") return false
+  const runtime = s.health.gpuRuntime ?? ""
+  if (runtime === "" || runtime === "none") return false
   return !s.accelerator
 }
