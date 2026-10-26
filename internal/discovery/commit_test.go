@@ -5,6 +5,8 @@ import (
 	"errors"
 	"testing"
 	"time"
+
+	"github.com/xraph/loomplane/internal/security"
 )
 
 // commitWorld is a source with a commit analyzer over an in-memory store.
@@ -133,5 +135,74 @@ func TestCommitAnalyzer_refusesASourceOfAnotherOrganization(t *testing.T) {
 	}
 	if a, err := w.analyzer.AnalyzeCommit(t.Context(), org, w.src, commit, "usr_1"); err != nil || a.ID != "anl_1" {
 		t.Fatalf("AnalyzeCommit %+v %v", a, err)
+	}
+}
+
+// An analysis a promotion pinned to an older commit serves that promotion
+// only: while it runs, Start and a push still analyze the branch, and
+// once it succeeds the project graph still shows the branch's analysis.
+func TestCommitAnalyzer_aPinnedAnalysisIsNeverTheSourcesLatest(t *testing.T) {
+	ctx := t.Context()
+	f := newFixture(t, 2)
+	src, err := f.store.GetSource(ctx, org, project, "mono")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dev := f.as(t, "ausr_dev", security.RoleDeveloper)
+	branch, err := f.svc.Start(ctx, dev, project, StartAnalysisInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = f.runner.Run(ctx, org, branch[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	// Created after everything below, the pinned analysis is the newest.
+	later := time.Now().Add(time.Hour)
+	analyzer := &CommitAnalyzer{Store: f.store, Enqueue: f.queue, Now: func() time.Time { return later }}
+	older := "fedcba9876543210fedcba9876543210fedcba98"
+	pinned, err := analyzer.Analyze(ctx, org, src, older, "usr_promoter")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !pinned.Pinned {
+		t.Fatalf("the promotion's analysis isn't pinned: %+v", pinned)
+	}
+	if stored, gerr := f.store.GetAnalysis(ctx, org, pinned.ID); gerr != nil || !stored.Pinned {
+		t.Fatalf("stored %+v %v", stored, gerr)
+	}
+
+	// While it runs, a push still queues an analysis of the branch.
+	pushed, err := f.svc.StartFromPush(ctx, src)
+	if err != nil {
+		t.Fatalf("a push while a pinned analysis runs: %v", err)
+	}
+	if pushed.Pinned || pushed.Ref != "" {
+		t.Fatalf("pushed %+v", pushed)
+	}
+	if err = f.runner.Run(ctx, org, pushed.ID); err != nil {
+		t.Fatal(err)
+	}
+	// And so does Start, with the pinned one still running.
+	started, err := f.svc.Start(ctx, dev, project, StartAnalysisInput{})
+	if err != nil {
+		t.Fatalf("Start while a pinned analysis runs: %v", err)
+	}
+	if err = f.runner.Run(ctx, org, started[0].ID); err != nil {
+		t.Fatal(err)
+	}
+
+	// Succeeded and newest, the pinned analysis is still not the latest.
+	if err = f.runner.Run(ctx, org, pinned.ID); err != nil {
+		t.Fatal(err)
+	}
+	view, err := f.svc.ProjectGraph(ctx, f.as(t, "ausr_viewer", security.RoleViewer), project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(view.Sources) != 1 || view.Sources[0].Latest == nil || view.Sources[0].Shown == nil {
+		t.Fatalf("sources %+v", view.Sources)
+	}
+	if got := view.Sources[0]; got.Latest.ID != started[0].ID || got.Shown.ID != started[0].ID {
+		t.Fatalf("latest %s, shown %s, want the branch's %s (pinned %s)", got.Latest.ID, got.Shown.ID, started[0].ID, pinned.ID)
 	}
 }

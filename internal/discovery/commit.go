@@ -65,7 +65,8 @@ func (c *CommitAnalyzer) Analyze(ctx context.Context, orgID string, src *Source,
 }
 
 // queue creates an analysis pinned to commitSHA and its job, as
-// Service.queue does.
+// Service.queue does. It is marked Pinned, so it never becomes the
+// source's latest analysis or blocks the next analysis of its branch.
 func (c *CommitAnalyzer) queue(ctx context.Context, src *Source, commitSHA, createdBy string, now time.Time) (*Analysis, error) {
 	id, err := typeid.Generate("anl")
 	if err != nil {
@@ -73,7 +74,7 @@ func (c *CommitAnalyzer) queue(ctx context.Context, src *Source, commitSHA, crea
 	}
 	a := &Analysis{
 		ID: id.String(), OrgID: src.OrgID, ProjectID: src.ProjectID, SourceID: src.ID, Source: src.Alias,
-		Status: StatusQueued, Repository: src.Repository, Ref: commitSHA, CreatedBy: createdBy, CreatedAt: now,
+		Status: StatusQueued, Repository: src.Repository, Ref: commitSHA, Pinned: true, CreatedBy: createdBy, CreatedAt: now,
 	}
 	if err := c.Store.CreateAnalysis(ctx, a); err != nil {
 		return nil, err

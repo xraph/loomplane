@@ -10,7 +10,8 @@ import (
 
 // A plan records its kind (release, promotion or rollback), the environment
 // a promotion deploys from, and a rollback's spec. A plan source remembers
-// the plan of the source environment that deployed its commit. Each
+// the plan of the source environment that deployed its commit, and an
+// analysis whether a promotion pinned it to one commit. Each
 // environment also keeps the manifest revision its last release was planned
 // from, which a promotion uses. Plans made before this read as releases.
 func init() {
@@ -29,6 +30,13 @@ func init() {
 
 			err = db.NewAlterTable("loomplane_plan_sources").
 				AddColumn("from_plan_id", migrate.Text, migrate.NotNull(), migrate.Default("")).IfNotExists().
+				Exec(ctx)
+			if err != nil {
+				return err
+			}
+
+			err = db.NewAlterTable("loomplane_analyses").
+				AddColumn("pinned", migrate.Boolean, migrate.NotNull(), migrate.Default(false)).IfNotExists().
 				Exec(ctx)
 			if err != nil {
 				return err
@@ -87,6 +95,13 @@ func init() {
 			}
 
 			err = db.NewDropIndex("loomplane_plans_rollback_target").IfExists().Exec(ctx)
+			if err != nil {
+				return err
+			}
+
+			err = db.NewAlterTable("loomplane_analyses").
+				DropColumn("pinned").IfExists().
+				Exec(ctx)
 			if err != nil {
 				return err
 			}

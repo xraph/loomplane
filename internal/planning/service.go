@@ -396,7 +396,9 @@ func (s *Service) pin(ctx context.Context, orgID, projectID string, env *project
 			return nil, lerr
 		}
 		for _, a := range list {
-			if a.Status == discovery.StatusSucceeded {
+			// A pinned analysis is of an older commit a promotion
+			// deployed, not the branch's latest.
+			if a.Status == discovery.StatusSucceeded && !a.Pinned {
 				latest[src.ID] = a
 				break
 			}
