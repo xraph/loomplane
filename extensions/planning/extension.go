@@ -61,6 +61,7 @@ import (
 	"github.com/xraph/loomplane/internal/environments"
 	"github.com/xraph/loomplane/internal/fabriqloom"
 	"github.com/xraph/loomplane/internal/manifests"
+	"github.com/xraph/loomplane/internal/octopusloom"
 	"github.com/xraph/loomplane/internal/orchestration"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/plugins"
@@ -340,6 +341,29 @@ func (e *Extension) Register(fapp forge.App) error {
 	}
 	// Deleting a composed resource ends the admin sessions open on it.
 	serverTarget.CompositionRemoved, clusterTarget.CompositionRemoved = e.catalogAdmin.RevokeResource, e.catalogAdmin.RevokeResource
+	// A hosted Octopus renders its config from the gateway's routes, pushes
+	// them once it's up and whenever a service it serves is released, and
+	// ends its admin sessions when it goes. The octopus extension serves
+	// its API and runs the reconcile from the Syncer and Store provided
+	// here. Attached hostnames come from the Domains routes once they can
+	// list a service's; until then there are none.
+	octopusStore := octopusloom.NewPgStore(pg)
+	octopusSyncer := &octopusloom.Syncer{
+		Store: octopusStore, Open: octopusloom.InternalOpener(catalogAccess), Secret: octopusloom.InternalSecrets(catalogAccess),
+		Bindings: planStore.ListBindings, Hostnames: octopusloom.NoHostnames(),
+		Warn: func(msg string, err error) { log.Warn(msg, forge.F("error", err.Error())) },
+	}
+	octopusHooks := octopusloom.NewHooks(octopusloom.HookDeps{
+		Store: octopusStore, Syncer: octopusSyncer, Bindings: octopusSyncer.Bindings, Hostnames: octopusSyncer.Hostnames, Revoker: e.catalogAdmin,
+	})
+	catalogHooks[recipes.OctopusKind] = octopusHooks
+	observers = append(observers, octopusHooks)
+	if err := forge.ProvideValue(c, octopusSyncer); err != nil {
+		return err
+	}
+	if err := forge.ProvideValue[octopusloom.Store](c, octopusStore); err != nil {
+		return err
+	}
 	if err := fapp.Router().Handle(catalogAdminRoute, e.catalogAdmin.Handler()); err != nil {
 		return fmt.Errorf("mount the catalog admin proxy: %w", err)
 	}

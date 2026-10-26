@@ -76,6 +76,18 @@ type HostnameSource interface {
 	ServiceHostnames(ctx context.Context, orgID, projectID, environmentID, service string) ([]ServiceHostname, error)
 }
 
+// NoHostnames is a HostnameSource with no hostnames attached to any
+// service. Loomplane wires it until the Domains routes can list a service's
+// attached hostnames; until then FARP routes answer on any host and no
+// attached hostname reaches the config.
+func NoHostnames() HostnameSource { return noHostnames{} }
+
+type noHostnames struct{}
+
+func (noHostnames) ServiceHostnames(context.Context, string, string, string, string) ([]ServiceHostname, error) {
+	return nil, nil
+}
+
 // GatewayAction is the action name of a gateway's Octopus component, which
 // its hostnames and its binding are recorded under.
 func GatewayAction(resource string) string {
@@ -85,6 +97,8 @@ func GatewayAction(resource string) string {
 // Syncer pushes what a gateway should hold to Octopus's admin API, so a
 // route change needs no redeploy and an Octopus restart is put right by the
 // next sync. Now defaults to time.Now and a nil Hostnames attaches nothing.
+// Warn logs what a background sync couldn't do; it may be nil. What it is
+// given never holds a token.
 type Syncer struct {
 	Store     Store
 	Open      ChannelOpener
@@ -92,6 +106,13 @@ type Syncer struct {
 	Bindings  BindingLister
 	Hostnames HostnameSource
 	Now       func() time.Time
+	Warn      func(msg string, err error)
+}
+
+func (s *Syncer) warn(msg string, err error) {
+	if s.Warn != nil {
+		s.Warn(msg, err)
+	}
 }
 
 // SyncResult is what one sync did. Restored counts the routes and upstreams
