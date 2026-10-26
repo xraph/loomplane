@@ -13,9 +13,11 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"io"
+	"maps"
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -109,6 +111,39 @@ type Fake struct {
 	// RedisUnavailableIn is a region that refuses a Managed Redis cluster,
 	// with RedisUnavailableCode: SkuNotAvailable unless it's set.
 	RedisUnavailableIn, RedisUnavailableCode string
+
+	// FailImage makes every container app revision that runs this image
+	// crash once it starts: its running state is Failed, and so is the
+	// app's provisioning while it's the latest revision, as Container
+	// Apps reports an app whose newest revision won't run.
+	FailImage string
+	// RefuseLatestDeactivation refuses to deactivate an app's latest
+	// revision. Whether Container Apps does isn't documented, so a test
+	// can check Loomplane copes either way.
+	RefuseLatestDeactivation bool
+	// AppPatches are the container app bodies Loomplane PATCHed, in
+	// order, and Deactivations the revisions it deactivated.
+	AppPatches    []map[string]any
+	Deactivations []string
+	// Calls are the container app calls Loomplane made, in order, by
+	// kind ("PUT app", "PATCH app", "GET revision", "POST deactivate",
+	// "POST listsecrets" and so on) and the app's name.
+	Calls     []string
+	fail      map[string]int
+	failAt    map[string]int
+	counts    map[string]int
+	revisions map[string]*fakeRevision // lower-cased app ID + "/" + revision name
+	crashed   map[string]bool          // lower-cased revision name
+}
+
+// fakeRevision is a container app revision: the template it was made
+// from, and whether it's active and ready.
+type fakeRevision struct {
+	name     string
+	template any
+	active   bool
+	ready    bool
+	order    int
 }
 
 // New starts a fake.
@@ -119,6 +154,7 @@ func New(t *testing.T) *Fake {
 		groups: map[string]string{}, registered: map[string]bool{}, resources: map[string]map[string]any{},
 		polls: map[string]int{}, Uploads: map[string][]byte{}, Apps: map[string]map[string]any{},
 		pullDenied: map[string]bool{}, provisionFailed: map[string]bool{}, unseen: map[string]int{}, FirewallRules: map[string]map[string]any{},
+		fail: map[string]int{}, failAt: map[string]int{}, counts: map[string]int{}, revisions: map[string]*fakeRevision{}, crashed: map[string]bool{},
 	}
 	f.Server = httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(f.Server.Close)
@@ -222,6 +258,18 @@ func (f *Fake) resource(w http.ResponseWriter, r *http.Request, reply func(int, 
 		notFound("ResourceGroupNotFound")
 		return
 	}
+	if kind == "microsoft.app/containerapps" {
+		call := appCall(r.Method, rest)
+		f.Calls = append(f.Calls, call+" "+name)
+		f.counts[call]++
+		if f.fail[call] > 0 || f.failAt[call] == f.counts[call] {
+			if f.fail[call] > 0 {
+				f.fail[call]--
+			}
+			reply(http.StatusServiceUnavailable, map[string]any{"error": map[string]string{"code": "ServiceUnavailable", "message": "the fake failed " + call}})
+			return
+		}
+	}
 	// GET reports provisioning once, then the final state.
 	getAt := func(id string) {
 		res := f.resources[id]
@@ -240,10 +288,11 @@ func (f *Fake) resource(w http.ResponseWriter, r *http.Request, reply func(int, 
 			latest, _ := props["latestRevisionName"].(string)
 			switch {
 			case kind != "microsoft.app/containerapps" || f.pullDenied[strings.ToLower(latest)]:
-			case f.provisionFailed[strings.ToLower(latest)]:
+			case f.provisionFailed[strings.ToLower(latest)] || f.crashed[strings.ToLower(latest)]:
 				props["provisioningState"] = "Failed"
 			default:
 				props["latestReadyRevisionName"] = latest
+				f.ready(id, res, latest)
 			}
 		}
 		if isServer(kind) {
@@ -254,6 +303,10 @@ func (f *Fake) resource(w http.ResponseWriter, r *http.Request, reply func(int, 
 			}
 		}
 		f.polls[id]++
+		if kind == "microsoft.app/containerapps" {
+			reply(http.StatusOK, withoutSecretValues(res))
+			return
+		}
 		reply(http.StatusOK, res)
 	}
 	get := func() { getAt(id) }
@@ -315,15 +368,20 @@ func (f *Fake) resource(w http.ResponseWriter, r *http.Request, reply func(int, 
 						"'Invalid value: unable to pull image using Managed identity " + PullPrincipal + "'."}})
 				return
 			}
-			f.Apps[name] = body
-			// Like Container Apps, a PUT makes a new revision only when the
-			// template changed, its revisionSuffix included.
-			if old := f.resources[id]; old != nil && reflect.DeepEqual(old["properties"].(map[string]any)["template"], props["template"]) {
-				body["revision"] = old["revision"]
-				props["latestRevisionName"] = old["properties"].(map[string]any)["latestRevisionName"]
-			} else {
-				f.newRevision(name, old, body, props)
+			old := f.resources[id]
+			// A PUT that sends no traffic keeps the split there was. Azure
+			// may route it all to the latest revision instead, but nothing
+			// here relies on that.
+			if ing := ingressOf(body); ing != nil && ing["traffic"] == nil && old != nil {
+				if was := ingressOf(old); was != nil && was["traffic"] != nil {
+					ing["traffic"] = record(map[string]any{"t": was["traffic"]})["t"]
+				}
 			}
+			if refused := f.change(id, name, old, body); refused != "" {
+				reply(http.StatusBadRequest, map[string]any{"error": map[string]string{"code": "ContainerAppOperationError", "message": refused}})
+				return
+			}
+			f.Apps[name] = body
 			if conf, _ := props["configuration"].(map[string]any); conf != nil {
 				if ing, _ := conf["ingress"].(map[string]any); ing != nil {
 					ing["fqdn"] = strings.TrimPrefix(f.Server.URL, "http://") + "/apps/" + name
@@ -334,7 +392,26 @@ func (f *Fake) resource(w http.ResponseWriter, r *http.Request, reply func(int, 
 			f.unseen[id] = f.NotFoundAfterPut
 		}
 		f.resources[id], f.polls[id] = body, 0
+		if kind == "microsoft.app/containerapps" {
+			reply(http.StatusCreated, withoutSecretValues(body))
+			return
+		}
 		reply(http.StatusCreated, body)
+	case kind == "microsoft.app/containerapps" && len(rest) == 0 && r.Method == http.MethodPatch:
+		f.patchApp(reply, notFound, id, name, body)
+	case kind == "microsoft.app/containerapps" && len(rest) == 1 && rest[0] == "listsecrets" && r.Method == http.MethodPost:
+		app := f.resources[id]
+		if app == nil {
+			notFound("ResourceNotFound")
+			return
+		}
+		secrets, _ := configurationOf(app)["secrets"].([]any)
+		if secrets == nil {
+			secrets = []any{}
+		}
+		reply(http.StatusOK, map[string]any{"value": record(map[string]any{"s": secrets})["s"]})
+	case kind == "microsoft.app/containerapps" && len(rest) >= 1 && rest[0] == "revisions":
+		f.revision(r, reply, notFound, id, rest)
 	case len(rest) == 0 && r.Method == http.MethodDelete:
 		if f.resources[id] == nil {
 			w.WriteHeader(http.StatusNoContent)
@@ -411,14 +488,6 @@ func (f *Fake) resource(w http.ResponseWriter, r *http.Request, reply func(int, 
 		reply(http.StatusAccepted, body)
 	case kind == "microsoft.cache/redisenterprise" && len(rest) >= 2 && rest[0] == "databases":
 		f.redisDatabase(r, reply, notFound, getAt, id, canonical, rest, body)
-	case kind == "microsoft.app/containerapps" && len(rest) == 2 && rest[0] == "revisions" && f.provisionFailed[rest[1]]:
-		reply(http.StatusOK, map[string]any{"properties": map[string]any{"provisioningState": "Failed", "runningState": "Failed",
-			"provisioningError": "Failed to provision revision for container app. Error details: unable to pull image using Managed identity " + PullPrincipal + "."}})
-	case kind == "microsoft.app/containerapps" && len(rest) == 2 && rest[0] == "revisions" && f.pullDenied[rest[1]]:
-		reply(http.StatusOK, map[string]any{"properties": map[string]any{"provisioningState": "Provisioned", "runningState": "Failed",
-			"runningStateDetails": "Failed to pull image: UNAUTHORIZED: authentication required"}})
-	case kind == "microsoft.app/containerapps" && len(rest) == 2 && rest[0] == "revisions":
-		reply(http.StatusOK, map[string]any{"properties": map[string]any{"provisioningState": "Provisioning", "runningState": "Processing"}})
 	default:
 		notFound("NotFound")
 	}
@@ -482,28 +551,317 @@ func isServer(kind string) bool {
 	return kind == "microsoft.dbforpostgresql/flexibleservers" || kind == "microsoft.dbformysql/flexibleservers"
 }
 
-// newRevision numbers a container app's new revision, or names it with
-// the template's revisionSuffix, and denies it a pull while
-// PullDeniedFor or AppPullFailedFor says so.
-func (f *Fake) newRevision(name string, old, body, props map[string]any) {
-	rev := 1
+// change decides what a PUT or PATCH of a container app makes of it: the
+// new body replaces old. Like Container Apps, it makes a new revision only
+// when the template changed, its revisionSuffix included, and refuses a
+// suffix a revision already has. It refuses traffic that doesn't add up to
+// 100, that names a revision that isn't there, isn't active or, for a
+// share, isn't ready, and in single revision mode any traffic that names a
+// revision. It returns why it refused, or "".
+func (f *Fake) change(id, name string, old, body map[string]any) string {
+	props, _ := body["properties"].(map[string]any)
+	var was map[string]any
 	if old != nil {
-		rev = int(old["revision"].(float64)) + 1
-	}
-	body["revision"] = float64(rev)
-	revision := name + "--" + strconv.Itoa(rev)
-	if tmpl, _ := props["template"].(map[string]any); tmpl != nil {
-		if suffix, _ := tmpl["revisionSuffix"].(string); suffix != "" {
-			revision = name + "--" + suffix
+		was, _ = old["properties"].(map[string]any)
+		// Read only, so a PUT never sends it.
+		if ready, _ := was["latestReadyRevisionName"].(string); ready != "" {
+			props["latestReadyRevisionName"] = ready
 		}
 	}
-	props["latestRevisionName"] = revision
+	created := ""
+	if was != nil && reflect.DeepEqual(was["template"], props["template"]) {
+		body["revision"] = old["revision"]
+		props["latestRevisionName"] = was["latestRevisionName"]
+	} else {
+		rev := 1
+		if old != nil {
+			rev = int(old["revision"].(float64)) + 1
+		}
+		created = name + "--" + strconv.Itoa(rev)
+		if tmpl, _ := props["template"].(map[string]any); tmpl != nil {
+			if suffix, _ := tmpl["revisionSuffix"].(string); suffix != "" {
+				created = name + "--" + suffix
+			}
+		}
+		created = strings.ToLower(created)
+		if f.revisions[id+"/"+created] != nil {
+			return "Revision " + created + " already exists. Use a revision suffix the app hasn't used."
+		}
+		body["revision"] = float64(rev)
+		props["latestRevisionName"] = created
+	}
+	if refused := f.checkTraffic(id, props); refused != "" {
+		return refused
+	}
+	if created != "" {
+		f.newRevision(id, created, props)
+	}
+	return ""
+}
+
+// checkTraffic is why Container Apps would refuse an app's traffic, or "".
+func (f *Fake) checkTraffic(id string, props map[string]any) string {
+	conf, _ := props["configuration"].(map[string]any)
+	mode, _ := conf["activeRevisionsMode"].(string)
+	ing, _ := conf["ingress"].(map[string]any)
+	traffic, _ := ing["traffic"].([]any)
+	if len(traffic) == 0 {
+		return ""
+	}
+	total := 0
+	for _, e := range traffic {
+		w, _ := e.(map[string]any)
+		weight, _ := w["weight"].(float64)
+		latest, _ := w["latestRevision"].(bool)
+		named, _ := w["revisionName"].(string)
+		total += int(weight)
+		if named == "" {
+			continue
+		}
+		if !strings.EqualFold(mode, "Multiple") && !latest {
+			return "In single revision mode, all of the traffic goes to the latest revision; it can't name revision " + named + "."
+		}
+		rev := f.revisions[id+"/"+strings.ToLower(named)]
+		switch {
+		case rev == nil:
+			return "Revision " + named + " not found."
+		case !rev.active:
+			return "Revision " + named + " isn't active, so it can't take traffic."
+		case weight > 0 && (!rev.ready || f.crashed[rev.name]):
+			return "Revision " + named + " isn't ready, so it can't take traffic."
+		}
+	}
+	if total != 100 {
+		return "The traffic weights add up to " + strconv.Itoa(total) + ", not 100."
+	}
+	return ""
+}
+
+// newRevision records a container app's new revision, active and not
+// ready yet, and denies it a pull while PullDeniedFor or AppPullFailedFor
+// says so, or crashes it when it runs FailImage.
+func (f *Fake) newRevision(id, revision string, props map[string]any) {
+	tmpl := record(map[string]any{"t": props["template"]})["t"]
+	f.revisions[id+"/"+revision] = &fakeRevision{name: revision, template: tmpl, active: true, order: len(f.revisions)}
 	if len(f.RoleAssignments) > 0 && len(f.pullDenied) < f.PullDeniedFor {
-		f.pullDenied[strings.ToLower(revision)] = true
+		f.pullDenied[revision] = true
 	}
 	if f.appPuts-f.PutPullRefusedFor <= f.AppPullFailedFor {
-		f.provisionFailed[strings.ToLower(revision)] = true
+		f.provisionFailed[revision] = true
 	}
+	if t, _ := tmpl.(map[string]any); f.FailImage != "" && t != nil {
+		if cs, _ := t["containers"].([]any); len(cs) > 0 && cs[0].(map[string]any)["image"] == f.FailImage {
+			f.crashed[revision] = true
+		}
+	}
+}
+
+// ready marks an app's latest revision ready. In single revision mode
+// that deactivates every other revision, as Container Apps does once the
+// new one can take over.
+func (f *Fake) ready(id string, app map[string]any, latest string) {
+	rev := f.revisions[id+"/"+strings.ToLower(latest)]
+	if rev == nil {
+		return
+	}
+	rev.ready = true
+	if mode, _ := configurationOf(app)["activeRevisionsMode"].(string); strings.EqualFold(mode, "Multiple") {
+		return
+	}
+	for key, other := range f.revisions {
+		if strings.HasPrefix(key, id+"/") && other != rev {
+			other.active = false
+		}
+	}
+}
+
+// patchApp merges a PATCH into a container app, as JSON Merge Patch does.
+func (f *Fake) patchApp(reply func(int, any), notFound func(string), id, name string, body map[string]any) {
+	old := f.resources[id]
+	if old == nil {
+		notFound("ResourceNotFound")
+		return
+	}
+	f.AppPatches = append(f.AppPatches, record(body))
+	merged := record(old)
+	mergePatch(merged, body)
+	if refused := f.change(id, name, old, merged); refused != "" {
+		reply(http.StatusBadRequest, map[string]any{"error": map[string]string{"code": "ContainerAppOperationError", "message": refused}})
+		return
+	}
+	merged["properties"].(map[string]any)["provisioningState"] = "InProgress"
+	f.resources[id], f.polls[id] = merged, 0
+	reply(http.StatusOK, withoutSecretValues(merged))
+}
+
+// mergePatch applies patch to dst as RFC 7386 says: objects merge, null
+// removes, and anything else, arrays included, replaces.
+func mergePatch(dst, patch map[string]any) {
+	for k, v := range patch {
+		switch pv := v.(type) {
+		case nil:
+			delete(dst, k)
+		case map[string]any:
+			dv, ok := dst[k].(map[string]any)
+			if !ok {
+				dv = map[string]any{}
+				dst[k] = dv
+			}
+			mergePatch(dv, pv)
+		default:
+			dst[k] = v
+		}
+	}
+}
+
+// revision serves a container app's revisions: listing them, reading one,
+// and deactivating or activating one.
+func (f *Fake) revision(r *http.Request, reply func(int, any), notFound func(string), id string, rest []string) {
+	if f.resources[id] == nil {
+		notFound("ResourceNotFound")
+		return
+	}
+	var rev *fakeRevision
+	if len(rest) >= 2 {
+		rev = f.revisions[id+"/"+rest[1]]
+	}
+	switch {
+	case len(rest) == 1 && r.Method == http.MethodGet:
+		var all []*fakeRevision
+		for key, rev := range f.revisions {
+			if strings.HasPrefix(key, id+"/") {
+				all = append(all, rev)
+			}
+		}
+		slices.SortFunc(all, func(a, b *fakeRevision) int { return a.order - b.order })
+		value := make([]any, 0, len(all))
+		for _, rev := range all {
+			value = append(value, f.revisionView(id, rev))
+		}
+		reply(http.StatusOK, map[string]any{"value": value})
+	case len(rest) == 2 && r.Method == http.MethodGet && f.provisionFailed[rest[1]]:
+		reply(http.StatusOK, map[string]any{"properties": map[string]any{"provisioningState": "Failed", "runningState": "Failed",
+			"provisioningError": "Failed to provision revision for container app. Error details: unable to pull image using Managed identity " + PullPrincipal + "."}})
+	case len(rest) == 2 && r.Method == http.MethodGet && f.pullDenied[rest[1]]:
+		reply(http.StatusOK, map[string]any{"properties": map[string]any{"provisioningState": "Provisioned", "runningState": "Failed",
+			"runningStateDetails": "Failed to pull image: UNAUTHORIZED: authentication required"}})
+	case rev == nil:
+		notFound("ResourceNotFound")
+	case len(rest) == 2 && r.Method == http.MethodGet:
+		reply(http.StatusOK, f.revisionView(id, rev))
+	case len(rest) == 3 && rest[2] == "deactivate" && r.Method == http.MethodPost:
+		latest, _ := f.resources[id]["properties"].(map[string]any)["latestRevisionName"].(string)
+		switch {
+		case f.shares(id)[rev.name] > 0:
+			reply(http.StatusBadRequest, map[string]any{"error": map[string]string{"code": "ContainerAppOperationError", "message": "Revision " + rev.name + " takes traffic, so it can't be deactivated."}})
+			return
+		case f.RefuseLatestDeactivation && strings.EqualFold(latest, rev.name):
+			reply(http.StatusBadRequest, map[string]any{"error": map[string]string{"code": "ContainerAppOperationError", "message": "Revision " + rev.name + " is the latest revision, so it can't be deactivated."}})
+			return
+		}
+		rev.active = false
+		f.Deactivations = append(f.Deactivations, rev.name)
+		reply(http.StatusOK, map[string]any{})
+	case len(rest) == 3 && rest[2] == "activate" && r.Method == http.MethodPost:
+		rev.active = true
+		reply(http.StatusOK, map[string]any{})
+	default:
+		notFound("NotFound")
+	}
+}
+
+// revisionView is a revision as Azure shows it.
+func (f *Fake) revisionView(id string, rev *fakeRevision) map[string]any {
+	props := map[string]any{"active": rev.active, "template": rev.template, "trafficWeight": f.shares(id)[rev.name]}
+	state := func(provisioning, running, health string) {
+		props["provisioningState"], props["runningState"], props["healthState"] = provisioning, running, health
+	}
+	switch {
+	case f.crashed[rev.name]:
+		state("Provisioned", "Failed", "Unhealthy")
+		props["runningStateDetails"] = "The container exited with status 1."
+	case !rev.ready:
+		state("Provisioning", "Processing", "None")
+	case !rev.active:
+		state("Provisioned", "Stopped", "None")
+	default:
+		state("Provisioned", "Running", "Healthy")
+	}
+	return map[string]any{"id": id + "/revisions/" + rev.name, "name": rev.name, "properties": props}
+}
+
+// shares is each revision's percent of an app's traffic now: the latest
+// ready revision's in single revision mode, else as its traffic says.
+func (f *Fake) shares(id string) map[string]int {
+	out := map[string]int{}
+	app := f.resources[id]
+	if app == nil {
+		return out
+	}
+	conf := configurationOf(app)
+	ready, _ := app["properties"].(map[string]any)["latestReadyRevisionName"].(string)
+	ready = strings.ToLower(ready)
+	mode, _ := conf["activeRevisionsMode"].(string)
+	traffic, _ := ingressOf(app)["traffic"].([]any)
+	if !strings.EqualFold(mode, "Multiple") || len(traffic) == 0 {
+		if ready != "" {
+			out[ready] = 100
+		}
+		return out
+	}
+	for _, e := range traffic {
+		w, _ := e.(map[string]any)
+		weight, _ := w["weight"].(float64)
+		named, _ := w["revisionName"].(string)
+		if latest, _ := w["latestRevision"].(bool); latest || named == "" {
+			named = ready
+		}
+		out[strings.ToLower(named)] += int(weight)
+	}
+	return out
+}
+
+// configurationOf is a container app's configuration, or an empty one.
+func configurationOf(app map[string]any) map[string]any {
+	props, _ := app["properties"].(map[string]any)
+	conf, _ := props["configuration"].(map[string]any)
+	if conf == nil {
+		return map[string]any{}
+	}
+	return conf
+}
+
+// ingressOf is a container app's ingress, or nil.
+func ingressOf(app map[string]any) map[string]any {
+	ing, _ := configurationOf(app)["ingress"].(map[string]any)
+	return ing
+}
+
+// withoutSecretValues is a container app as Azure shows it: its secrets'
+// names without their values.
+func withoutSecretValues(app map[string]any) map[string]any {
+	out := record(app)
+	secrets, _ := configurationOf(out)["secrets"].([]any)
+	for _, s := range secrets {
+		delete(s.(map[string]any), "value")
+	}
+	return out
+}
+
+// appCall is the kind of a container app call, as Calls and FailNext name
+// it: "PUT app", "GET revision", "POST deactivate" and so on.
+func appCall(method string, rest []string) string {
+	switch {
+	case len(rest) == 0:
+		return method + " app"
+	case rest[0] == "revisions" && len(rest) == 1:
+		return method + " revisions"
+	case rest[0] == "revisions" && len(rest) == 2:
+		return method + " revision"
+	case rest[0] == "revisions":
+		return method + " " + rest[2]
+	}
+	return method + " " + rest[0]
 }
 
 // identity serves a user-assigned managed identity.
@@ -531,4 +889,136 @@ func (f *Fake) Registered(namespace string) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.registered[strings.ToLower(namespace)]
+}
+
+// --- What a test reads and changes of container apps ---
+
+// FakeRevision is a container app revision as the fake keeps it.
+type FakeRevision struct {
+	Name          string
+	Active, Ready bool
+	// Image is what its first container runs.
+	Image    string
+	Template map[string]any
+}
+
+// appID is the fake's key for the container app called name.
+func (f *Fake) appID(name string) string {
+	suffix := "/providers/microsoft.app/containerapps/" + strings.ToLower(name)
+	for id := range f.resources {
+		if strings.HasSuffix(id, suffix) {
+			return id
+		}
+	}
+	return ""
+}
+
+// FailNext makes the next container app call of a kind, as Calls names
+// it, answer 503.
+func (f *Fake) FailNext(call string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fail[call] = 1
+}
+
+// FailAfter lets n more container app calls of a kind through, then
+// fails one.
+func (f *Fake) FailAfter(call string, n int) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.failAt[call] = f.counts[call] + n + 1
+}
+
+// Split is how the traffic of the container app called name resolves
+// now, by revision, without the zeros.
+func (f *Fake) Split(name string) map[string]int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	out := f.shares(f.appID(name))
+	maps.DeleteFunc(out, func(_ string, v int) bool { return v == 0 })
+	return out
+}
+
+// App is the container app called name as the fake keeps it now, secret
+// values included, or nil.
+func (f *Fake) App(name string) map[string]any {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	app := f.resources[f.appID(name)]
+	if app == nil {
+		return nil
+	}
+	return record(app)
+}
+
+// Mode is the active revisions mode of the container app called name.
+func (f *Fake) Mode(name string) string {
+	app := f.App(name)
+	mode, _ := configurationOf(app)["activeRevisionsMode"].(string)
+	return mode
+}
+
+// Secrets are the secrets of the container app called name, by name,
+// with their values.
+func (f *Fake) Secrets(name string) map[string]string {
+	out := map[string]string{}
+	secrets, _ := configurationOf(f.App(name))["secrets"].([]any)
+	for _, s := range secrets {
+		m := s.(map[string]any)
+		k, _ := m["name"].(string)
+		v, _ := m["value"].(string)
+		out[k] = v
+	}
+	return out
+}
+
+// Revisions are the revisions of the container app called name, by name.
+func (f *Fake) Revisions(name string) map[string]FakeRevision {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	id := f.appID(name)
+	out := map[string]FakeRevision{}
+	for key, rev := range f.revisions {
+		if !strings.HasPrefix(key, id+"/") {
+			continue
+		}
+		v := FakeRevision{Name: rev.name, Active: rev.active, Ready: rev.ready && !f.crashed[rev.name]}
+		v.Template, _ = record(map[string]any{"t": rev.template})["t"].(map[string]any)
+		if cs, _ := v.Template["containers"].([]any); len(cs) > 0 {
+			v.Image, _ = cs[0].(map[string]any)["image"].(string)
+		}
+		out[rev.name] = v
+	}
+	return out
+}
+
+// ActiveRevisions are the names of the active revisions of the container
+// app called name, sorted.
+func (f *Fake) ActiveRevisions(name string) []string {
+	var out []string
+	for n, rev := range f.Revisions(name) {
+		if rev.Active {
+			out = append(out, n)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+// DropRevision makes a revision of the container app called name gone,
+// as if Azure had purged it.
+func (f *Fake) DropRevision(name, revision string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	delete(f.revisions, f.appID(name)+"/"+strings.ToLower(revision))
+}
+
+// Crash makes a revision of the container app called name crash, as a
+// revision that started can later.
+func (f *Fake) Crash(name, revision string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if f.revisions[f.appID(name)+"/"+strings.ToLower(revision)] != nil {
+		f.crashed[strings.ToLower(revision)] = true
+	}
 }

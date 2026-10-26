@@ -76,8 +76,9 @@ var (
 
 // DetailCanaryMissing is the detail listing, comma separated, what a
 // credential lacks that only a canary release needs: the actions an AWS
-// key lacks for one on ECS, or the permissions a Google Cloud service
-// account lacks for one on Cloud Run.
+// key lacks for one on ECS, the permissions a Google Cloud service
+// account lacks for one on Cloud Run, or the actions an Azure service
+// principal lacks for one on Container Apps.
 const DetailCanaryMissing = "canary_missing"
 
 // Connection is one cloud account an organization deploys to.
