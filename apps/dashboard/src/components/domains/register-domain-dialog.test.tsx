@@ -103,6 +103,7 @@ function stubRegistration(
               title: "Cloudflare",
               builtin: false,
               credential: "API token",
+              methods: ["token"],
               settings: [{ key: "account_id", label: "Account ID" }],
             },
           ],
