@@ -1205,3 +1205,180 @@ func TestAzureCanaryTheFirstDeployAfterAPromoteKeepsWhatServes(t *testing.T) {
 		t.Fatal("the deploy's PUT dropped the secrets the serving revision read")
 	}
 }
+
+// --- What an ordinary deploy needs ---
+
+// canaryActionsDenied takes the canary-only actions away from the fake's
+// principal.
+func canaryActionsDenied(f *azuretest.Fake, actions ...string) {
+	f.Lock()
+	defer f.Unlock()
+	f.NotActions = append(f.NotActions, actions...)
+}
+
+// notes records the progress a job shows.
+func notes(job *Job) *[]string {
+	var out []string
+	job.Progress = func(_, m string) { out = append(out, m) }
+	return &out
+}
+
+// An app that never ran a canary deploys as it did before canaries, with
+// a principal that has none of the canary actions: one more GET, and
+// nothing else new.
+func TestAzureADeployThatNeverRanACanaryNeedsNoCanaryAction(t *testing.T) {
+	t.Parallel()
+	e := newAzureCanaryEnv(t)
+	canaryActionsDenied(e.f, azure.CanaryActions...)
+	said := notes(e.job)
+	e.job.Resume = nil
+	n := e.callCount()
+	if _, err := e.exec.Apply(t.Context(), e.job); err != nil {
+		t.Fatal(err)
+	}
+	calls := e.calls(n)
+	puts := 0
+	for _, c := range calls {
+		if c == "PUT app "+e.app {
+			puts++
+		}
+	}
+	if calls[0] != "GET app "+e.app || puts != 1 || slices.ContainsFunc(calls[1:], func(c string) bool { return c != "GET app "+e.app && c != "PUT app "+e.app }) {
+		t.Fatalf("calls %v", calls)
+	}
+	for _, m := range *said {
+		if strings.Contains(m, "secret") {
+			t.Fatalf("a note about secrets: %q", m)
+		}
+	}
+
+	// A release that drops a secret variable removes its secret, as it
+	// always did, and says which.
+	e.f.Lock()
+	e.f.AllowDroppingInUseSecrets = true
+	e.f.Unlock()
+	delete(e.job.Env, "TOKEN")
+	n = e.callCount()
+	if _, err := e.exec.Apply(t.Context(), e.job); err != nil {
+		t.Fatal(err)
+	}
+	if calls := e.calls(n); slices.ContainsFunc(calls, func(c string) bool { return c != "GET app "+e.app && c != "PUT app "+e.app }) {
+		t.Fatalf("calls %v", calls)
+	}
+	if !slices.ContainsFunc(*said, func(m string) bool {
+		return strings.Contains(m, e.oldSecret) && strings.Contains(m, "removes those secrets")
+	}) {
+		t.Fatalf("notes %q", *said)
+	}
+	if _, has := e.f.Secrets(e.app)[e.oldSecret]; has {
+		t.Fatal("the dropped variable's secret is still there")
+	}
+}
+
+// After a canary, the deploy has to read what the earlier revisions read
+// before it replaces the secrets. A principal that may not is refused,
+// with the action named, and nothing is written.
+func TestAzureADeployOverCanaryLeftoversNeedsToReadThem(t *testing.T) {
+	t.Parallel()
+	for _, denied := range []string{"Microsoft.App/containerApps/revisions/read", "Microsoft.App/containerApps/listSecrets/action"} {
+		t.Run(denied, func(t *testing.T) {
+			t.Parallel()
+			e := newAzureCanaryEnv(t)
+			target := e.start(t)
+			e.weigh(t, target, 50)
+			if _, err := e.exec.Promote(t.Context(), e.job, target); err != nil {
+				t.Fatal(err)
+			}
+			canaryActionsDenied(e.f, denied)
+			e.job.Resume = nil
+			n := e.callCount()
+			_, err := e.exec.Apply(t.Context(), e.job)
+			for _, want := range []string{"earlier canary", denied, "Grant it"} {
+				if err == nil || !strings.Contains(err.Error(), want) {
+					t.Fatalf("err %v doesn't say %q", err, want)
+				}
+			}
+			if slices.ContainsFunc(e.calls(n), func(c string) bool { return strings.HasPrefix(c, "PUT ") || strings.HasPrefix(c, "PATCH ") }) {
+				t.Fatalf("calls %v", e.calls(n))
+			}
+			if split := e.split(); !maps.Equal(split, map[string]int{target.Candidate: 100}) {
+				t.Fatalf("split %v", split)
+			}
+		})
+	}
+
+	// In multiple revisions mode with nothing to keep, the takeover still
+	// reads the new revision before it gives it the traffic.
+	e := newAzureCanaryEnv(t)
+	target := e.start(t)
+	e.weigh(t, target, 50)
+	if err := e.revert(t, target); err != nil {
+		t.Fatal(err)
+	}
+	canaryActionsDenied(e.f, "Microsoft.App/containerApps/revisions/read")
+	e.job.Resume = nil
+	_, err := e.exec.Apply(t.Context(), e.job)
+	if err == nil || !strings.Contains(err.Error(), "Microsoft.App/containerApps/revisions/read") {
+		t.Fatalf("err %v", err)
+	}
+	if split := e.split(); !maps.Equal(split, map[string]int{e.baseline: 100}) {
+		t.Fatalf("split %v", split)
+	}
+}
+
+// A candidate's secrets an earlier deploy couldn't prune go with the next
+// one, even when it keeps nothing.
+func TestAzureADeployPrunesWhatAnEarlierOneLeft(t *testing.T) {
+	t.Parallel()
+	e := newAzureCanaryEnv(t)
+	target := e.start(t)
+	e.weigh(t, target, 50)
+	if _, err := e.exec.Promote(t.Context(), e.job, target); err != nil {
+		t.Fatal(err)
+	}
+	own := e.oldSecret + "-" + strings.TrimPrefix(target.Candidate, e.app+"--")
+	e.job.Resume = nil
+	// The first deploy lists the secrets to keep them, then its prune
+	// can't list them.
+	e.f.FailAfter("POST listsecrets", 1)
+	if _, err := e.exec.Apply(t.Context(), e.job); err != nil {
+		t.Fatal(err)
+	}
+	if _, has := e.f.Secrets(e.app)[own]; !has {
+		t.Fatal("the prune ran")
+	}
+	if _, err := e.exec.Apply(t.Context(), e.job); err != nil {
+		t.Fatal(err)
+	}
+	if _, has := e.f.Secrets(e.app)[own]; has {
+		t.Fatalf("secrets %v", e.f.Secrets(e.app))
+	}
+}
+
+// The takeover gives the traffic only to a revision that's active and
+// ready, and otherwise leaves it as it is.
+func TestAzureTakeOverRefusesARevisionThatIsntUp(t *testing.T) {
+	t.Parallel()
+	e := newAzureCanaryEnv(t)
+	target := e.start(t)
+	e.weigh(t, target, 50)
+	if err := e.revert(t, target); err != nil {
+		t.Fatal(err)
+	}
+	s, err := azureSession(t.Context(), e.exec.Client, e.job.Connection, e.job.Credential)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The revision that put the baseline's template back is the latest,
+	// and inactive.
+	latest, _ := e.f.App(e.app)["properties"].(map[string]any)["latestRevisionName"].(string)
+	for _, rev := range []string{latest, target.Candidate} {
+		err := azureTakeOver(t.Context(), s, e.appID, rev)
+		if err == nil || !strings.Contains(err.Error(), "left as it is") {
+			t.Fatalf("%s: err %v", rev, err)
+		}
+		if split := e.split(); !maps.Equal(split, map[string]int{e.baseline: 100}) || e.f.Mode(e.app) != "Multiple" {
+			t.Fatalf("%s: split %v, mode %s", rev, split, e.f.Mode(e.app))
+		}
+	}
+}

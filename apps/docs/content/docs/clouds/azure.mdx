@@ -107,7 +107,7 @@ A canary needs three actions every other deploy can do without:
 |---|---|
 | Canary releases only | `Microsoft.App/containerApps/revisions/read`, `Microsoft.App/containerApps/revisions/deactivate/action`, `Microsoft.App/containerApps/listSecrets/action` |
 
-Contributor has them. The last one is there because Azure never shows a secret's value on a read, and the new revision's update has to send the old revision's secrets back as they are. A principal without them still deploys. The connection lists what's missing, and a canary on Container Apps refuses to start, when you plan it and again when it runs. Grant them, or release that environment `direct` or `blue_green`.
+Contributor has them. The last one is there because Azure never shows a secret's value on a read, and the new revision's update has to send the old revision's secrets back as they are. A principal without them still deploys any app that never ran a canary. Once a canary has left revisions or secrets of its own on an app, the next deploy there needs the first and the last too, since it has to read what the old revisions use before it replaces the app's secrets, and it stops with the missing action named if it can't. The connection lists what's missing, and a canary on Container Apps refuses to start, when you plan it and again when it runs. Grant them, or release that environment `direct` or `blue_green`.
 
 If an earlier canary couldn't roll back and left the traffic split, or left all of it on its new revision, a new canary on that app won't start, since it can't tell which revision is the real one to compare against. Retry or roll back that deployment, or release once with `direct`, which gives the latest revision all of the traffic.
 

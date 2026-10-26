@@ -289,7 +289,7 @@ func (c *azureCanary) start(ctx context.Context, candidate azure.App, restoreBas
 	left := c.deactivate(ctx, earlier)
 	// The PUT replaces the app's secrets, so the baseline's, and those of
 	// anything Azure wouldn't deactivate, go back as they are.
-	if _, err := azureKeepSecrets(ctx, c.s, c.app, &candidate); err != nil {
+	if err := azureKeepSecrets(ctx, c.s, c.app, &candidate); err != nil {
 		return fmt.Errorf("keep the secrets the baseline reads: %w", err)
 	}
 	if err := c.startIn(ctx, candidate); err != nil {
