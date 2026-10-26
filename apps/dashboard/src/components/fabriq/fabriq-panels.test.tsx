@@ -469,6 +469,17 @@ test("turning a projection off warns that it removes the engine and its data", a
   expect(screen.queryByText(/Turning FalkorDB off/)).toBeNull()
 })
 
+test("the removal warning appears inside a live region that was already on the page", async () => {
+  api()
+  const { container } = mount(<FabriqSettings {...withGraph()} />)
+  const regions = container.querySelectorAll('[aria-live="polite"]')
+  expect(regions).toHaveLength(2)
+  for (const region of regions) expect(region).toBeEmptyDOMElement()
+  await userEvent.click(screen.getByRole("switch", { name: "FalkorDB" }))
+  const note = screen.getByText(/Turning FalkorDB off removes it/)
+  expect(note.closest('[aria-live="polite"]')).toBe(regions[0])
+})
+
 test("turning a projection on shows no removal warning", async () => {
   api()
   mount(<FabriqSettings {...panelProps()} />)
@@ -482,12 +493,12 @@ test("each projection switch is described by its explanation", () => {
   expect(
     screen.getByRole("switch", { name: "FalkorDB" })
   ).toHaveAccessibleDescription(
-    "Graph projections. Rebuilt from Postgres, so no backups."
+    /^Graph projections\. Rebuilt from Postgres, so no backups\.\s*$/
   )
   expect(
     screen.getByRole("switch", { name: "Elasticsearch" })
   ).toHaveAccessibleDescription(
-    "Search projections. Rebuilt from Postgres, so no backups."
+    /^Search projections\. Rebuilt from Postgres, so no backups\.\s*$/
   )
 })
 

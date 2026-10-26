@@ -154,7 +154,7 @@ export function FabriqSettings({
               <Switch
                 className="data-[size=default]:h-5"
                 aria-label={title}
-                aria-describedby={warn ? `${about} ${warning}` : about}
+                aria-describedby={`${about} ${warning}`}
                 checked={checked}
                 disabled={busy || !allowed}
                 onCheckedChange={(enabled) =>
@@ -162,16 +162,17 @@ export function FabriqSettings({
                 }
               />
             </label>
-            {warn && (
-              <p
-                id={warning}
-                role="note"
-                className="rounded-[9px] bg-notice-warning px-2.5 py-2 text-[12.5px] leading-normal text-notice-warning-ink"
-              >
-                Turning {title} off removes it and {projection.removes}.{" "}
-                {projection.queries} fail until you turn it back on.
-              </p>
-            )}
+            <div id={warning} aria-live="polite">
+              {warn && (
+                <p
+                  role="note"
+                  className="rounded-[9px] bg-notice-warning px-2.5 py-2 text-[12.5px] leading-normal text-notice-warning-ink"
+                >
+                  Turning {title} off removes it and {projection.removes}.{" "}
+                  {projection.queries} fail until you turn it back on.
+                </p>
+              )}
+            </div>
           </div>
         )
       })}
