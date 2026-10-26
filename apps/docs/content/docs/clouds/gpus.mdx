@@ -1,0 +1,129 @@
+---
+title: GPUs
+description: What a Kubernetes cluster, your own server or a DigitalOcean GPU Droplet needs before Loomplane can run GPU work on it, and how to ask for GPUs in a manifest.
+---
+
+Loomplane finds GPUs, schedules work onto them and shows what they cost. It never installs a GPU driver, and it never installs the NVIDIA device plugin on your cluster. Whatever the target is, the driver side is yours to set up (DigitalOcean GPU Droplets are the one exception, covered below). Everything on this page is about getting that side right so Loomplane can see the GPUs.
+
+Prices are estimates. When Loomplane doesn't know a price it says "price unknown" and never shows $0. And GPU workloads on your own servers and clusters are never stopped or scaled down for you, since nothing here can tell an idle GPU from a busy one.
+
+## Kubernetes
+
+Install the NVIDIA device plugin or the NVIDIA GPU Operator first. Without one, the nodes have GPUs but nothing advertises `nvidia.com/gpu`, and the connection says so and asks you to install one.
+
+Then let the connection list nodes. Loomplane reads the cluster's nodes to find GPUs, and a namespace-scoped credential can't do that. Without the permission, the connection reads "Loomplane can't list this cluster's nodes, so it can't see GPUs". Fix it with a ClusterRole and a binding to the service account behind your kubeconfig token (swap in your own names):
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: loomplane-nodes
+rules:
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: loomplane-nodes
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: loomplane-nodes
+subjects:
+  - kind: ServiceAccount
+    name: loomplane
+    namespace: loomplane
+```
+
+Check the connection again afterwards.
+
+Each GPU node also needs a label that says what kind of GPU it has. Loomplane tries these in order and uses the first one a node carries:
+
+1. `cloud.google.com/gke-accelerator`
+2. `nvidia.com/gpu.product` (GPU feature discovery adds this one)
+3. `k8s.amazonaws.com/accelerator`
+4. `doks.digitalocean.com/gpu-model`
+
+If none is there, it falls back to the cloud's `node.kubernetes.io/instance-type` label. A cluster with GPUs but no label that names the kind shows a message asking you to add `nvidia.com/gpu.product`. If the cluster has no GPU nodes at all, the GPU sizes simply don't appear.
+
+You don't have to touch taints. Loomplane copies the taints on the matching GPU nodes into tolerations on the pod. A GPU pod gets an `nvidia.com/gpu` limit and a node selector built from the label above, so it only lands on the kind you asked for.
+
+If a service keeps a model weight cache, the storage class behind it must have a `Retain` reclaim policy. Loomplane checks that before it uses the class.
+
+## Your own servers
+
+A server needs the NVIDIA driver and the NVIDIA Container Toolkit. Once both are in, tell Docker to use the toolkit and restart it:
+
+```bash
+sudo nvidia-ctk runtime configure --runtime=docker
+sudo systemctl restart docker
+```
+
+Loomplane runs `nvidia-smi` over SSH when you connect the server and again on every check, so it learns what GPUs the server has and whether Docker can use them. Open the server and choose **Check again** after any change.
+
+When a server has GPUs it can't use yet, it shows **Can't take GPU work** with the reason. There are two common ones. If `nvidia-smi` doesn't answer on a machine with an NVIDIA card, you need the driver. If it answers but Docker can't reach the GPUs, you need the toolkit steps above.
+
+Each container gets its own GPUs, picked when the service is deployed. Two workloads never share a device, so a server with two GPUs runs at most two single-GPU services.
+
+## DigitalOcean GPU Droplets
+
+DigitalOcean is the only cloud where Loomplane creates GPU servers today. You add them through a pool, the same way you add other [DigitalOcean Droplets](/docs/clouds/digitalocean#droplets-and-dns).
+
+Loomplane picks a GPU-ready image, which ships the driver. At first boot it installs Docker only if the image doesn't have it, then installs the NVIDIA Container Toolkit and points Docker at it. The hourly price shows on the review before you approve anything, and stays on the server afterwards.
+
+If the toolkit setup fails, the server says so, takes no GPU work and keeps costing money. Nothing retries by itself. The message gives you the commands to run (the `nvidia-ctk` steps above) and then **Check again**, or you can delete the server.
+
+Pools have a few GPU rules:
+
+- A pool can be restricted to one GPU kind. A GPU pool refuses CPU work, and a CPU pool refuses GPU sizes.
+- Your Cloud has a GPU ceiling for each kind, and each GPU pool has its own ceiling for its kind. The pool's can't exceed the Cloud's.
+- If one server's GPUs can't be read, growth of GPU capacity pauses until a check on that server succeeds. Nothing buys another GPU on a guess.
+
+## AWS, GCP and Azure
+
+GPU nodes on EKS, GKE and AKS clusters are recognized by their instance type and priced from list prices, with the date of those prices shown beside them. Loomplane doesn't create GPU virtual machines on these clouds yet. You bring the cluster and Loomplane places work on it, using the Kubernetes rules above.
+
+## In a manifest
+
+Ask for GPUs on a service with `size.gpu`. Add `size.shm` (in MiB) if your framework wants a bigger `/dev/shm`, which PyTorch data loaders often do. Shared memory counts toward `memory`, so it has to be smaller.
+
+```yaml
+services:
+  inference:
+    source: services/inference
+    provider: kubernetes
+    target: conn_cluster
+    size:
+      cpu: 4
+      memory: 32768
+      shm: 8192
+      gpu: { kind: nvidia-l4, count: 1 }
+```
+
+A catalog resource whose recipe can use a GPU takes the same field under `resources`. Recipes only accept NVIDIA kinds here:
+
+```yaml
+resources:
+  models:
+    kind: <a catalog kind that uses GPUs>
+    gpu: { kind: nvidia-l40s, count: 1 }
+```
+
+`count` runs from 1 to 8. `kind` is one of these IDs:
+
+| Kind | GPU |
+| --- | --- |
+| `nvidia-t4` | NVIDIA T4 |
+| `nvidia-l4` | NVIDIA L4 |
+| `nvidia-a10`, `nvidia-a10g` | NVIDIA A10, A10G |
+| `nvidia-l40s` | NVIDIA L40S |
+| `nvidia-rtx-4000-ada`, `nvidia-rtx-6000-ada` | NVIDIA RTX 4000 Ada, RTX 6000 Ada |
+| `nvidia-v100-16gb`, `nvidia-v100-32gb` | NVIDIA V100 |
+| `nvidia-a100-40gb`, `nvidia-a100-80gb` | NVIDIA A100 |
+| `nvidia-h100-80gb`, `nvidia-h100-nvl-94gb` | NVIDIA H100, H100 NVL |
+| `nvidia-h200-141gb` | NVIDIA H200 |
+| `amd-mi300x` | AMD Instinct MI300X |
+
+Planning checks the kind against the target, so a request the target can't meet shows up as a problem on the plan before anything runs. Arm64 targets can't run GPU work, and a gateway can't ask for GPUs.
