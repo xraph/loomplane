@@ -64,6 +64,9 @@ func (h *HealthReader) Health(ctx context.Context, orgID, bindingID, revision st
 	if err != nil {
 		return releasehealth.Health{}, err
 	}
+	if m == nil {
+		return releasehealth.Health{Reason: "The cloud returned no measurement."}, nil
+	}
 	if !m.ErrorsCounted {
 		// Zero errors and errors nobody counted look the same in a sum.
 		return releasehealth.Health{Reason: "The cloud didn't report 5xx error counts, so the error rate can't be judged."}, nil
