@@ -45,7 +45,11 @@ The Integration's settings show its client ID and client secret. The Cloud sign-
 
 In the Google Cloud console, open **APIs & Services**. Set up the OAuth consent screen first if the project doesn't have one (newer consoles call it **Google Auth Platform**), and add the `https://www.googleapis.com/auth/cloud-platform` scope under its data access. Loomplane also asks for `openid` and `email`, which need nothing extra. Then open **Credentials**, create an OAuth client ID of type **Web application**, and add the callback URL under **Authorized redirect URIs**.
 
-Publish the app when you're done. While it's in testing, Google ends every sign-in after 7 days and the connection asks to be signed in again, which the Cloud sign-in page reminds you of. If everyone who'll sign in is in your Google Workspace, an **Internal** app avoids that without publishing.
+Publish the app when you're done. While it's in testing, Google ends every sign-in after 7 days and the connection asks to be signed in again, which the Cloud sign-in page reminds you of.
+
+If you make it an **External** app, Google also has to verify it, because `cloud-platform` is one of its sensitive scopes. Until it does, everyone who signs in sees a warning that Google hasn't verified the app and has to open **Advanced** to carry on, and no more than 100 people can sign in with it. You ask for verification from the consent screen. Google wants a homepage, a privacy policy and a reason for each scope, so expect it to take a while. If everyone who'll sign in is in your Google Workspace, make the app **Internal** instead, which needs neither publishing nor verification and has no 100-person limit.
+
+The person who signs in needs `serviceusage.services.use` on the project they deploy to. Owner, Editor and Service Usage Consumer all include it. Loomplane bills their API calls to that project, not to the one the OAuth client lives in, so the client's project doesn't need any of the APIs turned on. Without the permission the connection lists it as missing.
 
 ### Azure
 
