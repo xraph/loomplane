@@ -34,11 +34,11 @@ export function BackupSchedule({
           save(cadence, changed ? (policy?.enabled ?? true) : !policy?.enabled)
       }}
     >
-      <label className="grid gap-1 text-xs text-muted-foreground">
+      <label className="grid gap-1.5 text-[12.5px] font-medium">
         Backup interval (hours)
         <Input
           type="number"
-          className="h-8 w-24"
+          className="h-8 w-24 font-mono text-[12.5px]"
           min={1}
           max={168}
           step={1}
@@ -67,7 +67,6 @@ export function BackupSchedule({
       <Button
         size="sm"
         variant="outline"
-        className="h-8 rounded-[9px] px-3 text-[12.5px]"
         disabled={disabled}
         onClick={() => setOpen(true)}
       >

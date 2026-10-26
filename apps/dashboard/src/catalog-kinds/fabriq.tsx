@@ -15,7 +15,7 @@ import { defineCatalogKind, type CatalogPanelProps } from "@/lib/catalog-kinds"
 
 function KeysPanel(props: CatalogPanelProps) {
   return (
-    <div className="grid gap-[18px]">
+    <div className="grid gap-5">
       <FabriqStack {...props} />
       <FabriqTenants {...props} />
       <FabriqServices {...props} />
@@ -27,7 +27,6 @@ export default defineCatalogKind({
   kind: "fabriq",
   title: "Fabriq",
   deployedLabel: "Running",
-  serviceLayout: "compact",
   defaultPanel: "keys",
   group: "data",
   icon: FabriqIcon,

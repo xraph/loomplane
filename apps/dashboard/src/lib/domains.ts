@@ -4,10 +4,10 @@
 import { useEffect, useState } from "react"
 
 import type {
+  CloudinfraRouteStatus,
   DomainOffer,
   HostnameUse,
   Registration,
-  RouteStatus,
   ZoneOverview,
 } from "@/client/forge/loomplane/types"
 import { cloudLabel } from "@/lib/clouds"
@@ -51,7 +51,7 @@ function shared(state: string): string {
 }
 
 // Until its zone is verified, every column of a route waits on it.
-function zoneUnverified(s: RouteStatus): boolean {
+function zoneUnverified(s: CloudinfraRouteStatus): boolean {
   return (
     s.dns === "awaiting_verification" &&
     s.certificate === "awaiting_verification" &&
@@ -60,11 +60,11 @@ function zoneUnverified(s: RouteStatus): boolean {
 }
 
 // A verified external zone whose record isn't there yet: the owner adds it.
-function awaitingRecord(s: RouteStatus): boolean {
+function awaitingRecord(s: CloudinfraRouteStatus): boolean {
   return s.dns === "awaiting_verification" && !zoneUnverified(s)
 }
 
-export function dnsLabel(s: RouteStatus): string {
+export function dnsLabel(s: CloudinfraRouteStatus): string {
   if (awaitingRecord(s)) return "Awaiting record"
   switch (s.dns) {
     case "ready":
@@ -75,11 +75,11 @@ export function dnsLabel(s: RouteStatus): string {
   return shared(s.dns)
 }
 
-export function dnsTone(s: RouteStatus): PillTone {
+export function dnsTone(s: CloudinfraRouteStatus): PillTone {
   return awaitingRecord(s) ? "warn" : stateTone(s.dns as DomainState)
 }
 
-export function certificateLabel(s: RouteStatus): string {
+export function certificateLabel(s: CloudinfraRouteStatus): string {
   switch (s.certificate) {
     case "ready":
       return "Active"
@@ -92,7 +92,7 @@ export function certificateLabel(s: RouteStatus): string {
   return shared(s.certificate)
 }
 
-export function routeLabel(s: RouteStatus): string {
+export function routeLabel(s: CloudinfraRouteStatus): string {
   switch (s.route) {
     case "ready":
       return "Ready"

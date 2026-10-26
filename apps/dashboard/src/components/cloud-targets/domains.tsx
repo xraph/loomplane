@@ -168,11 +168,11 @@ function Zones({ onCreate }: { onCreate: () => void }) {
       ) : (
         <Rows>
           {list.map((zone) => (
-            <Row key={zone.id} className="grid gap-2 p-3 text-[13px]">
+            <Row key={zone.id} className="grid gap-2 py-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
                 <div>
                   <p className="font-medium">
-                    {zone.name} · {zone.mode}
+                    <span className="font-mono">{zone.name}</span> · {zone.mode}
                   </p>
                   <p className="text-xs text-muted-foreground">
                     DNS account: {zone.connectionId || "External"} ·{" "}
@@ -271,7 +271,7 @@ function Zones({ onCreate }: { onCreate: () => void }) {
               {projects.data?.projects.map((p) => (
                 <FormField
                   orientation="horizontal"
-                  className="flex items-center gap-2 text-sm"
+                  className="flex items-center gap-2 text-[13px]"
                   key={p.id}
                 >
                   <FieldLabel className="contents">
@@ -344,7 +344,7 @@ function ZoneEditor({ onClose }: { onClose: () => void }) {
           </DialogDescription>
         </DialogHeader>
         {zone ? (
-          <div role="status" className="grid gap-2 text-sm">
+          <div role="status" className="grid gap-2 text-[13px]">
             <p>{zone.name} saved. Verify ownership before adding routes.</p>
             {zone.proofName && (
               <p className="wrap-anywhere">
@@ -571,7 +571,9 @@ function ProjectRoutes({
           {list.map((route) => (
             <Row key={route.id}>
               <div className="grid min-w-0 gap-1">
-                <p className="font-medium break-all">{route.input.hostname}</p>
+                <p className="font-mono text-[12.5px] font-medium break-all">
+                  {route.input.hostname}
+                </p>
                 <p className="text-xs text-muted-foreground">
                   {route.input.environmentId} / {route.input.service} ·
                   destination{" "}

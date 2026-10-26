@@ -73,8 +73,15 @@ An empty host disables email. Setting a username, password or sender without a h
 |---|---|---|
 | `LOOMPLANE_DIGITALOCEAN_OAUTH_CLIENT_ID` | Unset | The client ID of the DigitalOcean OAuth app (`clouds.oauth.digitalocean.client_id`). Set it with the secret |
 | `LOOMPLANE_DIGITALOCEAN_OAUTH_CLIENT_SECRET` | Unset | The app's client secret. When both are set they apply to every organization and lock the Cloud sign-in page |
+| `LOOMPLANE_VERCEL_OAUTH_CLIENT_ID` | Unset | The client ID of the Vercel Integration (`clouds.oauth.vercel.client_id`). Set it with the secret and the slug |
+| `LOOMPLANE_VERCEL_OAUTH_CLIENT_SECRET` | Unset | The Integration's client secret |
+| `LOOMPLANE_VERCEL_OAUTH_SLUG` | Unset | The Integration's slug, the last part of its address on Vercel (`clouds.oauth.vercel.slug`). Required once the ID and secret are set |
+| `LOOMPLANE_GCP_OAUTH_CLIENT_ID` | Unset | The client ID of the Google OAuth client (`clouds.oauth.gcp.client_id`). Set it with the secret |
+| `LOOMPLANE_GCP_OAUTH_CLIENT_SECRET` | Unset | The OAuth client's secret |
+| `LOOMPLANE_AZURE_OAUTH_CLIENT_ID` | Unset | The Application (client) ID of the Azure app registration (`clouds.oauth.azure.client_id`). Set it with the secret |
+| `LOOMPLANE_AZURE_OAUTH_CLIENT_SECRET` | Unset | The app registration's client secret |
 
-[Connect a cloud by signing in](/docs/clouds/cloud-sign-in) explains how to register the app.
+Each cloud's values lock only that cloud's row on the Cloud sign-in page. [Connect a cloud by signing in](/docs/clouds/cloud-sign-in) explains how to register each app, and every one of them uses `{public_url}/integrations/oauth/callback` as its callback.
 
 ## Cloud API endpoints
 

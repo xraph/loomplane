@@ -1,5 +1,5 @@
 .PHONY: help up down stack dev dev-api dev-dashboard build build-api build-dashboard run vuln fuzz build-cli build-agent \
-	image test test-go test-dashboard test-integration acceptance acceptance-infrastructure acceptance-catalog lint lint-go lint-dashboard \
+	image helm-lint k8s-manifest test-kubernetes test test-go test-dashboard test-integration acceptance acceptance-infrastructure acceptance-catalog lint lint-go lint-dashboard \
 	gen-client check-client setup clean
 
 .DEFAULT_GOAL := help
@@ -58,6 +58,16 @@ run: build ## Build everything and run the API on API_PORT, with the analysis wo
 
 image: ## Build the container image, tagged with the git version
 	docker build -f deployments/docker/Dockerfile --build-arg VERSION=$(VERSION) -t loomplane:$(VERSION) .
+
+helm-lint: ## Lint the Helm chart and validate what it renders (needs helm and kubeconform)
+	bash scripts/check-helm.sh
+
+k8s-manifest: ## Render deployments/kubernetes/loomplane.yaml from the Helm chart
+	bash scripts/render-k8s-manifest.sh > deployments/kubernetes/loomplane.yaml
+
+test-kubernetes: ## Install the chart in a kind cluster and check it stays up through pod and node loss
+	docker build -f deployments/docker/Dockerfile --build-arg VERSION=$(VERSION) -t loomplane:k8s-test .
+	bash scripts/test-kubernetes.sh loomplane:k8s-test
 
 test: test-go test-dashboard ## Run the Go and dashboard unit tests
 

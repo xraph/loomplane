@@ -1,4 +1,8 @@
-import { ForgotPasswordForm, ResetPasswordForm } from "@authsome/ui-components"
+import {
+  AuthCard,
+  ForgotPasswordForm,
+  ResetPasswordForm,
+} from "@authsome/ui-components"
 import { useAuth } from "@authsome/ui-react"
 import { useState, type FormEvent } from "react"
 import { toast } from "sonner"
@@ -113,70 +117,71 @@ function VerifyEmail({ initialEmail }: { initialEmail: string }) {
   }
 
   return (
-    <form
-      onSubmit={(event) => void verify(event)}
-      className="auth-card grid gap-3"
+    <AuthCard
+      title="Verify your email"
+      description="Enter the code from your verification email."
+      logo={<BrandLogo />}
+      align="left"
+      variant="borderless"
+      className="auth-card"
+      footer={
+        <Link to="/sign-in" className="text-[13px] font-medium">
+          Back to sign in
+        </Link>
+      }
     >
-      <BrandLogo />
-      <div>
-        <h2 className="text-lg font-medium">Verify your email</h2>
-        <p className="text-sm text-muted-foreground">
-          Enter the code from your verification email.
-        </p>
-      </div>
-      {error && (
-        <Alert variant="destructive">
-          <AlertDescription>{error}</AlertDescription>
-        </Alert>
-      )}
-      {notice && (
-        <Alert>
-          <AlertDescription>{notice}</AlertDescription>
-        </Alert>
-      )}
-      <div className="grid gap-1.5">
-        <Label htmlFor="verify-email">Email address</Label>
-        <Input
-          id="verify-email"
-          type="email"
-          autoComplete="email"
-          required
-          value={email}
-          onChange={(event) => setEmail(event.target.value)}
-          disabled={pending}
-        />
-      </div>
-      <div className="grid gap-1.5">
-        <Label htmlFor="verify-code">Verification code</Label>
-        <Input
-          id="verify-code"
-          inputMode="numeric"
-          autoComplete="one-time-code"
-          pattern="[0-9]{6}"
-          maxLength={6}
-          required
-          value={code}
-          onChange={(event) => setCode(event.target.value)}
-          disabled={pending}
-        />
-      </div>
-      <Button type="submit" disabled={pending}>
-        Verify email
-      </Button>
-      <div className="flex flex-wrap items-center justify-between gap-2">
+      <form onSubmit={(event) => void verify(event)} className="grid gap-3">
+        {error && (
+          <Alert variant="destructive">
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        )}
+        <div className="grid gap-1.5">
+          <Label htmlFor="verify-email">Email address</Label>
+          <Input
+            id="verify-email"
+            type="email"
+            autoComplete="email"
+            required
+            value={email}
+            onChange={(event) => setEmail(event.target.value)}
+            disabled={pending}
+          />
+        </div>
+        <div className="grid gap-1.5">
+          <Label htmlFor="verify-code">Verification code</Label>
+          {/* Sized past the frame's compact inputs: the code is the point. */}
+          <Input
+            id="verify-code"
+            inputMode="numeric"
+            autoComplete="one-time-code"
+            pattern="[0-9]{6}"
+            maxLength={6}
+            placeholder="000000"
+            required
+            value={code}
+            onChange={(event) => setCode(event.target.value)}
+            disabled={pending}
+            className="h-12! text-center font-mono text-[22px]! tracking-[0.5em]"
+          />
+        </div>
+        <Button type="submit" disabled={pending}>
+          Verify email
+        </Button>
         <Button
           type="button"
-          variant="link"
-          size="sm"
+          variant="outline"
           onClick={() => void resend()}
           disabled={pending || !email.trim()}
         >
           Send a new code
         </Button>
-        <Link to="/sign-in" className="text-sm underline">
-          Back to sign in
-        </Link>
-      </div>
-    </form>
+        {notice && (
+          <p role="status" className="text-[12.5px] text-overdye-ink">
+            {notice}
+          </p>
+        )}
+      </form>
+    </AuthCard>
   )
 }

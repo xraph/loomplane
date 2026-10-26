@@ -33,6 +33,9 @@ type CloudForm struct {
 	Credential string        `json:"credential,omitempty"`
 	Help       string        `json:"help,omitempty"`
 	Settings   []sdk.Setting `json:"settings,omitempty"`
+	// SignInSettings are what signing in asks for first, such as the
+	// Google Cloud project. A cloud that asks nothing has none.
+	SignInSettings []sdk.Setting `json:"sign_in_settings,omitempty"`
 	// Methods are the ways to connect it: oauth when the organization can
 	// sign in to the cloud, and token always.
 	Methods []string `json:"methods"`
@@ -45,7 +48,8 @@ type CloudList struct {
 
 func (e *Extension) clouds(ctx context.Context, p security.Principal) (CloudList, error) {
 	out := CloudList{Clouds: []CloudForm{
-		{Cloud: connections.GCP, Title: "Google Cloud", Builtin: true},
+		{Cloud: connections.GCP, Title: "Google Cloud", Builtin: true,
+			SignInSettings: []sdk.Setting{{Key: "project_id", Label: "Project ID", Required: true}}},
 		{Cloud: connections.Vercel, Title: "Vercel", Builtin: true},
 		{Cloud: connections.AWS, Title: "AWS", Builtin: true},
 		{Cloud: connections.Server, Title: "SSH server", Credential: "SSH private key", //nolint:gosec // Form label, not a credential.
@@ -78,6 +82,11 @@ func (e *Extension) clouds(ctx context.Context, p security.Principal) (CloudList
 			Settings: []sdk.Setting{
 				{Key: "tenant_id", Label: "Directory (tenant) ID", Required: true},
 				{Key: "client_id", Label: "Application (client) ID", Required: true},
+				{Key: "subscription_id", Label: "Subscription ID", Required: true},
+				{Key: "resource_group", Label: "Resource group (default loomplane)"},
+			},
+			SignInSettings: []sdk.Setting{
+				{Key: "tenant_id", Label: "Directory (tenant) ID", Required: true},
 				{Key: "subscription_id", Label: "Subscription ID", Required: true},
 				{Key: "resource_group", Label: "Resource group (default loomplane)"},
 			},

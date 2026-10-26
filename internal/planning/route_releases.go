@@ -43,6 +43,32 @@ func (s *Service) releaseRoutes(ctx context.Context, plan *Plan) ([]cloudinfra.R
 	return reader.ReleaseRoutes(ctx, plan.OrgID, plan.ProjectID, plan.EnvironmentID)
 }
 
+// ProjectZones returns the verified DNS zones granted to a project, which
+// the database gateway names its hosts in.
+func (s *PgStore) ProjectZones(ctx context.Context, org, project string) ([]cloudinfra.ProjectZone, error) {
+	zones, err := cloudinfra.NewPgStore(s.db).Zones(ctx, org)
+	if err != nil {
+		return nil, err
+	}
+	out := []cloudinfra.ProjectZone{}
+	for _, z := range zones {
+		if slices.Contains(z.ProjectIDs, project) && !z.VerifiedAt.IsZero() {
+			out = append(out, cloudinfra.ProjectZone{ID: z.ID, Name: z.Name, Mode: z.Mode, Verified: true})
+		}
+	}
+	return out, nil
+}
+
+func (s *Service) projectZones(ctx context.Context, plan *Plan) ([]cloudinfra.ProjectZone, error) {
+	reader, ok := s.store.(interface {
+		ProjectZones(context.Context, string, string) ([]cloudinfra.ProjectZone, error)
+	})
+	if !ok {
+		return nil, nil
+	}
+	return reader.ProjectZones(ctx, plan.OrgID, plan.ProjectID)
+}
+
 // routedReplacements runs before dependency readdressing. A routed update must
 // keep its source instance until every consumer and route has moved.
 func (p *planner) routedReplacements() bool {

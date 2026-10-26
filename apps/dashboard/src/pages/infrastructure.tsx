@@ -1,15 +1,6 @@
 // The clouds Loomplane deploys to and everything it runs there, across
 // every project: one list, whichever cloud or engine owns the lifecycle.
-import {
-  BoxIcon,
-  CpuIcon,
-  DatabaseIcon,
-  EllipsisIcon,
-  PlusIcon,
-  SearchIcon,
-  ServerIcon,
-  WalletIcon,
-} from "lucide-react"
+import { BoxIcon, PlusIcon, SearchIcon, ServerIcon } from "lucide-react"
 import { type ReactNode, useMemo, useState } from "react"
 
 import { QueryError } from "@/components/query-error"
@@ -22,24 +13,14 @@ import {
 import type { Binding, Connection } from "@/client/forge/loomplane/types"
 import { useQuery } from "@/client/hooks"
 import { CloudGlyph } from "@/components/cloud-glyph"
-import { Page, PageHeading, SectionHeading } from "@/components/page"
-import { EnvBadge, segmented } from "@/components/runs"
+import { InfrastructureIcon } from "@/components/icons"
+import { Page, PageHeading } from "@/components/page"
+import { Panel } from "@/components/panel"
+import { EnvBadge, segmented, StatusPill, type Tone } from "@/components/runs"
 import { SiteHeader } from "@/components/site-header"
 import { Badge } from "@/components/ui/badge"
 import { Button, buttonVariants } from "@/components/ui/button"
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
+import { Card } from "@/components/ui/card"
 import {
   Empty,
   EmptyContent,
@@ -77,12 +58,41 @@ import { relative } from "@/lib/format"
 import { ProjectIcon, projectStyle } from "@/lib/project-style"
 import { Link } from "@/lib/router"
 import { useNow, useRunning } from "@/lib/use-runs"
-import { cn } from "@/lib/utils"
 
-const connectionStatus: Record<string, { label: string; tone: string }> = {
-  ready: { label: "Ready", tone: "bg-overdye" },
-  incomplete: { label: "Missing permissions", tone: "bg-weld" },
-  failed: { label: "Can't connect", tone: "bg-destructive" },
+const connectionStatus: Record<string, { label: string; tone: Tone }> = {
+  ready: { label: "Ready", tone: "live" },
+  incomplete: { label: "Missing permissions", tone: "waiting" },
+  failed: { label: "Can't connect", tone: "failed" },
+}
+
+/** Heading is a section's 15px title, with a line under it or a note aside. */
+function Heading({
+  title,
+  description,
+  aside,
+  id,
+}: {
+  title: ReactNode
+  description?: ReactNode
+  aside?: ReactNode
+  id?: string
+}) {
+  return (
+    <div
+      id={id}
+      className="flex scroll-mt-16 flex-wrap items-baseline justify-between gap-2"
+    >
+      <div className="grid gap-0.5">
+        <h2 className="text-[15px] font-semibold">{title}</h2>
+        {description && (
+          <p className="text-[12.5px] text-muted-foreground">{description}</p>
+        )}
+      </div>
+      {aside && (
+        <span className="text-[12.5px] text-muted-foreground">{aside}</span>
+      )}
+    </div>
+  )
 }
 
 export function Infrastructure() {
@@ -100,10 +110,7 @@ export function Infrastructure() {
           title="Infrastructure"
           description="Connected servers, Kubernetes clusters and cloud accounts, with the services running on each."
           actions={
-            <Link
-              to="/integrations"
-              className={cn(buttonVariants(), "rounded-full")}
-            >
+            <Link to="/integrations" className={buttonVariants()}>
               <PlusIcon />
               Connect infrastructure
             </Link>
@@ -120,24 +127,26 @@ export function Infrastructure() {
           />
         )}
 
-        <section className="grid gap-4">
-          <SectionHeading
+        <section className="grid gap-2.5">
+          <Heading
             id="clouds"
             title="Deployment infrastructure"
-            description="Connected accounts, their health and what runs on each"
+            aside={
+              connections.data && accountsNote(connections.data.connections)
+            }
           />
           {!connections.data &&
           connections.status === "error" ? null : !connections.data ? (
-            <div className="grid gap-2 md:grid-cols-2">
+            <div className="grid gap-2.5 sm:grid-cols-[repeat(auto-fill,minmax(260px,1fr))]">
               {[0, 1].map((i) => (
-                <Skeleton key={i} className="h-16 rounded-xl" />
+                <Skeleton key={i} className="h-[86px] rounded-[14px]" />
               ))}
             </div>
           ) : connections.data.connections.length === 0 ? (
             <Empty>
               <EmptyHeader>
                 <EmptyMedia variant="icon">
-                  <ServerIcon />
+                  <InfrastructureIcon />
                 </EmptyMedia>
                 <EmptyTitle>No infrastructure connected yet</EmptyTitle>
                 <EmptyDescription>
@@ -147,16 +156,13 @@ export function Infrastructure() {
                 </EmptyDescription>
               </EmptyHeader>
               <EmptyContent>
-                <Link
-                  to="/integrations"
-                  className={cn(buttonVariants(), "rounded-full")}
-                >
+                <Link to="/integrations" className={buttonVariants()}>
                   Connect a cloud
                 </Link>
               </EmptyContent>
             </Empty>
           ) : (
-            <div className="grid gap-2 md:grid-cols-2">
+            <div className="grid gap-2.5 sm:grid-cols-[repeat(auto-fill,minmax(260px,1fr))]">
               {connections.data.connections.map((c) => (
                 <CloudCard
                   key={c.id}
@@ -184,44 +190,46 @@ export function Infrastructure() {
           />
         )}
 
-        <PersistentStorage environmentNames={envNames} />
-
-        <Card id="spend" className="scroll-mt-16">
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <WalletIcon className="size-4 text-muted-foreground" />
-              Spend this month
-            </CardTitle>
-            <CardDescription>
-              What each connected account has cost this month, read from the
-              cloud&apos;s own billing.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
+        <div className="grid items-start gap-3 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+          <PersistentStorage environmentNames={envNames} />
+          <Panel
+            id="spend"
+            aria-label="Spend this month"
+            className="scroll-mt-16 gap-3"
+          >
+            <div className="grid gap-1.5">
+              <h2 className="text-[14px] font-semibold">Spend this month</h2>
+              <p className="text-[12.5px] leading-normal text-muted-foreground">
+                What each connected account has cost this month, read from the
+                cloud&apos;s own billing.
+              </p>
+            </div>
             <SpendAccounts />
-          </CardContent>
-        </Card>
+          </Panel>
+        </div>
 
         {infra.data && (
           <section className="grid gap-3">
-            <SectionHeading
-              title="Engine"
-              description="What keeps track of everything above"
-            />
-            <div className="grid gap-4 md:grid-cols-2">
-              <Fact
-                icon={<CpuIcon />}
-                title="Lifecycle engine"
-                value={infra.data.engine}
-                note="Starts, stops and replaces what Loomplane deploys, and remembers what it did."
-              />
-              <Fact
-                icon={<DatabaseIcon />}
-                title="Engine state"
-                value={infra.data.store}
-                note="Where the engine records every instance and release."
-              />
-            </div>
+            <Panel aria-label="Engine" className="gap-0 p-0">
+              <div className="grid gap-0.5 border-b px-4 py-3">
+                <h2 className="text-[15px] font-semibold">Engine</h2>
+                <p className="text-[12.5px] text-muted-foreground">
+                  What keeps track of everything above
+                </p>
+              </div>
+              <div className="grid max-md:divide-y md:grid-cols-2 md:divide-x">
+                <Fact
+                  title="Lifecycle engine"
+                  value={infra.data.engine}
+                  note="Starts, stops and replaces what Loomplane deploys, and remembers what it did."
+                />
+                <Fact
+                  title="Engine state"
+                  value={infra.data.store}
+                  note="Where the engine records every instance and release."
+                />
+              </div>
+            </Panel>
             {infra.data.providers.length > 0 && (
               <Card className="py-0">
                 <Table>
@@ -269,6 +277,17 @@ export function Infrastructure() {
   )
 }
 
+/** accountsNote counts the connected accounts and says if any need a look. */
+function accountsNote(list: Connection[]): string | undefined {
+  if (list.length === 0) return undefined
+  const ready = list.filter((c) => c.status === "ready").length
+  return `${list.length} connected · ${
+    ready === list.length
+      ? "all ready"
+      : `${list.length - ready} ${list.length - ready === 1 ? "needs" : "need"} a look`
+  }`
+}
+
 function CloudCard({
   connection: c,
   bindings,
@@ -278,7 +297,7 @@ function CloudCard({
 }) {
   const status = connectionStatus[c.status] ?? {
     label: c.status,
-    tone: "bg-muted-foreground/50",
+    tone: "quiet" as const,
   }
   const services = bindings.filter(
     (binding) => binding.subject === "service"
@@ -288,58 +307,46 @@ function CloudCard({
   ).length
   const drifted = bindings.filter((binding) => binding.drift).length
   return (
-    <Card size="sm" className="flex-row items-center gap-3 px-3 py-2">
-      <CloudGlyph cloud={c.cloud} size="md" />
-      <div className="grid min-w-0 flex-1 gap-1">
-        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">
-          <Link
-            to="/clouds/accounts/$id"
-            params={{ id: c.id }}
-            className="truncate text-sm font-semibold text-foreground hover:underline"
-          >
-            {c.name}
-          </Link>
-          <span className="flex items-center gap-1 text-xs text-muted-foreground">
-            <span className={cn("size-1.5 rounded-full", status.tone)} />
-            {status.label}
+    <Link
+      to="/clouds/accounts/$id"
+      params={{ id: c.id }}
+      className="grid min-w-0 content-start gap-2 rounded-[14px] bg-card px-3.5 py-3 text-foreground ring-1 ring-border transition-colors hover:bg-subtle"
+    >
+      <div className="flex min-w-0 items-center gap-2.5">
+        <CloudGlyph cloud={c.cloud} size="md" />
+        <span className="grid min-w-0 flex-1 gap-px">
+          <span className="truncate text-[13.5px] font-semibold">{c.name}</span>
+          <span className="truncate text-xs text-muted-foreground">
+            {[cloudLabel(c.cloud), c.account].filter(Boolean).join(" · ")}
           </span>
-        </div>
-        <p className="truncate text-xs text-muted-foreground">
-          {cloudLabel(c.cloud)} · {c.account} · {services} services ·{" "}
-          {resources} resources
-        </p>
-        {c.status !== "ready" && (
-          <p className="text-xs text-weld-ink">
-            {c.message || "Check the connection under Integrations."}
-          </p>
-        )}
-        {drifted > 0 && (
-          <p className="text-xs text-weld-ink">
-            {drifted} deployments need review
-          </p>
-        )}
+        </span>
+        <StatusPill tone={status.tone}>{status.label}</StatusPill>
       </div>
-      <DropdownMenu>
-        <DropdownMenuTrigger
-          render={
-            <Button
-              variant="ghost"
-              size="icon-sm"
-              aria-label={`${c.name} actions`}
-            />
-          }
-        >
-          <EllipsisIcon />
-        </DropdownMenuTrigger>
-        <DropdownMenuContent align="end">
-          <DropdownMenuItem
-            render={<Link to="/clouds/accounts/$id" params={{ id: c.id }} />}
-          >
-            Check, replace or remove it
-          </DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
-    </Card>
+      <span className="flex flex-wrap gap-x-3.5 text-xs text-muted-foreground">
+        <span>
+          <span className="font-mono text-foreground tabular-nums">
+            {services}
+          </span>{" "}
+          {services === 1 ? "service" : "services"}
+        </span>
+        <span>
+          <span className="font-mono text-foreground tabular-nums">
+            {resources}
+          </span>{" "}
+          {resources === 1 ? "resource" : "resources"}
+        </span>
+      </span>
+      {c.status !== "ready" && (
+        <p className="text-xs text-weld-ink">
+          {c.message || "Check the connection under Integrations."}
+        </p>
+      )}
+      {drifted > 0 && (
+        <p className="text-xs text-weld-ink">
+          {drifted} deployments need review
+        </p>
+      )}
+    </Link>
   )
 }
 
@@ -349,14 +356,14 @@ const subjects = [
   { value: "resource", label: "Resources" },
 ] as const
 
-function driftLabel(b: Binding): { label: string; tone: string } {
+function driftLabel(b: Binding): { label: string; tone: Tone } {
   if (b.drift === "missing") {
-    return { label: "Missing", tone: "bg-destructive" }
+    return { label: "Missing", tone: "failed" }
   }
-  if (b.drift) return { label: "Changed outside", tone: "bg-weld" }
+  if (b.drift) return { label: "Changed outside", tone: "waiting" }
   return b.observedAt
-    ? { label: "In sync", tone: "bg-overdye" }
-    : { label: "Not checked yet", tone: "bg-warp" }
+    ? { label: "In sync", tone: "live" }
+    : { label: "Not checked yet", tone: "quiet" }
 }
 
 function Running({
@@ -386,67 +393,67 @@ function Running({
           .includes(query.toLowerCase()))
   )
   return (
-    <section id="resources" className="grid scroll-mt-16 gap-3">
-      <SectionHeading
+    <section id="resources" className="grid scroll-mt-16 gap-2.5">
+      <Heading
         title="Running"
         description="Every service and resource Loomplane deployed, across every project and environment."
       />
-      <div className="flex flex-wrap items-center gap-2">
-        <InputGroup className="w-full sm:w-64">
-          <InputGroupAddon>
-            <SearchIcon />
-          </InputGroupAddon>
-          <InputGroupInput
-            data-page-search
-            placeholder="Search what's running"
-            value={query}
-            onChange={(e) => setQuery(e.target.value)}
-            aria-label="Search what's running"
-          />
-          <InputGroupAddon align="inline-end">
-            <Kbd>/</Kbd>
-          </InputGroupAddon>
-        </InputGroup>
-        <ToggleGroup
-          variant="outline"
-          size="sm"
-          spacing={0}
-          value={[subject]}
-          onValueChange={(v) => v[0] && setSubject(v[0])}
-          aria-label="Kind"
-        >
-          {subjects.map((s) => (
-            <ToggleGroupItem
-              key={s.value}
-              value={s.value}
-              className={segmented}
-            >
-              {s.label}
-            </ToggleGroupItem>
-          ))}
-        </ToggleGroup>
-        <Select
-          items={[
-            { label: "Every provider", value: "all" },
-            ...providers.map((p) => ({ label: p, value: p })),
-          ]}
-          value={cloud}
-          onValueChange={(v) => setCloud(String(v))}
-        >
-          <SelectTrigger size="sm" className="w-44" aria-label="Provider">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">Every provider</SelectItem>
-            {providers.map((p) => (
-              <SelectItem key={p} value={p}>
-                {p}
-              </SelectItem>
+      <Card className="gap-0 py-0">
+        <div className="flex flex-wrap items-center gap-2 border-b p-2.5">
+          <InputGroup className="min-w-0 flex-[1_1_240px]">
+            <InputGroupAddon>
+              <SearchIcon />
+            </InputGroupAddon>
+            <InputGroupInput
+              data-page-search
+              placeholder="Search what's running"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              aria-label="Search what's running"
+            />
+            <InputGroupAddon align="inline-end">
+              <Kbd>/</Kbd>
+            </InputGroupAddon>
+          </InputGroup>
+          <ToggleGroup
+            variant="outline"
+            size="sm"
+            spacing={0}
+            value={[subject]}
+            onValueChange={(v) => v[0] && setSubject(v[0])}
+            aria-label="Kind"
+          >
+            {subjects.map((s) => (
+              <ToggleGroupItem
+                key={s.value}
+                value={s.value}
+                className={segmented}
+              >
+                {s.label}
+              </ToggleGroupItem>
             ))}
-          </SelectContent>
-        </Select>
-      </div>
-      <Card className="py-0">
+          </ToggleGroup>
+          <Select
+            items={[
+              { label: "Every provider", value: "all" },
+              ...providers.map((p) => ({ label: p, value: p })),
+            ]}
+            value={cloud}
+            onValueChange={(v) => setCloud(String(v))}
+          >
+            <SelectTrigger size="sm" className="w-44" aria-label="Provider">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">Every provider</SelectItem>
+              {providers.map((p) => (
+                <SelectItem key={p} value={p}>
+                  {p}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
         {!loaded && bindings.length === 0 ? (
           <div className="p-4">
             <Skeleton className="h-24 w-full" />
@@ -529,12 +536,8 @@ function Running({
                       </span>
                     </TableCell>
                     <TableCell>
-                      <span
-                        className="inline-flex items-center gap-1.5 text-sm"
-                        title={b.driftMessage || undefined}
-                      >
-                        <span className={cn("size-1.5 rounded-full", d.tone)} />
-                        {d.label}
+                      <span title={b.driftMessage || undefined}>
+                        <StatusPill tone={d.tone}>{d.label}</StatusPill>
                       </span>
                     </TableCell>
                     <TableCell className="hidden text-right text-xs text-muted-foreground lg:table-cell">
@@ -590,30 +593,19 @@ function Running({
 }
 
 function Fact({
-  icon,
   title,
   value,
   note,
 }: {
-  icon: ReactNode
   title: string
   value: string
   note: string
 }) {
   return (
-    <Card>
-      <CardHeader>
-        <CardDescription className="flex items-center gap-2 [&_svg]:size-4">
-          {icon}
-          {title}
-        </CardDescription>
-        <CardTitle className="text-2xl font-semibold tracking-tight">
-          {value}
-        </CardTitle>
-      </CardHeader>
-      <CardContent className="text-sm text-muted-foreground">
-        {note}
-      </CardContent>
-    </Card>
+    <div className="grid content-start gap-1 px-4 py-3">
+      <span className="text-xs text-muted-foreground">{title}</span>
+      <span className="font-mono text-[14px] font-medium">{value}</span>
+      <span className="text-[12.5px] text-muted-foreground">{note}</span>
+    </div>
   )
 }

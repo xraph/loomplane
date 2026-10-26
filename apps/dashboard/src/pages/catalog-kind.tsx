@@ -198,7 +198,7 @@ function WhatYouGet({
   return (
     <aside
       aria-label="What you get"
-      className="grid gap-3 rounded-[14px] bg-subtle p-4 ring-1 ring-border"
+      className="grid gap-3 rounded-xl bg-subtle p-4 ring-1 ring-border"
     >
       <h2 className="text-[13px] font-semibold">What you get</h2>
       {(info.components ?? []).length > 0 && (
@@ -268,7 +268,7 @@ function AddForm({
   return (
     <section
       aria-label={`Add ${title}`}
-      className="grid gap-5 rounded-[14px] bg-card p-5 ring-1 ring-border"
+      className="grid gap-5 rounded-xl bg-card p-5 ring-1 ring-border"
     >
       {projects.status === "error" ? (
         <Failed
@@ -313,7 +313,7 @@ function AddForm({
               value={project.id}
               onValueChange={(v) => setChosen(String(v))}
             >
-              <SelectTrigger className="h-10 w-full" aria-label="Project">
+              <SelectTrigger className="w-full" aria-label="Project">
                 <SelectValue>
                   {(v: string) => {
                     const p = list.find((x) => x.id === v)
@@ -618,10 +618,10 @@ function Choices({
                   disabled={locked}
                   onClick={() => setTarget(c.id)}
                   className={cn(
-                    "flex min-w-0 items-center gap-3 rounded-xl bg-card px-3 py-2.5 text-left ring-1 transition-shadow disabled:opacity-60",
+                    "flex min-w-0 items-center gap-3 rounded-xl border px-3 py-2.5 text-left transition-shadow disabled:opacity-60",
                     on
-                      ? "ring-2 ring-primary"
-                      : "ring-border hover:ring-foreground/25"
+                      ? "border-brand-line bg-brand-soft ring-3 ring-ring/35"
+                      : "bg-card hover:bg-muted/50"
                   )}
                 >
                   <CloudGlyph cloud={c.cloud} size="md" />
@@ -682,7 +682,9 @@ function Choices({
           </div>
           {info.versions.length > 1 && (
             <div className="grid min-w-0 content-start gap-1.5">
-              <span className="text-sm leading-none font-medium">Version</span>
+              <span className="text-[13px] leading-none font-medium">
+                Version
+              </span>
               <Segmented
                 label="Version"
                 value={version}
@@ -826,7 +828,7 @@ function Segmented({
     <div
       role="radiogroup"
       aria-label={label}
-      className="flex max-w-full gap-0.5 self-start justify-self-start overflow-x-auto rounded-[10px] bg-muted p-[3px]"
+      className="flex max-w-full gap-0.5 self-start justify-self-start overflow-x-auto rounded-lg bg-muted p-0.5"
     >
       {options.map((option) => {
         const on = option === value
@@ -839,7 +841,7 @@ function Segmented({
             disabled={disabled}
             onClick={() => onChange(option)}
             className={cn(
-              "flex h-7 shrink-0 items-center rounded-lg px-2.5 text-[12.5px] font-medium disabled:opacity-60",
+              "flex h-7 shrink-0 items-center rounded-md px-2.5 text-[12.5px] font-medium disabled:opacity-60",
               mono && "font-mono",
               on
                 ? "bg-background text-foreground shadow-xs"

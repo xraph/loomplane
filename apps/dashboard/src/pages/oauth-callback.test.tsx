@@ -22,6 +22,7 @@ afterEach(() => {
   forgeClient.clear()
   navigate.mockReset()
   window.sessionStorage.clear()
+  window.localStorage.clear()
 })
 
 function stub() {
@@ -49,6 +50,7 @@ function page(props: Partial<Parameters<typeof OAuthCallback>[0]>) {
           code="c1"
           error=""
           errorDescription=""
+          configurationId=""
           {...props}
         />
       </ClientProvider>
@@ -121,4 +123,57 @@ it("says the same thing when the cloud gives no reason", async () => {
     )
   ).toBeTruthy()
   expect(screen.queryByText(/said:/)).toBeNull()
+})
+
+const storeKey = "loomplane.sign-in.vercel"
+const keep = (state: string, at = Date.now()) =>
+  window.localStorage.setItem(storeKey, JSON.stringify({ state, at }))
+
+function postedState(fetcher: ReturnType<typeof stub>) {
+  const posts = fetcher.mock.calls.filter(([, init]) => init?.method === "POST")
+  return posts.map(([, init]) => JSON.parse(String(init?.body)).state)
+}
+
+it("uses the stored state only for a Vercel install", async () => {
+  const fetcher = stub()
+  keep("kept")
+  page({ state: "" })
+  expect(
+    await screen.findByText(
+      "The cloud didn't send a sign-in back, so nothing was connected."
+    )
+  ).toBeTruthy()
+  expect(fetcher).not.toHaveBeenCalled()
+  cleanup()
+
+  keep("kept")
+  page({ state: "", configurationId: "icfg_1" })
+  await waitFor(() => expect(navigate).toHaveBeenCalled())
+  expect(postedState(fetcher)).toEqual(["kept"])
+})
+
+it("prefers the URL's state and ignores a stale stored one", async () => {
+  const fetcher = stub()
+  keep("kept")
+  page({ state: "from-url", configurationId: "icfg_1" })
+  await waitFor(() => expect(navigate).toHaveBeenCalled())
+  expect(postedState(fetcher)).toEqual(["from-url"])
+  cleanup()
+
+  keep("old", Date.now() - 11 * 60 * 1000)
+  page({ state: "", configurationId: "icfg_1" })
+  expect(
+    await screen.findByText(
+      "The cloud didn't send a sign-in back, so nothing was connected."
+    )
+  ).toBeTruthy()
+  expect(postedState(fetcher)).toEqual(["from-url"])
+})
+
+it("forgets the stored state after one use", async () => {
+  stub()
+  keep("kept")
+  page({ state: "", configurationId: "icfg_1" })
+  await waitFor(() => expect(navigate).toHaveBeenCalled())
+  expect(window.localStorage.getItem(storeKey)).toBeNull()
 })

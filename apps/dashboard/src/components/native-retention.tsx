@@ -129,7 +129,7 @@ function NativeRetentionReview({
           </DialogDescription>
         </DialogHeader>
         <div className="flex flex-wrap items-end gap-2">
-          <label className="grid gap-1 text-xs">
+          <label className="grid gap-1.5 text-[12.5px] font-medium">
             Older than (days)
             <Input
               type="number"
@@ -140,7 +140,7 @@ function NativeRetentionReview({
               onChange={(e) => setDays(e.target.value)}
             />
           </label>
-          <label className="grid gap-1 text-xs">
+          <label className="grid gap-1.5 text-[12.5px] font-medium">
             Keep newest
             <Input
               type="number"
@@ -347,7 +347,7 @@ function NativeDeletionList({
       aria-label="Native deletion history"
       className="grid min-w-0 gap-2"
     >
-      <h4 className="text-sm font-medium">Native deletions</h4>
+      <h4 className="text-[13.5px] font-semibold">Native deletions</h4>
       {jobs.status === "error" && (
         <QueryError
           error={jobs.error}
@@ -453,7 +453,7 @@ function NativeDeletionDetails({
   return (
     <section
       aria-label="Native deletion details"
-      className="grid min-w-0 gap-2 rounded-md border p-3 text-xs"
+      className="grid min-w-0 gap-2 rounded-xl bg-card p-3 text-xs ring-1 ring-border"
     >
       {job.status === "error" && (
         <QueryError
@@ -465,7 +465,9 @@ function NativeDeletionDetails({
       {job.data && (
         <>
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <h4 className="text-sm font-medium">{status(job.data.status)}</h4>
+            <h4 className="text-[13.5px] font-semibold">
+              {status(job.data.status)}
+            </h4>
             {can("service_backup:retire") &&
               job.data.status === "failed" &&
               job.status === "success" && (

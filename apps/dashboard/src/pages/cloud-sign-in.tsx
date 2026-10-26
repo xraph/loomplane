@@ -25,7 +25,12 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
+import {
+  Field,
+  FieldDescription,
+  FieldGroup,
+  FieldLabel,
+} from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
@@ -88,6 +93,17 @@ export function CloudSignIn() {
                     <div className="text-sm text-muted-foreground">
                       {state(app)}
                     </div>
+                    {app.problem && (
+                      <div className="text-sm text-destructive">
+                        {app.problem}
+                      </div>
+                    )}
+                    {app.cloud === "gcp" && (
+                      <div className="text-sm text-muted-foreground">
+                        While your Google OAuth app is in testing, Google ends
+                        sign-ins after 7 days. Publish the app to keep them.
+                      </div>
+                    )}
                   </div>
                   {app.source !== "none" && (
                     <Button
@@ -198,6 +214,7 @@ function AppDialog({ app, onClose }: { app: SignInApp; onClose: () => void }) {
   const invalidate = useInvalidate()
   const [clientId, setClientId] = useState(app.clientId ?? "")
   const [clientSecret, setClientSecret] = useState("")
+  const [slug, setSlug] = useState(app.slug ?? "")
   const [error, setError] = useState("")
   const label = cloudLabel(app.cloud)
   const busy = save.isPending || remove.isPending
@@ -213,7 +230,11 @@ function AppDialog({ app, onClose }: { app: SignInApp; onClose: () => void }) {
     try {
       await save.mutateAsync({
         path: { cloud: app.cloud },
-        body: { clientId: clientId.trim(), clientSecret },
+        body: {
+          clientId: clientId.trim(),
+          clientSecret,
+          ...(app.cloud === "vercel" ? { slug: slug.trim() } : {}),
+        },
       })
       setClientSecret("")
       refresh()
@@ -271,6 +292,22 @@ function AppDialog({ app, onClose }: { app: SignInApp; onClose: () => void }) {
                 required
               />
             </Field>
+            {app.cloud === "vercel" && (
+              <Field>
+                <FieldLabel htmlFor="app-slug">Integration slug</FieldLabel>
+                <Input
+                  id="app-slug"
+                  value={slug}
+                  onChange={(e) => setSlug(e.target.value)}
+                  className="font-mono text-xs"
+                  autoComplete="off"
+                  required
+                />
+                <FieldDescription>
+                  The last part of your integration's URL on Vercel.
+                </FieldDescription>
+              </Field>
+            )}
           </FieldGroup>
           {error && (
             <Alert variant="destructive">

@@ -24,6 +24,7 @@ import (
 	relaypg "github.com/xraph/relay/store/postgres"
 
 	"github.com/xraph/loomplane/internal/config"
+	"github.com/xraph/loomplane/internal/pglock"
 	"github.com/xraph/loomplane/internal/security"
 )
 
@@ -77,7 +78,13 @@ func (s *Service) MailEnabled() bool          { return s.cfg.Notifications.MailE
 
 // Prepare is called after central migrations and before Authsome starts. It
 // configures exactly one application-owned SMTP provider and seeds templates.
+// Replicas that start together take turns: the provider has no unique
+// constraint, so two at once would each find none and create one.
 func (s *Service) Prepare(ctx context.Context) error {
+	return pglock.Do(ctx, s.pg, pglock.StartupSeed, s.prepare)
+}
+
+func (s *Service) prepare(ctx context.Context) error {
 	if err := s.herald.SeedDefaultTemplates(ctx, s.cfg.Identity.AppID); err != nil {
 		return err
 	}

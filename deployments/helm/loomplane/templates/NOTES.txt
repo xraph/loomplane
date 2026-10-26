@@ -1,0 +1,36 @@
+Loomplane is starting.
+
+  Release:   {{ .Release.Name }}
+  Namespace: {{ .Release.Namespace }}
+  API:       {{ if .Values.api.autoscaling.enabled }}{{ .Values.api.autoscaling.minReplicas }} to {{ .Values.api.autoscaling.maxReplicas }} replicas (autoscaled){{ else }}{{ .Values.api.replicaCount }} replicas{{ end }}
+  Worker:    {{ if .Values.worker.autoscaling.enabled }}{{ .Values.worker.autoscaling.minReplicas }} to {{ .Values.worker.autoscaling.maxReplicas }} replicas (autoscaled){{ else }}{{ .Values.worker.replicaCount }} replicas{{ end }}
+  Image:     {{ include "loomplane.image" . }}
+
+The first API pod applies migrations before it starts, and the workers wait
+for it. Follow along with:
+
+  kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "loomplane.fullname" . }}
+  kubectl -n {{ .Release.Namespace }} rollout status deploy/{{ include "loomplane.workerName" . }}
+  helm test {{ .Release.Name }} -n {{ .Release.Namespace }}
+
+{{- if or .Values.ingress.enabled .Values.httpRoute.enabled }}
+
+Then open {{ .Values.publicURL }} and create the first account. It owns the
+instance.
+{{- else }}
+
+Nothing routes outside traffic to it yet: enable ingress or httpRoute, or try
+it with a port-forward:
+
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "loomplane.fullname" . }} 8780:{{ .Values.service.port }}
+{{- end }}
+{{- if and (le (int .Values.api.replicaCount) 1) (not .Values.api.autoscaling.enabled) }}
+
+One API replica isn't highly available: a node drain or a crash takes
+Loomplane offline until the pod is back. Set api.replicaCount to 2 or more.
+{{- end }}
+{{- if .Values.secrets.existingSecret }}
+
+Using the Secret {{ .Values.secrets.existingSecret }}. With more than one
+replica, its LOOMPLANE_STORAGE_URL has to point at S3 or the shared volume.
+{{- end }}

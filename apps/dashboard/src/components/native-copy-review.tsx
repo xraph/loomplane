@@ -198,7 +198,7 @@ export function NativeCopyReview({
             . The source database stays unchanged.
           </DialogDescription>
           {restoreTime && (
-            <p className="text-sm break-all">PITR time: {restoreTime}</p>
+            <p className="text-[13px] break-all">PITR time: {restoreTime}</p>
           )}
         </DialogHeader>
         {!owner && (
@@ -304,7 +304,7 @@ export function NativeCopyReview({
         )}
         {review && (
           <div className="grid min-w-0 gap-2 rounded-md bg-muted/50 p-3">
-            <p className="text-sm font-medium break-all">
+            <p className="text-[13px] font-medium break-all">
               {review.target.nativeProject ||
                 review.target.nativeAccount ||
                 review.target.provider}{" "}

@@ -123,6 +123,7 @@ export interface AnalysisList {
 export interface AppInputBody {
   clientId: string;
   clientSecret: string;
+  slug?: string;
 }
 
 export interface AppliedInputs {
@@ -350,6 +351,7 @@ export interface CloudForm {
   help?: string;
   methods: string[];
   settings?: Setting[];
+  signInSettings?: Setting[];
   title: string;
 }
 
@@ -437,6 +439,21 @@ export interface CloudinfraRoute {
   status: string;
   updatedAt: string;
   verification: RouteVerification;
+}
+
+export interface CloudinfraRouteStatus {
+  backend: string;
+  certificate: string;
+  certificateExpiresAt: string;
+  checkedAt: string;
+  dns: string;
+  hostname: string;
+  message?: string;
+  operationId?: string;
+  retryable: boolean;
+  route: string;
+  routeId: string;
+  wildcard: boolean;
 }
 
 export interface CloudprofilesCreateInputBody {
@@ -535,6 +552,7 @@ export interface Connection {
   missing: string[];
   name: string;
   orgId: string;
+  signedInBy?: string;
   status: string;
   updatedAt: string;
 }
@@ -650,6 +668,32 @@ export interface DNSZone {
   name: string;
   nameservers?: string[];
   verified: boolean;
+}
+
+export interface DatabaseGateway {
+  cloudTags?: string[];
+  environments?: Record<string, any>;
+  provider?: string;
+  region?: string;
+}
+
+export interface DatabaseGatewayConfig {
+  name: string;
+  program: string;
+  resources: string[];
+  suffix: string;
+  trust?: string;
+}
+
+export interface DbgatewayRouteStatus {
+  backendConns: number;
+  id: string;
+  maxConnections: number;
+  pinRate: number;
+  reachable: boolean;
+  reported: boolean;
+  resource: string;
+  state: string;
 }
 
 export interface DecideInputBody {
@@ -849,6 +893,7 @@ export interface EnvLink {
   address?: string;
   field?: string;
   from: string;
+  gateway?: string;
   key: string;
   options?: Record<string, any>;
   subject: string;
@@ -951,11 +996,26 @@ export interface Finding {
   subject?: string;
 }
 
+export interface GatewayList {
+  gateways: GatewayStatus[];
+}
+
 export interface GatewayRoute {
   env: string;
   path: string;
   stripPrefix?: boolean;
   to: string;
+}
+
+export interface GatewayStatus {
+  environmentId: string;
+  id: string;
+  instances: InstanceStatus[];
+  name: string;
+  provider: string;
+  region: string;
+  routes: DbgatewayRouteStatus[];
+  snapshotVersion: number;
 }
 
 export interface GeneratedSecret {
@@ -1027,7 +1087,7 @@ export interface HostnameUse {
   routeId: string;
   runsOn: string;
   service: string;
-  status: RouteStatus;
+  status: CloudinfraRouteStatus;
 }
 
 export interface IdentitySession {
@@ -1051,6 +1111,26 @@ export interface InfrastructureStatus {
   engine: string;
   providers: ProviderStatus[];
   store: string;
+}
+
+export interface InstanceRouteStats {
+  backendConns: number;
+  maxConnections: number;
+  pinRate: number;
+  pinned: number;
+  reachable: boolean;
+  routeId: string;
+  waitP95Ms: number;
+}
+
+export interface InstanceStatus {
+  behind: boolean;
+  draining: boolean;
+  id: string;
+  lastSeenAt: string;
+  reporting: boolean;
+  routes: InstanceRouteStats[];
+  snapshotVersion: number;
 }
 
 export interface KindInfo {
@@ -1124,6 +1204,7 @@ export interface ManagedDatabaseProfile {
 }
 
 export interface Manifest {
+  databaseGateway?: DatabaseGateway;
   defaults?: Defaults;
   federation?: Federation;
   gateways?: Record<string, any>;
@@ -2278,19 +2359,11 @@ export interface RouteOperation {
   status: string;
 }
 
-export interface RouteStatus {
-  backend: string;
-  certificate: string;
-  certificateExpiresAt: string;
-  checkedAt: string;
-  dns: string;
-  hostname: string;
-  message?: string;
-  operationId?: string;
-  retryable: boolean;
-  route: string;
-  routeId: string;
-  wildcard: boolean;
+export interface RouteSummary {
+  gatewayId: string;
+  id: string;
+  resource: string;
+  state: string;
 }
 
 export interface RouteTTLInputBody {
@@ -2329,6 +2402,7 @@ export interface RuntimeHealth {
 export interface SaveInputBody {
   baseRevision?: number;
   manifest?: {
+  databaseGateway?: DatabaseGateway;
   defaults?: Defaults;
   federation?: Federation;
   gateways?: Record<string, any>;
@@ -2484,6 +2558,7 @@ export interface ServiceConfig {
   commitSha?: string;
   component?: ComponentConfig;
   context?: string;
+  databaseGateway?: DatabaseGatewayConfig;
   ecosystem: string;
   endpoint?: ManifestEndpoint;
   env?: EnvLink[];
@@ -2539,11 +2614,14 @@ export interface Setting {
 
 export interface SignIn {
   authorizeUrl: string;
+  state: string;
 }
 
 export interface SignInApp {
   clientId?: string;
   cloud: string;
+  problem?: string;
+  slug?: string;
   source: string;
   updatedAt?: string;
   updatedBy?: string;
@@ -2558,6 +2636,7 @@ export interface SignInInputBody {
   cloud: string;
   connectionId?: string;
   name: string;
+  settings?: Record<string, any>;
 }
 
 export interface Size {

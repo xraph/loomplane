@@ -3,7 +3,7 @@
 // neither follows the accent.
 import type { ReactNode } from "react"
 
-import type { RouteStatus } from "@/client/forge/loomplane/types"
+import type { CloudinfraRouteStatus } from "@/client/forge/loomplane/types"
 import {
   certificateLabel,
   dnsLabel,
@@ -46,7 +46,7 @@ export function DomainStatePill({
 }
 
 /** RouteStates is the DNS, Certificate and Route cells of a hostname row. */
-export function RouteStates({ status }: { status: RouteStatus }) {
+export function RouteStates({ status }: { status: CloudinfraRouteStatus }) {
   const cells: [string, PillTone][] = [
     [dnsLabel(status), dnsTone(status)],
     [certificateLabel(status), stateTone(status.certificate as DomainState)],

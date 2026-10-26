@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest"
 
 import type {
+  CloudinfraRouteStatus,
   DomainOffer,
   HostnameUse,
   Registration,
-  RouteStatus,
   ZoneOverview,
 } from "@/client/forge/loomplane/types"
 import {
@@ -29,7 +29,7 @@ import {
   zoneNeedsAttention,
 } from "./domains"
 
-function status(over: Partial<RouteStatus> = {}): RouteStatus {
+function status(over: Partial<CloudinfraRouteStatus> = {}): CloudinfraRouteStatus {
   return {
     backend: "server",
     certificate: "ready",
@@ -45,7 +45,7 @@ function status(over: Partial<RouteStatus> = {}): RouteStatus {
   }
 }
 
-function use(over: Partial<RouteStatus> = {}): HostnameUse {
+function use(over: Partial<CloudinfraRouteStatus> = {}): HostnameUse {
   return {
     environmentId: "env-prod",
     hostname: "api.acme.dev",

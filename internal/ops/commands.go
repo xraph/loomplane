@@ -112,8 +112,16 @@ func Commands(settings func() (Settings, error)) []cli.Command {
 			if len(st.Unknown) > 0 {
 				return fmt.Errorf("%w: %s", ErrNewerSchema, strings.Join(st.Unknown, ", "))
 			}
+			if ctx.Bool("check") && len(st.Pending) > 0 {
+				return fmt.Errorf("%w: %d pending", ErrPendingMigrations, len(st.Pending))
+			}
 			return nil
-		}),
+		},
+			cli.WithUsage("loomplane migrations [--check]"),
+			// The Kubernetes chart's worker waits on this, since only the
+			// API migrates: until loomplane migrations --check; do sleep 5; done
+			cli.WithFlag(cli.NewBoolFlag("check", "", "Exit non-zero while any migration is still pending", false)),
+		),
 		cli.NewCommand("migrate", "Apply pending migrations; starting Loomplane does this too", func(ctx cli.CommandContext) error {
 			s, err := settings()
 			if err != nil {

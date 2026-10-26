@@ -1,0 +1,12 @@
+{{- if .Values.configFile }}
+apiVersion: v1
+kind: Secret
+metadata:
+  name: {{ include "loomplane.fullname" . }}-config
+  labels:
+    {{- include "loomplane.labels" . | nindent 4 }}
+type: Opaque
+stringData:
+  config.local.yaml: |
+    {{- .Values.configFile | nindent 4 }}
+{{- end }}

@@ -1,3 +1,0 @@
-import type { Codec } from '../codec-runtime';
-
-export const codec_RouteStatus: Codec = {"kind": "object", "fields": {"backend": {"ts": "backend"}, "certificate": {"ts": "certificate"}, "certificate_expires_at": {"ts": "certificateExpiresAt"}, "checked_at": {"ts": "checkedAt"}, "dns": {"ts": "dns"}, "hostname": {"ts": "hostname"}, "message": {"ts": "message"}, "operation_id": {"ts": "operationId"}, "retryable": {"ts": "retryable"}, "route": {"ts": "route"}, "route_id": {"ts": "routeId"}, "wildcard": {"ts": "wildcard"}}, "required": ["backend", "certificate", "certificate_expires_at", "checked_at", "dns", "hostname", "retryable", "route", "route_id", "wildcard"]};

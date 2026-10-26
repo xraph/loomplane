@@ -1,4 +1,4 @@
-import { ChevronLeftIcon, CloudIcon } from "lucide-react"
+import { ChevronLeftIcon } from "lucide-react"
 import { CloudsIcon, ProjectsIcon } from "@/components/icons"
 import * as api from "@/client/forge/loomplane/hooks"
 import type { Profile } from "@/client/forge/loomplane/types"
@@ -14,7 +14,10 @@ import { SiteHeader } from "@/components/site-header"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useOrganization } from "@/lib/organization"
+import { relative } from "@/lib/format"
+import { ProjectIcon, projectStyle } from "@/lib/project-style"
 import { Link } from "@/lib/router"
+import { useNow } from "@/lib/use-runs"
 import { CloudsWorkspace } from "@/pages/clouds"
 import { Domains } from "@/components/cloud-targets/domains"
 
@@ -85,6 +88,15 @@ function Frame({
   error?: unknown
   restricted?: boolean
 }) {
+  const now = useNow()
+  const projects = useQuery(api.useProjectsList)
+  // A project's own Cloud names the project; an organization's is shared.
+  const owner = organization
+    ? undefined
+    : projects.data?.projects.find(
+        (p) => p.id === (cloud?.projectId || project)
+      )
+  const style = owner ? projectStyle(owner) : null
   return (
     <>
       <SiteHeader
@@ -96,7 +108,7 @@ function Frame({
       <Page>
         <Link
           to="/clouds"
-          className="inline-flex items-center gap-1.5 self-start text-[13px] text-muted-foreground hover:text-foreground"
+          className="-mb-2 inline-flex items-center gap-1.5 self-start text-[13px] text-muted-foreground hover:text-foreground"
         >
           <ChevronLeftIcon className="size-3.5" />
           All Clouds
@@ -133,17 +145,40 @@ function Frame({
           </div>
         ) : (
           <>
-            <header className="flex items-center gap-3">
-              <span className="flex size-10 shrink-0 items-center justify-center rounded-xl bg-muted">
-                <CloudIcon className="size-5" />
+            <header className="flex items-center gap-3.5">
+              <span className="flex size-11 shrink-0 items-center justify-center rounded-xl bg-muted">
+                <CloudsIcon className="size-[22px]" />
               </span>
               <div className="grid min-w-0 gap-1">
-                <h1 className="text-2xl font-semibold tracking-tight break-words">
+                <h1 className="text-2xl leading-tight font-semibold tracking-[-0.025em] break-words">
                   {cloud.name}
                 </h1>
-                <p className="text-xs text-muted-foreground">
-                  Shared across the organization · revision {cloud.revision}
-                </p>
+                <span className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px] text-muted-foreground">
+                  {owner && style ? (
+                    <Link
+                      to="/projects/$id"
+                      params={{ id: owner.id }}
+                      className="flex items-center gap-1.5 font-medium text-foreground hover:underline"
+                    >
+                      <ProjectIcon
+                        icon={style.icon}
+                        color={style.color}
+                        size="xs"
+                      />
+                      {owner.name}
+                    </Link>
+                  ) : (
+                    organization && (
+                      <span className="font-medium text-foreground">
+                        Shared across the organization
+                      </span>
+                    )
+                  )}
+                  <span>· revision {cloud.revision}</span>
+                  <span>
+                    · updated {relative(Date.parse(cloud.updatedAt), now)}
+                  </span>
+                </span>
               </div>
             </header>
             {organization ? (

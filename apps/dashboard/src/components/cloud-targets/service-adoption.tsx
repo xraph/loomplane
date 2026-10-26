@@ -158,14 +158,16 @@ export function ServiceAdoption({
     return <CloudLoading>Loading service placement...</CloudLoading>
   return (
     <section className="grid gap-2">
-      <h3 className="text-sm font-medium">Services in {environment.name}</h3>
+      <h3 className="text-[14px] font-semibold">
+        Services in {environment.name}
+      </h3>
       {!services.length ? (
         <EmptyClouds
           title="No services in the manifest"
           description="Add a service to your project manifest, then choose a named target here."
         />
       ) : (
-        <div className="divide-y rounded-xl border">
+        <div className="divide-y overflow-hidden rounded-xl bg-card ring-1 ring-border">
           {services.map(([name, entry]) => {
             const settings = placementSettings(
               manifest.data!.manifest!,
@@ -190,10 +192,10 @@ export function ServiceAdoption({
                     ? `Cloud default: ${fallbackAccount?.name ?? fallback.provider}`
                     : "Direct: automatic"
             return (
-              <div key={name} className="grid gap-2 p-3">
+              <div key={name} className="grid gap-2 px-4 py-3">
                 <div className="flex flex-wrap items-center gap-2">
                   <div className="min-w-28 flex-1">
-                    <p className="text-sm font-medium">{name}</p>
+                    <p className="text-[13px] font-medium">{name}</p>
                     <p className="text-xs break-words text-muted-foreground">
                       {current}
                     </p>
@@ -288,7 +290,7 @@ export function ServiceAdoption({
         </div>
       )}
       {error && (
-        <Alert variant="destructive" className="text-sm text-destructive">
+        <Alert variant="destructive">
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       )}
@@ -328,7 +330,7 @@ export function ServiceAdoption({
               entries retain their provider and region.
             </p>
             {error && (
-              <Alert variant="destructive" className="text-sm text-destructive">
+              <Alert variant="destructive">
                 <AlertDescription>{error}</AlertDescription>
               </Alert>
             )}

@@ -11,6 +11,7 @@ import {
   CloudEmpty,
   CloudError,
   CloudSectionHead,
+  StatePill,
   Row,
   Rows,
   rowClass,
@@ -126,10 +127,13 @@ export function OrganizationActivity({ cloudId }: { cloudId: string }) {
       ) : (
         <Rows>
           {list.map((sync) => (
-            <Row key={sync.id} className="grid gap-2 p-3">
+            <Row key={sync.id} className="grid gap-2 py-3">
               <div className={rowClass}>
-                <p className="text-sm font-medium">
-                  {sync.status} · attempt {sync.attempt}
+                <p className="flex flex-wrap items-center gap-2">
+                  <StatePill status={sync.status} />
+                  <span className="text-[12.5px] text-muted-foreground">
+                    attempt {sync.attempt}
+                  </span>
                 </p>
                 {["failed", "cleanup_pending", "routing_pending"].includes(
                   sync.status

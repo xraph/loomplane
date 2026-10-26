@@ -23,7 +23,9 @@ secret_key: "${LOOMPLANE_SECRET_KEY:-}"
 database:
   # postgres://user:password@host:port/db?sslmode=disable
   url: "${LOOMPLANE_DATABASE_URL:-}"
-  pool_size: 16
+  # Connections each process keeps open. Each API process runs about two dozen
+  # job pollers, so raise it when the database is a slow network hop away.
+  pool_size: "${LOOMPLANE_DATABASE_POOL_SIZE:-16}"
 
 identity:
   base_path: /authsome
@@ -131,6 +133,17 @@ clouds:
     digitalocean:
       client_id: "${LOOMPLANE_DIGITALOCEAN_OAUTH_CLIENT_ID:-}"
       client_secret: "${LOOMPLANE_DIGITALOCEAN_OAUTH_CLIENT_SECRET:-}"
+    vercel:
+      client_id: "${LOOMPLANE_VERCEL_OAUTH_CLIENT_ID:-}"
+      client_secret: "${LOOMPLANE_VERCEL_OAUTH_CLIENT_SECRET:-}"
+      # The integration's slug in its Vercel install address.
+      slug: "${LOOMPLANE_VERCEL_OAUTH_SLUG:-}"
+    gcp:
+      client_id: "${LOOMPLANE_GCP_OAUTH_CLIENT_ID:-}"
+      client_secret: "${LOOMPLANE_GCP_OAUTH_CLIENT_SECRET:-}"
+    azure:
+      client_id: "${LOOMPLANE_AZURE_OAUTH_CLIENT_ID:-}"
+      client_secret: "${LOOMPLANE_AZURE_OAUTH_CLIENT_SECRET:-}"
 
 providers:
   # Deployment targets that run as their own services, built with
@@ -168,3 +181,12 @@ federation:
     trust_domain: "${LOOMPLANE_FEDERATION_RUNTIME_TRUST_DOMAIN:-}"
     workload_api: "${LOOMPLANE_FEDERATION_RUNTIME_WORKLOAD_API:-}"
     signing_keys_file: "${LOOMPLANE_FEDERATION_RUNTIME_SIGNING_KEYS_FILE:-}"
+
+# The database gateway. Its snapshots are signed with the Ed25519 keys in
+# this file: private (0600), as an absolute path, holding one key as
+# {"version":1,"private_key":"<base64 seed>","not_before":...,"not_after":...}
+# or several, for a rotation, as {"version":2,"keys":[{"private_key":...,
+# "not_before":...,"not_after":...}, ...]}. docs/postgres-services.md says
+# how to rotate. Leave it empty and the gateway endpoints answer 503.
+dbgateway:
+  signing_key_file: "${LOOMPLANE_DBGATEWAY_SIGNING_KEY_FILE:-}"
