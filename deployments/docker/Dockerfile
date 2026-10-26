@@ -70,8 +70,11 @@ ENV LOOMPLANE_CONFIG_DIR=/etc/loomplane \
 WORKDIR /etc/loomplane
 USER loomplane
 EXPOSE 8780
-# The health check follows the default port. Change LOOMPLANE_HTTP_ADDR and
-# you'll want to change this too.
+# The health check follows the default ports: 8780 for the API, 8781 when
+# LOOMPLANE_PROCESS=worker. Change LOOMPLANE_HTTP_ADDR or
+# LOOMPLANE_WORKER_HTTP_ADDR and you'll want to change this too. Kubernetes
+# ignores it and uses the chart's probes.
 HEALTHCHECK --interval=10s --timeout=3s --start-period=30s --retries=3 \
-  CMD wget -qO /dev/null http://127.0.0.1:8780/_/health/live || exit 1
+  CMD port=8780; [ "${LOOMPLANE_PROCESS:-api}" = worker ] && port=8781; \
+      wget -qO /dev/null "http://127.0.0.1:${port}/_/health/live" || exit 1
 ENTRYPOINT ["loomplane-entrypoint"]

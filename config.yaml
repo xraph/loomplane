@@ -23,7 +23,9 @@ secret_key: "${LOOMPLANE_SECRET_KEY:-}"
 database:
   # postgres://user:password@host:port/db?sslmode=disable
   url: "${LOOMPLANE_DATABASE_URL:-}"
-  pool_size: 16
+  # Connections each process keeps open. Each API process runs about two dozen
+  # job pollers, so raise it when the database is a slow network hop away.
+  pool_size: "${LOOMPLANE_DATABASE_POOL_SIZE:-16}"
 
 identity:
   base_path: /authsome
