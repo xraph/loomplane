@@ -3,79 +3,14 @@
 package migrations
 
 import (
-	"context"
-	"fmt"
-	"os"
 	"slices"
 	"strings"
 	"testing"
-	"time"
-
-	"github.com/jackc/pgx/v5"
 )
 
-// scratch is an empty database of its own on the test server, dropped when
-// the test ends.
-func scratch(t *testing.T) *pgx.Conn {
-	t.Helper()
-	url := os.Getenv("LOOMPLANE_TEST_DATABASE_URL")
-	if url == "" {
-		t.Skip("LOOMPLANE_TEST_DATABASE_URL isn't set; make test-integration sets it")
-	}
-	ctx := context.Background()
-	admin, err := pgx.Connect(ctx, url)
-	if err != nil {
-		t.Fatal(err)
-	}
-	name := fmt.Sprintf("loomplane_migrations_%d", time.Now().UnixNano())
-	if _, err = admin.Exec(ctx, "CREATE DATABASE "+name); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		_, _ = admin.Exec(context.Background(), "DROP DATABASE IF EXISTS "+name+" WITH (FORCE)")
-		_ = admin.Close(context.Background())
-	})
-	cfg, err := pgx.ParseConfig(url)
-	if err != nil {
-		t.Fatal(err)
-	}
-	cfg.Database = name
-	conn, err := pgx.ConnectConfig(ctx, cfg)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = conn.Close(context.Background()) })
-	return conn
-}
-
-func exec(t *testing.T, conn *pgx.Conn, stmts ...string) {
-	t.Helper()
-	for i, s := range stmts {
-		if _, err := conn.Exec(context.Background(), s); err != nil {
-			t.Fatalf("statement %d: %v", i+1, err)
-		}
-	}
-}
-
-func strs(t *testing.T, conn *pgx.Conn, query string) []string {
-	t.Helper()
-	rows, err := conn.Query(context.Background(), query)
-	if err != nil {
-		t.Fatal(err)
-	}
-	out, err := pgx.CollectRows(rows, pgx.RowTo[string])
-	if err != nil {
-		t.Fatal(err)
-	}
-	return out
-}
-
 func TestSources_eachProjectsRepositoryBecomesItsFirstSource(t *testing.T) {
-	conn := scratch(t)
-	exec(t, conn, projectsUp...)
-	exec(t, conn, analysesUp...)
-	exec(t, conn, variablesUp...)
-	exec(t, conn, projectStyleUp...)
+	conn, db := scratch(t)
+	up(t, db, "create_projects", "create_analyses", "create_variables", "add_project_style")
 	exec(t, conn,
 		`INSERT INTO loomplane_projects (id, org_id, name, slug, repository_url, status, created_by, created_at, updated_at) VALUES
 			('proj_a', 'org', 'A', 'a', 'https://github.com/acme/Storefront.git', 'ready', 'usr', now(), now()),
@@ -93,10 +28,9 @@ func TestSources_eachProjectsRepositoryBecomesItsFirstSource(t *testing.T) {
 			('var_a', 'org', 'proj_a', 'svc:go:cmd/api', 'PORT', 'usr', 'usr', now(), now()),
 			('var_b', 'org', 'proj_a', '', 'LOG', 'usr', 'usr', now(), now())`,
 	)
-	// Twice: grove migrations aren't transactional, so one interrupted
-	// halfway runs again from the top.
-	exec(t, conn, sourcesUp...)
-	exec(t, conn, sourcesUp...)
+	// Twice: a rerun changes nothing.
+	up(t, db, "create_project_sources")
+	up(t, db, "create_project_sources")
 
 	got := strs(t, conn, `SELECT project_id || ' ' || alias || ' ' || repository || ' [' || root || '] [' || ref || ']'
 		FROM loomplane_project_sources ORDER BY project_id`)
@@ -121,12 +55,8 @@ func TestSources_eachProjectsRepositoryBecomesItsFirstSource(t *testing.T) {
 }
 
 func TestPlanSources_eachPlanKeepsItsCommit(t *testing.T) {
-	conn := scratch(t)
-	exec(t, conn, projectsUp...)
-	exec(t, conn, analysesUp...)
-	exec(t, conn, variablesUp...)
-	exec(t, conn, projectStyleUp...)
-	exec(t, conn, planningUp...)
+	conn, db := scratch(t)
+	up(t, db, "create_projects", "create_analyses", "create_variables", "add_project_style", "create_planning")
 	exec(t, conn,
 		`INSERT INTO loomplane_projects (id, org_id, name, slug, repository_url, status, created_by, created_at, updated_at) VALUES
 			('proj_a', 'org', 'A', 'a', 'https://github.com/acme/mono', 'ready', 'usr', now(), now())`,
@@ -140,9 +70,9 @@ func TestPlanSources_eachPlanKeepsItsCommit(t *testing.T) {
 			manifest_id, manifest_revision, created_by, created_at) VALUES
 			('plan_a', 'org', 'proj_a', 'env_a', 'production', 'approved', 'anl_a', 'abc', 'man_a', 1, 'usr', now())`,
 	)
-	exec(t, conn, sourcesUp...)
-	exec(t, conn, planSourcesUp...)
-	exec(t, conn, planSourcesUp...)
+	up(t, db, "create_project_sources")
+	up(t, db, "create_plan_sources")
+	up(t, db, "create_plan_sources")
 	got := strs(t, conn, `SELECT plan_id || ' ' || alias || ' ' || analysis_id || ' ' || commit_sha || ' ' || in_scope::text FROM loomplane_plan_sources`)
 	if !slices.Equal(got, []string{"plan_a mono anl_a abc true"}) {
 		t.Fatalf("plan sources %q", got)
@@ -150,13 +80,8 @@ func TestPlanSources_eachPlanKeepsItsCommit(t *testing.T) {
 }
 
 func TestDeploymentSources_aStoredSourceBecomesTheOnlyOne(t *testing.T) {
-	conn := scratch(t)
-	exec(t, conn, projectsUp...)
-	exec(t, conn, analysesUp...)
-	exec(t, conn, variablesUp...)
-	exec(t, conn, projectStyleUp...)
-	exec(t, conn, planningUp...)
-	exec(t, conn, deploymentsUp...)
+	conn, db := scratch(t)
+	up(t, db, "create_projects", "create_analyses", "create_variables", "add_project_style", "create_planning", "create_deployments")
 	exec(t, conn,
 		`INSERT INTO loomplane_projects (id, org_id, name, slug, repository_url, status, created_by, created_at, updated_at) VALUES
 			('proj_a', 'org', 'A', 'a', 'https://github.com/acme/mono', 'ready', 'usr', now(), now())`,
@@ -175,8 +100,8 @@ func TestDeploymentSources_aStoredSourceBecomesTheOnlyOne(t *testing.T) {
 			('dep_a', 'org', 'proj_a', 'env_a', 'production', 'plan_a', 'abc', 'running', 'k', 'usr', now()),
 			('dep_b', 'org', 'proj_a', 'env_a', 'production', 'plan_b', 'abc', 'running', '', 'usr', now())`,
 	)
-	exec(t, conn, deploymentSourcesUp...)
-	exec(t, conn, deploymentSourcesUp...)
+	up(t, db, "add_deployment_sources")
+	up(t, db, "add_deployment_sources")
 	got := strs(t, conn, `SELECT id || ' ' || sources::text FROM loomplane_deployments ORDER BY id`)
 	want := []string{
 		`dep_a [{"key": "k", "alias": "", "commit_sha": "abc", "repository": ""}]`,
@@ -188,11 +113,9 @@ func TestDeploymentSources_aStoredSourceBecomesTheOnlyOne(t *testing.T) {
 }
 
 func TestEnvironmentSourcesBackfill_eachEnvironmentKeepsItsNewestSucceededDeployment(t *testing.T) {
-	conn := scratch(t)
-	for _, up := range [][]string{projectsUp, analysesUp, variablesUp, projectStyleUp, planningUp,
-		deploymentsUp, bindingURLUp} {
-		exec(t, conn, up...)
-	}
+	conn, db := scratch(t)
+	up(t, db, "create_projects", "create_analyses", "create_variables", "add_project_style", "create_planning",
+		"create_deployments", "add_binding_url")
 	exec(t, conn,
 		`INSERT INTO loomplane_projects (id, org_id, name, slug, repository_url, status, created_by, created_at, updated_at) VALUES
 			('proj_a', 'org', 'A', 'a', 'https://github.com/acme/mono', 'ready', 'usr', now(), now())`,
@@ -213,9 +136,7 @@ func TestEnvironmentSourcesBackfill_eachEnvironmentKeepsItsNewestSucceededDeploy
 			('plan_new', 'org', 'proj_a', 'env_a', 'production', 'approved', 'anl_new', 'new', 'man_a', 1, 'usr', now()),
 			('plan_late', 'org', 'proj_a', 'env_a', 'production', 'approved', 'anl_late', 'late', 'man_a', 1, 'usr', now())`,
 	)
-	exec(t, conn, sourcesUp...)
-	exec(t, conn, planSourcesUp...)
-	exec(t, conn, deploymentSourcesUp...)
+	up(t, db, "create_project_sources", "create_plan_sources", "add_deployment_sources")
 	// A second repository moved by the older plan and held by the newest
 	// one: what's deployed of it is what the older plan moved.
 	exec(t, conn,
@@ -238,8 +159,8 @@ func TestEnvironmentSourcesBackfill_eachEnvironmentKeepsItsNewestSucceededDeploy
 			('dep_new', 'org', 'proj_a', 'env_a', 'production', 'plan_new', 'new', 'succeeded', 'usr', now(), now() - interval '2 hours'),
 			('dep_late', 'org', 'proj_a', 'env_a', 'production', 'plan_late', 'late', 'failed', 'usr', now(), now() - interval '1 hour')`,
 	)
-	exec(t, conn, environmentSourcesBackfillUp...)
-	exec(t, conn, environmentSourcesBackfillUp...)
+	up(t, db, "backfill_environment_sources")
+	up(t, db, "backfill_environment_sources")
 
 	got := strs(t, conn, `SELECT e.environment_id || ' ' || s.alias || ' ' || e.org_id || ' ' || e.analysis_id || ' ' ||
 			e.commit_sha || ' ' || e.plan_id || ' ' || (e.deployed_at = d.finished_at)::text
@@ -257,17 +178,14 @@ func TestEnvironmentSourcesBackfill_eachEnvironmentKeepsItsNewestSucceededDeploy
 }
 
 func TestSourceRepositoryIndex_findsARepositoryWhateverItsCase(t *testing.T) {
-	conn := scratch(t)
-	exec(t, conn, projectsUp...)
-	exec(t, conn, analysesUp...)
-	exec(t, conn, variablesUp...)
-	exec(t, conn, projectStyleUp...)
+	conn, db := scratch(t)
+	up(t, db, "create_projects", "create_analyses", "create_variables", "add_project_style")
 	exec(t, conn,
 		`INSERT INTO loomplane_projects (id, org_id, name, slug, repository_url, status, created_by, created_at, updated_at) VALUES
 			('proj_a', 'org', 'A', 'a', 'https://github.com/Acme/Storefront', 'ready', 'usr', now(), now())`)
-	exec(t, conn, sourcesUp...)
-	exec(t, conn, sourceRepositoryIndexUp...)
-	exec(t, conn, sourceRepositoryIndexUp...)
+	up(t, db, "create_project_sources")
+	up(t, db, "index_source_repositories_by_name")
+	up(t, db, "index_source_repositories_by_name")
 	indexes := `SELECT indexname FROM pg_indexes WHERE tablename = 'loomplane_project_sources'
 		AND indexname LIKE 'loomplane_project_sources_repository%' ORDER BY indexname`
 	if got := strs(t, conn, indexes); !slices.Equal(got, []string{"loomplane_project_sources_repository_lower"}) {
@@ -286,18 +204,17 @@ func TestSourceRepositoryIndex_findsARepositoryWhateverItsCase(t *testing.T) {
 	if !strings.Contains(plan, "loomplane_project_sources_repository_lower") {
 		t.Fatalf("the lookup doesn't use the index:\n%s", plan)
 	}
-	exec(t, conn, sourceRepositoryIndexDown...)
+	down(t, db, "index_source_repositories_by_name")
 	if got := strs(t, conn, indexes); !slices.Equal(got, []string{"loomplane_project_sources_repository"}) {
 		t.Fatalf("indexes after down %q", got)
 	}
 }
 
 func TestSupersededColumns_dropAndComeBackFilled(t *testing.T) {
-	conn := scratch(t)
-	for _, up := range [][]string{projectsUp, analysesUp, githubUp, variablesUp, projectStyleUp, planningUp,
-		cloudConnectionsUp, environmentConnectionsUp, deploymentsUp, bindingURLUp, deploymentRetriesUp, bindingDriftUp} {
-		exec(t, conn, up...)
-	}
+	conn, db := scratch(t)
+	up(t, db, "create_projects", "create_analyses", "create_github_installations", "create_variables", "add_project_style",
+		"create_planning", "create_cloud_connections", "create_environment_connections", "create_deployments",
+		"add_binding_url", "add_deployment_retries", "add_binding_drift")
 	exec(t, conn,
 		`INSERT INTO loomplane_projects (id, org_id, name, slug, repository_url, status, created_by, created_at, updated_at) VALUES
 			('proj_a', 'org', 'A', 'a', 'https://github.com/acme/mono', 'ready', 'usr', now(), now())`,
@@ -314,12 +231,11 @@ func TestSupersededColumns_dropAndComeBackFilled(t *testing.T) {
 			source, started_by, started_at) VALUES
 			('dep_a', 'org', 'proj_a', 'env_a', 'production', 'plan_a', 'abc', 'succeeded', 'k', 'usr', now())`,
 	)
-	for _, up := range [][]string{sourcesUp, planSourcesUp, deploymentSourcesUp, environmentSourcesBackfillUp, sourceRepositoryIndexUp} {
-		exec(t, conn, up...)
-	}
+	up(t, db, "create_project_sources", "create_plan_sources", "add_deployment_sources", "backfill_environment_sources",
+		"index_source_repositories_by_name")
 
-	exec(t, conn, supersededUp...)
-	exec(t, conn, supersededUp...)
+	up(t, db, "drop_superseded_columns")
+	up(t, db, "drop_superseded_columns")
 	left := strs(t, conn, `SELECT table_name || '.' || column_name FROM information_schema.columns
 		WHERE (table_name, column_name) IN (('loomplane_projects', 'repository_url'), ('loomplane_plans', 'analysis_id'),
 			('loomplane_plans', 'commit_sha'), ('loomplane_deployments', 'source'))`)
@@ -327,11 +243,11 @@ func TestSupersededColumns_dropAndComeBackFilled(t *testing.T) {
 		t.Fatalf("still there: %q", left)
 	}
 
-	exec(t, conn, supersededDown...)
+	down(t, db, "drop_superseded_columns")
 	got := strs(t, conn, `SELECT p.repository_url || ' ' || pl.analysis_id || ' ' || pl.commit_sha || ' ' || d.source
 		FROM loomplane_projects p, loomplane_plans pl, loomplane_deployments d`)
 	if !slices.Equal(got, []string{"https://github.com/acme/mono anl_a abc k"}) {
 		t.Fatalf("back down %q", got)
 	}
-	exec(t, conn, supersededUp...)
+	up(t, db, "drop_superseded_columns")
 }
