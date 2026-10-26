@@ -54,6 +54,9 @@ type OwnedTarget struct {
 	Secrets     ResourceSecrets
 	Builder     *ImageBuilder
 	Ports       owned.PortReservations
+	// GPULocks serializes GPU device picking per Docker daemon. Nil
+	// serializes it within this process only.
+	GPULocks    server.GPULocks
 	Controllers ControllerReceipts
 	ServerDial  func(context.Context, *server.Config) (*server.Client, error)
 	Backend     func(string, string) owned.Backend
@@ -302,7 +305,7 @@ func (e *OwnedTarget) Register(org, connection string) string {
 	case e.Backend != nil:
 		backend = e.Backend(org, connection)
 	case e.Cloud == connections.Server:
-		backend = &server.Runtime{Session: e.serverSession(org, connection), Values: e.values, Ports: e.Ports}
+		backend = &server.Runtime{Session: e.serverSession(org, connection), Values: e.values, Ports: e.Ports, GPULocks: e.GPULocks}
 	default:
 		backend = e.kubernetesBackend(org, connection)
 	}

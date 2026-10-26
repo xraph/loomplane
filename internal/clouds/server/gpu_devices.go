@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"slices"
 	"strings"
+	"sync"
 
 	"github.com/xraph/loomplane/pkg/provider"
 )
@@ -71,6 +72,43 @@ func assignDevices(devices []provider.GPUDevice, kind string, count int, held ma
 		out[i] = d.UUID
 	}
 	return out, nil
+}
+
+// GPULocks serializes GPU device picking on one Docker daemon. LockGPUs
+// blocks until no other apply holds daemon's devices and returns the
+// function that lets the next one in. The holder must not wait on any other
+// lock until it calls that function.
+type GPULocks interface {
+	LockGPUs(ctx context.Context, daemon string) (unlock func(), err error)
+}
+
+// localGPULocks serializes device picking within this process, for a
+// Runtime without GPULocks.
+var localGPULocks sync.Map // daemon -> *sync.Mutex
+
+// lockGPUs takes the daemon's GPU lock for the stretch from reading which
+// devices are free to creating the container that records them. The
+// unlock it returns is safe to call more than once.
+func (r *Runtime) lockGPUs(ctx context.Context, c *Client) (func(), error) {
+	daemon := c.Config.Details["docker_id"]
+	if daemon == "" {
+		return nil, errors.New("the server's Docker identity must be verified before Loomplane assigns its GPUs")
+	}
+	var once sync.Once
+	if r.GPULocks == nil {
+		value, _ := localGPULocks.LoadOrStore(daemon, &sync.Mutex{})
+		mu, ok := value.(*sync.Mutex)
+		if !ok {
+			return nil, errors.New("the server's local GPU lock is unreadable")
+		}
+		mu.Lock()
+		return func() { once.Do(mu.Unlock) }, nil
+	}
+	unlock, err := r.GPULocks.LockGPUs(ctx, daemon)
+	if err != nil {
+		return nil, err
+	}
+	return func() { once.Do(unlock) }, nil
 }
 
 // gpuDevices assigns the devices for a workload's reviewed GPU placement

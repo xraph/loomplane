@@ -309,7 +309,7 @@ func (e *Extension) Register(fapp forge.App) error {
 	// observers hear of each service binding a deployment writes or
 	// deletes. A kind that tracks its consumers registers its own here.
 	observers := make([]deployments.ReleaseObserver, 0, 1)
-	serverTarget := &deployments.OwnedTarget{RouteGuard: routeService, Cloud: connections.Server, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, Ports: owned.NewReservations(pg), Hooks: catalogHooks, Endpoints: e.endpoints, Checker: checker}
+	serverTarget := &deployments.OwnedTarget{RouteGuard: routeService, Cloud: connections.Server, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, Ports: owned.NewReservations(pg), GPULocks: owned.NewGPULocks(pg), Hooks: catalogHooks, Endpoints: e.endpoints, Checker: checker}
 	// A cluster's endpoint checks dial from Loomplane's own network, so
 	// they never reach what Loomplane itself depends on.
 	denied, servicesErr := loomplaneServices(e.cfg)

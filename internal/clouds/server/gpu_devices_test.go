@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"reflect"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -337,4 +338,66 @@ func TestApplyWithoutGPUsIgnoresDeviceLabels(t *testing.T) {
 	if reads != 0 || d.lists != 0 {
 		t.Fatalf("GPU reads %d, container lists %d", reads, d.lists)
 	}
+}
+
+// recordingGPULocks notes what the fake daemon had seen when the GPU lock
+// was taken and released.
+type recordingGPULocks struct {
+	d      *gpuDocker
+	events []string
+}
+
+func (l *recordingGPULocks) LockGPUs(_ context.Context, daemon string) (func(), error) {
+	l.d.mu.Lock()
+	l.events = append(l.events, "lock "+daemon+" lists="+strconv.Itoa(l.d.lists)+" creates="+strconv.Itoa(len(l.d.creates)))
+	l.d.mu.Unlock()
+	return func() {
+		l.d.mu.Lock()
+		defer l.d.mu.Unlock()
+		l.events = append(l.events, "unlock lists="+strconv.Itoa(l.d.lists)+" creates="+strconv.Itoa(len(l.d.creates)))
+	}, nil
+}
+
+// The daemon's GPU lock covers reading which devices are free through
+// creating the container that records them, and no further. A refusal
+// releases it too.
+func TestApplyHoldsTheGPULockFromListingToCreate(t *testing.T) {
+	t.Run("create", func(t *testing.T) {
+		d := &gpuDocker{t: t, containers: map[string]*gpuContainer{"lp-other": foreign("GPU-a")}}
+		locks := &recordingGPULocks{d: d}
+		runtime := gpuRuntime(t, d, twoL4s(), nil)
+		runtime.GPULocks = locks
+		if _, err := runtime.Apply(t.Context(), id.New(id.PrefixInstance), cpprovider.ServiceSpec{Name: "main", Image: gpuImage}, gpuLabels("first")); err != nil {
+			t.Fatal(err)
+		}
+		if want := []string{"lock daemon_fixture lists=0 creates=0", "unlock lists=1 creates=1"}; !slices.Equal(locks.events, want) {
+			t.Fatalf("GPU lock events: %q, want %q", locks.events, want)
+		}
+	})
+	t.Run("refusal", func(t *testing.T) {
+		d := &gpuDocker{t: t, containers: map[string]*gpuContainer{"lp-one": foreign("GPU-a"), "lp-two": foreign("GPU-b")}}
+		locks := &recordingGPULocks{d: d}
+		runtime := gpuRuntime(t, d, twoL4s(), nil)
+		runtime.GPULocks = locks
+		if _, err := runtime.Apply(t.Context(), id.New(id.PrefixInstance), cpprovider.ServiceSpec{Name: "main", Image: gpuImage}, gpuLabels("first")); !errors.Is(err, ErrGPUBusy) {
+			t.Fatalf("busy: %v", err)
+		}
+		if want := []string{"lock daemon_fixture lists=0 creates=0", "unlock lists=1 creates=0"}; !slices.Equal(locks.events, want) {
+			t.Fatalf("GPU lock events: %q, want %q", locks.events, want)
+		}
+	})
+	t.Run("no GPUs", func(t *testing.T) {
+		d := &gpuDocker{t: t, containers: map[string]*gpuContainer{}}
+		locks := &recordingGPULocks{d: d}
+		runtime := gpuRuntime(t, d, twoL4s(), nil)
+		runtime.GPULocks = locks
+		labels := gpuLabels("first")
+		delete(labels, owned.LabelGPU)
+		if _, err := runtime.Apply(t.Context(), id.New(id.PrefixInstance), cpprovider.ServiceSpec{Name: "main", Image: gpuImage}, labels); err != nil {
+			t.Fatal(err)
+		}
+		if len(locks.events) != 0 {
+			t.Fatalf("a workload without GPUs took the GPU lock: %q", locks.events)
+		}
+	})
 }

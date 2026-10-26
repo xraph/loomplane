@@ -44,6 +44,9 @@ type Runtime struct {
 	// GPUReader reads the server's GPUs for device assignment; nil is
 	// (*Client).GPUs.
 	GPUReader func(context.Context, *Client) (provider.GPUInventory, error)
+	// GPULocks keeps two GPU applies on one daemon from both reading a
+	// device as free. Nil serializes them within this process only.
+	GPULocks GPULocks
 }
 
 var _ owned.Backend = (*Runtime)(nil)
@@ -355,10 +358,19 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 	// Devices are assigned before the old container stops, so a refusal
 	// leaves it running. Its own devices count as free: it stops before
 	// the new one starts. Two applies can't both read a device as free:
-	// the runner holds the daemon's host-admission lock through every
-	// direct server create, replace and update, and through every pooled
-	// one that asks for GPUs.
+	// each holds the daemon's GPU lock from listing its containers until
+	// the new container, labelled with its devices, exists. Direct and
+	// pooled applies take the same lock. Nothing between the two touches
+	// the database, so the lock never waits behind the organization lock
+	// or a connection row.
+	unlockGPUs := func() {}
 	if raw := labels[owned.LabelGPU]; raw != "" {
+		unlock, lockErr := r.lockGPUs(ctx, c)
+		if lockErr != nil {
+			return nil, lockErr
+		}
+		defer unlock()
+		unlockGPUs = unlock
 		devices, gpuErr := r.gpuDevices(ctx, c, raw, own, old)
 		if gpuErr != nil {
 			return nil, gpuErr
@@ -382,6 +394,9 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 	if checkErr := dockerJSON(ctx, c, http.MethodPost, "/containers/create?name="+name, body, &result); checkErr != nil {
 		return nil, checkErr
 	}
+	// The created container carries its device label, so the next apply's
+	// listing sees those devices as held.
+	unlockGPUs()
 	if checkErr := uploadFiles(ctx, c, result.ID, values); checkErr != nil {
 		return nil, checkErr
 	}

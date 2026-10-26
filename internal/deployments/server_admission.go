@@ -10,10 +10,15 @@ import (
 )
 
 // Direct execution holds the same daemon lock as pool enrollment through its
-// external effects, including connections that alias an adopted daemon. A
-// pooled action takes it too when it asks for GPUs: its pool reservation
-// counts them, but the runtime picks the devices by reading the daemon's
-// container labels, and two applies must not both read a device as free.
+// external effects, including connections that alias an adopted daemon.
+// Pooled actions never take it, GPU or not. Their pool reservation admits
+// them, and this transaction keeps a share lock on the connection row open
+// through the run, while a pooled run takes the organization lock in later
+// transactions. Pool saves, cloud sync and plan approval take the
+// organization lock first and the connection rows after, so a pooled action
+// holding this lock could wait on them while they wait on it. Two GPU
+// applies on one daemon are kept apart by the server runtime's own
+// gpu-devices lock instead (server.GPULocks).
 func (r *Runner) directServerAdmission(ctx context.Context, p *planning.Plan, a planning.Action) (driver.Tx, error) {
 	if !holdsServerAdmission(a) {
 		return nil, nil
@@ -46,23 +51,8 @@ func (r *Runner) directServerAdmission(ctx context.Context, p *planning.Plan, a 
 }
 
 // holdsServerAdmission reports whether a server action holds its daemon's
-// host-admission lock through its effects. Pooled CPU actions don't: their
-// pool reservation already admits them.
+// host-admission lock through its effects. Only direct creates, replaces and
+// updates do.
 func holdsServerAdmission(a planning.Action) bool {
-	if a.Provider != "server" || a.Op == planning.Delete || a.Op == planning.Keep {
-		return false
-	}
-	return !poolAction(a) || gpuAction(a)
-}
-
-// gpuAction reports whether a service action carries a GPU placement, as a
-// reviewed runtime request or as a pool's GPU reservation.
-func gpuAction(a planning.Action) bool {
-	if a.Service == nil {
-		return false
-	}
-	if a.Service.GPU != nil && a.Service.GPU.Count > 0 {
-		return true
-	}
-	return a.Service.CloudPlacement != nil && a.Service.CloudPlacement.GPUs > 0
+	return a.Provider == "server" && !poolAction(a) && a.Op != planning.Delete && a.Op != planning.Keep
 }
