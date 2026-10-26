@@ -356,3 +356,30 @@ func TestCanaryOnContainerAppsRefusesAnAppWideChange(t *testing.T) {
 		t.Fatalf("executable %v, release %+v, problems %+v", r.Executable, r.Release, r.Problems)
 	}
 }
+
+// A service that reaches Cloud SQL through a PSC route can't canary: its
+// candidate wouldn't carry the route. The plan says so and blocks, since a
+// canary environment promised a ramp.
+func TestCanaryRefusesACloudSQLPSCRoute(t *testing.T) {
+	in := releaseInput(t, releaseYAML(canaryRelease))
+	api := serviceAction("api", "cloud-run", Update, ServiceConfig{Public: true, Port: 8080, CloudSQLNetwork: &provider.CloudSQLApplicationNetwork{ConsumerProject: "shop", Network: "default", Subnetwork: "projects/shop/regions/europe-west1/subnetworks/default"}})
+	web := serviceAction("web", "cloud-run", Update, ServiceConfig{Public: true, Port: 8080})
+	r := &Result{Actions: []Action{api, web}, Executable: true}
+	planRelease(in, r)
+	if r.Executable || r.Release.Ramps(api.ID) || !r.Release.Ramps(web.ID) || len(r.Problems) != 1 {
+		t.Fatalf("executable %v, release %+v, problems %+v", r.Executable, r.Release, r.Problems)
+	}
+	p := r.Problems[0]
+	for _, want := range []string{"api can't run a canary", "Private Service Connect", "direct or blue_green"} {
+		if p.Code != "canary-unsupported-database-route" || p.Name != "api" || p.Path != "services.api" || !strings.Contains(p.Message, want) {
+			t.Fatalf("problem %+v doesn't say %q", p, want)
+		}
+	}
+	// A new one deploys all at once anyway, so nothing blocks.
+	api.Op = Create
+	r = &Result{Actions: []Action{api}, Executable: true}
+	planRelease(in, r)
+	if !r.Executable || len(r.Problems) != 0 || len(r.Warnings) != 1 {
+		t.Fatalf("executable %v, problems %+v, warnings %+v", r.Executable, r.Problems, r.Warnings)
+	}
+}
