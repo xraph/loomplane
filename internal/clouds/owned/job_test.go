@@ -6,20 +6,49 @@ import (
 	"testing"
 )
 
-// leaks reports a sensitive piece of a secret that output shows outside
-// its redactions.
+// leaks reports four bytes of a sensitive part of a secret that output
+// shows outside its redactions. It doesn't ask the redactor which pieces
+// it hides: the only four bytes it lets show are ones the address's own
+// scheme and host spell, found here by hand, since those stay readable.
 func leaks(output string, secrets map[string]string) string {
 	shown := strings.Split(output, "[redacted]")
 	for _, value := range secrets {
-		for _, piece := range sensitivePieces(value) {
-			for _, text := range shown {
-				if strings.Contains(text, piece) {
-					return piece
+		public := strings.ToLower(schemeAndHost(value))
+		for _, part := range sensitiveParts(value) {
+			for start := 0; start+4 <= len(part); start++ {
+				piece := part[start : start+4]
+				if strings.Contains(public, strings.ToLower(piece)) {
+					continue
+				}
+				for _, text := range shown {
+					if strings.Contains(text, piece) {
+						return piece
+					}
 				}
 			}
 		}
 	}
 	return ""
+}
+
+// schemeAndHost is "scheme://host" of an address with a password, cut from
+// its text: what comes before "://", and what comes after the last "@" up
+// to the next "/", "?" or "#". Anything else has none.
+func schemeAndHost(value string) string {
+	scheme, rest, ok := strings.Cut(value, "://")
+	if !ok {
+		return ""
+	}
+	end := len(rest)
+	if i := strings.IndexAny(rest, "/?#"); i >= 0 {
+		end = i
+	}
+	authority := rest[:end]
+	at := strings.LastIndex(authority, "@")
+	if at < 0 || !strings.Contains(authority[:at], ":") {
+		return ""
+	}
+	return scheme + "://" + authority[at+1:]
 }
 
 // tailed is output as a JobTail keeps it.

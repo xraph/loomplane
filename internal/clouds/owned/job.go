@@ -59,11 +59,12 @@ func JobOutput(output []byte, secrets map[string]string) string {
 // (urlTokenUser), and its query values that look secret
 // (secretQueryValue), and its path and fragment, each as decoded and as
 // the address spells it. Its scheme, host and an ordinary user, such as
-// postgres, are left, so output naming them stays readable. An address without a password is secret
-// whole, since its path can hold the secret (a bot's token, a webhook's
-// key), and its token user and secret query values count on their own
-// too. Anything else is secret whole. A value of several lines is covered
-// line by line too, since its pieces include each line's.
+// postgres, are left, so output naming them stays readable. An address
+// without a password is secret whole, since its path can hold the secret
+// (a bot's token, a webhook's key), and its token user and secret query
+// values count on their own too. Anything else is secret whole. A value
+// of several lines is covered line by line too, since its pieces include
+// each line's.
 func sensitiveParts(value string) []string {
 	u, err := url.Parse(value)
 	if err != nil || u.Scheme == "" || u.Host == "" {
