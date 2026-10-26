@@ -62,7 +62,7 @@ func TestFabriqsWithTheirOwnDatabasesPlan(t *testing.T) {
 // by environment. The finding says where the other one runs.
 func TestFabriqRefusesAnEndpointAnotherEnvironmentsFabriqUses(t *testing.T) {
 	doc := "version: 1\nresources:\n  orders: {kind: fabriq, provider: server, target: " + targetA + ", uses: {postgres: {external: " + prodPG + "}}}\n"
-	remedy := " Each Fabriq needs its own Postgres server: turn Fabriq off in one environment or point it at another server."
+	remedy := " Each Fabriq needs its own Postgres server: turn Fabriq off in one environment, or let Loomplane provision its Postgres or connect a project resource instead."
 	cases := map[string]struct {
 		user FabriqUser
 		want string

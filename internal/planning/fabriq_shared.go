@@ -13,8 +13,8 @@ import (
 
 // fabriqKinds are the composed kinds that keep Fabriq's schema, and its
 // cluster-wide fabriq_app role, in their Postgres. Two of them on one
-// database would reset each other's role password and revoke each other's
-// keys, so each needs a database of its own.
+// Postgres server would reset each other's role password and revoke each
+// other's keys, so each needs a Postgres server of its own.
 var fabriqKinds = map[string]bool{"fabriq": true, "fabriq-library": true}
 
 // fabriqDatabase is the Postgres a Fabriq resource connects in the
@@ -69,7 +69,7 @@ func (p *planner) checkFabriqDatabases() {
 		var used string
 		switch {
 		case external && inOther:
-			used = fmt.Sprintf("Fabriq %s %s. Each Fabriq needs its own Postgres server: turn Fabriq off in one environment or point it at another server.", elsewhere.Name, elsewhere.where())
+			used = fmt.Sprintf("Fabriq %s %s. Each Fabriq needs its own Postgres server: turn Fabriq off in one environment, or let Loomplane provision its Postgres or connect a project resource instead.", elsewhere.Name, elsewhere.where())
 		case inManifest:
 			used = fmt.Sprintf("Fabriq %s. Each Fabriq needs its own Postgres server: point one of them at another server.", earlier)
 		default:
