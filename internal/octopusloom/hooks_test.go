@@ -18,11 +18,14 @@ import (
 
 // hookStore is a Store in memory with any number of gateways. events
 // records the calls that change something, in order, as "Call resource".
+// Its writes honour the context, as Postgres does, and saveErr makes
+// SaveSyncState fail.
 type hookStore struct {
 	mu       sync.Mutex
 	gateways map[GatewayRef]*Gateway
 	routes   []*Route
 	events   *[]string
+	saveErr  error
 }
 
 func newHookStore(events *[]string, gateways ...*Gateway) *hookStore {
@@ -74,9 +77,15 @@ func (s *hookStore) Gateways(context.Context) ([]*Gateway, error) {
 	return out, nil
 }
 
-func (s *hookStore) SaveSyncState(_ context.Context, ref GatewayRef, applied int64, state SyncState) error {
+func (s *hookStore) SaveSyncState(ctx context.Context, ref GatewayRef, applied int64, state SyncState) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.saveErr != nil {
+		return s.saveErr
+	}
 	g, ok := s.gateways[ref]
 	if !ok {
 		return ErrNotFound
@@ -86,7 +95,10 @@ func (s *hookStore) SaveSyncState(_ context.Context, ref GatewayRef, applied int
 	return nil
 }
 
-func (s *hookStore) BumpGeneration(_ context.Context, ref GatewayRef) error {
+func (s *hookStore) BumpGeneration(ctx context.Context, ref GatewayRef) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	g, ok := s.gateways[ref]
@@ -236,7 +248,7 @@ func newHookFixture(t *testing.T) *hookFixture {
 		},
 	}
 	f.hooks = NewHooks(HookDeps{
-		Store: f.store, Syncer: f.syncer, Bindings: f.syncer.Bindings, Hostnames: f.syncer.Hostnames,
+		Store: f.store, Syncer: f.syncer,
 		Revoker: revokerFunc(func(_ context.Context, orgID, environmentID, resource string) error {
 			f.revoked = append(f.revoked, orgID+"/"+environmentID+"/"+resource)
 			f.events = append(f.events, "RevokeResource "+resource)
@@ -463,15 +475,18 @@ func TestRemovedRevokesAdminSessionsAndDeletesGateway(t *testing.T) {
 	}
 }
 
-func TestRemovedKeepsTheGatewayWhenSessionsStayOpen(t *testing.T) {
+func TestRemovedDeletesTheGatewayWhenSessionsCantBeEnded(t *testing.T) {
 	f := newHookFixture(t)
 	f.hooks.d.Revoker = revokerFunc(func(context.Context, string, string, string) error { return errors.New("db down") })
 	err := f.hooks.Removed(context.Background(), deployments.ComposedResource{OrgID: "org_x", ProjectID: "proj_x", EnvironmentID: "env_x", Resource: "edge"})
-	if err == nil {
-		t.Fatal("Removed succeeded with the sessions still open")
+	if err != nil {
+		t.Fatalf("Removed: %v, want only a warning", err)
 	}
-	if f.countEvents("DeleteGateway edge") != 0 {
-		t.Fatal("the gateway went while its admin sessions stayed open")
+	if f.countEvents("DeleteGateway edge") != 1 {
+		t.Fatalf("events %v, want the gateway deleted", f.events)
+	}
+	if len(f.warns) != 1 || !strings.Contains(f.warns[0], "edge") || !strings.Contains(f.warns[0], "db down") {
+		t.Fatalf("warnings %q", f.warns)
 	}
 }
 
@@ -615,5 +630,51 @@ func TestInternalAccessReachesTheGatewaysAdminPort(t *testing.T) {
 	}
 	if !slices.Equal(a.secrets, []string{"org_x/proj_x/env_x/edge/admin-api-token"}) {
 		t.Fatalf("secrets %v", a.secrets)
+	}
+}
+
+func TestReleasedBumpsEveryAffectedGatewayBeforeSyncing(t *testing.T) {
+	f := newHookFixture(t)
+	f.hooks.releaseTimeout = 50 * time.Millisecond
+	f.block = true
+	// billing feeds edge over FARP and has a manual route on inner.
+	billing := farpBilling(t, "edge")
+	f.bindings[3] = billing
+	route := authRoute()
+	route.GatewayRef, route.Service, route.Port = hookRef("inner"), "billing", 8080
+	f.store.routes = []*Route{route}
+	if err := f.hooks.Released(context.Background(), release(billing, false)); err == nil {
+		t.Fatal("Released succeeded with Octopus down")
+	}
+	for name, want := range map[string]int64{"edge": 3, "inner": 6} {
+		g := f.gateway(name)
+		if g.Generation != want {
+			t.Errorf("%s's generation = %d, want %d: the hung sync kept it from being marked", name, g.Generation, want)
+		}
+		// What the sync did is recorded after the deadline passed.
+		if g.State.Error != msgUnavailable {
+			t.Errorf("%s's recorded sync error = %q, want %q", name, g.State.Error, msgUnavailable)
+		}
+	}
+	if i, j := slices.Index(f.events, "BumpGeneration inner"), slices.Index(f.events, "SaveSyncState edge"); i < 0 || j < 0 || i > j {
+		t.Fatalf("events %v, want every bump before the first sync records", f.events)
+	}
+}
+
+func TestReadyFailsWhenTheSyncCantBeRecorded(t *testing.T) {
+	f := newHookFixture(t)
+	f.store.saveErr = errors.New("db down")
+	run := f.run("edge")
+	run.Channel = func(context.Context, string, string) (*deployments.ComponentChannel, error) {
+		return nil, errors.New("connection refused")
+	}
+	// Octopus down alone is pending and not an error; the store failing to
+	// record it is Loomplane's failure.
+	err := f.hooks.Ready(context.Background(), run)
+	if err == nil || !strings.Contains(err.Error(), "db down") {
+		t.Fatalf("Ready = %v, want the store's failure", err)
+	}
+	if !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("Ready's error %v no longer says Octopus was unavailable", err)
 	}
 }

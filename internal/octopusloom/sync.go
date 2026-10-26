@@ -44,6 +44,25 @@ const (
 	msgRefused     = "Octopus refused Loomplane's admin requests. Loomplane tries again within 30 seconds."
 )
 
+// saveTimeout bounds recording what a sync did. The record is made apart
+// from the sync's own context, so a sync that ran out of time still
+// records how far it got.
+const saveTimeout = 5 * time.Second
+
+// errLoomplaneSide marks a sync that stopped on Loomplane's side rather
+// than Octopus's: the store, the bindings, the hostnames or the secrets.
+// Test with errors.Is.
+var errLoomplaneSide = errors.New("loomplane couldn't sync the gateway")
+
+// loomplaneError is err marked errLoomplaneSide. Its text is err's.
+type loomplaneError struct{ err error }
+
+func (e loomplaneError) Error() string        { return e.err.Error() }
+func (e loomplaneError) Unwrap() error        { return e.err }
+func (e loomplaneError) Is(target error) bool { return target == errLoomplaneSide }
+
+func ours(err error) error { return loomplaneError{err: err} }
+
 // Origins of the routes Loomplane put in Octopus: from the config file it
 // rendered, or from the admin API. Octopus reports a config route replaced
 // at runtime as admin until it restarts.
@@ -78,8 +97,9 @@ type HostnameSource interface {
 
 // NoHostnames is a HostnameSource with no hostnames attached to any
 // service. Loomplane wires it until the Domains routes can list a service's
-// attached hostnames; until then FARP routes answer on any host and no
-// attached hostname reaches the config.
+// attached hostnames, when an adapter over cloudinfra.Service.ServiceHostnames
+// replaces it; until then FARP routes answer on any host and no attached
+// hostname reaches the config.
 func NoHostnames() HostnameSource { return noHostnames{} }
 
 type noHostnames struct{}
@@ -155,7 +175,7 @@ func (s *Syncer) SyncWith(ctx context.Context, ref GatewayRef, open ChannelOpene
 		}
 		return res, fmt.Errorf("sync Octopus gateway %s: %w", ref.Resource, err)
 	case err != nil:
-		return SyncResult{State: SyncFailed, Message: msgInternal}, fmt.Errorf("sync Octopus gateway %s: %w", ref.Resource, err)
+		return SyncResult{State: SyncFailed, Message: msgInternal}, fmt.Errorf("sync Octopus gateway %s: %w", ref.Resource, ours(err))
 	}
 	return res, syncErr
 }
@@ -163,25 +183,25 @@ func (s *Syncer) SyncWith(ctx context.Context, ref GatewayRef, open ChannelOpene
 func (s *Syncer) syncLocked(ctx context.Context, ref GatewayRef, open ChannelOpener, secret SecretReader) (SyncResult, error) {
 	g, err := s.Store.Gateway(ctx, ref)
 	if err != nil {
-		return SyncResult{State: SyncFailed, Message: msgInternal}, fmt.Errorf("sync Octopus gateway %s: %w", ref.Resource, err)
+		return SyncResult{State: SyncFailed, Message: msgInternal}, fmt.Errorf("sync Octopus gateway %s: %w", ref.Resource, ours(err))
 	}
 	d, routes, found, err := s.desired(ctx, g)
 	if err != nil {
-		return s.failed(ctx, g, msgInternal, err)
+		return s.failed(ctx, g, msgInternal, ours(err))
 	}
 	if !found {
 		return s.pending(ctx, g, nil, msgNotRunning, errors.New("the gateway has no binding"))
 	}
 	if open == nil || secret == nil {
-		return s.failed(ctx, g, msgInternal, errors.New("the syncer has no way to reach Octopus"))
+		return s.failed(ctx, g, msgInternal, ours(errors.New("the syncer has no way to reach Octopus")))
 	}
 	adminToken, err := secret(ctx, ref, adminTokenSecret)
 	if err != nil {
-		return s.failed(ctx, g, msgCredentials, err)
+		return s.failed(ctx, g, msgCredentials, ours(err))
 	}
 	farpToken, err := secret(ctx, ref, farpTokenSecret)
 	if err != nil {
-		return s.failed(ctx, g, msgCredentials, err)
+		return s.failed(ctx, g, msgCredentials, ours(err))
 	}
 	ch, err := open(ctx, ref)
 	if err != nil {
@@ -225,8 +245,12 @@ func (s *Syncer) now() time.Time {
 	return time.Now()
 }
 
-// desired builds what g should hold. found is false when the gateway's own
-// binding isn't there, so there is no knowing which services it can reach.
+// desired builds what g should hold, from the environment's bindings, the
+// gateway's manual routes and the hostnames attached to it: the one place
+// both the rendered config file and the admin API push get it from. found
+// is false when the gateway's own binding isn't there, as on a first
+// deploy: d is then built without a connection, so no service is
+// reachable, and a sync has no knowing which services it can reach.
 func (s *Syncer) desired(ctx context.Context, g *Gateway) (d Desired, routes []*Route, found bool, err error) {
 	if s.Bindings == nil {
 		return Desired{}, nil, false, errors.New("the syncer can't list bindings")
@@ -236,9 +260,6 @@ func (s *Syncer) desired(ctx context.Context, g *Gateway) (d Desired, routes []*
 		return Desired{}, nil, false, fmt.Errorf("list the environment's bindings: %w", err)
 	}
 	connectionID, found := gatewayConnection(bindings, g.Resource)
-	if !found {
-		return Desired{}, nil, false, nil
-	}
 	routes, err = s.Store.Routes(ctx, g.GatewayRef)
 	if err != nil {
 		return Desired{}, nil, false, fmt.Errorf("read the gateway's routes: %w", err)
@@ -254,7 +275,7 @@ func (s *Syncer) desired(ctx context.Context, g *Gateway) (d Desired, routes []*
 		}
 	}
 	d = BuildDesired(DesiredInput{Gateway: *g, ConnectionID: connectionID, Bindings: bindings, Routes: routes, Hostnames: hostnames})
-	return d, routes, true, nil
+	return d, routes, found, nil
 }
 
 // gatewayConnection is the connection the gateway's Octopus component runs
@@ -288,10 +309,21 @@ func (s *Syncer) pending(ctx context.Context, g *Gateway, run *syncRun, msg stri
 		}
 	}
 	err := fmt.Errorf("sync Octopus gateway %s: %w", g.Resource, cause)
-	if saveErr := s.Store.SaveSyncState(ctx, g.GatewayRef, g.AppliedGeneration, state); saveErr != nil {
-		err = errors.Join(err, fmt.Errorf("record the sync: %w", saveErr))
+	if saveErr := s.save(ctx, g.GatewayRef, g.AppliedGeneration, state); saveErr != nil {
+		err = errors.Join(err, saveErr)
 	}
 	return res, err
+}
+
+// save records what a sync did, on a context of its own that the sync's
+// deadline doesn't end. A failure is Loomplane's.
+func (s *Syncer) save(ctx context.Context, ref GatewayRef, applied int64, state SyncState) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), saveTimeout)
+	defer cancel()
+	if err := s.Store.SaveSyncState(ctx, ref, applied, state); err != nil {
+		return ours(fmt.Errorf("record the sync: %w", err))
+	}
+	return nil
 }
 
 // failed records a sync that couldn't run, keeping the rest of the state.
@@ -299,8 +331,8 @@ func (s *Syncer) failed(ctx context.Context, g *Gateway, msg string, cause error
 	state := g.State
 	state.Error = msg
 	err := fmt.Errorf("sync Octopus gateway %s: %w", g.Resource, cause)
-	if saveErr := s.Store.SaveSyncState(ctx, g.GatewayRef, g.AppliedGeneration, state); saveErr != nil {
-		err = errors.Join(err, fmt.Errorf("record the sync: %w", saveErr))
+	if saveErr := s.save(ctx, g.GatewayRef, g.AppliedGeneration, state); saveErr != nil {
+		err = errors.Join(err, saveErr)
 	}
 	return SyncResult{State: SyncFailed, Message: msg, Generation: g.Generation}, err
 }
@@ -351,9 +383,9 @@ func (s *Syncer) finish(ctx context.Context, g *Gateway, run *syncRun) (SyncResu
 	case run.restored > 0:
 		res.Message = fmt.Sprintf("Octopus restarted. Loomplane put back %d of its routes and upstreams.", run.restored)
 	}
-	if saveErr := s.Store.SaveSyncState(ctx, g.GatewayRef, applied, state); saveErr != nil {
+	if saveErr := s.save(ctx, g.GatewayRef, applied, state); saveErr != nil {
 		res.State, res.Message = SyncFailed, msgInternal
-		err = errors.Join(err, fmt.Errorf("sync Octopus gateway %s: record the sync: %w", g.Resource, saveErr))
+		err = errors.Join(err, fmt.Errorf("sync Octopus gateway %s: %w", g.Resource, saveErr))
 	}
 	return res, err
 }

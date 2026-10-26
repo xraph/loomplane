@@ -354,7 +354,7 @@ func (e *Extension) Register(fapp forge.App) error {
 		Warn: func(msg string, err error) { log.Warn(msg, forge.F("error", err.Error())) },
 	}
 	octopusHooks := octopusloom.NewHooks(octopusloom.HookDeps{
-		Store: octopusStore, Syncer: octopusSyncer, Bindings: octopusSyncer.Bindings, Hostnames: octopusSyncer.Hostnames, Revoker: e.catalogAdmin,
+		Store: octopusStore, Syncer: octopusSyncer, Revoker: e.catalogAdmin,
 	})
 	catalogHooks[recipes.OctopusKind] = octopusHooks
 	observers = append(observers, octopusHooks)

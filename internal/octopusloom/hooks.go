@@ -56,15 +56,13 @@ func resourceRef(ref GatewayRef) deployments.ResourceRef {
 	return deployments.ResourceRef{ProjectID: ref.ProjectID, EnvironmentID: ref.EnvironmentID, Resource: ref.Resource}
 }
 
-// HookDeps are what the Octopus kind's hooks use. Bindings and Hostnames
-// are the same ones the Syncer reads; a nil Hostnames attaches nothing,
-// and a nil Revoker ends no sessions.
+// HookDeps are what the Octopus kind's hooks use. The config file is built
+// from what the Syncer reads, so it and what the Syncer pushes agree. A nil
+// Revoker ends no sessions.
 type HookDeps struct {
-	Store     Store
-	Syncer    *Syncer
-	Bindings  BindingLister
-	Hostnames HostnameSource
-	Revoker   Revoker
+	Store   Store
+	Syncer  *Syncer
+	Revoker Revoker
 }
 
 // Hooks are the Octopus kind's catalog hooks and its release observer.
@@ -113,32 +111,14 @@ func (h *Hooks) Files(ctx context.Context, run deployments.ComponentRun) (map[st
 			return nil, fmt.Errorf("record Octopus gateway %s: %w", ref.Resource, err)
 		}
 	}
-	if h.d.Bindings == nil {
-		return nil, errors.New("the Octopus hooks can't list bindings")
-	}
-	bindings, err := h.d.Bindings(ctx, run.OrgID, run.EnvironmentID)
+	// On a first deploy the gateway has no binding yet, so d has no
+	// connection and the found the Syncer needs doesn't matter here: no
+	// manual route can exist before the gateway's row, and registrations
+	// happen at runtime, so rendering without one leaves nothing out.
+	d, _, _, err := h.d.Syncer.desired(ctx, g)
 	if err != nil {
-		return nil, fmt.Errorf("list the environment's bindings: %w", err)
+		return nil, fmt.Errorf("work out what Octopus gateway %s serves: %w", ref.Resource, err)
 	}
-	// On a first deploy the gateway has no binding yet: no manual route
-	// can exist before its row, and registrations happen at runtime, so
-	// rendering without a connection leaves nothing out.
-	connectionID, _ := gatewayConnection(bindings, run.Resource)
-	routes, err := h.d.Store.Routes(ctx, ref)
-	if err != nil {
-		return nil, fmt.Errorf("read Octopus gateway %s's routes: %w", ref.Resource, err)
-	}
-	var hostnames []string
-	if h.d.Hostnames != nil {
-		attached, herr := h.d.Hostnames.ServiceHostnames(ctx, run.OrgID, run.ProjectID, run.EnvironmentID, GatewayAction(run.Resource))
-		if herr != nil {
-			return nil, fmt.Errorf("read Octopus gateway %s's hostnames: %w", ref.Resource, herr)
-		}
-		for _, a := range attached {
-			hostnames = append(hostnames, a.Hostname)
-		}
-	}
-	d := BuildDesired(DesiredInput{Gateway: *g, ConnectionID: connectionID, Bindings: bindings, Routes: routes, Hostnames: hostnames})
 	cfg, err := RenderConfig(d)
 	if err != nil {
 		return nil, fmt.Errorf("render Octopus gateway %s's config: %w", ref.Resource, err)
@@ -174,28 +154,23 @@ func (h *Hooks) Ready(ctx context.Context, run deployments.ComponentRun) error {
 	if err == nil {
 		return nil
 	}
-	if loomplaneFailure(res) {
+	if errors.Is(err, errLoomplaneSide) {
 		return fmt.Errorf("push Octopus gateway %s's routes: %w", run.Resource, err)
 	}
 	h.d.Syncer.warn(fmt.Sprintf("Octopus gateway %s is up, and its routes are %s: %s", run.Resource, res.State, res.Message), err)
 	return nil
 }
 
-// loomplaneFailure reports whether a sync stopped on Loomplane's side,
-// before it could ask Octopus anything: the store, the bindings or the
-// secrets.
-func loomplaneFailure(res SyncResult) bool {
-	return res.Message == msgInternal || res.Message == msgCredentials
-}
-
 // Removed implements deployments.CatalogHooks. It ends the admin sessions
-// open on the gateway, then forgets the gateway and its manual routes.
+// open on the gateway, then forgets the gateway and its manual routes. A
+// session left open only warns, as the owned targets' own ending of them
+// does: nothing it reaches is there any more, and it expires on its own.
 // Domain routes to the gateway keep it from being removed before this
 // (ValidateRuntimeRemoval).
 func (h *Hooks) Removed(ctx context.Context, res deployments.ComposedResource) error {
 	if h.d.Revoker != nil {
 		if err := h.d.Revoker.RevokeResource(ctx, res.OrgID, res.EnvironmentID, res.Resource); err != nil {
-			return fmt.Errorf("end the admin sessions open on %s: %w", res.Resource, err)
+			h.d.Syncer.warn(fmt.Sprintf("the admin sessions open on Octopus gateway %s couldn't be ended, and expire on their own once idle", res.Resource), err)
 		}
 	}
 	ref := GatewayRef{OrgID: res.OrgID, ProjectID: res.ProjectID, EnvironmentID: res.EnvironmentID, Resource: res.Resource}
@@ -209,9 +184,11 @@ func (h *Hooks) Removed(ctx context.Context, res deployments.ComposedResource) e
 // release's environment that the service feeds gets a new generation and
 // a sync: one the service opts in to over FARP, one with a manual route to
 // it, and one it's registered with, which is how a removed or opted-out
-// service is deregistered. The syncs share 10 seconds; one that doesn't
-// get through leaves the generation for the reconcile. It returns the
-// first error.
+// service is deregistered. Every affected gateway gets its generation
+// before any sync runs, so one sync that hangs can't keep the others from
+// being marked for the reconcile. The syncs share 10 seconds; one that
+// doesn't get through leaves the generation for the reconcile. It returns
+// the first error.
 func (h *Hooks) Released(ctx context.Context, r deployments.Release) error {
 	b := r.Binding
 	if b == nil || b.Subject != planning.ServiceSubject {
@@ -228,6 +205,7 @@ func (h *Hooks) Released(ctx context.Context, r deployments.Release) error {
 		cfg = planning.ServiceConfig{}
 	}
 	var first error
+	var bumped []GatewayRef
 	keep := func(err error) {
 		if first == nil {
 			first = err
@@ -251,7 +229,10 @@ func (h *Hooks) Released(ctx context.Context, r deployments.Release) error {
 			}
 			continue
 		}
-		if _, err := h.d.Syncer.Sync(ctx, g.GatewayRef); err != nil {
+		bumped = append(bumped, g.GatewayRef)
+	}
+	for _, ref := range bumped {
+		if _, err := h.d.Syncer.Sync(ctx, ref); err != nil {
 			keep(err)
 		}
 	}
