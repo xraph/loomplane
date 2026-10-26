@@ -319,3 +319,40 @@ func TestCanaryOnContainerAppsNeedsTheCanaryActions(t *testing.T) {
 		t.Fatalf("executable %v, release %+v, problems %+v", r.Executable, r.Release, r.Problems)
 	}
 }
+
+// Container Apps applies ingress to every revision at once, so a release
+// that changes it can't canary: the baseline would take the change too.
+func TestCanaryOnContainerAppsRefusesAnAppWideChange(t *testing.T) {
+	in := releaseInput(t, releaseYAML(canaryRelease))
+	for what, change := range map[string]Change{
+		"port":   {Field: "port", From: "8080", To: "9090"},
+		"public": {Field: "public", From: "true", To: "false"},
+	} {
+		t.Run(what, func(t *testing.T) {
+			api := serviceAction("api", "azure-container-apps", Update, ServiceConfig{Public: true, Port: 8080})
+			api.Changes = []Change{{Field: "commit", From: "abc", To: "def"}, change}
+			r := &Result{Actions: []Action{api}, Executable: true}
+			planRelease(in, r)
+			if r.Executable || r.Release.Ramps(api.ID) || len(r.Problems) != 1 {
+				t.Fatalf("executable %v, release %+v, problems %+v", r.Executable, r.Release, r.Problems)
+			}
+			p := r.Problems[0]
+			for _, want := range []string{what + " " + change.From + " to " + change.To, "app-wide", "direct or blue_green"} {
+				if p.Code != codeCanaryAppWide || p.Name != "api" || !strings.Contains(p.Message, want) {
+					t.Fatalf("problem %+v doesn't say %q", p, want)
+				}
+			}
+		})
+	}
+	// A release that keeps the ingress canaries; so does one on Cloud Run
+	// that changes its port, since each revision there has its own.
+	api := serviceAction("api", "azure-container-apps", Update, ServiceConfig{Public: true, Port: 8080})
+	api.Changes = []Change{{Field: "commit", From: "abc", To: "def"}}
+	run := serviceAction("web", "cloud-run", Update, ServiceConfig{Public: true, Port: 9090})
+	run.Changes = []Change{{Field: "port", From: "8080", To: "9090"}}
+	r := &Result{Actions: []Action{api, run}, Executable: true}
+	planRelease(in, r)
+	if !r.Executable || !r.Release.Ramps(api.ID) || !r.Release.Ramps(run.ID) || len(r.Problems) != 0 {
+		t.Fatalf("executable %v, release %+v, problems %+v", r.Executable, r.Release, r.Problems)
+	}
+}

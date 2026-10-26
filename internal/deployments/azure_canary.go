@@ -287,6 +287,11 @@ func (c *azureCanary) start(ctx context.Context, candidate azure.App, restoreBas
 		return err
 	}
 	left := c.deactivate(ctx, earlier)
+	// The PUT replaces the app's secrets, so the baseline's, and those of
+	// anything Azure wouldn't deactivate, go back as they are.
+	if _, err := azureKeepSecrets(ctx, c.s, c.app, &candidate); err != nil {
+		return fmt.Errorf("keep the secrets the baseline reads: %w", err)
+	}
 	if err := c.startIn(ctx, candidate); err != nil {
 		// Detached, so a start that failed because its context ended still
 		// cleans up. When that was the action's deadline, a retry may start
@@ -442,12 +447,14 @@ func (c *azureCanary) remove(ctx context.Context, restoreBase string) error {
 	}
 	others, err := c.others(ctx)
 	if err != nil {
-		if c.note != nil {
-			c.note(fmt.Sprintf("Revisions other than the baseline may be left active, taking no traffic: %v", err))
-		}
-		return nil
+		return fmt.Errorf("read what's still active beside the baseline: %w", err)
 	}
 	c.noteLeft(c.deactivate(ctx, others))
+	// The candidate's own secrets hold the release's values. Nothing active
+	// reads them now.
+	if perr := azurePruneSecrets(ctx, c.s, c.app); perr != nil && c.note != nil {
+		c.note(fmt.Sprintf("The candidate's secrets are left on the container app: %v", perr))
+	}
 	return nil
 }
 
@@ -521,40 +528,6 @@ func azureReleaseTemplate(job *Job, image, suffix string) azure.Template {
 	return t
 }
 
-// keptSecrets are the app's secrets the baseline reads, with their values
-// as Azure lists them, less any candidate already sets, so the
-// candidate's PUT keeps them as they are. Secrets nothing active reads,
-// such as an earlier candidate's, are dropped.
-func (c *azureCanary) keptSecrets(ctx context.Context, baseline *azure.Revision, candidate azure.App) ([]azure.Secret, error) {
-	read := map[string]bool{}
-	for _, ctr := range baseline.Properties.Template.Containers {
-		for _, e := range ctr.Env {
-			if e.SecretRef != "" {
-				read[e.SecretRef] = true
-			}
-		}
-	}
-	if len(read) == 0 {
-		return nil, nil
-	}
-	listed, err := c.s.ListSecrets(ctx, c.app)
-	if err != nil {
-		return nil, err
-	}
-	var kept []azure.Secret
-	for _, sec := range listed {
-		set := slices.ContainsFunc(candidate.Properties.Configuration.Secrets, func(s azure.Secret) bool { return s.Name == sec.Name })
-		if read[sec.Name] && !set {
-			kept = append(kept, sec)
-			delete(read, sec.Name)
-		}
-	}
-	if len(read) > 0 {
-		return nil, fmt.Errorf("container app %s doesn't list the secrets its baseline reads: %s", c.name, strings.Join(slices.Sorted(maps.Keys(read)), ", "))
-	}
-	return kept, nil
-}
-
 // ApplyCandidate implements Weighted. It checks the service principal may
 // read and deactivate revisions and list secrets, picks the baseline,
 // builds the image as Apply does, then starts the candidate as a revision
@@ -588,6 +561,9 @@ func (a *Azure) ApplyCandidate(ctx context.Context, job *Job) (*CanaryTarget, er
 	if app.Properties.Configuration.Ingress == nil {
 		return nil, fmt.Errorf("%s can't ramp a canary: container app %s takes no HTTP traffic", job.Action.Name, c.name)
 	}
+	if changes := app.IngressChanges(azureAppIngress(cfg, nil)); len(changes) > 0 {
+		return nil, azureAppWideRefusal(job, c.name, changes)
+	}
 	baseline, err := azureBaseline(ctx, job, c, app)
 	if err != nil {
 		return nil, err
@@ -606,15 +582,21 @@ func (a *Azure) ApplyCandidate(ctx context.Context, job *Job) (*CanaryTarget, er
 	candidate := azureApp(job, cfg, r.location, r.env.ID, r.pull, r.state.Image, azure.MultipleRevisions, c.alone())
 	candidate.Properties.Template.RevisionSuffix = suffix
 	azureCandidateSecrets(&candidate.Properties.Template, candidate.Properties.Configuration.Secrets, suffix)
-	kept, err := c.keptSecrets(ctx, baseline, candidate)
-	if err != nil {
-		return nil, err
+	// How the app pulls only shows once the release is set up.
+	if changes := app.AppWideChanges(candidate); len(changes) > 0 {
+		return nil, azureAppWideRefusal(job, c.name, changes)
 	}
-	candidate.Properties.Configuration.Secrets = append(candidate.Properties.Configuration.Secrets, kept...)
 	if err := c.start(ctx, candidate, azureRestoreSuffix(job.Deployment.ID, job.Deployment.Retries)); err != nil {
 		return nil, err
 	}
 	return &CanaryTarget{Baseline: c.baseline, Candidate: c.candidate, Image: r.state.Image, Refs: map[string]string{azureRefApp: c.app}}, nil
+}
+
+// azureAppWideRefusal refuses a canary of a release that changes what
+// Container Apps applies to every revision at once.
+func azureAppWideRefusal(job *Job, app string, changes []string) error {
+	return fmt.Errorf("%s can't run a canary: this release changes container app %s's %s, which Container Apps applies app-wide, to every revision at once, the baseline included. Release this environment direct or blue_green once to make that change",
+		job.Action.Name, app, strings.Join(changes, ", "))
 }
 
 // canaryPermissions refuses a canary whose service principal may not read
