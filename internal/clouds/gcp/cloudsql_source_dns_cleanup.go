@@ -11,6 +11,9 @@ import (
 )
 
 func (s *Session) deletePSCSourceDNS(ctx context.Context, project, network string, owned SQLPSCSourceDNSState, endpoint SQLPSCProvisionedEndpoint, state *SQLPSCCleanupState, save func(SQLPSCCleanupState) error, check func(context.Context) error) error {
+	if owned.ZoneID == "" {
+		return check(ctx)
+	}
 	want := pscDNSZone{Name: "lp-psc-" + owned.Scope[:24], DNSName: strings.TrimSuffix(endpoint.DNSName, ".") + ".", Description: "loomplane-psc:" + owned.Scope, Visibility: "private"}
 	zoneURL := s.c.url("dns.googleapis.com", "/dns/v1/projects/"+project+"/managedZones/"+owned.ZoneID)
 	guard := func() error {
@@ -35,6 +38,16 @@ func (s *Session) deletePSCSourceDNS(ctx context.Context, project, network strin
 	}
 	if state.ZoneComplete {
 		return errPSCProvision
+	}
+	if owned.RecordRequest == "" && !state.Records.Complete {
+		if err := s.verifyPSCRecords(ctx, zoneURL, want.DNSName, nil, guard); err != nil {
+			return err
+		}
+		next := *state
+		next.Records.Complete = true
+		if err := save(next); err != nil {
+			return err
+		}
 	}
 	records := pscSourceRecords(want.DNSName, endpoint.Address, owned.RecordRequest)
 	if !state.Records.Complete {

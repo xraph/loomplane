@@ -15,8 +15,30 @@ import (
 )
 
 func TestPSCSourceCleanupKeepsOwnedIdentitiesAcrossRetry(t *testing.T) {
+	var cases []struct{ stage, scenario string }
 	for _, scenario := range []string{"async-failed-once", "retry-rejected-records", "retry-rejected-rule", "address-still-in-use", "pending", "lost-rule-pending", "checkpoint-after-rule", "delete", "lost-records", "lost-zone", "lost-rule", "lost-address", "denied", "save-refused", "revoked", "zone-replaced", "foreign-record", "rule-replaced", "address-in-use", "rule-replaced-at-intent", "wrong-operation", "missing-operation"} {
-		t.Run(scenario, func(t *testing.T) {
+		cases = append(cases, struct{ stage, scenario string }{"records", scenario})
+	}
+	for _, stage := range []string{"none", "address", "rule", "zone"} {
+		cases = append(cases, struct{ stage, scenario string }{stage, "delete"})
+	}
+	for stage, scenarios := range map[string][]string{
+		"address": {"lost-address", "save-refused", "revoked", "address-in-use", "address-replaced", "address-replaced-at-intent", "unresolved-address"},
+		"rule":    {"lost-rule", "lost-address", "checkpoint-after-rule", "rule-replaced", "rule-replaced-at-intent", "wrong-operation", "missing-operation", "pending", "lost-rule-pending", "address-still-in-use", "unresolved-rule"},
+		"zone":    {"lost-zone", "lost-rule", "lost-address", "save-refused", "revoked", "zone-replaced", "foreign-record", "unresolved-zone"},
+		"records": {"unresolved-records", "wrong-create-request", "missing-create-intent", "invalid-cleanup-rule", "invalid-cleanup-address"},
+	} {
+		for _, scenario := range scenarios {
+			cases = append(cases, struct{ stage, scenario string }{stage, scenario})
+		}
+	}
+	for _, tc := range cases {
+		t.Run(tc.stage+"/"+tc.scenario, func(t *testing.T) {
+			scenario := tc.scenario
+			hasAddress := tc.stage != "none"
+			hasRule := tc.stage == "rule" || tc.stage == "zone" || tc.stage == "records"
+			hasZone := tc.stage == "zone" || tc.stage == "records"
+			hasRecords := tc.stage == "records"
 			const network = "projects/app-project/global/networks/apps"
 			const prefix = "projects/app-project/regions/us-central1"
 			const rule = prefix + "/forwardingRules/database"
@@ -25,10 +47,10 @@ func TestPSCSourceCleanupKeepsOwnedIdentitiesAcrossRetry(t *testing.T) {
 			dnsScope := strings.Repeat("b", 64)
 			endpoint := SQLPSCProvisionedEndpoint{AddressID: "456", ForwardingRuleID: "789", Address: "10.20.0.8", DNSName: "source-db.us-central1.sql.goog.", ServiceAttachment: "projects/sql-tenant/regions/us-central1/serviceAttachments/source"}
 			spec := SQLPSCProvisionSpec{Source: pscPITRSpec(), PhysicalID: "cloud-sql:" + strings.Repeat("c", 64), Subnetwork: subnet, Endpoint: provider.CloudSQLSourceEndpoint{ConsumerProject: "app-project", Network: network, ForwardingRule: rule}}
-			creation := func(id string) PSCComputeState {
-				return PSCComputeState{Attempted: true, RequestID: uuid.NewString(), Operation: "create-original", OperationID: "123", ResourceID: id, Complete: true}
+			creation := func(id, path string) PSCComputeState {
+				return PSCComputeState{Attempted: true, RequestID: uuid.NewSHA1(uuid.NameSpaceURL, []byte(scope+"/"+path)).String(), Operation: "create-original", OperationID: "123", ResourceID: id, Complete: true}
 			}
-			owned := SQLPSCProvisionState{Version: 2, Scope: scope, SourceProject: "source-project", SourcePhysicalID: spec.PhysicalID, Subnet: SQLApplicationNetwork{Route: provider.CloudSQLApplicationNetwork{ConsumerProject: "app-project", Network: network, Subnetwork: subnet}, ID: "234", IPCIDR: "10.20.0.0/28"}, Address: creation("456"), ForwardingRule: creation("789"), DNS: SQLPSCSourceDNSState{Scope: dnsScope, ZoneRequest: uuid.NewString(), ZoneID: "678", RecordRequest: uuid.NewString(), ChangeID: "1", Complete: true}}
+			owned := SQLPSCProvisionState{Version: 2, Scope: scope, SourceProject: "source-project", SourcePhysicalID: spec.PhysicalID, Subnet: SQLApplicationNetwork{Route: provider.CloudSQLApplicationNetwork{ConsumerProject: "app-project", Network: network, Subnetwork: subnet}, ID: "234", IPCIDR: "10.20.0.0/28"}, Address: creation("456", prefix+"/addresses/lp-psc-"+scope[:24]), ForwardingRule: creation("789", rule), DNS: SQLPSCSourceDNSState{Scope: dnsScope, ZoneRequest: uuid.NewString(), ZoneID: "678", RecordRequest: uuid.NewString(), ChangeID: "1", Complete: true}}
 			addressPath := prefix + "/addresses/lp-psc-" + scope[:24]
 			records := pscSourceRecords(endpoint.DNSName, endpoint.Address, owned.DNS.RecordRequest)
 			var zone pscDNSZone
@@ -39,6 +61,42 @@ func TestPSCSourceCleanupKeepsOwnedIdentitiesAcrossRetry(t *testing.T) {
 			objects := map[string]map[string]any{
 				rule:        {"kind": "compute#forwardingRule", "id": "789", "name": "database", "selfLink": rule, "region": prefix, "network": network, "target": endpoint.ServiceAttachment, "IPAddress": endpoint.Address, "pscConnectionStatus": "ACCEPTED", "description": "loomplane-psc:" + scope, "allowPscGlobalAccess": false},
 				addressPath: {"kind": "compute#address", "id": "456", "name": "lp-psc-" + scope[:24], "selfLink": addressPath, "region": prefix, "description": "loomplane-psc:" + scope, "address": endpoint.Address, "addressType": "INTERNAL", "purpose": "GCE_ENDPOINT", "subnetwork": subnet, "status": "RESERVED"},
+			}
+			if !hasRecords {
+				owned.DNS.RecordRequest, owned.DNS.ChangeID, owned.DNS.Complete = "", "", false
+				records = nil
+			}
+			if !hasZone {
+				owned.DNS = SQLPSCSourceDNSState{}
+				if hasRule {
+					owned.DNS.Scope = dnsScope
+				}
+			}
+			if !hasRule {
+				owned.ForwardingRule = PSCComputeState{}
+				endpoint.ForwardingRuleID = ""
+				objects[rule]["id"] = "unowned-rule"
+			}
+			if !hasAddress {
+				owned.Address = PSCComputeState{}
+				endpoint.AddressID, endpoint.Address = "", ""
+				objects[addressPath]["id"] = "unowned-address"
+			}
+			switch scenario {
+			case "unresolved-address":
+				owned.Address.Complete = false
+			case "unresolved-rule":
+				owned.ForwardingRule.Complete = false
+			case "unresolved-zone":
+				owned.DNS.ZoneID = ""
+			case "unresolved-records":
+				owned.DNS.Complete = false
+			case "wrong-create-request":
+				owned.Address.RequestID = uuid.NewString()
+			case "missing-create-intent":
+				owned.Address.Attempted = false
+			case "address-replaced":
+				objects[addressPath]["id"] = "999"
 			}
 			if scenario == "zone-replaced" {
 				zone.ID = "999"
@@ -62,14 +120,19 @@ func TestPSCSourceCleanupKeepsOwnedIdentitiesAcrossRetry(t *testing.T) {
 			var rejectedRequest string
 			ops := map[string]pscComputeOperation{}
 			writes := map[string]int{}
-			zoneGone, revoked, lost, checkpointRefused := false, false, false, false
+			zoneGone, revoked, lost, checkpointRefused := !hasZone, false, false, false
+			requests := 0
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests++
 				w.Header().Set("Content-Type", "application/json")
 				if scenario == "denied" {
 					w.WriteHeader(403)
 					return
 				}
 				if strings.HasPrefix(r.URL.Path, "/dns/") {
+					if !hasZone {
+						t.Error("accessed unowned DNS zone", r.Method, r.URL.Path)
+					}
 					if !strings.Contains(r.URL.Path, "/managedZones/678") {
 						t.Error("DNS used mutable zone name", r.URL.Path)
 					}
@@ -149,6 +212,9 @@ func TestPSCSourceCleanupKeepsOwnedIdentitiesAcrossRetry(t *testing.T) {
 					_ = json.NewEncoder(w).Encode(op)
 					return
 				}
+				if path == rule && !hasRule || path == addressPath && !hasAddress {
+					t.Error("accessed unowned Compute resource", r.Method, path)
+				}
 				obj := objects[path]
 				if obj == nil {
 					w.WriteHeader(404)
@@ -168,7 +234,7 @@ func TestPSCSourceCleanupKeepsOwnedIdentitiesAcrossRetry(t *testing.T) {
 					if !kept.Attempted || kept.RequestID != r.URL.Query().Get("requestId") || !zoneGone {
 						t.Error("compute deletion before durable intent or DNS removal")
 					}
-					if kind == "address" && objects[rule] != nil {
+					if kind == "address" && hasRule && objects[rule] != nil {
 						t.Error("address deletion preceded rule")
 					}
 					op := pscComputeOperation{Kind: "compute#operation", ID: "999", RequestID: kept.RequestID, Type: "delete", Target: path, TargetID: obj["id"].(string)}
@@ -210,16 +276,25 @@ func TestPSCSourceCleanupKeepsOwnedIdentitiesAcrossRetry(t *testing.T) {
 			defer srv.Close()
 			s := &Session{c: New(srv.URL), key: &Key{ProjectID: "source-project"}, http: srv.Client()}
 			save := func(next SQLPSCCleanupState) error {
+				if strings.HasPrefix(scenario, "invalid-cleanup-") && !checkpointRefused {
+					checkpointRefused = true
+					saved = next
+					return errors.New("interrupted after initial cleanup checkpoint")
+				}
 				if scenario == "checkpoint-after-rule" && next.ForwardingRule.Operation != "" && !checkpointRefused {
 					checkpointRefused = true
 					return errors.New("checkpoint unavailable")
 				}
 
-				if scenario == "save-refused" && next.Records.RequestID != "" {
+				intent := next.Records.RequestID != "" || next.ZoneRequest != "" || next.ForwardingRule.Attempted || next.Address.Attempted
+				if scenario == "save-refused" && intent {
 					return errors.New("storage unavailable")
 				}
-				if scenario == "revoked" && next.Records.RequestID != "" {
+				if scenario == "revoked" && intent {
 					revoked = true
+				}
+				if scenario == "address-replaced-at-intent" && next.Address.Attempted {
+					objects[addressPath]["id"] = "999"
 				}
 				if scenario == "rule-replaced-at-intent" && next.ForwardingRule.Attempted {
 					objects[rule]["id"] = "999"
@@ -237,6 +312,22 @@ func TestPSCSourceCleanupKeepsOwnedIdentitiesAcrossRetry(t *testing.T) {
 				return s.DeleteSQLPSCSourceEndpoint(t.Context(), spec, owned, endpoint, &state, save, check)
 			}
 			err := run()
+			if strings.HasPrefix(scenario, "invalid-cleanup-") {
+				if err == nil || requests != 0 {
+					t.Fatal("initial checkpoint did not stop cleanup", err, requests)
+				}
+				state = saved
+				if scenario == "invalid-cleanup-rule" {
+					state.ForwardingRule.Complete = true
+				} else {
+					state.Address.Complete = true
+				}
+				err = run()
+				if err == nil || requests != 0 {
+					t.Fatal("malformed cleanup state allowed provider access", err, requests, writes)
+				}
+				return
+			}
 			if scenario == "async-failed-once" || strings.HasPrefix(scenario, "retry-rejected-") || strings.HasPrefix(scenario, "lost-") || scenario == "missing-operation" || scenario == "checkpoint-after-rule" {
 				if err == nil {
 					t.Fatal("lost response did not stop")
@@ -245,7 +336,11 @@ func TestPSCSourceCleanupKeepsOwnedIdentitiesAcrossRetry(t *testing.T) {
 				err = run()
 			}
 			switch scenario {
-			case "denied", "save-refused", "revoked", "zone-replaced", "foreign-record", "rule-replaced", "address-in-use":
+			case "unresolved-address", "unresolved-rule", "unresolved-zone", "unresolved-records", "wrong-create-request", "missing-create-intent":
+				if err == nil || requests != 0 {
+					t.Fatal("unverified ownership allowed provider access", err, requests)
+				}
+			case "denied", "address-replaced", "address-replaced-at-intent", "save-refused", "revoked", "zone-replaced", "foreign-record", "rule-replaced", "address-in-use":
 				if err == nil || len(writes) != 0 {
 					t.Fatal("unsafe cleanup", err, writes)
 				}
@@ -258,11 +353,14 @@ func TestPSCSourceCleanupKeepsOwnedIdentitiesAcrossRetry(t *testing.T) {
 					t.Fatal("unverified operation advanced", err, writes)
 				}
 			default:
-				if err != nil || !saved.Address.Complete || !saved.ForwardingRule.Complete || !saved.ZoneComplete || !saved.Records.Complete {
+				if err != nil || saved.Address.Complete != hasAddress || saved.ForwardingRule.Complete != hasRule || saved.ZoneComplete != hasZone || saved.Records.Complete != hasZone {
 					t.Fatal("cleanup incomplete", err, saved)
 				}
 				for _, kind := range []string{"records", "zone", "rule", "address"} {
-					want := 1
+					want := 0
+					if map[string]bool{"records": hasRecords, "zone": hasZone, "rule": hasRule, "address": hasAddress}[kind] {
+						want = 1
+					}
 					if scenario == "async-failed-once" && kind == "rule" {
 						want = 2
 					}

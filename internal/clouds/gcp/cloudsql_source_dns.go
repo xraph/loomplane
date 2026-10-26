@@ -101,6 +101,10 @@ func validPSCRequest(id string) bool {
 	return err == nil && value != uuid.Nil && value.String() == id
 }
 
+func invalidPSCSourceDNSState(state SQLPSCSourceDNSState, scope string) bool {
+	return state != (SQLPSCSourceDNSState{}) && (state.Scope != scope || state.ZoneRequest != "" && !validPSCRequest(state.ZoneRequest) || state.ZoneRequest == "" && (state.ZoneID != "" || state.RecordRequest != "" || state.ChangeID != "" || state.Complete) || state.ZoneID != "" && !positiveComputeID(state.ZoneID) || state.ZoneID == "" && (state.RecordRequest != "" || state.ChangeID != "" || state.Complete) || state.RecordRequest != "" && !validPSCRequest(state.RecordRequest) || state.RecordRequest == "" && (state.ChangeID != "" || state.Complete) || state.ChangeID != "" && !validSQLPathID(state.ChangeID) || state.Complete && state.ChangeID == "")
+}
+
 func (s *Session) ensurePSCSourceDNS(ctx context.Context, networkScope, project, network string, endpoint SQLPSCProvisionedEndpoint, checkpoint *SQLPSCSourceDNSState, save func(SQLPSCSourceDNSState) error, check func(context.Context) error) error {
 	return s.pscSourceDNS(ctx, networkScope, project, network, endpoint, checkpoint, save, check, true)
 }
@@ -117,7 +121,7 @@ func (s *Session) pscSourceDNS(ctx context.Context, networkScope, project, netwo
 	}
 	scope := fmt.Sprintf("%x", sha256.Sum256(raw))
 	state := *checkpoint
-	if state != (SQLPSCSourceDNSState{}) && (state.Scope != scope || state.ZoneRequest != "" && !validPSCRequest(state.ZoneRequest) || state.ZoneRequest == "" && (state.ZoneID != "" || state.RecordRequest != "" || state.ChangeID != "" || state.Complete) || state.ZoneID != "" && !positiveComputeID(state.ZoneID) || state.ZoneID == "" && (state.RecordRequest != "" || state.ChangeID != "" || state.Complete) || state.RecordRequest != "" && !validPSCRequest(state.RecordRequest) || state.RecordRequest == "" && (state.ChangeID != "" || state.Complete) || state.ChangeID != "" && !validSQLPathID(state.ChangeID) || state.Complete && state.ChangeID == "") {
+	if invalidPSCSourceDNSState(state, scope) {
 		return errPSCProvision
 	}
 	persist := func(next SQLPSCSourceDNSState) error {

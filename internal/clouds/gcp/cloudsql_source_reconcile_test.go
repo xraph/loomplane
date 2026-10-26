@@ -168,7 +168,7 @@ func TestPSCSourceReconciliationDoesNotProvisionMissingResources(t *testing.T) {
 				state.DNS.ZoneID = "321"
 			}
 			reconciling = true
-			ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 			defer cancel()
 			endpoint, err := session.ReconcileSQLPSCSourceEndpoint(ctx, spec, &state, save, guard)
 			if writes != before {

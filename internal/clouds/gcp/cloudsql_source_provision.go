@@ -368,9 +368,13 @@ func (op pscComputeOperation) matchesMutation(prefix, path, request, verb string
 	return op.Kind == "compute#operation" && positiveComputeID(op.ID) && validSQLPathID(op.Name) && op.RequestID == request && op.Type == verb && computeResource(op.Target) == path && computeResource(op.Region) == prefix && slices.Contains([]string{"PENDING", "RUNNING", "DONE"}, op.Status) && (state.Operation == "" || state.Operation == op.Name && state.OperationID == op.ID) && (state.ResourceID == "" || state.ResourceID == op.TargetID) && (op.TargetID == "" && op.Status != "DONE" || positiveComputeID(op.TargetID))
 }
 
+func invalidPSCComputeCreation(state PSCComputeState, request string) bool {
+	return state.RequestID != "" && state.RequestID != request || !state.Attempted && state != (PSCComputeState{}) || state.Attempted && state.RequestID == "" || state.Operation == "" && (state.OperationID != "" || state.ResourceID != "" || state.Complete) || state.Operation != "" && (!validSQLPathID(state.Operation) || !positiveComputeID(state.OperationID)) || state.ResourceID != "" && !positiveComputeID(state.ResourceID) || state.Complete && state.ResourceID == ""
+}
+
 func (s *Session) ensurePSCCompute(ctx context.Context, prefix, path, scope string, state PSCComputeState, body map[string]any, verify func(string) error, save func(PSCComputeState) error, check func(context.Context) error, provision bool) error {
 	request := uuid.NewSHA1(uuid.NameSpaceURL, []byte(scope+"/"+path)).String()
-	if state.RequestID != "" && state.RequestID != request || !state.Attempted && state != (PSCComputeState{}) || state.Attempted && state.RequestID == "" || state.Operation == "" && (state.OperationID != "" || state.ResourceID != "" || state.Complete) || state.Operation != "" && (!validSQLPathID(state.Operation) || !positiveComputeID(state.OperationID)) || state.ResourceID != "" && !positiveComputeID(state.ResourceID) || state.Complete && state.ResourceID == "" {
+	if invalidPSCComputeCreation(state, request) {
 		return errPSCProvision
 	}
 	if err := check(ctx); err != nil {

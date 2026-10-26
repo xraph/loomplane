@@ -32,11 +32,12 @@ type SQLPSCCleanupState struct {
 	Address        PSCComputeState     `json:"address"`
 }
 
-// DeleteSQLPSCSourceEndpoint removes a fully provisioned owned endpoint. It
-// never reads a reusable SQL instance name or deletes an external manual route.
-// Partial creation must first be reconciled through its provisioning checkpoint.
+// DeleteSQLPSCSourceEndpoint removes the reconciled resources of an owned
+// endpoint. Unattempted stages are skipped. Uncertain creation must first be
+// reconciled through its provisioning checkpoint. Cleanup does not read the
+// reusable SQL instance name or delete an external manual route.
 func (s *Session) DeleteSQLPSCSourceEndpoint(ctx context.Context, spec SQLPSCProvisionSpec, owned SQLPSCProvisionState, endpoint SQLPSCProvisionedEndpoint, checkpoint *SQLPSCCleanupState, save func(SQLPSCCleanupState) error, check func(context.Context) error) error {
-	if checkpoint == nil || save == nil || check == nil || !spec.Endpoint.Valid(spec.Source.Region) || owned.Version != 2 || owned.SourceProject != s.key.ProjectID || owned.SourcePhysicalID != spec.PhysicalID || s.checkSQLBackupSource(spec.Source.Region, spec.Source.Name, spec.PhysicalID) != nil || !validPSCScope(owned.Scope) || !validPSCScope(owned.DNS.Scope) || !owned.Address.Complete || !owned.ForwardingRule.Complete || !owned.DNS.Complete || owned.Address.ResourceID != endpoint.AddressID || owned.ForwardingRule.ResourceID != endpoint.ForwardingRuleID || !positiveComputeID(endpoint.AddressID) || !positiveComputeID(endpoint.ForwardingRuleID) || !positiveComputeID(owned.DNS.ZoneID) || !validPSCRequest(owned.DNS.RecordRequest) || !validSQLPSCName(endpoint.DNSName) {
+	if checkpoint == nil || save == nil || check == nil || !spec.Endpoint.Valid(spec.Source.Region) || owned.Version != 2 || owned.SourceProject != s.key.ProjectID || owned.SourcePhysicalID != spec.PhysicalID || s.checkSQLBackupSource(spec.Source.Region, spec.Source.Name, spec.PhysicalID) != nil || !validPSCScope(owned.Scope) || !validPSCDeletionOwnership(spec, owned, endpoint) || !validSQLPSCName(endpoint.DNSName) {
 		return errPSCProvision
 	}
 	route := owned.Subnet.Route
@@ -53,7 +54,13 @@ func (s *Session) DeleteSQLPSCSourceEndpoint(ctx context.Context, spec SQLPSCPro
 	}
 	scope := fmt.Sprintf("%x", sha256.Sum256(raw))
 	state := *checkpoint
-	if state != (SQLPSCCleanupState{}) && (state.Version != 1 || state.Scope != scope || state.Records.RequestID != "" && !validPSCRequest(state.Records.RequestID) || state.Records.ChangeID != "" && (!validSQLPathID(state.Records.ChangeID) || state.Records.RequestID == "") || state.ZoneRequest != "" && (!validPSCRequest(state.ZoneRequest) || !state.Records.Complete) || state.ZoneComplete && !state.Records.Complete || state.ForwardingRule.Attempted && !state.ZoneComplete || state.Address.Attempted && !state.ForwardingRule.Complete) {
+	if state != (SQLPSCCleanupState{}) && (state.Version != 1 || state.Scope != scope || state.Records.RequestID != "" && !validPSCRequest(state.Records.RequestID) || state.Records.ChangeID != "" && (!validSQLPathID(state.Records.ChangeID) || state.Records.RequestID == "") || state.ZoneRequest != "" && (!validPSCRequest(state.ZoneRequest) || !state.Records.Complete) || state.ZoneComplete && !state.Records.Complete || state.ForwardingRule.Attempted && owned.DNS.ZoneID != "" && !state.ZoneComplete || state.Address.Attempted && owned.ForwardingRule.Complete && !state.ForwardingRule.Complete) {
+		return errPSCProvision
+	}
+	if !validPSCComputeDeletion(state.Address, endpoint.AddressID) || !validPSCComputeDeletion(state.ForwardingRule, endpoint.ForwardingRuleID) {
+		return errPSCProvision
+	}
+	if !owned.Address.Complete && state.Address != (PSCComputeState{}) || !owned.ForwardingRule.Complete && state.ForwardingRule != (PSCComputeState{}) || owned.DNS.ZoneID == "" && (state.Records != (PSCDNSRecordCleanup{}) || state.ZoneRequest != "" || state.ZoneComplete) || !owned.DNS.Complete && (state.Records.RequestID != "" || state.Records.ChangeID != "") {
 		return errPSCProvision
 	}
 	persist := func(next SQLPSCCleanupState) error {
@@ -115,7 +122,14 @@ func (s *Session) DeleteSQLPSCSourceEndpoint(ctx context.Context, spec SQLPSCPro
 		return check(ctx)
 	}
 	// Check every remaining Compute object before removing the working DNS route.
-	for _, read := range []func() error{readRule, readAddress} {
+	var reads []func() error
+	if owned.ForwardingRule.Complete {
+		reads = append(reads, readRule)
+	}
+	if owned.Address.Complete {
+		reads = append(reads, readAddress)
+	}
+	for _, read := range reads {
 		if err := read(); err != nil && !IsNotFound(err) {
 			return err
 		}
@@ -123,13 +137,16 @@ func (s *Session) DeleteSQLPSCSourceEndpoint(ctx context.Context, spec SQLPSCPro
 	if err := s.deletePSCSourceDNS(ctx, spec.Endpoint.ConsumerProject, spec.Endpoint.Network, owned.DNS, endpoint, &state, persist, check); err != nil {
 		return err
 	}
-	if err := s.deletePSCCompute(ctx, prefix, spec.Endpoint.ForwardingRule, endpoint.ForwardingRuleID, state.ForwardingRule, readRule, func(next PSCComputeState) error {
-		updated := state
-		updated.ForwardingRule = next
-		return persist(updated)
-	}, check); err != nil {
-		return err
+	if owned.ForwardingRule.Complete {
+		if err := s.deletePSCCompute(ctx, prefix, spec.Endpoint.ForwardingRule, endpoint.ForwardingRuleID, state.ForwardingRule, readRule, func(next PSCComputeState) error {
+			updated := state
+			updated.ForwardingRule = next
+			return persist(updated)
+		}, check); err != nil {
+			return err
+		}
 	}
+
 	readUnusedAddress := func() error {
 		if err := readAddress(); err != nil {
 			return err
@@ -139,10 +156,34 @@ func (s *Session) DeleteSQLPSCSourceEndpoint(ctx context.Context, spec SQLPSCPro
 		}
 		return nil
 	}
-	if err := s.deletePSCCompute(ctx, prefix, addressPath, endpoint.AddressID, state.Address, readUnusedAddress, func(next PSCComputeState) error { updated := state; updated.Address = next; return persist(updated) }, check); err != nil {
-		return err
+	if owned.Address.Complete {
+		if err := s.deletePSCCompute(ctx, prefix, addressPath, endpoint.AddressID, state.Address, readUnusedAddress, func(next PSCComputeState) error { updated := state; updated.Address = next; return persist(updated) }, check); err != nil {
+			return err
+		}
 	}
+
 	return check(ctx)
+}
+
+func validPSCDeletionOwnership(spec SQLPSCProvisionSpec, owned SQLPSCProvisionState, endpoint SQLPSCProvisionedEndpoint) bool {
+	prefix := "projects/" + spec.Endpoint.ConsumerProject + "/regions/" + spec.Source.Region
+	addressPath := prefix + "/addresses/lp-psc-" + owned.Scope[:24]
+	for _, item := range []struct {
+		state    PSCComputeState
+		path, id string
+	}{{owned.Address, addressPath, endpoint.AddressID}, {owned.ForwardingRule, spec.Endpoint.ForwardingRule, endpoint.ForwardingRuleID}} {
+		request := uuid.NewSHA1(uuid.NameSpaceURL, []byte(owned.Scope+"/"+item.path)).String()
+		if invalidPSCComputeCreation(item.state, request) || item.state.Attempted && !item.state.Complete || item.id != item.state.ResourceID {
+			return false
+		}
+	}
+	if !owned.Address.Complete && (owned.ForwardingRule != (PSCComputeState{}) || endpoint.Address != "") || !owned.ForwardingRule.Complete && owned.DNS != (SQLPSCSourceDNSState{}) {
+		return false
+	}
+	if owned.DNS != (SQLPSCSourceDNSState{}) && (!validPSCScope(owned.DNS.Scope) || invalidPSCSourceDNSState(owned.DNS, owned.DNS.Scope) || owned.DNS.ZoneRequest != "" && owned.DNS.ZoneID == "" || owned.DNS.RecordRequest != "" && !owned.DNS.Complete) {
+		return false
+	}
+	return true
 }
 
 func validPSCScope(scope string) bool {
@@ -150,12 +191,20 @@ func validPSCScope(scope string) bool {
 	return err == nil && len(raw) == sha256.Size && hex.EncodeToString(raw) == scope
 }
 
+func validPSCComputeDeletion(state PSCComputeState, id string) bool {
+	if state == (PSCComputeState{}) {
+		return true
+	}
+	return state.Attempted && validPSCRequest(state.RequestID) && state.ResourceID == id &&
+		(state.Operation == "" && state.OperationID == "" || state.Operation != "" && validSQLPathID(state.Operation) && positiveComputeID(state.OperationID))
+}
+
 func (s *Session) deletePSCCompute(ctx context.Context, prefix, path, id string, state PSCComputeState, read func() error, save func(PSCComputeState) error, check func(context.Context) error) error {
 	request := state.RequestID
 	if request == "" {
 		request = uuid.NewString()
 	}
-	if !validPSCRequest(request) || !state.Attempted && state != (PSCComputeState{}) || state.Attempted && (state.RequestID == "" || state.ResourceID != id) || state.Operation == "" && state.OperationID != "" || state.Operation != "" && (!validSQLPathID(state.Operation) || !positiveComputeID(state.OperationID)) {
+	if !validPSCComputeDeletion(state, id) {
 		return errPSCProvision
 	}
 	persist := func(next PSCComputeState) error {
