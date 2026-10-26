@@ -41,6 +41,8 @@ type fakeOctopus struct {
 	// instances are FARP registrations by instance id.
 	instances map[string]json.RawMessage
 	// conflicts makes a PUT of the route id answer 409 naming the value.
+	// Without one, a PUT that overlaps another config or admin route on a
+	// method, path and host answers 409 naming that route, as Octopus does.
 	conflicts map[string]string
 	// status makes "METHOD /path" answer with that status and failBody.
 	status   map[string]int
@@ -283,7 +285,11 @@ func (f *fakeOctopus) serveRoute(w http.ResponseWriter, method, id string, raw [
 			writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 			return
 		}
-		if other := f.conflicts[id]; other != "" {
+		other := f.conflicts[id]
+		if other == "" {
+			other = f.overlap(id, body)
+		}
+		if other != "" {
 			writeJSON(w, http.StatusConflict, map[string]string{"error": "route conflicts with " + other, "conflict": other})
 			return
 		}
@@ -303,6 +309,41 @@ func (f *fakeOctopus) serveRoute(w http.ResponseWriter, method, id string, raw [
 	default:
 		w.WriteHeader(http.StatusMethodNotAllowed)
 	}
+}
+
+// overlap is the first other config or admin route that answers a method
+// and host body answers on body's path.
+func (f *fakeOctopus) overlap(id string, body RouteBody) string {
+	want := fakeEntries(body.Methods, body.Hosts)
+	for _, other := range slices.Sorted(maps.Keys(f.routes)) {
+		r := f.routes[other]
+		if other == id || r.Path != body.Path || (r.Origin != "config" && r.Origin != "admin") {
+			continue
+		}
+		for e := range fakeEntries(r.Methods, r.Hosts) {
+			if want[e] {
+				return other
+			}
+		}
+	}
+	return ""
+}
+
+// fakeEntries are a route's "METHOD host" entries, host "" for any host.
+func fakeEntries(methods, hosts []string) map[string]bool {
+	if len(methods) == 0 {
+		methods = methodOrder
+	}
+	if len(hosts) == 0 {
+		hosts = []string{""}
+	}
+	out := map[string]bool{}
+	for _, m := range methods {
+		for _, h := range hosts {
+			out[m+" "+h] = true
+		}
+	}
+	return out
 }
 
 func (f *fakeOctopus) upstreamEntries() []map[string]any {

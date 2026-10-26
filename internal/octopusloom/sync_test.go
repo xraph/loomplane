@@ -539,3 +539,135 @@ func TestSyncRecordsSkippedRoutes(t *testing.T) {
 }
 
 var _ http.RoundTripper = componentTransport{}
+
+// desiredWith is what the fixture's gateway would hold with routes instead
+// of its stored ones: an older deploy's config, for seeding Octopus.
+func (f *syncFixture) desiredWith(routes ...*Route) Desired {
+	g, err := f.store.Gateway(context.Background(), f.ref)
+	if err != nil {
+		f.t.Fatal(err)
+	}
+	return BuildDesired(DesiredInput{Gateway: *g, ConnectionID: "conn_a", Bindings: f.bindings, Routes: routes, Hostnames: []string{"api.acme.dev"}})
+}
+
+func TestSyncRetriesPastItsOwnStaleRoute(t *testing.T) {
+	// The auth route was /auth/* when Octopus last loaded it, and is now
+	// /auth. Its old base entry lp-octoroute_a-base holds /auth, so Octopus
+	// refuses the new lp-octoroute_a until that entry is gone.
+	edited := authRoute()
+	edited.Path = "/auth"
+	f := newSyncFixture(t, edited)
+	f.octo.seed(f.desiredWith(authRoute()), "config")
+	f.store.gateway.State = SyncState{StartTime: "2026-10-21 10:00:00", OwnedUpstreams: []string{"lp-auth-9000"}}
+
+	res, err := f.sync()
+	if err != nil || res.State != "applied" {
+		t.Fatalf("%+v, %v", res, err)
+	}
+	want := []string{
+		"PUT /admin/api/routes/lp-octoroute_a",
+		"DELETE /admin/api/routes/lp-octoroute_a-base",
+		"PUT /admin/api/routes/lp-octoroute_a",
+	}
+	if w := f.octo.writes(); !reflect.DeepEqual(w, want) {
+		t.Fatalf("writes = %v, want %v", w, want)
+	}
+	if got := f.octo.routes["lp-octoroute_a"]; got == nil || got.Path != "/auth" {
+		t.Fatalf("lp-octoroute_a = %+v", got)
+	}
+	if _, ok := f.octo.routes["lp-octoroute_a-base"]; ok {
+		t.Fatal("the stale base entry is still there")
+	}
+	if g := f.store.saved(); len(g.State.RouteErrors) != 0 || g.AppliedGeneration != g.Generation {
+		t.Fatalf("saved %d, %+v", g.AppliedGeneration, g.State)
+	}
+
+	// A route made in Octopus on the same path is still a conflict to report.
+	f = newSyncFixture(t, edited)
+	f.octo.binding = []string{"api.acme.dev"}
+	f.octo.upstreams["lp-auth-9000"] = UpstreamBody{Strategy: "round_robin", Instances: []UpstreamInstance{{ID: "lp-auth-0", Address: testContainer, Port: 9000}}}
+	f.octo.routes["manual-1"] = &fakeRoute{Origin: "admin", RouteBody: RouteBody{Path: "/auth", Hosts: []string{"api.acme.dev"}, Methods: []string{"GET"}, Upstream: "lp-auth-9000"}}
+	res, err = f.sync()
+	if err == nil || res.State != "failed" {
+		t.Fatalf("%+v, %v", res, err)
+	}
+	if got := f.store.saved().State.RouteErrors["octoroute_a"]; !strings.Contains(got, "(manual-1)") {
+		t.Fatalf("RouteErrors[octoroute_a] = %q", got)
+	}
+	if slices.Contains(f.octo.writes(), "DELETE /admin/api/routes/manual-1") {
+		t.Fatal("deleted the route made in Octopus")
+	}
+}
+
+func TestSyncKeepsUpstreamALiveRouteStillUses(t *testing.T) {
+	// The auth route sent to billing:8080 and now sends to auth:9000.
+	before := authRoute()
+	before.Service, before.Port = "billing", 8080
+	for name, setup := range map[string]func(f *syncFixture){
+		"upstream refused": func(f *syncFixture) {
+			f.octo.status["PUT /admin/api/upstreams/lp-auth-9000"] = http.StatusBadRequest
+			f.octo.failBody = `{"error":"bad upstream"}`
+		},
+		"route refused": func(f *syncFixture) { f.octo.conflicts["lp-octoroute_a"] = "manual-1" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newSyncFixture(t, authRoute())
+			f.octo.seed(f.desiredWith(before), "admin")
+			f.store.gateway.State = SyncState{StartTime: "2026-10-21 10:00:00", OwnedUpstreams: []string{"lp-billing-8080"}}
+			setup(f)
+
+			res, err := f.sync()
+			if err == nil || res.State != "failed" {
+				t.Fatalf("%+v, %v", res, err)
+			}
+			if slices.Contains(f.octo.writes(), "DELETE /admin/api/upstreams/lp-billing-8080") {
+				t.Fatalf("deleted the upstream a live route sends to: %v", f.octo.writes())
+			}
+			if got := f.store.saved().State.OwnedUpstreams; !slices.Contains(got, "lp-billing-8080") {
+				t.Fatalf("OwnedUpstreams = %v, lost lp-billing-8080", got)
+			}
+		})
+	}
+
+	// Once the routes moved, the old upstream goes.
+	f := newSyncFixture(t, authRoute())
+	f.octo.seed(f.desiredWith(before), "admin")
+	f.store.gateway.State = SyncState{StartTime: "2026-10-21 10:00:00", OwnedUpstreams: []string{"lp-billing-8080"}}
+	if _, err := f.sync(); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(f.octo.writes(), "DELETE /admin/api/upstreams/lp-billing-8080") {
+		t.Fatalf("old upstream kept: %v", f.octo.writes())
+	}
+}
+
+func TestSyncDeletesUpstreamsOfStaleConfigRoutesAfterRestart(t *testing.T) {
+	// Octopus restarted on a config with a route deleted since: its upstream
+	// was never recorded as owned. A stale route whose upstream a FARP route
+	// also uses gives that upstream no owner.
+	f := newSyncFixture(t, authRoute())
+	f.octo.seed(f.desired(), "config")
+	f.octo.startTime = "2026-10-21 11:00:00"
+	f.store.gateway.State = SyncState{StartTime: "2026-10-21 10:00:00", OwnedUpstreams: []string{"lp-auth-9000"}}
+	f.octo.upstreams["lp-gone-8080"] = UpstreamBody{Strategy: "round_robin", Instances: []UpstreamInstance{{ID: "lp-gone-0", Address: testContainer, Port: 8080}}}
+	f.octo.routes["lp-octoroute_gone"] = &fakeRoute{Origin: "config", RouteBody: RouteBody{Path: "/gone", Hosts: []string{"api.acme.dev"}, Upstream: "lp-gone-8080"}}
+	f.octo.upstreams["lp-inst-01jbzfarp"] = UpstreamBody{Strategy: "round_robin", Instances: []UpstreamInstance{{ID: "i", Address: "billing", Port: 8080}}}
+	f.octo.routes["lp-octoroute_shared"] = &fakeRoute{Origin: "config", RouteBody: RouteBody{Path: "/shared", Upstream: "lp-inst-01jbzfarp"}}
+	f.octo.routes["lp-svc-billing"] = &fakeRoute{Origin: "farp", RouteBody: RouteBody{Path: "/billing/*", Upstream: "lp-inst-01jbzfarp"}}
+
+	res, err := f.sync()
+	if err != nil || res.State != "applied" || !res.Restarted {
+		t.Fatalf("%+v, %v", res, err)
+	}
+	want := []string{
+		"DELETE /admin/api/routes/lp-octoroute_gone",
+		"DELETE /admin/api/routes/lp-octoroute_shared",
+		"DELETE /admin/api/upstreams/lp-gone-8080",
+	}
+	if w := f.octo.writes(); !reflect.DeepEqual(w, want) {
+		t.Fatalf("writes = %v, want %v", w, want)
+	}
+	if got := f.store.saved().State.OwnedUpstreams; !reflect.DeepEqual(got, []string{"lp-auth-9000"}) {
+		t.Fatalf("OwnedUpstreams = %v", got)
+	}
+}

@@ -342,15 +342,24 @@ type syncRun struct {
 	putUpstreams    []string
 	failedUpstreams map[string]error
 	keepOwned       []string
-	routeErrors     map[string]string
-	rejected        int
-	problems        []string
+	// wanted are the desired Octopus route ids; replaced are the ones this
+	// sync put and deleted the stale ones it removed. orphaned are the
+	// upstreams the removed routes sent to.
+	wanted, replaced, deleted map[string]bool
+	orphaned                  map[string]bool
+	routeErrors               map[string]string
+	rejected                  int
+	problems                  []string
 }
 
 func newSyncRun(admin *Admin, g *Gateway, d Desired, routes []*Route) *syncRun {
 	run := &syncRun{
 		admin: admin, gateway: g, desired: d,
 		owner: map[string]*Route{}, failedUpstreams: map[string]error{}, routeErrors: map[string]string{},
+		wanted: map[string]bool{}, replaced: map[string]bool{}, deleted: map[string]bool{}, orphaned: map[string]bool{},
+	}
+	for _, route := range d.Routes {
+		run.wanted[route.ID] = true
 	}
 	for _, r := range routes {
 		if r == nil {
@@ -451,11 +460,17 @@ func (r *syncRun) pushRoutes(ctx context.Context) error {
 		if live := r.liveRoutes[d.ID]; live != nil && live.matches(d) {
 			continue
 		}
-		err := r.admin.PutRoute(ctx, d.ID, RouteBody{
-			Path: d.Path, Methods: slices.Clone(d.Methods), Hosts: slices.Clone(d.Hosts),
-			Upstream: d.Upstream, StripPrefix: d.StripPrefix, Priority: d.Priority,
-		})
+		err := r.putRoute(ctx, d)
 		var conflict *RouteConflictError
+		if errors.As(err, &conflict) && r.stale(conflict.Conflict) {
+			// The route in the way is one of Loomplane's own that this sync
+			// removes anyway, such as the base entry of a path that lost its
+			// "/*". Remove it now and push again, once.
+			err = r.deleteRoute(ctx, conflict.Conflict)
+			if err == nil {
+				err = r.putRoute(ctx, d)
+			}
+		}
 		switch {
 		case errors.Is(err, ErrUnavailable):
 			return err
@@ -465,8 +480,37 @@ func (r *syncRun) pushRoutes(ctx context.Context) error {
 		case err != nil:
 			r.routeError(manualID, d.ID, fmt.Sprintf("Octopus didn't accept this route: %v", err))
 		default:
+			r.replaced[d.ID] = true
 			r.put()
 		}
+	}
+	return nil
+}
+
+func (r *syncRun) putRoute(ctx context.Context, d OctopusRoute) error {
+	return r.admin.PutRoute(ctx, d.ID, RouteBody{
+		Path: d.Path, Methods: slices.Clone(d.Methods), Hosts: slices.Clone(d.Hosts),
+		Upstream: d.Upstream, StripPrefix: d.StripPrefix, Priority: d.Priority,
+	})
+}
+
+// stale reports whether Octopus's route id is one Loomplane put there, no
+// longer wants and hasn't removed yet in this sync.
+func (r *syncRun) stale(id string) bool {
+	live := r.liveRoutes[id]
+	return strings.HasPrefix(id, "lp-") && !r.wanted[id] && !r.deleted[id] && live != nil && live.loomplanes()
+}
+
+// deleteRoute removes a stale route. The upstreams it sent to and that no
+// FARP or Kubernetes route uses are Loomplane's, even when no sync recorded
+// them, as after a restart brings back an older config file's routes.
+func (r *syncRun) deleteRoute(ctx context.Context, id string) error {
+	if err := r.admin.DeleteRoute(ctx, id); err != nil {
+		return err
+	}
+	r.deleted[id] = true
+	for name := range r.liveRoutes[id].upstreams {
+		r.orphaned[name] = true
 	}
 	return nil
 }
@@ -475,15 +519,11 @@ func (r *syncRun) pushRoutes(ctx context.Context) error {
 // longer wants: an "lp-" id from the config file or the admin API. FARP and
 // Kubernetes routes, and routes made in Octopus itself, are never touched.
 func (r *syncRun) removeStaleRoutes(ctx context.Context) error {
-	wanted := map[string]bool{}
-	for _, d := range r.desired.Routes {
-		wanted[d.ID] = true
-	}
 	for _, id := range slices.Sorted(maps.Keys(r.liveRoutes)) {
-		if !strings.HasPrefix(id, "lp-") || wanted[id] || !r.liveRoutes[id].loomplanes() {
+		if !r.stale(id) {
 			continue
 		}
-		err := r.admin.DeleteRoute(ctx, id)
+		err := r.deleteRoute(ctx, id)
 		switch {
 		case errors.Is(err, ErrUnavailable):
 			return err
@@ -495,15 +535,43 @@ func (r *syncRun) removeStaleRoutes(ctx context.Context) error {
 }
 
 // removeStaleUpstreams deletes the upstreams Loomplane created that it no
-// longer wants. Only names it recorded as its own are deleted, so an
-// upstream FARP or a person made is never touched, whatever its name.
+// longer wants: the names it recorded as its own, and the ones only its
+// removed routes sent to. An upstream that a FARP or Kubernetes route sends
+// to is never deleted, whatever its name, and neither is one a route still
+// sends to, such as a route Octopus refused to change. Loomplane keeps
+// owning that one, to remove once nothing uses it.
 func (r *syncRun) removeStaleUpstreams(ctx context.Context) error {
 	wanted := map[string]bool{}
 	for _, u := range r.desired.Upstreams {
 		wanted[u.Name] = true
 	}
+	inUse, discovered := map[string]bool{}, map[string]bool{}
+	for id, live := range r.liveRoutes {
+		if r.replaced[id] || r.deleted[id] {
+			continue
+		}
+		for name := range live.upstreams {
+			inUse[name] = true
+			if !live.loomplanes() {
+				discovered[name] = true
+			}
+		}
+	}
+	owned := map[string]bool{}
 	for _, name := range r.gateway.State.OwnedUpstreams {
+		owned[name] = true
+	}
+	for name := range r.orphaned {
+		if !discovered[name] {
+			owned[name] = true
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(owned)) {
 		if _, live := r.liveUpstreams[name]; wanted[name] || !live {
+			continue
+		}
+		if inUse[name] {
+			r.keepOwned = append(r.keepOwned, name)
 			continue
 		}
 		err := r.admin.DeleteUpstream(ctx, name)
