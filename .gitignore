@@ -60,3 +60,6 @@ docs/catalog-recovery-verification.md
 
 # GoReleaser output
 /dist/
+
+# Python bytecode from the acceptance scripts
+__pycache__/
