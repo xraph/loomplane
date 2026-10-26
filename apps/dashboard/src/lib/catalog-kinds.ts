@@ -99,6 +99,12 @@ export type CatalogKindModule = {
   blurb: string
   features: string[]
   panels: CatalogPanel[]
+  /** The normal deployed state. Drift warnings always take precedence. */
+  deployedLabel?: string
+  /** Compact page with an inline header and environment in its subtitle. */
+  serviceLayout?: "compact"
+  /** Panel ID to open first, falling back to Overview when unavailable. */
+  defaultPanel?: string
   /** Buttons at the right of the service page's header. */
   actions?: ComponentType<CatalogPanelProps>
   /** Drawn in place of a product logo when the kind has none. */
@@ -111,7 +117,7 @@ export type CatalogKindModule = {
    */
   addDialog?: ComponentType<CatalogAddProps>
   /** A line under the resource's name on its service page. */
-  subtitle?: (props: CatalogPanelProps) => string
+  subtitle?: (props: CatalogPanelProps, environment: string) => string
 }
 
 /** The icon of each group, for a kind with neither a logo nor an icon. */

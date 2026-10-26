@@ -53,6 +53,7 @@ import {
 } from "./shared"
 
 type Props = {
+  compact?: boolean
   project: string
   points: Backup[]
   onChanged: () => Promise<unknown>
@@ -65,10 +66,13 @@ export function BackupRetentionReview(props: Props) {
       <Button
         size="sm"
         variant="outline"
+        className={
+          props.compact ? "h-8 rounded-[9px] px-3 text-[12.5px]" : undefined
+        }
         disabled={!props.points.length}
         onClick={() => setOpen(true)}
       >
-        Review retention
+        {props.compact ? "Retention" : "Review retention"}
       </Button>
       {open && (
         <RetentionReview

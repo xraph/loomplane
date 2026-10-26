@@ -69,9 +69,11 @@ func readNativeTarget(ctx context.Context, db nativeTargetReader, org, project, 
 	switch out.Provider {
 	case "cloud-sql":
 		out.NativeProject = details["project_id"]
-		if cloudKind != connections.GCP || strings.TrimSpace(out.NativeProject) == "" {
+		route, routeErr := manageddb.CloudSQLRecoverySettings(details)
+		if cloudKind != connections.GCP || strings.TrimSpace(out.NativeProject) == "" || routeErr != nil {
 			return NativeRestoreTarget{}, ErrInvalid
 		}
+		out.CloudSQLNetwork = route
 	case "rds":
 		route, routeErr := manageddb.RDSRecoverySettings(details)
 		if cloudKind != connections.AWS || details["region"] != out.Region || routeErr != nil || !route.Valid() {

@@ -3,10 +3,13 @@ package deployments
 import (
 	"errors"
 	"reflect"
+	"strconv"
+	"strings"
 
 	nativemysql "github.com/xraph/loomplane/internal/clouds/mysql"
 	nativenats "github.com/xraph/loomplane/internal/clouds/nats"
 	"github.com/xraph/loomplane/internal/clouds/owned"
+	nativepg "github.com/xraph/loomplane/internal/clouds/postgres"
 	nativerabbit "github.com/xraph/loomplane/internal/clouds/rabbitmq"
 	nativecache "github.com/xraph/loomplane/internal/clouds/redis"
 	"github.com/xraph/loomplane/internal/clouds/server"
@@ -65,12 +68,18 @@ func databaseLabels(labels map[string]string, recipe *recipes.Recipe, name strin
 		labels[nativenats.LabelEngine] = "nats"
 		return
 	}
+	if recipe.FSGroup > 0 {
+		labels[owned.LabelFSGroup] = strconv.Itoa(recipe.FSGroup)
+	}
 	if recipe.Cache() {
 		labels[nativecache.LabelEngine] = recipe.Engine()
 		return
 	}
 	if recipe.Engine() == "postgres" {
 		labels[server.LabelDatabase] = name
+		if len(recipe.Extensions) > 0 {
+			labels[nativepg.LabelExtensions] = strings.Join(recipe.Extensions, ",")
+		}
 		return
 	}
 	labels[nativemysql.LabelDatabase] = name

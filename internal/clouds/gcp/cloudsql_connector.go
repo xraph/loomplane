@@ -17,6 +17,16 @@ type SQLConnector interface {
 // PostgresConnector uses only the session's explicit, checked credential. The
 // dialer supplies IAM authorization and TLS for this fixed instance name.
 func (s *Session) PostgresConnector(ctx context.Context, region, instance string) (SQLConnector, error) {
+	return s.postgresConnector(ctx, region, instance, false)
+}
+
+// PostgresPSCConnector selects only the instance's PSC route. Missing PSC
+// metadata or an unreachable private endpoint never permits public fallback.
+func (s *Session) PostgresPSCConnector(ctx context.Context, region, instance string) (SQLConnector, error) {
+	return s.postgresConnector(ctx, region, instance, true)
+}
+
+func (s *Session) postgresConnector(ctx context.Context, region, instance string, psc bool) (SQLConnector, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -31,15 +41,19 @@ func (s *Session) PostgresConnector(ctx context.Context, region, instance string
 	if err != nil {
 		return nil, errors.New("could not initialize the explicit Cloud SQL recovery credential")
 	}
-	return &sqlConnector{dialer: dialer, instance: key.ProjectID + ":" + region + ":" + instance}, nil
+	return &sqlConnector{dialer: dialer, instance: key.ProjectID + ":" + region + ":" + instance, psc: psc}, nil
 }
 
 type sqlConnector struct {
 	dialer   *cloudsqlconn.Dialer
 	instance string
+	psc      bool
 }
 
 func (c *sqlConnector) DialContext(ctx context.Context, _, _ string) (net.Conn, error) {
+	if c.psc {
+		return c.dialer.Dial(ctx, c.instance, cloudsqlconn.WithPSC())
+	}
 	return c.dialer.Dial(ctx, c.instance, cloudsqlconn.WithPublicIP())
 }
 

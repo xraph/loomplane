@@ -4,6 +4,8 @@ package integration
 
 import (
 	"context"
+	"crypto/ed25519"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -14,6 +16,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"golang.org/x/crypto/ssh"
 
 	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/connections"
@@ -163,6 +166,19 @@ type infraFixture struct {
 	runtime     *infraRuntime
 	provider    *infraProvider
 	p           security.Principal
+}
+
+func infraFixtureHostKey(t *testing.T) string {
+	t.Helper()
+	public, _, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := ssh.NewPublicKey(public)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return strings.TrimSpace(string(ssh.MarshalAuthorizedKey(key)))
 }
 
 func newInfraFixture(t *testing.T) *infraFixture {
@@ -333,7 +349,7 @@ func TestCloudInfrastructureResizeAndManagedDeletion(t *testing.T) {
 	o = f.reconcile(t, o)
 	// Enrollment's real transport is covered by the SSH/Docker test below. This
 	// fixture isolates lifecycle checkpoint and exact-action behavior.
-	o.HostKey = "fixture-host-key"
+	o.HostKey = infraFixtureHostKey(t)
 	o.Enrolled = true
 	if err := f.store.SaveOperation(t.Context(), o); err != nil {
 		t.Fatal(err)
@@ -627,7 +643,7 @@ func TestCloudInfrastructureRetirementSerializesWorkloadReferences(t *testing.T)
 	f := newInfraFixture(t)
 	o := f.create(t)
 	o = f.reconcile(t, o)
-	o.HostKey = "fixture-key"
+	o.HostKey = infraFixtureHostKey(t)
 	o.Enrolled = true
 	if err := f.store.SaveOperation(t.Context(), o); err != nil {
 		t.Fatal(err)

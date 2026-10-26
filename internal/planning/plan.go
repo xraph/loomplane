@@ -77,7 +77,10 @@ const (
 
 // Action is one step of a plan.
 type Action struct {
-	Compensation *CloudCompensation `json:"compensation,omitempty"`
+	// BackupEveryHours is a reviewed default for a newly provisioned resource.
+	// It does not change the runtime recipe or overwrite an operator's policy.
+	BackupEveryHours int                `json:"backup_every_hours,omitempty"`
+	Compensation     *CloudCompensation `json:"compensation,omitempty"`
 
 	Routes []cloudinfra.Route `json:"routes,omitempty"`
 
@@ -165,6 +168,8 @@ type ServiceConfig struct {
 	// PrivateEgress sends the service's traffic to private addresses into
 	// its cloud's network, and over a link to the other cloud.
 	PrivateEgress bool `json:"private_egress,omitempty"`
+	// CloudSQLNetwork is the reviewed application route for PSC attachments.
+	CloudSQLNetwork *provider.CloudSQLApplicationNetwork `json:"cloud_sql_network,omitempty"`
 	// Env are the variables Loomplane sets so the service finds what it
 	// needs. The values exist only once those things are deployed.
 	Env []EnvLink `json:"env,omitempty"`
@@ -519,6 +524,8 @@ type Binding struct {
 	// PhysicalID identifies the immutable provider incarnation when the adapter
 	// can verify it. ExternalID may be a reusable native name.
 	PhysicalID string `json:"physical_id,omitempty"`
+	// OwnedResources holds non-secret provider identities needed for later cleanup.
+	OwnedResources map[string]json.RawMessage `json:"owned_resources,omitempty"`
 	// Config is the ServiceConfig or ResourceConfig last applied.
 	Config json.RawMessage `json:"config"`
 	// URL is where a deployed service answers, which the services that

@@ -12,6 +12,11 @@ import { type FormEvent, useRef, useState } from "react"
 import { toast } from "sonner"
 
 import {
+  CloudSQLRecoveryFields,
+  cloudSQLRecoverySettings,
+} from "@/components/cloudsql-recovery-fields"
+
+import {
   RDSRecoveryFields,
   rdsRecoverySettings,
 } from "@/components/rds-recovery-fields"
@@ -439,6 +444,9 @@ function ConnectForm({
   const [certificate, setCertificate] = useState(
     (replacing?.details.certificate_arn as string | undefined) ?? ""
   )
+  const [billingExport, setBillingExport] = useState(
+    (replacing?.details.billing_export as string | undefined) ?? ""
+  )
   const [error, setError] = useState("")
   const busy = create.isPending || replace.isPending
 
@@ -471,6 +479,10 @@ function ConnectForm({
         .map(([k, v]) => [k, v.trim()])
         .filter(([, v]) => v !== "")
     )
+    const gcpSettings = {
+      ...cloudSQLRecoverySettings(extraSettings),
+      ...(billingExport.trim() ? { billing_export: billingExport.trim() } : {}),
+    }
     const settings = extra
       ? trimmed
       : cloud === "vercel" && team.trim()
@@ -483,7 +495,9 @@ function ConnectForm({
                 ? { certificate_arn: certificate.trim() }
                 : {}),
             }
-          : undefined
+          : cloud === "gcp" && Object.keys(gcpSettings).length
+            ? gcpSettings
+            : undefined
     // An AWS key is two values; Loomplane stores them together.
     const secret =
       cloud === "aws"
@@ -574,46 +588,72 @@ function ConnectForm({
               </>
             )}
             {cloud === "gcp" ? (
-              <Field>
-                <FieldLabel htmlFor="connection-key">
-                  {info.credential}
-                </FieldLabel>
-                <Textarea
-                  id="connection-key"
-                  value={credential}
-                  onChange={(e) => setCredential(e.target.value)}
-                  placeholder='{"type": "service_account", ...}'
-                  spellCheck={false}
-                  className="max-h-40 min-h-24 font-mono text-xs md:text-xs"
-                  required
-                />
-                <div className="flex items-center gap-2">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-
-                    onClick={() => file.current?.click()}
-                  >
-                    <UploadIcon />
-                    Choose the key file
-                  </Button>
-                  <input
-                    ref={file}
-                    type="file"
-                    accept="application/json,.json"
-                    className="hidden"
-                    onChange={(e) => void load(e.target.files?.[0])}
+              <>
+                <Field>
+                  <FieldLabel htmlFor="connection-key">
+                    {info.credential}
+                  </FieldLabel>
+                  <Textarea
+                    id="connection-key"
+                    value={credential}
+                    onChange={(e) => setCredential(e.target.value)}
+                    placeholder='{"type": "service_account", ...}'
+                    spellCheck={false}
+                    className="max-h-40 min-h-24 font-mono text-xs md:text-xs"
+                    required
                   />
-                </div>
-                <FieldDescription>
-                  A JSON key for a service account in the project you deploy to.
-                  It needs Cloud Run Admin, Cloud Build Editor, Artifact
-                  Registry Administrator, Storage Admin, Secret Manager Admin,
-                  Cloud SQL Admin, Cloud Memorystore Redis Admin, Service
-                  Account User and Browser; Loomplane says which are missing.
-                </FieldDescription>
-              </Field>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+
+                      onClick={() => file.current?.click()}
+                    >
+                      <UploadIcon />
+                      Choose the key file
+                    </Button>
+                    <input
+                      ref={file}
+                      type="file"
+                      accept="application/json,.json"
+                      className="hidden"
+                      onChange={(e) => void load(e.target.files?.[0])}
+                    />
+                  </div>
+                  <FieldDescription>
+                    A JSON key for a service account in the project you deploy
+                    to. It needs Cloud Run Admin, Cloud Build Editor, Artifact
+                    Registry Administrator, Storage Admin, Secret Manager Admin,
+                    Cloud SQL Admin, Cloud Memorystore Redis Admin, Service
+                    Account User and Browser; Loomplane says which are missing.
+                  </FieldDescription>
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="connection-billing-export">
+                    Billing export table (optional)
+                  </FieldLabel>
+                  <Input
+                    id="connection-billing-export"
+                    autoComplete="off"
+                    value={billingExport}
+                    onChange={(e) => setBillingExport(e.target.value)}
+                    placeholder="project.dataset.gcp_billing_export_v1_..."
+                    spellCheck={false}
+                    className="font-mono"
+                  />
+                  <FieldDescription>
+                    Google Cloud reports cost only through a billing export to
+                    BigQuery. Name its table and Loomplane reads this
+                    project&apos;s spend from it, with BigQuery Job User on the
+                    project and BigQuery Data Viewer on the dataset.
+                  </FieldDescription>
+                </Field>
+                <CloudSQLRecoveryFields
+                  value={extraSettings}
+                  onChange={setExtraSettings}
+                />
+              </>
             ) : cloud === "aws" ? (
               <>
                 <Field>

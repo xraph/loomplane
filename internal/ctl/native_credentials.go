@@ -37,6 +37,14 @@ func (a *App) nativeCopyCredentials(ctx cli.CommandContext) (result error) {
 	if writeErr := encoder.Encode(credentials); writeErr != nil { // #nosec G117 -- Explicit disclosure to the new owner-only file requested by the caller.
 		return writeErr
 	}
-	a.printf("Saved reader credentials for %s to %s. Login expires %s. Cloud SQL still requires your own authorized connector identity.\n", id, path, credentials.ExpiresAt.UTC().Format("2006-01-02 15:04Z"))
+	a.printf("Saved reader credentials for %s to %s. Login expires %s.\n", id, path, credentials.ExpiresAt.UTC().Format("2006-01-02 15:04Z"))
+	switch {
+	case credentials.PrivateServiceConnect:
+		a.printf("Use your own authorized Cloud SQL connector identity with PSC selected (Cloud SQL Auth Proxy --psc) from the reviewed recovery network.\n")
+	case credentials.Provider == "cloud-sql":
+		a.printf("Cloud SQL requires your own authorized connector identity.\n")
+	case credentials.Provider == "rds":
+		a.printf("Connect over the reviewed private route with RDS CA verification.\n")
+	}
 	return nil
 }

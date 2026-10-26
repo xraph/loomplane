@@ -46,6 +46,7 @@ const WEEKS = [
 ];
 const WEEKLY = [3, 5, 4, 6, 5, 7, 6, 8, 7, 9, 11, 4];
 const PLAN_TO_LIVE = [0, 0, 0, 0, 9, 9, 0, 0, 0, 5, 0, 0, 0, 0];
+const SPEND_DAYS = [18, 17, 19, 22, 21, 16, 15, 18, 20, 24, 23, 19, 17, 21];
 const STEPS = 7;
 const PITCH = 7;
 
@@ -449,23 +450,15 @@ export function DashboardShot() {
                   </div>
                   <PlanBars data={PLAN_TO_LIVE} />
                 </section>
-                <section className="ds-card dashed">
+                <section className="ds-card ds-spend">
                   <div className="ds-head">
-                    <b>Spend, latency and traffic</b>
+                    <b>Cloud spend</b>
+                    <small>October so far</small>
                   </div>
-                  <p className="ds-note">
-                    These show up once Loomplane reads billing and metrics from
-                    your cloud accounts.
-                  </p>
-                  <dl className="ds-kv">
-                    <dt>Cloud spend</dt>
-                    <dd>Not connected</dd>
-                    <dt>p95 latency</dt>
-                    <dd>Not connected</dd>
-                    <dt>Traffic</dt>
-                    <dd>Not connected</dd>
-                  </dl>
-                  <span className="ds-link">Connect metrics</span>
+                  <div className="ds-big">
+                    $412 <small>2 of 3 accounts</small>
+                  </div>
+                  <PlanBars data={SPEND_DAYS} />
                 </section>
               </div>
 

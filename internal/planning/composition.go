@@ -576,6 +576,10 @@ func (p *planner) provision(name, base string, r manifest.Resource, dep recipes.
 	}
 	p.configureCatalog(action, base, manifest.Resource{Kind: kind, Provider: prov.Name, Target: r.Target}, cfg, a)
 	p.diff(a, cfg, cfg.Provider, cfg.Region)
+	if hours := dep.BackupEveryHours[prov.Cloud]; hours > 0 && a.Op == Create && cfg.Catalog != nil {
+		a.BackupEveryHours = hours
+		a.Creates += fmt.Sprintf(" with a backup every %d hours", hours)
+	}
 	p.resources[action] = a
 	p.actions = append(p.actions, a)
 	return a

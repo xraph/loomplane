@@ -10,7 +10,7 @@
 import { query, mutation } from '@forge-go/client-core';
 import { ops } from './ops';
 
-import type { APIKeyList, ActivitySummary, Analysis, AnalysisGraph, AnalysisList, Backup, BackupList, BindingList, CatalogKindList, CatalogconnectEndpoint, CloudProjectGrantList, CloudSyncList, CloudTargetList, CloudinfraRoute, ConnectedRepositoryList, Connection, ConnectionList, ConnectionsCloudList, DeliveryList, DeployedList, Deployment, DeploymentList, DomainOperationList, DomainRouteList, EndpointList, Environment, EnvironmentCloud, EnvironmentConnections, EnvironmentList, GatewayList, GitHubInstallation, GitHubStatus, IdentitySession, InfrastructureStatus, LogPage, ManifestDraft, NativeInventory, NativePITRWindow, NativeRecoveryCopies, NativeRecoverySources, NativeRestore, NativeRetentionPolicy, NativeRetentionPolicyState, NativeRetirement, NativeRetirementPage, NotificationList, Operation, OperationList, OrgInvitationList, OrgMemberList, Plan, PlanList, PlanningCloudList, Policy, PolicyList, Pool, PoolList, Preferences, Preview, Profile, Project, ProjectList, ProjectView, ProjectZoneList, ProviderList, PublicConfig, Resolution, Restore, RestoreList, RetentionPolicy, RetentionPolicyHistory, RetentionPolicyState, RetentionPreview, Retirement, RetirementHistory, RetirementPage, Revision, RevisionList, RouteOperation, RouteSummary, Server, ServerList, ServerOptions, ServerUsage, Snapshot, Source, SourceList, StorageVolumeList, Sync, Target, Variable, VariableList, WebhookEndpointList, Zone, ZoneList } from './types';
+import type { APIKeyList, ActivitySummary, Analysis, AnalysisGraph, AnalysisList, Backup, BackupList, BindingList, CatalogKindList, CatalogconnectEndpoint, CloudProjectGrantList, CloudSyncList, CloudTargetList, CloudinfraRoute, ConnectedRepositoryList, Connection, ConnectionList, ConnectionsCloudList, ConsumerKey, DeliveryList, DeployedList, Deployment, DeploymentList, DomainOperationList, DomainRouteList, EndpointList, Environment, EnvironmentCloud, EnvironmentConnections, EnvironmentList, FabriqKeyList, GatewayList, GitHubInstallation, GitHubStatus, IdentitySession, InfrastructureStatus, LogPage, ManifestDraft, NativeInventory, NativePITRWindow, NativeRecoveryCopies, NativeRecoverySources, NativeRestore, NativeRetentionPolicy, NativeRetentionPolicyState, NativeRetirement, NativeRetirementPage, NotificationList, Operation, OperationList, OrgInvitationList, OrgMemberList, Plan, PlanList, PlanningCloudList, Policy, PolicyList, Pool, PoolList, Preferences, Preview, Profile, Project, ProjectList, ProjectView, ProjectZoneList, ProviderList, PublicConfig, Rebuild, RebuildList, Resolution, Restore, RestoreList, RetentionPolicy, RetentionPolicyHistory, RetentionPolicyState, RetentionPreview, Retirement, RetirementHistory, RetirementPage, Revision, RevisionList, RouteOperation, RouteSummary, Server, ServerList, ServerOptions, ServerUsage, Snapshot, Source, SourceList, SpendReport, Status, StorageVolumeList, Sync, Target, Tenant, TenantList, TrafficReport, Variable, VariableList, WebhookEndpointList, Zone, ZoneList } from './types';
 
 export const useActivityGet = query<ActivitySummary>(ops['activity.get']);
 export const useAnalysesGet = query<Analysis>(ops['analyses.get']);
@@ -193,6 +193,14 @@ export const useDomainRoutesRemove = mutation<RouteOperation, RouteOperation>(op
 export const useDomainRoutesUpdateTtl = mutation<CloudinfraRoute, CloudinfraRoute>(ops['domainRoutes.updateTTL']);
 export const useDomainRoutesVerify = mutation<RouteOperation, RouteOperation>(ops['domainRoutes.verify']);
 export const useCatalogAdminOpen = mutation(ops['catalogAdmin.open']);
+export const useFabriqStatus = query<Status>(ops['fabriq.status']);
+export const useFabriqKeysList = query<FabriqKeyList>(ops['fabriqKeys.list']);
+export const useFabriqKeysRevoke = mutation<ConsumerKey, ConsumerKey>(ops['fabriqKeys.revoke']);
+export const useFabriqKeysRotate = mutation<ConsumerKey, ConsumerKey>(ops['fabriqKeys.rotate']);
+export const useFabriqRebuildsList = query<RebuildList>(ops['fabriqRebuilds.list']);
+export const useFabriqRebuildsCreate = mutation<Rebuild, Rebuild>(ops['fabriqRebuilds.create']);
+export const useFabriqTenantsList = query<TenantList>(ops['fabriqTenants.list']);
+export const useFabriqTenantsCreate = mutation<Tenant, Tenant>(ops['fabriqTenants.create']);
 export const useDomainRoutesOperation = query<RouteOperation>(ops['domainRoutes.operation']);
 export const useDomainRoutesApply = mutation<RouteOperation, RouteOperation>(ops['domainRoutes.apply']);
 export const useDomainRoutesCutover = mutation<RouteOperation, RouteOperation>(ops['domainRoutes.cutover']);
@@ -218,6 +226,8 @@ export const useServiceBackupsRetry = mutation<Backup, Backup>(ops['serviceBacku
 export const useServiceRestoresGet = query<Restore>(ops['serviceRestores.get']);
 export const useServiceRestoresDelete = mutation(ops['serviceRestores.delete']);
 export const useSessionGet = query<IdentitySession>(ops['session.get']);
+export const useUsageSpend = query<SpendReport>(ops['usage.spend']);
+export const useUsageTraffic = query<TrafficReport>(ops['usage.traffic']);
 export const useVariablesList = query<VariableList>(ops['variables.list']);
 export const useVariablesCreate = mutation<Variable, Variable>(ops['variables.create']);
 export const useVariablesUpdate = mutation<Variable, Variable>(ops['variables.update']);

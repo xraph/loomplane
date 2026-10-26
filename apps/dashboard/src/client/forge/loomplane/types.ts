@@ -26,8 +26,18 @@ export interface APIKeyList {
   keys: APIKey[];
 }
 
+export interface AccountSpend {
+  cloud: string;
+  connectionId: string;
+  currency: string;
+  days: Point[];
+  name: string;
+  total: number;
+}
+
 export interface Action {
   adoptCloudPlacement?: boolean;
+  backupEveryHours?: number;
   changes?: Change[];
   cloudAdoption?: CloudAdoption;
   compensation?: CloudCompensation;
@@ -69,6 +79,13 @@ export interface AddSourceInputBody {
   ref?: string;
   repository: string;
   root?: string;
+}
+
+export interface Amount {
+  currency: string;
+  days: Point[];
+  total: number;
+  undated: number;
 }
 
 export interface Analysis {
@@ -172,6 +189,7 @@ export interface Binding {
   name: string;
   observedAt?: string;
   orgId: string;
+  ownedResources?: Record<string, any>;
   physicalId?: string;
   planId: string;
   projectId: string;
@@ -351,6 +369,24 @@ export interface CloudProjectGrantList {
   grants: (ProjectGrant | null)[];
 }
 
+export interface CloudSQLApplicationNetwork {
+  consumerProject: string;
+  network: string;
+  subnetwork: string;
+}
+
+export interface CloudSQLRecoveryNetwork {
+  consumerProject: string;
+  network: string;
+}
+
+export interface CloudSQLSourceEndpoint {
+  consumerProject: string;
+  forwardingRule: string;
+  network: string;
+  provisionSubnetwork?: string;
+}
+
 export interface CloudSyncEvent {
   attempt: number;
   cloudId: string;
@@ -494,6 +530,17 @@ export interface ConnectionsCreateInputBody {
   credential: string;
   name: string;
   settings?: Record<string, any>;
+}
+
+export interface ConsumerKey {
+  createdAt?: string;
+  lastUsedAt?: string;
+  lastUsedKnown: boolean;
+  prefix?: string;
+  revokedAt?: string;
+  service: string;
+  state: string;
+  tenant: string;
 }
 
 export interface ConsumerOption {
@@ -730,6 +777,7 @@ export interface EditInputBody {
 };
   placement?: {
   build?: Build;
+  cloudSqlNetwork?: CloudSQLApplicationNetwork;
   cloudTags?: string[];
   cloudTarget?: string;
   enabled?: boolean;
@@ -841,6 +889,10 @@ export interface Evidence {
   line?: number;
   path: string;
   source?: string;
+}
+
+export interface FabriqKeyList {
+  keys: ConsumerKey[];
 }
 
 export interface Federation {
@@ -1035,6 +1087,7 @@ export interface LogPage {
 
 export interface ManagedDatabaseConfig {
   accountIdentity: string;
+  cloudSqlPsc?: CloudSQLSourceEndpoint;
   connectionId: string;
   profile: ManagedDatabaseProfile;
 }
@@ -1136,6 +1189,7 @@ export interface NativeCopyCredentials {
   database: string;
   expiresAt: string;
   password: string;
+  privateServiceConnect?: boolean;
   provider: string;
   username: string;
 }
@@ -1171,6 +1225,9 @@ export interface NativePITRBounds {
   earliest: string;
   latest: string;
   protocol: number;
+  settingsDigest?: string;
+  sourceBackup?: string;
+  sourceDeletedAt?: string;
 }
 
 export interface NativePITRWindow {
@@ -1239,6 +1296,7 @@ export interface NativeRestoreTarget {
   accountIdentity: string;
   cloudId?: string;
   cloudRevision?: number;
+  cloudSqlNetwork?: CloudSQLRecoveryNetwork;
   connectionId: string;
   grantRevision?: number;
   nativeAccount?: string;
@@ -1529,6 +1587,11 @@ export interface PlanningSummary {
   update: number;
 }
 
+export interface Point {
+  t: string;
+  v: number;
+}
+
 export interface Policy {
   createdBy: string;
   enabled: boolean;
@@ -1757,6 +1820,26 @@ export interface RealtimeSend {
   op: string;
   orgId: string;
   projectIds?: string[];
+}
+
+export interface Rebuild {
+  createdAt: string;
+  createdBy: string;
+  finishedAt?: string;
+  id: string;
+  output: string;
+  projection: string;
+  retryable: boolean;
+  status: string;
+}
+
+export interface RebuildInputBody {
+  projection: string;
+  requestId: string;
+}
+
+export interface RebuildList {
+  rebuilds: Rebuild[];
 }
 
 export interface Recipe {
@@ -2302,6 +2385,7 @@ export interface ServiceConfig {
   buildTarget?: BuildTarget;
   catalog?: Recipe;
   cloudPlacement?: CloudPlacement;
+  cloudSqlNetwork?: CloudSQLApplicationNetwork;
   commitSha?: string;
   component?: ComponentConfig;
   context?: string;
@@ -2329,6 +2413,19 @@ export interface ServiceConfig {
   target?: string;
   targetSettings?: Record<string, any>;
   workload: string;
+}
+
+export interface ServiceTraffic {
+  bindingId: string;
+  environmentId: string;
+  latency: number;
+  name: string;
+  previousLatency: number;
+  previousRequests: number;
+  projectId: string;
+  provider: string;
+  requests: number;
+  statistic?: string;
 }
 
 export interface SetDefaultPlacementInputBody {
@@ -2406,9 +2503,27 @@ export interface SourceState {
   source: Source;
 }
 
+export interface SpendReport {
+  accounts: AccountSpend[];
+  month: string;
+  sources: UsageSource[];
+  totals: Amount[];
+}
+
 export interface StartAnalysisInputBody {
   ref?: string;
   sources?: string[];
+}
+
+export interface Status {
+  entityTypes: number;
+  keysReportUse: boolean;
+  kind: string;
+  migrations: number;
+  migrationsKnown: boolean;
+  reachable: boolean;
+  reason?: string;
+  version: string;
 }
 
 export interface Step {
@@ -2499,6 +2614,32 @@ export interface Target {
   updatedAt: string;
 }
 
+export interface Tenant {
+  createdAt: string;
+  id: string;
+  label: string;
+}
+
+export interface TenantInputBody {
+  tenantId: string;
+}
+
+export interface TenantList {
+  tenants: Tenant[];
+}
+
+export interface TrafficReport {
+  end: string;
+  previousTotal: number;
+  range: string;
+  requests: Point[];
+  services: ServiceTraffic[];
+  sources: UsageSource[];
+  start: string;
+  step: number;
+  total: number;
+}
+
 export interface UpdateInputBody {
   name: string;
   revision: number;
@@ -2525,6 +2666,15 @@ export interface UpdateTargetInputBody {
 export interface UpdateVariableInputBody {
   secret?: boolean;
   value: string;
+}
+
+export interface UsageSource {
+  cloud: string;
+  connectionId: string;
+  name: string;
+  reason?: string;
+  services?: string[];
+  status: string;
 }
 
 export interface Use {

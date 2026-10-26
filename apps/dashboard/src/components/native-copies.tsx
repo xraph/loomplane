@@ -183,9 +183,9 @@ export function NativeCopyHistory({
       ) : (
         copies.status !== "error" && (
           <NativeEmpty title="No native recovery copies">
-            Choose a Cloud SQL PostgreSQL 17 snapshot below to review a
-            temporary copy and its charges. Snapshot observations alone do not
-            establish a successful restore.
+            Choose a supported RDS or Cloud SQL snapshot, or read its PITR
+            window, to review a temporary copy and its charges. Saved provider
+            observations alone do not establish a successful restore.
           </NativeEmpty>
         )
       )}

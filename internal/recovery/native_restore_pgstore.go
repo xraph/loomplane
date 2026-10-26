@@ -87,9 +87,9 @@ func (s *PgStore) createNativeRestore(ctx context.Context, r *NativeRestore, sou
 	if err != nil {
 		return nil, err
 	}
-	var retired bool
-	if checkErr := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_native_retirements WHERE org_id=$1 AND source_id=$2 AND point_id=$3)`, r.OrgID, r.SourceID, r.PointID).Scan(&retired); checkErr != nil {
-		return nil, checkErr
+	retired, retirementErr := nativePointRetired(ctx, tx, r.OrgID, r.SourceID, r.PointID)
+	if retirementErr != nil {
+		return nil, retirementErr
 	}
 	if retired {
 		return nil, ErrConflict

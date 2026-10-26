@@ -101,6 +101,7 @@ export function NativeCopyReview({
   restoreTime?: string
 }) {
   const { can } = useOrganization()
+  const cloudSQLPITR = source.provider === "cloud-sql" && !!restoreTime
   const clouds = useQuery(useCloudsList, { path: { id: source.projectId } })
   const [chosenCloud, setChosenCloud] = useState("")
   const [target, setTarget] = useState("")
@@ -191,7 +192,9 @@ export function NativeCopyReview({
             Copy {point.name} from {source.name} into{" "}
             {source.provider === "rds"
               ? "a new private RDS instance"
-              : "a separate recovery project"}
+              : cloudSQLPITR
+                ? "a new instance in the source project and region, on a separate recovery network"
+                : "a separate recovery project"}
             . The source database stays unchanged.
           </DialogDescription>
           {restoreTime && (
@@ -218,7 +221,9 @@ export function NativeCopyReview({
             Ask your organization manager to grant this project a Cloud with a
             {source.provider === "rds"
               ? "managed RDS target with a private recovery route in the source account and region."
-              : "managed Cloud SQL target in a separate recovery project."}
+              : cloudSQLPITR
+                ? "managed Cloud SQL target in the source project and region, on a separate recovery network."
+                : "managed Cloud SQL target in a separate recovery project."}
           </NativeEmpty>
         ) : (
           <>
@@ -271,6 +276,7 @@ export function NativeCopyReview({
               <TargetChoice
                 key={cloud.id}
                 source={source}
+                cloudSQLPITR={cloudSQLPITR}
                 cloud={cloud}
                 value={target}
                 disabled={busy || submitted}
@@ -368,12 +374,14 @@ export function NativeCopyReview({
 
 function TargetChoice({
   source,
+  cloudSQLPITR,
   cloud,
   value,
   disabled,
   onChange,
 }: {
   source: NativeSource
+  cloudSQLPITR: boolean
   cloud: Profile
   value: string
   disabled: boolean
@@ -388,7 +396,7 @@ function TargetChoice({
       target.provider === source.provider &&
       target.runtime === "managed" &&
       !target.poolId &&
-      (source.provider === "rds"
+      (source.provider === "rds" || cloudSQLPITR
         ? target.region === source.region
         : target.connectionId !== source.connectionId)
   )

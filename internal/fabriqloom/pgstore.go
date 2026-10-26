@@ -1,0 +1,261 @@
+package fabriqloom
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/xraph/grove/drivers/pgdriver"
+
+	"github.com/xraph/loomplane/internal/deployments"
+)
+
+// PgStore is the Postgres KeyStore. The schema is migration group
+// "loomplane" (database/migrations).
+type PgStore struct {
+	db  *pgdriver.PgDB
+	now func() time.Time
+}
+
+// NewPgStore returns a KeyStore over db.
+func NewPgStore(db *pgdriver.PgDB) *PgStore { return &PgStore{db: db, now: time.Now} }
+
+var _ KeyStore = (*PgStore)(nil)
+
+// LockService uses a transaction-scoped advisory lock. A crashed process loses
+// its connection and lock, so the next writer can reconcile the remote keys.
+// Key and Vault writes use their own connections and commit before unlock.
+func (s *PgStore) LockService(ctx context.Context, orgID, environmentID, resource, service string) (func(), error) {
+	name := fmt.Sprintf("fabriq-key:%q:%q:%q:%q", orgID, environmentID, resource, service)
+	for {
+		tx, err := s.db.BeginTx(ctx, nil)
+		if err != nil {
+			return nil, fmt.Errorf("begin Fabriq key lock: %w", err)
+		}
+		var locked bool
+		if err = tx.QueryRow(ctx, `SELECT pg_try_advisory_xact_lock(hashtextextended($1, 0))`, name).Scan(&locked); err != nil {
+			return nil, errors.Join(fmt.Errorf("lock Fabriq keys: %w", err), tx.Rollback())
+		}
+		if locked {
+			return func() { _ = tx.Rollback() }, nil //nolint:errcheck // rollback or connection loss both release the lock
+		}
+		// Wait outside the pool so contending writers cannot occupy every
+		// connection that the current holder needs to record its key.
+		if rollbackErr := tx.Rollback(); rollbackErr != nil {
+			return nil, rollbackErr
+		}
+		timer := time.NewTimer(50 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return nil, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+const keyColumns = `id, org_id, project_id, environment_id, resource, service, tenant, prefix, state, created_at, updated_at, revoked_at`
+
+// Insert implements KeyStore.
+func (s *PgStore) Insert(ctx context.Context, r *KeyRecord) error {
+	_, err := s.db.Exec(ctx, `INSERT INTO loomplane_fabriq_keys (`+keyColumns+`)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
+		r.ID, r.OrgID, r.ProjectID, r.EnvironmentID, r.Resource, r.Service, r.Tenant, r.Prefix, string(r.State), r.CreatedAt, r.UpdatedAt, r.RevokedAt)
+	if err != nil {
+		return keyStoreError("record Fabriq key", err)
+	}
+	return nil
+}
+
+// SetState implements KeyStore. Revoking a key stamps revoked_at.
+func (s *PgStore) SetState(ctx context.Context, orgID, id string, from []KeyState, to KeyState) error {
+	states := make([]string, 0, len(from))
+	for _, st := range from {
+		states = append(states, string(st))
+	}
+	at := s.now().UTC()
+	res, err := s.db.Exec(ctx, `UPDATE loomplane_fabriq_keys
+		SET state = $4, updated_at = $5, revoked_at = CASE WHEN $4 = 'revoked' THEN $5 ELSE revoked_at END
+		WHERE org_id = $1 AND id = $2 AND state = ANY($3::text[])`, orgID, id, states, string(to), at)
+	if err != nil {
+		return keyStoreError("change Fabriq key state", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("change Fabriq key state: %w", err)
+	}
+	if n != 1 {
+		return ErrStateChanged
+	}
+	return nil
+}
+
+// ForService implements KeyStore.
+func (s *PgStore) ForService(ctx context.Context, orgID, environmentID, resource, service string) ([]*KeyRecord, error) {
+	return s.list(ctx, `WHERE org_id = $1 AND environment_id = $2 AND resource = $3 AND service = $4`, orgID, environmentID, resource, service)
+}
+
+// ForResource implements KeyStore.
+func (s *PgStore) ForResource(ctx context.Context, orgID, environmentID, resource string) ([]*KeyRecord, error) {
+	return s.list(ctx, `WHERE org_id = $1 AND environment_id = $2 AND resource = $3`, orgID, environmentID, resource)
+}
+
+func (s *PgStore) list(ctx context.Context, where string, args ...any) ([]*KeyRecord, error) {
+	rows, err := s.db.Query(ctx, `SELECT `+keyColumns+` FROM loomplane_fabriq_keys `+where+` ORDER BY created_at DESC, id DESC`, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list Fabriq keys: %w", err)
+	}
+	defer rows.Close()
+	var out []*KeyRecord
+	for rows.Next() {
+		var r KeyRecord
+		var state string
+		if err := rows.Scan(&r.ID, &r.OrgID, &r.ProjectID, &r.EnvironmentID, &r.Resource, &r.Service, &r.Tenant, &r.Prefix, &state, &r.CreatedAt, &r.UpdatedAt, &r.RevokedAt); err != nil {
+			return nil, fmt.Errorf("read Fabriq key: %w", err)
+		}
+		r.State = KeyState(state)
+		r.CreatedAt, r.UpdatedAt = r.CreatedAt.UTC(), r.UpdatedAt.UTC()
+		if r.RevokedAt != nil {
+			at := r.RevokedAt.UTC()
+			r.RevokedAt = &at
+		}
+		out = append(out, &r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list Fabriq keys: %w", err)
+	}
+	return out, nil
+}
+
+// keyStoreError is ErrConflict for a unique index's violation.
+func keyStoreError(what string, err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code == "23505" && pgErr.ConstraintName != "loomplane_fabriq_keys_pkey" {
+		return ErrConflict
+	}
+	return fmt.Errorf("%s: %w", what, err)
+}
+
+// PgRebuildStore is the Postgres RebuildStore, over table
+// loomplane_fabriq_rebuilds (database/migrations).
+type PgRebuildStore struct{ db *pgdriver.PgDB }
+
+// NewPgRebuildStore returns a RebuildStore over db.
+func NewPgRebuildStore(db *pgdriver.PgDB) *PgRebuildStore { return &PgRebuildStore{db: db} }
+
+var _ RebuildStore = (*PgRebuildStore)(nil)
+
+const rebuildColumns = `id, org_id, project_id, environment_id, resource, projection, request_id, status, attempt, output, created_by, created_at, finished_at`
+
+func scanRebuild(row pgx.Row) (*Rebuild, error) {
+	var r Rebuild
+	if err := row.Scan(&r.ID, &r.OrgID, &r.ProjectID, &r.EnvironmentID, &r.Resource, &r.Projection, &r.RequestID, &r.Status, &r.Attempt, &r.Output,
+		&r.CreatedBy, &r.CreatedAt, &r.FinishedAt); err != nil {
+		return nil, err
+	}
+	r.CreatedAt = r.CreatedAt.UTC()
+	if r.FinishedAt != nil {
+		at := r.FinishedAt.UTC()
+		r.FinishedAt = &at
+	}
+	return &r, nil
+}
+
+// Create implements RebuildStore. The table's unique indexes keep one
+// request id per organization and one queued or running rebuild per
+// resource and projection, so two requests racing store one rebuild.
+func (s *PgRebuildStore) Create(ctx context.Context, r *Rebuild) (*Rebuild, error) {
+	// A rebuild that finishes between the insert and the reads below
+	// frees its projection: try again.
+	for range 3 {
+		if _, err := s.db.Exec(ctx, `INSERT INTO loomplane_fabriq_rebuilds (id, org_id, project_id, environment_id, resource, projection, request_id, status, created_by, created_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, 'queued', $8, $9) ON CONFLICT DO NOTHING`,
+			r.ID, r.OrgID, r.ProjectID, r.EnvironmentID, r.Resource, r.Projection, r.RequestID, r.CreatedBy, r.CreatedAt); err != nil {
+			return nil, fmt.Errorf("record Fabriq rebuild: %w", err)
+		}
+		same, err := scanRebuild(s.db.QueryRow(ctx, `SELECT `+rebuildColumns+` FROM loomplane_fabriq_rebuilds WHERE org_id = $1 AND request_id = $2`, r.OrgID, r.RequestID))
+		switch {
+		case err == nil:
+			if same.ProjectID != r.ProjectID || same.EnvironmentID != r.EnvironmentID || same.Resource != r.Resource || same.Projection != r.Projection {
+				return nil, ErrRequestConflict
+			}
+			return same, nil
+		case !errors.Is(err, pgx.ErrNoRows):
+			return nil, fmt.Errorf("read Fabriq rebuild: %w", err)
+		}
+		active, err := scanRebuild(s.db.QueryRow(ctx, `SELECT `+rebuildColumns+` FROM loomplane_fabriq_rebuilds
+			WHERE org_id = $1 AND environment_id = $2 AND resource = $3 AND projection = $4 AND status IN ('queued','running')`,
+			r.OrgID, r.EnvironmentID, r.Resource, r.Projection))
+		switch {
+		case err == nil:
+			return active, nil
+		case !errors.Is(err, pgx.ErrNoRows):
+			return nil, fmt.Errorf("read Fabriq rebuild: %w", err)
+		}
+	}
+	return nil, errors.New("record Fabriq rebuild: another rebuild of that projection kept starting and finishing; request it again")
+}
+
+// List implements RebuildStore: the latest 50.
+func (s *PgRebuildStore) List(ctx context.Context, orgID string, ref deployments.ResourceRef) ([]Rebuild, error) {
+	return s.list(ctx, `WHERE org_id = $1 AND project_id = $2 AND environment_id = $3 AND resource = $4 ORDER BY created_at DESC, id DESC LIMIT 50`,
+		orgID, ref.ProjectID, ref.EnvironmentID, ref.Resource)
+}
+
+// Claim implements RebuildStore.
+func (s *PgRebuildStore) Claim(ctx context.Context, orgID, id, attempt string) (*Rebuild, error) {
+	r, err := scanRebuild(s.db.QueryRow(ctx, `UPDATE loomplane_fabriq_rebuilds SET status = 'running', attempt = $3
+		WHERE org_id = $1 AND id = $2 AND status = 'queued' RETURNING `+rebuildColumns, orgID, id, attempt))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrRebuildClaimed
+	}
+	if err != nil {
+		return nil, fmt.Errorf("claim Fabriq rebuild: %w", err)
+	}
+	return r, nil
+}
+
+// Finish implements RebuildStore.
+func (s *PgRebuildStore) Finish(ctx context.Context, orgID, id, attempt, status, output string, at time.Time) error {
+	res, err := s.db.Exec(ctx, `UPDATE loomplane_fabriq_rebuilds SET status = $4, output = $5, finished_at = $6
+		WHERE org_id = $1 AND id = $2 AND attempt = $3 AND status = 'running'`, orgID, id, attempt, status, output, at)
+	if err != nil {
+		return fmt.Errorf("finish Fabriq rebuild: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("finish Fabriq rebuild: %w", err)
+	}
+	if n != 1 {
+		return ErrRebuildClaimed
+	}
+	return nil
+}
+
+// Unfinished implements RebuildStore: the oldest 100.
+func (s *PgRebuildStore) Unfinished(ctx context.Context) ([]Rebuild, error) {
+	return s.list(ctx, `WHERE status IN ('queued','running') ORDER BY created_at, id LIMIT 100`)
+}
+
+func (s *PgRebuildStore) list(ctx context.Context, where string, args ...any) ([]Rebuild, error) {
+	rows, err := s.db.Query(ctx, `SELECT `+rebuildColumns+` FROM loomplane_fabriq_rebuilds `+where, args...)
+	if err != nil {
+		return nil, fmt.Errorf("list Fabriq rebuilds: %w", err)
+	}
+	defer rows.Close()
+	out := []Rebuild{}
+	for rows.Next() {
+		r, err := scanRebuild(rows)
+		if err != nil {
+			return nil, fmt.Errorf("read Fabriq rebuild: %w", err)
+		}
+		out = append(out, *r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list Fabriq rebuilds: %w", err)
+	}
+	return out, nil
+}

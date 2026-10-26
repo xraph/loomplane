@@ -338,6 +338,10 @@
         "enabled": {
           "description": "False leaves the service out.",
           "type": "boolean"
+        },
+        "cloud_sql_network": {
+          "description": "VPC and regional subnet for Cloud Run PSC database connections.",
+          "$ref": "#/$defs/cloudSQLApplicationNetwork"
         }
       }
     },
@@ -431,7 +435,48 @@
       "type": "object",
       "required": ["kind"],
       "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "required": ["cloud_sql_psc"]
+          },
+          "then": {
+            "required": ["provider", "version", "region"],
+            "properties": {
+              "kind": {
+                "const": "postgres"
+              },
+              "provider": {
+                "const": "cloud-sql"
+              },
+              "version": {
+                "const": "17"
+              }
+            }
+          }
+        }
+      ],
       "properties": {
+        "cloud_sql_psc": {
+          "description": "Manual PSC endpoint for a PostgreSQL 17 source. You manage the endpoint and DNS. Application attachment is not available yet.",
+          "type": "object",
+          "required": ["consumer_project", "network", "forwarding_rule"],
+          "additionalProperties": false,
+          "properties": {
+            "consumer_project": {
+              "type": "string",
+              "minLength": 6
+            },
+            "network": {
+              "type": "string",
+              "pattern": "^projects/[^/]+/global/networks/[^/]+$"
+            },
+            "forwarding_rule": {
+              "type": "string",
+              "pattern": "^projects/[^/]+/regions/[^/]+/forwardingRules/[^/]+$"
+            }
+          }
+        },
         "kind": {
           "$ref": "#/$defs/kind"
         },
@@ -792,6 +837,25 @@
         }
       },
       "required": ["service", "destination"]
+    },
+    "cloudSQLApplicationNetwork": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["consumer_project", "network", "subnetwork"],
+      "properties": {
+        "consumer_project": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{4,28}[a-z0-9]$"
+        },
+        "network": {
+          "type": "string",
+          "pattern": "^projects/[a-z][a-z0-9-]{4,28}[a-z0-9]/global/networks/[a-z]([a-z0-9-]{0,61}[a-z0-9])?$"
+        },
+        "subnetwork": {
+          "type": "string",
+          "pattern": "^projects/[a-z][a-z0-9-]{4,28}[a-z0-9]/regions/[a-z][a-z0-9-]*/subnetworks/[a-z]([a-z0-9-]{0,61}[a-z0-9])?$"
+        }
+      }
     }
   },
   "allOf": [

@@ -213,7 +213,7 @@ func cloudCompensationBindings(current []*Binding, snapshot *cloudprofiles.Snaps
 }
 
 func sameCompensationResource(a, b Binding) bool {
-	return a.ID == b.ID && a.OrgID == b.OrgID && a.ProjectID == b.ProjectID && a.EnvironmentID == b.EnvironmentID && a.Subject == b.Subject && a.Name == b.Name && a.Provider == b.Provider && a.Region == b.Region && a.Engine == b.Engine && a.URL == b.URL && a.ConnectionID == b.ConnectionID && a.ExternalID == b.ExternalID && a.PhysicalID == b.PhysicalID && a.Revision == b.Revision && a.CommitSHA == b.CommitSHA && reflect.DeepEqual(a.Config, b.Config)
+	return a.ID == b.ID && a.OrgID == b.OrgID && a.ProjectID == b.ProjectID && a.EnvironmentID == b.EnvironmentID && a.Subject == b.Subject && a.Name == b.Name && a.Provider == b.Provider && a.Region == b.Region && a.Engine == b.Engine && a.URL == b.URL && a.ConnectionID == b.ConnectionID && a.ExternalID == b.ExternalID && a.PhysicalID == b.PhysicalID && a.Revision == b.Revision && a.CommitSHA == b.CommitSHA && reflect.DeepEqual(a.Config, b.Config) && a.RetainsOwnership(&b) && b.RetainsOwnership(&a)
 }
 
 // cloudCompensationDescription exposes reviewed modes without saved input refs.

@@ -21,6 +21,8 @@ import (
 	"unicode"
 	"unicode/utf8"
 
+	providercontract "github.com/xraph/loomplane/pkg/provider"
+
 	"gopkg.in/yaml.v3"
 )
 
@@ -168,6 +170,8 @@ type Build struct {
 
 // Settings are what a service sets, and what an environment can override.
 type Settings struct {
+	// CloudSQLNetwork is the explicit application route for PSC attachments.
+	CloudSQLNetwork *providercontract.CloudSQLApplicationNetwork `json:"cloud_sql_network,omitempty" yaml:"cloud_sql_network,omitempty"`
 	// CloudTarget names a target in the environment's assigned Cloud.
 	CloudTarget string `json:"cloud_target,omitempty" yaml:"cloud_target,omitempty"`
 	// CloudTags select the one target in the assigned Cloud that carries
@@ -210,6 +214,8 @@ type Size struct {
 
 // Resource is a backing service the application needs, such as Postgres.
 type Resource struct {
+	// CloudSQLPSC opts a PostgreSQL 17 source into a reviewed manual PSC endpoint.
+	CloudSQLPSC *providercontract.CloudSQLSourceEndpoint `json:"cloud_sql_psc,omitempty" yaml:"cloud_sql_psc,omitempty"`
 	// Kind is what it is: postgres, mysql, redis and so on, the names
 	// repository analysis uses.
 	Kind     string `json:"kind" yaml:"kind"`
@@ -515,6 +521,9 @@ func (m *Manifest) Validate() error {
 		}
 		checkToken(add, path+".provider", "provider", r.Provider)
 		checkToken(add, path+".region", "region", r.Region)
+		if r.CloudSQLPSC != nil && (r.Provider != "cloud-sql" || r.Kind != "postgres" || r.Version != "17" || !r.CloudSQLPSC.Valid(r.Region)) {
+			add(path+".cloud_sql_psc", "requires explicit cloud-sql PostgreSQL 17 placement and a manual PSC endpoint in the resource region")
+		}
 		if r.Version != "" && !versionRE.MatchString(r.Version) {
 			add(path+".version", "%q isn't a version", r.Version)
 		}
@@ -659,6 +668,15 @@ func checkCloudTags(add func(string, string, ...any), path string, tags []string
 }
 
 func checkSettings(add func(string, string, ...any), path string, s Settings) {
+	if n := s.CloudSQLNetwork; n != nil {
+		region := s.Region
+		if parts := strings.Split(n.Subnetwork, "/"); region == "" && len(parts) == 6 {
+			region = parts[3]
+		}
+		if !n.Valid(region) {
+			add(path+".cloud_sql_network", "requires a canonical VPC and regional subnet in the consumer project")
+		}
+	}
 	if s.CloudTarget != "" && (len(s.CloudTarget) > 48 || !cloudTargetRE.MatchString(s.CloudTarget)) {
 		add(path+".cloud_target", "must be a lowercase target slug of at most 48 characters")
 	}
@@ -923,6 +941,9 @@ func (s Service) For(env string, d Defaults) Settings {
 	}
 	if o.Provider != "" && o.Provider != out.Provider {
 		out.Target, out.Endpoint = "", nil
+		if out.Provider != "" || o.Provider != "cloud-run" {
+			out.CloudSQLNetwork = nil
+		}
 	}
 	if o.Target != "" && o.Target != out.Target {
 		out.Endpoint = nil
@@ -940,6 +961,9 @@ func (s Service) For(env string, d Defaults) Settings {
 	}
 	if o.Endpoint != nil {
 		out.Endpoint = o.Endpoint
+	}
+	if o.CloudSQLNetwork != nil {
+		out.CloudSQLNetwork = o.CloudSQLNetwork
 	}
 	if o.HealthPath != "" {
 		out.HealthPath = o.HealthPath
@@ -968,6 +992,10 @@ func (s Service) For(env string, d Defaults) Settings {
 // cloudTagDefaults gives a service with no placement of its own the
 // manifest's default Cloud tags.
 func cloudTagDefaults(out Settings, d Defaults) Settings {
+	if out.CloudSQLNetwork != nil {
+		network := *out.CloudSQLNetwork
+		out.CloudSQLNetwork = &network
+	}
 	if len(d.CloudTags) > 0 && out.CloudTarget == "" && len(out.CloudTags) == 0 && out.Provider == "" && out.Target == "" {
 		out.CloudTags = slices.Clone(d.CloudTags)
 	}

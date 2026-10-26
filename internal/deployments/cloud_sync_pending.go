@@ -77,7 +77,7 @@ func (r *Runner) CleanupRevertedCloudPlan(ctx context.Context, org, planID, comp
 			}
 			continue
 		}
-		if a.Op != planning.Replace {
+		if !r.canResolvePendingAction(a) {
 			restored := false
 			for _, b := range bindings {
 				if b.Subject == a.Subject && b.Name == a.Name && b.PlanID == fmt.Sprintf("%s.%s", compensationID, plan.EnvironmentID) {
@@ -92,14 +92,6 @@ func (r *Runner) CleanupRevertedCloudPlan(ctx context.Context, org, planID, comp
 			}
 			continue
 		}
-		exec, ok := r.executors[a.Provider]
-		if !ok {
-			return ErrNoExecutor
-		}
-		pending, ok := exec.(PendingCloudResource)
-		if !ok {
-			return fmt.Errorf("%s cannot safely resolve the unfinished %s checkpoint; recover its provider resource identity before retrying cleanup", a.Provider, a.Name)
-		}
 		conn, credential, e := r.credentials.Credential(ctx, org, a.ConnectionID)
 		if e != nil {
 			return e
@@ -109,26 +101,12 @@ func (r *Runner) CleanupRevertedCloudPlan(ctx context.Context, org, planID, comp
 			return errors.New("the original target settings changed; restore the reviewed settings before retrying cleanup")
 		}
 		rc := readReplaceCheckpoint(step.Checkpoint)
-		job.Resume = rc.Apply
-		id := rc.PendingResource
-		if id == "" {
-			id, e = pending.PendingCloudResource(ctx, job)
-			if e != nil {
-				return e
-			}
-			if id != "" {
-				rc.PendingResource = id
-				step.Checkpoint = rc.encode()
-				if saveErr := r.store.UpdateStep(ctx, org, d.ID, *step); saveErr != nil {
-					return saveErr
-				}
-			}
-		}
-		raw, e := json.Marshal(a.Service)
+		checkpoint := r.pendingCheckpoint(ctx, job, step, heartbeat)
+		created, e := r.resolvePendingIdentity(ctx, job, rc, checkpoint)
 		if e != nil {
 			return e
 		}
-		created := &planning.Binding{OrgID: org, ProjectID: plan.ProjectID, EnvironmentID: plan.EnvironmentID, Subject: a.Subject, Name: a.Name, Provider: a.Provider, Region: a.Region, Engine: a.Engine, ConnectionID: a.ConnectionID, ExternalID: id, Config: raw, PlanID: plan.ID}
+		id := created.ExternalID
 		protected := false
 		for _, b := range bindings {
 			same, identityErr := r.sameBindingResource(ctx, org, created, b)
@@ -141,13 +119,6 @@ func (r *Runner) CleanupRevertedCloudPlan(ctx context.Context, org, planID, comp
 			}
 		}
 		if id != "" && !protected {
-			checkpoint := func(data []byte) error {
-				step.Checkpoint = append([]byte(nil), data...)
-				if e := r.store.UpdateStep(ctx, org, d.ID, *step); e != nil {
-					return e
-				}
-				return heartbeat(data)
-			}
 			if done, e := r.removeOne(ctx, job, created, rc, checkpoint); e != nil {
 				return e
 			} else if !done {

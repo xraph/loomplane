@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"path"
 	"regexp"
@@ -26,6 +27,18 @@ type Config struct {
 	HostKey               ssh.PublicKey
 	Signer                ssh.Signer
 	Details               map[string]string
+}
+
+// RecordedDetails applies transport defaults while retaining the recorded
+// daemon identity. Observed identity must still be compared against these facts.
+func (c *Config) RecordedDetails(recorded map[string]string) map[string]string {
+	details := maps.Clone(c.Details)
+	for _, key := range []string{"docker_id", "architecture"} {
+		if value := recorded[key]; value != "" {
+			details[key] = value
+		}
+	}
+	return details
 }
 
 // ParseConfig accepts a PEM key or a JSON private_key/passphrase pair.

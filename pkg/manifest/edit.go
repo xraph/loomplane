@@ -9,6 +9,8 @@ import (
 	"strings"
 
 	"gopkg.in/yaml.v3"
+
+	providercontract "github.com/xraph/loomplane/pkg/provider"
 )
 
 // Edits change a manifest's YAML in place, through its node tree, so the
@@ -18,12 +20,14 @@ import (
 // Placement changes where an existing service, resource or gateway runs.
 // A nil field leaves its value alone; an empty string restores inheritance.
 type Placement struct {
-	Section     string  `json:"section"`
-	Name        string  `json:"name"`
-	Environment string  `json:"environment,omitempty"`
-	Provider    *string `json:"provider,omitempty"`
-	Region      *string `json:"region,omitempty"`
-	CloudTarget *string `json:"cloud_target,omitempty"`
+	// An empty route restores inheritance; nil leaves the route unchanged.
+	CloudSQLNetwork *providercontract.CloudSQLApplicationNetwork `json:"cloud_sql_network,omitempty"`
+	Section         string                                       `json:"section"`
+	Name            string                                       `json:"name"`
+	Environment     string                                       `json:"environment,omitempty"`
+	Provider        *string                                      `json:"provider,omitempty"`
+	Region          *string                                      `json:"region,omitempty"`
+	CloudTarget     *string                                      `json:"cloud_target,omitempty"`
 	// CloudTags replaces the tag list; an empty list restores inheritance.
 	// Clear cloud_target in the same edit when switching to tags.
 	CloudTags  *[]string `json:"cloud_tags,omitempty"`
@@ -41,11 +45,11 @@ func WithPlacement(doc []byte, p Placement) ([]byte, error) {
 		return nil, err
 	}
 	if !slices.Contains([]string{"services", "resources", "gateways"}, p.Section) ||
-		(p.CloudTarget == nil && p.CloudTags == nil && p.Provider == nil && p.Region == nil && p.Enabled == nil && p.Target == nil && p.HealthPath == nil && p.Endpoint == nil && p.Build == nil) {
+		(p.CloudSQLNetwork == nil && p.CloudTarget == nil && p.CloudTags == nil && p.Provider == nil && p.Region == nil && p.Enabled == nil && p.Target == nil && p.HealthPath == nil && p.Endpoint == nil && p.Build == nil) {
 		return nil, fmt.Errorf("%w: name a service, resource or gateway and its placement changes", ErrInvalid)
 	}
-	if p.Section != "services" && (p.CloudTarget != nil || p.CloudTags != nil || p.Target != nil || p.HealthPath != nil || p.Endpoint != nil || p.Build != nil) {
-		return nil, fmt.Errorf("%w: cloud_target, cloud_tags, target, endpoint, health_path and build edits need a service", ErrInvalid)
+	if p.Section != "services" && (p.CloudSQLNetwork != nil || p.CloudTarget != nil || p.CloudTags != nil || p.Target != nil || p.HealthPath != nil || p.Endpoint != nil || p.Build != nil) {
+		return nil, fmt.Errorf("%w: cloud_sql_network, cloud_target, cloud_tags, target, endpoint, health_path and build edits need a service", ErrInvalid)
 	}
 	if p.Environment == "" && p.Section != "services" && p.Enabled != nil {
 		return nil, fmt.Errorf("%w: enabled on %s needs an environment", ErrInvalid, p.Section)
@@ -118,6 +122,13 @@ func WithPlacement(doc []byte, p Placement) ([]byte, error) {
 		}
 		setPlacementField(target, "endpoint", value, *p.Endpoint == (Endpoint{}))
 	}
+	if p.CloudSQLNetwork != nil {
+		value := &yaml.Node{}
+		if err := value.Encode(p.CloudSQLNetwork); err != nil {
+			return nil, err
+		}
+		setPlacementField(target, "cloud_sql_network", value, *p.CloudSQLNetwork == (providercontract.CloudSQLApplicationNetwork{}))
+	}
 	if p.Build != nil {
 		value := &yaml.Node{}
 		if err := value.Encode(p.Build); err != nil {
@@ -132,7 +143,19 @@ func WithPlacement(doc []byte, p Placement) ([]byte, error) {
 		}
 		setPlacementField(target, "enabled", value, false)
 	}
-	return encode(file)
+	out, encodeErr := encode(file)
+	if encodeErr != nil || p.Section != "services" {
+		return out, encodeErr
+	}
+	m, parseErr := Parse(out)
+	if parseErr != nil {
+		return nil, parseErr
+	}
+	settings := m.Services[p.Name].For(p.Environment, m.Defaults)
+	if settings.CloudSQLNetwork != nil && settings.Region != "" && !settings.CloudSQLNetwork.Valid(settings.Region) {
+		return nil, fmt.Errorf("%w: cloud_sql_network subnet must match the service's effective region %s", ErrInvalid, settings.Region)
+	}
+	return out, nil
 }
 
 // Detach aliases before editing so shared settings in another environment
@@ -286,6 +309,16 @@ func WithResource(doc []byte, name string, r Resource) ([]byte, error) {
 	}
 	if r.Version != "" {
 		value.Content = append(value.Content, scalar("version"), scalar(r.Version))
+	}
+	if r.Region != "" {
+		value.Content = append(value.Content, scalar("region"), scalar(r.Region))
+	}
+	if r.CloudSQLPSC != nil {
+		endpoint := &yaml.Node{}
+		if err := endpoint.Encode(r.CloudSQLPSC); err != nil {
+			return nil, err
+		}
+		value.Content = append(value.Content, scalar("cloud_sql_psc"), endpoint)
 	}
 	if len(r.Uses) > 0 {
 		uses := &yaml.Node{Kind: yaml.MappingNode}

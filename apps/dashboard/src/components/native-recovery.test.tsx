@@ -103,7 +103,9 @@ it("shows native identity, incomplete observations and provider refresh without 
   const refreshes = fixture()
   show()
   expect(await screen.findByText("daily")).toBeInTheDocument()
-  expect(screen.getByText(/db-original/)).toBeInTheDocument()
+  expect(
+    screen.getByRole("combobox", { name: "Cloud database history" })
+  ).toHaveTextContent("database · us-east-1 · db-original")
   expect(screen.getByText(/partial scan/i)).toBeInTheDocument()
   expect(
     screen.queryByRole("button", { name: /test restore|delete|retire/i })

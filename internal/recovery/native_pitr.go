@@ -2,7 +2,11 @@ package recovery
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/xraph/loomplane/internal/planning"
@@ -11,12 +15,58 @@ import (
 
 var ErrNativePITRUnavailable = errors.New("PITR is unavailable for this captured source and recovery profile")
 
+var nativePITRBackupReference = regexp.MustCompile(`^projects/[A-Za-z0-9_.-]{1,256}/backups/[A-Za-z0-9_.-]{1,256}$`)
+
 // NativePITRBounds are provider observations. Protocol pins copy isolation rules;
 // bounds may roll while a signed request retains its exact selected UTC time.
 type NativePITRBounds struct {
 	Protocol int       `json:"protocol"`
 	Earliest time.Time `json:"earliest"`
 	Latest   time.Time `json:"latest"`
+	// SettingsDigest pins Cloud SQL clone isolation to the reviewed source settings.
+	SettingsDigest string `json:"settings_digest,omitempty"`
+	// SourceBackup and SourceDeletedAt identify a deleted Cloud SQL incarnation.
+	SourceBackup    string     `json:"source_backup,omitempty"`
+	SourceDeletedAt *time.Time `json:"source_deleted_at,omitempty" format:"date-time"`
+}
+
+func validNativePITRIdentity(provider string, bounds *NativePITRBounds) bool {
+	if bounds == nil || bounds.Protocol != 1 {
+		return false
+	}
+	if provider == "rds" {
+		return bounds.SettingsDigest == "" && bounds.SourceBackup == "" && bounds.SourceDeletedAt == nil
+	}
+	if provider != "cloud-sql" || len(bounds.SettingsDigest) != sha256.Size*2 || strings.ToLower(bounds.SettingsDigest) != bounds.SettingsDigest {
+		return false
+	}
+	_, err := hex.DecodeString(bounds.SettingsDigest)
+	if err != nil {
+		return false
+	}
+	if bounds.SourceDeletedAt == nil {
+		return bounds.SourceBackup == ""
+	}
+	if !nativePITRBackupReference.MatchString(bounds.SourceBackup) {
+		return false
+	}
+	parts := strings.Split(bounds.SourceBackup, "/")
+	if parts[1] == "." || parts[1] == ".." || parts[3] == "." || parts[3] == ".." {
+		return false
+	}
+	_, offset := bounds.SourceDeletedAt.Zone()
+	return !bounds.SourceDeletedAt.IsZero() && offset == 0 && !bounds.SourceDeletedAt.After(time.Now()) && !bounds.Latest.After(*bounds.SourceDeletedAt)
+}
+
+// SameSource compares immutable PITR identity while allowing log bounds to roll.
+func (b *NativePITRBounds) SameSource(other *NativePITRBounds) bool {
+	if b == nil || other == nil || b.Protocol != 1 || other.Protocol != 1 || b.SettingsDigest != other.SettingsDigest || b.SourceBackup != other.SourceBackup {
+		return false
+	}
+	if b.SourceDeletedAt == nil || other.SourceDeletedAt == nil {
+		return b.SourceDeletedAt == nil && other.SourceDeletedAt == nil
+	}
+	return b.SourceDeletedAt.Equal(*other.SourceDeletedAt)
 }
 
 // NativePITRWindow is a dedicated window response, separate from snapshots.
@@ -72,6 +122,16 @@ func (s *NativeService) PITRWindow(ctx context.Context, p security.Principal, so
 	if point == nil || point.PITR == nil {
 		return nil, ErrNativeUnavailable
 	}
+	if s.Retirements != nil {
+		retired, retirementErr := s.Retirements.NativePointRetired(ctx, p.OrgID, sourceID, point.ID)
+		if retirementErr != nil {
+			return nil, retirementErr
+		}
+		if retired {
+			out.UnavailableReason = ErrNativePITRUnavailable.Error()
+			return out, nil
+		}
+	}
 	out.Available, out.PointID = true, point.ID
 	out.Earliest, out.Latest, out.ObservedAt = &point.PITR.Earliest, &point.PITR.Latest, &point.LastSeenAt
 	return out, nil
@@ -86,11 +146,14 @@ func (p NativePoint) SelectTime(provider string, at *time.Time) (NativePoint, er
 		}
 		return cloneNativePoint(p), nil
 	}
-	if provider != "rds" && provider != "cloud-sql" || at == nil || at.IsZero() || p.PITR == nil || p.PITR.Protocol != 1 {
+	if at == nil || at.IsZero() || !validNativePITRIdentity(provider, p.PITR) {
 		return NativePoint{}, ErrInvalid
 	}
 	_, offset := at.Zone()
 	bounds := p.PITR
+	if bounds.SourceDeletedAt != nil && (p.CreatedAt.IsZero() || !bounds.SourceDeletedAt.After(p.CreatedAt)) {
+		return NativePoint{}, ErrInvalid
+	}
 	if offset != 0 || provider == "rds" && at.Nanosecond() != 0 || bounds.Earliest.IsZero() || bounds.Latest.IsZero() || !bounds.Earliest.Before(bounds.Latest) || bounds.Latest.After(time.Now()) || at.Before(bounds.Earliest) || !at.Before(bounds.Latest) {
 		return NativePoint{}, ErrInvalid
 	}
@@ -109,6 +172,10 @@ func cloneNativePoint(p NativePoint) NativePoint {
 	}
 	if p.PITR != nil {
 		bounds := *p.PITR
+		if bounds.SourceDeletedAt != nil {
+			deleted := *bounds.SourceDeletedAt
+			bounds.SourceDeletedAt = &deleted
+		}
 		p.PITR = &bounds
 	}
 	if p.RestoreTime != nil {

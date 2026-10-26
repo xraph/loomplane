@@ -4,6 +4,8 @@ import (
 	"testing"
 
 	native "github.com/xraph/loomplane/internal/clouds/mysql"
+	"github.com/xraph/loomplane/internal/clouds/owned"
+	nativepg "github.com/xraph/loomplane/internal/clouds/postgres"
 	"github.com/xraph/loomplane/internal/clouds/server"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/planning"
@@ -45,5 +47,27 @@ func TestSQLDatabaseSpecUsesReviewedEngineWithoutPersistentCredentials(t *testin
 				t.Fatal("recipe accepted for another engine")
 			}
 		})
+	}
+}
+
+func TestDatabaseLabelsCarryExtensionsAndFSGroup(t *testing.T) {
+	recipe := &recipes.Recipe{ID: "timescaledb-17", Family: "postgres", Image: "example/timescaledb@sha256:abc", Extensions: []string{"timescaledb", "vector", "postgis"}, FSGroup: 1000}
+	labels := map[string]string{}
+	databaseLabels(labels, recipe, "database")
+	if labels[nativepg.LabelExtensions] != "timescaledb,vector,postgis" || labels[owned.LabelFSGroup] != "1000" || labels[server.LabelDatabase] != "database" {
+		t.Fatalf("wrong labels: %+v", labels)
+	}
+
+	builtin, err := recipes.Lookup("postgres", recipes.DefaultVersion("postgres"), "arm64")
+	if err != nil {
+		t.Fatal(err)
+	}
+	labels = map[string]string{}
+	databaseLabels(labels, builtin, "database")
+	if _, ok := labels[nativepg.LabelExtensions]; ok {
+		t.Fatalf("built-in postgres carries extensions: %+v", labels)
+	}
+	if _, ok := labels[owned.LabelFSGroup]; ok {
+		t.Fatalf("built-in postgres carries an fs group: %+v", labels)
 	}
 }

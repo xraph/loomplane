@@ -19,6 +19,9 @@ import (
 type NativeSQLTransports struct {
 	RDS      func(context.Context, *aws.Session, string, string, int32) (aws.DBConnector, error)
 	CloudSQL func(context.Context, *gcp.Session, string, string) (gcp.SQLConnector, error)
+	// CloudSQLDNS resolves PSC routes from the trusted verifier network.
+	// Nil keeps the system resolver for source, application and recovery checks.
+	CloudSQLDNS gcp.DNSResolver
 }
 
 // NativeDatabases reads provider metadata for the original reviewed source.

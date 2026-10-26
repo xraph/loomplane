@@ -81,9 +81,9 @@ What the application runs, by name. Names are lower case letters, digits and hyp
 | `scale`              | `{min, max}` instances, on targets that let you choose.                                                                                                                                                                                                                                                                                                                                                                                          |
 | `size`               | `{cpu, memory}`: virtual CPUs, such as 0.5 or 2, and MiB.                                                                                                                                                                                                                                                                                                                                                                                        |
 | `needs`              | The resources and services it talks to. Each one it names gets it an address in a variable, and it deploys after them.                                                                                                                                                                                                                                                                                                                           |
-| `need_options`       | Options this service passes to a need, by need and then by option name. See [Passing options](#passing-options-to-what-a-service-needs). |
+| `need_options`       | Options this service passes to a need, by need and then by option name. See [Passing options](#passing-options-to-what-a-service-needs).                                                                                                                                                                                                                                                                                                         |
 | `enabled`            | `false` leaves it out.                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `environments`       | Overrides by environment name: any of the fields above but `source`, `kind`, `build`, `needs` and `need_options`.                                                                                                                                                                                                                                                                                                                                                |
+| `environments`       | Overrides by environment name: any of the fields above but `source`, `kind`, `build`, `needs` and `need_options`.                                                                                                                                                                                                                                                                                                                                |
 
 A Dockerfile that copies from across the repository, such as a Go service that needs the module's `go.mod` at the root, has to build from the root:
 
@@ -106,15 +106,15 @@ How a service reaches another depends on where both run. Two services on ECS in 
 
 Backing services the application needs, by name. A resource can't share a service's name.
 
-| Field                | What it does                                                                          |
-| -------------------- | ------------------------------------------------------------------------------------- |
-| `kind`               | `postgres`, `mysql`, `redis` and so on, the names analysis uses. Required.            |
-| `provider`, `region` | Where it's provisioned.                                                               |
-| `version`            | The engine's version, such as `"17"` for Postgres. Without it, the provider's newest. |
-| `gateway`            | `true` puts a Postgres resource behind the [database gateway](#database_gateway).     |
-| `target`             | The ID of the checked server or Kubernetes connection a catalog resource runs on.     |
+| Field                | What it does                                                                              |
+| -------------------- | ----------------------------------------------------------------------------------------- |
+| `kind`               | `postgres`, `mysql`, `redis` and so on, the names analysis uses. Required.                |
+| `provider`, `region` | Where it's provisioned.                                                                   |
+| `version`            | The engine's version, such as `"17"` for Postgres. Without it, the provider's newest.     |
+| `gateway`            | `true` puts a Postgres resource behind the [database gateway](#database_gateway).         |
+| `target`             | The ID of the checked server or Kubernetes connection a catalog resource runs on.         |
 | `uses`               | Where a catalog resource gets each dependency. See [Catalog services](#catalog-services). |
-| `environments`       | `provider`, `region`, `enabled` or `gateway` by environment name.                     |
+| `environments`       | `provider`, `region`, `enabled` or `gateway` by environment name.                         |
 
 A managed resource is only reachable from services on its own cloud. A Vercel app that needs a Cloud SQL database is a problem on the plan.
 
@@ -133,13 +133,15 @@ resources:
 
 ### Catalog services
 
+For a complete stack with tenants, keys and optional projections, see [Fabriq](fabriq.md).
+
 A catalog resource can depend on other things, a Postgres for its data or a Redis for its cache. By default Loomplane provisions a new one of each, next to the resource, and wires it in. `uses` lets you choose something else, one dependency at a time. The key is the dependency's name, as the catalog lists it for that kind.
 
-| Field      | What it does                                                                               |
-| ---------- | ------------------------------------------------------------------------------------------ |
+| Field      | What it does                                                                                    |
+| ---------- | ----------------------------------------------------------------------------------------------- |
 | `resource` | Use another resource in this manifest. It has to be there, and it can't be the resource itself. |
-| `external` | Connect to an endpoint you added to the catalog, by its ID (`endpoint_` and 26 characters). |
-| `enabled`  | Turn an optional dependency on or off. `false` can't go with `resource` or `external`.     |
+| `external` | Connect to an endpoint you added to the catalog, by its ID (`endpoint_` and 26 characters).     |
+| `enabled`  | Turn an optional dependency on or off. `false` can't go with `resource` or `external`.          |
 
 Set `resource` or `external`, not both. Set nothing and you get a new one.
 

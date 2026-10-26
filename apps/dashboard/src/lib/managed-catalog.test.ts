@@ -2,7 +2,11 @@ import { expect, it } from "vitest"
 import type { Plan } from "@/client/forge/loomplane/types"
 import { assertDatabasePlan } from "@/lib/catalog"
 import { databaseTargetProvider } from "@/lib/catalog-targets"
-import { managedDatabaseProfile } from "@/lib/managed-catalog"
+import {
+  managedDatabaseProfile,
+  sameCloudSQLSourceEndpoint,
+  cloudSQLSourceEndpointValid,
+} from "@/lib/managed-catalog"
 import { managedDatabaseFixture } from "@/test-fixtures/managed-database"
 
 for (const target of ["rds", "cloud-sql"] as const) {
@@ -181,4 +185,31 @@ it("rejects incomplete or malformed displayed profile metadata", () => {
         `${key}: ${String(value)}`
       ).toBeUndefined()
   expect(offered(null)).toBeUndefined()
+})
+
+it("requires explicit matching intent before provisioning a PSC subnet", () => {
+  const endpoint = {
+    consumerProject: "app-project",
+    network: "projects/app-project/global/networks/apps",
+    forwardingRule:
+      "projects/app-project/regions/us-central1/forwardingRules/database",
+  }
+  const provisioned = {
+    ...endpoint,
+    provisionSubnetwork:
+      "projects/app-project/regions/us-central1/subnetworks/psc",
+  }
+  expect(sameCloudSQLSourceEndpoint(provisioned, endpoint)).toBe(false)
+  expect(sameCloudSQLSourceEndpoint(provisioned, { ...provisioned })).toBe(true)
+  expect(cloudSQLSourceEndpointValid(provisioned, "us-central1")).toBe(true)
+  expect(
+    cloudSQLSourceEndpointValid(
+      {
+        ...provisioned,
+        provisionSubnetwork:
+          "projects/app-project/regions/us-east1/subnetworks/psc",
+      },
+      "us-central1"
+    )
+  ).toBe(false)
 })

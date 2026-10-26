@@ -55,5 +55,5 @@ func (n *NativeDatabases) NativeCredentials(ctx context.Context, p security.Prin
 	if !r.ExpiresAt.After(time.Now()) {
 		return nil, recovery.ErrConflict
 	}
-	return &recovery.NativeCopyCredentials{CopyID: r.ID, Provider: r.Target.Provider, ConnectionName: connection, Database: databaseName(r.Source.Name), Username: "lp_recovery_" + s.Scope[:32], Password: passwords.ReaderPassword, ExpiresAt: r.ExpiresAt, CheckedAt: time.Now().UTC()}, nil
+	return &recovery.NativeCopyCredentials{CopyID: r.ID, Provider: r.Target.Provider, ConnectionName: connection, PrivateServiceConnect: s.Version == 2, Database: databaseName(r.Source.Name), Username: "lp_recovery_" + s.Scope[:32], Password: passwords.ReaderPassword, ExpiresAt: r.ExpiresAt, CheckedAt: time.Now().UTC()}, nil
 }

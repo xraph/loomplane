@@ -424,6 +424,11 @@ func (s *Service) decide(ctx context.Context, p security.Principal, id string, a
 	case len(in.Note) > maxNote:
 		return nil, fmt.Errorf("%w: the note can be at most %d characters", ErrInvalid, maxNote)
 	}
+	if approve {
+		if checkErr := RequireBackupPolicyPermission(ctx, s.authz, p, plan.ProjectID, plan.Actions); checkErr != nil {
+			return nil, checkErr
+		}
+	}
 	reqID, err := typeid.Generate("dec")
 	if err != nil {
 		return nil, fmt.Errorf("generate decision id: %w", err)
@@ -662,6 +667,7 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 		result.Problems = append(result.Problems, Finding{Code: "route-capacity", Message: routeErr.Error()})
 		result.Executable = false
 	}
+	s.checkBackupPreview(ctx, plan, result)
 	in := revisionInput{
 		EnvironmentID: plan.EnvironmentID, Environment: plan.Environment, Sources: plan.Sources,
 		Manifest: rev.Digest, Deployed: make([]deployedRef, 0, len(bindings)), Result: result,
@@ -914,6 +920,9 @@ func (s *Service) ApplyDecision(ctx context.Context, orgID, planID string, d orc
 		// The API checks this before it signals, so this is a decision on
 		// a plan that changed in between. The plan keeps waiting.
 		return StatusReady, nil
+	}
+	if checkErr := s.checkBackupDecision(ctx, plan, d); checkErr != nil {
+		return "", checkErr
 	}
 	_, revision, err := s.compute(ctx, plan)
 	if permanent(err) {

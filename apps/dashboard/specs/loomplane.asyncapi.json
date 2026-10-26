@@ -968,6 +968,9 @@
           "adopt_cloud_placement": {
             "type": "boolean"
           },
+          "backup_every_hours": {
+            "type": "integer"
+          },
           "changes": {
             "type": "array",
             "items": {
@@ -1112,6 +1115,10 @@
           },
           "org_id": {
             "type": "string"
+          },
+          "owned_resources": {
+            "type": "object",
+            "additionalProperties": true
           },
           "physical_id": {
             "type": "string"
@@ -1943,6 +1950,9 @@
           "account_identity": {
             "type": "string"
           },
+          "cloud_sql_psc": {
+            "$ref": "#/components/schemas/CloudSQLSourceEndpoint"
+          },
           "connection_id": {
             "type": "string"
           },
@@ -2687,6 +2697,9 @@
           },
           "workload": {
             "type": "string"
+          },
+          "cloud_sql_network": {
+            "$ref": "#/components/schemas/CloudSQLApplicationNetwork"
           }
         }
       },
@@ -3843,6 +3856,47 @@
             "items": {
               "type": "string"
             }
+          }
+        }
+      },
+      "CloudSQLSourceEndpoint": {
+        "type": "object",
+        "required": [
+          "consumer_project",
+          "network",
+          "forwarding_rule"
+        ],
+        "properties": {
+          "consumer_project": {
+            "type": "string"
+          },
+          "forwarding_rule": {
+            "type": "string"
+          },
+          "network": {
+            "type": "string"
+          },
+          "provision_subnetwork": {
+            "type": "string"
+          }
+        }
+      },
+      "CloudSQLApplicationNetwork": {
+        "type": "object",
+        "required": [
+          "consumer_project",
+          "network",
+          "subnetwork"
+        ],
+        "properties": {
+          "consumer_project": {
+            "type": "string"
+          },
+          "network": {
+            "type": "string"
+          },
+          "subnetwork": {
+            "type": "string"
           }
         }
       }

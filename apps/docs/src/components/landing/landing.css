@@ -2782,10 +2782,6 @@
   padding: 14px 16px;
   min-width: 0;
 }
-.lp .ds-card.dashed {
-  border-style: dashed;
-  background: transparent;
-}
 .lp .ds-card.flush {
   padding: 0;
   overflow: hidden;
@@ -2909,32 +2905,10 @@
   fill: var(--muted);
   font: 9px var(--f-sans);
 }
-.lp .ds-card p.ds-note {
-  margin: 10px 0 12px;
-  line-height: 1.5;
-}
-.lp .ds-kv {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 7px 12px;
-  margin: 0;
-  font-size: 12px;
-}
-.lp .ds-kv dt {
-  color: var(--ink-2);
-}
-.lp .ds-kv dd {
-  margin: 0;
-  color: var(--muted);
-}
 .lp .ds-link {
   color: var(--blue-ink);
   font-size: 12px;
   font-weight: 500;
-}
-.lp .ds-card.dashed .ds-link {
-  display: block;
-  margin-top: 14px;
 }
 .lp .ds-feed {
   list-style: none;
@@ -3069,7 +3043,7 @@
   .lp .ds-row.r2 {
     grid-template-columns: 1fr 1fr;
   }
-  .lp .ds-row.r2 .dashed {
+  .lp .ds-row.r2 .ds-spend {
     display: none;
   }
   .lp .ds-search {

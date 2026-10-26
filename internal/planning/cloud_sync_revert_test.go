@@ -10,6 +10,8 @@ import (
 
 func TestCloudCompensationUsesSavedSourceAndRetainedIdentity(t *testing.T) {
 	source := Binding{ID: "binding", OrgID: "org", ProjectID: "project", EnvironmentID: "env", Subject: ServiceSubject, Name: "web", Provider: "server", ConnectionID: "source", ExternalID: "original", PlanID: "source-plan", Config: json.RawMessage(`{"commit_sha":"saved","applied_inputs":{"variables":"saved-vars"}}`)}
+	source.PhysicalID = "native-original"
+	source.OwnedResources = map[string]json.RawMessage{"zone_id": json.RawMessage(`"123"`)}
 	candidate := source
 	candidate.ExternalID, candidate.ConnectionID, candidate.PlanID = "candidate", "destination", "sync.env"
 	candidate.Config = json.RawMessage(`{"commit_sha":"newer"}`)
@@ -42,6 +44,13 @@ func TestCloudCompensationUsesSavedSourceAndRetainedIdentity(t *testing.T) {
 			t.Fatal("released source appears live")
 		}
 	}
+	for _, ownership := range []map[string]json.RawMessage{nil, {"zone_id": json.RawMessage(`"foreign"`)}} {
+		candidate.Replaced[0].OwnedResources = ownership
+		if _, _, err := cloudCompensationBindings([]*Binding{&candidate}, snapshot, "sync", "env", false); err == nil {
+			t.Error("changed retained source ownership accepted")
+		}
+	}
+	candidate.Replaced[0].OwnedResources = source.OwnedResources
 	candidate.Replaced[0].Config = json.RawMessage(`{"commit_sha":"other"}`)
 	if _, _, err := cloudCompensationBindings([]*Binding{&candidate}, snapshot, "sync", "env", false); err == nil {
 		t.Fatal("different retained source config accepted")
