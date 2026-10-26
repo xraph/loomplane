@@ -354,6 +354,7 @@ func (e *Extension) Register(fapp forge.App) error {
 	e.plans = planning.NewService(planning.Deps{
 		Capacity: routeService, CapacityTemplates: routeService, CapacityPrincipal: principal,
 		Store: planStore, Projects: prj, Analyses: discovery.NewPgStore(pg), Commits: commits, Manifests: e.manifests,
+		History:       &deployments.History{Store: deployStore, Plans: planStore, Providers: catalog},
 		CloudProfiles: e.cloudStore, CloudSyncWorkflow: e.deployments,
 		Providers: catalog, Connections: clouds, Authz: authz, Workflow: e.deployments, Audit: auditor,
 		Window: e.cfg.Planning.ApprovalWindow, Telemetry: metrics,

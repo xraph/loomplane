@@ -158,8 +158,10 @@ func (c *CloudRun) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 	})
 
 	if state.Image == "" {
-		if state.Image, err = c.build(ctx, s, job, &state, save); err != nil {
-			return nil, err
+		if state.Image = reusedImage(job); state.Image == "" {
+			if state.Image, err = c.build(ctx, s, job, &state, save); err != nil {
+				return nil, err
+			}
 		}
 		save()
 	}

@@ -147,8 +147,10 @@ func (a *Azure) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 		}
 	}
 	if state.Image == "" {
-		if state.Image, err = a.build(ctx, s, job, cfg, &state, save); err != nil {
-			return nil, err
+		if state.Image = reusedImage(job); state.Image == "" {
+			if state.Image, err = a.build(ctx, s, job, cfg, &state, save); err != nil {
+				return nil, err
+			}
 		}
 		save()
 	}

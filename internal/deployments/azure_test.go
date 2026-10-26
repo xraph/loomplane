@@ -630,3 +630,26 @@ func TestAzure_theAdminUserNeverRetriesAPull(t *testing.T) {
 		})
 	}
 }
+
+func TestAzure_deploysAReusedImageWithoutBuilding(t *testing.T) {
+	f := azuretest.New(t)
+	reused := azure.RegistryName(azuretest.Subscription, "loomplane") + ".azurecr.io/api-23456789@sha256:" + strings.Repeat("a8", 32)
+	job := azureJob(t, apiConfig())
+	messages := reusing(t, job, reused)
+	out, err := (&Azure{Client: azure.New(f.URL())}).Apply(t.Context(), job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Image != reused || out.Revision != reused || !slices.Contains(*messages, "Using the image staging ran") {
+		t.Fatalf("outcome %+v, progress %q", out, *messages)
+	}
+	f.Lock()
+	defer f.Unlock()
+	if len(f.Tasks) != 0 || len(f.Uploads) != 0 {
+		t.Fatalf("built: tasks %v, uploads %d", f.Tasks, len(f.Uploads))
+	}
+	c := f.Apps[AzureName(job)]["properties"].(map[string]any)["template"].(map[string]any)["containers"].([]any)[0].(map[string]any)
+	if c["image"] != reused {
+		t.Fatalf("the app runs %v", c["image"])
+	}
+}

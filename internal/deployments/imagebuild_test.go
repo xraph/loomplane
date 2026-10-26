@@ -282,3 +282,43 @@ func TestImageBuildMutationsUsePhysicalFence(t *testing.T) {
 		})
 	}
 }
+
+func TestImageBuilder_usesAReusedImageInsideTheReviewedRegistry(t *testing.T) {
+	digest := "sha256:" + strings.Repeat("f9", 32)
+	reuse := func(job *Job, reference string) {
+		cfg := *job.Action.Service
+		cfg.Artifact = &planning.ReusedArtifact{Reference: reference, Digest: digest, FromEnvironment: "staging"}
+		job.Action.Service = &cfg
+	}
+	job, builder, _, builds := imageBuildFixture(t, true)
+	registry, _, err := job.BuildCredentials.Credential(t.Context(), "org_fixture", "conn_registry")
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint, err := url.Parse(registry.Details["endpoint"])
+	if err != nil {
+		t.Fatal(err)
+	}
+	inside := endpoint.Host + "/team/loomplane/api-fixture@" + digest
+	reuse(job, inside)
+	var state ImageArtifact
+	ref, err := builder.Build(t.Context(), job, &state, func() error { return nil })
+	if err != nil || ref != inside || state.Reference != inside || state.Digest != digest || *builds != 0 {
+		t.Fatalf("reference %q, state %+v, builds %d: %v", ref, state, *builds, err)
+	}
+	if err := builder.PrepareEffects(t.Context(), job); err != nil {
+		t.Fatalf("a reused image needs no builder: %v", err)
+	}
+
+	job, builder, _, builds = imageBuildFixture(t, true)
+	reuse(job, "elsewhere.example.com/team/loomplane/api-fixture@"+digest)
+	if _, err := builder.Build(t.Context(), job, &ImageArtifact{}, func() error { return nil }); err == nil || err.Error() != "the reused image is outside the selected registry prefix" || *builds != 0 {
+		t.Fatalf("outside the prefix: %v, builds %d", err, *builds)
+	}
+
+	job, builder, _, builds = imageBuildFixture(t, false)
+	reuse(job, inside)
+	if _, err := builder.Build(t.Context(), job, &ImageArtifact{}, func() error { return nil }); err == nil || !strings.Contains(err.Error(), "needs the registry") || *builds != 0 {
+		t.Fatalf("without a registry: %v, builds %d", err, *builds)
+	}
+}

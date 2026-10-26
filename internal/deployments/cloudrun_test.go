@@ -3,6 +3,8 @@ package deployments
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -264,5 +266,56 @@ func TestCloudRun_deploysByTagWhenItMayNotReadTheDigest(t *testing.T) {
 	exec = &CloudRun{Google: gcp.New(srv.URL), Ctrl: CtrlPlane{Providers: cpprovider.NewRegistry(), Instances: &createdInstances{}}}
 	if _, err := exec.Apply(t.Context(), cloudRunJob(t, pack(), srv.URL+"/token")); err == nil || !strings.Contains(err.Error(), "the build reported no image digest") {
 		t.Fatalf("a tag with no version: %v", err)
+	}
+}
+
+// reusing makes job deploy reference, the image staging ran, instead of
+// building: opening its source fails the test. It returns the progress
+// messages the step reports.
+func reusing(t *testing.T, job *Job, reference string) *[]string {
+	t.Helper()
+	cfg := *job.Action.Service
+	_, digest, _ := strings.Cut(reference, "@")
+	cfg.Artifact = &planning.ReusedArtifact{Reference: reference, Digest: digest, CommitSHA: doApproved, FromEnvironment: "staging", FromDeploymentID: "dep_staging"}
+	job.Action.Service = &cfg
+	job.Source = func(context.Context) (io.ReadCloser, int64, error) {
+		t.Error("the step opened its source to build it")
+		return nil, 0, errors.New("no source")
+	}
+	var mu sync.Mutex
+	messages := &[]string{}
+	job.Progress = func(_, m string) {
+		mu.Lock()
+		defer mu.Unlock()
+		*messages = append(*messages, m)
+	}
+	return messages
+}
+
+func TestCloudRun_deploysAReusedImageWithoutBuilding(t *testing.T) {
+	reused := "europe-west1-docker.pkg.dev/shop/loomplane/api-23456789@sha256:" + strings.Repeat("d6", 32)
+	fake := &cloudBuildFake{}
+	srv := fake.serve(t)
+	instances := &createdInstances{}
+	exec := &CloudRun{Google: gcp.New(srv.URL), Ctrl: CtrlPlane{Providers: cpprovider.NewRegistry(), Instances: instances}}
+	job := cloudRunJob(t, apiConfig(), srv.URL+"/token")
+	messages := reusing(t, job, reused)
+	out, err := exec.Apply(t.Context(), job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out.Image != reused || out.Revision != reused {
+		t.Fatalf("outcome %+v, want %s", out, reused)
+	}
+	if len(instances.created) != 1 || instances.created[0].Services[0].Image != reused {
+		t.Fatalf("Ctrl Plane was asked for %+v", instances.created)
+	}
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	if len(fake.builds) != 0 {
+		t.Fatalf("started builds %v", fake.builds)
+	}
+	if !slices.Contains(*messages, "Using the image staging ran") {
+		t.Fatalf("progress %q", *messages)
 	}
 }

@@ -38,6 +38,24 @@ func unpinnedWarning(name, permission string) error {
 	return fmt.Errorf("%s runs its image by tag: the connection lacks %s, so Loomplane couldn't read the digest the build pushed. Until it has it, promoting or rolling back %s builds it again", name, permission, name)
 }
 
+// reusedImage is the image an earlier release ran that the plan deploys
+// instead of building this step's commit again, or "" when it builds.
+func reusedImage(job *Job) string {
+	ref := reusedReference(job.Action.Service)
+	if ref != "" {
+		job.Progress(StepBuilding, "Using the image "+job.Action.Service.Artifact.FromEnvironment+" ran")
+	}
+	return ref
+}
+
+// reusedReference is the image cfg reuses, or "" when it builds.
+func reusedReference(cfg *planning.ServiceConfig) string {
+	if cfg == nil || cfg.Artifact == nil {
+		return ""
+	}
+	return cfg.Artifact.Reference
+}
+
 // byDigest names image, a repository and tag, by the digest a build
 // pushed it under instead of its tag.
 func byDigest(image, digest string) (string, error) {
@@ -93,16 +111,17 @@ func (b *ImageBuilder) Build(ctx context.Context, job *Job, state *ImageArtifact
 		return "", errors.New("the service needs reviewed remote build settings")
 	}
 	target := job.Action.Service.BuildTarget
+	reused := reusedReference(job.Action.Service) != ""
 	collector := job.Collector("image-build", job.LogAttempt())
 	defer func() { err = collector.safeError(err) }()
 	var registryConfig *registry.Config
 	if target.Registry != "" {
-		connection, raw, credentialErr := b.connection(ctx, job, target.Registry, connections.Registry, target.RegistrySettings, target.Image != "")
+		connection, raw, credentialErr := b.connection(ctx, job, target.Registry, connections.Registry, target.RegistrySettings, target.Image != "" || reused)
 		if credentialErr != nil {
 			return "", credentialErr
 		}
 		collector.addCredential(raw)
-		if target.Image == "" && connection.Details["push"] != "ready" {
+		if target.Image == "" && !reused && connection.Details["push"] != "ready" {
 			return "", errors.New("a source build needs registry push access")
 		}
 		registryConfig, err = registry.ParseConfig(raw, connection.Details)
@@ -113,9 +132,18 @@ func (b *ImageBuilder) Build(ctx context.Context, job *Job, state *ImageArtifact
 			return "", errors.New("registry trust settings changed since review; plan again")
 		}
 	}
-	if target.Image != "" {
-		state.Reference = target.Image
-		_, state.Digest, _ = strings.Cut(target.Image, "@")
+	if target.Image != "" || reused {
+		image, what := target.Image, "pinned"
+		if image == "" {
+			// A promotion deploys the image its From environment ran,
+			// pulled through the registry this target pushes to.
+			if registryConfig == nil {
+				return "", errors.New("a reused image needs the registry it was pushed to")
+			}
+			image, what = reusedImage(job), "reused"
+		}
+		state.Reference = image
+		_, state.Digest, _ = strings.Cut(image, "@")
 		if !imageDigest.MatchString(state.Digest) {
 			return "", errors.New("choose a digest-pinned existing image")
 		}
@@ -124,8 +152,8 @@ func (b *ImageBuilder) Build(ctx context.Context, job *Job, state *ImageArtifact
 			if parseErr != nil {
 				return "", parseErr
 			}
-			if !strings.HasPrefix(target.Image, endpoint.Host+"/"+registryConfig.Repository+"/") {
-				return "", errors.New("the pinned image is outside the selected registry prefix")
+			if !strings.HasPrefix(image, endpoint.Host+"/"+registryConfig.Repository+"/") {
+				return "", fmt.Errorf("the %s image is outside the selected registry prefix", what)
 			}
 		}
 		state.Registry = target.Registry
@@ -327,7 +355,7 @@ func dockerRequest(ctx context.Context, client *server.Client, method, resource 
 // PrepareEffects uses the immutable accepted builder identity, including when
 // the builder and deployment daemon differ. It needs no current target grant.
 func (b *ImageBuilder) PrepareEffects(ctx context.Context, job *Job) error {
-	if job.Action.Service == nil || job.Action.Service.BuildTarget == nil || job.Action.Service.BuildTarget.Image != "" {
+	if job.Action.Service == nil || job.Action.Service.BuildTarget == nil || job.Action.Service.BuildTarget.Image != "" || reusedReference(job.Action.Service) != "" {
 		return nil
 	}
 	fence, ok := server.EffectFenceFrom(ctx)

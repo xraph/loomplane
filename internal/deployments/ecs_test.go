@@ -10,8 +10,12 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
+
+	cpprovider "github.com/xraph/ctrlplane/provider"
 
 	"github.com/xraph/loomplane/internal/clouds/aws"
 	"github.com/xraph/loomplane/internal/connections"
@@ -180,5 +184,44 @@ func TestECS_deploysByTagWhenItMayNotReadTheDigest(t *testing.T) {
 	if got := unpinnedWarning("api", state.Unpinned).Error(); !strings.Contains(got, "ecr:DescribeImages") ||
 		!strings.Contains(got, "promoting or rolling back api builds it again") {
 		t.Fatalf("warning %q", got)
+	}
+}
+
+// A promotion that reuses staging's image skips CodeBuild and ECR and goes
+// straight to deploying it. The fake AWS refuses everything, so the step
+// stops at the first call that deploys.
+func TestECS_deploysAReusedImageWithoutBuilding(t *testing.T) {
+	reused := "123456789012.dkr.ecr.eu-west-1.amazonaws.com/loomplane/api-23456789@sha256:" + strings.Repeat("e7", 32)
+	var mu sync.Mutex
+	var asked []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_ = r.ParseForm()
+		mu.Lock()
+		asked = append(asked, r.Method+" "+r.URL.Path+" "+r.Header.Get("X-Amz-Target")+" "+r.Form.Get("Action"))
+		mu.Unlock()
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"__type":"ValidationException","message":"refused"}`))
+	}))
+	t.Cleanup(srv.Close)
+	exec := &ECS{AWS: aws.New(srv.URL), Ctrl: CtrlPlane{Providers: cpprovider.NewRegistry(), Instances: &createdInstances{}}}
+	job := azureJob(t, apiConfig())
+	job.Action.Provider = "ecs-fargate"
+	job.Connection = &connections.Connection{ID: "conn_a", Cloud: connections.AWS, Account: "123456789012", Details: map[string]string{"region": "eu-west-1"}}
+	job.Credential = []byte(`{"access_key_id":"AKIATESTTESTTESTTEST","secret_access_key":"secret-test-secret-test"}`)
+	var saved ecsState
+	job.Checkpoint = func(data []byte) error { return json.Unmarshal(data, &saved) }
+	messages := reusing(t, job, reused)
+	if _, err := exec.Apply(t.Context(), job); err == nil {
+		t.Fatal("the fake AWS deployed nothing, yet the step succeeded")
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	for _, call := range asked {
+		if strings.Contains(call, "CodeBuild") || strings.Contains(call, "AmazonEC2ContainerRegistry") || strings.HasPrefix(call, http.MethodPut) {
+			t.Errorf("built: %s", call)
+		}
+	}
+	if !slices.Contains(*messages, "Using the image staging ran") || !slices.Contains(*messages, "Deploying "+reused) || saved.Image != reused || saved.BuildID != "" {
+		t.Fatalf("progress %q, checkpoint %+v", *messages, saved)
 	}
 }
