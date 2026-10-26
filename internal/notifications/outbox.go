@@ -33,6 +33,7 @@ type DeploymentPayload struct {
 }
 type outboxItem struct {
 	id, org, user, owner   string
+	kind                   string
 	payload, wire          []byte
 	inboxDone, webhookDone bool
 	emailState             string
@@ -71,10 +72,13 @@ func (s *Service) drain(ctx context.Context) error {
 }
 func (s *Service) claim(ctx context.Context) (*outboxItem, error) {
 	item := &outboxItem{owner: rand.Text()}
-	err := s.pg.QueryRow(ctx, `UPDATE loomplane_notification_outbox SET lease_owner=$1,lease_until=clock_timestamp()+interval '2 minutes',attempts=attempts+1 WHERE id=(SELECT id FROM loomplane_notification_outbox WHERE completed_at IS NULL AND attempts<10 AND next_attempt_at<=clock_timestamp() AND (lease_until IS NULL OR lease_until<clock_timestamp()) ORDER BY next_attempt_at,created_at,id FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING id,org_id,user_id,payload,wire_payload,inbox_done,webhook_done,email_state,attempts,created_at`, item.owner).Scan(&item.id, &item.org, &item.user, &item.payload, &item.wire, &item.inboxDone, &item.webhookDone, &item.emailState, &item.attempts, &item.created)
+	err := s.pg.QueryRow(ctx, `UPDATE loomplane_notification_outbox SET lease_owner=$1,lease_until=clock_timestamp()+interval '2 minutes',attempts=attempts+1 WHERE id=(SELECT id FROM loomplane_notification_outbox WHERE completed_at IS NULL AND attempts<10 AND next_attempt_at<=clock_timestamp() AND (lease_until IS NULL OR lease_until<clock_timestamp()) ORDER BY next_attempt_at,created_at,id FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING id,org_id,user_id,kind,payload,wire_payload,inbox_done,webhook_done,email_state,attempts,created_at`, item.owner).Scan(&item.id, &item.org, &item.user, &item.kind, &item.payload, &item.wire, &item.inboxDone, &item.webhookDone, &item.emailState, &item.attempts, &item.created)
 	return item, err
 }
 func (s *Service) process(ctx context.Context, item *outboxItem) error {
+	if item.kind == kindConnection {
+		return s.processConnection(ctx, item)
+	}
 	var payload DeploymentPayload
 	if len(item.wire) == 0 {
 		if err := json.Unmarshal(item.payload, &payload); err != nil {
