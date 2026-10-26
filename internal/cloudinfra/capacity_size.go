@@ -144,9 +144,9 @@ func sizeResources(size provider.ServerSize) (ResourceVector, error) {
 	if cpu.CPUMillis <= 0 || memory.MemoryBytes <= 0 || disk.StorageBytes <= 0 {
 		return ResourceVector{}, ErrInvalid
 	}
-	// Pools count NVIDIA GPUs only; AMD sizes can't join one yet.
-	if !sizeAcceleratorValid(size) {
-		return ResourceVector{}, fmt.Errorf("%w: AMD GPU servers aren't supported yet", ErrInvalid)
+	// Pools count known NVIDIA GPUs only.
+	if err := sizeAcceleratorError(size); err != nil {
+		return ResourceVector{}, err
 	}
 	kind, gpus := sizeGPUs(size)
 	return ResourceVector{Servers: 1, CPUMillis: cpu.CPUMillis, MemoryBytes: memory.MemoryBytes, StorageBytes: disk.StorageBytes, GPUKind: kind, GPUs: gpus}, nil

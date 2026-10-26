@@ -73,21 +73,26 @@ func (s *Service) SavePool(ctx context.Context, p security.Principal, cloud, id 
 	if err := validatePoolGPUs(in); err != nil {
 		return nil, err
 	}
-	if len(in.Members) == 0 {
-		policies, available := s.Store.(CapacityPolicyStore)
-		if !available || id == "" {
-			return nil, ErrInvalid
-		}
-		policy, policyErr := policies.GetCapacityPolicy(ctx, p.OrgID, cloud)
-		if policyErr != nil {
+	policies, available := s.Store.(CapacityPolicyStore)
+	var policy *CapacityPolicy
+	if available && id != "" {
+		var policyErr error
+		if policy, policyErr = policies.GetCapacityPolicy(ctx, p.OrgID, cloud); policyErr != nil {
 			return nil, policyErr
 		}
-		template, configured := expansionPool(policy, id)
-		if !policy.Enabled || !configured {
-			return nil, ErrInvalid
-		}
-		if template.AcceleratorKind != in.AcceleratorKind {
-			return nil, fmt.Errorf("%w: the pool's GPU kind must match its expansion template", ErrInvalid)
+	}
+	var template PoolExpansionPolicy
+	configured := false
+	if policy != nil {
+		template, configured = expansionPool(policy, id)
+	}
+	if len(in.Members) == 0 && (policy == nil || !policy.Enabled || !configured) {
+		return nil, ErrInvalid
+	}
+	// Expansions add servers of the template's kind, so the pool has to hold the same kind.
+	if configured {
+		if err := poolKindMatchesTemplate(id, in.AcceleratorKind, template.AcceleratorKind); err != nil {
+			return nil, err
 		}
 	}
 	if id == "" {
@@ -151,6 +156,16 @@ func (s *PgStore) SavePool(ctx context.Context, p *Pool, previous int64) error {
 	defer rollback(tx)
 	if checkErr := lockCapacityCloud(ctx, tx, p.OrgID, p.CloudID); checkErr != nil {
 		return checkErr
+	}
+	// Policy saves take the same Cloud lock, so the template can't change under this check.
+	policy, err := capacityPolicyTx(ctx, tx, p.OrgID, p.CloudID)
+	if err != nil {
+		return err
+	}
+	if template, configured := expansionPool(policy, p.ID); configured {
+		if checkErr := poolKindMatchesTemplate(p.ID, p.AcceleratorKind, template.AcceleratorKind); checkErr != nil {
+			return checkErr
+		}
 	}
 	// All membership edits and reservations share the same ordered host locks.
 	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('pool-config/'||$1,0))`, p.OrgID); err != nil {
@@ -322,4 +337,19 @@ func usableGPUs(v *Server, kind string, m PoolMember) error {
 		return fmt.Errorf("%w: the server's GPU runtime isn't ready", ErrConflict)
 	}
 	return nil
+}
+
+// poolKindMatchesTemplate refuses a pool whose GPU kind differs from the kind
+// its expansion template buys, in either direction.
+func poolKindMatchesTemplate(poolID, poolKind, templateKind string) error {
+	if poolKind == templateKind {
+		return nil
+	}
+	name := func(kind string) string {
+		if kind == "" {
+			return "CPU"
+		}
+		return kind
+	}
+	return fmt.Errorf("%w: pool %s holds %s servers but its expansion template buys %s servers", ErrInvalid, poolID, name(poolKind), name(templateKind))
 }

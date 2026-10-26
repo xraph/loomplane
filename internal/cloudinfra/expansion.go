@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/xraph/loomplane/internal/security"
+	"github.com/xraph/loomplane/pkg/provider"
 )
 
 type expansionSchedule struct {
@@ -653,9 +654,18 @@ func (s *Service) enrollExpansionPool(ctx context.Context, st *PgStore, e *Expan
 		if cpu <= 0 || memory <= 0 {
 			return ErrConflict
 		}
+		member := PoolMember{ServerID: v.ID, CPUMillis: cpu, MemoryBytes: memory}
+		gpus, wait, gpuErr := expansionMemberGPUs(pool, e, v)
+		if gpuErr != nil {
+			return gpuErr
+		}
+		if wait != nil {
+			return s.waitForGPURuntime(ctx, st, e, wait, token)
+		}
+		member.GPUs = gpus
 		previous := pool.Revision
 		pool.Revision++
-		pool.Members = append(pool.Members, PoolMember{ServerID: v.ID, CPUMillis: cpu, MemoryBytes: memory})
+		pool.Members = append(pool.Members, member)
 		if saveErr := st.SavePool(ctx, pool, previous); saveErr != nil {
 			return saveErr
 		}
@@ -666,6 +676,40 @@ func (s *Service) enrollExpansionPool(ctx context.Context, st *PgStore, e *Expan
 		return saveErr
 	}
 	return s.wakeExpansionDemands(ctx, st, e)
+}
+
+// expansionMemberGPUs gives a GPU pool's new member the GPUs its expansion
+// bought. A server whose GPU runtime isn't ready yet returns a block to wait on.
+func expansionMemberGPUs(pool *Pool, e *Expansion, v *Server) (gpus int64, wait *CapacityBlock, err error) {
+	if pool.AcceleratorKind == "" {
+		if e.Resources.GPUs != 0 {
+			return 0, nil, fmt.Errorf("%w: expansion %s bought %s GPUs for CPU pool %s", ErrConflict, e.ID, e.Resources.GPUKind, pool.ID)
+		}
+		return 0, nil, nil
+	}
+	if e.Resources.GPUKind != pool.AcceleratorKind || e.Resources.GPUs <= 0 {
+		bought := e.Resources.GPUKind
+		if bought == "" {
+			bought = "no"
+		}
+		return 0, nil, fmt.Errorf("%w: expansion %s bought %s GPUs but pool %s takes %s", ErrConflict, e.ID, bought, pool.ID, pool.AcceleratorKind)
+	}
+	if v.Health.GPURuntime != provider.GPUStatusReady {
+		return 0, &CapacityBlock{Reason: "provisioning", Resource: "gpu_runtime", CloudID: e.CloudID, PoolID: e.PoolID, PolicyRevision: e.PolicyRevision, Retryable: true}, nil
+	}
+	return e.Resources.GPUs, nil, nil
+}
+
+// waitForGPURuntime records why a GPU server hasn't joined its pool and leaves
+// the expansion enrolling. Each reconcile pass tries again, and the server joins
+// once a server check reports its GPU runtime ready.
+func (s *Service) waitForGPURuntime(ctx context.Context, st *PgStore, e *Expansion, block *CapacityBlock, token string) error {
+	if e.Status == "enrolling" && e.Block != nil && *e.Block == *block {
+		return nil
+	}
+	e.Status = "enrolling"
+	e.Block = block
+	return st.saveExpansion(ctx, e, token)
 }
 
 // expansionEffect permits accepted identity reconciliation after revocation.

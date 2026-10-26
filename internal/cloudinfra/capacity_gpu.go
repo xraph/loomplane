@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strings"
 
 	"github.com/xraph/loomplane/pkg/provider"
 )
@@ -73,12 +74,24 @@ func nvidiaKind(kind string) bool {
 	return ok && k.Vendor == provider.VendorNVIDIA
 }
 
-// sizeAcceleratorValid refuses an accelerator a pool can't count: AMD, an
-// unknown kind, or a count that doesn't name devices.
-func sizeAcceleratorValid(size provider.ServerSize) bool {
+// sizeAcceleratorError names why a pool can't count a size's accelerator, or
+// returns nil for a CPU size or a known NVIDIA kind with devices.
+func sizeAcceleratorError(size provider.ServerSize) error {
 	a := size.Accelerator
-	return a == nil || (a.Vendor == provider.VendorNVIDIA && a.Count > 0 && nvidiaKind(a.Kind))
+	switch {
+	case a == nil:
+		return nil
+	case a.Vendor == provider.VendorAMD || strings.HasPrefix(a.Kind, provider.VendorAMD+"-"):
+		return fmt.Errorf("%w: AMD GPU servers aren't supported yet", ErrInvalid)
+	case a.Count <= 0:
+		return fmt.Errorf("%w: size %s reports no GPUs", ErrInvalid, size.ID)
+	case a.Vendor != provider.VendorNVIDIA || !nvidiaKind(a.Kind):
+		return fmt.Errorf("%w: Loomplane doesn't know the GPU kind %q on size %s yet", ErrInvalid, a.Kind, size.ID)
+	}
+	return nil
 }
+
+func sizeAcceleratorValid(size provider.ServerSize) bool { return sizeAcceleratorError(size) == nil }
 
 // gpuReadyImage reports whether the pool's image ships drivers for size's GPUs.
 func gpuReadyImage(options provider.ServerOptions, image string, size provider.ServerSize) bool {
@@ -184,8 +197,8 @@ func validateGPUPolicyShape(policy CapacityPolicy) error {
 // validatePoolSizeAccelerator keeps GPU sizes in GPU pools of their own kind,
 // on an image with the drivers, and CPU sizes out of GPU pools.
 func validatePoolSizeAccelerator(pool PoolExpansionPolicy, catalog provider.ServerOptions, size provider.ServerSize) error {
-	if !sizeAcceleratorValid(size) {
-		return fmt.Errorf("%w: AMD GPU servers aren't supported yet", ErrInvalid)
+	if err := sizeAcceleratorError(size); err != nil {
+		return err
 	}
 	kind, _ := sizeGPUs(size)
 	if pool.AcceleratorKind == "" {

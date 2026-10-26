@@ -386,3 +386,81 @@ func TestPoolGPUMembers(t *testing.T) {
 		t.Fatalf("toolkit missing: %v", err)
 	}
 }
+
+func TestSizeAcceleratorErrorNamesTheReason(t *testing.T) {
+	size := func(a *provider.Accelerator) provider.ServerSize {
+		return provider.ServerSize{ID: "gpu-x", CPUs: 8, MemoryMiB: 8192, DiskGB: 100, Regions: []string{"tor1"}, Accelerator: a}
+	}
+	for name, tc := range map[string]struct {
+		size provider.ServerSize
+		want string
+	}{
+		"CPU size":           {size(nil), ""},
+		"known NVIDIA":       {size(&provider.Accelerator{Kind: "nvidia-l4", Vendor: "nvidia", Count: 1}), ""},
+		"AMD":                {size(&provider.Accelerator{Kind: "amd-mi300x", Vendor: "amd", Count: 1}), "AMD GPU servers aren't supported yet"},
+		"unknown NVIDIA":     {size(&provider.Accelerator{Kind: "nvidia-b200", Vendor: "nvidia", Count: 1}), `Loomplane doesn't know the GPU kind "nvidia-b200" on size gpu-x yet`},
+		"unknown vendor":     {size(&provider.Accelerator{Kind: "nvidia-l4", Vendor: "", Count: 1}), `Loomplane doesn't know the GPU kind "nvidia-l4" on size gpu-x yet`},
+		"no devices":         {size(&provider.Accelerator{Kind: "nvidia-l4", Vendor: "nvidia", Count: 0}), "size gpu-x reports no GPUs"},
+		"AMD with no device": {size(&provider.Accelerator{Kind: "amd-mi300x", Vendor: "amd"}), "AMD GPU servers aren't supported yet"},
+	} {
+		err := sizeAcceleratorError(tc.size)
+		if tc.want == "" {
+			if err != nil {
+				t.Errorf("%s: %v", name, err)
+			}
+			continue
+		}
+		if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), tc.want) {
+			t.Errorf("%s: got %v, want %q", name, err, tc.want)
+		}
+		if _, sizeErr := sizeResources(tc.size); sizeErr == nil || sizeErr.Error() != err.Error() {
+			t.Errorf("%s: sizeResources says %v", name, sizeErr)
+		}
+		if sizeAcceleratorValid(tc.size) {
+			t.Errorf("%s: valid", name)
+		}
+	}
+	// A pool names the same reason.
+	unknown := size(&provider.Accelerator{Kind: "nvidia-b200", Vendor: "nvidia", Count: 1})
+	if err := validatePoolSizeAccelerator(PoolExpansionPolicy{AcceleratorKind: "nvidia-l4"}, gpuOptions(), unknown); err == nil || !strings.Contains(err.Error(), "doesn't know the GPU kind") {
+		t.Fatalf("pool: %v", err)
+	}
+}
+
+func TestExpansionMemberGPUs(t *testing.T) {
+	ready := &Server{Health: RuntimeHealth{GPURuntime: provider.GPUStatusReady}}
+	missing := &Server{Health: RuntimeHealth{GPURuntime: provider.GPUStatusToolkitMissing}}
+	gpuPool := &Pool{ID: "pool", AcceleratorKind: "nvidia-l4"}
+	l4 := &Expansion{ID: "e", CloudID: "cloud", PoolID: "pool", PolicyRevision: 3, Resources: ResourceVector{Servers: 1, CPUMillis: 2000, GPUKind: "nvidia-l4", GPUs: 2}}
+	if gpus, wait, err := expansionMemberGPUs(gpuPool, l4, ready); err != nil || wait != nil || gpus != 2 {
+		t.Fatalf("ready L4: %d %+v %v", gpus, wait, err)
+	}
+	gpus, wait, err := expansionMemberGPUs(gpuPool, l4, missing)
+	if err != nil || gpus != 0 || wait == nil || *wait != (CapacityBlock{Reason: "provisioning", Resource: "gpu_runtime", CloudID: "cloud", PoolID: "pool", PolicyRevision: 3, Retryable: true}) {
+		t.Fatalf("runtime not ready: %d %+v %v", gpus, wait, err)
+	}
+	t4 := *l4
+	t4.Resources.GPUKind = "nvidia-t4"
+	if _, _, err = expansionMemberGPUs(gpuPool, &t4, ready); !errors.Is(err, ErrConflict) || !strings.Contains(err.Error(), "bought nvidia-t4 GPUs but pool pool takes nvidia-l4") {
+		t.Fatalf("other kind: %v", err)
+	}
+	cpu := &Expansion{ID: "e", Resources: ResourceVector{Servers: 1, CPUMillis: 2000}}
+	if _, _, err = expansionMemberGPUs(gpuPool, cpu, ready); !errors.Is(err, ErrConflict) || !strings.Contains(err.Error(), "bought no GPUs") {
+		t.Fatalf("CPU expansion for a GPU pool: %v", err)
+	}
+	if gpus, wait, err = expansionMemberGPUs(&Pool{ID: "pool"}, cpu, missing); err != nil || wait != nil || gpus != 0 {
+		t.Fatalf("CPU pool: %d %+v %v", gpus, wait, err)
+	}
+	if _, _, err = expansionMemberGPUs(&Pool{ID: "pool"}, l4, ready); !errors.Is(err, ErrConflict) {
+		t.Fatalf("GPU expansion for a CPU pool: %v", err)
+	}
+}
+
+func TestPoolKindMatchesTemplate(t *testing.T) {
+	if poolKindMatchesTemplate("p", "", "") != nil || poolKindMatchesTemplate("p", "nvidia-l4", "nvidia-l4") != nil {
+		t.Fatal("equal kinds refused")
+	}
+	if err := poolKindMatchesTemplate("p", "nvidia-l4", "nvidia-t4"); !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "pool p holds nvidia-l4 servers but its expansion template buys nvidia-t4 servers") {
+		t.Fatalf("kinds differ: %v", err)
+	}
+}
