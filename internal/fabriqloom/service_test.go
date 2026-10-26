@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"slices"
 	"strings"
 	"sync"
@@ -47,7 +49,12 @@ type fakeCatalog struct {
 	on         map[string]bool
 	roles      map[string][]security.Permission
 	channelErr error
-	result     owned.JobResult
+	// adminErr fails channels to the admin component only.
+	adminErr error
+	// workerReady is what the worker's /_/readyz answers: 200 when 0.
+	workerReady int
+	opened      []deployments.ComponentRef
+	result      owned.JobResult
 	jobErr     error
 	jobs       []jobCall
 }
@@ -116,14 +123,53 @@ func (c *fakeCatalog) Channel(_ context.Context, p security.Principal, need secu
 	if err := c.allow(p, need); err != nil {
 		return nil, err
 	}
+	c.mu.Lock()
+	c.opened = append(c.opened, ref)
+	adminErr, ready := c.adminErr, c.workerReady
+	c.mu.Unlock()
 	if c.channelErr != nil {
 		return nil, c.channelErr
+	}
+	if ref.ResourceRef == fabriqRef && ref.Component == "worker" && ref.Port == "api" {
+		return workerChannel(ready), nil
 	}
 	if ref.ResourceRef != fabriqRef || ref.Component != "admin" || ref.Port != "http" {
 		return nil, errors.New("only the console's http port reaches the admin API")
 	}
+	if adminErr != nil {
+		return nil, adminErr
+	}
 	return c.f.channel(), nil
 }
+
+func (c *fakeCatalog) channels() []deployments.ComponentRef {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return slices.Clone(c.opened)
+}
+
+// workerChannel reaches a library's stock worker, whose /_/readyz answers
+// status (200 when 0).
+func workerChannel(status int) *deployments.ComponentChannel {
+	if status == 0 {
+		status = http.StatusOK
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /_/readyz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(status) })
+	return &deployments.ComponentChannel{
+		Client: &http.Client{Transport: roundTripper(func(r *http.Request) (*http.Response, error) {
+			w := httptest.NewRecorder()
+			mux.ServeHTTP(w, r)
+			return w.Result(), nil
+		}), Timeout: 5 * time.Second},
+		BaseURL: &url.URL{Scheme: "http", Host: "component"},
+		Close:   func() error { return nil },
+	}
+}
+
+type roundTripper func(*http.Request) (*http.Response, error)
+
+func (f roundTripper) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func (c *fakeCatalog) RunJob(_ context.Context, orgID string, ref deployments.ResourceRef, component, name string) (owned.JobResult, error) {
 	c.mu.Lock()
@@ -528,10 +574,24 @@ func twoDigits(i int) string { return string(rune('0'+i/10)) + string(rune('0'+i
 func TestLibraryStatusHasNoTenants(t *testing.T) {
 	h := newServiceHarness(nil)
 	h.catalog.kind = "fabriq-library"
-	h.catalog.channelErr = errors.New("must not open admin channel")
+	h.catalog.adminErr = errors.New("a library has no console")
 	status, err := h.svc.Status(t.Context(), as("viewer"), fabriqRef)
-	if err != nil || status.Kind != "fabriq-library" {
+	if err != nil || status.Kind != "fabriq-library" || !status.Reachable || status.Reason != "" {
 		t.Fatalf("status %+v: %v", status, err)
+	}
+	// It asks the stock worker's readiness, never the console.
+	for _, ref := range h.catalog.channels() {
+		if ref.Component != "worker" || ref.Port != "api" {
+			t.Fatalf("the library's status opened %s/%s", ref.Component, ref.Port)
+		}
+	}
+	if len(h.catalog.channels()) != 1 {
+		t.Fatalf("channels: %+v", h.catalog.channels())
+	}
+	h.catalog.workerReady = http.StatusServiceUnavailable
+	status, err = h.svc.Status(t.Context(), as("viewer"), fabriqRef)
+	if err != nil || status.Reachable || !strings.Contains(status.Reason, "HTTP 503") || status.Kind != "fabriq-library" {
+		t.Fatalf("worker not ready: %+v %v", status, err)
 	}
 	if _, err = h.svc.Tenants(t.Context(), as("viewer"), fabriqRef); !errors.Is(err, fabriqloom.ErrInvalid) || err.Error() != "fabriq-library has no tenants or keys" {
 		t.Fatalf("tenants: %v", err)
