@@ -90,20 +90,50 @@ test("the stack says what Fabriq doesn't report", () => {
   expect(detail(parts, "falkordb")?.state).toBe("Running")
 })
 
-test("a project resource is described as run by Loomplane in this project", () => {
+test("a project-resource Postgres is backed up with its resource, and its Redis reads as provisioned", () => {
   const parts = stackParts({
     ...docker,
     postgres: "resource",
     postgresResource: "shared-db",
     redis: "resource",
-    redisResource: "shared-cache",
   })
   expect(detail(parts, "postgres")?.detail).toBe(
     "TimescaleDB, pgvector, PostGIS. Backed up with shared-db."
   )
   expect(detail(parts, "redis")?.detail).toBe(
-    "Outbox stream and cache. Runs as shared-cache in this project."
+    "Outbox stream and cache. AOF every second."
   )
+})
+
+test("a project-resource Postgres on Kubernetes names the Kubernetes limit, not a backup", () => {
+  const parts = stackParts({
+    ...docker,
+    provider: "kubernetes",
+    postgres: "resource",
+    postgresResource: "shared-db",
+  })
+  expect(detail(parts, "postgres")?.detail).toBe(
+    "TimescaleDB, pgvector, PostGIS. Backups on Kubernetes aren’t available yet."
+  )
+})
+
+test("an engine with no choice makes no backup or persistence claim", () => {
+  const parts = stackParts({ ...docker, postgres: "unset", redis: "unset" })
+  expect(detail(parts, "postgres")?.detail).toBe(
+    "TimescaleDB, pgvector, PostGIS."
+  )
+  expect(detail(parts, "redis")?.detail).toBe("Outbox stream and cache.")
+})
+
+test("the stack reads a missing or off Postgres and Redis as not provisioned", () => {
+  serve()
+  const props = panelProps()
+  delete props.config.composition!.dependencies.postgres
+  props.config.composition!.dependencies.redis = { mode: "off" }
+  mount(<FabriqStack {...props} />)
+  expect(screen.getByText("TimescaleDB, pgvector, PostGIS.")).toBeVisible()
+  expect(screen.getByText("Outbox stream and cache.")).toBeVisible()
+  expect(screen.queryByText(/AOF every second/)).toBeNull()
 })
 
 test("an external engine is not managed by Loomplane", () => {
@@ -115,7 +145,7 @@ test("an external engine is not managed by Loomplane", () => {
   for (const id of ["postgres", "redis"]) {
     const text = detail(parts, id)?.detail
     expect(text).toContain("Not managed by Loomplane: no backups or restores.")
-    expect(text).not.toMatch(/Run by you|Backed up|Runs as/)
+    expect(text).not.toMatch(/Run by you|Backed up|Runs as|AOF/)
   }
   expect(detail(parts, "postgres")?.detail).toBe(
     "TimescaleDB, pgvector, PostGIS. Not managed by Loomplane: no backups or restores."

@@ -521,7 +521,7 @@ test("engine state does not claim health for linked resources or external endpoi
   expect(within(redis).queryByText("Running")).toBeNull()
 })
 
-test("engines say who runs each engine: Loomplane, this project, or neither", async () => {
+test("engines say how a project resource and an external engine are backed up", async () => {
   api()
   const props = panelProps()
   props.config.composition!.dependencies.postgres = {
@@ -541,9 +541,7 @@ test("engines say who runs each engine: Loomplane, this project, or neither", as
     )
   ).toBeVisible()
   expect(
-    within(redis).getByText(
-      "Outbox stream and cache. Runs as shared-cache in this project."
-    )
+    within(redis).getByText("Outbox stream and cache. AOF every second.")
   ).toBeVisible()
   unmount()
 

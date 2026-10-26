@@ -81,8 +81,6 @@ export function useFabriqStack({
     postgresResource:
       postgres?.mode === "resource" ? postgres.resource : undefined,
     redis: sourceOf(choices.redis),
-    redisResource:
-      choices.redis?.mode === "resource" ? choices.redis.resource : undefined,
     backupPolicy: policies.data?.policies?.find(
       (policy) =>
         policy.environmentId === environmentId &&
@@ -124,12 +122,13 @@ export function useFabriqStack({
   return { parts: stackParts(input), migrated, now }
 }
 
-// Where an engine comes from. An engine with no choice at all is treated as
-// provisioned, as the stack always has.
+// Where an engine comes from. A missing or off choice is not provisioned, so
+// it gets no backup or persistence claim.
 function sourceOf(choice?: { mode: string }): EngineSource {
+  if (choice?.mode === "new") return "managed"
   if (choice?.mode === "external") return "external"
   if (choice?.mode === "resource") return "resource"
-  return "managed"
+  return "unset"
 }
 
 // The newest verified test restore of any backup of the database, in this

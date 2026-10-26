@@ -156,7 +156,7 @@ export type StackPart = {
   detail: string
 }
 
-export type EngineSource = "managed" | "resource" | "external"
+export type EngineSource = "managed" | "resource" | "external" | "unset"
 
 export type StackInput = {
   library?: boolean
@@ -165,13 +165,13 @@ export type StackInput = {
   /**
    * Where Postgres and Redis come from: provisioned with Fabriq ("managed"),
    * another resource in this project ("resource", which Loomplane runs), or
-   * an endpoint Loomplane doesn't run ("external").
+   * an endpoint Loomplane doesn't run ("external"). "unset" is no choice at
+   * all, which makes no claim about backups or persistence.
    */
   postgres: EngineSource
   redis: EngineSource
-  /** The resource's name, for an engine that is a project resource. */
+  /** The resource's name, for a Postgres that is a project resource. */
   postgresResource?: string
-  redisResource?: string
   /** The saved policy, including operator overrides. */
   backupPolicy?: { enabled: boolean; everyHours: number; lastError?: string }
   backupPolicyStatus?: "loading" | "unavailable" | "denied"
@@ -203,10 +203,11 @@ export const kubernetesBackupsSentence =
 function postgresDetail(input: StackInput): string {
   if (input.postgres === "external")
     return `${postgresExtensions} ${externalSentence}`
-  if (input.postgres === "resource")
-    return `${postgresExtensions} Backed up with ${input.postgresResource ?? "its resource"}.`
   if (input.provider === "kubernetes")
     return `${postgresExtensions} ${kubernetesBackupsSentence}`
+  if (input.postgres === "resource")
+    return `${postgresExtensions} Backed up with ${input.postgresResource ?? "its resource"}.`
+  if (input.postgres === "unset") return postgresExtensions
   const schedule = backupSchedule(input)
   if (input.restoreStatus === "loading")
     return `${postgresExtensions} ${schedule}.`
@@ -220,8 +221,7 @@ function postgresDetail(input: StackInput): string {
 function redisDetail(input: StackInput): string {
   const base = "Outbox stream and cache."
   if (input.redis === "external") return `${base} ${externalSentence}`
-  if (input.redis === "resource")
-    return `${base} Runs as ${input.redisResource ?? "its resource"} in this project.`
+  if (input.redis === "unset") return base
   return `${base} AOF every second.`
 }
 
