@@ -45,7 +45,7 @@ func (h *fakeHistory) ReleasedImages(_ context.Context, _, environmentID string,
 func stagingAPI() ReleasedImage {
 	return ReleasedImage{
 		Service: "api", Provider: "cloud-run", ConnectionID: "conn_g", Region: "us-central1",
-		CommitSHA: artifactCommit, Image: artifactImage, Revision: artifactImage,
+		CommitSHA: artifactCommit, Inputs: productionAPI().Service.BuildInputs(), Image: artifactImage, Revision: artifactImage,
 		DeploymentID: "d_s", PlanID: "plan_s",
 	}
 }
@@ -112,6 +112,19 @@ func TestArtifacts_rebuildsWithAReasonPerTarget(t *testing.T) {
 			"production runs api on AWS ECS on Fargate, staging on Google Cloud Run"},
 		{"another commit", "cloud-run", nil, func(img *ReleasedImage) { img.CommitSHA = "bbb1234567890123456789012345678901234567" },
 			"staging ran api at bbb1234" + again},
+		{"a server of another architecture", "server",
+			func(a *Action) {
+				a.Service.BuildTarget = registry("conn_reg")
+				a.Service.TargetSettings = map[string]string{"architecture": "amd64"}
+			},
+			func(img *ReleasedImage) { img.Architecture = "arm64" },
+			"staging built api for arm64; production runs amd64"},
+		{"another build context", "cloud-run", func(a *Action) { a.Service.Context = "services" }, nil,
+			"production builds api differently from staging (build.context)"},
+		{"another start command", "ecs-fargate", nil, func(img *ReleasedImage) { img.Inputs.Start = "./api --old" },
+			"production builds api differently from staging (start command)"},
+		{"no connection on either side", "cloud-run", nil, func(img *ReleasedImage) { img.ConnectionID = "" },
+			"Loomplane can't tell which Google Cloud project or region staging's image is in" + again},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a := productionAPI()
@@ -129,6 +142,11 @@ func TestArtifacts_rebuildsWithAReasonPerTarget(t *testing.T) {
 			}
 			cloud := map[string]string{"ecs-fargate": "aws", "cloud-run": "gcp", "azure-container-apps": "azure"}[tc.provider]
 			result := &Result{Actions: []Action{a}, Connections: map[string]string{cloud: "conn_g"}}
+			if img.ConnectionID == "" {
+				// Neither side resolves a connection: "" == "" is no proof
+				// both pull from the same account.
+				result.Connections = map[string]string{}
+			}
 			artifactService().applyArtifacts(promotionPlan(), result, map[string]ReleasedImage{"api": img}, "staging")
 			want := []ArtifactChoice{{Service: "api", Reason: tc.reason}}
 			if !reflect.DeepEqual(result.Artifacts, want) || result.Actions[0].Service.Artifact != nil {
@@ -148,10 +166,12 @@ func TestArtifacts_reusesOnEveryTargetThatPullsTheSameRegistry(t *testing.T) {
 		img.Provider = provider
 		if provider == "server" || provider == "kubernetes" {
 			a.Service.BuildTarget, img.Registry = &BuildTarget{Builder: "conn_builder", Registry: "conn_reg"}, "conn_reg"
+			a.Service.TargetSettings, img.Architecture = map[string]string{"architecture": "arm64"}, "arm64"
 		}
 		result := &Result{Actions: []Action{a}}
 		artifactService().applyArtifacts(promotionPlan(), result, map[string]ReleasedImage{"api": img}, "staging")
-		if len(result.Artifacts) != 1 || !result.Artifacts[0].Reused || result.Actions[0].Service.Artifact == nil {
+		if len(result.Artifacts) != 1 || !result.Artifacts[0].Reused || result.Actions[0].Service.Artifact == nil ||
+			result.Actions[0].Service.Artifact.Architecture != img.Architecture {
 			t.Fatalf("%s: %+v", provider, result.Artifacts)
 		}
 	}
@@ -232,8 +252,23 @@ func (m artifactManifests) Latest(context.Context, string, string) (*manifests.R
 	return m.revision, nil
 }
 
+// computedAPI is api as staging released it, built from the same inputs
+// artifactWorld plans it with.
+func computedAPI(t *testing.T) ReleasedImage {
+	t.Helper()
+	s, plan := artifactWorld(t, nil)
+	plan.Kind = KindRelease
+	result, _, err := s.compute(t.Context(), plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	img := stagingAPI()
+	img.Inputs = action(t, result, "service:api").Service.BuildInputs()
+	return img
+}
+
 func TestArtifacts_computedForAPromotion(t *testing.T) {
-	history := &fakeHistory{images: map[string]ReleasedImage{"api": stagingAPI()}}
+	history := &fakeHistory{images: map[string]ReleasedImage{"api": computedAPI(t)}}
 	s, plan := artifactWorld(t, history)
 	result, _, err := s.compute(t.Context(), plan)
 	if err != nil {
@@ -249,7 +284,7 @@ func TestArtifacts_computedForAPromotion(t *testing.T) {
 }
 
 func TestArtifacts_reviewedInTheRevision(t *testing.T) {
-	with, plan := artifactWorld(t, &fakeHistory{images: map[string]ReleasedImage{"api": stagingAPI()}})
+	with, plan := artifactWorld(t, &fakeHistory{images: map[string]ReleasedImage{"api": computedAPI(t)}})
 	_, reused, err := with.compute(t.Context(), plan)
 	if err != nil {
 		t.Fatal(err)
@@ -268,7 +303,7 @@ func TestArtifacts_reviewedInTheRevision(t *testing.T) {
 }
 
 func TestArtifacts_onlyForPromotionsAndRollbacks(t *testing.T) {
-	history := &fakeHistory{images: map[string]ReleasedImage{"api": stagingAPI()}}
+	history := &fakeHistory{images: map[string]ReleasedImage{"api": computedAPI(t)}}
 	s, plan := artifactWorld(t, history)
 	plan.Kind, plan.From, plan.FromEnvironmentID = KindRelease, "", ""
 	result, _, err := s.compute(t.Context(), plan)

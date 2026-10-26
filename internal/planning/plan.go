@@ -213,6 +213,9 @@ type ReusedArtifact struct {
 	CommitSHA        string `json:"commit_sha"`
 	FromEnvironment  string `json:"from_environment"`
 	FromDeploymentID string `json:"from_deployment_id"`
+	// Architecture is the CPU architecture the image was built for, when
+	// a server or Kubernetes builder built it.
+	Architecture string `json:"architecture,omitempty"`
 }
 
 // ArtifactChoice says, for one service of a promotion or rollback, whether
@@ -583,6 +586,11 @@ type ReleasedImage struct {
 	// for a server or Kubernetes service built by Loomplane.
 	Registry  string
 	CommitSHA string
+	// Architecture is what the image was built for, "" when the cloud
+	// built it for itself; Inputs are what it was built from besides
+	// the commit.
+	Architecture string
+	Inputs       BuildInputs
 	// Image is a digest reference when the executor recorded one.
 	Image string
 	// Revision is the provider's own revision at that release.

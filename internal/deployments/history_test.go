@@ -187,10 +187,11 @@ func TestHistory_releasedImagesWalkBack(t *testing.T) {
 	apiImage3 := "europe-west1-docker.pkg.dev/shop/loomplane/api-x@" + digest("3")
 	webImage := "registry.example.com/acme/web@" + digest("b")
 	api := func(commit string) *planning.ServiceConfig {
-		return &planning.ServiceConfig{Provider: "cloud-run", CommitSHA: commit}
+		return &planning.ServiceConfig{Provider: "cloud-run", CommitSHA: commit, Source: "services/api", Image: "services/api/Dockerfile"}
 	}
-	web := &planning.ServiceConfig{Provider: "server", CommitSHA: "aaa1111",
-		BuildTarget: &planning.BuildTarget{Registry: "conn_reg"}}
+	web := &planning.ServiceConfig{Provider: "server", CommitSHA: "aaa1111", Source: "apps/web", Ecosystem: "node", Start: "npm start",
+		TargetSettings: map[string]string{"architecture": "amd64"},
+		BuildTarget:    &planning.BuildTarget{Registry: "conn_reg", BuilderSettings: map[string]string{"architecture": "arm64"}}}
 	webAction := serviceAction("web", "create", "server", "", web)
 	webAction.ConnectionID = "conn_s"
 	keptWeb := serviceAction("web", "keep", "server", "", web)
@@ -223,9 +224,10 @@ func TestHistory_releasedImagesWalkBack(t *testing.T) {
 	}
 	want := map[string]planning.ReleasedImage{
 		"api": {Service: "api", Provider: "cloud-run", ConnectionID: "conn_g", Region: "europe-west1", CommitSHA: "ccc3333",
-			Image: apiImage3, Revision: apiImage3, DeploymentID: "dep_3", PlanID: "plan_3", FinishedAt: at(12, 0)},
+			Inputs: planning.BuildInputs{Source: "services/api", Image: "services/api/Dockerfile"}, Image: apiImage3, Revision: apiImage3, DeploymentID: "dep_3", PlanID: "plan_3", FinishedAt: at(12, 0)},
+		// web was built on an arm64 builder, whatever its server runs.
 		"web": {Service: "web", Provider: "server", ConnectionID: "conn_s", Registry: "conn_reg", CommitSHA: "aaa1111",
-			Image: webImage, Revision: "web-rev-1", DeploymentID: "dep_1", PlanID: "plan_1", FinishedAt: at(10, 0)},
+			Architecture: "arm64", Inputs: planning.BuildInputs{Source: "apps/web", Ecosystem: "node", Start: "npm start"}, Image: webImage, Revision: "web-rev-1", DeploymentID: "dep_1", PlanID: "plan_1", FinishedAt: at(10, 0)},
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("released images\n%+v\nwant\n%+v", got, want)

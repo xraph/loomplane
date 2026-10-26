@@ -141,6 +141,7 @@ func (b *ImageBuilder) Build(ctx context.Context, job *Job, state *ImageArtifact
 				return "", errors.New("a reused image needs the registry it was pushed to")
 			}
 			image, what = reusedImage(job), "reused"
+			state.Architecture = job.Action.Service.Artifact.Architecture
 		}
 		state.Reference = image
 		_, state.Digest, _ = strings.Cut(image, "@")
