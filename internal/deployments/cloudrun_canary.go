@@ -102,13 +102,24 @@ func revisionShares(svc *gcp.RunService) map[string]int {
 	return shares
 }
 
-// canaryBaseline is what a candidate ramps from: the baseline the canary
-// recorded, as a retry ramps from, while it still takes traffic. A retry
-// after a revert that didn't finish can find its earlier candidate
-// serving most. Without a record, the service's traffic has to be
-// settled, and the baseline is the one revision that serves.
-func canaryBaseline(job *Job, service string, svc *gcp.RunService) (string, error) {
-	if recorded := job.Deployment.Canary.service(job.Action.ID); recorded != nil && recorded.Baseline != "" && revisionShares(svc)[recorded.Baseline] > 0 {
+// canaryBaseline is what a candidate ramps from. Once the canary has
+// recorded a baseline, as a retry finds it, that is the baseline for as
+// long as its revision is up, whatever share of the traffic it has now: a
+// step at 100% leaves it none, and the revision with most of the traffic
+// is then the candidate that failed. A recorded baseline that's gone is
+// refused, and nothing else is picked. Only a deployment's first start,
+// with nothing recorded, takes the one revision that serves, and only
+// while the traffic is settled.
+func canaryBaseline(ctx context.Context, job *Job, service string, svc *gcp.RunService, revision func(context.Context, string) (*gcp.RunRevision, error)) (string, error) {
+	if recorded := job.Deployment.Canary.service(job.Action.ID); recorded != nil && recorded.Baseline != "" {
+		rev, err := revision(ctx, recorded.Baseline)
+		if err != nil {
+			return "", err
+		}
+		if !rev.Up() {
+			return "", fmt.Errorf("%s can't start its canary again: its baseline, revision %s of Cloud Run service %s, can't serve (%s), so the traffic was left as it is. Release this environment direct once to settle it",
+				job.Action.Name, recorded.Baseline, service, rev.Why())
+		}
 		return recorded.Baseline, nil
 	}
 	if err := settled(job, service, svc); err != nil {
@@ -502,7 +513,7 @@ func (c *CloudRun) ApplyCandidate(ctx context.Context, job *Job) (*CanaryTarget,
 	if err != nil {
 		return nil, err
 	}
-	if cr.baseline, err = canaryBaseline(job, cr.service, svc); err != nil {
+	if cr.baseline, err = canaryBaseline(ctx, job, cr.service, svc, cr.revision); err != nil {
 		return nil, err
 	}
 	if cr.baseline == "" {
