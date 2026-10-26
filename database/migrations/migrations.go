@@ -118,9 +118,7 @@ func Group() *migrate.Group {
 		statements("20261020000900", "shared_clouds", sharedCloudsUp, sharedCloudsDown),
 		statements("20261020000401", "cloud_events", cloudEventsUp, cloudEventsDown),
 		statements("20261019000100", "plan_source_refs", planSourceRefsUp, planSourceRefsDown),
-		// 20261102000500 is deployment_finish_receipts, so this one runs right
-		// after it.
-		statements("20261102000501", "plan_promotion_rollback", planPromotionRollbackUp, planPromotionRollbackDown),
+		statements("20261104000200", "plan_promotion_rollback", planPromotionRollbackUp, planPromotionRollbackDown),
 		WorkloadControllersMigration(),
 		WorkloadRegistrationsMigration(),
 		NotificationsMigration(),
