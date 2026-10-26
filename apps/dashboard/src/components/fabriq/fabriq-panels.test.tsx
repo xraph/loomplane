@@ -353,3 +353,50 @@ test("engine state does not claim health for linked resources or external endpoi
   expect(within(redis).getByText("Linked")).toBeVisible()
   expect(within(redis).queryByText("Running")).toBeNull()
 })
+
+test("engines say who runs each engine: Loomplane, this project, or neither", async () => {
+  api()
+  const props = panelProps()
+  props.config.composition!.dependencies.postgres = {
+    mode: "resource",
+    resource: "shared-db",
+  }
+  props.config.composition!.dependencies.redis = {
+    mode: "resource",
+    resource: "shared-cache",
+  }
+  const { unmount } = mount(<FabriqEngines {...props} />)
+  const postgres = screen.getByRole("region", { name: "Postgres" })
+  const redis = screen.getByRole("region", { name: "Redis" })
+  expect(
+    within(postgres).getByText(
+      "TimescaleDB, pgvector and PostGIS. Backed up with shared-db."
+    )
+  ).toBeVisible()
+  expect(
+    within(redis).getByText(
+      "Outbox stream and cache. Runs as shared-cache in this project."
+    )
+  ).toBeVisible()
+  unmount()
+
+  props.config.composition!.dependencies.postgres = {
+    mode: "external",
+    external: "own-db",
+  }
+  props.config.composition!.dependencies.redis = {
+    mode: "external",
+    external: "own-cache",
+  }
+  mount(<FabriqEngines {...props} />)
+  expect(
+    within(screen.getByRole("region", { name: "Postgres" })).getByText(
+      "TimescaleDB, pgvector and PostGIS. Not managed by Loomplane: no backups or restores."
+    )
+  ).toBeVisible()
+  expect(
+    within(screen.getByRole("region", { name: "Redis" })).getByText(
+      "Outbox stream and cache. Not managed by Loomplane: no backups or restores."
+    )
+  ).toBeVisible()
+})

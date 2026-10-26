@@ -11,7 +11,12 @@ import {
   dependencyChoices,
   type CatalogPanelProps,
 } from "@/lib/catalog-kinds"
-import { stackParts, type StackInput, type StackPart } from "@/lib/fabriq"
+import {
+  stackParts,
+  type EngineSource,
+  type StackInput,
+  type StackPart,
+} from "@/lib/fabriq"
 import { useNow } from "@/lib/use-runs"
 
 export function useFabriqStack({
@@ -72,8 +77,12 @@ export function useFabriqStack({
   const input: StackInput = {
     library: kind === "fabriq-library",
     provider: binding.provider,
-    postgres: postgres?.mode === "new" ? "managed" : "linked",
-    redis: choices.redis?.mode === "new" ? "managed" : "linked",
+    postgres: sourceOf(postgres),
+    postgresResource:
+      postgres?.mode === "resource" ? postgres.resource : undefined,
+    redis: sourceOf(choices.redis),
+    redisResource:
+      choices.redis?.mode === "resource" ? choices.redis.resource : undefined,
     backupPolicy: policies.data?.policies?.find(
       (policy) =>
         policy.environmentId === environmentId &&
@@ -113,6 +122,14 @@ export function useFabriqStack({
   }
   const migrated = deployed.get(componentName(resource, "migrate"))
   return { parts: stackParts(input), migrated, now }
+}
+
+// Where an engine comes from. An engine with no choice at all is treated as
+// provisioned, as the stack always has.
+function sourceOf(choice?: { mode: string }): EngineSource {
+  if (choice?.mode === "external") return "external"
+  if (choice?.mode === "resource") return "resource"
+  return "managed"
 }
 
 // The newest verified test restore of any backup of the database, in this

@@ -156,13 +156,22 @@ export type StackPart = {
   detail: string
 }
 
+export type EngineSource = "managed" | "resource" | "external"
+
 export type StackInput = {
   library?: boolean
   /** The resource's provider: "server" is Docker, "kubernetes" a cluster. */
   provider: string
-  /** Whether Loomplane runs Postgres and Redis, or they are the project's own or external. */
-  postgres: "managed" | "linked"
-  redis: "managed" | "linked"
+  /**
+   * Where Postgres and Redis come from: provisioned with Fabriq ("managed"),
+   * another resource in this project ("resource", which Loomplane runs), or
+   * an endpoint Loomplane doesn't run ("external").
+   */
+  postgres: EngineSource
+  redis: EngineSource
+  /** The resource's name, for an engine that is a project resource. */
+  postgresResource?: string
+  redisResource?: string
   /** The saved policy, including operator overrides. */
   backupPolicy?: { enabled: boolean; everyHours: number; lastError?: string }
   backupPolicyStatus?: "loading" | "unavailable" | "denied"
@@ -184,13 +193,18 @@ export type StackInput = {
 
 const postgresExtensions = "TimescaleDB, pgvector, PostGIS."
 
+/** What an external engine says on the Stack and Engines cards. */
+const externalSentence = "Not managed by Loomplane: no backups or restores."
+
 /** What the Postgres card and the Add Fabriq dialog say about backups on a cluster. */
 export const kubernetesBackupsSentence =
   "Backups on Kubernetes aren’t available yet."
 
 function postgresDetail(input: StackInput): string {
-  if (input.postgres === "linked")
-    return `${postgresExtensions} Connected to your engine. See Recovery for its backup options.`
+  if (input.postgres === "external")
+    return `${postgresExtensions} ${externalSentence}`
+  if (input.postgres === "resource")
+    return `${postgresExtensions} Backed up with ${input.postgresResource ?? "its resource"}.`
   if (input.provider === "kubernetes")
     return `${postgresExtensions} ${kubernetesBackupsSentence}`
   const schedule = backupSchedule(input)
@@ -201,6 +215,14 @@ function postgresDetail(input: StackInput): string {
   return input.restoreVerifiedAt
     ? `${postgresExtensions} ${schedule}, last restore verified ${agoDay(input.restoreVerifiedAt, input.now)}.`
     : `${postgresExtensions} ${schedule}, no restore verified yet.`
+}
+
+function redisDetail(input: StackInput): string {
+  const base = "Outbox stream and cache."
+  if (input.redis === "external") return `${base} ${externalSentence}`
+  if (input.redis === "resource")
+    return `${base} Runs as ${input.redisResource ?? "its resource"} in this project.`
+  return `${base} AOF every second.`
 }
 
 function backupSchedule(input: StackInput): string {
@@ -241,10 +263,7 @@ export function stackParts(input: StackInput): StackPart[] {
       id: "redis",
       name: "Redis",
       state: state("redis", "Running"),
-      detail:
-        input.redis === "linked"
-          ? "Outbox stream and cache. Run by you."
-          : "Outbox stream and cache. AOF every second.",
+      detail: redisDetail(input),
     },
     {
       id: "migrations",

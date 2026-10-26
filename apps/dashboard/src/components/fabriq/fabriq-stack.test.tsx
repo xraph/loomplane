@@ -90,13 +90,48 @@ test("the stack says what Fabriq doesn't report", () => {
   expect(detail(parts, "falkordb")?.state).toBe("Running")
 })
 
-test("a Postgres Loomplane doesn't run has no backups to describe", () => {
-  const parts = stackParts({ ...docker, postgres: "linked", redis: "linked" })
+test("a project resource is described as run by Loomplane in this project", () => {
+  const parts = stackParts({
+    ...docker,
+    postgres: "resource",
+    postgresResource: "shared-db",
+    redis: "resource",
+    redisResource: "shared-cache",
+  })
   expect(detail(parts, "postgres")?.detail).toBe(
-    "TimescaleDB, pgvector, PostGIS. Connected to your engine. See Recovery for its backup options."
+    "TimescaleDB, pgvector, PostGIS. Backed up with shared-db."
   )
   expect(detail(parts, "redis")?.detail).toBe(
-    "Outbox stream and cache. Run by you."
+    "Outbox stream and cache. Runs as shared-cache in this project."
+  )
+})
+
+test("an external engine is not managed by Loomplane", () => {
+  const parts = stackParts({
+    ...docker,
+    postgres: "external",
+    redis: "external",
+  })
+  for (const id of ["postgres", "redis"]) {
+    const text = detail(parts, id)?.detail
+    expect(text).toContain("Not managed by Loomplane: no backups or restores.")
+    expect(text).not.toMatch(/Run by you|Backed up|Runs as/)
+  }
+  expect(detail(parts, "postgres")?.detail).toBe(
+    "TimescaleDB, pgvector, PostGIS. Not managed by Loomplane: no backups or restores."
+  )
+  expect(detail(parts, "redis")?.detail).toBe(
+    "Outbox stream and cache. Not managed by Loomplane: no backups or restores."
+  )
+})
+
+test("a provisioned engine keeps its backup and persistence copy", () => {
+  const parts = stackParts(docker)
+  expect(detail(parts, "postgres")?.detail).toBe(
+    "TimescaleDB, pgvector, PostGIS. Backups daily, last restore verified yesterday."
+  )
+  expect(detail(parts, "redis")?.detail).toBe(
+    "Outbox stream and cache. AOF every second."
   )
 })
 
