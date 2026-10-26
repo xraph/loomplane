@@ -1,6 +1,7 @@
 package planning
 
 import (
+	"cmp"
 	"context"
 	"slices"
 	"strings"
@@ -62,6 +63,9 @@ const (
 	// codeCanaryPermissions blocks a canary on ECS, Cloud Run or Container
 	// Apps whose connection's credential can't split the service's traffic.
 	codeCanaryPermissions = "canary-permissions"
+	// codeCanaryAppWide blocks a canary on Container Apps whose release
+	// changes what Container Apps applies to every revision at once.
+	codeCanaryAppWide = "canary-app-wide-change" //nolint:gosec // G101: a finding code, not a credential
 )
 
 // planRelease pins the environment's release on r, and says which service
@@ -92,6 +96,15 @@ func planRelease(in Input, r *Result) {
 		case manifest.StrategyCanary:
 			reason := noCanary(in, r, a)
 			if reason == "" {
+				if changed := appWideChanges(a); len(changed) > 0 {
+					r.Problems = append(r.Problems, Finding{
+						Code: codeCanaryAppWide, Subject: ServiceSubject, Name: a.Name, Path: "services." + a.Name,
+						Message: a.Name + " can't run a canary: this release changes its " + strings.Join(changed, ", ") +
+							", which Azure Container Apps applies app-wide, to every revision at once, the one serving now included. Release this environment direct or blue_green once to make that change.",
+					})
+					r.Executable = false
+					continue
+				}
 				if conn, cloud, missing := canaryMissing(in, r, a); missing != "" {
 					credential := map[string]string{"gcp": "the service account of ", "azure": "the service principal of "}[cloud]
 					if credential == "" {
@@ -163,6 +176,27 @@ func noCanary(in Input, r *Result, a Action) string {
 		}
 	}
 	return ""
+}
+
+// appWideFields are the service settings that make a container app's
+// ingress, which Container Apps applies to every revision at once: its
+// port, whether it's public, and its workload, which decides both for a
+// static site and whether it has ingress at all.
+var appWideFields = map[string]string{"port": "port", "public": "public", "workload": "workload"}
+
+// appWideChanges are the changes an action makes that a canary on Azure
+// Container Apps can't, as "port 8080 to 9090".
+func appWideChanges(a Action) []string {
+	if a.Provider != "azure-container-apps" {
+		return nil
+	}
+	var out []string
+	for _, c := range a.Changes {
+		if name, ok := appWideFields[c.Field]; ok {
+			out = append(out, name+" "+cmp.Or(c.From, "unset")+" to "+cmp.Or(c.To, "unset"))
+		}
+	}
+	return out
 }
 
 // canaryClouds are the clouds whose canaries need more than an ordinary

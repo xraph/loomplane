@@ -134,6 +134,7 @@ type Fake struct {
 	counts    map[string]int
 	revisions map[string]*fakeRevision // lower-cased app ID + "/" + revision name
 	crashed   map[string]bool          // lower-cased revision name
+	history   map[string][]map[string]int
 }
 
 // fakeRevision is a container app revision: the template it was made
@@ -155,6 +156,7 @@ func New(t *testing.T) *Fake {
 		polls: map[string]int{}, Uploads: map[string][]byte{}, Apps: map[string]map[string]any{},
 		pullDenied: map[string]bool{}, provisionFailed: map[string]bool{}, unseen: map[string]int{}, FirewallRules: map[string]map[string]any{},
 		fail: map[string]int{}, failAt: map[string]int{}, counts: map[string]int{}, revisions: map[string]*fakeRevision{}, crashed: map[string]bool{},
+		history: map[string][]map[string]int{},
 	}
 	f.Server = httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(f.Server.Close)
@@ -259,6 +261,9 @@ func (f *Fake) resource(w http.ResponseWriter, r *http.Request, reply func(int, 
 		return
 	}
 	if kind == "microsoft.app/containerapps" {
+		// Whatever the call did to who serves is kept, for a test to read
+		// what happened in between.
+		defer f.recordShares(id)
 		call := appCall(r.Method, rest)
 		f.Calls = append(f.Calls, call+" "+name)
 		f.counts[call]++
@@ -593,6 +598,9 @@ func (f *Fake) change(id, name string, old, body map[string]any) string {
 	if refused := f.checkTraffic(id, props); refused != "" {
 		return refused
 	}
+	if refused := f.checkSecrets(id, props); refused != "" {
+		return refused
+	}
 	if created != "" {
 		f.newRevision(id, created, props)
 	}
@@ -635,6 +643,55 @@ func (f *Fake) checkTraffic(id string, props map[string]any) string {
 		return "The traffic weights add up to " + strconv.Itoa(total) + ", not 100."
 	}
 	return ""
+}
+
+// checkSecrets is why Container Apps would refuse an app's secrets, or "":
+// a secret the template, or an active revision, reads that isn't there.
+// Azure may let one go that an active revision reads instead, and that
+// revision then can't start a replica; refusing is the safe model.
+func (f *Fake) checkSecrets(id string, props map[string]any) string {
+	conf, _ := props["configuration"].(map[string]any)
+	secrets, _ := conf["secrets"].([]any)
+	have := map[string]bool{}
+	for _, sec := range secrets {
+		name, _ := sec.(map[string]any)["name"].(string)
+		have[name] = true
+	}
+	missing := func(tmpl any, who string) string {
+		for _, ref := range secretRefs(tmpl) {
+			if !have[ref] {
+				return "Secret " + ref + ", which " + who + " reads, isn't among the app's secrets."
+			}
+		}
+		return ""
+	}
+	if refused := missing(props["template"], "the template"); refused != "" {
+		return refused
+	}
+	for _, key := range slices.Sorted(maps.Keys(f.revisions)) {
+		if rev := f.revisions[key]; strings.HasPrefix(key, id+"/") && rev.active {
+			if refused := missing(rev.template, "active revision "+rev.name); refused != "" {
+				return refused
+			}
+		}
+	}
+	return ""
+}
+
+// secretRefs are the secrets a template's containers read.
+func secretRefs(tmpl any) []string {
+	var out []string
+	t, _ := tmpl.(map[string]any)
+	cs, _ := t["containers"].([]any)
+	for _, c := range cs {
+		env, _ := c.(map[string]any)["env"].([]any)
+		for _, e := range env {
+			if ref, _ := e.(map[string]any)["secretRef"].(string); ref != "" {
+				out = append(out, ref)
+			}
+		}
+	}
+	return out
 }
 
 // newRevision records a container app's new revision, active and not
@@ -803,7 +860,15 @@ func (f *Fake) shares(id string) map[string]int {
 	ready = strings.ToLower(ready)
 	mode, _ := conf["activeRevisionsMode"].(string)
 	traffic, _ := ingressOf(app)["traffic"].([]any)
-	if !strings.EqualFold(mode, "Multiple") || len(traffic) == 0 {
+	if !strings.EqualFold(mode, "Multiple") {
+		// One revision serves in single revision mode, and only one that's
+		// active and ready: the latest ready, or else the newest that is.
+		if serving := f.singleServing(id, ready); serving != "" {
+			out[serving] = 100
+		}
+		return out
+	}
+	if len(traffic) == 0 {
 		if ready != "" {
 			out[ready] = 100
 		}
@@ -819,6 +884,35 @@ func (f *Fake) shares(id string) map[string]int {
 		out[strings.ToLower(named)] += int(weight)
 	}
 	return out
+}
+
+// singleServing is the revision that serves an app in single revision
+// mode: the latest ready one while it's active and running, else the
+// newest one that is, else none.
+func (f *Fake) singleServing(id, latestReady string) string {
+	up := func(rev *fakeRevision) bool { return rev != nil && rev.active && rev.ready && !f.crashed[rev.name] }
+	if rev := f.revisions[id+"/"+latestReady]; up(rev) {
+		return rev.name
+	}
+	var best *fakeRevision
+	for key, rev := range f.revisions {
+		if strings.HasPrefix(key, id+"/") && up(rev) && (best == nil || rev.order > best.order) {
+			best = rev
+		}
+	}
+	if best == nil {
+		return ""
+	}
+	return best.name
+}
+
+// recordShares keeps who serves an app now, when that changed.
+func (f *Fake) recordShares(id string) {
+	now := f.shares(id)
+	maps.DeleteFunc(now, func(_ string, v int) bool { return v == 0 })
+	if h := f.history[id]; len(h) == 0 || !maps.Equal(h[len(h)-1], now) {
+		f.history[id] = append(h, now)
+	}
 }
 
 // configurationOf is a container app's configuration, or an empty one.
@@ -1021,4 +1115,17 @@ func (f *Fake) Crash(name, revision string) {
 	if f.revisions[f.appID(name)+"/"+strings.ToLower(revision)] != nil {
 		f.crashed[strings.ToLower(revision)] = true
 	}
+}
+
+// TrafficHistory is every split the container app called name has had, in
+// order, as each call left it, without the zeros.
+func (f *Fake) TrafficHistory(name string) []map[string]int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	h := f.history[f.appID(name)]
+	out := make([]map[string]int, len(h))
+	for i, m := range h {
+		out[i] = maps.Clone(m)
+	}
+	return out
 }

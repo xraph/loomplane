@@ -142,8 +142,17 @@ func (e *azureCanaryEnv) assertBaselineAlone(t *testing.T, candidate string) {
 	if env := templateEnv(revs[e.baseline].Template); env["TOKEN"] != "secret:"+e.oldSecret || env["MODE"] != "slow" {
 		t.Fatalf("the baseline reads %v", env)
 	}
-	if e.f.Secrets(e.app)[e.oldSecret] != "old-secret" {
+	secrets := e.f.Secrets(e.app)
+	if secrets[e.oldSecret] != "old-secret" {
 		t.Fatal("the baseline's secret changed")
+	}
+	// The candidate's own secrets go with it.
+	if candidate != "" {
+		for name := range secrets {
+			if strings.HasSuffix(name, "-"+strings.TrimPrefix(candidate, e.app+"--")) {
+				t.Fatalf("the candidate's secret %s is still on the app", name)
+			}
+		}
 	}
 }
 
@@ -645,6 +654,7 @@ func TestAzureCanaryRevertResumesAfterAPartialRun(t *testing.T) {
 		{"GET app", 3},   // reading what the template makes, after the traffic's three
 		{"PATCH app", 1}, // putting the baseline's template back
 		{"POST deactivate", 0},
+		{"GET revisions", 0}, // what's still active beside the baseline
 	} {
 		t.Run(fmt.Sprintf("%s %d", fail.call, fail.after), func(t *testing.T) {
 			t.Parallel()
@@ -991,12 +1001,207 @@ func TestAzureCanarySecretsNeverReachTheBaseline(t *testing.T) {
 		t.Fatal(err)
 	}
 	check("reverted")
+	// Moving traffic never touches secrets. The one PATCH that does, once
+	// the candidate is deactivated, drops the candidate's own and leaves
+	// the baseline's as they were.
 	e.f.Lock()
 	defer e.f.Unlock()
 	for _, patch := range e.f.AppPatches {
 		conf, _ := patch["properties"].(map[string]any)["configuration"].(map[string]any)
-		if _, has := conf["secrets"]; has {
-			t.Fatalf("a PATCH sent secrets: %v", patch)
+		secrets, has := conf["secrets"].([]any)
+		if !has {
+			continue
 		}
+		if _, moves := conf["ingress"]; moves {
+			t.Fatalf("a traffic PATCH sent secrets: %v", patch)
+		}
+		for _, sec := range secrets {
+			m := sec.(map[string]any)
+			if m["name"] == e.oldSecret && m["value"] != "old-secret" {
+				t.Fatalf("a PATCH changed the baseline's secret: %v", patch)
+			}
+			if strings.HasSuffix(m["name"].(string), strings.TrimPrefix(target.Candidate, e.app+"--")) {
+				t.Fatalf("a PATCH kept the candidate's secret: %v", patch)
+			}
+		}
+	}
+}
+
+// --- What Container Apps applies to every revision ---
+
+// Ingress, the registries an app pulls from and its identity apply to
+// every revision at once, so a canary that changed them would change the
+// baseline too. The start refuses before it writes anything to the app.
+func TestAzureCanaryRefusesAnAppWideChange(t *testing.T) {
+	t.Parallel()
+	for what, c := range map[string]struct {
+		change func(e *azureCanaryEnv)
+		says   string
+	}{
+		"port":          {func(e *azureCanaryEnv) { e.job.Action.Service.Port = 9090 }, "target port from 8080 to 9090"},
+		"public":        {func(e *azureCanaryEnv) { e.job.Action.Service.Public = false }, "external ingress from true to false"},
+		"pull identity": {func(e *azureCanaryEnv) { e.f.Lock(); e.f.NotActions = nil; e.f.Unlock() }, "how it pulls from the container registry"},
+	} {
+		t.Run(what, func(t *testing.T) {
+			t.Parallel()
+			e := newAzureCanaryEnv(t)
+			c.change(e)
+			n := e.callCount()
+			_, err := e.exec.ApplyCandidate(t.Context(), e.job)
+			for _, want := range []string{c.says, "app-wide", "the baseline included", "direct or blue_green"} {
+				if err == nil || !strings.Contains(err.Error(), want) {
+					t.Fatalf("err %v doesn't say %q", err, want)
+				}
+			}
+			for _, call := range e.calls(n) {
+				if !strings.HasPrefix(call, "GET ") {
+					t.Fatalf("a refused start made %s", call)
+				}
+			}
+			ing := e.f.App(e.app)["properties"].(map[string]any)["configuration"].(map[string]any)["ingress"].(map[string]any)
+			if split := e.split(); !maps.Equal(split, map[string]int{e.baseline: 100}) || e.f.Mode(e.app) != "Single" ||
+				ing["targetPort"] != float64(8080) || ing["external"] != true {
+				t.Fatalf("the baseline changed: split %v, mode %s, ingress %v", split, e.f.Mode(e.app), ing)
+			}
+			if active := e.f.ActiveRevisions(e.app); !slices.Equal(active, []string{e.baseline}) {
+				t.Fatalf("active %v", active)
+			}
+		})
+	}
+	// A release that keeps the ingress, the registry and the identity
+	// canaries.
+	e := newAzureCanaryEnv(t)
+	e.job.Action.Service.Size.CPU = 2
+	e.start(t)
+}
+
+// --- Ordinary deploys after a canary ---
+
+// An ordinary deploy after a canary starts its revision beside what
+// serves, with the traffic as it was, and only then gives it everything.
+// No revision the canary left, inactive or failed, serves at any point,
+// and a deploy that fails leaves the traffic where it was.
+func TestAzureCanaryAnOrdinaryDeployServesOnlyWhatItShould(t *testing.T) {
+	t.Parallel()
+	for what, leave := range map[string]func(t *testing.T, e *azureCanaryEnv) CanaryTarget{
+		"a clean revert": func(t *testing.T, e *azureCanaryEnv) CanaryTarget {
+			target := e.start(t)
+			e.weigh(t, target, 50)
+			if err := e.revert(t, target); err != nil {
+				t.Fatal(err)
+			}
+			return target
+		},
+		// The template couldn't go back, so the candidate that failed its
+		// canary is still active, and still the app's latest ready revision.
+		"a revert that failed": func(t *testing.T, e *azureCanaryEnv) CanaryTarget {
+			target := e.start(t)
+			e.weigh(t, target, 50)
+			e.f.FailAfter("PATCH app", 2)
+			if err := e.revert(t, target); err == nil {
+				t.Fatal("the revert didn't fail")
+			}
+			if !e.f.Revisions(e.app)[target.Candidate].Active {
+				t.Fatal("the candidate isn't active")
+			}
+			return target
+		},
+	} {
+		for _, fails := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s, the deploy fails %t", what, fails), func(t *testing.T) {
+				t.Parallel()
+				e := newAzureCanaryEnv(t)
+				leave(t, e)
+				if split := e.split(); !maps.Equal(split, map[string]int{e.baseline: 100}) {
+					t.Fatalf("before: %v", split)
+				}
+				mark := len(e.f.TrafficHistory(e.app))
+				e.job.Resume, e.job.Env["MODE"] = nil, "fastest"
+				if fails {
+					// The ordinary deploy builds the approved commit again.
+					e.f.FailImage = e.oldImage
+				}
+				_, err := e.exec.Apply(t.Context(), e.job)
+				if fails != (err != nil) {
+					t.Fatalf("deploy: %v", err)
+				}
+				allowed := map[string]bool{e.baseline: true}
+				latest, _ := e.f.App(e.app)["properties"].(map[string]any)["latestRevisionName"].(string)
+				if !fails {
+					allowed[latest] = true
+				}
+				for i, split := range e.f.TrafficHistory(e.app)[mark:] {
+					if len(split) == 0 {
+						t.Fatalf("split %d: nothing serves", i)
+					}
+					for rev := range split {
+						if !allowed[rev] {
+							t.Fatalf("split %d gave %s traffic: %v", i, rev, split)
+						}
+					}
+				}
+				want, mode := map[string]int{e.baseline: 100}, "Multiple"
+				if !fails {
+					want, mode = map[string]int{latest: 100}, "Single"
+				}
+				if split := e.split(); !maps.Equal(split, want) || e.f.Mode(e.app) != mode {
+					t.Fatalf("after: split %v, mode %s", split, e.f.Mode(e.app))
+				}
+			})
+		}
+	}
+}
+
+// After a promote, the revision that serves reads the candidate's own
+// secrets. The next deploy keeps them while that revision runs, and drops
+// them once it's gone.
+func TestAzureCanaryTheFirstDeployAfterAPromoteKeepsWhatServes(t *testing.T) {
+	t.Parallel()
+	e := newAzureCanaryEnv(t)
+	target := e.start(t)
+	e.weigh(t, target, 50)
+	if _, err := e.exec.Promote(t.Context(), e.job, target); err != nil {
+		t.Fatal(err)
+	}
+	own := e.oldSecret + "-" + strings.TrimPrefix(target.Candidate, e.app+"--")
+	if e.f.Secrets(e.app)[own] != "new-secret" {
+		t.Fatalf("secrets %v", e.f.Secrets(e.app))
+	}
+
+	// A deploy whose revision won't start leaves the promoted revision
+	// serving, still with its secrets.
+	e.job.Resume = nil
+	e.f.FailImage = e.oldImage
+	if _, err := e.exec.Apply(t.Context(), e.job); err == nil {
+		t.Fatal("a crashing revision deployed")
+	}
+	if split := e.split(); !maps.Equal(split, map[string]int{target.Candidate: 100}) || e.f.Secrets(e.app)[own] != "new-secret" {
+		t.Fatalf("split %v, secrets %v", e.split(), e.f.Secrets(e.app))
+	}
+
+	// One that starts takes over, and the candidate's secrets go once
+	// nothing active reads them.
+	e.f.FailImage = ""
+	e.job.Env["MODE"] = "fastest"
+	if _, err := e.exec.Apply(t.Context(), e.job); err != nil {
+		t.Fatal(err)
+	}
+	latest, _ := e.f.App(e.app)["properties"].(map[string]any)["latestRevisionName"].(string)
+	if active := e.f.ActiveRevisions(e.app); !slices.Equal(active, []string{latest}) {
+		t.Fatalf("active %v", active)
+	}
+	secrets := e.f.Secrets(e.app)
+	if _, has := secrets[own]; has || secrets[e.oldSecret] != "new-secret" || secrets[azureRegistrySecret] != "registry-pw" {
+		t.Fatalf("secrets %v", secrets)
+	}
+	e.f.Lock()
+	put := e.f.AppPuts[len(e.f.AppPuts)-1]
+	e.f.Unlock()
+	kept := false
+	for _, sec := range put["properties"].(map[string]any)["configuration"].(map[string]any)["secrets"].([]any) {
+		kept = kept || sec.(map[string]any)["name"] == own
+	}
+	if !kept {
+		t.Fatal("the deploy's PUT dropped the secrets the serving revision read")
 	}
 }

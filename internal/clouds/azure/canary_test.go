@@ -125,6 +125,7 @@ func TestSetTrafficLooksAtTheSplitWhenTheAppFailed(t *testing.T) {
 	app.Properties.Configuration = Configuration{
 		ActiveRevisionsMode: MultipleRevisions,
 		Ingress:             &Ingress{External: true, TargetPort: 8080, Traffic: []TrafficWeight{{RevisionName: "api--1", Weight: 100}}},
+		Secrets:             []Secret{{Name: "env-token-abc123", Value: "s3cret"}},
 	}
 	app.Properties.Template.Containers[0].Image = f.FailImage
 	app.Properties.Template.RevisionSuffix = "bad"
@@ -336,5 +337,28 @@ func TestCanaryActionsAreAskedApart(t *testing.T) {
 		if slices.ContainsFunc(Actions, func(b string) bool { return strings.EqualFold(a, b) }) {
 			t.Fatalf("%s is in Actions", a)
 		}
+	}
+}
+
+func TestSetSecretsRefusesOneWithoutAValue(t *testing.T) {
+	f, s, id := canaryApp(t)
+	if err := s.SetSecrets(t.Context(), id, []Secret{{Name: "registry-password", Value: "registry-pw"}, {Name: "env-token-abc123"}}); err == nil {
+		t.Fatal("set a secret with no value")
+	}
+	f.Lock()
+	n := len(f.AppPatches)
+	f.Unlock()
+	if n != 0 {
+		t.Fatalf("%d PATCHes", n)
+	}
+	// One an active revision reads can't go.
+	if err := s.SetSecrets(t.Context(), id, []Secret{{Name: "registry-password", Value: "registry-pw"}}); err == nil {
+		t.Fatal("dropped a secret api--1 reads")
+	}
+	if err := s.SetSecrets(t.Context(), id, []Secret{{Name: "registry-password", Value: "pw2"}, {Name: "env-token-abc123", Value: "s3cret"}}); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.Secrets("api"); got["registry-password"] != "pw2" {
+		t.Fatalf("secrets %v", got)
 	}
 }

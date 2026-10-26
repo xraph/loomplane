@@ -237,15 +237,22 @@ func (s *Session) ActiveRevisions(ctx context.Context, appID string) ([]Revision
 	return slices.DeleteFunc(all, func(r Revision) bool { return !r.Properties.Active }), nil
 }
 
+// deactivatePolls bounds how many times DeactivateRevision reads a
+// revision Azure accepted to deactivate before it says it's still active.
+var deactivatePolls = 30
+
 // DeactivateRevision deactivates one of an app's revisions and waits until
-// it's inactive. One that's inactive already, or gone, is left as it is.
-// Azure refuses to deactivate a revision that takes traffic.
+// it's inactive, for a while. One that's inactive already, or gone, is left
+// as it is. Azure refuses to deactivate a revision that takes traffic.
 func (s *Session) DeactivateRevision(ctx context.Context, appID, revision string) error {
 	p, err := s.revisionPath(appID, revision)
 	if err != nil {
 		return err
 	}
-	for asked := false; ; {
+	for asked, polls := false, 0; ; polls++ {
+		if polls > deactivatePolls {
+			return fmt.Errorf("azure accepted deactivating revision %s, but it's still active", revision)
+		}
 		rev, gerr := s.GetRevision(ctx, appID, revision)
 		switch {
 		case IsNotFound(gerr):
@@ -280,6 +287,127 @@ func (s *Session) ListSecrets(ctx context.Context, appID string) ([]Secret, erro
 		return nil, fmt.Errorf("list the container app's secrets: %w", err)
 	}
 	return out.Value, nil
+}
+
+// SetSecrets replaces an app's secrets with secrets, PATCHing only them,
+// and waits for the app to settle. Each needs its value, or the Key Vault
+// URL it's read from: a secret without either would be set empty.
+func (s *Session) SetSecrets(ctx context.Context, appID string, secrets []Secret) error {
+	if !s.Owns(appID) {
+		return fmt.Errorf("%s isn't a container app in subscription %s", appID, s.cred.SubscriptionID)
+	}
+	want := make([]string, 0, len(secrets))
+	for _, sec := range secrets {
+		if sec.Value == "" && sec.KeyVaultURL == "" {
+			return fmt.Errorf("secret %s has no value to set", sec.Name)
+		}
+		want = append(want, sec.Name)
+	}
+	body := map[string]any{"properties": map[string]any{"configuration": map[string]any{"secrets": secrets}}}
+	_, perr := s.do(ctx, http.MethodPatch, appID, appsVersion, body, nil)
+	app, werr := s.settle(ctx, appID)
+	switch {
+	case werr != nil && perr != nil:
+		return fmt.Errorf("set the container app's secrets: %w", perr)
+	case werr != nil:
+		return werr
+	}
+	have := make([]string, 0, len(app.Properties.Configuration.Secrets))
+	for _, sec := range app.Properties.Configuration.Secrets {
+		have = append(have, sec.Name)
+	}
+	slices.Sort(want)
+	slices.Sort(have)
+	if slices.Equal(want, have) {
+		return nil
+	}
+	if perr != nil {
+		return fmt.Errorf("set the container app's secrets: %w", perr)
+	}
+	return fmt.Errorf("azure didn't set container app %s's secrets as asked", path.Base(appID))
+}
+
+// SecretsRead are the app secrets a revision's variables read.
+func (r *Revision) SecretsRead() []string {
+	var out []string
+	for _, c := range r.Properties.Template.Containers {
+		for _, e := range c.Env {
+			if e.SecretRef != "" && !slices.Contains(out, e.SecretRef) {
+				out = append(out, e.SecretRef)
+			}
+		}
+	}
+	return out
+}
+
+// AppWideChanges says what release would change of the app that
+// Container Apps applies to every revision at once, the ones that serve
+// included: its ingress (whether it has one, external, target port and
+// transport), the registries it pulls from and the identity it acts as.
+// A canary can't make such a change, since it would reach the baseline.
+// Secrets are app-wide too, but a canary gives the candidate its own.
+func (a *App) AppWideChanges(release App) []string {
+	out := a.IngressChanges(release.Properties.Configuration.Ingress)
+	conf, rel := a.Properties.Configuration, release.Properties.Configuration
+	registry := func(r AppRegistry) string {
+		return strings.ToLower(r.Server) + " " + strings.ToLower(r.Identity) + " " + r.Username + " " + r.PasswordSecretRef
+	}
+	have, want := make([]string, 0, len(conf.Registries)), make([]string, 0, len(rel.Registries))
+	for _, r := range conf.Registries {
+		have = append(have, registry(r))
+	}
+	for _, r := range rel.Registries {
+		want = append(want, registry(r))
+	}
+	slices.Sort(have)
+	slices.Sort(want)
+	if !slices.Equal(have, want) {
+		out = append(out, "how it pulls from the container registry")
+	}
+	identities := func(m *ManagedIdentity) []string {
+		if m == nil || strings.EqualFold(m.Type, "None") {
+			return nil
+		}
+		ids := []string{strings.ToLower(m.Type)}
+		for id := range m.UserAssignedIdentities {
+			ids = append(ids, strings.ToLower(id))
+		}
+		slices.Sort(ids[1:])
+		return ids
+	}
+	if !slices.Equal(identities(a.Identity), identities(release.Identity)) {
+		out = append(out, "the managed identity it acts as")
+	}
+	return out
+}
+
+// IngressChanges says what want would change of the app's ingress, which
+// Container Apps applies to every revision at once: whether it has one,
+// external, target port and transport. Traffic isn't part of it.
+func (a *App) IngressChanges(want *Ingress) []string {
+	var out []string
+	switch have := a.Properties.Configuration.Ingress; {
+	case (have == nil) != (want == nil):
+		out = append(out, fmt.Sprintf("ingress from %s to %s", onOff(have != nil), onOff(want != nil)))
+	case have != nil:
+		if have.External != want.External {
+			out = append(out, fmt.Sprintf("external ingress from %t to %t", have.External, want.External))
+		}
+		if have.TargetPort != want.TargetPort {
+			out = append(out, fmt.Sprintf("target port from %d to %d", have.TargetPort, want.TargetPort))
+		}
+		if t, u := cmp.Or(have.Transport, "auto"), cmp.Or(want.Transport, "auto"); !strings.EqualFold(t, u) {
+			out = append(out, fmt.Sprintf("transport from %s to %s", t, u))
+		}
+	}
+	return out
+}
+
+func onOff(on bool) string {
+	if on {
+		return "on"
+	}
+	return "off"
 }
 
 // SetTraffic sets an app's revisions mode and splits its traffic. It
