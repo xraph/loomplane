@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"maps"
 	"net/http"
@@ -29,6 +30,9 @@ type memStore struct {
 	capacityEvents []CapacityTransition
 	capacityAcks   map[string]bool
 	verdicts       map[string]CanaryVerdict
+	// afterGet runs once, after the next GetDeployment read, as a change
+	// made between a read and a later write would.
+	afterGet func()
 }
 
 var _ CanaryStore = (*memStore)(nil)
@@ -69,12 +73,18 @@ func (m *memStore) CreateDeployment(_ context.Context, d *Deployment) (*Deployme
 
 func (m *memStore) GetDeployment(_ context.Context, _, id string) (*Deployment, error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	d, ok := m.d[id]
 	if !ok {
+		m.mu.Unlock()
 		return nil, ErrNotFound
 	}
-	return copyDeployment(d), nil
+	out, after := copyDeployment(d), m.afterGet
+	m.afterGet = nil
+	m.mu.Unlock()
+	if after != nil {
+		after()
+	}
+	return out, nil
 }
 
 func (m *memStore) ForPlan(_ context.Context, _, planID string) (*Deployment, error) {
@@ -151,6 +161,24 @@ func (m *memStore) SetCanary(_ context.Context, _, id string, c *Canary) error {
 	}
 	d.Canary = copyCanary(c)
 	return nil
+}
+
+func (m *memStore) UpdateCanary(_ context.Context, _, id string, change func(*Deployment) error) (*Deployment, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	stored, ok := m.d[id]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	if stored.Canary == nil {
+		return nil, fmt.Errorf("deployment %s has no canary", id)
+	}
+	d := copyDeployment(stored)
+	if err := change(d); err != nil {
+		return nil, err
+	}
+	stored.Canary = copyCanary(d.Canary)
+	return d, nil
 }
 
 func (m *memStore) RecordVerdict(_ context.Context, v *CanaryVerdict) error {
@@ -253,6 +281,8 @@ type fakePlans struct {
 	// RecordDeployed ones.
 	releases []planning.DeployedRelease
 	single   int
+	// onGetPlan runs once, inside the next GetPlan.
+	onGetPlan func()
 }
 
 func (f *fakePlans) RecordDeployed(_ context.Context, _ string, d *planning.DeployedSource) error {
@@ -274,6 +304,13 @@ func (f *fakePlans) RecordRelease(_ context.Context, _ string, r *planning.Deplo
 }
 
 func (f *fakePlans) GetPlan(context.Context, string, string) (*planning.Plan, error) {
+	f.mu.Lock()
+	hook := f.onGetPlan
+	f.onGetPlan = nil
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 	return f.plan, nil
 }
 

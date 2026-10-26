@@ -838,6 +838,47 @@ func TestCanaryBlocksANewPlanUntilItSettles(t *testing.T) {
 	}
 }
 
+// Changes made to one canary at once through UpdateCanary all land, each
+// on the one before it, and a change that fails stores nothing.
+func TestCanaryUpdatesDontLoseEachOther(t *testing.T) {
+	f := newCanaryFixture(t, canaryManifest)
+	ctx := t.Context()
+	f.deployment(t, "dep_u", rampingCanary("bind_api"))
+	const changes = 20
+	errs := make(chan error, changes)
+	var wg sync.WaitGroup
+	for range changes {
+		wg.Go(func() {
+			_, err := f.store.UpdateCanary(ctx, "org", "dep_u", func(d *deployments.Deployment) error {
+				d.Canary.Step++
+				return nil
+			})
+			errs <- err
+		})
+	}
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	refused := errors.New("refused")
+	if _, err := f.store.UpdateCanary(ctx, "org", "dep_u", func(d *deployments.Deployment) error {
+		d.Canary.Step = 99
+		return refused
+	}); !errors.Is(err, refused) {
+		t.Fatalf("a refused change: %v", err)
+	}
+	d, err := f.store.GetDeployment(ctx, "org", "dep_u")
+	if err != nil || d.Canary.Step != changes {
+		t.Fatalf("step %d after %d changes: %v", d.Canary.Step, changes, err)
+	}
+	if _, err = f.store.UpdateCanary(ctx, "org", "dep_missing", func(*deployments.Deployment) error { return nil }); !errors.Is(err, deployments.ErrNotFound) {
+		t.Fatalf("a deployment that isn't there: %v", err)
+	}
+}
+
 // A canary release on Postgres, from the manifest to the binding: approved
 // once, it climbs 50% then 100%, judged by the cloud's monitoring after
 // each one-minute hold, and promotes. The next release fails at 50%, rolls

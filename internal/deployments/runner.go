@@ -1743,9 +1743,9 @@ func (r *Runner) bind(ctx context.Context, d *Deployment, a planning.Action, cur
 // Finish settles a deployment: failed with reason, or succeeded. Steps
 // still pending after a failure are marked skipped, and steps still
 // ramping failed. A canary still in flight after a failure settles (see
-// settleCanary). A success
-// records the commit of each repository it moved as what the environment
-// runs; a repository the plan held keeps what it had.
+// settleCanary). A success records the commit of each repository it moved
+// as what the environment runs; a repository the plan held keeps what it
+// had.
 func (r *Runner) Finish(ctx context.Context, orgID, deploymentID, reason string) error {
 	d, err := r.store.GetDeployment(ctx, orgID, deploymentID)
 	if err != nil {
