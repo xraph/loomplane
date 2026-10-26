@@ -356,8 +356,8 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 	// leaves it running. Its own devices count as free: it stops before
 	// the new one starts. Two applies can't both read a device as free:
 	// the runner holds the daemon's host-admission lock through every
-	// direct server create, replace and update, and pooled services
-	// carry no GPU label.
+	// direct server create, replace and update, and through every pooled
+	// one that asks for GPUs.
 	if raw := labels[owned.LabelGPU]; raw != "" {
 		devices, gpuErr := r.gpuDevices(ctx, c, raw, own, old)
 		if gpuErr != nil {
