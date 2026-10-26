@@ -5,10 +5,13 @@ package migrations
 import "testing"
 
 func TestOctopusGatewaysMigration(t *testing.T) {
-	conn := scratch(t)
-	// Central migrations are not transactional, so the up statements repeat.
-	exec(t, conn, octopusUp...)
-	exec(t, conn, octopusUp...)
+	// Databases record the version and name, so the filename can't drift.
+	if m := migration(t, "octopus_gateways"); m.Version != "20261110000100" {
+		t.Fatalf("version %q", m.Version)
+	}
+	conn, db := scratch(t)
+	// Running the up again changes nothing.
+	up(t, db, "octopus_gateways", "octopus_gateways")
 	exec(t, conn, `INSERT INTO loomplane_octopus_gateways(org_id,project_id,environment_id,resource,provider,updated_at) VALUES('o','p','e','octopus','server',now())`)
 	if got := strs(t, conn, `SELECT generation||'|'||applied_generation||'|'||revision||'|'||cardinality(farp_hostnames)||'|'||state::text||'|'||namespace FROM loomplane_octopus_gateways`); len(got) != 1 || got[0] != "1|0|1|0|{}|" {
 		t.Fatalf("gateway defaults: %v", got)
@@ -33,8 +36,7 @@ func TestOctopusGatewaysMigration(t *testing.T) {
 	if got := strs(t, conn, `SELECT count(*)::text FROM loomplane_octopus_routes`); len(got) != 1 || got[0] != "0" {
 		t.Fatalf("routes survived their gateway: %v", got)
 	}
-	exec(t, conn, octopusDown...)
-	exec(t, conn, octopusDown...)
+	down(t, db, "octopus_gateways", "octopus_gateways")
 	if got := strs(t, conn, `SELECT coalesce(to_regclass('loomplane_octopus_routes')::text,'gone')||'|'||coalesce(to_regclass('loomplane_octopus_gateways')::text,'gone')`); len(got) != 1 || got[0] != "gone|gone" {
 		t.Fatalf("down left tables: %v", got)
 	}

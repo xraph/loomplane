@@ -23,8 +23,8 @@ import (
 const octopusMigration = "20261110000100"
 
 // scratchStore is a PgStore over a database of its own, dropped when the
-// test ends, with the octopus migration applied twice (central migrations
-// aren't transactional, so a rerun must be harmless).
+// test ends, with the octopus migration applied twice (a rerun must be
+// harmless).
 func scratchStore(t *testing.T) (*PgStore, *pgdriver.PgDB) {
 	t.Helper()
 	dsn := os.Getenv("LOOMPLANE_TEST_DATABASE_URL")
