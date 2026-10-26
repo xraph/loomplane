@@ -44,8 +44,8 @@ func applyPSCTransport(template *gcp.RunTemplate, labels map[string]string, proj
 	if len(strictErrors) > 0 {
 		return fmt.Errorf("cloud sql PSC transport has unknown or duplicate fields")
 	}
-	if !transport.Network.Valid(region) || len(transport.Instances) == 0 {
-		return fmt.Errorf("cloud sql PSC transport requires a canonical VPC, regional subnet and instances")
+	if err := transport.Validate(project, region); err != nil {
+		return err
 	}
 	if labels[LabelVPC] != "" {
 		return fmt.Errorf("cloud sql PSC transport conflicts with the service VPC label")
@@ -57,20 +57,10 @@ func applyPSCTransport(template *gcp.RunTemplate, labels map[string]string, proj
 		}
 	}
 	legacy := strings.Split(labels[LabelCloudSQL], ",")
-	seen := make(map[string]bool, len(transport.Instances))
 	for _, instance := range transport.Instances {
-		parts := strings.Split(instance, ":")
-		if len(parts) != 3 || parts[0] != project || parts[1] != region || !pscInstanceName.MatchString(parts[2]) {
-			return fmt.Errorf("cloud sql PSC instance must be a canonical connection name in the service project and region")
+		if slices.Contains(legacy, instance) {
+			return fmt.Errorf("cloud sql instance has conflicting socket transports")
 		}
-		if seen[instance] || slices.Contains(legacy, instance) {
-			return fmt.Errorf("cloud sql instance has duplicate or conflicting socket transports")
-		}
-		// Linux reserves one byte of sockaddr_un's 108-byte path for NUL.
-		if len(PSCSocketDirectory+"/"+instance+"/.s.PGSQL.5432") >= 108 {
-			return fmt.Errorf("cloud sql PSC PostgreSQL socket path exceeds the Unix socket limit")
-		}
-		seen[instance] = true
 	}
 	app := &template.Containers[0]
 	if len(app.Ports) == 0 {
@@ -91,11 +81,8 @@ func applyPSCTransport(template *gcp.RunTemplate, labels map[string]string, proj
 	}
 	// The readiness handler alone only checks local proxy state. The connection
 	// test must pass before the proxy reports that it has started.
-	args := make([]string, 0, 8+len(transport.Instances))
-	args = append(args, "--psc", "--unix-socket="+PSCSocketDirectory, "--health-check", "--run-connection-test", "--http-address=0.0.0.0", "--http-port="+strconv.Itoa(healthPort), "--lazy-refresh", "--structured-logs")
-	if len(args)+len(transport.Instances) > 1000 {
-		return fmt.Errorf("cloud sql PSC transport exceeds Cloud Run's 1000 argument limit")
-	}
+	args := pscProxyArgs(healthPort)
+
 	template.Containers = append(template.Containers, gcp.RunContainer{
 		Name: pscContainer, Image: pscProxyImage,
 		Args: append(args, transport.Instances...), Mounts: []gcp.RunVolumeMount{mount},
@@ -103,4 +90,34 @@ func applyPSCTransport(template *gcp.RunTemplate, labels map[string]string, proj
 		StartupProbe: &gcp.RunProbe{HTTPGet: gcp.RunHTTPGet{Path: "/readiness", Port: healthPort}, TimeoutSeconds: 4, PeriodSeconds: 5, FailureThreshold: 48},
 	})
 	return nil
+}
+
+// Validate checks the transport before builds or credential writes.
+func (transport PSCTransport) Validate(project, region string) error {
+	if !transport.Network.Valid(region) || len(transport.Instances) == 0 {
+		return fmt.Errorf("cloud sql PSC transport requires a canonical VPC, regional subnet and instances")
+	}
+	seen := make(map[string]bool, len(transport.Instances))
+	for _, instance := range transport.Instances {
+		parts := strings.Split(instance, ":")
+		if len(parts) != 3 || parts[0] != project || parts[1] != region || !pscInstanceName.MatchString(parts[2]) {
+			return fmt.Errorf("cloud sql PSC instance must be a canonical connection name in the service project and region")
+		}
+		if seen[instance] {
+			return fmt.Errorf("cloud sql instance has duplicate or conflicting socket transports")
+		}
+		// Linux reserves one byte of sockaddr_un's 108-byte path for NUL.
+		if len(PSCSocketDirectory+"/"+instance+"/.s.PGSQL.5432") >= 108 {
+			return fmt.Errorf("cloud sql PSC PostgreSQL socket path exceeds the Unix socket limit")
+		}
+		seen[instance] = true
+	}
+	if len(transport.Instances)+len(pscProxyArgs(9090)) > 1000 {
+		return fmt.Errorf("cloud sql PSC transport exceeds Cloud Run's 1000 argument limit")
+	}
+	return nil
+}
+
+func pscProxyArgs(healthPort int) []string {
+	return []string{"--psc", "--unix-socket=" + PSCSocketDirectory, "--health-check", "--run-connection-test", "--http-address=0.0.0.0", "--http-port=" + strconv.Itoa(healthPort), "--lazy-refresh", "--structured-logs"}
 }

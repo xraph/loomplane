@@ -62,7 +62,7 @@ func TestCloudSQLPSCPlanRefusesUnsupportedConsumers(t *testing.T) {
 	r.CloudSQLPSC = &provider.CloudSQLSourceEndpoint{ConsumerProject: "app-project", Network: "projects/app-project/global/networks/apps", ForwardingRule: "projects/app-project/regions/europe-west1/forwardingRules/database"}
 	in.Manifest.Resources["database"] = r
 	result := Compute(in)
-	if result.Executable || !slices.ContainsFunc(result.Problems, func(f Finding) bool { return f.Code == "cloud-sql-psc-transport-unavailable" }) {
+	if result.Executable || !slices.ContainsFunc(result.Problems, func(f Finding) bool { return f.Code == "cloud-sql-psc-route-required" }) {
 		t.Fatalf("unconfigured PSC consumer was approved: %+v", result)
 	}
 }
