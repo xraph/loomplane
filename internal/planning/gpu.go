@@ -287,10 +287,10 @@ func (p *planner) checkPoolGPUs() {
 }
 
 func gpuCountText(kind string, count int64) string {
-	switch {
-	case count == 0:
+	switch count {
+	case 0:
 		return "no GPUs"
-	case count == 1:
+	case 1:
 		return "1 " + kind + " GPU"
 	}
 	return fmt.Sprintf("%d %s GPUs", count, kind)

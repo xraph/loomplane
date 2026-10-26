@@ -41,13 +41,13 @@ func TestTargetsListConnectionsAndCreatableSizes(t *testing.T) {
 // nodes the group has: two one-L4 nodes show 1, not 2, and no workload
 // is subtracted from it.
 func TestTargetsClusterFreeIsPerNode(t *testing.T) {
-	svc := NewService(Deps{Connections: fakeConnections(clusterWithL4Nodes("gke")),
-		Bindings: fakeBindings(map[string]map[string]int{"gke": {"nvidia-l4": 1}}), Authz: allowAll{}})
+	svc := NewService(Deps{Connections: fakeConnections(clusterWithL4Nodes("eks")),
+		Bindings: fakeBindings(map[string]map[string]int{"eks": {"nvidia-l4": 1}}), Authz: allowAll{}})
 	list, err := svc.Targets(t.Context(), principal(), GPUTargetQuery{Count: 1})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if gke := find(list, "gke"); gke.Free != 1 || gke.Accelerator.Count != 1 || !gke.Fits {
+	if gke := find(list, "eks"); gke.Free != 1 || gke.Accelerator.Count != 1 || !gke.Fits {
 		t.Fatalf("cluster: %+v", gke)
 	}
 }
