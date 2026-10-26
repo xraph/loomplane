@@ -58,7 +58,7 @@ The bindings never changed, so the environment runs exactly what it ran before, 
 
 Sometimes the revert itself fails. Loomplane tries it again every minute for an hour, and then the error ends with `Traffic may still be split:` and the cloud's last error. The canary shows `revert_failed`. Check the service's traffic in the cloud's console before you retry, because part of it may still reach the candidate.
 
-Cancelling a deployment's wait for capacity, or stopping its workflow, reverts the candidates the same way.
+Cancelling a deployment's wait for capacity, or stopping its workflow, reverts the candidates too, and a revert that keeps failing there ends as `revert_failed` the same way. If every step had already passed, stopping the workflow finishes the promotion instead. Either way the canary stops holding the environment, so you can plan again.
 
 ## When something moves
 

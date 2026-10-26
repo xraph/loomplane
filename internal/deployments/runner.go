@@ -1767,7 +1767,7 @@ func (r *Runner) Finish(ctx context.Context, orgID, deploymentID, reason string)
 		status = StatusFailed
 		// The canary settles first, from its services, so it never reads
 		// steps this marks.
-		if err := r.settleCanary(ctx, d, reason); err != nil {
+		if err := r.settleCanary(ctx, d, reason, false); err != nil {
 			return err
 		}
 		for _, s := range d.Steps {

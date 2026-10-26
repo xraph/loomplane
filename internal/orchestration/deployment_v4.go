@@ -38,8 +38,6 @@ func (d *Deployments) resumeReleaseV4(w *drt.Workflow, input []byte) ([]byte, er
 type canaryRun struct {
 	// dep is the deployment, once it started.
 	dep deployInput
-	// ramp is nil until the run read it.
-	ramp *CanaryRamp
 	// promoting is set once every step passed.
 	promoting bool
 	// settled is set once the canary promoted or reverted, or there was
@@ -75,48 +73,77 @@ func runStepsV4(w *drt.Workflow, run *canaryRun, org string, started deployStart
 		return err
 	}
 	if stopped {
-		_, err = rampCanary(w, run, canaryStopped)
-		return err
+		rampCanary(w, run, canaryStopped)
+		return nil
 	}
-	if reason, err = rampCanary(w, run, reason); err != nil {
-		return err
-	}
-	return finishCapacity(w, org, started.DeploymentID, reason, interval)
+	return finishCapacity(w, org, started.DeploymentID, rampCanary(w, run, reason), interval)
 }
 
 // rampCanary runs once every action has run or one failed (reason). It
 // reads the ramp; without a canary, it returns reason as it is. With one,
 // it climbs the steps unless an action failed, then promotes when every
 // step passed and reverts otherwise. It returns the deployment's reason
-// to fail, "" when it promoted.
-func rampCanary(w *drt.Workflow, run *canaryRun, reason string) (string, error) {
+// to fail, "" when it promoted. Whatever happens, the canary ends settled:
+// a promote or revert the ramp gave up on is recorded as such.
+func rampCanary(w *drt.Workflow, run *canaryRun, reason string) string {
 	dep := run.dep
 	p := dep.DeploymentID + "-canary"
 	var ramp CanaryRamp
 	if err := callInto(w, p+"-ramp", ActivityCanaryRamp, dep, activityTimeout, 0, activityAttempts, &ramp); err != nil {
-		return "", err
+		// Whether there's a canary is unknown, and reverting a deployment
+		// without one does nothing, so revert: no candidate stays up.
+		if reason == "" {
+			reason = "The canary's ramp couldn't be read: " + err.Error()
+		}
+		return revertCanary(w, run, p, reason)
 	}
-	run.ramp = &ramp
 	if len(ramp.Steps) == 0 {
 		run.settled = true
-		return reason, nil
+		return reason
 	}
 	if reason == "" {
 		reason = climb(w, p, dep, ramp) // "" when every step passed
 	}
-	in := canaryInput{OrgID: dep.OrgID, DeploymentID: dep.DeploymentID}
 	if reason == "" {
 		run.promoting = true
-		reason = settle(w, p+"-promote", ActivityCanaryPromote, in)
-		run.settled = true
-		return reason, nil
+		return promoteCanary(w, run, p)
 	}
-	in.Reason = reason
-	if failed := settle(w, p+"-revert", ActivityCanaryRevert, in); failed != "" {
-		reason += " " + failed
+	return revertCanary(w, run, p, reason)
+}
+
+// promoteCanary promotes every candidate, and returns "" or why traffic
+// may still be split.
+func promoteCanary(w *drt.Workflow, run *canaryRun, p string) string {
+	in := canaryInput{OrgID: run.dep.OrgID, DeploymentID: run.dep.DeploymentID}
+	failed := settle(w, p+"-promote", ActivityCanaryPromote, in)
+	if failed != "" {
+		in.Reason = failed
+		giveUp(w, p+"-promote", in)
 	}
 	run.settled = true
-	return reason, nil
+	return failed
+}
+
+// revertCanary reverts every candidate because of reason, and returns
+// reason, with why traffic may still be split if the revert never
+// succeeded.
+func revertCanary(w *drt.Workflow, run *canaryRun, p, reason string) string {
+	in := canaryInput{OrgID: run.dep.OrgID, DeploymentID: run.dep.DeploymentID, Reason: reason}
+	if failed := settle(w, p+"-revert", ActivityCanaryRevert, in); failed != "" {
+		reason += " " + failed
+		in.Reason = reason
+		giveUp(w, p+"-revert", in)
+	}
+	run.settled = true
+	return reason
+}
+
+// giveUp ends a canary whose promote or revert never succeeded, with
+// in.Reason, so it says traffic may still be split and stops holding its
+// environment, whatever the deployment's status. If even that can't be
+// stored for as long as settle tries, nothing else can be done.
+func giveUp(w *drt.Workflow, p string, in canaryInput) {
+	settle(w, p+"-settle", ActivityCanarySettle, in)
 }
 
 // climb weighs each step, holds it and judges it. An inconclusive step
@@ -178,32 +205,24 @@ func settle(w *drt.Workflow, p, activity string, in canaryInput) string {
 
 // cancelled settles what a cancelled run leaves of its canary: it finishes
 // a promotion every step already passed, and otherwise reverts every
-// candidate, ramping or still dark. The deployment itself stays as v3
-// would leave it.
+// candidate, ramping or still dark. A deployment without a canary has
+// nothing to revert. Either way a promote or revert it gives up on is
+// recorded, so the canary never stays in flight. The deployment itself
+// stays as v3 would leave it.
 func (run *canaryRun) cancelled(w *drt.Workflow, c durable.ExecutionCancellation) ([]byte, error) {
 	stop := &drt.WorkflowCancelledError{RequestID: c.RequestID, Reason: c.Reason}
 	if run.dep.DeploymentID == "" || run.settled {
 		return nil, stop
 	}
 	p := run.dep.DeploymentID + "-canary-cancel"
-	in := canaryInput{OrgID: run.dep.OrgID, DeploymentID: run.dep.DeploymentID}
 	if run.promoting {
-		settle(w, p+"-promote", ActivityCanaryPromote, in)
+		promoteCanary(w, run, p)
 		return nil, stop
 	}
-	if run.ramp == nil {
-		var ramp CanaryRamp
-		if err := callInto(w, p+"-ramp", ActivityCanaryRamp, run.dep, activityTimeout, 0, activityAttempts, &ramp); err != nil {
-			return nil, stop
-		}
-		run.ramp = &ramp
+	reason := canaryStopped
+	if c.Reason != "" {
+		reason += ": " + c.Reason
 	}
-	if len(run.ramp.Steps) > 0 {
-		in.Reason = canaryStopped
-		if c.Reason != "" {
-			in.Reason += ": " + c.Reason
-		}
-		settle(w, p+"-revert", ActivityCanaryRevert, in)
-	}
+	revertCanary(w, run, p, reason)
 	return nil, stop
 }

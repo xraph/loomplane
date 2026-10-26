@@ -113,6 +113,11 @@ func TestRampingCanaryInPostgres(t *testing.T) {
 	at := time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC)
 	deployment("dep_done", "org", "env", "succeeded", `{"status":"promoted"}`, at)
 	deployment("dep_promoted", "org", "env", "running", `{"status":"promoted"}`, at)
+	// A canary the workflow gave up on, even on a deployment a cancel left
+	// running, no longer holds the environment.
+	for _, status := range []string{"rolled_back", "revert_failed", "promote_failed"} {
+		deployment("dep_"+status, "org", "env", "running", `{"status":"`+status+`"}`, at)
+	}
 	deployment("dep_other_env", "org", "env_2", "running", `{"status":"ramping"}`, at)
 	deployment("dep_other_org", "org_2", "env", "running", `{"status":"ramping"}`, at)
 	if id, err := store.RampingCanary(ctx, "org", "env"); err != nil || id != "" {
