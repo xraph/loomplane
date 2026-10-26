@@ -480,7 +480,7 @@ func (s *Service) Rotate(ctx context.Context, p security.Principal, ref deployme
 	if err := s.hosted(ctx, p, security.SecretManage, ref); err != nil {
 		return nil, err
 	}
-	unlock, err := s.Keys.LockService(ctx, p.OrgID, ref.EnvironmentID, ref.Resource, service)
+	ctx, unlock, err := s.Keys.LockService(ctx, p.OrgID, ref.EnvironmentID, ref.Resource, service)
 	if err != nil {
 		return nil, err
 	}
@@ -539,7 +539,7 @@ func (s *Service) Revoke(ctx context.Context, p security.Principal, ref deployme
 	if err := s.hosted(ctx, p, security.SecretManage, ref); err != nil {
 		return nil, err
 	}
-	unlock, err := s.Keys.LockService(ctx, p.OrgID, ref.EnvironmentID, ref.Resource, service)
+	ctx, unlock, err := s.Keys.LockService(ctx, p.OrgID, ref.EnvironmentID, ref.Resource, service)
 	if err != nil {
 		return nil, err
 	}

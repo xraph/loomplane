@@ -42,15 +42,18 @@ var _ KeyStore = (*PgStore)(nil)
 // works: it renews the lease in the background and deletes its own row on
 // release. A process that dies stops renewing, so the next writer takes the
 // lease over once it expires and reconciles what was left in Fabriq. Times
-// are the database's, so the processes' clocks don't matter.
-func (s *PgStore) LockService(ctx context.Context, orgID, environmentID, resource, service string) (func(), error) {
+// that decide who holds the lease are the database's, so the processes'
+// clocks don't matter.
+//
+// The context it returns ends, with cause ErrLeaseLost, when the lease is
+// gone or the holder can no longer be sure it has it, and Insert and
+// SetState made with it succeed only while the lease is still the holder's.
+func (s *PgStore) LockService(ctx context.Context, orgID, environmentID, resource, service string) (context.Context, func(), error) {
 	var nonce [16]byte
 	if _, err := rand.Read(nonce[:]); err != nil {
-		return nil, fmt.Errorf("lock Fabriq keys: %w", err)
+		return nil, nil, fmt.Errorf("lock Fabriq keys: %w", err)
 	}
-	holder := hex.EncodeToString(nonce[:])
-	key := []any{orgID, environmentID, resource, service}
-	lease := s.lease.Milliseconds()
+	l := &keyLease{key: []any{orgID, environmentID, resource, service}, holder: hex.EncodeToString(nonce[:])}
 	delay := 20 * time.Millisecond
 	for {
 		var got string
@@ -58,12 +61,16 @@ func (s *PgStore) LockService(ctx context.Context, orgID, environmentID, resourc
 			VALUES ($1, $2, $3, $4, $5, now() + $6 * interval '1 millisecond')
 			ON CONFLICT (org_id, environment_id, resource, service)
 			DO UPDATE SET holder = EXCLUDED.holder, expires_at = EXCLUDED.expires_at WHERE l.expires_at < now()
-			RETURNING holder`, append(key, holder, lease)...).Scan(&got)
+			RETURNING holder`, l.args(s.lease.Milliseconds())...).Scan(&got)
 		if err == nil {
-			return s.holdLease(key, holder), nil
+			held, release := s.holdLease(ctx, l)
+			return held, release, nil
 		}
 		if !errors.Is(err, pgx.ErrNoRows) {
-			return nil, fmt.Errorf("lock Fabriq keys: %w", err)
+			// The upsert may have committed before the answer was lost:
+			// don't leave the service locked for a whole lease.
+			s.dropLease(l)
+			return nil, nil, fmt.Errorf("lock Fabriq keys: %w", err)
 		}
 		// Someone else holds it: wait without a connection, so the holder
 		// has the pool to record its key.
@@ -71,84 +78,180 @@ func (s *PgStore) LockService(ctx context.Context, orgID, environmentID, resourc
 		select {
 		case <-ctx.Done():
 			timer.Stop()
-			return nil, ctx.Err()
+			return nil, nil, ctx.Err()
 		case <-timer.C:
 		}
 		delay = min(2*delay, time.Second)
 	}
 }
 
-// renewKeyLock and releaseKeyLock touch a lease only while it is still
-// the holder's.
-const (
-	renewKeyLock = `UPDATE loomplane_fabriq_key_locks SET expires_at = now() + $6 * interval '1 millisecond'
-		WHERE org_id = $1 AND environment_id = $2 AND resource = $3 AND service = $4 AND holder = $5`
-	releaseKeyLock = `DELETE FROM loomplane_fabriq_key_locks
-		WHERE org_id = $1 AND environment_id = $2 AND resource = $3 AND service = $4 AND holder = $5`
-)
+// ErrLeaseLost is work on a service's Fabriq keys whose lease is gone:
+// another holder may have taken it over, so the work stops and nothing it
+// would record is.
+var ErrLeaseLost = errors.New("the lock on the service's Fabriq keys was lost; try again")
 
-// holdLease renews the lease until the returned release, which deletes it
-// if it is still the holder's.
-func (s *PgStore) holdLease(key []any, holder string) func() {
-	ctx, stop := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		ticker := time.NewTicker(s.lease / 3)
-		defer ticker.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-ticker.C:
-				// A renewal that fails is tried again at the next tick; the
-				// lease outlasts two of them.
-				_, _ = s.db.Exec(ctx, renewKeyLock, append(key, holder, s.lease.Milliseconds())...) //nolint:errcheck // retried at the next tick
-			}
-		}
-	}()
-	var once sync.Once
-	return func() {
-		once.Do(func() {
-			stop()
-			<-done
-			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-			defer cancel()
-			// A release that fails leaves the lease to expire.
-			_, _ = s.db.Exec(ctx, releaseKeyLock, append(key, holder)...) //nolint:errcheck // the lease expires on its own
-		})
-	}
+// keyLease is one holder's lease on a service's keys.
+type keyLease struct {
+	key    []any // org_id, environment_id, resource, service
+	holder string
 }
 
-const keyColumns = `id, org_id, project_id, environment_id, resource, service, tenant, prefix, state, created_at, updated_at, revoked_at`
+// args are the lease's key and holder, then extra.
+func (l *keyLease) args(extra ...any) []any {
+	return append(append(append(make([]any, 0, 5+len(extra)), l.key...), l.holder), extra...)
+}
 
-// Insert implements KeyStore.
-func (s *PgStore) Insert(ctx context.Context, r *KeyRecord) error {
-	_, err := s.db.Exec(ctx, `INSERT INTO loomplane_fabriq_keys (`+keyColumns+`)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`,
-		r.ID, r.OrgID, r.ProjectID, r.EnvironmentID, r.Resource, r.Service, r.Tenant, r.Prefix, string(r.State), r.CreatedAt, r.UpdatedAt, r.RevokedAt)
-	if err != nil {
-		return keyStoreError("record Fabriq key", err)
+type leaseContextKey struct{}
+
+// leaseOf is the lease ctx was made under, or nil.
+func leaseOf(ctx context.Context) *keyLease {
+	if l, ok := ctx.Value(leaseContextKey{}).(*keyLease); ok {
+		return l
 	}
 	return nil
 }
 
-// SetState implements KeyStore. Revoking a key stamps revoked_at.
+// renewKeyLock and releaseKeyLock touch a lease only while it is still
+// the holder's; a lease that has expired isn't renewed, since someone else
+// may hold it already.
+const (
+	renewKeyLock = `UPDATE loomplane_fabriq_key_locks SET expires_at = now() + $6 * interval '1 millisecond'
+		WHERE org_id = $1 AND environment_id = $2 AND resource = $3 AND service = $4 AND holder = $5 AND expires_at > now()`
+	releaseKeyLock = `DELETE FROM loomplane_fabriq_key_locks
+		WHERE org_id = $1 AND environment_id = $2 AND resource = $3 AND service = $4 AND holder = $5`
+	// leaseHeld is a CTE that says whether lease $1..$5 is held right now.
+	leaseHeld = `lease AS (SELECT EXISTS (SELECT 1 FROM loomplane_fabriq_key_locks
+		WHERE org_id = $1 AND environment_id = $2 AND resource = $3 AND service = $4 AND holder = $5 AND expires_at > now()) AS held)`
+)
+
+// holdLease renews the lease every third of it, under a context made from
+// ctx. The context ends when ctx does, when the release returned is called,
+// and, with cause ErrLeaseLost, when a renewal finds the lease gone or none
+// has succeeded for a lease less a tick (so the holder stops before the
+// lease can expire under it). Release stops the renewal and deletes the
+// lease if it is still the holder's.
+func (s *PgStore) holdLease(ctx context.Context, l *keyLease) (held context.Context, release func()) {
+	held, cancel := context.WithCancelCause(context.WithValue(ctx, leaseContextKey{}, l))
+	tick := s.lease / 3
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(tick)
+		defer ticker.Stop()
+		// Measured on the monotonic clock from just after the last renewal
+		// (or the acquisition) succeeded.
+		sure := time.NewTimer(s.lease - tick)
+		defer sure.Stop()
+		for {
+			select {
+			case <-held.Done():
+				return
+			case <-sure.C:
+				cancel(ErrLeaseLost)
+				return
+			case <-ticker.C:
+				renewCtx, stop := context.WithTimeout(held, tick/2)
+				res, err := s.db.Exec(renewCtx, renewKeyLock, l.args(s.lease.Milliseconds())...)
+				stop()
+				if err != nil {
+					// Tried again at the next tick, until sure fires.
+					continue
+				}
+				if n, nerr := res.RowsAffected(); nerr == nil && n == 0 {
+					cancel(ErrLeaseLost)
+					return
+				}
+				sure.Reset(s.lease - tick)
+			}
+		}
+	}()
+	var once sync.Once
+	return held, func() {
+		once.Do(func() {
+			cancel(context.Canceled)
+			<-done
+			s.dropLease(l)
+		})
+	}
+}
+
+// dropLease deletes the lease if it is still the holder's, with a context
+// of its own. A release that fails leaves the lease to expire.
+func (s *PgStore) dropLease(l *keyLease) {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_, _ = s.db.Exec(ctx, releaseKeyLock, l.args()...) //nolint:errcheck // the lease expires on its own
+}
+
+const keyColumns = `id, org_id, project_id, environment_id, resource, service, tenant, prefix, state, created_at, updated_at, revoked_at`
+
+// Insert implements KeyStore. Under a lease (LockService's context), it
+// records the key only while the lease is still the holder's.
+func (s *PgStore) Insert(ctx context.Context, r *KeyRecord) error {
+	values := []any{r.ID, r.OrgID, r.ProjectID, r.EnvironmentID, r.Resource, r.Service, r.Tenant, r.Prefix, string(r.State), r.CreatedAt, r.UpdatedAt, r.RevokedAt}
+	l := leaseOf(ctx)
+	if l == nil {
+		_, err := s.db.Exec(ctx, `INSERT INTO loomplane_fabriq_keys (`+keyColumns+`)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)`, values...)
+		if err != nil {
+			return keyStoreError("record Fabriq key", err)
+		}
+		return nil
+	}
+	var held bool
+	var n int
+	err := s.db.QueryRow(ctx, `WITH `+leaseHeld+`, ins AS (
+			INSERT INTO loomplane_fabriq_keys (`+keyColumns+`)
+			SELECT $6, $7, $8, $9, $10, $11, $12, $13, $14, $15::timestamptz, $16::timestamptz, $17::timestamptz
+			WHERE (SELECT held FROM lease) RETURNING 1)
+		SELECT (SELECT held FROM lease), (SELECT count(*) FROM ins)`, l.args(values...)...).Scan(&held, &n)
+	if err != nil {
+		return keyStoreError("record Fabriq key", err)
+	}
+	if !held {
+		return ErrLeaseLost
+	}
+	return nil
+}
+
+// SetState implements KeyStore. Revoking a key stamps revoked_at. Under a
+// lease (LockService's context), it changes the key only while the lease is
+// still the holder's.
 func (s *PgStore) SetState(ctx context.Context, orgID, id string, from []KeyState, to KeyState) error {
 	states := make([]string, 0, len(from))
 	for _, st := range from {
 		states = append(states, string(st))
 	}
 	at := s.now().UTC()
-	res, err := s.db.Exec(ctx, `UPDATE loomplane_fabriq_keys
+	const update = `UPDATE loomplane_fabriq_keys
 		SET state = $4, updated_at = $5, revoked_at = CASE WHEN $4 = 'revoked' THEN $5 ELSE revoked_at END
-		WHERE org_id = $1 AND id = $2 AND state = ANY($3::text[])`, orgID, id, states, string(to), at)
+		WHERE org_id = $1 AND id = $2 AND state = ANY($3::text[])`
+	l := leaseOf(ctx)
+	if l == nil {
+		res, err := s.db.Exec(ctx, update, orgID, id, states, string(to), at)
+		if err != nil {
+			return keyStoreError("change Fabriq key state", err)
+		}
+		n, err := res.RowsAffected()
+		if err != nil {
+			return fmt.Errorf("change Fabriq key state: %w", err)
+		}
+		if n != 1 {
+			return ErrStateChanged
+		}
+		return nil
+	}
+	var held bool
+	var n int
+	err := s.db.QueryRow(ctx, `WITH `+leaseHeld+`, upd AS (UPDATE loomplane_fabriq_keys
+			SET state = $9, updated_at = $10, revoked_at = CASE WHEN $9 = 'revoked' THEN $10 ELSE revoked_at END
+			WHERE org_id = $6 AND id = $7 AND state = ANY($8::text[]) AND (SELECT held FROM lease) RETURNING 1)
+		SELECT (SELECT held FROM lease), (SELECT count(*) FROM upd)`, l.args(orgID, id, states, string(to), at)...).Scan(&held, &n)
 	if err != nil {
 		return keyStoreError("change Fabriq key state", err)
 	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return fmt.Errorf("change Fabriq key state: %w", err)
+	if !held {
+		return ErrLeaseLost
 	}
 	if n != 1 {
 		return ErrStateChanged

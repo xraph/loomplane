@@ -134,7 +134,7 @@ func (h *Hooks) sweep(ctx context.Context, admin *AdminClient, orgID, environmen
 }
 
 func (h *Hooks) sweepService(ctx context.Context, admin *AdminClient, keys []KeyInfo, orgID, environmentID, resource, service string) error {
-	unlock, err := h.d.Keys.LockService(ctx, orgID, environmentID, resource, service)
+	ctx, unlock, err := h.d.Keys.LockService(ctx, orgID, environmentID, resource, service)
 	if err != nil {
 		return err
 	}
@@ -153,7 +153,7 @@ func (h *Hooks) BindConsumer(ctx context.Context, c deployments.Consumer) (strin
 	if !ValidTenant(tenant) {
 		return "", fmt.Errorf("%s's default tenant %q isn't a tenant id: use lowercase letters, digits and dashes", c.Service, tenant)
 	}
-	unlock, err := h.d.Keys.LockService(ctx, c.OrgID, c.EnvironmentID, c.Resource, c.Service)
+	ctx, unlock, err := h.d.Keys.LockService(ctx, c.OrgID, c.EnvironmentID, c.Resource, c.Service)
 	if err != nil {
 		return "", err
 	}
@@ -352,7 +352,7 @@ func (h *Hooks) kept(ctx context.Context, c deployments.Consumer, id string) (st
 // reached is no error: there is nothing Loomplane knows to be valid, and
 // the next sweep that reaches Fabriq revokes what is left.
 func (h *Hooks) ReleaseConsumer(ctx context.Context, c deployments.Consumer) error {
-	unlock, err := h.d.Keys.LockService(ctx, c.OrgID, c.EnvironmentID, c.Resource, c.Service)
+	ctx, unlock, err := h.d.Keys.LockService(ctx, c.OrgID, c.EnvironmentID, c.Resource, c.Service)
 	if err != nil {
 		return err
 	}

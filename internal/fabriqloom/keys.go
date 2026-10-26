@@ -43,8 +43,12 @@ type KeyRecord struct {
 // KeyStore keeps KeyRecords. Lists are newest first.
 type KeyStore interface {
 	// LockService serializes remote key issuance and local bookkeeping across
-	// releases, rotations and revocations. The caller must release the lock.
-	LockService(ctx context.Context, orgID, environmentID, resource, service string) (release func(), err error)
+	// releases, rotations and revocations of one service's keys. The caller
+	// must call release once it is done, on every path, and must do its work
+	// under held: held ends (with cause ErrLeaseLost where the lock can be
+	// lost) when the lock is no longer the caller's, and the store refuses
+	// Insert and SetState made with it then.
+	LockService(ctx context.Context, orgID, environmentID, resource, service string) (held context.Context, release func(), err error)
 	// Insert records a key. A second pending or active key for the same
 	// (organization, environment, resource, service) is ErrConflict.
 	Insert(ctx context.Context, r *KeyRecord) error

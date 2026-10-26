@@ -29,7 +29,7 @@ type memKeys struct {
 	waiting chan string
 }
 
-func (s *memKeys) LockService(_ context.Context, orgID, environmentID, resource, service string) (func(), error) {
+func (s *memKeys) LockService(ctx context.Context, orgID, environmentID, resource, service string) (context.Context, func(), error) {
 	s.mu.Lock()
 	if s.locks == nil {
 		s.locks = map[string]*sync.Mutex{}
@@ -48,7 +48,8 @@ func (s *memKeys) LockService(_ context.Context, orgID, environmentID, resource,
 		}
 		lock.Lock()
 	}
-	return lock.Unlock, nil
+	held, cancel := context.WithCancel(ctx)
+	return held, func() { cancel(); lock.Unlock() }, nil
 }
 
 func (s *memKeys) Insert(_ context.Context, r *fabriqloom.KeyRecord) error {
