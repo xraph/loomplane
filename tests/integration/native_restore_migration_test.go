@@ -31,6 +31,9 @@ type nativeRestoreMigrationReplies struct {
 	failAt int
 }
 
+// Unwrap lets grove's schema builders find the driver behind the wrapper.
+func (e *nativeRestoreMigrationReplies) Unwrap() migrate.Executor { return e.Executor }
+
 func (e *nativeRestoreMigrationReplies) Exec(ctx context.Context, query string, args ...any) (driver.Result, error) {
 	result, err := e.Executor.Exec(ctx, query, args...)
 	if err != nil {

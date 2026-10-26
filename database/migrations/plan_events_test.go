@@ -7,7 +7,10 @@ import (
 
 func TestPlanEventFunctions_replaceOnlyTheTwoFunctions(t *testing.T) {
 	for _, leftovers := range []bool{true, false} {
-		got := planEventFunctions(leftovers)
+		got, err := planEventFunctions(leftovers)
+		if err != nil {
+			t.Fatalf("leftovers %v: %v", leftovers, err)
+		}
 		if len(got) != 2 {
 			t.Fatalf("leftovers %v: %d statements", leftovers, len(got))
 		}

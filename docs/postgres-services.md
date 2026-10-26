@@ -387,6 +387,182 @@ Worker loss keeps an accepted point unavailable for restore. On the Docker/local
 
 Backup creation accepts `environment`, `resource` and `request_id`. Restore creation accepts `request_id`. Retirement accepts `request_id` and a `policy` with `older_than_days` and `keep_last`; retry accepts a new `request_id`. Retirement lists and history accept `before` and `limit` (1 to 100). Project retirement lists also accept `backup_id` to resolve one recovery point without scanning other histories. Backup schedule updates accept `environment`, `resource`, `every_hours` and `enabled`. Retention policy updates accept the observed `revision`, `policy` (`older_than_days`, `keep_last`) and `enabled`. Retention history accepts `before` and `limit` (1 to 100). Requests and worker execution are scoped to the recorded organization and project. Scheduled requests recheck the policy creator's permission.
 
+## Database gateway
+
+A Vercel function can't open a TCP connection to Postgres. Even where a function could, a few hundred of them at once would use up the connection limit of a small database. The database gateway deals with both. Loomplane builds it, runs it on Cloud Run or ECS Fargate, and gives your app its address. Your app talks to the gateway over HTTPS or a WebSocket, and the gateway talks to Postgres over a short list of real connections, lending one out only for the length of a transaction.
+
+Use it when a Vercel app needs a Postgres database on DigitalOcean or RDS. If your services run on the same cloud as their database and connect the usual way, you don't need it.
+
+### What Phase 1 supports
+
+| Database                        | Gateway on `cloud-run` | Gateway on `ecs-fargate`                                     |
+| ------------------------------- | ---------------------- | ------------------------------------------------------------ |
+| DigitalOcean managed PostgreSQL | Yes                    | Yes                                                          |
+| RDS PostgreSQL                  | No                     | Yes, with the same AWS connection and region as the database |
+| Everything else                 | No                     | No                                                           |
+
+Everything else includes Cloud SQL, Render, and the Docker and Kubernetes profiles above. A plan that puts one of them behind the gateway stops with `db-gateway-backend-unsupported` and says why. The gateway itself only runs on Cloud Run and ECS, and any other provider gets `db-gateway-unsupported`.
+
+DigitalOcean databases have a public address with TLS, so a gateway on either cloud reaches them. RDS sits inside its VPC, which is why only a gateway on ECS, deployed through the same AWS connection and in the same region, can get to it. When the gateway and the database are in different regions the plan warns (`db-gateway-region-mismatch`), because every query then crosses regions. You'll usually see that warning with DigitalOcean, whose region names (`nyc`, `ams`) never match a cloud's.
+
+Apps are only ever handed an https address for the gateway. Cloud Run always has one. On ECS you get one when the AWS connection has a `certificate_arn`, an ACM certificate in the connection's region. Without it the plan stops with `db-gateway-needs-https`. Add the certificate, or run the gateway on Cloud Run. A gateway that ECS opened before the certificate existed keeps its plain HTTP port, so move `database_gateway` to another region or connection, or remove it and deploy again.
+
+### Turn it on
+
+Start with a signing key. Loomplane signs the routing snapshots that each gateway follows, and it can't deploy a gateway without a key to sign them with. Make one from 32 random bytes:
+
+```sh
+openssl rand -base64 32
+```
+
+Put the result in a JSON file that only its owner can read (mode `0600`), at an absolute path:
+
+```json
+{
+  "version": 1,
+  "private_key": "<the base64 you just made>",
+  "not_before": "2026-10-01T00:00:00Z",
+  "not_after": "2028-10-01T00:00:00Z"
+}
+```
+
+Then point Loomplane at the file with `dbgateway.signing_key_file` in its configuration, or set `LOOMPLANE_DBGATEWAY_SIGNING_KEY_FILE`. The file has to be a regular file, not a symlink, no bigger than 16 KiB, with exactly those four fields. (A version 2 file holds a list of keys instead. You'll want that when you rotate, as [Rotate the signing key](#rotate-the-signing-key) shows.) The path has to be clean: no `..`, and no doubled or trailing slashes. `not_before` must come first. Give yourself a long window, because the key only signs between the two dates.
+
+Loomplane reads the file once, at startup. If the file itself is wrong, Loomplane won't start. You get `dbgateway.signing_key_file: invalid database gateway signing key configuration` and nothing more, so the message can't leak the file. Leave the setting empty and Loomplane starts, but the gateway endpoints answer 503 and a deployment that includes a gateway fails.
+
+A key outside its window is treated the same way as no key, and Loomplane still starts. Past `not_after`, it logs an error at startup, the gateway endpoints answer 503 with a message saying the key has expired, and a deployment that includes a gateway fails with that reason. That also happens the moment the key expires while Loomplane is running: it stops signing snapshots then, and never signs one with an expired key. Before `not_before` you get the same, saying the key isn't valid yet, until that date passes. Deployed gateways keep serving the routes they last applied, but they won't hear about a changed password or a paused route until a valid key signs again. From 30 days before the last key's `not_after`, Loomplane logs a warning at every start. Add the next key before then, as [Rotate the signing key](#rotate-the-signing-key) describes.
+
+Gateways are handed the public halves of the keys when they're deployed. The plan records which keys those are, so when they change (you add one, renew one, or one expires) the next plan shows `db-gateway` as an update, and deploying it hands the gateway the keys Loomplane has now. The apps behind it stay as they are, since its address doesn't move. If the keys change between making a plan and deploying it, the deployment fails and asks you to plan again, so a gateway never runs with keys other than the ones you reviewed. The first plan after you upgrade to a Loomplane that records them updates each gateway once, for the same reason.
+
+A gateway also has to reach Loomplane to fetch its routes, and it does that at your `public_url`. That has to be https (plain http is accepted for `localhost` only), or the deployment is refused.
+
+Next, tell the manifest where the gateway runs and which resources go behind it:
+
+```yaml
+database_gateway:
+  provider: cloud-run
+  region: us-central1
+
+resources:
+  db:
+    kind: postgres
+    provider: digitalocean
+    gateway: true
+
+services:
+  web:
+    source: apps/web
+    provider: vercel
+    needs: [db]
+```
+
+The gateway names each database from its resource and your DNS zone, as `<resource>.<region>.db.<zone>`. So `db` in `us-central1` on `example.com` becomes `db.us-central1.db.example.com`. That needs a verified zone granted to the project, which you add under Domains. With two or more, Loomplane keeps the ones this environment's domain routes use. If that still leaves several, the plan stops with `db-gateway-domain-ambiguous`, and with none it stops with `db-gateway-domain-missing`. Nothing has to resolve these names. They tell the gateway which database a connection is for.
+
+Create a plan and review it. Turning the gateway on adds one `db-gateway` service, deploys it before anything that needs a resource behind it, and redeploys those apps with their new variables. Taking a resource off the gateway redeploys them too, and they go back to the database's own address before the gateway stops serving it. A new region or DNS zone renames every host behind the gateway, so the same plan that updates the gateway redeploys every app that reaches a database through it. An app you've held back can't follow, and the plan stops with `db-gateway-held-user` until you release it.
+
+Opting a database in changes `DATABASE_URL` for every service that needs it, not just the Vercel app. Apps on Cloud Run and ECS get the gateway's host in `DATABASE_URL` too, so a service that connects over TCP stops working until it reads `DATABASE_URL_DIRECT` instead. The next section says where that comes from. The plan stops with `db-gateway-held-user` if it would take a resource off the gateway while a [held](manifest.md#held) app, one the plan leaves alone, still reaches it there.
+
+### Rotate the signing key
+
+You rotate by running the old key and the new one side by side for a while. A version 2 key file holds both:
+
+```json
+{
+  "version": 2,
+  "keys": [
+    {"private_key": "<the old key>", "not_before": "2026-10-01T00:00:00Z", "not_after": "2028-10-01T00:00:00Z"},
+    {"private_key": "<the new key>", "not_before": "2028-09-01T00:00:00Z", "not_after": "2030-10-01T00:00:00Z"}
+  ]
+}
+```
+
+Each entry takes the same three fields as a version 1 file, and a file holds up to eight. Loomplane signs with the newest key whose window is open, the one with the latest `not_before`, and hands gateways every key that hasn't expired, including one whose window hasn't opened yet. So a rotation goes like this:
+
+1. Make a new key with `openssl rand -base64 32` and add it beside the old one. Give it a `not_before` far enough out that you can deploy every environment with a gateway before it arrives, and let its window overlap the old key's, or Loomplane has nothing to sign with in the gap. Restart Loomplane.
+2. Plan and deploy each environment that has a gateway. The plan shows `db-gateway` as an update. The redeployed gateway trusts both keys, and Loomplane is still signing with the old one, so it gets its routes straight away.
+3. When the new key's `not_before` passes, Loomplane signs with it from then on, without a restart. Gateways from step 2 take what it signs. A gateway you missed refuses it and keeps serving the routes it has, the same as one whose key expired, until you deploy it.
+4. Take the old key out of the file and restart Loomplane, or just let it expire. Either way the next plan redeploys each gateway trusting the new key alone. There's no hurry: a gateway ignores a key that has expired.
+
+To extend a key rather than replace it, add the same `private_key` again with a later window, and follow the same steps. A gateway takes a snapshot while any window of that key is open.
+
+### Connect from Vercel
+
+An app that needs `db` gets three variables. `DATABASE_URL` keeps the user and password but carries the gateway's name for the database as its host. `DATABASE_URL_GATEWAY` is the gateway's own https address. `DATABASE_URL_DIRECT` is the database's own address, exactly as it was before you opted in, and it's a secret because it holds the credentials. The last two are always the first's name with `_GATEWAY` or `_DIRECT` on the end. Only Postgres can opt in today.
+
+Install `@neondatabase/serverless` and `ws`. The gateway speaks the protocol this driver uses, and we've verified version 1.2.0 against it. All you do is tell the driver where the gateway is:
+
+```js
+import { Pool, neon, neonConfig } from "@neondatabase/serverless";
+import ws from "ws";
+
+const gateway = new URL(process.env.DATABASE_URL_GATEWAY);
+
+neonConfig.webSocketConstructor = ws;
+neonConfig.wsProxy = (host, port) =>
+  `${gateway.host}/v2?address=${host}:${port}`;
+neonConfig.fetchEndpoint = () => `${gateway.origin}/sql`;
+
+// Over a WebSocket: transactions, LISTEN, prepared statements.
+export const pool = new Pool({ connectionString: process.env.DATABASE_URL });
+
+// Over HTTP, one request per query.
+export const sql = neon(process.env.DATABASE_URL);
+```
+
+The driver adds the `wss://` itself, so `wsProxy` returns a host and path with no scheme. `fetchEndpoint` is a full URL. The gateway picks the route from the `address` it's given on a WebSocket, or from the connection string it's sent over HTTP. Leave `useSecureWebSocket` alone, because the default is right for an https gateway. A runtime with a global `WebSocket` doesn't need `ws` or the `webSocketConstructor` line.
+
+Queries work the way the driver documents them:
+
+```js
+const { rows } = await pool.query("select now()");
+const result = await sql.query("select $1::int as n", [7]);
+```
+
+Use the WebSocket for transactions and anything that holds state between statements. Use HTTP for single queries, keeping in mind that a request has a 60 second limit and a 10 MiB body, caps the size of its result, and can't run `COPY FROM STDIN`, and that when a result is too large the error tells you to switch to the WebSocket.
+
+### Pooling and what pins a session
+
+The gateway pools by transaction. Your session gets a real connection when a transaction begins and hands it back at the end, so a function that sits idle between requests holds nothing at the database, and each gateway instance sizes its pool from the database's `max_connections`, keeps back at least five (or a tenth) for everything else, and splits the rest between the running instances.
+
+Most session state survives that. The gateway remembers `SET` on these parameters and replays it on whichever connection serves your next transaction: `application_name`, `search_path`, `timezone`, `statement_timeout`, `lock_timeout`, `idle_in_transaction_session_timeout`, `datestyle`, `intervalstyle`, `extra_float_digits`, `standard_conforming_strings`, `default_transaction_isolation`, `default_transaction_read_only` and `work_mem`. Named prepared statements from your driver are prepared again wherever they next run. `LISTEN` and `UNLISTEN` work too, through a listener the gateway shares between sessions.
+
+State the gateway can't replay pins the session instead. A pinned session keeps one connection until it disconnects, and that connection counts against the database like any other. These pin:
+
+- Session advisory locks: `pg_advisory_lock` and its `try` and `shared` forms, and any `pg_advisory_unlock` call.
+- Temporary tables and objects, and anything that names `pg_temp`.
+- Cursors declared `WITH HOLD`, and SQL-level `PREPARE`, including `PREPARE TRANSACTION`.
+- `SET` of any parameter not in the list above, `set_config()`, and a `SET` that runs inside an open transaction, where a rollback would undo it.
+- `DO`, `LOAD`, `setseed`, `dblink_connect` and `dblink_connect_u`.
+- `query_to_xml`, `query_to_xmlschema`, `query_to_xml_and_xmlschema` and `ts_stat`, which run SQL held in a string that the gateway doesn't read.
+- The protocol's fast-path function call.
+- A text with several statements that includes `SET`, `RESET`, `LISTEN` or `UNLISTEN`, since the gateway can't tell which one you meant to keep.
+
+`COPY` holds a connection only until the statement finishes. The classifier errs towards pinning, so now and then something pins that didn't need to.
+
+The gateway only sees the SQL you send. A function you wrote yourself that takes an advisory lock, creates a temporary table or calls `set_config` inside its body looks like any other function call, so the session doesn't pin, and that state stays on a connection the next transaction may not get. Keep session state out of your own functions, or take it with one of the statements above in the same session.
+
+### Limits
+
+Phase 1 speaks Postgres to clients over WebSocket and HTTP only. There is no TCP listener, so `pg` and other drivers that open a plain socket can't connect through the gateway from Vercel yet. The database names the gateway hands out don't resolve for them either. Use the Neon driver as above.
+
+Anything else that opens a TCP connection, a migration step for example, should read `DATABASE_URL_DIRECT`. Prisma's `directUrl` is the usual place for it. That's the database's own address, so it works only from somewhere that can reach the database itself: a DigitalOcean database is public, but RDS is private to its VPC, and a Vercel build can't get into it. If your migrations run from Vercel against RDS, run them from a machine inside the VPC instead.
+
+Putting a database behind the gateway makes it reachable from the internet. The gateway's endpoint is public, so anyone who has a database's host name and its user and password can connect through it. That includes RDS, which is otherwise private to its VPC: once it's behind a gateway on ECS, its password is all that stands between it and the internet. Phase 1 doesn't rate-limit failed logins either, so nothing slows down someone guessing. Keep the database passwords long and random, and leave a database off the gateway if nothing outside its network needs it.
+
+`currval()` and `lastval()` don't work across transactions. The sequence value belongs to a connection, and your next transaction may run on another one. Get the value in the same statement with `INSERT ... RETURNING id`. PgBouncer in transaction mode has the same limit.
+
+`LISTEN` and `NOTIFY` go through a listener shared by every session on the route. If that listener loses its connection and redials, or a `LISTEN` is refused on the way back, notifications sent in the gap can be dropped. Postgres doesn't keep notifications for absent listeners anyway, so don't rely on a notification as your only signal. Read the table again after a reconnect.
+
+Loomplane runs at least two instances of the gateway, so one that's draining or starting cold never leaves your apps without a database. That's the minimum instance count on Cloud Run and the desired count on ECS. It sets no maximum, so the platform's own applies.
+
+On Cloud Run, Loomplane doesn't set the request timeout or keep CPU allocated between requests yet, so the gateway runs with Cloud Run's defaults. Cloud Run counts a WebSocket session as one request, which means it cuts the session when the request timeout runs out (five minutes by default) and your driver has to connect again. Keep transactions short and let the pool reconnect. Outside requests Cloud Run also throttles the CPU, so an idle instance polls Loomplane for its routes slowly. A paused route or a changed password can take a while to reach an instance that's had no traffic. ECS has neither limit.
+
+When an instance shuts down, for a deploy or because the platform scales it in, it stops taking connections straight away and gives the sessions it has 8 seconds to finish. A session still in a transaction after that gets `57P01` and is closed, so your driver should retry on a new connection. The whole shutdown fits inside the 10 seconds Cloud Run allows between SIGTERM and stopping the instance. The gateway reads that limit from `LOOMPLANE_DBGW_DRAIN_SECONDS`, which Loomplane leaves at its default.
+
+A gateway keeps the last routes it was given in memory, and in a sealed file under `/tmp/dbgw`. Cloud Run and Fargate start every new instance with an empty disk, so a new instance has to fetch its routes from Loomplane before it serves anything. While Loomplane is unreachable, running instances carry on with what they have. Instances that start in that window, whether from scaling up, a crash or a deploy, can't start serving until Loomplane answers. Keep `public_url` reachable from the cloud the gateway runs on.
+
+You'll find each gateway on the project's Services tab, with the instances seen in the last hour and a route for each database. Anyone with `infrastructure:modify` can pause a route there, and resume it from the same place. While a route is paused, new transactions wait up to 30 seconds and then fail.
+
 ## Qualification boundary
 
 PostgreSQL 17.11 has passed the Docker catalog and recovery drill, with local Trove and a separate native adapter drill against an isolated MinIO endpoint. The Kubernetes catalog, CLI, API and browser drill passed on arm64 Kubernetes 1.36.4, Cilium 1.20.3 and a retained local-path class. That drill covered pod replacement, backup persistence after a control-plane restart, isolated SQL recovery, scheduled backups and deletion of the exact temporary PV.

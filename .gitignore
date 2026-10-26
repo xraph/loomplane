@@ -60,3 +60,6 @@ docs/catalog-recovery-verification.md
 
 # GoReleaser output
 /dist/
+
+# Neon driver capture: npm install output
+internal/dbgateway/plane/testdata/neon/node_modules/

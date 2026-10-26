@@ -192,6 +192,9 @@ type ServiceConfig struct {
 	// Gateway are a gateway's routes. A service with routes is a gateway
 	// Loomplane generates and builds, not code from the repository.
 	Gateway []gateway.Route `json:"gateway,omitempty"`
+	// DatabaseGateway is set on the database gateway, a service Loomplane
+	// generates and builds in front of the Postgres resources that opt in.
+	DatabaseGateway *DatabaseGatewayConfig `json:"database_gateway,omitempty"`
 	// Component is the catalog component the service runs, when a
 	// composed catalog kind runs one as a service.
 	Component *ComponentConfig `json:"component,omitempty"`
@@ -260,6 +263,31 @@ func DataBearing(a Action) bool {
 	return false
 }
 
+// DatabaseGatewayConfig is what the database gateway serves: the
+// resources behind it, each at <resource>.<Suffix>.
+type DatabaseGatewayConfig struct {
+	Name string `json:"name"`
+	// Suffix is <region>.db.<domain>, the domain being a DNS zone granted
+	// to the project.
+	Suffix string `json:"suffix"`
+	// Resources are the opted-in resources' names, sorted.
+	Resources []string `json:"resources"`
+	// Program is the ID of the gateway's generated source, so a Loomplane
+	// upgrade that changes the gateway's code changes its configuration
+	// and redeploys it.
+	Program string `json:"program"`
+	// Trust names the control-plane keys the gateway trusts, as
+	// plane.TrustDigest gives it, so a signing key added, renewed or
+	// expired redeploys the gateway with the keys it needs. The deploy
+	// hands it the keys themselves.
+	Trust string `json:"trust,omitempty"`
+}
+
+// Generated reports whether Loomplane generates the service from its own
+// code, as it does a gateway or the database gateway, rather than
+// building it from a repository.
+func (c *ServiceConfig) Generated() bool { return c.Gateway != nil || c.DatabaseGateway != nil }
+
 // BuildTarget pins the builder, registry and image reviewed in a plan.
 type BuildTarget struct {
 	Builder          string            `json:"builder,omitempty"`
@@ -304,6 +332,13 @@ type EnvLink struct {
 	// they share a network: http://name:port through ECS Service Connect.
 	// Empty means its public URL, known once it's deployed.
 	Address string `json:"address,omitempty"`
+	// Gateway is set when the service reaches the resource through the
+	// database gateway, so its variables hold the gateway's address. It's
+	// the suffix the gateway names the resource's host under,
+	// <region>.db.<domain>, and empty for a direct link. It's part of the
+	// configuration, so a resource opting in or out, or the gateway moving
+	// to another region or DNS zone, redeploys what needs it.
+	Gateway string `json:"gateway,omitempty"`
 	// Field is what of a composed catalog resource the variable holds:
 	// "url" for its primary output, "output:<name>" for another output,
 	// "consumer:<name>" for one issued to this service alone. It's empty

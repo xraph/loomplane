@@ -24,6 +24,17 @@ func consumerOutput(link planning.EnvLink) (string, bool) {
 	return name, ok && name != "" && link.Subject == planning.ResourceSubject
 }
 
+// consumerThroughGateway refuses a per-consumer link the plan routes
+// through the database gateway. The gateway only stands in for a
+// resource's address, and an output issued to one service never passes
+// the check resourceAddress makes, so the link can't skip it either.
+func consumerThroughGateway(service string, link planning.EnvLink) error {
+	if link.Gateway == "" {
+		return nil
+	}
+	return fmt.Errorf("%s reads %s of %s through the database gateway, which only stands in for a resource's address", service, link.Field, link.From)
+}
+
 // consumerOf describes service as a consumer of a per-consumer output of
 // the composed resource a link reads, with the options the link carries,
 // and the binder of its kind.

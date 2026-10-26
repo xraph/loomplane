@@ -310,6 +310,93 @@
         }
       }
     },
+    "/api/v1/cloud-sign-in/apps": {
+      "get": {
+        "tags": [
+          "Cloud sign-in"
+        ],
+        "summary": "The clouds you can sign in to, where each one's app comes from, and the callback URL to register",
+        "operationId": "cloudSignInApps.list",
+        "responses": {
+          "200": {
+            "description": "Sign-in apps",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignInAppList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/cloud-sign-in/apps/{cloud}": {
+      "put": {
+        "tags": [
+          "Cloud sign-in"
+        ],
+        "summary": "Set the organization's own sign-in app for a cloud. The secret is never returned",
+        "operationId": "cloudSignInApps.set",
+        "parameters": [
+          {
+            "name": "cloud",
+            "in": "path",
+            "description": "Path parameter: cloud",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AppInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The sign-in app",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignInApp"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Cloud sign-in"
+        ],
+        "summary": "Remove the organization's own sign-in app for a cloud",
+        "operationId": "cloudSignInApps.delete",
+        "parameters": [
+          {
+            "name": "cloud",
+            "in": "path",
+            "description": "Path parameter: cloud",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        }
+      }
+    },
     "/api/v1/clouds": {
       "get": {
         "tags": [
@@ -1977,6 +2064,80 @@
         "responses": {
           "201": {
             "description": "The connection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Connection"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/connections/sign-ins": {
+      "post": {
+        "tags": [
+          "Cloud sign-in"
+        ],
+        "summary": "Start signing in to a cloud, for a new connection or in place of an existing one's credential",
+        "operationId": "connectionSignIns.start",
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignInInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Where to send you to sign in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignIn"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/connections/sign-ins/complete": {
+      "post": {
+        "tags": [
+          "Cloud sign-in"
+        ],
+        "summary": "Finish a sign-in with what the cloud sent back to the callback",
+        "operationId": "connectionSignIns.complete",
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompleteInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The connection, with its credential replaced",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Connection"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "The new connection",
             "content": {
               "application/json": {
                 "schema": {
@@ -4977,6 +5138,135 @@
         "responses": {
           "200": {
             "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{id}/db-gateways": {
+      "get": {
+        "tags": [
+          "Database gateways"
+        ],
+        "operationId": "dbGateways.list",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The project's database gateways, their instances and route metrics",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GatewayList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{id}/db-gateways/{gatewayId}/routes/{routeId}/pause": {
+      "post": {
+        "tags": [
+          "Database gateways"
+        ],
+        "operationId": "dbGateways.pauseRoute",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "gatewayId",
+            "in": "path",
+            "description": "Path parameter: gatewayId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "routeId",
+            "in": "path",
+            "description": "Path parameter: routeId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The paused route",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RouteSummary"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{id}/db-gateways/{gatewayId}/routes/{routeId}/resume": {
+      "post": {
+        "tags": [
+          "Database gateways"
+        ],
+        "operationId": "dbGateways.resumeRoute",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "gatewayId",
+            "in": "path",
+            "description": "Path parameter: gatewayId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "routeId",
+            "in": "path",
+            "description": "Path parameter: routeId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The resumed route",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RouteSummary"
+                }
+              }
+            }
           }
         }
       }
@@ -8626,6 +8916,21 @@
         "type": "object",
         "x-forge-envelope": "analyses"
       },
+      "AppInputBody": {
+        "type": "object",
+        "required": [
+          "client_id",
+          "client_secret"
+        ],
+        "properties": {
+          "client_id": {
+            "type": "string"
+          },
+          "client_secret": {
+            "type": "string"
+          }
+        }
+      },
       "AppliedInputs": {
         "type": "object",
         "properties": {
@@ -9554,7 +9859,8 @@
         "required": [
           "cloud",
           "title",
-          "builtin"
+          "builtin",
+          "methods"
         ],
         "properties": {
           "builtin": {
@@ -9568,6 +9874,12 @@
           },
           "help": {
             "type": "string"
+          },
+          "methods": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           },
           "settings": {
             "type": "array",
@@ -9923,6 +10235,21 @@
           }
         }
       },
+      "CompleteInputBody": {
+        "type": "object",
+        "required": [
+          "state",
+          "code"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          }
+        }
+      },
       "ComponentConfig": {
         "type": "object",
         "required": [
@@ -10080,6 +10407,7 @@
           "org_id",
           "cloud",
           "name",
+          "method",
           "account",
           "details",
           "status",
@@ -10121,6 +10449,9 @@
             "x-forge-id": true
           },
           "message": {
+            "type": "string"
+          },
+          "method": {
             "type": "string"
           },
           "missing": {
@@ -10517,6 +10848,56 @@
           },
           "verified": {
             "type": "boolean"
+          }
+        }
+      },
+      "DatabaseGateway": {
+        "type": "object",
+        "properties": {
+          "cloud_tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "environments": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "provider": {
+            "type": "string"
+          },
+          "region": {
+            "type": "string"
+          }
+        }
+      },
+      "DatabaseGatewayConfig": {
+        "type": "object",
+        "required": [
+          "name",
+          "suffix",
+          "resources",
+          "program"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "program": {
+            "type": "string"
+          },
+          "resources": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "suffix": {
+            "type": "string"
+          },
+          "trust": {
+            "type": "string"
           }
         }
       },
@@ -11200,6 +11581,9 @@
           "from": {
             "type": "string"
           },
+          "gateway": {
+            "type": "string"
+          },
           "key": {
             "type": "string"
           },
@@ -11517,6 +11901,21 @@
           }
         }
       },
+      "GatewayList": {
+        "properties": {
+          "gateways": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GatewayStatus"
+            }
+          }
+        },
+        "required": [
+          "gateways"
+        ],
+        "type": "object",
+        "x-forge-envelope": "gateways"
+      },
       "GatewayRoute": {
         "properties": {
           "env": {
@@ -11539,6 +11938,51 @@
         ],
         "type": "object",
         "x-forge-type": "github.com/xraph/loomplane/internal/gateway.Route"
+      },
+      "GatewayStatus": {
+        "type": "object",
+        "required": [
+          "id",
+          "environment_id",
+          "name",
+          "provider",
+          "region",
+          "snapshot_version",
+          "routes",
+          "instances"
+        ],
+        "properties": {
+          "environment_id": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "instances": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InstanceStatus"
+            }
+          },
+          "name": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "region": {
+            "type": "string"
+          },
+          "routes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RouteStatus"
+            }
+          },
+          "snapshot_version": {
+            "type": "integer"
+          }
+        }
       },
       "GeneratedSecret": {
         "type": "object",
@@ -11833,6 +12277,80 @@
           },
           "store": {
             "type": "string"
+          }
+        }
+      },
+      "InstanceRouteStats": {
+        "type": "object",
+        "required": [
+          "route_id",
+          "backend_conns",
+          "max_connections",
+          "pinned",
+          "pin_rate",
+          "wait_p95_ms",
+          "reachable"
+        ],
+        "properties": {
+          "backend_conns": {
+            "type": "integer"
+          },
+          "max_connections": {
+            "type": "integer"
+          },
+          "pin_rate": {
+            "type": "number"
+          },
+          "pinned": {
+            "type": "integer"
+          },
+          "reachable": {
+            "type": "boolean"
+          },
+          "route_id": {
+            "type": "string"
+          },
+          "wait_p95_ms": {
+            "type": "integer"
+          }
+        }
+      },
+      "InstanceStatus": {
+        "type": "object",
+        "required": [
+          "id",
+          "snapshot_version",
+          "last_seen_at",
+          "draining",
+          "reporting",
+          "behind",
+          "routes"
+        ],
+        "properties": {
+          "behind": {
+            "type": "boolean"
+          },
+          "draining": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "last_seen_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "reporting": {
+            "type": "boolean"
+          },
+          "routes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/InstanceRouteStats"
+            }
+          },
+          "snapshot_version": {
+            "type": "integer"
           }
         }
       },
@@ -12145,6 +12663,9 @@
           "version"
         ],
         "properties": {
+          "database_gateway": {
+            "$ref": "#/components/schemas/DatabaseGateway"
+          },
           "defaults": {
             "$ref": "#/components/schemas/Defaults"
           },
@@ -16041,6 +16562,68 @@
           }
         }
       },
+      "RouteStatus": {
+        "type": "object",
+        "required": [
+          "id",
+          "resource",
+          "state",
+          "reported",
+          "reachable",
+          "backend_conns",
+          "max_connections",
+          "pin_rate"
+        ],
+        "properties": {
+          "backend_conns": {
+            "type": "integer"
+          },
+          "id": {
+            "type": "string"
+          },
+          "max_connections": {
+            "type": "integer"
+          },
+          "pin_rate": {
+            "type": "number"
+          },
+          "reachable": {
+            "type": "boolean"
+          },
+          "reported": {
+            "type": "boolean"
+          },
+          "resource": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          }
+        }
+      },
+      "RouteSummary": {
+        "type": "object",
+        "required": [
+          "id",
+          "gateway_id",
+          "resource",
+          "state"
+        ],
+        "properties": {
+          "gateway_id": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "resource": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          }
+        }
+      },
       "RouteTTLInputBody": {
         "type": "object",
         "required": [
@@ -16167,6 +16750,9 @@
               "version"
             ],
             "properties": {
+              "database_gateway": {
+                "$ref": "#/components/schemas/DatabaseGateway"
+              },
               "defaults": {
                 "$ref": "#/components/schemas/Defaults"
               },
@@ -16754,6 +17340,9 @@
           "context": {
             "type": "string"
           },
+          "database_gateway": {
+            "$ref": "#/components/schemas/DatabaseGatewayConfig"
+          },
           "ecosystem": {
             "type": "string"
           },
@@ -16925,6 +17514,77 @@
           },
           "required": {
             "type": "boolean"
+          }
+        }
+      },
+      "SignIn": {
+        "type": "object",
+        "required": [
+          "authorize_url"
+        ],
+        "properties": {
+          "authorize_url": {
+            "type": "string"
+          }
+        }
+      },
+      "SignInApp": {
+        "type": "object",
+        "required": [
+          "cloud",
+          "source"
+        ],
+        "properties": {
+          "client_id": {
+            "type": "string"
+          },
+          "cloud": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          },
+          "updated_by": {
+            "type": "string"
+          }
+        }
+      },
+      "SignInAppList": {
+        "type": "object",
+        "required": [
+          "apps",
+          "callback_url"
+        ],
+        "properties": {
+          "apps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SignInApp"
+            }
+          },
+          "callback_url": {
+            "type": "string"
+          }
+        }
+      },
+      "SignInInputBody": {
+        "type": "object",
+        "required": [
+          "cloud",
+          "name"
+        ],
+        "properties": {
+          "cloud": {
+            "type": "string"
+          },
+          "connection_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
           }
         }
       },

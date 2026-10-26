@@ -29,6 +29,10 @@ In Loomplane, open **Integrations**, choose **DigitalOcean** and paste the token
 
 Loomplane asks DigitalOcean whose token it is before it keeps it. A token belongs to one team, and that team is where every app and database is made. A token from a locked account is refused.
 
+## Sign in instead of a token
+
+If your organization has registered a DigitalOcean OAuth app, the connect dialog offers **Sign in with DigitalOcean** first and **Use a token instead** underneath. You approve Loomplane on DigitalOcean, and Loomplane renews the grant itself. The app asks for the `read write` scope, which covers what the token steps above grant. [Connect a cloud by signing in](/docs/clouds/cloud-sign-in) covers registering the app and what happens if DigitalOcean stops accepting the sign-in.
+
 ## Use it in a manifest
 
 ```yaml

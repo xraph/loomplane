@@ -67,6 +67,15 @@ An empty host disables email. Setting a username, password or sender without a h
 | `LOOMPLANE_NOTIFICATIONS_FROM` | Unset | A single sender address |
 | `LOOMPLANE_NOTIFICATIONS_SMTP_TLS` | `false` | Implicit TLS, commonly on port 465. Production requires it |
 
+## Cloud sign-in
+
+| Variable | Default | What it does |
+|---|---|---|
+| `LOOMPLANE_DIGITALOCEAN_OAUTH_CLIENT_ID` | Unset | The client ID of the DigitalOcean OAuth app (`clouds.oauth.digitalocean.client_id`). Set it with the secret |
+| `LOOMPLANE_DIGITALOCEAN_OAUTH_CLIENT_SECRET` | Unset | The app's client secret. When both are set they apply to every organization and lock the Cloud sign-in page |
+
+[Connect a cloud by signing in](/docs/clouds/cloud-sign-in) explains how to register the app.
+
 ## Cloud API endpoints
 
 These exist so tests can stand fakes in for real clouds. Leave them empty in a live deployment.

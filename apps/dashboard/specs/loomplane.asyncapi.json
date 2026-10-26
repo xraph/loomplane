@@ -1754,6 +1754,56 @@
           }
         }
       },
+      "DatabaseGateway": {
+        "type": "object",
+        "properties": {
+          "cloud_tags": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "environments": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "provider": {
+            "type": "string"
+          },
+          "region": {
+            "type": "string"
+          }
+        }
+      },
+      "DatabaseGatewayConfig": {
+        "type": "object",
+        "required": [
+          "name",
+          "suffix",
+          "resources",
+          "program"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "program": {
+            "type": "string"
+          },
+          "resources": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "suffix": {
+            "type": "string"
+          },
+          "trust": {
+            "type": "string"
+          }
+        }
+      },
       "DefaultPlacement": {
         "type": "object",
         "required": [
@@ -1822,6 +1872,9 @@
             "type": "string"
           },
           "from": {
+            "type": "string"
+          },
+          "gateway": {
             "type": "string"
           },
           "key": {
@@ -2279,6 +2332,9 @@
           "version"
         ],
         "properties": {
+          "database_gateway": {
+            "$ref": "#/components/schemas/DatabaseGateway"
+          },
           "defaults": {
             "$ref": "#/components/schemas/Defaults"
           },
@@ -3011,6 +3067,9 @@
           "context": {
             "type": "string"
           },
+          "database_gateway": {
+            "$ref": "#/components/schemas/DatabaseGatewayConfig"
+          },
           "ecosystem": {
             "type": "string"
           },
@@ -3653,6 +3712,7 @@
           "org_id",
           "cloud",
           "name",
+          "method",
           "account",
           "details",
           "status",
@@ -3694,6 +3754,9 @@
             "x-forge-id": true
           },
           "message": {
+            "type": "string"
+          },
+          "method": {
             "type": "string"
           },
           "missing": {

@@ -25,12 +25,14 @@ require (
 	github.com/aws/smithy-go v1.28.5
 	github.com/gobwas/ws v1.4.0
 	github.com/google/uuid v1.6.0
+	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/joho/godotenv v1.5.1
 	github.com/moby/patternmatcher v0.6.1
 	github.com/modelcontextprotocol/go-sdk v1.8.0
 	github.com/nats-io/nats.go v1.53.1
 	github.com/rabbitmq/amqp091-go v1.16.0
+	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3
 	github.com/spiffe/go-spiffe/v2 v2.9.0
 	github.com/spiffe/spire-api-sdk v1.15.3
 	github.com/xraph/authsome v1.8.3
@@ -42,10 +44,10 @@ require (
 	github.com/xraph/forge v1.13.0
 	github.com/xraph/forge/extensions/conduit v1.13.0
 	github.com/xraph/go-utils v1.5.0
-	github.com/xraph/grove v1.9.1
-	github.com/xraph/grove/drivers/pgdriver v1.9.1
-	github.com/xraph/grove/drivers/sqlitedriver v1.9.1
-	github.com/xraph/grove/extension v1.9.1
+	github.com/xraph/grove v1.10.0
+	github.com/xraph/grove/drivers/pgdriver v1.10.0
+	github.com/xraph/grove/drivers/sqlitedriver v1.10.0
+	github.com/xraph/grove/extension v1.10.0
 	github.com/xraph/herald v1.8.1
 	github.com/xraph/keysmith v1.8.1
 	github.com/xraph/relay v1.8.1
@@ -144,7 +146,6 @@ require (
 	github.com/google/s2a-go v0.1.11 // indirect
 	github.com/googleapis/enterprise-certificate-proxy v0.3.23 // indirect
 	github.com/googleapis/gax-go/v2 v2.26.2 // indirect
-	github.com/gorilla/websocket v1.5.4-0.20250319132907-e064f32e3674 // indirect
 	github.com/grafana/pyroscope-go v1.4.3 // indirect
 	github.com/grafana/pyroscope-go/godeltaprof v0.1.11 // indirect
 	github.com/grandcat/zeroconf v1.0.0 // indirect
@@ -190,7 +191,6 @@ require (
 	github.com/redis/go-redis/v9 v9.22.0 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/robfig/cron/v3 v3.0.1 // indirect
-	github.com/santhosh-tekuri/jsonschema/v6 v6.0.3 // indirect
 	github.com/segmentio/asm v1.1.3 // indirect
 	github.com/segmentio/encoding v0.5.4 // indirect
 	github.com/segmentio/kafka-go v0.4.51 // indirect

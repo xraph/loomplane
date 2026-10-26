@@ -134,6 +134,26 @@ type DriftChecker interface {
 	Run(ctx context.Context) error
 }
 
+// JobConnectionRefresh renews the cloud sign-ins that are close to expiring.
+// Its cron entry runs it on the leader only.
+const JobConnectionRefresh = "loomplane.connections.refresh"
+
+// CronConnectionRefresh names the cron entry that enqueues
+// JobConnectionRefresh.
+const CronConnectionRefresh = "loomplane.connections.refresh"
+
+// ConnectionRefreshPayload is the payload of JobConnectionRefresh. It has
+// nothing in it: a pass covers every signed-in connection.
+type ConnectionRefreshPayload struct{}
+
+// ConnectionRefreshJob is JobConnectionRefresh's definition. It takes the
+// refresher as an interface so this package does not import connections.
+func ConnectionRefreshJob(r interface{ RefreshAll(context.Context) error }) *job.Definition[ConnectionRefreshPayload] {
+	return job.NewDefinition(JobConnectionRefresh, func(ctx context.Context, _ ConnectionRefreshPayload) error {
+		return r.RefreshAll(ctx)
+	})
+}
+
 // DriftJob is JobDriftCheck's definition.
 func DriftJob(c DriftChecker) *job.Definition[DriftPayload] {
 	return job.NewDefinition(JobDriftCheck, func(ctx context.Context, _ DriftPayload) error {

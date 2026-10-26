@@ -1,0 +1,40 @@
+{
+  "method": "POST",
+  "path": "/sql",
+  "header": {
+    "Accept": [
+      "*/*"
+    ],
+    "Accept-Encoding": [
+      "gzip, deflate"
+    ],
+    "Accept-Language": [
+      "*"
+    ],
+    "Connection": [
+      "keep-alive"
+    ],
+    "Content-Length": [
+      "46"
+    ],
+    "Content-Type": [
+      "text/plain;charset=UTF-8"
+    ],
+    "Neon-Array-Mode": [
+      "true"
+    ],
+    "Neon-Connection-String": [
+      "postgresql://app:pw@orders.us-east-1.db.example.com/orders?application_name=pkg%3Anpm%2F%2540neondatabase%2Fserverless%401.2.0"
+    ],
+    "Neon-Raw-Text-Output": [
+      "true"
+    ],
+    "Sec-Fetch-Mode": [
+      "cors"
+    ],
+    "User-Agent": [
+      "node"
+    ]
+  },
+  "body": "{\"query\":\"SELECT $1::int AS n\",\"params\":[\"7\"]}"
+}
