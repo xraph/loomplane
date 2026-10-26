@@ -48,8 +48,7 @@ export function FabriqLibraryPanel(props: CatalogPanelProps) {
         Loomplane runs the stock Fabriq worker. It handles the entity types your
         app defines with <code>DefineDynamic</code>. Entities written as Go
         structs, and hooks such as <code>Validate</code> or embeddings, need
-        your own binary built with
-        <code>forgeext.WithWorker(true)</code>.
+        your own binary built with <code>forgeext.WithWorker(true)</code>.
       </p>
     </div>
   )
