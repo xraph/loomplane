@@ -93,6 +93,13 @@ func (l *lockingStore) LeftSignIns(_ context.Context, clouds []string) ([]*Conne
 	return out, nil
 }
 
+// brokenMembers is a lockingStore whose membership query fails.
+type brokenMembers struct{ *lockingStore }
+
+func (brokenMembers) LeftSignIns(context.Context, []string) ([]*Connection, error) {
+	return nil, errors.New("authsome_members is unreachable")
+}
+
 type lockingSecrets struct {
 	*memSecrets
 	mu sync.Mutex

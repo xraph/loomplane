@@ -2,9 +2,11 @@ package connections
 
 import (
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/xraph/loomplane/internal/clouds/oauth"
 	"github.com/xraph/loomplane/internal/security"
 )
 
@@ -97,5 +99,26 @@ func TestRefreshDueAsksAgainWhenTheSignerLeaves(t *testing.T) {
 	}
 	if !slices.Equal(personalClouds, []string{GCP, Azure}) {
 		t.Fatalf("personal clouds %v", personalClouds)
+	}
+}
+
+func TestRefreshDueRenewsWhenTheMembershipCheckFails(t *testing.T) {
+	r := newRefreshRig(t)
+	r.signedIn(t, "conn_do", "at-1", r.clock.Add(time.Hour))
+	r.renewer.grants["rt-at-1"] = oauth.Grant{AccessToken: "at-2", RefreshToken: "rt-at-2", Expiry: r.clock.Add(30 * 24 * time.Hour)}
+	r.s.grants = brokenMembers{r.locked}
+
+	report, err := r.s.RefreshDue(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report != (RefreshReport{Refreshed: 1, Failed: 1}) {
+		t.Fatalf("report %+v", report)
+	}
+	if got := r.kept(t, "conn_do").AccessToken; got != "at-2" {
+		t.Fatalf("the due grant wasn't renewed: %q", got)
+	}
+	if len(r.warned) != 1 || !strings.Contains(r.warned[0], "unreachable") {
+		t.Fatalf("warned %v", r.warned)
 	}
 }

@@ -377,7 +377,12 @@ func (s *Service) RefreshDue(ctx context.Context) (RefreshReport, error) {
 		return report, fmt.Errorf("%w: renewing sign-ins needs the database", ErrUnavailable)
 	}
 	if err := s.askAgainWhenLeft(ctx, &report); err != nil {
-		return report, err
+		if ctx.Err() != nil {
+			return report, err
+		}
+		// Renewing doesn't depend on who has left, so it carries on.
+		report.Failed++
+		s.warn("find sign-ins whose signer left", err)
 	}
 	conns, err := s.grants.OAuthConnections(ctx)
 	if err != nil {
