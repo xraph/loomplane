@@ -639,9 +639,18 @@ func TestReleaseConsumerRevokesUnrecordedKeys(t *testing.T) {
 	if err := h.hooks.ReleaseConsumer(t.Context(), down); err != nil {
 		t.Fatalf("unreachable with nothing recorded: %v", err)
 	}
-	h.f.refuse = http.StatusBadGateway
+	for _, status := range []int{http.StatusBadGateway, http.StatusInternalServerError, http.StatusUnauthorized} {
+		h.f.refuse = status
+		if err := h.hooks.ReleaseConsumer(t.Context(), h.consumer("api", "acme")); err != nil {
+			t.Fatalf("%d with nothing recorded: %v", status, err)
+		}
+	}
+	h.f.refuse = 0
+	// A failed revoke with nothing recorded is quiet too.
+	h.f.plant("loomplane:api")
+	h.f.failRevoke = true
 	if err := h.hooks.ReleaseConsumer(t.Context(), h.consumer("api", "acme")); err != nil {
-		t.Fatalf("502 with nothing recorded: %v", err)
+		t.Fatalf("a failed revoke with nothing recorded: %v", err)
 	}
 }
 
