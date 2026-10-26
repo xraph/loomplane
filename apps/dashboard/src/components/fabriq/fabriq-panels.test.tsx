@@ -320,7 +320,7 @@ test("engines show deployed state and evidence without inventing a verified rest
   ).toBeVisible()
 })
 
-test("settings explains the projections before reviewing deployment", () => {
+test("settings explains the projections before reviewing deployment", async () => {
   api()
   mount(<FabriqSettings {...panelProps()} />)
   expect(
@@ -331,7 +331,102 @@ test("settings explains the projections before reviewing deployment", () => {
       "Search projections. Rebuilt from Postgres, so no backups."
     )
   ).toBeVisible()
-  expect(screen.getByRole("button", { name: "Review plan" })).toBeDisabled()
+  // Prove the manifest has loaded, which is what enables Review plan, before
+  // asserting that an untouched page leaves it disabled.
+  const review = screen.getByRole("button", { name: "Review plan" })
+  const graph = screen.getByRole("switch", { name: "FalkorDB" })
+  await userEvent.click(graph)
+  await vi.waitFor(() => expect(review).toBeEnabled())
+  await userEvent.click(graph)
+  expect(review).toBeDisabled()
+})
+
+test("flipping a projection and back plans nothing", async () => {
+  const writes = api()
+  mount(<FabriqSettings {...panelProps()} />)
+  const review = screen.getByRole("button", { name: "Review plan" })
+  const graph = screen.getByRole("switch", { name: "FalkorDB" })
+  const search = screen.getByRole("switch", { name: "Elasticsearch" })
+  await userEvent.click(graph)
+  await vi.waitFor(() => expect(review).toBeEnabled())
+  await userEvent.click(graph)
+  expect(review).toBeDisabled()
+
+  // Only the entry that really changed is planned.
+  await userEvent.click(graph)
+  await userEvent.click(search)
+  await userEvent.click(graph)
+  await vi.waitFor(() => expect(review).toBeEnabled())
+  await userEvent.click(review)
+  await vi.waitFor(() => expect(state.navigate).toHaveBeenCalled())
+  expect(writes.map((w) => w.body)).toEqual([
+    {
+      set_use: {
+        resource: "fabriq",
+        dependency: "elasticsearch",
+        use: { enabled: true },
+      },
+    },
+    { environment: "production" },
+  ])
+})
+
+test("turning a projection off warns that it removes the engine and its data", async () => {
+  api()
+  const props = withGraph()
+  props.config.composition!.dependencies.elasticsearch = {
+    mode: "new",
+    resource: "fabriq--elasticsearch",
+  }
+  mount(<FabriqSettings {...props} />)
+  expect(screen.queryByText(/Turning .* off removes it/)).toBeNull()
+  await userEvent.click(screen.getByRole("switch", { name: "FalkorDB" }))
+  expect(
+    screen.getByText(
+      "Turning FalkorDB off removes it and its data. Graph queries fail until you turn it back on."
+    )
+  ).toBeVisible()
+  expect(screen.queryByText(/Turning Elasticsearch off/)).toBeNull()
+  await userEvent.click(screen.getByRole("switch", { name: "Elasticsearch" }))
+  expect(
+    screen.getByText(
+      "Turning Elasticsearch off removes it and its search index. Search queries fail until you turn it back on."
+    )
+  ).toBeVisible()
+  await userEvent.click(screen.getByRole("switch", { name: "FalkorDB" }))
+  expect(screen.queryByText(/Turning FalkorDB off/)).toBeNull()
+})
+
+test("turning a projection on shows no removal warning", async () => {
+  api()
+  mount(<FabriqSettings {...panelProps()} />)
+  await userEvent.click(screen.getByRole("switch", { name: "FalkorDB" }))
+  expect(screen.queryByText(/Turning .* off removes it/)).toBeNull()
+})
+
+test("each projection switch is described by its explanation", () => {
+  api()
+  mount(<FabriqSettings {...panelProps()} />)
+  expect(
+    screen.getByRole("switch", { name: "FalkorDB" })
+  ).toHaveAccessibleDescription(
+    "Graph projections. Rebuilt from Postgres, so no backups."
+  )
+  expect(
+    screen.getByRole("switch", { name: "Elasticsearch" })
+  ).toHaveAccessibleDescription(
+    "Search projections. Rebuilt from Postgres, so no backups."
+  )
+})
+
+test("a switched-off projection's description includes the removal warning", async () => {
+  api()
+  mount(<FabriqSettings {...withGraph()} />)
+  const graph = screen.getByRole("switch", { name: "FalkorDB" })
+  await userEvent.click(graph)
+  expect(graph).toHaveAccessibleDescription(
+    /Rebuilt from Postgres, so no backups\..*Turning FalkorDB off removes it/
+  )
 })
 
 test("engine state does not claim health for linked resources or external endpoints", async () => {

@@ -1,4 +1,4 @@
-import { useRef, useState } from "react"
+import { useId, useRef, useState } from "react"
 import { messageOf } from "@/client/errors"
 import {
   useEnvironmentsList,
@@ -17,9 +17,20 @@ import { useOrganization } from "@/lib/organization"
 import { useNavigate } from "@/lib/router"
 
 const projections = {
-  falkordb: "FalkorDB",
-  elasticsearch: "Elasticsearch",
+  falkordb: {
+    title: "FalkorDB",
+    kind: "Graph",
+    removes: "its data",
+    queries: "Graph queries",
+  },
+  elasticsearch: {
+    title: "Elasticsearch",
+    kind: "Search",
+    removes: "its search index",
+    queries: "Search queries",
+  },
 } as const
+
 export function FabriqSettings({
   projectId,
   environmentId,
@@ -38,6 +49,7 @@ export function FabriqSettings({
   const [changes, setChanges] = useState<Record<string, boolean>>({})
   const [error, setError] = useState("")
   const submitting = useRef(false)
+  const descriptions = useId()
   const environment = environments.data?.environments.find(
     (e) => e.id === environmentId
   )?.name
@@ -52,13 +64,17 @@ export function FabriqSettings({
     if (isRecord(use) && typeof use.enabled === "boolean") return use.enabled
     return !!choices[id] && choices[id].mode !== "off"
   }
+  // A switch flipped and flipped back is not a change.
+  const pending = Object.entries(changes).filter(
+    ([id, enabled]) => enabled !== current(id)
+  )
   const busy = edit.isPending || plan.isPending
   async function review() {
     if (submitting.current || !environment || !allowed) return
     submitting.current = true
     setError("")
     try {
-      for (const [dependency, enabled] of Object.entries(changes))
+      for (const [dependency, enabled] of pending)
         await edit.mutateAsync({
           path: { id: projectId },
           body: { setUse: { resource, dependency, use: { enabled } } },
@@ -102,31 +118,54 @@ export function FabriqSettings({
           retry={environments.refetch}
         />
       )}
-      {Object.entries(projections).map(([id, title]) => (
-        <label
-          key={id}
-          className="flex items-center justify-between gap-4 rounded-xl border border-border-panel bg-card px-3.5 py-3"
-        >
-          <span>
-            <span className="text-[15px] leading-[normal] font-semibold">
-              {title}
-            </span>
-            <span className="block text-[12.5px] leading-[1.5] text-muted-foreground">
-              {id === "falkordb" ? "Graph" : "Search"} projections. Rebuilt from
-              Postgres, so no backups.
-            </span>
-          </span>
-          <Switch
-            className="data-[size=default]:h-5"
-            aria-label={title}
-            checked={changes[id] ?? current(id)}
-            disabled={busy || !allowed}
-            onCheckedChange={(enabled) =>
-              setChanges((previous) => ({ ...previous, [id]: enabled }))
-            }
-          />
-        </label>
-      ))}
+      {Object.entries(projections).map(([id, projection]) => {
+        const { title } = projection
+        const checked = changes[id] ?? current(id)
+        const warn = !checked && current(id)
+        const about = `${descriptions}-${id}-about`
+        const warning = `${descriptions}-${id}-warning`
+        return (
+          <div
+            key={id}
+            className="grid gap-2 rounded-xl border border-border-panel bg-card px-3.5 py-3"
+          >
+            <label className="flex items-center justify-between gap-4">
+              <span>
+                <span className="text-[15px] leading-[normal] font-semibold">
+                  {title}
+                </span>
+                <span
+                  id={about}
+                  className="block text-[12.5px] leading-[1.5] text-muted-foreground"
+                >
+                  {projection.kind} projections. Rebuilt from Postgres, so no
+                  backups.
+                </span>
+              </span>
+              <Switch
+                className="data-[size=default]:h-5"
+                aria-label={title}
+                aria-describedby={warn ? `${about} ${warning}` : about}
+                checked={checked}
+                disabled={busy || !allowed}
+                onCheckedChange={(enabled) =>
+                  setChanges((previous) => ({ ...previous, [id]: enabled }))
+                }
+              />
+            </label>
+            {warn && (
+              <p
+                id={warning}
+                role="note"
+                className="rounded-[9px] bg-notice-warning px-2.5 py-2 text-[12.5px] leading-normal text-notice-warning-ink"
+              >
+                Turning {title} off removes it and {projection.removes}.{" "}
+                {projection.queries} fail until you turn it back on.
+              </p>
+            )}
+          </div>
+        )
+      })}
       {error && (
         <Alert variant="destructive">
           <AlertDescription>{error}</AlertDescription>
@@ -143,7 +182,7 @@ export function FabriqSettings({
             !environment ||
             !manifest.data ||
             manifest.status === "error" ||
-            !Object.keys(changes).length ||
+            !pending.length ||
             !allowed
           }
           onClick={() => void review()}
