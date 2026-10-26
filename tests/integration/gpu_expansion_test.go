@@ -14,25 +14,38 @@ import (
 	"github.com/xraph/loomplane/pkg/provider"
 )
 
-type gpuExpansionProvider struct{ *infraProvider }
+var (
+	l4Size = provider.ServerSize{ID: "gpu-l4", CPUs: 2, MemoryMiB: 2048, DiskGB: 20, Architectures: []string{"amd64"}, Regions: []string{"region"},
+		Accelerator: &provider.Accelerator{Kind: "nvidia-l4", Vendor: "nvidia", Count: 1, MemoryGiB: 24}}
+	h100Size = provider.ServerSize{ID: "gpu-h100x1-80gb", CPUs: 2, MemoryMiB: 2048, DiskGB: 20, HourlyUSD: 3.39, HourlyPriceKnown: true, Architectures: []string{"amd64"}, Regions: []string{"region"},
+		Accelerator: &provider.Accelerator{Kind: "nvidia-h100-80gb", Vendor: "nvidia", Count: 1, MemoryGiB: 80}}
+	h100x8Size = provider.ServerSize{ID: "gpu-h100x8-640gb", CPUs: 16, MemoryMiB: 16384, DiskGB: 160, HourlyUSD: 23.92, HourlyPriceKnown: true, Architectures: []string{"amd64"}, Regions: []string{"region"},
+		Accelerator: &provider.Accelerator{Kind: "nvidia-h100-80gb", Vendor: "nvidia", Count: 8, MemoryGiB: 80}}
+)
 
-func (p gpuExpansionProvider) ServerOptions(context.Context, provider.InfrastructureCredential) (provider.ServerOptions, error) {
+// gpuExpansionProvider offers a plain image, a GPU-ready one and the test's sizes.
+type gpuExpansionProvider struct {
+	*infraProvider
+	sizes []provider.ServerSize
+}
+
+func (p *gpuExpansionProvider) ServerOptions(context.Context, provider.InfrastructureCredential) (provider.ServerOptions, error) {
 	return provider.ServerOptions{Regions: []provider.ServerRegion{{ID: "region"}},
 		Images: []provider.ServerImage{
 			{ID: "ubuntu", Bootstrap: true, Architecture: "amd64", Regions: []string{"region"}},
 			{ID: "gpu-base", Bootstrap: true, Architecture: "amd64", Regions: []string{"region"}, Accelerators: []string{"nvidia"}},
 		},
-		Sizes: []provider.ServerSize{{ID: "gpu-l4", CPUs: 2, MemoryMiB: 2048, DiskGB: 20, Architectures: []string{"amd64"}, Regions: []string{"region"},
-			Accelerator: &provider.Accelerator{Kind: "nvidia-l4", Vendor: "nvidia", Count: 1, MemoryGiB: 24}}}}, nil
+		Sizes: append([]provider.ServerSize(nil), p.sizes...)}, nil
 }
-func (p gpuExpansionProvider) CapacityInventory(ctx context.Context, c provider.InfrastructureCredential) (provider.CapacityInventory, error) {
-	return expansionProvider(p).CapacityInventory(ctx, c)
+func (p *gpuExpansionProvider) CapacityInventory(ctx context.Context, c provider.InfrastructureCredential) (provider.CapacityInventory, error) {
+	return expansionProvider{p.infraProvider}.CapacityInventory(ctx, c)
 }
 
-// gpuExpansionRuntime reports one L4 and whatever GPU runtime state the test sets.
+// gpuExpansionRuntime reports one GPU of kind and whatever GPU runtime state the test sets.
 type gpuExpansionRuntime struct {
 	*infraRuntime
 	gpuRuntime string
+	kind       string
 }
 
 func (r *gpuExpansionRuntime) Inspect(ctx context.Context, raw []byte, settings map[string]string, vacant bool) (cloudinfra.RuntimeHealth, error) {
@@ -40,22 +53,41 @@ func (r *gpuExpansionRuntime) Inspect(ctx context.Context, raw []byte, settings 
 	h.EffectiveCPUMillis = 2000
 	h.EffectiveMemoryBytes = 2 << 30
 	h.GPURuntime = r.gpuRuntime
-	h.GPUs = []provider.GPUDevice{{Index: 0, UUID: "GPU-0", Kind: "nvidia-l4", Product: "NVIDIA L4", MemoryMiB: 23034}}
+	title := r.kind
+	if k, ok := provider.LookupAcceleratorKind(r.kind); ok {
+		title = k.Title
+	}
+	h.GPUs = []provider.GPUDevice{{Index: 0, UUID: "GPU-0", Kind: r.kind, Product: title, MemoryMiB: 23034}}
 	return h, err
+}
+
+// gpuServerFixture registers a provider that sells sizes and a runtime that reports gpuRuntime.
+func gpuServerFixture(t *testing.T, gpuRuntime string, sizes ...provider.ServerSize) (*infraFixture, *gpuExpansionProvider, *gpuExpansionRuntime) {
+	t.Helper()
+	f := newInfraFixture(t)
+	p := &gpuExpansionProvider{infraProvider: f.provider, sizes: sizes}
+	adapters := cloudinfra.NewAdapters()
+	if err := adapters.RegisterServer("digitalocean", p); err != nil {
+		t.Fatal(err)
+	}
+	f.svc.Adapters = adapters
+	runtime := &gpuExpansionRuntime{infraRuntime: f.runtime, gpuRuntime: gpuRuntime, kind: sizes[0].Accelerator.Kind}
+	f.svc.Runtime = runtime
+	return f, p, runtime
 }
 
 func gpuExpansionFixture(t *testing.T) (*infraFixture, *gpuExpansionRuntime, cloudinfra.CapacityDemand) {
 	t.Helper()
-	f := newInfraFixture(t)
-	adapters := cloudinfra.NewAdapters()
-	if err := adapters.RegisterServer("digitalocean", gpuExpansionProvider{f.provider}); err != nil {
-		t.Fatal(err)
-	}
-	f.svc.Adapters = adapters
+	return gpuExpansionFixtureFor(t, l4Size, provider.GPUStatusToolkitMissing, false)
+}
+
+// gpuExpansionFixtureFor makes an empty GPU pool that grows by size, with an approved GPU demand.
+func gpuExpansionFixtureFor(t *testing.T, size provider.ServerSize, gpuRuntime string, approval bool) (*infraFixture, *gpuExpansionRuntime, cloudinfra.CapacityDemand) {
+	t.Helper()
+	f, _, runtime := gpuServerFixture(t, gpuRuntime, size)
 	f.svc.EnableAutomaticCapacity = true
-	runtime := &gpuExpansionRuntime{infraRuntime: f.runtime, gpuRuntime: provider.GPUStatusToolkitMissing}
-	f.svc.Runtime = runtime
-	pool := &cloudinfra.Pool{ID: "pool", OrgID: "org", CloudID: "cloud", Name: "L4", Revision: 1, AcceleratorKind: "nvidia-l4", Members: []cloudinfra.PoolMember{}}
+	kind := size.Accelerator.Kind
+	pool := &cloudinfra.Pool{ID: "pool", OrgID: "org", CloudID: "cloud", Name: "GPU", Revision: 1, AcceleratorKind: kind, Members: []cloudinfra.PoolMember{}}
 	if err := f.store.SavePool(t.Context(), pool, 0); err != nil {
 		t.Fatal(err)
 	}
@@ -63,8 +95,8 @@ func gpuExpansionFixture(t *testing.T) (*infraFixture, *gpuExpansionRuntime, clo
 	if err := f.svc.Clouds.(*cloudprofiles.PgStore).CreateTarget(t.Context(), &cloudprofiles.Target{ID: "pool-target", OrgID: "org", CloudID: "cloud", ProjectID: "proj", Name: "pool", DisplayName: "Pool", Provider: "server", Runtime: "server", PoolID: "pool", Revision: 1, CreatedAt: now, UpdatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
-	policy := cloudinfra.CapacityPolicy{Enabled: true, Limits: cloudinfra.ResourceVector{Servers: 4, CPUMillis: 8000, MemoryBytes: 8 << 30, StorageBytes: 80_000_000_000}, GPULimits: []cloudinfra.GPULimit{{Kind: "nvidia-l4", Maximum: 4}},
-		Pools: []cloudinfra.PoolExpansionPolicy{{PoolID: "pool", AcceleratorKind: "nvidia-l4", ConnectionID: "infra-account", Region: "region", Architecture: "amd64", Image: "gpu-base", AllowedSizes: []string{"gpu-l4"}, MaxServers: 4, SystemReserve: cloudinfra.ResourceVector{CPUMillis: 500, MemoryBytes: 512 << 20}}}}
+	policy := cloudinfra.CapacityPolicy{Enabled: true, RequireExpansionApproval: approval, Limits: cloudinfra.ResourceVector{Servers: 4, CPUMillis: 8000, MemoryBytes: 8 << 30, StorageBytes: 80_000_000_000}, GPULimits: []cloudinfra.GPULimit{{Kind: kind, Maximum: 4}},
+		Pools: []cloudinfra.PoolExpansionPolicy{{PoolID: "pool", AcceleratorKind: kind, ConnectionID: "infra-account", Region: "region", Architecture: "amd64", Image: "gpu-base", AllowedSizes: []string{size.ID}, MaxServers: 4, SystemReserve: cloudinfra.ResourceVector{CPUMillis: 500, MemoryBytes: 512 << 20}}}}
 	if _, err := f.svc.SaveCapacityPolicy(t.Context(), f.p, "cloud", cloudinfra.CapacityPolicyInput{Policy: policy}); err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +105,7 @@ func gpuExpansionFixture(t *testing.T) (*infraFixture, *gpuExpansionRuntime, clo
 	}
 	f.svc.CapacityDemandAuthority = &expansionAuthority{db: f.sql}
 	f.svc.CapacityDemandWakeup = &expansionWakeup{}
-	d := cloudinfra.CapacityDemand{OrgID: "org", CloudID: "cloud", PoolID: "pool", TargetID: "pool-target", ProjectID: "proj", EnvironmentID: "env", PlanID: "capacity-plan", Service: "app", Architecture: "amd64", Resources: cloudinfra.ResourceVector{CPUMillis: 1000, MemoryBytes: 1 << 30, GPUKind: "nvidia-l4", GPUs: 1}, PolicyRevision: 1, IntentHash: "approved-demand"}
+	d := cloudinfra.CapacityDemand{OrgID: "org", CloudID: "cloud", PoolID: "pool", TargetID: "pool-target", ProjectID: "proj", EnvironmentID: "env", PlanID: "capacity-plan", Service: "app", Architecture: "amd64", Resources: cloudinfra.ResourceVector{CPUMillis: 1000, MemoryBytes: 1 << 30, GPUKind: kind, GPUs: 1}, PolicyRevision: 1, IntentHash: "approved-demand"}
 	if _, err := f.sql.Exec(t.Context(), `INSERT INTO loomplane_manifests(id,org_id,project_id,revision,body,digest,created_by,created_at) VALUES('capacity-manifest','org','proj',1,'version: 1','capacity','manager',now())`); err != nil {
 		t.Fatal(err)
 	}
@@ -157,5 +189,163 @@ func TestPoolAndTemplateGPUKindsStayEqual(t *testing.T) {
 	err = f.store.SavePool(ctx, &cloudinfra.Pool{ID: "pool", OrgID: "org", CloudID: "cloud", Name: "GPU", Revision: 2, AcceleratorKind: "nvidia-l4", Members: []cloudinfra.PoolMember{}}, 1)
 	if !errors.Is(err, cloudinfra.ErrInvalid) || !strings.Contains(err.Error(), "expansion template buys CPU servers") {
 		t.Fatalf("store drift: %v", err)
+	}
+}
+
+// A GPU Droplet whose NVIDIA toolkit never came up costs money while it can't
+// take GPU work. It still enrolls, shows its hourly price and says why.
+func TestEnrollmentRecordsGPURuntime(t *testing.T) {
+	f, p, _ := gpuServerFixture(t, provider.GPUStatusToolkitMissing, h100Size, h100x8Size)
+	ctx := t.Context()
+	in := cloudinfra.ServerInput{Kind: "create", Name: "gpu", ConnectionID: "infra-account", CloudRevision: 1, Region: "region", Size: h100Size.ID, Image: "ubuntu"}
+	if _, err := f.svc.PreviewServer(ctx, f.p, "cloud", in); !errors.Is(err, cloudinfra.ErrInvalid) || !strings.Contains(err.Error(), "A GPU server needs a GPU-ready image such as gpu-base.") {
+		t.Fatalf("GPU size on a plain image: %v", err)
+	}
+	in.Image = "gpu-base"
+	preview, err := f.svc.PreviewServer(ctx, f.p, "cloud", in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The approval shows the hourly price and the GPUs before anything is bought.
+	if preview.EstimatedHourlyUSD != 3.39 || !preview.HourlyPriceKnown || preview.Accelerator == nil || preview.Accelerator.Kind != "nvidia-h100-80gb" || preview.Accelerator.Count != 1 {
+		t.Fatalf("GPU preview: %v %v %+v", preview.EstimatedHourlyUSD, preview.HourlyPriceKnown, preview.Accelerator)
+	}
+	var userData string
+	p.beforeCreate = func(spec provider.ServerSpec) {
+		if !spec.ReconcileOnly {
+			userData = spec.UserData
+		}
+	}
+	o, err := f.svc.ApplyServerOperation(ctx, f.p, "cloud", preview.ID, cloudinfra.ApplyInput{Review: preview.Review})
+	if err != nil {
+		t.Fatal(err)
+	}
+	o = f.reconcile(t, o)
+	// The Droplet's user data sets up the NVIDIA toolkit before it enrolls.
+	if o.Status != "waiting" || !strings.Contains(userData, `["nvidia-ctk","runtime","configure","--runtime=docker"]`) {
+		t.Fatalf("GPU create: %s, toolkit configured: %v", o.Status, strings.Contains(userData, "nvidia-ctk"))
+	}
+	// The Droplet is running and billing before it enrolls, so its price is already on it.
+	server, err := f.store.GetServer(ctx, "org", "cloud", o.ServerID)
+	if err != nil || server.Status != "provisioning" || server.HourlyUSD != 3.39 || !server.HourlyPriceKnown || server.Accelerator == nil {
+		t.Fatalf("provisioning GPU server: %+v %v", server, err)
+	}
+
+	o.HostKey = infraFixtureHostKey(t)
+	o.Enrolled = true
+	if err = f.store.SaveOperation(ctx, o); err != nil {
+		t.Fatal(err)
+	}
+	if o = f.reconcile(t, o); o.Status != "succeeded" {
+		t.Fatalf("enrolment: %+v", o)
+	}
+	server, err = f.store.GetServer(ctx, "org", "cloud", o.ServerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if server.Status != "ready" || server.Health.GPURuntime != provider.GPUStatusToolkitMissing || server.Health.GPUMessage == "" {
+		t.Fatalf("unready GPU server: %s %+v", server.Status, server.Health)
+	}
+	if server.Accelerator == nil || server.Accelerator.Kind != "nvidia-h100-80gb" || server.HourlyUSD != 3.39 || !server.HourlyPriceKnown {
+		t.Fatalf("GPU server cost: %+v %v %v", server.Accelerator, server.HourlyUSD, server.HourlyPriceKnown)
+	}
+	// Planning reads the runtime connection, which carries the same reason.
+	conn, err := f.connections.GetConnection(ctx, "org", server.RuntimeConnectionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inv, ok := provider.ParseGPUInventory(conn.Details)
+	if !ok || inv.Status != provider.GPUStatusToolkitMissing || inv.Message != server.Health.GPUMessage || len(inv.Devices) != 1 {
+		t.Fatalf("runtime connection GPU inventory: %+v %v", inv, conn.Details)
+	}
+	if _, placeErr := inv.Place(provider.GPURequest{Kind: "nvidia-h100-80gb", Count: 1}); placeErr == nil || placeErr.Error() != server.Health.GPUMessage {
+		t.Fatalf("an unready GPU server fits GPU work: %v", placeErr)
+	}
+
+	// A resize review and the resized server carry the new size's price and GPUs.
+	resize, err := f.svc.PreviewServer(ctx, f.p, "cloud", cloudinfra.ServerInput{Kind: "resize", ServerID: server.ID, CloudRevision: 1, ServerRevision: server.Revision, Size: h100x8Size.ID})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resize.EstimatedHourlyUSD != 23.92 || !resize.HourlyPriceKnown || resize.Accelerator == nil || resize.Accelerator.Count != 8 {
+		t.Fatalf("GPU resize preview: %v %+v", resize.EstimatedHourlyUSD, resize.Accelerator)
+	}
+	if _, err = f.svc.ApplyServerOperation(ctx, f.p, "cloud", resize.ID, cloudinfra.ApplyInput{Review: resize.Review}); err != nil {
+		t.Fatal(err)
+	}
+	if resize = f.reconcile(t, resize); resize.Status != "succeeded" {
+		t.Fatalf("resize: %+v", resize)
+	}
+	server, err = f.store.GetServer(ctx, "org", "cloud", server.ID)
+	if err != nil || server.Size != h100x8Size.ID || server.HourlyUSD != 23.92 || server.Accelerator == nil || server.Accelerator.Count != 8 {
+		t.Fatalf("resized GPU server: %+v %v", server, err)
+	}
+
+	// Inventory refresh follows the catalog's price for the server's size.
+	p.sizes[1].HourlyUSD = 24.5
+	if _, err = f.svc.RefreshCapacity(ctx, f.p, "cloud"); err != nil {
+		t.Fatal(err)
+	}
+	server, err = f.store.GetServer(ctx, "org", "cloud", server.ID)
+	if err != nil || server.HourlyUSD != 24.5 || !server.HourlyPriceKnown || server.Accelerator == nil || server.Accelerator.Count != 8 {
+		t.Fatalf("refreshed GPU server price: %+v %v", server, err)
+	}
+}
+
+func TestExpansionCarriesHourlyCost(t *testing.T) {
+	f, _, d := gpuExpansionFixtureFor(t, h100Size, provider.GPUStatusReady, true)
+	e := ensureExpansion(t, f, d)
+	// The expansion waits for approval with its hourly price and GPUs on it.
+	if e.Status != "awaiting_approval" || e.EstimatedHourlyUSD != 3.39 || e.Accelerator == nil || e.Accelerator.Kind != "nvidia-h100-80gb" || e.Accelerator.Count != 1 {
+		t.Fatalf("GPU expansion cost: %s %v %+v", e.Status, e.EstimatedHourlyUSD, e.Accelerator)
+	}
+	approved, err := f.svc.ApproveExpansion(t.Context(), f.p, "cloud", e.ID, e.Revision)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if approved.EstimatedHourlyUSD != 3.39 || approved.Accelerator == nil {
+		t.Fatalf("approved expansion lost its cost: %+v", approved)
+	}
+	o, err := f.store.GetOperation(t.Context(), "org", "cloud", approved.OperationID)
+	if err != nil || o.EstimatedHourlyUSD != 3.39 || o.Accelerator == nil || o.Accelerator.Kind != "nvidia-h100-80gb" {
+		t.Fatalf("expansion operation cost: %+v %v", o, err)
+	}
+}
+
+// With the GPU runtime known at enrolment, a ready GPU Droplet joins its pool on
+// the next pass, without anyone checking the server.
+func TestGPUExpansionJoinsWhenReadyAtEnrollment(t *testing.T) {
+	f, runtime, d := gpuExpansionFixtureFor(t, l4Size, provider.GPUStatusReady, false)
+	e := ensureExpansion(t, f, d)
+	reconcileExpansion(t, f)
+	o, err := f.store.GetOperation(t.Context(), "org", "cloud", e.OperationID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	o.Enrolled = true
+	o.HostKey = infraFixtureHostKey(t)
+	if err = f.store.SaveOperation(t.Context(), o); err != nil {
+		t.Fatal(err)
+	}
+	calls := runtime.calls
+	reconcileExpansion(t, f)
+	e, err = f.store.GetExpansion(t.Context(), "org", "cloud", e.ID)
+	if err != nil || e.Status != "ready" || e.Block != nil {
+		t.Fatalf("ready GPU expansion: %+v %v", e, err)
+	}
+	pool, err := f.store.GetPool(t.Context(), "org", "cloud", "pool")
+	if err != nil || len(pool.Members) != 1 || pool.Members[0].GPUs != 1 {
+		t.Fatalf("GPU member: %+v %v", pool, err)
+	}
+	server, err := f.store.GetServer(t.Context(), "org", "cloud", pool.Members[0].ServerID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	conn, err := f.connections.GetConnection(t.Context(), "org", server.RuntimeConnectionID)
+	if err != nil || conn.Details[provider.GPUDetailStatus] != provider.GPUStatusReady {
+		t.Fatalf("runtime connection GPU status: %+v %v", conn, err)
+	}
+	if runtime.calls == calls {
+		t.Fatal("the pass never inspected the enrolled server")
 	}
 }

@@ -210,12 +210,14 @@ func (s *Service) newExpansion(ctx context.Context, st *PgStore, policy *Capacit
 		return nil, ErrConflict
 	}
 	var resources ResourceVector
+	var selected provider.ServerSize
 	for _, candidate := range options.Sizes {
 		if candidate.ID == size {
 			resources, err = sizeResources(candidate)
 			if err != nil {
 				return nil, err
 			}
+			selected = candidate
 		}
 	}
 	if resources.Servers != 1 {
@@ -238,7 +240,9 @@ func (s *Service) newExpansion(ctx context.Context, st *PgStore, policy *Capacit
 	if policy.RequireExpansionApproval {
 		status = "awaiting_approval"
 	}
-	e := &Expansion{ID: id, OrgID: policy.OrgID, CloudID: policy.CloudID, PoolID: pool.PoolID, Status: status, IntentHash: id, Revision: 1, PolicyRevision: policy.Revision, Resources: resources, Provider: conn.Cloud, AccountID: credential.AccountID, ConnectionID: conn.ID, ConnectionGeneration: conn.Generation, Region: pool.Region, Size: size, Architecture: pool.Architecture, Image: pool.Image, Template: pool, Minimum: minimum, CreatedAt: now, UpdatedAt: now}
+	e := &Expansion{ID: id, OrgID: policy.OrgID, CloudID: policy.CloudID, PoolID: pool.PoolID, Status: status, IntentHash: id, Revision: 1, PolicyRevision: policy.Revision, Resources: resources, Provider: conn.Cloud, AccountID: credential.AccountID, ConnectionID: conn.ID, ConnectionGeneration: conn.Generation, Region: pool.Region, Size: size, Architecture: pool.Architecture, Image: pool.Image, Template: pool, Minimum: minimum, CreatedAt: now, UpdatedAt: now,
+		// The approval shows what the new server costs per hour and which GPUs it has.
+		EstimatedHourlyUSD: selected.HourlyUSD, Accelerator: cloneAccelerator(selected.Accelerator)}
 	if createErr := st.createExpansion(ctx, e, token); createErr != nil {
 		return nil, createErr
 	}

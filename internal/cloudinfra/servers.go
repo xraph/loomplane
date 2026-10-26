@@ -42,6 +42,11 @@ type Server struct {
 	Health              RuntimeHealth `json:"health"`
 	CreatedAt           time.Time     `json:"created_at"`
 	UpdatedAt           time.Time     `json:"updated_at"`
+	// Accelerator and the hourly price come from the catalog size the server
+	// was bought or resized to, so a GPU's cost stays on screen while it runs.
+	Accelerator      *provider.Accelerator `json:"accelerator,omitempty"`
+	HourlyUSD        float64               `json:"hourly_usd,omitempty"`
+	HourlyPriceKnown bool                  `json:"hourly_price_known,omitempty"`
 }
 
 // RuntimeHealth comes from the pinned Docker daemon, never a provider size slug.
@@ -82,6 +87,8 @@ type Operation struct {
 	CapacityCheckedAt    time.Time                       `json:"capacity_checked_at,omitempty,omitzero"`
 	AbsenceConfirmedAt   time.Time                       `json:"absence_confirmed_at,omitempty,omitzero"`
 	EstimatedHourlyUSD   float64                         `json:"estimated_hourly_usd"`
+	HourlyPriceKnown     bool                            `json:"hourly_price_known,omitempty"`
+	Accelerator          *provider.Accelerator           `json:"accelerator,omitempty"`
 	StateRevision        int64                           `json:"state_revision"`
 	ID                   string                          `json:"id" forge:"id"`
 	OrgID                string                          `json:"org_id"`
@@ -219,6 +226,11 @@ func (s *Service) checkServer(ctx context.Context, org, cloud, id string) (*Serv
 	if checkErr != nil || health.DockerID != v.Health.DockerID {
 		v.Status = "unhealthy"
 	} else {
+		health = gpuHealth(health, v.Accelerator)
+		// Planning reads GPUs from the runtime connection, so a check keeps it current.
+		if syncErr := s.syncRuntimeGPUs(ctx, conn, health); syncErr != nil {
+			return nil, syncErr
+		}
 		if v.Health.EffectiveCPUMillis != health.EffectiveCPUMillis || v.Health.EffectiveMemoryBytes != health.EffectiveMemoryBytes || v.Health.CPUs != health.CPUs || v.Health.MemoryBytes != health.MemoryBytes || v.Health.Architecture != health.Architecture {
 			v.Revision++
 		}

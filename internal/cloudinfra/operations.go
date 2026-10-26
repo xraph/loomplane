@@ -167,7 +167,7 @@ func (s *Service) PreviewServer(ctx context.Context, p security.Principal, cloud
 						continue
 					}
 
-					o.EstimatedHourlyUSD = size.HourlyUSD
+					priceOperation(o, size)
 					resources, sizeErr := sizeResources(size)
 					if sizeErr != nil {
 						return nil, sizeErr
@@ -192,6 +192,7 @@ func (s *Service) PreviewServer(ctx context.Context, p security.Principal, cloud
 						continue
 					}
 
+					priceOperation(o, size)
 					resources, sizeErr := sizeResources(size)
 					if sizeErr != nil {
 						return nil, sizeErr
@@ -207,6 +208,29 @@ func (s *Service) PreviewServer(ctx context.Context, p security.Principal, cloud
 		return nil, checkErr
 	}
 	return o, nil
+}
+
+// priceOperation puts the size's hourly price and GPUs on the review, so the
+// cost is on screen before anyone approves it.
+func priceOperation(o *Operation, size provider.ServerSize) {
+	o.EstimatedHourlyUSD = size.HourlyUSD
+	o.HourlyPriceKnown = size.HourlyPriceKnown
+	o.Accelerator = cloneAccelerator(size.Accelerator)
+}
+
+// priceServer gives a server the price and GPUs of the operation that bought or resized it.
+func priceServer(v *Server, o *Operation) {
+	v.Accelerator = cloneAccelerator(o.Accelerator)
+	v.HourlyUSD = o.EstimatedHourlyUSD
+	v.HourlyPriceKnown = o.HourlyPriceKnown
+}
+
+func cloneAccelerator(a *provider.Accelerator) *provider.Accelerator {
+	if a == nil {
+		return nil
+	}
+	copied := *a
+	return &copied
 }
 
 func connectionMatches(o *Operation, c *connections.Connection) bool {
@@ -440,6 +464,8 @@ func (s *Service) execute(ctx context.Context, o *Operation) error {
 	}
 	if errors.Is(err, ErrNotFound) && o.Input.Kind == "create" {
 		v = &Server{CreationOperationID: o.ID, ID: o.ServerID, OrgID: o.OrgID, CloudID: o.CloudID, Name: o.Input.Name, Ownership: o.Ownership, Provider: o.Provider, ConnectionID: o.ConnectionID, AccountID: o.AccountID, ResourceID: o.ResourceID, Region: o.Input.Region, Size: o.Input.Size, Revision: 1, Status: "provisioning", CreatedAt: o.CreatedAt, UpdatedAt: s.now().UTC()}
+		// The server bills from the moment it exists, so its price shows while it boots.
+		priceServer(v, o)
 		err = s.Store.SaveServer(ctx, v)
 	}
 	if err != nil {

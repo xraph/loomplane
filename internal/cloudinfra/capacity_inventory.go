@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"reflect"
 	"slices"
 	"strings"
 	"time"
@@ -101,6 +102,14 @@ func (s *Service) refreshCapacity(ctx context.Context, org, cloud string) (*Capa
 		}
 	}
 	accounts := map[string]provider.CapacityInventory{}
+	catalogs := map[string]provider.ServerOptions{}
+	// Only accounts holding managed servers need their catalog read for prices.
+	priced := map[string]bool{}
+	for _, v := range servers {
+		if v.Ownership == "managed" && v.Provider != "server" && v.Status != "deleted" {
+			priced[v.Provider+"/"+v.AccountID] = true
+		}
+	}
 	ids := make([]string, 0, len(connectionIDs))
 	for id := range connectionIDs {
 		ids = append(ids, id)
@@ -135,6 +144,13 @@ func (s *Service) refreshCapacity(ctx context.Context, org, cloud string) (*Capa
 			return nil, provider.ErrInfrastructureIdentity
 		}
 		accounts[key] = snapshot
+		// Prices are a display estimate. A catalog that can't be read leaves
+		// the last known prices in place rather than failing the refresh.
+		if catalog, ok := adapter.(provider.ServerOptionsAdapter); ok && priced[key] {
+			if options, optionsErr := catalog.ServerOptions(ctx, credential); optionsErr == nil {
+				catalogs[key] = options
+			}
+		}
 	}
 	records := make([]CapacityRecord, 0, len(servers))
 	for _, v := range servers {
@@ -151,6 +167,11 @@ func (s *Service) refreshCapacity(ctx context.Context, org, cloud string) (*Capa
 				return nil, e
 			}
 			v = checked
+		}
+		if options, ok := catalogs[v.Provider+"/"+v.AccountID]; ok && v.Ownership == "managed" && catalogPrice(v, options) {
+			if e := s.Store.SaveServer(ctx, v); e != nil {
+				return nil, e
+			}
 		}
 		record := CapacityRecord{Kind: "server", Provider: v.Provider, AccountID: v.AccountID, ResourceID: "server:" + v.ResourceID, ServerID: v.ID, ServerStateRevision: v.StateRevision, CheckedAt: v.Health.CheckedAt, Resources: CapacityResources{Servers: number(1)}, Observation: capacityObservation(v.Health)}
 		var created *Operation
@@ -255,6 +276,23 @@ func (s *Service) refreshCapacity(ctx context.Context, org, cloud string) (*Capa
 		return current, nil
 	}
 	return usage, nil
+}
+
+// catalogPrice updates a managed server's hourly price and GPUs from the
+// catalog row for its size. It reports whether anything changed. A size the
+// catalog no longer lists keeps its last known facts.
+func catalogPrice(v *Server, options provider.ServerOptions) bool {
+	for _, size := range options.Sizes {
+		if size.ID != v.Size {
+			continue
+		}
+		if v.HourlyUSD == size.HourlyUSD && v.HourlyPriceKnown == size.HourlyPriceKnown && reflect.DeepEqual(v.Accelerator, size.Accelerator) {
+			return false
+		}
+		v.HourlyUSD, v.HourlyPriceKnown, v.Accelerator = size.HourlyUSD, size.HourlyPriceKnown, cloneAccelerator(size.Accelerator)
+		return true
+	}
+	return false
 }
 func (s *Service) recoverCapacity(ctx context.Context) error {
 	st, ok := s.Store.(capacityRecoveryStore)

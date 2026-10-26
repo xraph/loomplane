@@ -464,3 +464,34 @@ func TestPoolKindMatchesTemplate(t *testing.T) {
 		t.Fatalf("kinds differ: %v", err)
 	}
 }
+
+func TestGPUServerNeedsGPUImage(t *testing.T) {
+	err := validateOptions(gpuOptions(), ServerInput{Region: "tor1", Size: "gpu-h100x1-80gb", Image: "ubuntu-24-04-x64"})
+	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "GPU-ready image") || !strings.Contains(err.Error(), "gpu-h100x1-base") {
+		t.Fatalf("plain image accepted: %v", err)
+	}
+	if err = validateOptions(gpuOptions(), ServerInput{Region: "tor1", Size: "gpu-h100x1-80gb", Image: "gpu-h100x1-base"}); err != nil {
+		t.Fatalf("GPU-ready image refused: %v", err)
+	}
+	// A CPU size still takes the plain image, and the GPU image too.
+	for _, image := range []string{"ubuntu-24-04-x64", "gpu-h100x1-base"} {
+		if err = validateOptions(gpuOptions(), ServerInput{Region: "tor1", Size: "c-32", Image: image}); err != nil {
+			t.Fatalf("CPU size on %s: %v", image, err)
+		}
+	}
+	// The rule runs even when the image isn't in the catalog at all.
+	if err = validateOptions(gpuOptions(), ServerInput{Region: "tor1", Size: "gpu-h100x1-80gb", Image: "missing"}); !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "GPU-ready image") {
+		t.Fatalf("unknown image: %v", err)
+	}
+}
+
+func TestAMDServerRefused(t *testing.T) {
+	options := gpuOptions()
+	options.Sizes = append(options.Sizes, provider.ServerSize{ID: "gpu-mi300x1-192gb", CPUs: 20, MemoryMiB: 245760, DiskGB: 720, HourlyUSD: 1.99, HourlyPriceKnown: true, Regions: []string{"tor1"},
+		Accelerator: &provider.Accelerator{Kind: "amd-mi300x", Vendor: "amd", Count: 1, MemoryGiB: 192}})
+	options.Images = append(options.Images, provider.ServerImage{ID: "gpu-amd-base", Architecture: "amd64", Bootstrap: true, Regions: []string{"tor1"}, Accelerators: []string{"amd"}})
+	err := validateOptions(options, ServerInput{Region: "tor1", Size: "gpu-mi300x1-192gb", Image: "gpu-amd-base"})
+	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "AMD GPU servers aren't supported yet") {
+		t.Fatalf("AMD size accepted: %v", err)
+	}
+}

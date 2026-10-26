@@ -129,6 +129,10 @@ type Expansion struct {
 	ApprovedAt           *time.Time          `json:"approved_at,omitempty"`
 	CreatedAt            time.Time           `json:"created_at"`
 	UpdatedAt            time.Time           `json:"updated_at"`
+	// EstimatedHourlyUSD and Accelerator come from the selected size, so an
+	// approval shows what the new server costs per hour.
+	EstimatedHourlyUSD float64               `json:"estimated_hourly_usd,omitempty"`
+	Accelerator        *provider.Accelerator `json:"accelerator,omitempty"`
 }
 
 // CapacityResources preserves unknown facts as null, independently per dimension.

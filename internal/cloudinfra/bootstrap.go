@@ -10,8 +10,10 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -161,10 +163,90 @@ for attempt in range(180):
 		return "", err
 	}
 	script = strings.ReplaceAll(strings.ReplaceAll(script, "ENDPOINT", string(ep)), "TOKEN", string(token))
-	document := map[string]any{"package_update": true, "groups": []string{"docker"}, "packages": []string{"docker.io", "python3", "iproute2"}, "users": []any{"default", map[string]any{"name": "loomplane", "groups": []string{"docker"}, "shell": "/bin/bash", "ssh_authorized_keys": []string{strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey())))}}}, "write_files": []any{map[string]any{"path": "/root/loomplane-enroll.py", "permissions": "0600", "content": script}}, "runcmd": []any{[]string{"systemctl", "enable", "--now", "docker"}, []string{"python3", "/root/loomplane-enroll.py"}}}
+	packages := []string{"docker.io", "python3", "iproute2"}
+	runcmd := []any{[]string{"systemctl", "enable", "--now", "docker"}}
+	if nvidiaAccelerator(o.Accelerator) {
+		// The GPU-ready image ships the driver. Docker still needs the NVIDIA
+		// Container Toolkit, so add it when missing and point Docker at it
+		// before the server enrolls. A failure here still enrolls the server,
+		// and its GPU check then says why it can't take GPU work.
+		packages = append(packages, "ca-certificates", "curl", "gnupg")
+		runcmd = append(runcmd, []string{"sh", "-c", nvidiaToolkitScript}, []string{"nvidia-ctk", "runtime", "configure", "--runtime=docker"}, []string{"systemctl", "restart", "docker"})
+	}
+	runcmd = append(runcmd, []string{"python3", "/root/loomplane-enroll.py"})
+	document := map[string]any{"package_update": true, "groups": []string{"docker"}, "packages": packages, "users": []any{"default", map[string]any{"name": "loomplane", "groups": []string{"docker"}, "shell": "/bin/bash", "ssh_authorized_keys": []string{strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey())))}}}, "write_files": []any{map[string]any{"path": "/root/loomplane-enroll.py", "permissions": "0600", "content": script}}, "runcmd": runcmd}
 	encoded, err := json.Marshal(document)
 	return "#cloud-config\n" + string(encoded), err
 }
+
+// nvidiaToolkitScript installs the NVIDIA Container Toolkit from NVIDIA's apt
+// repository, unless nvidia-ctk is already there. It never installs a driver.
+const nvidiaToolkitScript = `set -eu
+if command -v nvidia-ctk >/dev/null 2>&1; then exit 0; fi
+keyring=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | gpg --batch --yes --dearmor -o "$keyring"
+curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | sed "s#deb https://#deb [signed-by=$keyring] https://#g" > /etc/apt/sources.list.d/nvidia-container-toolkit.list
+apt-get update
+DEBIAN_FRONTEND=noninteractive apt-get install -y nvidia-container-toolkit
+`
+
+func nvidiaAccelerator(a *provider.Accelerator) bool {
+	return a != nil && a.Vendor == provider.VendorNVIDIA
+}
+
+// gpuHealth keeps an NVIDIA server's GPU state honest. A probe that found no
+// GPU, or couldn't run, on a server bought with GPUs leaves the count unknown
+// rather than zero, and a server that can't take GPU work always says why.
+func gpuHealth(h RuntimeHealth, a *provider.Accelerator) RuntimeHealth {
+	if !nvidiaAccelerator(a) || h.GPURuntime == provider.GPUStatusReady {
+		return h
+	}
+	if h.GPURuntime == "" || h.GPURuntime == provider.GPUStatusNone {
+		h.GPURuntime = provider.GPUStatusUnknown
+	}
+	if h.GPUMessage == "" {
+		title := a.Kind
+		if k, ok := provider.LookupAcceleratorKind(a.Kind); ok {
+			title = k.Title
+		}
+		noun, them := "GPU", "it"
+		if a.Count != 1 {
+			noun, them = "GPUs", "them"
+		}
+		h.GPUMessage = fmt.Sprintf("This server was bought with %d %s %s, but Loomplane can't confirm Docker can use %s. It takes no GPU work until a server check finds %s ready.", a.Count, title, noun, them, them)
+	}
+	return h
+}
+
+// runtimeGPUDetails is the GPU inventory a runtime connection carries for
+// planning, or nil when the health check couldn't say anything about GPUs.
+func runtimeGPUDetails(h RuntimeHealth) map[string]string {
+	if h.GPURuntime == "" {
+		return nil
+	}
+	return provider.GPUInventory{Status: h.GPURuntime, Message: h.GPUMessage, Devices: h.GPUs, CheckedAt: h.CheckedAt}.Details()
+}
+
+// syncRuntimeGPUs writes the latest GPU inventory into a server's runtime
+// connection. It writes only when the status, message or devices changed, so
+// a routine check doesn't rewrite the connection.
+func (s *Service) syncRuntimeGPUs(ctx context.Context, conn *connections.Connection, h RuntimeHealth) error {
+	details := runtimeGPUDetails(h)
+	if details == nil || conn == nil {
+		return nil
+	}
+	if old, ok := provider.ParseGPUInventory(conn.Details); ok && conn.Details[provider.GPUDetailStatus] == h.GPURuntime && old.Status == h.GPURuntime && old.Message == h.GPUMessage && slices.Equal(old.Devices, h.GPUs) {
+		return nil
+	}
+	updated := *conn
+	updated.Details = maps.Clone(conn.Details)
+	if updated.Details == nil {
+		updated.Details = map[string]string{}
+	}
+	maps.Copy(updated.Details, details)
+	return s.RuntimeConnections.UpdateConnection(ctx, &updated)
+}
+
 func (s *Service) bootstrapSecret(ctx context.Context, o *Operation) (*bootstrapSecret, error) {
 	raw, err := s.Secrets.Reveal(ctx, o.OrgID, bootstrapKey(o.ID))
 	if err != nil {
@@ -256,6 +338,7 @@ func (s *Service) Enroll(ctx context.Context, org, id, token string, in Enrollme
 func (s *Service) readyRuntime(ctx context.Context, o *Operation, v *Server) error {
 	var raw []byte
 	var settings map[string]string
+	var conn *connections.Connection
 	if o.Input.Kind == "create" {
 		secret, err := s.bootstrapSecret(ctx, o)
 		if err != nil {
@@ -267,12 +350,11 @@ func (s *Service) readyRuntime(ctx context.Context, o *Operation, v *Server) err
 			return err
 		}
 	} else {
-		conn, key, err := s.Connections.Credential(ctx, o.OrgID, v.RuntimeConnectionID)
+		current, key, err := s.Connections.Credential(ctx, o.OrgID, v.RuntimeConnectionID)
 		if err != nil {
 			return err
 		}
-		raw = key
-		settings = conn.Details
+		conn, raw, settings = current, key, current.Details
 	}
 	health, err := s.Runtime.Inspect(ctx, raw, settings, false)
 	if err != nil {
@@ -281,6 +363,9 @@ func (s *Service) readyRuntime(ctx context.Context, o *Operation, v *Server) err
 	if v.Health.DockerID != "" && health.DockerID != v.Health.DockerID {
 		return provider.ErrInfrastructureIdentity
 	}
+	// A GPU server enrolls even when Docker can't use its GPUs yet: it exists
+	// and costs money. Its health says why, and it takes no GPU work.
+	health = gpuHealth(health, o.Accelerator)
 	if o.Input.Kind == "create" {
 		config, configErr := server.ParseConfig(raw, settings)
 		if configErr != nil {
@@ -294,6 +379,8 @@ func (s *Service) readyRuntime(ctx context.Context, o *Operation, v *Server) err
 		}
 		now := s.now().UTC()
 		connection := &connections.Connection{ID: connectionID, OrgID: o.OrgID, Cloud: connections.Server, Name: "Server " + o.ServerID, Account: health.DockerID, Details: settings, Status: connections.StatusReady, CheckedAt: &now, CreatedBy: o.Principal.UserID, CreatedAt: now, UpdatedAt: now}
+		// Planning reads GPUs from the runtime connection, so it carries them from the start.
+		maps.Copy(connection.Details, runtimeGPUDetails(health))
 		err = s.RuntimeConnections.CreateConnection(ctx, connection)
 		if errors.Is(err, connections.ErrExists) {
 			existing, getErr := s.RuntimeConnections.GetConnection(ctx, o.OrgID, connectionID)
@@ -303,10 +390,20 @@ func (s *Service) readyRuntime(ctx context.Context, o *Operation, v *Server) err
 			if existing.Cloud != connections.Server || existing.Details["docker_id"] != health.DockerID || existing.Details["host_key"] != o.HostKey {
 				return ErrConflict
 			}
+			if syncErr := s.syncRuntimeGPUs(ctx, existing, health); syncErr != nil {
+				return syncErr
+			}
 		} else if err != nil {
 			return err
 		}
 		v.RuntimeConnectionID = connectionID
+	} else if conn != nil {
+		if syncErr := s.syncRuntimeGPUs(ctx, conn, health); syncErr != nil {
+			return syncErr
+		}
+	}
+	if o.Input.Kind == "create" || o.Input.Kind == "resize" {
+		priceServer(v, o)
 	}
 	v.Health = health
 	v.Status = "ready"

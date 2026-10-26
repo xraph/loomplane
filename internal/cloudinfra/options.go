@@ -3,6 +3,7 @@ package cloudinfra
 import (
 	"context"
 	"slices"
+	"strings"
 
 	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/pkg/provider"
@@ -37,10 +38,22 @@ func validateOptions(options provider.ServerOptions, in ServerInput) error {
 	}
 	size := false
 	disk := 0
-	for _, v := range options.Sizes {
+	var chosen *provider.ServerSize
+	for i, v := range options.Sizes {
 		size = size || (v.ID == in.Size && slices.Contains(v.Regions, in.Region))
 		if v.ID == in.Size {
 			disk = v.DiskGB
+			chosen = &options.Sizes[i]
+		}
+	}
+	// A GPU size needs an image that ships its vendor's driver, whatever else
+	// is wrong with the request, so the reviewer learns why first.
+	if chosen != nil && chosen.Accelerator != nil {
+		if chosen.Accelerator.Vendor == provider.VendorAMD || strings.HasPrefix(chosen.Accelerator.Kind, provider.VendorAMD+"-") {
+			return invalidSentence("AMD GPU servers aren't supported yet.")
+		}
+		if !gpuReadyImage(options, in.Image, *chosen) {
+			return gpuImageError(options, in.Region, *chosen)
 		}
 	}
 	image := false
