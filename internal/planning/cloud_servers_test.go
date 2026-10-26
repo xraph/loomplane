@@ -328,3 +328,35 @@ func TestRoutedReleaseOntoAPoolSticksOnlyToAPoolServer(t *testing.T) {
 		})
 	}
 }
+
+// A composed resource on a direct target of the Cloud that can't be placed
+// is unverified, which its warning says, unlike one on no target of it.
+func TestUnverifiedPlacementsNameResourcesOnTheCloud(t *testing.T) {
+	m := parse(t, edgeApp)
+	unverifiedAccount := composedConnections(t) // no docker_id: no account identity
+	unreviewed := edgeHostTarget()
+	unreviewed.Revision = 0
+	elsewhere := edgeHostTarget()
+	elsewhere.ConnectionID = targetB
+	pooled := edgeHostTarget()
+	pooled.PoolID = "pool"
+	unreviewedCloud := edgeAssignment(edgeHostTarget())
+	unreviewedCloud.CloudRevision = 0
+	for name, tt := range map[string]struct {
+		assignment *cloudprofiles.Assignment
+		options    []ConnectionOption
+		want       bool
+	}{
+		"placed":              {edgeAssignment(edgeHostTarget()), hostedConnections(t), false},
+		"unverified account":  {edgeAssignment(edgeHostTarget()), unverifiedAccount, true},
+		"unreviewed target":   {edgeAssignment(unreviewed), hostedConnections(t), true},
+		"unreviewed Cloud":    {unreviewedCloud, hostedConnections(t), true},
+		"another target only": {edgeAssignment(elsewhere), hostedConnections(t), false},
+		"a pool target":       {edgeAssignment(pooled), hostedConnections(t), false},
+		"no assignment":       {nil, hostedConnections(t), false},
+	} {
+		if got := unverifiedPlacements(m, "production", []string{"edge"}, tt.assignment, tt.options)["edge"]; got != tt.want {
+			t.Errorf("%s: unverified %v, want %v", name, got, tt.want)
+		}
+	}
+}

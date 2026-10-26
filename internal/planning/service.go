@@ -636,7 +636,7 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 		maps.Copy(placed, composedPlacements(resolved, plan.Environment, composed, assignment, options))
 		result = Compute(Input{
 			Catalog: plan.Catalog, Routes: routes,
-			Federation: federation, CloudPlacements: placed, CapacityIntents: intents,
+			Federation: federation, CloudPlacements: placed, UnverifiedPlacements: unverifiedPlacements(resolved, plan.Environment, composed, assignment, options), CapacityIntents: intents,
 			Environment: plan.Environment, Graph: g, Manifest: resolved, Providers: s.providers, Bindings: bindings,
 			Connections: options, Chosen: chosen, Held: held,
 			Kinds: s.kinds, Endpoints: s.checkEndpoints(ctx, plan.OrgID, plan.Environment, resolved),

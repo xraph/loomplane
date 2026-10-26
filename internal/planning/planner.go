@@ -28,7 +28,12 @@ type Input struct {
 	// Catalog requests a standalone service without repository sources.
 	Catalog         bool
 	CloudPlacements map[string]CloudPlacement
-	CapacityIntents map[string]*CapacityIntent
+	// UnverifiedPlacements are the composed resources on a target of the
+	// environment's Cloud that have no CloudPlacement because the Cloud's
+	// or the target's revisions, or its connection's account, aren't
+	// verified. Their catalog-cloud-placement-missing warning says so.
+	UnverifiedPlacements map[string]bool
+	CapacityIntents      map[string]*CapacityIntent
 	// Federation contains scoped persisted observations; nil leaves all federation capabilities unavailable.
 	Federation *FederationInput
 	// Environment is the environment's name, which picks the manifest's

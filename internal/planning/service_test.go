@@ -313,7 +313,13 @@ func TestCreatePlanPlacesComposedResourceOnTheMatchingCloudTarget(t *testing.T) 
 		t.Fatalf("placed resource warned: %+v", result.Warnings)
 	}
 
+	const notOnCloud = "edge isn't on a target of this environment's Cloud, so it can't take domain routes."
+	var missingBecause func(t *testing.T, result *Result, message string)
 	missing := func(t *testing.T, result *Result) {
+		t.Helper()
+		missingBecause(t, result, notOnCloud)
+	}
+	missingBecause = func(t *testing.T, result *Result, message string) {
 		t.Helper()
 		for _, a := range result.Actions {
 			if a.Resource != nil && a.Resource.CloudPlacement != nil {
@@ -321,7 +327,7 @@ func TestCreatePlanPlacesComposedResourceOnTheMatchingCloudTarget(t *testing.T) 
 			}
 		}
 		w := findCode(result.Warnings, "catalog-cloud-placement-missing")
-		if w == nil || w.Name != "edge" || w.Message != "edge isn't on a target of this environment's Cloud, so it can't take domain routes." {
+		if w == nil || w.Name != "edge" || w.Message != message {
 			t.Fatalf("missing placement warning: %+v", result.Warnings)
 		}
 	}
@@ -331,7 +337,26 @@ func TestCreatePlanPlacesComposedResourceOnTheMatchingCloudTarget(t *testing.T) 
 	pooled.PoolID = "pool_1"
 	unreviewed := edgeHost
 	unreviewed.Revision = 0
-	for name, targets := range map[string][]cloudprofiles.Target{"no matching target": {other}, "a pool target": {pooled}, "no targets": nil, "an unreviewed target": {unreviewed}} {
+	// On a target of the Cloud, but not verified: it says so.
+	const unverified = "edge is on a target of this environment's Cloud, but the Cloud's revisions or the target connection's account aren't verified, so it can't take domain routes yet. Check the target's connection, then plan again."
+	t.Run("an unreviewed target", func(t *testing.T) {
+		s, p, _ := edgeService(t, doc, unreviewed)
+		r, _, planErr := s.compute(t.Context(), p)
+		if planErr != nil {
+			t.Fatal(planErr)
+		}
+		missingBecause(t, r, unverified)
+	})
+	t.Run("an unreviewed assignment", func(t *testing.T) {
+		s, p, unreviewedCloud := edgeService(t, doc, edgeHost)
+		unreviewedCloud.assignment.CloudRevision = 0
+		r, _, planErr := s.compute(t.Context(), p)
+		if planErr != nil {
+			t.Fatal(planErr)
+		}
+		missingBecause(t, r, unverified)
+	})
+	for name, targets := range map[string][]cloudprofiles.Target{"no matching target": {other}, "a pool target": {pooled}, "no targets": nil} {
 		t.Run(name, func(t *testing.T) {
 			s, p, _ := edgeService(t, doc, targets...)
 			r, _, planErr := s.compute(t.Context(), p)
