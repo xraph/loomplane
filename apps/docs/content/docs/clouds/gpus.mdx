@@ -46,11 +46,11 @@ Each GPU node also needs a label that says what kind of GPU it has. Loomplane tr
 3. `k8s.amazonaws.com/accelerator`
 4. `doks.digitalocean.com/gpu-model`
 
-If none is there, it falls back to the cloud's `node.kubernetes.io/instance-type` label. A cluster with GPUs but no label that names the kind shows a message asking you to add `nvidia.com/gpu.product`. If the cluster has no GPU nodes at all, the GPU sizes simply don't appear.
+If none is there, it falls back to the cloud's `node.kubernetes.io/instance-type` label, which only works when Loomplane knows that instance size. A cluster with GPUs but no label that names the kind shows a message asking you to add `nvidia.com/gpu.product`. A cluster with no GPU nodes shows **No GPU nodes**.
 
 You don't have to touch taints. Loomplane copies the taints on the matching GPU nodes into tolerations on the pod. A GPU pod gets an `nvidia.com/gpu` limit and a node selector built from the label above, so it only lands on the kind you asked for.
 
-If a service keeps a model weight cache, the storage class behind it must have a `Retain` reclaim policy. Loomplane checks that before it uses the class.
+Anything persistent that Loomplane runs on the cluster needs a storage class with a `Retain` reclaim policy and a declared binding mode, and that covers catalog databases and any other volume, not only a model weight cache. Pick the class on the connection and Loomplane checks it. If the cluster has no such class, the plan is refused until you add one.
 
 ## Your own servers
 
@@ -79,11 +79,12 @@ Pools have a few GPU rules:
 
 - A pool can be restricted to one GPU kind. A GPU pool refuses CPU work, and a CPU pool refuses GPU sizes.
 - Your Cloud has a GPU ceiling for each kind, and each GPU pool has its own ceiling for its kind. The pool's can't exceed the Cloud's.
+- Set the Cloud ceiling first. A kind with no Cloud ceiling allows no GPUs at all, and a pool's ceiling can't go above the Cloud's.
 - If one server's GPUs can't be read, growth of GPU capacity pauses until a check on that server succeeds. Nothing buys another GPU on a guess.
 
 ## AWS, GCP and Azure
 
-GPU nodes on EKS, GKE and AKS clusters are recognized by their instance type and priced from list prices, with the date of those prices shown beside them. Loomplane doesn't create GPU virtual machines on these clouds yet. You bring the cluster and Loomplane places work on it, using the Kubernetes rules above.
+GPU nodes on EKS, GKE and AKS clusters are recognized by their instance type and priced from reference prices, which are estimates. Loomplane doesn't create GPU virtual machines on these clouds yet. You bring the cluster and Loomplane places work on it, using the Kubernetes rules above.
 
 ## In a manifest
 
@@ -102,14 +103,7 @@ services:
       gpu: { kind: nvidia-l4, count: 1 }
 ```
 
-A catalog resource whose recipe can use a GPU takes the same field under `resources`. Recipes only accept NVIDIA kinds here:
-
-```yaml
-resources:
-  models:
-    kind: <a catalog kind that uses GPUs>
-    gpu: { kind: nvidia-l40s, count: 1 }
-```
+Catalog resources take the same `gpu` field under `resources.<name>`, with `kind` and `count`, and only NVIDIA kinds. No catalog kind uses it yet. GPU catalog kinds arrive with the model registry, so there's no example to copy for now.
 
 `count` runs from 1 to 8. `kind` is one of these IDs:
 
@@ -124,6 +118,6 @@ resources:
 | `nvidia-a100-40gb`, `nvidia-a100-80gb` | NVIDIA A100 |
 | `nvidia-h100-80gb`, `nvidia-h100-nvl-94gb` | NVIDIA H100, H100 NVL |
 | `nvidia-h200-141gb` | NVIDIA H200 |
-| `amd-mi300x` | AMD Instinct MI300X |
+| `amd-mi300x` | AMD Instinct MI300X (listed and priced, but Loomplane can't schedule it yet) |
 
 Planning checks the kind against the target, so a request the target can't meet shows up as a problem on the plan before anything runs. Arm64 targets can't run GPU work, and a gateway can't ask for GPUs.
