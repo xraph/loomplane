@@ -277,7 +277,11 @@ func (h *Hooks) kept(ctx context.Context, c deployments.Consumer, id string) (st
 }
 
 // ReleaseConsumer implements deployments.ConsumerBinder: it revokes every
-// key the service holds and forgets them.
+// key the service holds and forgets them, along with any key labelled for
+// it that Loomplane never recorded (a bind that crashed between issuing
+// and recording one). With nothing recorded, a Fabriq that can't be
+// reached is no error: there is nothing Loomplane knows to be valid, and
+// the next sweep that reaches Fabriq revokes what is left.
 func (h *Hooks) ReleaseConsumer(ctx context.Context, c deployments.Consumer) error {
 	unlock, err := h.d.Keys.LockService(ctx, c.OrgID, c.EnvironmentID, c.Resource, c.Service)
 	if err != nil {
@@ -294,17 +298,22 @@ func (h *Hooks) ReleaseConsumer(ctx context.Context, c deployments.Consumer) err
 			live = append(live, r)
 		}
 	}
-	if len(live) == 0 {
-		return nil
-	}
 	ch, err := c.Channel(ctx, consoleComponent, consolePort)
 	if err != nil {
+		if len(live) == 0 {
+			h.d.warn("sweep the unrecorded Fabriq keys of "+c.Service, err)
+			return nil
+		}
 		return fmt.Errorf("reach Fabriq's console: %w", err)
 	}
 	defer func() { _ = ch.Close() }() //nolint:errcheck // nothing to do about it
 	admin := &AdminClient{Channel: ch}
-	var errs []error
-	errs = append(errs, h.revokeOrphans(ctx, admin, c))
+	sweep := h.revokeOrphans(ctx, admin, c)
+	if len(live) == 0 && errors.Is(sweep, ErrUnreachable) {
+		h.d.warn("sweep the unrecorded Fabriq keys of "+c.Service, sweep)
+		return nil
+	}
+	errs := []error{sweep}
 	for _, r := range live {
 		errs = append(errs, h.revoke(ctx, admin, c.OrgID, c.EnvironmentID, c.Resource, r))
 	}

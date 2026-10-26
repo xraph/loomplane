@@ -581,6 +581,43 @@ func TestReleaseConsumerRevokesAndForgets(t *testing.T) {
 	}
 }
 
+func TestReleaseConsumerRevokesUnrecordedKeys(t *testing.T) {
+	h := newHarness("acme")
+	// A bind issued this key and kept it in Vault, then crashed before
+	// recording it, so api has no record at all.
+	orphan := h.f.plant("loomplane:api")
+	if err := h.secrets.Put(t.Context(), vaultKey(orphan.ID), []byte(orphan.Key)); err != nil {
+		t.Fatal(err)
+	}
+	webs := h.f.plant("loomplane:web")
+	session := h.f.plant("session")
+	if err := h.hooks.ReleaseConsumer(t.Context(), h.consumer("api", "acme")); err != nil {
+		t.Fatal(err)
+	}
+	if h.f.key(orphan.ID).RevokedAt == nil {
+		t.Fatal("the unrecorded key still opens Fabriq")
+	}
+	if h.secrets.has(orphan.ID) {
+		t.Fatal("the unrecorded key is still in Vault")
+	}
+	if h.f.key(webs.ID).RevokedAt != nil || h.f.key(session.ID).RevokedAt != nil {
+		t.Fatal("a key with another label was revoked")
+	}
+	// With nothing recorded, a Fabriq that can't be reached is no error:
+	// the next sweep that reaches it revokes what is left.
+	down := h.consumer("api", "acme")
+	down.Channel = func(context.Context, string, string) (*deployments.ComponentChannel, error) {
+		return nil, errors.New("dial lp-a:8080: connection refused")
+	}
+	if err := h.hooks.ReleaseConsumer(t.Context(), down); err != nil {
+		t.Fatalf("unreachable with nothing recorded: %v", err)
+	}
+	h.f.refuse = http.StatusBadGateway
+	if err := h.hooks.ReleaseConsumer(t.Context(), h.consumer("api", "acme")); err != nil {
+		t.Fatalf("502 with nothing recorded: %v", err)
+	}
+}
+
 func TestRemovedToleratesAGoneServer(t *testing.T) {
 	h := newHarness("acme")
 	api := idOf(t, h.f, h.bind(t, "api", "acme"))
