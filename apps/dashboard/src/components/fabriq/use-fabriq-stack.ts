@@ -86,6 +86,8 @@ export function useFabriqStack({
       : !policies.data
         ? "loading"
         : undefined,
+    // An error wins over data from an earlier load: stale history mustn't
+    // claim a verified restore.
     restoreStatus:
       backups.error || restores.error
         ? "unavailable"

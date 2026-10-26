@@ -128,6 +128,9 @@ it("backs up the Postgres a Fabriq provisions as TimescaleDB on a server", () =>
     protection: "native",
     label: "Native backups and test restores",
   })
+  expect(protectionOf(binding("kubernetes", "timescaledb"))?.label).toBe(
+    "Backups on Kubernetes aren’t available yet."
+  )
   expect(
     recoverySelection(
       [
