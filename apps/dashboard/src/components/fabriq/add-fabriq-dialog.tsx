@@ -18,6 +18,7 @@ import {
 import type { CheckResult } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
 import { FabriqIcon } from "./fabriq-icon"
+import { ProductIcon } from "@/components/product-icon"
 import { QueryError } from "@/components/query-error"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -25,6 +26,8 @@ import {
   Dialog,
   DialogContent,
   DialogDescription,
+  DialogFooter,
+  DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Input } from "@/components/ui/input"
@@ -338,28 +341,24 @@ export function AddFabriqDialog({
     <Dialog open onOpenChange={(open) => !open && !pending && onClose()}>
       <DialogContent
         showCloseButton={false}
-        className="top-4 flex max-h-[calc(100dvh-2rem)] -translate-y-0 flex-col gap-0 overflow-hidden rounded-[16px] p-0 leading-[normal] shadow-[0_24px_60px_rgba(26,22,20,0.24)] ring-foreground/[0.06] sm:top-9 sm:max-h-[calc(100dvh-72px)] sm:max-w-[640px]"
+        className="flex flex-col gap-0 overflow-hidden p-0 sm:max-w-[640px]"
       >
         <form
           onSubmit={(event) => void submit(event)}
           className="flex min-h-0 flex-1 flex-col"
         >
-          <div className="flex items-center gap-3 px-5 pt-[18px] pb-1.5">
-            <span className="flex size-10 flex-none items-center justify-center rounded-[11px] bg-background ring-1 ring-border-panel ring-inset">
-              <FabriqIcon className="size-5" aria-hidden />
-            </span>
-            <div className="grid min-w-0 gap-0.5">
-              <DialogTitle className="text-[17px] leading-[normal] font-semibold tracking-[-0.015em]">
-                Add Fabriq to {projectName}
-              </DialogTitle>
+          <DialogHeader className="flex-row items-center gap-3 px-5 pt-5 pb-1">
+            <ProductIcon fallback={FabriqIcon} size="lg" />
+            <div className="grid min-w-0 gap-1">
+              <DialogTitle>Add Fabriq to {projectName}</DialogTitle>
               <DialogDescription>
                 One click sets up the whole stack. Swap any engine for one you
                 already run.
               </DialogDescription>
             </div>
-          </div>
+          </DialogHeader>
 
-          <div className="flex min-h-0 flex-col gap-3.5 overflow-y-auto px-5 pt-3 pb-3.5">
+          <div className="flex min-h-0 flex-col gap-4 overflow-y-auto px-5 pt-3 pb-4">
             {environments.status === "error" ? (
               <QueryError
                 error={environments.error}
@@ -443,16 +442,16 @@ export function AddFabriqDialog({
                     nativeButton
                     render={<button type="button" />}
                     className={cn(
-                      "grid content-start gap-1 rounded-[11px] border px-3 py-2.5 text-left transition-shadow disabled:opacity-60",
+                      "grid content-start gap-1 rounded-xl border px-3 py-2.5 text-left transition-shadow disabled:opacity-60",
                       on
-                        ? "border-brand-line bg-brand-soft ring-[3px] ring-brand-ring"
-                        : "border-input bg-card hover:border-foreground/25"
+                        ? "border-brand-line bg-brand-soft ring-3 ring-ring/35"
+                        : "bg-card hover:bg-muted/50"
                     )}
                   >
-                    <span className="text-[13.5px] font-semibold">
+                    <span className="text-[13px] font-semibold">
                       {mode.label}
                     </span>
-                    <span className="text-xs leading-[1.45] text-muted-foreground">
+                    <span className="text-xs text-muted-foreground">
                       {mode.description}
                     </span>
                   </Radio.Root>
@@ -461,18 +460,10 @@ export function AddFabriqDialog({
             </RadioGroup>
 
             <div className="grid gap-1.5">
-              <span className="text-[12.5px] font-medium text-label">
-                Engines
-              </span>
-              <div className="overflow-hidden rounded-[12px] border border-border-panel">
-                {engines.map((engine, index) => (
-                  <div
-                    key={engine.id}
-                    className={cn(
-                      "px-3.5 py-[11px]",
-                      index > 0 && "border-t border-border-divider"
-                    )}
-                  >
+              <span className="text-[12.5px] font-medium">Engines</span>
+              <div className="divide-y overflow-hidden rounded-xl ring-1 ring-border">
+                {engines.map((engine) => (
+                  <div key={engine.id} className="px-3.5 py-3">
                     <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
                       <span className="grid min-w-[220px] flex-[1_1_220px] gap-0.5">
                         <span className="text-[13px] font-semibold">
@@ -481,7 +472,7 @@ export function AddFabriqDialog({
                             {engine.need}
                           </span>
                         </span>
-                        <span className="text-xs leading-[1.45] text-muted-foreground">
+                        <span className="text-xs text-muted-foreground">
                           {engine.id === "pg" &&
                           selected?.connection.cloud === "kubernetes"
                             ? "With TimescaleDB, pgvector and PostGIS. Backups on Kubernetes aren’t available yet."
@@ -517,11 +508,11 @@ export function AddFabriqDialog({
               </div>
             </div>
 
-            <div className="grid gap-1 rounded-[10px] bg-surface-summary px-3 py-2.5">
-              <span className="text-[11.5px] font-medium tracking-[0.04em] text-caption uppercase">
+            <div className="grid gap-1 rounded-lg bg-muted px-3 py-2.5">
+              <span className="text-[11.5px] font-medium tracking-[0.04em] text-muted-foreground uppercase">
                 This creates
               </span>
-              <span className="text-[13px] leading-[1.55]">
+              <span className="text-[13px] leading-relaxed">
                 {fabriqSummary(choice)}
               </span>
             </div>
@@ -538,7 +529,7 @@ export function AddFabriqDialog({
             )}
           </div>
 
-          <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-2 border-t border-border-divider bg-surface-muted px-5 py-3">
+          <DialogFooter className="m-0 flex-wrap px-5 py-3 sm:items-center sm:justify-between">
             <span className="text-xs text-muted-foreground">
               Nothing is created until you approve the plan.
             </span>
@@ -546,22 +537,17 @@ export function AddFabriqDialog({
               <Button
                 type="button"
                 variant="outline"
-                className="h-[38px] border-input px-3.5 hover:bg-accent"
                 disabled={pending}
                 onClick={onClose}
               >
                 Cancel
               </Button>
-              <Button
-                type="submit"
-                className="h-9 border-0 px-3.5 shadow-none hover:bg-primary hover:brightness-[1.12]"
-                disabled={blocked}
-              >
+              <Button type="submit" disabled={blocked}>
                 {pending && <Spinner data-icon="inline-start" />}
                 Review plan
               </Button>
             </span>
-          </div>
+          </DialogFooter>
         </form>
       </DialogContent>
     </Dialog>
@@ -587,8 +573,8 @@ function Pick({
   empty?: string
 }) {
   return (
-    <div className="grid min-w-0 gap-[5px]">
-      <span id={id} className="text-[12.5px] font-medium text-label">
+    <div className="grid min-w-0 gap-1.5">
+      <span id={id} className="text-[12.5px] font-medium">
         {label}
       </span>
       <Select
@@ -597,11 +583,7 @@ function Pick({
         onValueChange={(next) => onChange(String(next))}
         disabled={disabled || items.length === 0}
       >
-        <SelectTrigger
-          aria-labelledby={id}
-          size="lg"
-          className="w-full rounded-[9px] px-2.5"
-        >
+        <SelectTrigger aria-labelledby={id} className="w-full">
           <SelectValue placeholder={empty} />
         </SelectTrigger>
         <SelectContent>
@@ -636,7 +618,7 @@ function Segments({
       onValueChange={onChange}
       disabled={disabled}
       aria-label={label}
-      className="flex max-w-full gap-0.5 overflow-x-auto rounded-[10px] bg-secondary p-[3px]"
+      className="flex max-w-full gap-0.5 overflow-x-auto rounded-lg bg-muted p-0.5"
     >
       {options.map((option) => {
         const on = option.value === value
@@ -647,9 +629,9 @@ function Segments({
             nativeButton
             render={<button type="button" />}
             className={cn(
-              "h-7 shrink-0 rounded-lg px-2.5 text-xs font-medium whitespace-nowrap disabled:opacity-60",
+              "h-7 shrink-0 rounded-md px-2.5 text-xs font-medium whitespace-nowrap disabled:opacity-60",
               on
-                ? "bg-background text-foreground shadow-[0_1px_2px_rgb(26_22_20/0.08)]"
+                ? "bg-background text-foreground shadow-xs"
                 : "text-muted-foreground hover:text-foreground"
             )}
           >
@@ -710,10 +692,8 @@ function Connecting({
                   nativeButton
                   render={<button type="button" />}
                   className={cn(
-                    "truncate rounded-[9px] border px-2.5 py-1.5 text-left text-[12.5px] font-medium disabled:opacity-60",
-                    on
-                      ? "border-brand-line bg-brand-soft"
-                      : "border-border hover:border-foreground/25"
+                    "truncate rounded-lg border px-2.5 py-1.5 text-left text-[12.5px] font-medium disabled:opacity-60",
+                    on ? "border-brand-line bg-brand-soft" : "hover:bg-muted/50"
                   )}
                 >
                   {r ? `${r} (in this project)` : "A connection string"}
@@ -735,7 +715,7 @@ function Connecting({
               // "off" doesn't stop a browser filling in a saved password.
               autoComplete="new-password"
               spellCheck={false}
-              className="h-[34px] min-w-0 flex-[1_1_300px] rounded-[9px] font-mono text-[12.5px]"
+              className="min-w-0 flex-[1_1_300px] font-mono text-[12.5px]"
               onChange={(event) =>
                 // A different string is a different connection to check.
                 onChange({
@@ -753,7 +733,6 @@ function Connecting({
             <Button
               type="button"
               variant="outline"
-              className="h-[34px] rounded-[9px] border-input text-[12.5px] hover:bg-accent"
               disabled={disabled || checking || !state.dsn}
               onClick={onCheck}
             >
@@ -765,10 +744,10 @@ function Connecting({
             <div
               role="note"
               className={cn(
-                "grid gap-1 rounded-[9px] px-2.5 py-2 text-[12.5px] leading-normal",
+                "grid gap-1 rounded-lg px-2.5 py-2 text-[12.5px]",
                 message.tone === "ok"
-                  ? "bg-overdye-tint text-notice-success-ink"
-                  : "bg-notice-warning text-notice-warning-ink"
+                  ? "bg-overdye-tint text-overdye-ink"
+                  : "bg-weld-tint text-weld-ink"
               )}
             >
               <span>{message.text}</span>
@@ -788,9 +767,5 @@ function Connecting({
 }
 
 function Hint({ children }: { children: ReactNode }) {
-  return (
-    <span className="text-[11.5px] leading-[1.45] text-muted-foreground">
-      {children}
-    </span>
-  )
+  return <span className="text-xs text-muted-foreground">{children}</span>
 }

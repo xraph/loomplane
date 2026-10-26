@@ -94,7 +94,7 @@ export function CloudConnections({ className }: { className?: string }) {
 
   return (
     <MetricCard icon={CloudIcon} title="Clouds" className={className}>
-      <p className="-mt-1 max-w-3xl text-sm text-muted-foreground">
+      <p className="-mt-1 max-w-3xl text-[13px] text-muted-foreground">
         Where Loomplane deploys. Each credential is checked with its cloud
         before it&apos;s kept, stored encrypted, and never shown again.
       </p>
@@ -143,12 +143,12 @@ function CloudTile({
   return (
     <section
       aria-label={title}
-      className="flex flex-col gap-4 rounded-xl border bg-background/50 p-4"
+      className="flex flex-col gap-4 rounded-xl bg-subtle p-4"
     >
       <div className="flex items-start gap-3">
         <CloudGlyph cloud={cloud} size="lg" />
         <div className="grid min-w-0 flex-1 gap-0.5">
-          <h3 className="font-medium">{title}</h3>
+          <h3 className="text-[14px] font-semibold">{title}</h3>
           <p className="text-xs text-muted-foreground">
             {cloudPurposes[cloud] ?? "Added by a provider plugin"}
           </p>
@@ -157,7 +157,6 @@ function CloudTile({
           <Button
             variant="outline"
             size="sm"
-
             onClick={() => setConnecting(true)}
           >
             <PlusIcon />
@@ -232,7 +231,7 @@ function ConnectionRow({
           )}
         />
         <div className="grid min-w-0 flex-1 gap-0.5">
-          <span className="truncate text-sm font-medium">{c.name}</span>
+          <span className="truncate text-[13px] font-medium">{c.name}</span>
           <span className="truncate text-xs text-muted-foreground">
             {statusLabels[c.status] ?? c.status}
             {c.account && (

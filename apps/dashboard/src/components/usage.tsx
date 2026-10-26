@@ -84,7 +84,7 @@ export function UsageNotes({
           ))}
           {n.services.length > 0 && <> ({joined(n.services)})</>}
           {": "}
-          <span className={cn(n.failed && "text-weld")}>{n.reason}</span>
+          <span className={cn(n.failed && "text-weld-ink")}>{n.reason}</span>
         </li>
       ))}
       {hidden > 0 && (
@@ -165,7 +165,7 @@ export function UsageSummary({ className }: { className?: string }) {
     <Panel
       dashed={!live}
       aria-label="Spend, latency and traffic"
-      className={cn("gap-3", className)}
+      className={cn("gap-2.5", className)}
     >
       <PanelHead title="Spend, latency and traffic" />
       {failed ? (
@@ -189,7 +189,7 @@ export function UsageSummary({ className }: { className?: string }) {
                 key={label}
                 className="flex items-center justify-between gap-3"
               >
-                <dt>{label}</dt>
+                <dt className="text-muted-foreground">{label}</dt>
                 <dd
                   className={cn(
                     value ? "font-mono tabular-nums" : "text-muted-foreground"
@@ -221,7 +221,7 @@ export function LatencyCard({ className }: { className?: string }) {
   const r = q.data
   const slow = (r?.services ?? []).filter((s) => s.latency > 0).slice(0, 5)
   return (
-    <Panel aria-label="Slowest services" className={cn("gap-4", className)}>
+    <Panel aria-label="Slowest services" className={cn("gap-2.5", className)}>
       <PanelHead title="Slowest services" aside="Last 7 days" />
       {q.status === "error" ? (
         <QueryError
@@ -265,7 +265,7 @@ export function LatencyCard({ className }: { className?: string }) {
                         <span
                           className={cn(
                             "text-xs",
-                            pct <= 0 ? "text-overdye" : "text-destructive"
+                            pct <= 0 ? "text-overdye-ink" : "text-destructive"
                           )}
                         >
                           {signed(pct)}
@@ -312,11 +312,11 @@ export function TrafficCard({ className }: { className?: string }) {
     v: p.v,
   }))
   return (
-    <Panel aria-label="Traffic" className={cn("gap-4", className)}>
+    <Panel aria-label="Traffic" className={cn("gap-2.5", className)}>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <PanelHead title="Traffic" />
         <ToggleGroup
-          spacing={0}
+          spacing={0.5}
           value={[range]}
           onValueChange={(v) => v[0] && setRange(v[0] as Range)}
           className="rounded-lg bg-muted p-0.5"
@@ -445,7 +445,14 @@ export function AccountSpend({ connectionId }: { connectionId: string }) {
   } else if (account) note = "No charges so far this month"
   else if (source?.reason) note = source.reason
   return (
-    <section className="flex items-center gap-4 rounded-xl bg-card p-4 ring-1 ring-border">
+    <section
+      className={cn(
+        "flex items-center gap-4 rounded-xl p-4",
+        account?.currency
+          ? "bg-card ring-1 ring-border"
+          : "border border-dashed bg-subtle"
+      )}
+    >
       <div
         aria-hidden="true"
         className="canvas-dots size-16 shrink-0 rounded-full opacity-60"
@@ -456,8 +463,9 @@ export function AccountSpend({ connectionId }: { connectionId: string }) {
         </span>
         <span
           className={cn(
-            "text-lg font-semibold",
-            !account?.currency && "text-muted-foreground"
+            account?.currency
+              ? "font-mono text-[22px] font-medium tabular-nums"
+              : "text-[14px] font-semibold text-muted-foreground"
           )}
         >
           {value}

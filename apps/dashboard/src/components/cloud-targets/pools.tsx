@@ -101,7 +101,7 @@ export function Pools({
           {list.map((p) => (
             <Row key={p.id}>
               <div>
-                <p className="font-medium">{p.name}</p>
+                <p className="font-mono text-[13px] font-medium">{p.name}</p>
                 <p className="text-xs text-muted-foreground">
                   {p.members.length} members ·{" "}
                   {p.members.filter((m) => m.draining).length} draining ·
@@ -224,7 +224,7 @@ function PoolEditor({
               <div key={s.id} className="grid gap-2 rounded-lg bg-muted p-3">
                 <FormField
                   orientation="horizontal"
-                  className="flex items-center gap-2 text-sm"
+                  className="flex items-center gap-2 text-[13px]"
                 >
                   <FieldLabel className="contents">
                     <Checkbox
@@ -397,7 +397,7 @@ function MoveEditor({
           </DialogDescription>
         </DialogHeader>
         {accepted ? (
-          <div className="grid gap-3 text-sm">
+          <div className="grid gap-3 text-[13px]">
             <p role="status">
               Move intent staged for {input.service}. It expires 15 minutes
               after acceptance. No deployment has started; the source still
@@ -511,7 +511,7 @@ function MoveEditor({
               </Select>
             </Field>
             {review && (
-              <p className="text-sm">
+              <p className="text-[13px]">
                 Source: {review.sourceServerId} · destination:{" "}
                 {input.destinationServerId}. Accept this exact reviewed
                 placement.
@@ -690,7 +690,7 @@ export function Recovery({
           />
         </Field>
         {review && (
-          <div className="grid gap-1 text-sm">
+          <div className="grid gap-1 text-[13px]">
             <p>
               Reservation: {review.phase} ·{" "}
               {review.active ? "active" : "inactive"} ·{" "}

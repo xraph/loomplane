@@ -11,7 +11,7 @@ import { Field as FormField, FieldLabel } from "@/components/ui/field"
 // Clouds: every Cloud in the organization, with the accounts their targets
 // can point at. A Cloud's own page (CloudDetail) holds the workspace where
 // its targets, assignments and syncs are managed, one environment at a time.
-import { ChevronRightIcon, CloudIcon, PlusIcon } from "lucide-react"
+import { ChevronRightIcon, PlusIcon } from "lucide-react"
 import { useState } from "react"
 
 import * as api from "@/client/forge/loomplane/hooks"
@@ -127,7 +127,7 @@ function CloudsList() {
               </Button>
               {(shared || (manage && list.length > 0)) && (
                 <Button onClick={() => setCreating(true)}>
-                  <CloudIcon />
+                  <CloudsIcon />
                   New Cloud
                 </Button>
               )}
@@ -158,11 +158,11 @@ function CloudsList() {
                 </Button>
               </EmptyClouds>
             ) : (
-              <section aria-label="Your Clouds" className="grid gap-2">
+              <section aria-label="Your Clouds" className="grid gap-2.5">
                 <h2 className="text-[15px] font-semibold">Your Clouds</h2>
                 <div className="overflow-x-auto rounded-xl bg-card ring-1 ring-border">
                   <div className="min-w-[680px]">
-                    <div className="grid grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)_220px_110px_16px] gap-4 border-b bg-subtle px-4 py-2 text-[11px] font-medium tracking-[0.04em] text-muted-foreground uppercase">
+                    <div className="grid grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)_220px_110px_16px] gap-4 border-b bg-subtle px-4 py-2 text-[11.5px] font-medium tracking-[0.04em] text-muted-foreground uppercase">
                       <span>Cloud</span>
                       <span>Project</span>
                       <span>Targets</span>
@@ -184,7 +184,7 @@ function CloudsList() {
         )}
 
         {
-          <section aria-label="Connected accounts" className="grid gap-2">
+          <section aria-label="Connected accounts" className="grid gap-2.5">
             <div className="flex flex-wrap items-baseline justify-between gap-2">
               <h2 className="text-[15px] font-semibold">
                 Connected accounts{" "}
@@ -311,9 +311,9 @@ function CloudRow({ cloud: c, project }: { cloud: Profile; project: Project }) {
     >
       <span className="flex min-w-0 items-center gap-2.5">
         <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-muted">
-          <CloudIcon className="size-4" />
+          <CloudsIcon className="size-4" />
         </span>
-        <span className="truncate text-sm font-semibold">{c.name}</span>
+        <span className="truncate text-[14px] font-semibold">{c.name}</span>
       </span>
       <ProjectName project={project} />
       <span className="min-w-0 text-[12.5px]">
@@ -345,7 +345,7 @@ function AccountCard({ connection: c }: { connection: Connection }) {
       <div className="flex items-center gap-2.5">
         <CloudGlyph cloud={c.cloud} size="md" />
         <span className="grid min-w-0 flex-1 gap-0.5">
-          <span className="truncate text-sm font-semibold">{c.name}</span>
+          <span className="truncate text-[14px] font-semibold">{c.name}</span>
           <span className="truncate text-xs text-muted-foreground">
             {cloudLabel(c.cloud)}
             {c.account && ` · ${c.account}`}
@@ -369,8 +369,13 @@ function OrganizationClouds({ onCreate }: { onCreate: () => void }) {
   const clouds = useQuery(api.useOrganizationCloudsList)
   const list = (clouds.data?.clouds ?? []).filter((c): c is Profile => !!c)
   return (
-    <section aria-label="Your Clouds" className="grid gap-2">
-      <h2 className="text-[15px] font-semibold">Your Clouds</h2>
+    <section aria-label="Your Clouds" className="grid gap-2.5">
+      <h2 className="text-[15px] font-semibold">
+        Your Clouds{" "}
+        <span className="font-mono text-xs font-normal text-muted-foreground">
+          {clouds.data ? list.length : ""}
+        </span>
+      </h2>
       {clouds.status === "error" ? (
         <QueryError
           error={clouds.error}
@@ -398,7 +403,7 @@ function OrganizationClouds({ onCreate }: { onCreate: () => void }) {
       ) : (
         <div className="overflow-x-auto rounded-xl bg-card ring-1 ring-border">
           <div className="min-w-[680px]">
-            <div className="grid grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)_220px_110px_16px] gap-4 border-b bg-subtle px-4 py-2 text-[11px] font-medium tracking-[0.04em] text-muted-foreground uppercase">
+            <div className="grid grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)_220px_110px_16px] gap-4 border-b bg-subtle px-4 py-2 text-[11.5px] font-medium tracking-[0.04em] text-muted-foreground uppercase">
               <span>Cloud</span>
               <span>Used by</span>
               <span>Targets</span>
@@ -440,9 +445,9 @@ function OrganizationCloudRow({ cloud: c }: { cloud: Profile }) {
     >
       <span className="flex min-w-0 items-center gap-2.5">
         <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-brand-tint text-brand-ink">
-          <CloudIcon className="size-4" />
+          <CloudsIcon className="size-4" />
         </span>
-        <span className="truncate text-sm font-semibold">{c.name}</span>
+        <span className="truncate text-[14px] font-semibold">{c.name}</span>
       </span>
       <span className="flex min-w-0 items-center gap-2 text-[12.5px]">
         {!grants.data ? (

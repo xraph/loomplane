@@ -335,7 +335,7 @@ export function TargetEditor({
                             </span>
                           </span>
                           {target?.connectionId === c.id && (
-                            <span className="shrink-0 rounded-md bg-muted px-1.5 py-0.5 text-[11px] text-muted-foreground">
+                            <span className="shrink-0 rounded-md bg-muted px-1.5 py-0.5 text-[11.5px] text-muted-foreground">
                               Current
                             </span>
                           )}
@@ -400,7 +400,7 @@ export function TargetEditor({
             )}
           </div>
           {error && (
-            <Alert variant="destructive" className="text-sm text-destructive">
+            <Alert variant="destructive">
               <AlertDescription>{error}</AlertDescription>
             </Alert>
           )}

@@ -321,7 +321,7 @@ function Heading({ run, now }: { run: Run; now: number }) {
         <h1 className="text-[22px] leading-tight font-semibold tracking-[-0.025em] text-balance md:text-2xl">
           {run.project?.name ?? "Deploy"} to {run.environment}
         </h1>
-        <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 text-sm text-muted-foreground">
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-1.5 text-[13px] text-muted-foreground">
           <span className="flex items-center gap-2">
             <PersonAvatar initials={author.initials} name={author.name} />
             <span>
@@ -517,7 +517,7 @@ function Progression({
                 {g}
                 {inGroup.length > 1 && ` · ${inGroup.length} steps`}
               </span>
-              <span className="truncate text-sm font-medium">
+              <span className="truncate text-[13px] font-medium">
                 {head?.name ?? g}
               </span>
               <span className={cn("text-[12.5px]", groupTone[state])}>
@@ -757,7 +757,7 @@ const opStyle: Record<
   create: {
     icon: PlusIcon,
     label: "Create",
-    tone: "text-overdye bg-overdye/12",
+    tone: "text-overdye-ink bg-overdye-tint",
   },
   update: {
     icon: PencilIcon,
@@ -767,12 +767,12 @@ const opStyle: Record<
   replace: {
     icon: RefreshCwIcon,
     label: "Replace",
-    tone: "text-weld-ink bg-weld/15",
+    tone: "text-weld-ink bg-weld-tint",
   },
   delete: {
     icon: MinusIcon,
     label: "Delete",
-    tone: "text-destructive bg-destructive/12",
+    tone: "text-destructive bg-failed-tint",
   },
   keep: {
     icon: CheckIcon,
@@ -787,7 +787,7 @@ function PlanTab({ run }: { run: Run }) {
   if (p.status === "planning") {
     return (
       <Card className="py-10">
-        <p className="flex items-center justify-center gap-2 text-sm text-muted-foreground">
+        <p className="flex items-center justify-center gap-2 text-[13px] text-muted-foreground">
           <Spinner />
           Working out what {run.environment} needs
         </p>
@@ -809,7 +809,7 @@ function PlanTab({ run }: { run: Run }) {
           {(["create", "update", "replace", "delete"] as const).map((op) => {
             const Icon = opStyle[op]?.icon ?? CircleIcon
             return (
-              <span key={op} className="flex items-center gap-2 text-sm">
+              <span key={op} className="flex items-center gap-2 text-[13px]">
                 <span
                   className={cn(
                     "flex size-5 items-center justify-center rounded-md",
@@ -818,17 +818,17 @@ function PlanTab({ run }: { run: Run }) {
                 >
                   <Icon className="size-3" strokeWidth={2.5} />
                 </span>
-                <span className="tabular-nums">{s[op]}</span>
+                <span className="font-mono tabular-nums">{s[op]}</span>
                 <span className="text-muted-foreground">to {op}</span>
               </span>
             )
           })}
-          <span className="ml-auto text-sm text-muted-foreground">
+          <span className="ml-auto text-[13px] text-muted-foreground">
             {s.keep} kept as they are
           </span>
         </CardHeader>
         {p.actions.length === 0 ? (
-          <p className="px-5 py-8 text-center text-sm text-muted-foreground">
+          <p className="px-5 py-8 text-center text-[13px] text-muted-foreground">
             Nothing to do: what&apos;s deployed already matches the manifest.
           </p>
         ) : (
@@ -883,7 +883,7 @@ function FindingRow({
         )}
       />
       <div className="grid min-w-0 gap-1">
-        <p className="text-sm">{f.message}</p>
+        <p className="text-[13px]">{f.message}</p>
         {f.path && (
           <code className="font-mono text-xs text-muted-foreground">
             {f.path}
@@ -912,7 +912,7 @@ function ActionRow({ action: a }: { action: Action }) {
   ]
   return (
     <Collapsible defaultOpen={a.op !== "keep" && a.op !== "update"}>
-      <CollapsibleTrigger className="group/change flex w-full items-center gap-3 px-5 py-3.5 text-left text-sm outline-none hover:bg-muted/50 focus-visible:bg-muted/50">
+      <CollapsibleTrigger className="group/change flex w-full items-center gap-3 px-5 py-3.5 text-left text-[13px] outline-none hover:bg-muted/50 focus-visible:bg-muted/50">
         <span
           className={cn(
             "flex size-5 shrink-0 items-center justify-center rounded-md",
@@ -971,7 +971,7 @@ function Services({ run }: { run: Run }) {
   if (deploy.length === 0) {
     return (
       <Card className="py-0">
-        <p className="px-5 py-8 text-center text-sm text-muted-foreground">
+        <p className="px-5 py-8 text-center text-[13px] text-muted-foreground">
           This plan changes nothing, so no service moves.
         </p>
       </Card>
