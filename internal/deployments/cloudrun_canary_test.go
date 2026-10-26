@@ -95,10 +95,10 @@ type fakeRunRevision struct {
 
 // fakeGoogleRun is one Cloud Run service as Google keeps it: an immutable
 // revision for each template it's been given, the latest of them, and
-// how its traffic is split. Like Cloud Run, a PATCH replaces the whole
-// service, so one without traffic sends it all to the latest ready
-// revision; a template that changes makes a revision; and a revision
-// that takes traffic, or that the template makes, can't be deleted.
+// how its traffic is split. A template that changes makes a revision, and
+// a revision that takes traffic, or that the template makes, can't be
+// deleted. A PATCH without traffic keeps the split as it was: Cloud Run
+// documents it as all to the latest, but nothing here relies on that.
 type fakeGoogleRun struct {
 	t  *testing.T
 	mu sync.Mutex
@@ -137,6 +137,7 @@ func newFakeGoogleRun(t *testing.T, service string, baseline gcp.RunService) *fa
 		granted: slices.Clone(gcp.CanaryPermissions), versions: map[string]int{},
 	}
 	f.template = baseline.Template
+	f.traffic = cloudrun.Latest()
 	f.revisions[runBaseline] = &fakeRunRevision{template: baseline.Template, ready: true}
 	f.latestCreated, f.latestReady = runBaseline, runBaseline
 	return f
@@ -238,7 +239,9 @@ func (f *fakeGoogleRun) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		out := map[string]any{
 			"name":       f.servicePath()[1:] + "/revisions/" + name,
 			"conditions": []map[string]string{{"type": "Ready", "state": state}},
-			"containers": rev.template.Containers,
+			"containers": rev.template.Containers, "volumes": rev.template.Volumes,
+			"scaling": rev.template.Scaling, "vpcAccess": rev.template.VPCAccess,
+			"serviceAccount": "123-compute@developer.gserviceaccount.com",
 		}
 		if rev.deleting {
 			out["deleteTime"] = "2026-10-26T10:00:00Z"
@@ -313,7 +316,7 @@ func (f *fakeGoogleRun) patch(data []byte) *fakeRefusal {
 	}
 	traffic := in.Traffic
 	if len(traffic) == 0 {
-		traffic = []gcp.RunTraffic{{Type: gcp.TrafficLatest, Percent: 100}}
+		traffic = f.traffic
 	}
 	for _, t := range traffic {
 		if t.Type != gcp.TrafficRevision {
@@ -637,15 +640,15 @@ func TestCloudRunCanaryUsesTheRecordedBaseline(t *testing.T) {
 	if second.Baseline != runBaseline {
 		t.Fatalf("baseline %s", second.Baseline)
 	}
-	// Without a record, the revision with most of the traffic would be.
+	// Without a record, a split can't say which is the baseline.
 	e.job.Deployment.Canary = nil
 	svc := &gcp.RunService{TrafficStatuses: []gcp.RunTraffic{{Type: gcp.TrafficRevision, Revision: first.Candidate, Percent: 70}, {Type: gcp.TrafficRevision, Revision: runBaseline, Percent: 30}}}
-	if got := canaryBaseline(e.job, svc); got != first.Candidate {
+	if got, err := canaryBaseline(e.job, e.g.service, svc); err == nil {
 		t.Fatalf("unrecorded: %s", got)
 	}
-	// A recorded baseline that takes no traffic any more isn't used.
+	// Nor can a recorded baseline that takes no traffic any more.
 	e.job.Deployment.Canary = &Canary{Services: []CanaryService{{ActionID: e.job.Action.ID, Baseline: "svc-gone"}}}
-	if got := canaryBaseline(e.job, svc); got != first.Candidate {
+	if got, err := canaryBaseline(e.job, e.g.service, svc); err == nil {
 		t.Fatalf("a recorded baseline without traffic: %s", got)
 	}
 }
@@ -970,5 +973,205 @@ func TestCloudRunCanaryNeedsSomethingRunning(t *testing.T) {
 	}
 	if len(e.g.calls) != 0 {
 		t.Fatalf("calls %v", e.g.calls)
+	}
+}
+
+// ordinaryDeploy deploys image the way a direct release does, through the
+// Cloud Run provider Ctrl Plane calls.
+func (e *runCanaryEnv) ordinaryDeploy(t *testing.T, image string) {
+	t.Helper()
+	session := func(ctx context.Context) (*gcp.Session, error) {
+		key, err := gcp.ParseKey(e.job.Credential)
+		if err != nil {
+			return nil, err
+		}
+		return e.exec.Google.Session(ctx, key)
+	}
+	p := cloudrun.New(runConnection, runRegion, session, e.ctrl)
+	if _, err := p.Deploy(t.Context(), cpprovider.DeployRequest{InstanceID: e.inst.ID, Services: []cpprovider.ServiceDeploySpec{{Name: mainService, Image: image}}}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Whatever a canary left pinned, the next ordinary deploy gives its new
+// revision everything, without relying on Cloud Run's default.
+func TestCloudRunCanaryAnOrdinaryDeployAfterwardTakesEverything(t *testing.T) {
+	for name, after := range map[string]func(*testing.T, *runCanaryEnv){
+		"a revert": func(t *testing.T, e *runCanaryEnv) {
+			target := e.start(t)
+			if err := e.exec.Revert(t.Context(), e.job, target); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"a failed start": func(t *testing.T, e *runCanaryEnv) {
+			e.g.failImage = runNewImage
+			if _, err := e.exec.ApplyCandidate(t.Context(), e.job); err == nil {
+				t.Fatal("the start didn't fail")
+			}
+			e.g.failImage = ""
+		},
+		"a refused promote": func(t *testing.T, e *runCanaryEnv) {
+			target := e.start(t)
+			e.g.mu.Lock()
+			e.g.revisions[target.Candidate].ready = false
+			e.g.mu.Unlock()
+			if _, err := e.exec.Promote(t.Context(), e.job, target); err == nil {
+				t.Fatal("the promote didn't fail")
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newRunCanaryEnv(t)
+			after(t, e)
+			if split := e.g.split(); !maps.Equal(split, map[string]int{runBaseline: 100}) {
+				t.Fatalf("before the deploy: %v", split)
+			}
+			e.ordinaryDeploy(t, "europe-west1-docker.pkg.dev/shop/loomplane/api:next")
+			_, traffic, _ := e.g.current()
+			if !reflect.DeepEqual(traffic, cloudrun.Latest()) {
+				t.Fatalf("traffic %+v", traffic)
+			}
+			e.g.mu.Lock()
+			latest := e.g.latestReady
+			e.g.mu.Unlock()
+			if split := e.g.split(); latest == runBaseline || !maps.Equal(split, map[string]int{latest: 100}) {
+				t.Fatalf("the deploy's revision %s doesn't take everything: %v", latest, split)
+			}
+		})
+	}
+}
+
+// The commit, and so the image, can stay the same while secrets, scale or
+// size change. A revision with that image doesn't run the release.
+func TestCloudRunCanaryPromoteWontFinishOnARevisionThatOnlySharesTheImage(t *testing.T) {
+	for name, change := range map[string]func(*gcp.RunTemplate){
+		"secret version": func(t *gcp.RunTemplate) {
+			for i := range t.Containers[0].Env {
+				if vs := t.Containers[0].Env[i].ValueSource; vs != nil {
+					vs.SecretKeyRef.Version = "1"
+				}
+			}
+		},
+		"scale": func(t *gcp.RunTemplate) { t.Scaling = &gcp.RunScaling{Min: 2, Max: 4} },
+		"size": func(t *gcp.RunTemplate) {
+			t.Containers[0].Resources = &gcp.RunResources{Limits: map[string]string{"cpu": "2"}}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newRunCanaryEnv(t)
+			target := e.start(t)
+			e.g.mu.Lock()
+			data, _ := json.Marshal(e.g.revisions[target.Candidate].template)
+			var serving gcp.RunTemplate
+			json.Unmarshal(data, &serving)
+			serving.Revision = ""
+			change(&serving)
+			e.g.revisions["svc-00009-old"] = &fakeRunRevision{template: serving, ready: true}
+			e.g.revisions[target.Candidate].ready = false
+			e.g.traffic = []gcp.RunTraffic{{Type: gcp.TrafficRevision, Revision: "svc-00009-old", Percent: 100}}
+			e.g.mu.Unlock()
+			for i := range 2 {
+				if _, err := e.exec.Promote(t.Context(), e.job, target); err == nil || !strings.Contains(err.Error(), "nothing was promoted") {
+					t.Fatalf("promote %d: %v", i+1, err)
+				}
+			}
+			if len(e.ctrl.updates) != 0 {
+				t.Fatalf("Ctrl Plane recorded a release that never ran: %+v", e.ctrl.updates)
+			}
+		})
+	}
+}
+
+// One canary ends revert_failed with its candidate holding most of the
+// traffic. A later deployment's canary has no baseline recorded, and the
+// revision with most of the traffic is that failed candidate.
+func TestCloudRunCanaryRefusesTrafficAnEarlierCanaryLeft(t *testing.T) {
+	for name, leave := range map[string]func(*testing.T, *runCanaryEnv, CanaryTarget){
+		"split": func(t *testing.T, e *runCanaryEnv, first CanaryTarget) {
+			if err := e.exec.SetWeights(t.Context(), e.job, first, 70); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"pinned to the candidate": func(t *testing.T, e *runCanaryEnv, first CanaryTarget) {
+			if err := e.exec.SetWeights(t.Context(), e.job, first, 100); err != nil {
+				t.Fatal(err)
+			}
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			e := newRunCanaryEnv(t)
+			first := e.start(t)
+			leave(t, e, first)
+			before := e.g.split()
+			e.job.Deployment = &Deployment{ID: "dep_01jxlater000000000000000000", OrgID: "org_1", ProjectID: e.job.Deployment.ProjectID, Environment: "production"}
+			calls := len(e.g.calls)
+			_, err := e.exec.ApplyCandidate(t.Context(), e.job)
+			for _, want := range []string{"can't start a canary", first.Candidate, fmt.Sprintf("%s %d%%", first.Candidate, before[first.Candidate]), "Settle that canary's traffic first"} {
+				if err == nil || !strings.Contains(err.Error(), want) {
+					t.Fatalf("error %v doesn't say %q", err, want)
+				}
+			}
+			if split := e.g.split(); !maps.Equal(split, before) {
+				t.Fatalf("traffic moved: %v, was %v", split, before)
+			}
+			for _, c := range e.g.calls[calls:] {
+				if !strings.HasPrefix(c, http.MethodGet) && !strings.Contains(c, "testIamPermissions") && c != "POST /token" {
+					t.Fatalf("a refused canary called %s", c)
+				}
+			}
+			_, _, revisions := e.g.current()
+			if revisions[runBaseline] == nil {
+				t.Fatal("the true baseline was deleted")
+			}
+		})
+	}
+}
+
+// A clean revert leaves the baseline pinned under its own template, which
+// is settled: the next deployment's canary starts from it.
+func TestCloudRunCanaryStartsAfterAnotherDeploymentReverted(t *testing.T) {
+	e := newRunCanaryEnv(t)
+	first := e.start(t)
+	if err := e.exec.Revert(t.Context(), e.job, first); err != nil {
+		t.Fatal(err)
+	}
+	e.job.Deployment = &Deployment{ID: "dep_01jxlater000000000000000000", OrgID: "org_1", ProjectID: e.job.Deployment.ProjectID, Environment: "production"}
+	if second := e.start(t); second.Baseline != runBaseline {
+		t.Fatalf("baseline %s", second.Baseline)
+	}
+}
+
+// A start that failed and cleaned up recorded no baseline, and the retry
+// still starts.
+func TestCloudRunCanaryStartsAgainAfterAFailedStart(t *testing.T) {
+	e := newRunCanaryEnv(t)
+	e.g.failImage = runNewImage
+	if _, err := e.exec.ApplyCandidate(t.Context(), e.job); err == nil {
+		t.Fatal("the start didn't fail")
+	}
+	e.g.failImage = ""
+	if target := e.start(t); target.Baseline != runBaseline {
+		t.Fatalf("baseline %s", target.Baseline)
+	}
+}
+
+// An earlier candidate that can't be deleted takes no traffic, so the new
+// candidate stays up and the leftover is noted.
+func TestCloudRunCanaryKeepsTheCandidateWhenAnEarlierOneWontGo(t *testing.T) {
+	e := newRunCanaryEnv(t)
+	first := e.start(t)
+	var notes []string
+	e.job.Progress = func(_, m string) { notes = append(notes, m) }
+	e.g.failNext("DELETE revision")
+	second := e.start(t)
+	_, _, revisions := e.g.current()
+	if revisions[second.Candidate] == nil || revisions[first.Candidate] == nil {
+		t.Fatalf("revisions %v", slices.Sorted(maps.Keys(revisions)))
+	}
+	if !slices.ContainsFunc(notes, func(n string) bool { return strings.Contains(n, first.Candidate) && strings.Contains(n, "left") }) {
+		t.Fatalf("notes %v", notes)
+	}
+	if split := e.g.split(); !maps.Equal(split, map[string]int{runBaseline: 100}) {
+		t.Fatalf("traffic %v", split)
 	}
 }

@@ -157,6 +157,10 @@ func (p *Provider) apply(ctx context.Context, instanceID id.ID, spec cpprovider.
 	if transportErr := applyPSCTransport(&run.Template, labels, s.Key().ProjectID, p.region); transportErr != nil {
 		return nil, transportErr
 	}
+	// An ordinary deploy gives the new revision all of the traffic, said
+	// outright: a canary that stopped leaves traffic pinned to a revision
+	// by name, and this mustn't rely on Cloud Run's default to undo that.
+	run.Traffic = Latest()
 	svc, err := s.ApplyService(ctx, p.region, name, run)
 	if err != nil {
 		return nil, err
@@ -231,6 +235,11 @@ func Service(spec cpprovider.ServiceSpec, labels map[string]string) (gcp.RunServ
 		run.Template.Scaling = &gcp.RunScaling{Min: minScale, Max: maxScale}
 	}
 	return run, nil
+}
+
+// Latest is all of a service's traffic on its latest ready revision.
+func Latest() []gcp.RunTraffic {
+	return []gcp.RunTraffic{{Type: gcp.TrafficLatest, Percent: 100}}
 }
 
 // SetInvokers sets who may call the service the labels describe. A

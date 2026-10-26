@@ -95,6 +95,8 @@ Cloud SQL is reached through the Cloud SQL connector. Memorystore only has an ad
 
 A canary runs the new release as a second revision of the same Cloud Run service, named after the service and the deployment, and splits the service's traffic between that revision and the one that served before. Promoting it sends all of the traffic to the latest revision, so your next deploy takes everything again. A rollback gives the old revision all of the traffic, puts its template back and deletes the new one. Putting the template back makes one more revision with the old configuration, which takes no traffic.
 
+If an earlier canary couldn't roll back and left the traffic split, a new canary on that service won't start, since it can't tell which revision is the real baseline. Retry or roll back that deployment, or release once with `direct`, which gives the latest revision all of the traffic.
+
 The canary releases only permissions aren't needed for anything else, so a service account without them still deploys. The connection lists what's missing, and a canary on Cloud Run refuses to start, when you plan it and again when it runs. Grant them, or release that environment `direct` or `blue_green`.
 
 Each revision reads its secrets at the Secret Manager version it was started with, never `latest`. The candidate stores new versions, so an instance the old revision starts mid-canary still reads its own values.
