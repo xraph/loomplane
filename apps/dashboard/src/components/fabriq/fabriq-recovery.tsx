@@ -36,36 +36,37 @@ export function FabriqRecovery(props: CatalogPanelProps) {
           Backups for these engines aren't available on Kubernetes yet.
         </p>
       )}
-      {engines.map((engine) => (
-        <section
-          key={engine.name}
-          aria-label={`${engine.name} recovery`}
-          className="min-w-0 space-y-2"
-        >
-          {(engine.external || kubernetes || !engine.resource) && (
-            <h2 className="text-[15px] font-semibold">{engine.name}</h2>
-          )}
-          {engine.external ? (
-            <p className="text-sm text-muted-foreground">
-              Not managed by Loomplane: no backups or restores.
-            </p>
-          ) : !kubernetes && engine.resource ? (
-            <ServiceRecovery
-              embeddedTitle={engine.name}
-              project={props.projectId}
-              environment={props.environmentId}
-              resource={engine.resource}
-            />
-          ) : (
-            !kubernetes && (
+      {/* On Kubernetes only an external engine has anything to say. */}
+      {engines
+        .filter((engine) => !kubernetes || engine.external)
+        .map((engine) => (
+          <section
+            key={engine.name}
+            aria-label={`${engine.name} recovery`}
+            className="min-w-0 space-y-2"
+          >
+            {(engine.external || !engine.resource) && (
+              <h2 className="text-[15px] font-semibold">{engine.name}</h2>
+            )}
+            {engine.external ? (
+              <p className="text-sm text-muted-foreground">
+                Not managed by Loomplane: no backups or restores.
+              </p>
+            ) : !kubernetes && engine.resource ? (
+              <ServiceRecovery
+                embeddedTitle={engine.name}
+                project={props.projectId}
+                environment={props.environmentId}
+                resource={engine.resource}
+              />
+            ) : (
               <FabriqEmpty
                 title="Engine not provisioned"
                 description="Recovery will appear after this engine is provisioned."
               />
-            )
-          )}
-        </section>
-      ))}
+            )}
+          </section>
+        ))}
       <p className="text-xs text-muted-foreground">
         FalkorDB and Elasticsearch are rebuilt from Postgres. Use the Engines
         tab to rebuild their projections.

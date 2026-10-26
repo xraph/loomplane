@@ -140,6 +140,25 @@ test("Kubernetes recovery states its limitation without backup controls", () => 
     )
   ).toBeVisible()
   expect(screen.queryByRole("button", { name: /backup/i })).toBeNull()
+  // No engine sections: a bare heading with nothing under it says nothing.
+  expect(screen.queryByRole("region", { name: /recovery/i })).toBeNull()
+  expect(screen.queryByRole("heading")).toBeNull()
+})
+
+test("Kubernetes recovery still names an external engine", () => {
+  const props = panelProps()
+  props.binding.provider = "kubernetes"
+  props.config.composition!.dependencies.redis = {
+    mode: "external",
+    external: "external-cache",
+  }
+  mount(<FabriqRecovery {...props} />)
+  expect(screen.queryByRole("region", { name: "Postgres recovery" })).toBeNull()
+  expect(
+    within(screen.getByRole("region", { name: "Redis recovery" })).getByText(
+      "Not managed by Loomplane: no backups or restores."
+    )
+  ).toBeVisible()
 })
 
 test("recovery on Docker lists the Postgres backups of a live TimescaleDB binding", async () => {
