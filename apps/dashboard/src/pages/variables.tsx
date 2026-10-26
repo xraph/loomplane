@@ -1,4 +1,4 @@
-import { PlusIcon } from "lucide-react"
+import { PlusIcon, SearchIcon } from "lucide-react"
 import { useState } from "react"
 import { toast } from "sonner"
 
@@ -11,6 +11,7 @@ import {
 } from "@/client/forge/loomplane/hooks"
 import type { Variable } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
+import { NoMatchIcon, VariablesIcon } from "@/components/icons"
 import { DeleteVariable, Value } from "@/components/project-variables"
 import { Page, PageHeading } from "@/components/page"
 import { SiteHeader } from "@/components/site-header"
@@ -21,8 +22,14 @@ import {
   Empty,
   EmptyDescription,
   EmptyHeader,
+  EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty"
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupInput,
+} from "@/components/ui/input-group"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
   Table,
@@ -53,6 +60,11 @@ export function Variables() {
   const create = useMutation(useVariablesCreate)
   const update = useMutation(useVariablesUpdate)
   const invalidate = useInvalidate()
+  const [query, setQuery] = useState("")
+  const q = query.trim().toLowerCase()
+  const shown = list.data?.variables.filter(
+    (v) => !q || v.key.toLowerCase().includes(q)
+  )
 
   const save = async (input: VariableInput) => {
     if (dialog?.kind === "edit") {
@@ -79,7 +91,7 @@ export function Variables() {
   return (
     <>
       <SiteHeader crumbs={[{ label: "Variables" }]} />
-      <Page>
+      <Page className="max-w-[980px]">
         <PageHeading
           title="Variables"
           description="Organization-wide values every project inherits. A project, or one of its services, can override any of them on its own page."
@@ -106,6 +118,9 @@ export function Variables() {
         {list.data && list.data.variables.length === 0 && (
           <Empty>
             <EmptyHeader>
+              <EmptyMedia variant="icon">
+                <VariablesIcon />
+              </EmptyMedia>
               <EmptyTitle>No organization-wide variables yet</EmptyTitle>
               <EmptyDescription>
                 {mayManage
@@ -116,66 +131,103 @@ export function Variables() {
           </Empty>
         )}
         {list.data && list.data.variables.length > 0 && (
+          <InputGroup className="h-9 rounded-lg border-transparent bg-muted">
+            <InputGroupAddon>
+              <SearchIcon />
+            </InputGroupAddon>
+            <InputGroupInput
+              data-page-search
+              placeholder="Filter by key"
+              aria-label="Filter variables"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+          </InputGroup>
+        )}
+        {shown && list.data && list.data.variables.length > 0 && (
           <Card className="py-0">
-            <Table>
-              <TableHeader>
-                <TableRow className="hover:bg-transparent">
-                  <TableHead>Key</TableHead>
-                  <TableHead>Value</TableHead>
-                  <TableHead>Applies in</TableHead>
-                  <TableHead className="hidden md:table-cell">
-                    Changed
-                  </TableHead>
-                  {mayManage && (
-                    <TableHead className="w-0">
-                      <span className="sr-only">Actions</span>
+            {shown.length === 0 ? (
+              <Empty surface={false} className="py-8">
+                <EmptyHeader>
+                  <EmptyMedia variant="icon">
+                    <NoMatchIcon />
+                  </EmptyMedia>
+                  <EmptyTitle>No variables match</EmptyTitle>
+                  <EmptyDescription>
+                    Try another key, or set a new one for every project.
+                  </EmptyDescription>
+                </EmptyHeader>
+              </Empty>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow className="hover:bg-transparent">
+                    <TableHead>Key</TableHead>
+                    <TableHead>Value</TableHead>
+                    <TableHead>Applies in</TableHead>
+                    <TableHead className="hidden md:table-cell">
+                      Changed
                     </TableHead>
-                  )}
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {list.data.variables.map((v) => (
-                  <TableRow key={v.id}>
-                    <TableCell className="font-mono text-sm">{v.key}</TableCell>
-                    <TableCell className="max-w-xs">
-                      <Value variable={v} />
-                    </TableCell>
-                    <TableCell>
-                      {v.environment ? (
-                        <span>
-                          every project&apos;s{" "}
-                          <span className="font-medium">{v.environment}</span>
-                        </span>
-                      ) : (
-                        "every environment"
-                      )}
-                    </TableCell>
-                    <TableCell className="hidden text-muted-foreground md:table-cell">
-                      <time dateTime={v.updatedAt}>
-                        {formatDate(v.updatedAt)}
-                      </time>
-                    </TableCell>
                     {mayManage && (
-                      <TableCell>
-                        <div className="flex justify-end gap-1">
-                          <Button
-                            variant="ghost"
-                            size="xs"
-                            onClick={() =>
-                              setDialog({ kind: "edit", variable: v })
-                            }
-                          >
-                            Edit
-                          </Button>
-                          <DeleteVariable variable={v} />
-                        </div>
-                      </TableCell>
+                      <TableHead className="w-0">
+                        <span className="sr-only">Actions</span>
+                      </TableHead>
                     )}
                   </TableRow>
-                ))}
-              </TableBody>
-            </Table>
+                </TableHeader>
+                <TableBody>
+                  {shown.map((v) => (
+                    <TableRow key={v.id}>
+                      <TableCell className="font-mono text-[12.5px] font-medium">
+                        {v.key}
+                      </TableCell>
+                      <TableCell className="max-w-xs">
+                        <Value variable={v} />
+                      </TableCell>
+                      <TableCell className="text-[12.5px]">
+                        {v.environment ? (
+                          <span>
+                            every project&apos;s{" "}
+                            <span className="font-medium">{v.environment}</span>
+                          </span>
+                        ) : (
+                          "every environment"
+                        )}
+                      </TableCell>
+                      <TableCell className="hidden text-[12.5px] text-muted-foreground md:table-cell">
+                        <time dateTime={v.updatedAt}>
+                          {formatDate(v.updatedAt)}
+                        </time>
+                      </TableCell>
+                      {mayManage && (
+                        <TableCell>
+                          <div className="flex justify-end gap-1">
+                            <Button
+                              variant="ghost"
+                              size="xs"
+                              onClick={() =>
+                                setDialog({ kind: "edit", variable: v })
+                              }
+                            >
+                              Edit
+                            </Button>
+                            <DeleteVariable variable={v} />
+                          </div>
+                        </TableCell>
+                      )}
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            )}
           </Card>
+        )}
+        {list.data && list.data.variables.length > 0 && (
+          <p className="text-[12.5px] leading-normal text-muted-foreground">
+            A project&apos;s own value always wins over the one here. Secrets
+            are encrypted and never shown again, so editing one means typing a
+            new value.
+          </p>
         )}
       </Page>
       <VariableDialog

@@ -13,6 +13,7 @@ import { formatDate } from "@/lib/format"
 import { NativeEmpty } from "@/components/native-recovery-empty"
 import { NativeCopyCredentialsControl } from "@/components/native-copy-credentials"
 import { QueryError } from "@/components/query-error"
+import { StatusPill, type Tone } from "@/components/runs"
 import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
@@ -24,6 +25,14 @@ import {
   AlertDialogFooter,
   AlertDialogCancel,
 } from "@/components/ui/alert-dialog"
+
+// Verified is green, under way blue, anything needing a hand red.
+function copyTone(copy: NativeRestore): Tone {
+  if (copy.status === "succeeded") return copy.verifiedAt ? "live" : "waiting"
+  if (["failed", "cleanup_failed"].includes(copy.status)) return "failed"
+  if (["queued", "running", "deleting"].includes(copy.status)) return "flight"
+  return "quiet"
+}
 
 function copyStatus(copy: NativeRestore) {
   if (copy.status === "succeeded")
@@ -91,9 +100,12 @@ export function NativeCopyHistory({
     }
   }
   return (
-    <section aria-label="Native recovery copies" className="grid min-w-0 gap-2">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h4 className="text-sm font-medium">Native recovery copies</h4>
+    <section
+      aria-label="Native recovery copies"
+      className="grid min-w-0 overflow-hidden rounded-xl bg-card ring-1 ring-border"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-2.5">
+        <h4 className="text-[13.5px] font-semibold">Native recovery copies</h4>
         <Button
           variant="ghost"
           size="sm"
@@ -103,22 +115,33 @@ export function NativeCopyHistory({
         </Button>
       </div>
       {copies.status === "error" && (
-        <QueryError
-          error={copies.error}
-          fallback="Could not load native copies"
-          retry={copies.refetch}
-        />
+        <div className="p-4">
+          <QueryError
+            error={copies.error}
+            fallback="Could not load native copies"
+            retry={copies.refetch}
+          />
+        </div>
       )}
       {!copies.data && copies.status === "pending" ? (
-        <p role="status">Loading native copies…</p>
+        <p role="status" className="px-4 py-3.5 text-muted-foreground">
+          Loading native copies…
+        </p>
       ) : list.length ? (
         <ul aria-label="Temporary native copies" className="divide-y">
           {list.map((copy) => (
-            <li key={copy.id} className="grid min-w-0 gap-1 py-2 text-xs">
+            <li
+              key={copy.id}
+              className="grid min-w-0 gap-1 px-4 py-2.5 text-[12.5px]"
+            >
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <p className="min-w-0 break-all">
-                  <span className="font-medium">{copyStatus(copy)}</span> ·{" "}
-                  {copy.id}
+                <p className="flex min-w-0 flex-wrap items-center gap-2">
+                  <span className="font-mono font-medium break-all">
+                    {copy.id}
+                  </span>
+                  <StatusPill tone={copyTone(copy)}>
+                    {copyStatus(copy)}
+                  </StatusPill>
                 </p>
                 {can("service_backup:read") &&
                   can("service_restore:manage") &&
@@ -136,6 +159,7 @@ export function NativeCopyHistory({
                     <Button
                       size="sm"
                       variant="outline"
+                      className="border-destructive/25 text-destructive hover:bg-destructive/10 hover:text-destructive"
                       disabled={cleanup.isPending}
                       onClick={() => {
                         setFailure("")
@@ -190,7 +214,7 @@ export function NativeCopyHistory({
         )
       )}
       {(pages.length > 1 || copies.data?.nextBefore) && (
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap gap-2 border-t px-4 py-2.5">
           <Button
             size="sm"
             variant="outline"

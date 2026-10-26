@@ -31,6 +31,7 @@ import {
   ZeroStateMedia,
 } from "@/components/zero-state"
 import { Button, buttonVariants } from "@/components/ui/button"
+import { Card } from "@/components/ui/card"
 import { CloudGlyph } from "@/components/cloud-glyph"
 import { ProductIcon } from "@/components/product-icon"
 import { cn } from "@/lib/utils"
@@ -123,7 +124,7 @@ export function ServiceCatalog({
           <div className="grid min-w-0 flex-1 gap-1">
             <h1 className="flex flex-wrap items-baseline gap-2 text-[22px] leading-tight font-semibold tracking-[-0.025em] md:text-2xl">
               {recipe.title}
-              <span className="font-mono text-sm font-normal text-muted-foreground">
+              <span className="font-mono text-[13px] font-normal text-muted-foreground">
                 {recipe.version}
               </span>
             </h1>
@@ -156,7 +157,7 @@ function WhatYouGet({ kind }: { kind: DatabaseKind }) {
   return (
     <aside
       aria-label="What you get"
-      className="grid gap-3 rounded-[14px] bg-subtle p-4 ring-1 ring-border"
+      className="grid gap-3 rounded-xl bg-subtle p-4 ring-1 ring-border"
     >
       <h2 className="text-[13px] font-semibold">What you get</h2>
       <p className="text-[12.5px] leading-relaxed text-muted-foreground">
@@ -344,7 +345,7 @@ function DatabaseDeployment({
   return (
     <section
       aria-label="Deploy database"
-      className="grid gap-5 rounded-[14px] bg-card p-5 ring-1 ring-border"
+      className="grid gap-5 rounded-xl bg-card p-5 ring-1 ring-border"
     >
       {providers.status === "error" && connections.status !== "error" && (
         <QueryError
@@ -850,10 +851,8 @@ function Recovery({
       <div className="flex flex-wrap items-center justify-between gap-2">
         {embeddedTitle && (
           <div>
-            <h2 className="text-[15px] leading-[normal] font-semibold">
-              {embeddedTitle}
-            </h2>
-            <p className="text-[12.5px] leading-[1.5] text-muted-foreground">
+            <h2 className="text-[15px] font-semibold">{embeddedTitle}</h2>
+            <p className="text-[12.5px] text-muted-foreground">
               {selected || resource} ·{" "}
               {policy?.enabled
                 ? policy.everyHours === 24
@@ -897,16 +896,7 @@ function Recovery({
           )}
           {selected && live && can("service_backup:manage") && (
             <>
-              <Button
-                size="sm"
-                className={
-                  embeddedTitle
-                    ? "h-8 rounded-[9px] px-3 text-[12.5px]"
-                    : undefined
-                }
-                disabled={busy}
-                onClick={backupNow}
-              >
+              <Button size="sm" disabled={busy} onClick={backupNow}>
                 Back up now
               </Button>
               <BackupSchedule
@@ -970,13 +960,13 @@ function Recovery({
       ) : (
         <>
           {!live && (
-            <p className="text-sm text-muted-foreground">
+            <p className="text-[13px] text-muted-foreground">
               The source service has been removed. Recovery points and test
               copies remain available.
             </p>
           )}
           {!embeddedTitle && (
-            <div className="text-sm text-muted-foreground">
+            <div className="text-[13px] text-muted-foreground">
               {policy?.enabled
                 ? `Backups every ${policy.everyHours} hours. Next: ${formatDate(policy.nextAt)}.`
                 : "Backups run when requested."}{" "}
@@ -1003,26 +993,10 @@ function Recovery({
               )}
             </CatalogEmpty>
           ) : (
-            <div
-              className={cn(
-                "min-w-0 overflow-hidden border",
-                embeddedTitle
-                  ? "rounded-[14px] border-border-panel"
-                  : "rounded-lg"
-              )}
-            >
-              <Table
-                scrollLabel={
-                  embeddedTitle ? `${embeddedTitle} backups` : undefined
-                }
-                className={
-                  embeddedTitle
-                    ? "min-w-[640px] text-[12.5px] [&_td]:px-4 [&_td]:py-2.5 [&_th]:h-auto [&_th]:bg-surface-muted [&_th]:px-4 [&_th]:py-[9px] [&_th]:text-[11.5px] [&_th]:font-medium [&_th]:tracking-[0.04em] [&_th]:text-caption [&_th]:uppercase [&_tr]:border-border-divider"
-                    : undefined
-                }
-              >
+            <Card className="min-w-0 py-0">
+              <Table className={embeddedTitle ? "min-w-[640px]" : undefined}>
                 <TableHeader>
-                  <TableRow>
+                  <TableRow className="hover:bg-transparent">
                     <TableHead>Backup</TableHead>
                     {embeddedTitle ? (
                       <>
@@ -1070,7 +1044,7 @@ function Recovery({
                   ))}
                 </TableBody>
               </Table>
-            </div>
+            </Card>
           )}
         </>
       )}
@@ -1085,11 +1059,11 @@ function Recovery({
               {active ? " · In progress" : ""}
             </summary>
           ) : (
-            <h3 className="mb-2 text-sm font-semibold">
+            <h3 className="mb-1 text-[14px] font-semibold">
               Isolated recovery copies
             </h3>
           )}
-          <p className="mb-3 text-sm text-muted-foreground">
+          <p className="mb-3 text-[12.5px] text-muted-foreground">
             Copies use a private network, never replace a live database, and are
             scheduled for removal after 24 hours. Database checks do not test
             your application.
@@ -1100,10 +1074,10 @@ function Recovery({
               description="Use Test restore on a completed backup to verify it in a temporary database."
             />
           ) : (
-            <div className="min-w-0 overflow-x-auto rounded-lg border">
+            <Card className="min-w-0 py-0">
               <Table>
                 <TableHeader>
-                  <TableRow>
+                  <TableRow className="hover:bg-transparent">
                     <TableHead>Copy</TableHead>
                     <TableHead className="hidden sm:table-cell">
                       Status
@@ -1169,7 +1143,7 @@ function Recovery({
                   ))}
                 </TableBody>
               </Table>
-            </div>
+            </Card>
           )}
         </CopiesContainer>
       )}

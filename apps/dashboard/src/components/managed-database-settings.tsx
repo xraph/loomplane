@@ -33,7 +33,7 @@ export function ManagedDatabaseSettings({
     <div className="mb-3 grid gap-2">
       <dl
         aria-label="Requested managed settings"
-        className="grid grid-cols-2 gap-x-4 gap-y-2 text-sm sm:grid-cols-4"
+        className="grid grid-cols-2 gap-x-4 gap-y-2 text-[13px] sm:grid-cols-4"
       >
         {settings.map(([label, value]) => (
           <div key={label} className="min-w-0">

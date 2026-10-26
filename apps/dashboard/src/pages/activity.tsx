@@ -1,31 +1,18 @@
 // What the organization's Loomplane has done lately, from its own records.
 
-import {
-  ActivityIcon,
-  CheckCircle2Icon,
-  FileSearchIcon,
-  GitPullRequestIcon,
-  TriangleAlertIcon,
-} from "lucide-react"
 import { useState, type ReactNode } from "react"
 
-import { messageOf } from "@/client/errors"
 import { useActivityGet } from "@/client/forge/loomplane/hooks"
 import type { ActivitySummary } from "@/client/forge/loomplane/types"
 import { useQuery } from "@/client/hooks"
 import { DotStackChart } from "@/components/dots"
-import { Page, PageHeading, SectionHeading } from "@/components/page"
+import { Page, PageHeading } from "@/components/page"
+import { Panel } from "@/components/panel"
+import { QueryError } from "@/components/query-error"
 import { SiteHeader } from "@/components/site-header"
-import { Alert, AlertDescription } from "@/components/ui/alert"
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
+import { cn } from "@/lib/utils"
 
 const windows = [7, 30, 90] as const
 
@@ -37,41 +24,41 @@ export function Activity() {
     <>
       <SiteHeader crumbs={[{ label: "Activity" }]} />
       <Page>
-        <div className="flex flex-wrap items-end justify-between gap-4">
-          <PageHeading
-            title="Activity"
-            description="What Loomplane has done for this organization lately, counted from its own records."
-          />
-          <ToggleGroup
-            spacing={0}
-            value={[String(days)]}
-            onValueChange={(v) => v[0] && setDays(Number(v[0]))}
-            className="rounded-xl bg-muted p-1"
-            aria-label="How far back"
-          >
-            {windows.map((w) => (
-              <ToggleGroupItem
-                key={w}
-                value={String(w)}
-                className="h-8 rounded-lg px-3 text-muted-foreground aria-pressed:bg-background aria-pressed:text-foreground aria-pressed:shadow-sm"
-              >
-                {w} days
-              </ToggleGroupItem>
-            ))}
-          </ToggleGroup>
-        </div>
+        <PageHeading
+          title="Activity"
+          description="What Loomplane has done for this organization lately, counted from its own records."
+          actions={
+            <ToggleGroup
+              spacing={0.5}
+              value={[String(days)]}
+              onValueChange={(v) => v[0] && setDays(Number(v[0]))}
+              className="rounded-lg bg-muted p-0.5"
+              aria-label="How far back"
+            >
+              {windows.map((w) => (
+                <ToggleGroupItem
+                  key={w}
+                  value={String(w)}
+                  className="h-[30px] rounded-lg px-3 text-[13px] font-medium text-muted-foreground aria-pressed:bg-background aria-pressed:text-foreground aria-pressed:shadow-sm"
+                >
+                  {w} days
+                </ToggleGroupItem>
+              ))}
+            </ToggleGroup>
+          }
+        />
 
         {activity.status === "error" && (
-          <Alert variant="destructive">
-            <AlertDescription>
-              {messageOf(activity.error, "Activity couldn't be loaded.")}
-            </AlertDescription>
-          </Alert>
+          <QueryError
+            error={activity.error}
+            fallback="Activity couldn't be loaded."
+            retry={activity.refetch}
+          />
         )}
         {!activity.data && activity.status !== "error" && (
-          <div className="grid gap-4 md:grid-cols-4">
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
             {[0, 1, 2, 3].map((i) => (
-              <Skeleton key={i} className="h-28 rounded-xl" />
+              <Skeleton key={i} className="h-[118px] rounded-[14px]" />
             ))}
           </div>
         )}
@@ -87,9 +74,8 @@ function Summary({ data }: { data: ActivitySummary }) {
   const decided = data.plans.approved + data.plans.rejected + data.plans.expired
   return (
     <>
-      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <Stat
-          icon={<CheckCircle2Icon />}
           title="Deployments"
           value={finished + d.running}
           note={
@@ -99,7 +85,6 @@ function Summary({ data }: { data: ActivitySummary }) {
           }
         />
         <Stat
-          icon={<ActivityIcon />}
           title="Typical deployment"
           value={d.medianSeconds ? duration(d.medianSeconds) : "None yet"}
           note={
@@ -109,7 +94,6 @@ function Summary({ data }: { data: ActivitySummary }) {
           }
         />
         <Stat
-          icon={<GitPullRequestIcon />}
           title="Plans decided"
           value={decided}
           note={
@@ -119,89 +103,87 @@ function Summary({ data }: { data: ActivitySummary }) {
           }
         />
         <Stat
-          icon={<TriangleAlertIcon />}
           title="Drifted"
           value={data.drift.missing + data.drift.changed}
           note={`Of ${data.drift.deployed} deployed services and resources, from the last check.`}
         />
       </div>
 
-      <SectionHeading
-        title="Deployments by day"
-        description="Each day's deployments that succeeded or failed, by when they started, in UTC."
-      />
-      <Card>
-        <CardContent className="pt-6">
-          {finished + d.running === 0 ? (
-            <p className="py-16 text-center text-sm text-muted-foreground">
-              No deployments in these {data.days} days.
-            </p>
-          ) : (
-            <div className="grid gap-3">
-              <div className="flex justify-end gap-4 text-[12.5px] text-muted-foreground">
-                <span className="flex items-center gap-1.5">
-                  <span className="size-2.5 rounded-[3px] bg-overdye" />
-                  Succeeded
-                </span>
-                <span className="flex items-center gap-1.5">
-                  <span className="size-2.5 rounded-[3px] bg-failed" />
-                  Failed
-                </span>
-              </div>
-              <DotStackChart
-                data={data.daily.map((d) => ({
-                  label: shortDate(d.date),
-                  succeeded: d.succeeded,
-                  failed: d.failed,
-                }))}
-              />
-            </div>
-          )}
-        </CardContent>
-      </Card>
+      <Panel aria-label="Deployments by day" className="gap-3">
+        <div className="flex flex-wrap items-baseline justify-between gap-2">
+          <CardHeading
+            title="Deployments by day"
+            description="Each day's deployments that succeeded or failed, by when they started, in UTC."
+          />
+          <div className="flex gap-3.5 text-[12.5px] text-muted-foreground">
+            <span className="flex items-center gap-1.5">
+              <span className="size-2.5 rounded-[3px] bg-overdye" />
+              Succeeded
+            </span>
+            <span className="flex items-center gap-1.5">
+              <span className="size-2.5 rounded-[3px] bg-failed" />
+              Failed
+            </span>
+          </div>
+        </div>
+        {finished + d.running === 0 ? (
+          <p className="py-14 text-center text-[13px] text-muted-foreground">
+            No deployments in these {data.days} days.
+          </p>
+        ) : (
+          <DotStackChart
+            data={data.daily.map((d) => ({
+              label: shortDate(d.date),
+              succeeded: d.succeeded,
+              failed: d.failed,
+            }))}
+          />
+        )}
+      </Panel>
 
-      <div className="grid gap-4 md:grid-cols-2">
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <GitPullRequestIcon className="size-4" /> Plans
-            </CardTitle>
-            <CardDescription>
-              What became of the plans made in these {data.days} days.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Counts
-              rows={[
-                ["Approved", data.plans.approved],
-                ["Rejected", data.plans.rejected],
-                ["Expired before a decision", data.plans.expired],
-                ["Replaced by a newer plan", data.plans.superseded],
-                ["Couldn't be planned", data.plans.failed],
-              ]}
-            />
-          </CardContent>
-        </Card>
-        <Card>
-          <CardHeader>
-            <CardTitle className="flex items-center gap-2">
-              <FileSearchIcon className="size-4" /> Analyses
-            </CardTitle>
-            <CardDescription>
-              Repository reads, by hand or after a push.
-            </CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Counts
-              rows={[
+      <div className="grid items-start gap-3 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+        <Panel aria-label="Plans" className="gap-0 p-0">
+          <CardHeading
+            className="border-b px-4 py-3"
+            title="Plans"
+            description={`What became of the plans made in these ${data.days} days.`}
+          />
+          <Bars
+            rows={[
+              ["Approved", data.plans.approved, "bg-overdye"],
+              ["Waiting for a decision", data.plans.waiting, "bg-weld"],
+              ["Rejected", data.plans.rejected, "bg-failed"],
+              ["Expired before a decision", data.plans.expired, "bg-warp"],
+              ["Replaced by a newer plan", data.plans.superseded, "bg-warp"],
+              ["Couldn't be planned", data.plans.failed, "bg-failed"],
+            ]}
+          />
+        </Panel>
+        <Panel aria-label="Analyses" className="gap-0 p-0">
+          <CardHeading
+            className="border-b px-4 py-3"
+            title="Analyses"
+            description="Repository reads, by hand or after a push."
+          />
+          <dl className="divide-y text-[13px]">
+            {(
+              [
                 ["Succeeded", data.analyses.succeeded],
                 ["Failed", data.analyses.failed],
-              ]}
-            />
-          </CardContent>
-        </Card>
+              ] as const
+            ).map(([label, n]) => (
+              <div
+                key={label}
+                className="flex items-center justify-between gap-4 px-4 py-2.5"
+              >
+                <dt>{label}</dt>
+                <dd className="font-mono tabular-nums">{n}</dd>
+              </div>
+            ))}
+          </dl>
+        </Panel>
       </div>
-      <p className="text-sm text-muted-foreground">
+      <p className="text-[12.5px] text-muted-foreground">
         Loomplane&apos;s own metrics, for Prometheus, are on{" "}
         <code className="font-mono">/_/metrics</code>. Backups are a command:{" "}
         <code className="font-mono">loomplane backup</code>, and{" "}
@@ -211,40 +193,70 @@ function Summary({ data }: { data: ActivitySummary }) {
   )
 }
 
+/** CardHeading is a card's 14px title with its line of explanation. */
+function CardHeading({
+  title,
+  description,
+  className,
+}: {
+  title: string
+  description: string
+  className?: string
+}) {
+  return (
+    <div className={cn("grid gap-0.5", className)}>
+      <h2 className="text-[14px] font-semibold">{title}</h2>
+      <p className="text-[12.5px] text-muted-foreground">{description}</p>
+    </div>
+  )
+}
+
 function Stat({
-  icon,
   title,
   value,
   note,
 }: {
-  icon: ReactNode
   title: string
   value: ReactNode
   note: string
 }) {
   return (
-    <Card>
-      <CardHeader>
-        <CardDescription className="flex items-center gap-2 [&_svg]:size-4">
-          {icon}
-          {title}
-        </CardDescription>
-        <CardTitle className="text-2xl tabular-nums">{value}</CardTitle>
-      </CardHeader>
-      <CardContent className="text-sm text-muted-foreground">
+    <Panel className="gap-1.5">
+      <h2 className="text-[12.5px] font-medium text-muted-foreground">
+        {title}
+      </h2>
+      <span className="font-mono text-[26px] leading-none font-medium tracking-[-0.02em] tabular-nums">
+        {value}
+      </span>
+      <span className="text-[12.5px] leading-[1.45] text-muted-foreground">
         {note}
-      </CardContent>
-    </Card>
+      </span>
+    </Panel>
   )
 }
 
-function Counts({ rows }: { rows: [string, number][] }) {
+/** Bars counts each outcome with a bar against the largest. */
+function Bars({ rows }: { rows: [string, number, string][] }) {
+  const max = Math.max(1, ...rows.map(([, n]) => n))
   return (
-    <dl className="grid gap-2 text-sm">
-      {rows.map(([label, n]) => (
-        <div key={label} className="flex justify-between gap-4">
-          <dt className="text-muted-foreground">{label}</dt>
-          <dd className="font-medium tabular-nums">{n}</dd>
+    <dl className="divide-y">
+      {rows.map(([label, n, tone]) => (
+        <div key={label} className="flex items-center gap-3.5 px-4 py-2.5">
+          <dt className="w-[210px] max-w-[45%] shrink-0 text-[13px]">
+            {label}
+          </dt>
+          <dd
+            aria-hidden="true"
+            className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted"
+          >
+            <span
+              className={cn("block h-full rounded-full", tone)}
+              style={{ width: `${Math.round((n / max) * 100)}%` }}
+            />
+          </dd>
+          <dd className="w-8 shrink-0 text-right font-mono text-[12.5px] tabular-nums">
+            {n}
+          </dd>
         </div>
       ))}
     </dl>

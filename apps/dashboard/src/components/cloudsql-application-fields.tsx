@@ -14,11 +14,11 @@ export function CloudSQLApplicationFields({
 }) {
   return (
     <fieldset className="grid min-w-0 gap-2" disabled={disabled}>
-      <legend className="mb-2 text-xs font-medium">
+      <legend className="mb-2 text-[13px] font-medium">
         Cloud SQL private route (PSC)
       </legend>
       <div className="grid min-w-0 gap-2 sm:grid-cols-2">
-        <label className="grid min-w-0 gap-1 text-xs text-muted-foreground">
+        <label className="grid min-w-0 gap-1.5 text-[12.5px] font-medium">
           VPC network
           <Input
             className="h-8 min-w-0 text-xs"
@@ -34,7 +34,7 @@ export function CloudSQLApplicationFields({
             }
           />
         </label>
-        <label className="grid min-w-0 gap-1 text-xs text-muted-foreground">
+        <label className="grid min-w-0 gap-1.5 text-[12.5px] font-medium">
           Regional subnet
           <Input
             className="h-8 min-w-0 text-xs"

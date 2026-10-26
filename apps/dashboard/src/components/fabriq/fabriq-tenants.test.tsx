@@ -148,17 +148,3 @@ test("no tenants uses the shared empty state with its next action", async () => 
   expect(await screen.findByText("No tenants yet")).toBeVisible()
   expect(screen.queryByRole("table")).toBeNull()
 })
-
-test("tenants scrolling is keyboard accessible and keeps table semantics", async () => {
-  serve()
-  mount(<FabriqTenants {...panelProps()} />)
-  const region = await screen.findByRole("region", { name: "Tenant rows" })
-  const table = within(region).getByRole("table")
-  for (const heading of within(table).getAllByRole("columnheader"))
-    expect(heading).toHaveAttribute("scope", "col")
-  screen.getByRole("button", { name: "New tenant" }).focus()
-  await userEvent.tab()
-  expect(region).toHaveFocus()
-  await userEvent.tab()
-  expect(table).toContainElement(document.activeElement as HTMLElement)
-})

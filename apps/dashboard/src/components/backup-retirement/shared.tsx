@@ -1,5 +1,5 @@
 import { useRef, useState, type ReactNode } from "react"
-import { DatabaseIcon } from "lucide-react"
+import { ServicesIcon } from "@/components/icons"
 import { messageOf } from "@/client/errors"
 import { useDeploymentWrites } from "@/lib/deployment-writes"
 import {
@@ -24,7 +24,7 @@ export function RetirementEmpty({
     <ZeroState>
       <ZeroStateHeader>
         <ZeroStateMedia variant="icon">
-          <DatabaseIcon />
+          <ServicesIcon />
         </ZeroStateMedia>
         <ZeroStateTitle>{title}</ZeroStateTitle>
         <ZeroStateDescription>{description}</ZeroStateDescription>

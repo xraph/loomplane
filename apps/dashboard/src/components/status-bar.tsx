@@ -1,10 +1,10 @@
 // A status bar along the bottom, the way an editor has one: the state of
 // the machinery under Loomplane, readable at a glance and quiet otherwise.
 // Each app fills the left side with what it knows.
-import { CommandIcon } from "lucide-react"
 import type { ReactNode } from "react"
 
 import { Button } from "@/components/ui/button"
+import { Kbd } from "@/components/ui/kbd"
 import {
   Tooltip,
   TooltipContent,
@@ -77,18 +77,19 @@ export function StatusBar({
           variant="ghost"
           size="xs"
           onClick={onShortcuts}
-          className="hidden h-6 px-1.5 font-normal text-muted-foreground xl:inline-flex"
+          className="hidden h-6 gap-1.5 px-1.5 font-normal text-muted-foreground xl:inline-flex"
         >
-          ? Shortcuts
+          <Kbd>?</Kbd>
+          Shortcuts
         </Button>
         <Button
           variant="ghost"
           size="xs"
           onClick={onCommand}
-          className="h-6 gap-1 px-1.5 font-normal text-muted-foreground"
+          className="h-6 gap-1.5 px-1.5 font-normal text-muted-foreground"
         >
-          <CommandIcon />K
-          <span className="hidden lg:inline"> Command menu</span>
+          <Kbd>⌘K</Kbd>
+          <span className="hidden lg:inline">Command menu</span>
         </Button>
         {version && (
           <span className="hidden px-1.5 font-mono lg:inline">{version}</span>

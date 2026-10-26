@@ -69,7 +69,7 @@ function NativeRecoveryContent({
   return (
     <section aria-label="Cloud snapshots" className="grid min-w-0 gap-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h3 className="text-sm font-medium">
+        <h3 className="text-[15px] font-semibold">
           Cloud snapshots{resource ? ` for ${resource}` : ""}
         </h3>
         <Button
@@ -80,7 +80,7 @@ function NativeRecoveryContent({
           Reload histories
         </Button>
       </div>
-      <p className="text-xs text-muted-foreground">
+      <p className="text-[12.5px] leading-normal text-muted-foreground">
         Saved provider observations, separate from Trove exports. A snapshot
         listed here has not been restore-tested. You can review temporary Cloud
         SQL and RDS PostgreSQL 17 copies below. Native retention has a separate
@@ -252,9 +252,15 @@ function NativePoints({
       {inventory.status === "pending" && !inventory.data ? (
         <p role="status">Loading saved snapshots…</p>
       ) : inventory.data?.points.length ? (
-        <ul aria-label="Native snapshot observations" className="divide-y">
+        <ul
+          aria-label="Native snapshot observations"
+          className="divide-y overflow-hidden rounded-xl bg-card ring-1 ring-border"
+        >
           {inventory.data.points.map((point) => (
-            <li key={point.id} className="grid min-w-0 gap-1 py-2 text-sm">
+            <li
+              key={point.id}
+              className="grid min-w-0 gap-1 px-4 py-2.5 text-[13px]"
+            >
               <div className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1">
                 <span className="min-w-0 font-medium break-all">
                   {point.name}
