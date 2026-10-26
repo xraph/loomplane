@@ -45,6 +45,41 @@ func (s *PgStore) SetCanary(ctx context.Context, orgID, deploymentID string, c *
 	return nil
 }
 
+// UpdateCanary implements CanaryStore. It locks the deployment's row
+// while change runs, so a change made at the same time waits for this one
+// and then sees it.
+func (s *PgStore) UpdateCanary(ctx context.Context, orgID, deploymentID string, change func(*Deployment) error) (d *Deployment, err error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin: %w", err)
+	}
+	defer func() { err = rollback(tx, err) }()
+	d, err = scan(tx.QueryRow(ctx, `SELECT `+columns+` FROM loomplane_deployments WHERE org_id = $1 AND id = $2 FOR UPDATE`, orgID, deploymentID))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read deployment: %w", err)
+	}
+	if d.Canary == nil {
+		return nil, fmt.Errorf("deployment %s has no canary", deploymentID)
+	}
+	if changeErr := change(d); changeErr != nil {
+		return nil, changeErr
+	}
+	raw, err := encodeCanary(d.Canary)
+	if err != nil {
+		return nil, err
+	}
+	if _, err = tx.Exec(ctx, `UPDATE loomplane_deployments SET canary = $3 WHERE org_id = $1 AND id = $2`, orgID, deploymentID, raw); err != nil {
+		return nil, fmt.Errorf("set canary: %w", err)
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit: %w", err)
+	}
+	return d, nil
+}
+
 // RecordVerdict implements CanaryStore. It sets v.ID from the deployment,
 // its retry, the action, step and attempt, so a repeated judgement finds
 // its row and leaves it as it is, and a retried deployment judges afresh.

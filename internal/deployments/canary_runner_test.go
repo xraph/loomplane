@@ -957,3 +957,144 @@ func TestCanarySettleGivesUpWhateverTheDeploymentsStatus(t *testing.T) {
 		}
 	})
 }
+
+// beginCanary starts a deployment as a canary workflow does, and runs only
+// the actions named, so a test can run the rest when it likes.
+func beginCanary(t *testing.T, r *Runner, plan *planning.Plan, actions ...string) string {
+	t.Helper()
+	ctx := orchestration.CanaryContext(t.Context())
+	id, _, err := r.Start(ctx, plan.OrgID, plan.ID)
+	if err != nil || id == "" {
+		t.Fatalf("start: %q %v", id, err)
+	}
+	if err = r.FetchSource(ctx, plan.OrgID, id); err != nil {
+		t.Fatal(err)
+	}
+	for _, action := range actions {
+		if err = runAction(t, r, plan, id, action); err != nil {
+			t.Fatalf("%s: %v", action, err)
+		}
+	}
+	return id
+}
+
+// runAction runs one of a canary deployment's actions, as the workflow
+// does.
+func runAction(t *testing.T, r *Runner, plan *planning.Plan, id, action string) error {
+	t.Helper()
+	return r.Run(orchestration.CanaryContext(t.Context()), plan.OrgID, id, action, nil, func([]byte) error { return nil })
+}
+
+// A candidate recorded after a revert read the deployment, but before it
+// marked the canary reverting, is reverted with the rest: the canary
+// never says rolled_back with a candidate up.
+func TestRevertRevertsACandidateRecordedAsItStarts(t *testing.T) {
+	plan := withWeb(canaryPlan())
+	r, store, plans, exec := newCanaryRunner(t, plan)
+	id := beginCanary(t, r, plan, "resource:db", "service:api")
+	var runErr error
+	plans.mu.Lock()
+	plans.onGetPlan = func() { runErr = runAction(t, r, plan, id, "service:web") }
+	plans.mu.Unlock()
+	reason := "The canary failed at 5%: api: too slow"
+	if err := r.CanaryRevert(t.Context(), plan.OrgID, id, reason); err != nil {
+		t.Fatal(err)
+	}
+	if runErr != nil {
+		t.Fatalf("web's candidate: %v", runErr)
+	}
+	if !slices.Contains(exec.log(), "revert web web-00001") {
+		t.Fatalf("web wasn't reverted: %q", exec.log())
+	}
+	d := getDeployment(t, store, id)
+	if d.Canary.Status != CanaryRolledBack || d.Canary.service("service:web").Candidate != "" {
+		t.Fatalf("canary %s with web's candidate %q", d.Canary.Status, d.Canary.service("service:web").Candidate)
+	}
+	if s := d.Step("service:web"); s.Status != StepFailed || s.Message != reason {
+		t.Fatalf("web step %+v", s)
+	}
+}
+
+// Settling decides from the canary as it is when it's stored, not as it
+// was when the deployment was read.
+func TestSettleDecidesFromTheCanaryAsItIs(t *testing.T) {
+	reverted := "The canary failed at 5%: api: too slow"
+	// revertedMeanwhile settles the canary as a revert finishing between
+	// the read and the write would.
+	revertedMeanwhile := func(t *testing.T, store *memStore, id string) {
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		store.afterGet = func() {
+			c := getDeployment(t, store, id).Canary
+			c.Status, c.Reason, c.Weight = CanaryRolledBack, reverted, 0
+			c.Services[0].Candidate = ""
+			if err := store.SetCanary(t.Context(), "org_1", id, c); err != nil {
+				t.Error(err)
+			}
+		}
+	}
+	for name, settle := range map[string]func(r *Runner, id string) error{
+		"finish": func(r *Runner, id string) error { return r.Finish(t.Context(), "org_1", id, "The workflow stopped") },
+		"settle": func(r *Runner, id string) error {
+			return r.CanarySettle(t.Context(), "org_1", id, "Traffic may still be split: api: busy.")
+		},
+	} {
+		t.Run("after a revert finished meanwhile, by "+name, func(t *testing.T) {
+			plan := canaryPlan()
+			r, store, _, _ := newCanaryRunner(t, plan)
+			id, err := startCanary(t, r, plan)
+			if err != nil {
+				t.Fatal(err)
+			}
+			revertedMeanwhile(t, store, id)
+			if err = settle(r, id); err != nil {
+				t.Fatal(err)
+			}
+			if c := getDeployment(t, store, id).Canary; c.Status != CanaryRolledBack || c.Reason != reverted {
+				t.Fatalf("canary %s: %q", c.Status, c.Reason)
+			}
+		})
+	}
+	t.Run("with a candidate up meanwhile", func(t *testing.T) {
+		plan := canaryPlan()
+		r, store, _, _ := newCanaryRunner(t, plan)
+		id := beginCanary(t, r, plan, "resource:db")
+		var runErr error
+		store.mu.Lock()
+		store.afterGet = func() { runErr = runAction(t, r, plan, id, "service:api") }
+		store.mu.Unlock()
+		if err := r.Finish(t.Context(), plan.OrgID, id, "The workflow stopped"); err != nil {
+			t.Fatal(err)
+		}
+		if runErr != nil {
+			t.Fatalf("api's candidate: %v", runErr)
+		}
+		if c := getDeployment(t, store, id).Canary; c.Status != CanaryRevertFailed || c.service("service:api").Candidate != "api-00002" {
+			t.Fatalf("canary %s with api's candidate %q", c.Status, c.service("service:api").Candidate)
+		}
+	})
+}
+
+// A candidate that came up while a revert ran and couldn't be removed
+// leaves the canary revert_failed: the revert, finishing after it, doesn't
+// call that a rollback.
+func TestARevertKeepsARevertFailedRecordedMeanwhile(t *testing.T) {
+	plan := withWeb(canaryPlan())
+	r, store, _, exec := newCanaryRunner(t, plan)
+	id := beginCanary(t, r, plan, "resource:db", "service:api")
+	exec.revertFail = map[string]error{"web": errors.New("quota exceeded")}
+	var runErr error
+	var once sync.Once
+	exec.onWeigh = func(*Job) { once.Do(func() { runErr = runAction(t, r, plan, id, "service:web") }) }
+	if err := r.CanaryRevert(t.Context(), plan.OrgID, id, "The canary failed at 5%: api: too slow"); err != nil {
+		t.Fatal(err)
+	}
+	if runErr == nil || !strings.Contains(runErr.Error(), "couldn't be removed") {
+		t.Fatalf("web's late candidate: %v", runErr)
+	}
+	c := getDeployment(t, store, id).Canary
+	if c.Status != CanaryRevertFailed || c.service("service:web").Candidate != "web-00002" || c.service("service:api").Candidate != "" ||
+		!strings.Contains(c.Reason, "Traffic may still be split") {
+		t.Fatalf("canary %+v", c)
+	}
+}

@@ -188,6 +188,12 @@ type CanaryRun struct {
 type CanaryStore interface {
 	// SetCanary writes the deployment's canary.
 	SetCanary(ctx context.Context, orgID, deploymentID string, c *Canary) error
+	// UpdateCanary reads the deployment, lets change edit its canary and
+	// stores the canary, as one change: nothing else changes the canary in
+	// between, so neither change is lost. An error from change stores
+	// nothing and is returned as it is. A deployment without a canary is
+	// an error.
+	UpdateCanary(ctx context.Context, orgID, deploymentID string, change func(*Deployment) error) (*Deployment, error)
 	// RecordVerdict stores v under VerdictID, or does nothing when that
 	// verdict is stored. It sets v.ID, and v.ProjectID from the deployment,
 	// and returns ErrNotFound when the deployment isn't in v.OrgID.

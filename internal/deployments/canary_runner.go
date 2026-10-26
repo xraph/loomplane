@@ -130,25 +130,40 @@ func (r *Runner) removeLateCandidate(ctx context.Context, d *Deployment, w Weigh
 // updateCanary changes a deployment's canary as it's stored now, and
 // stores it.
 func (r *Runner) updateCanary(ctx context.Context, orgID, deploymentID string, change func(*Canary) error) (*Canary, error) {
+	d, err := r.changeCanary(ctx, orgID, deploymentID, func(d *Deployment) error { return change(d.Canary) })
+	if err != nil {
+		return nil, err
+	}
+	return d.Canary, nil
+}
+
+// changeCanary is updateCanary for a change that also reads the
+// deployment's steps. change sees the deployment as it's stored now, and
+// nothing else changes its canary until this one is stored, so a decision
+// change makes is never one a concurrent change made stale. It returns the
+// deployment as change left it.
+func (r *Runner) changeCanary(ctx context.Context, orgID, deploymentID string, change func(*Deployment) error) (*Deployment, error) {
 	st, ok := r.store.(CanaryStore)
 	if !ok {
 		return nil, errors.New("this deployment store can't keep a canary")
 	}
-	d, err := r.store.GetDeployment(ctx, orgID, deploymentID)
-	if err != nil {
-		return nil, err
-	}
-	if d.Canary == nil {
-		return nil, fmt.Errorf("deployment %s has no canary", deploymentID)
-	}
-	if changeErr := change(d.Canary); changeErr != nil {
-		return nil, changeErr
-	}
-	d.Canary.UpdatedAt = r.now().UTC()
-	if setErr := st.SetCanary(ctx, orgID, deploymentID, d.Canary); setErr != nil {
-		return nil, setErr
-	}
-	return d.Canary, nil
+	return st.UpdateCanary(ctx, orgID, deploymentID, func(d *Deployment) error {
+		if err := change(d); err != nil {
+			return err
+		}
+		d.Canary.UpdatedAt = r.now().UTC()
+		return nil
+	})
+}
+
+// errCanarySettled leaves a canary that settled as it is: a change
+// returns it to store nothing, and its caller takes it as done.
+var errCanarySettled = errors.New("the canary has settled")
+
+// stillUp reports whether a canary service's candidate is still up
+// beside a baseline: recorded, and not promoted.
+func stillUp(d *Deployment, svc CanaryService) bool {
+	return svc.Candidate != "" && !promoted(d, svc)
 }
 
 // canaryAction is what the ramp needs to act on one canary service: a job
@@ -371,29 +386,39 @@ func (r *Runner) promote(ctx context.Context, d *Deployment, plan *planning.Plan
 }
 
 // CanaryRevert implements orchestration.CanaryDeployer. Which services to
-// revert comes from the canary, not from step statuses: each candidate it
-// records as up gives all of its traffic back to its baseline and is
-// removed, then its candidate is cleared, so a retry reverts only what's
-// still up. Its step fails with reason; a step that never ran is skipped.
-// Bindings never changed, so they still name the baselines. The error
-// names each service that couldn't be reverted. A canary already settled
-// isn't reverted again: rolled_back is done, and revert_failed was given
-// up on when its deployment failed.
+// revert comes from the canary as this marks it reverting, not from step
+// statuses or an earlier read: a candidate recorded before then is
+// reverted here, and one that comes up after finds the canary stopped and
+// removes itself. Each candidate up gives all of its traffic back to its
+// baseline and is removed, then its candidate is cleared, so a retry
+// reverts only what's still up. Its step fails with reason; a step that
+// never ran is skipped. Bindings never changed, so they still name the
+// baselines. The error names each service that couldn't be reverted. A
+// canary already settled isn't reverted again: rolled_back is done, and
+// revert_failed was given up on when its deployment failed.
 func (r *Runner) CanaryRevert(ctx context.Context, orgID, deploymentID, reason string) error {
 	d, plan, err := r.canaryDeployment(ctx, orgID, deploymentID)
 	if err != nil {
 		return err
 	}
-	switch {
-	case d.Canary == nil || d.Canary.Status == CanaryRolledBack || d.Canary.Status == CanaryPromoteFailed:
+	if d.Canary == nil {
 		return nil
-	case d.Canary.Status != CanaryPending && d.Canary.Status != CanaryRamping && d.Canary.Status != CanaryReverting:
-		return fmt.Errorf("the canary is %s, so it can't be reverted", d.Canary.Status)
 	}
-	if _, err = r.updateCanary(ctx, orgID, deploymentID, func(c *Canary) error {
-		c.Status, c.Reason = CanaryReverting, reason
+	d, err = r.changeCanary(ctx, orgID, deploymentID, func(d *Deployment) error {
+		switch c := d.Canary; c.Status {
+		case CanaryRolledBack, CanaryPromoteFailed:
+			return errCanarySettled
+		case CanaryPending, CanaryRamping, CanaryReverting:
+			c.Status, c.Reason = CanaryReverting, reason
+			return nil
+		default:
+			return fmt.Errorf("the canary is %s, so it can't be reverted", c.Status)
+		}
+	})
+	if errors.Is(err, errCanarySettled) {
 		return nil
-	}); err != nil {
+	}
+	if err != nil {
 		return err
 	}
 	var failed []string
@@ -440,19 +465,38 @@ func (r *Runner) CanaryRevert(ctx context.Context, orgID, deploymentID, reason s
 	if len(storeErrs) > 0 {
 		return errors.Join(storeErrs...)
 	}
-	// A service an earlier attempt promoted keeps the release, so the
-	// deployment is split between old and new: not a rollback.
-	partial := slices.ContainsFunc(d.Canary.Services, func(svc CanaryService) bool { return promoted(d, svc) })
-	_, err = r.updateCanary(ctx, orgID, deploymentID, func(c *Canary) error {
-		// Every candidate still up is back at 0%, so Weight is 0 either way.
+	_, err = r.changeCanary(ctx, orgID, deploymentID, func(d *Deployment) error {
+		c := d.Canary
+		// Something else settled it meanwhile: a late candidate that
+		// couldn't be removed made it revert_failed, or a revert beside
+		// this one finished first. Either way it says what's true already.
+		if c.Status != CanaryReverting {
+			return errCanarySettled
+		}
+		var up []string
+		for _, svc := range c.Services {
+			if stillUp(d, svc) {
+				up = append(up, svc.Name)
+			}
+		}
+		if len(up) > 0 {
+			// Still reverting, so a retry reverts what this didn't.
+			return fmt.Errorf("%s still has a candidate up", strings.Join(up, ", "))
+		}
+		// Every candidate is gone, so Weight is 0 either way. A service an
+		// earlier attempt promoted keeps the release, so the deployment is
+		// split between old and new: not a rollback.
 		c.Weight = 0
-		if partial {
+		if slices.ContainsFunc(c.Services, func(svc CanaryService) bool { return promoted(d, svc) }) {
 			c.Status = CanaryPromoteFailed
 		} else {
 			c.Status = CanaryRolledBack
 		}
 		return nil
 	})
+	if errors.Is(err, errCanarySettled) {
+		return nil
+	}
 	return err
 }
 
@@ -469,14 +513,6 @@ func (r *Runner) revert(ctx context.Context, d *Deployment, plan *planning.Plan,
 	return ca.exec.Revert(ctx, ca.job, svc.target())
 }
 
-// settleCanary ends the canary of a deployment that failed, from what its
-// services show, so a failed deployment never shows a canary still in
-// flight. One still promoting couldn't be promoted. Otherwise, an unpromoted
-// candidate still up means traffic may still be split, so the revert
-// failed, whatever else was promoted. With none up, a service an earlier
-// attempt promoted leaves old and new side by side, which a rollback can't
-// be; with none promoted, every binding names what runs, and the canary
-// rolled back. replace puts reason in place of the canary's own.
 // CanarySettle implements orchestration.CanaryDeployer. The workflow
 // calls it once it gave up on a promote or revert, whatever the
 // deployment's status, so the canary ends as promote_failed or
@@ -490,25 +526,31 @@ func (r *Runner) CanarySettle(ctx context.Context, orgID, deploymentID, reason s
 	return r.settleCanary(ctx, d, reason, true)
 }
 
+// settleCanary ends the canary of a deployment that failed, from what its
+// services show, so a failed deployment never shows a canary still in
+// flight. It decides from the canary as it's stored when it settles, not
+// from d, which may be older: a canary that settled meanwhile is left as
+// it is. One still promoting couldn't be promoted. Otherwise, an
+// unpromoted candidate still up means traffic may still be split, so the
+// revert failed, whatever else was promoted. With none up, a service an
+// earlier attempt promoted leaves old and new side by side, which a
+// rollback can't be; with none promoted, every binding names what runs,
+// and the canary rolled back. replace puts reason in place of the canary's
+// own.
 func (r *Runner) settleCanary(ctx context.Context, d *Deployment, reason string, replace bool) error {
-	c := d.Canary
-	if c == nil {
+	if d.Canary == nil {
 		return nil
 	}
-	switch c.Status {
-	case CanaryPending, CanaryRamping, CanaryReverting, CanaryPromoting:
-	default:
-		return nil
-	}
-	up := slices.ContainsFunc(c.Services, func(svc CanaryService) bool { return svc.Candidate != "" && !promoted(d, svc) })
-	partial := slices.ContainsFunc(c.Services, func(svc CanaryService) bool { return promoted(d, svc) })
-	_, err := r.updateCanary(ctx, d.OrgID, d.ID, func(c *Canary) error {
+	_, err := r.changeCanary(ctx, d.OrgID, d.ID, func(d *Deployment) error {
+		c := d.Canary
 		switch {
 		case c.Status == CanaryPromoting:
 			c.Status = CanaryPromoteFailed
-		case up:
+		case c.Status != CanaryPending && c.Status != CanaryRamping && c.Status != CanaryReverting:
+			return errCanarySettled
+		case slices.ContainsFunc(c.Services, func(svc CanaryService) bool { return stillUp(d, svc) }):
 			c.Status = CanaryRevertFailed
-		case partial:
+		case slices.ContainsFunc(c.Services, func(svc CanaryService) bool { return promoted(d, svc) }):
 			c.Status, c.Weight = CanaryPromoteFailed, 0
 		default:
 			c.Status, c.Weight = CanaryRolledBack, 0
@@ -518,5 +560,8 @@ func (r *Runner) settleCanary(ctx context.Context, d *Deployment, reason string,
 		}
 		return nil
 	})
+	if errors.Is(err, errCanarySettled) {
+		return nil
+	}
 	return err
 }
