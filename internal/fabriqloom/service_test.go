@@ -385,6 +385,33 @@ func TestRevokeAlsoCutsUnrecordedKeys(t *testing.T) {
 	}
 }
 
+func TestRotateAndRevokeKeepStoreErrorsTheirOwn(t *testing.T) {
+	h := newServiceHarness(nil, "acme")
+	h.bind(t, "api", "acme")
+	calls := map[string]func() error{
+		"rotate": func() error { _, err := h.svc.Rotate(t.Context(), as("admin"), fabriqRef, "api"); return err },
+		"revoke": func() error { _, err := h.svc.Revoke(t.Context(), as("admin"), fabriqRef, "api"); return err },
+	}
+	for name, call := range calls {
+		// Vault fails to forget an unrecorded key: Fabriq answered fine.
+		h.f.plant("loomplane:api")
+		h.secrets.failDelete = errors.New("vault: permission denied")
+		err := call()
+		if err == nil || errors.Is(err, fabriqloom.ErrUnavailable) || security.StatusFor(err) != http.StatusInternalServerError {
+			t.Fatalf("%s with Vault failing: %v", name, err)
+		}
+		h.secrets.failDelete = nil
+		// Fabriq failing to revoke it is Fabriq being unavailable.
+		h.f.plant("loomplane:api")
+		h.f.failRevoke = true
+		if err = call(); !errors.Is(err, fabriqloom.ErrUnavailable) {
+			t.Fatalf("%s with Fabriq failing: %v", name, err)
+		}
+		noSecret(t, h.f, err)
+		h.f.failRevoke = false
+	}
+}
+
 func TestBindWaitsForRotationToRecordItsKey(t *testing.T) {
 	h := newServiceHarness(nil, "acme")
 	h.bind(t, "api", "acme")

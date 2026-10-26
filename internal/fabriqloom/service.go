@@ -70,6 +70,16 @@ func unavailable(err error) error {
 	return &UnavailableError{Reason: scrub(err.Error())}
 }
 
+// sweepFailure is unavailable(err) when the orphan sweep failed in Fabriq
+// or on the way to it, and err as it is when the key store or Vault did.
+func sweepFailure(err error) error {
+	var remote *fabriqFailure
+	if errors.As(err, &remote) {
+		return unavailable(err)
+	}
+	return err
+}
+
 // Catalog is how the panel's service reaches a hosted Fabriq.
 // *deployments.CatalogAccess is the real one: Components and Channel check
 // the principal's permission on the project first.
@@ -478,7 +488,7 @@ func (s *Service) Rotate(ctx context.Context, p security.Principal, ref deployme
 	defer done()
 	consumer := deployments.Consumer{OrgID: p.OrgID, ProjectID: ref.ProjectID, EnvironmentID: ref.EnvironmentID, Resource: ref.Resource, Service: service}
 	if err = s.hooks().revokeOrphans(ctx, admin, consumer); err != nil {
-		return nil, unavailable(err)
+		return nil, sweepFailure(err)
 	}
 	issued, err := admin.IssueKey(ctx, KeyLabel(service))
 	if err != nil {
@@ -540,7 +550,7 @@ func (s *Service) Revoke(ctx context.Context, p security.Principal, ref deployme
 		h := s.hooks()
 		consumer := deployments.Consumer{OrgID: p.OrgID, ProjectID: ref.ProjectID, EnvironmentID: ref.EnvironmentID, Resource: ref.Resource, Service: service}
 		if err = h.revokeOrphans(ctx, admin, consumer); err != nil {
-			return nil, unavailable(err)
+			return nil, sweepFailure(err)
 		}
 		var errs []error
 		for _, r := range live {

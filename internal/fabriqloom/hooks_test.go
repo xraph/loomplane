@@ -135,10 +135,12 @@ func (s *memKeys) inState(service string, state fabriqloom.KeyState) []fabriqloo
 	return out
 }
 
-// memSecrets is ResourceSecrets in memory.
+// memSecrets is ResourceSecrets in memory. Setting failDelete fails every
+// Delete with it.
 type memSecrets struct {
-	mu sync.Mutex
-	m  map[string][]byte
+	mu         sync.Mutex
+	m          map[string][]byte
+	failDelete error
 }
 
 func newMemSecrets() *memSecrets { return &memSecrets{m: map[string][]byte{}} }
@@ -163,6 +165,9 @@ func (s *memSecrets) Get(_ context.Context, key string) ([]byte, error) {
 func (s *memSecrets) Delete(_ context.Context, key string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.failDelete != nil {
+		return s.failDelete
+	}
 	delete(s.m, key)
 	return nil
 }

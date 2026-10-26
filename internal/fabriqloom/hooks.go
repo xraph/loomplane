@@ -273,7 +273,7 @@ func (h *Hooks) issue(ctx context.Context, admin *AdminClient, c deployments.Con
 func (h *Hooks) revokeOrphans(ctx context.Context, admin *AdminClient, c deployments.Consumer) error {
 	keys, err := admin.Keys(ctx)
 	if err != nil {
-		return fmt.Errorf("list Fabriq's keys: %w", err)
+		return &fabriqFailure{fmt.Errorf("list Fabriq's keys: %w", err)}
 	}
 	return h.revokeUnrecorded(ctx, admin, keys, c.OrgID, c.EnvironmentID, c.Resource, c.Service)
 }
@@ -293,7 +293,7 @@ func (h *Hooks) revokeUnrecorded(ctx context.Context, admin *AdminClient, keys [
 			continue
 		}
 		if err := admin.RevokeKey(ctx, k.ID); err != nil {
-			return fmt.Errorf("revoke an unrecorded Fabriq key of %s: %w", service, err)
+			return &fabriqFailure{fmt.Errorf("revoke an unrecorded Fabriq key of %s: %w", service, err)}
 		}
 		if err := h.d.Secrets.Delete(ctx, VaultKey(orgID, environmentID, resource, k.ID)); err != nil {
 			return err
@@ -301,6 +301,14 @@ func (h *Hooks) revokeUnrecorded(ctx context.Context, admin *AdminClient, keys [
 	}
 	return nil
 }
+
+// fabriqFailure is an error from Fabriq's admin API or the channel to it,
+// as opposed to one from the key store or Vault. The panel reports the
+// first as Fabriq being unavailable and the second as what it is.
+type fabriqFailure struct{ err error }
+
+func (e *fabriqFailure) Error() string { return e.err.Error() }
+func (e *fabriqFailure) Unwrap() error { return e.err }
 
 // liveIDs are the ids of the records that aren't revoked.
 func liveIDs(records []*KeyRecord) map[string]bool {
