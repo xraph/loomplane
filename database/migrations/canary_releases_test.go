@@ -3,32 +3,32 @@
 package migrations
 
 import (
-	"context"
-	"net/url"
-	"os"
 	"strconv"
 	"testing"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/xraph/grove/migrate"
-
-	"github.com/xraph/loomplane/internal/ops"
 )
 
 func TestCanaryReleasesMigration(t *testing.T) {
-	conn, _ := scratch(t)
-	ctx := context.Background()
-	dsn, err := url.Parse(os.Getenv("LOOMPLANE_TEST_DATABASE_URL"))
-	if err != nil {
-		t.Fatal(err)
+	conn, ex := scratch(t)
+	ctx := t.Context()
+	// Everything else goes first, so canary_releases is the last one applied
+	// and one rollback undoes exactly it, whatever sorts after it.
+	others := migrate.NewGroup(GroupName)
+	for _, step := range Group().Migrations() {
+		if step.Name != "canary_releases" {
+			others.MustRegister(step)
+		}
 	}
-	dsn.Path = "/" + conn.Config().Database
-	if err = ops.Migrate(ctx, dsn.String(), []*migrate.Group{Group()}); err != nil {
-		t.Fatal(err)
+	if _, err := migrate.NewOrchestrator(ex, others).Migrate(ctx); err != nil {
+		t.Fatalf("up others: %v", err)
 	}
-	// Central migrations are not transactional, so the up statements repeat.
-	exec(t, conn, canaryReleasesUp...)
-	exec(t, conn, canaryReleasesUp...)
+	o := migrate.NewOrchestrator(ex, Group())
+	if _, err := o.Migrate(ctx); err != nil {
+		t.Fatalf("up: %v", err)
+	}
+	// Running the up again changes nothing.
+	up(t, ex, "canary_releases", "canary_releases")
 	if got := strs(t, conn, `SELECT conname::text FROM pg_constraint WHERE conrelid='loomplane_deployment_workflow_runs'::regclass AND contype='c'`); len(got) != 1 || got[0] != "loomplane_deployment_workflow_runs_build" {
 		t.Fatalf("build checks after up: %v", got)
 	}
@@ -50,7 +50,7 @@ func TestCanaryReleasesMigration(t *testing.T) {
 		t.Fatalf("verdict events: %v", got)
 	}
 	for _, sql := range []string{verdict("v_maybe", "maybe", 10), verdict("v_heavy", "pass", 101)} {
-		if _, err = conn.Exec(ctx, sql); err == nil {
+		if _, err := conn.Exec(ctx, sql); err == nil {
 			t.Fatalf("constraint accepted %s", sql)
 		}
 	}
@@ -59,20 +59,26 @@ func TestCanaryReleasesMigration(t *testing.T) {
 		return `INSERT INTO loomplane_deployment_workflow_runs (org_id,plan_id,workflow_id,request) VALUES ('org','plan_1','` + id + `','{"build_id":"` + build + `"}')`
 	}
 	exec(t, conn, run("wf_v4", "deployment-v4"))
-	if _, err = conn.Exec(ctx, run("wf_v5", "deployment-v5")); err == nil {
+	if _, err := conn.Exec(ctx, run("wf_v5", "deployment-v5")); err == nil {
 		t.Fatal("deployment-v5 run accepted")
 	}
 
-	if err = apply(ctx, conn, canaryReleasesDown); err == nil {
+	canary := migration(t, "canary_releases")
+	if err := canary.Down(ctx, ex); err == nil {
 		t.Fatal("down dropped the verdicts")
 	}
 	exec(t, conn, `DELETE FROM loomplane_canary_verdicts`)
-	if err = apply(ctx, conn, canaryReleasesDown); err == nil {
+	if err := canary.Down(ctx, ex); err == nil {
 		t.Fatal("down stranded a deployment-v4 run")
 	}
 	exec(t, conn, `DELETE FROM loomplane_deployment_workflow_runs`)
-	exec(t, conn, canaryReleasesDown...)
-	exec(t, conn, canaryReleasesDown...)
+	// The orchestrator rolls back the canary's own version.
+	res, err := o.Rollback(ctx)
+	if err != nil || len(res.Rollback) != 1 || res.Rollback[0].Version != "20261104000100" || res.Rollback[0].Name != "canary_releases" {
+		t.Fatalf("rollback: %+v %v", res, err)
+	}
+	// Running the down again changes nothing.
+	down(t, ex, "canary_releases")
 	if got := strs(t, conn, `SELECT coalesce(to_regclass('loomplane_canary_verdicts')::text,'gone')`); len(got) != 1 || got[0] != "gone" {
 		t.Fatalf("down left the table: %v", got)
 	}
@@ -89,19 +95,11 @@ func TestCanaryReleasesMigration(t *testing.T) {
 	}
 
 	// Up again over the restored two-build check.
-	exec(t, conn, canaryReleasesUp...)
+	if _, err = o.Migrate(ctx); err != nil {
+		t.Fatalf("up again: %v", err)
+	}
 	exec(t, conn, run("wf_v4_after", "deployment-v4"))
 	if got := strs(t, conn, `SELECT conname::text FROM pg_constraint WHERE conrelid='loomplane_deployment_workflow_runs'::regclass AND contype='c' ORDER BY conname`); len(got) != 1 || got[0] != "loomplane_deployment_workflow_runs_build" {
 		t.Fatalf("build checks after up: %v", got)
 	}
-}
-
-// apply runs stmts in order and returns the first error.
-func apply(ctx context.Context, conn *pgx.Conn, stmts []string) error {
-	for _, s := range stmts {
-		if _, err := conn.Exec(ctx, s); err != nil {
-			return err
-		}
-	}
-	return nil
 }
