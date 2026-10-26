@@ -101,6 +101,13 @@ it("lists GPU targets with fit and price", async () => {
   // A size row is named by its slug; the account is looked up by connection.
   expect(await screen.findByText(/Prod DigitalOcean/)).toBeInTheDocument()
   expect(screen.getByText("$3.39/hr")).toBeInTheDocument()
+  // A cluster says how many GPUs one node has; a server says how many are free.
+  const clusterRow = screen.getByRole("row", { name: /gpu-cluster/ })
+  expect(within(clusterRow).getByText(/· 3 per node/)).toBeInTheDocument()
+  expect(within(clusterRow).queryByText(/free/)).not.toBeInTheDocument()
+  expect(
+    within(screen.getByRole("row", { name: /gpu-box/ })).getByText(/· 0 free/)
+  ).toBeInTheDocument()
   // An unknown price is never shown as $0.
   const box = screen.getByRole("row", { name: /gpu-box/ })
   expect(within(box).getByText("Price unknown")).toBeInTheDocument()

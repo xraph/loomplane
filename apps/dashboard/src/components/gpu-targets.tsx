@@ -146,7 +146,10 @@ function TargetRow({
           {t.accelerator.kind
             ? `${acceleratorLabel(t.accelerator)}${t.accelerator.memoryGib ? ` · ${t.accelerator.memoryGib} GiB each` : ""}`
             : "GPU kind not labelled"}
-          {!size && ` · ${t.free} free`}
+          {!size &&
+            (t.cloud === "kubernetes"
+              ? ` · ${t.free} per node`
+              : ` · ${t.free} free`)}
         </div>
         {!t.fits && t.message && (
           <div className="mt-1 text-xs text-weld-ink">{t.message}</div>

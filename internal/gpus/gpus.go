@@ -48,8 +48,10 @@ type GPUTarget struct {
 	Regions      []string             `json:"regions,omitempty"` // server_size only
 	SizeID       string               `json:"size_id,omitempty"` // server_size only
 	Accelerator  provider.Accelerator `json:"accelerator"`       // Count is per server or node
-	// Free is how many GPUs of the kind are free on one server or node, as
-	// far as Loomplane knows. It's 0 when Loomplane can't tell.
+	// Free is, on a server, how many GPUs of the kind no deployed workload
+	// holds. On a cluster it's the most GPUs of the kind one node can
+	// allocate (PerNode), not how many are free: Loomplane doesn't count
+	// the cluster's other pods. It's 0 when Loomplane can't tell.
 	Free             int     `json:"free"`
 	Fits             bool    `json:"fits"`
 	Code             string  `json:"code,omitempty"` // a GPUUnavailableError code when it doesn't fit
@@ -389,6 +391,7 @@ func clusterRows(c *connections.Connection, q GPUTargetQuery) []GPUTarget {
 		g := best[kind]
 		row := connectionRow(c)
 		row.Accelerator = accelerator(kind, g.PerNode, g.MemoryGiB)
+		// A cluster row's Free is per node, not what's free right now.
 		row.Free = g.PerNode
 		if g.HourlyPriceKnown {
 			row.HourlyUSD, row.HourlyPriceKnown, row.PriceEstimate = g.HourlyUSD, true, true
