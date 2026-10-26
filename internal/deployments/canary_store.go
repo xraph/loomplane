@@ -46,8 +46,8 @@ func (s *PgStore) SetCanary(ctx context.Context, orgID, deploymentID string, c *
 }
 
 // RecordVerdict implements CanaryStore. It sets v.ID from the deployment,
-// action, step and attempt, so a retried judgement finds its row and leaves
-// it as it is. The project, and so the realtime event's scope, is the
+// its retry, the action, step and attempt, so a repeated judgement finds
+// its row and leaves it as it is, and a retried deployment judges afresh. The project, and so the realtime event's scope, is the
 // deployment's: a deployment outside v.OrgID records nothing and returns
 // ErrNotFound.
 func (s *PgStore) RecordVerdict(ctx context.Context, v *CanaryVerdict) error {

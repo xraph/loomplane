@@ -161,12 +161,17 @@ func (d *Deployments) ResumeRelease(ctx context.Context, org, planID string) err
 		}
 		return resumeReleaseOn(ctx, recordedRecovery{releaseRecoveryEngine: eng, workflows: d, org: org, plan: planID}, org, planID)
 	}
+	// A v3 run resumes on v3, as it was approved. Every later build resumes
+	// on CurrentBuild.
+	build, request := CurrentBuild, "resume-release-v4:"+planID
+	if current.BuildID == CapacityBuild {
+		build, request = CapacityBuild, "resume-release-v3:"+planID
+	}
 	input, err := json.Marshal(DeploymentInput{OrgID: org, PlanID: planID, ReconcileInterval: capacityInterval})
 	if err != nil {
 		return err
 	}
-	request := "resume-release-v3:" + planID
-	return d.startRun(ctx, DeploymentRun{OrgID: org, PlanID: planID, Request: durable.StartRequest{Key: durable.Key{Namespace: DurableNamespace, WorkflowID: request, RunID: runID}, RequestID: request, WorkflowType: resumeReleaseWorkflow, BuildID: CapacityBuild, Queue: DurableQueue, Input: input, RetryPolicy: recoveryRetryPolicy()}})
+	return d.startRun(ctx, DeploymentRun{OrgID: org, PlanID: planID, Request: durable.StartRequest{Key: durable.Key{Namespace: DurableNamespace, WorkflowID: request, RunID: runID}, RequestID: request, WorkflowType: resumeReleaseWorkflow, BuildID: build, Queue: DurableQueue, Input: input, RetryPolicy: recoveryRetryPolicy()}})
 }
 
 type releaseRecoveryEngine interface {

@@ -283,14 +283,15 @@ func TestFinishAfterAPromotionSettlesFromWhatsLeft(t *testing.T) {
 		promoteAPI(t, store, id)
 		c := getDeployment(t, store, id).Canary
 		c.service("service:web").Candidate = ""
+		c.Status, c.Step, c.Weight = CanaryRamping, 0, 5
 		if err = store.SetCanary(t.Context(), plan.OrgID, id, c); err != nil {
 			t.Fatal(err)
 		}
 		if err = r.Finish(t.Context(), plan.OrgID, id, "The workflow stopped"); err != nil {
 			t.Fatal(err)
 		}
-		if c = getDeployment(t, store, id).Canary; c.Status != CanaryPromoteFailed {
-			t.Fatalf("canary %s", c.Status)
+		if c = getDeployment(t, store, id).Canary; c.Status != CanaryPromoteFailed || c.Weight != 0 {
+			t.Fatalf("canary %s at %d%%", c.Status, c.Weight)
 		}
 	})
 }

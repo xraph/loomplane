@@ -19,6 +19,7 @@ import (
 	"time"
 
 	cpext "github.com/xraph/ctrlplane/extension"
+	drt "github.com/xraph/dispatch/durable/runtime"
 	dispatchext "github.com/xraph/dispatch/extension"
 	"github.com/xraph/forge"
 	"github.com/xraph/grove"
@@ -115,6 +116,7 @@ func Extensions(cfg config.Config) []forge.Extension {
 		dispatchext.WithDisableMigrate(),
 	)
 	jobs.WithCapacity(deployments.CapacityOptions(owner(), cfg.Orchestration.Concurrency), deployments.BindCapacityWorker)
+	jobs.WithBuild(deployments.CanaryOptions(owner(), cfg.Orchestration.Concurrency), func(w *drt.Worker) { deployments.BindWorker(orchestration.CanaryBuild, w) })
 
 	// Provider plugins, described when the first extension that needs
 	// them registers.
