@@ -122,6 +122,11 @@ func (s *Service) Create(ctx context.Context, p security.Principal, in NewKey) (
 	if p.KeyID != "" {
 		return nil, ErrNotWithKey
 	}
+	// A key acts as the person who made it. Loomplane automation is no
+	// person, and nothing may act as it through a key.
+	if p.IsServiceAccount() {
+		return nil, security.ErrForbidden
+	}
 	name := strings.TrimSpace(in.Name)
 	switch {
 	case name == "":
@@ -224,6 +229,9 @@ func (s *Service) Authenticate(ctx context.Context, raw string) (security.Princi
 	}
 	k := res.Key
 	if k.AppID != s.appID || k.TenantID == "" || k.CreatedBy == "" {
+		return security.Principal{}, ErrRejected
+	}
+	if _, system := security.IsSystemSubject(k.CreatedBy); system {
 		return security.Principal{}, ErrRejected
 	}
 	return security.Principal{

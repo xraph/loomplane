@@ -412,6 +412,20 @@ type Action struct {
 	Changes  []Change        `json:"changes,omitempty"`
 }
 
+// AutomationName is how Loomplane automation, which rolls back a release
+// whose watch or canary failed, is named wherever it acts.
+const AutomationName = "Loomplane automation"
+
+// ActorName is how to show a created_by, decided_by or started_by, such as
+// Plan.DecidedBy: "Loomplane automation" for the organization's automation
+// (loomplane:<org>), else the ID as given.
+func ActorName(id string) string {
+	if org, ok := strings.CutPrefix(id, "loomplane:"); ok && org != "" {
+		return AutomationName
+	}
+	return id
+}
+
 // Plan is what deploying a manifest to an environment would do, waiting
 // for someone to approve or reject it.
 type Plan struct {

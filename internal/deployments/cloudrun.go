@@ -353,10 +353,10 @@ func sourceRoot(ctx context.Context, job *Job) (string, error) {
 	return root, nil
 }
 
-// principal is who Ctrl Plane sees acting: the person who approved the
-// plan, in its organization.
+// principal is who Ctrl Plane sees acting: whoever approved the plan, in
+// its organization. That's Loomplane automation for a rollback it approved.
 func principal(job *Job) security.Principal {
-	return security.Principal{OrgID: job.Deployment.OrgID, UserID: job.Deployment.StartedBy}
+	return security.ActorPrincipal(job.Deployment.OrgID, job.Deployment.StartedBy)
 }
 
 // provider registers the connection's Cloud Run provider for the region,
