@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -19,6 +20,8 @@ type lockingStore struct {
 	mu    sync.Mutex
 	held  map[string]*sync.Mutex
 	locks int
+	// departed are the users no longer in the organization.
+	departed map[string]bool
 	// entrants counts callers inside WithConnectionLock or waiting on it,
 	// as a pooled database connection would be; most is its peak.
 	entrants, most int
@@ -72,6 +75,18 @@ func (l *lockingStore) OAuthConnections(context.Context) ([]*Connection, error) 
 	var out []*Connection
 	for _, c := range l.rows {
 		if c.Method == MethodOAuth && c.Status != StatusSignInNeeded {
+			out = append(out, &c)
+		}
+	}
+	return out, nil
+}
+
+func (l *lockingStore) LeftSignIns(_ context.Context, clouds []string) ([]*Connection, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var out []*Connection
+	for _, c := range l.rows {
+		if c.Method == MethodOAuth && c.Status != StatusSignInNeeded && slices.Contains(clouds, c.Cloud) && c.SignedInBy != "" && l.departed[c.SignedInBy] {
 			out = append(out, &c)
 		}
 	}

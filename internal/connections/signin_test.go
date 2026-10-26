@@ -117,10 +117,17 @@ func (m *memSecrets) Delete(_ context.Context, org, id string) error {
 	return nil
 }
 
-type connAudit struct{ actions []string }
+type connAudit struct {
+	actions []string
+	// actors and signers are, per action, who did it and who the
+	// connection says signed in.
+	actors, signers []string
+}
 
-func (a *connAudit) Record(_ context.Context, action string, _ security.Principal, _ *Connection) {
+func (a *connAudit) Record(_ context.Context, action string, p security.Principal, c *Connection) {
 	a.actions = append(a.actions, action)
+	a.actors = append(a.actors, p.UserID)
+	a.signers = append(a.signers, c.SignedInBy)
 }
 
 type signInRig struct {

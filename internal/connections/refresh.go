@@ -30,9 +30,10 @@ const maxRenewals = 4
 
 // grantStore is what renewing a sign-in needs from the database: one lock
 // per connection, shared with credential replacement, and every sign-in
-// that could need renewing. *PgStore has it.
+// that could need renewing, or whose signer has left. *PgStore has it.
 type grantStore interface {
 	OAuthConnections(ctx context.Context) ([]*Connection, error)
+	LeftSignIns(ctx context.Context, clouds []string) ([]*Connection, error)
 	WithConnectionLock(ctx context.Context, orgID, id string, fn func() error) error
 }
 
@@ -96,7 +97,7 @@ func (g *renewGate) enter(ctx context.Context, key string) (leave func(), err er
 }
 
 // RefreshReport counts what one pass over the sign-ins did.
-type RefreshReport struct{ Refreshed, Lapsed, Failed int }
+type RefreshReport struct{ Refreshed, Lapsed, Left, Failed int }
 
 // readGrant returns the sign-in grant Vault holds for c.
 func (s *Service) readGrant(ctx context.Context, c *Connection) (oauth.Grant, error) {
@@ -332,12 +333,51 @@ func (s *Service) signInRefused(ctx context.Context, c *Connection, why string, 
 	return current, lapsed, err
 }
 
-// RefreshDue renews every sign-in that expires within a week, so one
+// personalClouds are the clouds whose sign-in acts as the person who
+// made it, so it ends being theirs to give when they leave.
+var personalClouds = []string{GCP, Azure}
+
+// askAgainWhenLeft marks every sign-in to a personal cloud whose signer
+// has left the organization as needing a new one, and tells Lapsed. A
+// sign-in someone has since replaced is passed over. One that fails
+// doesn't stop the rest.
+func (s *Service) askAgainWhenLeft(ctx context.Context, report *RefreshReport) error {
+	gone, err := s.grants.LeftSignIns(ctx, personalClouds)
+	if err != nil {
+		return err
+	}
+	for _, c := range gone {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		why := fmt.Sprintf("The person who signed in to %s has left the organization. Sign in again.", c.Name)
+		_, lapsed, markErr := s.signInRefused(ctx, c, why, nil)
+		switch {
+		case errors.Is(markErr, ErrChanged):
+			continue
+		case markErr != nil:
+			report.Failed++
+			s.warn("ask for a new sign-in of "+c.ID, markErr)
+			continue
+		}
+		if lapsed != nil {
+			report.Left++
+		}
+		s.tellLapsed(ctx, lapsed)
+	}
+	return nil
+}
+
+// RefreshDue first asks for a new sign-in wherever the person who made it
+// has left, then renews every sign-in that expires within a week, so one
 // nobody deploys with stays usable. One that fails doesn't stop the rest.
 func (s *Service) RefreshDue(ctx context.Context) (RefreshReport, error) {
 	var report RefreshReport
 	if s.grants == nil {
 		return report, fmt.Errorf("%w: renewing sign-ins needs the database", ErrUnavailable)
+	}
+	if err := s.askAgainWhenLeft(ctx, &report); err != nil {
+		return report, err
 	}
 	conns, err := s.grants.OAuthConnections(ctx)
 	if err != nil {
@@ -375,9 +415,9 @@ func (s *Service) RefreshAll(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	if report.Lapsed > 0 || report.Failed > 0 {
-		s.warn("renew cloud sign-ins", fmt.Errorf("%d renewed, %d need signing in again, %d failed",
-			report.Refreshed, report.Lapsed, report.Failed))
+	if report.Lapsed > 0 || report.Left > 0 || report.Failed > 0 {
+		s.warn("renew cloud sign-ins", fmt.Errorf("%d renewed, %d need signing in again, %d lost the person who signed in, %d failed",
+			report.Refreshed, report.Lapsed, report.Left, report.Failed))
 	}
 	return nil
 }

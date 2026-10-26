@@ -211,6 +211,7 @@ func (s *Service) create(ctx context.Context, p security.Principal, cloud, name 
 	}
 	now := s.now().UTC()
 	c := &Connection{ID: id.String(), OrgID: p.OrgID, Cloud: cloud, Name: name, Method: method, CreatedBy: p.UserID, CreatedAt: now}
+	c.SignedInBy = signer(p, method)
 	apply(c, res, now)
 	// The secret first: a row without its secret would look connected and
 	// fail every deployment, where a secret without its row is unreachable
@@ -339,6 +340,15 @@ func (s *Service) Replace(ctx context.Context, p security.Principal, id string, 
 	return s.replace(ctx, p, id, []byte(strings.TrimSpace(in.Credential)), nil, in.Settings, MethodToken)
 }
 
+// signer is who a credential that got there by method is the sign-in of:
+// the person signing in, or no one for a token.
+func signer(p security.Principal, method string) string {
+	if method == MethodOAuth {
+		return p.UserID
+	}
+	return ""
+}
+
 // replace swaps connection id's credential for cred, which got there by
 // method, if the cloud accepts it for the same account. checked is what
 // the check gets instead of cred, as for create. The caller has checked
@@ -393,6 +403,7 @@ func (s *Service) replace(ctx context.Context, p security.Principal, id string, 
 			return err
 		}
 		c.Method = method
+		c.SignedInBy = signer(p, method)
 		apply(c, res, s.now().UTC())
 		return s.store.UpdateConnection(ctx, c)
 	}
