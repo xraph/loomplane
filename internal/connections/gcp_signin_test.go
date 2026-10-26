@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/xraph/loomplane/internal/clouds/azure/azuretest"
 	"github.com/xraph/loomplane/internal/clouds/gcp"
 	"github.com/xraph/loomplane/internal/clouds/oauth"
 )
@@ -20,9 +21,12 @@ var googleSecrets = []string{"ya29.", "1//", "g-secret"}
 
 // googleAPI is a fake Google. Its token endpoint trades code-ada, sent
 // with a PKCE verifier, for refresh token 1//rt signed in as
-// ada@example.com, renews 1//rt as ya29.fresh and refuses any other
-// refresh token. Resource Manager grants the bearer of ya29.fresh every
-// permission but cloudsql.instances.delete, on any project.
+// ada@example.com, renews 1//rt as ya29.fresh, 1//busy as ya29.busy and
+// 1//stale as ya29.stale, refuses the app for 1//app, is down for
+// 1//outage and refuses any other refresh token. Resource Manager grants
+// the bearer of ya29.fresh every permission a person needs but
+// cloudsql.instances.delete, on any project, is down for ya29.busy and
+// refuses any other bearer.
 func googleAPI(t *testing.T) *gcp.Client {
 	t.Helper()
 	enc := base64.RawURLEncoding.EncodeToString
@@ -46,16 +50,27 @@ func googleAPI(t *testing.T) *gcp.Client {
 				})
 			case f.Get("grant_type") == "refresh_token" && f.Get("refresh_token") == "1//rt":
 				_, _ = w.Write([]byte(`{"access_token":"ya29.fresh","expires_in":3599,"token_type":"Bearer"}`))
+			case f.Get("grant_type") == "refresh_token" && (f.Get("refresh_token") == "1//busy" || f.Get("refresh_token") == "1//stale"):
+				_, _ = w.Write([]byte(`{"access_token":"ya29.` + strings.TrimPrefix(f.Get("refresh_token"), "1//") + `","expires_in":3599,"token_type":"Bearer"}`))
+			case f.Get("refresh_token") == "1//app":
+				w.WriteHeader(http.StatusUnauthorized)
+				_, _ = w.Write([]byte(`{"error":"invalid_client","error_description":"The OAuth client was not found."}`))
+			case f.Get("refresh_token") == "1//outage":
+				w.WriteHeader(http.StatusServiceUnavailable)
+				_, _ = w.Write([]byte(`{"error":"internal_failure"}`))
 			default:
 				refuse()
 			}
+		case strings.HasSuffix(r.URL.Path, ":testIamPermissions") && r.Header.Get("Authorization") == "Bearer ya29.busy":
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"error":{"message":"The service is currently unavailable."}}`))
 		case strings.HasSuffix(r.URL.Path, ":testIamPermissions"):
 			if r.Header.Get("Authorization") != "Bearer ya29.fresh" {
 				w.WriteHeader(http.StatusUnauthorized)
 				_, _ = w.Write([]byte(`{"error":{"message":"Request had invalid authentication credentials."}}`))
 				return
 			}
-			held := slices.DeleteFunc(slices.Clone(gcp.Permissions), func(p string) bool { return p == "cloudsql.instances.delete" })
+			held := slices.DeleteFunc(slices.Clone(gcp.UserPermissions), func(p string) bool { return p == "cloudsql.instances.delete" })
 			_ = json.NewEncoder(w).Encode(map[string]any{"permissions": held})
 		default:
 			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
@@ -218,6 +233,100 @@ func TestRefreshDueMarksARevokedGoogleSignIn(t *testing.T) {
 	// The next run passes it over.
 	if report, err = r.s.RefreshDue(t.Context()); err != nil || report != (RefreshReport{}) || len(r.lapsed) != 1 {
 		t.Fatalf("again: %+v %v, lapsed %d", report, err, len(r.lapsed))
+	}
+}
+
+// Google being down, at its token endpoint or its APIs, is no reason to
+// ask anyone to sign in again. Google refusing the token mid-session is.
+func TestRecheckKeepsASignInThroughAGoogleOutage(t *testing.T) {
+	r := newRefreshRig(t)
+	googleSignIn(t, r.s)
+	for _, rt := range []string{"1//outage", "1//busy"} {
+		googleSignedIn(t, r, "conn_gcp", rt)
+		_, err := r.s.Recheck(t.Context(), starter, "conn_gcp")
+		if !errors.Is(err, ErrUnavailable) || errors.Is(err, ErrInvalid) {
+			t.Fatalf("%s: %v", rt, err)
+		}
+		noGoogleSecrets(t, "the error", err.Error())
+		if row := r.store.rows["conn_gcp"]; row.Status != StatusReady || row.Message != "" || row.CheckedAt != nil {
+			t.Fatalf("%s changed the row: %+v", rt, row)
+		}
+	}
+	if len(r.lapsed) != 0 {
+		t.Fatalf("an outage lapsed %v", r.lapsed)
+	}
+
+	googleSignedIn(t, r, "conn_gcp", "1//stale")
+	c, err := r.s.Recheck(t.Context(), starter, "conn_gcp")
+	if err != nil || c.Status != StatusSignInNeeded || len(r.lapsed) != 1 {
+		t.Fatalf("refused mid-session: %+v %v, lapsed %d", c, err, len(r.lapsed))
+	}
+}
+
+// A session whose renewal Google refuses for the app itself records the
+// problem on the app, as a renewal does, and says to fix the app rather
+// than sign in again with it. People are told once.
+func TestRecheckRecordsARefusedAppFromASession(t *testing.T) {
+	r := newRefreshRig(t)
+	googleSignIn(t, r.s)
+	googleSignedIn(t, r, "conn_gcp", "1//app")
+	const why = "Loomplane's Google Cloud sign-in app was refused; check its client ID and secret on Cloud sign-in"
+	for range 2 {
+		c, err := r.s.Recheck(t.Context(), starter, "conn_gcp")
+		if err != nil || c.Status != StatusSignInNeeded || c.Message != why || c.Generation != 2 {
+			t.Fatalf("recheck %+v: %v", c, err)
+		}
+	}
+	if r.apps.problems["org/"+GCP] != why || len(r.lapsed) != 1 {
+		t.Fatalf("problems %v, lapsed %d", r.apps.problems, len(r.lapsed))
+	}
+	noGoogleSecrets(t, "the row", r.store.rows["conn_gcp"])
+
+	// Azure's sessions are told apart the same way.
+	a := newRefreshRig(t)
+	azureSignIn(t, a.s)
+	a.s.ConfigApps[Azure] = oauth.App{ClientID: azureApp.ClientID, ClientSecret: "rotated-in-azure"}
+	a.store.rows["conn_az"] = Connection{ID: "conn_az", OrgID: "org", Cloud: Azure, Name: "Shop", Method: MethodOAuth, Account: "Acme production",
+		Details: map[string]string{"tenant_id": azuretest.Tenant, "subscription_id": azuretest.Subscription, "resource_group": "loomplane", "signed_in_as": "ada@contoso.com"},
+		Status:  StatusReady, Generation: 2}
+	a.keep(t, "conn_az", oauth.Grant{AccessToken: "fake-token", RefreshToken: "rt-ada-1", Expiry: a.clock.Add(time.Hour), Account: map[string]string{"email": "ada@contoso.com"}})
+	c, err := a.s.Recheck(t.Context(), starter, "conn_az")
+	const azureWhy = "Loomplane's Microsoft Azure sign-in app was refused; check its client ID and secret on Cloud sign-in"
+	if err != nil || c.Status != StatusSignInNeeded || c.Message != azureWhy || a.apps.problems["org/"+Azure] != azureWhy || len(a.lapsed) != 1 {
+		t.Fatalf("azure recheck %+v: %v, problems %v", c, err, a.apps.problems)
+	}
+	noAzureSecrets(t, "the row", a.store.rows["conn_az"])
+}
+
+// What people are told names the cloud as they know it, not by its ID.
+func TestLapseMessagesNameTheCloud(t *testing.T) {
+	r := newRefreshRig(t)
+	googleSignIn(t, r.s)
+	googleSignedIn(t, r, "conn_gcp", "1//revoked")
+	c, err := r.s.Recheck(t.Context(), starter, "conn_gcp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	r.signedIn(t, "conn_do", "at-1", r.clock.Add(time.Hour))
+	r.renewer.errs["rt-at-1"] = oauth.ErrRefused
+	if _, _, err = r.s.Credential(t.Context(), "org", "conn_do"); !errors.Is(err, ErrNotReady) {
+		t.Fatalf("credential: %v", err)
+	}
+	r.signedIn(t, "conn_quiet", "at-quiet", r.clock.Add(30*24*time.Hour))
+	r.renewer.probeErrs = map[string]error{"at-quiet": oauth.ErrRefused}
+	if _, err = r.s.RefreshDue(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range []struct{ got, want string }{
+		{c.Message, "Google Cloud refused the sign-in. Sign in again."},
+		{r.store.rows["conn_do"].Message, "DigitalOcean no longer accepts this sign-in. Sign in again."},
+		{r.store.rows["conn_quiet"].Message, "DigitalOcean no longer accepts this sign-in. Sign in again."},
+		{noAppWhy(Azure), "Microsoft Azure has no sign-in app set up, so Loomplane can't renew this sign-in. Set up the app, then sign in again."},
+		{r.s.appRejected(t.Context(), "org", Vercel), "Loomplane's Vercel sign-in app was refused; check its client ID and secret on Cloud sign-in"},
+	} {
+		if m.got != m.want {
+			t.Errorf("got %q, want %q", m.got, m.want)
+		}
 	}
 }
 

@@ -259,3 +259,28 @@ func TestSetSignInAppNeedsASlugForVercel(t *testing.T) {
 		t.Fatalf("app %+v", app)
 	}
 }
+
+// A removed app's problem goes with it, so a new app doesn't start out
+// showing the old one's.
+func TestDeleteSignInAppClearsItsProblem(t *testing.T) {
+	s, store, _, _ := signInService(nil, security.Permission{})
+	if _, err := s.SetSignInApp(t.Context(), viewer, GCP, AppInput{ClientID: "org-id", ClientSecret: "old"}); err != nil {
+		t.Fatal(err)
+	}
+	s.appRejected(t.Context(), "org", GCP)
+	if store.problems["org/"+GCP] == "" {
+		t.Fatal("no problem was recorded")
+	}
+	if err := s.DeleteSignInApp(t.Context(), viewer, GCP); err != nil {
+		t.Fatal(err)
+	}
+	apps, err := s.SignInApps(t.Context(), viewer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range apps {
+		if a.Problem != "" {
+			t.Fatalf("the deleted app's problem stayed: %+v", a)
+		}
+	}
+}

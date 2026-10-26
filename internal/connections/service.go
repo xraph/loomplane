@@ -247,7 +247,8 @@ func (s *Service) Get(ctx context.Context, p security.Principal, id string) (*Co
 
 // Recheck asks the cloud again, such as after granting the permissions an
 // incomplete connection lacked. A credential the cloud now refuses marks
-// the connection failed, or sign_in_needed if it was a sign-in; a cloud it
+// the connection failed. A sign-in the cloud no longer honors, or whose
+// sign-in app it refuses, marks it sign_in_needed instead. A cloud it
 // can't reach changes nothing.
 func (s *Service) Recheck(ctx context.Context, p security.Principal, id string) (*Connection, error) {
 	if err := s.authz.Require(ctx, p, security.CloudAccountManage, ""); err != nil {
@@ -294,18 +295,29 @@ func (s *Service) Recheck(ctx context.Context, p security.Principal, id string) 
 		// A failed legacy upgrade preserves the old row as well as its token.
 		return nil, err
 	}
+	var why string
 	switch {
-	case errors.Is(err, ErrInvalid) && c.Method == MethodOAuth:
+	case c.Method != MethodOAuth || err == nil:
+	case errors.Is(err, oauth.ErrAppRejected):
+		// Signing in again with the same app won't help, so the app
+		// shows the problem too.
+		why = s.appRejected(ctx, c.OrgID, c.Cloud)
+	case refusedSignIn(err):
 		// Revoking Loomplane in the cloud kills the access token at once,
-		// so a refused grant asks for a new sign-in. The account is the
-		// same, so the generation stays.
-		current, lapsed, markErr := s.signInRefused(ctx, c, fmt.Sprintf("%s refused the sign-in. Sign in again.", c.Cloud), &now)
+		// so a refused grant asks for a new sign-in.
+		why = fmt.Sprintf("%s refused the sign-in. Sign in again.", cloudTitle(c.Cloud))
+	}
+	if why != "" {
+		// The account is the same, so the generation stays.
+		current, lapsed, markErr := s.signInRefused(ctx, c, why, &now)
 		if markErr != nil {
 			return nil, markErr
 		}
 		s.tellLapsed(ctx, lapsed)
 		s.record(ctx, "cloud_connection.check", p, current)
 		return current, nil
+	}
+	switch {
 	case errors.Is(err, ErrInvalid):
 		c.Status, c.Message, c.CheckedAt, c.UpdatedAt = StatusFailed, strings.TrimPrefix(err.Error(), ErrInvalid.Error()+": "), &now, now
 	case err != nil:

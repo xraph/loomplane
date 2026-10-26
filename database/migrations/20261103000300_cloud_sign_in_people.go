@@ -10,8 +10,10 @@ import (
 // Loomplane user behind an OAuth connection, so the connection can be
 // flagged when they leave. A Vercel app has a slug; a pending sign-in
 // carries the settings picked before it started and its PKCE verifier; and
-// a problem says why an organization's app stopped working. Nothing
-// secret is stored here.
+// a problem says why an organization's app stopped working. The PKCE
+// verifier is the one secret here: it's kept only until the sign-in
+// finishes or its ten minutes run out, and the background job sweeps
+// away any left behind. Client secrets and grants stay in Vault.
 func init() {
 	App.Add(
 		func(ctx context.Context, db *migrate.DB) error {

@@ -253,7 +253,7 @@ func TestCloudSignIn_googleEndToEnd(t *testing.T) {
 				_, _ = w.Write([]byte(`{"error":{"message":"Request had invalid authentication credentials."}}`))
 				return
 			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"permissions": gcp.Permissions})
+			_ = json.NewEncoder(w).Encode(map[string]any{"permissions": gcp.UserPermissions})
 		default:
 			t.Errorf("asked Google %s %s", r.Method, r.URL)
 			w.WriteHeader(http.StatusNotFound)

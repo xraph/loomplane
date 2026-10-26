@@ -20,6 +20,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/xraph/loomplane/internal/clouds/oauth"
 )
 
 // Azure's own hosts.
@@ -243,11 +245,16 @@ func (s *Session) bearer(ctx context.Context) (string, error) {
 	switch {
 	case s.refresh != "" && res.StatusCode >= 300:
 		// Only the error code is kept: the description of a refused
-		// refresh token is long and says nothing a person can act on.
-		if res.StatusCode == http.StatusBadRequest || res.StatusCode == http.StatusUnauthorized {
-			return "", fmt.Errorf("%w: azure refused the sign-in (%s); sign in again", ErrRejected, errorCode(out.Error))
+		// refresh token is long and says nothing a person can act on. A
+		// refused app is told apart, as a renewal's is, since signing in
+		// again with it won't help.
+		if res.StatusCode != http.StatusBadRequest && res.StatusCode != http.StatusUnauthorized {
+			return "", fmt.Errorf("azure sign-in answered %d: %s", res.StatusCode, errorCode(out.Error))
 		}
-		return "", fmt.Errorf("azure sign-in answered %d: %s", res.StatusCode, errorCode(out.Error))
+		if out.Error == "invalid_client" || out.Error == "unauthorized_client" {
+			return "", fmt.Errorf("%w: %w (%s)", ErrRejected, oauth.ErrAppRejected, errorCode(out.Error))
+		}
+		return "", fmt.Errorf("%w: %w (%s); sign in again", ErrRejected, oauth.ErrRefused, errorCode(out.Error))
 	case res.StatusCode == http.StatusBadRequest || res.StatusCode == http.StatusUnauthorized:
 		// Microsoft Entra ID answers 400 for a wrong secret, an unknown
 		// application or an unknown tenant, with an AADSTS code that

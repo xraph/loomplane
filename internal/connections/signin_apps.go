@@ -194,7 +194,8 @@ func (s *Service) SetSignInApp(ctx context.Context, p security.Principal, cloud 
 	return &SignInApp{Cloud: cloud, Source: AppFromOrganization, ClientID: clientID, Slug: slug, UpdatedBy: p.UserID, UpdatedAt: &now}, nil
 }
 
-// DeleteSignInApp removes the organization's own app for a cloud.
+// DeleteSignInApp removes the organization's own app for a cloud, and any
+// problem the cloud had with it.
 func (s *Service) DeleteSignInApp(ctx context.Context, p security.Principal, cloud string) error {
 	if err := s.authz.Require(ctx, p, security.CloudAccountManage, ""); err != nil {
 		return err
@@ -214,6 +215,11 @@ func (s *Service) DeleteSignInApp(ctx context.Context, p security.Principal, clo
 	}
 	if err := s.AppSecrets.Delete(ctx, p.OrgID, cloud); err != nil {
 		s.warn("remove the secret of a deleted sign-in app", err)
+	}
+	// The app is gone either way, so a problem left behind only shows a
+	// stale message until the next app is saved.
+	if err := s.Apps.ClearAppProblem(ctx, p.OrgID, cloud); err != nil {
+		s.warn("clear the problem of a deleted sign-in app", err)
 	}
 	s.recordApp(ctx, "cloud_signin_app.delete", p, cloud, stored.ClientID)
 	return nil
@@ -246,7 +252,7 @@ func (s *Service) app(ctx context.Context, orgID, cloud string) (oauth.App, erro
 // for the settings page to show, and returns the message saying so. The
 // record is kept even if the caller gives up.
 func (s *Service) appRejected(ctx context.Context, orgID, cloud string) string {
-	why := fmt.Sprintf("%s refused the sign-in app; check its client ID and secret", cloud)
+	why := fmt.Sprintf("Loomplane's %s sign-in app was refused; check its client ID and secret on Cloud sign-in", cloudTitle(cloud))
 	if err := s.Apps.SetAppProblem(context.WithoutCancel(ctx), orgID, cloud, why, s.now().UTC()); err != nil {
 		s.warn("record the problem with a sign-in app", err)
 	}

@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"regexp"
 	"strings"
 
@@ -380,17 +381,42 @@ func (a AzureChecker) Check(ctx context.Context, credential []byte, settings map
 func azureGUID(s string) bool { return len(s) == 36 && strings.Count(s, "-") == 4 }
 
 // rejected reports whether a check failed because the cloud refused the
-// credential, as opposed to the cloud being unreachable.
+// credential, as opposed to the cloud being unreachable. A Google, Vercel
+// or DigitalOcean answer counts only if it says no to the request; one
+// that says the cloud couldn't answer it, such as a 503, doesn't.
 func rejected(err error) bool {
 	var ge *gcp.APIError
 	var ve *vercel.APIError
 	var re *render.APIError
 	var de *digitalocean.APIError
 	return errors.Is(err, render.ErrRejected) || errors.As(err, &re) ||
-		errors.Is(err, digitalocean.ErrRejected) || errors.As(err, &de) || errors.Is(err, gcp.ErrRejected) || errors.Is(err, gcp.ErrInvalidKey) || errors.Is(err, vercel.ErrRejected) ||
+		errors.Is(err, digitalocean.ErrRejected) || (errors.As(err, &de) && refusedStatus(de.Status)) ||
+		errors.Is(err, gcp.ErrRejected) || errors.Is(err, gcp.ErrInvalidKey) || errors.Is(err, vercel.ErrRejected) ||
 		errors.Is(err, server.ErrRejected) || errors.Is(err, kubernetes.ErrRejected) || errors.Is(err, registry.ErrRejected) ||
 		errors.Is(err, aws.ErrRejected) || errors.Is(err, azure.ErrRejected) || errors.Is(err, sdk.ErrRejected) ||
-		errors.As(err, &ge) || errors.As(err, &ve)
+		(errors.As(err, &ge) && refusedStatus(ge.Status)) || (errors.As(err, &ve) && refusedStatus(ve.Status))
+}
+
+// refusedStatus reports whether an HTTP status says no to the request
+// itself: a 4xx other than a timeout or a rate limit, which a retry may
+// get past.
+func refusedStatus(status int) bool {
+	return status >= 400 && status < 500 && status != http.StatusRequestTimeout && status != http.StatusTooManyRequests
+}
+
+// refusedSignIn reports whether a check of a signed-in connection failed
+// because the cloud no longer honors the sign-in, as opposed to refusing
+// something else, such as a permission, or being unreachable: a renewal
+// refused as the background job's are, or the cloud answering 401. Only
+// Vercel says so with a 403, for a disabled integration.
+func refusedSignIn(err error) bool {
+	var ge *gcp.APIError
+	var ae *azure.APIError
+	var de *digitalocean.APIError
+	return errors.Is(err, oauth.ErrRefused) || vercel.Revoked(err) ||
+		(errors.As(err, &ge) && ge.Status == http.StatusUnauthorized) ||
+		(errors.As(err, &ae) && ae.Status == http.StatusUnauthorized) ||
+		(errors.As(err, &de) && de.Status == http.StatusUnauthorized)
 }
 
 // AWSChecker checks AWS access keys in a required region. Optional private

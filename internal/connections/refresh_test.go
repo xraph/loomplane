@@ -488,6 +488,43 @@ func TestRecheckOfARevokedSignInNeedsSignIn(t *testing.T) {
 	}
 }
 
+// A cloud that is down changes nothing about a sign-in, and a grant that
+// can't be read is a failed connection, not one to sign in to again.
+func TestRecheckKeepsASignInThroughAnOutage(t *testing.T) {
+	r := newRefreshRig(t)
+	r.signedIn(t, "conn_do", "at-outage", r.clock.Add(30*24*time.Hour))
+	if _, err := r.s.Recheck(t.Context(), starter, "conn_do"); !errors.Is(err, ErrUnavailable) || errors.Is(err, ErrInvalid) {
+		t.Fatalf("digitalocean down: %v", err)
+	}
+	if row := r.store.rows["conn_do"]; row.Status != StatusReady || row.Message != "" {
+		t.Fatalf("an outage changed the row: %+v", row)
+	}
+
+	r.signedIn(t, "conn_do", "not a token", r.clock.Add(30*24*time.Hour))
+	c, err := r.s.Recheck(t.Context(), starter, "conn_do")
+	if err != nil || c.Status != StatusFailed || r.store.rows["conn_do"].Status != StatusFailed {
+		t.Fatalf("unreadable grant: %+v %v", c, err)
+	}
+	if len(r.lapsed) != 0 {
+		t.Fatalf("lapsed %v", r.lapsed)
+	}
+
+	v := newVercelSignInRig(t)
+	v.store.rows["conn_v"] = Connection{ID: "conn_v", OrgID: "org", Cloud: Vercel, Name: "Acme", Method: MethodOAuth,
+		Account: "slug-team_one", Details: map[string]string{"team_id": "team_one"}, Status: StatusReady, Generation: 1}
+	raw, err := json.Marshal(oauth.Grant{AccessToken: "vcp-down", Account: map[string]string{"team_id": "team_one"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	v.secrets.kept["org/conn_v"] = raw
+	if _, err = v.s.Recheck(t.Context(), starter, "conn_v"); !errors.Is(err, ErrUnavailable) || errors.Is(err, ErrInvalid) {
+		t.Fatalf("vercel down: %v", err)
+	}
+	if row := v.store.rows["conn_v"]; row.Status != StatusReady || row.Message != "" {
+		t.Fatalf("an outage changed the row: %+v", row)
+	}
+}
+
 // DigitalOcean spends the old refresh token as soon as it answers, so a
 // caller giving up mid-renewal must not lose the new one.
 func TestARenewalTheCallerAbandonsIsStillKept(t *testing.T) {

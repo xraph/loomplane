@@ -150,13 +150,15 @@ type userKeyFile struct {
 	ClientSecret string `json:"client_secret"`
 	RefreshToken string `json:"refresh_token"`
 	ProjectID    string `json:"project_id"`
+	QuotaProject string `json:"quota_project_id"`
 	ClientEmail  string `json:"client_email"`
 	TokenURI     string `json:"token_uri"`
 }
 
 // Handout is the authorized_user key a deployment's session renews itself
 // from: the app, the grant's refresh token, the connection's project and
-// the person's email. Its errors never carry a secret.
+// the person's email. The project is also the one their API calls bill
+// to, not the sign-in app's. Its errors never carry a secret.
 func (c *Client) Handout(app oauth.App, g oauth.Grant, settings map[string]string) ([]byte, error) {
 	project, email := settings["project_id"], g.Account["email"]
 	switch {
@@ -169,7 +171,7 @@ func (c *Client) Handout(app oauth.App, g oauth.Grant, settings map[string]strin
 		return nil, err
 	}
 	key := userKeyFile{Type: authorizedUser, ClientID: app.ClientID, ClientSecret: app.ClientSecret, RefreshToken: g.RefreshToken,
-		ProjectID: project, ClientEmail: email, TokenURI: c.tokenURL()}
+		ProjectID: project, QuotaProject: project, ClientEmail: email, TokenURI: c.tokenURL()}
 	raw, err := json.Marshal(key) // #nosec G117 -- the handout is a credential for a session, never a response.
 	if err != nil {
 		return nil, errors.New("encode the Google sign-in key")

@@ -223,7 +223,7 @@ func (s *Service) renew(ctx context.Context, c *Connection, held oauth.Grant, ah
 			return err
 		}
 		if errors.Is(err, oauth.ErrRefused) {
-			why = fmt.Sprintf("%s no longer accepts this sign-in. Sign in again.", c.Cloud)
+			why = noLongerAccepted(c.Cloud)
 			lapsed, err = s.needSignIn(ctx, current, why)
 			return err
 		}
@@ -231,7 +231,7 @@ func (s *Service) renew(ctx context.Context, c *Connection, held oauth.Grant, ah
 			return fmt.Errorf("%w: renew the sign-in: %w", ErrUnavailable, err)
 		}
 		if fresh.AccessToken == "" {
-			return fmt.Errorf("%w: %s renewed the sign-in without an access token", ErrUnavailable, c.Cloud)
+			return fmt.Errorf("%w: %s renewed the sign-in without an access token", ErrUnavailable, cloudTitle(c.Cloud))
 		}
 		// A cloud that doesn't rotate refresh tokens leaves them out.
 		if fresh.RefreshToken == "" {
@@ -270,7 +270,13 @@ func (s *Service) renew(ctx context.Context, c *Connection, held oauth.Grant, ah
 // noAppWhy is why a sign-in for cloud needs signing in again once the
 // cloud's sign-in app is gone.
 func noAppWhy(cloud string) string {
-	return fmt.Sprintf("%s has no sign-in app set up, so Loomplane can't renew this sign-in. Set up the app, then sign in again.", cloud)
+	return fmt.Sprintf("%s has no sign-in app set up, so Loomplane can't renew this sign-in. Set up the app, then sign in again.", cloudTitle(cloud))
+}
+
+// noLongerAccepted is why a sign-in for cloud needs signing in again once
+// the cloud stops honoring it.
+func noLongerAccepted(cloud string) string {
+	return fmt.Sprintf("%s no longer accepts this sign-in. Sign in again.", cloudTitle(cloud))
 }
 
 // handoutWithoutApp passes err on, unless it is ErrNoApp from building a
@@ -418,7 +424,7 @@ func (s *Service) probeQuiet(ctx context.Context, c *Connection, held oauth.Gran
 		case errors.Is(err, oauth.ErrAppRejected):
 			why = s.appRejected(ctx, c.OrgID, c.Cloud)
 		case errors.Is(err, oauth.ErrRefused):
-			why = fmt.Sprintf("%s no longer accepts this sign-in. Sign in again.", c.Cloud)
+			why = noLongerAccepted(c.Cloud)
 		case err != nil:
 			fail(err)
 			return

@@ -479,3 +479,32 @@ func mustKey(t *testing.T, refresh string) []byte {
 	}
 	return raw
 }
+
+// A session's renewal tells a refused sign-in app from a refused sign-in,
+// so the app can be fixed instead of signing in again with it, and Azure
+// failing to answer from either.
+func TestBearerTellsARefusedAppFromARefusedSignIn(t *testing.T) {
+	for name, tc := range map[string]struct {
+		status       int
+		body         string
+		refused, app bool
+	}{
+		"revoked":      {400, `{"error":"invalid_grant","error_description":"AADSTS70008: expired"}`, true, false},
+		"wrong secret": {401, `{"error":"invalid_client","error_description":"AADSTS7000215: Invalid client secret provided."}`, true, true},
+		"unknown app":  {400, `{"error":"unauthorized_client","error_description":"AADSTS700016: Application not found."}`, true, true},
+		"down":         {503, `{"error":"temporarily_unavailable"}`, false, false},
+	} {
+		c, _ := newTokenServer(t, answering(tc.status, tc.body))
+		cred, err := ParseCredential(mustKey(t, "rt-1"), placement())
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = c.Session(context.Background(), cred)
+		if err == nil || errors.Is(err, ErrRejected) != tc.refused || errors.Is(err, oauth.ErrAppRejected) != tc.app ||
+			errors.Is(err, oauth.ErrRefused) != (tc.refused && !tc.app) {
+			t.Errorf("%s: %v", name, err)
+			continue
+		}
+		noSecrets(t, name, err.Error())
+	}
+}

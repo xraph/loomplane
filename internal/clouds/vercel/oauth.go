@@ -127,12 +127,16 @@ func (c *Client) Refresh(_ context.Context, _ oauth.App, g oauth.Grant) (oauth.G
 // uninstalled or disabled, is oauth.ErrRefused.
 func (c *Client) Probe(ctx context.Context, _ oauth.App, g oauth.Grant) error {
 	err := c.json(ctx, Token{Value: g.AccessToken, TeamID: g.Account["team_id"]}, http.MethodGet, "/v2/user", nil, nil, nil)
-	if err == nil {
-		return nil
-	}
-	var ae *APIError
-	if errors.As(err, &ae) && (ae.Status == http.StatusUnauthorized || ae.Code == "integration_configuration_disabled") {
+	if Revoked(err) {
 		return fmt.Errorf("%w: %w", oauth.ErrRefused, err)
 	}
 	return err
+}
+
+// Revoked reports whether err is Vercel no longer honoring a token at
+// all: revoked, or its integration uninstalled or disabled. A token
+// merely kept out of one team or project isn't.
+func Revoked(err error) bool {
+	var ae *APIError
+	return errors.As(err, &ae) && (ae.Status == http.StatusUnauthorized || ae.Code == "integration_configuration_disabled")
 }

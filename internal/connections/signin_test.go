@@ -144,7 +144,7 @@ const callback = "https://loomplane.example/oauth/callback"
 
 // newSignInRig is a Service with a DigitalOcean sign-in. The fake API
 // answers access tokens at-team-1 and dop_v1_team for team-1, and
-// at-team-2 for team-2.
+// at-team-2 for team-2, is down for at-outage and refuses any other.
 func newSignInRig(t *testing.T) *signInRig {
 	t.Helper()
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -153,6 +153,9 @@ func newSignInRig(t *testing.T) *signInRig {
 			_, _ = w.Write([]byte(`{"account":{"uuid":"acct-1","email":"ada@example.com","status":"active","team":{"uuid":"team-1","name":"Acme"}}}`))
 		case "Bearer at-team-2":
 			_, _ = w.Write([]byte(`{"account":{"uuid":"acct-1","email":"ada@example.com","status":"active","team":{"uuid":"team-2","name":"Other"}}}`))
+		case "Bearer at-outage":
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"id":"service_unavailable","message":"try again later"}`))
 		default:
 			w.WriteHeader(http.StatusUnauthorized)
 			_, _ = w.Write([]byte(`{"id":"Unauthorized","message":"Unable to authenticate you"}`))
@@ -579,7 +582,7 @@ func TestAppRejectedIsRecordedOnTheApp(t *testing.T) {
 	}
 	r.signedIn(t, "conn_do", "at-1", r.clock.Add(time.Hour))
 	r.renewer.errs["rt-at-1"] = fmt.Errorf("%w: digitalocean answered 401: invalid_client", oauth.ErrAppRejected)
-	const why = "digitalocean refused the sign-in app; check its client ID and secret"
+	const why = "Loomplane's DigitalOcean sign-in app was refused; check its client ID and secret on Cloud sign-in"
 
 	if _, _, err := r.s.Credential(t.Context(), "org", "conn_do"); !errors.Is(err, ErrNotReady) || !strings.Contains(err.Error(), why) {
 		t.Fatalf("credential: %v", err)

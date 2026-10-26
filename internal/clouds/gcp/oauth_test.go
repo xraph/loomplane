@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -264,7 +265,7 @@ func TestGoogleHandoutIsAnAuthorizedUserKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[string]string{"type": "authorized_user", "client_id": testApp.ClientID, "client_secret": "csecret", "refresh_token": "1//rt",
-		"project_id": "shop-prod", "client_email": "ada@example.com", "token_uri": "http://127.0.0.1:1/token"}
+		"project_id": "shop-prod", "quota_project_id": "shop-prod", "client_email": "ada@example.com", "token_uri": "http://127.0.0.1:1/token"}
 	if len(got) != len(want) {
 		t.Errorf("handout has %d fields: %v", len(got), keys(got))
 	}
@@ -300,7 +301,8 @@ func keys(m map[string]string) []string {
 
 // userAPI is a fake Google: its token endpoint renews refresh token
 // 1//rt as ya29.fresh and refuses any other, and its Resource Manager
-// grants the bearer of ya29.fresh every permission on shop-prod.
+// grants the bearer of ya29.fresh every permission a person needs on
+// shop-prod.
 func userAPI(t *testing.T, refreshes *[]url.Values) *Client {
 	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -323,7 +325,7 @@ func userAPI(t *testing.T, refreshes *[]url.Values) *Client {
 				_, _ = w.Write([]byte(`{"error":{"message":"bad bearer"}}`))
 				return
 			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"permissions": Permissions})
+			_ = json.NewEncoder(w).Encode(map[string]any{"permissions": UserPermissions})
 		default:
 			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
 			w.WriteHeader(http.StatusNotFound)
@@ -381,6 +383,172 @@ func TestUserSessionWithARevokedSignInIsRejected(t *testing.T) {
 	for _, secret := range []string{"1//revoked", "csecret"} {
 		if strings.Contains(err.Error(), secret) {
 			t.Fatalf("a secret leaked: %v", err)
+		}
+	}
+}
+
+// billingAPI is a fake Google that hands any refresh token or service
+// account assertion ya29.fresh, and records, per testIamPermissions call,
+// the project it billed and the permissions it asked about.
+func billingAPI(t *testing.T, billed *[]string, asked *[][]string) *Client {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case r.URL.Path == "/token":
+			if r.Header.Get("X-Goog-User-Project") != "" {
+				t.Error("the token request named a project to bill")
+			}
+			_, _ = w.Write([]byte(`{"access_token":"ya29.fresh","expires_in":3599,"token_type":"Bearer"}`))
+		case strings.HasSuffix(r.URL.Path, ":testIamPermissions"):
+			var in struct {
+				Permissions []string `json:"permissions"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+				t.Error(err)
+			}
+			*billed = append(*billed, r.Header.Get("X-Goog-User-Project"))
+			*asked = append(*asked, in.Permissions)
+			_ = json.NewEncoder(w).Encode(map[string]any{"permissions": in.Permissions})
+		default:
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return New(srv.URL)
+}
+
+// A person's calls bill to the project they deploy to, not the sign-in
+// app's, so they need leave to use its services. A service account's
+// calls already bill to its own project.
+func TestUserKeyBillsTheTargetProject(t *testing.T) {
+	var billed []string
+	var asked [][]string
+	c := billingAPI(t, &billed, &asked)
+	raw, err := c.Handout(testApp, oauth.Grant{AccessToken: "ya29.old", RefreshToken: "1//rt", Account: map[string]string{"email": "ada@example.com"}},
+		map[string]string{"project_id": "shop-prod"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	user, err := ParseKey(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sa := sqlConnectorTestKey(t)
+	var file map[string]string
+	if err = json.Unmarshal(sa.raw, &file); err != nil {
+		t.Fatal(err)
+	}
+	file["token_uri"] = c.tokenURL()
+	saRaw, err := json.Marshal(file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sa, err = ParseKey(saRaw); err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []*Key{user, sa} {
+		s, err := c.Session(context.Background(), key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if missing, err := s.Missing(context.Background()); err != nil || len(missing) != 0 {
+			t.Fatalf("missing %v: %v", missing, err)
+		}
+	}
+	if len(billed) != 2 || billed[0] != "shop-prod" || billed[1] != "" {
+		t.Fatalf("billed %q", billed)
+	}
+	if !slices.Contains(asked[0], "serviceusage.services.use") || slices.Contains(asked[1], "serviceusage.services.use") {
+		t.Fatalf("asked a person about %v and a service account about %v", asked[0], asked[1])
+	}
+}
+
+// A renewal goes through the client's own HTTP client, so it gives up
+// when that client does.
+func TestSessionRenewalUsesTheClientTimeout(t *testing.T) {
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/token" {
+			select {
+			case <-release:
+			case <-r.Context().Done():
+			}
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"access_token":"ya29.fresh","expires_in":3599,"token_type":"Bearer","permissions":[]}`))
+	}))
+	t.Cleanup(srv.Close)
+	t.Cleanup(func() { close(release) })
+	c := New(srv.URL)
+	c.base = &http.Client{Timeout: 50 * time.Millisecond}
+	raw, err := c.Handout(testApp, oauth.Grant{AccessToken: "ya29.old", RefreshToken: "1//rt", Account: map[string]string{"email": "ada@example.com"}},
+		map[string]string{"project_id": "shop-prod"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := ParseKey(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := c.Session(context.Background(), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() {
+		_, missingErr := s.Missing(context.Background())
+		done <- missingErr
+	}()
+	select {
+	case err = <-done:
+		if err == nil || errors.Is(err, ErrRejected) {
+			t.Fatalf("a renewal past the timeout: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the renewal ignored the client's timeout")
+	}
+}
+
+// Google failing to answer a renewal isn't Google refusing the sign-in.
+// A refused app is told apart from a refused sign-in.
+func TestUserSessionTellsRefusalsFromOutages(t *testing.T) {
+	for name, tc := range map[string]struct {
+		status       int
+		body         string
+		refused, app bool
+	}{
+		"revoked":     {http.StatusBadRequest, `{"error":"invalid_grant","error_description":"Token has been expired or revoked."}`, true, false},
+		"app refused": {http.StatusUnauthorized, `{"error":"invalid_client","error_description":"The OAuth client was not found."}`, true, true},
+		"down":        {http.StatusServiceUnavailable, `{"error":"internal_failure","error_description":"csecret 1//rt"}`, false, false},
+		"broken":      {http.StatusInternalServerError, `<html>csecret</html>`, false, false},
+	} {
+		var got url.Values
+		c := googleTokenServer(t, tc.status, tc.body, &got)
+		raw, err := c.Handout(testApp, oauth.Grant{AccessToken: "ya29.old", RefreshToken: "1//rt", Account: map[string]string{"email": "ada@example.com"}},
+			map[string]string{"project_id": "shop-prod"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		key, err := ParseKey(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, err := c.Session(context.Background(), key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = s.Missing(context.Background())
+		if err == nil || errors.Is(err, ErrRejected) != tc.refused || errors.Is(err, oauth.ErrAppRejected) != tc.app ||
+			errors.Is(err, oauth.ErrRefused) != (tc.refused && !tc.app) {
+			t.Errorf("%s: %v", name, err)
+			continue
+		}
+		for _, secret := range []string{"1//rt", "csecret"} {
+			if strings.Contains(err.Error(), secret) {
+				t.Errorf("%s: a secret leaked: %v", name, err)
+			}
 		}
 	}
 }

@@ -14,10 +14,15 @@ import (
 
 // newVercelSignInRig is a sign-in rig for Vercel. The fake API knows the
 // team token vcp-tok (team_one) and the sign-in grants' tokens vcp-team-1
-// (team_one) and vcp-team-2 (team_two).
+// (team_one) and vcp-team-2 (team_two), and is down for vcp-down.
 func newVercelSignInRig(t *testing.T) *signInRig {
 	t.Helper()
 	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "Bearer vcp-down" {
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"error":{"code":"internal_server_error","message":"try again"}}`))
+			return
+		}
 		team := map[string]string{"Bearer vcp-tok": "team_one", "Bearer vcp-team-1": "team_one", "Bearer vcp-team-2": "team_two"}[r.Header.Get("Authorization")]
 		if team == "" || r.URL.Path != "/v2/teams/"+team {
 			w.WriteHeader(http.StatusForbidden)
