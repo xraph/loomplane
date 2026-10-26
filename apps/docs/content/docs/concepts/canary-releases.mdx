@@ -51,7 +51,7 @@ For each service, Loomplane reads the new version's requests, 5xx responses and 
 - has a failure share more than `thresholds.error_rate_delta` above the current version's
 - is slower than `thresholds.p95_latency_ratio` times the current version's latency
 
-Latency is p95 on Cloud Run and ECS. Azure Container Apps only reports an average, so the dashboard marks those readings "avg".
+The error share and latency comparisons only count when the current version also served at least `min_requests` requests. Latency is p95 on Cloud Run and ECS. Azure Container Apps only reports an average, so the dashboard marks those readings "avg".
 
 ## Verdicts
 
@@ -69,21 +69,20 @@ You can retry the deployment. The dashboard and the API then show only the verdi
 
 ## When traffic may still be split
 
-Rollback calls the cloud's API, so it can fail too. If Loomplane can't move traffic back, the canary ends as `revert_failed`. If a failure hits while the new version is being promoted, it ends as `promote_failed`. In both cases the reason starts with "Traffic may still be split".
+Rollback calls the cloud's API, so it can fail too. Loomplane retries once a minute for up to an hour, so a stuck rollback can sit at "Rolling back" for a while. If it still can't move traffic back, the canary ends as `revert_failed`. If a failure hits while the new version is being promoted, it ends as `promote_failed`. In both cases the reason starts with "Traffic may still be split".
 
 You have to act here. Open the service in the cloud, check how it splits traffic between versions, and fix it before you retry. The deployment page shows this as a red "Needs you" notice, and `loomctl deployment` prints it as `NEEDS YOU:`.
 
 ## Where a canary can't run
 
-A service gets no canary when its target has no native weighting (see the table above). The plan still goes ahead, with a warning on the service, and the service deploys all at once.
+A service gets no canary when its target has no native weighting (see the table above). The plan still goes ahead and the service deploys all at once. The approval card lists a warning for each such service, and it doesn't say "Approving starts a canary" for them.
 
-Some refusals depend on your setup, and the plan reports them on the approval card:
+Two refusals block the plan instead, and the plan shows them as problems you have to fix before anyone can approve:
 
-- On ECS or Cloud Run, the connection's credential may lack the permissions to split traffic.
+- On ECS, Cloud Run or Azure Container Apps, the connection's credential may lack the permissions to split the service's traffic.
 - On Azure Container Apps, a release that changes app-wide ingress settings can't ramp, because those apply to every revision at once. Release that change with `direct` or `blue_green` first.
-- On Cloud Run, a traffic split left behind by an earlier canary has to be cleared first.
 
-A service refused a canary doesn't get the "Approving starts a canary" line.
+A third one only shows up when the canary starts. If an earlier canary left a traffic split on a Cloud Run service, the new canary refuses to start, and the deployment fails with a message that says so. Clear the split in the cloud, then retry.
 
 ## One canary per environment
 
