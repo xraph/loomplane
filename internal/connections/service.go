@@ -126,12 +126,28 @@ func (s *Service) check(ctx context.Context, cloud string, c Checker, credential
 	}
 }
 
+// pastedGrantAdvice is a GrantChecker that says, in its cloud's words,
+// what to do instead of pasting a sign-in's grant.
+type pastedGrantAdvice interface {
+	PastedGrant() string
+}
+
+// PastedGrant implements pastedGrantAdvice.
+func (GCPChecker) PastedGrant() string {
+	return "paste a service account key, or sign in to Google instead of pasting a signed-in key"
+}
+
+// PastedGrant implements pastedGrantAdvice.
+func (AzureChecker) PastedGrant() string {
+	return "paste a service principal's client secret, or sign in to Azure instead of pasting a signed-in key"
+}
+
 // refusePastedGrant keeps Method true to what Vault holds: a pasted
 // credential that is really a sign-in grant is refused.
 func refusePastedGrant(c Checker, cred []byte, method string) error {
 	if g, ok := c.(GrantChecker); ok && method == MethodToken && g.IsGrant(cred) {
-		if _, google := c.(GCPChecker); google {
-			return fmt.Errorf("%w: paste a service account key, or sign in to Google instead of pasting a signed-in key", ErrInvalid)
+		if a, ok := c.(pastedGrantAdvice); ok {
+			return fmt.Errorf("%w: %s", ErrInvalid, a.PastedGrant())
 		}
 		return fmt.Errorf("%w: paste the API token itself, not JSON", ErrInvalid)
 	}

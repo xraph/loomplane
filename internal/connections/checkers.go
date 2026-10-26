@@ -299,17 +299,34 @@ func (d DigitalOceanChecker) Check(ctx context.Context, credential []byte, setti
 	return c, nil
 }
 
-// AzureChecker checks Azure service principals. The credential is the
-// principal's client secret; the settings say whose it is and where it
-// deploys: tenant_id, client_id and subscription_id, and resource_group,
-// which defaults to loomplane.
+// AzureChecker checks Azure service principals, and the azure_user keys
+// an Azure sign-in hands out. The credential is the principal's client
+// secret, or the key; the settings say where it deploys: tenant_id and
+// subscription_id, and resource_group, which defaults to loomplane. A
+// principal's settings also say whose it is, as client_id.
 type AzureChecker struct{ Client *azure.Client }
 
-// Parse implements Checker.
+// IsGrant implements GrantChecker: an azure_user key only ever comes from
+// a sign-in.
+func (AzureChecker) IsGrant(credential []byte) bool {
+	var k struct {
+		Type string `json:"type"`
+	}
+	return json.Unmarshal(bytes.TrimSpace(credential), &k) == nil && k.Type == "azure_user"
+}
+
+// Parse implements Checker. A signed-in person's key names them as
+// signed_in_as; the sign-in app's client isn't shown.
 func (a AzureChecker) Parse(credential []byte, settings map[string]string) (Check, error) {
 	cred, err := azure.ParseCredential(credential, settings)
 	if err != nil {
 		return Check{}, fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
+	if cred.RefreshToken != "" {
+		return Check{Details: map[string]string{
+			"tenant_id": cred.TenantID, "subscription_id": cred.SubscriptionID,
+			"resource_group": cred.ResourceGroup, "signed_in_as": cred.Username,
+		}}, nil
 	}
 	return Check{Details: map[string]string{
 		"tenant_id": cred.TenantID, "client_id": cred.ClientID,
@@ -317,9 +334,9 @@ func (a AzureChecker) Parse(credential []byte, settings map[string]string) (Chec
 	}}, nil
 }
 
-// Check implements Checker: it signs in as the principal, reads its
-// subscription, and asks Azure which of the actions a deployment needs
-// its role assignments allow.
+// Check implements Checker: it signs in as the principal, or renews the
+// person's sign-in, reads the subscription, and asks Azure which of the
+// actions a deployment needs their role assignments allow.
 func (a AzureChecker) Check(ctx context.Context, credential []byte, settings map[string]string) (Check, error) {
 	c, err := a.Parse(credential, settings)
 	if err != nil {

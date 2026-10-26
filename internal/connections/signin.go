@@ -7,9 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"strings"
 	"time"
 
+	"github.com/xraph/loomplane/internal/clouds/azure"
 	"github.com/xraph/loomplane/internal/clouds/gcp"
 	"github.com/xraph/loomplane/internal/clouds/oauth"
 	"github.com/xraph/loomplane/internal/security"
@@ -121,7 +123,6 @@ func signInSettings(cloud string, in map[string]string) (map[string]string, erro
 	case GCP:
 		keys = []string{"project_id"}
 	case Azure:
-		// Its validator, azure.CheckPlacement, comes with Azure's sign-in.
 		keys = []string{"tenant_id", "subscription_id", "resource_group"}
 	}
 	out := map[string]string{}
@@ -137,6 +138,15 @@ func signInSettings(cloud string, in map[string]string) (map[string]string, erro
 		if err := gcp.CheckProjectID(out["project_id"]); err != nil {
 			return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
 		}
+	}
+	if cloud == Azure {
+		// Normalized as a principal's connection records them, so a
+		// sign-in lands on the same identity.
+		tenant, subscription, group, err := azure.CheckPlacement(out)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
+		}
+		out = map[string]string{"tenant_id": tenant, "subscription_id": subscription, "resource_group": group}
 	}
 	return out, nil
 }
@@ -197,7 +207,18 @@ func (s *Service) CompleteSignIn(ctx context.Context, p security.Principal, in C
 		return nil, err
 	}
 	if pending.ConnectionID != "" {
-		return s.replace(ctx, p, pending.ConnectionID, cred, checked, nil, MethodOAuth)
+		// The check takes the sign-in's placement over the connection's
+		// other settings, so a sign-in that reaches elsewhere is refused.
+		current, getErr := s.store.GetConnection(ctx, p.OrgID, pending.ConnectionID)
+		if getErr != nil {
+			return nil, getErr
+		}
+		settings := maps.Clone(current.Details)
+		if settings == nil {
+			settings = map[string]string{}
+		}
+		maps.Copy(settings, pending.Settings)
+		return s.replace(ctx, p, pending.ConnectionID, cred, checked, settings, MethodOAuth)
 	}
 	return s.create(ctx, p, pending.Cloud, pending.Name, cred, checked, pending.Settings, MethodOAuth)
 }
