@@ -325,15 +325,15 @@ func TestDiscoveryPgStore_pinnedAnalysesDontBlockTheBranch(t *testing.T) {
 	if err != nil || !got.Pinned {
 		t.Fatalf("stored %+v %v", got, err)
 	}
-	if a, err := analyses.ActiveAnalysis(ctx, "org", "src_1", now.Add(-time.Hour)); !errors.Is(err, discovery.ErrNotFound) {
-		t.Fatalf("a pinned analysis blocks the branch: %+v %v", a, err)
+	if a, activeErr := analyses.ActiveAnalysis(ctx, "org", "src_1", now.Add(-time.Hour)); !errors.Is(activeErr, discovery.ErrNotFound) {
+		t.Fatalf("a pinned analysis blocks the branch: %+v %v", a, activeErr)
 	}
 	branch := &discovery.Analysis{ID: "anl_branch", OrgID: "org", ProjectID: "proj", SourceID: "src_1", Source: "mono",
 		Status: discovery.StatusQueued, Repository: "acme/mono", CreatedBy: "usr", CreatedAt: now.Add(-time.Minute)}
 	if err = analyses.CreateAnalysis(ctx, branch); err != nil {
 		t.Fatal(err)
 	}
-	if a, err := analyses.ActiveAnalysis(ctx, "org", "src_1", now.Add(-time.Hour)); err != nil || a.ID != "anl_branch" || a.Pinned {
-		t.Fatalf("running branch analysis %+v %v", a, err)
+	if a, activeErr := analyses.ActiveAnalysis(ctx, "org", "src_1", now.Add(-time.Hour)); activeErr != nil || a.ID != "anl_branch" || a.Pinned {
+		t.Fatalf("running branch analysis %+v %v", a, activeErr)
 	}
 }
