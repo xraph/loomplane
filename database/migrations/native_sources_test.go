@@ -5,7 +5,7 @@ package migrations
 import "testing"
 
 func TestNativeSourcesBackfillKeepsPendingReplacementHistory(t *testing.T) {
-	conn := scratch(t)
+	conn, db := scratch(t)
 	exec(t, conn,
 		`CREATE TABLE loomplane_environments(org_id TEXT,project_id TEXT,id TEXT,UNIQUE(org_id,project_id,id))`,
 		`INSERT INTO loomplane_environments VALUES('org','project','environment')`,
@@ -16,8 +16,8 @@ func TestNativeSourcesBackfillKeepsPendingReplacementHistory(t *testing.T) {
 	)
 	exec(t, conn, `INSERT INTO loomplane_bindings SELECT 'moved',org_id,project_id,environment_id,subject,name,'server',connection_id,region,'',external_id,config,
  jsonb_build_array(jsonb_set(jsonb_set((replaced->0)-'replaced','{physical_id}','"db-moved"'),'{id}','"moved"')),url,drift_message FROM loomplane_bindings WHERE id='binding'`)
-	exec(t, conn, nativeSourcesUp...)
-	exec(t, conn, nativeSourcesUp...)
+	up(t, db, "native_sources")
+	up(t, db, "native_sources")
 	got := strs(t, conn, `SELECT physical_id FROM loomplane_native_sources ORDER BY physical_id`)
 	if len(got) != 4 {
 		t.Fatalf("backfill lost pending original incarnations: %v", got)

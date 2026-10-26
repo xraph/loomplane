@@ -5,10 +5,9 @@ package migrations
 import "testing"
 
 func TestCatalogEndpointsMigration(t *testing.T) {
-	conn := scratch(t)
-	// Central migrations are not transactional, so the up statements repeat.
-	exec(t, conn, catalogEndpointsUp...)
-	exec(t, conn, catalogEndpointsUp...)
+	conn, db := scratch(t)
+	// Running the up again changes nothing.
+	up(t, db, "catalog_endpoints", "catalog_endpoints")
 	exec(t, conn, `INSERT INTO loomplane_catalog_endpoints(id,org_id,name,engine,host,port,tls,created_by,created_at) VALUES('endpoint_1','o','prod-pg','postgres','db.example',5432,'require','u',now())`)
 	if got := strs(t, conn, `SELECT database||'|'||username||'|'||revision FROM loomplane_catalog_endpoints`); len(got) != 1 || got[0] != "||1" {
 		t.Fatalf("defaults: %v", got)
@@ -23,8 +22,7 @@ func TestCatalogEndpointsMigration(t *testing.T) {
 		}
 	}
 	exec(t, conn, `INSERT INTO loomplane_catalog_endpoints(id,org_id,name,engine,host,port,tls,created_by,created_at) VALUES('endpoint_5','p','prod-pg','postgres','db.example',5432,'require','u',now())`)
-	exec(t, conn, catalogEndpointsDown...)
-	exec(t, conn, catalogEndpointsDown...)
+	down(t, db, "catalog_endpoints", "catalog_endpoints")
 	if got := strs(t, conn, `SELECT coalesce(to_regclass('loomplane_catalog_endpoints')::text,'gone')`); len(got) != 1 || got[0] != "gone" {
 		t.Fatalf("down left the table: %v", got)
 	}
