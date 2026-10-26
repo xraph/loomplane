@@ -8,16 +8,19 @@ import (
 
 // leaks reports four bytes of a sensitive part of a secret that output
 // shows outside its redactions. It doesn't ask the redactor which pieces
-// it hides: the only four bytes it lets show are ones the address's own
-// scheme and host spell, found here by hand, since those stay readable.
+// it hides. The only four bytes it lets show are ones of an address's own
+// path or fragment that its scheme and host spell too, both found here by
+// hand, since those stay readable. A password, token user or query value
+// gets no such exemption.
 func leaks(output string, secrets map[string]string) string {
 	shown := strings.Split(output, "[redacted]")
 	for _, value := range secrets {
-		public := strings.ToLower(schemeAndHost(value))
+		public, located := schemeAndHost(value)
 		for _, part := range sensitiveParts(value) {
+			exempt := located != "" && strings.Contains(located, part)
 			for start := 0; start+4 <= len(part); start++ {
 				piece := part[start : start+4]
-				if strings.Contains(public, strings.ToLower(piece)) {
+				if exempt && strings.Contains(public, strings.ToLower(piece)) {
 					continue
 				}
 				for _, text := range shown {
@@ -31,13 +34,13 @@ func leaks(output string, secrets map[string]string) string {
 	return ""
 }
 
-// schemeAndHost is "scheme://host" of an address with a password, cut from
-// its text: what comes before "://", and what comes after the last "@" up
-// to the next "/", "?" or "#". Anything else has none.
-func schemeAndHost(value string) string {
+// schemeAndHost cuts an address with a non-empty password from its text:
+// public is "scheme://host" in lower case, and located its path and
+// fragment as spelled, without its query. Anything else has neither.
+func schemeAndHost(value string) (public, located string) {
 	scheme, rest, ok := strings.Cut(value, "://")
 	if !ok {
-		return ""
+		return "", ""
 	}
 	end := len(rest)
 	if i := strings.IndexAny(rest, "/?#"); i >= 0 {
@@ -45,10 +48,21 @@ func schemeAndHost(value string) string {
 	}
 	authority := rest[:end]
 	at := strings.LastIndex(authority, "@")
-	if at < 0 || !strings.Contains(authority[:at], ":") {
-		return ""
+	if at < 0 {
+		return "", ""
 	}
-	return scheme + "://" + authority[at+1:]
+	if _, password, found := strings.Cut(authority[:at], ":"); !found || password == "" {
+		return "", ""
+	}
+	located = rest[end:]
+	if q := strings.Index(located, "?"); q >= 0 {
+		fragment := ""
+		if f := strings.Index(located[q:], "#"); f >= 0 {
+			fragment = located[q+f:]
+		}
+		located = located[:q] + fragment
+	}
+	return strings.ToLower(scheme + "://" + authority[at+1:]), located
 }
 
 // tailed is output as a JobTail keeps it.
@@ -176,6 +190,19 @@ func TestJobOutputNeverShowsFourBytesOfASecret(t *testing.T) {
 		output := tailed(secrets, writes...)
 		if piece := leaks(output, secrets); piece != "" {
 			t.Fatalf("round %d: output shows %q", round, piece)
+		}
+	}
+}
+
+// A password that shares runs with its host is still hidden wherever a
+// cut leaves it: only the path's runs the host spells may show.
+func TestJobOutputHidesAPasswordItsHostSpells(t *testing.T) {
+	const hook = "https://relay:hooks-Pw-77@hooks.example.com/send"
+	secrets := map[string]string{"HOOK_URL": hook}
+	for cut := range len(hook) {
+		output := tailed(secrets, "post "+hook[:cut], "warn: slow\n", hook[cut:]+"\n")
+		if piece := leaks(output, secrets); piece != "" {
+			t.Fatalf("cut at %d: output %q shows %q", cut, output, piece)
 		}
 	}
 }
