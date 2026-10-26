@@ -85,6 +85,13 @@ const routeRuntimeJoin = ` LEFT JOIN LATERAL (SELECT d.id,d.release_id,d.state F
 const routeRuntimeRevision = `CASE WHEN i.state='running' AND deployment.id IS NULL AND coalesce(i.labels->>'` + owned.LabelReceiptRelease + `','')='' THEN i.labels->>'` + owned.LabelRevision + `' WHEN i.state='running' AND deployment.state='succeeded' AND deployment.release_id=i.labels->>'` + owned.LabelReceiptRelease + `' AND deployment.release_id=i.labels->>'` + owned.LabelRevision + `' THEN deployment.release_id ELSE '' END`
 const routeRuntimeContainer = `CASE WHEN deployment.id IS NULL THEN i.service_refs->>'main' ELSE i.labels->>'` + owned.LabelReceiptServicePrefix + `main' END`
 
+// routableComponent matches a composed catalog component's process on a port
+// its recipe marks routable. Planning lists only those in routable_ports, never
+// a control port, and gives engine databases, the composed resource itself and
+// its jobs none; the role and shape checks keep a stray list from widening it.
+const routableComponent = `b.subject='resource' AND b.config->'component' IS NOT NULL AND b.config->'composition' IS NULL AND b.config->'catalog' IS NULL
+ AND b.config->'component'->'component'->>'role'='process' AND jsonb_typeof(b.config->'routable_ports')='array' AND b.config->'routable_ports' @> jsonb_build_array($6::int)`
+
 const routeBindingQuery = `SELECT b.id,b.config,s.id,t.id,c.id,c.generation,b.external_id,coalesce(c.details->>'docker_id',''),coalesce(` + routeRuntimeRevision + `,''),coalesce(` + routeRuntimeContainer + `,''),coalesce(nullif(c.details->>'advertise_host',''),c.details->>'host','')
  FROM loomplane_bindings b
  JOIN loomplane_environments e ON e.org_id=b.org_id AND e.project_id=b.project_id AND e.id=b.environment_id
@@ -93,7 +100,7 @@ const routeBindingQuery = `SELECT b.id,b.config,s.id,t.id,c.id,c.generation,b.ex
  JOIN loomplane_cloud_servers s ON s.org_id=b.org_id AND s.cloud_id=t.cloud_id AND s.id=b.config->'cloud_placement'->>'server_id' AND s.status='ready'
  JOIN loomplane_cloud_connections c ON c.org_id=s.org_id AND c.id=s.runtime_connection_id AND c.id=b.connection_id AND c.status='ready'
  JOIN cp_instances i ON i.tenant_id=b.org_id AND i.id=b.external_id` + routeRuntimeJoin + `
- WHERE b.org_id=$1 AND b.project_id=$2 AND b.environment_id=$3 AND b.name=$4 AND b.subject='service' AND b.provider='server'
+ WHERE b.org_id=$1 AND b.project_id=$2 AND b.environment_id=$3 AND b.name=$4 AND b.provider='server' AND (b.subject='service' OR (` + routableComponent + `))
  AND EXISTS(SELECT 1 FROM jsonb_array_elements(i.services) svc,jsonb_array_elements(svc->'ports') p WHERE svc->>'name'='main' AND (p->>'container')::int=$6)`
 
 func scanRouteBinding(row pgx.Row) (RouteBinding, error) {
