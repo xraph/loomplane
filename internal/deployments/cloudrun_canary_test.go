@@ -643,13 +643,83 @@ func TestCloudRunCanaryUsesTheRecordedBaseline(t *testing.T) {
 	// Without a record, a split can't say which is the baseline.
 	e.job.Deployment.Canary = nil
 	svc := &gcp.RunService{TrafficStatuses: []gcp.RunTraffic{{Type: gcp.TrafficRevision, Revision: first.Candidate, Percent: 70}, {Type: gcp.TrafficRevision, Revision: runBaseline, Percent: 30}}}
-	if got, err := canaryBaseline(e.job, e.g.service, svc); err == nil {
+	up := func(context.Context, string) (*gcp.RunRevision, error) {
+		return &gcp.RunRevision{Conditions: []gcp.RunCondition{{Type: "Ready", State: "CONDITION_SUCCEEDED"}}}, nil
+	}
+	if got, err := canaryBaseline(t.Context(), e.job, e.g.service, svc, up); err == nil {
 		t.Fatalf("unrecorded: %s", got)
 	}
-	// Nor can a recorded baseline that takes no traffic any more.
-	e.job.Deployment.Canary = &Canary{Services: []CanaryService{{ActionID: e.job.Action.ID, Baseline: "svc-gone"}}}
-	if got, err := canaryBaseline(e.job, e.g.service, svc); err == nil {
-		t.Fatalf("a recorded baseline without traffic: %s", got)
+	// A recorded baseline with no traffic left is still the baseline.
+	e.job.Deployment.Canary = &Canary{Services: []CanaryService{{ActionID: e.job.Action.ID, Baseline: "svc-00002-old"}}}
+	if got, err := canaryBaseline(t.Context(), e.job, e.g.service, svc, up); err != nil || got != "svc-00002-old" {
+		t.Fatalf("a recorded baseline without traffic: %s, %v", got, err)
+	}
+}
+
+// A step at 100% leaves the baseline no traffic, under the candidate's
+// own template. The revert fails and the deployment is retried: the retry
+// still ramps from the recorded baseline, and its revert ends there.
+func TestCloudRunCanaryARetryAfterAFullStepRampsFromTheRecordedBaseline(t *testing.T) {
+	e := newRunCanaryEnv(t)
+	first := e.start(t)
+	if err := e.exec.SetWeights(t.Context(), e.job, first, 100); err != nil {
+		t.Fatal(err)
+	}
+	e.g.failNext("PATCH service")
+	if err := e.exec.Revert(t.Context(), e.job, first); err == nil {
+		t.Fatal("the revert didn't fail")
+	}
+	if split := e.g.split(); !maps.Equal(split, map[string]int{first.Candidate: 100}) {
+		t.Fatalf("before the retry: %v", split)
+	}
+	// The runner recorded the baseline when the first candidate started,
+	// and a retry keeps it.
+	e.job.Deployment.Retries = 1
+	e.job.Deployment.Canary = &Canary{Services: []CanaryService{{ActionID: e.job.Action.ID, Baseline: first.Baseline}}}
+	second := e.start(t)
+	if second.Baseline != runBaseline {
+		t.Fatalf("the retry ramps from %s, not the recorded baseline", second.Baseline)
+	}
+	if split := e.g.split(); !maps.Equal(split, map[string]int{runBaseline: 100}) {
+		t.Fatalf("after the retry started: %v", split)
+	}
+	if err := e.exec.Revert(t.Context(), e.job, second); err != nil {
+		t.Fatal(err)
+	}
+	e.assertBaselineAlone(t, second.Candidate)
+	_, _, revisions := e.g.current()
+	if revisions[first.Candidate] != nil {
+		t.Fatalf("the failed candidate %s is still there", first.Candidate)
+	}
+}
+
+// A recorded baseline whose revision is gone can't be ramped from, and
+// nothing else is picked in its place.
+func TestCloudRunCanaryRefusesARecordedBaselineThatsGone(t *testing.T) {
+	e := newRunCanaryEnv(t)
+	first := e.start(t)
+	if err := e.exec.SetWeights(t.Context(), e.job, first, 100); err != nil {
+		t.Fatal(err)
+	}
+	e.g.mu.Lock()
+	delete(e.g.revisions, runBaseline)
+	e.g.mu.Unlock()
+	e.job.Deployment.Retries = 1
+	e.job.Deployment.Canary = &Canary{Services: []CanaryService{{ActionID: e.job.Action.ID, Baseline: runBaseline}}}
+	calls := len(e.g.calls)
+	_, err := e.exec.ApplyCandidate(t.Context(), e.job)
+	for _, want := range []string{runBaseline, "it's gone", "left as it is"} {
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %v doesn't say %q", err, want)
+		}
+	}
+	if split := e.g.split(); !maps.Equal(split, map[string]int{first.Candidate: 100}) {
+		t.Fatalf("traffic moved: %v", split)
+	}
+	for _, c := range e.g.calls[calls:] {
+		if !strings.HasPrefix(c, http.MethodGet) && !strings.Contains(c, "testIamPermissions") && c != "POST /token" {
+			t.Fatalf("a refused canary called %s", c)
+		}
 	}
 }
 
