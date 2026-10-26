@@ -390,16 +390,22 @@ func TestBindWaitsForRotationToRecordItsKey(t *testing.T) {
 	h.bind(t, "api", "acme")
 	issued, resume := make(chan struct{}), make(chan struct{})
 	h.keys.beforeInsert = func(*fabriqloom.KeyRecord) { close(issued); <-resume }
+	waiting := make(chan string, 1)
+	h.keys.waiting = waiting
 	rotated := make(chan error, 1)
 	go func() { _, err := h.svc.Rotate(t.Context(), as("admin"), fabriqRef, "api"); rotated <- err }()
 	<-issued
 	bound := make(chan error, 1)
 	go func() { _, err := h.hooks.BindConsumer(t.Context(), h.consumer("api", "acme")); bound <- err }()
+	// The bind found api's lock held by the rotation, which can't let go
+	// until it has recorded its key.
+	if service := <-waiting; service != "api" {
+		t.Fatalf("%s waited", service)
+	}
 	select {
 	case err := <-bound:
-		close(resume)
 		t.Fatalf("bind ran before rotation recorded its key: %v", err)
-	case <-time.After(50 * time.Millisecond):
+	default:
 	}
 	close(resume)
 	if err := <-rotated; err != nil {

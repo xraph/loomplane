@@ -2,8 +2,11 @@ package fabriqloom
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -18,42 +21,97 @@ import (
 type PgStore struct {
 	db  *pgdriver.PgDB
 	now func() time.Time
+	// lease is how long a service lock lasts unless its holder renews it.
+	lease time.Duration
 }
 
+// keyLockLease outlasts any one of a bind's calls to Fabriq, Vault or the
+// key table several times over; the holder renews it at a third of that
+// for as long as it works.
+const keyLockLease = 2 * time.Minute
+
 // NewPgStore returns a KeyStore over db.
-func NewPgStore(db *pgdriver.PgDB) *PgStore { return &PgStore{db: db, now: time.Now} }
+func NewPgStore(db *pgdriver.PgDB) *PgStore {
+	return &PgStore{db: db, now: time.Now, lease: keyLockLease}
+}
 
 var _ KeyStore = (*PgStore)(nil)
 
-// LockService uses a transaction-scoped advisory lock. A crashed process loses
-// its connection and lock, so the next writer can reconcile the remote keys.
-// Key and Vault writes use their own connections and commit before unlock.
+// LockService takes a lease on the service's keys in
+// loomplane_fabriq_key_locks. It holds no connection while the caller
+// works: it renews the lease in the background and deletes its own row on
+// release. A process that dies stops renewing, so the next writer takes the
+// lease over once it expires and reconciles what was left in Fabriq. Times
+// are the database's, so the processes' clocks don't matter.
 func (s *PgStore) LockService(ctx context.Context, orgID, environmentID, resource, service string) (func(), error) {
-	name := fmt.Sprintf("fabriq-key:%q:%q:%q:%q", orgID, environmentID, resource, service)
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		return nil, fmt.Errorf("lock Fabriq keys: %w", err)
+	}
+	holder := hex.EncodeToString(nonce[:])
+	key := []any{orgID, environmentID, resource, service}
+	lease := s.lease.Milliseconds()
+	delay := 20 * time.Millisecond
 	for {
-		tx, err := s.db.BeginTx(ctx, nil)
-		if err != nil {
-			return nil, fmt.Errorf("begin Fabriq key lock: %w", err)
+		var got string
+		err := s.db.QueryRow(ctx, `INSERT INTO loomplane_fabriq_key_locks AS l (org_id, environment_id, resource, service, holder, expires_at)
+			VALUES ($1, $2, $3, $4, $5, now() + $6 * interval '1 millisecond')
+			ON CONFLICT (org_id, environment_id, resource, service)
+			DO UPDATE SET holder = EXCLUDED.holder, expires_at = EXCLUDED.expires_at WHERE l.expires_at < now()
+			RETURNING holder`, append(key, holder, lease)...).Scan(&got)
+		if err == nil {
+			return s.holdLease(key, holder), nil
 		}
-		var locked bool
-		if err = tx.QueryRow(ctx, `SELECT pg_try_advisory_xact_lock(hashtextextended($1, 0))`, name).Scan(&locked); err != nil {
-			return nil, errors.Join(fmt.Errorf("lock Fabriq keys: %w", err), tx.Rollback())
+		if !errors.Is(err, pgx.ErrNoRows) {
+			return nil, fmt.Errorf("lock Fabriq keys: %w", err)
 		}
-		if locked {
-			return func() { _ = tx.Rollback() }, nil //nolint:errcheck // rollback or connection loss both release the lock
-		}
-		// Wait outside the pool so contending writers cannot occupy every
-		// connection that the current holder needs to record its key.
-		if rollbackErr := tx.Rollback(); rollbackErr != nil {
-			return nil, rollbackErr
-		}
-		timer := time.NewTimer(50 * time.Millisecond)
+		// Someone else holds it: wait without a connection, so the holder
+		// has the pool to record its key.
+		timer := time.NewTimer(delay)
 		select {
 		case <-ctx.Done():
 			timer.Stop()
 			return nil, ctx.Err()
 		case <-timer.C:
 		}
+		delay = min(2*delay, time.Second)
+	}
+}
+
+// holdLease renews the lease until the returned release, which deletes it
+// if it is still the holder's.
+func (s *PgStore) holdLease(key []any, holder string) func() {
+	ctx, stop := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		ticker := time.NewTicker(s.lease / 3)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				// A renewal that fails is tried again at the next tick; the
+				// lease outlasts two of them.
+				_, _ = s.db.Exec(ctx, `UPDATE loomplane_fabriq_key_locks SET expires_at = now() + $6 * interval '1 millisecond'
+					WHERE org_id = $1 AND environment_id = $2 AND resource = $3 AND service = $4 AND holder = $5`,
+					append(key, holder, s.lease.Milliseconds())...) //nolint:errcheck // retried at the next tick
+			}
+		}
+	}()
+	var once sync.Once
+	return func() {
+		once.Do(func() {
+			stop()
+			<-done
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			// A release that fails leaves the lease to expire.
+			_, _ = s.db.Exec(ctx, `DELETE FROM loomplane_fabriq_key_locks
+				WHERE org_id = $1 AND environment_id = $2 AND resource = $3 AND service = $4 AND holder = $5`,
+				append(key, holder)...) //nolint:errcheck // the lease expires on its own
+		})
 	}
 }
 

@@ -16,18 +16,39 @@ import (
 	"github.com/xraph/loomplane/internal/recipes"
 )
 
-// memKeys is a KeyStore in memory, with the table's unique indexes.
+// memKeys is a KeyStore in memory, with the table's unique indexes and a
+// lock per service, as PgStore's leases are.
 type memKeys struct {
-	mu      sync.Mutex
-	writers sync.Mutex
-	rows    []fabriqloom.KeyRecord
+	mu    sync.Mutex
+	locks map[string]*sync.Mutex
+	rows  []fabriqloom.KeyRecord
 	// beforeInsert runs before each Insert, outside the lock.
 	beforeInsert func(r *fabriqloom.KeyRecord)
+	// waiting, when set, hears the service of each LockService that finds
+	// the lock held, before it waits.
+	waiting chan string
 }
 
-func (s *memKeys) LockService(context.Context, string, string, string, string) (func(), error) {
-	s.writers.Lock()
-	return s.writers.Unlock, nil
+func (s *memKeys) LockService(_ context.Context, orgID, environmentID, resource, service string) (func(), error) {
+	s.mu.Lock()
+	if s.locks == nil {
+		s.locks = map[string]*sync.Mutex{}
+	}
+	key := strings.Join([]string{orgID, environmentID, resource, service}, "\x00")
+	lock, ok := s.locks[key]
+	if !ok {
+		lock = &sync.Mutex{}
+		s.locks[key] = lock
+	}
+	waiting := s.waiting
+	s.mu.Unlock()
+	if !lock.TryLock() {
+		if waiting != nil {
+			waiting <- service
+		}
+		lock.Lock()
+	}
+	return lock.Unlock, nil
 }
 
 func (s *memKeys) Insert(_ context.Context, r *fabriqloom.KeyRecord) error {
