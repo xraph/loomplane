@@ -128,6 +128,17 @@ clouds:
     digitalocean:
       client_id: "${LOOMPLANE_DIGITALOCEAN_OAUTH_CLIENT_ID:-}"
       client_secret: "${LOOMPLANE_DIGITALOCEAN_OAUTH_CLIENT_SECRET:-}"
+    vercel:
+      client_id: "${LOOMPLANE_VERCEL_OAUTH_CLIENT_ID:-}"
+      client_secret: "${LOOMPLANE_VERCEL_OAUTH_CLIENT_SECRET:-}"
+      # The integration's slug in its Vercel install address.
+      slug: "${LOOMPLANE_VERCEL_OAUTH_SLUG:-}"
+    gcp:
+      client_id: "${LOOMPLANE_GCP_OAUTH_CLIENT_ID:-}"
+      client_secret: "${LOOMPLANE_GCP_OAUTH_CLIENT_SECRET:-}"
+    azure:
+      client_id: "${LOOMPLANE_AZURE_OAUTH_CLIENT_ID:-}"
+      client_secret: "${LOOMPLANE_AZURE_OAUTH_CLIENT_SECRET:-}"
 
 providers:
   # Deployment targets that run as their own services, built with

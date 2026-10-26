@@ -13,8 +13,9 @@ import (
 
 type fakeAppStore struct {
 	AppStore
-	apps    map[string]*StoredApp
-	signIns map[string]*PendingSignIn
+	apps     map[string]*StoredApp
+	signIns  map[string]*PendingSignIn
+	problems map[string]string
 }
 
 func (f *fakeAppStore) key(org, cloud string) string { return org + "/" + cloud }
@@ -189,4 +190,38 @@ func TestAppIsMissingWithoutConfigOrOrganization(t *testing.T) {
 	if _, err := s.app(t.Context(), "org", DigitalOcean); !errors.Is(err, ErrNoApp) {
 		t.Fatalf("got %v", err)
 	}
+}
+
+func (f *fakeAppStore) SweepSignIns(_ context.Context, before time.Time) (int64, error) {
+	var n int64
+	for state, p := range f.signIns {
+		if p.ExpiresAt.Before(before) {
+			delete(f.signIns, state)
+			n++
+		}
+	}
+	return n, nil
+}
+
+func (f *fakeAppStore) SetAppProblem(_ context.Context, org, cloud, message string, _ time.Time) error {
+	if f.problems == nil {
+		f.problems = map[string]string{}
+	}
+	f.problems[f.key(org, cloud)] = message
+	return nil
+}
+
+func (f *fakeAppStore) ClearAppProblem(_ context.Context, org, cloud string) error {
+	delete(f.problems, f.key(org, cloud))
+	return nil
+}
+
+func (f *fakeAppStore) AppProblems(_ context.Context, org string) (map[string]string, error) {
+	out := map[string]string{}
+	for k, v := range f.problems {
+		if cloud, ok := strings.CutPrefix(k, org+"/"); ok {
+			out[cloud] = v
+		}
+	}
+	return out, nil
 }

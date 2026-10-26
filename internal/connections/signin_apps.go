@@ -47,13 +47,21 @@ type AppInput struct {
 // is in Vault.
 type StoredApp struct {
 	OrgID, Cloud, ClientID, UpdatedBy string
-	CreatedAt, UpdatedAt              time.Time
+	// Slug is the app's name in its cloud's own address. Only Vercel's
+	// has one.
+	Slug                 string
+	CreatedAt, UpdatedAt time.Time
 }
 
 // PendingSignIn is one sign-in someone has started and not finished.
 type PendingSignIn struct {
 	State, OrgID, UserID, Cloud, Name, ConnectionID string
-	ExpiresAt, CreatedAt                            time.Time
+	// Settings are the choices made before signing in, such as a region.
+	Settings map[string]string
+	// Verifier is the PKCE secret that proves the callback belongs to
+	// the browser that started the sign-in.
+	Verifier             string
+	ExpiresAt, CreatedAt time.Time
 }
 
 // AppStore keeps sign-in apps and pending sign-ins.
@@ -66,6 +74,15 @@ type AppStore interface {
 	// TakeSignIn removes and returns a pending sign-in, so a state works
 	// once. One already taken is ErrNotFound.
 	TakeSignIn(ctx context.Context, state string) (*PendingSignIn, error)
+	// SweepSignIns removes sign-ins that expired before the given time and
+	// says how many.
+	SweepSignIns(ctx context.Context, before time.Time) (int64, error)
+	// SetAppProblem records why an organization's app for a cloud stopped
+	// working, replacing any earlier message.
+	SetAppProblem(ctx context.Context, orgID, cloud, message string, at time.Time) error
+	ClearAppProblem(ctx context.Context, orgID, cloud string) error
+	// AppProblems maps each cloud with a problem to its message.
+	AppProblems(ctx context.Context, orgID string) (map[string]string, error)
 }
 
 // AppAuditor records a change to a sign-in app. The Auditor given to

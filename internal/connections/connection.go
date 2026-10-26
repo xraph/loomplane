@@ -88,8 +88,11 @@ type Connection struct {
 	Message   string     `json:"message"`
 	CheckedAt *time.Time `json:"checked_at"`
 	CreatedBy string     `json:"created_by"`
-	CreatedAt time.Time  `json:"created_at"`
-	UpdatedAt time.Time  `json:"updated_at"`
+	// SignedInBy is the Loomplane user who signed in to the cloud, for a
+	// connection made that way. Empty for a pasted token.
+	SignedInBy string    `json:"signed_in_by,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 func (c *Connection) normalize() {

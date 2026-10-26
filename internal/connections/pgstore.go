@@ -28,13 +28,13 @@ var (
 )
 
 const columns = `id, org_id, cloud, name, account, details, status, missing, message,
-	checked_at, created_by, created_at, updated_at, generation, method`
+	checked_at, created_by, created_at, updated_at, generation, method, signed_in_by`
 
 func scan(row pgx.Row) (*Connection, error) {
 	var c Connection
 	var details, missing []byte
 	if err := row.Scan(&c.ID, &c.OrgID, &c.Cloud, &c.Name, &c.Account, &details, &c.Status, &missing, &c.Message,
-		&c.CheckedAt, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt, &c.Generation, &c.Method); err != nil {
+		&c.CheckedAt, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt, &c.Generation, &c.Method, &c.SignedInBy); err != nil {
 		return nil, err
 	}
 	if err := json.Unmarshal(details, &c.Details); err != nil {
@@ -65,9 +65,9 @@ func (s *PgStore) CreateConnection(ctx context.Context, c *Connection) error {
 		return fmt.Errorf("encode connection: %w", err)
 	}
 	_, err = s.db.Exec(ctx, `INSERT INTO loomplane_cloud_connections (`+columns+`)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
 		c.ID, c.OrgID, c.Cloud, c.Name, c.Account, details, c.Status, missing, c.Message,
-		c.CheckedAt, c.CreatedBy, c.CreatedAt, c.UpdatedAt, c.Generation, c.Method)
+		c.CheckedAt, c.CreatedBy, c.CreatedAt, c.UpdatedAt, c.Generation, c.Method, c.SignedInBy)
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation {
 		return ErrExists
@@ -102,6 +102,17 @@ func (s *PgStore) ListConnections(ctx context.Context, orgID string) ([]*Connect
 func (s *PgStore) OAuthConnections(ctx context.Context) ([]*Connection, error) {
 	return s.list(ctx, `SELECT `+columns+` FROM loomplane_cloud_connections
 		WHERE method = $1 AND status <> $2 ORDER BY org_id, id`, MethodOAuth, StatusSignInNeeded)
+}
+
+// LeftSignIns returns signed-in connections to clouds whose signer is no
+// longer a member of the organization, other than those already waiting
+// for someone to sign in again.
+func (s *PgStore) LeftSignIns(ctx context.Context, clouds []string) ([]*Connection, error) {
+	return s.list(ctx, `SELECT `+columns+` FROM loomplane_cloud_connections c
+		WHERE c.method = $1 AND c.cloud = ANY($2) AND c.signed_in_by <> '' AND c.status <> $3
+		AND NOT EXISTS (SELECT 1 FROM authsome_members m JOIN authsome_users u ON u.id = m.user_id
+			WHERE m.org_id = c.org_id AND m.user_id = c.signed_in_by AND u.deleted_at IS NULL AND NOT u.banned)
+		ORDER BY c.org_id, c.id`, MethodOAuth, clouds, StatusSignInNeeded)
 }
 
 func (s *PgStore) list(ctx context.Context, query string, args ...any) ([]*Connection, error) {
@@ -144,9 +155,9 @@ func (s *PgStore) UpdateConnection(ctx context.Context, c *Connection) error {
 		return fmt.Errorf("encode connection: %w", err)
 	}
 	tag, err := s.db.Exec(ctx, `UPDATE loomplane_cloud_connections
-		SET account = $3, details = $4, status = $5, missing = $6, message = $7, checked_at = $8, updated_at = $9, generation = $10, method = $12
+		SET account = $3, details = $4, status = $5, missing = $6, message = $7, checked_at = $8, updated_at = $9, generation = $10, method = $12, signed_in_by = $13
 		WHERE org_id = $1 AND id = $2 AND generation = $11`,
-		c.OrgID, c.ID, c.Account, details, c.Status, missing, c.Message, c.CheckedAt, c.UpdatedAt, generation, c.Generation, c.Method)
+		c.OrgID, c.ID, c.Account, details, c.Status, missing, c.Message, c.CheckedAt, c.UpdatedAt, generation, c.Generation, c.Method, c.SignedInBy)
 	if err != nil {
 		return fmt.Errorf("update connection: %w", err)
 	}
