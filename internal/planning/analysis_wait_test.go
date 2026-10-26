@@ -353,3 +353,20 @@ func TestPinsMatchSource_readsBindingsForAnUnrecordedSource(t *testing.T) {
 		t.Fatalf("after api went: %v %q %v", ok, diffs, err)
 	}
 }
+
+// A test that stops the clock without making sleep move it still gets its
+// plan back from settle, after as many polls as settleWait allows.
+func TestSettle_returnsWhenTheClockStops(t *testing.T) {
+	w := promotionWorld(t)
+	frozen := time.Date(2026, 10, 24, 9, 0, 0, 0, time.UTC)
+	polls := 0
+	w.svc.now = func() time.Time { return frozen }
+	w.svc.sleep = func(context.Context, time.Duration) error { polls++; return nil }
+	plan := w.store.plans["plan_s1"]
+	if got := w.svc.settle(t.Context(), plan); got != plan {
+		t.Fatalf("settle returned %+v", got)
+	}
+	if want := int(settleWait / settlePoll); polls != want {
+		t.Fatalf("polled %d times, want %d", polls, want)
+	}
+}

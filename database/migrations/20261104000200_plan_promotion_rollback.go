@@ -126,7 +126,11 @@ func init() {
 // execPlanEventFunctions replaces the two realtime trigger functions that
 // build a plan event with planEventFunctions(leftovers).
 func execPlanEventFunctions(ctx context.Context, db *migrate.DB, leftovers bool) error {
-	for _, stmt := range planEventFunctions(leftovers) {
+	stmts, err := planEventFunctions(leftovers)
+	if err != nil {
+		return err
+	}
+	for _, stmt := range stmts {
 		if _, err := db.Exec(ctx, stmt); err != nil {
 			return fmt.Errorf("replace a plan event trigger function: %w", err)
 		}
@@ -134,20 +138,27 @@ func execPlanEventFunctions(ctx context.Context, db *migrate.DB, leftovers bool)
 	return nil
 }
 
-// planEventFunctions returns the two realtime trigger functions that build a
-// plan event. With leftovers, a plan event defaults leftovers and artifacts
-// to [] as it does actions and problems, because a result leaves them out
-// when empty. Without, the functions are exactly as persist_realtime_events
-// defines them.
-func planEventFunctions(leftovers bool) []string {
+// planEventFunctions returns the CREATE OR REPLACE FUNCTION statements of
+// the two realtime trigger functions that build a plan event,
+// loomplane_state_event_trigger and loomplane_parent_event_trigger. With
+// leftovers, a plan event defaults leftovers and artifacts to [] as it does
+// actions and problems, because a result leaves them out when empty.
+// Without, the functions are exactly as persist_realtime_events defines
+// them. It fails if either function no longer builds a plan event the way
+// this expects, rather than migrate a database without the defaults.
+func planEventFunctions(leftovers bool) ([]string, error) {
 	const defaults = `'summary','{}'::jsonb)`
 	out := []string{stateEventTriggerFunction, parentEventTriggerFunction}
-	if leftovers {
-		for i, stmt := range out {
-			out[i] = strings.ReplaceAll(stmt, defaults, `'summary','{}'::jsonb,'leftovers','[]'::jsonb,'artifacts','[]'::jsonb)`)
-		}
+	if !leftovers {
+		return out, nil
 	}
-	return out
+	for i, stmt := range out {
+		if !strings.Contains(stmt, defaults) {
+			return nil, fmt.Errorf("plan_promotion_rollback: a realtime trigger function no longer builds a plan event with %s", defaults)
+		}
+		out[i] = strings.ReplaceAll(stmt, defaults, `'summary','{}'::jsonb,'leftovers','[]'::jsonb,'artifacts','[]'::jsonb)`)
+	}
+	return out, nil
 }
 
 // stateEventTriggerFunction is loomplane_state_event_trigger exactly as
