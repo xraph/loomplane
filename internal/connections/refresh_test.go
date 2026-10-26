@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"slices"
 	"strings"
 	"sync"
@@ -143,6 +144,17 @@ type renewer struct {
 	honorCancel bool
 	// unbounded counts calls whose context had no deadline.
 	unbounded int
+	// probed lists the access tokens Probe was asked about; probeErrs
+	// maps an access token to what Probe answers for it.
+	probed    []string
+	probeErrs map[string]error
+}
+
+func (r *renewer) Probe(_ context.Context, _ oauth.App, g oauth.Grant) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.probed = append(r.probed, g.AccessToken)
+	return r.probeErrs[g.AccessToken]
 }
 
 func (r *renewer) Refresh(ctx context.Context, app oauth.App, held oauth.Grant) (oauth.Grant, error) {
@@ -515,7 +527,7 @@ func TestRefreshDueRefreshesOnlyWhatsDue(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if report != (RefreshReport{Refreshed: 1, Lapsed: 1, Failed: 1}) {
+	if report != (RefreshReport{Refreshed: 1, Lapsed: 1, Failed: 1, Probed: 1}) {
 		t.Fatalf("report %+v", report)
 	}
 	if r.renewer.calls != 3 {
@@ -644,4 +656,208 @@ func TestRenewalsAcrossConnectionsAreCapped(t *testing.T) {
 	if r.renewer.calls != len(ids) {
 		t.Fatalf("refreshed %d times for %d connections", r.renewer.calls, len(ids))
 	}
+}
+
+// vercelSignIn stores a ready Vercel connection, conn_vercel, whose
+// grant never expires, last checked at checked.
+func (r *refreshRig) vercelSignIn(t *testing.T, checked *time.Time) {
+	t.Helper()
+	r.s.Providers[Vercel] = r.renewer
+	r.s.ConfigApps[Vercel] = oauth.App{ClientID: "vercel-id", ClientSecret: "vercel-secret", Slug: "loomplane"}
+	const id, token = "conn_vercel", "vt-1"
+	r.store.rows[id] = Connection{ID: id, OrgID: "org", Cloud: Vercel, Name: id, Method: MethodOAuth, Account: "Acme",
+		Details: map[string]string{"team_id": "team_1"}, Status: StatusReady, Generation: 3, CheckedAt: checked}
+	r.keep(t, id, oauth.Grant{AccessToken: token, Account: map[string]string{"team_id": "team_1"}})
+}
+
+func TestRefreshDueProbesAQuietSignIn(t *testing.T) {
+	r := newRefreshRig(t)
+	old := r.clock.Add(-48 * time.Hour)
+	r.vercelSignIn(t, &old)
+	report, err := r.s.RefreshDue(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report != (RefreshReport{Probed: 1}) {
+		t.Fatalf("report %+v", report)
+	}
+	if !slices.Equal(r.renewer.probed, []string{"vt-1"}) || r.renewer.calls != 0 {
+		t.Fatalf("probed %v, renewed %d times", r.renewer.probed, r.renewer.calls)
+	}
+	row := r.store.rows["conn_vercel"]
+	if row.CheckedAt == nil || !row.CheckedAt.Equal(r.clock) || row.Generation != 3 || row.Status != StatusReady {
+		t.Fatalf("row: %+v", row)
+	}
+	// Probed just now, so the next pass leaves it be.
+	if _, err := r.s.RefreshDue(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if len(r.renewer.probed) != 1 {
+		t.Fatalf("probed again: %v", r.renewer.probed)
+	}
+}
+
+func TestRefreshDueProbesASignInNeverChecked(t *testing.T) {
+	r := newRefreshRig(t)
+	r.vercelSignIn(t, nil)
+	if report, err := r.s.RefreshDue(t.Context()); err != nil || report.Probed != 1 {
+		t.Fatalf("report %+v %v", report, err)
+	}
+	if row := r.store.rows["conn_vercel"]; row.CheckedAt == nil {
+		t.Fatalf("row: %+v", row)
+	}
+}
+
+func TestRefreshDueSkipsARecentlyCheckedSignIn(t *testing.T) {
+	r := newRefreshRig(t)
+	recent := r.clock.Add(-time.Hour)
+	r.vercelSignIn(t, &recent)
+	report, err := r.s.RefreshDue(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report != (RefreshReport{}) || len(r.renewer.probed) != 0 {
+		t.Fatalf("report %+v, probed %v", report, r.renewer.probed)
+	}
+	if row := r.store.rows["conn_vercel"]; !row.CheckedAt.Equal(recent) {
+		t.Fatalf("row: %+v", row)
+	}
+}
+
+func TestRefreshDueMarksAnUninstalledIntegration(t *testing.T) {
+	r := newRefreshRig(t)
+	old := r.clock.Add(-48 * time.Hour)
+	r.vercelSignIn(t, &old)
+	r.renewer.probeErrs = map[string]error{"vt-1": fmt.Errorf("%w: uninstalled", oauth.ErrRefused)}
+	report, err := r.s.RefreshDue(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report != (RefreshReport{Lapsed: 1}) {
+		t.Fatalf("report %+v", report)
+	}
+	row := r.store.rows["conn_vercel"]
+	if row.Status != StatusSignInNeeded || row.Message == "" || row.Generation != 3 {
+		t.Fatalf("row: %+v", row)
+	}
+	if len(r.lapsed) != 1 || r.lapsed[0].ID != "conn_vercel" || r.attached != 0 {
+		t.Fatalf("lapsed %v, %d on a cancellable context", r.lapsed, r.attached)
+	}
+}
+
+func TestRefreshDueRecordsARejectedAppFoundByAProbe(t *testing.T) {
+	r := newRefreshRig(t)
+	old := r.clock.Add(-48 * time.Hour)
+	r.vercelSignIn(t, &old)
+	r.renewer.probeErrs = map[string]error{"vt-1": oauth.ErrAppRejected}
+	report, err := r.s.RefreshDue(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report != (RefreshReport{Lapsed: 1}) || r.store.rows["conn_vercel"].Status != StatusSignInNeeded || len(r.lapsed) != 1 {
+		t.Fatalf("report %+v row %+v", report, r.store.rows["conn_vercel"])
+	}
+	if r.apps.problems["org/"+Vercel] == "" {
+		t.Fatalf("no app problem recorded: %v", r.apps.problems)
+	}
+}
+
+func TestRefreshDueProbeThatCantReachTheCloudChangesNothing(t *testing.T) {
+	r := newRefreshRig(t)
+	old := r.clock.Add(-48 * time.Hour)
+	r.vercelSignIn(t, &old)
+	r.renewer.probeErrs = map[string]error{"vt-1": errors.New("503")}
+	report, err := r.s.RefreshDue(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	row := r.store.rows["conn_vercel"]
+	if report != (RefreshReport{Failed: 1}) || row.Status != StatusReady || !row.CheckedAt.Equal(old) || len(r.lapsed) != 0 {
+		t.Fatalf("report %+v row %+v", report, row)
+	}
+}
+
+func TestRefreshAllSweepsExpiredSignIns(t *testing.T) {
+	r := newRefreshRig(t)
+	r.apps.signIns = map[string]*PendingSignIn{
+		"old":  {State: "old", ExpiresAt: r.clock.Add(-time.Minute)},
+		"live": {State: "live", ExpiresAt: r.clock.Add(time.Minute)},
+	}
+	if err := r.s.RefreshAll(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := r.apps.signIns["old"]; ok || r.apps.signIns["live"] == nil {
+		t.Fatalf("sign-ins: %v", r.apps.signIns)
+	}
+}
+
+type failingSweep struct{ AppStore }
+
+func (failingSweep) SweepSignIns(context.Context, time.Time) (int64, error) {
+	return 0, errors.New("database is down")
+}
+
+func TestRefreshAllWarnsWhenTheSweepFails(t *testing.T) {
+	r := newRefreshRig(t)
+	r.s.Apps = failingSweep{r.apps}
+	if err := r.s.RefreshAll(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.ContainsFunc(r.warned, func(w string) bool { return strings.Contains(w, "database is down") }) {
+		t.Fatalf("warned: %v", r.warned)
+	}
+}
+
+// failingLock runs the callback, then reports the lock failed, as a
+// commit that fails after the writes outside its transaction landed.
+type failingLock struct{ *lockingStore }
+
+func (f failingLock) WithConnectionLock(ctx context.Context, org, id string, fn func() error) error {
+	if err := f.lockingStore.WithConnectionLock(ctx, org, id, fn); err != nil {
+		return err
+	}
+	return errors.New("release the connection lock")
+}
+
+func TestLapseIsToldEvenWhenTheLockFails(t *testing.T) {
+	r := newRefreshRig(t)
+	r.s.grants = failingLock{r.locked}
+	r.signedIn(t, "conn_do", "at-1", r.clock.Add(time.Hour))
+	r.renewer.errs["rt-at-1"] = oauth.ErrRefused
+	_, _, err := r.s.renew(t.Context(), mustConn(t, r, "conn_do"), r.kept(t, "conn_do"), refreshAhead)
+	if err == nil || errors.Is(err, ErrNotReady) {
+		t.Fatalf("got %v", err)
+	}
+	if r.store.rows["conn_do"].Status != StatusSignInNeeded {
+		t.Fatalf("row: %+v", r.store.rows["conn_do"])
+	}
+	if len(r.lapsed) != 1 || r.attached != 0 {
+		t.Fatalf("lapsed %v, %d on a cancellable context", r.lapsed, r.attached)
+	}
+}
+
+func TestLeftSignerIsToldEvenWhenTheLockFails(t *testing.T) {
+	r := newRefreshRig(t)
+	r.s.grants = failingLock{r.locked}
+	r.signedIn(t, "conn_do", "at-1", r.clock.Add(30*24*time.Hour))
+	row := r.store.rows["conn_do"]
+	row.Cloud, row.SignedInBy = GCP, "ada"
+	r.store.rows["conn_do"] = row
+	r.locked.departed = map[string]bool{"ada": true}
+	report, err := r.s.RefreshDue(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Failed != 1 || len(r.lapsed) != 1 {
+		t.Fatalf("report %+v, lapsed %v", report, r.lapsed)
+	}
+}
+
+func mustConn(t *testing.T, r *refreshRig, id string) *Connection {
+	t.Helper()
+	c, err := r.s.store.GetConnection(t.Context(), "org", id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
 }

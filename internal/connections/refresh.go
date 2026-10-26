@@ -18,6 +18,11 @@ const refreshAhead = 24 * time.Hour
 // sign-in, so one nobody deploys with still stays fresh.
 const backgroundAhead = 7 * 24 * time.Hour
 
+// probeEvery is how long a sign-in that needs no renewing goes between
+// asks of the cloud whether it still honors it, so an uninstalled
+// integration or a revoked app shows up before a deployment hits it.
+const probeEvery = 24 * time.Hour
+
 // renewTimeout bounds asking the cloud for a new grant, and keeping it,
 // once neither may be abandoned with the caller. The lock is held
 // throughout, so neither may wait forever either.
@@ -96,8 +101,9 @@ func (g *renewGate) enter(ctx context.Context, key string) (leave func(), err er
 	}, nil
 }
 
-// RefreshReport counts what one pass over the sign-ins did.
-type RefreshReport struct{ Refreshed, Lapsed, Left, Failed int }
+// RefreshReport counts what one pass over the sign-ins did. Probed is how
+// many quiet sign-ins the cloud still honors.
+type RefreshReport struct{ Refreshed, Lapsed, Left, Failed, Probed int }
 
 // readGrant returns the sign-in grant Vault holds for c.
 func (s *Service) readGrant(ctx context.Context, c *Connection) (oauth.Grant, error) {
@@ -249,6 +255,9 @@ func (s *Service) renew(ctx context.Context, c *Connection, held oauth.Grant, ah
 		return nil
 	})
 	if lockErr != nil {
+		// A lapse saved inside the lock isn't part of its transaction, so
+		// it stands even though the lock failed.
+		s.tellLapsed(ctx, lapsed)
 		return oauth.Grant{}, false, lockErr
 	}
 	if why != "" {
@@ -307,6 +316,8 @@ func (s *Service) tellLapsed(ctx context.Context, c *Connection) {
 // refused its token, under the connection's lock, unless it changed since
 // c was read. A change is stamped as checked at checked, if given. It
 // returns the connection as it is now, and whether this call changed it.
+// If the lock fails after the change was saved, the change stands, so
+// Lapsed is told here and the error is returned without it.
 func (s *Service) signInRefused(ctx context.Context, c *Connection, why string, checked *time.Time) (current, lapsed *Connection, err error) {
 	mark := func() error {
 		latest, getErr := s.store.GetConnection(ctx, c.OrgID, c.ID)
@@ -329,6 +340,10 @@ func (s *Service) signInRefused(ctx context.Context, c *Connection, why string, 
 		err = mark()
 	} else {
 		err = s.grants.WithConnectionLock(ctx, c.OrgID, c.ID, mark)
+	}
+	if err != nil && lapsed != nil {
+		s.tellLapsed(ctx, lapsed)
+		lapsed = nil
 	}
 	return current, lapsed, err
 }
@@ -368,9 +383,89 @@ func (s *Service) askAgainWhenLeft(ctx context.Context, report *RefreshReport) e
 	return nil
 }
 
+// probeQuiet asks the cloud whether the grant it holds for c is still
+// honored, unless that was checked within probeEvery. A refusal marks c
+// as needing a new sign-in and tells Lapsed; an answer that it is honored
+// stamps CheckedAt. Any other failure changes nothing and is counted as
+// failed.
+func (s *Service) probeQuiet(ctx context.Context, c *Connection, held oauth.Grant, report *RefreshReport) {
+	now := s.now().UTC()
+	if c.CheckedAt != nil && now.Sub(*c.CheckedAt) < probeEvery {
+		return
+	}
+	fail := func(err error) {
+		report.Failed++
+		s.warn("check the sign-in of "+c.ID, err)
+	}
+	provider, ok := s.Providers[c.Cloud]
+	if !ok {
+		fail(fmt.Errorf("%w: Loomplane has no sign-in for %s", ErrUnavailable, c.Cloud))
+		return
+	}
+	var why string
+	app, err := s.app(ctx, c.OrgID, c.Cloud)
+	switch {
+	case errors.Is(err, ErrNoApp):
+		why = noAppWhy(c.Cloud)
+	case err != nil:
+		fail(err)
+		return
+	default:
+		probeCtx, cancel := context.WithTimeout(ctx, renewTimeout)
+		err = provider.Probe(probeCtx, app, held)
+		cancel()
+		switch {
+		case errors.Is(err, oauth.ErrAppRejected):
+			why = s.appRejected(ctx, c.OrgID, c.Cloud)
+		case errors.Is(err, oauth.ErrRefused):
+			why = fmt.Sprintf("%s no longer accepts this sign-in. Sign in again.", c.Cloud)
+		case err != nil:
+			fail(err)
+			return
+		}
+	}
+	if why == "" {
+		switch stampErr := s.stampChecked(ctx, c, now); {
+		case errors.Is(stampErr, ErrChanged):
+		case stampErr != nil:
+			fail(stampErr)
+		default:
+			report.Probed++
+		}
+		return
+	}
+	_, lapsed, err := s.signInRefused(ctx, c, why, &now)
+	switch {
+	case errors.Is(err, ErrChanged):
+	case err != nil:
+		fail(err)
+	case lapsed != nil:
+		report.Lapsed++
+		s.tellLapsed(ctx, lapsed)
+	}
+}
+
+// stampChecked records that the cloud honored c's sign-in at checked,
+// under the connection's lock, unless it changed since c was read. Only
+// the check time is saved, so the generation stays.
+func (s *Service) stampChecked(ctx context.Context, c *Connection, checked time.Time) error {
+	return s.grants.WithConnectionLock(ctx, c.OrgID, c.ID, func() error {
+		latest, err := s.store.GetConnection(ctx, c.OrgID, c.ID)
+		if err != nil {
+			return err
+		}
+		if latest.Method != MethodOAuth || latest.Generation != c.Generation || latest.Status != c.Status || latest.Message == replacementInProgressMessage {
+			return ErrChanged
+		}
+		latest.CheckedAt, latest.UpdatedAt = &checked, checked
+		return s.store.UpdateConnection(ctx, latest)
+	})
+}
+
 // RefreshDue first asks for a new sign-in wherever the person who made it
 // has left, then renews every sign-in that expires within a week, so one
-// nobody deploys with stays usable. One that fails doesn't stop the rest.
+// nobody deploys with stays usable. A sign-in with nothing to renew is
+// probed once a day instead. One that fails doesn't stop the rest.
 func (s *Service) RefreshDue(ctx context.Context) (RefreshReport, error) {
 	var report RefreshReport
 	if s.grants == nil {
@@ -393,6 +488,12 @@ func (s *Service) RefreshDue(ctx context.Context) (RefreshReport, error) {
 			return report, err
 		}
 		held, err := s.readGrant(ctx, c)
+		if err == nil && !held.Due(s.now(), backgroundAhead) {
+			// Renewing talks to the cloud for a grant that is due; one
+			// that isn't has to be asked about instead.
+			s.probeQuiet(ctx, c, held, &report)
+			continue
+		}
 		if err == nil {
 			_, renewed, rerr := s.renew(ctx, c, held, backgroundAhead)
 			switch {
@@ -416,13 +517,19 @@ func (s *Service) RefreshDue(ctx context.Context) (RefreshReport, error) {
 // RefreshAll runs RefreshDue for the scheduled job and logs what needs
 // attention.
 func (s *Service) RefreshAll(ctx context.Context) error {
+	// Abandoned sign-ins are swept whatever else happens.
+	if s.Apps != nil {
+		if _, err := s.Apps.SweepSignIns(ctx, s.now()); err != nil {
+			s.warn("sweep expired sign-ins", err)
+		}
+	}
 	report, err := s.RefreshDue(ctx)
 	if err != nil {
 		return err
 	}
 	if report.Lapsed > 0 || report.Left > 0 || report.Failed > 0 {
-		s.warn("renew cloud sign-ins", fmt.Errorf("%d renewed, %d need signing in again, %d lost the person who signed in, %d failed",
-			report.Refreshed, report.Lapsed, report.Left, report.Failed))
+		s.warn("renew cloud sign-ins", fmt.Errorf("%d renewed, %d checked, %d need signing in again, %d lost the person who signed in, %d failed",
+			report.Refreshed, report.Probed, report.Lapsed, report.Left, report.Failed))
 	}
 	return nil
 }
