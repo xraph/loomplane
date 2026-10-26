@@ -96,11 +96,12 @@ func lockWithin(t *testing.T, s *PgStore, wait time.Duration, service string) (f
 	return s.LockService(ctx, "org", "env", "fabriq", service)
 }
 
-func leaseHolder(t *testing.T, db *pgdriver.PgDB, service string) string {
+// apiLease is who holds the lease on api's keys, or "".
+func apiLease(t *testing.T, db *pgdriver.PgDB) string {
 	t.Helper()
 	var holder string
 	err := db.QueryRow(t.Context(), `SELECT coalesce((SELECT holder FROM loomplane_fabriq_key_locks
-		WHERE org_id = 'org' AND environment_id = 'env' AND resource = 'fabriq' AND service = $1), '')`, service).Scan(&holder)
+		WHERE org_id = 'org' AND environment_id = 'env' AND resource = 'fabriq' AND service = 'api'), '')`).Scan(&holder)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -153,7 +154,7 @@ func TestServiceKeyLockIsALease(t *testing.T) {
 	if err = <-got; err != nil {
 		t.Fatalf("the waiter didn't get the released lock: %v", err)
 	}
-	if h := leaseHolder(t, db, "api"); h != "" {
+	if h := apiLease(t, db); h != "" {
 		t.Fatalf("release left a lease held by %s", h)
 	}
 }
@@ -170,7 +171,7 @@ func TestServiceKeyLockTakesOverAnExpiredLease(t *testing.T) {
 		t.Fatalf("an expired lease kept the lock: %v", err)
 	}
 	t.Cleanup(release)
-	mine := leaseHolder(t, db, "api")
+	mine := apiLease(t, db)
 	if mine == "" || mine == "dead" {
 		t.Fatalf("holder: %q", mine)
 	}
@@ -184,10 +185,10 @@ func TestServiceKeyLockTakesOverAnExpiredLease(t *testing.T) {
 		t.Fatalf("takeover: %v", err)
 	}
 	t.Cleanup(unlockOther)
-	theirs := leaseHolder(t, db, "api")
+	theirs := apiLease(t, db)
 	// Releasing deletes only the releaser's own lease.
 	release()
-	if h := leaseHolder(t, db, "api"); h != theirs {
+	if h := apiLease(t, db); h != theirs {
 		t.Fatalf("a stale release removed the new holder's lease: %q", h)
 	}
 	if unlock, lockErr := lockWithin(t, s, 300*time.Millisecond, "api"); lockErr == nil {
@@ -195,7 +196,7 @@ func TestServiceKeyLockTakesOverAnExpiredLease(t *testing.T) {
 		t.Fatal("the lock was free while the new holder held it")
 	}
 	unlockOther()
-	if h := leaseHolder(t, db, "api"); h != "" {
+	if h := apiLease(t, db); h != "" {
 		t.Fatalf("lease left behind: %q", h)
 	}
 }

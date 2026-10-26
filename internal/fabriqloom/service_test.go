@@ -55,8 +55,8 @@ type fakeCatalog struct {
 	workerReady int
 	opened      []deployments.ComponentRef
 	result      owned.JobResult
-	jobErr     error
-	jobs       []jobCall
+	jobErr      error
+	jobs        []jobCall
 }
 
 func newFakeCatalog(f *fakeFabriq) *fakeCatalog {
@@ -446,6 +446,10 @@ func TestRotateAndRevokeKeepStoreErrorsTheirOwn(t *testing.T) {
 		if err == nil || errors.Is(err, fabriqloom.ErrUnavailable) || security.StatusFor(err) != http.StatusInternalServerError {
 			t.Fatalf("%s with Vault failing: %v", name, err)
 		}
+		if !strings.HasPrefix(err.Error(), "forget an unrecorded Fabriq key of api (fq_o") {
+			t.Fatalf("%s: the Vault error doesn't say whose key: %v", name, err)
+		}
+		noSecret(t, h.f, err)
 		h.secrets.failDelete = nil
 		// Fabriq failing to revoke it is Fabriq being unavailable.
 		h.f.plant("loomplane:api")
@@ -590,7 +594,7 @@ func TestLibraryStatusHasNoTenants(t *testing.T) {
 	}
 	h.catalog.workerReady = http.StatusServiceUnavailable
 	status, err = h.svc.Status(t.Context(), as("viewer"), fabriqRef)
-	if err != nil || status.Reachable || !strings.Contains(status.Reason, "HTTP 503") || status.Kind != "fabriq-library" {
+	if err != nil || status.Reachable || status.Reason != "The Fabriq worker isn't ready (HTTP 503)" || status.Kind != "fabriq-library" {
 		t.Fatalf("worker not ready: %+v %v", status, err)
 	}
 	if _, err = h.svc.Tenants(t.Context(), as("viewer"), fabriqRef); !errors.Is(err, fabriqloom.ErrInvalid) || err.Error() != "fabriq-library has no tenants or keys" {

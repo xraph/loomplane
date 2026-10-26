@@ -78,6 +78,15 @@ func (s *PgStore) LockService(ctx context.Context, orgID, environmentID, resourc
 	}
 }
 
+// renewKeyLock and releaseKeyLock touch a lease only while it is still
+// the holder's.
+const (
+	renewKeyLock = `UPDATE loomplane_fabriq_key_locks SET expires_at = now() + $6 * interval '1 millisecond'
+		WHERE org_id = $1 AND environment_id = $2 AND resource = $3 AND service = $4 AND holder = $5`
+	releaseKeyLock = `DELETE FROM loomplane_fabriq_key_locks
+		WHERE org_id = $1 AND environment_id = $2 AND resource = $3 AND service = $4 AND holder = $5`
+)
+
 // holdLease renews the lease until the returned release, which deletes it
 // if it is still the holder's.
 func (s *PgStore) holdLease(key []any, holder string) func() {
@@ -94,9 +103,7 @@ func (s *PgStore) holdLease(key []any, holder string) func() {
 			case <-ticker.C:
 				// A renewal that fails is tried again at the next tick; the
 				// lease outlasts two of them.
-				_, _ = s.db.Exec(ctx, `UPDATE loomplane_fabriq_key_locks SET expires_at = now() + $6 * interval '1 millisecond'
-					WHERE org_id = $1 AND environment_id = $2 AND resource = $3 AND service = $4 AND holder = $5`,
-					append(key, holder, s.lease.Milliseconds())...) //nolint:errcheck // retried at the next tick
+				_, _ = s.db.Exec(ctx, renewKeyLock, append(key, holder, s.lease.Milliseconds())...) //nolint:errcheck // retried at the next tick
 			}
 		}
 	}()
@@ -108,9 +115,7 @@ func (s *PgStore) holdLease(key []any, holder string) func() {
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			// A release that fails leaves the lease to expire.
-			_, _ = s.db.Exec(ctx, `DELETE FROM loomplane_fabriq_key_locks
-				WHERE org_id = $1 AND environment_id = $2 AND resource = $3 AND service = $4 AND holder = $5`,
-				append(key, holder)...) //nolint:errcheck // the lease expires on its own
+			_, _ = s.db.Exec(ctx, releaseKeyLock, append(key, holder)...) //nolint:errcheck // the lease expires on its own
 		})
 	}
 }

@@ -229,10 +229,9 @@ func (h *Hooks) current(ctx context.Context, admin *AdminClient, c deployments.C
 	return "", nil
 }
 
-// issue issues the service a new key for tenant and records it active,
-// after revoking any key Fabriq has for the service that Loomplane has no
-// live record of: one issued before a crash kept Loomplane from recording
-// it.
+// issue issues the service a new key for tenant and records it active.
+// BindConsumer has already revoked the keys labelled for the service that
+// no live record names.
 func (h *Hooks) issue(ctx context.Context, admin *AdminClient, c deployments.Consumer, tenant string) (string, error) {
 	issued, err := admin.IssueKey(ctx, KeyLabel(c.Service))
 	if err != nil {
@@ -253,7 +252,8 @@ func (h *Hooks) issue(ctx context.Context, admin *AdminClient, c deployments.Con
 	if !errors.Is(err, ErrConflict) {
 		return "", fmt.Errorf("record %s's Fabriq key: %w", c.Service, err)
 	}
-	// Another release of the service recorded its key first: use that one.
+	// The service lock keeps a second writer out, so this is defensive: if
+	// an active key was recorded anyway, use it.
 	records, rerr := h.d.Keys.ForService(ctx, c.OrgID, c.EnvironmentID, c.Resource, c.Service)
 	if rerr != nil {
 		return "", rerr
@@ -273,7 +273,7 @@ func (h *Hooks) issue(ctx context.Context, admin *AdminClient, c deployments.Con
 func (h *Hooks) revokeOrphans(ctx context.Context, admin *AdminClient, c deployments.Consumer) error {
 	keys, err := admin.Keys(ctx)
 	if err != nil {
-		return &fabriqFailure{fmt.Errorf("list Fabriq's keys: %w", err)}
+		return &fabriqError{fmt.Errorf("list Fabriq's keys: %w", err)}
 	}
 	return h.revokeUnrecorded(ctx, admin, keys, c.OrgID, c.EnvironmentID, c.Resource, c.Service)
 }
@@ -293,22 +293,22 @@ func (h *Hooks) revokeUnrecorded(ctx context.Context, admin *AdminClient, keys [
 			continue
 		}
 		if err := admin.RevokeKey(ctx, k.ID); err != nil {
-			return &fabriqFailure{fmt.Errorf("revoke an unrecorded Fabriq key of %s: %w", service, err)}
+			return &fabriqError{fmt.Errorf("revoke an unrecorded Fabriq key of %s: %w", service, err)}
 		}
 		if err := h.d.Secrets.Delete(ctx, VaultKey(orgID, environmentID, resource, k.ID)); err != nil {
-			return err
+			return fmt.Errorf("forget an unrecorded Fabriq key of %s (%s): %w", service, k.Prefix, err)
 		}
 	}
 	return nil
 }
 
-// fabriqFailure is an error from Fabriq's admin API or the channel to it,
+// fabriqError is an error from Fabriq's admin API or the channel to it,
 // as opposed to one from the key store or Vault. The panel reports the
 // first as Fabriq being unavailable and the second as what it is.
-type fabriqFailure struct{ err error }
+type fabriqError struct{ err error }
 
-func (e *fabriqFailure) Error() string { return e.err.Error() }
-func (e *fabriqFailure) Unwrap() error { return e.err }
+func (e *fabriqError) Error() string { return e.err.Error() }
+func (e *fabriqError) Unwrap() error { return e.err }
 
 // liveIDs are the ids of the records that aren't revoked.
 func liveIDs(records []*KeyRecord) map[string]bool {
