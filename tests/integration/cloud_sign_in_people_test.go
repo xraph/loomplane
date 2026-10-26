@@ -42,8 +42,10 @@ func TestLeftSignInsLapseOnlyPersonalClouds(t *testing.T) {
 	now := time.Now().UTC()
 	add := func(id, cloud string) {
 		t.Helper()
+		// Checked just now, so the daily probe leaves them alone and the
+		// test sees only what leaving does.
 		c := &connections.Connection{ID: id, OrgID: "org_1", Cloud: cloud, Name: id, Status: connections.StatusReady, Method: connections.MethodOAuth,
-			SignedInBy: "ada", CreatedBy: "ada", Account: "acct", CreatedAt: now, UpdatedAt: now}
+			SignedInBy: "ada", CreatedBy: "ada", Account: "acct", CheckedAt: &now, CreatedAt: now, UpdatedAt: now}
 		if err := store.CreateConnection(ctx, c); err != nil {
 			t.Fatal(err)
 		}
@@ -83,7 +85,7 @@ func TestLeftSignInsLapseOnlyPersonalClouds(t *testing.T) {
 		t.Fatal(err)
 	}
 	report, err = svc.RefreshDue(ctx)
-	if err != nil || report.Left != 1 || report.Failed != 0 {
+	if err != nil || report.Left != 1 || report.Failed != 0 || report.Probed != 0 {
 		t.Fatalf("after ada left: %+v %v", report, err)
 	}
 	gcp, err := store.GetConnection(ctx, "org_1", "conn_gcp")
