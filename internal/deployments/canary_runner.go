@@ -392,10 +392,12 @@ func (r *Runner) CanaryRevert(ctx context.Context, orgID, deploymentID, reason s
 	// deployment is split between old and new: not a rollback.
 	partial := slices.ContainsFunc(d.Canary.Services, func(svc CanaryService) bool { return promoted(d, svc) })
 	_, err = r.updateCanary(ctx, orgID, deploymentID, func(c *Canary) error {
+		// Every candidate still up is back at 0%, so Weight is 0 either way.
+		c.Weight = 0
 		if partial {
 			c.Status = CanaryPromoteFailed
 		} else {
-			c.Status, c.Weight = CanaryRolledBack, 0
+			c.Status = CanaryRolledBack
 		}
 		return nil
 	})
@@ -417,11 +419,12 @@ func (r *Runner) revert(ctx context.Context, d *Deployment, plan *planning.Plan,
 
 // settleCanary ends the canary of a deployment that failed, from what its
 // services show, so a failed deployment never shows a canary still in
-// flight. One still promoting couldn't be promoted, and one with a service
-// an earlier attempt promoted is split between old and new, which a
-// rollback can't be. Otherwise, a candidate
-// still up means traffic may still be split, so the revert failed; with
-// none up, every binding names what runs, and the canary rolled back.
+// flight. One still promoting couldn't be promoted. Otherwise, an unpromoted
+// candidate still up means traffic may still be split, so the revert
+// failed, whatever else was promoted. With none up, a service an earlier
+// attempt promoted leaves old and new side by side, which a rollback can't
+// be; with none promoted, every binding names what runs, and the canary
+// rolled back.
 func (r *Runner) settleCanary(ctx context.Context, d *Deployment, reason string) error {
 	c := d.Canary
 	if c == nil {
@@ -436,10 +439,12 @@ func (r *Runner) settleCanary(ctx context.Context, d *Deployment, reason string)
 	partial := slices.ContainsFunc(c.Services, func(svc CanaryService) bool { return promoted(d, svc) })
 	_, err := r.updateCanary(ctx, d.OrgID, d.ID, func(c *Canary) error {
 		switch {
-		case c.Status == CanaryPromoting || partial:
+		case c.Status == CanaryPromoting:
 			c.Status = CanaryPromoteFailed
 		case up:
 			c.Status = CanaryRevertFailed
+		case partial:
+			c.Status = CanaryPromoteFailed
 		default:
 			c.Status, c.Weight = CanaryRolledBack, 0
 		}

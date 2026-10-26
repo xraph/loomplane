@@ -160,7 +160,7 @@ func (m *memStore) RecordVerdict(_ context.Context, v *CanaryVerdict) error {
 	if !ok || d.OrgID != v.OrgID {
 		return ErrNotFound
 	}
-	v.ID, v.ProjectID = VerdictID(v.DeploymentID, v.ActionID, v.Step, v.Attempt), d.ProjectID
+	v.ID, v.ProjectID = VerdictID(v.DeploymentID, v.Retry, v.ActionID, v.Step, v.Attempt), d.ProjectID
 	if m.verdicts == nil {
 		m.verdicts = map[string]CanaryVerdict{}
 	}
@@ -180,6 +180,9 @@ func (m *memStore) Verdicts(_ context.Context, org, id string) ([]CanaryVerdict,
 		}
 	}
 	slices.SortFunc(out, func(a, b CanaryVerdict) int {
+		if a.Retry != b.Retry {
+			return a.Retry - b.Retry
+		}
 		if a.Step != b.Step {
 			return a.Step - b.Step
 		}
