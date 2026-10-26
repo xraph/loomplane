@@ -11,6 +11,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/xraph/loomplane/internal/security"
@@ -103,11 +104,12 @@ func (s *Service) refreshCapacity(ctx context.Context, org, cloud string) (*Capa
 	}
 	accounts := map[string]provider.CapacityInventory{}
 	catalogs := map[string]provider.ServerOptions{}
-	// Only accounts holding managed servers need their catalog read for prices.
-	priced := map[string]bool{}
+	// Only an account holding a managed server without a current price has its
+	// catalog read, so a Cloud whose servers are priced makes no catalog calls.
+	unpriced := map[string]bool{}
 	for _, v := range servers {
-		if v.Ownership == "managed" && v.Provider != "server" && v.Status != "deleted" {
-			priced[v.Provider+"/"+v.AccountID] = true
+		if needsPrice(v) {
+			unpriced[v.Provider+"/"+v.AccountID] = true
 		}
 	}
 	ids := make([]string, 0, len(connectionIDs))
@@ -144,10 +146,8 @@ func (s *Service) refreshCapacity(ctx context.Context, org, cloud string) (*Capa
 			return nil, provider.ErrInfrastructureIdentity
 		}
 		accounts[key] = snapshot
-		// Prices are a display estimate. A catalog that can't be read leaves
-		// the last known prices in place rather than failing the refresh.
-		if catalog, ok := adapter.(provider.ServerOptionsAdapter); ok && priced[key] {
-			if options, optionsErr := catalog.ServerOptions(ctx, credential); optionsErr == nil {
+		if unpriced[key] {
+			if options, ok := s.catalog(ctx, key, adapter, credential); ok {
 				catalogs[key] = options
 			}
 		}
@@ -168,8 +168,17 @@ func (s *Service) refreshCapacity(ctx context.Context, org, cloud string) (*Capa
 			}
 			v = checked
 		}
-		if options, ok := catalogs[v.Provider+"/"+v.AccountID]; ok && v.Ownership == "managed" && catalogPrice(v, options) {
-			if e := s.Store.SaveServer(ctx, v); e != nil {
+		if options, ok := catalogs[v.Provider+"/"+v.AccountID]; ok && needsPrice(v) && catalogPrice(v, options) {
+			// A price is a display estimate. A server that changed under the
+			// refresh keeps its stored facts, and the next refresh prices it.
+			if e := s.Store.SaveServer(ctx, v); errors.Is(e, ErrConflict) {
+				s.warn("Couldn't save a server's catalog price; the next refresh tries again", e)
+				current, getErr := s.Store.GetServer(ctx, org, cloud, v.ID)
+				if getErr != nil {
+					return nil, getErr
+				}
+				v = current
+			} else if e != nil {
 				return nil, e
 			}
 		}
@@ -278,6 +287,58 @@ func (s *Service) refreshCapacity(ctx context.Context, org, cloud string) (*Capa
 	return usage, nil
 }
 
+// catalogTTL bounds how often a provider catalog is read for prices. DigitalOcean
+// serves it over several paginated requests on the same token as inventory.
+const catalogTTL = time.Hour
+
+type catalogEntry struct {
+	options provider.ServerOptions
+	ok      bool
+	at      time.Time
+}
+
+// catalogCache keeps one catalog read per account, failed reads included, so
+// a rate-limited provider isn't asked again before the TTL runs out.
+type catalogCache struct {
+	mu      sync.Mutex
+	entries map[string]catalogEntry
+}
+
+// catalog returns the account's server catalog, read at most once per catalogTTL.
+func (s *Service) catalog(ctx context.Context, key string, adapter provider.ServerAdapter, credential provider.InfrastructureCredential) (provider.ServerOptions, bool) {
+	reader, ok := adapter.(provider.ServerOptionsAdapter)
+	if !ok {
+		return provider.ServerOptions{}, false
+	}
+	now := s.now()
+	s.catalogs.mu.Lock()
+	entry, cached := s.catalogs.entries[key]
+	s.catalogs.mu.Unlock()
+	if cached && now.Sub(entry.at) < catalogTTL {
+		return entry.options, entry.ok
+	}
+	options, err := reader.ServerOptions(ctx, credential)
+	if ctx.Err() != nil {
+		return provider.ServerOptions{}, false
+	}
+	entry = catalogEntry{options: options, ok: err == nil, at: now}
+	if err != nil {
+		s.warn("Couldn't read the server catalog for prices; the next read is in an hour", err)
+	}
+	s.catalogs.mu.Lock()
+	s.catalogs.entries[key] = entry
+	s.catalogs.mu.Unlock()
+	return entry.options, entry.ok
+}
+
+// needsPrice reports whether a managed provider server lacks a price for its current size.
+func needsPrice(v *Server) bool {
+	if v.Ownership != "managed" || v.Provider == "server" || v.Status == "deleted" || v.Status == "disconnected" {
+		return false
+	}
+	return !v.HourlyPriceKnown || v.PricedSize != v.Size
+}
+
 // catalogPrice updates a managed server's hourly price and GPUs from the
 // catalog row for its size. It reports whether anything changed. A size the
 // catalog no longer lists keeps its last known facts.
@@ -286,10 +347,10 @@ func catalogPrice(v *Server, options provider.ServerOptions) bool {
 		if size.ID != v.Size {
 			continue
 		}
-		if v.HourlyUSD == size.HourlyUSD && v.HourlyPriceKnown == size.HourlyPriceKnown && reflect.DeepEqual(v.Accelerator, size.Accelerator) {
+		if v.PricedSize == size.ID && v.HourlyUSD == size.HourlyUSD && v.HourlyPriceKnown == size.HourlyPriceKnown && reflect.DeepEqual(v.Accelerator, size.Accelerator) {
 			return false
 		}
-		v.HourlyUSD, v.HourlyPriceKnown, v.Accelerator = size.HourlyUSD, size.HourlyPriceKnown, cloneAccelerator(size.Accelerator)
+		v.HourlyUSD, v.HourlyPriceKnown, v.Accelerator, v.PricedSize = size.HourlyUSD, size.HourlyPriceKnown, cloneAccelerator(size.Accelerator), size.ID
 		return true
 	}
 	return false

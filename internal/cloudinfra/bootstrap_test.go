@@ -116,21 +116,37 @@ func TestBootstrapConfiguresNVIDIAToolkitForGPUServers(t *testing.T) {
 		return slices.IndexFunc(runcmd, func(c string) bool { return strings.Contains(c, want) })
 	}
 	install := index("nvidia-container-toolkit")
+	enable := index("systemctl enable --now docker")
 	configure := index("nvidia-ctk runtime configure --runtime=docker")
 	restart := index("systemctl restart docker")
 	enroll := index("python3 /root/loomplane-enroll.py")
-	if index("systemctl enable --now docker") != 0 || install < 1 || configure <= install || restart <= configure || enroll <= restart {
+	if install != 0 || enable <= install || configure <= enable || restart <= configure || enroll <= restart {
 		t.Fatalf("toolkit steps out of order: %q", runcmd)
 	}
-	script := runcmd[install]
-	for _, want := range []string{"command -v nvidia-ctk", "exit 0", "https://nvidia.github.io/libnvidia-container/gpgkey", "https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list", "apt-get install -y nvidia-container-toolkit"} {
+	script, ok := strings.CutPrefix(runcmd[install], "bash -c ")
+	if !ok || !strings.HasPrefix(script, "set -euo pipefail\n") {
+		t.Fatalf("toolkit script must run under bash with pipefail: %q", runcmd[install])
+	}
+	for _, want := range []string{"command -v nvidia-ctk", "exit 0", "https://nvidia.github.io/libnvidia-container/gpgkey", "https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list", "install -y nvidia-container-toolkit"} {
 		if !strings.Contains(script, want) {
 			t.Fatalf("toolkit script lacks %q: %s", want, script)
 		}
 	}
-	// The script only installs when nvidia-ctk is missing, so the check comes first.
-	if strings.Index(script, "command -v nvidia-ctk") > strings.Index(script, "apt-get") {
+	// Docker is installed only when the image has none, before the early exit
+	// for an image that already has the toolkit.
+	dockerCheck, dockerInstall := strings.Index(script, "if ! command -v docker"), strings.Index(script, "install -y docker.io")
+	if dockerCheck < 0 || dockerInstall < dockerCheck || dockerInstall > strings.Index(script, "command -v nvidia-ctk") {
+		t.Fatalf("Docker install isn't guarded: %s", script)
+	}
+	// The toolkit is installed only when nvidia-ctk is missing, so the check comes first.
+	if strings.Index(script, "command -v nvidia-ctk") > strings.Index(script, "install -y nvidia-container-toolkit") {
 		t.Fatalf("toolkit script installs before checking: %s", script)
+	}
+	// Every apt-get waits for a held dpkg lock rather than failing on it.
+	for _, line := range strings.Split(script, "\n") {
+		if strings.Contains(line, "apt-get") && !strings.Contains(line, "-o DPkg::Lock::Timeout=300") {
+			t.Fatalf("apt-get without a lock timeout: %q", line)
+		}
 	}
 	// The GPU-ready image ships the driver. The bootstrap never installs one.
 	for _, c := range runcmd {
@@ -138,7 +154,9 @@ func TestBootstrapConfiguresNVIDIAToolkitForGPUServers(t *testing.T) {
 			t.Fatalf("bootstrap installs a driver: %s", c)
 		}
 	}
-	if !slices.Contains(packages, "docker.io") || !slices.Contains(packages, "curl") || !slices.Contains(packages, "gnupg") {
+	// A GPU-ready image may ship its own Docker engine, which cloud-init's
+	// packages step must not fight over. The script installs docker.io only when missing.
+	if slices.Contains(packages, "docker.io") || !slices.Contains(packages, "python3") || !slices.Contains(packages, "curl") || !slices.Contains(packages, "gnupg") {
 		t.Fatalf("GPU packages: %q", packages)
 	}
 	// An AMD accelerator gets no NVIDIA steps (creation refuses AMD sizes anyway).
@@ -172,6 +190,7 @@ func (s *gpuServerStore) GetServer(_ context.Context, _, _, id string) (*Server,
 type gpuConnectionStore struct {
 	rows    map[string]*connections.Connection
 	updates int
+	changed int // UpdateConnection calls left to fail with ErrChanged
 }
 
 func copyConnection(c *connections.Connection) *connections.Connection {
@@ -199,6 +218,10 @@ func (s *gpuConnectionStore) ListConnections(context.Context, string) ([]*connec
 func (s *gpuConnectionStore) UpdateConnection(_ context.Context, c *connections.Connection) error {
 	if _, ok := s.rows[c.ID]; !ok {
 		return connections.ErrNotFound
+	}
+	if s.changed > 0 {
+		s.changed--
+		return connections.ErrChanged
 	}
 	s.updates++
 	s.rows[c.ID] = copyConnection(c)
@@ -335,6 +358,10 @@ func TestUnreadyGPUServerStillEnrolls(t *testing.T) {
 			if tc.message != "" && got.Health.GPUMessage != tc.message {
 				t.Fatalf("probe message replaced: %q", got.Health.GPUMessage)
 			}
+			// Nothing re-runs the bootstrap, so the fallback says what to do.
+			if tc.message == "" && (!strings.Contains(got.Health.GPUMessage, "Nothing retries the setup by itself") || !strings.Contains(got.Health.GPUMessage, "nvidia-ctk runtime configure --runtime=docker") || !strings.Contains(got.Health.GPUMessage, "1 NVIDIA H100 80GB GPU")) {
+				t.Fatalf("fallback GPU message: %q", got.Health.GPUMessage)
+			}
 			if got.Accelerator == nil || got.Accelerator.Kind != "nvidia-h100-80gb" || got.HourlyUSD != 3.39 || !got.HourlyPriceKnown {
 				t.Fatalf("GPU server cost: %+v %v %v", got.Accelerator, got.HourlyUSD, got.HourlyPriceKnown)
 			}
@@ -361,5 +388,106 @@ func TestCPUServerEnrollmentKeepsGPUFree(t *testing.T) {
 	}
 	if c, err := conns.GetConnection(t.Context(), "org", "conn_gpu"); err != nil || c.Details[provider.GPUDetailStatus] != provider.GPUStatusNone {
 		t.Fatalf("CPU runtime connection: %v %v", c, err)
+	}
+}
+
+func TestServerCheckSurvivesRuntimeConnectionConflicts(t *testing.T) {
+	unready := RuntimeHealth{DockerID: "docker-gpu", Architecture: "amd64", CPUs: 20, MemoryBytes: 240 << 30, GPUs: []provider.GPUDevice{h100Device}, GPURuntime: provider.GPUStatusToolkitMissing, GPUMessage: "Docker can't use the GPU.", CheckedAt: time.Now().UTC()}
+	ready := unready
+	ready.GPURuntime, ready.GPUMessage = provider.GPUStatusReady, ""
+	for _, tc := range []struct {
+		name     string
+		changed  int
+		want     string
+		warnings int
+	}{
+		{"retried once", 1, provider.GPUStatusReady, 0},
+		{"changed twice", 2, provider.GPUStatusToolkitMissing, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, store, conns, o, v := gpuEnrollment(t, unready)
+			var warnings []error
+			s.Warn = func(_ string, err error) { warnings = append(warnings, err) }
+			if err := s.readyRuntime(t.Context(), o, v); err != nil {
+				t.Fatal(err)
+			}
+			s.Runtime = &gpuHealthRuntime{health: ready}
+			conns.changed = tc.changed
+			checked, err := s.checkServer(t.Context(), "org", "cloud", "server_gpu")
+			if err != nil || checked.Status != "ready" || store.servers["server_gpu"].Health.GPURuntime != provider.GPUStatusReady {
+				t.Fatalf("a connection conflict failed the check: %+v %v", checked, err)
+			}
+			c, err := conns.GetConnection(t.Context(), "org", "conn_gpu")
+			if err != nil || c.Details[provider.GPUDetailStatus] != tc.want || len(warnings) != tc.warnings {
+				t.Fatalf("connection %q, %d warnings: %v", c.Details[provider.GPUDetailStatus], len(warnings), err)
+			}
+		})
+	}
+}
+
+// countingCatalog is a provider adapter that only serves its catalog.
+type countingCatalog struct {
+	provider.ServerAdapter
+	calls int
+	fail  bool
+}
+
+func (c *countingCatalog) ServerOptions(context.Context, provider.InfrastructureCredential) (provider.ServerOptions, error) {
+	c.calls++
+	if c.fail {
+		return provider.ServerOptions{}, errors.New("429 too many requests")
+	}
+	return gpuOptions(), nil
+}
+
+func TestCatalogReadAtMostHourly(t *testing.T) {
+	s := NewService(Deps{})
+	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
+	s.now = func() time.Time { return now }
+	adapter := &countingCatalog{fail: true}
+	// A failed read, a rate limit say, is cached too, so the provider isn't asked again within the hour.
+	for range 3 {
+		if _, ok := s.catalog(t.Context(), "digitalocean/account", adapter, provider.InfrastructureCredential{}); ok {
+			t.Fatal("failed catalog read reported ok")
+		}
+	}
+	if adapter.calls != 1 {
+		t.Fatalf("catalog reads within the hour: %d", adapter.calls)
+	}
+	adapter.fail = false
+	now = now.Add(catalogTTL)
+	options, ok := s.catalog(t.Context(), "digitalocean/account", adapter, provider.InfrastructureCredential{})
+	if !ok || len(options.Sizes) != 2 || adapter.calls != 2 {
+		t.Fatalf("catalog after the hour: %v %d", ok, adapter.calls)
+	}
+	if _, ok = s.catalog(t.Context(), "digitalocean/other", adapter, provider.InfrastructureCredential{}); !ok || adapter.calls != 3 {
+		t.Fatalf("another account shares the cache: %d", adapter.calls)
+	}
+}
+
+func TestNeedsPrice(t *testing.T) {
+	priced := &Server{Ownership: "managed", Provider: "digitalocean", Status: "ready", Size: "c-32", PricedSize: "c-32", HourlyUSD: 1, HourlyPriceKnown: true}
+	if needsPrice(priced) {
+		t.Fatal("a priced server asked for the catalog")
+	}
+	resized := *priced
+	resized.Size = "gpu-h100x1-80gb"
+	unknown := *priced
+	unknown.HourlyPriceKnown = false
+	if !needsPrice(&resized) || !needsPrice(&unknown) {
+		t.Fatal("a resized or unpriced server kept its price")
+	}
+	adopted := unknown
+	adopted.Ownership = "adopted"
+	deleted := unknown
+	deleted.Status = "deleted"
+	if needsPrice(&adopted) || needsPrice(&deleted) {
+		t.Fatal("an adopted or deleted server asked for the catalog")
+	}
+	if !catalogPrice(&resized, gpuOptions()) || resized.HourlyUSD != 3.39 || resized.PricedSize != "gpu-h100x1-80gb" || resized.Accelerator == nil || needsPrice(&resized) {
+		t.Fatalf("catalog price: %+v", resized)
+	}
+	if catalogPrice(&resized, gpuOptions()) {
+		t.Fatal("an unchanged price reported a change")
 	}
 }

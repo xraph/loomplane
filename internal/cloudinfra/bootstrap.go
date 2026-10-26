@@ -164,30 +164,41 @@ for attempt in range(180):
 	}
 	script = strings.ReplaceAll(strings.ReplaceAll(script, "ENDPOINT", string(ep)), "TOKEN", string(token))
 	packages := []string{"docker.io", "python3", "iproute2"}
-	runcmd := []any{[]string{"systemctl", "enable", "--now", "docker"}}
+	runcmd := []any{[]string{"systemctl", "enable", "--now", "docker"}, []string{"python3", "/root/loomplane-enroll.py"}}
 	if nvidiaAccelerator(o.Accelerator) {
-		// The GPU-ready image ships the driver. Docker still needs the NVIDIA
-		// Container Toolkit, so add it when missing and point Docker at it
+		// The GPU-ready image ships the driver and may ship Docker, so the
+		// script installs Docker only when it's missing, adds the NVIDIA
+		// Container Toolkit when that's missing, and Docker is pointed at it
 		// before the server enrolls. A failure here still enrolls the server,
 		// and its GPU check then says why it can't take GPU work.
-		packages = append(packages, "ca-certificates", "curl", "gnupg")
-		runcmd = append(runcmd, []string{"sh", "-c", nvidiaToolkitScript}, []string{"nvidia-ctk", "runtime", "configure", "--runtime=docker"}, []string{"systemctl", "restart", "docker"})
+		packages = []string{"python3", "iproute2", "ca-certificates", "curl", "gnupg"}
+		runcmd = []any{[]string{"bash", "-c", nvidiaToolkitScript}, []string{"systemctl", "enable", "--now", "docker"}, []string{"nvidia-ctk", "runtime", "configure", "--runtime=docker"}, []string{"systemctl", "restart", "docker"}, []string{"python3", "/root/loomplane-enroll.py"}}
 	}
-	runcmd = append(runcmd, []string{"python3", "/root/loomplane-enroll.py"})
 	document := map[string]any{"package_update": true, "groups": []string{"docker"}, "packages": packages, "users": []any{"default", map[string]any{"name": "loomplane", "groups": []string{"docker"}, "shell": "/bin/bash", "ssh_authorized_keys": []string{strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey())))}}}, "write_files": []any{map[string]any{"path": "/root/loomplane-enroll.py", "permissions": "0600", "content": script}}, "runcmd": runcmd}
 	encoded, err := json.Marshal(document)
 	return "#cloud-config\n" + string(encoded), err
 }
 
-// nvidiaToolkitScript installs the NVIDIA Container Toolkit from NVIDIA's apt
-// repository, unless nvidia-ctk is already there. It never installs a driver.
-const nvidiaToolkitScript = `set -eu
+// nvidiaToolkitScript prepares a GPU-ready image for containers. It installs
+// Docker only when the image has none, so an engine the image ships stays,
+// then installs the NVIDIA Container Toolkit from NVIDIA's apt repository
+// unless nvidia-ctk is already there. It never installs a driver. Any failed
+// step stops the script, and the server's GPU check then says what's missing.
+const nvidiaToolkitScript = `set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
+if ! command -v docker >/dev/null 2>&1; then
+  apt-get -o DPkg::Lock::Timeout=300 update
+  apt-get -o DPkg::Lock::Timeout=300 install -y docker.io
+fi
 if command -v nvidia-ctk >/dev/null 2>&1; then exit 0; fi
 keyring=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
-curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey | gpg --batch --yes --dearmor -o "$keyring"
-curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list | sed "s#deb https://#deb [signed-by=$keyring] https://#g" > /etc/apt/sources.list.d/nvidia-container-toolkit.list
-apt-get update
-DEBIAN_FRONTEND=noninteractive apt-get install -y nvidia-container-toolkit
+download=$(mktemp -d)
+curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey -o "$download/gpgkey"
+gpg --batch --yes --dearmor -o "$keyring" "$download/gpgkey"
+curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list -o "$download/list"
+sed "s#deb https://#deb [signed-by=$keyring] https://#g" "$download/list" > /etc/apt/sources.list.d/nvidia-container-toolkit.list
+apt-get -o DPkg::Lock::Timeout=300 update
+apt-get -o DPkg::Lock::Timeout=300 install -y nvidia-container-toolkit
 `
 
 func nvidiaAccelerator(a *provider.Accelerator) bool {
@@ -213,7 +224,7 @@ func gpuHealth(h RuntimeHealth, a *provider.Accelerator) RuntimeHealth {
 		if a.Count != 1 {
 			noun, them = "GPUs", "them"
 		}
-		h.GPUMessage = fmt.Sprintf("This server was bought with %d %s %s, but Loomplane can't confirm Docker can use %s. It takes no GPU work until a server check finds %s ready.", a.Count, title, noun, them, them)
+		h.GPUMessage = fmt.Sprintf("This server was bought with %d %s %s, but Loomplane can't confirm Docker can use %s, so it takes no GPU work and still costs money. Nothing retries the setup by itself. Install the NVIDIA Container Toolkit on the server, run nvidia-ctk runtime configure --runtime=docker, restart Docker and check the server again, or delete the server.", a.Count, title, noun, them)
 	}
 	return h
 }
@@ -245,6 +256,25 @@ func (s *Service) syncRuntimeGPUs(ctx context.Context, conn *connections.Connect
 	}
 	maps.Copy(updated.Details, details)
 	return s.RuntimeConnections.UpdateConnection(ctx, &updated)
+}
+
+// checkedRuntimeGPUs is syncRuntimeGPUs for a routine server check. A
+// connection changed under the check is read again and written once more; if
+// it changes again the check carries on, and the next one writes the inventory.
+func (s *Service) checkedRuntimeGPUs(ctx context.Context, org string, conn *connections.Connection, h RuntimeHealth) error {
+	err := s.syncRuntimeGPUs(ctx, conn, h)
+	if !errors.Is(err, connections.ErrChanged) {
+		return err
+	}
+	fresh, getErr := s.RuntimeConnections.GetConnection(ctx, org, conn.ID)
+	if getErr != nil {
+		return getErr
+	}
+	if err = s.syncRuntimeGPUs(ctx, fresh, h); errors.Is(err, connections.ErrChanged) {
+		s.warn("Couldn't write a server's GPU inventory to its runtime connection; the next check tries again", err)
+		return nil
+	}
+	return err
 }
 
 func (s *Service) bootstrapSecret(ctx context.Context, o *Operation) (*bootstrapSecret, error) {

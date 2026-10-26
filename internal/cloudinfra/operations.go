@@ -223,6 +223,7 @@ func priceServer(v *Server, o *Operation) {
 	v.Accelerator = cloneAccelerator(o.Accelerator)
 	v.HourlyUSD = o.EstimatedHourlyUSD
 	v.HourlyPriceKnown = o.HourlyPriceKnown
+	v.PricedSize = o.Input.Size
 }
 
 func cloneAccelerator(a *provider.Accelerator) *provider.Accelerator {

@@ -26,10 +26,12 @@ var (
 // gpuExpansionProvider offers a plain image, a GPU-ready one and the test's sizes.
 type gpuExpansionProvider struct {
 	*infraProvider
-	sizes []provider.ServerSize
+	sizes        []provider.ServerSize
+	optionsCalls int
 }
 
 func (p *gpuExpansionProvider) ServerOptions(context.Context, provider.InfrastructureCredential) (provider.ServerOptions, error) {
+	p.optionsCalls++
 	return provider.ServerOptions{Regions: []provider.ServerRegion{{ID: "region"}},
 		Images: []provider.ServerImage{
 			{ID: "ubuntu", Bootstrap: true, Architecture: "amd64", Regions: []string{"region"}},
@@ -53,6 +55,9 @@ func (r *gpuExpansionRuntime) Inspect(ctx context.Context, raw []byte, settings 
 	h.EffectiveCPUMillis = 2000
 	h.EffectiveMemoryBytes = 2 << 30
 	h.GPURuntime = r.gpuRuntime
+	if r.kind == "" {
+		return h, err
+	}
 	title := r.kind
 	if k, ok := provider.LookupAcceleratorKind(r.kind); ok {
 		title = k.Title
@@ -71,7 +76,10 @@ func gpuServerFixture(t *testing.T, gpuRuntime string, sizes ...provider.ServerS
 		t.Fatal(err)
 	}
 	f.svc.Adapters = adapters
-	runtime := &gpuExpansionRuntime{infraRuntime: f.runtime, gpuRuntime: gpuRuntime, kind: sizes[0].Accelerator.Kind}
+	runtime := &gpuExpansionRuntime{infraRuntime: f.runtime, gpuRuntime: gpuRuntime}
+	if sizes[0].Accelerator != nil {
+		runtime.kind = sizes[0].Accelerator.Kind
+	}
 	f.svc.Runtime = runtime
 	return f, p, runtime
 }
@@ -281,35 +289,52 @@ func TestEnrollmentRecordsGPURuntime(t *testing.T) {
 		t.Fatalf("resized GPU server: %+v %v", server, err)
 	}
 
-	// Inventory refresh follows the catalog's price for the server's size.
-	p.sizes[1].HourlyUSD = 24.5
+	if server.PricedSize != h100x8Size.ID {
+		t.Fatalf("resized server priced for %q", server.PricedSize)
+	}
+	// Inventory refresh prices a server whose price is unknown from the catalog.
+	server.HourlyUSD, server.HourlyPriceKnown, server.Accelerator = 0, false, nil
+	if err = f.store.SaveServer(ctx, server); err != nil {
+		t.Fatal(err)
+	}
 	if _, err = f.svc.RefreshCapacity(ctx, f.p, "cloud"); err != nil {
 		t.Fatal(err)
 	}
 	server, err = f.store.GetServer(ctx, "org", "cloud", server.ID)
-	if err != nil || server.HourlyUSD != 24.5 || !server.HourlyPriceKnown || server.Accelerator == nil || server.Accelerator.Count != 8 {
+	if err != nil || server.HourlyUSD != 23.92 || !server.HourlyPriceKnown || server.Accelerator == nil || server.Accelerator.Count != 8 {
 		t.Fatalf("refreshed GPU server price: %+v %v", server, err)
 	}
 }
 
 func TestExpansionCarriesHourlyCost(t *testing.T) {
-	f, _, d := gpuExpansionFixtureFor(t, h100Size, provider.GPUStatusReady, true)
-	e := ensureExpansion(t, f, d)
-	// The expansion waits for approval with its hourly price and GPUs on it.
-	if e.Status != "awaiting_approval" || e.EstimatedHourlyUSD != 3.39 || e.Accelerator == nil || e.Accelerator.Kind != "nvidia-h100-80gb" || e.Accelerator.Count != 1 {
-		t.Fatalf("GPU expansion cost: %s %v %+v", e.Status, e.EstimatedHourlyUSD, e.Accelerator)
-	}
-	approved, err := f.svc.ApproveExpansion(t.Context(), f.p, "cloud", e.ID, e.Revision)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if approved.EstimatedHourlyUSD != 3.39 || approved.Accelerator == nil {
-		t.Fatalf("approved expansion lost its cost: %+v", approved)
-	}
-	o, err := f.store.GetOperation(t.Context(), "org", "cloud", approved.OperationID)
-	if err != nil || o.EstimatedHourlyUSD != 3.39 || o.Accelerator == nil || o.Accelerator.Kind != "nvidia-h100-80gb" {
-		t.Fatalf("expansion operation cost: %+v %v", o, err)
-	}
+	t.Run("known", func(t *testing.T) {
+		f, _, d := gpuExpansionFixtureFor(t, h100Size, provider.GPUStatusReady, true)
+		e := ensureExpansion(t, f, d)
+		// The expansion waits for approval with its hourly price and GPUs on it.
+		if e.Status != "awaiting_approval" || e.EstimatedHourlyUSD != 3.39 || !e.HourlyPriceKnown || e.Accelerator == nil || e.Accelerator.Kind != "nvidia-h100-80gb" || e.Accelerator.Count != 1 {
+			t.Fatalf("GPU expansion cost: %s %v %v %+v", e.Status, e.EstimatedHourlyUSD, e.HourlyPriceKnown, e.Accelerator)
+		}
+		approved, err := f.svc.ApproveExpansion(t.Context(), f.p, "cloud", e.ID, e.Revision)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if approved.EstimatedHourlyUSD != 3.39 || !approved.HourlyPriceKnown || approved.Accelerator == nil {
+			t.Fatalf("approved expansion lost its cost: %+v", approved)
+		}
+		o, err := f.store.GetOperation(t.Context(), "org", "cloud", approved.OperationID)
+		if err != nil || o.EstimatedHourlyUSD != 3.39 || !o.HourlyPriceKnown || o.Accelerator == nil || o.Accelerator.Kind != "nvidia-h100-80gb" {
+			t.Fatalf("expansion operation cost: %+v %v", o, err)
+		}
+	})
+	t.Run("unknown", func(t *testing.T) {
+		// The catalog has no price for this size, and the expansion says so
+		// rather than showing a free server.
+		f, _, d := gpuExpansionFixtureFor(t, l4Size, provider.GPUStatusReady, true)
+		e := ensureExpansion(t, f, d)
+		if e.Status != "awaiting_approval" || e.HourlyPriceKnown || e.EstimatedHourlyUSD != 0 || e.Accelerator == nil || e.Accelerator.Kind != "nvidia-l4" {
+			t.Fatalf("unpriced GPU expansion: %s %v %v %+v", e.Status, e.EstimatedHourlyUSD, e.HourlyPriceKnown, e.Accelerator)
+		}
+	})
 }
 
 // With the GPU runtime known at enrolment, a ready GPU Droplet joins its pool on
@@ -347,5 +372,102 @@ func TestGPUExpansionJoinsWhenReadyAtEnrollment(t *testing.T) {
 	}
 	if runtime.calls == calls {
 		t.Fatal("the pass never inspected the enrolled server")
+	}
+}
+
+// pricingConflictStore fails the next priced save of a server, as if another
+// writer changed the server during the refresh.
+type pricingConflictStore struct {
+	*cloudinfra.PgStore
+	conflicts int
+}
+
+func (s *pricingConflictStore) SaveServer(ctx context.Context, v *cloudinfra.Server) error {
+	if s.conflicts > 0 && v.HourlyPriceKnown {
+		s.conflicts--
+		return cloudinfra.ErrConflict
+	}
+	return s.PgStore.SaveServer(ctx, v)
+}
+
+// Inventory refresh runs every 30 seconds per Cloud. A Cloud whose servers are
+// priced never reads the provider catalog, and a price that can't be saved
+// never fails the refresh.
+func TestRefreshReadsCatalogOnlyForUnpricedServers(t *testing.T) {
+	cpu := provider.ServerSize{ID: "s-2vcpu-2gb", CPUs: 2, MemoryMiB: 2048, DiskGB: 20, HourlyUSD: 0.03, HourlyPriceKnown: true, Architectures: []string{"amd64"}, Regions: []string{"region"}}
+	f, p, _ := gpuServerFixture(t, provider.GPUStatusNone, cpu)
+	ctx := t.Context()
+	preview, err := f.svc.PreviewServer(ctx, f.p, "cloud", cloudinfra.ServerInput{Kind: "create", Name: "cpu", ConnectionID: "infra-account", CloudRevision: 1, Region: "region", Size: cpu.ID, Image: "ubuntu"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	o, err := f.svc.ApplyServerOperation(ctx, f.p, "cloud", preview.ID, cloudinfra.ApplyInput{Review: preview.Review})
+	if err != nil {
+		t.Fatal(err)
+	}
+	o = f.reconcile(t, o)
+	o.HostKey, o.Enrolled = infraFixtureHostKey(t), true
+	if err = f.store.SaveOperation(ctx, o); err != nil {
+		t.Fatal(err)
+	}
+	if o = f.reconcile(t, o); o.Status != "succeeded" {
+		t.Fatalf("create: %+v", o)
+	}
+	calls := p.optionsCalls
+	for range 3 {
+		if _, err = f.svc.RefreshCapacity(ctx, f.p, "cloud"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if p.optionsCalls != calls {
+		t.Fatalf("priced CPU Cloud read the catalog %d times", p.optionsCalls-calls)
+	}
+
+	// A server without a price (one priced before prices were recorded, say)
+	// costs one catalog read, then none.
+	unprice := func() {
+		t.Helper()
+		v, getErr := f.store.GetServer(ctx, "org", "cloud", o.ServerID)
+		if getErr != nil {
+			t.Fatal(getErr)
+		}
+		v.HourlyUSD, v.HourlyPriceKnown, v.PricedSize = 0, false, ""
+		if getErr = f.store.SaveServer(ctx, v); getErr != nil {
+			t.Fatal(getErr)
+		}
+	}
+	price := func() *cloudinfra.Server {
+		t.Helper()
+		v, getErr := f.store.GetServer(ctx, "org", "cloud", o.ServerID)
+		if getErr != nil {
+			t.Fatal(getErr)
+		}
+		return v
+	}
+	unprice()
+	for range 2 {
+		if _, err = f.svc.RefreshCapacity(ctx, f.p, "cloud"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if v := price(); p.optionsCalls != calls+1 || v.HourlyUSD != 0.03 || !v.HourlyPriceKnown || v.PricedSize != cpu.ID {
+		t.Fatalf("unpriced server: %d catalog reads, %+v", p.optionsCalls-calls, v)
+	}
+
+	// A price save that loses a race is skipped. The refresh succeeds and the
+	// next one prices the server from the catalog it already read this hour.
+	unprice()
+	f.svc.Store = &pricingConflictStore{PgStore: f.store, conflicts: 1}
+	if _, err = f.svc.RefreshCapacity(ctx, f.p, "cloud"); err != nil {
+		t.Fatalf("a price conflict failed the refresh: %v", err)
+	}
+	if v := price(); v.HourlyPriceKnown {
+		t.Fatalf("conflicted price was saved: %+v", v)
+	}
+	if _, err = f.svc.RefreshCapacity(ctx, f.p, "cloud"); err != nil {
+		t.Fatal(err)
+	}
+	if v := price(); !v.HourlyPriceKnown || v.HourlyUSD != 0.03 || p.optionsCalls != calls+1 {
+		t.Fatalf("price after the conflict: %d catalog reads, %+v", p.optionsCalls-calls, v)
 	}
 }

@@ -242,7 +242,7 @@ func (s *Service) newExpansion(ctx context.Context, st *PgStore, policy *Capacit
 	}
 	e := &Expansion{ID: id, OrgID: policy.OrgID, CloudID: policy.CloudID, PoolID: pool.PoolID, Status: status, IntentHash: id, Revision: 1, PolicyRevision: policy.Revision, Resources: resources, Provider: conn.Cloud, AccountID: credential.AccountID, ConnectionID: conn.ID, ConnectionGeneration: conn.Generation, Region: pool.Region, Size: size, Architecture: pool.Architecture, Image: pool.Image, Template: pool, Minimum: minimum, CreatedAt: now, UpdatedAt: now,
 		// The approval shows what the new server costs per hour and which GPUs it has.
-		EstimatedHourlyUSD: selected.HourlyUSD, Accelerator: cloneAccelerator(selected.Accelerator)}
+		EstimatedHourlyUSD: selected.HourlyUSD, HourlyPriceKnown: selected.HourlyPriceKnown, Accelerator: cloneAccelerator(selected.Accelerator)}
 	if createErr := st.createExpansion(ctx, e, token); createErr != nil {
 		return nil, createErr
 	}

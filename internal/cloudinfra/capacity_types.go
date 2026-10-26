@@ -132,6 +132,7 @@ type Expansion struct {
 	// EstimatedHourlyUSD and Accelerator come from the selected size, so an
 	// approval shows what the new server costs per hour.
 	EstimatedHourlyUSD float64               `json:"estimated_hourly_usd,omitempty"`
+	HourlyPriceKnown   bool                  `json:"hourly_price_known,omitempty"`
 	Accelerator        *provider.Accelerator `json:"accelerator,omitempty"`
 }
 
