@@ -36,6 +36,17 @@ func fabriqDatabase(m *manifest.Manifest, env, name string) (key, path string) {
 	return "", ""
 }
 
+// connectsPostgres says whether a Fabriq resource in m connects a Postgres
+// it doesn't provision in env.
+func connectsPostgres(m *manifest.Manifest, env string) bool {
+	for name := range m.Resources {
+		if key, _ := fabriqDatabase(m, env, name); key != "" {
+			return true
+		}
+	}
+	return false
+}
+
 // checkFabriqDatabases refuses a Fabriq resource whose Postgres server
 // another Fabriq resource already uses: one earlier in this manifest, by
 // name, or one in another of the organization's environments
@@ -137,10 +148,12 @@ type orgResources interface {
 
 var _ orgResources = (*PgStore)(nil)
 
-// fabriqPostgres is Input.FabriqPostgres for plan.
-func (s *Service) fabriqPostgres(ctx context.Context, plan *Plan) (map[string]FabriqUser, error) {
+// fabriqPostgres is Input.FabriqPostgres for plan of m. It reads every
+// resource in the organization, so only a plan with a Fabriq that connects
+// a Postgres it doesn't provision asks.
+func (s *Service) fabriqPostgres(ctx context.Context, plan *Plan, m *manifest.Manifest) (map[string]FabriqUser, error) {
 	lister, ok := s.store.(orgResources)
-	if !ok {
+	if !ok || !connectsPostgres(m, plan.Environment) {
 		return nil, nil
 	}
 	resources, err := lister.OrgResourceBindings(ctx, plan.OrgID)

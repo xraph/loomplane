@@ -1,11 +1,13 @@
 package planning
 
 import (
+	"context"
 	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
 
+	"github.com/xraph/loomplane/internal/manifests"
 	"github.com/xraph/loomplane/internal/providers"
 	"github.com/xraph/loomplane/internal/recipes"
 )
@@ -112,5 +114,47 @@ func TestFabriqPostgresReadsOtherEnvironmentsBindings(t *testing.T) {
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("got %+v", got)
+	}
+}
+
+// orgCountingStore counts the reads of the organization's resources.
+type orgCountingStore struct {
+	catalogStore
+	reads *int
+}
+
+func (s orgCountingStore) OrgResourceBindings(context.Context, string) ([]*OrgResource, error) {
+	*s.reads++
+	return nil, nil
+}
+
+// Only a plan with a Fabriq that connects a Postgres it doesn't provision
+// reads every resource in the organization.
+func TestOnlyAFabriqOnAnotherPostgresReadsTheOrganizationsResources(t *testing.T) {
+	cases := map[string]struct {
+		resources string
+		reads     int
+	}{
+		"no Fabriq":             {"  db: {kind: postgres, provider: server, target: " + targetA + "}\n", 0},
+		"a Fabriq with its own": {"  orders: {kind: fabriq, provider: server, target: " + targetA + "}\n", 0},
+		"a Fabriq that's off":   {"  orders: {kind: fabriq, provider: server, target: " + targetA + ", uses: {postgres: {external: " + prodPG + "}}, environments: {production: {enabled: false}}}\n", 0},
+		"an external Postgres":  {"  orders: {kind: fabriq, provider: server, target: " + targetA + ", uses: {postgres: {external: " + prodPG + "}}}\n", 1},
+		"a project resource":    {"  tsdb: {kind: timescaledb, provider: server, target: " + targetA + "}\n  lib: {kind: fabriq-library, provider: server, target: " + targetA + ", uses: {postgres: {resource: tsdb}}}\n", 1},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			reads := 0
+			service := NewService(Deps{
+				Store: orgCountingStore{reads: &reads}, Manifests: catalogManifest{revision: &manifests.Revision{Manifest: parse(t, "version: 1\nresources:\n"+c.resources)}},
+				Providers: providers.Registry(), Connections: serverClouds{}, Kinds: recipes.Default(),
+			})
+			plan := &Plan{Catalog: true, OrgID: "org", ProjectID: "project", EnvironmentID: "env", Environment: "production"}
+			if _, _, err := service.compute(t.Context(), plan); err != nil {
+				t.Fatal(err)
+			}
+			if reads != c.reads {
+				t.Fatalf("read the organization's resources %d times, want %d", reads, c.reads)
+			}
+		})
 	}
 }
