@@ -23,17 +23,31 @@ import (
 	"github.com/xraph/loomplane/pkg/provider/sdk"
 )
 
-// GCPChecker checks Google Cloud service account keys.
+// GCPChecker checks Google Cloud service account keys, and the
+// authorized_user keys a Google sign-in hands out.
 type GCPChecker struct{ Client *gcp.Client }
 
+// IsGrant implements GrantChecker: an authorized_user key only ever comes
+// from a sign-in.
+func (GCPChecker) IsGrant(credential []byte) bool {
+	var k struct {
+		Type string `json:"type"`
+	}
+	return json.Unmarshal(bytes.TrimSpace(credential), &k) == nil && k.Type == "authorized_user"
+}
+
 // Parse implements Checker. Billing export and a native recovery VPC are
-// optional. Neither changes the identity derived from the service account.
+// optional. Neither changes the identity derived from the project. A
+// signed-in person's key names them as signed_in_as.
 func (g GCPChecker) Parse(credential []byte, settings map[string]string) (Check, error) {
 	key, err := gcp.ParseKey(credential)
 	if err != nil {
 		return Check{}, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	details := map[string]string{"project_id": key.ProjectID, "service_account": key.ClientEmail}
+	if key.User {
+		details = map[string]string{"project_id": key.ProjectID, "signed_in_as": key.ClientEmail}
+	}
 	if table := strings.TrimSpace(settings[gcp.BillingExportSetting]); table != "" {
 		if billingErr := gcp.CheckBillingTable(table); billingErr != nil {
 			return Check{}, fmt.Errorf("%w: %w", ErrInvalid, billingErr)
@@ -51,7 +65,7 @@ func (g GCPChecker) Parse(credential []byte, settings map[string]string) (Check,
 }
 
 // Check implements Checker: it asks Google which of the permissions a
-// deployment needs the service account holds.
+// deployment needs the service account, or the person, holds.
 func (g GCPChecker) Check(ctx context.Context, credential []byte, settings map[string]string) (Check, error) {
 	c, err := g.Parse(credential, settings)
 	if err != nil {

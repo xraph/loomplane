@@ -75,33 +75,47 @@ var Permissions = []string{
 var (
 	// ErrInvalidKey is a key that isn't a service account key.
 	ErrInvalidKey = errors.New("that isn't a Google Cloud service account key")
-	// ErrRejected is a key Google refused: deleted, disabled or revoked.
-	ErrRejected = errors.New("google refused the service account key")
+	// ErrRejected is a key Google refused: deleted, disabled or revoked,
+	// or a sign-in whose refresh token was revoked.
+	ErrRejected = errors.New("google refused the service account key or sign-in")
 )
 
-// Key is a parsed service account key. Only its project and email are
-// ever shown; the private key stays in the bytes it came from.
+// Key is a parsed service account key, or a signed-in person's
+// authorized_user key. Only its project and email are ever shown; the
+// private key or refresh token stays in the bytes it came from.
 type Key struct {
-	ProjectID   string
+	ProjectID string
+	// ClientEmail is the service account's email, or the person's.
 	ClientEmail string
-	raw         []byte
+	// User is true for a person's authorized_user key.
+	User bool
+	raw  []byte
 }
 
-// ParseKey reads a service account key, as downloaded from the console.
+// ParseKey reads a service account key, as downloaded from the console,
+// or the authorized_user key a Google sign-in hands out.
 func ParseKey(data []byte) (*Key, error) {
 	if len(data) > maxKey {
 		return nil, fmt.Errorf("%w: it's larger than %d KiB", ErrInvalidKey, maxKey>>10)
 	}
 	var k struct {
-		Type        string `json:"type"`
-		ProjectID   string `json:"project_id"`
-		ClientEmail string `json:"client_email"`
-		PrivateKey  string `json:"private_key"`
+		Type         string `json:"type"`
+		ProjectID    string `json:"project_id"`
+		ClientEmail  string `json:"client_email"`
+		PrivateKey   string `json:"private_key"`
+		ClientID     string `json:"client_id"`
+		ClientSecret string `json:"client_secret"`
+		RefreshToken string `json:"refresh_token"`
 	}
 	if err := json.Unmarshal(bytes.TrimSpace(data), &k); err != nil {
 		return nil, fmt.Errorf("%w: it isn't JSON", ErrInvalidKey)
 	}
 	switch {
+	case k.Type == authorizedUser:
+		if k.ProjectID == "" || k.ClientEmail == "" || k.ClientID == "" || k.ClientSecret == "" || k.RefreshToken == "" {
+			return nil, fmt.Errorf("%w: the sign-in key has no project, email, client or refresh token", ErrInvalidKey)
+		}
+		return &Key{ProjectID: k.ProjectID, ClientEmail: k.ClientEmail, User: true, raw: data}, nil
 	case k.Type != "service_account":
 		return nil, fmt.Errorf("%w: its type is %q, not service_account", ErrInvalidKey, k.Type)
 	case k.ProjectID == "" || k.ClientEmail == "" || k.PrivateKey == "":
@@ -151,16 +165,21 @@ func (c *Client) url(host, path string) string {
 	return "https://" + host + path
 }
 
-// Session is an authorized client for one service account.
+// Session is an authorized client for one service account or person.
 type Session struct {
 	c    *Client
 	key  *Key
 	http *http.Client
 }
 
-// Session authorizes as key's service account.
+// Session authorizes as key's service account, or as the person a user
+// key signed in. Either renews its own access token.
 func (c *Client) Session(ctx context.Context, key *Key) (*Session, error) {
-	creds, err := google.CredentialsFromJSONWithType(ctx, key.raw, google.ServiceAccount, Scope)
+	kind := google.ServiceAccount
+	if key.User {
+		kind = google.AuthorizedUser
+	}
+	creds, err := google.CredentialsFromJSONWithType(ctx, key.raw, kind, Scope)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %w", ErrInvalidKey, err)
 	}
@@ -173,7 +192,7 @@ func (c *Client) Session(ctx context.Context, key *Key) (*Session, error) {
 	}}, nil
 }
 
-// tokenSource reports a refused key as ErrRejected.
+// tokenSource reports a refused key or sign-in as ErrRejected.
 type tokenSource struct {
 	ctx context.Context
 	ts  oauth2.TokenSource
@@ -188,7 +207,7 @@ func (t tokenSource) Token() (*oauth2.Token, error) {
 	return tok, err
 }
 
-// Key is the session's service account key.
+// Key is the session's key.
 func (s *Session) Key() *Key { return s.key }
 
 // APIError is an error response from a Google API.

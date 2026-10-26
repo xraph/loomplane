@@ -194,7 +194,7 @@ func (s *Service) renew(ctx context.Context, c *Connection, held oauth.Grant, ah
 		}
 		app, err := s.app(ctx, c.OrgID, c.Cloud)
 		if errors.Is(err, ErrNoApp) {
-			why = fmt.Sprintf("%s has no sign-in app set up, so Loomplane can't renew this sign-in. Set up the app, then sign in again.", c.Cloud)
+			why = noAppWhy(c.Cloud)
 			lapsed, err = s.needSignIn(ctx, current, why)
 			return err
 		}
@@ -257,6 +257,29 @@ func (s *Service) renew(ctx context.Context, c *Connection, held oauth.Grant, ah
 	return g, renewed, nil
 }
 
+// noAppWhy is why a sign-in for cloud needs signing in again once the
+// cloud's sign-in app is gone.
+func noAppWhy(cloud string) string {
+	return fmt.Sprintf("%s has no sign-in app set up, so Loomplane can't renew this sign-in. Set up the app, then sign in again.", cloud)
+}
+
+// handoutWithoutApp passes err on, unless it is ErrNoApp from building a
+// handout for signed-in c. Without its app no session can renew itself,
+// so, as renew does, c then needs a new sign-in, Lapsed is told, and it
+// is ErrNotReady.
+func (s *Service) handoutWithoutApp(ctx context.Context, c *Connection, err error) error {
+	if !errors.Is(err, ErrNoApp) {
+		return err
+	}
+	why := noAppWhy(c.Cloud)
+	_, lapsed, markErr := s.signInRefused(ctx, c, why, nil)
+	if markErr != nil {
+		return markErr
+	}
+	s.tellLapsed(ctx, lapsed)
+	return fmt.Errorf("%w: %s", ErrNotReady, why)
+}
+
 // needSignIn marks c as needing a new sign-in. It returns c if this call
 // changed it, so Lapsed is told once. The account is unchanged, so the
 // store keeps the generation and reviewed plans stay valid.
@@ -279,11 +302,11 @@ func (s *Service) tellLapsed(ctx context.Context, c *Connection) {
 	}
 }
 
-// signInRefused marks c as needing a new sign-in after the cloud refused
-// its token, under the connection's lock, unless it changed since c was
-// read. It returns the connection as it is now, and whether this call
-// changed it.
-func (s *Service) signInRefused(ctx context.Context, c *Connection, why string, checked time.Time) (current, lapsed *Connection, err error) {
+// signInRefused marks c as needing a new sign-in, such as after the cloud
+// refused its token, under the connection's lock, unless it changed since
+// c was read. A change is stamped as checked at checked, if given. It
+// returns the connection as it is now, and whether this call changed it.
+func (s *Service) signInRefused(ctx context.Context, c *Connection, why string, checked *time.Time) (current, lapsed *Connection, err error) {
 	mark := func() error {
 		latest, getErr := s.store.GetConnection(ctx, c.OrgID, c.ID)
 		if getErr != nil {
@@ -292,9 +315,9 @@ func (s *Service) signInRefused(ctx context.Context, c *Connection, why string, 
 		if latest.Method != MethodOAuth || latest.Generation != c.Generation || latest.Message == replacementInProgressMessage {
 			return ErrChanged
 		}
-		if latest.Status != StatusSignInNeeded {
+		if latest.Status != StatusSignInNeeded && checked != nil {
 			// needSignIn saves only a change, so only a change is stamped.
-			latest.CheckedAt = &checked
+			latest.CheckedAt = checked
 		}
 		current = latest
 		var markErr error

@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/xraph/loomplane/internal/clouds/gcp"
 	"github.com/xraph/loomplane/internal/clouds/oauth"
 	"github.com/xraph/loomplane/internal/security"
 )
@@ -114,13 +115,10 @@ func (s *Service) StartSignIn(ctx context.Context, p security.Principal, in Sign
 
 // signInSettings keeps only the settings cloud's sign-in takes, checked.
 // A cloud that takes none gets an empty map.
-//
-//nolint:unparam // the GCP and Azure validators can refuse a value
 func signInSettings(cloud string, in map[string]string) (map[string]string, error) {
 	var keys []string
 	switch cloud {
 	case GCP:
-		// Its validator, gcp.CheckProjectID, comes with GCP's sign-in.
 		keys = []string{"project_id"}
 	case Azure:
 		// Its validator, azure.CheckPlacement, comes with Azure's sign-in.
@@ -130,6 +128,14 @@ func signInSettings(cloud string, in map[string]string) (map[string]string, erro
 	for _, k := range keys {
 		if v := strings.TrimSpace(in[k]); v != "" {
 			out[k] = v
+		}
+	}
+	if cloud == GCP {
+		if out["project_id"] == "" {
+			return nil, fmt.Errorf("%w: give the ID of the Google Cloud project to sign in to", ErrInvalid)
+		}
+		if err := gcp.CheckProjectID(out["project_id"]); err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
 		}
 	}
 	return out, nil

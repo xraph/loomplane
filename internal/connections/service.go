@@ -130,6 +130,9 @@ func (s *Service) check(ctx context.Context, cloud string, c Checker, credential
 // credential that is really a sign-in grant is refused.
 func refusePastedGrant(c Checker, cred []byte, method string) error {
 	if g, ok := c.(GrantChecker); ok && method == MethodToken && g.IsGrant(cred) {
+		if _, google := c.(GCPChecker); google {
+			return fmt.Errorf("%w: paste a service account key, or sign in to Google instead of pasting a signed-in key", ErrInvalid)
+		}
 		return fmt.Errorf("%w: paste the API token itself, not JSON", ErrInvalid)
 	}
 	return nil
@@ -251,6 +254,10 @@ func (s *Service) Recheck(ctx context.Context, p security.Principal, id string) 
 	if c.Method == MethodOAuth {
 		// Check what a deployment would get.
 		g, grantErr := s.deployGrant(ctx, c)
+		if grantErr == nil {
+			cred, grantErr = s.checkable(ctx, c, g)
+			grantErr = s.handoutWithoutApp(ctx, c, grantErr)
+		}
 		if errors.Is(grantErr, ErrNotReady) {
 			if c, err = s.store.GetConnection(ctx, p.OrgID, id); err != nil {
 				return nil, err
@@ -260,9 +267,6 @@ func (s *Service) Recheck(ctx context.Context, p security.Principal, id string) 
 		}
 		if grantErr != nil {
 			return nil, grantErr
-		}
-		if cred, err = s.checkable(ctx, c, g); err != nil {
-			return nil, err
 		}
 	} else if cred, err = s.secrets.Reveal(ctx, p.OrgID, c.ID); err != nil {
 		return nil, err
@@ -278,7 +282,7 @@ func (s *Service) Recheck(ctx context.Context, p security.Principal, id string) 
 		// Revoking Loomplane in the cloud kills the access token at once,
 		// so a refused grant asks for a new sign-in. The account is the
 		// same, so the generation stays.
-		current, lapsed, markErr := s.signInRefused(ctx, c, fmt.Sprintf("%s refused the sign-in. Sign in again.", c.Cloud), now)
+		current, lapsed, markErr := s.signInRefused(ctx, c, fmt.Sprintf("%s refused the sign-in. Sign in again.", c.Cloud), &now)
 		if markErr != nil {
 			return nil, markErr
 		}
@@ -434,7 +438,7 @@ func (s *Service) Credential(ctx context.Context, orgID, id string) (*Connection
 		}
 		if _, ok := s.Providers[c.Cloud].(Handout); ok {
 			if cred, err = s.checkable(ctx, c, g); err != nil {
-				return nil, nil, err
+				return nil, nil, s.handoutWithoutApp(ctx, c, err)
 			}
 		} else {
 			cred = []byte(g.AccessToken)
