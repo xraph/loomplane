@@ -82,6 +82,12 @@ END $$`)
 				return fmt.Errorf("create function loomplane_server_gpus: %w", err)
 			}
 
+			// The member-row lock below doesn't serialize two pools that share a
+			// server: each pool has its own member row. Safety rests on
+			// loomplane_reserve_pool_plan, which locks the server rows FOR UPDATE (and
+			// takes the host-admission lock) before it inserts any reservation, so two
+			// plans reserving GPUs on one server can't both pass the budget check.
+			// Kept as a Go comment so the migration's SQL text doesn't change.
 			_, err = db.Exec(ctx, `CREATE OR REPLACE FUNCTION loomplane_reservation_gpus() RETURNS TRIGGER LANGUAGE plpgsql AS $$
  DECLARE member loomplane_server_pool_members%ROWTYPE; kind TEXT; used BIGINT;
  BEGIN

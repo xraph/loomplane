@@ -248,6 +248,12 @@ func (p gpuCeilingProvider) ServerOptions(context.Context, provider.Infrastructu
 // one H100 and one H100 server already in inventory.
 func gpuCeilingFixture(t *testing.T) *infraFixture {
 	t.Helper()
+	return gpuCeilingFixtureWith(t, 1, nil)
+}
+
+// gpuCeilingFixtureWith sets the Cloud's H100 ceiling and the pool's own limits.
+func gpuCeilingFixtureWith(t *testing.T, cloudH100 int64, poolLimits *cloudinfra.ResourceVector) *infraFixture {
+	t.Helper()
 	f := newInfraFixture(t)
 	adapters := cloudinfra.NewAdapters()
 	if err := adapters.RegisterServer("digitalocean", gpuCeilingProvider{f.provider}); err != nil {
@@ -262,8 +268,8 @@ func gpuCeilingFixture(t *testing.T) *infraFixture {
 	if err := f.svc.Clouds.(*cloudprofiles.PgStore).CreateTarget(t.Context(), &cloudprofiles.Target{ID: "pool-target", OrgID: "org", CloudID: "cloud", ProjectID: "proj", Name: "pool", DisplayName: "Pool", Provider: "server", Runtime: "server", PoolID: "pool", Revision: 1, CreatedAt: now, UpdatedAt: now}); err != nil {
 		t.Fatal(err)
 	}
-	policy := cloudinfra.CapacityPolicy{Enabled: true, Limits: cloudinfra.ResourceVector{Servers: 4, CPUMillis: 8000, MemoryBytes: 8 << 30, StorageBytes: 80_000_000_000}, GPULimits: []cloudinfra.GPULimit{{Kind: "nvidia-h100-80gb", Maximum: 1}},
-		Pools: []cloudinfra.PoolExpansionPolicy{{PoolID: "pool", AcceleratorKind: "nvidia-h100-80gb", ConnectionID: "infra-account", Region: "region", Architecture: "amd64", Image: "gpu-base", AllowedSizes: []string{"gpu-h100x1-80gb"}, MaxServers: 4, SystemReserve: cloudinfra.ResourceVector{CPUMillis: 500, MemoryBytes: 512 << 20}}}}
+	policy := cloudinfra.CapacityPolicy{Enabled: true, Limits: cloudinfra.ResourceVector{Servers: 4, CPUMillis: 8000, MemoryBytes: 8 << 30, StorageBytes: 80_000_000_000}, GPULimits: []cloudinfra.GPULimit{{Kind: "nvidia-h100-80gb", Maximum: cloudH100}},
+		Pools: []cloudinfra.PoolExpansionPolicy{{PoolID: "pool", AcceleratorKind: "nvidia-h100-80gb", ConnectionID: "infra-account", Region: "region", Architecture: "amd64", Image: "gpu-base", AllowedSizes: []string{"gpu-h100x1-80gb"}, MaxServers: 4, Limits: poolLimits, SystemReserve: cloudinfra.ResourceVector{CPUMillis: 500, MemoryBytes: 512 << 20}}}}
 	if _, err := f.svc.SaveCapacityPolicy(t.Context(), f.p, "cloud", cloudinfra.CapacityPolicyInput{Policy: policy}); err != nil {
 		t.Fatal(err)
 	}
@@ -432,5 +438,64 @@ func TestGPUDisconnectedServerKeepsGPUCount(t *testing.T) {
 	var gpus int64
 	if err = f.sql.QueryRow(ctx, `SELECT gpus FROM loomplane_cloud_capacity_inventory WHERE server_id='h100-host'`).Scan(&gpus); err != nil || gpus != 1 {
 		t.Fatalf("retained row: %d %v", gpus, err)
+	}
+}
+
+func TestGPUPoolCeilingUnderCloudCeiling(t *testing.T) {
+	// The pool may hold 2 H100s while the Cloud may hold 8.
+	f := gpuCeilingFixtureWith(t, 8, &cloudinfra.ResourceVector{Servers: 4, CPUMillis: 8000, MemoryBytes: 8 << 30, StorageBytes: 80_000_000_000, GPUKind: "nvidia-h100-80gb", GPUs: 2})
+	ctx := t.Context()
+	for _, n := range []string{"a", "b"} {
+		decision, err := f.svc.EnsureCapacity(ctx, h100Demand(f, t, n))
+		if err != nil || decision == nil || decision.ExpansionID == "" {
+			t.Fatalf("expansion %s: %+v %v", n, decision, err)
+		}
+		e, err := f.store.GetExpansion(ctx, "org", "cloud", decision.ExpansionID)
+		if err != nil || e.OperationID == "" || e.Block != nil {
+			t.Fatalf("expansion %s was not admitted: %+v %v", n, e, err)
+		}
+	}
+	// The H100 server outside the pool counts toward the Cloud, not the pool,
+	// so the Cloud has 3 of 8 and the pool 2 of 2.
+	b := ensureBlock(t, f, h100Demand(f, t, "c"))
+	if b.Reason != "hard_limit" || b.Resource != "gpus:nvidia-h100-80gb" || b.PoolID != "pool" || b.Limit != 2 || b.Counted != 2 || b.Requested != 1 {
+		t.Fatalf("third H100 in a 2-H100 pool: %+v", b)
+	}
+	var reserved int
+	if err := f.sql.QueryRow(ctx, `SELECT count(*) FROM loomplane_cloud_capacity_reservations WHERE status='reserved'`).Scan(&reserved); err != nil || reserved != 2 {
+		t.Fatalf("reservations: %d %v", reserved, err)
+	}
+
+	// Adding an H100 server to the full pool is refused the same way.
+	now := time.Now().UTC()
+	if err := f.connections.CreateConnection(ctx, &connections.Connection{ID: "h100-runtime", OrgID: "org", Cloud: "server", Name: "H100 host", Account: "h100", Details: map[string]string{"docker_id": "h100", "architecture": "amd64"}, Status: "ready", CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	v, err := f.store.GetServer(ctx, "org", "cloud", "h100-host")
+	if err != nil {
+		t.Fatal(err)
+	}
+	v.RuntimeConnectionID = "h100-runtime"
+	v.Health = cloudinfra.RuntimeHealth{DockerID: "h100", Architecture: "amd64", EffectiveCPUMillis: 2000, EffectiveMemoryBytes: 2 << 30, GPURuntime: provider.GPUStatusReady, GPUs: []provider.GPUDevice{{Index: 0, UUID: "GPU-0", Kind: "nvidia-h100-80gb"}}, CheckedAt: now}
+	if err = f.store.SaveServer(ctx, v); err != nil {
+		t.Fatal(err)
+	}
+	if v, err = f.store.GetServer(ctx, "org", "cloud", "h100-host"); err != nil {
+		t.Fatal(err)
+	}
+	record := cloudinfra.CapacityRecord{Kind: "server", Provider: "digitalocean", AccountID: "account", ResourceID: "server:h100-host", ServerID: "h100-host", ServerStateRevision: v.StateRevision, CheckedAt: time.Now(), GPUKind: "nvidia-h100-80gb", GPUs: inventoryNumber(1), Resources: cloudinfra.CapacityResources{Servers: inventoryNumber(1), CPUMillis: inventoryNumber(2000), MemoryBytes: inventoryNumber(1 << 30), StorageBytes: inventoryNumber(10_000_000_000)}}
+	zero := cloudinfra.CapacityResources{Servers: inventoryNumber(0), CPUMillis: inventoryNumber(0), MemoryBytes: inventoryNumber(0), StorageBytes: inventoryNumber(0)}
+	ledgerSave(t, f, []cloudinfra.CapacityRecord{record}, []cloudinfra.CapacityAccountSnapshot{{Provider: "digitalocean", AccountID: "account", Provisioned: zero, CheckedAt: time.Now()}})
+	pool, err := f.store.GetPool(ctx, "org", "cloud", "pool")
+	if err != nil {
+		t.Fatal(err)
+	}
+	previous := pool.Revision
+	pool.Revision++
+	pool.Members = append(pool.Members, cloudinfra.PoolMember{ServerID: "h100-host", CPUMillis: 2000, MemoryBytes: 2 << 30, GPUs: 1})
+	err = f.store.SavePool(ctx, pool, previous)
+	var admission *cloudinfra.CapacityAdmissionError
+	if !errors.As(err, &admission) || admission.Block.Reason != "hard_limit" || admission.Block.Resource != "gpus:nvidia-h100-80gb" || admission.Block.Limit != 2 || admission.Block.Counted != 2 || admission.Block.Requested != 1 {
+		t.Fatalf("H100 member past the pool ceiling: %v", err)
 	}
 }

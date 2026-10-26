@@ -154,6 +154,63 @@ func checkGPULimit(p *CapacityPolicy, d CapacityDemand, kind string, counted *in
 	return nil
 }
 
+// checkPoolGPULimit blocks GPUs past a pool's own ceiling, in checkGPULimit's
+// style. A pool ceiling of zero means none, which leaves the Cloud's ceiling in
+// charge, and a ceiling only covers its own kind. A nil count is unknown.
+func checkPoolGPULimit(p *CapacityPolicy, d CapacityDemand, pool PoolExpansionPolicy, kind string, counted *int64, requested int64) *CapacityBlock {
+	if requested <= 0 || pool.Limits == nil || pool.Limits.GPUs <= 0 || pool.Limits.GPUKind != kind {
+		return nil
+	}
+	resource := "gpus:" + kind
+	if counted == nil {
+		return capacityBlock(p, d, "stale_inventory", resource)
+	}
+	limit := pool.Limits.GPUs
+	if *counted > limit || requested > limit-*counted {
+		b := capacityBlock(p, d, "hard_limit", resource)
+		b.Limit, b.Counted, b.Requested = limit, *counted, requested
+		return b
+	}
+	return nil
+}
+
+// poolInventoryGPUs counts the GPUs of kind on a pool's member servers. A
+// member without an inventory record, or with an unread count, makes it nil.
+func poolInventoryGPUs(records []CapacityRecord, members map[string]bool, kind string) *int64 {
+	var total int64
+	for id := range members {
+		found := false
+		for _, r := range records {
+			if r.Kind != "server" || r.ServerID != id {
+				continue
+			}
+			if r.GPUs == nil || !recordGPUsValid(r) {
+				return nil
+			}
+			found = true
+			if r.GPUKind == kind {
+				total += *r.GPUs
+			}
+			break
+		}
+		if !found {
+			return nil
+		}
+	}
+	return &total
+}
+
+// addGPUCount adds n to a known count. An unknown count stays unknown.
+func addGPUCount(count *int64, n int64) (*int64, error) {
+	if count == nil || n <= 0 {
+		return count, nil
+	}
+	if *count > math.MaxInt64-n {
+		return nil, ErrInvalid
+	}
+	return number(*count + n), nil
+}
+
 // validateGPUPolicyShape checks GPU ceilings and each pool's accelerator kind.
 func validateGPUPolicyShape(policy CapacityPolicy) error {
 	if policy.Limits.GPUs != 0 || policy.Limits.GPUKind != "" {

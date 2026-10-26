@@ -3,6 +3,7 @@ package cloudinfra
 import (
 	"encoding/json"
 	"errors"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -131,5 +132,65 @@ func TestGPUWorkFitsPool(t *testing.T) {
 		if tc.want == nil && err != nil || tc.want != nil && (!errors.Is(err, tc.want) || !strings.Contains(err.Error(), tc.text)) {
 			t.Errorf("%q in %q pool: %v", tc.kind, tc.pool, err)
 		}
+	}
+}
+
+func TestCheckPoolGPULimit(t *testing.T) {
+	p := &CapacityPolicy{Revision: 3}
+	d := CapacityDemand{CloudID: "cloud", PoolID: "pool"}
+	capped := PoolExpansionPolicy{PoolID: "pool", AcceleratorKind: "nvidia-h100-80gb", Limits: &ResourceVector{Servers: 4, GPUKind: "nvidia-h100-80gb", GPUs: 2}}
+	if b := checkPoolGPULimit(p, d, capped, "nvidia-h100-80gb", number(1), 1); b != nil {
+		t.Fatalf("second of two: %+v", b)
+	}
+	b := checkPoolGPULimit(p, d, capped, "nvidia-h100-80gb", number(2), 1)
+	if b == nil || b.Reason != "hard_limit" || b.Resource != "gpus:nvidia-h100-80gb" || b.PoolID != "pool" || b.Limit != 2 || b.Counted != 2 || b.Requested != 1 || b.PolicyRevision != 3 || b.Retryable {
+		t.Fatalf("third of two: %+v", b)
+	}
+	if b = checkPoolGPULimit(p, d, capped, "nvidia-h100-80gb", number(3), 0); b != nil {
+		t.Fatalf("keeping members after a lowered ceiling: %+v", b)
+	}
+	if b = checkPoolGPULimit(p, d, capped, "nvidia-h100-80gb", nil, 1); b == nil || b.Reason != "stale_inventory" || b.Resource != "gpus:nvidia-h100-80gb" || !b.Retryable {
+		t.Fatalf("unknown count: %+v", b)
+	}
+	uncapped := capped
+	uncapped.Limits = &ResourceVector{Servers: 4}
+	if b = checkPoolGPULimit(p, d, uncapped, "nvidia-h100-80gb", nil, 8); b != nil {
+		t.Fatalf("a pool without a GPU ceiling leaves it to the Cloud: %+v", b)
+	}
+	if b = checkPoolGPULimit(p, d, PoolExpansionPolicy{PoolID: "pool"}, "nvidia-h100-80gb", nil, 1); b != nil {
+		t.Fatalf("no pool limits: %+v", b)
+	}
+	if b = checkPoolGPULimit(p, d, capped, "nvidia-l4", number(9), 1); b != nil {
+		t.Fatalf("a ceiling covers only its own kind: %+v", b)
+	}
+}
+
+func TestPoolInventoryGPUs(t *testing.T) {
+	records := []CapacityRecord{
+		{Kind: "server", ServerID: "a", GPUKind: "nvidia-h100-80gb", GPUs: number(1)},
+		{Kind: "server", ServerID: "b", GPUKind: "nvidia-h100-80gb", GPUs: number(2)},
+		{Kind: "server", ServerID: "c", GPUKind: "nvidia-l4", GPUs: number(4)},
+		{Kind: "server", ServerID: "unread"},
+	}
+	if got := poolInventoryGPUs(records, map[string]bool{"a": true, "b": true, "c": true}, "nvidia-h100-80gb"); got == nil || *got != 3 {
+		t.Fatalf("pool H100s: %v", got)
+	}
+	if got := poolInventoryGPUs(records, map[string]bool{}, "nvidia-h100-80gb"); got == nil || *got != 0 {
+		t.Fatalf("empty pool: %v", got)
+	}
+	if got := poolInventoryGPUs(records, map[string]bool{"a": true, "unread": true}, "nvidia-h100-80gb"); got != nil {
+		t.Fatalf("an unread member read as a count: %v", *got)
+	}
+	if got := poolInventoryGPUs(records, map[string]bool{"a": true, "missing": true}, "nvidia-h100-80gb"); got != nil {
+		t.Fatalf("a member without inventory read as a count: %v", *got)
+	}
+	if got, err := addGPUCount(nil, 1); got != nil || err != nil {
+		t.Fatalf("unknown plus one: %v %v", got, err)
+	}
+	if got, err := addGPUCount(number(2), 1); err != nil || *got != 3 {
+		t.Fatalf("two plus one: %v %v", got, err)
+	}
+	if _, err := addGPUCount(number(math.MaxInt64), 1); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("overflow: %v", err)
 	}
 }
