@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -86,7 +87,32 @@ type gpuGroupAcc struct {
 	memoryMiB int
 }
 
-// gpuInventory groups nodes by accelerator kind. Pure, for tests.
+// gpuTolerations are the tolerations a node's GPU taints need. Kubernetes
+// and cloud controllers set node.kubernetes.io/ and
+// node.cloudprovider.kubernetes.io/ taints for state (cordoned, not ready,
+// unreachable, uninitialized), so tolerating them would land GPU pods on a
+// cordoned node and keep them on a dead one. They are left out.
+func gpuTolerations(taints []corev1.Taint) map[provider.GPUToleration]bool {
+	out := map[provider.GPUToleration]bool{}
+	for _, taint := range taints {
+		if taint.Effect != corev1.TaintEffectNoSchedule && taint.Effect != corev1.TaintEffectNoExecute {
+			continue
+		}
+		if strings.HasPrefix(taint.Key, "node.kubernetes.io/") || strings.HasPrefix(taint.Key, "node.cloudprovider.kubernetes.io/") {
+			continue
+		}
+		t := provider.GPUToleration{Key: taint.Key, Operator: "Equal", Value: taint.Value, Effect: string(taint.Effect)}
+		if taint.Value == "" {
+			t.Operator = "Exists"
+		}
+		out[t] = true
+	}
+	return out
+}
+
+// gpuInventory groups nodes by accelerator kind. A group tolerates only
+// the taints every one of its nodes carries, so a taint on one node never
+// spreads to the rest. Pure, for tests.
 func gpuInventory(nodes []corev1.Node) provider.GPUInventory {
 	groups := map[gpuGroupKey]*gpuGroupAcc{}
 	var order []gpuGroupKey
@@ -112,9 +138,7 @@ func gpuInventory(nodes []corev1.Node) provider.GPUInventory {
 		key := gpuGroupKey{kind, selKey, selValue}
 		acc := groups[key]
 		if acc == nil {
-			acc = &gpuGroupAcc{instances: map[string]int{}, tolers: map[provider.GPUToleration]bool{
-				{Key: gpuResource, Operator: "Exists", Effect: "NoSchedule"}: true,
-			}}
+			acc = &gpuGroupAcc{instances: map[string]int{}}
 			acc.group.Kind = kind
 			acc.group.Product = product
 			if selKey != "" {
@@ -123,22 +147,22 @@ func gpuInventory(nodes []corev1.Node) provider.GPUInventory {
 			groups[key] = acc
 			order = append(order, key)
 		}
+		nodeTolers := gpuTolerations(node.Spec.Taints)
+		if acc.group.Nodes == 0 {
+			acc.tolers = nodeTolers
+		} else {
+			for t := range acc.tolers {
+				if !nodeTolers[t] {
+					delete(acc.tolers, t)
+				}
+			}
+		}
 		acc.group.Nodes++
 		acc.group.Total += int(alloc)
 		acc.group.PerNode = max(acc.group.PerNode, int(alloc))
 		acc.memoryMiB = max(acc.memoryMiB, memoryMiB)
 		if it := node.Labels[instanceTypeLabel]; it != "" {
 			acc.instances[it]++
-		}
-		for _, taint := range node.Spec.Taints {
-			if taint.Effect != corev1.TaintEffectNoSchedule && taint.Effect != corev1.TaintEffectNoExecute {
-				continue
-			}
-			t := provider.GPUToleration{Key: taint.Key, Operator: "Equal", Value: taint.Value, Effect: string(taint.Effect)}
-			if taint.Value == "" {
-				t.Operator = "Exists"
-			}
-			acc.tolers[t] = true
 		}
 	}
 	inv := provider.GPUInventory{Status: provider.GPUStatusNone}
@@ -155,6 +179,7 @@ func gpuInventory(nodes []corev1.Node) provider.GPUInventory {
 		if size, _, ok := gpusizes.Lookup(g.InstanceType); ok {
 			g.HourlyUSD, g.HourlyPriceKnown = size.HourlyUSD, size.HourlyPriceKnown
 		}
+		acc.tolers[provider.GPUToleration{Key: gpuResource, Operator: "Exists", Effect: "NoSchedule"}] = true
 		g.Tolerations = sortedTolerations(acc.tolers)
 		if g.PerNode > 0 && len(g.NodeSelector) > 0 {
 			ready = true

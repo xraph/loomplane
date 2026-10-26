@@ -45,8 +45,15 @@ func gpuFake(allowNodes bool, nodes ...corev1.Node) *Client {
 func TestGPUInventoryGroupsNodesByKind(t *testing.T) {
 	present := corev1.Taint{Key: "nvidia.com/gpu", Value: "present", Effect: corev1.TaintEffectNoSchedule}
 	gke := map[string]string{"cloud.google.com/gke-accelerator": "nvidia-l4", "node.kubernetes.io/instance-type": "g2-standard-4"}
+	// gke-2 is cordoned and gke-3 is not ready: their state taints must not
+	// become tolerations. Only gke-1 is dedicated, so no node's pods get
+	// that toleration either.
+	cordoned := corev1.Taint{Key: "node.kubernetes.io/unschedulable", Effect: corev1.TaintEffectNoSchedule}
+	notReady := corev1.Taint{Key: "node.kubernetes.io/not-ready", Effect: corev1.TaintEffectNoExecute}
+	uninitialized := corev1.Taint{Key: "node.cloudprovider.kubernetes.io/uninitialized", Value: "true", Effect: corev1.TaintEffectNoSchedule}
+	dedicated := corev1.Taint{Key: "dedicated", Value: "ml", Effect: corev1.TaintEffectNoSchedule}
 	inv := gpuInventory([]corev1.Node{
-		gpuNode("gke-1", gke, 1, present), gpuNode("gke-2", gke, 1, present),
+		gpuNode("gke-1", gke, 1, present, dedicated), gpuNode("gke-2", gke, 1, present, cordoned), gpuNode("gke-3", gke, 1, present, notReady, uninitialized),
 		gpuNode("eks-1", map[string]string{"node.kubernetes.io/instance-type": "g5.12xlarge"}, 4),
 		gpuNode("cpu-1", map[string]string{"node.kubernetes.io/instance-type": "e2-standard-4"}, 0),
 	})
@@ -54,7 +61,7 @@ func TestGPUInventoryGroupsNodesByKind(t *testing.T) {
 		t.Fatalf("inventory: %+v", inv)
 	}
 	l4 := inv.Nodes[slices.IndexFunc(inv.Nodes, func(g provider.GPUNodeGroup) bool { return g.Kind == "nvidia-l4" })]
-	if l4.Nodes != 2 || l4.PerNode != 1 || l4.Total != 2 || l4.NodeSelector["cloud.google.com/gke-accelerator"] != "nvidia-l4" || !l4.HourlyPriceKnown {
+	if l4.Nodes != 3 || l4.PerNode != 1 || l4.Total != 3 || l4.NodeSelector["cloud.google.com/gke-accelerator"] != "nvidia-l4" || !l4.HourlyPriceKnown {
 		t.Fatalf("L4 group: %+v", l4)
 	}
 	want := []provider.GPUToleration{{Key: "nvidia.com/gpu", Operator: "Equal", Value: "present", Effect: "NoSchedule"}, {Key: "nvidia.com/gpu", Operator: "Exists", Effect: "NoSchedule"}}
@@ -64,6 +71,24 @@ func TestGPUInventoryGroupsNodesByKind(t *testing.T) {
 	a10g := inv.Nodes[slices.IndexFunc(inv.Nodes, func(g provider.GPUNodeGroup) bool { return g.Kind == "nvidia-a10g" })]
 	if a10g.PerNode != 4 || a10g.NodeSelector["node.kubernetes.io/instance-type"] != "g5.12xlarge" {
 		t.Fatalf("A10G group: %+v", a10g)
+	}
+	if !reflect.DeepEqual(a10g.Tolerations, []provider.GPUToleration{{Key: "nvidia.com/gpu", Operator: "Exists", Effect: "NoSchedule"}}) {
+		t.Fatalf("A10G tolerations: %+v", a10g.Tolerations)
+	}
+}
+
+// A taint on every node of a group is tolerated; one on only some nodes
+// isn't, so the placement doesn't change as nodes come and go.
+func TestGPUInventoryToleratesOnlyTaintsOnEveryNode(t *testing.T) {
+	labels := map[string]string{"cloud.google.com/gke-accelerator": "nvidia-l4"}
+	shared := corev1.Taint{Key: "gpu", Effect: corev1.TaintEffectNoExecute}
+	inv := gpuInventory([]corev1.Node{
+		gpuNode("a", labels, 1, shared, corev1.Taint{Key: "team", Value: "a", Effect: corev1.TaintEffectNoSchedule}),
+		gpuNode("b", labels, 1, shared, corev1.Taint{Key: "team", Value: "b", Effect: corev1.TaintEffectNoSchedule}),
+	})
+	want := []provider.GPUToleration{{Key: "gpu", Operator: "Exists", Effect: "NoExecute"}, {Key: "nvidia.com/gpu", Operator: "Exists", Effect: "NoSchedule"}}
+	if len(inv.Nodes) != 1 || !reflect.DeepEqual(inv.Nodes[0].Tolerations, want) {
+		t.Fatalf("tolerations: %+v", inv.Nodes)
 	}
 }
 
