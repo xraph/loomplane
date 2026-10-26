@@ -48,6 +48,7 @@ func (s *Service) releaseRoutes(ctx context.Context, plan *Plan) ([]cloudinfra.R
 func (p *planner) routedReplacements() bool {
 	changed := false
 	for _, route := range p.in.Routes {
+		p.refuseRoutedComponent(route)
 		a := p.services[route.Input.Service]
 		if a == nil || a.Op == Keep || a.Op == Delete || slices.ContainsFunc(a.Routes, func(r cloudinfra.Route) bool { return r.ID == route.ID }) {
 			continue
@@ -62,6 +63,26 @@ func (p *planner) routedReplacements() bool {
 		changed = true
 	}
 	return changed
+}
+
+// refuseRoutedComponent refuses a change to a composed component that has
+// a domain route. A routed release retains the serving instance on reviewed
+// pool capacity, and components run only on direct targets, so changing
+// one would fail at apply until its routes were removed.
+func (p *planner) refuseRoutedComponent(route cloudinfra.Route) {
+	a := p.resources[route.Input.Service]
+	if a == nil || a.Resource == nil || a.Resource.Component == nil || a.Op == Keep || a.Op == Delete {
+		return
+	}
+	if slices.ContainsFunc(p.problems, func(f Finding) bool {
+		return f.Code == "route-release" && f.Subject == ResourceSubject && f.Name == a.Name
+	}) {
+		return
+	}
+	p.problem(Finding{
+		Code: "route-release", Subject: ResourceSubject, Name: a.Name,
+		Message: a.Name + " has domain routes. Remove them before changing it: routed component releases aren't supported yet.",
+	})
 }
 
 func routedReplacementAllowed(a *Action, b *Binding, route cloudinfra.Route) error {

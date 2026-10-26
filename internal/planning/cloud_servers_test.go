@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"slices"
 	"testing"
 
 	"github.com/xraph/loomplane/internal/cloudinfra"
@@ -358,5 +359,44 @@ func TestUnverifiedPlacementsNameResourcesOnTheCloud(t *testing.T) {
 		if got := unverifiedPlacements(m, "production", []string{"edge"}, tt.assignment, tt.options)["edge"]; got != tt.want {
 			t.Errorf("%s: unverified %v, want %v", name, got, tt.want)
 		}
+	}
+}
+
+// A routed component can't be released with its routes yet: a change to
+// it is refused with what to do, and an unchanged one plans as before.
+func TestChangingARoutedComponentIsRefused(t *testing.T) {
+	options := hostedConnections(t, CloudServer{ID: "server_1", CloudID: "cloud_1"})
+	first, _ := directPlans(t, options)
+	bound := boundAll(t, first)
+	routes := []cloudinfra.Route{{ID: "route_1", Status: "ready", Input: cloudinfra.RouteInput{Service: "edge--api", Hostname: "api.example.com", Port: 8080}}}
+	plan := func(bindings []*Binding) *Result {
+		a := edgeAssignment(edgeHostTarget())
+		m := parse(t, edgeApp)
+		return Compute(Input{
+			Environment: "production", Graph: infrastructureGraph(), Manifest: m, Providers: providers.Registry(),
+			Connections: options, Kinds: recipestest.Registry(t), Bindings: bindings, Routes: routes,
+			CloudPlacements: composedPlacements(m, "production", []string{"edge"}, a, options),
+		})
+	}
+	if r := plan(bound); hasCode(r.Problems, "route-release") || findAction(r, "resource:edge--api").Op != Keep {
+		t.Fatalf("an unchanged routed component: %+v %+v", findAction(r, "resource:edge--api"), r.Problems)
+	}
+	// An older image is bound, so the plan changes the api.
+	for _, b := range bound {
+		if b.Name == "edge--api" {
+			b.Config = bytes.Replace(b.Config, []byte(`"image":"registry.example/sample-api@sha256:`), []byte(`"image":"registry.example/sample-api-old@sha256:`), 1)
+		}
+	}
+	r := plan(bound)
+	if api := findAction(r, "resource:edge--api"); api == nil || api.Op == Keep {
+		t.Fatalf("the api didn't change: %+v", api)
+	}
+	f := findCode(r.Problems, "route-release")
+	if f == nil || r.Executable || f.Subject != ResourceSubject || f.Name != "edge--api" ||
+		f.Message != "edge--api has domain routes. Remove them before changing it: routed component releases aren't supported yet." {
+		t.Fatalf("problems %+v", r.Problems)
+	}
+	if n := len(slices.DeleteFunc(slices.Clone(r.Problems), func(f Finding) bool { return f.Code != "route-release" })); n != 1 {
+		t.Fatalf("%d route-release problems", n)
 	}
 }
