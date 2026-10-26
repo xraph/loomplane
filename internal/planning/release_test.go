@@ -383,3 +383,21 @@ func TestCanaryRefusesACloudSQLPSCRoute(t *testing.T) {
 		t.Fatalf("executable %v, problems %+v, warnings %+v", r.Executable, r.Problems, r.Warnings)
 	}
 }
+
+// The database gateway never ramps: its record, keys and routes follow a
+// release in one go.
+func TestCanaryRefusesTheDatabaseGateway(t *testing.T) {
+	in := releaseInput(t, releaseYAML(canaryRelease))
+	gw := serviceAction(dbGatewayName, "cloud-run", Update, ServiceConfig{Port: 5432, Public: true, DatabaseGateway: &DatabaseGatewayConfig{Name: dbGatewayName, Suffix: "europe-west1.db.example.com", Resources: []string{"db"}}})
+	r := &Result{Actions: []Action{gw}, Executable: true}
+	planRelease(in, r)
+	if r.Executable || r.Release.Ramps(gw.ID) || len(r.Problems) != 1 {
+		t.Fatalf("executable %v, release %+v, problems %+v", r.Executable, r.Release, r.Problems)
+	}
+	p := r.Problems[0]
+	for _, want := range []string{"can't run a canary", "database gateway", "direct or blue_green"} {
+		if p.Code != "canary-unsupported-database-gateway" || p.Name != dbGatewayName || !strings.Contains(p.Message, want) {
+			t.Fatalf("problem %+v doesn't say %q", p, want)
+		}
+	}
+}

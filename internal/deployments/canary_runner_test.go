@@ -751,6 +751,30 @@ func TestARampingServiceThatMovesIsRefused(t *testing.T) {
 	}
 }
 
+// A plan approved before plans refused it can still list the database
+// gateway as ramping. Its start is refused before anything records the
+// gateway or mints its keys, and nothing deploys.
+func TestTheDatabaseGatewayNeverRamps(t *testing.T) {
+	plan := canaryPlan()
+	plan.Actions[1].Service.DatabaseGateway = &planning.DatabaseGatewayConfig{Name: "api", Suffix: "europe-west1.db.example.com", Resources: []string{"db"}}
+	r, store, _, exec := newCanaryRunner(t, plan)
+	_, err := startCanary(t, r, plan)
+	if err == nil || !strings.Contains(err.Error(), "api can't run a canary: it's the environment's database gateway") || !strings.Contains(err.Error(), "direct or blue_green") {
+		t.Fatalf("run error %v", err)
+	}
+	if len(exec.log()) != 0 {
+		t.Fatalf("the database gateway deployed: %v", exec.log())
+	}
+	for _, d := range store.d {
+		if s := d.Step("service:api"); s.Status != StepFailed {
+			t.Fatalf("api step %s", s.Status)
+		}
+		if svc := d.Canary.service("service:api"); svc == nil || svc.Candidate != "" {
+			t.Fatalf("canary service %+v", svc)
+		}
+	}
+}
+
 func TestRevertRetriesOnlyWhatsStillUp(t *testing.T) {
 	plan := withWeb(canaryPlan())
 	r, store, _, exec := newCanaryRunner(t, plan)
