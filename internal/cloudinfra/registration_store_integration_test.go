@@ -12,24 +12,13 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"github.com/xraph/grove/driver"
 	"github.com/xraph/grove/drivers/pgdriver"
-	"github.com/xraph/grove/migrate"
+	"github.com/xraph/grove/drivers/pgdriver/pgmigrate"
 
 	"github.com/xraph/loomplane/database/migrations"
 	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/pkg/provider"
 )
-
-// migrationExec runs a migration's statements; nothing else is needed here.
-type migrationExec struct {
-	migrate.Executor
-	db *pgdriver.PgDB
-}
-
-func (e migrationExec) Exec(ctx context.Context, query string, args ...any) (driver.Result, error) {
-	return e.db.Exec(ctx, query, args...)
-}
 
 func registrationDatabase(t *testing.T) *pgdriver.PgDB {
 	t.Helper()
@@ -75,7 +64,7 @@ func registrationDatabase(t *testing.T) *pgdriver.PgDB {
 	ran := false
 	for _, m := range migrations.Group().Migrations() {
 		if m.Name == "domain_registrations" {
-			if err = m.Up(ctx, migrationExec{db: pg}); err != nil {
+			if err = m.Up(ctx, pgmigrate.New(pg)); err != nil {
 				t.Fatal(err)
 			}
 			ran = true
