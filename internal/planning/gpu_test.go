@@ -256,6 +256,19 @@ func TestPlanServiceGPU(t *testing.T) {
 	}
 }
 
+// Asking a CPU server for a GPU says the server has none, not that its
+// GPUs couldn't be read.
+func TestPlanServiceGPUOnACPUServer(t *testing.T) {
+	image := "build: {registry: " + registryTarget + ", image: 'registry.example.com/acme/api@sha256:" + strings.Repeat("a", 64) + "'}"
+	doc := "version: 1\nservices:\n  api: {source: cmd/api, provider: server, target: " + targetA + ", public: false, size: {cpu: 1, memory: 2048, gpu: {kind: nvidia-l4, count: 1}}, " + image + "}\n"
+	r := Compute(Input{Environment: "production", Graph: infrastructureGraph(), Manifest: parse(t, doc), Providers: infrastructureProviders(t),
+		Connections: gpuConnections(t, provider.GPUInventory{Status: provider.GPUStatusNone}, "amd64")})
+	i := slices.IndexFunc(r.Problems, func(f Finding) bool { return f.Code == provider.GPUUnavailable })
+	if r.Executable || i < 0 || r.Problems[i].Message != "This target has no GPUs." {
+		t.Fatalf("GPU on a CPU server: %+v", r.Problems)
+	}
+}
+
 func TestPlanWarnsUnusedGPU(t *testing.T) {
 	for _, doc := range []string{
 		"version: 1\nresources:\n  app: {kind: sample, provider: server, target: " + targetA + ", gpu: {kind: nvidia-l4, count: 1}}\n",

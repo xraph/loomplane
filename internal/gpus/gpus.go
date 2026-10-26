@@ -253,7 +253,7 @@ func unready(c *connections.Connection, inv provider.GPUInventory, accel provide
 	case inv.Message != "":
 		row.Message = inv.Message
 	default:
-		row.Message = "Loomplane couldn't read this target's GPUs. Check the connection again."
+		row.Message = provider.GPUStatusMessage(inv.Status)
 	}
 	return row
 }

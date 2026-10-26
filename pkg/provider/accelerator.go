@@ -240,6 +240,24 @@ func (e *GPUUnavailableError) Error() string { return e.Message }
 
 var ErrGPURequestInvalid = errors.New("a GPU request needs a known NVIDIA kind and 1 to 8 devices")
 
+// GPUStatusMessage says why a target whose inventory has no message of its
+// own can't run GPU work.
+func GPUStatusMessage(status string) string {
+	switch status {
+	case GPUStatusNone:
+		return "This target has no GPUs."
+	case GPUStatusDriverMissing:
+		return "This target has an NVIDIA GPU but its driver doesn't answer. Install the NVIDIA driver, then check the connection again."
+	case GPUStatusToolkitMissing:
+		return "This target has GPUs but Docker can't use them. Install the NVIDIA Container Toolkit, then check the connection again."
+	case GPUStatusNoDevicePlugin:
+		return "This cluster's nodes have GPUs but nothing advertises nvidia.com/gpu. Install the NVIDIA device plugin or GPU Operator, then check the connection again."
+	case GPUStatusUnlisted:
+		return "Loomplane can't list this cluster's nodes, so it can't see its GPUs. Let the connection list nodes, then check it again."
+	}
+	return "Loomplane couldn't read this target's GPUs. Check the connection again."
+}
+
 // Place reports where req fits on one host or node, or why it doesn't. It
 // never says yes on a guess: unknown inventory, an unlisted cluster or a
 // missing toolkit all mean it doesn't fit.
@@ -250,7 +268,7 @@ func (i GPUInventory) Place(req GPURequest) (*GPUPlacement, error) {
 	if i.Status != GPUStatusReady {
 		msg := i.Message
 		if msg == "" {
-			msg = "Loomplane couldn't read this target's GPUs. Check the connection again."
+			msg = GPUStatusMessage(i.Status)
 		}
 		return nil, &GPUUnavailableError{Code: GPUUnavailable, Message: msg}
 	}

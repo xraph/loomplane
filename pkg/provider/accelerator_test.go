@@ -107,3 +107,30 @@ func TestGPUInventoryDetailsRoundTrip(t *testing.T) {
 		t.Fatal("absent inventory parsed")
 	}
 }
+
+// An inventory without a message of its own still says why it can't run
+// GPU work, by its status. A CPU server says it has no GPUs, not that
+// its GPUs couldn't be read.
+func TestGPUInventoryPlaceExplainsEachStatus(t *testing.T) {
+	req := GPURequest{Kind: "nvidia-l4", Count: 1}
+	for status, want := range map[string]string{
+		GPUStatusNone:           "This target has no GPUs.",
+		GPUStatusDriverMissing:  "This target has an NVIDIA GPU but its driver doesn't answer. Install the NVIDIA driver, then check the connection again.",
+		GPUStatusToolkitMissing: "This target has GPUs but Docker can't use them. Install the NVIDIA Container Toolkit, then check the connection again.",
+		GPUStatusNoDevicePlugin: "This cluster's nodes have GPUs but nothing advertises nvidia.com/gpu. Install the NVIDIA device plugin or GPU Operator, then check the connection again.",
+		GPUStatusUnlisted:       "Loomplane can't list this cluster's nodes, so it can't see its GPUs. Let the connection list nodes, then check it again.",
+		GPUStatusUnknown:        "Loomplane couldn't read this target's GPUs. Check the connection again.",
+		"":                      "Loomplane couldn't read this target's GPUs. Check the connection again.",
+	} {
+		_, err := GPUInventory{Status: status}.Place(req)
+		var unavailable *GPUUnavailableError
+		if !errors.As(err, &unavailable) || unavailable.Code != GPUUnavailable || unavailable.Message != want {
+			t.Errorf("status %q: %v", status, err)
+		}
+	}
+	// The inventory's own message still wins.
+	_, err := GPUInventory{Status: GPUStatusToolkitMissing, Message: "This server has 2 NVIDIA L4 GPUs but Docker can't use them."}.Place(req)
+	if err == nil || err.Error() != "This server has 2 NVIDIA L4 GPUs but Docker can't use them." {
+		t.Fatalf("own message: %v", err)
+	}
+}
