@@ -647,6 +647,68 @@ func TestRemovedRevokesInFabriqWhenItCan(t *testing.T) {
 	}
 }
 
+func TestReadyRevokesKeysNoLiveRecordNames(t *testing.T) {
+	h := newHarness("acme")
+	api := idOf(t, h.f, h.bind(t, "api", "acme"))
+	web := idOf(t, h.f, h.bind(t, "web", "acme"))
+	// The resource was removed once while Fabriq was down: Loomplane
+	// recorded web's key revoked, and Fabriq, re-added on the Postgres that
+	// outlived it, still accepts it.
+	if err := h.keys.SetState(t.Context(), "org", web, []fabriqloom.KeyState{fabriqloom.KeyActive}, fabriqloom.KeyRevoked); err != nil {
+		t.Fatal(err)
+	}
+	old := h.f.plant("loomplane:old-svc")
+	if err := h.secrets.Put(t.Context(), vaultKey(old.ID), []byte(old.Key)); err != nil {
+		t.Fatal(err)
+	}
+	session := h.f.plant("session")
+	ci := h.f.plant("ci")
+	if err := h.hooks.Ready(t.Context(), adminRun(h, "admin")); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{old.ID, web} {
+		if h.f.key(id).RevokedAt == nil {
+			t.Fatalf("%s still opens Fabriq", id)
+		}
+	}
+	if h.secrets.has(old.ID) {
+		t.Fatal("old-svc's key is still in Vault")
+	}
+	if h.f.key(api).RevokedAt != nil || !h.secrets.has(api) {
+		t.Fatal("api's recorded key was revoked")
+	}
+	if h.f.key(session.ID).RevokedAt != nil || h.f.key(ci.ID).RevokedAt != nil {
+		t.Fatal("a key Loomplane didn't label was revoked")
+	}
+	// Other components don't sweep.
+	h.f.plant("loomplane:later")
+	if err := h.hooks.Ready(t.Context(), adminRun(h, "server")); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.f.valid("loomplane:later"); len(got) != 1 {
+		t.Fatalf("the server's readiness swept: %v", got)
+	}
+}
+
+func TestReadyReportsAFailedSweep(t *testing.T) {
+	h := newHarness("acme")
+	orphan := h.f.plant("loomplane:old-svc")
+	h.f.failRevoke = true
+	err := h.hooks.Ready(t.Context(), adminRun(h, "admin"))
+	if err == nil || !strings.Contains(err.Error(), "old-svc") {
+		t.Fatalf("a failed revoke passed: %v", err)
+	}
+	noSecret(t, h.f, err)
+	// A key Fabriq no longer has can't be used: that is revoked.
+	h.f.failRevoke, h.f.revokeNotFound = false, true
+	if err = h.hooks.Ready(t.Context(), adminRun(h, "admin")); err != nil {
+		t.Fatalf("404: %v", err)
+	}
+	if h.f.key(orphan.ID) == nil {
+		t.Fatal("the fake lost the key")
+	}
+}
+
 func adminRun(h *harness, component string) deployments.ComponentRun {
 	return deployments.ComponentRun{
 		OrgID: "org", ProjectID: "proj", EnvironmentID: "env", Resource: "fabriq", Kind: "fabriq", Provider: "server",

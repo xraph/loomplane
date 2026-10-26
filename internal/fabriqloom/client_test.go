@@ -34,8 +34,11 @@ type fakeFabriq struct {
 	refuse   int
 	// failRevoke answers DELETE /admin/keys/:id with 500.
 	failRevoke bool
-	types      []string
-	applied    []string
+	// revokeNotFound answers DELETE /admin/keys/:id with 404, as Fabriq
+	// does for a key it no longer has, and leaves the key as it was.
+	revokeNotFound bool
+	types          []string
+	applied        []string
 	// noMigrations answers GET /admin/migrations with this status.
 	noMigrations int
 }
@@ -156,6 +159,10 @@ func (f *fakeFabriq) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/admin/keys/"):
 		if f.failRevoke {
 			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		if f.revokeNotFound {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
 			return
 		}
 		id := strings.TrimPrefix(r.URL.Path, "/admin/keys/")

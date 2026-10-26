@@ -56,9 +56,12 @@ type KeyStore interface {
 	ForResource(ctx context.Context, orgID, environmentID, resource string) ([]*KeyRecord, error)
 }
 
+// keyLabelPrefix starts the label of every key Loomplane issues.
+const keyLabelPrefix = "loomplane:"
+
 // KeyLabel is the label of the keys Loomplane issues to service. Keys with
 // any other label are never touched.
-func KeyLabel(service string) string { return "loomplane:" + service }
+func KeyLabel(service string) string { return keyLabelPrefix + service }
 
 // VaultKey is where a key's plaintext lives in ResourceSecrets.
 func VaultKey(orgID, environmentID, resource, id string) string {
