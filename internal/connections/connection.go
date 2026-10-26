@@ -27,6 +27,13 @@ const (
 	Cloudflare   = "cloudflare"
 )
 
+// Methods say how a connection got its credential: someone pasted it, or
+// signed in to the cloud.
+const (
+	MethodToken = "token"
+	MethodOAuth = "oauth"
+)
+
 // Statuses. A connection is checked when it's made and whenever someone
 // asks: ready when everything a deployment needs is allowed, incomplete
 // when the credential works but lacks permissions, failed when the cloud
@@ -35,6 +42,9 @@ const (
 	StatusReady      = "ready"
 	StatusIncomplete = "incomplete"
 	StatusFailed     = "failed"
+	// StatusSignInNeeded is a signed-in connection whose grant the cloud
+	// no longer honors, so someone has to sign in again.
+	StatusSignInNeeded = "sign_in_needed"
 )
 
 // Errors.
@@ -47,6 +57,10 @@ var (
 	// ErrNotReady is a deployment asking for a connection that isn't
 	// ready.
 	ErrNotReady = errors.New("the cloud connection isn't ready")
+	// ErrAppLocked is a change to a sign-in app that configuration owns.
+	ErrAppLocked = errors.New("this cloud's sign-in app is set in Loomplane's configuration")
+	// ErrNoApp is a sign-in for a cloud with no app.
+	ErrNoApp = errors.New("this cloud's sign-in isn't set up")
 )
 
 // Connection is one cloud account an organization deploys to.
@@ -57,6 +71,8 @@ type Connection struct {
 	OrgID      string `json:"org_id"`
 	Cloud      string `json:"cloud"`
 	Name       string `json:"name"`
+	// Method is token or oauth. Empty means token.
+	Method string `json:"method"`
 	// Account is what the credential acts as: a Google Cloud project, or
 	// a Vercel team or username.
 	Account string `json:"account"`
@@ -78,6 +94,9 @@ type Connection struct {
 }
 
 func (c *Connection) normalize() {
+	if c.Method == "" {
+		c.Method = MethodToken
+	}
 	if c.Generation == 0 {
 		c.Generation = 1
 	}
@@ -151,4 +170,11 @@ type Checker interface {
 	// cloud refuses is an error wrapping ErrRejected-like errors; the
 	// service records it as failed.
 	Check(ctx context.Context, credential []byte, settings map[string]string) (Check, error)
+}
+
+// GrantChecker is a Checker for a cloud that can be signed in to. It tells
+// a sign-in grant from a pasted credential, so a grant only ever reaches
+// Vault through a sign-in.
+type GrantChecker interface {
+	IsGrant(credential []byte) bool
 }

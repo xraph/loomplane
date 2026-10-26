@@ -1,5 +1,12 @@
 package migrations
 
+import (
+	"context"
+	"fmt"
+
+	"github.com/xraph/grove/migrate"
+)
+
 // Routes and their operations record which backend serves them. A Kubernetes
 // route holds a ready Kubernetes connection where a server route holds a
 // ready Cloud server. Every other rule is the cloud_domains one, unchanged.
@@ -30,5 +37,15 @@ var kubernetesRoutesUp = []string{
 }
 
 func init() {
-	App.MustRegister(statements("20261105000300", "kubernetes_routes", kubernetesRoutesUp, nil))
+	App.Add(
+		func(ctx context.Context, db *migrate.DB) error {
+			for i, q := range kubernetesRoutesUp {
+				if _, err := db.Exec(ctx, q); err != nil {
+					return fmt.Errorf("kubernetes_routes statement %d: %w", i+1, err)
+				}
+			}
+			return nil
+		},
+		nil,
+	)
 }

@@ -120,6 +120,11 @@ export interface AnalysisList {
   analyses: Analysis[];
 }
 
+export interface AppInputBody {
+  clientId: string;
+  clientSecret: string;
+}
+
 export interface AppliedInputs {
   artifactKey?: string;
   source?: PlanSource;
@@ -343,6 +348,7 @@ export interface CloudForm {
   cloud: string;
   credential?: string;
   help?: string;
+  methods: string[];
   settings?: Setting[];
   title: string;
 }
@@ -466,6 +472,11 @@ export interface CompleteCloudRoutingInputBody {
   evidence: string;
 }
 
+export interface CompleteInputBody {
+  code: string;
+  state: string;
+}
+
 export interface ComponentConfig {
   component: ResolvedComponent;
   dependencies?: Record<string, any>;
@@ -520,6 +531,7 @@ export interface Connection {
   generation: number;
   id: string;
   message: string;
+  method: string;
   missing: string[];
   name: string;
   orgId: string;
@@ -2523,6 +2535,29 @@ export interface Setting {
   key: string;
   label: string;
   required?: boolean;
+}
+
+export interface SignIn {
+  authorizeUrl: string;
+}
+
+export interface SignInApp {
+  clientId?: string;
+  cloud: string;
+  source: string;
+  updatedAt?: string;
+  updatedBy?: string;
+}
+
+export interface SignInAppList {
+  apps: SignInApp[];
+  callbackUrl: string;
+}
+
+export interface SignInInputBody {
+  cloud: string;
+  connectionId?: string;
+  name: string;
 }
 
 export interface Size {

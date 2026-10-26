@@ -3222,6 +3222,7 @@
           "org_id",
           "cloud",
           "name",
+          "method",
           "account",
           "details",
           "status",
@@ -3263,6 +3264,9 @@
             "x-forge-id": true
           },
           "message": {
+            "type": "string"
+          },
+          "method": {
             "type": "string"
           },
           "missing": {

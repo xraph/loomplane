@@ -1,7 +1,9 @@
 package connections
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -14,6 +16,7 @@ import (
 	"github.com/xraph/loomplane/internal/clouds/digitalocean"
 	"github.com/xraph/loomplane/internal/clouds/gcp"
 	"github.com/xraph/loomplane/internal/clouds/kubernetes"
+	"github.com/xraph/loomplane/internal/clouds/oauth"
 	"github.com/xraph/loomplane/internal/clouds/registry"
 	"github.com/xraph/loomplane/internal/clouds/render"
 	"github.com/xraph/loomplane/internal/clouds/server"
@@ -237,33 +240,79 @@ func (r RenderChecker) Check(ctx context.Context, credential []byte, settings ma
 	return Check{}, fmt.Errorf("%w: the key reaches %d workspaces, %s; set owner_id to the one to deploy in", ErrInvalid, len(owners), strings.Join(names, ", "))
 }
 
-// DigitalOceanChecker checks DigitalOcean API tokens. It needs no
-// settings: a token belongs to one team, and that's where it deploys.
+// DigitalOceanChecker checks DigitalOcean API tokens and sign-in grants.
+// It needs no settings: a token or grant belongs to one team, and that's
+// where it deploys.
 type DigitalOceanChecker struct{ Client *digitalocean.Client }
 
-// Parse implements Checker.
-func (d DigitalOceanChecker) Parse(credential []byte, _ map[string]string) (Check, error) {
-	if err := digitalocean.CheckToken(string(credential)); err != nil {
-		return Check{}, fmt.Errorf("%w: %w", ErrInvalid, err)
+// digitalOceanGrant reads a sign-in grant's JSON. ok is false for a
+// credential that isn't JSON, which is a pasted token.
+func digitalOceanGrant(credential []byte) (g oauth.Grant, ok bool, err error) {
+	trimmed := bytes.TrimSpace(credential)
+	if !bytes.HasPrefix(trimmed, []byte("{")) {
+		return oauth.Grant{}, false, nil
 	}
-	return Check{Details: map[string]string{}}, nil
+	if err := json.Unmarshal(trimmed, &g); err != nil {
+		return oauth.Grant{}, true, fmt.Errorf("%w: the sign-in grant isn't valid JSON", ErrInvalid)
+	}
+	if err := digitalocean.CheckToken(g.AccessToken); err != nil {
+		return oauth.Grant{}, true, fmt.Errorf("%w: the sign-in grant has no usable access token", ErrInvalid)
+	}
+	return g, true, nil
 }
 
-// Check implements Checker: it asks DigitalOcean whose token it is. A
-// locked account can't create anything, so it's refused.
-func (d DigitalOceanChecker) Check(ctx context.Context, credential []byte, settings map[string]string) (Check, error) {
-	c, err := d.Parse(credential, settings)
+// IsGrant implements GrantChecker.
+func (DigitalOceanChecker) IsGrant(credential []byte) bool {
+	// A grant that doesn't parse is still a grant; Parse says what's wrong.
+	_, isGrant, _ := digitalOceanGrant(credential) //nolint:errcheck // only whether it's a grant matters here
+	return isGrant
+}
+
+// Parse implements Checker. A grant says which account and team it's for.
+func (d DigitalOceanChecker) Parse(credential []byte, _ map[string]string) (Check, error) {
+	g, isGrant, err := digitalOceanGrant(credential)
 	if err != nil {
 		return Check{}, err
 	}
-	a, err := d.Client.Account(ctx, strings.TrimSpace(string(credential)))
+	if !isGrant {
+		if err := digitalocean.CheckToken(string(credential)); err != nil {
+			return Check{}, fmt.Errorf("%w: %w", ErrInvalid, err)
+		}
+		return Check{Details: map[string]string{}}, nil
+	}
+	c := Check{Account: g.Account["email"], Details: map[string]string{}}
+	if v := g.Account["account_uuid"]; v != "" {
+		c.Details["account_uuid"] = v
+	}
+	if v := g.Account["team_uuid"]; v != "" {
+		c.Details["team_uuid"] = v
+	}
+	if v := g.Account["team_name"]; v != "" {
+		c.Account = v
+	}
+	return c, nil
+}
+
+// Check implements Checker: it asks DigitalOcean whose token it is. A
+// grant is asked about with its access token, so it gives the same
+// account and team a token would. A locked account can't create
+// anything, so it's refused.
+func (d DigitalOceanChecker) Check(ctx context.Context, credential []byte, settings map[string]string) (Check, error) {
+	if _, err := d.Parse(credential, settings); err != nil {
+		return Check{}, err
+	}
+	token := strings.TrimSpace(string(credential))
+	if g, isGrant, _ := digitalOceanGrant(credential); isGrant { //nolint:errcheck // Parse refused a bad grant above
+		token = g.AccessToken
+	}
+	a, err := d.Client.Account(ctx, token)
 	if err != nil {
 		return Check{}, err
 	}
 	if a.Status == "locked" {
 		return Check{}, fmt.Errorf("%w: the account %s is locked", digitalocean.ErrRejected, a.Email)
 	}
-	c.Account, c.Details["account_uuid"] = a.Email, a.UUID
+	c := Check{Account: a.Email, Details: map[string]string{"account_uuid": a.UUID}}
 	if a.Team != nil && a.Team.UUID != "" {
 		c.Account, c.Details["team_uuid"] = a.Team.Name, a.Team.UUID
 	}

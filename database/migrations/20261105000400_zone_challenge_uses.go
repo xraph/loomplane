@@ -1,5 +1,12 @@
 package migrations
 
+import (
+	"context"
+	"fmt"
+
+	"github.com/xraph/grove/migrate"
+)
+
 // A zone's DNS challenge connection is held like its own connection, by
 // that zone alone, and can't be cleared while a wildcard route uses it.
 // The insert names no conflict target, so a second zone taking the same
@@ -48,5 +55,15 @@ var zoneChallengeUsesUp = []string{
 }
 
 func init() {
-	App.MustRegister(statements("20261105000400", "zone_challenge_uses", zoneChallengeUsesUp, nil))
+	App.Add(
+		func(ctx context.Context, db *migrate.DB) error {
+			for i, q := range zoneChallengeUsesUp {
+				if _, err := db.Exec(ctx, q); err != nil {
+					return fmt.Errorf("zone_challenge_uses statement %d: %w", i+1, err)
+				}
+			}
+			return nil
+		},
+		nil,
+	)
 }

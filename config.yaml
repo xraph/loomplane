@@ -124,6 +124,13 @@ clouds:
   cloudflare_endpoint: "${LOOMPLANE_CLOUDFLARE_ENDPOINT:-}"
   cloudflare_registrar_sandbox: "${LOOMPLANE_CLOUDFLARE_REGISTRAR_SANDBOX:-false}"
   acme_directory: "${LOOMPLANE_ACME_DIRECTORY:-}"
+  # Loomplane's sign-in app at each cloud, so people can connect by signing
+  # in. Leave both empty to keep token entry only. Keep the secret in the
+  # environment.
+  oauth:
+    digitalocean:
+      client_id: "${LOOMPLANE_DIGITALOCEAN_OAUTH_CLIENT_ID:-}"
+      client_secret: "${LOOMPLANE_DIGITALOCEAN_OAUTH_CLIENT_SECRET:-}"
 
 providers:
   # Deployment targets that run as their own services, built with

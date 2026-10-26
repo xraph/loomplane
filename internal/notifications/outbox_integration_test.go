@@ -99,6 +99,9 @@ func notificationDatabase(t *testing.T) *grove.DB {
 	if err = migrations.NotificationsMigration().Up(ctx, executor); err != nil {
 		t.Fatal(err)
 	}
+	// The cloud_sign_in and notification_kinds migrations both add the
+	// outbox's kind column. This helper only runs the notifications
+	// migration, so it runs notification_kinds as well.
 	for _, m := range migrations.Group().Migrations() {
 		if m.Name == "notification_kinds" {
 			if err = m.Up(ctx, executor); err != nil {

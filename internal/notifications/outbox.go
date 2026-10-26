@@ -110,6 +110,9 @@ func deploymentMessage(item *outboxItem) (*outboxMessage, error) {
 		subject:  "Loomplane deployment " + payload.Status, emailBody: "Your deployment " + payload.Status + ".\n\nReview the deployment: " + payload.URL}, nil
 }
 func (s *Service) process(ctx context.Context, item *outboxItem) error {
+	if item.kind == kindConnection {
+		return s.processConnection(ctx, item)
+	}
 	if len(item.wire) == 0 {
 		wire, err := s.wirePayload(item)
 		if err != nil {

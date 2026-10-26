@@ -8753,6 +8753,167 @@
           }
         }
       }
+    },
+    "/api/v1/cloud-sign-in/apps": {
+      "get": {
+        "tags": [
+          "Cloud sign-in"
+        ],
+        "summary": "The clouds you can sign in to, where each one's app comes from, and the callback URL to register",
+        "operationId": "cloudSignInApps.list",
+        "responses": {
+          "200": {
+            "description": "Sign-in apps",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignInAppList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/cloud-sign-in/apps/{cloud}": {
+      "put": {
+        "tags": [
+          "Cloud sign-in"
+        ],
+        "summary": "Set the organization's own sign-in app for a cloud. The secret is never returned",
+        "operationId": "cloudSignInApps.set",
+        "parameters": [
+          {
+            "name": "cloud",
+            "in": "path",
+            "description": "Path parameter: cloud",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AppInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The sign-in app",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignInApp"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Cloud sign-in"
+        ],
+        "summary": "Remove the organization's own sign-in app for a cloud",
+        "operationId": "cloudSignInApps.delete",
+        "parameters": [
+          {
+            "name": "cloud",
+            "in": "path",
+            "description": "Path parameter: cloud",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        }
+      }
+    },
+    "/api/v1/connections/sign-ins": {
+      "post": {
+        "tags": [
+          "Cloud sign-in"
+        ],
+        "summary": "Start signing in to a cloud, for a new connection or in place of an existing one's credential",
+        "operationId": "connectionSignIns.start",
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignInInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Where to send you to sign in",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignIn"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/connections/sign-ins/complete": {
+      "post": {
+        "tags": [
+          "Cloud sign-in"
+        ],
+        "summary": "Finish a sign-in with what the cloud sent back to the callback",
+        "operationId": "connectionSignIns.complete",
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CompleteInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The connection, with its credential replaced",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Connection"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "The new connection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Connection"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -9828,7 +9989,8 @@
         "required": [
           "cloud",
           "title",
-          "builtin"
+          "builtin",
+          "methods"
         ],
         "properties": {
           "builtin": {
@@ -9842,6 +10004,12 @@
           },
           "help": {
             "type": "string"
+          },
+          "methods": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           },
           "settings": {
             "type": "array",
@@ -10313,6 +10481,7 @@
           "org_id",
           "cloud",
           "name",
+          "method",
           "account",
           "details",
           "status",
@@ -10354,6 +10523,9 @@
             "x-forge-id": true
           },
           "message": {
+            "type": "string"
+          },
+          "method": {
             "type": "string"
           },
           "missing": {
@@ -18734,6 +18906,107 @@
             "type": "string"
           },
           "subnetwork": {
+            "type": "string"
+          }
+        }
+      },
+      "SignInAppList": {
+        "type": "object",
+        "required": [
+          "apps",
+          "callback_url"
+        ],
+        "properties": {
+          "apps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SignInApp"
+            }
+          },
+          "callback_url": {
+            "type": "string"
+          }
+        }
+      },
+      "SignInApp": {
+        "type": "object",
+        "required": [
+          "cloud",
+          "source"
+        ],
+        "properties": {
+          "client_id": {
+            "type": "string"
+          },
+          "cloud": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string"
+          },
+          "updated_by": {
+            "type": "string"
+          }
+        }
+      },
+      "AppInputBody": {
+        "type": "object",
+        "required": [
+          "client_id",
+          "client_secret"
+        ],
+        "properties": {
+          "client_id": {
+            "type": "string"
+          },
+          "client_secret": {
+            "type": "string"
+          }
+        }
+      },
+      "SignInInputBody": {
+        "type": "object",
+        "required": [
+          "cloud",
+          "name"
+        ],
+        "properties": {
+          "cloud": {
+            "type": "string"
+          },
+          "connection_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "SignIn": {
+        "type": "object",
+        "required": [
+          "authorize_url"
+        ],
+        "properties": {
+          "authorize_url": {
+            "type": "string"
+          }
+        }
+      },
+      "CompleteInputBody": {
+        "type": "object",
+        "required": [
+          "state",
+          "code"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "state": {
             "type": "string"
           }
         }

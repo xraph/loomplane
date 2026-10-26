@@ -266,7 +266,20 @@ type CloudsConfig struct {
 	// ACMEDirectory replaces the ACME directory certificates are ordered
 	// from. Empty means Let's Encrypt's production directory.
 	ACMEDirectory string
+	// OAuth holds the sign-in app Loomplane registered with each cloud,
+	// keyed by connection cloud such as "digitalocean". A cloud appears
+	// only when both its client ID and secret are set.
+	OAuth map[string]OAuthApp
 }
+
+// OAuthApp is Loomplane's OAuth 2 app at one cloud.
+type OAuthApp struct {
+	ClientID     string
+	ClientSecret string
+}
+
+// oauthClouds are the clouds that can connect by signing in.
+var oauthClouds = []string{"digitalocean"}
 
 // Bounds on the approval window: long enough to reach a person, short
 // enough that an approved plan still describes the world.
@@ -406,6 +419,7 @@ func FromSource(src Getter) (Config, error) {
 	r.str(&c.Clouds.CloudflareEndpoint, "clouds.cloudflare_endpoint")
 	r.boolean(&c.Clouds.CloudflareRegistrarSandbox, "clouds.cloudflare_registrar_sandbox")
 	r.str(&c.Clouds.ACMEDirectory, "clouds.acme_directory")
+	c.Clouds.OAuth = r.oauthApps(c.Clouds.OAuth, "clouds.oauth")
 	r.plugins(&c.Providers.Plugins, "providers.plugins")
 	r.names(&c.Providers.Paused, "providers.paused")
 	r.boolean(&c.Federation.Enabled, "federation.enabled")
@@ -615,6 +629,31 @@ func (r *reader) prefixes(dst *[]netip.Prefix, key string) {
 		}
 		*dst = append(*dst, p.Masked())
 	}
+}
+
+// oauthApps reads <key>.<cloud>.client_id and client_secret for each cloud
+// that can sign in. A cloud with only one of the two is an error.
+func (r *reader) oauthApps(dst map[string]OAuthApp, key string) map[string]OAuthApp {
+	for _, cloud := range oauthClouds {
+		var app OAuthApp
+		r.str(&app.ClientID, key+"."+cloud+".client_id")
+		r.str(&app.ClientSecret, key+"."+cloud+".client_secret")
+		switch {
+		case app.ClientID == "" && app.ClientSecret == "":
+			continue
+		case app.ClientID == "":
+			r.errs = append(r.errs, fmt.Errorf("%s.%s.client_id is required when client_secret is set", key, cloud))
+			continue
+		case app.ClientSecret == "":
+			r.errs = append(r.errs, fmt.Errorf("%s.%s.client_secret is required when client_id is set", key, cloud))
+			continue
+		}
+		if dst == nil {
+			dst = map[string]OAuthApp{}
+		}
+		dst[cloud] = app
+	}
+	return dst
 }
 
 func (r *reader) str(dst *string, key string) {

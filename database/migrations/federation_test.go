@@ -5,27 +5,19 @@ package migrations
 import "testing"
 
 func TestFederationMigration(t *testing.T) {
-	conn := scratch(t)
-	exec(t, conn, projectsUp...)
-	exec(t, conn, cloudConnectionsUp...)
+	conn, db := scratch(t)
+	up(t, db, "create_projects", "create_cloud_connections")
 	exec(t, conn, `CREATE UNIQUE INDEX IF NOT EXISTS loomplane_connections_org_id ON loomplane_cloud_connections(org_id,id)`)
 	exec(t, conn, `CREATE TABLE loomplane_connection_uses (org_id TEXT NOT NULL, connection_id TEXT NOT NULL, kind TEXT NOT NULL, owner_id TEXT NOT NULL, PRIMARY KEY(kind,owner_id,connection_id), FOREIGN KEY(org_id,connection_id) REFERENCES loomplane_cloud_connections(org_id,id) ON DELETE RESTRICT)`)
-	for i := range federationUp {
-		exec(t, conn, federationUp[:i+1]...)
+	// Each runs twice: a rerun changes nothing.
+	for _, name := range []string{
+		"create_federation_destinations",
+		"federation_destination_references",
+		"federation_runtime_catalog",
+		"federation_enrollment",
+	} {
+		up(t, db, name, name)
 	}
-	exec(t, conn, federationUp...)
-	for i := range federationLifecycleUp {
-		exec(t, conn, federationLifecycleUp[:i+1]...)
-	}
-	exec(t, conn, federationLifecycleUp...)
-	for i := range federationCatalogUp {
-		exec(t, conn, federationCatalogUp[:i+1]...)
-	}
-	exec(t, conn, federationCatalogUp...)
-	for i := range federationEnrollmentUp {
-		exec(t, conn, federationEnrollmentUp[:i+1]...)
-	}
-	exec(t, conn, federationEnrollmentUp...)
 	exec(t, conn, `INSERT INTO loomplane_projects(id,org_id,name,slug,status,created_by,created_at,updated_at) VALUES('p','o','project','project','ready','u',now(),now())`)
 	exec(t, conn, `INSERT INTO loomplane_environments(id,org_id,project_id,name,kind,created_at,updated_at) VALUES('e','o','p','prod','production',now(),now())`)
 	exec(t, conn, `INSERT INTO loomplane_cloud_connections(id,org_id,cloud,name,account,status,created_by,created_at,updated_at) VALUES('c','o','server','server','daemon','ready','u',now(),now())`)

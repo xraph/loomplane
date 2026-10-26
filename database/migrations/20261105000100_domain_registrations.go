@@ -1,5 +1,12 @@
 package migrations
 
+import (
+	"context"
+	"fmt"
+
+	"github.com/xraph/grove/migrate"
+)
+
 // A registration holds its connection from approval on, unless it ended
 // without a domain. Only one registration of a name can be active at once.
 var domainRegistrationsUp = []string{
@@ -24,5 +31,22 @@ var domainRegistrationsDown = []string{
 }
 
 func init() {
-	App.MustRegister(statements("20261105000100", "domain_registrations", domainRegistrationsUp, domainRegistrationsDown))
+	App.Add(
+		func(ctx context.Context, db *migrate.DB) error {
+			for i, q := range domainRegistrationsUp {
+				if _, err := db.Exec(ctx, q); err != nil {
+					return fmt.Errorf("domain_registrations statement %d: %w", i+1, err)
+				}
+			}
+			return nil
+		},
+		func(ctx context.Context, db *migrate.DB) error {
+			for i, q := range domainRegistrationsDown {
+				if _, err := db.Exec(ctx, q); err != nil {
+					return fmt.Errorf("domain_registrations statement %d: %w", i+1, err)
+				}
+			}
+			return nil
+		},
+	)
 }

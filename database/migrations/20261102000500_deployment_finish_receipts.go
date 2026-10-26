@@ -2,31 +2,35 @@ package migrations
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/xraph/grove/migrate"
 )
 
 func init() {
-	App.MustRegister(&migrate.Migration{
-		Name: "deployment_finish_receipts", Version: "20261102000500",
-		Up: func(ctx context.Context, exec migrate.Executor) error {
-			_, err := exec.Exec(ctx, `CREATE TABLE IF NOT EXISTS loomplane_deployment_finishes (
- org_id TEXT NOT NULL,
- deployment_id TEXT NOT NULL REFERENCES loomplane_deployments(id) ON DELETE CASCADE,
- activity_key TEXT NOT NULL,
- retries INTEGER NOT NULL CHECK(retries >= 0),
- created_at TIMESTAMPTZ NOT NULL,
- PRIMARY KEY(org_id,deployment_id,activity_key)
-)`)
-			return err
+	App.Add(
+		func(ctx context.Context, db *migrate.DB) error {
+			return db.NewCreateTable("loomplane_deployment_finishes").IfNotExists().
+				Column("org_id", migrate.Text, migrate.NotNull()).
+				Column("deployment_id", migrate.Text, migrate.NotNull(),
+					migrate.References("loomplane_deployments", "id"), migrate.OnDelete(migrate.Cascade)).
+				Column("activity_key", migrate.Text, migrate.NotNull()).
+				Column("retries", migrate.Integer, migrate.NotNull(), migrate.Check("retries >= 0")).
+				Column("created_at", migrate.Timestamp, migrate.NotNull()).
+				PrimaryKey("org_id", "deployment_id", "activity_key").
+				Exec(ctx)
 		},
-		Down: func(ctx context.Context, exec migrate.Executor) error {
-			_, err := exec.Exec(ctx, `DO $$ BEGIN IF EXISTS(SELECT 1 FROM loomplane_deployment_finishes) THEN RAISE EXCEPTION 'deployment finish receipts must be retained'; END IF; END $$`)
+		func(ctx context.Context, db *migrate.DB) error {
+			_, err := db.Exec(ctx, `DO $$ BEGIN
+	IF EXISTS(SELECT 1 FROM loomplane_deployment_finishes) THEN
+		RAISE EXCEPTION 'deployment finish receipts must be retained';
+	END IF;
+END $$`)
 			if err != nil {
-				return err
+				return fmt.Errorf("check loomplane_deployment_finishes is empty: %w", err)
 			}
-			_, err = exec.Exec(ctx, `DROP TABLE IF EXISTS loomplane_deployment_finishes`)
-			return err
+
+			return db.NewDropTable("loomplane_deployment_finishes").IfExists().Exec(ctx)
 		},
-	})
+	)
 }

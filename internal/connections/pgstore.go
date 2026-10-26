@@ -22,16 +22,19 @@ type PgStore struct {
 // NewPgStore returns a Store over db.
 func NewPgStore(db *pgdriver.PgDB) *PgStore { return &PgStore{db: db} }
 
-var _ Store = (*PgStore)(nil)
+var (
+	_ Store      = (*PgStore)(nil)
+	_ grantStore = (*PgStore)(nil)
+)
 
 const columns = `id, org_id, cloud, name, account, details, status, missing, message,
-	checked_at, created_by, created_at, updated_at, generation`
+	checked_at, created_by, created_at, updated_at, generation, method`
 
 func scan(row pgx.Row) (*Connection, error) {
 	var c Connection
 	var details, missing []byte
 	if err := row.Scan(&c.ID, &c.OrgID, &c.Cloud, &c.Name, &c.Account, &details, &c.Status, &missing, &c.Message,
-		&c.CheckedAt, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt, &c.Generation); err != nil {
+		&c.CheckedAt, &c.CreatedBy, &c.CreatedAt, &c.UpdatedAt, &c.Generation, &c.Method); err != nil {
 		return nil, err
 	}
 	if err := json.Unmarshal(details, &c.Details); err != nil {
@@ -62,9 +65,9 @@ func (s *PgStore) CreateConnection(ctx context.Context, c *Connection) error {
 		return fmt.Errorf("encode connection: %w", err)
 	}
 	_, err = s.db.Exec(ctx, `INSERT INTO loomplane_cloud_connections (`+columns+`)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
 		c.ID, c.OrgID, c.Cloud, c.Name, c.Account, details, c.Status, missing, c.Message,
-		c.CheckedAt, c.CreatedBy, c.CreatedAt, c.UpdatedAt, c.Generation)
+		c.CheckedAt, c.CreatedBy, c.CreatedAt, c.UpdatedAt, c.Generation, c.Method)
 	var pgErr *pgconn.PgError
 	if errors.As(err, &pgErr) && pgErr.Code == pgUniqueViolation {
 		return ErrExists
@@ -90,8 +93,19 @@ func (s *PgStore) GetConnection(ctx context.Context, orgID, id string) (*Connect
 
 // ListConnections implements Store.
 func (s *PgStore) ListConnections(ctx context.Context, orgID string) ([]*Connection, error) {
-	rows, err := s.db.Query(ctx, `SELECT `+columns+` FROM loomplane_cloud_connections
+	return s.list(ctx, `SELECT `+columns+` FROM loomplane_cloud_connections
 		WHERE org_id = $1 ORDER BY cloud, name`, orgID)
+}
+
+// OAuthConnections returns every organization's signed-in connections,
+// except those already waiting for someone to sign in again.
+func (s *PgStore) OAuthConnections(ctx context.Context) ([]*Connection, error) {
+	return s.list(ctx, `SELECT `+columns+` FROM loomplane_cloud_connections
+		WHERE method = $1 AND status <> $2 ORDER BY org_id, id`, MethodOAuth, StatusSignInNeeded)
+}
+
+func (s *PgStore) list(ctx context.Context, query string, args ...any) ([]*Connection, error) {
+	rows, err := s.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list connections: %w", err)
 	}
@@ -130,9 +144,9 @@ func (s *PgStore) UpdateConnection(ctx context.Context, c *Connection) error {
 		return fmt.Errorf("encode connection: %w", err)
 	}
 	tag, err := s.db.Exec(ctx, `UPDATE loomplane_cloud_connections
-		SET account = $3, details = $4, status = $5, missing = $6, message = $7, checked_at = $8, updated_at = $9, generation = $10
+		SET account = $3, details = $4, status = $5, missing = $6, message = $7, checked_at = $8, updated_at = $9, generation = $10, method = $12
 		WHERE org_id = $1 AND id = $2 AND generation = $11`,
-		c.OrgID, c.ID, c.Account, details, c.Status, missing, c.Message, c.CheckedAt, c.UpdatedAt, generation, c.Generation)
+		c.OrgID, c.ID, c.Account, details, c.Status, missing, c.Message, c.CheckedAt, c.UpdatedAt, generation, c.Generation, c.Method)
 	if err != nil {
 		return fmt.Errorf("update connection: %w", err)
 	}
@@ -194,25 +208,34 @@ func (s *PgStore) BeginCredentialReplacement(ctx context.Context, c *Connection)
 	return nil
 }
 
-// WithCredentialReplacement serializes Vault writes as well as generation changes.
-func (s *PgStore) WithCredentialReplacement(ctx context.Context, c *Connection, replace func() error) (err error) {
+// WithConnectionLock runs fn holding connection id's credential lock, so
+// a replacement and a sign-in renewal never write Vault at the same time.
+// The lock lasts until fn returns, across every Loomplane process.
+func (s *PgStore) WithConnectionLock(ctx context.Context, orgID, id string, fn func() error) (err error) {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer func() {
 		if rollbackErr := tx.Rollback(); rollbackErr != nil && !errors.Is(rollbackErr, pgx.ErrTxClosed) {
-			err = errors.Join(err, fmt.Errorf("release credential replacement lock: %w", rollbackErr))
+			err = errors.Join(err, fmt.Errorf("release connection credential lock: %w", rollbackErr))
 		}
 	}()
-	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "connection-credential/"+c.OrgID+"/"+c.ID); err != nil {
+	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1,0))`, "connection-credential/"+orgID+"/"+id); err != nil {
 		return err
 	}
-	if err := s.BeginCredentialReplacement(ctx, c); err != nil {
-		return err
-	}
-	if err := replace(); err != nil {
+	if err := fn(); err != nil {
 		return err
 	}
 	return tx.Commit()
+}
+
+// WithCredentialReplacement serializes Vault writes as well as generation changes.
+func (s *PgStore) WithCredentialReplacement(ctx context.Context, c *Connection, replace func() error) error {
+	return s.WithConnectionLock(ctx, c.OrgID, c.ID, func() error {
+		if err := s.BeginCredentialReplacement(ctx, c); err != nil {
+			return err
+		}
+		return replace()
+	})
 }

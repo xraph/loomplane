@@ -66,6 +66,7 @@ const settingsPaths = [
   "/members",
   "/variables",
   "/integrations",
+  "/cloud-sign-in",
   "/api-keys",
   "/notifications",
 ]
@@ -188,6 +189,11 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
           title: "Integrations",
           link: <Link to="/integrations" />,
           isActive: path.startsWith("/integrations"),
+        },
+        {
+          title: "Cloud sign-in",
+          link: <Link to="/cloud-sign-in" />,
+          isActive: path.startsWith("/cloud-sign-in"),
         },
         {
           title: "API keys",
