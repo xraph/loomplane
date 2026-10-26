@@ -30,6 +30,57 @@ var pullAccounts = map[string]struct {
 	"azure-container-apps": {"Azure container registry", false},
 }
 
+// BuildInputs are what a service's image is built from, besides its
+// commit: two configs with equal inputs build the same image.
+type BuildInputs struct {
+	Source    string
+	Image     string
+	Context   string
+	Ecosystem string
+	Build     string
+	Start     string
+}
+
+// buildInputNames name each input for people, in the order they're compared.
+var buildInputNames = []struct {
+	name  string
+	value func(BuildInputs) string
+}{
+	{"source", func(b BuildInputs) string { return b.Source }},
+	{"dockerfile", func(b BuildInputs) string { return b.Image }},
+	{"build.context", func(b BuildInputs) string { return b.Context }},
+	{"ecosystem", func(b BuildInputs) string { return b.Ecosystem }},
+	{"build command", func(b BuildInputs) string { return b.Build }},
+	{"start command", func(b BuildInputs) string { return b.Start }},
+}
+
+// BuildInputs are what c's image is built from.
+func (c *ServiceConfig) BuildInputs() BuildInputs {
+	return BuildInputs{Source: c.Source, Image: c.Image, Context: c.Context, Ecosystem: string(c.Ecosystem), Build: c.Build, Start: c.Start}
+}
+
+// BuildArchitecture is the architecture c's image is built for: its
+// builder's, else its target's. It is "" for a cloud that builds for
+// itself.
+func (c *ServiceConfig) BuildArchitecture() string {
+	if c.BuildTarget != nil && c.BuildTarget.BuilderSettings["architecture"] != "" {
+		return c.BuildTarget.BuilderSettings["architecture"]
+	}
+	return c.TargetSettings["architecture"]
+}
+
+// runArchitecture is the architecture c runs on: its target's, else its
+// builder's.
+func (c *ServiceConfig) runArchitecture() string {
+	if a := c.TargetSettings["architecture"]; a != "" {
+		return a
+	}
+	if c.BuildTarget != nil {
+		return c.BuildTarget.BuilderSettings["architecture"]
+	}
+	return ""
+}
+
 // releasedImages reads what the From environment of a promotion ran, once
 // per compute, so recomputing an approved plan sees the same images unless
 // that environment released again since. ok is false when the plan reuses
@@ -109,6 +160,13 @@ func (s *Service) reusable(to string, connections map[string]string, a Action, i
 	case img.Provider != a.Provider:
 		choice.Reason = to + " runs " + a.Name + " on " + s.providerTitle(a.Provider) + ", " + from + " on " + s.providerTitle(img.Provider)
 		return choice, nil
+	case img.Architecture != cfg.runArchitecture():
+		choice.Reason = from + " built " + a.Name + " for " + architecture(img.Architecture) + "; " + to + " runs " + architecture(cfg.runArchitecture())
+		return choice, nil
+	}
+	if differs := changedInput(img.Inputs, cfg.BuildInputs()); differs != "" {
+		choice.Reason = to + " builds " + a.Name + " differently from " + from + " (" + differs + ")"
+		return choice, nil
 	}
 	pull, pulls := pullAccounts[a.Provider]
 	ownsRegistry := a.Provider == "server" || a.Provider == "kubernetes"
@@ -135,7 +193,10 @@ func (s *Service) reusable(to string, connections map[string]string, a Action, i
 			choice.Reason = to + " pushes to another registry" + again
 			return choice, nil
 		}
-	} else if s.actionConnection(connections, a) != img.ConnectionID || (pull.region && a.Region != img.Region) {
+	} else if connection := s.actionConnection(connections, a); connection == "" || img.ConnectionID == "" {
+		choice.Reason = "Loomplane can't tell which " + pull.what + " " + from + "'s image is in" + again
+		return choice, nil
+	} else if connection != img.ConnectionID || (pull.region && a.Region != img.Region) {
 		choice.Reason = from + "'s image is in another " + pull.what + ", which " + to + " can't pull from" + again
 		return choice, nil
 	}
@@ -143,8 +204,25 @@ func (s *Service) reusable(to string, connections map[string]string, a Action, i
 	choice.Reused, choice.Reference, choice.From = true, img.Image, from
 	return choice, &ReusedArtifact{
 		Reference: img.Image, Digest: digest, CommitSHA: img.CommitSHA,
-		FromEnvironment: from, FromDeploymentID: img.DeploymentID,
+		FromEnvironment: from, FromDeploymentID: img.DeploymentID, Architecture: img.Architecture,
 	}
+}
+
+// changedInput names the first build input that differs, or "".
+func changedInput(was, now BuildInputs) string {
+	for _, in := range buildInputNames {
+		if in.value(was) != in.value(now) {
+			return in.name
+		}
+	}
+	return ""
+}
+
+func architecture(a string) string {
+	if a == "" {
+		return "an unrecorded architecture"
+	}
+	return a
 }
 
 // actionConnection is the connection an action deploys with: the one it

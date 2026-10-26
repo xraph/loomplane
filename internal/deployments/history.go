@@ -128,7 +128,8 @@ func (h *History) ReleasedImages(ctx context.Context, orgID, environmentID strin
 			}
 			img := planning.ReleasedImage{
 				Service: s.Name, Provider: a.Provider, ConnectionID: h.connection(plan, a), Region: a.Region,
-				CommitSHA: a.Service.CommitSHA, Image: s.Image, Revision: s.Revision,
+				CommitSHA: a.Service.CommitSHA, Architecture: a.Service.BuildArchitecture(), Inputs: a.Service.BuildInputs(),
+				Image: s.Image, Revision: s.Revision,
 				DeploymentID: r.DeploymentID, PlanID: r.PlanID, FinishedAt: r.FinishedAt,
 			}
 			if a.Service.BuildTarget != nil {

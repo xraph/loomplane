@@ -287,7 +287,7 @@ func TestImageBuilder_usesAReusedImageInsideTheReviewedRegistry(t *testing.T) {
 	digest := "sha256:" + strings.Repeat("f9", 32)
 	reuse := func(job *Job, reference string) {
 		cfg := *job.Action.Service
-		cfg.Artifact = &planning.ReusedArtifact{Reference: reference, Digest: digest, FromEnvironment: "staging"}
+		cfg.Artifact = &planning.ReusedArtifact{Reference: reference, Digest: digest, FromEnvironment: "staging", Architecture: "arm64"}
 		job.Action.Service = &cfg
 	}
 	job, builder, _, builds := imageBuildFixture(t, true)
@@ -303,7 +303,9 @@ func TestImageBuilder_usesAReusedImageInsideTheReviewedRegistry(t *testing.T) {
 	reuse(job, inside)
 	var state ImageArtifact
 	ref, err := builder.Build(t.Context(), job, &state, func() error { return nil })
-	if err != nil || ref != inside || state.Reference != inside || state.Digest != digest || *builds != 0 {
+	// The server labels the instance with the architecture staging's
+	// builder built for, not this builder's.
+	if err != nil || ref != inside || state.Reference != inside || state.Digest != digest || state.Architecture != "arm64" || *builds != 0 {
 		t.Fatalf("reference %q, state %+v, builds %d: %v", ref, state, *builds, err)
 	}
 	if err := builder.PrepareEffects(t.Context(), job); err != nil {
