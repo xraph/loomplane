@@ -74,36 +74,76 @@ func (g GCPChecker) Check(ctx context.Context, credential []byte, settings map[s
 // teamRE matches Vercel team IDs, such as team_a1B2c3.
 var teamRE = regexp.MustCompile(`^team_[A-Za-z0-9]{1,64}$`)
 
-// VercelChecker checks Vercel access tokens.
+// VercelChecker checks Vercel access tokens and sign-in grants.
 type VercelChecker struct{ Client *vercel.Client }
 
+// vercelGrant reads a sign-in grant's JSON. ok is false for a credential
+// that isn't JSON, which is a pasted token.
+func vercelGrant(credential []byte) (g oauth.Grant, ok bool, err error) {
+	trimmed := bytes.TrimSpace(credential)
+	if !bytes.HasPrefix(trimmed, []byte("{")) {
+		return oauth.Grant{}, false, nil
+	}
+	if err := json.Unmarshal(trimmed, &g); err != nil {
+		return oauth.Grant{}, true, fmt.Errorf("%w: the sign-in grant isn't valid JSON", ErrInvalid)
+	}
+	if err := vercel.CheckToken(g.AccessToken); err != nil {
+		return oauth.Grant{}, true, fmt.Errorf("%w: the sign-in grant has no usable access token", ErrInvalid)
+	}
+	return g, true, nil
+}
+
+// IsGrant implements GrantChecker.
+func (VercelChecker) IsGrant(credential []byte) bool {
+	// A grant that doesn't parse is still a grant; Parse says what's wrong.
+	_, isGrant, _ := vercelGrant(credential) //nolint:errcheck // only whether it's a grant matters here
+	return isGrant
+}
+
 // Parse implements Checker. The one setting is team_id; without it the
-// token deploys to the person's own account.
+// token deploys to the person's own account. A grant says its own team,
+// and settings don't override it.
 func (v VercelChecker) Parse(credential []byte, settings map[string]string) (Check, error) {
-	if err := vercel.CheckToken(string(credential)); err != nil {
+	g, isGrant, err := vercelGrant(credential)
+	if err != nil {
+		return Check{}, err
+	}
+	team := strings.TrimSpace(settings["team_id"])
+	if isGrant {
+		team = strings.TrimSpace(g.Account["team_id"])
+	} else if err := vercel.CheckToken(string(credential)); err != nil {
 		return Check{}, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	details := map[string]string{}
-	if team := strings.TrimSpace(settings["team_id"]); team != "" {
+	if team != "" {
 		if !teamRE.MatchString(team) {
 			return Check{}, fmt.Errorf("%w: %q isn't a Vercel team ID; they look like team_ followed by letters and digits", ErrInvalid, team)
 		}
 		details["team_id"] = team
+	} else if user := strings.TrimSpace(g.Account["user_id"]); isGrant && user != "" {
+		details["user_id"] = user
 	}
 	return Check{Details: details}, nil
 }
 
-// Check implements Checker: it asks Vercel who the token is.
+// Check implements Checker: it asks Vercel who the token is. A grant is
+// asked about with its access token and team, so it gives the same
+// account a token would.
 func (v VercelChecker) Check(ctx context.Context, credential []byte, settings map[string]string) (Check, error) {
 	c, err := v.Parse(credential, settings)
 	if err != nil {
 		return Check{}, err
 	}
-	acct, err := v.Client.Check(ctx, vercel.Token{Value: strings.TrimSpace(string(credential)), TeamID: c.Details["team_id"]})
+	token := strings.TrimSpace(string(credential))
+	if g, isGrant, _ := vercelGrant(credential); isGrant { //nolint:errcheck // Parse refused a bad grant above
+		token = g.AccessToken
+	}
+	acct, err := v.Client.Check(ctx, vercel.Token{Value: token, TeamID: c.Details["team_id"]})
 	if err != nil {
 		return Check{}, err
 	}
 	c.Account = acct.Name
+	delete(c.Details, "user_id")
 	if acct.TeamID != "" {
 		c.Details["team_id"] = acct.TeamID
 	} else {
