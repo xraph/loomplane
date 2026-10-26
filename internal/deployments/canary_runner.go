@@ -65,19 +65,66 @@ func (r *Runner) deployCandidate(ctx context.Context, d *Deployment, exec Execut
 	if err != nil {
 		return err
 	}
-	if _, err = r.updateCanary(ctx, d.OrgID, d.ID, func(c *Canary) error {
+	record := func(c *Canary) error {
 		svc := c.service(a.ID)
 		if svc == nil {
 			return fmt.Errorf("the canary doesn't ramp %s", a.Name)
 		}
 		svc.Baseline, svc.Candidate, svc.Image, svc.Refs = t.Baseline, t.Candidate, t.Image, maps.Clone(t.Refs)
 		return nil
-	}); err != nil {
+	}
+	var stopped *Canary
+	if _, err = r.updateCanary(ctx, d.OrgID, d.ID, func(c *Canary) error {
+		if c.stopped() {
+			stopped = c
+			return errCanaryStopped
+		}
+		return record(c)
+	}); errors.Is(err, errCanaryStopped) {
+		return r.removeLateCandidate(ctx, d, w, job, *t, stopped.Status, record)
+	} else if err != nil {
 		return fmt.Errorf("record %s's candidate: %w", a.Name, err)
 	}
 	step.Image = t.Image
 	step.Status, step.Message = StepRamping, candidateUp
 	return nil
+}
+
+// errCanaryStopped refuses a change that would move a stopped canary
+// toward its candidates again.
+var errCanaryStopped = errors.New("the canary has stopped")
+
+// stopped reports whether a canary is going back to its baselines, or has
+// settled as anything but promoted. Nothing may start a candidate or move
+// traffic toward one after that, or an action or weigh still in flight
+// when the workflow reverted would undo the revert.
+func (c *Canary) stopped() bool {
+	switch c.Status {
+	case CanaryReverting, CanaryRolledBack, CanaryRevertFailed, CanaryPromoteFailed:
+		return true
+	}
+	return false
+}
+
+// removeLateCandidate removes a candidate that came up after its canary
+// stopped. When it can't be removed, the canary records it and that its
+// revert failed, so traffic may still be split is what the canary says.
+// Either way the action fails.
+func (r *Runner) removeLateCandidate(ctx context.Context, d *Deployment, w Weighted, job *Job, t CanaryTarget, status string, record func(*Canary) error) error {
+	name := job.Action.Name
+	revertErr := w.Revert(ctx, job, t)
+	if revertErr == nil {
+		return fmt.Errorf("the canary is %s, so %s's candidate was removed", status, name)
+	}
+	_, err := r.updateCanary(ctx, d.OrgID, d.ID, func(c *Canary) error {
+		if recordErr := record(c); recordErr != nil {
+			return recordErr
+		}
+		c.Status = CanaryRevertFailed
+		c.Reason = strings.TrimSpace(c.Reason + " " + fmt.Sprintf("Traffic may still be split: %s's candidate came up after the canary was %s and couldn't be removed: %v.", name, status, revertErr))
+		return nil
+	})
+	return errors.Join(fmt.Errorf("the canary is %s, and %s's candidate couldn't be removed: %w", status, name, revertErr), err)
 }
 
 // updateCanary changes a deployment's canary as it's stored now, and
@@ -235,6 +282,11 @@ func (r *Runner) CanaryWeigh(ctx context.Context, orgID, deploymentID string, st
 		}
 	}
 	c, err = r.updateCanary(ctx, orgID, deploymentID, func(c *Canary) error {
+		// A revert may have started while the weights moved. It owns the
+		// canary now, and puts its traffic back itself.
+		if c.stopped() {
+			return fmt.Errorf("the canary is %s, so its traffic doesn't move", c.Status)
+		}
 		c.Status, c.Step, c.Weight = CanaryRamping, step, weight
 		return nil
 	})
@@ -424,8 +476,21 @@ func (r *Runner) revert(ctx context.Context, d *Deployment, plan *planning.Plan,
 // failed, whatever else was promoted. With none up, a service an earlier
 // attempt promoted leaves old and new side by side, which a rollback can't
 // be; with none promoted, every binding names what runs, and the canary
-// rolled back.
-func (r *Runner) settleCanary(ctx context.Context, d *Deployment, reason string) error {
+// rolled back. replace puts reason in place of the canary's own.
+// CanarySettle implements orchestration.CanaryDeployer. The workflow
+// calls it once it gave up on a promote or revert, whatever the
+// deployment's status, so the canary ends as promote_failed or
+// revert_failed with why traffic may still be split, and stops holding its
+// environment. A canary already settled is left as it is.
+func (r *Runner) CanarySettle(ctx context.Context, orgID, deploymentID, reason string) error {
+	d, err := r.store.GetDeployment(ctx, orgID, deploymentID)
+	if err != nil {
+		return err
+	}
+	return r.settleCanary(ctx, d, reason, true)
+}
+
+func (r *Runner) settleCanary(ctx context.Context, d *Deployment, reason string, replace bool) error {
 	c := d.Canary
 	if c == nil {
 		return nil
@@ -448,7 +513,7 @@ func (r *Runner) settleCanary(ctx context.Context, d *Deployment, reason string)
 		default:
 			c.Status, c.Weight = CanaryRolledBack, 0
 		}
-		if c.Reason == "" {
+		if replace || c.Reason == "" {
 			c.Reason = reason
 		}
 		return nil

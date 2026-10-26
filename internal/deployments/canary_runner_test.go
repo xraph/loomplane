@@ -31,6 +31,10 @@ type weighted struct {
 	// promoteFail and revertFail fail those calls for a service.
 	promoteFail map[string]error
 	revertFail  map[string]error
+	// onApply and onWeigh run inside ApplyCandidate and SetWeights, as
+	// a revert racing them would.
+	onApply func(job *Job)
+	onWeigh func(job *Job)
 }
 
 func (w *weighted) record(job *Job, call string) {
@@ -49,12 +53,18 @@ func (w *weighted) log() []string {
 func (w *weighted) ApplyCandidate(_ context.Context, job *Job) (*CanaryTarget, error) {
 	name := job.Action.Name
 	w.record(job, "candidate "+name)
+	if w.onApply != nil {
+		w.onApply(job)
+	}
 	return &CanaryTarget{Baseline: name + "-00001", Candidate: name + "-00002", Image: "img:" + name + "-new",
 		Refs: map[string]string{"service": "loomplane-" + name}}, nil
 }
 
 func (w *weighted) SetWeights(_ context.Context, job *Job, t CanaryTarget, percent int) error {
 	w.record(job, fmt.Sprintf("weigh %s %s %d", job.Action.Name, t.Candidate, percent))
+	if w.onWeigh != nil {
+		w.onWeigh(job)
+	}
 	return nil
 }
 
@@ -826,6 +836,124 @@ func TestFinishSettlesACanaryInFlight(t *testing.T) {
 		d := getDeployment(t, store, id)
 		if d.Canary.Status != CanaryRolledBack || d.Canary.Reason != "the database didn't resize" || d.Step("service:api").Status != StepSkipped {
 			t.Fatalf("canary %+v, api %s", d.Canary, d.Step("service:api").Status)
+		}
+	})
+}
+
+// settleTo stores status on a deployment's canary, as a revert that ran
+// meanwhile would.
+func settleTo(t *testing.T, store *memStore, id, status string) {
+	t.Helper()
+	c := getDeployment(t, store, id).Canary
+	c.Status = status
+	if err := store.SetCanary(t.Context(), "org_1", id, c); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAWeighInFlightDoesntUndoARevert(t *testing.T) {
+	plan := canaryPlan()
+	r, store, _, exec := newCanaryRunner(t, plan)
+	id, err := startCanary(t, r, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exec.onWeigh = func(*Job) { settleTo(t, store, id, CanaryRolledBack) }
+	if _, err = r.CanaryWeigh(t.Context(), plan.OrgID, id, 0, 5); err == nil || !strings.Contains(err.Error(), "rolled_back") {
+		t.Fatalf("weigh: %v", err)
+	}
+	if c := getDeployment(t, store, id).Canary; c.Status != CanaryRolledBack || c.Weight != 0 {
+		t.Fatalf("canary %s at %d%%", c.Status, c.Weight)
+	}
+}
+
+func TestACandidateUpAfterARevertIsRemoved(t *testing.T) {
+	for _, status := range []string{CanaryReverting, CanaryRolledBack} {
+		t.Run(status, func(t *testing.T) {
+			plan := canaryPlan()
+			r, store, _, exec := newCanaryRunner(t, plan)
+			exec.onApply = func(job *Job) { settleTo(t, store, job.Deployment.ID, status) }
+			id, err := startCanary(t, r, plan)
+			if err == nil || !strings.Contains(err.Error(), "candidate was removed") {
+				t.Fatalf("run: %v", err)
+			}
+			if !slices.Contains(exec.log(), "revert api api-00001") {
+				t.Fatalf("calls %q", exec.log())
+			}
+			c := getDeployment(t, store, id).Canary
+			if c.Status != status || c.service("service:api").Candidate != "" {
+				t.Fatalf("canary %s with candidate %q", c.Status, c.service("service:api").Candidate)
+			}
+		})
+	}
+	t.Run("when it can't be removed", func(t *testing.T) {
+		plan := canaryPlan()
+		r, store, _, exec := newCanaryRunner(t, plan)
+		exec.revertErr = errors.New("quota exceeded")
+		exec.onApply = func(job *Job) { settleTo(t, store, job.Deployment.ID, CanaryRolledBack) }
+		id, err := startCanary(t, r, plan)
+		if err == nil || !strings.Contains(err.Error(), "couldn't be removed") {
+			t.Fatalf("run: %v", err)
+		}
+		c := getDeployment(t, store, id).Canary
+		if c.Status != CanaryRevertFailed || c.service("service:api").Candidate != "api-00002" || !strings.Contains(c.Reason, "Traffic may still be split") {
+			t.Fatalf("canary %+v", c)
+		}
+	})
+}
+
+func TestCanarySettleGivesUpWhateverTheDeploymentsStatus(t *testing.T) {
+	reason := "The deployment was cancelled Traffic may still be split: api: quota exceeded."
+	t.Run("a revert", func(t *testing.T) {
+		plan := canaryPlan()
+		r, store, _, _ := newCanaryRunner(t, plan)
+		id, err := startCanary(t, r, plan)
+		if err != nil {
+			t.Fatal(err)
+		}
+		settleTo(t, store, id, CanaryReverting)
+		c := getDeployment(t, store, id).Canary
+		c.Reason = "The deployment was cancelled"
+		if err = store.SetCanary(t.Context(), plan.OrgID, id, c); err != nil {
+			t.Fatal(err)
+		}
+		if id2, _ := store.RampingCanary(t.Context(), plan.OrgID, plan.EnvironmentID); id2 != id {
+			t.Fatalf("a reverting canary should hold the environment, got %q", id2)
+		}
+		if err = r.CanarySettle(t.Context(), plan.OrgID, id, reason); err != nil {
+			t.Fatal(err)
+		}
+		c = getDeployment(t, store, id).Canary
+		if c.Status != CanaryRevertFailed || c.Reason != reason {
+			t.Fatalf("canary %s: %q", c.Status, c.Reason)
+		}
+		if held, _ := store.RampingCanary(t.Context(), plan.OrgID, plan.EnvironmentID); held != "" {
+			t.Fatalf("%s still holds the environment", held)
+		}
+		// Settling again changes nothing.
+		if err = r.CanarySettle(t.Context(), plan.OrgID, id, "again"); err != nil {
+			t.Fatal(err)
+		}
+		if c = getDeployment(t, store, id).Canary; c.Status != CanaryRevertFailed || c.Reason != reason {
+			t.Fatalf("canary %s: %q after a repeat", c.Status, c.Reason)
+		}
+	})
+	t.Run("a promotion, on a cancelled deployment", func(t *testing.T) {
+		plan := canaryPlan()
+		r, store, _, _ := newCanaryRunner(t, plan)
+		id, err := startCanary(t, r, plan)
+		if err != nil {
+			t.Fatal(err)
+		}
+		settleTo(t, store, id, CanaryPromoting)
+		store.mu.Lock()
+		store.d[id].Status = StatusCancelled
+		store.mu.Unlock()
+		if err = r.CanarySettle(t.Context(), plan.OrgID, id, "Traffic may still be split: api: busy."); err != nil {
+			t.Fatal(err)
+		}
+		if c := getDeployment(t, store, id).Canary; c.Status != CanaryPromoteFailed || c.Reason != "Traffic may still be split: api: busy." {
+			t.Fatalf("canary %s: %q", c.Status, c.Reason)
 		}
 	})
 }

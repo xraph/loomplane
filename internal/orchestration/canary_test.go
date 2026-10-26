@@ -139,6 +139,7 @@ type canaryProbe struct {
 	pauseAfter string                     // capacity pauses the deployment once this action ran
 	revertErr  error
 	promoteErr error
+	rampErr    error
 	started    []context.Context
 	windows    []releasehealth.Window
 	log        []string
@@ -188,7 +189,24 @@ func (p *canaryProbe) AssessWorkflowCapacity(context.Context, string, string) (C
 }
 func (p *canaryProbe) CanaryRamp(context.Context, string, string) (CanaryRamp, error) {
 	p.log = append(p.log, "ramp")
+	if p.rampErr != nil {
+		return CanaryRamp{}, p.rampErr
+	}
 	return p.ramp, nil
+}
+func (p *canaryProbe) CanarySettle(_ context.Context, _, _, reason string) error {
+	p.log = append(p.log, "settle "+reason)
+	return nil
+}
+
+// settled is the reason the canary was given up on with, or "".
+func (p *canaryProbe) settled() string {
+	for _, e := range p.log {
+		if reason, ok := strings.CutPrefix(e, "settle "); ok {
+			return reason
+		}
+	}
+	return ""
 }
 func (p *canaryProbe) CanaryWeigh(_ context.Context, _, _ string, step, weight int) (time.Time, error) {
 	p.log = append(p.log, fmt.Sprintf("weigh %d %d", step, weight))
@@ -455,6 +473,11 @@ func TestCanaryRevertKeepsTryingThenSaysTrafficMayBeSplit(t *testing.T) {
 	if !strings.HasPrefix(finish, "finish "+reason+" Traffic may still be split: ") || !strings.Contains(finish, "the cloud refused the change") {
 		t.Fatalf("finished with %q", finish)
 	}
+	// The canary is given up on before the deployment finishes, with the
+	// same reason.
+	if p.count("settle "+strings.TrimPrefix(finish, "finish ")) != 1 || p.log[len(p.log)-2] != "settle "+strings.TrimPrefix(finish, "finish ") {
+		t.Fatalf("effects end %q", p.log[len(p.log)-2:])
+	}
 }
 
 func TestCanaryRevertsDarkCandidatesWhenAnActionFails(t *testing.T) {
@@ -590,12 +613,44 @@ func TestCanaryCancelRevertsCandidates(t *testing.T) {
 		c := startCanaryPlan(t, p)
 		c.approve(t, nil)
 		cancel(t, c)
-		want := []string{"source", "run first", "ramp", "revert " + reason}
+		// A candidate may be up dark, so the cleanup reverts without
+		// knowing whether there's a canary.
+		want := []string{"source", "run first", "revert " + reason}
 		if !slices.Equal(p.log, want) {
 			t.Fatalf("effects %q", p.log)
 		}
-		if !slices.Contains(c.commands(t), "activity dep-canary-cancel-ramp") {
-			t.Fatal("the cleanup didn't read the ramp")
+	})
+	t.Run("during a hold, when the revert never succeeds", func(t *testing.T) {
+		p := newCanaryProbe(t)
+		c := startCanaryPlan(t, p)
+		c.approve(t, c.scheduled(t, "timer dep-canary-hold-1-0"))
+		p.revertErr = errors.New("web: the cloud refused the change")
+		cancel(t, c)
+		if n := p.count("revert " + reason); n != canarySettleRounds {
+			t.Fatalf("%d reverts", n)
+		}
+		settled := p.settled()
+		if !strings.HasPrefix(settled, reason+" Traffic may still be split: ") || !strings.Contains(settled, "the cloud refused the change") {
+			t.Fatalf("given up on with %q", settled)
+		}
+		if !slices.Contains(c.commands(t), "activity dep-canary-cancel-revert-settle-0") {
+			t.Fatal("the cleanup didn't give the canary up")
+		}
+	})
+	t.Run("during the promotion, when the promotion never succeeds", func(t *testing.T) {
+		p := newCanaryProbe(t)
+		p.promoteErr = errors.New("api: the cloud is busy")
+		c := startCanaryPlan(t, p)
+		c.approve(t, c.scheduled(t, "timer dep-canary-promote-wait-0"))
+		cancel(t, c)
+		if n := p.count("promote"); n != 1+canarySettleRounds {
+			t.Fatalf("%d promotions", n)
+		}
+		if settled := p.settled(); !strings.HasPrefix(settled, "Traffic may still be split: ") || !strings.Contains(settled, "the cloud is busy") {
+			t.Fatalf("given up on with %q", settled)
+		}
+		if slices.ContainsFunc(p.log, func(e string) bool { return strings.HasPrefix(e, "revert") }) {
+			t.Fatalf("effects %q", p.log)
 		}
 	})
 	t.Run("after the promotion", func(t *testing.T) {
@@ -634,6 +689,73 @@ func TestCanaryCancelRevertsCandidates(t *testing.T) {
 			t.Fatalf("effects %q", p.log)
 		}
 	})
+}
+
+func TestCanaryGivesUpWhenCapacityStopsTheDeploymentAndTheRevertFails(t *testing.T) {
+	p := newCanaryProbe(t)
+	p.stopAfter = "first"
+	p.revertErr = errors.New("api: the cloud refused the change")
+	c := startCanaryPlan(t, p)
+	c.approve(t, nil)
+	if n := p.count("revert " + canaryStopped); n != canarySettleRounds {
+		t.Fatalf("%d reverts", n)
+	}
+	settled := p.settled()
+	if !strings.HasPrefix(settled, canaryStopped+" Traffic may still be split: ") || !strings.Contains(settled, "the cloud refused the change") {
+		t.Fatalf("given up on with %q", settled)
+	}
+	// Capacity settled the deployment as cancelled, so nothing finishes it.
+	if slices.ContainsFunc(p.log, func(e string) bool { return strings.HasPrefix(e, "finish") }) {
+		t.Fatalf("effects %q", p.log)
+	}
+	c.outcome(t)
+}
+
+func TestCanaryRevertsWhenTheRampCantBeRead(t *testing.T) {
+	p := newCanaryProbe(t)
+	p.rampErr = &drt.ApplicationError{Type: "test", Message: "the database is down", NonRetryable: true}
+	c := startCanaryPlan(t, p)
+	c.approve(t, nil)
+	reason := "The canary's ramp couldn't be read: the database is down"
+	want := []string{"source", "run first", "run second", "ramp", "revert " + reason, "finish " + reason}
+	if !slices.Equal(p.log, want) {
+		t.Fatalf("effects %q", p.log)
+	}
+	c.outcome(t)
+}
+
+func TestCanaryFirstHoldWaitsForTheMetrics(t *testing.T) {
+	p := newCanaryProbe(t)
+	p.ramp.Lag = 2 * time.Millisecond
+	p.verdicts = map[[2]int]CanaryJudgement{{0, 0}: {Verdict: "inconclusive", Reason: "web: 12 requests, under 100"}}
+	c := startCanaryPlan(t, p)
+	c.approve(t, nil)
+	c.outcome(t)
+	delays := map[string]time.Duration{}
+	for after := int64(0); ; {
+		history, err := c.store.ReadHistory(t.Context(), c.key, after, 1000)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(history) == 0 {
+			break
+		}
+		for _, event := range history {
+			after = event.Sequence
+			var command drt.Command
+			if event.Type == drt.EventCommandScheduled && json.Unmarshal(event.Payload, &command) == nil && command.Kind == durable.TaskTimer {
+				delays[command.ID] = command.Delay
+			}
+		}
+	}
+	// The first hold of each step waits Lag longer; a step's next hold
+	// doesn't.
+	want := map[string]time.Duration{"dep-canary-hold-0-0": 3 * time.Millisecond, "dep-canary-hold-0-1": time.Millisecond, "dep-canary-hold-1-0": 3 * time.Millisecond}
+	for id, delay := range want {
+		if delays[id] != delay {
+			t.Fatalf("%s waits %v, want %v (%v)", id, delays[id], delay, delays)
+		}
+	}
 }
 
 func TestCanaryActivitiesNeedACanaryDeployer(t *testing.T) {

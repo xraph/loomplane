@@ -24,6 +24,7 @@ const (
 	ActivityCanaryJudge   = "loomplane.canary.judge.v4"
 	ActivityCanaryPromote = "loomplane.canary.promote.v4"
 	ActivityCanaryRevert  = "loomplane.canary.revert.v4"
+	ActivityCanarySettle  = "loomplane.canary.settle.v4"
 
 	// Weighing waits for every candidate's cloud to move its traffic.
 	canaryEffectTimeout = 15 * time.Minute
@@ -35,7 +36,8 @@ const (
 )
 
 // canarySettleWait is how long a promote or revert waits before it's tried
-// again. Tests shorten it.
+// again. Tests shorten it, so the tests that change it must not run in
+// parallel with each other or with any other v4 workflow test.
 var canarySettleWait = time.Minute
 
 // canaryInput is what each canary activity after the ramp's read takes.
@@ -102,8 +104,12 @@ type CanaryDeployer interface {
 	// CanaryPromote makes every candidate what runs.
 	CanaryPromote(ctx context.Context, orgID, deploymentID string) error
 	// CanaryRevert moves all traffic back to every baseline, because of
-	// reason.
+	// reason. A deployment without a canary has nothing to revert.
 	CanaryRevert(ctx context.Context, orgID, deploymentID, reason string) error
+	// CanarySettle ends a canary whose promote or revert the workflow gave
+	// up on, whatever the deployment's status, with reason. A canary
+	// already settled is left as it is.
+	CanarySettle(ctx context.Context, orgID, deploymentID, reason string) error
 }
 
 // CanaryOptions are the durable runtime options of CanaryBuild: v3's
@@ -118,6 +124,7 @@ func (d *Deployments) CanaryOptions(owner string, concurrency int) drt.Options {
 	o.Activities[ActivityCanaryJudge] = d.canaryJudge
 	o.Activities[ActivityCanaryPromote] = d.canaryPromote
 	o.Activities[ActivityCanaryRevert] = d.canaryRevert
+	o.Activities[ActivityCanarySettle] = d.canarySettle
 	return o
 }
 
@@ -209,4 +216,16 @@ func (d *Deployments) canaryRevert(ctx context.Context, _ drt.ActivityInfo, raw 
 		return nil, err
 	}
 	return []byte("{}"), c.CanaryRevert(ctx, in.OrgID, in.DeploymentID, in.Reason)
+}
+
+func (d *Deployments) canarySettle(ctx context.Context, _ drt.ActivityInfo, raw []byte) ([]byte, error) {
+	var in canaryInput
+	if err := json.Unmarshal(raw, &in); err != nil {
+		return nil, err
+	}
+	c, err := d.canaryDeployer()
+	if err != nil {
+		return nil, err
+	}
+	return []byte("{}"), c.CanarySettle(ctx, in.OrgID, in.DeploymentID, in.Reason)
 }
