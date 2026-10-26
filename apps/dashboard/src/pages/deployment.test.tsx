@@ -21,11 +21,11 @@ afterEach(() => {
   forgeClient.clear()
 })
 
-const plan = (release?: object) => ({
+const plan = (release?: object, status = "ready") => ({
   id: "plan_1",
   project_id: "proj_1",
   environment: "production",
-  status: "waiting",
+  status,
   executable: true,
   actions: [],
   connections: {},
@@ -81,4 +81,26 @@ test("a plan with a canary release shows the canary panel", async () => {
   expect(
     await screen.findByRole("heading", { name: "Canary" })
   ).toBeInTheDocument()
+})
+
+const canaried = {
+  strategy: "canary",
+  steps: [5, 100],
+  hold_seconds: 600,
+  canary: ["svc-web"],
+  thresholds: {},
+}
+
+test.each([
+  ["a blocked plan", plan(canaried, "blocked")],
+  ["a rejected plan", plan(canaried, "rejected")],
+  ["a release with no canaried service", plan({ ...canaried, canary: [] })],
+])("%s shows no canary panel", async (_, p) => {
+  serve(p)
+  expect(
+    await screen.findByRole("region", { name: "Steps" })
+  ).toBeInTheDocument()
+  expect(
+    screen.queryByRole("heading", { name: "Canary" })
+  ).not.toBeInTheDocument()
 })

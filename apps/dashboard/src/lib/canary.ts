@@ -1,5 +1,6 @@
 // What a canary release looks like to a person: the manifest's release in a
 // line, where the ramp stands step by step, and which statuses need someone.
+import type { Run } from "@/lib/runs"
 import type {
   Canary,
   CanaryVerdict,
@@ -61,7 +62,7 @@ export const statusLabel: Record<string, string> = {
   promote_failed: "Promote failed",
 }
 
-/** latestAttempts keeps each service's last verdict at a step. */
+/** latestAt keeps each service's last verdict at a step. */
 function latestAt(verdicts: CanaryVerdict[], step: number): CanaryVerdict[] {
   const byService = new Map<string, CanaryVerdict>()
   for (const v of verdicts) {
@@ -153,9 +154,23 @@ export function canaryLine(plan: Plan): { ramping: string[]; release: string } {
   return { ramping, release: `${releaseSummary(r)}.` }
 }
 
-/** canaryFindings are the plan's own words on why a service can't ramp. */
+/**
+ * canaryFindings are the plan's own words on why a service deploys all at
+ * once. Refusals that block the plan (permissions, app-wide changes) are
+ * problems, shown by the blocked plan's alert instead.
+ */
 export function canaryFindings(plan: Plan): Finding[] {
-  return [...(plan.warnings ?? []), ...(plan.problems ?? [])].filter((f) =>
-    canaryCodes.has(f.code)
-  )
+  return (plan.warnings ?? []).filter((f) => canaryCodes.has(f.code))
+}
+
+/**
+ * showsCanary says whether the deployment page has a canary to show. Once a
+ * deployment exists, it does when the deployment has one. Before, only an
+ * approvable plan whose release ramps at least one service does; a blocked
+ * or rejected plan will never start a ramp.
+ */
+export function showsCanary(run: Run): boolean {
+  if (run.deployment) return Boolean(run.deployment.canary)
+  const ramps = (run.plan.release?.canary ?? []).length > 0
+  return ramps && (run.status === "waiting" || run.status === "approved")
 }

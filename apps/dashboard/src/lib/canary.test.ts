@@ -5,7 +5,8 @@ import type {
   CanaryVerdict,
   Release,
 } from "@/client/forge/loomplane/types"
-import { releaseSummary, stepStates } from "@/lib/canary"
+import { type Run, toRun } from "@/lib/runs"
+import { releaseSummary, showsCanary, stepStates } from "@/lib/canary"
 
 import { canary, thresholds, verdict } from "@/lib/canary.fixtures"
 
@@ -65,4 +66,66 @@ test("a promoted canary passed every step", () => {
   expect(
     states(canary({ status: "promoted", step: 3, weight: 100 }), [])
   ).toEqual(["passed", "passed", "passed", "passed"])
+})
+
+test("a pass at the current step counts as passed before the ramp moves on", () => {
+  expect(
+    states(canary({ step: 0 }), [verdict({ step: 0, verdict: "pass" })])
+  ).toEqual(["passed", "pending", "pending", "pending"])
+  expect(states(canary({ step: 0 }), [])).toEqual([
+    "holding",
+    "pending",
+    "pending",
+    "pending",
+  ])
+})
+
+const planOf = (over: object) =>
+  ({ release: { strategy: "canary", canary: ["web"] }, ...over }) as never
+
+test("showsCanary waits for a plan that can ramp, then follows the deployment", () => {
+  const run = (over: object) => over as Run
+  expect(showsCanary(run({ status: "waiting", plan: planOf({}) }))).toBe(true)
+  expect(showsCanary(run({ status: "blocked", plan: planOf({}) }))).toBe(false)
+  expect(showsCanary(run({ status: "canceled", plan: planOf({}) }))).toBe(false)
+  expect(
+    showsCanary(
+      run({
+        status: "waiting",
+        plan: planOf({ release: { strategy: "canary", canary: [] } }),
+      })
+    )
+  ).toBe(false)
+  expect(
+    showsCanary(
+      run({
+        status: "running",
+        plan: planOf({}),
+        deployment: { canary: canary({}) },
+      })
+    )
+  ).toBe(true)
+  expect(
+    showsCanary(run({ status: "running", plan: planOf({}), deployment: {} }))
+  ).toBe(false)
+})
+
+test("a ramping step reads as taking a share of traffic", () => {
+  const plan = {
+    id: "p",
+    status: "approved",
+    actions: [{ id: "web", op: "update", name: "web" }],
+    warnings: [],
+    problems: [],
+  } as never
+  const run = toRun(plan, {
+    id: "d",
+    status: "running",
+    steps: [{ actionId: "web", status: "ramping" }],
+  } as never)
+  const step = run.thread.find((s) => s.key === "web")
+  expect(step).toMatchObject({
+    state: "running",
+    detail: "Taking a share of traffic",
+  })
 })

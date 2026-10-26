@@ -33,6 +33,7 @@ import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
 import { FailedDeploymentCleanup } from "@/components/failed-deployment-cleanup"
 import { ApprovalCard } from "@/components/approval"
 import { CanaryPanel } from "@/components/canary"
+import { showsCanary } from "@/lib/canary"
 import { Page } from "@/components/page"
 import {
   Code,
@@ -207,8 +208,7 @@ function Loaded({
             setTab("logs")
           }}
         />
-        {(run.plan.release?.strategy === "canary" ||
-          run.deployment?.canary) && (
+        {showsCanary(run) && (
           <CanaryPanel
             deploymentId={run.deployment?.id}
             release={run.plan.release}

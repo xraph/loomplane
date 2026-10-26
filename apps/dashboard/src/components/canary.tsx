@@ -3,12 +3,12 @@
 // has to check the cloud.
 import { TriangleAlertIcon } from "lucide-react"
 
-import { useDeploymentsCanary } from "@/client/forge/loomplane/hooks"
 import type {
   Canary,
   CanaryVerdict,
   Release,
 } from "@/client/forge/loomplane/types"
+import { useDeploymentsCanary } from "@/client/canary"
 import { useQuery } from "@/client/hooks"
 import { Panel, PanelHead } from "@/components/panel"
 import { toneClass } from "@/components/runs"
