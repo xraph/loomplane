@@ -91,7 +91,7 @@ Everything lives in the connection's resource group, which Loomplane creates in 
 - One Container Apps environment per region, called `loomplane-<region>`. It's consumption only, with no Log Analytics workspace.
 - A container app for each service in each environment, named after the service, the environment and the project.
 
-A service with a Dockerfile builds from it. Anything else goes through Google's buildpacks, run by `pack` in the same ACR Tasks run. Each deployment builds the approved commit, tagged with its first twelve characters, and the app runs that image in a single active revision.
+A service with a Dockerfile builds from it. Anything else goes through Google's buildpacks, run by `pack` in the same ACR Tasks run. Each deployment builds the approved commit, tagged with its first twelve characters, and the app runs that image in a single active revision, except while a canary ramps (see below).
 
 A public service takes HTTPS traffic from anywhere. A private one only takes traffic from apps in its own Container Apps environment, which means the same connection and the same region. The plan stops with a finding if a service that needs one sits in another region or account, and a service on another cloud can't reach it at all.
 
@@ -100,6 +100,22 @@ A public service takes HTTPS traffic from anywhere. A private one only takes tra
 A worker runs as a container app with no ingress. Nothing calls a worker to wake it, so it never scales to zero: the minimum is one replica even if you set `scale.min` to 0. A static site also runs as a container app, so it needs a Dockerfile that builds the site and serves it with nginx or any other web server. Without a Dockerfile the plan stops with a finding. The app takes traffic on the `port` you set, or the one your Dockerfile exposes, otherwise 8080 (the plan warns when it has to guess). A server that listens on 80, like nginx, needs `EXPOSE 80` in the Dockerfile or `port: 80` in the manifest.
 
 Secret variables go in as app secrets, which Azure never shows again. Removing a service from the manifest deletes its container app. The registry and the environment stay for the group's other apps.
+
+### Canary releases
+
+A canary runs the new release as a second revision of the same container app, beside the one that served before. Loomplane switches the app to multiple revisions mode and moves the traffic between the two revisions by weight, step by step. Promoting puts the app back in single revision mode with all of the traffic on the latest revision, which is the new one, and Container Apps deactivates the old revision. A rollback gives the old revision all of the traffic, puts its template back on the app and deactivates the new one. Putting the template back makes one more revision with the old configuration, which takes no traffic, and Loomplane deactivates it too. The app stays in multiple revisions mode, pinned to the old revision, until your next deploy switches it back.
+
+Container Apps keeps secrets on the app, not on each revision, and a replica reads them when it starts. So the new revision reads its own copies, named after its revision suffix, and the old revision's secrets keep their values the whole time. A replica the old revision starts in the middle of a canary still gets the old values. Those copies stay in the app until the next deploy replaces its secrets.
+
+A canary needs three actions every other deploy can do without:
+
+| Needed for | Actions |
+|---|---|
+| Canary releases only | `Microsoft.App/containerApps/revisions/read`, `Microsoft.App/containerApps/revisions/deactivate/action`, `Microsoft.App/containerApps/listSecrets/action` |
+
+Contributor has them. The last one is there because Azure never shows a secret's value on a read, and the new revision's update has to send the old revision's secrets back as they are. A principal without them still deploys. The connection lists what's missing, and a canary on Container Apps refuses to start, when you plan it and again when it runs. Grant them, or release that environment `direct` or `blue_green`.
+
+If an earlier canary couldn't roll back and left the traffic split, or left all of it on its new revision, a new canary on that app won't start, since it can't tell which revision is the real one to compare against. Retry or roll back that deployment, or release once with `direct`, which gives the latest revision all of the traffic.
 
 ## Databases
 

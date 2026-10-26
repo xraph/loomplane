@@ -481,6 +481,15 @@ func (a AzureChecker) Check(ctx context.Context, credential []byte, settings map
 	if c.Missing, err = s.Missing(ctx); err != nil {
 		return Check{}, err
 	}
+	// A principal without what only a canary needs is still complete: a
+	// canary release on Container Apps refuses to start instead.
+	canary, err := s.MissingOf(ctx, azure.CanaryActions)
+	if err != nil {
+		return Check{}, err
+	}
+	if len(canary) > 0 {
+		c.Details[DetailCanaryMissing] = strings.Join(canary, ",")
+	}
 	// Pulling with an identity takes more than Contributor, so it's
 	// reported, never required.
 	if c.Details["registry_pull"], err = s.PullMode(ctx); err != nil {

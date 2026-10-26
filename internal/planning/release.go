@@ -59,8 +59,8 @@ const (
 	// codeCanaryInProgress blocks a plan while a canary ramps in its
 	// environment.
 	codeCanaryInProgress = "canary-in-progress"
-	// codeCanaryPermissions blocks a canary on ECS or Cloud Run whose
-	// connection's credential can't split the service's traffic.
+	// codeCanaryPermissions blocks a canary on ECS, Cloud Run or Container
+	// Apps whose connection's credential can't split the service's traffic.
 	codeCanaryPermissions = "canary-permissions"
 )
 
@@ -93,9 +93,9 @@ func planRelease(in Input, r *Result) {
 			reason := noCanary(in, r, a)
 			if reason == "" {
 				if conn, cloud, missing := canaryMissing(in, r, a); missing != "" {
-					credential := "the key of "
-					if cloud == "gcp" {
-						credential = "the service account of "
+					credential := map[string]string{"gcp": "the service account of ", "azure": "the service principal of "}[cloud]
+					if credential == "" {
+						credential = "the key of "
 					}
 					r.Problems = append(r.Problems, Finding{
 						Code: codeCanaryPermissions, Subject: ServiceSubject, Name: a.Name, Path: "connections." + cloud,
@@ -167,13 +167,13 @@ func noCanary(in Input, r *Result, a Action) string {
 
 // canaryClouds are the clouds whose canaries need more than an ordinary
 // deploy, by provider.
-var canaryClouds = map[string]string{"ecs-fargate": "aws", "cloud-run": "gcp"}
+var canaryClouds = map[string]string{"ecs-fargate": "aws", "cloud-run": "gcp", "azure-container-apps": "azure"}
 
-// canaryMissing names the connection an ECS or Cloud Run action deploys
-// with and its cloud, and lists, comma separated, what its credential
-// lacks to ramp a canary, as its last check found. A connection checked
-// before canaries existed lists nothing, and the canary checks again when
-// it starts.
+// canaryMissing names the connection an ECS, Cloud Run or Container Apps
+// action deploys with and its cloud, and lists, comma separated, what its
+// credential lacks to ramp a canary, as its last check found. A
+// connection checked before canaries existed lists nothing, and the
+// canary checks again when it starts.
 func canaryMissing(in Input, r *Result, a Action) (connection, cloud, missing string) {
 	cloud, ok := canaryClouds[a.Provider]
 	if !ok {
