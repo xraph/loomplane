@@ -147,6 +147,7 @@ test("a composed resource's parts are the bindings that say so, not every name i
           },
           graph: { mode: "new", resource: "app--graph", kind: "graph" },
           cache: { mode: "off" },
+          search: { mode: "resource", resource: "shared-search" },
         },
       },
     }),
@@ -160,16 +161,23 @@ test("a composed resource's parts are the bindings that say so, not every name i
     resource("app--reports", { kind: "postgres", provider: "server" }),
     component("app--other", "other"),
     { subject: "service", name: "app--web", config: {} } as unknown as Binding,
+    // A project resource app connects, which keeps its own page.
+    resource("shared-search", { kind: "search", provider: "server" }),
   ]
   expect(
     serviceBindings(bindings, "app").components.map((b) => b.name)
   ).toEqual(["app--api", "app--graph", "app--postgres", "app--worker"])
+  expect(serviceBindings(bindings, "app").linked.map((b) => b.name)).toEqual([
+    "shared-search",
+  ])
   expect(catalogResources(bindings).map((b) => b.name)).toEqual([
     "app",
     "app--reports",
     "app--other",
+    "shared-search",
   ])
   expect(serviceBindings(bindings, "app--reports").components).toEqual([])
+  expect(serviceBindings(bindings, "app--reports").linked).toEqual([])
 })
 
 test("NATS exposes native recovery and describes file persistence", () => {

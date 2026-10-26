@@ -162,7 +162,7 @@ function InEnvironment({
     )
   if (!bindings.data) return <Loading resource={resource} />
   const all = bindings.data.bindings
-  const { binding, components } = serviceBindings(all, resource)
+  const { binding, components, linked } = serviceBindings(all, resource)
   if (!binding)
     return (
       <Missing
@@ -186,6 +186,7 @@ function InEnvironment({
     binding,
     config,
     components,
+    linked,
   }
   const panels = (module?.panels ?? [])
     .filter((panel) => !panel.when || panel.when(props))

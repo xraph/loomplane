@@ -207,7 +207,11 @@ export function serve(fixture: Fixture = {}) {
   return writes
 }
 
-const binding = (name: string, extra: Partial<Binding> = {}): Binding => ({
+/** A binding as the dashboard holds it, deployed and in step. */
+export const binding = (
+  name: string,
+  extra: Partial<Binding> = {}
+): Binding => ({
   id: `b_${name}`,
   name,
   subject: "resource",
@@ -292,6 +296,7 @@ export function panelProps(
       "fabriq--server",
       "fabriq--admin",
     ].map((name) => binding(name)),
+    linked: [],
     ...overrides,
   }
 }

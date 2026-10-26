@@ -27,6 +27,7 @@ export function useFabriqStack({
   config,
   kind,
   components,
+  linked,
 }: CatalogPanelProps) {
   const now = useNow(30_000)
   const status = useQuery(useFabriqStatus, {
@@ -37,11 +38,11 @@ export function useFabriqStack({
   const restores = useQuery(useServiceRestoresList, { path: { id: projectId } })
 
   const choices = Object.fromEntries(dependencyChoices(config))
-  const deployed = new Map(components.map((b) => [b.name, b]))
+  const deployed = new Map([...components, ...linked].map((b) => [b.name, b]))
   // A part is down when its binding is missing or was deleted outside
-  // Loomplane. A dependency that isn't provisioned with Fabriq has no
-  // binding here, and isn't judged.
-  const linked: StackInput["linked"] = {}
+  // Loomplane, and so is a project resource it connects. An external
+  // engine has no binding, and isn't judged.
+  const external: StackPart["id"][] = []
   const down: StackPart["id"][] = []
   const check = (id: StackPart["id"], name?: string) => {
     if (!name) return
@@ -63,9 +64,10 @@ export function useFabriqStack({
     "falkordb",
     "elasticsearch",
   ] as const) {
-    if (choices[id]?.mode === "new") check(id, choices[id].resource)
-    else if (choices[id]?.mode === "external") linked[id] = "External"
-    else if (choices[id]?.mode === "resource") linked[id] = "Linked"
+    const choice = choices[id]
+    if (choice?.mode === "new" || choice?.mode === "resource")
+      check(id, choice.resource)
+    else if (choice?.mode === "external") external.push(id)
   }
 
   const postgres = choices.postgres
@@ -109,7 +111,7 @@ export function useFabriqStack({
     ),
     now,
     down,
-    linked,
+    external,
     falkordb: !!choices.falkordb && choices.falkordb.mode !== "off",
     elasticsearch:
       !!choices.elasticsearch && choices.elasticsearch.mode !== "off",

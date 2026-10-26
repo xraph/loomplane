@@ -11,7 +11,6 @@ export const stackTones: Record<StackState, Tone | "completed"> = {
   Completed: "completed",
   Off: "quiet",
   External: "quiet",
-  Linked: "quiet",
   "Not running": "waiting",
 }
 

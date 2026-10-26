@@ -139,7 +139,7 @@ function sentence(text: string): string {
 }
 
 export type StackState =
-  "Running" | "Completed" | "Off" | "Not running" | "External" | "Linked"
+  "Running" | "Completed" | "Off" | "Not running" | "External"
 
 export type StackPart = {
   id:
@@ -182,7 +182,8 @@ export type StackInput = {
   now: number
   /** Which parts are deployed and in step. A part left out counts as deployed. */
   down?: StackPart["id"][]
-  linked?: Partial<Record<StackPart["id"], "External" | "Linked">>
+  /** The engines Loomplane doesn't run, which it makes no claim about. */
+  external?: StackPart["id"][]
   falkordb: boolean
   elasticsearch: boolean
   /** How many migrations Fabriq reports applied, when it reports them. */
@@ -247,7 +248,11 @@ function backupSchedule(input: StackInput): string {
  */
 export function stackParts(input: StackInput): StackPart[] {
   const state = (id: StackPart["id"], running: StackState): StackState =>
-    input.linked?.[id] ?? (input.down?.includes(id) ? "Not running" : running)
+    input.external?.includes(id)
+      ? "External"
+      : input.down?.includes(id)
+        ? "Not running"
+        : running
   const entityTypes =
     input.entityTypes === undefined
       ? ""

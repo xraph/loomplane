@@ -7,7 +7,14 @@ import { forgeClient } from "@/client/runtime"
 import { FabriqEngines } from "./fabriq-engines"
 import { FabriqRecovery, recoveryEngines } from "./fabriq-recovery"
 import { FabriqSettings } from "./fabriq-settings"
-import { dependencyBinding, json, mount, panelProps, serve } from "./test-api"
+import {
+  binding,
+  dependencyBinding,
+  json,
+  mount,
+  panelProps,
+  serve,
+} from "./test-api"
 
 const state = vi.hoisted(() => ({ allowed: true, navigate: vi.fn() }))
 vi.mock("@/lib/organization", () => ({
@@ -512,7 +519,7 @@ test("a switched-off projection's description includes the removal warning", asy
   )
 })
 
-test("engine state does not claim health for linked resources or external endpoints", async () => {
+test("a linked engine runs while its project resource does, and an external one claims nothing", async () => {
   api()
   const props = panelProps()
   props.config.composition!.dependencies.postgres = {
@@ -521,15 +528,29 @@ test("engine state does not claim health for linked resources or external endpoi
   }
   props.config.composition!.dependencies.redis = {
     mode: "resource",
-    resource: "shared-cache",
+    resource: "shared-redis",
   }
-  mount(<FabriqEngines {...props} />)
+  props.linked = [binding("shared-redis")]
+  const { unmount } = mount(<FabriqEngines {...props} />)
   const postgres = screen.getByRole("region", { name: "Postgres" })
-  const redis = screen.getByRole("region", { name: "Redis" })
   expect(within(postgres).getByText("External")).toBeVisible()
   expect(within(postgres).queryByText("Running")).toBeNull()
-  expect(within(redis).getByText("Linked")).toBeVisible()
-  expect(within(redis).queryByText("Running")).toBeNull()
+  expect(
+    within(screen.getByRole("region", { name: "Redis" })).getByText("Running")
+  ).toBeVisible()
+  unmount()
+
+  // Gone, or deleted outside Loomplane, it isn't running.
+  for (const linked of [[], [binding("shared-redis", { drift: "missing" })]]) {
+    props.linked = linked
+    const { unmount } = mount(<FabriqEngines {...props} />)
+    expect(
+      within(screen.getByRole("region", { name: "Redis" })).getByText(
+        "Not running"
+      )
+    ).toBeVisible()
+    unmount()
+  }
 })
 
 test("engines say how a project resource and an external engine are backed up", async () => {
