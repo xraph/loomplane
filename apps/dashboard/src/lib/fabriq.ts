@@ -168,6 +168,8 @@ export type StackInput = {
   backupPolicyStatus?: "loading" | "unavailable" | "denied"
   /** When the newest test restore of Postgres was verified, if one has been. */
   restoreVerifiedAt?: string
+  /** Set while the backups and restores are still loading, or couldn't be read. */
+  restoreStatus?: "loading" | "unavailable"
   now: number
   /** Which parts are deployed and in step. A part left out counts as deployed. */
   down?: StackPart["id"][]
@@ -188,6 +190,10 @@ function postgresDetail(input: StackInput): string {
   if (input.provider === "kubernetes")
     return `${postgresExtensions} Backups on Kubernetes aren’t available yet.`
   const schedule = backupSchedule(input)
+  if (input.restoreStatus === "loading")
+    return `${postgresExtensions} ${schedule}.`
+  if (input.restoreStatus === "unavailable")
+    return `${postgresExtensions} ${schedule}, restore history unavailable.`
   return input.restoreVerifiedAt
     ? `${postgresExtensions} ${schedule}, last restore verified ${agoDay(input.restoreVerifiedAt, input.now)}.`
     : `${postgresExtensions} ${schedule}, no restore verified yet.`

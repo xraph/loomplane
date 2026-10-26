@@ -270,3 +270,46 @@ test("library worker uses the approved copy with reported entity counts only", (
     )?.detail
   ).toBe("Stock worker.")
 })
+
+test.each(["loading", "unavailable"] as const)(
+  "the stack does not claim no restore verified yet when restores are %s",
+  (restoreStatus) => {
+    const text = detail(
+      stackParts({ ...docker, restoreVerifiedAt: undefined, restoreStatus }),
+      "postgres"
+    )?.detail
+    expect(text).not.toContain("no restore verified yet")
+    expect(text).toContain("Backups daily")
+  }
+)
+
+test("the stack says nothing about restores while they load", async () => {
+  let release!: () => void
+  serve({ hold: new Promise<void>((resolve) => (release = resolve)) })
+  mount(<FabriqStack {...panelProps()} />)
+  expect(
+    await screen.findByText("TimescaleDB, pgvector, PostGIS. Backups daily.")
+  ).toBeVisible()
+  expect(screen.queryByText(/no restore verified yet/)).toBeNull()
+  release()
+  expect(
+    await screen.findByText(/Backups daily, no restore verified yet\./)
+  ).toBeVisible()
+})
+
+test.each([
+  [{ backupsError: 403 }],
+  [{ backupsError: 503 }],
+  [{ restoresError: 403 }],
+  [{ restoresError: 503 }],
+] as const)(
+  "the stack does not claim no restore when the restore history fails: %s",
+  async (fixture) => {
+    serve(fixture)
+    mount(<FabriqStack {...panelProps()} />)
+    expect(
+      await screen.findByText(/Backups daily, restore history unavailable\./)
+    ).toBeVisible()
+    expect(screen.queryByText(/no restore verified yet/)).toBeNull()
+  }
+)

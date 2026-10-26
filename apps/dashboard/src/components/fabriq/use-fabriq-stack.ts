@@ -86,6 +86,12 @@ export function useFabriqStack({
       : !policies.data
         ? "loading"
         : undefined,
+    restoreStatus:
+      backups.error || restores.error
+        ? "unavailable"
+        : !backups.data || !restores.data
+          ? "loading"
+          : undefined,
     restoreVerifiedAt: lastVerified(
       backups.data?.backups ?? [],
       restores.data?.restores ?? [],
