@@ -31,14 +31,13 @@ func execOutput(ctx context.Context, c *Client, container string, args []string,
 	if created.ID == "" {
 		return errors.New("docker returned no exec identity")
 	}
+	mode, f, err := execStartMode(ctx, ingress)
+	if err != nil {
+		return err
+	}
 	var response *http.Response
-	var err error
-	if ingress {
-		f, ok := EffectFenceFrom(ctx)
-		if !ok {
-			return errors.New("ingress exec requires an effect fence")
-		}
-		response, err = c.fencedRequest(ctx, "ingress-exec", f, http.MethodPost, "/exec/"+url.PathEscape(created.ID)+"/start", strings.NewReader(`{"Detach":false,"Tty":false}`), http.Header{"Content-Type": []string{"application/json"}})
+	if mode != "" {
+		response, err = c.fencedRequest(ctx, mode, f, http.MethodPost, "/exec/"+url.PathEscape(created.ID)+"/start", strings.NewReader(`{"Detach":false,"Tty":false}`), http.Header{"Content-Type": []string{"application/json"}})
 	} else {
 		response, err = c.Request(ctx, http.MethodPost, "/exec/"+url.PathEscape(created.ID)+"/start", strings.NewReader(`{"Detach":false,"Tty":false}`))
 	}
@@ -63,6 +62,23 @@ func execOutput(ctx context.Context, c *Client, container string, args []string,
 		return fmt.Errorf("database tool did not complete successfully (exit %d)", result.ExitCode)
 	}
 	return nil
+}
+
+// execStartMode picks how an exec start reaches Docker. Under an effect fence
+// it goes through the helper's exec mode, since Docker answers with a
+// close-delimited stream the generic request mode can't frame. Ingress execs
+// always need their fence. An empty mode means an unfenced request.
+func execStartMode(ctx context.Context, ingress bool) (string, EffectFence, error) {
+	f, fenced := EffectFenceFrom(ctx)
+	switch {
+	case ingress && !fenced:
+		return "", EffectFence{}, errors.New("ingress exec requires an effect fence")
+	case ingress:
+		return "ingress-exec", f, nil
+	case fenced:
+		return "exec", f, nil
+	}
+	return "", EffectFence{}, nil
 }
 
 func copyDockerOutput(source io.Reader, dst io.Writer) error {

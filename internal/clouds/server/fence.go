@@ -155,8 +155,12 @@ def main():
   state['epochs'][op]=generation;save()
   emit(b'HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n');return
  assert generation==old and old>0
+ # An attached exec start answers with a close-delimited stream. Both exec
+ # modes frame it and wait for the exec to finish; ingress-exec also pins
+ # which ingress command may run.
  ingress=q['Mode']=='ingress-exec'
- if ingress:
+ streamed=ingress or q['Mode']=='exec'
+ if streamed:
   assert q['Method']=='POST' and re.fullmatch(r'/exec/[a-f0-9]{64}/start',q['Path'])
   assert json.loads(payload.read())=={'Detach':False,'Tty':False};payload.seek(0)
   inspect=q['Path'][:-5]+'json'
@@ -164,7 +168,9 @@ def main():
   container=execution['ContainerID'];assert re.fullmatch(r'[a-f0-9]{64}',container)
   assert not execution['Running']
   process=execution['ProcessConfig'];args=process['arguments']
-  assert not process['tty'] and not process['privileged'] and process['entrypoint']=='sh' and args[0]=='-c'
+  assert not process['tty'] and not process['privileged']
+ if ingress:
+  assert process['entrypoint']=='sh' and args[0]=='-c'
   admin=r"""` + ingressAdminScript + `"""
   probe=r"""` + ingressProbeScript + `"""
   assert (len(args)==6 and args[1]==admin and args[2]=='ingress' and args[3] in ('read','apply')) or (len(args)==4 and args[1]==probe and args[2]=='probe' and re.fullmatch(r'[a-z0-9.-]+',args[3]))
@@ -175,7 +181,7 @@ def main():
  headers={k:','.join(v) for k,v in (q['Headers'] or {}).items()};headers['Content-Length']=str(size)
  state['dirty']=True;save()
  c.request(q['Method'],q['Path'],body=payload,headers=headers);r=c.getresponse()
- assert r.chunked or r.length is not None or (ingress and r.status==200)
+ assert r.chunked or r.length is not None or (streamed and r.status==200)
  responding=True
  emit(('HTTP/1.1 '+str(r.status)+' '+r.reason+'\r\n').encode())
  for k,v in r.getheaders():
@@ -183,7 +189,7 @@ def main():
  emit(b'Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n')
  def output(chunk):
   emit(('%x\r\n'%len(chunk)).encode()+chunk+b'\r\n')
- if ingress and r.status==200:
+ if streamed and r.status==200:
   # Docker's synchronous non-TTY exec uses a close-delimited multiplex stream.
   # Complete frames plus exact process completion establish quiescence.
   while True:
