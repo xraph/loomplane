@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"maps"
 	"path"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -129,11 +130,26 @@ func (a *Azure) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 	if multiple {
 		app.Properties.Configuration.ActiveRevisionsMode = azure.MultipleRevisions
 		app.Properties.Configuration.Ingress.Traffic = slices.Clone(live.Properties.Configuration.Ingress.Traffic)
+		// A new suffix always makes a revision, so the one that takes over
+		// is this deploy's own.
+		app.Properties.Template.RevisionSuffix = azureDeploySuffix()
 	}
-	kept := 0
+	// The PUT replaces all of the app's secrets. What it would drop shows
+	// from the app alone, and usually that's nothing.
+	prune := false
 	if live != nil {
-		if kept, err = azureKeepSecrets(ctx, s, cmp.Or(live.ID, s.AppPath(name)), &app); err != nil {
-			job.Progress(StepDeploying, "Couldn't keep the secrets the running revisions read, so the PUT replaces them: "+err.Error())
+		appID := cmp.Or(live.ID, s.AppPath(name))
+		switch dropped := azureDroppable(live, app); {
+		case len(dropped) == 0:
+		case azureCanaryLeftovers(live):
+			// An earlier canary left a revision that may still read secrets
+			// of its own, so they're kept until nothing active does.
+			if kerr := azureKeepSecrets(ctx, s, appID, &app); kerr != nil {
+				return nil, azureLeftoverRefusal(job, name, kerr)
+			}
+			prune = true
+		default:
+			job.Progress(StepDeploying, "This release no longer sets "+strings.Join(dropped, ", ")+", so the deploy removes those secrets from the container app")
 		}
 	}
 	job.Progress(StepDeploying, "Deploying "+r.state.Image)
@@ -150,10 +166,10 @@ func (a *Azure) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 		if derr == nil {
 			if multiple {
 				if terr := azureTakeOver(ctx, s, r.state.AppID, deployed.Properties.LatestRevisionName); terr != nil {
-					return nil, terr
+					return nil, azureLeftoverRefusal(job, name, terr)
 				}
 			}
-			if kept > 0 {
+			if prune {
 				azurePruneNote(ctx, s, job, r.state.AppID)
 			}
 			return &Outcome{ExternalID: r.state.AppID, URL: s.URL(deployed), Image: r.state.Image, Revision: r.state.Image}, nil
@@ -256,8 +272,16 @@ func (a *Azure) prepare(ctx context.Context, s *azure.Session, job *Job, cfg *pl
 
 // azureTakeOver gives a new revision, ready beside what served in multiple
 // revisions mode, all of the traffic, then puts the app back in single
-// revision mode.
+// revision mode. A revision that isn't active and ready gets none, and
+// the traffic is left as it is.
 func azureTakeOver(ctx context.Context, s *azure.Session, appID, revision string) error {
+	rev, err := s.GetRevision(ctx, appID, revision)
+	if err != nil {
+		return fmt.Errorf("read whether revision %s can take the traffic: %w", revision, azureDeny(azureRevisionsRead, err))
+	}
+	if !rev.Up() {
+		return fmt.Errorf("revision %s can't take the traffic (%s), so the traffic was left as it is", revision, rev.Why())
+	}
 	if err := s.SetTraffic(ctx, appID, azure.MultipleRevisions, []azure.TrafficWeight{{RevisionName: revision, Weight: 100}}); err != nil {
 		return fmt.Errorf("give revision %s all of the traffic: %w", revision, err)
 	}
@@ -267,15 +291,88 @@ func azureTakeOver(ctx context.Context, s *azure.Session, appID, revision string
 	return nil
 }
 
+// What keeping a canary's leftovers takes.
+const (
+	azureRevisionsRead = "Microsoft.App/containerApps/revisions/read"
+	azureListSecrets   = "Microsoft.App/containerApps/listSecrets/action" //nolint:gosec // G101: an Azure action name, not a credential
+)
+
+// azureLeftoverSecretRE matches the name of a canary candidate's own
+// secret: the variable's, then the candidate's revision suffix.
+var azureLeftoverSecretRE = regexp.MustCompile(`-c[0-9a-f]{8}-\d+(-\d+)?$`)
+
+// azureDeploySuffix is a new revision suffix for a deploy in multiple
+// revisions mode.
+func azureDeploySuffix() string {
+	return "d" + strconv.FormatInt(time.Now().UnixMilli(), 36)
+}
+
+// azureDroppable are the secrets on the app that a PUT of release would
+// drop: those it has that release doesn't set.
+func azureDroppable(live *azure.App, release azure.App) []string {
+	var out []string
+	for _, sec := range live.Properties.Configuration.Secrets {
+		if !slices.ContainsFunc(release.Properties.Configuration.Secrets, func(r azure.Secret) bool { return r.Name == sec.Name }) {
+			out = append(out, sec.Name)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+// azureCanaryLeftovers reports whether an earlier canary left something on
+// the app: multiple revisions mode, or a candidate's own secrets.
+func azureCanaryLeftovers(live *azure.App) bool {
+	if strings.EqualFold(live.Properties.Configuration.ActiveRevisionsMode, azure.MultipleRevisions) {
+		return true
+	}
+	return slices.ContainsFunc(live.Properties.Configuration.Secrets, func(sec azure.Secret) bool { return azureLeftoverSecretRE.MatchString(sec.Name) })
+}
+
+// azureDeniedError is a call Azure refused because the principal may not make
+// it, with the action it takes.
+type azureDeniedError struct {
+	action string
+	err    error
+}
+
+func (e *azureDeniedError) Error() string { return e.err.Error() }
+func (e *azureDeniedError) Unwrap() error { return e.err }
+
+// azureDeny is err, marked with the action it takes when Azure refused it
+// for want of that action.
+func azureDeny(action string, err error) error {
+	if azure.IsForbidden(err) {
+		return &azureDeniedError{action: action, err: err}
+	}
+	return err
+}
+
+// azureLeftoverRefusal is why a deploy can't go ahead over what an
+// earlier canary left. When the principal may not read what it has to,
+// it says which action that takes.
+func azureLeftoverRefusal(job *Job, app string, err error) error {
+	var denied *azureDeniedError
+	if !errors.As(err, &denied) {
+		return err
+	}
+	conn := "the connection"
+	if job.Connection != nil && job.Connection.Name != "" {
+		conn = job.Connection.Name
+	}
+	return fmt.Errorf("%s can't deploy: an earlier canary left container app %s with revisions or secrets of its own, which this deploy would break unless it reads them first, and the service principal of %s isn't allowed %s. Grant it and check the connection again under Integrations: %w",
+		job.Action.Name, app, conn, denied.action, err)
+}
+
 // azureKeepSecrets adds to app each secret an active revision of the app
 // at appID reads that app doesn't set, with its value as Azure lists it.
 // A PUT replaces all of an app's secrets, so without them a revision that
 // still runs, such as one a canary promoted, which reads secrets of its
-// own, couldn't start a replica. It returns how many it kept.
-func azureKeepSecrets(ctx context.Context, s *azure.Session, appID string, app *azure.App) (int, error) {
+// own, couldn't start a replica.
+func azureKeepSecrets(ctx context.Context, s *azure.Session, appID string, app *azure.App) error {
 	active, err := s.ActiveRevisions(ctx, appID)
 	if err != nil {
-		return 0, err
+		return azureDeny(azureRevisionsRead, err)
 	}
 	read := map[string]bool{}
 	for _, rev := range active {
@@ -287,28 +384,26 @@ func azureKeepSecrets(ctx context.Context, s *azure.Session, appID string, app *
 		delete(read, sec.Name)
 	}
 	if len(read) == 0 {
-		return 0, nil
+		return nil
 	}
 	listed, err := s.ListSecrets(ctx, appID)
 	if err != nil {
-		return 0, err
+		return azureDeny(azureListSecrets, err)
 	}
-	kept := 0
 	for _, sec := range listed {
 		if !read[sec.Name] {
 			continue
 		}
 		if sec.Value == "" && sec.KeyVaultURL == "" {
-			return 0, fmt.Errorf("azure lists secret %s with no value, so it can't be kept", sec.Name)
+			return fmt.Errorf("azure lists secret %s with no value, so it can't be kept", sec.Name)
 		}
 		app.Properties.Configuration.Secrets = append(app.Properties.Configuration.Secrets, sec)
 		delete(read, sec.Name)
-		kept++
 	}
 	if len(read) > 0 {
-		return 0, fmt.Errorf("azure doesn't list the secrets running revisions read: %s", strings.Join(slices.Sorted(maps.Keys(read)), ", "))
+		return fmt.Errorf("azure doesn't list the secrets running revisions read: %s", strings.Join(slices.Sorted(maps.Keys(read)), ", "))
 	}
-	return kept, nil
+	return nil
 }
 
 // azurePruneSecrets drops the app's secrets nothing reads any more: no

@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -124,6 +125,10 @@ type Fake struct {
 	// app's provisioning while it's the latest revision, as Container
 	// Apps reports an app whose newest revision won't run.
 	FailImage string
+	// AllowDroppingInUseSecrets lets a PUT or PATCH drop a secret an active
+	// revision reads. By default the fake refuses one, the safe model of
+	// what Azure does, which isn't documented.
+	AllowDroppingInUseSecrets bool
 	// RefuseLatestDeactivation refuses to deactivate an app's latest
 	// revision. Whether Container Apps does isn't documented, so a test
 	// can check Loomplane copes either way.
@@ -297,6 +302,13 @@ func (f *Fake) resource(w http.ResponseWriter, r *http.Request, reply func(int, 
 		call := appCall(r.Method, rest)
 		f.Calls = append(f.Calls, call+" "+name)
 		f.counts[call]++
+		// Like Resource Manager, each call needs its action, which Actions
+		// and NotActions decide.
+		if action := appActions[call]; action != "" && !f.allows(action) {
+			reply(http.StatusForbidden, map[string]any{"error": map[string]string{"code": "AuthorizationFailed",
+				"message": "The client '" + Client + "' does not have authorization to perform action '" + action + "'."}})
+			return
+		}
 		if f.fail[call] > 0 || f.failAt[call] == f.counts[call] {
 			if f.fail[call] > 0 {
 				f.fail[call]--
@@ -703,6 +715,9 @@ func (f *Fake) checkSecrets(id string, props map[string]any) string {
 	if refused := missing(props["template"], "the template"); refused != "" {
 		return refused
 	}
+	if f.AllowDroppingInUseSecrets {
+		return ""
+	}
 	for _, key := range slices.Sorted(maps.Keys(f.revisions)) {
 		if rev := f.revisions[key]; strings.HasPrefix(key, id+"/") && rev.active {
 			if refused := missing(rev.template, "active revision "+rev.name); refused != "" {
@@ -975,6 +990,34 @@ func withoutSecretValues(app map[string]any) map[string]any {
 		delete(s.(map[string]any), "value")
 	}
 	return out
+}
+
+// appActions are the actions each kind of container app call needs.
+var appActions = map[string]string{
+	"GET app":          "Microsoft.App/containerApps/read",
+	"PUT app":          "Microsoft.App/containerApps/write",
+	"PATCH app":        "Microsoft.App/containerApps/write",
+	"DELETE app":       "Microsoft.App/containerApps/delete",
+	"GET revisions":    "Microsoft.App/containerApps/revisions/read",
+	"GET revision":     "Microsoft.App/containerApps/revisions/read",
+	"POST deactivate":  "Microsoft.App/containerApps/revisions/deactivate/action",
+	"POST activate":    "Microsoft.App/containerApps/revisions/activate/action",
+	"POST listsecrets": "Microsoft.App/containerApps/listSecrets/action",
+}
+
+// allows reports whether Actions allow action and NotActions don't, with
+// Azure's wildcard, where * is any run of characters.
+func (f *Fake) allows(action string) bool {
+	match := func(patterns []string) bool {
+		for _, p := range patterns {
+			re := "(?i)^" + strings.ReplaceAll(regexp.QuoteMeta(p), `\*`, ".*") + "$"
+			if regexp.MustCompile(re).MatchString(action) {
+				return true
+			}
+		}
+		return false
+	}
+	return match(f.Actions) && !match(f.NotActions)
 }
 
 // appCall is the kind of a container app call, as Calls and FailNext name
