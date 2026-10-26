@@ -21,7 +21,8 @@ import (
 
 // Actions are what an access key needs for Loomplane to build a service
 // on CodeBuild into ECR, run it on ECS with Fargate behind a load
-// balancer, keep its secrets in Secrets Manager, and provision RDS.
+// balancer, split its traffic for a canary, keep its secrets in Secrets
+// Manager, and provision RDS.
 var Actions = []string{
 	"codebuild:BatchGetBuilds", "codebuild:CreateProject", "codebuild:StartBuild", "codebuild:UpdateProject",
 	"ec2:AuthorizeSecurityGroupIngress", "ec2:CreateSecurityGroup", "ec2:DescribeSecurityGroups",
@@ -30,9 +31,10 @@ var Actions = []string{
 	"ecs:CreateCluster", "ecs:CreateService", "ecs:DeleteService", "ecs:DescribeClusters", "ecs:DescribeServices",
 	"ecs:RegisterTaskDefinition", "ecs:UpdateService",
 	"elasticloadbalancing:CreateListener", "elasticloadbalancing:CreateLoadBalancer",
-	"elasticloadbalancing:CreateRule", "elasticloadbalancing:CreateTargetGroup",
+	"elasticloadbalancing:CreateRule", "elasticloadbalancing:CreateTargetGroup", "elasticloadbalancing:DeleteTargetGroup",
 	"elasticloadbalancing:DescribeListeners", "elasticloadbalancing:DescribeLoadBalancers",
 	"elasticloadbalancing:DescribeRules", "elasticloadbalancing:DescribeTargetGroups",
+	"elasticloadbalancing:DescribeTargetHealth", "elasticloadbalancing:ModifyListener",
 	"iam:AttachRolePolicy", "iam:CreateRole", "iam:GetRole", "iam:PassRole", "iam:PutRolePolicy",
 	"logs:CreateLogGroup",
 	"rds:CreateDBInstance", "rds:CreateDBSubnetGroup", "rds:DeleteDBInstance", "rds:DescribeDBInstances",

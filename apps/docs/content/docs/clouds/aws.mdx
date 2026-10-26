@@ -17,7 +17,7 @@ You can add an ACM certificate ARN for the same region as an optional setting. P
 |---|---|
 | Builds | `codebuild:BatchGetBuilds`, `CreateProject`, `StartBuild`, `UpdateProject`; `ecr:CreateRepository`, `DescribeRepositories` |
 | ECS | `ecs:CreateCluster`, `CreateService`, `DeleteService`, `DescribeClusters`, `DescribeServices`, `RegisterTaskDefinition`, `UpdateService` |
-| Load balancing | `elasticloadbalancing:CreateListener`, `CreateLoadBalancer`, `CreateRule`, `CreateTargetGroup`, `DescribeListeners`, `DescribeLoadBalancers`, `DescribeRules`, `DescribeTargetGroups` |
+| Load balancing | `elasticloadbalancing:CreateListener`, `CreateLoadBalancer`, `CreateRule`, `CreateTargetGroup`, `DeleteTargetGroup`, `DescribeListeners`, `DescribeLoadBalancers`, `DescribeRules`, `DescribeTargetGroups`, `DescribeTargetHealth`, `ModifyListener` |
 | Networking | `ec2:AuthorizeSecurityGroupIngress`, `CreateSecurityGroup`, `DescribeSecurityGroups`, `DescribeSubnets`, `DescribeVpcs`; `servicediscovery:CreateHttpNamespace`, `CreateService`, `GetNamespace`, `GetOperation`, `ListNamespaces` |
 | IAM and logs | `iam:AttachRolePolicy`, `CreateRole`, `GetRole`, `PassRole`, `PutRolePolicy`; `logs:CreateLogGroup` |
 | Secrets | `secretsmanager:CreateSecret`, `PutSecretValue` |
@@ -62,6 +62,8 @@ Two ECS services in the same environment reach each other inside the VPC at `htt
 Buckets are private, and services reach them with their task's environment role, so `STORAGE_URL` carries no credentials (`s3://bucket?region=...`). Redis gets an auth token in `REDIS_URL` (`rediss://...`), and ElastiCache encrypts it in transit and at rest.
 
 Secret variables go to Secrets Manager and never into a task definition.
+
+A canary runs the new release as a second ECS service, `<service>-canary`, in a target group of its own. Its listener splits traffic between the two target groups by weight, which is why the key needs `ModifyListener`, `DescribeTargetHealth`, `DeleteTargetGroup` and `ecs:DeleteService`. Only traffic through the load balancer is split. Your other services still call the baseline over Service Connect until the canary is promoted.
 
 Supported regions Loomplane lists: `us-east-1`, `us-east-2`, `us-west-2`, `ca-central-1`, `sa-east-1`, `eu-west-1`, `eu-west-2`, `eu-central-1`, `eu-north-1`, `ap-south-1`, `ap-southeast-1`, `ap-southeast-2` and `ap-northeast-1`.
 
