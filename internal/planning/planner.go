@@ -56,6 +56,10 @@ type Input struct {
 	// endpointKey instead. A connected endpoint with no check can't be
 	// used.
 	Endpoints map[string]EndpointCheck
+	// FabriqPostgres are the external endpoints that Fabriq resources in
+	// the organization's other environments connect as their Postgres, each
+	// with the name of one that does. A Fabriq here can't connect them too.
+	FabriqPostgres map[string]string
 }
 
 // ConnectionOption is a cloud connection a plan could deploy with.
@@ -157,6 +161,7 @@ func Compute(in Input) *Result {
 	p.planGateways()
 	p.checkTargetPlacements()
 	p.checkCloudSQLApplications()
+	p.checkFabriqDatabases()
 	p.readdress()
 	for p.routedReplacements() {
 		p.readdress()
