@@ -190,7 +190,7 @@ func (s *Service) ResolveApprovedCapacityDemand(ctx context.Context, org, plan, 
 // A pending capacity decision or lost host race leaves the plan unchanged.
 func (s *Service) ResolveCapacityIntents(ctx context.Context, org, planID string) error {
 	st, ok := s.store.(*PgStore)
-	if !ok || s.capacity == nil {
+	if !ok {
 		return ErrUnavailable
 	}
 	plan, err := st.GetPlan(ctx, org, planID)
@@ -202,10 +202,27 @@ func (s *Service) ResolveCapacityIntents(ctx context.Context, org, planID string
 	}
 	var blocked []error
 	for _, a := range plan.Actions {
-		if a.Service == nil || a.Service.CapacityIntent == nil {
+		if a.Service == nil {
 			continue
 		}
-		checkErr := s.resolveCapacityIntent(ctx, st, plan, a)
+		var checkErr error
+		switch {
+		case !HasCapacityIntent(a):
+			if a.Op == Delete || a.Op == Keep || !cloudinfra.ManagedFrontend(a.Provider, a.Service.Workload, a.Service.Execution) {
+				continue
+			}
+			block, legacyErr := cloudinfra.NewPgStore(st.db).CheckLegacyFrontend(ctx, cloudinfra.FrontendDemand{OrgID: plan.OrgID, ProjectID: plan.ProjectID, EnvironmentID: plan.EnvironmentID, PlanID: plan.ID, Service: a.Name, Provider: a.Provider, ConnectionID: a.ConnectionID})
+			checkErr = legacyErr
+			if block != nil {
+				checkErr = &cloudinfra.CapacityAdmissionError{Block: *block}
+			}
+		case a.Service.FrontendDemand != nil:
+			checkErr = s.resolveFrontendIntent(ctx, st, plan, a)
+		case s.capacity == nil:
+			checkErr = ErrUnavailable
+		default:
+			checkErr = s.resolveCapacityIntent(ctx, st, plan, a)
+		}
 		if checkErr != nil {
 			var admission *cloudinfra.CapacityAdmissionError
 			if !errors.As(checkErr, &admission) {

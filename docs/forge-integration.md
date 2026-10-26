@@ -192,7 +192,7 @@ Loomplane registers the official extension on its own Postgres, with self-migrat
 What we found:
 
 - Only Docker, Kubernetes and Nomad providers exist. There's no Vercel, Cloud Run, ECS or Render provider, despite the docs listing AWS and GCP as "interface defined".
-- Instance drift correction is a stub. The reconciler only reconciles datacenter bootstrap services, and the health, telemetry and certificate workers are no-ops. Its scheduler isn't leader-elected, so two replicas run every worker twice.
+- Instance drift correction is a stub. The reconciler only reconciles datacenter bootstrap services, and the health, telemetry and certificate workers are no-ops. Loomplane turns on the scheduler's leader election (`cpext.WithLeaderElection`, a Postgres advisory lock), so with several API replicas only one of them runs those workers.
 - `Config.DefaultProvider` is never applied; every create needs a provider or datacenter.
 - The extension declared no dependency on grove. Fixed in Ctrl Plane (9068e10), so `internal/platform` no longer adds one.
 

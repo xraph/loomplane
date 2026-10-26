@@ -645,6 +645,21 @@ export interface DNSZone {
   verified: boolean;
 }
 
+export interface DatabaseGateway {
+  cloudTags?: string[];
+  environments?: Record<string, any>;
+  provider?: string;
+  region?: string;
+}
+
+export interface DatabaseGatewayConfig {
+  name: string;
+  program: string;
+  resources: string[];
+  suffix: string;
+  trust?: string;
+}
+
 export interface DecideInputBody {
   note?: string;
   revision?: string;
@@ -814,6 +829,7 @@ export interface EnvLink {
   address?: string;
   field?: string;
   from: string;
+  gateway?: string;
   key: string;
   options?: Record<string, any>;
   subject: string;
@@ -916,11 +932,26 @@ export interface Finding {
   subject?: string;
 }
 
+export interface GatewayList {
+  gateways: GatewayStatus[];
+}
+
 export interface GatewayRoute {
   env: string;
   path: string;
   stripPrefix?: boolean;
   to: string;
+}
+
+export interface GatewayStatus {
+  environmentId: string;
+  id: string;
+  instances: InstanceStatus[];
+  name: string;
+  provider: string;
+  region: string;
+  routes: RouteStatus[];
+  snapshotVersion: number;
 }
 
 export interface GeneratedSecret {
@@ -1006,6 +1037,26 @@ export interface InfrastructureStatus {
   store: string;
 }
 
+export interface InstanceRouteStats {
+  backendConns: number;
+  maxConnections: number;
+  pinRate: number;
+  pinned: number;
+  reachable: boolean;
+  routeId: string;
+  waitP95Ms: number;
+}
+
+export interface InstanceStatus {
+  behind: boolean;
+  draining: boolean;
+  id: string;
+  lastSeenAt: string;
+  reporting: boolean;
+  routes: InstanceRouteStats[];
+  snapshotVersion: number;
+}
+
 export interface KindInfo {
   components?: ComponentInfo[];
   consumerOptions?: ConsumerOption[];
@@ -1077,6 +1128,7 @@ export interface ManagedDatabaseProfile {
 }
 
 export interface Manifest {
+  databaseGateway?: DatabaseGateway;
   defaults?: Defaults;
   federation?: Federation;
   gateways?: Record<string, any>;
@@ -2143,6 +2195,24 @@ export interface RouteOperation {
   status: string;
 }
 
+export interface RouteStatus {
+  backendConns: number;
+  id: string;
+  maxConnections: number;
+  pinRate: number;
+  reachable: boolean;
+  reported: boolean;
+  resource: string;
+  state: string;
+}
+
+export interface RouteSummary {
+  gatewayId: string;
+  id: string;
+  resource: string;
+  state: string;
+}
+
 export interface RouteTTLInputBody {
   externalTtlSeconds: number;
   revision: number;
@@ -2178,6 +2248,7 @@ export interface RuntimeHealth {
 export interface SaveInputBody {
   baseRevision?: number;
   manifest?: {
+  databaseGateway?: DatabaseGateway;
   defaults?: Defaults;
   federation?: Federation;
   gateways?: Record<string, any>;
@@ -2333,6 +2404,7 @@ export interface ServiceConfig {
   commitSha?: string;
   component?: ComponentConfig;
   context?: string;
+  databaseGateway?: DatabaseGatewayConfig;
   ecosystem: string;
   endpoint?: ManifestEndpoint;
   env?: EnvLink[];

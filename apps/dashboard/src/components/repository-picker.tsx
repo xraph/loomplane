@@ -82,7 +82,7 @@ function PlainField({
         value={value}
         onFocus={onFocus}
         onChange={(e) => onChange(normalize(e.target.value))}
-        className="font-mono text-sm"
+        className="font-mono text-[12.5px]"
         autoComplete="off"
         spellCheck={false}
       />
@@ -131,7 +131,7 @@ function Picker({
             aria-label={rest["aria-label"]}
             onFocus={onFocus}
             render={<InputGroupInput />}
-            className="font-mono text-sm"
+            className="font-mono text-[12.5px]"
             autoComplete="off"
             spellCheck={false}
           />
@@ -145,7 +145,7 @@ function Picker({
         {repos.data && all.length > 0 && (
           <Autocomplete.Portal>
             <Autocomplete.Positioner sideOffset={6} className="isolate z-50">
-              <Autocomplete.Popup className="max-h-[min(22rem,var(--available-height))] w-(--anchor-width) origin-(--transform-origin) overflow-y-auto overscroll-contain rounded-xl bg-popover p-1 text-sm text-popover-foreground shadow-md ring-1 ring-foreground/10 duration-100 data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0">
+              <Autocomplete.Popup className="max-h-[min(22rem,var(--available-height))] w-(--anchor-width) origin-(--transform-origin) overflow-y-auto overscroll-contain rounded-xl bg-popover p-1 text-[13px] text-popover-foreground shadow-md ring-1 ring-foreground/10 duration-100 data-open:animate-in data-open:fade-in-0 data-closed:animate-out data-closed:fade-out-0">
                 <Autocomplete.Empty className="px-3 py-4 text-center text-xs text-muted-foreground empty:hidden">
                   No connected repository matches. Any public one works too.
                 </Autocomplete.Empty>

@@ -121,6 +121,38 @@ func TestLoad_readsFilesAndEnvironment(t *testing.T) {
 	}
 }
 
+// The repository's config.yaml takes the pool size from the environment, so
+// the Kubernetes chart can set it without a config file.
+func TestLoad_poolSizeFromEnvironment(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		name, env string
+		want      int
+	}{
+		{"default", "", 16},
+		{"set", "40", 40},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "config.yaml"), raw, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("LOOMPLANE_DATABASE_URL", testDSN)
+			t.Setenv("LOOMPLANE_DATABASE_POOL_SIZE", tt.env)
+			c, err := Load(dir)
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if c.Database.PoolSize != tt.want {
+				t.Fatalf("pool size %d, want %d", c.Database.PoolSize, tt.want)
+			}
+		})
+	}
+}
+
 func TestLoad_requiresConfigFile(t *testing.T) {
 	if _, err := Load(t.TempDir()); err == nil {
 		t.Fatal("Load succeeded without config.yaml")
@@ -152,6 +184,22 @@ func TestFromSource_fallsBackToThePlatformsDatabaseURL(t *testing.T) {
 	// LOOMPLANE_DATABASE_URL, through database.url, still wins.
 	if c, err = FromSource(mapGetter{"database.url": testDSN}); err != nil || c.Database.URL != testDSN {
 		t.Fatalf("got %q, %v", c.Database.URL, err)
+	}
+}
+
+func TestFromSource_dbGatewaySigningKeyFile(t *testing.T) {
+	c, err := FromSource(mapGetter{"database.url": testDSN, "dbgateway.signing_key_file": "/run/secrets/dbgateway.json"})
+	if err != nil || c.DBGateway.SigningKeyFile != "/run/secrets/dbgateway.json" {
+		t.Fatalf("signing key file %q: %v", c.DBGateway.SigningKeyFile, err)
+	}
+	if c, err = FromSource(mapGetter{"database.url": testDSN}); err != nil || c.DBGateway.SigningKeyFile != "" {
+		t.Fatalf("unset signing key file %q: %v", c.DBGateway.SigningKeyFile, err)
+	}
+	for _, path := range []string{"keys/dbgateway.json", "/run/secrets/../dbgateway.json"} {
+		_, err := FromSource(mapGetter{"database.url": testDSN, "dbgateway.signing_key_file": path})
+		if err == nil || !strings.Contains(err.Error(), "dbgateway.signing_key_file") {
+			t.Fatalf("%q: error %v, want it to name dbgateway.signing_key_file", path, err)
+		}
 	}
 }
 

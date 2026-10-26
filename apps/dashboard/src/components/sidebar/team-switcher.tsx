@@ -56,8 +56,8 @@ export function TeamSwitcher({
               />
             }
           >
-            <OrgMark org={active} className="size-8 rounded-lg" />
-            <div className="grid flex-1 text-left text-sm leading-tight">
+            <OrgMark org={active} className="size-8.5 rounded-lg" />
+            <div className="grid flex-1 text-left text-[14px] leading-tight">
               <span className="truncate font-semibold tracking-tight">
                 {active.name}
               </span>

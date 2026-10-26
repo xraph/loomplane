@@ -48,6 +48,7 @@ import {
   Field,
   Row,
   Rows,
+  StatePill,
   useInfrastructureRefresh,
 } from "./infrastructure-ui"
 import { Pools, Recovery } from "./pools"
@@ -217,7 +218,7 @@ function ServerContent({ cloud }: { cloud: Profile }) {
 const gib = (bytes: number) => `${((bytes || 0) / 1073741824).toFixed(1)} GiB`
 function Capacity({ server, usage }: { server: Server; usage?: ServerUsage }) {
   return (
-    <span className="text-xs text-muted-foreground">
+    <span className="font-mono text-[11.5px] text-muted-foreground">
       {usage?.workloads.length ?? "…"} workloads · reserved{" "}
       {usage?.reservedCpuMillis ?? "…"} mCPU /{" "}
       {gib(usage?.reservedMemoryBytes ?? 0)} · available{" "}
@@ -253,13 +254,18 @@ function ServerRow({
   })
   return (
     <Row>
-      <div className="grid min-w-0 gap-1">
-        <span className="font-medium break-words">
-          {server.name}{" "}
-          <span className="font-normal text-muted-foreground">
-            {server.status}
-            {server.draining ? " · draining" : ""}
+      <span
+        aria-hidden="true"
+        className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted"
+      >
+        <InfrastructureIcon className="size-4" />
+      </span>
+      <div className="grid min-w-0 flex-1 gap-1">
+        <span className="flex flex-wrap items-center gap-2">
+          <span className="text-[13px] font-medium break-words">
+            {server.name}
           </span>
+          <StatePill status={server.draining ? "draining" : server.status} />
         </span>
         <span className="text-xs text-muted-foreground">
           {server.ownership} · {server.region || "SSH"} ·{" "}
@@ -488,7 +494,7 @@ function ServerEditor({
               </FormField>
             )}
             {operation && (
-              <div className="grid gap-1 rounded-lg bg-muted p-3 text-sm">
+              <div className="grid gap-1 rounded-lg bg-muted p-3 text-[13px]">
                 <p>Review: {operation.status}</p>
                 <p>
                   Connection generation:{" "}
@@ -718,7 +724,7 @@ function ServerDetails({
             <Capacity server={server} usage={usage.data} />
             <Usage usage={drain?.usage ?? usage.data} onRecover={onRecover} />
             {drain && (
-              <p className="text-sm">
+              <p className="text-[13px]">
                 Drain review: {drain.reservations} reservations. New placements
                 stop; existing workloads still need reviewed moves.
               </p>
@@ -872,10 +878,15 @@ export function InfrastructureActivity({ cloudId }: { cloudId: string }) {
         <Rows>
           {list.map((o) => (
             <Row key={o.id}>
-              <div className="grid min-w-0 gap-1">
-                <p>
-                  {o.input.kind} {o.input.name || o.serverId}: {o.status} ·
-                  attempt {o.attempt}
+              <div className="grid min-w-0 flex-1 gap-1">
+                <p className="flex flex-wrap items-center gap-2">
+                  <span className="text-[13px] font-medium">
+                    {o.input.kind} {o.input.name || o.serverId}
+                  </span>
+                  <StatePill status={o.status} />
+                  <span className="text-xs text-muted-foreground">
+                    attempt {o.attempt}
+                  </span>
                 </p>
                 <p className="text-xs break-words text-muted-foreground">
                   {o.message}

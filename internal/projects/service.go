@@ -48,6 +48,18 @@ type Cleaner interface {
 	Sweep(ctx context.Context, orgID string)
 }
 
+// Reaper is a Cleaner for what can only be found before the deletion: what
+// the cascade is about to take from the database, such as the record of a
+// service still running in a cloud, or of a secret kept in Vault. Reap reads
+// it before the project, or only its environment environmentID when that
+// isn't empty, is deleted, and returns what cleans up after it, or nil when
+// there's nothing to do. That runs only once the deletion has happened. Like
+// a Cleaner it's best effort and logs its own failures: a failed read doesn't
+// stop the deletion.
+type Reaper interface {
+	Reap(ctx context.Context, orgID, projectID, environmentID string) func(context.Context)
+}
+
 // Auditor records changes worth an audit trail. Recording must not fail the
 // change, so it returns nothing; the implementation logs its own failures.
 type Auditor interface {
@@ -71,6 +83,7 @@ type Service struct {
 	init     Initializer
 	audit    Auditor
 	cleaners []Cleaner
+	reapers  []Reaper
 	attacher Attacher
 	now      func() time.Time
 }
@@ -90,6 +103,26 @@ func (s *Service) SetAttacher(a Attacher) { s.attacher = a }
 // AddCleaner registers a Cleaner, run after every project or environment
 // deletion. Call it while the app registers, before any request arrives.
 func (s *Service) AddCleaner(c Cleaner) { s.cleaners = append(s.cleaners, c) }
+
+// AddReaper registers a Reaper, run around every project or environment
+// deletion. Call it while the app registers, before any request arrives.
+func (s *Service) AddReaper(r Reaper) { s.reapers = append(s.reapers, r) }
+
+// reap asks each Reaper what the deletion would leave behind and returns
+// what cleans it up, to run once the deletion has happened.
+func (s *Service) reap(ctx context.Context, orgID, projectID, environmentID string) func(context.Context) {
+	var after []func(context.Context)
+	for _, r := range s.reapers {
+		if f := r.Reap(ctx, orgID, projectID, environmentID); f != nil {
+			after = append(after, f)
+		}
+	}
+	return func(ctx context.Context) {
+		for _, f := range after {
+			f(context.WithoutCancel(ctx))
+		}
+	}
+}
 
 func (s *Service) sweep(ctx context.Context, orgID string) {
 	for _, c := range s.cleaners {
@@ -341,10 +374,12 @@ func (s *Service) Delete(ctx context.Context, p security.Principal, id string) e
 	if err := s.authz.Require(ctx, p, security.ProjectDelete, id); err != nil {
 		return err
 	}
+	reaped := s.reap(ctx, p.OrgID, id, "")
 	if err := s.store.DeleteProject(ctx, p.OrgID, id); err != nil {
 		return err
 	}
 	s.record(ctx, AuditEvent{Action: "project.delete", Severity: "warning", ProjectID: id, Principal: p})
+	reaped(ctx)
 	s.sweep(ctx, p.OrgID)
 	return nil
 }
@@ -425,11 +460,15 @@ func (s *Service) DeleteEnvironment(ctx context.Context, p security.Principal, p
 	if err != nil {
 		return err
 	}
+	// What the cascade is about to take is read first, and cleaned up only
+	// once the environment is gone, so a refused deletion touches nothing.
+	reaped := s.reap(ctx, p.OrgID, projectID, envID)
 	if err := s.store.DeleteEnvironment(ctx, p.OrgID, projectID, envID); err != nil {
 		return err
 	}
 	s.record(ctx, AuditEvent{Action: "environment.delete", Severity: "warning", ProjectID: projectID, Principal: p,
 		Attributes: map[string]any{"environment": env.Name}})
+	reaped(ctx)
 	s.sweep(ctx, p.OrgID)
 	return nil
 }

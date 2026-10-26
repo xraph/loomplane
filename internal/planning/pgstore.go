@@ -27,7 +27,8 @@ var ErrConflict = errors.New("another plan for this environment was just started
 // PgStore is the Postgres Store. The schema is migration group "loomplane"
 // (database/migrations).
 type PgStore struct {
-	db *pgdriver.PgDB
+	frontendWake cloudinfra.CapacityCloudWakeup
+	db           *pgdriver.PgDB
 }
 
 // NewPgStore returns a Store over db.
@@ -394,18 +395,28 @@ func (s *PgStore) PutBinding(ctx context.Context, b *Binding) error {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }() //nolint:errcheck // a no-op once committed
+	if checkErr := cloudprofiles.LockOrganization(ctx, tx, b.OrgID); checkErr != nil {
+		return checkErr
+	}
 	if guardErr := cloudinfra.GuardPoolWrite(ctx, tx); guardErr != nil {
 		return guardErr
 	}
-	if err := putBinding(ctx, tx, b); err != nil {
-		return err
+	if checkErr := cloudinfra.ActivateFrontendBinding(ctx, tx, b.OrgID, b.PlanID, b.Name, b.ConnectionID, b.ExternalID); checkErr != nil {
+		return checkErr
+	}
+	if checkErr := putBinding(ctx, tx, b); checkErr != nil {
+		return checkErr
 	}
 	if id != "" {
 		if err := s.checkpointCloudBinding(ctx, tx, id, b.OrgID, b.ID); err != nil {
 			return err
 		}
 	}
-	return tx.Commit()
+	if commitErr := tx.Commit(); commitErr != nil {
+		return commitErr
+	}
+	s.wakeFrontendPlan(ctx, b.OrgID, b.PlanID, "frontend-active/"+b.PlanID+"/"+b.Name)
+	return nil
 }
 
 func putBinding(ctx context.Context, db bindingExecutor, b *Binding) error {

@@ -149,7 +149,7 @@ test("the stack reads the bindings, the status and the last verified restore", a
   expect(
     screen.getByText("Port 8081. 6 dynamic entity types loaded.")
   ).toBeVisible()
-  const off = screen.getByText("FalkorDB").closest("div")!
+  const off = screen.getByText("FalkorDB").closest("section")!
   expect(within(off).getByText("Off")).toBeVisible()
   expect(screen.getAllByText("Running")).toHaveLength(4)
   expect(screen.getByText("Completed")).toBeVisible()

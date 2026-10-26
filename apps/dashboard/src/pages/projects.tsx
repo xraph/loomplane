@@ -1,10 +1,11 @@
-import { FolderGit2Icon, PlusIcon, SearchIcon } from "lucide-react"
+import { GitBranchIcon, PlusIcon, SearchIcon } from "lucide-react"
 import { useState } from "react"
 
 import { messageOf } from "@/client/errors"
 import { useProjectsList } from "@/client/forge/loomplane/hooks"
 import type { Project } from "@/client/forge/loomplane/types"
 import { useQuery, useRefetchWhile } from "@/client/hooks"
+import { NoMatchIcon, ProjectsIcon } from "@/components/icons"
 import { Page, PageHeading } from "@/components/page"
 import { StatusPill, toneOf } from "@/components/runs"
 import { useShell } from "@/components/shell"
@@ -96,7 +97,7 @@ export function Projects() {
           <Empty>
             <EmptyHeader>
               <EmptyMedia variant="icon">
-                <FolderGit2Icon />
+                <ProjectsIcon />
               </EmptyMedia>
               <EmptyTitle>No projects yet</EmptyTitle>
               <EmptyDescription>
@@ -115,21 +116,26 @@ export function Projects() {
 
         {projects && projects.length > 0 && (
           <div className="grid gap-4">
-            <InputGroup className="h-9 w-full rounded-[10px] border-transparent bg-muted">
-              <InputGroupAddon>
-                <SearchIcon />
-              </InputGroupAddon>
-              <InputGroupInput
-                data-page-search
-                placeholder="Search projects"
-                aria-label="Search projects"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-              />
-              <InputGroupAddon align="inline-end">
-                <Kbd>/</Kbd>
-              </InputGroupAddon>
-            </InputGroup>
+            <div className="flex flex-wrap items-center gap-2">
+              <InputGroup className="h-9 min-w-0 flex-[1_1_320px] rounded-lg border-transparent bg-muted">
+                <InputGroupAddon>
+                  <SearchIcon />
+                </InputGroupAddon>
+                <InputGroupInput
+                  data-page-search
+                  placeholder="Search projects by name, slug or repository"
+                  aria-label="Search projects"
+                  value={query}
+                  onChange={(e) => setQuery(e.target.value)}
+                />
+                <InputGroupAddon align="inline-end">
+                  <Kbd>/</Kbd>
+                </InputGroupAddon>
+              </InputGroup>
+              <span className="text-[12.5px] text-muted-foreground tabular-nums">
+                {shown?.length ?? 0} of {projects.length}
+              </span>
+            </div>
             {shown && shown.length > 0 ? (
               <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
                 {shown.map((p) => (
@@ -143,13 +149,13 @@ export function Projects() {
                   <button
                     type="button"
                     onClick={openNewProject}
-                    className="flex min-h-40 flex-col items-center justify-center gap-2 rounded-xl border border-dashed text-[13.5px] font-medium text-muted-foreground transition-colors hover:bg-subtle hover:text-foreground"
+                    className="flex min-h-42 flex-col items-center justify-center gap-2 rounded-xl border border-dashed text-[13.5px] font-medium text-foreground transition-colors hover:bg-subtle"
                   >
-                    <span className="flex size-8 items-center justify-center rounded-[9px] bg-brand-tint text-brand-ink">
+                    <span className="flex size-8.5 items-center justify-center rounded-lg bg-brand-tint text-brand-ink">
                       <PlusIcon className="size-4" />
                     </span>
                     New project from a repository
-                    <span className="text-xs font-normal">
+                    <span className="text-xs font-normal text-muted-foreground">
                       Production and preview are set up for you
                     </span>
                   </button>
@@ -158,6 +164,9 @@ export function Projects() {
             ) : (
               <Empty>
                 <EmptyHeader>
+                  <EmptyMedia variant="icon">
+                    <NoMatchIcon />
+                  </EmptyMedia>
                   <EmptyTitle>No projects match</EmptyTitle>
                   <EmptyDescription>
                     Search by name, slug, description or repository.
@@ -166,7 +175,7 @@ export function Projects() {
                 <EmptyContent>
                   <Button
                     variant="outline"
-
+                    size="sm"
                     onClick={() => setQuery("")}
                   >
                     Clear the search
@@ -203,7 +212,7 @@ function ProjectCard({ project: p, runs }: { project: Project; runs: Run[] }) {
       params={{ id: p.id }}
       className="group flex flex-col overflow-hidden rounded-xl bg-card text-foreground ring-1 ring-border transition-shadow hover:shadow-[0_6px_18px_oklch(0.2_0.01_50/0.08)]"
     >
-      <div className="flex flex-1 flex-col gap-2.5 p-4">
+      <div className="flex flex-1 flex-col gap-2.5 px-4 py-3.5">
         <div className="flex items-center gap-3">
           <ProjectIcon icon={style.icon} color={style.color} size="lg" />
           <div className="grid min-w-0 flex-1 gap-0.5">
@@ -239,7 +248,7 @@ function ProjectCard({ project: p, runs }: { project: Project; runs: Run[] }) {
       </div>
       <div className="flex items-center justify-between gap-3 border-t bg-subtle px-4 py-2.5 text-xs text-muted-foreground">
         <span className="flex min-w-0 items-center gap-1.5">
-          <FolderGit2Icon className="size-3.5 shrink-0" />
+          <GitBranchIcon className="size-3.5 shrink-0" />
           <span className="truncate font-mono">
             {repositoriesLabel(p.repositories) || "No repository yet"}
           </span>

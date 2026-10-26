@@ -1,0 +1,28 @@
+# The chart test's install: the HA defaults against the fixtures. The test
+# sets image.repository and image.tag to the image it loaded into kind.
+publicURL: https://loomplane.test
+secrets:
+  # Test-only values; never reuse them.
+  secretKey: bG9vbXBsYW5lLWtpbmQtdGVzdC1vbmx5LWtleS0zMmI=
+  databaseURL: postgres://loomplane:loomplane-test-only@postgres:5432/loomplane?sslmode=disable
+storage:
+  url: s3://test:test-only@us-east-1/loomplane-artifacts?endpoint=http://s3:9090&path_style=true
+# Configures the SMTP provider, so the test can check replicas booting
+# together create exactly one. Nothing gets sent.
+notifications:
+  smtpHost: smtp.invalid
+  from: loomplane@loomplane.test
+image:
+  pullPolicy: Never
+# kind nodes are small.
+api:
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {memory: 1Gi}
+worker:
+  tmpSize: 1Gi
+  resources:
+    requests: {cpu: 50m, memory: 128Mi}
+    limits: {memory: 1Gi}
+ingress:
+  enabled: false

@@ -53,9 +53,11 @@ function PITRWindow({
     !!window.pointId &&
     coveredPITRTime(at, window.earliest, window.latest, source.provider)
   return (
-    <div className="grid min-w-0 gap-2 rounded-md border p-3">
+    <div className="grid min-w-0 gap-2 rounded-xl bg-card p-3 ring-1 ring-border">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className="text-sm font-medium">Point-in-time recovery</span>
+        <span className="text-[13.5px] font-semibold">
+          Point-in-time recovery
+        </span>
         <Button
           size="sm"
           variant="ghost"

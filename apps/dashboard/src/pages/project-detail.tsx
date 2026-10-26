@@ -1,10 +1,7 @@
 import {
   BoxIcon,
   ChevronRightIcon,
-  CopyIcon,
   FolderGit2Icon,
-  GitBranchIcon,
-  GitCommitHorizontalIcon,
   RocketIcon,
   SparklesIcon,
 } from "lucide-react"
@@ -42,6 +39,7 @@ import {
   Structure,
   useAnalyses,
 } from "@/components/architecture"
+import { DatabaseGateways } from "@/components/database-gateway"
 import { DeployTab } from "@/components/deploy"
 import { ProductIcon } from "@/components/product-icon"
 import { QueryError } from "@/components/query-error"
@@ -49,6 +47,7 @@ import { EnvironmentCards } from "@/components/environment-manager"
 import { Page, PageHeading } from "@/components/page"
 import { ProjectStylePopover } from "@/components/project-style-picker"
 import { ProjectVariables } from "@/components/project-variables"
+import { EnvBadge } from "@/components/runs"
 import {
   type GraphSelection,
   needsReview,
@@ -73,13 +72,6 @@ import {
 } from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button, buttonVariants } from "@/components/ui/button"
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
 import {
   Empty,
   EmptyContent,
@@ -313,13 +305,13 @@ function Body({
           </>
         }
       >
-        <div className="mt-2 flex flex-wrap items-center gap-2 text-sm text-muted-foreground">
+        <div className="mt-1 flex flex-wrap items-center gap-1.5">
           {project.repositories.length > 0 ? (
             project.repositories.map((r) => (
               <Badge
                 key={r}
                 variant="outline"
-                className="h-6 gap-1.5 font-normal"
+                className={cn(chip, "font-mono")}
                 render={
                   <a
                     href={`https://github.com/${r}`}
@@ -333,33 +325,41 @@ function Body({
               </Badge>
             ))
           ) : (
-            <Badge variant="outline" className="h-6 gap-1.5 font-normal">
+            <Badge
+              variant="outline"
+              className={cn(chip, "text-muted-foreground")}
+            >
               <FolderGit2Icon />
               No repository yet
             </Badge>
           )}
           {shown?.ref && (
-            <Badge variant="outline" className="h-6 gap-1.5 font-normal">
-              <GitBranchIcon />
+            <Badge
+              variant="secondary"
+              className={cn(chip, "bg-muted font-mono text-muted-foreground")}
+            >
               {shown.ref}
             </Badge>
           )}
           {shown?.commitSha && (
             <Badge
-              variant="outline"
-              className="h-6 gap-1.5 font-mono font-normal"
+              variant="secondary"
+              className={cn(chip, "bg-muted font-mono text-muted-foreground")}
             >
-              <GitCommitHorizontalIcon />
               {shortSHA(shown.commitSha)}
             </Badge>
           )}
           {ecosystems.map((e) => (
-            <Badge key={e} variant="secondary" className="font-normal">
+            <Badge
+              key={e}
+              variant="secondary"
+              className={cn(chip, "bg-muted text-muted-foreground")}
+            >
               {ecosystemLabel(e)}
             </Badge>
           ))}
           {!isReady(project.status) && (
-            <Badge variant="outline" className="h-6 gap-1.5 font-normal">
+            <Badge variant="outline" className={cn(chip, "gap-1.5")}>
               <span className="h-1.5 w-3 animate-pulse rounded-full bg-weld motion-reduce:animate-none" />
               Setting up
             </Badge>
@@ -477,6 +477,7 @@ function Body({
               </>
             )}
           </Discovered>
+          <DatabaseGateways project={project.id} />
         </TabsContent>
         <TabsContent value="variables">
           {environments && environments.length > 0 ? (
@@ -509,7 +510,7 @@ function Body({
             <ServiceRecovery project={project.id} />
           </TabsContent>
         )}
-        <TabsContent value="settings" className="grid gap-6">
+        <TabsContent value="settings" className="grid max-w-[760px] gap-3">
           <Details project={project} />
           {can("project:delete") && <DeleteProject project={project} />}
         </TabsContent>
@@ -656,16 +657,18 @@ function ResourceRow({
         size="sm"
       />
       <span className="grid min-w-0 flex-1 gap-0.5">
-        <span className="truncate text-sm font-semibold">{binding.name}</span>
+        <span className="truncate text-[13px] font-medium">{binding.name}</span>
         <span className="truncate text-xs text-muted-foreground">{title}</span>
       </span>
-      <Badge variant="outline" className="h-5 shrink-0 font-normal capitalize">
-        {environment.name}
-      </Badge>
+      <EnvBadge env={environment.name} className="shrink-0" />
       <ChevronRightIcon className="size-4 shrink-0 text-muted-foreground/60 transition-transform group-hover:translate-x-0.5" />
     </Link>
   )
 }
+
+// The heading's facts: small square chips, outlined for the repository and
+// filled for what was read from it.
+const chip = "h-5 rounded-md px-2 text-xs font-normal"
 
 // Resource labels are names, except two common nouns that read wrong
 // capitalized mid-sentence.
@@ -743,26 +746,25 @@ function Details({ project }: { project: Project }) {
     [
       "Repositories",
       project.repositories.length > 0 ? (
-        <code className="font-mono text-xs">
+        <code className="font-mono text-[12.5px]">
           {project.repositories.join(", ")}
         </code>
       ) : (
         <span className="text-muted-foreground">None yet</span>
       ),
     ],
-    ["Slug", <code className="font-mono text-xs">{project.slug}</code>],
+    ["Slug", <code className="font-mono text-[12.5px]">{project.slug}</code>],
     [
       "Project ID",
-      <span className="flex items-center gap-1">
-        <code className="font-mono text-xs break-all">{project.id}</code>
+      <span className="flex items-center gap-2">
+        <code className="font-mono text-[12.5px] break-all">{project.id}</code>
         <Button
-          variant="ghost"
-          size="icon-xs"
-          className="text-muted-foreground"
+          variant="outline"
+          size="xs"
           aria-label="Copy project ID"
           onClick={copy(project.id, "project ID")}
         >
-          <CopyIcon />
+          Copy
         </Button>
       </span>,
     ],
@@ -772,24 +774,25 @@ function Details({ project }: { project: Project }) {
     ],
   ]
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Details</CardTitle>
-        <CardDescription>
-          The slug never changes, because other systems key on it.
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        <dl className="grid grid-cols-[7rem_1fr] gap-x-4 gap-y-3 text-sm">
-          {rows.map(([k, v]) => (
-            <div key={k} className="contents">
-              <dt className="text-muted-foreground">{k}</dt>
-              <dd className="min-w-0">{v}</dd>
-            </div>
-          ))}
-        </dl>
-      </CardContent>
-    </Card>
+    <section
+      aria-labelledby="project-details"
+      className="rounded-xl bg-card px-4 pt-1 pb-1.5 ring-1 ring-border"
+    >
+      <h2 id="project-details" className="pt-3 text-[14px] font-semibold">
+        Details
+      </h2>
+      <p className="mt-0.5 mb-2 text-[12.5px] text-muted-foreground">
+        The slug never changes, because other systems key on it.
+      </p>
+      <dl className="grid grid-cols-[140px_minmax(0,1fr)] text-[13px]">
+        {rows.map(([k, v]) => (
+          <div key={k} className="contents">
+            <dt className="border-t py-2.5 text-muted-foreground">{k}</dt>
+            <dd className="min-w-0 border-t py-2.5">{v}</dd>
+          </div>
+        ))}
+      </dl>
+    </section>
   )
 }
 
@@ -813,45 +816,52 @@ function DeleteProject({ project }: { project: Project }) {
   }
 
   return (
-    <Card className={cn("border-destructive/40")}>
-      <CardHeader>
-        <CardTitle>Delete project</CardTitle>
-        <CardDescription>
+    <section
+      aria-labelledby="delete-project"
+      className="flex flex-wrap items-center gap-3 rounded-xl bg-card px-4 py-3.5 ring-1 ring-destructive/25"
+    >
+      <div className="grid min-w-0 flex-[1_1_360px] gap-1">
+        <h2 id="delete-project" className="text-[14px] font-semibold">
+          Delete project
+        </h2>
+        <p className="text-[12.5px] leading-normal text-muted-foreground">
           Removes the project and its environments from Loomplane. Nothing has
           been deployed from it yet, so no cloud resources are touched.
-        </CardDescription>
-      </CardHeader>
-      <CardContent>
-        <AlertDialog open={open} onOpenChange={setOpen}>
-          <AlertDialogTrigger
-            render={
-              <Button variant="destructive" disabled={remove.isPending} />
-            }
-          >
-            Delete project
-          </AlertDialogTrigger>
-          <AlertDialogContent>
-            <AlertDialogHeader>
-              <AlertDialogTitle>Delete {project.name}?</AlertDialogTitle>
-              <AlertDialogDescription>
-                Its environments and their variables go with it. This can&apos;t
-                be undone.
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            <AlertDialogFooter>
-              <AlertDialogCancel>Keep project</AlertDialogCancel>
-              <AlertDialogAction
-                variant="destructive"
-                disabled={remove.isPending}
-                onClick={() => void confirm()}
-              >
-                {remove.isPending && <Spinner />}
-                Delete project
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </AlertDialogContent>
-        </AlertDialog>
-      </CardContent>
-    </Card>
+        </p>
+      </div>
+      <AlertDialog open={open} onOpenChange={setOpen}>
+        <AlertDialogTrigger
+          render={
+            <Button
+              variant="outline"
+              className="border-destructive/25 text-destructive hover:bg-destructive/10 hover:text-destructive"
+              disabled={remove.isPending}
+            />
+          }
+        >
+          Delete project
+        </AlertDialogTrigger>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete {project.name}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Its environments and their variables go with it. This can&apos;t
+              be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Keep project</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              disabled={remove.isPending}
+              onClick={() => void confirm()}
+            >
+              {remove.isPending && <Spinner />}
+              Delete project
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </section>
   )
 }
