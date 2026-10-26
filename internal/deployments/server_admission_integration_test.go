@@ -198,9 +198,11 @@ func testAdmissionAllowsFirstDeploymentProgress(t *testing.T, dsn, template stri
 		t.Fatalf("a first deployment's step write waits on its own host admission: %v", err)
 	}
 
+	// Open the waiting pool here: t.Fatal can't stop the test from a goroutine.
+	waiting := cloudinfra.NewPgStore(c.unbounded())
 	retiring := make(chan error, 1)
 	go func() {
-		retiring <- cloudinfra.NewPgStore(c.unbounded()).RetireServer(context.WithoutCancel(t.Context()), retiringServer())
+		retiring <- waiting.RetireServer(context.WithoutCancel(t.Context()), retiringServer())
 	}()
 	waitForLockWaiters(t, c.db, 1)
 	finished := time.Now().UTC()
@@ -253,9 +255,11 @@ func testAdmissionSerializesRetirement(t *testing.T, dsn, template string) {
 	if err != nil || admission == nil {
 		t.Fatalf("admit: %v", err)
 	}
+	// Open the waiting pool here: t.Fatal can't stop the test from a goroutine.
+	waiting := cloudinfra.NewPgStore(c.unbounded())
 	retiring := make(chan error, 1)
 	go func() {
-		retiring <- cloudinfra.NewPgStore(c.unbounded()).RetireServer(context.WithoutCancel(t.Context()), retiringServer())
+		retiring <- waiting.RetireServer(context.WithoutCancel(t.Context()), retiringServer())
 	}()
 	waitForLockWaiters(t, c.db, 1)
 	select {
