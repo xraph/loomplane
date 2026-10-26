@@ -89,7 +89,10 @@ const routeRuntimeContainer = `CASE WHEN deployment.id IS NULL THEN i.service_re
 // its recipe marks routable. Planning lists only those in routable_ports, never
 // a control port, and gives engine databases, the composed resource itself and
 // its jobs none; the role and shape checks keep a stray list from widening it.
+// A dependency-only kind's component is its own composed resource (its
+// component config names itself), which is never routed.
 const routableComponent = `b.subject='resource' AND b.config->'component' IS NOT NULL AND b.config->'composition' IS NULL AND b.config->'catalog' IS NULL
+ AND b.config->'component'->>'resource' <> b.name
  AND b.config->'component'->'component'->>'role'='process' AND jsonb_typeof(b.config->'routable_ports')='array' AND b.config->'routable_ports' @> jsonb_build_array($6::int)`
 
 const routeBindingQuery = `SELECT b.id,b.config,s.id,t.id,c.id,c.generation,b.external_id,coalesce(c.details->>'docker_id',''),coalesce(` + routeRuntimeRevision + `,''),coalesce(` + routeRuntimeContainer + `,''),coalesce(nullif(c.details->>'advertise_host',''),c.details->>'host','')

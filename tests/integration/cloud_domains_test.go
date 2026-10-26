@@ -703,7 +703,7 @@ func TestDomainsManagedHostingRequiresPublicControl(t *testing.T) {
 
 // A composed catalog component on a Cloud server takes a route on a port its
 // recipe marks routable. Its control ports, engine databases, the composed
-// resource itself and its jobs never do.
+// resource itself, its jobs and a dependency-only kind's component never do.
 func TestDomainsRouteComposedComponentRoutablePorts(t *testing.T) {
 	_, sql, db := cloudSyncDatabase(t)
 	ctx := t.Context()
@@ -729,7 +729,8 @@ func TestDomainsRouteComposedComponentRoutablePorts(t *testing.T) {
 		('api','org','proj','env','resource','app--api','server','resource','api','runtime','{"provider":"server","kind":"sample","component":{"kind":"sample","resource":"app","component":{"name":"api","role":"process"}},"routable_ports":[8080],` + placement + `}',now(),now()),
 		('parent','org','proj','env','resource','app','server','resource','api','runtime','{"provider":"server","kind":"sample","composition":{"kind":"sample","version":"1","revision":"r"},"routable_ports":[8080],` + placement + `}',now(),now()),
 		('migrate','org','proj','env','resource','app--migrate','server','resource','api','runtime','{"provider":"server","kind":"sample","component":{"kind":"sample","resource":"app","component":{"name":"migrate","role":"job"}},"routable_ports":[8080],` + placement + `}',now(),now()),
-		('db','org','proj','env','resource','db','server','postgres','db','runtime','{"provider":"server","kind":"postgres","catalog":{"id":"postgres-17"},"routable_ports":[5432],` + placement + `}',now(),now())`,
+		('db','org','proj','env','resource','db','server','postgres','db','runtime','{"provider":"server","kind":"postgres","catalog":{"id":"postgres-17"},"routable_ports":[5432],` + placement + `}',now(),now()),
+		('graph','org','proj','env','resource','app--graph','server','resource','api','runtime','{"provider":"server","kind":"graph","component":{"kind":"graph","resource":"app--graph","component":{"name":"server","role":"process"}},"routable_ports":[8080],` + placement + `}',now(),now())`,
 	} {
 		if _, err := sql.Exec(ctx, statement); err != nil {
 			t.Fatal(err)
@@ -750,6 +751,7 @@ func TestDomainsRouteComposedComponentRoutablePorts(t *testing.T) {
 		{"composed parent", input("app", 8080)},
 		{"job component", input("app--migrate", 8080)},
 		{"engine database", input("db", 5432)},
+		{"dependency-only component", input("app--graph", 8080)},
 	} {
 		if got, refuseErr := store.ResolveRouteBinding(ctx, "org", "proj", refused.in); !errors.Is(refuseErr, cloudinfra.ErrNotFound) {
 			t.Errorf("%s resolved: %+v %v", refused.why, got, refuseErr)
