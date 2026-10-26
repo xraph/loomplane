@@ -225,3 +225,37 @@ func (f *fakeAppStore) AppProblems(_ context.Context, org string) (map[string]st
 	}
 	return out, nil
 }
+
+// Vercel's install page is addressed by the app's slug, so a Vercel app
+// can't be saved without one.
+func TestSetSignInAppNeedsASlugForVercel(t *testing.T) {
+	s, store, secrets, _ := signInService(nil, security.Permission{})
+	s.Providers[Vercel] = noProvider{}
+	if _, err := s.SetSignInApp(t.Context(), viewer, Vercel, AppInput{ClientID: "oac_1", ClientSecret: "sec"}); !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "slug") {
+		t.Fatalf("no slug: %v", err)
+	}
+	if len(secrets.kept) != 0 || len(store.apps) != 0 {
+		t.Fatalf("kept %v, stored %v", secrets.kept, store.apps)
+	}
+	got, err := s.SetSignInApp(t.Context(), viewer, Vercel, AppInput{ClientID: "oac_1", ClientSecret: "sec", Slug: " loomplane "})
+	if err != nil || got.Slug != "loomplane" || store.apps["org/"+Vercel].Slug != "loomplane" {
+		t.Fatalf("returned %+v, stored %+v: %v", got, store.apps["org/"+Vercel], err)
+	}
+	if app, err := s.app(t.Context(), "org", Vercel); err != nil || app.Slug != "loomplane" {
+		t.Fatalf("app %+v: %v", app, err)
+	}
+	apps, _ := s.SignInApps(t.Context(), viewer)
+	if v := apps[len(apps)-1]; v.Cloud != Vercel || v.Slug != "loomplane" {
+		t.Fatalf("listed %+v", v)
+	}
+
+	// Configuration's slug is the one listed when configuration sets the app.
+	s.ConfigApps = map[string]oauth.App{Vercel: {ClientID: "cfg", ClientSecret: "x", Slug: "lp-config"}}
+	apps, _ = s.SignInApps(t.Context(), viewer)
+	if v := apps[len(apps)-1]; v.Source != AppFromConfig || v.Slug != "lp-config" {
+		t.Fatalf("listed %+v", v)
+	}
+	if app, _ := s.app(t.Context(), "org", Vercel); app.Slug != "lp-config" {
+		t.Fatalf("app %+v", app)
+	}
+}

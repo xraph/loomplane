@@ -139,14 +139,25 @@ func (s *Service) usableGrant(ctx context.Context, c *Connection) (oauth.Grant, 
 	}
 }
 
+// deployGrant is the grant a deployment's credential comes from: the one
+// Vault holds, for a cloud whose sessions renew themselves from it, or
+// else a usable one.
+func (s *Service) deployGrant(ctx context.Context, c *Connection) (oauth.Grant, error) {
+	if _, ok := s.Providers[c.Cloud].(Handout); ok {
+		return s.readGrant(ctx, c)
+	}
+	return s.usableGrant(ctx, c)
+}
+
 // renew trades held's refresh token for a new grant if held expires
 // within ahead. Callers in this process queue in s.renewals first, so at
 // most one per connection waits on the database. It then takes the
 // connection's lock and reads Vault again, so of several callers in any
 // process only the first spends the refresh token and the rest use what
 // it stored. renewed reports whether this
-// call renewed it. A refusal, or a cloud without a sign-in app, marks the
-// connection sign_in_needed and is ErrNotReady.
+// call renewed it. A refusal, a refused sign-in app, or a cloud without
+// one marks the connection sign_in_needed and is ErrNotReady. A refused
+// app is also recorded on the app.
 func (s *Service) renew(ctx context.Context, c *Connection, held oauth.Grant, ahead time.Duration) (g oauth.Grant, renewed bool, err error) {
 	if !held.Due(s.now(), ahead) {
 		return held, false, nil
@@ -198,7 +209,12 @@ func (s *Service) renew(ctx context.Context, c *Connection, held oauth.Grant, ah
 		// read, so a caller giving up must not cut the answer off.
 		refreshCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), renewTimeout)
 		defer cancel()
-		fresh, err := provider.Refresh(refreshCtx, app, latest.RefreshToken)
+		fresh, err := provider.Refresh(refreshCtx, app, latest)
+		if errors.Is(err, oauth.ErrAppRejected) {
+			why = s.appRejected(ctx, c.OrgID, c.Cloud)
+			lapsed, err = s.needSignIn(ctx, current, why)
+			return err
+		}
 		if errors.Is(err, oauth.ErrRefused) {
 			why = fmt.Sprintf("%s no longer accepts this sign-in. Sign in again.", c.Cloud)
 			lapsed, err = s.needSignIn(ctx, current, why)

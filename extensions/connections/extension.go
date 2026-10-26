@@ -138,7 +138,7 @@ func (e *Extension) Register(fapp forge.App) error {
 	}
 	e.svc.ConfigApps = map[string]oauth.App{}
 	for cloud, app := range e.cfg.Clouds.OAuth {
-		e.svc.ConfigApps[cloud] = oauth.App{ClientID: app.ClientID, ClientSecret: app.ClientSecret}
+		e.svc.ConfigApps[cloud] = oauth.App{ClientID: app.ClientID, ClientSecret: app.ClientSecret, Slug: app.Slug}
 	}
 	e.svc.CallbackURL = callbackURL(e.cfg.PublicURL)
 	mail, err := forge.InjectType[*notifications.Service](c)

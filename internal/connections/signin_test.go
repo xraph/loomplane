@@ -2,8 +2,11 @@ package connections
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"net/http"
 	"net/http/httptest"
@@ -34,29 +37,37 @@ func (f *fakeAppStore) TakeSignIn(_ context.Context, state string) (*PendingSign
 	return p, nil
 }
 
-// fakeProvider records what it was given and hands back a grant per code.
+// fakeProvider records what it was given and hands back a grant, or an
+// error, per code.
 type fakeProvider struct {
-	grants   map[string]oauth.Grant
-	code     string
-	redirect string
+	grants map[string]oauth.Grant
+	errs   map[string]error
+	asked  oauth.AuthorizeRequest
+	code   oauth.CodeRequest
 }
 
-func (f *fakeProvider) AuthorizeURL(app oauth.App, redirect, state string) string {
-	return "https://provider.example/authorize?" + url.Values{"client_id": {app.ClientID}, "redirect_uri": {redirect}, "state": {state}}.Encode()
+func (f *fakeProvider) AuthorizeURL(app oauth.App, r oauth.AuthorizeRequest) string {
+	f.asked = r
+	return "https://provider.example/authorize?" + url.Values{"client_id": {app.ClientID}, "redirect_uri": {r.Redirect}, "state": {r.State}}.Encode()
 }
 
-func (f *fakeProvider) Exchange(_ context.Context, _ oauth.App, redirect, code string) (oauth.Grant, error) {
-	f.code, f.redirect = code, redirect
-	g, ok := f.grants[code]
+func (f *fakeProvider) Exchange(_ context.Context, _ oauth.App, r oauth.CodeRequest) (oauth.Grant, error) {
+	f.code = r
+	if err, ok := f.errs[r.Code]; ok {
+		return oauth.Grant{}, err
+	}
+	g, ok := f.grants[r.Code]
 	if !ok {
 		return oauth.Grant{}, oauth.ErrRefused
 	}
 	return g, nil
 }
 
-func (f *fakeProvider) Refresh(context.Context, oauth.App, string) (oauth.Grant, error) {
+func (f *fakeProvider) Refresh(context.Context, oauth.App, oauth.Grant) (oauth.Grant, error) {
 	return oauth.Grant{}, errors.New("not used")
 }
+
+func (f *fakeProvider) Probe(context.Context, oauth.App, oauth.Grant) error { return nil }
 
 type memStore struct {
 	Store
@@ -256,8 +267,8 @@ func TestCompleteSignInCreatesAnOAuthConnection(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if r.provider.code != "code-team-1" || r.provider.redirect != callback {
-		t.Fatalf("exchange got code=%q redirect=%q", r.provider.code, r.provider.redirect)
+	if r.provider.code.Code != "code-team-1" || r.provider.code.Redirect != callback {
+		t.Fatalf("exchange got %+v", r.provider.code)
 	}
 	if c.Status != StatusReady || c.Method != MethodOAuth || c.Details["team_uuid"] != "team-1" || c.Account != "Acme" || c.Name != "Acme" || c.CreatedBy != "ada" {
 		t.Fatalf("connection: %+v", c)
@@ -425,5 +436,174 @@ func TestPastingAGrantIsRefused(t *testing.T) {
 	}
 	if r.secrets.puts != 0 || string(r.secrets.kept["org/conn_do"]) != "dop_v1_team" || len(r.store.rows) != 1 {
 		t.Fatalf("vault=%q puts=%d rows=%d", r.secrets.kept["org/conn_do"], r.secrets.puts, len(r.store.rows))
+	}
+}
+
+// gcpSignIn lets r sign in to GCP with a fake provider and a checker
+// that accepts any credential for project shop-prod.
+func gcpSignIn(r *signInRig) {
+	r.s.Providers[GCP] = r.provider
+	r.s.ConfigApps[GCP] = oauth.App{ClientID: "g-id", ClientSecret: "g-secret"}
+	r.s.checkers[GCP] = identityChecker{Check{Account: "shop-prod", Details: map[string]string{"project_id": "shop-prod"}}}
+	r.provider.grants["code-gcp"] = oauth.Grant{AccessToken: "ya29.g", RefreshToken: "1//g", Expiry: time.Now().Add(time.Hour)}
+}
+
+func TestStartSignInStoresSettingsAndAChallenge(t *testing.T) {
+	r := newSignInRig(t)
+	gcpSignIn(r)
+	got, err := r.s.StartSignIn(t.Context(), starter, SignInInput{Cloud: GCP, Name: "Shop",
+		Settings: map[string]string{"project_id": "shop-prod", "region": "us-central1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, ok := r.apps.signIns[got.State]
+	if !ok || got.State == "" {
+		t.Fatalf("state %q wasn't stored: %v", got.State, r.apps.signIns)
+	}
+	if !maps.Equal(p.Settings, map[string]string{"project_id": "shop-prod"}) {
+		t.Fatalf("stored settings %v", p.Settings)
+	}
+	sum := sha256.Sum256([]byte(p.Verifier))
+	if p.Verifier == "" || r.provider.asked.Challenge != base64.RawURLEncoding.EncodeToString(sum[:]) {
+		t.Fatalf("verifier %q, challenge %q", p.Verifier, r.provider.asked.Challenge)
+	}
+	if r.provider.asked.State != got.State || r.provider.asked.Redirect != callback || !maps.Equal(r.provider.asked.Settings, p.Settings) {
+		t.Fatalf("authorize got %+v", r.provider.asked)
+	}
+	if shown, _ := json.Marshal(got); strings.Contains(string(shown), p.Verifier) {
+		t.Fatalf("the verifier was handed out: %s", shown)
+	}
+
+	// Finishing hands the cloud the verifier and the same settings.
+	if _, err = r.s.CompleteSignIn(t.Context(), starter, CompleteInput{State: got.State, Code: "code-gcp"}); err != nil {
+		t.Fatal(err)
+	}
+	if r.provider.code.Verifier != p.Verifier || !maps.Equal(r.provider.code.Settings, p.Settings) {
+		t.Fatalf("exchange got %+v", r.provider.code)
+	}
+
+	// DigitalOcean takes no settings and no PKCE.
+	got, err = r.s.StartSignIn(t.Context(), starter, SignInInput{Cloud: DigitalOcean, Name: "Acme", Settings: map[string]string{"project_id": "x"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := r.apps.signIns[got.State]; len(p.Settings) != 0 || p.Verifier != "" || r.provider.asked.Challenge != "" {
+		t.Fatalf("pending %+v, challenge %q", p, r.provider.asked.Challenge)
+	}
+}
+
+// Signing in again keeps the connection where it is: the settings come
+// from the connection, whatever the request says.
+func TestStartSignInAgainReusesTheConnectionsSettings(t *testing.T) {
+	r := newSignInRig(t)
+	gcpSignIn(r)
+	r.store.rows["conn_gcp"] = Connection{ID: "conn_gcp", OrgID: "org", Cloud: GCP, Name: "Shop", Method: MethodOAuth,
+		Details: map[string]string{"project_id": "shop-prod", "email": "ada@example.com"}, Status: StatusSignInNeeded}
+	got, err := r.s.StartSignIn(t.Context(), starter, SignInInput{Cloud: GCP, ConnectionID: "conn_gcp",
+		Settings: map[string]string{"project_id": "elsewhere"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := r.apps.signIns[got.State]; !maps.Equal(p.Settings, map[string]string{"project_id": "shop-prod"}) || p.ConnectionID != "conn_gcp" {
+		t.Fatalf("pending %+v", p)
+	}
+}
+
+// handingOut is a renewer for a cloud whose sessions renew themselves:
+// it hands out a credential built from the grant.
+type handingOut struct{ *renewer }
+
+func (handingOut) Handout(app oauth.App, g oauth.Grant, settings map[string]string) ([]byte, error) {
+	return []byte("handout:" + app.ClientID + ":" + g.RefreshToken + ":" + settings["project_id"]), nil
+}
+
+// seenChecker accepts any credential for project shop-prod and keeps the
+// last one it checked.
+type seenChecker struct{ seen []byte }
+
+func (c *seenChecker) Parse([]byte, map[string]string) (Check, error) {
+	return Check{Account: "shop-prod", Details: map[string]string{"project_id": "shop-prod"}}, nil
+}
+
+func (c *seenChecker) Check(_ context.Context, cred []byte, s map[string]string) (Check, error) {
+	c.seen = append([]byte(nil), cred...)
+	return c.Parse(cred, s)
+}
+
+func TestCredentialHandsOutWithoutRenewing(t *testing.T) {
+	r := newRefreshRig(t)
+	checker := &seenChecker{}
+	r.s.checkers[GCP] = checker
+	r.s.Providers[GCP] = handingOut{r.renewer}
+	r.s.ConfigApps[GCP] = oauth.App{ClientID: "g-id", ClientSecret: "g-secret"}
+	r.store.rows["conn_gcp"] = Connection{ID: "conn_gcp", OrgID: "org", Cloud: GCP, Name: "Shop", Method: MethodOAuth, Account: "shop-prod",
+		Details: map[string]string{"project_id": "shop-prod"}, Status: StatusReady, Generation: 2}
+	r.keep(t, "conn_gcp", oauth.Grant{AccessToken: "ya29.old", RefreshToken: "1//rt", Expiry: r.clock.Add(time.Minute)})
+
+	_, cred, err := r.s.Credential(t.Context(), "org", "conn_gcp")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(cred) != "handout:g-id:1//rt:shop-prod" {
+		t.Fatalf("credential %q", cred)
+	}
+	if locks, _ := r.locked.stats(); r.renewer.calls != 0 || locks != 0 {
+		t.Fatalf("a self-renewing sign-in was renewed: calls=%d locks=%d", r.renewer.calls, locks)
+	}
+
+	// Checking it again checks the handout too.
+	c, err := r.s.Recheck(t.Context(), starter, "conn_gcp")
+	if err != nil || c.Status != StatusReady {
+		t.Fatalf("recheck: %+v %v", c, err)
+	}
+	if string(checker.seen) != "handout:g-id:1//rt:shop-prod" || r.renewer.calls != 0 {
+		t.Fatalf("checked %q, renewed %d times", checker.seen, r.renewer.calls)
+	}
+}
+
+// The organization rotated its app's secret in the cloud but not in
+// Loomplane. The app shows why, the connection asks for a sign-in, and
+// saving the app again clears it.
+func TestAppRejectedIsRecordedOnTheApp(t *testing.T) {
+	r := newRefreshRig(t)
+	r.s.ConfigApps = nil
+	if _, err := r.s.SetSignInApp(t.Context(), starter, DigitalOcean, AppInput{ClientID: "org-id", ClientSecret: "old-secret"}); err != nil {
+		t.Fatal(err)
+	}
+	r.signedIn(t, "conn_do", "at-1", r.clock.Add(time.Hour))
+	r.renewer.errs["rt-at-1"] = fmt.Errorf("%w: digitalocean answered 401: invalid_client", oauth.ErrAppRejected)
+	const why = "digitalocean refused the sign-in app; check its client ID and secret"
+
+	if _, _, err := r.s.Credential(t.Context(), "org", "conn_do"); !errors.Is(err, ErrNotReady) || !strings.Contains(err.Error(), why) {
+		t.Fatalf("credential: %v", err)
+	}
+	row := r.store.rows["conn_do"]
+	if row.Status != StatusSignInNeeded || row.Message != why || row.Generation != 3 || len(r.lapsed) != 1 {
+		t.Fatalf("connection %+v, lapsed %d", row, len(r.lapsed))
+	}
+	apps, err := r.s.SignInApps(t.Context(), starter)
+	if err != nil || len(apps) != 1 || apps[0].Problem != why {
+		t.Fatalf("apps %+v: %v", apps, err)
+	}
+	if shown, _ := json.Marshal(apps); strings.Contains(string(shown), "old-secret") {
+		t.Fatalf("the secret was shown: %s", shown)
+	}
+
+	if _, err := r.s.SetSignInApp(t.Context(), starter, DigitalOcean, AppInput{ClientID: "org-id", ClientSecret: "new-secret"}); err != nil {
+		t.Fatal(err)
+	}
+	if apps, _ = r.s.SignInApps(t.Context(), starter); apps[0].Problem != "" {
+		t.Fatalf("saving the app kept its problem: %+v", apps[0])
+	}
+
+	// An exchange the cloud refuses for the app is recorded the same way.
+	s := newSignInRig(t)
+	s.provider.errs = map[string]error{"code-bad-app": oauth.ErrAppRejected}
+	state := s.start(t, starter, SignInInput{Cloud: DigitalOcean, Name: "Acme"})
+	if _, err := s.s.CompleteSignIn(t.Context(), starter, CompleteInput{State: state, Code: "code-bad-app"}); !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), why) {
+		t.Fatalf("complete: %v", err)
+	}
+	if s.apps.problems["org/"+DigitalOcean] != why || len(s.store.rows) != 0 {
+		t.Fatalf("problems %v, rows %v", s.apps.problems, s.store.rows)
 	}
 }

@@ -123,7 +123,8 @@ type renewer struct {
 	unbounded int
 }
 
-func (r *renewer) Refresh(ctx context.Context, app oauth.App, refreshToken string) (oauth.Grant, error) {
+func (r *renewer) Refresh(ctx context.Context, app oauth.App, held oauth.Grant) (oauth.Grant, error) {
+	refreshToken := held.RefreshToken
 	if r.started != nil {
 		r.started <- struct{}{}
 	}
