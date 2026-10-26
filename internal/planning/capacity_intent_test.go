@@ -3,6 +3,7 @@ package planning
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -162,5 +163,65 @@ func TestStoredCPUIntentDigestUnchanged(t *testing.T) {
 	fresh.Demand.IntentHash = ""
 	if hash, hashErr := Digest(fresh); hashErr != nil || hash != saved {
 		t.Fatalf("fresh CPU intent digest moved: %s, want %s (%v)", hash, saved, hashErr)
+	}
+}
+
+func TestCapacityIntentCarriesGPUs(t *testing.T) {
+	p, a, target, req, policy := intentFixture()
+	req.GPUKind, req.GPUs = "nvidia-l4", 1
+	policy.Pools[0].AcceleratorKind = "nvidia-l4"
+	got, err := newCapacityIntent(p, a, target, req, policy, "app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := got.Demand.Resources; r.GPUKind != "nvidia-l4" || r.GPUs != 1 || r.CPUMillis != 1000 {
+		t.Fatalf("GPU demand: %+v", r)
+	}
+
+	policy.Pools[0].AcceleratorKind = "nvidia-h100-80gb"
+	_, err = newCapacityIntent(p, a, target, req, policy, "app")
+	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "this pool's servers have nvidia-h100-80gb GPUs; the service asks for nvidia-l4") {
+		t.Fatalf("GPU kind mismatch: %v", err)
+	}
+}
+
+// A GPU pool grows only for GPU work, and a CPU pool never for GPU work.
+func TestCapacityIntentKeepsGPUAndCPUPoolsApart(t *testing.T) {
+	p, a, target, req, policy := intentFixture()
+	policy.Pools[0].AcceleratorKind = "nvidia-l4"
+	if _, err := newCapacityIntent(p, a, target, req, policy, "app"); !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "GPU pool") {
+		t.Fatalf("CPU work in a GPU pool: %v", err)
+	}
+	policy.Pools[0].AcceleratorKind = ""
+	req.GPUKind, req.GPUs = "nvidia-l4", 1
+	if _, err := newCapacityIntent(p, a, target, req, policy, "app"); !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "CPU pool") {
+		t.Fatalf("GPU work in a CPU pool: %v", err)
+	}
+}
+
+// Admission takes only a candidate with the GPUs the approved demand asks for.
+func TestCapacityAdmissionComparesGPUs(t *testing.T) {
+	p, a, target, req, policy := intentFixture()
+	req.GPUKind, req.GPUs = "nvidia-l4", 1
+	policy.Pools[0].AcceleratorKind = "nvidia-l4"
+	intent, err := newCapacityIntent(p, a, target, req, policy, "app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	action := Action{Name: "web", Service: &ServiceConfig{CapacityIntent: intent}}
+	matching := cloudinfra.Placement{PoolID: "pool", ServerID: "host", ConnectionID: "runtime", CPUMillis: 1000, MemoryBytes: 512 << 20, GPUKind: "nvidia-l4", GPUs: 1}
+	for name, candidate := range map[string]cloudinfra.Placement{
+		"no GPUs":     {PoolID: "pool", ServerID: "host", ConnectionID: "runtime", CPUMillis: 1000, MemoryBytes: 512 << 20},
+		"other kind":  {PoolID: "pool", ServerID: "host", ConnectionID: "runtime", CPUMillis: 1000, MemoryBytes: 512 << 20, GPUKind: "nvidia-h100-80gb", GPUs: 1},
+		"other count": {PoolID: "pool", ServerID: "host", ConnectionID: "runtime", CPUMillis: 1000, MemoryBytes: 512 << 20, GPUKind: "nvidia-l4", GPUs: 2},
+	} {
+		// The store is never reached: a mismatch is refused before any query.
+		var admission *cloudinfra.CapacityAdmissionError
+		if err = (&PgStore{}).admitCapacityPlacement(t.Context(), p, action, candidate); !errors.As(err, &admission) || admission.Block.Reason != "review_required" {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+	if !capacityCandidateFits(intent.Demand, matching) {
+		t.Fatal("matching GPU candidate refused")
 	}
 }

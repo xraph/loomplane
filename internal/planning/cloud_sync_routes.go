@@ -79,6 +79,7 @@ func (s *Service) syncPoolPlacements(ctx context.Context, plan *Plan, bindings [
 			return nil, err
 		}
 		req := cloudinfra.PlacementRequest{PlanID: plan.ID, OrgID: plan.OrgID, ProjectID: plan.ProjectID, EnvironmentID: plan.EnvironmentID, CloudID: assignment.CloudID, TargetID: target.ID, TargetRevision: target.Revision, PoolID: target.PoolID, Service: b.Name, CPUMillis: cpu, MemoryBytes: mem, Replicas: 1, Planned: planned, LocalData: old.Catalog != nil, Architecture: old.TargetSettings["architecture"]}
+		req.GPUKind, req.GPUs = ServerGPUs(old.Size)
 		if old.CloudPlacement.PoolID == target.PoolID {
 			req.StickyServerID = old.CloudPlacement.ServerID
 			req.Allocation = old.CloudPlacement.Allocation
@@ -108,7 +109,7 @@ func (s *Service) syncPoolPlacements(ctx context.Context, plan *Plan, bindings [
 			return nil, errors.New("selected pool connection is unavailable")
 		}
 		connection := options[ci]
-		result[b.Name] = CloudPlacement{Allocation: placed.Allocation, CloudID: assignment.CloudID, CloudRevision: assignment.CloudRevision, AssignmentRevision: assignment.Revision, GrantRevision: assignment.GrantRevision, TargetID: target.ID, TargetRevision: target.Revision, TargetName: target.Name, Provider: "server", ConnectionID: placed.ConnectionID, AccountIdentity: connections.AccountIdentity(connection.Cloud, connection.Account, connection.Details), RegionSource: old.CloudPlacement.RegionSource, PoolID: placed.PoolID, PoolRevision: placed.PoolRevision, ServerID: placed.ServerID, ServerRevision: placed.ServerRevision, ConnectionGeneration: placed.ConnectionGeneration, CPUMillis: placed.CPUMillis, MemoryBytes: placed.MemoryBytes}
+		result[b.Name] = CloudPlacement{Allocation: placed.Allocation, CloudID: assignment.CloudID, CloudRevision: assignment.CloudRevision, AssignmentRevision: assignment.Revision, GrantRevision: assignment.GrantRevision, TargetID: target.ID, TargetRevision: target.Revision, TargetName: target.Name, Provider: "server", ConnectionID: placed.ConnectionID, AccountIdentity: connections.AccountIdentity(connection.Cloud, connection.Account, connection.Details), RegionSource: old.CloudPlacement.RegionSource, PoolID: placed.PoolID, PoolRevision: placed.PoolRevision, ServerID: placed.ServerID, ServerRevision: placed.ServerRevision, ConnectionGeneration: placed.ConnectionGeneration, CPUMillis: placed.CPUMillis, MemoryBytes: placed.MemoryBytes, GPUKind: placed.GPUKind, GPUs: placed.GPUs}
 		planned = append(planned, cloudinfra.PlannedPlacement{OrgID: plan.OrgID, ProjectID: plan.ProjectID, EnvironmentID: plan.EnvironmentID, Service: b.Name, Placement: *placed})
 	}
 	return result, nil

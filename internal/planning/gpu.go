@@ -240,10 +240,12 @@ func gpuText(g *provider.GPUPlacement) string {
 // serviceGPU settles a service's GPUs from its size: on a server or a
 // cluster it reaches directly, the reviewed placement; anywhere else, a
 // problem. A service on a Cloud pool, or waiting for pool capacity, gets
-// its GPUs from the pool's reservation, which planning doesn't settle.
+// its GPUs from the pool's reservation, so planning doesn't fit them here.
+// It gets the kind and count alone, for the runtime to assign devices, and
+// never a GPU placement it held on a server or cluster before.
 func (p *planner) serviceGPU(name, base string, prov *provider.Provider, set manifest.Settings, cfg *ServiceConfig, c *ConnectionOption) {
 	if set.Size == nil || set.Size.GPU == nil {
-		if OwnedCloud(prov.Cloud) && !p.pooled(name, cfg) {
+		if OwnedCloud(prov.Cloud) {
 			cfg.GPU = nil
 		}
 		return
@@ -254,6 +256,7 @@ func (p *planner) serviceGPU(name, base string, prov *provider.Provider, set man
 		return
 	}
 	if p.pooled(name, cfg) {
+		cfg.GPU = &provider.GPUPlacement{GPURequest: provider.GPURequest{Kind: set.Size.GPU.Kind, Count: set.Size.GPU.Count}}
 		return
 	}
 	cfg.GPU = p.gpuPlacement(ServiceSubject, name, path, c, provider.GPURequest{Kind: set.Size.GPU.Kind, Count: set.Size.GPU.Count}, 0)

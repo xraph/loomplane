@@ -52,16 +52,12 @@ func gpuRequest(f *poolFixture, name string) cloudinfra.PlacementRequest {
 	return r
 }
 
-// gpuPlan writes a plan for the GPU target. The planner doesn't carry GPU
-// fields yet, so the pin gets them, and the target, patched in as JSON.
-func gpuPlan(t *testing.T, f *poolFixture, id string, r cloudinfra.PlacementRequest, p *cloudinfra.Placement, gpus bool) *planning.CloudPlacement {
+// gpuPlan writes a plan for the GPU target. The pin carries the placement's
+// GPUs; only the target, which the shared fixture fixes, is patched in.
+func gpuPlan(t *testing.T, f *poolFixture, id string, r cloudinfra.PlacementRequest, p *cloudinfra.Placement) *planning.CloudPlacement {
 	t.Helper()
 	pin := f.plan(t, id, r, p)
-	patch := map[string]any{"target_id": "gpu-target", "target_name": "gpu"}
-	if gpus {
-		patch["gpu_kind"], patch["gpus"] = p.GPUKind, p.GPUs
-	}
-	raw, err := json.Marshal(patch)
+	raw, err := json.Marshal(map[string]any{"target_id": "gpu-target", "target_name": "gpu"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +106,7 @@ func TestGPUPoolReservations(t *testing.T) {
 		if err != nil || p.ServerID != "server-gpu" || p.GPUKind != "nvidia-l4" || p.GPUs != 1 {
 			t.Fatalf("GPU placement %s: %+v %v", tc.id, p, err)
 		}
-		pin := gpuPlan(t, f, tc.id, r, p, true)
+		pin := gpuPlan(t, f, tc.id, r, p)
 		f.accept(t, tc.id)
 		if err = f.store.ValidatePlacement(ctx, "org", "proj", "env", tc.id, tc.service, *p); err != nil {
 			t.Fatalf("validate %s: %v", tc.id, err)
@@ -149,7 +145,7 @@ func TestGPUPoolReservations(t *testing.T) {
 	}
 
 	// 2. A third L4 on the same server is refused by the database.
-	gpuPlan(t, f, "g3", gpuRequest(f, "llm-c"), first, true)
+	gpuPlan(t, f, "g3", gpuRequest(f, "llm-c"), first)
 	decideError(t, f, "g3", "insufficient GPUs")
 	closePlan(t, f, "g3")
 
@@ -158,7 +154,7 @@ func TestGPUPoolReservations(t *testing.T) {
 	cpu.GPUKind, cpu.GPUs = "", 0
 	cpuPlacement := *first
 	cpuPlacement.GPUKind, cpuPlacement.GPUs = "", 0
-	gpuPlan(t, f, "c1", cpu, &cpuPlacement, false)
+	gpuPlan(t, f, "c1", cpu, &cpuPlacement)
 	decideError(t, f, "c1", "a GPU pool takes only GPU workloads")
 	closePlan(t, f, "c1")
 
@@ -185,7 +181,7 @@ func TestGPUPoolReservations(t *testing.T) {
 	if _, err = f.store.PreviewPlacement(ctx, gpuRequest(f, "llm-d")); !errors.Is(err, cloudinfra.ErrConflict) {
 		t.Fatalf("preview with the toolkit missing: %v", err)
 	}
-	gpuPlan(t, f, "g4", gpuRequest(f, "llm-d"), first, true)
+	gpuPlan(t, f, "g4", gpuRequest(f, "llm-d"), first)
 	decideError(t, f, "g4", "GPU runtime")
 	setGPURuntime(t, f, provider.GPUStatusReady)
 	f.accept(t, "g4")
@@ -412,7 +408,7 @@ func TestGPUCapacityMigrationRoundTrip(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	gpuPlan(t, f, "gpu-plan", gr, gp, true)
+	gpuPlan(t, f, "gpu-plan", gr, gp)
 	f.accept(t, "gpu-plan")
 	if err = m.Down(ctx, pgmigrate.New(f.db)); err == nil || !strings.Contains(err.Error(), "GPU reservations") {
 		t.Fatalf("downgrade with GPU reservations: %v", err)

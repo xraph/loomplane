@@ -80,8 +80,12 @@ func (f *poolFixture) request(env, name string) cloudinfra.PlacementRequest {
 }
 func (f *poolFixture) plan(t *testing.T, id string, r cloudinfra.PlacementRequest, p *cloudinfra.Placement) *planning.CloudPlacement {
 	t.Helper()
-	pin := &planning.CloudPlacement{Allocation: p.Allocation, CloudID: "cloud", CloudRevision: 1, GrantRevision: 1, AssignmentRevision: 1, TargetID: "pool-target", TargetRevision: 1, TargetName: "shared", Provider: "server", ConnectionID: p.ConnectionID, AccountIdentity: connections.AccountIdentity("server", p.ConnectionID, map[string]string{"docker_id": p.ConnectionID, "architecture": "amd64"}), PoolID: p.PoolID, PoolRevision: p.PoolRevision, ServerID: p.ServerID, ServerRevision: p.ServerRevision, ConnectionGeneration: p.ConnectionGeneration, CPUMillis: p.CPUMillis, MemoryBytes: p.MemoryBytes}
-	result := planning.Result{Executable: true, Connections: map[string]string{}, Actions: []planning.Action{{ID: "service:" + r.Service, Subject: planning.ServiceSubject, Name: r.Service, Op: planning.Create, Provider: "server", ConnectionID: p.ConnectionID, Service: &planning.ServiceConfig{Provider: "server", Target: p.ConnectionID, TargetSettings: map[string]string{"docker_id": p.ConnectionID, "architecture": "amd64"}, Size: &manifest.Size{CPU: float64(r.CPUMillis) / 1000, Memory: int(r.MemoryBytes >> 20)}, CloudPlacement: pin}}}}
+	pin := &planning.CloudPlacement{Allocation: p.Allocation, CloudID: "cloud", CloudRevision: 1, GrantRevision: 1, AssignmentRevision: 1, TargetID: "pool-target", TargetRevision: 1, TargetName: "shared", Provider: "server", ConnectionID: p.ConnectionID, AccountIdentity: connections.AccountIdentity("server", p.ConnectionID, map[string]string{"docker_id": p.ConnectionID, "architecture": "amd64"}), PoolID: p.PoolID, PoolRevision: p.PoolRevision, ServerID: p.ServerID, ServerRevision: p.ServerRevision, ConnectionGeneration: p.ConnectionGeneration, CPUMillis: p.CPUMillis, MemoryBytes: p.MemoryBytes, GPUKind: p.GPUKind, GPUs: p.GPUs}
+	size := &manifest.Size{CPU: float64(r.CPUMillis) / 1000, Memory: int(r.MemoryBytes >> 20)}
+	if r.GPUs > 0 {
+		size.GPU = &manifest.GPU{Kind: r.GPUKind, Count: int(r.GPUs)}
+	}
+	result := planning.Result{Executable: true, Connections: map[string]string{}, Actions: []planning.Action{{ID: "service:" + r.Service, Subject: planning.ServiceSubject, Name: r.Service, Op: planning.Create, Provider: "server", ConnectionID: p.ConnectionID, Service: &planning.ServiceConfig{Provider: "server", Target: p.ConnectionID, TargetSettings: map[string]string{"docker_id": p.ConnectionID, "architecture": "amd64"}, Size: size, CloudPlacement: pin}}}}
 	raw, err := json.Marshal(result)
 	if err != nil {
 		t.Fatal(err)
