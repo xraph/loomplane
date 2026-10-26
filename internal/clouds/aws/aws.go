@@ -23,8 +23,8 @@ import (
 
 // Actions are what an access key needs for Loomplane to build a service
 // on CodeBuild into ECR, run it on ECS with Fargate behind a load
-// balancer, split its traffic for a canary, keep its secrets in Secrets
-// Manager, and provision RDS.
+// balancer, keep its secrets in Secrets Manager, and provision RDS. A
+// connection whose key lacks any of them is incomplete.
 var Actions = []string{
 	"codebuild:BatchGetBuilds", "codebuild:CreateProject", "codebuild:StartBuild", "codebuild:UpdateProject",
 	"ec2:AuthorizeSecurityGroupIngress", "ec2:CreateSecurityGroup", "ec2:DescribeSecurityGroups",
@@ -33,10 +33,9 @@ var Actions = []string{
 	"ecs:CreateCluster", "ecs:CreateService", "ecs:DeleteService", "ecs:DescribeClusters", "ecs:DescribeServices",
 	"ecs:RegisterTaskDefinition", "ecs:UpdateService",
 	"elasticloadbalancing:CreateListener", "elasticloadbalancing:CreateLoadBalancer",
-	"elasticloadbalancing:CreateRule", "elasticloadbalancing:CreateTargetGroup", "elasticloadbalancing:DeleteTargetGroup",
+	"elasticloadbalancing:CreateRule", "elasticloadbalancing:CreateTargetGroup",
 	"elasticloadbalancing:DescribeListeners", "elasticloadbalancing:DescribeLoadBalancers",
 	"elasticloadbalancing:DescribeRules", "elasticloadbalancing:DescribeTargetGroups",
-	"elasticloadbalancing:DescribeTargetHealth", "elasticloadbalancing:ModifyListener",
 	"iam:AttachRolePolicy", "iam:CreateRole", "iam:GetRole", "iam:PassRole", "iam:PutRolePolicy",
 	"logs:CreateLogGroup",
 	"rds:CreateDBInstance", "rds:CreateDBSubnetGroup", "rds:DeleteDBInstance", "rds:DescribeDBInstances",
@@ -47,6 +46,16 @@ var Actions = []string{
 	"secretsmanager:CreateSecret", "secretsmanager:PutSecretValue",
 	"servicediscovery:CreateHttpNamespace", "servicediscovery:CreateService", "servicediscovery:GetNamespace",
 	"servicediscovery:GetOperation", "servicediscovery:ListNamespaces",
+}
+
+// CanaryActions are what a key needs on top of Actions to ramp a canary
+// on ECS: split a listener between two target groups, wait for the
+// candidate's targets, and remove its target group. A canary is opt in,
+// so a key without them is still complete. A canary release refuses to
+// start instead.
+var CanaryActions = []string{
+	"elasticloadbalancing:DeleteTargetGroup", "elasticloadbalancing:DescribeTargetHealth",
+	"elasticloadbalancing:ModifyListener",
 }
 
 // Errors.
@@ -173,11 +182,16 @@ func (c *Client) Identify(ctx context.Context, key *Key, region string) (*Identi
 // principal is its role: the simulator doesn't take the assumed role's
 // session ARN.
 func (c *Client) Missing(ctx context.Context, key *Key, region, principal string) (missing []string, checked bool, err error) {
+	return c.MissingOf(ctx, key, region, principal, Actions)
+}
+
+// MissingOf is Missing for any actions.
+func (c *Client) MissingOf(ctx context.Context, key *Key, region, principal string, actions []string) (missing []string, checked bool, err error) {
 	if key.Keyless() {
 		principal = key.RoleARN
 	}
 	out, err := iam.NewFromConfig(c.Config(key, region)).SimulatePrincipalPolicy(ctx, &iam.SimulatePrincipalPolicyInput{
-		PolicySourceArn: sdk.String(principal), ActionNames: Actions,
+		PolicySourceArn: sdk.String(principal), ActionNames: actions,
 	})
 	if err != nil {
 		if refused(err) {
@@ -192,6 +206,20 @@ func (c *Client) Missing(ctx context.Context, key *Key, region, principal string
 	}
 	slices.Sort(missing)
 	return missing, true, nil
+}
+
+// PrincipalARN is what the policy simulator takes for an identity STS
+// names: an assumed role's session ARN names the role instead.
+func PrincipalARN(arn string) string {
+	if !strings.Contains(arn, ":assumed-role/") {
+		return arn
+	}
+	parts := strings.Split(arn, ":")
+	if len(parts) < 6 {
+		return arn
+	}
+	role := strings.Split(strings.TrimPrefix(parts[5], "assumed-role/"), "/")[0]
+	return "arn:aws:iam::" + parts[4] + ":role/" + role
 }
 
 // refused reports whether AWS turned the request down for its key or its

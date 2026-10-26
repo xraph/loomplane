@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/xraph/loomplane/internal/clouds/aws"
@@ -575,27 +576,26 @@ func (a AWSChecker) Check(ctx context.Context, credential []byte, settings map[s
 	}
 	c.Account = who.Account
 	c.Details["principal"] = who.ARN
-	missing, checked, err := a.Client.Missing(ctx, key, c.Details["region"], principalARN(who.ARN))
+	asked := append(slices.Clone(aws.Actions), aws.CanaryActions...)
+	missing, checked, err := a.Client.MissingOf(ctx, key, c.Details["region"], aws.PrincipalARN(who.ARN), asked)
 	if err != nil {
 		return Check{}, err
 	}
 	if !checked {
 		c.Details["permissions"] = "unchecked"
 	}
-	c.Missing = missing
+	// A key without what only a canary needs is still complete: a canary
+	// release on ECS refuses to start instead.
+	var canary []string
+	for _, m := range missing {
+		if slices.Contains(aws.CanaryActions, m) {
+			canary = append(canary, m)
+		} else {
+			c.Missing = append(c.Missing, m)
+		}
+	}
+	if len(canary) > 0 {
+		c.Details[DetailCanaryMissing] = strings.Join(canary, ",")
+	}
 	return c, nil
-}
-
-// principalARN is what the policy simulator takes for an identity: an
-// assumed role's session ARN names the role instead.
-func principalARN(arn string) string {
-	if !strings.Contains(arn, ":assumed-role/") {
-		return arn
-	}
-	parts := strings.Split(arn, ":")
-	if len(parts) < 6 {
-		return arn
-	}
-	role := strings.Split(strings.TrimPrefix(parts[5], "assumed-role/"), "/")[0]
-	return "arn:aws:iam::" + parts[4] + ":role/" + role
 }

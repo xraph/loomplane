@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/xraph/loomplane/internal/cloudinfra"
+	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/providers"
 	"github.com/xraph/loomplane/internal/releasehealth"
 	"github.com/xraph/loomplane/pkg/provider"
@@ -226,5 +227,43 @@ func TestPlanThresholdsDefault(t *testing.T) {
 	var none *Release
 	if none.Hold() != 0 || none.Ramps("service:api") {
 		t.Fatal("a nil release holds or ramps")
+	}
+}
+
+// A canary on ECS whose connection's key can't split a listener is
+// refused at plan time, and says how to release instead.
+func TestCanaryOnECSNeedsTheCanaryPermissions(t *testing.T) {
+	in := releaseInput(t, releaseYAML(canaryRelease))
+	in.Connections = []ConnectionOption{{ID: "conn_1", Name: "Prod", Cloud: "aws", Ready: true, Details: map[string]string{
+		connections.DetailCanaryMissing: "elasticloadbalancing:DescribeTargetHealth,elasticloadbalancing:ModifyListener",
+	}}}
+	web := serviceAction("web", "ecs-fargate", Update, ServiceConfig{Public: true, Port: 8080})
+	r := &Result{Actions: []Action{web}, Connections: map[string]string{"aws": "conn_1"}, Executable: true}
+	planRelease(in, r)
+	if r.Executable || r.Release.Ramps(web.ID) || len(r.Problems) != 1 {
+		t.Fatalf("executable %v, release %+v, problems %+v", r.Executable, r.Release, r.Problems)
+	}
+	p := r.Problems[0]
+	for _, want := range []string{"Prod", "elasticloadbalancing:DescribeTargetHealth, elasticloadbalancing:ModifyListener", "direct or blue_green"} {
+		if p.Code != codeCanaryPermissions || p.Name != "web" || !strings.Contains(p.Message, want) {
+			t.Fatalf("problem %+v doesn't say %q", p, want)
+		}
+	}
+
+	// With the permissions, or with a direct release, nothing is refused.
+	in.Connections[0].Details = map[string]string{}
+	r = &Result{Actions: []Action{web}, Connections: map[string]string{"aws": "conn_1"}, Executable: true}
+	planRelease(in, r)
+	if !r.Executable || !r.Release.Ramps(web.ID) || len(r.Problems) != 0 {
+		t.Fatalf("executable %v, release %+v, problems %+v", r.Executable, r.Release, r.Problems)
+	}
+	in = releaseInput(t, releaseYAML("      strategy: direct\n"))
+	in.Connections = []ConnectionOption{{ID: "conn_1", Name: "Prod", Cloud: "aws", Ready: true, Details: map[string]string{
+		connections.DetailCanaryMissing: "elasticloadbalancing:ModifyListener",
+	}}}
+	r = &Result{Actions: []Action{web}, Connections: map[string]string{"aws": "conn_1"}, Executable: true}
+	planRelease(in, r)
+	if !r.Executable || len(r.Problems) != 0 {
+		t.Fatalf("a direct release: executable %v, problems %+v", r.Executable, r.Problems)
 	}
 }

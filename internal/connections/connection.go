@@ -83,6 +83,10 @@ var (
 	ErrNoApp = errors.New("this cloud's sign-in isn't set up")
 )
 
+// DetailCanaryMissing is the detail listing, comma separated, the
+// actions an AWS key lacks that only a canary release on ECS needs.
+const DetailCanaryMissing = "canary_missing"
+
 // Connection is one cloud account an organization deploys to.
 type Connection struct {
 	// Generation changes with credentials or verified placement configuration, not health checks.
@@ -101,6 +105,8 @@ type Connection struct {
 	AccountIdentity string `json:"account_identity,omitempty"`
 	// Details are facts about the credential that are safe to show, such
 	// as a service account's email. Never the credential.
+	// DetailCanaryMissing, when set, lists what the key lacks to ramp a
+	// canary, which doesn't make the connection incomplete.
 	Details map[string]string `json:"details"`
 	Status  string            `json:"status"`
 	// Missing lists the permissions an incomplete connection lacks.
