@@ -628,6 +628,15 @@ func ownedSpec(job *Job, image string, state ownedState) (sp cpprovider.ServiceS
 		}
 	}
 	labels[owned.LabelManageIngress] = strconv.FormatBool(cfg.Public)
+	if cfg.Farp != nil && job.Connection.Cloud == connections.Kubernetes {
+		// Octopus finds a Kubernetes service by the Service's labels and
+		// annotations. A Docker service registers with the gateway instead.
+		raw, _ := json.Marshal(struct { //nolint:errcheck // strings and a string map always encode
+			Gateway  string            `json:"gateway"`
+			Metadata map[string]string `json:"metadata"`
+		}{cfg.Farp.Gateway, cfg.Farp.Metadata})
+		labels[owned.LabelFarp] = string(raw)
+	}
 	if job.Binding != nil {
 		var old planning.ServiceConfig
 		if json.Unmarshal(job.Binding.Config, &old) == nil {
