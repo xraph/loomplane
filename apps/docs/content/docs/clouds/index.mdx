@@ -1,0 +1,66 @@
+---
+title: Clouds overview
+description: Every deployment target Loomplane ships with, what it runs and provisions, and how connections and Clouds fit together.
+---
+
+A target is somewhere Loomplane can run a service or provision a resource. You connect an account for each cloud under **Integrations**, name targets in your manifest, and Loomplane builds and deploys with your credentials in your accounts.
+
+## Targets
+
+Use the provider name in the left column in `provider:` fields in your manifest.
+
+| Provider | Cloud | Runs | Provisions |
+|---|---|---|---|
+| `vercel` | Vercel | Web apps, static sites | |
+| `cloud-run` | Google Cloud | HTTP services, web apps | |
+| `cloud-sql` | Google Cloud | | Postgres 17, 16, 15 and MySQL 8.4, 8.0 |
+| `memorystore` | Google Cloud | | Redis |
+| `cloud-storage` | Google Cloud | | Object storage |
+| `ecs-fargate` | AWS | HTTP services, web apps, workers | |
+| `rds` | AWS | | Postgres 17, 16, 15 and MySQL 8.4, 8.0 |
+| `elasticache` | AWS | | Redis |
+| `s3` | AWS | | Object storage |
+| `cross-cloud-vpn` | Google Cloud and AWS | | [Links](/docs/concepts/gateways-and-networking#links) between them |
+| `render` | Render | HTTP services, web apps, workers, static sites | Postgres 17, 16, 15 and Key Value (Redis) |
+| `digitalocean` | DigitalOcean | HTTP services, web apps, workers, static sites | Managed PostgreSQL 17, 16, 15, MySQL 8 and Valkey |
+| `azure-container-apps` | Azure | HTTP services, web apps, workers, static sites | |
+| `azure-database` | Azure | | Postgres 17, 16, 15 and MySQL 8.4, 8.0.21 |
+| `azure-managed-redis` | Azure | | Redis |
+| `server` | Your SSH/Docker server | HTTP services, web apps, workers, static sites | Postgres, MySQL, MariaDB, Redis and Valkey containers |
+| `kubernetes` | Your cluster | HTTP services, web apps, workers, static sites | Postgres on a StatefulSet |
+
+Where a build runs depends on the target: Vercel builds on Vercel, Cloud Run on Cloud Build, ECS on CodeBuild, Render and DigitalOcean on their own platforms, Azure on ACR Tasks, and servers and clusters on the SSH builder you choose.
+
+<Callout type="warn">
+  Managed cloud paths (Cloud SQL, RDS and the rest) are checked against controlled provider endpoints. Live cloud creation and recovery are not yet qualified, and the pages that depend on them say so. Run one against a disposable project in your own account before you rely on it.
+</Callout>
+
+## Connections
+
+A connection holds the credential for one account. When you add one, Loomplane checks it with the cloud before it keeps it. A credential the cloud refuses is never stored. One that works but lacks permissions is marked incomplete, with every missing permission listed, until you fix it and check again.
+
+Credentials live in Vault, encrypted with a key derived from your secret key. A connection stays usable for as long as a plan, build, binding or deployment references it, so don't delete one that's still in use. You can rotate a credential and keep the same destination.
+
+| Cloud | You provide |
+|---|---|
+| [Google Cloud](/docs/clouds/google-cloud) | A service account key (JSON) |
+| [AWS](/docs/clouds/aws) | An access key ID and secret, plus a region |
+| [Vercel](/docs/clouds/vercel) | An access token, and a team ID if you deploy to a team |
+| [Render](/docs/clouds/render) | An API key, and a workspace ID if it reaches several |
+| [DigitalOcean](/docs/clouds/digitalocean) | A personal access token |
+| [Azure](/docs/clouds/azure) | A service principal's client secret, with tenant, client and subscription IDs |
+| [Your own servers](/docs/clouds/your-own-servers) | An SSH key and host key, or a Kubernetes kubeconfig |
+
+The same credential reads what the account costs and how its services are doing, when the cloud reports it. [Spend, latency and traffic](/docs/clouds/spend-and-traffic) lists what each cloud gives you and the permission it needs.
+
+## Clouds and targets
+
+A Cloud (the organization-level object, with a capital C) groups named targets so your manifest can say `cloud_target: frontend` without carrying an account ID. You can also pick targets by tag. [Cloud targets](/docs/clouds/cloud-targets) covers that, and [Adopting and moving services](/docs/clouds/adopting-and-moving) covers changing accounts later.
+
+## Pausing a target
+
+During an incident on a cloud you can pause its target. Plans that use it are still made and can be approved, but they're for review only and deploy nothing. See [Monitoring](/docs/operations/monitoring#pausing-a-target).
+
+## Adding your own
+
+If your target isn't here, write a [provider plugin](/docs/extending/provider-plugins).

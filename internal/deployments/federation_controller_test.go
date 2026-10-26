@@ -36,7 +36,7 @@ func (f *controllerReceiptFixture) GetController(_ context.Context, org, connect
 	return &r, nil
 }
 
-func TestFederationControllerUsesCommittedBindingAndAttempt(t *testing.T) {
+func federationControllerFixture() (*controllerReceiptFixture, *planning.Binding, *instance.Instance, domain.Destination, federation.KubernetesAttestationProfile) {
 	iid := id.New(id.PrefixInstance)
 	scope := domain.Scope{OrgID: "org", ProjectID: "project", EnvironmentID: "env"}
 	image := "registry.example/api@sha256:" + strings.Repeat("a", 64)
@@ -47,8 +47,13 @@ func TestFederationControllerUsesCommittedBindingAndAttempt(t *testing.T) {
 	d := domain.Destination{ID: "dest", Scope: scope, ConnectionID: "connection", Identity: domain.PhysicalIdentity{Provider: "kubernetes", Account: receipt.ClusterCA, NamespaceUID: receipt.NamespaceUID, ResourceID: receipt.NamespaceUID}}
 	base := federation.KubernetesAttestationProfile{Scope: scope, DestinationID: d.ID, ConnectionID: d.ConnectionID, IdentityRevision: d.Identity.Revision(), PodName: "pod", PodUID: "pod-uid", SPIRECluster: "cluster", SPIRENamespace: "spire", SPIREServiceAccount: "spire-agent"}
 	store := &controllerReceiptFixture{receipt: receipt}
-	profile, err := LoadFederationController(t.Context(), store, &binding, &inst, d, base)
-	if err != nil || profile.DeploymentUID != receipt.DeploymentUID || profile.DeploymentGeneration != 7 || profile.RuntimeRevision != "release" || profile.ServiceAccount != "default" || profile.Container != mainService || profile.BindingID != "binding" {
+	return store, &binding, &inst, d, base
+}
+
+func TestFederationControllerUsesCommittedBindingAndAttempt(t *testing.T) {
+	store, binding, inst, d, base := federationControllerFixture()
+	profile, err := LoadFederationController(t.Context(), store, binding, inst, d, base)
+	if err != nil || profile.DeploymentUID != store.receipt.DeploymentUID || profile.DeploymentGeneration != 7 || profile.RuntimeRevision != "release" || profile.ServiceAccount != "default" || profile.Container != mainService || profile.BindingID != "binding" {
 		t.Fatal("receipt not projected", profile, err)
 	}
 	for name, change := range map[string]func(*planning.Binding, *instance.Instance, *kube.ControllerReceipt, *domain.Destination){
@@ -84,7 +89,7 @@ func TestFederationControllerUsesCommittedBindingAndAttempt(t *testing.T) {
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			b, i, r, dst := binding, inst, receipt, d
+			b, i, r, dst := *binding, *inst, store.receipt, d
 			i.Labels = maps.Clone(inst.Labels)
 			change(&b, &i, &r, &dst)
 			if _, err := LoadFederationController(t.Context(), &controllerReceiptFixture{receipt: r}, &b, &i, dst, base); err == nil {

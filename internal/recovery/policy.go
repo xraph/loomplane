@@ -37,19 +37,47 @@ type PolicyInput struct {
 }
 type PolicyStore interface {
 	PutPolicy(context.Context, *Policy) (*Policy, error)
+	// EnsurePolicy inserts a default without changing an existing operator policy.
+	EnsurePolicy(context.Context, *Policy) (*Policy, bool, error)
 	ListPolicies(context.Context, string, string) ([]Policy, error)
 	DuePolicies(context.Context) ([]Policy, error)
 	AdvancePolicy(context.Context, *Policy, error) error
 }
 
 func (s *Service) SetPolicy(ctx context.Context, p security.Principal, project string, in PolicyInput) (*Policy, error) {
+	draft, err := s.newPolicy(ctx, p, project, in)
+	if err != nil {
+		return nil, err
+	}
+	r, err := s.Policies.PutPolicy(ctx, draft)
+	if err == nil {
+		s.recordPolicy(ctx, p, r)
+	}
+	return r, err
+}
+
+// EnsurePolicy installs a deployment default once. An existing policy keeps
+// its creator, enabled state, interval, next due time and last error.
+func (s *Service) EnsurePolicy(ctx context.Context, p security.Principal, project string, in PolicyInput) (*Policy, error) {
+	draft, err := s.newPolicy(ctx, p, project, in)
+	if err != nil {
+		return nil, err
+	}
+	r, created, err := s.Policies.EnsurePolicy(ctx, draft)
+	if err == nil && created {
+		s.recordPolicy(ctx, p, r)
+	}
+	return r, err
+}
+
+func (s *Service) newPolicy(ctx context.Context, p security.Principal, project string, in PolicyInput) (*Policy, error) {
 	if err := s.Authz.Require(ctx, p, security.BackupManage, project); err != nil {
 		return nil, err
 	}
 	if _, err := s.Projects.GetProject(ctx, p.OrgID, project); err != nil {
 		return nil, err
 	}
-	if in.EveryHours < 1 || in.EveryHours > 168 {
+	if in.EveryHours < 1 || in.EveryHours > 168 || p.OrgID == "" || p.UserID == "" {
 		return nil, ErrInvalid
 	}
 	envs, err := s.Projects.ListEnvironments(ctx, p.OrgID, project)
@@ -91,12 +119,15 @@ func (s *Service) SetPolicy(ctx context.Context, p security.Principal, project s
 	if err != nil {
 		return nil, err
 	}
-	r, err := s.Policies.PutPolicy(ctx, &Policy{ID: key.String(), OrgID: p.OrgID, ProjectID: project, EnvironmentID: environment, Environment: in.Environment, Resource: in.Resource, EveryHours: in.EveryHours, Enabled: in.Enabled, CreatedBy: p.UserID, NextAt: time.Now().UTC().Add(time.Duration(in.EveryHours) * time.Hour)})
-	if err == nil && s.Audit != nil {
-		s.Audit.Record(ctx, projects.AuditEvent{Action: "service.backup.policy", Severity: "info", ProjectID: project, Principal: p, Attributes: map[string]any{"policy_id": r.ID, "enabled": r.Enabled, "every_hours": r.EveryHours}})
-	}
-	return r, err
+	return &Policy{ID: key.String(), OrgID: p.OrgID, ProjectID: project, EnvironmentID: environment, Environment: in.Environment, Resource: in.Resource, EveryHours: in.EveryHours, Enabled: in.Enabled, CreatedBy: p.UserID, NextAt: time.Now().UTC().Add(time.Duration(in.EveryHours) * time.Hour)}, nil
 }
+
+func (s *Service) recordPolicy(ctx context.Context, p security.Principal, r *Policy) {
+	if s.Audit != nil {
+		s.Audit.Record(ctx, projects.AuditEvent{Action: "service.backup.policy", Severity: "info", ProjectID: r.ProjectID, Principal: p, Attributes: map[string]any{"policy_id": r.ID, "enabled": r.Enabled, "every_hours": r.EveryHours}})
+	}
+}
+
 func (s *Service) ListPolicies(ctx context.Context, p security.Principal, project string) ([]Policy, error) {
 	if err := s.Authz.Require(ctx, p, security.BackupRead, project); err != nil {
 		return nil, err

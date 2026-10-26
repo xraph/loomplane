@@ -8,6 +8,8 @@ import (
 // families are the native adapter families and each one's full-backup
 // format. An Engine reuses one of them.
 var families = map[string]string{
+	"rabbitmq": "rabbitmq-node-v1",
+	"nats":     "nats-jetstream-v1",
 	"postgres": "pg-dump-custom-v1",
 	"mysql":    "mysqldump-sql-v1",
 	"mariadb":  "mariadb-dump-sql-v1",

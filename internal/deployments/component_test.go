@@ -1670,3 +1670,24 @@ func TestDeletingACompositionWarnsWhenItsSessionsOutliveIt(t *testing.T) {
 		t.Fatal("a failed revoke kept the composed resource's values")
 	}
 }
+
+func TestComponentVolumeSizeIsOnlyRequestedOnKubernetes(t *testing.T) {
+	f := newComponentFixture(t, recipestest.Registry(t))
+	job := f.componentJob(t, "api", newPostgres)
+	job.Action.Resource.Component.Component.Volume = &recipes.Volume{MountPath: "/data", KubernetesSizeMB: 4096}
+	for _, target := range []struct {
+		provider string
+		size     int
+	}{{"server", 0}, {"kubernetes", 4096}} {
+		t.Run(target.provider, func(t *testing.T) {
+			svc := componentService(job.Action.Resource)
+			svc.Provider = target.provider
+			copyJob := *job
+			copyJob.Action.Resource, copyJob.Action.Service = nil, svc
+			spec, labels := ownedSpec(&copyJob, svc.BuildTarget.Image, ownedState{})
+			if len(spec.Volumes) != 1 || spec.Volumes[0].SizeMB != target.size || labels[owned.LabelStateful] != "true" {
+				t.Fatalf("volume size on %s: %+v", target.provider, spec.Volumes)
+			}
+		})
+	}
+}

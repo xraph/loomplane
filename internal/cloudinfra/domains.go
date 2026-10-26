@@ -2,6 +2,7 @@ package cloudinfra
 
 import (
 	"context"
+	"errors"
 	"net"
 	"slices"
 	"strings"
@@ -305,6 +306,14 @@ func (s *Service) verifyZoneControl(ctx context.Context, zone *Zone) error {
 	}
 	values, err := s.domainResolver().LookupTXT(ctx, zone.ProofName)
 	if err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return err
+		}
+		var dnsErr *net.DNSError
+		if errors.As(err, &dnsErr) && dnsErr.IsNotFound && !dnsErr.IsTimeout && !dnsErr.IsTemporary {
+			// Missing public TXT is an unproven claim, including during propagation.
+			return ErrConflict
+		}
 		return err
 	}
 	if !slices.Contains(values, zone.ProofValue) {

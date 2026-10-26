@@ -1,4 +1,6 @@
 import { ClientProvider } from "@forge-go/client-react"
+import { dehydrate } from "@forge-go/client-core"
+import { StrictMode } from "react"
 import {
   act,
   cleanup,
@@ -14,11 +16,17 @@ import { forgeClient } from "@/client/runtime"
 import { NativeRecovery } from "@/components/native-recovery"
 import { ServiceRecovery } from "@/pages/service-catalog"
 
-const permission = vi.hoisted(() => ({ manage: true }))
+const permission = vi.hoisted(() => ({
+  manage: true,
+  secret: true,
+  read: true,
+}))
 vi.mock("@/lib/organization", () => ({
   useOrganization: () => ({
     can: (name: string) =>
-      name !== "service_restore:manage" || permission.manage,
+      (name !== "service_restore:manage" || permission.manage) &&
+      (name !== "secret:manage" || permission.secret) &&
+      (name !== "service_backup:read" || permission.read),
     session: { userId: "owner", orgId: "org" },
   }),
 }))
@@ -27,6 +35,8 @@ afterEach(() => {
   cleanup()
   vi.useRealTimers()
   permission.manage = true
+  permission.secret = true
+  permission.read = true
   vi.restoreAllMocks()
   vi.unstubAllGlobals()
   forgeClient.clear()
@@ -36,16 +46,21 @@ function fixture({
   denyReview = false,
   noTargets = false,
   removed = false,
+  provider = "cloud-sql",
+  cloudSQLPITR = false,
 } = {}) {
   const reviews: Record<string, unknown>[] = []
   const creates: Record<string, unknown>[] = []
   const deletes: string[] = []
   const reads: string[] = []
+  const credentialSignals: AbortSignal[] = []
   const control = {
     loseCreate: false,
     cleanupFails: true,
     denyHistory: false,
     nextBefore: "",
+    denyCredentials: false,
+    credentialResponse: null as Promise<Response> | null,
   }
   const source = {
     id: "source",
@@ -53,10 +68,10 @@ function fixture({
     project_id: "project",
     environment_id: "prod",
     name: "orders",
-    provider: "cloud-sql",
+    provider,
     connection_id: "source-account",
     physical_id: "source-original",
-    region: "us-central1",
+    region: provider === "rds" ? "us-east-1" : "us-central1",
     state: "ready",
     complete: true,
     captured_at: "2026-10-20T00:00:00Z",
@@ -64,12 +79,15 @@ function fixture({
   const point = {
     id: "point",
     source_id: "source",
-    provider_id: "projects/source-project/backups/daily",
+    provider_id:
+      provider === "rds"
+        ? "arn:aws:rds:us-east-1:123456789012:snapshot:daily"
+        : "projects/source-project/backups/daily",
     name: "daily",
-    kind: "ENHANCED",
-    status: "SUCCESSFUL",
+    kind: provider === "rds" ? "manual" : "ENHANCED",
+    status: provider === "rds" ? "available" : "SUCCESSFUL",
     engine: "postgres",
-    version: "17",
+    version: provider === "rds" ? "17.2" : "17",
     created_at: "2026-10-20T00:00:00Z",
     expires_at: "2099-01-01T00:00:00Z",
     last_seen_at: "2026-10-20T00:00:00Z",
@@ -84,9 +102,17 @@ function fixture({
     org_id: "org",
     project_id: "project",
     runtime: "managed",
-    provider: "cloud-sql",
-    region: "europe-west1",
-    connection_id: "recovery-account",
+    provider,
+    region:
+      provider === "rds"
+        ? "us-east-1"
+        : cloudSQLPITR
+          ? "us-central1"
+          : "europe-west1",
+    connection_id:
+      provider === "rds" || cloudSQLPITR
+        ? "source-account"
+        : "recovery-account",
     revision: 2,
   }
   const baseCopy = {
@@ -101,9 +127,20 @@ function fixture({
     created_at: "2026-10-23T00:00:00Z",
     expires_at: "2099-01-01T00:00:00Z",
     target: {
-      provider: "cloud-sql",
-      region: "europe-west1",
-      native_project: "recovery-project",
+      provider,
+      region:
+        provider === "rds"
+          ? "us-east-1"
+          : cloudSQLPITR
+            ? "us-central1"
+            : "europe-west1",
+      native_project:
+        provider === "rds"
+          ? undefined
+          : cloudSQLPITR
+            ? "source-project"
+            : "recovery-project",
+      native_account: provider === "rds" ? "123456789012" : undefined,
     },
   }
   let copy: Record<string, unknown> | null = null
@@ -121,6 +158,50 @@ function fixture({
       const url = new URL(String(input), "http://localhost")
       const method = init?.method ?? "GET"
       reads.push(`${method} ${url.pathname}${url.search}`)
+      if (
+        url.pathname === "/api/v1/native-recovery-copies/copy/credentials" &&
+        method === "POST"
+      ) {
+        if (init?.signal) credentialSignals.push(init.signal)
+        if (init?.signal?.aborted)
+          throw new DOMException("The operation was aborted", "AbortError")
+        if (control.credentialResponse) return control.credentialResponse
+        return control.denyCredentials
+          ? reply({ message: "Reader access could not be checked" }, 503)
+          : reply({
+              copy_id: "copy",
+              provider,
+              connection_name:
+                provider === "rds"
+                  ? "copy.abcdef.us-east-1.rds.amazonaws.com:5432"
+                  : "recovery:europe-west1:copy",
+              database: "orders",
+              username: "lp_recovery_reader",
+              password: "private-native-reader",
+              expires_at: new Date(Date.now() + 3600000).toISOString(),
+              checked_at: new Date().toISOString(),
+            })
+      }
+      if (url.pathname.endsWith("/pitr-window"))
+        return reply(
+          provider === "rds" || cloudSQLPITR
+            ? {
+                source_id: "source",
+                provider,
+                available: true,
+                point_id: "window",
+                earliest: "2026-10-21T00:00:00Z",
+                latest: "2026-10-22T00:00:00Z",
+                observed_at: "2026-10-23T00:00:00Z",
+              }
+            : {
+                source_id: "source",
+                provider,
+                available: false,
+                unavailable_reason:
+                  "PITR is unavailable for this recovery profile.",
+              }
+        )
       if (url.pathname.endsWith("/native-recovery-sources"))
         return reply({
           sources:
@@ -145,11 +226,11 @@ function fixture({
                   id: "managed-orders",
                   subject: "resource",
                   name: "orders",
-                  provider: "cloud-sql",
+                  provider,
                   environment_id: "prod",
                   config: {
                     kind: "postgres",
-                    provider: "cloud-sql",
+                    provider,
                     managed: { profile: { id: "postgresql-17-cloud-sql" } },
                   },
                 },
@@ -173,6 +254,16 @@ function fixture({
             ? []
             : [
                 target,
+                ...(cloudSQLPITR
+                  ? [
+                      {
+                        ...target,
+                        id: "wrong-region",
+                        display_name: "Wrong region",
+                        region: "europe-west1",
+                      },
+                    ]
+                  : []),
                 {
                   ...target,
                   id: "rds",
@@ -189,19 +280,23 @@ function fixture({
           request_id: body.request_id,
           review_token: `signed-${body.request_id}`,
           source_id: "source",
-          point_id: "point",
+          point_id: body.restore_time ? "window" : "point",
+          restore_time: body.restore_time,
           ttl_hours: body.ttl_hours,
           valid_until: new Date(Date.now() + 600000).toISOString(),
           notice:
             "Charges continue until deletion is confirmed. Cleanup can fail; check copy status.",
           target: {
-            provider: "cloud-sql",
+            provider,
             cloud_id: "cloud",
             target_id: "recovery",
-            region: "europe-west1",
-            native_project: "recovery-project",
-            connection_id: "recovery-account",
-            account_identity: "gcp:recovery-project",
+            region: target.region,
+            native_project: baseCopy.target.native_project,
+            native_account: provider === "rds" ? "123456789012" : undefined,
+            connection_id: target.connection_id,
+            account_identity: cloudSQLPITR
+              ? "gcp:source-project"
+              : "gcp:recovery-project",
             cloud_revision: 1,
             target_revision: 2,
             grant_revision: 3,
@@ -209,8 +304,9 @@ function fixture({
           capacity: {
             profile_id: "cloud-sql-postgres-17",
             profile_revision: "1",
-            compute_class: "db-custom-1-3840",
-            storage_gb: 10,
+            compute_class:
+              provider === "rds" ? "db.t4g.micro" : "db-custom-1-3840",
+            storage_gb: provider === "rds" ? 20 : 10,
             storage_type: "PD_SSD",
             availability: "ZONAL",
           },
@@ -222,7 +318,7 @@ function fixture({
       ) {
         const body = JSON.parse(String(init?.body))
         creates.push(body)
-        copy ??= { ...baseCopy }
+        copy ??= { ...baseCopy, restore_time: reviews.at(-1)?.restore_time }
         if (control.loseCreate)
           return reply({ message: "Admission response unavailable" }, 503)
         return reply(copy, 202)
@@ -262,7 +358,15 @@ function fixture({
       return reply({ message: `Unexpected ${method} ${url.pathname}` }, 404)
     }
   )
-  return { reviews, creates, deletes, reads, control, seedCopy }
+  return {
+    reviews,
+    creates,
+    deletes,
+    reads,
+    control,
+    seedCopy,
+    credentialSignals,
+  }
 }
 
 function show(project = "project", environment = "prod") {
@@ -292,6 +396,211 @@ async function openReview() {
   )
   return dialog
 }
+
+it.each(["secret", "read"] as const)(
+  "reveals native reader credentials only on request and forgets them on close or %s permission loss",
+  async (revoked) => {
+    const f = fixture()
+    f.seedCopy({ status: "succeeded", verified_at: new Date().toISOString() })
+    const view = show()
+    await screen.findByText("SQL verification recorded")
+    expect(f.reads.some((url) => url.endsWith("/credentials"))).toBe(false)
+    await userEvent.click(
+      screen.getByRole("button", { name: "Reader credentials" })
+    )
+    let dialog = await screen.findByRole("dialog", {
+      name: "Recovery copy credentials",
+    })
+    expect(
+      within(dialog).queryByLabelText("Reader password")
+    ).not.toBeInTheDocument()
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Reveal reader credentials" })
+    )
+    expect(await within(dialog).findByLabelText("Reader password")).toHaveValue(
+      "private-native-reader"
+    )
+    expect(
+      JSON.stringify(
+        dehydrate(forgeClient, {
+          principal: forgeClient.owner as string | undefined,
+        })
+      )
+    ).not.toContain("private-native-reader")
+    expect(
+      JSON.stringify(
+        [...forgeClient.store.keys()].map((key) =>
+          forgeClient.store.getRecord(key)
+        )
+      )
+    ).not.toContain("private-native-reader")
+    await userEvent.click(within(dialog).getByRole("button", { name: "Done" }))
+    expect(screen.queryByLabelText("Reader password")).not.toBeInTheDocument()
+    await userEvent.click(
+      screen.getByRole("button", { name: "Reader credentials" })
+    )
+    dialog = await screen.findByRole("dialog", {
+      name: "Recovery copy credentials",
+    })
+    expect(
+      within(dialog).queryByLabelText("Reader password")
+    ).not.toBeInTheDocument()
+    await userEvent.click(
+      within(dialog).getByRole("button", { name: "Reveal reader credentials" })
+    )
+    await within(dialog).findByLabelText("Reader password")
+    permission[revoked] = false
+    view.rerender(
+      <ClientProvider client={forgeClient}>
+        <NativeRecovery project="project" environment="prod" />
+      </ClientProvider>
+    )
+    expect(screen.queryByLabelText("Reader password")).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "Reader credentials" })
+    ).not.toBeInTheDocument()
+  }
+)
+
+it.each(["failed", "unverified", "expired"])(
+  "does not offer credentials for a %s native copy",
+  async (status) => {
+    const f = fixture()
+    f.seedCopy({
+      status: status === "failed" ? "failed" : "succeeded",
+      verified_at:
+        status === "unverified" ? undefined : new Date().toISOString(),
+      expires_at:
+        status === "expired" ? "2020-01-01T00:00:00Z" : "2099-01-01T00:00:00Z",
+    })
+    show()
+    await screen.findByRole("list", { name: "Temporary native copies" })
+    expect(
+      screen.queryByRole("button", { name: "Reader credentials" })
+    ).not.toBeInTheDocument()
+  }
+)
+
+it("keeps a failed credential check retryable without showing a password", async () => {
+  const f = fixture()
+  f.seedCopy({ status: "succeeded", verified_at: new Date().toISOString() })
+  f.control.denyCredentials = true
+  show()
+  await userEvent.click(
+    await screen.findByRole("button", { name: "Reader credentials" })
+  )
+  const dialog = await screen.findByRole("dialog", {
+    name: "Recovery copy credentials",
+  })
+  await userEvent.click(
+    within(dialog).getByRole("button", { name: "Reveal reader credentials" })
+  )
+  expect(
+    await within(dialog).findByText(/Reader access could not be checked/)
+  ).toBeInTheDocument()
+  expect(
+    within(dialog).queryByLabelText("Reader password")
+  ).not.toBeInTheDocument()
+  f.control.denyCredentials = false
+  await userEvent.click(
+    within(dialog).getByRole("button", { name: "Reveal reader credentials" })
+  )
+  expect(await within(dialog).findByLabelText("Reader password")).toHaveValue(
+    "private-native-reader"
+  )
+})
+
+it("reveals and retries credentials in StrictMode and cancels on close", async () => {
+  const f = fixture()
+  f.seedCopy({ status: "succeeded", verified_at: new Date().toISOString() })
+  render(
+    <StrictMode>
+      <ClientProvider client={forgeClient}>
+        <NativeRecovery project="project" environment="prod" />
+      </ClientProvider>
+    </StrictMode>
+  )
+  await userEvent.click(
+    await screen.findByRole("button", { name: "Reader credentials" })
+  )
+  let dialog = await screen.findByRole("dialog", {
+    name: "Recovery copy credentials",
+  })
+  await userEvent.click(
+    within(dialog).getByRole("button", { name: "Reveal reader credentials" })
+  )
+  expect(await within(dialog).findByLabelText("Reader password")).toHaveValue(
+    "private-native-reader"
+  )
+  await userEvent.click(within(dialog).getByRole("button", { name: "Done" }))
+  expect(f.credentialSignals.at(-1)?.aborted).toBe(true)
+  f.control.denyCredentials = true
+  await userEvent.click(
+    screen.getByRole("button", { name: "Reader credentials" })
+  )
+  dialog = await screen.findByRole("dialog", {
+    name: "Recovery copy credentials",
+  })
+  await userEvent.click(
+    within(dialog).getByRole("button", { name: "Reveal reader credentials" })
+  )
+  await within(dialog).findByRole("alert")
+  f.control.denyCredentials = false
+  await userEvent.click(
+    within(dialog).getByRole("button", { name: "Reveal reader credentials" })
+  )
+  expect(await within(dialog).findByLabelText("Reader password")).toHaveValue(
+    "private-native-reader"
+  )
+})
+
+it("discards a pending credential response after backup-read revocation", async () => {
+  const f = fixture()
+  f.seedCopy({ status: "succeeded", verified_at: new Date().toISOString() })
+  let resolve!: (response: Response) => void
+  f.control.credentialResponse = new Promise<Response>((done) => {
+    resolve = done
+  })
+  const view = show()
+  await userEvent.click(
+    await screen.findByRole("button", { name: "Reader credentials" })
+  )
+  const dialog = await screen.findByRole("dialog", {
+    name: "Recovery copy credentials",
+  })
+  await userEvent.click(
+    within(dialog).getByRole("button", { name: "Reveal reader credentials" })
+  )
+  permission.read = false
+  view.rerender(
+    <ClientProvider client={forgeClient}>
+      <NativeRecovery project="project" environment="prod" />
+    </ClientProvider>
+  )
+  expect(
+    screen.queryByRole("dialog", { name: "Recovery copy credentials" })
+  ).not.toBeInTheDocument()
+  await act(async () =>
+    resolve(
+      new Response(
+        JSON.stringify({
+          copy_id: "copy",
+          password: "late-private-reader",
+          expires_at: "2099-01-01T00:00:00Z",
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      )
+    )
+  )
+  expect(screen.queryByLabelText("Reader password")).not.toBeInTheDocument()
+  expect(
+    JSON.stringify(
+      [...forgeClient.store.keys()].map((key) =>
+        forgeClient.store.getRecord(key)
+      )
+    )
+  ).not.toContain("late-private-reader")
+})
 
 it("reviews charges and retries the same uncertain admission before tracking cleanup", async () => {
   const f = fixture()
@@ -649,4 +958,171 @@ it("replaces a preselected resource's review and cursor when the default-environ
   expect(lastPage).toContain("resource=analytics")
   expect(lastPage).not.toContain("before=")
   expect(f.creates).toHaveLength(0)
+})
+
+it("reviews an RDS snapshot into a granted private target on the source account", async () => {
+  const f = fixture({ provider: "rds" })
+  show()
+  const dialog = await openReview()
+  await userEvent.click(
+    within(dialog).getByRole("button", { name: "Review capacity and charges" })
+  )
+  await within(dialog).findByText(/db.t4g.micro/)
+  expect(f.reviews).toHaveLength(1)
+  await userEvent.click(
+    within(dialog).getByRole("checkbox", { name: /acknowledge charges/i })
+  )
+  await userEvent.click(
+    within(dialog).getByRole("button", { name: "Create temporary copy" })
+  )
+  await waitFor(() => expect(f.creates).toHaveLength(1))
+})
+
+it("explains the private RDS TLS route before revealing reader credentials", async () => {
+  const f = fixture({ provider: "rds" })
+  f.seedCopy({ status: "succeeded", verified_at: new Date().toISOString() })
+  show()
+  await userEvent.click(
+    await screen.findByRole("button", { name: "Reader credentials" })
+  )
+  const dialog = await screen.findByRole("dialog", {
+    name: "Recovery copy credentials",
+  })
+  expect(
+    within(dialog).getByText(/reviewed private route.*RDS CA/i)
+  ).toBeInTheDocument()
+  await userEvent.click(
+    within(dialog).getByRole("button", { name: "Reveal reader credentials" })
+  )
+  expect(await within(dialog).findByLabelText("Reader password")).toHaveValue(
+    "private-native-reader"
+  )
+})
+
+it("requires PSC from the recovery network for a Cloud SQL PITR reader", async () => {
+  const f = fixture()
+  f.seedCopy({
+    status: "succeeded",
+    verified_at: new Date().toISOString(),
+    restore_time: "2026-10-22T12:00:03.123456789Z",
+  })
+  show()
+  await userEvent.click(
+    await screen.findByRole("button", { name: "Reader credentials" })
+  )
+  const dialog = await screen.findByRole("dialog", {
+    name: "Recovery copy credentials",
+  })
+  expect(
+    within(dialog).getByText(/--psc.*recovery network/i)
+  ).toBeInTheDocument()
+})
+
+it("keeps the exact reviewed PITR time through uncertain admission and copy history", async () => {
+  const f = fixture({ provider: "rds" })
+  f.control.loseCreate = true
+  show()
+  await userEvent.click(
+    await screen.findByRole("button", { name: "Read PITR window" })
+  )
+  await userEvent.type(
+    await screen.findByLabelText("Restore time in UTC"),
+    "2026-10-21T12:00:03Z"
+  )
+  await userEvent.click(
+    screen.getByRole("button", { name: "Review PITR copy" })
+  )
+  const dialog = await screen.findByRole("dialog", {
+    name: "Review native copy",
+  })
+  await userEvent.click(
+    within(dialog).getByRole("combobox", { name: "Destination Cloud" })
+  )
+  await userEvent.click(await screen.findByRole("option", { name: "Recovery" }))
+  await userEvent.click(
+    within(dialog).getByRole("combobox", { name: "Destination target" })
+  )
+  await userEvent.click(
+    await screen.findByRole("option", { name: /Recovery SQL/ })
+  )
+  await userEvent.click(
+    within(dialog).getByRole("button", { name: "Review capacity and charges" })
+  )
+  expect(
+    await within(dialog).findByText("Reviewed PITR time: 2026-10-21T12:00:03Z")
+  ).toBeVisible()
+  expect(f.reviews[0].restore_time).toBe("2026-10-21T12:00:03Z")
+  await userEvent.click(within(dialog).getByRole("checkbox"))
+  await userEvent.click(
+    within(dialog).getByRole("button", { name: "Create temporary copy" })
+  )
+  const retry = await within(dialog).findByRole("button", {
+    name: "Retry same request",
+  })
+  f.control.loseCreate = false
+  await userEvent.click(retry)
+  await waitFor(() =>
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
+  )
+  expect(f.creates).toHaveLength(2)
+  expect(f.creates[1]).toEqual(f.creates[0])
+  expect(
+    await screen.findByText("PITR time 2026-10-21T12:00:03Z")
+  ).toBeVisible()
+})
+
+it("reviews Cloud SQL PITR on the source connection and region with network isolation", async () => {
+  const f = fixture({ cloudSQLPITR: true })
+  const user = userEvent.setup()
+  show()
+  await user.click(
+    await screen.findByRole("button", { name: "Read PITR window" })
+  )
+  await user.type(
+    await screen.findByLabelText("Restore time in UTC"),
+    "2026-10-21T12:00:03.123456789Z"
+  )
+  await user.click(screen.getByRole("button", { name: "Review PITR copy" }))
+  const dialog = await screen.findByRole("dialog", {
+    name: "Review native copy",
+  })
+  await user.click(
+    within(dialog).getByRole("combobox", { name: "Destination Cloud" })
+  )
+  await user.click(await screen.findByRole("option", { name: "Recovery" }))
+  await user.click(
+    await within(dialog).findByRole("combobox", { name: "Destination target" })
+  )
+  expect(
+    screen.queryByRole("option", { name: /Wrong region/ })
+  ).not.toBeInTheDocument()
+  await user.click(await screen.findByRole("option", { name: /Recovery SQL/ }))
+  expect(
+    within(dialog).getByText(
+      /source project and region.*separate recovery network/i
+    )
+  ).toBeVisible()
+  expect(
+    within(dialog).queryByText(/a separate recovery project/i)
+  ).not.toBeInTheDocument()
+  await user.click(
+    within(dialog).getByRole("button", { name: "Review capacity and charges" })
+  )
+  expect(
+    await within(dialog).findByText(
+      "Reviewed PITR time: 2026-10-21T12:00:03.123456789Z"
+    )
+  ).toBeVisible()
+  await user.click(within(dialog).getByRole("checkbox"))
+  await user.click(
+    within(dialog).getByRole("button", { name: "Create temporary copy" })
+  )
+  await waitFor(() =>
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument()
+  )
+  expect(f.reviews[0]).toMatchObject({
+    target_id: "recovery",
+    restore_time: "2026-10-21T12:00:03.123456789Z",
+  })
+  expect(f.creates).toHaveLength(1)
 })

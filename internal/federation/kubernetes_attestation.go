@@ -179,6 +179,9 @@ func (r *KubernetesAttestationResolver) resolve(ctx context.Context, d domain.De
 	if err := ctx.Err(); err != nil {
 		return denied, err
 	}
+	if evidence.X509SvidExpiresAt <= r.now().Unix() {
+		return denied, ErrUnverified
+	}
 	return workloadidentity.Binding{Destination: d, ParentURI: parent.String(), CheckedAt: r.now().UTC(), Method: "kubernetes", Namespace: namespace, NamespaceUID: string(ns.UID), ServiceAccount: p.ServiceAccount, PodUID: p.PodUID, Container: p.Container, TTL: time.Minute}, nil
 }
 func currentPod(p *corev1.Pod, uid, serviceAccount string) bool {

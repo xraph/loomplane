@@ -1,5 +1,6 @@
 import type {
   Build,
+  CloudSQLApplicationNetwork,
   Connection,
   Graph,
   Manifest,
@@ -8,6 +9,8 @@ import type {
 } from "@/client/forge/loomplane/types"
 
 export type PlacementFields = {
+  cloudSqlNetwork?: CloudSQLApplicationNetwork
+  cloud_sql_network?: CloudSQLApplicationNetwork & { consumer_project?: string }
   cloudTarget?: string
   cloud_target?: string
   cloudTags?: string[]
@@ -119,6 +122,23 @@ export function placementSettings(
   if (o?.region) region = o.region
   const changedProvider =
     !!o?.provider && o.provider !== (s.provider || d?.provider)
+  const rawRoute =
+    o?.cloudSqlNetwork ??
+    o?.cloud_sql_network ??
+    (changedProvider &&
+    (s.provider || d?.provider || o?.provider !== "cloud-run")
+      ? undefined
+      : (s.cloudSqlNetwork ?? s.cloud_sql_network))
+  const cloudSqlNetwork = rawRoute
+    ? {
+        consumerProject:
+          rawRoute.consumerProject ??
+          (rawRoute as { consumer_project?: string }).consumer_project ??
+          "",
+        network: rawRoute.network,
+        subnetwork: rawRoute.subnetwork,
+      }
+    : undefined
   const target = o?.target || (changedProvider ? undefined : s.target)
   const changedTarget = !!o?.target && o.target !== s.target
   const rawEndpoint =
@@ -161,6 +181,7 @@ export function placementSettings(
     provider,
     region,
     enabled: o?.enabled ?? s.enabled ?? true,
+    ...(cloudSqlNetwork ? { cloudSqlNetwork } : {}),
     ...(target ? { target } : {}),
     ...(endpoint ? { endpoint } : {}),
     ...(build ? { build } : {}),

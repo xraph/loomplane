@@ -19,7 +19,7 @@ export function Onboarding({
         title="Name your organization"
         description="Give your team's projects a home. You'll be the owner of this organization."
         logo={<BrandLogo />}
-        align="center"
+        align="left"
         variant="borderless"
         className="auth-card"
         footer={

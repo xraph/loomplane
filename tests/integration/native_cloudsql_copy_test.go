@@ -4,6 +4,7 @@ package integration
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -17,11 +18,13 @@ import (
 
 	"github.com/jackc/pgx/v5"
 
+	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/clouds/gcp"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/deployments"
 	"github.com/xraph/loomplane/internal/manageddb"
 	"github.com/xraph/loomplane/internal/planning"
+	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/recovery"
 	"github.com/xraph/loomplane/internal/security"
 )
@@ -129,7 +132,28 @@ func runNativeCloudSQLCopyBackend(t *testing.T, scenario string) {
 		t.Fatal("missing Cloud SQL point", err)
 	}
 	request := &recovery.NativeRestore{ID: "sql-copy-one", OrgID: "org", ProjectID: "project", EnvironmentID: "environment", SourceID: f.source.ID, PointID: points.Points[0].ID, Point: points.Points[0], RequestID: "copy-request", CreatedBy: "operator", CreatedAt: time.Now(), ExpiresAt: time.Now().Add(time.Hour), Target: recovery.NativeRestoreTarget{Provider: "cloud-sql", ConnectionID: "copy-account", NativeProject: "recovery-project", AccountIdentity: connections.AccountIdentity(connections.GCP, "recovery-project", accounts.connections["copy-account"].Details), Region: "europe-west1"}}
-	if _, err = f.store.CreateNativeRestore(t.Context(), request); err != nil {
+	if scenario == "complete" {
+		now := time.Now().UTC()
+		clouds := cloudprofiles.NewPgStore(f.db)
+		if err = clouds.CreateProfile(t.Context(), &cloudprofiles.Profile{ID: "access-cloud", OrgID: "org", ProjectID: "project", Name: "Recovery", Revision: 1, CreatedAt: now, UpdatedAt: now}); err != nil {
+			t.Fatal(err)
+		}
+		if err = clouds.CreateTarget(t.Context(), &cloudprofiles.Target{ID: "access-target", OrgID: "org", ProjectID: "project", CloudID: "access-cloud", Name: "recovery", DisplayName: "Recovery", Runtime: "managed", Provider: "cloud-sql", ConnectionID: "copy-account", Region: "europe-west1", Revision: 1, CreatedAt: now, UpdatedAt: now}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = clouds.SetProjectGrant(t.Context(), "org", "access-cloud", "project", []string{"access-target"}, false); err != nil {
+			t.Fatal(err)
+		}
+		request.Target, err = f.store.ReviewNativeTarget(t.Context(), "org", "project", "access-cloud", "access-target")
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := json.Marshal(f.source.Binding)
+		_, err = f.store.CreateReviewedNativeRestore(t.Context(), request, fmt.Sprintf("%x", sha256.Sum256(body)))
+	} else {
+		_, err = f.store.CreateNativeRestore(t.Context(), request)
+	}
+	if err != nil {
 		t.Fatal(err)
 	}
 	claimed, err := f.store.ClaimNativeRestore(t.Context(), "org", request.ID, "copy-worker")
@@ -483,6 +507,83 @@ func runNativeCloudSQLCopyBackend(t *testing.T, scenario string) {
 	}
 	if err = f.store.FinishNativeRestore(t.Context(), claimed, result, time.Second, nil); err != nil {
 		t.Fatal(err)
+	}
+	if scenario == "complete" {
+		access, accessOK := any(backend).(recovery.NativeAccessBackend)
+		if !accessOK {
+			t.Fatal("verified native copies have no credential access backend")
+		}
+		ready, readErr := f.store.GetNativeRestore(t.Context(), "org", claimed.ID)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		guard := func(context.Context) error { return nil }
+		revealed, accessErr := access.NativeCredentials(t.Context(), principal, *ready, guard)
+		if accessErr != nil || revealed == nil || revealed.Password != credentials.ReaderPassword || revealed.Username != readerName || revealed.ConnectionName != result.ExternalID || !revealed.ExpiresAt.Equal(ready.ExpiresAt) {
+			t.Fatal("kept reader credential could not be inspected", accessErr)
+		}
+		service := recovery.NativeService{Copies: f.store, Admission: f.store, Projects: projects.NewPgStore(f.db), Authz: nativeAccessAllow{}, AccessBackend: access}
+		publicCredentials, accessErr := service.CopyCredentials(t.Context(), principal, ready.ID)
+		if accessErr != nil || publicCredentials == nil || publicCredentials.Password != credentials.ReaderPassword {
+			t.Fatal("connected authorized access failed", accessErr)
+		}
+		if _, accessErr = cloudprofiles.NewPgStore(f.db).SetProjectGrant(t.Context(), "org", "access-cloud", "project", nil, true); accessErr != nil {
+			t.Fatal(accessErr)
+		}
+		if exposed, failure := service.CopyCredentials(t.Context(), principal, ready.ID); failure == nil || exposed != nil {
+			t.Fatal("revoked project target retained credential access", failure)
+		}
+		raw, _ := json.Marshal(revealed)
+		if strings.Contains(string(raw), adminPassword) || strings.Contains(string(raw), "private_key") {
+			t.Fatal("access exposed administrator or cloud account credentials")
+		}
+		for _, change := range []string{"expired", "no-proof", "cleanup", "changed-pin", "denied", "unsafe-sql"} {
+			input := *ready
+			check := guard
+			switch change {
+			case "expired":
+				input.ExpiresAt = time.Now().Add(-time.Second)
+			case "no-proof":
+				input.VerifiedAt = nil
+			case "cleanup":
+				input.Status = "cleanup_queued"
+			case "changed-pin":
+				mu.Lock()
+				unsafeCopy = "cleanup-replaced"
+				mu.Unlock()
+			case "denied":
+				check = func(context.Context) error { return security.ErrForbidden }
+			case "unsafe-sql":
+				if _, accessErr = sql.admin.Exec(t.Context(), `GRANT UPDATE ON public.recovered_rows TO PUBLIC`); accessErr != nil {
+					t.Fatal(accessErr)
+				}
+			}
+			if exposed, failure := access.NativeCredentials(t.Context(), principal, input, check); failure == nil || exposed != nil {
+				t.Fatal("unsafe native credentials returned", change, failure)
+			}
+			mu.Lock()
+			unsafeCopy = ""
+			mu.Unlock()
+		}
+		if _, accessErr = sql.admin.Exec(t.Context(), `REVOKE UPDATE ON public.recovered_rows FROM PUBLIC`); accessErr != nil {
+			t.Fatal(accessErr)
+		}
+		if _, accessErr = sql.admin.Exec(t.Context(), "DROP ROLE "+pgx.Identifier{readerName}.Sanitize()); accessErr != nil {
+			t.Fatal(accessErr)
+		}
+		if exposed, failure := access.NativeCredentials(t.Context(), principal, *ready, guard); failure == nil || exposed != nil {
+			t.Fatal("access recreated the removed recovery reader", failure)
+		}
+		var readerExists bool
+		if accessErr = sql.admin.QueryRow(t.Context(), `SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname=$1)`, readerName).Scan(&readerExists); accessErr != nil || readerExists {
+			t.Fatal("inspection repaired a removed login", accessErr)
+		}
+		mu.Lock()
+		restoreWrites, adminWrites = writes["restore"], writes["admin"]
+		mu.Unlock()
+		if restoreWrites != 1 || adminWrites != 1 {
+			t.Fatal("credential access repeated provider writes")
+		}
 	}
 	if _, err = f.store.RequestNativeCleanup(t.Context(), "org", claimed.ID, "operator", func(context.Context) error { return nil }); err != nil {
 		t.Fatal(err)

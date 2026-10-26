@@ -3,7 +3,6 @@ import { useAuth } from "@authsome/ui-react"
 import { useState, type FormEvent } from "react"
 import { toast } from "sonner"
 
-import { AuthLayout } from "@/components/auth-layout"
 import { BrandLogo } from "@/components/brand-logo"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -18,7 +17,10 @@ import {
 import { messageOf } from "@/client/errors"
 import { Link, useNavigate } from "@/lib/router"
 
-/** Authsome owns the password and verification flows behind these public routes. */
+/**
+ * Authsome owns the password and verification flows behind these public
+ * routes. App renders them inside the shared AuthLayout.
+ */
 export function RecoveryPage({
   mode,
   token,
@@ -30,55 +32,43 @@ export function RecoveryPage({
 }) {
   const { signOut } = useAuth()
   const navigate = useNavigate()
-  return (
-    <AuthLayout
-      title={
-        mode === "verify-email"
-          ? "Verify your email"
-          : "Recover your Loomplane account"
-      }
-    >
-      {mode === "forgot-password" ? (
-        <ForgotPasswordForm
-          signInUrl="/sign-in"
-          logo={<BrandLogo />}
-          align="center"
-          variant="borderless"
-          className="auth-card"
-        />
-      ) : mode === "reset-password" ? (
-        token ? (
-          <ResetPasswordForm
-            token={token}
-            logo={<BrandLogo />}
-            className="auth-card"
-            onSuccess={() => {
-              // A reset revokes every server session. Clear the SDK's cached state too.
-              void signOut().then(() => {
-                toast.success(
-                  "Password changed. Sign in with your new password."
-                )
-                void navigate({ to: "/sign-in", replace: true })
-              })
-            }}
-          />
-        ) : (
-          <ZeroState preview={false}>
-            <ZeroStateHeader>
-              <ZeroStateTitle>This reset link is incomplete</ZeroStateTitle>
-              <ZeroStateDescription>
-                Request a new link to choose a password.
-              </ZeroStateDescription>
-            </ZeroStateHeader>
-            <Button render={<Link to="/forgot-password" />}>
-              Request a reset link
-            </Button>
-          </ZeroState>
-        )
-      ) : (
-        <VerifyEmail initialEmail={email ?? ""} />
-      )}
-    </AuthLayout>
+  return mode === "forgot-password" ? (
+    <ForgotPasswordForm
+      signInUrl="/sign-in"
+      logo={<BrandLogo />}
+      align="left"
+      variant="borderless"
+      className="auth-card"
+    />
+  ) : mode === "reset-password" ? (
+    token ? (
+      <ResetPasswordForm
+        token={token}
+        logo={<BrandLogo />}
+        className="auth-card"
+        onSuccess={() => {
+          // A reset revokes every server session. Clear the SDK's cached state too.
+          void signOut().then(() => {
+            toast.success("Password changed. Sign in with your new password.")
+            void navigate({ to: "/sign-in", replace: true })
+          })
+        }}
+      />
+    ) : (
+      <ZeroState preview={false}>
+        <ZeroStateHeader>
+          <ZeroStateTitle>This reset link is incomplete</ZeroStateTitle>
+          <ZeroStateDescription>
+            Request a new link to choose a password.
+          </ZeroStateDescription>
+        </ZeroStateHeader>
+        <Button render={<Link to="/forgot-password" />}>
+          Request a reset link
+        </Button>
+      </ZeroState>
+    )
+  ) : (
+    <VerifyEmail initialEmail={email ?? ""} />
   )
 }
 

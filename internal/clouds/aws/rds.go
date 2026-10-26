@@ -64,6 +64,7 @@ type DBInstanceSpec struct {
 
 // DBInstance is an RDS instance as it is.
 type DBInstance struct {
+	Recovery      *DBRecoverySettings
 	Tags          map[string]string
 	ID            string
 	ResourceID    string
@@ -92,6 +93,7 @@ func (s *Session) GetDBInstance(ctx context.Context, id string) (*DBInstance, er
 
 func readDBInstance(in rdstypes.DBInstance) *DBInstance {
 	db := &DBInstance{ID: sdk.ToString(in.DBInstanceIdentifier), ResourceID: sdk.ToString(in.DbiResourceId), Engine: sdk.ToString(in.Engine), EngineVersion: sdk.ToString(in.EngineVersion), Status: sdk.ToString(in.DBInstanceStatus), Tags: map[string]string{}}
+	db.Recovery = readDBRecoverySettings(in)
 	for _, tag := range in.TagList {
 		db.Tags[sdk.ToString(tag.Key)] = sdk.ToString(tag.Value)
 	}
@@ -201,6 +203,8 @@ func (s *Session) EnsureDBInstance(ctx context.Context, spec DBInstanceSpec, tra
 
 // DBSnapshot is native recovery metadata. It is separate from Trove backup files.
 type DBSnapshot struct {
+	StorageGB       int32     `json:"storage_gb,omitempty"`
+	MasterUser      string    `json:"master_user,omitempty"`
 	ID              string    `json:"id"`
 	ARN             string    `json:"arn"`
 	InstanceID      string    `json:"instance_id"`

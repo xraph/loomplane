@@ -116,11 +116,11 @@ func (s *PgStore) ReadNativeInventory(ctx context.Context, org, id string, page 
 	if err != nil {
 		return nil, err
 	}
-	query := `SELECT id,source_id,body,present,last_seen_at FROM loomplane_native_points WHERE org_id=$1 AND source_id=$2`
+	query := `SELECT id,source_id,body,present,last_seen_at FROM loomplane_native_points WHERE org_id=$1 AND source_id=$2 AND COALESCE(body->>'kind','')<>'pitr'`
 	args := []any{org, id}
 	if page.Before != "" {
 		var created string
-		if pageErr := tx.QueryRow(ctx, `SELECT creation_identity FROM loomplane_native_points WHERE org_id=$1 AND source_id=$2 AND id=$3`, org, id, page.Before).Scan(&created); pageErr != nil {
+		if pageErr := tx.QueryRow(ctx, `SELECT creation_identity FROM loomplane_native_points WHERE org_id=$1 AND source_id=$2 AND id=$3 AND COALESCE(body->>'kind','')<>'pitr'`, org, id, page.Before).Scan(&created); pageErr != nil {
 			if errors.Is(pageErr, pgx.ErrNoRows) {
 				return nil, ErrNotFound
 			}
@@ -176,7 +176,7 @@ func (s *PgStore) RefreshNativeInventory(ctx context.Context, org, id string, fe
 	seen := map[string]bool{}
 	for _, point := range points {
 		identity := point.ProviderID + "\x00" + point.CreatedAt.UTC().Format(time.RFC3339Nano)
-		if point.ProviderID == "" || point.CreatedAt.IsZero() || point.Name == "" || point.Status == "" || seen[identity] {
+		if point.Kind == "pitr" || point.PITR != nil || point.RestoreTime != nil || point.ProviderID == "" || point.CreatedAt.IsZero() || point.Name == "" || point.Status == "" || seen[identity] {
 			fetchErr = ErrNativeUnavailable
 		}
 		if point.ExpiresAt != nil && (point.ExpiresAt.IsZero() || !point.ExpiresAt.After(point.CreatedAt)) {
@@ -198,7 +198,7 @@ func (s *PgStore) RefreshNativeInventory(ctx context.Context, org, id string, fe
 		return ErrNativeUnavailable
 	}
 	if complete {
-		if _, err := tx.Exec(ctx, `UPDATE loomplane_native_points SET present=false WHERE org_id=$1 AND source_id=$2`, org, id); err != nil {
+		if _, err := tx.Exec(ctx, `UPDATE loomplane_native_points SET present=false WHERE org_id=$1 AND source_id=$2 AND COALESCE(body->>'kind','')<>'pitr'`, org, id); err != nil {
 			return err
 		}
 	}

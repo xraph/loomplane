@@ -23,34 +23,49 @@ type ControllerReceipts interface {
 // load both records, then recheck them before issuance. This does not register
 // an identity or replace live owner-chain and image-proof verification.
 func LoadFederationController(ctx context.Context, records ControllerReceipts, b *planning.Binding, inst *instance.Instance, d domain.Destination, base federation.KubernetesAttestationProfile) (federation.KubernetesWorkloadProfile, error) {
+	profile, _, err := loadFederationController(ctx, records, b, inst, d, base)
+	return profile, err
+}
+func loadFederationController(ctx context.Context, records ControllerReceipts, b *planning.Binding, inst *instance.Instance, d domain.Destination, base federation.KubernetesAttestationProfile) (federation.KubernetesWorkloadProfile, *kube.ControllerReceipt, error) {
 	denied := federation.KubernetesWorkloadProfile{}
 	if err := ctx.Err(); err != nil {
-		return denied, err
+		return denied, nil, err
 	}
+	deployment, ref, err := federationWorkloadInstance(b, inst)
+	if err != nil {
+		return denied, nil, err
+	}
+	if records == nil || d.Quarantined || d.Scope != deployment.Scope || d.ConnectionID != deployment.ConnectionID || d.Identity.Provider != "kubernetes" || base.Scope != d.Scope || base.DestinationID != d.ID || base.ConnectionID != d.ConnectionID || base.IdentityRevision != d.Identity.Revision() {
+		return denied, nil, federation.ErrUnverified
+	}
+	receipt, err := records.GetController(ctx, b.OrgID, b.ConnectionID, b.ExternalID, ref)
+	if err != nil {
+		return denied, nil, err
+	}
+	if receipt == nil || !receipt.Valid() || receipt.Scope != deployment.Scope || receipt.ConnectionID != deployment.ConnectionID || receipt.InstanceID != deployment.InstanceID || receipt.RuntimeRef != ref || receipt.PlanID != b.PlanID || receipt.ServiceID != b.Name || receipt.Container != deployment.Container || receipt.Image != deployment.Image || receipt.ClusterCA != d.Identity.Account || receipt.NamespaceUID != d.Identity.NamespaceUID || receipt.NamespaceUID != d.Identity.ResourceID {
+		return denied, nil, federation.ErrUnverified
+	}
+	base.ServiceAccount, base.Container = receipt.ServiceAccount, receipt.Container
+	return federation.KubernetesWorkloadProfile{KubernetesAttestationProfile: base, BindingID: b.ID, DeploymentUID: receipt.DeploymentUID, DeploymentGeneration: receipt.DeploymentGeneration, RuntimeRevision: receipt.RuntimeRevision}, receipt, nil
+}
+
+func federationWorkloadInstance(b *planning.Binding, inst *instance.Instance) (federation.WorkloadDeployment, string, error) {
 	deployment, err := FederationWorkloadDeployment(b)
 	if err != nil {
-		return denied, err
+		return federation.WorkloadDeployment{}, "", err
 	}
-	if records == nil || inst == nil || !domain.ValidIdentitySegment(b.PlanID) || inst.ID.String() != deployment.InstanceID || inst.TenantID != b.OrgID || inst.ProviderName != "kubernetes."+b.ConnectionID || inst.State != cpprovider.StateRunning || (inst.Kind != "" && inst.Kind != cpprovider.KindDeployment) || len(inst.Services) != 1 || inst.Services[0].Name != deployment.Container || inst.Services[0].Image != deployment.Image || len(inst.Services[0].Volumes) != 0 {
-		return denied, federation.ErrUnverified
+	if inst == nil || !domain.ValidIdentitySegment(b.PlanID) || inst.ID.String() != deployment.InstanceID || inst.TenantID != b.OrgID || inst.ProviderName != "kubernetes."+b.ConnectionID || inst.State != cpprovider.StateRunning || (inst.Kind != "" && inst.Kind != cpprovider.KindDeployment) || len(inst.Services) != 1 || inst.Services[0].Name != deployment.Container || inst.Services[0].Image != deployment.Image || len(inst.Services[0].Volumes) != 0 {
+		return federation.WorkloadDeployment{}, "", federation.ErrUnverified
 	}
 	labels := inst.Labels
 	for key, value := range map[string]string{owned.LabelOrg: b.OrgID, owned.LabelProject: b.ProjectID, owned.LabelEnvironment: b.EnvironmentID, owned.LabelConnection: b.ConnectionID, owned.LabelService: b.Name, owned.LabelPlan: b.PlanID} {
 		if labels[key] != value {
-			return denied, federation.ErrUnverified
+			return federation.WorkloadDeployment{}, "", federation.ErrUnverified
 		}
 	}
 	ref := labels[owned.LabelRuntime]
-	if ref == "" || validateRuntimeRef(b.OrgID, b.EnvironmentID, b.Name, ref) != nil || d.Quarantined || d.Scope != deployment.Scope || d.ConnectionID != deployment.ConnectionID || d.Identity.Provider != "kubernetes" || base.Scope != d.Scope || base.DestinationID != d.ID || base.ConnectionID != d.ConnectionID || base.IdentityRevision != d.Identity.Revision() {
-		return denied, federation.ErrUnverified
+	if ref == "" || validateRuntimeRef(b.OrgID, b.EnvironmentID, b.Name, ref) != nil {
+		return federation.WorkloadDeployment{}, "", federation.ErrUnverified
 	}
-	receipt, err := records.GetController(ctx, b.OrgID, b.ConnectionID, b.ExternalID, ref)
-	if err != nil {
-		return denied, err
-	}
-	if receipt == nil || !receipt.Valid() || receipt.Scope != deployment.Scope || receipt.ConnectionID != deployment.ConnectionID || receipt.InstanceID != deployment.InstanceID || receipt.RuntimeRef != ref || receipt.PlanID != b.PlanID || receipt.ServiceID != b.Name || receipt.Container != deployment.Container || receipt.Image != deployment.Image || receipt.ClusterCA != d.Identity.Account || receipt.NamespaceUID != d.Identity.NamespaceUID || receipt.NamespaceUID != d.Identity.ResourceID {
-		return denied, federation.ErrUnverified
-	}
-	base.ServiceAccount, base.Container = receipt.ServiceAccount, receipt.Container
-	return federation.KubernetesWorkloadProfile{KubernetesAttestationProfile: base, BindingID: b.ID, DeploymentUID: receipt.DeploymentUID, DeploymentGeneration: receipt.DeploymentGeneration, RuntimeRevision: receipt.RuntimeRevision}, nil
+	return deployment, ref, nil
 }

@@ -1,0 +1,88 @@
+---
+title: The manifest
+description: loomplane.yaml says what your application deploys, where, and what it needs.
+---
+
+`loomplane.yaml` is the file a plan is made from. Loomplane drafts one from your analysis, you review it, and each save becomes a new revision. A plan always names the revision it was made from.
+
+```bash
+loomctl manifest my-project --draft     # print a draft from the latest analysis
+loomctl manifest save my-project -f loomplane.yaml
+loomctl manifest my-project             # print the saved one
+```
+
+Nothing in the manifest is Forge, or Go. Point a YAML language server at `pkg/manifest/schema.json` (its `$id` is `https://loomplane.dev/schemas/loomplane.json`) and you get completion and checks as you type. A manifest that doesn't parse is refused with every problem and its line.
+
+## A complete example
+
+```yaml title="loomplane.yaml"
+version: 1
+
+defaults:
+  provider: cloud-run
+  region: us-central1
+
+services:
+  api:
+    source: go:services/api
+    needs: [db, cache]
+    scale: { min: 1, max: 5 }
+    size: { cpu: 1, memory: 512 }
+  worker:
+    source: services/worker/cmd/worker
+    provider: ecs-fargate
+    needs: [api]
+  web:
+    source: apps/web
+    provider: vercel
+    needs: [api]
+    environments:
+      preview:
+        enabled: false
+
+resources:
+  db:
+    kind: postgres
+    provider: cloud-sql
+    version: "17"
+  cache:
+    kind: redis
+    provider: memorystore
+
+gateways:
+  edge:
+    routes:
+      - { path: /api, to: api, strip_prefix: true }
+      - { path: /, to: web }
+
+ignore:
+  resources: [kafka]
+```
+
+The five top-level sections are `services`, `resources`, `gateways`, `links` and `ignore`, with `defaults` and `held` for settings that apply across them. [The reference](/docs/reference/loomplane-yaml) lists every field.
+
+## Services, resources and gateways
+
+A service is something you run. A resource is a backing service such as Postgres or Redis. A gateway puts one public address in front of several services. Names are lower case letters, digits and hyphens, start with a letter, and run to 40 characters at most. They're how everything refers to everything else, so a resource can't share a service's name.
+
+`needs` is how you wire things together. A service that lists a resource or another service gets an address for it in a variable, and it deploys after it. A Postgres resource arrives as `DATABASE_URL`, a Redis as `REDIS_URL`, and another service as its name in capitals plus `_URL` (`API_URL`). A variable you set yourself wins, so you can point a service somewhere else.
+
+## Choosing where things run
+
+You can name a `provider` and `region` on any service, resource or gateway, or set `defaults` for all of them. A default region only comes with the default provider: a service that names another provider doesn't take it along.
+
+In the dashboard, the Deployment targets panel on the Deploy tab sets provider, region and enabled status for each entry in the selected environment. It only offers providers that support the workload, which is why Vercel isn't offered for a worker. Saving a placement creates a manifest revision and preserves your comments, source paths and dependencies. It doesn't provision anything, because approval is what starts a deployment.
+
+For larger setups, give your targets names or tags in an organization Cloud and refer to them from the manifest with `cloud_target` or `cloud_tags`. See [Cloud targets](/docs/clouds/cloud-targets).
+
+## Environments and overrides
+
+Services, resources and gateways accept an `environments` map that overrides `provider`, `region` or `enabled` for one environment. A service also takes the other settings (scale, size, port and so on) there. It can't override `source`, `kind`, `build`, `needs` or `need_options`.
+
+## Version 2
+
+Existing workflows use `version: 1`, and generated manifests do too. Version 2 adds an optional `federation` section that records federation proposals. Its plans stay blocked until the destination agents, network drivers and policy enforcement pass qualification.
+
+<Callout type="warn">
+  Federation is being built and isn't ready for production. Writing a version 2 manifest doesn't make private traffic between clouds available, and the editor never upgrades a file for you.
+</Callout>

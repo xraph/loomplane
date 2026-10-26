@@ -18,22 +18,35 @@ import (
 	"github.com/xraph/loomplane/internal/clouds/render"
 	"github.com/xraph/loomplane/internal/clouds/server"
 	"github.com/xraph/loomplane/internal/clouds/vercel"
+	"github.com/xraph/loomplane/internal/manageddb"
 	"github.com/xraph/loomplane/pkg/provider/sdk"
 )
 
 // GCPChecker checks Google Cloud service account keys.
 type GCPChecker struct{ Client *gcp.Client }
 
-// Parse implements Checker.
-func (g GCPChecker) Parse(credential []byte, _ map[string]string) (Check, error) {
+// Parse implements Checker. Billing export and a native recovery VPC are
+// optional. Neither changes the identity derived from the service account.
+func (g GCPChecker) Parse(credential []byte, settings map[string]string) (Check, error) {
 	key, err := gcp.ParseKey(credential)
 	if err != nil {
 		return Check{}, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
-	return Check{
-		Account: key.ProjectID,
-		Details: map[string]string{"project_id": key.ProjectID, "service_account": key.ClientEmail},
-	}, nil
+	details := map[string]string{"project_id": key.ProjectID, "service_account": key.ClientEmail}
+	if table := strings.TrimSpace(settings[gcp.BillingExportSetting]); table != "" {
+		if billingErr := gcp.CheckBillingTable(table); billingErr != nil {
+			return Check{}, fmt.Errorf("%w: %w", ErrInvalid, billingErr)
+		}
+		details[gcp.BillingExportSetting] = table
+	}
+	route, err := manageddb.CloudSQLRecoverySettings(settings)
+	if err != nil {
+		return Check{}, fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
+	for field, value := range route.Settings() {
+		details[field] = value
+	}
+	return Check{Account: key.ProjectID, Details: details}, nil
 }
 
 // Check implements Checker: it asks Google which of the permissions a
@@ -335,8 +348,8 @@ func rejected(err error) bool {
 		errors.As(err, &ge) || errors.As(err, &ve)
 }
 
-// AWSChecker checks AWS access keys. The one setting is region, which is
-// required: everything Loomplane makes lives in it.
+// AWSChecker checks AWS access keys in a required region. Optional private
+// recovery route settings do not establish connectivity or SQL verification.
 type AWSChecker struct{ Client *aws.Client }
 
 // Parse implements Checker.
@@ -358,6 +371,14 @@ func (a AWSChecker) Parse(credential []byte, settings map[string]string) (Check,
 		}
 		details["certificate_arn"] = cert
 	}
+	route, routeErr := manageddb.RDSRecoverySettings(settings)
+	if routeErr != nil {
+		return Check{}, fmt.Errorf("%w: %w", ErrInvalid, routeErr)
+	}
+	for key, value := range route.Settings() {
+		details[key] = value
+	}
+
 	return Check{Details: details}, nil
 }
 

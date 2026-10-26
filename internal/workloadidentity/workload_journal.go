@@ -21,6 +21,7 @@ var ErrWorkloadUncertain = errors.New("workload registration creation outcome re
 // image verification. The guard must recheck that authority and live workload.
 // This journal does not expose issuance through a management endpoint.
 type WorkloadIntent struct {
+	PodName         string                 `json:"pod_name,omitempty"`
 	OperatingSystem string                 `json:"operating_system,omitempty"`
 	Architecture    string                 `json:"architecture,omitempty"`
 	ImageIndexes    [][]byte               `json:"image_indexes,omitempty"`

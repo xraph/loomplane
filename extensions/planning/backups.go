@@ -30,11 +30,14 @@ const backupJob = "loomplane.service.backup"
 const reconcileBackupsJob = "loomplane.service.backup.reconcile"
 const nativeRestoreJob = "loomplane.service.native.restore"
 const nativeCleanupJob = "loomplane.service.native.cleanup"
+const nativeRetirementJob = "loomplane.service.native.retirement"
 
 type nativeRecoveryBackend interface {
+	recovery.NativeDeletionBackend
 	recovery.NativeBackend
 	recovery.NativeCopyBackend
 	recovery.NativeCleanupBackend
+	recovery.NativeAccessBackend
 }
 
 type backupPayload struct {
@@ -58,9 +61,10 @@ func (e *Extension) setupBackups(app forge.App, pg *pgdriver.PgDB, prj *projects
 		return err
 	}
 	e.nativeBackups = &recovery.NativeService{
+		Retirements: records, DeletionBackend: native, EnqueueDeletion: e.enqueueRecovery(nativeRetirementJob, 0),
 		Store: records, Authz: authz, Projects: prj, Backend: native, Admission: records,
 		ReviewKey: reviewKey, Audit: audit,
-		Copies: records, CopyBackend: native, EnqueueCopy: e.enqueueRecovery(nativeRestoreJob, 0),
+		Copies: records, CopyBackend: native, AccessBackend: native, EnqueueCopy: e.enqueueRecovery(nativeRestoreJob, 0),
 		Cleanups: records, CleanupBackend: native, EnqueueCleanup: e.enqueueRecovery(nativeCleanupJob, 0),
 	}
 	e.backups = &recovery.Service{
@@ -74,6 +78,9 @@ func (e *Extension) setupBackups(app forge.App, pg *pgdriver.PgDB, prj *projects
 	}))
 	engine.Register(e.engineOf(), job.NewDefinition(restoreJob, func(ctx context.Context, in backupPayload) error { return e.backups.RunRestore(ctx, in.OrgID, in.ID) }))
 	engine.Register(e.engineOf(), job.NewDefinition(backupJob, func(ctx context.Context, in backupPayload) error { return e.backups.Run(ctx, in.OrgID, in.ID) }))
+	engine.Register(e.engineOf(), job.NewDefinition(nativeRetirementJob, func(ctx context.Context, in backupPayload) error {
+		return e.nativeBackups.RunNativeRetirement(ctx, in.OrgID, in.ID)
+	}))
 	engine.Register(e.engineOf(), job.NewDefinition(nativeRestoreJob, func(ctx context.Context, in backupPayload) error {
 		return e.nativeBackups.RunCopy(ctx, in.OrgID, in.ID)
 	}))

@@ -94,6 +94,10 @@ func (r *Recipe) Engine() string {
 }
 func (r *Recipe) Port() int {
 	switch r.Engine() {
+	case "rabbitmq":
+		return 5672
+	case "nats":
+		return 4222
 	case "postgres":
 		return 5432
 	case "mysql", "mariadb":
@@ -108,6 +112,12 @@ func (r *Recipe) Port() int {
 // RuntimeArgs belongs to recipe revision 1's single-instance logical profile.
 // Binary logs are unused here; copies must never execute restored timers.
 func (r *Recipe) RuntimeArgs(recovery bool) []string {
+	if r.Engine() == "rabbitmq" {
+		return rabbitmqArgs(recovery)
+	}
+	if r.Engine() == "nats" {
+		return natsArgs(recovery)
+	}
 	if r.Cache() {
 		return r.cacheArgs(recovery)
 	}

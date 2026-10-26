@@ -17,17 +17,21 @@ type ServerRegion struct {
 	Name string `json:"name"`
 }
 type ServerSize struct {
-	ID         string   `json:"id"`
-	CPUs       int      `json:"cpus"`
-	MemoryMiB  int      `json:"memory_mib"`
-	DiskGB     int      `json:"disk_gb"`
-	HourlyUSD  float64  `json:"hourly_usd"`
-	MonthlyUSD float64  `json:"monthly_usd"`
-	Regions    []string `json:"regions"`
+	Architectures    []string `json:"architectures,omitempty"`
+	HourlyPriceKnown bool     `json:"hourly_price_known,omitempty"`
+	ID               string   `json:"id"`
+	CPUs             int      `json:"cpus"`
+	MemoryMiB        int      `json:"memory_mib"`
+	DiskGB           int      `json:"disk_gb"`
+	HourlyUSD        float64  `json:"hourly_usd"`
+	MonthlyUSD       float64  `json:"monthly_usd"`
+	Regions          []string `json:"regions"`
 }
 type ServerImage struct {
-	ID        string   `json:"id"`
-	Name      string   `json:"name"`
-	Regions   []string `json:"regions"`
-	Bootstrap bool     `json:"bootstrap"`
+	MinDiskGB    int      `json:"min_disk_gb,omitempty"`
+	Architecture string   `json:"architecture,omitempty"`
+	ID           string   `json:"id"`
+	Name         string   `json:"name"`
+	Regions      []string `json:"regions"`
+	Bootstrap    bool     `json:"bootstrap"`
 }

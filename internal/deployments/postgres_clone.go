@@ -69,7 +69,7 @@ func (e *OwnedTarget) RestoreDatabase(ctx context.Context, p security.Principal,
 		return "", errors.New("target has no recovery adapter")
 	}
 	password := rand.Text() + rand.Text()
-	environment, secrets := databaseEnvironment(cfg.Kind, databaseName(b.Name), password, rand.Text()+rand.Text())
+	environment, secrets := databaseEnvironment(cfg.Catalog.Engine(), databaseName(b.Name), password, rand.Text()+rand.Text())
 	values := map[string]string{}
 	publicEnv := map[string]string{}
 	for name, value := range environment {

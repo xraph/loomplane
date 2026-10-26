@@ -98,6 +98,9 @@ type TargetDialer interface {
 // API methods check the caller's role; workflow methods trust the plan,
 // which a checked call created.
 type Service struct {
+	capacityTemplates CapacityTemplateValidator
+	capacity          CapacityProvisioner
+	capacityPrincipal CapacityPrincipalVerifier
 	cloudSyncRunner   CloudSyncDeployer
 	appliedInputs     AppliedInputReader
 	cloudSyncWorkflow CloudSyncWorkflow
@@ -122,6 +125,9 @@ type Service struct {
 
 // Deps are what a Service needs.
 type Deps struct {
+	CapacityTemplates CapacityTemplateValidator
+	Capacity          CapacityProvisioner
+	CapacityPrincipal CapacityPrincipalVerifier
 	AppliedInputs     AppliedInputReader
 	CloudSyncWorkflow CloudSyncWorkflow
 	CloudProfiles     cloudprofiles.Resolver
@@ -158,6 +164,7 @@ func NewService(d Deps) *Service {
 		warn = func(string, error) {}
 	}
 	return &Service{
+		capacityTemplates: d.CapacityTemplates, capacity: d.Capacity, capacityPrincipal: d.CapacityPrincipal,
 		appliedInputs: d.AppliedInputs, cloudSyncWorkflow: d.CloudSyncWorkflow,
 		cloudProfiles: d.CloudProfiles, store: d.Store, projects: d.Projects, analyses: d.Analyses, manifests: d.Manifests,
 		providers: d.Providers, clouds: d.Connections, authz: d.Authz, workflow: d.Workflow, audit: d.Audit,
@@ -410,11 +417,16 @@ func (s *Service) decide(ctx context.Context, p security.Principal, id string, a
 	case len(in.Note) > maxNote:
 		return nil, fmt.Errorf("%w: the note can be at most %d characters", ErrInvalid, maxNote)
 	}
+	if approve {
+		if checkErr := RequireBackupPolicyPermission(ctx, s.authz, p, plan.ProjectID, plan.Actions); checkErr != nil {
+			return nil, checkErr
+		}
+	}
 	reqID, err := typeid.Generate("dec")
 	if err != nil {
 		return nil, fmt.Errorf("generate decision id: %w", err)
 	}
-	dec := orchestration.Decision{Approve: approve, Revision: in.Revision, By: p.UserID, Note: strings.TrimSpace(in.Note)}
+	dec := orchestration.Decision{Actor: &p, Approve: approve, Revision: in.Revision, By: p.UserID, Note: strings.TrimSpace(in.Note)}
 	if !approve {
 		dec.Revision = plan.Revision
 	}
@@ -592,14 +604,15 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 			resolutionErr = fmt.Errorf("cloud assignment is outside this organization, project or environment scope")
 		}
 	}
+	intents := map[string]*CapacityIntent{}
 	var placements map[string]CloudPlacement
 	var resolved *manifest.Manifest
 	if resolutionErr == nil {
-		pools, poolErr := s.resolvePools(ctx, plan, resolutionManifest, assignment, bindings, options, needs.Held)
+		pools, poolErr := s.resolvePools(ctx, plan, resolutionManifest, assignment, bindings, options, needs.Held, intents)
 		if poolErr != nil {
 			resolutionErr = poolErr
 		} else {
-			resolved, placements, resolutionErr = resolveCloudPlacements(resolutionManifest, plan.Environment, assignment, options, pools, needs.Held)
+			resolved, placements, resolutionErr = resolveCloudPlacements(resolutionManifest, plan.Environment, assignment, options, pools, needs.Held, intents)
 		}
 	}
 	routes, routeErr := s.releaseRoutes(ctx, plan)
@@ -623,7 +636,7 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 		maps.Copy(placed, composedPlacements(resolved, plan.Environment, composed, assignment, options))
 		result = Compute(Input{
 			Catalog: plan.Catalog, Routes: routes,
-			Federation: federation, CloudPlacements: placed,
+			Federation: federation, CloudPlacements: placed, CapacityIntents: intents,
 			Environment: plan.Environment, Graph: g, Manifest: resolved, Providers: s.providers, Bindings: bindings,
 			Connections: options, Chosen: chosen, Held: held,
 			Kinds: s.kinds, Endpoints: s.checkEndpoints(ctx, plan.OrgID, plan.Environment, resolved),
@@ -636,6 +649,7 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 		result.Problems = append(result.Problems, Finding{Code: "route-capacity", Message: routeErr.Error()})
 		result.Executable = false
 	}
+	s.checkBackupPreview(ctx, plan, result)
 	in := revisionInput{
 		EnvironmentID: plan.EnvironmentID, Environment: plan.Environment, Sources: plan.Sources,
 		Manifest: rev.Digest, Deployed: make([]deployedRef, 0, len(bindings)), Result: result,
@@ -874,6 +888,9 @@ func (s *Service) ApplyDecision(ctx context.Context, orgID, planID string, d orc
 		// a plan that changed in between. The plan keeps waiting.
 		return StatusReady, nil
 	}
+	if checkErr := s.checkBackupDecision(ctx, plan, d); checkErr != nil {
+		return "", checkErr
+	}
 	_, revision, err := s.compute(ctx, plan)
 	if permanent(err) {
 		return s.settleAs(ctx, plan, StatusStale, d.By, "What the plan was made from is gone: "+err.Error(), now)
@@ -883,6 +900,12 @@ func (s *Service) ApplyDecision(ctx context.Context, orgID, planID string, d orc
 	}
 	if revision != plan.Revision {
 		return s.settleAs(ctx, plan, StatusStale, d.By, "What's deployed changed after this plan was made. Plan again.", now)
+	}
+	if d.Actor != nil {
+		if d.Actor.OrgID != orgID || d.Actor.UserID != d.By || d.Actor.ReadOnly {
+			return "", security.ErrForbidden
+		}
+		ctx = security.WithPrincipal(ctx, *d.Actor)
 	}
 	return s.settleAs(ctx, plan, StatusApproved, d.By, d.Note, now)
 }

@@ -26,4 +26,4 @@ port=${binding##*:}
 export LOOMPLANE_TEST_NATIVE_POSTGRES_URL="postgres://loomplane:loomplane@127.0.0.1:$port/postgres?sslmode=disable&connect_timeout=5&statement_timeout=15000"
 cd "$root"
 test_pattern=${1:-'^TestNative(PostgresVerification|CloudSQLCopyBackend)'}
-GOMAXPROCS=${GOMAXPROCS:-4} go test -p 4 -tags=integration -race -timeout=5m -count=1 -v -run "$test_pattern" ./tests/integration
+GOMAXPROCS=${GOMAXPROCS:-4} go test -p 4 -tags=integration -race -timeout="${LOOMPLANE_TEST_NATIVE_TIMEOUT:-5m}" -count=1 -v -run "$test_pattern" ./tests/integration

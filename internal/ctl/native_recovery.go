@@ -18,6 +18,7 @@ func nativeRecoveryScopeFlags() []cli.Flag {
 
 func (a *App) nativeRecoveryCommands() []cli.Command {
 	return []cli.Command{
+		cli.NewCommand("native-pitr", "Read the current PITR window for a captured source", a.nativePITR, cli.WithUsage("backups native-pitr <source> [--json]"), cli.WithFlag(jsonFlag)),
 		cli.NewCommand("native-sources", "List captured cloud database histories", a.nativeSources, cli.WithUsage("backups native-sources <project> [--environment-id ID] [--resource NAME] [--before ...] [--limit 50] [--json]"), cli.WithFlags(nativeRecoveryScopeFlags()...)),
 		cli.NewCommand("native-inventory", "Read saved native snapshot observations", a.nativeInventory, cli.WithUsage("backups native-inventory <source> [--before ...] [--limit 50] [--json]"), cli.WithFlags(nativeRecoveryFlags()...)),
 		cli.NewCommand("native-refresh", "Refresh snapshots from the original cloud account", a.nativeRefresh, cli.WithUsage("backups native-refresh <source> [--json]"), cli.WithFlag(jsonFlag)),
@@ -113,4 +114,19 @@ func (a *App) nativeRefresh(ctx cli.CommandContext) error {
 	}
 	a.printf("Refreshed %s: complete %t. Saved observations are available with backups native-inventory %s.\n", page.Source.Name, page.Source.Complete, id)
 	return nil
+}
+
+func (a *App) nativePITR(ctx cli.CommandContext) error {
+	if ctx.Arg(0) == "" {
+		return fmt.Errorf("give a source ID")
+	}
+	c, err := a.client()
+	if err != nil {
+		return err
+	}
+	window, err := c.NativeRecoveryPITRWindow(ctxOf(ctx), ctx.Arg(0))
+	if err != nil {
+		return err
+	}
+	return a.json(window)
 }

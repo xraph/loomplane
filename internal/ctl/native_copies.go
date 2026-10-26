@@ -6,24 +6,29 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"strconv"
+	"time"
 
 	"github.com/xraph/forge/cli"
 
 	"github.com/xraph/loomplane/pkg/client"
 )
 
+var nativeRestoreUTC = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,9})?Z$`)
+
 func (a *App) nativeCopyCommand() cli.Command {
 	return cli.NewCommand("native-copies", "List temporary provider-native recovery copies", a.nativeCopies,
 		cli.WithUsage("backups native-copies <project> [--environment-id ID] [--resource NAME] [--before ID] [--limit 50] [--json]"),
 		cli.WithFlags(nativeRecoveryScopeFlags()...),
-		cli.WithSubcommand(cli.NewCommand("review", "Review capacity and lifetime before creating a Cloud SQL copy", a.reviewNativeCopy,
-			cli.WithFlags(jsonFlag, cli.NewStringFlag("cloud", "", "Granted destination Cloud ID", ""), cli.NewStringFlag("target", "", "Named destination target ID", ""), cli.NewStringFlag("ttl-hours", "", "Copy lifetime, from 1 to 24 hours", "1"), cli.NewStringFlag("request-id", "", "Stable request ID retained in the review", ""), cli.NewStringFlag("out", "", "Save a private review JSON file without overwriting", "")),
-			cli.WithUsage("backups native-copies review <source> <point> --cloud ID --target ID [--ttl-hours 1] [--request-id KEY] [--out review.json]"))),
+		cli.WithSubcommand(cli.NewCommand("review", "Review capacity and lifetime before creating a native copy", a.reviewNativeCopy,
+			cli.WithFlags(jsonFlag, cli.NewStringFlag("restore-time", "", "Explicit UTC PITR time (RFC3339 Z, up to nine fractional digits for Cloud SQL; whole seconds for RDS)", ""), cli.NewStringFlag("cloud", "", "Granted destination Cloud ID", ""), cli.NewStringFlag("target", "", "Named destination target ID", ""), cli.NewStringFlag("ttl-hours", "", "Copy lifetime, from 1 to 24 hours", "1"), cli.NewStringFlag("request-id", "", "Stable request ID retained in the review", ""), cli.NewStringFlag("out", "", "Save a private review JSON file without overwriting", "")),
+			cli.WithUsage("backups native-copies review <source> <point> --cloud ID --target ID [--restore-time UTC] [--ttl-hours 1] [--request-id KEY] [--out review.json]"))),
 		cli.WithSubcommand(cli.NewCommand("create", "Admit the saved reviewed request", a.createNativeCopy,
 			cli.WithFlags(append(recoveryFlags(), cli.NewStringFlag("review-file", "", "Saved native-copy review JSON file", ""), cli.NewBoolFlag("acknowledge-charges", "", "Acknowledge charges until confirmed deletion, including failed cleanup", false))...),
 			cli.WithUsage("backups native-copies create --review-file review.json --acknowledge-charges [--wait] [--json]"))),
 		cli.WithSubcommand(cli.NewCommand("show", "Show retained native copy and cleanup status", a.showNativeCopy, cli.WithFlags(recoveryFlags()...), cli.WithUsage("backups native-copies show <copy> [--wait] [--json]"))),
+		cli.WithSubcommand(cli.NewCommand("credentials", "Save freshly checked reader credentials to a private file", a.nativeCopyCredentials, cli.WithFlag(cli.NewStringFlag("out", "", "New owner-only credential JSON file", "")), cli.WithUsage("backups native-copies credentials <copy> --out copy-credentials.json"))),
 		cli.WithSubcommand(cli.NewCommand("cleanup", "Request removal of this temporary copy", a.cleanupNativeCopy,
 			cli.WithFlags(append(recoveryFlags(), cli.NewBoolFlag("yes", "y", "Confirm removal of the temporary copy", false))...), cli.WithUsage("backups native-copies cleanup <copy> --yes [--wait] [--json]"))))
 }
@@ -33,11 +38,19 @@ func (a *App) reviewNativeCopy(ctx cli.CommandContext) error {
 	if err != nil || ttl < 1 || ttl > 24 || ctx.Arg(0) == "" || ctx.Arg(1) == "" || ctx.String("cloud") == "" || ctx.String("target") == "" {
 		return fmt.Errorf("provide source, point, granted Cloud, target and ttl-hours from 1 to 24")
 	}
+	var restoreTime *time.Time
+	if raw := ctx.String("restore-time"); raw != "" {
+		at, parseErr := time.Parse(time.RFC3339Nano, raw)
+		if parseErr != nil || !nativeRestoreUTC.MatchString(raw) {
+			return fmt.Errorf("restore-time must be an explicit UTC timestamp with at most nine fractional digits, such as 2026-10-22T12:00:03Z")
+		}
+		restoreTime = &at
+	}
 	c, err := a.client()
 	if err != nil {
 		return err
 	}
-	review, err := c.ReviewNativeRecoveryCopy(ctxOf(ctx), ctx.Arg(0), ctx.Arg(1), client.NativeCopyReviewRequest{RequestID: requestID(ctx), CloudID: ctx.String("cloud"), TargetID: ctx.String("target"), TTLHours: ttl})
+	review, err := c.ReviewNativeRecoveryCopy(ctxOf(ctx), ctx.Arg(0), ctx.Arg(1), client.NativeCopyReviewRequest{RestoreTime: restoreTime, RequestID: requestID(ctx), CloudID: ctx.String("cloud"), TargetID: ctx.String("target"), TTLHours: ttl})
 	if err != nil {
 		return err
 	}
@@ -55,7 +68,14 @@ func (a *App) reviewNativeCopy(ctx cli.CommandContext) error {
 			return saveErr
 		}
 		if !ctx.Bool("json") {
-			a.printf("Target %s/%s: %s in %s. %s, %d GiB %s, lifetime %dh. Review expires %s.\n", review.Target.CloudID, review.Target.TargetID, review.Target.NativeProject, review.Target.Region, review.Capacity.ComputeClass, review.Capacity.StorageGB, review.Capacity.StorageType, review.TTLHours, review.ValidUntil.UTC().Format("2006-01-02 15:04Z"))
+			nativeAccount := review.Target.NativeProject
+			if nativeAccount == "" {
+				nativeAccount = review.Target.NativeAccount
+			}
+			if review.RestoreTime != nil {
+				a.printf("PITR time: %s\n", review.RestoreTime.UTC().Format(time.RFC3339Nano))
+			}
+			a.printf("Target %s/%s: %s in %s. %s, %d GiB %s, lifetime %dh. Review expires %s.\n", review.Target.CloudID, review.Target.TargetID, nativeAccount, review.Target.Region, review.Capacity.ComputeClass, review.Capacity.StorageGB, review.Capacity.StorageType, review.TTLHours, review.ValidUntil.UTC().Format("2006-01-02 15:04Z"))
 			a.printf("Saved request %s to %s. %s\n", review.RequestID, path, review.Notice)
 			return nil
 		}

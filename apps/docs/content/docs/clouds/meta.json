@@ -1,0 +1,16 @@
+{
+  "title": "Clouds",
+  "pages": [
+    "index",
+    "google-cloud",
+    "aws",
+    "vercel",
+    "render",
+    "digitalocean",
+    "azure",
+    "your-own-servers",
+    "spend-and-traffic",
+    "cloud-targets",
+    "adopting-and-moving"
+  ]
+}

@@ -8,10 +8,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"slices"
 	"strings"
 	"time"
 
+	"github.com/xraph/loomplane/internal/clouds/aws"
 	"github.com/xraph/loomplane/internal/clouds/gcp"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/nativepg"
@@ -38,6 +40,7 @@ type nativeSQLCopyState struct {
 	CredentialVersion int64  `json:"credential_version"`
 	PhysicalID        string `json:"physical_id,omitempty"`
 	Operation         string `json:"operation,omitempty"`
+	CloneOperation    string `json:"clone_operation,omitempty"`
 	Uncertain         bool   `json:"uncertain,omitempty"`
 	DeleteOperation   string `json:"delete_operation,omitempty"`
 	DeleteUncertain   bool   `json:"delete_uncertain,omitempty"`
@@ -52,7 +55,7 @@ type nativeCopyPasswords struct {
 }
 
 func nativeSQLCopyScope(r recovery.NativeRestore) (string, *planning.ResourceConfig, error) {
-	if r.ID == "" || r.OrgID == "" || r.ProjectID == "" || r.EnvironmentID == "" || r.SourceID == "" || r.PointID == "" || r.Source.OrgID != r.OrgID || r.Source.ProjectID != r.ProjectID || r.Source.EnvironmentID != r.EnvironmentID || r.Source.Subject != planning.ResourceSubject || r.Source.Provider != "cloud-sql" || r.Target.Provider != "cloud-sql" || r.Source.PhysicalID == "" || r.Source.ConnectionID == "" || r.Point.ID != r.PointID || r.Point.SourceID != r.SourceID || r.Point.Engine != "postgres" || r.Point.Version != "17" || r.Point.CreatedAt.IsZero() || r.ExpiresAt.IsZero() {
+	if r.ID == "" || r.OrgID == "" || r.ProjectID == "" || r.EnvironmentID == "" || r.SourceID == "" || r.PointID == "" || r.Source.OrgID != r.OrgID || r.Source.ProjectID != r.ProjectID || r.Source.EnvironmentID != r.EnvironmentID || r.Source.Subject != planning.ResourceSubject || (r.Source.Provider != "cloud-sql" && r.Source.Provider != "rds") || r.Target.Provider != r.Source.Provider || r.Source.PhysicalID == "" || r.Source.ConnectionID == "" || r.Point.ID != r.PointID || r.Point.SourceID != r.SourceID || r.Point.Engine != "postgres" || r.Point.CreatedAt.IsZero() || r.ExpiresAt.IsZero() {
 		return "", nil, recovery.ErrInvalid
 	}
 	for _, segment := range []string{r.OrgID, r.EnvironmentID, r.ID} {
@@ -64,10 +67,13 @@ func nativeSQLCopyScope(r recovery.NativeRestore) (string, *planning.ResourceCon
 	if err != nil {
 		return "", nil, err
 	}
-	parts := strings.Split(r.Point.ProviderID, "/")
-	if _, _, err = boundSQLInstance(r.Source.ExternalID, parts[1], r.Source.Region); err != nil {
-		return "", nil, err
+	if r.Source.Provider == "cloud-sql" && r.Point.Kind != "pitr" {
+		parts := strings.Split(r.Point.ProviderID, "/")
+		if _, _, err = boundSQLInstance(r.Source.ExternalID, parts[1], r.Source.Region); err != nil {
+			return "", nil, err
+		}
 	}
+
 	// Scope contains the immutable retained inputs, not worker tokens/status or
 	// mutable inventory observations. The same request always names one copy.
 	raw, err := json.Marshal(struct {
@@ -75,7 +81,9 @@ func nativeSQLCopyScope(r recovery.NativeRestore) (string, *planning.ResourceCon
 		Config                                                                                                         json.RawMessage
 		Target                                                                                                         recovery.NativeRestoreTarget
 		PointReference, PointKind, PointVersion, PointCreated, KMS, Expires                                            string
-	}{r.OrgID, r.ProjectID, r.EnvironmentID, r.ID, r.SourceID, r.PointID, r.Source.Name, r.Source.ExternalID, r.Source.PhysicalID, r.Source.ConnectionID, r.Source.Config, r.Target, r.Point.ProviderID, r.Point.Kind, r.Point.Version, r.Point.CreatedAt.UTC().Format(time.RFC3339Nano), r.Point.KMSKey, r.ExpiresAt.UTC().Format(time.RFC3339Nano)})
+		PITR                                                                                                           *recovery.NativePITRBounds `json:"pitr,omitempty"`
+		RestoreTime                                                                                                    *time.Time                 `json:"restore_time,omitempty"`
+	}{r.OrgID, r.ProjectID, r.EnvironmentID, r.ID, r.SourceID, r.PointID, r.Source.Name, r.Source.ExternalID, r.Source.PhysicalID, r.Source.ConnectionID, r.Source.Config, r.Target, r.Point.ProviderID, r.Point.Kind, r.Point.Version, r.Point.CreatedAt.UTC().Format(time.RFC3339Nano), r.Point.KMSKey, r.ExpiresAt.UTC().Format(time.RFC3339Nano), r.Point.PITR, r.Point.RestoreTime})
 	if err != nil {
 		return "", nil, err
 	}
@@ -88,6 +96,10 @@ func readNativeSQLCopy(r recovery.NativeRestore) (*nativeSQLCopyState, *planning
 		return nil, nil, err
 	}
 	s := &nativeSQLCopyState{Version: 1, Scope: scope, Stage: "restore"}
+	if r.Source.Provider == "cloud-sql" && r.Point.Kind == "pitr" {
+		s.Version = 2
+	}
+	version := s.Version
 	raw := bytes.TrimSpace(r.Checkpoint)
 	if len(raw) == 0 || bytes.Equal(raw, []byte("{}")) {
 		return s, cfg, nil
@@ -95,7 +107,10 @@ func readNativeSQLCopy(r recovery.NativeRestore) (*nativeSQLCopyState, *planning
 	if checkErr := decodeDatabaseCheckpoint(raw, s); checkErr != nil {
 		return nil, nil, checkErr
 	}
-	if s.Version != 1 || s.Scope != scope || !slices.Contains([]string{"restore", "admin", "verify", "ready"}, s.Stage) || s.CredentialVersion < 0 || (!s.Uncertain && s.Operation != "") || (!s.DeleteUncertain && s.DeleteOperation != "") || s.Stage != "restore" && s.PhysicalID == "" || s.CredentialVersion == 0 && (s.Uncertain || s.Stage != "restore") || s.Deleted && s.DeleteUncertain {
+	if s.Version != version || s.Scope != scope || !slices.Contains([]string{"restore", "network", "admin", "verify", "ready"}, s.Stage) || s.CredentialVersion < 0 || (!s.Uncertain && s.Operation != "") || (!s.DeleteUncertain && s.DeleteOperation != "") || s.Stage != "restore" && s.PhysicalID == "" || s.CredentialVersion == 0 && (s.Uncertain || s.Stage != "restore") || s.Deleted && s.DeleteUncertain {
+		return nil, nil, recovery.ErrConflict
+	}
+	if version == 1 && (s.Stage == "network" || s.CloneOperation != "") || version == 2 && (s.Stage == "restore" && s.Operation != s.CloneOperation || s.Stage != "restore" && s.CloneOperation == "") {
 		return nil, nil, recovery.ErrConflict
 	}
 	return s, cfg, nil
@@ -129,6 +144,9 @@ func (s *nativeSQLCopyState) track(ctx context.Context, c recovery.NativeWorkerC
 			s.DeleteOperation = operation
 		} else {
 			s.Operation = operation
+			if s.Version == 2 && s.Stage == "restore" {
+				s.CloneOperation = operation
+			}
 		}
 		return s.save(ctx, c)
 	}}
@@ -179,6 +197,17 @@ func (n *NativeDatabases) copyPasswords(ctx context.Context, r recovery.NativeRe
 			return nativeCopyPasswords{}, checkErr
 		}
 	}
+	passwords, err := n.readCopyPasswords(ctx, r, s)
+	if err != nil {
+		return nativeCopyPasswords{}, err
+	}
+	return passwords, c.Check(ctx)
+}
+
+func (n *NativeDatabases) readCopyPasswords(ctx context.Context, r recovery.NativeRestore, s *nativeSQLCopyState) (nativeCopyPasswords, error) {
+	if s.CredentialVersion <= 0 {
+		return nativeCopyPasswords{}, recovery.ErrConflict
+	}
 	raw, err := n.Secrets.GetVersion(ctx, nativeCopySecretKey(r), s.CredentialVersion)
 	if err != nil {
 		return nativeCopyPasswords{}, err
@@ -187,10 +216,13 @@ func (n *NativeDatabases) copyPasswords(ctx context.Context, r recovery.NativeRe
 	if json.Unmarshal(raw, &p) != nil || p.Scope != s.Scope || len(p.AdminPassword) < 40 || len(p.ReaderPassword) < 40 || strings.ContainsRune(p.AdminPassword, 0) || strings.ContainsRune(p.ReaderPassword, 0) {
 		return nativeCopyPasswords{}, recovery.ErrConflict
 	}
-	return p, c.Check(ctx)
+	return p, nil
 }
 
 func (s *nativeSQLCopyState) copyGuard(client *gcp.Session, r recovery.NativeRestore, cfg *planning.ResourceConfig, c recovery.NativeWorkerControl) func(context.Context) error {
+	if s.Version == 2 {
+		return s.pitrCopyGuard(client, r, cfg, c)
+	}
 	return func(ctx context.Context) error {
 		if err := c.Check(ctx); err != nil {
 			return err
@@ -217,10 +249,18 @@ func (s *nativeSQLCopyState) copyGuard(client *gcp.Session, r recovery.NativeRes
 }
 
 func (s *nativeSQLCopyState) spec(r recovery.NativeRestore, cfg *planning.ResourceConfig) gcp.SQLInstanceSpec {
+	if s.Version == 2 {
+		spec := cloudSQLPITRSourceSpec(cfg, "lp-recovery-"+s.Scope[:32])
+		spec.Intent = s.Scope[:60]
+		return spec
+	}
 	return gcp.SQLInstanceSpec{Name: "lp-recovery-" + s.Scope[:32], DatabaseVersion: "POSTGRES_17", Region: r.Target.Region, Tier: cfg.Managed.Profile.ComputeClass, Storage: &gcp.SQLStorageSettings{SizeGB: cfg.Managed.Profile.StorageGB, Type: cfg.Managed.Profile.StorageType}, Intent: s.Scope[:60]}
 }
 
 func (s *nativeSQLCopyState) restore(ctx context.Context, client *gcp.Session, r recovery.NativeRestore, cfg *planning.ResourceConfig, c recovery.NativeWorkerControl) error {
+	if s.Version == 2 {
+		return s.clonePITR(ctx, client, r, cfg, c)
+	}
 	if s.Uncertain && s.Operation == "" {
 		return errNativeReconcile
 	}
@@ -252,6 +292,20 @@ func (s *nativeSQLCopyState) restore(ctx context.Context, client *gcp.Session, r
 // RestoreNative creates only an isolated copy, then proves an actual SQL login.
 // The original binding and the source database credentials are never changed.
 func (n *NativeDatabases) RestoreNative(ctx context.Context, p security.Principal, r recovery.NativeRestore, c recovery.NativeCopyControl) (recovery.NativeRestoreResult, error) {
+	var result recovery.NativeRestoreResult
+	var err error
+	if r.Target.Provider == "rds" {
+		result, err = n.restoreRDSCopy(ctx, p, r, c)
+	} else {
+		result, err = n.restoreCloudSQLCopy(ctx, p, r, c)
+	}
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) || aws.DBRecoveryReconciliationPending(err) {
+		return recovery.NativeRestoreResult{}, errors.Join(recovery.ErrNativePending, err)
+	}
+	return result, err
+}
+
+func (n *NativeDatabases) restoreCloudSQLCopy(ctx context.Context, p security.Principal, r recovery.NativeRestore, c recovery.NativeCopyControl) (recovery.NativeRestoreResult, error) {
 	if c.Check == nil || c.Save == nil || c.Selected == nil || p.OrgID != r.OrgID || p.UserID == "" {
 		return recovery.NativeRestoreResult{}, recovery.ErrInvalid
 	}
@@ -279,11 +333,23 @@ func (n *NativeDatabases) RestoreNative(ctx context.Context, p security.Principa
 			if selectErr != nil {
 				return recovery.NativeRestoreResult{}, selectErr
 			}
-			if selected == nil || selected.ProviderID != r.Point.ProviderID || !selected.CreatedAt.Equal(r.Point.CreatedAt) || selected.Engine != r.Point.Engine || selected.Version != r.Point.Version || selected.Kind != r.Point.Kind || selected.KMSKey != r.Point.KMSKey || !selected.Encrypted || selected.Status != "SUCCESSFUL" {
-				return recovery.NativeRestoreResult{}, recovery.ErrConflict
+			if selectionErr := checkNativeCopySelection(r, selected); selectionErr != nil {
+				return recovery.NativeRestoreResult{}, selectionErr
 			}
 		}
 		if checkErr := s.restore(ctx, client, r, cfg, c.NativeWorkerControl); checkErr != nil {
+			return recovery.NativeRestoreResult{}, checkErr
+		}
+		s.Stage, s.Operation, s.Uncertain = "admin", "", false
+		if s.Version == 2 {
+			s.Stage = "network"
+		}
+		if checkErr := s.save(ctx, c.NativeWorkerControl); checkErr != nil {
+			return recovery.NativeRestoreResult{}, checkErr
+		}
+	}
+	if s.Stage == "network" {
+		if checkErr := s.preparePITR(ctx, client, r, cfg, c.NativeWorkerControl); checkErr != nil {
 			return recovery.NativeRestoreResult{}, checkErr
 		}
 		s.Stage, s.Operation, s.Uncertain = "admin", "", false
@@ -307,22 +373,8 @@ func (n *NativeDatabases) RestoreNative(ctx context.Context, p security.Principa
 	if checkErr := guard(ctx); checkErr != nil {
 		return recovery.NativeRestoreResult{}, checkErr
 	}
-	var connector gcp.SQLConnector
-	if n.SQLConnector != nil {
-		connector, err = n.SQLConnector(ctx, client, r.Target.Region, "lp-recovery-"+s.Scope[:32])
-	} else {
-		connector, err = client.PostgresConnector(ctx, r.Target.Region, "lp-recovery-"+s.Scope[:32])
-	}
-	if err != nil {
-		return recovery.NativeRestoreResult{}, err
-	}
-	if connector == nil {
-		return recovery.NativeRestoreResult{}, recovery.ErrInvalid
-	}
-	defer func() { _ = connector.Close() }()
-	_, err = (&nativepg.Verifier{Dial: connector.DialContext}).Verify(ctx, nativepg.Spec{Database: databaseName(r.Source.Name), AdminUser: "postgres", AdminPassword: passwords.AdminPassword, Reader: "lp_recovery_" + s.Scope[:32], ReaderPassword: passwords.ReaderPassword, Intent: s.Scope, ExpiresAt: r.ExpiresAt, MajorVersion: 17}, guard)
-	if err != nil {
-		return recovery.NativeRestoreResult{}, err
+	if checkErr := n.checkNativeSQL(ctx, client, r, s, passwords, guard, false); checkErr != nil {
+		return recovery.NativeRestoreResult{}, checkErr
 	}
 	s.Stage = "ready"
 	if checkErr := s.save(ctx, c.NativeWorkerControl); checkErr != nil {
@@ -331,9 +383,50 @@ func (n *NativeDatabases) RestoreNative(ctx context.Context, p security.Principa
 	return recovery.NativeRestoreResult{ExternalID: r.Target.NativeProject + ":" + r.Target.Region + ":lp-recovery-" + s.Scope[:32], PhysicalID: s.PhysicalID, SQLVerified: true}, nil
 }
 
+func (n *NativeDatabases) checkNativeSQL(ctx context.Context, client *gcp.Session, r recovery.NativeRestore, s *nativeSQLCopyState, passwords nativeCopyPasswords, guard func(context.Context) error, existingOnly bool) error {
+	var connector gcp.SQLConnector
+	var err error
+	switch {
+	case n.SQLConnector != nil:
+		connector, err = n.SQLConnector(ctx, client, r.Target.Region, "lp-recovery-"+s.Scope[:32])
+	case s.Version == 2:
+		connector, err = client.PostgresPSCConnector(ctx, r.Target.Region, "lp-recovery-"+s.Scope[:32])
+	default:
+		connector, err = client.PostgresConnector(ctx, r.Target.Region, "lp-recovery-"+s.Scope[:32])
+	}
+	if err != nil {
+		return err
+	}
+	return verifyNativeReader(ctx, r, s, passwords, guard, connector, "postgres", existingOnly)
+}
+
+type nativeSQLConnector interface {
+	DialContext(context.Context, string, string) (net.Conn, error)
+	Close() error
+}
+
+func verifyNativeReader(ctx context.Context, r recovery.NativeRestore, s *nativeSQLCopyState, passwords nativeCopyPasswords, guard func(context.Context) error, connector nativeSQLConnector, adminUser string, existingOnly bool) error {
+	var err error
+	if connector == nil {
+		return recovery.ErrInvalid
+	}
+	defer func() { _ = connector.Close() }()
+	verifier := &nativepg.Verifier{Dial: connector.DialContext}
+	spec := nativepg.Spec{Database: databaseName(r.Source.Name), AdminUser: adminUser, AdminPassword: passwords.AdminPassword, Reader: "lp_recovery_" + s.Scope[:32], ReaderPassword: passwords.ReaderPassword, Intent: s.Scope, ExpiresAt: r.ExpiresAt, MajorVersion: 17}
+	if existingOnly {
+		_, err = verifier.Inspect(ctx, spec, guard)
+	} else {
+		_, err = verifier.Verify(ctx, spec, guard)
+	}
+	return err
+}
+
 // DeleteNative retains the pin and operation through retries. Secrets are
 // removed only after the destination confirms the temporary copy is absent.
 func (n *NativeDatabases) DeleteNative(ctx context.Context, p security.Principal, r recovery.NativeRestore, c recovery.NativeWorkerControl) (recovery.NativeCleanupResult, error) {
+	if r.Target.Provider == "rds" {
+		return n.deleteRDSCopy(ctx, p, r, c)
+	}
 	if c.Check == nil || c.Save == nil || p.OrgID != r.OrgID || p.UserID == "" {
 		return recovery.NativeCleanupResult{}, recovery.ErrInvalid
 	}
@@ -361,7 +454,12 @@ func (n *NativeDatabases) DeleteNative(ctx context.Context, p security.Principal
 			s.PhysicalID = pin
 			return s.save(ctx, c)
 		}
-		if _, observeErr := client.InspectSQLRecoveryForCleanup(ctx, spec, s.Operation, c.Check); observeErr != nil {
+		inspect := client.InspectSQLRecoveryForCleanup
+		operation := s.Operation
+		if s.Version == 2 {
+			inspect, operation = client.InspectSQLPITRForCleanup, s.CloneOperation
+		}
+		if _, observeErr := inspect(ctx, spec, operation, c.Check); observeErr != nil {
 			return recovery.NativeCleanupResult{}, observeErr
 		}
 	}
@@ -370,7 +468,11 @@ func (n *NativeDatabases) DeleteNative(ctx context.Context, p security.Principal
 		return recovery.NativeCleanupResult{}, errNativeReconcile
 	}
 	if s.PhysicalID != "" && !s.Deleted {
-		if checkErr := client.DeleteSQLRecovery(ctx, name, r.Target.Region, s.PhysicalID, s.Scope[:60], s.track(ctx, c, c.Check, true)); checkErr != nil {
+		remove, witness := client.DeleteSQLRecovery, s.Scope[:60]
+		if s.Version == 2 {
+			remove, witness = client.DeleteSQLPITRCopy, s.CloneOperation
+		}
+		if checkErr := remove(ctx, name, r.Target.Region, s.PhysicalID, witness, s.track(ctx, c, c.Check, true)); checkErr != nil {
 			return recovery.NativeCleanupResult{}, checkErr
 		}
 	}

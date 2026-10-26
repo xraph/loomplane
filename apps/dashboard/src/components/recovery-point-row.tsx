@@ -5,6 +5,8 @@ import { useServiceRetirementsList } from "@/client/forge/loomplane/hooks"
 import type { Backup, Retirement } from "@/client/forge/loomplane/types"
 import { useRecoveryPolling } from "@/lib/recovery-polling"
 import { useOrganization } from "@/lib/organization"
+import { ago, agoDay } from "@/lib/relative-time"
+import { useNow } from "@/lib/use-runs"
 import { formatDate } from "@/lib/format"
 import { QueryError } from "@/components/query-error"
 import { Button } from "@/components/ui/button"
@@ -25,6 +27,7 @@ import {
 } from "@/components/backup-retirement/shared"
 
 type Props = {
+  compact?: boolean
   project: string
   backup: Backup
   busy: boolean
@@ -110,6 +113,7 @@ function RetiringPoint(props: Props & { onDetails: (id?: string) => void }) {
 
 function PointView({
   backup: b,
+  compact = false,
   busy,
   onRestore,
   onRetry,
@@ -122,6 +126,7 @@ function PointView({
   onDetails: (id?: string) => void
 }) {
   const { can } = useOrganization()
+  const now = useNow(30_000)
   const deletion = ["retiring", "retired"].includes(b.status)
   const label =
     b.status === "retired"
@@ -137,17 +142,66 @@ function PointView({
         : undefined
       : b.error
   const evidence = b.restoredAt
-    ? `${b.status === "retired" ? "Previously verified" : "Restore verified"} ${formatDate(b.restoredAt)}`
+    ? `${b.status === "retired" ? "Previously verified" : compact ? "Verified" : "Restore verified"} ${compact ? agoDay(b.restoredAt, now) : formatDate(b.restoredAt)}`
     : "Not tested"
   return (
     <>
       <TableRow>
         <TableCell className="whitespace-normal">
-          <div>{formatDate(b.createdAt)}</div>
-          <div className="text-xs text-muted-foreground">
-            {b.bytes.toLocaleString()} bytes
-          </div>
-          <div className="mt-1 grid gap-1 text-xs sm:hidden">
+          {compact ? (
+            <code className="text-xs">{b.name}</code>
+          ) : (
+            <>
+              <div>{formatDate(b.createdAt)}</div>
+              <div className="text-xs text-muted-foreground">
+                {b.bytes.toLocaleString()} bytes
+              </div>
+            </>
+          )}
+          {(!compact || b.status !== "succeeded" || error) && (
+            <div
+              className={
+                compact
+                  ? "mt-1 grid gap-1 text-xs"
+                  : "mt-1 grid gap-1 text-xs sm:hidden"
+              }
+            >
+              {(!compact || b.status !== "succeeded") && (
+                <Badge
+                  variant={
+                    operation?.status === "failed" ? "destructive" : "secondary"
+                  }
+                >
+                  {label}
+                </Badge>
+              )}
+              {!compact && <span>{evidence}</span>}
+              {error && <span className="text-destructive">{error}</span>}
+            </div>
+          )}
+        </TableCell>
+        {compact ? (
+          <>
+            <TableCell>
+              <time dateTime={b.createdAt} title={formatDate(b.createdAt)}>
+                {ago(b.createdAt, now)}
+              </time>
+            </TableCell>
+            <TableCell>
+              {new Intl.NumberFormat(undefined, {
+                maximumFractionDigits: 1,
+              }).format(
+                b.bytes >= 1_000_000
+                  ? b.bytes / 1_000_000
+                  : b.bytes >= 1000
+                    ? b.bytes / 1000
+                    : b.bytes
+              )}{" "}
+              {b.bytes >= 1_000_000 ? "MB" : b.bytes >= 1000 ? "kB" : "B"}
+            </TableCell>
+          </>
+        ) : (
+          <TableCell className="hidden sm:table-cell">
             <Badge
               variant={
                 operation?.status === "failed" ? "destructive" : "secondary"
@@ -155,23 +209,14 @@ function PointView({
             >
               {label}
             </Badge>
-            <span>{evidence}</span>
-            {error && <span className="text-destructive">{error}</span>}
-          </div>
+            {error && (
+              <p className="max-w-xs text-xs text-destructive">{error}</p>
+            )}
+          </TableCell>
+        )}
+        <TableCell className={compact ? undefined : "hidden sm:table-cell"}>
+          {evidence}
         </TableCell>
-        <TableCell className="hidden sm:table-cell">
-          <Badge
-            variant={
-              operation?.status === "failed" ? "destructive" : "secondary"
-            }
-          >
-            {label}
-          </Badge>
-          {error && (
-            <p className="max-w-xs text-xs text-destructive">{error}</p>
-          )}
-        </TableCell>
-        <TableCell className="hidden sm:table-cell">{evidence}</TableCell>
         <TableCell className="text-right">
           <div className="flex flex-wrap justify-end gap-1">
             {b.status === "succeeded" && can("service_restore:manage") && (
@@ -179,10 +224,13 @@ function PointView({
                 size="sm"
                 variant="outline"
                 disabled={busy}
+                className={
+                  compact ? "h-8 rounded-[9px] px-3 text-[12.5px]" : undefined
+                }
                 onClick={() => onRestore(b.id)}
               >
-                <RotateCcwIcon />
-                Test restore
+                {!compact && <RotateCcwIcon />}
+                {compact ? "Restore copy" : "Test restore"}
               </Button>
             )}
             {b.status === "failed" && can("service_backup:manage") && (

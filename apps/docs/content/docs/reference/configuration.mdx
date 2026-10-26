@@ -1,0 +1,120 @@
+---
+title: Configuration
+description: Every LOOMPLANE_ environment variable and config.yaml setting, with its default and the rules Loomplane enforces at startup.
+---
+
+Loomplane reads `config.yaml` from its config directory, then `config.local.yaml` beside it, with `LOOMPLANE_` environment variables wired into the YAML as `"${LOOMPLANE_SOMETHING:-}"`. A key in `config.local.yaml` wins over `config.yaml`. When a variable is unset, the built-in default applies. `loomplane` also loads a `.env` file from its working directory, if there is one.
+
+The config directory is the current directory, or `LOOMPLANE_CONFIG_DIR`. The Docker image sets that to `/etc/loomplane`. `config.local.yaml` is ignored by Git, so it's the place for your own overrides. Keep secrets in the environment, not in either file.
+
+## Core
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `LOOMPLANE_ENVIRONMENT` | `development` | `development`, `staging` or `production`. Production refuses the development secret key and an `http://` public URL |
+| `LOOMPLANE_HTTP_ADDR` | `:8780` | Where the API listens |
+| `LOOMPLANE_PUBLIC_URL` | `http://localhost:8780` | The address browsers and the CLI reach Loomplane at. Recovery and invitation links are built from it. Must be an absolute URL, and https in production |
+| `LOOMPLANE_SECRET_KEY` | A development key | 32 random bytes, base64 (`openssl rand -base64 32`). Every credential and secret is encrypted with keys derived from it. Keep it safe and away from your backups |
+| `LOOMPLANE_DATABASE_URL` | Required | PostgreSQL DSN. Falls back to `DATABASE_URL`, which platforms like App Platform, Render, Heroku and Miget set for you |
+| `LOOMPLANE_DASHBOARD_DIR` | `apps/dashboard/dist` | The built dashboard. Without one the API still runs and serves no dashboard |
+| `LOOMPLANE_STORAGE_URL` | `.loomplane/storage` | Where deployment sources are kept, as `file:///path` |
+| `LOOMPLANE_ARTIFACT_BUCKET` | `loomplane-artifacts` | The artifact bucket name |
+| `LOOMPLANE_BACKUP_URL` | Unset | An independent backend for recovery objects, such as an S3-compatible URL. Empty uses the artifact backend |
+| `LOOMPLANE_BACKUP_BUCKET` | `loomplane-backups` | The bucket for recovery objects |
+| `LOOMPLANE_SESSION_COOKIE` | `loomplane_session` | The HttpOnly session cookie's name. Cookies are shared by every port on a host, so another authsome app on the same host needs a different name |
+| `LOOMPLANE_AUTHSOME_APP_ID` | Built in | The authsome app (`aapp_...`) that holds Loomplane's users |
+| `LOOMPLANE_AUTHSOME_PUBLISHABLE_KEY` | Built in | That app's public key |
+
+## Planning, drift and providers
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `LOOMPLANE_PLANNING_APPROVAL_WINDOW` | `168h` | How long a plan waits for a decision, from `1m` to `2160h` (90 days) |
+| `LOOMPLANE_PLANNING_ENDPOINT_DENIED_CIDRS` | Unset | Ranges an endpoint check from a Kubernetes target never connects to, as a comma-separated list such as `10.20.0.0/16,192.0.2.7`. A bare address is one host |
+| `LOOMPLANE_DRIFT_INTERVAL` | `30m` | How often deployments are compared with what's live. `0` turns it off. Otherwise at least `1s` |
+| `LOOMPLANE_PAUSED_PROVIDERS` | Unset | Comma-separated target names whose plans are review only. A name that isn't a target stops startup |
+| `LOOMPLANE_WORKER_HTTP_ADDR` | `:8781` | Where `loomplane-worker` serves its health checks |
+| `LOOMPLANE_ANALYSIS_WORK_DIR` | System temp directory | Where checkouts are extracted during analysis |
+
+Loomplane's own host, its database, its API and its provider plugins are always refused by endpoint checks, as are loopback, link-local and `0.0.0.0/8` addresses, AWS's IPv6 metadata service, and the NAT64 forms of all of these. Other private ranges are dialable, since real endpoints live there.
+
+## GitHub
+
+Set the five App settings together, or none. Loomplane refuses to start with some of them set. See [Private repositories](/docs/guides/private-repositories).
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `LOOMPLANE_GITHUB_API_URL` | `https://api.github.com` | GitHub's REST API, or your GitHub Enterprise Server's `/api/v3` |
+| `LOOMPLANE_GITHUB_WEB_URL` | `https://github.com` | Where people install the App and sign in |
+| `LOOMPLANE_GITHUB_APP_ID` | Unset | The App ID |
+| `LOOMPLANE_GITHUB_APP_SLUG` | Unset | The App's slug |
+| `LOOMPLANE_GITHUB_PRIVATE_KEY` | Unset | The PEM itself. Newlines written as `\n` work |
+| `LOOMPLANE_GITHUB_PRIVATE_KEY_FILE` | Unset | The path to the PEM, instead of the key itself |
+| `LOOMPLANE_GITHUB_CLIENT_ID` | Unset | The App's OAuth client ID |
+| `LOOMPLANE_GITHUB_CLIENT_SECRET` | Unset | The App's OAuth client secret |
+| `LOOMPLANE_GITHUB_WEBHOOK_SECRET` | Unset | The secret GitHub signs deliveries with. Empty turns webhooks off |
+
+## Email
+
+An empty host disables email. Setting a username, password or sender without a host is an error.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `LOOMPLANE_NOTIFICATIONS_SMTP_HOST` | Unset | The SMTP server |
+| `LOOMPLANE_NOTIFICATIONS_SMTP_PORT` | `1025` | Its port, 1 to 65535 |
+| `LOOMPLANE_NOTIFICATIONS_SMTP_USERNAME` | Unset | Set with the password |
+| `LOOMPLANE_NOTIFICATIONS_SMTP_PASSWORD` | Unset | Set with the username |
+| `LOOMPLANE_NOTIFICATIONS_FROM` | Unset | A single sender address |
+| `LOOMPLANE_NOTIFICATIONS_SMTP_TLS` | `false` | Implicit TLS, commonly on port 465. Production requires it |
+
+## Cloud API endpoints
+
+These exist so tests can stand fakes in for real clouds. Leave them empty in a live deployment.
+
+`LOOMPLANE_GOOGLE_ENDPOINT`, `LOOMPLANE_VERCEL_ENDPOINT`, `LOOMPLANE_AWS_ENDPOINT`, `LOOMPLANE_RENDER_ENDPOINT`, `LOOMPLANE_DIGITALOCEAN_ENDPOINT` and `LOOMPLANE_AZURE_ENDPOINT` replace the matching cloud's API host.
+
+The setting `clouds.enrollment_url` (set it in `config.local.yaml`) is the reachable HTTPS callback base that managed servers use to enroll. Empty uses the public URL, and a local address can't provision remote servers.
+
+## YAML-only settings
+
+These have no variable wired in `config.yaml`. Set them in `config.local.yaml`.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `database.pool_size` | `16` | Open connections. `0` keeps the driver's default |
+| `orchestration.concurrency` | `4` | Jobs one process runs at once. At least 1 |
+| `orchestration.poll_interval` | `1s` | How often idle workers look for jobs |
+| `analysis.concurrency` | `2` | Analyses one worker runs at once. At least 1 |
+| `identity.base_path` | `/authsome` | Where authsome's API is mounted |
+| `identity.require_email_verification` | `false` | Whether sign-in waits for a verified email |
+| `providers.plugins` | `[]` | A list of `{url, token}`. See [Provider plugins](/docs/extending/provider-plugins) |
+
+`providers.paused` also accepts a YAML list, in place of the variable.
+
+## Process and container
+
+| Variable | Meaning |
+|---|---|
+| `LOOMPLANE_CONFIG_DIR` | The directory that holds `config.yaml` |
+| `LOOMPLANE_PROCESS` | `api` (default) or `worker`. The Docker image's entrypoint starts `loomplane` or `loomplane-worker` from it, for platforms such as Miget that drop `command:` overrides. Any other value stops the container |
+| `LOOMPLANE_PORT` | The host port `make stack` publishes. Defaults to 8780 |
+| `LOOMPLANE_URL`, `LOOMPLANE_API_KEY` | Used by `loomctl`, not the server |
+
+The production Compose bundle also reads `LOOMPLANE_IMAGE`, `LOOMPLANE_DOMAIN`, `ACME_EMAIL`, `POSTGRES_PASSWORD`, `POSTGRES_IMAGE` and `CADDY_IMAGE`. See [Production on Docker](/docs/operations/production-on-docker).
+
+## Federation
+
+<Callout type="warn">
+  Federation is still being built. Leave every switch below at `false` unless you're working on it. Enabling the listener doesn't qualify a cloud provider or make a service reachable across clouds.
+</Callout>
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `LOOMPLANE_FEDERATION_ENABLED` | `false` | Authorized in-process destination management. Doesn't enable traffic or public routes |
+| `LOOMPLANE_FEDERATION_IDENTITY_ENABLED` | `false` | Local SPIRE administration and enrollment cleanup. Needs the switch above |
+| `LOOMPLANE_FEDERATION_IDENTITY_ORGANIZATION_ID`, `..._TRUST_DOMAIN`, `..._ADMIN_SOCKET` | Unset | Its scope and canonical Unix socket address |
+| `LOOMPLANE_FEDERATION_RUNTIME_ENABLED` | `false` | A separate mTLS agent listener. Needs `ENABLED` |
+| `LOOMPLANE_FEDERATION_RUNTIME_LISTEN_ADDRESS` | Unset | An explicit IP and port |
+| `LOOMPLANE_FEDERATION_RUNTIME_ORGANIZATION_ID`, `..._TRUST_DOMAIN`, `..._WORKLOAD_API`, `..._SIGNING_KEYS_FILE` | Unset | Scope, SPIRE Workload API socket and scoped signing keys. Must match the identity scope when both are on |
+| `LOOMPLANE_FEDERATION_LAUNCH_ENABLED` | `false` | Needs runtime and identity |
+| `LOOMPLANE_FEDERATION_LAUNCH_CONTROL_ENDPOINT`, `..._AGENT_IMAGE`, `..._TRUST_GENERATION` | Unset, unset, `0` | Launch settings |

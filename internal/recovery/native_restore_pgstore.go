@@ -33,11 +33,12 @@ func scanNativeRestore(row pgx.Row) (*NativeRestore, error) {
 			return nil, err
 		}
 	}
+	r.RestoreTime = r.Point.RestoreTime
 	return &r, nil
 }
 
 func sameNativeRestoreRequest(a, b *NativeRestore) bool {
-	return a.OrgID == b.OrgID && a.ProjectID == b.ProjectID && a.EnvironmentID == b.EnvironmentID && a.SourceID == b.SourceID && a.PointID == b.PointID && a.RequestID == b.RequestID && a.CreatedBy == b.CreatedBy && a.Target == b.Target && a.ExpiresAt.Sub(a.CreatedAt) == b.ExpiresAt.Sub(b.CreatedAt) && sameNativePointIdentity(a.Point, b.Point)
+	return a.OrgID == b.OrgID && a.ProjectID == b.ProjectID && a.EnvironmentID == b.EnvironmentID && a.SourceID == b.SourceID && a.PointID == b.PointID && a.RequestID == b.RequestID && a.CreatedBy == b.CreatedBy && a.Target == b.Target && a.ExpiresAt.Sub(a.CreatedAt) == b.ExpiresAt.Sub(b.CreatedAt) && sameNativePointSelection(a.Point, b.Point)
 }
 
 func (s *PgStore) CreateNativeRestore(ctx context.Context, r *NativeRestore) (*NativeRestore, error) {
@@ -86,12 +87,22 @@ func (s *PgStore) createNativeRestore(ctx context.Context, r *NativeRestore, sou
 	if err != nil {
 		return nil, err
 	}
+	retired, retirementErr := nativePointRetired(ctx, tx, r.OrgID, r.SourceID, r.PointID)
+	if retirementErr != nil {
+		return nil, retirementErr
+	}
+	if retired {
+		return nil, ErrConflict
+	}
 	point, err := scanNativePoint(tx.QueryRow(ctx, `SELECT id,source_id,body,present,last_seen_at FROM loomplane_native_points WHERE org_id=$1 AND source_id=$2 AND id=$3 FOR SHARE`, r.OrgID, r.SourceID, r.PointID))
 	if err != nil {
 		return nil, err
 	}
 	if !sameNativePointIdentity(*point, r.Point) || source.Provider != r.Target.Provider {
 		return nil, ErrConflict
+	}
+	if _, selectionErr := point.SelectTime(source.Provider, r.Point.RestoreTime); selectionErr != nil {
+		return nil, selectionErr
 	}
 	if sourceDigest != "" {
 		if checkErr := checkReviewedNativeSource(&NativeRestore{Source: source.Binding}, sourceDigest); checkErr != nil {
@@ -208,13 +219,16 @@ func (s *PgStore) SaveNativeCheckpoint(ctx context.Context, r *NativeRestore, st
 func (s *PgStore) FinishNativeRestore(ctx context.Context, r *NativeRestore, result NativeRestoreResult, duration time.Duration, cause error) error {
 	status, message := "succeeded", ""
 	var verified *time.Time
-	if cause == nil {
+	switch {
+	case cause == nil:
 		if !result.SQLVerified || result.ExternalID == "" || result.PhysicalID == "" || duration < 0 {
 			return ErrInvalid
 		}
 		now := time.Now().UTC()
 		verified = &now
-	} else {
+	case errors.Is(cause, ErrNativePending):
+		status, message = "queued", "Waiting to reconcile the original native request. Its identity, credentials and expiry are retained."
+	default:
 		status, message = "failed", "Native restore did not finish. Check the saved operation and remove or reconcile the temporary copy."
 	}
 	return nativeRestoreWrite(s.db.Exec(ctx, `UPDATE loomplane_native_restores SET status=$4,error=$5,external_id=$6,physical_id=$7,verified_at=$8,duration_ms=$9,lease_until=NULL

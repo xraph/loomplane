@@ -365,6 +365,11 @@ func validateKind(k Kind) []error {
 		if d.Default && !d.Optional {
 			f.add("dependency %q is on by default but not optional", d.Name)
 		}
+		for target, hours := range d.BackupEveryHours {
+			if !slices.Contains(k.Targets, target) || hours < 1 || hours > 168 {
+				f.add("dependency %q backup default for %q must use a supported target and an interval of 1 to 168 hours", d.Name, target)
+			}
+		}
 		if d.External != nil {
 			validateRequirement(f, d.Name, *d.External)
 		}
@@ -1057,7 +1062,7 @@ func validateEngine(e Engine) []error {
 	}
 	format, ok := families[e.Family]
 	if !ok {
-		f.add("family %q is not one of postgres, mysql, mariadb, redis and valkey", e.Family)
+		f.add("family %q has no native recovery adapter", e.Family)
 	}
 	if e.Title == "" {
 		f.add("engine has no title")

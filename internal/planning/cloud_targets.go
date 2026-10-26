@@ -228,7 +228,7 @@ func ResolveCloudTargets(m *manifest.Manifest, environment string, assignment *c
 }
 
 // resolveCloudPlacements leaves held services exactly as their manifest says.
-func resolveCloudPlacements(m *manifest.Manifest, environment string, assignment *cloudprofiles.Assignment, options []ConnectionOption, pools map[string]*cloudinfra.Placement, held map[string]bool) (*manifest.Manifest, map[string]CloudPlacement, error) {
+func resolveCloudPlacements(m *manifest.Manifest, environment string, assignment *cloudprofiles.Assignment, options []ConnectionOption, pools map[string]*cloudinfra.Placement, held map[string]bool, future ...map[string]*CapacityIntent) (*manifest.Manifest, map[string]CloudPlacement, error) {
 	raw, err := json.Marshal(m)
 	if err != nil {
 		return nil, nil, err
@@ -284,6 +284,13 @@ func resolveCloudPlacements(m *manifest.Manifest, environment string, assignment
 		connectionID := target.ConnectionID
 		var pool *cloudinfra.Placement
 		if target.PoolID != "" {
+			if len(future) > 0 && future[0][name] != nil {
+				set.Provider, set.CloudTarget, set.CloudTags = target.Provider, "", nil
+				set.Target = ""
+				s.Settings, s.Environments = set, nil
+				out.Services[name] = s
+				continue
+			}
 			if pools[name] == nil {
 				return nil, nil, fmt.Errorf("%s needs resolved pool capacity", path)
 			}
@@ -500,7 +507,7 @@ func (s *PgStore) PreviewPlacement(ctx context.Context, in cloudinfra.PlacementR
 func (s *PgStore) ValidatePlacement(ctx context.Context, org, project, env, plan, service string, p cloudinfra.Placement) error {
 	return cloudinfra.NewPgStore(s.db).ValidatePlacement(ctx, org, project, env, plan, service, p)
 }
-func (s *Service) resolvePools(ctx context.Context, plan *Plan, m *manifest.Manifest, a *cloudprofiles.Assignment, bindings []*Binding, options []ConnectionOption, held map[string]bool) (map[string]*cloudinfra.Placement, error) {
+func (s *Service) resolvePools(ctx context.Context, plan *Plan, m *manifest.Manifest, a *cloudprofiles.Assignment, bindings []*Binding, options []ConnectionOption, held map[string]bool, future ...map[string]*CapacityIntent) (map[string]*cloudinfra.Placement, error) {
 	out := map[string]*cloudinfra.Placement{}
 	if a == nil {
 		return out, nil
@@ -575,6 +582,15 @@ func (s *Service) resolvePools(ctx context.Context, plan *Plan, m *manifest.Mani
 				req.DestinationServerID = out[name].ServerID
 				out[name], err = resolver.PreviewPlacement(ctx, req)
 			}
+		}
+		if err != nil && len(future) > 0 {
+			intent, intentErr := s.futureCapacity(ctx, plan, a, t, req, svc.Repo, err)
+			if intentErr == nil {
+				future[0][name] = intent
+				delete(out, name)
+				continue
+			}
+			err = intentErr
 		}
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", name, err)

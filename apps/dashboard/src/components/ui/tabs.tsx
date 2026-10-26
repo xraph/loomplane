@@ -29,9 +29,22 @@ const tabsListVariants = cva(
         default: "bg-muted",
         line: "w-full justify-start gap-0.5 border-b p-0 group-data-horizontal/tabs:h-auto",
       },
+      density: {
+        default: "",
+        compact: "",
+      },
     },
+    compoundVariants: [
+      {
+        variant: "line",
+        density: "compact",
+        className:
+          "flex-wrap gap-x-[18px] gap-y-0 border-border-tab [&>[data-slot=tabs-trigger]]:-mb-px [&>[data-slot=tabs-trigger]]:border-0 [&>[data-slot=tabs-trigger]]:px-0 [&>[data-slot=tabs-trigger]]:after:bottom-0 [&>[data-slot=tabs-trigger]:not([data-active])]:text-muted-foreground",
+      },
+    ],
     defaultVariants: {
       variant: "default",
+      density: "default",
     },
   }
 )
@@ -39,13 +52,14 @@ const tabsListVariants = cva(
 function TabsList({
   className,
   variant = "default",
+  density = "default",
   ...props
 }: TabsPrimitive.List.Props & VariantProps<typeof tabsListVariants>) {
   return (
     <TabsPrimitive.List
       data-slot="tabs-list"
       data-variant={variant}
-      className={cn(tabsListVariants({ variant }), className)}
+      className={cn(tabsListVariants({ variant, density }), className)}
       {...props}
     />
   )

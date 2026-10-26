@@ -166,6 +166,21 @@ func (s *Session) DeleteSQLRecovery(ctx context.Context, name, region, physical,
 	if intent == "" || track.Check == nil {
 		return errors.New("cloud sql copy cleanup requires its saved intent and active worker guard")
 	}
+	return s.deleteSQLRecoveryCopy(ctx, name, track, func(_ context.Context, in *SQLInstance) error {
+		pin, err := in.Incarnation(s.key.ProjectID, region, name)
+		if err != nil {
+			return err
+		}
+		if pin != physical || in.Kind != "sql#instance" || in.Settings.UserLabels[SQLIntentLabel] != intent || in.Settings.UserLabels["managed-by"] != "loomplane" {
+			return errors.New("cloud sql cleanup target does not match the original temporary copy")
+		}
+		return nil
+	})
+}
+
+// deleteSQLRecoveryCopy shares checkpointed disposal and absence confirmation.
+// The caller supplies the ownership witness appropriate to its creation API.
+func (s *Session) deleteSQLRecoveryCopy(ctx context.Context, name string, track SQLMutation, inspect func(context.Context, *SQLInstance) error) error {
 	guard := track.Check
 	if err := guard(ctx); err != nil {
 		return err
@@ -182,17 +197,10 @@ func (s *Session) DeleteSQLRecovery(ctx context.Context, name, region, physical,
 		if err != nil {
 			return err
 		}
-		pin, err := in.Incarnation(s.key.ProjectID, region, name)
-		if err != nil {
-			return err
-		}
-		if pin != physical || in.Kind != "sql#instance" || in.Settings.UserLabels[SQLIntentLabel] != intent || in.Settings.UserLabels["managed-by"] != "loomplane" {
-			return errors.New("cloud sql cleanup target does not match the original temporary copy")
-		}
-		return nil
+		return inspect(ctx, in)
 	}
 	if _, err := s.GetSQLInstance(ctx, name); IsNotFound(err) && !requested {
-		return nil
+		return guard(ctx)
 	} else if err != nil && !IsNotFound(err) {
 		return err
 	}

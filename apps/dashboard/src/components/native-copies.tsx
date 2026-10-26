@@ -11,6 +11,7 @@ import { useOrganization } from "@/lib/organization"
 import { useNow } from "@/lib/use-runs"
 import { formatDate } from "@/lib/format"
 import { NativeEmpty } from "@/components/native-recovery-empty"
+import { NativeCopyCredentialsControl } from "@/components/native-copy-credentials"
 import { QueryError } from "@/components/query-error"
 import { Button } from "@/components/ui/button"
 import { Alert, AlertDescription } from "@/components/ui/alert"
@@ -119,6 +120,16 @@ export function NativeCopyHistory({
                   <span className="font-medium">{copyStatus(copy)}</span> ·{" "}
                   {copy.id}
                 </p>
+                {can("service_backup:read") &&
+                  can("service_restore:manage") &&
+                  can("secret:manage") &&
+                  copies.status === "success" &&
+                  copy.status === "succeeded" &&
+                  copy.verifiedAt &&
+                  !copy.cleanupRequestedAt &&
+                  new Date(copy.expiresAt).getTime() > now && (
+                    <NativeCopyCredentialsControl copy={copy} />
+                  )}
                 {can("service_restore:manage") &&
                   copies.status === "success" &&
                   !["deleted", "deleting"].includes(copy.status) && (
@@ -138,9 +149,16 @@ export function NativeCopyHistory({
                   )}
               </div>
               <p className="break-all text-muted-foreground">
-                {copy.target.nativeProject || copy.target.provider} ·{" "}
-                {copy.target.region} · Source {copy.sourceId}
+                {copy.target.nativeProject ||
+                  copy.target.nativeAccount ||
+                  copy.target.provider}{" "}
+                · {copy.target.region} · Source {copy.sourceId}
               </p>
+              {copy.restoreTime && (
+                <p className="break-all text-muted-foreground">
+                  PITR time {copy.restoreTime}
+                </p>
+              )}
               <p className="text-muted-foreground">
                 {copy.verifiedAt
                   ? `SQL verified ${formatDate(copy.verifiedAt)}`
@@ -165,9 +183,9 @@ export function NativeCopyHistory({
       ) : (
         copies.status !== "error" && (
           <NativeEmpty title="No native recovery copies">
-            Choose a Cloud SQL PostgreSQL 17 snapshot below to review a
-            temporary copy and its charges. Snapshot observations alone do not
-            establish a successful restore.
+            Choose a supported RDS or Cloud SQL snapshot, or read its PITR
+            window, to review a temporary copy and its charges. Saved provider
+            observations alone do not establish a successful restore.
           </NativeEmpty>
         )
       )}
@@ -211,8 +229,10 @@ export function NativeCopyHistory({
             <AlertDialogTitle>Clean up temporary copy?</AlertDialogTitle>
             <AlertDialogDescription className="break-words">
               Remove {confirming?.id} from{" "}
-              {confirming?.target.nativeProject || confirming?.target.provider}.
-              This removes the temporary copy and its credentials. The source
+              {confirming?.target.nativeProject ||
+                confirming?.target.nativeAccount ||
+                confirming?.target.provider}
+              . This removes the temporary copy and its credentials. The source
               database stays unchanged. Charges continue if cleanup fails.
             </AlertDialogDescription>
           </AlertDialogHeader>

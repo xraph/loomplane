@@ -4,6 +4,7 @@ import { Navigate, Outlet } from "@tanstack/react-router"
 import { messageOf } from "@/client/errors"
 import { AppSidebar } from "@/components/app-sidebar"
 import { AppStatusBar } from "@/components/app-status-bar"
+import { AuthLayout } from "@/components/auth-layout"
 import { ShellProvider } from "@/components/shell"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
@@ -19,6 +20,22 @@ import { RealtimeProvider } from "@/lib/realtime-provider"
 const authPaths = ["/sign-in", "/sign-up"]
 const recoveryPaths = ["/forgot-password", "/reset-password", "/verify-email"]
 
+// Every signed-out screen shares one AuthLayout, returned from the same place
+// below, so moving between them swaps the card and keeps the frame mounted.
+function authTitle(path: string) {
+  switch (path) {
+    case "/sign-up":
+      return "Create your Loomplane account"
+    case "/forgot-password":
+    case "/reset-password":
+      return "Recover your Loomplane account"
+    case "/verify-email":
+      return "Verify your email"
+    default:
+      return "Sign in to Loomplane"
+  }
+}
+
 export function App() {
   const { isLoading, isAuthenticated } = useAuth()
   const path = usePath()
@@ -26,17 +43,25 @@ export function App() {
   const invite = usePendingInvite()
 
   if (isLoading) return <PageLoading />
-  if (recoveryPaths.includes(path)) return <Outlet />
+  if (recoveryPaths.includes(path)) {
+    return (
+      <AuthLayout title={authTitle(path)}>
+        <Outlet />
+      </AuthLayout>
+    )
+  }
   if (!isAuthenticated) {
     return (
-      <AuthPage
-        mode={path === "/sign-up" ? "sign-up" : "sign-in"}
-        notice={
-          invite
-            ? "Sign in, or create an account with the email your invitation went to, to join the organization."
-            : undefined
-        }
-      />
+      <AuthLayout title={authTitle(path)}>
+        <AuthPage
+          mode={path === "/sign-up" ? "sign-up" : "sign-in"}
+          notice={
+            invite
+              ? "Sign in, or create an account with the email your invitation went to, to join the organization."
+              : undefined
+          }
+        />
+      </AuthLayout>
     )
   }
   if (authPaths.includes(path)) return <Navigate to="/" replace />

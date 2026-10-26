@@ -1,0 +1,212 @@
+---
+title: loomplane.yaml
+description: Every field of the loomplane.yaml manifest, with its type, limits and meaning.
+---
+
+This is the complete field reference. For how to think about a manifest, read [The manifest](/docs/concepts/the-manifest) first. The JSON schema at `pkg/manifest/schema.json` (`$id` `https://loomplane.dev/schemas/loomplane.json`) is the machine-readable version, and it's also the MCP resource `loomplane://schema/loomplane.yaml`. Loomplane rejects unknown fields and unsupported versions. A manifest can be up to 256 KiB.
+
+## Top level
+
+| Field | Type | Meaning |
+|---|---|---|
+| `version` | `1` or `2` | Required. `1` for all existing workflows. `2` adds the optional `federation` section |
+| `defaults` | object | `provider`, `region` and `cloud_tags` for everything that doesn't set its own |
+| `services` | map, up to 100 | What the application runs, by name |
+| `resources` | map, up to 100 | Backing services, by name. A resource can't share a service's name |
+| `gateways` | map, up to 10 | Public entry points that route by path |
+| `links` | map, up to 5 | Private network links between Google Cloud and AWS |
+| `ignore` | object | `resources`: kinds analysis found that you don't use |
+| `held` | object | `same_address`: `block` (default) or `warn` |
+| `federation` | object | Version 2 only. See [below](#federation-version-2) |
+
+Names (of services, resources, gateways, links and environments in overrides) match `^[a-z][a-z0-9-]{0,39}$`: lower case letters, digits and hyphens, starting with a letter, 40 characters at most.
+
+## defaults
+
+| Field | Meaning |
+|---|---|
+| `provider` | Provider for every service, resource and gateway that sets none |
+| `region` | Region for the same. It only applies together with the default provider: a service that names another provider doesn't take the default region |
+| `cloud_tags` | Up to 8 tags used to pick a Cloud target for every service with no placement of its own. Can't be combined with `provider` |
+
+## services
+
+| Field | Type | Meaning |
+|---|---|---|
+| `source` | string | Required. Where the service's code is, as analysis found it: a Go main package's directory, a Rust binary's source file, a Node package's, Python project's or JVM module's directory, or a Dockerfile. A Python Procfile process other than `web` is `shop/Procfile/worker`. When two ecosystems have a service at one path, prefix the ecosystem: `go:`, `rust:`, `node:`, `python:`, `jvm:` or `container:` |
+| `repo` | string | The alias of the repository the service is in. A project with one repository can leave it out |
+| `kind` | enum | Corrects what analysis decided: `http-service`, `web-app`, `static-site` or `worker` |
+| `build` | object | See [build](#build) |
+| `provider` | string | Where it runs, by the provider's name |
+| `region` | string | The provider's region |
+| `target` | `conn_...` | The checked server or Kubernetes connection to run on |
+| `cloud_target` | string | A named target in the environment's assigned Cloud. Can't be set with `cloud_tags` |
+| `cloud_tags` | array | Up to 8 tags. Selects the one target that carries every tag. Can't be set with `cloud_target` |
+| `endpoint` | object | See [endpoint](#endpoint) |
+| `health_path` | string | A readiness path, such as `/_/health`. Starts with `/` |
+| `port` | 1 to 65535 | The port it listens on. Without it, the one its Dockerfile exposes, or 8080 with a warning |
+| `public` | boolean | Whether it gets an address on the internet. Yes for anything that serves HTTP, no for a worker, unless you say |
+| `scale` | `{min, max}` | Instances. `min` is 0 or more, `max` is 1 to 100. On targets that let you choose |
+| `size` | `{cpu, memory}` | `cpu` is virtual CPUs above 0 and up to 8 (such as 0.5 or 2). `memory` is MiB, 128 to 32768 |
+| `needs` | array of names | Resources and services it talks to. Each gets it an address in a variable, and it deploys after them |
+| `need_options` | map | Options passed to a need, by need and then by option name |
+| `enabled` | boolean | `false` leaves it out |
+| `environments` | map | Overrides by environment name. Takes every field above except `source`, `repo`, `kind`, `build`, `needs` and `need_options` |
+
+`provider`, `cloud_target` and `cloud_tags` can't be mixed at the same level. An effective direct `provider` or `target` also conflicts with Cloud placement, including one inherited from `defaults`.
+
+### build
+
+| Field | Meaning |
+|---|---|
+| `context` | The directory its Dockerfile builds from, from the repository root. `.` is the root. Without it, the context a Compose file gives the Dockerfile, or the Dockerfile's own directory |
+| `builder` | For Kubernetes source builds: the `conn_...` of the SSH/Docker builder |
+| `registry` | The `conn_...` of the OCI registry |
+| `image` | An existing image pinned as `registry/repository@sha256:...`, instead of building |
+
+Loomplane passes the Dockerfile to the build by its path from the context, so it can sit anywhere. A service without a Dockerfile is built from its source, and `build` on it is ignored with a warning.
+
+### endpoint
+
+Settings for a service on your own server or cluster.
+
+| Field | Meaning |
+|---|---|
+| `host_port` | The published host port, 1 to 65535 |
+| `hostname` | The public hostname |
+| `ingress_class` | The Kubernetes ingress class |
+| `tls_secret` | The name of an existing Kubernetes TLS secret |
+
+### need_options
+
+Options a service hands to something it needs, by need name and then option name:
+
+```yaml
+services:
+  api:
+    source: services/api
+    needs: [fabriq]
+    need_options:
+      fabriq:
+        tenant: acme
+```
+
+The need has to be in `needs`. Option names are lower case letters, digits and underscores, start with a letter and run to 32 characters. A value is up to 200 characters with no newline or other control character. Which options a kind accepts is checked when you plan.
+
+The dashboard and `POST /projects/:id/manifest/edits` can change these in place without touching your comments. `link` adds a need to a service (with options if you give them, replacing old ones as a whole; with none, they stay). `unlink` removes the need and its options, and fails if the service doesn't need it. `set_use` sets one dependency on a catalog resource and leaves the rest of its `uses` alone. Send one of the three per edit.
+
+## resources
+
+| Field | Meaning |
+|---|---|
+| `kind` | Required. `postgres`, `mysql`, `mariadb`, `redis`, `valkey`, `mongodb`, `kafka`, `rabbitmq`, `nats`, `object-storage`, `search`, `memcached`, `clickhouse` and so on: the names analysis uses, or a catalog kind |
+| `provider`, `region` | Where it's provisioned |
+| `version` | The engine's version, such as `"17"`. Without it, the provider's newest |
+| `target` | The `conn_...` of the checked server or Kubernetes connection a catalog resource runs on |
+| `uses` | Where a catalog resource gets each dependency |
+| `environments` | `provider`, `region` or `enabled` by environment name |
+
+### uses
+
+A catalog resource can depend on other things, such as a Postgres for its data or a Redis for its cache. By default Loomplane provisions a new one of each and wires it in. `uses` chooses something else, one dependency at a time, keyed by the dependency's name as the catalog lists it.
+
+| Field | Meaning |
+|---|---|
+| `resource` | Use another resource in this manifest. It must exist and can't be the resource itself |
+| `external` | Connect to an endpoint you added to the catalog, by its ID (`endpoint_` and 26 characters) |
+| `enabled` | Turn an optional dependency on or off. `false` can't go with `resource` or `external` |
+
+Set `resource` or `external`, not both. Set nothing and you get a new one.
+
+```yaml
+resources:
+  db:
+    kind: postgres
+  gateway:
+    kind: sample
+    target: conn_your_server
+    uses:
+      postgres:
+        resource: db
+      redis:
+        external: endpoint_01jbz7q5mx8vh3k2r9t4w6y0ae
+      falkordb:
+        enabled: true
+```
+
+`sample` stands in for a catalog kind with those three dependencies, and `conn_your_server` for one of your checked connections. The manifest checks what it can see on its own: that `db` is in it and isn't `gateway` itself, and that the endpoint ID has the right form. The rest waits until you plan, when Loomplane finds out whether the kind has a dependency called `postgres`, whether `db` is a kind it accepts, and whether the endpoint answers from the target.
+
+## gateways
+
+| Field | Meaning |
+|---|---|
+| `provider`, `region` | Where it runs: `cloud-run` or `ecs-fargate` |
+| `routes` | Required. 1 to 50 routes |
+| `environments` | `provider`, `region` or `enabled` by environment name |
+
+A route is `{path, to, strip_prefix}`. `path` is a prefix such as `/api` that matches `/api` and anything under `/api/`. `to` is the service name. `strip_prefix` removes the prefix first, so `/api/users` arrives as `/users`. The longest matching path wins.
+
+## links
+
+| Field | Meaning |
+|---|---|
+| `between` | Required. The two clouds it joins: `gcp` and `aws` |
+| `region` | Where the Google Cloud side runs. Put it where the Cloud Run services that use it run |
+| `environments` | `region` or `enabled` by environment name |
+
+A link needs more than a connection check asks for. The Google Cloud key needs Compute Network Admin (`roles/compute.networkAdmin`). The AWS key needs `ec2:CreateVpnGateway`, `ec2:AttachVpnGateway`, `ec2:DetachVpnGateway`, `ec2:DeleteVpnGateway`, `ec2:DescribeVpnGateways`, `ec2:CreateCustomerGateway`, `ec2:DeleteCustomerGateway`, `ec2:CreateVpnConnection`, `ec2:DeleteVpnConnection`, `ec2:DescribeVpnConnections`, `ec2:DescribeRouteTables`, `ec2:EnableVgwRoutePropagation` and `ec2:CreateTags`. See [Gateways and networking](/docs/concepts/gateways-and-networking#links) for what a link builds and bills.
+
+## ignore
+
+`ignore.resources` lists resource kinds analysis found that the application doesn't use, so plans stop asking about them.
+
+## held
+
+`held.same_address` decides what a scoped plan does when a held service uses a service that was deleted outside Loomplane and that the plan creates again. The held service isn't redeployed, so it keeps the old address.
+
+With `block` (the default) that's a problem until you add the held repository to the scope. With `warn` it's a warning, but only when the planner can tell the address won't change: a Cloud Run service created again with the name, region and connection it had, which gets the same URL. Anything else, including a replacement, is still a problem.
+
+```yaml
+held:
+  same_address: warn
+```
+
+## Variables Loomplane adds
+
+| Needs | Variable |
+|---|---|
+| Postgres, MySQL, MariaDB | `DATABASE_URL` |
+| Redis, Valkey | `REDIS_URL` |
+| Memcached | `MEMCACHED_SERVERS` |
+| MongoDB | `MONGODB_URI` |
+| AMQP brokers | `AMQP_URL` |
+| Kafka | `KAFKA_BROKERS` |
+| NATS | `NATS_URL` |
+| Object storage | `STORAGE_URL` |
+| Search | `SEARCH_URL` |
+| ClickHouse | `CLICKHOUSE_URL` |
+| Another service | Its name in capitals plus `_URL` (`API_URL`) |
+
+## Provider names
+
+`vercel`, `cloud-run`, `cloud-sql`, `memorystore`, `cloud-storage`, `ecs-fargate`, `rds`, `elasticache`, `s3`, `cross-cloud-vpn`, `render`, `digitalocean`, `azure-container-apps`, `azure-database`, `azure-managed-redis`, `server`, `kubernetes`, plus any [provider plugin](/docs/extending/provider-plugins). The [Clouds overview](/docs/clouds) says what each runs and provisions.
+
+## Federation (version 2)
+
+<Callout type="warn">
+  Federation is still being built. Version 2 records federation proposals, and its plans stay blocked until destination agents, network drivers and policy enforcement pass qualification. Don't use it to try to get private traffic between clouds.
+</Callout>
+
+To convert a file, review its destinations and public exposure, change `version` explicitly, add the `federation` section and review the resulting blocked plan. Keep the original for rollback. The editor never upgrades it for you.
+
+| Map | Contents |
+|---|---|
+| `destinations` | Name to `{id: dest_..., environments: {env: dest_...}}`. IDs must resolve in the organization, project and environment |
+| `network_links` | `{from, to, transport}` where `transport` is `imported` or `ipsec` |
+| `service_exports` | `{service, destination, exposure: private, port, protocol, identity}`. `protocol` is `http`, `grpc` or `tcp`, and `identity` is `workload` or `gateway` |
+| `access_grants` | `{source_service, source_destination, export, methods, paths, grpc_methods, expires_at}` |
+| `placements` | `{service, destination}` |
+
+Each map allows 100 entries. A grant allows 16 HTTP methods, 32 paths of up to 1024 bytes, or 32 gRPC methods of up to 256 bytes (gRPC selectors look like `/package.Service/Method`). `expires_at` is RFC 3339, and an expired grant is rejected at execution even if the manifest still parses. Exports need `public: false` and an explicit service `port` that matches. Every export and source grant needs a matching placement. `needs` still controls configuration and startup order and grants no access.
+
+Connections supply credentials through Vault, so manifests contain no tokens, kubeconfigs or certificate keys. Management is off by default and turned on with `federation.enabled`. See [Configuration](/docs/reference/configuration).

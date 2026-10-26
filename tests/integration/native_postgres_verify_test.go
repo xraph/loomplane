@@ -26,6 +26,37 @@ type nativePostgresVerifier interface {
 	Verify(context.Context, nativepg.Spec, func(context.Context) error) (nativepg.Proof, error)
 }
 
+func TestNativePostgresCredentialInspectionCannotRecreateOrRepairLogin(t *testing.T) {
+	f := nativeSQLFixtureFor(t)
+	inspector, ok := any(f.verifier).(interface {
+		Inspect(context.Context, nativepg.Spec, func(context.Context) error) (nativepg.Proof, error)
+	})
+	if !ok {
+		t.Fatal("credential access has no existing-login-only SQL inspection")
+	}
+	guard := func(context.Context) error { return nil }
+	if _, err := inspector.Inspect(t.Context(), f.spec, guard); err == nil {
+		t.Fatal("credential inspection accepted a missing login")
+	}
+	var exists bool
+	if err := f.admin.QueryRow(t.Context(), `SELECT EXISTS(SELECT 1 FROM pg_roles WHERE rolname=$1)`, f.spec.Reader).Scan(&exists); err != nil || exists {
+		t.Fatal("inspection recreated the missing login", err)
+	}
+	if _, err := f.verifier.Verify(t.Context(), f.spec, guard); err != nil {
+		t.Fatal(err)
+	}
+	proof, err := inspector.Inspect(t.Context(), f.spec, guard)
+	if err != nil || proof.Reader != f.spec.Reader || !proof.TransactionReadOnly {
+		t.Fatal("existing restricted reader was not authenticated", proof, err)
+	}
+	if _, err = f.admin.Exec(t.Context(), `GRANT UPDATE ON public.recovered_rows TO PUBLIC`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = inspector.Inspect(t.Context(), f.spec, guard); !errors.Is(err, nativepg.ErrUnsafeRole) {
+		t.Fatal("changed inherited privileges retained credential access", err)
+	}
+}
+
 type nativeSQLFixture struct {
 	admin    *pgx.Conn
 	config   *pgx.ConnConfig

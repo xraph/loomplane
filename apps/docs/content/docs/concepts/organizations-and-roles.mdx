@@ -1,0 +1,39 @@
+---
+title: Organizations and roles
+description: Everything belongs to an organization, and four roles decide who can plan, approve and manage.
+---
+
+Every project, plan, connection, variable and API key belongs to one organization, and every request acts in exactly one. That organization comes from your signed-in session or your API key, and nothing in the request can change it. A dashboard tab that drifted to another organization gets a 409 instead of acting in the wrong place. Another organization's things aren't found, which is the same answer as something that doesn't exist, so an ID never confirms anything.
+
+## Roles
+
+| Role | Can |
+|---|---|
+| Viewer | Read everything but secret values. Changes nothing |
+| Developer | Create projects and environments, analyze, edit manifests and variables, plan |
+| Admin | Approve plans, retry deployments, manage cloud connections, secrets, members and backups |
+| Owner | Everything, including the organization itself, and retiring backups |
+
+Each role includes everything the one below it can do. The line that matters is approval: a developer can plan anything, and only an admin's approval of the exact revision they reviewed changes a cloud. [Roles and permissions](/docs/reference/roles-and-permissions) lists every permission.
+
+Roles are Warden roles, checked in the service layer on every action. The dashboard hides what your role can't do, but the API checks anyway. They're mapped from your organization membership: owner to owner, admin to admin, member to developer, and anything else to viewer, so an unexpected role never grants more than reading.
+
+## Members and invitations
+
+Owners and admins invite people from the dashboard. With SMTP configured, Loomplane emails the invitation and reports whether it was sent, disabled or failed. Either way you get a manual link that works once, for a week, and only for an account with that address. Owners and admins change roles and remove people, never above their own role.
+
+## API keys
+
+Make a key under **Settings, API keys**. It acts as you, with your role, in your organization, and never more. Pick read-only and it fails every permission that isn't a read.
+
+- The secret appears once. Loomplane stores a hash.
+- A key lives 90 days unless you say otherwise, and at most 366.
+- Keys can't manage keys, so a key can't outlive its own revocation.
+- When you leave the organization or lose a role, your keys lose the same rights on the next request.
+- Owners and admins can see and revoke anyone's keys. Everyone else sees their own.
+
+Name a key after the machine or pipeline it's for.
+
+## The audit trail
+
+Chronicle records authentication, membership and project changes, plus what agents and keys change, under the person who made the key. The record keeps names and the last four characters of a key, never a value.

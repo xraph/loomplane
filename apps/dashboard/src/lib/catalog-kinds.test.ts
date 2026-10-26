@@ -171,3 +171,18 @@ test("a composed resource's parts are the bindings that say so, not every name i
   ])
   expect(serviceBindings(bindings, "app--reports").components).toEqual([])
 })
+
+test("NATS exposes native recovery and describes file persistence", () => {
+  const module = catalogKind("nats")
+  expect(module?.title).toBe("NATS JetStream")
+  expect(module?.features).toContain("Messages and consumers")
+  expect(module?.panels[0].id).toBe("recovery")
+})
+
+test("RabbitMQ exposes message recovery and warns about backup downtime", () => {
+  const module = catalogKind("rabbitmq")
+  expect(module?.title).toBe("RabbitMQ")
+  expect(module?.blurb).toMatch(/disconnect.*stop/i)
+  expect(module?.features).toContain("Message backups")
+  expect(module?.panels[0].id).toBe("recovery")
+})

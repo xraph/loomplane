@@ -20,6 +20,10 @@ func AppliedCloudPlan(bindings []*Binding, assignment *cloudprofiles.Assignment,
 }
 
 func appliedCloudPlan(bindings []*Binding, assignment *cloudprofiles.Assignment, targetID string, options []ConnectionOption, registry *provider.Registry, pools map[string]CloudPlacement, routes ...[]cloudinfra.Route) *Result {
+	return appliedCloudPlanWithIntents(bindings, assignment, targetID, options, registry, pools, nil, routes...)
+}
+
+func appliedCloudPlanWithIntents(bindings []*Binding, assignment *cloudprofiles.Assignment, targetID string, options []ConnectionOption, registry *provider.Registry, pools map[string]CloudPlacement, intents map[string]*CapacityIntent, routes ...[]cloudinfra.Route) *Result {
 	p := &planner{in: Input{Providers: registry, Connections: options, CloudPlacements: map[string]CloudPlacement{}, Chosen: map[string]string{}}, services: map[string]*Action{}, resources: map[string]*Action{}, bindings: map[string]*Binding{}, clouds: map[string]bool{}, unready: map[string]string{}, held: map[string]string{}, removing: map[string]bool{}}
 	if len(routes) > 0 {
 		p.in.Routes = routes[0]
@@ -63,6 +67,38 @@ func appliedCloudPlan(bindings []*Binding, assignment *cloudprofiles.Assignment,
 				continue
 			}
 			t = assignment.Targets[ti]
+		}
+		if intent := intents[b.Name]; intent != nil {
+			prov, err := registry.Get(t.Provider)
+			if err != nil {
+				blocked(b.Name, err.Error())
+				continue
+			}
+			runs, ok := prov.Running(cfg.Workload)
+			if !ok || !prov.Available {
+				blocked(b.Name, "The pool cannot run the applied workload.")
+				continue
+			}
+			cfg.CapacityIntent = intent
+			cfg.CloudPlacement = nil
+			cfg.Provider = prov.Name
+			cfg.Target = ""
+			cfg.TargetSettings = nil
+			cfg.Execution = runs.Execution
+			set := manifest.Settings{Provider: cfg.Provider, Endpoint: cfg.Endpoint, Scale: cfg.Scale, Size: cfg.Size}
+			if cfg.BuildTarget != nil {
+				set.Build = &manifest.Build{Builder: cfg.BuildTarget.Builder, Registry: cfg.BuildTarget.Registry, Image: cfg.BuildTarget.Image, Context: cfg.Context}
+			}
+			p.configureTarget(b.Name, "services."+b.Name, prov, set, &cfg)
+			a.Provider, a.ConnectionID, a.Engine, a.Creates = prov.Name, "", prov.Engine(runs), runs.Creates
+			a.Op = Replace
+			a.Reason = "Recreate the applied service when its approved pool capacity is ready."
+			for _, route := range p.in.Routes {
+				if route.Input.Service == b.Name {
+					blocked(b.Name, "A routed replacement needs a concrete destination for overlap review.")
+				}
+			}
+			continue
 		}
 		if t.PoolID != "" {
 			placement, found := pools[b.Name]
@@ -163,7 +199,7 @@ func appliedCloudPlan(bindings []*Binding, assignment *cloudprofiles.Assignment,
 					continue
 				}
 				a.DependsOn = appendUnique(a.DependsOn, dep.ID)
-				if !dep.Service.Public && (a.ConnectionID != dep.ConnectionID || a.Region != dep.Region || a.Provider != dep.Provider) {
+				if !dep.Service.Public && (a.Service.CapacityIntent != nil || dep.Service.CapacityIntent != nil || a.ConnectionID != dep.ConnectionID || a.Region != dep.Region || a.Provider != dep.Provider) {
 					blocked(a.Name, "The private dependency "+dep.Name+" would cross an unverified account or network boundary.")
 				}
 				if dep.Op == Replace || dep.Op == Update {

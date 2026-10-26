@@ -8,7 +8,7 @@ import {
 import { protectionOf } from "@/lib/service-recovery"
 import { ServiceRecovery } from "@/pages/service-catalog"
 
-const recovery: CatalogPanel = {
+export const recovery: CatalogPanel = {
   id: "recovery",
   title: "Recovery",
   // Only where Loomplane backs the engine up on its target: not Redis or
@@ -27,6 +27,26 @@ const databaseFeatures = ["Retained volume", "Daily backups", "Test restores"]
 const cacheFeatures = ["AOF every second", "RDB snapshots", "Up to 128 MiB"]
 
 const engines: Omit<CatalogKindModule, "panels">[] = [
+  {
+    kind: "rabbitmq",
+    title: "RabbitMQ",
+    group: "data",
+    blurb:
+      "Durable queues on one private server. Message backups disconnect clients and briefly stop the broker. Recover into an isolated copy.",
+    features: ["Retained volume", "Message backups", "Test restores"],
+  },
+  {
+    kind: "nats",
+    title: "NATS JetStream",
+    group: "data",
+    blurb:
+      "Persistent messaging on one private server. Back up file streams and durable consumers, then verify them in an isolated copy.",
+    features: [
+      "Retained file store",
+      "Messages and consumers",
+      "Test restores",
+    ],
+  },
   {
     kind: "postgres",
     title: "PostgreSQL",

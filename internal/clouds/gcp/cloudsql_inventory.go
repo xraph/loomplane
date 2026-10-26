@@ -33,6 +33,7 @@ type sqlBackup struct {
 	DatabaseVersion string     `json:"databaseVersion"`
 	KMSKey          string     `json:"kmsKey"`
 	ExpiresAt       *time.Time `json:"expiryTime"`
+	DeletedAt       *time.Time `json:"instanceDeletionTime"`
 	Interval        struct {
 		Start time.Time `json:"startTime"`
 		End   time.Time `json:"endTime"`
@@ -124,7 +125,7 @@ func (s *Session) ReadSQLBackup(ctx context.Context, region, instance, physical 
 	if err != nil {
 		return nil, err
 	}
-	if partial || point == nil || point.Name != selected.Name || !point.CreatedAt.Equal(selected.CreatedAt) || point.Type != selected.Type || point.DatabaseVersion != selected.DatabaseVersion || point.KMSKey != selected.KMSKey {
+	if partial || !sameSQLBackupIdentity(&selected, point) {
 		return nil, errors.New("cloud sql selected backup no longer matches its retained identity")
 	}
 	if point.State != "SUCCESSFUL" || point.ExpiresAt != nil && !point.ExpiresAt.After(time.Now()) {

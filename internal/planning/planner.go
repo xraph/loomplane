@@ -28,6 +28,7 @@ type Input struct {
 	// Catalog requests a standalone service without repository sources.
 	Catalog         bool
 	CloudPlacements map[string]CloudPlacement
+	CapacityIntents map[string]*CapacityIntent
 	// Federation contains scoped persisted observations; nil leaves all federation capabilities unavailable.
 	Federation *FederationInput
 	// Environment is the environment's name, which picks the manifest's
@@ -155,6 +156,7 @@ func Compute(in Input) *Result {
 	p.planServices()
 	p.planGateways()
 	p.checkTargetPlacements()
+	p.checkCloudSQLApplications()
 	p.readdress()
 	for p.routedReplacements() {
 		p.readdress()
@@ -458,6 +460,10 @@ func (p *planner) planResources() {
 		if !manifest.On(set.Enabled) || p.noLinkKind(name, base, r) {
 			continue
 		}
+		if r.CloudSQLPSC != nil && (r.Kind != "postgres" || set.Provider != "cloud-sql" || r.Version != "17" || !r.CloudSQLPSC.Valid(set.Region)) {
+			p.problem(Finding{Code: "managed-profile-invalid", Subject: ResourceSubject, Name: name, Path: base + ".cloud_sql_psc", Message: "PSC requires PostgreSQL 17 on Cloud SQL and a manual endpoint in the database region."})
+			continue
+		}
 		if p.kinds().Composed(r.Kind) {
 			composed = append(composed, name)
 			continue
@@ -624,6 +630,7 @@ func (p *planner) desired(name, base string, s manifest.Service, gs *graph.Servi
 	}
 	cfg := p.serviceConfig(name, base, gs, prov, runs, set)
 	p.buildContext(name, base, set.Build, gs, cfg)
+	cfg.CapacityIntent = p.in.CapacityIntents[name]
 	p.configureTarget(name, base, prov, set, cfg)
 	if placement, ok := p.in.CloudPlacements[name]; ok {
 		placement.Region = cfg.Region
@@ -1474,6 +1481,13 @@ func (p *planner) serviceConfig(name, base string, gs *graph.Service, prov *prov
 	if cfg.HealthPath == "" && cfg.Framework == "forge" {
 		cfg.HealthPath = "/_/health"
 	}
+	if set.CloudSQLNetwork != nil {
+		network := *set.CloudSQLNetwork
+		cfg.CloudSQLNetwork = &network
+		if prov.Name != "cloud-run" || !network.Valid(cfg.Region) {
+			p.problem(Finding{Code: "cloud-sql-network-invalid", Subject: ServiceSubject, Name: name, Path: base + ".cloud_sql_network", Message: "Choose a canonical VPC and subnet in this Cloud Run service's region."})
+		}
+	}
 	if set.Public != nil {
 		cfg.Public = *set.Public
 	}
@@ -1600,8 +1614,14 @@ func (p *planner) link(name string, a *Action) {
 	for i, need := range needs {
 		if r, ok := m.Resources[need]; ok {
 			if kind, ok := p.kinds().Kind(r.Kind); ok {
-				outputs[i], takes[i], composed[i] = kind.Outputs, kind.ConsumerOptions, true
-				for _, o := range kind.Outputs {
+				outputs[i], takes[i], composed[i] = slices.Clone(kind.Outputs), kind.ConsumerOptions, true
+				if dep := p.resources[need]; dep != nil && dep.Resource != nil && dep.Resource.Composition != nil {
+					choices := dep.Resource.Composition.Dependencies
+					outputs[i] = slices.DeleteFunc(outputs[i], func(o recipes.Output) bool {
+						return o.Requires != "" && choices[o.Requires].Mode == DependencyOff
+					})
+				}
+				for _, o := range outputs[i] {
 					count[o.EnvKey]++
 				}
 				continue

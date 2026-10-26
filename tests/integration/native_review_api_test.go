@@ -77,6 +77,29 @@ func checkNativeCopyReviewAPI(t *testing.T, c *client, lc loomctl, dsn string, s
 		}
 	}
 	wait("failed")
+	c.must(http.StatusConflict, http.MethodPost, copyPath+"/credentials", nil, nil)
+	reader.must(http.StatusForbidden, http.MethodPost, copyPath+"/credentials", nil, nil)
+	credentialRequest, err := http.NewRequestWithContext(t.Context(), http.MethodPost, c.base+copyPath+"/credentials", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	credentialRequest.Header.Set("X-Publishable-Key", c.key)
+	credentialRequest.Header.Set("Authorization", "Bearer "+c.token)
+	credentialResponse, err := http.DefaultClient.Do(credentialRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = credentialResponse.Body.Close()
+	if credentialResponse.StatusCode != http.StatusConflict || credentialResponse.Header.Get("Cache-Control") != "no-store, private" {
+		t.Fatal("credential denial can be cached", credentialResponse.StatusCode, credentialResponse.Header)
+	}
+	credentialFile := filepath.Join(t.TempDir(), "copy-credentials.json")
+	if output, commandErr := lc.run("", "backups", "native-copies", "credentials", restored.ID, "--out", credentialFile); commandErr == nil {
+		t.Fatal("actual CLI disclosed a failed copy", output)
+	}
+	if _, fileErr := os.Stat(credentialFile); !os.IsNotExist(fileErr) {
+		t.Fatal("denied credential request retained an output file", fileErr)
+	}
 	sdk := lpclient.New(lc.url, lc.key)
 	retained, readErr := sdk.WaitNativeRecoveryCopy(t.Context(), restored.ID)
 	if readErr != nil || retained.Status != "failed" || retained.VerifiedAt != nil {

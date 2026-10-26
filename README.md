@@ -1,8 +1,11 @@
 <p align="center">
-  <img src="docs/assets/loomplane-logo.svg" width="96" height="96" alt="Loomplane's woven gold and ivory logo" />
+  <a href="https://www.loomplane.com">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="apps/dashboard/src/assets/brand/loomplane-logo-dark.svg" />
+      <img src="apps/dashboard/src/assets/brand/loomplane-logo.svg" width="300" alt="Loomplane" />
+    </picture>
+  </a>
 </p>
-
-<h1 align="center">Loomplane</h1>
 
 <p align="center"><strong>Your infrastructure, woven together.</strong></p>
 
@@ -12,16 +15,22 @@
 </p>
 
 <p align="center">
+  <img alt="Go 1.26" src="https://img.shields.io/badge/Go-1.26-2F5C78?style=flat-square&logo=go&logoColor=FAFAFA&labelColor=171717" />
+  <a href="LICENSE"><img alt="License: FSL-1.1-ALv2" src="https://img.shields.io/badge/license-FSL--1.1--ALv2-2F5C78?style=flat-square&labelColor=171717" /></a>
+</p>
+
+<p align="center">
+  <a href="https://www.loomplane.com">Website</a> ·
+  <a href="https://www.loomplane.com/docs">Docs</a> ·
   <a href="#quick-start">Quick start</a> ·
   <a href="#deploy-something">Deploy something</a> ·
   <a href="#what-it-does">What it does</a> ·
-  <a href="#architecture">Architecture</a> ·
-  <a href="#documentation">Documentation</a>
+  <a href="#architecture">Architecture</a>
 </p>
 
-![Interlaced charcoal, gold, and green threads forming a connected architectural grid](docs/assets/loomplane-cover.png)
+![The Loomplane dashboard's Overview: a plan for mono to production waits on an Approve button, beside the last release and deployment charts](docs/assets/loomplane-cover.png)
 
-<p align="center"><sub>Concept artwork inspired by the dashboard's woven environments.</sub></p>
+<p align="center"><sub>The Overview, with sample data, the way the landing page draws it.</sub></p>
 
 Loomplane takes a Go, Rust, TypeScript, JavaScript, Python or JVM monorepo, or an application split across several repositories, from source to running services across clouds. You give it the repositories. It reads the code (never runs it) to find the services and the databases they need, drafts a `loomplane.yaml`, and plans what deploying it would do. Once someone approves that exact plan, it builds each service on its cloud's own builder and deploys it: a Next.js app to Vercel, a Go API to Cloud Run, a worker to ECS on Fargate, Postgres on Cloud SQL or RDS, wired to each other with secrets kept in each cloud's secret store. Then it keeps checking that what runs is what it deployed.
 

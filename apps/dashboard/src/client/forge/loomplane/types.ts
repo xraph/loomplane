@@ -26,8 +26,18 @@ export interface APIKeyList {
   keys: APIKey[];
 }
 
+export interface AccountSpend {
+  cloud: string;
+  connectionId: string;
+  currency: string;
+  days: Point[];
+  name: string;
+  total: number;
+}
+
 export interface Action {
   adoptCloudPlacement?: boolean;
+  backupEveryHours?: number;
   changes?: Change[];
   cloudAdoption?: CloudAdoption;
   compensation?: CloudCompensation;
@@ -69,6 +79,13 @@ export interface AddSourceInputBody {
   ref?: string;
   repository: string;
   root?: string;
+}
+
+export interface Amount {
+  currency: string;
+  days: Point[];
+  total: number;
+  undated: number;
 }
 
 export interface Analysis {
@@ -177,6 +194,7 @@ export interface Binding {
   name: string;
   observedAt?: string;
   orgId: string;
+  ownedResources?: Record<string, any>;
   physicalId?: string;
   planId: string;
   projectId: string;
@@ -361,6 +379,24 @@ export interface CloudProjectGrantList {
   grants: (ProjectGrant | null)[];
 }
 
+export interface CloudSQLApplicationNetwork {
+  consumerProject: string;
+  network: string;
+  subnetwork: string;
+}
+
+export interface CloudSQLRecoveryNetwork {
+  consumerProject: string;
+  network: string;
+}
+
+export interface CloudSQLSourceEndpoint {
+  consumerProject: string;
+  forwardingRule: string;
+  network: string;
+  provisionSubnetwork?: string;
+}
+
 export interface CloudSyncEvent {
   attempt: number;
   cloudId: string;
@@ -504,6 +540,17 @@ export interface ConnectionsCreateInputBody {
   credential: string;
   name: string;
   settings?: Record<string, any>;
+}
+
+export interface ConsumerKey {
+  createdAt?: string;
+  lastUsedAt?: string;
+  lastUsedKnown: boolean;
+  prefix?: string;
+  revokedAt?: string;
+  service: string;
+  state: string;
+  tenant: string;
 }
 
 export interface ConsumerOption {
@@ -753,6 +800,7 @@ export interface EditInputBody {
 };
   placement?: {
   build?: Build;
+  cloudSqlNetwork?: CloudSQLApplicationNetwork;
   cloudTags?: string[];
   cloudTarget?: string;
   enabled?: boolean;
@@ -863,6 +911,10 @@ export interface Evidence {
   line?: number;
   path: string;
   source?: string;
+}
+
+export interface FabriqKeyList {
+  keys: ConsumerKey[];
 }
 
 export interface Federation {
@@ -1034,6 +1086,7 @@ export interface LogPage {
 
 export interface ManagedDatabaseConfig {
   accountIdentity: string;
+  cloudSqlPsc?: CloudSQLSourceEndpoint;
   connectionId: string;
   profile: ManagedDatabaseProfile;
 }
@@ -1112,10 +1165,13 @@ export interface MoveReview {
 export interface NativeCopyCapacity {
   availability: string;
   computeClass: string;
+  iops?: number;
+  maxStorageGb?: number;
   profileId: string;
   profileRevision: string;
   storageGb: number;
   storageType: string;
+  throughputMbps?: number;
 }
 
 export interface NativeCopyCreateInputBody {
@@ -1124,11 +1180,24 @@ export interface NativeCopyCreateInputBody {
   reviewToken: string;
 }
 
+export interface NativeCopyCredentials {
+  checkedAt: string;
+  connectionName: string;
+  copyId: string;
+  database: string;
+  expiresAt: string;
+  password: string;
+  privateServiceConnect?: boolean;
+  provider: string;
+  username: string;
+}
+
 export interface NativeCopyReview {
   capacity: NativeCopyCapacity;
   notice: string;
   pointId: string;
   requestId: string;
+  restoreTime?: string;
   reviewToken: string;
   sourceId: string;
   target: NativeRestoreTarget;
@@ -1139,6 +1208,7 @@ export interface NativeCopyReview {
 export interface NativeCopyReviewInputBody {
   cloudId: string;
   requestId: string;
+  restoreTime?: string;
   targetId: string;
   ttlHours: number;
 }
@@ -1147,6 +1217,26 @@ export interface NativeInventory {
   nextBefore?: string;
   points: NativePoint[];
   source: NativeSource;
+}
+
+export interface NativePITRBounds {
+  earliest: string;
+  latest: string;
+  protocol: number;
+  settingsDigest?: string;
+  sourceBackup?: string;
+  sourceDeletedAt?: string;
+}
+
+export interface NativePITRWindow {
+  available: boolean;
+  earliest?: string;
+  latest?: string;
+  observedAt?: string;
+  pointId?: string;
+  provider: string;
+  sourceId: string;
+  unavailableReason?: string;
 }
 
 export interface NativePoint {
@@ -1159,8 +1249,10 @@ export interface NativePoint {
   kmsKey?: string;
   lastSeenAt: string;
   name: string;
+  pitr?: NativePITRBounds;
   present: boolean;
   providerId: string;
+  restoreTime?: string;
   sourceId: string;
   status: string;
   version: string;
@@ -1191,6 +1283,7 @@ export interface NativeRestore {
   physicalId?: string;
   pointId: string;
   projectId: string;
+  restoreTime?: string;
   sourceId: string;
   status: string;
   target: NativeRestoreTarget;
@@ -1201,13 +1294,69 @@ export interface NativeRestoreTarget {
   accountIdentity: string;
   cloudId?: string;
   cloudRevision?: number;
+  cloudSqlNetwork?: CloudSQLRecoveryNetwork;
   connectionId: string;
   grantRevision?: number;
+  nativeAccount?: string;
   nativeProject?: string;
   provider: string;
+  rdsNetwork?: RDSRecoveryNetwork;
   region: string;
   targetId?: string;
   targetRevision?: number;
+}
+
+export interface NativeRetentionPolicy {
+  authorizedBy: string;
+  createdAt: string;
+  createdBy: string;
+  enabled: boolean;
+  id: string;
+  lastError?: string;
+  lastRetirementId?: string;
+  nextAt: string;
+  orgId: string;
+  policy: RetentionInput;
+  projectId: string;
+  revision: number;
+  sourceId: string;
+  updatedAt: string;
+}
+
+export interface NativeRetentionPolicyState {
+  configured: boolean;
+  policy?: NativeRetentionPolicy;
+}
+
+export interface NativeRetirement {
+  completedAt?: string;
+  createdAt: string;
+  createdBy: string;
+  error?: string;
+  id: string;
+  orgId: string;
+  pointId: string;
+  policy: RetentionInput;
+  policyId?: string;
+  policyRevision?: number;
+  projectId: string;
+  sourceId: string;
+  status: string;
+  witnessId: string;
+}
+
+export interface NativeRetirementInputBody {
+  acknowledgeDeletion: boolean;
+  policy: {
+  keepLast: number;
+  olderThanDays: number;
+};
+  requestId: string;
+}
+
+export interface NativeRetirementPage {
+  nextBefore?: string;
+  retirements: NativeRetirement[];
 }
 
 export interface NativeSource {
@@ -1436,6 +1585,11 @@ export interface PlanningSummary {
   update: number;
 }
 
+export interface Point {
+  t: string;
+  v: number;
+}
+
 export interface Policy {
   createdBy: string;
   enabled: boolean;
@@ -1642,6 +1796,13 @@ export interface PublicConfig {
   publishableKey: string;
 }
 
+export interface RDSRecoveryNetwork {
+  securityGroupId: string;
+  subnetGroup: string;
+  verifierGroupId: string;
+  vpcId: string;
+}
+
 export interface RealtimeForgeGap {
   reason: string;
 }
@@ -1675,6 +1836,26 @@ export interface RealtimeSend {
   op: string;
   orgId: string;
   projectIds?: string[];
+}
+
+export interface Rebuild {
+  createdAt: string;
+  createdBy: string;
+  finishedAt?: string;
+  id: string;
+  output: string;
+  projection: string;
+  retryable: boolean;
+  status: string;
+}
+
+export interface RebuildInputBody {
+  projection: string;
+  requestId: string;
+}
+
+export interface RebuildList {
+  rebuilds: Rebuild[];
 }
 
 export interface Recipe {
@@ -2287,6 +2468,7 @@ export interface ServiceConfig {
   buildTarget?: BuildTarget;
   catalog?: Recipe;
   cloudPlacement?: CloudPlacement;
+  cloudSqlNetwork?: CloudSQLApplicationNetwork;
   commitSha?: string;
   component?: ComponentConfig;
   context?: string;
@@ -2313,6 +2495,19 @@ export interface ServiceConfig {
   target?: string;
   targetSettings?: Record<string, any>;
   workload: string;
+}
+
+export interface ServiceTraffic {
+  bindingId: string;
+  environmentId: string;
+  latency: number;
+  name: string;
+  previousLatency: number;
+  previousRequests: number;
+  projectId: string;
+  provider: string;
+  requests: number;
+  statistic?: string;
 }
 
 export interface SetDefaultPlacementInputBody {
@@ -2390,9 +2585,27 @@ export interface SourceState {
   source: Source;
 }
 
+export interface SpendReport {
+  accounts: AccountSpend[];
+  month: string;
+  sources: UsageSource[];
+  totals: Amount[];
+}
+
 export interface StartAnalysisInputBody {
   ref?: string;
   sources?: string[];
+}
+
+export interface Status {
+  entityTypes: number;
+  keysReportUse: boolean;
+  kind: string;
+  migrations: number;
+  migrationsKnown: boolean;
+  reachable: boolean;
+  reason?: string;
+  version: string;
 }
 
 export interface Step {
@@ -2483,6 +2696,32 @@ export interface Target {
   updatedAt: string;
 }
 
+export interface Tenant {
+  createdAt: string;
+  id: string;
+  label: string;
+}
+
+export interface TenantInputBody {
+  tenantId: string;
+}
+
+export interface TenantList {
+  tenants: Tenant[];
+}
+
+export interface TrafficReport {
+  end: string;
+  previousTotal: number;
+  range: string;
+  requests: Point[];
+  services: ServiceTraffic[];
+  sources: UsageSource[];
+  start: string;
+  step: number;
+  total: number;
+}
+
 export interface UpdateInputBody {
   name: string;
   revision: number;
@@ -2509,6 +2748,15 @@ export interface UpdateTargetInputBody {
 export interface UpdateVariableInputBody {
   secret?: boolean;
   value: string;
+}
+
+export interface UsageSource {
+  cloud: string;
+  connectionId: string;
+  name: string;
+  reason?: string;
+  services?: string[];
+  status: string;
 }
 
 export interface Use {
