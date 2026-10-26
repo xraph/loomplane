@@ -192,11 +192,13 @@ func (s *PgStore) RampingCanary(ctx context.Context, orgID, environmentID string
 	return planning.NewPgStore(s.db).RampingCanary(ctx, orgID, environmentID)
 }
 
-// CanaryBinding implements CanaryStore.
+// CanaryBinding implements CanaryStore. A paused deployment counts: one
+// paused for capacity after a candidate started may have that candidate in
+// what's live while the binding still names the baseline.
 func (s *PgStore) CanaryBinding(ctx context.Context, orgID, bindingID string) (bool, error) {
 	var ramps bool
 	if err := s.db.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM loomplane_deployments
-		WHERE org_id = $1 AND status = 'running' AND canary->>'status' = ANY($3::text[])
+		WHERE org_id = $1 AND status IN ('running', 'paused') AND canary->>'status' = ANY($3::text[])
 		AND canary->'services' @> jsonb_build_array(jsonb_build_object('binding_id', $2::text)))`,
 		orgID, bindingID, canaryActive).Scan(&ramps); err != nil {
 		return false, fmt.Errorf("find canary binding: %w", err)
