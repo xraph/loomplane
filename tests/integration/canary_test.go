@@ -242,7 +242,10 @@ func (canarySources) Open(context.Context, string) (io.ReadCloser, int64, error)
 // shortHolds is the runner with each canary hold cut to a millisecond. A
 // manifest can't hold less than a minute, and the durable runtime refuses
 // a timer that fires before its deadline, so the ramp is shortened where
-// the workflow reads it. It keeps every ramp the runner read.
+// the workflow reads it. It zeroes the ramp's Lag too, so the wait for
+// late metrics before each step's first judgement isn't exercised on
+// Postgres: orchestration's TestCanaryFirstHoldWaitsForTheMetrics covers
+// it. It keeps every ramp the runner read.
 type shortHolds struct {
 	*deployments.Runner
 	mu    sync.Mutex
@@ -1155,20 +1158,36 @@ func TestCanaryReleasesMigrationOnAFreshDatabase(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
-	res, err := migrate.NewOrchestrator(pgmigrate.New(db), migrations.Group()).Rollback(ctx)
-	if err != nil || len(res.Rollback) != 1 || res.Rollback[0].Version != "20261104000100" {
-		t.Fatalf("rollback: %+v %v", res, err)
+	// Grove rolls back the last applied migration only, so later ones go
+	// first, one at a time, until the canary's own does. Until then the
+	// canary's schema stays.
+	const present = "loomplane_canary_verdicts jsonb loomplane_deployment_workflow_runs_build"
+	o := migrate.NewOrchestrator(pgmigrate.New(db), migrations.Group())
+	for n := 0; ; n++ {
+		if n == len(migrations.Group().Migrations()) {
+			t.Fatal("rolled back every migration without reaching canary_releases")
+		}
+		if got := schema(); got != present {
+			t.Fatalf("schema before rolling back canary_releases: %s", got)
+		}
+		res, rerr := o.Rollback(ctx)
+		if rerr != nil || len(res.Rollback) != 1 {
+			t.Fatalf("rollback: %+v %v", res, rerr)
+		}
+		if res.Rollback[0].Version == "20261104000100" {
+			break
+		}
 	}
 	if got := schema(); got != "none none loomplane_deployment_workflow_runs_request_check" {
 		t.Fatalf("schema after the down migration: %s", got)
 	}
-	if status, err = ops.SchemaStatus(ctx, dsn, groups); err != nil || !slices.Equal(status.Pending, []string{canary}) {
+	if status, err = ops.SchemaStatus(ctx, dsn, groups); err != nil || !slices.Contains(status.Pending, canary) || slices.Contains(status.Applied, canary) {
 		t.Fatalf("status after the down migration: %+v %v", status, err)
 	}
 	if err = ops.Migrate(ctx, dsn, groups); err != nil {
 		t.Fatal(err)
 	}
-	if got := schema(); got != "loomplane_canary_verdicts jsonb loomplane_deployment_workflow_runs_build" {
+	if got := schema(); got != present {
 		t.Fatalf("schema after migrating again: %s", got)
 	}
 }
