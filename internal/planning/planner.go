@@ -576,6 +576,9 @@ func (p *planner) planServices() {
 	}
 	p.retain()
 	p.markInternal()
+	// FARP is part of a service's configuration, so it's settled before
+	// the links, which compare that configuration with what's deployed.
+	p.planFarp()
 	// Needs are settled once every service has its action, since a service
 	// can need one planned after it. A held service keeps the links it was
 	// deployed with.
