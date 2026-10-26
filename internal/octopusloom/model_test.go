@@ -236,3 +236,45 @@ func TestOctopusNames(t *testing.T) {
 		t.Errorf("instance %q", got)
 	}
 }
+
+func TestNormalizeRouteInputWildcardHostnames(t *testing.T) {
+	for host, want := range map[string]string{
+		"*.acme.dev":    "*.acme.dev",
+		" *.ACME.dev ":  "*.acme.dev",
+		"*.eu.acme.dev": "*.eu.acme.dev",
+		"api.acme.dev":  "api.acme.dev",
+		"":              "",
+	} {
+		in := routeInput("/x")
+		in.Hostname = host
+		got, err := NormalizeRouteInput(in)
+		if err != nil {
+			t.Errorf("%q refused: %v", host, err)
+			continue
+		}
+		if got.Hostname != want {
+			t.Errorf("%q became %q, want %q", host, got.Hostname, want)
+		}
+	}
+	for _, host := range []string{"*", "*.", "*.dev", "a.*.dev", "**.acme.dev", "*acme.dev", "*.*.acme.dev", "*.acme.dev.", ".acme.dev", "*.-acme.dev"} {
+		in := routeInput("/x")
+		in.Hostname = host
+		if _, err := NormalizeRouteInput(in); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%q: want ErrInvalid, got %v", host, err)
+		}
+	}
+}
+
+func TestWildcardHostnameNeverConflictsWithExactHost(t *testing.T) {
+	existing := []*Route{{ID: "octoroute_a", Hostname: "api.acme.dev", Path: "/auth/*"}}
+	if err := CheckRouteConflicts(existing, "", RouteInput{Hostname: "*.acme.dev", Path: "/auth/*"}); err != nil {
+		t.Errorf("wildcard against exact host: %v", err)
+	}
+	wild := []*Route{{ID: "octoroute_w", Hostname: "*.acme.dev", Path: "/auth/*"}}
+	if err := CheckRouteConflicts(wild, "", RouteInput{Hostname: "api.acme.dev", Path: "/auth/*"}); err != nil {
+		t.Errorf("exact host against wildcard: %v", err)
+	}
+	if err := CheckRouteConflicts(wild, "", RouteInput{Hostname: "*.acme.dev", Path: "/auth/*"}); !errors.Is(err, ErrConflict) {
+		t.Errorf("same wildcard host: %v", err)
+	}
+}

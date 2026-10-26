@@ -146,15 +146,22 @@ func NormalizeRouteInput(in RouteInput) (RouteInput, error) {
 	return out, nil
 }
 
+// checkHostname accepts "" (any host), an exact hostname, or a wildcard
+// "*.zone" with a single leading "*." and at least two labels after it.
 func checkHostname(h string) error {
 	if h == "" {
 		return nil
 	}
-	bad := invalidf("%q isn't a hostname. Use a name like api.acme.dev, without a scheme, port or path.", h)
+	bad := invalidf("%q isn't a hostname. Use a name like api.acme.dev or *.acme.dev, without a scheme, port or path.", h)
 	if len(h) > 253 {
 		return bad
 	}
-	for _, label := range strings.Split(h, ".") {
+	name, wildcard := strings.CutPrefix(h, "*.")
+	labels := strings.Split(name, ".")
+	if wildcard && len(labels) < 2 {
+		return bad
+	}
+	for _, label := range labels {
 		if len(label) > 63 || !hostLabel.MatchString(label) {
 			return bad
 		}
