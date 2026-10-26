@@ -101,6 +101,21 @@ providers:
 
 or set `LOOMPLANE_PAUSED_PROVIDERS=render,cloud-run`. Plans that use a paused target are still made, and can be reviewed and approved, but they say they're for review only, and approving one deploys nothing. What already runs there keeps running, and drift checks still read it. A name that isn't a target stops Loomplane from starting, so a typo can't leave a target running that you meant to pause. Restart Loomplane to pause or unpause one.
 
+## A server that refuses every deployment
+
+If every deployment to one SSH/Docker server fails with `runtime effect fence could not establish quiescence`, that server's fence journal is stuck. Loomplane keeps a small journal on each Docker host, under `/var/tmp/loomplane-fence-<hash>/`, so a deployment can tell whether the last write to that daemon finished. While a write is in flight the journal is marked dirty, and Loomplane won't touch the daemon again until the mark clears. Builds of main from late October 2026 left it dirty after a database readiness check, and nothing clears it on its own.
+
+Check that nothing Loomplane started is still working on that server (no deployment, route change or pool recovery in flight). Then run this on the server, as the SSH user Loomplane connects with:
+
+```bash
+D=/var/tmp/loomplane-fence-$(printf %s "$(docker info -f '{{.ID}}')" | sha256sum | cut -d' ' -f1)
+flock "$D/daemon.lock" python3 -c 'import json,sys;p=sys.argv[1]+"/state";s=json.load(open(p));s["dirty"]=False;open(p,"w").write(json.dumps(s))' "$D"
+```
+
+It takes the same lock the deployment helper takes, clears the mark and keeps the recorded generations, so an older attempt still can't write. Plan again afterwards.
+
+A journal can also go dirty for a reason that still matters: the host rebooting or the helper being killed in the middle of a Docker change. If that's what happened, look at the containers on that server first, because the change may be half done.
+
 ## Email and deployment notifications
 
 Open Notifications to read deployment results, change your deployment email preference and, as an owner or admin, manage signed webhooks. Deployment mail goes to the person who started the deployment. Loomplane checks their current organization membership and project access before delivery. Account recovery and verification mail do not follow that deployment preference.
