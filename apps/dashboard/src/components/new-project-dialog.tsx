@@ -201,7 +201,7 @@ function NewProjectForm({
         </DialogDescription>
       </DialogHeader>
 
-      <Item variant="muted">
+      <Item variant="outline" className="rounded-xl bg-subtle">
         <ItemMedia>
           {icon && color ? (
             <ProjectIcon icon={icon} color={color} size="lg" />
@@ -228,7 +228,6 @@ function NewProjectForm({
             type="button"
             variant="outline"
             size="sm"
-
             onClick={() => {
               setIcon(randomIcon())
               setColor(randomColor())
@@ -280,7 +279,7 @@ function NewProjectForm({
                     onChange={(e) =>
                       setRow(i, { alias: e.target.value.toLowerCase() })
                     }
-                    className="w-32 font-mono text-sm"
+                    className="w-28 font-mono text-[12.5px]"
                     autoComplete="off"
                     spellCheck={false}
                   />
@@ -296,7 +295,7 @@ function NewProjectForm({
               type="button"
               variant="ghost"
               size="sm"
-              className="justify-self-start"
+              className="justify-self-start text-brand-ink hover:text-brand-ink"
               onClick={addRow}
             >
               <PlusIcon />

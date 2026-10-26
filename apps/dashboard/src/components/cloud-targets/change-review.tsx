@@ -208,11 +208,11 @@ function ReviewContent({
         </DialogHeader>
         {loading && <CloudLoading>Building preview...</CloudLoading>}
         {preview && (
-          <div className="grid gap-3 text-sm">
+          <div className="grid gap-3 text-[13px]">
             {(preview.beforeDefault ||
               preview.afterDefault ||
               change?.default) && (
-              <div className="grid gap-1 text-sm">
+              <div className="grid gap-1 text-[13px]">
                 <p>
                   Current default:{" "}
                   {preview.beforeDefault
@@ -284,12 +284,12 @@ function ReviewContent({
           </div>
         )}
         {error && (
-          <Alert variant="destructive" className="text-sm text-destructive">
+          <Alert variant="destructive">
             <AlertDescription>{error}</AlertDescription>
           </Alert>
         )}
         {stale && (
-          <Alert variant="destructive" className="text-sm">
+          <Alert variant="destructive">
             <AlertDescription>
               This review is out of date. Refresh it before applying.
             </AlertDescription>

@@ -17,7 +17,7 @@ export function FabriqEmpty({
   children?: ReactNode
 }) {
   return (
-    <ZeroState variant="inline">
+    <ZeroState>
       <ZeroStateHeader>
         <ZeroStateTitle>{title}</ZeroStateTitle>
         <ZeroStateDescription>{description}</ZeroStateDescription>

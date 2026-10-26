@@ -66,9 +66,6 @@ export function BackupRetentionReview(props: Props) {
       <Button
         size="sm"
         variant="outline"
-        className={
-          props.compact ? "h-8 rounded-[9px] px-3 text-[12.5px]" : undefined
-        }
         disabled={!props.points.length}
         onClick={() => setOpen(true)}
       >
@@ -192,8 +189,8 @@ function RetentionReview({
             } else void preview.refetch().catch(() => undefined)
           }}
         >
-          <div className="grid min-w-0 gap-1">
-            <span className="text-xs text-muted-foreground">
+          <div className="grid min-w-0 gap-1.5">
+            <span className="text-[12.5px] font-medium">
               History containing
             </span>
             <Select
@@ -225,7 +222,7 @@ function RetentionReview({
               </SelectContent>
             </Select>
           </div>
-          <label className="grid gap-1 text-xs text-muted-foreground">
+          <label className="grid gap-1.5 text-[12.5px] font-medium">
             Older than (days)
             <Input
               className="w-28"
@@ -238,7 +235,7 @@ function RetentionReview({
               onChange={(e) => setDays(e.target.value)}
             />
           </label>
-          <label className="grid gap-1 text-xs text-muted-foreground">
+          <label className="grid gap-1.5 text-[12.5px] font-medium">
             Keep newest
             <Input
               className="w-24"
@@ -270,7 +267,7 @@ function RetentionReview({
           onOpenRetirement={onAccepted}
         />
         {stale && (
-          <p role="status" className="text-sm text-muted-foreground">
+          <p role="status" className="text-[13px] text-muted-foreground">
             Update the preview before deleting with these settings.
           </p>
         )}
@@ -291,7 +288,7 @@ function RetentionReview({
                 </AlertDescription>
               </Alert>
             )}
-            <p className="text-sm text-muted-foreground">
+            <p className="text-[13px] text-muted-foreground">
               {preview.data?.eligibleCount ?? 0} backups meet the age and count
               settings. A restore-tested point and existing recovery copies stay
               protected.
@@ -303,7 +300,7 @@ function RetentionReview({
                 description="Create a backup and test a restore before reviewing deletion."
               />
             ) : (
-              <div className="min-w-0 overflow-x-auto rounded-lg border">
+              <div className="min-w-0 overflow-x-auto rounded-xl bg-card ring-1 ring-border">
                 <Table>
                   <TableHeader>
                     <TableRow>

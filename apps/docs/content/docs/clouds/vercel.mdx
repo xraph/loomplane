@@ -11,6 +11,10 @@ Under **Integrations**, choose Vercel and paste an access token. If you deploy t
 
 Loomplane asks Vercel whose token it is before keeping it. A token that has expired, been revoked or has no access to the team is refused.
 
+## Sign in instead of a token
+
+If your organization has set up a Vercel Integration for Loomplane, the connect dialog offers **Sign in with Vercel** first and **Use a token instead** underneath. You install the Integration on Vercel and pick the team or your own account there, so you don't need a team ID. Install it in the same browser you started from. The Integration's token doesn't expire, and Loomplane asks Vercel once a day whether it still works, so an uninstalled Integration asks for a new sign-in. [Connect a cloud by signing in](/docs/clouds/cloud-sign-in) covers making the Integration and what happens when Vercel stops accepting it.
+
 ## Use it in a manifest
 
 ```yaml

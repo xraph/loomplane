@@ -14,7 +14,7 @@ export function CloudSQLRecoveryFields({
   onChange: (value: Record<string, string>) => void
 }) {
   return (
-    <details className="text-sm">
+    <details className="text-[13px]">
       <summary className="cursor-pointer">
         Private Cloud SQL recovery (optional)
       </summary>

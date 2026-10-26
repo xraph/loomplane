@@ -8,6 +8,7 @@ import { messageOf, statusOf } from "@/client/errors"
 import {
   useConnectionsCheck,
   useConnectionsGet,
+  useMembersList,
   useProjectsList,
 } from "@/client/forge/loomplane/hooks"
 import { useMutation, useQuery } from "@/client/hooks"
@@ -54,6 +55,7 @@ export function CloudAccount({ id }: { id: string }) {
   const now = useNow()
   const person = usePeople()
   const connection = useQuery(useConnectionsGet, { path: { id } })
+  const members = useQuery(useMembersList)
   const check = useMutation(useConnectionsCheck)
   const { signInAgain, pending: signingIn } = useSignInAgain()
   const running = useRunning()
@@ -64,6 +66,12 @@ export function CloudAccount({ id }: { id: string }) {
   const manage = can("cloud_account:manage")
   const here = running.bindings.filter((b) => b.connectionId === id)
   const services = here.filter((b) => b.subject === "service").length
+  // The member's name when the members list has them, else their ID.
+  const signedInAs = String(c?.details.signed_in_as ?? "")
+  const who = members.data?.members.find((m) => m.userId === c?.signedInBy)
+  const signedInBy = who
+    ? who.name || who.email || c?.signedInBy
+    : c?.signedInBy
   const missing =
     connection.status === "error" && statusOf(connection.error) === 404
 
@@ -148,6 +156,15 @@ export function CloudAccount({ id }: { id: string }) {
                     {" · connected "}
                     {formatDate(c.createdAt)} by {person(c.createdBy).name}
                   </span>
+                  {signedInAs && (
+                    <span
+                      className="text-[13px] text-muted-foreground"
+                      data-signed-in
+                    >
+                      Signed in as {signedInAs}
+                      {c.signedInBy && `, by ${signedInBy}`}
+                    </span>
+                  )}
                 </div>
               </div>
               {manage && (

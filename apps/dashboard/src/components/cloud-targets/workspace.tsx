@@ -1,7 +1,10 @@
 import { CloudSelect as Select } from "@/components/cloud-targets/cloud-select"
 import { Card } from "@/components/ui/card"
 import { Item, ItemGroup } from "@/components/ui/item"
-import { CloudLoading } from "@/components/cloud-targets/infrastructure-ui"
+import {
+  CloudLoading,
+  listItemClass,
+} from "@/components/cloud-targets/infrastructure-ui"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
   SelectTrigger,
@@ -46,6 +49,7 @@ import { useOrganization } from "@/lib/organization"
 import { CloudGlyph } from "@/components/cloud-glyph"
 import { CloudsIcon } from "@/components/icons"
 import { cloudLabel } from "@/lib/clouds"
+import { cn } from "@/lib/utils"
 
 import { AccountSummary, cloudOf } from "./target-mix"
 import { TargetEditor } from "./target-editor"
@@ -434,7 +438,7 @@ export function CloudForm({
               : "Create a named set of deployment targets for this project."}
           </DialogDescription>
         </DialogHeader>
-        <FormField className="grid gap-1 text-sm">
+        <FormField className="grid gap-1.5">
           <FieldLabel className="contents">
             Name
             <Input
@@ -446,7 +450,7 @@ export function CloudForm({
           </FieldLabel>
         </FormField>
         {error && (
-          <Alert variant="destructive" className="text-sm text-destructive">
+          <Alert variant="destructive">
             <AlertDescription>{error}</AlertDescription>
           </Alert>
         )}
@@ -516,7 +520,7 @@ function Targets({
   return (
     <section className="grid min-w-0 gap-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="font-semibold">Targets</h2>
+        <h2 className="text-[15px] font-semibold">Targets</h2>
         <div className="flex flex-wrap gap-2">
           <Input
             className="h-8 w-44"
@@ -643,7 +647,7 @@ function AppliedPlacement({
   const services = bindings.data.bindings.filter((b) => b.subject === "service")
   return (
     <section className="grid gap-2">
-      <h3 className="text-sm font-medium">
+      <h3 className="text-[14px] font-semibold">
         Applied accounts in {environment.name}
       </h3>
       {!services.length ? (
@@ -652,11 +656,11 @@ function AppliedPlacement({
           description="Deploy this environment to see each service's applied account here."
         />
       ) : (
-        <div className="divide-y rounded-xl border">
+        <div className="divide-y overflow-hidden rounded-xl bg-card ring-1 ring-border">
           {services.map((b) => (
             <div
               key={b.id}
-              className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 text-xs"
+              className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 text-[12.5px]"
             >
               <span className="font-medium">{b.name}</span>
               <span className="break-words text-muted-foreground">
@@ -706,14 +710,14 @@ export function TargetTable({
       <Card size="sm" className="gap-0 py-0">
         <div
           aria-hidden="true"
-          className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)_110px_auto] gap-4 border-b px-4 py-2 text-[11px] font-medium tracking-[0.04em] text-muted-foreground uppercase max-md:hidden"
+          className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)_110px_auto] gap-4 border-b bg-subtle px-4 py-2 text-[11.5px] font-medium tracking-[0.04em] text-muted-foreground uppercase max-md:hidden"
         >
           <span>Target</span>
           <span>Account</span>
           <span>Region</span>
           <span className="w-[86px]" />
         </div>
-        <ItemGroup className="gap-0 divide-y">
+        <ItemGroup className="gap-0">
           {[...visible]
             .sort((a, b) =>
               `${cloudOf(a, accounts)}:${a.connectionId}:${a.name}`.localeCompare(
@@ -728,7 +732,10 @@ export function TargetTable({
                   role="listitem"
                   size="sm"
                   key={t.id}
-                  className="grid items-center gap-x-4 gap-y-2 px-4 py-2.5 md:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)_110px_auto]"
+                  className={cn(
+                    listItemClass,
+                    "grid items-center gap-x-4 gap-y-2 py-2.5 md:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)_110px_auto]"
+                  )}
                 >
                   <span className="grid min-w-0 gap-0.5">
                     <span className="truncate text-[13px] font-medium">

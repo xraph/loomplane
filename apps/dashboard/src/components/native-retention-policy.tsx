@@ -115,7 +115,7 @@ function NativePolicyContent({
   return (
     <section
       aria-label="Automatic native retention"
-      className="grid min-w-0 gap-2 rounded-md border p-3 text-xs"
+      className="grid min-w-0 gap-2 rounded-xl bg-card p-3 text-xs ring-1 ring-border"
     >
       {state.status === "error" && (
         <QueryError

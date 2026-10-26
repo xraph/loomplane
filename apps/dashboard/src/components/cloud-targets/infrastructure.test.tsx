@@ -591,8 +591,7 @@ it("refreshes both persisted activity lists when returning after server or place
   rerender(content(false))
   changed = true
   rerender(content(true))
-  expect(
-    await screen.findByText(/resize shared-host: waiting/)
-  ).toBeInTheDocument()
+  expect(await screen.findByText("resize shared-host")).toBeInTheDocument()
+  expect(screen.getByText("Waiting")).toBeInTheDocument()
   expect(await screen.findByText(/provider \/ new-account/)).toBeInTheDocument()
 })

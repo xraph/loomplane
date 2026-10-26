@@ -85,7 +85,7 @@ function SyncList({
   }, [moving, refetchSyncs])
   return (
     <section className="grid gap-3">
-      <h2 className="font-semibold">Sync history</h2>
+      <h2 className="text-[15px] font-semibold">Sync history</h2>
       {syncs.status === "error" ? (
         <QueryError
           error={syncs.error}
@@ -100,7 +100,7 @@ function SyncList({
           description="Reviewed Cloud changes appear here with each environment's persisted result."
         />
       ) : (
-        <div className="divide-y rounded-xl border">
+        <div className="divide-y overflow-hidden rounded-xl bg-card ring-1 ring-border">
           {rows.map((sync) => (
             <SyncRow
               key={sync.id}
@@ -177,16 +177,18 @@ function SyncRow({
     }
   }
   return (
-    <article className="grid gap-2 p-3">
+    <article className="grid gap-2 px-4 py-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="min-w-0">
-          <p className="text-sm font-medium">
+          <p className="text-[13px] font-medium">
             {syncLabel(sync.status)}{" "}
             <span className="text-xs font-normal text-muted-foreground">
               Attempt {sync.attempt}
             </span>
           </p>
-          <p className="text-xs break-all text-muted-foreground">{sync.id}</p>
+          <p className="font-mono text-xs break-all text-muted-foreground">
+            {sync.id}
+          </p>
         </div>
         <div className="flex flex-wrap gap-2">
           {["failed", "cleanup_pending"].includes(sync.status) && (
@@ -218,7 +220,7 @@ function SyncRow({
         </p>
       )}
       {sync.error && (
-        <Alert variant="destructive" className="text-sm text-destructive">
+        <Alert variant="destructive">
           <AlertDescription>{sync.error}</AlertDescription>
         </Alert>
       )}
@@ -290,7 +292,7 @@ function SyncRow({
         </div>
       ))}
       {error && (
-        <Alert variant="destructive" className="text-sm text-destructive">
+        <Alert variant="destructive">
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       )}

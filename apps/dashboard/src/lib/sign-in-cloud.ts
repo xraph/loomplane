@@ -20,3 +20,38 @@ export function signInCloud(): string {
     return ""
   }
 }
+
+// Vercel may send someone back without the state it was given, so the state
+// a Vercel sign-in started with waits here (this browser) for ten minutes.
+const vercelKey = "loomplane.sign-in.vercel"
+const vercelTTL = 10 * 60 * 1000
+
+/** rememberVercelState keeps the state a Vercel sign-in started with. */
+export function rememberVercelState(state: string): void {
+  try {
+    window.localStorage.setItem(
+      vercelKey,
+      JSON.stringify({ state, at: Date.now() })
+    )
+  } catch {
+    // Without storage a Vercel callback that drops the state can't finish.
+  }
+}
+
+/**
+ * takeVercelState is the state rememberVercelState kept, or "" when there is
+ * none or it is older than ten minutes. The entry is removed either way.
+ */
+export function takeVercelState(): string {
+  try {
+    const raw = window.localStorage.getItem(vercelKey)
+    if (raw === null) return ""
+    window.localStorage.removeItem(vercelKey)
+    const kept = JSON.parse(raw) as { state?: unknown; at?: unknown }
+    if (typeof kept.state !== "string" || typeof kept.at !== "number") return ""
+    const age = Date.now() - kept.at
+    return age >= 0 && age < vercelTTL ? kept.state : ""
+  } catch {
+    return ""
+  }
+}
