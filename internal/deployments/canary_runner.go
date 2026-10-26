@@ -444,7 +444,7 @@ func (r *Runner) settleCanary(ctx context.Context, d *Deployment, reason string)
 		case up:
 			c.Status = CanaryRevertFailed
 		case partial:
-			c.Status = CanaryPromoteFailed
+			c.Status, c.Weight = CanaryPromoteFailed, 0
 		default:
 			c.Status, c.Weight = CanaryRolledBack, 0
 		}

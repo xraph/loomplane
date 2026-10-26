@@ -77,8 +77,11 @@ func TestJobsHealthReportsCapacityClaimFailures(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	jobs := &jobsExtension{Extension: dispatchext.New(), durable: orchestration.NewDurableSupervisor(d.Options("legacy-health", 1), nil), capacity: orchestration.NewDurableSupervisor(options, nil)}
-	if err = jobs.capacity.Start(worker, store, nil); err != nil {
+	// The capacity build is one of the jobs' build workers.
+	capacity := orchestration.NewDurableSupervisor(options, nil)
+	jobs := &jobsExtension{Extension: dispatchext.New(), durable: orchestration.NewDurableSupervisor(d.Options("legacy-health", 1), nil),
+		builds: []*buildWorker{{options: options, supervisor: capacity}}}
+	if err = capacity.Start(worker, store, nil); err != nil {
 		t.Fatal(err)
 	}
 	ctx, cancel := context.WithCancel(t.Context())
@@ -89,7 +92,7 @@ func TestJobsHealthReportsCapacityClaimFailures(t *testing.T) {
 		if runErr := <-done; runErr != nil {
 			t.Errorf("capacity worker stopped on failing claims: %v", runErr)
 		}
-		if e := jobs.capacity.Stop(context.Background()); e != nil {
+		if e := capacity.Stop(context.Background()); e != nil {
 			t.Error(e)
 		}
 	}()
@@ -103,5 +106,73 @@ func TestJobsHealthReportsCapacityClaimFailures(t *testing.T) {
 			t.Fatalf("capacity health: %v", err)
 		}
 		time.Sleep(time.Millisecond)
+	}
+}
+
+// failingBuild fails every claim for one build, as a lost connection
+// would, and serves the rest.
+type failingBuild struct {
+	durable.Store
+	build string
+}
+
+func (s failingBuild) ClaimTask(ctx context.Context, r durable.ClaimRequest) (*durable.Task, error) {
+	if r.BuildID == s.build {
+		return nil, errStoreTimeout
+	}
+	return s.Store.ClaimTask(ctx, r)
+}
+
+// Every build runs a worker of its own, and health names the build whose
+// claims fail without the others' failing too.
+func TestJobsRunsEveryBuildWorker(t *testing.T) {
+	for _, failing := range []string{orchestration.CapacityBuild, orchestration.CanaryBuild} {
+		t.Run(failing+" fails", func(t *testing.T) {
+			d := orchestration.NewDeployments()
+			jobs := &jobsExtension{Extension: dispatchext.New(), durable: orchestration.NewDurableSupervisor(d.Options("legacy", 1), nil)}
+			workers := map[string]*drt.Worker{}
+			capacity, canary := d.CapacityOptions("v3", 1), d.CanaryOptions("v4", 1)
+			capacity.PollInterval, canary.PollInterval = 5*time.Millisecond, 5*time.Millisecond
+			jobs.WithCapacity(capacity, func(w *drt.Worker) {
+				workers[orchestration.CapacityBuild] = w
+				d.BindCapacityWorker(w)
+			})
+			jobs.WithBuild(canary, func(w *drt.Worker) {
+				workers[orchestration.CanaryBuild] = w
+				d.BindWorker(orchestration.CanaryBuild, w)
+			})
+			if err := jobs.startBuilds(failingBuild{Store: memory.New(), build: failing}, nil); err != nil {
+				t.Fatal(err)
+			}
+			if len(workers) != 2 {
+				t.Fatalf("bound %v", workers)
+			}
+			deadline := time.Now().Add(5 * time.Second)
+			for {
+				err := jobs.Health(t.Context())
+				if errors.Is(err, drt.ErrClaimUnknown) && strings.HasPrefix(err.Error(), failing+": ") {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("health: %v", err)
+				}
+				time.Sleep(time.Millisecond)
+			}
+			for build, w := range workers {
+				if status := w.Status(); status.State == drt.WorkerFailed || (build != failing && status.ClaimFailures > 0) {
+					t.Fatalf("%s: %+v", build, status)
+				}
+			}
+			if err := jobs.stopBuilds(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			for _, b := range jobs.builds {
+				select {
+				case <-b.done:
+				default:
+					t.Fatalf("%s still runs", b.options.BuildID)
+				}
+			}
+		})
 	}
 }

@@ -172,7 +172,7 @@ type Deployments struct {
 	planner        Planner
 	deployer       Deployer
 	engineOf       func() *engine.Engine
-	capacityClient *drt.Worker
+	workers        map[string]*drt.Worker
 	runs           RunStore
 }
 
@@ -369,8 +369,10 @@ func (d *Deployments) Retry(ctx context.Context, orgID, deploymentID, retryID st
 		}
 		build = e.BuildID
 	}
+	// A retry keeps its plan's build: the steps it runs again are that
+	// build's.
 	in := retryInput{OrgID: orgID, DeploymentID: deploymentID, Steps: steps}
-	if build == CapacityBuild {
+	if build != DeploymentBuild {
 		in.ReconcileInterval = capacityInterval
 	}
 	raw, err := json.Marshal(in)
@@ -509,10 +511,12 @@ func (d *Deployments) Start(ctx context.Context, orgID, planID string, window ti
 	if !errors.Is(err, durable.ErrNotFound) {
 		return err
 	}
+	// Only a run store routes later builds, so without one the engine's
+	// build runs the plan.
 	build := DeploymentBuild
 	interval := time.Duration(0)
 	if d.runs != nil {
-		build = CapacityBuild
+		build = CurrentBuild
 		interval = capacityInterval
 	}
 	raw, err := json.Marshal(DeploymentInput{OrgID: orgID, PlanID: planID, Window: window, ReconcileInterval: interval})
@@ -552,18 +556,18 @@ func (d *Deployments) Cancel(ctx context.Context, planID, reason string) error {
 		return err
 	}
 	req := durable.CancelExecutionRequest{Key: e.Key, RequestID: "cancel:" + e.WorkflowID + ":" + e.RunID, BuildID: e.BuildID, Reason: reason}
-	if e.BuildID == CapacityBuild {
-		w, werr := d.capacityWorker()
-		if werr != nil {
-			return werr
-		}
-		_, err = w.RequestCancelExecution(ctx, req)
-	} else {
+	if e.BuildID == DeploymentBuild {
 		eng, eerr := d.engine()
 		if eerr != nil {
 			return eerr
 		}
 		_, err = eng.RequestCancelDurableWorkflow(ctx, req)
+	} else {
+		w, werr := d.worker(e.BuildID)
+		if werr != nil {
+			return werr
+		}
+		_, err = w.RequestCancelExecution(ctx, req)
 	}
 	if errors.Is(err, durable.ErrClosed) || errors.Is(err, durable.ErrNotFound) {
 		return nil
