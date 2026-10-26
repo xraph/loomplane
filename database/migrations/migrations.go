@@ -26,9 +26,23 @@ import (
 // GroupName is the migration group for Loomplane's own tables.
 const GroupName = "loomplane"
 
+// App is where a migration in a file of its own registers. Run
+//
+//	forge db create-go <name>
+//
+// and you get database/migrations/<version>_<name>.go, which adds itself
+// here from init.
+//
+// A migration's version and name are what databases record it as. Renaming
+// the file of one that has shipped makes grove see a new migration and run
+// it again, so leave those alone.
+var App = migrate.NewGroup(GroupName)
+
 // Group builds Loomplane's migration group. A constructor rather than a
 // package variable filled by init(), so tests and the app each get a fresh
-// group.
+// group. It copies App's migrations in too, because tests lift migrations
+// out of the result into groups of their own and grove's Register writes to
+// every migration it's handed.
 func Group() *migrate.Group {
 	g := migrate.NewGroup(GroupName)
 	g.MustRegister(
@@ -123,6 +137,10 @@ func Group() *migrate.Group {
 		WorkloadRegistrationsMigration(),
 		NotificationsMigration(),
 	)
+	for _, m := range App.Migrations() {
+		copied := *m
+		g.MustRegister(&copied)
+	}
 	return g
 }
 
