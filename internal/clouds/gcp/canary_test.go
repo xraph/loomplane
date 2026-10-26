@@ -335,3 +335,63 @@ func TestSetTrafficLooksAtTheSplitWhenTheOperationFails(t *testing.T) {
 		}
 	}
 }
+
+func TestRevisionRunsComparesTheWholeRelease(t *testing.T) {
+	release := func() RunTemplate {
+		ref := &RunValueSource{}
+		ref.SecretKeyRef.Secret, ref.SecretKeyRef.Version = "lp-api-TOKEN", "2"
+		sql := RunVolume{Name: "cloudsql", CloudSQLInstance: &struct {
+			Instances []string `json:"instances"`
+		}{Instances: []string{"shop:europe-west1:db"}}}
+		return RunTemplate{
+			Scaling: &RunScaling{Min: 1, Max: 3},
+			Containers: []RunContainer{{
+				Image: "img:abc", Env: []RunEnv{{Name: "MODE", Value: "fast"}, {Name: "TOKEN", ValueSource: ref}},
+				Ports: []RunPort{{ContainerPort: 8080}}, Resources: &RunResources{Limits: map[string]string{"cpu": "1", "memory": "512Mi"}},
+				Mounts: []RunVolumeMount{{Name: "cloudsql", MountPath: "/cloudsql"}},
+			}},
+			Volumes:   []RunVolume{sql},
+			VPCAccess: &RunVPCAccess{NetworkInterfaces: []RunNetworkInterface{{Network: "default", Subnetwork: "default"}}, Egress: "PRIVATE_RANGES_ONLY"},
+		}
+	}
+	revisionOf := func(t RunTemplate) *RunRevision {
+		// Cloud Run names the secret by its full path and the account it
+		// runs as.
+		data, _ := json.Marshal(t)
+		var copied RunTemplate
+		json.Unmarshal(data, &copied)
+		copied.Containers[0].Env[1].ValueSource.SecretKeyRef.Secret = "projects/123/secrets/lp-api-TOKEN"
+		return &RunRevision{
+			ServiceAccount: "123-compute@developer.gserviceaccount.com", Scaling: copied.Scaling,
+			Containers: copied.Containers, Volumes: copied.Volumes, VPCAccess: copied.VPCAccess,
+		}
+	}
+	if !revisionOf(release()).Runs(release()) {
+		t.Fatal("the same release doesn't run")
+	}
+	for name, change := range map[string]func(*RunTemplate){
+		"secret version": func(t *RunTemplate) { t.Containers[0].Env[1].ValueSource.SecretKeyRef.Version = "1" },
+		"plain variable": func(t *RunTemplate) { t.Containers[0].Env[0].Value = "slow" },
+		"image":          func(t *RunTemplate) { t.Containers[0].Image = "img:def" },
+		"scale":          func(t *RunTemplate) { t.Scaling.Max = 5 },
+		"size":           func(t *RunTemplate) { t.Containers[0].Resources.Limits["cpu"] = "2" },
+		"port":           func(t *RunTemplate) { t.Containers[0].Ports[0].ContainerPort = 9090 },
+		"cloud sql":      func(t *RunTemplate) { t.Volumes[0].CloudSQLInstance.Instances = []string{"shop:europe-west1:other"} },
+		"vpc":            func(t *RunTemplate) { t.VPCAccess = nil },
+	} {
+		running := release()
+		change(&running)
+		if revisionOf(running).Runs(release()) {
+			t.Errorf("%s: a revision that differs runs the release", name)
+		}
+	}
+	other := revisionOf(release())
+	other.ServiceAccount = "someone@shop.iam.gserviceaccount.com"
+	if other.Runs(release()) {
+		t.Error("a revision that runs as another account runs the release")
+	}
+	var gone *RunRevision
+	if gone.Runs(release()) {
+		t.Error("a missing revision runs the release")
+	}
+}

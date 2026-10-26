@@ -103,16 +103,61 @@ func revisionShares(svc *gcp.RunService) map[string]int {
 }
 
 // canaryBaseline is what a candidate ramps from: the baseline the canary
-// recorded, as a retry ramps from, while it still takes traffic, or else
-// the revision that serves most. A retry after a revert that didn't
-// finish can find the earlier candidate serving most.
-func canaryBaseline(job *Job, svc *gcp.RunService) string {
-	if job.Deployment != nil {
-		if recorded := job.Deployment.Canary.service(job.Action.ID); recorded != nil && recorded.Baseline != "" && revisionShares(svc)[recorded.Baseline] > 0 {
-			return recorded.Baseline
+// recorded, as a retry ramps from, while it still takes traffic. A retry
+// after a revert that didn't finish can find its earlier candidate
+// serving most. Without a record, the service's traffic has to be
+// settled, and the baseline is the one revision that serves.
+func canaryBaseline(job *Job, service string, svc *gcp.RunService) (string, error) {
+	if recorded := job.Deployment.Canary.service(job.Action.ID); recorded != nil && recorded.Baseline != "" && revisionShares(svc)[recorded.Baseline] > 0 {
+		return recorded.Baseline, nil
+	}
+	if err := settled(job, service, svc); err != nil {
+		return "", err
+	}
+	return baselineRevision(svc), nil
+}
+
+// settled refuses a service whose traffic another canary left behind:
+// split between revisions, or pinned while the template still makes a
+// candidate that isn't this deployment's. Either way the revision with
+// most of the traffic may be a candidate that failed, and ramping from it
+// would give it everything and delete the real baseline.
+func settled(job *Job, service string, svc *gcp.RunService) error {
+	var serving []string
+	shares := revisionShares(svc)
+	for _, rev := range slices.Sorted(maps.Keys(shares)) {
+		if shares[rev] > 0 {
+			serving = append(serving, fmt.Sprintf("%s %d%%", rev, shares[rev]))
 		}
 	}
-	return baselineRevision(svc)
+	settle := "Settle that canary's traffic first: retry or roll back its deployment, or release this environment direct once, which gives the latest revision all of the traffic"
+	if len(serving) > 1 {
+		return fmt.Errorf("%s can't start a canary: an earlier canary left Cloud Run service %s's traffic split (%s). %s",
+			job.Action.Name, service, strings.Join(serving, ", "), settle)
+	}
+	if named := svc.Template.Revision; named != "" && !latestOnly(svc) && !ownCandidate(job, service, named) {
+		return fmt.Errorf("%s can't start a canary: Cloud Run service %s still makes revision %s, an earlier canary's candidate, while its traffic is pinned (%s). %s",
+			job.Action.Name, service, named, strings.Join(serving, ", "), settle)
+	}
+	return nil
+}
+
+// latestOnly reports whether all of a service's traffic follows its
+// latest revision, as after a promote or an ordinary deploy.
+func latestOnly(svc *gcp.RunService) bool {
+	return len(svc.Traffic) == 1 && svc.Traffic[0].Type == gcp.TrafficLatest && svc.Traffic[0].Percent == 100
+}
+
+// ownCandidate reports whether a revision is one this deployment started,
+// in any of its retries.
+func ownCandidate(job *Job, service, revision string) bool {
+	for retry := 0; retry <= job.Deployment.Retries; retry++ {
+		base := canaryRevision(service, job.Deployment.ID, retry)
+		if revision == base || strings.HasPrefix(revision, base+"-") {
+			return true
+		}
+	}
+	return false
 }
 
 // cloudRunCanaryCloud is what a Cloud Run canary does in Google Cloud.
@@ -134,6 +179,8 @@ type cloudRunCanary struct {
 	service   string
 	baseline  string
 	candidate string
+	// note shows what the canary couldn't tidy, when set.
+	note func(string)
 }
 
 // baselineTemplate is the service the baseline's revision was made from,
@@ -255,26 +302,46 @@ func (c *cloudRunCanary) start(ctx context.Context, candidate gcp.RunService, re
 	}
 	// Detached, so a start that failed because its context ended still
 	// cleans up. When that was the action's deadline, a retry may start
-	// while this runs. Each step is safe to repeat and the two converge:
-	// the retry's candidate has a name of its own, and this removes only
-	// this one.
+	// while this runs. The retry's candidate has a name of its own, and
+	// once it's the template this leaves the traffic alone and only
+	// deletes this candidate.
 	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), candidateCleanup)
 	defer cancel()
-	if cerr := c.remove(cleanup, restore); cerr != nil {
+	if cerr := c.cleanUp(cleanup, restore); cerr != nil {
 		return fmt.Errorf("%w. Cleaning up failed too, so revision %s of Cloud Run service %s may be left, and the service may still name it as its template: %w",
 			err, c.candidate, c.service, cerr)
 	}
 	return err
 }
 
+// startIn starts the candidate, then deletes the earlier candidates.
+// Those take no traffic once the candidate is up, so one that can't be
+// deleted is noted and left, and the candidate stays.
 func (c *cloudRunCanary) startIn(ctx context.Context, candidate gcp.RunService, earlier []string) error {
 	if _, err := c.cloud.ApplyCandidateRevision(ctx, c.region, c.service, candidate); err != nil {
 		return fmt.Errorf("start the candidate: %w", err)
 	}
 	for _, rev := range earlier {
-		if err := c.cloud.DeleteRevision(ctx, c.region, c.service, rev); err != nil {
-			return fmt.Errorf("delete revision %s, an earlier candidate: %w", rev, err)
+		if err := c.cloud.DeleteRevision(ctx, c.region, c.service, rev); err != nil && c.note != nil {
+			c.note(fmt.Sprintf("Revision %s, an earlier candidate, couldn't be deleted and is left, taking no traffic: %v", rev, err))
 		}
+	}
+	return nil
+}
+
+// cleanUp removes a candidate that failed to start. When the template no
+// longer makes it, a retry has started its own candidate, so the traffic
+// is the retry's to move and only this candidate is deleted.
+func (c *cloudRunCanary) cleanUp(ctx context.Context, restore baselineTemplate) error {
+	svc, err := c.cloud.GetService(ctx, c.region, c.service)
+	if err != nil {
+		return err
+	}
+	if svc.Template.Revision == c.candidate || svc.LatestCreated() == c.candidate {
+		return c.remove(ctx, restore)
+	}
+	if err := c.cloud.DeleteRevision(ctx, c.region, c.service, c.candidate); err != nil {
+		return fmt.Errorf("delete the candidate revision: %w", err)
 	}
 	return nil
 }
@@ -301,31 +368,6 @@ func (c *cloudRunCanary) weigh(ctx context.Context, percent int) error {
 	return nil
 }
 
-// runRelease is what a promote makes the service run: the candidate's
-// image, its plain variables and the names of its secret ones.
-type runRelease struct {
-	image   string
-	env     map[string]string
-	secrets []string
-}
-
-// runsOn reports whether a revision runs the release.
-func (r runRelease) runsOn(rev *gcp.RunRevision) bool {
-	if rev == nil || len(rev.Containers) != 1 || rev.Containers[0].Image != r.image {
-		return false
-	}
-	env, secrets := map[string]string{}, []string{}
-	for _, e := range rev.Containers[0].Env {
-		if e.ValueSource != nil {
-			secrets = append(secrets, e.Name)
-		} else {
-			env[e.Name] = e.Value
-		}
-	}
-	slices.Sort(secrets)
-	return maps.Equal(env, r.env) && slices.Equal(secrets, r.secrets)
-}
-
 // promote sends all of the traffic to the service's latest revision, the
 // candidate, then records the release. The candidate only takes all of
 // the traffic while it's up and it's the latest, so the next ordinary
@@ -333,9 +375,10 @@ func (r runRelease) runsOn(rev *gcp.RunRevision) bool {
 //
 // A candidate that isn't up means an earlier promote got as far as it
 // could: when what serves all of the traffic is up and runs the release,
-// only the record is left. Otherwise the baseline gets the traffic back
-// and nothing is promoted.
-func (c *cloudRunCanary) promote(ctx context.Context, rel runRelease, record func(context.Context) error) error {
+// its whole template as gcp.RunRevision.Runs compares it, only the record
+// is left. Otherwise the baseline gets the traffic back and nothing is
+// promoted.
+func (c *cloudRunCanary) promote(ctx context.Context, rel gcp.RunTemplate, record func(context.Context) error) error {
 	candidate, err := c.revision(ctx, c.candidate)
 	if err != nil {
 		return err
@@ -351,7 +394,7 @@ func (c *cloudRunCanary) promote(ctx context.Context, rel runRelease, record fun
 			if rerr != nil {
 				return rerr
 			}
-			if rev.Up() && rel.runsOn(rev) {
+			if rev.Up() && rev.Runs(rel) {
 				return record(ctx)
 			}
 		}
@@ -451,7 +494,7 @@ func (c *CloudRun) ApplyCandidate(ctx context.Context, job *Job) (*CanaryTarget,
 	if perr := c.canaryPermissions(ctx, s, job); perr != nil {
 		return nil, perr
 	}
-	cr := &cloudRunCanary{cloud: s, region: a.Region, service: cloudrun.ServiceName(inst.ID)}
+	cr := &cloudRunCanary{cloud: s, region: a.Region, service: cloudrun.ServiceName(inst.ID), note: func(m string) { job.Progress(StepDeploying, m) }}
 	svc, err := s.GetService(ctx, cr.region, cr.service)
 	if gcp.IsNotFound(err) {
 		return nil, fmt.Errorf("%w: %s has no Cloud Run service %s to ramp a canary from", ErrNoExecutor, a.Name, cr.service)
@@ -459,7 +502,10 @@ func (c *CloudRun) ApplyCandidate(ctx context.Context, job *Job) (*CanaryTarget,
 	if err != nil {
 		return nil, err
 	}
-	if cr.baseline = canaryBaseline(job, svc); cr.baseline == "" {
+	if cr.baseline, err = canaryBaseline(job, cr.service, svc); err != nil {
+		return nil, err
+	}
+	if cr.baseline == "" {
 		return nil, fmt.Errorf("cloud run service %s serves no revision to ramp a canary from", cr.service)
 	}
 	ctx, cancel := context.WithCancelCause(ctx)
@@ -542,10 +588,12 @@ func (c *CloudRun) Promote(ctx context.Context, job *Job, t CanaryTarget) (*Outc
 	if inst == nil || cloudrun.ServiceName(inst.ID) != cr.service {
 		return nil, fmt.Errorf("%s's candidate ran in Cloud Run service %s, which isn't what the binding names now", job.Action.Name, cr.service)
 	}
-	secrets := candidateSecrets(t.Refs)
-	sp, labels := spec(job, t.Image, secrets)
-	rel := runRelease{image: t.Image, env: sp.Env, secrets: slices.Sorted(maps.Keys(secretNames(secrets)))}
-	if err := cr.promote(ctx, rel, func(ctx context.Context) error {
+	sp, labels := spec(job, t.Image, candidateSecrets(t.Refs))
+	rel, err := cloudrun.Service(sp, labels)
+	if err != nil {
+		return nil, err
+	}
+	if err := cr.promote(ctx, rel.Template, func(ctx context.Context) error {
 		if ierr := cloudrun.SetInvokers(ctx, s, cr.region, cr.service, labels); ierr != nil {
 			return ierr
 		}
@@ -564,15 +612,6 @@ func (c *CloudRun) Promote(ctx context.Context, job *Job, t CanaryTarget) (*Outc
 		url = job.Binding.URL
 	}
 	return &Outcome{ExternalID: inst.ID.String(), URL: url, Image: t.Image, Revision: t.Image}, nil
-}
-
-// secretNames are the variables secret labels are for.
-func secretNames(labels map[string]string) map[string]bool {
-	out := map[string]bool{}
-	for k := range labels {
-		out[strings.TrimPrefix(k, cloudrun.LabelSecret)] = true
-	}
-	return out
 }
 
 // Revert implements Weighted. The baseline gets all of the traffic back,

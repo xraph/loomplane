@@ -8,6 +8,9 @@ import (
 	"maps"
 	"net/http"
 	"net/url"
+	"reflect"
+	"slices"
+	"strings"
 )
 
 // A Cloud Run canary runs the candidate as a named revision of the
@@ -23,14 +26,94 @@ var CanaryPermissions = []string{
 	"run.revisions.get",
 }
 
-// RunRevision is the part of a Cloud Run revision a canary reads.
+// RunRevision is the part of a Cloud Run revision a canary reads: whether
+// it's up, and what it runs, which Cloud Run copied from the template
+// that made it.
 type RunRevision struct {
 	Name string `json:"name"`
 	// DeleteTime is set once the revision is being deleted.
-	DeleteTime  string         `json:"deleteTime,omitempty"`
-	Reconciling bool           `json:"reconciling,omitempty"`
-	Conditions  []RunCondition `json:"conditions,omitempty"`
-	Containers  []RunContainer `json:"containers,omitempty"`
+	DeleteTime     string         `json:"deleteTime,omitempty"`
+	Reconciling    bool           `json:"reconciling,omitempty"`
+	Conditions     []RunCondition `json:"conditions,omitempty"`
+	ServiceAccount string         `json:"serviceAccount,omitempty"`
+	Scaling        *RunScaling    `json:"scaling,omitempty"`
+	Containers     []RunContainer `json:"containers,omitempty"`
+	Volumes        []RunVolume    `json:"volumes,omitempty"`
+	VPCAccess      *RunVPCAccess  `json:"vpcAccess,omitempty"`
+}
+
+// Runs reports whether the revision runs what t would make: the same
+// image, the same plain variables, the same secrets at the same versions,
+// the same ports, size and scaling, the same Cloud SQL instances and VPC
+// egress, and the same service account. A release on the same commit has
+// the same image, so the image alone can't tell a revision runs it.
+// Anything Cloud Run filled in that t leaves to its defaults reads as a
+// difference, which is the safe way to be wrong.
+func (r *RunRevision) Runs(t RunTemplate) bool {
+	if r == nil || len(r.Containers) != 1 || len(t.Containers) != 1 {
+		return false
+	}
+	if !defaultAccount(t.ServiceAccount, r.ServiceAccount) {
+		return false
+	}
+	return reflect.DeepEqual(shapeOf(t.Containers[0], t.Scaling, t.Volumes, t.VPCAccess),
+		shapeOf(r.Containers[0], r.Scaling, r.Volumes, r.VPCAccess))
+}
+
+// defaultAccount reports whether a revision's service account is the
+// template's, where a template that names none runs as the project's
+// default compute account.
+func defaultAccount(want, got string) bool {
+	if want != "" {
+		return want == got
+	}
+	return got == "" || strings.HasSuffix(got, "-compute@developer.gserviceaccount.com")
+}
+
+// releaseShape is what a revision runs, in a form two of them compare by.
+type releaseShape struct {
+	Image    string
+	Env      map[string]string
+	Secrets  map[string]string // name: secret:version
+	Ports    []int
+	Limits   map[string]string
+	Mounts   map[string]string
+	Min, Max int
+	CloudSQL map[string]string // volume: instances, sorted
+	VPC      string
+}
+
+func shapeOf(c RunContainer, scaling *RunScaling, volumes []RunVolume, vpc *RunVPCAccess) releaseShape {
+	s := releaseShape{Image: c.Image, Env: map[string]string{}, Secrets: map[string]string{}, Mounts: map[string]string{}, Limits: map[string]string{}, CloudSQL: map[string]string{}}
+	for _, e := range c.Env {
+		if e.ValueSource != nil {
+			s.Secrets[e.Name] = RevisionName(e.ValueSource.SecretKeyRef.Secret) + ":" + e.ValueSource.SecretKeyRef.Version
+		} else {
+			s.Env[e.Name] = e.Value
+		}
+	}
+	for _, p := range c.Ports {
+		s.Ports = append(s.Ports, p.ContainerPort)
+	}
+	if c.Resources != nil {
+		maps.Copy(s.Limits, c.Resources.Limits)
+	}
+	for _, m := range c.Mounts {
+		s.Mounts[m.Name] = m.MountPath
+	}
+	if scaling != nil {
+		s.Min, s.Max = scaling.Min, scaling.Max
+	}
+	for _, v := range volumes {
+		if v.CloudSQLInstance != nil {
+			s.CloudSQL[v.Name] = strings.Join(slices.Sorted(slices.Values(v.CloudSQLInstance.Instances)), ",")
+		}
+	}
+	if vpc != nil {
+		data, _ := json.Marshal(vpc) //nolint:errcheck // a plain struct always encodes
+		s.VPC = string(data)
+	}
+	return s
 }
 
 // Up reports whether the revision can serve: it's there, it isn't being

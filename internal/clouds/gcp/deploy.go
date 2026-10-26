@@ -257,12 +257,15 @@ type RunTemplate struct {
 	// Revision names the revision the template makes. Left empty, Cloud
 	// Run names it. Only a canary's candidate is named, so the canary can
 	// tell it from the baseline.
-	Revision   string            `json:"revision,omitempty"`
-	Labels     map[string]string `json:"labels,omitempty"`
-	Scaling    *RunScaling       `json:"scaling,omitempty"`
-	Containers []RunContainer    `json:"containers"`
-	Volumes    []RunVolume       `json:"volumes,omitempty"`
-	VPCAccess  *RunVPCAccess     `json:"vpcAccess,omitempty"`
+	Revision string `json:"revision,omitempty"`
+	// ServiceAccount is what the revision runs as. Loomplane sets none,
+	// so its revisions run as the project's default compute account.
+	ServiceAccount string            `json:"serviceAccount,omitempty"`
+	Labels         map[string]string `json:"labels,omitempty"`
+	Scaling        *RunScaling       `json:"scaling,omitempty"`
+	Containers     []RunContainer    `json:"containers"`
+	Volumes        []RunVolume       `json:"volumes,omitempty"`
+	VPCAccess      *RunVPCAccess     `json:"vpcAccess,omitempty"`
 }
 
 // RunVPCAccess sends a revision's traffic to private addresses through a
