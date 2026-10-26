@@ -1,31 +1,78 @@
 package migrations
 
-func init() {
-	App.MustRegister(statements("20261103000100", "cloud_sign_in", cloudSignInUp, cloudSignInDown))
-}
+import (
+	"context"
+
+	"github.com/xraph/grove/migrate"
+)
 
 // Connecting a cloud by signing in. method says how a connection got its
 // credential. An app is the OAuth client an organization registered with a
 // cloud; only its client ID is here, the secret is in Vault. A sign-in is
 // one pending attempt, and its state is single use. Nothing secret is
 // stored in any of these tables.
-var cloudSignInUp = []string{
-	`ALTER TABLE loomplane_cloud_connections ADD COLUMN IF NOT EXISTS method TEXT NOT NULL DEFAULT 'token'`,
-	`CREATE TABLE IF NOT EXISTS loomplane_oauth_apps (
- org_id TEXT NOT NULL,cloud TEXT NOT NULL,client_id TEXT NOT NULL,updated_by TEXT NOT NULL,
- created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
- updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
- PRIMARY KEY(org_id,cloud))`,
-	`CREATE TABLE IF NOT EXISTS loomplane_oauth_sign_ins (
- state TEXT PRIMARY KEY,org_id TEXT NOT NULL,user_id TEXT NOT NULL,cloud TEXT NOT NULL,
- name TEXT NOT NULL,connection_id TEXT NOT NULL DEFAULT '',expires_at TIMESTAMPTZ NOT NULL,
- created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp())`,
-	`ALTER TABLE loomplane_notification_outbox ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'deployment'`,
-}
+func init() {
+	App.Add(
+		func(ctx context.Context, db *migrate.DB) error {
+			err := db.NewAlterTable("loomplane_cloud_connections").
+				AddColumn("method", migrate.Text, migrate.NotNull(), migrate.Default("token")).IfNotExists().
+				Exec(ctx)
+			if err != nil {
+				return err
+			}
 
-var cloudSignInDown = []string{
-	`ALTER TABLE loomplane_notification_outbox DROP COLUMN IF EXISTS kind`,
-	`DROP TABLE IF EXISTS loomplane_oauth_sign_ins`,
-	`DROP TABLE IF EXISTS loomplane_oauth_apps`,
-	`ALTER TABLE loomplane_cloud_connections DROP COLUMN IF EXISTS method`,
+			err = db.NewCreateTable("loomplane_oauth_apps").IfNotExists().
+				Column("org_id", migrate.Text, migrate.NotNull()).
+				Column("cloud", migrate.Text, migrate.NotNull()).
+				Column("client_id", migrate.Text, migrate.NotNull()).
+				Column("updated_by", migrate.Text, migrate.NotNull()).
+				Column("created_at", migrate.Timestamp, migrate.NotNull(), migrate.DefaultExpr("clock_timestamp()")).
+				Column("updated_at", migrate.Timestamp, migrate.NotNull(), migrate.DefaultExpr("clock_timestamp()")).
+				PrimaryKey("org_id", "cloud").
+				Exec(ctx)
+			if err != nil {
+				return err
+			}
+
+			err = db.NewCreateTable("loomplane_oauth_sign_ins").IfNotExists().
+				Column("state", migrate.Text, migrate.PrimaryKey()).
+				Column("org_id", migrate.Text, migrate.NotNull()).
+				Column("user_id", migrate.Text, migrate.NotNull()).
+				Column("cloud", migrate.Text, migrate.NotNull()).
+				Column("name", migrate.Text, migrate.NotNull()).
+				Column("connection_id", migrate.Text, migrate.NotNull(), migrate.Default("")).
+				Column("expires_at", migrate.Timestamp, migrate.NotNull()).
+				Column("created_at", migrate.Timestamp, migrate.NotNull(), migrate.DefaultExpr("clock_timestamp()")).
+				Exec(ctx)
+			if err != nil {
+				return err
+			}
+
+			return db.NewAlterTable("loomplane_notification_outbox").
+				AddColumn("kind", migrate.Text, migrate.NotNull(), migrate.Default("deployment")).IfNotExists().
+				Exec(ctx)
+		},
+		func(ctx context.Context, db *migrate.DB) error {
+			err := db.NewAlterTable("loomplane_notification_outbox").
+				DropColumn("kind").IfExists().
+				Exec(ctx)
+			if err != nil {
+				return err
+			}
+
+			err = db.NewDropTable("loomplane_oauth_sign_ins").IfExists().Exec(ctx)
+			if err != nil {
+				return err
+			}
+
+			err = db.NewDropTable("loomplane_oauth_apps").IfExists().Exec(ctx)
+			if err != nil {
+				return err
+			}
+
+			return db.NewAlterTable("loomplane_cloud_connections").
+				DropColumn("method").IfExists().
+				Exec(ctx)
+		},
+	)
 }
