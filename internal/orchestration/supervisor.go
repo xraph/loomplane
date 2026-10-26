@@ -20,14 +20,15 @@ const (
 
 // DurableSupervisor keeps a durable worker polling after a store error.
 //
-// Dispatch v1.9.1 stops its durable worker on the first store error that
-// isn't lease contention, a claim that times out included, and a stopped
-// worker can't be started again. The engine still starts, signals and
-// queries runs through that worker, since those calls go straight to the
-// store, but nothing claims their tasks: a plan stays in planning until
-// the process restarts. The supervisor watches the engine's worker and,
-// once it fails, runs a replacement on the same store after a backoff,
-// and another each time a replacement fails.
+// Since v1.9.3 Dispatch retries a claim the store doesn't answer, so a
+// claim timeout no longer stops its durable worker. A store error while
+// the worker processes a claimed task still does, once its own retries
+// run out, and a stopped worker can't be started again. The engine still
+// starts, signals and queries runs through that worker, since those calls
+// go straight to the store, but nothing claims their tasks: a plan stays
+// in planning until the process restarts. The supervisor watches the
+// engine's worker and, once it fails, runs a replacement on the same
+// store after a backoff, and another each time a replacement fails.
 //
 // A replacement never runs a task twice. The store hands out only tasks
 // whose lease is unset or expired, and each claim takes a new epoch that
@@ -105,8 +106,10 @@ func (s *DurableSupervisor) Stop(ctx context.Context) error {
 	}
 }
 
-// Health reports a worker that has stopped and not yet been replaced.
-// It reads the worker's own state, so it's current between checks.
+// Health reports a worker that has stopped and not yet been replaced, and
+// one whose claims the store hasn't been answering. It reads the current
+// worker's own state, so it's current between checks; Dispatch's engine
+// health only knows about the engine's first worker.
 func (s *DurableSupervisor) Health() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -115,6 +118,10 @@ func (s *DurableSupervisor) Health() error {
 	}
 	status := s.current.Status()
 	if status.State != drt.WorkerFailed {
+		if status.ClaimFailures > 0 {
+			return fmt.Errorf("the durable workflow worker can't claim tasks: %w: %d attempts since %s",
+				drt.ErrClaimUnknown, status.ClaimFailures, status.ClaimFailingSince.Format(time.RFC3339))
+		}
 		return nil
 	}
 	if s.failure != nil {
