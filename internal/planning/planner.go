@@ -173,6 +173,7 @@ func Compute(in Input) *Result {
 	p.checkFindings()
 	p.impact()
 	p.planDeletes()
+	p.refuseRoutedDeletes()
 	p.stillReplaced()
 	return p.finish()
 }

@@ -4,13 +4,16 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/manifests"
 	"github.com/xraph/loomplane/internal/providers"
+	"github.com/xraph/loomplane/internal/recipes"
 	"github.com/xraph/loomplane/internal/recipes/recipestest"
 )
 
@@ -363,41 +366,146 @@ func TestUnverifiedPlacementsNameResourcesOnTheCloud(t *testing.T) {
 	}
 }
 
-// A routed component can't be released with its routes yet: a change to
-// it is refused with what to do, and an unchanged one plans as before.
-func TestChangingARoutedComponentIsRefused(t *testing.T) {
+// routedPlan plans edgeApp, or doc, with routes to the named actions,
+// against bindings.
+func routedPlan(t *testing.T, doc string, kinds *recipes.Registry, bindings []*Binding, routed ...string) *Result {
+	t.Helper()
 	options := hostedConnections(t, CloudServer{ID: "server_1", CloudID: "cloud_1"})
-	first, _ := directPlans(t, options)
-	bound := boundAll(t, first)
-	routes := []cloudinfra.Route{{ID: "route_1", Status: "ready", Input: cloudinfra.RouteInput{Service: "edge--api", Hostname: "api.example.com", Port: 8080}}}
-	plan := func(bindings []*Binding) *Result {
-		a := edgeAssignment(edgeHostTarget())
-		m := parse(t, edgeApp)
-		return Compute(Input{
-			Environment: "production", Graph: infrastructureGraph(), Manifest: m, Providers: providers.Registry(),
-			Connections: options, Kinds: recipestest.Registry(t), Bindings: bindings, Routes: routes,
-			CloudPlacements: composedPlacements(m, "production", []string{"edge"}, a, options),
-		})
+	routes := make([]cloudinfra.Route, 0, len(routed))
+	for i, name := range routed {
+		routes = append(routes, cloudinfra.Route{ID: fmt.Sprintf("route_%d", i), Status: "ready", Input: cloudinfra.RouteInput{Service: name, Hostname: name + ".example.com", Port: 8080}})
 	}
-	if r := plan(bound); hasCode(r.Problems, "route-release") || findAction(r, "resource:edge--api").Op != Keep {
+	a := edgeAssignment(edgeHostTarget())
+	m := parse(t, doc)
+	return Compute(Input{
+		Environment: "production", Graph: infrastructureGraph(), Manifest: m, Providers: providers.Registry(),
+		Connections: options, Kinds: kinds, Bindings: bindings, Routes: routes,
+		CloudPlacements: composedPlacements(m, "production", []string{"edge"}, a, options),
+	})
+}
+
+// routedBindings are what planning edgeApp with kinds deploys.
+func routedBindings(t *testing.T, kinds *recipes.Registry) []*Binding {
+	t.Helper()
+	return boundAll(t, routedPlan(t, edgeApp, kinds, nil))
+}
+
+// routeRefusals are the plan's route-release problems.
+func routeRefusals(r *Result) []Finding {
+	return slices.DeleteFunc(slices.Clone(r.Problems), func(f Finding) bool { return f.Code != "route-release" })
+}
+
+// changeRefusal is the problem a change to a routed component gets.
+func changeRefusal(a *Action) string {
+	reason := strings.TrimSpace(a.Reason)
+	if !strings.HasSuffix(reason, ".") {
+		reason += "."
+	}
+	return a.Name + " has domain routes, and this plan changes it: " + reason + " Routed component releases aren't supported yet, so remove its routes or undo the change, then plan again."
+}
+
+// twoReleases is the sample kind with a second release of the same images.
+func twoReleases(t *testing.T) *recipes.Registry {
+	t.Helper()
+	k := recipestest.Sample()
+	next := k.Releases[0]
+	next.Version, next.Revision = "2", "2"
+	k.Releases = append(k.Releases, next)
+	r := recipes.NewRegistry()
+	if err := r.Register(k); err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+// A routed component can't be released with its routes yet: any change to
+// it is refused, whatever caused it, with both ways out. An unchanged one
+// plans as before.
+func TestChangingARoutedComponentIsRefused(t *testing.T) {
+	kinds := recipestest.Registry(t)
+	if r := routedPlan(t, edgeApp, kinds, routedBindings(t, kinds), "edge--api"); len(routeRefusals(r)) != 0 || findAction(r, "resource:edge--api").Op != Keep {
 		t.Fatalf("an unchanged routed component: %+v %+v", findAction(r, "resource:edge--api"), r.Problems)
 	}
-	// An older image is bound, so the plan changes the api.
-	for _, b := range bound {
-		if b.Name == "edge--api" {
+	bump := "version: 1\nresources:\n  edge: {kind: sample, version: \"2\", provider: server, target: " + targetA + "}\n"
+	for _, tt := range []struct {
+		name  string
+		doc   string
+		kinds *recipes.Registry
+		edit  func(*Binding)
+		op    Op
+	}{
+		{"an older image", edgeApp, kinds, func(b *Binding) {
 			b.Config = bytes.Replace(b.Config, []byte(`"image":"registry.example/sample-api@sha256:`), []byte(`"image":"registry.example/sample-api-old@sha256:`), 1)
-		}
+		}, ""},
+		{"drift: it's missing", edgeApp, kinds, func(b *Binding) { b.Drift = DriftMissing }, Create},
+		{"another region", edgeApp, kinds, func(b *Binding) { b.Region = "elsewhere" }, Replace},
+		{"its parent's version bump", bump, twoReleases(t), nil, ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			bound := routedBindings(t, tt.kinds)
+			for _, b := range bound {
+				if b.Name == "edge--api" && tt.edit != nil {
+					tt.edit(b)
+				}
+			}
+			r := routedPlan(t, tt.doc, tt.kinds, bound, "edge--api")
+			api := findAction(r, "resource:edge--api")
+			if api == nil || api.Op == Keep || (tt.op != "" && api.Op != tt.op) {
+				t.Fatalf("the api: %+v", api)
+			}
+			refusals := routeRefusals(r)
+			if len(refusals) != 1 || r.Executable {
+				t.Fatalf("problems %+v", r.Problems)
+			}
+			if f := refusals[0]; f.Subject != ResourceSubject || f.Name != "edge--api" || f.Path != "resources.edge" || f.Message != changeRefusal(api) {
+				t.Fatalf("refusal %+v, want message %q", f, changeRefusal(api))
+			}
+		})
 	}
-	r := plan(bound)
-	if api := findAction(r, "resource:edge--api"); api == nil || api.Op == Keep {
-		t.Fatalf("the api didn't change: %+v", api)
-	}
-	f := findCode(r.Problems, "route-release")
-	if f == nil || r.Executable || f.Subject != ResourceSubject || f.Name != "edge--api" ||
-		f.Message != "edge--api has domain routes. Remove them before changing it: routed component releases aren't supported yet." {
-		t.Fatalf("problems %+v", r.Problems)
-	}
-	if n := len(slices.DeleteFunc(slices.Clone(r.Problems), func(f Finding) bool { return f.Code != "route-release" })); n != 1 {
-		t.Fatalf("%d route-release problems", n)
+}
+
+// Deleting something with domain routes is refused at plan time, before
+// any step of the teardown runs: a component, the composed resource it's
+// part of, and a service.
+func TestDeletingRoutedWorkloadsIsRefused(t *testing.T) {
+	kinds := recipestest.Registry(t)
+	for _, tt := range []struct {
+		name, doc, routed, path string
+		subject                 Subject
+		extra                   func(bound []*Binding) []*Binding
+	}{
+		{"a component its resource no longer has", edgeApp, "edge--old", "resources.edge", ResourceSubject, func(bound []*Binding) []*Binding {
+			for _, b := range bound {
+				if b.Name == "edge--api" {
+					old := *b
+					old.ID, old.Name, old.ExternalID = "binding-edge--old", "edge--old", "instance-edge--old"
+					return append(bound, &old)
+				}
+			}
+			return bound
+		}},
+		{"the composed resource", "version: 1\n", "edge--api", "resources.edge", ResourceSubject, nil},
+		{"a service", edgeApp, "web", "services.web", ServiceSubject, func(bound []*Binding) []*Binding {
+			return append(bound, &Binding{ID: "binding-web", Subject: ServiceSubject, Name: "web", Provider: "server", ConnectionID: targetA, ExternalID: "instance-web", Config: []byte(`{"provider":"server"}`)})
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			bound := routedBindings(t, kinds)
+			if tt.extra != nil {
+				bound = tt.extra(bound)
+			}
+			r := routedPlan(t, tt.doc, kinds, bound, tt.routed)
+			deleted := findAction(r, string(tt.subject)+":"+tt.routed)
+			if deleted == nil || deleted.Op != Delete {
+				t.Fatalf("%s isn't deleted: %+v", tt.routed, deleted)
+			}
+			refusals := routeRefusals(r)
+			if len(refusals) != 1 || r.Executable {
+				t.Fatalf("problems %+v", r.Problems)
+			}
+			if f := refusals[0]; f.Subject != tt.subject || f.Name != tt.routed || f.Path != tt.path || f.Message != tt.routed+" has domain routes. Remove them before deleting it." {
+				t.Fatalf("refusal %+v", f)
+			}
+		})
 	}
 }

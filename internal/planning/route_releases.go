@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"slices"
+	"strings"
 
 	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/cloudprofiles"
@@ -66,12 +67,14 @@ func (p *planner) routedReplacements() bool {
 }
 
 // refuseRoutedComponent refuses a change to a composed component that has
-// a domain route. A routed release retains the serving instance on reviewed
-// pool capacity, and components run only on direct targets, so changing
-// one would fail at apply until its routes were removed.
+// a domain route, whatever caused it: an edit, drift or its resource's
+// version. A routed release retains the serving instance on reviewed pool
+// capacity, and components run only on direct targets, so changing one
+// would fail at apply until its routes were removed. Deletes are planned
+// later; refuseRoutedDeletes covers them.
 func (p *planner) refuseRoutedComponent(route cloudinfra.Route) {
 	a := p.resources[route.Input.Service]
-	if a == nil || a.Resource == nil || a.Resource.Component == nil || a.Op == Keep || a.Op == Delete {
+	if a == nil || a.Resource == nil || a.Resource.Component == nil || a.Op == Keep {
 		return
 	}
 	if slices.ContainsFunc(p.problems, func(f Finding) bool {
@@ -79,10 +82,39 @@ func (p *planner) refuseRoutedComponent(route cloudinfra.Route) {
 	}) {
 		return
 	}
+	reason := strings.TrimSpace(a.Reason)
+	if reason != "" && !strings.HasSuffix(reason, ".") {
+		reason += "."
+	}
 	p.problem(Finding{
-		Code: "route-release", Subject: ResourceSubject, Name: a.Name,
-		Message: a.Name + " has domain routes. Remove them before changing it: routed component releases aren't supported yet.",
+		Code: "route-release", Subject: ResourceSubject, Name: a.Name, Path: "resources." + a.Resource.Component.Resource,
+		Message: strings.TrimSpace(fmt.Sprintf("%s has domain routes, and this plan changes it: %s", a.Name, reason)) +
+			" Routed component releases aren't supported yet, so remove its routes or undo the change, then plan again.",
 	})
+}
+
+// refuseRoutedDeletes refuses deleting anything a domain route points at:
+// a service, a composed resource's component, or the composed resource
+// it's part of, whose components are deleted with it. Apply would refuse
+// it only once earlier delete steps had already run.
+func (p *planner) refuseRoutedDeletes() {
+	if len(p.in.Routes) == 0 {
+		return
+	}
+	composed := p.composedBindings()
+	for _, a := range p.actions {
+		if a.Op != Delete || !slices.ContainsFunc(p.in.Routes, func(r cloudinfra.Route) bool { return r.Input.Service == a.Name }) {
+			continue
+		}
+		path := "services." + a.Name
+		if a.Subject == ResourceSubject {
+			path = "resources." + a.Name
+			if of, part := composed[a.ID]; part {
+				path = "resources." + of.parent
+			}
+		}
+		p.problem(Finding{Code: "route-release", Subject: a.Subject, Name: a.Name, Path: path, Message: a.Name + " has domain routes. Remove them before deleting it."})
+	}
 }
 
 func routedReplacementAllowed(a *Action, b *Binding, route cloudinfra.Route) error {
