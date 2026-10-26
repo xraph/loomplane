@@ -462,6 +462,27 @@ func TestRotateAndRevokeKeepStoreErrorsTheirOwn(t *testing.T) {
 	}
 }
 
+// A rotation or revocation whose lock is lost partway asks you to try
+// again: it isn't Fabriq being unreachable.
+func TestRotateAndRevokeThatLoseTheirLockAskToRetry(t *testing.T) {
+	h := newServiceHarness(nil, "acme")
+	h.bind(t, "api", "acme")
+	h.keys.lose = true
+	calls := map[string]func() error{
+		"rotate": func() error { _, err := h.svc.Rotate(t.Context(), as("admin"), fabriqRef, "api"); return err },
+		"revoke": func() error { _, err := h.svc.Revoke(t.Context(), as("admin"), fabriqRef, "api"); return err },
+	}
+	for name, call := range calls {
+		err := call()
+		if !errors.Is(err, fabriqloom.ErrBusy) || errors.Is(err, fabriqloom.ErrUnavailable) {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if want := "Another change to api's Fabriq key was in progress. Try again."; err.Error() != want {
+			t.Fatalf("%s: %q", name, err)
+		}
+	}
+}
+
 func TestBindWaitsForRotationToRecordItsKey(t *testing.T) {
 	h := newServiceHarness(nil, "acme")
 	h.bind(t, "api", "acme")

@@ -27,6 +27,9 @@ type memKeys struct {
 	// waiting, when set, hears the service of each LockService that finds
 	// the lock held, before it waits.
 	waiting chan string
+	// lose, when set, ends each lease it gives at once with cause
+	// ErrLeaseLost, as PgStore's does when a renewal finds it gone.
+	lose bool
 }
 
 func (s *memKeys) LockService(ctx context.Context, orgID, environmentID, resource, service string) (context.Context, func(), error) {
@@ -48,8 +51,11 @@ func (s *memKeys) LockService(ctx context.Context, orgID, environmentID, resourc
 		}
 		lock.Lock()
 	}
-	held, cancel := context.WithCancel(ctx)
-	return held, func() { cancel(); lock.Unlock() }, nil
+	held, cancel := context.WithCancelCause(ctx)
+	if s.lose {
+		cancel(fabriqloom.ErrLeaseLost)
+	}
+	return held, func() { cancel(nil); lock.Unlock() }, nil
 }
 
 func (s *memKeys) Insert(_ context.Context, r *fabriqloom.KeyRecord) error {

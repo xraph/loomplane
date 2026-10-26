@@ -214,6 +214,10 @@ func (f *fakeFabriq) RoundTrip(r *http.Request) (*http.Response, error) {
 	if r.Header.Get("Authorization") != "" {
 		return nil, errors.New("a component channel can't carry an Authorization header")
 	}
+	// A request whose context has ended fails, as it would on the wire.
+	if err := r.Context().Err(); err != nil {
+		return nil, err
+	}
 	w := httptest.NewRecorder()
 	f.ServeHTTP(w, r)
 	res := w.Result()

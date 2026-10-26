@@ -32,6 +32,9 @@ var (
 	// ErrUnavailable is a Fabriq whose console can't be reached, or whose
 	// admin API failed. Errors that are it are *UnavailableError.
 	ErrUnavailable = errors.New("Fabriq isn't reachable right now") //nolint:staticcheck // ST1005: a sentence people read, and Fabriq is a name
+	// ErrBusy is a change to a service's keys that lost its lock to
+	// another change partway. Trying again works.
+	ErrBusy = errors.New("another change to the service's Fabriq key was in progress")
 )
 
 // refusal is an error whose message is all there is to say, and which is
@@ -68,6 +71,16 @@ func unavailable(err error) error {
 		return err
 	}
 	return &UnavailableError{Reason: scrub(err.Error())}
+}
+
+// leaseLost is err, unless the lock on service's keys was lost under it
+// (ctx is the lock's): then whatever failed failed because of that, and
+// it's ErrBusy.
+func leaseLost(ctx context.Context, service string, err error) error {
+	if err == nil || !errors.Is(err, ErrLeaseLost) && !errors.Is(context.Cause(ctx), ErrLeaseLost) {
+		return err
+	}
+	return &refusal{msg: fmt.Sprintf("Another change to %s's Fabriq key was in progress. Try again.", service), kind: ErrBusy}
 }
 
 // sweepFailure is unavailable(err) when the orphan sweep failed in Fabriq
@@ -480,11 +493,17 @@ func (s *Service) Rotate(ctx context.Context, p security.Principal, ref deployme
 	if err := s.hosted(ctx, p, security.SecretManage, ref); err != nil {
 		return nil, err
 	}
-	ctx, unlock, err := s.Keys.LockService(ctx, p.OrgID, ref.EnvironmentID, ref.Resource, service)
+	held, unlock, err := s.Keys.LockService(ctx, p.OrgID, ref.EnvironmentID, ref.Resource, service)
 	if err != nil {
 		return nil, err
 	}
 	defer unlock()
+	key, err := s.rotate(held, p, ref, service)
+	return key, leaseLost(held, service, err)
+}
+
+// rotate is Rotate under the lock on service's keys, which ctx is.
+func (s *Service) rotate(ctx context.Context, p security.Principal, ref deployments.ResourceRef, service string) (*ConsumerKey, error) {
 	records, err := s.Keys.ForService(ctx, p.OrgID, ref.EnvironmentID, ref.Resource, service)
 	if err != nil {
 		return nil, err
@@ -539,11 +558,17 @@ func (s *Service) Revoke(ctx context.Context, p security.Principal, ref deployme
 	if err := s.hosted(ctx, p, security.SecretManage, ref); err != nil {
 		return nil, err
 	}
-	ctx, unlock, err := s.Keys.LockService(ctx, p.OrgID, ref.EnvironmentID, ref.Resource, service)
+	held, unlock, err := s.Keys.LockService(ctx, p.OrgID, ref.EnvironmentID, ref.Resource, service)
 	if err != nil {
 		return nil, err
 	}
 	defer unlock()
+	key, err := s.revoke(held, p, ref, service)
+	return key, leaseLost(held, service, err)
+}
+
+// revoke is Revoke under the lock on service's keys, which ctx is.
+func (s *Service) revoke(ctx context.Context, p security.Principal, ref deployments.ResourceRef, service string) (*ConsumerKey, error) {
 	records, err := s.Keys.ForService(ctx, p.OrgID, ref.EnvironmentID, ref.Resource, service)
 	if err != nil {
 		return nil, err
