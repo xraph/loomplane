@@ -45,6 +45,8 @@ func TestServerOptionsReadsGPUDropletsAndGPUImages(t *testing.T) {
 				"gpu_info": map[string]any{"count": 1, "model": "nvidia_h100", "vram": map[string]any{"amount": 80, "unit": "gib"}}},
 			map[string]any{"slug": "gpu-mi300x1-192gb", "vcpus": 20, "memory": 245760, "disk": 720, "price_hourly": 1.99, "price_monthly": 1480, "regions": []string{"tor1"}, "available": true,
 				"gpu_info": map[string]any{"count": 1, "model": "amd_mi300x", "vram": map[string]any{"amount": 192, "unit": "gib"}}},
+			map[string]any{"slug": "gpu-h100x8-640gb", "vcpus": 160, "memory": 1966080, "disk": 2046, "price_hourly": 23.92, "price_monthly": 17796.48, "regions": []string{"tor1"}, "available": true,
+				"gpu_info": map[string]any{"count": 8, "model": "nvidia_h100", "vram": map[string]any{"amount": 640, "unit": "gib"}}},
 		}})
 	})
 	f.on("GET /v2/images", func(w http.ResponseWriter, _ *http.Request, _ map[string]any) {
@@ -68,11 +70,44 @@ func TestServerOptionsReadsGPUDropletsAndGPUImages(t *testing.T) {
 	if amd.Accelerator == nil || amd.Accelerator.Vendor != "amd" || amd.Accelerator.Kind != "amd-mi300x" {
 		t.Fatalf("MI300X: %+v", amd)
 	}
+	// 640 GiB across eight GPUs is 80 per GPU: an H100 80GB, not an NVL.
+	if x8 := options.Sizes[3]; x8.Accelerator == nil || *x8.Accelerator != (provider.Accelerator{Kind: "nvidia-h100-80gb", Vendor: "nvidia", Count: 8, MemoryGiB: 80}) {
+		t.Fatalf("H100x8: %+v", x8.Accelerator)
+	}
 	plain, gpu, amdImage := options.Images[0], options.Images[1], options.Images[2]
 	if len(plain.Accelerators) != 0 || !slices.Equal(gpu.Accelerators, []string{"nvidia"}) || !gpu.Bootstrap || gpu.Architecture != "amd64" {
 		t.Fatalf("images: %+v %+v", plain, gpu)
 	}
 	if !slices.Equal(amdImage.Accelerators, []string{"amd"}) || !amdImage.Bootstrap {
 		t.Fatalf("AMD image: %+v", amdImage)
+	}
+}
+
+// vram may be per GPU or the size's total. It only tells variants apart,
+// and the kind table supplies the memory, so a total never becomes the
+// memory of one GPU.
+func TestDropletAcceleratorReadsVRAMEitherWay(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		model string
+		count int
+		vram  int
+		unit  string
+		want  provider.Accelerator
+	}{
+		{"one H100", "nvidia_h100", 1, 80, "gib", provider.Accelerator{Kind: "nvidia-h100-80gb", Vendor: "nvidia", Count: 1, MemoryGiB: 80}},
+		{"eight H100, total", "nvidia_h100", 8, 640, "gib", provider.Accelerator{Kind: "nvidia-h100-80gb", Vendor: "nvidia", Count: 8, MemoryGiB: 80}},
+		{"eight H100, per GPU", "nvidia_h100", 8, 80, "gib", provider.Accelerator{Kind: "nvidia-h100-80gb", Vendor: "nvidia", Count: 8, MemoryGiB: 80}},
+		{"two H100 NVL, total", "nvidia_h100", 2, 188, "gb", provider.Accelerator{Kind: "nvidia-h100-nvl-94gb", Vendor: "nvidia", Count: 2, MemoryGiB: 94}},
+		{"eight MI300X, total", "amd_mi300x", 8, 1536, "gib", provider.Accelerator{Kind: "amd-mi300x", Vendor: "amd", Count: 8, MemoryGiB: 192}},
+		{"eight A100, total", "nvidia_a100", 8, 640, "gib", provider.Accelerator{Kind: "nvidia-a100-80gb", Vendor: "nvidia", Count: 8, MemoryGiB: 80}},
+		{"eight A100 40GB, total", "nvidia_a100", 8, 320, "gib", provider.Accelerator{Kind: "nvidia-a100-40gb", Vendor: "nvidia", Count: 8, MemoryGiB: 40}},
+		{"unknown unit", "nvidia_h100", 8, 655360, "mib", provider.Accelerator{Kind: "nvidia-h100-80gb", Vendor: "nvidia", Count: 8, MemoryGiB: 80}},
+		{"unknown model, one GPU", "nvidia_b300", 1, 288, "gib", provider.Accelerator{Kind: dropletKind("nvidia_b300", 1, 288), Vendor: "nvidia", Count: 1, MemoryGiB: 288}},
+		{"unknown model, eight GPUs", "nvidia_b300", 8, 2304, "gib", provider.Accelerator{Kind: dropletKind("nvidia_b300", 8, 2304), Vendor: "nvidia", Count: 8}},
+	} {
+		if got := dropletAccelerator(tc.model, tc.count, tc.vram, tc.unit); got == nil || *got != tc.want {
+			t.Errorf("%s: %+v, want %+v", tc.name, got, tc.want)
+		}
 	}
 }
