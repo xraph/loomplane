@@ -12,13 +12,15 @@ export function ago(iso: string, now: number): string {
   const elapsed = now - then
   if (elapsed < 45_000) return "just now"
   // Round within a bucket, and move up a bucket when rounding reaches its
-  // edge: 59.5 minutes is "1 hour ago", 23.6 hours is "yesterday".
+  // edge: 59.5 minutes is "1 hour ago", and 23.6 hours is "yesterday" once
+  // the date has changed. Earlier the same day it stays "23 hours ago".
   const minutes = Math.max(1, Math.round(elapsed / minute))
   if (minutes < 60) return plural(minutes, "minute")
   const hours = Math.round(elapsed / hour)
   if (hours < 24) return plural(hours, "hour")
   const days = daysBetween(then, now)
-  if (days <= 1) return "yesterday"
+  if (days < 1) return plural(Math.floor(elapsed / hour), "hour")
+  if (days === 1) return "yesterday"
   if (days < 31) return `${days} days ago`
   return dateOf(then)
 }
