@@ -16,9 +16,12 @@ var resourceCredentialFields = []string{ResourceURL, passwordField, adminPasswor
 // BindingReaper cleans up after the services and resources deployed in a
 // project or environment being deleted. The deletion takes every binding
 // with it, by a cascade that can't reach Vault or a cloud, so it reads them
-// first. Once the deletion has happened it deletes each one's credentials
-// from Vault. What each binding deployed is out of reach by then: deleting
-// it takes a deployment, through the connection that deployed it, and the
+// first. Once the deletion has happened it deletes every credential the
+// environment kept in Vault: each resource's address and passwords, the
+// variables each deployment pinned, the runtime values of a service on a
+// server or cluster of yours, and whatever a deployment that failed left
+// there. What each binding deployed is out of reach by then: deleting it
+// takes a deployment, through the connection that deployed it, and the
 // binding that said where it runs is gone. So it warns, naming where each
 // one runs, that it's yours to delete now, as a deployment does for a
 // leftover it can't remove. A database gateway's binding gets its warning
@@ -34,7 +37,9 @@ type BindingReaper struct {
 		ListEnvironments(ctx context.Context, orgID, projectID string) ([]*projects.Environment, error)
 	}
 	// Secrets keeps the resources' credentials. It may be nil when nothing
-	// is provisioned.
+	// is provisioned. When it's a ResourceSecretKeys every key under the
+	// environment goes. Otherwise only each binding's own credentials do,
+	// since nothing else can be found.
 	Secrets ResourceSecrets
 	// Executors name where a leftover runs, by provider name. It may be nil.
 	Executors map[string]Executor
@@ -46,13 +51,16 @@ var _ projects.Reaper = (*BindingReaper)(nil)
 
 // Reap implements projects.Reaper. It reads the bindings of the project's
 // environments, or of environmentID alone when that isn't empty, and
-// returns what cleans up after them.
+// returns what cleans up after them. An environment with nothing bound
+// still has credentials to delete when Secrets can list them, such as the
+// variables a deployment that never finished pinned.
 func (br *BindingReaper) Reap(ctx context.Context, orgID, projectID, environmentID string) func(context.Context) {
 	envs, err := br.Environments.ListEnvironments(ctx, orgID, projectID)
 	if err != nil {
-		br.warn("read the environments being deleted, so their resources' credentials stay in Vault", err)
+		br.warn("read the environments being deleted, so their credentials stay in Vault", err)
 		return nil
 	}
+	_, sweeps := br.Secrets.(ResourceSecretKeys)
 	var found []reapedEnvironment
 	for _, e := range envs {
 		if environmentID != "" && e.ID != environmentID {
@@ -60,10 +68,9 @@ func (br *BindingReaper) Reap(ctx context.Context, orgID, projectID, environment
 		}
 		bindings, berr := br.Bindings.ListBindings(ctx, orgID, e.ID)
 		if berr != nil {
-			br.warn(fmt.Sprintf("read what's deployed in the environment %s being deleted, so its resources' credentials stay in Vault and what it leaves running isn't reported", e.Name), berr)
-			continue
+			br.warn(fmt.Sprintf("read what's deployed in the environment %s being deleted, so what it leaves running isn't reported", e.Name), berr)
 		}
-		if len(bindings) > 0 {
+		if len(bindings) > 0 || sweeps {
 			found = append(found, reapedEnvironment{org: orgID, id: e.ID, name: e.Name, bindings: bindings})
 		}
 	}
@@ -77,18 +84,12 @@ func (br *BindingReaper) Reap(ctx context.Context, orgID, projectID, environment
 	}
 }
 
-// finish runs once the environment is gone: it deletes each binding's
-// credentials and warns about what each one deployed, and about what a
+// finish runs once the environment is gone: it deletes the environment's
+// credentials and warns about what each binding deployed, and about what a
 // move left running.
 func (br *BindingReaper) finish(ctx context.Context, r reapedEnvironment) {
+	br.forget(ctx, r)
 	for _, b := range r.bindings {
-		if br.Secrets != nil {
-			for _, field := range resourceCredentialFields {
-				if err := br.Secrets.Delete(ctx, resourceKey(r.org, r.id, b.Name, field)); err != nil {
-					br.warn(fmt.Sprintf("delete the credentials of %s, whose environment %s was deleted", b.Name, r.name), err)
-				}
-			}
-		}
 		if databaseGatewayOf(b) != nil {
 			continue
 		}
@@ -98,6 +99,45 @@ func (br *BindingReaper) finish(ctx context.Context, r reapedEnvironment) {
 					b.Subject, b.Name, r.name, locate(br.Executors[left.Provider], &left)))
 		}
 	}
+}
+
+// forget deletes what the environment kept in Vault: every key under it,
+// when Secrets can list them, or else each binding's own credentials.
+func (br *BindingReaper) forget(ctx context.Context, r reapedEnvironment) {
+	if br.Secrets == nil {
+		return
+	}
+	if keys, ok := br.Secrets.(ResourceSecretKeys); ok {
+		if br.sweep(ctx, keys, r) {
+			return
+		}
+	}
+	for _, b := range r.bindings {
+		for _, field := range resourceCredentialFields {
+			if err := br.Secrets.Delete(ctx, resourceKey(r.org, r.id, b.Name, field)); err != nil {
+				br.warn(fmt.Sprintf("delete the credentials of %s, whose environment %s was deleted", b.Name, r.name), err)
+			}
+		}
+	}
+}
+
+// sweep deletes every key under the environment, and reports whether it
+// could list them. When it couldn't, forget falls back on the bindings.
+func (br *BindingReaper) sweep(ctx context.Context, keys ResourceSecretKeys, r reapedEnvironment) bool {
+	prefix, err := environmentKeys(r.org, r.id)
+	if err == nil {
+		var found []string
+		if found, err = keys.Keys(ctx, prefix); err == nil {
+			for _, key := range found {
+				if derr := br.Secrets.Delete(ctx, key); derr != nil {
+					br.warn(fmt.Sprintf("delete the credential %s, whose environment %s was deleted", key, r.name), derr)
+				}
+			}
+			return true
+		}
+	}
+	br.warn(fmt.Sprintf("list the credentials of the environment %s that was deleted, so only its deployments' own go", r.name), err)
+	return false
 }
 
 func (br *BindingReaper) warn(msg string, err error) {

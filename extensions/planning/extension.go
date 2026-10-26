@@ -328,8 +328,8 @@ func (e *Extension) Register(fapp forge.App) error {
 		Warn: reapWarn,
 	})
 	// It takes every other service and resource's binding too, and this
-	// deletes their credentials from Vault and warns about each one still
-	// running in a cloud.
+	// deletes everything the environment kept in Vault and warns about each
+	// one still running in a cloud.
 	projectSvc.AddReaper(&deployments.BindingReaper{
 		Bindings: planStore, Environments: prj, Secrets: resourceSecrets, Executors: executors,
 		Warn: reapWarn,
