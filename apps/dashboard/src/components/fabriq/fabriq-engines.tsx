@@ -130,8 +130,7 @@ export function FabriqEngines(props: CatalogPanelProps) {
                       !jobs.data ||
                       jobs.status === "error" ||
                       create.isPending ||
-                      busy ||
-                      (last?.status === "failed" && !last.retryable)
+                      busy
                     }
                     onClick={() => void rebuild(projection)}
                   >

@@ -83,7 +83,7 @@ test("rebuild queues once and blocks another request while active", async () => 
   })
   await vi.waitFor(() => expect(rebuild).toBeEnabled())
   await userEvent.dblClick(rebuild)
-  expect(await within(graph).findByText("queued")).toBeVisible()
+  expect(await within(graph).findByRole("status")).toHaveTextContent("queued")
   expect(rebuild).toBeDisabled()
   expect(writes).toHaveLength(1)
   expect(writes[0].body).toEqual({
@@ -107,6 +107,46 @@ test("failed rebuild shows its output and retry only when retryable", async () =
   mount(<FabriqEngines {...withGraph()} />)
   expect(await screen.findByText("worker unavailable")).toBeVisible()
   expect(screen.getByRole("button", { name: "Retry rebuild" })).toBeEnabled()
+})
+
+const job = (status: string, retryable = false, output = "") => ({
+  id: "j",
+  projection: "graph",
+  status,
+  retryable,
+  output,
+  created_by: "u",
+  created_at: "2026-10-25T10:00:00Z",
+})
+
+test.each(["queued", "running"])(
+  "Rebuild from Postgres is disabled while the newest rebuild is %s",
+  async (status) => {
+    api([job(status)])
+    mount(<FabriqEngines {...withGraph()} />)
+    const graph = screen.getByRole("region", { name: "FalkorDB" })
+    expect(
+      await within(graph).findByRole("button", {
+        name: "Rebuild from Postgres",
+      })
+    ).toBeDisabled()
+  }
+)
+
+test("a rebuild that failed for good shows its output and can be requested again", async () => {
+  const writes = api([job("failed", false, "recipe error: unknown index")])
+  mount(<FabriqEngines {...withGraph()} />)
+  const graph = screen.getByRole("region", { name: "FalkorDB" })
+  expect(
+    await within(graph).findByText("recipe error: unknown index")
+  ).toBeVisible()
+  expect(within(graph).queryByRole("button", { name: /Retry/ })).toBeNull()
+  const rebuild = within(graph).getByRole("button", {
+    name: "Rebuild from Postgres",
+  })
+  expect(rebuild).toBeEnabled()
+  await userEvent.click(rebuild)
+  await vi.waitFor(() => expect(writes).toHaveLength(1))
 })
 
 test("readers cannot request projection rebuilds", async () => {
