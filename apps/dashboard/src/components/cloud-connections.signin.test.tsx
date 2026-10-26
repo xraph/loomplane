@@ -27,7 +27,14 @@ afterEach(() => {
   vi.unstubAllGlobals()
   forgeClient.clear()
   assign.mockReset()
+  signInSettings = []
+  stubCloud = "digitalocean"
+  window.localStorage.clear()
 })
+
+// Settings the stubbed cloud asks for before sign-in.
+let signInSettings: object[] = []
+let stubCloud = "digitalocean"
 
 type Posted = { path: string; body: Record<string, unknown> }
 
@@ -52,18 +59,26 @@ function stub(
         })
         return Response.json({
           authorizeUrl: "https://cloud.example/authorize",
+          state: "st1",
         })
       }
       if (path.includes("connection-clouds"))
         return Response.json({
           clouds: [
             {
-              cloud: "digitalocean",
-              title: "DigitalOcean",
+              cloud: stubCloud,
+              title: stubCloud === "vercel" ? "Vercel" : "DigitalOcean",
               builtin: false,
               credential: "API token",
               methods,
+              sign_in_settings: signInSettings,
             },
+          ],
+        })
+      if (path.includes("members"))
+        return Response.json({
+          members: [
+            { user_id: "u1", name: "Ada Lovelace", email: "ada@example.com" },
           ],
         })
       if (connection && /connections\/[^/?]+$/.test(path))
@@ -297,4 +312,62 @@ it("offers sign in again on the Clouds list", async () => {
     name: "",
     connection_id: "conn_do",
   })
+})
+
+it("asks for the project before signing in to Google", async () => {
+  signInSettings = [{ key: "project_id", label: "Project ID", required: true }]
+  const posted: Posted[] = []
+  stub(["oauth", "token"], posted)
+  dialog()
+  const user = userEvent.setup()
+  await user.type(await screen.findByLabelText(/^Name$/i), "Prod")
+  const button = screen.getByRole("button", {
+    name: "Sign in with DigitalOcean",
+  })
+  await user.click(button)
+  // Required, so the form doesn't submit without it.
+  expect(posted).toHaveLength(0)
+  await user.type(screen.getByLabelText(/Project ID/), " my-project ")
+  await user.click(button)
+  await waitFor(() => expect(posted).toHaveLength(1))
+  expect(posted[0]!.body).toEqual({
+    cloud: "digitalocean",
+    name: "Prod",
+    settings: { project_id: "my-project" },
+  })
+})
+
+it("shows who signed in", async () => {
+  stub(["oauth", "token"], [], {
+    ...tokenConnection,
+    method: "oauth",
+    signed_in_by: "u1",
+    details: { signed_in_as: "ada@example.com" },
+  })
+  render(
+    <ClientProvider client={forgeClient}>
+      <CloudAccount id="conn_do" />
+    </ClientProvider>
+  )
+  expect(await screen.findByText(/Signed in as ada@example.com/)).toBeTruthy()
+  expect(await screen.findByText(/, by Ada Lovelace/)).toBeTruthy()
+})
+
+it("keeps a Vercel sign-in's state for its callback", async () => {
+  stubCloud = "vercel"
+  stub(["oauth", "token"])
+  render(
+    <ClientProvider client={forgeClient}>
+      <ConnectDialog open cloud="vercel" onOpenChange={vi.fn()} />
+    </ClientProvider>
+  )
+  const user = userEvent.setup()
+  await user.type(await screen.findByLabelText(/^Name$/i), "Web")
+  await user.click(screen.getByRole("button", { name: /Sign in with/ }))
+  await waitFor(() => expect(assign).toHaveBeenCalled())
+  const kept = JSON.parse(
+    window.localStorage.getItem("loomplane.sign-in.vercel") ?? "{}"
+  ) as { state: string; at: number }
+  expect(kept.state).toBe("st1")
+  expect(typeof kept.at).toBe("number")
 })

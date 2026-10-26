@@ -14,6 +14,7 @@ export const Route = createFileRoute("/integrations/oauth/callback")({
     code: text(search.code),
     error: text(search.error),
     error_description: text(search.error_description),
+    configurationId: text(search.configurationId),
   }),
   component: CallbackRoute,
 })
@@ -26,6 +27,7 @@ function CallbackRoute() {
       code={s.code}
       error={s.error}
       errorDescription={s.error_description}
+      configurationId={s.configurationId}
     />
   )
 }
