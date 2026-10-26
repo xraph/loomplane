@@ -21,6 +21,14 @@ export const engineNames = {
   elasticsearch: "Elasticsearch",
 } as const
 
+// The words a rebuild's state goes by on the page, not the API's names.
+const rebuildStates: Record<string, string> = {
+  queued: "queued",
+  running: "running",
+  succeeded: "completed",
+  failed: "failed",
+}
+
 export function FabriqEngines(props: CatalogPanelProps) {
   const { projectId, environmentId, resource, config } = props
   const { parts, now } = useFabriqStack(props)
@@ -155,7 +163,10 @@ export function FabriqEngines(props: CatalogPanelProps) {
               <div className="grid gap-2 border-t border-border-divider pt-2 text-xs leading-[1.5] text-muted-foreground">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <span>
-                    Last rebuild: <span role="status">{last.status}</span>
+                    Last rebuild:{" "}
+                    <span role="status">
+                      {rebuildStates[last.status] ?? last.status}
+                    </span>
                   </span>
                   <time dateTime={last.createdAt}>
                     {ago(last.createdAt, now)}

@@ -149,6 +149,16 @@ test("a rebuild that failed for good shows its output and can be requested again
   await vi.waitFor(() => expect(writes).toHaveLength(1))
 })
 
+test("last rebuild names its state in words", async () => {
+  api([job("succeeded")])
+  mount(<FabriqEngines {...withGraph()} />)
+  const graph = screen.getByRole("region", { name: "FalkorDB" })
+  expect(await within(graph).findByRole("status")).toHaveTextContent(
+    "completed"
+  )
+  expect(within(graph).queryByText("succeeded")).toBeNull()
+})
+
 test("readers cannot request projection rebuilds", async () => {
   state.allowed = false
   api()
