@@ -1,5 +1,9 @@
 package migrations
 
+func init() {
+	App.MustRegister(statements("20261115000200", "fabriq_key_locks", fabriqKeyLocksUp, fabriqKeyLocksDown))
+}
+
 // A Fabriq key lock is a lease on one service's keys, so a release, a
 // rotation and a revocation never interleave their calls to Fabriq. It
 // holds no connection: holder names the process holding it, which renews
