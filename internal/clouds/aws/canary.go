@@ -117,6 +117,11 @@ func listenerWeights(ctx context.Context, api listenerAPI, listener string) ([]T
 // 0 stays attached: it takes no traffic, and its targets are still
 // health checked. One target group alone gets a plain forward, the shape
 // EnsureListener opens a listener with.
+//
+// It assumes what's true of every listener Loomplane opens: the listener
+// is one service's alone, and its default action carries all of its
+// traffic, since Loomplane adds no rules. A listener shared by several
+// services, or one with rules, would need the split on each rule.
 func (s *Session) SetListenerWeights(ctx context.Context, listener string, weights []TargetWeight) error {
 	return setListenerWeights(ctx, elb.NewFromConfig(s.cfg), listener, weights)
 }
@@ -299,6 +304,70 @@ func removeTargetGroup(ctx context.Context, api targetGroupDeleter, targetGroup 
 		return fmt.Errorf("delete target group %s: %w", targetGroup, err)
 	}
 	return nil
+}
+
+// ServiceTask is what an ECS service runs: its status, how many tasks
+// it's meant to run, and its task's main container.
+type ServiceTask struct {
+	Status  string
+	Desired int32
+	Image   string
+	Env     map[string]string
+	// Secrets maps each secret variable to the secret it's read from.
+	Secrets map[string]string
+}
+
+// Serving reports whether the service is active and meant to run tasks.
+// One scaled to nothing is being removed, and nil is gone.
+func (t *ServiceTask) Serving() bool {
+	return t != nil && t.Status == "ACTIVE" && t.Desired > 0
+}
+
+// serviceTaskAPI is the part of ECS that reads a service and its task.
+type serviceTaskAPI interface {
+	DescribeServices(context.Context, *ecs.DescribeServicesInput, ...func(*ecs.Options)) (*ecs.DescribeServicesOutput, error)
+	DescribeTaskDefinition(context.Context, *ecs.DescribeTaskDefinitionInput, ...func(*ecs.Options)) (*ecs.DescribeTaskDefinitionOutput, error)
+}
+
+// ServiceTask reads what a service runs, or nil when it's missing. The
+// task of a service that isn't active isn't read.
+func (s *Session) ServiceTask(ctx context.Context, cluster, name string) (*ServiceTask, error) {
+	return serviceTask(ctx, ecs.NewFromConfig(s.cfg), cluster, name)
+}
+
+func serviceTask(ctx context.Context, api serviceTaskAPI, cluster, name string) (*ServiceTask, error) {
+	got, err := api.DescribeServices(ctx, &ecs.DescribeServicesInput{Cluster: sdk.String(cluster), Services: []string{name}})
+	if err != nil {
+		if gone(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("read service %s: %w", name, err)
+	}
+	if len(got.Services) == 0 {
+		return nil, nil
+	}
+	svc := got.Services[0]
+	t := &ServiceTask{Status: sdk.ToString(svc.Status), Desired: svc.DesiredCount}
+	if t.Status != "ACTIVE" || svc.TaskDefinition == nil {
+		return t, nil
+	}
+	td, err := api.DescribeTaskDefinition(ctx, &ecs.DescribeTaskDefinitionInput{TaskDefinition: svc.TaskDefinition})
+	if err != nil {
+		return nil, fmt.Errorf("read the task of service %s: %w", name, err)
+	}
+	for _, c := range td.TaskDefinition.ContainerDefinitions {
+		if sdk.ToString(c.Name) != "main" {
+			continue
+		}
+		t.Image, t.Env, t.Secrets = sdk.ToString(c.Image), map[string]string{}, map[string]string{}
+		for _, kv := range c.Environment {
+			t.Env[sdk.ToString(kv.Name)] = sdk.ToString(kv.Value)
+		}
+		for _, sec := range c.Secrets {
+			t.Secrets[sdk.ToString(sec.Name)] = sdk.ToString(sec.ValueFrom)
+		}
+	}
+	return t, nil
 }
 
 // WaitServiceStable polls until a service's newest deployment has

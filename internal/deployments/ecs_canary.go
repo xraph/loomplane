@@ -2,8 +2,10 @@ package deployments
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"maps"
+	"slices"
 	"strings"
 	"time"
 
@@ -49,7 +51,7 @@ type ecsCanaryCloud interface {
 	EnsureTargetGroup(ctx context.Context, name, vpc string, port int32) (string, error)
 	WaitServiceStable(ctx context.Context, cluster, name string) error
 	WaitTargetsHealthy(ctx context.Context, targetGroup string) error
-	ServiceImage(ctx context.Context, cluster, name string) (string, error)
+	ServiceTask(ctx context.Context, cluster, name string) (*aws.ServiceTask, error)
 	RemoveService(ctx context.Context, cluster, name string) error
 	RemoveTargetGroup(ctx context.Context, targetGroup string) error
 }
@@ -121,6 +123,10 @@ func (c *ecsCanary) start(ctx context.Context, group, vpc string, port int32, ru
 	if err = c.startIn(ctx, tg, run); err == nil {
 		return tg, nil
 	}
+	// Detached, so a start that failed because its context ended still
+	// cleans up. When that was the action's deadline, a retry may start
+	// while this runs. Each step is safe to repeat and the two converge,
+	// though the retry can lose its fresh candidate here and start again.
 	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), candidateCleanup)
 	defer cancel()
 	if cerr := c.remove(cleanup, tg); cerr != nil {
@@ -161,44 +167,87 @@ func (c *ecsCanary) weigh(ctx context.Context, candidateGroup string, percent in
 	return nil
 }
 
-// promote rolls the baseline to image while the candidate holds all of
-// the traffic, waits until the baseline is stable and its targets pass
-// their health checks, then gives it the traffic back and removes the
-// candidate. Until the baseline passes, the candidate keeps the traffic.
-// The candidate goes only after that, so a promote that finds it gone
-// finds the baseline running image already, and only finishes the
-// cleanup.
-func (c *ecsCanary) promote(ctx context.Context, candidateGroup, image string, roll func(context.Context) error) error {
-	up, err := c.cloud.ServiceImage(ctx, c.cluster, c.candidate)
+// ecsRelease is what a promote rolls the baseline to: the candidate's
+// image, its plain variables and the names of its secret ones. Secret
+// values aren't in a task, so a release that changes only those looks
+// like the one before it.
+type ecsRelease struct {
+	image   string
+	env     map[string]string
+	secrets []string
+}
+
+// runsOn reports whether a service's task is the release's.
+func (r ecsRelease) runsOn(t *aws.ServiceTask) bool {
+	if t == nil || t.Status != "ACTIVE" || t.Image != r.image || !maps.Equal(t.Env, r.env) {
+		return false
+	}
+	return slices.Equal(slices.Sorted(maps.Keys(t.Secrets)), r.secrets)
+}
+
+// promote rolls the baseline to the release while the candidate holds
+// all of the traffic, waits until the baseline is stable and its targets
+// pass their health checks, then gives it the traffic back and removes
+// the candidate. Until the baseline passes, the candidate keeps the
+// traffic.
+//
+// The candidate only takes all of the traffic while it's serving and its
+// own targets pass. An earlier promote's cleanup scales it to nothing
+// before it deletes it, and removes it only once the baseline runs the
+// release, so a candidate that isn't serving means the baseline should
+// run the release already: then the cleanup is finished, and otherwise
+// the baseline gets the traffic back and nothing is promoted. A
+// candidate that's serving is used even when the baseline looks rolled,
+// since a release that changes only secret values looks the same.
+func (c *ecsCanary) promote(ctx context.Context, candidateGroup string, rel ecsRelease, roll func(context.Context) error) error {
+	candidate, err := c.cloud.ServiceTask(ctx, c.cluster, c.candidate)
 	if err != nil {
 		return err
 	}
-	if up == "" {
-		runs, rerr := c.cloud.ServiceImage(ctx, c.cluster, c.service)
-		if rerr != nil {
-			return rerr
+	if !candidate.Serving() {
+		baseline, berr := c.cloud.ServiceTask(ctx, c.cluster, c.service)
+		if berr != nil {
+			return berr
 		}
-		if runs != image {
-			if werr := c.cloud.SetListenerWeights(ctx, c.listener, c.alone()); werr != nil {
-				return fmt.Errorf("the candidate is gone, the baseline doesn't run %s, and the baseline couldn't get the traffic back: %w", image, werr)
-			}
-			return fmt.Errorf("the candidate went before the baseline ran %s, so nothing was promoted, and the baseline has all of the traffic", image)
+		if !rel.runsOn(baseline) {
+			return c.giveBack(ctx, errors.New("the candidate isn't running and the baseline doesn't run the release, so nothing was promoted"))
+		}
+		if rerr := c.baselineReady(ctx); rerr != nil {
+			return c.giveBack(ctx, fmt.Errorf("the baseline runs the release but isn't ready, and the candidate isn't running to hold the traffic: %w", rerr))
 		}
 		return c.remove(ctx, candidateGroup)
+	}
+	if err = c.cloud.WaitTargetsHealthy(ctx, candidateGroup); err != nil {
+		return c.giveBack(ctx, fmt.Errorf("the candidate fails its health checks, so it can't take all of the traffic and nothing was promoted: %w", err))
 	}
 	if err = c.cloud.SetListenerWeights(ctx, c.listener, c.split(candidateGroup, 100)); err != nil {
 		return fmt.Errorf("give the candidate all of the traffic: %w", err)
 	}
 	if err = roll(ctx); err != nil {
-		return fmt.Errorf("roll the baseline to %s, so the candidate keeps all of the traffic: %w", image, err)
+		return fmt.Errorf("roll the baseline to %s, so the candidate keeps all of the traffic: %w", rel.image, err)
 	}
-	if err = c.cloud.WaitServiceStable(ctx, c.cluster, c.service); err != nil {
-		return fmt.Errorf("the baseline didn't settle on %s, so the candidate keeps all of the traffic: %w", image, err)
-	}
-	if err = c.cloud.WaitTargetsHealthy(ctx, c.baseline); err != nil {
-		return fmt.Errorf("the baseline runs %s but fails its health checks, so the candidate keeps all of the traffic: %w", image, err)
+	if err = c.baselineReady(ctx); err != nil {
+		return fmt.Errorf("the baseline runs %s but isn't ready, so the candidate keeps all of the traffic: %w", rel.image, err)
 	}
 	return c.remove(ctx, candidateGroup)
+}
+
+// baselineReady waits until the baseline is stable and its targets pass
+// their health checks.
+func (c *ecsCanary) baselineReady(ctx context.Context) error {
+	if err := c.cloud.WaitServiceStable(ctx, c.cluster, c.service); err != nil {
+		return err
+	}
+	return c.cloud.WaitTargetsHealthy(ctx, c.baseline)
+}
+
+// giveBack gives the baseline all of the traffic after err, and says
+// whether it got it.
+func (c *ecsCanary) giveBack(ctx context.Context, err error) error {
+	if werr := c.cloud.SetListenerWeights(ctx, c.listener, c.alone()); werr != nil {
+		return fmt.Errorf("%w, and the baseline couldn't get all of the traffic back: %w", err, werr)
+	}
+	return fmt.Errorf("%w. The baseline has all of the traffic", err)
 }
 
 // remove gives the baseline all of the traffic, then removes the
@@ -216,11 +265,27 @@ func (c *ecsCanary) remove(ctx context.Context, candidateGroup string) error {
 	return nil
 }
 
-// ApplyCandidate implements Weighted. It builds the image as Apply does,
-// sets up what the service runs with as Apply does, then starts the
-// candidate beside the baseline with the baseline's desired count, roles
-// and network, and its secrets under a path of its own, so a baseline
-// task that restarts meanwhile still reads its own.
+// candidateLabels are what the candidate runs with: the release's
+// labels, with the candidate's target group, as many tasks as the
+// baseline runs so the two compare fairly, no Service Connect name of its
+// own (it's a client only, so calls from other services stay on the
+// baseline), and no listener.
+func candidateLabels(release, baseline map[string]string, targetGroup string) map[string]string {
+	labels := maps.Clone(release)
+	labels[ecs.LabelTargetGroup] = targetGroup
+	if d := baseline[ecs.LabelDesired]; d != "" {
+		labels[ecs.LabelDesired] = d
+	}
+	delete(labels, ecs.LabelAlias)
+	delete(labels, ecs.LabelListener)
+	return labels
+}
+
+// ApplyCandidate implements Weighted. It checks the key may split the
+// listener's traffic, builds the image as Apply does, sets up what the
+// service runs with as Apply does, then starts the candidate beside the
+// baseline, with its secrets under a path of its own, so a baseline task
+// that restarts meanwhile still reads its own.
 func (e *ECS) ApplyCandidate(ctx context.Context, job *Job) (*CanaryTarget, error) {
 	a := job.Action
 	if a.Service == nil {
@@ -235,6 +300,9 @@ func (e *ECS) ApplyCandidate(ctx context.Context, job *Job) (*CanaryTarget, erro
 	case inst.Labels[ecs.LabelTargetGroup] == "" || inst.Labels[ecs.LabelListener] == "":
 		return nil, fmt.Errorf("%w: %s can't ramp a canary on ECS: it isn't behind a load balancer", ErrNoExecutor, a.Name)
 	}
+	if perr := e.canaryPermissions(ctx, job); perr != nil {
+		return nil, perr
+	}
 	s, err := e.session(job, job.Credential)
 	if err != nil {
 		return nil, err
@@ -244,11 +312,14 @@ func (e *ECS) ApplyCandidate(ctx context.Context, job *Job) (*CanaryTarget, erro
 		return nil, err
 	}
 	job.Progress(StepDeploying, "Starting the candidate on "+image)
-	p, err := e.prepare(ctx, s, job, "loomplane/"+canaryService(instanceSlug(job)))
+	p, err := e.prepare(ctx, s, job)
 	if err != nil {
 		return nil, err
 	}
-	if p.inst == nil || p.inst.ID != inst.ID || p.labels[ecs.LabelTargetGroup] == "" || p.labels[ecs.LabelListener] == "" {
+	switch {
+	case p.inst == nil || p.inst.ID != inst.ID:
+		return nil, fmt.Errorf("%s can't ramp a canary on ECS: the binding names Ctrl Plane instance %s, but this release would deploy another", a.Name, inst.ID)
+	case p.labels[ecs.LabelTargetGroup] == "" || p.labels[ecs.LabelListener] == "":
 		return nil, fmt.Errorf("%w: %s can't ramp a canary on ECS: it isn't behind a load balancer", ErrNoExecutor, a.Name)
 	}
 	c := &ecsCanary{
@@ -258,15 +329,10 @@ func (e *ECS) ApplyCandidate(ctx context.Context, job *Job) (*CanaryTarget, erro
 	c.candidate = canaryService(c.service)
 	port := int32(a.Service.Port) //nolint:gosec // G115: a port, validated by the manifest
 	tg, err := c.start(ctx, canaryTargetGroup(strings.ToLower(p.name)), p.vpc, port, func(ctx context.Context, tg string) error {
-		labels := maps.Clone(p.labels)
-		labels[ecs.LabelTargetGroup] = tg
-		// As many tasks as the baseline runs, so the two compare fairly.
-		if d := inst.Labels[ecs.LabelDesired]; d != "" {
-			labels[ecs.LabelDesired] = d
+		labels := candidateLabels(p.labels, inst.Labels, tg)
+		if serr := putSecrets(ctx, s, job, "loomplane/"+canaryService(instanceSlug(job)), labels); serr != nil {
+			return serr
 		}
-		// A client of Service Connect only: the name stays the baseline's.
-		delete(labels, ecs.LabelAlias)
-		delete(labels, ecs.LabelListener)
 		spec := p.spec
 		spec.Image = image
 		return ecs.Run(ctx, s, c.candidate, spec, labels)
@@ -276,6 +342,36 @@ func (e *ECS) ApplyCandidate(ctx context.Context, job *Job) (*CanaryTarget, erro
 	}
 	t := c.target(tg, image)
 	return &t, nil
+}
+
+// canaryPermissions refuses a canary whose key lacks what splitting a
+// listener needs. It asks IAM's policy simulator now, since the
+// connection's last check may be from before canaries, and a key without
+// those actions is still a complete connection. A key that may not run
+// the simulator goes ahead, as its connection does.
+func (e *ECS) canaryPermissions(ctx context.Context, job *Job) error {
+	key, err := aws.ParseKey(job.Credential)
+	if err != nil {
+		return err
+	}
+	region := job.Connection.Details["region"]
+	who := job.Connection.Details["principal"]
+	if who == "" {
+		id, ierr := e.AWS.Identify(ctx, key, region)
+		if ierr != nil {
+			return ierr
+		}
+		who = id.ARN
+	}
+	missing, checked, err := e.AWS.MissingOf(ctx, key, region, aws.PrincipalARN(who), aws.CanaryActions)
+	if err != nil {
+		return fmt.Errorf("check that the key may split traffic: %w", err)
+	}
+	if !checked || len(missing) == 0 {
+		return nil
+	}
+	return fmt.Errorf("%s can't run a canary: the key of %s isn't allowed %s. Grant them and check the connection again under Integrations, or release this environment direct or blue_green, which don't need them",
+		job.Action.Name, job.Connection.Name, strings.Join(missing, ", "))
 }
 
 // SetWeights implements Weighted.
@@ -308,14 +404,20 @@ func (e *ECS) Promote(ctx context.Context, job *Job, t CanaryTarget) (*Outcome, 
 	if err != nil {
 		return nil, err
 	}
-	p, err := e.prepare(ctx, s, job, "loomplane/"+instanceSlug(job))
+	p, err := e.prepare(ctx, s, job)
 	if err != nil {
 		return nil, err
 	}
 	if p.inst == nil || ecs.ServiceName(p.inst.ID) != c.service {
 		return nil, fmt.Errorf("%s's candidate ran beside ECS service %s, which isn't what the binding names now", job.Action.Name, c.service)
 	}
-	if err := c.promote(ctx, t.Candidate, t.Image, func(ctx context.Context) error {
+	rel := ecsRelease{image: t.Image, env: p.spec.Env, secrets: sortedKeys(job.Secrets)}
+	// The release's secret values go in only once the candidate holds the
+	// traffic, so a baseline task that restarts before then reads its own.
+	if err := c.promote(ctx, t.Candidate, rel, func(ctx context.Context) error {
+		if serr := putSecrets(ctx, s, job, "loomplane/"+instanceSlug(job), p.labels); serr != nil {
+			return serr
+		}
 		_, derr := e.deploy(ctx, job, p, t.Image)
 		return derr
 	}); err != nil {

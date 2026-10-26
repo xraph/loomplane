@@ -3,8 +3,10 @@ package planning
 import (
 	"context"
 	"slices"
+	"strings"
 	"time"
 
+	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/releasehealth"
 	"github.com/xraph/loomplane/pkg/manifest"
 	"github.com/xraph/loomplane/pkg/provider"
@@ -57,6 +59,9 @@ const (
 	// codeCanaryInProgress blocks a plan while a canary ramps in its
 	// environment.
 	codeCanaryInProgress = "canary-in-progress"
+	// codeCanaryPermissions blocks a canary on ECS whose connection's key
+	// can't split a listener's traffic.
+	codeCanaryPermissions = "canary-permissions"
 )
 
 // planRelease pins the environment's release on r, and says which service
@@ -87,6 +92,15 @@ func planRelease(in Input, r *Result) {
 		case manifest.StrategyCanary:
 			reason := noCanary(in, r, a)
 			if reason == "" {
+				if conn, missing := canaryMissing(in, r, a); missing != "" {
+					r.Problems = append(r.Problems, Finding{
+						Code: codeCanaryPermissions, Subject: ServiceSubject, Name: a.Name, Path: "connections.aws",
+						Message: a.Name + " can't run a canary: the key of " + conn + " isn't allowed " + strings.ReplaceAll(missing, ",", ", ") +
+							". Grant them and check the connection again under Integrations, or release this environment direct or blue_green, which don't need them.",
+					})
+					r.Executable = false
+					continue
+				}
 				release.Canary = append(release.Canary, a.ID)
 				continue
 			}
@@ -145,6 +159,25 @@ func noCanary(in Input, r *Result, a Action) string {
 		}
 	}
 	return ""
+}
+
+// canaryMissing names the connection an ECS action deploys with, and
+// lists, comma separated, what its key lacks to ramp a canary, as its
+// last check found. A connection checked before canaries existed lists
+// nothing, and the canary checks again when it starts.
+func canaryMissing(in Input, r *Result, a Action) (connection, missing string) {
+	if a.Provider != "ecs-fargate" {
+		return "", ""
+	}
+	id := a.ConnectionID
+	if id == "" {
+		id = r.Connections["aws"]
+	}
+	i := slices.IndexFunc(in.Connections, func(c ConnectionOption) bool { return c.ID == id })
+	if id == "" || i < 0 {
+		return "", ""
+	}
+	return in.Connections[i].Name, in.Connections[i].Details[connections.DetailCanaryMissing]
 }
 
 // providerTitle names a provider for people, or by its name when the

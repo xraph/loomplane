@@ -434,9 +434,12 @@ func exposeInternally(ctx context.Context, s *aws.Session, job *Job, net *aws.Ne
 // run sets up the environment's network and load balancer, the service's
 // secrets, and runs it through Ctrl Plane.
 func (e *ECS) run(ctx context.Context, s *aws.Session, job *Job, image string) (externalID, url string, err error) {
-	p, err := e.prepare(ctx, s, job, "loomplane/"+instanceSlug(job))
+	p, err := e.prepare(ctx, s, job)
 	if err != nil {
 		return "", "", err
+	}
+	if serr := putSecrets(ctx, s, job, "loomplane/"+instanceSlug(job), p.labels); serr != nil {
+		return "", "", serr
 	}
 	if externalID, err = e.deploy(ctx, job, p, image); err != nil {
 		return "", "", err
@@ -459,9 +462,8 @@ type ecsPrepared struct {
 }
 
 // prepare sets up the environment's network and load balancer and the
-// service's roles and log group, and writes its secret variables under
-// secrets in Secrets Manager.
-func (e *ECS) prepare(ctx context.Context, s *aws.Session, job *Job, secrets string) (*ecsPrepared, error) {
+// service's roles and log group. Its secret variables are putSecrets'.
+func (e *ECS) prepare(ctx context.Context, s *aws.Session, job *Job) (*ecsPrepared, error) {
 	cfg := job.Action.Service
 	net, err := s.DefaultNetwork(ctx)
 	if err != nil {
@@ -539,13 +541,6 @@ func (e *ECS) prepare(ctx context.Context, s *aws.Session, job *Job, secrets str
 		labels[ecs.LabelTargetGroup], labels[ecs.LabelListener] = tg, listener
 		p.url = lbURL
 	}
-	for _, key := range sortedKeys(job.Secrets) {
-		arn, serr := s.PutSecret(ctx, secrets+"/"+key, job.Env[key])
-		if serr != nil {
-			return nil, serr
-		}
-		labels[ecs.LabelSecret+key] = arn
-	}
 	env := map[string]string{}
 	for k, v := range job.Env {
 		if !job.Secrets[k] {
@@ -560,6 +555,19 @@ func (e *ECS) prepare(ctx context.Context, s *aws.Session, job *Job, secrets str
 		p.spec.Resources.MemoryMB = cfg.Size.Memory
 	}
 	return p, nil
+}
+
+// putSecrets writes the job's secret variables to Secrets Manager under
+// path, and labels each with the secret it's read from.
+func putSecrets(ctx context.Context, s *aws.Session, job *Job, path string, labels map[string]string) error {
+	for _, key := range sortedKeys(job.Secrets) {
+		arn, err := s.PutSecret(ctx, path+"/"+key, job.Env[key])
+		if err != nil {
+			return err
+		}
+		labels[ecs.LabelSecret+key] = arn
+	}
+	return nil
 }
 
 // deploy runs a prepared service on image through Ctrl Plane: it creates
