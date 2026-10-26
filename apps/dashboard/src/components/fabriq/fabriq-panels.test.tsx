@@ -5,7 +5,7 @@ import { forgeClient } from "@/client/runtime"
 import { FabriqEngines } from "./fabriq-engines"
 import { FabriqRecovery, recoveryEngines } from "./fabriq-recovery"
 import { FabriqSettings } from "./fabriq-settings"
-import { json, mount, panelProps, serve } from "./test-api"
+import { dependencyBinding, json, mount, panelProps, serve } from "./test-api"
 
 const state = vi.hoisted(() => ({ allowed: true, navigate: vi.fn() }))
 vi.mock("@/lib/organization", () => ({
@@ -140,6 +140,36 @@ test("Kubernetes recovery states its limitation without backup controls", () => 
     )
   ).toBeVisible()
   expect(screen.queryByRole("button", { name: /backup/i })).toBeNull()
+})
+
+test("recovery on Docker lists the Postgres backups of a live TimescaleDB binding", async () => {
+  serve({
+    bindings: [
+      dependencyBinding("fabriq--postgres", "timescaledb"),
+      dependencyBinding("fabriq--redis", "redis"),
+    ],
+    backups: [
+      {
+        id: "bk_1",
+        name: "fabriq--postgres",
+        environment_id: "env_prod",
+        status: "succeeded",
+        bytes: 2048,
+        created_at: "2026-10-21T08:00:00Z",
+      },
+    ],
+  })
+  mount(<FabriqRecovery {...panelProps()} />)
+  const postgres = await screen.findByRole("region", {
+    name: "Postgres recovery",
+  })
+  expect(
+    await within(postgres).findByRole("button", { name: "Back up now" })
+  ).toBeEnabled()
+  expect(within(postgres).getByText(/Restore evidence/)).toBeVisible()
+  expect(
+    within(postgres).queryByText(/source service has been removed/)
+  ).toBeNull()
 })
 
 test("external engines have no managed recovery controls", () => {

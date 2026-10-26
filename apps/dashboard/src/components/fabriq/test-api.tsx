@@ -41,6 +41,13 @@ export type Fixture = {
   policyError?: number
   backups?: unknown[]
   restores?: unknown[]
+  /** The bindings the project lists, as the API sends them (snake_case). */
+  bindings?: unknown[]
+  /** Answers the backups and restores lists with this status and no data. */
+  backupsError?: number
+  restoresError?: number
+  /** Holds the backups and restores lists back until they are released. */
+  hold?: Promise<unknown>
   adminUrl?: string
 }
 
@@ -174,10 +181,20 @@ export function serve(fixture: Fixture = {}) {
                 },
               ],
             })
-      if (path.endsWith("/projects/p/service-backups"))
-        return json({ backups: fixture.backups ?? [] })
-      if (path.endsWith("/projects/p/service-restores"))
-        return json({ restores: fixture.restores ?? [] })
+      if (path.endsWith("/projects/p/bindings"))
+        return json({ bindings: fixture.bindings ?? [] })
+      if (path.endsWith("/projects/p/service-backups")) {
+        await fixture.hold
+        return fixture.backupsError
+          ? json({ message: "Cannot read backups" }, fixture.backupsError)
+          : json({ backups: fixture.backups ?? [] })
+      }
+      if (path.endsWith("/projects/p/service-restores")) {
+        await fixture.hold
+        return fixture.restoresError
+          ? json({ message: "Cannot read restores" }, fixture.restoresError)
+          : json({ restores: fixture.restores ?? [] })
+      }
       if (path.endsWith("/connections"))
         return json({
           connections: [
@@ -213,6 +230,34 @@ const binding = (name: string, extra: Partial<Binding> = {}): Binding => ({
   url: "",
   ...extra,
 })
+
+/**
+ * A dependency binding as the API sends it for a Fabriq's database: the
+ * planner names the Postgres it provisions timescaledb, whatever the
+ * dependency is called.
+ */
+export function dependencyBinding(
+  name: string,
+  kind: "timescaledb" | "redis",
+  provider = "server"
+) {
+  return {
+    id: `b_${name}`,
+    name,
+    subject: "resource",
+    provider,
+    engine: "resource",
+    environment_id: "env_prod",
+    connection_id: "conn_1",
+    drift: "",
+    config: {
+      kind,
+      provider,
+      version: kind === "redis" ? "8.2" : "16",
+      catalog: { id: `${kind}-${provider}`, kind },
+    },
+  }
+}
 
 /** The props a catalog panel is given for a Fabriq on Docker. */
 export function panelProps(
