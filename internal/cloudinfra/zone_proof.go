@@ -101,7 +101,7 @@ func (s *Service) publishZoneProof(ctx context.Context, st DomainStore, zone *Zo
 	if zone.Mode != "managed" || !zone.hasControlProof() || zone.proofPublished() || !now.Before(zone.ProofExpiresAt) || zone.proofWriteInFlight(now) {
 		return nil
 	}
-	if !zone.VerifiedAt.IsZero() && zone.ProofRecord == nil && zone.ProofPublishAttemptedAt.IsZero() {
+	if zone.ownVerified() && zone.ProofRecord == nil && zone.ProofPublishAttemptedAt.IsZero() {
 		// Verified from a record its owner added before Loomplane published
 		// proofs. That record is theirs, and it already does the job.
 		return nil
@@ -310,16 +310,16 @@ func dnsProviderName(cloud string) string {
 }
 
 // checkZoneProof publishes a managed zone's proof if it still needs it, then
-// looks for the proof in public DNS. Every check is saved, so the page can
-// say when the record was last looked for. wrote reports a publish in this
-// pass, for the audit log.
+// looks for the zone's own proof in public DNS, never its domain's. Every
+// check is saved, so the page can say when the record was last looked for.
+// wrote reports a publish in this pass, for the audit log.
 func (s *Service) checkZoneProof(ctx context.Context, st DomainStore, zone *Zone) (wrote bool, err error) {
 	before := zone.ProofRecord
 	if publishErr := s.publishZoneProof(ctx, st, zone); publishErr != nil {
 		return false, publishErr
 	}
 	wrote = zone.ProofRecord != before && zone.proofPublished()
-	checkErr := s.verifyZoneControl(ctx, zone)
+	checkErr := s.verifyOwnZoneControl(ctx, zone)
 	now := s.now().UTC()
 	// A record written a while ago that public DNS still doesn't show may
 	// be gone at the provider. One written in this pass is just new.
@@ -330,7 +330,7 @@ func (s *Service) checkZoneProof(ctx context.Context, st DomainStore, zone *Zone
 			checkErr = reclaimErr
 		case republished:
 			wrote = true
-			checkErr = s.verifyZoneControl(ctx, zone)
+			checkErr = s.verifyOwnZoneControl(ctx, zone)
 		}
 	}
 	zone.ProofCheckedAt = s.now().UTC()
