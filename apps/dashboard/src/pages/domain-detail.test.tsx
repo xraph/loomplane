@@ -914,8 +914,12 @@ it("lists the hostnames that block removal", async () => {
   forgeClient.clear()
 
   // One the page didn't know about yet: the API refuses with it.
+  let reads = 0
   const writes = stubFetch({
-    [detailPath("loomplane.com")]: detailWith(zoneWith("loomplane.com")),
+    [detailPath("loomplane.com")]: () => {
+      reads++
+      return Response.json(detailWith(zoneWith("loomplane.com")))
+    },
     "POST /api/v1/dns-zones/zone-loomplane.com/remove": () =>
       Response.json(
         {
@@ -930,6 +934,15 @@ it("lists the hostnames that block removal", async () => {
                 zone_name: "loomplane.com",
                 project_id: "blog",
                 project_name: "acme-blog",
+              },
+              // A route whose project is gone has nowhere to link to.
+              {
+                route_id: "",
+                hostname: "old.loomplane.com",
+                zone_id: "zone-loomplane.com",
+                zone_name: "loomplane.com",
+                project_id: "",
+                project_name: "",
               },
             ],
           },
@@ -956,9 +969,15 @@ it("lists the hostnames that block removal", async () => {
   expect(
     within(again.dialog).getByText("Remove these hostnames first.")
   ).toBeTruthy()
+  expect(
+    within(again.dialog).queryByRole("link", { name: "old.loomplane.com" })
+  ).toBeNull()
+  expect(within(again.dialog).getByText("old.loomplane.com")).toBeTruthy()
   expect(again.confirm).toHaveProperty("disabled", true)
   expect(writes).toHaveLength(1)
   expect(navigate).not.toHaveBeenCalled()
+  // The page reads its hostnames again too.
+  await waitFor(() => expect(reads).toBe(2))
 })
 
 it("lists the subdomains that go with the domain", async () => {
@@ -1066,4 +1085,156 @@ it("removes a subdomain from its domain's page", async () => {
   expect(navigate).not.toHaveBeenCalled()
   await waitFor(() => expect(reads).toBeGreaterThan(1))
   expect(await screen.findByText("No subdomains yet.")).toBeTruthy()
+})
+
+it("removes a subdomain from its own page and goes back to its domain", async () => {
+  let reads = 0
+  const domain = zoneWith("loomplane.com", [], {
+    subdomains: ["api.loomplane.com"],
+  })
+  const writes = stubFetch({
+    [detailPath("api.loomplane.com")]: () => {
+      reads++
+      return Response.json(
+        detailWith(
+          zoneWith("api.loomplane.com", [], {
+            parent: "loomplane.com",
+            proofZone: "loomplane.com",
+          }),
+          { parent: domain, proofZone: domain }
+        )
+      )
+    },
+    "POST /api/v1/dns-zones/zone-api.loomplane.com/remove": () =>
+      new Response(null, { status: 204 }),
+  })
+  // The page reads nothing again until it has left the removed zone.
+  let arrived = () => {}
+  navigate.mockImplementation(
+    () => new Promise<void>((resolve) => (arrived = resolve))
+  )
+  open("zone-api.loomplane.com")
+  // A subdomain can have zones under it too.
+  const actions = await screen.findByRole("group", { name: "Domain actions" })
+  expect(
+    within(actions).getByRole("button", { name: "Add subdomain" })
+  ).toBeTruthy()
+  await userEvent.click(
+    within(await section("Remove subdomain")).getByRole("button", {
+      name: "Remove subdomain",
+    })
+  )
+  const { confirm, field } = await confirmRemoval("api.loomplane.com")
+  await userEvent.type(field, "api.loomplane.com")
+  await userEvent.click(confirm)
+  await waitFor(() =>
+    expect(navigate).toHaveBeenCalledWith({
+      to: "/domains/$zoneId",
+      params: { zoneId: "zone-loomplane.com" },
+      replace: true,
+    })
+  )
+  expect(reads).toBe(1)
+  arrived()
+  await waitFor(() => expect(reads).toBe(2))
+  expect(writes).toHaveLength(1)
+})
+
+it("sends one removal for a double click", async () => {
+  stubFetch({
+    [detailPath("loomplane.com")]: detailWith(zoneWith("loomplane.com")),
+  })
+  let removals = 0
+  let answer = () => {}
+  vi.stubGlobal(
+    "fetch",
+    (
+      (next: typeof fetch) =>
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (String(input).endsWith("/remove")) {
+          removals++
+          return new Promise<Response>(
+            (resolve) =>
+              (answer = () => resolve(new Response(null, { status: 204 })))
+          )
+        }
+        return next(input, init)
+      }
+    )(fetch)
+  )
+  open("zone-loomplane.com")
+  await userEvent.click(
+    within(await section("Remove domain")).getByRole("button", {
+      name: "Remove domain",
+    })
+  )
+  const { confirm, field } = await confirmRemoval("loomplane.com")
+  await userEvent.type(field, "loomplane.com")
+  await userEvent.dblClick(confirm)
+  expect(removals).toBe(1)
+  answer()
+  await waitFor(() =>
+    expect(navigate).toHaveBeenCalledWith({ to: "/domains", replace: true })
+  )
+  expect(removals).toBe(1)
+})
+
+it("names the zone a new subdomain is verified through", async () => {
+  const domain = zoneWith("loomplane.com", [], {
+    subdomains: ["app.loomplane.com"],
+  })
+  stubFetch({
+    [detailPath("app.loomplane.com")]: detailWith(
+      zoneWith("app.loomplane.com", [], {
+        parent: "loomplane.com",
+        proofZone: "loomplane.com",
+      }),
+      { parent: domain, proofZone: domain }
+    ),
+  })
+  open("zone-app.loomplane.com")
+  const dialog = await addSubdomain("x")
+  expect(
+    within(dialog).getByText(/^It's verified through loomplane\.com,/)
+  ).toBeTruthy()
+})
+
+it("sends one new subdomain for a double click", async () => {
+  stubFetch({
+    [detailPath("loomplane.com")]: detailWith(zoneWith("loomplane.com")),
+  })
+  let creates = 0
+  let answer = () => {}
+  vi.stubGlobal(
+    "fetch",
+    (
+      (next: typeof fetch) =>
+      async (input: RequestInfo | URL, init?: RequestInit) => {
+        if (init?.method === "POST" && String(input).endsWith("/dns-zones")) {
+          creates++
+          return new Promise<Response>(
+            (resolve) =>
+              (answer = () =>
+                resolve(
+                  Response.json(
+                    zoneWith("app.loomplane.com", [], {
+                      parent: "loomplane.com",
+                    }).zone
+                  )
+                ))
+          )
+        }
+        return next(input, init)
+      }
+    )(fetch)
+  )
+  open("zone-loomplane.com")
+  const dialog = await addSubdomain("app")
+  await userEvent.dblClick(
+    within(dialog).getByRole("button", { name: "Add subdomain" })
+  )
+  expect(creates).toBe(1)
+  answer()
+  await waitFor(() => expect(navigate).toHaveBeenCalledTimes(1))
+  expect(creates).toBe(1)
 })
