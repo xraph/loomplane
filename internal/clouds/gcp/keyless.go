@@ -109,6 +109,9 @@ func (c *Client) keylessTokens(ctx context.Context, key *Key) (oauth2.TokenSourc
 	if c.minter == nil {
 		return nil, keyless.ErrNoMinter
 	}
+	if key.handout == nil {
+		return nil, fmt.Errorf("%w: the keyless key has no handout", ErrInvalidKey)
+	}
 	stsURL := c.url("sts.googleapis.com", "/v1/token")
 	iamURL := c.url("iamcredentials.googleapis.com", "/v1/projects/-/serviceAccounts/"+key.ClientEmail+":generateAccessToken")
 	src := &keylessSource{}
@@ -252,10 +255,12 @@ func (w exchangeWatch) RoundTrip(req *http.Request) (*http.Response, error) {
 	return res, nil
 }
 
-// stsAnswer is why STS didn't trade the token. Only STS refusing the
-// token itself is ErrRejected: a trust that's gone or never matched.
-// STS not reaching Loomplane's issuer for its keys is Loomplane's to fix,
-// and a retry may get past it, so it isn't.
+// stsAnswer is why STS didn't trade the token. STS refusing the trust is
+// ErrRejected: a token it won't take (invalid_grant), a provider whose
+// condition turns it away (unauthorized_client), or a pool or provider
+// that's disabled, deleted or never existed (invalid_target). STS not
+// reaching Loomplane's issuer for its keys is Loomplane's to fix, and a
+// retry may get past it, so it isn't.
 func stsAnswer(status int, body []byte) error {
 	var e struct {
 		Error       string `json:"error"`
@@ -266,7 +271,7 @@ func stsAnswer(status int, body []byte) error {
 	if d := reason(e.Description, maxReason); d != "" {
 		why += ": " + d
 	}
-	refused := status == http.StatusBadRequest && (e.Error == "invalid_grant" || e.Error == "unauthorized_client")
+	refused := status == http.StatusBadRequest && (e.Error == "invalid_grant" || e.Error == "unauthorized_client" || e.Error == "invalid_target")
 	if refused && !issuerUnreachable(e.Description) {
 		return fmt.Errorf("%w: google's security token service refused Loomplane's token: %s", ErrRejected, why)
 	}

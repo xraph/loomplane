@@ -297,8 +297,11 @@ func TestKeylessRefusedTrustIsRejectedAndAFailureIsNot(t *testing.T) {
 		mint     error
 		rejected bool
 	}{
-		"subject refused": {sts: answer(http.StatusBadRequest, `{"error":"invalid_grant","error_description":"The given credential is rejected by the attribute condition."}`), rejected: true},
-		"client refused":  {sts: answer(http.StatusBadRequest, `{"error":"unauthorized_client","error_description":"The workload identity pool provider is disabled."}`), rejected: true},
+		"token refused": {sts: answer(http.StatusBadRequest, `{"error":"invalid_grant","error_description":"ID Token issued at 1761523200 is stale to sign-in."}`), rejected: true},
+		"condition refused": {sts: answer(http.StatusBadRequest,
+			`{"error":"unauthorized_client","error_description":"The given credential is rejected by the attribute condition."}`), rejected: true},
+		"provider deleted": {sts: answer(http.StatusBadRequest,
+			`{"error":"invalid_target","error_description":"The target service indicated by the \"audience\" parameters is invalid. This might either be because the pool or provider is disabled or deleted or because it doesn't exist."}`), rejected: true},
 		"not impersonable": {iam: answer(http.StatusForbidden,
 			`{"error":{"code":403,"message":"Permission 'iam.serviceAccounts.getAccessToken' denied on resource (or it may not exist).","status":"PERMISSION_DENIED"}}`), rejected: true},
 		"sts down": {sts: answer(http.StatusServiceUnavailable, `{"error":"temporarily_unavailable"}`)},
@@ -327,6 +330,17 @@ func TestKeylessRefusedTrustIsRejectedAndAFailureIsNot(t *testing.T) {
 				t.Fatal("STS was asked without a token")
 			}
 		})
+	}
+}
+
+// A keyless key made anywhere but ParseKey has no handout to mint for,
+// which is refused rather than a crash.
+func TestKeylessKeyWithoutAHandoutIsInvalid(t *testing.T) {
+	g := newFakeGoogle(t)
+	key := &Key{ProjectID: "shop-prod", ClientEmail: testAccount, Keyless: true, WorkloadProvider: testProvider}
+	_, err := New(g.srv.URL).WithMinter(&countingMinter{}).Session(t.Context(), key)
+	if !errors.Is(err, ErrInvalidKey) || len(g.exchanged) != 0 {
+		t.Fatalf("no handout: %v, exchanged %d", err, len(g.exchanged))
 	}
 }
 

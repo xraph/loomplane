@@ -29,7 +29,7 @@ const (
 // grant is ya29.key, STS trades a minted token for sts-access, IAM
 // Credentials trades that for ya29.keyless, and Resource Manager grants
 // either access token every permission. STS is down while down is set,
-// and refuses the token while refuse is.
+// and answers as for a deleted provider while refuse is.
 type fakeGoogleProject struct {
 	mu       sync.Mutex
 	tokens   []string
@@ -56,7 +56,7 @@ func (f *fakeGoogleProject) serve(w http.ResponseWriter, r *http.Request) {
 			_, _ = w.Write([]byte(`{"error":"temporarily_unavailable"}`))
 		case f.refuse:
 			w.WriteHeader(http.StatusBadRequest)
-			_, _ = w.Write([]byte(`{"error":"invalid_grant","error_description":"The given credential is rejected by the attribute condition."}`))
+			_, _ = w.Write([]byte(`{"error":"invalid_target","error_description":"The target service indicated by the \"audience\" parameters is invalid. This might either be because the pool or provider is disabled or deleted or because it doesn't exist."}`))
 		default:
 			_, _ = w.Write([]byte(`{"access_token":"sts-access","issued_token_type":"urn:ietf:params:oauth:token-type:access_token","token_type":"Bearer","expires_in":3600}`))
 		}
@@ -184,8 +184,8 @@ func TestGoogleKeylessLandsOnTheSameIdentityAsAKey(t *testing.T) {
 	}
 }
 
-// Google refusing the trust is a refusal, which fails the connection, and
-// Google being down is not.
+// Google refusing the trust, here because its provider was deleted, is a
+// refusal, which fails the connection, and Google being down is not.
 func TestGoogleKeylessRefusalIsRejectedAndAnOutageIsNot(t *testing.T) {
 	r, fake, _ := newGoogleKeylessRig(t)
 	settings := map[string]string{"project_id": "shop-prod", "workload_provider": workloadProvider, "service_account": keylessAccount}
