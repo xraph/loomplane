@@ -123,7 +123,7 @@ it("shows a domain's status, hosting and hostnames", async () => {
 
   expect(await section("Access")).toBeTruthy()
   expect(screen.getByText("Subdomains have their own projects.")).toBeTruthy()
-  expect(await section("DNS records")).toBeTruthy()
+  expect(await section("DNS records Loomplane manages")).toBeTruthy()
   // Not registered here, so there's no Registration section.
   expect(screen.queryByRole("region", { name: "Registration" })).toBeNull()
   expect(await section("Subdomains")).toBeTruthy()
@@ -1237,4 +1237,164 @@ it("sends one new subdomain for a double click", async () => {
   answer()
   await waitFor(() => expect(navigate).toHaveBeenCalledTimes(1))
   expect(creates).toBe(1)
+})
+
+/** record is a DNS record Loomplane wrote, as the API lists it. */
+function record(
+  name: string,
+  over: Record<string, unknown> = {}
+): Record<string, unknown> {
+  return {
+    kind: "route",
+    zone_id: "zone-acme.dev",
+    type: "CNAME",
+    name,
+    value: "edge.acme-hosting.net",
+    ttl: 60,
+    ...over,
+  }
+}
+
+const proofRecord = (zone: string) =>
+  record(`_loomplane.${zone}`, {
+    kind: "proof",
+    zone_id: `zone-${zone}`,
+    type: "TXT",
+    value: "lp-proof-123",
+  })
+
+const records = () => section("DNS records Loomplane manages")
+
+it("lists the TXT proof and each route's record Loomplane wrote", async () => {
+  stubFetch({
+    [detailPath("acme.dev")]: detailWith(
+      zoneWith("acme.dev", [host("api.acme.dev")], { published: true }),
+      {
+        records: [
+          record("api.acme.dev", {
+            type: "A",
+            value: "203.0.113.10",
+            route_id: "route-acme.dev-0",
+            hostname: "api.acme.dev",
+            project_id: "shop",
+            project_name: "acme-shop",
+          }),
+          // A route whose project is gone.
+          record("old.acme.dev", {
+            route_id: "route-old",
+            hostname: "old.acme.dev",
+          }),
+          proofRecord("acme.dev"),
+        ],
+      }
+    ),
+  })
+  open("zone-acme.dev")
+  const dns = await records()
+  const headers = within(dns)
+    .getAllByRole("columnheader")
+    .map((h) => h.textContent)
+  expect(headers).toEqual(["Type", "Name", "Value", "TTL", "Owned by"])
+  const rows = within(dns).getAllByRole("row").slice(1)
+  // The proof first, then by name.
+  expect(
+    rows.map((r) =>
+      within(r)
+        .getAllByRole("cell")
+        .map((c) => c.textContent)
+    )
+  ).toEqual([
+    ["TXT", "_loomplane.acme.dev", "lp-proof-123", "60", "Domain proof"],
+    ["A", "api.acme.dev", "203.0.113.10", "60", "api.acme.dev"],
+    ["CNAME", "old.acme.dev", "edge.acme-hosting.net", "60", "old.acme.dev"],
+  ])
+  expect(
+    within(rows[1])
+      .getByRole("link", { name: "api.acme.dev" })
+      .getAttribute("href")
+  ).toBe("/projects/shop")
+  // With no project, there's nowhere to link to.
+  expect(within(rows[2]).queryByRole("link")).toBeNull()
+})
+
+it("shows a Subdomain column when records span zones", async () => {
+  const api = zoneWith("api.loomplane.com", [host("v1.api.loomplane.com")], {
+    parent: "loomplane.com",
+  })
+  stubFetch({
+    [detailPath("loomplane.com")]: detailWith(
+      zoneWith("loomplane.com", [], { subdomains: ["api.loomplane.com"] }),
+      {
+        subdomains: [api],
+        records: [
+          record("v1.api.loomplane.com", {
+            zone_id: "zone-api.loomplane.com",
+            route_id: "route-api.loomplane.com-0",
+            hostname: "v1.api.loomplane.com",
+            project_id: "shop",
+            project_name: "acme-shop",
+          }),
+          proofRecord("loomplane.com"),
+        ],
+      }
+    ),
+  })
+  open("zone-loomplane.com")
+  const dns = await records()
+  expect(
+    within(dns)
+      .getAllByRole("columnheader")
+      .map((h) => h.textContent)
+  ).toEqual(["Type", "Name", "Value", "TTL", "Subdomain", "Owned by"])
+  const v1 = within(dns).getByRole("row", { name: /v1\.api\.loomplane\.com/ })
+  expect(within(v1).getByText("api.loomplane.com")).toBeTruthy()
+  const proof = within(dns).getByRole("row", { name: /^TXT/ })
+  expect(within(proof).getByText("loomplane.com")).toBeTruthy()
+})
+
+it("shows no Subdomain column for records in one zone", async () => {
+  stubFetch({
+    [detailPath("loomplane.com")]: detailWith(
+      zoneWith("loomplane.com", [], { subdomains: ["api.loomplane.com"] }),
+      {
+        subdomains: [
+          zoneWith("api.loomplane.com", [], { parent: "loomplane.com" }),
+        ],
+        records: [proofRecord("loomplane.com")],
+      }
+    ),
+  })
+  open("zone-loomplane.com")
+  const dns = await records()
+  expect(
+    within(dns).queryByRole("columnheader", { name: "Subdomain" })
+  ).toBeNull()
+})
+
+it("says Loomplane writes no records for a domain whose DNS stays elsewhere", async () => {
+  stubFetch({
+    [detailPath("docs-example.org")]: detailWith(
+      zoneWith("docs-example.org", [], { external: true })
+    ),
+  })
+  open("zone-docs-example.org")
+  const dns = await records()
+  expect(
+    within(dns).getByText(
+      "Loomplane writes no records here. You add each hostname's record where the domain is hosted."
+    )
+  ).toBeTruthy()
+  expect(within(dns).queryByRole("table")).toBeNull()
+})
+
+it("says Loomplane hasn't written records to a managed domain yet", async () => {
+  stubFetch({
+    [detailPath("acme.dev")]: detailWith(zoneWith("acme.dev")),
+  })
+  open("zone-acme.dev")
+  const dns = await records()
+  expect(
+    within(dns).getByText("Loomplane hasn't written any records here yet.")
+  ).toBeTruthy()
+  expect(within(dns).queryByRole("table")).toBeNull()
 })
