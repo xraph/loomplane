@@ -3232,6 +3232,10 @@ export interface Zone {
   proofCheckedAt: string;
   proofExpiresAt: string;
   proofName?: string;
+  proofPublishAttempted?: boolean;
+  proofPublishAttemptedAt: string;
+  proofPublishError?: string;
+  proofRecord?: DNSRecord;
   proofValue?: string;
   provider?: string;
   providerZone: DNSZone;
