@@ -34,7 +34,7 @@ func (GCPChecker) IsGrant(credential []byte) bool {
 	var k struct {
 		Type string `json:"type"`
 	}
-	return json.Unmarshal(bytes.TrimSpace(credential), &k) == nil && k.Type == "authorized_user"
+	return keylessJSON(credential) || json.Unmarshal(bytes.TrimSpace(credential), &k) == nil && k.Type == "authorized_user"
 }
 
 // Parse implements Checker. Billing export and a native recovery VPC are
@@ -112,7 +112,7 @@ func vercelGrant(credential []byte) (g oauth.Grant, ok bool, err error) {
 func (VercelChecker) IsGrant(credential []byte) bool {
 	// A grant that doesn't parse is still a grant; Parse says what's wrong.
 	_, isGrant, _ := vercelGrant(credential) //nolint:errcheck // only whether it's a grant matters here
-	return isGrant
+	return isGrant || keylessJSON(credential)
 }
 
 // Parse implements Checker. The one setting is team_id; without it the
@@ -176,6 +176,9 @@ var ownerRE = regexp.MustCompile(`^(tea|usr)-[a-z0-9]{1,64}$`)
 // without the setting, the only one it reaches is used, and several is an
 // error naming them.
 type RenderChecker struct{ Client *render.Client }
+
+// IsGrant implements GrantChecker.
+func (RenderChecker) IsGrant(credential []byte) bool { return keylessJSON(credential) }
 
 // Parse implements Checker.
 func (r RenderChecker) Parse(credential []byte, settings map[string]string) (Check, error) {
@@ -246,7 +249,7 @@ func digitalOceanGrant(credential []byte) (g oauth.Grant, ok bool, err error) {
 func (DigitalOceanChecker) IsGrant(credential []byte) bool {
 	// A grant that doesn't parse is still a grant; Parse says what's wrong.
 	_, isGrant, _ := digitalOceanGrant(credential) //nolint:errcheck // only whether it's a grant matters here
-	return isGrant
+	return isGrant || keylessJSON(credential)
 }
 
 // Parse implements Checker. A grant says which account and team it's for.
@@ -313,7 +316,7 @@ func (AzureChecker) IsGrant(credential []byte) bool {
 	var k struct {
 		Type string `json:"type"`
 	}
-	return json.Unmarshal(bytes.TrimSpace(credential), &k) == nil && k.Type == "azure_user"
+	return keylessJSON(credential) || json.Unmarshal(bytes.TrimSpace(credential), &k) == nil && k.Type == "azure_user"
 }
 
 // Parse implements Checker. A signed-in person's key names them as
@@ -422,6 +425,9 @@ func refusedSignIn(err error) bool {
 // AWSChecker checks AWS access keys in a required region. Optional private
 // recovery route settings do not establish connectivity or SQL verification.
 type AWSChecker struct{ Client *aws.Client }
+
+// IsGrant implements GrantChecker.
+func (AWSChecker) IsGrant(credential []byte) bool { return keylessJSON(credential) }
 
 // Parse implements Checker.
 func (a AWSChecker) Parse(credential []byte, settings map[string]string) (Check, error) {
