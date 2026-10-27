@@ -224,7 +224,7 @@ type Runner struct {
 	sources        Sources
 	providers      *provider.Registry
 	executors      map[string]Executor
-	catalogHooks   map[string]CatalogHooks
+	catalogHooks   CatalogHookMap
 	observers      []ReleaseObserver
 	authz          Authorizer
 	backupPolicies BackupPolicyInstaller
@@ -276,7 +276,7 @@ type RunnerDeps struct {
 	Telemetry *telemetry.Recorder
 	// CatalogHooks are composed catalog kinds' hooks, by kind: the same
 	// ones the owned targets run.
-	CatalogHooks map[string]CatalogHooks
+	CatalogHooks CatalogHookMap
 	// Observers hear of each service binding a deployment writes or
 	// deletes. What they fail at only warns.
 	Observers []ReleaseObserver

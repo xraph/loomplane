@@ -102,6 +102,10 @@ func (p *planner) planComposed(name string) {
 	if !ok {
 		return
 	}
+	if !featureOn(p.in.Features, kind.Feature) {
+		p.problem(featureOff(name, base, kind))
+		return
+	}
 	if kind.Placement == recipes.PlacementDependency {
 		p.problem(Finding{
 			Code: "catalog-kind-dependency-only", Subject: ResourceSubject, Name: name, Path: base + ".kind",
@@ -213,7 +217,7 @@ func (p *planner) planComposition(name, base string, r manifest.Resource, kind r
 		}
 		parts = append(parts, id)
 		cfg := resource()
-		cfg.Component = &ComponentConfig{Kind: kind.Name, Resource: name, Revision: composition.Revision, Component: c, Dependencies: choices, Protection: ComponentProtection(c.Component)}
+		cfg.Component = &ComponentConfig{Kind: kind.Name, Resource: name, Revision: composition.Revision, Component: c, Dependencies: choices, Protection: ComponentProtection(c.Component), Inputs: p.in.Inputs[name][c.Name]}
 		cfg.Component.GPU = p.componentGPU(name, p.gpuPath(name), kind, c.Component, set.GPU, connection)
 		creates := componentCreates(kind.Title, c.Component)
 		if c.Role != recipes.RoleJob {
@@ -601,6 +605,10 @@ func (p *planner) provision(name, base string, r manifest.Resource, dep recipes.
 func (p *planner) provisionComponent(name, base string, dep recipes.Dependency, kind recipes.Kind, action string, prov *provider.Provider, connection *ConnectionOption, region string, gpu *manifest.GPU) *Action {
 	path := base + ".uses." + dep.Name
 	if p.componentNameTaken(name, dep.Name) {
+		return nil
+	}
+	if !featureOn(p.in.Features, kind.Feature) {
+		p.problem(featureOff(name, path, kind))
 		return nil
 	}
 	if !slices.Contains(kind.Targets, prov.Cloud) {

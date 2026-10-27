@@ -550,6 +550,7 @@ export interface CompleteInputBody {
 export interface ComponentConfig {
   component: ResolvedComponent;
   dependencies?: Record<string, any>;
+  inputs?: string;
   kind: string;
   protection: string;
   resource: string;
@@ -1333,6 +1334,7 @@ export interface KindInfo {
   dependencies?: DependencyInfo[];
   description?: string;
   engine: boolean;
+  feature?: string;
   name: string;
   outputs?: OutputInfo[];
   placement: string;

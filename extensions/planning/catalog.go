@@ -22,16 +22,25 @@ type CatalogKindList struct {
 }
 
 // catalogKindList describes every engine and kind in the registry: the
-// five built-in engines first, then the registered ones.
-func catalogKindList(r *recipes.Registry) CatalogKindList {
-	return CatalogKindList{Kinds: r.Kinds()}
+// five built-in engines first, then the registered ones. A kind of a
+// server feature that's off isn't listed; nil features have every
+// feature off.
+func catalogKindList(r *recipes.Registry, features map[string]bool) CatalogKindList {
+	kinds := r.Kinds()
+	return CatalogKindList{Kinds: slices.DeleteFunc(kinds, func(k recipes.KindInfo) bool {
+		return k.Feature != "" && !features[k.Feature]
+	})}
 }
 
 func (e *Extension) listCatalogKinds(c forge.Context) error {
 	if _, err := principal(c); err != nil {
 		return err
 	}
-	return c.JSON(http.StatusOK, catalogKindList(recipes.Default()))
+	kinds := e.catalogKinds
+	if kinds == nil {
+		kinds = recipes.Default()
+	}
+	return c.JSON(http.StatusOK, catalogKindList(kinds, e.features))
 }
 
 // EndpointList is the body of GET /api/v1/catalog/endpoints.

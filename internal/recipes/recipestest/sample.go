@@ -153,6 +153,15 @@ func GPUSample() recipes.Kind {
 	}
 }
 
+// Featured is kind "featured": Sample under another name, belonging to
+// the server feature recipes.FeatureAI, for tests of a feature that's off.
+func Featured() recipes.Kind {
+	k := Sample()
+	k.Name, k.Title, k.Feature = "featured", "Featured", recipes.FeatureAI
+	k.Outputs[0].EnvKey, k.Outputs[1].EnvKey = "FEATURED_URL", "FEATURED_ADMIN_URL"
+	return k
+}
+
 // Registry is a fresh registry with the built-in engines, Sample and GPUSample.
 func Registry(t testing.TB) *recipes.Registry {
 	t.Helper()

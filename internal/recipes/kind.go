@@ -54,7 +54,15 @@ type Kind struct {
 	// ConsumerOptions are the values a consuming service chooses when it
 	// links, such as a tenant, passed to the kind's ConsumerBinder.
 	ConsumerOptions []ConsumerOption `json:"consumer_options,omitempty"`
+	// Feature is the server feature the kind belongs to, such as
+	// FeatureAI, or "" for none. Planning refuses the kind while that
+	// feature is off on the server, and the catalog doesn't list it.
+	Feature string `json:"feature,omitempty"` // ^[a-z]{0,16}$
 }
+
+// FeatureAI is the feature of the kinds that need the server's AI section
+// (config ai.enabled).
+const FeatureAI = "ai"
 
 // ConsumerOption is a value a consuming service sets for its link, under
 // services.<name>.need_options.<need>.<Name>.
@@ -309,6 +317,8 @@ type KindInfo struct {
 	Outputs      []OutputInfo     `json:"outputs,omitempty"`
 	// ConsumerOptions are what a consuming service chooses when it links.
 	ConsumerOptions []ConsumerOption `json:"consumer_options,omitempty"`
+	// Feature is the server feature the kind belongs to, or "" for none.
+	Feature string `json:"feature,omitempty"`
 }
 
 // DependencyInfo is the public part of a Dependency.

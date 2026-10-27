@@ -365,6 +365,9 @@ type ComponentConfig struct {
 	Protection   recipes.Protection          `json:"protection"`
 	// GPU is the reviewed GPU placement of a component that uses GPUs.
 	GPU *provider.GPUPlacement `json:"gpu,omitempty"`
+	// Inputs is the digest of what the kind renders into the component
+	// from outside the manifest (see CatalogInputs), or "" for nothing.
+	Inputs string `json:"inputs,omitempty"`
 }
 
 // Change is one setting an update changes.

@@ -109,6 +109,7 @@ type Extension struct {
 	checkLimit          *checkLimiter // nil is checksPerMinute (see checks)
 	checkLimitOnce      sync.Once
 	catalogKinds        *recipes.Registry // nil is recipes.Default()
+	features            map[string]bool   // server features that are on; nil has all off
 	failedCleanups      *deployments.FailedCleanups
 	cloudStore          *cloudprofiles.PgStore
 	cloudRecoveryCancel context.CancelFunc
@@ -124,6 +125,7 @@ func New(cfg config.Config, engineOf func() *engine.Engine, workflow *orchestrat
 		plugins:       plugs,
 		BaseExtension: forge.NewBaseExtension(Name, "0.1.0", "Manifests and deployment plans"),
 		cfg:           cfg,
+		features:      map[string]bool{recipes.FeatureAI: cfg.AI.Enabled},
 		engineOf:      engineOf,
 		ctrlplane:     ctrlplane,
 		deployments:   workflow,
@@ -318,8 +320,9 @@ func (e *Extension) Register(fapp forge.App) error {
 	}}
 	e.endpointChecks = checker
 	// catalogHooks are what composed catalog kinds do beyond their
-	// recipes, by kind. A kind registers its own here.
-	catalogHooks := map[string]deployments.CatalogHooks{}
+	// recipes, by kind. A kind registers its own here, or, from another
+	// extension, in the deployments.CatalogHookMap provided below.
+	catalogHooks := deployments.CatalogHookMap{}
 	catalogHooks["elasticsearch"] = fabriqloom.SearchHooks{}
 	// observers hear of each service binding a deployment writes or
 	// deletes. A kind that tracks its consumers registers its own here.
@@ -385,6 +388,16 @@ func (e *Extension) Register(fapp forge.App) error {
 	})
 	catalogHooks[recipes.OctopusKind] = octopusHooks
 	observers = append(observers, octopusHooks)
+	// An extension that registers after this one adds its kinds' hooks to
+	// the same map, and what they render from outside the manifest to
+	// catalogInputs, during its own Register.
+	catalogInputs := planning.CatalogInputMap{}
+	if err := forge.ProvideValue(c, catalogHooks); err != nil {
+		return fmt.Errorf("provide the catalog hooks: %w", err)
+	}
+	if err := forge.ProvideValue(c, catalogInputs); err != nil {
+		return fmt.Errorf("provide the catalog inputs: %w", err)
+	}
 	if err := forge.ProvideValue(c, octopusSyncer); err != nil {
 		return err
 	}
@@ -405,9 +418,11 @@ func (e *Extension) Register(fapp forge.App) error {
 		CloudProfiles: e.cloudStore, CloudSyncWorkflow: e.deployments,
 		Providers: catalog, Connections: clouds, Authz: authz, Workflow: e.deployments, Audit: auditor,
 		Window: e.cfg.Planning.ApprovalWindow, Telemetry: metrics, DatabaseGatewayTrust: databaseGatewayTrust(c),
-		Warn:      func(msg string, err error) { log.Warn(msg, forge.F("error", err.Error())) },
-		Endpoints: checker,
-		Dialer:    dialer,
+		Warn:          func(msg string, err error) { log.Warn(msg, forge.F("error", err.Error())) },
+		Endpoints:     checker,
+		Dialer:        dialer,
+		Features:      e.features,
+		CatalogInputs: catalogInputs,
 	})
 
 	routeService.CapacityDemandAuthority = e.plans

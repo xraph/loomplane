@@ -66,7 +66,7 @@ type OwnedTarget struct {
 	Kinds *recipes.Registry
 	// Hooks are composed kinds' hooks, by kind. A kind without any gets
 	// NoHooks.
-	Hooks map[string]CatalogHooks
+	Hooks CatalogHookMap
 	// Endpoints reads the external endpoints composed resources connect,
 	// and Checker checks them again from the target on each release.
 	Endpoints EndpointResolver

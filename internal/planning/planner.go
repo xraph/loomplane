@@ -71,6 +71,14 @@ type Input struct {
 	// the organization's other environments connect as their Postgres, each
 	// with one that does. A Fabriq here can't connect them too.
 	FabriqPostgres map[string]FabriqUser
+	// Features are the server features that are on, by name. A kind of a
+	// feature that's off, or missing, is refused; nil has every feature
+	// off, and a kind without a feature ignores them.
+	Features map[string]bool
+	// Inputs are digests of what composed resources' kinds render from
+	// outside the manifest, by resource and then component. Each lands on
+	// its component's ComponentConfig, so a change plans an update.
+	Inputs map[string]map[string]string
 }
 
 // ConnectionOption is a cloud connection a plan could deploy with.

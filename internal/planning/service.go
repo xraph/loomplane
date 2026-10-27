@@ -124,6 +124,8 @@ type Service struct {
 	kinds             *recipes.Registry
 	endpoints         EndpointChecker
 	dialer            TargetDialer
+	features          map[string]bool
+	inputs            CatalogInputMap
 }
 
 // Deps are what a Service needs.
@@ -162,6 +164,13 @@ type Deps struct {
 	// through Dialer. Without either, no external endpoint can be used.
 	Endpoints EndpointChecker
 	Dialer    TargetDialer
+	// Features are the server features that are on, by name, such as
+	// {"ai": true}. Nil has every feature off. A plan refuses a kind of a
+	// feature that's off.
+	Features map[string]bool
+	// CatalogInputs digest what kinds render from outside the manifest,
+	// by kind. The map may gain entries after NewService, during Register.
+	CatalogInputs CatalogInputMap
 }
 
 // NewService returns a Service.
@@ -182,6 +191,7 @@ func NewService(d Deps) *Service {
 		providers: d.Providers, clouds: d.Connections, authz: d.Authz, workflow: d.Workflow, audit: d.Audit,
 		window: d.Window, now: time.Now, warn: warn, telemetry: d.Telemetry, dbTrust: d.DatabaseGatewayTrust,
 		kinds: d.Kinds, endpoints: d.Endpoints, dialer: d.Dialer,
+		features: d.Features, inputs: d.CatalogInputs,
 	}
 }
 
@@ -643,6 +653,10 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 		}
 		trust = s.databaseGatewayTrust()
 	}
+	inputs, err := s.catalogInputs(ctx, plan, rev.Manifest, composed)
+	if err != nil {
+		return nil, "", err
+	}
 	var result *Result
 	if resolutionErr != nil {
 		finding := Finding{Code: "cloud-target", Path: "services", Message: resolutionErr.Error()}
@@ -667,7 +681,7 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 			Environment: plan.Environment, Graph: g, Manifest: resolved, Providers: s.providers, Bindings: bindings,
 			Connections: options, Chosen: chosen, Held: held,
 			Kinds: s.kinds, Endpoints: s.checkEndpoints(ctx, plan.OrgID, plan.Environment, resolved),
-			FabriqPostgres: fabriqPostgres,
+			FabriqPostgres: fabriqPostgres, Features: s.features, Inputs: inputs,
 		})
 	}
 	if resolutionErr == nil && poolRelocation(bindings, placements) {
@@ -854,7 +868,7 @@ func (s *Service) checkEndpoints(ctx context.Context, orgID, environment string,
 // pointless: what it was made from is gone or unreadable.
 func permanent(err error) bool {
 	return errors.Is(err, discovery.ErrNotFound) || errors.Is(err, discovery.ErrNoGraph) ||
-		errors.Is(err, manifests.ErrNotFound) || errors.Is(err, ErrInvalid)
+		errors.Is(err, manifests.ErrNotFound) || errors.Is(err, ErrInvalid) || failsPlanning(err)
 }
 
 // Plan implements orchestration.Planner: it computes a planning plan.

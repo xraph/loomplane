@@ -22,6 +22,12 @@ type CatalogHooks interface {
 	Removed(ctx context.Context, res ComposedResource) error
 }
 
+// CatalogHookMap holds composed kinds' hooks, by kind: the one map the
+// owned targets and the runner share. The planning extension provides it
+// through Forge DI, and an extension adds its kinds' hooks during its own
+// Register, never later.
+type CatalogHookMap map[string]CatalogHooks
+
 // NoHooks does nothing. A kind's hooks embed it to implement only what
 // they need.
 type NoHooks struct{}

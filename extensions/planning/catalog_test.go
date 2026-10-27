@@ -16,6 +16,7 @@ import (
 	"github.com/xraph/forge"
 
 	"github.com/xraph/loomplane/internal/catalogconnect"
+	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/deployments"
 	"github.com/xraph/loomplane/internal/recipes"
@@ -59,13 +60,62 @@ func TestCatalogKindsRouteListsKinds(t *testing.T) {
 }
 
 func TestCatalogKindListIncludesRegisteredKinds(t *testing.T) {
-	list := catalogKindList(recipestest.Registry(t))
+	list := catalogKindList(recipestest.Registry(t), nil)
 	last := list.Kinds[len(list.Kinds)-1]
 	if last.Name != "sample" || last.Engine || last.Placement != recipes.PlacementAppProject {
 		t.Fatalf("last kind: %+v", last)
 	}
 	if len(list.Kinds) != 7 || list.Kinds[0].Name != "postgres" {
 		t.Fatalf("kinds: %+v", list.Kinds)
+	}
+}
+
+func TestCatalogKindsListHidesKindsOfAnOffFeature(t *testing.T) {
+	kinds := recipestest.Registry(t)
+	if err := kinds.Register(recipestest.Featured()); err != nil {
+		t.Fatal(err)
+	}
+	list := func(features map[string]bool) []recipes.KindInfo {
+		t.Helper()
+		r := forge.NewRouter()
+		if err := (&Extension{catalogKinds: kinds, features: features}).routes(r, nil); err != nil {
+			t.Fatal(err)
+		}
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/api/v1/catalog/kinds", nil)
+		req = req.WithContext(security.WithPrincipal(req.Context(), security.Principal{OrgID: "org", UserID: "member"}))
+		out := httptest.NewRecorder()
+		r.ServeHTTP(out, req)
+		if out.Code != http.StatusOK {
+			t.Fatalf("list: %d %s", out.Code, out.Body.String())
+		}
+		var body CatalogKindList
+		if err := json.Unmarshal(out.Body.Bytes(), &body); err != nil {
+			t.Fatal(err)
+		}
+		return body.Kinds
+	}
+	named := func(kinds []recipes.KindInfo, name string) *recipes.KindInfo {
+		i := slices.IndexFunc(kinds, func(k recipes.KindInfo) bool { return k.Name == name })
+		if i < 0 {
+			return nil
+		}
+		return &kinds[i]
+	}
+	for _, features := range []map[string]bool{nil, {recipes.FeatureAI: false}} {
+		got := list(features)
+		if named(got, "featured") != nil {
+			t.Errorf("features %v: catalogKinds.list offers a kind of an off feature", features)
+		}
+		if named(got, "sample") == nil || len(got) != 7 {
+			t.Errorf("features %v: kinds %+v", features, got)
+		}
+	}
+	got := list(map[string]bool{recipes.FeatureAI: true})
+	if k := named(got, "featured"); k == nil || k.Feature != recipes.FeatureAI {
+		t.Fatalf("feature on: featured is %+v", k)
+	}
+	if len(got) != 8 {
+		t.Fatalf("feature on: %d kinds", len(got))
 	}
 }
 
@@ -364,6 +414,17 @@ func TestCheckRouteResolvesTheRequirement(t *testing.T) {
 		probes = len(prober.reqs)
 		if out = send(tc.user, tc.body); out.Code != tc.code || len(prober.reqs) != probes {
 			t.Fatalf("%s: %d %s (probes %d)", tc.name, out.Code, out.Body.String(), len(prober.reqs)-probes)
+		}
+	}
+}
+
+func TestFeaturesComeFromConfig(t *testing.T) {
+	for _, on := range []bool{false, true} {
+		var cfg config.Config
+		cfg.AI.Enabled = on
+		e := New(cfg, nil, nil, nil, nil)
+		if got, ok := e.features[recipes.FeatureAI]; !ok || got != on {
+			t.Errorf("ai.enabled %t: features %v", on, e.features)
 		}
 	}
 }

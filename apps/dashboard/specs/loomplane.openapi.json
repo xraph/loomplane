@@ -11449,6 +11449,9 @@
             "type": "object",
             "additionalProperties": true
           },
+          "inputs": {
+            "type": "string"
+          },
           "kind": {
             "type": "string"
           },
@@ -13919,6 +13922,9 @@
           },
           "engine": {
             "type": "boolean"
+          },
+          "feature": {
+            "type": "string"
           },
           "name": {
             "type": "string"

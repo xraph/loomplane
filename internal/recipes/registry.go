@@ -23,6 +23,7 @@ var (
 	envNamePattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_.]*$`)
 	prefixPattern  = regexp.MustCompile(`^[a-z]{1,8}_$`)
 	optionPattern  = regexp.MustCompile(`^[a-z][a-z0-9_]{0,31}$`)
+	featurePattern = regexp.MustCompile(`^[a-z]{0,16}$`)
 	// Postgres extension names, such as "vector" or "uuid-ossp".
 	extensionPattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,62}$`)
 
@@ -278,6 +279,7 @@ func (k Kind) info() KindInfo {
 		info.Outputs = append(info.Outputs, OutputInfo{Name: o.Name, EnvKey: o.EnvKey, PerConsumer: o.PerConsumer})
 	}
 	info.ConsumerOptions = slices.Clone(k.ConsumerOptions)
+	info.Feature = k.Feature
 	return info
 }
 
@@ -342,6 +344,9 @@ func validateKind(k Kind) []error {
 		f.add("placement %q is not %s, %s or %s", k.Placement, PlacementServiceProject, PlacementAppProject, PlacementDependency)
 	}
 	validateTargets(f, k.Targets)
+	if !featurePattern.MatchString(k.Feature) {
+		f.add("feature %q must be at most 16 lowercase letters", k.Feature)
+	}
 	if k.Placement == PlacementDependency {
 		validateDependencyOnly(f, k)
 	}
