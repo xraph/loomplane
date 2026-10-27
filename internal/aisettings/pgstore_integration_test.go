@@ -185,6 +185,34 @@ func TestProviderKeyRoundTrip(t *testing.T) {
 	}
 }
 
+func TestCreateProviderKeyNeverOverwrites(t *testing.T) {
+	st, _ := scratchStore(t)
+	ctx := t.Context()
+	first := &ProviderKey{ID: "aikey_first", OrgID: "org_a", Name: "claude", Type: "anthropic", KeyHint: "wxyz", CreatedBy: "usr_a", UpdatedBy: "usr_a"}
+	if err := st.CreateProviderKey(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	if first.ID != "aikey_first" || first.Revision != 1 {
+		t.Fatalf("created = %+v", first)
+	}
+	second := &ProviderKey{ID: "aikey_second", OrgID: "org_a", Name: "claude", Type: "openai", KeyHint: "3333", CreatedBy: "usr_b", UpdatedBy: "usr_b"}
+	if err := st.CreateProviderKey(ctx, second); !errors.Is(err, ErrStale) {
+		t.Fatalf("second create err = %v, want ErrStale", err)
+	}
+	got, err := st.ProviderKey(ctx, "org_a", "claude")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.ID != "aikey_first" || got.Type != "anthropic" || got.KeyHint != "wxyz" || got.Revision != 1 || got.UpdatedBy != "usr_a" {
+		t.Errorf("the refused create changed the key: %+v", got)
+	}
+	// Another workspace may use the name.
+	other := &ProviderKey{OrgID: "org_b", Name: "claude", Type: "openai", CreatedBy: "usr_b", UpdatedBy: "usr_b"}
+	if err := st.CreateProviderKey(ctx, other); err != nil || !strings.HasPrefix(other.ID, "aikey_") {
+		t.Fatalf("other org create: %v, %+v", err, other)
+	}
+}
+
 func allocation(scope, usd string) *Allocation {
 	return &Allocation{Scope: scope, ProjectID: "proj_shop", EnvironmentID: "env_" + scope, Label: "shop / " + scope, MonthlyBudgetUSD: usd}
 }

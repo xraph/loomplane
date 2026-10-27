@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
 	"math/big"
 	"slices"
@@ -144,6 +145,16 @@ func (m *memStore) SaveProviderKey(_ context.Context, k *ProviderKey) error {
 	m.keys[k.OrgID][k.Name] = got
 	*k = got
 	return nil
+}
+
+func (m *memStore) CreateProviderKey(ctx context.Context, k *ProviderKey) error {
+	m.mu.Lock()
+	_, exists := m.keys[k.OrgID][k.Name]
+	m.mu.Unlock()
+	if exists {
+		return ErrStale
+	}
+	return m.SaveProviderKey(ctx, k)
 }
 
 func (m *memStore) DeleteProviderKey(_ context.Context, orgID, name string) error {
@@ -336,12 +347,37 @@ type harness struct {
 func newHarness(t *testing.T) *harness {
 	t.Helper()
 	h := &harness{store: newMemStore(), keys: newMemKeys(), audit: &memAudit{}, notify: &memNotify{}}
-	h.svc = NewService(Deps{
-		Store: h.store, Keys: h.keys, Authz: roleAuthz{}, Audit: h.audit, Projects: memProjects{},
-		Notify: h.notify, Now: func() time.Time { return time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC) },
-	})
+	h.useStore(h.store)
 	return h
 }
+
+// useStore rebuilds the service over st, which may wrap h.store.
+func (h *harness) useStore(st Store) {
+	h.svc = NewService(Deps{
+		Store: st, Keys: h.keys, Authz: roleAuthz{}, Audit: h.audit, Projects: memProjects{},
+		Notify: h.notify, Now: func() time.Time { return time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC) },
+	})
+}
+
+// staleRead hides a key from the service's next read of it, as if another
+// create of the same name committed between that read and the write.
+type staleRead struct {
+	*memStore
+	hide string
+}
+
+func (s *staleRead) ProviderKey(ctx context.Context, orgID, name string) (*ProviderKey, error) {
+	if name == s.hide {
+		s.hide = ""
+		return nil, ErrNotFound
+	}
+	return s.memStore.ProviderKey(ctx, orgID, name)
+}
+
+// staleSave refuses every settings save, as if another admin saved first.
+type staleSave struct{ *memStore }
+
+func (staleSave) SaveSettings(context.Context, *Settings, int64) error { return ErrStale }
 
 func ptr[T any](v T) *T { return &v }
 
@@ -912,7 +948,7 @@ func TestSettingsChangesAreAudited(t *testing.T) {
 			t.Errorf("%s principal = %+v", e.Action, e.Principal)
 		}
 	}
-	want := []string{"ai.provider_key.put", "ai.provider_key.put", "ai.settings.update", "ai.budget.allocate", "ai.provider_key.delete"}
+	want := []string{"ai.provider_key.put", "ai.provider_key.put", "ai.settings.update", "ai.settings.update", "ai.budget.allocate", "ai.provider_key.delete"}
 	if !slices.Equal(actions, want) {
 		t.Fatalf("actions = %v, want %v", actions, want)
 	}
@@ -923,7 +959,8 @@ func TestSettingsChangesAreAudited(t *testing.T) {
 	checks := [][]string{
 		{"api_key", "projects", "type"},
 		{"projects"},
-		{"embeddings", "monthly_budget_usd"},
+		{"monthly_budget_usd"},
+		{"embeddings"},
 		{"label", "monthly_budget_usd", "scope"},
 		nil,
 	}
@@ -996,5 +1033,131 @@ func TestVaultKeysKeepOneBlobPerKey(t *testing.T) {
 	}
 	if _, err := keys.Reveal(ctx, "org", "aikey_1"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("Reveal after Delete = %v", err)
+	}
+}
+
+func TestConcurrentCreateOfOneNameIsRefused(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		in   ProviderKeyInput
+	}{
+		{"same type", ProviderKeyInput{Type: "anthropic", Fields: map[string]string{"api_key": "sk-ant-second-2222"}}},
+		{"other type", ProviderKeyInput{Type: "openai", Fields: map[string]string{"api_key": "sk-openai-3333"}}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			h := newHarness(t)
+			ctx := context.Background()
+			first := h.put(t, "claude", anthropicKey())
+			h.notify.take()
+			events := len(h.audit.all())
+
+			// The second create read no key called claude, then lost the race.
+			h.useStore(&staleRead{memStore: h.store, hide: "claude"})
+			_, err := h.svc.PutProviderKey(ctx, admin, "claude", c.in)
+			mustErr(t, err, ErrStale, "claude")
+
+			stored, err := h.store.ProviderKey(ctx, "org", "claude")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if stored.ID != first.ID || stored.Type != "anthropic" || stored.KeyHint != "wxyz" || stored.Revision != 1 {
+				t.Errorf("the losing create changed the key: %+v", stored)
+			}
+			h.keys.mu.Lock()
+			blobs := slices.Sorted(maps.Keys(h.keys.blobs))
+			h.keys.mu.Unlock()
+			if !slices.Equal(blobs, []string{"org/" + first.ID}) {
+				t.Errorf("vault holds %v, want only the first key's values", blobs)
+			}
+			if got, _ := h.keys.Reveal(ctx, "org", first.ID); got["api_key"] != secretValue {
+				t.Error("the first key's values changed")
+			}
+			if len(h.audit.all()) != events || len(h.notify.take()) != 0 {
+				t.Error("a refused create was audited or notified")
+			}
+		})
+	}
+}
+
+func TestBudgetSavedWhenEmbeddingsAreNot(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	h.useStore(staleSave{h.store})
+	_, err := h.svc.Update(ctx, admin, UpdateInput{MonthlyBudgetUSD: ptr("75"), Embeddings: &Embeddings{Mode: EmbeddingsLocal}})
+	mustErr(t, err, ErrStale, "budget was saved as 75.00 USD")
+	if !strings.Contains(err.Error(), "embeddings weren't") {
+		t.Errorf("err = %q", err)
+	}
+	st, _ := h.store.Settings(ctx, "org")
+	if st.MonthlyBudgetUSD != "75.00" {
+		t.Errorf("budget = %s", st.MonthlyBudgetUSD)
+	}
+	events := h.audit.all()
+	if len(events) != 1 || events[0].Action != "ai.settings.update" {
+		t.Fatalf("events = %+v", events)
+	}
+	if f, _ := events[0].Attributes["fields"].([]string); !slices.Equal(f, []string{"monthly_budget_usd"}) {
+		t.Errorf("fields = %v", f)
+	}
+	if got := h.notify.take(); len(got) != 0 {
+		t.Errorf("notified %+v", got)
+	}
+	// Embeddings alone fail plainly.
+	_, err = h.svc.Update(ctx, admin, UpdateInput{Revision: st.Revision, Embeddings: &Embeddings{Mode: EmbeddingsLocal}})
+	if !errors.Is(err, ErrStale) || strings.Contains(err.Error(), "budget") {
+		t.Errorf("embeddings-only err = %v", err)
+	}
+}
+
+func TestOptionalPrimaryMayBeShort(t *testing.T) {
+	h := newHarness(t)
+	in := openCompat()
+	in.Fields["api_key"] = "EMPTY"
+	k := h.put(t, "vllm", in)
+	if k.KeyHint != "" {
+		t.Errorf("a five-character key got hint %q", k.KeyHint)
+	}
+	blob, _ := h.keys.Reveal(context.Background(), "org", k.ID)
+	if blob["api_key"] != "EMPTY" {
+		t.Errorf("vault blob = %v", blob)
+	}
+	// A required primary still has to look like a key.
+	_, err := h.svc.PutProviderKey(context.Background(), admin, "claude", ProviderKeyInput{Type: "anthropic", Fields: map[string]string{"api_key": "EMPTY"}})
+	mustErr(t, err, ErrInvalid, "api_key")
+}
+
+func TestKeyHintCountsCharacters(t *testing.T) {
+	h := newHarness(t)
+	k := h.put(t, "claude", ProviderKeyInput{Type: "anthropic", Fields: map[string]string{"api_key": "sk-ant-ключ€é"}})
+	if k.KeyHint != "юч€é" {
+		t.Errorf("hint = %q, want %q", k.KeyHint, "юч€é")
+	}
+	// Seven characters but more than eight bytes is still too short.
+	_, err := h.svc.PutProviderKey(context.Background(), admin, "other", ProviderKeyInput{Type: "anthropic", Fields: map[string]string{"api_key": "ключключ"[:14]}})
+	mustErr(t, err, ErrInvalid, "too short")
+}
+
+func TestSecretsNeverPrinted(t *testing.T) {
+	const s1, s2 = "sk-print-secret-1111", "aws-print-secret-2222"
+	g := GatewayKey{Name: "k1", Type: "bedrock", Fields: SecretFields{"access_key_id": s1, "secret_access_key": s2, "region": "us-east-1"}, Revision: 3}
+	in := ProviderKeyInput{Type: "bedrock", Fields: SecretFields{"access_key_id": s1, "secret_access_key": s2}, Projects: &[]string{"p1"}}
+	subjects := []any{g, &g, []GatewayKey{g}, in, &in, g.Fields, struct{ K GatewayKey }{g}}
+	out := make([]string, 0, 5*len(subjects))
+	for _, x := range subjects {
+		for _, verb := range []string{"%v", "%+v", "%#v", "%s"} {
+			out = append(out, fmt.Sprintf(verb, x))
+		}
+		var buf strings.Builder
+		slog.New(slog.NewJSONHandler(&buf, nil)).Info("key", "subject", x)
+		slog.New(slog.NewTextHandler(&buf, nil)).Info("key", "subject", x)
+		out = append(out, buf.String())
+	}
+	for _, o := range out {
+		if strings.Contains(o, s1) || strings.Contains(o, s2) {
+			t.Errorf("secret printed: %s", o)
+		}
+	}
+	if s := fmt.Sprint(g); !strings.Contains(s, "secret_access_key") || !strings.Contains(s, "k1") {
+		t.Errorf("String lost the names: %s", s)
 	}
 }

@@ -168,6 +168,25 @@ func (s *PgStore) ProviderKey(ctx context.Context, orgID, name string) (*Provide
 
 // SaveProviderKey implements Store.
 func (s *PgStore) SaveProviderKey(ctx context.Context, k *ProviderKey) error {
+	return s.writeProviderKey(ctx, k, `DO UPDATE SET
+			type = EXCLUDED.type,
+			fields = EXCLUDED.fields,
+			models = EXCLUDED.models,
+			key_hint = EXCLUDED.key_hint,
+			projects = EXCLUDED.projects,
+			revision = k.revision + 1,
+			updated_by = EXCLUDED.updated_by,
+			updated_at = EXCLUDED.updated_at`)
+}
+
+// CreateProviderKey implements Store.
+func (s *PgStore) CreateProviderKey(ctx context.Context, k *ProviderKey) error {
+	return s.writeProviderKey(ctx, k, `DO NOTHING`)
+}
+
+// writeProviderKey inserts k, doing onConflict when the workspace already
+// has a key with its name. A conflict that writes nothing is ErrStale.
+func (s *PgStore) writeProviderKey(ctx context.Context, k *ProviderKey, onConflict string) error {
 	id := k.ID
 	if id == "" {
 		tid, err := typeid.Generate("aikey")
@@ -199,17 +218,12 @@ func (s *PgStore) SaveProviderKey(ctx context.Context, k *ProviderKey) error {
 	got, err := scanKey(s.db.QueryRow(ctx, `INSERT INTO loomplane_ai_provider_keys AS k
 			(id, org_id, name, type, fields, models, key_hint, projects, revision, created_by, updated_by, created_at, updated_at)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 1, $9, $10, $11, $11)
-		ON CONFLICT (org_id, name) DO UPDATE SET
-			type = EXCLUDED.type,
-			fields = EXCLUDED.fields,
-			models = EXCLUDED.models,
-			key_hint = EXCLUDED.key_hint,
-			projects = EXCLUDED.projects,
-			revision = k.revision + 1,
-			updated_by = EXCLUDED.updated_by,
-			updated_at = EXCLUDED.updated_at
+		ON CONFLICT (org_id, name) `+onConflict+`
 		RETURNING `+keyColumns,
 		id, k.OrgID, k.Name, k.Type, fieldsJSON, modelsJSON, k.KeyHint, projects, k.CreatedBy, k.UpdatedBy, s.now().UTC()))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return ErrStale
+	}
 	if err != nil {
 		return fmt.Errorf("save AI provider key: %w", err)
 	}

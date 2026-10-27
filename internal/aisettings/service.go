@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"maps"
 	"net/url"
 	"regexp"
@@ -34,9 +35,21 @@ const (
 	maxEmbeddingDimensions = 4096
 )
 
-// minPrimaryLength is the shortest primary secret accepted. Its last four
-// characters become the hint, so a shorter one would show most of itself.
+// minPrimaryLength is the shortest required primary secret accepted, in
+// characters. Its last four become the hint, so a shorter one would show
+// most of itself.
 const minPrimaryLength = 8
+
+// keyHint returns the last four characters of a primary secret, and whether
+// the secret is long enough to show them. A shorter one, which only an
+// optional secret can be (vLLM's "EMPTY"), gets no hint at all.
+func keyHint(secret string) (hint string, long bool) {
+	r := []rune(secret)
+	if len(r) < minPrimaryLength {
+		return "", false
+	}
+	return string(r[len(r)-4:]), true
+}
 
 var (
 	namePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
@@ -89,7 +102,7 @@ type UpdateInput struct {
 // ProviderKeyInput creates or changes a provider key.
 type ProviderKeyInput struct {
 	Type     string             `json:"type"`               // required on create; can't change later
-	Fields   map[string]string  `json:"fields,omitempty"`   // every field, secret ones included; a secret omitted keeps its value, "" is refused
+	Fields   SecretFields       `json:"fields,omitempty"`   // every field, secret ones included; a secret omitted keeps its value, "" is refused
 	Projects *[]string          `json:"projects,omitempty"` // nil keeps; empty slice: every project
 	Models   *[]OpenCompatModel `json:"models,omitempty"`
 }
@@ -98,9 +111,81 @@ type ProviderKeyInput struct {
 // included. Never serialized.
 type GatewayKey struct {
 	Name, Type string
-	Fields     map[string]string `json:"-"` // secret and non-secret together, as nexus config keys
+	Fields     SecretFields `json:"-"` // secret and non-secret together, as nexus config keys
 	Models     []OpenCompatModel
 	Revision   int64
+}
+
+// SecretFields are provider key fields with secret values among them. They
+// print and log as field names only: fmt's verbs and slog never see a value.
+type SecretFields map[string]string
+
+const redacted = "[redacted]"
+
+func (f SecretFields) names() []string { return slices.Sorted(maps.Keys(f)) }
+
+// String implements fmt.Stringer.
+func (f SecretFields) String() string { return fmt.Sprintf("%v (values redacted)", f.names()) }
+
+// GoString implements fmt.GoStringer.
+func (f SecretFields) GoString() string {
+	parts := make([]string, 0, len(f))
+	for _, n := range f.names() {
+		parts = append(parts, strconv.Quote(n)+": "+strconv.Quote(redacted))
+	}
+	return "aisettings.SecretFields{" + strings.Join(parts, ", ") + "}"
+}
+
+// LogValue implements slog.LogValuer.
+func (f SecretFields) LogValue() slog.Value {
+	attrs := make([]slog.Attr, 0, len(f))
+	for _, n := range f.names() {
+		attrs = append(attrs, slog.String(n, redacted))
+	}
+	return slog.GroupValue(attrs...)
+}
+
+// String implements fmt.Stringer, without a single value.
+func (k GatewayKey) String() string {
+	return fmt.Sprintf("{Name:%s Type:%s Fields:%s Models:%d Revision:%d}", k.Name, k.Type, k.Fields, len(k.Models), k.Revision)
+}
+
+// GoString implements fmt.GoStringer, without a single value.
+func (k GatewayKey) GoString() string {
+	return fmt.Sprintf("aisettings.GatewayKey{Name:%q, Type:%q, Fields:%#v, Models:%d, Revision:%d}",
+		k.Name, k.Type, k.Fields, len(k.Models), k.Revision)
+}
+
+// LogValue implements slog.LogValuer, without a single value.
+func (k GatewayKey) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.String("name", k.Name), slog.String("type", k.Type),
+		slog.Any("fields", k.Fields.names()), slog.Int64("revision", k.Revision),
+	)
+}
+
+func (in ProviderKeyInput) projectNames() string {
+	if in.Projects == nil {
+		return "unchanged"
+	}
+	return fmt.Sprint(*in.Projects)
+}
+
+// String implements fmt.Stringer, without a single value.
+func (in ProviderKeyInput) String() string {
+	return fmt.Sprintf("{Type:%s Fields:%s Projects:%s}", in.Type, in.Fields, in.projectNames())
+}
+
+// GoString implements fmt.GoStringer, without a single value.
+func (in ProviderKeyInput) GoString() string {
+	return fmt.Sprintf("aisettings.ProviderKeyInput{Type:%q, Fields:%#v, Projects:%s}", in.Type, in.Fields, in.projectNames())
+}
+
+// LogValue implements slog.LogValuer, without a single value.
+func (in ProviderKeyInput) LogValue() slog.Value {
+	return slog.GroupValue(
+		slog.String("type", in.Type), slog.Any("fields", in.Fields.names()), slog.String("projects", in.projectNames()),
+	)
 }
 
 // Deps are what a Service needs. Notify may be nil, and bound later with
@@ -266,9 +351,9 @@ func (s *Service) Update(ctx context.Context, p security.Principal, in UpdateInp
 		return nil, ErrStale
 	}
 
-	// SetBudget bumps the revision, so the embeddings write that follows
-	// expects the revision the budget write left.
-	var changed []string
+	// Two writes, each audited once it commits. SetBudget bumps the
+	// revision, so the embeddings write that follows expects the revision
+	// the budget write left.
 	rev := cur.Revision
 	if in.MonthlyBudgetUSD != nil {
 		got, err := s.store.SetBudget(ctx, p.OrgID, budget, p.UserID)
@@ -279,21 +364,21 @@ func (s *Service) Update(ctx context.Context, p security.Principal, in UpdateInp
 			return nil, err
 		}
 		rev = got.Revision
-		changed = append(changed, "monthly_budget_usd")
+		s.record(ctx, p, "ai.settings.update", "", map[string]any{"fields": []string{"monthly_budget_usd"}})
 	}
 	if embeddings != nil {
 		next := *cur
 		next.Embeddings, next.UpdatedBy = *embeddings, p.UserID
 		if err := s.store.SaveSettings(ctx, &next, rev); err != nil {
+			if in.MonthlyBudgetUSD != nil {
+				return nil, fmt.Errorf("the monthly AI budget was saved as %s USD, but the embeddings weren't: %w", budget, err)
+			}
 			return nil, err
 		}
-		changed = append(changed, "embeddings")
+		s.record(ctx, p, "ai.settings.update", "", map[string]any{"fields": []string{"embeddings"}})
 		if n := s.notifier(); n != nil {
 			n.EmbeddingsChanged(ctx, p.OrgID)
 		}
-	}
-	if len(changed) > 0 {
-		s.record(ctx, p, "ai.settings.update", "", map[string]any{"fields": changed})
 	}
 	return s.Get(ctx, p)
 }
@@ -401,10 +486,12 @@ func (s *Service) PutProviderKey(ctx context.Context, p security.Principal, name
 	}
 	if primary := pt.primary(); primary != "" {
 		if v, ok := secrets[primary]; ok {
-			if len(v) < minPrimaryLength {
+			f, _ := pt.field(primary)
+			h, long := keyHint(v)
+			if !long && f.Required {
 				return nil, invalid("%s is too short to be a real key", primary)
 			}
-			hint = v[len(v)-4:]
+			hint = h
 		}
 	}
 
@@ -472,10 +559,18 @@ func (s *Service) PutProviderKey(ctx context.Context, p security.Principal, name
 		ID: id, OrgID: p.OrgID, Name: name, Type: typ, Fields: fields, Models: models, KeyHint: hint,
 		Projects: reach, CreatedBy: p.UserID, UpdatedBy: p.UserID,
 	}
-	if err := s.store.SaveProviderKey(ctx, k); err != nil {
-		if old == nil {
+	if old == nil {
+		// Insert only: an upsert would let a key created meanwhile under the
+		// same name take this one's type and hint while Vault keeps the
+		// other's values.
+		if err := s.store.CreateProviderKey(ctx, k); err != nil {
 			_ = s.keys.Delete(ctx, p.OrgID, id) //nolint:errcheck // best effort: nothing points at it
+			if errors.Is(err, ErrStale) {
+				return nil, fmt.Errorf("%w: someone else just added a provider key called %q. Reload and edit that one", ErrStale, name)
+			}
+			return nil, err
 		}
+	} else if err := s.store.SaveProviderKey(ctx, k); err != nil {
 		return nil, err
 	}
 	k.Fields = publicFields(k.Type, k.Fields)

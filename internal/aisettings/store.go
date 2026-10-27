@@ -35,6 +35,11 @@ type Store interface {
 	// An update keeps the stored ID, CreatedBy and CreatedAt and bumps
 	// Revision. On success k holds the stored row.
 	SaveProviderKey(ctx context.Context, k *ProviderKey) error
+	// CreateProviderKey inserts k, and only inserts: when the workspace
+	// already has a key with k's name it changes nothing and returns
+	// ErrStale. An empty k.ID gets a new one. On success k holds the stored
+	// row.
+	CreateProviderKey(ctx context.Context, k *ProviderKey) error
 	// DeleteProviderKey deletes one key by name, or returns ErrNotFound.
 	DeleteProviderKey(ctx context.Context, orgID, name string) error
 
