@@ -52,7 +52,9 @@ import (
 //	                                 credentials that can create serviceaccounts, roles and
 //	                                 rolebindings and use services/proxy in the namespace
 //	                                 (LOOMPLANE_ACCEPTANCE_KUBE_CONTEXT and _KUBE_NAMESPACE pick
-//	                                 them; the kubeconfig's own otherwise)
+//	                                 them; the kubeconfig's own otherwise), and
+//	                                 LOOMPLANE_ACCEPTANCE_KUBE_ARCHITECTURE, amd64 or arm64, the
+//	                                 nodes' architecture, which a catalog workload is pinned to
 //	LOOMPLANE_ACCEPTANCE_FARP_IMAGE  the FARP sample service: an image pinned by digest that
 //	                                 serves an OpenAPI 3 document at /openapi.json listing at
 //	                                 least one GET path without parameters, answers that path
@@ -133,10 +135,15 @@ func octoClusterTarget(image string) octoTarget {
 	if image == "" {
 		target.missing = append(target.missing, "LOOMPLANE_ACCEPTANCE_FARP_IMAGE")
 	}
-	for setting, name := range map[string]string{"context": "KUBE_CONTEXT", "namespace": "KUBE_NAMESPACE", "ingress_class": "INGRESS_CLASS", "ingress_address": "INGRESS_ADDRESS"} {
+	for setting, name := range map[string]string{"context": "KUBE_CONTEXT", "namespace": "KUBE_NAMESPACE", "architecture": "KUBE_ARCHITECTURE", "ingress_class": "INGRESS_CLASS", "ingress_address": "INGRESS_ADDRESS"} {
 		if v := acceptanceEnv(name); v != "" {
 			target.settings[setting] = v
 		}
+	}
+	// A catalog workload on a cluster is pinned to one architecture, and
+	// the plan refuses one without it.
+	if target.settings["architecture"] == "" {
+		target.missing = append(target.missing, "LOOMPLANE_ACCEPTANCE_KUBE_ARCHITECTURE (amd64 or arm64)")
 	}
 	return target
 }
@@ -818,8 +825,34 @@ func (x *octoRun) cleanup() {
 	}
 	ns, list := cfg.Namespace, metav1.ListOptions{LabelSelector: selector}
 	kube := cluster.Kube
-	if left, listErr := kube.AppsV1().Deployments(ns).List(ctx, list); listErr == nil && len(left.Items) > 0 {
-		t.Errorf("%d deployments are left after the teardown; removing them", len(left.Items))
+	// The product deletes a Deployment in the foreground, so one whose
+	// pods are still shutting down stays listed, already being deleted,
+	// for as long as their grace period. Only one that isn't going, or
+	// hasn't gone within a minute, is left behind.
+	waited := time.Now()
+	for deadline := waited.Add(time.Minute); ; {
+		left, listErr := kube.AppsV1().Deployments(ns).List(ctx, list)
+		if listErr != nil {
+			t.Errorf("cleanup: list deployments: %v", listErr)
+			break
+		}
+		going := 0
+		for _, d := range left.Items {
+			if d.DeletionTimestamp != nil {
+				going++
+			}
+		}
+		if len(left.Items) == 0 {
+			if time.Since(waited) > time.Second {
+				t.Logf("the teardown's deployments finished deleting %s after it", time.Since(waited).Round(time.Second))
+			}
+			break
+		}
+		if going < len(left.Items) || time.Now().After(deadline) {
+			t.Errorf("%d deployments are left after the teardown (%d of them being deleted); removing them", len(left.Items), going)
+			break
+		}
+		time.Sleep(2 * time.Second)
 	}
 	for name, remove := range map[string]func() error{
 		"deployments": func() error { return kube.AppsV1().Deployments(ns).DeleteCollection(ctx, metav1.DeleteOptions{}, list) },
