@@ -295,15 +295,13 @@ function CloudPage({
   const creator = projectList.find((p) => p.id === cloud.projectId)
   const environments = usage.data?.environments.filter((e) => e.assigned).length
   const state = headState(syncs.list)
-  const owner = !cloud.projectId
-    ? "Organization"
-    : (creator?.name ?? "A project")
+  const owner = !cloud.projectId ? "Workspace" : (creator?.name ?? "A project")
 
   const summary = project
     ? [
         cloud.projectId === project
           ? `${viewing?.name ?? "This project"}'s Cloud`
-          : `Shared with ${viewing?.name ?? "this project"} by your organization`,
+          : `Shared with ${viewing?.name ?? "this project"} by your workspace`,
         targets.data &&
           plural(
             targets.list.length,
@@ -312,7 +310,7 @@ function CloudPage({
           ),
       ]
     : [
-        cloud.projectId ? `Created in ${owner}` : "Organization Cloud",
+        cloud.projectId ? `Created in ${owner}` : "Workspace Cloud",
         targets.data && plural(targets.list.length, "target"),
         grants && plural(grants.length, "project"),
         environments !== undefined && plural(environments, "environment"),

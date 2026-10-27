@@ -126,7 +126,7 @@ export function DeploymentPage({ id }: { id: string }) {
               <EmptyHeader>
                 <EmptyTitle>No deployment here by that ID</EmptyTitle>
                 <EmptyDescription>
-                  It may belong to another organization, or the link is wrong.
+                  It may belong to another workspace, or the link is wrong.
                 </EmptyDescription>
               </EmptyHeader>
               <EmptyContent>

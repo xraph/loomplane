@@ -182,3 +182,106 @@ it("gates automatic initial activation and removes cached children on session fa
   expect(await screen.findByText("error")).toBeInTheDocument()
   expect(screen.queryByText("Active child")).not.toBeInTheDocument()
 })
+
+it("follows the workspace an address names and reports one the person isn't in", async () => {
+  let org = "A"
+  const switched: string[] = []
+  vi.stubGlobal(
+    "fetch",
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = new URL(String(input), "http://localhost").pathname
+      if (path.endsWith("/session"))
+        return Response.json({ user_id: "user", org_id: org, permissions: [] })
+      if (path.endsWith("/orgs"))
+        return Response.json({
+          organizations: [
+            { id: "A", name: "Acme", slug: "acme" },
+            { id: "B", name: "Bolt", slug: "bolt" },
+          ],
+        })
+      if (path.endsWith("/switch-org")) {
+        org = JSON.parse(String(init?.body)).org_id
+        switched.push(org)
+        return Response.json({})
+      }
+      throw new Error(path)
+    }
+  )
+  function Child() {
+    const { slug, missing } = useOrganization()
+    return (
+      <p>
+        {slug}:{missing ?? "none"}
+      </p>
+    )
+  }
+  const gate = (workspace: string | null) => (
+    <ClientProvider client={forgeClient}>
+      <OrganizationGate workspace={workspace} fallback={() => <p>Gated</p>}>
+        <Child />
+      </OrganizationGate>
+    </ClientProvider>
+  )
+  const { rerender } = render(gate("acme"))
+  await screen.findByText("acme:none")
+  rerender(gate("bolt"))
+  await screen.findByText("bolt:none")
+  expect(switched).toEqual(["B"])
+  rerender(gate("nobody"))
+  await screen.findByText("bolt:nobody")
+  rerender(gate(null))
+  await screen.findByText("bolt:none")
+  expect(switched).toEqual(["B"])
+})
+
+it("points links into the new workspace before a switch the person asked for renders", async () => {
+  let org = "A"
+  vi.stubGlobal(
+    "fetch",
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = new URL(String(input), "http://localhost").pathname
+      if (path.endsWith("/session"))
+        return Response.json({ user_id: "user", org_id: org, permissions: [] })
+      if (path.endsWith("/orgs"))
+        return Response.json({
+          organizations: [
+            { id: "A", name: "Acme", slug: "acme" },
+            { id: "B", name: "Bolt", slug: "bolt" },
+          ],
+        })
+      if (path.endsWith("/switch-org")) {
+        org = JSON.parse(String(init?.body)).org_id
+        return Response.json({})
+      }
+      throw new Error(path)
+    }
+  )
+  let workspace = "acme"
+  const onSwitch = vi.fn(() => {
+    // App navigates home here; the address follows the new workspace.
+    workspace = "bolt"
+    rerender(gate())
+  })
+  function Child() {
+    const { slug, switchOrganization } = useOrganization()
+    return <button onClick={() => void switchOrganization("B")}>{slug}</button>
+  }
+  const gate = () => (
+    <ClientProvider client={forgeClient}>
+      <OrganizationGate
+        workspace={workspace}
+        onSwitch={onSwitch}
+        fallback={() => <p>Gated</p>}
+      >
+        <Child />
+      </OrganizationGate>
+    </ClientProvider>
+  )
+  const { rerender } = render(gate())
+  await userEvent
+    .setup()
+    .click(await screen.findByRole("button", { name: "acme" }))
+  await screen.findByRole("button", { name: "bolt" })
+  expect(onSwitch).toHaveBeenCalledOnce()
+  expect(org).toBe("B")
+})

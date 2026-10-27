@@ -275,7 +275,7 @@ const pages: Page[] = [
     to: "/variables",
     label: "Variables",
     icon: <VariablesIcon />,
-    search: "variables secrets organization",
+    search: "variables secrets workspace",
     keys: "G V",
   },
   {

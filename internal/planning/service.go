@@ -529,6 +529,10 @@ type revisionInput struct {
 	Manifest      string        `json:"manifest"`
 	Deployed      []deployedRef `json:"deployed"`
 	Result        *Result       `json:"result"`
+	// Exclusions are the project's exclusions that matched a service, so
+	// excluding or including one makes a plan stale. Omitted when empty,
+	// so plans from before exclusions keep their revision.
+	Exclusions []string `json:"exclusions,omitempty"`
 }
 
 type deployedRef struct {
@@ -544,6 +548,38 @@ type deployedRef struct {
 
 // compute plans a plan from its pinned commits and manifest, against what's
 // deployed now, and returns the result with its revision.
+// excluded reads the project's exclusions and returns the graph services
+// they exclude, by ID, each true when it's kept running, and the
+// exclusions that matched, as "kind:match[:keep]" for the revision.
+func (s *Service) excluded(ctx context.Context, plan *Plan, g *graph.Graph) (keep map[string]bool, used []string, err error) {
+	if s.projects == nil || plan.ProjectID == "" {
+		return nil, nil, nil
+	}
+	proj, err := s.projects.GetProject(ctx, plan.OrgID, plan.ProjectID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("load the project's exclusions: %w", err)
+	}
+	if len(proj.Exclusions) == 0 {
+		return nil, nil, nil
+	}
+	_, matched := graph.Exclude(g, proj.ExclusionRules())
+	keep = map[string]bool{}
+	for _, x := range matched {
+		i := slices.IndexFunc(proj.Exclusions, func(e projects.Exclusion) bool { return e.Kind == x.Rule.Kind && e.Match == x.Rule.Match })
+		kept := i >= 0 && proj.Exclusions[i].KeepRunning
+		keep[x.Service.ID] = kept
+		ref := x.Rule.Kind + ":" + x.Rule.Match
+		if kept {
+			ref += ":keep"
+		}
+		if !slices.Contains(used, ref) {
+			used = append(used, ref)
+		}
+	}
+	slices.Sort(used)
+	return keep, used, nil
+}
+
 func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, error) {
 	// An older plan the backfill couldn't pin would plan from an empty
 	// graph, so it fails instead of proposing to tear down what's deployed.
@@ -566,6 +602,10 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 		}
 	}
 	g := graph.Compose(parts)
+	excluded, exclusions, err := s.excluded(ctx, plan, g)
+	if err != nil {
+		return nil, "", err
+	}
 	rev, err := s.manifests.Get(ctx, plan.OrgID, plan.ManifestID)
 	if err != nil {
 		return nil, "", fmt.Errorf("load the manifest: %w", err)
@@ -665,7 +705,7 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 			Catalog: plan.Catalog, Routes: routes, Zones: zones, DatabaseGatewayTrust: trust,
 			Federation: federation, CloudPlacements: placed, UnverifiedPlacements: unverifiedPlacements(resolved, plan.Environment, composed, assignment, options), CapacityIntents: intents,
 			Environment: plan.Environment, Graph: g, Manifest: resolved, Providers: s.providers, Bindings: bindings,
-			Connections: options, Chosen: chosen, Held: held,
+			Connections: options, Chosen: chosen, Held: held, Excluded: excluded,
 			Kinds: s.kinds, Endpoints: s.checkEndpoints(ctx, plan.OrgID, plan.Environment, resolved),
 			FabriqPostgres: fabriqPostgres,
 		})
@@ -685,6 +725,7 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 	in := revisionInput{
 		EnvironmentID: plan.EnvironmentID, Environment: plan.Environment, Sources: plan.Sources,
 		Manifest: rev.Digest, Deployed: make([]deployedRef, 0, len(bindings)), Result: result,
+		Exclusions: exclusions,
 	}
 	for _, b := range bindings {
 		in.Deployed = append(in.Deployed, deployedRef{
@@ -1006,7 +1047,8 @@ func (s *Service) DraftManifest(ctx context.Context, p security.Principal, proje
 	if err := s.authz.Require(ctx, p, security.ProjectRead, projectID); err != nil {
 		return nil, err
 	}
-	if _, err := s.projects.GetProject(ctx, p.OrgID, projectID); err != nil {
+	proj, err := s.projects.GetProject(ctx, p.OrgID, projectID)
+	if err != nil {
 		return nil, err
 	}
 	g, states, err := discovery.ProjectGraph(ctx, s.analyses, p.OrgID, projectID)
@@ -1016,6 +1058,8 @@ func (s *Service) DraftManifest(ctx context.Context, p security.Principal, proje
 	if !slices.ContainsFunc(states, func(st discovery.SourceState) bool { return st.Shown != nil }) {
 		return nil, ErrNoAnalysis
 	}
+	// An excluded service is never proposed.
+	g, _ = graph.Exclude(g, proj.ExclusionRules())
 	m := Draft(g, s.providers)
 	data, err := manifest.Marshal(m)
 	if err != nil {

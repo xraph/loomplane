@@ -239,13 +239,13 @@ function Domains({
             <ZeroStateTitle>No domains yet</ZeroStateTitle>
             {noZones ? (
               <ZeroStateDescription>
-                Your organization has no zones this project can use. Add one on
-                the <Link to="/domains">Domains page</Link>.
+                Your workspace has no zones this project can use. Add one on the{" "}
+                <Link to="/domains">Domains page</Link>.
               </ZeroStateDescription>
             ) : (
               <ZeroStateDescription>
                 Octopus answers on the target&apos;s private network until you
-                attach one. Pick a hostname from your organization&apos;s zones.
+                attach one. Pick a hostname from your workspace&apos;s zones.
               </ZeroStateDescription>
             )}
           </ZeroStateHeader>

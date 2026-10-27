@@ -103,7 +103,7 @@ export function Projects() {
               <EmptyDescription>
                 {mayCreate
                   ? "Create a project from a repository. It gets production and preview environments right away."
-                  : "Ask an organization admin to make you a developer so you can create one."}
+                  : "Ask a workspace admin to make you a developer so you can create one."}
               </EmptyDescription>
             </EmptyHeader>
             {mayCreate && (

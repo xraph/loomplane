@@ -39,7 +39,7 @@ export interface Target {
 }
 
 const scopeLabels: Record<string, string> = {
-  organization: "Organization",
+  organization: "Workspace",
   project: "Project",
   service: "Service",
 }
