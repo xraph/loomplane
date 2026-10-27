@@ -364,7 +364,7 @@ func TestAcceptRouteLeavesASubdomainsNamesToIt(t *testing.T) {
 	zone("org", "zone_app", "app.example.com", `"docs"`)
 	zone("rival", "zone_www", "www.example.com", `"rival"`)
 	for _, host := range []string{"app.example.com", "x.app.example.com", "*.app.example.com"} {
-		if _, acceptErr := accept("route_"+strings.ReplaceAll(host, "*", "w"), host); !errors.Is(acceptErr, ErrInvalid) || !strings.Contains(acceptErr.Error(), host+" belongs to app.example.com. Add it there") {
+		if _, acceptErr := accept("route_"+strings.ReplaceAll(host, "*", "w"), host); !errors.Is(acceptErr, ErrInvalid) || !strings.Contains(acceptErr.Error(), host+" belongs to app.example.com. Pick that domain") {
 			t.Fatalf("%s accepted on example.com: %v", host, acceptErr)
 		}
 	}

@@ -182,7 +182,7 @@ func deeperZone(zone *Zone, hostname string, zones []*Zone) *Zone {
 
 // errBelongsTo refuses a new route on a zone for a name a subdomain holds.
 func errBelongsTo(hostname, subdomain string) error {
-	return fmt.Errorf("%w: %s belongs to %s. Add it there", ErrInvalid, hostname, subdomain)
+	return fmt.Errorf("%w: %s belongs to %s. Pick that domain for it, or ask an admin to grant it to this project", ErrInvalid, hostname, subdomain)
 }
 
 // checkDeepestZone refuses hostname on zone when a subdomain holds it.
