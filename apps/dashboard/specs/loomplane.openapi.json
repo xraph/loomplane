@@ -565,6 +565,13 @@
             "schema": {
               "type": "integer"
             }
+          },
+          {
+            "name": "cloud",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -4418,6 +4425,13 @@
             "in": "query",
             "schema": {
               "type": "integer"
+            }
+          },
+          {
+            "name": "cloud",
+            "in": "query",
+            "schema": {
+              "type": "string"
             }
           }
         ],
@@ -9844,6 +9858,79 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/Connection"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clouds/{cloudId}/usage": {
+      "get": {
+        "tags": [
+          "Clouds"
+        ],
+        "summary": "organizationClouds.usage",
+        "operationId": "organizationClouds.usage",
+        "parameters": [
+          {
+            "name": "cloudId",
+            "in": "path",
+            "description": "Path parameter: cloudId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Usage"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{id}/clouds/{cloudId}/usage": {
+      "get": {
+        "tags": [
+          "Clouds"
+        ],
+        "summary": "clouds.usage",
+        "operationId": "clouds.usage",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cloudId",
+            "in": "path",
+            "description": "Path parameter: cloudId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Usage"
                 }
               }
             }
@@ -21920,6 +22007,78 @@
                   "type": "string"
                 }
               }
+            }
+          }
+        }
+      },
+      "EnvironmentUsage": {
+        "type": "object",
+        "required": [
+          "project_id",
+          "project_name",
+          "environment_id",
+          "environment_name",
+          "assigned",
+          "placements"
+        ],
+        "properties": {
+          "assigned": {
+            "type": "boolean"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "environment_name": {
+            "type": "string"
+          },
+          "placements": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlacementUsage"
+            }
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "project_name": {
+            "type": "string"
+          }
+        }
+      },
+      "PlacementUsage": {
+        "type": "object",
+        "required": [
+          "services"
+        ],
+        "properties": {
+          "default": {
+            "type": "boolean"
+          },
+          "services": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "target_id": {
+            "type": "string"
+          }
+        }
+      },
+      "Usage": {
+        "type": "object",
+        "required": [
+          "cloud_id",
+          "environments"
+        ],
+        "properties": {
+          "cloud_id": {
+            "type": "string"
+          },
+          "environments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EnvironmentUsage"
             }
           }
         }

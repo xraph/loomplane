@@ -1113,6 +1113,15 @@ export interface EnvironmentList {
   environments: Environment[];
 }
 
+export interface EnvironmentUsage {
+  assigned: boolean;
+  environmentId: string;
+  environmentName: string;
+  placements: PlacementUsage[];
+  projectId: string;
+  projectName: string;
+}
+
 export interface Evidence {
   detail: string;
   line?: number;
@@ -1969,6 +1978,12 @@ export interface Placement {
   poolRevision: number;
   serverId: string;
   serverRevision: number;
+}
+
+export interface PlacementUsage {
+  default?: boolean;
+  services: string[];
+  targetId?: string;
 }
 
 export interface Plan {
@@ -3354,6 +3369,11 @@ export interface UpdateTargetInputBody {
 export interface UpdateVariableInputBody {
   secret?: boolean;
   value: string;
+}
+
+export interface Usage {
+  cloudId: string;
+  environments: EnvironmentUsage[];
 }
 
 export interface UsageSource {

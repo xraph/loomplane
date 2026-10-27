@@ -61,6 +61,14 @@ type CompleteCloudRoutingInput struct {
 	Evidence      string `json:"evidence"`
 }
 
+// CloudSyncQuery pages sync history, optionally for one Cloud.
+type CloudSyncQuery struct {
+	PageQuery
+	// Cloud keeps the operations that changed this Cloud: its targets, its
+	// default, or an environment choosing it or leaving it.
+	Cloud string `query:"cloud,omitempty"`
+}
+
 type cloudRoute struct {
 	method, path, name string
 	handler            forge.Handler
@@ -89,6 +97,7 @@ func (e *Extension) cloudRoutes(r forge.Router, guard identity.Guard) error {
 		{http.MethodPost, "/clouds/:cloudId/targets", "organizationCloudTargets.create", e.createCloudTarget, cloudprofiles.CreateTargetInput{}, cloudprofiles.Target{}, http.StatusCreated},
 		{http.MethodPut, "/clouds/:cloudId/targets/:targetId", "organizationCloudTargets.update", e.updateCloudTarget, cloudprofiles.UpdateTargetInput{}, cloudprofiles.Target{}, http.StatusOK},
 		{http.MethodDelete, "/clouds/:cloudId/targets/:targetId", "organizationCloudTargets.delete", e.deleteCloudTarget, nil, nil, http.StatusNoContent},
+		{http.MethodGet, "/clouds/:cloudId/usage", "organizationClouds.usage", e.cloudUsage, nil, cloudprofiles.Usage{}, http.StatusOK},
 		{http.MethodGet, "/clouds/:cloudId/projects", "organizationClouds.listGrants", e.listCloudProjectGrants, nil, CloudProjectGrantList{}, http.StatusOK},
 		{http.MethodPut, "/clouds/:cloudId/projects/:projectId", "organizationClouds.grantProject", e.grantCloudProject, CloudProjectGrantInput{}, cloudprofiles.ProjectGrant{}, http.StatusOK},
 		{http.MethodDelete, "/clouds/:cloudId/projects/:projectId", "organizationClouds.revokeProject", e.revokeCloudProject, nil, cloudprofiles.ProjectGrant{}, http.StatusOK},
@@ -108,6 +117,7 @@ func (e *Extension) cloudRoutes(r forge.Router, guard identity.Guard) error {
 		{http.MethodGet, cloud, "clouds.get", e.getCloud, nil, cloudprofiles.Profile{}, http.StatusOK},
 		{http.MethodPut, cloud, "clouds.update", e.updateCloud, cloudprofiles.UpdateInput{}, cloudprofiles.Profile{}, http.StatusOK},
 		{http.MethodDelete, cloud, "clouds.delete", e.deleteCloud, nil, nil, http.StatusNoContent},
+		{http.MethodGet, cloud + "/usage", "clouds.usage", e.cloudUsage, nil, cloudprofiles.Usage{}, http.StatusOK},
 		{http.MethodPut, cloud + "/default-placement", "clouds.setDefaultPlacement", e.setCloudDefaultPlacement, cloudprofiles.SetDefaultPlacementInput{}, cloudprofiles.Profile{}, http.StatusOK},
 		{http.MethodGet, targets, "cloudTargets.list", e.listCloudTargets, nil, CloudTargetList{}, http.StatusOK},
 		{http.MethodGet, target, "cloudTargets.get", e.getCloudTarget, nil, cloudprofiles.Target{}, http.StatusOK},
@@ -135,7 +145,7 @@ func (e *Extension) cloudRoutes(r forge.Router, guard identity.Guard) error {
 			opts = append(opts, forge.WithResponseSchema(rt.status, "Result", rt.response))
 		}
 		if rt.name == "cloudSyncs.list" || rt.name == "organizationCloudSyncs.list" {
-			opts = append(opts, forge.WithQuerySchema(PageQuery{}))
+			opts = append(opts, forge.WithQuerySchema(CloudSyncQuery{}))
 		}
 		var err error
 		switch rt.method {
@@ -293,8 +303,13 @@ func (e *Extension) listCloudSyncs(c forge.Context) error {
 		return err
 	}
 	return cloudCall(c, http.StatusOK, func(ctx context.Context, p security.Principal) (any, error) {
-		v, next, err := e.plans.CloudSyncPage(ctx, p, c.Param("id"), before, limit)
+		v, next, err := e.plans.CloudSyncPage(ctx, p, c.Param("id"), c.Request().URL.Query().Get("cloud"), before, limit)
 		return CloudSyncList{Syncs: v, Next: next.String()}, err
+	})
+}
+func (e *Extension) cloudUsage(c forge.Context) error {
+	return cloudCall(c, http.StatusOK, func(ctx context.Context, p security.Principal) (any, error) {
+		return e.cloudProfiles.Usage(ctx, p, c.Param("id"), c.Param("cloudId"))
 	})
 }
 func (e *Extension) getCloudSync(c forge.Context) error {
