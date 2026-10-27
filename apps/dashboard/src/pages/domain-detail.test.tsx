@@ -23,6 +23,7 @@ import {
 import { DomainDetailPage } from "./domain-detail"
 
 const access = vi.hoisted(() => ({ allowed: true }))
+const navigate = vi.hoisted(() => vi.fn())
 vi.mock("@/lib/organization", () => ({
   useOrganization: () => ({
     session: { orgId: "org" },
@@ -40,7 +41,7 @@ vi.mock("@/components/site-header", () => ({
 }))
 vi.mock("@/lib/router", () => ({
   usePath: () => "/domains",
-  useNavigate: () => () => {},
+  useNavigate: () => navigate,
   Link: ({
     children,
     to,
@@ -62,6 +63,7 @@ afterEach(() => {
   vi.unstubAllGlobals()
   forgeClient.clear()
   access.allowed = true
+  navigate.mockReset()
 })
 
 function open(zoneId: string) {
@@ -643,4 +645,425 @@ it("keeps loading, denied, not found and failed apart", async () => {
     screen.queryByText("This domain isn't in your organization")
   ).toBeNull()
   expect(screen.queryByText("Domain access is restricted")).toBeNull()
+})
+
+// Connected accounts a subdomain can be hosted on, and two it can't.
+const accounts = {
+  connections: [
+    {
+      id: "cf",
+      cloud: "cloudflare",
+      name: "Acme Cloudflare",
+      account: "acct",
+      status: "ready",
+      details: {},
+      missing: [],
+    },
+    {
+      id: "vc",
+      cloud: "vercel",
+      name: "Acme Vercel",
+      account: "acme-team",
+      status: "ready",
+      details: {},
+      missing: [],
+    },
+    {
+      id: "do",
+      cloud: "digitalocean",
+      name: "Pending DigitalOcean",
+      account: "",
+      status: "pending",
+      details: {},
+      missing: [],
+    },
+    {
+      id: "gh",
+      cloud: "github",
+      name: "Acme GitHub",
+      account: "acme",
+      status: "ready",
+      details: {},
+      missing: [],
+    },
+  ],
+}
+
+async function addSubdomain(label: string) {
+  const actions = await screen.findByRole("group", { name: "Domain actions" })
+  await userEvent.click(
+    within(actions).getByRole("button", { name: "Add subdomain" })
+  )
+  const dialog = await screen.findByRole("dialog")
+  await userEvent.type(
+    within(dialog).getByRole("textbox", { name: "Subdomain" }),
+    label
+  )
+  return dialog
+}
+
+it("adds a subdomain with the domain's hosting", async () => {
+  const writes = stubFetch({
+    [detailPath("loomplane.com")]: detailWith(zoneWith("loomplane.com")),
+    "POST /api/v1/dns-zones": () =>
+      Response.json(
+        zoneWith("api.eu.loomplane.com", [], { parent: "loomplane.com" }).zone
+      ),
+  })
+  open("zone-loomplane.com")
+  const dialog = await addSubdomain("api.eu")
+  // The full name follows what you type.
+  expect(within(dialog).getByText("api.eu.loomplane.com")).toBeTruthy()
+  // Off by default: the domain's own hosting.
+  expect(
+    within(dialog)
+      .getByRole("switch", { name: "Hosted elsewhere" })
+      .getAttribute("aria-checked")
+  ).toBe("false")
+  await userEvent.click(
+    within(dialog).getByRole("button", { name: "Add subdomain" })
+  )
+  await waitFor(() =>
+    expect(navigate).toHaveBeenCalledWith({
+      to: "/domains/$zoneId",
+      params: { zoneId: "zone-api.eu.loomplane.com" },
+    })
+  )
+  expect(writes).toEqual([
+    {
+      method: "POST",
+      path: "/api/v1/dns-zones",
+      body: {
+        name: "api.eu.loomplane.com",
+        mode: "managed",
+        connection_id: "cf",
+        project_ids: [],
+      },
+    },
+  ])
+})
+
+it("adds a subdomain hosted on another connection", async () => {
+  let tries = 0
+  const writes = stubFetch({
+    [detailPath("loomplane.com")]: detailWith(
+      zoneWith("loomplane.com", [], { external: true })
+    ),
+    "/api/v1/connections": accounts,
+    "POST /api/v1/dns-zones": () =>
+      ++tries === 1
+        ? Response.json({ message: "zone not found" }, { status: 404 })
+        : Response.json(
+            zoneWith("app.loomplane.com", [], {
+              parent: "loomplane.com",
+              provider: "vercel",
+              connection: "vc",
+            }).zone
+          ),
+  })
+  open("zone-loomplane.com")
+  const dialog = await addSubdomain("app")
+  await userEvent.click(
+    within(dialog).getByRole("switch", { name: "Hosted elsewhere" })
+  )
+  const picks = within(dialog).getByRole("radiogroup", {
+    name: "Connected account",
+  })
+  // Ready Cloudflare, DigitalOcean and Vercel accounts only.
+  expect(within(picks).getAllByRole("radio")).toHaveLength(2)
+  expect(
+    within(picks).getByRole("radio", { name: /Acme Cloudflare/ })
+  ).toBeTruthy()
+  expect(within(picks).queryByRole("radio", { name: /Pending/ })).toBeNull()
+  expect(within(picks).queryByRole("radio", { name: /GitHub/ })).toBeNull()
+  const add = within(dialog).getByRole("button", { name: "Add subdomain" })
+  // Nothing is picked yet.
+  expect(add).toHaveProperty("disabled", true)
+  await userEvent.click(
+    within(picks).getByRole("radio", { name: /Acme Vercel/ })
+  )
+  await userEvent.click(add)
+  expect(
+    await within(dialog).findByText(
+      "app.loomplane.com isn't a zone in that Vercel account."
+    )
+  ).toBeTruthy()
+  expect(navigate).not.toHaveBeenCalled()
+  await userEvent.click(add)
+  await waitFor(() =>
+    expect(navigate).toHaveBeenCalledWith({
+      to: "/domains/$zoneId",
+      params: { zoneId: "zone-app.loomplane.com" },
+    })
+  )
+  const sent = {
+    method: "POST",
+    path: "/api/v1/dns-zones",
+    body: {
+      name: "app.loomplane.com",
+      mode: "managed",
+      connection_id: "vc",
+      project_ids: [],
+    },
+  }
+  expect(writes).toEqual([sent, sent])
+})
+
+it("refuses an invalid subdomain label before sending", async () => {
+  const writes = stubFetch({
+    [detailPath("loomplane.com")]: detailWith(
+      zoneWith("loomplane.com", [], { external: true })
+    ),
+  })
+  open("zone-loomplane.com")
+  const dialog = await addSubdomain("*.app")
+  await userEvent.click(
+    within(dialog).getByRole("button", { name: "Add subdomain" })
+  )
+  expect(within(dialog).getByRole("alert").textContent).toMatch(
+    /Enter a label like app or api\.eu/
+  )
+  expect(writes).toEqual([])
+})
+
+async function confirmRemoval(name: string) {
+  const dialog = await screen.findByRole("alertdialog")
+  const confirm = within(dialog).getByRole("button", { name: /^Remove/ })
+  const field = within(dialog).getByRole("textbox", {
+    name: `Type ${name} to confirm`,
+  })
+  return { dialog, confirm, field }
+}
+
+it("removes a domain once its name is typed", async () => {
+  let revision = 2
+  let reads = 0
+  const writes = stubFetch({
+    [detailPath("loomplane.com")]: () => {
+      reads++
+      const z = zoneWith("loomplane.com")
+      z.zone.revision = revision
+      return Response.json(detailWith(z))
+    },
+    "POST /api/v1/dns-zones/zone-loomplane.com/remove": (body: unknown) => {
+      if ((body as { revision: number }).revision === 2) {
+        // Someone changed it since the page read it.
+        revision = 3
+        return Response.json(
+          { message: "the zone changed, reload it" },
+          { status: 409 }
+        )
+      }
+      return new Response(null, { status: 204 })
+    },
+  })
+  open("zone-loomplane.com")
+  const danger = await section("Remove domain")
+  await userEvent.click(
+    within(danger).getByRole("button", { name: "Remove domain" })
+  )
+  const { dialog, confirm, field } = await confirmRemoval("loomplane.com")
+  expect(confirm).toHaveProperty("disabled", true)
+  await userEvent.type(field, "loomplane.co")
+  expect(confirm).toHaveProperty("disabled", true)
+  await userEvent.type(field, "m")
+  expect(confirm).toHaveProperty("disabled", false)
+  await userEvent.click(confirm)
+  expect(
+    await within(dialog).findByText("The zone changed, reload it.")
+  ).toBeTruthy()
+  expect(navigate).not.toHaveBeenCalled()
+  // The page reads the zone again, so the next try has its revision.
+  await waitFor(() => expect(reads).toBe(2))
+  await userEvent.click(confirm)
+  await waitFor(() =>
+    expect(navigate).toHaveBeenCalledWith({ to: "/domains", replace: true })
+  )
+  expect(writes.map((w) => w.body)).toEqual([{ revision: 2 }, { revision: 3 }])
+  expect(
+    writes.every((w) => w.path.endsWith("/zone-loomplane.com/remove"))
+  ).toBe(true)
+})
+
+it("lists the hostnames that block removal", async () => {
+  const api = zoneWith("api.loomplane.com", [host("v1.api.loomplane.com")], {
+    parent: "loomplane.com",
+  })
+  stubFetch({
+    [detailPath("loomplane.com")]: detailWith(
+      zoneWith("loomplane.com", [host("www.loomplane.com")], {
+        subdomains: ["api.loomplane.com"],
+      }),
+      { subdomains: [api] }
+    ),
+  })
+  const view = open("zone-loomplane.com")
+  const danger = await section("Remove domain")
+  await userEvent.click(
+    within(danger).getByRole("button", { name: "Remove domain" })
+  )
+  const { dialog, confirm, field } = await confirmRemoval("loomplane.com")
+  expect(within(dialog).getByText("Remove these hostnames first.")).toBeTruthy()
+  for (const h of ["www.loomplane.com", "v1.api.loomplane.com"])
+    expect(
+      within(dialog).getByRole("link", { name: h }).getAttribute("href")
+    ).toBe("/projects/shop")
+  await userEvent.type(field, "loomplane.com")
+  expect(confirm).toHaveProperty("disabled", true)
+  view.unmount()
+  forgeClient.clear()
+
+  // One the page didn't know about yet: the API refuses with it.
+  const writes = stubFetch({
+    [detailPath("loomplane.com")]: detailWith(zoneWith("loomplane.com")),
+    "POST /api/v1/dns-zones/zone-loomplane.com/remove": () =>
+      Response.json(
+        {
+          code: "zone_in_use",
+          message: "Hostnames still use loomplane.com.",
+          details: {
+            hostnames: [
+              {
+                route_id: "r9",
+                hostname: "new.loomplane.com",
+                zone_id: "zone-loomplane.com",
+                zone_name: "loomplane.com",
+                project_id: "blog",
+                project_name: "acme-blog",
+              },
+            ],
+          },
+        },
+        { status: 409 }
+      ),
+  })
+  open("zone-loomplane.com")
+  await userEvent.click(
+    within(await section("Remove domain")).getByRole("button", {
+      name: "Remove domain",
+    })
+  )
+  const again = await confirmRemoval("loomplane.com")
+  await userEvent.type(again.field, "loomplane.com")
+  await userEvent.click(again.confirm)
+  expect(
+    (
+      await within(again.dialog).findByRole("link", {
+        name: "new.loomplane.com",
+      })
+    ).getAttribute("href")
+  ).toBe("/projects/blog")
+  expect(
+    within(again.dialog).getByText("Remove these hostnames first.")
+  ).toBeTruthy()
+  expect(again.confirm).toHaveProperty("disabled", true)
+  expect(writes).toHaveLength(1)
+  expect(navigate).not.toHaveBeenCalled()
+})
+
+it("lists the subdomains that go with the domain", async () => {
+  const api = zoneWith("api.loomplane.com", [], { parent: "loomplane.com" })
+  const eu = zoneWith("eu.loomplane.com", [], { parent: "loomplane.com" })
+  stubFetch({
+    [detailPath("loomplane.com")]: detailWith(
+      zoneWith("loomplane.com", [], {
+        subdomains: ["api.loomplane.com", "eu.loomplane.com"],
+      }),
+      { subdomains: [api, eu] }
+    ),
+  })
+  open("zone-loomplane.com")
+  // The header's menu offers it too.
+  const actions = await screen.findByRole("group", { name: "Domain actions" })
+  await userEvent.click(
+    within(actions).getByRole("button", { name: "More domain actions" })
+  )
+  await userEvent.click(
+    await screen.findByRole("menuitem", { name: "Remove domain" })
+  )
+  const { dialog, confirm, field } = await confirmRemoval("loomplane.com")
+  const goes = within(dialog).getByRole("list", {
+    name: "Subdomains removed with it",
+  })
+  expect(
+    within(goes)
+      .getAllByRole("listitem")
+      .map((li) => li.textContent)
+  ).toEqual(["api.loomplane.com", "eu.loomplane.com"])
+  await userEvent.type(field, "loomplane.com")
+  expect(confirm).toHaveProperty("disabled", false)
+})
+
+it("says a registered domain stays registered at Cloudflare", async () => {
+  stubFetch({
+    [detailPath("acme.shop")]: detailWith(
+      zoneWith("acme.shop", [], { registration: "reg" }),
+      { registration: registration() }
+    ),
+  })
+  open("zone-acme.shop")
+  await userEvent.click(
+    within(await section("Remove domain")).getByRole("button", {
+      name: "Remove domain",
+    })
+  )
+  const { dialog, confirm, field } = await confirmRemoval("acme.shop")
+  expect(
+    within(dialog).getByText(
+      /The registration stays in your Cloudflare account and auto-renew is unchanged\./
+    )
+  ).toBeTruthy()
+  expect(
+    within(dialog)
+      .getByRole("link", { name: "Open in Cloudflare" })
+      .getAttribute("href")
+  ).toBe("https://dash.cloudflare.com/acct/domains/registrations")
+  // It still asks for the name.
+  expect(confirm).toHaveProperty("disabled", true)
+  await userEvent.type(field, "acme.shop")
+  expect(confirm).toHaveProperty("disabled", false)
+})
+
+it("removes a subdomain from its domain's page", async () => {
+  let reads = 0
+  let removed = false
+  const api = zoneWith("api.loomplane.com", [], { parent: "loomplane.com" })
+  const writes = stubFetch({
+    [detailPath("loomplane.com")]: () => {
+      reads++
+      return Response.json(
+        detailWith(
+          zoneWith("loomplane.com", [], {
+            subdomains: removed ? [] : ["api.loomplane.com"],
+          }),
+          { subdomains: removed ? [] : [api] }
+        )
+      )
+    },
+    "POST /api/v1/dns-zones/zone-api.loomplane.com/remove": () => {
+      removed = true
+      return new Response(null, { status: 204 })
+    },
+  })
+  open("zone-loomplane.com")
+  const subdomains = await section("Subdomains")
+  const row = within(subdomains).getByRole("row", {
+    name: /^api\.loomplane\.com/,
+  })
+  await userEvent.click(within(row).getByRole("button", { name: "Remove" }))
+  const { confirm, field } = await confirmRemoval("api.loomplane.com")
+  await userEvent.type(field, "api.loomplane.com")
+  await userEvent.click(confirm)
+  await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull())
+  expect(writes).toEqual([
+    {
+      method: "POST",
+      path: "/api/v1/dns-zones/zone-api.loomplane.com/remove",
+      body: { revision: 2 },
+    },
+  ])
+  // It stays on the domain's page, read again without the subdomain.
+  expect(navigate).not.toHaveBeenCalled()
+  await waitFor(() => expect(reads).toBeGreaterThan(1))
+  expect(await screen.findByText("No subdomains yet.")).toBeTruthy()
 })
