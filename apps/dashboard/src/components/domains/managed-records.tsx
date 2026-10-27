@@ -48,7 +48,7 @@ export function ManagedRecords({
     return (
       // Not in the mock.
       <p className="px-4 py-3 text-[12.5px] text-muted-foreground">
-        {zones[0]?.zone?.mode === "external"
+        {zones.length > 0 && zones.every((z) => z.zone?.mode === "external")
           ? "Loomplane writes no records here. You add each hostname's record where the domain is hosted."
           : "Loomplane hasn't written any records here yet."}
       </p>

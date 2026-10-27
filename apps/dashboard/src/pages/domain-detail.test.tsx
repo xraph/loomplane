@@ -125,7 +125,8 @@ it("shows a domain's status, hosting and hostnames", async () => {
   expect(within(api).getByText("Active")).toBeTruthy()
 
   expect(await section("Access")).toBeTruthy()
-  expect(screen.getByText("Subdomains have their own projects.")).toBeTruthy()
+  // With no subdomains, there's nothing to say about theirs.
+  expect(screen.queryByText("Subdomains have their own projects.")).toBeNull()
   expect(await section("DNS records Loomplane manages")).toBeTruthy()
   // Not registered here, so there's no Registration section.
   expect(screen.queryByRole("region", { name: "Registration" })).toBeNull()
@@ -1564,6 +1565,55 @@ it("says Loomplane writes no records for a domain whose DNS stays elsewhere", as
     )
   ).toBeTruthy()
   expect(within(dns).queryByRole("table")).toBeNull()
+})
+
+it("says whose projects a domain's and a subdomain's grants reach", async () => {
+  const api = zoneWith("api.loomplane.com", [], { parent: "loomplane.com" })
+  const domain = zoneWith("loomplane.com", [], {
+    subdomains: ["api.loomplane.com"],
+  })
+  stubFetch({
+    [detailPath("loomplane.com")]: detailWith(domain, { subdomains: [api] }),
+    [detailPath("api.loomplane.com")]: detailWith(api, { parent: domain }),
+  })
+  const view = open("zone-loomplane.com")
+  let access = await section("Access")
+  expect(
+    within(access).getByText("Subdomains have their own projects.")
+  ).toBeTruthy()
+  view.unmount()
+
+  open("zone-api.loomplane.com")
+  access = await section("Access")
+  expect(
+    within(access).getByText(
+      "Projects granted loomplane.com don't get this subdomain."
+    )
+  ).toBeTruthy()
+  expect(
+    within(access).queryByText("Subdomains have their own projects.")
+  ).toBeNull()
+})
+
+it("says Loomplane writes records when a subdomain's DNS is managed", async () => {
+  // The domain's DNS stays elsewhere, but Loomplane manages its subdomain's.
+  const app = zoneWith("app.docs-example.org", [], {
+    parent: "docs-example.org",
+  })
+  stubFetch({
+    [detailPath("docs-example.org")]: detailWith(
+      zoneWith("docs-example.org", [], {
+        external: true,
+        subdomains: ["app.docs-example.org"],
+      }),
+      { subdomains: [app] }
+    ),
+  })
+  open("zone-docs-example.org")
+  const dns = await records()
+  expect(
+    within(dns).getByText("Loomplane hasn't written any records here yet.")
+  ).toBeTruthy()
 })
 
 it("says Loomplane hasn't written records to a managed domain yet", async () => {
