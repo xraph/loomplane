@@ -83,7 +83,7 @@ func (s *Session) GetDBInstance(ctx context.Context, id string) (*DBInstance, er
 		return nil, err
 	}
 	if len(out.DBInstances) == 0 {
-		return nil, fmt.Errorf("db instance %s: %w", id, errNotFound)
+		return nil, fmt.Errorf("db instance %s: %w", id, ErrNotFound)
 	}
 	if len(out.DBInstances) != 1 || sdk.ToString(out.DBInstances[0].DBInstanceIdentifier) != id {
 		return nil, errors.New("RDS returned a different database identity")
@@ -232,7 +232,7 @@ func (s *Session) GetDBSnapshot(ctx context.Context, id string) (*DBSnapshot, er
 		return nil, err
 	}
 	if len(out.DBSnapshots) == 0 {
-		return nil, errNotFound
+		return nil, ErrNotFound
 	}
 	if len(out.DBSnapshots) != 1 || sdk.ToString(out.DBSnapshots[0].DBSnapshotIdentifier) != id {
 		return nil, errors.New("RDS returned a different snapshot identity")

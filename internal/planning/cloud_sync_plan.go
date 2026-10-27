@@ -41,6 +41,9 @@ func appliedCloudPlanWithIntents(bindings []*Binding, assignment *cloudprofiles.
 			blocked(b.Name, "The applied service configuration cannot be read.")
 			continue
 		}
+		// A reused image belongs to the plan that chose it, and was chosen
+		// for the binding's own target, so a moved service builds again.
+		cfg.Artifact = nil
 		a := &Action{ID: actionID(b.Subject, b.Name), Subject: b.Subject, Name: b.Name, Provider: b.Provider, ConnectionID: b.ConnectionID, Region: b.Region, Engine: b.Engine, Op: Keep, Service: &cfg, Reason: "Keep the applied service."}
 		p.actions = append(p.actions, a)
 		p.services[b.Name] = a

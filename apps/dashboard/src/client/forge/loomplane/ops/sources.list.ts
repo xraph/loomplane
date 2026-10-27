@@ -4,9 +4,9 @@ import { codec_SourceList } from '../codecs/SourceList';
 export const op_sources_list = {
   method: 'GET',
   path: '/api/v1/projects/{id}/sources',
-  entity: 'Source',
+  entity: 'DiscoverySource',
   rootType: 'SourceList',
-  provides: ['Source:{id}', 'Source[]'],
+  provides: ['DiscoverySource:{id}', 'DiscoverySource[]'],
   invalidates: [],
   responseCodec: codec_SourceList,
 } as const satisfies OperationMeta;

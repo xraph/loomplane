@@ -3,7 +3,7 @@ title: Roles and permissions
 description: What each organization role can do, permission by permission, and how API keys and the Warden check fit in.
 ---
 
-Loomplane has four roles per organization. They're Warden roles, checked in the service layer on every action, and each includes everything the role below it can do. A permission is named `resource:action`.
+Loomplane has four roles per organization. They're Warden roles, checked in the service layer on every action, and each includes everything the role below it can do. A permission is named `resource:action`. A fifth role belongs to [Loomplane automation](#loomplane-automation), never to a person.
 
 ## The roles
 
@@ -53,6 +53,22 @@ A secret variable's value isn't readable by anyone, whatever their role.
 A key acts as the member who made it, with their role, in their organization, and never more. A read-only key fails every permission that isn't a read. Keys can't manage keys. When a member leaves or loses a role, their keys lose the same rights on the next request.
 
 Every key expires: 90 days by default, at most 366. Keysmith stores a hash, and the key shows once. `GET /api/v1/session` (or `loomctl whoami`) shows which permissions your key has.
+
+## Loomplane automation
+
+Every organization also has one identity that isn't a person: Loomplane automation. It's reserved for automatic rollback, which rolls back a release whose watch or canary failed, and it will do nothing else. Automatic rollback hasn't shipped yet, so today the identity exists but nothing acts as it, and you won't find it in your audit log. It's there whether or not you turn the AI agent on, because automatic rollback doesn't use AI.
+
+You'll see it as "Loomplane automation" in the dashboard and the audit log, and `pkg/client` names it the same way with `client.ActorName`. Its ID is `loomplane:` followed by your organization's ID, which is what a rollback it makes will show as `created_by` and `decided_by`. Its audit events will carry `actor: system` and `actor_name: Loomplane automation`, so you can filter for them.
+
+It holds one Warden role, `loomplane-automation`, as a service account. Loomplane writes that role into each organization the first time it checks anything there after starting, and resets it to the list below each time, so if someone widens it by hand it goes back at the next start. It holds:
+
+| Permission | Why |
+|---|---|
+| `project:read`, `environment:read`, `deployment:read`, `infrastructure:read` | To read the release it will roll back |
+| `deployment:create`, `deployment:approve` | To plan the rollback and approve it |
+| `infrastructure:modify` | To deploy the rollback and restore its routes |
+
+Warden isn't the only limit. The code refuses it everywhere a person works: it can't create, approve or reject a plan through the API, change a Cloud placement, choose a connection or draft a manifest. Once automatic rollback ships, it and the deployment of a rollback it approved are the only things that act as it. It can never retire a backup, and no session or API key can sign in as it. It isn't a member, so it doesn't appear among your members and you can't give its role to anyone.
 
 ## Where this is enforced
 

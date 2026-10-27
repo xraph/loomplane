@@ -83,3 +83,34 @@ func TestWithPrincipal(t *testing.T) {
 		t.Fatalf("tenant %q", got)
 	}
 }
+
+func TestAuthProvider_refusesSessionsForTheAutomation(t *testing.T) {
+	a := NewAuthProvider()
+	a.Bind(func(context.Context, string) (string, string, error) { return "loomplane:aorg_1", "aorg_1", nil }, &fakeAuthz{})
+	if _, err := a.Authenticate(context.Background(), "Bearer tok"); !errors.Is(err, cpauth.ErrUnauthorized) {
+		t.Fatalf("a session resolved to the automation: %v", err)
+	}
+}
+
+func TestAuthProvider_authorizesTheAutomationAsItself(t *testing.T) {
+	authz := &fakeAuthz{allow: map[security.Permission]bool{security.InfrastructureModify: true}}
+	a := NewAuthProvider()
+	a.Bind(func(context.Context, string) (string, string, error) { return "", "", nil }, authz)
+	ctx := context.Background()
+	// A deployment the automation approved calls Ctrl Plane with its claims.
+	for _, sub := range []string{security.SystemSubject("aorg_1"), security.SystemSubject("aorg_other"), "ausr_1"} {
+		if _, err := a.Authorize(ctx, cpauth.AuthzRequest{SubjectID: sub, TenantID: "aorg_1", Action: "create"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if got := authz.calls[0]; got != security.SystemPrincipal("aorg_1") {
+		t.Fatalf("the automation was authorized as %+v", got)
+	}
+	// Another organization's automation is never the automation here.
+	if got := authz.calls[1]; got.IsServiceAccount() {
+		t.Fatalf("another org's automation was authorized as %+v", got)
+	}
+	if got := authz.calls[2]; got != (security.Principal{UserID: "ausr_1", OrgID: "aorg_1"}) {
+		t.Fatalf("a person was authorized as %+v", got)
+	}
+}

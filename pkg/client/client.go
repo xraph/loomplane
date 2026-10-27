@@ -412,6 +412,20 @@ type Action struct {
 	Changes  []Change        `json:"changes,omitempty"`
 }
 
+// AutomationName is how Loomplane automation, which rolls back a release
+// whose watch or canary failed, is named wherever it acts.
+const AutomationName = "Loomplane automation"
+
+// ActorName is how to show a created_by, decided_by or started_by, such as
+// Plan.DecidedBy: "Loomplane automation" for the organization's automation
+// (loomplane:<org>), else the ID as given.
+func ActorName(id string) string {
+	if org, ok := strings.CutPrefix(id, "loomplane:"); ok && org != "" {
+		return AutomationName
+	}
+	return id
+}
+
 // Plan is what deploying a manifest to an environment would do, waiting
 // for someone to approve or reject it.
 type Plan struct {
@@ -431,6 +445,44 @@ type Plan struct {
 	DecidedBy    string            `json:"decided_by,omitempty"`
 	DecisionNote string            `json:"decision_note,omitempty"`
 	CreatedAt    time.Time         `json:"created_at"`
+	// Kind is "release", "promotion" or "rollback".
+	Kind string `json:"kind"`
+	// From is the environment a promotion deploys from.
+	From      string           `json:"from_environment"`
+	Rollback  *Rollback        `json:"rollback"`
+	Leftovers []Leftover       `json:"leftovers"`
+	Artifacts []ArtifactChoice `json:"artifacts"`
+}
+
+// Rollback is what a rollback plan undoes and what it restores.
+type Rollback struct {
+	Reason              string    `json:"reason"`
+	Trigger             string    `json:"trigger"`
+	TargetDeploymentID  string    `json:"target_deployment_id"`
+	TargetPlanID        string    `json:"target_plan_id"`
+	RestoreDeploymentID string    `json:"restore_deployment_id"`
+	RestorePlanID       string    `json:"restore_plan_id"`
+	RestoreFinishedAt   time.Time `json:"restore_finished_at"`
+	WatchID             string    `json:"watch_id,omitempty"`
+}
+
+// Leftover is something a rollback leaves as the bad release made it.
+type Leftover struct {
+	Subject     string `json:"subject"`
+	Name        string `json:"name"`
+	Op          string `json:"op"`
+	DataBearing bool   `json:"data_bearing"`
+	Reason      string `json:"reason"`
+}
+
+// ArtifactChoice says whether a service reuses an earlier build.
+type ArtifactChoice struct {
+	Service   string `json:"service"`
+	Reused    bool   `json:"reused"`
+	Reference string `json:"reference,omitempty"`
+	Revision  string `json:"revision,omitempty"`
+	From      string `json:"from,omitempty"`
+	Reason    string `json:"reason,omitempty"`
 }
 
 // PlanSource is one repository a plan was made from, at the commit it
@@ -441,6 +493,7 @@ type PlanSource struct {
 	Repository string `json:"repository"`
 	CommitSHA  string `json:"commit_sha"`
 	InScope    bool   `json:"in_scope"`
+	FromPlanID string `json:"from_plan_id,omitempty"`
 }
 
 // Planning reports whether the plan is still being worked out.
@@ -472,6 +525,8 @@ type NewPlan struct {
 	Catalog     bool     `json:"catalog,omitempty"`
 	Environment string   `json:"environment"`
 	Scope       []string `json:"scope,omitempty"`
+	// From is the environment to promote from.
+	From string `json:"from,omitempty"`
 }
 
 // CreatePlan plans the project's current manifest for an environment.

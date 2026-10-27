@@ -124,6 +124,54 @@ func TestPoolRelocationPreservesAppliedInputsAndPrivateBoundary(t *testing.T) {
 	}
 }
 
+// A service a promotion deployed with staging's image keeps nothing of
+// that image in its binding, but a binding written with one still builds
+// its commit again when a pool relocation or Cloud sync move rebuilds its
+// action: the image was chosen for the target it ran on.
+func TestRelocationAfterAPromotionBuildsAgain(t *testing.T) {
+	binding := appliedTestBinding(t, "api", "original")
+	var cfg ServiceConfig
+	if err := json.Unmarshal(binding.Config, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	cfg.Provider = "server"
+	cfg.Public = false
+	cfg.Execution = provider.Container
+	cfg.Workload = provider.Worker
+	cfg.Image = "Dockerfile"
+	cfg.Target = "old"
+	cfg.TargetSettings = map[string]string{"docker_id": "old", "architecture": "amd64"}
+	cfg.Size = &manifest.Size{CPU: 1, Memory: 512}
+	cfg.CloudPlacement.Provider = "server"
+	cfg.CloudPlacement.PoolID = "pool"
+	cfg.CloudPlacement.ServerID = "host-old"
+	cfg.BuildTarget = &BuildTarget{Builder: "old", Registry: "registry"}
+	cfg.Artifact = &ReusedArtifact{Reference: "registry.example/app/api@" + artifactDigest, Digest: artifactDigest, CommitSHA: "original", FromEnvironment: "staging"}
+	binding.Provider = "server"
+	binding.Config, _ = json.Marshal(cfg)
+	assigned := appliedAssignment("")
+	assigned.Targets[0].Provider = "server"
+	assigned.Targets[0].Runtime = "server"
+	assigned.Targets[0].PoolID = "pool"
+	options := []ConnectionOption{{ID: "old", Cloud: "server", Ready: true, Details: cfg.TargetSettings}, {ID: "new", Cloud: "server", Ready: true, Details: map[string]string{"docker_id": "new", "architecture": "amd64"}}, {ID: "registry", Cloud: "registry", Ready: true, Details: map[string]string{"endpoint": "registry.example", "repository": "app"}}}
+	pin := *cfg.CloudPlacement
+	pin.ConnectionID = "new"
+	pin.ServerID = "host-new"
+	pin.CPUMillis = 1000
+	pin.MemoryBytes = 512 << 20
+	result := appliedCloudPlan([]*Binding{binding}, assigned, "", options, providers.Registry(), map[string]CloudPlacement{"api": pin})
+	if !result.Executable {
+		t.Fatalf("relocation blocked: %+v", result.Problems)
+	}
+	moved := action(t, result, "service:api")
+	if moved.Op != Replace || moved.Service.CommitSHA != "original" {
+		t.Fatalf("relocation %s at %s", moved.Op, moved.Service.CommitSHA)
+	}
+	if moved.Service.Artifact != nil {
+		t.Fatalf("the relocated service deploys %s's image instead of building: %+v", moved.Service.Artifact.FromEnvironment, moved.Service.Artifact)
+	}
+}
+
 func TestServerPlanPreservesRuntimeLimitsWithoutAutoscaling(t *testing.T) {
 	for _, tc := range []struct {
 		name, settings      string

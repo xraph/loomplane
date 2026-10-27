@@ -56,7 +56,9 @@ var (
 	// errKeylessRefused is ErrRejected for a keyless key, in its words.
 	errKeylessRefused = keyless.Refusal(ErrRejected, "AWS refused Loomplane's keyless token for this role")
 
-	errNotFound = errors.New("not found")
+	// ErrNotFound is something AWS doesn't have, such as an image tag no
+	// push made.
+	ErrNotFound = errors.New("not found")
 )
 
 var (
@@ -225,7 +227,7 @@ func keysUnreachable(message string) bool {
 
 // IsNotFound reports whether err is AWS saying something doesn't exist.
 func IsNotFound(err error) bool {
-	if errors.Is(err, errNotFound) {
+	if errors.Is(err, ErrNotFound) {
 		return true
 	}
 	var ae smithy.APIError
@@ -234,6 +236,17 @@ func IsNotFound(err error) bool {
 	}
 	code := ae.ErrorCode()
 	return strings.Contains(code, "NotFound") || code == "NoSuchEntity" || code == "RepositoryNotFoundException"
+}
+
+// IsAccessDenied reports whether AWS refused a request for want of a
+// permission.
+func IsAccessDenied(err error) bool {
+	var ae smithy.APIError
+	if !errors.As(err, &ae) {
+		return false
+	}
+	code := ae.ErrorCode()
+	return code == "AccessDenied" || code == "AccessDeniedException"
 }
 
 // IsExists reports whether err is AWS saying something already exists.

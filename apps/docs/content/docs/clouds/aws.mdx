@@ -15,7 +15,7 @@ You can add an ACM certificate ARN for the same region as an optional setting. P
 
 | Used for | Actions Loomplane checks |
 |---|---|
-| Builds | `codebuild:BatchGetBuilds`, `CreateProject`, `StartBuild`, `UpdateProject`; `ecr:CreateRepository`, `DescribeRepositories` |
+| Builds | `codebuild:BatchGetBuilds`, `CreateProject`, `StartBuild`, `UpdateProject`; `ecr:CreateRepository`, `DescribeRepositories`. Recommended, not checked: `ecr:DescribeImages` |
 | ECS | `ecs:CreateCluster`, `CreateService`, `DeleteService`, `DescribeClusters`, `DescribeServices`, `RegisterTaskDefinition`, `UpdateService` |
 | Load balancing | `elasticloadbalancing:CreateListener`, `CreateLoadBalancer`, `CreateRule`, `CreateTargetGroup`, `DescribeListeners`, `DescribeLoadBalancers`, `DescribeRules`, `DescribeTargetGroups` |
 | Networking | `ec2:AuthorizeSecurityGroupIngress`, `CreateSecurityGroup`, `DescribeSecurityGroups`, `DescribeSubnets`, `DescribeVpcs`; `servicediscovery:CreateHttpNamespace`, `CreateService`, `GetNamespace`, `GetOperation`, `ListNamespaces` |
@@ -24,6 +24,8 @@ You can add an ACM certificate ARN for the same region as an optional setting. P
 | RDS | `rds:CreateDBInstance`, `CreateDBSubnetGroup`, `DeleteDBInstance`, `DescribeDBInstances`, `DescribeDBSnapshots`, `AddTagsToResource` |
 | ElastiCache | `elasticache:CreateCacheSubnetGroup`, `CreateReplicationGroup`, `DeleteReplicationGroup`, `DescribeReplicationGroups` |
 | S3 | `s3:CreateBucket`, `DeleteBucket`, `DeleteObject`, `ListBucket`, `PutBucketPublicAccessBlock`, `PutObject` |
+
+With `ecr:DescribeImages`, Loomplane reads the digest of each image a build pushes, deploys the image by that digest and records it with the release. A promotion can then deploy the exact image staging ran, and a rollback the image the previous release ran. Without it you can still deploy: the service runs its image by tag, the step warns you, and promoting or rolling back that service builds it again.
 
 Reading build logs also needs CloudWatch `GetLogEvents`. A cross-cloud link needs the VPN actions listed in the [manifest reference](/docs/reference/loomplane-yaml#links).
 

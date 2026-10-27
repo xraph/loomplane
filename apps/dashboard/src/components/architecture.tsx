@@ -98,6 +98,7 @@ import {
   kindLabel,
   latestBySource,
   latestSucceeded,
+  unpinned,
   linkTo,
   resourceLabel,
   shortSHA,
@@ -122,8 +123,9 @@ const workerHintAfter = 30_000
 export function useAnalyses(projectID: string) {
   const analyses = useQuery(useAnalysesList, { path: { id: projectID } })
   const list = analyses.data?.analyses ?? []
-  const latest = list[0]
-  const running = [...latestBySource(list).values()].some((a) =>
+  const branch = unpinned(list)
+  const latest = branch[0]
+  const running = [...latestBySource(branch).values()].some((a) =>
     isActive(a.status)
   )
   useRefetchWhile(running, analyses.refetch)
@@ -133,7 +135,7 @@ export function useAnalyses(projectID: string) {
     error: analyses.status === "error" ? analyses.error : undefined,
     latest,
     running,
-    shown: latestSucceeded(list),
+    shown: latestSucceeded(branch),
   }
 }
 

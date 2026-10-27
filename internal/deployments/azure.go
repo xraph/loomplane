@@ -147,10 +147,11 @@ func (a *Azure) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 		}
 	}
 	if state.Image == "" {
-		if berr := a.build(ctx, s, job, cfg, &state, save); berr != nil {
-			return nil, berr
+		if state.Image = reusedImage(job); state.Image == "" {
+			if state.Image, err = a.build(ctx, s, job, cfg, &state, save); err != nil {
+				return nil, err
+			}
 		}
-		state.Image = reg.Properties.LoginServer + "/" + state.Repo
 		save()
 	}
 
@@ -267,26 +268,27 @@ type azurePull struct {
 }
 
 // build uploads the source and builds it on ACR Tasks, setting
-// state.Repo once the run succeeds.
-func (a *Azure) build(ctx context.Context, s *azure.Session, job *Job, cfg *planning.ServiceConfig, state *azureState, save func()) error {
+// state.Repo once the run starts, and returns the image the run pushed,
+// by digest.
+func (a *Azure) build(ctx context.Context, s *azure.Session, job *Job, cfg *planning.ServiceConfig, state *azureState, save func()) (string, error) {
 	if state.RunID == "" {
 		tag, err := imageTag(job)
 		if err != nil {
-			return err
+			return "", err
 		}
 		root, err := sourceRoot(ctx, job)
 		if err != nil {
-			return err
+			return "", err
 		}
 		job.Progress(StepBuilding, "Uploading the source to the container registry")
 		src, size, err := job.Source(ctx)
 		if err != nil {
-			return err
+			return "", err
 		}
 		where, err := s.UploadSource(ctx, src, size)
 		_ = src.Close() // read-only
 		if err != nil {
-			return err
+			return "", err
 		}
 		repo := imageName(job) + ":" + tag
 		req := azure.BuildRequest{Source: where, Image: repo}
@@ -300,14 +302,23 @@ func (a *Azure) build(ctx context.Context, s *azure.Session, job *Job, cfg *plan
 		}
 		state.RunID, err = s.StartBuild(ctx, req)
 		if err != nil {
-			return err
+			return "", err
 		}
 		state.Repo = repo
 		save()
 	}
 	job.Progress(StepBuilding, "Building on ACR Tasks")
 	job.Collector(state.RunID, job.LogAttempt()).RecordState(ctx, "", "unavailable", azureLogNote)
-	return s.WaitBuild(ctx, state.RunID)
+	run, err := s.WaitBuild(ctx, state.RunID)
+	if err != nil {
+		return "", err
+	}
+	for _, pushed := range run.Properties.OutputImages {
+		if pushed.Repository+":"+pushed.Tag == state.Repo {
+			return byDigest(pushed.Registry+"/"+state.Repo, pushed.Digest)
+		}
+	}
+	return "", errNoDigest
 }
 
 // appName is the container app to deploy to: the bound one, or the

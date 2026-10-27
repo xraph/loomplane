@@ -13,6 +13,7 @@ import (
 	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"go.jetify.com/typeid/v2"
@@ -189,6 +190,10 @@ type Plans interface {
 	// RecordDeployed records the commit of one repository now deployed in
 	// an environment, which the next plan holds the repository at.
 	RecordDeployed(ctx context.Context, orgID string, d *planning.DeployedSource) error
+	// RecordRelease records, in one transaction, the manifest revision a
+	// succeeded deployment's plan was made from and the commit of every
+	// repository it moved.
+	RecordRelease(ctx context.Context, orgID string, r *planning.DeployedRelease) error
 }
 
 // Credentials reveals a connection's credential.
@@ -997,14 +1002,25 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 			}
 		}
 	}
+	// What an executor warns about while it deploys reaches the step once
+	// it has deployed, since its progress may update the step meanwhile.
+	var applyMu sync.Mutex
+	var applyWarnings []string
+	job.warn = func(err error) {
+		applyMu.Lock()
+		defer applyMu.Unlock()
+		applyWarnings = append(applyWarnings, err.Error())
+	}
 	out, err := exec.Apply(ctx, job)
+	job.warn = nil
 	if elsewhere := (*ElsewhereError)(nil); errors.As(err, &elsewhere) {
 		return r.deployedElsewhere(ctx, current, elsewhere)
 	}
 	if err != nil {
 		return err
 	}
-	step.URL, step.Image = out.URL, out.Image
+	step.URL, step.Image, step.Revision = out.URL, out.Image, out.Revision
+	step.Warnings = append(step.Warnings, applyWarnings...)
 	if out.URL != "" && a.Service != nil && a.Service.Public {
 		progress(StepVerifying, "Checking "+out.URL+" answers")
 		if verr := r.verifyService(ctx, out.URL, a); verr != nil {
@@ -1574,6 +1590,14 @@ func (r *Runner) bind(ctx context.Context, d *Deployment, a planning.Action, cur
 	var cfg any = a.Service
 	if a.Subject == planning.ResourceSubject {
 		cfg = a.Resource
+	} else if a.Service != nil && a.Service.Artifact != nil {
+		// An image reused from another environment belongs to the plan
+		// that chose it, never to the binding: an action rebuilt from the
+		// binding later, by a Cloud sync move or a pool relocation, builds
+		// its commit for wherever it goes.
+		svc := *a.Service
+		svc.Artifact = nil
+		cfg = &svc
 	}
 	raw, err := json.Marshal(cfg)
 	if err != nil {
@@ -1692,25 +1716,33 @@ func (r *Runner) Finish(ctx context.Context, orgID, deploymentID, reason string)
 }
 
 // recordDeployed records the commit of each repository a deployment's plan
-// moved as what its environment runs.
+// moved, and the manifest revision the plan was made from, as what its
+// environment runs, in one write. A rollback records like any release, so
+// the restored manifest becomes the environment's. A Cloud sync and a
+// catalog plan record nothing: neither releases the environment's
+// repositories or manifest.
 func (r *Runner) recordDeployed(ctx context.Context, d *Deployment, at time.Time) error {
 	plan, err := r.plans.GetPlan(ctx, d.OrgID, d.PlanID)
 	if err != nil {
 		return err
 	}
-	if plan.CloudSyncID != "" {
+	if plan.CloudSyncID != "" || plan.Catalog {
 		return nil
 	}
+	release := &planning.DeployedRelease{
+		EnvironmentID: d.EnvironmentID, PlanID: d.PlanID, ManifestID: plan.ManifestID, ManifestRevision: plan.ManifestRevision,
+		DeployedAt: at, Sources: make([]*planning.DeployedSource, 0, len(plan.Sources)),
+	}
 	for _, ps := range plan.Sources {
-		if !ps.InScope {
-			continue
+		if ps.InScope {
+			release.Sources = append(release.Sources, &planning.DeployedSource{
+				EnvironmentID: d.EnvironmentID, SourceID: ps.SourceID, AnalysisID: ps.AnalysisID, CommitSHA: ps.CommitSHA,
+				PlanID: d.PlanID, DeployedAt: at,
+			})
 		}
-		if err := r.plans.RecordDeployed(ctx, d.OrgID, &planning.DeployedSource{
-			EnvironmentID: d.EnvironmentID, SourceID: ps.SourceID, AnalysisID: ps.AnalysisID, CommitSHA: ps.CommitSHA,
-			PlanID: d.PlanID, DeployedAt: at,
-		}); err != nil {
-			return fmt.Errorf("record what's deployed: %w", err)
-		}
+	}
+	if err := r.plans.RecordRelease(ctx, d.OrgID, release); err != nil {
+		return fmt.Errorf("record what's deployed: %w", err)
 	}
 	return nil
 }
