@@ -3717,6 +3717,7 @@
           "icon",
           "color",
           "repositories",
+          "exclusions",
           "status",
           "created_by",
           "created_at",
@@ -3735,6 +3736,12 @@
           },
           "description": {
             "type": "string"
+          },
+          "exclusions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Exclusion"
+            }
           },
           "icon": {
             "type": "string"
@@ -3946,6 +3953,41 @@
             "type": "string"
           },
           "subnetwork": {
+            "type": "string"
+          }
+        }
+      },
+      "Exclusion": {
+        "type": "object",
+        "required": [
+          "kind",
+          "match",
+          "reason",
+          "keep_running",
+          "created_by",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "type": "string"
+          },
+          "keep_running": {
+            "type": "boolean"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "match": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "reason": {
             "type": "string"
           }
         }

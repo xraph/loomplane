@@ -86,7 +86,7 @@ export function Members() {
       <Page className="max-w-[980px]">
         <PageHeading
           title="Members"
-          description="Everyone in this organization, and what each of them can do."
+          description="Everyone in this workspace, and what each of them can do."
           actions={
             mayManage && (
               <Button onClick={() => setInviting(true)}>
@@ -308,7 +308,7 @@ function MemberRow({
                     Remove {member.name || member.email}?
                   </AlertDialogTitle>
                   <AlertDialogDescription>
-                    They lose access to this organization's projects at once.
+                    They lose access to this workspace's projects at once.
                     You can invite them again later.
                   </AlertDialogDescription>
                 </AlertDialogHeader>

@@ -170,7 +170,7 @@ function Frame({
                   ) : (
                     organization && (
                       <span className="font-medium text-foreground">
-                        Shared across the organization
+                        Shared across the workspace
                       </span>
                     )
                   )}

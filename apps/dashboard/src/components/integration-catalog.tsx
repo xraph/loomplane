@@ -171,7 +171,7 @@ export function IntegrationCatalog({
         "Signed deployment results sent to a public HTTPS endpoint, with retries.",
       icon: <ProductIcon fallback={WebhookIcon} label="Webhooks" size="md" />,
       connected: false,
-      detail: "Organization-wide",
+      detail: "Workspace-wide",
       action: (
         <Button
           size="sm"

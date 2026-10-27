@@ -5969,6 +5969,92 @@
         }
       }
     },
+    "/api/v1/projects/{id}/exclusions": {
+      "post": {
+        "tags": [
+          "Projects"
+        ],
+        "summary": "Exclude services from a project's graph, plans and deploys, by service or path. A project setting: the repository doesn't change.",
+        "operationId": "projects.exclude",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExcludeInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The project",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Project"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{id}/exclusions/remove": {
+      "post": {
+        "tags": [
+          "Projects"
+        ],
+        "summary": "Remove exclusions, bringing those services back into the graph and the next plan",
+        "operationId": "projects.include",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IncludeInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The project",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Project"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{id}/graph": {
       "get": {
         "tags": [
@@ -16415,6 +16501,7 @@
           "icon",
           "color",
           "repositories",
+          "exclusions",
           "status",
           "created_by",
           "created_at",
@@ -16433,6 +16520,12 @@
           },
           "description": {
             "type": "string"
+          },
+          "exclusions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Exclusion"
+            }
           },
           "icon": {
             "type": "string"
@@ -16569,9 +16662,16 @@
         "type": "object",
         "required": [
           "project_id",
-          "sources"
+          "sources",
+          "excluded"
         ],
         "properties": {
+          "excluded": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Excluded"
+            }
+          },
           "graph": {
             "$ref": "#/components/schemas/Graph"
           },
@@ -21359,6 +21459,133 @@
           "settings": {
             "type": "object",
             "additionalProperties": true
+          }
+        }
+      },
+      "ExcludeInputBody": {
+        "type": "object",
+        "required": [
+          "exclusions"
+        ],
+        "properties": {
+          "exclusions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "kind",
+                "match",
+                "reason"
+              ],
+              "properties": {
+                "keep_running": {
+                  "type": "boolean"
+                },
+                "kind": {
+                  "type": "string"
+                },
+                "match": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "Excluded": {
+        "type": "object",
+        "required": [
+          "service",
+          "rule"
+        ],
+        "properties": {
+          "rule": {
+            "$ref": "#/components/schemas/ExclusionRule"
+          },
+          "service": {
+            "$ref": "#/components/schemas/Service"
+          }
+        }
+      },
+      "Exclusion": {
+        "type": "object",
+        "required": [
+          "kind",
+          "match",
+          "reason",
+          "keep_running",
+          "created_by",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "type": "string"
+          },
+          "keep_running": {
+            "type": "boolean"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "match": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      },
+      "ExclusionRule": {
+        "type": "object",
+        "required": [
+          "kind",
+          "match"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "match": {
+            "type": "string"
+          }
+        }
+      },
+      "IncludeInputBody": {
+        "type": "object",
+        "required": [
+          "exclusions"
+        ],
+        "properties": {
+          "exclusions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "kind",
+                "match"
+              ],
+              "properties": {
+                "kind": {
+                  "type": "string"
+                },
+                "match": {
+                  "type": "string"
+                }
+              }
+            }
           }
         }
       }

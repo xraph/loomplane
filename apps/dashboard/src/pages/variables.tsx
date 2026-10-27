@@ -94,7 +94,7 @@ export function Variables() {
       <Page className="max-w-[980px]">
         <PageHeading
           title="Variables"
-          description="Organization-wide values every project inherits. A project, or one of its services, can override any of them on its own page."
+          description="Workspace-wide values every project inherits. A project, or one of its services, can override any of them on its own page."
           actions={
             mayManage && (
               <Button onClick={() => setDialog({ kind: "create" })}>
@@ -121,7 +121,7 @@ export function Variables() {
               <EmptyMedia variant="icon">
                 <VariablesIcon />
               </EmptyMedia>
-              <EmptyTitle>No organization-wide variables yet</EmptyTitle>
+              <EmptyTitle>No workspace-wide variables yet</EmptyTitle>
               <EmptyDescription>
                 {mayManage
                   ? "Set one here to give every project the same value, such as a region or a log level."
@@ -236,7 +236,7 @@ export function Variables() {
         title={
           dialog?.kind === "edit"
             ? `Change ${dialog.variable.key}`
-            : "Set an organization-wide variable"
+            : "Set a workspace-wide variable"
         }
         description={
           dialog?.kind === "edit"

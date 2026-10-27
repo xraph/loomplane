@@ -45,6 +45,11 @@ import { ProductIcon } from "@/components/product-icon"
 import { QueryError } from "@/components/query-error"
 import { EnvironmentCards } from "@/components/environment-manager"
 import { Page, PageHeading } from "@/components/page"
+import { ProjectGeneral } from "@/components/project-general"
+import {
+  ExcludedServices,
+  ProjectServices,
+} from "@/components/project-services"
 import { ProjectStylePopover } from "@/components/project-style-picker"
 import { ProjectVariables } from "@/components/project-variables"
 import { EnvBadge } from "@/components/runs"
@@ -133,7 +138,7 @@ export function ProjectDetail({ id }: { id: string }) {
                 <EmptyTitle>No such project here</EmptyTitle>
                 <EmptyDescription>
                   It may have been deleted, or it belongs to another
-                  organization. Pick one from the sidebar.
+                  workspace. Pick one from the sidebar.
                 </EmptyDescription>
               </EmptyHeader>
               <EmptyContent>
@@ -453,6 +458,10 @@ function Body({
                     onSelect={setSelected}
                   />
                   <GraphCaption graph={g} />
+                  <ExcludedServices
+                    project={project}
+                    excluded={view?.excluded ?? []}
+                  />
                 </>
               ) : (
                 <ServicesTable graph={g} onSelect={setSelected} />
@@ -472,7 +481,15 @@ function Body({
           >
             {(g) => (
               <>
-                <ServicesTable graph={g} onSelect={setSelected} />
+                {view ? (
+                  <ProjectServices
+                    project={project}
+                    environments={environments ?? []}
+                    view={view}
+                  />
+                ) : (
+                  <ServicesTable graph={g} onSelect={setSelected} />
+                )}
                 <Structure sources={g.sources ?? []} graph={g} />
               </>
             )}
@@ -511,6 +528,11 @@ function Body({
           </TabsContent>
         )}
         <TabsContent value="settings" className="grid max-w-[760px] gap-3">
+          <ProjectGeneral
+            key={`${project.id}:${project.updatedAt}`}
+            project={project}
+            mayEdit={mayEdit}
+          />
           <Details project={project} />
           {can("project:delete") && <DeleteProject project={project} />}
         </TabsContent>

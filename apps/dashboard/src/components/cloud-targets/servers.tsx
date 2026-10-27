@@ -97,7 +97,7 @@ export function Servers({ cloud }: { cloud: Profile }) {
       icon={RestrictedIcon}
       title="Server inventory is restricted"
     >
-      Your organization manager can review shared workloads and capacity.
+      Your workspace manager can review shared workloads and capacity.
     </CloudEmpty>
   )
 }
@@ -825,7 +825,7 @@ function ServerDetails({
         <DialogHeader>
           <DialogTitle>{server.name}</DialogTitle>
           <DialogDescription>
-            {server.ownership} server · {server.status}. Organization workload
+            {server.ownership} server · {server.status}. Workspace workload
             inventory.
           </DialogDescription>
         </DialogHeader>

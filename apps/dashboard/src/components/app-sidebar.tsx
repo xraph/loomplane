@@ -239,7 +239,7 @@ function Organizations() {
   const [creating, setCreating] = useState(false)
   const switchTo = (orgId: string) =>
     switchOrganization(orgId).catch((err: unknown) =>
-      toast.error(messageOf(err, "Couldn't switch organization."))
+      toast.error(messageOf(err, "Couldn't switch workspace."))
     )
   return (
     <>
@@ -262,7 +262,7 @@ function Organizations() {
       <Dialog open={creating} onOpenChange={setCreating}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
-            <DialogTitle>New organization</DialogTitle>
+            <DialogTitle>New workspace</DialogTitle>
             <DialogDescription>
               A separate home for another team&apos;s projects. You&apos;ll be
               its owner.

@@ -689,7 +689,7 @@ function Failed({
           <ZeroStateTitle>You can&apos;t see this service</ZeroStateTitle>
           <ZeroStateDescription>
             Your role doesn&apos;t include reading this project&apos;s
-            deployments. An organization owner can give you access.
+            deployments. A workspace owner can give you access.
           </ZeroStateDescription>
         </ZeroStateHeader>
       </ZeroState>

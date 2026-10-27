@@ -107,7 +107,7 @@ export function ApiKeys() {
           description={
             admin
               ? "Keys for the CLI, CI and scripts. Each acts as the person who made it, with their role, here only. You see everyone's."
-              : "Keys for the CLI, CI and scripts. Each acts as you, with your role, in this organization only."
+              : "Keys for the CLI, CI and scripts. Each acts as you, with your role, in this workspace only."
           }
           actions={
             <Button onClick={() => setCreating(true)}>
@@ -369,7 +369,7 @@ function CreateKeyDialog({
             <DialogHeader>
               <DialogTitle>New API key</DialogTitle>
               <DialogDescription>
-                It acts as you, in this organization, and can never do more than
+                It acts as you, in this workspace, and can never do more than
                 your role allows.
               </DialogDescription>
             </DialogHeader>

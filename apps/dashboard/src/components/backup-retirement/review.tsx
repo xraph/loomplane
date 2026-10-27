@@ -292,7 +292,7 @@ function RetentionReview({
               {preview.data?.eligibleCount ?? 0} backups meet the age and count
               settings. A restore-tested point and existing recovery copies stay
               protected.
-              {!owner && " Only an organization owner can request deletion."}
+              {!owner && " Only a workspace owner can request deletion."}
             </p>
             {!preview.data?.points.length ? (
               <RetirementEmpty

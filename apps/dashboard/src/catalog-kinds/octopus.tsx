@@ -27,7 +27,7 @@ export default defineCatalogKind({
   features: [
     "Routes discovered over FARP",
     "Routes you add by domain and path",
-    "Domains from your organization",
+    "Domains from your workspace",
   ],
   actions: OpenAdminButton,
   subtitle: useOctopusSubtitle,

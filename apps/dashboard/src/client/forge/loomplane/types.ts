@@ -1040,6 +1040,36 @@ export interface Evidence {
   source?: string;
 }
 
+export interface ExcludeInputBody {
+  exclusions: {
+  keepRunning?: boolean;
+  kind: string;
+  match: string;
+  name?: string;
+  reason: string;
+}[];
+}
+
+export interface Excluded {
+  rule: ExclusionRule;
+  service: Service;
+}
+
+export interface Exclusion {
+  createdAt: string;
+  createdBy: string;
+  keepRunning: boolean;
+  kind: string;
+  match: string;
+  name?: string;
+  reason: string;
+}
+
+export interface ExclusionRule {
+  kind: string;
+  match: string;
+}
+
 export interface FabriqKeyList {
   keys: ConsumerKey[];
 }
@@ -1259,6 +1289,13 @@ export interface IdentitySession {
 
 export interface Ignore {
   resources?: string[];
+}
+
+export interface IncludeInputBody {
+  exclusions: {
+  kind: string;
+  match: string;
+}[];
 }
 
 export interface InfrastructureAction {
@@ -2037,6 +2074,7 @@ export interface Project {
   createdAt: string;
   createdBy: string;
   description: string;
+  exclusions: Exclusion[];
   icon: string;
   id: string;
   name: string;
@@ -2075,6 +2113,7 @@ export interface ProjectList {
 }
 
 export interface ProjectView {
+  excluded: Excluded[];
   graph?: Graph;
   projectId: string;
   sources: SourceState[];

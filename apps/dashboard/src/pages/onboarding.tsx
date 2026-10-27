@@ -14,10 +14,10 @@ export function Onboarding({
 }) {
   const { signOut } = useAuth()
   return (
-    <AuthLayout title="Create your organization">
+    <AuthLayout title="Create your workspace">
       <AuthCard
-        title="Name your organization"
-        description="Give your team's projects a home. You'll be the owner of this organization."
+        title="Name your workspace"
+        description="Give your team's projects a home. You'll be the owner of this workspace."
         logo={<BrandLogo />}
         align="left"
         variant="borderless"

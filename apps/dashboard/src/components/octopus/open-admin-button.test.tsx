@@ -108,6 +108,6 @@ test("the module puts the button in the header", () => {
   expect(octopus.features).toEqual([
     "Routes discovered over FARP",
     "Routes you add by domain and path",
-    "Domains from your organization",
+    "Domains from your workspace",
   ])
 })

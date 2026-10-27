@@ -1,3 +1,4 @@
+import { Link } from "@tanstack/react-router"
 import { CloudLoading } from "@/components/cloud-targets/infrastructure-ui"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Field as FormField, FieldLabel } from "@/components/ui/field"
@@ -239,12 +240,13 @@ function SyncRow({
                 : syncLabel(env.status)}
             </span>
             {env.deploymentId && (
-              <a
+              <Link
                 className="underline underline-offset-4"
-                href={`/deployments/${env.deploymentId}`}
+                to="/deployments/$id"
+                params={{ id: env.deploymentId }}
               >
                 Deployment and logs
-              </a>
+              </Link>
             )}
           </div>
           <EnvironmentProgress environment={env} />
