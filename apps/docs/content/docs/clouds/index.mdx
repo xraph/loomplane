@@ -51,6 +51,8 @@ Credentials live in Vault, encrypted with a key derived from your secret key. A 
 | [Azure](/docs/clouds/azure) | A service principal's client secret, with tenant, client and subscription IDs |
 | [Your own servers](/docs/clouds/your-own-servers) | An SSH key and host key, or a Kubernetes kubeconfig |
 
+DigitalOcean, Vercel, Google Cloud and Azure can also [connect by signing in](/docs/clouds/cloud-sign-in). AWS, Google Cloud and Azure can [connect keylessly](/docs/clouds/keyless) as well, trusting tokens Loomplane signs itself, and then Vault holds nothing for the connection at all.
+
 The same credential reads what the account costs and how its services are doing, when the cloud reports it. [Spend, latency and traffic](/docs/clouds/spend-and-traffic) lists what each cloud gives you and the permission it needs.
 
 ## Clouds and targets

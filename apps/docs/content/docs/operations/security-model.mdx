@@ -24,12 +24,21 @@ An API key acts as the member who made it, with their role, and never more. A re
 | Passwords | authsome, as bcrypt hashes | Nobody |
 | SMTP credentials | Herald, encrypted with a purpose-specific key derived from `secret_key` | The delivery engine only |
 | Webhook signing secrets | Relay store wrapper, encrypted with a separate derived key | The signer. One-time response on create or rotation |
+| Keyless signing keys | Vault, under an app of their own, encrypted with a key derived from `secret_key` | The issuer, to sign tokens. Only the public halves are published |
 
 Read APIs never return stored credential values. New API keys and webhook signing secrets appear once, when you create or rotate them. The audit trail records key names and the last four characters of an API key, never a value.
 
 Secrets reach a service through the cloud's own secret store: Secret Manager on Cloud Run, Secrets Manager on ECS, sensitive variables on Vercel. Each is readable by that service's runtime identity only. They never pass through Ctrl Plane, which stores what it's given as plain JSON.
 
 Everything depends on `secret_key`. Keep it out of the repository and away from your backups. Losing it loses every credential and secret, and leaking it together with a copy of the database exposes them.
+
+## Keyless signing keys
+
+For a [keyless connection](/docs/clouds/keyless), Loomplane is an OpenID Connect issuer at your public URL, and AWS, Google Cloud or Azure trust the tokens it signs. Nothing about such a connection is a secret you'd store, but the signing keys are, because whoever holds one can act as every keyless connection.
+
+The keys are 2048-bit RSA and sign with RS256. A new one is made every 30 days and published a day before it signs, and the old one stays published for a day after it retires, so a cloud's cached copy always has the key in use. The private halves stay in Vault. Discovery and the JWKS at `/.well-known/` carry public keys only and need no session.
+
+A token lasts 10 minutes and names one connection in its subject, `org:{organization ID}:connection:{connection ID}`, which the cloud's trust has to match exactly. Loomplane signs only when it's handed a ticket the issuer made for that subject and audience, and a credential you paste that's shaped like a keyless handout is refused before it gets that far. Neither a token nor a ticket ever reaches an API response, a log or the audit trail.
 
 ## What runs where
 

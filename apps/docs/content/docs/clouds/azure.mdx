@@ -58,6 +58,14 @@ The connection acts as you, so you need a role on the resource group that covers
 
 Microsoft's refresh token lasts 90 days from its last use, and Loomplane renews it every 6 hours. [Connect a cloud by signing in](/docs/clouds/cloud-sign-in) covers registering the app and what happens if Azure stops accepting the sign-in.
 
+## Connect keylessly
+
+An app registration can trust Loomplane with a federated credential, so there's no client secret to expire. When Loomplane's public URL is HTTPS and reachable from the internet, the connect dialog offers **Connect keylessly** (or **Connect keylessly instead**, under the sign-in button). It gives you an `az ad app federated-credential create` command for your app, with Loomplane's issuer, this connection's subject and the audience `api://AzureADTokenExchange`, then a role assignment that makes the app a Contributor on the resource group. If you don't have an app for Loomplane yet, `az ad app create --display-name loomplane` and `az ad sp create --id <client-id>` make one.
+
+The federated credential is named `loomplane-` and the connection's ID, so one app can serve several connections, each with a credential of its own. Fill in the tenant ID, the app's client ID, the subscription ID and the resource group, then choose **Check and connect**. Loomplane signs a 10-minute token for every sign-in to Entra and uses it as the app's client assertion, then checks the app's role assignments as it would a service principal's.
+
+Loomplane asks Entra once a day whether the app still trusts the connection. If the federated credential is gone, the connection shows as failed and you get a notice. [Connect a cloud keylessly](/docs/clouds/keyless) has the whole setup and what happens when Azure refuses the trust.
+
 ## Use it in a manifest
 
 ```yaml

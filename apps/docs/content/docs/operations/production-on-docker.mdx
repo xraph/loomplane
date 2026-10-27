@@ -26,6 +26,8 @@ openssl rand -hex 32
 
 Edit `.env`. Set `LOOMPLANE_IMAGE`, `LOOMPLANE_DOMAIN` (a hostname without `https://` or a path) and `ACME_EMAIL`. Put the first generated value in `LOOMPLANE_SECRET_KEY` and the second in `POSTGRES_PASSWORD`.
 
+The stack sets the public URL to `https://` and your domain. That URL is also the OpenID Connect issuer AWS, Google Cloud and Azure trust for [keyless connections](/docs/clouds/keyless), and they fetch `/.well-known/openid-configuration` and `/.well-known/jwks.json` from it themselves. Caddy passes both through to the API. If the hostname only resolves inside your network, everything else still works, but keyless stays off.
+
 Keep that secret key in your secret manager. Loomplane derives encryption keys from it, and your database backup needs the original key to recover stored credentials. Generate it once, not on each deployment.
 
 The stack passes secrets to containers through environment variables. Protect `.env` with mode 600, restrict Docker access to administrators, and don't paste `docker compose config` or `docker inspect` output into tickets, since both can reveal those values. Validate with `config --quiet`.
