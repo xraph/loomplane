@@ -4,7 +4,6 @@
 // built from the list's pieces and design language.
 import { EllipsisIcon, GlobeIcon, PlusIcon } from "lucide-react"
 import { type ReactNode, useEffect, useId, useMemo, useState } from "react"
-import { toast } from "sonner"
 
 import { statusOf } from "@/client/errors"
 import {
@@ -28,10 +27,6 @@ import { RemoveDomainDialog } from "@/components/domains/remove-domain-dialog"
 import { useAutoRenew } from "@/components/domains/renewal-banner"
 import { Restricted } from "@/components/domains/restricted"
 import { SubdomainTable } from "@/components/domains/subdomain-table"
-import {
-  proofExpired,
-  useCheckAgain,
-} from "@/components/domains/txt-instructions"
 import { ZoneGrants } from "@/components/domains/zone-grants"
 import { Page, PageHeading } from "@/components/page"
 import { QueryError } from "@/components/query-error"
@@ -61,7 +56,6 @@ import {
   providerLabel,
   registrationStatusLine,
   settling,
-  useClock,
   zoneDNSLabel,
   zoneDNSTone,
 } from "@/lib/domains"
@@ -181,7 +175,6 @@ function Detail({ zoneId }: { zoneId: string }) {
 function Sections({ detail, zone }: { detail: DomainDetail; zone: Zone }) {
   const { domain, subdomains } = detail
   const navigate = useNavigate()
-  const now = useClock()
   const [adding, setAdding] = useState(false)
   const [removing, setRemoving] = useState(false)
   // By ID, so the dialog follows the subdomain as the page reads it again.
@@ -189,10 +182,6 @@ function Sections({ detail, zone }: { detail: DomainDetail; zone: Zone }) {
   const removingSub = subdomains.find((s) => s.zone?.id === removingID)
   const kind = domain.parentZoneId ? "subdomain" : "domain"
   const ready = domain.state === "ready"
-  // A subdomain without a proof of its own is checked on the zone whose is.
-  const proving = detail.proofZone?.zone ?? zone
-  // Checking needs a value that can still verify.
-  const checkable = !ready && !!proving.proofName && !proofExpired(proving, now)
   // A domain, or any zone with zones under it, lists its subdomains.
   const listsSubdomains = !domain.parentZoneId || subdomains.length > 0
   const hostnames = useMemo(
@@ -222,7 +211,6 @@ function Sections({ detail, zone }: { detail: DomainDetail; zone: Zone }) {
             aria-label="Domain actions"
             className="flex flex-wrap items-center gap-2"
           >
-            {checkable && <CheckAgainAction zone={proving} />}
             <Button variant="outline" onClick={() => setAdding(true)}>
               <PlusIcon />
               Add subdomain
@@ -454,24 +442,6 @@ function DangerZone({
         Remove {kind}
       </Button>
     </section>
-  )
-}
-
-// The header's check, on the zone whose record decides this one. Not in
-// the mock: what it found shows as a toast.
-function CheckAgainAction({ zone }: { zone: Zone }) {
-  const { check, pending } = useCheckAgain(zone)
-  const run = async () => {
-    const outcome = await check()
-    if (outcome.kind === "verified") toast.success(`${zone.name} is verified.`)
-    else if (outcome.kind === "missing")
-      toast(`The TXT record for ${zone.name} isn't visible yet.`)
-    else toast.error(outcome.message)
-  }
-  return (
-    <Button variant="outline" disabled={pending} onClick={() => void run()}>
-      Check again
-    </Button>
   )
 }
 

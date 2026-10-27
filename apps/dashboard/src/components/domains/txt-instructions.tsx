@@ -131,7 +131,7 @@ export function ManagedProof({ zone }: { zone: Zone }) {
 }
 
 // An expired proof can't verify; a renewed one starts the 24 hours again.
-export function proofExpired(zone: Zone, now: number): boolean {
+function proofExpired(zone: Zone, now: number): boolean {
   return (
     isSet(zone.proofExpiresAt) && new Date(zone.proofExpiresAt).getTime() <= now
   )
@@ -166,13 +166,13 @@ function ProofTable({ zone }: { zone: Zone }) {
 }
 
 /** What a check found: the record, nothing yet, or why it couldn't look. */
-export type CheckOutcome =
+type CheckOutcome =
   | { kind: "verified" }
   | { kind: "missing" }
   | { kind: "failed"; message: string }
 
 /** useCheckAgain looks for a zone's TXT record now. */
-export function useCheckAgain(zone: Zone) {
+function useCheckAgain(zone: Zone) {
   const verify = useMutation(useDnsZonesVerify)
   const invalidate = useInvalidate()
   const check = async (): Promise<CheckOutcome> => {
