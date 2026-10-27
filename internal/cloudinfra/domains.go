@@ -530,20 +530,35 @@ func (s *Service) RemoveZone(ctx context.Context, p security.Principal, id strin
 	// proves it while it remains.
 	slices.SortStableFunc(subdomains, func(a, b *Zone) int { return cmp.Compare(len(b.Name), len(a.Name)) })
 	for _, z := range append(subdomains, zone) {
-		if proofErr := s.removeZoneProof(ctx, st, z); proofErr != nil {
-			return proofErr
-		}
-		if removeErr := st.RemoveZone(ctx, p.OrgID, z.ID, z.Revision); removeErr != nil {
+		err = s.removeZoneProof(ctx, st, z)
+		if err == nil {
+			err = st.RemoveZone(ctx, p.OrgID, z.ID, z.Revision)
 			// Only the zone you asked for can be not found: a subdomain
 			// that changed or went since you looked is a conflict.
-			if z != zone && errors.Is(removeErr, ErrNotFound) {
+			if z != zone && errors.Is(err, ErrNotFound) {
 				return fmt.Errorf("%w: %s changed since you looked, so %s was kept. Try again", ErrConflict, z.Name, zone.Name)
 			}
-			return removeErr
+		}
+		if err != nil {
+			return s.racedRemoval(ctx, st, zone, subdomains, err)
 		}
 		s.domainAudit(ctx, p, "domain.zone.remove", z.ID, "")
 	}
 	return nil
+}
+
+// racedRemoval is the refusal for a cascade that stopped at a conflict:
+// the hostnames that use zone or its subdomains when a route landed after
+// the first check, or else err itself.
+func (s *Service) racedRemoval(ctx context.Context, st DomainStore, zone *Zone, subdomains []*Zone, err error) error {
+	if !errors.Is(err, ErrConflict) || errors.Is(err, provider.ErrInfrastructureAmbiguous) {
+		return err
+	}
+	var inUse *ZoneInUseError
+	if errors.As(s.zoneInUse(ctx, st, zone, subdomains), &inUse) {
+		return inUse
+	}
+	return err
 }
 
 // zoneInUse is the refusal for removing zone and its subdomains, or nil

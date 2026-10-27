@@ -165,8 +165,8 @@ func TestRemoveZoneStopsAtTheFirstZoneItCannotClean(t *testing.T) {
 
 // racingStore runs before just ahead of each RemoveZone, the way another
 // request can land between the cascade's checks and a delete. Like the
-// database, it deletes only at the revision given, and a zone that changed
-// or went is not found.
+// database, it deletes only at the revision given, a zone that changed or
+// went is not found, and a zone a live route uses is a plain conflict.
 type racingStore struct {
 	*overviewStore
 	before func(id string)
@@ -179,16 +179,21 @@ func (s *racingStore) RemoveZone(ctx context.Context, org, id string, revision i
 	if zone, err := s.Zone(ctx, org, id); err != nil || zone.Revision != revision {
 		return ErrNotFound
 	}
+	for _, route := range s.routes {
+		if route.Input.ZoneID == id && route.Status != "removed" {
+			return ErrConflict
+		}
+	}
 	return s.overviewStore.RemoveZone(ctx, org, id, revision)
 }
 
-func racing(t *testing.T) (*Service, *overviewStore, *racingStore) {
+func racing(t *testing.T) (*Service, *overviewStore, *racingStore, *removalDNS) {
 	t.Helper()
-	svc, st, _, _ := removalFixture(t)
+	svc, st, dns, _ := removalFixture(t)
 	withoutFamilyRoutes(st)
 	race := &racingStore{overviewStore: st}
 	svc.Domains = race
-	return svc, st, race
+	return svc, st, race, dns
 }
 
 func bumpRevision(st *overviewStore, id string) {
@@ -200,7 +205,7 @@ func bumpRevision(st *overviewStore, id string) {
 }
 
 func TestRemoveZoneReportsAChangedSubdomainAsAConflict(t *testing.T) {
-	svc, st, race := racing(t)
+	svc, st, race, _ := racing(t)
 	race.before = func(id string) {
 		if id == "zone_app" {
 			bumpRevision(st, id)
@@ -218,7 +223,7 @@ func TestRemoveZoneReportsAChangedSubdomainAsAConflict(t *testing.T) {
 	}
 
 	// One that went is reported the same way.
-	svc, st, race = racing(t)
+	svc, st, race, _ = racing(t)
 	race.before = func(id string) {
 		if id == "zone_xapp" {
 			st.zones = slices.DeleteFunc(st.zones, func(z *Zone) bool { return z.ID == id })
@@ -230,7 +235,7 @@ func TestRemoveZoneReportsAChangedSubdomainAsAConflict(t *testing.T) {
 	}
 
 	// The zone you asked to remove changing is still not found.
-	svc, st, race = racing(t)
+	svc, st, race, _ = racing(t)
 	race.before = func(id string) {
 		if id == "zone_root" {
 			bumpRevision(st, id)
@@ -238,5 +243,32 @@ func TestRemoveZoneReportsAChangedSubdomainAsAConflict(t *testing.T) {
 	}
 	if err = svc.RemoveZone(t.Context(), overviewAdmin, "zone_root", 4); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("the requested zone: %v", err)
+	}
+}
+
+func TestRemoveZoneListsAHostnameThatRacedIt(t *testing.T) {
+	// The route lands on x.app just before its row goes, so the store
+	// refuses, or on app before its proof record goes, so that refuses.
+	for _, zoneID := range []string{"zone_xapp", "zone_app"} {
+		svc, st, race, dns := racing(t)
+		race.before = func(id string) {
+			if id == "zone_xapp" {
+				st.routes = append(st.routes, &Route{ID: "route_late", OrgID: "org", ProjectID: "shop", Status: "pending",
+					Input: RouteInput{ZoneID: zoneID, Hostname: "late.loomplane.com"}})
+			}
+		}
+		err := svc.RemoveZone(t.Context(), overviewAdmin, "zone_root", 4)
+		var inUse *ZoneInUseError
+		if !errors.As(err, &inUse) || !errors.Is(err, ErrConflict) {
+			t.Fatalf("%s: a route that raced the removal: %v", zoneID, err)
+		}
+		zoneName := map[string]string{"zone_xapp": "x.app.loomplane.com", "zone_app": "app.loomplane.com"}[zoneID]
+		want := BlockingHostname{RouteID: "route_late", Hostname: "late.loomplane.com", ZoneID: zoneID, ZoneName: zoneName, ProjectID: "shop", ProjectName: "Shop"}
+		if inUse.Zone != "loomplane.com" || !inUse.Subdomains || len(inUse.Hostnames) != 1 || inUse.Hostnames[0] != want {
+			t.Fatalf("%s: refusal: %+v", zoneID, inUse)
+		}
+		if ids := zoneIDs(st); !slices.Contains(ids, "zone_app") || !slices.Contains(ids, "zone_root") || len(dns.deleted) != 0 {
+			t.Fatalf("%s: zones left %v, records deleted %v", zoneID, ids, dns.deleted)
+		}
 	}
 }

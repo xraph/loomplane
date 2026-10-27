@@ -865,6 +865,52 @@ func TestDomainsRemoveDomainWithSubdomain(t *testing.T) {
 	}
 }
 
+// racingZones runs before ahead of each zone row delete, the way a request
+// can land between a removal's first check and its deletes.
+type racingZones struct {
+	*cloudinfra.PgStore
+	before func(id string)
+}
+
+func (s *racingZones) RemoveZone(ctx context.Context, org, id string, revision int64) error {
+	s.before(id)
+	return s.PgStore.RemoveZone(ctx, org, id, revision)
+}
+
+// A route that lands on a subdomain after the removal checked still names
+// itself, so you see which hostname is in the way.
+func TestDomainsRouteRacingARemovalIsListed(t *testing.T) {
+	env := newDomainsRuntime(t)
+	ctx, p := t.Context(), security.Principal{OrgID: "org", UserID: "manager"}
+	domain, app := domainWithSubdomain(t, env)
+	preview, err := env.svc.PreviewRoute(ctx, p, "proj", cloudinfra.RouteInput{ZoneID: app.ID, CloudID: "cloud", EnvironmentID: "env", Service: "web", Hostname: "web.app.example.com", Port: 8080})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = env.svc.ApplyRoute(ctx, p, "proj", preview.ID, cloudinfra.ApplyInput{Review: preview.Review}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = env.sql.Exec(ctx, `UPDATE loomplane_domain_routes SET status='removed'`); err != nil {
+		t.Fatal(err)
+	}
+	race := &racingZones{PgStore: env.store, before: func(id string) {
+		if id == app.ID {
+			if _, execErr := env.sql.Exec(ctx, `UPDATE loomplane_domain_routes SET status='ready'`); execErr != nil {
+				t.Fatal(execErr)
+			}
+		}
+	}}
+	svc := cloudinfra.NewService(cloudinfra.Deps{Store: env.store, Domains: race, Authz: domainAuth{}, Resolver: env.resolver})
+	err = svc.RemoveZone(ctx, p, domain.ID, domain.Revision)
+	var inUse *cloudinfra.ZoneInUseError
+	if !errors.As(err, &inUse) || len(inUse.Hostnames) != 1 || inUse.Hostnames[0].Hostname != "web.app.example.com" || inUse.Hostnames[0].ZoneName != "app.example.com" {
+		t.Fatalf("a route that raced the removal: %v %+v", err, inUse)
+	}
+	if n := zoneRows(t, env); n != 2 {
+		t.Fatal("rows left after a refused removal", n)
+	}
+}
+
 // A subdomain added while its domain is being removed is caught by the
 // store either way round: the domain is kept while a zone sits under it,
 // and a zone that would be verified through a removed domain isn't added.
