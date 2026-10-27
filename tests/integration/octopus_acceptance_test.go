@@ -571,6 +571,11 @@ func (x *octoRun) checkOverride(routeID string) {
 func (x *octoRun) checkRestore(request string) {
 	t := x.t
 	before := x.status().StartTime
+	// Without a start time to compare there's no telling the restarted
+	// process apart from the old one.
+	if before == "" {
+		t.Fatal("check 4: Octopus reports no start time before the restart, so the run can't tell when it's back")
+	}
 	if err := x.restart(t.Context()); err != nil {
 		t.Fatalf("check 4: restart Octopus: %v", err)
 	}
@@ -690,9 +695,8 @@ func (x *octoRun) checkDomain(request string) {
 			t.Fatalf("check 6: GET https://%s/admin reached Octopus: HTTP %d %.200q", hostname, admin.Status, admin.Body)
 		}
 		t.Logf("check 6 PASS: https://%s%s answered HTTP %d through Octopus, and /admin answered HTTP %d without reaching it", hostname, request, answer.Status, admin.Status)
-		guard := x.guard
-		if guard != nil {
-			guard.sandboxOnly(t)
+		if x.guard != nil {
+			x.guard.sandboxOnly(t)
 		}
 	})
 }

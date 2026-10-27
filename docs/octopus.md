@@ -30,7 +30,7 @@ Octopus runs as one stateless container or pod, `ghcr.io/xraph/octopus` 0.5.0, p
 
 Loomplane generates the admin password, the admin session secret, an admin API token and a FARP token, keeps all four in Vault and hands them to Octopus as secrets. The admin always requires a password. You never need to see it, because **Open Octopus admin** signs you in.
 
-Anyone who can read the project sees the gateway's tabs. Adding, changing or removing a route, attaching a domain, picking where FARP routes land and pushing again all need permission to modify the project's infrastructure, which admins and owners have.
+Every role sees the gateway's tabs, viewers included. Adding, changing or removing a route, attaching a domain, picking where FARP routes land and pushing again all need permission to modify the project's infrastructure, which admins and owners have.
 
 ## Routes
 
@@ -119,9 +119,11 @@ The Sync section on the Settings tab shows when Loomplane last pushed to Octopus
 | Octopus isn't answering on its private port. | The container or pod is down, or the private channel can't reach it. Loomplane keeps your change and pushes it within 30 seconds. |
 | Octopus isn't running in this environment yet. | The first deploy hasn't finished. The push happens once it has. |
 | Loomplane is already pushing this gateway's routes. | Another push was running. Yours goes out within 30 seconds. |
+| Loomplane couldn't work out what this gateway should serve. | Loomplane couldn't read what the gateway needs from its own records: the environment's bindings, your routes or the attached hostnames. It tries again within 30 seconds. |
 | Loomplane couldn't read the gateway's admin credentials. | The generated secrets aren't readable from Vault. Loomplane tries again within 30 seconds. |
 | Octopus refused Loomplane's admin requests. | Octopus answered the admin API with an error instead of its routes. Loomplane tries again within 30 seconds. |
 | Octopus didn't accept one of this gateway's routes. | The route's own row says why. |
+| Octopus didn't accept a change Loomplane pushed. | Octopus refused something other than one of your routes, such as removing an old route or upstream, or taking the FARP hostnames. The error names it. Everything else is applied, and Loomplane tries again within 30 seconds. |
 
 **Push routes again** runs a push now. When Octopus doesn't answer within 5 seconds, the Routes tab still lists your routes and says FARP's can't be shown until it's back.
 
