@@ -30,6 +30,16 @@ import (
 // This uses the installed API, authorization, Vault, Dispatch and PostgreSQL;
 // Google is an HTTP fixture, and no successful database login is claimed.
 func TestInstalledCloudRevertDoesNotAdoptPartialSQLDeployment(t *testing.T) {
+	testInstalledPartialSQLCleanup(t, "")
+}
+
+func TestInstalledCloudSQLCleanupAfterSourceOrSubnetLoss(t *testing.T) {
+	for _, loss := range []string{"source", "subnet", "both", "source-after-intent"} {
+		t.Run(loss, func(t *testing.T) { testInstalledPartialSQLCleanup(t, loss) })
+	}
+}
+
+func testInstalledPartialSQLCleanup(t *testing.T, loss string) {
 	google := newFakeGoogle(t)
 	route := manageddb.CloudSQLSourceEndpoint{ConsumerProject: "acme-prod", Network: "projects/acme-prod/global/networks/apps", ForwardingRule: "projects/acme-prod/regions/us-central1/forwardingRules/database", ProvisionSubnetwork: "projects/acme-prod/regions/us-central1/subnetworks/psc"}
 	network := newSourceNetworkFixture(t, route, "", "provision-lost-rule")
@@ -37,6 +47,9 @@ func TestInstalledCloudRevertDoesNotAdoptPartialSQLDeployment(t *testing.T) {
 	cleanupStarted := false
 	holdRecovery := true
 	sqlDeleted := false
+	sourceLost := false
+	subnetLost := false
+	denyRecovery := false
 	var instance string
 	var settings map[string]any
 	writes := map[string]int{}
@@ -44,6 +57,14 @@ func TestInstalledCloudRevertDoesNotAdoptPartialSQLDeployment(t *testing.T) {
 		mu.Lock()
 		defer mu.Unlock()
 		w.Header().Set("Content-Type", "application/json")
+		if cleanupStarted && denyRecovery && strings.HasSuffix(r.URL.Path, "/operations") {
+			w.WriteHeader(http.StatusForbidden)
+			return
+		}
+		if subnetLost && r.URL.Path == "/compute/v1/"+route.ProvisionSubnetwork {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
 		// Keep the original deployment failed until an explicit recovery is accepted.
 		if (holdRecovery || cleanupStarted) && network.lost && strings.HasSuffix(r.URL.Path, "/operations") {
 			w.WriteHeader(http.StatusBadRequest)
@@ -57,7 +78,19 @@ func TestInstalledCloudRevertDoesNotAdoptPartialSQLDeployment(t *testing.T) {
 				_ = json.NewEncoder(w).Encode(map[string]any{"kind": "sql#operation", "name": "remove", "status": "DONE", "targetProject": "acme-prod", "targetId": instance, "operationType": "DELETE"})
 				return
 			}
-			if instance == "" || sqlDeleted {
+			if cleanupStarted && loss == "source-after-intent" {
+				var removal struct {
+					Stage     string `json:"stage"`
+					Uncertain bool   `json:"uncertain"`
+				}
+				if decodeErr := json.Unmarshal(network.checkpoint(), &removal); decodeErr != nil {
+					t.Error(decodeErr)
+				}
+				if removal.Stage == "remove" && removal.Uncertain {
+					sourceLost = true
+				}
+			}
+			if instance == "" || sqlDeleted || sourceLost {
 				w.WriteHeader(http.StatusNotFound)
 				return
 			}
@@ -256,6 +289,15 @@ func TestInstalledCloudRevertDoesNotAdoptPartialSQLDeployment(t *testing.T) {
 	network.scenario = "provision-remove-retry"
 	network.lost = false
 	cleanupStarted = true
+	sourceLost = loss == "source" || loss == "both"
+	subnetLost = loss == "subnet" || loss == "both"
+	if sourceLost {
+		network.objects[route.ForwardingRule]["pscConnectionStatus"] = "CLOSED"
+	}
+	if subnetLost {
+		clear(network.objects)
+		denyRecovery = true
+	}
 	mu.Unlock()
 	denied.must(http.StatusForbidden, http.MethodPost, cleanupURL+"/apply", map[string]string{"revision": review.Revision}, nil)
 	c.must(http.StatusConflict, http.MethodPost, cleanupURL+"/apply", map[string]string{"revision": "stale"}, nil)
@@ -292,8 +334,12 @@ func TestInstalledCloudRevertDoesNotAdoptPartialSQLDeployment(t *testing.T) {
 	}
 	waitCleanup("failed")
 	mu.Lock()
-	if !sqlDeleted || network.counts["delete-rule"] != 1 || network.counts["delete-address"] != 0 {
-		t.Error("cleanup did not fail after deleting SQL and its rule", cleanup.Error, writes, network.counts)
+	if subnetLost || loss == "source-after-intent" {
+		if sqlDeleted || len(writes) != 1 || network.counts["delete-rule"] != 0 || network.counts["delete-address"] != 0 {
+			t.Error("denied recovery mutated resources", cleanup.Error, writes, network.counts)
+		}
+	} else if (!sourceLost && !sqlDeleted) || sourceLost && sqlDeleted || network.counts["delete-rule"] != 1 || network.counts["delete-address"] != 0 {
+		t.Error("cleanup did not retain expected deletion progress", cleanup.Error, writes, network.counts)
 	}
 	mu.Unlock()
 	app.stop()
@@ -304,6 +350,7 @@ func TestInstalledCloudRevertDoesNotAdoptPartialSQLDeployment(t *testing.T) {
 	mu.Lock()
 	network.lost = false
 	network.scenario = ""
+	denyRecovery = false
 	mu.Unlock()
 	c.must(http.StatusAccepted, http.MethodPost, cleanupURL+"/retry", nil, &cleanup)
 	if cleanup.Attempt != 2 {
@@ -335,7 +382,14 @@ func TestInstalledCloudRevertDoesNotAdoptPartialSQLDeployment(t *testing.T) {
 			t.Errorf("repeated SQL mutation %s: %d", request, count)
 		}
 	}
-	if !sqlDeleted || len(writes) != 2 || len(network.objects) != 0 || network.counts["delete-rule"] != 1 || network.counts["delete-address"] != 1 || network.counts["request-delete-rule"] != 1 || network.counts["request-delete-address"] != 1 || network.counts["insert-zone"] != 0 {
+	wantWrites, wantNetworkDeletes := 2, 1
+	if sourceLost {
+		wantWrites = 1
+	}
+	if subnetLost {
+		wantNetworkDeletes = 0
+	}
+	if sqlDeleted == sourceLost || len(writes) != wantWrites || len(network.objects) != 0 || network.counts["delete-rule"] != wantNetworkDeletes || network.counts["delete-address"] != wantNetworkDeletes || network.counts["request-delete-rule"] != wantNetworkDeletes || network.counts["request-delete-address"] != wantNetworkDeletes || network.counts["insert-zone"] != 0 {
 		t.Fatal("incomplete or repeated cleanup", writes, network.counts)
 	}
 }

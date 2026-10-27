@@ -39,7 +39,7 @@ func (c *CloudSQL) ResolvePendingCloudResource(ctx context.Context, job *Job) (*
 			return nil, checkErr
 		}
 	}
-	if checkErr := state.guarded(client, true).Check(ctx); checkErr != nil {
+	if checkErr := state.checkPendingSource(ctx, client); checkErr != nil {
 		return nil, checkErr
 	}
 	if state.PSC != nil {
@@ -174,4 +174,21 @@ func (s *cloudSQLState) restorePendingPSC(cfg *planning.ResourceConfig, b *plann
 		return errCloudSQLPSCOwnership
 	}
 	return nil
+}
+
+// A missing pinned source can be abandoned only when its endpoint has a saved
+// v3 source witness. The provider still validates that witness and every native
+// operation before exposing deletion ownership.
+func (s *cloudSQLState) checkPendingSource(ctx context.Context, client *gcp.Session) error {
+	if s.PSC == nil || s.PSC.Provision.Version != 3 || s.Uncertain || s.ResourceID == "" {
+		return s.guarded(client, true).Check(ctx)
+	}
+	in, err := client.GetSQLInstance(ctx, s.Scope.Instance)
+	if gcp.IsNotFound(err) {
+		return s.pscCheck(ctx)
+	}
+	if err != nil {
+		return err
+	}
+	return s.inspect(in, true)
 }

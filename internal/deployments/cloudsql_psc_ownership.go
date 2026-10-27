@@ -26,7 +26,7 @@ func ownedCloudSQLPSC(cfg *planning.ResourceConfig) bool {
 }
 
 func (o *cloudSQLPSCOwnership) complete(project, physical string, route provider.CloudSQLSourceEndpoint) bool {
-	return o != nil && o.Version == 1 && o.Route == route && o.Provision.Version == 2 && physical != "" &&
+	return o != nil && o.Version == 1 && o.Route == route && (o.Provision.Version == 2 || o.Provision.Version == 3) && physical != "" &&
 		o.Provision.SourceProject == project && o.Provision.SourcePhysicalID == physical &&
 		o.Provision.Subnet.Route == (provider.CloudSQLApplicationNetwork{ConsumerProject: route.ConsumerProject, Network: route.Network, Subnetwork: route.ProvisionSubnetwork}) &&
 		o.Provision.Address.Complete && o.Provision.ForwardingRule.Complete && o.Provision.DNS.Complete &&
