@@ -16778,7 +16778,8 @@
         "required": [
           "publishable_key",
           "app_id",
-          "auth_base_path"
+          "auth_base_path",
+          "features"
         ],
         "properties": {
           "app_id": {
@@ -16786,6 +16787,9 @@
           },
           "auth_base_path": {
             "type": "string"
+          },
+          "features": {
+            "$ref": "#/components/schemas/Features"
           },
           "publishable_key": {
             "type": "string"
@@ -20251,7 +20255,7 @@
           "proof_expires_at",
           "proof_checked_at",
           "verified_at",
-            "proof_publish_attempted_at",
+          "proof_publish_attempted_at",
           "revision"
         ],
         "properties": {
@@ -21359,6 +21363,17 @@
           "settings": {
             "type": "object",
             "additionalProperties": true
+          }
+        }
+      },
+      "Features": {
+        "type": "object",
+        "required": [
+          "ai"
+        ],
+        "properties": {
+          "ai": {
+            "type": "boolean"
           }
         }
       }

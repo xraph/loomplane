@@ -182,6 +182,10 @@ federation:
     workload_api: "${LOOMPLANE_FEDERATION_RUNTIME_WORKLOAD_API:-}"
     signing_keys_file: "${LOOMPLANE_FEDERATION_RUNTIME_SIGNING_KEYS_FILE:-}"
 
+# The AI section (models) is opt-in.
+ai:
+  enabled: "${LOOMPLANE_AI_ENABLED:-false}"
+
 # The database gateway. Its snapshots are signed with the Ed25519 keys in
 # this file: private (0600), as an absolute path, holding one key as
 # {"version":1,"private_key":"<base64 seed>","not_before":...,"not_after":...}

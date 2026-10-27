@@ -21,23 +21,20 @@ type Session struct {
 // in it is secret: the publishable key and app ID only name the authsome
 // app, which some authsome calls (checking an organization slug) take.
 type PublicConfig struct {
-	PublishableKey string `json:"publishable_key"`
-	AppID          string `json:"app_id"`
-	AuthBasePath   string `json:"auth_base_path"`
+	PublishableKey string   `json:"publishable_key"`
+	AppID          string   `json:"app_id"`
+	AuthBasePath   string   `json:"auth_base_path"`
+	Features       Features `json:"features"`
+}
+
+// Features says which optional sections the server runs, so the dashboard
+// shows only those.
+type Features struct {
+	AI bool `json:"ai"` // the server runs the AI section
 }
 
 func (e *Extension) routes(r forge.Router) error {
-	public := PublicConfig{
-		PublishableKey: e.cfg.Identity.PublishableKey,
-		AppID:          e.cfg.Identity.AppID,
-		AuthBasePath:   e.cfg.Identity.BasePath,
-	}
-	if err := r.GET("/api/v1/public-config", func(c forge.Context) error { return c.JSON(http.StatusOK, public) },
-		forge.WithName("publicConfig.get"),
-		forge.WithSummary("Settings the dashboard needs before sign-in"),
-		forge.WithTags("Identity"),
-		forge.WithResponseSchema(http.StatusOK, "Public settings", PublicConfig{}),
-	); err != nil {
+	if err := e.publicConfigRoute(r); err != nil {
 		return err
 	}
 	v1 := r.Group("/api/v1", forge.WithGroupMiddleware(e.guard()), forge.WithGroupTags("Identity"))
@@ -52,6 +49,22 @@ func (e *Extension) routes(r forge.Router) error {
 		return err
 	}
 	return e.keyRoutes(r)
+}
+
+// publicConfigRoute serves the settings the dashboard reads before sign-in.
+func (e *Extension) publicConfigRoute(r forge.Router) error {
+	public := PublicConfig{
+		PublishableKey: e.cfg.Identity.PublishableKey,
+		AppID:          e.cfg.Identity.AppID,
+		AuthBasePath:   e.cfg.Identity.BasePath,
+		Features:       Features{AI: e.cfg.AI.Enabled},
+	}
+	return r.GET("/api/v1/public-config", func(c forge.Context) error { return c.JSON(http.StatusOK, public) },
+		forge.WithName("publicConfig.get"),
+		forge.WithSummary("Settings the dashboard needs before sign-in"),
+		forge.WithTags("Identity"),
+		forge.WithResponseSchema(http.StatusOK, "Public settings", PublicConfig{}),
+	)
 }
 
 func (e *Extension) getSession(c forge.Context) error {

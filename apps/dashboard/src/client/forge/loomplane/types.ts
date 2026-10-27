@@ -1067,6 +1067,10 @@ export interface FarpHostnamesInputBody {
   revision: number;
 }
 
+export interface Features {
+  ai: boolean;
+}
+
 export interface Federation {
   accessGrants?: Record<string, any>;
   destinations?: Record<string, any>;
@@ -2133,6 +2137,7 @@ export interface Provisions {
 export interface PublicConfig {
   appId: string;
   authBasePath: string;
+  features: Features;
   publishableKey: string;
 }
 

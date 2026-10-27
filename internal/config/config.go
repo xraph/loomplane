@@ -70,6 +70,7 @@ type Config struct {
 	Drift         DriftConfig
 	Worker        WorkerConfig
 	Federation    FederationConfig
+	AI            AIConfig
 	Providers     ProvidersConfig
 	DBGateway     DBGatewayConfig
 }
@@ -435,6 +436,7 @@ func FromSource(src Getter) (Config, error) {
 	r.plugins(&c.Providers.Plugins, "providers.plugins")
 	r.names(&c.Providers.Paused, "providers.paused")
 	r.boolean(&c.Federation.Enabled, "federation.enabled")
+	r.boolean(&c.AI.Enabled, "ai.enabled")
 	r.boolean(&c.Federation.Runtime.Enabled, "federation.runtime.enabled")
 	r.str(&c.Federation.Runtime.ListenAddress, "federation.runtime.listen_address")
 	r.str(&c.Federation.Runtime.OrganizationID, "federation.runtime.organization_id")
