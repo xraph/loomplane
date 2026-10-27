@@ -174,7 +174,7 @@ func failFabriq(c forge.Context, err error) error {
 		return forge.NewHTTPError(http.StatusUnprocessableEntity, err.Error())
 	case errors.Is(err, fabriqloom.ErrNotFound):
 		return forge.NewHTTPError(http.StatusNotFound, err.Error())
-	case errors.Is(err, fabriqloom.ErrRequestConflict):
+	case errors.Is(err, fabriqloom.ErrRequestConflict), errors.Is(err, fabriqloom.ErrBusy):
 		return forge.NewHTTPError(http.StatusConflict, err.Error())
 	}
 	return fail(err)

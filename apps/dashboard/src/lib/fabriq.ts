@@ -139,7 +139,7 @@ function sentence(text: string): string {
 }
 
 export type StackState =
-  "Running" | "Completed" | "Off" | "Not running" | "External" | "Linked"
+  "Running" | "Completed" | "Off" | "Not running" | "External"
 
 export type StackPart = {
   id:
@@ -156,22 +156,34 @@ export type StackPart = {
   detail: string
 }
 
+export type EngineSource = "managed" | "resource" | "external" | "unset"
+
 export type StackInput = {
   library?: boolean
   /** The resource's provider: "server" is Docker, "kubernetes" a cluster. */
   provider: string
-  /** Whether Loomplane runs Postgres and Redis, or they are the project's own or external. */
-  postgres: "managed" | "linked"
-  redis: "managed" | "linked"
+  /**
+   * Where Postgres and Redis come from: provisioned with Fabriq ("managed"),
+   * another resource in this project ("resource", which Loomplane runs), or
+   * an endpoint Loomplane doesn't run ("external"). "unset" is no choice at
+   * all, which makes no claim about backups or persistence.
+   */
+  postgres: EngineSource
+  redis: EngineSource
+  /** The resource's name, for a Postgres that is a project resource. */
+  postgresResource?: string
   /** The saved policy, including operator overrides. */
   backupPolicy?: { enabled: boolean; everyHours: number; lastError?: string }
   backupPolicyStatus?: "loading" | "unavailable" | "denied"
   /** When the newest test restore of Postgres was verified, if one has been. */
   restoreVerifiedAt?: string
+  /** Set while the backups and restores are still loading, or couldn't be read. */
+  restoreStatus?: "loading" | "unavailable"
   now: number
   /** Which parts are deployed and in step. A part left out counts as deployed. */
   down?: StackPart["id"][]
-  linked?: Partial<Record<StackPart["id"], "External" | "Linked">>
+  /** The engines Loomplane doesn't run, which it makes no claim about. */
+  external?: StackPart["id"][]
   falkordb: boolean
   elasticsearch: boolean
   /** How many migrations Fabriq reports applied, when it reports them. */
@@ -182,15 +194,36 @@ export type StackInput = {
 
 const postgresExtensions = "TimescaleDB, pgvector, PostGIS."
 
+/** What an external engine says on the Stack and Engines cards. */
+const externalSentence = "Not managed by Loomplane: no backups or restores."
+
+/** What the Postgres card and the Add Fabriq dialog say about backups on a cluster. */
+export const kubernetesBackupsSentence =
+  "Backups on Kubernetes aren’t available yet."
+
 function postgresDetail(input: StackInput): string {
-  if (input.postgres === "linked")
-    return `${postgresExtensions} Connected to your engine. See Recovery for its backup options.`
+  if (input.postgres === "external")
+    return `${postgresExtensions} ${externalSentence}`
   if (input.provider === "kubernetes")
-    return `${postgresExtensions} Backups on Kubernetes aren’t available yet.`
+    return `${postgresExtensions} ${kubernetesBackupsSentence}`
+  if (input.postgres === "resource")
+    return `${postgresExtensions} Backed up with ${input.postgresResource ?? "its resource"}.`
+  if (input.postgres === "unset") return postgresExtensions
   const schedule = backupSchedule(input)
+  if (input.restoreStatus === "loading")
+    return `${postgresExtensions} ${schedule}.`
+  if (input.restoreStatus === "unavailable")
+    return `${postgresExtensions} ${schedule}, restore history unavailable.`
   return input.restoreVerifiedAt
     ? `${postgresExtensions} ${schedule}, last restore verified ${agoDay(input.restoreVerifiedAt, input.now)}.`
     : `${postgresExtensions} ${schedule}, no restore verified yet.`
+}
+
+function redisDetail(input: StackInput): string {
+  const base = "Outbox stream and cache."
+  if (input.redis === "external") return `${base} ${externalSentence}`
+  if (input.redis === "unset") return base
+  return `${base} AOF every second.`
 }
 
 function backupSchedule(input: StackInput): string {
@@ -215,7 +248,11 @@ function backupSchedule(input: StackInput): string {
  */
 export function stackParts(input: StackInput): StackPart[] {
   const state = (id: StackPart["id"], running: StackState): StackState =>
-    input.linked?.[id] ?? (input.down?.includes(id) ? "Not running" : running)
+    input.external?.includes(id)
+      ? "External"
+      : input.down?.includes(id)
+        ? "Not running"
+        : running
   const entityTypes =
     input.entityTypes === undefined
       ? ""
@@ -231,10 +268,7 @@ export function stackParts(input: StackInput): StackPart[] {
       id: "redis",
       name: "Redis",
       state: state("redis", "Running"),
-      detail:
-        input.redis === "linked"
-          ? "Outbox stream and cache. Run by you."
-          : "Outbox stream and cache. AOF every second.",
+      detail: redisDetail(input),
     },
     {
       id: "migrations",

@@ -34,7 +34,12 @@ type Input struct {
 	// Catalog requests a standalone service without repository sources.
 	Catalog         bool
 	CloudPlacements map[string]CloudPlacement
-	CapacityIntents map[string]*CapacityIntent
+	// UnverifiedPlacements are the composed resources on a target of the
+	// environment's Cloud that have no CloudPlacement because the Cloud's
+	// or the target's revisions, or its connection's account, aren't
+	// verified. Their catalog-cloud-placement-missing warning says so.
+	UnverifiedPlacements map[string]bool
+	CapacityIntents      map[string]*CapacityIntent
 	// Federation contains scoped persisted observations; nil leaves all federation capabilities unavailable.
 	Federation *FederationInput
 	// Environment is the environment's name, which picks the manifest's
@@ -62,6 +67,10 @@ type Input struct {
 	// endpointKey instead. A connected endpoint with no check can't be
 	// used.
 	Endpoints map[string]EndpointCheck
+	// FabriqPostgres are the external endpoints that Fabriq resources in
+	// the organization's other environments connect as their Postgres, each
+	// with one that does. A Fabriq here can't connect them too.
+	FabriqPostgres map[string]FabriqUser
 }
 
 // ConnectionOption is a cloud connection a plan could deploy with.
@@ -164,6 +173,7 @@ func Compute(in Input) *Result {
 	p.planDatabaseGateway()
 	p.checkTargetPlacements()
 	p.checkCloudSQLApplications()
+	p.checkFabriqDatabases()
 	p.checkServerGPUs()
 	p.readdress()
 	for p.routedReplacements() {
@@ -176,6 +186,7 @@ func Compute(in Input) *Result {
 	p.checkFindings()
 	p.impact()
 	p.planDeletes()
+	p.refuseRoutedDeletes()
 	p.stillReplaced()
 	return p.finish()
 }

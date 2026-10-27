@@ -48,9 +48,15 @@ func TestKubernetesRouteBindingQuery(t *testing.T) {
 		t.Helper()
 		exec(`INSERT INTO loomplane_bindings(id,org_id,project_id,environment_id,subject,name,provider,engine,external_id,connection_id,config,created_at,updated_at) VALUES($1,'org','shop','prod','resource',$2,'kubernetes','http',$3,'conn_k8s',$4,now(),now())`, "b_"+name, name, instance.String(), config)
 	}
-	binding("octo--gateway", placed, `{"routable_ports":[8080],"cloud_placement":{"cloud_id":"cloud_1","target_id":"target_k8s"}}`)
-	binding("loose--gateway", loose, `{"routable_ports":[8080]}`)
-	binding("default--gateway", fallback, `{"routable_ports":[8080],"cloud_placement":{"cloud_id":"cloud_1","default":true}}`)
+	// A component routes only as a process of a composed resource other than
+	// itself, the way planning records one.
+	component := func(resource, name, role string) string {
+		return `"component":{"kind":"octopus","resource":"` + resource + `","component":{"name":"` + name + `","role":"` + role + `"}}`
+	}
+	gatewayOf := func(resource string) string { return component(resource, "gateway", "process") }
+	binding("octo--gateway", placed, `{`+gatewayOf("octo")+`,"routable_ports":[8080],"cloud_placement":{"cloud_id":"cloud_1","target_id":"target_k8s"}}`)
+	binding("loose--gateway", loose, `{`+gatewayOf("loose")+`,"routable_ports":[8080]}`)
+	binding("default--gateway", fallback, `{`+gatewayOf("default")+`,"routable_ports":[8080],"cloud_placement":{"cloud_id":"cloud_1","default":true}}`)
 	st := NewPgStore(pg)
 
 	check := func(name string, in RouteInput, instance id.ID) RouteBinding {
@@ -97,7 +103,7 @@ func TestKubernetesRouteBindingQuery(t *testing.T) {
 	exec(`INSERT INTO cp_instances VALUES($1,'org',NULL,'{}',jsonb_build_array(jsonb_build_object('name','main','image','octopus/gateway:1','ports','[{"container":8080,"protocol":"tcp"},{"container":9090,"protocol":"tcp"}]'::jsonb)),'{}','running')`, planned.String())
 	pin := `"cloud_placement":{"cloud_id":"cloud_1","cloud_revision":1,"assignment_revision":1,"grant_revision":1,"target_id":"target_k8s","target_revision":1,"target_name":"cluster","provider":"kubernetes","connection_id":"conn_k8s","account_identity":"cluster","region_source":"default"}`
 	binding("plan0--gateway", planned, `{"target":"conn_k8s","provider":"kubernetes","kind":"octopus","version":"1.0.0",`+
-		`"component":{"kind":"octopus","resource":"plan0","revision":"r1","component":{"name":"gateway","image":"octopus/gateway:1","ports":[{"name":"http","container":8080,"protocol":"http","routable":true},{"name":"admin","container":9090,"protocol":"http","control":true}]},"protection":"rebuildable"},`+
+		`"component":{"kind":"octopus","resource":"plan0","revision":"r1","component":{"name":"gateway","role":"process","image":"octopus/gateway:1","ports":[{"name":"http","container":8080,"protocol":"http","routable":true},{"name":"admin","container":9090,"protocol":"http","control":true}]},"protection":"rebuildable"},`+
 		`"routable_ports":[8080],`+pin+`}`)
 	binding("plan0", planned, `{"target":"conn_k8s","provider":"kubernetes","kind":"octopus","version":"1.0.0","composition":{"kind":"octopus","version":"1.0.0","revision":"r1"},`+pin+`}`)
 	if cloud, err = st.RouteBindingCloud(ctx, "org", "shop", "prod", "plan0--gateway"); err != nil || cloud != "cloud_1" {
@@ -106,6 +112,23 @@ func TestKubernetesRouteBindingQuery(t *testing.T) {
 	check("as the planner records a component", RouteInput{EnvironmentID: "prod", Service: "plan0--gateway", CloudID: "cloud_1", Port: 8080}, planned)
 	if b, resolveErr := st.ResolveRouteBinding(ctx, "org", "shop", RouteInput{EnvironmentID: "prod", Service: "plan0", CloudID: "cloud_1", Port: 8080}); !errors.Is(resolveErr, ErrNotFound) {
 		t.Fatalf("the composed resource itself resolved: %+v %v", b, resolveErr)
+	}
+
+	// Even with a stray routable_ports list, a database, a dependency-only
+	// kind's part (its own composed resource) and a job never take a route.
+	stray := id.New(id.PrefixInstance)
+	exec(`INSERT INTO cp_instances VALUES($1,'org',NULL,'{}',jsonb_build_array(jsonb_build_object('name','main','ports','[{"container":8080},{"container":5432}]'::jsonb)),'{}','running')`, stray.String())
+	binding("pg", stray, `{"provider":"kubernetes","kind":"postgres","catalog":{"id":"postgres-17"},"routable_ports":[5432],`+pin+`}`)
+	binding("graph", stray, `{"provider":"kubernetes","kind":"graph",`+component("graph", "server", "process")+`,"routable_ports":[8080],`+pin+`}`)
+	binding("plan0--migrate", stray, `{"provider":"kubernetes","kind":"octopus",`+component("plan0", "migrate", "job")+`,"routable_ports":[8080],`+pin+`}`)
+	for name, refused := range map[string]RouteInput{
+		"a database":             {EnvironmentID: "prod", Service: "pg", CloudID: "cloud_1", Port: 5432},
+		"a dependency-only part": {EnvironmentID: "prod", Service: "graph", CloudID: "cloud_1", Port: 8080},
+		"a job component":        {EnvironmentID: "prod", Service: "plan0--migrate", CloudID: "cloud_1", Port: 8080},
+	} {
+		if b, resolveErr := st.ResolveRouteBinding(ctx, "org", "shop", refused); !errors.Is(resolveErr, ErrNotFound) {
+			t.Fatalf("%s resolved: %+v %v", name, b, resolveErr)
+		}
 	}
 
 	for name, refused := range map[string]RouteInput{
@@ -145,8 +168,8 @@ func TestKubernetesRouteBindingQuery(t *testing.T) {
 	for _, instance := range []id.ID{staleTarget, staleDefault} {
 		exec(`INSERT INTO cp_instances VALUES($1,'org',NULL,'{}',jsonb_build_array(jsonb_build_object('name','gateway','ports','[{"container":8080}]'::jsonb)),'{}','running')`, instance.String())
 	}
-	binding("stale--gateway", staleTarget, `{"routable_ports":[8080],"cloud_placement":{"cloud_id":"cloud_2","target_id":"target_other"}}`)
-	binding("staledefault--gateway", staleDefault, `{"routable_ports":[8080],"cloud_placement":{"cloud_id":"cloud_2","default":true}}`)
+	binding("stale--gateway", staleTarget, `{`+gatewayOf("stale")+`,"routable_ports":[8080],"cloud_placement":{"cloud_id":"cloud_2","target_id":"target_other"}}`)
+	binding("staledefault--gateway", staleDefault, `{`+gatewayOf("staledefault")+`,"routable_ports":[8080],"cloud_placement":{"cloud_id":"cloud_2","default":true}}`)
 	for _, service := range []string{"stale--gateway", "staledefault--gateway"} {
 		if b, resolveErr := st.ResolveRouteBinding(ctx, "org", "shop", RouteInput{EnvironmentID: "prod", Service: service, CloudID: "cloud_2", Port: 8080}); !errors.Is(resolveErr, ErrNotFound) {
 			t.Fatalf("%s resolved through another Cloud's connection: %+v %v", service, b, resolveErr)

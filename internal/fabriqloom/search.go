@@ -10,10 +10,12 @@ import (
 
 const (
 	rolesPath = "/usr/share/elasticsearch/config/roles.yml"
-	// probeRole lets an anonymous request read cluster health and nothing
-	// else, so the unauthenticated readiness probe passes while every index
-	// still needs the elastic password.
-	probeRole = "loomplane_probe:\n  cluster: [\"cluster:monitor/health\"]\n"
+	// probeRole lets an anonymous request read the root document (cluster
+	// name and version) and nothing else. cluster:monitor/health is not safe
+	// here: with it, GET /_cluster/health?level=indices lists every index
+	// name and /_cluster/health/<index> answers per index, anonymously, which
+	// leaks tenant-named Fabriq indices. The root document names no index.
+	probeRole = "loomplane_probe:\n  cluster: [\"cluster:monitor/main\"]\n"
 )
 
 // SearchHooks are the Elasticsearch kind's hooks: it renders the role the

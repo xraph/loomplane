@@ -81,6 +81,11 @@ type OwnedTarget struct {
 	// services Loomplane depends on and an operator's denied ranges. Nil
 	// refuses only its own host's addresses.
 	DialGuard *DialGuard
+	// FilesRevisionKey keys the digest of a component's rendered files in
+	// its revision label, derived from secret_key under
+	// FilesRevisionKeyLabel, so the label can't be used to guess a file's
+	// content offline. A component with files doesn't start without it.
+	FilesRevisionKey []byte
 
 	// Bindings lists what runs in an environment, for reaching the
 	// components of a composition from its hooks. Nil leaves a component
@@ -667,7 +672,7 @@ func ownedSpec(job *Job, image string, state ownedState) (sp cpprovider.ServiceS
 		// The rendered bytes are part of the revision, so a changed file
 		// starts another container. Only their digest is a label.
 		labels[owned.LabelRuntimeFiles] = "true"
-		labels[owned.LabelRevision] += "/" + filesRevision(job.files)
+		labels[owned.LabelRevision] += "/" + job.filesRevision
 	}
 	return sp, labels
 }
@@ -715,10 +720,7 @@ func (e *OwnedTarget) Remove(ctx context.Context, job *Job, b *planning.Binding)
 		if e.Secrets == nil {
 			return ErrNoCredential
 		}
-		if err := e.Secrets.Delete(ctx, resourceKey(b.OrgID, b.EnvironmentID, b.Name, componentAddressField)); err != nil {
-			return err
-		}
-		return e.forgetPublished(ctx, b, resource.Component)
+		return e.forgetComponent(ctx, b, resource.Component)
 	}
 	return nil
 }

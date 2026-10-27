@@ -292,6 +292,9 @@ func (e *Extension) Register(fapp forge.App) error {
 	// An external endpoint's DSN is a resource credential too.
 	e.endpoints = catalogconnect.NewService(catalogconnect.NewPgStore(pg), resourceSecrets, authz)
 	e.endpoints.Audit = endpointAuditor{chronicle: audit, appID: e.cfg.Identity.AppID, log: log}
+	e.endpoints.OrphanedDSN = func(_ context.Context, vaultKey string, err error) {
+		log.Warn("a deleted catalog endpoint's DSN is still in Vault; delete it by its key", forge.F("vault_key", vaultKey), forge.F("error", err.Error()))
+	}
 	ctrl := deployments.CtrlPlane{Providers: cp.Providers(), Instances: cp.Instances, Deploys: cp.Deploys}
 	routeService, err := forge.InjectType[*cloudinfra.Service](c)
 	if err != nil {
@@ -310,7 +313,13 @@ func (e *Extension) Register(fapp forge.App) error {
 	// observers hear of each service binding a deployment writes or
 	// deletes. A kind that tracks its consumers registers its own here.
 	observers := make([]deployments.ReleaseObserver, 0, 1)
-	serverTarget := &deployments.OwnedTarget{RouteGuard: routeService, Cloud: connections.Server, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, Ports: owned.NewReservations(pg), GPULocks: owned.NewGPULocks(pg), Hooks: catalogHooks, Endpoints: e.endpoints, Checker: checker}
+	// A component's rendered files show in its revision label only as a
+	// digest keyed by this installation.
+	filesKey, err := security.DeriveKey(e.cfg.SecretKey, deployments.FilesRevisionKeyLabel)
+	if err != nil {
+		return err
+	}
+	serverTarget := &deployments.OwnedTarget{RouteGuard: routeService, Cloud: connections.Server, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, Ports: owned.NewReservations(pg), GPULocks: owned.NewGPULocks(pg), Hooks: catalogHooks, Endpoints: e.endpoints, Checker: checker, FilesRevisionKey: filesKey}
 	// A cluster's endpoint checks dial from Loomplane's own network, so
 	// they never reach what Loomplane itself depends on.
 	denied, servicesErr := loomplaneServices(e.cfg)
@@ -318,7 +327,7 @@ func (e *Extension) Register(fapp forge.App) error {
 		log.Warn("endpoint checks from a cluster can reach the database", forge.F("error", servicesErr.Error()))
 	}
 	dialGuard := &deployments.DialGuard{Denied: e.cfg.Planning.EndpointDeniedCIDRs, Services: denied}
-	clusterTarget := &deployments.OwnedTarget{Cloud: connections.Kubernetes, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, Controllers: kubernetes.NewControllerStore(pg), Hooks: catalogHooks, Endpoints: e.endpoints, Checker: checker, DialGuard: dialGuard}
+	clusterTarget := &deployments.OwnedTarget{Cloud: connections.Kubernetes, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, Controllers: kubernetes.NewControllerStore(pg), Hooks: catalogHooks, Endpoints: e.endpoints, Checker: checker, DialGuard: dialGuard, FilesRevisionKey: filesKey}
 	serverTarget.Bindings, clusterTarget.Bindings = planStore.ListBindings, planStore.ListBindings
 	executors[connections.Server], executors[connections.Kubernetes] = serverTarget, clusterTarget
 	dialer := ownedDialer{credentials: clouds, targets: map[string]*deployments.OwnedTarget{connections.Server: serverTarget, connections.Kubernetes: clusterTarget}}

@@ -677,3 +677,78 @@ it("keeps embedded recovery scoped and opens the shared schedule and restore wor
   expect(writes[1].path).toMatch(/service-backups\/backup\/restore$/)
   expect(writes[1].body).toEqual({ request_id: expect.any(String) })
 })
+
+it("keeps the recovery copies list open after the copy finishes", async () => {
+  let copy = "running"
+  vi.stubGlobal(
+    "fetch",
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input)
+      if (init?.method === "POST") return response({ id: "accepted" }, 202)
+      if (path.endsWith("/environments"))
+        return response({ environments: [{ id: "prod", name: "production" }] })
+      if (path.includes("/bindings"))
+        return response({
+          bindings: [
+            {
+              id: "binding",
+              name: "database",
+              subject: "resource",
+              provider: "server",
+              environment_id: "prod",
+              config: { kind: "redis", catalog: { id: "redis-8.2" } },
+            },
+          ],
+        })
+      if (path.endsWith("/service-backups"))
+        return response({
+          backups: [
+            {
+              id: "backup",
+              name: "database",
+              environment_id: "prod",
+              status: "succeeded",
+              bytes: 512,
+              created_at: "2026-10-20T12:00:00Z",
+            },
+          ],
+        })
+      if (path.endsWith("/service-restores"))
+        return response({
+          restores: [
+            {
+              id: "restore",
+              backup_id: "backup",
+              status: copy,
+              created_at: "2026-10-20T12:00:00Z",
+              expires_at: "2026-10-21T12:00:00Z",
+            },
+          ],
+        })
+      return response({ policies: [] })
+    }
+  )
+  render(
+    <ClientProvider client={forgeClient}>
+      <ServiceRecovery
+        project="p"
+        environment="prod"
+        resource="database"
+        embeddedTitle="Redis"
+      />
+    </ClientProvider>
+  )
+  const summary = await screen.findByText(/Isolated recovery copies/)
+  const copies = summary.closest("details")!
+  expect(summary).toHaveTextContent("In progress")
+  expect(copies).toHaveAttribute("open")
+  // The copy finishes, and the next refresh shows it done.
+  copy = "succeeded"
+  await userEvent.click(screen.getByRole("button", { name: "Schedule" }))
+  await userEvent.click(screen.getByRole("button", { name: "Enable backups" }))
+  await vi.waitFor(() => expect(summary).not.toHaveTextContent("In progress"))
+  expect(copies).toHaveAttribute("open")
+  // Closing it is the reader's call.
+  await userEvent.click(summary)
+  expect(copies).not.toHaveAttribute("open")
+})

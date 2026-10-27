@@ -64,3 +64,12 @@ test("library explains conditional credentials without exposing their values", (
   ).toBeVisible()
   expect(screen.queryByText("FABRIQ_FALKORDB_PASSWORD")).toBeNull()
 })
+
+test("the worker note keeps a space before each code name", () => {
+  serve()
+  mount(<FabriqLibraryPanel {...panelProps({ kind: "fabriq-library" })} />)
+  const note = screen.getByText(/Loomplane runs the stock Fabriq worker/)
+  expect(note.textContent).toContain("built with forgeext.WithWorker(true)")
+  expect(note.textContent).toContain("with DefineDynamic")
+  expect(note.textContent).toContain("such as Validate or embeddings")
+})

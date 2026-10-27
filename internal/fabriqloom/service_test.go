@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"net/http/httptest"
+	"net/url"
 	"slices"
 	"strings"
 	"sync"
@@ -47,9 +49,14 @@ type fakeCatalog struct {
 	on         map[string]bool
 	roles      map[string][]security.Permission
 	channelErr error
-	result     owned.JobResult
-	jobErr     error
-	jobs       []jobCall
+	// adminErr fails channels to the admin component only.
+	adminErr error
+	// workerReady is what the worker's /_/readyz answers: 200 when 0.
+	workerReady int
+	opened      []deployments.ComponentRef
+	result      owned.JobResult
+	jobErr      error
+	jobs        []jobCall
 }
 
 func newFakeCatalog(f *fakeFabriq) *fakeCatalog {
@@ -116,14 +123,53 @@ func (c *fakeCatalog) Channel(_ context.Context, p security.Principal, need secu
 	if err := c.allow(p, need); err != nil {
 		return nil, err
 	}
+	c.mu.Lock()
+	c.opened = append(c.opened, ref)
+	adminErr, ready := c.adminErr, c.workerReady
+	c.mu.Unlock()
 	if c.channelErr != nil {
 		return nil, c.channelErr
+	}
+	if ref.ResourceRef == fabriqRef && ref.Component == "worker" && ref.Port == "api" {
+		return workerChannel(ready), nil
 	}
 	if ref.ResourceRef != fabriqRef || ref.Component != "admin" || ref.Port != "http" {
 		return nil, errors.New("only the console's http port reaches the admin API")
 	}
+	if adminErr != nil {
+		return nil, adminErr
+	}
 	return c.f.channel(), nil
 }
+
+func (c *fakeCatalog) channels() []deployments.ComponentRef {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return slices.Clone(c.opened)
+}
+
+// workerChannel reaches a library's stock worker, whose /_/readyz answers
+// status (200 when 0).
+func workerChannel(status int) *deployments.ComponentChannel {
+	if status == 0 {
+		status = http.StatusOK
+	}
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /_/readyz", func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(status) })
+	return &deployments.ComponentChannel{
+		Client: &http.Client{Transport: roundTripper(func(r *http.Request) (*http.Response, error) {
+			w := httptest.NewRecorder()
+			mux.ServeHTTP(w, r)
+			return w.Result(), nil
+		}), Timeout: 5 * time.Second},
+		BaseURL: &url.URL{Scheme: "http", Host: "component"},
+		Close:   func() error { return nil },
+	}
+}
+
+type roundTripper func(*http.Request) (*http.Response, error)
+
+func (f roundTripper) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func (c *fakeCatalog) RunJob(_ context.Context, orgID string, ref deployments.ResourceRef, component, name string) (owned.JobResult, error) {
 	c.mu.Lock()
@@ -385,21 +431,79 @@ func TestRevokeAlsoCutsUnrecordedKeys(t *testing.T) {
 	}
 }
 
+func TestRotateAndRevokeKeepStoreErrorsTheirOwn(t *testing.T) {
+	h := newServiceHarness(nil, "acme")
+	h.bind(t, "api", "acme")
+	calls := map[string]func() error{
+		"rotate": func() error { _, err := h.svc.Rotate(t.Context(), as("admin"), fabriqRef, "api"); return err },
+		"revoke": func() error { _, err := h.svc.Revoke(t.Context(), as("admin"), fabriqRef, "api"); return err },
+	}
+	for name, call := range calls {
+		// Vault fails to forget an unrecorded key: Fabriq answered fine.
+		h.f.plant("loomplane:api")
+		h.secrets.failDelete = errors.New("vault: permission denied")
+		err := call()
+		if err == nil || errors.Is(err, fabriqloom.ErrUnavailable) || security.StatusFor(err) != http.StatusInternalServerError {
+			t.Fatalf("%s with Vault failing: %v", name, err)
+		}
+		if !strings.HasPrefix(err.Error(), "forget an unrecorded Fabriq key of api (fq_o") {
+			t.Fatalf("%s: the Vault error doesn't say whose key: %v", name, err)
+		}
+		noSecret(t, h.f, err)
+		h.secrets.failDelete = nil
+		// Fabriq failing to revoke it is Fabriq being unavailable.
+		h.f.plant("loomplane:api")
+		h.f.failRevoke = true
+		if err = call(); !errors.Is(err, fabriqloom.ErrUnavailable) {
+			t.Fatalf("%s with Fabriq failing: %v", name, err)
+		}
+		noSecret(t, h.f, err)
+		h.f.failRevoke = false
+	}
+}
+
+// A rotation or revocation whose lock is lost partway asks you to try
+// again: it isn't Fabriq being unreachable.
+func TestRotateAndRevokeThatLoseTheirLockAskToRetry(t *testing.T) {
+	h := newServiceHarness(nil, "acme")
+	h.bind(t, "api", "acme")
+	h.keys.lose = true
+	calls := map[string]func() error{
+		"rotate": func() error { _, err := h.svc.Rotate(t.Context(), as("admin"), fabriqRef, "api"); return err },
+		"revoke": func() error { _, err := h.svc.Revoke(t.Context(), as("admin"), fabriqRef, "api"); return err },
+	}
+	for name, call := range calls {
+		err := call()
+		if !errors.Is(err, fabriqloom.ErrBusy) || errors.Is(err, fabriqloom.ErrUnavailable) {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if want := "Another change to api's Fabriq key was in progress. Try again."; err.Error() != want {
+			t.Fatalf("%s: %q", name, err)
+		}
+	}
+}
+
 func TestBindWaitsForRotationToRecordItsKey(t *testing.T) {
 	h := newServiceHarness(nil, "acme")
 	h.bind(t, "api", "acme")
 	issued, resume := make(chan struct{}), make(chan struct{})
 	h.keys.beforeInsert = func(*fabriqloom.KeyRecord) { close(issued); <-resume }
+	waiting := make(chan string, 1)
+	h.keys.waiting = waiting
 	rotated := make(chan error, 1)
 	go func() { _, err := h.svc.Rotate(t.Context(), as("admin"), fabriqRef, "api"); rotated <- err }()
 	<-issued
 	bound := make(chan error, 1)
 	go func() { _, err := h.hooks.BindConsumer(t.Context(), h.consumer("api", "acme")); bound <- err }()
+	// The bind found api's lock held by the rotation, which can't let go
+	// until it has recorded its key.
+	if service := <-waiting; service != "api" {
+		t.Fatalf("%s waited", service)
+	}
 	select {
 	case err := <-bound:
-		close(resume)
 		t.Fatalf("bind ran before rotation recorded its key: %v", err)
-	case <-time.After(50 * time.Millisecond):
+	default:
 	}
 	close(resume)
 	if err := <-rotated; err != nil {
@@ -495,10 +599,24 @@ func twoDigits(i int) string { return string(rune('0'+i/10)) + string(rune('0'+i
 func TestLibraryStatusHasNoTenants(t *testing.T) {
 	h := newServiceHarness(nil)
 	h.catalog.kind = "fabriq-library"
-	h.catalog.channelErr = errors.New("must not open admin channel")
+	h.catalog.adminErr = errors.New("a library has no console")
 	status, err := h.svc.Status(t.Context(), as("viewer"), fabriqRef)
-	if err != nil || status.Kind != "fabriq-library" {
+	if err != nil || status.Kind != "fabriq-library" || !status.Reachable || status.Reason != "" {
 		t.Fatalf("status %+v: %v", status, err)
+	}
+	// It asks the stock worker's readiness, never the console.
+	for _, ref := range h.catalog.channels() {
+		if ref.Component != "worker" || ref.Port != "api" {
+			t.Fatalf("the library's status opened %s/%s", ref.Component, ref.Port)
+		}
+	}
+	if len(h.catalog.channels()) != 1 {
+		t.Fatalf("channels: %+v", h.catalog.channels())
+	}
+	h.catalog.workerReady = http.StatusServiceUnavailable
+	status, err = h.svc.Status(t.Context(), as("viewer"), fabriqRef)
+	if err != nil || status.Reachable || status.Reason != "The Fabriq worker isn't ready (HTTP 503)" || status.Kind != "fabriq-library" {
+		t.Fatalf("worker not ready: %+v %v", status, err)
 	}
 	if _, err = h.svc.Tenants(t.Context(), as("viewer"), fabriqRef); !errors.Is(err, fabriqloom.ErrInvalid) || err.Error() != "fabriq-library has no tenants or keys" {
 		t.Fatalf("tenants: %v", err)

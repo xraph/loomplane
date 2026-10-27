@@ -16,18 +16,46 @@ import (
 	"github.com/xraph/loomplane/internal/recipes"
 )
 
-// memKeys is a KeyStore in memory, with the table's unique indexes.
+// memKeys is a KeyStore in memory, with the table's unique indexes and a
+// lock per service, as PgStore's leases are.
 type memKeys struct {
-	mu      sync.Mutex
-	writers sync.Mutex
-	rows    []fabriqloom.KeyRecord
+	mu    sync.Mutex
+	locks map[string]*sync.Mutex
+	rows  []fabriqloom.KeyRecord
 	// beforeInsert runs before each Insert, outside the lock.
 	beforeInsert func(r *fabriqloom.KeyRecord)
+	// waiting, when set, hears the service of each LockService that finds
+	// the lock held, before it waits.
+	waiting chan string
+	// lose, when set, ends each lease it gives at once with cause
+	// ErrLeaseLost, as PgStore's does when a renewal finds it gone.
+	lose bool
 }
 
-func (s *memKeys) LockService(context.Context, string, string, string, string) (func(), error) {
-	s.writers.Lock()
-	return s.writers.Unlock, nil
+func (s *memKeys) LockService(ctx context.Context, orgID, environmentID, resource, service string) (context.Context, func(), error) {
+	s.mu.Lock()
+	if s.locks == nil {
+		s.locks = map[string]*sync.Mutex{}
+	}
+	key := strings.Join([]string{orgID, environmentID, resource, service}, "\x00")
+	lock, ok := s.locks[key]
+	if !ok {
+		lock = &sync.Mutex{}
+		s.locks[key] = lock
+	}
+	waiting := s.waiting
+	s.mu.Unlock()
+	if !lock.TryLock() {
+		if waiting != nil {
+			waiting <- service
+		}
+		lock.Lock()
+	}
+	held, cancel := context.WithCancelCause(ctx)
+	if s.lose {
+		cancel(fabriqloom.ErrLeaseLost)
+	}
+	return held, func() { cancel(nil); lock.Unlock() }, nil
 }
 
 func (s *memKeys) Insert(_ context.Context, r *fabriqloom.KeyRecord) error {
@@ -114,10 +142,12 @@ func (s *memKeys) inState(service string, state fabriqloom.KeyState) []fabriqloo
 	return out
 }
 
-// memSecrets is ResourceSecrets in memory.
+// memSecrets is ResourceSecrets in memory. Setting failDelete fails every
+// Delete with it.
 type memSecrets struct {
-	mu sync.Mutex
-	m  map[string][]byte
+	mu         sync.Mutex
+	m          map[string][]byte
+	failDelete error
 }
 
 func newMemSecrets() *memSecrets { return &memSecrets{m: map[string][]byte{}} }
@@ -142,6 +172,9 @@ func (s *memSecrets) Get(_ context.Context, key string) ([]byte, error) {
 func (s *memSecrets) Delete(_ context.Context, key string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.failDelete != nil {
+		return s.failDelete
+	}
 	delete(s.m, key)
 	return nil
 }
@@ -581,6 +614,52 @@ func TestReleaseConsumerRevokesAndForgets(t *testing.T) {
 	}
 }
 
+func TestReleaseConsumerRevokesUnrecordedKeys(t *testing.T) {
+	h := newHarness("acme")
+	// A bind issued this key and kept it in Vault, then crashed before
+	// recording it, so api has no record at all.
+	orphan := h.f.plant("loomplane:api")
+	if err := h.secrets.Put(t.Context(), vaultKey(orphan.ID), []byte(orphan.Key)); err != nil {
+		t.Fatal(err)
+	}
+	webs := h.f.plant("loomplane:web")
+	session := h.f.plant("session")
+	if err := h.hooks.ReleaseConsumer(t.Context(), h.consumer("api", "acme")); err != nil {
+		t.Fatal(err)
+	}
+	if h.f.key(orphan.ID).RevokedAt == nil {
+		t.Fatal("the unrecorded key still opens Fabriq")
+	}
+	if h.secrets.has(orphan.ID) {
+		t.Fatal("the unrecorded key is still in Vault")
+	}
+	if h.f.key(webs.ID).RevokedAt != nil || h.f.key(session.ID).RevokedAt != nil {
+		t.Fatal("a key with another label was revoked")
+	}
+	// With nothing recorded, a Fabriq that can't be reached is no error:
+	// the next sweep that reaches it revokes what is left.
+	down := h.consumer("api", "acme")
+	down.Channel = func(context.Context, string, string) (*deployments.ComponentChannel, error) {
+		return nil, errors.New("dial lp-a:8080: connection refused")
+	}
+	if err := h.hooks.ReleaseConsumer(t.Context(), down); err != nil {
+		t.Fatalf("unreachable with nothing recorded: %v", err)
+	}
+	for _, status := range []int{http.StatusBadGateway, http.StatusInternalServerError, http.StatusUnauthorized} {
+		h.f.refuse = status
+		if err := h.hooks.ReleaseConsumer(t.Context(), h.consumer("api", "acme")); err != nil {
+			t.Fatalf("%d with nothing recorded: %v", status, err)
+		}
+	}
+	h.f.refuse = 0
+	// A failed revoke with nothing recorded is quiet too.
+	h.f.plant("loomplane:api")
+	h.f.failRevoke = true
+	if err := h.hooks.ReleaseConsumer(t.Context(), h.consumer("api", "acme")); err != nil {
+		t.Fatalf("a failed revoke with nothing recorded: %v", err)
+	}
+}
+
 func TestRemovedToleratesAGoneServer(t *testing.T) {
 	h := newHarness("acme")
 	api := idOf(t, h.f, h.bind(t, "api", "acme"))
@@ -607,6 +686,68 @@ func TestRemovedRevokesInFabriqWhenItCan(t *testing.T) {
 	}
 	if h.f.key(api).RevokedAt == nil {
 		t.Fatal("api's key is still valid")
+	}
+}
+
+func TestReadyRevokesKeysNoLiveRecordNames(t *testing.T) {
+	h := newHarness("acme")
+	api := idOf(t, h.f, h.bind(t, "api", "acme"))
+	web := idOf(t, h.f, h.bind(t, "web", "acme"))
+	// The resource was removed once while Fabriq was down: Loomplane
+	// recorded web's key revoked, and Fabriq, re-added on the Postgres that
+	// outlived it, still accepts it.
+	if err := h.keys.SetState(t.Context(), "org", web, []fabriqloom.KeyState{fabriqloom.KeyActive}, fabriqloom.KeyRevoked); err != nil {
+		t.Fatal(err)
+	}
+	old := h.f.plant("loomplane:old-svc")
+	if err := h.secrets.Put(t.Context(), vaultKey(old.ID), []byte(old.Key)); err != nil {
+		t.Fatal(err)
+	}
+	session := h.f.plant("session")
+	ci := h.f.plant("ci")
+	if err := h.hooks.Ready(t.Context(), adminRun(h, "admin")); err != nil {
+		t.Fatal(err)
+	}
+	for _, id := range []string{old.ID, web} {
+		if h.f.key(id).RevokedAt == nil {
+			t.Fatalf("%s still opens Fabriq", id)
+		}
+	}
+	if h.secrets.has(old.ID) {
+		t.Fatal("old-svc's key is still in Vault")
+	}
+	if h.f.key(api).RevokedAt != nil || !h.secrets.has(api) {
+		t.Fatal("api's recorded key was revoked")
+	}
+	if h.f.key(session.ID).RevokedAt != nil || h.f.key(ci.ID).RevokedAt != nil {
+		t.Fatal("a key Loomplane didn't label was revoked")
+	}
+	// Other components don't sweep.
+	h.f.plant("loomplane:later")
+	if err := h.hooks.Ready(t.Context(), adminRun(h, "server")); err != nil {
+		t.Fatal(err)
+	}
+	if got := h.f.valid("loomplane:later"); len(got) != 1 {
+		t.Fatalf("the server's readiness swept: %v", got)
+	}
+}
+
+func TestReadyReportsAFailedSweep(t *testing.T) {
+	h := newHarness("acme")
+	orphan := h.f.plant("loomplane:old-svc")
+	h.f.failRevoke = true
+	err := h.hooks.Ready(t.Context(), adminRun(h, "admin"))
+	if err == nil || !strings.Contains(err.Error(), "old-svc") {
+		t.Fatalf("a failed revoke passed: %v", err)
+	}
+	noSecret(t, h.f, err)
+	// A key Fabriq no longer has can't be used: that is revoked.
+	h.f.failRevoke, h.f.revokeNotFound = false, true
+	if err = h.hooks.Ready(t.Context(), adminRun(h, "admin")); err != nil {
+		t.Fatalf("404: %v", err)
+	}
+	if h.f.key(orphan.ID) == nil {
+		t.Fatal("the fake lost the key")
 	}
 }
 

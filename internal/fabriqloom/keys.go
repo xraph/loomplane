@@ -43,8 +43,12 @@ type KeyRecord struct {
 // KeyStore keeps KeyRecords. Lists are newest first.
 type KeyStore interface {
 	// LockService serializes remote key issuance and local bookkeeping across
-	// releases, rotations and revocations. The caller must release the lock.
-	LockService(ctx context.Context, orgID, environmentID, resource, service string) (release func(), err error)
+	// releases, rotations and revocations of one service's keys. The caller
+	// must call release once it is done, on every path, and must do its work
+	// under held: held ends (with cause ErrLeaseLost where the lock can be
+	// lost) when the lock is no longer the caller's, and the store refuses
+	// Insert and SetState made with it then.
+	LockService(ctx context.Context, orgID, environmentID, resource, service string) (held context.Context, release func(), err error)
 	// Insert records a key. A second pending or active key for the same
 	// (organization, environment, resource, service) is ErrConflict.
 	Insert(ctx context.Context, r *KeyRecord) error
@@ -56,9 +60,12 @@ type KeyStore interface {
 	ForResource(ctx context.Context, orgID, environmentID, resource string) ([]*KeyRecord, error)
 }
 
+// keyLabelPrefix starts the label of every key Loomplane issues.
+const keyLabelPrefix = "loomplane:"
+
 // KeyLabel is the label of the keys Loomplane issues to service. Keys with
 // any other label are never touched.
-func KeyLabel(service string) string { return "loomplane:" + service }
+func KeyLabel(service string) string { return keyLabelPrefix + service }
 
 // VaultKey is where a key's plaintext lives in ResourceSecrets.
 func VaultKey(orgID, environmentID, resource, id string) string {
