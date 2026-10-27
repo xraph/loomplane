@@ -8,9 +8,9 @@ import {
   useDbGatewaysResumeRoute,
 } from "@/client/forge/loomplane/hooks"
 import type {
+  DbgatewayRouteStatus,
   GatewayStatus,
   InstanceStatus,
-  RouteStatus,
 } from "@/client/forge/loomplane/types"
 import { messageOf } from "@/client/errors"
 import { DotProgress } from "@/components/dots"
@@ -146,7 +146,7 @@ function Routes({
   // The list is the only source of a route's state: after a pause or
   // resume the card reads it again rather than trusting the answer, so it
   // shows what the server holds even if something else changed it since.
-  async function toggle(route: RouteStatus, paused: boolean) {
+  async function toggle(route: DbgatewayRouteStatus, paused: boolean) {
     setBusy(route.id)
     try {
       const vars = {

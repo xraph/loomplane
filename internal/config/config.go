@@ -267,6 +267,14 @@ type CloudsConfig struct {
 	// AzureEndpoint replaces Microsoft Entra ID's sign-in and Azure
 	// Resource Manager.
 	AzureEndpoint string
+	// CloudflareEndpoint replaces Cloudflare's API.
+	CloudflareEndpoint string
+	// CloudflareRegistrarSandbox sends registrar calls to Cloudflare's
+	// sandbox, which never registers or charges for a real domain.
+	CloudflareRegistrarSandbox bool
+	// ACMEDirectory replaces the ACME directory certificates are ordered
+	// from. Empty means Let's Encrypt's production directory.
+	ACMEDirectory string
 	// OAuth holds the sign-in app Loomplane registered with each cloud,
 	// keyed by connection cloud such as "digitalocean". A cloud appears
 	// only when both its client ID and secret are set.
@@ -420,6 +428,9 @@ func FromSource(src Getter) (Config, error) {
 	r.str(&c.Clouds.DigitalOceanEndpoint, "clouds.digitalocean_endpoint")
 	r.str(&c.Clouds.AzureEndpoint, "clouds.azure_endpoint")
 	r.str(&c.Clouds.AWSEndpoint, "clouds.aws_endpoint")
+	r.str(&c.Clouds.CloudflareEndpoint, "clouds.cloudflare_endpoint")
+	r.boolean(&c.Clouds.CloudflareRegistrarSandbox, "clouds.cloudflare_registrar_sandbox")
+	r.str(&c.Clouds.ACMEDirectory, "clouds.acme_directory")
 	c.Clouds.OAuth = r.oauthApps(c.Clouds.OAuth, "clouds.oauth")
 	r.plugins(&c.Providers.Plugins, "providers.plugins")
 	r.names(&c.Providers.Paused, "providers.paused")

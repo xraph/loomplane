@@ -21,7 +21,6 @@ import (
 	heraldstore "github.com/xraph/herald/store"
 	heraldpg "github.com/xraph/herald/store/postgres"
 	"github.com/xraph/relay"
-	"github.com/xraph/relay/catalog"
 	relaypg "github.com/xraph/relay/store/postgres"
 
 	"github.com/xraph/loomplane/internal/config"
@@ -107,17 +106,6 @@ func (s *Service) prepare(ctx context.Context) error {
 		}
 	}
 	return s.herald.CreateProvider(ctx, &provider.Provider{AppID: s.cfg.Identity.AppID, Name: "loomplane-smtp", Channel: "email", Driver: "smtp", Credentials: creds, Settings: settings, Enabled: true})
-}
-
-// registerEventTypes tells Relay the webhook types this service sends.
-func (s *Service) registerEventTypes(ctx context.Context) error {
-	for _, status := range []string{"succeeded", "failed"} {
-		if _, err := s.relay.RegisterEventType(ctx, catalog.WebhookDefinition{Name: "deployment." + status, Description: "A deployment attempt completed", Group: "deployment", Version: "2026-10-18"}); err != nil {
-			return err
-		}
-	}
-	_, err := s.relay.RegisterEventType(ctx, catalog.WebhookDefinition{Name: connectionSignInNeeded, Description: "A cloud connection needs signing in again", Group: "connection", Version: "2026-10-25"})
-	return err
 }
 func (s *Service) Run(ctx context.Context) error {
 	if err := s.registerEventTypes(ctx); err != nil {

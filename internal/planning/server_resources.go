@@ -18,3 +18,12 @@ func ServerResources(size *manifest.Size) (cpuMillis, memoryBytes int64, err err
 	}
 	return int64(cpu), int64(size.Memory) << 20, nil
 }
+
+// ServerGPUs is the GPU kind and count a service's size asks a pool for. A
+// size without GPUs asks for none.
+func ServerGPUs(size *manifest.Size) (kind string, count int64) {
+	if size == nil || size.GPU == nil {
+		return "", 0
+	}
+	return size.GPU.Kind, int64(size.GPU.Count)
+}

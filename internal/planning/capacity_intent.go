@@ -57,6 +57,9 @@ func newCapacityIntent(plan *Plan, a *cloudprofiles.Assignment, target cloudprof
 	if template.ConnectionID == "" || template.Region == "" || template.Image == "" || len(template.AllowedSizes) == 0 || template.Architecture == "" || req.Architecture != "" && req.Architecture != template.Architecture {
 		return nil, fmt.Errorf("%w: pool template or architecture is incompatible", ErrInvalid)
 	}
+	if err := templateTakesGPUs(template.AcceleratorKind, req.GPUKind, req.GPUs); err != nil {
+		return nil, err
+	}
 	var commit string
 	for _, source := range plan.Sources {
 		if source.Alias == repo || repo == "" && len(plan.Sources) == 1 {
@@ -71,9 +74,24 @@ func newCapacityIntent(plan *Plan, a *cloudprofiles.Assignment, target cloudprof
 	if err != nil {
 		return nil, err
 	}
-	intent := &CapacityIntent{Template: template, Demand: cloudinfra.CapacityDemand{OrgID: plan.OrgID, CloudID: a.CloudID, PoolID: target.PoolID, TargetID: target.ID, ProjectID: plan.ProjectID, EnvironmentID: plan.EnvironmentID, PlanID: plan.ID, Service: req.Service, Architecture: template.Architecture, Resources: cloudinfra.ResourceVector{CPUMillis: req.CPUMillis, MemoryBytes: req.MemoryBytes}, PolicyRevision: policy.Revision}, TemplateHash: hash, CommitSHA: commit, AssignmentRevision: a.Revision, CloudRevision: a.CloudRevision, TargetRevision: target.Revision, GrantRevision: a.GrantRevision, TargetName: target.Name}
+	intent := &CapacityIntent{Template: template, Demand: cloudinfra.CapacityDemand{OrgID: plan.OrgID, CloudID: a.CloudID, PoolID: target.PoolID, TargetID: target.ID, ProjectID: plan.ProjectID, EnvironmentID: plan.EnvironmentID, PlanID: plan.ID, Service: req.Service, Architecture: template.Architecture, Resources: cloudinfra.ResourceVector{CPUMillis: req.CPUMillis, MemoryBytes: req.MemoryBytes, GPUKind: req.GPUKind, GPUs: req.GPUs}, PolicyRevision: policy.Revision}, TemplateHash: hash, CommitSHA: commit, AssignmentRevision: a.Revision, CloudRevision: a.CloudRevision, TargetRevision: target.Revision, GrantRevision: a.GrantRevision, TargetName: target.Name}
 	intent.Demand.IntentHash, err = Digest(intent)
 	return intent, err
+}
+
+// templateTakesGPUs refuses a pool template whose servers can't run the
+// service's GPUs: a GPU pool grows only for GPU work of its own kind, and a
+// CPU pool never for GPU work.
+func templateTakesGPUs(poolKind, kind string, gpus int64) error {
+	switch {
+	case poolKind != "" && gpus == 0:
+		return fmt.Errorf("%w: this pool's servers have %s GPUs, and a GPU pool takes only services that ask for them", ErrInvalid, poolKind)
+	case poolKind == "" && gpus > 0:
+		return fmt.Errorf("%w: a CPU pool takes no GPU workloads; the service asks for %s", ErrInvalid, kind)
+	case gpus > 0 && kind != poolKind:
+		return fmt.Errorf("%w: this pool's servers have %s GPUs; the service asks for %s", ErrInvalid, poolKind, kind)
+	}
+	return nil
 }
 
 func (s *Service) futureCapacity(ctx context.Context, plan *Plan, a *cloudprofiles.Assignment, target cloudprofiles.Target, req cloudinfra.PlacementRequest, repo string, original error) (*CapacityIntent, error) {
@@ -290,10 +308,16 @@ func (s *PgStore) ResolvedCapacityPlacements(ctx context.Context, org, plan stri
 	return out, rows.Err()
 }
 
+// capacityCandidateFits reports whether a candidate is the approved demand's
+// pool and resources, GPUs included, on a concrete server.
+func capacityCandidateFits(d cloudinfra.CapacityDemand, candidate cloudinfra.Placement) bool {
+	return candidate.PoolID == d.PoolID && candidate.CPUMillis == d.Resources.CPUMillis && candidate.MemoryBytes == d.Resources.MemoryBytes && candidate.GPUKind == d.Resources.GPUKind && candidate.GPUs == d.Resources.GPUs && candidate.ServerID != "" && candidate.ConnectionID != ""
+}
+
 func (s *PgStore) admitCapacityPlacement(ctx context.Context, plan *Plan, a Action, candidate cloudinfra.Placement) (err error) {
 	intent := a.Service.CapacityIntent
 	d := intent.Demand
-	if candidate.PoolID != d.PoolID || candidate.CPUMillis != d.Resources.CPUMillis || candidate.MemoryBytes != d.Resources.MemoryBytes || candidate.ServerID == "" || candidate.ConnectionID == "" {
+	if !capacityCandidateFits(d, candidate) {
 		return capacityReview(d)
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
@@ -350,7 +374,7 @@ func (s *PgStore) admitCapacityPlacement(ctx context.Context, plan *Plan, a Acti
 	if identity == "" || details["architecture"] != d.Architecture {
 		return capacityReview(d)
 	}
-	pin := CloudPlacement{Allocation: candidate.Allocation, PoolID: candidate.PoolID, PoolRevision: candidate.PoolRevision, ServerID: candidate.ServerID, ServerRevision: candidate.ServerRevision, ConnectionID: candidate.ConnectionID, ConnectionGeneration: candidate.ConnectionGeneration, CPUMillis: candidate.CPUMillis, MemoryBytes: candidate.MemoryBytes, CloudID: d.CloudID, CloudRevision: intent.CloudRevision, AssignmentRevision: intent.AssignmentRevision, GrantRevision: intent.GrantRevision, TargetID: d.TargetID, TargetRevision: intent.TargetRevision, TargetName: intent.TargetName, Provider: "server", AccountIdentity: identity}
+	pin := CloudPlacement{Allocation: candidate.Allocation, PoolID: candidate.PoolID, PoolRevision: candidate.PoolRevision, ServerID: candidate.ServerID, ServerRevision: candidate.ServerRevision, ConnectionID: candidate.ConnectionID, ConnectionGeneration: candidate.ConnectionGeneration, CPUMillis: candidate.CPUMillis, MemoryBytes: candidate.MemoryBytes, GPUKind: candidate.GPUKind, GPUs: candidate.GPUs, CloudID: d.CloudID, CloudRevision: intent.CloudRevision, AssignmentRevision: intent.AssignmentRevision, GrantRevision: intent.GrantRevision, TargetID: d.TargetID, TargetRevision: intent.TargetRevision, TargetName: intent.TargetName, Provider: "server", AccountIdentity: identity}
 	var portConflict bool
 	if cfgPort := a.Service.Endpoint; a.Service.Public && cfgPort != nil && cfgPort.HostPort > 0 {
 		err = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_capacity_reservations r JOIN loomplane_plans p ON p.id=r.plan_id CROSS JOIN LATERAL jsonb_array_elements(p.result->'actions') other WHERE r.org_id=$1 AND r.server_id=$2 AND other->>'name'=r.service AND (r.environment_id<>$3 OR r.service<>$4) AND (other->'service'->'endpoint'->>'host_port')::int=$5)`, plan.OrgID, candidate.ServerID, plan.EnvironmentID, a.Name, cfgPort.HostPort).Scan(&portConflict)

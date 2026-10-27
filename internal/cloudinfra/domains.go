@@ -10,6 +10,7 @@ import (
 
 	"golang.org/x/net/idna"
 
+	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/pkg/provider"
@@ -32,8 +33,27 @@ type Zone struct {
 	ProofName            string           `json:"proof_name,omitempty"`
 	ProofValue           string           `json:"proof_value,omitempty"`
 	ProofExpiresAt       time.Time        `json:"proof_expires_at"`
+	ProofCheckedAt       time.Time        `json:"proof_checked_at"`
 	VerifiedAt           time.Time        `json:"verified_at"`
-	Revision             int64            `json:"revision"`
+	// RegistrationID names the registration that bought the domain, if one did.
+	RegistrationID string `json:"registration_id,omitempty"`
+	// ChallengeConnectionID is the second Cloudflare connection whose token
+	// answers DNS-01 challenges for this zone's wildcard routes.
+	ChallengeConnectionID string `json:"challenge_connection_id,omitempty"`
+	Revision              int64  `json:"revision"`
+}
+
+// Wildcards reports whether routes under the zone may use wildcard
+// hostnames: a Cloudflare zone with a DNS challenge connection attached.
+func (z Zone) Wildcards() bool {
+	return z.Mode == "managed" && z.Provider == connections.Cloudflare && z.ChallengeConnectionID != "" && z.ownsProviderZone()
+}
+
+// ownsProviderZone is a zone that is its Cloudflare zone, not a namespace
+// inside a larger one. A Cloudflare token reaches whole zones, so a
+// challenge token for shop.acme.dev would edit all of acme.dev.
+func (z Zone) ownsProviderZone() bool {
+	return z.ProviderZone.ID != "" && z.ProviderZone.Name == z.Name
 }
 
 type ZoneInput struct {
@@ -118,75 +138,117 @@ func (s *Service) CreateZone(ctx context.Context, p security.Principal, in ZoneI
 		return nil, err
 	}
 	name, err := NormalizeHostname(in.Name)
-	if err != nil || (in.Mode != "managed" && in.Mode != "external") || len(in.ProjectIDs) == 0 {
+	// A zone without grants is usable by no project until granted.
+	if err != nil || (in.Mode != "managed" && in.Mode != "external") {
 		return nil, ErrInvalid
 	}
 	st, err := s.domainStore()
 	if err != nil {
 		return nil, err
 	}
-	for _, project := range in.ProjectIDs {
-		if project == "" {
-			return nil, ErrInvalid
-		}
-		if checkErr := st.DomainProject(ctx, p.OrgID, project); checkErr != nil {
-			return nil, checkErr
-		}
+	var zone *Zone
+	if in.Mode == "managed" {
+		zone, err = s.createManagedZone(ctx, p, name, in.ConnectionID, in.ProjectIDs)
+	} else {
+		zone, err = s.externalZone(ctx, st, p, name, in)
 	}
-	id, err := randomID("zone")
 	if err != nil {
 		return nil, err
-	}
-	zone := &Zone{ID: id, OrgID: p.OrgID, Name: name, Mode: in.Mode, ConnectionID: in.ConnectionID, ProjectIDs: slices.Clone(in.ProjectIDs), Revision: 1}
-	if in.Mode == "managed" {
-		conn, raw, credErr := s.Connections.Credential(ctx, p.OrgID, in.ConnectionID)
-		if credErr != nil {
-			return nil, credErr
-		}
-		cred, credErr := Credential(conn, raw)
-		if credErr != nil {
-			return nil, credErr
-		}
-		adapter, adapterErr := s.Adapters.DNS(conn.Cloud, provider.DNSZoneDiscovery, provider.DNSRecordDiscovery, provider.DNSRecordUpsert, provider.DNSRecordDeletion)
-		if adapterErr != nil {
-			return nil, adapterErr
-		}
-		if ownership, ok := adapter.(provider.DNSRecordOwnership); ok {
-			zone.RecordOwnership = ownership.SupportsDNSRecordOwnership()
-		}
-		// Hosting access selects the record-writing account. Public TXT proves
-		// control only over the requested namespace, even in a larger hosted zone.
-		zones, listErr := adapter.ListZones(ctx, cred)
-		if listErr != nil {
-			return nil, listErr
-		}
-		for _, candidate := range zones {
-			if _, scopeErr := zoneRelative(name, candidate.Name); scopeErr == nil && len(candidate.Name) > len(zone.ProviderZone.Name) {
-				zone.ProviderZone = candidate
-			}
-		}
-		if zone.ProviderZone.ID == "" {
-			return nil, provider.ErrInfrastructureNotFound
-		}
-		current, getErr := adapter.GetZone(ctx, cred, zone.ProviderZone.Name)
-		if getErr != nil {
-			return nil, getErr
-		}
-		if current.ID != zone.ProviderZone.ID || current.Name != zone.ProviderZone.Name || current.AccountID != cred.AccountID {
-			return nil, provider.ErrInfrastructureIdentity
-		}
-		zone.ProviderZone = current
-		zone.Provider, zone.AccountID, zone.ConnectionGeneration = conn.Cloud, cred.AccountID, conn.Generation
-	} else if in.ConnectionID != "" {
-		return nil, ErrInvalid
-	}
-	if proofErr := s.renewZoneProof(zone); proofErr != nil {
-		return nil, proofErr
 	}
 	if checkErr := st.CreateZone(ctx, zone); checkErr != nil {
 		return nil, checkErr
 	}
 	s.domainAudit(ctx, p, "domain.zone.write", zone.ID, "")
+	return zone, nil
+}
+
+func zoneProjects(ctx context.Context, st DomainStore, org string, projectIDs []string) error {
+	for _, project := range projectIDs {
+		if project == "" {
+			return ErrInvalid
+		}
+		if err := st.DomainProject(ctx, org, project); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// createManagedZone builds a zone in the most specific zone the connection's
+// DNS provider hosts. It waits on the TXT proof like an external zone. The
+// caller stores it.
+func (s *Service) createManagedZone(ctx context.Context, p security.Principal, name, connectionID string, projectIDs []string) (*Zone, error) {
+	st, err := s.domainStore()
+	if err != nil {
+		return nil, err
+	}
+	if checkErr := zoneProjects(ctx, st, p.OrgID, projectIDs); checkErr != nil {
+		return nil, checkErr
+	}
+	id, err := randomID("zone")
+	if err != nil {
+		return nil, err
+	}
+	zone := &Zone{ID: id, OrgID: p.OrgID, Name: name, Mode: "managed", ConnectionID: connectionID, ProjectIDs: append([]string{}, projectIDs...), Revision: 1}
+	conn, raw, err := s.Connections.Credential(ctx, p.OrgID, connectionID)
+	if err != nil {
+		return nil, err
+	}
+	cred, err := Credential(conn, raw)
+	if err != nil {
+		return nil, err
+	}
+	adapter, err := s.Adapters.DNS(conn.Cloud, provider.DNSZoneDiscovery, provider.DNSRecordDiscovery, provider.DNSRecordUpsert, provider.DNSRecordDeletion)
+	if err != nil {
+		return nil, err
+	}
+	if ownership, ok := adapter.(provider.DNSRecordOwnership); ok {
+		zone.RecordOwnership = ownership.SupportsDNSRecordOwnership()
+	}
+	// Hosting access selects the record-writing account. Public TXT proves
+	// control only over the requested namespace, even in a larger hosted zone.
+	zones, err := adapter.ListZones(ctx, cred)
+	if err != nil {
+		return nil, err
+	}
+	for _, candidate := range zones {
+		if _, scopeErr := zoneRelative(name, candidate.Name); scopeErr == nil && len(candidate.Name) > len(zone.ProviderZone.Name) {
+			zone.ProviderZone = candidate
+		}
+	}
+	if zone.ProviderZone.ID == "" {
+		return nil, provider.ErrInfrastructureNotFound
+	}
+	current, err := adapter.GetZone(ctx, cred, zone.ProviderZone.Name)
+	if err != nil {
+		return nil, err
+	}
+	if current.ID != zone.ProviderZone.ID || current.Name != zone.ProviderZone.Name || current.AccountID != cred.AccountID {
+		return nil, provider.ErrInfrastructureIdentity
+	}
+	zone.ProviderZone = current
+	zone.Provider, zone.AccountID, zone.ConnectionGeneration = conn.Cloud, cred.AccountID, conn.Generation
+	if proofErr := s.renewZoneProof(zone); proofErr != nil {
+		return nil, proofErr
+	}
+	return zone, nil
+}
+
+func (s *Service) externalZone(ctx context.Context, st DomainStore, p security.Principal, name string, in ZoneInput) (*Zone, error) {
+	if err := zoneProjects(ctx, st, p.OrgID, in.ProjectIDs); err != nil {
+		return nil, err
+	}
+	id, err := randomID("zone")
+	if err != nil {
+		return nil, err
+	}
+	if in.ConnectionID != "" {
+		return nil, ErrInvalid
+	}
+	zone := &Zone{ID: id, OrgID: p.OrgID, Name: name, Mode: "external", ProjectIDs: append([]string{}, in.ProjectIDs...), Revision: 1}
+	if proofErr := s.renewZoneProof(zone); proofErr != nil {
+		return nil, proofErr
+	}
 	return zone, nil
 }
 
@@ -202,12 +264,18 @@ func (s *Service) VerifyZone(ctx context.Context, p security.Principal, id strin
 	if err != nil {
 		return nil, err
 	}
-	if checkErr := s.verifyZoneControl(ctx, zone); checkErr != nil {
+	// Every check is saved, so the page can say when the record was last looked for.
+	checkErr := s.verifyZoneControl(ctx, zone)
+	zone.ProofCheckedAt = s.now().UTC()
+	if checkErr == nil {
+		zone.VerifiedAt = zone.ProofCheckedAt
+	}
+	saveErr := st.SaveZone(ctx, zone)
+	if checkErr != nil {
 		return nil, checkErr
 	}
-	zone.VerifiedAt = s.now().UTC()
-	if checkErr := st.SaveZone(ctx, zone); checkErr != nil {
-		return nil, checkErr
+	if saveErr != nil {
+		return nil, saveErr
 	}
 	s.domainAudit(ctx, p, "domain.zone.write", zone.ID, "")
 	return zone, nil
@@ -257,6 +325,12 @@ func (s *Service) verifyZoneControl(ctx context.Context, zone *Zone) error {
 // hasControlProof rejects legacy hosting-only verification and malformed scope.
 func (z *Zone) hasControlProof() bool {
 	return z.ProofName == "_loomplane."+z.Name && z.ProofValue != "" && !z.ProofExpiresAt.IsZero()
+}
+
+// verified is a zone a project can route through: checked, and checked
+// against its own TXT proof.
+func (z *Zone) verified() bool {
+	return !z.VerifiedAt.IsZero() && z.hasControlProof()
 }
 
 func (s *Service) renewZoneProof(zone *Zone) error {
@@ -311,7 +385,7 @@ func (s *Service) UpdateZone(ctx context.Context, p security.Principal, id strin
 			return nil, checkErr
 		}
 	}
-	zone.ProjectIDs = slices.Clone(in.ProjectIDs)
+	zone.ProjectIDs = append([]string{}, in.ProjectIDs...)
 	if in.RenewProof {
 		if !zone.VerifiedAt.IsZero() && zone.hasControlProof() {
 			return nil, ErrConflict
@@ -367,7 +441,7 @@ func (s *Service) ProjectZones(ctx context.Context, p security.Principal, projec
 	out := []ProjectZone{}
 	for _, zone := range zones {
 		if slices.Contains(zone.ProjectIDs, project) {
-			out = append(out, ProjectZone{zone.ID, zone.Name, zone.Mode, zone.hasControlProof() && !zone.VerifiedAt.IsZero()})
+			out = append(out, ProjectZone{zone.ID, zone.Name, zone.Mode, zone.verified()})
 		}
 	}
 	return out, nil

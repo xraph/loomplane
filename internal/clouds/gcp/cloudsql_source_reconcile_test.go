@@ -14,6 +14,8 @@ import (
 func TestPSCSourceReconciliationDoesNotProvisionMissingResources(t *testing.T) {
 	cases := []struct{ stop, scenario string }{
 		{"none", "normal"}, {"address", "normal"}, {"rule", "normal"}, {"zone", "normal"}, {"records", "normal"},
+		{"address", "source-missing"}, {"rule", "source-missing"}, {"zone", "source-missing"}, {"records", "source-missing"},
+		{"rule", "subnet-missing"}, {"rule", "both-missing"}, {"rule", "source-denied"}, {"rule", "subnet-denied"}, {"rule", "subnet-replaced"}, {"rule", "subnet-replaced-then-missing"}, {"rule", "legacy-source-missing"},
 		{"rule", "pending"}, {"zone", "closed"}, {"rule", "unknown-status"},
 		{"address", "missing-operation"}, {"address", "ambiguous-operation"}, {"address", "replaced-address"},
 		{"address", "source-changed"}, {"address", "save-refused"}, {"address", "guard-refused"},
@@ -49,6 +51,8 @@ func TestPSCSourceReconciliationDoesNotProvisionMissingResources(t *testing.T) {
 			}
 			dns := &pscDNSFixture{t: t, scenario: dnsScenario, network: network, endpoint: SQLPSCProvisionedEndpoint{DNSName: "source-db.us-central1.sql.goog."}, saved: func() SQLPSCSourceDNSState { return saved.DNS }}
 			lost := false
+			recovering := false
+			subnetReads := 0
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				w.Header().Set("Content-Type", "application/json")
 				if r.Method != http.MethodGet {
@@ -61,9 +65,36 @@ func TestPSCSourceReconciliationDoesNotProvisionMissingResources(t *testing.T) {
 				path := strings.TrimPrefix(r.URL.Path, "/compute/v1/")
 				switch {
 				case r.URL.Path == "/v1/projects/source-project/instances/source-db":
+					if recovering && (scenario == "source-missing" || scenario == "both-missing" || scenario == "legacy-source-missing") {
+						w.WriteHeader(404)
+						return
+					}
+					if recovering && scenario == "source-denied" {
+						w.WriteHeader(403)
+						return
+					}
 					_ = json.NewEncoder(w).Encode(fields)
 				case path == subnet:
-					_ = json.NewEncoder(w).Encode(map[string]any{"kind": "compute#subnetwork", "id": "123", "name": "psc", "selfLink": subnet, "region": prefix, "network": network, "ipCidrRange": "10.20.0.0/28", "purpose": "PRIVATE", "stackType": "IPV4_ONLY", "state": "READY"})
+					if recovering && scenario == "subnet-replaced-then-missing" {
+						subnetReads++
+						if subnetReads > 1 {
+							w.WriteHeader(404)
+							return
+						}
+					}
+					if recovering && (scenario == "subnet-missing" || scenario == "both-missing") {
+						w.WriteHeader(404)
+						return
+					}
+					if recovering && scenario == "subnet-denied" {
+						w.WriteHeader(403)
+						return
+					}
+					subnetID := "123"
+					if recovering && (scenario == "subnet-replaced" || scenario == "subnet-replaced-then-missing") {
+						subnetID = "999"
+					}
+					_ = json.NewEncoder(w).Encode(map[string]any{"kind": "compute#subnetwork", "id": subnetID, "name": "psc", "selfLink": subnet, "region": prefix, "network": network, "ipCidrRange": "10.20.0.0/28", "purpose": "PRIVATE", "stackType": "IPV4_ONLY", "state": "READY"})
 				case strings.HasSuffix(path, "/operations"):
 					var items []map[string]any
 					for _, op := range operations {
@@ -168,13 +199,25 @@ func TestPSCSourceReconciliationDoesNotProvisionMissingResources(t *testing.T) {
 				state.DNS.ZoneID = "321"
 			}
 			reconciling = true
+			recovering = true
+			if scenario == "subnet-missing" || scenario == "both-missing" {
+				clear(objects)
+			}
+			if scenario == "source-missing" && objects[rule] != nil {
+				objects[rule]["pscConnectionStatus"] = "CLOSED"
+			}
+			if scenario == "legacy-source-missing" {
+				state.Version = 2
+				state.AddressValue = ""
+				state.Source = SQLPSCSourceWitness{}
+			}
 			ctx, cancel := context.WithTimeout(t.Context(), 30*time.Second)
 			defer cancel()
 			endpoint, err := session.ReconcileSQLPSCSourceEndpoint(ctx, spec, &state, save, guard)
 			if writes != before {
 				t.Fatalf("reconciliation created missing resources: before=%d after=%d", before, writes)
 			}
-			wantError := scenario != "normal" && scenario != "pending" && scenario != "closed"
+			wantError := scenario != "normal" && scenario != "pending" && scenario != "closed" && scenario != "source-missing" && scenario != "subnet-missing" && scenario != "both-missing"
 			if wantError {
 				if err == nil || endpoint != nil {
 					t.Fatal("unsafe reconciliation accepted", endpoint, err)
@@ -198,6 +241,12 @@ func TestPSCSourceReconciliationDoesNotProvisionMissingResources(t *testing.T) {
 			}
 			if wantAddress && endpoint.AddressID != "456" || wantRule && endpoint.ForwardingRuleID != "789" || wantZone && state.DNS.ZoneID != "321" {
 				t.Fatal("lost original resource identity", endpoint, state)
+			}
+			if scenario == "source-missing" || scenario == "subnet-missing" || scenario == "both-missing" {
+				attempt := state
+				if _, provisionErr := session.EnsureSQLPSCSourceEndpoint(ctx, spec, &attempt, save, guard); provisionErr == nil || writes != before {
+					t.Fatal("normal provisioning accepted absent source or subnet", provisionErr)
+				}
 			}
 			kept := saved
 			state = saved

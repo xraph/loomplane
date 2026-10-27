@@ -1522,6 +1522,12 @@
           "default": {
             "type": "boolean"
           },
+          "gpu_kind": {
+            "type": "string"
+          },
+          "gpus": {
+            "type": "integer"
+          },
           "grant_revision": {
             "type": "integer"
           },
@@ -1670,6 +1676,9 @@
           "dependencies": {
             "type": "object",
             "additionalProperties": true
+          },
+          "gpu": {
+            "$ref": "#/components/schemas/GPUPlacement"
           },
           "kind": {
             "type": "string"
@@ -2128,6 +2137,53 @@
           }
         }
       },
+      "GPUPlacement": {
+        "type": "object",
+        "required": [
+          "kind",
+          "count"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "node_selector": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "tolerations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GPUToleration"
+            }
+          }
+        }
+      },
+      "GPUToleration": {
+        "type": "object",
+        "required": [
+          "key",
+          "operator",
+          "effect"
+        ],
+        "properties": {
+          "effect": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "operator": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        }
+      },
       "GatewayRoute": {
         "properties": {
           "env": {
@@ -2427,6 +2483,22 @@
           }
         }
       },
+      "ManifestGPU": {
+        "properties": {
+          "count": {
+            "type": "integer"
+          },
+          "kind": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "count"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/pkg/manifest.GPU"
+      },
       "Output": {
         "type": "object",
         "required": [
@@ -2572,6 +2644,9 @@
           "system_reserve"
         ],
         "properties": {
+          "accelerator_kind": {
+            "type": "string"
+          },
           "allowed_sizes": {
             "type": "array",
             "items": {
@@ -2685,6 +2760,24 @@
           }
         }
       },
+      "RecipesGPU": {
+        "properties": {
+          "count": {
+            "type": "integer"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "min_memory_gib": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "count"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/internal/recipes.GPU"
+      },
       "Ref": {
         "type": "object",
         "required": [
@@ -2783,6 +2876,9 @@
           },
           "volume": {
             "$ref": "#/components/schemas/Volume"
+          },
+          "weight_cache": {
+            "$ref": "#/components/schemas/WeightCache"
           }
         }
       },
@@ -2847,6 +2943,12 @@
           "cpu_millis": {
             "type": "integer"
           },
+          "gpu_kind": {
+            "type": "string"
+          },
+          "gpus": {
+            "type": "integer"
+          },
           "memory_bytes": {
             "type": "integer"
           },
@@ -2868,7 +2970,13 @@
           "cpu_millis": {
             "type": "integer"
           },
+          "gpu": {
+            "$ref": "#/components/schemas/RecipesGPU"
+          },
           "memory_mb": {
+            "type": "integer"
+          },
+          "shm_mb": {
             "type": "integer"
           }
         }
@@ -2962,6 +3070,9 @@
           "address": {
             "type": "string"
           },
+          "backend": {
+            "type": "string"
+          },
           "binding_id": {
             "type": "string"
           },
@@ -2977,7 +3088,13 @@
           "container_id": {
             "type": "string"
           },
+          "ingress_class": {
+            "type": "string"
+          },
           "instance_id": {
+            "type": "string"
+          },
+          "namespace": {
             "type": "string"
           },
           "release_id": {
@@ -2987,6 +3104,9 @@
             "type": "string"
           },
           "server_id": {
+            "type": "string"
+          },
+          "service_name": {
             "type": "string"
           },
           "target_id": {
@@ -3005,6 +3125,12 @@
           "port"
         ],
         "properties": {
+          "blocked_path_prefixes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
           "cloud_id": {
             "type": "string"
           },
@@ -3047,6 +3173,9 @@
           "cert_expires": {
             "type": "string",
             "format": "date-time"
+          },
+          "cert_state": {
+            "type": "string"
           },
           "checked_at": {
             "type": "string",
@@ -3156,6 +3285,9 @@
               "$ref": "#/components/schemas/GatewayRoute"
             }
           },
+          "gpu": {
+            "$ref": "#/components/schemas/GPUPlacement"
+          },
           "health_path": {
             "type": "string"
           },
@@ -3220,7 +3352,13 @@
           "cpu": {
             "type": "number"
           },
+          "gpu": {
+            "$ref": "#/components/schemas/ManifestGPU"
+          },
           "memory": {
+            "type": "integer"
+          },
+          "shm": {
             "type": "integer"
           }
         }
@@ -3398,6 +3536,21 @@
           "fs_group": {
             "type": "integer"
           },
+          "kubernetes_size_mb": {
+            "type": "integer"
+          },
+          "mount_path": {
+            "type": "string"
+          }
+        }
+      },
+      "WeightCache": {
+        "type": "object",
+        "required": [
+          "mount_path",
+          "kubernetes_size_mb"
+        ],
+        "properties": {
           "kubernetes_size_mb": {
             "type": "integer"
           },

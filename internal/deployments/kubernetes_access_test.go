@@ -200,7 +200,7 @@ func TestComponentSpecCarriesAccessReadinessAndVolumeGroup(t *testing.T) {
 		KubernetesRules: []recipes.KubernetesRule{{APIGroups: []string{""}, Resources: []string{"services"}, Verbs: []string{"get", "list", "watch"}}},
 	}
 	labels := map[string]string{}
-	componentSpec(&cpprovider.ServiceSpec{}, labels, &planning.ComponentConfig{Kind: "sample", Resource: "app", Component: recipes.ResolvedComponent{Component: component}})
+	componentSpec(&cpprovider.ServiceSpec{}, labels, &planning.ComponentConfig{Kind: "sample", Resource: "app", Component: recipes.ResolvedComponent{Component: component}}, "kubernetes")
 	if labels[owned.LabelKubernetesRules] != `[{"api_groups":[""],"resources":["services"],"verbs":["get","list","watch"]}]` || labels[owned.LabelHealthProtocol] != "redis" || labels[owned.LabelHealthPort] != "6379" || labels[owned.LabelFSGroup] != "1000" {
 		t.Fatalf("labels: %v", labels)
 	}
@@ -209,7 +209,7 @@ func TestComponentSpecCarriesAccessReadinessAndVolumeGroup(t *testing.T) {
 	component.Volume.FSGroup = 0
 	component.KubernetesRules = nil
 	labels = map[string]string{}
-	componentSpec(&cpprovider.ServiceSpec{}, labels, &planning.ComponentConfig{Kind: "sample", Resource: "app", Component: recipes.ResolvedComponent{Component: component}})
+	componentSpec(&cpprovider.ServiceSpec{}, labels, &planning.ComponentConfig{Kind: "sample", Resource: "app", Component: recipes.ResolvedComponent{Component: component}}, "kubernetes")
 	for _, key := range []string{owned.LabelKubernetesRules, owned.LabelHealthProtocol, owned.LabelFSGroup} {
 		if _, ok := labels[key]; ok {
 			t.Fatalf("%s set: %v", key, labels)

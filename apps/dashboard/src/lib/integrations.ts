@@ -88,6 +88,7 @@ export const cloudPurposes: Record<string, string> = {
   digitalocean: "App Platform, Managed PostgreSQL, MySQL and Valkey",
   azure:
     "Container Apps, PostgreSQL and MySQL flexible servers and Managed Redis",
+  cloudflare: "DNS zones and domain registration",
 }
 
 // The built-in clouds, for while the API's list is on its way.

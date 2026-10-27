@@ -12,6 +12,7 @@ import (
 
 	"github.com/xraph/loomplane/internal/clouds/aws"
 	"github.com/xraph/loomplane/internal/clouds/azure"
+	"github.com/xraph/loomplane/internal/clouds/cloudflare"
 	"github.com/xraph/loomplane/internal/clouds/digitalocean"
 	"github.com/xraph/loomplane/internal/clouds/gcp"
 	"github.com/xraph/loomplane/internal/clouds/kubernetes"
@@ -163,6 +164,78 @@ func (v VercelChecker) Check(ctx context.Context, credential []byte, settings ma
 		c.Details["team_id"] = acct.TeamID
 	} else {
 		c.Details["user_id"] = acct.UserID
+	}
+	return c, nil
+}
+
+// cloudflareAccountRE matches Cloudflare account IDs: 32 lowercase hex digits.
+var cloudflareAccountRE = regexp.MustCompile(`^[0-9a-f]{32}$`)
+
+// CloudflareChecker checks Cloudflare API tokens. The one setting is
+// account_id, which is required: a token can reach several accounts, and
+// DNS and domains are made in one.
+type CloudflareChecker struct{ Client *cloudflare.Client }
+
+// Parse implements Checker.
+func (CloudflareChecker) Parse(credential []byte, settings map[string]string) (Check, error) {
+	if err := cloudflare.CheckToken(string(credential)); err != nil {
+		return Check{}, fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
+	account := strings.TrimSpace(settings["account_id"])
+	if !cloudflareAccountRE.MatchString(account) {
+		return Check{}, fmt.Errorf("%w: %q isn't a Cloudflare account ID; they are 32 lowercase letters and digits", ErrInvalid, account)
+	}
+	return Check{Details: map[string]string{"account_id": account}}, nil
+}
+
+// Check implements Checker: it verifies the token, reads the account, and
+// probes which permissions the token holds without changing anything.
+// Zone Read and DNS Write are needed; registrar access is optional and
+// only shows in the details.
+func (cf CloudflareChecker) Check(ctx context.Context, credential []byte, settings map[string]string) (Check, error) {
+	c, err := cf.Parse(credential, settings)
+	if err != nil {
+		return Check{}, err
+	}
+	token, account := strings.TrimSpace(string(credential)), c.Details["account_id"]
+	info, err := cf.Client.VerifyToken(ctx, token, account)
+	if err != nil {
+		return Check{}, err
+	}
+	// Account details need Account Settings Read, which the form doesn't
+	// ask for; without it the account ID names the connection.
+	acct, err := cf.Client.Account(ctx, token, account)
+	var ae *cloudflare.APIError
+	switch {
+	case errors.As(err, &ae) && ae.Status == http.StatusForbidden:
+		acct = cloudflare.Account{ID: account}
+	case err != nil:
+		return Check{}, err
+	}
+	perms, err := cf.Client.Permissions(ctx, token, account)
+	if err != nil {
+		return Check{}, err
+	}
+	c.Account = acct.Name
+	if c.Account == "" {
+		c.Account = acct.ID
+	}
+	c.Details["token_id"] = info.ID
+	c.Details["zone_read"], c.Details["dns_write"] = string(perms.ZoneRead), string(perms.DNSWrite)
+	c.Details["registrar_mode"] = cf.Client.RegistrarMode()
+	switch {
+	case perms.RegistrarRead == cloudflare.Missing || perms.RegistrarWrite == cloudflare.Missing:
+		c.Details["registrar"] = string(cloudflare.Missing)
+	case perms.RegistrarRead == cloudflare.Granted && perms.RegistrarWrite == cloudflare.Granted:
+		c.Details["registrar"] = string(cloudflare.Granted)
+	default:
+		c.Details["registrar"] = string(cloudflare.Unchecked)
+	}
+	if perms.ZoneRead == cloudflare.Missing {
+		c.Missing = append(c.Missing, "Zone Read")
+	}
+	if perms.DNSWrite == cloudflare.Missing {
+		c.Missing = append(c.Missing, "DNS Write")
 	}
 	return c, nil
 }
@@ -389,7 +462,8 @@ func rejected(err error) bool {
 	var ve *vercel.APIError
 	var re *render.APIError
 	var de *digitalocean.APIError
-	return errors.Is(err, render.ErrRejected) || errors.As(err, &re) ||
+	var ce *cloudflare.APIError
+	return errors.Is(err, cloudflare.ErrRejected) || errors.As(err, &ce) || errors.Is(err, render.ErrRejected) || errors.As(err, &re) ||
 		errors.Is(err, digitalocean.ErrRejected) || (errors.As(err, &de) && refusedStatus(de.Status)) ||
 		errors.Is(err, gcp.ErrRejected) || errors.Is(err, gcp.ErrInvalidKey) || errors.Is(err, vercel.ErrRejected) ||
 		errors.Is(err, server.ErrRejected) || errors.Is(err, kubernetes.ErrRejected) || errors.Is(err, registry.ErrRejected) ||

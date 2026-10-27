@@ -400,6 +400,9 @@ func (r *Runtime) waitPersistent(ctx context.Context, c *Client, applied *appsv1
 		if persistentReady(current) {
 			return nil
 		}
+		if gpuErr := unschedulableGPU(ctx, c, applied.Spec.Template, applied.Spec.Selector); gpuErr != nil {
+			return gpuErr
+		}
 		if time.Now().After(deadline) {
 			return errors.New("persistent workload did not become ready")
 		}

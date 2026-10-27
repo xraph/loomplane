@@ -202,6 +202,8 @@ type ServiceConfig struct {
 	// Artifact is an image (or provider revision) this action deploys
 	// instead of building. It is excluded from change detection.
 	Artifact *ReusedArtifact `json:"artifact,omitempty"`
+	// GPU is the reviewed GPU placement of a service whose size asks for GPUs.
+	GPU *provider.GPUPlacement `json:"gpu,omitempty"`
 }
 
 // ReusedArtifact names a build another release already made, which a
@@ -425,6 +427,8 @@ type ComponentConfig struct {
 	Component    recipes.ResolvedComponent   `json:"component"`
 	Dependencies map[string]DependencyChoice `json:"dependencies,omitempty"`
 	Protection   recipes.Protection          `json:"protection"`
+	// GPU is the reviewed GPU placement of a component that uses GPUs.
+	GPU *provider.GPUPlacement `json:"gpu,omitempty"`
 }
 
 // Change is one setting an update changes.

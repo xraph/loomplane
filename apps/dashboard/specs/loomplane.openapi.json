@@ -2283,6 +2283,38 @@
         }
       }
     },
+    "/api/v1/connections/{id}/gpus": {
+      "get": {
+        "tags": [
+          "Cloud connections"
+        ],
+        "summary": "GPUs a server or cluster connection can see, read live",
+        "operationId": "connectionGpus.get",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "GPU inventory",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GPUInventory"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/connections/{id}/storage": {
       "get": {
         "tags": [
@@ -2610,6 +2642,80 @@
         }
       }
     },
+    "/api/v1/dns-zones/discover": {
+      "get": {
+        "tags": [
+          "Domains"
+        ],
+        "summary": "dnsZones.discover",
+        "operationId": "dnsZones.discover",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProviderZoneList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/dns-zones/{zoneId}/challenge-credential": {
+      "post": {
+        "tags": [
+          "Domains"
+        ],
+        "summary": "dnsZones.setChallengeCredential",
+        "operationId": "dnsZones.setChallengeCredential",
+        "parameters": [
+          {
+            "name": "zoneId",
+            "in": "path",
+            "description": "Path parameter: zoneId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ChallengeCredentialInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Zone"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/dns-zones/{zoneId}/remove": {
       "post": {
         "tags": [
@@ -2721,6 +2827,300 @@
         }
       }
     },
+    "/api/v1/domain-registration/check": {
+      "post": {
+        "tags": [
+          "Domain registration"
+        ],
+        "summary": "domainRegistration.check",
+        "operationId": "domainRegistration.check",
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DomainCheckInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DomainOfferList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/domain-registration/extensions": {
+      "get": {
+        "tags": [
+          "Domain registration"
+        ],
+        "summary": "domainRegistration.extensions",
+        "operationId": "domainRegistration.extensions",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegistrationExtensionList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/domain-registration/search": {
+      "get": {
+        "tags": [
+          "Domain registration"
+        ],
+        "summary": "domainRegistration.search",
+        "operationId": "domainRegistration.search",
+        "parameters": [
+          {
+            "name": "connection_id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DomainOfferList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/domain-registrations": {
+      "get": {
+        "tags": [
+          "Domain registration"
+        ],
+        "summary": "domainRegistrations.list",
+        "operationId": "domainRegistrations.list",
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegistrationList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/domain-registrations/preview": {
+      "post": {
+        "tags": [
+          "Domain registration"
+        ],
+        "summary": "domainRegistrations.preview",
+        "operationId": "domainRegistrations.preview",
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegistrationInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Registration"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/domain-registrations/{registrationId}": {
+      "get": {
+        "tags": [
+          "Domain registration"
+        ],
+        "summary": "domainRegistrations.get",
+        "operationId": "domainRegistrations.get",
+        "parameters": [
+          {
+            "name": "registrationId",
+            "in": "path",
+            "description": "Path parameter: registrationId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Registration"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/domain-registrations/{registrationId}/approve": {
+      "post": {
+        "tags": [
+          "Domain registration"
+        ],
+        "summary": "domainRegistrations.approve",
+        "operationId": "domainRegistrations.approve",
+        "parameters": [
+          {
+            "name": "registrationId",
+            "in": "path",
+            "description": "Path parameter: registrationId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegistrationApprovalBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Registration"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/domain-registrations/{registrationId}/auto-renew": {
+      "post": {
+        "tags": [
+          "Domain registration"
+        ],
+        "summary": "domainRegistrations.setAutoRenew",
+        "operationId": "domainRegistrations.setAutoRenew",
+        "parameters": [
+          {
+            "name": "registrationId",
+            "in": "path",
+            "description": "Path parameter: registrationId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AutoRenewInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Registration"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/domains": {
+      "get": {
+        "tags": [
+          "Domains"
+        ],
+        "summary": "domains.overview",
+        "operationId": "domains.overview",
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DomainOverview"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/github": {
       "get": {
         "tags": [
@@ -2817,6 +3217,50 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ConnectedRepositoryList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/gpu-targets": {
+      "get": {
+        "tags": [
+          "GPUs"
+        ],
+        "summary": "Where GPUs can run and what they cost per hour",
+        "operationId": "gpuTargets.list",
+        "parameters": [
+          {
+            "name": "min_memory_gib",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "count",
+            "in": "query",
+            "schema": {
+              "type": "integer"
+            }
+          },
+          {
+            "name": "kind",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "GPUTargetList",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/GPUTargetList"
                 }
               }
             }
@@ -6930,6 +7374,47 @@
         }
       }
     },
+    "/api/v1/projects/{projectId}/domain-routes/{routeId}/status": {
+      "get": {
+        "tags": [
+          "Domains"
+        ],
+        "summary": "domainRoutes.status",
+        "operationId": "domainRoutes.status",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "description": "Path parameter: projectId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "routeId",
+            "in": "path",
+            "description": "Path parameter: routeId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CloudinfraRouteStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{projectId}/domain-routes/{routeId}/ttl": {
       "post": {
         "tags": [
@@ -7016,6 +7501,38 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/RouteOperation"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{projectId}/domains": {
+      "get": {
+        "tags": [
+          "Domains"
+        ],
+        "summary": "domains.project",
+        "operationId": "domains.project",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "description": "Path parameter: projectId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectDomainList"
                 }
               }
             }
@@ -8711,6 +9228,29 @@
           }
         }
       },
+      "Accelerator": {
+        "type": "object",
+        "required": [
+          "kind",
+          "vendor",
+          "count",
+          "memory_gib"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "memory_gib": {
+            "type": "integer"
+          },
+          "vendor": {
+            "type": "string"
+          }
+        }
+      },
       "AccountSpend": {
         "type": "object",
         "required": [
@@ -9182,6 +9722,21 @@
             "items": {
               "$ref": "#/components/schemas/Target"
             }
+          }
+        }
+      },
+      "AutoRenewInputBody": {
+        "type": "object",
+        "required": [
+          "auto_renew",
+          "revision"
+        ],
+        "properties": {
+          "auto_renew": {
+            "type": "boolean"
+          },
+          "revision": {
+            "type": "integer"
           }
         }
       },
@@ -9757,6 +10312,21 @@
         "type": "object",
         "x-forge-type": "github.com/xraph/loomplane/internal/catalogproxy.Session"
       },
+      "ChallengeCredentialInputBody": {
+        "type": "object",
+        "required": [
+          "connection_id",
+          "revision"
+        ],
+        "properties": {
+          "connection_id": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          }
+        }
+      },
       "Change": {
         "type": "object",
         "required": [
@@ -10112,6 +10682,12 @@
           "default": {
             "type": "boolean"
           },
+          "gpu_kind": {
+            "type": "string"
+          },
+          "gpus": {
+            "type": "integer"
+          },
           "grant_revision": {
             "type": "integer"
           },
@@ -10354,6 +10930,62 @@
         "type": "object",
         "x-forge-type": "github.com/xraph/loomplane/internal/cloudinfra.Route"
       },
+      "CloudinfraRouteStatus": {
+        "properties": {
+          "backend": {
+            "type": "string"
+          },
+          "certificate": {
+            "type": "string"
+          },
+          "certificate_expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "checked_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "dns": {
+            "type": "string"
+          },
+          "hostname": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "operation_id": {
+            "type": "string"
+          },
+          "retryable": {
+            "type": "boolean"
+          },
+          "route": {
+            "type": "string"
+          },
+          "route_id": {
+            "type": "string"
+          },
+          "wildcard": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "route_id",
+          "hostname",
+          "wildcard",
+          "backend",
+          "dns",
+          "certificate",
+          "route",
+          "certificate_expires_at",
+          "checked_at",
+          "retryable"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/internal/cloudinfra.RouteStatus"
+      },
       "CloudprofilesCreateInputBody": {
         "properties": {
           "default_placement": {
@@ -10445,6 +11077,9 @@
           "dependencies": {
             "type": "object",
             "additionalProperties": true
+          },
+          "gpu": {
+            "$ref": "#/components/schemas/GPUPlacement"
           },
           "kind": {
             "type": "string"
@@ -11083,6 +11718,46 @@
           }
         }
       },
+      "DbgatewayRouteStatus": {
+        "properties": {
+          "backend_conns": {
+            "type": "integer"
+          },
+          "id": {
+            "type": "string"
+          },
+          "max_connections": {
+            "type": "integer"
+          },
+          "pin_rate": {
+            "type": "number"
+          },
+          "reachable": {
+            "type": "boolean"
+          },
+          "reported": {
+            "type": "boolean"
+          },
+          "resource": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "resource",
+          "state",
+          "reported",
+          "reachable",
+          "backend_conns",
+          "max_connections",
+          "pin_rate"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/internal/dbgateway.RouteStatus"
+      },
       "DecideInputBody": {
         "type": "object",
         "properties": {
@@ -11439,6 +12114,62 @@
         "type": "object",
         "x-forge-type": "github.com/xraph/loomplane/internal/discovery.Source"
       },
+      "DomainCheckInputBody": {
+        "type": "object",
+        "required": [
+          "connection_id",
+          "domains"
+        ],
+        "properties": {
+          "connection_id": {
+            "type": "string"
+          },
+          "domains": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "DomainOffer": {
+        "type": "object",
+        "required": [
+          "name",
+          "registrable"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "price": {
+            "$ref": "#/components/schemas/DomainPrice"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "registrable": {
+            "type": "boolean"
+          },
+          "tier": {
+            "type": "string"
+          }
+        }
+      },
+      "DomainOfferList": {
+        "type": "object",
+        "required": [
+          "offers"
+        ],
+        "properties": {
+          "offers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DomainOffer"
+            }
+          }
+        }
+      },
       "DomainOperationList": {
         "type": "object",
         "required": [
@@ -11461,6 +12192,57 @@
                 }
               ]
             }
+          }
+        }
+      },
+      "DomainOverview": {
+        "type": "object",
+        "required": [
+          "zones",
+          "registrations"
+        ],
+        "properties": {
+          "registrations": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/Registration"
+                },
+                {
+                  "type": "object",
+                  "nullable": true,
+                  "enum": [
+                    null
+                  ]
+                }
+              ]
+            }
+          },
+          "zones": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ZoneOverview"
+            }
+          }
+        }
+      },
+      "DomainPrice": {
+        "type": "object",
+        "required": [
+          "currency",
+          "registration_cost",
+          "renewal_cost"
+        ],
+        "properties": {
+          "currency": {
+            "type": "string"
+          },
+          "registration_cost": {
+            "type": "string"
+          },
+          "renewal_cost": {
+            "type": "string"
           }
         }
       },
@@ -12179,6 +12961,245 @@
           }
         }
       },
+      "GPUDevice": {
+        "type": "object",
+        "required": [
+          "index",
+          "uuid",
+          "kind",
+          "product",
+          "memory_mib"
+        ],
+        "properties": {
+          "index": {
+            "type": "integer"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "memory_mib": {
+            "type": "integer"
+          },
+          "product": {
+            "type": "string"
+          },
+          "uuid": {
+            "type": "string"
+          }
+        }
+      },
+      "GPUInventory": {
+        "type": "object",
+        "required": [
+          "status",
+          "checked_at"
+        ],
+        "properties": {
+          "checked_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "devices": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GPUDevice"
+            }
+          },
+          "message": {
+            "type": "string"
+          },
+          "nodes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GPUNodeGroup"
+            }
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "GPUNodeGroup": {
+        "type": "object",
+        "required": [
+          "kind",
+          "memory_gib",
+          "nodes",
+          "per_node",
+          "total",
+          "hourly_usd",
+          "hourly_price_known"
+        ],
+        "properties": {
+          "hourly_price_known": {
+            "type": "boolean"
+          },
+          "hourly_usd": {
+            "type": "number"
+          },
+          "instance_type": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "memory_gib": {
+            "type": "integer"
+          },
+          "node_selector": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "nodes": {
+            "type": "integer"
+          },
+          "per_node": {
+            "type": "integer"
+          },
+          "product": {
+            "type": "string"
+          },
+          "tolerations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GPUToleration"
+            }
+          },
+          "total": {
+            "type": "integer"
+          }
+        }
+      },
+      "GPUPlacement": {
+        "type": "object",
+        "required": [
+          "kind",
+          "count"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "node_selector": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "tolerations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GPUToleration"
+            }
+          }
+        }
+      },
+      "GPUTarget": {
+        "type": "object",
+        "required": [
+          "source",
+          "connection_id",
+          "name",
+          "cloud",
+          "accelerator",
+          "free",
+          "fits",
+          "hourly_usd",
+          "hourly_price_known",
+          "price_estimate"
+        ],
+        "properties": {
+          "accelerator": {
+            "$ref": "#/components/schemas/Accelerator"
+          },
+          "cloud": {
+            "type": "string"
+          },
+          "code": {
+            "type": "string"
+          },
+          "connection_id": {
+            "type": "string"
+          },
+          "fits": {
+            "type": "boolean"
+          },
+          "free": {
+            "type": "integer"
+          },
+          "hourly_price_known": {
+            "type": "boolean"
+          },
+          "hourly_usd": {
+            "type": "number"
+          },
+          "message": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "price_estimate": {
+            "type": "boolean"
+          },
+          "regions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "size_id": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          }
+        }
+      },
+      "GPUTargetList": {
+        "type": "object",
+        "required": [
+          "targets",
+          "unreachable"
+        ],
+        "properties": {
+          "targets": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GPUTarget"
+            }
+          },
+          "unreachable": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UnreachableAccount"
+            }
+          }
+        }
+      },
+      "GPUToleration": {
+        "type": "object",
+        "required": [
+          "key",
+          "operator",
+          "effect"
+        ],
+        "properties": {
+          "effect": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "operator": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        }
+      },
       "GatewayList": {
         "properties": {
           "gateways": {
@@ -12254,7 +13275,7 @@
           "routes": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/RouteStatus"
+              "$ref": "#/components/schemas/DbgatewayRouteStatus"
             }
           },
           "snapshot_version": {
@@ -12476,6 +13497,49 @@
         "properties": {
           "same_address": {
             "type": "string"
+          }
+        }
+      },
+      "HostnameUse": {
+        "type": "object",
+        "required": [
+          "route_id",
+          "hostname",
+          "project_id",
+          "project_name",
+          "environment_id",
+          "service",
+          "port",
+          "runs_on",
+          "status"
+        ],
+        "properties": {
+          "environment_id": {
+            "type": "string"
+          },
+          "hostname": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "project_name": {
+            "type": "string"
+          },
+          "route_id": {
+            "type": "string"
+          },
+          "runs_on": {
+            "type": "string"
+          },
+          "service": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/CloudinfraRouteStatus"
           }
         }
       },
@@ -13020,6 +14084,22 @@
         },
         "type": "object",
         "x-forge-type": "github.com/xraph/loomplane/pkg/manifest.Endpoint"
+      },
+      "ManifestGPU": {
+        "properties": {
+          "count": {
+            "type": "integer"
+          },
+          "kind": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "count"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/pkg/manifest.GPU"
       },
       "MoveInput": {
         "type": "object",
@@ -13999,6 +15079,9 @@
             "type": "string",
             "format": "date-time"
           },
+          "accelerator": {
+            "$ref": "#/components/schemas/Accelerator"
+          },
           "account_id": {
             "type": "string"
           },
@@ -14054,6 +15137,9 @@
           },
           "host_key": {
             "type": "string"
+          },
+          "hourly_price_known": {
+            "type": "boolean"
           },
           "id": {
             "type": "string",
@@ -14342,6 +15428,12 @@
             "type": "string"
           },
           "cpu_millis": {
+            "type": "integer"
+          },
+          "gpu_kind": {
+            "type": "string"
+          },
+          "gpus": {
             "type": "integer"
           },
           "memory_bytes": {
@@ -14805,6 +15897,9 @@
           "members"
         ],
         "properties": {
+          "accelerator_kind": {
+            "type": "string"
+          },
           "cloud_id": {
             "type": "string"
           },
@@ -14844,6 +15939,9 @@
           "system_reserve"
         ],
         "properties": {
+          "accelerator_kind": {
+            "type": "string"
+          },
           "allowed_sizes": {
             "type": "array",
             "items": {
@@ -14890,6 +15988,9 @@
           "members"
         ],
         "properties": {
+          "accelerator_kind": {
+            "type": "string"
+          },
           "members": {
             "type": "array",
             "items": {
@@ -14906,6 +16007,9 @@
                 },
                 "draining": {
                   "type": "boolean"
+                },
+                "gpus": {
+                  "type": "integer"
                 },
                 "memory_bytes": {
                   "type": "integer"
@@ -14964,6 +16068,9 @@
           },
           "draining": {
             "type": "boolean"
+          },
+          "gpus": {
+            "type": "integer"
           },
           "memory_bytes": {
             "type": "integer"
@@ -15206,6 +16313,57 @@
           }
         }
       },
+      "ProjectDomain": {
+        "type": "object",
+        "required": [
+          "zone_id",
+          "name",
+          "mode",
+          "verified",
+          "wildcards",
+          "hostnames"
+        ],
+        "properties": {
+          "hostnames": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HostnameUse"
+            }
+          },
+          "mode": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "verified": {
+            "type": "boolean"
+          },
+          "wildcards": {
+            "type": "boolean"
+          },
+          "zone_id": {
+            "type": "string"
+          }
+        }
+      },
+      "ProjectDomainList": {
+        "type": "object",
+        "required": [
+          "domains"
+        ],
+        "properties": {
+          "domains": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProjectDomain"
+            }
+          }
+        }
+      },
       "ProjectGrant": {
         "type": "object",
         "required": [
@@ -15422,6 +16580,20 @@
           }
         }
       },
+      "ProviderZoneList": {
+        "type": "object",
+        "required": [
+          "zones"
+        ],
+        "properties": {
+          "zones": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DNSZone"
+            }
+          }
+        }
+      },
       "Provisions": {
         "type": "object",
         "required": [
@@ -15611,6 +16783,24 @@
           }
         }
       },
+      "RecipesGPU": {
+        "properties": {
+          "count": {
+            "type": "integer"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "min_memory_gib": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "count"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/internal/recipes.GPU"
+      },
       "RecoveryInputBody": {
         "type": "object",
         "required": [
@@ -15643,6 +16833,260 @@
           },
           "field": {
             "type": "string"
+          }
+        }
+      },
+      "Registration": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "connection_id",
+          "provider",
+          "account_id",
+          "name",
+          "auto_renew",
+          "privacy_mode",
+          "custom_registrant",
+          "project_ids",
+          "quote",
+          "status",
+          "message",
+          "review",
+          "review_expires_at",
+          "attempt",
+          "attempted",
+          "first_unconfirmed_at",
+          "zone_id",
+          "domain_expires_at",
+          "refreshed_at",
+          "notice_sent_for",
+          "result_notified_for",
+          "sandbox",
+          "revision",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "account_id": {
+            "type": "string"
+          },
+          "attempt": {
+            "type": "integer"
+          },
+          "attempted": {
+            "type": "boolean"
+          },
+          "auto_renew": {
+            "type": "boolean"
+          },
+          "connection_id": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "custom_registrant": {
+            "type": "boolean"
+          },
+          "domain_expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "first_unconfirmed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "message": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "notice_sent_for": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "privacy_mode": {
+            "type": "string"
+          },
+          "project_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "provider": {
+            "type": "string"
+          },
+          "quote": {
+            "$ref": "#/components/schemas/DomainPrice"
+          },
+          "refreshed_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "result_notified_for": {
+            "type": "string"
+          },
+          "review": {
+            "type": "string"
+          },
+          "review_expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "sandbox": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "zone_id": {
+            "type": "string"
+          }
+        }
+      },
+      "RegistrationApprovalBody": {
+        "type": "object",
+        "required": [
+          "review",
+          "currency",
+          "registration_cost"
+        ],
+        "properties": {
+          "currency": {
+            "type": "string"
+          },
+          "registration_cost": {
+            "type": "string"
+          },
+          "review": {
+            "type": "string"
+          }
+        }
+      },
+      "RegistrationExtensionList": {
+        "type": "object",
+        "required": [
+          "extensions"
+        ],
+        "properties": {
+          "extensions": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "RegistrationInputBody": {
+        "type": "object",
+        "required": [
+          "connection_id",
+          "name"
+        ],
+        "properties": {
+          "auto_renew": {
+            "type": "boolean"
+          },
+          "connection_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "privacy_mode": {
+            "type": "string"
+          },
+          "project_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "registrant": {
+            "type": "object",
+            "required": [
+              "email",
+              "phone",
+              "name",
+              "organization",
+              "street",
+              "city",
+              "state",
+              "postal_code",
+              "country_code"
+            ],
+            "properties": {
+              "city": {
+                "type": "string"
+              },
+              "country_code": {
+                "type": "string"
+              },
+              "email": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "organization": {
+                "type": "string"
+              },
+              "phone": {
+                "type": "string"
+              },
+              "postal_code": {
+                "type": "string"
+              },
+              "state": {
+                "type": "string"
+              },
+              "street": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "RegistrationList": {
+        "type": "object",
+        "required": [
+          "registrations"
+        ],
+        "properties": {
+          "registrations": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/Registration"
+                },
+                {
+                  "type": "object",
+                  "nullable": true,
+                  "enum": [
+                    null
+                  ]
+                }
+              ]
+            }
           }
         }
       },
@@ -15842,6 +17286,9 @@
           },
           "volume": {
             "$ref": "#/components/schemas/Volume"
+          },
+          "weight_cache": {
+            "$ref": "#/components/schemas/WeightCache"
           }
         }
       },
@@ -15958,6 +17405,12 @@
           "cpu_millis": {
             "type": "integer"
           },
+          "gpu_kind": {
+            "type": "string"
+          },
+          "gpus": {
+            "type": "integer"
+          },
           "memory_bytes": {
             "type": "integer"
           },
@@ -15979,7 +17432,13 @@
           "cpu_millis": {
             "type": "integer"
           },
+          "gpu": {
+            "$ref": "#/components/schemas/RecipesGPU"
+          },
           "memory_mb": {
+            "type": "integer"
+          },
+          "shm_mb": {
             "type": "integer"
           }
         }
@@ -16661,6 +18120,9 @@
           "address": {
             "type": "string"
           },
+          "backend": {
+            "type": "string"
+          },
           "binding_id": {
             "type": "string"
           },
@@ -16676,7 +18138,13 @@
           "container_id": {
             "type": "string"
           },
+          "ingress_class": {
+            "type": "string"
+          },
           "instance_id": {
+            "type": "string"
+          },
+          "namespace": {
             "type": "string"
           },
           "release_id": {
@@ -16686,6 +18154,9 @@
             "type": "string"
           },
           "server_id": {
+            "type": "string"
+          },
+          "service_name": {
             "type": "string"
           },
           "target_id": {
@@ -16704,6 +18175,12 @@
           "port"
         ],
         "properties": {
+          "blocked_path_prefixes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
           "cloud_id": {
             "type": "string"
           },
@@ -16738,6 +18215,12 @@
           "port"
         ],
         "properties": {
+          "blocked_path_prefixes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
           "cloud_id": {
             "type": "string"
           },
@@ -16817,6 +18300,12 @@
             "type": "string",
             "format": "date-time"
           },
+          "notices": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
           "previous_receipt": {
             "$ref": "#/components/schemas/DNSRecord"
           },
@@ -16836,45 +18325,6 @@
             "$ref": "#/components/schemas/CloudinfraRoute"
           },
           "status": {
-            "type": "string"
-          }
-        }
-      },
-      "RouteStatus": {
-        "type": "object",
-        "required": [
-          "id",
-          "resource",
-          "state",
-          "reported",
-          "reachable",
-          "backend_conns",
-          "max_connections",
-          "pin_rate"
-        ],
-        "properties": {
-          "backend_conns": {
-            "type": "integer"
-          },
-          "id": {
-            "type": "string"
-          },
-          "max_connections": {
-            "type": "integer"
-          },
-          "pin_rate": {
-            "type": "number"
-          },
-          "reachable": {
-            "type": "boolean"
-          },
-          "reported": {
-            "type": "boolean"
-          },
-          "resource": {
-            "type": "string"
-          },
-          "state": {
             "type": "string"
           }
         }
@@ -16936,6 +18386,9 @@
           "cert_expires": {
             "type": "string",
             "format": "date-time"
+          },
+          "cert_state": {
+            "type": "string"
           },
           "checked_at": {
             "type": "string",
@@ -17007,6 +18460,18 @@
           },
           "free_storage_bytes": {
             "type": "integer"
+          },
+          "gpu_message": {
+            "type": "string"
+          },
+          "gpu_runtime": {
+            "type": "string"
+          },
+          "gpus": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GPUDevice"
+            }
           },
           "memory_bytes": {
             "type": "integer"
@@ -17109,6 +18574,9 @@
           "updated_at"
         ],
         "properties": {
+          "accelerator": {
+            "$ref": "#/components/schemas/Accelerator"
+          },
           "account_id": {
             "type": "string"
           },
@@ -17131,6 +18599,12 @@
           "health": {
             "$ref": "#/components/schemas/RuntimeHealth"
           },
+          "hourly_price_known": {
+            "type": "boolean"
+          },
+          "hourly_usd": {
+            "type": "number"
+          },
           "id": {
             "type": "string",
             "x-forge-id": true
@@ -17142,6 +18616,9 @@
             "type": "string"
           },
           "ownership": {
+            "type": "string"
+          },
+          "priced_size": {
             "type": "string"
           },
           "provider": {
@@ -17183,6 +18660,12 @@
           "bootstrap"
         ],
         "properties": {
+          "accelerators": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
           "architecture": {
             "type": "string"
           },
@@ -17365,6 +18848,9 @@
           "regions"
         ],
         "properties": {
+          "accelerator": {
+            "$ref": "#/components/schemas/Accelerator"
+          },
           "architectures": {
             "type": "array",
             "items": {
@@ -17408,6 +18894,7 @@
           "draining",
           "reserved_cpu_millis",
           "reserved_memory_bytes",
+          "reserved_gpus",
           "workloads"
         ],
         "properties": {
@@ -17415,6 +18902,9 @@
             "type": "boolean"
           },
           "reserved_cpu_millis": {
+            "type": "integer"
+          },
+          "reserved_gpus": {
             "type": "integer"
           },
           "reserved_memory_bytes": {
@@ -17449,7 +18939,8 @@
           "phase",
           "active",
           "cpu_millis",
-          "memory_bytes"
+          "memory_bytes",
+          "gpus"
         ],
         "properties": {
           "active": {
@@ -17468,6 +18959,9 @@
             "type": "string"
           },
           "execution_revision": {
+            "type": "integer"
+          },
+          "gpus": {
             "type": "integer"
           },
           "memory_bytes": {
@@ -17647,6 +19141,9 @@
             "items": {
               "$ref": "#/components/schemas/GatewayRoute"
             }
+          },
+          "gpu": {
+            "$ref": "#/components/schemas/GPUPlacement"
           },
           "health_path": {
             "type": "string"
@@ -17893,7 +19390,13 @@
           "cpu": {
             "type": "number"
           },
+          "gpu": {
+            "$ref": "#/components/schemas/ManifestGPU"
+          },
           "memory": {
+            "type": "integer"
+          },
+          "shm": {
             "type": "integer"
           }
         }
@@ -18547,6 +20050,25 @@
           }
         }
       },
+      "UnreachableAccount": {
+        "type": "object",
+        "required": [
+          "connection_id",
+          "name",
+          "message"
+        ],
+        "properties": {
+          "connection_id": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
       "UpdateInputBody": {
         "type": "object",
         "required": [
@@ -18836,6 +20358,21 @@
           }
         }
       },
+      "WeightCache": {
+        "type": "object",
+        "required": [
+          "mount_path",
+          "kubernetes_size_mb"
+        ],
+        "properties": {
+          "kubernetes_size_mb": {
+            "type": "integer"
+          },
+          "mount_path": {
+            "type": "string"
+          }
+        }
+      },
       "Workspace": {
         "type": "object",
         "required": [
@@ -18883,11 +20420,15 @@
           "provider_zone",
           "project_ids",
           "proof_expires_at",
+          "proof_checked_at",
           "verified_at",
           "revision"
         ],
         "properties": {
           "account_id": {
+            "type": "string"
+          },
+          "challenge_connection_id": {
             "type": "string"
           },
           "connection_generation": {
@@ -18915,6 +20456,10 @@
               "type": "string"
             }
           },
+          "proof_checked_at": {
+            "type": "string",
+            "format": "date-time"
+          },
           "proof_expires_at": {
             "type": "string",
             "format": "date-time"
@@ -18933,6 +20478,9 @@
           },
           "record_ownership": {
             "type": "boolean"
+          },
+          "registration_id": {
+            "type": "string"
           },
           "revision": {
             "type": "integer"
@@ -18993,6 +20541,34 @@
         ],
         "type": "object",
         "x-forge-envelope": "zones"
+      },
+      "ZoneOverview": {
+        "type": "object",
+        "required": [
+          "state",
+          "wildcards",
+          "hostnames"
+        ],
+        "properties": {
+          "hostnames": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HostnameUse"
+            }
+          },
+          "registration_id": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "wildcards": {
+            "type": "boolean"
+          },
+          "zone": {
+            "$ref": "#/components/schemas/Zone"
+          }
+        }
       },
       "ZoneUpdateBody": {
         "type": "object",

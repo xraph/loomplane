@@ -12,6 +12,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/xraph/loomplane/pkg/provider"
 )
 
 var (
@@ -406,7 +408,7 @@ func validateKind(k Kind) []error {
 		components[c.Name] = c
 	}
 	for i := range k.Components {
-		validateComponent(f, &k.Components[i], components, dependencies, secrets)
+		validateComponent(f, k, &k.Components[i], components, dependencies, secrets)
 		if slices.Contains(k.Targets, "kubernetes") && slices.ContainsFunc(k.Components[i].Ports, func(p Port) bool { return p.Protocol == "memcached" }) {
 			f.add("component %q uses Memcached readiness, which is qualified only on server targets", k.Components[i].Name)
 		}
@@ -466,7 +468,7 @@ func validateKind(k Kind) []error {
 				f.add("release %s has no image for component %q", release.Version, c.Name)
 				continue
 			}
-			validateImage(f, fmt.Sprintf("release %s component %q", release.Version, c.Name), image)
+			validateImage(f, fmt.Sprintf("release %s component %q", release.Version, c.Name), image, c.Resources.GPU != nil)
 		}
 		for name := range release.Images {
 			if _, ok := components[name]; !ok {
@@ -477,7 +479,7 @@ func validateKind(k Kind) []error {
 	return f.errs
 }
 
-func validateComponent(f *findings, c *Component, components map[string]*Component, dependencies map[string]Dependency, secrets map[string]bool) {
+func validateComponent(f *findings, k Kind, c *Component, components map[string]*Component, dependencies map[string]Dependency, secrets map[string]bool) {
 	validateName(f, "component", c.Name)
 	if strings.Contains(c.Name, "--") {
 		f.add("component name %q has \"--\", which action names use as a separator", c.Name)
@@ -583,6 +585,7 @@ func validateComponent(f *findings, c *Component, components map[string]*Compone
 	if c.Resources.CPUMillis < 0 || c.Resources.MemoryMB < 0 {
 		f.add("%s resources must not be negative", what)
 	}
+	validateGPU(f, what, c, k)
 
 	env := map[string]bool{}
 	for _, e := range c.Env {
@@ -642,6 +645,56 @@ func validateComponent(f *findings, c *Component, components map[string]*Compone
 			f.add("%s names %q in after more than once", what, name)
 		}
 		after[name] = true
+	}
+}
+
+func validateGPU(f *findings, what string, c *Component, k Kind) {
+	r := c.Resources
+	if g := r.GPU; g != nil {
+		if c.Role != RoleProcess {
+			f.add("%s requests a GPU but isn't a process", what)
+		}
+		if g.Count < 1 || g.Count > 8 {
+			f.add("%s GPU count %d is outside 1 to 8", what, g.Count)
+		}
+		memory := 0
+		if g.Kind != "" {
+			kind, ok := provider.LookupAcceleratorKind(g.Kind)
+			if !ok || kind.Vendor != provider.VendorNVIDIA {
+				f.add("%s GPU kind %q isn't a known NVIDIA kind", what, g.Kind)
+			} else {
+				memory = kind.MemoryGiB
+			}
+		}
+		switch {
+		case g.MinMemoryGiB < 0:
+			f.add("%s GPU memory floor %d GiB is negative", what, g.MinMemoryGiB)
+		case memory > 0 && g.MinMemoryGiB > memory:
+			f.add("%s needs %d GiB per GPU but %s has %d", what, g.MinMemoryGiB, g.Kind, memory)
+		}
+	}
+	if r.ShmMB < 0 || r.ShmMB > 65536 || (r.ShmMB > 0 && r.ShmMB >= r.MemoryMB) {
+		f.add("%s shared memory must be smaller than its memory, and at most 65536 MB", what)
+	}
+	w := c.WeightCache
+	if w == nil {
+		return
+	}
+	if r.GPU == nil {
+		f.add("%s weight cache needs a GPU component", what)
+	}
+	p := w.MountPath
+	switch {
+	case !path.IsAbs(p) || path.Clean(p) != p || p == "/":
+		f.add("%s weight cache mount path %q must be a clean absolute path below /", what, p)
+	case underSystem(p):
+		f.add("%s weight cache mount path %q is under /proc, /sys or /dev", what, p)
+	}
+	if v := c.Volume; v != nil && (p == v.MountPath || strings.HasPrefix(p, v.MountPath+"/") || strings.HasPrefix(v.MountPath, p+"/")) {
+		f.add("%s weight cache mount path %q overlaps volume mount path %q", what, p, v.MountPath)
+	}
+	if slices.Contains(k.Targets, "kubernetes") && w.KubernetesSizeMB < 1024 {
+		f.add("%s weight cache needs at least 1024 MB on Kubernetes", what)
 	}
 }
 
@@ -1030,7 +1083,9 @@ func validateRelease(f *findings, version, product, revision string, seen map[st
 	}
 }
 
-func validateImage(f *findings, what string, image Image) {
+// validateImage pins both architectures, except that a GPU component's image
+// may leave out arm64, since NVIDIA GPUs run on amd64 targets.
+func validateImage(f *findings, what string, image Image, gpu bool) {
 	if image.Repository == "" {
 		f.add("%s has no image repository", what)
 	} else if strings.ContainsAny(image.Repository, "@ \t\n") {
@@ -1039,6 +1094,7 @@ func validateImage(f *findings, what string, image Image) {
 	for _, architecture := range architectures {
 		digest, ok := image.Digests[architecture]
 		switch {
+		case !ok && gpu && architecture == "arm64":
 		case !ok:
 			f.add("%s has no %s digest", what, architecture)
 		case !digestPattern.MatchString(digest):
@@ -1084,7 +1140,7 @@ func validateEngine(e Engine) []error {
 	versions := map[string]bool{}
 	for _, release := range e.Releases {
 		validateRelease(f, release.Version, release.Product, release.Revision, versions)
-		validateImage(f, "release "+release.Version, release.Image)
+		validateImage(f, "release "+release.Version, release.Image, false)
 		if !path.IsAbs(release.MountPath) || path.Clean(release.MountPath) != release.MountPath || release.MountPath == "/" {
 			f.add("release %s mount path %q must be a clean absolute path below /", release.Version, release.MountPath)
 		}
