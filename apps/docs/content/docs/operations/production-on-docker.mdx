@@ -1,0 +1,80 @@
+---
+title: Production on Docker
+description: Run Loomplane on one Linux host with Docker Compose, Postgres 17 and Caddy for HTTPS.
+---
+
+This stack runs one API and dashboard, one analysis worker, Postgres 17 and Caddy. It tolerates container restarts. A host failure still takes it offline, so keep backups off the host. It isn't a high-availability setup. For that, use [Production on Kubernetes](/docs/operations/production-on-kubernetes).
+
+## Requirements
+
+A Linux host with Docker Engine, Docker Compose 2.24.4 or newer, and a hostname pointed at that host. Open TCP ports 80 and 443 for Caddy's HTTPS certificates and browser traffic. Start with 2 CPU cores, 8 GB of RAM and enough disk for your repositories, database and recovery objects, and measure your workload before you pick something smaller.
+
+## Install
+
+Download the Docker bundle from the GitHub release you want to run, verify its checksum against the release's `SHA256SUMS`, and extract it into `/srv/loomplane`. The bundle holds `compose.yaml`, the `Caddyfile`, `.env.example`, `image.txt` and a README. It pins `.env.example` to the image digest in `image.txt`.
+
+You can also use `deployments/production` from a source checkout. Then choose a published image tag or digest yourself. The example version is a placeholder, not a promise that a release exists.
+
+Run these in the directory that holds `compose.yaml`:
+
+```bash
+umask 077
+cp .env.example .env
+openssl rand -base64 32
+openssl rand -hex 32
+```
+
+Edit `.env`. Set `LOOMPLANE_IMAGE`, `LOOMPLANE_DOMAIN` (a hostname without `https://` or a path) and `ACME_EMAIL`. Put the first generated value in `LOOMPLANE_SECRET_KEY` and the second in `POSTGRES_PASSWORD`.
+
+Keep that secret key in your secret manager. Loomplane derives encryption keys from it, and your database backup needs the original key to recover stored credentials. Generate it once, not on each deployment.
+
+The stack passes secrets to containers through environment variables. Protect `.env` with mode 600, restrict Docker access to administrators, and don't paste `docker compose config` or `docker inspect` output into tickets, since both can reveal those values. Validate with `config --quiet`.
+
+```bash
+docker compose config --quiet
+docker compose pull
+docker compose up -d --wait --wait-timeout 240
+docker compose ps
+```
+
+Open `https://YOUR_HOSTNAME`, create your account and organization, then connect a repository. Caddy gets and renews the certificate and forwards WebSocket and SSE traffic to the API. Health and metrics routes are blocked at the public proxy.
+
+If GHCR requires authentication, run `docker login ghcr.io` with a token that can read the package. A newly published package may need its visibility set to public in GitHub before anonymous pulls work.
+
+## Configuration and storage
+
+The API runs migrations before it becomes healthy, and Compose starts the worker after that check passes. Both run as UID 10001 with a read-only root filesystem, dropped capabilities, a PID limit and a temporary `/tmp`. The API gets a writable artifact volume. Neither container gets the host's Docker socket. Connections to deployment targets use Loomplane's normal credential and approval flow.
+
+| Volume | Contents |
+|---|---|
+| `postgres-data` | Accounts, credentials, jobs, deployment state and audit records |
+| `artifact-data` | Deployment source artifacts and local recovery objects |
+| `caddy-data` | TLS certificates and Caddy's certificate authority state |
+| `caddy-config` | Caddy's saved runtime configuration |
+
+Volume names carry the Compose project prefix `loomplane-production`, so keep that project name stable across upgrades. `docker compose down` keeps the data, and `docker compose down --volumes` deletes it.
+
+Only Caddy publishes host ports. Postgres sits on an internal Docker network. The API and worker also have outbound access for GitHub and cloud APIs. Database traffic stays on this host's Docker network with TLS disabled. If you move Postgres off the host, supply a separate Compose override with a certificate-verified database URL and remove the bundled database dependency.
+
+Set the optional GitHub App variables together when you need private repositories ([Private repositories](/docs/guides/private-repositories)). You can put a multiline PEM in a single-quoted `.env` value, and the webhook secret must match in Loomplane and GitHub.
+
+Email is off until you configure SMTP. Production uses implicit TLS, usually on port 465. Verify delivery with your mail provider before you rely on account recovery.
+
+`LOOMPLANE_BACKUP_URL` can point recovery objects at independent storage. Without it they share the local artifact volume. It doesn't schedule backups of Loomplane's own database.
+
+## Check health
+
+```bash
+docker compose ps
+docker compose logs --tail=100 loomplane loomplane-worker
+docker compose exec -T loomplane wget -qO- http://127.0.0.1:8780/_/health
+docker compose exec -T loomplane-worker wget -qO- http://127.0.0.1:8781/_/health
+```
+
+The probes include extension health, so a stalled durable worker can make a container unhealthy even while its HTTP listener answers. The API replaces a durable worker that a database timeout stopped, and turns healthy again once the replacement is polling. Docker's restart policy restarts exited processes but not a running unhealthy container. Alert on unhealthy state, find the cause, and restart the affected service after database or provider access recovers.
+
+Logs rotate at 10 MB per file with five files per container. Send logs and metrics to your monitoring system before you need longer retention, and keep metrics access inside a trusted Docker network. See [Monitoring](/docs/operations/monitoring).
+
+## Next
+
+[Upgrades and releases](/docs/operations/upgrades-and-releases) covers upgrading and rolling back. [Backing up Loomplane](/docs/operations/backing-up-loomplane) covers the database backup and the artifact volume.

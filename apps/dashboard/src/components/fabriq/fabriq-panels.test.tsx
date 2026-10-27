@@ -1,0 +1,256 @@
+import { screen, within } from "@testing-library/react"
+import userEvent from "@testing-library/user-event"
+import { afterEach, expect, test, vi } from "vitest"
+import { forgeClient } from "@/client/runtime"
+import { FabriqEngines } from "./fabriq-engines"
+import { FabriqRecovery, recoveryEngines } from "./fabriq-recovery"
+import { FabriqSettings } from "./fabriq-settings"
+import { json, mount, panelProps, serve } from "./test-api"
+
+const state = vi.hoisted(() => ({ allowed: true, navigate: vi.fn() }))
+vi.mock("@/lib/organization", () => ({
+  useOrganization: () => ({ can: () => state.allowed }),
+}))
+vi.mock("@/lib/router", () => ({
+  useNavigate: () => state.navigate,
+  Link: ({ children }: { children: React.ReactNode }) => (
+    <span>{children}</span>
+  ),
+}))
+afterEach(() => {
+  vi.unstubAllGlobals()
+  vi.restoreAllMocks()
+  forgeClient.clear()
+  state.allowed = true
+  state.navigate.mockReset()
+})
+
+function withGraph() {
+  const props = panelProps()
+  props.config.composition!.dependencies.falkordb = {
+    mode: "new",
+    resource: "fabriq--falkordb",
+  }
+  return props
+}
+function api(rebuilds: unknown[] = [], failPlan = false) {
+  const writes = serve()
+  const base = fetch
+  vi.stubGlobal(
+    "fetch",
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = new URL(String(input), "http://localhost").pathname
+      if (path.endsWith("/rebuilds")) {
+        if (init?.method === "POST") {
+          const body = JSON.parse(String(init.body))
+          writes.push({ method: "POST", path, body })
+          const job = {
+            id: "job-1",
+            projection: body.projection,
+            status: "queued",
+            retryable: false,
+            output: "",
+            created_by: "u",
+            created_at: new Date().toISOString(),
+          }
+          rebuilds.unshift(job)
+          return json(job, 202)
+        }
+        return json({ rebuilds })
+      }
+      if (path.endsWith("/projects/p/plans")) {
+        writes.push({
+          method: "POST",
+          path,
+          body: JSON.parse(String(init?.body)),
+        })
+        return failPlan
+          ? json({ error: "Planner unavailable" }, 503)
+          : json({ id: "plan-1" }, 201)
+      }
+      return base(input, init)
+    }
+  )
+  return writes
+}
+
+test("rebuild queues once and blocks another request while active", async () => {
+  const writes = api()
+  mount(<FabriqEngines {...withGraph()} />)
+  const graph = screen.getByRole("region", { name: "FalkorDB" })
+  const rebuild = await within(graph).findByRole("button", {
+    name: "Rebuild from Postgres",
+  })
+  await vi.waitFor(() => expect(rebuild).toBeEnabled())
+  await userEvent.dblClick(rebuild)
+  expect(await within(graph).findByText("queued")).toBeVisible()
+  expect(rebuild).toBeDisabled()
+  expect(writes).toHaveLength(1)
+  expect(writes[0].body).toEqual({
+    projection: "graph",
+    request_id: expect.any(String),
+  })
+})
+
+test("failed rebuild shows its output and retry only when retryable", async () => {
+  api([
+    {
+      id: "j",
+      projection: "graph",
+      status: "failed",
+      retryable: true,
+      output: "worker unavailable",
+      created_by: "u",
+      created_at: "2026-10-25T10:00:00Z",
+    },
+  ])
+  mount(<FabriqEngines {...withGraph()} />)
+  expect(await screen.findByText("worker unavailable")).toBeVisible()
+  expect(screen.getByRole("button", { name: "Retry rebuild" })).toBeEnabled()
+})
+
+test("readers cannot request projection rebuilds", async () => {
+  state.allowed = false
+  api()
+  mount(<FabriqEngines {...withGraph()} />)
+  expect(
+    screen.queryByRole("button", { name: /Rebuild from Postgres/ })
+  ).toBeNull()
+})
+
+test("recovery resolves provisioned and linked resources, excluding projections", () => {
+  const props = withGraph()
+  props.config.composition!.dependencies.postgres = {
+    mode: "resource",
+    resource: "shared-db",
+  }
+  expect(recoveryEngines(props.config)).toEqual([
+    { name: "Postgres", resource: "shared-db", external: false },
+    { name: "Redis", resource: "fabriq--redis", external: false },
+  ])
+})
+
+test("Kubernetes recovery states its limitation without backup controls", () => {
+  const props = panelProps()
+  props.binding.provider = "kubernetes"
+  mount(<FabriqRecovery {...props} />)
+  expect(
+    screen.getByText(
+      "Backups for these engines aren't available on Kubernetes yet."
+    )
+  ).toBeVisible()
+  expect(screen.queryByRole("button", { name: /backup/i })).toBeNull()
+})
+
+test("external engines have no managed recovery controls", () => {
+  const props = panelProps()
+  props.config.composition!.dependencies.postgres = {
+    mode: "external",
+    external: "external-pg",
+  }
+  props.config.composition!.dependencies.redis = {
+    mode: "external",
+    external: "external-cache",
+  }
+  mount(<FabriqRecovery {...props} />)
+  expect(
+    screen.getAllByText("Not managed by Loomplane: no backups or restores.")
+  ).toHaveLength(2)
+  expect(screen.queryByRole("button", { name: /backup/i })).toBeNull()
+})
+
+test("settings edits only changed projections then opens the review plan", async () => {
+  const writes = api()
+  mount(<FabriqSettings {...panelProps()} />)
+  await userEvent.click(screen.getByRole("switch", { name: "FalkorDB" }))
+  const review = screen.getByRole("button", { name: "Review plan" })
+  await vi.waitFor(() => expect(review).toBeEnabled())
+  await userEvent.click(review)
+  await vi.waitFor(() =>
+    expect(state.navigate).toHaveBeenCalledWith({
+      to: "/deployments/$id",
+      params: { id: "plan-1" },
+    })
+  )
+  expect(writes.map((w) => w.body)).toEqual([
+    {
+      set_use: {
+        resource: "fabriq",
+        dependency: "falkordb",
+        use: { enabled: true },
+      },
+    },
+    { environment: "production" },
+  ])
+})
+
+test("settings keeps the draft retryable when planning fails", async () => {
+  api([], true)
+  mount(<FabriqSettings {...panelProps()} />)
+  await userEvent.click(screen.getByRole("switch", { name: "FalkorDB" }))
+  const review = screen.getByRole("button", { name: "Review plan" })
+  await vi.waitFor(() => expect(review).toBeEnabled())
+  await userEvent.click(review)
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    /Planner unavailable/
+  )
+  expect(review).toBeEnabled()
+  expect(state.navigate).not.toHaveBeenCalled()
+})
+
+test("engines show deployed state and evidence without inventing a verified restore", async () => {
+  api()
+  const props = withGraph()
+  props.components = props.components.filter(
+    (b) => b.name !== "fabriq--falkordb"
+  )
+  mount(<FabriqEngines {...props} />)
+  const graph = screen.getByRole("region", { name: "FalkorDB" })
+  expect(within(graph).getByText("Not running")).toBeVisible()
+  const postgres = screen.getByRole("region", { name: "Postgres" })
+  expect(
+    await within(postgres).findByText(/Backups daily, no restore verified yet/)
+  ).toBeVisible()
+  expect(within(postgres).getByText("Postgres 16")).toBeVisible()
+  expect(within(postgres).getByText("Running")).toBeVisible()
+  const search = screen.getByRole("region", { name: "Elasticsearch" })
+  expect(
+    within(search).getByText(
+      "Search projections. Turn on in Settings; rebuilt from Postgres."
+    )
+  ).toBeVisible()
+})
+
+test("settings explains the projections before reviewing deployment", () => {
+  api()
+  mount(<FabriqSettings {...panelProps()} />)
+  expect(
+    screen.getByText("Graph projections. Rebuilt from Postgres, so no backups.")
+  ).toBeVisible()
+  expect(
+    screen.getByText(
+      "Search projections. Rebuilt from Postgres, so no backups."
+    )
+  ).toBeVisible()
+  expect(screen.getByRole("button", { name: "Review plan" })).toBeDisabled()
+})
+
+test("engine state does not claim health for linked resources or external endpoints", async () => {
+  api()
+  const props = panelProps()
+  props.config.composition!.dependencies.postgres = {
+    mode: "external",
+    external: "own-db",
+  }
+  props.config.composition!.dependencies.redis = {
+    mode: "resource",
+    resource: "shared-cache",
+  }
+  mount(<FabriqEngines {...props} />)
+  const postgres = screen.getByRole("region", { name: "Postgres" })
+  const redis = screen.getByRole("region", { name: "Redis" })
+  expect(within(postgres).getByText("External")).toBeVisible()
+  expect(within(postgres).queryByText("Running")).toBeNull()
+  expect(within(redis).getByText("Linked")).toBeVisible()
+  expect(within(redis).queryByText("Running")).toBeNull()
+})

@@ -209,7 +209,7 @@ function Panel({
           </Button>
         )}
       </div>
-      <p className="text-xs text-muted-foreground">
+      <p className="text-[12.5px] text-muted-foreground">
         A value set for a service beats one set for the project, which beats the
         organization&apos;s, and a value for one environment beats one for every
         environment.
@@ -285,7 +285,7 @@ function Resolved({
   if (rows.length === 0) {
     return (
       <Card className="py-0">
-        <p className="px-4 py-8 text-center text-sm text-muted-foreground">
+        <p className="px-4 py-3.5 text-[13px] text-muted-foreground">
           Nothing set for {target.serviceName ?? "this project"} in{" "}
           {environment} yet, here or organization-wide.
         </p>
@@ -341,7 +341,9 @@ function Row({
   const own = ownLayer(v, target)
   return (
     <TableRow>
-      <TableCell className="font-mono text-xs font-medium">{row.key}</TableCell>
+      <TableCell className="font-mono text-[12.5px] font-medium">
+        {row.key}
+      </TableCell>
       <TableCell className="max-w-xs">
         <Value variable={v} />
       </TableCell>
@@ -353,7 +355,9 @@ function Row({
           >
             {layerLabel(v)}
           </Badge>
-          <span className="text-xs text-muted-foreground">{reachLabel(v)}</span>
+          <span className="text-[12.5px] text-muted-foreground">
+            {reachLabel(v)}
+          </span>
         </div>
         {row.overrides.length > 0 && (
           <div className="mt-1 text-xs text-muted-foreground">
@@ -394,7 +398,7 @@ function Row({
 export function Value({ variable }: { variable: Variable }) {
   if (variable.secret) {
     return (
-      <span className="inline-flex items-center gap-1 text-sm text-muted-foreground">
+      <span className="inline-flex items-center gap-1 text-[12.5px] text-muted-foreground">
         <LockIcon className="size-3.5" aria-hidden="true" />
         Secret
       </span>
@@ -403,7 +407,7 @@ export function Value({ variable }: { variable: Variable }) {
   return (
     <code
       className={cn(
-        "block truncate font-mono text-sm",
+        "block truncate font-mono text-[12.5px]",
         variable.value === "" && "text-muted-foreground"
       )}
       title={variable.value}

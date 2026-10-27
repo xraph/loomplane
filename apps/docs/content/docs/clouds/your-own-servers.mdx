@@ -1,0 +1,197 @@
+---
+title: Your own servers
+description: Run services on SSH/Docker servers and Kubernetes clusters you already have, group servers into pools, and route domains to them.
+---
+
+Loomplane can deploy to a Linux server over SSH, to a Kubernetes namespace, or to a pool of servers it manages for you. You connect them under **Integrations**, and each service can pick its own connection. The plan pins that destination, its trust settings and the source commit before you approve it.
+
+## SSH and Docker
+
+You need a Linux host with a Docker daemon, an existing private key and the server's verified public host key. The SSH user needs access to the Docker Unix socket and TCP forwarding for readiness checks. Loomplane doesn't install Docker and doesn't use sudo.
+
+Choose a published host port for a public HTTP service. Private services use the environment's Docker network. A readiness path checks the application over SSH before its binding changes.
+
+```yaml
+services:
+  worker:
+    source: go:cmd/worker
+    provider: server
+    target: conn_server
+    public: false
+    build: { context: . }
+```
+
+`target` is the ID of the checked connection. Replace `conn_server` with yours.
+
+## Kubernetes
+
+Use a self-contained HTTPS kubeconfig with an embedded CA and a token or client certificate. File references, exec authentication, insecure TLS and impersonation are rejected. Select an existing namespace. Loomplane pins its UID and checks permissions for workloads, services and secrets.
+
+Public HTTP services need your ingress controller, a hostname and an existing TLS secret. CPU autoscaling also needs the metrics API.
+
+```yaml
+version: 1
+services:
+  api:
+    source: go:cmd/api
+    provider: kubernetes
+    target: conn_cluster
+    port: 8080
+    health_path: /_/health
+    public: false
+    scale: { min: 2, max: 2 }
+    build:
+      context: .
+      builder: conn_builder
+      registry: conn_registry
+```
+
+A source build for Kubernetes needs an SSH/Docker builder and an OCI registry that both the builder and the cluster can reach. Or give it an existing image pinned as `registry/repository@sha256:...` in `build.image`.
+
+For private images, enter the name of an existing namespace Secret in the connection's `image_pull_secret` setting. You manage its credentials and rotation. Rollback and removal leave that Secret alone, and names starting with `lp-` are reserved for Loomplane's own objects.
+
+Forge HTTP apps without a Dockerfile can use a generated Go build, and a repository Dockerfile takes precedence over it. A private dependency needs a supported network path between its targets. Picking destinations doesn't create a cross-cluster network.
+
+### Registry credentials
+
+Docker publishing and server pulls accept a registry bearer token, or a repository token from your reviewed token service. Username and password connections need a bearer token exchange for authenticated Docker operations. Basic-only credentials can check registry API access but can't be delegated to Docker. Loomplane sends registry credentials only to the selected registry or its approved token endpoint. If you use a private CA, install its trust on the builder daemon, the target daemon and the Kubernetes nodes that contact the registry.
+
+## Persistent storage
+
+Docker databases keep a named volume that survives container replacement and removal. Kubernetes uses a StatefulSet and a retained PVC. [Storage inventory](/docs/services/storage-inventory) shows what's retained.
+
+## Servers and pools
+
+You can provision and adopt servers inside an organization Cloud. Your installed provider adapter declares each operation separately: discovery, provisioning, resize, deletion, DNS and domain attachment. An unsupported capability is a failure you resolve with a supported account or operation. Having a provider name doesn't mean it supports a runtime.
+
+```bash
+loomctl cloud-servers cloud_...
+loomctl cloud-servers options cloud_... conn_...
+loomctl cloud-servers preview cloud_... --file server.json
+loomctl cloud-servers apply cloud_... infraop_... --review REVIEW_TOKEN --yes \
+  --wait --timeout 20m
+loomctl cloud-servers show cloud_... infraop_...
+loomctl cloud-servers operations cloud_...
+loomctl cloud-servers retry cloud_... infraop_... --wait --timeout 20m
+loomctl cloud-servers cancel cloud_... infraop_...
+```
+
+For a managed server creation, `server.json` looks like this. Get supported region, size and bootstrap image IDs from `options` for your connection.
+
+```json title="server.json"
+{
+  "kind": "create",
+  "name": "host-a",
+  "connection_id": "conn_...",
+  "region": "nyc3",
+  "size": "s-1vcpu-1gb",
+  "image": "ubuntu-24-04-x64",
+  "cloud_revision": 1
+}
+```
+
+To adopt an existing host, use `{"kind":"adopt","name":"existing-host","connection_id":"ssh_conn_...","cloud_revision":1,"confirm_adoption":true}`. You keep provider ownership of an adopted host. Loomplane can disconnect it but can't resize or delete it. Disconnecting or deleting a host is blocked while workloads, reservations or pool membership still reference it.
+
+To review a resize, disconnect or deletion, supply `kind`, `server_id`, `cloud_revision` and `server_revision` (and `size` for a resize). The preview returns an operation ID, an exact review token, an expiry, an estimated cost and the provider actions. Reviews last 15 minutes, and `apply` prints the saved operation before it accepts your token.
+
+Provider acceptance doesn't mean the runtime is ready. Follow the operation's provider actions and bootstrap expiry, then refresh the pinned SSH and Docker health:
+
+```bash
+loomctl cloud-servers check cloud_... server_...
+```
+
+`--wait` stops at success, failure, cancellation or a waiting checkpoint. A waiting checkpoint still needs your attention.
+
+### Capacity and pools
+
+```bash
+loomctl cloud-servers usage cloud_... server_...
+loomctl cloud-servers drain cloud_... server_...
+loomctl cloud-servers drain cloud_... server_... --review DRAIN_DIGEST --yes
+loomctl cloud-pools cloud_...
+loomctl cloud-pools save cloud_... --file pool.json
+loomctl cloud-pools save cloud_... pool_... --file pool-update.json
+```
+
+Draining disables new admission after you review current usage. It doesn't move workloads. Usage includes capacity reservations, serving workloads, execution phases and retained storage markers (which don't prove a volume exists). A pool input gives `name`, `revision` (0 for creation) and `members`, each with `server_id`, `cpu_millis`, `memory_bytes` and `draining`. Budgets must fit verified runtime capacity. A pool groups compatible Docker hosts and doesn't create a private network.
+
+Point a target at a pool instead of an infrastructure account:
+
+```bash
+loomctl cloud-targets create cloud_... --organization --name workers \
+  --provider server --runtime server --pool pool_... --tags workers
+loomctl cloud-targets switch cloud_... target_... --organization \
+  --provider server --runtime server --pool pool_new --revision 2
+```
+
+A pool service has one bounded replica and one active placement, and ordinary deployments keep the chosen host when they can. To pick another host for a stateless service, review a move:
+
+```json title="move.json"
+{
+  "project_id": "project_...",
+  "environment_id": "env_...",
+  "service": "web",
+  "pool_id": "pool_...",
+  "destination_server_id": "server_next"
+}
+```
+
+```bash
+loomctl cloud-pools move cloud_... --file move.json
+# Copy the returned review digest into move.json as "review", then accept.
+loomctl cloud-pools move cloud_... --file move.json --yes
+```
+
+Accepting saves a 15-minute intent and starts no deployment. The response includes a conservative `local_review_and_approve_by` deadline and the exact `loomctl plan` command to run next. Review that plan, then `loomctl approve` it before the intent expires. If the source, pool, capacity or grant changes, plan again. Local data needs a separate, explicit migration.
+
+To recover an unfinished accepted reservation, run `loomctl cloud-pools recover cloud_... --file recovery.json` with `{"plan_id":"plan_...","service":"web"}`. Read its execution revision, active or started state and digest, copy the digest into `review`, and repeat with `--yes`. Recovery fences new attempts, checks exact owned compute cleanup and releases capacity. It retains local storage and reports `storage_retained`, which isn't evidence of a backup or a data migration. A serving workload needs a reviewed delete or move. Don't clear a reservation by editing database rows. Pending mixed managed and server attempts without proof that provider work stopped stay blocked until you reconcile or finish the original operation.
+
+## Domains and routes
+
+DNS zones belong to the organization, apart from any Cloud or compute connection. Grant them to projects explicitly. Managed mode uses a supported DNS account. External mode returns a TXT ownership proof you publish yourself. This doesn't register domains or change registrar nameservers.
+
+```bash
+loomctl dns-zones
+loomctl dns-zones create --file zone.json
+loomctl dns-zones verify zone_...
+loomctl dns-zones project my-project
+loomctl dns-zones update zone_... --file zone-update.json
+loomctl dns-zones remove zone_... --revision 3 --yes
+```
+
+Use `{"name":"example.com","mode":"external","project_ids":["project_..."]}` for an external zone, or `"mode": "managed"` with a `connection_id` for a DNS adapter. A zone update carries `revision`, `project_ids` and `renew_proof`. Renew an expired, unverified proof with `renew_proof: true` and publish the replacement TXT value. Referenced zones can't be removed.
+
+```json title="route.json"
+{
+  "zone_id": "zone_...",
+  "cloud_id": "cloud_...",
+  "environment_id": "env_...",
+  "service": "web",
+  "hostname": "app.example.com",
+  "port": 8080,
+  "external_ttl_seconds": 7200
+}
+```
+
+```bash
+loomctl domain-routes preview my-project --file route.json
+loomctl domain-routes apply my-project routeop_... --review REVIEW_DIGEST --yes \
+  --wait --timeout 15m
+loomctl domain-routes my-project
+loomctl domain-routes show my-project routeop_...
+loomctl domain-routes verify my-project route_... --wait --timeout 10m
+loomctl domain-routes retry my-project routeop_... --wait --timeout 10m
+loomctl domain-routes history my-project route_...
+loomctl domain-routes ttl my-project route_... --revision 3 --external-ttl-seconds 7200
+loomctl domain-routes remove my-project route_... --revision 4 --yes
+```
+
+DNS, TLS and backend verification are reported separately. A route operation prints its desired record, applied receipt, message and `not_before` drain gate. For external DNS, publish the exact record and verify again. A server route needs the public hostname to reach its ingress and the HTTP-01 challenge before a public certificate can be issued.
+
+`external_ttl_seconds` is the maximum TTL your external DNS records previously served, including any cached value, between 60 and 86400 seconds. You have to establish that bound yourself. A successful resolver lookup and the new TTL you ask for don't establish it.
+
+During a routed release, old and new compute coexist while DNS changes and cached traffic drain. If a legacy runtime lacks a trusted current container receipt, redeploy it through the reviewed flow before you attach a route. DNS-only retries can't repair a missing runtime identity.
+
+<Callout type="warn">
+  Fixture certificates and local ACME checks don't qualify your domain for public ACME, and fixture-backed provider checks don't qualify your account or DNS propagation. Stop every older app and worker binary before running migrations that touch these tables. Mixed versions with unfenced writers aren't supported.
+</Callout>

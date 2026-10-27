@@ -318,6 +318,33 @@ func TestEnsureDatabaseGatewayNeedsASigningKey(t *testing.T) {
 	}
 }
 
+// A deploy hands the gateway every key the plan recorded, and refuses when
+// the keys changed after it was planned, before minting anything.
+func TestEnsureDatabaseGatewayChecksThePlannedTrustKeys(t *testing.T) {
+	old, next := testTrustKey(t), testTrustKey(t)
+	next.NotBefore = next.NotBefore.Add(12 * time.Hour)
+	store, secrets := &fakeDBGateways{}, snapshotSecrets{}
+	r := dbGatewayRunner(store, secrets, old, next)
+	a := dbGatewayAction()
+	a.Service.DatabaseGateway.Trust = plane.TrustDigest([]plane.TrustKey{old, next})
+	env, _, err := r.ensureDatabaseGateway(t.Context(), gatewayDeployment, &a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg := gatewayConfig(t, env); plane.TrustDigest(cfg.TrustKeys) != a.Service.DatabaseGateway.Trust {
+		t.Fatalf("the gateway trusts %+v", cfg.TrustKeys)
+	}
+
+	store, secrets = &fakeDBGateways{}, snapshotSecrets{}
+	r = dbGatewayRunner(store, secrets, next)
+	if _, _, err = r.ensureDatabaseGateway(t.Context(), gatewayDeployment, &a); !errors.Is(err, errDBGatewayTrustChanged) {
+		t.Fatalf("err %v", err)
+	}
+	if store.ensures != 0 || len(secrets) != 0 {
+		t.Fatal("minted with keys the plan didn't record")
+	}
+}
+
 // A Loomplane whose database gateway service isn't wired in is a wiring
 // error, not a missing signing key, and says so.
 func TestEnsureDatabaseGatewayTellsAMissingServiceFromAMissingKey(t *testing.T) {
@@ -606,6 +633,54 @@ func TestResourceAddressGatewayFailuresHoldNoSecrets(t *testing.T) {
 	}
 }
 
+// readsCounted counts every secret read, so a test can tell a refusal
+// that never opened a secret from one that read it first.
+type readsCounted struct {
+	snapshotSecrets
+	reads int
+}
+
+func (s *readsCounted) Get(ctx context.Context, k string) ([]byte, error) {
+	s.reads++
+	return s.snapshotSecrets.Get(ctx, k)
+}
+
+// A gateway link to anything but the address is refused before the secret
+// it names is decrypted.
+func TestResourceAddressGatewayRefusesAnOutputUnread(t *testing.T) {
+	secrets := &readsCounted{snapshotSecrets: snapshotSecrets{resourceKey("org_1", "env_1", "db", "output:x"): []byte("pw-in-output")}}
+	r := NewRunner(RunnerDeps{Resources: secrets})
+	services := map[string]*planning.Binding{"db-gateway": gatewayBinding(t, "https://db-gateway-xyz.run.app")}
+	link := gatewayLink
+	link.Field = "output:x"
+	_, _, err := r.resourceAddress(t.Context(), gatewayDeployment, "web", services, link)
+	if err == nil || !strings.Contains(err.Error(), "only stands in for a resource's address") {
+		t.Fatalf("err %v", err)
+	}
+	if secrets.reads != 0 {
+		t.Fatalf("read %d secrets before refusing", secrets.reads)
+	}
+}
+
+// A per-consumer link carrying a gateway suffix is refused on both paths
+// that resolve one, rather than issued past the gateway's check.
+func TestConsumerLinksThroughTheGatewayAreRefused(t *testing.T) {
+	ctx := t.Context()
+	link := planning.EnvLink{Key: "CACHE_URL", From: "db", Subject: planning.ResourceSubject, Field: consumerPrefix + "url", Gateway: "nyc3.db.example.com"}
+	services := map[string]*planning.Binding{"db-gateway": gatewayBinding(t, "https://db-gateway-xyz.run.app")}
+	resources := map[string]*planning.Binding{"db": {Subject: planning.ResourceSubject, Name: "db"}}
+	const want = "web reads consumer:url of db through the database gateway"
+
+	r := NewRunner(RunnerDeps{Variables: fakeVariables{"svc": {}}, Resources: snapshotSecrets{}})
+	a := planning.Action{ID: "service:web", Name: "web", Service: &planning.ServiceConfig{Service: "svc", Env: []planning.EnvLink{link}}}
+	if err := r.captureAppliedVariables(ctx, gatewayDeployment, &a, services, resources); err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("capture: %v", err)
+	}
+	if _, _, err := r.env(ctx, gatewayDeployment, a, services, resources); err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("env: %v", err)
+	}
+}
+
 func TestAppliedInputsUseGatewayAddress(t *testing.T) {
 	ctx := t.Context()
 	secrets := snapshotSecrets{resourceKey("org_1", "env_1", "db", ResourceURL): []byte(doDSN)}
@@ -614,7 +689,7 @@ func TestAppliedInputsUseGatewayAddress(t *testing.T) {
 	resources := map[string]*planning.Binding{"db": {Subject: planning.ResourceSubject, Name: "db"}}
 	a := planning.Action{ID: "service:web", Name: "web", Service: &planning.ServiceConfig{Service: "svc",
 		Env: []planning.EnvLink{gatewayLink}}}
-	if err := r.captureAppliedVariables(ctx, gatewayDeployment, &a, services); err != nil {
+	if err := r.captureAppliedVariables(ctx, gatewayDeployment, &a, services, nil); err != nil {
 		t.Fatal(err)
 	}
 	want, extra, err := r.resourceAddress(ctx, gatewayDeployment, "web", services, gatewayLink)
@@ -642,7 +717,7 @@ func TestAppliedInputsUseGatewayAddress(t *testing.T) {
 	// A variable someone set for the gateway's address wins, as any does.
 	r.variables = fakeVariables{"svc": {"DATABASE_URL_GATEWAY": "https://mine"}}
 	b := planning.Action{ID: "service:other", Name: "other", Service: &planning.ServiceConfig{Service: "svc", Env: a.Service.Env}}
-	if err = r.captureAppliedVariables(ctx, gatewayDeployment, &b, services); err != nil {
+	if err = r.captureAppliedVariables(ctx, gatewayDeployment, &b, services, nil); err != nil {
 		t.Fatal(err)
 	}
 	if env, _, err = r.env(ctx, gatewayDeployment, b, services, resources); err != nil || env["DATABASE_URL_GATEWAY"] != "https://mine" || env["DATABASE_URL"] != want {
@@ -696,7 +771,7 @@ func TestGeneratedServicesAreNeverRepositoryServices(t *testing.T) {
 		if commitFor(d, a) != "" {
 			t.Errorf("%s has a commit", a.Name)
 		}
-		if err := r.captureAppliedVariables(t.Context(), d, &a, nil); err != nil || a.Service.AppliedInputs != nil {
+		if err := r.captureAppliedVariables(t.Context(), d, &a, nil, nil); err != nil || a.Service.AppliedInputs != nil {
 			t.Errorf("%s captured variables: %v", a.Name, err)
 		}
 		pinAppliedSource(d, plan, &a)
@@ -963,7 +1038,7 @@ func TestGatewayLinkedAppsGetTheirDirectAddress(t *testing.T) {
 
 	// Through the applied-inputs snapshot, which captures what the app gets.
 	a := planning.Action{ID: "service:web", Name: "web", Service: &planning.ServiceConfig{Service: "svc", Env: links}}
-	if err = r.captureAppliedVariables(ctx, gatewayDeployment, &a, services); err != nil {
+	if err = r.captureAppliedVariables(ctx, gatewayDeployment, &a, services, nil); err != nil {
 		t.Fatal(err)
 	}
 	if env, secret, err = r.env(ctx, gatewayDeployment, a, services, resources); err != nil {
@@ -993,7 +1068,7 @@ func TestGatewayLinkedAppsGetTheirDirectAddress(t *testing.T) {
 		b := planning.Action{ID: "service:own", Name: "own", Service: &planning.ServiceConfig{Service: "svc", Env: links}}
 		if snapshot {
 			b.ID = "service:own-pinned"
-			if err = r.captureAppliedVariables(ctx, gatewayDeployment, &b, services); err != nil {
+			if err = r.captureAppliedVariables(ctx, gatewayDeployment, &b, services, nil); err != nil {
 				t.Fatal(err)
 			}
 		}

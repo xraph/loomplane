@@ -54,6 +54,7 @@ import (
 	"github.com/xraph/loomplane/internal/apikeys"
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/notifications"
+	"github.com/xraph/loomplane/internal/pglock"
 	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/internal/telemetry"
 )
@@ -81,6 +82,7 @@ type Extension struct {
 	*forge.BaseExtension
 	cfg config.Config
 
+	pg            *pgdriver.PgDB
 	store         *authpg.Store
 	orgs          *organization.Plugin
 	warden        *warden.Engine
@@ -123,6 +125,7 @@ func (e *Extension) Register(fapp forge.App) error {
 	if err != nil {
 		return fmt.Errorf("identity needs notification delivery: %w", err)
 	}
+	e.pg = pgdriver.Unwrap(db)
 	e.store = authpg.New(db)
 	wstore := wardenpg.New(db)
 	if e.warden, err = warden.NewEngine(warden.WithStore(wstore), warden.WithLogger(e.Logger())); err != nil {
@@ -149,6 +152,7 @@ func (e *Extension) Register(fapp forge.App) error {
 	c := fapp.Container()
 	if err := errors.Join(
 		forge.ProvideValue(c, e.authz),
+		forge.ProvideValue[security.PrincipalVerifier](c, e.keys),
 		forge.ProvideValue(c, e.audit),
 		forge.ProvideValue(c, e.engine),
 		forge.ProvideValue(c, Guard{e.guard()}),
@@ -202,22 +206,11 @@ func (e *Extension) buildEngine() (*authsome.Engine, error) {
 // authsome's API. authsome's plugins receive the engine while it starts, so
 // their routes can only be registered after that.
 func (e *Extension) Start(ctx context.Context) error {
-	if err := e.seed(ctx); err != nil {
-		return err
-	}
-	if err := e.warden.Start(ctx); err != nil {
-		return fmt.Errorf("start warden: %w", err)
-	}
-	if err := e.engine.Start(ctx); err != nil {
-		return fmt.Errorf("start authsome: %w", err)
-	}
-	if err := e.setting(ctx, "auth.require_email_verification", e.cfg.Identity.RequireEmailVerification); err != nil {
-		return err
-	}
-	// Global, not per app: authsome only knows a request's app when it
-	// sends the publishable key, which calls to Loomplane's own API don't.
-	// This engine holds Loomplane's app alone, so global is per app anyway.
-	if err := e.setting(ctx, authsome.SettingCookieName.Def.Key, e.cfg.Identity.SessionCookie); err != nil {
+	// Replicas that start together take turns at everything that writes on
+	// a start: the app seed, Warden's and authsome's bootstraps, and
+	// authsome's settings, which look for a row before they insert one. Two
+	// at once would both find nothing and one would fail on the duplicate.
+	if err := pglock.Do(ctx, e.pg, pglock.StartupSeed, e.prepare); err != nil {
 		return err
 	}
 	if err := e.mount(ctx); err != nil {
@@ -340,8 +333,30 @@ func (e *Extension) membership(ctx context.Context, orgID, userID string) (membe
 	return string(m.Role), true, nil
 }
 
+// prepare does Start's writes; Start runs it under pglock.StartupSeed.
+func (e *Extension) prepare(ctx context.Context) error {
+	if err := e.seed(ctx); err != nil {
+		return err
+	}
+	if err := e.warden.Start(ctx); err != nil {
+		return fmt.Errorf("start warden: %w", err)
+	}
+	if err := e.engine.Start(ctx); err != nil {
+		return fmt.Errorf("start authsome: %w", err)
+	}
+	if err := e.setting(ctx, "auth.require_email_verification", e.cfg.Identity.RequireEmailVerification); err != nil {
+		return err
+	}
+	// Global, not per app: authsome only knows a request's app when it
+	// sends the publishable key, which calls to Loomplane's own API don't.
+	// This engine holds Loomplane's app alone, so global is per app anyway.
+	return e.setting(ctx, authsome.SettingCookieName.Def.Key, e.cfg.Identity.SessionCookie)
+}
+
 // seed creates Loomplane's authsome app and its default environment on the
-// first start. Both are looked up first, so restarts change nothing.
+// first start. Both are looked up first, so restarts change nothing; prepare
+// runs it under the startup lock, which keeps that safe for replicas that
+// start at once.
 func (e *Extension) seed(ctx context.Context) error {
 	appID, err := authid.ParseAppID(e.cfg.Identity.AppID)
 	if err != nil {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"io/fs"
 	"maps"
 	"strings"
 	"time"
@@ -44,6 +45,26 @@ const (
 	LabelManageHPA            = "loomplane.manage.hpa"
 )
 
+// A composed catalog resource's component carries its kind, its resource's
+// manifest name and its own name. LabelHealthPort is the container port
+// its readiness probe answers on, when it publishes more than one.
+// LabelRuntimeFiles is "true" on a component whose runtime values include
+// rendered files. LabelKubernetesRules is the JSON array of
+// recipes.KubernetesRule a process gets through its own ServiceAccount on
+// Kubernetes. LabelHealthProtocol is "redis" when readiness is a RESP PING;
+// absent, it is HTTP. LabelFSGroup is the group that owns a component's
+// volume on Kubernetes.
+const (
+	LabelCatalogKind      = "loomplane.catalog.kind"
+	LabelCatalogResource  = "loomplane.catalog.resource"
+	LabelCatalogComponent = "loomplane.catalog.component"
+	LabelHealthPort       = "loomplane.health.port"
+	LabelRuntimeFiles     = "loomplane.runtime.files"
+	LabelKubernetesRules  = "loomplane.kubernetes.rules"
+	LabelHealthProtocol   = "loomplane.health.protocol"
+	LabelFSGroup          = "loomplane.fs.group"
+)
+
 type Instances interface {
 	Get(context.Context, id.ID) (*instance.Instance, error)
 }
@@ -55,7 +76,24 @@ type instanceUpdater interface {
 type RuntimeValues struct {
 	Env      map[string]string
 	PullAuth string
+	// Files are rendered files by absolute path, and FileModes their
+	// modes; a file without one is 0o444. They're written into the
+	// container before it starts.
+	Files     map[string][]byte
+	FileModes map[string]fs.FileMode
 }
+
+// DefaultFileMode is a rendered file's mode when it has none.
+const DefaultFileMode fs.FileMode = 0o444
+
+// FileMode is the mode a rendered file is written with.
+func (v RuntimeValues) FileMode(path string) fs.FileMode {
+	if mode := v.FileModes[path].Perm(); mode != 0 {
+		return mode
+	}
+	return DefaultFileMode
+}
+
 type Values func(context.Context, map[string]string) (RuntimeValues, error)
 
 // Backend uses an explicitly selected connection for every operation. Its
@@ -66,6 +104,23 @@ type Backend interface {
 	Status(context.Context, id.ID, map[string]string) (*cpprovider.InstanceStatus, error)
 	SetRunning(context.Context, id.ID, map[string]string, bool) error
 	Scale(context.Context, id.ID, map[string]string, cpprovider.ResourceSpec) error
+}
+
+// JobBackend runs a one-shot container to completion: a composed
+// resource's migration, for one deployment's action. name identifies the
+// run on the target, so a retry finds what an earlier attempt left. A
+// finished run is a JobResult whatever its exit code; an error is a run
+// that couldn't start or didn't finish within timeout. What it created is
+// removed either way.
+type JobBackend interface {
+	RunJob(ctx context.Context, name string, spec cpprovider.ServiceSpec, labels map[string]string, timeout time.Duration) (JobResult, error)
+}
+
+// JobResult is how a job ended: its exit code and the last JobOutputLimit
+// bytes of what it wrote, with every secret value replaced by "[redacted]".
+type JobResult struct {
+	ExitCode int
+	Output   string
 }
 
 type Provider struct {

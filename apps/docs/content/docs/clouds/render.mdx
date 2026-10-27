@@ -1,0 +1,61 @@
+---
+title: Render
+description: Connect a Render workspace and run web services, workers and static sites with Postgres and Key Value.
+---
+
+import { Step, Steps } from 'fumadocs-ui/components/steps';
+
+Render builds each service itself, from your repository through its own GitHub connection. Loomplane creates the service with automatic deploys off, cancels the deploy Render starts on its own when a service is made, and deploys the commit the plan approved.
+
+## Connect Render
+
+<Steps>
+<Step>
+
+In Render, create an API key.
+
+</Step>
+<Step>
+
+Give Render access to the repositories you'll deploy, in Render's own dashboard, before the first deployment. Loomplane can't hand Render a connection.
+
+</Step>
+<Step>
+
+Under **Integrations** in Loomplane, choose Render and paste the key. If the key reaches more than one workspace, enter the workspace ID (`tea-...` for a team or `usr-...` for a person). With exactly one it's used for you. With several and no workspace ID, the check fails and lists them.
+
+</Step>
+</Steps>
+
+## Use it in a manifest
+
+```yaml
+version: 1
+defaults:
+  provider: render
+  region: oregon
+services:
+  api:
+    source: services/api
+    needs: [db]
+resources:
+  db:
+    kind: postgres
+    version: "17"
+  cache:
+    kind: redis
+```
+
+Regions are `oregon`, `ohio`, `virginia`, `frankfurt` and `singapore`. Render provisions Postgres 17, 16 and 15, and Key Value as its Redis.
+
+## What it builds
+
+A service with a Dockerfile builds from it. Otherwise Render's native runtime builds it, which it has for Go, Node and Python. A Node service starts with `npm start`, so it needs a start script. A Rust or JVM service needs a Dockerfile.
+
+## Networking
+
+A private service is reached on Render's private network by the other services on Render, at `http://` plus its name and port. Postgres and Key Value are reachable from services on Render only.
+
+## Build logs
+
+Render's build-log API can't isolate one deployment among concurrent ones, so Loomplane shows progress only. Read full logs in Render.

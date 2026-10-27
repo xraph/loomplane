@@ -2,11 +2,10 @@ import { SignInForm, SignUpForm } from "@authsome/ui-components"
 import { toast } from "sonner"
 
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { AuthLayout } from "@/components/auth-layout"
 import { BrandLogo } from "@/components/brand-logo"
 import { useNavigate, usePath } from "@/lib/router"
 
-/** Sign-in and sign-up, from authsome's own components. */
+/** Sign-in and sign-up, from authsome's own components. App puts them in the shared AuthLayout. */
 export function AuthPage({
   mode,
   notice,
@@ -17,13 +16,7 @@ export function AuthPage({
   const navigate = useNavigate()
   const path = usePath()
   return (
-    <AuthLayout
-      title={
-        mode === "sign-in"
-          ? "Sign in to Loomplane"
-          : "Create your Loomplane account"
-      }
-    >
+    <>
       {notice && (
         <Alert>
           <AlertDescription>{notice}</AlertDescription>
@@ -37,7 +30,7 @@ export function AuthPage({
           forgotPasswordUrl="/forgot-password"
           verifyEmailUrl="/verify-email"
           logo={<BrandLogo />}
-          align="center"
+          align="left"
           variant="borderless"
           className="auth-card"
           onSuccess={() => {
@@ -54,7 +47,7 @@ export function AuthPage({
         <SignUpForm
           signInUrl="/sign-in"
           logo={<BrandLogo />}
-          align="center"
+          align="left"
           variant="borderless"
           className="auth-card"
           onSuccess={() => {
@@ -64,6 +57,6 @@ export function AuthPage({
           }}
         />
       )}
-    </AuthLayout>
+    </>
   )
 }

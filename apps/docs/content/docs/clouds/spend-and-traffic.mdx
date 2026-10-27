@@ -1,0 +1,55 @@
+---
+title: Spend, latency and traffic
+description: What each connected cloud reports about what it costs and how your services are doing, and the permission it needs.
+---
+
+The overview shows what your connected accounts have cost this month, how many requests your services served, and which services are slowest. Each cloud account's page shows its own spend, and **Infrastructure** breaks the month down by account.
+
+None of it passes through Loomplane. Your traffic goes straight to your services, so Loomplane reads these numbers from each cloud's own billing and monitoring, with the credential you connected. When a cloud can't answer, the card names the connection and says what to grant it.
+
+## What each cloud reports
+
+| Cloud | Spend | Requests | Latency | Grant |
+|---|---|---|---|---|
+| Google Cloud | From a billing export to BigQuery | Cloud Monitoring | p95 | Monitoring Viewer on the project. For spend, BigQuery Job User on the project and BigQuery Data Viewer on the export's dataset |
+| AWS | Cost Explorer, for the whole account | CloudWatch, from the load balancer in front of each ECS service | p95 | `cloudwatch:GetMetricData` and `ce:GetCostAndUsage` |
+| Azure | Cost Management, for the resource group Loomplane deploys into | Azure Monitor | Average | Monitoring Reader and Cost Management Reader on the resource group. Contributor already covers both |
+| Render | Not available | Render's metrics API | p95 | Nothing more: the API key does it |
+| DigitalOcean | The team's balance, month to date | Not available | Not available | `billing:read`, on a token made by a team owner, admin or biller |
+| Vercel | Not available | Not available | Not available | |
+| Your own servers and clusters | Not available | Not available | Not available | |
+
+Azure Container Apps only reports a mean response time, so Azure services show `avg` beside their latency, never `p95`. Loomplane doesn't combine percentiles across services either, because averaging two services' p95s doesn't give you a p95 for both. The latency card lists each service with its own number.
+
+A token has the role of the person who made it, so a DigitalOcean token with every scope is still refused the balance when its maker can't see billing. The card shows what DigitalOcean said.
+
+Vercel and Render don't report what an account costs through their APIs, so the card mentions them once and moves on. Services on your own servers and clusters report to whatever monitoring you run there, and Loomplane doesn't read it.
+
+## Turn on Google Cloud spend
+
+Google Cloud only reports cost through a billing export, so there's one extra step.
+
+1. In the Google Cloud console, open **Billing**, then **Billing export**, and turn on **Standard usage cost** to a BigQuery dataset.
+2. Give the connection's service account BigQuery Job User on its project and BigQuery Data Viewer on that dataset.
+3. In Loomplane, replace the connection's key and fill in **Billing export table** with the table's full name, such as `my-project.billing.gcp_billing_export_v1_0A1B2C`.
+
+The export takes a few hours to start filling. Until it does, the month reads as zero.
+
+## Turn on AWS spend
+
+Cost Explorer has to be turned on once per account, in the Billing console. It can take a day before it answers. AWS charges a cent for each Cost Explorer request, so Loomplane keeps each account's bill for an hour before it asks again.
+
+## How fresh it is
+
+Loomplane reads each account's spend at most once an hour, and requests and latency at most every five minutes. It asks a cloud that didn't answer again after a minute, so a permission you've just granted shows up quickly.
+
+The traffic card covers 24 hours, 7 days, 30 days or 90 days, and compares the total with the same stretch before it. Requests are added up across services, which works because they're counts.
+
+## Read it from the API
+
+```bash
+curl -H "Authorization: Bearer $LOOMPLANE_TOKEN" "$URL/api/v1/usage/spend"
+curl -H "Authorization: Bearer $LOOMPLANE_TOKEN" "$URL/api/v1/usage/traffic?range=7d"
+```
+
+Spend needs `cloud_account:read`. Traffic needs `infrastructure:read`, and only covers services in projects you can read. Each report has a `sources` list with every connection's status, `reporting`, `unavailable` or `failed`, and the reason when it isn't reporting.

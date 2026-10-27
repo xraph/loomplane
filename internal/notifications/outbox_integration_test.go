@@ -99,6 +99,11 @@ func notificationDatabase(t *testing.T) *grove.DB {
 	if err = migrations.NotificationsMigration().Up(ctx, executor); err != nil {
 		t.Fatal(err)
 	}
+	// The cloud_sign_in migration adds the outbox's kind column. This helper
+	// only runs the notifications migration, so add it as that migration does.
+	if _, err = pg.Exec(ctx, `ALTER TABLE loomplane_notification_outbox ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'deployment'`); err != nil {
+		t.Fatal(err)
+	}
 	return db
 }
 

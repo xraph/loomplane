@@ -1,0 +1,101 @@
+---
+title: CI with loomctl
+description: Use API keys and loomctl in a pipeline to analyze, plan and, if you choose, approve deployments.
+---
+
+Anything the dashboard does, a pipeline can do with `loomctl` or the HTTP API. This page covers the pieces that matter in CI: keys, environment variables, output you can parse and exit codes.
+
+## Make a key for the pipeline
+
+Under **Settings, API keys**, create a key named after the pipeline, such as `github-actions-plan`. Pick the narrowest access that works.
+
+- Read-only is enough to list, read and follow deployments, and to run `loomctl status`. The API refuses anything else.
+- A write key acts as you, with your role, and can do whatever that role can. If your role is admin it can approve plans.
+- Keys last 90 days by default and at most 366, so put the expiry on your calendar.
+- Keys can't make keys.
+
+Treat a key like any credential. Loomplane shows it once and stores only a hash.
+
+## Point loomctl at Loomplane
+
+`loomctl` reads `LOOMPLANE_URL` and `LOOMPLANE_API_KEY` first. They win over a saved login, which suits CI because nothing is written to disk.
+
+```bash
+export LOOMPLANE_URL=https://loomplane.example.com
+export LOOMPLANE_API_KEY=lp_live_...
+loomctl whoami
+```
+
+On a machine you use by hand, `loomctl login --url https://loomplane.example.com --key -` reads the key from standard input and saves it, readable only by you, in your user config directory. `loomctl logout` removes it. The key keeps working until you revoke it under Settings.
+
+## A plan on every pull request
+
+A good default is to let CI analyze and plan, and leave approval to a person. A developer key is enough.
+
+```yaml title=".github/workflows/plan.yml"
+name: loomplane-plan
+on:
+  pull_request:
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    env:
+      LOOMPLANE_URL: ${{ secrets.LOOMPLANE_URL }}
+      LOOMPLANE_API_KEY: ${{ secrets.LOOMPLANE_API_KEY }}
+      LOOMCTL_VERSION: 0.1.0 # the release you run, without the v
+    steps:
+      - name: Install loomctl
+        run: |
+          curl -fsSL "https://github.com/xraph/loomplane/releases/download/v${LOOMCTL_VERSION}/loomctl_${LOOMCTL_VERSION}_linux_amd64.tar.gz" | tar -xz loomctl
+          sudo mv loomctl /usr/local/bin/
+      - name: Analyze and plan
+        run: |
+          loomctl analyze mono
+          loomctl plan mono --env production --json > plan.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plan
+          path: plan.json
+```
+
+Check the release page for the exact archive names for your version and platform. On macOS or Linux workstations, `brew install xraph/tap/loomctl` is simpler.
+
+Notes on this:
+
+- `analyze` waits for each analysis to finish and exits nonzero if one fails. Add `--no-wait` to start it and return.
+- `plan` waits until the plan is made. `--json` prints the whole plan, including `status`, `actions`, `problems` and `warnings`, which you can feed to a comment bot.
+- Don't assume the exit code tells you whether the plan is approvable. Read the plan's `status` and `problems` in the JSON if you want the job to fail on a blocked plan.
+- Planning doesn't touch a cloud. It's safe to run on every push.
+
+## Approving from CI
+
+You can approve from a pipeline with an admin's write key, but think twice. The point of an approval is that a person reviewed the exact plan, and the approval names the plan's revision to enforce that.
+
+```bash
+loomctl approve <plan-id> --yes --note "Release 14 from CI"
+```
+
+`--yes` skips the confirmation. Without a terminal, `approve` fails and tells you to pass `--yes`. The command follows the deployment and exits nonzero if it fails, with a hint to run `loomctl retry <deployment-id>`. Pass `--no-wait` to approve and return.
+
+If what's deployed changed since the plan was made, the plan comes back stale and the command fails with "plan again". Plan again and look at the new plan before you approve it.
+
+A common middle path: CI plans on merge to `main`, posts the plan to chat, and a human runs `loomctl approve` or clicks Approve in the dashboard.
+
+## Useful commands in scripts
+
+```bash
+loomctl projects --json
+loomctl plans mono --json
+loomctl show <plan-id> --json
+loomctl deployments mono --json
+loomctl deployment <deployment-id> --json
+loomctl status mono --json
+loomctl reject <plan-id> --note "Superseded"
+loomctl vars set mono API_TOKEN=- --secret --env production < token.txt
+```
+
+`status --json` is a good post-deploy gate: it lists every binding with its address, commit and drift. Not every command takes `--json`, so run `loomctl <command> --help` to see its flags. [The loomctl reference](/docs/reference/loomctl) lists them all.
+
+## The HTTP API
+
+`loomctl` is a thin client over the API, and `pkg/client` is a typed Go client for it. Every `/api/v1` route takes a session or an API key as a bearer token. See [HTTP API](/docs/reference/http-api).

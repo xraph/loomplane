@@ -48,7 +48,7 @@ func changedSyncTarget(before cloudprofiles.Target, in cloudprofiles.ChangeInput
 	return after, nil
 }
 
-func (s *Service) syncPoolPlacements(ctx context.Context, plan *Plan, bindings []*Binding, assignment *cloudprofiles.Assignment, before *cloudprofiles.Target, options []ConnectionOption, prior []cloudinfra.PlannedPlacement) (map[string]CloudPlacement, error) {
+func (s *Service) syncPoolPlacements(ctx context.Context, plan *Plan, bindings []*Binding, assignment *cloudprofiles.Assignment, before *cloudprofiles.Target, options []ConnectionOption, prior []cloudinfra.PlannedPlacement, future ...map[string]*CapacityIntent) (map[string]CloudPlacement, error) {
 	result := map[string]CloudPlacement{}
 	if assignment == nil {
 		return result, nil
@@ -90,6 +90,16 @@ func (s *Service) syncPoolPlacements(ctx context.Context, plan *Plan, bindings [
 			req.TargetRevision = before.Revision
 		}
 		placed, err := resolver.PreviewPlacement(ctx, req)
+		if err != nil && len(future) > 0 {
+			futurePlan := *plan
+			futurePlan.Sources = []PlanSource{{Alias: old.Repo, CommitSHA: old.CommitSHA}}
+			intent, intentErr := s.futureCapacity(ctx, &futurePlan, assignment, target, req, old.Repo, err)
+			if intentErr == nil {
+				future[0][b.Name] = intent
+				continue
+			}
+			err = intentErr
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -113,6 +123,11 @@ func prepareAcceptedPlans(sync *cloudprofiles.Sync, snapshot *cloudprofiles.Snap
 		}
 		if !slices.ContainsFunc(plan.Actions, func(a Action) bool { return a.Op != Keep || a.AdoptCloudPlacement }) {
 			continue
+		}
+		for _, a := range plan.Actions {
+			if a.Service != nil && a.Service.CapacityIntent != nil && a.Service.CapacityIntent.Demand.PlanID != migrationPlanID(sync.ID, env.EnvironmentID) {
+				return cloudprofiles.ErrConflict
+			}
 		}
 		revision, err := Digest(plan.Actions)
 		if err != nil {

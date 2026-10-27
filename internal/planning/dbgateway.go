@@ -142,7 +142,10 @@ func (p *planner) planDatabaseGateway() {
 		})
 		return
 	}
-	cfg.DatabaseGateway = &DatabaseGatewayConfig{Name: dbGatewayName, Suffix: strings.ToLower(cfg.Region + ".db." + domain), Resources: served, Program: program}
+	cfg.DatabaseGateway = &DatabaseGatewayConfig{
+		Name: dbGatewayName, Suffix: strings.ToLower(cfg.Region + ".db." + domain), Resources: served,
+		Program: program, Trust: p.in.DatabaseGatewayTrust,
+	}
 	sort.Strings(deps)
 	a := &Action{
 		ID: actionID(ServiceSubject, dbGatewayName), Subject: ServiceSubject, Name: dbGatewayName,
@@ -305,6 +308,9 @@ func (p *planner) dependOnDatabaseGateway(gw *Action, resources []string) {
 			// comparison set mustn't outlive an Update.
 			a.AdoptCloudPlacement, a.CloudAdoption = false, nil
 			p.diff(a, a.Service, a.Provider, a.Region)
+			// diff resets the changes, so the consumer options link named
+			// have to be named again.
+			p.optionChanges(a)
 		}
 	}
 	for _, a := range p.actions {
@@ -485,7 +491,8 @@ func resolveDatabaseGatewayPlacement(out *manifest.Manifest, env string, assignm
 	if fallback {
 		path = "database_gateway.provider"
 	}
-	placement, resolved, err := resolveCloudPlacement(dbGatewayName, path, set, fallback, assignment, options, pools)
+	// The gateway isn't a manifest service, so it never has a capacity intent.
+	placement, resolved, err := resolveCloudPlacement(dbGatewayName, path, set, fallback, assignment, options, pools, false)
 	if err != nil {
 		return err
 	}

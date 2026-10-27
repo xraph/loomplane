@@ -1,21 +1,26 @@
 import type {
   Build,
+  CloudSQLApplicationNetwork,
   Connection,
-  Endpoint,
   Graph,
   Manifest,
+  ManifestEndpoint,
   Provider,
 } from "@/client/forge/loomplane/types"
 
 export type PlacementFields = {
+  cloudSqlNetwork?: CloudSQLApplicationNetwork
+  cloud_sql_network?: CloudSQLApplicationNetwork & { consumer_project?: string }
   cloudTarget?: string
   cloud_target?: string
+  cloudTags?: string[]
+  cloud_tags?: string[]
   provider?: string
   region?: string
   enabled?: boolean
   target?: string
   build?: Build
-  endpoint?: Endpoint
+  endpoint?: ManifestEndpoint
   healthPath?: string
 }
 type Entry = PlacementFields & {
@@ -117,6 +122,23 @@ export function placementSettings(
   if (o?.region) region = o.region
   const changedProvider =
     !!o?.provider && o.provider !== (s.provider || d?.provider)
+  const rawRoute =
+    o?.cloudSqlNetwork ??
+    o?.cloud_sql_network ??
+    (changedProvider &&
+    (s.provider || d?.provider || o?.provider !== "cloud-run")
+      ? undefined
+      : (s.cloudSqlNetwork ?? s.cloud_sql_network))
+  const cloudSqlNetwork = rawRoute
+    ? {
+        consumerProject:
+          rawRoute.consumerProject ??
+          (rawRoute as { consumer_project?: string }).consumer_project ??
+          "",
+        network: rawRoute.network,
+        subnetwork: rawRoute.subnetwork,
+      }
+    : undefined
   const target = o?.target || (changedProvider ? undefined : s.target)
   const changedTarget = !!o?.target && o.target !== s.target
   const rawEndpoint =
@@ -124,7 +146,7 @@ export function placementSettings(
   // Manifest maps are opaque JSON in the generated contract. Normalize their
   // snake_case members at this boundary; placement writes use generated codecs.
   const raw = rawEndpoint as
-    | (Endpoint & {
+    | (ManifestEndpoint & {
         host_port?: number
         ingress_class?: string
         tls_secret?: string
@@ -141,24 +163,34 @@ export function placementSettings(
   const build = o?.build ?? s.build
   const healthPath =
     o?.healthPath ?? o?.health_path ?? s.healthPath ?? s.health_path
+  // An environment names its target one way, replacing the service's choice.
+  // Default tags reach only a service with no placement of its own.
+  let cloudTarget = s.cloudTarget || s.cloud_target || ""
+  let cloudTags = tagsOf(s)
+  const overrideTarget = o?.cloudTarget || o?.cloud_target || ""
+  const overrideTags = o ? tagsOf(o) : []
+  if (overrideTarget) [cloudTarget, cloudTags] = [overrideTarget, []]
+  if (overrideTags.length) [cloudTarget, cloudTags] = ["", overrideTags]
+  const defaultTags =
+    d?.cloudTags ?? (d as { cloud_tags?: string[] })?.cloud_tags
+  if (!cloudTarget && !cloudTags.length && !provider && !target)
+    cloudTags = [...(defaultTags ?? [])]
   return {
-    ...(o?.cloudTarget || o?.cloud_target || s.cloudTarget || s.cloud_target
-      ? {
-          cloudTarget:
-            o?.cloudTarget ||
-            o?.cloud_target ||
-            s.cloudTarget ||
-            s.cloud_target,
-        }
-      : {}),
+    ...(cloudTarget ? { cloudTarget } : {}),
+    ...(cloudTags.length ? { cloudTags } : {}),
     provider,
     region,
     enabled: o?.enabled ?? s.enabled ?? true,
+    ...(cloudSqlNetwork ? { cloudSqlNetwork } : {}),
     ...(target ? { target } : {}),
     ...(endpoint ? { endpoint } : {}),
     ...(build ? { build } : {}),
     ...(healthPath ? { healthPath } : {}),
   }
+}
+
+function tagsOf(fields: PlacementFields): string[] {
+  return [...(fields.cloudTags ?? fields.cloud_tags ?? [])]
 }
 
 export function targetConnections(

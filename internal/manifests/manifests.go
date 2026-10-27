@@ -97,12 +97,33 @@ type SaveInput struct {
 }
 
 // EditInput is one change to the current manifest, made to its YAML so
-// the comments in it survive: add a resource, ignore a resource kind or
-// change an existing entry's placement.
+// the comments in it survive: add a resource, ignore a resource kind,
+// change an existing entry's placement, link a service to a need or unlink
+// it, or set where one dependency of a catalog resource comes from.
 type EditInput struct {
 	AddResource *NewResource        `json:"add_resource,omitempty"`
 	Ignore      string              `json:"ignore,omitempty"`
 	Placement   *manifest.Placement `json:"placement,omitempty"`
+	Link        *ServiceLink        `json:"link,omitempty"`
+	Unlink      *ServiceLink        `json:"unlink,omitempty"`
+	SetUse      *ResourceUse        `json:"set_use,omitempty"`
+}
+
+// ServiceLink names a service and something it needs. Link adds the need,
+// with the options the service passes to it; Unlink removes the need and
+// its options, and ignores Options.
+type ServiceLink struct {
+	Service string            `json:"service"`
+	Need    string            `json:"need"`
+	Options map[string]string `json:"options,omitempty"`
+}
+
+// ResourceUse sets where one dependency of a catalog resource comes from.
+// A Use with nothing set asks for a new dependency.
+type ResourceUse struct {
+	Resource   string       `json:"resource"`
+	Dependency string       `json:"dependency"`
+	Use        manifest.Use `json:"use"`
 }
 
 // NewResource is a resource to add to the manifest.
@@ -110,6 +131,10 @@ type NewResource struct {
 	Name     string `json:"name"`
 	Kind     string `json:"kind"`
 	Provider string `json:"provider,omitempty"`
+	// Target is the checked server connection a catalog resource runs on.
+	Target  string                  `json:"target,omitempty"`
+	Version string                  `json:"version,omitempty"`
+	Uses    map[string]manifest.Use `json:"uses,omitempty"`
 }
 
 // Edit applies one change to the project's current manifest and saves the
@@ -127,7 +152,7 @@ func (s *Service) Edit(ctx context.Context, p security.Principal, projectID stri
 	}
 	var out []byte
 	edits := 0
-	for _, present := range []bool{in.AddResource != nil, in.Ignore != "", in.Placement != nil} {
+	for _, present := range []bool{in.AddResource != nil, in.Ignore != "", in.Placement != nil, in.Link != nil, in.Unlink != nil, in.SetUse != nil} {
 		if present {
 			edits++
 		}
@@ -137,13 +162,24 @@ func (s *Service) Edit(ctx context.Context, p security.Principal, projectID stri
 		return nil, false, fmt.Errorf("%w: make one edit at a time", ErrInvalid)
 	case in.AddResource != nil:
 		r := in.AddResource
-		out, err = manifest.WithResource([]byte(cur.YAML), strings.TrimSpace(r.Name), manifest.Resource{Kind: r.Kind, Provider: r.Provider})
+		out, err = manifest.WithResource([]byte(cur.YAML), strings.TrimSpace(r.Name), manifest.Resource{
+			Kind: r.Kind, Provider: r.Provider, Target: r.Target, Version: r.Version, Uses: r.Uses,
+		})
 	case in.Ignore != "":
 		out, err = manifest.WithIgnored([]byte(cur.YAML), strings.TrimSpace(in.Ignore))
 	case in.Placement != nil:
 		out, err = manifest.WithPlacement([]byte(cur.YAML), *in.Placement)
+	case in.Link != nil:
+		l := in.Link
+		out, err = manifest.WithNeed([]byte(cur.YAML), strings.TrimSpace(l.Service), strings.TrimSpace(l.Need), l.Options)
+	case in.Unlink != nil:
+		l := in.Unlink
+		out, err = manifest.WithoutNeed([]byte(cur.YAML), strings.TrimSpace(l.Service), strings.TrimSpace(l.Need))
+	case in.SetUse != nil:
+		u := in.SetUse
+		out, err = manifest.WithUse([]byte(cur.YAML), strings.TrimSpace(u.Resource), strings.TrimSpace(u.Dependency), u.Use)
 	default:
-		return nil, false, fmt.Errorf("%w: say what to change: add_resource, ignore or placement", ErrInvalid)
+		return nil, false, fmt.Errorf("%w: say what to change: add_resource, ignore, placement, link, unlink or set_use", ErrInvalid)
 	}
 	if err != nil {
 		return nil, false, err

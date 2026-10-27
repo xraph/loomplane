@@ -13,6 +13,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -219,6 +220,10 @@ type PlanningConfig struct {
 	// ApprovalWindow is how long a plan waits for someone to approve or
 	// reject it. After that it expires, and you plan again.
 	ApprovalWindow time.Duration
+	// EndpointDeniedCIDRs are ranges an endpoint check from Loomplane's
+	// own network never connects to, at any port, besides its own host
+	// and the services it depends on. A bare address is one host.
+	EndpointDeniedCIDRs []netip.Prefix
 }
 
 // DriftConfig schedules the drift check.
@@ -262,7 +267,23 @@ type CloudsConfig struct {
 	// AzureEndpoint replaces Microsoft Entra ID's sign-in and Azure
 	// Resource Manager.
 	AzureEndpoint string
+	// OAuth holds the sign-in app Loomplane registered with each cloud,
+	// keyed by connection cloud such as "digitalocean". A cloud appears
+	// only when both its client ID and secret are set.
+	OAuth map[string]OAuthApp
 }
+
+// OAuthApp is Loomplane's OAuth 2 app at one cloud.
+type OAuthApp struct {
+	ClientID     string
+	ClientSecret string
+	// Slug names the app in the cloud's own address, which Vercel's
+	// install page needs. Only Vercel sets it.
+	Slug string
+}
+
+// oauthClouds are the clouds that can connect by signing in.
+var oauthClouds = []string{"digitalocean", "vercel", "gcp", "azure"}
 
 // Bounds on the approval window: long enough to reach a person, short
 // enough that an approved plan still describes the world.
@@ -387,6 +408,7 @@ func FromSource(src Getter) (Config, error) {
 	r.integer(&c.Analysis.Concurrency, "analysis.concurrency")
 	r.str(&c.Worker.HTTPAddr, "worker.http_addr")
 	r.duration(&c.Planning.ApprovalWindow, "planning.approval_window")
+	r.prefixes(&c.Planning.EndpointDeniedCIDRs, "planning.endpoint_denied_cidrs")
 	r.str(&c.Storage.URL, "storage.url")
 	r.str(&c.Storage.ArtifactBucket, "storage.artifact_bucket")
 	r.str(&c.Storage.BackupURL, "storage.backup_url")
@@ -398,6 +420,7 @@ func FromSource(src Getter) (Config, error) {
 	r.str(&c.Clouds.DigitalOceanEndpoint, "clouds.digitalocean_endpoint")
 	r.str(&c.Clouds.AzureEndpoint, "clouds.azure_endpoint")
 	r.str(&c.Clouds.AWSEndpoint, "clouds.aws_endpoint")
+	c.Clouds.OAuth = r.oauthApps(c.Clouds.OAuth, "clouds.oauth")
 	r.plugins(&c.Providers.Plugins, "providers.plugins")
 	r.names(&c.Providers.Paused, "providers.paused")
 	r.boolean(&c.Federation.Enabled, "federation.enabled")
@@ -588,6 +611,60 @@ func (r *reader) names(dst *[]string, key string) {
 			*dst = append(*dst, s)
 		}
 	}
+}
+
+// prefixes reads a list of CIDR ranges, as a list or a comma-separated
+// string. A bare address is a range of one.
+func (r *reader) prefixes(dst *[]netip.Prefix, key string) {
+	var items []string
+	before := len(r.errs)
+	r.names(&items, key)
+	if len(r.errs) > before {
+		return
+	}
+	for _, item := range items {
+		p, err := netip.ParsePrefix(item)
+		if err != nil {
+			addr, aerr := netip.ParseAddr(item)
+			if aerr != nil {
+				r.fail(key, "a list of CIDR ranges, such as 10.20.0.0/16", item)
+				continue
+			}
+			p = netip.PrefixFrom(addr.WithZone(""), addr.BitLen())
+		}
+		*dst = append(*dst, p.Masked())
+	}
+}
+
+// oauthApps reads <key>.<cloud>.client_id and client_secret for each cloud
+// that can sign in, and slug for Vercel. A cloud with only one of the
+// two is an error, and so is a Vercel app without its slug.
+func (r *reader) oauthApps(dst map[string]OAuthApp, key string) map[string]OAuthApp {
+	for _, cloud := range oauthClouds {
+		var app OAuthApp
+		r.str(&app.ClientID, key+"."+cloud+".client_id")
+		r.str(&app.ClientSecret, key+"."+cloud+".client_secret")
+		r.str(&app.Slug, key+"."+cloud+".slug")
+		switch {
+		case app.ClientID == "" && app.ClientSecret == "":
+			continue
+		case app.ClientID == "":
+			r.errs = append(r.errs, fmt.Errorf("%s.%s.client_id is required when client_secret is set", key, cloud))
+			continue
+		case app.ClientSecret == "":
+			r.errs = append(r.errs, fmt.Errorf("%s.%s.client_secret is required when client_id is set", key, cloud))
+			continue
+		}
+		if cloud == "vercel" && app.Slug == "" {
+			r.errs = append(r.errs, fmt.Errorf("%s.%s.slug is required when client_id and client_secret are set", key, cloud))
+			continue
+		}
+		if dst == nil {
+			dst = map[string]OAuthApp{}
+		}
+		dst[cloud] = app
+	}
+	return dst
 }
 
 func (r *reader) str(dst *string, key string) {

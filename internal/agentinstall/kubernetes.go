@@ -87,7 +87,7 @@ func (p *KubernetesPlan) Pod() *corev1.Pod {
 		Volumes: []corev1.Volume{
 			{Name: "launch", VolumeSource: corev1.VolumeSource{ConfigMap: &corev1.ConfigMapVolumeSource{LocalObjectReference: corev1.LocalObjectReference{Name: p.name}, Items: []corev1.KeyToPath{{Key: ConfigKey, Path: ConfigKey}}, DefaultMode: ptr.To(int32(0o444)), Optional: ptr.To(false)}}},
 			{Name: "state", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{SizeLimit: ptr.To(resource.MustParse("64Mi"))}}},
-			{Name: "workload-api", VolumeSource: corev1.VolumeSource{CSI: &corev1.CSIVolumeSource{Driver: "csi.spiffe.io", ReadOnly: ptr.To(true)}}},
+			{Name: "workload-api", VolumeSource: corev1.VolumeSource{CSI: &corev1.CSIVolumeSource{Driver: CSIDriverName, ReadOnly: ptr.To(true)}}},
 		},
 	}}
 	if p.publisher {

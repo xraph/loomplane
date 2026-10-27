@@ -81,8 +81,9 @@ What the application runs, by name. Names are lower case letters, digits and hyp
 | `scale`              | `{min, max}` instances, on targets that let you choose.                                                                                                                                                                                                                                                                                                                                                                                          |
 | `size`               | `{cpu, memory}`: virtual CPUs, such as 0.5 or 2, and MiB.                                                                                                                                                                                                                                                                                                                                                                                        |
 | `needs`              | The resources and services it talks to. Each one it names gets it an address in a variable, and it deploys after them.                                                                                                                                                                                                                                                                                                                           |
+| `need_options`       | Options this service passes to a need, by need and then by option name. See [Passing options](#passing-options-to-what-a-service-needs).                                                                                                                                                                                                                                                                                                         |
 | `enabled`            | `false` leaves it out.                                                                                                                                                                                                                                                                                                                                                                                                                           |
-| `environments`       | Overrides by environment name: any of the fields above but `source`, `kind`, `build` and `needs`.                                                                                                                                                                                                                                                                                                                                                |
+| `environments`       | Overrides by environment name: any of the fields above but `source`, `kind`, `build`, `needs` and `need_options`.                                                                                                                                                                                                                                                                                                                                |
 
 A Dockerfile that copies from across the repository, such as a Go service that needs the module's `go.mod` at the root, has to build from the root:
 
@@ -95,7 +96,7 @@ services:
 
 Loomplane passes the Dockerfile to the build by its path from the context, so it can sit anywhere. A service without a Dockerfile is built from its source, and a `build` on it is ignored with a warning.
 
-A service gets a variable for each thing it `needs`. A resource's is named for its kind: `DATABASE_URL` for Postgres and MySQL, `REDIS_URL`, `MEMCACHED_SERVERS`, `MONGODB_URI`, `AMQP_URL`, `KAFKA_BROKERS`, `NATS_URL`, `STORAGE_URL`, `SEARCH_URL`, `CLICKHOUSE_URL`. Another service's is its name in capitals and `_URL`: `API_URL`. When two needs would share a name, each gets its own name's instead (`ANALYTICS_URL`). A variable you set yourself wins, so you can point a service somewhere else.
+A service gets a variable for each thing it `needs`. A resource's is named for its kind: `DATABASE_URL` for Postgres, MySQL and MariaDB, `REDIS_URL` for Redis and Valkey, `MEMCACHED_SERVERS`, `MONGODB_URI`, `AMQP_URL`, `KAFKA_BROKERS`, `NATS_URL`, `STORAGE_URL`, `SEARCH_URL`, `CLICKHOUSE_URL`. Another service's is its name in capitals and `_URL`: `API_URL`. A MariaDB or Valkey resource used to get its name in capitals and `_URL` (`DB_URL`), so a service you deployed that way keeps that variable beside the new one, and the plan warns you to move off it. When two needs would share a name, each gets its own name's instead (`ANALYTICS_URL`). A variable you set yourself wins, so you can point a service somewhere else.
 
 Resource addresses hold credentials, so they're secrets: they reach the service through its cloud's secret store, never as plain variables.
 
@@ -105,13 +106,15 @@ How a service reaches another depends on where both run. Two services on ECS in 
 
 Backing services the application needs, by name. A resource can't share a service's name.
 
-| Field                | What it does                                                                          |
-| -------------------- | ------------------------------------------------------------------------------------- |
-| `kind`               | `postgres`, `mysql`, `redis` and so on, the names analysis uses. Required.            |
-| `provider`, `region` | Where it's provisioned.                                                               |
-| `version`            | The engine's version, such as `"17"` for Postgres. Without it, the provider's newest. |
-| `gateway`            | `true` puts a Postgres resource behind the [database gateway](#database_gateway).     |
-| `environments`       | `provider`, `region`, `enabled` or `gateway` by environment name.                     |
+| Field                | What it does                                                                              |
+| -------------------- | ----------------------------------------------------------------------------------------- |
+| `kind`               | `postgres`, `mysql`, `redis` and so on, the names analysis uses. Required.                |
+| `provider`, `region` | Where it's provisioned.                                                                   |
+| `version`            | The engine's version, such as `"17"` for Postgres. Without it, the provider's newest.     |
+| `gateway`            | `true` puts a Postgres resource behind the [database gateway](#database_gateway).         |
+| `target`             | The ID of the checked server or Kubernetes connection a catalog resource runs on.         |
+| `uses`               | Where a catalog resource gets each dependency. See [Catalog services](#catalog-services). |
+| `environments`       | `provider`, `region`, `enabled` or `gateway` by environment name.                         |
 
 A managed resource is only reachable from services on its own cloud. A Vercel app that needs a Cloud SQL database is a problem on the plan.
 
@@ -127,6 +130,59 @@ resources:
       preview:
         gateway: false
 ```
+
+### Catalog services
+
+For a complete stack with tenants, keys and optional projections, see [Fabriq](fabriq.md).
+
+A catalog resource can depend on other things, a Postgres for its data or a Redis for its cache. By default Loomplane provisions a new one of each, next to the resource, and wires it in. `uses` lets you choose something else, one dependency at a time. The key is the dependency's name, as the catalog lists it for that kind.
+
+| Field      | What it does                                                                                    |
+| ---------- | ----------------------------------------------------------------------------------------------- |
+| `resource` | Use another resource in this manifest. It has to be there, and it can't be the resource itself. |
+| `external` | Connect to an endpoint you added to the catalog, by its ID (`endpoint_` and 26 characters).     |
+| `enabled`  | Turn an optional dependency on or off. `false` can't go with `resource` or `external`.          |
+
+Set `resource` or `external`, not both. Set nothing and you get a new one.
+
+```yaml
+resources:
+  db:
+    kind: postgres
+  gateway:
+    kind: sample
+    target: conn_your_server
+    uses:
+      postgres:
+        resource: db
+      redis:
+        external: endpoint_01jbz7q5mx8vh3k2r9t4w6y0ae
+      falkordb:
+        enabled: true
+```
+
+In this example `sample` stands in for a catalog kind with those three dependencies, and `conn_your_server` for the ID of one of your checked connections. The `gateway` resource shares the `db` Postgres, connects to an existing Redis instead of creating one, and switches on its optional FalkorDB. The manifest checks what it can see on its own: that `db` is a resource in it and isn't `gateway` itself, and that the endpoint ID has the right form. The rest waits until you plan. That's where Loomplane finds out whether `gateway`'s kind has a dependency called `postgres`, whether `db` is a kind it accepts, and whether the endpoint answers from the target.
+
+#### Passing options to what a service needs
+
+A service can hand options to something it needs. Some catalog kinds ask for them, a tenant name for a shared server, say. They go under `need_options` on the service, first by the need's name and then by option name:
+
+```yaml
+services:
+  api:
+    source: services/api
+    needs: [fabriq]
+    need_options:
+      fabriq:
+        tenant: acme
+resources:
+  fabriq:
+    kind: sample
+```
+
+The need has to be in `needs`, or the manifest is invalid. Option names are lower case letters, digits and underscores, start with a letter, and run to 32 characters at most. A value is up to 200 characters and can't hold a newline or any other control character. Which options a kind accepts, and whether a value fits, is checked when you plan.
+
+The dashboard and `POST /projects/:id/manifest/edits` can change these in place without touching your comments. `link` adds a need to a service, with options if you give them. Link again with new options and they replace the old ones as a whole; link again with none and they stay. `unlink` removes the need and its options, and fails if the service doesn't need it. `set_use` sets one dependency on a catalog resource and leaves the rest of its `uses` alone. Send one of the three per edit.
 
 ## gateways
 

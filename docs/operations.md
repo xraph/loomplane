@@ -8,7 +8,7 @@ Proxy `/api/v1/realtime/ws` with WebSocket upgrades and leave `/api/v1/realtime/
 
 Events and build output are committed in Postgres before delivery. Conduit notifications wake other API replicas, which read the durable sequence. You can restart an API or deployment worker without relying on its memory for status or checkpoints. An interrupted Docker build may need rebuilding; its earlier attempt stays visible as incomplete.
 
-If a database timeout stops Dispatch's durable worker, `/_/health` reports the extension as unhealthy. Restart that API or worker process after database access recovers so another worker can claim the durable work. Monitor this health result in your process supervisor; a running HTTP listener alone doesn't establish that deployment work is progressing.
+When the database stops answering, Dispatch's durable worker keeps trying to claim work and backs off between attempts, and `/_/health` reports the dispatch extension as unhealthy until a claim gets through. A timeout while it saves a task's result can still stop the worker. The API then starts a replacement on its own: one second later at first, doubling up to thirty seconds while the database stays down. Until a replacement is polling, the extension stays unhealthy and the log has a `durable workflow worker stopped` warning for each attempt. A replacement only claims tasks whose lease has run out, so a plan the failed worker had claimed picks up again once that lease expires. If the extension stays unhealthy after the database is back, restart the API. Watch this health result in your process supervisor, because a running HTTP listener doesn't tell you deployment work is moving.
 
 Build output is retained for seven days, with 16 KiB per line and 10 MiB per action attempt. The deployment log endpoint pages retained output. A cursor older than retention produces a gap and a current snapshot. Collector checkpoints and cloud credentials are excluded from public events; runtime variables stay out of Docker build arguments.
 
@@ -74,17 +74,17 @@ Migrations only move forward. Each one is written to be safe to run again, and n
 
 `/_/metrics` serves Prometheus metrics: the Go runtime's, Dispatch's jobs and workflows, and Loomplane's own, all prefixed `forge_loomplane_`:
 
-| Metric | Labels | What it counts |
-|---|---|---|
-| `deployments_total`, `deployment_duration_seconds` | `status` | Deployments that finished, and how long they took |
-| `deployment_steps_total` | `provider`, `op`, `status` | Each action of a deployment |
-| `deployment_step_duration_seconds` | `provider`, `status` | How long each provider takes |
-| `plans_total` | `status` | Plans worked out: ready, blocked or failed |
-| `plan_decisions_total` | `decision` | Approved, rejected, stale or expired |
-| `drift_findings_total` | `provider`, `state` | Bindings found missing or changed |
-| `analyses_total`, `analysis_duration_seconds` | `status` | Repository analyses, from loomplane-worker |
-| `api_key_authentications_total` | `result` | Requests with an API key, accepted or rejected |
-| `connection_checks_total` | `cloud`, `result` | Credential checks: ready, incomplete, rejected or unavailable |
+| Metric                                             | Labels                     | What it counts                                                |
+| -------------------------------------------------- | -------------------------- | ------------------------------------------------------------- |
+| `deployments_total`, `deployment_duration_seconds` | `status`                   | Deployments that finished, and how long they took             |
+| `deployment_steps_total`                           | `provider`, `op`, `status` | Each action of a deployment                                   |
+| `deployment_step_duration_seconds`                 | `provider`, `status`       | How long each provider takes                                  |
+| `plans_total`                                      | `status`                   | Plans worked out: ready, blocked or failed                    |
+| `plan_decisions_total`                             | `decision`                 | Approved, rejected, stale or expired                          |
+| `drift_findings_total`                             | `provider`, `state`        | Bindings found missing or changed                             |
+| `analyses_total`, `analysis_duration_seconds`      | `status`                   | Repository analyses, from loomplane-worker                    |
+| `api_key_authentications_total`                    | `result`                   | Requests with an API key, accepted or rejected                |
+| `connection_checks_total`                          | `cloud`, `result`          | Credential checks: ready, incomplete, rejected or unavailable |
 
 Worth an alert: `deployment_steps_total{status="failed"}` rising for one provider, which usually means its connection lost a permission; `api_key_authentications_total{result="rejected"}` climbing, which is a revoked key still in a pipeline or someone guessing; and `drift_findings_total`, which means something changed in a cloud outside Loomplane.
 
@@ -129,3 +129,9 @@ Herald stores encrypted SMTP credentials and sanitized delivery outcomes. It doe
 A database trigger captures each future terminal deployment attempt in the transaction that writes it. Notification processing retries up to ten times, then marks its health check unhealthy. Retry notification processing on the Notifications page after fixing the cause. Replay keeps completed channels and Relay's durable acceptance identity, so it does not create another webhook event. SMTP has at-least-once delivery: a crash after the mail server accepts a message but before Loomplane records success can produce a duplicate.
 
 Webhook endpoints require public HTTPS on port 443. Loomplane blocks private and reserved addresses, resolves again when connecting and refuses redirects. The signing secret appears once after creation or rotation. Store it in your receiver's secret manager and verify Relay's `X-Relay-Signature` against the exact request body and `X-Relay-Timestamp`, with a receiver-side timestamp tolerance. Relay owns HTTP retries and durable delivery history; the page shows attempts, HTTP status and the next retry without retaining response bodies in the public API. A receiver that returns 410 disables its endpoint.
+
+## Fabriq projection rebuilds
+
+The `loomplane.fabriq.rebuild` job runs the graph or search rebuild requested from a Fabriq service's Engines tab. It checks the requester's current permissions and the resource's current configuration before running the pinned rebuild command. Failed runs retain a redacted output tail. Retryable failures can be retried from the same tab.
+
+The `loomplane.fabriq.rebuild.reconcile` cron runs every minute to re-enqueue queued work after an interruption. Keep Dispatch workers running on at least one replica. Rebuilds do not replace Postgres backups; see [Fabriq](fabriq.md) for recovery and library-mode setup.

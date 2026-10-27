@@ -46,6 +46,8 @@ type Server struct {
 
 // RuntimeHealth comes from the pinned Docker daemon, never a provider size slug.
 type RuntimeHealth struct {
+	StorageBytes         *int64    `json:"storage_bytes"`
+	FreeStorageBytes     *int64    `json:"free_storage_bytes"`
 	EffectiveCPUMillis   int64     `json:"effective_cpu_millis"`
 	EffectiveMemoryBytes int64     `json:"effective_memory_bytes"`
 	DockerID             string    `json:"docker_id"`
@@ -73,6 +75,9 @@ type ServerInput struct {
 // Operation retains the immutable review and public execution checkpoints.
 // Bootstrap credentials are stored only in Vault, keyed by this operation ID.
 type Operation struct {
+	CapacityTarget       *ResourceVector                 `json:"capacity_target,omitempty"`
+	CapacityCheckedAt    time.Time                       `json:"capacity_checked_at,omitempty,omitzero"`
+	AbsenceConfirmedAt   time.Time                       `json:"absence_confirmed_at,omitempty,omitzero"`
 	EstimatedHourlyUSD   float64                         `json:"estimated_hourly_usd"`
 	StateRevision        int64                           `json:"state_revision"`
 	ID                   string                          `json:"id" forge:"id"`
@@ -122,33 +127,39 @@ type Runtime interface {
 }
 
 type Deps struct {
-	Domains              DomainStore
-	Resolver             DomainResolver
-	PoolCleanup          PoolCleanup
-	Store                Store
-	Clouds               Clouds
-	Connections          Credentials
-	RuntimeConnections   connections.Store
-	Secrets              connections.Secrets
-	Authz                connections.Authorizer
-	Adapters             *Adapters
-	Workflow             Workflow
-	Runtime              Runtime
-	Audit                projects.Auditor
-	EnrollmentURL        string
-	AllowLocalEnrollment bool
+	CapacityPrincipal       security.PrincipalVerifier
+	CapacityDemandAuthority CapacityDemandAuthority
+	CapacityDemandWakeup    CapacityDemandWakeup
+	// EnableAutomaticCapacity stays false until integrated qualification.
+	EnableAutomaticCapacity bool
+	Domains                 DomainStore
+	Resolver                DomainResolver
+	PoolCleanup             PoolCleanup
+	Store                   Store
+	Clouds                  Clouds
+	Connections             Credentials
+	RuntimeConnections      connections.Store
+	Secrets                 connections.Secrets
+	Authz                   connections.Authorizer
+	Adapters                *Adapters
+	Workflow                Workflow
+	Runtime                 Runtime
+	Audit                   projects.Auditor
+	EnrollmentURL           string
+	AllowLocalEnrollment    bool
 }
 
 type Service struct {
 	Deps
-	now func() time.Time
+	now               func() time.Time
+	expansionSchedule *expansionSchedule
 }
 
 func NewService(d Deps) *Service {
 	if d.Runtime == nil {
 		d.Runtime = SSHRuntime{}
 	}
-	return &Service{Deps: d, now: time.Now}
+	return &Service{Deps: d, now: time.Now, expansionSchedule: &expansionSchedule{}}
 }
 
 func (s *Service) authorize(ctx context.Context, p security.Principal, cloud string) (*cloudprofiles.Profile, error) {
@@ -187,14 +198,17 @@ func (s *Service) CheckServer(ctx context.Context, p security.Principal, cloud, 
 	if p.ReadOnly {
 		return nil, security.ErrForbidden
 	}
-	v, err := s.Store.GetServer(ctx, p.OrgID, cloud, id)
+	return s.checkServer(ctx, p.OrgID, cloud, id)
+}
+func (s *Service) checkServer(ctx context.Context, org, cloud, id string) (*Server, error) {
+	v, err := s.Store.GetServer(ctx, org, cloud, id)
 	if err != nil {
 		return nil, err
 	}
 	if v.Status != "ready" && v.Status != "unhealthy" {
 		return nil, ErrConflict
 	}
-	conn, raw, err := s.Connections.Credential(ctx, p.OrgID, v.RuntimeConnectionID)
+	conn, raw, err := s.Connections.Credential(ctx, org, v.RuntimeConnectionID)
 	if err != nil {
 		return nil, err
 	}

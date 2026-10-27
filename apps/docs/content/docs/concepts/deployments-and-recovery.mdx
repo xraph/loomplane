@@ -1,0 +1,50 @@
+---
+title: Deployments and recovery
+description: What happens after you approve a plan, how to follow it, and how to retry from the step that failed.
+---
+
+Approval starts a deployment, a durable Dispatch workflow that runs beside the API. Each step is an activity with retries, and a crash resumes from the last completed step. Long steps checkpoint the cloud's operation ID, so a retry waits on the build or database already under way instead of starting another.
+
+## The steps
+
+| Step | Where it runs |
+|---|---|
+| Plan again and check the revision still matches what was approved | Loomplane. A mismatch ends the deployment as stale |
+| Store one tarball for each source the plan moves, at its pinned commit | Trove, so every builder gets the same bytes |
+| Provision resources | Loomplane's executors, such as Cloud SQL and RDS, or a provider plugin |
+| Build each service from its own source's tarball | Cloud Build, CodeBuild, Vercel, Render, App Platform or ACR Tasks, in your accounts |
+| Deploy each service, with its secrets in the cloud's secret store | Ctrl Plane for Cloud Run and ECS, Loomplane's adapters for the rest, a plugin for its own targets |
+| Check each public service answers, and record what runs it | Loomplane |
+| Finish, recording the commit now deployed for each source that moved | Loomplane |
+
+Steps run in order, each after everything it needs, so a service gets the address of its database when it deploys.
+
+## Follow it
+
+```bash
+loomctl deployments my-project
+loomctl deployment <deployment-id> --watch
+loomctl status my-project
+```
+
+In the dashboard, a Live badge on the page confirms a recent status heartbeat. Events and build output are committed in PostgreSQL before they're delivered, so restarting the API or the worker doesn't lose status. Build output is kept for seven days, with 16 KiB per line and 10 MiB per action attempt.
+
+Build logs depend on the target. Vercel streams them. Cloud Run and ECS poll them from Cloud Logging and CloudWatch. Render, App Platform and Azure show progress only, and the full build logs stay in each provider's own console.
+
+## Retry from where it stopped
+
+```bash
+loomctl retry <deployment-id>
+```
+
+A failed deployment retries from the step that failed, with the plan that was approved. Earlier attempts stay visible. An interrupted Docker build may need rebuilding, and its first attempt stays visible as incomplete.
+
+If a step fails because a connection lost a permission, fix the permission, check the connection again, then retry.
+
+## When something moves
+
+Replaced services and resources leave an old copy behind until the new one is up. Loomplane records what's still to remove on the binding, not the deployment, so a failed removal isn't lost if you plan again instead of retrying. Every plan warns about what's on that list. Any later deployment of the same service or resource tries again after its own work, and a failure there adds a warning without blocking the deployment.
+
+Deleting a service or resource removes everything on that list first, then the thing itself. Each goes through the connection that deployed it, so you can move an environment to a different account and still clean up what the old one left. If that connection has been deleted, the plan tells you where the leftover runs and that it's yours to remove.
+
+Keep a connection for as long as a plan, build, binding or deployment references it.

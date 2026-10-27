@@ -55,7 +55,12 @@ func (SSHRuntime) Inspect(ctx context.Context, raw []byte, settings map[string]s
 	if capacityErr != nil {
 		effectiveCPU, effectiveMemory = 0, 0
 	}
-	return RuntimeHealth{EffectiveCPUMillis: effectiveCPU, EffectiveMemoryBytes: effectiveMemory, DockerID: details["docker_id"], Architecture: details["architecture"], CPUs: cpus, MemoryBytes: memory, CheckedAt: time.Now().UTC()}, nil
+	var storageBytes, freeStorageBytes *int64
+	if storage, e := client.StorageCapacity(ctx); e == nil {
+		storageBytes = &storage.TotalBytes
+		freeStorageBytes = &storage.FreeBytes
+	}
+	return RuntimeHealth{StorageBytes: storageBytes, FreeStorageBytes: freeStorageBytes, EffectiveCPUMillis: effectiveCPU, EffectiveMemoryBytes: effectiveMemory, DockerID: details["docker_id"], Architecture: details["architecture"], CPUs: cpus, MemoryBytes: memory, CheckedAt: time.Now().UTC()}, nil
 }
 
 // Enrollment contains only the host's public key. The bearer token is accepted
@@ -272,6 +277,11 @@ func (s *Service) readyRuntime(ctx context.Context, o *Operation, v *Server) err
 		return provider.ErrInfrastructureIdentity
 	}
 	if o.Input.Kind == "create" {
+		config, configErr := server.ParseConfig(raw, settings)
+		if configErr != nil {
+			return configErr
+		}
+		settings = config.RecordedDetails(map[string]string{"docker_id": health.DockerID, "architecture": health.Architecture})
 		// Stable connection ID allows recovery after a lost database response.
 		connectionID := "conn_" + strings.TrimPrefix(o.ServerID, "server_")
 		if checkErr := s.Secrets.Put(ctx, o.OrgID, connectionID, raw); checkErr != nil {
@@ -279,8 +289,6 @@ func (s *Service) readyRuntime(ctx context.Context, o *Operation, v *Server) err
 		}
 		now := s.now().UTC()
 		connection := &connections.Connection{ID: connectionID, OrgID: o.OrgID, Cloud: connections.Server, Name: "Server " + o.ServerID, Account: health.DockerID, Details: settings, Status: connections.StatusReady, CheckedAt: &now, CreatedBy: o.Principal.UserID, CreatedAt: now, UpdatedAt: now}
-		connection.Details["docker_id"] = health.DockerID
-		connection.Details["architecture"] = health.Architecture
 		err = s.RuntimeConnections.CreateConnection(ctx, connection)
 		if errors.Is(err, connections.ErrExists) {
 			existing, getErr := s.RuntimeConnections.GetConnection(ctx, o.OrgID, connectionID)

@@ -1,6 +1,7 @@
 package federation
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -63,12 +64,19 @@ func TestWorkloadVerifierUsesScopedConnectionAndTLSOwnershipReads(t *testing.T) 
 	profile.IdentityRevision = d.Identity.Revision()
 	now := time.Now()
 	credentials := &installationCredentialFixture{raw: raw, connection: connections.Connection{ID: "c", OrgID: "o", Cloud: connections.Kubernetes, Status: connections.StatusReady, CheckedAt: &now, Details: map[string]string{"cluster_ca": ca, "namespace_uid": d.Identity.NamespaceUID, "namespace": "workloads"}}}
-	verify := VerifyKubernetesWorkload(credentials, r.attestation.nodes, "example.test", "o")
+	proofCalls := 0
+	verify := VerifyKubernetesWorkloadEvidence(credentials, r.attestation.nodes, "example.test", "o", func(_ context.Context, b WorkloadDeployment, reported, _, _ string) ([][]byte, error) {
+		proofCalls++
+		if b != r.binding || reported != r.binding.Image {
+			t.Fatal("wrong image request")
+		}
+		return nil, nil
+	})
 	got, err := verify(t.Context(), d, r.binding, profile)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Workload.ServiceID != "api" || got.Binding.Container != "main" || got.ContainerImage != r.binding.Image || calls.Load() != 9 {
+	if got.Workload.Workload.ServiceID != "api" || got.Workload.Binding.Container != "main" || got.Workload.ContainerImage != r.binding.Image || calls.Load() != 10 || proofCalls != 1 {
 		t.Fatalf("incorrect verified result/calls: %+v %d", got, calls.Load())
 	}
 	for _, value := range credentials.last {
@@ -78,11 +86,11 @@ func TestWorkloadVerifierUsesScopedConnectionAndTLSOwnershipReads(t *testing.T) 
 	}
 	foreign := r.binding
 	foreign.OrgID = "foreign"
-	if _, verifyErr := verify(t.Context(), d, foreign, profile); verifyErr == nil || calls.Load() != 9 {
+	if _, verifyErr := verify(t.Context(), d, foreign, profile); verifyErr == nil || calls.Load() != 10 {
 		t.Fatal("foreign workload reached cluster", verifyErr)
 	}
 	credentials.connection.Details["namespace_uid"] = "replacement"
-	if _, verifyErr := verify(t.Context(), d, r.binding, profile); verifyErr == nil || calls.Load() != 9 {
+	if _, verifyErr := verify(t.Context(), d, r.binding, profile); verifyErr == nil || calls.Load() != 10 {
 		t.Fatal("changed connection reached cluster", verifyErr)
 	}
 	credentials.connection.Details["namespace_uid"] = d.Identity.NamespaceUID

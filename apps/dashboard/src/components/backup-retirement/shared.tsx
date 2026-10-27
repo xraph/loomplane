@@ -1,6 +1,5 @@
 import { useRef, useState, type ReactNode } from "react"
-import { DatabaseIcon } from "lucide-react"
-import type { Retirement } from "@/client/forge/loomplane/types"
+import { ServicesIcon } from "@/components/icons"
 import { messageOf } from "@/client/errors"
 import { useDeploymentWrites } from "@/lib/deployment-writes"
 import {
@@ -25,7 +24,7 @@ export function RetirementEmpty({
     <ZeroState>
       <ZeroStateHeader>
         <ZeroStateMedia variant="icon">
-          <DatabaseIcon />
+          <ServicesIcon />
         </ZeroStateMedia>
         <ZeroStateTitle>{title}</ZeroStateTitle>
         <ZeroStateDescription>{description}</ZeroStateDescription>
@@ -42,9 +41,9 @@ export function useDeletionRequest(
   const { busy, onPendingChange } = useDeploymentWrites(project)
   const keys = useRef<Record<string, string>>({})
   const [error, setError] = useState("")
-  async function run(
+  async function run<T>(
     key: string,
-    submit: (requestId: string) => Promise<Retirement>
+    submit: (requestId: string) => Promise<T>
   ) {
     if (busy) return
     onPendingChange(true)

@@ -6,7 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
+	"net"
+	"net/http"
 	"net/url"
 	"reflect"
 	"strconv"
@@ -21,12 +24,16 @@ import (
 	cpprovider "github.com/xraph/ctrlplane/provider"
 	"go.jetify.com/typeid/v2"
 
+	"github.com/xraph/loomplane/internal/catalogconnect"
+	"github.com/xraph/loomplane/internal/clouds/kubernetes"
 	"github.com/xraph/loomplane/internal/clouds/owned"
 	"github.com/xraph/loomplane/internal/clouds/registry"
 	"github.com/xraph/loomplane/internal/clouds/server"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/infrastructure"
 	"github.com/xraph/loomplane/internal/planning"
+	"github.com/xraph/loomplane/internal/recipes"
+	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/pkg/provider"
 )
 
@@ -50,10 +57,45 @@ type OwnedTarget struct {
 	Controllers ControllerReceipts
 	ServerDial  func(context.Context, *server.Config) (*server.Client, error)
 	Backend     func(string, string) owned.Backend
+
+	// Kinds is the catalog composed resources' components are checked
+	// against. Nil is recipes.Default().
+	Kinds *recipes.Registry
+	// Hooks are composed kinds' hooks, by kind. A kind without any gets
+	// NoHooks.
+	Hooks map[string]CatalogHooks
+	// Endpoints reads the external endpoints composed resources connect,
+	// and Checker checks them again from the target on each release.
+	Endpoints EndpointResolver
+	Checker   EndpointChecker
+	// CompositionRemoved runs once a composed resource is really deleted,
+	// never when what it ran as before it moved is removed, such as to
+	// end the admin sessions open on it. Its error is a warning on the
+	// deployment, never a failure. Nil does nothing.
+	CompositionRemoved func(ctx context.Context, orgID, environmentID, resource string) error
+	// DialGuard refuses what a cluster's endpoint checks, which dial from
+	// Loomplane's own network, must never reach beyond its own host: the
+	// services Loomplane depends on and an operator's denied ranges. Nil
+	// refuses only its own host's addresses.
+	DialGuard *DialGuard
+
+	// Bindings lists what runs in an environment, for reaching the
+	// components of a composition from its hooks. Nil leaves a component
+	// only itself to reach.
+	Bindings func(ctx context.Context, orgID, environmentID string) ([]*planning.Binding, error)
+
+	// endpointDial dials from a target for an endpoint check. Nil is
+	// TargetDial.
+	endpointDial func(ctx context.Context, orgID, connectionID string) (catalogconnect.DialFunc, io.Closer, error)
+	// componentDial reaches a component's port for its composition's
+	// hooks. Nil is ComponentTransport.
+	componentDial func(ctx context.Context, b *planning.Binding, port int) (http.RoundTripper, io.Closer, error)
 }
 
 var _ Executor = (*OwnedTarget)(nil)
 var _ Locator = (*OwnedTarget)(nil)
+var _ ComponentDialer = (*OwnedTarget)(nil)
+var _ JobRunner = (*OwnedTarget)(nil)
 
 func (e *OwnedTarget) connection(ctx context.Context, org, connection string, labels map[string]string) (*connections.Connection, []byte, error) {
 	if labels[owned.LabelOrg] != org || labels[owned.LabelConnection] != connection {
@@ -92,6 +134,7 @@ func (e *OwnedTarget) serverSession(org, connection string) server.Session {
 		if err != nil {
 			return nil, err
 		}
+		recorded := cfg.RecordedDetails(c.Details)
 		dial := e.ServerDial
 		if dial == nil {
 			dial = server.Dial
@@ -101,7 +144,7 @@ func (e *OwnedTarget) serverSession(org, connection string) server.Session {
 			return nil, err
 		}
 		details, missing, err := client.Check(ctx)
-		if err != nil || len(missing) > 0 || !reflect.DeepEqual(planning.ReviewedConnectionSettings(e.Cloud, details), planning.ReviewedConnectionSettings(e.Cloud, c.Details)) {
+		if err != nil || len(missing) > 0 || !reflect.DeepEqual(planning.ReviewedConnectionSettings(e.Cloud, details), planning.ReviewedConnectionSettings(e.Cloud, recorded)) {
 			_ = client.Close()
 			if err != nil {
 				return nil, err
@@ -115,6 +158,68 @@ func (e *OwnedTarget) serverSession(org, connection string) server.Session {
 	}
 }
 
+// ComponentTransport reaches one port of a running catalog component over
+// the target's own connection, opened with every check a deployment makes:
+// the instance must be the binding's, and the connection, its trust and
+// identity must still be the reviewed ones. A server reaches the port
+// Docker publishes on its loopback interface, through its pinned SSH
+// connection; a cluster reaches the component's Service through the API
+// server's service proxy. Closing the io.Closer ends the connection.
+func (e *OwnedTarget) ComponentTransport(ctx context.Context, b *planning.Binding, port int) (http.RoundTripper, io.Closer, error) {
+	if b == nil || b.Provider != e.Cloud || !planning.OwnedCloud(e.Cloud) || port < 1 || port > 65535 {
+		return nil, nil, errors.New("the component doesn't run on this target")
+	}
+	iid, err := id.Parse(b.ExternalID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("the component isn't running: %w", err)
+	}
+	if cpauth.ClaimsFrom(ctx) == nil {
+		ctx = infrastructure.WithPrincipal(ctx, security.Principal{OrgID: b.OrgID})
+	}
+	key := e.Register(b.OrgID, b.ConnectionID)
+	inst, err := e.Ctrl.Instances.Get(ctx, iid)
+	if err != nil {
+		return nil, nil, err
+	}
+	if inst.ProviderName != key || inst.TenantID != b.OrgID || inst.Labels[owned.LabelOrg] != b.OrgID || inst.Labels[owned.LabelConnection] != b.ConnectionID || inst.Labels[owned.LabelProject] != b.ProjectID || inst.Labels[owned.LabelEnvironment] != b.EnvironmentID {
+		return nil, nil, errors.New("the binding does not own this infrastructure instance")
+	}
+	labels := owned.ForOperation(inst.Labels, "read")
+	switch e.Cloud {
+	case connections.Server:
+		client, sessionErr := e.serverSession(b.OrgID, b.ConnectionID)(ctx, labels)
+		if sessionErr != nil {
+			return nil, nil, sessionErr
+		}
+		container := server.ContainerName(iid)
+		transport := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return client.DialContainerPort(ctx, container, port)
+		}, MaxIdleConnsPerHost: 4}
+		return transport, closerFunc(func() error {
+			transport.CloseIdleConnections()
+			return client.Close()
+		}), nil
+	default:
+		client, sessionErr := e.kubernetesSession(b.OrgID, b.ConnectionID)(ctx, labels)
+		if sessionErr != nil {
+			return nil, nil, sessionErr
+		}
+		if client.Config.Details["service_proxy"] != "ready" {
+			return nil, nil, errors.New("reaching this component needs namespace service proxy permissions; check the connection after granting get and create on services/proxy")
+		}
+		transport, proxyErr := client.ServiceProxyTransport(client.Config.Namespace, kubernetes.WorkloadName(iid), port)
+		if proxyErr != nil {
+			return nil, nil, proxyErr
+		}
+		return transport, noClose{}, nil
+	}
+}
+
+// closerFunc is an io.Closer from a function.
+type closerFunc func() error
+
+func (f closerFunc) Close() error { return f() }
+
 func (e *OwnedTarget) values(ctx context.Context, labels map[string]string) (owned.RuntimeValues, error) {
 	values := owned.RuntimeValues{Env: map[string]string{}}
 	if ref := labels[owned.LabelRuntime]; ref != "" {
@@ -127,6 +232,11 @@ func (e *OwnedTarget) values(ctx context.Context, labels map[string]string) (own
 		}
 		if checkErr := json.Unmarshal(raw, &values.Env); checkErr != nil {
 			return values, checkErr
+		}
+		if labels[owned.LabelRuntimeFiles] == "true" {
+			if filesErr := e.runtimeFiles(ctx, ref, &values); filesErr != nil {
+				return values, filesErr
+			}
 		}
 	}
 	connection := labels[labelRegistry]
@@ -214,7 +324,13 @@ type ownedState struct {
 }
 
 func (e *OwnedTarget) Apply(ctx context.Context, job *Job) (out *Outcome, err error) {
-	if job.Action.Resource != nil {
+	if r := job.Action.Resource; r != nil {
+		switch {
+		case r.Component != nil:
+			return e.applyComponent(ctx, job)
+		case r.Composition != nil:
+			return e.applyComposition(ctx, job)
+		}
 		return e.applyDatabase(ctx, job)
 	}
 	if job.Action.Service == nil || job.Connection == nil || job.Deployment == nil {
@@ -289,6 +405,9 @@ func (e *OwnedTarget) Apply(ctx context.Context, job *Job) (out *Outcome, err er
 		}
 
 		if state.PriorLabels != nil && state.PriorLabels[owned.LabelRuntime] != "" && state.PriorLabels[owned.LabelRuntime] != state.RuntimeRef {
+			if deleteErr := e.deleteRuntimeFiles(ctx, job.Deployment.OrgID, job.Deployment.EnvironmentID, job.Action.Name, state.PriorLabels); deleteErr != nil {
+				return nil, deleteErr
+			}
 			if deleteErr := e.deleteRuntime(ctx, job.Deployment.OrgID, job.Deployment.EnvironmentID, job.Action.Name, state.PriorLabels[owned.LabelRuntime]); deleteErr != nil {
 				return nil, deleteErr
 			}
@@ -354,6 +473,9 @@ func (e *OwnedTarget) Apply(ctx context.Context, job *Job) (out *Outcome, err er
 	if checkErr := e.Secrets.Put(ctx, state.RuntimeRef, raw); checkErr != nil {
 		return nil, checkErr
 	}
+	if checkErr := e.keepRuntimeFiles(ctx, state.RuntimeRef, job.files); checkErr != nil {
+		return nil, checkErr
+	}
 	sp, labels := ownedSpec(job, image, state)
 	// Resolve and validate credentials before persisting any changed instance spec.
 	if _, err = e.values(ctx, labels); err != nil {
@@ -414,7 +536,8 @@ func (e *OwnedTarget) Apply(ctx context.Context, job *Job) (out *Outcome, err er
 			}
 			_, restoreErr := e.Ctrl.Instances.Update(restore, inst.ID, instance.UpdateRequest{Services: previousServices, Labels: previousLabels})
 			if backendErr == nil && restoreErr == nil && state.RuntimeRef != previousLabels[owned.LabelRuntime] {
-				cleanupErr := e.deleteRuntime(restore, job.Deployment.OrgID, job.Deployment.EnvironmentID, job.Action.Name, state.RuntimeRef)
+				cleanupErr := e.deleteRuntimeFiles(restore, job.Deployment.OrgID, job.Deployment.EnvironmentID, job.Action.Name, labels)
+				cleanupErr = errors.Join(cleanupErr, e.deleteRuntime(restore, job.Deployment.OrgID, job.Deployment.EnvironmentID, job.Action.Name, state.RuntimeRef))
 				return nil, errors.Join(err, cleanupErr)
 			}
 			return nil, errors.Join(err, backendErr, restoreErr)
@@ -429,6 +552,9 @@ func (e *OwnedTarget) Apply(ctx context.Context, job *Job) (out *Outcome, err er
 		return nil, saveErr
 	}
 	if previousLabels != nil && previousLabels[owned.LabelRuntime] != "" && previousLabels[owned.LabelRuntime] != state.RuntimeRef {
+		if checkErr := e.deleteRuntimeFiles(ctx, job.Deployment.OrgID, job.Deployment.EnvironmentID, job.Action.Name, previousLabels); checkErr != nil {
+			return nil, checkErr
+		}
 		if checkErr := e.deleteRuntime(ctx, job.Deployment.OrgID, job.Deployment.EnvironmentID, job.Action.Name, previousLabels[owned.LabelRuntime]); checkErr != nil {
 			return nil, checkErr
 		}
@@ -459,6 +585,14 @@ func ownedSpec(job *Job, image string, state ownedState) (sp cpprovider.ServiceS
 		sp.Resources = cpprovider.ResourceSpec{CPUMillis: 1000, MemoryMB: 512}
 		sp.Ports = []cpprovider.PortSpec{{Container: cfg.Catalog.Port(), Protocol: "tcp"}}
 	}
+	if cfg.Component != nil {
+		componentSpec(&sp, labels, cfg.Component)
+		if cfg.Provider == "server" {
+			for i := range sp.Volumes {
+				sp.Volumes[i].SizeMB = 0
+			}
+		}
+	}
 	labels[labelImage] = image
 	if image == "" && cfg.BuildTarget != nil {
 		labels[labelImage] = cfg.BuildTarget.Image
@@ -476,7 +610,7 @@ func ownedSpec(job *Job, image string, state ownedState) (sp cpprovider.ServiceS
 		labels[owned.LabelScaleMin] = strconv.Itoa(cfg.Scale.Min)
 		labels[owned.LabelScaleMax] = strconv.Itoa(cfg.Scale.Max)
 	}
-	if job.Action.Provider == "server" {
+	if job.Action.Provider == "server" && cfg.Component == nil {
 		cpu, memory, err := planning.ServerResources(cfg.Size)
 		if err == nil {
 			sp.Resources.CPUMillis = int(cpu)
@@ -510,6 +644,12 @@ func ownedSpec(job *Job, image string, state ownedState) (sp cpprovider.ServiceS
 		registrySettings, _ := json.Marshal(cfg.BuildTarget.RegistrySettings) //nolint:errcheck // string maps always encode
 		labels[labelRegistrySettings] = string(registrySettings)
 	}
+	if len(job.files) > 0 {
+		// The rendered bytes are part of the revision, so a changed file
+		// starts another container. Only their digest is a label.
+		labels[owned.LabelRuntimeFiles] = "true"
+		labels[owned.LabelRevision] += "/" + filesRevision(job.files)
+	}
 	return sp, labels
 }
 
@@ -541,6 +681,30 @@ func (e *OwnedTarget) validateTarget(ctx context.Context, labels map[string]stri
 }
 
 func (e *OwnedTarget) Remove(ctx context.Context, job *Job, b *planning.Binding) error {
+	resource := boundResource(b)
+	if resource != nil && resource.Composition != nil {
+		return e.removeComposition(ctx, job, b, resource.Composition)
+	}
+	if resource != nil && resource.Component != nil && resource.Component.Component.Role == recipes.RoleJob {
+		// A job removed its container or Kubernetes Job when it finished.
+		return nil
+	}
+	if err := e.removeInstance(ctx, job, b); err != nil {
+		return err
+	}
+	if resource != nil && resource.Component != nil && job.Deployment != nil && job.Deployment.OrgID == b.OrgID && forgetsKept(job) {
+		if e.Secrets == nil {
+			return ErrNoCredential
+		}
+		if err := e.Secrets.Delete(ctx, resourceKey(b.OrgID, b.EnvironmentID, b.Name, componentAddressField)); err != nil {
+			return err
+		}
+		return e.forgetPublished(ctx, b, resource.Component)
+	}
+	return nil
+}
+
+func (e *OwnedTarget) removeInstance(ctx context.Context, job *Job, b *planning.Binding) error {
 	if e.RouteGuard != nil {
 		if routeErr := e.RouteGuard.ValidateRuntimeRemoval(ctx, b.OrgID, b.ProjectID, b.ExternalID); routeErr != nil {
 			return routeErr
@@ -586,7 +750,11 @@ func (e *OwnedTarget) Remove(ctx context.Context, job *Job, b *planning.Binding)
 	if refErr := validateRuntimeRef(b.OrgID, b.EnvironmentID, b.Name, ref); refErr != nil {
 		return refErr
 	}
+	// A component's files go with its runtime values, whether its instance
+	// says so or, once it's gone, its binding.
+	files := declaresFiles(b)
 	if inst != nil {
+		files = files || inst.Labels[owned.LabelRuntimeFiles] == "true"
 		if inst.ProviderName != key || inst.TenantID != b.OrgID || inst.Labels[owned.LabelProject] != b.ProjectID || inst.Labels[owned.LabelEnvironment] != b.EnvironmentID {
 			return errors.New("the binding does not own this infrastructure instance")
 		}
@@ -611,6 +779,11 @@ func (e *OwnedTarget) Remove(ctx context.Context, job *Job, b *planning.Binding)
 		if e.Secrets == nil {
 			return ErrNoCredential
 		}
+		if files {
+			if deleteErr := e.deleteRuntimeFiles(ctx, b.OrgID, b.EnvironmentID, b.Name, map[string]string{owned.LabelRuntime: ref, owned.LabelRuntimeFiles: "true"}); deleteErr != nil {
+				return deleteErr
+			}
+		}
 		if deleteErr := e.deleteRuntime(ctx, b.OrgID, b.EnvironmentID, b.Name, ref); deleteErr != nil {
 			return deleteErr
 		}
@@ -623,6 +796,15 @@ func (e *OwnedTarget) Remove(ctx context.Context, job *Job, b *planning.Binding)
 func (e *OwnedTarget) Observe(ctx context.Context, c *connections.Connection, _ []byte, b *planning.Binding) (*Observation, error) {
 	if c == nil || c.ID != b.ConnectionID || c.OrgID != b.OrgID || c.Cloud != e.Cloud {
 		return nil, errors.New("the binding target is outside its recorded organization")
+	}
+	if resource := boundResource(b); resource != nil && resource.Composition != nil {
+		// A composed resource is its components and the outputs it keeps:
+		// nothing runs as it.
+		return &Observation{Exists: true}, nil
+	}
+	if resource := boundResource(b); resource != nil && resource.Component != nil && resource.Component.Component.Role == recipes.RoleJob {
+		// A job ran once and was removed: nothing runs as it either.
+		return &Observation{Exists: true}, nil
 	}
 	iid, err := id.Parse(b.ExternalID)
 	if err != nil {
@@ -637,11 +819,15 @@ func (e *OwnedTarget) Observe(ctx context.Context, c *connections.Connection, _ 
 		if decodeErr := json.Unmarshal(b.Config, &resource); decodeErr != nil {
 			return nil, decodeErr
 		}
-		converted, convertErr := databaseService(&resource)
-		if convertErr != nil {
-			return nil, convertErr
+		if resource.Component != nil {
+			cfg = *componentService(&resource)
+		} else {
+			converted, convertErr := databaseService(&resource)
+			if convertErr != nil {
+				return nil, convertErr
+			}
+			cfg = *converted
 		}
-		cfg = *converted
 	}
 	job := &Job{Deployment: &Deployment{OrgID: b.OrgID, ProjectID: b.ProjectID, EnvironmentID: b.EnvironmentID}, Connection: c, Action: planning.Action{ID: "service:" + b.Name, Name: b.Name, Service: &cfg}}
 	_, labels := ownedSpec(job, "", ownedState{})

@@ -22,9 +22,10 @@ type CloudReconciler interface {
 }
 
 type cloudSyncInput struct {
-	OrgID     string `json:"org_id"`
-	ProjectID string `json:"project_id"`
-	SyncID    string `json:"sync_id"`
+	OrgID             string        `json:"org_id"`
+	ProjectID         string        `json:"project_id"`
+	SyncID            string        `json:"sync_id"`
+	ReconcileInterval time.Duration `json:"reconcile_interval,omitempty"`
 }
 
 // BindCloudSync binds the migration service after the runner is available.
@@ -58,17 +59,39 @@ func (d *Deployments) syncActivity(ctx context.Context, info drt.ActivityInfo, i
 
 // StartCloudSync deduplicates delivery by operation and explicitly authorized attempt.
 func (d *Deployments) StartCloudSync(ctx context.Context, org, project, id string, attempt int) error {
-	eng, err := d.engine()
-	if err != nil {
-		return err
-	}
-	input, err := json.Marshal(cloudSyncInput{OrgID: org, ProjectID: project, SyncID: id})
-	if err != nil {
-		return err
-	}
 	request := fmt.Sprintf("%s.attempt.%d", id, attempt)
-	_, err = eng.StartDurableWorkflow(ctx, durable.StartRequest{Key: durable.Key{Namespace: DurableNamespace, WorkflowID: request, RunID: runID}, RequestID: "start:" + request, WorkflowType: cloudSyncWorkflow, BuildID: DeploymentBuild, Queue: DurableQueue, Input: input, RetryPolicy: recoveryRetryPolicy()})
-	return err
+	key := durable.Key{Namespace: DurableNamespace, WorkflowID: request, RunID: runID}
+	build := DeploymentBuild
+	in := cloudSyncInput{OrgID: org, ProjectID: project, SyncID: id}
+	current, err := d.currentExecution(ctx, key)
+	if err != nil && !errors.Is(err, durable.ErrNotFound) {
+		return err
+	}
+	var raw []byte
+	if err == nil {
+		build = current.BuildID
+		raw = current.Input
+	} else {
+		if d.runs != nil {
+			r, e := d.capacitySyncReconciler()
+			if e != nil {
+				return e
+			}
+			needs, e := r.CloudSyncNeedsCapacity(ctx, org, project, id)
+			if e != nil {
+				return e
+			}
+			if needs {
+				build = CapacityBuild
+				in.ReconcileInterval = capacityInterval
+			}
+		}
+		raw, err = json.Marshal(in)
+		if err != nil {
+			return err
+		}
+	}
+	return d.startRun(ctx, DeploymentRun{OrgID: org, PlanID: id, Request: durable.StartRequest{Key: key, RequestID: "start:" + request, WorkflowType: cloudSyncWorkflow, BuildID: build, Queue: DurableQueue, Input: raw, RetryPolicy: recoveryRetryPolicy()}})
 }
 
 // RecoverCloudSyncs runs once at startup and periodically through the owner extension.
@@ -88,11 +111,57 @@ const releaseAvailableActivity = "loomplane.release.available"
 // ResumeRelease recovers a settled original workflow without racing one that
 // still runs. The replacement workflow waits durably behind an accepted sync.
 func (d *Deployments) ResumeRelease(ctx context.Context, org, planID string) error {
-	eng, err := d.engine()
+	if d.runs == nil {
+		eng, err := d.engine()
+		if err != nil {
+			return err
+		}
+		return resumeReleaseOn(ctx, eng, org, planID)
+	}
+	route, err := d.runs.ForPlan(ctx, planID)
+	if errors.Is(err, durable.ErrNotFound) {
+		active, lookupErr := d.planRun(ctx, planID)
+		if lookupErr == nil && active.State == durable.StateRunning {
+			return nil
+		}
+		if lookupErr != nil && !errors.Is(lookupErr, durable.ErrNotFound) {
+			return lookupErr
+		}
+		eng, e := d.engine()
+		if e != nil {
+			return e
+		}
+		return resumeReleaseOn(ctx, recordedRecovery{releaseRecoveryEngine: eng, workflows: d, org: org, plan: planID}, org, planID)
+	}
 	if err != nil {
 		return err
 	}
-	return resumeReleaseOn(ctx, eng, org, planID)
+	if route.OrgID != org {
+		return errors.New("release recovery organization mismatch")
+	}
+	current, err := d.currentExecution(ctx, route.Request.Key)
+	if errors.Is(err, durable.ErrNotFound) {
+		return d.startRun(ctx, route)
+	}
+	if err != nil {
+		return err
+	}
+	if current.State == durable.StateRunning {
+		return nil
+	}
+	if current.BuildID == DeploymentBuild {
+		eng, e := d.engine()
+		if e != nil {
+			return e
+		}
+		return resumeReleaseOn(ctx, recordedRecovery{releaseRecoveryEngine: eng, workflows: d, org: org, plan: planID}, org, planID)
+	}
+	input, err := json.Marshal(DeploymentInput{OrgID: org, PlanID: planID, ReconcileInterval: capacityInterval})
+	if err != nil {
+		return err
+	}
+	request := "resume-release-v3:" + planID
+	return d.startRun(ctx, DeploymentRun{OrgID: org, PlanID: planID, Request: durable.StartRequest{Key: durable.Key{Namespace: DurableNamespace, WorkflowID: request, RunID: runID}, RequestID: request, WorkflowType: resumeReleaseWorkflow, BuildID: CapacityBuild, Queue: DurableQueue, Input: input, RetryPolicy: recoveryRetryPolicy()}})
 }
 
 type releaseRecoveryEngine interface {

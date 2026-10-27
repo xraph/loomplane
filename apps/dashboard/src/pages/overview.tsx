@@ -1,7 +1,8 @@
 // The overview: what's waiting on you and what went out last, how often and
-// how fast the organization ships, and where it runs. Spend, latency and
-// traffic share one card that says what they're waiting for until Loomplane
-// reads those numbers.
+// how fast the organization ships, what it costs, how its services are
+// doing, and where it runs. Spend, latency and traffic come from each
+// connected cloud's own billing and monitoring: one card sums them up,
+// and the traffic and slowest services cards beneath it show the detail.
 import { useAuth } from "@authsome/ui-react"
 import { CheckIcon, PlusIcon, ShieldCheckIcon } from "lucide-react"
 import { type ReactNode, useCallback, useMemo } from "react"
@@ -16,10 +17,12 @@ import { useDecision } from "@/components/approval"
 import { CloudGlyph } from "@/components/cloud-glyph"
 import { DotBarChart, GlowBarChart } from "@/components/dots"
 import { Page, PageHeading } from "@/components/page"
+import { Figure, Panel, PanelHead } from "@/components/panel"
 import { QueryError } from "@/components/query-error"
 import { ChangeChips, StatusPill, Thread } from "@/components/runs"
 import { useShell } from "@/components/shell"
 import { SiteHeader } from "@/components/site-header"
+import { LatencyCard, TrafficCard, UsageSummary } from "@/components/usage"
 import { Button } from "@/components/ui/button"
 import { Kbd } from "@/components/ui/kbd"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -121,7 +124,7 @@ export function Overview() {
           />
         )}
 
-        <div className="grid gap-4 lg:grid-cols-[minmax(0,10fr)_minmax(0,7fr)]">
+        <div className="grid gap-3 lg:grid-cols-[minmax(0,10fr)_minmax(0,7fr)]">
           {!loaded && runs.length === 0 ? (
             <>
               <Skeleton className="h-[188px] rounded-[14px]" />
@@ -135,15 +138,20 @@ export function Overview() {
           )}
         </div>
 
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)_minmax(0,1fr)]">
+        <div className="grid gap-3 md:grid-cols-2 lg:grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)_minmax(0,1fr)]">
           <DeploysCard />
           <PlanToLive />
-          <MetricsPending />
+          <UsageSummary className="md:col-span-2 lg:col-span-1" />
         </div>
 
-        <div className="grid items-start gap-4 lg:grid-cols-[minmax(0,10fr)_minmax(0,7fr)]">
+        <div className="grid gap-3 lg:grid-cols-[minmax(0,10fr)_minmax(0,7fr)]">
+          <TrafficCard />
+          <LatencyCard />
+        </div>
+
+        <div className="grid items-start gap-3 lg:grid-cols-[minmax(0,10fr)_minmax(0,7fr)]">
           <Feed runs={runs} loaded={loaded} now={now} />
-          <div className="grid gap-4">
+          <div className="grid gap-3">
             <QuickDeploy projects={projects} loaded={loaded} />
             <Clouds />
           </div>
@@ -155,47 +163,6 @@ export function Overview() {
 
 /* ------------------------------------------------------------------------ */
 /* Shared card parts                                                          */
-
-function Panel({
-  className,
-  dashed = false,
-  children,
-  ...props
-}: React.ComponentProps<"section"> & { dashed?: boolean }) {
-  return (
-    <section
-      className={cn(
-        "flex min-w-0 flex-col rounded-[14px] px-4 py-3.5",
-        dashed
-          ? "border border-dashed border-border bg-subtle"
-          : "bg-card ring-1 ring-border",
-        className
-      )}
-      {...props}
-    >
-      {children}
-    </section>
-  )
-}
-
-function PanelHead({
-  title,
-  aside,
-  className,
-}: {
-  title: ReactNode
-  aside?: ReactNode
-  className?: string
-}) {
-  return (
-    <div className={cn("flex items-baseline justify-between gap-3", className)}>
-      <h2 className="text-[13px] font-semibold">{title}</h2>
-      {aside && (
-        <span className="shrink-0 text-xs text-muted-foreground">{aside}</span>
-      )}
-    </div>
-  )
-}
 
 function Eyebrow({
   className,
@@ -213,19 +180,6 @@ function Eyebrow({
     >
       {children}
     </span>
-  )
-}
-
-function Figure({ value, note }: { value: ReactNode; note?: ReactNode }) {
-  return (
-    <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-      <span className="font-mono text-[26px] leading-none font-medium tracking-[-0.02em] tabular-nums">
-        {value}
-      </span>
-      {note && (
-        <span className="text-[12.5px] text-muted-foreground">{note}</span>
-      )}
-    </div>
   )
 }
 
@@ -280,7 +234,7 @@ function Waiting({
   return (
     <Panel
       aria-label="Waiting on you"
-      className="gap-3.5 ring-[color-mix(in_oklch,var(--weld)_28%,var(--border))]"
+      className="gap-2.5 ring-[color-mix(in_oklch,var(--weld)_28%,var(--border))]"
     >
       <div className="flex items-baseline justify-between gap-3">
         <Eyebrow className="text-weld-ink">Waiting on you · {count}</Eyebrow>
@@ -295,7 +249,7 @@ function Waiting({
         )}
       </div>
       <div className="flex min-w-0 gap-3">
-        <span className="flex size-[34px] shrink-0 items-center justify-center rounded-[10px] bg-background text-weld-ink shadow-xs ring-1 ring-border">
+        <span className="flex size-[34px] shrink-0 items-center justify-center rounded-lg bg-background text-weld-ink shadow-xs ring-1 ring-border">
           <ShieldCheckIcon className="size-4" />
         </span>
         <div className="grid min-w-0 gap-1">
@@ -339,7 +293,7 @@ function Waiting({
 
 function InFlight({ run, count }: { run: Run; count: number }) {
   return (
-    <Panel aria-label="In flight" className="gap-3.5">
+    <Panel aria-label="In flight" className="gap-2.5">
       <Eyebrow className="text-flight-ink">In flight · {count}</Eyebrow>
       <div className="grid min-w-0 gap-1">
         <span className="truncate text-[15px] font-semibold tracking-[-0.01em]">
@@ -366,7 +320,7 @@ function AllClear() {
   const { can } = useOrganization()
   const { openDeploy } = useShell()
   return (
-    <Panel aria-label="Waiting on you" className="gap-3.5">
+    <Panel aria-label="Waiting on you" className="gap-2.5">
       <Eyebrow>Waiting on you · 0</Eyebrow>
       <div className="grid gap-1">
         <span className="text-[15px] font-semibold tracking-[-0.01em]">
@@ -394,7 +348,7 @@ function LastRelease({ run, now }: { run?: Run; now: number }) {
   const who = useWho()
   const style = run?.project ? projectStyle(run.project) : null
   return (
-    <Panel aria-label="Last release" className="gap-3.5">
+    <Panel aria-label="Last release" className="gap-2.5">
       <div className="flex items-center justify-between gap-3">
         <Eyebrow>Last release</Eyebrow>
         {run && <StatusPill tone="live">Live</StatusPill>}
@@ -490,7 +444,7 @@ function DeploysCard() {
   const total = a ? a.deployments.succeeded + a.deployments.failed : 0
   const thisWeek = data.at(-1)?.value ?? 0
   return (
-    <Panel aria-label="Deployments" className="gap-4">
+    <Panel aria-label="Deployments" className="gap-2.5">
       <PanelHead
         title={
           <Link to="/deployments" className="hover:underline">
@@ -536,7 +490,7 @@ function PlanToLive() {
       value: d.succeeded,
     }))
   return (
-    <Panel aria-label="Plan to live" className="gap-4">
+    <Panel aria-label="Plan to live" className="gap-2.5">
       <PanelHead title="Plan to live" aside={`Last ${timingDays} days`} />
       {activity.status === "error" ? (
         <QueryError
@@ -563,39 +517,6 @@ function PlanToLive() {
   )
 }
 
-const pendingMetrics = ["Cloud spend", "p95 latency", "Traffic"]
-
-/** MetricsPending holds the place of the numbers Loomplane doesn't read yet. */
-function MetricsPending() {
-  return (
-    <Panel
-      dashed
-      aria-label="Spend, latency and traffic"
-      className="gap-3 md:col-span-2 lg:col-span-1"
-    >
-      <PanelHead title="Spend, latency and traffic" />
-      <p className="text-[12.5px] leading-normal text-muted-foreground">
-        These show up once Loomplane reads billing and metrics from your cloud
-        accounts. Build minutes aren&apos;t metered yet.
-      </p>
-      <dl className="grid gap-1.5 text-[12.5px]">
-        {pendingMetrics.map((m) => (
-          <div key={m} className="flex items-center justify-between gap-3">
-            <dt>{m}</dt>
-            <dd className="text-muted-foreground">Not connected</dd>
-          </div>
-        ))}
-      </dl>
-      <Link
-        to="/integrations"
-        className="mt-auto self-start text-[12.5px] font-medium text-brand-ink hover:underline"
-      >
-        Connect metrics
-      </Link>
-    </Panel>
-  )
-}
-
 /* ------------------------------------------------------------------------ */
 /* Activity, quick deploy and clouds                                          */
 
@@ -615,9 +536,12 @@ function useEvents(runs: Run[]) {
   return useMemo(() => {
     const out: Event[] = []
     const name = (r: Run) => (
-      <span className="font-medium">
+      <span className="font-medium text-foreground">
         {r.project?.name ?? "a deleted project"}
       </span>
+    )
+    const actor = (s: string) => (
+      <span className="font-medium text-foreground">{s}</span>
     )
     for (const r of runs.slice(0, 12)) {
       const ts = Date.parse(r.finishedAt ?? r.createdAt)
@@ -631,7 +555,8 @@ function useEvents(runs: Run[]) {
           dot: "bg-flight",
           text: (
             <>
-              {by} {r.deployment ? "started deploying" : "started planning"}{" "}
+              {actor(by)}{" "}
+              {r.deployment ? "started deploying" : "started planning"}{" "}
               {name(r)} to {r.environment}
             </>
           ),
@@ -644,7 +569,8 @@ function useEvents(runs: Run[]) {
           dot: "bg-weld",
           text: (
             <>
-              {by} planned {name(r)} to {r.environment}. It needs approval.
+              {actor(by)} planned {name(r)} to {r.environment}. It needs
+              approval.
             </>
           ),
         })
@@ -670,7 +596,7 @@ function useEvents(runs: Run[]) {
           dot: "bg-failed",
           text: (
             <>
-              {by === "You" ? "Your" : `${by}'s`} deploy of {name(r)} to{" "}
+              {actor(by === "You" ? "Your" : `${by}'s`)} deploy of {name(r)} to{" "}
               {r.environment} failed
             </>
           ),
@@ -695,7 +621,7 @@ function useEvents(runs: Run[]) {
           dot: "bg-overdye",
           text: (
             <>
-              {by} deployed {name(r)} to {r.environment}
+              {actor(by)} deployed {name(r)} to {r.environment}
             </>
           ),
         })
@@ -712,7 +638,7 @@ function useEvents(runs: Run[]) {
           dot: "bg-flight",
           text: (
             <>
-              {who(r.plan.decidedBy)} approved the plan for {name(r)} to{" "}
+              {actor(who(r.plan.decidedBy))} approved the plan for {name(r)} to{" "}
               {r.environment}
             </>
           ),
@@ -757,13 +683,13 @@ function Feed({
           Plans, approvals and deployments appear here as they happen.
         </p>
       ) : (
-        <ul className="divide-y divide-border/70">
+        <ul className="divide-y">
           {events.map((e) => (
             <li key={e.id}>
               <Link
                 to="/deployments/$id"
                 params={{ id: e.run }}
-                className="flex items-center gap-3 px-4 py-2.5 text-[13px] text-sidebar-foreground transition-colors hover:bg-subtle"
+                className="flex items-center gap-3 px-4 py-2.5 text-[13px] text-muted-foreground transition-colors hover:bg-subtle"
               >
                 <span
                   aria-hidden="true"
@@ -792,13 +718,13 @@ function QuickDeploy({
   const { can } = useOrganization()
   const { openDeploy, openNewProject } = useShell()
   return (
-    <Panel aria-label="Quick deploy" className="gap-3.5">
+    <Panel aria-label="Quick deploy" className="gap-2.5 pt-3">
       <PanelHead title="Quick deploy" />
       <div className="flex flex-wrap gap-2">
         {!loaded &&
           projects.length === 0 &&
           [0, 1, 2].map((i) => (
-            <Skeleton key={i} className="h-8 w-36 rounded-[9px]" />
+            <Skeleton key={i} className="h-8 w-36 rounded-lg" />
           ))}
         {projects.map((p) => {
           const s = projectStyle(p)
@@ -808,7 +734,7 @@ function QuickDeploy({
               variant="outline"
               disabled={!can("deployment:create")}
               onClick={() => openDeploy({ project: p.id })}
-              className="h-8 max-w-full gap-2 rounded-[9px] pr-2.5 pl-1.5 text-[13px]"
+              className="h-8 max-w-full gap-2 rounded-lg pr-2.5 pl-1.5 text-[12.5px]"
             >
               <ProjectIcon icon={s.icon} color={s.color} size="xs" />
               <span className="truncate">{p.name}</span>
@@ -846,7 +772,7 @@ function Clouds() {
           <>
             Clouds{" "}
             {list.length > 0 && (
-              <span className="font-normal text-muted-foreground tabular-nums">
+              <span className="font-mono text-[11.5px] font-normal text-muted-foreground tabular-nums">
                 {list.length}
               </span>
             )}
@@ -878,13 +804,13 @@ function Clouds() {
           Connect Google Cloud, AWS, Vercel or Render to deploy there.
           <Link
             to="/integrations"
-            className="font-medium text-foreground hover:underline"
+            className="w-fit font-medium text-brand-ink hover:underline"
           >
             Connect a cloud
           </Link>
         </div>
       ) : (
-        <ul className="divide-y divide-border/70">
+        <ul className="divide-y">
           {list.map((c) => {
             const running = byConnection.get(c.id)?.length ?? 0
             return (
@@ -892,7 +818,7 @@ function Clouds() {
                 <Link
                   to="/clouds/accounts/$id"
                   params={{ id: c.id }}
-                  className="flex items-center gap-3 px-4 py-2.5 text-foreground transition-colors hover:bg-subtle"
+                  className="flex items-center gap-2.5 px-4 py-2 text-foreground transition-colors hover:bg-subtle"
                 >
                   <CloudGlyph cloud={c.cloud} size="md" />
                   <span className="grid min-w-0 flex-1 gap-0.5">

@@ -24,7 +24,7 @@ func TestServerOptionsUsesAccountScopedProviderCatalog(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(options.Regions) != 1 || len(options.Sizes) != 1 || len(options.Images) != 2 || !options.Images[0].Bootstrap || options.Images[1].Bootstrap || options.Sizes[0].HourlyUSD != 0.01786 || options.Sizes[0].MemoryMiB != 2048 {
+	if len(options.Regions) != 1 || len(options.Sizes) != 1 || len(options.Images) != 2 || !options.Images[0].Bootstrap || options.Images[1].Bootstrap || options.Sizes[0].HourlyUSD != 0.01786 || options.Sizes[0].MemoryMiB != 2048 || !options.Sizes[0].HourlyPriceKnown || options.Images[0].Architecture != "amd64" {
 		t.Fatalf("catalog: %+v", options)
 	}
 }

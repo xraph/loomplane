@@ -13,6 +13,7 @@ import (
 	"github.com/xraph/dispatch/engine"
 
 	"github.com/xraph/loomplane/internal/realtime"
+	"github.com/xraph/loomplane/internal/security"
 )
 
 // The deployment workflow runs on Dispatch's durable runtime: history
@@ -80,12 +81,14 @@ type DeploymentInput struct {
 	// Window is how long a ready plan waits for a decision. It's part of
 	// the input rather than read from configuration, so a replay waits
 	// exactly as long as the first run did.
-	Window time.Duration `json:"window"`
+	Window            time.Duration `json:"window"`
+	ReconcileInterval time.Duration `json:"reconcile_interval,omitempty"`
 }
 
 // Decision is an approval or a rejection, as the signal carries it.
 type Decision struct {
-	Approve bool `json:"approve"`
+	Actor   *security.Principal `json:"actor,omitempty"`
+	Approve bool                `json:"approve"`
 	// Revision is the plan revision the decider reviewed.
 	Revision string `json:"revision"`
 	By       string `json:"by"`
@@ -168,6 +171,8 @@ type Deployments struct {
 	planner        Planner
 	deployer       Deployer
 	engineOf       func() *engine.Engine
+	capacityClient *drt.Worker
+	runs           RunStore
 }
 
 // NewDeployments returns the workflow, unbound.
@@ -326,9 +331,10 @@ func runSteps(w *drt.Workflow, orgID string, started deployStarted) error {
 
 // retryInput restarts a failed deployment's remaining steps.
 type retryInput struct {
-	OrgID        string     `json:"org_id"`
-	DeploymentID string     `json:"deployment_id"`
-	Steps        [][]string `json:"steps"`
+	OrgID             string        `json:"org_id"`
+	DeploymentID      string        `json:"deployment_id"`
+	Steps             [][]string    `json:"steps"`
+	ReconcileInterval time.Duration `json:"reconcile_interval,omitempty"`
 }
 
 // retry is the retry workflow: the deployment was reopened before it
@@ -348,23 +354,28 @@ func (d *Deployments) retry(w *drt.Workflow, input []byte) ([]byte, error) {
 // Retry starts a reopened deployment's steps again. retryID names this
 // retry, so a repeated request starts it once.
 func (d *Deployments) Retry(ctx context.Context, orgID, deploymentID, retryID string, steps [][]string) error {
-	eng, err := d.engine()
+	build, plan := DeploymentBuild, ""
+	if d.runs != nil {
+		r, err := d.runs.ForDeployment(ctx, orgID, deploymentID)
+		if err != nil {
+			return err
+		}
+		plan = r.PlanID
+		e, err := d.planRun(ctx, r.PlanID)
+		if err != nil {
+			return err
+		}
+		build = e.BuildID
+	}
+	in := retryInput{OrgID: orgID, DeploymentID: deploymentID, Steps: steps}
+	if build == CapacityBuild {
+		in.ReconcileInterval = capacityInterval
+	}
+	raw, err := json.Marshal(in)
 	if err != nil {
 		return err
 	}
-	input, err := json.Marshal(retryInput{OrgID: orgID, DeploymentID: deploymentID, Steps: steps})
-	if err != nil {
-		return fmt.Errorf("encode retry input: %w", err)
-	}
-	_, err = eng.StartDurableWorkflow(ctx, durable.StartRequest{
-		Key:       durable.Key{Namespace: DurableNamespace, WorkflowID: retryID, RunID: runID},
-		RequestID: "start:" + retryID, WorkflowType: WorkflowRetry, BuildID: DeploymentBuild,
-		Queue: DurableQueue, Input: input,
-	})
-	if err != nil {
-		return fmt.Errorf("start retry workflow: %w", err)
-	}
-	return nil
+	return d.startRun(ctx, DeploymentRun{OrgID: orgID, PlanID: plan, Request: durable.StartRequest{Key: durable.Key{Namespace: DurableNamespace, WorkflowID: retryID, RunID: runID}, RequestID: "start:" + retryID, WorkflowType: WorkflowRetry, BuildID: build, Queue: DurableQueue, Input: raw}})
 }
 
 // callInto runs an activity and decodes its output into out, if out isn't
@@ -488,66 +499,74 @@ func (d *Deployments) engine() (*engine.Engine, error) {
 // Start starts a plan's workflow. Starting one twice is harmless: the
 // request ID is the plan's, so Dispatch returns the first start's receipt.
 func (d *Deployments) Start(ctx context.Context, orgID, planID string, window time.Duration) error {
-	eng, err := d.engine()
+	// Existing executions supply their immutable request input and build.
+	e, err := d.currentExecution(ctx, durable.Key{Namespace: DurableNamespace, WorkflowID: planID, RunID: runID})
+	if err == nil {
+		return d.startRun(ctx, DeploymentRun{OrgID: orgID, PlanID: planID, Request: durable.StartRequest{Key: durable.Key{Namespace: DurableNamespace, WorkflowID: planID, RunID: runID}, RequestID: "start:" + planID, WorkflowType: WorkflowDeployment, BuildID: e.BuildID, Queue: DurableQueue, Input: e.Input}})
+	}
+	if !errors.Is(err, durable.ErrNotFound) {
+		return err
+	}
+	build := DeploymentBuild
+	interval := time.Duration(0)
+	if d.runs != nil {
+		build = CapacityBuild
+		interval = capacityInterval
+	}
+	raw, err := json.Marshal(DeploymentInput{OrgID: orgID, PlanID: planID, Window: window, ReconcileInterval: interval})
 	if err != nil {
 		return err
 	}
-	input, err := json.Marshal(DeploymentInput{OrgID: orgID, PlanID: planID, Window: window})
-	if err != nil {
-		return fmt.Errorf("encode deployment input: %w", err)
-	}
-	_, err = eng.StartDurableWorkflow(ctx, durable.StartRequest{
-		Key:       durable.Key{Namespace: DurableNamespace, WorkflowID: planID, RunID: runID},
-		RequestID: "start:" + planID, WorkflowType: WorkflowDeployment, BuildID: DeploymentBuild,
-		Queue: DurableQueue, Input: input,
-	})
-	if err != nil {
-		return fmt.Errorf("start deployment workflow: %w", err)
-	}
-	return nil
+	return d.startRun(ctx, DeploymentRun{OrgID: orgID, PlanID: planID, Request: durable.StartRequest{Key: durable.Key{Namespace: DurableNamespace, WorkflowID: planID, RunID: runID}, RequestID: "start:" + planID, WorkflowType: WorkflowDeployment, BuildID: build, Queue: DurableQueue, Input: raw}})
 }
 
-// Decide signals a plan's workflow with a decision. requestID makes a
-// retried request safe: Dispatch accepts each ID once.
+// Decide delivers approval to the build and run stored for this plan.
 func (d *Deployments) Decide(ctx context.Context, planID, requestID string, dec Decision) error {
-	eng, err := d.engine()
-	if err != nil {
-		return err
-	}
-	input, err := json.Marshal(dec)
-	if err != nil {
-		return fmt.Errorf("encode decision: %w", err)
-	}
-	_, err = eng.SignalDurableWorkflow(ctx, durable.SignalRequest{
-		Key:       durable.Key{Namespace: DurableNamespace, WorkflowID: planID, RunID: runID},
-		RequestID: requestID, BuildID: DeploymentBuild, Name: SignalDecision, Input: input,
-	})
-	if errors.Is(err, durable.ErrClosed) || errors.Is(err, durable.ErrNotFound) {
+	e, err := d.planRun(ctx, planID)
+	if errors.Is(err, durable.ErrNotFound) {
 		return ErrNotRunning
 	}
 	if err != nil {
-		return fmt.Errorf("signal deployment workflow: %w", err)
+		return err
 	}
-	return nil
-}
-
-// Cancel stops a plan's workflow, for a plan another one superseded.
-func (d *Deployments) Cancel(ctx context.Context, planID, reason string) error {
-	eng, err := d.engine()
+	raw, err := json.Marshal(dec)
 	if err != nil {
 		return err
 	}
-	_, err = eng.RequestCancelDurableWorkflow(ctx, durable.CancelExecutionRequest{
-		Key:       durable.Key{Namespace: DurableNamespace, WorkflowID: planID, RunID: runID},
-		RequestID: "cancel:" + planID, BuildID: DeploymentBuild, Reason: reason,
-	})
+	err = d.signalRun(ctx, durable.SignalRequest{Key: e.Key, RequestID: requestID, BuildID: e.BuildID, Name: SignalDecision, Input: raw})
 	if errors.Is(err, durable.ErrClosed) || errors.Is(err, durable.ErrNotFound) {
+		return ErrNotRunning
+	}
+	return err
+}
+
+// Cancel routes supersession to the current durable run.
+func (d *Deployments) Cancel(ctx context.Context, planID, reason string) error {
+	e, err := d.planRun(ctx, planID)
+	if errors.Is(err, durable.ErrNotFound) {
 		return nil
 	}
 	if err != nil {
-		return fmt.Errorf("cancel deployment workflow: %w", err)
+		return err
 	}
-	return nil
+	req := durable.CancelExecutionRequest{Key: e.Key, RequestID: "cancel:" + e.WorkflowID + ":" + e.RunID, BuildID: e.BuildID, Reason: reason}
+	if e.BuildID == CapacityBuild {
+		w, werr := d.capacityWorker()
+		if werr != nil {
+			return werr
+		}
+		_, err = w.RequestCancelExecution(ctx, req)
+	} else {
+		eng, eerr := d.engine()
+		if eerr != nil {
+			return eerr
+		}
+		_, err = eng.RequestCancelDurableWorkflow(ctx, req)
+	}
+	if errors.Is(err, durable.ErrClosed) || errors.Is(err, durable.ErrNotFound) {
+		return nil
+	}
+	return err
 }
 
 func (d *Deployments) deployStart(ctx context.Context, _ drt.ActivityInfo, input []byte) ([]byte, error) {
@@ -592,7 +611,7 @@ func (d *Deployments) deployAction(ctx context.Context, info drt.ActivityInfo, i
 	return []byte("{}"), dep.Run(ctx, in.OrgID, in.DeploymentID, in.ActionID, info.HeartbeatDetails(), heartbeat)
 }
 
-func (d *Deployments) deployFinish(ctx context.Context, _ drt.ActivityInfo, input []byte) ([]byte, error) {
+func (d *Deployments) deployFinish(ctx context.Context, info drt.ActivityInfo, input []byte) ([]byte, error) {
 	var in deployInput
 	if err := json.Unmarshal(input, &in); err != nil {
 		return nil, err
@@ -600,6 +619,9 @@ func (d *Deployments) deployFinish(ctx context.Context, _ drt.ActivityInfo, inpu
 	dep, err := d.boundDeployer()
 	if err != nil {
 		return nil, err
+	}
+	if info.Key.Namespace != "" && info.Key.WorkflowID != "" && info.Key.RunID != "" && info.CommandID != "" {
+		ctx = context.WithValue(ctx, finalizationKey{}, finalizationIdentity{key: info.IdempotencyKey(), workflow: info.Key.WorkflowID})
 	}
 	return []byte("{}"), dep.Finish(ctx, in.OrgID, in.DeploymentID, in.Reason)
 }

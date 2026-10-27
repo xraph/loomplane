@@ -1,0 +1,61 @@
+---
+title: Roles and permissions
+description: What each organization role can do, permission by permission, and how API keys and the Warden check fit in.
+---
+
+Loomplane has four roles per organization. They're Warden roles, checked in the service layer on every action, and each includes everything the role below it can do. A permission is named `resource:action`.
+
+## The roles
+
+| Role | Description |
+|---|---|
+| Viewer | Reads everything, changes nothing. Can't see secret values |
+| Developer | Creates projects and environments, analyzes, edits manifests and variables, and requests deployments |
+| Admin | Approves deployments, manages members, cloud accounts and secrets |
+| Owner | Everything, including the organization itself |
+
+Your authsome organization role maps to one of these: `owner` to Owner, `admin` to Admin, `member` to Developer, and anything else to Viewer, so an unexpected role never grants more than reading.
+
+## Permission matrix
+
+An X means the role holds it.
+
+| Permission | Viewer | Developer | Admin | Owner |
+|---|---|---|---|---|
+| `project:read`, `environment:read`, `deployment:read`, `infrastructure:read`, `cloud_account:read`, `member:read`, `variable:read` | X | X | X | X |
+| `destination:read`, `network:read`, `service_backup:read` | X | X | X | X |
+| `project:create`, `project:update` | | X | X | X |
+| `environment:manage` | | X | X | X |
+| `deployment:create` (request a plan) | | X | X | X |
+| `analysis:run` | | X | X | X |
+| `variable:manage` (project and service variables) | | X | X | X |
+| `access_grant:propose` | | X | X | X |
+| `deployment:approve` | | | X | X |
+| `project:delete` | | | X | X |
+| `infrastructure:modify` | | | X | X |
+| `organization_cloud:manage` | | | X | X |
+| `cloud_account:manage` | | | X | X |
+| `secret:manage` | | | X | X |
+| `member:manage` | | | X | X |
+| `repository:connect` (GitHub installations) | | | X | X |
+| `organization_variable:manage` | | | X | X |
+| `service_backup:manage`, `service_restore:manage` | | | X | X |
+| `destination:manage`, `network:manage`, `service_export:manage`, `access_grant:approve`, `access_grant:revoke`, `federation_trust:manage` | | | X | X |
+| `organization:administer` | | | | X |
+| `service_backup:retire` | | | | X |
+
+The `destination`, `network`, `service_export`, `access_grant` and `federation_trust` permissions belong to federation, which isn't ready for production.
+
+A secret variable's value isn't readable by anyone, whatever their role.
+
+## API keys
+
+A key acts as the member who made it, with their role, in their organization, and never more. A read-only key fails every permission that isn't a read. Keys can't manage keys. When a member leaves or loses a role, their keys lose the same rights on the next request.
+
+Every key expires: 90 days by default, at most 366. Keysmith stores a hash, and the key shows once. `GET /api/v1/session` (or `loomctl whoami`) shows which permissions your key has.
+
+## Where this is enforced
+
+The dashboard hides what your role can't do, but the API checks regardless. Another organization's projects, plans, deployments, connections, variables and keys aren't found, which is the same answer as something that doesn't exist. A request's organization comes from the session or key, and the `X-Loomplane-Org` header the dashboard sends only helps a stale tab find out (it gets a 409), since it never selects an organization.
+
+[Organizations and roles](/docs/concepts/organizations-and-roles) covers the people side, and [the security model](/docs/operations/security-model) covers the rest.

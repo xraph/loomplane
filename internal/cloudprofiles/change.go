@@ -31,17 +31,36 @@ type ChangeInput struct {
 
 // EnvironmentChange describes the reviewed work in one environment.
 type EnvironmentChange struct {
-	ProjectID       string      `json:"project_id,omitempty"`
-	EnvironmentID   string      `json:"environment_id"`
-	Environment     string      `json:"environment"`
-	Services        []string    `json:"services"`
-	Summary         PlanSummary `json:"summary"`
-	PlanID          string      `json:"plan_id,omitempty"`
-	DeploymentID    string      `json:"deployment_id,omitempty"`
-	Status          string      `json:"status"`
-	Error           string      `json:"error,omitempty"`
-	ExternalRouting bool        `json:"external_routing"`
-	RoutingEvidence string      `json:"routing_evidence,omitempty"`
+	CompensationMode    string      `json:"compensation_mode,omitempty"`
+	CompensationMessage string      `json:"compensation_message,omitempty"`
+	ProjectID           string      `json:"project_id,omitempty"`
+	EnvironmentID       string      `json:"environment_id"`
+	Environment         string      `json:"environment"`
+	Services            []string    `json:"services"`
+	Summary             PlanSummary `json:"summary"`
+	PlanID              string      `json:"plan_id,omitempty"`
+	DeploymentID        string      `json:"deployment_id,omitempty"`
+	Status              string      `json:"status"`
+	Error               string      `json:"error,omitempty"`
+	ExternalRouting     bool        `json:"external_routing"`
+	RoutingEvidence     string      `json:"routing_evidence,omitempty"`
+	RoutingStatus       string      `json:"routing_status,omitempty"`
+	Routes              []SyncRoute `json:"routes,omitempty"`
+}
+
+// SyncRoute identifies the durable handoff and the DNS record you need to serve.
+type SyncRoute struct {
+	RouteID    string    `json:"route_id"`
+	PrepareID  string    `json:"prepare_id"`
+	CutoverID  string    `json:"cutover_id,omitempty"`
+	ReleaseID  string    `json:"release_id,omitempty"`
+	Status     string    `json:"status"`
+	Message    string    `json:"message,omitempty"`
+	Hostname   string    `json:"hostname"`
+	RecordType string    `json:"record_type,omitempty"`
+	Value      string    `json:"value,omitempty"`
+	TTL        int       `json:"ttl,omitempty"`
+	NotBefore  time.Time `json:"not_before"`
 }
 
 // PlanSummary counts the reviewed provider changes and metadata adoptions.

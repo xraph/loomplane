@@ -4,16 +4,9 @@
 import { useAuth } from "@authsome/ui-react"
 import { useRouterState } from "@tanstack/react-router"
 import {
-  ActivityIcon,
-  CloudIcon,
-  DatabaseIcon,
   CopyIcon,
   FolderGit2Icon,
   KeyboardIcon,
-  LayoutDashboardIcon,
-  LayoutGridIcon,
-  RocketIcon,
-  ServerIcon,
   Settings2Icon,
 } from "lucide-react"
 import { type ComponentProps, useState } from "react"
@@ -22,6 +15,15 @@ import { toast } from "sonner"
 import { messageOf } from "@/client/errors"
 import { useProjectsList } from "@/client/forge/loomplane/hooks"
 import { useQuery } from "@/client/hooks"
+import {
+  ActivityIcon,
+  CloudsIcon,
+  DeploymentsIcon,
+  InfrastructureIcon,
+  OverviewIcon,
+  ProjectsIcon,
+  ServicesIcon,
+} from "@/components/icons"
 import { OrganizationForm } from "@/components/organization-form"
 import { useShell } from "@/components/shell"
 import { NavMain, type NavItem } from "@/components/sidebar/nav-main"
@@ -63,6 +65,7 @@ const settingsPaths = [
   "/members",
   "/variables",
   "/integrations",
+  "/cloud-sign-in",
   "/api-keys",
   "/notifications",
 ]
@@ -87,14 +90,19 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
   const nav: NavItem[] = [
     {
       title: "Overview",
-      icon: <LayoutDashboardIcon />,
+      icon: <OverviewIcon />,
       link: <Link to="/" />,
       isActive: path === "/",
     },
     {
       title: "Deployments",
-      icon: <RocketIcon />,
+      icon: <DeploymentsIcon />,
       isActive: path.startsWith("/deployments"),
+      badge: waiting > 0 && (
+        <span className="rounded-full bg-weld-tint px-1.5 font-mono text-[11px] text-weld-ink tabular-nums">
+          {waiting}
+        </span>
+      ),
       items: [
         {
           title: "All deployments",
@@ -105,43 +113,47 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
           title: "In flight",
           link: <Link to="/deployments" search={{ status: "live" }} />,
           isActive: status === "live",
-          badge: live || undefined,
+          badge: live > 0 && <span className="text-flight-ink">{live}</span>,
         },
         {
           title: "Needs approval",
           link: <Link to="/deployments" search={{ status: "waiting" }} />,
           isActive: status === "waiting",
-          badge: waiting || undefined,
+          badge: waiting > 0 && (
+            <span className="text-weld-ink">{waiting}</span>
+          ),
         },
         {
           title: "Failed",
           link: <Link to="/deployments" search={{ status: "failed" }} />,
           isActive: status === "failed",
-          badge: failed || undefined,
+          badge: failed > 0 && (
+            <span className="text-destructive">{failed}</span>
+          ),
         },
       ],
     },
     {
       title: "Projects",
-      icon: <LayoutGridIcon />,
+      icon: <ProjectsIcon />,
       link: <Link to="/projects" />,
       isActive: path === "/projects",
     },
     {
       title: "Services",
-      icon: <DatabaseIcon />,
+      icon: <ServicesIcon />,
       link: <Link to="/services" />,
       isActive: path === "/services",
     },
     {
       title: "Clouds",
-      icon: <CloudIcon />,
+      icon: <CloudsIcon />,
       link: <Link to="/clouds" />,
       isActive: path.startsWith("/clouds"),
     },
     {
       title: "Infrastructure",
-      icon: <ServerIcon />,
+      icon: <InfrastructureIcon />,
       link: <Link to="/infrastructure" />,
       isActive: path.startsWith("/infrastructure"),
     },
@@ -177,6 +189,11 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
           isActive: path.startsWith("/integrations"),
         },
         {
+          title: "Cloud sign-in",
+          link: <Link to="/cloud-sign-in" />,
+          isActive: path.startsWith("/cloud-sign-in"),
+        },
+        {
           title: "API keys",
           link: <Link to="/api-keys" />,
           isActive: path.startsWith("/api-keys"),
@@ -198,7 +215,7 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
           onNew={can("project:create") ? openNewProject : undefined}
         />
       </SidebarContent>
-      <SidebarFooter>
+      <SidebarFooter className="border-t border-sidebar-border">
         <Account />
       </SidebarFooter>
       <SidebarRail />

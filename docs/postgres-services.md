@@ -12,7 +12,7 @@ In **Services**, you can also deploy PostgreSQL 17 through a checked AWS RDS or 
 
 The form keeps a link to your project if creation fails or takes longer than its wait limit. Once a project exists, use that project to inspect the result. **New service** starts a separate creation and requires a new name. Managed operations can take up to 45 minutes before the form stops waiting; this limit does not cancel a cloud operation.
 
-Managed creation has been checked through the actual API and dashboard against controlled provider endpoints, at desktop and narrow widths. Live cloud creation and recovery remain unqualified. You can also use project manifests or prepare standalone plans with `loomctl`, as shown below. The recovery controls in this guide apply to the Docker and Kubernetes profiles. Managed services keep their provider-native backups separate from Trove exports.
+Managed creation has been checked through the actual API and dashboard against controlled provider endpoints, at desktop and narrow widths. Live cloud creation and recovery remain unqualified. You can also use project manifests or prepare standalone plans with `loomctl`, as shown below. The export and file-restore controls below apply to the Docker and Kubernetes profiles. Managed services keep their provider-native backups separate from Trove exports.
 
 | Connected provider | Existing resource adapters                                       |
 | ------------------ | ---------------------------------------------------------------- |
@@ -27,35 +27,107 @@ RDS saves a creation intent before sending the request, then captures the provid
 
 RDS retries require the original password in Vault. They cannot reset it implicitly or publish a new password. Protected removal also keeps its intent before requesting deletion, so retry can inspect the original final snapshot without sending another delete. Older bindings without a physical ID pin the currently observed database during explicit execution; they cannot prove ownership of an earlier incarnation. These paths have been checked through the actual API, deployment store and Vault against controlled AWS endpoints, including restart and lost responses. Live AWS creation, SQL persistence and snapshot restore remain unqualified.
 
-Cloud SQL deployments save the account, region, resource settings and each native operation before moving to the next setup step. A retry follows the captured operation for instance creation, database creation, user setup or protected removal. Checkpoint failures stop further work. If a request may have reached Google but its operation ID was not saved, Loomplane blocks replay and asks you to reconcile the original operation. Older operation-only checkpoints also need reconciliation. Automatic discovery for these uncertain requests is still pending.
+Cloud SQL deployments save the account, region, resource settings and each native operation before moving to the next setup step. A retry follows the captured operation for instance creation, database creation, user setup or protected removal. Checkpoint failures stop further work.
+
+If a new instance's create response loses its operation ID, Retry can read Google's operation history using the saved request time and original service account. The scan must return every page within its limit of ten pages of 100 operations, with one possible CREATE after that request. The operation must have succeeded, its native time interval must contain the instance's creation time, and the instance must match the saved intent label, placement and engine. Multiple possible creates, missing metadata, provider warnings or failed reads block setup. Loomplane rereads the selected operation and instance, then saves the recovered operation and creation pin before database or user setup. It never sends the create request again.
+
+This discovery uses the native history Google returns. It does not establish how long Google retains that history, or prove ownership after an external recreation whose earlier operation has disappeared. Reconcile externally recreated instances before Retry. A lost database, user or removal operation ID still requires reconciliation because those operation records do not identify the complete original mutation payload. Version 2 checkpoints can follow a captured operation, but cannot discover an unknown one without the original request context.
 
 Cloud SQL saves a creation intent label with each new instance. Before it polls further or creates your database and user, it pins the provider's creation time, project, region and instance name. Retry checks that pin again, including after an app restart. A reused name or a missing original blocks setup and removal. Your bound instance and a resumed user operation require the original password in Vault; a missing password cannot trigger a reset. New services refuse an existing instance without a saved operation or binding.
 
-This pin identifies an observed creation, not a provider-issued immutable UUID. Cloud SQL writes address instances by name, so the checks are fresh reads rather than atomic write preconditions. A replacement between a check and Google's write remains a provider API limitation. Older bindings can capture the currently observed creation during explicit execution, but cannot prove an earlier instance's ownership. Version 1 checkpoints have no creation pin and need reconciliation before retry; their saved operations are retained. Unknown create responses still block replay.
+This pin identifies an observed creation, not a provider-issued immutable UUID. Cloud SQL writes address instances by name, so the checks are fresh reads rather than atomic write preconditions. A replacement between a check and Google's write remains a provider API limitation. Older bindings can capture the currently observed creation during explicit execution, but cannot prove an earlier instance's ownership. Version 1 checkpoints have no creation pin and need reconciliation before retry; their saved operations are retained.
 
-These paths have controlled endpoint and actual API restart tests. Live Google Cloud creation, SQL persistence and restore remain unqualified. Cloud SQL backup inventory and recovery controls are pending. See Google's [instance identity fields](https://docs.cloud.google.com/sql/docs/postgres/admin-api/rest/v1/instances) and [operation identities](https://docs.cloud.google.com/sql/docs/postgres/admin-api/rest/v1/operations).
+These paths have controlled endpoint and actual API restart tests. Live Google Cloud creation, SQL persistence and restore remain unqualified. Cloud SQL backup inventory is available for pinned, reviewed sources; isolated restore controls remain pending. See Google's [instance identity fields](https://docs.cloud.google.com/sql/docs/postgres/admin-api/rest/v1/instances) and [operation identities](https://docs.cloud.google.com/sql/docs/postgres/admin-api/rest/v1/operations).
 
-Cloud SQL final backups remain in your Google Cloud project. Manage or restore them through the [provider's deleted-instance backup controls](https://docs.cloud.google.com/sql/docs/postgres/backup-recovery/manage-backups-deleted-instance). They are separate from the logical backup files stored through Trove. Loomplane's Cloud SQL inventory, isolated native restore controls and live cloud recovery qualification remain pending.
+Cloud SQL final backups remain in your Google Cloud project. Manage or restore them through the [provider's deleted-instance backup controls](https://docs.cloud.google.com/sql/docs/postgres/backup-recovery/manage-backups-deleted-instance). They are separate from the logical backup files stored through Trove. Loomplane can retain their metadata with matching source identity in Cloud snapshots. Isolated native restore controls and live cloud recovery qualification remain pending.
 
 ## Native cloud snapshot history
 
-Open **Cloud snapshots** under **Service recovery** to inspect captured RDS histories in the selected environment. Choose the physical database history, then select **Refresh cloud snapshots**. This reads manual and automated snapshots from the original checked account and region. It does not create or remove a snapshot.
+Open **Cloud snapshots** under **Service recovery** to inspect captured RDS and Cloud SQL histories in the selected environment. Choose the physical database history, then select **Refresh cloud snapshots**. This reads native recovery points from the original checked account and region. It does not create or remove a snapshot.
 
 The history stays after you remove a service binding. Each saved point keeps its native reference and creation time, so a reused snapshot name gets a separate record. A complete scan can mark earlier points **No longer observed**. A partial scan cannot prove that a point disappeared, and a failed refresh preserves the last successful observations. Check the observation time and completeness before relying on the list.
 
-You need service backup read access. The saved managed account review must still match the connection; a changed account or unready credential blocks refresh. Old unpinned databases and Cloud SQL do not yet have qualified inventory. RDS discovery follows up to ten pages of 100 snapshots per refresh, reports an incomplete scan when more exist, and excludes shared and public snapshots.
+When you open recovery for a named service, Cloud snapshots and copy history stay scoped to that resource, including after its live binding is removed. Changing the resource clears the previous page and any open copy review.
+
+Creation times retain the provider's full nanosecond precision for identity and pagination. The `native_point_creation_identity` migration derives an exact key from the retained point JSON and keeps existing point IDs. Stop older API and worker processes before upgrading: their inventory writes use the previous uniqueness constraint. Allow time for the table rewrite and exclusive lock. The migration cannot recover points overwritten before this upgrade, and downgrade refuses while any native point history remains.
+
+You need service backup read access. The saved managed account review must still match the connection; a changed account or unready credential blocks refresh. Old unpinned databases cannot refresh until an explicit execution captures their current identity. RDS discovery follows up to ten pages of 100 snapshots per refresh, reports an incomplete scan when more exist, and excludes shared and public snapshots.
+
+Cloud SQL reads up to ten pages of 100 backups from the saved Google project. Each point must include source settings that match the original creation pin. If a list entry omits those settings, Loomplane reads that backup's own details. It never asks the current instance to prove an old backup's source. A backup from a newer instance that reused the name is excluded.
+
+Missing source proof, unavailable point times, provider warnings or more pages leave the scan partial. Partial and failed scans preserve earlier observations. Only a complete scan can mark an earlier point no longer observed; the record stays in history. Cloud SQL's point time is the backup interval start, not a measured export completion or a promised PITR window. Google encrypts Cloud SQL backups by default, and Loomplane retains the optional KMS key reference. See Google's [backup fields](https://docs.cloud.google.com/sql/docs/postgres/admin-api/rest/v1/Backups), [project backup listing](https://docs.cloud.google.com/sql/docs/postgres/admin-api/rest/v1/Backups/ListBackups) and [backup encryption](https://docs.cloud.google.com/sql/docs/postgres/backup-recovery/backups).
+
+Cloud SQL points retain the provider's absolute expiry time when reported. The dashboard and CLI show missing expiry as not reported, including RDS snapshots without an absolute expiry. Requested retention days do not supply that timestamp. Expired observations stay in history; refresh the original account to inspect current provider metadata before planning recovery. Inventory does not establish that a point can still be restored.
+
+Your Google account needs permission to list and read these backups. A failed permission check leaves saved observations available so you can correct the account and retry. API, CLI, deletion and restart checks use controlled Google endpoints with a real local control-plane database. Live Google Cloud inventory and recovery remain unqualified.
 
 You can read and refresh the same history with the CLI:
 
 ```sh
-loomctl backups native-sources PROJECT_ID --json
+loomctl backups native-sources PROJECT_ID --environment-id ENVIRONMENT_ID --resource DATABASE_NAME --json
 loomctl backups native-inventory SOURCE_ID --limit 50 --json
 loomctl backups native-refresh SOURCE_ID --json
 ```
 
-Pass the response's `next_before` as `--before` to read another source or point page. Saved points are provider metadata, separate from Trove backup files. Snapshot availability is not a tested restore. Isolated native restore, PITR, deletion and retention controls remain unavailable in Loomplane; use your provider's controls until those paths are qualified.
+Pass the response's `next_before` as `--before` to read another source or point page. Saved points are provider metadata, separate from Trove backup files. Snapshot availability is not a tested restore. Native full-backup deletion is available through the API and CLI below. RDS PITR copies use the separate window controls described below.
 
-Live AWS snapshot and recovery qualification remain pending.
+The source and copy list commands accept `--environment-id` and `--resource` independently. Resource names match exactly. Each page and its cursor use the same scope, so a page cannot silently continue into another resource's history. Omit these filters to list the project's retained histories.
+
+For Cloud SQL PostgreSQL 17, open **Cloud snapshots** in the project's recovery screen, then **Review native copy** on a saved point. Choose a project-granted Cloud and a managed Cloud SQL target in a separate recovery project. Review its compute, disk, region and lifetime, then acknowledge charges before creating the copy. A review lasts ten minutes; the copy's requested lifetime can be one to 24 hours. These capacity details do not include a price estimate.
+
+For RDS PostgreSQL 17, choose a managed RDS target in the source account and region. The source must have the saved catalog profile and an encrypted snapshot that fits its reviewed 20 GiB capacity. Recovery creates a new private instance. It does not restore over the source or copy snapshots across accounts or regions.
+
+Configure **Private RDS recovery (optional)** when connecting or replacing the AWS account credential. Supply the recovery VPC, DB subnet group, copy security group and separate verifier security group. The copy group must allow TCP 5432 only from that verifier group, without CIDR or other ingress rules. Your recovery worker needs a private route from that group to the DB subnets. The server checks the groups, owner, VPC, subnet and instance settings before SQL access. Changing these connection settings invalidates an existing target review.
+
+The connection settings are `rds_recovery_vpc`, `rds_recovery_subnet_group`, `rds_recovery_security_group` and `rds_recovery_verifier_group`. Configure all four together. The AWS connection's **Ready** status does not establish the worker route or recovery permissions. Its key also needs the RDS snapshot restore, instance modification, metadata and deletion permissions, EC2 group reads and access to the snapshot's KMS key.
+
+RDS copies use the retained snapshot's encryption key, single-zone capacity and a fixed PostgreSQL 17 parameter group. They disable automated backups. Cleanup skips a final snapshot and deletes only the pinned temporary instance and its automated backups; your original recovery point stays in the account. An explicit AWS authorization rejection remains retryable after you correct access. A lost response stays uncertain and is reconciled without reposting the native request.
+
+You can save and submit the same review with `loomctl`:
+
+```sh
+loomctl backups native-copies review SOURCE_ID POINT_ID --cloud CLOUD_ID --target TARGET_ID --ttl-hours 2 --out recovery-review.json
+loomctl backups native-copies create --review-file recovery-review.json --acknowledge-charges --wait
+loomctl backups native-copies PROJECT_ID --environment-id ENVIRONMENT_ID --resource DATABASE_NAME --limit 25 --json
+loomctl backups native-copies show COPY_ID --wait
+loomctl backups native-copies cleanup COPY_ID --yes --wait
+```
+
+The review file is created with owner-only permissions and will not overwrite an existing file. Keep it if admission loses its response: retrying the same file returns the original copy without extending its expiry. In the dashboard, **Retry same request** does the same. Check retained copy history before starting a separate request.
+
+**Native recovery copies** records status independently of snapshot inventory. A queued or available cloud instance is not SQL proof; the copy needs a recorded verification time. **Clean up copy** requires confirmation. **Cleanup needs attention** keeps the error and offers a retry. Charges can continue after expiry until deletion is confirmed. A revoked placement grant blocks new copy work, but an administrator with current recovery permission can still finish cleanup.
+
+For a succeeded, unexpired copy with recorded SQL proof, **Reader credentials** lets you request a fresh access check. You need backup read, restore management and secret management permissions, plus the unchanged project grant for the recovery target. The check reads the original Vault credential version, confirms the cloud instance identity and authenticates the existing reader login. A missing login or changed privileges blocks access; revealing credentials cannot recreate or repair that login.
+
+```sh
+loomctl backups native-copies credentials COPY_ID --out copy-credentials.json
+```
+
+The CLI creates a new owner-only JSON file and refuses to overwrite one. It does not print the password. The API exposes the same check through `POST /api/v1/native-recovery-copies/COPY_ID/credentials`, with a `no-store` response. The dashboard keeps the password in the open dialog and clears it on close, scope change or permission loss. Cleanup cannot begin while the server checks access.
+
+For Cloud SQL, use the returned database, reader name, password and instance connection name with your own authorized connector identity. For RDS, connect to the returned host and port over the reviewed private route, using `sslmode=verify-full` and the [RDS root certificate bundle](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/UsingWithRDS.SSL.html). Loomplane does not export the cloud account key or administrator password. Revealing credentials does not extend the copy's expiry. Hiding a disclosed password does not revoke it, and an open SQL session can outlive login expiry. Confirm copy removal when you finish.
+
+Native copy API, CLI, Dispatch and Vault checks use a real local control-plane database with controlled Google and AWS endpoints. The RDS success drill includes a control-plane restart, a real reader query, removed-role denial, retained credentials after cleanup denial and a CLI cleanup retry. SQL checks run against a private PostgreSQL fixture; the RDS TLS connector has separate certificate, hostname and private-address tests. Live Cloud SQL restore, IAM/TLS, privilege authority and cost qualification remain unverified; unsafe inherited SQL privileges cause verification to fail. Browser rendering of the native-copy and credential dialogs remains unverified. Live AWS snapshot and recovery qualification also remain pending.
+
+## Restore RDS to an explicit time
+
+In **Cloud snapshots**, choose the retained source history and **Read PITR window**. Loomplane reads the actual earliest and latest provider times using the original physical database ID. Choose a whole UTC second from the earliest time up to, but not including, the latest time. There is no automatic latest-time selection. Review the destination, capacity, lifetime and charges before creating the copy.
+
+```sh
+loomctl backups native-pitr SOURCE_ID --json
+loomctl backups native-copies review SOURCE_ID WINDOW_POINT_ID --restore-time 2026-10-22T12:00:03Z --cloud CLOUD_ID --target TARGET_ID --ttl-hours 2 --out pitr-review.json
+loomctl backups native-copies create --review-file pitr-review.json --acknowledge-charges --wait
+```
+
+Use the returned `point_id` as `WINDOW_POINT_ID`. The API reads the same window at `GET /api/v1/native-recovery-sources/SOURCE_ID/pitr-window`. Send `restore_time` with the explicit UTC timestamp to the existing point `copy-review` endpoint. The signed review and retained copy include that time. Retrying a request cannot change it or extend its expiry. Bounds are checked again before the first native creation request; an expired window cannot authorize a new copy. Existing copies keep their reader-access and cleanup paths after the source window expires.
+
+This path supports the saved encrypted RDS PostgreSQL 17 profile in the source account and region. The temporary instance uses 20 GiB gp3, 3,000 IOPS, 125 MiB/s throughput and a storage ceiling equal to its allocation. The copy security group must have no outbound rules as well as verifier-only ingress. This fences inherited database jobs before SQL verification. Configure and verify that private worker route before use. The AWS identity needs automated-backup metadata and point-in-time restore permissions, plus the existing copy modification, metadata, deletion and KMS access.
+
+The exact 20 GiB gp3 request still needs live AWS qualification. The [restore API reference](https://docs.aws.amazon.com/AmazonRDS/latest/APIReference/API_RestoreDBInstanceToPointInTime.html) requires an IOPS value when requesting gp3, while the [storage table](https://docs.aws.amazon.com/AmazonRDS/latest/UserGuide/CHAP_Storage.html#gp3-storage) marks provisioned performance below 400 GiB as inapplicable. Acceptance of the explicit baseline fields remains unresolved. A controlled endpoint accepting them does not establish that AWS will.
+
+PITR windows are separate from snapshot history and full-backup retention. Loomplane does not prune provider-managed recovery logs. Cloud SQL PITR remains unavailable with the current recovery profile: its standard clone operation inherits settings and cannot atomically apply the required isolation. A Cloud SQL source with PITR enabled is not evidence that Loomplane can safely create a PITR copy.
+
+The connected acceptance drill uses controlled AWS endpoints and a private PostgreSQL fixture. It checks the exact submitted timestamp, retained intent, worker reconciliation, SQL proof and cleanup. It does not establish that AWS returned timestamp-correct data. Live AWS PITR, IAM/KMS, routing, inherited privileges, costs and desktop/narrow browser rendering remain unverified.
 
 ## Persistence and backup storage
 
@@ -131,7 +203,7 @@ Each new standalone RDS or Cloud SQL PostgreSQL 17 plan saves a versioned manage
 | Recovery logs     | 7 days through RDS backup retention           | 7 days, point-in-time recovery enabled                        |
 | Removal           | Final snapshot and retained automated backups | Final backup requested for 30 days                            |
 
-These are creation requests. They do not establish the actual retained recovery window or a successful restore, and they do not include a Loomplane point-in-time restore control. A Cloud SQL backup count is not a duration. RDS final snapshots have no Loomplane expiry; your account controls their lifetime. Provider availability and quotas can reject a requested class or region.
+These are creation requests. They do not establish the actual retained recovery window or a successful restore, so you must read the current provider window before reviewing an RDS PITR copy. A Cloud SQL backup count is not a duration. RDS final snapshots have no Loomplane expiry; your account controls their lifetime. Provider availability and quotas can reject a requested class or region.
 
 Existing databases without a managed profile keep their original settings when you replan. Loomplane does not label them with a new profile or silently reconfigure their storage and backups.
 
@@ -181,6 +253,48 @@ loomctl restores delete RESTORE_ID --yes
 Reuse a request ID after a lost response to recover the original operation. Use a new ID for a new backup or restore. Failed backups can be retried with `loomctl backups retry BACKUP_ID`. Add `--disable` to the policy command to stop its schedule.
 
 With `--wait`, the CLI follows the persisted operation for up to 45 minutes. Set `--timeout 10m` to change that limit. Timeouts must be positive; invalid values are rejected before any API call. A timeout stops waiting and leaves the server job running. With `--json`, the CLI preserves the operation ID and its earlier response, then exits nonzero. Follow that ID with `show --wait` to read current status. Failed operations also return a nonzero exit status and retain their JSON result for inspection. `--json` outputs a single JSON value without a request-ID prefix; request errors include the reusable key.
+
+## Delete eligible native backups
+
+You can preview retention for a captured RDS or Cloud SQL source, then request permanent deletion of one eligible independent backup:
+
+```sh
+loomctl backups native-retention preview SOURCE_ID --older-than-days 30 --keep-last 7 --json
+loomctl backups native-retention delete SOURCE_ID POINT_ID --older-than-days 30 --keep-last 7 --request-id native-delete-001 --yes --wait
+loomctl backups native-retention show DELETION_ID --json
+loomctl backups native-retention history DELETION_ID --limit 50 --json
+```
+
+The source needs a complete, fresh inventory and a strictly newer point with recorded SQL verification. Keep counts protect the newest usable independent backups. Active recovery copies and the witness for an accepted deletion stay protected. A point exactly at the age cutoff stays. This selector supports RDS manual snapshots and Cloud SQL ON_DEMAND/FINAL backups. It does not prune provider-managed automated chains or PITR logs.
+
+Only an organization owner can request deletion. Admission permanently blocks that point from new recovery copies, even if the provider response is lost. The worker records intent before sending a native delete, rechecks the captured source and point identities, then confirms absence. An uncertain response is reconciled against the original point without posting another delete. A confirmed native rejection requires an explicit retry by the original requesting owner:
+
+```sh
+loomctl backups native-retention retry DELETION_ID --yes --wait
+```
+
+Deletion history remains scoped to the captured source. Read-only access permits previews and status, not deletion or retry. In **Service recovery**, choose the captured cloud history and open **Review native retention** to inspect decisions and deletion history. You can also enable a separate automatic native retention policy as described below. These operations use the provider's native backup storage; Trove export retention remains separate.
+
+Provider deletion tests use controlled AWS and Google endpoints. The RDS API/CLI/Dispatch drill uses a real control-plane database and a private PostgreSQL SQL verifier; it covers a denied native delete, explicit retry and the retained restore barrier. Dashboard workflows have JSDOM checks. Live cloud deletion and desktop/narrow browser rendering remain unverified.
+
+## Automatic native retention
+
+In **Review native retention**, update the age/count preview, then choose **Enable automatic native deletion**. Confirm the displayed rule. The source needs a complete inventory and a SQL-verified witness. Saving a backup schedule does not enable deletion.
+
+The minute reconciliation job selects at most one oldest eligible independent backup per due evaluation. It checks the policy revision, current owner authority and source identity again during admission. An unresolved deletion holds that source. A failed job needs attention before another point can be selected; ordinary policy failures wait an hour before evaluation resumes.
+
+**Pause native retention** stops future selections and preserves the saved rule. You can pause when cloud reads are unavailable. Accepted deletions may still finish. An enabled policy keeps a source-account reference; after pause, each pending deletion keeps its own reference until completion. Pausing does not remove the original backup or clear a deletion barrier.
+
+**Native policy changes** shows committed revisions and authorizing owners. If a save is uncertain or conflicts with another revision, inspect the current policy before retrying. Readers can inspect policies and history. Only organization owners can change them.
+
+```sh
+loomctl backups native-retention policy SOURCE_ID --json
+loomctl backups native-retention policy-set SOURCE_ID --revision 0 --older-than-days 30 --keep-last 7 --yes --json
+loomctl backups native-retention policy-history SOURCE_ID --limit 50 --json
+loomctl backups native-retention policy-pause SOURCE_ID --yes --json
+```
+
+Revision zero creates a policy; updates use its observed revision. The controlled RDS drill exercises real minute reconciliation, API, CLI and Dispatch, including a native denial, pause, retry and SQL witness. It does not qualify live provider permissions, cloud backup bytes or browser layouts.
 
 ## Preview backup retention
 
@@ -266,6 +380,10 @@ Worker loss keeps an accepted point unavailable for restore. On the Docker/local
 | Create a recovery copy        | `POST /api/v1/service-backups/:id/restore`                                                                     | `service_restore:manage`                        |
 | List/read copies              | `GET /api/v1/projects/:id/service-restores`, `GET /api/v1/service-restores/:id`                                | `service_backup:read`                           |
 | Remove a copy                 | `DELETE /api/v1/service-restores/:id`                                                                          | `service_restore:manage`                        |
+| Review a native copy          | `POST /api/v1/native-recovery-sources/:id/points/:pointId/copy-review`                                         | `service_restore:manage`                        |
+| Admit a native copy           | `POST /api/v1/native-recovery-copies`                                                                          | `service_restore:manage`                        |
+| List/read native copies       | `GET /api/v1/projects/:id/native-recovery-copies`, `GET /api/v1/native-recovery-copies/:id`                    | `service_backup:read`                           |
+| Clean up a native copy        | `DELETE /api/v1/native-recovery-copies/:id`                                                                    | `service_restore:manage`                        |
 
 Backup creation accepts `environment`, `resource` and `request_id`. Restore creation accepts `request_id`. Retirement accepts `request_id` and a `policy` with `older_than_days` and `keep_last`; retry accepts a new `request_id`. Retirement lists and history accept `before` and `limit` (1 to 100). Project retirement lists also accept `backup_id` to resolve one recovery point without scanning other histories. Backup schedule updates accept `environment`, `resource`, `every_hours` and `enabled`. Retention policy updates accept the observed `revision`, `policy` (`older_than_days`, `keep_last`) and `enabled`. Retention history accepts `before` and `limit` (1 to 100). Requests and worker execution are scoped to the recorded organization and project. Scheduled requests recheck the policy creator's permission.
 
@@ -308,15 +426,13 @@ Put the result in a JSON file that only its owner can read (mode `0600`), at an 
 }
 ```
 
-Then point Loomplane at the file with `dbgateway.signing_key_file` in its configuration, or set `LOOMPLANE_DBGATEWAY_SIGNING_KEY_FILE`. The file has to be a regular file, not a symlink, no bigger than 16 KiB, with exactly those four fields. The path has to be clean: no `..`, and no doubled or trailing slashes. `not_before` must come first. Give yourself a long window, because the key only signs between the two dates.
+Then point Loomplane at the file with `dbgateway.signing_key_file` in its configuration, or set `LOOMPLANE_DBGATEWAY_SIGNING_KEY_FILE`. The file has to be a regular file, not a symlink, no bigger than 16 KiB, with exactly those four fields. (A version 2 file holds a list of keys instead. You'll want that when you rotate, as [Rotate the signing key](#rotate-the-signing-key) shows.) The path has to be clean: no `..`, and no doubled or trailing slashes. `not_before` must come first. Give yourself a long window, because the key only signs between the two dates.
 
 Loomplane reads the file once, at startup. If the file itself is wrong, Loomplane won't start. You get `dbgateway.signing_key_file: invalid database gateway signing key configuration` and nothing more, so the message can't leak the file. Leave the setting empty and Loomplane starts, but the gateway endpoints answer 503 and a deployment that includes a gateway fails.
 
-A key outside its window is treated the same way as no key, and Loomplane still starts. Past `not_after`, it logs an error at startup, the gateway endpoints answer 503 with a message saying the key has expired, and a deployment that includes a gateway fails with that reason. That also happens the moment the key expires while Loomplane is running: it stops signing snapshots then, and never signs one with an expired key. Before `not_before` you get the same, saying the key isn't valid yet, until that date passes. Deployed gateways keep serving the routes they last applied, but they won't hear about a changed password or a paused route until a valid key signs again. From 30 days before `not_after`, Loomplane logs a warning at every start. Replace the key before then, and follow the steps below to hand the new one to your gateways.
+A key outside its window is treated the same way as no key, and Loomplane still starts. Past `not_after`, it logs an error at startup, the gateway endpoints answer 503 with a message saying the key has expired, and a deployment that includes a gateway fails with that reason. That also happens the moment the key expires while Loomplane is running: it stops signing snapshots then, and never signs one with an expired key. Before `not_before` you get the same, saying the key isn't valid yet, until that date passes. Deployed gateways keep serving the routes they last applied, but they won't hear about a changed password or a paused route until a valid key signs again. From 30 days before the last key's `not_after`, Loomplane logs a warning at every start. Add the next key before then, as [Rotate the signing key](#rotate-the-signing-key) describes.
 
-Gateways are handed the public half of the key when they're deployed, and nothing sends it again on its own. If you replace the key file and restart Loomplane, a plan still shows `db-gateway` as unchanged, because none of its configuration moved, and the gateway you deployed keeps trusting the old key. It refuses every snapshot signed with the new one. It carries on serving the routes it already has, but it never hears about a changed password or a paused route.
-
-A gateway gets the current key whenever a plan creates, updates or replaces it. An update happens when its planned configuration changes: the resources behind it, its region or provider, the DNS zone its names live in, or the gateway's own code, which changes when you upgrade to a Loomplane whose gateway differs. Opting another Postgres resource in, or one out, is the smallest change that does it, and it redeploys only the apps that need that resource. If there's no change you want to make, the only other way is to remove the gateway and add it back. Set `gateway: false` on every resource, approve that plan, then set them back to `true` and approve the next. Removing it deletes its record and keys, so adding it back mints new ones and a new gateway. It costs two deployments, each redeploying every app that needs one of those databases, and until the second finishes an app that can only reach its database through the gateway has no database.
+Gateways are handed the public halves of the keys when they're deployed. The plan records which keys those are, so when they change (you add one, renew one, or one expires) the next plan shows `db-gateway` as an update, and deploying it hands the gateway the keys Loomplane has now. The apps behind it stay as they are, since its address doesn't move. If the keys change between making a plan and deploying it, the deployment fails and asks you to plan again, so a gateway never runs with keys other than the ones you reviewed. The first plan after you upgrade to a Loomplane that records them updates each gateway once, for the same reason.
 
 A gateway also has to reach Loomplane to fetch its routes, and it does that at your `public_url`. That has to be https (plain http is accepted for `localhost` only), or the deployment is refused.
 
@@ -345,6 +461,29 @@ The gateway names each database from its resource and your DNS zone, as `<resour
 Create a plan and review it. Turning the gateway on adds one `db-gateway` service, deploys it before anything that needs a resource behind it, and redeploys those apps with their new variables. Taking a resource off the gateway redeploys them too, and they go back to the database's own address before the gateway stops serving it. A new region or DNS zone renames every host behind the gateway, so the same plan that updates the gateway redeploys every app that reaches a database through it. An app you've held back can't follow, and the plan stops with `db-gateway-held-user` until you release it.
 
 Opting a database in changes `DATABASE_URL` for every service that needs it, not just the Vercel app. Apps on Cloud Run and ECS get the gateway's host in `DATABASE_URL` too, so a service that connects over TCP stops working until it reads `DATABASE_URL_DIRECT` instead. The next section says where that comes from. The plan stops with `db-gateway-held-user` if it would take a resource off the gateway while a [held](manifest.md#held) app, one the plan leaves alone, still reaches it there.
+
+### Rotate the signing key
+
+You rotate by running the old key and the new one side by side for a while. A version 2 key file holds both:
+
+```json
+{
+  "version": 2,
+  "keys": [
+    {"private_key": "<the old key>", "not_before": "2026-10-01T00:00:00Z", "not_after": "2028-10-01T00:00:00Z"},
+    {"private_key": "<the new key>", "not_before": "2028-09-01T00:00:00Z", "not_after": "2030-10-01T00:00:00Z"}
+  ]
+}
+```
+
+Each entry takes the same three fields as a version 1 file, and a file holds up to eight. Loomplane signs with the newest key whose window is open, the one with the latest `not_before`, and hands gateways every key that hasn't expired, including one whose window hasn't opened yet. So a rotation goes like this:
+
+1. Make a new key with `openssl rand -base64 32` and add it beside the old one. Give it a `not_before` far enough out that you can deploy every environment with a gateway before it arrives, and let its window overlap the old key's, or Loomplane has nothing to sign with in the gap. Restart Loomplane.
+2. Plan and deploy each environment that has a gateway. The plan shows `db-gateway` as an update. The redeployed gateway trusts both keys, and Loomplane is still signing with the old one, so it gets its routes straight away.
+3. When the new key's `not_before` passes, Loomplane signs with it from then on, without a restart. Gateways from step 2 take what it signs. A gateway you missed refuses it and keeps serving the routes it has, the same as one whose key expired, until you deploy it.
+4. Take the old key out of the file and restart Loomplane, or just let it expire. Either way the next plan redeploys each gateway trusting the new key alone. There's no hurry: a gateway ignores a key that has expired.
+
+To extend a key rather than replace it, add the same `private_key` again with a later window, and follow the same steps. A gateway takes a snapshot while any window of that key is open.
 
 ### Connect from Vercel
 

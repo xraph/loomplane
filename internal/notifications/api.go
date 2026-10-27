@@ -130,13 +130,16 @@ func (s *Service) List(ctx context.Context, p security.Principal) (NotificationL
 		if err != nil {
 			return out, err
 		}
-		if !s.projectExists(ctx, p.OrgID, n.Metadata["project_id"]) {
-			continue
-		}
-		if err = s.require(ctx, p, security.ProjectRead, n.Metadata["project_id"]); errors.Is(err, security.ErrForbidden) {
-			continue
-		} else if err != nil {
-			return out, err
+		// A connection notice belongs to the organization, not a project.
+		if n.Metadata["kind"] != kindConnection {
+			if !s.projectExists(ctx, p.OrgID, n.Metadata["project_id"]) {
+				continue
+			}
+			if err = s.require(ctx, p, security.ProjectRead, n.Metadata["project_id"]); errors.Is(err, security.ErrForbidden) {
+				continue
+			} else if err != nil {
+				return out, err
+			}
 		}
 		var emailState string
 		if err := s.pg.QueryRow(ctx, `SELECT email_state FROM loomplane_notification_outbox WHERE id=$1 AND org_id=$2`, n.Metadata["outbox_id"], p.OrgID).Scan(&emailState); err != nil {
@@ -164,14 +167,27 @@ func (s *Service) MarkRead(ctx context.Context, p security.Principal, value stri
 	if err != nil {
 		return ErrNotFound
 	}
-	if n.AppID != s.cfg.Identity.AppID || n.UserID != p.UserID || n.Metadata["org_id"] != p.OrgID || !s.projectExists(ctx, p.OrgID, n.Metadata["project_id"]) {
+	if n.AppID != s.cfg.Identity.AppID || n.UserID != p.UserID || n.Metadata["org_id"] != p.OrgID {
 		return ErrNotFound
 	}
-	if err := s.require(ctx, p, security.ProjectRead, n.Metadata["project_id"]); err != nil {
-		return err
+	if n.Metadata["kind"] != kindConnection {
+		if !s.projectExists(ctx, p.OrgID, n.Metadata["project_id"]) {
+			return ErrNotFound
+		}
+		if err := s.require(ctx, p, security.ProjectRead, n.Metadata["project_id"]); err != nil {
+			return err
+		}
 	}
 	return s.mailStore.MarkRead(ctx, parsed)
 }
+
+// webhookEventTypes is every event a webhook endpoint hears. Endpoints made
+// before connection.sign_in_needed existed get it from the
+// cloud_sign_in_webhooks migration.
+func webhookEventTypes() []string {
+	return []string{"deployment.succeeded", "deployment.failed", connectionSignInNeeded}
+}
+
 func publicEndpoint(ep *endpoint.Endpoint) WebhookEndpoint {
 	return WebhookEndpoint{ID: ep.ID.String(), URL: ep.URL, Description: ep.Description, Enabled: ep.Enabled, CreatedAt: ep.CreatedAt}
 }
@@ -219,7 +235,7 @@ func (s *Service) CreateEndpoint(ctx context.Context, p security.Principal, in W
 	if count >= 100 {
 		return WebhookEndpointSecret{}, ErrInvalid
 	}
-	ep := &endpoint.Endpoint{ID: relayid.NewEndpointID(), TenantID: p.OrgID, ScopeAppID: s.cfg.Identity.AppID, ScopeOrgID: p.OrgID, URL: in.URL, Description: in.Description, Secret: signature.GenerateSecret(), EventTypes: []string{"deployment.succeeded", "deployment.failed"}, RateLimit: 5, Enabled: true}
+	ep := &endpoint.Endpoint{ID: relayid.NewEndpointID(), TenantID: p.OrgID, ScopeAppID: s.cfg.Identity.AppID, ScopeOrgID: p.OrgID, URL: in.URL, Description: in.Description, Secret: signature.GenerateSecret(), EventTypes: webhookEventTypes(), RateLimit: 5, Enabled: true}
 	ep.CreatedAt = time.Now().UTC()
 	ep.UpdatedAt = ep.CreatedAt
 	if err := s.relayStore.CreateEndpoint(ctx, ep); err != nil {

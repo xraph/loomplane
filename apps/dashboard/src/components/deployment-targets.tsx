@@ -17,6 +17,8 @@ import type {
   Provider,
 } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
+import { CloudSQLApplicationFields } from "@/components/cloudsql-application-fields"
+import { cloudSQLApplicationNetworkValid } from "@/lib/cloudsql-network"
 import { QueryError } from "@/components/query-error"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
@@ -167,7 +169,7 @@ export function DeploymentTargets({
           <Card size="sm">
             <CardHeader>
               <CardTitle>Accounts</CardTitle>
-              <CardDescription className="text-xs">
+              <CardDescription className="text-[12.5px]">
                 Where {environment}'s services and resources will be installed.
               </CardDescription>
             </CardHeader>
@@ -218,6 +220,18 @@ function TargetRow({
   const dirty = Object.keys(changes).length > 0
   const disabled = !can("project:update") || save.isPending
   useDeploymentDraft(dirty, onPendingChange)
+  const cloudRun = row.section === "services" && value.provider === "cloud-run"
+  const route = value.cloudSqlNetwork ?? {
+    consumerProject: "",
+    network: "",
+    subnetwork: "",
+  }
+  const routeEmpty =
+    !route.consumerProject && !route.network && !route.subnetwork
+  const routeValid =
+    !cloudRun ||
+    routeEmpty ||
+    cloudSQLApplicationNetworkValid(route, value.region)
   const owned =
     row.section === "services" &&
     (selected?.cloud === "server" || selected?.cloud === "kubernetes")
@@ -231,6 +245,7 @@ function TargetRow({
     setSaved(false)
   }
   const submit = async () => {
+    if (!routeValid) return
     setError(undefined)
     onPendingChange?.(true)
     try {
@@ -255,16 +270,19 @@ function TargetRow({
       onPendingChange?.(false)
     }
   }
-  if (value.cloudTarget)
+  if (value.cloudTarget || value.cloudTags?.length)
     return (
       <section
         aria-label={`${row.name} configuration`}
         className="flex flex-wrap items-center justify-between gap-2 border-b pb-3 last:border-0"
       >
         <div className="min-w-0">
-          <p className="text-sm font-medium">{row.name}</p>
+          <p className="text-[13px] font-medium">{row.name}</p>
           <p className="text-xs text-muted-foreground">
-            Cloud target: {value.cloudTarget} · {environment}
+            {value.cloudTarget
+              ? `Cloud target: ${value.cloudTarget}`
+              : `Cloud tags: ${value.cloudTags!.join(", ")}`}{" "}
+            · {environment}
           </p>
         </div>
         <Link
@@ -314,7 +332,7 @@ function TargetRow({
       className="grid min-w-0 gap-3 border-b pb-3 last:border-0 last:pb-0"
     >
       <div className="flex items-center gap-2.5">
-        <span className="flex size-8 shrink-0 items-center justify-center rounded-lg border bg-muted/30">
+        <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-muted text-muted-foreground">
           {row.section === "resources" ? (
             <DatabaseIcon className="size-4" />
           ) : row.kind === "static-site" || row.kind === "web-app" ? (
@@ -324,7 +342,7 @@ function TargetRow({
           )}
         </span>
         <div className="min-w-0 flex-1">
-          <p className="text-sm font-medium break-words">{row.name}</p>
+          <p className="text-[13px] font-medium break-words">{row.name}</p>
           <p className="font-mono text-xs break-all text-muted-foreground">
             {row.entry.source ?? row.kind}
           </p>
@@ -342,7 +360,7 @@ function TargetRow({
             variant="outline"
 
             aria-label={`Save ${row.name} placement`}
-            disabled={disabled || (value.enabled && !offered)}
+            disabled={disabled || !routeValid || (value.enabled && !offered)}
             onClick={() => void submit()}
           >
             Save
@@ -350,7 +368,7 @@ function TargetRow({
         )}
       </div>
       <div className="grid min-w-0 gap-2 sm:grid-cols-2">
-        <label className="grid min-w-0 gap-1 text-xs text-muted-foreground">
+        <label className="grid min-w-0 gap-1.5 text-[12.5px] font-medium">
           Infrastructure
           <Select
             value={value.provider || null}
@@ -359,6 +377,15 @@ function TargetRow({
               change({
                 provider: v,
                 region: "",
+                ...(value.cloudSqlNetwork
+                  ? {
+                      cloudSqlNetwork: {
+                        consumerProject: "",
+                        network: "",
+                        subnetwork: "",
+                      },
+                    }
+                  : {}),
                 ...(owned || v === "server" || v === "kubernetes"
                   ? { target: "", endpoint: {} }
                   : {}),
@@ -395,10 +422,10 @@ function TargetRow({
             </SelectContent>
           </Select>
         </label>
-        <label className="grid min-w-0 gap-1 text-xs text-muted-foreground">
+        <label className="grid min-w-0 gap-1.5 text-[12.5px] font-medium">
           Region
           <Input
-            className="h-8 text-sm"
+            className="h-8 text-[13px]"
             aria-label={`Region for ${row.name}`}
             value={value.region}
             placeholder={
@@ -417,6 +444,22 @@ function TargetRow({
           </datalist>
         </label>
       </div>
+      {cloudRun && (
+        <>
+          <CloudSQLApplicationFields
+            name={row.name}
+            value={route}
+            disabled={disabled}
+            onChange={(cloudSqlNetwork) => change({ cloudSqlNetwork })}
+          />
+          {!routeValid && (
+            <p role="alert" className="text-xs text-destructive">
+              Choose a canonical VPC and subnet in the same host project and
+              service region, or clear both fields to restore inheritance.
+            </p>
+          )}
+        </>
+      )}
       {owned && (
         <div className="grid min-w-0 gap-2 sm:grid-cols-2 xl:grid-cols-3">
           <ConnectionChoice
@@ -452,7 +495,7 @@ function TargetRow({
             automatic="No registry selected"
             onChange={(registry) => buildChange({ registry })}
           />
-          <label className="grid gap-1 text-xs text-muted-foreground">
+          <label className="grid gap-1.5 text-[12.5px] font-medium">
             Build context
             <Input
               className="h-8 text-xs"
@@ -463,7 +506,7 @@ function TargetRow({
               onChange={(e) => buildChange({ context: e.target.value })}
             />
           </label>
-          <label className="grid gap-1 text-xs text-muted-foreground sm:col-span-2">
+          <label className="grid gap-1.5 text-[12.5px] font-medium sm:col-span-2">
             Existing image (optional)
             <Input
               className="h-8 min-w-0 font-mono text-xs"
@@ -476,7 +519,7 @@ function TargetRow({
           </label>
           {row.kind !== "worker" && (
             <>
-              <label className="grid gap-1 text-xs text-muted-foreground">
+              <label className="grid gap-1.5 text-[12.5px] font-medium">
                 Readiness path
                 <Input
                   className="h-8 text-xs"
@@ -488,7 +531,7 @@ function TargetRow({
                 />
               </label>
               {selected?.cloud === "server" ? (
-                <label className="grid gap-1 text-xs text-muted-foreground">
+                <label className="grid gap-1.5 text-[12.5px] font-medium">
                   Published host port
                   <Input
                     className="h-8 text-xs"
@@ -510,7 +553,7 @@ function TargetRow({
                 </label>
               ) : (
                 <>
-                  <label className="grid gap-1 text-xs text-muted-foreground">
+                  <label className="grid gap-1.5 text-[12.5px] font-medium">
                     Public hostname
                     <Input
                       className="h-8 text-xs"
@@ -523,7 +566,7 @@ function TargetRow({
                       }
                     />
                   </label>
-                  <label className="grid gap-1 text-xs text-muted-foreground">
+                  <label className="grid gap-1.5 text-[12.5px] font-medium">
                     Ingress class
                     <Input
                       className="h-8 text-xs"
@@ -536,7 +579,7 @@ function TargetRow({
                       }
                     />
                   </label>
-                  <label className="grid gap-1 text-xs text-muted-foreground">
+                  <label className="grid gap-1.5 text-[12.5px] font-medium">
                     TLS secret
                     <Input
                       className="h-8 text-xs"
@@ -605,7 +648,7 @@ function ConnectionChoice({
 }) {
   const found = connections.find((c) => c.id === value)
   return (
-    <div className="grid min-w-0 gap-1 text-xs text-muted-foreground">
+    <div className="grid min-w-0 gap-1.5 text-[12.5px] font-medium">
       <span>{label}</span>
       <Select
         value={value || "automatic"}
@@ -700,7 +743,7 @@ export function EnvironmentAccounts({
               {ready.length === 0 ? (
                 <Link
                   to="/integrations"
-                  className="text-sm underline underline-offset-4"
+                  className="text-[13px] underline underline-offset-4"
                 >
                   Connect {cloudLabel(cloud)}
                 </Link>

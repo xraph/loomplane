@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"os"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -145,7 +146,7 @@ func TestCompute_fresh(t *testing.T) {
 	if api.Service.Port != 8080 || api.Service.Image != "services/api/Dockerfile" || api.Service.Scale.Max != 3 {
 		t.Errorf("api config = %+v", api.Service)
 	}
-	if len(api.Service.Env) != 1 || api.Service.Env[0] != (EnvLink{Key: "DATABASE_URL", From: "db", Subject: ResourceSubject}) {
+	if len(api.Service.Env) != 1 || !reflect.DeepEqual(api.Service.Env[0], EnvLink{Key: "DATABASE_URL", From: "db", Subject: ResourceSubject}) {
 		t.Errorf("api env = %+v", api.Service.Env)
 	}
 
@@ -2644,5 +2645,66 @@ links:
 `, "production")
 	if !slices.Contains(codes(r.Problems), "private-across-clouds:worker") {
 		t.Fatalf("problems %v", codes(r.Problems))
+	}
+}
+
+// envKeyPlan is a service on a server that needs a MariaDB database and a
+// Valkey cache on the same server.
+func envKeyPlan(t *testing.T, bindings ...*Binding) *Result {
+	t.Helper()
+	doc := "version: 1\nservices:\n  api: {source: cmd/api, provider: server, target: " + targetA + ", public: false, needs: [db, cache]}\n" +
+		"resources:\n  db: {kind: mariadb, provider: server, target: " + targetA + "}\n  cache: {kind: valkey, provider: server, target: " + targetA + "}\n"
+	connections := infrastructureConnections(t)
+	connections[0].Details["architecture"] = "arm64"
+	return Compute(Input{
+		Environment: "production", Graph: infrastructureGraph(), Manifest: parse(t, doc),
+		Providers: providers.Registry(), Connections: connections, Bindings: bindings,
+	})
+}
+
+func TestMariaDBAndValkeyConsumersGetConventionalKeys(t *testing.T) {
+	r := envKeyPlan(t)
+	if len(r.Problems) != 0 {
+		t.Fatalf("problems: %+v", r.Problems)
+	}
+	got := action(t, r, "service:api").Service.Env
+	for _, want := range []EnvLink{
+		{Key: "DATABASE_URL", From: "db", Subject: ResourceSubject},
+		{Key: "REDIS_URL", From: "cache", Subject: ResourceSubject},
+	} {
+		if !slices.ContainsFunc(got, func(e EnvLink) bool { return reflect.DeepEqual(e, want) }) {
+			t.Errorf("api env lacks %+v: %+v", want, got)
+		}
+	}
+	if len(got) != 2 {
+		t.Errorf("api env = %+v, want only the two conventional variables", got)
+	}
+	if slices.Contains(codes(r.Warnings), "env-key-renamed:api") {
+		t.Errorf("a new service was warned about a rename: %v", codes(r.Warnings))
+	}
+}
+
+func TestDeployedConsumerKeepsLegacyKeyWithWarning(t *testing.T) {
+	cfg, err := json.Marshal(ServiceConfig{Env: []EnvLink{
+		{Key: "DB_URL", From: "db", Subject: ResourceSubject},
+		{Key: "CACHE_URL", From: "cache", Subject: ResourceSubject},
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	live := &Binding{ID: "binding", Name: "api", Subject: ServiceSubject, Provider: "server", ConnectionID: targetA, ExternalID: "ext-api", Config: cfg}
+	r := envKeyPlan(t, live)
+	env := action(t, r, "service:api").Service.Env
+	for _, key := range []string{"DB_URL", "DATABASE_URL", "CACHE_URL", "REDIS_URL"} {
+		if !slices.ContainsFunc(env, func(e EnvLink) bool { return e.Key == key }) {
+			t.Errorf("api env lacks %s: %+v", key, env)
+		}
+	}
+	w := warning(r, "env-key-renamed", "api")
+	if w == nil {
+		t.Fatalf("no env-key-renamed warning: %v", codes(r.Warnings))
+	}
+	if !strings.Contains(w.Message, "DB_URL") || !strings.Contains(w.Message, "DATABASE_URL") {
+		t.Errorf("message = %q", w.Message)
 	}
 }

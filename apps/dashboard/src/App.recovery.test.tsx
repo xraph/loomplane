@@ -11,6 +11,10 @@ vi.mock("@/lib/router", async (original) => ({
   ...(await original<typeof import("@/lib/router")>()),
   usePath: () => route.path,
 }))
+// The shared frame renders its own <main>; this test is about the guard.
+vi.mock("@/components/auth-layout", () => ({
+  AuthLayout: ({ children }: { children: React.ReactNode }) => <>{children}</>,
+}))
 vi.mock("@tanstack/react-router", async (original) => ({
   ...(await original<typeof import("@tanstack/react-router")>()),
   Outlet: () => <main>Public recovery route</main>,

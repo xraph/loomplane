@@ -2,6 +2,7 @@
 // runs: a plan and what came of it. One filter panel holds the status tabs,
 // search, project, environment and time; the oldest plan waiting on you sits
 // above it so it can be approved without opening it.
+import { DeploymentsIcon, NoMatchIcon } from "@/components/icons"
 import {
   ChevronRightIcon,
   ClockIcon,
@@ -9,9 +10,7 @@ import {
   LayersIcon,
   LayoutGridIcon,
   PlusIcon,
-  RocketIcon,
   SearchIcon,
-  SearchXIcon,
   XIcon,
 } from "lucide-react"
 import { type ReactNode, useMemo, useState } from "react"
@@ -441,7 +440,7 @@ export function Deployments({ status }: { status: RunFilter }) {
           <Empty>
             <EmptyHeader>
               <EmptyMedia variant="icon">
-                <RocketIcon />
+                <DeploymentsIcon />
               </EmptyMedia>
               <EmptyTitle>No deployments yet</EmptyTitle>
               <EmptyDescription>
@@ -459,7 +458,7 @@ export function Deployments({ status }: { status: RunFilter }) {
           <Empty>
             <EmptyHeader>
               <EmptyMedia variant="icon">
-                <SearchXIcon />
+                <NoMatchIcon />
               </EmptyMedia>
               <EmptyTitle>No deployments match</EmptyTitle>
               <EmptyDescription>

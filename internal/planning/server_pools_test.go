@@ -123,3 +123,60 @@ func TestPoolRelocationPreservesAppliedInputsAndPrivateBoundary(t *testing.T) {
 		t.Fatalf("missing boundary finding: %+v", result.Problems)
 	}
 }
+
+func TestServerPlanPreservesRuntimeLimitsWithoutAutoscaling(t *testing.T) {
+	for _, tc := range []struct {
+		name, settings      string
+		wantCPU, wantMemory int64
+		blocked             bool
+	}{
+		{name: "nondefault", settings: "size: {cpu: 0.2, memory: 128}", wantCPU: 200, wantMemory: 128 << 20},
+		{name: "default", wantCPU: 1000, wantMemory: 512 << 20},
+		{name: "single replica", settings: "scale: {min: 1, max: 1}", wantCPU: 1000, wantMemory: 512 << 20},
+		{name: "replicas", settings: "scale: {min: 2, max: 2}", blocked: true},
+		{name: "autoscaling", settings: "scale: {min: 1, max: 2}", blocked: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := parse(t, "version: 1\nservices:\n  api:\n    source: cmd/api\n    provider: server\n    target: "+targetA+"\n    public: false\n    "+tc.settings+"\n")
+			r := Compute(Input{Environment: "production", Graph: infrastructureGraph(), Manifest: m, Providers: providers.Registry(), Connections: infrastructureConnections(t)})
+			if tc.blocked {
+				for _, p := range r.Problems {
+					if p.Code == "server-scale" && !r.Executable {
+						return
+					}
+				}
+				t.Fatalf("unsupported server scale accepted: %+v", r)
+			}
+			if !r.Executable {
+				t.Fatalf("supported server limits blocked: %+v", r.Problems)
+			}
+			cfg := action(t, r, "service:api").Service
+			cpu, memory, err := ServerResources(cfg.Size)
+			if err != nil || cpu != tc.wantCPU || memory != tc.wantMemory {
+				t.Fatalf("planned runtime limits = %dm/%d bytes, want %dm/%d bytes: %v", cpu, memory, tc.wantCPU, tc.wantMemory, err)
+			}
+			if !reflect.DeepEqual(cfg.Scale, m.Services["api"].Scale) {
+				t.Fatalf("single-replica scale lost: %+v", cfg.Scale)
+			}
+			for _, warning := range r.Warnings {
+				if warning.Code == "scaling-ignored" {
+					t.Fatalf("supported runtime limits reported as ignored: %+v", warning)
+				}
+			}
+		})
+	}
+}
+
+func TestManagedPlanStillIgnoresUncontrolledSizing(t *testing.T) {
+	r := compute(t, "version: 1\nservices:\n  web:\n    source: apps/web\n    provider: vercel\n    size: {cpu: 0.2, memory: 128}\n    scale: {min: 1, max: 2}\n", "production")
+	cfg := action(t, r, "service:web").Service
+	if cfg.Size != nil || cfg.Scale != nil {
+		t.Fatalf("managed runtime received ignored limits: %+v", cfg)
+	}
+	for _, warning := range r.Warnings {
+		if warning.Code == "scaling-ignored" && warning.Name == "web" {
+			return
+		}
+	}
+	t.Fatal("managed sizing warning missing")
+}

@@ -20,6 +20,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/xraph/loomplane/pkg/manifest"
 )
 
 // Client calls one Loomplane with one API key.
@@ -327,6 +329,53 @@ func (c *Client) DraftManifest(ctx context.Context, projectID string) (string, e
 func (c *Client) SaveManifest(ctx context.Context, projectID, yaml string) (*ManifestRevision, error) {
 	var m ManifestRevision
 	return &m, c.do(ctx, http.MethodPut, "/api/v1/projects/"+esc(projectID)+"/manifest", map[string]string{"yaml": yaml}, &m)
+}
+
+// ManifestEdit is one change to the project's manifest, which keeps the
+// YAML's comments and order.
+type ManifestEdit struct {
+	AddResource *NewResource `json:"add_resource,omitempty"`
+	// Link makes a service need something, with the options it passes to
+	// it. Unlink removes the need and its options. SetUse chooses where one
+	// dependency of a catalog resource comes from.
+	Link   *ServiceLink `json:"link,omitempty"`
+	Unlink *ServiceLink `json:"unlink,omitempty"`
+	SetUse *ResourceUse `json:"set_use,omitempty"`
+}
+
+// ServiceLink names a service and something it needs. Options are what the
+// service passes to the need, and Unlink ignores them.
+type ServiceLink struct {
+	Service string            `json:"service"`
+	Need    string            `json:"need"`
+	Options map[string]string `json:"options,omitempty"`
+}
+
+// ResourceUse sets where one dependency of a catalog resource comes from.
+// A Use with nothing set asks for a new dependency.
+type ResourceUse struct {
+	Resource   string       `json:"resource"`
+	Dependency string       `json:"dependency"`
+	Use        manifest.Use `json:"use"`
+}
+
+// NewResource is a resource to add to the manifest. Target is the checked
+// connection it runs on, and Uses says where its dependencies come from.
+type NewResource struct {
+	Name     string                  `json:"name"`
+	Kind     string                  `json:"kind"`
+	Provider string                  `json:"provider,omitempty"`
+	Target   string                  `json:"target,omitempty"`
+	Version  string                  `json:"version,omitempty"`
+	Uses     map[string]manifest.Use `json:"uses,omitempty"`
+}
+
+// EditManifest applies one change to the project's current manifest and
+// saves the result as a new revision. A change that's already there adds
+// nothing.
+func (c *Client) EditManifest(ctx context.Context, projectID string, in ManifestEdit) (*ManifestRevision, error) {
+	var m ManifestRevision
+	return &m, c.do(ctx, http.MethodPost, "/api/v1/projects/"+esc(projectID)+"/manifest/edits", in, &m)
 }
 
 // --- Plans ---

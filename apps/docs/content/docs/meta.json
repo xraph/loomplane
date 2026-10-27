@@ -1,0 +1,25 @@
+{
+  "title": "Documentation",
+  "pages": [
+    "---Introduction---",
+    "index",
+    "quick-start",
+    "how-it-works",
+    "---Concepts---",
+    "...concepts",
+    "---Clouds---",
+    "...clouds",
+    "---Services---",
+    "...services",
+    "---Guides---",
+    "...guides",
+    "---AI agents---",
+    "...agents",
+    "---Reference---",
+    "...reference",
+    "---Operations---",
+    "...operations",
+    "---Extending---",
+    "...extending"
+  ]
+}

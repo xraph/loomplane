@@ -146,10 +146,11 @@ func (c *Client) do(ctx context.Context, token, method, path string, query url.V
 // Account is who a token acts for. Team is the team a token belongs to;
 // DigitalOcean scopes every token to one.
 type Account struct {
-	UUID   string `json:"uuid"`
-	Email  string `json:"email"`
-	Status string `json:"status"`
-	Team   *struct {
+	DropletLimit *int64 `json:"droplet_limit"`
+	UUID         string `json:"uuid"`
+	Email        string `json:"email"`
+	Status       string `json:"status"`
+	Team         *struct {
 		UUID string `json:"uuid"`
 		Name string `json:"name"`
 	} `json:"team"`

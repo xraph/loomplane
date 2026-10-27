@@ -121,6 +121,38 @@ func TestLoad_readsFilesAndEnvironment(t *testing.T) {
 	}
 }
 
+// The repository's config.yaml takes the pool size from the environment, so
+// the Kubernetes chart can set it without a config file.
+func TestLoad_poolSizeFromEnvironment(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		name, env string
+		want      int
+	}{
+		{"default", "", 16},
+		{"set", "40", 40},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "config.yaml"), raw, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("LOOMPLANE_DATABASE_URL", testDSN)
+			t.Setenv("LOOMPLANE_DATABASE_POOL_SIZE", tt.env)
+			c, err := Load(dir)
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if c.Database.PoolSize != tt.want {
+				t.Fatalf("pool size %d, want %d", c.Database.PoolSize, tt.want)
+			}
+		})
+	}
+}
+
 func TestLoad_requiresConfigFile(t *testing.T) {
 	if _, err := Load(t.TempDir()); err == nil {
 		t.Fatal("Load succeeded without config.yaml")
@@ -167,6 +199,31 @@ func TestFromSource_dbGatewaySigningKeyFile(t *testing.T) {
 		_, err := FromSource(mapGetter{"database.url": testDSN, "dbgateway.signing_key_file": path})
 		if err == nil || !strings.Contains(err.Error(), "dbgateway.signing_key_file") {
 			t.Fatalf("%q: error %v, want it to name dbgateway.signing_key_file", path, err)
+		}
+	}
+}
+
+func TestFromSource_endpointDeniedCIDRs(t *testing.T) {
+	c, err := FromSource(mapGetter{"database.url": testDSN})
+	if err != nil {
+		t.Fatalf("FromSource: %v", err)
+	}
+	if len(c.Planning.EndpointDeniedCIDRs) != 0 {
+		t.Fatalf("denied by default: %v", c.Planning.EndpointDeniedCIDRs)
+	}
+	for _, v := range []any{"10.9.0.0/16, 192.0.2.7", []any{"10.9.0.0/16", "192.0.2.7"}} {
+		c, err := FromSource(mapGetter{"database.url": testDSN, "planning.endpoint_denied_cidrs": v})
+		if err != nil {
+			t.Fatalf("FromSource: %v", err)
+		}
+		got := c.Planning.EndpointDeniedCIDRs
+		if len(got) != 2 || got[0].String() != "10.9.0.0/16" || got[1].String() != "192.0.2.7/32" {
+			t.Fatalf("denied from %#v: %v", v, got)
+		}
+	}
+	for _, v := range []any{"10.9.0.0/33", "db.internal", 3} {
+		if _, err := FromSource(mapGetter{"database.url": testDSN, "planning.endpoint_denied_cidrs": v}); err == nil || !strings.Contains(err.Error(), "planning.endpoint_denied_cidrs") {
+			t.Fatalf("%#v: %v", v, err)
 		}
 	}
 }

@@ -410,7 +410,11 @@ func (s *Store) LatestSnapshot(ctx context.Context, org, gatewayID string) (vers
 	if err != nil {
 		return 0, "", fmt.Errorf("read database gateway snapshot: %w", err)
 	}
-	return uint64(v), digest, nil //nolint:gosec // G115: the column is checked positive
+	version, err = versionFromColumn(v)
+	if err != nil {
+		return 0, "", err
+	}
+	return version, digest, nil
 }
 
 // RaiseSnapshotVersion makes the gateway's stored version at least atLeast,
@@ -434,7 +438,7 @@ func (s *Store) RaiseSnapshotVersion(ctx context.Context, org, gatewayID, digest
 	if err != nil {
 		return 0, fmt.Errorf("raise database gateway snapshot version: %w", err)
 	}
-	return uint64(v), nil //nolint:gosec // G115: the column is checked positive
+	return versionFromColumn(v)
 }
 
 // Report stores an instance's report, replacing its last one, and returns how

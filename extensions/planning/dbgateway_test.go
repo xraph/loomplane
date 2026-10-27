@@ -23,7 +23,7 @@ func TestDatabaseGatewayTrust(t *testing.T) {
 	if keys, err := trust(); err == nil || !strings.Contains(err.Error(), "isn't registered") || keys != nil {
 		t.Fatalf("no service: %v %v", keys, err)
 	}
-	if err := forge.ProvideValue(c, dbgateway.NewService(nil, nil, nil, plane.TrustKey{}, nil)); err != nil {
+	if err := forge.ProvideValue(c, dbgateway.NewService(nil, nil, nil, nil)); err != nil {
 		t.Fatal(err)
 	}
 	if keys, err := trust(); err != nil || len(keys) != 0 {
@@ -36,7 +36,7 @@ func TestDatabaseGatewayTrust(t *testing.T) {
 	}
 	configured := forge.NewContainer()
 	want := plane.TrustKey{PublicKey: pub, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour)}
-	if err = forge.ProvideValue(configured, dbgateway.NewService(nil, nil, key, want, nil)); err != nil {
+	if err = forge.ProvideValue(configured, dbgateway.NewService(nil, nil, []dbgateway.SigningKey{{Private: key, Trust: want}}, nil)); err != nil {
 		t.Fatal(err)
 	}
 	keys, err := databaseGatewayTrust(configured)()
@@ -47,7 +47,7 @@ func TestDatabaseGatewayTrust(t *testing.T) {
 	// An expired key fails the deploy with that reason.
 	expired := forge.NewContainer()
 	old := plane.TrustKey{PublicKey: pub, NotBefore: time.Now().Add(-2 * time.Hour), NotAfter: time.Now().Add(-time.Hour)}
-	if err = forge.ProvideValue(expired, dbgateway.NewService(nil, nil, key, old, nil)); err != nil {
+	if err = forge.ProvideValue(expired, dbgateway.NewService(nil, nil, []dbgateway.SigningKey{{Private: key, Trust: old}}, nil)); err != nil {
 		t.Fatal(err)
 	}
 	if keys, err = databaseGatewayTrust(expired)(); !errors.Is(err, dbgateway.ErrSigningKeyExpired) || keys != nil {

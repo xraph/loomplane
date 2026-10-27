@@ -69,16 +69,25 @@ var (
 // cloudRunState is what a Cloud Run action checkpoints, so a retry picks
 // up the same build instead of starting another.
 type cloudRunState struct {
-	BuildID    string `json:"build_id,omitempty"`
-	Image      string `json:"image,omitempty"`
-	LogAttempt string `json:"log_attempt,omitempty"`
+	PSC        *cloudRunPSCState `json:"psc,omitempty"`
+	BuildID    string            `json:"build_id,omitempty"`
+	BuildRetry int               `json:"build_retry,omitempty"`
+	Image      string            `json:"image,omitempty"`
+	LogAttempt string            `json:"log_attempt,omitempty"`
 }
+
+// RetainCheckpointOnRetry preserves build progress and PSC route identities.
+func (*CloudRun) RetainCheckpointOnRetry() bool { return true }
 
 // Apply implements Executor.
 func (c *CloudRun) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 	a := job.Action
 	if a.Service == nil {
 		return nil, fmt.Errorf("%w: cloud run runs services, not %s", ErrNoExecutor, a.Subject)
+	}
+	psc, prepareErr := prepareCloudRunPSC(job)
+	if prepareErr != nil {
+		return nil, prepareErr
 	}
 	// What's bound has to be this connection's before anything is built.
 	if _, err := boundInstance(infrastructure.WithPrincipal(ctx, principal(job)), c.Ctrl, job, c.provider(job)); err != nil {
@@ -88,17 +97,56 @@ func (c *CloudRun) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 	if err != nil {
 		return nil, err
 	}
+	if psc != nil && key.ProjectID != job.Connection.Details["project_id"] {
+		return nil, errCloudRunPSCReview
+	}
 	s, err := c.Google.Session(ctx, key)
 	if err != nil {
 		return nil, err
 	}
 	var state cloudRunState
 	if len(job.Resume) > 0 {
-		_ = json.Unmarshal(job.Resume, &state) //nolint:errcheck // an unreadable checkpoint starts over
+		if decodeErr := json.Unmarshal(job.Resume, &state); decodeErr != nil && psc != nil {
+			return nil, errors.New("cloud sql PSC application checkpoint cannot be read")
+		}
+	}
+	if state.PSC != nil && psc == nil {
+		return nil, errors.New("cloud sql PSC application checkpoint requires its reviewed transport")
+	}
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	persist := func() error {
+		if ctx.Err() != nil {
+			return context.Cause(ctx)
+		}
+		if job.Checkpoint == nil {
+			return errors.New("deployment checkpoint is unavailable")
+		}
+		data, encodeErr := json.Marshal(state)
+		if encodeErr != nil {
+			cancel(encodeErr)
+			return encodeErr
+		}
+		checkpointErr := job.Checkpoint(data)
+		if checkpointErr != nil && psc != nil {
+			cancel(checkpointErr)
+		}
+		return checkpointErr
 	}
 	save := func() {
-		data, _ := json.Marshal(state) //nolint:errcheck // a plain struct always encodes
-		_ = job.Checkpoint(data)       //nolint:errcheck // a missed heartbeat is retried by the next one
+		if checkpointErr := persist(); checkpointErr != nil && psc != nil {
+			cancel(checkpointErr)
+		}
+	}
+	var check func(context.Context) error
+	if psc != nil {
+		check = func(ctx context.Context) error { return psc.check(ctx, s, job, &state, persist) }
+		if checkErr := check(ctx); checkErr != nil {
+			return nil, checkErr
+		}
+		prepared := *job
+		prepared.Env = psc.env
+		job = &prepared
 	}
 	status := StepBuilding
 	ctx = progress.With(ctx, func(m string) {
@@ -114,7 +162,7 @@ func (c *CloudRun) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 	}
 	status = StepDeploying
 	job.Progress(StepDeploying, "Deploying "+state.Image)
-	ext, url, err := c.run(ctx, job, state.Image)
+	ext, url, err := c.run(ctx, job, state.Image, check)
 	if err != nil {
 		return nil, err
 	}
@@ -130,6 +178,23 @@ func (c *CloudRun) build(ctx context.Context, s *gcp.Session, job *Job, state *c
 		return "", err
 	}
 	image := gcp.ImageName(project, a.Region, imageRepository, imageName(job), tag)
+	retry := 0
+	if job.Deployment != nil {
+		retry = job.Deployment.Retries
+	}
+	if state.BuildID != "" && state.BuildRetry < retry {
+		// An explicit retry may replace a confirmed failed build. A running
+		// or unreadable operation still owns its checkpoint and must resume.
+		previous, readErr := s.GetBuild(ctx, state.BuildID)
+		if readErr != nil {
+			return "", readErr
+		}
+		if previous.Done() && previous.Status != "SUCCESS" {
+			state.BuildID, state.LogAttempt = "", ""
+			state.BuildRetry = retry
+			save()
+		}
+	}
 	if state.BuildID == "" {
 		job.Progress(StepBuilding, "Uploading the source to Cloud Build")
 		bucket := project + "_loomplane"
@@ -158,6 +223,7 @@ func (c *CloudRun) build(ctx context.Context, s *gcp.Session, job *Job, state *c
 		if state.BuildID, err = s.StartBuild(ctx, b); err != nil {
 			return "", fmt.Errorf("start the build: %w", err)
 		}
+		state.BuildRetry = retry
 		save()
 	}
 	job.Progress(StepBuilding, "Building on Cloud Build")
@@ -310,15 +376,24 @@ func spec(job *Job, image string, secrets map[string]string) (s cpprovider.Servi
 		labels[cloudrun.LabelCPU] = strconv.FormatFloat(cfg.Size.CPU, 'f', -1, 64)
 	}
 	maps.Copy(labels, secrets)
-	var instances []string
+	var instances, pscInstances []string
 	for _, b := range job.Attach {
 		switch {
 		case b.Provider == "cloud-sql" && b.ExternalID != "":
-			instances = append(instances, b.ExternalID)
+			if _, psc, err := cloudRunPSCBinding(b); err == nil && psc {
+				pscInstances = append(pscInstances, b.ExternalID)
+			} else {
+				instances = append(instances, b.ExternalID)
+			}
 		case b.Provider == "memorystore":
 			// Memorystore has a private address on the default network.
 			labels[cloudrun.LabelVPC] = "default"
 		}
+	}
+	if len(pscInstances) > 0 && cfg.CloudSQLNetwork != nil {
+		slices.Sort(pscInstances)
+		raw, _ := json.Marshal(cloudrun.PSCTransport{Network: *cfg.CloudSQLNetwork, Instances: slices.Compact(pscInstances)}) //nolint:errcheck // contains only strings and string slices
+		labels[cloudrun.LabelCloudSQLPSC] = string(raw)
 	}
 	if len(instances) > 0 {
 		slices.Sort(instances)
@@ -378,7 +453,7 @@ func secretName(job *Job, key string) string {
 // run creates the Ctrl Plane instance the first time, and deploys to it
 // after that. Ctrl Plane calls the Cloud Run provider, which waits until
 // the revision serves.
-func (c *CloudRun) run(ctx context.Context, job *Job, image string) (externalID, url string, err error) {
+func (c *CloudRun) run(ctx context.Context, job *Job, image string, check func(context.Context) error) (externalID, url string, err error) {
 	key := c.provider(job)
 	gkey, err := gcp.ParseKey(job.Credential)
 	if err != nil {
@@ -387,6 +462,11 @@ func (c *CloudRun) run(ctx context.Context, job *Job, image string) (externalID,
 	s, err := c.Google.Session(ctx, gkey)
 	if err != nil {
 		return "", "", err
+	}
+	if check != nil {
+		if checkErr := check(ctx); checkErr != nil {
+			return "", "", checkErr
+		}
 	}
 	secrets, err := c.storeSecrets(ctx, s, job)
 	if err != nil {
@@ -398,6 +478,11 @@ func (c *CloudRun) run(ctx context.Context, job *Job, image string) (externalID,
 	inst, name, err := currentInstance(ctx, c.Ctrl, job, key)
 	if err != nil {
 		return "", "", err
+	}
+	if check != nil {
+		if err := check(ctx); err != nil {
+			return "", "", err
+		}
 	}
 	if inst == nil {
 		created, err := c.Ctrl.Instances.Create(ctx, instance.CreateRequest{
@@ -411,6 +496,11 @@ func (c *CloudRun) run(ctx context.Context, job *Job, image string) (externalID,
 	}
 	if _, err := c.Ctrl.Instances.Update(ctx, inst.ID, instance.UpdateRequest{Services: []cpprovider.ServiceSpec{sp}, Labels: labels}); err != nil {
 		return "", "", fmt.Errorf("update the cloud run service: %w", err)
+	}
+	if check != nil {
+		if err := check(ctx); err != nil {
+			return "", "", err
+		}
 	}
 	if _, err := c.Ctrl.Deploys.Deploy(ctx, deploy.DeployRequest{
 		InstanceID: inst.ID, Services: []cpprovider.ServiceDeploySpec{{Name: mainService, Image: image, Env: sp.Env}},

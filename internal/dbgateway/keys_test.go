@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -37,6 +38,52 @@ func keyFile(seed []byte, notBefore, notAfter time.Time) map[string]any {
 	}
 }
 
+// entry is one key of a version 2 file.
+func entry(seed []byte, notBefore, notAfter time.Time) map[string]any {
+	return map[string]any{"private_key": base64.StdEncoding.EncodeToString(seed), "not_before": notBefore, "not_after": notAfter}
+}
+
+func keyFileV2(entries ...map[string]any) map[string]any {
+	return map[string]any{"version": 2, "keys": entries}
+}
+
+// A version 2 file holds the old key and its replacement, and a renewal of
+// the old one under the same seed, each with its own window, in order.
+func TestLoadSigningKeysVersion2(t *testing.T) {
+	oldSeed, newSeed := make([]byte, ed25519.SeedSize), make([]byte, ed25519.SeedSize)
+	if _, err := rand.Read(oldSeed); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rand.Read(newSeed); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC().Truncate(time.Second)
+	windows := [][2]time.Time{
+		{now.Add(-48 * time.Hour), now.Add(24 * time.Hour)},
+		{now.Add(12 * time.Hour), now.Add(90 * 24 * time.Hour)},
+		{now.Add(-time.Hour), now.Add(48 * time.Hour)},
+	}
+	seeds := [][]byte{oldSeed, newSeed, oldSeed}
+	entries := make([]map[string]any, 0, len(windows))
+	for i, w := range windows {
+		entries = append(entries, entry(seeds[i], w[0], w[1]))
+	}
+	keys, err := LoadSigningKeys(writeKeyFile(t, keyFileV2(entries...), 0o600))
+	if err != nil || len(keys) != 3 {
+		t.Fatal(keys, err)
+	}
+	for i, k := range keys {
+		want := ed25519.NewKeyFromSeed(seeds[i])
+		if !bytes.Equal(k.Private, want) || !bytes.Equal(k.Trust.PublicKey, want.Public().(ed25519.PublicKey)) ||
+			!k.Trust.NotBefore.Equal(windows[i][0]) || !k.Trust.NotAfter.Equal(windows[i][1]) {
+			t.Errorf("key %d: %+v", i, k.Trust)
+		}
+	}
+	if keys[0].Trust.ID() != keys[2].Trust.ID() || keys[0].Trust.ID() == keys[1].Trust.ID() {
+		t.Fatal("a renewal should share its key's ID, and only it")
+	}
+}
+
 func TestLoadSigningKey(t *testing.T) {
 	seed := make([]byte, ed25519.SeedSize)
 	if _, err := rand.Read(seed); err != nil {
@@ -46,10 +93,11 @@ func TestLoadSigningKey(t *testing.T) {
 	notBefore, notAfter := now.Add(-time.Hour).UTC().Truncate(time.Second), now.Add(24*time.Hour).UTC().Truncate(time.Second)
 	path := writeKeyFile(t, keyFile(seed, notBefore, notAfter), 0o600)
 
-	priv, trust, err := LoadSigningKey(path)
-	if err != nil {
-		t.Fatal(err)
+	keys, err := LoadSigningKeys(path)
+	if err != nil || len(keys) != 1 {
+		t.Fatal(keys, err)
 	}
+	priv, trust := keys[0].Private, keys[0].Trust
 	want := ed25519.NewKeyFromSeed(seed)
 	if !bytes.Equal(priv, want) {
 		t.Fatal("private key isn't the one from the seed")
@@ -72,9 +120,9 @@ func TestLoadSigningKeyOutsideItsWindow(t *testing.T) {
 		"expired":       {now.Add(-2 * time.Hour), now.Add(-time.Hour)},
 		"not yet valid": {now.Add(time.Hour), now.Add(2 * time.Hour)},
 	} {
-		_, trust, err := LoadSigningKey(writeKeyFile(t, keyFile(seed, window[0], window[1]), 0o600))
-		if err != nil || !trust.NotBefore.Equal(window[0]) || !trust.NotAfter.Equal(window[1]) {
-			t.Errorf("%s: %+v %v", name, trust, err)
+		keys, err := LoadSigningKeys(writeKeyFile(t, keyFile(seed, window[0], window[1]), 0o600))
+		if err != nil || len(keys) != 1 || !keys[0].Trust.NotBefore.Equal(window[0]) || !keys[0].Trust.NotAfter.Equal(window[1]) {
+			t.Errorf("%s: %+v %v", name, keys, err)
 		}
 	}
 }
@@ -97,7 +145,13 @@ func TestLoadSigningKeyRefuses(t *testing.T) {
 		body any
 		mode os.FileMode
 	}{
-		{"version 2", with("version", 2), 0o600},
+		{"version 3", with("version", 3), 0o600},
+		{"version 2 with a key of its own", with("version", 2), 0o600},
+		{"version 1 with a list", with("keys", []any{}), 0o600},
+		{"version 2 with no keys", map[string]any{"version": 2, "keys": []any{}}, 0o600},
+		{"version 2 with too many keys", keyFileV2(slices.Repeat([]map[string]any{entry(seed, now.Add(-time.Hour), now.Add(time.Hour))}, maxSigningKeys+1)...), 0o600},
+		{"version 2 with one bad key", keyFileV2(entry(seed, now.Add(-time.Hour), now.Add(time.Hour)), entry(seed[:16], now, now.Add(time.Hour))), 0o600},
+		{"version 2 with an empty window", keyFileV2(entry(seed, now.Add(-time.Hour), now.Add(-time.Hour))), 0o600},
 		{"a short seed", with("private_key", base64.StdEncoding.EncodeToString(seed[:16])), 0o600},
 		{"a whole private key, not a seed", with("private_key", base64.StdEncoding.EncodeToString(ed25519.NewKeyFromSeed(seed))), 0o600},
 		{"not base64", with("private_key", "%%%"+encoded), 0o600},
@@ -109,7 +163,7 @@ func TestLoadSigningKeyRefuses(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			path := writeKeyFile(t, tc.body, tc.mode)
-			_, _, err := LoadSigningKey(path)
+			_, err := LoadSigningKeys(path)
 			if err == nil {
 				t.Fatal("accepted")
 			}
@@ -118,10 +172,10 @@ func TestLoadSigningKeyRefuses(t *testing.T) {
 			}
 		})
 	}
-	if _, _, err := LoadSigningKey("relative/dbgateway.json"); err == nil {
+	if _, err := LoadSigningKeys("relative/dbgateway.json"); err == nil {
 		t.Fatal("accepted a relative path")
 	}
-	if _, _, err := LoadSigningKey(filepath.Join(t.TempDir(), "missing.json")); err == nil {
+	if _, err := LoadSigningKeys(filepath.Join(t.TempDir(), "missing.json")); err == nil {
 		t.Fatal("accepted a missing file")
 	}
 }

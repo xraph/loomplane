@@ -8,14 +8,17 @@ import { messageOf, statusOf } from "@/client/errors"
 import {
   useConnectionsCheck,
   useConnectionsGet,
+  useMembersList,
   useProjectsList,
 } from "@/client/forge/loomplane/hooks"
 import { useMutation, useQuery } from "@/client/hooks"
 import { CloudGlyph } from "@/components/cloud-glyph"
 import {
   ConnectDialog,
+  needsSignInAgain,
   RemoveDialog,
   statusLabels,
+  useSignInAgain,
 } from "@/components/cloud-connections"
 import { Page } from "@/components/page"
 import { EnvBadge, StatusPill, type Tone } from "@/components/runs"
@@ -31,6 +34,7 @@ import {
 } from "@/components/ui/empty"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
+import { AccountSpend } from "@/components/usage"
 import { cloudLabel } from "@/lib/clouds"
 import { formatDate, relative } from "@/lib/format"
 import { cloudPurposes } from "@/lib/integrations"
@@ -43,6 +47,7 @@ const tone: Record<string, Tone> = {
   ready: "live",
   incomplete: "waiting",
   failed: "failed",
+  sign_in_needed: "waiting",
 }
 
 export function CloudAccount({ id }: { id: string }) {
@@ -50,7 +55,9 @@ export function CloudAccount({ id }: { id: string }) {
   const now = useNow()
   const person = usePeople()
   const connection = useQuery(useConnectionsGet, { path: { id } })
+  const members = useQuery(useMembersList)
   const check = useMutation(useConnectionsCheck)
+  const { signInAgain, pending: signingIn } = useSignInAgain()
   const running = useRunning()
   const projects = useQuery(useProjectsList)
   const [replacing, setReplacing] = useState(false)
@@ -59,6 +66,12 @@ export function CloudAccount({ id }: { id: string }) {
   const manage = can("cloud_account:manage")
   const here = running.bindings.filter((b) => b.connectionId === id)
   const services = here.filter((b) => b.subject === "service").length
+  // The member's name when the members list has them, else their ID.
+  const signedInAs = String(c?.details.signed_in_as ?? "")
+  const who = members.data?.members.find((m) => m.userId === c?.signedInBy)
+  const signedInBy = who
+    ? who.name || who.email || c?.signedInBy
+    : c?.signedInBy
   const missing =
     connection.status === "error" && statusOf(connection.error) === 404
 
@@ -143,10 +156,28 @@ export function CloudAccount({ id }: { id: string }) {
                     {" · connected "}
                     {formatDate(c.createdAt)} by {person(c.createdBy).name}
                   </span>
+                  {signedInAs && (
+                    <span
+                      className="text-[13px] text-muted-foreground"
+                      data-signed-in
+                    >
+                      Signed in as {signedInAs}
+                      {c.signedInBy && `, by ${signedInBy}`}
+                    </span>
+                  )}
                 </div>
               </div>
               {manage && (
                 <div className="flex flex-wrap gap-2">
+                  {needsSignInAgain(c) && (
+                    <Button
+                      disabled={signingIn}
+                      onClick={() => void signInAgain(c)}
+                    >
+                      {signingIn && <Spinner />}
+                      Sign in again
+                    </Button>
+                  )}
                   <Button
                     variant="outline"
                     disabled={check.isPending}
@@ -195,23 +226,7 @@ export function CloudAccount({ id }: { id: string }) {
                 value={cloudLabel(c.cloud)}
                 note={cloudPurposes[c.cloud] ?? "Services Loomplane deploys"}
               />
-              <section className="flex items-center gap-4 rounded-xl bg-card p-4 ring-1 ring-border">
-                <div
-                  aria-hidden="true"
-                  className="canvas-dots size-16 shrink-0 rounded-full opacity-60"
-                />
-                <div className="grid gap-1">
-                  <span className="text-[12.5px] text-muted-foreground">
-                    Spend this month
-                  </span>
-                  <span className="text-lg font-semibold text-muted-foreground">
-                    None yet
-                  </span>
-                  <span className="text-[12.5px] leading-snug text-muted-foreground">
-                    Arrives with billing access
-                  </span>
-                </div>
-              </section>
+              <AccountSpend connectionId={id} />
             </div>
 
             <section className="overflow-hidden rounded-xl bg-card ring-1 ring-border">

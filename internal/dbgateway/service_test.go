@@ -238,7 +238,7 @@ func newServiceHarness(t *testing.T) *serviceHarness {
 	}
 	trust := plane.TrustKey{PublicKey: pub, NotBefore: now.Add(-time.Hour), NotAfter: now.Add(time.Hour)}
 	h := &serviceHarness{store: st, urls: urls, gw: g, keys: keys, now: now}
-	h.svc = newService(st, urls, priv, trust, func() time.Time { return h.now })
+	h.svc = newService(st, urls, []SigningKey{{Private: priv, Trust: trust}}, func() time.Time { return h.now })
 	return h
 }
 
@@ -353,6 +353,122 @@ func TestSnapshotVersionMovesOnlyOnChange(t *testing.T) {
 	}
 }
 
+// A gateway recorded with a new sealing key gets a new version, sealed to
+// that key, though nothing else changed.
+func TestSnapshotVersionMovesWithTheSealingKey(t *testing.T) {
+	h := newServiceHarness(t)
+	if s, err := h.snapshot(t, 0); err != nil || s.Version != 1 {
+		t.Fatalf("first: %+v %v", s, err)
+	}
+	_, keys := testGateway(t, h.gw.ID)
+	h.gw.SealingPublicKey = keys.sealing.PublicKey()
+	s, err := h.snapshot(t, 1)
+	if err != nil || s == nil || s.Version != 2 {
+		t.Fatalf("after a new sealing key: %+v %v", s, err)
+	}
+	if _, password := openCredential(t, keys.sealing, s.Routes[0]); password != "pw" {
+		t.Fatalf("password %q", password)
+	}
+}
+
+// signingKeyFor is a control-plane key with the window [from, until).
+func signingKeyFor(t *testing.T, from, until time.Time) SigningKey {
+	t.Helper()
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return SigningKey{Private: priv, Trust: plane.TrustKey{PublicKey: pub, NotBefore: from, NotAfter: until}}
+}
+
+// A rotation: key b is added beside a with a window that opens later. The
+// service keeps signing with a and hands gateways both until b opens, signs
+// with b from then on, and drops a from the trust keys once it expires. At
+// no point is there nothing to sign with.
+func TestServiceRotatesItsSigningKey(t *testing.T) {
+	h := newServiceHarness(t)
+	start := h.now
+	a := signingKeyFor(t, start.Add(-24*time.Hour), start.Add(48*time.Hour))
+	b := signingKeyFor(t, start.Add(24*time.Hour), start.Add(90*24*time.Hour))
+	h.svc = newService(h.store, h.urls, []SigningKey{b, a}, func() time.Time { return h.now })
+	ids := func(keys []plane.TrustKey) []string {
+		out := make([]string, 0, len(keys))
+		for _, k := range keys {
+			out = append(out, k.ID())
+		}
+		return out
+	}
+	for _, tc := range []struct {
+		name   string
+		at     time.Time
+		signer SigningKey
+		trust  []SigningKey
+	}{
+		{"before b opens", start, a, []SigningKey{a, b}},
+		{"as b opens", start.Add(24 * time.Hour), b, []SigningKey{a, b}},
+		{"as a expires", start.Add(48 * time.Hour), b, []SigningKey{b}},
+		{"a month on", start.Add(30 * 24 * time.Hour), b, []SigningKey{b}},
+	} {
+		h.now = tc.at
+		env, err := h.svc.Snapshot(t.Context(), &h.gw, 0)
+		if err != nil || env == nil {
+			t.Fatalf("%s: Snapshot: %v", tc.name, err)
+		}
+		if env.KeyID != tc.signer.Trust.ID() {
+			t.Errorf("%s: signed by the wrong key", tc.name)
+		}
+		want := make([]plane.TrustKey, 0, len(tc.trust))
+		for _, k := range tc.trust {
+			want = append(want, k.Trust)
+		}
+		if got := h.svc.TrustKeys(); !slices.Equal(ids(got), ids(want)) {
+			t.Errorf("%s: trust keys %v, want %v", tc.name, ids(got), ids(want))
+		}
+		if _, err = plane.VerifySnapshot(*env, h.svc.TrustKeys(), h.gw.ID, h.now); err != nil {
+			t.Errorf("%s: the snapshot doesn't verify against the trust keys: %v", tc.name, err)
+		}
+	}
+	h.now = b.Trust.NotAfter
+	if err := h.svc.Ready(); !errors.Is(err, ErrSigningKeyExpired) || len(h.svc.TrustKeys()) != 0 {
+		t.Fatalf("after b expires: %v, trust %d keys", err, len(h.svc.TrustKeys()))
+	}
+}
+
+// Between two windows that don't meet, nothing signs, and the service
+// says a key is still to come rather than that the keys have expired.
+func TestServiceBetweenWindows(t *testing.T) {
+	h := newServiceHarness(t)
+	a := signingKeyFor(t, h.now.Add(-48*time.Hour), h.now.Add(-24*time.Hour))
+	b := signingKeyFor(t, h.now.Add(24*time.Hour), h.now.Add(48*time.Hour))
+	h.svc = newService(h.store, h.urls, []SigningKey{a, b}, func() time.Time { return h.now })
+	if err := h.svc.Ready(); !errors.Is(err, ErrSigningKeyNotYetValid) {
+		t.Fatalf("Ready: %v", err)
+	}
+	if got := h.svc.TrustKeys(); len(got) != 1 || got[0].ID() != b.Trust.ID() {
+		t.Fatalf("trust keys %+v", got)
+	}
+}
+
+// A key renewed under the same seed is trusted once per window, and signs
+// on through the renewal.
+func TestServiceRenewsAKey(t *testing.T) {
+	h := newServiceHarness(t)
+	old := signingKeyFor(t, h.now.Add(-24*time.Hour), h.now.Add(24*time.Hour))
+	renewed := old
+	renewed.Trust.NotBefore, renewed.Trust.NotAfter = h.now, h.now.Add(90*24*time.Hour)
+	h.svc = newService(h.store, h.urls, []SigningKey{renewed, old, old}, func() time.Time { return h.now })
+	trust := h.svc.TrustKeys()
+	if len(trust) != 2 || !trust[0].NotAfter.Equal(old.Trust.NotAfter) || !trust[1].NotAfter.Equal(renewed.Trust.NotAfter) {
+		t.Fatalf("trust keys %+v", trust)
+	}
+	for _, at := range []time.Time{h.now, old.Trust.NotAfter.Add(time.Hour)} {
+		h.now = at
+		if s, err := snapshotOf(t, h.svc, &h.gw, 0, at); err != nil || s == nil {
+			t.Fatalf("at %s: %+v %v", at, s, err)
+		}
+	}
+}
+
 func TestPausedRouteInSnapshot(t *testing.T) {
 	h := newServiceHarness(t)
 	if _, err := h.snapshot(t, 0); err != nil {
@@ -450,7 +566,7 @@ func TestHoldPhase1(t *testing.T) {
 
 func TestServiceWithoutASigningKey(t *testing.T) {
 	g, _ := testGateway(t, "dbgw_01test")
-	svc := newService(newMemStore(g), &memURLs{}, nil, plane.TrustKey{}, time.Now)
+	svc := newService(newMemStore(g), &memURLs{}, nil, time.Now)
 	if svc.Configured() || len(svc.TrustKeys()) != 0 {
 		t.Fatalf("configured %v, trust keys %+v", svc.Configured(), svc.TrustKeys())
 	}
@@ -472,14 +588,14 @@ func TestServiceSignsOnlyInsideTheKeysWindow(t *testing.T) {
 	if s, err := h.snapshot(t, 0); err != nil || s == nil {
 		t.Fatalf("Snapshot inside the window: %+v %v", s, err)
 	}
-	until := h.svc.trust.NotAfter
+	until := h.svc.keys[0].Trust.NotAfter
 	for _, tc := range []struct {
 		at   time.Time
 		want error
 	}{
 		{until, ErrSigningKeyExpired},
 		{until.Add(time.Hour), ErrSigningKeyExpired},
-		{h.svc.trust.NotBefore.Add(-time.Second), ErrSigningKeyNotYetValid},
+		{h.svc.keys[0].Trust.NotBefore.Add(-time.Second), ErrSigningKeyNotYetValid},
 	} {
 		h.now = tc.at
 		if err := h.svc.Ready(); !errors.Is(err, tc.want) {

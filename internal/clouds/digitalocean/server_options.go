@@ -27,11 +27,12 @@ func (c *Client) ServerOptions(ctx context.Context, credential provider.Infrastr
 					Slug                string
 					Memory, Vcpus, Disk int
 					Available           bool
-					PriceHourly         float64 `json:"price_hourly"`
-					PriceMonthly        float64 `json:"price_monthly"`
+					PriceHourly         *float64 `json:"price_hourly"`
+					PriceMonthly        float64  `json:"price_monthly"`
 					Regions             []string
 				} `json:"sizes"`
 				Images []struct {
+					MinDiskSize              int `json:"min_disk_size"`
 					ID                       int64
 					Slug, Name, Distribution string
 					Public                   bool
@@ -66,7 +67,11 @@ func (c *Client) ServerOptions(ctx context.Context, credential provider.Infrastr
 					return out, provider.ErrInfrastructurePagination
 				}
 				if size.Available {
-					out.Sizes = append(out.Sizes, provider.ServerSize{ID: size.Slug, CPUs: size.Vcpus, MemoryMiB: size.Memory, DiskGB: size.Disk, HourlyUSD: size.PriceHourly, MonthlyUSD: size.PriceMonthly, Regions: size.Regions})
+					price := 0.0
+					if size.PriceHourly != nil {
+						price = *size.PriceHourly
+					}
+					out.Sizes = append(out.Sizes, provider.ServerSize{HourlyPriceKnown: size.PriceHourly != nil, ID: size.Slug, CPUs: size.Vcpus, MemoryMiB: size.Memory, DiskGB: size.Disk, HourlyUSD: price, MonthlyUSD: size.PriceMonthly, Regions: size.Regions})
 				}
 			}
 			for _, im := range response.Images {
@@ -78,7 +83,14 @@ func (c *Client) ServerOptions(ctx context.Context, credential provider.Infrastr
 					return out, provider.ErrInfrastructurePagination
 				}
 				if im.Public {
-					out.Images = append(out.Images, provider.ServerImage{ID: id, Name: im.Name, Regions: im.Regions, Bootstrap: strings.EqualFold(im.Distribution, "Ubuntu") && strings.HasPrefix(im.Slug, "ubuntu-24-04-")})
+					architecture := ""
+					if strings.HasSuffix(im.Slug, "-x64") {
+						architecture = "amd64"
+					}
+					if strings.HasSuffix(im.Slug, "-arm64") {
+						architecture = "arm64"
+					}
+					out.Images = append(out.Images, provider.ServerImage{MinDiskGB: im.MinDiskSize, Architecture: architecture, ID: id, Name: im.Name, Regions: im.Regions, Bootstrap: strings.EqualFold(im.Distribution, "Ubuntu") && strings.HasPrefix(im.Slug, "ubuntu-24-04-")})
 				}
 			}
 			if response.Links.Pages.Next == "" {

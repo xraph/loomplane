@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"slices"
 	"strings"
@@ -11,15 +12,18 @@ import (
 
 	"go.jetify.com/typeid/v2"
 
+	"github.com/xraph/loomplane/internal/catalogconnect"
 	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/connections"
+	"github.com/xraph/loomplane/internal/dbgateway/plane"
 	"github.com/xraph/loomplane/internal/discovery"
 	"github.com/xraph/loomplane/internal/graph"
 	"github.com/xraph/loomplane/internal/manifests"
 	"github.com/xraph/loomplane/internal/orchestration"
 	"github.com/xraph/loomplane/internal/page"
 	"github.com/xraph/loomplane/internal/projects"
+	"github.com/xraph/loomplane/internal/recipes"
 	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/internal/telemetry"
 	"github.com/xraph/loomplane/pkg/manifest"
@@ -76,10 +80,29 @@ type Workflow interface {
 	Cancel(ctx context.Context, planID, reason string) error
 }
 
+// EndpointChecker checks the external endpoints composed resources
+// connect. *catalogconnect.Checker is the real one.
+type EndpointChecker interface {
+	// Endpoint returns an endpoint without its DSN, or
+	// catalogconnect.ErrNotFound.
+	Endpoint(ctx context.Context, orgID, id string) (*catalogconnect.Endpoint, error)
+	Check(ctx context.Context, orgID, endpointID string, req recipes.Requirement, dial catalogconnect.DialFunc) (*catalogconnect.Report, error)
+}
+
+// TargetDialer opens connections from a deployment target's network: over
+// a server's SSH connection, or from Loomplane for a cluster. Closing the
+// io.Closer ends what the dial goes through.
+type TargetDialer interface {
+	TargetDial(ctx context.Context, orgID, connectionID string) (catalogconnect.DialFunc, io.Closer, error)
+}
+
 // Service is the plan API, and the planner the deployment workflow calls.
 // API methods check the caller's role; workflow methods trust the plan,
 // which a checked call created.
 type Service struct {
+	capacityTemplates CapacityTemplateValidator
+	capacity          CapacityProvisioner
+	capacityPrincipal CapacityPrincipalVerifier
 	cloudSyncRunner   CloudSyncDeployer
 	appliedInputs     AppliedInputReader
 	cloudSyncWorkflow CloudSyncWorkflow
@@ -97,10 +120,17 @@ type Service struct {
 	now               func() time.Time
 	warn              func(msg string, err error)
 	telemetry         *telemetry.Recorder
+	dbTrust           func() ([]plane.TrustKey, error)
+	kinds             *recipes.Registry
+	endpoints         EndpointChecker
+	dialer            TargetDialer
 }
 
 // Deps are what a Service needs.
 type Deps struct {
+	CapacityTemplates CapacityTemplateValidator
+	Capacity          CapacityProvisioner
+	CapacityPrincipal CapacityPrincipalVerifier
 	AppliedInputs     AppliedInputReader
 	CloudSyncWorkflow CloudSyncWorkflow
 	CloudProfiles     cloudprofiles.Resolver
@@ -122,19 +152,36 @@ type Deps struct {
 	Warn func(msg string, err error)
 	// Telemetry counts plans and decisions. It may be nil.
 	Telemetry *telemetry.Recorder
+	// DatabaseGatewayTrust returns the keys a database gateway deployed
+	// now would trust, which a plan records so a change to them redeploys
+	// the gateway. Nil, or an error, records none, and the deploy says why.
+	DatabaseGatewayTrust func() ([]plane.TrustKey, error)
+	// Kinds are the catalog's kinds. Nil means recipes.Default().
+	Kinds *recipes.Registry
+	// Endpoints checks the external endpoints composed resources connect,
+	// through Dialer. Without either, no external endpoint can be used.
+	Endpoints EndpointChecker
+	Dialer    TargetDialer
 }
 
 // NewService returns a Service.
 func NewService(d Deps) *Service {
+	if st, ok := d.Store.(*PgStore); ok {
+		if wake, available := d.Capacity.(cloudinfra.CapacityCloudWakeup); available {
+			st.frontendWake = wake
+		}
+	}
 	warn := d.Warn
 	if warn == nil {
 		warn = func(string, error) {}
 	}
 	return &Service{
+		capacityTemplates: d.CapacityTemplates, capacity: d.Capacity, capacityPrincipal: d.CapacityPrincipal,
 		appliedInputs: d.AppliedInputs, cloudSyncWorkflow: d.CloudSyncWorkflow,
 		cloudProfiles: d.CloudProfiles, store: d.Store, projects: d.Projects, analyses: d.Analyses, manifests: d.Manifests,
 		providers: d.Providers, clouds: d.Connections, authz: d.Authz, workflow: d.Workflow, audit: d.Audit,
-		window: d.Window, now: time.Now, warn: warn, telemetry: d.Telemetry,
+		window: d.Window, now: time.Now, warn: warn, telemetry: d.Telemetry, dbTrust: d.DatabaseGatewayTrust,
+		kinds: d.Kinds, endpoints: d.Endpoints, dialer: d.Dialer,
 	}
 }
 
@@ -382,11 +429,16 @@ func (s *Service) decide(ctx context.Context, p security.Principal, id string, a
 	case len(in.Note) > maxNote:
 		return nil, fmt.Errorf("%w: the note can be at most %d characters", ErrInvalid, maxNote)
 	}
+	if approve {
+		if checkErr := RequireBackupPolicyPermission(ctx, s.authz, p, plan.ProjectID, plan.Actions); checkErr != nil {
+			return nil, checkErr
+		}
+	}
 	reqID, err := typeid.Generate("dec")
 	if err != nil {
 		return nil, fmt.Errorf("generate decision id: %w", err)
 	}
-	dec := orchestration.Decision{Approve: approve, Revision: in.Revision, By: p.UserID, Note: strings.TrimSpace(in.Note)}
+	dec := orchestration.Decision{Actor: &p, Approve: approve, Revision: in.Revision, By: p.UserID, Note: strings.TrimSpace(in.Note)}
 	if !approve {
 		dec.Revision = plan.Revision
 	}
@@ -548,8 +600,13 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 		return nil, "", err
 	}
 	resolutionManifest, needs, resolutionErr := cloudResolutionManifest(rev.Manifest, Input{Environment: plan.Environment, Graph: g, Bindings: bindings, Held: held})
+	// A composed resource on one of the Cloud's targets is placed there too.
+	composed := composedResources(rev.Manifest, plan.Environment, s.kinds)
 	var assignment *cloudprofiles.Assignment
-	if resolutionErr == nil && (needs.Explicit || needs.Fallback) && s.cloudProfiles != nil {
+	// composedLookup says only composed resources asked for the Cloud.
+	composedLookup := false
+	if resolutionErr == nil && (needs.Explicit || needs.Fallback || len(composed) > 0) && s.cloudProfiles != nil {
+		composedLookup = !needs.Explicit && !needs.Fallback
 		assignment, resolutionErr = s.cloudProfiles.Resolve(ctx, plan.OrgID, plan.ProjectID, plan.EnvironmentID)
 		// A revoked grant only matters to services that ask for the Cloud.
 		if !needs.Explicit && errors.Is(resolutionErr, cloudprofiles.ErrNotFound) {
@@ -559,14 +616,15 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 			resolutionErr = fmt.Errorf("cloud assignment is outside this organization, project or environment scope")
 		}
 	}
+	intents := map[string]*CapacityIntent{}
 	var placements map[string]CloudPlacement
 	var resolved *manifest.Manifest
 	if resolutionErr == nil {
-		pools, poolErr := s.resolvePools(ctx, plan, resolutionManifest, assignment, bindings, options, needs.Held)
+		pools, poolErr := s.resolvePools(ctx, plan, resolutionManifest, assignment, bindings, options, needs.Held, intents)
 		if poolErr != nil {
 			resolutionErr = poolErr
 		} else {
-			resolved, placements, resolutionErr = resolveCloudPlacements(resolutionManifest, plan.Environment, assignment, options, pools, needs.Held)
+			resolved, placements, resolutionErr = resolveCloudPlacements(resolutionManifest, plan.Environment, assignment, options, pools, needs.Held, intents)
 		}
 	}
 	routes, routeErr := s.releaseRoutes(ctx, plan)
@@ -574,28 +632,37 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 		return nil, "", routeErr
 	}
 	var zones []cloudinfra.ProjectZone
+	var trust string
 	if len(dbGatewayResources(rev.Manifest, plan.Environment)) > 0 {
 		if zones, err = s.projectZones(ctx, plan); err != nil {
 			return nil, "", err
 		}
+		trust = s.databaseGatewayTrust()
 	}
 	var result *Result
 	if resolutionErr != nil {
 		finding := Finding{Code: "cloud-target", Path: "services", Message: resolutionErr.Error()}
 		var placementErr *CloudPlacementError
-		if errors.As(resolutionErr, &placementErr) {
+		switch {
+		case errors.As(resolutionErr, &placementErr):
 			finding = Finding{Code: placementErr.Code, Subject: ServiceSubject, Name: strings.TrimSuffix(strings.TrimPrefix(placementErr.Path, "services."), ".cloud_tags"), Path: placementErr.Path, Message: placementErr.Message}
 			if strings.HasPrefix(placementErr.Path, "database_gateway.") {
 				finding.Name = dbGatewayName
 			}
+		case composedLookup:
+			finding = Finding{Code: "cloud-target", Subject: ResourceSubject, Name: composed[0], Path: "resources." + composed[0] + ".target", Message: resolutionErr.Error()}
 		}
 		result = &Result{Problems: []Finding{finding}, Actions: []Action{}, Connections: map[string]string{}}
 	} else {
+		placed := map[string]CloudPlacement{}
+		maps.Copy(placed, placements)
+		maps.Copy(placed, composedPlacements(resolved, plan.Environment, composed, assignment, options))
 		result = Compute(Input{
-			Catalog: plan.Catalog, Routes: routes, Zones: zones,
-			Federation: federation, CloudPlacements: placements,
+			Catalog: plan.Catalog, Routes: routes, Zones: zones, DatabaseGatewayTrust: trust,
+			Federation: federation, CloudPlacements: placed, CapacityIntents: intents,
 			Environment: plan.Environment, Graph: g, Manifest: resolved, Providers: s.providers, Bindings: bindings,
 			Connections: options, Chosen: chosen, Held: held,
+			Kinds: s.kinds, Endpoints: s.checkEndpoints(ctx, plan.OrgID, plan.Environment, resolved),
 		})
 	}
 	if resolutionErr == nil && poolRelocation(bindings, placements) {
@@ -605,6 +672,11 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 		result.Problems = append(result.Problems, Finding{Code: "route-capacity", Message: routeErr.Error()})
 		result.Executable = false
 	}
+	if frontendErr := s.pinFrontendDemands(ctx, plan, result); frontendErr != nil {
+		result.Problems = append(result.Problems, Finding{Code: "frontend-governance", Message: frontendErr.Error()})
+		result.Executable = false
+	}
+	s.checkBackupPreview(ctx, plan, result)
 	in := revisionInput{
 		EnvironmentID: plan.EnvironmentID, Environment: plan.Environment, Sources: plan.Sources,
 		Manifest: rev.Digest, Deployed: make([]deployedRef, 0, len(bindings)), Result: result,
@@ -622,6 +694,21 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 	return result, revision, nil
 }
 
+// databaseGatewayTrust is plane.TrustDigest of the keys a database gateway
+// deployed now would trust, or "" when they can't be had. A plan that
+// records "" for a gateway that runs with keys redeploys it, and that
+// deploy fails saying what's wrong with the keys.
+func (s *Service) databaseGatewayTrust() string {
+	if s.dbTrust == nil {
+		return ""
+	}
+	keys, err := s.dbTrust()
+	if err != nil {
+		return ""
+	}
+	return plane.TrustDigest(keys)
+}
+
 func (s *Service) connectionOptions(ctx context.Context, orgID string) ([]ConnectionOption, error) {
 	if s.clouds == nil {
 		return nil, nil
@@ -630,11 +717,11 @@ func (s *Service) connectionOptions(ctx context.Context, orgID string) ([]Connec
 	if err != nil {
 		return nil, fmt.Errorf("list cloud connections: %w", err)
 	}
-	pooled := map[string]bool{}
+	hosts := map[string]ConnectionHost{}
 	if reader, ok := s.store.(interface {
-		PooledConnections(context.Context, string) (map[string]bool, error)
+		ConnectionHosts(context.Context, string) (map[string]ConnectionHost, error)
 	}); ok {
-		pooled, err = reader.PooledConnections(ctx, orgID)
+		hosts, err = reader.ConnectionHosts(ctx, orgID)
 		if err != nil {
 			return nil, err
 		}
@@ -642,13 +729,120 @@ func (s *Service) connectionOptions(ctx context.Context, orgID string) ([]Connec
 	out := make([]ConnectionOption, 0, len(all))
 	for _, c := range all {
 		out = append(out, ConnectionOption{
-			Pooled: pooled[c.ID], Account: c.Account, ID: c.ID, Name: c.Name, Cloud: c.Cloud, Ready: c.Status == connections.StatusReady,
+			Pooled: hosts[c.ID].Pooled, Servers: slices.Clone(hosts[c.ID].Servers), Account: c.Account, ID: c.ID, Name: c.Name, Cloud: c.Cloud, Ready: c.Status == connections.StatusReady,
 			PullReady: connections.RegistryPullReady(c),
 			HTTPS:     c.Details["certificate_arn"] != "", Region: c.Details["region"],
 			Details: maps.Clone(c.Details),
 		})
 	}
 	return out, nil
+}
+
+// checkEndpoints checks each external endpoint the manifest's composed
+// resources connect, from each resource's target, for Compute to report
+// on. An endpoint resources share on one target, against one requirement,
+// is checked once. Without a checker and a dialer nothing is checked, so
+// no external endpoint can be used.
+func (s *Service) checkEndpoints(ctx context.Context, orgID, environment string, m *manifest.Manifest) map[string]EndpointCheck {
+	if s.endpoints == nil || s.dialer == nil || m == nil {
+		return nil
+	}
+	kinds := s.kinds
+	if kinds == nil {
+		kinds = recipes.Default()
+	}
+	type use struct {
+		id, connection string
+		req            recipes.Requirement
+		consumer       catalogconnect.Consumer
+	}
+	uses := map[string]use{} // by endpointKey
+	for _, name := range slices.Sorted(maps.Keys(m.Resources)) {
+		r := m.Resources[name]
+		kind, ok := kinds.Kind(r.Kind)
+		if !ok || r.Target == "" || !manifest.On(r.For(environment, m.Defaults).Enabled) {
+			continue
+		}
+		for _, dep := range kind.Dependencies {
+			id := r.Uses[dep.Name].External
+			if id == "" || dep.External == nil {
+				continue
+			}
+			consumer := catalogconnect.ConsumerOf(kind, dep.Name)
+			uses[endpointKey(id, r.Target, *dep.External, consumer)] = use{id: id, connection: r.Target, req: *dep.External, consumer: consumer}
+		}
+	}
+	if len(uses) == 0 {
+		return nil
+	}
+	keys := slices.Sorted(maps.Keys(uses))
+	// Look each endpoint up once, and dial only for the ones that exist.
+	found := map[string]EndpointCheck{}
+	targets := map[string][]string{}
+	for _, key := range keys {
+		u := uses[key]
+		if _, ok := found[u.id]; !ok {
+			e, err := s.endpoints.Endpoint(ctx, orgID, u.id)
+			switch {
+			case errors.Is(err, catalogconnect.ErrNotFound):
+				found[u.id] = EndpointCheck{ID: u.id}
+			case err != nil:
+				found[u.id] = EndpointCheck{ID: u.id, Err: err.Error()}
+			default:
+				found[u.id] = EndpointCheck{ID: u.id, Name: e.Name, Engine: e.Engine, Found: true}
+			}
+		}
+		if found[u.id].Found {
+			targets[u.connection] = append(targets[u.connection], key)
+		}
+	}
+	checks := map[string]EndpointCheck{}
+	for _, connection := range slices.Sorted(maps.Keys(targets)) {
+		dial, closer, err := s.dialer.TargetDial(ctx, orgID, connection)
+		for _, key := range targets[connection] {
+			u := uses[key]
+			c := found[u.id]
+			if err != nil {
+				c.Err = "the target connection failed: " + err.Error()
+				checks[key] = c
+				continue
+			}
+			report, checkErr := s.endpoints.Check(catalogconnect.WithConsumer(ctx, u.consumer), orgID, u.id, u.req, dial)
+			switch {
+			case errors.Is(checkErr, catalogconnect.ErrNotFound):
+				c = EndpointCheck{ID: u.id}
+			case checkErr != nil:
+				c.Err = checkErr.Error()
+			default:
+				c.Report = report
+			}
+			checks[key] = c
+		}
+		if closer != nil {
+			if closeErr := closer.Close(); closeErr != nil {
+				s.warn("close the target connection an endpoint check used", closeErr)
+			}
+		}
+	}
+	// An endpoint checked once is under its ID, and one checked from more
+	// than one target, or for more than one requirement, under each key.
+	times := map[string]int{}
+	for _, u := range uses {
+		times[u.id]++
+	}
+	out := make(map[string]EndpointCheck, len(uses))
+	for _, key := range keys {
+		u := uses[key]
+		c, ok := checks[key]
+		if !ok {
+			c = found[u.id]
+		}
+		if times[u.id] == 1 {
+			key = u.id
+		}
+		out[key] = c
+	}
+	return out
 }
 
 // permanent reports whether planning can never succeed, so retrying is
@@ -736,6 +930,9 @@ func (s *Service) ApplyDecision(ctx context.Context, orgID, planID string, d orc
 		// a plan that changed in between. The plan keeps waiting.
 		return StatusReady, nil
 	}
+	if checkErr := s.checkBackupDecision(ctx, plan, d); checkErr != nil {
+		return "", checkErr
+	}
 	_, revision, err := s.compute(ctx, plan)
 	if permanent(err) {
 		return s.settleAs(ctx, plan, StatusStale, d.By, "What the plan was made from is gone: "+err.Error(), now)
@@ -745,6 +942,12 @@ func (s *Service) ApplyDecision(ctx context.Context, orgID, planID string, d orc
 	}
 	if revision != plan.Revision {
 		return s.settleAs(ctx, plan, StatusStale, d.By, "What's deployed changed after this plan was made. Plan again.", now)
+	}
+	if d.Actor != nil {
+		if d.Actor.OrgID != orgID || d.Actor.UserID != d.By || d.Actor.ReadOnly {
+			return "", security.ErrForbidden
+		}
+		ctx = security.WithPrincipal(ctx, *d.Actor)
 	}
 	return s.settleAs(ctx, plan, StatusApproved, d.By, d.Note, now)
 }

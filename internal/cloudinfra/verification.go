@@ -64,16 +64,7 @@ func (s *Service) ReconcileRoute(ctx context.Context, org, id string, heartbeat 
 	if err != nil {
 		return err
 	}
-	locks := []string{op.Route.Binding.ServerID}
-	if op.Source != nil && op.Source.Binding.ServerID != op.Route.Binding.ServerID {
-		locks = append(locks, op.Source.Binding.ServerID)
-	}
-	slices.Sort(locks)
-	var locked func(int) error
-	locked = func(index int) error {
-		if index < len(locks) {
-			return s.Store.WithOperationLock(ctx, "ingress/"+org+"/"+locks[index], func() error { return locked(index + 1) })
-		}
+	return s.withRouteIngressLocks(ctx, op, func() error {
 		return func() error {
 			op, err = st.RouteOperation(ctx, org, id)
 			if err != nil {
@@ -112,15 +103,14 @@ func (s *Service) ReconcileRoute(ctx context.Context, org, id string, heartbeat 
 			}
 			return nil
 		}()
-	}
-	return locked(0)
+	})
 }
 
 func (s *Service) executeRoute(ctx context.Context, st DomainStore, op *RouteOperation, state *IngressState) error {
 	route := &op.Route
 	// Accepted removal retains exact cleanup authority after a grant is revoked.
 	if op.Kind != "remove" {
-		if err := s.domainScope(ctx, op.Principal, route.ProjectID, true); err != nil {
+		if err := s.domainScope(ctx, op.executionPrincipal(), route.ProjectID, true); err != nil {
 			return err
 		}
 		switch op.Kind {

@@ -1,0 +1,28 @@
+---
+title: Drift
+description: Loomplane checks on a schedule that what runs in your clouds is what it deployed, and records differences without changing anything.
+---
+
+Drift is the difference between what Loomplane deployed and what a cloud has live. Someone deletes a Cloud Run service by hand, a tunnel goes down, or a console edit changes a setting.
+
+## How the check works
+
+Every 30 minutes by default, Loomplane asks each target's executor what's live and compares it with the binding it recorded at deploy time. It writes down the result and touches nothing. Ctrl Plane's own drift correction isn't used, because two controllers changing one resource fight each other.
+
+Set the interval with `LOOMPLANE_DRIFT_INTERVAL`. A value of `0` turns the check off.
+
+## Where you see it
+
+```bash
+loomctl status my-project
+```
+
+The `DRIFT` column reads "in sync" or says what changed. The dashboard shows the same on each environment, and the `drift_findings_total` metric counts bindings found missing or changed, labelled by provider and state.
+
+## Putting it back
+
+The next plan notices what's missing or changed, and proposes the actions to fix it. You review and approve that plan like any other. A cross-cloud link with a tunnel down also shows as drift, and the next plan brings back what's missing.
+
+<Callout type="info">
+  Drift only reads. If a check finds something unexpected, nothing happens to your cloud until a person approves a plan.
+</Callout>

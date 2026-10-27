@@ -12,6 +12,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useState,
 } from "react"
 
 import { statusOf } from "@/client/errors"
@@ -21,14 +22,14 @@ import {
 } from "@/client/forge/authsome/hooks"
 import type { Organization } from "@/client/forge/authsome/types"
 import { useSessionGet } from "@/client/forge/loomplane/hooks"
-import type { Session } from "@/client/forge/loomplane/types"
+import type { IdentitySession } from "@/client/forge/loomplane/types"
 import { useMutation, useQuery } from "@/client/hooks"
 import { forgeClient, setTabOrganization } from "@/client/runtime"
 
 const lastOrgKey = "loomplane.last-org"
 
 type Value = {
-  session: Session
+  session: IdentitySession
   organizations: Organization[]
   switchOrganization: (orgId: string) => Promise<void>
   /** can reports whether the session holds a permission, such as "project:create". */
@@ -57,29 +58,40 @@ export function OrganizationGate({
   const orgs = useQuery(useListOrganizations)
   const switchOrg = useMutation(useSwitchOrg)
   const { refetch: refetchSession } = session
-  const switching = switchOrg.isPending
+  const [transitioning, setTransitioning] = useState(false)
+  const [synchronized, setSynchronized] = useState("")
+  const switching = switchOrg.isPending || transitioning
 
   const activate = useCallback(
     async (orgId: string) => {
-      await switchOrg.mutateAsync({ body: { orgId } })
-      window.localStorage.setItem(lastOrgKey, orgId)
-      // The session is in the new organization now. Without this the
-      // refetch still names the old one, and the API refuses it as a tab
-      // that's fallen out of step (409).
-      setTabOrganization(orgId)
-      await refetchSession()
+      setTransitioning(true)
+      try {
+        await switchOrg.mutateAsync({ body: { orgId } })
+        window.localStorage.setItem(lastOrgKey, orgId)
+        // The session is in the new organization now. Without this the
+        // refetch still names the old one, and the API refuses it as a tab
+        // that's fallen out of step (409).
+        setTabOrganization(orgId)
+        await refetchSession()
+      } finally {
+        setTransitioning(false)
+      }
     },
     [switchOrg, refetchSession]
   )
 
   const active = session.data
-  if (active) {
-    // On every render, not in an effect: a child's effect runs before its
-    // parent's, so a child could otherwise read the previous organization's
-    // rows. setPrincipal empties the cache only when the value changes.
+  const principal = active ? `${active.userId}:${active.orgId}` : ""
+  useEffect(() => {
+    if (!active || switching || session.status !== "success") return
+    // Children stay unmounted until the header and cache owner agree. Cache
+    // subscribers may refetch synchronously when the principal changes.
     setTabOrganization(active.orgId)
-    forgeClient.setPrincipal(`${active.userId}:${active.orgId}`)
-  }
+    forgeClient.setPrincipal(principal)
+    // This state acknowledges the external header/cache transition before admission.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
+    setSynchronized(principal)
+  }, [active, principal, switching, session.status])
 
   const needsOrg =
     !active && session.status === "error" && statusOf(session.error) === 403
@@ -93,6 +105,8 @@ export function OrganizationGate({
 
   useEffect(() => {
     if (needsOrg && pick && !switching && switchOrg.status !== "error") {
+      // Automatic activation enters the same committed gate as a user switch.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       void activate(pick.id)
     }
   }, [needsOrg, pick, switching, switchOrg.status, activate])
@@ -110,7 +124,13 @@ export function OrganizationGate({
     [active, organizations, activate]
   )
 
-  if (value) return <Ctx.Provider value={value}>{children}</Ctx.Provider>
+  if (
+    value &&
+    session.status === "success" &&
+    !switching &&
+    synchronized === principal
+  )
+    return <Ctx.Provider value={value}>{children}</Ctx.Provider>
   if (session.status === "error" && !needsOrg) {
     return fallback({ kind: "error", error: session.error })
   }

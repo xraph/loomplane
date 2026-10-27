@@ -1,3 +1,18 @@
+import { CloudSelect as Select } from "@/components/cloud-targets/cloud-select"
+import { Card } from "@/components/ui/card"
+import { Item, ItemGroup } from "@/components/ui/item"
+import {
+  CloudLoading,
+  listItemClass,
+} from "@/components/cloud-targets/infrastructure-ui"
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import {
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+} from "@/components/ui/select"
+import { Field as FormField, FieldLabel } from "@/components/ui/field"
 import { type ReactNode, useEffect, useState } from "react"
 import { PlusIcon } from "lucide-react"
 import * as api from "@/client/forge/loomplane/hooks"
@@ -26,12 +41,15 @@ import {
   ZeroStateContent,
   ZeroStateDescription,
   ZeroStateHeader,
+  ZeroStateMedia,
   ZeroStateTitle,
 } from "@/components/zero-state"
 import { cloudDeletionError } from "@/lib/cloud-targets"
 import { useOrganization } from "@/lib/organization"
 import { CloudGlyph } from "@/components/cloud-glyph"
+import { CloudsIcon } from "@/components/icons"
 import { cloudLabel } from "@/lib/clouds"
+import { cn } from "@/lib/utils"
 
 import { AccountSummary, cloudOf } from "./target-mix"
 import { TargetEditor } from "./target-editor"
@@ -39,20 +57,24 @@ import { ChangeReview } from "./change-review"
 import { ServiceAdoption } from "./service-adoption"
 import { SyncHistory } from "./sync-history"
 
-export const selectClass =
-  "h-9 min-w-0 rounded-md border bg-background px-2 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50"
 export function EmptyClouds({
   title,
   description,
   children,
+  kind = "list",
 }: {
   title: string
   description: string
   children?: ReactNode
+  /** A list that will fill gets the faded preview; a notice doesn't. */
+  kind?: "list" | "notice"
 }) {
   return (
-    <ZeroState>
+    <ZeroState preview={kind === "list"}>
       <ZeroStateHeader>
+        <ZeroStateMedia variant="icon">
+          <CloudsIcon />
+        </ZeroStateMedia>
         <ZeroStateTitle>{title}</ZeroStateTitle>
         <ZeroStateDescription>{description}</ZeroStateDescription>
       </ZeroStateHeader>
@@ -105,24 +127,32 @@ export function CloudWorkspace({
         scopeControls={
           <>
             {projectControl}
-            <label className="grid min-w-32 flex-1 gap-1 text-xs text-muted-foreground">
-              Environment
-              <select
-                className={selectClass}
-                aria-label="Environment"
-                value={environment.id}
-                onChange={(e) => {
-                  setChosen(e.target.value)
-                  window.localStorage.setItem(preference, e.target.value)
-                }}
-              >
-                {environments.data.environments.map((e) => (
-                  <option key={e.id} value={e.id}>
-                    {e.name}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <FormField className="grid min-w-32 flex-1 gap-1 text-xs text-muted-foreground">
+              <FieldLabel className="contents">
+                Environment
+                <Select
+                  value={environment.id}
+                  onValueChange={(e) => {
+                    setChosen(e ?? "")
+                    window.localStorage.setItem(preference, e ?? "")
+                  }}
+                >
+                  <SelectTrigger
+                    aria-label="Environment"
+                    className={"w-full min-w-0"}
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {environments.data.environments.map((e) => (
+                      <SelectItem key={e.id} value={e.id}>
+                        {e.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </FieldLabel>
+            </FormField>
           </>
         }
       />
@@ -205,22 +235,30 @@ function EnvironmentWorkspace({
         <>
           <section className="flex flex-wrap items-end gap-2">
             {scopeControls}
-            <label className="grid min-w-36 flex-1 gap-1 text-xs text-muted-foreground">
-              Cloud
-              <select
-                className={selectClass}
-                aria-label="Cloud"
-                value={profile?.id ?? ""}
-                onChange={(e) => setChosen(e.target.value)}
-              >
-                {!profile && <option value="">No Clouds</option>}
-                {list.map((p) => (
-                  <option key={p.id} value={p.id}>
-                    {p.name}
-                  </option>
-                ))}
-              </select>
-            </label>
+            <FormField className="grid min-w-36 flex-1 gap-1 text-xs text-muted-foreground">
+              <FieldLabel className="contents">
+                Cloud
+                <Select
+                  value={profile?.id ?? ""}
+                  onValueChange={(e) => setChosen(e ?? "")}
+                >
+                  <SelectTrigger
+                    aria-label="Cloud"
+                    className={"w-full min-w-0"}
+                  >
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {!profile && <SelectItem value="">No Clouds</SelectItem>}
+                    {list.map((p) => (
+                      <SelectItem key={p.id} value={p.id}>
+                        {p.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </FieldLabel>
+            </FormField>
             {manage && (
               <>
                 <Button
@@ -400,19 +438,21 @@ export function CloudForm({
               : "Create a named set of deployment targets for this project."}
           </DialogDescription>
         </DialogHeader>
-        <label className="grid gap-1 text-sm">
-          Name
-          <Input
-            aria-label="Cloud name"
-            value={name}
-            maxLength={64}
-            onChange={(e) => setName(e.target.value)}
-          />
-        </label>
+        <FormField className="grid gap-1.5">
+          <FieldLabel className="contents">
+            Name
+            <Input
+              aria-label="Cloud name"
+              value={name}
+              maxLength={64}
+              onChange={(e) => setName(e.target.value)}
+            />
+          </FieldLabel>
+        </FormField>
         {error && (
-          <p role="alert" className="text-sm text-destructive">
-            {error}
-          </p>
+          <Alert variant="destructive">
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
         )}
         <DialogFooter className="flex-wrap">
           {profile && (
@@ -480,7 +520,7 @@ function Targets({
   return (
     <section className="grid min-w-0 gap-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <h2 className="font-semibold">Targets</h2>
+        <h2 className="text-[15px] font-semibold">Targets</h2>
         <div className="flex flex-wrap gap-2">
           <Input
             className="h-8 w-44"
@@ -603,15 +643,11 @@ function AppliedPlacement({
       />
     )
   if (!bindings.data)
-    return (
-      <p role="status" className="text-xs text-muted-foreground">
-        Loading applied accounts...
-      </p>
-    )
+    return <CloudLoading>Loading applied accounts...</CloudLoading>
   const services = bindings.data.bindings.filter((b) => b.subject === "service")
   return (
     <section className="grid gap-2">
-      <h3 className="text-sm font-medium">
+      <h3 className="text-[14px] font-semibold">
         Applied accounts in {environment.name}
       </h3>
       {!services.length ? (
@@ -620,11 +656,11 @@ function AppliedPlacement({
           description="Deploy this environment to see each service's applied account here."
         />
       ) : (
-        <div className="divide-y rounded-xl border">
+        <div className="divide-y overflow-hidden rounded-xl bg-card ring-1 ring-border">
           {services.map((b) => (
             <div
               key={b.id}
-              className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 text-xs"
+              className="flex flex-wrap items-center justify-between gap-2 px-4 py-2.5 text-[12.5px]"
             >
               <span className="font-medium">{b.name}</span>
               <span className="break-words text-muted-foreground">
@@ -671,17 +707,17 @@ export function TargetTable({
   return (
     <div className="grid gap-2.5">
       <AccountSummary targets={all} connections={accounts} />
-      <div className="overflow-hidden rounded-xl bg-card ring-1 ring-border">
+      <Card size="sm" className="gap-0 py-0">
         <div
           aria-hidden="true"
-          className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)_110px_auto] gap-4 border-b px-4 py-2 text-[11px] font-medium tracking-[0.04em] text-muted-foreground uppercase max-md:hidden"
+          className="grid grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)_110px_auto] gap-4 border-b bg-subtle px-4 py-2 text-[11.5px] font-medium tracking-[0.04em] text-muted-foreground uppercase max-md:hidden"
         >
           <span>Target</span>
           <span>Account</span>
           <span>Region</span>
           <span className="w-[86px]" />
         </div>
-        <ul className="divide-y">
+        <ItemGroup className="gap-0">
           {[...visible]
             .sort((a, b) =>
               `${cloudOf(a, accounts)}:${a.connectionId}:${a.name}`.localeCompare(
@@ -692,9 +728,14 @@ export function TargetTable({
               const account = accounts.find((c) => c.id === t.connectionId)
               const cloud = cloudOf(t, accounts)
               return (
-                <li
+                <Item
+                  role="listitem"
+                  size="sm"
                   key={t.id}
-                  className="grid items-center gap-x-4 gap-y-2 px-4 py-2.5 md:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)_110px_auto]"
+                  className={cn(
+                    listItemClass,
+                    "grid items-center gap-x-4 gap-y-2 py-2.5 md:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)_110px_auto]"
+                  )}
                 >
                   <span className="grid min-w-0 gap-0.5">
                     <span className="truncate text-[13px] font-medium">
@@ -722,7 +763,9 @@ export function TargetTable({
                     <CloudGlyph cloud={cloud} size="sm" />
                     <span className="grid min-w-0 gap-0.5">
                       <span className="truncate text-[13px]">
-                        {account?.name ?? "An account that was removed"}
+                        {t.runtime === "server"
+                          ? `Server pool ${t.poolId}`
+                          : (account?.name ?? "An account that was removed")}
                       </span>
                       <span className="truncate text-xs text-muted-foreground">
                         {cloudLabel(cloud)}
@@ -741,11 +784,11 @@ export function TargetTable({
                   >
                     {manage ? "Edit target" : "View target"}
                   </Button>
-                </li>
+                </Item>
               )
             })}
-        </ul>
-      </div>
+        </ItemGroup>
+      </Card>
     </div>
   )
 }

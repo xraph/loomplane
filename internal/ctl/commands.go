@@ -17,9 +17,15 @@ var jsonFlag = cli.NewBoolFlag("json", "", "Print JSON, for scripts", false)
 func (a *App) commands() []cli.Command {
 	return []cli.Command{
 		a.mcpCommand(),
+		a.federationCommand(),
 		a.cloudsCommand(),
 		a.cloudTargetsCommand(),
 		a.cloudSyncsCommand(),
+		a.cloudServersCommand(),
+		a.cloudPoolsCommand(),
+		a.dnsZonesCommand(),
+		a.domainRoutesCommand(),
+		a.cloudGrantsCommand(),
 		a.backupCommand(),
 		a.restoreCommand(),
 		a.retirementsCommand(),

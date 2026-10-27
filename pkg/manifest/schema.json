@@ -338,6 +338,10 @@
         "enabled": {
           "description": "False leaves the service out.",
           "type": "boolean"
+        },
+        "cloud_sql_network": {
+          "description": "VPC and regional subnet for Cloud Run PSC database connections.",
+          "$ref": "#/$defs/cloudSQLApplicationNetwork"
         }
       }
     },
@@ -373,6 +377,24 @@
             "$ref": "#/$defs/name"
           }
         },
+        "need_options": {
+          "description": "Options this service passes to a need, by need and then by option name. A need has to be listed in needs. What a need accepts is checked when you plan.",
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/name"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "propertyNames": {
+              "pattern": "^[a-z][a-z0-9_]{0,31}$"
+            },
+            "additionalProperties": {
+              "type": "string",
+              "maxLength": 200,
+              "pattern": "^[^\\u0000-\\u001f\\u007f-\\u009f]*$"
+            }
+          }
+        },
         "environments": {
           "description": "Overrides in one environment, by name.",
           "type": "object",
@@ -390,11 +412,71 @@
         }
       }
     },
+    "use": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "resource": {
+          "description": "A resource in this manifest to use for the dependency.",
+          "$ref": "#/$defs/name"
+        },
+        "external": {
+          "description": "A catalog endpoint to connect to instead, by ID.",
+          "type": "string",
+          "pattern": "^endpoint_[0-9a-z]{26}$"
+        },
+        "enabled": {
+          "description": "Turns an optional dependency on or off. Off can't be set with resource or external.",
+          "type": "boolean"
+        }
+      }
+    },
     "resource": {
       "type": "object",
       "required": ["kind"],
       "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "required": ["cloud_sql_psc"]
+          },
+          "then": {
+            "required": ["provider", "version", "region"],
+            "properties": {
+              "kind": {
+                "const": "postgres"
+              },
+              "provider": {
+                "const": "cloud-sql"
+              },
+              "version": {
+                "const": "17"
+              }
+            }
+          }
+        }
+      ],
       "properties": {
+        "cloud_sql_psc": {
+          "description": "Manual PSC endpoint for a PostgreSQL 17 source. You manage the endpoint and DNS. Application attachment is not available yet.",
+          "type": "object",
+          "required": ["consumer_project", "network", "forwarding_rule"],
+          "additionalProperties": false,
+          "properties": {
+            "consumer_project": {
+              "type": "string",
+              "minLength": 6
+            },
+            "network": {
+              "type": "string",
+              "pattern": "^projects/[^/]+/global/networks/[^/]+$"
+            },
+            "forwarding_rule": {
+              "type": "string",
+              "pattern": "^projects/[^/]+/regions/[^/]+/forwardingRules/[^/]+$"
+            }
+          }
+        },
         "kind": {
           "$ref": "#/$defs/kind"
         },
@@ -416,6 +498,16 @@
         "gateway": {
           "description": "Put this Postgres resource behind the database gateway. Only postgres resources can.",
           "type": "boolean"
+        },
+        "uses": {
+          "description": "Where a catalog resource gets each dependency, by dependency name: a resource in this manifest, an external endpoint, or on or off for an optional one. A dependency left out gets a new one.",
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/name"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/use"
+          }
         },
         "environments": {
           "description": "Overrides in one environment, by name.",
@@ -745,6 +837,25 @@
         }
       },
       "required": ["service", "destination"]
+    },
+    "cloudSQLApplicationNetwork": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["consumer_project", "network", "subnetwork"],
+      "properties": {
+        "consumer_project": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9-]{4,28}[a-z0-9]$"
+        },
+        "network": {
+          "type": "string",
+          "pattern": "^projects/[a-z][a-z0-9-]{4,28}[a-z0-9]/global/networks/[a-z]([a-z0-9-]{0,61}[a-z0-9])?$"
+        },
+        "subnetwork": {
+          "type": "string",
+          "pattern": "^projects/[a-z][a-z0-9-]{4,28}[a-z0-9]/regions/[a-z][a-z0-9-]*/subnetworks/[a-z]([a-z0-9-]{0,61}[a-z0-9])?$"
+        }
+      }
     }
   },
   "allOf": [

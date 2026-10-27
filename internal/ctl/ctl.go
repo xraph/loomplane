@@ -20,6 +20,7 @@ import (
 
 	"github.com/xraph/forge/cli"
 
+	"github.com/xraph/loomplane/internal/recipes"
 	"github.com/xraph/loomplane/pkg/client"
 )
 
@@ -45,6 +46,9 @@ type Options struct {
 	// ConfigPath is the saved login. Empty means the user's config
 	// directory.
 	ConfigPath string
+	// Recipes describes the catalog kinds. Nil means the registry the
+	// server binary registers its kinds in.
+	Recipes *recipes.Registry
 }
 
 // App is loomctl.
@@ -62,6 +66,9 @@ func New(opts Options) *App {
 	}
 	if opts.Getenv == nil {
 		opts.Getenv = os.Getenv
+	}
+	if opts.Recipes == nil {
+		opts.Recipes = recipes.Default()
 	}
 	if opts.ConfigPath == "" {
 		dir, err := os.UserConfigDir()

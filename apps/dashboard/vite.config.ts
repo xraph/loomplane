@@ -26,6 +26,12 @@ export default defineConfig({
       "@": resolve(import.meta.dirname, "./src"),
     },
   },
+  optimizeDeps: {
+    // The generated realtime client falls back to require("ws") outside a
+    // browser. The browser never reaches it, but the dependency scan still
+    // tries to resolve it and gives up on pre-bundling when it can't.
+    exclude: ["ws"],
+  },
   server: {
     port: 5173,
     proxy: {
@@ -36,6 +42,8 @@ export default defineConfig({
       "/openapi.json": api,
       "/asyncapi.json": api,
       "/_/": api,
+      // A catalog service's admin, through Loomplane's sandboxed proxy.
+      "/catalog-admin/": { target: api, ws: true },
     },
   },
   build: {

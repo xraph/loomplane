@@ -1,0 +1,12 @@
+{
+  "title": "Operations",
+  "pages": [
+    "production-on-docker",
+    "production-on-kubernetes",
+    "miget",
+    "upgrades-and-releases",
+    "backing-up-loomplane",
+    "monitoring",
+    "security-model"
+  ]
+}

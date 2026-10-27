@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/xraph/loomplane/internal/planning"
+	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/security"
 )
 
@@ -36,25 +37,29 @@ type NativeSource struct {
 // NativePoint is provider metadata, not a logical backup object in Trove.
 // Its identity includes the source, native reference and creation time.
 type NativePoint struct {
-	ID         string    `json:"id" forge:"id"`
-	SourceID   string    `json:"source_id"`
-	ProviderID string    `json:"provider_id"`
-	Name       string    `json:"name"`
-	Kind       string    `json:"kind"`
-	Status     string    `json:"status"`
-	Engine     string    `json:"engine"`
-	Version    string    `json:"version"`
-	CreatedAt  time.Time `json:"created_at"`
-	Encrypted  bool      `json:"encrypted"`
-	KMSKey     string    `json:"kms_key,omitempty"`
-	Present    bool      `json:"present"`
-	LastSeenAt time.Time `json:"last_seen_at"`
+	ID          string            `json:"id" forge:"id"`
+	SourceID    string            `json:"source_id"`
+	ProviderID  string            `json:"provider_id"`
+	Name        string            `json:"name"`
+	Kind        string            `json:"kind"`
+	Status      string            `json:"status"`
+	Engine      string            `json:"engine"`
+	Version     string            `json:"version"`
+	CreatedAt   time.Time         `json:"created_at"`
+	ExpiresAt   *time.Time        `json:"expires_at" nullable:"true" required:"true"`
+	Encrypted   bool              `json:"encrypted"`
+	KMSKey      string            `json:"kms_key,omitempty"`
+	Present     bool              `json:"present"`
+	LastSeenAt  time.Time         `json:"last_seen_at"`
+	PITR        *NativePITRBounds `json:"pitr,omitempty"`
+	RestoreTime *time.Time        `json:"restore_time,omitempty"`
 }
 
 type NativePageInput struct {
-	EnvironmentID string `json:"environment_id,omitempty"`
-	Before        string `json:"before,omitempty"`
-	Limit         int    `json:"limit,omitempty"`
+	EnvironmentID string `json:"environment_id,omitempty" query:"environment_id,omitempty"`
+	Before        string `json:"before,omitempty" query:"before,omitempty"`
+	Limit         int    `json:"limit,omitempty" query:"limit,omitempty"`
+	Resource      string `json:"resource,omitempty" query:"resource,omitempty"`
 }
 
 func (p NativePageInput) pageSize() (int, error) {
@@ -81,18 +86,40 @@ type NativeInventory struct {
 type NativeFetch func(context.Context, *NativeSource) ([]NativePoint, bool, error)
 type NativeStore interface {
 	GetNativeSource(context.Context, string, string) (*NativeSource, error)
+	GetNativePoint(context.Context, string, string, string) (*NativePoint, error)
 	ListNativeSources(context.Context, string, string, NativePageInput) (*NativeSourcesPage, error)
 	ReadNativeInventory(context.Context, string, string, NativePageInput) (*NativeInventory, error)
 	RefreshNativeInventory(context.Context, string, string, NativeFetch) error
 }
 type NativeBackend interface {
 	NativeSnapshots(context.Context, *planning.Binding) ([]NativePoint, bool, error)
+	CheckNativeSnapshot(context.Context, *planning.Binding, NativePoint) (*NativePoint, error)
 }
+
+type NativeAdmissionStore interface {
+	ReviewNativeTarget(context.Context, string, string, string, string) (NativeRestoreTarget, error)
+	CreateReviewedNativeRestore(context.Context, *NativeRestore, string) (*NativeRestore, error)
+	CheckNativeTarget(context.Context, *NativeRestore) error
+}
+
 type NativeService struct {
-	Store    NativeStore
-	Authz    Authorizer
-	Projects Projects
-	Backend  NativeBackend
+	Retirements     NativeRetirementStore
+	DeletionBackend NativeDeletionBackend
+	EnqueueDeletion func(context.Context, string, string) error
+	Store           NativeStore
+	Authz           Authorizer
+	Projects        Projects
+	Backend         NativeBackend
+	Copies          NativeCopyWorkStore
+	CopyBackend     NativeCopyBackend
+	AccessBackend   NativeAccessBackend
+	EnqueueCopy     func(context.Context, string, string) error
+	Cleanups        NativeCleanupWorkStore
+	CleanupBackend  NativeCleanupBackend
+	EnqueueCleanup  func(context.Context, string, string) error
+	Admission       NativeAdmissionStore
+	ReviewKey       []byte
+	Audit           projects.Auditor
 }
 
 func (s *NativeService) List(ctx context.Context, p security.Principal, project string, page NativePageInput) (*NativeSourcesPage, error) {
@@ -108,20 +135,25 @@ func (s *NativeService) List(ctx context.Context, p security.Principal, project 
 	return s.Store.ListNativeSources(ctx, p.OrgID, project, page)
 }
 func (s *NativeService) authorizeSource(ctx context.Context, p security.Principal, id string) error {
+	_, err := s.authorizedSource(ctx, p, id, security.BackupRead)
+	return err
+}
+
+func (s *NativeService) authorizedSource(ctx context.Context, p security.Principal, id string, permission security.Permission) (*NativeSource, error) {
 	source, err := s.Store.GetNativeSource(ctx, p.OrgID, id)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if source == nil || source.ID != id || p.OrgID == "" || source.OrgID != p.OrgID || source.ProjectID == "" {
-		return ErrNotFound
+		return nil, ErrNotFound
 	}
-	if err := s.Authz.Require(ctx, p, security.BackupRead, source.ProjectID); err != nil {
-		return err
+	if err := s.Authz.Require(ctx, p, permission, source.ProjectID); err != nil {
+		return nil, err
 	}
 	if _, err := s.Projects.GetProject(ctx, p.OrgID, source.ProjectID); err != nil {
-		return err
+		return nil, err
 	}
-	return nil
+	return source, nil
 }
 func (s *NativeService) Inventory(ctx context.Context, p security.Principal, id string, page NativePageInput) (*NativeInventory, error) {
 	if err := s.authorizeSource(ctx, p, id); err != nil {

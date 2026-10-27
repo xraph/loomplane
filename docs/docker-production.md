@@ -9,6 +9,7 @@ your workload before choosing a smaller host.
 This stack runs one API and dashboard, one analysis worker, Postgres 17 and
 Caddy. It tolerates container restarts. Host failure still takes it offline,
 so keep backups off the host. It does not provide high availability.
+For that, run the [Kubernetes chart](kubernetes.md).
 
 ## Install
 
@@ -109,7 +110,9 @@ docker compose exec -T loomplane-worker wget -qO- http://127.0.0.1:8781/_/health
 ```
 
 The probes include extension health, so a stalled durable worker can make
-a container unhealthy even while its HTTP listener still answers. Docker's
+a container unhealthy even while its HTTP listener still answers. The API
+replaces a durable worker that a database timeout stopped, and turns
+healthy again once the replacement is polling. Docker's
 restart policy restarts exited processes; it does not restart a running
 unhealthy container. Alert on unhealthy state, investigate the cause, and
 restart the affected service after database or provider access recovers.

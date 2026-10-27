@@ -6,7 +6,6 @@ package dbgateway
 
 import (
 	"context"
-	"crypto/ed25519"
 	"errors"
 	"fmt"
 	"time"
@@ -20,7 +19,6 @@ import (
 	planningext "github.com/xraph/loomplane/extensions/planning"
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/dbgateway"
-	"github.com/xraph/loomplane/internal/dbgateway/plane"
 	"github.com/xraph/loomplane/internal/deployments"
 	"github.com/xraph/loomplane/internal/security"
 )
@@ -77,18 +75,17 @@ func (e *Extension) Register(fapp forge.App) error {
 	if err != nil {
 		return fmt.Errorf("the database gateway needs the audit trail: %w", err)
 	}
-	var key ed25519.PrivateKey
-	var trust plane.TrustKey
+	var keys []dbgateway.SigningKey
 	if path := e.cfg.DBGateway.SigningKeyFile; path != "" {
-		if key, trust, err = dbgateway.LoadSigningKey(path); err != nil {
+		if keys, err = dbgateway.LoadSigningKeys(path); err != nil {
 			return fmt.Errorf("dbgateway.signing_key_file: %w", err)
 		}
 	} else {
 		e.Logger().Warn("dbgateway.signing_key_file isn't set: the database gateway endpoints answer 503")
 	}
-	e.svc = dbgateway.NewService(dbgateway.NewStore(pgdriver.Unwrap(db)), resourceURLs{secrets: secrets}, key, trust, time.Now)
-	if key != nil {
-		warnAboutKeyWindow(e.Logger(), e.svc.Ready(), trust, time.Now())
+	e.svc = dbgateway.NewService(dbgateway.NewStore(pgdriver.Unwrap(db)), resourceURLs{secrets: secrets}, keys, time.Now)
+	if len(keys) > 0 {
+		warnAboutKeyWindow(e.Logger(), e.svc.Ready(), keys, time.Now())
 	}
 	e.svc.Authz = authz
 	e.svc.Audit = auditor{chronicle: audit, appID: e.cfg.Identity.AppID, log: e.Logger()}
@@ -111,24 +108,34 @@ func (e *Extension) Register(fapp forge.App) error {
 	return mountManagement(fapp.Router(), guard, e.svc)
 }
 
-// keyExpiryWarning is how soon before the signing key expires Loomplane
-// starts warning about it.
+// keyExpiryWarning is how soon before the last signing key expires
+// Loomplane starts warning about it.
 const keyExpiryWarning = 30 * 24 * time.Hour
 
-// warnAboutKeyWindow logs, at startup, a signing key that can't sign now,
-// which leaves the gateway endpoints answering 503 and gateway deploys
-// failing, or one that expires within 30 days. ready is the service's Ready.
-func warnAboutKeyWindow(log forge.Logger, ready error, trust plane.TrustKey, now time.Time) {
+// warnAboutKeyWindow logs, at startup, signing keys none of which can sign
+// now, which leaves the gateway endpoints answering 503 and gateway deploys
+// failing, or ones the last of which expires within 30 days. ready is the
+// service's Ready.
+func warnAboutKeyWindow(log forge.Logger, ready error, keys []dbgateway.SigningKey, now time.Time) {
+	var last, next time.Time
+	for _, k := range keys {
+		if k.Trust.NotAfter.After(last) {
+			last = k.Trust.NotAfter
+		}
+		if k.Trust.NotBefore.After(now) && (next.IsZero() || k.Trust.NotBefore.Before(next)) {
+			next = k.Trust.NotBefore
+		}
+	}
 	switch {
 	case errors.Is(ready, dbgateway.ErrSigningKeyExpired):
-		log.Error("the database gateway signing key in dbgateway.signing_key_file has expired: the database gateway endpoints answer 503 and deployments with a gateway fail until you replace it and restart",
-			forge.F("not_after", trust.NotAfter.UTC().Format(time.RFC3339)))
+		log.Error("every database gateway signing key in dbgateway.signing_key_file has expired: the database gateway endpoints answer 503 and deployments with a gateway fail until you add a new key and restart",
+			forge.F("not_after", last.UTC().Format(time.RFC3339)))
 	case errors.Is(ready, dbgateway.ErrSigningKeyNotYetValid):
-		log.Error("the database gateway signing key in dbgateway.signing_key_file isn't valid yet: the database gateway endpoints answer 503 and deployments with a gateway fail until its not_before",
-			forge.F("not_before", trust.NotBefore.UTC().Format(time.RFC3339)))
-	case ready == nil && trust.NotAfter.Sub(now) < keyExpiryWarning:
-		log.Warn("the database gateway signing key in dbgateway.signing_key_file expires within 30 days: after that the gateway endpoints answer 503 and deployed gateways keep the routes they have. A new key also needs each gateway redeployed, as docs/postgres-services.md describes",
-			forge.F("not_after", trust.NotAfter.UTC().Format(time.RFC3339)))
+		log.Error("no database gateway signing key in dbgateway.signing_key_file is valid yet: the database gateway endpoints answer 503 and deployments with a gateway fail until the next not_before",
+			forge.F("not_before", next.UTC().Format(time.RFC3339)))
+	case ready == nil && last.Sub(now) < keyExpiryWarning:
+		log.Warn("the last database gateway signing key in dbgateway.signing_key_file expires within 30 days: after that the gateway endpoints answer 503 and deployed gateways keep the routes they have. Add the next key beside it and deploy, as docs/postgres-services.md describes",
+			forge.F("not_after", last.UTC().Format(time.RFC3339)))
 	}
 }
 

@@ -1,10 +1,31 @@
-import type { ReactNode } from "react"
+import { useNavigate } from "@tanstack/react-router"
+import type { MouseEvent, ReactNode } from "react"
 
+import { AuthLogos } from "@/components/auth-logos"
+import { AuthSilk } from "@/components/auth-silk"
 import { ModeToggle } from "@/components/mode-toggle"
+import { XraphMark } from "@/components/xraph-mark"
 
 import "./auth-layout.css"
 
-/** Shared frame for account access and the first organization setup. */
+// The signed-out screens App renders inside this one frame.
+const authPaths = new Set([
+  "/sign-in",
+  "/sign-up",
+  "/forgot-password",
+  "/reset-password",
+  "/verify-email",
+])
+
+/**
+ * Shared frame for account access and the first organization setup, in the
+ * landing site's look: the form in a double-bezel card, and the hero's light
+ * beside it. It follows the app's light and dark themes.
+ *
+ * Authsome's forms link between these screens with plain anchors, which would
+ * reload the page and restart the frame. Clicks on those links route through
+ * the app instead, so only the card changes.
+ */
 export function AuthLayout({
   title,
   children,
@@ -12,99 +33,76 @@ export function AuthLayout({
   title: string
   children: ReactNode
 }) {
+  const navigate = useNavigate()
+
+  const routeAuthLinks = (event: MouseEvent<HTMLElement>) => {
+    if (
+      event.defaultPrevented ||
+      event.button !== 0 ||
+      event.metaKey ||
+      event.ctrlKey ||
+      event.shiftKey ||
+      event.altKey
+    ) {
+      return
+    }
+    const link = (event.target as Element).closest?.("a[href]")
+    if (!(link instanceof HTMLAnchorElement)) return
+    if (
+      (link.target && link.target !== "_self") ||
+      link.hasAttribute("download")
+    ) {
+      return
+    }
+    const url = new URL(link.href, window.location.href)
+    if (url.origin !== window.location.origin || !authPaths.has(url.pathname)) {
+      return
+    }
+    event.preventDefault()
+    void navigate({ href: url.pathname + url.search + url.hash })
+  }
+
   return (
-    <main className="auth-layout">
+    <main className="auth-layout" onClickCapture={routeAuthLinks}>
       <h1 className="sr-only">{title}</h1>
-      <div className="auth-watermark" aria-hidden="true">
-        <WovenThreads />
-      </div>
       <section className="auth-access" aria-label="Account access">
         <header className="auth-toolbar">
+          <span className="auth-cross" aria-hidden="true" />
           <ModeToggle />
         </header>
         <div className="auth-content">
-          <div className="auth-panel">{children}</div>
+          <div className="auth-bezel">
+            <div className="auth-panel">{children}</div>
+          </div>
         </div>
-        <footer className="auth-footer">Loomplane by Xraph</footer>
+        <footer className="auth-footer">
+          <a
+            className="auth-by"
+            href="https://xraph.com"
+            target="_blank"
+            rel="noreferrer"
+          >
+            Loomplane by
+            <XraphMark className="auth-xraph" />
+            <span>Xraph</span>
+          </a>
+          <span>Self-hosted, on your own clouds</span>
+        </footer>
       </section>
+      <aside className="auth-visual" aria-hidden="true">
+        <AuthSilk />
+        <AuthLogos />
+        <div className="auth-visual-copy">
+          <p className="auth-headline">
+            Your infrastructure, <span>woven together.</span>
+          </p>
+          <ul className="auth-points">
+            <li>Reads your code, never runs it</li>
+            <li>Every change is a plan someone approves</li>
+            <li>Runs in your own cloud accounts</li>
+          </ul>
+        </div>
+      </aside>
     </main>
-  )
-}
-
-/** Two interlaced bands, drawn from the brand's rounded L-shaped threads. */
-function WovenThreads() {
-  const threads = Array.from({ length: 8 }, (_, i) => i)
-
-  return (
-    <svg
-      className="auth-weave"
-      viewBox="0 0 640 480"
-      fill="none"
-      aria-hidden="true"
-    >
-      <defs>
-        <mask id="auth-weave-under">
-          <rect width="640" height="480" fill="white" />
-          {threads.flatMap((row) =>
-            threads.map((column) =>
-              (row + column) % 2 === 0 ? (
-                <rect
-                  key={`top-${row}-${column}`}
-                  x={116 + column * 18}
-                  y={76 + row * 18}
-                  width="12"
-                  height="12"
-                  rx="2"
-                  fill="black"
-                />
-              ) : null
-            )
-          )}
-          {threads
-            .slice(0, 7)
-            .flatMap((row) =>
-              threads.map((column) =>
-                (row + column) % 2 === 0 ? (
-                  <rect
-                    key={`bottom-${row}-${column}`}
-                    x={560 - column * 18}
-                    y={412 - row * 18}
-                    width="12"
-                    height="12"
-                    rx="2"
-                    fill="black"
-                  />
-                ) : null
-              )
-            )}
-        </mask>
-      </defs>
-
-      <g
-        stroke="var(--auth-thread-paper)"
-        strokeWidth="7"
-        strokeLinecap="round"
-      >
-        {threads.map((i) => (
-          <path
-            key={i}
-            d={`M${122 + i * 18} 58V226Q${122 + i * 18} ${418 - i * 18} 314 ${418 - i * 18}H582`}
-          />
-        ))}
-      </g>
-      <g
-        stroke="var(--auth-thread-gold)"
-        strokeWidth="7"
-        strokeLinecap="round"
-        mask="url(#auth-weave-under)"
-      >
-        {threads.map((i) => (
-          <path
-            key={i}
-            d={`M58 ${82 + i * 18}H344Q${566 - i * 18} ${82 + i * 18} ${566 - i * 18} 304V422`}
-          />
-        ))}
-      </g>
-    </svg>
   )
 }

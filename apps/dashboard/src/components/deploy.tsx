@@ -44,6 +44,8 @@ import {
   useRefetchWhile,
 } from "@/client/hooks"
 import { EvidenceList } from "@/components/architecture"
+import { StatusPill as RunPill, type Tone as RunTone } from "@/components/runs"
+import { ServiceAddress } from "@/components/service-address"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -60,7 +62,6 @@ import {
   Empty,
   EmptyDescription,
   EmptyHeader,
-  EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty"
 import {
@@ -205,8 +206,8 @@ function ManifestCard({
             onPendingChange={onPendingChange}
           />
         )}
-        <details className="rounded-xl border p-3">
-          <summary className="cursor-pointer text-sm font-medium">
+        <details className="rounded-xl bg-card px-4 py-3 ring-1 ring-border">
+          <summary className="cursor-pointer text-[13px] font-semibold">
             Edit loomplane.yaml · Revision {current.data.revision}
           </summary>
           <div className="pt-3">
@@ -228,9 +229,6 @@ function ManifestCard({
       return (
         <Empty>
           <EmptyHeader>
-            <EmptyMedia variant="icon">
-              <FileCodeIcon />
-            </EmptyMedia>
             <EmptyTitle>No manifest yet</EmptyTitle>
             <EmptyDescription>
               The manifest says where each service runs. Analyze the repository
@@ -487,10 +485,10 @@ function PlansCard({
   )
 
   return (
-    <Card className="pb-0">
-      <CardHeader>
+    <Card size="sm" className="gap-0 py-0">
+      <CardHeader className="border-b px-4 pt-3">
         <CardTitle>Plans</CardTitle>
-        <CardDescription>
+        <CardDescription className="text-[12.5px]">
           What deploying an environment would do, worked out from the manifest
           and one commit of each repository. Planning never touches a cloud.
         </CardDescription>
@@ -508,30 +506,30 @@ function PlansCard({
           />
         )}
       </CardHeader>
-      <CardContent className="px-0">
+      <div>
         {plans.status === "error" ? (
-          <Alert variant="destructive" className="mx-4 mb-4 w-auto">
+          <Alert variant="destructive" className="m-4 w-auto">
             <AlertDescription>
               {messageOf(plans.error, "Plans couldn't be loaded.")}
             </AlertDescription>
           </Alert>
         ) : !plans.data ? (
-          <div className="px-4 pb-4">
+          <div className="p-4">
             <Skeleton className="h-24 w-full" />
           </div>
         ) : list.length === 0 ? (
-          <p className="border-t px-4 py-8 text-center text-sm text-muted-foreground">
+          <p className="px-4 py-3.5 text-[13px] text-muted-foreground">
             No plans yet. Save a manifest, then plan an environment.
           </p>
         ) : (
           <Table>
             <TableHeader>
               <TableRow className="hover:bg-transparent">
-                <TableHead className="pl-4">Environment</TableHead>
+                <TableHead>Environment</TableHead>
                 <TableHead>Status</TableHead>
                 <TableHead>Changes</TableHead>
                 <TableHead>From</TableHead>
-                <TableHead className="pr-4">Planned</TableHead>
+                <TableHead>Planned</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -541,7 +539,7 @@ function PlansCard({
                   className="cursor-pointer"
                   onClick={() => onOpen(p.id)}
                 >
-                  <TableCell className="pl-4 font-medium">
+                  <TableCell className="font-medium">
                     <button
                       type="button"
                       className="outline-none focus-visible:underline"
@@ -559,10 +557,10 @@ function PlansCard({
                   <TableCell className="text-muted-foreground tabular-nums">
                     {summaryLine(p)}
                   </TableCell>
-                  <TableCell className="font-mono text-xs text-muted-foreground">
+                  <TableCell className="font-mono text-xs">
                     {lockLabel(p.sources)} · r{p.manifestRevision}
                   </TableCell>
-                  <TableCell className="pr-4 text-muted-foreground">
+                  <TableCell className="text-muted-foreground">
                     <time dateTime={p.createdAt}>
                       {formatDate(p.createdAt)}
                     </time>
@@ -572,7 +570,7 @@ function PlansCard({
             </TableBody>
           </Table>
         )}
-      </CardContent>
+      </div>
     </Card>
   )
 }
@@ -692,25 +690,17 @@ function PlanStatus({ status }: { status: string }) {
   return <StatusPill {...planStatus(status)} />
 }
 
-/** StatusPill is a status with a light that says how it's going. */
+// A plan's tones in the run colors: waiting is amber, done is green.
+const pillTones: Record<Tone, RunTone> = {
+  ok: "live",
+  wait: "waiting",
+  bad: "failed",
+  quiet: "quiet",
+}
+
+/** StatusPill is a status in the tinted pill the rest of the app uses. */
 function StatusPill({ label, tone }: { label: string; tone: Tone }) {
-  const s = { label, tone }
-  return (
-    <span className="inline-flex items-center gap-2">
-      <span
-        aria-hidden="true"
-        className={cn(
-          "inline-block h-1.5 w-3 shrink-0 rounded-full",
-          s.tone === "ok" && "bg-overdye",
-          s.tone === "bad" && "bg-destructive",
-          s.tone === "quiet" && "bg-muted-foreground/40",
-          s.tone === "wait" &&
-            "animate-pulse bg-weld motion-reduce:animate-none"
-        )}
-      />
-      {s.label}
-    </span>
-  )
+  return <RunPill tone={pillTones[tone]}>{label}</RunPill>
 }
 
 function PlanReview({
@@ -820,7 +810,7 @@ function PlanBody({
           </Section>
         )}
         {isPlanning(plan.status) && (
-          <div className="flex items-center gap-2 px-4 py-6 text-sm text-muted-foreground">
+          <div className="flex items-center gap-2 px-4 py-6 text-[13px] text-muted-foreground">
             <Spinner />
             Working out what this environment needs
           </div>
@@ -867,7 +857,7 @@ function PlanBody({
             }
           >
             {plan.actions.length === 0 ? (
-              <p className="text-sm text-muted-foreground">
+              <p className="text-[13px] text-muted-foreground">
                 Nothing: what&apos;s deployed already matches the manifest.
               </p>
             ) : (
@@ -910,7 +900,7 @@ function Lockset({ sources }: { sources: PlanSource[] }) {
         <li
           key={s.sourceId}
           className={cn(
-            "flex items-center gap-3 text-sm",
+            "flex items-center gap-3 text-[13px]",
             !s.inScope && "text-muted-foreground"
           )}
         >
@@ -998,7 +988,7 @@ function Findings({
             )}
           />
           <div className="grid min-w-0 gap-1.5">
-            <p className="text-sm">{f.message}</p>
+            <p className="text-[13px]">{f.message}</p>
             {f.path && !f.path.startsWith(connectionPath) && (
               <code className="font-mono text-xs text-muted-foreground">
                 {f.path}
@@ -1007,7 +997,7 @@ function Findings({
             {f.code === "no-connection" && (
               <Link
                 to="/integrations"
-                className="text-sm underline-offset-4 hover:underline"
+                className="text-[13px] underline-offset-4 hover:underline"
               >
                 Connect one under Integrations
               </Link>
@@ -1220,7 +1210,7 @@ function ActionRow({ action: a }: { action: Action }) {
   const env = a.service?.env ?? []
   const routes = a.service?.gateway ?? []
   return (
-    <li className="grid gap-1.5 rounded-lg border px-3 py-2.5">
+    <li className="grid gap-1.5 rounded-xl bg-card px-3 py-2.5 ring-1 ring-border">
       <div className="flex flex-wrap items-center gap-2">
         <Badge
           variant={a.op === "delete" ? "destructive" : "secondary"}
@@ -1229,7 +1219,7 @@ function ActionRow({ action: a }: { action: Action }) {
           {opLabel(a.op)}
         </Badge>
         <span className="font-medium">{a.name}</span>
-        <span className="text-sm text-muted-foreground">
+        <span className="text-[13px] text-muted-foreground">
           {a.creates} on {a.provider}
           {a.connectionId ? `, ${target?.name ?? a.connectionId}` : ""}
           {a.region ? `, ${a.region}` : ""}
@@ -1357,7 +1347,7 @@ function DeploymentProgress({ planId }: { planId: string }) {
   )
   if (missing || !deployment.data) {
     return (
-      <p className="flex items-center gap-2 text-sm text-muted-foreground">
+      <p className="flex items-center gap-2 text-[13px] text-muted-foreground">
         <Spinner />
         Starting the deployment
       </p>
@@ -1369,7 +1359,7 @@ function DeploymentProgress({ planId }: { planId: string }) {
 function DeploymentSteps({ deployment: d }: { deployment: Deployment }) {
   return (
     <div className="grid gap-3">
-      <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
+      <p className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px]">
         <StatusPill {...deploymentStatus(d.status)} />
         <span className="text-muted-foreground">
           Started <time dateTime={d.startedAt}>{formatDate(d.startedAt)}</time>
@@ -1390,7 +1380,7 @@ function DeploymentSteps({ deployment: d }: { deployment: Deployment }) {
       )}
       {d.status === "failed" && <RetryDeployment deployment={d} />}
       {d.steps.length === 0 ? (
-        <p className="text-sm text-muted-foreground">
+        <p className="text-[13px] text-muted-foreground">
           Nothing to change: everything was already deployed.
         </p>
       ) : (
@@ -1398,11 +1388,11 @@ function DeploymentSteps({ deployment: d }: { deployment: Deployment }) {
           {d.steps.map((s) => (
             <li
               key={s.actionId}
-              className="grid gap-1 rounded-lg border px-3 py-2.5"
+              className="grid gap-1 rounded-xl bg-card px-3 py-2.5 ring-1 ring-border"
             >
               <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
                 <span className="font-medium">{s.name}</span>
-                <span className="text-sm">
+                <span className="text-[13px]">
                   <StatusPill {...stepStatus(s.status)} />
                 </span>
                 <span className="text-xs text-muted-foreground">
@@ -1427,14 +1417,7 @@ function DeploymentSteps({ deployment: d }: { deployment: Deployment }) {
                 </p>
               ))}
               {s.url && s.status === "succeeded" && (
-                <a
-                  href={s.url}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="w-fit text-sm underline-offset-4 hover:underline"
-                >
-                  {s.url.replace(/^https?:\/\//, "")}
-                </a>
+                <ServiceAddress address={s.url} className="w-fit text-[13px]" />
               )}
               {s.image && (
                 <code className="font-mono text-xs wrap-anywhere text-muted-foreground">
@@ -1466,21 +1449,21 @@ function DeploymentsCard({
   )
   if (list.status === "error" || deployments.length === 0) return null
   return (
-    <Card className="pb-0">
-      <CardHeader>
+    <Card size="sm" className="gap-0 py-0">
+      <CardHeader className="border-b px-4 pt-3">
         <CardTitle>Deployments</CardTitle>
-        <CardDescription>
+        <CardDescription className="text-[12.5px]">
           Each approved plan, carried out. Open one to see its steps.
         </CardDescription>
       </CardHeader>
-      <CardContent className="px-0">
+      <div>
         <Table>
           <TableHeader>
             <TableRow className="hover:bg-transparent">
-              <TableHead className="pl-4">Environment</TableHead>
+              <TableHead>Environment</TableHead>
               <TableHead>Status</TableHead>
               <TableHead>Commit</TableHead>
-              <TableHead className="pr-4">Started</TableHead>
+              <TableHead>Started</TableHead>
             </TableRow>
           </TableHeader>
           <TableBody>
@@ -1490,7 +1473,7 @@ function DeploymentsCard({
                 className="cursor-pointer"
                 onClick={() => onOpen(d.planId)}
               >
-                <TableCell className="pl-4 font-medium">
+                <TableCell className="font-medium">
                   <button
                     type="button"
                     className="outline-none focus-visible:underline"
@@ -1505,17 +1488,17 @@ function DeploymentsCard({
                 <TableCell>
                   <StatusPill {...deploymentStatus(d.status)} />
                 </TableCell>
-                <TableCell className="font-mono text-xs text-muted-foreground">
+                <TableCell className="font-mono text-xs">
                   {deployedCommits(d)}
                 </TableCell>
-                <TableCell className="pr-4 text-muted-foreground">
+                <TableCell className="text-muted-foreground">
                   <time dateTime={d.startedAt}>{formatDate(d.startedAt)}</time>
                 </TableCell>
               </TableRow>
             ))}
           </TableBody>
         </Table>
-      </CardContent>
+      </div>
     </Card>
   )
 }

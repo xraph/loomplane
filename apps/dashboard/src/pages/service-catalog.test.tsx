@@ -64,6 +64,134 @@ function response(body: unknown, status = 200) {
   })
 }
 
+it.each(["manual", "provision"])(
+  "requires an explicit regional PSC endpoint before deploying its profile: %s",
+  async (mode) => {
+    const user = userEvent.setup()
+    const fixture = managedDatabaseFixture("cloud-sql")
+    const psc = {
+      ...fixture.profile,
+      id: "postgresql-17-cloud-sql-psc",
+      access: "cloud-sql-psc-connector",
+    }
+    fixture.provider.provisions![0].managedProfiles!.push(psc)
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const path = String(input)
+      return response(
+        managedWire(
+          path.endsWith("/projects")
+            ? { projects: [] }
+            : path.endsWith("/providers")
+              ? { providers: [fixture.provider] }
+              : {
+                  connections: [
+                    fixture.connection,
+                    {
+                      ...fixture.connection,
+                      id: "second",
+                      name: "Second account",
+                      accountIdentity: "second-account",
+                      details: { project_id: "project-b" },
+                    },
+                  ],
+                }
+        )
+      )
+    })
+    const deploy = vi
+      .spyOn(catalog, "deployDatabase")
+      .mockResolvedValue("project")
+    mount()
+    const button = await screen.findByRole("button", {
+      name: "Deploy PostgreSQL",
+    })
+    expect(button).toBeEnabled()
+    expect(
+      screen.getByRole("combobox", { name: "Connection mode" })
+    ).toHaveTextContent("Cloud SQL connector")
+    await user.click(screen.getByRole("combobox", { name: "Connection mode" }))
+    await user.click(
+      await screen.findByRole("option", {
+        name: "Private Service Connect (PSC)",
+      })
+    )
+    expect(button).toBeDisabled()
+    await user.click(screen.getByLabelText("VPC network"))
+    await user.paste("projects/project-a/global/networks/apps")
+    await user.click(screen.getByLabelText("PSC forwarding rule"))
+    await user.paste(
+      "projects/project-a/regions/us-central1/forwardingRules/database"
+    )
+    expect(button).toBeEnabled()
+    await user.click(screen.getByRole("radio", { name: /Second account/ }))
+    await user.click(screen.getByRole("combobox", { name: "Connection mode" }))
+    await user.click(
+      await screen.findByRole("option", {
+        name: "Private Service Connect (PSC)",
+      })
+    )
+    expect(screen.getByLabelText("VPC network")).toHaveValue("")
+    expect(screen.getByLabelText("PSC forwarding rule")).toHaveValue("")
+    expect(button).toBeDisabled()
+    await user.click(screen.getByRole("radio", { name: /Selected account/ }))
+    await user.click(screen.getByRole("combobox", { name: "Connection mode" }))
+    await user.click(
+      await screen.findByRole("option", {
+        name: "Private Service Connect (PSC)",
+      })
+    )
+    await user.click(screen.getByRole("combobox", { name: "Region" }))
+    await user.click(
+      await screen.findByRole("option", { name: "europe-west1" })
+    )
+    expect(button).toBeDisabled()
+    await user.clear(screen.getByLabelText("PSC forwarding rule"))
+    await user.click(screen.getByLabelText("PSC forwarding rule"))
+    await user.paste(
+      "projects/project-a/regions/europe-west1/forwardingRules/database"
+    )
+    if (mode === "provision") {
+      await user.click(
+        screen.getByRole("checkbox", {
+          name: "Create endpoint and private DNS",
+        })
+      )
+      expect(button).toBeDisabled()
+      await user.click(screen.getByLabelText("PSC subnet"))
+      await user.paste("projects/project-a/regions/us-central1/subnetworks/psc")
+      expect(button).toBeDisabled()
+      await user.clear(screen.getByLabelText("PSC subnet"))
+      await user.paste(
+        "projects/project-a/regions/europe-west1/subnetworks/psc"
+      )
+      expect(button).toBeEnabled()
+    }
+    await user.click(button)
+    expect(deploy).toHaveBeenCalledWith(
+      expect.objectContaining({
+        managed: expect.objectContaining({
+          profile: psc,
+          region: "europe-west1",
+          cloudSqlPsc: {
+            consumerProject: "project-a",
+            network: "projects/project-a/global/networks/apps",
+            forwardingRule:
+              "projects/project-a/regions/europe-west1/forwardingRules/database",
+            ...(mode === "provision"
+              ? {
+                  provisionSubnetwork:
+                    "projects/project-a/regions/europe-west1/subnetworks/psc",
+                }
+              : {}),
+          },
+        }),
+      }),
+      expect.any(Function),
+      expect.any(Function)
+    )
+  }
+)
+
 for (const target of ["rds", "cloud-sql"] as const) {
   it(`shows ${target} account, requested storage and provider backups without a Docker schedule`, async () => {
     const fixture = managedDatabaseFixture(target)
@@ -149,53 +277,59 @@ it("keeps a failed provider read distinct from having no eligible cloud accounts
   ).not.toBeInTheDocument()
 })
 
-it("identifies managed recovery as pending instead of offering container backups", async () => {
-  const fixture = managedDatabaseFixture("rds")
-  vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
-    const path = String(input)
-    if (path.endsWith("/providers"))
-      return response(managedWire({ providers: [fixture.provider] }))
-    if (path.endsWith("/projects"))
-      return response({ projects: [{ id: "p", name: "Managed orders" }] })
-    if (path.endsWith("/environments"))
-      return response({ environments: [{ id: "prod", name: "production" }] })
-    if (path.includes("/bindings"))
-      return response({
-        bindings: [
-          {
-            id: "binding",
-            name: "database",
-            subject: "resource",
-            provider: "rds",
-            environment_id: "prod",
-            config: {
-              kind: "postgres",
-              managed: { profile: { id: "postgresql-17-rds" } },
+it.each(["rds", "cloud-sql"] as const)(
+  "identifies %s managed recovery without offering container backups",
+  async (provider) => {
+    const fixture = managedDatabaseFixture(provider)
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const path = String(input)
+      if (path.endsWith("/providers"))
+        return response(managedWire({ providers: [fixture.provider] }))
+      if (path.endsWith("/projects"))
+        return response({ projects: [{ id: "p", name: "Managed orders" }] })
+      if (path.endsWith("/environments"))
+        return response({ environments: [{ id: "prod", name: "production" }] })
+      if (path.includes("/bindings"))
+        return response({
+          bindings: [
+            {
+              id: "binding",
+              name: "database",
+              subject: "resource",
+              provider,
+              environment_id: "prod",
+              config: {
+                kind: "postgres",
+                managed: { profile: { id: `postgresql-17-${provider}` } },
+              },
             },
-          },
-        ],
+          ],
+        })
+      return response({
+        connections: [],
+        backups: [],
+        restores: [],
+        policies: [],
       })
-    return response({
-      connections: [],
-      backups: [],
-      restores: [],
-      policies: [],
     })
-  })
-  mountRecovery()
-  expect(
-    await screen.findByText("Managed database recovery")
-  ).toBeInTheDocument()
-  expect(
-    screen.queryByText("No catalog database in this environment")
-  ).not.toBeInTheDocument()
-  expect(
-    screen.queryByRole("button", { name: "Back up now" })
-  ).not.toBeInTheDocument()
-  expect(
-    screen.queryByRole("heading", { name: "Isolated recovery copies" })
-  ).not.toBeInTheDocument()
-})
+    mountRecovery()
+    expect(
+      await screen.findByText("Managed database recovery")
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByText("No catalog database in this environment")
+    ).not.toBeInTheDocument()
+    expect(
+      screen.getByText(/captured RDS and Cloud SQL history/i)
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByRole("button", { name: "Back up now" })
+    ).not.toBeInTheDocument()
+    expect(
+      screen.queryByRole("heading", { name: "Isolated recovery copies" })
+    ).not.toBeInTheDocument()
+  }
+)
 it("deploys one engine per page, with no project or recovery reads", async () => {
   const requests: string[] = []
   vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
@@ -466,4 +600,80 @@ it("does not silently replace the default cloud account with a server after prof
   expect(
     screen.getByRole("button", { name: "Deploy PostgreSQL" })
   ).toBeDisabled()
+})
+
+it("keeps embedded recovery scoped and opens the shared schedule and restore workflows", async () => {
+  const writes: { path: string; body: unknown }[] = []
+  vi.stubGlobal(
+    "fetch",
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = String(input)
+      if (init?.method === "POST" || init?.method === "PUT") {
+        writes.push({ path, body: JSON.parse(String(init.body)) })
+        return response({ id: "accepted" }, 202)
+      }
+      if (path.endsWith("/environments"))
+        return response({ environments: [{ id: "prod", name: "production" }] })
+      if (path.includes("/bindings"))
+        return response({
+          bindings: [
+            {
+              id: "binding",
+              name: "database",
+              subject: "resource",
+              provider: "server",
+              environment_id: "prod",
+              config: { kind: "redis", catalog: { id: "redis-8.2" } },
+            },
+          ],
+        })
+      if (path.endsWith("/service-backups"))
+        return response({
+          backups: [
+            {
+              id: "backup",
+              name: "database",
+              environment_id: "prod",
+              status: "succeeded",
+              bytes: 512,
+              created_at: "2026-10-20T12:00:00Z",
+            },
+          ],
+        })
+      return response({ policies: [], restores: [] })
+    }
+  )
+  render(
+    <ClientProvider client={forgeClient}>
+      <ServiceRecovery
+        project="p"
+        environment="prod"
+        resource="database"
+        embeddedTitle="Redis"
+      />
+    </ClientProvider>
+  )
+  expect(await screen.findByRole("heading", { name: "Redis" })).toBeVisible()
+  expect(
+    screen.queryByRole("combobox", { name: "Recovery environment" })
+  ).toBeNull()
+  expect(screen.queryByRole("button", { name: "Cloud snapshots" })).toBeNull()
+  expect(screen.getByRole("columnheader", { name: "Created" })).toBeVisible()
+  expect(screen.getByRole("columnheader", { name: "Size" })).toBeVisible()
+  expect(screen.getByText("Not tested")).toBeVisible()
+  await userEvent.click(screen.getByRole("button", { name: "Schedule" }))
+  expect(screen.getByRole("dialog", { name: "Backup schedule" })).toBeVisible()
+  await userEvent.click(screen.getByRole("button", { name: "Enable backups" }))
+  await vi.waitFor(() => expect(writes).toHaveLength(1))
+  expect(writes[0].body).toEqual({
+    environment: "production",
+    resource: "database",
+    every_hours: 24,
+    enabled: true,
+  })
+  await userEvent.keyboard("{Escape}")
+  await userEvent.click(screen.getByRole("button", { name: "Restore copy" }))
+  await vi.waitFor(() => expect(writes).toHaveLength(2))
+  expect(writes[1].path).toMatch(/service-backups\/backup\/restore$/)
+  expect(writes[1].body).toEqual({ request_id: expect.any(String) })
 })

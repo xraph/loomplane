@@ -77,6 +77,11 @@ const (
 
 // Action is one step of a plan.
 type Action struct {
+	// BackupEveryHours is a reviewed default for a newly provisioned resource.
+	// It does not change the runtime recipe or overwrite an operator's policy.
+	BackupEveryHours int                `json:"backup_every_hours,omitempty"`
+	Compensation     *CloudCompensation `json:"compensation,omitempty"`
+
 	Routes []cloudinfra.Route `json:"routes,omitempty"`
 
 	// AdoptCloudPlacement persists reviewed metadata without a provider call.
@@ -120,18 +125,20 @@ type AppliedInputs struct {
 }
 
 type ServiceConfig struct {
-	AppliedInputs  *AppliedInputs     `json:"applied_inputs,omitempty"`
-	CloudPlacement *CloudPlacement    `json:"cloud_placement,omitempty"`
-	Catalog        *recipes.Recipe    `json:"catalog,omitempty"`
-	Provider       string             `json:"provider"`
-	Region         string             `json:"region,omitempty"`
-	Target         string             `json:"target,omitempty"`
-	TargetSettings map[string]string  `json:"target_settings,omitempty"`
-	Endpoint       *manifest.Endpoint `json:"endpoint,omitempty"`
-	HealthPath     string             `json:"health_path,omitempty"`
-	BuildTarget    *BuildTarget       `json:"build_target,omitempty"`
-	Workload       provider.Workload  `json:"workload"`
-	Execution      provider.Execution `json:"execution"`
+	FrontendDemand *cloudinfra.FrontendDemand `json:"frontend_demand,omitempty"`
+	CapacityIntent *CapacityIntent            `json:"capacity_intent,omitempty"`
+	AppliedInputs  *AppliedInputs             `json:"applied_inputs,omitempty"`
+	CloudPlacement *CloudPlacement            `json:"cloud_placement,omitempty"`
+	Catalog        *recipes.Recipe            `json:"catalog,omitempty"`
+	Provider       string                     `json:"provider"`
+	Region         string                     `json:"region,omitempty"`
+	Target         string                     `json:"target,omitempty"`
+	TargetSettings map[string]string          `json:"target_settings,omitempty"`
+	Endpoint       *manifest.Endpoint         `json:"endpoint,omitempty"`
+	HealthPath     string                     `json:"health_path,omitempty"`
+	BuildTarget    *BuildTarget               `json:"build_target,omitempty"`
+	Workload       provider.Workload          `json:"workload"`
+	Execution      provider.Execution         `json:"execution"`
 	// Service is the service's ID in the analysis's graph, which its
 	// variables are set against.
 	Service string `json:"service"`
@@ -162,6 +169,8 @@ type ServiceConfig struct {
 	// PrivateEgress sends the service's traffic to private addresses into
 	// its cloud's network, and over a link to the other cloud.
 	PrivateEgress bool `json:"private_egress,omitempty"`
+	// CloudSQLNetwork is the reviewed application route for PSC attachments.
+	CloudSQLNetwork *provider.CloudSQLApplicationNetwork `json:"cloud_sql_network,omitempty"`
 	// Env are the variables Loomplane sets so the service finds what it
 	// needs. The values exist only once those things are deployed.
 	Env []EnvLink `json:"env,omitempty"`
@@ -171,6 +180,9 @@ type ServiceConfig struct {
 	// DatabaseGateway is set on the database gateway, a service Loomplane
 	// generates and builds in front of the Postgres resources that opt in.
 	DatabaseGateway *DatabaseGatewayConfig `json:"database_gateway,omitempty"`
+	// Component is the catalog component the service runs, when a
+	// composed catalog kind runs one as a service.
+	Component *ComponentConfig `json:"component,omitempty"`
 }
 
 // DatabaseGatewayConfig is what the database gateway serves: the
@@ -186,6 +198,11 @@ type DatabaseGatewayConfig struct {
 	// upgrade that changes the gateway's code changes its configuration
 	// and redeploys it.
 	Program string `json:"program"`
+	// Trust names the control-plane keys the gateway trusts, as
+	// plane.TrustDigest gives it, so a signing key added, renewed or
+	// expired redeploys the gateway with the keys it needs. The deploy
+	// hands it the keys themselves.
+	Trust string `json:"trust,omitempty"`
 }
 
 // Generated reports whether Loomplane generates the service from its own
@@ -244,6 +261,14 @@ type EnvLink struct {
 	// configuration, so a resource opting in or out, or the gateway moving
 	// to another region or DNS zone, redeploys what needs it.
 	Gateway string `json:"gateway,omitempty"`
+	// Field is what of a composed catalog resource the variable holds:
+	// "url" for its primary output, "output:<name>" for another output,
+	// "consumer:<name>" for one issued to this service alone. It's empty
+	// for everything else, which gives its address.
+	Field string `json:"field,omitempty"`
+	// Options are what the service chose for a "consumer:" link, from
+	// services.<name>.need_options.<need>. No other link has them.
+	Options map[string]string `json:"options,omitempty"`
 }
 
 // ResourceConfig is everything a resource is provisioned from.
@@ -256,6 +281,71 @@ type ResourceConfig struct {
 	Region         string                 `json:"region,omitempty"`
 	Kind           string                 `json:"kind"`
 	Version        string                 `json:"version,omitempty"`
+	// Composition is set on the action for a composed catalog resource
+	// itself, and Component on each of its components' actions.
+	Composition *CompositionConfig `json:"composition,omitempty"`
+	Component   *ComponentConfig   `json:"component,omitempty"`
+	// RoutablePorts are the container ports of a process component that
+	// may get a public HTTP route. Control ports are never listed, and
+	// nothing else has any.
+	RoutablePorts []int `json:"routable_ports,omitempty"`
+	// CloudPlacement is the environment's Cloud target a composed resource
+	// and each of its components run on, when its target is one. Nothing
+	// else has one.
+	CloudPlacement *CloudPlacement `json:"cloud_placement,omitempty"`
+}
+
+// ComponentActionName names the action for one part of a composed catalog
+// resource: one of its components, or a dependency provisioned for it.
+func ComponentActionName(resource, part string) string { return resource + "--" + part }
+
+// Where a composed catalog resource gets one of its dependencies.
+const (
+	// DependencyNew provisions one of its own, named by
+	// ComponentActionName.
+	DependencyNew = "new"
+	// DependencyResource connects another resource in the manifest.
+	DependencyResource = "resource"
+	// DependencyExternal connects an external endpoint.
+	DependencyExternal = "external"
+	// DependencyOff leaves an optional dependency out.
+	DependencyOff = "off"
+)
+
+// DependencyChoice is where a composed catalog resource gets one
+// dependency.
+type DependencyChoice struct {
+	Mode string `json:"mode"`
+	// Resource is the action name: ComponentActionName(parent, dependency)
+	// for a new one, the manifest name for a connected resource.
+	Resource string `json:"resource,omitempty"`
+	// External is the endpoint's ID.
+	External string `json:"external,omitempty"`
+	Kind     string `json:"kind,omitempty"`
+}
+
+// CompositionConfig is the composed catalog resource itself: the release
+// its components run, where its dependencies come from, and what it gives
+// the services that need it.
+type CompositionConfig struct {
+	Kind         string                      `json:"kind"`
+	Version      string                      `json:"version"`
+	Revision     string                      `json:"revision"`
+	Dependencies map[string]DependencyChoice `json:"dependencies,omitempty"`
+	Outputs      []recipes.Output            `json:"outputs,omitempty"`
+	Secrets      []recipes.GeneratedSecret   `json:"secrets,omitempty"`
+}
+
+// ComponentConfig is one component of a composed catalog resource, pinned
+// to its release's image for the target's architecture.
+type ComponentConfig struct {
+	Kind string `json:"kind"`
+	// Resource is the composed resource's manifest name.
+	Resource     string                      `json:"resource"`
+	Revision     string                      `json:"revision"`
+	Component    recipes.ResolvedComponent   `json:"component"`
+	Dependencies map[string]DependencyChoice `json:"dependencies,omitempty"`
+	Protection   recipes.Protection          `json:"protection"`
 }
 
 // Change is one setting an update changes.
@@ -435,6 +525,8 @@ type Binding struct {
 	// PhysicalID identifies the immutable provider incarnation when the adapter
 	// can verify it. ExternalID may be a reusable native name.
 	PhysicalID string `json:"physical_id,omitempty"`
+	// OwnedResources holds non-secret provider identities needed for later cleanup.
+	OwnedResources map[string]json.RawMessage `json:"owned_resources,omitempty"`
 	// Config is the ServiceConfig or ResourceConfig last applied.
 	Config json.RawMessage `json:"config"`
 	// URL is where a deployed service answers, which the services that

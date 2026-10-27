@@ -98,11 +98,10 @@ func Extensions(cfg config.Config) []forge.Extension {
 	// repository's code. Its handlers go to Dispatch now; the planning
 	// extension binds them to the planner when it registers.
 	deployments := orchestration.NewDeployments()
-	jobs := dispatchext.New(
+	jobs := newJobs(deployments.Options(owner(), cfg.Orchestration.Concurrency),
 		dispatchext.WithConcurrency(cfg.Orchestration.Concurrency),
 		dispatchext.WithPollInterval(cfg.Orchestration.PollInterval),
 		dispatchext.WithQueues([]string{"default", orchestration.Queue}),
-		dispatchext.WithDurableWorkflows(deployments.Options(owner(), cfg.Orchestration.Concurrency)),
 		// Followers check for a leader every half lease. A short lease
 		// means a leader that stops, a restarted replica or a stopped
 		// worker, is replaced in seconds, and the drift check keeps its
@@ -114,6 +113,7 @@ func Extensions(cfg config.Config) []forge.Extension {
 		dispatchext.WithDisableRoutes(),
 		dispatchext.WithDisableMigrate(),
 	)
+	jobs.WithCapacity(deployments.CapacityOptions(owner(), cfg.Orchestration.Concurrency), deployments.BindCapacityWorker)
 
 	// Provider plugins, described when the first extension that needs
 	// them registers.
@@ -126,6 +126,10 @@ func Extensions(cfg config.Config) []forge.Extension {
 		// action; Loomplane's API reaches Ctrl Plane in-process instead.
 		cpext.WithDisableRoutes(),
 		cpext.WithDisableMigrate(),
+		// Its scheduler (reconciler, health checks, garbage collection, cert
+		// renewal) runs on one API replica, elected through a Postgres
+		// advisory lock. Without this, every replica runs every worker.
+		cpext.WithLeaderElection(""),
 	)
 
 	return []forge.Extension{
@@ -142,12 +146,12 @@ func Extensions(cfg config.Config) []forge.Extension {
 		environmentsext.New(cfg),
 		connectionsext.New(cfg, plugs),
 		cloudinfraext.New(cfg, deployments),
-		federationext.New(cfg),
+		federationext.New(cfg, ctrl.CtrlPlane),
 		realtimeext.New(cfg),
 		planningext.New(cfg, jobs.Engine, deployments, ctrl.CtrlPlane, plugs),
 		dbgatewayext.New(cfg),
 		infraext.New(cpAuth, ctrl.CtrlPlane),
-		web.New(cfg.Dashboard.Dir, "/api/", cfg.Identity.BasePath+"/", "/_/"),
+		web.New(cfg.Dashboard.Dir, "/api/", cfg.Identity.BasePath+"/", "/_/", "/catalog-admin/"),
 	}
 }
 

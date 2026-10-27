@@ -5,22 +5,21 @@ settings:
   excludeLinksFromLockfile: false
 
 patchedDependencies:
-  '@authsome/ui-core@1.7.2': 58bb1969ba526abd68985734a8115bd2cedb6847e1f150d4099440cb1fa66af2
-  '@authsome/ui-react@1.7.2': d0ebfc238c98705469681d89e9b411e1044f4ae4fc1a73d00e7749920e7bf330
+  '@authsome/ui-core@1.8.3': e056b4762edf04873c247ace5e10260db0c80a56b1e042ab6305726be26b2c06
 
 importers:
 
   .:
     dependencies:
       '@authsome/ui-components':
-        specifier: 1.7.2
-        version: 1.7.2(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+        specifier: 1.8.3
+        version: 1.8.3(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@authsome/ui-core':
-        specifier: 1.7.2
-        version: 1.7.2(patch_hash=58bb1969ba526abd68985734a8115bd2cedb6847e1f150d4099440cb1fa66af2)
+        specifier: 1.8.3
+        version: 1.8.3(patch_hash=e056b4762edf04873c247ace5e10260db0c80a56b1e042ab6305726be26b2c06)
       '@authsome/ui-react':
-        specifier: 1.7.2
-        version: 1.7.2(patch_hash=d0ebfc238c98705469681d89e9b411e1044f4ae4fc1a73d00e7749920e7bf330)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+        specifier: 1.8.3
+        version: 1.8.3(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@base-ui/react':
         specifier: ^1.9.0
         version: 1.9.0(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
@@ -31,11 +30,14 @@ importers:
         specifier: ^5.3.0
         version: 5.3.0
       '@forge-go/client-core':
-        specifier: 1.12.8
-        version: 1.12.8
+        specifier: 1.13.0
+        version: 1.13.0
       '@forge-go/client-react':
-        specifier: 1.12.8
-        version: 1.12.8(@forge-go/client-core@1.12.8)(react@19.3.0)
+        specifier: 1.13.0
+        version: 1.13.0(@forge-go/client-core@1.13.0)(react@19.3.0)
+      '@phosphor-icons/react':
+        specifier: 2.1.10
+        version: 2.1.10(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@tailwindcss/vite':
         specifier: ^4
         version: 4.3.3(vite@8.3.4(@types/node@24.19.2)(jiti@2.7.0))
@@ -153,17 +155,17 @@ packages:
     resolution: {integrity: sha512-YnVzxDxLaqL0t7Q4wfcgHZjg55Wm6y5EaO7Bhu3q9J7wq/8iw3PhsnWiOQhYekx4VexnbkgWpTT6n+QIV7kczw==}
     engines: {node: ^22.22.2 || ^24.15.0 || >=26.0.0}
 
-  '@authsome/ui-components@1.7.2':
-    resolution: {integrity: sha512-GLL1IiBkrKOO9S5Q2rly4oUvdTT5O+St8nyQqyTi5Cjlc10OuRj5QakhLRQ2enEn3SQnDxdUBbLAFWSLvp0CYw==}
+  '@authsome/ui-components@1.8.3':
+    resolution: {integrity: sha512-5wNxpDc/51h4KbhTzzZIZy0tCw/JnTH3HZvUa28zK1FBs3kNFG+xJ/TUEcWP+Iby62i8DNqv/YQI9tJKljs5Gg==}
     peerDependencies:
       react: ^18.0.0 || ^19.0.0
       react-dom: ^18.0.0 || ^19.0.0
 
-  '@authsome/ui-core@1.7.2':
-    resolution: {integrity: sha512-OIWenLsbfjx50FlQCiE3nHjmQv3foIKnrCtdPgfW4ih0292f76+337pkhc5KqeAIIwM4XWv/R6T4q978U22O3Q==}
+  '@authsome/ui-core@1.8.3':
+    resolution: {integrity: sha512-v0Hig8V9pP9El+vDU2MbXDzQ82lYYi+idnU5TrDjCxPOQIe0YD8Tq5npEMNsPpv0RwT53WYG2ZL6Ly5lgxK1AA==}
 
-  '@authsome/ui-react@1.7.2':
-    resolution: {integrity: sha512-3kzKJN/xNbN0sARKkMueWTQTmf5OIlBa23GMn7F1m1Br2QGDcwsrE62wHwklXA5p5tSn0AEZ+7rt6vcfHhz2Lw==}
+  '@authsome/ui-react@1.8.3':
+    resolution: {integrity: sha512-9Bw2M8K+V753db7pAPl+Ew61CsjtDdMv7t4C5Nk80T6tXVo4va9EjlaehtEFnc7K1t5BT3hT9gAVX6rwd2zrMw==}
     peerDependencies:
       react: ^18.0.0 || ^19.0.0
       react-dom: ^18.0.0 || ^19.0.0
@@ -450,13 +452,13 @@ packages:
   '@fontsource-variable/geist@5.3.0':
     resolution: {integrity: sha512-j0m+vLQuG5XAYoHtGCVu0spvlGreR3EzpECUVzkFmI1mTVnAO38l/NEPDCFgZ177JxzYJCLSmTQibIiYPilGrA==}
 
-  '@forge-go/client-core@1.12.8':
-    resolution: {integrity: sha512-E7agZOuP8748yytE19V5at5+fvkQy9JrjI00GPAwjle8qT8FGTUimeocC3WFf5PiG6oIWCM5dZn0qI4Q2JynGQ==}
+  '@forge-go/client-core@1.13.0':
+    resolution: {integrity: sha512-rc3pJagpG5KErwpGKU3LwMld+3MCSYJIJy6drvqC5Pz5fbHH74D+z1FfL7hE3Fl5Bw6SrmVUbk3HkjOKAAIeYg==}
 
-  '@forge-go/client-react@1.12.8':
-    resolution: {integrity: sha512-adaGyaM6TLabs3gbU+NIuZjQfYDmR4fZIIPW8zaEFgWsVtbbMMjisp6a010BMeFmKEM5DEtVI8m9S+e9pnCzPQ==}
+  '@forge-go/client-react@1.13.0':
+    resolution: {integrity: sha512-EAWCeoGgUm17/PZNSfbEBUU0XfS0e+lwQ3p1iu5LdIrFFHvvfhf2ry/c6eOPeNM/Lj6PcG4mhi3QKrhf0gk06w==}
     peerDependencies:
-      '@forge-go/client-core': ^1.12.8
+      '@forge-go/client-core': ^1.13.0
       react: ^18.0.0 || ^19.0.0
 
   '@hono/node-server@2.1.4':
@@ -534,6 +536,13 @@ packages:
 
   '@oxc-project/types@0.153.0':
     resolution: {integrity: sha512-jSNrRIyvPVLL5E1z/tS5zLAprosGz/FuI1PWwEOz59j3E4TTTzSpqKb/RDGqJhhW0QHYISGXxq582wGx6T11Tw==}
+
+  '@phosphor-icons/react@2.1.10':
+    resolution: {integrity: sha512-vt8Tvq8GLjheAZZYa+YG/pW7HDbov8El/MANW8pOAz4eGxrwhnbfrQZq0Cp4q8zBEu8NIhHdnr+r8thnfRSNYA==}
+    engines: {node: '>=10'}
+    peerDependencies:
+      react: '>= 16.8'
+      react-dom: '>= 16.8'
 
   '@radix-ui/number@1.1.3':
     resolution: {integrity: sha512-Road2bidD0uu/1BGDOWNdPI06g0lIRy6IF9GZcIrDK2KGItfor8IQwQa+yM2ERgHM1MmHxaxpTzk0/Jp42lNfA==}
@@ -3534,10 +3543,10 @@ snapshots:
       is-potential-custom-element-name: 1.0.1
       lru-cache: 11.5.3
 
-  '@authsome/ui-components@1.7.2(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
+  '@authsome/ui-components@1.8.3(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
     dependencies:
-      '@authsome/ui-core': 1.7.2(patch_hash=58bb1969ba526abd68985734a8115bd2cedb6847e1f150d4099440cb1fa66af2)
-      '@authsome/ui-react': 1.7.2(patch_hash=d0ebfc238c98705469681d89e9b411e1044f4ae4fc1a73d00e7749920e7bf330)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
+      '@authsome/ui-core': 1.8.3(patch_hash=e056b4762edf04873c247ace5e10260db0c80a56b1e042ab6305726be26b2c06)
+      '@authsome/ui-react': 1.8.3(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@radix-ui/react-avatar': 1.2.7(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@radix-ui/react-checkbox': 1.3.12(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
       '@radix-ui/react-dialog': 1.2.0(@types/react-dom@19.3.0(@types/react@19.3.0))(@types/react@19.3.0)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)
@@ -3560,11 +3569,11 @@ snapshots:
       - '@types/react'
       - '@types/react-dom'
 
-  '@authsome/ui-core@1.7.2(patch_hash=58bb1969ba526abd68985734a8115bd2cedb6847e1f150d4099440cb1fa66af2)': {}
+  '@authsome/ui-core@1.8.3(patch_hash=e056b4762edf04873c247ace5e10260db0c80a56b1e042ab6305726be26b2c06)': {}
 
-  '@authsome/ui-react@1.7.2(patch_hash=d0ebfc238c98705469681d89e9b411e1044f4ae4fc1a73d00e7749920e7bf330)(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
+  '@authsome/ui-react@1.8.3(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
     dependencies:
-      '@authsome/ui-core': 1.7.2(patch_hash=58bb1969ba526abd68985734a8115bd2cedb6847e1f150d4099440cb1fa66af2)
+      '@authsome/ui-core': 1.8.3(patch_hash=e056b4762edf04873c247ace5e10260db0c80a56b1e042ab6305726be26b2c06)
       react: 19.3.0
       react-dom: 19.3.0(react@19.3.0)
 
@@ -3897,11 +3906,11 @@ snapshots:
 
   '@fontsource-variable/geist@5.3.0': {}
 
-  '@forge-go/client-core@1.12.8': {}
+  '@forge-go/client-core@1.13.0': {}
 
-  '@forge-go/client-react@1.12.8(@forge-go/client-core@1.12.8)(react@19.3.0)':
+  '@forge-go/client-react@1.13.0(@forge-go/client-core@1.13.0)(react@19.3.0)':
     dependencies:
-      '@forge-go/client-core': 1.12.8
+      '@forge-go/client-core': 1.13.0
       react: 19.3.0
 
   '@hono/node-server@2.1.4(hono@4.13.13)':
@@ -3986,6 +3995,11 @@ snapshots:
       fastq: 1.20.3
 
   '@oxc-project/types@0.153.0': {}
+
+  '@phosphor-icons/react@2.1.10(react-dom@19.3.0(react@19.3.0))(react@19.3.0)':
+    dependencies:
+      react: 19.3.0
+      react-dom: 19.3.0(react@19.3.0)
 
   '@radix-ui/number@1.1.3': {}
 

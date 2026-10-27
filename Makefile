@@ -1,6 +1,7 @@
 .PHONY: help up down stack dev dev-api dev-dashboard build build-api build-dashboard run vuln fuzz build-cli build-agent \
-	image test test-go test-dashboard test-integration acceptance acceptance-infrastructure lint lint-go lint-dashboard \
-	gen-client check-client setup clean
+	image helm-lint k8s-manifest test-kubernetes test test-go test-dashboard test-integration acceptance acceptance-infrastructure acceptance-catalog lint lint-go lint-dashboard \
+	lint-fix fmt fmt-go fmt-dashboard vet gen-client check-client setup clean \
+	h b r t ti c f l lf v d
 
 .DEFAULT_GOAL := help
 
@@ -15,6 +16,9 @@ TEST_DATABASE_URL ?= postgres://loomplane:loomplane@localhost:55532/loomplane?ss
 
 help: ## List the targets
 	@awk 'BEGIN {FS = ":.*##"} /^[a-zA-Z_-]+:.*?##/ { printf "  \033[36m%-18s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
+	@echo
+	@echo "  Shortcuts: h help, b build, r run, t test, ti test-integration, c clean,"
+	@echo "  f fmt, l lint, lf lint-fix, v vet, d dev"
 
 setup: ## Install Go modules and the dashboard's packages
 	go mod download
@@ -59,6 +63,16 @@ run: build ## Build everything and run the API on API_PORT, with the analysis wo
 image: ## Build the container image, tagged with the git version
 	docker build -f deployments/docker/Dockerfile --build-arg VERSION=$(VERSION) -t loomplane:$(VERSION) .
 
+helm-lint: ## Lint the Helm chart and validate what it renders (needs helm and kubeconform)
+	bash scripts/check-helm.sh
+
+k8s-manifest: ## Render deployments/kubernetes/loomplane.yaml from the Helm chart
+	bash scripts/render-k8s-manifest.sh > deployments/kubernetes/loomplane.yaml
+
+test-kubernetes: ## Install the chart in a kind cluster and check it stays up through pod and node loss
+	docker build -f deployments/docker/Dockerfile --build-arg VERSION=$(VERSION) -t loomplane:k8s-test .
+	bash scripts/test-kubernetes.sh loomplane:k8s-test
+
 test: test-go test-dashboard ## Run the Go and dashboard unit tests
 
 test-go: ## Run the Go unit tests
@@ -78,10 +92,29 @@ acceptance-infrastructure: ## Verify SSH/Docker and kind with isolated targets, 
 	python3 -m unittest discover -s tests/acceptance/infrastructure -p 'test_*.py'
 	LOOMPLANE_TEST_DATABASE_URL='$(TEST_DATABASE_URL)' python3 tests/acceptance/infrastructure/run.py
 
+acceptance-catalog: ## Deploy a test-only composed catalog kind to isolated SSH/Docker and kind targets, then remove them
+	python3 -m unittest discover -s tests/acceptance/infrastructure -p 'test_*.py'
+	LOOMPLANE_TEST_DATABASE_URL='$(TEST_DATABASE_URL)' python3 tests/acceptance/infrastructure/run.py --suite catalog
+
 lint: lint-go lint-dashboard ## Lint Go and the dashboard
 
 lint-go: ## golangci-lint, integration tests included
 	golangci-lint run --build-tags=integration ./...
+
+lint-fix: ## Lint Go and the dashboard, applying the fixes each linter can make
+	golangci-lint run --fix --build-tags=integration ./...
+	pnpm --dir $(DASHBOARD_DIR) lint --fix
+
+fmt: fmt-go fmt-dashboard ## Format Go and the dashboard
+
+fmt-go: ## gofmt and goimports, with the settings in .golangci.yml
+	golangci-lint fmt ./...
+
+fmt-dashboard: ## Prettier over the dashboard's TypeScript
+	pnpm --dir $(DASHBOARD_DIR) format
+
+vet: ## go vet, integration tests included
+	go vet -tags=integration ./...
 
 vuln: ## Check Loomplane and its dependencies for known vulnerabilities it reaches
 	go run golang.org/x/vuln/cmd/govulncheck@v1.8.0 ./...
@@ -110,3 +143,16 @@ check-client: ## Fail if the generated clients drifted from the specs
 
 clean: ## Remove build output
 	rm -rf bin $(DASHBOARD_DIR)/dist .forge
+
+# Short aliases. Each forwards to the long target, which carries the recipe.
+h: help
+b: build
+r: run
+t: test
+ti: test-integration
+c: clean
+f: fmt
+l: lint
+lf: lint-fix
+v: vet
+d: dev

@@ -1,0 +1,10 @@
+{
+  "title": "Reference",
+  "pages": [
+    "loomplane-yaml",
+    "loomctl",
+    "configuration",
+    "roles-and-permissions",
+    "http-api"
+  ]
+}

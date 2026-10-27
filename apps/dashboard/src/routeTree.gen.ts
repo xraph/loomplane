@@ -12,6 +12,7 @@ import { Route as rootRouteImport } from "./routes/__root"
 import { Route as IndexRouteImport } from "./routes/index"
 import { Route as ActivityRouteImport } from "./routes/activity"
 import { Route as ApiKeysRouteImport } from "./routes/api-keys"
+import { Route as CloudSignInRouteImport } from "./routes/cloud-sign-in"
 import { Route as ForgotPasswordRouteImport } from "./routes/forgot-password"
 import { Route as InfrastructureRouteImport } from "./routes/infrastructure"
 import { Route as MembersRouteImport } from "./routes/members"
@@ -35,6 +36,8 @@ import { Route as ServicesIndexRouteImport } from "./routes/services.index"
 import { Route as ServicesKindRouteImport } from "./routes/services.$kind"
 import { Route as CloudsAccountsIdRouteImport } from "./routes/clouds.accounts.$id"
 import { Route as IntegrationsGithubSetupRouteImport } from "./routes/integrations.github.setup"
+import { Route as IntegrationsOauthCallbackRouteImport } from "./routes/integrations.oauth.callback"
+import { Route as ProjectsIdCatalogResourceRouteImport } from "./routes/projects.$id_.catalog.$resource"
 
 const IndexRoute = IndexRouteImport.update({
   id: "/",
@@ -49,6 +52,11 @@ const ActivityRoute = ActivityRouteImport.update({
 const ApiKeysRoute = ApiKeysRouteImport.update({
   id: "/api-keys",
   path: "/api-keys",
+  getParentRoute: () => rootRouteImport,
+} as any)
+const CloudSignInRoute = CloudSignInRouteImport.update({
+  id: "/cloud-sign-in",
+  path: "/cloud-sign-in",
   getParentRoute: () => rootRouteImport,
 } as any)
 const ForgotPasswordRoute = ForgotPasswordRouteImport.update({
@@ -166,11 +174,24 @@ const IntegrationsGithubSetupRoute = IntegrationsGithubSetupRouteImport.update({
   path: "/integrations/github/setup",
   getParentRoute: () => rootRouteImport,
 } as any)
+const IntegrationsOauthCallbackRoute =
+  IntegrationsOauthCallbackRouteImport.update({
+    id: "/integrations/oauth/callback",
+    path: "/integrations/oauth/callback",
+    getParentRoute: () => rootRouteImport,
+  } as any)
+const ProjectsIdCatalogResourceRoute =
+  ProjectsIdCatalogResourceRouteImport.update({
+    id: "/projects/$id_/catalog/$resource",
+    path: "/projects/$id/catalog/$resource",
+    getParentRoute: () => rootRouteImport,
+  } as any)
 
 export interface FileRoutesByFullPath {
   "/": typeof IndexRoute
   "/activity": typeof ActivityRoute
   "/api-keys": typeof ApiKeysRoute
+  "/cloud-sign-in": typeof CloudSignInRoute
   "/forgot-password": typeof ForgotPasswordRoute
   "/infrastructure": typeof InfrastructureRoute
   "/members": typeof MembersRoute
@@ -194,11 +215,14 @@ export interface FileRoutesByFullPath {
   "/services/": typeof ServicesIndexRoute
   "/clouds/accounts/$id": typeof CloudsAccountsIdRoute
   "/integrations/github/setup": typeof IntegrationsGithubSetupRoute
+  "/integrations/oauth/callback": typeof IntegrationsOauthCallbackRoute
+  "/projects/$id/catalog/$resource": typeof ProjectsIdCatalogResourceRoute
 }
 export interface FileRoutesByTo {
   "/": typeof IndexRoute
   "/activity": typeof ActivityRoute
   "/api-keys": typeof ApiKeysRoute
+  "/cloud-sign-in": typeof CloudSignInRoute
   "/forgot-password": typeof ForgotPasswordRoute
   "/infrastructure": typeof InfrastructureRoute
   "/members": typeof MembersRoute
@@ -222,12 +246,15 @@ export interface FileRoutesByTo {
   "/services": typeof ServicesIndexRoute
   "/clouds/accounts/$id": typeof CloudsAccountsIdRoute
   "/integrations/github/setup": typeof IntegrationsGithubSetupRoute
+  "/integrations/oauth/callback": typeof IntegrationsOauthCallbackRoute
+  "/projects/$id/catalog/$resource": typeof ProjectsIdCatalogResourceRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
   "/": typeof IndexRoute
   "/activity": typeof ActivityRoute
   "/api-keys": typeof ApiKeysRoute
+  "/cloud-sign-in": typeof CloudSignInRoute
   "/forgot-password": typeof ForgotPasswordRoute
   "/infrastructure": typeof InfrastructureRoute
   "/members": typeof MembersRoute
@@ -251,6 +278,8 @@ export interface FileRoutesById {
   "/services/": typeof ServicesIndexRoute
   "/clouds/accounts/$id": typeof CloudsAccountsIdRoute
   "/integrations/github/setup": typeof IntegrationsGithubSetupRoute
+  "/integrations/oauth/callback": typeof IntegrationsOauthCallbackRoute
+  "/projects/$id_/catalog/$resource": typeof ProjectsIdCatalogResourceRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -258,6 +287,7 @@ export interface FileRouteTypes {
     | "/"
     | "/activity"
     | "/api-keys"
+    | "/cloud-sign-in"
     | "/forgot-password"
     | "/infrastructure"
     | "/members"
@@ -281,11 +311,14 @@ export interface FileRouteTypes {
     | "/services/"
     | "/clouds/accounts/$id"
     | "/integrations/github/setup"
+    | "/integrations/oauth/callback"
+    | "/projects/$id/catalog/$resource"
   fileRoutesByTo: FileRoutesByTo
   to:
     | "/"
     | "/activity"
     | "/api-keys"
+    | "/cloud-sign-in"
     | "/forgot-password"
     | "/infrastructure"
     | "/members"
@@ -309,11 +342,14 @@ export interface FileRouteTypes {
     | "/services"
     | "/clouds/accounts/$id"
     | "/integrations/github/setup"
+    | "/integrations/oauth/callback"
+    | "/projects/$id/catalog/$resource"
   id:
     | "__root__"
     | "/"
     | "/activity"
     | "/api-keys"
+    | "/cloud-sign-in"
     | "/forgot-password"
     | "/infrastructure"
     | "/members"
@@ -337,12 +373,15 @@ export interface FileRouteTypes {
     | "/services/"
     | "/clouds/accounts/$id"
     | "/integrations/github/setup"
+    | "/integrations/oauth/callback"
+    | "/projects/$id_/catalog/$resource"
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   ActivityRoute: typeof ActivityRoute
   ApiKeysRoute: typeof ApiKeysRoute
+  CloudSignInRoute: typeof CloudSignInRoute
   ForgotPasswordRoute: typeof ForgotPasswordRoute
   InfrastructureRoute: typeof InfrastructureRoute
   MembersRoute: typeof MembersRoute
@@ -366,6 +405,8 @@ export interface RootRouteChildren {
   ServicesIndexRoute: typeof ServicesIndexRoute
   CloudsAccountsIdRoute: typeof CloudsAccountsIdRoute
   IntegrationsGithubSetupRoute: typeof IntegrationsGithubSetupRoute
+  IntegrationsOauthCallbackRoute: typeof IntegrationsOauthCallbackRoute
+  ProjectsIdCatalogResourceRoute: typeof ProjectsIdCatalogResourceRoute
 }
 
 declare module "@tanstack/react-router" {
@@ -389,6 +430,13 @@ declare module "@tanstack/react-router" {
       path: "/api-keys"
       fullPath: "/api-keys"
       preLoaderRoute: typeof ApiKeysRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    "/cloud-sign-in": {
+      id: "/cloud-sign-in"
+      path: "/cloud-sign-in"
+      fullPath: "/cloud-sign-in"
+      preLoaderRoute: typeof CloudSignInRouteImport
       parentRoute: typeof rootRouteImport
     }
     "/forgot-password": {
@@ -552,6 +600,20 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof IntegrationsGithubSetupRouteImport
       parentRoute: typeof rootRouteImport
     }
+    "/integrations/oauth/callback": {
+      id: "/integrations/oauth/callback"
+      path: "/integrations/oauth/callback"
+      fullPath: "/integrations/oauth/callback"
+      preLoaderRoute: typeof IntegrationsOauthCallbackRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    "/projects/$id_/catalog/$resource": {
+      id: "/projects/$id_/catalog/$resource"
+      path: "/projects/$id/catalog/$resource"
+      fullPath: "/projects/$id/catalog/$resource"
+      preLoaderRoute: typeof ProjectsIdCatalogResourceRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -559,6 +621,7 @@ const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   ActivityRoute: ActivityRoute,
   ApiKeysRoute: ApiKeysRoute,
+  CloudSignInRoute: CloudSignInRoute,
   ForgotPasswordRoute: ForgotPasswordRoute,
   InfrastructureRoute: InfrastructureRoute,
   MembersRoute: MembersRoute,
@@ -582,6 +645,8 @@ const rootRouteChildren: RootRouteChildren = {
   ServicesIndexRoute: ServicesIndexRoute,
   CloudsAccountsIdRoute: CloudsAccountsIdRoute,
   IntegrationsGithubSetupRoute: IntegrationsGithubSetupRoute,
+  IntegrationsOauthCallbackRoute: IntegrationsOauthCallbackRoute,
+  ProjectsIdCatalogResourceRoute: ProjectsIdCatalogResourceRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

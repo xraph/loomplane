@@ -1,19 +1,17 @@
 # README artwork
 
-| Asset                                                    | Source                                                                                                           | Use                                                                                                  |
-| -------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------- |
-| [loomplane-logo.svg](loomplane-logo.svg)                 | A standalone copy of the woven L app icon in [the brand kit](../../brand/README.md), with a charcoal background. | README masthead.                                                                                     |
-| [loomplane-cover.png](loomplane-cover.png)               | Concept illustration generated with the built-in image generation tool.                                          | README cover. This is brand artwork, not a product screenshot.                                       |
-| [loomplane-architecture.svg](loomplane-architecture.svg) | Editable SVG drawn from [the architecture guide](../architecture.md) and application composition.                | Current application architecture. Planned cloud deployment flows are described in the documentation. |
+| Asset | Source | Use |
+| --- | --- | --- |
+| Logo | The dashboard's own files, [loomplane-logo.svg](../../apps/dashboard/src/assets/brand/loomplane-logo.svg) and [loomplane-logo-dark.svg](../../apps/dashboard/src/assets/brand/loomplane-logo-dark.svg). There's no copy here. | README masthead. GitHub picks the dark file when you're in dark mode. |
+| [loomplane-cover.png](loomplane-cover.png) | A screenshot of the landing page hero's Overview replica (`apps/docs/src/components/landing/dashboard-shot.tsx`), with its sample data. | README cover. |
+| [loomplane-architecture.svg](loomplane-architecture.svg) | Editable SVG drawn from [the architecture guide](../architecture.md) and the application's composition. | Current application architecture. Planned cloud deployment flows are described in the documentation. |
 
-The logo and diagram use charcoal, ivory, weld gold, and overdye green from the dashboard's visual language. SVGs include a title and description; the README gives each image alternative text.
+Everything follows the dashboard's ocean accent: blue `#2F5C78` on light backgrounds and `#5AAEE5` on dark ones, with ink `#171717` and paper `#FAFAFA`. Those are the `--brand` token in `apps/dashboard/src/index.css` and the landing's `--blue`, converted to hex. If the brand moves again, the logo follows on its own, because the README points at the dashboard's files. The cover and the diagram you'll have to redo.
 
-## Cover generation prompt
+## Retaking the cover
 
-```text
-Use case: stylized-concept
-Asset type: wide cover illustration for the Loomplane software project's README.
-Primary request: a beautifully crafted editorial 3D illustration of infrastructure woven together. Use the project's established textile metaphor and palette: charcoal black, warm ivory, weld golden yellow, muted forest green. Show parallel charcoal warp threads with broad ivory, gold, and green ribbons interlaced over and under them, opening into a precise architectural grid. The ribbons terminate in small restrained geometric blocks suggesting connected services. A large woven crossing is the focal point, sculptural and tactile, on a warm off-white studio background. Sophisticated engineering publication art, crisp geometry, fine shadows, subtle paper and fiber textures, controlled negative space, no clutter. Landscape composition approximately 2.5:1, suitable as a compact panoramic README cover. No text, no letters, no brand logos, no clouds, no interface mockups, no watermark. This is conceptual brand artwork, not a screenshot.
-```
+Run the docs site (`next dev` in `apps/docs`), open it at 1440 pixels wide with a device scale factor of 2, and screenshot `div.shot` with 56 pixels of the hero around its top and sides. The replica plays a loop, so wait for the frame where a plan for `mono` to production is waiting on the Approve button. Hide the Next.js dev indicator (`nextjs-portal`) first, then scale the result to 1600 pixels wide.
 
-The saved PNG is 1983 × 793 pixels. The README uses local asset paths so you can move the project without relying on a hosted image service.
+`next dev` also writes an `AGENTS.md` into `apps/docs`. Delete it afterwards; it isn't meant to be committed here.
+
+The README uses local paths, so the images move with the repository and don't depend on a hosted image service.

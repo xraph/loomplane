@@ -12,6 +12,7 @@ import {
 } from "@/client/forge/loomplane/hooks"
 import type { Environment, Project } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
+import { ServiceAddress } from "@/components/service-address"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
   AlertDialog,
@@ -26,14 +27,9 @@ import {
 } from "@/components/ui/alert-dialog"
 import { isReady } from "@/lib/projects"
 import { Button } from "@/components/ui/button"
-import {
-  Card,
-  CardAction,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
+import { Badge } from "@/components/ui/badge"
+import { Card } from "@/components/ui/card"
+import { Choice } from "@/components/cloud-targets/target-editor"
 import {
   Dialog,
   DialogContent,
@@ -49,15 +45,7 @@ import {
   FieldLabel,
 } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
-import { RunDot, Thread } from "@/components/runs"
-import { Item, ItemContent } from "@/components/ui/item"
+import { StatusPill, Thread, toneOf } from "@/components/runs"
 import { Spinner } from "@/components/ui/spinner"
 import {
   Tooltip,
@@ -115,10 +103,16 @@ export function AddEnvironment({ project }: { project: Project }) {
       <Button
         variant="outline"
         onClick={() => setOpen(true)}
-        className="h-auto min-h-10 flex-row gap-2 rounded-xl border-dashed bg-transparent text-muted-foreground shadow-none hover:bg-muted/40 md:min-h-24 md:flex-col"
+        aria-label="Add environment"
+        className="h-auto min-h-[120px] flex-col gap-1.5 rounded-[14px] border-dashed bg-transparent text-[13.5px] whitespace-normal shadow-none hover:bg-subtle"
       >
-        <PlusIcon />
+        <span className="flex size-[30px] items-center justify-center rounded-lg bg-brand-tint text-brand-ink">
+          <PlusIcon />
+        </span>
         Add environment
+        <span className="text-xs font-normal text-muted-foreground">
+          Staging, preview or development
+        </span>
       </Button>
       <Dialog open={open} onOpenChange={close}>
         <DialogContent className="sm:max-w-md">
@@ -138,6 +132,7 @@ export function AddEnvironment({ project }: { project: Project }) {
                   value={name}
                   onChange={(e) => setName(e.target.value.toLowerCase())}
                   placeholder="staging"
+                  className="font-mono"
                   autoFocus
                   required
                 />
@@ -147,30 +142,29 @@ export function AddEnvironment({ project }: { project: Project }) {
                 </FieldDescription>
               </Field>
               <Field>
-                <FieldLabel>Kind</FieldLabel>
-                <Select
-                  items={environmentKinds.map((k) => ({
-                    label: k.label,
-                    value: k.value,
-                  }))}
-                  value={chosenKind}
-                  onValueChange={(v) => setKind(v as string)}
+                <FieldLabel id="environment-kind">Kind</FieldLabel>
+                <div
+                  role="radiogroup"
+                  aria-labelledby="environment-kind"
+                  className="grid gap-2 sm:grid-cols-2"
                 >
-                  <SelectTrigger aria-label="Kind" className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {environmentKinds.map((k) => (
-                      <SelectItem key={k.value} value={k.value}>
-                        {k.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <FieldDescription>
-                  {environmentKinds.find((k) => k.value === chosenKind)
-                    ?.description ?? ""}
-                </FieldDescription>
+                  {environmentKinds.map((k) => (
+                    <Choice
+                      key={k.value}
+                      checked={chosenKind === k.value}
+                      onSelect={() => setKind(k.value)}
+                    >
+                      <span className="grid min-w-0 gap-0.5 py-1.5">
+                        <span className="text-[13px] font-semibold">
+                          {k.label}
+                        </span>
+                        <span className="text-xs font-normal text-muted-foreground">
+                          {k.description}
+                        </span>
+                      </span>
+                    </Choice>
+                  ))}
+                </div>
               </Field>
               {error && (
                 <Alert variant="destructive">
@@ -188,7 +182,7 @@ export function AddEnvironment({ project }: { project: Project }) {
               </Button>
               <Button type="submit" disabled={create.isPending || !name.trim()}>
                 {create.isPending && <Spinner />}
-                Add environment
+                {name.trim() ? `Add ${name.trim()}` : "Add environment"}
               </Button>
             </DialogFooter>
           </form>
@@ -232,42 +226,50 @@ export function EnvironmentCards({
     >
       {cards.map((env) => {
         const real = environments.find((e) => e.id === env.id)
+        const run = runs.find((r) => r.environment === env.name)
+        const settingUp = loading || !isReady(project.status)
         return (
-          <Card key={env.id} size="sm" className="min-w-0">
-            <CardHeader>
-              <CardTitle className="capitalize">{env.name}</CardTitle>
-              {env.kind !== env.name && (
-                <CardDescription>
-                  {environmentKinds.find((k) => k.value === env.kind)?.label ??
-                    env.kind}
-                </CardDescription>
+          <Card
+            key={env.id}
+            size="sm"
+            className="min-w-0 gap-0 rounded-[14px] py-0"
+          >
+            <div className="flex min-w-0 items-center gap-2 px-3.5 pt-3 pb-2">
+              <h3 className="truncate text-[14px] font-semibold">{env.name}</h3>
+              <Badge
+                variant="outline"
+                className="h-5 rounded-md px-1.5 text-[11.5px] font-normal text-muted-foreground"
+              >
+                {environmentKinds.find((k) => k.value === env.kind)?.label ??
+                  env.kind}
+              </Badge>
+              <span className="flex-1" />
+              {!settingUp && run && (
+                <StatusPill tone={toneOf(run.status)}>
+                  {runStatusText[run.status]}
+                </StatusPill>
               )}
               {mayManage && real && (
-                <CardAction>
-                  <DeleteEnvironment
-                    project={project}
-                    environment={real}
-                    last={environments.length === 1}
-                  />
-                </CardAction>
+                <DeleteEnvironment
+                  project={project}
+                  environment={real}
+                  last={environments.length === 1}
+                />
               )}
-            </CardHeader>
-            <CardContent>
-              {loading || !isReady(project.status) ? (
-                <span className="flex items-center gap-2 text-xs text-muted-foreground">
-                  <span className="h-1.5 w-3 animate-pulse rounded-full bg-weld motion-reduce:animate-none" />
-                  Setting up
-                </span>
-              ) : (
-                <div className="grid gap-3">
-                  <LatestRun
-                    run={runs.find((r) => r.environment === env.name)}
-                    now={now}
-                  />
+            </div>
+            {settingUp ? (
+              <span className="flex items-center gap-2 px-3.5 pb-3 text-[12.5px] text-muted-foreground">
+                <span className="h-1.5 w-3 animate-pulse rounded-full bg-weld motion-reduce:animate-none" />
+                Setting up
+              </span>
+            ) : (
+              <>
+                <LatestRun run={run} now={now} />
+                <div className="border-t px-3.5 pt-2 pb-3">
                   <Deployed project={project} environment={env.name} />
                 </div>
-              )}
-            </CardContent>
+              </>
+            )}
           </Card>
         )
       })}
@@ -378,22 +380,19 @@ function DeleteEnvironment({
 function LatestRun({ run, now }: { run?: Run; now: number }) {
   if (!run) return null
   return (
-    <Item
-      size="sm"
-      className="-mx-3 flex-col items-stretch gap-2 py-2"
-      render={<Link to="/deployments/$id" params={{ id: run.id }} />}
+    <Link
+      to="/deployments/$id"
+      params={{ id: run.id }}
+      className="flex min-w-0 items-center gap-2 px-3.5 pb-2.5 text-[12.5px] text-muted-foreground transition-colors hover:text-foreground"
     >
-      <Thread steps={run.thread} size="sm" />
-      <ItemContent className="flex-row items-center gap-2 text-xs">
-        <RunDot status={run.status} />
-        <span className="truncate">{run.phase}</span>
-        <span className="ml-auto shrink-0 text-muted-foreground">
-          {isLive(run)
-            ? runStatusText[run.status]
-            : relative(Date.parse(run.finishedAt ?? run.createdAt), now)}
-        </span>
-      </ItemContent>
-    </Item>
+      <Thread steps={run.thread} size="sm" className="w-[72px] shrink-0" />
+      <span className="truncate">{run.phase}</span>
+      <span className="ml-auto shrink-0">
+        {isLive(run)
+          ? runStatusText[run.status]
+          : relative(Date.parse(run.finishedAt ?? run.createdAt), now)}
+      </span>
+    </Link>
   )
 }
 
@@ -413,14 +412,14 @@ function Deployed({
   )
   if (services.length === 0) {
     return (
-      <span className="flex items-center gap-2 text-xs text-muted-foreground">
+      <span className="flex items-center gap-2 text-[12.5px] text-muted-foreground">
         <span className="h-1.5 w-3 rounded-full bg-warp" />
         {bindings.data ? "Not deployed yet" : "Checking"}
       </span>
     )
   }
   return (
-    <ul className="grid gap-1.5 text-xs">
+    <ul className="grid gap-1.5 text-[12.5px]">
       {services.map((b) => (
         <li
           key={b.id}
@@ -437,21 +436,17 @@ function Deployed({
           />
           <span className="font-medium">{b.name}</span>
           {b.drift && (
-            <span className="text-weld-ink shrink-0">
+            <span className="shrink-0 text-weld-ink">
               {b.drift === "missing"
                 ? "deleted outside Loomplane"
                 : "changed outside Loomplane"}
             </span>
           )}
           {b.url ? (
-            <a
-              href={b.url}
-              target="_blank"
-              rel="noreferrer"
-              className="truncate text-muted-foreground underline-offset-4 hover:underline"
-            >
-              {b.url.replace(/^https?:\/\//, "")}
-            </a>
+            <ServiceAddress
+              address={b.url}
+              className="truncate text-muted-foreground"
+            />
           ) : (
             <span className="text-muted-foreground">on {b.provider}</span>
           )}

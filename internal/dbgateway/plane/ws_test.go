@@ -33,6 +33,11 @@ type wsRig struct {
 
 const wsTestAddress = "orders." + string(testSuffix) + ":5432"
 
+// wsTestWait bounds how long a test waits on the gateway before failing. It
+// only decides how slow a broken run fails, and CI runs these under -race
+// on a busy machine, where a 1 MiB reply can take many seconds.
+const wsTestWait = 30 * time.Second
+
 func newWSRig(t *testing.T) *wsRig {
 	t.Helper()
 	h := newRouterHarness(t, nil, nil)
@@ -142,7 +147,7 @@ func (c *wsClient) frame(frames ...[]byte) {
 
 func (c *wsClient) recv() string {
 	c.t.Helper()
-	_ = c.c.SetReadDeadline(time.Now().Add(3 * time.Second))
+	_ = c.c.SetReadDeadline(time.Now().Add(wsTestWait))
 	msg, err := c.fe.Receive()
 	if err != nil {
 		c.t.Fatalf("client receive: %v", err)
@@ -169,7 +174,7 @@ func (c *wsClient) readUntilReady() []string {
 // error that told us.
 func (c *wsClient) expectClosed() error {
 	c.t.Helper()
-	_ = c.c.SetReadDeadline(time.Now().Add(3 * time.Second))
+	_ = c.c.SetReadDeadline(time.Now().Add(wsTestWait))
 	for {
 		_, _, err := c.c.ReadMessage()
 		if err == nil {
@@ -383,7 +388,7 @@ func TestWSSSLRequestGetsN(t *testing.T) {
 			g := newWSRig(t)
 			c := g.dial()
 			c.frame(frontendBytes(t, req))
-			_ = c.c.SetReadDeadline(time.Now().Add(3 * time.Second))
+			_ = c.c.SetReadDeadline(time.Now().Add(wsTestWait))
 			kind, data, err := c.c.ReadMessage()
 			if err != nil || kind != websocket.BinaryMessage || string(data) != "N" {
 				t.Fatalf("reply = %v %q %v, want a binary message holding N", kind, data, err)
@@ -527,7 +532,7 @@ func TestWSConnConcurrentWrites(t *testing.T) {
 		}()
 	}
 	for i := 0; i < writers*each; i++ {
-		_ = client.SetReadDeadline(time.Now().Add(3 * time.Second))
+		_ = client.SetReadDeadline(time.Now().Add(wsTestWait))
 		if _, data, err := client.ReadMessage(); err != nil || string(data) != "0123456789" {
 			t.Fatalf("message %d = %q, %v", i, data, err)
 		}
@@ -543,7 +548,7 @@ func TestWSConnCloseIsIdempotent(t *testing.T) {
 	if err := server.Close(); err != nil {
 		t.Fatalf("second Close = %v", err)
 	}
-	_ = client.SetReadDeadline(time.Now().Add(3 * time.Second))
+	_ = client.SetReadDeadline(time.Now().Add(wsTestWait))
 	_, _, err := client.ReadMessage()
 	var ce *websocket.CloseError
 	if !errors.As(err, &ce) || ce.Code != websocket.CloseNormalClosure {
@@ -679,7 +684,7 @@ func TestWSStalledClientWriteTimesOut(t *testing.T) {
 	all := frontendBytes(t, queries...)
 	go func() { _ = c.c.WriteMessage(websocket.BinaryMessage, all) }()
 
-	deadline := time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(wsTestWait)
 	for {
 		g.h.r.mu.Lock()
 		live := len(g.h.r.sessions)
@@ -714,7 +719,7 @@ func TestWSConnWriteTimesOut(t *testing.T) {
 		if !errors.As(err, &ne) || !ne.Timeout() {
 			t.Fatalf("Write failed with %v, want a timeout", err)
 		}
-	case <-time.After(5 * time.Second):
+	case <-time.After(wsTestWait):
 		t.Fatal("Write to a client that doesn't read never gave up")
 	}
 }

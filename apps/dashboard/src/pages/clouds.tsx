@@ -1,7 +1,17 @@
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import { CloudsIcon } from "@/components/icons"
+import { CloudSelect as Select } from "@/components/cloud-targets/cloud-select"
+import {
+  SelectTrigger,
+  SelectValue,
+  SelectContent,
+  SelectItem,
+} from "@/components/ui/select"
+import { Field as FormField, FieldLabel } from "@/components/ui/field"
 // Clouds: every Cloud in the organization, with the accounts their targets
 // can point at. A Cloud's own page (CloudDetail) holds the workspace where
 // its targets, assignments and syncs are managed, one environment at a time.
-import { ChevronRightIcon, CloudIcon, PlusIcon } from "lucide-react"
+import { ChevronRightIcon, PlusIcon } from "lucide-react"
 import { useState } from "react"
 
 import * as api from "@/client/forge/loomplane/hooks"
@@ -24,7 +34,6 @@ import {
   CloudForm,
   CloudWorkspace,
   EmptyClouds,
-  selectClass,
 } from "@/components/cloud-targets/workspace"
 import { Page, PageHeading } from "@/components/page"
 import { QueryError } from "@/components/query-error"
@@ -65,7 +74,7 @@ const connectionTone: Record<string, Tone> = {
 
 export function Clouds() {
   const { session, can } = useOrganization()
-  const allowed = can("cloud_account:read")
+  const allowed = can("organization_cloud:manage") || can("cloud_account:read")
   // Without access nothing about Clouds is read.
   if (!allowed) {
     return (
@@ -77,6 +86,7 @@ export function Clouds() {
             description="Named targets keep your services connected to the accounts you choose."
           />
           <EmptyClouds
+            kind="notice"
             title="Cloud access is restricted"
             description="Ask your organization owner for permission to view Cloud accounts."
           />
@@ -117,7 +127,7 @@ function CloudsList() {
               </Button>
               {(shared || (manage && list.length > 0)) && (
                 <Button onClick={() => setCreating(true)}>
-                  <CloudIcon />
+                  <CloudsIcon />
                   New Cloud
                 </Button>
               )}
@@ -125,26 +135,7 @@ function CloudsList() {
           }
         />
         {shared ? (
-          <>
-            <OrganizationClouds onCreate={() => setCreating(true)} />
-            {list.length > 0 && (
-              <section
-                aria-label="Project Clouds"
-                className="hidden gap-2 has-[[data-cloud-row]]:grid"
-              >
-                <h2 className="text-[15px] font-semibold">
-                  Owned by a project
-                </h2>
-                <div className="overflow-x-auto rounded-xl bg-card ring-1 ring-border">
-                  <div className="min-w-[680px]">
-                    {list.map((p) => (
-                      <ProjectClouds key={p.id} project={p} hideEmpty />
-                    ))}
-                  </div>
-                </div>
-              </section>
-            )}
-          </>
+          <OrganizationClouds onCreate={() => setCreating(true)} />
         ) : (
           <>
             {projects.status === "error" ? (
@@ -157,8 +148,9 @@ function CloudsList() {
               <Skeleton className="h-40 rounded-xl" />
             ) : list.length === 0 ? (
               <EmptyClouds
+                kind="notice"
                 title="Create a project first"
-                description="Clouds and their targets belong to a project."
+                description="Your organization manager can create Clouds before projects exist. Create a project to use granted targets."
               >
                 <Button nativeButton={false} render={<Link to="/projects" />}>
                   <PlusIcon />
@@ -166,11 +158,11 @@ function CloudsList() {
                 </Button>
               </EmptyClouds>
             ) : (
-              <section aria-label="Your Clouds" className="grid gap-2">
+              <section aria-label="Your Clouds" className="grid gap-2.5">
                 <h2 className="text-[15px] font-semibold">Your Clouds</h2>
                 <div className="overflow-x-auto rounded-xl bg-card ring-1 ring-border">
                   <div className="min-w-[680px]">
-                    <div className="grid grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)_220px_110px_16px] gap-4 border-b bg-subtle px-4 py-2 text-[11px] font-medium tracking-[0.04em] text-muted-foreground uppercase">
+                    <div className="grid grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)_220px_110px_16px] gap-4 border-b bg-subtle px-4 py-2 text-[11.5px] font-medium tracking-[0.04em] text-muted-foreground uppercase">
                       <span>Cloud</span>
                       <span>Project</span>
                       <span>Targets</span>
@@ -192,7 +184,7 @@ function CloudsList() {
         )}
 
         {
-          <section aria-label="Connected accounts" className="grid gap-2">
+          <section aria-label="Connected accounts" className="grid gap-2.5">
             <div className="flex flex-wrap items-baseline justify-between gap-2">
               <h2 className="text-[15px] font-semibold">
                 Connected accounts{" "}
@@ -256,9 +248,7 @@ function ProjectClouds({
   const clouds = useQuery(api.useCloudsList, { path: { id: project.id } })
   // A project's list also holds the organization's Clouds it was granted.
   // Next to the organization's own list, show only the ones it owns.
-  const list = (clouds.data?.clouds ?? []).filter(
-    (c): c is Profile => !!c && (!hideEmpty || c.projectId === project.id)
-  )
+  const list = (clouds.data?.clouds ?? []).filter((c): c is Profile => !!c)
   if (clouds.status === "error") {
     return (
       <div className="border-t px-4 py-3">
@@ -321,9 +311,9 @@ function CloudRow({ cloud: c, project }: { cloud: Profile; project: Project }) {
     >
       <span className="flex min-w-0 items-center gap-2.5">
         <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-muted">
-          <CloudIcon className="size-4" />
+          <CloudsIcon className="size-4" />
         </span>
-        <span className="truncate text-sm font-semibold">{c.name}</span>
+        <span className="truncate text-[14px] font-semibold">{c.name}</span>
       </span>
       <ProjectName project={project} />
       <span className="min-w-0 text-[12.5px]">
@@ -355,7 +345,7 @@ function AccountCard({ connection: c }: { connection: Connection }) {
       <div className="flex items-center gap-2.5">
         <CloudGlyph cloud={c.cloud} size="md" />
         <span className="grid min-w-0 flex-1 gap-0.5">
-          <span className="truncate text-sm font-semibold">{c.name}</span>
+          <span className="truncate text-[14px] font-semibold">{c.name}</span>
           <span className="truncate text-xs text-muted-foreground">
             {cloudLabel(c.cloud)}
             {c.account && ` · ${c.account}`}
@@ -379,8 +369,13 @@ function OrganizationClouds({ onCreate }: { onCreate: () => void }) {
   const clouds = useQuery(api.useOrganizationCloudsList)
   const list = (clouds.data?.clouds ?? []).filter((c): c is Profile => !!c)
   return (
-    <section aria-label="Your Clouds" className="grid gap-2">
-      <h2 className="text-[15px] font-semibold">Your Clouds</h2>
+    <section aria-label="Your Clouds" className="grid gap-2.5">
+      <h2 className="text-[15px] font-semibold">
+        Your Clouds{" "}
+        <span className="font-mono text-xs font-normal text-muted-foreground">
+          {clouds.data ? list.length : ""}
+        </span>
+      </h2>
       {clouds.status === "error" ? (
         <QueryError
           error={clouds.error}
@@ -393,7 +388,7 @@ function OrganizationClouds({ onCreate }: { onCreate: () => void }) {
         <Empty>
           <EmptyHeader>
             <EmptyMedia variant="icon">
-              <CloudIcon />
+              <CloudsIcon />
             </EmptyMedia>
             <EmptyTitle>No Clouds yet</EmptyTitle>
             <EmptyDescription>
@@ -408,7 +403,7 @@ function OrganizationClouds({ onCreate }: { onCreate: () => void }) {
       ) : (
         <div className="overflow-x-auto rounded-xl bg-card ring-1 ring-border">
           <div className="min-w-[680px]">
-            <div className="grid grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)_220px_110px_16px] gap-4 border-b bg-subtle px-4 py-2 text-[11px] font-medium tracking-[0.04em] text-muted-foreground uppercase">
+            <div className="grid grid-cols-[minmax(0,1.1fr)_minmax(0,1fr)_220px_110px_16px] gap-4 border-b bg-subtle px-4 py-2 text-[11.5px] font-medium tracking-[0.04em] text-muted-foreground uppercase">
               <span>Cloud</span>
               <span>Used by</span>
               <span>Targets</span>
@@ -450,9 +445,9 @@ function OrganizationCloudRow({ cloud: c }: { cloud: Profile }) {
     >
       <span className="flex min-w-0 items-center gap-2.5">
         <span className="flex size-7 shrink-0 items-center justify-center rounded-lg bg-brand-tint text-brand-ink">
-          <CloudIcon className="size-4" />
+          <CloudsIcon className="size-4" />
         </span>
-        <span className="truncate text-sm font-semibold">{c.name}</span>
+        <span className="truncate text-[14px] font-semibold">{c.name}</span>
       </span>
       <span className="flex min-w-0 items-center gap-2 text-[12.5px]">
         {!grants.data ? (
@@ -561,35 +556,43 @@ export function NewOrganizationCloud({
             if (name.trim()) void submit()
           }}
         >
-          <label className="grid gap-1.5 text-[12.5px] font-medium text-muted-foreground">
-            Name
-            <Input
-              autoFocus
-              aria-label="Cloud name"
-              value={name}
-              disabled={create.isPending}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Production"
-            />
-          </label>
-          <div className="grid gap-3 rounded-xl bg-subtle p-3">
-            <label className="flex items-start gap-2.5 text-[13px]">
-              <Checkbox
-                checked={withDefault}
+          <FormField className="grid gap-1.5 text-[12.5px] font-medium text-muted-foreground">
+            <FieldLabel className="contents">
+              Name
+              <Input
+                autoFocus
+                aria-label="Cloud name"
+                value={name}
                 disabled={create.isPending}
-                onCheckedChange={(v) => setWithDefault(!!v)}
-                className="mt-0.5"
+                onChange={(e) => setName(e.target.value)}
+                placeholder="Production"
               />
-              <span className="grid gap-0.5">
-                <span className="font-medium">
-                  Start with a default provider
+            </FieldLabel>
+          </FormField>
+          <div className="grid gap-3 rounded-xl bg-subtle p-3">
+            <FormField
+              orientation="horizontal"
+              className="flex items-start gap-2.5 text-[13px]"
+            >
+              <FieldLabel className="contents">
+                <Checkbox
+                  checked={withDefault}
+                  disabled={create.isPending}
+                  onCheckedChange={(v) => setWithDefault(!!v)}
+                  className="mt-0.5"
+                />
+                <span className="grid gap-0.5">
+                  <span className="font-medium">
+                    Start with a default provider
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    With no targets, every service on the Cloud runs on this one
+                    provider and account. You can add targets or change it
+                    later.
+                  </span>
                 </span>
-                <span className="text-xs text-muted-foreground">
-                  With no targets, every service on the Cloud runs on this one
-                  provider and account. You can add targets or change it later.
-                </span>
-              </span>
-            </label>
+              </FieldLabel>
+            </FormField>
             {withDefault && (
               <PlacementPicker
                 value={placement}
@@ -602,9 +605,9 @@ export function NewOrganizationCloud({
             )}
           </div>
           {error && (
-            <p role="alert" className="text-sm text-destructive">
-              {error}
-            </p>
+            <Alert variant="destructive">
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
           )}
           <DialogFooter>
             <Button
@@ -674,21 +677,26 @@ function NewCloudDialog({
             services once it&apos;s assigned to an environment.
           </DialogDescription>
         </DialogHeader>
-        <label className="grid gap-1.5 text-[12.5px] font-medium text-muted-foreground">
-          Project
-          <select
-            className={selectClass}
-            aria-label="Project for the new Cloud"
-            value={chosen}
-            onChange={(e) => setProject(e.target.value)}
-          >
-            {projects.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-        </label>
+        <FormField className="grid gap-1.5 text-[12.5px] font-medium text-muted-foreground">
+          <FieldLabel className="contents">
+            Project
+            <Select value={chosen} onValueChange={(e) => setProject(e ?? "")}>
+              <SelectTrigger
+                aria-label="Project for the new Cloud"
+                className={"w-full min-w-0"}
+              >
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {projects.map((p) => (
+                  <SelectItem key={p.id} value={p.id}>
+                    {p.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </FieldLabel>
+        </FormField>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Cancel
@@ -747,6 +755,7 @@ function WorkspaceScope({
     projects.data?.projects[0]
   return !allowed ? (
     <EmptyClouds
+      kind="notice"
       title="Cloud access is restricted"
       description="Ask your organization owner for permission to view Cloud accounts."
     />
@@ -760,8 +769,9 @@ function WorkspaceScope({
     <Skeleton className="h-24" />
   ) : !project ? (
     <EmptyClouds
+      kind="notice"
       title="Create a project first"
-      description="Clouds and their targets belong to a project."
+      description="Your organization manager can create Clouds before projects exist. Create a project to use granted targets."
     >
       <Link to="/projects">
         <Button>
@@ -776,24 +786,29 @@ function WorkspaceScope({
       projectId={project.id}
       cloudId={project.id === projectId ? cloudId : undefined}
       projectControl={
-        <label className="grid min-w-32 flex-1 gap-1 text-xs text-muted-foreground">
-          Project
-          <select
-            className={selectClass}
-            aria-label="Project"
-            value={project.id}
-            onChange={(e) => {
-              setSelected(e.target.value)
-              window.localStorage.setItem(preference, e.target.value)
-            }}
-          >
-            {projects.data.projects.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
-        </label>
+        <FormField className="grid min-w-32 flex-1 gap-1 text-xs text-muted-foreground">
+          <FieldLabel className="contents">
+            Project
+            <Select
+              value={project.id}
+              onValueChange={(e) => {
+                setSelected(e ?? "")
+                window.localStorage.setItem(preference, e ?? "")
+              }}
+            >
+              <SelectTrigger aria-label="Project" className={"w-full min-w-0"}>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {projects.data.projects.map((p) => (
+                  <SelectItem key={p.id} value={p.id}>
+                    {p.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </FieldLabel>
+        </FormField>
       }
     />
   )

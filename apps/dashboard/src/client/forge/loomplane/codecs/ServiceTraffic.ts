@@ -1,0 +1,3 @@
+import type { Codec } from '../codec-runtime';
+
+export const codec_ServiceTraffic: Codec = {"kind": "object", "fields": {"binding_id": {"ts": "bindingId"}, "environment_id": {"ts": "environmentId"}, "latency": {"ts": "latency"}, "name": {"ts": "name"}, "previous_latency": {"ts": "previousLatency"}, "previous_requests": {"ts": "previousRequests"}, "project_id": {"ts": "projectId"}, "provider": {"ts": "provider"}, "requests": {"ts": "requests"}, "statistic": {"ts": "statistic"}}, "required": ["binding_id", "environment_id", "latency", "name", "previous_latency", "previous_requests", "project_id", "provider", "requests"]};

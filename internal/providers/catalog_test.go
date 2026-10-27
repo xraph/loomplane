@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/xraph/loomplane/internal/manageddb"
+	"github.com/xraph/loomplane/internal/recipes/recipestest"
 	"github.com/xraph/loomplane/pkg/provider"
 )
 
@@ -153,5 +154,93 @@ func TestRegistry_aPausedTargetIsForReviewOnly(t *testing.T) {
 	}
 	if p, _ := Registry().Get("render"); !p.Available {
 		t.Fatal("render is paused without being named")
+	}
+}
+
+func provisionsOf(t *testing.T, all []provider.Provider, name string) []provider.Provisions {
+	t.Helper()
+	for _, p := range all {
+		if p.Name == name {
+			return p.Provisions
+		}
+	}
+	t.Fatalf("no %s provider", name)
+	return nil
+}
+
+func TestServerProvisionsKeepBuiltInOrderThenRegisteredKinds(t *testing.T) {
+	builtIn := []provider.Provisions{
+		{Kind: "postgres", Creates: "Persistent PostgreSQL container", Versions: []string{"17"}},
+		{Kind: "mysql", Creates: "Persistent MySQL container", Versions: []string{"8.4"}},
+		{Kind: "mariadb", Creates: "Persistent MariaDB container", Versions: []string{"11.8"}},
+		{Kind: "redis", Creates: "Persistent Redis container", Versions: []string{"8.2"}},
+		{Kind: "valkey", Creates: "Persistent Valkey container", Versions: []string{"8.1"}},
+	}
+	wantDefault := append(slices.Clone(builtIn),
+		provider.Provisions{Kind: "fabriq", Creates: "Fabriq catalog service", Versions: []string{"1.9"}},
+		provider.Provisions{Kind: "fabriq-library", Creates: "Fabriq library catalog service", Versions: []string{"1.9"}},
+		provider.Provisions{Kind: "memcached", Creates: "Memcached catalog service", Versions: []string{"1.6"}},
+		provider.Provisions{Kind: "nats", Creates: "NATS JetStream catalog service", Versions: []string{"2.11"}},
+		provider.Provisions{Kind: "rabbitmq", Creates: "RabbitMQ catalog service", Versions: []string{"4.3"}},
+		provider.Provisions{Kind: "timescaledb", Creates: "PostgreSQL 16 with TimescaleDB catalog service", Versions: []string{"16"}},
+	)
+	got := provisionsOf(t, Catalog(), "server")
+	if !reflect.DeepEqual(got, wantDefault) {
+		t.Fatalf("default registry changed the server provisions: %+v", got)
+	}
+
+	got = provisionsOf(t, catalogWith(recipestest.Registry(t)), "server")
+	if len(got) != 6 || !reflect.DeepEqual(got[:5], builtIn) {
+		t.Fatalf("built-in provisions moved or changed: %+v", got)
+	}
+	want := provider.Provisions{Kind: "sample", Creates: "Sample catalog service", Versions: []string{"1"}}
+	if !reflect.DeepEqual(got[5], want) {
+		t.Fatalf("registered kind: %+v, want %+v", got[5], want)
+	}
+}
+
+func TestKubernetesProvisionsAcceptRegisteredKinds(t *testing.T) {
+	first := provider.Provisions{Kind: "postgres", Creates: "Retained PostgreSQL StatefulSet", Versions: []string{"17"}}
+	got := provisionsOf(t, Catalog(), "kubernetes")
+	fabriq := provider.Provisions{Kind: "fabriq", Creates: "Fabriq catalog service", Versions: []string{"1.9"}}
+	timescaledb := provider.Provisions{Kind: "timescaledb", Creates: "PostgreSQL 16 with TimescaleDB catalog service", Versions: []string{"16"}}
+	if !reflect.DeepEqual(got, []provider.Provisions{first, fabriq, {Kind: "fabriq-library", Creates: "Fabriq library catalog service", Versions: []string{"1.9"}}, timescaledb}) {
+		t.Fatalf("default registry changed the Kubernetes provisions: %+v", got)
+	}
+
+	got = provisionsOf(t, catalogWith(recipestest.Registry(t)), "kubernetes")
+	if len(got) != 2 || !reflect.DeepEqual(got[0], first) || got[1].Kind != "sample" || got[1].Creates != "Sample catalog service" {
+		t.Fatalf("Kubernetes provisions: %+v", got)
+	}
+	// Managed clouds don't gain registered kinds.
+	for _, p := range catalogWith(recipestest.Registry(t)) {
+		if p.Cloud == "server" || p.Cloud == "kubernetes" {
+			continue
+		}
+		for _, offer := range p.Provisions {
+			if offer.Kind == "sample" {
+				t.Errorf("%s offers the sample kind", p.Name)
+			}
+		}
+	}
+	if _, err := provider.NewRegistry(catalogWith(recipestest.Registry(t))...); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestServerProvisionsSkipDependencyOnlyKinds(t *testing.T) {
+	kinds := recipestest.Registry(t)
+	if err := kinds.Register(recipestest.Graph()); err != nil {
+		t.Fatal(err)
+	}
+	all := catalogWith(kinds)
+	for _, name := range []string{"server", "kubernetes"} {
+		got := provisionsOf(t, all, name)
+		if !slices.ContainsFunc(got, func(p provider.Provisions) bool { return p.Kind == "sample" }) {
+			t.Fatalf("%s lost the sample kind: %+v", name, got)
+		}
+		if slices.ContainsFunc(got, func(p provider.Provisions) bool { return p.Kind == "graph" }) {
+			t.Fatalf("%s offers a dependency-only kind: %+v", name, got)
+		}
 	}
 }

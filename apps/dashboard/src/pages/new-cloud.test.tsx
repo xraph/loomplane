@@ -103,10 +103,8 @@ it("creates a Cloud with its one default provider and account", async () => {
   expect(screen.getByRole("button", { name: "Create Cloud" })).toBeDisabled()
   await user.click(await screen.findByRole("radio", { name: /Vercel/ }))
   await user.click(screen.getByRole("radio", { name: /Team Vercel/ }))
-  await user.selectOptions(
-    screen.getByRole("combobox", { name: "Default region" }),
-    "fra1"
-  )
+  await user.click(screen.getByRole("combobox", { name: "Default region" }))
+  await user.click(await screen.findByRole("option", { name: /fra1/ }))
   await user.click(screen.getByRole("button", { name: "Create Cloud" }))
   await waitFor(() =>
     expect(writes).toEqual([

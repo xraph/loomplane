@@ -1,0 +1,58 @@
+---
+title: Security model
+description: Who can do what, where every secret lives, what runs where, and how Loomplane is tested.
+---
+
+Loomplane holds credentials to your clouds and deploys code to them, so it's worth knowing exactly what it protects, how, and what it leaves to you. To report a vulnerability, see `SECURITY.md` in the repository.
+
+## Who can do what
+
+Everything belongs to an organization, and every request acts in one. The organization comes from the signed-in session or the API key, and nothing in the request can change it. Another organization's projects, plans, deployments, connections, variables and keys aren't found, the same answer as something that doesn't exist, so an ID never confirms anything.
+
+Roles are checked on every action. Approving is the line that matters: a developer can plan anything, and only an admin's approval of the exact revision they reviewed changes a cloud. An approval of a plan whose world changed since comes back stale. [Roles and permissions](/docs/reference/roles-and-permissions) has the full list.
+
+An API key acts as the member who made it, with their role, and never more. A read-only key fails every permission that isn't a read, keys can't manage keys, and they lose rights when a member loses a role. Every key expires within a year. Keysmith stores a hash, and the key shows once.
+
+## Where secrets live
+
+| What | Where | Who can read it back |
+|---|---|---|
+| Cloud credentials | Vault, encrypted with a key derived from `secret_key` | Deployments, in memory, to call the cloud |
+| Secret variables | Vault, likewise | Deployments, to hand to the cloud's secret store |
+| Database passwords Loomplane generates | Vault, under a key of their own | Deployments, to build the address services get |
+| API keys | Keysmith, as hashes | Nobody |
+| Passwords | authsome, as bcrypt hashes | Nobody |
+| SMTP credentials | Herald, encrypted with a purpose-specific key derived from `secret_key` | The delivery engine only |
+| Webhook signing secrets | Relay store wrapper, encrypted with a separate derived key | The signer. One-time response on create or rotation |
+
+Read APIs never return stored credential values. New API keys and webhook signing secrets appear once, when you create or rotate them. The audit trail records key names and the last four characters of an API key, never a value.
+
+Secrets reach a service through the cloud's own secret store: Secret Manager on Cloud Run, Secrets Manager on ECS, sensitive variables on Vercel. Each is readable by that service's runtime identity only. They never pass through Ctrl Plane, which stores what it's given as plain JSON.
+
+Everything depends on `secret_key`. Keep it out of the repository and away from your backups. Losing it loses every credential and secret, and leaking it together with a copy of the database exposes them.
+
+## What runs where
+
+Nothing from a repository runs on a Loomplane machine. Analysis only reads files, in pure Go parsers behind size and file-count limits, in a worker that holds no sessions. Builds run on the clouds' own builders (Cloud Build, CodeBuild, Vercel and so on), in your accounts. Gateways and provider plugins run on your infrastructure, and application traffic never passes through Loomplane.
+
+Provider plugins are trusted with the credentials of the cloud they deploy to, so only configure ones you run or trust. Each needs its own token, and a plugin refuses any request without it.
+
+## Private repositories
+
+For a private repository the worker mints a GitHub App installation token limited to that one repository and to reading its contents, and stores it nowhere. An organization's analyses only use installations that organization connected, and connecting one needs GitHub to confirm the person connecting can see it. See [Private repositories](/docs/guides/private-repositories).
+
+## Recovery email and outgoing notifications
+
+Authsome creates, expires and consumes recovery tokens and revokes existing sessions after a password reset. Loomplane fences redemption with a PostgreSQL advisory lock, because the pinned Authsome otherwise allows simultaneous redemption. Each API admits one reset operation at a time on a dedicated, bounded database connection, so waiting reset requests can't use up the application pool. Conflicting requests return 429.
+
+Recovery links use the configured public URL. Browser pages set `no-referrer`, and reset tokens never enter notification history or audit metadata. Provider error details become a fixed delivery failure message.
+
+Deployment payloads contain allowlisted IDs, status, attempt and an application link, and exclude build logs, variables and raw provider errors. Delayed mail and inbox reads check current project access and organization membership. The outbound HTTP transport blocks private and reserved DNS results, dials only validated addresses, verifies TLS and refuses redirects. [Notifications and webhooks](/docs/guides/notifications-and-webhooks) covers the details.
+
+## How it's tested
+
+- Every route's authorization: an integration test asks for each of an organization's things from another organization, as a developer, as a viewer and with a member's key, and fails on anything that isn't refused.
+- Fuzzing for what reads input anyone can send: the manifest parser, repository analysis, the credential parsers and the code that repacks a repository's tarball, which mustn't write a file outside its directory. `make fuzz` runs each for 30 seconds.
+- Known vulnerabilities: `make vuln`, and CI on every push, run govulncheck against Loomplane's code and everything it imports. The Go toolchain is pinned in `go.mod` to a release with every standard library fix.
+- Static analysis: golangci-lint with gosec, on every push.
+- Secrets in tests: integration tests check that secrets reach the cloud's secret store and never a task definition, a list response or the CLI's output.

@@ -1,3 +1,6 @@
+import { CloudLoading } from "@/components/cloud-targets/infrastructure-ui"
+import { Alert, AlertDescription } from "@/components/ui/alert"
+import { Field as FormField, FieldLabel } from "@/components/ui/field"
 import { useEffect, useState } from "react"
 import * as api from "@/client/forge/loomplane/hooks"
 import type { Sync } from "@/client/forge/loomplane/types"
@@ -8,6 +11,7 @@ import { Input } from "@/components/ui/input"
 import { QueryError } from "@/components/query-error"
 import { useOrganization } from "@/lib/organization"
 import { activeSync, syncLabel } from "@/lib/cloud-targets"
+import { EnvironmentProgress } from "./organization-activity"
 import { ChangeReview } from "./change-review"
 import { EmptyClouds } from "./workspace"
 
@@ -32,6 +36,7 @@ export function SyncHistory({
     />
   ) : (
     <EmptyClouds
+      kind="notice"
       title="Sync history is restricted"
       description="You need deployment read permission to view applied results."
     />
@@ -80,7 +85,7 @@ function SyncList({
   }, [moving, refetchSyncs])
   return (
     <section className="grid gap-3">
-      <h2 className="font-semibold">Sync history</h2>
+      <h2 className="text-[15px] font-semibold">Sync history</h2>
       {syncs.status === "error" ? (
         <QueryError
           error={syncs.error}
@@ -88,14 +93,14 @@ function SyncList({
           retry={reload}
         />
       ) : !syncs.data ? (
-        <p role="status">Loading sync history...</p>
+        <CloudLoading>Loading sync history...</CloudLoading>
       ) : !rows.length ? (
         <EmptyClouds
           title="No syncs in this environment"
           description="Reviewed Cloud changes appear here with each environment's persisted result."
         />
       ) : (
-        <div className="divide-y rounded-xl border">
+        <div className="divide-y overflow-hidden rounded-xl bg-card ring-1 ring-border">
           {rows.map((sync) => (
             <SyncRow
               key={sync.id}
@@ -172,16 +177,18 @@ function SyncRow({
     }
   }
   return (
-    <article className="grid gap-2 p-3">
+    <article className="grid gap-2 px-4 py-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div className="min-w-0">
-          <p className="text-sm font-medium">
+          <p className="text-[13px] font-medium">
             {syncLabel(sync.status)}{" "}
             <span className="text-xs font-normal text-muted-foreground">
               Attempt {sync.attempt}
             </span>
           </p>
-          <p className="text-xs break-all text-muted-foreground">{sync.id}</p>
+          <p className="font-mono text-xs break-all text-muted-foreground">
+            {sync.id}
+          </p>
         </div>
         <div className="flex flex-wrap gap-2">
           {["failed", "cleanup_pending"].includes(sync.status) && (
@@ -213,9 +220,9 @@ function SyncRow({
         </p>
       )}
       {sync.error && (
-        <p role="alert" className="text-sm text-destructive">
-          {sync.error}
-        </p>
+        <Alert variant="destructive">
+          <AlertDescription>{sync.error}</AlertDescription>
+        </Alert>
       )}
       {(sync.environments ?? []).map((env) => (
         <div
@@ -240,33 +247,31 @@ function SyncRow({
               </a>
             )}
           </div>
+          <EnvironmentProgress environment={env} />
           <p className="text-muted-foreground">
             {env.services?.join(", ") || "No service changes"}
           </p>
-          {env.error && (
-            <p role="alert" className="text-destructive">
-              {env.error}
-            </p>
-          )}
           {env.externalRouting &&
             sync.status === "routing_pending" &&
             !env.routingEvidence && (
               <div className="flex flex-wrap items-center gap-2">
-                <label className="grid min-w-40 flex-1 gap-1">
-                  Confirm external routing
-                  <Input
-                    aria-label={`Routing evidence for ${env.environment}`}
-                    placeholder="Route change or verification evidence"
-                    value={evidence[env.environmentId] ?? ""}
-                    disabled={!permitted || busy}
-                    onChange={(e) =>
-                      setEvidence((v) => ({
-                        ...v,
-                        [env.environmentId]: e.target.value,
-                      }))
-                    }
-                  />
-                </label>
+                <FormField className="grid min-w-40 flex-1 gap-1">
+                  <FieldLabel className="contents">
+                    Confirm external routing
+                    <Input
+                      aria-label={`Routing evidence for ${env.environment}`}
+                      placeholder="Route change or verification evidence"
+                      value={evidence[env.environmentId] ?? ""}
+                      disabled={!permitted || busy}
+                      onChange={(e) =>
+                        setEvidence((v) => ({
+                          ...v,
+                          [env.environmentId]: e.target.value,
+                        }))
+                      }
+                    />
+                  </FieldLabel>
+                </FormField>
                 <Button
                   size="sm"
                   variant="outline"
@@ -287,9 +292,9 @@ function SyncRow({
         </div>
       ))}
       {error && (
-        <p role="alert" className="text-sm text-destructive">
-          {error}
-        </p>
+        <Alert variant="destructive">
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
       )}
     </article>
   )

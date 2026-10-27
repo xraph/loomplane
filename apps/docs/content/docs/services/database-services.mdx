@@ -1,0 +1,130 @@
+---
+title: Database services
+description: Deploy PostgreSQL, MySQL, MariaDB, Redis and Valkey on your own servers, or managed Postgres on RDS and Cloud SQL, without a repository.
+---
+
+Open **Services** in the dashboard to deploy a database. Choose a project name and a target, leave daily backups on if you want them, and select **Deploy PostgreSQL**. Loomplane creates a project with no repository, checks its plan, and approves only the single database creation you asked for. Anything unexpected, or any warning, sends you to normal plan review.
+
+The same selector offers **MySQL 8.4** and **MariaDB 11.8**, each with its own pinned image and native backup client. You can deploy **Redis 8.2** or **Valkey 8.1** on a checked Docker server. All five engines share the recovery controls and CLI commands.
+
+## What you get on Docker and Kubernetes
+
+The PostgreSQL profiles run one private instance with a digest-pinned image, retained storage and a separate application role that isn't a superuser and can't create databases or roles. Credentials stay in Vault. Applications in the same environment on the same target get the resource URL through the normal resource binding.
+
+Docker uses a named volume that survives container replacement and removal. Docker local storage shares host capacity, so this profile doesn't reserve a disk quota or survive losing the host. Kubernetes uses a StatefulSet and a retained PVC requesting 10 GiB. It needs the connection to report PostgreSQL recovery permissions ready, and each restore proves separately that the cluster's network policies enforce isolation. Neither profile gives you replication or recovery after losing a host or zone.
+
+| Engine | Version | Targets |
+|---|---|---|
+| PostgreSQL | 17 | Docker server, Kubernetes |
+| MySQL | 8.4 (image 8.4.11) | Docker server |
+| MariaDB | 11.8 (image 11.8.9) | Docker server |
+| Redis | 8.2 (image 8.2.10) | Docker server |
+| Valkey | 8.1 (image 8.1.10) | Docker server |
+
+Kubernetes accepts PostgreSQL only.
+
+## Create one from the CLI
+
+```bash
+loomctl services create "Application database" --target conn_your_checked_server --json
+loomctl approve PLAN_ID --yes
+```
+
+For a Kubernetes cluster, name the provider:
+
+```bash
+loomctl services create "Cluster database" --provider kubernetes --target conn_your_checked_cluster --json
+```
+
+Choose another engine with `--kind`:
+
+```bash
+loomctl services create "Orders MySQL" --kind mysql --target conn_your_checked_server --json
+loomctl services create "Orders MariaDB" --kind mariadb --target conn_your_checked_server --json
+loomctl services create "Application Redis" --kind redis --target conn_your_checked_server --json
+loomctl services create "Application Valkey" --kind valkey --target conn_your_checked_server --json
+```
+
+Each command saves a resource manifest and returns a plan. Approval starts the deployment. Changing the engine, image or target of an existing database needs a tested migration into a fresh service.
+
+You can also save a resource-only manifest yourself:
+
+```yaml title="loomplane.yaml"
+version: 1
+resources:
+  database:
+    kind: postgres
+    provider: server
+    version: "17"
+    target: conn_your_checked_server
+```
+
+```bash
+loomctl projects create "Application database"
+loomctl manifest save PROJECT_ID -f loomplane.yaml
+loomctl plan PROJECT_ID --catalog --env production
+loomctl approve PLAN_ID
+```
+
+## MySQL and MariaDB
+
+Application credentials grant access to the selected database without global user-management privileges. Backups use the matching `mysqldump` or `mariadb-dump` client and include tables, views, routines, triggers and events. Server users and global settings aren't in the backup.
+
+Logical snapshots need InnoDB tables, and backup creation refuses other engines. Avoid schema changes while a dump runs, because a consistent transaction doesn't protect against concurrent DDL. The profiles disable binary logging, with no replication or point-in-time recovery.
+
+## Redis and Valkey
+
+Both expose a private `redis://` binding on port 6379, database zero, with separate administrative and application credentials in Vault. The application role can't change server configuration, manage users or run dangerous administrative commands.
+
+You get one instance with retained `/data`, AOF persistence and an fsync interval of one second, so a sudden host failure can lose recent writes. The dataset limit is 128 MiB with eviction disabled, inside a 512 MiB container. Once it reaches the limit, writes that need more memory fail. Plan capacity before you use it as a cache or primary store.
+
+Cross-engine restores, upgrades, replication, failover, point-in-time recovery and credential rotation are outside these profiles.
+
+## Managed PostgreSQL on RDS and Cloud SQL
+
+In **Services** you can also deploy PostgreSQL 17 through a checked AWS or Google Cloud account. Choose the account and region, review the compute, disk, access and backup settings, and Loomplane approves only one creation whose account identity, region and complete profile match that review.
+
+```bash
+loomctl services create "Orders RDS" --provider rds --target conn_your_aws_account --json
+loomctl services create "Orders Cloud SQL" --provider cloud-sql --target conn_your_google_project --region europe-west1 --json
+```
+
+Here `--target` picks the environment's cloud account connection, which needs cloud account management access. `--region` is optional: Cloud SQL uses its default region without it, and RDS uses the AWS connection's region and blocks a plan that asks for another. Plan creation doesn't provision anything, so review the plan, the connection and the provider charges, then approve it. The managed profiles accept PostgreSQL only.
+
+| Requested setting | AWS RDS | Google Cloud SQL |
+|---|---|---|
+| Compute | `db.t4g.micro` | `db-custom-1-3840`, Enterprise |
+| Disk | 20 GiB, encrypted gp3 | 10 GiB, provider-encrypted SSD, automatic growth disabled |
+| Availability | Single zone | Single zone |
+| Access | Private VPC, environment ECS tasks | Cloud SQL connector, IPv4 enabled without authorized networks |
+| Automated backups | 7 days | 7 retained backups |
+| Recovery logs | 7 days through RDS backup retention | 7 days, point-in-time recovery enabled |
+| Removal | Final snapshot and retained automated backups | Final backup requested for 30 days |
+
+These are creation requests. They don't establish the actual recovery window or a successful restore, and Loomplane has no point-in-time restore control. A Cloud SQL backup count isn't a duration. Provider availability and quotas can reject a class or region.
+
+The `--json` output shows the complete request before approval, and deployment checks the account identity again. Moving a profiled database to another account or region, or changing its profile or version, needs a tested restore into a fresh service. Existing databases without a profile keep their original settings when you replan.
+
+Creation can take up to 45 minutes before the form stops waiting. That limit doesn't cancel the cloud operation. If creation fails or times out, the form keeps a link to your project, so inspect the result there. **New service** starts a separate creation and needs a new name.
+
+### Lost responses and removal
+
+RDS saves a creation intent before it sends the request, then captures the provider's physical database ID before waiting. Retry and restarts keep that checkpoint. If the create response is lost, Loomplane follows the original database only when its creation tag matches the saved intent. A reused name with a different physical ID blocks the operation, and a missing original database never triggers another create. Retries need the original password in Vault and never reset it.
+
+Cloud SQL saves the account, region, settings and each native operation before the next step, and pins the provider's creation time, project, region and instance name. If a create response loses its operation ID, Retry can read Google's operation history to recover it, within ten pages of 100 operations. It never sends the create request again. Reconcile an instance recreated outside Loomplane before you retry. A lost database, user or removal operation ID needs reconciliation too.
+
+RDS removal retains automated backups and waits until the original database is gone and its final snapshot is available and matches the saved source. Cloud SQL removal requests a final backup with a 30-day lifetime and waits for the operation. If either fails, Loomplane keeps the credentials and reports the failure, with no retry that skips the final backup. Retained cloud backups can incur storage charges, and they stay in your account, apart from Loomplane's own backup files.
+
+<Callout type="warn">
+  Managed creation was checked through the real API and dashboard against controlled provider endpoints. Live RDS and Cloud SQL creation, SQL persistence and restore are not qualified yet.
+</Callout>
+
+## Other managed databases
+
+Services can also get databases from the manifest's resources, on any target that provisions them: Cloud SQL, RDS, Memorystore, ElastiCache, Render's Postgres and Key Value, DigitalOcean's Managed databases, and Azure's. Provider availability doesn't establish backup or restore support. See the [Clouds overview](/docs/clouds) for what each provisions.
+
+## Qualification boundary
+
+PostgreSQL 17.11 passed the Docker catalog and recovery drill with local Trove storage, and a native adapter drill against an isolated MinIO endpoint. The Kubernetes catalog, CLI, API and browser drill passed on arm64 Kubernetes 1.36.4 with Cilium 1.20.3 and a retained local-path class. That covered pod replacement, backup persistence across a control plane restart, isolated SQL recovery, scheduled backups and deletion of the exact temporary PV.
+
+Still pending: AWS S3 acceptance, managed cloud recovery, production CSI and cross-node qualification, high availability, point-in-time recovery, explicit source-data destruction, Kubernetes and other-engine retention, upgrades, credential rotation and live binding cutover. The Redis and Valkey drills ran on arm64. The amd64 images are pinned but haven't passed live acceptance here.

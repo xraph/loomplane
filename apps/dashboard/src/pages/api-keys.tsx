@@ -1,4 +1,6 @@
-import { CheckIcon, CopyIcon, KeyRoundIcon } from "lucide-react"
+import { Radio } from "@base-ui/react/radio"
+import { RadioGroup } from "@base-ui/react/radio-group"
+import { CheckIcon, CopyIcon, PlusIcon } from "lucide-react"
 import { type FormEvent, useState } from "react"
 import { toast } from "sonner"
 
@@ -10,7 +12,9 @@ import {
 } from "@/client/forge/loomplane/hooks"
 import type { APIKey, CreatedKey } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
+import { ApiKeysIcon } from "@/components/icons"
 import { Page, PageHeading } from "@/components/page"
+import { Panel } from "@/components/panel"
 import { SiteHeader } from "@/components/site-header"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
@@ -36,11 +40,14 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import {
-  Field,
-  FieldDescription,
-  FieldGroup,
-  FieldLabel,
-} from "@/components/ui/field"
+  Empty,
+  EmptyContent,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyMedia,
+  EmptyTitle,
+} from "@/components/ui/empty"
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import {
   Select,
@@ -61,10 +68,20 @@ import {
 } from "@/components/ui/table"
 import { formatDate } from "@/lib/format"
 import { useOrganization } from "@/lib/organization"
+import { cn } from "@/lib/utils"
 
 const accessChoices = [
-  { label: "Read only", value: "read" },
-  { label: "Read and write", value: "write" },
+  {
+    label: "Read only",
+    value: "read",
+    description:
+      "Looks at projects, plans and deployments, and changes nothing.",
+  },
+  {
+    label: "Read and write",
+    value: "write",
+    description: "Can plan and deploy, as far as your role allows.",
+  },
 ]
 
 const lifetimes = [
@@ -84,7 +101,7 @@ export function ApiKeys() {
   return (
     <>
       <SiteHeader crumbs={[{ label: "API keys" }]} />
-      <Page>
+      <Page className="max-w-[980px]">
         <PageHeading
           title="API keys"
           description={
@@ -94,7 +111,7 @@ export function ApiKeys() {
           }
           actions={
             <Button onClick={() => setCreating(true)}>
-              <KeyRoundIcon />
+              <PlusIcon />
               New key
             </Button>
           }
@@ -111,9 +128,20 @@ export function ApiKeys() {
           <Skeleton className="h-40 w-full rounded-xl" />
         )}
         {keys.data && keys.data.keys.length === 0 && (
-          <Card className="items-center px-6 py-10 text-center text-sm text-muted-foreground">
-            No keys yet. Make one to use the CLI or call the API from CI.
-          </Card>
+          <Empty>
+            <EmptyHeader>
+              <EmptyMedia variant="icon">
+                <ApiKeysIcon />
+              </EmptyMedia>
+              <EmptyTitle>No keys yet</EmptyTitle>
+              <EmptyDescription>
+                Make one to use the CLI or call the API from CI.
+              </EmptyDescription>
+            </EmptyHeader>
+            <EmptyContent>
+              <Button onClick={() => setCreating(true)}>New key</Button>
+            </EmptyContent>
+          </Empty>
         )}
         {keys.data && keys.data.keys.length > 0 && (
           <Card className="py-0">
@@ -145,6 +173,13 @@ export function ApiKeys() {
             </Table>
           </Card>
         )}
+        <Panel className="gap-2">
+          <h2 className="text-[13.5px] font-semibold">Using a key</h2>
+          <code className="block rounded-lg bg-muted px-3 py-2.5 font-mono text-xs leading-relaxed break-all whitespace-pre-wrap">
+            curl -H &quot;Authorization: Bearer &lt;key&gt;&quot;{" "}
+            {window.location.origin}/api/...
+          </code>
+        </Panel>
       </Page>
       <CreateKeyDialog open={creating} onOpenChange={setCreating} />
     </>
@@ -170,15 +205,20 @@ function KeyRow({ apiKey: k, mine }: { apiKey: APIKey; mine: boolean }) {
   return (
     <TableRow>
       <TableCell>
-        <div className="font-medium">{k.name}</div>
-        <div className="font-mono text-xs text-muted-foreground">
+        <div className="text-[13.5px] font-medium">{k.name}</div>
+        <div className="font-mono text-[11.5px] text-muted-foreground">
           lp_live_…{k.hint}
           {!mine && " · someone else's"}
         </div>
       </TableCell>
       <TableCell>
         {active ? (
-          <Badge variant="secondary" className="font-normal">
+          <Badge
+            variant="secondary"
+            className={cn(
+              k.access === "write" && "bg-brand-tint text-brand-ink"
+            )}
+          >
             {k.access === "write" ? "Read and write" : "Read only"}
           </Badge>
         ) : (
@@ -187,10 +227,10 @@ function KeyRow({ apiKey: k, mine }: { apiKey: APIKey; mine: boolean }) {
           </Badge>
         )}
       </TableCell>
-      <TableCell className="hidden text-sm text-muted-foreground md:table-cell">
+      <TableCell className="hidden text-[12.5px] text-muted-foreground md:table-cell">
         {k.lastUsedAt ? formatDate(k.lastUsedAt) : "Never"}
       </TableCell>
-      <TableCell className="hidden text-sm text-muted-foreground md:table-cell">
+      <TableCell className="hidden text-[12.5px] text-muted-foreground md:table-cell">
         {k.expiresAt ? formatDate(k.expiresAt) : "Never"}
       </TableCell>
       <TableCell>
@@ -198,7 +238,12 @@ function KeyRow({ apiKey: k, mine }: { apiKey: APIKey; mine: boolean }) {
           <AlertDialog>
             <AlertDialogTrigger
               render={
-                <Button variant="ghost" size="sm" disabled={revoke.isPending}>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="text-destructive hover:text-destructive"
+                  disabled={revoke.isPending}
+                >
                   Revoke
                 </Button>
               }
@@ -277,7 +322,7 @@ function CreateKeyDialog({
 
   return (
     <Dialog open={open} onOpenChange={close}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="sm:max-w-[520px]">
         {secret ? (
           <>
             <DialogHeader>
@@ -287,19 +332,24 @@ function CreateKeyDialog({
                 if you lose it, revoke it and make another.
               </DialogDescription>
             </DialogHeader>
-            <div className="flex gap-2">
+            <div className="flex gap-1.5">
               <Input
                 readOnly
                 value={secret}
-                className="font-mono text-xs"
+                aria-label="Your new key"
+                className="h-9 border-transparent bg-muted font-mono text-[12.5px]"
                 onFocus={(e) => e.target.select()}
               />
-              <Button variant="outline" size="icon" onClick={() => void copy()}>
+              <Button
+                variant="outline"
+                className="h-9"
+                onClick={() => void copy()}
+              >
                 {copied ? <CheckIcon /> : <CopyIcon />}
-                <span className="sr-only">Copy</span>
+                {copied ? "Copied" : "Copy"}
               </Button>
             </div>
-            <p className="text-sm text-muted-foreground">
+            <p className="text-muted-foreground">
               Use it with the CLI:{" "}
               <code className="font-mono text-xs">
                 loomctl login --url {window.location.origin} --key -
@@ -336,27 +386,35 @@ function CreateKeyDialog({
                 />
               </Field>
               <Field>
-                <FieldLabel>Access</FieldLabel>
-                <Select
-                  items={accessChoices}
+                <FieldLabel id="key-access">Access</FieldLabel>
+                <RadioGroup
                   value={access}
-                  onValueChange={(v) => setAccess(v ?? "read")}
+                  onValueChange={(v) => setAccess(v as string)}
+                  aria-labelledby="key-access"
+                  className="grid gap-2 sm:grid-cols-2"
                 >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {accessChoices.map((a) => (
-                      <SelectItem key={a.value} value={a.value}>
+                  {accessChoices.map((a) => (
+                    <Radio.Root
+                      key={a.value}
+                      value={a.value}
+                      nativeButton
+                      render={<button type="button" />}
+                      className={cn(
+                        "grid content-start gap-0.5 rounded-[11px] border px-3 py-2.5 text-left transition-colors",
+                        access === a.value
+                          ? "border-brand-line bg-brand-soft"
+                          : "border-border bg-card hover:border-foreground/25"
+                      )}
+                    >
+                      <span className="text-[13px] font-semibold">
                         {a.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <FieldDescription>
-                  A read-only key can look at projects, plans and deployments,
-                  and change nothing.
-                </FieldDescription>
+                      </span>
+                      <span className="text-xs leading-snug text-muted-foreground">
+                        {a.description}
+                      </span>
+                    </Radio.Root>
+                  ))}
+                </RadioGroup>
               </Field>
               <Field>
                 <FieldLabel>Expires after</FieldLabel>
@@ -368,7 +426,7 @@ function CreateKeyDialog({
                   value={days}
                   onValueChange={(v) => setDays(v ?? "90")}
                 >
-                  <SelectTrigger>
+                  <SelectTrigger aria-label="Expires after" className="w-full">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>

@@ -10,6 +10,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5/pgconn"
+
 	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/clouds/server"
 	"github.com/xraph/loomplane/internal/connections"
@@ -44,6 +46,20 @@ func (w *domainWorkflow) StartRoute(context.Context, string, string, int) error 
 }
 
 func TestDomainsDurableClaimsScopeAndServerGuards(t *testing.T) {
+	domainsDurableClaims(t, 60, 60)
+}
+
+func TestDomainsCompensationTrustedReceiptDeadline(t *testing.T) {
+	for _, tt := range []struct {
+		name              string
+		previous, current int
+	}{{"previous-longer", 90000, 60}, {"current-longer", 60, 90000}} {
+		t.Run(tt.name, func(t *testing.T) { domainsDurableClaims(t, tt.previous, tt.current) })
+	}
+}
+
+func domainsDurableClaims(t *testing.T, cutoverTTL, rollbackTTL int, modes ...string) {
+	t.Helper()
 	clouds, sql, db := cloudSyncDatabase(t)
 	ctx := t.Context()
 	store := cloudinfra.NewPgStore(db)
@@ -69,18 +85,49 @@ func TestDomainsDurableClaimsScopeAndServerGuards(t *testing.T) {
 		}
 	}
 	resolver, workflow := &domainDNS{}, &domainWorkflow{}
-	svc := cloudinfra.NewService(cloudinfra.Deps{Store: store, Clouds: clouds, Authz: domainAuth{}, Resolver: resolver, Workflow: workflow})
+	adapters := cloudinfra.NewAdapters()
+	if err := adapters.RegisterDNS("vercel", &controlDNSAdapter{}); err != nil {
+		t.Fatal(err)
+	}
+	svc := cloudinfra.NewService(cloudinfra.Deps{Store: store, Clouds: clouds, Authz: domainAuth{}, Resolver: resolver, Workflow: workflow, Adapters: adapters, Connections: &syncAccounts{store: cs}})
 	p := security.Principal{OrgID: "org", UserID: "manager"}
-	zone, err := svc.CreateZone(ctx, p, cloudinfra.ZoneInput{Name: "Example.COM.", Mode: "external", ProjectIDs: []string{"proj"}})
+	mode, dnsConnection := "external", ""
+	if len(modes) > 0 {
+		mode, dnsConnection = modes[0], "old"
+	}
+	zone, err := svc.CreateZone(ctx, p, cloudinfra.ZoneInput{Name: "Example.COM.", Mode: mode, ConnectionID: dnsConnection, ProjectIDs: []string{"proj"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if zone.Name != "example.com" || zone.ConnectionID != "" || !zone.VerifiedAt.IsZero() {
+	if zone.Name != "example.com" || zone.ConnectionID != dnsConnection || !zone.VerifiedAt.IsZero() {
 		t.Fatal("unexpected external zone", zone)
 	}
 	input := cloudinfra.RouteInput{ZoneID: zone.ID, CloudID: "cloud", EnvironmentID: "env", Service: "web", Hostname: "APP.EXAMPLE.COM.", Port: 8080}
 	if _, err = svc.PreviewRoute(ctx, p, "proj", input); !errors.Is(err, cloudinfra.ErrNotFound) {
 		t.Fatal("unverified control accepted", err)
+	}
+	if mode == "managed" {
+		// A persisted hosting-only timestamp from an old version grants no control.
+		legacy := *zone
+		legacy.VerifiedAt, legacy.ProofName, legacy.ProofValue = now, "", ""
+		if err = store.SaveZone(ctx, &legacy); err != nil {
+			t.Fatal(err)
+		}
+		if _, err = svc.PreviewRoute(ctx, p, "proj", input); err == nil {
+			t.Fatal("legacy hosting verification authorized route")
+		}
+		if _, err = svc.VerifyZone(ctx, p, zone.ID); err == nil {
+			t.Fatal("legacy hosting verification renewed without public proof")
+		}
+		renewed, renewErr := svc.UpdateZone(ctx, p, zone.ID, cloudinfra.ZoneUpdate{Revision: legacy.Revision, ProjectIDs: legacy.ProjectIDs, RenewProof: true})
+		if renewErr != nil || !renewed.VerifiedAt.IsZero() || renewed.ProofName == "" {
+			t.Fatalf("legacy challenge renewal: %+v %v", renewed, renewErr)
+		}
+		zone = renewed
+	}
+	resolver.proof = "foreign-organization-proof"
+	if _, err = svc.VerifyZone(ctx, p, zone.ID); err == nil {
+		t.Fatal("foreign public proof accepted")
 	}
 	resolver.proof = zone.ProofValue
 	if zone, err = svc.VerifyZone(ctx, p, zone.ID); err != nil {
@@ -141,6 +188,18 @@ func TestDomainsDurableClaimsScopeAndServerGuards(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	resolver.proof = "changed-proof"
+	if _, err = svc.ApplyRoute(ctx, p, "proj", preview.ID, cloudinfra.ApplyInput{Review: preview.Review}); err == nil {
+		t.Fatal("changed proof accepted")
+	}
+	if _, err = svc.PreviewRoute(ctx, p, "proj", input); err == nil {
+		t.Fatal("changed proof allowed new preview")
+	}
+	var claims int
+	if err = sql.QueryRow(ctx, `SELECT count(*) FROM loomplane_domain_routes`).Scan(&claims); err != nil || claims != 0 || workflow.routes != 0 {
+		t.Fatalf("unproved ownership reached claims/effects: %d %d %v", claims, workflow.routes, err)
+	}
+	resolver.proof = zone.ProofValue
 	accepted, err := svc.ApplyRoute(ctx, p, "proj", preview.ID, cloudinfra.ApplyInput{Review: preview.Review})
 	if err != nil {
 		t.Fatal(err)
@@ -154,6 +213,26 @@ func TestDomainsDurableClaimsScopeAndServerGuards(t *testing.T) {
 	}
 	if _, err = svc.ApplyRoute(ctx, p, "proj", second.ID, cloudinfra.ApplyInput{Review: second.Review}); !errors.Is(err, cloudinfra.ErrConflict) {
 		t.Fatal("duplicate global hostname accepted", err)
+	}
+	// A valid route row in a different organization still contends on the
+	// same exact hostname, after unproved previews reserved nothing above.
+	for _, statement := range []string{
+		`INSERT INTO loomplane_projects(id,org_id,name,slug,status,created_by,created_at,updated_at) VALUES('other-project','other-org','Other','other','ready','manager',now(),now())`,
+		`INSERT INTO loomplane_environments(id,org_id,project_id,name,kind,created_at,updated_at) VALUES('other-env','other-org','other-project','production','production',now(),now())`,
+		`INSERT INTO loomplane_cloud_profiles(id,org_id,project_id,name,revision,created_at,updated_at) VALUES('other-cloud','other-org','other-project','Other',1,now(),now())`,
+		`INSERT INTO loomplane_cloud_connections(id,org_id,cloud,name,status,details,created_by,created_at,updated_at) VALUES('other-runtime','other-org','server','Other','ready','{}','manager',now(),now())`,
+		`INSERT INTO loomplane_cloud_servers(id,org_id,cloud_id,connection_id,provider,account_id,ownership,revision,status,body) VALUES('other-host','other-org','other-cloud','other-runtime','server','other-daemon','adopted',1,'ready','{}')`,
+		`INSERT INTO loomplane_dns_zones(id,org_id,name,revision,body) VALUES('other-zone','other-org','example.com',1,'{}')`,
+		`INSERT INTO loomplane_domain_routes(id,org_id,project_id,environment_id,cloud_id,server_id,connection_id,zone_id,hostname,status,revision,body) VALUES('other-route','other-org','other-project','other-env','other-cloud','other-host','other-runtime','other-zone','other.example.com','ready',1,'{}')`,
+	} {
+		if _, fixtureErr := sql.Exec(ctx, statement); fixtureErr != nil {
+			t.Fatal(fixtureErr)
+		}
+	}
+	_, claimErr := sql.Exec(ctx, `UPDATE loomplane_domain_routes SET hostname='app.example.com' WHERE id='other-route'`)
+	var constraint *pgconn.PgError
+	if !errors.As(claimErr, &constraint) || constraint.ConstraintName != "loomplane_hostname_claim" {
+		t.Fatalf("cross-organization claim was not fenced: %v", claimErr)
 	}
 	if _, err = store.Zone(ctx, "foreign-org", zone.ID); !errors.Is(err, cloudinfra.ErrNotFound) {
 		t.Fatal("foreign zone disclosed", err)
@@ -301,7 +380,7 @@ func TestDomainsDurableClaimsScopeAndServerGuards(t *testing.T) {
 		t.Fatal(err)
 	}
 	cutover.Route.Status = "ready"
-	cutover.Receipt = &provider.DNSRecord{ID: "rotated-receipt", Name: "app", Type: "A", Value: "192.0.2.43", TTL: 60}
+	cutover.Receipt = &provider.DNSRecord{ID: "rotated-receipt", Name: "app", Type: "A", Value: "192.0.2.43", TTL: cutoverTTL}
 	if err = store.PublishRoute(ctx, cutover); err != nil {
 		t.Fatal(err)
 	}
@@ -351,7 +430,7 @@ func TestDomainsDurableClaimsScopeAndServerGuards(t *testing.T) {
 	if rolled.PreviousReceipt == nil || rolled.PreviousReceipt.ID != "rotated-receipt" {
 		t.Fatal("rollback lost latest DNS receipt")
 	}
-	rolled.Receipt = &provider.DNSRecord{ID: "rollback-receipt", Name: "app", Type: "A", Value: "192.0.2.42", TTL: 60}
+	rolled.Receipt = &provider.DNSRecord{ID: "rollback-receipt", Name: "app", Type: "A", Value: "192.0.2.42", TTL: rollbackTTL}
 	if err = store.PublishRoute(ctx, rolled); err != nil {
 		t.Fatal(err)
 	}
@@ -360,6 +439,14 @@ func TestDomainsDurableClaimsScopeAndServerGuards(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	resolver.proof = "lost-control"
+	if _, err = svc.PreviewRoute(ctx, p, "proj", input); err == nil {
+		t.Fatal("lost proof admitted new work")
+	}
+	if err = store.ValidateRouteCleanup(ctx, rolled.Route); err != nil {
+		t.Fatal("lost proof blocked exact cleanup", err)
+	}
+	resolver.proof = zone.ProofValue
 	// Revocation and credential rotation do not grant fresh route work, but exact
 	// retained cleanup is still authorized for the active runtime.
 	if _, err = sql.Exec(ctx, `UPDATE loomplane_cloud_project_grants SET revoked=true,revision=revision+1 WHERE org_id='org' AND cloud_id='cloud' AND project_id='proj'`); err != nil {
@@ -386,15 +473,48 @@ func TestDomainsDurableClaimsScopeAndServerGuards(t *testing.T) {
 	if _, err = svc.RollbackRoute(ctx, p, "proj", cutover.ID); err == nil {
 		t.Fatal("revoked grant authorized rollback")
 	}
+	if cutoverTTL > 86400 || rollbackTTL > 86400 {
+		// Later operations from other handoffs must not hide the accepted maximum.
+		if _, fixtureErr := sql.Exec(ctx, `INSERT INTO loomplane_route_operations(id,org_id,project_id,route_id,server_id,cloud_id,status,revision,body,principal,checkpoint)
+ SELECT 'history-'||n,o.org_id,o.project_id,o.route_id,o.server_id,o.cloud_id,'succeeded',1,
+ o.body||jsonb_build_object('id','history-'||n,'handoff_id','unrelated','status','succeeded','created_at',now()+interval '1 second','receipt',jsonb_build_object('ttl',180000)),o.principal,o.checkpoint
+ FROM loomplane_route_operations o CROSS JOIN generate_series(1,105) n WHERE o.id=$1`, cutover.ID); fixtureErr != nil {
+			t.Fatal(fixtureErr)
+		}
+		if _, fixtureErr := sql.Exec(ctx, `INSERT INTO loomplane_route_operations(id,org_id,project_id,route_id,server_id,cloud_id,status,revision,body,principal,checkpoint)
+ SELECT 'unaccepted-receipt',org_id,project_id,route_id,server_id,cloud_id,'preview',1,
+ body||jsonb_build_object('id','unaccepted-receipt','status','preview','receipt',jsonb_build_object('ttl',180000)),principal,checkpoint FROM loomplane_route_operations WHERE id=$1`, cutover.ID); fixtureErr != nil {
+			t.Fatal(fixtureErr)
+		}
+		history, historyErr := store.RouteOperations(ctx, "org", "proj", cutover.Route.ID)
+		if historyErr != nil || len(history) != 100 {
+			t.Fatal("public history cap changed", len(history), historyErr)
+		}
+		for _, op := range history {
+			if op.ID == cutover.ID {
+				t.Fatal("fixture did not hide old cutover")
+			}
+		}
+	}
+	if _, invalidErr := svc.ReleaseRouteHandoff(ctx, p, "proj", prepared.ID, 90000); !errors.Is(invalidErr, cloudinfra.ErrInvalid) {
+		t.Fatal("unbounded caller drain accepted", invalidErr)
+	}
 	released, err := svc.ReleaseRouteHandoff(ctx, p, "proj", prepared.ID, 60)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !released.NotBefore.Equal(rolled.Route.UpdatedAt.Add(300 * time.Second)) {
+	if !released.NotBefore.Equal(rolled.Route.UpdatedAt.Add(time.Duration(max(300, cutoverTTL, rollbackTTL)) * time.Second)) {
 		t.Fatal("prior source TTL was shortened", released.NotBefore)
+	}
+	persistedRelease, readErr := store.RouteOperation(ctx, "org", released.ID)
+	if readErr != nil || !persistedRelease.NotBefore.Equal(released.NotBefore) {
+		t.Fatal("trusted drain deadline was not persisted", readErr)
 	}
 	if released.Source.Binding.ServerID != "host2" || released.NotBefore.IsZero() {
 		t.Fatal("release lost inactive identity or TTL gate")
+	}
+	if _, err = store.BeginIngress(ctx, released); err != nil {
+		t.Fatal(err)
 	}
 	if err = store.CompleteHandoff(ctx, released); err != nil {
 		t.Fatal(err)
@@ -490,6 +610,9 @@ func TestDomainsDurableClaimsScopeAndServerGuards(t *testing.T) {
 			if resumed.DesiredConfig == nil || resumed.DesiredConfig.Version != abandoned.DesiredConfig.Version || resumed.PreviousConfig.ETag != "prepared" {
 				t.Fatal("cleanup CAS intent was lost")
 			}
+			if _, err = store.BeginIngress(ctx, resumed); err != nil {
+				t.Fatal(err)
+			}
 			if err = store.CompleteHandoff(ctx, resumed); err != nil {
 				t.Fatal(err)
 			}
@@ -535,6 +658,7 @@ func TestDomainsDurableClaimsScopeAndServerGuards(t *testing.T) {
 	if err = store.SaveRouteOperation(ctx, recoveryOp); err != nil {
 		t.Fatal(err)
 	}
+	resolver.proof = "lost-control-before-cleanup"
 	removal, removeErr := svc.RemoveRoute(ctx, p, "proj", recoveryOp.Route.ID, recoveryOp.Route.Revision)
 	if removeErr != nil {
 		t.Fatal(removeErr)
@@ -556,4 +680,23 @@ func TestDomainsDurableClaimsScopeAndServerGuards(t *testing.T) {
 	if _, err = svc.ApplyRoute(ctx, p, "proj", changed.ID, cloudinfra.ApplyInput{Review: changed.Review}); err == nil {
 		t.Fatal("revoked Cloud grant admitted a route")
 	}
+}
+
+// The hosted-zone API can report Verified while public DNS is controlled elsewhere.
+type controlDNSAdapter struct{ provider.DNSAdapter }
+
+func (*controlDNSAdapter) ListZones(_ context.Context, c provider.InfrastructureCredential) ([]provider.DNSZone, error) {
+	return []provider.DNSZone{{ID: "provider-zone", Name: "example.com", AccountID: c.AccountID, Verified: true}}, nil
+}
+func (*controlDNSAdapter) GetZone(_ context.Context, c provider.InfrastructureCredential, name string) (provider.DNSZone, error) {
+	if name != "example.com" {
+		return provider.DNSZone{}, provider.ErrInfrastructureNotFound
+	}
+	return provider.DNSZone{ID: "provider-zone", Name: name, AccountID: c.AccountID, Verified: true}, nil
+}
+func (*controlDNSAdapter) ListRecords(context.Context, provider.InfrastructureCredential, provider.DNSZone) ([]provider.DNSRecord, error) {
+	return nil, nil
+}
+func TestDomainsManagedHostingRequiresPublicControl(t *testing.T) {
+	domainsDurableClaims(t, 60, 60, "managed")
 }

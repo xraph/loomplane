@@ -15,6 +15,7 @@ import (
 	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/clouds/owned"
 	"github.com/xraph/loomplane/internal/clouds/server"
+	"github.com/xraph/loomplane/internal/security"
 )
 
 var _ DomainStore = (*PgStore)(nil)
@@ -114,11 +115,12 @@ func (s *PgStore) ResolveRouteBinding(ctx context.Context, org, project string, 
 }
 
 type routeCheckpoint struct {
-	Cancelled *IngressTransition      `json:"cancelled,omitempty"`
-	Source    *IngressTransition      `json:"source,omitempty"`
-	Desired   *server.IngressConfig   `json:"desired,omitempty"`
-	Previous  *server.IngressSnapshot `json:"previous,omitempty"`
-	Applied   *server.IngressSnapshot `json:"applied,omitempty"`
+	ExecutionPrincipal *security.Principal     `json:"execution_principal,omitempty"`
+	Cancelled          *IngressTransition      `json:"cancelled,omitempty"`
+	Source             *IngressTransition      `json:"source,omitempty"`
+	Desired            *server.IngressConfig   `json:"desired,omitempty"`
+	Previous           *server.IngressSnapshot `json:"previous,omitempty"`
+	Applied            *server.IngressSnapshot `json:"applied,omitempty"`
 }
 
 func routeBytes(op *RouteOperation) (body, principal, checkpoint []byte, err error) {
@@ -127,7 +129,7 @@ func routeBytes(op *RouteOperation) (body, principal, checkpoint []byte, err err
 		principal, err = json.Marshal(op.Principal)
 	}
 	if err == nil {
-		checkpoint, err = json.Marshal(routeCheckpoint{Cancelled: op.CancelledIngress, Source: op.SourceTransition, Desired: op.DesiredConfig, Previous: op.PreviousConfig, Applied: op.AppliedConfig})
+		checkpoint, err = json.Marshal(routeCheckpoint{ExecutionPrincipal: op.ExecutionPrincipal, Cancelled: op.CancelledIngress, Source: op.SourceTransition, Desired: op.DesiredConfig, Previous: op.PreviousConfig, Applied: op.AppliedConfig})
 	}
 	return
 }
@@ -148,6 +150,7 @@ func scanRouteOperation(row pgx.Row) (*RouteOperation, error) {
 	if err := json.Unmarshal(checkpoint, &cp); err != nil {
 		return nil, err
 	}
+	op.ExecutionPrincipal = cp.ExecutionPrincipal
 	op.DesiredConfig, op.PreviousConfig, op.AppliedConfig, op.SourceTransition, op.CancelledIngress = cp.Desired, cp.Previous, cp.Applied, cp.Source, cp.Cancelled
 	return &op, nil
 }
@@ -205,7 +208,7 @@ func (s *PgStore) AcceptRoute(ctx context.Context, op *RouteOperation) error {
 		if checkErr := json.Unmarshal(rawZone, &zone); checkErr != nil {
 			return checkErr
 		}
-		if !slices.Contains(zone.ProjectIDs, route.ProjectID) || zone.VerifiedAt.IsZero() {
+		if !slices.Contains(zone.ProjectIDs, route.ProjectID) || zone.VerifiedAt.IsZero() || !zone.hasControlProof() {
 			return ErrNotFound
 		}
 		raw, encodeErr := json.Marshal(route)
@@ -473,6 +476,10 @@ func (s *PgStore) CompleteHandoff(ctx context.Context, op *RouteOperation) error
 		return err
 	}
 	defer rollback(tx)
+	var generation int64
+	if checkErr := tx.QueryRow(ctx, `SELECT o.generation FROM loomplane_route_operations o JOIN loomplane_ingress_configs i ON i.org_id=o.org_id AND i.server_id=$5 WHERE o.org_id=$1 AND o.id=$2 AND o.revision=$3 AND o.generation=$4 AND i.generation=$4 AND o.status<>'cancelled' AND o.body->>'handoff_id'=$6 AND o.route_id=$7 AND o.body->>'kind'='release' AND o.body->'route'->'binding'->>'server_id'=$5 FOR UPDATE OF o,i`, op.Route.OrgID, op.ID, op.Revision, op.Generation, op.Route.Binding.ServerID, op.HandoffID, op.Route.ID).Scan(&generation); checkErr != nil {
+		return ErrConflict
+	}
 	var id string
 	if checkErr := tx.QueryRow(ctx, `UPDATE loomplane_route_handoffs SET released=true WHERE org_id=$1 AND id=$2 AND route_id=$3 RETURNING id`, op.Route.OrgID, op.HandoffID, op.Route.ID).Scan(&id); checkErr != nil {
 		return storeError(checkErr)
@@ -490,6 +497,25 @@ func (s *PgStore) RouteOperations(ctx context.Context, org, project, route strin
 	}
 	defer rows.Close()
 	out := []*RouteOperation{}
+	for rows.Next() {
+		op, scanErr := scanRouteOperation(rows)
+		if scanErr != nil {
+			return nil, scanErr
+		}
+		out = append(out, op)
+	}
+	return out, rows.Err()
+}
+
+// RouteHandoffReceipts reads accepted receipt owners without the public history
+// cap. Release safety retains the maximum across every exact handoff attempt.
+func (s *PgStore) RouteHandoffReceipts(ctx context.Context, org, project, route, handoff string) ([]*RouteOperation, error) {
+	rows, err := s.db.Query(ctx, `SELECT body,principal,checkpoint FROM loomplane_route_operations WHERE org_id=$1 AND project_id=$2 AND route_id=$3 AND body->>'handoff_id'=$4 AND body->>'kind' IN ('cutover','rollback') AND status<>'preview'`, org, project, route, handoff)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []*RouteOperation
 	for rows.Next() {
 		op, scanErr := scanRouteOperation(rows)
 		if scanErr != nil {

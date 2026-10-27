@@ -1,0 +1,22 @@
+apiVersion: v2
+name: loomplane
+description: Loomplane, the self-hosted platform that deploys your monorepos to your own clouds, run highly available on Kubernetes
+type: application
+# Bump on every chart change. A release overrides it with the release version.
+version: 0.1.0
+# The image this chart runs by default. A release overrides it with its tag;
+# from a checkout it's the image CI publishes for every commit on main.
+appVersion: "main"
+kubeVersion: ">=1.27.0-0"
+home: https://github.com/xraph/loomplane
+icon: https://raw.githubusercontent.com/xraph/loomplane/main/apps/dashboard/public/icon-512.png
+sources:
+  - https://github.com/xraph/loomplane
+keywords:
+  - deployment
+  - platform
+  - monorepo
+  - self-hosted
+maintainers:
+  - name: xraph
+    url: https://github.com/xraph

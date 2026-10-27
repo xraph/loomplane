@@ -213,6 +213,115 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly catalogAdmin = {
+    /**
+     * Open a catalog service's own admin through Loomplane's sandboxed proxy, for 30 minutes of idle time and at most 8 hours; needs permission to modify the project's infrastructure
+     */
+    open: async (projectId: string, environmentId: string, resource: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CatalogproxySession> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/catalog/${encodeURIComponent(String(resource))}/admin-sessions`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CatalogproxySession"],
+      };
+
+      return this.request<types.CatalogproxySession>(config);
+    },
+
+  };
+
+  public readonly catalogEndpoints = {
+    /**
+     * Check a Postgres or Redis DSN from a target against what a kind's dependency needs, before storing it; the DSN isn't stored or returned
+     */
+    check: async (body: types.CheckInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CheckResult> => {
+      let __path = `/api/v1/catalog/endpoints/checks`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["CheckInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CheckResult"],
+      };
+
+      return this.request<types.CheckResult>(config);
+    },
+
+    /**
+     * Register an external Postgres or Redis; its DSN is kept in Vault and never returned
+     */
+    create: async (body: types.CatalogconnectCreateInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CatalogconnectEndpoint> => {
+      let __path = `/api/v1/catalog/endpoints`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["CatalogconnectCreateInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CatalogconnectEndpoint"],
+      };
+
+      return this.request<types.CatalogconnectEndpoint>(config);
+    },
+
+    /**
+     * Forget an external endpoint and its DSN; refused while a service connects to it. Nothing on the endpoint changes
+     */
+    delete: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<void> => {
+      let __path = `/api/v1/catalog/endpoints/${encodeURIComponent(String(id))}`;
+      const config: RequestConfig = {
+        method: 'DELETE',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        allowEmptyBody: true,
+      };
+
+      await this.request(config);
+    },
+
+    /**
+     * The external databases and caches a catalog service can connect to, without their DSNs
+     */
+    list: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.EndpointList> => {
+      let __path = `/api/v1/catalog/endpoints`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["EndpointList"],
+      };
+
+      return this.request<types.EndpointList>(config);
+    },
+
+  };
+
+  public readonly catalogKinds = {
+    /**
+     * The catalog kinds a manifest can name: the database engines and the composed services, and where each can be placed and run
+     */
+    list: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CatalogKindList> => {
+      let __path = `/api/v1/catalog/kinds`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CatalogKindList"],
+      };
+
+      return this.request<types.CatalogKindList>(config);
+    },
+
+  };
+
   public readonly cloudChanges = {
     /**
      * cloudChanges.apply
@@ -511,6 +620,59 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.ServerUsage>(config);
+    },
+
+  };
+
+  public readonly cloudSignInApps = {
+    /**
+     * Remove the organization's own sign-in app for a cloud
+     */
+    delete: async (cloud: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<void> => {
+      let __path = `/api/v1/cloud-sign-in/apps/${encodeURIComponent(String(cloud))}`;
+      const config: RequestConfig = {
+        method: 'DELETE',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        allowEmptyBody: true,
+      };
+
+      await this.request(config);
+    },
+
+    /**
+     * The clouds you can sign in to, where each one's app comes from, and the callback URL to register
+     */
+    list: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.SignInAppList> => {
+      let __path = `/api/v1/cloud-sign-in/apps`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["SignInAppList"],
+      };
+
+      return this.request<types.SignInAppList>(config);
+    },
+
+    /**
+     * Set the organization's own sign-in app for a cloud. The secret is never returned
+     */
+    set: async (cloud: string, body: types.AppInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.SignInApp> => {
+      let __path = `/api/v1/cloud-sign-in/apps/${encodeURIComponent(String(cloud))}`;
+      const config: RequestConfig = {
+        method: 'PUT',
+        url: __path,
+        body,
+        bodyCodec: CODECS["AppInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["SignInApp"],
+      };
+
+      return this.request<types.SignInApp>(config);
     },
 
   };
@@ -836,6 +998,45 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.ConnectionsCloudList>(config);
+    },
+
+  };
+
+  public readonly connectionSignIns = {
+    /**
+     * Finish a sign-in with what the cloud sent back to the callback
+     */
+    complete: async (body: types.CompleteInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Connection> => {
+      let __path = `/api/v1/connections/sign-ins/complete`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["CompleteInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Connection"],
+      };
+
+      return this.request<types.Connection>(config);
+    },
+
+    /**
+     * Start signing in to a cloud, for a new connection or in place of an existing one's credential
+     */
+    start: async (body: types.SignInInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.SignIn> => {
+      let __path = `/api/v1/connections/sign-ins`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["SignInInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["SignIn"],
+      };
+
+      return this.request<types.SignIn>(config);
     },
 
   };
@@ -1588,6 +1789,150 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly fabriq = {
+    /**
+     * A hosted Fabriq's stack: its release, entity types and migrations, and whether its console answers
+     */
+    status: async (projectId: string, environmentId: string, resource: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Status> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/fabriq/${encodeURIComponent(String(resource))}`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Status"],
+      };
+
+      return this.request<types.Status>(config);
+    },
+
+  };
+
+  public readonly fabriqKeys = {
+    /**
+     * The Fabriq key of each service that needs it or had one; never a key itself, only its prefix
+     */
+    list: async (projectId: string, environmentId: string, resource: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.FabriqKeyList> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/fabriq/${encodeURIComponent(String(resource))}/keys`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["FabriqKeyList"],
+      };
+
+      return this.request<types.FabriqKeyList>(config);
+    },
+
+    /**
+     * Revoke a service's Fabriq keys now; its next release gets a new one while it still needs Fabriq
+     */
+    revoke: async (projectId: string, environmentId: string, resource: string, service: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ConsumerKey> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/fabriq/${encodeURIComponent(String(resource))}/keys/${encodeURIComponent(String(service))}/revoke`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ConsumerKey"],
+      };
+
+      return this.request<types.ConsumerKey>(config);
+    },
+
+    /**
+     * Issue a service a new Fabriq key, which its next release takes and then revokes the old one
+     */
+    rotate: async (projectId: string, environmentId: string, resource: string, service: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ConsumerKey> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/fabriq/${encodeURIComponent(String(resource))}/keys/${encodeURIComponent(String(service))}/rotate`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ConsumerKey"],
+      };
+
+      return this.request<types.ConsumerKey>(config);
+    },
+
+  };
+
+  public readonly fabriqRebuilds = {
+    /**
+     * Rebuild a FalkorDB or Elasticsearch projection from Postgres; while one is queued or running, return it
+     */
+    create: async (projectId: string, environmentId: string, resource: string, body: types.RebuildInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Rebuild> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/fabriq/${encodeURIComponent(String(resource))}/rebuilds`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["RebuildInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Rebuild"],
+      };
+
+      return this.request<types.Rebuild>(config);
+    },
+
+    /**
+     * A hosted Fabriq's latest projection rebuilds, newest first
+     */
+    list: async (projectId: string, environmentId: string, resource: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RebuildList> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/fabriq/${encodeURIComponent(String(resource))}/rebuilds`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["RebuildList"],
+      };
+
+      return this.request<types.RebuildList>(config);
+    },
+
+  };
+
+  public readonly fabriqTenants = {
+    /**
+     * Create a tenant in a hosted Fabriq, or find it
+     */
+    create: async (projectId: string, environmentId: string, resource: string, body: types.TenantInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Tenant> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/fabriq/${encodeURIComponent(String(resource))}/tenants`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["TenantInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Tenant"],
+      };
+
+      return this.request<types.Tenant>(config);
+    },
+
+    /**
+     * A hosted Fabriq's tenants, by id
+     */
+    list: async (projectId: string, environmentId: string, resource: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.TenantList> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/fabriq/${encodeURIComponent(String(resource))}/tenants`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["TenantList"],
+      };
+
+      return this.request<types.TenantList>(config);
+    },
+
+  };
+
   public readonly github = {
     /**
      * Connect a GitHub App installation, from what GitHub's install redirect carried back
@@ -1925,11 +2270,250 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly nativeRecoveryCopies = {
+    /**
+     */
+    cleanup: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NativeRestore> => {
+      let __path = `/api/v1/native-recovery-copies/${encodeURIComponent(String(id))}`;
+      const config: RequestConfig = {
+        method: 'DELETE',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["NativeRestore"],
+      };
+
+      return this.request<types.NativeRestore>(config);
+    },
+
+    /**
+     */
+    create: async (body: types.NativeCopyCreateInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NativeRestore> => {
+      let __path = `/api/v1/native-recovery-copies`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["NativeCopyCreateInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["NativeRestore"],
+      };
+
+      return this.request<types.NativeRestore>(config);
+    },
+
+    /**
+     */
+    credentials: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NativeCopyCredentials> => {
+      let __path = `/api/v1/native-recovery-copies/${encodeURIComponent(String(id))}/credentials`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["NativeCopyCredentials"],
+      };
+
+      return this.request<types.NativeCopyCredentials>(config);
+    },
+
+    /**
+     */
+    get: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NativeRestore> => {
+      let __path = `/api/v1/native-recovery-copies/${encodeURIComponent(String(id))}`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["NativeRestore"],
+      };
+
+      return this.request<types.NativeRestore>(config);
+    },
+
+    /**
+     */
+    list: async (id: string, environmentId?: string | undefined, before?: string | undefined, limit?: number | undefined, resource?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NativeRecoveryCopies> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/native-recovery-copies`;
+      const queryParams: Record<string, any> = {};
+      if (environmentId !== undefined) {
+        queryParams['environment_id'] = environmentId;
+      }
+      if (before !== undefined) {
+        queryParams['before'] = before;
+      }
+      if (limit !== undefined) {
+        queryParams['limit'] = limit;
+      }
+      if (resource !== undefined) {
+        queryParams['resource'] = resource;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["NativeRecoveryCopies"],
+      };
+
+      return this.request<types.NativeRecoveryCopies>(config);
+    },
+
+    /**
+     */
+    review: async (id: string, pointId: string, body: types.NativeCopyReviewInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NativeCopyReview> => {
+      let __path = `/api/v1/native-recovery-sources/${encodeURIComponent(String(id))}/points/${encodeURIComponent(String(pointId))}/copy-review`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["NativeCopyReviewInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["NativeCopyReview"],
+      };
+
+      return this.request<types.NativeCopyReview>(config);
+    },
+
+  };
+
+  public readonly nativeRecoveryRetirements = {
+    /**
+     */
+    create: async (id: string, pointId: string, body: types.NativeRetirementInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NativeRetirement> => {
+      let __path = `/api/v1/native-recovery-sources/${encodeURIComponent(String(id))}/points/${encodeURIComponent(String(pointId))}/retirements`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["NativeRetirementInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["NativeRetirement"],
+      };
+
+      return this.request<types.NativeRetirement>(config);
+    },
+
+    /**
+     */
+    get: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NativeRetirement> => {
+      let __path = `/api/v1/native-recovery-retirements/${encodeURIComponent(String(id))}`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["NativeRetirement"],
+      };
+
+      return this.request<types.NativeRetirement>(config);
+    },
+
+    /**
+     */
+    history: async (id: string, before?: string | undefined, limit?: number | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RetirementHistory> => {
+      let __path = `/api/v1/native-recovery-retirements/${encodeURIComponent(String(id))}/history`;
+      const queryParams: Record<string, any> = {};
+      if (before !== undefined) {
+        queryParams['before'] = before;
+      }
+      if (limit !== undefined) {
+        queryParams['limit'] = limit;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["RetirementHistory"],
+      };
+
+      return this.request<types.RetirementHistory>(config);
+    },
+
+    /**
+     */
+    list: async (id: string, environmentId?: string | undefined, before?: string | undefined, limit?: number | undefined, resource?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NativeRetirementPage> => {
+      let __path = `/api/v1/native-recovery-sources/${encodeURIComponent(String(id))}/retirements`;
+      const queryParams: Record<string, any> = {};
+      if (environmentId !== undefined) {
+        queryParams['environment_id'] = environmentId;
+      }
+      if (before !== undefined) {
+        queryParams['before'] = before;
+      }
+      if (limit !== undefined) {
+        queryParams['limit'] = limit;
+      }
+      if (resource !== undefined) {
+        queryParams['resource'] = resource;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["NativeRetirementPage"],
+      };
+
+      return this.request<types.NativeRetirementPage>(config);
+    },
+
+    /**
+     */
+    retry: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NativeRetirement> => {
+      let __path = `/api/v1/native-recovery-retirements/${encodeURIComponent(String(id))}/retry`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["NativeRetirement"],
+      };
+
+      return this.request<types.NativeRetirement>(config);
+    },
+
+  };
+
   public readonly nativeRecoverySources = {
     /**
      */
-    inventory: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NativeInventory> => {
+    inventory: async (id: string, environmentId?: string | undefined, before?: string | undefined, limit?: number | undefined, resource?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NativeInventory> => {
       let __path = `/api/v1/native-recovery-sources/${encodeURIComponent(String(id))}`;
+      const queryParams: Record<string, any> = {};
+      if (environmentId !== undefined) {
+        queryParams['environment_id'] = environmentId;
+      }
+      if (before !== undefined) {
+        queryParams['before'] = before;
+      }
+      if (limit !== undefined) {
+        queryParams['limit'] = limit;
+      }
+      if (resource !== undefined) {
+        queryParams['resource'] = resource;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
       const config: RequestConfig = {
         method: 'GET',
         url: __path,
@@ -1943,8 +2527,25 @@ export class RESTClient extends Client {
 
     /**
      */
-    list: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NativeRecoverySources> => {
+    list: async (id: string, environmentId?: string | undefined, before?: string | undefined, limit?: number | undefined, resource?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NativeRecoverySources> => {
       let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/native-recovery-sources`;
+      const queryParams: Record<string, any> = {};
+      if (environmentId !== undefined) {
+        queryParams['environment_id'] = environmentId;
+      }
+      if (before !== undefined) {
+        queryParams['before'] = before;
+      }
+      if (limit !== undefined) {
+        queryParams['limit'] = limit;
+      }
+      if (resource !== undefined) {
+        queryParams['resource'] = resource;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
       const config: RequestConfig = {
         method: 'GET',
         url: __path,
@@ -1954,6 +2555,43 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.NativeRecoverySources>(config);
+    },
+
+    /**
+     */
+    pitrWindow: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NativePITRWindow> => {
+      let __path = `/api/v1/native-recovery-sources/${encodeURIComponent(String(id))}/pitr-window`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["NativePITRWindow"],
+      };
+
+      return this.request<types.NativePITRWindow>(config);
+    },
+
+    /**
+     */
+    previewRetention: async (id: string, olderThanDays?: number, keepLast?: number, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RetentionPreview> => {
+      let __path = `/api/v1/native-recovery-sources/${encodeURIComponent(String(id))}/retention-preview`;
+      const queryParams: Record<string, any> = {};
+      queryParams['older_than_days'] = olderThanDays;
+      queryParams['keep_last'] = keepLast;
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["RetentionPreview"],
+      };
+
+      return this.request<types.RetentionPreview>(config);
     },
 
     /**
@@ -1969,6 +2607,67 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.NativeInventory>(config);
+    },
+
+  };
+
+  public readonly nativeRetentionPolicies = {
+    /**
+     */
+    get: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NativeRetentionPolicyState> => {
+      let __path = `/api/v1/native-recovery-sources/${encodeURIComponent(String(id))}/retention-policy`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["NativeRetentionPolicyState"],
+      };
+
+      return this.request<types.NativeRetentionPolicyState>(config);
+    },
+
+    /**
+     */
+    history: async (id: string, before?: string | undefined, limit?: number | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RetentionPolicyHistory> => {
+      let __path = `/api/v1/native-recovery-sources/${encodeURIComponent(String(id))}/retention-policy/history`;
+      const queryParams: Record<string, any> = {};
+      if (before !== undefined) {
+        queryParams['before'] = before;
+      }
+      if (limit !== undefined) {
+        queryParams['limit'] = limit;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["RetentionPolicyHistory"],
+      };
+
+      return this.request<types.RetentionPolicyHistory>(config);
+    },
+
+    /**
+     */
+    set: async (id: string, body: types.RetentionPolicyInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.NativeRetentionPolicy> => {
+      let __path = `/api/v1/native-recovery-sources/${encodeURIComponent(String(id))}/retention-policy`;
+      const config: RequestConfig = {
+        method: 'PUT',
+        url: __path,
+        body,
+        bodyCodec: CODECS["RetentionPolicyInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["NativeRetentionPolicy"],
+      };
+
+      return this.request<types.NativeRetentionPolicy>(config);
     },
 
   };
@@ -3261,17 +3960,17 @@ export class RESTClient extends Client {
     /**
      * The signed-in user, their active organization and their permissions in it
      */
-    get: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Session> => {
+    get: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.IdentitySession> => {
       let __path = `/api/v1/session`;
       const config: RequestConfig = {
         method: 'GET',
         url: __path,
         signal: options?.signal,
         retry: options?.retry,
-        responseCodec: CODECS["Session"],
+        responseCodec: CODECS["IdentitySession"],
       };
 
-      return this.request<types.Session>(config);
+      return this.request<types.IdentitySession>(config);
     },
 
   };
@@ -3343,6 +4042,49 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.Source>(config);
+    },
+
+  };
+
+  public readonly usage = {
+    /**
+     * What each connected account has cost this month, read from the cloud's own billing, and why any account can't say
+     */
+    spend: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.SpendReport> => {
+      let __path = `/api/v1/usage/spend`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["SpendReport"],
+      };
+
+      return this.request<types.SpendReport>(config);
+    },
+
+    /**
+     * Requests and latency of every service you can see, read from each cloud's own monitoring, beside the stretch before
+     */
+    traffic: async (range?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.TrafficReport> => {
+      let __path = `/api/v1/usage/traffic`;
+      const queryParams: Record<string, any> = {};
+      if (range !== undefined) {
+        queryParams['range'] = range;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["TrafficReport"],
+      };
+
+      return this.request<types.TrafficReport>(config);
     },
 
   };

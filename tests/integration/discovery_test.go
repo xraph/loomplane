@@ -7,11 +7,13 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"fmt"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 
@@ -24,11 +26,27 @@ const exampleSHA = "fedcba9876543210fedcba9876543210fedcba98"
 // exampleTarball is examples/polyglot as a GitHub tarball of one commit.
 func exampleTarball(t *testing.T) []byte {
 	t.Helper()
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, source, _, _ := runtime.Caller(0)
+	body, err := repositoryExampleTarball(cwd, source)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return body
+}
+
+func repositoryExampleTarball(cwd, source string) ([]byte, error) {
+	root, err := repositoryFixture(cwd, source)
+	if err != nil {
+		return nil, err
+	}
 	var buf bytes.Buffer
 	zw := gzip.NewWriter(&buf)
 	tw := tar.NewWriter(zw)
-	root := "../../examples/polyglot"
-	err := filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
+	err = filepath.WalkDir(root, func(p string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return err
 		}
@@ -47,15 +65,39 @@ func exampleTarball(t *testing.T) []byte {
 		return err
 	})
 	if err != nil {
-		t.Fatal(err)
+		return nil, err
 	}
 	if err = tw.Close(); err != nil {
-		t.Fatal(err)
+		return nil, err
 	}
 	if err = zw.Close(); err != nil {
-		t.Fatal(err)
+		return nil, err
 	}
-	return buf.Bytes()
+	return buf.Bytes(), nil
+}
+
+func repositoryFixture(cwd, source string) (string, error) {
+	// Prefer the working checkout when a binary has been relocated. Walk upward
+	// so both package tests and repository-root acceptance runs share this lookup.
+	if filepath.IsAbs(cwd) {
+		for directory := filepath.Clean(cwd); ; directory = filepath.Dir(directory) {
+			candidate := filepath.Join(directory, "examples", "polyglot")
+			if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+				return candidate, nil
+			}
+			if filepath.Dir(directory) == directory {
+				break
+			}
+		}
+	}
+	if filepath.IsAbs(source) {
+		candidate := filepath.Join(filepath.Dir(source), "..", "..", "examples", "polyglot")
+		if info, err := os.Stat(candidate); err == nil && info.IsDir() {
+			return candidate, nil
+		}
+	}
+
+	return "", fmt.Errorf("repository fixture examples/polyglot unavailable (cwd %q, source %q)", cwd, source)
 }
 
 // fakeGitHubRepos serves each tarball as the repository its key names, on

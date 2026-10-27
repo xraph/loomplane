@@ -1,0 +1,99 @@
+---
+title: Google Cloud
+description: Connect a Google Cloud project and run services on Cloud Run with Cloud SQL, Memorystore and Cloud Storage.
+---
+
+import { Step, Steps } from 'fumadocs-ui/components/steps';
+
+Loomplane builds a service with Cloud Build, stores its image in Artifact Registry and runs it on Cloud Run. It also provisions Cloud SQL (Postgres and MySQL), Memorystore (Redis) and Cloud Storage buckets. Everything happens in your project.
+
+## Connect a project
+
+You connect a service account key.
+
+<Steps>
+<Step>
+
+In the Google Cloud console, create a service account in the project you'll deploy to.
+
+</Step>
+<Step>
+
+Grant it roles that cover the permissions in the table below.
+
+</Step>
+<Step>
+
+Create a JSON key for it and download it.
+
+</Step>
+<Step>
+
+In Loomplane, open **Integrations**, choose Google Cloud, and paste the key.
+
+</Step>
+</Steps>
+
+Loomplane parses the key, then asks Google which permissions the account holds on the project (`testIamPermissions`). A key that isn't a service account key, or that Google has deleted, disabled or revoked, is refused. A key that's missing permissions makes the connection incomplete, and Loomplane lists each one.
+
+The project ID comes from the key. Only the project and the service account's email are ever shown back to you.
+
+| Used for | Permissions Loomplane checks |
+|---|---|
+| Builds | `cloudbuild.builds.create`, `cloudbuild.builds.get`, `artifactregistry.repositories.create`, `artifactregistry.repositories.get` |
+| Cloud Run | `run.services.create`, `run.services.get`, `run.services.update`, `run.services.setIamPolicy`, `run.operations.get`, `iam.serviceAccounts.actAs` |
+| Secrets | `secretmanager.secrets.create`, `secretmanager.secrets.setIamPolicy`, `secretmanager.versions.add` |
+| Cloud SQL | `cloudsql.instances.create`, `cloudsql.instances.delete`, `cloudsql.instances.get`, `cloudsql.databases.create`, `cloudsql.users.create`, `cloudsql.users.update` |
+| Memorystore | `redis.instances.create`, `redis.instances.delete`, `redis.instances.get`, `redis.instances.getAuthString` |
+| Cloud Storage | `storage.buckets.create`, `storage.buckets.delete`, `storage.buckets.get`, `storage.buckets.getIamPolicy`, `storage.buckets.setIamPolicy`, `storage.objects.create`, `storage.objects.delete`, `storage.objects.list` |
+| Project | `resourcemanager.projects.get` |
+
+Build logs come from Cloud Logging, so the account also needs permission to read there. Without it the deployment still works and the logs show as unavailable.
+
+Joining a Cloud Run service to AWS through a link needs Compute Network Admin (`roles/compute.networkAdmin`) as well. See [Gateways and networking](/docs/concepts/gateways-and-networking#links).
+
+## Sign in instead of a key
+
+If your organization has registered a Google OAuth client, the connect dialog offers **Sign in with Google Cloud** first and **Use a token instead** underneath. Type the project ID, then sign in to Google and approve. Loomplane asks for `openid`, `email` and `https://www.googleapis.com/auth/cloud-platform`.
+
+The connection acts as you, so your own IAM roles in the project are what it can do. Loomplane checks them against the table above, the same as it checks a key, and lists anything you're missing. You also need `serviceusage.services.use` on the project (Owner, Editor and Service Usage Consumer have it), because your API calls are billed to the project you deploy to, not the one the OAuth client is in. The connection shows the Google account it signed in as and who in Loomplane did it. If that person leaves your organization, the connection asks for a new sign-in within 6 hours and anyone who manages cloud accounts can sign in again as themselves.
+
+Publish the OAuth app. While it's in testing, Google ends every sign-in after 7 days. Once it's published as an **External** app, people see Google's unverified-app warning and no more than 100 of them can sign in until Google verifies it, because `cloud-platform` is a sensitive scope. An **Internal** app, for a Google Workspace, needs neither. [Connect a cloud by signing in](/docs/clouds/cloud-sign-in) covers registering the client and what happens if Google stops accepting the sign-in.
+
+## Use it in a manifest
+
+```yaml
+version: 1
+defaults:
+  provider: cloud-run
+  region: us-central1
+services:
+  api:
+    source: go:services/api
+    needs: [db, cache, uploads]
+resources:
+  db:
+    kind: postgres
+    provider: cloud-sql
+    version: "17"
+  cache:
+    kind: redis
+    provider: memorystore
+  uploads:
+    kind: object-storage
+    provider: cloud-storage
+```
+
+Regions Loomplane lists are `us-central1`, `us-east1`, `us-east4`, `us-west1`, `northamerica-northeast1`, `southamerica-east1`, `europe-west1`, `europe-west2`, `europe-west3`, `europe-west4`, `asia-east1`, `asia-northeast1`, `asia-south1`, `asia-southeast1` and `australia-southeast1`. You can name any region, but the planner warns about one it doesn't know, since a typo would otherwise only show up as a failed deployment.
+
+## How things behave
+
+A private Cloud Run service only takes calls from the project's own services, which must send a Google ID token. Services that need a private one get its address in a variable.
+
+Cloud SQL is reached through the Cloud SQL connector. Memorystore only has an address on the project's default network, so Cloud Run services that need it send their private traffic there with direct VPC egress. Buckets are private, and services reach them as the Cloud Run runtime account, so `STORAGE_URL` carries no credentials (`gs://bucket`).
+
+On Google Cloud you pick the region per service or resource. Moving one starts the new copy first. Cloud SQL instances and Cloud Storage buckets carry their region in their names, so the new one never collides with the one it replaces.
+
+<Callout type="warn">
+  Managed Cloud SQL creation and recovery are checked against controlled Google endpoints. Live Google Cloud creation, SQL persistence and restore aren't qualified yet. [Database services](/docs/services/database-services) has the details.
+</Callout>

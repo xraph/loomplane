@@ -3,6 +3,7 @@ package planning
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/connections"
+	"github.com/xraph/loomplane/internal/recipes"
 	"github.com/xraph/loomplane/pkg/manifest"
 )
 
@@ -52,6 +54,109 @@ type CloudPlacementError struct {
 }
 
 func (e *CloudPlacementError) Error() string { return e.Path + ": " + e.Message }
+
+// targetPlacement pins a workload to one of the assignment's targets,
+// reached through the target's own connection c. A direct target records
+// the Cloud server c runs, when it runs exactly one; a pool target's
+// server is its capacity resolution's to choose.
+func targetPlacement(a *cloudprofiles.Assignment, t cloudprofiles.Target, c ConnectionOption, identity, region, regionSource string) CloudPlacement {
+	p := CloudPlacement{GrantRevision: a.GrantRevision, CloudID: a.CloudID, CloudRevision: a.CloudRevision, AssignmentRevision: a.Revision, TargetID: t.ID, TargetRevision: t.Revision, TargetName: t.Name, Provider: t.Provider, ConnectionID: t.ConnectionID, AccountIdentity: identity, Region: region, RegionSource: regionSource}
+	if servers := c.cloudServers(a.CloudID); t.PoolID == "" && len(servers) == 1 {
+		p.ServerID = servers[0]
+	}
+	return p
+}
+
+// cloudServers are the servers of cloud that c is the runtime connection of.
+func (c ConnectionOption) cloudServers(cloud string) []string {
+	var out []string
+	for _, s := range c.Servers {
+		if s.CloudID == cloud {
+			out = append(out, s.ID)
+		}
+	}
+	return out
+}
+
+// checkCloudServer warns about a direct placement whose connection is the
+// runtime of more than one Cloud server: none is recorded, so it can't
+// take domain routes. A connection that runs no Cloud server is a plain
+// direct target and isn't worth a finding.
+//
+// The schema can't produce this today. The loomplane_cloud_server_runtime
+// unique index (database/migrations/cloud_infrastructure.go) allows one
+// live server per organization and runtime connection, and ConnectionHosts
+// reads only live servers in the connection's organization. The check
+// stays so that loosening that index can't silently pick a server.
+func (p *planner) checkCloudServer(subject Subject, name, path string, placement CloudPlacement) {
+	if placement.PoolID != "" || placement.ServerID != "" {
+		return
+	}
+	i := slices.IndexFunc(p.in.Connections, func(c ConnectionOption) bool { return c.ID == placement.ConnectionID })
+	if i < 0 || len(p.in.Connections[i].cloudServers(placement.CloudID)) < 2 {
+		return
+	}
+	target := placement.TargetName
+	if target == "" {
+		target = placement.ConnectionID
+	}
+	p.warn(Finding{
+		Code: "cloud-server-ambiguous", Subject: subject, Name: name, Path: path,
+		Message: fmt.Sprintf("%s's target %s is the runtime connection of more than one Cloud server, so Loomplane can't tell which one it runs on, and it can't take domain routes. Give each server its own connection.", name, target),
+	})
+}
+
+// composedResources are the manifest's composed catalog resources that are
+// on in the environment.
+func composedResources(m *manifest.Manifest, environment string, kinds *recipes.Registry) []string {
+	if m == nil {
+		return nil
+	}
+	if kinds == nil {
+		kinds = recipes.Default()
+	}
+	var out []string
+	for _, name := range m.ResourceNames() {
+		r := m.Resources[name]
+		if kinds.Composed(r.Kind) && manifest.On(r.For(environment, m.Defaults).Enabled) {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+// composedPlacements places each of the named composed resources whose
+// target is a direct-connection target of the assignment, as a service on
+// that target is placed. Pool targets aren't matched. A placement pins
+// reviewed revisions and a verified account, as the runner checks it
+// before it records one; without them the resource isn't placed.
+func composedPlacements(m *manifest.Manifest, environment string, names []string, assignment *cloudprofiles.Assignment, options []ConnectionOption) map[string]CloudPlacement {
+	out := map[string]CloudPlacement{}
+	if assignment == nil || assignment.CloudRevision < 1 || assignment.Revision < 1 {
+		return out
+	}
+	for _, name := range names {
+		r := m.Resources[name]
+		i := slices.IndexFunc(assignment.Targets, func(t cloudprofiles.Target) bool {
+			return t.PoolID == "" && t.ConnectionID != "" && t.ConnectionID == r.Target && t.OrgID == assignment.OrgID && t.CloudID == assignment.CloudID && t.Revision > 0
+		})
+		ci := slices.IndexFunc(options, func(c ConnectionOption) bool { return c.ID == r.Target })
+		if i < 0 || ci < 0 {
+			continue
+		}
+		identity := connections.AccountIdentity(options[ci].Cloud, options[ci].Account, options[ci].Details)
+		if identity == "" {
+			continue
+		}
+		set := r.For(environment, m.Defaults)
+		regionSource := "manifest"
+		if set.Region == "" {
+			regionSource = "default"
+		}
+		out[name] = targetPlacement(assignment, assignment.Targets[i], options[ci], identity, set.Region, regionSource)
+	}
+	return out
+}
 
 // SelectCloudTarget returns the target a service's settings name or tag, or
 // nil when they select none. Tags match the targets the project's grant
@@ -124,7 +229,7 @@ func ResolveCloudTargets(m *manifest.Manifest, environment string, assignment *c
 }
 
 // resolveCloudPlacements leaves held services exactly as their manifest says.
-func resolveCloudPlacements(m *manifest.Manifest, environment string, assignment *cloudprofiles.Assignment, options []ConnectionOption, pools map[string]*cloudinfra.Placement, held map[string]bool) (*manifest.Manifest, map[string]CloudPlacement, error) {
+func resolveCloudPlacements(m *manifest.Manifest, environment string, assignment *cloudprofiles.Assignment, options []ConnectionOption, pools map[string]*cloudinfra.Placement, held map[string]bool, future ...map[string]*CapacityIntent) (*manifest.Manifest, map[string]CloudPlacement, error) {
 	raw, err := json.Marshal(m)
 	if err != nil {
 		return nil, nil, err
@@ -151,7 +256,13 @@ func resolveCloudPlacements(m *manifest.Manifest, environment string, assignment
 		if !fallback && (set.Provider != "" || set.Target != "") {
 			return nil, nil, fmt.Errorf("%s conflicts with effective provider or target placement; remove direct placement, including defaults, to use a Cloud target", path)
 		}
-		placement, resolvedSet, placeErr := resolveCloudPlacement(name, path, set, fallback, assignment, options, pools)
+		deferred := len(future) > 0 && future[0][name] != nil
+		placement, resolvedSet, placeErr := resolveCloudPlacement(name, path, set, fallback, assignment, options, pools, deferred)
+		if errors.Is(placeErr, errCapacityDeferred) {
+			s.Settings, s.Environments = resolvedSet, nil
+			out.Services[name] = s
+			continue
+		}
 		if placeErr != nil {
 			return nil, nil, placeErr
 		}
@@ -167,10 +278,16 @@ func resolveCloudPlacements(m *manifest.Manifest, environment string, assignment
 	return &out, placements, nil
 }
 
+// errCapacityDeferred is how resolveCloudPlacement says a pool service
+// waits on capacity a later plan creates, so it gets no placement yet.
+var errCapacityDeferred = errors.New("pool capacity deferred to a later plan")
+
 // resolveCloudPlacement pins the target set names or tags, or the Cloud's
 // default when fallback is set, and returns the settings with the target's
-// provider and region in place of the Cloud's names and tags.
-func resolveCloudPlacement(name, path string, set manifest.Settings, fallback bool, assignment *cloudprofiles.Assignment, options []ConnectionOption, pools map[string]*cloudinfra.Placement) (CloudPlacement, manifest.Settings, error) {
+// provider and region in place of the Cloud's names and tags. When deferred
+// is set and the target is a pool, it returns errCapacityDeferred with the
+// settings carrying only the target's provider.
+func resolveCloudPlacement(name, path string, set manifest.Settings, fallback bool, assignment *cloudprofiles.Assignment, options []ConnectionOption, pools map[string]*cloudinfra.Placement, deferred bool) (CloudPlacement, manifest.Settings, error) {
 	if assignment == nil {
 		return CloudPlacement{}, set, fmt.Errorf("%s needs a Cloud assigned to this environment", path)
 	}
@@ -200,6 +317,10 @@ func resolveCloudPlacement(name, path string, set manifest.Settings, fallback bo
 	connectionID := target.ConnectionID
 	var pool *cloudinfra.Placement
 	if target.PoolID != "" {
+		if deferred {
+			set.Provider, set.CloudTarget, set.CloudTags, set.Target = target.Provider, "", nil, ""
+			return CloudPlacement{}, set, errCapacityDeferred
+		}
 		if pools[name] == nil {
 			return CloudPlacement{}, set, fmt.Errorf("%s needs resolved pool capacity", path)
 		}
@@ -229,7 +350,8 @@ func resolveCloudPlacement(name, path string, set manifest.Settings, fallback bo
 	if OwnedCloud(c.Cloud) {
 		set.Target = c.ID
 	}
-	placement := CloudPlacement{Default: fallback, GrantRevision: assignment.GrantRevision, CloudID: assignment.CloudID, CloudRevision: assignment.CloudRevision, AssignmentRevision: assignment.Revision, TargetID: target.ID, TargetRevision: target.Revision, TargetName: target.Name, Provider: target.Provider, ConnectionID: connectionID, AccountIdentity: identity, Region: set.Region, RegionSource: regionSource}
+	placement := targetPlacement(assignment, target, c, identity, set.Region, regionSource)
+	placement.Default, placement.ConnectionID = fallback, connectionID
 	if pool != nil {
 		placement.PoolID = pool.PoolID
 		placement.PoolRevision = pool.PoolRevision
@@ -269,6 +391,12 @@ func (p *planner) allCloudActionsPinned(cloud string) bool {
 // SameProviderConfig compares applied inputs without placement bookkeeping.
 // Keep metadata actions use it to reject a changed serving configuration.
 func SameProviderConfig(before json.RawMessage, after *ServiceConfig) bool {
+	return len(changes(before, after)) == 0
+}
+
+// SameResourceConfig is SameProviderConfig for a composed resource or one
+// of its components.
+func SameResourceConfig(before json.RawMessage, after *ResourceConfig) bool {
 	return len(changes(before, after)) == 0
 }
 
@@ -405,7 +533,7 @@ func (s *PgStore) PreviewPlacement(ctx context.Context, in cloudinfra.PlacementR
 func (s *PgStore) ValidatePlacement(ctx context.Context, org, project, env, plan, service string, p cloudinfra.Placement) error {
 	return cloudinfra.NewPgStore(s.db).ValidatePlacement(ctx, org, project, env, plan, service, p)
 }
-func (s *Service) resolvePools(ctx context.Context, plan *Plan, m *manifest.Manifest, a *cloudprofiles.Assignment, bindings []*Binding, options []ConnectionOption, held map[string]bool) (map[string]*cloudinfra.Placement, error) {
+func (s *Service) resolvePools(ctx context.Context, plan *Plan, m *manifest.Manifest, a *cloudprofiles.Assignment, bindings []*Binding, options []ConnectionOption, held map[string]bool, future ...map[string]*CapacityIntent) (map[string]*cloudinfra.Placement, error) {
 	out := map[string]*cloudinfra.Placement{}
 	if a == nil {
 		return out, nil
@@ -445,7 +573,8 @@ func (s *Service) resolvePools(ctx context.Context, plan *Plan, m *manifest.Mani
 			if checkErr := json.Unmarshal(b.Config, &old); checkErr != nil {
 				return nil, checkErr
 			}
-			if old.CloudPlacement != nil {
+			// Only a pool placement's server is one a pool can keep it on.
+			if old.CloudPlacement != nil && old.CloudPlacement.PoolID != "" {
 				req.StickyServerID = old.CloudPlacement.ServerID
 				req.Allocation = old.CloudPlacement.Allocation
 			}
@@ -480,6 +609,15 @@ func (s *Service) resolvePools(ctx context.Context, plan *Plan, m *manifest.Mani
 				out[name], err = resolver.PreviewPlacement(ctx, req)
 			}
 		}
+		if err != nil && len(future) > 0 {
+			intent, intentErr := s.futureCapacity(ctx, plan, a, t, req, svc.Repo, err)
+			if intentErr == nil {
+				future[0][name] = intent
+				delete(out, name)
+				continue
+			}
+			err = intentErr
+		}
 		if err != nil {
 			return nil, fmt.Errorf("%s: %w", name, err)
 		}
@@ -488,21 +626,47 @@ func (s *Service) resolvePools(ctx context.Context, plan *Plan, m *manifest.Mani
 	return out, nil
 }
 
-func (s *PgStore) PooledConnections(ctx context.Context, org string) (map[string]bool, error) {
-	rows, err := s.db.Query(ctx, `SELECT DISTINCT c.id FROM loomplane_cloud_connections c JOIN loomplane_cloud_servers s ON (s.runtime_connection_id=c.id OR (coalesce(c.details->>'docker_id','')<>'' AND c.details->>'docker_id'=s.body->'health'->>'docker_id')) JOIN loomplane_server_pool_members m ON m.server_id=s.id WHERE c.org_id=$1 AND c.cloud='server' AND s.status NOT IN ('deleted','disconnected')`, org)
+// ConnectionHosts reads what runs behind each of the organization's server
+// connections. A connection is pooled when it reaches a pool member, as
+// its runtime or through the same Docker daemon. Its Cloud servers are
+// only those it's the runtime connection of, as a domain route needs.
+func (s *PgStore) ConnectionHosts(ctx context.Context, org string) (map[string]ConnectionHost, error) {
+	rows, err := s.db.Query(ctx, `SELECT c.id,s.id,s.cloud_id,s.runtime_connection_id=c.id AND s.org_id=c.org_id,EXISTS(SELECT 1 FROM loomplane_server_pool_members m WHERE m.server_id=s.id) FROM loomplane_cloud_connections c JOIN loomplane_cloud_servers s ON (s.runtime_connection_id=c.id OR (coalesce(c.details->>'docker_id','')<>'' AND c.details->>'docker_id'=s.body->'health'->>'docker_id')) WHERE c.org_id=$1 AND c.cloud='server' AND s.status NOT IN ('deleted','disconnected') ORDER BY c.id,s.id`, org)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	out := map[string]bool{}
+	out := map[string]ConnectionHost{}
 	for rows.Next() {
-		var id string
-		if checkErr := rows.Scan(&id); checkErr != nil {
+		var connection string
+		var server CloudServer
+		var runtime, pooled bool
+		if checkErr := rows.Scan(&connection, &server.ID, &server.CloudID, &runtime, &pooled); checkErr != nil {
 			return nil, checkErr
 		}
-		out[id] = true
+		host := out[connection]
+		host.Pooled = host.Pooled || pooled
+		if runtime {
+			host.Servers = append(host.Servers, server)
+		}
+		out[connection] = host
 	}
 	return out, rows.Err()
+}
+
+// PooledConnections are the server connections that reach a pool member.
+func (s *PgStore) PooledConnections(ctx context.Context, org string) (map[string]bool, error) {
+	hosts, err := s.ConnectionHosts(ctx, org)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]bool{}
+	for id, host := range hosts {
+		if host.Pooled {
+			out[id] = true
+		}
+	}
+	return out, nil
 }
 
 func poolRelocation(bindings []*Binding, placements map[string]CloudPlacement) bool {
@@ -512,7 +676,7 @@ func poolRelocation(bindings []*Binding, placements map[string]CloudPlacement) b
 			continue
 		}
 		var old ServiceConfig
-		if json.Unmarshal(b.Config, &old) == nil && old.CloudPlacement != nil && old.CloudPlacement.ServerID != "" && old.CloudPlacement.ServerID != p.ServerID {
+		if json.Unmarshal(b.Config, &old) == nil && old.CloudPlacement != nil && old.CloudPlacement.PoolID != "" && old.CloudPlacement.ServerID != "" && old.CloudPlacement.ServerID != p.ServerID {
 			return true
 		}
 	}

@@ -1,8 +1,11 @@
 <p align="center">
-  <img src="docs/assets/loomplane-logo.svg" width="96" height="96" alt="Loomplane's woven gold and ivory logo" />
+  <a href="https://www.loomplane.com">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset="apps/dashboard/src/assets/brand/loomplane-logo-dark.svg" />
+      <img src="apps/dashboard/src/assets/brand/loomplane-logo.svg" width="300" alt="Loomplane" />
+    </picture>
+  </a>
 </p>
-
-<h1 align="center">Loomplane</h1>
 
 <p align="center"><strong>Your infrastructure, woven together.</strong></p>
 
@@ -12,16 +15,22 @@
 </p>
 
 <p align="center">
+  <img alt="Go 1.26" src="https://img.shields.io/badge/Go-1.26-2F5C78?style=flat-square&logo=go&logoColor=FAFAFA&labelColor=171717" />
+  <a href="LICENSE"><img alt="License: FSL-1.1-ALv2" src="https://img.shields.io/badge/license-FSL--1.1--ALv2-2F5C78?style=flat-square&labelColor=171717" /></a>
+</p>
+
+<p align="center">
+  <a href="https://www.loomplane.com">Website</a> ·
+  <a href="https://www.loomplane.com/docs">Docs</a> ·
   <a href="#quick-start">Quick start</a> ·
   <a href="#deploy-something">Deploy something</a> ·
   <a href="#what-it-does">What it does</a> ·
-  <a href="#architecture">Architecture</a> ·
-  <a href="#documentation">Documentation</a>
+  <a href="#architecture">Architecture</a>
 </p>
 
-![Interlaced charcoal, gold, and green threads forming a connected architectural grid](docs/assets/loomplane-cover.png)
+![The Loomplane dashboard's Overview: a plan for mono to production waits on an Approve button, beside the last release and deployment charts](docs/assets/loomplane-cover.png)
 
-<p align="center"><sub>Concept artwork inspired by the dashboard's woven environments.</sub></p>
+<p align="center"><sub>The Overview, with sample data, the way the landing page draws it.</sub></p>
 
 Loomplane takes a Go, Rust, TypeScript, JavaScript, Python or JVM monorepo, or an application split across several repositories, from source to running services across clouds. You give it the repositories. It reads the code (never runs it) to find the services and the databases they need, drafts a `loomplane.yaml`, and plans what deploying it would do. Once someone approves that exact plan, it builds each service on its cloud's own builder and deploys it: a Next.js app to Vercel, a Go API to Cloud Run, a worker to ECS on Fargate, Postgres on Cloud SQL or RDS, wired to each other with secrets kept in each cloud's secret store. Then it keeps checking that what runs is what it deployed.
 
@@ -42,7 +51,7 @@ Open [localhost:8780](http://localhost:8780), create an account, and name your o
 
 No Go or Node on your machine? `make stack` builds the image and runs everything in Docker on the same port. It runs in development mode with the development secret key, which is fine on a laptop and nowhere else: set `LOOMPLANE_ENVIRONMENT=production`, `LOOMPLANE_SECRET_KEY` and an https `LOOMPLANE_PUBLIC_URL`, and production refuses to start without them.
 
-For a production host, use the [production Docker guide](docs/docker-production.md). It covers the API, dashboard, analysis worker, Postgres, HTTPS, persistent storage, backups and versioned image releases. To run on Miget instead, follow the [Miget guide](docs/miget.md).
+For a production host, use the [production Docker guide](docs/docker-production.md). It covers the API, dashboard, analysis worker, Postgres, HTTPS, persistent storage, backups and versioned image releases. To run it highly available on Kubernetes, use the [Helm chart](docs/kubernetes.md), and to run on Miget, follow the [Miget guide](docs/miget.md).
 
 For hot reload while you work on Loomplane itself, `make dev` serves the dashboard on [localhost:5173](http://localhost:5173) and reloads the API as you edit.
 
@@ -133,6 +142,7 @@ Start with [config.yaml](config.yaml); your own overrides go in `config.local.ya
 | `LOOMPLANE_STORAGE_URL` | `.loomplane/storage` | Where deployment sources are kept, `file:///path` |
 | `LOOMPLANE_PLANNING_APPROVAL_WINDOW` | `168h` | How long a plan waits for a decision |
 | `LOOMPLANE_DRIFT_INTERVAL` | `30m` | How often deployments are checked for drift; `0` turns it off |
+| `LOOMPLANE_PLANNING_ENDPOINT_DENIED_CIDRS` | unset | Ranges an endpoint check from a Kubernetes target never connects to, such as `10.20.0.0/16`. Loomplane's own host, database and API are always refused |
 | `LOOMPLANE_GITHUB_*` | unset | The GitHub App for private repositories |
 | `LOOMPLANE_WORKER_HTTP_ADDR` | `:8781` | The worker's health checks |
 
@@ -210,6 +220,7 @@ loomplane/
 | [Providers](docs/providers.md) | Add a deployment target with a plugin |
 | [Agents](docs/agents.md) | Let an AI agent plan deployments over MCP |
 | [Operations](docs/operations.md) | Back up, restore, upgrade and monitor Loomplane |
+| [Kubernetes](docs/kubernetes.md) | Run Loomplane highly available with the Helm chart |
 | [Security](docs/security.md) | Know who can do what and where secrets live |
 | [GitHub App](docs/github-app.md) | Analyze private repositories |
 | [Architecture](docs/architecture.md) | Follow startup, state ownership and trust boundaries |
@@ -223,6 +234,6 @@ Keep a change focused. Domain behavior belongs in `internal/`, Forge wiring in `
 
 ## License and distribution
 
-Loomplane is free software under the GNU Affero General Public License, version 3 ([LICENSE](LICENSE)). You can run it, change it and share it. If you run a changed Loomplane as a service other people use, you have to offer them the source of your changes too.
+Loomplane is source-available under the [Functional Source License 1.1, with Apache 2.0 as the future license](LICENSE) (FSL-1.1-ALv2). You can run it for your own team, change it and share your changes. You can't sell it to anyone else, either as software or as a hosted service that does the same job. Each release also becomes available under Apache 2.0 two years after it ships.
 
 Some of the libraries it's built on had their own license questions, recorded in [docs/forge-integration.md](docs/forge-integration.md#licenses).

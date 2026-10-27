@@ -1,0 +1,33 @@
+@import "tailwindcss";
+@import "fumadocs-ui/css/black.css";
+@import "fumadocs-ui/css/preset.css";
+
+html {
+  scrollbar-gutter: stable;
+}
+
+html > body[data-scroll-locked] {
+  margin-right: 0px !important;
+  --removed-body-scroll-bar-size: 0px !important;
+}
+
+/* Loomplane's ocean blue as the docs' primary color, and the brand tokens the
+   shared logo symbols read outside the landing pages. */
+:root {
+  --color-fd-primary: oklch(0.455 0.068 238);
+  --color-fd-primary-foreground: oklch(1 0 0);
+  --ink: hsl(0 0% 9%);
+  --blue: oklch(0.455 0.068 238);
+}
+
+.dark {
+  --color-fd-primary: oklch(0.72 0.115 240);
+  --color-fd-primary-foreground: hsl(220 40% 8%);
+  --ink: hsl(0 0% 96%);
+  --blue: oklch(0.72 0.115 240);
+}
+
+.docs-wordmark {
+  height: 18px;
+  width: auto;
+}

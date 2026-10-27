@@ -4,11 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"strings"
+	"time"
 
-	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/planning"
+	"github.com/xraph/loomplane/internal/security"
 )
 
 // CloudSyncAuthorizer rechecks the recorded actor before each provider mutation.
@@ -102,9 +102,29 @@ func (r *Runner) authorizeSync(ctx context.Context, plan *planning.Plan) error {
 	return r.cloudSyncAuth.ValidateCloudSync(ctx, plan)
 }
 
+func (r *Runner) authorizeCloudSourceCleanup(ctx context.Context, plan *planning.Plan) error {
+	_, err := r.cloudSourceCleanupPrincipal(ctx, plan)
+	return err
+}
+
+func (r *Runner) cloudSourceCleanupPrincipal(ctx context.Context, plan *planning.Plan) (security.Principal, error) {
+	if plan.CloudSyncID == "" {
+		return security.Principal{}, nil
+	}
+	auth, ok := r.cloudSyncAuth.(interface {
+		ValidateCloudSyncSourceCleanup(context.Context, *planning.Plan) (security.Principal, error)
+	})
+	if !ok {
+		return security.Principal{}, errors.New("the Cloud source cleanup authorization is unavailable")
+	}
+	return auth.ValidateCloudSyncSourceCleanup(ctx, plan)
+}
+
 // CleanupCloudPlan runs only after every managed consumer and external route
 // has completed. Each old binding keeps its original credential and checkpoint.
 func (r *Runner) CleanupCloudPlan(ctx context.Context, org, planID string, heartbeat func([]byte) error) error {
+	ctx, _, stop := keepHeartbeat(ctx, nil, heartbeat, 30*time.Second)
+	defer stop()
 	plan, err := r.plans.GetPlan(ctx, org, planID)
 	if err != nil {
 		return err
@@ -112,7 +132,8 @@ func (r *Runner) CleanupCloudPlan(ctx context.Context, org, planID string, heart
 	if plan.CloudSyncID == "" {
 		return errors.New("cleanup requires a Cloud sync plan")
 	}
-	if authErr := r.authorizeSync(ctx, plan); authErr != nil {
+	actor, authErr := r.cloudSourceCleanupPrincipal(ctx, plan)
+	if authErr != nil {
 		return authErr
 	}
 	d, err := r.store.ForPlan(ctx, org, planID)
@@ -122,47 +143,18 @@ func (r *Runner) CleanupCloudPlan(ctx context.Context, org, planID string, heart
 	if err != nil {
 		return err
 	}
-	bindings, err := r.plans.ListBindings(ctx, org, plan.EnvironmentID)
-	if err != nil {
+	if err := reviewedActionsComplete(d, plan); err != nil {
 		return err
 	}
 	for _, a := range plan.Actions {
-		step := d.Step(a.ID)
-		if step == nil {
+		if (a.Op == planning.Keep && (a.Compensation == nil || !a.Compensation.Retained)) || a.Op == planning.Delete {
 			continue
 		}
-		for _, b := range bindings {
-			if b.Subject != a.Subject || b.Name != a.Name || len(b.Replaced) == 0 {
-				continue
-			}
-			if b.PlanID != plan.ID && a.Op != planning.Keep {
-				return cloudprofiles.ErrConflict
-			}
-			if authErr := r.authorizeSync(ctx, plan); authErr != nil {
-				return authErr
-			}
-			if validationErr := r.validateCloudPlacementAuthority(ctx, plan, a, nil, true); validationErr != nil {
-				return validationErr
-			}
-			rc := readReplaceCheckpoint(step.Checkpoint)
-			checkpoint := func(raw []byte) error {
-				step.Checkpoint = append([]byte(nil), raw...)
-				if e := r.store.UpdateStep(ctx, org, d.ID, *step); e != nil {
-					return e
-				}
-				return heartbeat(raw)
-			}
-			// removeOne reports progress, but a cleanup has no live step to show it on.
-			job := &Job{Deployment: d, Plan: plan, Action: a, Binding: b, Checkpoint: checkpoint, Progress: func(string, string) {}}
-			if err = r.removeReplaced(ctx, job, b, step.Replaced, nil, rc, checkpoint); err != nil {
-				return fmt.Errorf("cleanup %s: %w", a.Name, err)
-			}
-			step.Replaced = nil
-			if err := r.store.UpdateStep(ctx, org, d.ID, *step); err != nil {
-				return err
-			}
+		if err := r.finalizeReleaseAction(ctx, d, plan, a, true, nil, &actor); err != nil {
+			return err
 		}
 	}
+
 	return nil
 }
 

@@ -11,16 +11,27 @@ import {
 import { type FormEvent, useRef, useState } from "react"
 import { toast } from "sonner"
 
+import {
+  CloudSQLRecoveryFields,
+  cloudSQLRecoverySettings,
+} from "@/components/cloudsql-recovery-fields"
+
+import {
+  RDSRecoveryFields,
+  rdsRecoverySettings,
+} from "@/components/rds-recovery-fields"
+
 import { messageOf } from "@/client/errors"
 import {
   useConnectionsCheck,
   useConnectionCloudsList,
   useConnectionsCreate,
   useConnectionsDelete,
+  useConnectionSignInsStart,
   useConnectionsList,
   useConnectionsReplace,
 } from "@/client/forge/loomplane/hooks"
-import type { Connection } from "@/client/forge/loomplane/types"
+import type { Connection, SignIn } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
 import { CloudGlyph } from "@/components/cloud-glyph"
 import { MetricCard } from "@/components/metric-card"
@@ -72,6 +83,7 @@ import {
 import { formatDate } from "@/lib/format"
 import { cloudCatalogue, cloudPurposes } from "@/lib/integrations"
 import { useOrganization } from "@/lib/organization"
+import { rememberSignInCloud, rememberVercelState } from "@/lib/sign-in-cloud"
 import { cn } from "@/lib/utils"
 
 export function CloudConnections({ className }: { className?: string }) {
@@ -84,7 +96,7 @@ export function CloudConnections({ className }: { className?: string }) {
 
   return (
     <MetricCard icon={CloudIcon} title="Clouds" className={className}>
-      <p className="-mt-1 max-w-3xl text-sm text-muted-foreground">
+      <p className="-mt-1 max-w-3xl text-[13px] text-muted-foreground">
         Where Loomplane deploys. Each credential is checked with its cloud
         before it&apos;s kept, stored encrypted, and never shown again.
       </p>
@@ -133,12 +145,12 @@ function CloudTile({
   return (
     <section
       aria-label={title}
-      className="flex flex-col gap-4 rounded-xl border bg-background/50 p-4"
+      className="flex flex-col gap-4 rounded-xl bg-subtle p-4"
     >
       <div className="flex items-start gap-3">
         <CloudGlyph cloud={cloud} size="lg" />
         <div className="grid min-w-0 flex-1 gap-0.5">
-          <h3 className="font-medium">{title}</h3>
+          <h3 className="text-[14px] font-semibold">{title}</h3>
           <p className="text-xs text-muted-foreground">
             {cloudPurposes[cloud] ?? "Added by a provider plugin"}
           </p>
@@ -147,7 +159,6 @@ function CloudTile({
           <Button
             variant="outline"
             size="sm"
-
             onClick={() => setConnecting(true)}
           >
             <PlusIcon />
@@ -177,10 +188,46 @@ function CloudTile({
   )
 }
 
+/**
+ * needsSignInAgain is whether a signed-in connection can't be used as it is.
+ * Signing in again is how it recovers, whether the sign-in lapsed or the
+ * cloud refused it.
+ */
+export function needsSignInAgain(c: Connection): boolean {
+  return (
+    c.status === "sign_in_needed" ||
+    (c.method === "oauth" && c.status !== "ready")
+  )
+}
+
+/**
+ * useSignInAgain starts a new sign-in for an existing connection. When it
+ * finishes it replaces the connection's credential. The name stays as it
+ * is, so none is sent.
+ */
+export function useSignInAgain() {
+  const start = useMutation(useConnectionSignInsStart)
+  const signInAgain = async (c: Connection) => {
+    try {
+      const started = await start.mutateAsync({
+        body: { cloud: c.cloud, name: "", connectionId: c.id },
+      })
+      rememberSignInCloud(cloudLabel(c.cloud))
+      if (c.cloud === "vercel") rememberVercelState((started as SignIn).state)
+      // The generated hook doesn't type this response.
+      window.location.assign((started as SignIn).authorizeUrl)
+    } catch (err) {
+      toast.error(messageOf(err, "Sign-in couldn't be started."))
+    }
+  }
+  return { signInAgain, pending: start.isPending }
+}
+
 export const statusLabels: Record<string, string> = {
   ready: "Ready",
   incomplete: "Missing permissions",
   failed: "Refused",
+  sign_in_needed: "Sign-in needed",
 }
 
 function ConnectionRow({
@@ -191,6 +238,7 @@ function ConnectionRow({
   mayManage: boolean
 }) {
   const check = useMutation(useConnectionsCheck)
+  const { signInAgain, pending: signingIn } = useSignInAgain()
   const [replacing, setReplacing] = useState(false)
   const [removing, setRemoving] = useState(false)
   const roles = rolesFor(c.missing)
@@ -222,7 +270,7 @@ function ConnectionRow({
           )}
         />
         <div className="grid min-w-0 flex-1 gap-0.5">
-          <span className="truncate text-sm font-medium">{c.name}</span>
+          <span className="truncate text-[13px] font-medium">{c.name}</span>
           <span className="truncate text-xs text-muted-foreground">
             {statusLabels[c.status] ?? c.status}
             {c.account && (
@@ -240,6 +288,17 @@ function ConnectionRow({
           </span>
         </div>
         {check.isPending && <Spinner className="text-muted-foreground" />}
+        {mayManage && needsSignInAgain(c) && (
+          <Button
+            variant="outline"
+            size="sm"
+            disabled={signingIn}
+            onClick={() => void signInAgain(c)}
+          >
+            {signingIn && <Spinner />}
+            Sign in again
+          </Button>
+        )}
         {mayManage && (
           <DropdownMenu>
             <DropdownMenuTrigger
@@ -412,6 +471,7 @@ function ConnectForm({
 }) {
   const create = useMutation(useConnectionsCreate)
   const replace = useMutation(useConnectionsReplace)
+  const signInStart = useMutation(useConnectionSignInsStart)
   const invalidate = useInvalidate()
   const file = useRef<HTMLInputElement>(null)
   const [cloud, setCloud] = useState<string>(replacing?.cloud ?? initial)
@@ -419,9 +479,21 @@ function ConnectForm({
   const available = useQuery(useConnectionCloudsList)
   const extras = (available.data?.clouds ?? []).filter((c) => !c.builtin)
   const extra = extras.find((c) => c.cloud === cloud)
+  // Signing in is offered first when the cloud supports it here, for a new
+  // connection or in place of an existing one's credential. A person who
+  // wants a token picks it for one cloud, and the choice resets if they
+  // switch clouds.
+  const entry = (available.data?.clouds ?? []).find((c) => c.cloud === cloud)
+  const [tokenFor, setTokenFor] = useState<string | null>(null)
+  const signIn = !!entry?.methods.includes("oauth") && tokenFor !== cloud
   const [extraSettings, setExtraSettings] = useState<Record<string, string>>(
     () => ({ ...(replacing?.details ?? {}) }) as Record<string, string>
   )
+  // What the cloud asks for before sign-in, like Google's project. Until
+  // someone types, a replaced connection shows the values it already has.
+  const [signInValues, setSignInValues] = useState<Record<string, string>>({})
+  const signInValue = (key: string) =>
+    signInValues[key] ?? String(replacing?.details[key] ?? "")
   const [name, setName] = useState("")
   const [credential, setCredential] = useState("")
   const [team, setTeam] = useState(
@@ -434,8 +506,11 @@ function ConnectForm({
   const [certificate, setCertificate] = useState(
     (replacing?.details.certificate_arn as string | undefined) ?? ""
   )
+  const [billingExport, setBillingExport] = useState(
+    (replacing?.details.billing_export as string | undefined) ?? ""
+  )
   const [error, setError] = useState("")
-  const busy = create.isPending || replace.isPending
+  const busy = create.isPending || replace.isPending || signInStart.isPending
 
   const close = (next: boolean) => {
     if (!next) {
@@ -458,14 +533,49 @@ function ConnectForm({
     setCredential(text)
   }
 
+  const startSignIn = async () => {
+    try {
+      // Signing in for an existing connection replaces its credential and
+      // keeps its name, so none is sent.
+      const fields = entry?.signInSettings ?? []
+      const settings =
+        fields.length > 0
+          ? {
+              settings: Object.fromEntries(
+                fields.map((f) => [f.key, signInValue(f.key).trim()])
+              ),
+            }
+          : {}
+      const started = await signInStart.mutateAsync({
+        body: replacing
+          ? { cloud, name: "", connectionId: replacing.id, ...settings }
+          : { cloud, name: name.trim(), ...settings },
+      })
+      rememberSignInCloud(entry?.title ?? cloudLabel(cloud))
+      if (cloud === "vercel") rememberVercelState((started as SignIn).state)
+      // The generated hook doesn't type this response.
+      window.location.assign((started as SignIn).authorizeUrl)
+    } catch (err) {
+      setError(messageOf(err, "Sign-in couldn't be started."))
+    }
+  }
+
   const submit = async (e: FormEvent) => {
     e.preventDefault()
     setError("")
+    if (signIn) {
+      await startSignIn()
+      return
+    }
     const trimmed = Object.fromEntries(
       Object.entries(extraSettings)
         .map(([k, v]) => [k, v.trim()])
         .filter(([, v]) => v !== "")
     )
+    const gcpSettings = {
+      ...cloudSQLRecoverySettings(extraSettings),
+      ...(billingExport.trim() ? { billing_export: billingExport.trim() } : {}),
+    }
     const settings = extra
       ? trimmed
       : cloud === "vercel" && team.trim()
@@ -473,11 +583,14 @@ function ConnectForm({
         : cloud === "aws"
           ? {
               region: region.trim(),
+              ...rdsRecoverySettings(extraSettings),
               ...(certificate.trim()
                 ? { certificate_arn: certificate.trim() }
                 : {}),
             }
-          : undefined
+          : cloud === "gcp" && Object.keys(gcpSettings).length
+            ? gcpSettings
+            : undefined
     // An AWS key is two values; Loomplane stores them together.
     const secret =
       cloud === "aws"
@@ -567,47 +680,118 @@ function ConnectForm({
                 </Field>
               </>
             )}
-            {cloud === "gcp" ? (
-              <Field>
-                <FieldLabel htmlFor="connection-key">
-                  {info.credential}
-                </FieldLabel>
-                <Textarea
-                  id="connection-key"
-                  value={credential}
-                  onChange={(e) => setCredential(e.target.value)}
-                  placeholder='{"type": "service_account", ...}'
-                  spellCheck={false}
-                  className="max-h-40 min-h-24 font-mono text-xs md:text-xs"
-                  required
-                />
-                <div className="flex items-center gap-2">
-                  <Button
-                    type="button"
-                    variant="outline"
-                    size="sm"
-
-                    onClick={() => file.current?.click()}
-                  >
-                    <UploadIcon />
-                    Choose the key file
-                  </Button>
-                  <input
-                    ref={file}
-                    type="file"
-                    accept="application/json,.json"
-                    className="hidden"
-                    onChange={(e) => void load(e.target.files?.[0])}
+            {signIn &&
+              (entry?.signInSettings ?? []).map((f) => (
+                <Field key={f.key}>
+                  <FieldLabel htmlFor={`sign-in-${f.key}`}>
+                    {f.label}
+                  </FieldLabel>
+                  {/* The server keeps a replaced connection's own
+                      placement, so it can't be changed here. */}
+                  <Input
+                    id={`sign-in-${f.key}`}
+                    value={signInValue(f.key)}
+                    onChange={(e) =>
+                      setSignInValues({
+                        ...signInValues,
+                        [f.key]: e.target.value,
+                      })
+                    }
+                    readOnly={!!replacing}
+                    autoComplete="off"
+                    required={f.required}
                   />
-                </div>
+                </Field>
+              ))}
+            {signIn &&
+              replacing &&
+              (entry?.signInSettings ?? []).length > 0 && (
                 <FieldDescription>
-                  A JSON key for a service account in the project you deploy to.
-                  It needs Cloud Run Admin, Cloud Build Editor, Artifact
-                  Registry Administrator, Storage Admin, Secret Manager Admin,
-                  Cloud SQL Admin, Cloud Memorystore Redis Admin, Service
-                  Account User and Browser; Loomplane says which are missing.
+                  A new sign-in keeps this connection where it is. To deploy
+                  somewhere else, make a new connection.
                 </FieldDescription>
-              </Field>
+              )}
+            {signIn ? (
+              <div className="grid justify-items-start gap-2">
+                <Button type="submit" disabled={busy}>
+                  {busy && <Spinner />}
+                  Sign in with {entry?.title ?? cloud}
+                </Button>
+                <button
+                  type="button"
+                  className="text-sm text-muted-foreground underline underline-offset-4 hover:text-foreground"
+                  onClick={() => setTokenFor(cloud)}
+                >
+                  Use a token instead
+                </button>
+              </div>
+            ) : cloud === "gcp" ? (
+              <>
+                <Field>
+                  <FieldLabel htmlFor="connection-key">
+                    {info.credential}
+                  </FieldLabel>
+                  <Textarea
+                    id="connection-key"
+                    value={credential}
+                    onChange={(e) => setCredential(e.target.value)}
+                    placeholder='{"type": "service_account", ...}'
+                    spellCheck={false}
+                    className="max-h-40 min-h-24 font-mono text-xs md:text-xs"
+                    required
+                  />
+                  <div className="flex items-center gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+
+                      onClick={() => file.current?.click()}
+                    >
+                      <UploadIcon />
+                      Choose the key file
+                    </Button>
+                    <input
+                      ref={file}
+                      type="file"
+                      accept="application/json,.json"
+                      className="hidden"
+                      onChange={(e) => void load(e.target.files?.[0])}
+                    />
+                  </div>
+                  <FieldDescription>
+                    A JSON key for a service account in the project you deploy
+                    to. It needs Cloud Run Admin, Cloud Build Editor, Artifact
+                    Registry Administrator, Storage Admin, Secret Manager Admin,
+                    Cloud SQL Admin, Cloud Memorystore Redis Admin, Service
+                    Account User and Browser; Loomplane says which are missing.
+                  </FieldDescription>
+                </Field>
+                <Field>
+                  <FieldLabel htmlFor="connection-billing-export">
+                    Billing export table (optional)
+                  </FieldLabel>
+                  <Input
+                    id="connection-billing-export"
+                    autoComplete="off"
+                    value={billingExport}
+                    onChange={(e) => setBillingExport(e.target.value)}
+                    placeholder="project.dataset.gcp_billing_export_v1_..."
+                    spellCheck={false}
+                    className="font-mono"
+                  />
+                  <FieldDescription>
+                    Google Cloud reports cost only through a billing export to
+                    BigQuery. Name its table and Loomplane reads this
+                    project&apos;s spend from it, with BigQuery Job User on the
+                    project and BigQuery Data Viewer on the dataset.
+                  </FieldDescription>
+                </Field>
+                <CloudSQLRecoveryFields
+                  value={extraSettings}
+                  onChange={setExtraSettings}
+                />
+              </>
             ) : cloud === "aws" ? (
               <>
                 <Field>
@@ -675,6 +859,10 @@ function ConnectForm({
                     balancer serves plain HTTP and plans warn you.
                   </FieldDescription>
                 </Field>
+                <RDSRecoveryFields
+                  value={extraSettings}
+                  onChange={setExtraSettings}
+                />
               </>
             ) : extra ? (
               <>
@@ -765,10 +953,12 @@ function ConnectForm({
             >
               Cancel
             </Button>
-            <Button type="submit" disabled={busy}>
-              {busy && <Spinner />}
-              {replacing ? "Check and replace" : "Check and connect"}
-            </Button>
+            {!signIn && (
+              <Button type="submit" disabled={busy}>
+                {busy && <Spinner />}
+                {replacing ? "Check and replace" : "Check and connect"}
+              </Button>
+            )}
           </DialogFooter>
         </form>
       </DialogContent>

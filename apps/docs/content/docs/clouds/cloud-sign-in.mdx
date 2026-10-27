@@ -1,0 +1,139 @@
+---
+title: Connect a cloud by signing in
+description: Register an OAuth app once, then connect DigitalOcean, Vercel, Google Cloud or Azure with a sign-in instead of a pasted token or key.
+---
+
+import { Step, Steps } from 'fumadocs-ui/components/steps';
+
+A pasted token works, but it's yours to copy, store and rotate. Signing in swaps that for a grant the cloud hands to Loomplane after you approve it, and Loomplane renews the grant on its own. DigitalOcean, Vercel, Google Cloud and Azure all connect this way.
+
+## Register the OAuth app
+
+You do this once per organization for each cloud, and you need to be an owner or admin.
+
+<Steps>
+<Step>
+
+In Loomplane, open **Settings**, then **Cloud sign-in**. The page shows a callback URL, which is your public URL followed by `/integrations/oauth/callback`. Copy it. Every cloud uses the same one.
+
+</Step>
+<Step>
+
+Make the app with the cloud, using the steps for it below, and paste the callback URL wherever it asks for a redirect or callback.
+
+</Step>
+<Step>
+
+Back on the Cloud sign-in page, choose **Set up** on the cloud's row, paste the app's client ID and client secret, and save. The secret is kept encrypted and never shown again, so replace it there if you lose track of it.
+
+</Step>
+</Steps>
+
+The callback has to match exactly, down to `https` and the host. If you change `LOOMPLANE_PUBLIC_URL` later, update the app with each cloud too.
+
+### DigitalOcean
+
+Open **API**, then **OAuth Applications**, and make a new application. Paste the callback URL as the callback. Loomplane asks for the `read write` scope, so the application needs to allow it.
+
+### Vercel
+
+On Vercel you make an Integration, not a plain OAuth app. Open the Integrations Console from your team's settings and create one. Set its redirect URL to the callback URL. Under its permissions, give it read and write on projects, project environment variables, deployments and domains, and read on the team and the user. Loomplane calls all of those when it deploys, the same as it does with a token.
+
+The Integration's settings show its client ID and client secret. The Cloud sign-in page also asks for the **Integration slug**: the last part of the Integration's address on Vercel, so for `https://vercel.com/integrations/loomplane-acme` you'd type `loomplane-acme`. Loomplane sends people to that page to install it.
+
+### Google Cloud
+
+In the Google Cloud console, open **APIs & Services**. Set up the OAuth consent screen first if the project doesn't have one (newer consoles call it **Google Auth Platform**), and add the `https://www.googleapis.com/auth/cloud-platform` scope under its data access. Loomplane also asks for `openid` and `email`, which need nothing extra. Then open **Credentials**, create an OAuth client ID of type **Web application**, and add the callback URL under **Authorized redirect URIs**.
+
+Publish the app when you're done. While it's in testing, Google ends every sign-in after 7 days and the connection asks to be signed in again, which the Cloud sign-in page reminds you of.
+
+If you make it an **External** app, Google also has to verify it, because `cloud-platform` is one of its sensitive scopes. Until it does, everyone who signs in sees a warning that Google hasn't verified the app and has to open **Advanced** to carry on, and no more than 100 people can sign in with it. You ask for verification from the consent screen. Google wants a homepage, a privacy policy and a reason for each scope, so expect it to take a while. If everyone who'll sign in is in your Google Workspace, make the app **Internal** instead, which needs neither publishing nor verification and has no 100-person limit.
+
+The person who signs in needs `serviceusage.services.use` on the project they deploy to. Owner, Editor and Service Usage Consumer all include it. Loomplane bills their API calls to that project, not to the one the OAuth client lives in, so the client's project doesn't need any of the APIs turned on. Without the permission the connection lists it as missing.
+
+### Azure
+
+In the Azure portal, open **Microsoft Entra ID**, then **App registrations**, and register an application. Single tenant is fine when everyone signs in from your own directory; pick multitenant if people sign in from other tenants. Under **Authentication**, add a **Web** platform with the callback URL as its redirect URI.
+
+Under **Certificates & secrets**, add a client secret and copy its value, since Azure shows it once. Then under **API permissions**, add **Azure Service Management** with the delegated `user_impersonation` permission. Loomplane also asks for `openid`, `profile` and `offline_access`. If your tenant only lets admins consent to apps, an admin grants consent there once.
+
+The Application (client) ID on the app's overview is the client ID you paste into Loomplane.
+
+## Sign in
+
+Open **Integrations**, choose the cloud and pick **Sign in with** followed by the cloud's name, or **Use a token instead** underneath if you'd rather paste a token or key. You finish on the cloud's page and land back in Loomplane with the connection ready. Be quick. The sign-in Loomplane starts expires after ten minutes.
+
+What happens on the cloud's page depends on the cloud.
+
+- DigitalOcean asks you to approve Loomplane and pick the team. The connection belongs to that team, the same as a token's.
+- Vercel shows the Integration's install page, where you pick the team or your own account to install it on. Install it in the same browser you started from. Vercel doesn't always pass Loomplane's state back, and the dashboard keeps its own copy in that browser for the ten minutes.
+- Google Cloud needs the **Project ID** typed in the dialog before you sign in. You sign in to your Google account and approve, and the connection deploys to that project as you.
+- Azure needs the **Directory (tenant) ID** and **Subscription ID** before you sign in, and takes an optional resource group, which defaults to `loomplane`. You sign in to Microsoft in that tenant, and the connection deploys into the resource group as you.
+
+Google and Azure act as the person who signed in, so the connection can only do what their own roles let them. Loomplane checks that the same way it checks a key. For Google it asks which of the permissions a deployment needs you hold on the project, and lists any you don't. For Azure it asks what your role assignments allow in the resource group (or in the subscription while the group isn't there yet), so you need a role such as Contributor there. [Google Cloud](/docs/clouds/google-cloud) and [Azure](/docs/clouds/azure) have the full lists.
+
+## Who signed in
+
+A Google or Azure connection shows who it acts as: **Signed in as** the Google or Microsoft account, then the Loomplane member who signed in. A DigitalOcean or Vercel sign-in belongs to the team it was approved for, so there's no person to show.
+
+If that member leaves your Loomplane organization, the connection shouldn't go on acting as them, so Loomplane notices on its next background run (they're 6 hours apart), marks the connection as needing a new sign-in and sends the usual notice. Anyone who can manage cloud accounts can then choose **Sign in again** with their own account. The connection keeps its ID, and the project, or the tenant, subscription and resource group, have to stay the same.
+
+## Set the app in config instead
+
+If you run Loomplane yourself and want one app for every organization, put it in `config.yaml` or the environment:
+
+```yaml
+clouds:
+  oauth:
+    digitalocean:
+      client_id: your-client-id
+      client_secret: your-client-secret
+    vercel:
+      client_id: your-client-id
+      client_secret: your-client-secret
+      slug: loomplane-acme
+    gcp:
+      client_id: your-client-id.apps.googleusercontent.com
+      client_secret: your-client-secret
+    azure:
+      client_id: your-application-client-id
+      client_secret: your-client-secret
+```
+
+You only need the clouds you use. Each value also reads from the environment:
+
+| Cloud | Variables |
+|---|---|
+| DigitalOcean | `LOOMPLANE_DIGITALOCEAN_OAUTH_CLIENT_ID`, `LOOMPLANE_DIGITALOCEAN_OAUTH_CLIENT_SECRET` |
+| Vercel | `LOOMPLANE_VERCEL_OAUTH_CLIENT_ID`, `LOOMPLANE_VERCEL_OAUTH_CLIENT_SECRET`, `LOOMPLANE_VERCEL_OAUTH_SLUG` |
+| Google Cloud | `LOOMPLANE_GCP_OAUTH_CLIENT_ID`, `LOOMPLANE_GCP_OAUTH_CLIENT_SECRET` |
+| Azure | `LOOMPLANE_AZURE_OAUTH_CLIENT_ID`, `LOOMPLANE_AZURE_OAUTH_CLIENT_SECRET` |
+
+Set a cloud's ID and secret together or not at all, because one without the other stops startup. Vercel's slug is required once its ID and secret are set.
+
+Config wins. Once a cloud's app is set there, the settings page shows that it comes from config and locks it for every organization, so nobody can point their own at something else.
+
+## When a sign-in lapses
+
+How long a grant lasts depends on the cloud.
+
+- DigitalOcean access tokens last 30 days. Loomplane refreshes the grant when it uses it, and again every 6 hours in the background, so a connection in regular use never gets near the end.
+- Vercel's token doesn't expire. It works until someone uninstalls the Integration, so Loomplane asks Vercel once a day whether it still does.
+- Google's access tokens last an hour, and deployments renew them as they go. The grant itself lasts until it's revoked, or for 7 days while the OAuth app is in testing.
+- Azure's refresh token lasts 90 days from its last use. The background job renews it every 6 hours, which keeps that window moving.
+
+A cloud can still refuse the grant. Someone revoked Loomplane's access, uninstalled the Vercel Integration, or deleted the app. Loomplane finds out the next time it renews the grant, on the daily check, or when you choose **Check again** on the connection, so a deployment that runs in between fails with the cloud's own error.
+
+Once Loomplane knows, the connection shows **Sign-in needed** and nothing deploys through it. Choose **Sign in again**, either on the connection's page or on its row in the **Clouds** list under **Integrations**, and approve once more. The button shows on any signed-in connection that isn't ready. The connection keeps its ID, so your projects and environments carry on without changes.
+
+The person who made the connection and the organization's owners and admins hear about it in the inbox, and by email if mail is set up. Every webhook endpoint gets a `connection.sign_in_needed` event too, including endpoints you made before sign-in existed. You get one notice per lapse, not one per refresh attempt.
+
+A Google or Azure person can also lose a role without losing the sign-in. The grant still works then, but deployments fail on the permission. **Check again** lists what's missing.
+
+## When the cloud refuses the app
+
+If the cloud refuses the app itself, say after someone rotated its client secret, every sign-in through it stops working. The Cloud sign-in page shows the problem on that cloud's row. Save the app again with the new values and it clears. An app set in config clears with the first sign-in that works after you fix config. Each connection that tried the app asks to be signed in again as well.
+
+## Switch between a token and a sign-in
+
+A token or key connection can move to a sign-in. Open the connection and choose **Replace credential**. The dialog offers the cloud's sign-in first, and once you approve on the cloud you land back on the connection, signed in. The reverse works too: pick **Use a token instead** in the same dialog and paste one. Either way the ID stays, and the account has to be the one the connection already uses (the team on DigitalOcean and Vercel, the project on Google Cloud, the tenant, subscription and resource group on Azure), so nothing that refers to the connection breaks.

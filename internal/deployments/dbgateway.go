@@ -53,6 +53,12 @@ const dbGatewayPort = "5432"
 // a deploy never mints them for a gateway that exists.
 var errDBGatewayKeysMissing = errors.New("the database gateway's keys are missing; remove the gateway and deploy again")
 
+// errDBGatewayTrustChanged is a deploy whose plan recorded other trust keys
+// than the ones Loomplane has now, as when a signing key was added or
+// expired in between. Deploying would leave the gateway's recorded
+// configuration naming keys it wasn't given.
+var errDBGatewayTrustChanged = errors.New("the database gateway signing keys changed after this deployment was planned; plan it again so the gateway gets the keys Loomplane has now")
+
 // DatabaseGatewayStore records each environment's database gateway and its
 // routes. *dbgateway.Store is the real one.
 type DatabaseGatewayStore interface {
@@ -102,6 +108,10 @@ func (r *Runner) ensureDatabaseGateway(ctx context.Context, d *Deployment, a *pl
 	}
 	if len(trust) == 0 {
 		return nil, nil, dbgateway.ErrNotConfigured
+	}
+	// A plan from before plans recorded the keys has no Trust to check.
+	if cfg.Trust != "" && plane.TrustDigest(trust) != cfg.Trust {
+		return nil, nil, errDBGatewayTrustChanged
 	}
 	control, err := dbGatewayControlURL(r.publicURL)
 	if err != nil {
@@ -330,7 +340,7 @@ func dbGatewayControlURL(public string) (string, error) {
 }
 
 // resourceAddress is what app gets in link.Key for the resource it links:
-// the address kept for it, or, when the plan links it through the
+// the field the link reads, its address unless it names another, or, when the plan links it through the
 // database gateway, that address pointed at the gateway under the link's
 // suffix, with the gateway's own address in Key+GatewaySuffix and the
 // address kept for it, unchanged and secret, in Key+DirectSuffix. The plan
@@ -345,7 +355,16 @@ func (r *Runner) resourceAddress(ctx context.Context, d *Deployment, app string,
 	if r.resources == nil {
 		return "", nil, fmt.Errorf("%s needs %s, which hasn't been provisioned", app, resource)
 	}
-	raw, err := r.resources.Get(ctx, resourceKey(d.OrgID, d.EnvironmentID, resource, ResourceURL))
+	field, err := linkField(link)
+	if err != nil {
+		return "", nil, err
+	}
+	// Refuse a gateway link that reads anything but the address before the
+	// secret is decrypted, so a link it won't serve never opens one.
+	if link.Gateway != "" && field != ResourceURL {
+		return "", nil, fmt.Errorf("%s reads %s of %s through the database gateway, which only stands in for a resource's address", app, field, resource)
+	}
+	raw, err := r.resources.Get(ctx, resourceKey(d.OrgID, d.EnvironmentID, resource, field))
 	if err != nil {
 		return "", nil, fmt.Errorf("%s needs %s: %w", app, resource, err)
 	}

@@ -1,0 +1,53 @@
+---
+title: Projects and environments
+description: A project groups the repositories you deploy together, and each environment is a separate target for plans and variables.
+---
+
+A project is the thing you deploy. It belongs to one organization, it builds from one or more repositories, and it has environments that each get their own plans, variables and deployed state.
+
+## Create a project
+
+In the dashboard choose **New project** and pick a repository the GitHub App can read, or paste a URL for a public one. From the terminal:
+
+```bash
+loomctl projects create "Acme shop" --repo acme/web --repo billing=acme/billing
+```
+
+Repeat `--repo` for each repository. Write `alias=repository` to name one yourself. Without one, Loomplane takes it from the repository's name.
+
+## Sources
+
+Each repository in a project is a source: a GitHub repository, an optional directory inside it, a tracked branch and an alias. Pick the alias carefully. It becomes part of every service ID (`svc:api:go:cmd/server`), so it never changes and is never reused, even after you remove the source.
+
+An analysis reads one source at one commit. To read a different branch, tag or commit for a single source, use `--ref`:
+
+```bash
+loomctl analyze acme-shop --source web --ref feature/checkout
+```
+
+Loomplane never stores a project-wide graph. It composes one on demand from the newest successful analysis of each source: IDs are qualified by alias, a source's directory filters what it contributes, resources of the same kind merge, and a dependency one repository declares on a package another provides becomes an edge between them. See [Repository discovery](/docs/concepts/repository-discovery).
+
+## Environments
+
+Every project starts with `production` and `preview`, and you can add more through the dashboard or the API. A plan is for one environment, and each manifest field's `environments` override applies only there.
+
+```yaml
+services:
+  web:
+    source: apps/web
+    environments:
+      preview:
+        enabled: false
+```
+
+Setting `enabled: false` in an environment leaves that service, resource or gateway out, and removes it if it was deployed. Deleting an environment deletes its variables with it.
+
+Each environment uses one connection per cloud, shared by its services and resources. With one ready account, Loomplane picks it for you. With several, you choose, and the choice is saved on the server so the dashboard, the CLI and the API all plan with it. If you want an environment's services somewhere else, see [Adopting and moving services](/docs/clouds/adopting-and-moving).
+
+## What an environment remembers
+
+Loomplane records the commit of each source that's deployed to each environment. That is how a scoped plan works: if you plan with `--scope web`, only the `web` repository moves, and every other source stays at the commit that's already deployed.
+
+```bash
+loomctl plan acme-shop --env production --scope web
+```

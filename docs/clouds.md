@@ -1,6 +1,6 @@
 # Clouds and deployment targets
 
-Create a Cloud for your project, add named targets, then assign the Cloud to an environment. Each target selects a provider and a verified connection. Your manifest can reference `frontend` without carrying a particular account ID:
+Create an organization Cloud before you create a project. Add named targets, grant a project access, then assign the Cloud to an environment. A Cloud belongs to one organization. Its legacy `project_id` records where it was created, not exclusive ownership. A target selects either a managed provider account or a server pool. Your manifest can reference `frontend` without carrying a particular account ID:
 
 ```yaml
 version: 1
@@ -13,14 +13,28 @@ services:
 Use the IDs returned by these commands:
 
 ```sh
-loomctl clouds create my-project --name Production
-loomctl cloud-targets create my-project cloud_... \
+loomctl clouds create --organization --name Production
+loomctl cloud-targets create cloud_... --organization \
   --name frontend --provider vercel --connection conn_...
+# Once your project exists, grant all targets or select them with --targets.
+loomctl cloud-grants grant cloud_... project_... --targets target_...
 loomctl clouds assignment my-project env_...
 loomctl clouds assign my-project env_... --cloud cloud_... --revision 0
 loomctl clouds assign my-project env_... --cloud cloud_... --revision 0 \
   --yes --request-id assign-production --wait --timeout 10m
 ```
+
+You can list, create, rename and delete organization Clouds with `--organization`, without a project positional argument. Use the same flag on `cloud-targets` and `cloud-syncs` for organization management. Existing project forms remain available, including `clouds create my-project --name Production` and `cloud-targets show my-project cloud_... target_...`. Assignment commands always require a project.
+
+```sh
+loomctl clouds --organization
+loomctl clouds show cloud_... --organization
+loomctl cloud-grants cloud_...
+loomctl cloud-grants revoke cloud_... project_...
+loomctl cloud-syncs --organization
+```
+
+An empty `--targets` grants the whole Cloud, including its managed default placement. A target list grants only those targets. Revocation prevents fresh placement; it keeps the recorded authority needed to clean up work you already accepted. Sharing capacity does not grant another project's releases, variables, logs or routes.
 
 The first assignment uses revision `0`. Read `clouds assignment` before later changes: an unassigned environment can have a nonzero revision because unassignment retains its generation. You must use that revision when assigning it again. An environment from another project returns a scoped error, never an empty assignment.
 
@@ -173,11 +187,13 @@ loomctl cloud-syncs revert my-project csync_... \
   --yes --request-id restore-frontend --wait --timeout 30m
 ```
 
-Revert reviews compensation from the actual serving state. It refuses work that changed outside the original operation, restores the recorded source and account, and retains unfinished resources until cleanup succeeds. You may need external routing evidence for the compensating sync too. Original credentials must remain available until all cleanup finishes.
+Revert reviews compensation from the actual serving state. Read each environment's `compensation_mode` and `compensation_message`: `restore_retained` restores the exact retained original server runtime, `recreate` deploys saved inputs again, and `mixed` includes both. A managed platform uses saved-input recreation even when an old managed binding remains recorded. Compensation refuses work that changed outside the original operation and retains unfinished resources until cleanup succeeds. You may need external routing evidence for the compensating sync too. Original credentials must remain available until all cleanup finishes.
 
 ## HTTP and generated clients
 
-All routes require organization and project authorization under `/api/v1/projects/:id`:
+Organization Cloud routes live under `/api/v1/clouds`; they require organization permissions and work before you create a project. Organization change and history collections are `/api/v1/clouds/changes` and `/api/v1/clouds/syncs`. Project grants use `GET /api/v1/clouds/:cloudId/projects` and `PUT, DELETE /api/v1/clouds/:cloudId/projects/:projectId`.
+
+The compatible project routes below live under `/api/v1/projects/:id` and retain project authorization:
 
 | Route                                                 | Operation                                                        |
 | ----------------------------------------------------- | ---------------------------------------------------------------- |
@@ -200,8 +216,138 @@ All routes require organization and project authorization under `/api/v1/project
 
 Acceptance takes `preview_id`, the preview's `revision` digest and `idempotency_key`, and returns HTTP 202 with the persisted sync ID. Assignment reads return `{ "assignment": null, "revision": 0 }` for an environment never assigned, with a higher generation after unassignment. Metadata updates use integer revisions. History accepts `before` and `limit` (30 by default, at most 100).
 
-Cloud configuration reads require account-read permission. Placement review and acceptance require account-management and deployment-approval permissions. Sync reads require deployment-read permission. The recorded actor is checked again before provider mutations and cleanup. Cross-project references fail within the requested scope. Stale, busy and referenced-resource conflicts return HTTP 409; invalid or blocked changes return 422. Credential values and internal snapshots are excluded from public syncs and lifecycle events.
+Organization Cloud reads and management require organization Cloud management permission. Compatible project reads require account-read permission. Project placement review and acceptance require account-management and deployment-approval permissions. Project sync reads require deployment-read permission. The recorded actor is checked again before provider mutations and cleanup. Cross-project references fail within the requested scope. Stale, busy and referenced-resource conflicts return HTTP 409; invalid or blocked changes return 422. Credential values and internal snapshots are excluded from public syncs and lifecycle events.
 
 ## Qualification limits
 
 Provider capability checks determine whether a proposed workload, region and dependency path can move. Fixture-backed API checks verify persisted switching, historical input recovery and next-release account selection. They do not establish access, quotas, DNS propagation or service behavior in your real provider account. Qualify those against your own configuration before production migration, and keep database or storage migration outside this service-placement workflow.
+
+## Manage servers and pools
+
+Connect your infrastructure account or pinned SSH runtime through Integrations first. Your installed provider adapter declares each operation separately: discovery, provisioning, resize, deletion, DNS and domain attachment are independent capabilities. An unsupported capability is a failure you need to resolve with a supported account or operation. A provider name does not establish runtime support.
+
+```sh
+loomctl cloud-servers cloud_...
+loomctl cloud-servers options cloud_... conn_...
+loomctl cloud-servers preview cloud_... --file server.json
+loomctl cloud-servers apply cloud_... infraop_... --review REVIEW_TOKEN --yes \
+  --wait --timeout 20m
+loomctl cloud-servers show cloud_... infraop_...
+loomctl cloud-servers operations cloud_...
+loomctl cloud-servers retry cloud_... infraop_... --wait --timeout 20m
+loomctl cloud-servers cancel cloud_... infraop_...
+```
+
+For a managed server creation, `server.json` has this shape. Get supported region, size and bootstrap image IDs from `options` for your connection:
+
+```json
+{
+  "kind": "create",
+  "name": "host-a",
+  "connection_id": "conn_...",
+  "region": "nyc3",
+  "size": "s-1vcpu-1gb",
+  "image": "ubuntu-24-04-x64",
+  "cloud_revision": 1
+}
+```
+
+For adoption, use `{"kind":"adopt","name":"existing-host","connection_id":"ssh_conn_...","cloud_revision":1,"confirm_adoption":true}`. You retain provider ownership of an adopted host. Loomplane can disconnect it, but cannot resize or delete it through this lifecycle. A managed host records the provider resource and creation operation; its deletion uses that recorded ownership. Disconnecting or deleting a host is blocked while workloads, reservations or pool membership still reference it.
+
+To review a resize, disconnect or deletion, supply `kind`, `server_id`, `cloud_revision` and `server_revision`. A resize also needs `size`. The preview returns an operation ID, exact review token, expiry, estimated cost and provider actions. Reviews last 15 minutes. The apply command fetches and prints the saved operation before accepting your exact token; a stale review, denied permission or unsupported provider response remains an error.
+
+Provider creation acceptance does not mean runtime readiness. Follow the operation's provider actions and bootstrap expiry, then use `cloud-servers check cloud_... server_...` to refresh the pinned SSH and Docker health. `--wait` stops at success, failure, cancellation or a waiting checkpoint and returns the latest persisted record on timeout. A waiting checkpoint still needs your attention.
+
+```sh
+loomctl cloud-servers usage cloud_... server_...
+loomctl cloud-servers drain cloud_... server_...
+loomctl cloud-servers drain cloud_... server_... --review DRAIN_DIGEST --yes
+loomctl cloud-pools cloud_...
+loomctl cloud-pools save cloud_... --file pool.json
+loomctl cloud-pools save cloud_... pool_... --file pool-update.json
+```
+
+Draining disables new admission after you review current usage. It does not move workloads. Usage includes capacity reservations, serving workloads, execution phases and retained storage markers; those markers do not prove that a volume exists. A pool input gives `name`, `revision` (0 for creation) and `members`, each with `server_id`, `cpu_millis`, `memory_bytes` and `draining`. Budgets must fit verified runtime capacity. Pools group compatible Docker hosts and do not create a private network.
+
+Point a target at a pool without choosing an infrastructure account as the runtime:
+
+```sh
+loomctl cloud-targets create cloud_... --organization --name workers \
+  --provider server --runtime server --pool pool_... --tags workers
+loomctl cloud-targets switch cloud_... target_... --organization \
+  --provider server --runtime server --pool pool_new --revision 2
+```
+
+A pool service has one bounded replica and one active placement. Ordinary deployments keep the chosen host when possible. To select another host for a stateless service, review a move:
+
+```json
+{
+  "project_id": "project_...",
+  "environment_id": "env_...",
+  "service": "web",
+  "pool_id": "pool_...",
+  "destination_server_id": "server_next"
+}
+```
+
+```sh
+loomctl cloud-pools move cloud_... --file move.json
+# Copy the returned review digest into move.json as "review", then accept.
+loomctl cloud-pools move cloud_... --file move.json --yes
+```
+
+Acceptance saves a 15-minute intent. It starts no deployment. The response includes a conservative local `local_review_and_approve_by` deadline and the exact next `loomctl plan` command for the same project and environment. Review that plan, then run `loomctl approve` with its returned ID before the intent expires. The server expiry is measured from acceptance; the CLI deadline starts just before the request and is not an exact server timestamp. If the source, pool, capacity or grant changes, plan again. Local data requires a separate explicit migration.
+
+To recover an unfinished accepted reservation, use `loomctl cloud-pools recover cloud_... --file recovery.json` with `{"plan_id":"plan_...","service":"web"}`. Read its execution revision, active/started state and digest. Copy the digest into the input's `review` field, then repeat with `--yes`. Recovery fences new attempts before checking exact owned compute cleanup and releasing capacity. It retains local storage and reports `storage_retained`; that field does not establish a backup or a successful data migration. A serving workload requires a reviewed delete or move. Failed cleanup stays blocked until you restore the recorded connection or reconcile its checkpoint, then review again. Do not clear a reservation by editing database rows. Pending mixed managed/server attempts without proof that provider work stopped remain blocked: reconcile or finish the original operation, then review again. An unfinished legacy unfenced server attempt also requires reconciliation; blind retry does not establish that old execution has stopped.
+
+## Keep domain authority separate
+
+DNS zones belong to the organization independently of a Cloud or compute connection. Grant zones to projects explicitly. Managed mode uses a supported DNS account. Both modes return a TXT ownership challenge that you publish and verify before using the namespace. Provider hosting access alone does not prove control. This configures DNS for a domain you already own, not domain registration or registrar nameserver changes.
+
+```sh
+loomctl dns-zones
+loomctl dns-zones create --file zone.json
+loomctl dns-zones verify zone_...
+loomctl dns-zones project my-project
+loomctl dns-zones update zone_... --file zone-update.json
+loomctl dns-zones remove zone_... --revision 3 --yes
+```
+
+Use `{"name":"example.com","mode":"external","project_ids":["project_..."]}` for an external zone, or `mode: "managed"` with `connection_id` for a DNS adapter. A zone update carries `revision`, `project_ids` and `renew_proof`. Renew an expired unverified proof with `renew_proof: true`, then publish the returned replacement TXT value. Managed zones saved by older versions with only a provider verification timestamp also need Renew proof and public verification. Referenced zones cannot be removed.
+
+The zone name is the namespace you grant to projects. For managed DNS, Loomplane selects the most specific containing hosted zone and pins its provider ID, account and connection generation separately. You can grant `app.example.com` while writing records in the hosted zone `example.com`: publish the challenge at `_loomplane.app.example.com`. That proof covers `app.example.com` and its children, never `example.com` or sibling names. Record names remain relative to the provider hosted zone. Each new route review and acceptance rechecks the public challenge and provider identity. Removing or changing the TXT blocks new work; previously accepted exact cleanup keeps its retained authority.
+
+```json
+{
+  "zone_id": "zone_...",
+  "cloud_id": "cloud_...",
+  "environment_id": "env_...",
+  "service": "web",
+  "hostname": "app.example.com",
+  "port": 8080,
+  "external_ttl_seconds": 7200
+}
+```
+
+```sh
+loomctl domain-routes preview my-project --file route.json
+loomctl domain-routes apply my-project routeop_... --review REVIEW_DIGEST --yes \
+  --wait --timeout 15m
+loomctl domain-routes my-project
+loomctl domain-routes show my-project routeop_...
+loomctl domain-routes verify my-project route_... --wait --timeout 10m
+loomctl domain-routes retry my-project routeop_... --wait --timeout 10m
+loomctl domain-routes history my-project route_...
+loomctl domain-routes ttl my-project route_... --revision 3 --external-ttl-seconds 7200
+loomctl domain-routes remove my-project route_... --revision 4 --yes
+```
+
+Keep DNS, TLS and backend verification separate. A route operation prints its desired record, applied receipt, message and `not_before` drain gate. For external DNS, publish the exact record from the operation and verify again. A server route needs the public hostname to reach its ingress and HTTP-01 challenge before public certificate issuance can succeed. Fixture certificates and local ACME checks do not qualify your domain for public ACME.
+
+`external_ttl_seconds` is the maximum TTL previously served by your external DNS records, including any still cached value. You must establish that bound yourself, between 60 and 86400 seconds. Resolver success and the requested new TTL cannot establish it. The TTL update requires the ready route's exact revision, advances that revision and invalidates old reviews; it refuses a pending handoff. Legacy accepted work missing the bound needs reviewed recovery, not an edit to an immutable snapshot. Managed handoffs also retain the maximum prior and current recorded provider receipt TTL, including receipts above the external-input limit.
+
+During a routed release, old and new compute can coexist while DNS changes and cached traffic drain. Cloud sync output preserves each environment's `routing_status` and route operation IDs, manual DNS instructions and `not_before` timestamp. Desired target placement may already be saved while a previous release still serves. Follow the applied plan and deployment IDs before deciding the move finished. Route histories remain project scoped, including on a shared Cloud.
+
+If a legacy runtime lacks a trusted current container/release receipt, redeploy it through the reviewed deployment flow before attaching a route. DNS-only retries cannot repair missing runtime identity. Stop every older app and worker binary before running the migrations and start only the upgraded binaries afterward. Mixed versions with unfenced writers are unsupported.
+
+The Go client exposes typed Cloud, server, pool, zone and route operations through the same authenticated transport as `loomctl`. Infrastructure operations live under `/api/v1/clouds/:cloudId`; zones under `/api/v1/dns-zones`; project route operations under `/api/v1/projects/:projectId/domain-routes` and `/route-operations`. Review inputs, revisions and cleanup authority remain enforced by those APIs.

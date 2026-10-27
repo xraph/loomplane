@@ -1,23 +1,5 @@
 // The command menu (⌘K): go anywhere, open any project, run an action.
-import {
-  ActivityIcon,
-  BellIcon,
-  BracesIcon,
-  CloudIcon,
-  DatabaseIcon,
-  FolderGit2Icon,
-  FolderPlusIcon,
-  LayoutDashboardIcon,
-  RocketIcon,
-  ShieldCheckIcon,
-  KeyRoundIcon,
-  KeyboardIcon,
-  MoonIcon,
-  PlugIcon,
-  ScanSearchIcon,
-  ServerIcon,
-  UsersIcon,
-} from "lucide-react"
+import { ScanSearchIcon } from "lucide-react"
 import { type ReactNode, useState } from "react"
 import { toast } from "sonner"
 
@@ -30,6 +12,24 @@ import {
   useSourcesList,
 } from "@/client/forge/loomplane/hooks"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
+import {
+  ActivityIcon,
+  ApiKeysIcon,
+  ApproveIcon,
+  CloudsIcon,
+  DeploymentsIcon,
+  InfrastructureIcon,
+  IntegrationsIcon,
+  MembersIcon,
+  NewProjectIcon,
+  NotificationsIcon,
+  OverviewIcon,
+  ProjectsIcon,
+  ServicesIcon,
+  ShortcutsIcon,
+  ThemeIcon,
+  VariablesIcon,
+} from "@/components/icons"
 import { RunDot } from "@/components/runs"
 import { useShell } from "@/components/shell"
 import { useTheme } from "@/components/theme-provider"
@@ -128,7 +128,7 @@ function RunGroups({
               onSelect={() => go(r)}
             >
               <Entry
-                icon={<ShieldCheckIcon />}
+                icon={<ApproveIcon />}
                 glyphClassName="bg-weld-tint text-weld-ink"
                 label={`Review the plan for ${r.project?.name ?? "a project"} to ${r.environment}`}
                 hint={changesLine(r)}
@@ -225,42 +225,42 @@ const pages: Page[] = [
   {
     to: "/",
     label: "Overview",
-    icon: <LayoutDashboardIcon />,
+    icon: <OverviewIcon />,
     search: "overview home",
     keys: "G O",
   },
   {
     to: "/deployments",
     label: "Deployments",
-    icon: <RocketIcon />,
+    icon: <DeploymentsIcon />,
     search: "deployments plans runs",
     keys: "G D",
   },
   {
     to: "/projects",
     label: "Projects",
-    icon: <FolderGit2Icon />,
+    icon: <ProjectsIcon />,
     search: "projects",
     keys: "G P",
   },
   {
     to: "/services",
     label: "Services",
-    icon: <DatabaseIcon />,
+    icon: <ServicesIcon />,
     search: "services catalog databases caches postgres redis",
     keys: "G S",
   },
   {
     to: "/clouds",
     label: "Clouds",
-    icon: <CloudIcon />,
+    icon: <CloudsIcon />,
     search: "clouds targets accounts",
     keys: "G C",
   },
   {
     to: "/infrastructure",
     label: "Infrastructure",
-    icon: <ServerIcon />,
+    icon: <InfrastructureIcon />,
     search: "infrastructure providers",
     keys: "G I",
   },
@@ -274,33 +274,33 @@ const pages: Page[] = [
   {
     to: "/variables",
     label: "Variables",
-    icon: <BracesIcon />,
+    icon: <VariablesIcon />,
     search: "variables secrets organization",
     keys: "G V",
   },
   {
     to: "/members",
     label: "Members",
-    icon: <UsersIcon />,
+    icon: <MembersIcon />,
     search: "members invitations people",
     keys: "G M",
   },
   {
     to: "/notifications",
     label: "Notifications",
-    icon: <BellIcon />,
+    icon: <NotificationsIcon />,
     search: "notifications inbox email webhooks",
   },
   {
     to: "/integrations",
     label: "Integrations",
-    icon: <PlugIcon />,
+    icon: <IntegrationsIcon />,
     search: "integrations github catalog",
   },
   {
     to: "/api-keys",
     label: "API keys",
-    icon: <KeyRoundIcon />,
+    icon: <ApiKeysIcon />,
     search: "api keys tokens cli",
     keys: "G K",
   },
@@ -433,7 +433,11 @@ export function CommandMenu({
                 value="new deployment deploy plan"
                 onSelect={run(() => openDeploy())}
               >
-                <Entry icon={<RocketIcon />} label="New deployment" keys="N" />
+                <Entry
+                  icon={<DeploymentsIcon />}
+                  label="New deployment"
+                  keys="N"
+                />
               </CommandItem>
             )}
             {can("project:create") && (
@@ -441,14 +445,14 @@ export function CommandMenu({
                 value="new project create repository"
                 onSelect={run(openNewProject)}
               >
-                <Entry icon={<FolderPlusIcon />} label="New project" />
+                <Entry icon={<NewProjectIcon />} label="New project" />
               </CommandItem>
             )}
             <CommandItem
               value="connect github integration"
               onSelect={run(() => void navigate({ to: "/integrations" }))}
             >
-              <Entry icon={<PlugIcon />} label="Connect GitHub" />
+              <Entry icon={<IntegrationsIcon />} label="Connect GitHub" />
             </CommandItem>
             <CommandItem
               value="toggle theme dark light"
@@ -456,14 +460,14 @@ export function CommandMenu({
                 setTheme(theme === "dark" ? "light" : "dark")
               )}
             >
-              <Entry icon={<MoonIcon />} label="Toggle theme" keys="D" />
+              <Entry icon={<ThemeIcon />} label="Toggle theme" keys="D" />
             </CommandItem>
             <CommandItem
               value="keyboard shortcuts help"
               onSelect={run(openShortcuts)}
             >
               <Entry
-                icon={<KeyboardIcon />}
+                icon={<ShortcutsIcon />}
                 label="Keyboard shortcuts"
                 keys="?"
               />

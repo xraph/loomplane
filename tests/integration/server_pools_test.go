@@ -674,3 +674,17 @@ func TestServerPoolsEnrollmentSerializesDirectExecution(t *testing.T) {
 		t.Fatal("enrollment ignored direct effects and binding")
 	}
 }
+
+func TestServerPoolsOrdinaryApprovalStillNeedsConcretePlacement(t *testing.T) {
+	f := newPoolFixture(t)
+	req := f.request("env", "api")
+	candidate, err := f.store.PreviewPlacement(t.Context(), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidate.ServerID = ""
+	f.plan(t, "missing-host", req, candidate)
+	if accepted, approveErr := f.plans.Decide(t.Context(), "org", "missing-host", "approved", "usr", "", time.Now()); approveErr == nil || accepted {
+		t.Fatal("ordinary approval omitted its concrete host reservation")
+	}
+}

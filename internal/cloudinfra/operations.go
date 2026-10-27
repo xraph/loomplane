@@ -163,15 +163,44 @@ func (s *Service) PreviewServer(ctx context.Context, p security.Principal, cloud
 					return nil, checkErr
 				}
 				for _, size := range options.Sizes {
-					if size.ID == in.Size {
-						o.EstimatedHourlyUSD = size.HourlyUSD
-						break
+					if size.ID != in.Size {
+						continue
 					}
+
+					o.EstimatedHourlyUSD = size.HourlyUSD
+					resources, sizeErr := sizeResources(size)
+					if sizeErr != nil {
+						return nil, sizeErr
+					}
+					o.CapacityTarget = &resources
+					o.CapacityCheckedAt = now
+					break
 				}
 			}
 		}
-		if in.Kind == "resize" && in.Size == "" {
-			return nil, ErrInvalid
+		if in.Kind == "resize" {
+			if in.Size == "" {
+				return nil, ErrInvalid
+			}
+			if catalog, ok := adapter.(provider.ServerOptionsAdapter); ok {
+				options, optionsErr := catalog.ServerOptions(ctx, credential)
+				if optionsErr != nil {
+					return nil, optionsErr
+				}
+				for _, size := range options.Sizes {
+					if size.ID != in.Size {
+						continue
+					}
+
+					resources, sizeErr := sizeResources(size)
+					if sizeErr != nil {
+						return nil, sizeErr
+					}
+					o.CapacityTarget = &resources
+					o.CapacityCheckedAt = now
+					break
+				}
+			}
 		}
 	}
 	if checkErr := s.Store.CreatePreview(ctx, o); checkErr != nil {
@@ -223,6 +252,15 @@ func (s *Service) ApplyServerOperation(ctx context.Context, p security.Principal
 	o, err := s.Store.GetOperation(ctx, p.OrgID, cloud, id)
 	if err != nil {
 		return nil, err
+	}
+	if store, ok := s.Store.(*PgStore); ok {
+		expansion, checkErr := store.expansionForOperation(ctx, o)
+		if checkErr != nil {
+			return nil, checkErr
+		}
+		if expansion != nil {
+			return nil, security.ErrForbidden
+		}
 	}
 	if o.Review != in.Review {
 		return nil, ErrConflict
@@ -360,18 +398,29 @@ func (s *Service) RecoverInfrastructure(ctx context.Context) error {
 			return checkErr
 		}
 	}
-	return nil
+	return s.recoverCapacity(ctx)
 }
 
 func (s *Service) execute(ctx context.Context, o *Operation) error {
+	expansion, expansionErr := s.expansionEffect(ctx, o)
+	if expansionErr != nil {
+		return expansionErr
+	}
 	// Accepted cleanup keeps its recorded authority and exact resource target.
 	// New capacity still requires the original manager's current permission.
-	if o.Input.Kind != "delete" && o.Input.Kind != "disconnect" {
+	if !expansion && o.Input.Kind != "delete" && o.Input.Kind != "disconnect" {
 		if checkErr := s.Authz.Require(ctx, o.Principal, security.OrganizationCloudManage, o.OrgID); checkErr != nil {
 			return checkErr
 		}
 	}
 	if !o.Attempted {
+		if capacity, ok := s.Store.(interface {
+			EnsureInfrastructureCapacity(context.Context, *Operation) error
+		}); ok {
+			if err := capacity.EnsureInfrastructureCapacity(ctx, o); err != nil {
+				return err
+			}
+		}
 		profile, scopeErr := s.Clouds.GetProfile(ctx, o.OrgID, "", o.CloudID)
 		if scopeErr != nil {
 			return scopeErr
@@ -429,8 +478,7 @@ func (s *Service) createServer(ctx context.Context, o *Operation, v *Server, a p
 				return err
 			}
 			userData = data
-			o.Attempted = true
-			if checkErr := s.checkpoint(ctx, o); checkErr != nil {
+			if checkErr := s.checkpointCreateAttempt(ctx, o); checkErr != nil {
 				return checkErr
 			}
 		}
@@ -556,6 +604,10 @@ func (s *Service) deleteServer(ctx context.Context, o *Operation, v *Server, a p
 	}
 	_, err := a.GetServer(ctx, c, o.ResourceID)
 	if errors.Is(err, provider.ErrInfrastructureNotFound) {
+		o.AbsenceConfirmedAt = s.now().UTC()
+		if checkErr := s.checkpoint(ctx, o); checkErr != nil {
+			return checkErr
+		}
 		v.Status = "deleted"
 		v.Revision++
 		v.UpdatedAt = s.now().UTC()
