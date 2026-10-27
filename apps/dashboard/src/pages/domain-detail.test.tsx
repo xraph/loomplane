@@ -122,7 +122,7 @@ it("shows a domain's status, hosting and hostnames", async () => {
   expect(await section("Access")).toBeTruthy()
   expect(screen.getByText("Subdomains have their own projects.")).toBeTruthy()
   expect(await section("DNS records")).toBeTruthy()
-  // Not registered here, and nothing under it: no sections for either.
+  // Not registered here, so there's no Registration section.
   expect(screen.queryByRole("region", { name: "Registration" })).toBeNull()
   expect(await section("Subdomains")).toBeTruthy()
 })
@@ -152,6 +152,49 @@ it("says a subdomain is verified through its domain", async () => {
   expect(screen.queryByRole("button", { name: "Check again" })).toBeNull()
   // A subdomain with none under it has no Subdomains section.
   expect(screen.queryByRole("region", { name: "Subdomains" })).toBeNull()
+})
+
+it("names the zone that verifies a subdomain two levels down", async () => {
+  const domain = zoneWith("loomplane.com", [], {
+    subdomains: ["app.loomplane.com", "x.app.loomplane.com"],
+  })
+  // The parent has no proof of its own: the domain proves both.
+  const parent = zoneWith("app.loomplane.com", [], {
+    parent: "loomplane.com",
+    proofZone: "loomplane.com",
+    subdomains: ["x.app.loomplane.com"],
+  })
+  const nested = (verified: boolean) =>
+    detailWith(
+      zoneWith("x.app.loomplane.com", [], {
+        verified,
+        proof: false,
+        parent: "app.loomplane.com",
+        proofZone: "loomplane.com",
+      }),
+      { parent, proofZone: domain }
+    )
+  stubFetch({ [detailPath("x.app.loomplane.com")]: nested(true) })
+  const view = open("zone-x.app.loomplane.com")
+  let status = await section("Status")
+  const line = within(status).getByText(/verified through/)
+  expect(line.textContent).toBe(
+    "Part of app.loomplane.com · verified through loomplane.com"
+  )
+  expect(
+    within(line)
+      .getByRole("link", { name: "loomplane.com" })
+      .getAttribute("href")
+  ).toBe("/domains/zone-loomplane.com")
+  view.unmount()
+  forgeClient.clear()
+
+  stubFetch({ [detailPath("x.app.loomplane.com")]: nested(false) })
+  open("zone-x.app.loomplane.com")
+  status = await section("Status")
+  expect(within(status).getByText(/waits for/).textContent).toBe(
+    "Part of app.loomplane.com · waits for loomplane.com's verification"
+  )
 })
 
 it("shows a subdomain waiting on its domain and checks the domain again", async () => {
