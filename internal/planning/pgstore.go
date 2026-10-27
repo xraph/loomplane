@@ -545,14 +545,22 @@ func (s *PgStore) PutBinding(ctx context.Context, b *Binding) error {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }() //nolint:errcheck // a no-op once committed
-	if checkErr := cloudprofiles.LockOrganization(ctx, tx, b.OrgID); checkErr != nil {
-		return checkErr
+	// Only a frontend has a slot to activate, under the organization gate.
+	// A direct server action writes its binding while it still holds its
+	// daemon's admission, which pool enrollment waits for under that gate.
+	frontend := frontendBinding(b)
+	if frontend {
+		if checkErr := cloudprofiles.LockOrganization(ctx, tx, b.OrgID); checkErr != nil {
+			return checkErr
+		}
 	}
 	if guardErr := cloudinfra.GuardPoolWrite(ctx, tx); guardErr != nil {
 		return guardErr
 	}
-	if checkErr := cloudinfra.ActivateFrontendBinding(ctx, tx, b.OrgID, b.PlanID, b.Name, b.ConnectionID, b.ExternalID); checkErr != nil {
-		return checkErr
+	if frontend {
+		if checkErr := cloudinfra.ActivateFrontendBinding(ctx, tx, b.OrgID, b.PlanID, b.Name, b.ConnectionID, b.ExternalID); checkErr != nil {
+			return checkErr
+		}
 	}
 	if checkErr := putBinding(ctx, tx, b); checkErr != nil {
 		return checkErr
@@ -567,6 +575,19 @@ func (s *PgStore) PutBinding(ctx context.Context, b *Binding) error {
 	}
 	s.wakeFrontendPlan(ctx, b.OrgID, b.PlanID, "frontend-active/"+b.PlanID+"/"+b.Name)
 	return nil
+}
+
+// frontendBinding reports whether b may hold a frontend slot. A binding
+// whose configuration doesn't parse is treated as one.
+func frontendBinding(b *Binding) bool {
+	if b.Subject != ServiceSubject {
+		return false
+	}
+	var cfg ServiceConfig
+	if err := json.Unmarshal(b.Config, &cfg); err != nil {
+		return true
+	}
+	return cloudinfra.ManagedFrontend(b.Provider, cfg.Workload, cfg.Execution)
 }
 
 func putBinding(ctx context.Context, db bindingExecutor, b *Binding) error {

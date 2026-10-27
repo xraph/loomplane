@@ -434,6 +434,8 @@ func stripProviderMetadata(config map[string]any) {
 	delete(config, "cloud_placement")
 	delete(config, "applied_inputs")
 	delete(config, "artifact")
+	// A frontend demand names the plan that counted it.
+	delete(config, "frontend_demand")
 }
 
 // CloudAdoption identifies the serving binding reviewed for metadata adoption.

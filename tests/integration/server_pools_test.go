@@ -640,9 +640,15 @@ type blockingDirectPoolExecutor struct {
 	entered, release chan struct{}
 }
 
+// Apply also gives up when the test ends, so a failed test rolls back the
+// admission it holds instead of hanging its cleanup.
 func (e *blockingDirectPoolExecutor) Apply(ctx context.Context, j *deployments.Job) (*deployments.Outcome, error) {
 	close(e.entered)
-	<-e.release
+	select {
+	case <-e.release:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 	return e.poolExecutor.Apply(ctx, j)
 }
 func TestServerPoolsEnrollmentSerializesDirectExecution(t *testing.T) {
@@ -673,7 +679,14 @@ func TestServerPoolsEnrollmentSerializesDirectExecution(t *testing.T) {
 	go func() { enrolled <- f.store.SavePool(t.Context(), &next, 1) }()
 	waitPoolSQL(t, f, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE 'SELECT c.id FROM loomplane_cloud_connections%')`)
 	close(executor.release)
-	if err = <-ran; err != nil {
+	// Both sides wait only on each other's database locks now, so a lock
+	// cycle between them never ends by itself.
+	select {
+	case err = <-ran:
+	case <-time.After(readyTimeout):
+		t.Fatal("direct execution and pool enrollment deadlocked")
+	}
+	if err != nil {
 		t.Fatal(err)
 	}
 	if err = <-enrolled; err == nil {
