@@ -1,0 +1,23 @@
+family: other
+entries:
+  - id: acme/Small-1B-Instruct
+    title: Acme Small 1B Instruct
+    publisher: Acme
+    summary: A small chat model for quick replies.
+    revision: 0123456789abcdef0123456789abcdef01234567
+    license:
+      id: apache-2.0
+      commercial: true
+    tasks: [chat]
+    parameters: 1235814400
+    context_length: 131072
+    architecture:
+      name: LlamaForCausalLM
+      layers: 16
+      attention_heads: 32
+      kv_heads: 8
+      head_dim: 64
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 2471645608

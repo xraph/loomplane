@@ -1,0 +1,3 @@
+# Not a family file. Load skips it, so its shape never reaches the strict
+# family decoder.
+results: []
