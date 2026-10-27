@@ -1734,7 +1734,7 @@ func (p *planner) link(name string, a *Action) {
 					}
 					p.warn(Finding{
 						Code: "need-off", Subject: ServiceSubject, Name: name, Path: base,
-						Message: fmt.Sprintf("%s gets no %s in %s: %s doesn't run there.", name, orList(missing), p.in.Environment, need),
+						Message: fmt.Sprintf("%s gets no %s in %s: %s doesn't run there. Enable it with resources.%s.environments.%s.enabled: true.", name, orList(missing), p.in.Environment, need, need, p.in.Environment),
 					})
 				default:
 					p.problem(Finding{

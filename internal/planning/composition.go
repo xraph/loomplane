@@ -176,6 +176,12 @@ func (p *planner) resourceSettings(name, base string, r manifest.Resource, kind 
 		default:
 			out[s.Name] = value
 		}
+		if value, ok := out[s.Name]; ok && sizesCache(kind, s.Name) && !cacheSize(value) {
+			p.problem(Finding{
+				Code: "catalog-setting-invalid", Subject: ResourceSubject, Name: name, Path: path,
+				Message: fmt.Sprintf("%s's %s is a size in MB: whole digits, at most %d.", name, s.Title, recipes.MaxVolumeMB),
+			})
+		}
 	}
 	if len(out) == 0 {
 		return nil
@@ -300,6 +306,7 @@ func (p *planner) planComposition(name, base string, r manifest.Resource, kind r
 		last = max(last, a.Step)
 		p.diff(a, cfg, cfg.Provider, cfg.Region)
 		p.namedChanges(a)
+		p.cacheResize(name, base, kind, a, prov.Cloud)
 		p.resources[a.Name] = a
 		p.actions = append(p.actions, a)
 	}

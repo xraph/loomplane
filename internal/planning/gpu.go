@@ -7,6 +7,7 @@ import (
 	"maps"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 
 	"github.com/xraph/loomplane/internal/recipes"
@@ -86,6 +87,49 @@ func ComponentResources(r recipes.Resources, gpu *provider.GPUPlacement) recipes
 		count = gpu.Count
 	}
 	return r.ForGPUs(count)
+}
+
+// sizesCache reports whether a kind's setting sizes a weight cache.
+func sizesCache(kind recipes.Kind, setting string) bool {
+	return slices.ContainsFunc(kind.Components, func(c recipes.Component) bool {
+		return c.WeightCache != nil && c.WeightCache.SizeSetting == setting
+	})
+}
+
+// cacheSize reports whether value is a weight cache size a runtime takes:
+// digits only, in MB, from 1 to recipes.MaxVolumeMB.
+func cacheSize(value string) bool {
+	mb, err := strconv.Atoi(value)
+	return err == nil && strings.Trim(value, "0123456789") == "" && mb >= 1 && mb <= recipes.MaxVolumeMB
+}
+
+// cacheResize refuses a planned update that asks a component's weight
+// cache on Kubernetes for another size. A claim's request can't change in
+// place, so the runtime would refuse the update after it's approved. A
+// server's cache has no size, and a create or replace gets a new claim.
+func (p *planner) cacheResize(name, base string, kind recipes.Kind, a *Action, cloud string) {
+	cfg := a.Resource.Component
+	w := cfg.Component.WeightCache
+	b := p.bindings[a.ID]
+	if cloud != "kubernetes" || a.Op != Update || w == nil || b == nil {
+		return
+	}
+	var old ResourceConfig
+	if json.Unmarshal(b.Config, &old) != nil || old.Component == nil || old.Component.Component.WeightCache == nil {
+		return
+	}
+	from, to := old.Component.Component.WeightCache.SizeMB(old.Component.Settings), w.SizeMB(cfg.Settings)
+	if from == to {
+		return
+	}
+	path, what := base, "its size"
+	if i := slices.IndexFunc(kind.Settings, func(s recipes.Setting) bool { return s.Name == w.SizeSetting }); i >= 0 {
+		path, what = base+".settings."+w.SizeSetting, kind.Settings[i].Title
+	}
+	p.problem(Finding{
+		Code: "catalog-cache-resize", Subject: ResourceSubject, Name: name, Path: path,
+		Message: fmt.Sprintf("%s's %s keeps its weight cache on a Kubernetes volume, which can't be resized in place (%d MB now, %d MB asked). Set %s back, or remove %s and add it again to start with a new, empty cache.", name, cfg.Component.Name, from, to, what, name),
+	})
 }
 
 // gpuKind reports whether a kind runs a GPU component, leaving out the

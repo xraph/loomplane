@@ -397,10 +397,12 @@ func (d *Deployments) Retry(ctx context.Context, orgID, deploymentID, retryID st
 		build = e.BuildID
 	}
 	in := retryInput{OrgID: orgID, DeploymentID: deploymentID, Steps: steps}
-	if dep, err := d.boundDeployer(); err == nil {
-		if in.Timeouts, err = actionTimeouts(ctx, dep, orgID, deploymentID); err != nil {
-			return err
-		}
+	dep, err := d.boundDeployer()
+	if err != nil {
+		return err
+	}
+	if in.Timeouts, err = actionTimeouts(ctx, dep, orgID, deploymentID); err != nil {
+		return err
 	}
 	if build == CapacityBuild {
 		in.ReconcileInterval = capacityInterval

@@ -9,6 +9,7 @@ import (
 	"github.com/xraph/loomplane/internal/providers"
 	"github.com/xraph/loomplane/internal/recipes"
 	"github.com/xraph/loomplane/internal/recipes/recipestest"
+	"github.com/xraph/loomplane/pkg/provider"
 )
 
 // settingKinds is recipestest.Registry with Sample taking a required model
@@ -185,7 +186,7 @@ func TestOptInResourceIsOffForNeeds(t *testing.T) {
 	if !production.Executable {
 		t.Fatalf("production is blocked: %+v", production.Problems)
 	}
-	want := Finding{Code: "need-off", Subject: ServiceSubject, Name: "checkout", Path: "services.checkout.needs", Message: "checkout gets no OPTIN_URL or OPTIN_ADMIN_URL in production: llm doesn't run there."}
+	want := Finding{Code: "need-off", Subject: ServiceSubject, Name: "checkout", Path: "services.checkout.needs", Message: "checkout gets no OPTIN_URL or OPTIN_ADMIN_URL in production: llm doesn't run there. Enable it with resources.llm.environments.production.enabled: true."}
 	if !slices.ContainsFunc(production.Warnings, func(f Finding) bool {
 		return f.Code == want.Code && f.Subject == want.Subject && f.Name == want.Name && f.Path == want.Path && f.Message == want.Message
 	}) {
@@ -240,5 +241,97 @@ func TestPerGPUResourcesScale(t *testing.T) {
 		Connections: gpuConnections(t, twoL4, "amd64"), Kinds: kinds, Bindings: boundFrom(t, r)})
 	if a := findAction(again, "resource:llm--server"); a.Op != Keep {
 		t.Fatalf("again: op %s, changes %+v", a.Op, a.Changes)
+	}
+}
+
+// cacheKinds is GPUSample with its weight cache sized by a cache_mb
+// setting matching pattern.
+func cacheKinds(t *testing.T, pattern string) *recipes.Registry {
+	t.Helper()
+	k := recipestest.GPUSample()
+	k.Settings = []recipes.Setting{{Name: "cache_mb", Title: "Cache size", Pattern: pattern}}
+	k.Components[0].WeightCache.SizeSetting = "cache_mb"
+	r := recipes.NewRegistry()
+	if err := r.Register(k); err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+// gpuCluster is a checked amd64 cluster with retained storage and L4 nodes.
+func gpuCluster(t *testing.T) ConnectionOption {
+	t.Helper()
+	details := map[string]string{
+		"endpoint": "https://cluster.example", "cluster_ca": "checked-ca", "namespace": "apps", "namespace_uid": "namespace-identity", "architecture": "amd64", "service_proxy": "ready",
+		"storage_class": "retained", "storage_class_uid": "class-identity", "storage_provisioner": "fixture.csi", "storage_binding": "WaitForFirstConsumer", "storage_reclaim": "Retain", "persistent_storage": "ready",
+	}
+	inv := provider.GPUInventory{Status: "ready", Nodes: []provider.GPUNodeGroup{{
+		Kind: "nvidia-l4", MemoryGiB: 24, Nodes: 2, PerNode: 1, Total: 2,
+		NodeSelector: map[string]string{"cloud.google.com/gke-accelerator": "nvidia-l4"},
+	}}}
+	maps.Copy(details, inv.Details())
+	return infrastructureConnection(t, targetA, "kubernetes", details)
+}
+
+func TestCacheResizeOnKubernetes(t *testing.T) {
+	kinds := cacheKinds(t, "[0-9]{1,10}")
+	plan := func(prov, size string, connections []ConnectionOption, bindings ...*Binding) *Result {
+		doc := "version: 1\nresources:\n  llm: {kind: gpusample, provider: " + prov + ", target: " + targetA + ", gpu: {kind: nvidia-l4, count: 1}, settings: {cache_mb: \"" + size + "\"}}\n"
+		return Compute(Input{Environment: "production", Graph: infrastructureGraph(), Manifest: parse(t, doc), Providers: providers.Registry(),
+			Connections: connections, Kinds: kinds, Bindings: bindings})
+	}
+	cluster := []ConnectionOption{gpuCluster(t)}
+	first := plan("kubernetes", "153600", cluster)
+	if !first.Executable {
+		t.Fatalf("first plan: %+v", first.Problems)
+	}
+	bound := boundFrom(t, first)
+
+	resized := plan("kubernetes", "204800", cluster, bound...)
+	want := Finding{
+		Code: "catalog-cache-resize", Subject: ResourceSubject, Name: "llm", Path: "resources.llm.settings.cache_mb",
+		Message: "llm's server keeps its weight cache on a Kubernetes volume, which can't be resized in place (153600 MB now, 204800 MB asked). Set Cache size back, or remove llm and add it again to start with a new, empty cache.",
+	}
+	if resized.Executable || !slices.ContainsFunc(resized.Problems, func(f Finding) bool {
+		return f.Code == want.Code && f.Subject == want.Subject && f.Name == want.Name && f.Path == want.Path && f.Message == want.Message
+	}) {
+		t.Fatalf("resize on Kubernetes: problems %+v", resized.Problems)
+	}
+	// Down to the recipe's own size is a resize too.
+	if r := plan("kubernetes", "1000", cluster, bound...); r.Executable || !hasCode(r.Problems, "catalog-cache-resize") {
+		t.Fatalf("shrink: %+v", r.Problems)
+	}
+	// A change that leaves the size where it was isn't.
+	small := boundFrom(t, plan("kubernetes", "1000", cluster))
+	if r := plan("kubernetes", "2000", cluster, small...); !r.Executable || findAction(r, "resource:llm--server").Op != Update {
+		t.Fatalf("same size: %+v", r.Problems)
+	}
+
+	// A server's cache is a Docker volume with no size, so the update runs.
+	servers := gpuConnections(t, twoL4, "amd64")
+	onServer := boundFrom(t, plan("server", "153600", servers))
+	r := plan("server", "204800", servers, onServer...)
+	if a := findAction(r, "resource:llm--server"); !r.Executable || a.Op != Update || hasCode(r.Problems, "catalog-cache-resize") {
+		t.Fatalf("server: %+v, problems %+v", a, r.Problems)
+	}
+}
+
+func TestCacheSizeSettingBounds(t *testing.T) {
+	kinds := cacheKinds(t, ".+")
+	plan := func(size string) *Result {
+		doc := "version: 1\nresources:\n  llm: {kind: gpusample, provider: server, target: " + targetA + ", gpu: {kind: nvidia-l4, count: 1}, settings: {cache_mb: \"" + size + "\"}}\n"
+		return Compute(Input{Environment: "production", Graph: infrastructureGraph(), Manifest: parse(t, doc), Providers: providers.Registry(),
+			Connections: gpuConnections(t, twoL4, "amd64"), Kinds: kinds})
+	}
+	for _, bad := range []string{"150Gi", "1073741825", "0", "+5"} {
+		r := plan(bad)
+		if r.Executable || !slices.ContainsFunc(r.Problems, func(f Finding) bool {
+			return f.Code == "catalog-setting-invalid" && f.Path == "resources.llm.settings.cache_mb" && f.Message == "llm's Cache size is a size in MB: whole digits, at most 1073741824."
+		}) {
+			t.Fatalf("cache_mb %q: problems %+v", bad, r.Problems)
+		}
+	}
+	if r := plan("1073741824"); !r.Executable {
+		t.Fatalf("the largest size: %+v", r.Problems)
 	}
 }

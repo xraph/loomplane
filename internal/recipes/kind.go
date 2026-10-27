@@ -221,6 +221,9 @@ type ResourceStep struct {
 	ShmMB     int `json:"shm_mb,omitempty"`
 }
 
+// MaxVolumeMB is the largest volume, in MB, a runtime asks for.
+const MaxVolumeMB = 1 << 30
+
 // WeightCache is a persistent volume for downloaded files, such as model
 // weights, kept across restarts and releases so they aren't fetched again.
 type WeightCache struct {

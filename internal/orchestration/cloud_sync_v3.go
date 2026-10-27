@@ -20,6 +20,10 @@ type CloudSyncDeployment struct {
 	PlanID       string     `json:"plan_id"`
 	DeploymentID string     `json:"deployment_id"`
 	Steps        [][]string `json:"steps"`
+	// Timeouts are the actions that get longer than actionTimeout, as
+	// deployStarted's. The prepare activity fills them in, so they're
+	// recorded with its output.
+	Timeouts map[string]time.Duration `json:"timeouts,omitempty"`
 }
 
 // CloudSyncPreparation keeps a business rejection out of activity retry policy.
@@ -66,7 +70,7 @@ func (d *Deployments) syncV3(w *drt.Workflow, raw []byte) ([]byte, error) {
 		}
 	}
 	for _, plan := range prepared.Deployments {
-		if err := runStepsV3(w, in.OrgID, deployStarted{DeploymentID: plan.DeploymentID, Steps: plan.Steps}, in.ReconcileInterval); err != nil {
+		if err := runStepsV3(w, in.OrgID, deployStarted{DeploymentID: plan.DeploymentID, Steps: plan.Steps, Timeouts: plan.Timeouts}, in.ReconcileInterval); err != nil {
 			return nil, err
 		}
 
@@ -106,6 +110,18 @@ func (d *Deployments) syncPrepare(ctx context.Context, info drt.ActivityInfo, ra
 	prepared, err := r.PrepareCapacityCloudSync(activityCtx, in.OrgID, in.ProjectID, in.SyncID)
 	if err != nil {
 		return nil, err
+	}
+	if len(prepared.Deployments) > 0 {
+		dep, depErr := d.boundDeployer()
+		if depErr != nil {
+			return nil, depErr
+		}
+		for i := range prepared.Deployments {
+			plan := &prepared.Deployments[i]
+			if plan.Timeouts, err = actionTimeouts(ctx, dep, in.OrgID, plan.DeploymentID); err != nil {
+				return nil, err
+			}
+		}
 	}
 	if d.runs != nil {
 		for _, plan := range prepared.Deployments {
