@@ -1737,6 +1737,25 @@
           }
         }
       },
+      "FarpConfig": {
+        "type": "object",
+        "required": [
+          "gateway",
+          "port"
+        ],
+        "properties": {
+          "gateway": {
+            "type": "string"
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "port": {
+            "type": "integer"
+          }
+        }
+      },
       "Federation": {
         "type": "object",
         "properties": {
@@ -2657,6 +2676,9 @@
           },
           "execution": {
             "type": "string"
+          },
+          "farp": {
+            "$ref": "#/components/schemas/FarpConfig"
           },
           "framework": {
             "type": "string"
