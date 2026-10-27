@@ -2,6 +2,7 @@ package octopusloom
 
 import (
 	"context"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -355,22 +356,45 @@ func (s *PgStore) missingOrStale(ctx context.Context, ref GatewayRef, id string)
 	return ErrNotFound
 }
 
-// WithGatewayLock implements Store. The lock is an advisory lock held by a
-// transaction that stays open while run does, so a crashed process drops it
-// with its connection.
+// syncLease is how long a sync holds its gateway's lease: longer than the
+// longest sync (writeSyncTimeout and reconcileSyncTimeout, 10 seconds) and
+// the save after it (saveTimeout, 5 seconds), so a lease runs out only
+// when its holder died.
+const syncLease = 30 * time.Second
+
+// leaseReleaseTimeout bounds giving the lease back, which is done apart from
+// the sync's own context so a sync that ran out of time still releases.
+const leaseReleaseTimeout = 5 * time.Second
+
+// WithGatewayLock implements Store. The lock is a lease on the gateway's
+// row, taken and given back with one short statement each, so no
+// connection is held while run talks to Octopus. A process that crashes
+// holding it leaves the lease to run out after syncLease.
 func (s *PgStore) WithGatewayLock(ctx context.Context, ref GatewayRef, run func() error) error {
-	tx, err := s.db.BeginTx(ctx, nil)
-	if err != nil {
-		return err
-	}
-	defer rollback(tx)
-	var acquired bool
-	if err = tx.QueryRow(ctx, `SELECT pg_try_advisory_xact_lock(hashtextextended($1, 0))`,
-		"octopus/"+ref.OrgID+"/"+ref.EnvironmentID+"/"+ref.Resource).Scan(&acquired); err != nil {
-		return fmt.Errorf("lock octopus gateway: %w", err)
-	}
-	if !acquired {
+	token := rand.Text()
+	var took string
+	err := s.db.QueryRow(ctx, `UPDATE loomplane_octopus_gateways
+		SET sync_lease_token = $4, sync_lease_until = now() + make_interval(secs => $5)
+		WHERE org_id = $1 AND environment_id = $2 AND resource = $3
+			AND (sync_lease_until IS NULL OR sync_lease_until < now())
+		RETURNING sync_lease_token`,
+		ref.OrgID, ref.EnvironmentID, ref.Resource, token, syncLease.Seconds()).Scan(&took)
+	if errors.Is(err, pgx.ErrNoRows) {
+		if _, getErr := s.Gateway(ctx, ref); getErr != nil {
+			return getErr
+		}
 		return ErrBusy
 	}
+	if err != nil {
+		return fmt.Errorf("lock octopus gateway: %w", err)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), leaseReleaseTimeout)
+		defer cancel()
+		// A lease that isn't given back runs out on its own.
+		_, _ = s.db.Exec(ctx, `UPDATE loomplane_octopus_gateways SET sync_lease_until = NULL
+			WHERE org_id = $1 AND environment_id = $2 AND resource = $3 AND sync_lease_token = $4`,
+			ref.OrgID, ref.EnvironmentID, ref.Resource, token) //nolint:errcheck // the lease expires by itself
+	}()
 	return run()
 }

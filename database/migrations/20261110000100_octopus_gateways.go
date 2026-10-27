@@ -12,6 +12,10 @@ import (
 // pushed to Octopus, and state is what that sync saw. Tokens never live
 // here, only in Vault.
 //
+// A sync holds the gateway through a lease on its row: sync_lease_token
+// names the holder and sync_lease_until is when the lease runs out, NULL
+// when nobody holds it. A holder that crashed leaves the lease to expire.
+//
 // A route belongs to its gateway: deleting the gateway deletes its routes.
 // A gateway serves one route per hostname and path.
 func init() {
@@ -30,7 +34,17 @@ func init() {
 				Column("state", migrate.JSON, migrate.NotNull(), migrate.Default("{}")).
 				Column("revision", migrate.BigInt, migrate.NotNull(), migrate.Default(1)).
 				Column("updated_at", migrate.Timestamp, migrate.NotNull()).
+				Column("sync_lease_token", migrate.Text, migrate.NotNull(), migrate.Default("")).
+				Column("sync_lease_until", migrate.Timestamp).
 				PrimaryKey("org_id", "environment_id", "resource").
+				Exec(ctx)
+			if err != nil {
+				return err
+			}
+			// A table an earlier run of this migration made has no lease yet.
+			err = db.NewAlterTable("loomplane_octopus_gateways").
+				AddColumn("sync_lease_token", migrate.Text, migrate.NotNull(), migrate.Default("")).IfNotExists().
+				AddColumn("sync_lease_until", migrate.Timestamp).IfNotExists().
 				Exec(ctx)
 			if err != nil {
 				return err

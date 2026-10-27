@@ -70,6 +70,6 @@ type Store interface {
 	// DeleteRoute has the same ErrStale and ErrNotFound rules as UpdateRoute.
 	DeleteRoute(ctx context.Context, ref GatewayRef, id string, revision int64) error
 	// WithGatewayLock runs run while holding the gateway's lock. ErrBusy when
-	// another caller holds it.
+	// another caller holds it, ErrNotFound when the gateway doesn't exist.
 	WithGatewayLock(ctx context.Context, ref GatewayRef, run func() error) error
 }

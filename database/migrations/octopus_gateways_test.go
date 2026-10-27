@@ -16,6 +16,16 @@ func TestOctopusGatewaysMigration(t *testing.T) {
 	if got := strs(t, conn, `SELECT generation||'|'||applied_generation||'|'||revision||'|'||cardinality(farp_hostnames)||'|'||state::text||'|'||namespace FROM loomplane_octopus_gateways`); len(got) != 1 || got[0] != "1|0|1|0|{}|" {
 		t.Fatalf("gateway defaults: %v", got)
 	}
+	// Nobody holds a new gateway's sync lease.
+	if got := strs(t, conn, `SELECT '['||sync_lease_token||']'||coalesce(sync_lease_until::text,'null') FROM loomplane_octopus_gateways`); len(got) != 1 || got[0] != "[]null" {
+		t.Fatalf("lease defaults: %v", got)
+	}
+	// A table made before the lease columns gets them on a rerun.
+	exec(t, conn, `ALTER TABLE loomplane_octopus_gateways DROP COLUMN sync_lease_token, DROP COLUMN sync_lease_until`)
+	up(t, db, "octopus_gateways", "octopus_gateways")
+	if got := strs(t, conn, `SELECT '['||sync_lease_token||']'||coalesce(sync_lease_until::text,'null') FROM loomplane_octopus_gateways`); len(got) != 1 || got[0] != "[]null" {
+		t.Fatalf("lease after a rerun: %v", got)
+	}
 	insert := func(id, host, path string, port string) string {
 		return `INSERT INTO loomplane_octopus_routes(id,org_id,project_id,environment_id,resource,hostname,path,service,port,created_by,created_at,updated_at) VALUES('` +
 			id + `','o','p','e','octopus','` + host + `','` + path + `','svc',` + port + `,'u',now(),now())`

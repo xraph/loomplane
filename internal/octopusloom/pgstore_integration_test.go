@@ -225,11 +225,19 @@ func TestPgStoreRouteLifecycle(t *testing.T) {
 
 func TestPgStoreGatewayLockIsExclusive(t *testing.T) {
 	store, db := scratchStore(t)
+	ctx := t.Context()
 	ref := testRef()
+	elsewhere := ref
+	elsewhere.EnvironmentID = "env-2"
+	for _, r := range []GatewayRef{ref, elsewhere} {
+		if err := store.EnsureGateway(ctx, &Gateway{GatewayRef: r, Provider: ProviderServer}); err != nil {
+			t.Fatal(err)
+		}
+	}
 	other := NewPgStore(db)
 	ran := false
-	err := store.WithGatewayLock(t.Context(), ref, func() error {
-		inner := other.WithGatewayLock(t.Context(), ref, func() error {
+	err := store.WithGatewayLock(ctx, ref, func() error {
+		inner := other.WithGatewayLock(ctx, ref, func() error {
 			ran = true
 			return nil
 		})
@@ -237,9 +245,7 @@ func TestPgStoreGatewayLockIsExclusive(t *testing.T) {
 			t.Errorf("second lock: %v", inner)
 		}
 		// Another gateway is free.
-		elsewhere := ref
-		elsewhere.EnvironmentID = "env-2"
-		if err := other.WithGatewayLock(t.Context(), elsewhere, func() error { return nil }); err != nil {
+		if err := other.WithGatewayLock(ctx, elsewhere, func() error { return nil }); err != nil {
 			t.Errorf("other gateway: %v", err)
 		}
 		return nil
@@ -249,7 +255,65 @@ func TestPgStoreGatewayLockIsExclusive(t *testing.T) {
 	}
 	// Released once run returns, and run's error comes back as it is.
 	boom := errors.New("boom")
-	if err = store.WithGatewayLock(t.Context(), ref, func() error { return boom }); !errors.Is(err, boom) {
+	if err = store.WithGatewayLock(ctx, ref, func() error { return boom }); !errors.Is(err, boom) {
 		t.Fatalf("lock after release: %v", err)
+	}
+	// A gateway that doesn't exist has no lease to take.
+	missing := ref
+	missing.Resource = "missing"
+	if err = store.WithGatewayLock(ctx, missing, func() error { return nil }); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("lock on a missing gateway: %v", err)
+	}
+}
+
+func TestPgStoreGatewayLockIsALeaseThatExpires(t *testing.T) {
+	store, db := scratchStore(t)
+	ctx := t.Context()
+	ref := testRef()
+	if err := store.EnsureGateway(ctx, &Gateway{GatewayRef: ref, Provider: ProviderServer}); err != nil {
+		t.Fatal(err)
+	}
+	lease := func() (token string, held bool) {
+		t.Helper()
+		if err := db.QueryRow(ctx, `SELECT sync_lease_token, sync_lease_until IS NOT NULL AND sync_lease_until > now()
+			FROM loomplane_octopus_gateways WHERE org_id = $1 AND environment_id = $2 AND resource = $3`,
+			ref.OrgID, ref.EnvironmentID, ref.Resource).Scan(&token, &held); err != nil {
+			t.Fatal(err)
+		}
+		return token, held
+	}
+	other := NewPgStore(db)
+	var first string
+	err := store.WithGatewayLock(ctx, ref, func() error {
+		var held bool
+		if first, held = lease(); first == "" || !held {
+			t.Errorf("no lease while run runs: %q %v", first, held)
+		}
+		// A holder that crashed leaves its lease to run out. Once it has,
+		// the next sync takes it.
+		if _, err := db.Exec(ctx, `UPDATE loomplane_octopus_gateways SET sync_lease_until = now() - interval '1 second'
+			WHERE org_id = $1 AND environment_id = $2 AND resource = $3`, ref.OrgID, ref.EnvironmentID, ref.Resource); err != nil {
+			t.Fatal(err)
+		}
+		took := false
+		if err := other.WithGatewayLock(ctx, ref, func() error {
+			took = true
+			if token, _ := lease(); token == first {
+				t.Errorf("the second holder kept the first one's token")
+			}
+			return nil
+		}); err != nil || !took {
+			t.Errorf("expired lease: %v (took %v)", err, took)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, held := lease(); held {
+		t.Fatal("the lease outlived its holders")
+	}
+	if err = other.WithGatewayLock(ctx, ref, func() error { return nil }); err != nil {
+		t.Fatalf("lock after both released: %v", err)
 	}
 }
