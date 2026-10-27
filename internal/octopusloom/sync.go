@@ -300,6 +300,11 @@ func (s *Syncer) pending(ctx context.Context, g *Gateway, run *syncRun, msg stri
 	}
 	err := fmt.Errorf("sync Octopus gateway %s: %w", g.Resource, cause)
 	if saveErr := s.save(ctx, g.GatewayRef, g.AppliedGeneration, state); saveErr != nil {
+		if errors.Is(cause, errNotDeployed) {
+			// A gateway that never deployed is waited for quietly, but not
+			// when recording it failed: that error must not read as the wait.
+			err = fmt.Errorf("sync Octopus gateway %s: %w: %s", g.Resource, ErrUnavailable, errNotDeployed.Error())
+		}
 		err = errors.Join(err, saveErr)
 	}
 	return res, err

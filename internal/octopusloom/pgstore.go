@@ -366,10 +366,12 @@ func (s *PgStore) missingOrStale(ctx context.Context, ref GatewayRef, id string)
 	return ErrNotFound
 }
 
-// syncLease is how long a sync holds its gateway's lease: longer than the
-// longest sync (writeSyncTimeout and reconcileSyncTimeout, 10 seconds) and
-// the save after it (saveTimeout, 5 seconds), so a lease runs out only
-// when its holder died.
+// syncLease is how long a sync holds its gateway's lease. Every caller
+// bounds its sync to 10 seconds (writeSyncTimeout, reconcileSyncTimeout,
+// readySyncTimeout and releaseTimeout) and the save after it to 5 seconds
+// (saveTimeout), so 30 seconds outlives any sync and a lease runs out only
+// when its holder died. A caller that runs a sync without such a bound
+// breaks this.
 const syncLease = 30 * time.Second
 
 // leaseReleaseTimeout bounds giving the lease back, which is done apart from

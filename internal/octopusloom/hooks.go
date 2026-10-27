@@ -20,6 +20,10 @@ const adminPort = "admin"
 // releaseTimeout bounds what one release's syncs take, together.
 const releaseTimeout = 10 * time.Second
 
+// readySyncTimeout bounds the sync Ready runs on the deploy job's context,
+// which has no deadline of its own. It matches a write's.
+const readySyncTimeout = writeSyncTimeout
+
 // Revoker ends the admin proxy sessions open on a composed resource.
 // *catalogproxy.Service is the real one.
 type Revoker interface {
@@ -150,6 +154,10 @@ func (h *Hooks) Ready(ctx context.Context, run deployments.ComponentRun) error {
 		}
 		return v, nil
 	}
+	// The deploy job's context has no deadline, and a gateway lease only
+	// outlives a sync bounded like the others (see syncLease).
+	ctx, cancel := context.WithTimeout(ctx, readySyncTimeout)
+	defer cancel()
 	res, err := h.d.Syncer.SyncWith(ctx, runRef(run), open, secret)
 	if err == nil {
 		return nil

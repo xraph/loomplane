@@ -436,6 +436,31 @@ func TestReadySyncsOverTheRunChannel(t *testing.T) {
 	}
 }
 
+func TestReadyBoundsItsSyncInsideTheLease(t *testing.T) {
+	f := newHookFixture(t)
+	run := f.run("edge")
+	var deadline time.Time
+	var hasDeadline bool
+	run.Channel = func(ctx context.Context, _, _ string) (*deployments.ComponentChannel, error) {
+		deadline, hasDeadline = ctx.Deadline()
+		return nil, errors.New("connection refused")
+	}
+	// The deploy job's context has no deadline.
+	if err := f.hooks.Ready(context.Background(), run); err != nil {
+		t.Fatalf("Ready with Octopus down: %v", err)
+	}
+	end := time.Now()
+	if !hasDeadline {
+		t.Fatal("Ready's sync context has no deadline")
+	}
+	if latest := end.Add(writeSyncTimeout); deadline.After(latest) {
+		t.Fatalf("Ready's sync deadline %v is later than %v", deadline, latest)
+	}
+	if writeSyncTimeout+saveTimeout >= syncLease {
+		t.Fatalf("a bounded sync and its save (%v) don't fit the %v lease", writeSyncTimeout+saveTimeout, syncLease)
+	}
+}
+
 func TestReadyIsNotAnErrorWhileTheGatewayIsPending(t *testing.T) {
 	f := newHookFixture(t)
 	f.bindings = f.bindings[2:] // a first deploy: no gateway binding yet

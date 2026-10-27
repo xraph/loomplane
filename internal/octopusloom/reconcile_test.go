@@ -75,6 +75,36 @@ func TestReconcileJobDoesntWarnAboutAGatewayThatNeverDeployed(t *testing.T) {
 	}
 }
 
+func TestReconcileJobWarnsWhenAGatewayThatNeverDeployedCantBeRecorded(t *testing.T) {
+	f := reconcileFixture(t)
+	f.bindings = slices.DeleteFunc(f.bindings, func(b *planning.Binding) bool { return b.Name == "side--gateway" })
+	// Every save fails, so each gateway warns; side's is the one that
+	// mustn't be taken for the quiet wait.
+	f.store.saveErr = errors.New("db down")
+	if err := ReconcileJob(f.syncer).Handler(context.Background(), ReconcilePayload{}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	warned := false
+	for _, w := range f.warns {
+		if strings.Contains(w, "side") && strings.Contains(w, "db down") {
+			warned = true
+		}
+	}
+	if !warned {
+		t.Fatalf("warnings %q, want one for side's failed save", f.warns)
+	}
+}
+
+func TestPendingNotDeployedWithAFailedSaveIsLoomplaneSide(t *testing.T) {
+	f := newHookFixture(t)
+	f.bindings = f.bindings[2:]
+	f.store.saveErr = errors.New("db down")
+	_, err := f.syncer.Sync(context.Background(), hookRef("edge"))
+	if err == nil || !errors.Is(err, errLoomplaneSide) || !errors.Is(err, ErrUnavailable) || errors.Is(err, errNotDeployed) {
+		t.Fatalf("Sync = %v, want Loomplane-side and unavailable, not not-deployed", err)
+	}
+}
+
 func TestReconcileJobFailsOnlyWhenItCantListGateways(t *testing.T) {
 	s := &Syncer{Store: failingGateways{newHookStore(new([]string))}}
 	if err := ReconcileJob(s).Handler(context.Background(), ReconcilePayload{}); err == nil {
