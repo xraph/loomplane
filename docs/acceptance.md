@@ -43,6 +43,7 @@ This one runs against a disposable Docker server and a disposable kind cluster t
 ```bash
 export LOOMPLANE_ACCEPTANCE_SERVER=$HOME/acceptance/server.json
 export LOOMPLANE_ACCEPTANCE_KUBECONFIG=$HOME/acceptance/kind.kubeconfig
+export LOOMPLANE_ACCEPTANCE_KUBE_ARCHITECTURE=arm64
 export LOOMPLANE_ACCEPTANCE_FARP_IMAGE=registry.example.test/farp-sample@sha256:...
 LOOMPLANE_TEST_DATABASE_URL='postgres://loomplane:loomplane@localhost:55532/loomplane?sslmode=disable' \
   go test -tags='integration acceptance' -count=1 -timeout=90m -v \
@@ -55,6 +56,7 @@ Each target skips on its own and names what it still needs, so you can run just 
 |---|---|
 | `LOOMPLANE_ACCEPTANCE_SERVER` | A JSON file for the Docker server, as the server connection takes it: `{"credential": ..., "settings": {"host", "user", "port", "host_key", "docker_socket"}}`. The credential is the SSH private key, or the `{private_key, passphrase}` JSON. |
 | `LOOMPLANE_ACCEPTANCE_KUBECONFIG` | A kubeconfig for the kind cluster, with embedded credentials that can create `serviceaccounts`, `roles` and `rolebindings` and use `services/proxy` in the namespace. `_KUBE_CONTEXT` and `_KUBE_NAMESPACE` pick them, or the kubeconfig's own are used. |
+| `LOOMPLANE_ACCEPTANCE_KUBE_ARCHITECTURE` | `amd64` or `arm64`, whichever your kind nodes run. Octopus is pinned to one on a cluster and the plan refuses a connection that names neither. There's no default, so without it the cluster target skips and names this variable. |
 | `LOOMPLANE_ACCEPTANCE_FARP_IMAGE` | The FARP sample service, pinned by digest. Both targets need it. It serves an OpenAPI 3 document at `/openapi.json` listing at least one GET path without parameters, answers that path with a 2xx, and isn't Caddy, which the run tells apart from the manual route's target. |
 | `LOOMPLANE_ACCEPTANCE_FARP_PORT` | The port the sample service listens on. 8080 by default. |
 | `LOOMPLANE_ACCEPTANCE_ZONE` | A Cloudflare zone. Optional. The cluster then gets a hostname in it with a Let's Encrypt staging certificate, and the run checks HTTPS reaches Octopus and `/admin` there is blocked. That also needs `LOOMPLANE_CF_SANDBOX_TOKEN`, `LOOMPLANE_CF_ACCOUNT_ID` and `LOOMPLANE_ACCEPTANCE_INGRESS_ADDRESS`, as [the domains run](domains.md#the-acceptance-run) does, plus cert-manager and an ingress controller in the cluster. |
