@@ -168,16 +168,17 @@ function CheckAgain({ zone }: { zone: Zone }) {
   const invalidate = useInvalidate()
   const now = useClock()
   const [note, setNote] = useState("")
+  // A 409 is the record not found yet. Not in the mock: a managed zone
+  // whose publish failed shows why above, so the note says only when.
+  const [unproven, setUnproven] = useState(false)
   const check = async () => {
     setNote("")
+    setUnproven(false)
     try {
       await verify.mutateAsync({ path: { zoneId: zone.id } })
     } catch (err) {
-      setNote(
-        statusOf(err) === 409
-          ? "Checked just now. The record isn't visible yet."
-          : messageOf(err, "The record couldn't be checked.")
-      )
+      if (statusOf(err) === 409) setUnproven(true)
+      else setNote(messageOf(err, "The record couldn't be checked."))
     }
     // Every check saves on the zone, so later writes need its new revision.
     invalidate(useDomainsOverview)
@@ -193,7 +194,11 @@ function CheckAgain({ zone }: { zone: Zone }) {
         Check again
       </Button>
       <span className="text-[12.5px] text-muted-foreground" aria-live="polite">
-        {note ||
+        {(unproven &&
+          (zone.proofPublishError
+            ? "Checked just now."
+            : "Checked just now. The record isn't visible yet.")) ||
+          note ||
           (isSet(zone.proofCheckedAt)
             ? `Last checked ${relativeTime(zone.proofCheckedAt, now)}.`
             : "")}

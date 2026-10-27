@@ -616,6 +616,9 @@ it("shows why a managed zone's record didn't publish and checks again", async ()
   await userEvent.click(
     within(card).getByRole("button", { name: "Check again" })
   )
+  // The reason is above, so the note doesn't guess at visibility.
+  expect(await within(card).findByText("Checked just now.")).toBeTruthy()
+  expect(within(card).queryByText(/The record isn't visible yet/)).toBeNull()
   await waitFor(() =>
     expect(writes).toEqual([
       {
