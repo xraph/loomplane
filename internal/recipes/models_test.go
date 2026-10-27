@@ -136,7 +136,7 @@ func TestModelKindShape(t *testing.T) {
 	const repo = `[A-Za-z0-9][A-Za-z0-9._-]{0,95}/[A-Za-z0-9][A-Za-z0-9._-]{0,95}`
 	settings := func(gguf bool) []recipes.Setting {
 		out := []recipes.Setting{
-			{Name: "entry", Pattern: `^(hf:)?` + repo + `$`, Required: true},
+			{Name: "entry", Pattern: `^(` + repo + `|hf:` + repo + `@[0-9a-f]{12})$`, Required: true},
 			{Name: "model", Pattern: `^` + repo + `$`, Required: true},
 			{Name: "revision", Pattern: `^[0-9a-f]{40}$`, Required: true},
 			{Name: "quantization", Pattern: `^[a-z0-9_-]{1,32}$`, Required: true},
@@ -406,5 +406,52 @@ func TestModelReleasesFollowEngines(t *testing.T) {
 	}
 	if got := slices.Sorted(maps.Keys(releases)); !slices.Equal(got, []string{"llamacpp", "tei", "vllm"}) {
 		t.Errorf("engines releases %v", got)
+	}
+}
+
+// TestModelEntrySettingTakesEveryEntryID: the entry setting takes every
+// registry ID and a custom entry's ID exactly as engines.CustomEntryID
+// writes it, and nothing in between.
+func TestModelEntrySettingTakesEveryEntryID(t *testing.T) {
+	const revision = "4f6a1c2b9d8e7f60a1b2c3d4e5f60718293a4b5c"
+	entries := registry.Default().Entries()
+	good := make([]string, 0, len(entries)+2)
+	good = append(good, engines.CustomEntryID("acme/chat-7b", revision), engines.CustomEntryID("Qwen/Qwen2.5-7B-Instruct", revision))
+	for _, e := range entries {
+		good = append(good, e.ID)
+	}
+	bad := []string{
+		"",
+		"hf:acme/chat-7b",                   // no revision
+		"hf:acme/chat-7b@4f6a1c2b9d8",       // 11 hex
+		"hf:acme/chat-7b@4f6a1c2b9d8e7",     // 13 hex
+		"hf:acme/chat-7b@" + revision,       // the whole SHA
+		"hf:acme/chat-7b@4F6A1C2B9D8E",      // upper case
+		"acme/chat-7b@4f6a1c2b9d8e",         // a revision without hf:
+		"hf:acme@4f6a1c2b9d8e",              // no repo name
+		"hf:hf:acme/chat-7b@4f6a1c2b9d8e",   // prefix twice
+		"hf:acme/chat-7b@4f6a1c2b9d8e\nx/y", // a second line
+	}
+	for _, name := range recipes.ModelKinds() {
+		kind, ok := recipes.Default().Kind(name)
+		if !ok {
+			t.Fatalf("no kind %s", name)
+		}
+		var entry recipes.Setting
+		for _, s := range kind.Settings {
+			if s.Name == "entry" {
+				entry = s
+			}
+		}
+		for _, id := range good {
+			if !entry.Matches(id) {
+				t.Errorf("%s entry setting refuses %q", name, id)
+			}
+		}
+		for _, id := range bad {
+			if entry.Matches(id) {
+				t.Errorf("%s entry setting takes %q", name, id)
+			}
+		}
 	}
 }

@@ -108,17 +108,19 @@ func modelImages() map[string]Image {
 }
 
 // Patterns of the model settings. A Hugging Face repository is an owner
-// and a name; the entry may say it's on Hugging Face with "hf:".
+// and a name. A registry entry's ID is its repository; an entry built from
+// a pasted repository is "hf:<repo>@<first 12 hex of its revision>".
 const (
-	modelRepoPattern = `[A-Za-z0-9][A-Za-z0-9._-]{0,95}/[A-Za-z0-9][A-Za-z0-9._-]{0,95}`
-	modelCacheMB     = 20480
+	modelRepoPattern  = `[A-Za-z0-9][A-Za-z0-9._-]{0,95}/[A-Za-z0-9][A-Za-z0-9._-]{0,95}`
+	modelEntryPattern = `^(` + modelRepoPattern + `|hf:` + modelRepoPattern + `@[0-9a-f]{12})$`
+	modelCacheMB      = 20480
 )
 
 // modelSettings are what a model resource sets. The llama.cpp kinds also
 // name the GGUF file they load.
 func modelSettings(gguf bool) []Setting {
 	settings := []Setting{
-		{Name: "entry", Title: "registry entry", Pattern: `^(hf:)?` + modelRepoPattern + `$`, Required: true},
+		{Name: "entry", Title: "registry entry", Pattern: modelEntryPattern, Required: true},
 		{Name: "model", Title: "Hugging Face repository", Pattern: `^` + modelRepoPattern + `$`, Required: true},
 		{Name: "revision", Title: "revision", Pattern: `^[0-9a-f]{40}$`, Required: true},
 		{Name: "quantization", Title: "quantization", Pattern: `^[a-z0-9_-]{1,32}$`, Required: true},
