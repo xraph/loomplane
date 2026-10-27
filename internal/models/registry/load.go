@@ -18,10 +18,10 @@ import (
 // reads it with its own decoder once every family is in.
 const qualificationFile = "qualification.yaml"
 
-// The "all:" prefix keeps data/.keep, so the embed compiles while data/ has
-// no family files yet.
+// dataFS holds the pinned family files and qualification.yaml. Entries
+// waiting for their first pin live in unpinned/, outside the binary.
 //
-//go:embed all:data
+//go:embed data/*.yaml
 var dataFS embed.FS
 
 var defaultRegistry = mustLoadDefault()

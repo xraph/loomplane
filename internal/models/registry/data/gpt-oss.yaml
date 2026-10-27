@@ -1,0 +1,75 @@
+# Written by hand: id, title, publisher, summary, license, tasks,
+# active_parameters, the embedding block, tool_parser, reasoning_parser,
+# trust_remote_code, core, and each quantization's id, engine, repo, file
+# and args.
+# Filled by go run ./internal/models/registry/cmd/registry-pin -write:
+# revision, gated, parameters, context_length, architecture, and each
+# quantization's revision, weight_bytes, min_gpu_memory_gib and
+# min_memory_gib.
+family: gpt-oss
+entries:
+  - id: openai/gpt-oss-20b
+    title: gpt-oss-20b
+    publisher: OpenAI
+    summary: OpenAI's smaller open weight reasoning model, which fits one 24 GB GPU.
+    revision: 6cee5e81ee83917806bbde320786a8fb61efebee
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - reasoning
+      - chat
+    parameters: 20914757184
+    active_parameters: 3600000000
+    context_length: 131072
+    architecture:
+      name: GptOssForCausalLM
+      layers: 24
+      attention_heads: 64
+      kv_heads: 8
+      head_dim: 64
+    tool_parser: openai
+    reasoning_parser: openai_gptoss
+    core: true
+    quantizations:
+      - id: mxfp4
+        engine: vllm
+        weight_bytes: 13761316904
+        min_gpu_memory_gib: 18
+      - id: gguf-mxfp4
+        engine: llamacpp
+        repo: ggml-org/gpt-oss-20b-GGUF
+        revision: 15dcfc7e7c608c6161507211ed43c5b590801b4b
+        file: gpt-oss-20b-MXFP4.gguf
+        weight_bytes: 12109566624
+        min_memory_gib: 14
+  - id: openai/gpt-oss-120b
+    title: gpt-oss-120b
+    publisher: OpenAI
+    summary: OpenAI's larger open weight reasoning model, which fits one 80 GB GPU.
+    revision: b5c939de8f754692c1647ca79fbf85e8c1e70f8a
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - reasoning
+      - chat
+    parameters: 116829156672
+    active_parameters: 5100000000
+    context_length: 131072
+    architecture:
+      name: GptOssForCausalLM
+      layers: 36
+      attention_heads: 64
+      kv_heads: 8
+      head_dim: 64
+    tool_parser: openai
+    reasoning_parser: openai_gptoss
+    core: true
+    quantizations:
+      - id: mxfp4
+        engine: vllm
+        weight_bytes: 65248893184
+        min_gpu_memory_gib: 75

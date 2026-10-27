@@ -1,0 +1,345 @@
+# Written by hand: id, title, publisher, summary, license, tasks,
+# active_parameters, the embedding block, tool_parser, reasoning_parser,
+# trust_remote_code, core, and each quantization's id, engine, repo, file
+# and args.
+# Filled by go run ./internal/models/registry/cmd/registry-pin -write:
+# revision, gated, parameters, context_length, architecture, and each
+# quantization's revision, weight_bytes, min_gpu_memory_gib and
+# min_memory_gib.
+family: granite
+entries:
+  - id: ibm-granite/granite-3.3-2b-instruct
+    title: Granite 3.3 2B Instruct
+    publisher: IBM
+    summary: A small enterprise chat model with an optional thinking mode.
+    revision: 707f574c62054322f6b5b04b6d075f0a8f05e0f0
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - chat
+    parameters: 2533539840
+    context_length: 131072
+    architecture:
+      name: GraniteForCausalLM
+      layers: 40
+      attention_heads: 32
+      kv_heads: 8
+      head_dim: 64
+    tool_parser: granite
+    reasoning_parser: granite
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 5067121552
+        min_gpu_memory_gib: 8
+  - id: ibm-granite/granite-3.3-8b-instruct
+    title: Granite 3.3 8B Instruct
+    publisher: IBM
+    summary: An 8B enterprise chat model with tool calling and an optional thinking mode.
+    revision: 51dd4bc2ade4059a6bd87649d68aa11e4fb2529b
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - chat
+    parameters: 8170864640
+    context_length: 131072
+    architecture:
+      name: GraniteForCausalLM
+      layers: 40
+      attention_heads: 32
+      kv_heads: 8
+      head_dim: 128
+    tool_parser: granite
+    reasoning_parser: granite
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 16341771384
+        min_gpu_memory_gib: 21
+      - id: gguf-q4_k_m
+        engine: llamacpp
+        repo: ibm-granite/granite-3.3-8b-instruct-GGUF
+        revision: e40e9dd739c7be00fa965c16ce167088190ce114
+        file: granite-3.3-8b-instruct-Q4_K_M.gguf
+        weight_bytes: 4942873344
+        min_memory_gib: 7
+      - id: gguf-q8_0
+        engine: llamacpp
+        repo: ibm-granite/granite-3.3-8b-instruct-GGUF
+        revision: e40e9dd739c7be00fa965c16ce167088190ce114
+        file: granite-3.3-8b-instruct-Q8_0.gguf
+        weight_bytes: 8684264992
+        min_memory_gib: 11
+  - id: ibm-granite/granite-3.1-3b-a800m-instruct
+    title: Granite 3.1 3B A800M Instruct
+    publisher: IBM
+    summary: A mixture of experts chat model with 800M parameters active per token, for low latency.
+    revision: a02780686e08a03fe0d2679a293b5c74a90efa89
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - chat
+    parameters: 3298793472
+    active_parameters: 800000000
+    context_length: 131072
+    architecture:
+      name: GraniteMoeForCausalLM
+      layers: 32
+      attention_heads: 24
+      kv_heads: 8
+      head_dim: 64
+    tool_parser: granite
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 6597622168
+        min_gpu_memory_gib: 10
+  - id: ibm-granite/granite-vision-3.2-2b
+    title: Granite Vision 3.2 2B
+    publisher: IBM
+    summary: A small vision model that reads documents, tables and charts.
+    revision: ec894191f2e9e9be3d90eab9ac6949583c46f03b
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - vision
+    parameters: 2975396928
+    context_length: 131072
+    architecture:
+      name: LlavaNextForConditionalGeneration
+      layers: 40
+      attention_heads: 32
+      kv_heads: 8
+      head_dim: 64
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 5950902496
+        min_gpu_memory_gib: 10
+  - id: ibm-granite/granite-4.0-micro
+    title: Granite 4.0 Micro
+    publisher: IBM
+    summary: A 3B transformer chat model with tool calling.
+    revision: 56111ae135df9c53a78c99028e7bc24035a9e979
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - chat
+    parameters: 3402836480
+    context_length: 131072
+    architecture:
+      name: GraniteMoeHybridForCausalLM
+      layers: 40
+      attention_heads: 40
+      kv_heads: 8
+      head_dim: 64
+    tool_parser: hermes
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 6805711176
+        min_gpu_memory_gib: 10
+  - id: ibm-granite/granite-4.0-h-micro
+    title: Granite 4.0 H Micro
+    publisher: IBM
+    summary: A 3B hybrid Mamba chat model that needs little memory for long contexts.
+    revision: d5f01a3ea75f088947be3aae039f4ad52837dfde
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - chat
+    parameters: 3191396096
+    context_length: 131072
+    architecture:
+      name: GraniteMoeHybridForCausalLM
+      layers: 40
+      attention_layers: 4
+      attention_heads: 32
+      kv_heads: 8
+      head_dim: 64
+    tool_parser: hermes
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 6382844048
+        min_gpu_memory_gib: 9
+  - id: ibm-granite/granite-4.0-h-tiny
+    title: Granite 4.0 H Tiny
+    publisher: IBM
+    summary: A hybrid Mamba mixture of experts chat model with 1B parameters active per token.
+    revision: 791e0d3d28c86e106c9b6e0b4cecdee0375b6124
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - chat
+    parameters: 6939037248
+    active_parameters: 1000000000
+    context_length: 131072
+    architecture:
+      name: GraniteMoeHybridForCausalLM
+      layers: 40
+      attention_layers: 4
+      attention_heads: 12
+      kv_heads: 4
+      head_dim: 128
+    tool_parser: hermes
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 13878142256
+        min_gpu_memory_gib: 18
+  - id: ibm-granite/granite-4.0-h-small
+    title: Granite 4.0 H Small
+    publisher: IBM
+    summary: IBM's largest Granite 4.0 model, a hybrid Mamba mixture of experts with 9B parameters active.
+    revision: b8c0982bab7fde4eb48110f5a069527c008fab39
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - chat
+    parameters: 32207337984
+    active_parameters: 9000000000
+    context_length: 131072
+    architecture:
+      name: GraniteMoeHybridForCausalLM
+      layers: 40
+      attention_layers: 4
+      attention_heads: 32
+      kv_heads: 8
+      head_dim: 128
+    tool_parser: hermes
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 64414744168
+        min_gpu_memory_gib: 74
+      - id: fp8
+        engine: vllm
+        repo: ibm-granite/granite-4.0-h-small-FP8
+        revision: 9e3273d970f0dfb1425b755c12378d937762a3c2
+        weight_bytes: 33489116704
+        min_gpu_memory_gib: 40
+  - id: ibm-granite/granite-embedding-30m-english
+    title: Granite Embedding 30M English
+    publisher: IBM
+    summary: A tiny English embedding model for retrieval on a CPU.
+    revision: 9b5b096411652ec1189c68fcfb90d0a82c5b45af
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - embedding
+    parameters: 30295296
+    context_length: 514
+    architecture:
+      name: RobertaModel
+      layers: 6
+      attention_heads: 12
+      kv_heads: 12
+      head_dim: 32
+    embedding:
+      dimensions: 384
+      max_input_tokens: 512
+    quantizations:
+      - id: native
+        engine: tei
+        weight_bytes: 60602024
+        min_memory_gib: 1
+  - id: ibm-granite/granite-embedding-125m-english
+    title: Granite Embedding 125M English
+    publisher: IBM
+    summary: An English embedding model for retrieval.
+    revision: 4ab61ffd423be45cd932b21a7c696063d82bf45f
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - embedding
+    parameters: 124645632
+    context_length: 514
+    architecture:
+      name: RobertaModel
+      layers: 12
+      attention_heads: 12
+      kv_heads: 12
+      head_dim: 64
+    embedding:
+      dimensions: 768
+      max_input_tokens: 512
+    quantizations:
+      - id: native
+        engine: tei
+        weight_bytes: 249313784
+        min_memory_gib: 1
+  - id: ibm-granite/granite-embedding-107m-multilingual
+    title: Granite Embedding 107M Multilingual
+    publisher: IBM
+    summary: A small embedding model for retrieval in 12 languages.
+    revision: d6cffd338414d6a1c1f5decfad5fec62eebc90d5
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - embedding
+    parameters: 106994304
+    context_length: 514
+    architecture:
+      name: XLMRobertaModel
+      layers: 6
+      attention_heads: 12
+      kv_heads: 12
+      head_dim: 32
+    embedding:
+      dimensions: 384
+      max_input_tokens: 512
+    quantizations:
+      - id: native
+        engine: tei
+        weight_bytes: 214000232
+        min_memory_gib: 1
+  - id: ibm-granite/granite-embedding-278m-multilingual
+    title: Granite Embedding 278M Multilingual
+    publisher: IBM
+    summary: A multilingual embedding model for retrieval in 12 languages.
+    revision: a9cb5338491faf32b73dd17b714a31821c021bbf
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - embedding
+    parameters: 278043648
+    context_length: 514
+    architecture:
+      name: XLMRobertaModel
+      layers: 12
+      attention_heads: 12
+      kv_heads: 12
+      head_dim: 64
+    embedding:
+      dimensions: 768
+      max_input_tokens: 512
+    quantizations:
+      - id: native
+        engine: tei
+        weight_bytes: 556109872
+        min_memory_gib: 2

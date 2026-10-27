@@ -1,0 +1,248 @@
+# Written by hand: id, title, publisher, summary, license, tasks,
+# active_parameters, the embedding block, tool_parser, reasoning_parser,
+# trust_remote_code, core, and each quantization's id, engine, repo, file
+# and args.
+# Filled by go run ./internal/models/registry/cmd/registry-pin -write:
+# revision, gated, parameters, context_length, architecture, and each
+# quantization's revision, weight_bytes, min_gpu_memory_gib and
+# min_memory_gib.
+family: phi
+entries:
+  - id: microsoft/Phi-3.5-mini-instruct
+    title: Phi-3.5 mini instruct
+    publisher: Microsoft
+    summary: A 3.8B chat model with a 128K context that's strong for its size.
+    revision: 2fe192450127e6a83f7441aef6e3ca586c338b77
+    license:
+      id: mit
+      commercial: true
+    gated: false
+    tasks:
+      - chat
+    parameters: 3821079552
+    context_length: 131072
+    architecture:
+      name: Phi3ForCausalLM
+      layers: 32
+      attention_heads: 32
+      kv_heads: 32
+      head_dim: 96
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 7642181880
+        min_gpu_memory_gib: 12
+  - id: microsoft/Phi-3-medium-128k-instruct
+    title: Phi-3 medium 128k instruct
+    publisher: Microsoft
+    summary: A 14B chat model with a 128K context.
+    revision: a088b37c71d441ab6d862bb3fcfe6165b3014702
+    license:
+      id: mit
+      commercial: true
+    gated: false
+    tasks:
+      - chat
+    parameters: 13960238080
+    context_length: 131072
+    architecture:
+      name: Phi3ForCausalLM
+      layers: 40
+      attention_heads: 40
+      kv_heads: 10
+      head_dim: 128
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 27920504728
+        min_gpu_memory_gib: 34
+  - id: microsoft/Phi-3.5-MoE-instruct
+    title: Phi-3.5 MoE instruct
+    publisher: Microsoft
+    summary: A mixture of experts chat model with 6.6B parameters active per token.
+    revision: 43688451b462a3351d8580625ebe1931adb3986d
+    license:
+      id: mit
+      commercial: true
+    gated: false
+    tasks:
+      - chat
+    parameters: 41873153344
+    active_parameters: 6600000000
+    context_length: 131072
+    architecture:
+      name: PhiMoEForCausalLM
+      layers: 32
+      attention_heads: 32
+      kv_heads: 8
+      head_dim: 128
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 83746556168
+        min_gpu_memory_gib: 96
+  - id: microsoft/Phi-3.5-vision-instruct
+    title: Phi-3.5 vision instruct
+    publisher: Microsoft
+    summary: A 4.2B model that reads images, charts and documents, and runs code from its repo.
+    revision: 12b77fb40b63a2c73c68243d3f767aab688a1b2a
+    license:
+      id: mit
+      commercial: true
+    gated: false
+    tasks:
+      - vision
+    parameters: 4146621440
+    context_length: 131072
+    architecture:
+      name: Phi3VForCausalLM
+      layers: 32
+      attention_heads: 32
+      kv_heads: 32
+      head_dim: 96
+    trust_remote_code: true
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 8293330888
+        min_gpu_memory_gib: 14
+  - id: microsoft/phi-4
+    title: Phi-4
+    publisher: Microsoft
+    summary: A 14B model trained on high quality synthetic data, good at math and code.
+    revision: 2db69c1c3e91a05d2c64a3185acfbaf36f744e25
+    license:
+      id: mit
+      commercial: true
+    gated: false
+    tasks:
+      - chat
+      - code
+    parameters: 14659507200
+    context_length: 16384
+    architecture:
+      name: Phi3ForCausalLM
+      layers: 40
+      attention_heads: 40
+      kv_heads: 10
+      head_dim: 128
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 29319042992
+        min_gpu_memory_gib: 36
+      - id: gguf-q4_k_m
+        engine: llamacpp
+        repo: unsloth/phi-4-GGUF
+        revision: 5110b7771e8166d5530e73346a15aea096a8cb99
+        file: phi-4-Q4_K_M.gguf
+        weight_bytes: 8890306112
+        min_memory_gib: 12
+      - id: gguf-q8_0
+        engine: llamacpp
+        repo: unsloth/phi-4-GGUF
+        revision: 5110b7771e8166d5530e73346a15aea096a8cb99
+        file: phi-4-Q8_0.gguf
+        weight_bytes: 15580507712
+        min_memory_gib: 19
+  - id: microsoft/Phi-4-mini-instruct
+    title: Phi-4 mini instruct
+    publisher: Microsoft
+    summary: A 3.8B chat model with function calling and a 128K context.
+    revision: cfbefacb99257ffa30c83adab238a50856ac3083
+    license:
+      id: mit
+      commercial: true
+    gated: false
+    tasks:
+      - chat
+    parameters: 3836021760
+    context_length: 131072
+    architecture:
+      name: Phi3ForCausalLM
+      layers: 32
+      attention_heads: 24
+      kv_heads: 8
+      head_dim: 128
+    tool_parser: phi4_mini_json
+    core: true
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 7672066216
+        min_gpu_memory_gib: 11
+  - id: microsoft/Phi-4-reasoning
+    title: Phi-4 reasoning
+    publisher: Microsoft
+    summary: A 14B reasoning model that writes out its thinking before the answer.
+    revision: 1de18ec97600877ce63dbf60c73b998da99f0195
+    license:
+      id: mit
+      commercial: true
+    gated: false
+    tasks:
+      - reasoning
+    parameters: 14659507200
+    context_length: 32768
+    architecture:
+      name: Phi3ForCausalLM
+      layers: 40
+      attention_heads: 40
+      kv_heads: 10
+      head_dim: 128
+    reasoning_parser: deepseek_r1
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 29319042992
+        min_gpu_memory_gib: 36
+  - id: microsoft/Phi-4-reasoning-plus
+    title: Phi-4 reasoning plus
+    publisher: Microsoft
+    summary: Phi-4 reasoning with extra training that makes it more accurate and its answers longer.
+    revision: 69baf8528e1bcf05f475034d9e5dd32875ed125f
+    license:
+      id: mit
+      commercial: true
+    gated: false
+    tasks:
+      - reasoning
+    parameters: 14659507200
+    context_length: 32768
+    architecture:
+      name: Phi3ForCausalLM
+      layers: 40
+      attention_heads: 40
+      kv_heads: 10
+      head_dim: 128
+    reasoning_parser: deepseek_r1
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 29319042992
+        min_gpu_memory_gib: 36
+  - id: microsoft/Phi-4-mini-reasoning
+    title: Phi-4 mini reasoning
+    publisher: Microsoft
+    summary: A 3.8B reasoning model tuned for math.
+    revision: 0e3b1e2d02ee478a3743abe3f629e9c0cb722e0a
+    license:
+      id: mit
+      commercial: true
+    gated: false
+    tasks:
+      - reasoning
+    parameters: 3836021760
+    context_length: 131072
+    architecture:
+      name: Phi3ForCausalLM
+      layers: 32
+      attention_heads: 24
+      kv_heads: 8
+      head_dim: 128
+    reasoning_parser: deepseek_r1
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 7672066216
+        min_gpu_memory_gib: 11

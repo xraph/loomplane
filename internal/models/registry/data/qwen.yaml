@@ -1,0 +1,968 @@
+# Written by hand: id, title, publisher, summary, license, tasks,
+# active_parameters, the embedding block, tool_parser, reasoning_parser,
+# trust_remote_code, core, and each quantization's id, engine, repo, file
+# and args.
+# Filled by go run ./internal/models/registry/cmd/registry-pin -write:
+# revision, gated, parameters, context_length, architecture, and each
+# quantization's revision, weight_bytes, min_gpu_memory_gib and
+# min_memory_gib.
+family: qwen
+entries:
+  - id: Qwen/Qwen2.5-0.5B-Instruct
+    title: Qwen2.5 0.5B Instruct
+    publisher: Qwen
+    summary: A tiny Qwen2.5 chat model for simple tasks on very little hardware.
+    revision: 7ae557604adf67be50417f59c2c2f167def9a775
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - chat
+    parameters: 494032768
+    context_length: 32768
+    architecture:
+      name: Qwen2ForCausalLM
+      layers: 24
+      attention_heads: 14
+      kv_heads: 2
+      head_dim: 64
+    tool_parser: hermes
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 988097824
+        min_gpu_memory_gib: 3
+      - id: gguf-q4_k_m
+        engine: llamacpp
+        repo: Qwen/Qwen2.5-0.5B-Instruct-GGUF
+        revision: 9217f5db79a29953eb74d5343926648285ec7e67
+        file: qwen2.5-0.5b-instruct-q4_k_m.gguf
+        weight_bytes: 491400032
+        min_memory_gib: 2
+      - id: gguf-q8_0
+        engine: llamacpp
+        repo: Qwen/Qwen2.5-0.5B-Instruct-GGUF
+        revision: 9217f5db79a29953eb74d5343926648285ec7e67
+        file: qwen2.5-0.5b-instruct-q8_0.gguf
+        weight_bytes: 675710816
+        min_memory_gib: 2
+  - id: Qwen/Qwen2.5-1.5B-Instruct
+    title: Qwen2.5 1.5B Instruct
+    publisher: Qwen
+    summary: A small multilingual Qwen2.5 chat model.
+    revision: 989aa7980e4cf806f80c7fef2b1adb7bc71aa306
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - chat
+    parameters: 1543714304
+    context_length: 32768
+    architecture:
+      name: Qwen2ForCausalLM
+      layers: 28
+      attention_heads: 12
+      kv_heads: 2
+      head_dim: 128
+    tool_parser: hermes
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 3087467144
+        min_gpu_memory_gib: 6
+  - id: Qwen/Qwen2.5-3B-Instruct
+    title: Qwen2.5 3B Instruct
+    publisher: Qwen
+    summary: A compact Qwen2.5 chat model, licensed for research only.
+    revision: aa8e72537993ba99e69dfaafa59ed015b17504d1
+    license:
+      id: qwen-research
+      commercial: false
+    gated: false
+    tasks:
+      - chat
+    parameters: 3085938688
+    context_length: 32768
+    architecture:
+      name: Qwen2ForCausalLM
+      layers: 36
+      attention_heads: 16
+      kv_heads: 2
+      head_dim: 128
+    tool_parser: hermes
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 6171926992
+        min_gpu_memory_gib: 9
+  - id: Qwen/Qwen2.5-7B-Instruct
+    title: Qwen2.5 7B Instruct
+    publisher: Qwen
+    summary: A capable 7B multilingual chat model with tool calling and structured output.
+    revision: a09a35458c702b33eeacc393d103063234e8bc28
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - chat
+    parameters: 7615616512
+    context_length: 32768
+    architecture:
+      name: Qwen2ForCausalLM
+      layers: 28
+      attention_heads: 28
+      kv_heads: 4
+      head_dim: 128
+    tool_parser: hermes
+    core: true
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 15231271888
+        min_gpu_memory_gib: 19
+      - id: awq-int4
+        engine: vllm
+        repo: Qwen/Qwen2.5-7B-Instruct-AWQ
+        revision: b25037543e9394b818fdfca67ab2a00ecc7dd641
+        weight_bytes: 5570829760
+        min_gpu_memory_gib: 9
+      - id: gguf-q4_k_m
+        engine: llamacpp
+        repo: bartowski/Qwen2.5-7B-Instruct-GGUF
+        revision: 8911e8a47f92bac19d6f5c64a2e2095bd2f7d031
+        file: Qwen2.5-7B-Instruct-Q4_K_M.gguf
+        weight_bytes: 4683074240
+        min_memory_gib: 6
+      - id: gguf-q8_0
+        engine: llamacpp
+        repo: bartowski/Qwen2.5-7B-Instruct-GGUF
+        revision: 8911e8a47f92bac19d6f5c64a2e2095bd2f7d031
+        file: Qwen2.5-7B-Instruct-Q8_0.gguf
+        weight_bytes: 8098525888
+        min_memory_gib: 10
+  - id: Qwen/Qwen2.5-14B-Instruct
+    title: Qwen2.5 14B Instruct
+    publisher: Qwen
+    summary: A mid-sized Qwen2.5 chat model that's stronger at reasoning and long answers.
+    revision: cf98f3b3bbb457ad9e2bb7baf9a0125b6b88caa8
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - chat
+    parameters: 14770033664
+    context_length: 32768
+    architecture:
+      name: Qwen2ForCausalLM
+      layers: 48
+      attention_heads: 40
+      kv_heads: 8
+      head_dim: 128
+    tool_parser: hermes
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 29540134000
+        min_gpu_memory_gib: 36
+      - id: awq-int4
+        engine: vllm
+        repo: Qwen/Qwen2.5-14B-Instruct-AWQ
+        revision: 539535859b135b0244c91f3e59816150c8056698
+        weight_bytes: 9980170584
+        min_gpu_memory_gib: 14
+  - id: Qwen/Qwen2.5-32B-Instruct
+    title: Qwen2.5 32B Instruct
+    publisher: Qwen
+    summary: A large Qwen2.5 chat model that fits one 80 GB GPU in BF16.
+    revision: 5ede1c97bbab6ce5cda5812749b4c0bdf79b18dd
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - chat
+    parameters: 32763876352
+    context_length: 32768
+    architecture:
+      name: Qwen2ForCausalLM
+      layers: 64
+      attention_heads: 40
+      kv_heads: 8
+      head_dim: 128
+    tool_parser: hermes
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 65527841856
+        min_gpu_memory_gib: 77
+      - id: awq-int4
+        engine: vllm
+        repo: Qwen/Qwen2.5-32B-Instruct-AWQ
+        revision: 5c7cb76a268fc6cfbb9c4777eb24ba6e27f9ee6c
+        weight_bytes: 19328993904
+        min_gpu_memory_gib: 25
+  - id: Qwen/Qwen2.5-72B-Instruct
+    title: Qwen2.5 72B Instruct
+    publisher: Qwen
+    summary: The largest Qwen2.5 chat model, for the hardest general tasks.
+    revision: 495f39366efef23836d0cfae4fbe635880d2be31
+    license:
+      id: qwen
+      commercial: true
+    gated: false
+    tasks:
+      - chat
+    parameters: 72706203648
+    context_length: 32768
+    architecture:
+      name: Qwen2ForCausalLM
+      layers: 80
+      attention_heads: 64
+      kv_heads: 8
+      head_dim: 128
+    tool_parser: hermes
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 145412519312
+        min_gpu_memory_gib: 166
+      - id: awq-int4
+        engine: vllm
+        repo: Qwen/Qwen2.5-72B-Instruct-AWQ
+        revision: 698703eae6604af048a3d2f509995dc302088217
+        weight_bytes: 41595756104
+        min_gpu_memory_gib: 50
+  - id: Qwen/Qwen2.5-Coder-1.5B-Instruct
+    title: Qwen2.5 Coder 1.5B Instruct
+    publisher: Qwen
+    summary: A small coding model for completions and quick code questions.
+    revision: 2e1fd397ee46e1388853d2af2c993145b0f1098a
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - code
+    parameters: 1543714304
+    context_length: 32768
+    architecture:
+      name: Qwen2ForCausalLM
+      layers: 28
+      attention_heads: 12
+      kv_heads: 2
+      head_dim: 128
+    tool_parser: hermes
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 3087467144
+        min_gpu_memory_gib: 6
+  - id: Qwen/Qwen2.5-Coder-7B-Instruct
+    title: Qwen2.5 Coder 7B Instruct
+    publisher: Qwen
+    summary: A 7B coding model that writes, explains and fixes code in many languages.
+    revision: c03e6d358207e414f1eca0bb1891e29f1db0e242
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - code
+    parameters: 7615616512
+    context_length: 32768
+    architecture:
+      name: Qwen2ForCausalLM
+      layers: 28
+      attention_heads: 28
+      kv_heads: 4
+      head_dim: 128
+    tool_parser: hermes
+    core: true
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 15231271864
+        min_gpu_memory_gib: 19
+      - id: gguf-q4_k_m
+        engine: llamacpp
+        repo: bartowski/Qwen2.5-Coder-7B-Instruct-GGUF
+        revision: 1f629da0c8bed16b9e50cee91c70693650e66c35
+        file: Qwen2.5-Coder-7B-Instruct-Q4_K_M.gguf
+        weight_bytes: 4683074336
+        min_memory_gib: 6
+      - id: gguf-q8_0
+        engine: llamacpp
+        repo: bartowski/Qwen2.5-Coder-7B-Instruct-GGUF
+        revision: 1f629da0c8bed16b9e50cee91c70693650e66c35
+        file: Qwen2.5-Coder-7B-Instruct-Q8_0.gguf
+        weight_bytes: 8098525984
+        min_memory_gib: 10
+  - id: Qwen/Qwen2.5-Coder-14B-Instruct
+    title: Qwen2.5 Coder 14B Instruct
+    publisher: Qwen
+    summary: A mid-sized coding model for larger edits and code review.
+    revision: aedcc2d42b622764e023cf882b6652e646b95671
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - code
+    parameters: 14770033664
+    context_length: 32768
+    architecture:
+      name: Qwen2ForCausalLM
+      layers: 48
+      attention_heads: 40
+      kv_heads: 8
+      head_dim: 128
+    tool_parser: hermes
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 29540133960
+        min_gpu_memory_gib: 36
+  - id: Qwen/Qwen2.5-Coder-32B-Instruct
+    title: Qwen2.5 Coder 32B Instruct
+    publisher: Qwen
+    summary: Qwen's strongest Qwen2.5 coding model.
+    revision: 381fc969f78efac66bc87ff7ddeadb7e73c218a7
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - code
+    parameters: 32763876352
+    context_length: 32768
+    architecture:
+      name: Qwen2ForCausalLM
+      layers: 64
+      attention_heads: 40
+      kv_heads: 8
+      head_dim: 128
+    tool_parser: hermes
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 65527841688
+        min_gpu_memory_gib: 77
+      - id: awq-int4
+        engine: vllm
+        repo: Qwen/Qwen2.5-Coder-32B-Instruct-AWQ
+        revision: 1ed0a6145da0ce550c628e8e8b678f51e695995d
+        weight_bytes: 19328993904
+        min_gpu_memory_gib: 25
+  - id: Qwen/Qwen2.5-VL-3B-Instruct
+    title: Qwen2.5 VL 3B Instruct
+    publisher: Qwen
+    summary: A small vision model that reads images, documents and charts, licensed for research only.
+    revision: 66285546d2b821cf421d4f5eb2576359d3770cd3
+    license:
+      id: qwen-research
+      commercial: false
+    gated: false
+    tasks:
+      - vision
+    parameters: 3754622976
+    context_length: 128000
+    architecture:
+      name: Qwen2_5_VLForConditionalGeneration
+      layers: 36
+      attention_heads: 16
+      kv_heads: 2
+      head_dim: 128
+    tool_parser: hermes
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 7509337976
+        min_gpu_memory_gib: 12
+  - id: Qwen/Qwen2.5-VL-7B-Instruct
+    title: Qwen2.5 VL 7B Instruct
+    publisher: Qwen
+    summary: A 7B vision model that reads images, documents, charts and screenshots.
+    revision: cc594898137f460bfe9f0759e9844b3ce807cfb5
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - vision
+    parameters: 8292166656
+    context_length: 128000
+    architecture:
+      name: Qwen2_5_VLForConditionalGeneration
+      layers: 28
+      attention_heads: 28
+      kv_heads: 4
+      head_dim: 128
+    tool_parser: hermes
+    core: true
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 16584414560
+        min_gpu_memory_gib: 22
+  - id: Qwen/Qwen2.5-VL-72B-Instruct
+    title: Qwen2.5 VL 72B Instruct
+    publisher: Qwen
+    summary: Qwen's largest Qwen2.5 vision model, for detailed document and image work.
+    revision: 89c86200743eec961a297729e7990e8f2ddbc4c5
+    license:
+      id: qwen
+      commercial: true
+    gated: false
+    tasks:
+      - vision
+    parameters: 73410777344
+    context_length: 128000
+    architecture:
+      name: Qwen2_5_VLForConditionalGeneration
+      layers: 80
+      attention_heads: 64
+      kv_heads: 8
+      head_dim: 128
+    tool_parser: hermes
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 146821709104
+        min_gpu_memory_gib: 169
+      - id: awq-int4
+        engine: vllm
+        repo: Qwen/Qwen2.5-VL-72B-Instruct-AWQ
+        revision: c8b87d4b81f34b6a147577a310d7e75f0698f6c2
+        weight_bytes: 43004946024
+        min_gpu_memory_gib: 53
+  - id: Qwen/QwQ-32B
+    title: QwQ 32B
+    publisher: Qwen
+    summary: A 32B reasoning model that thinks step by step before it answers.
+    revision: 976055f8c83f394f35dbd3ab09a285a984907bd0
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - reasoning
+    parameters: 32763876352
+    context_length: 40960
+    architecture:
+      name: Qwen2ForCausalLM
+      layers: 64
+      attention_heads: 40
+      kv_heads: 8
+      head_dim: 128
+    tool_parser: hermes
+    reasoning_parser: deepseek_r1
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 65527841688
+        min_gpu_memory_gib: 77
+      - id: awq-int4
+        engine: vllm
+        repo: Qwen/QwQ-32B-AWQ
+        revision: dc9f21221581580ccfa51b74077db6056b56cb69
+        weight_bytes: 19328993904
+        min_gpu_memory_gib: 25
+  - id: Qwen/Qwen3-0.6B
+    title: Qwen3 0.6B
+    publisher: Qwen
+    summary: The smallest Qwen3 model, which can think before answering or reply straight away.
+    revision: c1899de289a04d12100db370d81485cdf75e47ca
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - chat
+      - reasoning
+    parameters: 751632384
+    context_length: 40960
+    architecture:
+      name: Qwen3ForCausalLM
+      layers: 28
+      attention_heads: 16
+      kv_heads: 8
+      head_dim: 128
+    tool_parser: hermes
+    reasoning_parser: qwen3
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 1503300328
+        min_gpu_memory_gib: 4
+  - id: Qwen/Qwen3-1.7B
+    title: Qwen3 1.7B
+    publisher: Qwen
+    summary: A small Qwen3 model with an optional thinking mode.
+    revision: 70d244cc86ccca08cf5af4e1e306ecf908b1ad5e
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - chat
+      - reasoning
+    parameters: 2031739904
+    context_length: 40960
+    architecture:
+      name: Qwen3ForCausalLM
+      layers: 28
+      attention_heads: 16
+      kv_heads: 8
+      head_dim: 128
+    tool_parser: hermes
+    reasoning_parser: qwen3
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 4063515592
+        min_gpu_memory_gib: 7
+  - id: Qwen/Qwen3-4B
+    title: Qwen3 4B
+    publisher: Qwen
+    summary: A 4B Qwen3 model with an optional thinking mode and tool calling.
+    revision: 1cfa9a7208912126459214e8b04321603b3df60c
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - chat
+      - reasoning
+    parameters: 4022468096
+    context_length: 40960
+    architecture:
+      name: Qwen3ForCausalLM
+      layers: 36
+      attention_heads: 32
+      kv_heads: 8
+      head_dim: 128
+    tool_parser: hermes
+    reasoning_parser: qwen3
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 8044982000
+        min_gpu_memory_gib: 12
+  - id: Qwen/Qwen3-8B
+    title: Qwen3 8B
+    publisher: Qwen
+    summary: An 8B Qwen3 model that switches between quick replies and step by step thinking.
+    revision: b968826d9c46dd6066d109eabc6255188de91218
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - chat
+      - reasoning
+    parameters: 8190735360
+    context_length: 40960
+    architecture:
+      name: Qwen3ForCausalLM
+      layers: 36
+      attention_heads: 32
+      kv_heads: 8
+      head_dim: 128
+    tool_parser: hermes
+    reasoning_parser: qwen3
+    core: true
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 16381516776
+        min_gpu_memory_gib: 21
+      - id: fp8
+        engine: vllm
+        repo: Qwen/Qwen3-8B-FP8
+        revision: 220b46e3b2180893580a4454f21f22d3ebb187d3
+        weight_bytes: 9436628784
+        min_gpu_memory_gib: 13
+      - id: gguf-q4_k_m
+        engine: llamacpp
+        repo: Qwen/Qwen3-8B-GGUF
+        revision: 7c41481f57cb95916b40956ab2f0b139b296d974
+        file: Qwen3-8B-Q4_K_M.gguf
+        weight_bytes: 5027783488
+        min_memory_gib: 7
+      - id: gguf-q8_0
+        engine: llamacpp
+        repo: Qwen/Qwen3-8B-GGUF
+        revision: 7c41481f57cb95916b40956ab2f0b139b296d974
+        file: Qwen3-8B-Q8_0.gguf
+        weight_bytes: 8709518112
+        min_memory_gib: 11
+  - id: Qwen/Qwen3-14B
+    title: Qwen3 14B
+    publisher: Qwen
+    summary: A 14B Qwen3 model with an optional thinking mode.
+    revision: 40c069824f4251a91eefaf281ebe4c544efd3e18
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - chat
+      - reasoning
+    parameters: 14768307200
+    context_length: 40960
+    architecture:
+      name: Qwen3ForCausalLM
+      layers: 40
+      attention_heads: 40
+      kv_heads: 8
+      head_dim: 128
+    tool_parser: hermes
+    reasoning_parser: qwen3
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 29536665640
+        min_gpu_memory_gib: 36
+      - id: fp8
+        engine: vllm
+        repo: Qwen/Qwen3-14B-FP8
+        revision: 9a283b4a5efbc09ce247e0ae5b02b744739e525a
+        weight_bytes: 16326253296
+        min_gpu_memory_gib: 21
+  - id: Qwen/Qwen3-32B
+    title: Qwen3 32B
+    publisher: Qwen
+    summary: The largest dense Qwen3 model, with an optional thinking mode.
+    revision: 9216db5781bf21249d130ec9da846c4624c16137
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - chat
+      - reasoning
+    parameters: 32762123264
+    context_length: 40960
+    architecture:
+      name: Qwen3ForCausalLM
+      layers: 64
+      attention_heads: 64
+      kv_heads: 8
+      head_dim: 128
+    tool_parser: hermes
+    reasoning_parser: qwen3
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 65524328560
+        min_gpu_memory_gib: 77
+      - id: fp8
+        engine: vllm
+        repo: Qwen/Qwen3-32B-FP8
+        revision: aa55da1ecc13d006e8b8e4f54579b1ea8c3db2df
+        weight_bytes: 34322567640
+        min_gpu_memory_gib: 42
+  - id: Qwen/Qwen3-30B-A3B
+    title: Qwen3 30B A3B
+    publisher: Qwen
+    summary: A mixture of experts Qwen3 model that runs about as fast as a 3B model.
+    revision: ad44e777bcd18fa416d9da3bd8f70d33ebb85d39
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - chat
+      - reasoning
+    parameters: 30532122624
+    active_parameters: 3300000000
+    context_length: 40960
+    architecture:
+      name: Qwen3MoeForCausalLM
+      layers: 48
+      attention_heads: 32
+      kv_heads: 4
+      head_dim: 128
+    tool_parser: hermes
+    reasoning_parser: qwen3
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 61066575648
+        min_gpu_memory_gib: 71
+      - id: fp8
+        engine: vllm
+        repo: Qwen/Qwen3-30B-A3B-FP8
+        revision: d206ba732169f29bb77fbf80fc2c4b81d4d30782
+        weight_bytes: 32449487768
+        min_gpu_memory_gib: 39
+  - id: Qwen/Qwen3-235B-A22B
+    title: Qwen3 235B A22B
+    publisher: Qwen
+    summary: Qwen's flagship Qwen3 mixture of experts model, with 22B parameters active per token.
+    revision: 8efa61729e24bd65b1d152b5ab5409052aa80e65
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - chat
+      - reasoning
+    parameters: 235093634560
+    active_parameters: 22000000000
+    context_length: 40960
+    architecture:
+      name: Qwen3MoeForCausalLM
+      layers: 94
+      attention_heads: 64
+      kv_heads: 4
+      head_dim: 128
+    tool_parser: hermes
+    reasoning_parser: qwen3
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 470191875096
+        min_gpu_memory_gib: 528
+      - id: fp8
+        engine: vllm
+        repo: Qwen/Qwen3-235B-A22B-FP8
+        revision: 39eb2b067ea6b8e3e1dd97d3cd0c7ffeaf3e1a35
+        weight_bytes: 239044149304
+        min_gpu_memory_gib: 270
+  - id: Qwen/Qwen3-4B-Instruct-2507
+    title: Qwen3 4B Instruct 2507
+    publisher: Qwen
+    summary: The July 2025 update of Qwen3 4B, which answers directly without a thinking step.
+    revision: cdbee75f17c01a7cc42f958dc650907174af0554
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - chat
+    parameters: 4022468096
+    context_length: 262144
+    architecture:
+      name: Qwen3ForCausalLM
+      layers: 36
+      attention_heads: 32
+      kv_heads: 8
+      head_dim: 128
+    tool_parser: hermes
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 8044982000
+        min_gpu_memory_gib: 12
+      - id: gguf-q4_k_m
+        engine: llamacpp
+        repo: bartowski/Qwen_Qwen3-4B-Instruct-2507-GGUF
+        revision: ae44f08e1392f39c0e474af10c3ff8355c8b6688
+        file: Qwen_Qwen3-4B-Instruct-2507-Q4_K_M.gguf
+        weight_bytes: 2497280736
+        min_memory_gib: 5
+      - id: gguf-q8_0
+        engine: llamacpp
+        repo: bartowski/Qwen_Qwen3-4B-Instruct-2507-GGUF
+        revision: ae44f08e1392f39c0e474af10c3ff8355c8b6688
+        file: Qwen_Qwen3-4B-Instruct-2507-Q8_0.gguf
+        weight_bytes: 4280405216
+        min_memory_gib: 7
+  - id: Qwen/Qwen3-30B-A3B-Instruct-2507
+    title: Qwen3 30B A3B Instruct 2507
+    publisher: Qwen
+    summary: A fast mixture of experts chat model with a 256K context that answers without a thinking step.
+    revision: 0d7cf23991f47feeb3a57ecb4c9cee8ea4a17bfe
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - chat
+    parameters: 30532122624
+    active_parameters: 3300000000
+    context_length: 262144
+    architecture:
+      name: Qwen3MoeForCausalLM
+      layers: 48
+      attention_heads: 32
+      kv_heads: 4
+      head_dim: 128
+    tool_parser: hermes
+    core: true
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 61066575656
+        min_gpu_memory_gib: 71
+      - id: fp8
+        engine: vllm
+        repo: Qwen/Qwen3-30B-A3B-Instruct-2507-FP8
+        revision: 5a5a776300a41aaa681dd7ff0106608ef2bc90db
+        weight_bytes: 31175618584
+        min_gpu_memory_gib: 37
+  - id: Qwen/Qwen3-30B-A3B-Thinking-2507
+    title: Qwen3 30B A3B Thinking 2507
+    publisher: Qwen
+    summary: A mixture of experts model that always thinks step by step, for math, code and planning.
+    revision: 144afc2f379b542fdd4e85a1fcd5e1f79112d95d
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - reasoning
+    parameters: 30532122624
+    active_parameters: 3300000000
+    context_length: 262144
+    architecture:
+      name: Qwen3MoeForCausalLM
+      layers: 48
+      attention_heads: 32
+      kv_heads: 4
+      head_dim: 128
+    tool_parser: hermes
+    reasoning_parser: qwen3
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 61066575656
+        min_gpu_memory_gib: 71
+  - id: Qwen/Qwen3-Coder-30B-A3B-Instruct
+    title: Qwen3 Coder 30B A3B Instruct
+    publisher: Qwen
+    summary: A fast mixture of experts coding model built for agents that edit whole repositories.
+    revision: b2cff646eb4bb1d68355c01b18ae02e7cf42d120
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - code
+    parameters: 30532122624
+    active_parameters: 3300000000
+    context_length: 262144
+    architecture:
+      name: Qwen3MoeForCausalLM
+      layers: 48
+      attention_heads: 32
+      kv_heads: 4
+      head_dim: 128
+    tool_parser: hermes
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 61066575656
+        min_gpu_memory_gib: 71
+      - id: fp8
+        engine: vllm
+        repo: Qwen/Qwen3-Coder-30B-A3B-Instruct-FP8
+        revision: dcaee4d4dfc5ee71ad501f01f530e5652438fde0
+        weight_bytes: 31175618584
+        min_gpu_memory_gib: 37
+  - id: Qwen/Qwen3-Embedding-0.6B
+    title: Qwen3 Embedding 0.6B
+    publisher: Qwen
+    summary: A small multilingual embedding model that runs well on a CPU.
+    revision: 97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - embedding
+    parameters: 595776512
+    context_length: 32768
+    architecture:
+      name: Qwen3ForCausalLM
+      layers: 28
+      attention_heads: 16
+      kv_heads: 8
+      head_dim: 128
+    embedding:
+      dimensions: 1024
+      max_input_tokens: 32768
+      query_prefix: |-
+        Instruct: Given a web search query, retrieve relevant passages that answer the query
+        Query:
+    core: true
+    quantizations:
+      - id: native
+        engine: tei
+        weight_bytes: 1191586416
+        min_memory_gib: 2
+      - id: bf16
+        engine: vllm
+        weight_bytes: 1191586416
+        args:
+          - --runner=pooling
+        min_gpu_memory_gib: 3
+  - id: Qwen/Qwen3-Embedding-4B
+    title: Qwen3 Embedding 4B
+    publisher: Qwen
+    summary: A multilingual embedding model for search and retrieval in over 100 languages.
+    revision: 5cf2132abc99cad020ac570b19d031efec650f2b
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - embedding
+    parameters: 4021774336
+    context_length: 40960
+    architecture:
+      name: Qwen3ForCausalLM
+      layers: 36
+      attention_heads: 32
+      kv_heads: 8
+      head_dim: 128
+    embedding:
+      dimensions: 2560
+      max_input_tokens: 32768
+      query_prefix: |-
+        Instruct: Given a web search query, retrieve relevant passages that answer the query
+        Query:
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 8043592088
+        args:
+          - --runner=pooling
+        min_gpu_memory_gib: 11
+  - id: Qwen/Qwen3-Embedding-8B
+    title: Qwen3 Embedding 8B
+    publisher: Qwen
+    summary: Qwen's largest embedding model, for the best retrieval quality in many languages.
+    revision: 1d8ad4ca9b3dd8059ad90a75d4983776a23d44af
+    license:
+      id: apache-2.0
+      commercial: true
+    gated: false
+    tasks:
+      - embedding
+    parameters: 7567295488
+    context_length: 40960
+    architecture:
+      name: Qwen3ForCausalLM
+      layers: 36
+      attention_heads: 32
+      kv_heads: 8
+      head_dim: 128
+    embedding:
+      dimensions: 4096
+      max_input_tokens: 32768
+      query_prefix: |-
+        Instruct: Given a web search query, retrieve relevant passages that answer the query
+        Query:
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 15134634568
+        args:
+          - --runner=pooling
+        min_gpu_memory_gib: 19

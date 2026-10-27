@@ -1,0 +1,242 @@
+# Written by hand: id, title, publisher, summary, license, tasks,
+# active_parameters, the embedding block, tool_parser, reasoning_parser,
+# trust_remote_code, core, and each quantization's id, engine, repo, file
+# and args.
+# Filled by go run ./internal/models/registry/cmd/registry-pin -write:
+# revision, gated, parameters, context_length, architecture, and each
+# quantization's revision, weight_bytes, min_gpu_memory_gib and
+# min_memory_gib.
+family: e5
+entries:
+  - id: intfloat/e5-small-v2
+    title: E5 small v2
+    publisher: intfloat
+    summary: A small English embedding model for search.
+    revision: ffb93f3bd4047442299a41ebb6fa998a38507c52
+    license:
+      id: mit
+      commercial: true
+    gated: false
+    tasks:
+      - embedding
+    parameters: 33360512
+    context_length: 512
+    architecture:
+      name: BertModel
+      layers: 12
+      attention_heads: 12
+      kv_heads: 12
+      head_dim: 32
+    embedding:
+      dimensions: 384
+      max_input_tokens: 512
+      query_prefix: 'query: '
+      document_prefix: 'passage: '
+    quantizations:
+      - id: native
+        engine: tei
+        weight_bytes: 133466304
+        min_memory_gib: 1
+  - id: intfloat/e5-base-v2
+    title: E5 base v2
+    publisher: intfloat
+    summary: An English embedding model for search.
+    revision: f52bf8ec8c7124536f0efb74aca902b2995e5bcd
+    license:
+      id: mit
+      commercial: true
+    gated: false
+    tasks:
+      - embedding
+    parameters: 109482752
+    context_length: 512
+    architecture:
+      name: BertModel
+      layers: 12
+      attention_heads: 12
+      kv_heads: 12
+      head_dim: 64
+    embedding:
+      dimensions: 768
+      max_input_tokens: 512
+      query_prefix: 'query: '
+      document_prefix: 'passage: '
+    quantizations:
+      - id: native
+        engine: tei
+        weight_bytes: 437955512
+        min_memory_gib: 1
+  - id: intfloat/e5-large-v2
+    title: E5 large v2
+    publisher: intfloat
+    summary: The largest English E5 v2 embedding model.
+    revision: f169b11e22de13617baa190a028a32f3493550b6
+    license:
+      id: mit
+      commercial: true
+    gated: false
+    tasks:
+      - embedding
+    parameters: 335142400
+    context_length: 512
+    architecture:
+      name: BertModel
+      layers: 24
+      attention_heads: 16
+      kv_heads: 16
+      head_dim: 64
+    embedding:
+      dimensions: 1024
+      max_input_tokens: 512
+      query_prefix: 'query: '
+      document_prefix: 'passage: '
+    quantizations:
+      - id: native
+        engine: tei
+        weight_bytes: 1340616616
+        min_memory_gib: 2
+  - id: intfloat/multilingual-e5-small
+    title: Multilingual E5 small
+    publisher: intfloat
+    summary: A small embedding model for search in about 100 languages.
+    revision: 614241f622f53c4eeff9890bdc4f31cfecc418b3
+    license:
+      id: mit
+      commercial: true
+    gated: false
+    tasks:
+      - embedding
+    parameters: 117654272
+    context_length: 512
+    architecture:
+      name: BertModel
+      layers: 12
+      attention_heads: 12
+      kv_heads: 12
+      head_dim: 32
+    embedding:
+      dimensions: 384
+      max_input_tokens: 512
+      query_prefix: 'query: '
+      document_prefix: 'passage: '
+    quantizations:
+      - id: native
+        engine: tei
+        weight_bytes: 470641600
+        min_memory_gib: 1
+  - id: intfloat/multilingual-e5-base
+    title: Multilingual E5 base
+    publisher: intfloat
+    summary: An embedding model for search in about 100 languages.
+    revision: d128750597153bb5987e10b1c3493a34e5a4502a
+    license:
+      id: mit
+      commercial: true
+    gated: false
+    tasks:
+      - embedding
+    parameters: 278044162
+    context_length: 514
+    architecture:
+      name: XLMRobertaModel
+      layers: 12
+      attention_heads: 12
+      kv_heads: 12
+      head_dim: 64
+    embedding:
+      dimensions: 768
+      max_input_tokens: 512
+      query_prefix: 'query: '
+      document_prefix: 'passage: '
+    quantizations:
+      - id: native
+        engine: tei
+        weight_bytes: 1112201288
+        min_memory_gib: 2
+  - id: intfloat/multilingual-e5-large
+    title: Multilingual E5 large
+    publisher: intfloat
+    summary: The largest multilingual E5 embedding model.
+    revision: 3d7cfbdacd47fdda877c5cd8a79fbcc4f2a574f3
+    license:
+      id: mit
+      commercial: true
+    gated: false
+    tasks:
+      - embedding
+    parameters: 559890946
+    context_length: 514
+    architecture:
+      name: XLMRobertaModel
+      layers: 24
+      attention_heads: 16
+      kv_heads: 16
+      head_dim: 64
+    embedding:
+      dimensions: 1024
+      max_input_tokens: 512
+      query_prefix: 'query: '
+      document_prefix: 'passage: '
+    quantizations:
+      - id: native
+        engine: tei
+        weight_bytes: 2239611368
+        min_memory_gib: 3
+  - id: intfloat/multilingual-e5-large-instruct
+    title: Multilingual E5 large instruct
+    publisher: intfloat
+    summary: A multilingual embedding model that takes a one-line task description with each query.
+    revision: 274baa43b0e13e37fafa6428dbc7938e62e5c439
+    license:
+      id: mit
+      commercial: true
+    gated: false
+    tasks:
+      - embedding
+    parameters: 559890432
+    context_length: 514
+    architecture:
+      name: XLMRobertaModel
+      layers: 24
+      attention_heads: 16
+      kv_heads: 16
+      head_dim: 64
+    embedding:
+      dimensions: 1024
+      max_input_tokens: 512
+      query_prefix: "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: "
+    quantizations:
+      - id: native
+        engine: tei
+        weight_bytes: 1119825680
+        min_memory_gib: 2
+  - id: intfloat/e5-mistral-7b-instruct
+    title: E5 Mistral 7B instruct
+    publisher: intfloat
+    summary: A 7B embedding model built on Mistral that takes a task description with each query.
+    revision: d62cc4417be0e3289c03dd459d1ef2d137e2554e
+    license:
+      id: mit
+      commercial: true
+    gated: false
+    tasks:
+      - embedding
+    parameters: 7110660096
+    context_length: 32768
+    architecture:
+      name: MistralModel
+      layers: 32
+      attention_heads: 32
+      kv_heads: 8
+      head_dim: 128
+    embedding:
+      dimensions: 4096
+      max_input_tokens: 4096
+      query_prefix: "Instruct: Given a web search query, retrieve relevant passages that answer the query\nQuery: "
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 14221351904
+        args:
+          - --runner=pooling
+        min_gpu_memory_gib: 18

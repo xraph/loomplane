@@ -1,0 +1,235 @@
+# Written by hand: id, title, publisher, summary, license, tasks,
+# active_parameters, the embedding block, tool_parser, reasoning_parser,
+# trust_remote_code, core, and each quantization's id, engine, repo, file
+# and args.
+# Filled by go run ./internal/models/registry/cmd/registry-pin -write:
+# revision, gated, parameters, context_length, architecture, and each
+# quantization's revision, weight_bytes, min_gpu_memory_gib and
+# min_memory_gib.
+family: glm
+entries:
+  - id: zai-org/GLM-4-9B-0414
+    title: GLM-4 9B 0414
+    publisher: Z.ai
+    summary: A 9B bilingual chat model for Chinese and English.
+    revision: 645b8482494e31b6b752272bf7f7f273ef0f3caf
+    license:
+      id: mit
+      commercial: true
+    gated: false
+    tasks:
+      - chat
+    parameters: 9400279040
+    context_length: 32768
+    architecture:
+      name: Glm4ForCausalLM
+      layers: 40
+      attention_heads: 32
+      kv_heads: 2
+      head_dim: 128
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 18800618456
+        min_gpu_memory_gib: 23
+  - id: zai-org/GLM-4-32B-0414
+    title: GLM-4 32B 0414
+    publisher: Z.ai
+    summary: A 32B chat model that's good at code, function calling and search-based answers.
+    revision: 077b5c2f5c43bd3239fd605a0600229e8facbd4a
+    license:
+      id: mit
+      commercial: true
+    gated: false
+    tasks:
+      - chat
+    parameters: 32566081536
+    context_length: 32768
+    architecture:
+      name: Glm4ForCausalLM
+      layers: 61
+      attention_heads: 48
+      kv_heads: 2
+      head_dim: 128
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 65132235080
+        min_gpu_memory_gib: 75
+  - id: zai-org/GLM-Z1-9B-0414
+    title: GLM-Z1 9B 0414
+    publisher: Z.ai
+    summary: A 9B reasoning model that thinks before it answers.
+    revision: b221b06fefb23ca320922cf6e68ab5f2fb82de81
+    license:
+      id: mit
+      commercial: true
+    gated: false
+    tasks:
+      - reasoning
+    parameters: 9400279040
+    context_length: 32768
+    architecture:
+      name: Glm4ForCausalLM
+      layers: 40
+      attention_heads: 32
+      kv_heads: 2
+      head_dim: 128
+    reasoning_parser: glm45
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 18800618456
+        min_gpu_memory_gib: 23
+  - id: zai-org/GLM-Z1-32B-0414
+    title: GLM-Z1 32B 0414
+    publisher: Z.ai
+    summary: A 32B reasoning model, strong at math and code.
+    revision: 8eb2858992c1f749e2a6d4075455decc2484722d
+    license:
+      id: mit
+      commercial: true
+    gated: false
+    tasks:
+      - reasoning
+    parameters: 32566081536
+    context_length: 32768
+    architecture:
+      name: Glm4ForCausalLM
+      layers: 61
+      attention_heads: 48
+      kv_heads: 2
+      head_dim: 128
+    reasoning_parser: glm45
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 65132235080
+        min_gpu_memory_gib: 75
+  - id: zai-org/GLM-4.1V-9B-Thinking
+    title: GLM-4.1V 9B Thinking
+    publisher: Z.ai
+    summary: A 9B vision model that reasons about images, video frames and documents.
+    revision: 3c1471e51dc811b589d4d12b1c1c7c1c941267c2
+    license:
+      id: mit
+      commercial: true
+    gated: false
+    tasks:
+      - vision
+      - reasoning
+    parameters: 10292777472
+    context_length: 65536
+    architecture:
+      name: Glm4vForConditionalGeneration
+      layers: 40
+      attention_heads: 32
+      kv_heads: 2
+      head_dim: 128
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 20585644104
+        min_gpu_memory_gib: 26
+  - id: zai-org/GLM-4.5-Air
+    title: GLM-4.5 Air
+    publisher: Z.ai
+    summary: A mixture of experts model for agents and coding, with 12B parameters active per token.
+    revision: a24ceef6ce4f3536971efe9b778bdaa1bab18daa
+    license:
+      id: mit
+      commercial: true
+    gated: false
+    tasks:
+      - chat
+      - reasoning
+    parameters: 110468824832
+    active_parameters: 12000000000
+    context_length: 131072
+    architecture:
+      name: Glm4MoeForCausalLM
+      layers: 46
+      attention_heads: 96
+      kv_heads: 8
+      head_dim: 128
+    tool_parser: glm45
+    reasoning_parser: glm45
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 220939943456
+        min_gpu_memory_gib: 250
+      - id: fp8
+        engine: vllm
+        repo: zai-org/GLM-4.5-Air-FP8
+        revision: f9a9c5acf5e543cd24d659a056c5dbcda78ffcfc
+        weight_bytes: 112562597656
+        min_gpu_memory_gib: 129
+  - id: zai-org/GLM-4.5
+    title: GLM-4.5
+    publisher: Z.ai
+    summary: Z.ai's large mixture of experts model for agents, reasoning and coding.
+    revision: cbb2c7cfb52fa128a9660cb1a7a78e017899e115
+    license:
+      id: mit
+      commercial: true
+    gated: false
+    tasks:
+      - chat
+      - reasoning
+    parameters: 358337791296
+    active_parameters: 32000000000
+    context_length: 131072
+    architecture:
+      name: Glm4MoeForCausalLM
+      layers: 92
+      attention_heads: 96
+      kv_heads: 8
+      head_dim: 128
+    tool_parser: glm45
+    reasoning_parser: glm45
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 716681196672
+        min_gpu_memory_gib: 805
+      - id: fp8
+        engine: vllm
+        repo: zai-org/GLM-4.5-FP8
+        revision: 8cc290ee4c7cbfa38d3a2db9bd0b7371773ece81
+        weight_bytes: 361288184632
+        min_gpu_memory_gib: 408
+  - id: zai-org/GLM-4.6
+    title: GLM-4.6
+    publisher: Z.ai
+    summary: An update of GLM-4.5 with a 200K context and stronger coding.
+    revision: be72194883d968d7923a07e2f61681ea9a2826d1
+    license:
+      id: mit
+      commercial: true
+    gated: false
+    tasks:
+      - chat
+      - reasoning
+    parameters: 356785898816
+    active_parameters: 32000000000
+    context_length: 202752
+    architecture:
+      name: Glm4MoeForCausalLM
+      layers: 92
+      attention_heads: 96
+      kv_heads: 8
+      head_dim: 128
+    tool_parser: glm45
+    reasoning_parser: glm45
+    quantizations:
+      - id: bf16
+        engine: vllm
+        weight_bytes: 713577411472
+        min_gpu_memory_gib: 801
+      - id: fp8
+        engine: vllm
+        repo: zai-org/GLM-4.6-FP8
+        revision: c064d336a8d0b0f59071f77eafdcdfca40f4b54c
+        weight_bytes: 361288184848
+        min_gpu_memory_gib: 408
