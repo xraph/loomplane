@@ -6,10 +6,16 @@ import type {
   HostCard,
 } from "@/client/forge/loomplane/types"
 import {
+  attachedHosts,
+  discoveryState,
   discoverySentence,
   exampleRequest,
   farpCollision,
+  farpHostnamesWith,
+  farpSchemas,
   filterBoard,
+  gatewayRouteInput,
+  manualRoutes,
   methodsLabel,
   routeCountLabel,
   routeDraft,
@@ -285,4 +291,67 @@ test("validatePath says what the server says", () => {
   expect(validatePath("/a*")).toBe(
     "A * is only allowed as the last segment, as /*."
   )
+})
+
+test("gatewayRouteInput always routes to port 8080 with the blocked paths", () => {
+  const b = board()
+  expect(
+    gatewayRouteInput(
+      { ...b.gateway.attach, port: 9090 },
+      { zoneId: "zone_dev", hostname: "*.acme.dev" }
+    )
+  ).toEqual({
+    zoneId: "zone_dev",
+    cloudId: "",
+    environmentId: "env_prod",
+    service: "edge--gateway",
+    hostname: "*.acme.dev",
+    port: 8080,
+    blockedPathPrefixes: ["/__farp", "/_farp", "/admin"],
+  })
+})
+
+test("farpHostnamesWith keeps only attached hostnames", () => {
+  const b = board({
+    hosts: [
+      host("", []),
+      host("acme.dev", [route({ source: "here" }), route({})]),
+      host("api.acme.dev", []),
+      { ...host("old.acme.dev", []), attached: false },
+    ],
+  })
+  b.gateway.farpHostnames = ["api.acme.dev", "old.acme.dev"]
+  expect(attachedHosts(b).map((h) => h.hostname)).toEqual([
+    "acme.dev",
+    "api.acme.dev",
+  ])
+  expect(farpHostnamesWith(b, "acme.dev", true)).toEqual([
+    "api.acme.dev",
+    "acme.dev",
+  ])
+  expect(farpHostnamesWith(b, "api.acme.dev", false)).toEqual([])
+  expect(manualRoutes(b.hosts[1])).toBe(1)
+})
+
+test("discovery states and schemas", () => {
+  expect(discoveryState("registered")).toEqual({
+    label: "Registered",
+    tone: "overdye",
+  })
+  expect(discoveryState("discovered").tone).toBe("overdye")
+  expect(discoveryState("waiting")).toEqual({
+    label: "Waiting for a release",
+    tone: "weld",
+  })
+  expect(discoveryState("failed")).toEqual({ label: "Failed", tone: "failed" })
+  expect(
+    farpSchemas({
+      "farp.graphql.path": "/graphql",
+      "farp.openapi.path": "/openapi.json",
+      "farp.health.path": "/health",
+      "farp.grpc.reflection": "true",
+      "farp.port": "8080",
+    })
+  ).toEqual(["/openapi.json", "/graphql", "gRPC reflection"])
+  expect(farpSchemas(undefined)).toEqual([])
 })

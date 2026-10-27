@@ -200,9 +200,97 @@ function operation(id: string, status: string): Json {
     expires_at: zero,
     not_before: zero,
     dns_attempted: false,
-    desired_record: {},
+    desired_record: {
+      id: "",
+      zone_id: "zone_dev",
+      type: "CNAME",
+      name: "docs.acme.dev",
+      value: "edge-1.loomplane.net",
+      ttl: 300,
+    },
     route: { id: "route_docs", revision: 1 },
   }
+}
+
+/** The gateway's status, as the Settings tab reads it. */
+export function mockStatus(): Json {
+  return {
+    ...(mockBoard().gateway as Json),
+    start_time: minutesAgo(180),
+  }
+}
+
+/** What FARP found on Docker: three registered services and one waiting. */
+export function mockDiscovery(over: Json = {}): Json {
+  return {
+    mode: "push",
+    last_change: minutesAgo(2),
+    services: [
+      {
+        service: "api",
+        opted_in: true,
+        metadata: {
+          "farp.openapi.path": "/openapi.json",
+          "farp.port": "8080",
+        },
+        state: "registered",
+        routes: 1,
+        updated_at: minutesAgo(2),
+      },
+      {
+        service: "billing",
+        opted_in: true,
+        metadata: {
+          "farp.openapi.path": "/openapi.json",
+          "farp.asyncapi.path": "/asyncapi.json",
+          "farp.port": "8080",
+        },
+        state: "registered",
+        routes: 2,
+        updated_at: minutesAgo(2),
+      },
+      {
+        service: "auth",
+        opted_in: true,
+        metadata: { "farp.port": "9000" },
+        state: "failed",
+        error: "Octopus refused the registration: schema fetch timed out.",
+        routes: 0,
+        updated_at: minutesAgo(5),
+      },
+      {
+        service: "search",
+        opted_in: true,
+        metadata: { "farp.graphql.path": "/graphql", "farp.port": "7700" },
+        state: "waiting",
+        routes: 0,
+        updated_at: "0001-01-01T00:00:00Z",
+      },
+    ],
+    ...over,
+  }
+}
+
+/** The domain routes behind the board's attached cards, in the API's JSON. */
+export function domainRoutes(): Json[] {
+  return ["acme.dev", "api.acme.dev", "*.acme.dev"].map((hostname) => ({
+    id: `dr_${hostname}`,
+    org_id: "org",
+    project_id: "p",
+    operation_id: "",
+    status: "ready",
+    revision: 7,
+    updated_at: "2026-10-26T20:00:00Z",
+    input: {
+      zone_id: "zone_dev",
+      cloud_id: "",
+      environment_id: "env_prod",
+      service: "edge--gateway",
+      hostname,
+      port: 8080,
+      blocked_path_prefixes: ["/__farp", "/_farp", "/admin"],
+    },
+  }))
 }
 
 /** The domains granted to the project, as the attach flow reads them. */
@@ -225,6 +313,17 @@ export type Fixture = {
   boardStatus?: number
   /** The board read never answers. */
   boardPending?: boolean
+  /** The status read, or the status it answers with, or never answering. */
+  status?: Json
+  statusStatus?: number
+  statusPending?: boolean
+  /** The discovery read, the same way. */
+  discovery?: Json
+  discoveryStatus?: number
+  discoveryPending?: boolean
+  /** The project's domain routes and the domains granted to it. */
+  domainRoutes?: Json[]
+  projectDomains?: Json[]
   adminUrl?: string
   adminStatus?: number
   /** Answers a write before the defaults do, when it returns a response. */
@@ -255,6 +354,14 @@ export function serve(fixture: Fixture = {}) {
           return json(operation("routeop_1", "preview"))
         if (/\/route-operations\/[^/]+\/apply$/.test(path))
           return json(operation(path.split("/")[5], "pending"))
+        if (/\/domain-routes\/[^/]+\/remove$/.test(path))
+          return json(operation("routeop_remove", "pending"))
+        if (path.endsWith("/octopus/edge/farp-hostnames"))
+          return json({
+            ...mockStatus(),
+            farp_hostnames: (body as { hostnames: string[] }).hostnames,
+          })
+        if (path.endsWith("/octopus/edge/sync")) return json(applied)
       }
       if (path.endsWith("/catalog/edge/admin-sessions")) {
         if (fixture.adminStatus)
@@ -278,6 +385,24 @@ export function serve(fixture: Fixture = {}) {
           typeof fixture.board === "function" ? fixture.board() : fixture.board
         return json(board ?? mockBoard())
       }
+      if (path.endsWith("/octopus/edge/status")) {
+        if (fixture.statusPending) return new Promise<Response>(() => {})
+        if (fixture.statusStatus)
+          return json(
+            { message: "Something went wrong." },
+            fixture.statusStatus
+          )
+        return json(fixture.status ?? mockStatus())
+      }
+      if (path.endsWith("/octopus/edge/discovery")) {
+        if (fixture.discoveryPending) return new Promise<Response>(() => {})
+        if (fixture.discoveryStatus)
+          return json(
+            { message: "Something went wrong." },
+            fixture.discoveryStatus
+          )
+        return json(fixture.discovery ?? mockDiscovery())
+      }
       if (path.endsWith("/connections"))
         return json({
           connections: [
@@ -285,9 +410,9 @@ export function serve(fixture: Fixture = {}) {
           ],
         })
       if (path.endsWith("/projects/p/domains"))
-        return json({ domains: projectDomains })
+        return json({ domains: fixture.projectDomains ?? projectDomains })
       if (path.endsWith("/projects/p/domain-routes"))
-        return json({ routes: [] })
+        return json({ routes: fixture.domainRoutes ?? [] })
       if (path === "/api/v1/domains")
         return json({ zones: [], registrations: [] })
       if (path.endsWith("/projects/p/environments"))

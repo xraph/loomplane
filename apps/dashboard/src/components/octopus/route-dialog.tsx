@@ -59,6 +59,7 @@ import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import {
   exampleRequest,
   farpCollision,
+  gatewayRouteInput,
   splitPath,
   validatePath,
   type RouteDialogMode,
@@ -317,15 +318,9 @@ function RouteForm({
       // counts, so the route is created as soon as apply answers.
       if (attaching && attached !== hostname) {
         try {
-          const op = await lifecycle.preview({
-            zoneId: attach.zoneId,
-            cloudId: defaults.cloudId ?? "",
-            environmentId: defaults.environmentId,
-            service: defaults.service,
-            hostname,
-            port: 8080,
-            blockedPathPrefixes: defaults.blockedPathPrefixes,
-          })
+          const op = await lifecycle.preview(
+            gatewayRouteInput(defaults, { zoneId: attach.zoneId, hostname })
+          )
           await lifecycle.apply(op)
           setAttached(hostname)
           // The new domain gets its own card even if the route is refused.

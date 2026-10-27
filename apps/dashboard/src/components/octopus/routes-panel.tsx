@@ -1,9 +1,7 @@
 // The Routes tab: a gateway's routes in one card per domain, with what
 // FARP is watching above them and the services nothing routes to below.
-import { LockIcon } from "lucide-react"
 import { useState } from "react"
 
-import { statusOf } from "@/client/errors"
 import {
   useEnvironmentsList,
   useOctopusBoard,
@@ -13,15 +11,14 @@ import type { Board } from "@/client/forge/loomplane/types"
 import { useQuery } from "@/client/hooks"
 import { DiscoveryStrip } from "@/components/octopus/discovery-strip"
 import { HostCardView } from "@/components/octopus/host-card"
+import { PanelLoading, ReadFailed } from "@/components/octopus/panel-states"
 import { RouteDialog } from "@/components/octopus/route-dialog"
 import { QueryError } from "@/components/query-error"
 import { Button } from "@/components/ui/button"
-import { Skeleton } from "@/components/ui/skeleton"
 import {
   ZeroState,
   ZeroStateDescription,
   ZeroStateHeader,
-  ZeroStateMedia,
   ZeroStateTitle,
 } from "@/components/zero-state"
 import type { CatalogPanelProps } from "@/lib/catalog-kinds"
@@ -60,18 +57,16 @@ export function RoutesPanel(props: CatalogPanelProps) {
     path: { projectId, environmentId, resource },
   })
 
-  if (board.status === "error" && !board.data) {
-    const status = statusOf(board.error)
-    if (status === 401 || status === 403) return <Denied />
+  if (board.status === "error" && !board.data)
     return (
-      <QueryError
+      <ReadFailed
         error={board.error}
-        fallback="Octopus's routes couldn't be loaded."
         retry={board.refetch}
+        denied="You can't see this gateway's routes"
+        fallback="Octopus's routes couldn't be loaded."
       />
     )
-  }
-  if (!board.data) return <Loading />
+  if (!board.data) return <PanelLoading label="Loading routes" />
   return (
     <div className="grid min-w-0 gap-3.5">
       {/* A refresh that fails keeps what was read before on screen. */}
@@ -217,35 +212,5 @@ function Routes({
         />
       )}
     </>
-  )
-}
-
-function Loading() {
-  return (
-    <div aria-busy="true" aria-label="Loading routes" className="grid gap-3.5">
-      <Skeleton className="h-[58px] rounded-[14px]" />
-      <Skeleton className="h-40 rounded-[14px]" />
-      <Skeleton className="h-28 rounded-[14px]" />
-    </div>
-  )
-}
-
-// A missing permission isn't a failure to retry, so it reads differently.
-function Denied() {
-  return (
-    <ZeroState preview={false}>
-      <ZeroStateHeader>
-        <ZeroStateMedia variant="icon">
-          <LockIcon />
-        </ZeroStateMedia>
-        <ZeroStateTitle>
-          You can&apos;t see this gateway&apos;s routes
-        </ZeroStateTitle>
-        <ZeroStateDescription>
-          Your role doesn&apos;t include reading this project&apos;s
-          infrastructure. An organization owner can give you access.
-        </ZeroStateDescription>
-      </ZeroStateHeader>
-    </ZeroState>
   )
 }

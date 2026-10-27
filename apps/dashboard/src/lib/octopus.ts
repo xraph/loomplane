@@ -2,11 +2,13 @@
 // route comes from, how its path and methods read, and the lines around
 // the domain cards.
 import type {
+  AttachDefaults,
   Board,
   BoardRoute,
   CloudinfraRouteStatus,
   HostCard,
   OctopusRouteInputBody,
+  RouteInput,
 } from "@/client/forge/loomplane/types"
 import {
   certificateLabel,
@@ -282,3 +284,94 @@ export function validatePath(path: string): string | undefined {
   }
   return undefined
 }
+
+/** The only port a Loomplane route to Octopus ever sends to. */
+export const gatewayPort = 8080
+
+/**
+ * gatewayRouteInput is the domain route that attaches hostname to the
+ * gateway: always its port 8080, with the admin and FARP paths blocked.
+ */
+export function gatewayRouteInput(
+  defaults: AttachDefaults,
+  hostname: { zoneId: string; hostname: string }
+): RouteInput {
+  return {
+    zoneId: hostname.zoneId,
+    cloudId: defaults.cloudId ?? "",
+    environmentId: defaults.environmentId,
+    service: defaults.service,
+    hostname: hostname.hostname,
+    port: gatewayPort,
+    blockedPathPrefixes: defaults.blockedPathPrefixes,
+  }
+}
+
+/** attachedHosts are the board's cards for hostnames with a domain route. */
+export function attachedHosts(board: Board): HostCard[] {
+  return board.hosts.filter((h) => h.hostname && h.attached)
+}
+
+/** manualRoutes counts the routes added here on a card, which hold it. */
+export function manualRoutes(host: HostCard): number {
+  return host.routes.filter((r) => r.source === "here").length
+}
+
+/**
+ * farpHostnamesWith is where FARP routes land once hostname is turned on
+ * or off: the attached ones already picked, with it added or dropped.
+ */
+export function farpHostnamesWith(
+  board: Board,
+  hostname: string,
+  on: boolean
+): string[] {
+  const attached = new Set(attachedHosts(board).map((h) => h.hostname))
+  const kept = board.gateway.farpHostnames.filter(
+    (h) => attached.has(h) && h !== hostname
+  )
+  return on ? [...kept, hostname] : kept
+}
+
+/** What a discovered service's state pill says, and its tone. */
+export function discoveryState(state: string): {
+  label: string
+  tone: "overdye" | "weld" | "failed"
+} {
+  switch (state) {
+    case "registered":
+      return { label: "Registered", tone: "overdye" }
+    case "discovered":
+      return { label: "Discovered", tone: "overdye" }
+    case "failed":
+      return { label: "Failed", tone: "failed" }
+  }
+  return { label: "Waiting for a release", tone: "weld" }
+}
+
+// The metadata keys that name a schema, in the order they show.
+const schemaKeys = [
+  "farp.openapi.path",
+  "farp.asyncapi.path",
+  "farp.graphql.path",
+] as const
+
+/**
+ * farpSchemas are the schema paths a service publishes, from its FARP
+ * metadata, and gRPC reflection when it's on.
+ */
+export function farpSchemas(metadata: Record<string, unknown> = {}): string[] {
+  const paths = schemaKeys
+    .map((k) => metadata[k])
+    .filter((v): v is string => typeof v === "string" && v !== "")
+  if (metadata["farp.grpc.reflection"] === "true") paths.push("gRPC reflection")
+  return paths
+}
+
+/** The opt-in a service adds to the manifest, as the Discovery tab shows it. */
+export const farpExample = `services:
+  billing:
+    port: 8080
+    farp:
+      openapi: /openapi.json
+      capabilities: [rest, websocket]`
