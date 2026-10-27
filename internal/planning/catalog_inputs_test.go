@@ -3,11 +3,13 @@ package planning
 import (
 	"context"
 	"errors"
+	"fmt"
 	"slices"
 	"testing"
 	"time"
 
 	"github.com/xraph/loomplane/internal/manifests"
+	"github.com/xraph/loomplane/internal/orchestration"
 	"github.com/xraph/loomplane/internal/providers"
 	"github.com/xraph/loomplane/internal/recipes/recipestest"
 )
@@ -69,11 +71,19 @@ func (d *digests) Digest(_ context.Context, orgID, projectID, environmentID, res
 	return d.out, d.err
 }
 
-// planningStore holds one plan in planning and records why it failed.
+// planningStore holds one plan and records why it failed or how it was
+// settled.
 type planningStore struct {
 	catalogStore
-	plan   *Plan
-	failed string
+	plan    *Plan
+	failed  string
+	settled string
+	note    string
+}
+
+func (s *planningStore) Decide(_ context.Context, _, _, status, _, note string, _ time.Time) (bool, error) {
+	s.settled, s.note = status, note
+	return true, nil
 }
 
 func (s *planningStore) GetPlan(context.Context, string, string) (*Plan, error) {
@@ -138,5 +148,37 @@ func TestInputsErrorFailsThePlanClearly(t *testing.T) {
 	}
 	if want := "couldn't read what app is configured with: the settings store is down"; store.failed != want {
 		t.Fatalf("failed with %q, want %q", store.failed, want)
+	}
+}
+
+func TestCancelledInputReadIsTriedAgain(t *testing.T) {
+	for _, cause := range []error{context.Canceled, context.DeadlineExceeded, fmt.Errorf("read settings: %w", context.DeadlineExceeded)} {
+		if failsPlanning(&catalogInputsError{resource: "app", err: cause}) {
+			t.Fatalf("%v fails the plan", cause)
+		}
+		store := &planningStore{plan: &Plan{ID: "plan_1", Catalog: true, OrgID: "org", ProjectID: "project", EnvironmentID: "env", Environment: "production", Status: StatusPlanning}}
+		svc := inputsService(t, store, sampleApp, &digests{err: cause}, nil)
+		status, err := svc.Plan(t.Context(), "org", "plan_1")
+		if !errors.Is(err, cause) || status != "" || store.failed != "" {
+			t.Fatalf("%v: plan %q, %v, failed with %q", cause, status, err, store.failed)
+		}
+
+		store.plan = &Plan{ID: "plan_1", Catalog: true, OrgID: "org", ProjectID: "project", EnvironmentID: "env", Environment: "production", Status: StatusReady, Revision: "r1"}
+		status, err = svc.ApplyDecision(t.Context(), "org", "plan_1", orchestration.Decision{Approve: true, Revision: "r1", By: "usr_1"})
+		if !errors.Is(err, cause) || status != "" || store.settled != "" {
+			t.Fatalf("%v: approve %q, %v, settled %q", cause, status, err, store.settled)
+		}
+	}
+}
+
+func TestApprovalWithUnreadableInputsSaysWhy(t *testing.T) {
+	store := &planningStore{plan: &Plan{ID: "plan_1", Catalog: true, OrgID: "org", ProjectID: "project", EnvironmentID: "env", Environment: "production", Status: StatusReady, Revision: "r1"}}
+	svc := inputsService(t, store, sampleApp, &digests{err: errors.New("the settings store is down")}, nil)
+	status, err := svc.ApplyDecision(t.Context(), "org", "plan_1", orchestration.Decision{Approve: true, Revision: "r1", By: "usr_1"})
+	if err != nil || status != StatusStale || store.settled != StatusStale {
+		t.Fatalf("approve: %q, %v, settled %q", status, err, store.settled)
+	}
+	if want := "Couldn't check what app is configured with. Plan again."; store.note != want {
+		t.Fatalf("settled with %q, want %q", store.note, want)
 	}
 }

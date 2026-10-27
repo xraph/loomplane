@@ -83,3 +83,40 @@ func TestKindsWithoutAFeatureIgnoreFeatures(t *testing.T) {
 		}
 	}
 }
+
+// A kind without a feature can't provision a dependency-only kind whose
+// feature is off.
+func TestDependencyOfAnOffFeatureIsRefused(t *testing.T) {
+	kinds := recipes.NewRegistry()
+	dep := recipestest.Graph()
+	dep.Feature = recipes.FeatureAI
+	for _, kind := range []recipes.Kind{dep, graphApp()} {
+		if err := kinds.Register(kind); err != nil {
+			t.Fatal(err)
+		}
+	}
+	plan := func(features map[string]bool) *Result {
+		return Compute(Input{
+			Environment: "production", Graph: infrastructureGraph(), Manifest: parse(t, graphOn), Providers: providers.Registry(),
+			Connections: composedConnections(t), Kinds: kinds, Features: features,
+		})
+	}
+
+	r := plan(nil)
+	want := Finding{
+		Code: "catalog-feature-off", Subject: ResourceSubject, Name: "app", Path: "resources.app.uses.falkordb",
+		Message: "Graph needs AI, which is off on this Loomplane server. An operator turns it on with ai.enabled.",
+	}
+	if r.Executable || !slices.ContainsFunc(r.Problems, func(f Finding) bool {
+		return f.Code == want.Code && f.Subject == want.Subject && f.Name == want.Name && f.Path == want.Path && f.Message == want.Message
+	}) {
+		t.Fatalf("problems %+v, want %+v", r.Problems, want)
+	}
+	if a := findAction(r, "resource:app--falkordb"); a != nil {
+		t.Fatalf("planned the dependency of an off feature: %+v", a)
+	}
+
+	if r := plan(map[string]bool{"ai": true}); !r.Executable || findAction(r, "resource:app--falkordb") == nil {
+		t.Fatalf("feature on: %+v", r.Problems)
+	}
+}

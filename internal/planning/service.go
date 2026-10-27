@@ -953,6 +953,9 @@ func (s *Service) ApplyDecision(ctx context.Context, orgID, planID string, d orc
 		return "", checkErr
 	}
 	_, revision, err := s.compute(ctx, plan)
+	if failsPlanning(err) {
+		return s.settleAs(ctx, plan, StatusStale, d.By, unreadableInputs(err), now)
+	}
 	if permanent(err) {
 		return s.settleAs(ctx, plan, StatusStale, d.By, "What the plan was made from is gone: "+err.Error(), now)
 	}

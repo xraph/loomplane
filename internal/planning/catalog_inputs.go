@@ -16,7 +16,9 @@ import (
 // the kind reads plans an update of that component.
 type CatalogInputs interface {
 	// Digest returns, by component name, a digest of what the kind renders
-	// into its components from outside the manifest. It holds no secret.
+	// into its components from outside the manifest. It holds no secret,
+	// and neither does its error: the error's text reaches the plan's
+	// failure reason and the API.
 	Digest(ctx context.Context, orgID, projectID, environmentID, resource string) (map[string]string, error)
 }
 
@@ -88,8 +90,22 @@ func (s *Service) catalogInputs(ctx context.Context, plan *Plan, m *manifest.Man
 }
 
 // failsPlanning reports an error that fails the plan instead of being
-// tried again.
+// tried again. A read that was cancelled or ran out of time is tried
+// again, so only a CatalogInputs that answered with an error fails it.
 func failsPlanning(err error) bool {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
 	var inputs *catalogInputsError
 	return errors.As(err, &inputs)
+}
+
+// unreadableInputs is why an approval settles a plan stale when what a
+// resource is configured with couldn't be read: planning again may read it.
+func unreadableInputs(err error) string {
+	var inputs *catalogInputsError
+	if !errors.As(err, &inputs) {
+		return err.Error()
+	}
+	return fmt.Sprintf("Couldn't check what %s is configured with. Plan again.", inputs.resource)
 }
