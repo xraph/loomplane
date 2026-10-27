@@ -276,6 +276,13 @@ function SetupPanel({
                 onChange={(e) =>
                   setValues({ ...values, [f.key]: e.target.value })
                 }
+                // Enter checks and connects, as the button does. The
+                // dialog's own form doesn't, since this panel replaces it.
+                onKeyDown={(e) => {
+                  if (e.key !== "Enter") return
+                  e.preventDefault()
+                  if (!busy && ready) void connect()
+                }}
                 autoComplete="off"
                 required={f.required}
               />

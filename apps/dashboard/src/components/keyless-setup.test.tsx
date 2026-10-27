@@ -269,3 +269,21 @@ it("drops the tick two seconds after a copy, even when the value comes back", as
   await user.type(field, "{Backspace}")
   expect(copy.querySelector(".lucide-check")).toBeNull()
 }, 10000)
+
+it("connects when you press Enter in a field, once it's filled in", async () => {
+  const posted: Posted[] = []
+  stub(posted)
+  const onConnected = vi.fn()
+  panel({ onConnected })
+  const user = userEvent.setup()
+  await screen.findByText("https://loomplane.example")
+  const role = screen.getByLabelText("Role ARN")
+  await user.type(role, "{Enter}")
+  expect(posted).toHaveLength(1)
+  await user.type(role, "arn:aws:iam::1:role/x{Enter}")
+  await waitFor(() => expect(onConnected).toHaveBeenCalled())
+  expect(posted.map((p) => p.path.replace(/^.*\/api\/v1/, ""))).toEqual([
+    "/connections/keyless/prepare",
+    "/connections/keyless",
+  ])
+})
