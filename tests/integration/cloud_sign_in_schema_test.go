@@ -187,3 +187,52 @@ func TestCloudSignInPeopleSchema(t *testing.T) {
 		t.Fatalf("second problem for one org and cloud: err = %v, want a unique violation", err)
 	}
 }
+
+// Plan 2's migration goes down cleanly and comes back up.
+func TestCloudSignInPeopleMigrationGoesDownAndUp(t *testing.T) {
+	dsn := freshDatabase(t)
+	ctx := context.Background()
+	if err := ops.Migrate(ctx, dsn, migrations.All()); err != nil {
+		t.Fatal(err)
+	}
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx)
+	var people *migrate.Migration
+	for _, m := range migrations.Group().Migrations() {
+		if m.Name == "cloud_sign_in_people" {
+			people = m
+		}
+	}
+	if people == nil {
+		t.Fatal("no cloud_sign_in_people migration")
+	}
+	exec, err := migrate.NewExecutorFor(openPg(t, dsn))
+	if err != nil {
+		t.Fatal(err)
+	}
+	has := func() (column, table, index bool) {
+		t.Helper()
+		if err := conn.QueryRow(ctx, `SELECT
+			EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'loomplane_cloud_connections' AND column_name = 'signed_in_by'),
+			to_regclass('loomplane_oauth_app_problems') IS NOT NULL,
+			to_regclass('loomplane_oauth_sign_ins_expires_at') IS NOT NULL`).Scan(&column, &table, &index); err != nil {
+			t.Fatal(err)
+		}
+		return column, table, index
+	}
+	if err = people.Down(ctx, exec); err != nil {
+		t.Fatal(err)
+	}
+	if column, table, index := has(); column || table || index {
+		t.Fatalf("down left signed_in_by %v, the problems table %v, the index %v", column, table, index)
+	}
+	if err = people.Up(ctx, exec); err != nil {
+		t.Fatal(err)
+	}
+	if column, table, index := has(); !column || !table || !index {
+		t.Fatalf("up again: signed_in_by %v, the problems table %v, the index %v", column, table, index)
+	}
+}
