@@ -38,6 +38,12 @@ refuses "two replicas on local files" --set publicURL=https://x.example \
 refuses "a shared volume that isn't ReadWriteMany" --set publicURL=https://x.example \
 	--set secrets.secretKey="$key" --set secrets.databaseURL=postgres://x \
 	--set storage.persistence.enabled=true --set 'storage.persistence.accessModes={ReadWriteOnce}'
+refuses "deploying into this cluster with no namespace to deploy into" --set publicURL=https://x.example \
+	--set secrets.secretKey="$key" --set secrets.databaseURL=postgres://x --set storage.url=s3://b \
+	--set inCluster.enabled=true
+refuses "deploying into Loomplane's own namespace" --namespace loomplane --set publicURL=https://x.example \
+	--set secrets.secretKey="$key" --set secrets.databaseURL=postgres://x --set storage.url=s3://b \
+	--set inCluster.enabled=true --set 'inCluster.namespaces={loomplane}'
 
 rendered=$(mktemp)
 trap 'rm -f "$rendered"' EXIT

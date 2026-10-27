@@ -95,6 +95,23 @@ Each API pod opens a little over 20 database connections and each worker about 1
 
 Set `metrics.serviceMonitor.enabled` to have the Prometheus Operator scrape `/_/metrics` on both processes.
 
+## Deploying into the same cluster
+
+You can let people deploy to the cluster Loomplane runs in, with no kubeconfig to paste. List the namespaces it may use:
+
+```yaml
+inCluster:
+  enabled: true
+  namespaces: [apps, preview]
+  createNamespaces: true
+```
+
+The chart mounts the service account token in the API pods only, and binds a Role in each namespace with what a [Kubernetes connection](/docs/clouds/your-own-servers#the-cluster-loomplane-runs-in) checks for. The Kubernetes dialog under **Integrations** then opens on this cluster.
+
+Every organization on your instance shares that service account, so any of them can deploy into any namespace you list. That's right for a single-team install. On a shared one, leave it off and hand out kubeconfigs scoped per team. Loomplane always refuses its own namespace, where its database password and secret key live, and `kube-system`, `kube-public` and `kube-node-lease` too.
+
+`inCluster.clusterPermissions` (on by default) adds the cluster-wide reads that GPU inventory and retained storage need, plus updating persistent volumes so a database's volume survives recovery. Without it, those show as unavailable and plain deployments still work.
+
 ## Without Helm
 
 Each release attaches `loomplane-VERSION-kubernetes.yaml`, the chart rendered for `kubectl apply` with an ingress-nginx Ingress. Create the Secret above, replace `loomplane.example.com`, and apply it.

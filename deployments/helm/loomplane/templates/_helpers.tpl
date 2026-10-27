@@ -196,4 +196,12 @@ one replica and no shared volume.
 {{- if and .Values.storage.persistence.enabled (gt (int $replicas) 1) (not (has "ReadWriteMany" .Values.storage.persistence.accessModes)) -}}
 {{- fail "storage.persistence with more than one replica needs the ReadWriteMany access mode." -}}
 {{- end -}}
+{{- if .Values.inCluster.enabled -}}
+{{- if not .Values.inCluster.namespaces -}}
+{{- fail "inCluster.enabled needs at least one namespace in inCluster.namespaces for Loomplane to deploy into." -}}
+{{- end -}}
+{{- if has .Release.Namespace .Values.inCluster.namespaces -}}
+{{- fail (printf "inCluster.namespaces can't include %s, where Loomplane itself runs: its database password and secret key live there." .Release.Namespace) -}}
+{{- end -}}
+{{- end -}}
 {{- end -}}

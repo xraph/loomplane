@@ -41,10 +41,24 @@ type CloudForm struct {
 	// role the cloud's trust lets Loomplane assume. A cloud that can't be
 	// connected keylessly has none.
 	KeylessSettings []sdk.Setting `json:"keyless_settings,omitempty"`
+	// InClusterSettings are what connecting the cluster Loomplane runs in
+	// asks for, starting with the namespace. Only Kubernetes has them.
+	InClusterSettings []sdk.Setting `json:"in_cluster_settings,omitempty"`
 	// Methods are the ways to connect it, in this order: oauth when the
 	// organization can sign in to the cloud, keyless when the cloud can
-	// trust Loomplane's issuer, and token always.
+	// trust Loomplane's issuer, in_cluster when Loomplane runs in a
+	// Kubernetes cluster it may deploy to, and token always.
 	Methods []string `json:"methods"`
+}
+
+// kubernetesPlacement are the settings a Kubernetes connection takes
+// besides its kubeconfig, whichever way it's connected.
+var kubernetesPlacement = []sdk.Setting{
+	{Key: "image_pull_secret", Label: "Existing image pull Secret (optional)"},
+	{Key: "storage_class", Label: "Retained storage class (optional)"},
+	{Key: "architecture", Label: "Persistent service architecture (amd64 or arm64)"},
+	{Key: "ingress_class", Label: "Ingress class for routes (optional)"},
+	{Key: "ingress_address", Label: "Ingress load balancer address (IP or hostname)"},
 }
 
 // CloudList is the body of GET /api/v1/connection-clouds.
@@ -72,8 +86,9 @@ func (e *Extension) clouds(ctx context.Context, p security.Principal) (CloudList
 			Help:     "Use a PEM private key, or JSON with private_key and passphrase. Your SSH user needs access to an existing Linux Docker daemon. Copy the server's public host key from a trusted source.",
 			Settings: []sdk.Setting{{Key: "host", Label: "SSH host", Required: true}, {Key: "port", Label: "SSH port (default 22)"}, {Key: "user", Label: "SSH user", Required: true}, {Key: "host_key", Label: "Public host key", Required: true}, {Key: "docker_socket", Label: "Docker socket (default /var/run/docker.sock)"}, {Key: "advertise_host", Label: "Published address (optional)"}}},
 		{Cloud: connections.Kubernetes, Title: "Kubernetes", Credential: "Self-contained kubeconfig",
-			Help:     "Use an HTTPS API with an embedded CA and token or client certificate. The namespace must already exist. File references and executable authentication plugins are refused. For private images, select an existing namespace pull Secret that you manage. Persistent services need a retained storage class and an explicit amd64 or arm64 architecture.",
-			Settings: []sdk.Setting{{Key: "context", Label: "Context (optional)"}, {Key: "namespace", Label: "Namespace (defaults to kubeconfig)"}, {Key: "image_pull_secret", Label: "Existing image pull Secret (optional)"}, {Key: "storage_class", Label: "Retained storage class (optional)"}, {Key: "architecture", Label: "Persistent service architecture (amd64 or arm64)"}, {Key: "ingress_class", Label: "Ingress class for routes (optional)"}, {Key: "ingress_address", Label: "Ingress load balancer address (IP or hostname)"}}},
+			Help:              "Use an HTTPS API with an embedded CA and token or client certificate. The namespace must already exist. File references and executable authentication plugins are refused. For private images, select an existing namespace pull Secret that you manage. Persistent services need a retained storage class and an explicit amd64 or arm64 architecture.",
+			Settings:          append([]sdk.Setting{{Key: "context", Label: "Context (optional)"}, {Key: "namespace", Label: "Namespace (defaults to kubeconfig)"}}, kubernetesPlacement...),
+			InClusterSettings: append([]sdk.Setting{{Key: "namespace", Label: "Namespace", Required: true}}, kubernetesPlacement...)},
 		{Cloud: connections.Registry, Title: "Image registry", Credential: "Credential JSON", //nolint:gosec // Form label, not a credential.
 			Help:     "Use username/password or token JSON, with optional ca PEM. Use {} for anonymous access. HTTPS is required outside loopback. A separate token service needs an approved auth endpoint. Docker publishing and server pulls use bearer tokens; Basic-only registries need a token service. Kubernetes pulls use your existing namespace Secret.",
 			Settings: []sdk.Setting{{Key: "endpoint", Label: "Registry endpoint", Required: true}, {Key: "repository", Label: "Repository prefix", Required: true}, {Key: "auth_endpoint", Label: "Token service endpoint (optional)"}}},
@@ -146,6 +161,9 @@ func (e *Extension) clouds(ctx context.Context, p security.Principal) (CloudList
 		if _, ok := e.svc.KeylessClouds[cloud]; ok && keylessOK {
 			methods = append(methods, connections.MethodKeyless)
 		}
+		if cloud == connections.Kubernetes && connections.InClusterAvailable() {
+			methods = append(methods, connections.MethodInCluster)
+		}
 		methods = append(methods, connections.MethodToken)
 		out.Clouds[i].Methods = methods
 	}
@@ -200,6 +218,14 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 		forge.WithName("connections.create"),
 		forge.WithSummary("Connect a Google Cloud project or a Vercel account, checking the credential with the cloud first"),
 		forge.WithRequestSchema(connections.CreateInput{}),
+		forge.WithResponseSchema(http.StatusCreated, "The connection", connections.Connection{}),
+	); err != nil {
+		return err
+	}
+	if err := g.POST("/connections/in-cluster", e.createInCluster,
+		forge.WithName("connectionInCluster.create"),
+		forge.WithSummary("Connect the Kubernetes cluster Loomplane runs in, as Loomplane's own service account, checking the namespace first"),
+		forge.WithRequestSchema(connections.InClusterInput{}),
 		forge.WithResponseSchema(http.StatusCreated, "The connection", connections.Connection{}),
 	); err != nil {
 		return err
@@ -288,6 +314,22 @@ func (e *Extension) create(c forge.Context) error {
 		return forge.NewHTTPError(http.StatusBadRequest, `the body must be JSON: {"cloud": "gcp", "name": "...", "credential": "..."}`)
 	}
 	conn, err := e.svc.Create(c.Request().Context(), p, in)
+	if err != nil {
+		return fail(err)
+	}
+	return c.JSON(http.StatusCreated, conn)
+}
+
+func (e *Extension) createInCluster(c forge.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	var in connections.InClusterInput
+	if err = c.BindJSON(&in); err != nil {
+		return forge.NewHTTPError(http.StatusBadRequest, `the body must be JSON: {"name": "...", "settings": {"namespace": "..."}}`)
+	}
+	conn, err := e.svc.CreateInCluster(c.Request().Context(), p, in)
 	if err != nil {
 		return fail(err)
 	}

@@ -34,7 +34,7 @@ spec:
         {{- toYaml . | nindent 8 }}
       {{- end }}
       serviceAccountName: {{ include "loomplane.serviceAccountName" . }}
-      automountServiceAccountToken: {{ .Values.serviceAccount.automountToken }}
+      automountServiceAccountToken: {{ or .Values.serviceAccount.automountToken .Values.inCluster.enabled }}
       terminationGracePeriodSeconds: {{ .Values.api.terminationGracePeriodSeconds }}
       securityContext:
         {{- toYaml .Values.podSecurityContext | nindent 8 }}
