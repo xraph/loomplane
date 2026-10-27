@@ -43,7 +43,8 @@ export function RemoveDomainDialog({
   zone?: ZoneOverview
   open: boolean
   onOpenChange: (open: boolean) => void
-  onRemoved: () => void
+  /** Awaited before the page reads anything again. */
+  onRemoved: () => void | Promise<void>
 }) {
   const fieldID = useId()
   const remove = useMutation(useDnsZonesRemove)
@@ -88,7 +89,7 @@ export function RemoveDomainDialog({
   }
 
   const confirm = async () => {
-    if (!z) return
+    if (!z || remove.isPending) return
     setError("")
     try {
       await remove.mutateAsync({
@@ -97,13 +98,17 @@ export function RemoveDomainDialog({
       })
       toast.success(`Removed ${name}`)
       show(false)
-      onRemoved()
+      // Leaving a removed zone's own page first keeps it from reading the
+      // zone again and showing not found.
+      await onRemoved()
       invalidate(useDomainsOverview)
       invalidate(useDnsZonesGet)
     } catch (err) {
       const inUse = zoneInUse(err)
       if (inUse && inUse.length > 0) {
         setRefused(inUse)
+        // The page's own hostnames catch up with what the API knows.
+        invalidate(useDnsZonesGet)
         return
       }
       setError(messageOf(err, `The ${kind} wasn't removed.`))
@@ -151,18 +156,29 @@ export function RemoveDomainDialog({
                 Remove these hostnames first.
               </p>
               <ul className="grid gap-1 text-[12.5px]">
-                {blocking.map((h) => (
-                  <li key={h.routeId || h.hostname} className="min-w-0">
-                    <Link
-                      to="/projects/$id"
-                      params={{ id: h.projectId }}
-                      className="font-mono font-medium break-all text-foreground underline-offset-4 hover:underline"
-                    >
-                      {h.hostname}
-                    </Link>{" "}
-                    <span className="text-muted-foreground">
-                      in {h.projectName || h.projectId}
-                    </span>
+                {blocking.map((h, i) => (
+                  <li key={h.routeId || h.hostname || i} className="min-w-0">
+                    {h.projectId ? (
+                      <Link
+                        to="/projects/$id"
+                        params={{ id: h.projectId }}
+                        className="font-mono font-medium break-all text-foreground underline-offset-4 hover:underline"
+                      >
+                        {h.hostname}
+                      </Link>
+                    ) : (
+                      <span className="font-mono font-medium break-all text-foreground">
+                        {h.hostname}
+                      </span>
+                    )}
+                    {(h.projectName || h.projectId) && (
+                      <>
+                        {" "}
+                        <span className="text-muted-foreground">
+                          in {h.projectName || h.projectId}
+                        </span>
+                      </>
+                    )}
                   </li>
                 ))}
               </ul>

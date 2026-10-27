@@ -333,6 +333,7 @@ function Sections({ detail, zone }: { detail: DomainDetail; zone: Zone }) {
 
       <AddSubdomainDialog
         domain={zone}
+        provedBy={detail.proofZone?.zone}
         open={adding}
         onOpenChange={setAdding}
         onAdded={(added) =>
@@ -348,13 +349,13 @@ function Sections({ detail, zone }: { detail: DomainDetail; zone: Zone }) {
         onOpenChange={setRemoving}
         onRemoved={() =>
           // A subdomain's page goes back to the zone it was part of.
-          void (detail.parent?.zone
+          detail.parent?.zone
             ? navigate({
                 to: "/domains/$zoneId",
                 params: { zoneId: detail.parent.zone.id },
                 replace: true,
               })
-            : navigate({ to: "/domains", replace: true }))
+            : navigate({ to: "/domains", replace: true })
         }
       />
       {removingSub && (

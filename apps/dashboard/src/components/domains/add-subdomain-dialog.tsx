@@ -1,5 +1,5 @@
 // Adding a zone under a domain from its page. It's verified through the
-// domain, so there's no TXT record to add, and its DNS stays with the
+// zone that proves the domain, so there's no TXT record to add, and its DNS stays with the
 // domain's unless you say it's hosted elsewhere. Not in the mock.
 import { useId, useState } from "react"
 
@@ -31,11 +31,14 @@ const hosts = ["cloudflare", "digitalocean", "vercel"]
 
 export function AddSubdomainDialog({
   domain,
+  provedBy,
   open,
   onOpenChange,
   onAdded,
 }: {
   domain: Zone
+  /** The zone whose TXT record verifies domain, when it isn't domain's own. */
+  provedBy?: Zone
   open: boolean
   onOpenChange: (open: boolean) => void
   onAdded: (zone: Zone) => void
@@ -66,6 +69,7 @@ export function AddSubdomainDialog({
   }
 
   const add = async () => {
+    if (create.isPending) return
     setError("")
     if (!validSubdomainLabel(label)) {
       setError("Enter a label like app or api.eu.")
@@ -111,8 +115,9 @@ export function AddSubdomainDialog({
             Add a subdomain
           </DialogTitle>
           <DialogDescription className="leading-normal">
-            It&apos;s verified through {domain.name}, so you don&apos;t add a
-            TXT record for it. Projects need their own grant to use it.
+            It&apos;s verified through {(provedBy ?? domain).name}, so you
+            don&apos;t add a TXT record for it. Projects need their own grant to
+            use it.
           </DialogDescription>
         </DialogHeader>
         <form
