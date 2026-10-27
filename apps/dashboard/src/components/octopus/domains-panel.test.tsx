@@ -11,6 +11,7 @@ import {
   json,
   mockBoard,
   mount,
+  operation,
   panelProps,
   row,
   serve,
@@ -421,6 +422,44 @@ test("attach previews then applies a gateway route", async () => {
       path: "/api/v1/projects/p/route-operations/routeop_1/apply",
       body: { review: "review-token" },
     },
+  ])
+})
+
+test("a failed attach says why and keeps the dialog open", async () => {
+  const writes = serve({
+    board: board(),
+    domainRoutes: domainRoutes(),
+    write: (w) =>
+      w.path.endsWith("/apply")
+        ? json(
+            operation(
+              "routeop_1",
+              "failed",
+              "The DNS provider refused the record."
+            )
+          )
+        : undefined,
+  })
+  mount(<DomainsPanel {...panelProps()} />)
+  await userEvent.click(
+    await screen.findByRole("button", { name: "Attach a domain" })
+  )
+  const dialog = await screen.findByRole("dialog", { name: "Attach a domain" })
+  await userEvent.type(
+    await within(dialog).findByRole("textbox", { name: "Subdomain" }),
+    "docs"
+  )
+  await userEvent.click(within(dialog).getByRole("button", { name: "Preview" }))
+  await userEvent.click(
+    await within(dialog).findByRole("button", { name: "Attach" })
+  )
+  expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+    "The DNS provider refused the record."
+  )
+  expect(screen.getByRole("dialog", { name: "Attach a domain" })).toBeVisible()
+  expect(posts(writes).map((w) => w.path)).toEqual([
+    "/api/v1/projects/p/domain-routes/preview",
+    "/api/v1/projects/p/route-operations/routeop_1/apply",
   ])
 })
 

@@ -93,6 +93,38 @@ test("settings shows the sync error and hides the push without infrastructure:mo
   ).toBeNull()
 })
 
+test("a sync error with everything applied isn't still pushing", async () => {
+  // Octopus refused one route and took the rest: the generation is applied.
+  serve({
+    status: {
+      ...mockStatus(),
+      generation: 5,
+      applied_generation: 5,
+      sync_error:
+        "Octopus didn't accept one of this gateway's routes. The route says why.",
+    },
+  })
+  const view = mount(<SettingsPanel {...panelProps()} />)
+  const sync = await screen.findByRole("region", { name: "Sync" })
+  expect(
+    within(sync).getByText(
+      "Octopus didn't accept one of this gateway's routes. The route says why."
+    )
+  ).toBeVisible()
+  expect(within(sync).queryByText("Pushing to Octopus")).toBeNull()
+  view.unmount()
+  forgeClient.clear()
+
+  // A change still on its way says so.
+  serve({ status: { ...mockStatus(), generation: 6, applied_generation: 5 } })
+  mount(<SettingsPanel {...panelProps()} />)
+  expect(
+    within(await screen.findByRole("region", { name: "Sync" })).getByText(
+      "Pushing to Octopus"
+    )
+  ).toBeVisible()
+})
+
 test("a push that can't reach Octopus says so", async () => {
   serve({
     write: (w) =>

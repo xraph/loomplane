@@ -10,6 +10,7 @@ import {
   json,
   mockBoard,
   mount,
+  operation,
   panelProps,
   serve,
   type Write,
@@ -306,6 +307,42 @@ test("a refused route after attaching shows why and doesn't attach twice", async
     "/api/v1/projects/p/route-operations/routeop_1/apply",
     routesPath,
     routesPath,
+  ])
+})
+
+test("a domain that fails to attach stops before the route is created", async () => {
+  const writes = serve({
+    board: board(),
+    write: (w) =>
+      w.path.endsWith("/apply")
+        ? json(
+            operation(
+              "routeop_1",
+              "failed",
+              "The DNS provider refused the record."
+            )
+          )
+        : undefined,
+  })
+  mount(<RoutesPanel {...panelProps()} />)
+  const dialog = await openAdd()
+  await pick(dialog, "Domain", "Attach another domain…")
+  await userEvent.type(
+    await within(dialog).findByRole("textbox", { name: "Subdomain" }),
+    "docs"
+  )
+  await typePath(dialog, "/*")
+  await pick(dialog, "Send to", "web · port 3000")
+  await userEvent.click(
+    within(dialog).getByRole("button", { name: "Add route" })
+  )
+  expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+    "The DNS provider refused the record."
+  )
+  expect(screen.getByRole("dialog")).toBeVisible()
+  expect(posts(writes).map((w) => w.path)).toEqual([
+    "/api/v1/projects/p/domain-routes/preview",
+    "/api/v1/projects/p/route-operations/routeop_1/apply",
   ])
 })
 

@@ -314,7 +314,15 @@ function RouteForm({
           const op = await lifecycle.preview(
             gatewayRouteInput(defaults, { zoneId: attach.zoneId, hostname })
           )
-          await lifecycle.apply(op)
+          const applied = await lifecycle.apply(op)
+          // An apply can answer with an operation that failed: the domain
+          // isn't attached, so the route isn't created.
+          if (applied.status === "failed") {
+            setErrors({
+              form: applied.message || "The domain wasn't attached.",
+            })
+            return
+          }
           setAttached(hostname)
           // The new domain gets its own card even if the route is refused.
           invalidate(useOctopusBoard)

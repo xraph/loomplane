@@ -185,7 +185,7 @@ const applied = {
 }
 
 /** A domain route operation, as preview and apply answer. */
-function operation(id: string, status: string): Json {
+export function operation(id: string, status: string, message = ""): Json {
   const zero = "0001-01-01T00:00:00Z"
   return {
     id,
@@ -195,7 +195,7 @@ function operation(id: string, status: string): Json {
     attempt: 1,
     revision: 1,
     generation: 0,
-    message: "",
+    message,
     created_at: zero,
     expires_at: zero,
     not_before: zero,
