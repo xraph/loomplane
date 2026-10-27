@@ -2,7 +2,7 @@
 // hostname that uses it, who may use it, and its wildcards and
 // registration. Not in the mock, which has the Domains list only; it is
 // built from the list's pieces and design language.
-import { GlobeIcon } from "lucide-react"
+import { EllipsisIcon, GlobeIcon, PlusIcon } from "lucide-react"
 import { type ReactNode, useEffect, useId, useMemo, useState } from "react"
 import { toast } from "sonner"
 
@@ -18,10 +18,12 @@ import type {
   Zone,
 } from "@/client/forge/loomplane/types"
 import { useQuery } from "@/client/hooks"
+import { AddSubdomainDialog } from "@/components/domains/add-subdomain-dialog"
 import { ChallengeCredentialDialog } from "@/components/domains/challenge-credential-dialog"
 import { DomainStatePill } from "@/components/domains/domain-states"
 import { DomainStatus } from "@/components/domains/domain-status"
 import { HostnameTable } from "@/components/domains/hostname-table"
+import { RemoveDomainDialog } from "@/components/domains/remove-domain-dialog"
 import { useAutoRenew } from "@/components/domains/renewal-banner"
 import { Restricted } from "@/components/domains/restricted"
 import { SubdomainTable } from "@/components/domains/subdomain-table"
@@ -34,6 +36,12 @@ import { Page, PageHeading } from "@/components/page"
 import { QueryError } from "@/components/query-error"
 import { SiteHeader } from "@/components/site-header"
 import { Button, buttonVariants } from "@/components/ui/button"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
   ZeroState,
@@ -57,7 +65,7 @@ import {
   zoneDNSTone,
 } from "@/lib/domains"
 import { useOrganization } from "@/lib/organization"
-import { Link } from "@/lib/router"
+import { Link, useNavigate } from "@/lib/router"
 
 export function DomainDetailPage({ zoneId }: { zoneId: string }) {
   const { session, can } = useOrganization()
@@ -171,7 +179,14 @@ function Detail({ zoneId }: { zoneId: string }) {
 
 function Sections({ detail, zone }: { detail: DomainDetail; zone: Zone }) {
   const { domain, subdomains } = detail
+  const navigate = useNavigate()
   const now = useClock()
+  const [adding, setAdding] = useState(false)
+  const [removing, setRemoving] = useState(false)
+  // By ID, so the dialog follows the subdomain as the page reads it again.
+  const [removingID, setRemovingID] = useState("")
+  const removingSub = subdomains.find((s) => s.zone?.id === removingID)
+  const kind = domain.parentZoneId ? "subdomain" : "domain"
   const ready = domain.state === "ready"
   // A subdomain without a proof of its own is checked on the zone whose is.
   const proving = detail.proofZone?.zone ?? zone
@@ -201,16 +216,38 @@ function Sections({ detail, zone }: { detail: DomainDetail; zone: Zone }) {
       <PageHeading
         title={<span className="font-mono break-all">{zone.name}</span>}
         actions={
-          // Task 7 adds Add subdomain and the overflow menu with Remove.
-          checkable && (
-            <div
-              role="group"
-              aria-label="Domain actions"
-              className="flex flex-wrap items-center gap-2"
-            >
-              <CheckAgainAction zone={proving} />
-            </div>
-          )
+          <div
+            role="group"
+            aria-label="Domain actions"
+            className="flex flex-wrap items-center gap-2"
+          >
+            {checkable && <CheckAgainAction zone={proving} />}
+            <Button variant="outline" onClick={() => setAdding(true)}>
+              <PlusIcon />
+              Add subdomain
+            </Button>
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                render={
+                  <Button
+                    variant="outline"
+                    size="icon"
+                    aria-label="More domain actions"
+                  />
+                }
+              >
+                <EllipsisIcon />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end" className="w-48">
+                <DropdownMenuItem
+                  variant="destructive"
+                  onClick={() => setRemoving(true)}
+                >
+                  Remove {kind}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </div>
         }
       >
         <div className="flex flex-wrap items-center gap-2 pt-1">
@@ -228,10 +265,21 @@ function Sections({ detail, zone }: { detail: DomainDetail; zone: Zone }) {
       </Section>
 
       {listsSubdomains && (
-        <Section title="Subdomains" count={subdomains.length}>
+        <Section
+          title="Subdomains"
+          count={subdomains.length}
+          action={
+            <Button variant="ghost" size="sm" onClick={() => setAdding(true)}>
+              <PlusIcon />
+              Add subdomain
+            </Button>
+          }
+        >
           {subdomains.length > 0 ? (
-            // Task 7 passes onRemove.
-            <SubdomainTable detail={detail} />
+            <SubdomainTable
+              detail={detail}
+              onRemove={(sub) => setRemovingID(sub.zone?.id ?? "")}
+            />
           ) : (
             // Not in the mock.
             <p className="px-4 py-3 text-[12.5px] text-muted-foreground">
@@ -281,7 +329,45 @@ function Sections({ detail, zone }: { detail: DomainDetail; zone: Zone }) {
         </Section>
       )}
 
-      {/* Task 7 adds the danger zone with Remove domain. */}
+      <DangerZone kind={kind} onRemove={() => setRemoving(true)} />
+
+      <AddSubdomainDialog
+        domain={zone}
+        open={adding}
+        onOpenChange={setAdding}
+        onAdded={(added) =>
+          void navigate({
+            to: "/domains/$zoneId",
+            params: { zoneId: added.id },
+          })
+        }
+      />
+      <RemoveDomainDialog
+        detail={detail}
+        open={removing}
+        onOpenChange={setRemoving}
+        onRemoved={() =>
+          // A subdomain's page goes back to the zone it was part of.
+          void (detail.parent?.zone
+            ? navigate({
+                to: "/domains/$zoneId",
+                params: { zoneId: detail.parent.zone.id },
+                replace: true,
+              })
+            : navigate({ to: "/domains", replace: true }))
+        }
+      />
+      {removingSub && (
+        <RemoveDomainDialog
+          detail={detail}
+          zone={removingSub}
+          open
+          onOpenChange={(next) => {
+            if (!next) setRemovingID("")
+          }}
+          onRemoved={() => setRemovingID("")}
+        />
+      )}
     </>
   )
 }
@@ -289,10 +375,13 @@ function Sections({ detail, zone }: { detail: DomainDetail; zone: Zone }) {
 function Section({
   title,
   count,
+  action,
   children,
 }: {
   title: string
   count?: number
+  /** Sits at the end of the section's heading row. */
+  action?: ReactNode
   children?: ReactNode
 }) {
   const id = useId()
@@ -316,8 +405,45 @@ function Section({
             {count}
           </span>
         )}
+        {action && <div className="-my-1 ml-auto">{action}</div>}
       </div>
       {children}
+    </section>
+  )
+}
+
+// The DeleteProject pattern. Not in the mock.
+function DangerZone({
+  kind,
+  onRemove,
+}: {
+  kind: "domain" | "subdomain"
+  onRemove: () => void
+}) {
+  const id = useId()
+  return (
+    <section
+      aria-labelledby={id}
+      className="flex flex-wrap items-center gap-3 rounded-xl bg-card px-4 py-3.5 ring-1 ring-destructive/25"
+    >
+      <div className="grid min-w-0 flex-[1_1_360px] gap-1">
+        <h2 id={id} className="text-[14px] font-semibold">
+          Remove {kind}
+        </h2>
+        <p className="text-[12.5px] leading-normal text-muted-foreground">
+          {kind === "domain"
+            ? "Removes the domain and its subdomains from Loomplane. Hostnames that use them have to go first."
+            : "Removes the subdomain, and any zone under it, from Loomplane. Hostnames that use them have to go first."}{" "}
+          Loomplane deletes only the DNS records it wrote.
+        </p>
+      </div>
+      <Button
+        variant="outline"
+        className="border-destructive/25 text-destructive hover:bg-destructive/10 hover:text-destructive"
+        onClick={onRemove}
+      >
+        Remove {kind}
+      </Button>
     </section>
   )
 }

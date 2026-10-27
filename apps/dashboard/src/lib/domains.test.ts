@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest"
 
+import { HTTPError } from "@/client/forge/loomplane/fetch"
+
 import type {
   CloudinfraRouteStatus,
   DomainOffer,
@@ -31,8 +33,11 @@ import {
   runsOnLabel,
   sameHosting,
   stateTone,
+  subdomainName,
   usedByLabel,
+  validSubdomainLabel,
   zoneDNSLabel,
+  zoneInUse,
   zoneNeedsAttention,
 } from "./domains"
 
@@ -668,5 +673,64 @@ describe("domains and subdomains", () => {
       "Granted to acme-shop, blog"
     )
     expect(grantsLine([], names)).toBe("Not granted to a project yet")
+  })
+})
+
+describe("adding and removing", () => {
+  it("builds a subdomain name from a label", () => {
+    expect(subdomainName("api.eu", "loomplane.com")).toBe(
+      "api.eu.loomplane.com"
+    )
+    expect(subdomainName("  App ", "Loomplane.com")).toBe("app.loomplane.com")
+    for (const ok of ["app", "api.eu", "a1-b", "x"])
+      expect(validSubdomainLabel(ok)).toBe(true)
+    for (const bad of [
+      "",
+      " ",
+      "*",
+      "*.app",
+      "-app",
+      "app-",
+      ".app",
+      "app.",
+      "a..b",
+      "app_1",
+      "a.-b",
+      "x".repeat(64),
+    ])
+      expect(validSubdomainLabel(bad)).toBe(false)
+  })
+
+  it("reads the blocking hostnames from a refusal", () => {
+    const refusal = new HTTPError(409, "Remove these hostnames first.", "", {
+      hostnames: [
+        {
+          route_id: "r1",
+          hostname: "api.loomplane.com",
+          zone_id: "zone-loomplane.com",
+          zone_name: "loomplane.com",
+          project_id: "shop",
+          project_name: "acme-shop",
+        },
+      ],
+    })
+    expect(zoneInUse(refusal)).toEqual([
+      {
+        routeId: "r1",
+        hostname: "api.loomplane.com",
+        zoneId: "zone-loomplane.com",
+        zoneName: "loomplane.com",
+        projectId: "shop",
+        projectName: "acme-shop",
+      },
+    ])
+    // A stale revision is a 409 with only a message.
+    expect(
+      zoneInUse(new HTTPError(409, "stale", "", { message: "stale" }))
+    ).toBeNull()
+    expect(
+      zoneInUse(new HTTPError(404, "gone", "", { hostnames: [] }))
+    ).toBeNull()
+    expect(zoneInUse(new Error("boom"))).toBeNull()
   })
 })

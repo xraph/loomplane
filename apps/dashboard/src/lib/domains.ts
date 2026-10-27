@@ -3,6 +3,7 @@
 // lines under each domain's name.
 import { useEffect, useState } from "react"
 
+import { statusOf } from "@/client/errors"
 import type {
   CloudinfraRouteStatus,
   DomainOffer,
@@ -534,4 +535,56 @@ export function useClock(interval = 60000): number {
     return () => window.clearInterval(id)
   }, [interval])
   return now
+}
+
+/** subdomainName is the zone a label adds under parent: "api.eu.loomplane.com". */
+export function subdomainName(label: string, parent: string): string {
+  const l = label.trim().toLowerCase()
+  const p = parent.trim().toLowerCase()
+  return l ? `${l}.${p}` : p
+}
+
+const dnsLabel63 = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/
+
+/**
+ * validSubdomainLabel: one or more DNS labels joined by dots, as the API
+ * takes them. No wildcard, and no label starts or ends with a hyphen.
+ */
+export function validSubdomainLabel(label: string): boolean {
+  const l = label.trim().toLowerCase()
+  return !!l && l.split(".").every((part) => dnsLabel63.test(part))
+}
+
+/** A hostname that keeps a zone from being removed, and who uses it. */
+export type BlockingHostname = {
+  routeId: string
+  hostname: string
+  zoneId: string
+  zoneName: string
+  projectId: string
+  projectName: string
+}
+
+/**
+ * zoneInUse is the hostnames a removal was refused for: a 409 whose
+ * details carry them. The client hands details over as the API wrote them,
+ * in snake_case. Any other failure is null.
+ */
+export function zoneInUse(err: unknown): BlockingHostname[] | null {
+  if (statusOf(err) !== 409) return null
+  const details = (err as { details?: unknown }).details
+  const hostnames =
+    details && typeof details === "object"
+      ? (details as { hostnames?: unknown }).hostnames
+      : undefined
+  if (!Array.isArray(hostnames)) return null
+  const text = (v: unknown) => (typeof v === "string" ? v : "")
+  return hostnames.map((h: Record<string, unknown>) => ({
+    routeId: text(h?.route_id),
+    hostname: text(h?.hostname),
+    zoneId: text(h?.zone_id),
+    zoneName: text(h?.zone_name),
+    projectId: text(h?.project_id),
+    projectName: text(h?.project_name),
+  }))
 }
