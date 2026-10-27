@@ -5,6 +5,7 @@ import (
 	"maps"
 	"regexp"
 	"slices"
+	"sync"
 	"time"
 )
 
@@ -78,9 +79,29 @@ type Setting struct {
 }
 
 // Matches reports whether value matches the setting's pattern as a whole.
+// A pattern that doesn't compile matches nothing.
 func (s Setting) Matches(value string) bool {
-	re, err := regexp.Compile(`^(?:` + s.Pattern + `)$`)
-	return err == nil && re.MatchString(value)
+	re := settingPattern(s.Pattern)
+	return re != nil && re.MatchString(value)
+}
+
+// settingPatterns holds each setting pattern compiled once, anchored, by
+// its source; nil for one that doesn't compile.
+var settingPatterns sync.Map // string -> *regexp.Regexp
+
+func settingPattern(pattern string) *regexp.Regexp {
+	if v, ok := settingPatterns.Load(pattern); ok {
+		if re, ok := v.(*regexp.Regexp); ok {
+			return re
+		}
+		return nil
+	}
+	re, err := regexp.Compile(`^(?:` + pattern + `)$`)
+	if err != nil {
+		re = nil
+	}
+	settingPatterns.Store(pattern, re)
+	return re
 }
 
 // FeatureAI is the feature of the kinds that need the server's AI section

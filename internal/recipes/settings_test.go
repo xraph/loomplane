@@ -56,9 +56,15 @@ func TestRegisterValidatesSettings(t *testing.T) {
 
 func TestSettingMatchesTheWholeValue(t *testing.T) {
 	s := recipes.Setting{Name: "size", Title: "Size", Pattern: "[0-9]+"}
-	for value, want := range map[string]bool{"1": true, "12": true, "": false, "1x": false, "x1": false} {
-		if got := s.Matches(value); got != want {
-			t.Errorf("Matches(%q) = %v, want %v", value, got, want)
+	// Twice, so the second round reads the compiled pattern.
+	for range 2 {
+		for value, want := range map[string]bool{"1": true, "12": true, "": false, "1x": false, "x1": false} {
+			if got := s.Matches(value); got != want {
+				t.Errorf("Matches(%q) = %v, want %v", value, got, want)
+			}
+		}
+		if bad := (recipes.Setting{Name: "bad", Pattern: "("}); bad.Matches("(") || bad.Matches("") {
+			t.Error("a pattern that doesn't compile matched")
 		}
 	}
 }

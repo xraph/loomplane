@@ -503,6 +503,14 @@ func (p *planner) planResources() {
 			composed = append(composed, name)
 			continue
 		}
+		// Only composed catalog kinds take settings, so every one here is
+		// unknown, as on a catalog kind without settings.
+		for _, key := range slices.Sorted(maps.Keys(r.Settings)) {
+			p.problem(Finding{
+				Code: "catalog-setting-unknown", Subject: ResourceSubject, Name: name, Path: base + ".settings." + key,
+				Message: fmt.Sprintf("%s has no setting %s.", name, key),
+			})
+		}
 		if set.GPU != nil {
 			title := r.Kind
 			if engine, ok := p.kinds().Engine(r.Kind); ok {

@@ -413,7 +413,8 @@ func WithResourceUpdate(doc []byte, resource string, u ResourceUpdate) ([]byte, 
 
 // WithoutResource removes a resource. It refuses while a service needs it
 // or another resource uses it, naming them, since the manifest wouldn't
-// make sense without it.
+// make sense without it. Finding them means parsing doc, so a manifest
+// that doesn't parse can't lose a resource this way; fix it first.
 func WithoutResource(doc []byte, resource string) ([]byte, error) {
 	root, file, err := mapping(doc)
 	if err != nil {

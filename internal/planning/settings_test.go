@@ -81,6 +81,8 @@ func TestSettingProblems(t *testing.T) {
 			Finding{Code: "catalog-setting-required", Path: "resources.app.settings.model", Message: "app needs Model."}},
 		{"kind without settings", recipestest.Registry(t), settingsApp("{model: acme/x}"),
 			Finding{Code: "catalog-setting-unknown", Path: "resources.app.settings.model", Message: "app has no setting model."}},
+		{"resource that takes none", recipestest.Registry(t), "version: 1\nresources:\n  app: {kind: postgres, provider: server, target: " + targetA + ", settings: {model: acme/x}}\n",
+			Finding{Code: "catalog-setting-unknown", Path: "resources.app.settings.model", Message: "app has no setting model."}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			r := composedPlan(t, tc.kinds, tc.doc)
