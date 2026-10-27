@@ -71,7 +71,9 @@ func newAzureKeylessRig(t *testing.T) (*keylessRig, *fakeAzureTrust) {
 			form.Get("client_assertion_type") != "urn:ietf:params:oauth:client-assertion-type:jwt-bearer" ||
 			!strings.HasPrefix(form.Get("client_assertion"), "minted-for org:"):
 			w.WriteHeader(http.StatusBadRequest)
-			_, _ = w.Write([]byte(`{"error":"invalid_client","error_description":"AADSTS70021: No matching federated identity record found for presented assertion.","error_codes":[70021]}`))
+			// Entra files a missing federated credential under
+			// invalid_request, as its troubleshooting pages quote it.
+			_, _ = w.Write([]byte(`{"error":"invalid_request","error_description":"AADSTS70021: No matching federated identity record found for presented assertion.","error_codes":[70021]}`))
 		default:
 			_, _ = w.Write([]byte(`{"access_token":"fake-token","expires_in":3600}`))
 		}

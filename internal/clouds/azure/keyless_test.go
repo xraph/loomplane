@@ -229,18 +229,22 @@ func TestBearerSaysTheTrustIsMissing(t *testing.T) {
 		rejected bool
 		code     string
 	}{
-		"no federated credential": {400, `{"error":"invalid_client","error_description":"AADSTS70021: ` + echoed + `. Assertion Issuer: 'https://loomplane.example'.\r\nTrace ID: x","error_codes":[70021]}`, true, "invalid_client AADSTS70021"},
-		"code only in the text":   {401, `{"error":"invalid_client","error_description":"AADSTS70021: ` + echoed + `."}`, true, "invalid_client AADSTS70021"},
-		"issuer doesn't match":    {400, `{"error":"invalid_client","error_description":"AADSTS700211: ` + echoed + ` issuer.","error_codes":[700211]}`, true, "invalid_client AADSTS700211"},
-		"audience doesn't match":  {400, `{"error":"invalid_client","error_description":"AADSTS700212: ` + echoed + ` audience.","error_codes":[700212]}`, true, "invalid_client AADSTS700212"},
-		"subject doesn't match":   {400, `{"error":"invalid_client","error_description":"AADSTS700213: ` + echoed + ` subject.","error_codes":[700213]}`, true, "invalid_client AADSTS700213"},
-		"app not in the tenant":   {400, `{"error":"unauthorized_client","error_description":"AADSTS700016: Application with identifier '` + client + `' was not found.","error_codes":[700016]}`, true, "unauthorized_client AADSTS700016"},
-		"app disabled":            {400, `{"error":"invalid_client","error_description":"AADSTS7000112: Application is disabled.","error_codes":[7000112]}`, true, "invalid_client AADSTS7000112"},
-		"unauthorized, no code":   {400, `{"error":"unauthorized_client"}`, true, "unauthorized_client"},
+		"no federated credential":  {400, `{"error":"invalid_client","error_description":"AADSTS70021: ` + echoed + `. Assertion Issuer: 'https://loomplane.example'.\r\nTrace ID: x","error_codes":[70021]}`, true, "invalid_client AADSTS70021"},
+		"filed as invalid_request": {400, `{"error":"invalid_request","error_description":"AADSTS70021: ` + echoed + `. Assertion Request: {}.","error_codes":[70021]}`, true, "invalid_request AADSTS70021"},
+		"request, code in text":    {400, `{"error":"invalid_request","error_description":"AADSTS70021: ` + echoed + `."}`, true, "invalid_request AADSTS70021"},
+		"no credential left":       {400, `{"error":"invalid_client","error_description":"AADSTS70025: Client application has no configured federated identity credentials.","error_codes":[70025]}`, true, "invalid_client AADSTS70025"},
+		"code only in the text":    {401, `{"error":"invalid_client","error_description":"AADSTS70021: ` + echoed + `."}`, true, "invalid_client AADSTS70021"},
+		"issuer doesn't match":     {400, `{"error":"invalid_client","error_description":"AADSTS700211: ` + echoed + ` issuer.","error_codes":[700211]}`, true, "invalid_client AADSTS700211"},
+		"audience doesn't match":   {400, `{"error":"invalid_client","error_description":"AADSTS700212: ` + echoed + ` audience.","error_codes":[700212]}`, true, "invalid_client AADSTS700212"},
+		"subject doesn't match":    {400, `{"error":"invalid_client","error_description":"AADSTS700213: ` + echoed + ` subject.","error_codes":[700213]}`, true, "invalid_client AADSTS700213"},
+		"app not in the tenant":    {400, `{"error":"unauthorized_client","error_description":"AADSTS700016: Application with identifier '` + client + `' was not found.","error_codes":[700016]}`, true, "unauthorized_client AADSTS700016"},
+		"app disabled":             {400, `{"error":"invalid_client","error_description":"AADSTS7000112: Application is disabled.","error_codes":[7000112]}`, true, "invalid_client AADSTS7000112"},
+		"unauthorized, no code":    {400, `{"error":"unauthorized_client"}`, true, "unauthorized_client"},
 
 		"out of its time range": {400, `{"error":"invalid_client","error_description":"AADSTS700024: Client assertion is not within its valid time range.","error_codes":[700024]}`, false, "invalid_client AADSTS700024"},
 		"issuer unreachable":    {400, `{"error":"invalid_client","error_description":"AADSTS501661: Error fetching OIDC discovery document.","error_codes":[501661]}`, false, "invalid_client AADSTS501661"},
 		"keys unreachable":      {400, `{"error":"unauthorized_client","error_description":"AADSTS50166: Request to External OIDC endpoint failed.","error_codes":[50166]}`, false, "unauthorized_client AADSTS50166"},
+		"keys unreadable":       {400, `{"error":"invalid_request","error_description":"AADSTS900612: Failed to parse provider signing keys.","error_codes":[900612]}`, false, "invalid_request AADSTS900612"},
 		"service error":         {400, `{"error":"unauthorized_client","error_description":"AADSTS50000: There was an error issuing a token.","error_codes":[50000]}`, false, "unauthorized_client AADSTS50000"},
 		"stale signing key":     {401, `{"error":"invalid_client","error_description":"AADSTS700027: Client assertion contains an invalid signature.","error_codes":[700027]}`, false, "invalid_client AADSTS700027"},
 		"invalid, no code":      {401, `{"error":"invalid_client"}`, false, "invalid_client"},
@@ -260,6 +264,9 @@ func TestBearerSaysTheTrustIsMissing(t *testing.T) {
 		}
 		if tc.rejected && !strings.Contains(msg, "Azure doesn't trust Loomplane for this app; check its federated credential") {
 			t.Errorf("%s: the refusal doesn't say what to check", name)
+		}
+		if reach := strings.Contains(msg, "check that its public URL is reachable"); reach != (name == "keys unreachable" || name == "issuer unreachable" || name == "keys unreadable") {
+			t.Errorf("%s: says to check the public URL: %v", name, reach)
 		}
 		for _, echo := range []string{echoed, "Trace ID", "loomplane.example", client, "oops", "Client assertion"} {
 			if strings.Contains(msg, echo) {
@@ -311,7 +318,7 @@ func TestKeylessSetupNamesTheSubject(t *testing.T) {
 	if len(steps) != 2 {
 		t.Fatalf("steps: %d", len(steps))
 	}
-	want := `az ad app federated-credential create --id <client-id> --parameters '{"name":"loomplane","issuer":"https://loomplane.example/oidc","subject":"` + testSubject + `","audiences":["api://AzureADTokenExchange"]}'`
+	want := `az ad app federated-credential create --id <client-id> --parameters '{"name":"loomplane-conn_1","issuer":"https://loomplane.example/oidc","subject":"` + testSubject + `","audiences":["api://AzureADTokenExchange"]}'`
 	if steps[0].Command != want {
 		t.Fatalf("federated credential:\n%s\nwant\n%s", steps[0].Command, want)
 	}
@@ -323,8 +330,23 @@ func TestKeylessSetupNamesTheSubject(t *testing.T) {
 			t.Errorf("step: %+v", step)
 		}
 	}
+	if !strings.Contains(steps[1].Body, "the resource group below") {
+		t.Errorf("step 2 doesn't ask for the resource group: %s", steps[1].Body)
+	}
 	// A trailing slash names the same issuer the tokens carry.
 	if dev := New("").KeylessSetup("http://127.0.0.1:8080/", testSubject); !strings.Contains(dev[0].Command, `"issuer":"http://127.0.0.1:8080",`) {
 		t.Fatalf("development: %s", dev[0].Command)
+	}
+
+	// Each connection's credential has its own name, of what Entra allows.
+	for subject, want := range map[string]string{
+		"org:org_1:connection:conn_01jb3x7k9mexample":  "loomplane-conn_01jb3x7k9mexample",
+		"org:o:connection:a:b c/é.d":                   "loomplane-a-bcd",
+		"no-connection-here":                           "loomplane-no-connection-here",
+		"org:o:connection:" + strings.Repeat("x", 200): "loomplane-" + strings.Repeat("x", 110),
+	} {
+		if got := credentialName(subject); got != want || len(got) < 3 || len(got) > 120 {
+			t.Errorf("credentialName(%q) = %q, want %q", subject, got, want)
+		}
 	}
 }
