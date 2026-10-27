@@ -280,7 +280,7 @@ func (s *Service) VerifyZone(ctx context.Context, p security.Principal, id strin
 		return nil, err
 	}
 	// A managed zone's proof is published first if it still needs to be.
-	if checkErr := s.checkZoneProof(ctx, st, zone); checkErr != nil {
+	if _, checkErr := s.checkZoneProof(ctx, st, zone); checkErr != nil {
 		return nil, checkErr
 	}
 	s.domainAudit(ctx, p, "domain.zone.write", zone.ID, "")
@@ -425,20 +425,16 @@ func (s *Service) RemoveZone(ctx context.Context, p security.Principal, id strin
 	if err != nil {
 		return err
 	}
-	if zone.Mode == "managed" && zone.ProofRecord != nil {
-		// The proof record goes first, by its receipt, and only from the
-		// revision the caller saw.
+	if zone.Mode == "managed" && (zone.ProofRecord != nil || zone.ProofPublishAttempted) {
+		// The proof record goes first, and only from the revision the
+		// caller saw. The zone goes at that same revision, so a check in
+		// between fails the removal rather than publishing the record again.
 		if zone.Revision != revision {
 			return ErrConflict
 		}
 		if proofErr := s.removeZoneProof(ctx, st, zone); proofErr != nil {
 			return proofErr
 		}
-		zone.ProofRecord = nil
-		if saveErr := st.SaveZone(ctx, zone); saveErr != nil {
-			return saveErr
-		}
-		revision = zone.Revision
 	}
 	err = st.RemoveZone(ctx, p.OrgID, id, revision)
 	if err == nil {

@@ -32,6 +32,11 @@ type proofDNS struct {
 	dropWrite bool
 	deleteErr error
 	listErr   error
+	lists     int
+	// during runs once, inside the next write, before it lands.
+	during func()
+	// block holds GetZone until the caller's context ends.
+	block bool
 }
 
 func (a *proofDNS) SupportsDNSRecordOwnership() bool { return a.ownership }
@@ -39,7 +44,11 @@ func (a *proofDNS) SupportsDNSRecordOwnership() bool { return a.ownership }
 func (*proofDNS) ListZones(_ context.Context, c provider.InfrastructureCredential) ([]provider.DNSZone, error) {
 	return []provider.DNSZone{{ID: "parent", Name: "example.com", AccountID: c.AccountID, Verified: true}}, nil
 }
-func (*proofDNS) GetZone(_ context.Context, c provider.InfrastructureCredential, name string) (provider.DNSZone, error) {
+func (a *proofDNS) GetZone(ctx context.Context, c provider.InfrastructureCredential, name string) (provider.DNSZone, error) {
+	if a.block {
+		<-ctx.Done()
+		return provider.DNSZone{}, ctx.Err()
+	}
 	if name != "example.com" {
 		return provider.DNSZone{}, provider.ErrInfrastructureNotFound
 	}
@@ -49,6 +58,7 @@ func (*proofDNS) CreateZone(context.Context, provider.InfrastructureCredential, 
 	return provider.DNSZone{}, provider.ErrInfrastructureUnsupported
 }
 func (a *proofDNS) ListRecords(context.Context, provider.InfrastructureCredential, provider.DNSZone) ([]provider.DNSRecord, error) {
+	a.lists++
 	if a.listErr != nil {
 		return nil, a.listErr
 	}
@@ -61,6 +71,11 @@ func (a *proofDNS) UpsertRecord(_ context.Context, _ provider.InfrastructureCred
 	}
 	if a.listErr != nil {
 		return provider.DNSRecord{}, a.listErr
+	}
+	if a.during != nil {
+		during := a.during
+		a.during = nil
+		during()
 	}
 	if a.dropWrite {
 		return provider.DNSRecord{}, errors.Join(provider.ErrInfrastructureAmbiguous, errors.New("connection reset"))
@@ -161,7 +176,7 @@ func (s *overviewStore) RemoveZone(_ context.Context, org, id string, revision i
 func (s *overviewStore) ZoneProofsDue(_ context.Context, now, checkedBefore time.Time, limit int) ([]*Zone, error) {
 	out := []*Zone{}
 	for _, zone := range s.zones {
-		if zone.Mode == "managed" && zone.VerifiedAt.IsZero() && zone.ProofExpiresAt.After(now) && !zone.ProofCheckedAt.After(checkedBefore) && len(out) < limit {
+		if zoneProofDue(zone, now, checkedBefore) && len(out) < limit {
 			v := *zone
 			out = append(out, &v)
 		}
@@ -291,9 +306,15 @@ func TestZoneProofLostResponseNeverWritesTwice(t *testing.T) {
 				t.Fatalf("unknown outcome not durable: %+v", stored)
 			}
 			env.dns.loseResponse = false
+			// Inside the grace window the write may still be landing.
 			_, _ = env.svc.VerifyZone(t.Context(), proofManager, zone.ID)
-			if !env.dns.last.ReconcileOnly || env.dns.writes != 1 || len(env.dns.proofs()) != 1 {
-				t.Fatalf("lost response replayed: reconcile=%v writes=%d proofs=%+v", env.dns.last.ReconcileOnly, env.dns.writes, env.dns.proofs())
+			if env.dns.lists != 0 || env.stored(t, zone.ID).ProofRecord != nil {
+				t.Fatal("unknown write settled inside the grace window")
+			}
+			env.now = env.now.Add(zoneProofCheckEvery + time.Second)
+			_, _ = env.svc.VerifyZone(t.Context(), proofManager, zone.ID)
+			if env.dns.writes != 1 || len(env.dns.proofs()) != 1 {
+				t.Fatalf("lost response replayed: writes=%d proofs=%+v", env.dns.writes, env.dns.proofs())
 			}
 			stored = env.stored(t, zone.ID)
 			if cloud == "vercel" {
@@ -315,7 +336,7 @@ func TestZoneProofLeavesAForeignRecordAlone(t *testing.T) {
 	env.dns.records = append(env.dns.records, foreign)
 	zone := env.create(t, "managed")
 	stored := env.stored(t, zone.ID)
-	if env.dns.writes != 0 || stored.ProofRecord != nil || !strings.Contains(stored.ProofPublishError, "didn't create") || !strings.Contains(stored.ProofPublishError, "_loomplane.shop.example.com") {
+	if env.dns.writes != 0 || stored.ProofRecord != nil || !strings.Contains(stored.ProofPublishError, "didn't create") || !strings.Contains(stored.ProofPublishError, "_loomplane.shop.example.com") || !strings.Contains(stored.ProofPublishError, "Record details") {
 		t.Fatalf("foreign record: writes=%d %+v", env.dns.writes, stored)
 	}
 	if _, err := env.svc.VerifyZone(t.Context(), proofManager, zone.ID); !errors.Is(err, ErrConflict) {
@@ -473,6 +494,7 @@ func TestZoneProofLostCreateThatNeverLandedIsWrittenAgain(t *testing.T) {
 				t.Fatalf("unknown outcome not durable: %+v", stored)
 			}
 			env.dns.dropWrite = false
+			env.now = env.now.Add(zoneProofCheckEvery + time.Second)
 			_, _ = env.svc.VerifyZone(t.Context(), proofManager, zone.ID)
 			// The provider shows nothing at the name, so the same attempt writes.
 			proofs := env.dns.proofs()
@@ -493,6 +515,7 @@ func TestZoneProofLostCreateStaysReconcileOnlyWhenTheListingFails(t *testing.T) 
 	zone := env.create(t, "managed")
 	env.dns.dropWrite = false
 	env.dns.listErr = errors.New("provider unavailable")
+	env.now = env.now.Add(zoneProofCheckEvery + time.Second)
 	_, _ = env.svc.VerifyZone(t.Context(), proofManager, zone.ID)
 	stored := env.stored(t, zone.ID)
 	if env.dns.writes != 0 || !stored.ProofPublishAttempted || stored.ProofRecord != nil || !strings.Contains(stored.ProofPublishError, "didn't confirm") {
@@ -511,6 +534,7 @@ func TestZoneProofRecordDeletedAtTheProviderIsPublishedAgain(t *testing.T) {
 	first := *env.stored(t, zone.ID).ProofRecord
 
 	// Still there: keep waiting, write nothing.
+	env.now = env.now.Add(zoneProofRelistAfter)
 	if _, err := env.svc.VerifyZone(t.Context(), proofManager, zone.ID); !errors.Is(err, ErrConflict) {
 		t.Fatal(err)
 	}
@@ -518,8 +542,10 @@ func TestZoneProofRecordDeletedAtTheProviderIsPublishedAgain(t *testing.T) {
 		t.Fatal("present record rewritten", env.dns.writes)
 	}
 
-	// Someone deletes it at the provider.
+	// Someone deletes it at the provider. The record is only looked for
+	// once it has had time to show.
 	env.dns.records = env.dns.records[:1]
+	env.now = env.now.Add(zoneProofRelistAfter)
 	if _, err := env.svc.VerifyZone(t.Context(), proofManager, zone.ID); !errors.Is(err, ErrConflict) {
 		t.Fatal(err)
 	}
@@ -539,6 +565,7 @@ func TestZoneProofRecordWithARotatedIDStillCounts(t *testing.T) {
 	zone := env.create(t, "managed")
 	// The provider rotated the record's ID; owner, name, type and value hold.
 	env.dns.records[1].ID = "rotated"
+	env.now = env.now.Add(zoneProofRelistAfter)
 	if _, err := env.svc.VerifyZone(t.Context(), proofManager, zone.ID); !errors.Is(err, ErrConflict) {
 		t.Fatal(err)
 	}
@@ -552,6 +579,7 @@ func TestZoneProofListingFailureKeepsTheReceipt(t *testing.T) {
 	zone := env.create(t, "managed")
 	receipt := *env.stored(t, zone.ID).ProofRecord
 	env.dns.listErr = errors.New("provider unavailable")
+	env.now = env.now.Add(zoneProofRelistAfter)
 	_, err := env.svc.VerifyZone(t.Context(), proofManager, zone.ID)
 	if err == nil || errors.Is(err, ErrConflict) {
 		t.Fatal("listing failure hidden", err)

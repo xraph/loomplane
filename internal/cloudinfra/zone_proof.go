@@ -19,11 +19,21 @@ import (
 // route records' TTL and every supported provider's minimum or above.
 const zoneProofTTL = 60
 
-// zoneProofCheckEvery spaces background checks of one zone.
+// zoneProofCheckEvery spaces background checks of one zone. It is also the
+// grace window of a write that went unanswered: inside it the write may
+// still be landing, so nothing else writes the zone's proof.
 const zoneProofCheckEvery = 2 * time.Minute
+
+// zoneProofRelistAfter is how long a written record has to show in public
+// DNS before a check looks for it at the provider.
+const zoneProofRelistAfter = 5 * time.Minute
 
 // zoneProofBatch bounds the zones one background pass checks.
 const zoneProofBatch = 50
+
+// zoneProofReceiptRetries bounds re-reads after a receipt save loses the
+// zone's revision to another writer.
+const zoneProofReceiptRetries = 3
 
 // zoneProofOwner marks the record as this zone's on providers that keep an
 // owner token. DigitalOcean keeps none, so there the receipt alone is proof.
@@ -55,64 +65,165 @@ func (z *Zone) proofPublished() bool {
 	return z.ProofRecord != nil && !z.ProofPublishAttempted && z.ProofRecord.Value == z.ProofValue
 }
 
+// proofWriteInFlight is an unanswered write still inside its grace window.
+func (z *Zone) proofWriteInFlight(now time.Time) bool {
+	return z.ProofPublishAttempted && now.Sub(z.ProofPublishAttemptedAt) < zoneProofCheckEvery
+}
+
 // publishZoneProof writes or updates a managed zone's TXT proof through its
-// own connection. The attempt is saved before the write, so an answer lost
-// on the way back is only ever reconciled, never written again, and the
-// receipt is saved before anything treats the proof as published. A
-// provider failure is recorded on the zone as ProofPublishError and isn't
+// own connection. The attempt is saved before the write, and the receipt
+// before anything treats the proof as published. A write whose answer was
+// lost is settled from the provider's records once its grace window ends.
+// A provider failure is recorded on the zone as ProofPublishError and isn't
 // returned: the zone still exists, and the next check tries again. Only a
 // failed save is returned.
 func (s *Service) publishZoneProof(ctx context.Context, st DomainStore, zone *Zone) error {
-	if zone.Mode != "managed" || !zone.hasControlProof() || zone.proofPublished() {
+	now := s.now().UTC()
+	if zone.Mode != "managed" || !zone.hasControlProof() || zone.proofPublished() || !now.Before(zone.ProofExpiresAt) || zone.proofWriteInFlight(now) {
 		return nil
 	}
-	desired, err := zoneProofRecord(zone)
-	if err != nil {
-		return s.proofPublishFailed(ctx, st, zone, err)
+	if !zone.VerifiedAt.IsZero() && zone.ProofRecord == nil && zone.ProofPublishAttemptedAt.IsZero() {
+		// Verified from a record its owner added before Loomplane published
+		// proofs. That record is theirs, and it already does the job.
+		return nil
 	}
 	adapter, cred, err := s.zoneCredential(ctx, zone)
 	if err != nil {
 		return s.proofPublishFailed(ctx, st, zone, err)
 	}
-	attempted := zone.ProofPublishAttempted
-	reconcile := attempted
-	if reconcile && zone.ProofRecord == nil {
-		// A create whose answer was lost. A duplicate proof TXT is harmless,
-		// unlike a route record, so when the provider definitely shows
-		// nothing of ours at the name, this attempt writes it again.
-		records, listErr := adapter.ListRecords(ctx, cred, zone.ProviderZone)
-		if listErr != nil {
-			// Unknown still: stay reconcile-only.
-			return s.proofPublishFailed(ctx, st, zone, errors.Join(provider.ErrInfrastructureAmbiguous, listErr))
+	reconcile := false
+	if zone.ProofPublishAttempted {
+		done, settleReconcile, settleErr := s.settleProofAttempt(ctx, adapter, cred, zone)
+		switch {
+		case settleErr != nil:
+			return s.proofPublishFailed(ctx, st, zone, settleErr)
+		case done:
+			return s.saveProofReceipt(ctx, st, zone, *zone.ProofRecord)
 		}
-		reconcile = proofCreateLanded(records, desired)
+		reconcile = settleReconcile
 	}
-	zone.ProofPublishAttempted = true
+	desired, err := zoneProofRecord(zone)
+	if err != nil {
+		return s.proofPublishFailed(ctx, st, zone, err)
+	}
+	attempted, attemptedAt := zone.ProofPublishAttempted, zone.ProofPublishAttemptedAt
+	zone.ProofPublishAttempted, zone.ProofPublishAttemptedAt = true, now
 	if err = st.SaveZone(ctx, zone); err != nil {
-		zone.ProofPublishAttempted = attempted
+		zone.ProofPublishAttempted, zone.ProofPublishAttemptedAt = attempted, attemptedAt
 		return err
 	}
 	receipt, err := adapter.UpsertRecord(ctx, cred, provider.DNSUpsertRequest{Zone: zone.ProviderZone, Record: desired, Expected: zone.ProofRecord, ReconcileOnly: reconcile})
 	if err != nil {
 		return s.proofPublishFailed(ctx, st, zone, err)
 	}
-	zone.ProofRecord, zone.ProofPublishAttempted, zone.ProofPublishError = &receipt, false, ""
-	return st.SaveZone(ctx, zone)
+	return s.saveProofReceipt(ctx, st, zone, receipt)
 }
 
-// proofCreateLanded reports whether a create of desired may be at the
-// provider: a TXT record at its name that carries its owner token or, on a
-// provider without owner tokens, its value. Reconciling settles which.
-func proofCreateLanded(records []provider.DNSRecord, desired provider.DNSRecord) bool {
-	for _, r := range records {
-		if r.Name != desired.Name || r.Type != desired.Type {
-			continue
-		}
-		if (desired.Owner != "" && r.Owner == desired.Owner) || (desired.Owner == "" && r.Value == desired.Value) {
-			return true
+// settleProofAttempt reads the provider's records to learn what an
+// unanswered write did. It leaves zone.ProofRecord as the record the next
+// write should update, or nil for a create. done means the record already
+// holds the current value, and reconcile that only the adapter can tell
+// whether an ownerless create landed. A listing that fails, or several
+// records carrying this zone's owner token, stay unknown.
+func (s *Service) settleProofAttempt(ctx context.Context, adapter provider.DNSAdapter, cred provider.InfrastructureCredential, zone *Zone) (done, reconcile bool, err error) {
+	desired, err := zoneProofRecord(zone)
+	if err != nil {
+		return false, false, err
+	}
+	records, err := adapter.ListRecords(ctx, cred, zone.ProviderZone)
+	if err != nil {
+		return false, false, errors.Join(provider.ErrInfrastructureAmbiguous, err)
+	}
+	if zone.ProofRecord != nil {
+		for _, r := range records {
+			if r.ID != zone.ProofRecord.ID {
+				continue
+			}
+			wanted := desired
+			wanted.ID = r.ID
+			switch r {
+			case wanted:
+				// The update landed.
+				zone.ProofRecord = &r
+				return true, false, nil
+			case *zone.ProofRecord:
+				// It didn't. An update by ID can't make a second record.
+				return false, false, nil
+			}
+			return false, false, provider.ErrInfrastructureDrift
 		}
 	}
-	return false
+	owned, err := ownedProof(zone, records, desired.Name)
+	if err != nil {
+		return false, false, err
+	}
+	if owned != nil {
+		// This zone's owner token marks the record as its own, whatever the
+		// provider did to its ID or whichever value it holds.
+		zone.ProofRecord = owned
+		wanted := desired
+		wanted.ID = owned.ID
+		return *owned == wanted, false, nil
+	}
+	// Nothing of this zone's is there. A proof TXT is harmless to repeat,
+	// unlike a route record, so the next write creates it. Without owner
+	// tokens a record holding the value may be the lost create, and the
+	// adapter only reconciles it.
+	zone.ProofRecord = nil
+	for _, r := range records {
+		if desired.Owner == "" && r.Name == desired.Name && r.Type == desired.Type && r.Value == desired.Value {
+			return false, true, nil
+		}
+	}
+	return false, false, nil
+}
+
+// ownedProof is the one record at the proof name carrying this zone's owner
+// token, nil when there is none or the provider keeps no owner tokens.
+func ownedProof(zone *Zone, records []provider.DNSRecord, name string) (*provider.DNSRecord, error) {
+	owner := zoneProofOwner(zone)
+	if owner == "" {
+		return nil, nil
+	}
+	var found *provider.DNSRecord
+	for _, r := range records {
+		if r.Name != name || r.Type != "TXT" || r.Owner != owner {
+			continue
+		}
+		if found != nil {
+			return nil, provider.ErrInfrastructureAmbiguous
+		}
+		found = &r
+	}
+	return found, nil
+}
+
+// saveProofReceipt saves the record a write returned. A save lost to
+// another writer re-reads the zone and saves the receipt on top, as long
+// as the zone still wants the value the record holds. The save outlives
+// the caller's deadline: the record is already written.
+func (s *Service) saveProofReceipt(ctx context.Context, st DomainStore, zone *Zone, receipt provider.DNSRecord) error {
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
+	zone.ProofRecord, zone.ProofPublishAttempted, zone.ProofPublishError = &receipt, false, ""
+	err := st.SaveZone(ctx, zone)
+	for range zoneProofReceiptRetries {
+		if !errors.Is(err, ErrConflict) {
+			return err
+		}
+		current, readErr := st.Zone(ctx, zone.OrgID, zone.ID)
+		if readErr != nil {
+			return readErr
+		}
+		if current.ProofValue != receipt.Value {
+			// Renewed meanwhile; that renewal's write settles the record.
+			return err
+		}
+		current.ProofRecord, current.ProofPublishAttempted, current.ProofPublishError = &receipt, false, ""
+		*zone = *current
+		err = st.SaveZone(ctx, zone)
+	}
+	return err
 }
 
 // proofPublishFailed records why the proof isn't published. Only an
@@ -132,7 +243,7 @@ func proofPublishMessage(zone *Zone, err error) string {
 	case errors.Is(err, provider.ErrInfrastructureAmbiguous):
 		return fmt.Sprintf("%s didn't confirm the TXT record for %s. Loomplane will look for it before writing again.", host, zone.ProofName)
 	case errors.Is(err, provider.ErrInfrastructureDrift):
-		return fmt.Sprintf("A TXT record Loomplane didn't create already uses %s, so Loomplane left it alone. Remove it, or add the value below as another TXT record yourself, then check again.", zone.ProofName)
+		return fmt.Sprintf("A TXT record Loomplane didn't create already uses %s, so Loomplane left it alone. Remove it, or add the value under Record details as another TXT record yourself, then check again.", zone.ProofName)
 	case errors.Is(err, provider.ErrInfrastructureScope):
 		return fmt.Sprintf("The %s connection can't write DNS records for %s. Give its token DNS edit access, then check again.", host, zone.ProviderZone.Name)
 	case errors.Is(err, ErrConflict), errors.Is(err, provider.ErrInfrastructureIdentity):
@@ -155,19 +266,25 @@ func dnsProviderName(cloud string) string {
 
 // checkZoneProof publishes a managed zone's proof if it still needs it, then
 // looks for the proof in public DNS. Every check is saved, so the page can
-// say when the record was last looked for.
-func (s *Service) checkZoneProof(ctx context.Context, st DomainStore, zone *Zone) error {
-	if err := s.publishZoneProof(ctx, st, zone); err != nil {
-		return err
+// say when the record was last looked for. wrote reports a publish in this
+// pass.
+func (s *Service) checkZoneProof(ctx context.Context, st DomainStore, zone *Zone) (wrote bool, err error) {
+	before := zone.ProofRecord
+	if publishErr := s.publishZoneProof(ctx, st, zone); publishErr != nil {
+		return false, publishErr
 	}
+	wrote = zone.ProofRecord != before && zone.proofPublished()
 	checkErr := s.verifyZoneControl(ctx, zone)
-	if errors.Is(checkErr, ErrConflict) && zone.Mode == "managed" && zone.proofPublished() && s.now().Before(zone.ProofExpiresAt) {
-		// Not visible yet. Make sure the record is still there to see.
+	now := s.now().UTC()
+	// A record written a while ago that public DNS still doesn't show may
+	// be gone at the provider. One written in this pass is just new.
+	if errors.Is(checkErr, ErrConflict) && !wrote && zone.Mode == "managed" && zone.proofPublished() && now.Before(zone.ProofExpiresAt) && now.Sub(zone.ProofPublishAttemptedAt) >= zoneProofRelistAfter {
 		republished, reclaimErr := s.republishMissingProof(ctx, st, zone)
 		switch {
 		case reclaimErr != nil:
 			checkErr = reclaimErr
 		case republished:
+			wrote = true
 			checkErr = s.verifyZoneControl(ctx, zone)
 		}
 	}
@@ -177,15 +294,16 @@ func (s *Service) checkZoneProof(ctx context.Context, st DomainStore, zone *Zone
 	}
 	saveErr := st.SaveZone(ctx, zone)
 	if checkErr != nil {
-		return checkErr
+		return wrote, checkErr
 	}
-	return saveErr
+	return wrote, saveErr
 }
 
 // republishMissingProof looks for the receipt's record in the hosting zone.
 // One deleted at the provider loses its receipt and is published afresh;
-// one still there is left alone. A listing that fails keeps the receipt,
-// records why on the zone and returns the error.
+// one still there is left alone, and one found by its owner token under a
+// rotated ID moves the receipt to that ID. A listing that fails keeps the
+// receipt, records why on the zone and returns the error.
 func (s *Service) republishMissingProof(ctx context.Context, st DomainStore, zone *Zone) (bool, error) {
 	adapter, cred, err := s.zoneCredential(ctx, zone)
 	var records []provider.DNSRecord
@@ -196,9 +314,20 @@ func (s *Service) republishMissingProof(ctx context.Context, st DomainStore, zon
 		zone.ProofPublishError = fmt.Sprintf("Loomplane couldn't read the DNS records at %s to confirm the TXT record for %s is still there. Check again to retry.", dnsProviderName(zone.Provider), zone.ProofName)
 		return false, err
 	}
-	if proofReceiptPresent(records, *zone.ProofRecord) {
-		zone.ProofPublishError = ""
-		return false, nil
+	for _, r := range records {
+		if r.ID == zone.ProofRecord.ID {
+			zone.ProofPublishError = ""
+			return false, nil
+		}
+	}
+	owned, err := ownedProof(zone, records, zone.ProofRecord.Name)
+	if err != nil {
+		return false, err
+	}
+	if owned != nil && owned.Value == zone.ProofRecord.Value {
+		// The same record under the ID the provider rotated it to.
+		zone.ProofRecord, zone.ProofPublishError = owned, ""
+		return false, st.SaveZone(ctx, zone)
 	}
 	zone.ProofRecord = nil
 	if publishErr := s.publishZoneProof(ctx, st, zone); publishErr != nil {
@@ -207,24 +336,12 @@ func (s *Service) republishMissingProof(ctx context.Context, st DomainStore, zon
 	return zone.proofPublished(), nil
 }
 
-// proofReceiptPresent finds the receipt's record by ID or, for a provider
-// that rotates IDs, by its owner token, name, type and value.
-func proofReceiptPresent(records []provider.DNSRecord, receipt provider.DNSRecord) bool {
-	for _, r := range records {
-		if r.ID == receipt.ID {
-			return true
-		}
-		if receipt.Owner != "" && r.Owner == receipt.Owner && r.Name == receipt.Name && r.Type == receipt.Type && r.Value == receipt.Value {
-			return true
-		}
-	}
-	return false
-}
-
 // zoneProofDue is a managed zone the background still checks: unverified,
-// with an unexpired proof, and not checked since checkedBefore.
+// with an unexpired proof, not checked since checkedBefore, and with no
+// write inside its grace window.
 func zoneProofDue(zone *Zone, now, checkedBefore time.Time) bool {
-	return zone.Mode == "managed" && zone.VerifiedAt.IsZero() && zone.hasControlProof() && now.Before(zone.ProofExpiresAt) && !zone.ProofCheckedAt.After(checkedBefore)
+	inFlight := zone.ProofPublishAttempted && zone.ProofPublishAttemptedAt.After(checkedBefore)
+	return zone.Mode == "managed" && zone.VerifiedAt.IsZero() && zone.hasControlProof() && now.Before(zone.ProofExpiresAt) && !zone.ProofCheckedAt.After(checkedBefore) && !inFlight
 }
 
 // CheckZoneProofs retries pending publishes and checks public DNS for
@@ -249,18 +366,20 @@ func (s *Service) CheckZoneProofs(ctx context.Context) error {
 		}
 		// A record not visible yet is the usual answer while DNS propagates,
 		// and a save lost to a check from the page is that check's to make.
-		if checkErr := s.checkZoneProof(ctx, st, zone); checkErr != nil && !errors.Is(checkErr, ErrConflict) && ctx.Err() == nil {
+		if _, checkErr := s.checkZoneProof(ctx, st, zone); checkErr != nil && !errors.Is(checkErr, ErrConflict) && ctx.Err() == nil {
 			errs = append(errs, fmt.Errorf("zone %s: %w", zone.ID, checkErr))
 		}
 	}
 	return errors.Join(errs...)
 }
 
-// removeZoneProof deletes a managed zone's published proof by its exact
-// receipt before the zone goes. A record already gone is done. A delete
-// that fails keeps the zone, so the record is never left behind unseen.
+// removeZoneProof deletes a managed zone's proof record before the zone
+// goes: the receipt's record, or the record an unanswered write may have
+// made. A record already gone is done. When Loomplane can't tell whether
+// an unanswered write landed, or the delete fails, the zone is kept, so the
+// record is never left behind unseen.
 func (s *Service) removeZoneProof(ctx context.Context, st DomainStore, zone *Zone) error {
-	if zone.Mode != "managed" || zone.ProofRecord == nil {
+	if zone.Mode != "managed" || (zone.ProofRecord == nil && !zone.ProofPublishAttempted) {
 		return nil
 	}
 	// The record is the zone's control proof. While routes use the zone,
@@ -275,11 +394,63 @@ func (s *Service) removeZoneProof(ctx context.Context, st DomainStore, zone *Zon
 		}
 	}
 	adapter, cred, err := s.zoneCredentialFor(ctx, zone, true)
-	if err == nil {
-		err = adapter.DeleteRecord(ctx, cred, provider.DNSDeleteRequest{Zone: zone.ProviderZone, Expected: *zone.ProofRecord})
+	if err != nil {
+		return proofDeleteFailed(zone)
 	}
+	target := zone.ProofRecord
+	if zone.ProofPublishAttempted {
+		target, err = s.unconfirmedProof(ctx, adapter, cred, zone)
+		if err != nil {
+			return err
+		}
+		if target == nil {
+			return nil
+		}
+	}
+	err = adapter.DeleteRecord(ctx, cred, provider.DNSDeleteRequest{Zone: zone.ProviderZone, Expected: *target})
 	if err != nil && !errors.Is(err, provider.ErrInfrastructureNotFound) {
-		return fmt.Errorf("%w: the TXT record %s couldn't be deleted from %s, so %s was kept. Try again, or delete that record there yourself first", ErrConflict, zone.ProofName, dnsProviderName(zone.Provider), zone.Name)
+		return proofDeleteFailed(zone)
 	}
 	return nil
+}
+
+// unconfirmedProof is the record to delete when a write went unanswered:
+// the receipt's record by ID, or this zone's one owner-token record. nil
+// means nothing landed and the write's grace window is over.
+func (s *Service) unconfirmedProof(ctx context.Context, adapter provider.DNSAdapter, cred provider.InfrastructureCredential, zone *Zone) (*provider.DNSRecord, error) {
+	unknown := fmt.Errorf("%w: Loomplane can't confirm whether its TXT record landed. Check again first, then remove the domain", ErrConflict)
+	desired, err := zoneProofRecord(zone)
+	if err != nil {
+		return nil, unknown
+	}
+	records, err := adapter.ListRecords(ctx, cred, zone.ProviderZone)
+	if err != nil {
+		return nil, unknown
+	}
+	if zone.ProofRecord != nil {
+		for _, r := range records {
+			if r.ID == zone.ProofRecord.ID {
+				return &r, nil
+			}
+		}
+	}
+	if zone.RecordOwnership {
+		owned, ownedErr := ownedProof(zone, records, desired.Name)
+		if ownedErr != nil {
+			return nil, unknown
+		}
+		if owned != nil {
+			return owned, nil
+		}
+		if !zone.proofWriteInFlight(s.now().UTC()) {
+			return nil, nil
+		}
+	}
+	// Without owner tokens, or inside the grace window, nothing here says
+	// what the write did.
+	return nil, unknown
+}
+
+func proofDeleteFailed(zone *Zone) error {
+	return fmt.Errorf("%w: the TXT record %s couldn't be deleted from %s, so %s was kept. Try again, or delete that record there yourself first", ErrConflict, zone.ProofName, dnsProviderName(zone.Provider), zone.Name)
 }
