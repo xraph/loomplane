@@ -1232,6 +1232,68 @@ export class RESTClient extends Client {
 
   public readonly deployments = {
     /**
+     */
+    cleanup: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.FailedCleanup> => {
+      let __path = `/api/v1/deployments/${encodeURIComponent(String(id))}/cleanup`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["FailedCleanup"],
+      };
+
+      return this.request<types.FailedCleanup>(config);
+    },
+
+    /**
+     */
+    cleanupApply: async (id: string, body: types.FailedCleanupInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.FailedCleanup> => {
+      let __path = `/api/v1/deployments/${encodeURIComponent(String(id))}/cleanup/apply`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["FailedCleanupInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["FailedCleanup"],
+      };
+
+      return this.request<types.FailedCleanup>(config);
+    },
+
+    /**
+     */
+    cleanupPreview: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CleanupReview> => {
+      let __path = `/api/v1/deployments/${encodeURIComponent(String(id))}/cleanup/preview`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CleanupReview"],
+      };
+
+      return this.request<types.CleanupReview>(config);
+    },
+
+    /**
+     */
+    cleanupRetry: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.FailedCleanup> => {
+      let __path = `/api/v1/deployments/${encodeURIComponent(String(id))}/cleanup/retry`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["FailedCleanup"],
+      };
+
+      return this.request<types.FailedCleanup>(config);
+    },
+
+    /**
      * The deployment an approved plan started
      */
     forPlan: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Deployment> => {

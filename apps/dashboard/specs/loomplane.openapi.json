@@ -9043,6 +9043,141 @@
           }
         }
       }
+    },
+    "/api/v1/deployments/{id}/cleanup": {
+      "get": {
+        "tags": [
+          "Plans"
+        ],
+        "operationId": "deployments.cleanup",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Cleanup progress",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailedCleanup"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/deployments/{id}/cleanup/apply": {
+      "post": {
+        "tags": [
+          "Plans"
+        ],
+        "operationId": "deployments.cleanupApply",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FailedCleanupInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "The accepted cleanup",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailedCleanup"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/deployments/{id}/cleanup/preview": {
+      "post": {
+        "tags": [
+          "Plans"
+        ],
+        "operationId": "deployments.cleanupPreview",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The cleanup review",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CleanupReview"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/deployments/{id}/cleanup/retry": {
+      "post": {
+        "tags": [
+          "Plans"
+        ],
+        "operationId": "deployments.cleanupRetry",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Cleanup retry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/FailedCleanup"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -19420,6 +19555,78 @@
             "type": "string"
           },
           "state": {
+            "type": "string"
+          }
+        }
+      },
+      "FailedCleanupInputBody": {
+        "type": "object",
+        "required": [
+          "revision"
+        ],
+        "properties": {
+          "revision": {
+            "type": "string"
+          }
+        }
+      },
+      "FailedCleanup": {
+        "type": "object",
+        "required": [
+          "deployment_id",
+          "revision",
+          "status",
+          "attempt"
+        ],
+        "properties": {
+          "attempt": {
+            "type": "integer"
+          },
+          "deployment_id": {
+            "type": "string"
+          },
+          "error": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "CleanupReview": {
+        "type": "object",
+        "required": [
+          "deployment_id",
+          "revision",
+          "resource",
+          "provider",
+          "region",
+          "connection_id",
+          "effect"
+        ],
+        "properties": {
+          "connection_id": {
+            "type": "string"
+          },
+          "deployment_id": {
+            "type": "string"
+          },
+          "effect": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "region": {
+            "type": "string"
+          },
+          "resource": {
+            "type": "string"
+          },
+          "revision": {
             "type": "string"
           }
         }

@@ -325,6 +325,16 @@ export interface ChooseConnectionInputBody {
   connectionId: string;
 }
 
+export interface CleanupReview {
+  connectionId: string;
+  deploymentId: string;
+  effect: string;
+  provider: string;
+  region: string;
+  resource: string;
+  revision: string;
+}
+
 export interface CloudAdoption {
   bindingId: string;
   configDigest: string;
@@ -972,6 +982,18 @@ export interface Evidence {
 
 export interface FabriqKeyList {
   keys: ConsumerKey[];
+}
+
+export interface FailedCleanup {
+  attempt: number;
+  deploymentId: string;
+  error?: string;
+  revision: string;
+  status: string;
+}
+
+export interface FailedCleanupInputBody {
+  revision: string;
 }
 
 export interface Federation {
