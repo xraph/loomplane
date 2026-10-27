@@ -1734,26 +1734,19 @@ func (r *Runner) Finish(ctx context.Context, orgID, deploymentID, reason string)
 	status := StatusSucceeded
 	if reason != "" {
 		status = StatusFailed
-		// The canary settles first, from its services, so it never reads
+		// A durable finish settles the canary and marks the steps in the
+		// store's fenced transaction, so a late finish from an earlier
+		// retry can't settle the canary a retry reopened. Without one, the
+		// canary settles here first, from its services, so it never reads
 		// steps this marks.
-		if err := r.settleCanary(ctx, d, reason, false); err != nil {
-			return err
-		}
-		for _, s := range d.Steps {
-			if orchestration.FinalizationKey(ctx) != "" {
-				continue
-			}
-			switch s.Status {
-			case StepPending:
-				s.Status, s.Message = StepSkipped, "Skipped after an earlier step failed"
-			case StepRamping:
-				finished := r.now().UTC()
-				s.Status, s.Message, s.FinishedAt = StepFailed, reason, &finished
-			default:
-				continue
-			}
-			if err := r.store.UpdateStep(ctx, orgID, d.ID, s); err != nil {
+		if orchestration.FinalizationKey(ctx) == "" {
+			if err := r.settleCanary(ctx, d, reason, false); err != nil {
 				return err
+			}
+			for _, i := range failFinishedSteps(d.Steps, reason, r.now().UTC()) {
+				if err := r.store.UpdateStep(ctx, orgID, d.ID, d.Steps[i]); err != nil {
+					return err
+				}
 			}
 		}
 	}
