@@ -36,6 +36,7 @@ const plan = (release?: object, status = "ready") => ({
   revision: "r1",
   summary: { adopt: 0, create: 0, delete: 0, keep: 0, replace: 0, update: 1 },
   created_at: "2026-10-26T09:00:00Z",
+  created_by: "usr_1",
   ...(release ? { release } : {}),
 })
 
