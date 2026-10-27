@@ -3205,3 +3205,24 @@
     grid-template-columns: minmax(0, 1fr);
   }
 }
+
+/* ===== Home headline: a thin line over a bold one ===== */
+.lp .page-hero h1.hl {
+  max-width: none;
+  font-size: clamp(44px, 9vw, 120px);
+  line-height: 0.95;
+  letter-spacing: -0.05em;
+}
+.lp .hl-thin,
+.lp .hl-bold {
+  display: block;
+}
+.lp .hl-thin {
+  font-weight: 300;
+  color: hsl(0 0% 94%);
+}
+.lp .hl-bold {
+  font-weight: 700;
+  letter-spacing: -0.06em;
+  color: hsl(212 45% 88%);
+}

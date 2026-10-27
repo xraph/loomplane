@@ -63,6 +63,9 @@ func (s *PgStore) SaveCapacityPolicy(ctx context.Context, policy *CapacityPolicy
 	if checkErr := capacityPolicyScopes(ctx, tx, policy); checkErr != nil {
 		return checkErr
 	}
+	if checkErr := s.backfillFrontendSlots(ctx, tx, policy); checkErr != nil {
+		return checkErr
+	}
 	raw, err := json.Marshal(policy)
 	if err != nil {
 		return err

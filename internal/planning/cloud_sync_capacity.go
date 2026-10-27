@@ -27,7 +27,7 @@ func (s *Service) CloudSyncNeedsCapacity(ctx context.Context, org, project, id s
 			return false, decodeErr
 		}
 		for _, a := range p.Actions {
-			if a.Service != nil && a.Service.CapacityIntent != nil {
+			if HasCapacityIntent(a) {
 				return true, nil
 			}
 		}

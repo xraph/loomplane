@@ -28,6 +28,9 @@ type HandoffInput struct {
 	DestinationCloudID string `json:"destination_cloud_id"`
 }
 
+// Kubernetes routes have no retained source to hand off from or to.
+var errKubernetesHandoff = &provider.UnsupportedCapabilityError{Provider: "kubernetes", Capability: provider.IngressManagement}
+
 // PrepareRouteHandoff runs after the destination binding is committed, while
 // the deployment runner retains the previous instance in Replaced.
 func (s *Service) PrepareRouteHandoff(ctx context.Context, p security.Principal, project, id string, in HandoffInput) (*RouteOperation, error) {
@@ -45,6 +48,9 @@ func (s *Service) PrepareRouteHandoff(ctx context.Context, p security.Principal,
 	if err != nil {
 		return nil, err
 	}
+	if source.Binding.BackendName() == RouteBackendKubernetes {
+		return nil, errKubernetesHandoff
+	}
 	if source.Revision != in.Revision || source.Status != "ready" {
 		return nil, ErrConflict
 	}
@@ -53,6 +59,9 @@ func (s *Service) PrepareRouteHandoff(ctx context.Context, p security.Principal,
 	binding, err := st.ResolveRouteBinding(ctx, p.OrgID, project, input)
 	if err != nil {
 		return nil, err
+	}
+	if binding.BackendName() == RouteBackendKubernetes {
+		return nil, errKubernetesHandoff
 	}
 	if reflect.DeepEqual(binding, source.Binding) {
 		return nil, ErrInvalid
@@ -177,7 +186,7 @@ func (s *Service) RollbackRoute(ctx context.Context, p security.Principal, proje
 		return nil, err
 	}
 	op := &RouteOperation{ID: opID, Kind: "rollback", Status: "pending", Attempt: 1, Revision: 1, Route: source, Source: &cutover.Route, HandoffID: cutover.HandoffID, DesiredRecord: record, PreviousReceipt: receipt, Principal: p}
-	err = s.Store.WithOperationLock(ctx, "ingress/"+p.OrgID+"/"+cutover.Route.Binding.ServerID, func() error { return st.AcceptRoute(ctx, op) })
+	err = s.Store.WithOperationLock(ctx, routeLockKey(cutover.Route), func() error { return st.AcceptRoute(ctx, op) })
 	if err != nil {
 		return nil, err
 	}
@@ -219,7 +228,10 @@ func (s *Service) prepareSourceIngress(ctx context.Context, st DomainStore, op *
 		if index < 0 || desired.Routes[index].Backend.ContainerID != source.Binding.ContainerID || desired.Routes[index].Backend.ReleaseID != source.Binding.ReleaseID {
 			return ErrConflict
 		}
-		desired.Routes[index].ChallengeAddress = op.Route.Binding.Address
+		// A wildcard's certificate comes through DNS-01 on the destination.
+		if desired.Routes[index].DNSChallenge == nil {
+			desired.Routes[index].ChallengeAddress = op.Route.Binding.Address
+		}
 		op.SourceTransition = &IngressTransition{Desired: desired, Previous: state.Current}
 		if checkErr := st.SaveRouteOperation(ctx, op); checkErr != nil {
 			return checkErr
@@ -433,6 +445,9 @@ func (s *Service) releaseSourceIngress(ctx context.Context, st DomainStore, op *
 	}
 	if ingressReferences(state.Config, routeBackend(*source)) {
 		return ErrConflict
+	}
+	if checkErr := removeUnusedDNSToken(ctx, c, *source, state.Config); checkErr != nil {
+		return checkErr
 	}
 	if checkErr := server.DisconnectIngressBackend(ctx, c, state.Config, routeBackend(*source)); checkErr != nil {
 		return checkErr

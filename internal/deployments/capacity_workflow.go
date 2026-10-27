@@ -47,7 +47,7 @@ func (r *Runner) AssessWorkflowCapacity(ctx context.Context, org, id string) (or
 
 func deferredPlan(plan *planning.Plan) bool {
 	for _, a := range plan.Actions {
-		if a.Service != nil && a.Service.CapacityIntent != nil {
+		if planning.HasCapacityIntent(a) {
 			return true
 		}
 	}

@@ -68,6 +68,60 @@
         "$ref": "#/$defs/gateway"
       }
     },
+    "database_gateway": {
+      "description": "Where the database gateway runs, for the Postgres resources that set gateway: true. Loomplane builds it and runs it like a service. Set provider, or select a Cloud target with cloud_tags, not both.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "provider": {
+          "$ref": "#/$defs/provider"
+        },
+        "region": {
+          "$ref": "#/$defs/region"
+        },
+        "cloud_tags": {
+          "description": "Select the one target in the assigned Cloud that carries every tag. Can't be set with provider.",
+          "type": "array",
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "maxLength": 32,
+            "pattern": "^[a-z][a-z0-9]*(-[a-z0-9]+)*$"
+          }
+        },
+        "environments": {
+          "description": "Overrides in one environment, by name.",
+          "type": "object",
+          "propertyNames": {
+            "$ref": "#/$defs/name"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "provider": {
+                "$ref": "#/$defs/provider"
+              },
+              "region": {
+                "$ref": "#/$defs/region"
+              },
+              "enabled": {
+                "type": "boolean"
+              }
+            }
+          }
+        }
+      },
+      "not": {
+        "required": ["provider", "cloud_tags"],
+        "properties": {
+          "cloud_tags": {
+            "minItems": 1
+          }
+        }
+      }
+    },
     "links": {
       "description": "Private network links between two clouds, by name: an HA VPN between a Google Cloud project's default network and an AWS account's default VPC, so services on Google Cloud reach private services and databases on AWS. Each environment gets its own, billed by the hour on both clouds.",
       "type": "object",
@@ -498,6 +552,10 @@
           "type": "string",
           "pattern": "^[0-9A-Za-z][0-9A-Za-z._-]{0,31}$"
         },
+        "gateway": {
+          "description": "Put this Postgres resource behind the database gateway. Only postgres resources can.",
+          "type": "boolean"
+        },
         "uses": {
           "description": "Where a catalog resource gets each dependency, by dependency name: a resource in this manifest, an external endpoint, or on or off for an optional one. A dependency left out gets a new one.",
           "type": "object",
@@ -525,6 +583,10 @@
                 "$ref": "#/$defs/region"
               },
               "enabled": {
+                "type": "boolean"
+              },
+              "gateway": {
+                "description": "Turn the database gateway on or off for this Postgres resource in this environment. Wins over the resource's own gateway.",
                 "type": "boolean"
               }
             }

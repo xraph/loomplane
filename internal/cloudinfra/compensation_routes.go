@@ -121,9 +121,9 @@ func (s *Service) PrepareCompensationRoutes(ctx context.Context, p security.Prin
 }
 
 func (s *Service) withRouteIngressLocks(ctx context.Context, op *RouteOperation, run func() error) error {
-	locks := []string{op.Route.Binding.ServerID}
+	locks := []string{routeLockKey(op.Route)}
 	if op.Source != nil {
-		locks = append(locks, op.Source.Binding.ServerID)
+		locks = append(locks, routeLockKey(*op.Source))
 	}
 	slices.Sort(locks)
 	locks = slices.Compact(locks)
@@ -132,7 +132,7 @@ func (s *Service) withRouteIngressLocks(ctx context.Context, op *RouteOperation,
 		if i == len(locks) {
 			return run()
 		}
-		return s.Store.WithOperationLock(ctx, "ingress/"+op.Route.OrgID+"/"+locks[i], func() error { return lock(i + 1) })
+		return s.Store.WithOperationLock(ctx, locks[i], func() error { return lock(i + 1) })
 	}
 	return lock(0)
 }
@@ -147,6 +147,10 @@ func (s *Service) ReconcileCompensationRoutes(ctx context.Context, p security.Pr
 	for _, source := range in.Routes {
 		if source.OrgID != p.OrgID || source.ProjectID != in.ProjectID || source.Input.EnvironmentID != in.EnvironmentID || source.Input.Service != in.Service {
 			return ErrInvalid
+		}
+		// A Kubernetes route was never handed off, as in ReconcileReleaseRoutes.
+		if source.Binding.BackendName() == RouteBackendKubernetes {
+			continue
 		}
 		preparedID := releasePrepareID(in.Key, source.ID)
 		progress := cloudprofiles.SyncRoute{RouteID: source.ID, Hostname: source.Input.Hostname, PrepareID: preparedID}

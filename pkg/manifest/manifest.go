@@ -64,6 +64,9 @@ type Manifest struct {
 	Services   map[string]Service  `json:"services,omitempty" yaml:"services,omitempty"`
 	Resources  map[string]Resource `json:"resources,omitempty" yaml:"resources,omitempty"`
 	Gateways   map[string]Gateway  `json:"gateways,omitempty" yaml:"gateways,omitempty"`
+	// DatabaseGateway says where the database gateway runs, for the
+	// Postgres resources that opt in with gateway: true.
+	DatabaseGateway *DatabaseGateway `json:"database_gateway,omitempty" yaml:"database_gateway,omitempty"`
 	// Links join two clouds' private networks, so services on one reach
 	// what's private on the other.
 	Links  map[string]Link `json:"links,omitempty" yaml:"links,omitempty"`
@@ -266,12 +269,40 @@ type Resource struct {
 	// Version is the engine's version, such as "17" for Postgres. Empty
 	// lets the provider choose.
 	Version string `json:"version,omitempty" yaml:"version,omitempty"`
+	// Gateway puts a Postgres resource behind the database gateway.
+	// Only postgres resources can.
+	Gateway *bool `json:"gateway,omitempty" yaml:"gateway,omitempty"`
 	// Uses chooses, by dependency name, where a catalog resource gets each
 	// dependency. A dependency left out gets a new one of its own.
 	Uses map[string]Use `json:"uses,omitempty" yaml:"uses,omitempty"`
 	// Environments override the provider or region in one environment, or
 	// leave the resource out of it.
 	Environments map[string]ResourceSettings `json:"environments,omitempty" yaml:"environments,omitempty"`
+}
+
+// DatabaseGateway is where the database gateway runs: one per
+// application, in front of every Postgres resource that opts in. Loomplane
+// builds it and runs it like a service, on a provider, or on the one Cloud
+// target that carries every tag.
+type DatabaseGateway struct {
+	Provider string `json:"provider,omitempty" yaml:"provider,omitempty"`
+	Region   string `json:"region,omitempty" yaml:"region,omitempty"`
+	// CloudTags select the one target in the assigned Cloud that carries
+	// every tag. Can't be set with provider.
+	CloudTags []string `json:"cloud_tags,omitempty" yaml:"cloud_tags,omitempty"`
+	// Environments override the provider or region in one environment, or
+	// leave the database gateway out of it.
+	Environments map[string]ResourceSettings `json:"environments,omitempty" yaml:"environments,omitempty"`
+}
+
+// GatewayIn reports whether the resource is behind the database gateway in
+// env: the environment's setting if it has one, else the resource's own,
+// else no.
+func (r Resource) GatewayIn(env string) bool {
+	if o, ok := r.Environments[env]; ok && o.Gateway != nil {
+		return *o.Gateway
+	}
+	return r.Gateway != nil && *r.Gateway
 }
 
 // Use says how a composed catalog resource gets one of its dependencies:
@@ -315,6 +346,9 @@ type ResourceSettings struct {
 	Provider string `json:"provider,omitempty" yaml:"provider,omitempty"`
 	Region   string `json:"region,omitempty" yaml:"region,omitempty"`
 	Enabled  *bool  `json:"enabled,omitempty" yaml:"enabled,omitempty"`
+	// Gateway turns the database gateway on or off for a Postgres
+	// resource in one environment. Nothing else reads it.
+	Gateway *bool `json:"gateway,omitempty" yaml:"gateway,omitempty"`
 }
 
 // Ignore lists what analysis found that the application doesn't use, so
@@ -513,6 +547,7 @@ func (m *Manifest) Validate() error {
 		add("gateways", "has %d gateways; the most is %d", len(m.Gateways), MaxGateways)
 	}
 	m.validateGateways(add)
+	m.validateDatabaseGateway(add)
 	m.validateLinks(add)
 
 	for _, name := range m.ResourceNames() {
@@ -538,6 +573,7 @@ func (m *Manifest) Validate() error {
 		if r.Version != "" && !versionRE.MatchString(r.Version) {
 			add(path+".version", "%q isn't a version", r.Version)
 		}
+		checkGatewayKind(add, path, r.Kind, r.Gateway)
 		m.validateUses(add, name, path, r.Uses)
 		for _, env := range sortedKeys(r.Environments) {
 			o := r.Environments[env]
@@ -547,6 +583,7 @@ func (m *Manifest) Validate() error {
 			}
 			checkToken(add, epath+".provider", "provider", o.Provider)
 			checkToken(add, epath+".region", "region", o.Region)
+			checkGatewayKind(add, epath, r.Kind, o.Gateway)
 		}
 	}
 
@@ -637,6 +674,23 @@ func checkNeedOptions(add func(string, string, ...any), path string, options map
 func checkToken(add func(string, string, ...any), path, what, value string) {
 	if value != "" && !tokenRE.MatchString(value) {
 		add(path, "%q isn't a %s name", value, what)
+	}
+}
+
+// checkGatewayKind refuses gateway: true on anything but Postgres. False
+// asks for nothing, so any resource may say it.
+func checkGatewayKind(add func(string, string, ...any), path, kind string, gateway *bool) {
+	if gateway != nil && *gateway && kind != "postgres" {
+		add(path+".gateway", "only postgres resources can use the database gateway")
+	}
+}
+
+// checkNoGateway refuses the gateway switch where no resource is: it
+// belongs on a resource, and an override of a gateway's own would be
+// ignored.
+func checkNoGateway(add func(string, string, ...any), path string, gateway *bool) {
+	if gateway != nil {
+		add(path+".gateway", "only resources can opt into the database gateway")
 	}
 }
 
@@ -894,7 +948,32 @@ func (m *Manifest) validateGateways(add func(string, string, ...any)) {
 			}
 			checkToken(add, epath+".provider", "provider", o.Provider)
 			checkToken(add, epath+".region", "region", o.Region)
+			checkNoGateway(add, epath, o.Gateway)
 		}
+	}
+}
+
+func (m *Manifest) validateDatabaseGateway(add func(string, string, ...any)) {
+	g := m.DatabaseGateway
+	if g == nil {
+		return
+	}
+	const path = "database_gateway"
+	checkToken(add, path+".provider", "provider", g.Provider)
+	checkToken(add, path+".region", "region", g.Region)
+	checkCloudTags(add, path+".cloud_tags", g.CloudTags)
+	if len(g.CloudTags) > 0 && g.Provider != "" {
+		add(path+".cloud_tags", "can't be set with database_gateway.provider; choose Cloud tags or a provider")
+	}
+	for _, env := range sortedKeys(g.Environments) {
+		o := g.Environments[env]
+		epath := path + ".environments." + env
+		if !envRE.MatchString(env) {
+			add(epath, "isn't an environment name")
+		}
+		checkToken(add, epath+".provider", "provider", o.Provider)
+		checkToken(add, epath+".region", "region", o.Region)
+		checkNoGateway(add, epath, o.Gateway)
 	}
 }
 

@@ -39,6 +39,7 @@ import {
   Structure,
   useAnalyses,
 } from "@/components/architecture"
+import { DatabaseGateways } from "@/components/database-gateway"
 import { DeployTab } from "@/components/deploy"
 import { ProductIcon } from "@/components/product-icon"
 import { QueryError } from "@/components/query-error"
@@ -476,6 +477,7 @@ function Body({
               </>
             )}
           </Discovered>
+          <DatabaseGateways project={project.id} />
         </TabsContent>
         <TabsContent value="variables">
           {environments && environments.length > 0 ? (

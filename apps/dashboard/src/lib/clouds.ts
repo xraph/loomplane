@@ -42,6 +42,11 @@ export const clouds = {
     credential: "API token",
     account: "Team",
   },
+  cloudflare: {
+    label: "Cloudflare",
+    credential: "API token",
+    account: "Account",
+  },
 } as const
 
 export type Cloud = keyof typeof clouds

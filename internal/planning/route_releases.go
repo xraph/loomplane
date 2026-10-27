@@ -43,6 +43,32 @@ func (s *Service) releaseRoutes(ctx context.Context, plan *Plan) ([]cloudinfra.R
 	return reader.ReleaseRoutes(ctx, plan.OrgID, plan.ProjectID, plan.EnvironmentID)
 }
 
+// ProjectZones returns the verified DNS zones granted to a project, which
+// the database gateway names its hosts in.
+func (s *PgStore) ProjectZones(ctx context.Context, org, project string) ([]cloudinfra.ProjectZone, error) {
+	zones, err := cloudinfra.NewPgStore(s.db).Zones(ctx, org)
+	if err != nil {
+		return nil, err
+	}
+	out := []cloudinfra.ProjectZone{}
+	for _, z := range zones {
+		if slices.Contains(z.ProjectIDs, project) && !z.VerifiedAt.IsZero() {
+			out = append(out, cloudinfra.ProjectZone{ID: z.ID, Name: z.Name, Mode: z.Mode, Verified: true})
+		}
+	}
+	return out, nil
+}
+
+func (s *Service) projectZones(ctx context.Context, plan *Plan) ([]cloudinfra.ProjectZone, error) {
+	reader, ok := s.store.(interface {
+		ProjectZones(context.Context, string, string) ([]cloudinfra.ProjectZone, error)
+	})
+	if !ok {
+		return nil, nil
+	}
+	return reader.ProjectZones(ctx, plan.OrgID, plan.ProjectID)
+}
+
 // routedReplacements runs before dependency readdressing. A routed update must
 // keep its source instance until every consumer and route has moved.
 func (p *planner) routedReplacements() bool {
@@ -50,6 +76,15 @@ func (p *planner) routedReplacements() bool {
 	for _, route := range p.in.Routes {
 		a := p.services[route.Input.Service]
 		if a == nil || a.Op == Keep || a.Op == Delete || slices.ContainsFunc(a.Routes, func(r cloudinfra.Route) bool { return r.ID == route.ID }) {
+			continue
+		}
+		// A Kubernetes route reaches its Service by name, so an update in
+		// place keeps serving it with no handoff. A new runtime would leave
+		// the route on a Service that goes away.
+		if route.Binding.BackendName() == cloudinfra.RouteBackendKubernetes {
+			if a.Op != Update {
+				p.problem(Finding{Code: "route-release", Subject: ServiceSubject, Name: a.Name, Message: fmt.Sprintf("%s would get a new runtime, which %s doesn't follow on Kubernetes. Remove that route, then plan again.", a.Name, route.Input.Hostname)})
+			}
 			continue
 		}
 		a.Routes = append(a.Routes, route)
@@ -150,7 +185,8 @@ func (s *PgStore) CurrentReleaseRoutes(ctx context.Context, org, project, enviro
 	}
 	var out []cloudinfra.Route
 	for _, r := range routes {
-		if r.Input.EnvironmentID == environment && r.Input.Service == service && r.Status != "removed" {
+		// Releases never carry Kubernetes routes; see routedReplacements.
+		if r.Input.EnvironmentID == environment && r.Input.Service == service && r.Status != "removed" && r.Binding.BackendName() != cloudinfra.RouteBackendKubernetes {
 			out = append(out, *r)
 		}
 	}
