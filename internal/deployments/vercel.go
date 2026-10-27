@@ -130,7 +130,7 @@ func (v *Vercel) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 		// Vercel returns the deployment with an error only once it ended
 		// in ERROR or CANCELED.
 		if d != nil {
-			return nil, &finishedFailure{err: err}
+			return nil, &finishedError{err: err}
 		}
 		return nil, err
 	}
