@@ -586,6 +586,54 @@ describe("domains and subdomains", () => {
     expect(
       domainRollup({ domain, subdomains: [unproven] }, undefined, now)
     ).toEqual({ label: "Needs attention", tone: "failed", count: 1 })
+
+    // A record you still add, or a route being removed, isn't settled.
+    for (const waiting of [
+      use({ dns: "awaiting_verification" }),
+      use({ dns: "cleanup_pending", route: "cleanup_pending" }),
+    ])
+      expect(
+        domainRollup(
+          { domain, subdomains: [sub({ hostnames: [waiting] })] },
+          undefined,
+          now
+        )
+      ).toEqual({ label: "Verifying", tone: "warn", count: 0 })
+
+    // The pill never says Ready for a group the filter counts.
+    const statuses = [
+      "ready",
+      "provisioning",
+      "renewing",
+      "failed",
+      "awaiting_verification",
+      "cleanup_pending",
+    ]
+    const zones = [
+      domain,
+      sub(),
+      sub({}, false),
+      unpublished,
+      expired,
+      unproven,
+      ...statuses.flatMap((dns) =>
+        statuses.map((certificate) =>
+          sub({ hostnames: [use({ dns, certificate })] })
+        )
+      ),
+    ]
+    const registrations = [
+      undefined,
+      registration(),
+      registration({ status: "zone_pending" }),
+    ]
+    for (const d of zones)
+      for (const s of zones)
+        for (const r of registrations) {
+          const g = { domain: d, subdomains: [s] }
+          if (domainRollup(g, r, now).label === "Ready")
+            expect(groupNeedsAttention(g, r)).toBe(false)
+        }
   })
 
   it("needs attention when the domain or any subdomain does", () => {

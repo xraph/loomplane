@@ -207,10 +207,12 @@ const hostnameFailed = (h: HostnameUse) =>
   h.status.certificate === "failed" ||
   h.status.route === "failed"
 
-const hostnameMoving = (h: HostnameUse) =>
-  [h.status.dns, h.status.certificate, h.status.route].some(
-    (s) => s === "provisioning" || s === "renewing"
-  )
+// Ready on every column. Anything else is on its way, waiting on a
+// record you add, or being removed.
+const hostnameSettled = (h: HostnameUse) =>
+  h.status.dns === "ready" &&
+  h.status.certificate === "ready" &&
+  h.status.route === "ready"
 
 /**
  * domainRollup is Needs attention when anything in the group needs you,
@@ -229,8 +231,9 @@ export function domainRollup(
   }
   if (r && r.status !== "succeeded") count++
   if (count > 0) return { label: "Needs attention", tone: "failed", count }
+  // Ready only when nothing would put the group under Needs attention.
   const moving = zones.some(
-    (z) => z.state !== "ready" || z.hostnames.some(hostnameMoving)
+    (z) => z.state !== "ready" || !z.hostnames.every(hostnameSettled)
   )
   return moving
     ? { label: "Verifying", tone: "warn", count: 0 }

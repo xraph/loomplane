@@ -18,7 +18,6 @@ import {
   registrationLine,
   registrationStatusLine,
   sameHosting,
-  useClock,
   zoneDNSLabel,
   zoneDNSTone,
 } from "@/lib/domains"
@@ -30,13 +29,15 @@ const chip =
 export function DomainCard({
   group,
   registration,
+  now,
 }: {
   group: DomainGroup
   registration?: Registration
+  /** The page's clock, for proofs that expire. */
+  now: number
 }) {
   const { domain, subdomains } = group
   const name = domain.zone?.name ?? ""
-  const now = useClock()
   const rollup = domainRollup(group, registration, now)
   // Grants name projects; the overview carries their IDs.
   const projects = useQuery(useProjectsList)

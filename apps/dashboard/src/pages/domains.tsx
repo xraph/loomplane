@@ -169,8 +169,9 @@ function DomainsList({
   const loaded = !!overview.data
   useEffect(() => {
     if (!search.zone || !loaded) return
+    const named = search.zone.toLowerCase()
     const zone = zones.find(
-      (z) => z.zone?.id === search.zone || z.zone?.name === search.zone
+      (z) => z.zone?.id === search.zone || z.zone?.name.toLowerCase() === named
     )?.zone
     if (zone)
       void navigate({
@@ -363,6 +364,7 @@ function DomainsList({
                     key={item.id}
                     group={item.group}
                     registration={item.registration}
+                    now={now}
                   />
                 ) : (
                   <RegistrationCard
