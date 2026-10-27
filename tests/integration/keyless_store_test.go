@@ -62,3 +62,35 @@ func TestSweepReservationsDropsOnlyExpired(t *testing.T) {
 		t.Fatalf("live reservation was swept: %v", err)
 	}
 }
+
+// Two creates of one keyless connection at once: exactly one takes its
+// reservation.
+func TestReservationIsTakenOnceUnderConcurrentCreates(t *testing.T) {
+	store, _ := signInStore(t)
+	ctx := t.Context()
+	now := time.Now().UTC().Truncate(time.Microsecond)
+	in := &connections.Reservation{ID: "conn_race", OrgID: "org_1", UserID: "usr_1", Cloud: "gcp", ExpiresAt: now.Add(24 * time.Hour), CreatedAt: now}
+	if err := store.PutReservation(ctx, in); err != nil {
+		t.Fatal(err)
+	}
+	const tries = 8
+	results := make(chan error, tries)
+	for range tries {
+		go func() {
+			_, err := store.TakeReservation(ctx, "org_1", "conn_race")
+			results <- err
+		}()
+	}
+	took := 0
+	for range tries {
+		switch err := <-results; {
+		case err == nil:
+			took++
+		case !errors.Is(err, connections.ErrNotFound):
+			t.Errorf("take: %v", err)
+		}
+	}
+	if took != 1 {
+		t.Fatalf("%d creates took the reservation, want 1", took)
+	}
+}
