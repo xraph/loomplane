@@ -49,6 +49,9 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog"
 import { Link } from "@/lib/router"
+import { cloudLabel } from "@/lib/clouds"
+import { relative } from "@/lib/format"
+import { useNow } from "@/lib/use-runs"
 import { QueryError } from "@/components/query-error"
 import { useOrganization } from "@/lib/organization"
 import {
@@ -127,73 +130,78 @@ function ServerContent({ cloud }: { cloud: Profile }) {
       supports(providers.data?.providers ?? [], c, "server:provision")
   )
   return (
-    <section className="grid gap-3" aria-label="Servers">
-      <CloudSectionHead
-        title="Servers"
-        count={list.length}
-        description="Machines this Cloud places services on, connected over SSH or created through an account that can provision them."
-      >
-        <Button variant="outline" onClick={() => setEditing({ kind: "adopt" })}>
-          Connect existing server
-        </Button>
-        {create && (
-          <Button onClick={() => setEditing({ kind: "create" })}>
-            Create server
-          </Button>
-        )}
-      </CloudSectionHead>
-      {servers.status === "error" ||
-      connections.status === "error" ||
-      providers.status === "error" ? (
-        <QueryError
-          error={servers.error ?? connections.error ?? providers.error}
-          fallback="Servers couldn't be loaded."
-          retry={() =>
-            Promise.allSettled([
-              servers.refetch(),
-              connections.refetch(),
-              providers.refetch(),
-            ])
-          }
-        />
-      ) : !servers.data || !connections.data || !providers.data ? (
-        <CloudLoading>Loading servers...</CloudLoading>
-      ) : !list.length ? (
-        <CloudEmpty
-          kind="list"
-          icon={InfrastructureIcon}
-          title="No servers connected"
-          action={
-            <>
-              <Button
-                variant="outline"
-                onClick={() => setEditing({ kind: "adopt" })}
-              >
-                Connect existing server
-              </Button>
-              {create && (
-                <Button onClick={() => setEditing({ kind: "create" })}>
-                  Create server
-                </Button>
-              )}
-            </>
-          }
+    <div className="grid gap-6">
+      <section className="grid gap-3" aria-label="Servers">
+        <CloudSectionHead
+          title="Servers"
+          count={list.length}
+          description="Machines that server-pool targets run on. Connect one you already have, or create one through an account that can."
         >
-          Connect a pinned SSH account, or create a server with an account that
-          supports provisioning.
-        </CloudEmpty>
-      ) : (
-        <Rows>
-          {list.map((server) => (
-            <ServerRow
-              key={server.id}
-              cloudId={cloud.id}
-              server={server}
-              onSelect={() => setSelected(server)}
-            />
-          ))}
-        </Rows>
-      )}
+          <Button
+            variant="outline"
+            onClick={() => setEditing({ kind: "adopt" })}
+          >
+            Connect a server
+          </Button>
+          {create && (
+            <Button onClick={() => setEditing({ kind: "create" })}>
+              Create server
+            </Button>
+          )}
+        </CloudSectionHead>
+        {servers.status === "error" ||
+        connections.status === "error" ||
+        providers.status === "error" ? (
+          <QueryError
+            error={servers.error ?? connections.error ?? providers.error}
+            fallback="Servers couldn't be loaded."
+            retry={() =>
+              Promise.allSettled([
+                servers.refetch(),
+                connections.refetch(),
+                providers.refetch(),
+              ])
+            }
+          />
+        ) : !servers.data || !connections.data || !providers.data ? (
+          <CloudLoading>Loading servers...</CloudLoading>
+        ) : !list.length ? (
+          <CloudEmpty
+            kind="list"
+            icon={InfrastructureIcon}
+            title="No servers connected"
+            action={
+              <>
+                <Button
+                  variant="outline"
+                  onClick={() => setEditing({ kind: "adopt" })}
+                >
+                  Connect existing server
+                </Button>
+                {create && (
+                  <Button onClick={() => setEditing({ kind: "create" })}>
+                    Create server
+                  </Button>
+                )}
+              </>
+            }
+          >
+            Connect a pinned SSH account, or create a server with an account
+            that supports provisioning.
+          </CloudEmpty>
+        ) : (
+          <Rows>
+            {list.map((server) => (
+              <ServerRow
+                key={server.id}
+                cloudId={cloud.id}
+                server={server}
+                onSelect={() => setSelected(server)}
+              />
+            ))}
+          </Rows>
+        )}
+      </section>
       <Pools cloud={cloud} servers={list} />
       {editing && (
         <ServerEditor
@@ -231,33 +239,46 @@ function ServerContent({ cloud }: { cloud: Profile }) {
           onClose={() => setRecovering(null)}
         />
       )}
-    </section>
+    </div>
   )
 }
 const gib = (bytes: number) => `${((bytes || 0) / 1073741824).toFixed(1)} GiB`
 function Capacity({ server, usage }: { server: Server; usage?: ServerUsage }) {
+  const total = server.health.effectiveCpuMillis
+  const reserved = usage?.reservedCpuMillis ?? 0
+  const share = total > 0 ? Math.min(100, (reserved / total) * 100) : 0
+  const cpus = (m: number) => `${Number((m / 1000).toFixed(2))}`
   return (
-    <span className="font-mono text-[11.5px] text-muted-foreground">
-      {usage?.workloads.length ?? "…"} workloads · reserved{" "}
-      {usage?.reservedCpuMillis ?? "…"} mCPU /{" "}
-      {gib(usage?.reservedMemoryBytes ?? 0)} · available{" "}
-      {usage
-        ? Math.max(
-            0,
-            server.health.effectiveCpuMillis - usage.reservedCpuMillis
-          )
-        : "…"}{" "}
-      mCPU /{" "}
-      {usage
-        ? gib(
-            Math.max(
-              0,
-              server.health.effectiveMemoryBytes - usage.reservedMemoryBytes
-            )
-          )
-        : "…"}
-      {gpuCount(server) > 0 &&
-        ` · ${usage?.reservedGpus ?? "…"} of ${gpuCount(server)} GPUs reserved`}
+    <span className="grid max-w-md gap-1.5 text-xs text-muted-foreground">
+      <span className="flex flex-wrap justify-between gap-x-3">
+        <span>
+          {usage
+            ? `${cpus(reserved)} of ${cpus(total)} vCPU and ${gib(usage.reservedMemoryBytes)} of ${gib(server.health.effectiveMemoryBytes)} reserved`
+            : "Loading capacity…"}
+          {usage &&
+            gpuCount(server) > 0 &&
+            ` · ${usage.reservedGpus} of ${gpuCount(server)} GPUs`}
+        </span>
+        {usage && (
+          <span>
+            {usage.workloads.length}{" "}
+            {usage.workloads.length === 1 ? "service" : "services"}
+          </span>
+        )}
+      </span>
+      <span
+        role="meter"
+        aria-label={`${server.name} CPU reserved`}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={Math.round(share)}
+        className="flex h-1.5 overflow-hidden rounded-full bg-muted"
+      >
+        <span
+          className={share > 85 ? "bg-failed" : "bg-foreground/70"}
+          style={{ width: `${share}%` }}
+        />
+      </span>
     </span>
   )
 }
@@ -298,6 +319,7 @@ function ServerRow({
     path: { cloudId, serverId: server.id },
   })
   const problem = gpuProblem(server)
+  const now = useNow()
   return (
     <Row>
       <span
@@ -314,11 +336,17 @@ function ServerRow({
           <StatePill status={server.draining ? "draining" : server.status} />
         </span>
         <span className="text-xs text-muted-foreground">
-          {server.ownership} · {server.region || "SSH"} ·{" "}
-          {server.size || "Detected capacity"}
+          {server.ownership === "managed"
+            ? `Created by Loomplane · ${cloudLabel(server.provider)}`
+            : "Connected over SSH"}
+          {server.region && ` · ${server.region}`} ·{" "}
+          {server.size || "detected capacity"}
           {gpuCount(server) > 0 &&
             ` · ${serverGpuLabel(server)} · ${hourlyOrUnknown(serverHourly(server), true)}`}{" "}
-          · health checked {server.health.checkedAt || "never"}
+          ·{" "}
+          {server.health.checkedAt
+            ? `checked ${relative(Date.parse(server.health.checkedAt), now)}`
+            : "never checked"}
         </span>
         {problem && (
           <Tooltip>

@@ -5,17 +5,25 @@ import { afterEach, expect, it, vi } from "vitest"
 
 import { forgeClient } from "@/client/runtime"
 
-import { OrganizationCloud } from "./org-cloud"
+import { CloudDetail } from "./cloud-detail"
 
+// Tests switch between an organization manager and a project member.
+let manager = true
 vi.mock("@/lib/organization", () => ({
-  useOrganization: () => ({ session: { orgId: "org" }, can: () => true }),
+  useOrganization: () => ({
+    session: { orgId: "org" },
+    can: (p: string) => manager || p !== "organization_cloud:manage",
+  }),
 }))
+vi.mock("@/components/site-header", () => ({ SiteHeader: () => null }))
 vi.mock("@/lib/router", () => ({
   Link: ({ children, to }: { children: React.ReactNode; to: string }) => (
     <a href={to}>{children}</a>
   ),
+  useNavigate: () => () => Promise.resolve(),
 }))
 afterEach(() => {
+  manager = true
   cleanup()
   vi.unstubAllGlobals()
   forgeClient.clear()
@@ -41,13 +49,39 @@ const target = (id: string, provider: string, connection: string) => ({
   revision: 1,
 })
 
-function fixture({ granted = false, inUse = false, noTargets = false } = {}) {
+const usage = {
+  cloud_id: "c",
+  environments: [
+    {
+      project_id: "web",
+      project_name: "Web app",
+      environment_id: "prod",
+      environment_name: "production",
+      assigned: true,
+      placements: [
+        { target_id: "frontend", services: ["site", "docs"] },
+        { target_id: "api", services: ["api"] },
+      ],
+    },
+  ],
+}
+
+function fixture({
+  granted = false,
+  inUse = false,
+  noTargets = false,
+  profile = {} as Record<string, unknown>,
+  syncs = [] as unknown[],
+} = {}) {
   const writes: { method: string; path: string; body: unknown }[] = []
+  const reads: string[] = []
   vi.stubGlobal(
     "fetch",
     async (input: RequestInfo | URL, init?: RequestInit) => {
-      const path = new URL(String(input), "http://localhost").pathname
+      const url = new URL(String(input), "http://localhost")
+      const path = url.pathname
       const method = init?.method ?? "GET"
+      if (method === "GET") reads.push(path + url.search)
       if (method !== "GET") {
         const sent = JSON.parse(String(init?.body ?? "{}"))
         writes.push({ method, path, body: sent })
@@ -71,6 +105,16 @@ function fixture({ granted = false, inUse = false, noTargets = false } = {}) {
         })
       }
       let body: unknown = {}
+      if (path === "/api/v1/clouds/c") body = { ...cloud, ...profile }
+      if (path === "/api/v1/projects/web/clouds")
+        body = { clouds: [{ ...cloud, ...profile }] }
+      if (path.endsWith("/usage")) body = usage
+      if (path === "/api/v1/clouds/syncs" || path.endsWith("/cloud-syncs"))
+        body = { syncs }
+      if (path === "/api/v1/clouds/c/servers") body = { servers: [] }
+      if (path === "/api/v1/clouds/c/pools") body = { pools: [] }
+      if (path === "/api/v1/clouds/c/operations") body = { operations: [] }
+      if (path === "/api/v1/members") body = { members: [] }
       if (path.endsWith("/environments")) body = { environments: [] }
       if (path === "/api/v1/providers")
         body = {
@@ -92,9 +136,9 @@ function fixture({ granted = false, inUse = false, noTargets = false } = {}) {
             },
           ],
         }
-      if (path === "/api/v1/clouds/c/targets" && noTargets)
+      if (path.endsWith("/clouds/c/targets") && noTargets)
         body = { targets: [] }
-      else if (path === "/api/v1/clouds/c/targets")
+      else if (path.endsWith("/clouds/c/targets"))
         body = {
           targets: [
             target("frontend", "vercel", "v"),
@@ -152,27 +196,111 @@ function fixture({ granted = false, inUse = false, noTargets = false } = {}) {
       return Response.json(body)
     }
   )
-  return { writes }
+  return { writes, reads }
 }
 
-const show = () =>
+const show = (project?: string) =>
   render(
     <ClientProvider client={forgeClient}>
-      <OrganizationCloud cloud={cloud as never} />
+      <CloudDetail id="c" project={project} />
     </ClientProvider>
   )
+const openTab = async (name: string) =>
+  userEvent.click(
+    await screen.findByRole("tab", { name: new RegExp(`^${name}`) })
+  )
+
+it("shows where services go and how many run on each target", async () => {
+  const { reads } = fixture({ granted: true })
+  show()
+  const where = await screen.findByRole("region", { name: "Where services go" })
+  await waitFor(() => expect(where).toHaveTextContent("2 services"))
+  expect(where).toHaveTextContent("1 service")
+  expect(where).toHaveTextContent("0 services")
+  expect(
+    await screen.findByRole("region", { name: "Environments on this Cloud" })
+  ).toHaveTextContent(/production.*Web app.*3 services.*In sync/)
+  // History is asked for this Cloud only, not filtered from a page of all.
+  expect(reads).toContain("/api/v1/clouds/syncs?cloud=c&limit=30")
+})
+
+it("names each change in words and shows what moved", async () => {
+  fixture({
+    syncs: [
+      {
+        id: "s1",
+        cloud_id: "c",
+        target_id: "api",
+        status: "routing_pending",
+        attempt: 1,
+        created_at: new Date().toISOString(),
+        before: { ...target("api", "vercel", "v") },
+        after: { ...target("api", "digitalocean", "do-1"), region: "nyc" },
+        environments: [
+          {
+            environment_id: "prod",
+            environment: "production",
+            status: "succeeded",
+            external_routing: true,
+            services: ["api"],
+            summary: {},
+          },
+        ],
+      },
+    ],
+  })
+  show()
+  expect(
+    await screen.findByText(
+      "Moved Api to DO US: waiting on routing in production"
+    )
+  ).toBeInTheDocument()
+  await openTab("Changes")
+  expect(await screen.findByText("Moved Api to DO US")).toBeInTheDocument()
+  expect(
+    screen.getByText("Vercel team · its default region")
+  ).toBeInTheDocument()
+  expect(screen.getByText("DO US · nyc")).toBeInTheDocument()
+  expect(screen.getByRole("button", { name: "Confirm routing" })).toBeDisabled()
+})
+
+it("shows a project member only the project's share, read-only", async () => {
+  manager = false
+  const { reads } = fixture()
+  show("web")
+  await screen.findByRole("region", { name: "Where services go" })
+  expect(
+    screen.queryByRole("tab", { name: /^Projects/ })
+  ).not.toBeInTheDocument()
+  expect(
+    screen.queryByRole("tab", { name: /^Servers/ })
+  ).not.toBeInTheDocument()
+  expect(
+    screen.queryByRole("tab", { name: /^Settings/ })
+  ).not.toBeInTheDocument()
+  expect(reads).toContain("/api/v1/projects/web/clouds/c/usage")
+  expect(reads.some((r) => r.startsWith("/api/v1/clouds/c/operations"))).toBe(
+    false
+  )
+  await openTab("Targets")
+  expect(
+    screen.queryByRole("button", { name: /^Edit/ })
+  ).not.toBeInTheDocument()
+})
 
 it("shows an organization's Cloud with the projects allowed on each target", async () => {
   fixture({ granted: true })
   show()
-  expect(
-    await screen.findByText("3 targets across 3 accounts on 2 providers")
-  ).toBeInTheDocument()
-  await userEvent.click(screen.getByRole("tab", { name: "Projects" }))
-  expect((await screen.findAllByText("Web app")).length).toBeGreaterThan(0)
-  // Web app may use frontend and api, not worker.
-  const chips = screen.getAllByText(/^(Frontend|Api|Worker)$/)
-  expect(chips.length).toBeGreaterThan(0)
+  await openTab("Projects")
+  const access = await screen.findByRole("region", {
+    name: "Projects with access",
+  })
+  await waitFor(() => expect(access).toHaveTextContent("Web app"))
+  // Web app may use frontend and api, not worker, and production chose it.
+  expect(access).toHaveTextContent(
+    /May use\s*frontend\s*api\s*Environments\s*production/
+  )
+  expect(access).not.toHaveTextContent("worker")
   expect(
     screen.getByRole("button", { name: "Edit access" })
   ).toBeInTheDocument()
@@ -182,9 +310,9 @@ it("gives a project access to only the targets you tick", async () => {
   const user = userEvent.setup()
   const { writes } = fixture()
   show()
-  await user.click(screen.getByRole("tab", { name: "Projects" }))
+  await openTab("Projects")
   expect(
-    await screen.findByText("No project uses this Cloud yet")
+    await screen.findByText("No project has access yet")
   ).toBeInTheDocument()
   await user.click(
     await screen.findByRole("button", { name: "Give a project access" })
@@ -219,7 +347,7 @@ it("disables target choices for whole Cloud access and all grant choices while s
     return fetch(input, init)
   })
   show()
-  await user.click(screen.getByRole("tab", { name: "Projects" }))
+  await openTab("Projects")
   await user.click(
     await screen.findByRole("button", { name: "Give a project access" })
   )
@@ -254,6 +382,7 @@ it("sets a targetless Cloud's one provider and account", async () => {
   const user = userEvent.setup()
   const { writes } = fixture({ noTargets: true })
   show()
+  await openTab("Targets")
   expect(
     await screen.findByText(/every service on it runs here/)
   ).toBeInTheDocument()
@@ -289,6 +418,7 @@ it("explains why a default can't move while an environment uses the Cloud", asyn
   const user = userEvent.setup()
   fixture({ inUse: true })
   show()
+  await openTab("Targets")
   await user.click(
     await screen.findByRole("button", { name: "Set default provider" })
   )
@@ -303,24 +433,14 @@ it("explains why a default can't move while an environment uses the Cloud", asyn
 })
 
 it("reviews a default provider switch through the organization Cloud change contract", async () => {
-  fixture()
+  fixture({
+    profile: {
+      default_placement: { provider: "vercel", connection_id: "v", region: "" },
+    },
+  })
   const user = userEvent.setup()
-  render(
-    <ClientProvider client={forgeClient}>
-      <OrganizationCloud
-        cloud={
-          {
-            ...cloud,
-            defaultPlacement: {
-              provider: "vercel",
-              connectionId: "v",
-              region: "",
-            },
-          } as never
-        }
-      />
-    </ClientProvider>
-  )
+  show()
+  await openTab("Targets")
   await user.click(await screen.findByRole("button", { name: "Change" }))
   await user.click(
     await screen.findByRole("radio", { name: /DigitalOcean App Platform/ })
