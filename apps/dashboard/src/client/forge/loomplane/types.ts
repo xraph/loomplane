@@ -532,6 +532,8 @@ export interface CloudPlacement {
   connectionId: string;
   cpuMillis?: number;
   default?: boolean;
+  gpuKind?: string;
+  gpus?: number;
   grantRevision?: number;
   memoryBytes?: number;
   poolId?: string;
@@ -664,6 +666,7 @@ export interface CompleteInputBody {
 export interface ComponentConfig {
   component: ResolvedComponent;
   dependencies?: Record<string, any>;
+  gpu?: GPUPlacement;
   kind: string;
   protection: string;
   resource: string;
@@ -1314,6 +1317,13 @@ export interface GPUNodeGroup {
   total: number;
 }
 
+export interface GPUPlacement {
+  count: number;
+  kind: string;
+  nodeSelector?: Record<string, any>;
+  tolerations?: GPUToleration[];
+}
+
 export interface GPUTarget {
   accelerator: Accelerator;
   cloud: string;
@@ -1656,6 +1666,11 @@ export interface ManifestEndpoint {
   hostname?: string;
   ingressClass?: string;
   tlsSecret?: string;
+}
+
+export interface ManifestGPU {
+  count: number;
+  kind: string;
 }
 
 export interface MoveInput {
@@ -2214,6 +2229,7 @@ export interface Pool {
 }
 
 export interface PoolExpansionPolicy {
+  acceleratorKind?: string;
   allowedSizes: string[];
   architecture: string;
   bootstrapSize: string;
@@ -2480,6 +2496,12 @@ export interface Recipe {
   volumeSizeMb?: number;
 }
 
+export interface RecipesGPU {
+  count: number;
+  kind?: string;
+  minMemoryGib?: number;
+}
+
 export interface RecoveryInputBody {
   planId: string;
   review?: string;
@@ -2616,6 +2638,7 @@ export interface ResolvedComponent {
   step: number;
   timeout?: number;
   volume?: Volume;
+  weightCache?: WeightCache;
 }
 
 export interface ResolvedVariable {
@@ -2658,7 +2681,9 @@ export interface ResourceVector {
 
 export interface Resources {
   cpuMillis: number;
+  gpu?: RecipesGPU;
   memoryMb: number;
+  shmMb?: number;
 }
 
 export interface Restore {
@@ -3149,6 +3174,7 @@ export interface ServiceConfig {
   framework?: string;
   frontendDemand?: FrontendDemand;
   gateway?: GatewayRoute[];
+  gpu?: GPUPlacement;
   healthPath?: string;
   image?: string;
   internal?: boolean;
@@ -3237,7 +3263,9 @@ export interface SignInInputBody {
 
 export interface Size {
   cpu: number;
+  gpu?: ManifestGPU;
   memory: number;
+  shm?: number;
 }
 
 export interface Snapshot {
@@ -3559,6 +3587,11 @@ export interface WebhookEndpointList {
 export interface WebhookEndpointSecret {
   endpoint: WebhookEndpoint;
   secret: string;
+}
+
+export interface WeightCache {
+  kubernetesSizeMb: number;
+  mountPath: string;
 }
 
 export interface Workspace {

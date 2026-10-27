@@ -11474,6 +11474,12 @@
           "default": {
             "type": "boolean"
           },
+          "gpu_kind": {
+            "type": "string"
+          },
+          "gpus": {
+            "type": "integer"
+          },
           "grant_revision": {
             "type": "integer"
           },
@@ -11807,6 +11813,9 @@
           "dependencies": {
             "type": "object",
             "additionalProperties": true
+          },
+          "gpu": {
+            "$ref": "#/components/schemas/GPUPlacement"
           },
           "kind": {
             "type": "string"
@@ -16135,6 +16144,9 @@
           "system_reserve"
         ],
         "properties": {
+          "accelerator_kind": {
+            "type": "string"
+          },
           "allowed_sizes": {
             "type": "array",
             "items": {
@@ -17156,6 +17168,9 @@
           },
           "volume": {
             "$ref": "#/components/schemas/Volume"
+          },
+          "weight_cache": {
+            "$ref": "#/components/schemas/WeightCache"
           }
         }
       },
@@ -17299,7 +17314,13 @@
           "cpu_millis": {
             "type": "integer"
           },
+          "gpu": {
+            "$ref": "#/components/schemas/RecipesGPU"
+          },
           "memory_mb": {
+            "type": "integer"
+          },
+          "shm_mb": {
             "type": "integer"
           }
         }
@@ -19061,6 +19082,9 @@
           },
           "frontend_demand": {
             "$ref": "#/components/schemas/FrontendDemand"
+          },
+          "gpu": {
+            "$ref": "#/components/schemas/GPUPlacement"
           }
         }
       },
@@ -19259,7 +19283,13 @@
           "cpu": {
             "type": "number"
           },
+          "gpu": {
+            "$ref": "#/components/schemas/ManifestGPU"
+          },
           "memory": {
+            "type": "integer"
+          },
+          "shm": {
             "type": "integer"
           }
         }
@@ -21144,19 +21174,6 @@
         }
       },
       "CloudinfraRouteStatus": {
-        "type": "object",
-        "required": [
-          "route_id",
-          "hostname",
-          "wildcard",
-          "backend",
-          "dns",
-          "certificate",
-          "route",
-          "certificate_expires_at",
-          "checked_at",
-          "retryable"
-        ],
         "properties": {
           "backend": {
             "type": "string"
@@ -21196,20 +21213,23 @@
           "wildcard": {
             "type": "boolean"
           }
-        }
+        },
+        "required": [
+          "route_id",
+          "hostname",
+          "wildcard",
+          "backend",
+          "dns",
+          "certificate",
+          "route",
+          "certificate_expires_at",
+          "checked_at",
+          "retryable"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/internal/cloudinfra.RouteStatus"
       },
       "DbgatewayRouteStatus": {
-        "type": "object",
-        "required": [
-          "id",
-          "resource",
-          "state",
-          "reported",
-          "reachable",
-          "backend_conns",
-          "max_connections",
-          "pin_rate"
-        ],
         "properties": {
           "backend_conns": {
             "type": "integer"
@@ -21235,7 +21255,19 @@
           "state": {
             "type": "string"
           }
-        }
+        },
+        "required": [
+          "id",
+          "resource",
+          "state",
+          "reported",
+          "reachable",
+          "backend_conns",
+          "max_connections",
+          "pin_rate"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/internal/dbgateway.RouteStatus"
       },
       "ZoneOverview": {
         "type": "object",
@@ -22630,6 +22662,80 @@
           },
           "p95_latency_ratio": {
             "type": "number"
+          }
+        }
+      },
+      "GPUPlacement": {
+        "type": "object",
+        "required": [
+          "kind",
+          "count"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "node_selector": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "tolerations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GPUToleration"
+            }
+          }
+        }
+      },
+      "ManifestGPU": {
+        "properties": {
+          "count": {
+            "type": "integer"
+          },
+          "kind": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "count"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/pkg/manifest.GPU"
+      },
+      "RecipesGPU": {
+        "properties": {
+          "count": {
+            "type": "integer"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "min_memory_gib": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "count"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/internal/recipes.GPU"
+      },
+      "WeightCache": {
+        "type": "object",
+        "required": [
+          "mount_path",
+          "kubernetes_size_mb"
+        ],
+        "properties": {
+          "kubernetes_size_mb": {
+            "type": "integer"
+          },
+          "mount_path": {
+            "type": "string"
           }
         }
       }

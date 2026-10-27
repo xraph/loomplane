@@ -1259,6 +1259,87 @@
           }
         }
       },
+      "Canary": {
+        "type": "object",
+        "required": [
+          "status",
+          "steps",
+          "hold_seconds",
+          "thresholds",
+          "step",
+          "weight",
+          "services",
+          "updated_at"
+        ],
+        "properties": {
+          "hold_seconds": {
+            "type": "integer"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "services": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CanaryService"
+            }
+          },
+          "status": {
+            "type": "string"
+          },
+          "step": {
+            "type": "integer"
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          },
+          "thresholds": {
+            "$ref": "#/components/schemas/Thresholds"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "weight": {
+            "type": "integer"
+          }
+        }
+      },
+      "CanaryService": {
+        "type": "object",
+        "required": [
+          "action_id",
+          "name",
+          "provider",
+          "binding_id"
+        ],
+        "properties": {
+          "action_id": {
+            "type": "string"
+          },
+          "baseline": {
+            "type": "string"
+          },
+          "binding_id": {
+            "type": "string"
+          },
+          "candidate": {
+            "type": "string"
+          },
+          "image": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          }
+        }
+      },
       "CapacityBlock": {
         "type": "object",
         "required": [
@@ -2215,6 +2296,35 @@
           }
         }
       },
+      "Health": {
+        "type": "object",
+        "required": [
+          "requests",
+          "errors",
+          "latency_ms",
+          "available"
+        ],
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "errors": {
+            "type": "number"
+          },
+          "latency_ms": {
+            "type": "number"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "requests": {
+            "type": "number"
+          },
+          "statistic": {
+            "type": "string"
+          }
+        }
+      },
       "Held": {
         "type": "object",
         "properties": {
@@ -2704,6 +2814,36 @@
           },
           "field": {
             "type": "string"
+          }
+        }
+      },
+      "Release": {
+        "type": "object",
+        "required": [
+          "strategy",
+          "thresholds"
+        ],
+        "properties": {
+          "canary": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "hold_seconds": {
+            "type": "integer"
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          },
+          "strategy": {
+            "type": "string"
+          },
+          "thresholds": {
+            "$ref": "#/components/schemas/Thresholds"
           }
         }
       },
@@ -3418,6 +3558,29 @@
           }
         }
       },
+      "Thresholds": {
+        "type": "object",
+        "required": [
+          "error_rate",
+          "error_rate_delta",
+          "p95_latency_ratio",
+          "min_requests"
+        ],
+        "properties": {
+          "error_rate": {
+            "type": "number"
+          },
+          "error_rate_delta": {
+            "type": "number"
+          },
+          "min_requests": {
+            "type": "number"
+          },
+          "p95_latency_ratio": {
+            "type": "number"
+          }
+        }
+      },
       "Volume": {
         "type": "object",
         "required": [
@@ -3617,6 +3780,92 @@
           },
           "truncated": {
             "type": "boolean"
+          }
+        }
+      },
+      "CanaryVerdict": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "project_id",
+          "deployment_id",
+          "retry",
+          "action_id",
+          "service",
+          "step",
+          "attempt",
+          "weight",
+          "verdict",
+          "reason",
+          "baseline_fallback",
+          "baseline",
+          "candidate",
+          "thresholds",
+          "window_start",
+          "window_end",
+          "decided_at"
+        ],
+        "properties": {
+          "action_id": {
+            "type": "string"
+          },
+          "attempt": {
+            "type": "integer"
+          },
+          "baseline": {
+            "$ref": "#/components/schemas/Health"
+          },
+          "baseline_fallback": {
+            "type": "boolean"
+          },
+          "candidate": {
+            "$ref": "#/components/schemas/Health"
+          },
+          "decided_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "deployment_id": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "retry": {
+            "type": "integer"
+          },
+          "service": {
+            "type": "string"
+          },
+          "step": {
+            "type": "integer"
+          },
+          "thresholds": {
+            "$ref": "#/components/schemas/Thresholds"
+          },
+          "verdict": {
+            "type": "string"
+          },
+          "weight": {
+            "type": "integer"
+          },
+          "window_end": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "window_start": {
+            "type": "string",
+            "format": "date-time"
           }
         }
       },
@@ -3893,6 +4142,9 @@
           "started_at"
         ],
         "properties": {
+          "canary": {
+            "$ref": "#/components/schemas/Canary"
+          },
           "capacity_wait": {
             "$ref": "#/components/schemas/CapacityWait"
           },
@@ -4214,6 +4466,9 @@
           },
           "project_id": {
             "type": "string"
+          },
+          "release": {
+            "$ref": "#/components/schemas/Release"
           },
           "revision": {
             "type": "string"
@@ -5310,6 +5565,190 @@
         "title": "build.log event",
         "summary": "SSE event: build.log"
       },
+      "api-v1-realtime-eventscanary_verdict.deleted": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "id",
+            "org_id",
+            "project_id",
+            "deployment_id",
+            "retry",
+            "action_id",
+            "service",
+            "step",
+            "attempt",
+            "weight",
+            "verdict",
+            "reason",
+            "baseline_fallback",
+            "baseline",
+            "candidate",
+            "thresholds",
+            "window_start",
+            "window_end",
+            "decided_at"
+          ],
+          "properties": {
+            "action_id": {
+              "type": "string"
+            },
+            "attempt": {
+              "type": "integer"
+            },
+            "baseline": {
+              "$ref": "#/components/schemas/Health"
+            },
+            "baseline_fallback": {
+              "type": "boolean"
+            },
+            "candidate": {
+              "$ref": "#/components/schemas/Health"
+            },
+            "decided_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "deployment_id": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "org_id": {
+              "type": "string"
+            },
+            "project_id": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "retry": {
+              "type": "integer"
+            },
+            "service": {
+              "type": "string"
+            },
+            "step": {
+              "type": "integer"
+            },
+            "thresholds": {
+              "$ref": "#/components/schemas/Thresholds"
+            },
+            "verdict": {
+              "type": "string"
+            },
+            "weight": {
+              "type": "integer"
+            },
+            "window_end": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "window_start": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "canary_verdict.deleted",
+        "title": "canary_verdict.deleted event",
+        "summary": "SSE event: canary_verdict.deleted"
+      },
+      "api-v1-realtime-eventscanary_verdict.updated": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "id",
+            "org_id",
+            "project_id",
+            "deployment_id",
+            "retry",
+            "action_id",
+            "service",
+            "step",
+            "attempt",
+            "weight",
+            "verdict",
+            "reason",
+            "baseline_fallback",
+            "baseline",
+            "candidate",
+            "thresholds",
+            "window_start",
+            "window_end",
+            "decided_at"
+          ],
+          "properties": {
+            "action_id": {
+              "type": "string"
+            },
+            "attempt": {
+              "type": "integer"
+            },
+            "baseline": {
+              "$ref": "#/components/schemas/Health"
+            },
+            "baseline_fallback": {
+              "type": "boolean"
+            },
+            "candidate": {
+              "$ref": "#/components/schemas/Health"
+            },
+            "decided_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "deployment_id": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "org_id": {
+              "type": "string"
+            },
+            "project_id": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "retry": {
+              "type": "integer"
+            },
+            "service": {
+              "type": "string"
+            },
+            "step": {
+              "type": "integer"
+            },
+            "thresholds": {
+              "$ref": "#/components/schemas/Thresholds"
+            },
+            "verdict": {
+              "type": "string"
+            },
+            "weight": {
+              "type": "integer"
+            },
+            "window_end": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "window_start": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "canary_verdict.updated",
+        "title": "canary_verdict.updated event",
+        "summary": "SSE event: canary_verdict.updated"
+      },
       "api-v1-realtime-eventscloud.deleted": {
         "payload": {
           "type": "object",
@@ -5830,6 +6269,9 @@
             "started_at"
           ],
           "properties": {
+            "canary": {
+              "$ref": "#/components/schemas/Canary"
+            },
             "capacity_wait": {
               "$ref": "#/components/schemas/CapacityWait"
             },
@@ -5916,6 +6358,9 @@
             "started_at"
           ],
           "properties": {
+            "canary": {
+              "$ref": "#/components/schemas/Canary"
+            },
             "capacity_wait": {
               "$ref": "#/components/schemas/CapacityWait"
             },
@@ -6368,6 +6813,9 @@
             "project_id": {
               "type": "string"
             },
+            "release": {
+              "$ref": "#/components/schemas/Release"
+            },
             "revision": {
               "type": "string"
             },
@@ -6527,6 +6975,9 @@
             },
             "project_id": {
               "type": "string"
+            },
+            "release": {
+              "$ref": "#/components/schemas/Release"
             },
             "revision": {
               "type": "string"
