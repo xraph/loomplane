@@ -2,6 +2,7 @@ package cloudinfra
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 )
@@ -134,15 +135,62 @@ func VerifiedProjectZones(zones []*Zone, project string) []ProjectZone {
 // linkedZone loads the organization's zones, links them, and returns the
 // one with id.
 func (s *Service) linkedZone(ctx context.Context, st DomainStore, org, id string) (*Zone, error) {
-	zones, err := st.Zones(ctx, org)
-	if err != nil {
-		return nil, err
+	zone, _, err := s.linkedZones(ctx, st, org, id)
+	return zone, err
+}
+
+// linkedZones is linkedZone with every zone of the organization it read.
+func (s *Service) linkedZones(ctx context.Context, st DomainStore, org, id string) (zone *Zone, zones []*Zone, err error) {
+	if zones, err = st.Zones(ctx, org); err != nil {
+		return nil, nil, err
 	}
 	LinkZoneParents(zones)
 	for _, z := range zones {
 		if z.ID == id {
-			return z, nil
+			return z, zones, nil
 		}
 	}
-	return nil, ErrNotFound
+	return nil, nil, ErrNotFound
+}
+
+// deeperZoneNames lists the names strictly under zoneName that hostname's
+// base is or sits under, longest first. The base drops a wildcard's *.
+func deeperZoneNames(zoneName, hostname string) []string {
+	base := strings.TrimPrefix(hostname, "*.")
+	out := []string{}
+	for _, name := range append([]string{base}, ancestorNames(base)...) {
+		if strings.HasSuffix(name, "."+zoneName) {
+			out = append(out, name)
+		}
+	}
+	return out
+}
+
+// deeperZone is the deepest zone of zone's organization, strictly under
+// zone, that hostname's base is or sits under, or nil. A route for that
+// name belongs there, since the subdomain has its own grants.
+func deeperZone(zone *Zone, hostname string, zones []*Zone) *Zone {
+	for _, name := range deeperZoneNames(zone.Name, hostname) {
+		for _, z := range zones {
+			if z.OrgID == zone.OrgID && z.Name == name {
+				return z
+			}
+		}
+	}
+	return nil
+}
+
+// errBelongsTo refuses a new route on a zone for a name a subdomain holds.
+func errBelongsTo(hostname, subdomain string) error {
+	return fmt.Errorf("%w: %s belongs to %s. Add it there", ErrInvalid, hostname, subdomain)
+}
+
+// checkDeepestZone refuses hostname on zone when a subdomain holds it.
+// Routes that predate the subdomain aren't checked here and stay as they
+// are.
+func checkDeepestZone(zone *Zone, hostname string, zones []*Zone) error {
+	if sub := deeperZone(zone, hostname, zones); sub != nil {
+		return errBelongsTo(hostname, sub.Name)
+	}
+	return nil
 }
