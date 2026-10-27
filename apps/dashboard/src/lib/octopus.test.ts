@@ -7,6 +7,8 @@ import type {
 } from "@/client/forge/loomplane/types"
 import {
   discoverySentence,
+  exampleRequest,
+  farpCollision,
   filterBoard,
   methodsLabel,
   routeCountLabel,
@@ -14,6 +16,7 @@ import {
   routeSourceLabel,
   splitPath,
   unroutedSentence,
+  validatePath,
 } from "@/lib/octopus"
 
 const route = (over: Partial<BoardRoute>): BoardRoute => ({
@@ -199,4 +202,87 @@ test("unroutedSentence names each service and why", () => {
     "admin :4000 has no route yet. worker has no HTTP port, so it can't take one. batch runs on a different server or cluster, so Octopus can't reach it."
   )
   expect(unroutedSentence(board())).toBe("")
+})
+
+test("exampleRequest follows the mock", () => {
+  const auth = {
+    host: "api.acme.dev",
+    path: "/auth/*",
+    strip: true,
+    service: "auth",
+    port: 9000,
+    privateUrl: "http://edge--gateway:8080",
+  }
+  expect(exampleRequest(auth)).toEqual({
+    in: "https://api.acme.dev/auth/login",
+    out: "auth:9000/login",
+  })
+  expect(exampleRequest({ ...auth, strip: false })).toEqual({
+    in: "https://api.acme.dev/auth/login",
+    out: "auth:9000/auth/login",
+  })
+  expect(exampleRequest({ ...auth, host: "*.acme.dev" }).in).toBe(
+    "https://shop1.acme.dev/auth/login"
+  )
+  expect(exampleRequest({ ...auth, host: "" }).in).toBe(
+    "http://edge--gateway:8080/auth/login"
+  )
+  // An exact path strips to the root, and "/" and "/*" never strip.
+  expect(exampleRequest({ ...auth, path: "/auth" })).toEqual({
+    in: "https://api.acme.dev/auth",
+    out: "auth:9000/",
+  })
+  expect(exampleRequest({ ...auth, path: "/*" })).toEqual({
+    in: "https://api.acme.dev/login",
+    out: "auth:9000/login",
+  })
+  expect(
+    exampleRequest({ ...auth, path: "/", service: "web", port: 3000 })
+  ).toEqual({ in: "https://api.acme.dev/", out: "web:3000/" })
+})
+
+test("farpCollision finds a FARP route on the same host and path", () => {
+  const orders = route({ path: "/v1/orders/*", service: "api" })
+  const mine = route({ path: "/auth/*", source: "here", service: "auth" })
+  const b = board({
+    hosts: [
+      host("api.acme.dev", [orders, mine]),
+      host("acme.dev", [route({ path: "/v1/events", service: "billing" })]),
+    ],
+  })
+  expect(farpCollision(b, "api.acme.dev", "/v1/orders/*")).toBe(orders)
+  expect(farpCollision(b, "api.acme.dev", "/v1/orders")).toBeUndefined()
+  expect(farpCollision(b, "acme.dev", "/v1/orders/*")).toBeUndefined()
+  // A route added here isn't FARP's.
+  expect(farpCollision(b, "api.acme.dev", "/auth/*")).toBeUndefined()
+  expect(farpCollision(b, "docs.acme.dev", "/v1/orders/*")).toBeUndefined()
+})
+
+test("validatePath says what the server says", () => {
+  for (const ok of ["/", "/*", "/auth", "/auth/*", "/v1/orders/*"])
+    expect(validatePath(ok)).toBeUndefined()
+  expect(validatePath("")).toBe("A path starts with /, like /auth or /auth/*.")
+  expect(validatePath("auth")).toBe(
+    "A path starts with /, like /auth or /auth/*."
+  )
+  expect(validatePath("/" + "a".repeat(512))).toBe(
+    "A path is at most 512 characters."
+  )
+  expect(validatePath("/a?b")).toBe(
+    "A path can't contain ? or #. Query strings and fragments aren't part of a route."
+  )
+  expect(validatePath("/a b")).toBe(
+    "A path can't contain spaces or control characters."
+  )
+  expect(validatePath("/a//b")).toBe("A path can't contain //.")
+  expect(validatePath("/auth/")).toBe(
+    "Drop the trailing slash, or end with /* to match everything under it."
+  )
+  expect(validatePath("/a/../b")).toBe("A path can't contain . or .. segments.")
+  expect(validatePath("/a/*/b")).toBe(
+    "A * is only allowed as the last segment, as /*."
+  )
+  expect(validatePath("/a*")).toBe(
+    "A * is only allowed as the last segment, as /*."
+  )
 })

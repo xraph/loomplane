@@ -213,3 +213,72 @@ export function hostPills(status: CloudinfraRouteStatus): [string, PillTone][] {
 function lower(s: string): string {
   return s.charAt(0).toLowerCase() + s.slice(1)
 }
+
+/**
+ * exampleRequest is the route dialog's sample: a request the route would
+ * answer and where Octopus sends it. A wildcard host answers as shop1, a
+ * wildcard path as its /login, and an any-host route on the gateway's
+ * private address.
+ */
+export function exampleRequest(i: {
+  host: string
+  path: string
+  strip: boolean
+  service: string
+  port: number
+  privateUrl: string
+}): { in: string; out: string } {
+  const { prefix, wildcard } = splitPath(i.path || "/")
+  const sample = wildcard
+    ? `${prefix === "/" ? "" : prefix}/login`
+    : i.path || "/"
+  const out =
+    i.strip && prefix !== "/" ? sample.slice(prefix.length) || "/" : sample
+  const origin = i.host
+    ? `https://${i.host.replace("*", "shop1")}`
+    : i.privateUrl.replace(/\/+$/, "")
+  return { in: `${origin}${sample}`, out: `${i.service}:${i.port}${out}` }
+}
+
+/**
+ * farpCollision is the FARP route a manual route on host and path would
+ * take priority over, if FARP publishes one there.
+ */
+export function farpCollision(
+  board: Board,
+  host: string,
+  path: string
+): BoardRoute | undefined {
+  return board.hosts
+    .find((h) => h.hostname === host)
+    ?.routes.find((r) => r.source === "farp" && r.path === path)
+}
+
+// The server's limit on a path, in bytes as Go counts them.
+const maxPathLength = 512
+
+/**
+ * validatePath checks a path as the server's NormalizeRouteInput does and
+ * says what's wrong in the same words, or nothing when it's fine.
+ */
+export function validatePath(path: string): string | undefined {
+  if (!path.startsWith("/"))
+    return "A path starts with /, like /auth or /auth/*."
+  if (new TextEncoder().encode(path).length > maxPathLength)
+    return `A path is at most ${maxPathLength} characters.`
+  if (/[?#]/.test(path))
+    return "A path can't contain ? or #. Query strings and fragments aren't part of a route."
+  if (/[\s\p{Cc}]/u.test(path))
+    return "A path can't contain spaces or control characters."
+  if (path.includes("//")) return "A path can't contain //."
+  if (path !== "/" && path.endsWith("/"))
+    return "Drop the trailing slash, or end with /* to match everything under it."
+  const segments = path.slice(1).split("/")
+  for (const [i, seg] of segments.entries()) {
+    if (seg === "." || seg === "..")
+      return "A path can't contain . or .. segments."
+    if (seg.includes("*") && (seg !== "*" || i !== segments.length - 1))
+      return "A * is only allowed as the last segment, as /*."
+  }
+  return undefined
+}

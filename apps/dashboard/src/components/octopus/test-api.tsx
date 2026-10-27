@@ -154,14 +154,81 @@ export function mockBoard(): Json {
   }
 }
 
+/** A route the API stores, in its own JSON. */
+export function savedRoute(over: Json = {}): Json {
+  return {
+    id: "rt_new",
+    org_id: "org",
+    project_id: "p",
+    environment_id: "env_prod",
+    resource: "edge",
+    hostname: "api.acme.dev",
+    path: "/auth/*",
+    methods: [],
+    service: "auth",
+    port: 9000,
+    strip_prefix: true,
+    note: "",
+    revision: 1,
+    created_by: "user_1",
+    created_at: "2026-10-26T20:00:00Z",
+    updated_at: "2026-10-26T20:00:00Z",
+    ...over,
+  }
+}
+
+const applied = {
+  state: "applied",
+  generation: 5,
+  restarted: false,
+  restored: 0,
+}
+
+/** A domain route operation, as preview and apply answer. */
+function operation(id: string, status: string): Json {
+  const zero = "0001-01-01T00:00:00Z"
+  return {
+    id,
+    kind: "apply",
+    status,
+    review: "review-token",
+    attempt: 1,
+    revision: 1,
+    generation: 0,
+    message: "",
+    created_at: zero,
+    expires_at: zero,
+    not_before: zero,
+    dns_attempted: false,
+    desired_record: {},
+    route: { id: "route_docs", revision: 1 },
+  }
+}
+
+/** The domains granted to the project, as the attach flow reads them. */
+export const projectDomains: Json[] = [
+  {
+    zone_id: "zone_dev",
+    name: "acme.dev",
+    mode: "managed",
+    provider: "cloudflare",
+    verified: true,
+    wildcards: true,
+    hostnames: [],
+  },
+]
+
 export type Fixture = {
-  board?: Json
+  /** The board, or a function read on every board request. */
+  board?: Json | (() => Json)
   /** The board read answers with this status instead. */
   boardStatus?: number
   /** The board read never answers. */
   boardPending?: boolean
   adminUrl?: string
   adminStatus?: number
+  /** Answers a write before the defaults do, when it returns a response. */
+  write?: (w: Write) => Response | undefined
 }
 
 /** serve stubs the API and returns what was written. */
@@ -173,7 +240,22 @@ export function serve(fixture: Fixture = {}) {
       const method = init?.method ?? "GET"
       const path = new URL(String(input), "http://localhost").pathname
       const body = init?.body ? JSON.parse(String(init.body)) : undefined
-      if (method !== "GET") writes.push({ method, path, body })
+      if (method !== "GET") {
+        const w = { method, path, body }
+        writes.push(w)
+        const answer = fixture.write?.(w)
+        if (answer) return answer
+        if (path.endsWith("/octopus/edge/routes"))
+          return json({ route: savedRoute(body as Json), sync: applied }, 201)
+        if (/\/octopus\/edge\/routes\/[^/]+\/update$/.test(path))
+          return json({ route: savedRoute(body as Json), sync: applied })
+        if (/\/octopus\/edge\/routes\/[^/]+\/remove$/.test(path))
+          return json(applied)
+        if (path.endsWith("/domain-routes/preview"))
+          return json(operation("routeop_1", "preview"))
+        if (/\/route-operations\/[^/]+\/apply$/.test(path))
+          return json(operation(path.split("/")[5], "pending"))
+      }
       if (path.endsWith("/catalog/edge/admin-sessions")) {
         if (fixture.adminStatus)
           return json(
@@ -192,7 +274,9 @@ export function serve(fixture: Fixture = {}) {
         if (fixture.boardPending) return new Promise<Response>(() => {})
         if (fixture.boardStatus)
           return json({ message: "Something went wrong." }, fixture.boardStatus)
-        return json(fixture.board ?? mockBoard())
+        const board =
+          typeof fixture.board === "function" ? fixture.board() : fixture.board
+        return json(board ?? mockBoard())
       }
       if (path.endsWith("/connections"))
         return json({
@@ -200,6 +284,12 @@ export function serve(fixture: Fixture = {}) {
             { id: "conn_1", name: "edge-1", cloud: "server", status: "ready" },
           ],
         })
+      if (path.endsWith("/projects/p/domains"))
+        return json({ domains: projectDomains })
+      if (path.endsWith("/projects/p/domain-routes"))
+        return json({ routes: [] })
+      if (path === "/api/v1/domains")
+        return json({ zones: [], registrations: [] })
       if (path.endsWith("/projects/p/environments"))
         return json({ environments: [{ id: "env_prod", name: "production" }] })
       if (path.endsWith("/projects/p"))

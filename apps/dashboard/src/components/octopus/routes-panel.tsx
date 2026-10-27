@@ -13,6 +13,7 @@ import type { Board } from "@/client/forge/loomplane/types"
 import { useQuery } from "@/client/hooks"
 import { DiscoveryStrip } from "@/components/octopus/discovery-strip"
 import { HostCardView } from "@/components/octopus/host-card"
+import { RouteDialog } from "@/components/octopus/route-dialog"
 import { QueryError } from "@/components/query-error"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -36,17 +37,19 @@ import { useOrganization } from "@/lib/organization"
 
 /**
  * useRouteDialog is what the add, edit and override dialog opens with:
- * the mode and the route to start from. Nothing draws it yet.
+ * the mode and the route to start from. Each opening gets its own key so
+ * the dialog starts fresh.
  */
 function useRouteDialog() {
   const [request, setRequest] = useState<{
+    key: number
     mode: RouteDialogMode
     initial: RouteDraft
   } | null>(null)
   return {
     request,
     open: (mode: RouteDialogMode, initial: RouteDraft = {}) =>
-      setRequest({ mode, initial }),
+      setRequest((prev) => ({ key: (prev?.key ?? 0) + 1, mode, initial })),
     close: () => setRequest(null),
   }
 }
@@ -87,6 +90,7 @@ export function RoutesPanel(props: CatalogPanelProps) {
 function Routes({
   projectId,
   environmentId,
+  resource,
   board,
 }: CatalogPanelProps & { board: Board }) {
   const { can } = useOrganization()
@@ -96,7 +100,6 @@ function Routes({
   })
   const [source, setSource] = useState<SourceFilter>("all")
   const dialog = useRouteDialog()
-  // The add, edit and override dialog opens from dialog.request.
   const writes = can("infrastructure:modify")
 
   const environment =
@@ -197,6 +200,21 @@ function Routes({
             </Button>
           )}
         </section>
+      )}
+
+      {writes && dialog.request && (
+        <RouteDialog
+          key={dialog.request.key}
+          projectId={projectId}
+          environmentId={environmentId}
+          resource={resource}
+          mode={dialog.request.mode}
+          initial={dialog.request.initial}
+          open
+          onOpenChange={(open) => {
+            if (!open) dialog.close()
+          }}
+        />
       )}
     </>
   )
