@@ -171,7 +171,7 @@ func TestPreviewRouteLeavesASubdomainsNamesToIt(t *testing.T) {
 		in := gatewayInput()
 		in.Hostname = host
 		_, err := svc.PreviewRoute(t.Context(), overviewDev, "shop", in)
-		if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), host+" belongs to app.gateway.dev. Add it there") {
+		if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), host+" belongs to app.gateway.dev. Pick that domain") {
 			t.Fatalf("%s previewed on gateway.dev: %v", host, err)
 		}
 	}
@@ -195,7 +195,7 @@ func TestApplyRouteRefusesANameASubdomainTookAfterPreview(t *testing.T) {
 	}
 	subzoneOfGateway(st)
 	_, err = svc.ApplyRoute(t.Context(), overviewDev, "shop", op.ID, ApplyInput{Review: op.Review})
-	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "x.app.gateway.dev belongs to app.gateway.dev. Add it there") {
+	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "x.app.gateway.dev belongs to app.gateway.dev. Pick that domain") {
 		t.Fatal("applied a name the subdomain now holds", err)
 	}
 	if len(st.accepted) != 0 {
