@@ -63,8 +63,9 @@ const (
 	// codeCanaryPermissions blocks a canary on ECS, Cloud Run or Container
 	// Apps whose connection's credential can't split the service's traffic.
 	codeCanaryPermissions = "canary-permissions"
-	// codeCanaryAppWide blocks a canary on Container Apps whose release
-	// changes what Container Apps applies to every revision at once.
+	// codeCanaryAppWide blocks a canary on Container Apps or Cloud Run
+	// whose release changes what the target applies to every revision at
+	// once.
 	codeCanaryAppWide = "canary-app-wide-change" //nolint:gosec // G101: a finding code, not a credential
 	// codeCanaryDatabaseRoute blocks a canary for a service that reaches
 	// Cloud SQL through a Private Service Connect route, which a candidate
@@ -112,7 +113,7 @@ func planRelease(in Input, r *Result) {
 					r.Problems = append(r.Problems, Finding{
 						Code: codeCanaryAppWide, Subject: ServiceSubject, Name: a.Name, Path: "services." + a.Name,
 						Message: a.Name + " can't run a canary: this release changes its " + strings.Join(changed, ", ") +
-							", which Azure Container Apps applies app-wide, to every revision at once, the one serving now included. Release this environment direct or blue_green once to make that change.",
+							", which " + appWideTargets[a.Provider] + ", to every revision at once, the one serving now included. Release this environment direct or blue_green once to make that change.",
 					})
 					r.Executable = false
 					continue
@@ -206,21 +207,30 @@ func unsupportedCanary(a Action) (code, message string) {
 	return "", ""
 }
 
-// appWideFields are the service settings that make a container app's
-// ingress, which Container Apps applies to every revision at once: its
-// port, whether it's public, and its workload, which decides both for a
-// static site and whether it has ingress at all.
-var appWideFields = map[string]string{"port": "port", "public": "public", "workload": "workload"}
+// appWideFields are the service settings, by provider, that apply to
+// every revision at once, so a canary's baseline would take a change to
+// them too. On Container Apps that's the app's ingress: its port, whether
+// it's public, and its workload, which decides both for a static site and
+// whether it has ingress at all. On Cloud Run it's who may call the
+// service, which public decides.
+var appWideFields = map[string]map[string]string{
+	"azure-container-apps": {"port": "port", "public": "public", "workload": "workload"},
+	"cloud-run":            {"public": "public"},
+}
 
-// appWideChanges are the changes an action makes that a canary on Azure
-// Container Apps can't, as "port 8080 to 9090".
+// appWideTargets say, by provider, where an app-wide setting applies.
+var appWideTargets = map[string]string{
+	"azure-container-apps": "Azure Container Apps applies app-wide",
+	"cloud-run":            "Cloud Run applies to the whole service",
+}
+
+// appWideChanges are the changes an action makes that a canary on its
+// provider can't, as "port 8080 to 9090".
 func appWideChanges(a Action) []string {
-	if a.Provider != "azure-container-apps" {
-		return nil
-	}
+	fields := appWideFields[a.Provider]
 	var out []string
 	for _, c := range a.Changes {
-		if name, ok := appWideFields[c.Field]; ok {
+		if name, ok := fields[c.Field]; ok {
 			out = append(out, name+" "+cmp.Or(c.From, "unset")+" to "+cmp.Or(c.To, "unset"))
 		}
 	}

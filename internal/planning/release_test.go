@@ -401,3 +401,24 @@ func TestCanaryRefusesTheDatabaseGateway(t *testing.T) {
 		}
 	}
 }
+
+// Who may call a Cloud Run service is the service's, not a revision's, so
+// a release that flips public would switch access for all of the traffic
+// at Promote with no step judging it. The plan refuses it as Container
+// Apps refuses an ingress change.
+func TestCanaryOnCloudRunRefusesFlippingPublic(t *testing.T) {
+	in := releaseInput(t, releaseYAML(canaryRelease))
+	api := serviceAction("api", "cloud-run", Update, ServiceConfig{Port: 8080})
+	api.Changes = []Change{{Field: "commit", From: "abc", To: "def"}, {Field: "public", From: "true", To: "false"}}
+	r := &Result{Actions: []Action{api}, Executable: true}
+	planRelease(in, r)
+	if r.Executable || r.Release.Ramps(api.ID) || len(r.Problems) != 1 {
+		t.Fatalf("executable %v, release %+v, problems %+v", r.Executable, r.Release, r.Problems)
+	}
+	p := r.Problems[0]
+	for _, want := range []string{"public true to false", "Cloud Run applies to the whole service", "direct or blue_green"} {
+		if p.Code != codeCanaryAppWide || p.Name != "api" || !strings.Contains(p.Message, want) {
+			t.Fatalf("problem %+v doesn't say %q", p, want)
+		}
+	}
+}
