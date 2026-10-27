@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/xraph/loomplane/internal/projects"
 )
 
 // pastGrace moves the clock past the window in which an unanswered write
@@ -168,6 +170,21 @@ func TestZoneProofRotatedIDMovesTheReceipt(t *testing.T) {
 	}
 }
 
+func TestZoneProofBackgroundPassIsTimeBounded(t *testing.T) {
+	env := newProofEnv(t, "vercel")
+	env.create(t, "managed")
+	env.create(t, "managed")
+	env.dns.block = true
+	pass, perZone := zoneProofPassTimeout, zoneProofZoneTimeout
+	zoneProofPassTimeout, zoneProofZoneTimeout = 150*time.Millisecond, 100*time.Millisecond
+	t.Cleanup(func() { zoneProofPassTimeout, zoneProofZoneTimeout = pass, perZone })
+	started := time.Now()
+	_ = env.svc.CheckZoneProofs(t.Context())
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatal("background pass ran unbounded", elapsed)
+	}
+}
+
 func TestZoneProofCheckSkipsWorkItDoesNotNeed(t *testing.T) {
 	t.Run("no re-list in the pass that wrote", func(t *testing.T) {
 		env := newProofEnv(t, "vercel")
@@ -232,6 +249,30 @@ func TestRemoveZoneDeletesAtTheRevisionItWasGiven(t *testing.T) {
 	}
 	if env.store.saves != saves || len(env.store.zones) != 0 {
 		t.Fatal("removal saved the zone in between", env.store.saves-saves)
+	}
+}
+
+func TestZoneProofBackgroundWorkIsAudited(t *testing.T) {
+	env := newProofEnv(t, "vercel")
+	audit := &recordingAudit{}
+	env.svc.Audit = audit
+	env.dns.upsertErr = errors.New("provider unavailable")
+	zone := env.create(t, "managed")
+	env.dns.upsertErr = nil
+	audit.events = nil
+	env.resolver.values = []string{zone.ProofValue}
+	if err := env.svc.CheckZoneProofs(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	var found []projects.AuditEvent
+	for _, e := range audit.events {
+		if e.Action == "domain.zone.write" && e.Principal.UserID == zoneProofSystemUser && e.Principal.OrgID == "org" && e.Attributes["resource_id"] == zone.ID {
+			found = append(found, e)
+		}
+	}
+	// One for the publish, one for the verification.
+	if len(found) != 2 {
+		t.Fatalf("background work not audited: %+v", audit.events)
 	}
 }
 

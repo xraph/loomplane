@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/xraph/loomplane/internal/connections"
+	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/pkg/provider"
 )
 
@@ -30,6 +31,16 @@ const zoneProofRelistAfter = 5 * time.Minute
 
 // zoneProofBatch bounds the zones one background pass checks.
 const zoneProofBatch = 50
+
+// The background pass shares its goroutine with route and infrastructure
+// recovery, so it is bounded. Zones it doesn't reach wait for the next tick.
+var (
+	zoneProofPassTimeout = 20 * time.Second
+	zoneProofZoneTimeout = 8 * time.Second
+)
+
+// zoneProofSystemUser is who the background check acts as in the audit log.
+const zoneProofSystemUser = "system:zone-proof"
 
 // zoneProofReceiptRetries bounds re-reads after a receipt save loses the
 // zone's revision to another writer.
@@ -267,7 +278,7 @@ func dnsProviderName(cloud string) string {
 // checkZoneProof publishes a managed zone's proof if it still needs it, then
 // looks for the proof in public DNS. Every check is saved, so the page can
 // say when the record was last looked for. wrote reports a publish in this
-// pass.
+// pass, for the audit log.
 func (s *Service) checkZoneProof(ctx context.Context, st DomainStore, zone *Zone) (wrote bool, err error) {
 	before := zone.ProofRecord
 	if publishErr := s.publishZoneProof(ctx, st, zone); publishErr != nil {
@@ -347,30 +358,54 @@ func zoneProofDue(zone *Zone, now, checkedBefore time.Time) bool {
 // CheckZoneProofs retries pending publishes and checks public DNS for
 // managed zones still waiting on their proof, so a zone becomes usable
 // without anyone pressing Check again. Each zone is checked at most once
-// every zoneProofCheckEvery, and a pass checks at most zoneProofBatch.
+// every zoneProofCheckEvery, a pass checks at most zoneProofBatch, and the
+// pass and each zone have a deadline.
 func (s *Service) CheckZoneProofs(ctx context.Context) error {
 	st, err := s.domainStore()
 	if err != nil {
 		return err
 	}
+	pass, cancel := context.WithTimeout(ctx, zoneProofPassTimeout)
+	defer cancel()
 	now := s.now().UTC()
 	checkedBefore := now.Add(-zoneProofCheckEvery)
-	zones, err := st.ZoneProofsDue(ctx, now, checkedBefore, zoneProofBatch)
+	zones, err := st.ZoneProofsDue(pass, now, checkedBefore, zoneProofBatch)
 	if err != nil {
 		return err
 	}
 	var errs []error
 	for _, zone := range zones {
+		if pass.Err() != nil {
+			break
+		}
 		if !zoneProofDue(zone, now, checkedBefore) {
 			continue
 		}
-		// A record not visible yet is the usual answer while DNS propagates,
-		// and a save lost to a check from the page is that check's to make.
-		if _, checkErr := s.checkZoneProof(ctx, st, zone); checkErr != nil && !errors.Is(checkErr, ErrConflict) && ctx.Err() == nil {
+		if checkErr := s.checkZoneProofInBackground(pass, st, zone); checkErr != nil && ctx.Err() == nil {
 			errs = append(errs, fmt.Errorf("zone %s: %w", zone.ID, checkErr))
 		}
 	}
 	return errors.Join(errs...)
+}
+
+func (s *Service) checkZoneProofInBackground(ctx context.Context, st DomainStore, zone *Zone) error {
+	ctx, cancel := context.WithTimeout(ctx, zoneProofZoneTimeout)
+	defer cancel()
+	system := security.Principal{OrgID: zone.OrgID, UserID: zoneProofSystemUser}
+	wrote, err := s.checkZoneProof(ctx, st, zone)
+	if wrote {
+		s.domainAudit(ctx, system, "domain.zone.write", zone.ID, "")
+	}
+	if err == nil {
+		s.domainAudit(ctx, system, "domain.zone.write", zone.ID, "")
+	}
+	// A record not visible yet is the usual answer while DNS propagates, a
+	// save lost to a check from the page is that check's to make, and a
+	// zone out of time waits for the next pass.
+	if errors.Is(err, ErrConflict) || errors.Is(err, context.DeadlineExceeded) {
+		return nil
+	}
+	return err
 }
 
 // removeZoneProof deletes a managed zone's proof record before the zone
