@@ -483,7 +483,8 @@ it("opens the domain an old link names once the list loads", async () => {
   })
   render(
     <Wrapped>
-      <Domains search={{ zone: "docs-example.org" }} onSearch={() => {}} />
+      {/* Names match whatever their case. */}
+      <Domains search={{ zone: "Docs-Example.org" }} onSearch={() => {}} />
     </Wrapped>
   )
   await waitFor(() =>
