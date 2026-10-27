@@ -39,11 +39,13 @@ export function CopyButton({
 }) {
   const [done, setDone] = useState<string | null>(null)
   const copied = done === value
+  // The tick lasts two seconds from the copy, whatever the value does
+  // meanwhile, so a value that changes and comes back shows no tick.
   useEffect(() => {
-    if (!copied) return
+    if (done === null) return
     const t = window.setTimeout(() => setDone(null), 2000)
     return () => window.clearTimeout(t)
-  }, [copied])
+  }, [done])
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(value)
