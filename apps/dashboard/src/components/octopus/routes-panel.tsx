@@ -11,6 +11,7 @@ import type { Board } from "@/client/forge/loomplane/types"
 import { useQuery } from "@/client/hooks"
 import { DiscoveryStrip } from "@/components/octopus/discovery-strip"
 import { HostCardView } from "@/components/octopus/host-card"
+import { Panel } from "@/components/panel"
 import { PanelLoading, ReadFailed } from "@/components/octopus/panel-states"
 import { RouteDialog } from "@/components/octopus/route-dialog"
 import { QueryError } from "@/components/query-error"
@@ -157,11 +158,12 @@ function Routes({
         ))}
 
       {unrouted.length > 0 && (
-        <section
+        <Panel
+          dashed
           aria-label="Services without a route"
-          className="flex flex-wrap items-center gap-x-4 gap-y-2.5 rounded-[14px] border border-dashed border-border px-4 py-3"
+          className="flex-row flex-wrap items-center gap-x-4 gap-y-2.5 py-3"
         >
-          <span className="flex-[1_1_360px] text-[13px] leading-normal text-foreground/80">
+          <span className="flex-[1_1_360px] text-[13px] text-muted-foreground">
             {unrouted.map((part, i) => (
               <span key={part.service}>
                 {i > 0 && " "}
@@ -194,7 +196,7 @@ function Routes({
               Route {firstUnrouted.service}
             </Button>
           )}
-        </section>
+        </Panel>
       )}
 
       {writes && dialog.request && (

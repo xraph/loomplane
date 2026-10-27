@@ -20,15 +20,17 @@ import type {
   RouteOperation,
 } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
-import { RouteStates } from "@/components/domains/domain-states"
 import {
   HostnameField,
   type HostnameValue,
 } from "@/components/domains/hostname-field"
 import { useRouteLifecycle } from "@/components/domains/use-route-lifecycle"
 import { StrandedFarp } from "@/components/octopus/discovery-strip"
+import { pillTones } from "@/components/octopus/host-card"
 import { PanelLoading, ReadFailed } from "@/components/octopus/panel-states"
+import { Panel } from "@/components/panel"
 import { QueryError } from "@/components/query-error"
+import { StatusPill } from "@/components/runs"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -40,6 +42,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { Button, buttonVariants } from "@/components/ui/button"
+import { Card } from "@/components/ui/card"
 import {
   Dialog,
   DialogContent,
@@ -48,6 +51,14 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { Switch } from "@/components/ui/switch"
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
 import {
   Tooltip,
   TooltipContent,
@@ -62,6 +73,14 @@ import {
 } from "@/components/zero-state"
 import type { CatalogPanelProps } from "@/lib/catalog-kinds"
 import {
+  certificateLabel,
+  dnsLabel,
+  dnsTone,
+  routeLabel,
+  stateTone,
+  type DomainState,
+} from "@/lib/domains"
+import {
   attachedHosts,
   farpHostnamesWith,
   farpLanding,
@@ -75,11 +94,6 @@ import {
 } from "@/lib/octopus"
 import { useOrganization } from "@/lib/organization"
 import { Link } from "@/lib/router"
-import { cn } from "@/lib/utils"
-
-/** The columns of a hostname row: name, the three states, FARP, actions. */
-const columns =
-  "grid grid-cols-[minmax(0,1.3fr)_110px_140px_160px_190px_minmax(176px,auto)] gap-3"
 
 export function DomainsPanel(props: CatalogPanelProps) {
   const { projectId, environmentId, resource } = props
@@ -158,11 +172,11 @@ function Domains({
 
   return (
     <>
-      <section
+      <Panel
         aria-label="Domains"
-        className="flex flex-wrap items-center gap-x-4 gap-y-2.5 rounded-[14px] border border-border bg-subtle px-4 py-3"
+        className="flex-row flex-wrap items-center gap-x-4 gap-y-2.5 bg-subtle py-3"
       >
-        <span className="flex-[1_1_360px] text-[13px] leading-normal">
+        <span className="flex-[1_1_360px] text-[13px]">
           Domains attached to <b className="font-semibold">{resource}</b>. Each
           one is a Loomplane route to Octopus on port {gatewayPort}, and Octopus
           routes by host and path behind it.
@@ -178,34 +192,27 @@ function Domains({
             Attach a domain
           </Button>
         )}
-      </section>
+      </Panel>
 
       {hosts.length > 0 ? (
-        <div className="overflow-hidden rounded-[14px] border border-border">
-          <div className="overflow-x-auto">
-            <div
-              role="table"
-              aria-label={`Domains on ${resource}`}
-              className="min-w-[960px]"
-            >
-              <div
-                role="row"
-                className={cn(
-                  columns,
-                  "border-b border-border bg-subtle px-4 py-2 text-[11.5px] font-medium tracking-[0.04em] text-muted-foreground uppercase"
-                )}
-              >
-                {["Hostname", "DNS", "Certificate", "Route", "FARP"].map(
-                  (h) => (
-                    <span key={h} role="columnheader">
-                      {h}
-                    </span>
-                  )
-                )}
-                <span role="columnheader" className="sr-only">
-                  Actions
-                </span>
-              </div>
+        <Card className="py-0">
+          <Table
+            aria-label={`Domains on ${resource}`}
+            className="min-w-[960px]"
+          >
+            <TableHeader>
+              <TableRow className="hover:bg-transparent">
+                <TableHead>Hostname</TableHead>
+                <TableHead>DNS</TableHead>
+                <TableHead>Certificate</TableHead>
+                <TableHead>Route</TableHead>
+                <TableHead>FARP</TableHead>
+                <TableHead>
+                  <span className="sr-only">Actions</span>
+                </TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
               {hosts.map((host) => (
                 <HostnameRow
                   key={host.hostname}
@@ -223,9 +230,9 @@ function Domains({
                   onDetach={writes ? () => setDetaching(host) : undefined}
                 />
               ))}
-            </div>
-          </div>
-        </div>
+            </TableBody>
+          </Table>
+        </Card>
       ) : (
         <ZeroState>
           <ZeroStateHeader>
@@ -301,90 +308,95 @@ function HostnameRow({
 }) {
   const ids = useId()
   const manual = manualRoutes(host)
+  const states = host.status && [
+    [dnsLabel(host.status), dnsTone(host.status)] as const,
+    [
+      certificateLabel(host.status),
+      stateTone(host.status.certificate as DomainState),
+    ] as const,
+    [
+      routeLabel(host.status),
+      stateTone(host.status.route as DomainState),
+    ] as const,
+  ]
   return (
-    <div
-      role="row"
-      className={cn(
-        columns,
-        "items-center border-border px-4 py-2.5 transition-colors not-first:border-t hover:bg-subtle"
-      )}
-    >
-      <span role="cell" className="flex min-w-0 flex-col gap-0.5">
-        <span
-          data-hostname
-          className="font-mono text-[13px] font-medium break-all"
-        >
-          {host.hostname}
+    <TableRow>
+      <TableCell className="whitespace-normal">
+        <span className="flex min-w-0 flex-col gap-0.5">
+          <span
+            data-hostname
+            className="font-mono text-[13px] font-medium break-all"
+          >
+            {host.hostname}
+          </span>
+          <span className="text-xs text-muted-foreground">
+            {routeCountLabel(host.routes.length)}
+          </span>
         </span>
-        <span className="text-xs text-muted-foreground">
-          {routeCountLabel(host.routes.length)}
-        </span>
-      </span>
-      {host.status ? (
-        <RouteStates status={host.status} />
+      </TableCell>
+      {states ? (
+        states.map(([label, tone], i) => (
+          <TableCell key={i}>
+            <StatusPill tone={pillTones[tone]}>{label}</StatusPill>
+          </TableCell>
+        ))
       ) : (
         <>
-          <span role="cell" />
-          <span role="cell" />
-          <span role="cell" />
+          <TableCell />
+          <TableCell />
+          <TableCell />
         </>
       )}
-      <span role="cell" className="flex items-center gap-2">
-        {onFarp && farpLast ? (
-          <Blocked reason="FARP routes have to land somewhere. Turn on another hostname first.">
-            <Switch aria-labelledby={`${ids}-farp`} checked disabled />
-          </Blocked>
-        ) : (
-          <Switch
-            aria-labelledby={`${ids}-farp`}
-            checked={farpOn}
-            disabled={!onFarp || busy}
-            onCheckedChange={(on) => onFarp?.(on)}
-          />
-        )}
-        <span id={`${ids}-farp`} className="text-[12.5px] text-foreground/80">
-          FARP routes land here
-        </span>
-      </span>
-      <span role="cell" className="flex items-center justify-end gap-1.5">
-        <Link
-          to="/domains"
-          search={zoneId ? { zone: zoneId } : {}}
-          className={cn(
-            buttonVariants({ variant: "ghost", size: "sm" }),
-            "text-xs"
+      <TableCell>
+        <span className="flex items-center gap-2">
+          {onFarp && farpLast ? (
+            <Blocked reason="FARP routes have to land somewhere. Turn on another hostname first.">
+              <Switch aria-labelledby={`${ids}-farp`} checked disabled />
+            </Blocked>
+          ) : (
+            <Switch
+              aria-labelledby={`${ids}-farp`}
+              checked={farpOn}
+              disabled={!onFarp || busy}
+              onCheckedChange={(on) => onFarp?.(on)}
+            />
           )}
-        >
-          Zone settings
-        </Link>
-        {onDetach &&
-          (manual > 0 ? (
-            <Blocked
-              reason={`Move or delete its ${routeCountLabel(manual)} first.`}
-            >
+          <span id={`${ids}-farp`} className="text-[12.5px]">
+            FARP routes land here
+          </span>
+        </span>
+      </TableCell>
+      <TableCell>
+        <span className="flex items-center justify-end gap-1.5">
+          <Link
+            to="/domains"
+            search={zoneId ? { zone: zoneId } : {}}
+            className={buttonVariants({ variant: "ghost", size: "sm" })}
+          >
+            Zone settings
+          </Link>
+          {onDetach &&
+            (manual > 0 ? (
+              <Blocked
+                reason={`Move or delete its ${routeCountLabel(manual)} first.`}
+              >
+                <Button type="button" variant="outline" size="sm" disabled>
+                  Detach
+                </Button>
+              </Blocked>
+            ) : (
               <Button
                 type="button"
                 variant="outline"
                 size="sm"
-                className="text-xs"
-                disabled
+                onClick={onDetach}
               >
                 Detach
               </Button>
-            </Blocked>
-          ) : (
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              className="text-xs"
-              onClick={onDetach}
-            >
-              Detach
-            </Button>
-          ))}
-      </span>
-    </div>
+            ))}
+        </span>
+      </TableCell>
+    </TableRow>
   )
 }
 
@@ -565,29 +577,27 @@ function AttachDialog({
     >
       <DialogContent
         showCloseButton={false}
-        className="gap-0 overflow-hidden rounded-2xl p-0 sm:max-w-[580px]"
+        className="flex flex-col gap-0 overflow-hidden p-0 sm:max-w-[580px]"
       >
-        <DialogHeader className="gap-1 px-5 pt-[18px] pb-1.5">
-          <DialogTitle className="text-[17px] leading-normal font-semibold tracking-[-0.015em]">
-            Attach a domain
-          </DialogTitle>
+        <DialogHeader className="gap-1 px-5 pt-5 pb-1">
+          <DialogTitle>Attach a domain</DialogTitle>
         </DialogHeader>
         <form
           noValidate
-          className="contents"
+          className="flex min-h-0 flex-1 flex-col"
           onSubmit={(e) => {
             e.preventDefault()
             void run()
           }}
         >
-          <div className="flex flex-col gap-3.5 px-5 pt-3 pb-4">
+          <div className="flex min-h-0 flex-col gap-4 overflow-y-auto px-5 pt-3 pb-4">
             <div className="flex flex-col gap-1.5">
               <HostnameField
                 projectId={projectId}
                 value={value}
                 onChange={setValue}
               />
-              <span className="text-xs leading-normal text-muted-foreground">
+              <span className="text-xs text-muted-foreground">
                 Loomplane adds the DNS record if the zone is connected, then
                 issues a certificate. The route starts serving once both check
                 out.
@@ -597,7 +607,7 @@ function AttachDialog({
               <div
                 role="group"
                 aria-labelledby={`${ids}-record`}
-                className="flex flex-col gap-1 rounded-[10px] bg-muted px-3 py-2.5"
+                className="grid gap-1 rounded-lg bg-muted px-3 py-2.5"
               >
                 <span
                   id={`${ids}-record`}
@@ -605,7 +615,7 @@ function AttachDialog({
                 >
                   DNS record
                 </span>
-                <span className="flex flex-wrap gap-x-3 gap-y-0.5 font-mono text-[12.5px] leading-[1.6] break-all text-foreground">
+                <span className="flex flex-wrap gap-x-3 gap-y-0.5 font-mono text-[12.5px] leading-relaxed break-all">
                   <span>{record.name}</span>
                   <span className="text-muted-foreground">{record.type}</span>
                   <span>{record.value}</span>
@@ -618,7 +628,7 @@ function AttachDialog({
               </span>
             )}
           </div>
-          <DialogFooter className="mx-0 mb-0 gap-2 rounded-none border-border bg-subtle px-5 py-3">
+          <DialogFooter className="m-0 px-5 py-3">
             <Button
               type="button"
               variant="outline"

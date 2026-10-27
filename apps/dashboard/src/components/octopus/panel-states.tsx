@@ -17,9 +17,9 @@ import {
 export function PanelLoading({ label }: { label: string }) {
   return (
     <div aria-busy="true" aria-label={label} className="grid gap-3.5">
-      <Skeleton className="h-[58px] rounded-[14px]" />
-      <Skeleton className="h-40 rounded-[14px]" />
-      <Skeleton className="h-28 rounded-[14px]" />
+      <Skeleton className="h-14 rounded-[14px]" />
+      <Skeleton className="h-40 rounded-xl" />
+      <Skeleton className="h-28 rounded-xl" />
     </div>
   )
 }

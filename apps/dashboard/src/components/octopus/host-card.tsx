@@ -4,8 +4,11 @@
 import { ArrowRightIcon, PlusIcon } from "lucide-react"
 
 import type { BoardRoute, HostCard } from "@/client/forge/loomplane/types"
-import { DomainStatePill } from "@/components/domains/domain-states"
+import { StatusPill, type Tone } from "@/components/runs"
 import { Button } from "@/components/ui/button"
+import { Card } from "@/components/ui/card"
+import { Table, TableBody, TableCell, TableRow } from "@/components/ui/table"
+import type { PillTone } from "@/lib/domains"
 import {
   hostPills,
   methodsLabel,
@@ -15,9 +18,18 @@ import {
 } from "@/lib/octopus"
 import { cn } from "@/lib/utils"
 
-/** The columns of a route row, from the mock. */
-const routeGrid =
-  "grid grid-cols-[minmax(0,1.5fr)_110px_minmax(0,1.1fr)_190px_90px] items-center gap-3"
+/** The Domains states as status pill tones. */
+export const pillTones: Record<PillTone, Tone> = {
+  ok: "live",
+  warn: "waiting",
+  idle: "quiet",
+  failed: "failed",
+  own: "flight",
+}
+
+/** A short label on a row: where a route came from, a schema, a path. */
+export const chip =
+  "inline-flex h-5 w-fit items-center rounded-md px-1.5 text-xs font-medium whitespace-nowrap"
 
 const sourceTones: Record<RouteSource, string> = {
   farp: "bg-flight-tint text-flight-ink",
@@ -43,11 +55,8 @@ export function HostCardView({
 }) {
   const title = host.hostname || "Any hostname"
   return (
-    <section
-      aria-label={title}
-      className="overflow-hidden rounded-[14px] border border-border"
-    >
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-border bg-subtle px-4 py-[11px]">
+    <Card role="region" aria-label={title} className="gap-0 py-0">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b bg-subtle px-4 py-2.5">
         <span
           className={cn(
             "text-sm font-medium break-all",
@@ -58,17 +67,15 @@ export function HostCardView({
         </span>
         {host.status &&
           hostPills(host.status).map(([label, tone]) => (
-            <DomainStatePill key={label} tone={tone} className="text-xs">
+            <StatusPill key={label} tone={pillTones[tone]}>
               {label}
-            </DomainStatePill>
+            </StatusPill>
           ))}
         {host.hostname && !host.attached && (
-          <DomainStatePill tone="warn" className="text-xs">
-            Not attached
-          </DomainStatePill>
+          <StatusPill tone="waiting">Not attached</StatusPill>
         )}
         {host.farpHome && (
-          <span className="rounded-md bg-flight-tint px-2 py-px text-xs font-medium text-flight-ink">
+          <span className={cn(chip, "bg-flight-tint text-flight-ink")}>
             FARP routes land here
           </span>
         )}
@@ -77,13 +84,7 @@ export function HostCardView({
           {routeCountLabel(host.routes.length)}
         </span>
         {onRoute && (
-          <Button
-            type="button"
-            variant="outline"
-            size="sm"
-            className="text-xs"
-            onClick={onRoute}
-          >
+          <Button type="button" variant="outline" size="sm" onClick={onRoute}>
             <PlusIcon data-icon="inline-start" aria-hidden />
             Route
           </Button>
@@ -95,18 +96,26 @@ export function HostCardView({
           </span>
         )}
       </div>
-      <div className="overflow-x-auto">
-        <div
-          role="table"
-          aria-label={`Routes on ${title}`}
-          className="min-w-[760px]"
-        >
+      {/* The rows keep their columns and scroll inside the card, so a
+          narrow screen never scrolls the page sideways. */}
+      <Table
+        aria-label={`Routes on ${title}`}
+        className="min-w-[760px] table-fixed"
+      >
+        <colgroup>
+          <col />
+          <col className="w-[110px]" />
+          <col className="w-[22%]" />
+          <col className="w-[200px]" />
+          <col className="w-[110px]" />
+        </colgroup>
+        <TableBody>
           {host.routes.map((route) => (
             <RouteRow key={route.key} route={route} onRow={onRow} />
           ))}
-        </div>
-      </div>
-    </section>
+        </TableBody>
+      </Table>
+    </Card>
   )
 }
 
@@ -117,68 +126,69 @@ function RouteRow({ route, onRow }: { route: BoardRoute; onRow?: RowAction }) {
   const action =
     source === "farp" ? "override" : source === "here" ? "edit" : undefined
   return (
-    <div
-      role="row"
-      className={cn(
-        routeGrid,
-        "border-border px-4 py-2.5 transition-colors not-first:border-t hover:bg-subtle"
-      )}
-    >
-      <span role="cell" className="flex min-w-0 flex-col gap-0.5">
-        <span className="font-mono text-[13px] font-medium break-all">
-          {route.path}
-        </span>
-        {note && <span className="text-xs text-muted-foreground">{note}</span>}
-        {route.sync === "pending" && (
-          <span className="text-xs text-weld-ink">Pushing to Octopus</span>
-        )}
-        {route.sync === "failed" && route.syncError && (
-          <span className="text-xs text-destructive">{route.syncError}</span>
-        )}
-      </span>
-      <span role="cell" className="font-mono text-xs text-foreground/80">
-        {methodsLabel(route.methods)}
-      </span>
-      <span role="cell" className="flex min-w-0 items-center gap-2 text-[13px]">
-        <ArrowRightIcon
-          aria-hidden
-          className="size-3.5 flex-none text-muted-foreground/70"
-        />
-        <span className="truncate font-medium">{route.service}</span>
-        {route.port > 0 && (
-          <span className="font-mono text-xs text-muted-foreground">
-            :{route.port}
+    <TableRow>
+      <TableCell className="whitespace-normal">
+        <span className="flex min-w-0 flex-col gap-0.5">
+          <span className="font-mono text-[13px] font-medium break-all">
+            {route.path}
           </span>
-        )}
-      </span>
-      <span role="cell" className="flex flex-wrap gap-1">
-        <span
-          className={cn(
-            "rounded-md px-[7px] py-px text-[11.5px] font-medium",
-            sourceTones[source] ?? sourceTones["octopus-admin"]
+          {note && (
+            <span className="text-xs text-muted-foreground">{note}</span>
           )}
-        >
-          {routeSourceLabel(source) ?? route.source}
+          {route.sync === "pending" && (
+            <span className="text-xs text-weld-ink">Pushing to Octopus</span>
+          )}
+          {route.sync === "failed" && route.syncError && (
+            <span className="text-xs text-destructive">{route.syncError}</span>
+          )}
         </span>
-        {route.overrides && (
-          <span className="rounded-md bg-muted px-[7px] py-px text-[11.5px] font-medium text-foreground/80">
-            Overrides FARP
+      </TableCell>
+      <TableCell className="font-mono text-xs whitespace-normal">
+        {methodsLabel(route.methods)}
+      </TableCell>
+      <TableCell>
+        <span className="flex min-w-0 items-center gap-2">
+          <ArrowRightIcon
+            aria-hidden
+            className="size-3.5 flex-none text-muted-foreground"
+          />
+          <span className="truncate font-medium">{route.service}</span>
+          {route.port > 0 && (
+            <span className="font-mono text-xs text-muted-foreground">
+              :{route.port}
+            </span>
+          )}
+        </span>
+      </TableCell>
+      <TableCell className="whitespace-normal">
+        <span className="flex flex-wrap gap-1">
+          <span
+            className={cn(
+              chip,
+              sourceTones[source] ?? sourceTones["octopus-admin"]
+            )}
+          >
+            {routeSourceLabel(source) ?? route.source}
           </span>
-        )}
-      </span>
-      <span role="cell" className="flex justify-end">
+          {route.overrides && (
+            <span className={cn(chip, "bg-muted text-foreground")}>
+              Overrides FARP
+            </span>
+          )}
+        </span>
+      </TableCell>
+      <TableCell className="text-right">
         {action && onRow && (
           <Button
             type="button"
             variant="outline"
             size="sm"
-            className="h-7 text-xs"
             onClick={() => onRow(action, route)}
           >
             {action === "override" ? "Override" : "Edit"}
           </Button>
         )}
-      </span>
-    </div>
+      </TableCell>
+    </TableRow>
   )
 }

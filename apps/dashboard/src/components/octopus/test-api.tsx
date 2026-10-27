@@ -449,6 +449,7 @@ export function panelProps(
     binding,
     config,
     components: [],
+    linked: [],
     ...overrides,
   }
 }

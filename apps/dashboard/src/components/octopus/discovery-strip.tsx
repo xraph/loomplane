@@ -4,6 +4,7 @@ import { PlusIcon } from "lucide-react"
 import { Fragment, type KeyboardEvent, type ReactNode } from "react"
 
 import type { Board } from "@/client/forge/loomplane/types"
+import { Panel } from "@/components/panel"
 import { Button } from "@/components/ui/button"
 import { isSet, relativeTime, useClock } from "@/lib/domains"
 import {
@@ -38,11 +39,11 @@ export function DiscoveryStrip({
   const now = useClock()
   const lastChange = board.discovery.lastChange
   return (
-    <section
+    <Panel
       aria-label="Discovery"
-      className="flex flex-wrap items-center gap-x-4 gap-y-2.5 rounded-[14px] border border-border bg-subtle px-4 py-3"
+      className="flex-row flex-wrap items-center gap-x-4 gap-y-2.5 bg-subtle py-3"
     >
-      <span className="flex flex-[1_1_360px] items-center gap-2 text-[13px] leading-normal">
+      <span className="flex flex-[1_1_360px] items-center gap-2 text-[13px]">
         <span
           aria-hidden="true"
           className={cn(
@@ -68,7 +69,7 @@ export function DiscoveryStrip({
           Add route
         </Button>
       )}
-    </section>
+    </Panel>
   )
 }
 
@@ -162,7 +163,7 @@ function SourceFilterGroup({
       role="radiogroup"
       aria-label="Route source"
       onKeyDown={onKeyDown}
-      className="flex gap-0.5 rounded-[10px] bg-muted p-[3px]"
+      className="flex max-w-full gap-0.5 overflow-x-auto rounded-lg bg-muted p-0.5"
     >
       {sources.map((s) => {
         const on = s.id === source
@@ -176,9 +177,9 @@ function SourceFilterGroup({
             data-source={s.id}
             onClick={() => onSource(s.id)}
             className={cn(
-              "flex h-7 items-center gap-1.5 rounded-lg px-[11px] text-[12.5px] font-medium transition-colors focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none",
+              "flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2.5 text-xs font-medium whitespace-nowrap transition-colors outline-none focus-visible:ring-3 focus-visible:ring-ring/50",
               on
-                ? "bg-background text-foreground shadow-[0_1px_2px_oklch(0.2_0.01_50/0.08)]"
+                ? "bg-background text-foreground shadow-xs"
                 : "text-muted-foreground hover:text-foreground"
             )}
           >

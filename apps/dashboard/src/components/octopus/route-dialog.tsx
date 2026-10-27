@@ -167,15 +167,15 @@ export function RouteDialog(props: {
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         showCloseButton={false}
-        className="gap-0 overflow-hidden rounded-2xl p-0 sm:max-w-[580px]"
+        className="flex flex-col gap-0 overflow-hidden p-0 sm:max-w-[580px]"
       >
-        <DialogHeader className="gap-1 px-5 pt-[18px] pb-1.5">
-          <DialogTitle className="text-[17px] leading-normal font-semibold tracking-[-0.015em]">
+        <DialogHeader className="gap-1 px-5 pt-5 pb-1">
+          <DialogTitle>
             {mode === "edit"
               ? `Edit a route on ${resource}`
               : `Add a route to ${resource}`}
           </DialogTitle>
-          <DialogDescription className="leading-normal">
+          <DialogDescription>
             Send requests for a domain and path to a service in{" "}
             {project.data?.name ?? projectId} / {environment}. Loomplane pushes
             the route to Octopus without a redeploy.
@@ -192,10 +192,10 @@ export function RouteDialog(props: {
             />
           </div>
         ) : (
-          <div aria-busy="true" className="grid gap-3.5 px-5 pt-3 pb-4">
-            <Skeleton className="h-9 rounded-[9px]" />
-            <Skeleton className="h-9 rounded-[9px]" />
-            <Skeleton className="h-24 rounded-[10px]" />
+          <div aria-busy="true" className="grid gap-4 px-5 pt-3 pb-4">
+            <Skeleton className="h-8 rounded-lg" />
+            <Skeleton className="h-8 rounded-lg" />
+            <Skeleton className="h-24 rounded-lg" />
           </div>
         )}
       </DialogContent>
@@ -203,10 +203,7 @@ export function RouteDialog(props: {
   )
 }
 
-const label =
-  "flex flex-col gap-[5px] text-[12.5px] font-medium text-foreground/80"
-const control =
-  "h-9 rounded-[9px] border-input bg-background px-2.5 text-[13px] text-foreground"
+const label = "flex flex-col gap-1.5 text-[12.5px] font-medium"
 const hint = "text-xs font-normal text-muted-foreground"
 const fieldError = "text-xs font-normal text-destructive"
 
@@ -390,8 +387,12 @@ function RouteForm({
 
   return (
     <>
-      <form onSubmit={(e) => void submit(e)} noValidate className="contents">
-        <div className="flex flex-col gap-3.5 px-5 pt-3 pb-4">
+      <form
+        onSubmit={(e) => void submit(e)}
+        noValidate
+        className="flex min-h-0 flex-1 flex-col"
+      >
+        <div className="flex min-h-0 flex-col gap-4 overflow-y-auto px-5 pt-3 pb-4">
           <div
             role="group"
             aria-labelledby={`${ids}-host-label`}
@@ -411,7 +412,7 @@ function RouteForm({
                 <SelectTrigger
                   aria-labelledby={`${ids}-host-label`}
                   aria-invalid={!!domainError || undefined}
-                  className={cn(control, "w-full font-mono")}
+                  className="w-full font-mono"
                 >
                   <SelectValue />
                 </SelectTrigger>
@@ -435,7 +436,7 @@ function RouteForm({
                   value={attach}
                   onChange={setAttach}
                 />
-                <span className="text-xs leading-normal text-muted-foreground">
+                <span className="text-xs text-muted-foreground">
                   Loomplane adds the DNS record if the zone is connected, then
                   issues a certificate. The route starts serving once both check
                   out.
@@ -464,7 +465,7 @@ function RouteForm({
               spellCheck={false}
               aria-invalid={!!errors.path || undefined}
               aria-describedby={describe("path", `${ids}-path-hint`)}
-              className={cn(control, "font-mono")}
+              className="font-mono"
             />
             <span id={`${ids}-path-hint`} className={hint}>
               End with <span className="font-mono">/*</span> to match everything
@@ -476,7 +477,7 @@ function RouteForm({
           <div className="flex flex-col gap-1.5">
             <span
               id={`${ids}-methods-label`}
-              className="text-[12.5px] font-medium text-foreground/80"
+              className="text-[12.5px] font-medium"
             >
               Methods{" "}
               {methods.length === 0 && (
@@ -499,7 +500,8 @@ function RouteForm({
                   key={m}
                   value={m}
                   variant="outline"
-                  className="h-[30px] rounded-lg bg-background px-[11px] font-mono text-xs aria-pressed:border-brand-line aria-pressed:bg-brand-soft"
+                  size="sm"
+                  className="font-mono text-xs aria-pressed:border-brand-line aria-pressed:bg-brand-soft"
                 >
                   {m}
                 </ToggleGroupItem>
@@ -526,7 +528,7 @@ function RouteForm({
                 aria-labelledby={`${ids}-service-label`}
                 aria-invalid={!!errors.service || undefined}
                 aria-describedby={describe("service")}
-                className={cn(control, "w-full")}
+                className="w-full"
               >
                 <SelectValue placeholder="No service has an HTTP port" />
               </SelectTrigger>
@@ -556,7 +558,6 @@ function RouteForm({
               maxLength={120}
               aria-invalid={!!errors.note || undefined}
               aria-describedby={describe("note")}
-              className={control}
             />
             {errorOf("note")}
           </div>
@@ -581,7 +582,7 @@ function RouteForm({
           <div
             role="group"
             aria-labelledby={`${ids}-example-label`}
-            className="flex flex-col gap-1 rounded-[10px] bg-muted px-3 py-2.5"
+            className="grid gap-1 rounded-lg bg-muted px-3 py-2.5"
           >
             <span
               id={`${ids}-example-label`}
@@ -589,10 +590,10 @@ function RouteForm({
             >
               Example request
             </span>
-            <span className="font-mono text-[12.5px] leading-[1.6] break-all text-foreground">
+            <span className="font-mono text-[12.5px] leading-relaxed break-all">
               {example.in}
             </span>
-            <span className="font-mono text-[12.5px] leading-[1.6] break-all text-foreground/80">
+            <span className="font-mono text-[12.5px] leading-relaxed break-all text-muted-foreground">
               → {example.out}
             </span>
           </div>
@@ -600,7 +601,7 @@ function RouteForm({
           {collision && (
             <div
               role="note"
-              className="rounded-[10px] bg-weld-tint px-3 py-2.5 text-[12.5px] leading-normal text-weld-ink"
+              className="rounded-lg bg-weld-tint px-3 py-2.5 text-[12.5px] text-weld-ink"
             >
               FARP also publishes <span className="font-mono">{path}</span> on
               this domain from{" "}
@@ -617,7 +618,7 @@ function RouteForm({
           </p>
         )}
 
-        <DialogFooter className="mx-0 mb-0 gap-2 rounded-none border-border bg-subtle px-5 py-3">
+        <DialogFooter className="m-0 px-5 py-3">
           {mode === "edit" && initial.routeId && (
             <Button
               type="button"

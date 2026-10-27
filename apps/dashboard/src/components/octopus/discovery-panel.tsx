@@ -12,11 +12,23 @@ import type {
 } from "@/client/forge/loomplane/types"
 import { useQuery } from "@/client/hooks"
 import { StrandedFarp } from "@/components/octopus/discovery-strip"
+import { chip } from "@/components/octopus/host-card"
 import { PanelLoading, ReadFailed } from "@/components/octopus/panel-states"
 import { usePushRoutes } from "@/components/octopus/use-push-routes"
+import { Panel, PanelHead } from "@/components/panel"
 import { QueryError } from "@/components/query-error"
+import { StatusPill, type Tone } from "@/components/runs"
 import { Button } from "@/components/ui/button"
+import { Card } from "@/components/ui/card"
 import { Skeleton } from "@/components/ui/skeleton"
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table"
 import {
   ZeroState,
   ZeroStateDescription,
@@ -35,15 +47,12 @@ import {
 import { useOrganization } from "@/lib/organization"
 import { cn } from "@/lib/utils"
 
-/** The columns of a service row: service, schemas, state, routes, updated. */
-const columns =
-  "grid grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)_minmax(0,1.4fr)_70px_120px] gap-3"
-
-const stateTones = {
-  overdye: "bg-overdye-tint text-overdye-ink",
-  weld: "bg-weld-tint text-weld-ink",
-  failed: "bg-failed-tint text-destructive",
-} as const
+/** A discovered service's state as a status pill tone. */
+const stateTones: Record<ReturnType<typeof discoveryState>["tone"], Tone> = {
+  overdye: "live",
+  weld: "waiting",
+  failed: "failed",
+}
 
 const optInLine =
   "Add a farp block to a service in the manifest. Octopus picks up its schemas on the next release."
@@ -90,11 +99,11 @@ function Discovery({
 
   return (
     <>
-      <section
+      <Panel
         aria-label="How discovery works"
-        className="flex flex-wrap items-center gap-x-4 gap-y-2.5 rounded-[14px] border border-border bg-subtle px-4 py-3"
+        className="flex-row flex-wrap items-center gap-x-4 gap-y-2.5 bg-subtle py-3"
       >
-        <span className="flex-[1_1_360px] text-[13px] leading-normal">
+        <span className="flex-[1_1_360px] text-[13px]">
           {push ? (
             "A Docker server has nothing to watch, so Loomplane registers each opted-in service with Octopus on every release and sends a heartbeat every 30 seconds."
           ) : (
@@ -121,7 +130,7 @@ function Discovery({
             Register again
           </Button>
         )}
-      </section>
+      </Panel>
 
       {discovery.services.length > 0 ? (
         <ServiceTable services={discovery.services} />
@@ -142,18 +151,13 @@ function Discovery({
         resource={resource}
       />
 
-      <section
-        aria-label="How to opt in"
-        className="grid gap-2.5 rounded-[14px] border border-border px-4 py-3.5"
-      >
-        <h3 className="text-sm font-semibold">How to opt in</h3>
-        <p className="text-[13px] leading-normal text-foreground/80">
-          {optInLine}
-        </p>
-        <pre className="overflow-x-auto rounded-[10px] bg-muted px-3 py-2.5 font-mono text-[12.5px] leading-[1.6] text-foreground">
+      <Panel aria-label="How to opt in" className="gap-2.5">
+        <PanelHead title="How to opt in" />
+        <p className="text-[13px] text-muted-foreground">{optInLine}</p>
+        <pre className="overflow-x-auto rounded-lg bg-muted px-3 py-2.5 font-mono text-[12.5px] leading-relaxed">
           {farpExample}
         </pre>
-      </section>
+      </Panel>
     </>
   )
 }
@@ -161,78 +165,62 @@ function Discovery({
 function ServiceTable({ services }: { services: DiscoveredService[] }) {
   const now = useClock()
   return (
-    <div className="overflow-hidden rounded-[14px] border border-border">
-      <div className="overflow-x-auto">
-        <div role="table" aria-label="FARP services" className="min-w-[720px]">
-          <div
-            role="row"
-            className={cn(
-              columns,
-              "border-b border-border bg-subtle px-4 py-2 text-[11.5px] font-medium tracking-[0.04em] text-muted-foreground uppercase"
-            )}
-          >
-            {["Service", "Schemas", "State", "Routes", "Updated"].map((h) => (
-              <span key={h} role="columnheader">
-                {h}
-              </span>
-            ))}
-          </div>
+    <Card className="py-0">
+      <Table aria-label="FARP services" className="min-w-[720px]">
+        <TableHeader>
+          <TableRow className="hover:bg-transparent">
+            <TableHead>Service</TableHead>
+            <TableHead>Schemas</TableHead>
+            <TableHead>State</TableHead>
+            <TableHead>Routes</TableHead>
+            <TableHead>Updated</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
           {services.map((s) => {
             const state = discoveryState(s.state)
             return (
-              <div
-                key={s.service}
-                role="row"
-                className={cn(
-                  columns,
-                  "items-center border-border px-4 py-2.5 transition-colors not-first:border-t hover:bg-subtle"
-                )}
-              >
-                <span
-                  role="cell"
-                  data-service
-                  className="truncate text-[13px] font-medium"
-                >
+              <TableRow key={s.service}>
+                <TableCell data-service className="font-medium">
                   {s.service}
-                </span>
-                <span role="cell" className="flex min-w-0 flex-wrap gap-1">
-                  {farpSchemas(s.metadata).map((path) => (
-                    <span
-                      key={path}
-                      className="rounded-md bg-muted px-[7px] py-px font-mono text-[11.5px] break-all text-foreground/80"
-                    >
-                      {path}
-                    </span>
-                  ))}
-                </span>
-                <span role="cell" className="flex min-w-0 flex-col gap-1">
-                  <span
-                    className={cn(
-                      "w-fit rounded-full px-2 py-px text-[11.5px] font-medium whitespace-nowrap",
-                      stateTones[state.tone]
-                    )}
-                  >
-                    {state.label}
+                </TableCell>
+                <TableCell className="whitespace-normal">
+                  <span className="flex min-w-0 flex-wrap gap-1">
+                    {farpSchemas(s.metadata).map((path) => (
+                      <span
+                        key={path}
+                        className={cn(
+                          chip,
+                          "bg-muted font-mono font-normal break-all whitespace-normal"
+                        )}
+                      >
+                        {path}
+                      </span>
+                    ))}
                   </span>
-                  {s.state === "failed" && s.error && (
-                    <span className="text-xs text-destructive">{s.error}</span>
-                  )}
-                </span>
-                <span role="cell" className="font-mono text-xs">
-                  {s.routes}
-                </span>
-                <span
-                  role="cell"
-                  className="text-[12.5px] text-muted-foreground"
-                >
+                </TableCell>
+                <TableCell className="whitespace-normal">
+                  <span className="flex min-w-0 flex-col gap-1">
+                    <StatusPill tone={stateTones[state.tone]}>
+                      {state.label}
+                    </StatusPill>
+                    {s.state === "failed" && s.error && (
+                      <span className="text-xs text-destructive">
+                        {s.error}
+                      </span>
+                    )}
+                  </span>
+                </TableCell>
+                <TableCell className="font-mono text-xs">{s.routes}</TableCell>
+                <TableCell className="text-[12.5px] text-muted-foreground">
                   {isSet(s.updatedAt) ? relativeTime(s.updatedAt, now) : ""}
-                </span>
-              </div>
+                </TableCell>
+              </TableRow>
             )
           })}
-        </div>
-      </div>
-    </div>
+        </TableBody>
+      </Table>
+    </Card>
   )
 }
 
@@ -254,13 +242,10 @@ function Landing({
   const hostnames = board.data ? farpLandings(board.data) : []
   const stranded = board.data ? farpStranded(board.data) : []
   return (
-    <section
-      aria-label="Where FARP routes land"
-      className="grid gap-2.5 rounded-[14px] border border-border px-4 py-3.5"
-    >
-      <h3 className="text-sm font-semibold">Where FARP routes land</h3>
+    <Panel aria-label="Where FARP routes land" className="gap-2.5">
+      <PanelHead title="Where FARP routes land" />
       {board.data && stranded.length > 0 ? (
-        <p className="text-[12.5px] leading-normal text-weld-ink">
+        <p className="text-[12.5px] text-weld-ink">
           <StrandedFarp hosts={stranded} />
         </p>
       ) : board.data ? (
@@ -269,15 +254,16 @@ function Landing({
             hostnames.map((h) => (
               <span
                 key={h}
-                className="rounded-md bg-flight-tint px-2 py-px font-mono text-xs text-flight-ink"
+                className={cn(
+                  chip,
+                  "bg-flight-tint font-mono font-normal text-flight-ink"
+                )}
               >
                 {h}
               </span>
             ))
           ) : (
-            <span className="rounded-md bg-muted px-2 py-px text-xs font-medium text-foreground/80">
-              Every hostname
-            </span>
+            <span className={cn(chip, "bg-muted")}>Every hostname</span>
           )}
           <span className="text-[12.5px] text-muted-foreground">
             Change on the Domains tab
@@ -290,8 +276,8 @@ function Landing({
           retry={board.refetch}
         />
       ) : (
-        <Skeleton className="h-6 w-48 rounded-md" />
+        <Skeleton className="h-5 w-48 rounded-md" />
       )}
-    </section>
+    </Panel>
   )
 }

@@ -5,14 +5,17 @@ import type { ReactNode } from "react"
 import { useOctopusStatus } from "@/client/forge/loomplane/hooks"
 import type { OctopusStatus } from "@/client/forge/loomplane/types"
 import { useQuery } from "@/client/hooks"
+import { chip } from "@/components/octopus/host-card"
 import { PanelLoading, ReadFailed } from "@/components/octopus/panel-states"
 import { usePushRoutes } from "@/components/octopus/use-push-routes"
+import { Panel, PanelHead } from "@/components/panel"
 import { QueryError } from "@/components/query-error"
 import { Button } from "@/components/ui/button"
 import type { CatalogPanelProps } from "@/lib/catalog-kinds"
 import { isSet, relativeTime, useClock } from "@/lib/domains"
 import { gatewayPort } from "@/lib/octopus"
 import { useOrganization } from "@/lib/organization"
+import { cn } from "@/lib/utils"
 
 export function SettingsPanel(props: CatalogPanelProps) {
   const { projectId, environmentId, resource } = props
@@ -46,15 +49,12 @@ export function SettingsPanel(props: CatalogPanelProps) {
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
-    <section
-      aria-label={title}
-      className="grid gap-1.5 rounded-[14px] border border-border px-4 py-3.5"
-    >
-      <h3 className="text-sm font-semibold">{title}</h3>
-      <div className="grid gap-1.5 text-[13px] leading-normal text-foreground/80">
+    <Panel aria-label={title} className="gap-1.5">
+      <PanelHead title={title} />
+      <div className="grid gap-1.5 text-[13px] text-muted-foreground">
         {children}
       </div>
-    </section>
+    </Panel>
   )
 }
 
@@ -88,7 +88,10 @@ function Settings({
           {status.attach.blockedPathPrefixes.map((path) => (
             <span
               key={path}
-              className="rounded-md bg-muted px-[7px] py-px font-mono text-xs text-foreground/80"
+              className={cn(
+                chip,
+                "bg-muted font-mono font-normal text-foreground"
+              )}
             >
               {path}
             </span>
