@@ -2389,6 +2389,9 @@
           "role": {
             "type": "string"
           },
+          "start_timeout": {
+            "type": "integer"
+          },
           "step": {
             "type": "integer"
           },
@@ -2449,6 +2452,20 @@
           }
         }
       },
+      "ResourceStep": {
+        "type": "object",
+        "properties": {
+          "cpu_millis": {
+            "type": "integer"
+          },
+          "memory_mb": {
+            "type": "integer"
+          },
+          "shm_mb": {
+            "type": "integer"
+          }
+        }
+      },
       "Resources": {
         "type": "object",
         "required": [
@@ -2461,6 +2478,9 @@
           },
           "memory_mb": {
             "type": "integer"
+          },
+          "per_gpu": {
+            "$ref": "#/components/schemas/ResourceStep"
           }
         }
       },

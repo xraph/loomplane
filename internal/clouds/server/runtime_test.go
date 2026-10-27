@@ -708,3 +708,65 @@ func TestServerContainerRecordsDeclaredReadiness(t *testing.T) {
 		t.Fatalf("an HTTP readiness check gained a protocol label: %v", create.Labels)
 	}
 }
+
+func TestServerWaitsForTheStartTimeout(t *testing.T) {
+	iid := id.New(id.PrefixInstance)
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"Id":              "container_one",
+			"Config":          map[string]any{"Labels": map[string]string{owned.LabelInstance: iid.String(), owned.LabelOrg: "org_fixture", owned.LabelProject: "proj_fixture", owned.LabelEnvironment: "env_fixture"}},
+			"State":           map[string]any{"Running": true, "Status": "running"},
+			"NetworkSettings": map[string]any{"Ports": map[string]any{"8080/tcp": []map[string]string{{"HostIp": "127.0.0.1", "HostPort": "32001"}}}},
+		})
+	}))
+	defer api.Close()
+	u, err := url.Parse(api.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	client := &Client{Config: &Config{Details: map[string]string{"docker_id": "daemon_fixture"}}, HTTP: &http.Client{Transport: runtimeTransport(func(r *http.Request) (*http.Response, error) {
+		r.URL.Scheme, r.URL.Host = u.Scheme, u.Host
+		return http.DefaultTransport.RoundTrip(r)
+	})}}
+	// The clock reads the start, then exactly two hours on, then just past.
+	start := time.Date(2026, 10, 27, 9, 0, 0, 0, time.UTC)
+	waitFor := func(labels map[string]string) (int, error) {
+		ticks := []time.Time{start, start.Add(2 * time.Hour), start.Add(2*time.Hour + time.Nanosecond)}
+		probes := 0
+		runtime := &Runtime{
+			Now: func() time.Time {
+				now := ticks[0]
+				if len(ticks) > 1 {
+					ticks = ticks[1:]
+				}
+				return now
+			},
+			Probe: func(context.Context, *Client, int, string) error {
+				probes++
+				return errors.New("still loading weights")
+			},
+		}
+		return probes, runtime.wait(t.Context(), client, ContainerName(iid), iid, labels)
+	}
+	labels := func(timeout string) map[string]string {
+		out := map[string]string{owned.LabelOrg: "org_fixture", owned.LabelProject: "proj_fixture", owned.LabelEnvironment: "env_fixture", owned.LabelHealth: "/health", owned.LabelHealthPort: "8080"}
+		if timeout != "" {
+			out[owned.LabelStartTimeout] = timeout
+		}
+		return out
+	}
+
+	// Two hours on is still inside a 7200 second start timeout.
+	if probes, err := waitFor(labels("7200")); err == nil || probes != 2 {
+		t.Fatalf("start timeout 7200: %d probes, %v", probes, err)
+	}
+	// The three minute default is long over by then.
+	if probes, err := waitFor(labels("")); err == nil || probes != 1 {
+		t.Fatalf("default wait: %d probes, %v", probes, err)
+	}
+	for _, bad := range []string{"30", "10801", "2h", "-60"} {
+		if probes, err := waitFor(labels(bad)); err == nil || probes != 0 {
+			t.Fatalf("start timeout %q: %d probes, %v", bad, probes, err)
+		}
+	}
+}

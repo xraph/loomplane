@@ -122,7 +122,7 @@ func composedResources(m *manifest.Manifest, environment string, kinds *recipes.
 	var out []string
 	for _, name := range m.ResourceNames() {
 		r := m.Resources[name]
-		if kinds.Composed(r.Kind) && manifest.On(r.For(environment, m.Defaults).Enabled) {
+		if kinds.Composed(r.Kind) && resourceOn(kinds, r, environment, m.Defaults) {
 			out = append(out, name)
 		}
 	}

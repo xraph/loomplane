@@ -2362,6 +2362,7 @@ export interface ResolvedComponent {
   requires?: string;
   resources: Resources;
   role: string;
+  startTimeout?: number;
   step: number;
   timeout?: number;
   volume?: Volume;
@@ -2396,6 +2397,12 @@ export interface ResourceConfig {
   version?: string;
 }
 
+export interface ResourceStep {
+  cpuMillis?: number;
+  memoryMb?: number;
+  shmMb?: number;
+}
+
 export interface ResourceVector {
   cpuMillis: number;
   gpuKind?: string;
@@ -2408,6 +2415,7 @@ export interface ResourceVector {
 export interface Resources {
   cpuMillis: number;
   memoryMb: number;
+  perGpu?: ResourceStep;
 }
 
 export interface Restore {

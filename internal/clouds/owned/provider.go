@@ -2,10 +2,12 @@ package owned
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"io/fs"
 	"maps"
+	"strconv"
 	"strings"
 	"time"
 
@@ -81,6 +83,33 @@ const (
 	LabelGPU   = "loomplane.gpu"    // JSON provider.GPUPlacement
 	LabelShmMB = "loomplane.shm.mb" // decimal MiB
 )
+
+// LabelStartTimeout is how long, in seconds, the runtime waits for a
+// workload to become ready, in place of its default. A catalog component
+// sets it from its recipe's StartTimeout.
+const LabelStartTimeout = "loomplane.start.timeout" // seconds
+
+// Start timeouts a workload's LabelStartTimeout may ask for.
+const (
+	MinStartTimeout = time.Minute
+	MaxStartTimeout = 3 * time.Hour
+)
+
+// StartTimeout reads a workload's LabelStartTimeout: 0 when it has none,
+// and an error for anything but whole seconds from MinStartTimeout to
+// MaxStartTimeout.
+func StartTimeout(labels map[string]string) (time.Duration, error) {
+	raw := labels[LabelStartTimeout]
+	if raw == "" {
+		return 0, nil
+	}
+	seconds, err := strconv.Atoi(raw)
+	timeout := time.Duration(seconds) * time.Second
+	if err != nil || strings.Trim(raw, "0123456789") != "" || timeout < MinStartTimeout || timeout > MaxStartTimeout {
+		return 0, errors.New("invalid start timeout")
+	}
+	return timeout, nil
+}
 
 type Instances interface {
 	Get(context.Context, id.ID) (*instance.Instance, error)

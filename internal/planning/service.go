@@ -779,7 +779,7 @@ func (s *Service) checkEndpoints(ctx context.Context, orgID, environment string,
 	for _, name := range slices.Sorted(maps.Keys(m.Resources)) {
 		r := m.Resources[name]
 		kind, ok := kinds.Kind(r.Kind)
-		if !ok || r.Target == "" || !manifest.On(r.For(environment, m.Defaults).Enabled) {
+		if !ok || r.Target == "" || !resourceOn(kinds, r, environment, m.Defaults) {
 			continue
 		}
 		for _, dep := range kind.Dependencies {

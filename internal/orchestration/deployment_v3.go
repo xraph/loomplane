@@ -79,7 +79,7 @@ func (d *Deployments) retryV3(w *drt.Workflow, raw []byte) ([]byte, error) {
 	if err := json.Unmarshal(raw, &in); err != nil {
 		return nil, err
 	}
-	if err := runStepsV3(w, in.OrgID, deployStarted{DeploymentID: in.DeploymentID, Steps: in.Steps}, in.ReconcileInterval); err != nil {
+	if err := runStepsV3(w, in.OrgID, deployStarted{DeploymentID: in.DeploymentID, Steps: in.Steps, Timeouts: in.Timeouts}, in.ReconcileInterval); err != nil {
 		return nil, err
 	}
 	return json.Marshal(Outcome{Status: PlanApproved, Deployment: in.DeploymentID})

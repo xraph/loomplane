@@ -113,7 +113,7 @@ func (c *Client) checkBoundVolume(ctx context.Context, claim *corev1.PersistentV
 	return nil
 }
 
-func (r *Runtime) applyPersistent(ctx context.Context, iid id.ID, spec cpprovider.ServiceSpec, labels map[string]string) (result *cpprovider.ProvisionResult, err error) {
+func (r *Runtime) applyPersistent(ctx context.Context, iid id.ID, spec cpprovider.ServiceSpec, labels map[string]string, start time.Duration) (result *cpprovider.ProvisionResult, err error) {
 	if checkErr := validatePersistentSpec(spec, labels); checkErr != nil {
 		return nil, checkErr
 	}
@@ -350,7 +350,7 @@ func (r *Runtime) applyPersistent(ctx context.Context, iid id.ID, spec cpprovide
 	if r.WaitReady != nil {
 		err = r.WaitReady(ctx, c, name)
 	} else {
-		err = r.waitPersistent(ctx, c, set)
+		err = r.waitPersistent(ctx, c, set, r.readyWait(start))
 	}
 	if err != nil {
 		return nil, err
@@ -383,11 +383,7 @@ func (r *Runtime) applyPersistent(ctx context.Context, iid id.ID, spec cpprovide
 func persistentReady(set *appsv1.StatefulSet) bool {
 	return set.Spec.Replicas != nil && *set.Spec.Replicas == 1 && set.Status.ObservedGeneration >= set.Generation && set.Status.ReadyReplicas == 1 && set.Status.UpdatedReplicas == 1 && set.Status.CurrentRevision != "" && set.Status.CurrentRevision == set.Status.UpdateRevision
 }
-func (r *Runtime) waitPersistent(ctx context.Context, c *Client, applied *appsv1.StatefulSet) error {
-	wait := r.Wait
-	if wait <= 0 {
-		wait = 3 * time.Minute
-	}
+func (r *Runtime) waitPersistent(ctx context.Context, c *Client, applied *appsv1.StatefulSet, wait time.Duration) error {
 	deadline := time.Now().Add(wait)
 	for {
 		current, err := c.Kube.AppsV1().StatefulSets(c.Config.Namespace).Get(ctx, applied.Name, metav1.GetOptions{})

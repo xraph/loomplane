@@ -56,6 +56,28 @@ func (p *planner) kinds() *recipes.Registry {
 	return recipes.Default()
 }
 
+// resourceOn reports whether a manifest resource runs in environment, as
+// its enabled setting there says, except that a resource of a kind that
+// opts in to environments runs only where enabled is true. Every check of
+// whether a resource is on goes through here.
+func resourceOn(kinds *recipes.Registry, r manifest.Resource, environment string, d manifest.Defaults) bool {
+	enabled := r.For(environment, d).Enabled
+	if kinds == nil {
+		kinds = recipes.Default()
+	}
+	if kinds.EnvironmentOptIn(r.Kind) {
+		return enabled != nil && *enabled
+	}
+	return manifest.On(enabled)
+}
+
+// resourceOn reports whether the manifest's resource name runs in this
+// plan's environment.
+func (p *planner) resourceOn(name string) bool {
+	m := p.in.Manifest
+	return resourceOn(p.kinds(), m.Resources[name], p.in.Environment, m.Defaults)
+}
+
 // planCompositions plans the manifest's composed catalog resources, after
 // every other resource, so a dependency connected from the manifest has
 // its action already. A composed resource connected as another's
@@ -253,6 +275,7 @@ func (p *planner) planComposition(name, base string, r manifest.Resource, kind r
 		cfg := resource()
 		cfg.Component = &ComponentConfig{Kind: kind.Name, Resource: name, Revision: composition.Revision, Component: c, Dependencies: choices, Protection: ComponentProtection(c.Component), Inputs: p.in.Inputs[name][c.Name], Settings: maps.Clone(values)}
 		cfg.Component.GPU = p.componentGPU(name, p.gpuPath(name), kind, c.Component, set.GPU, connection)
+		cfg.Component.Component.Resources = ComponentResources(c.Resources, cfg.Component.GPU)
 		creates := componentCreates(kind.Title, c.Component)
 		if c.Role != recipes.RoleJob {
 			for _, port := range c.Ports {
@@ -461,7 +484,6 @@ func (p *planner) checkConnected(name, path string, dep recipes.Dependency, choi
 	if choice.Mode != DependencyResource {
 		return
 	}
-	m := p.in.Manifest
 	path += ".resource"
 	if !slices.Contains(dep.Kinds, choice.Kind) {
 		p.problem(Finding{
@@ -472,7 +494,7 @@ func (p *planner) checkConnected(name, path string, dep recipes.Dependency, choi
 	}
 	connected := p.resources[choice.Resource]
 	if connected == nil {
-		if !manifest.On(m.Resources[choice.Resource].For(p.in.Environment, m.Defaults).Enabled) {
+		if !p.resourceOn(choice.Resource) {
 			p.problem(Finding{
 				Code: "need-off", Subject: ResourceSubject, Name: name, Path: path,
 				Message: fmt.Sprintf("%s uses %s, which is off in %s.", name, choice.Resource, p.in.Environment),
@@ -814,11 +836,7 @@ func settingsText(settings map[string]string) string {
 // need instead.
 func (p *planner) linkComposition(a *Action, need string, outputs []recipes.Output, options map[string]string, count map[string]int) {
 	for i, o := range outputs {
-		key := o.EnvKey
-		if key == "" || count[key] > 1 {
-			key = envName(need) + "_" + envName(o.Name)
-		}
-		link := EnvLink{Key: key, From: need, Subject: ResourceSubject, Field: "output:" + o.Name}
+		link := EnvLink{Key: outputKey(need, o, count), From: need, Subject: ResourceSubject, Field: "output:" + o.Name}
 		switch {
 		case o.PerConsumer:
 			link.Field, link.Options = "consumer:"+o.Name, maps.Clone(options)
@@ -827,6 +845,15 @@ func (p *planner) linkComposition(a *Action, need string, outputs []recipes.Outp
 		}
 		a.Service.Env = append(a.Service.Env, link)
 	}
+}
+
+// outputKey is the variable a consuming service gets an output of need
+// under: its EnvKey, unless another need's output takes that too.
+func outputKey(need string, o recipes.Output, count map[string]int) string {
+	if o.EnvKey == "" || count[o.EnvKey] > 1 {
+		return envName(need) + "_" + envName(o.Name)
+	}
+	return o.EnvKey
 }
 
 // consumerOptions checks what a service sets for a need under need_options

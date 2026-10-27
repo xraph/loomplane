@@ -77,6 +77,17 @@ func (p *planner) componentGPU(name, path string, kind recipes.Kind, c recipes.C
 	return p.gpuPlacement(ResourceSubject, name, path, connection, want, g.MinMemoryGiB)
 }
 
+// ComponentResources is what a component runs with once it has its GPU
+// placement: its resources plus one PerGPU step for each GPU it's placed
+// with. A component without a placement gets no steps.
+func ComponentResources(r recipes.Resources, gpu *provider.GPUPlacement) recipes.Resources {
+	count := 0
+	if gpu != nil {
+		count = gpu.Count
+	}
+	return r.ForGPUs(count)
+}
+
 // gpuKind reports whether a kind runs a GPU component, leaving out the
 // ones that require a dependency that's off.
 func gpuKind(kind recipes.Kind, off map[string]bool) bool {

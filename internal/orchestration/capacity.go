@@ -168,7 +168,7 @@ func runStepsV3(w *drt.Workflow, org string, started deployStarted, interval tim
 				input              deployInput
 				timeout, heartbeat time.Duration
 				attempts           int64
-			}{id, ActivityDeployAction, step, actionTimeout, actionHeartbeat, actionAttempts})
+			}{id, ActivityDeployAction, step, started.timeout(id), actionHeartbeat, actionAttempts})
 		}
 	}
 	reason := ""

@@ -384,6 +384,40 @@ func (r *Runner) Start(ctx context.Context, orgID, planID string) (deploymentID 
 	return d.ID, order, nil
 }
 
+// startGrace is what a step gets on top of its component's start timeout:
+// time to pull the image and apply before the runtime starts waiting.
+const startGrace = 15 * time.Minute
+
+// ActionTimeouts are how long each of the deployment's actions that waits
+// for a catalog component's start timeout may run: that timeout plus
+// startGrace. The workflow gives every other action its usual time, and
+// never less than that to one listed here.
+func (r *Runner) ActionTimeouts(ctx context.Context, orgID, deploymentID string) (map[string]time.Duration, error) {
+	d, err := r.store.GetDeployment(ctx, orgID, deploymentID)
+	if err != nil {
+		return nil, err
+	}
+	plan, err := r.plans.GetPlan(ctx, orgID, d.PlanID)
+	if err != nil {
+		return nil, err
+	}
+	return actionTimeouts(plan.Actions), nil
+}
+
+func actionTimeouts(actions []planning.Action) map[string]time.Duration {
+	var out map[string]time.Duration
+	for _, a := range actions {
+		if a.Resource == nil || a.Resource.Component == nil || a.Resource.Component.Component.StartTimeout <= 0 {
+			continue
+		}
+		if out == nil {
+			out = map[string]time.Duration{}
+		}
+		out[a.ID] = a.Resource.Component.Component.StartTimeout + startGrace
+	}
+	return out
+}
+
 // inScope returns the repositories a plan moves, in alias order.
 func inScope(plan *planning.Plan) []planning.PlanSource {
 	out := slices.DeleteFunc(slices.Clone(plan.Sources), func(ps planning.PlanSource) bool { return !ps.InScope })

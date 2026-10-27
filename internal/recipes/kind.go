@@ -64,6 +64,10 @@ type Kind struct {
 	// resources.<name>.settings. Planning checks them and hands every
 	// one, defaults filled, to each component.
 	Settings []Setting `json:"settings,omitempty"`
+	// EnvironmentOptIn makes a resource of the kind run only in the
+	// environments where environments.<env>.enabled is true. Everywhere
+	// else planning treats it as off, as an explicit enabled: false.
+	EnvironmentOptIn bool `json:"environment_opt_in,omitempty"`
 }
 
 // Setting is a value a resource of the kind sets under
@@ -148,6 +152,10 @@ type Component struct {
 	After       []string      `json:"after,omitempty"` // components that must be ready or have succeeded first
 	Resources   Resources     `json:"resources"`
 	Timeout     time.Duration `json:"timeout,omitempty"` // jobs only
+	// StartTimeout is how long the runtime waits for a process to become
+	// ready: 0 keeps the runtime's default, else 1 minute to 3 hours.
+	// Processes only.
+	StartTimeout time.Duration `json:"start_timeout,omitempty"`
 	// KubernetesRules is the read-only discovery access a process gets
 	// through its own ServiceAccount on Kubernetes.
 	KubernetesRules []KubernetesRule `json:"kubernetes_rules,omitempty"`
@@ -201,6 +209,16 @@ type Resources struct {
 	MemoryMB  int  `json:"memory_mb"`
 	GPU       *GPU `json:"gpu,omitempty"`
 	ShmMB     int  `json:"shm_mb,omitempty"` // /dev/shm size; counts toward MemoryMB
+	// PerGPU is added once for each GPU the component is placed with, on
+	// top of the rest (see ForGPUs). Only with GPU.
+	PerGPU *ResourceStep `json:"per_gpu,omitempty"`
+}
+
+// ResourceStep is what a component needs for each GPU it gets.
+type ResourceStep struct {
+	CPUMillis int `json:"cpu_millis,omitempty"`
+	MemoryMB  int `json:"memory_mb,omitempty"`
+	ShmMB     int `json:"shm_mb,omitempty"`
 }
 
 // WeightCache is a persistent volume for downloaded files, such as model
@@ -208,6 +226,10 @@ type Resources struct {
 type WeightCache struct {
 	MountPath        string `json:"mount_path"`
 	KubernetesSizeMB int    `json:"kubernetes_size_mb"` // PVC request; required on Kubernetes targets
+	// SizeSetting names one of the kind's Settings whose value, in MB
+	// (digits), raises the PVC request above KubernetesSizeMB. It never
+	// lowers it.
+	SizeSetting string `json:"size_setting,omitempty"`
 }
 
 // EnvVar sets exactly one of Value, Secret, From and Template.
@@ -453,6 +475,10 @@ func (c Component) clone() Component {
 	if c.Resources.GPU != nil {
 		gpu := *c.Resources.GPU
 		c.Resources.GPU = &gpu
+	}
+	if c.Resources.PerGPU != nil {
+		step := *c.Resources.PerGPU
+		c.Resources.PerGPU = &step
 	}
 	c.After = slices.Clone(c.After)
 	c.KubernetesRules = slices.Clone(c.KubernetesRules)

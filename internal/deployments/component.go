@@ -161,7 +161,16 @@ func componentSpec(sp *cpprovider.ServiceSpec, labels map[string]string, cfg *pl
 		rules, _ := json.Marshal(c.KubernetesRules) //nolint:errcheck // string slices always encode
 		labels[owned.LabelKubernetesRules] = string(rules)
 	}
-	gpuSpec(sp, labels, cfg.GPU, c.Resources.ShmMB, c.WeightCache, providerName)
+	if c.StartTimeout > 0 {
+		labels[owned.LabelStartTimeout] = strconv.Itoa(int(c.StartTimeout / time.Second))
+	}
+	cache := c.WeightCache
+	if cache != nil {
+		sized := *cache
+		sized.KubernetesSizeMB = cache.SizeMB(cfg.Settings)
+		cache = &sized
+	}
+	gpuSpec(sp, labels, cfg.GPU, c.Resources.ShmMB, cache, providerName)
 }
 
 func componentPort(c recipes.Component, name string) (recipes.Port, bool) {
@@ -201,6 +210,7 @@ func (e *OwnedTarget) checkComponent(cfg *planning.ResourceConfig) (recipes.Kind
 		return recipes.Kind{}, errRecipeChanged
 	}
 	resolved := composition.Components[i]
+	resolved.Resources = planning.ComponentResources(resolved.Resources, c.GPU)
 	// The GPU placement, outside inputs and settings come from the reviewed
 	// plan, not the recipe. Settings still have to be ones the kind takes.
 	expected := planning.ComponentConfig{

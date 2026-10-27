@@ -41,6 +41,8 @@ type Runtime struct {
 	Probe     func(context.Context, *Client, int, string) error
 	ProbeRESP func(context.Context, *Client, int) error
 	Wait      time.Duration
+	// Now is the clock readiness waits are measured with; nil is time.Now.
+	Now func() time.Time
 	// GPUReader reads the server's GPUs for device assignment; nil is
 	// (*Client).GPUs.
 	GPUReader func(context.Context, *Client) (provider.GPUInventory, error)
@@ -339,6 +341,9 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 		}
 		hostConfig["ShmSize"] = int64(shm) << 20
 	}
+	if _, timeoutErr := owned.StartTimeout(labels); timeoutErr != nil {
+		return nil, errors.New("invalid server start timeout")
+	}
 	body := map[string]any{"Image": spec.Image, "Env": variables, "Labels": containerLabels, "ExposedPorts": exposed, "HostConfig": hostConfig, "NetworkingConfig": map[string]any{"EndpointsConfig": map[string]any{network: map[string]any{"Aliases": []string{name}}}}}
 	if len(spec.Command) > 0 {
 		body["Entrypoint"] = spec.Command
@@ -457,12 +462,24 @@ func (r *Runtime) endpoints(c *Client, iid id.ID, spec cpprovider.ServiceSpec, l
 	return out
 }
 
+// wait waits for a container to pass its readiness check, for as long as
+// its LabelStartTimeout says, else Wait, else three minutes.
 func (r *Runtime) wait(ctx context.Context, c *Client, name string, iid id.ID, labels map[string]string) error {
-	wait := r.Wait
+	wait, err := owned.StartTimeout(labels)
+	if err != nil {
+		return err
+	}
+	if wait == 0 {
+		wait = r.Wait
+	}
 	if wait <= 0 {
 		wait = 3 * time.Minute
 	}
-	deadline := time.Now().Add(wait)
+	now := r.Now
+	if now == nil {
+		now = time.Now
+	}
+	deadline := now().Add(wait)
 	for {
 		info, err := r.inspect(ctx, c, name, iid, labels)
 		if err != nil {
@@ -490,7 +507,7 @@ func (r *Runtime) wait(ctx context.Context, c *Client, name string, iid id.ID, l
 		} else if info.State.Status == "exited" || info.State.Status == "dead" {
 			return fmt.Errorf("the server container exited before readiness with code %d", info.State.ExitCode)
 		}
-		if time.Now().After(deadline) {
+		if now().After(deadline) {
 			return errors.New("the server container did not pass its readiness check")
 		}
 		select {

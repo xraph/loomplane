@@ -3,8 +3,10 @@ package planning
 import (
 	"maps"
 	"slices"
+	"strings"
 	"testing"
 
+	"github.com/xraph/loomplane/internal/providers"
 	"github.com/xraph/loomplane/internal/recipes"
 	"github.com/xraph/loomplane/internal/recipes/recipestest"
 )
@@ -121,5 +123,122 @@ func TestSettingChangePlansAnUpdate(t *testing.T) {
 		if a.Op != Keep {
 			t.Fatalf("same settings: %s op %s, changes %+v", a.ID, a.Op, a.Changes)
 		}
+	}
+}
+
+// optInKinds is recipestest.Registry with the opt-in kind.
+func optInKinds(t *testing.T) *recipes.Registry {
+	t.Helper()
+	r := recipestest.Registry(t)
+	if err := r.Register(recipestest.OptIn()); err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+func optInPlan(t *testing.T, environment, doc string) *Result {
+	t.Helper()
+	return Compute(Input{
+		Environment: environment, Graph: infrastructureGraph(), Manifest: parse(t, doc), Providers: providers.Registry(),
+		Connections: composedConnections(t), Kinds: optInKinds(t),
+	})
+}
+
+const optInLLM = "version: 1\nresources:\n  llm: {kind: optin, provider: server, target: " + targetA + ", environments: {staging: {enabled: true}}}\n"
+
+func TestOptInKindRunsOnlyWhereEnabled(t *testing.T) {
+	staging := optInPlan(t, "staging", optInLLM)
+	if !staging.Executable || findAction(staging, "resource:llm") == nil || findAction(staging, "resource:llm--api") == nil {
+		t.Fatalf("staging: actions %+v, problems %+v", staging.Actions, staging.Problems)
+	}
+
+	production := optInPlan(t, "production", optInLLM)
+	if !production.Executable || len(production.Actions) != 0 || len(production.Problems) != 0 {
+		t.Fatalf("production: actions %+v, problems %+v", production.Actions, production.Problems)
+	}
+
+	// enabled: false is off too, and an ordinary kind left unset stays on.
+	off := optInPlan(t, "staging", "version: 1\nresources:\n  llm: {kind: optin, provider: server, target: "+targetA+", environments: {staging: {enabled: false}}}\n")
+	if len(off.Actions) != 0 || len(off.Problems) != 0 {
+		t.Fatalf("enabled false: actions %+v, problems %+v", off.Actions, off.Problems)
+	}
+	plain := optInPlan(t, "production", "version: 1\nresources:\n  llm: {kind: sample, provider: server, target: "+targetA+", environments: {staging: {enabled: true}}}\n")
+	if findAction(plain, "resource:llm") == nil {
+		t.Fatalf("a kind that doesn't opt in stopped running: %+v", plain.Problems)
+	}
+
+	// Where it's off, what was deployed there is deleted, as for enabled: false.
+	bound := boundFrom(t, staging)
+	gone := Compute(Input{
+		Environment: "staging", Graph: infrastructureGraph(), Manifest: parse(t, "version: 1\nresources:\n  llm: {kind: optin, provider: server, target: "+targetA+"}\n"),
+		Providers: providers.Registry(), Connections: composedConnections(t), Kinds: optInKinds(t), Bindings: bound,
+	})
+	if a := findAction(gone, "resource:llm"); a == nil || a.Op != Delete {
+		t.Fatalf("unset opt-in resource with a binding: %+v, problems %+v", a, gone.Problems)
+	}
+}
+
+func TestOptInResourceIsOffForNeeds(t *testing.T) {
+	doc := optInLLM + "services:\n  checkout: {source: cmd/api, provider: server, target: " + targetA + ", public: false, needs: [llm]}\n"
+
+	production := optInPlan(t, "production", doc)
+	if !production.Executable {
+		t.Fatalf("production is blocked: %+v", production.Problems)
+	}
+	want := Finding{Code: "need-off", Subject: ServiceSubject, Name: "checkout", Path: "services.checkout.needs", Message: "checkout gets no OPTIN_URL or OPTIN_ADMIN_URL in production: llm doesn't run there."}
+	if !slices.ContainsFunc(production.Warnings, func(f Finding) bool {
+		return f.Code == want.Code && f.Subject == want.Subject && f.Name == want.Name && f.Path == want.Path && f.Message == want.Message
+	}) {
+		t.Fatalf("warnings %+v, want %+v", production.Warnings, want)
+	}
+	checkout := findAction(production, "service:checkout")
+	if checkout == nil || len(checkout.Service.Env) != 0 || slices.Contains(checkout.DependsOn, "resource:llm") {
+		t.Fatalf("checkout in production: %+v", checkout)
+	}
+
+	staging := optInPlan(t, "staging", doc)
+	checkout = findAction(staging, "service:checkout")
+	if !staging.Executable || hasCode(staging.Warnings, "need-off") || checkout == nil || len(checkout.Service.Env) != 2 {
+		t.Fatalf("staging: checkout %+v, problems %+v, warnings %+v", checkout, staging.Problems, staging.Warnings)
+	}
+
+	// A kind that doesn't opt in still blocks a service that needs it while it's off.
+	plain := strings.Replace(doc, "kind: optin", "kind: sample", 1)
+	plain = strings.Replace(plain, "staging: {enabled: true}", "production: {enabled: false}", 1)
+	r := optInPlan(t, "production", plain)
+	if r.Executable || !slices.ContainsFunc(r.Problems, func(f Finding) bool {
+		return f.Code == "need-off" && f.Message == "checkout needs llm, which is off in production."
+	}) {
+		t.Fatalf("ordinary need-off: problems %+v", r.Problems)
+	}
+}
+
+func TestPerGPUResourcesScale(t *testing.T) {
+	gpu := recipestest.GPUSample()
+	gpu.Components[0].Resources.PerGPU = &recipes.ResourceStep{CPUMillis: 1500, MemoryMB: 6144, ShmMB: 2048}
+	kinds := recipes.NewRegistry()
+	if err := kinds.Register(gpu); err != nil {
+		t.Fatal(err)
+	}
+	doc := "version: 1\nresources:\n  llm: {kind: gpusample, provider: server, target: " + targetA + ", gpu: {kind: nvidia-l4, count: 2}}\n"
+	r := Compute(Input{Environment: "production", Graph: infrastructureGraph(), Manifest: parse(t, doc), Providers: providers.Registry(),
+		Connections: gpuConnections(t, twoL4, "amd64"), Kinds: kinds})
+	server := findAction(r, "resource:llm--server")
+	if !r.Executable || server == nil {
+		t.Fatalf("problems %+v", r.Problems)
+	}
+	got := server.Resource.Component.Component.Resources
+	if got.CPUMillis != 5000 || got.MemoryMB != 20480 || got.ShmMB != 6144 || got.PerGPU != nil || got.GPU == nil {
+		t.Fatalf("resources %+v", got)
+	}
+	if sidecar := findAction(r, "resource:llm--sidecar").Resource.Component.Component.Resources; sidecar.CPUMillis != 500 || sidecar.MemoryMB != 256 {
+		t.Fatalf("the CPU sidecar was scaled: %+v", sidecar)
+	}
+
+	// The same plan again keeps what it deployed.
+	again := Compute(Input{Environment: "production", Graph: infrastructureGraph(), Manifest: parse(t, doc), Providers: providers.Registry(),
+		Connections: gpuConnections(t, twoL4, "amd64"), Kinds: kinds, Bindings: boundFrom(t, r)})
+	if a := findAction(again, "resource:llm--server"); a.Op != Keep {
+		t.Fatalf("again: op %s, changes %+v", a.Op, a.Changes)
 	}
 }

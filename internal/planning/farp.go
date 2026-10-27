@@ -106,7 +106,7 @@ func (p *planner) octopusResources() []string {
 	var out []string
 	for _, name := range m.ResourceNames() {
 		r := m.Resources[name]
-		if r.Kind == recipes.OctopusKind && manifest.On(r.For(p.in.Environment, m.Defaults).Enabled) {
+		if r.Kind == recipes.OctopusKind && p.resourceOn(name) {
 			out = append(out, name)
 		}
 	}

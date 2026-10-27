@@ -134,8 +134,12 @@ func (r *Runtime) objects(ctx context.Context, c *Client, iid id.ID, labels map[
 }
 
 func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceSpec, labels map[string]string) (result *cpprovider.ProvisionResult, err error) {
+	start, err := owned.StartTimeout(labels)
+	if err != nil {
+		return nil, err
+	}
 	if len(spec.Volumes) > 0 {
-		return r.applyPersistent(ctx, iid, spec, labels)
+		return r.applyPersistent(ctx, iid, spec, labels, start)
 	}
 	if labels[owned.LabelStateful] == "true" {
 		return nil, errors.New("a stateful workload cannot drop its persistent volumes")
@@ -231,6 +235,12 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 		// A surge pod would wait for a GPU the old pod still holds.
 		deployment.Spec.Strategy = appsv1.DeploymentStrategy{Type: appsv1.RecreateDeploymentStrategyType}
 	}
+	if start > 0 {
+		// Kubernetes calls a rollout failed once it makes no progress for
+		// this long, so it gets a minute more than the readiness wait.
+		deadline := int32((start + time.Minute) / time.Second)
+		deployment.Spec.ProgressDeadlineSeconds = &deadline
+	}
 
 	if len(servicePorts) > 0 {
 		// The Service is rebuilt from the labels on every Apply, so a
@@ -315,7 +325,9 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 	}
 	wait := r.WaitReady
 	if wait == nil {
-		wait = func(ctx context.Context, c *Client, _ string) error { return r.waitReady(ctx, c, deployment) }
+		wait = func(ctx context.Context, c *Client, _ string) error {
+			return r.waitReady(ctx, c, deployment, r.readyWait(start))
+		}
 	}
 	if checkErr := wait(ctx, c, name); checkErr != nil {
 		return nil, checkErr
@@ -342,12 +354,20 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 	return &cpprovider.ProvisionResult{ProviderRef: name, ServiceRefs: map[string]string{spec.Name: spec.Name}, Endpoints: endpoints}, nil
 }
 
-func (r *Runtime) waitReady(ctx context.Context, c *Client, applied *appsv1.Deployment) error {
-	name := applied.Name
-	wait := r.Wait
-	if wait <= 0 {
-		wait = 3 * time.Minute
+// readyWait is how long a workload gets to become ready: its start
+// timeout when it has one, else Wait, else three minutes.
+func (r *Runtime) readyWait(start time.Duration) time.Duration {
+	switch {
+	case start > 0:
+		return start
+	case r.Wait > 0:
+		return r.Wait
 	}
+	return 3 * time.Minute
+}
+
+func (r *Runtime) waitReady(ctx context.Context, c *Client, applied *appsv1.Deployment, wait time.Duration) error {
+	name := applied.Name
 	deadline := time.Now().Add(wait)
 	for {
 		deployment, err := c.Kube.AppsV1().Deployments(c.Config.Namespace).Get(ctx, name, metav1.GetOptions{})

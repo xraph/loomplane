@@ -47,6 +47,9 @@ var (
 const (
 	defaultJobTimeout  = 10 * time.Minute
 	maxJobTimeout      = time.Hour
+	minStartTimeout    = time.Minute
+	maxStartTimeout    = 3 * time.Hour
+	maxGPUCount        = 8
 	defaultCPUMillis   = 500
 	defaultMemoryMB    = 256
 	defaultSecretBytes = 32
@@ -234,6 +237,14 @@ func (r *Registry) Composed(kind string) bool {
 	defer r.mu.RUnlock()
 	_, ok := r.kinds[kind]
 	return ok
+}
+
+// EnvironmentOptIn reports whether kind is a composed kind whose
+// resources run only in the environments that enable them.
+func (r *Registry) EnvironmentOptIn(kind string) bool {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.kinds[kind].EnvironmentOptIn
 }
 
 // defaultVersion is the newest release of a registered engine or kind.
@@ -548,8 +559,14 @@ func validateComponent(f *findings, k Kind, c *Component, components map[string]
 		if c.Timeout < 0 || c.Timeout > maxJobTimeout {
 			f.add("%s timeout %s must be positive and at most an hour", what, c.Timeout)
 		}
+		if c.StartTimeout != 0 {
+			f.add("%s has a start timeout; only processes do", what)
+		}
 	default:
 		f.add("%s role %q is not process or job", what, c.Role)
+	}
+	if c.StartTimeout != 0 && (c.StartTimeout < minStartTimeout || c.StartTimeout > maxStartTimeout) {
+		f.add("%s start timeout %s must be between a minute and three hours", what, c.StartTimeout)
 	}
 
 	ports := map[string]Port{}
@@ -694,8 +711,8 @@ func validateGPU(f *findings, what string, c *Component, k Kind) {
 		if c.Role != RoleProcess {
 			f.add("%s requests a GPU but isn't a process", what)
 		}
-		if g.Count < 1 || g.Count > 8 {
-			f.add("%s GPU count %d is outside 1 to 8", what, g.Count)
+		if g.Count < 1 || g.Count > maxGPUCount {
+			f.add("%s GPU count %d is outside 1 to %d", what, g.Count, maxGPUCount)
 		}
 		memory := 0
 		if g.Kind != "" {
@@ -713,15 +730,19 @@ func validateGPU(f *findings, what string, c *Component, k Kind) {
 			f.add("%s needs %d GiB per GPU but %s has %d", what, g.MinMemoryGiB, g.Kind, memory)
 		}
 	}
-	if r.ShmMB < 0 || r.ShmMB > 65536 || (r.ShmMB > 0 && r.ShmMB >= r.MemoryMB) {
+	if !shmFits(r) {
 		f.add("%s shared memory must be smaller than its memory, and at most 65536 MB", what)
 	}
+	validatePerGPU(f, what, r)
 	w := c.WeightCache
 	if w == nil {
 		return
 	}
 	if r.GPU == nil {
 		f.add("%s weight cache needs a GPU component", what)
+	}
+	if w.SizeSetting != "" && !slices.ContainsFunc(k.Settings, func(s Setting) bool { return s.Name == w.SizeSetting }) {
+		f.add("%s weight cache size setting %q isn't one of the kind's settings", what, w.SizeSetting)
 	}
 	p := w.MountPath
 	switch {
@@ -735,6 +756,36 @@ func validateGPU(f *findings, what string, c *Component, k Kind) {
 	}
 	if slices.Contains(k.Targets, "kubernetes") && w.KubernetesSizeMB < 1024 {
 		f.add("%s weight cache needs at least 1024 MB on Kubernetes", what)
+	}
+}
+
+// shmFits reports whether a component's /dev/shm is at most 65536 MB and
+// smaller than its memory, which it counts toward.
+func shmFits(r Resources) bool {
+	return r.ShmMB >= 0 && r.ShmMB <= 65536 && (r.ShmMB == 0 || r.ShmMB < r.MemoryMB)
+}
+
+// validatePerGPU checks a per-GPU step: only on a GPU component, never
+// negative, and leaving shared memory in bounds for every GPU count the
+// component could be placed with.
+func validatePerGPU(f *findings, what string, r Resources) {
+	s := r.PerGPU
+	if s == nil {
+		return
+	}
+	if r.GPU == nil {
+		f.add("%s has per-GPU resources but requests no GPU", what)
+		return
+	}
+	if s.CPUMillis < 0 || s.MemoryMB < 0 || s.ShmMB < 0 {
+		f.add("%s per-GPU resources must not be negative", what)
+		return
+	}
+	for n := r.GPU.Count; n <= maxGPUCount; n++ {
+		if !shmFits(r.ForGPUs(n)) {
+			f.add("%s shared memory must stay smaller than its memory, and at most 65536 MB, with %d GPUs", what, n)
+			return
+		}
 	}
 }
 
@@ -769,6 +820,9 @@ func validateDependencyOnly(f *findings, k Kind) {
 	}
 	if len(k.Settings) > 0 {
 		f.add("a dependency-only kind has no manifest resource of its own to set them, so it takes no settings")
+	}
+	if k.EnvironmentOptIn {
+		f.add("a dependency-only kind has no manifest resource of its own to enable, so it can't opt in to environments")
 	}
 }
 

@@ -128,6 +128,32 @@ type Deployer interface {
 type deployStarted struct {
 	DeploymentID string     `json:"deployment_id"`
 	Steps        [][]string `json:"steps"`
+	// Timeouts are the actions that get longer than actionTimeout, by
+	// action ID. A run started before they existed has none.
+	Timeouts map[string]time.Duration `json:"timeouts,omitempty"`
+}
+
+// timeout is how long an action's step may run: actionTimeout, or longer
+// when the deployer says the action needs it.
+func (s deployStarted) timeout(actionID string) time.Duration {
+	return max(actionTimeout, s.Timeouts[actionID])
+}
+
+// ActionTimeouts is a Deployer that knows which of a deployment's actions
+// need longer than a step usually gets, such as a catalog component that
+// takes hours to become ready.
+type ActionTimeouts interface {
+	ActionTimeouts(ctx context.Context, orgID, deploymentID string) (map[string]time.Duration, error)
+}
+
+// actionTimeouts asks dep for a deployment's longer action timeouts, when
+// it knows any.
+func actionTimeouts(ctx context.Context, dep Deployer, orgID, deploymentID string) (map[string]time.Duration, error) {
+	t, ok := dep.(ActionTimeouts)
+	if !ok || deploymentID == "" {
+		return nil, nil
+	}
+	return t.ActionTimeouts(ctx, orgID, deploymentID)
 }
 
 type deployInput struct {
@@ -320,7 +346,7 @@ func runSteps(w *drt.Workflow, orgID string, started deployStarted) error {
 		for _, id := range group {
 			step := dep
 			step.ActionID = id
-			if err := callInto(w, "deploy-"+id, ActivityDeployAction, step, actionTimeout, actionHeartbeat, actionAttempts, nil); err != nil {
+			if err := callInto(w, "deploy-"+id, ActivityDeployAction, step, started.timeout(id), actionHeartbeat, actionAttempts, nil); err != nil {
 				reason = err.Error()
 				break
 			}
@@ -333,10 +359,11 @@ func runSteps(w *drt.Workflow, orgID string, started deployStarted) error {
 
 // retryInput restarts a failed deployment's remaining steps.
 type retryInput struct {
-	OrgID             string        `json:"org_id"`
-	DeploymentID      string        `json:"deployment_id"`
-	Steps             [][]string    `json:"steps"`
-	ReconcileInterval time.Duration `json:"reconcile_interval,omitempty"`
+	OrgID             string                   `json:"org_id"`
+	DeploymentID      string                   `json:"deployment_id"`
+	Steps             [][]string               `json:"steps"`
+	Timeouts          map[string]time.Duration `json:"timeouts,omitempty"`
+	ReconcileInterval time.Duration            `json:"reconcile_interval,omitempty"`
 }
 
 // retry is the retry workflow: the deployment was reopened before it
@@ -347,7 +374,7 @@ func (d *Deployments) retry(w *drt.Workflow, input []byte) ([]byte, error) {
 	if err := json.Unmarshal(input, &in); err != nil {
 		return nil, fmt.Errorf("decode retry input: %w", err)
 	}
-	if err := runSteps(w, in.OrgID, deployStarted{DeploymentID: in.DeploymentID, Steps: in.Steps}); err != nil {
+	if err := runSteps(w, in.OrgID, deployStarted{DeploymentID: in.DeploymentID, Steps: in.Steps, Timeouts: in.Timeouts}); err != nil {
 		return nil, err
 	}
 	return json.Marshal(Outcome{Status: PlanApproved, Deployment: in.DeploymentID})
@@ -370,6 +397,11 @@ func (d *Deployments) Retry(ctx context.Context, orgID, deploymentID, retryID st
 		build = e.BuildID
 	}
 	in := retryInput{OrgID: orgID, DeploymentID: deploymentID, Steps: steps}
+	if dep, err := d.boundDeployer(); err == nil {
+		if in.Timeouts, err = actionTimeouts(ctx, dep, orgID, deploymentID); err != nil {
+			return err
+		}
+	}
 	if build == CapacityBuild {
 		in.ReconcileInterval = capacityInterval
 	}
@@ -584,7 +616,11 @@ func (d *Deployments) deployStart(ctx context.Context, _ drt.ActivityInfo, input
 	if err != nil {
 		return nil, err
 	}
-	return json.Marshal(deployStarted{DeploymentID: id, Steps: steps})
+	timeouts, err := actionTimeouts(ctx, dep, in.OrgID, id)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(deployStarted{DeploymentID: id, Steps: steps, Timeouts: timeouts})
 }
 
 func (d *Deployments) deploySource(ctx context.Context, _ drt.ActivityInfo, input []byte) ([]byte, error) {

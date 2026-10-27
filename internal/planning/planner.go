@@ -492,7 +492,7 @@ func (p *planner) planResources() {
 		r := m.Resources[name]
 		base := "resources." + name
 		set := r.For(p.in.Environment, m.Defaults)
-		if !manifest.On(set.Enabled) || p.noLinkKind(name, base, r) {
+		if !p.resourceOn(name) || p.noLinkKind(name, base, r) {
 			continue
 		}
 		if r.CloudSQLPSC != nil && (r.Kind != "postgres" || set.Provider != "cloud-sql" || r.Version != "17" || !r.CloudSQLPSC.Valid(set.Region)) {
@@ -1668,6 +1668,14 @@ func (p *planner) deployedWith(id, need, key string) bool {
 	return slices.ContainsFunc(cfg.Env, func(e EnvLink) bool { return e.From == need && e.Key == key })
 }
 
+// orList is "A", "A or B", or "A, B or C".
+func orList(items []string) string {
+	if len(items) < 2 {
+		return strings.Join(items, "")
+	}
+	return strings.Join(items[:len(items)-1], ", ") + " or " + items[len(items)-1]
+}
+
 // link gives a service the variables for what it needs, and orders it
 // after them.
 func (p *planner) link(name string, a *Action) {
@@ -1711,7 +1719,24 @@ func (p *planner) link(name string, a *Action) {
 		if r, ok := m.Resources[need]; ok {
 			dep := p.resources[need]
 			if dep == nil {
-				if !manifest.On(r.For(p.in.Environment, m.Defaults).Enabled) {
+				switch {
+				case p.resourceOn(need):
+				case p.kinds().EnvironmentOptIn(r.Kind):
+					// It runs only where it's enabled, so a service that
+					// needs it elsewhere runs without it, and the other
+					// environments keep deploying.
+					missing := []string{key}
+					if composed[i] {
+						missing = missing[:0]
+						for _, o := range outputs[i] {
+							missing = append(missing, outputKey(need, o, count))
+						}
+					}
+					p.warn(Finding{
+						Code: "need-off", Subject: ServiceSubject, Name: name, Path: base,
+						Message: fmt.Sprintf("%s gets no %s in %s: %s doesn't run there.", name, orList(missing), p.in.Environment, need),
+					})
+				default:
 					p.problem(Finding{
 						Code: "need-off", Subject: ServiceSubject, Name: name, Path: base,
 						Message: fmt.Sprintf("%s needs %s, which is off in %s.", name, need, p.in.Environment),
@@ -2569,8 +2594,8 @@ func (p *planner) wanted(b *Binding) (wanted, on bool) {
 	if l, ok := m.Links[b.Name]; ok {
 		return true, manifest.On(l.For(p.in.Environment).Enabled)
 	}
-	r, ok := m.Resources[b.Name]
-	return ok, ok && manifest.On(r.For(p.in.Environment, m.Defaults).Enabled)
+	_, ok := m.Resources[b.Name]
+	return ok, ok && p.resourceOn(b.Name)
 }
 
 // creates names what a binding's provider made, for a delete's
