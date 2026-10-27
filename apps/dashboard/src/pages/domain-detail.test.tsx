@@ -228,9 +228,14 @@ it("shows a subdomain waiting on its domain and checks the domain again", async 
   ).toBeTruthy()
   // The record to add is the domain's, not the subdomain's.
   expect(within(status).getByText("_loomplane.loomplane.com")).toBeTruthy()
+  // Check again shows once, by the record it checks.
   const actions = screen.getByRole("group", { name: "Domain actions" })
+  expect(
+    within(actions).queryByRole("button", { name: "Check again" })
+  ).toBeNull()
+  expect(screen.getAllByRole("button", { name: "Check again" })).toHaveLength(1)
   await userEvent.click(
-    within(actions).getByRole("button", { name: "Check again" })
+    within(status).getByRole("button", { name: "Check again" })
   )
   await waitFor(() =>
     expect(writes).toEqual([
