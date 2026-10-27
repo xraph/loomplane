@@ -84,3 +84,65 @@ func TestCompute_excludedServices(t *testing.T) {
 		}
 	})
 }
+
+// An excluded service deploys nothing, so a canary release and a
+// promotion's artifact reuse both pass it over, whether it's deleted or
+// left running.
+func TestCompute_excludedServicesInAReleaseAndAPromotion(t *testing.T) {
+	id := workerID(t)
+	live := deployed(t, compute(t, acme, "production"))
+	// The worker changes, so a plan that doesn't exclude it updates it.
+	changed := strings.Replace(acme, "    provider: ecs-fargate\n", "    provider: ecs-fargate\n    scale: {min: 1, max: 2}\n", 1) +
+		"environments:\n  production:\n    release:\n      strategy: canary\n"
+	plan := func(excluded map[string]bool) *Result {
+		t.Helper()
+		r := Compute(Input{
+			Environment: "production", Graph: polyglot(t), Manifest: parse(t, changed),
+			Providers: providers.Registry(), Bindings: live, Connections: connected,
+			Excluded: excluded,
+		})
+		artifactService().applyArtifacts(promotionPlan(), r, map[string]ReleasedImage{}, "staging")
+		return r
+	}
+	mentions := func(r *Result) []string {
+		var got []string
+		for _, w := range r.Warnings {
+			if w.Name == "worker" && w.Code == codeCanaryUnavailable {
+				got = append(got, "canary-unavailable")
+			}
+		}
+		if r.Release != nil && r.Release.Ramps("service:worker") {
+			got = append(got, "ramps")
+		}
+		for _, c := range r.Artifacts {
+			if c.Service == "worker" {
+				got = append(got, "artifact choice")
+			}
+		}
+		return got
+	}
+
+	base := plan(nil)
+	if w := action(t, base, "service:worker"); w.Op != Update {
+		t.Fatalf("worker = %+v, want an update when it isn't excluded", w)
+	}
+	if got := mentions(base); len(got) != 2 {
+		t.Fatalf("not excluded, worker shows up as %v, want a canary-unavailable warning and an artifact choice", got)
+	}
+	for _, keep := range []bool{false, true} {
+		r := plan(map[string]bool{id: keep})
+		if len(r.Problems) > 0 {
+			t.Fatalf("keep %v: problems %+v", keep, r.Problems)
+		}
+		if r.Release == nil || r.Release.Strategy != "canary" {
+			t.Fatalf("keep %v: release %+v, want the canary release pinned", keep, r.Release)
+		}
+		want := map[bool]Op{false: Delete, true: Keep}[keep]
+		if w := action(t, r, "service:worker"); w.Op != want || w.Service != nil && w.Service.Artifact != nil {
+			t.Fatalf("keep %v: worker = %+v, want %s with no artifact", keep, w, want)
+		}
+		if got := mentions(r); len(got) > 0 {
+			t.Errorf("keep %v: the excluded worker shows up as %v", keep, got)
+		}
+	}
+}
