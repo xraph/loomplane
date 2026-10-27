@@ -188,7 +188,7 @@ func (s *PgStore) SavePool(ctx context.Context, p *Pool, previous int64) error {
 		return checkErr
 	}
 	if !free {
-		return fmt.Errorf("%w: a direct deployment is running on a server in this pool; save the pool after it finishes", ErrBusy)
+		return ErrDirectApplyRunning
 	}
 	rows, err := tx.Query(ctx, `SELECT id FROM loomplane_cloud_servers WHERE org_id=$1 AND (id=ANY($2::text[]) OR id IN (SELECT server_id FROM loomplane_server_pool_members WHERE pool_id=$3)) ORDER BY id FOR UPDATE`, p.OrgID, memberIDs(p.Members), p.ID)
 	if err != nil {

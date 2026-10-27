@@ -4,6 +4,7 @@ package integration
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -16,6 +17,7 @@ import (
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/providers"
 	"github.com/xraph/loomplane/internal/security"
+	"github.com/xraph/loomplane/pkg/provider"
 )
 
 // directPlanIn writes a direct plan for one service on runtime-1.
@@ -68,6 +70,18 @@ func pausedDirectApply(ctx context.Context, t *testing.T, f *poolFixture, name s
 		t.Fatalf("direct apply never reached its pause %s", pause)
 	}
 	return out, func() { close(held) }
+}
+
+// frontendBinding records an unrelated Vercel web app's binding. PutBinding
+// takes the organization lock only for a managed frontend, so the config
+// says it is one.
+func frontendBinding(ctx context.Context, f *poolFixture) error {
+	raw, err := json.Marshal(planning.ServiceConfig{Provider: "vercel", Workload: provider.WebApp, Execution: provider.Serverless})
+	if err != nil {
+		return err
+	}
+	now := time.Now().UTC()
+	return f.plans.PutBinding(ctx, &planning.Binding{ID: "unrelated", OrgID: "org", ProjectID: "second", EnvironmentID: "second-env", Subject: planning.ServiceSubject, Name: "web", Provider: "vercel", ConnectionID: "new", ExternalID: "web", Config: raw, CreatedAt: now, UpdatedAt: now})
 }
 
 // lockUser is a transaction that takes the organization lock and then the
@@ -222,8 +236,9 @@ func TestServerAdmissionDirectApplyLetsCloudSyncThrough(t *testing.T) {
 
 // A pool save that enrolls the daemon takes the organization lock first.
 // While a direct apply runs there it must refuse at once rather than wait
-// under that lock, or every binding in the organization would queue behind
-// it, the paused apply's own binding included.
+// under that lock. Otherwise every frontend binding in the organization
+// queues behind it, and the paused apply's own MarkWorkloadEffects (in the
+// before-effects case) waits on it while it waits on the apply.
 func TestServerAdmissionDirectApplyLetsBindingsPastPoolSave(t *testing.T) {
 	for _, pause := range []directPause{beforeEffects, inExecutor} {
 		t.Run(string(pause), func(t *testing.T) {
@@ -238,12 +253,9 @@ func TestServerAdmissionDirectApplyLetsBindingsPastPoolSave(t *testing.T) {
 			applyDone, release := pausedDirectApply(ctx, t, f, "api", pause)
 			next := *f.pool
 			next.Revision++
-			now := time.Now().UTC()
 			results := letThrough(t, f, applyDone, release, cancel,
 				lockUser{"pool save", func(ctx context.Context) error { return f.store.SavePool(ctx, &next, 1) }},
-				lockUser{"binding", func(ctx context.Context) error {
-					return f.plans.PutBinding(ctx, &planning.Binding{ID: "unrelated", OrgID: "org", ProjectID: "second", EnvironmentID: "second-env", Subject: planning.ServiceSubject, Name: "web", Provider: "server", ConnectionID: "runtime-2", ExternalID: "web", CreatedAt: now, UpdatedAt: now})
-				}},
+				lockUser{"binding", func(ctx context.Context) error { return frontendBinding(ctx, f) }},
 			)
 			if err := results["pool save"]; !errors.Is(err, cloudinfra.ErrBusy) {
 				t.Fatalf("pool save beside a direct apply: %v", err)
@@ -303,10 +315,14 @@ func TestServerAdmissionRetirementWaitsOutsideOrganizationLock(t *testing.T) {
 	case <-time.After(300 * time.Millisecond):
 	}
 	waitPoolSQL(t, f, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND wait_event='advisory' AND query LIKE '%direct-apply%')`)
-	results := letThrough(t, f, applyDone, release, cancel, lockUser{"binding", func(ctx context.Context) error {
-		now := time.Now().UTC()
-		return f.plans.PutBinding(ctx, &planning.Binding{ID: "unrelated", OrgID: "org", ProjectID: "second", EnvironmentID: "second-env", Subject: planning.ServiceSubject, Name: "web", Provider: "server", ConnectionID: "runtime-2", ExternalID: "web", CreatedAt: now, UpdatedAt: now})
-	}})
+	// The wait can last as long as a deploy, so it holds no table lock that
+	// would block DDL behind it.
+	var tables []string
+	if err := f.sql.QueryRow(t.Context(), `SELECT coalesce(array_agg(DISTINCT l.relation::regclass::text),'{}') FROM pg_locks l JOIN pg_stat_activity a ON a.pid=l.pid WHERE a.datname=current_database() AND a.wait_event='advisory' AND a.query LIKE '%direct-apply%' AND l.locktype='relation' AND l.granted`).Scan(&tables); err != nil || len(tables) > 0 {
+		release()
+		t.Fatalf("retirement waits holding table locks %v: %v", tables, err)
+	}
+	results := letThrough(t, f, applyDone, release, cancel, lockUser{"binding", func(ctx context.Context) error { return frontendBinding(ctx, f) }})
 	if err := results["binding"]; err != nil {
 		t.Fatalf("binding beside a queued retirement: %v", err)
 	}

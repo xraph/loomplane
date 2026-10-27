@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -286,14 +285,19 @@ func (s *PgStore) ServerInUse(ctx context.Context, v *Server) (bool, error) {
 // RetireServer waits for any direct apply on the server's daemon to finish
 // before it starts, and refuses while anything still uses the server.
 func (s *PgStore) RetireServer(ctx context.Context, v *Server) error {
+	// Read the daemon before the transaction: the wait below can last as
+	// long as a deploy, and a table lock held through it would block DDL.
+	daemon, err := s.directApplyDaemon(ctx, v.OrgID, v.RuntimeConnectionID)
+	if err != nil {
+		return err
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer rollback(tx)
-	daemon, err := waitForDirectApplies(ctx, tx, v.OrgID, v.RuntimeConnectionID)
-	if err != nil {
-		return err
+	if waitErr := waitForDirectApply(ctx, tx, daemon); waitErr != nil {
+		return waitErr
 	}
 	if checkErr := lockCapacityCloud(ctx, tx, v.OrgID, v.CloudID); checkErr != nil {
 		return checkErr
@@ -337,36 +341,41 @@ func (s *PgStore) RetireServer(ctx context.Context, v *Server) error {
 	return tx.Commit()
 }
 
-// waitForDirectApplies waits until no direct server apply runs on the daemon
-// behind connection, and keeps others off it until tx ends. It returns the
-// daemon's docker_id, or "" when connection isn't a verified server
-// connection. Call it before the organization lock: a direct apply holds
-// direct-apply/<docker_id> through its effects and takes the organization
-// lock inside them, so waiting for it under that lock could close a cycle
-// Postgres can't see.
-func waitForDirectApplies(ctx context.Context, tx driver.Tx, org, connection string) (string, error) {
+// directApplyDaemon returns the docker_id behind connection, or "" when it
+// isn't a verified server connection.
+func (s *PgStore) directApplyDaemon(ctx context.Context, org, connection string) (string, error) {
 	if connection == "" {
 		return "", nil
 	}
 	var daemon string
-	err := tx.QueryRow(ctx, `SELECT coalesce((SELECT details->>'docker_id' FROM loomplane_cloud_connections WHERE org_id=$1 AND id=$2 AND cloud='server'),'')`, org, connection).Scan(&daemon)
-	if err != nil || daemon == "" {
-		return "", err
-	}
-	_, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('direct-apply/'||$1,0))`, daemon)
+	err := s.db.QueryRow(ctx, `SELECT coalesce((SELECT details->>'docker_id' FROM loomplane_cloud_connections WHERE org_id=$1 AND id=$2 AND cloud='server'),'')`, org, connection).Scan(&daemon)
 	return daemon, err
 }
 
-// refuseDuringDirectApply returns ErrBusy while a direct server apply runs
-// on the daemon behind connection. It never waits, so callers can use it
-// under the organization lock.
+// waitForDirectApply waits until no direct server apply runs on daemon, and
+// keeps others off it until tx ends. Call it first in tx, holding nothing
+// else and before the organization lock: a direct apply holds
+// direct-apply/<docker_id> through its effects and takes the organization
+// lock inside them, so waiting for it under that lock could close a cycle
+// Postgres can't see.
+func waitForDirectApply(ctx context.Context, tx driver.Tx, daemon string) error {
+	if daemon == "" {
+		return nil
+	}
+	_, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('direct-apply/'||$1,0))`, daemon)
+	return err
+}
+
+// refuseDuringDirectApply returns ErrDirectApplyRunning while a direct
+// server apply runs on the daemon behind connection. It never waits, so
+// callers can use it under the organization lock.
 func refuseDuringDirectApply(ctx context.Context, tx driver.Tx, org, connection string) error {
 	var free bool
 	if err := tx.QueryRow(ctx, `SELECT coalesce((SELECT pg_try_advisory_xact_lock(hashtextextended('direct-apply/'||(details->>'docker_id'),0)) FROM loomplane_cloud_connections WHERE org_id=$1 AND id=$2 AND cloud='server' AND coalesce(details->>'docker_id','')<>''),true)`, org, connection).Scan(&free); err != nil {
 		return err
 	}
 	if !free {
-		return fmt.Errorf("%w: a direct deployment is running on this server; try again after it finishes", ErrBusy)
+		return ErrDirectApplyRunning
 	}
 	return nil
 }
@@ -424,7 +433,9 @@ func claimAdoption(ctx context.Context, tx driver.Tx, o *Operation) (*Server, er
 	if marshalErr != nil {
 		return nil, marshalErr
 	}
-	// The connection row lock serializes this claim with workload admission.
+	// The direct-apply try-lock in lockInfrastructureScope keeps this claim
+	// out of a running direct apply. The connection row lock only meets a
+	// direct apply's short admission check, which commits before effects.
 	if lookupErr == nil {
 		if _, updateErr := tx.Exec(ctx, `UPDATE loomplane_cloud_servers SET runtime_connection_id=$3,body=$4 WHERE org_id=$1 AND id=$2`, v.OrgID, v.ID, v.RuntimeConnectionID, body); updateErr != nil {
 			return nil, storeError(updateErr)

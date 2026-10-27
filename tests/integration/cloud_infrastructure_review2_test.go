@@ -184,3 +184,39 @@ func TestCloudInfrastructureLegacyAdoptionRecovery(t *testing.T) {
 		})
 	}
 }
+
+// A legacy adoption claims its host when it runs. While a direct deployment
+// runs on that daemon the claim is refused, and the operation waits for the
+// deployment instead of failing as a verification problem.
+func TestCloudInfrastructureLegacyAdoptionWaitsForDirectApply(t *testing.T) {
+	f := newInfraFixture(t)
+	o := legacyAcceptedAdoption(t, f)
+	running, err := f.sql.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = running.Rollback(context.Background()) }()
+	// What a direct apply on the adopted daemon holds through its effects.
+	if _, err = running.Exec(t.Context(), `SELECT pg_advisory_xact_lock(hashtextextended('direct-apply/docker-real',0))`); err != nil {
+		t.Fatal(err)
+	}
+	if err = f.svc.ReconcileInfrastructure(t.Context(), "org", o.ID, nil); !errors.Is(err, cloudinfra.ErrPending) {
+		t.Fatalf("claim beside a direct apply: %v", err)
+	}
+	waiting, err := f.store.OperationByID(t.Context(), "org", o.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if waiting.Status != "waiting" || waiting.Message != "Waiting for a direct deployment on this server to finish." {
+		t.Fatalf("operation beside a direct apply: %s %q", waiting.Status, waiting.Message)
+	}
+	if _, err = f.store.GetServer(t.Context(), "org", "cloud", o.ServerID); !errors.Is(err, cloudinfra.ErrNotFound) {
+		t.Fatalf("refused claim left a server: %v", err)
+	}
+	if err = running.Rollback(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if o = f.reconcile(t, o); o.Status != "succeeded" {
+		t.Fatalf("adoption after the direct apply: %+v", o)
+	}
+}
