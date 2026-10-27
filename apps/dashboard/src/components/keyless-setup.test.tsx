@@ -244,3 +244,46 @@ it("stops showing the tick once the value changes", async () => {
   await user.type(screen.getByLabelText("Workload provider"), "b")
   expect(copy.querySelector(".lucide-check")).toBeNull()
 })
+
+it("drops the tick two seconds after a copy, even when the value comes back", async () => {
+  stub([], { ...setup, audience: undefined })
+  panel({
+    cloud: "gcp",
+    title: "Google Cloud",
+    fields: [{ key: "workload_provider", label: "Workload provider" }],
+  })
+  const user = userEvent.setup()
+  await screen.findByText("https://loomplane.example")
+  const field = screen.getByLabelText("Workload provider")
+  await user.type(field, "a")
+  const copy = screen.getByRole("button", { name: "Copy audience" })
+  await user.click(copy)
+  expect(copy.querySelector(".lucide-check")).toBeTruthy()
+  await waitFor(() => expect(copy.querySelector(".lucide-check")).toBeNull(), {
+    timeout: 3000,
+  })
+
+  await user.click(copy)
+  await user.type(field, "b")
+  await new Promise((done) => setTimeout(done, 2200))
+  await user.type(field, "{Backspace}")
+  expect(copy.querySelector(".lucide-check")).toBeNull()
+}, 10000)
+
+it("connects when you press Enter in a field, once it's filled in", async () => {
+  const posted: Posted[] = []
+  stub(posted)
+  const onConnected = vi.fn()
+  panel({ onConnected })
+  const user = userEvent.setup()
+  await screen.findByText("https://loomplane.example")
+  const role = screen.getByLabelText("Role ARN")
+  await user.type(role, "{Enter}")
+  expect(posted).toHaveLength(1)
+  await user.type(role, "arn:aws:iam::1:role/x{Enter}")
+  await waitFor(() => expect(onConnected).toHaveBeenCalled())
+  expect(posted.map((p) => p.path.replace(/^.*\/api\/v1/, ""))).toEqual([
+    "/connections/keyless/prepare",
+    "/connections/keyless",
+  ])
+})
