@@ -510,7 +510,8 @@ func rejected(err error) bool {
 	var re *render.APIError
 	var de *digitalocean.APIError
 	var ce *cloudflare.APIError
-	return errors.Is(err, cloudflare.ErrRejected) || errors.As(err, &ce) || errors.Is(err, render.ErrRejected) || errors.As(err, &re) ||
+	return errors.Is(err, cloudflare.ErrRejected) || (errors.As(err, &ce) && refusedStatus(ce.Status)) ||
+		errors.Is(err, render.ErrRejected) || (errors.As(err, &re) && refusedStatus(re.Status)) ||
 		errors.Is(err, digitalocean.ErrRejected) || (errors.As(err, &de) && refusedStatus(de.Status)) ||
 		errors.Is(err, gcp.ErrRejected) || errors.Is(err, gcp.ErrInvalidKey) || errors.Is(err, vercel.ErrRejected) ||
 		errors.Is(err, server.ErrRejected) || errors.Is(err, kubernetes.ErrRejected) || errors.Is(err, registry.ErrRejected) ||

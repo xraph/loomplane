@@ -523,6 +523,8 @@ func TestUserSessionTellsRefusalsFromOutages(t *testing.T) {
 		"app refused": {http.StatusUnauthorized, `{"error":"invalid_client","error_description":"The OAuth client was not found."}`, true, true},
 		"down":        {http.StatusServiceUnavailable, `{"error":"internal_failure","error_description":"csecret 1//rt"}`, false, false},
 		"broken":      {http.StatusInternalServerError, `<html>csecret</html>`, false, false},
+		"bad request": {http.StatusBadRequest, `{"error":"invalid_request","error_description":"Missing required parameter: scope"}`, false, false},
+		"long":        {http.StatusBadRequest, `{"error":"invalid_grant","error_description":"` + strings.Repeat("expired ", 200) + `"}`, true, false},
 	} {
 		var got url.Values
 		c := googleTokenServer(t, tc.status, tc.body, &got)
@@ -549,6 +551,9 @@ func TestUserSessionTellsRefusalsFromOutages(t *testing.T) {
 			if strings.Contains(err.Error(), secret) {
 				t.Errorf("%s: a secret leaked: %v", name, err)
 			}
+		}
+		if len(err.Error()) > 400 {
+			t.Errorf("%s: the error runs to %d bytes", name, len(err.Error()))
 		}
 	}
 }

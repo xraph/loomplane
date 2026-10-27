@@ -27,6 +27,8 @@ type memKeys struct {
 	mu   sync.Mutex
 	lock sync.Mutex
 	keys []Key
+	// addErr, when set, is what AddKey fails with.
+	addErr error
 }
 
 func (m *memKeys) Keys(context.Context) ([]Key, error) {
@@ -38,6 +40,9 @@ func (m *memKeys) Keys(context.Context) ([]Key, error) {
 func (m *memKeys) AddKey(_ context.Context, k Key) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if m.addErr != nil {
+		return m.addErr
+	}
 	m.keys = append(m.keys, k)
 	return nil
 }
@@ -70,6 +75,8 @@ func (m *memKeys) WithKeyLock(_ context.Context, fn func() error) error {
 type memSecrets struct {
 	mu sync.Mutex
 	m  map[string][]byte
+	// deleteErr, when set, is what Delete fails with.
+	deleteErr error
 }
 
 var errNoSecret = errors.New("secret not found")
@@ -97,6 +104,9 @@ func (s *memSecrets) Reveal(_ context.Context, orgID, id string) ([]byte, error)
 func (s *memSecrets) Delete(_ context.Context, orgID, id string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.deleteErr != nil {
+		return s.deleteErr
+	}
 	delete(s.m, orgID+"/"+id)
 	return nil
 }
@@ -697,5 +707,55 @@ func TestServingFailsWhenACloudWouldntFindTheKey(t *testing.T) {
 				t.Fatal("serving passed")
 			}
 		})
+	}
+}
+
+func TestAKeyRowThatFailsTakesItsPrivateKeyOutOfVault(t *testing.T) {
+	s, keys, secrets, _ := newTestService(t)
+	keys.addErr = errors.New("database down")
+	if err := s.Rotate(t.Context()); err == nil {
+		t.Fatal("Rotate succeeded without a key row")
+	}
+	secrets.mu.Lock()
+	defer secrets.mu.Unlock()
+	for id := range secrets.m {
+		if id != vaultOrg+"/"+ticketKeyID {
+			t.Errorf("Vault kept %s with no row to find it by", id)
+		}
+	}
+}
+
+func TestARetiredKeyStaysListedWhileVaultWontDeleteIt(t *testing.T) {
+	s, keys, secrets, c := newTestService(t)
+	stored := func(kid string) bool {
+		list, _ := keys.Keys(t.Context()) // memKeys never fails to list
+		return slices.ContainsFunc(list, func(k Key) bool { return k.KID == kid })
+	}
+	if err := s.Rotate(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	first := kids(t, s)
+	c.advance(rotateEvery)
+	if err := s.Rotate(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	c.advance(prePublish + time.Minute)
+	if err := s.Rotate(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	c.advance(publishRetired + time.Minute)
+	secrets.deleteErr = errors.New("vault down")
+	if err := s.Rotate(t.Context()); err == nil {
+		t.Fatal("Rotate succeeded while Vault refused the delete")
+	}
+	if !stored(first[0]) || !secrets.has(first[0]) {
+		t.Fatal("the retired key's row went before its private key")
+	}
+	secrets.deleteErr = nil
+	if err := s.Rotate(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if stored(first[0]) || secrets.has(first[0]) {
+		t.Fatal("the retired key outlived a working Vault")
 	}
 }

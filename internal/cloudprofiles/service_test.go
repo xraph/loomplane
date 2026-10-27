@@ -244,3 +244,38 @@ func TestServiceTargetsRefusePausedProvider(t *testing.T) {
 		t.Fatalf("paused provider accepted: %v", err)
 	}
 }
+
+type usageStore struct {
+	*memoryStore
+}
+
+func (u usageStore) CloudUsage(_ context.Context, org, project, cloud string) (*Usage, error) {
+	return &Usage{CloudID: cloud, Environments: []EnvironmentUsage{{ProjectID: project, EnvironmentID: org}}}, nil
+}
+
+func TestServiceUsageScopesLikeGet(t *testing.T) {
+	_, st, a := fixture()
+	s := NewService(Deps{Store: usageStore{memoryStore: st}, Projects: projectLookup{}, Authz: a})
+	p := security.Principal{OrgID: "org_1"}
+	if _, err := s.Usage(t.Context(), p, "proj_other", "cloud_1"); !errors.Is(err, projects.ErrNotFound) {
+		t.Fatalf("cross-project: %v", err)
+	}
+	if st.reads != 0 {
+		t.Fatal("read before project scope validation")
+	}
+	if _, err := s.Usage(t.Context(), p, "proj_1", "cloud_other"); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("a Cloud the project can't see: %v", err)
+	}
+	u, err := s.Usage(t.Context(), p, "proj_1", "cloud_1")
+	if err != nil || u.CloudID != "cloud_1" || u.Environments[0].ProjectID != "proj_1" {
+		t.Fatalf("usage: %+v %v", u, err)
+	}
+	if a.permission != security.CloudAccountRead {
+		t.Fatal(a.permission)
+	}
+	denied := errors.New("denied")
+	a.err = denied
+	if _, err = s.Usage(t.Context(), p, "", "cloud_1"); !errors.Is(err, denied) || a.permission != security.OrganizationCloudManage {
+		t.Fatalf("organization view needs Cloud management: %v %v", err, a.permission)
+	}
+}

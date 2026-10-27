@@ -498,7 +498,11 @@ function ConnectForm({
   const [keylessFor, setKeylessFor] = useState<string | null>(
     startKeyless ? (replacing?.cloud ?? initial) : null
   )
-  const keylessOffered = !!entry?.methods.includes("keyless")
+  // Replacing a keyless connection's credential means giving it a key or
+  // a sign-in; it's keyless already.
+  const keylessOffered =
+    !!entry?.methods.includes("keyless") &&
+    (startKeyless || replacing?.method !== "keyless")
   const keylessOn = keylessOffered && keylessFor === cloud
   const signIn =
     !!entry?.methods.includes("oauth") && tokenFor !== cloud && !keylessOn

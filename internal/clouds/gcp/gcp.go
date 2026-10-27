@@ -292,8 +292,12 @@ func (t tokenSource) Token() (*oauth2.Token, error) {
 		return nil, fmt.Errorf("google answered %d from its token endpoint: %s", status, code)
 	case re.ErrorCode == "invalid_client" || re.ErrorCode == "unauthorized_client":
 		return nil, fmt.Errorf("%w: %w: google answered %d: %s", ErrRejected, oauth.ErrAppRejected, status, code)
+	case re.ErrorCode == "invalid_grant":
+		// The background job counts only this as a refusal too, so a
+		// session and the job agree on what needs a new sign-in.
+		return nil, fmt.Errorf("%w: %w: %s", ErrRejected, oauth.ErrRefused, cmp.Or(reason(re.ErrorDescription, maxReason), code))
 	default:
-		return nil, fmt.Errorf("%w: %w: %s", ErrRejected, oauth.ErrRefused, cmp.Or(re.ErrorDescription, code))
+		return nil, fmt.Errorf("google answered %d from its token endpoint: %s", status, code)
 	}
 }
 

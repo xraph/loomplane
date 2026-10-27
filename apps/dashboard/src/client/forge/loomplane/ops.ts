@@ -546,6 +546,13 @@ export const ops = {
     provides: [],
     invalidates: [],
   },
+  'organizationClouds.usage': {
+    method: 'GET',
+    path: '/api/v1/clouds/{cloudId}/usage',
+    provides: [],
+    invalidates: [],
+    responseCodec: CODECS['Usage'],
+  },
   'connectionClouds.list': {
     method: 'GET',
     path: '/api/v1/connection-clouds',
@@ -1488,6 +1495,13 @@ export const ops = {
     path: '/api/v1/projects/{id}/clouds/{cloudId}/targets/{targetId}',
     provides: [],
     invalidates: [],
+  },
+  'clouds.usage': {
+    method: 'GET',
+    path: '/api/v1/projects/{id}/clouds/{cloudId}/usage',
+    provides: [],
+    invalidates: [],
+    responseCodec: CODECS['Usage'],
   },
   'dbGateways.list': {
     method: 'GET',

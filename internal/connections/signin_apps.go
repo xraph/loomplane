@@ -158,7 +158,7 @@ func (s *Service) SignInApps(ctx context.Context, p security.Principal) ([]SignI
 
 func (s *Service) provider(cloud string) error {
 	if _, ok := s.Providers[cloud]; !ok {
-		return fmt.Errorf("%w: Loomplane has no sign-in for %q", ErrInvalid, cloud)
+		return fmt.Errorf("%w: Loomplane has no sign-in for %s", ErrInvalid, cloudTitle(cloud))
 	}
 	return nil
 }
