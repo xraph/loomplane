@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/xraph/loomplane/internal/connections"
@@ -194,6 +195,25 @@ func (s *Service) settleProofAttempt(ctx context.Context, adapter provider.DNSAd
 		}
 	}
 	return false, false, nil
+}
+
+// proofRecordIsOurs says the record at the receipt's ID is still this zone's
+// proof record: as last written, as wanted now, carrying this zone's owner
+// token, or, on a provider without owner tokens, holding one of this zone's
+// proof values. Anything else there was changed by someone else.
+func proofRecordIsOurs(zone *Zone, r, desired provider.DNSRecord) bool {
+	wanted := desired
+	wanted.ID = r.ID
+	if r == wanted || (zone.ProofRecord != nil && r == *zone.ProofRecord) {
+		return true
+	}
+	if r.ZoneID != desired.ZoneID || r.Name != desired.Name || r.Type != "TXT" {
+		return false
+	}
+	if owner := zoneProofOwner(zone); owner != "" {
+		return r.Owner == owner
+	}
+	return r.Owner == "" && strings.HasPrefix(r.Value, "loomplane="+zone.ID+"-")
 }
 
 // ownedProof is the one record at the proof name carrying this zone's owner
@@ -472,9 +492,14 @@ func (s *Service) unconfirmedProof(ctx context.Context, adapter provider.DNSAdap
 	}
 	if zone.ProofRecord != nil {
 		for _, r := range records {
-			if r.ID == zone.ProofRecord.ID {
-				return &r, nil
+			if r.ID != zone.ProofRecord.ID {
+				continue
 			}
+			if !proofRecordIsOurs(zone, r, desired) {
+				// Changed by someone else: not Loomplane's to delete.
+				return nil, unknown
+			}
+			return &r, nil
 		}
 	}
 	if zone.RecordOwnership {
