@@ -144,7 +144,8 @@ func (s *Syncer) Sync(ctx context.Context, ref GatewayRef) (SyncResult, error) {
 // is sent; when Octopus can't be reached it wraps ErrUnavailable and the
 // applied generation stays where it was. Either way State is "pending".
 // Otherwise State is "failed": what Octopus refused is in the gateway's
-// RouteErrors and State.Error, and everything else is applied.
+// RouteErrors and State.Error, and everything else is applied. When Octopus
+// answered throughout, the generation is recorded as applied all the same.
 func (s *Syncer) SyncWith(ctx context.Context, ref GatewayRef, open ChannelOpener, secret SecretReader) (SyncResult, error) {
 	var res SyncResult
 	var syncErr error
@@ -350,11 +351,14 @@ func (s *Syncer) finish(ctx context.Context, g *Gateway, run *syncRun) (SyncResu
 		state.Registrations = nil
 	}
 	res := SyncResult{State: SyncApplied, Generation: g.Generation, Restarted: run.restarted, Restored: run.restored}
+	// Octopus answered throughout, so the generation is applied even when it
+	// refused part of it: what it refused is in RouteErrors and State.Error,
+	// and the reconcile pushes it again every 30 seconds whatever the
+	// generation. Keeping the old one would leave every other route pending.
 	applied := g.Generation
 	var err error
 	switch {
 	case run.rejected > 0 || len(run.problems) > 0:
-		applied = g.AppliedGeneration
 		res.State = SyncFailed
 		res.Message = msgProblem
 		switch {

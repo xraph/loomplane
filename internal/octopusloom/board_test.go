@@ -202,6 +202,27 @@ func TestBoardRouteSyncPrefersRouteErrors(t *testing.T) {
 	}
 }
 
+func TestBoardOneRouteFailedTheOthersApplied(t *testing.T) {
+	// A sync that reached Octopus and had one route refused records the
+	// generation as applied, so only that route shows the failure.
+	in := mockBoard(t)
+	in.Gateway.Generation, in.Gateway.AppliedGeneration = 5, 5
+	in.Gateway.State.Error = "Octopus didn't accept one of this gateway's routes. The route says why."
+	in.Gateway.State.RouteErrors = map[string]string{"octoroute_auth": "Octopus already has its own route for /auth/* on api.acme.dev (manual-1)."}
+	b := BuildBoard(in)
+	if auth := rowAt(t, card(t, b, "api.acme.dev"), "/auth/*", "here"); auth.Sync != "failed" {
+		t.Fatalf("auth row %+v", auth)
+	}
+	for _, host := range []string{"acme.dev", "*.acme.dev"} {
+		if r := rowAt(t, card(t, b, host), "/", "here"); r.Sync != "applied" || r.SyncError != "" {
+			t.Fatalf("%s row %+v", host, r)
+		}
+	}
+	if b.Gateway.SyncError != in.Gateway.State.Error || b.Gateway.AppliedGeneration != b.Gateway.Generation {
+		t.Fatalf("gateway %+v", b.Gateway)
+	}
+}
+
 func TestBoardFarpRoutesWithNoHostnamesLandOnAnyHostCard(t *testing.T) {
 	in := mockBoard(t)
 	in.Gateway.FarpHostnames = nil

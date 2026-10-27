@@ -391,11 +391,37 @@ func TestSyncReportsOctopusRouteConflict(t *testing.T) {
 	if _, ok := f.octo.routes["lp-octoroute_b"]; !ok {
 		t.Fatal("the login route wasn't applied")
 	}
-	if g.AppliedGeneration == g.Generation {
-		t.Fatal("a failed sync recorded the generation as applied")
+	// Octopus answered throughout, so the generation is applied: the login
+	// route isn't left pending behind the auth route's conflict.
+	if g.AppliedGeneration != g.Generation {
+		t.Fatalf("applied generation = %d, want %d", g.AppliedGeneration, g.Generation)
 	}
 	if g.State.Error == "" {
 		t.Fatal("no State.Error for a failed sync")
+	}
+	if res.Message != "Octopus didn't accept one of this gateway's routes. The route says why." {
+		t.Fatalf("message = %q", res.Message)
+	}
+}
+
+func TestSyncThatOctopusRefusedAPartOfStillAppliesTheRest(t *testing.T) {
+	f := newSyncFixture(t, authRoute())
+	f.octo.binding = []string{}
+	f.octo.status["PUT /admin/api/farp/binding"] = http.StatusBadRequest
+
+	res, err := f.sync()
+	if err == nil || res.State != SyncFailed {
+		t.Fatalf("result = %+v, %v; want failed with an error", res, err)
+	}
+	g := f.store.saved()
+	if g.AppliedGeneration != g.Generation {
+		t.Fatalf("applied generation = %d, want %d", g.AppliedGeneration, g.Generation)
+	}
+	if !strings.Contains(g.State.Error, "Octopus didn't take the FARP hostnames") {
+		t.Fatalf("State.Error = %q", g.State.Error)
+	}
+	if len(g.State.RouteErrors) != 0 {
+		t.Fatalf("RouteErrors = %v", g.State.RouteErrors)
 	}
 }
 

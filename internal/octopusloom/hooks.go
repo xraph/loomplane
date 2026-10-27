@@ -129,9 +129,9 @@ func (h *Hooks) Files(ctx context.Context, run deployments.ComponentRun) (map[st
 // Ready implements deployments.CatalogHooks. Once the gateway answers it
 // pushes the routes and upstreams over the deploy's own channel, with the
 // deploy's own secrets. Octopus not taking all of it doesn't fail the
-// deploy: it's logged, the generation stays unapplied and the reconcile
-// pushes it within 30 seconds. On a first deploy that's always so, since
-// the gateway's binding is written after Ready. Only Loomplane failing on
+// deploy: it's logged and the reconcile pushes it again within 30
+// seconds. On a first deploy the push always waits for the reconcile,
+// since the gateway's binding is written after Ready. Only Loomplane failing on
 // its side, such as reading the store or the secrets, is an error.
 func (h *Hooks) Ready(ctx context.Context, run deployments.ComponentRun) error {
 	if run.Component.Name != recipes.OctopusGateway {
