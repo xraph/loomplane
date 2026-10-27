@@ -26,16 +26,24 @@ const (
 
 // Step statuses. A step is pending until its turn, then works through
 // building, deploying and verifying to succeeded, or stops at failed.
-// Steps after a failure are skipped.
+// Steps after a failure are skipped. A step a canary ramps is ramping once
+// its candidate is up: the ramp decides whether it succeeds or fails.
 const (
 	StepPending   = "pending"
 	StepBuilding  = "building"
 	StepDeploying = "deploying"
 	StepVerifying = "verifying"
+	StepRamping   = "ramping"
 	StepSucceeded = "succeeded"
 	StepFailed    = "failed"
 	StepSkipped   = "skipped"
 )
+
+// retried reports whether a retry runs a step in this status again: it
+// failed, never ran, or was ramping when the deployment failed.
+func retried(status string) bool {
+	return status == StepFailed || status == StepSkipped || status == StepRamping
+}
 
 // Errors.
 var (
@@ -59,6 +67,9 @@ type Deployment struct {
 	Status           string        `json:"status"`
 	CapacityWait     *CapacityWait `json:"capacity_wait,omitempty"`
 	CapacityRevision int64         `json:"-"`
+	// Canary is the deployment's canary release, nil when it deploys all
+	// at once.
+	Canary *Canary `json:"canary,omitempty"`
 	// Sources are the repositories the deployment moves, in alias order,
 	// each with its tarball once stored.
 	Sources []SourceArtifact `json:"sources"`
@@ -158,9 +169,10 @@ type Store interface {
 	UpdateStep(ctx context.Context, orgID, id string, s Step) error
 	// Finish settles a running deployment.
 	Finish(ctx context.Context, orgID, id, status, reason string, at time.Time) error
-	// Reopen sets a failed deployment running again, with its failed and
-	// skipped steps pending. It returns false, with no error, when the
-	// deployment isn't failed, such as when another retry won.
+	// Reopen sets a failed deployment running again, with its failed,
+	// skipped and ramping steps pending and its canary, if any, back before
+	// its first step. It returns false, with no error, when the deployment
+	// isn't failed, such as when another retry won.
 	Reopen(ctx context.Context, orgID, id string) (bool, error)
 }
 

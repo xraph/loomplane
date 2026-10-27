@@ -61,8 +61,8 @@ func (s *PgStore) finishActivity(ctx context.Context, org, id, key, status, reas
 	defer func() { err = rollback(tx, err) }()
 	var current, plan string
 	var generation int
-	var raw []byte
-	if scanErr := tx.QueryRow(ctx, `SELECT status,retries,steps,plan_id FROM loomplane_deployments WHERE org_id=$1 AND id=$2 FOR UPDATE`, org, id).Scan(&current, &generation, &raw, &plan); scanErr != nil {
+	var raw, canaryRaw []byte
+	if scanErr := tx.QueryRow(ctx, `SELECT status,retries,steps,plan_id,canary FROM loomplane_deployments WHERE org_id=$1 AND id=$2 FOR UPDATE`, org, id).Scan(&current, &generation, &raw, &plan, &canaryRaw); scanErr != nil {
 		return scanErr
 	}
 	if stale, sharedErr := staleSharedFinalization(ctx, tx, org, id, true); sharedErr != nil {
@@ -88,17 +88,19 @@ func (s *PgStore) finishActivity(ctx context.Context, org, id, key, status, reas
 			return decodeErr
 		}
 		if status == StatusFailed {
-			for i := range steps {
-				if steps[i].Status == StepPending {
-					steps[i].Status, steps[i].Message = StepSkipped, "Skipped after an earlier step failed"
-				}
+			// The canary settles from the steps before they're marked, in
+			// this fenced transaction, so a replayed or stale finish never
+			// settles a canary that a retry reopened.
+			if canaryRaw, err = settleFinishedCanary(canaryRaw, steps, reason, at); err != nil {
+				return err
 			}
+			failFinishedSteps(steps, reason, at)
 		}
 		raw, err = encodeSteps(steps)
 		if err != nil {
 			return err
 		}
-		if _, err = tx.Exec(ctx, `UPDATE loomplane_deployments SET status=$3,error=$4,finished_at=$5,steps=$6 WHERE org_id=$1 AND id=$2`, org, id, status, reason, at, raw); err != nil {
+		if _, err = tx.Exec(ctx, `UPDATE loomplane_deployments SET status=$3,error=$4,finished_at=$5,steps=$6,canary=$7 WHERE org_id=$1 AND id=$2`, org, id, status, reason, at, raw, canaryRaw); err != nil {
 			return err
 		}
 	}
@@ -128,4 +130,21 @@ func staleFinalization(ctx context.Context, d *Deployment) (bool, error) {
 		return false, errors.New("deployment finalization is ahead of the admitted retry")
 	}
 	return expected < d.Retries, nil
+}
+
+// settleFinishedCanary settles the stored canary of a deployment that
+// failed with reason, from its steps before they're marked, and returns
+// it encoded again. A deployment without a canary, or one whose canary has
+// settled, keeps what it has.
+func settleFinishedCanary(raw []byte, steps []Step, reason string, at time.Time) ([]byte, error) {
+	c, err := decodeCanary(raw)
+	if err != nil {
+		return nil, err
+	}
+	d := &Deployment{Steps: steps, Canary: c}
+	if !settleFailedCanary(d, reason, false) {
+		return raw, nil
+	}
+	d.Canary.UpdatedAt = at
+	return encodeCanary(d.Canary)
 }

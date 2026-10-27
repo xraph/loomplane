@@ -458,6 +458,8 @@ type AppProperties struct {
 
 // Configuration is how an app is reached and what it may read.
 type Configuration struct {
+	// ActiveRevisionsMode is SingleRevision, or MultipleRevisions while a
+	// canary splits the traffic.
 	ActiveRevisionsMode string        `json:"activeRevisionsMode,omitempty"`
 	Ingress             *Ingress      `json:"ingress,omitempty"`
 	Registries          []AppRegistry `json:"registries,omitempty"`
@@ -470,6 +472,9 @@ type Ingress struct {
 	External   bool   `json:"external"`
 	TargetPort int    `json:"targetPort"`
 	Transport  string `json:"transport,omitempty"`
+	// Traffic is how the app's traffic is split between its revisions.
+	// Only multiple revisions mode may name a revision.
+	Traffic []TrafficWeight `json:"traffic,omitempty"`
 	// Read only.
 	FQDN string `json:"fqdn,omitempty"`
 }
@@ -484,10 +489,14 @@ type AppRegistry struct {
 	PasswordSecretRef string `json:"passwordSecretRef,omitempty"`
 }
 
-// Secret is an app secret. Azure never returns its value.
+// Secret is an app secret. Azure returns its value only when it's
+// listed (ListSecrets). One kept in Key Vault has its URL and the
+// identity that reads it instead.
 type Secret struct {
-	Name  string `json:"name"`
-	Value string `json:"value,omitempty"`
+	Name        string `json:"name"`
+	Value       string `json:"value,omitempty"`
+	KeyVaultURL string `json:"keyVaultUrl,omitempty"`
+	Identity    string `json:"identity,omitempty"`
 }
 
 // Template is an app's revision template.

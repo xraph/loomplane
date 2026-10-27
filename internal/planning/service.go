@@ -765,6 +765,12 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 	}
 	if resolutionErr == nil && poolRelocation(bindings, placements) {
 		result = appliedCloudPlan(bindings, assignment, "", options, s.providers, placements, routes)
+		planRelease(Input{Environment: plan.Environment, Manifest: resolved, Providers: s.providers}, result)
+	}
+	// Asked before anything is reserved, so a store that can't tell fails
+	// the plan with nothing to undo.
+	if rampErr := s.rampingCanary(ctx, plan, result); rampErr != nil {
+		return nil, "", rampErr
 	}
 	if routeErr = s.reserveRoutedPlacements(ctx, plan, result, bindings); routeErr != nil {
 		result.Problems = append(result.Problems, Finding{Code: "route-capacity", Message: routeErr.Error()})
@@ -1056,7 +1062,7 @@ func (s *Service) ApplyDecision(ctx context.Context, orgID, planID string, d orc
 	if checkErr := s.checkBackupDecision(ctx, plan, d); checkErr != nil {
 		return "", checkErr
 	}
-	_, revision, err := s.compute(ctx, plan)
+	result, revision, err := s.compute(ctx, plan)
 	if permanent(err) {
 		return s.settleAs(ctx, plan, StatusStale, d.By, "What the plan was made from is gone: "+err.Error(), now)
 	}
@@ -1064,7 +1070,16 @@ func (s *Service) ApplyDecision(ctx context.Context, orgID, planID string, d orc
 		return "", err
 	}
 	if revision != plan.Revision {
-		return s.settleAs(ctx, plan, StatusStale, d.By, "What's deployed changed after this plan was made. Plan again.", now)
+		note := "What's deployed changed after this plan was made. Plan again."
+		// A canary ramping since says so: planning again is blocked until
+		// it finishes.
+		for _, f := range result.Problems {
+			if f.Code == codeCanaryInProgress {
+				note = f.Message
+				break
+			}
+		}
+		return s.settleAs(ctx, plan, StatusStale, d.By, note, now)
 	}
 	if d.Actor != nil {
 		if d.Actor.OrgID != orgID || d.Actor.UserID != d.By || d.Actor.ReadOnly {

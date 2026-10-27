@@ -110,12 +110,14 @@ func TestCapacityWorkflowPostgresReplay(t *testing.T) {
 	}
 	workflows.Bind(workflowPlanner{}, runner, func() *engine.Engine { return eng })
 	workflows.BindRunStore(orchestration.NewPgRunStore(f.db))
-	options := workflows.CapacityOptions("capacity", 1)
+	// A new plan starts on the current build, which waits for capacity as
+	// v3 does.
+	options := workflows.CanaryOptions("capacity", 1)
 	worker, err := drt.NewWorker(ds, options)
 	if err != nil {
 		t.Fatal(err)
 	}
-	workflows.BindCapacityWorker(worker)
+	workflows.BindWorker(orchestration.CurrentBuild, worker)
 	if err = workflows.Start(t.Context(), "org", plan.ID, time.Hour); err != nil {
 		t.Fatal(err)
 	}
@@ -130,7 +132,7 @@ func TestCapacityWorkflowPostgresReplay(t *testing.T) {
 	}
 	identity := dep.ID
 	route, err := orchestration.NewPgRunStore(f.db).ForDeployment(t.Context(), "org", identity)
-	if err != nil || route.Request.BuildID != orchestration.CapacityBuild {
+	if err != nil || route.Request.BuildID != orchestration.CurrentBuild {
 		t.Fatalf("route: %+v %v", route, err)
 	}
 	if _, err = orchestration.NewPgRunStore(f.db).ForDeployment(t.Context(), "other", identity); err == nil {
@@ -140,7 +142,7 @@ func TestCapacityWorkflowPostgresReplay(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	workflows.BindCapacityWorker(worker)
+	workflows.BindWorker(orchestration.CurrentBuild, worker)
 	capacity.ready = true
 	for range 2 {
 		if err = workflows.SignalCapacity(t.Context(), "org", identity, dep.CapacityRevision); err != nil {

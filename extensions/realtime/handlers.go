@@ -49,7 +49,7 @@ func permission(event string) security.Permission {
 	switch strings.SplitN(event, ".", 2)[0] {
 	case "environment":
 		return security.EnvironmentRead
-	case "plan", "deployment", "build", "cloud_sync":
+	case "plan", "deployment", "build", "cloud_sync", "canary_verdict":
 		return security.DeploymentRead
 	case "binding":
 		return security.InfrastructureRead
@@ -93,7 +93,9 @@ func (e *Extension) filter(ctx context.Context, p security.Principal, sub Subscr
 		if event.ProjectID != "" && len(sub.ProjectIDs) != 0 && !slices.Contains(sub.ProjectIDs, event.ProjectID) {
 			continue
 		}
-		if strings.HasPrefix(event.Type, "build.") {
+		// Build output and canary verdicts reach a subscription that names
+		// their deployment, like the logs they sit beside.
+		if strings.HasPrefix(event.Type, "build.") || strings.HasPrefix(event.Type, "canary_verdict.") {
 			var ref struct {
 				DeploymentID string `json:"deployment_id"`
 			}

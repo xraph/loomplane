@@ -356,11 +356,7 @@ func releaseSourceRows(orgID string, r *DeployedRelease, at time.Time) (values s
 
 // FinishPlanning implements Store.
 func (s *PgStore) FinishPlanning(ctx context.Context, p *Plan) (bool, error) {
-	result, err := json.Marshal(Result{
-		CloudSyncID: p.CloudSyncID,
-		Actions:     p.Actions, Problems: p.Problems, Warnings: p.Warnings, Summary: p.Summary, Executable: p.Executable,
-		Connections: p.Connections, Leftovers: p.Leftovers, Artifacts: p.Artifacts,
-	})
+	result, err := json.Marshal(p.result())
 	if err != nil {
 		return false, fmt.Errorf("encode plan: %w", err)
 	}
@@ -372,6 +368,33 @@ func (s *PgStore) FinishPlanning(ctx context.Context, p *Plan) (bool, error) {
 		return false, fmt.Errorf("store plan: %w", err)
 	}
 	return affected(tag)
+}
+
+// ActiveCanaryStatuses are the statuses of a deployment's canary that still
+// hold its environment: nothing else may deploy there until it settles.
+// deployments names each one; this is the one list of which are active.
+func ActiveCanaryStatuses() []string {
+	return []string{"pending", "ramping", "promoting", "reverting"}
+}
+
+// RampingCanary returns the running or paused deployment whose canary still
+// holds the environment, the newest when there are several, or "" when none
+// does. Paused counts, as it does for the environment guard: a deployment
+// paused for capacity may have a candidate up. A plan made meanwhile is
+// blocked, so two deployments never move one service's traffic at once.
+// deployments.PgStore reads it through here.
+func (s *PgStore) RampingCanary(ctx context.Context, orgID, environmentID string) (string, error) {
+	var id string
+	err := s.db.QueryRow(ctx, `SELECT id FROM loomplane_deployments
+		WHERE org_id = $1 AND environment_id = $2 AND status IN ('running', 'paused') AND canary->>'status' = ANY($3::text[])
+		ORDER BY started_at DESC, id DESC LIMIT 1`, orgID, environmentID, ActiveCanaryStatuses()).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("find ramping canary: %w", err)
+	}
+	return id, nil
 }
 
 // FailPlanning implements Store.
@@ -447,6 +470,19 @@ func (s *PgStore) ListBindings(ctx context.Context, orgID, environmentID string)
 		return nil, fmt.Errorf("list bindings: %w", err)
 	}
 	return out, nil
+}
+
+// GetBinding returns one binding of the organization, or ErrNotFound.
+func (s *PgStore) GetBinding(ctx context.Context, orgID, id string) (*Binding, error) {
+	b, err := scanBinding(s.db.QueryRow(ctx, `SELECT `+bindingColumns+` FROM loomplane_bindings
+		WHERE org_id = $1 AND id = $2`, orgID, id))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get binding: %w", err)
+	}
+	return b, nil
 }
 
 func scanBinding(row pgx.Row) (*Binding, error) {

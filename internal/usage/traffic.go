@@ -52,8 +52,9 @@ type TrafficReport struct {
 	Sources  []Source         `json:"sources"`
 }
 
-// noTraffic says why a provider's services can't report.
-var noTraffic = map[string]string{
+// NoTraffic says why a provider's services can't report. The release health
+// reader shares it.
+var NoTraffic = map[string]string{
 	"server":     "Services on your own servers report to your own monitoring, which Loomplane doesn't read.",
 	"kubernetes": "Services on your own clusters report to your own monitoring, which Loomplane doesn't read.",
 }
@@ -185,7 +186,7 @@ func (s *Service) measureBoth(ctx context.Context, c *connections.Connection, b 
 		m.err = metrics.Unavailablef("The connection that deployed %s is gone.", b.Name)
 		return m
 	case meter == nil:
-		reason := noTraffic[b.Provider]
+		reason := NoTraffic[b.Provider]
 		if reason == "" {
 			reason = s.Title(b.Provider) + " doesn't report requests or latency through an API Loomplane reads."
 		}

@@ -41,6 +41,25 @@ A failed deployment retries from the step that failed, with the plan that was ap
 
 If a step fails because a connection lost a permission, fix the permission, check the connection again, then retry.
 
+## When a canary rolls back
+
+In an environment with a [canary](/docs/concepts/canary-releases), each service that ramps deploys a candidate that takes no traffic. Once every action has run, the deployment moves traffic to the candidates in the release's steps, holds each step, and judges it against the baseline from the cloud's own metrics. Nobody approves the steps, since you already approved the plan. If every step passes, the candidates become what runs and the deployment finishes.
+
+When a step fails, or the deployment can't go on, the canary rolls itself back. Loomplane moves all traffic back to the baseline and removes each candidate, and the deployment fails with one of these errors:
+
+| The error starts with | Why |
+|---|---|
+| `The canary failed at 25%:` | A service's health at that step was outside the release's thresholds. The rest of the error names the service and the number. |
+| `The canary couldn't be judged at 5% after 4 holds:` | The cloud didn't report enough to judge, such as too few requests or no metrics at all. An inconclusive step holds again up to three more times before it gives up. |
+| `Traffic couldn't move to 50%:` | Moving traffic at that step failed, for example because the cloud refused the change. |
+| An action's own error | Something failed before the ramp started. Candidates already up, still taking no traffic, are removed too. |
+
+The bindings never changed, so the environment runs exactly what it ran before, and `loomctl deployment <deployment-id>` shows each step's verdict. A retry ramps from the first step again and judges fresh traffic.
+
+Sometimes the revert itself fails. Loomplane tries it again every minute for an hour, and then the error ends with `Traffic may still be split:` and the cloud's last error. The canary shows `revert_failed`. Check the service's traffic in the cloud's console before you retry, because part of it may still reach the candidate.
+
+Cancelling a deployment's wait for capacity, or stopping its workflow, reverts the candidates too, and a revert that keeps failing there ends as `revert_failed` the same way. If every step had already passed, stopping the workflow finishes the promotion instead. Either way the canary stops holding the environment, so you can plan again.
+
 ## When something moves
 
 Replaced services and resources leave an old copy behind until the new one is up. Loomplane records what's still to remove on the binding, not the deployment, so a failed removal isn't lost if you plan again instead of retrying. Every plan warns about what's on that list. Any later deployment of the same service or resource tries again after its own work, and a failure there adds a warning without blocking the deployment.

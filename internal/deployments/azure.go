@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"maps"
 	"path"
+	"regexp"
 	"slices"
 	"strconv"
 	"strings"
@@ -104,71 +105,54 @@ func (a *Azure) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 	if err != nil {
 		return nil, err
 	}
-	var state azureState
-	if len(job.Resume) > 0 {
-		_ = json.Unmarshal(job.Resume, &state) //nolint:errcheck // an unreadable checkpoint starts over
-	}
-	save := func() {
-		data, _ := json.Marshal(state) //nolint:errcheck // a plain struct always encodes
-		_ = job.Checkpoint(data)       //nolint:errcheck // the next heartbeat retries it
-	}
-	status := StepBuilding
-	ctx = progress.With(ctx, func(m string) {
-		job.Progress(status, m)
-		save()
-	})
-	location := job.Action.Region
-	if location == "" {
-		location = azureRegion
-	}
-
-	job.Progress(StepBuilding, "Setting up the resource group and container registry")
-	if rerr := s.EnsureRegistered(ctx); rerr != nil {
-		return nil, rerr
-	}
-	if gerr := s.EnsureGroup(ctx, location); gerr != nil {
-		return nil, fmt.Errorf("make resource group %s: %w", s.Credential().ResourceGroup, gerr)
-	}
-	reg, err := s.EnsureRegistry(ctx, location)
+	ctx, r, err := a.prepare(ctx, s, job, cfg)
 	if err != nil {
 		return nil, err
 	}
-	mode, err := s.PullMode(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("read whether apps may pull with an identity: %w", err)
-	}
-	pull := azurePull{Server: reg.Properties.LoginServer}
-	// One wait covers both the grant and the first pulls after it.
-	deadline := time.Now().Add(azurePullWait)
-	if mode == azure.PullModeIdentity {
-		// The role propagates while the build runs.
-		if pull.Identity, err = a.pullIdentity(ctx, s, job, location, reg.ID, deadline); err != nil {
-			return nil, err
-		}
-	}
-	if state.Image == "" {
-		if state.Image = reusedImage(job); state.Image == "" {
-			if state.Image, err = a.build(ctx, s, job, cfg, &state, save); err != nil {
-				return nil, err
-			}
-		}
-		save()
-	}
-
-	status = StepDeploying
-	job.Progress(StepDeploying, "Setting up the Container Apps environment in "+location)
-	env, err := s.EnsureEnvironment(ctx, location)
-	if err != nil {
-		return nil, err
-	}
-	if pull.Identity == "" {
-		if pull.Login, err = s.RegistryLogin(ctx); err != nil {
-			return nil, fmt.Errorf("read the container registry's login: %w", err)
-		}
-	}
-	app := azureApp(job, cfg, location, env.ID, pull, state.Image)
+	// The latest revision gets all of the traffic, said outright, in
+	// single revision mode.
+	app := azureApp(job, cfg, r.location, r.env.ID, r.pull, r.state.Image, azure.SingleRevision, azure.Latest())
 	name := a.appName(s, job)
-	job.Progress(StepDeploying, "Deploying "+state.Image)
+	live, err := s.GetApp(ctx, s.AppPath(name))
+	switch {
+	case azure.IsNotFound(err):
+		live = nil
+	case err != nil:
+		return nil, err
+	}
+	// A canary may have left the app in multiple revisions mode with its
+	// traffic pinned. The new revision starts beside what serves, with the
+	// traffic as it is, and only takes it once it's ready, so a revision
+	// that's inactive, or failed its canary, never serves in between and
+	// a deploy that fails leaves the traffic where it was.
+	multiple := live != nil && app.Properties.Configuration.Ingress != nil && live.Properties.Configuration.Ingress != nil &&
+		strings.EqualFold(live.Properties.Configuration.ActiveRevisionsMode, azure.MultipleRevisions)
+	if multiple {
+		app.Properties.Configuration.ActiveRevisionsMode = azure.MultipleRevisions
+		app.Properties.Configuration.Ingress.Traffic = slices.Clone(live.Properties.Configuration.Ingress.Traffic)
+		// A new suffix always makes a revision, so the one that takes over
+		// is this deploy's own.
+		app.Properties.Template.RevisionSuffix = azureDeploySuffix()
+	}
+	// The PUT replaces all of the app's secrets. What it would drop shows
+	// from the app alone, and usually that's nothing.
+	prune := false
+	if live != nil {
+		appID := cmp.Or(live.ID, s.AppPath(name))
+		switch dropped := azureDroppable(live, app); {
+		case len(dropped) == 0:
+		case azureCanaryLeftovers(live):
+			// An earlier canary left a revision that may still read secrets
+			// of its own, so they're kept until nothing active does.
+			if kerr := azureKeepSecrets(ctx, s, appID, &app); kerr != nil {
+				return nil, azureLeftoverRefusal(job, name, kerr)
+			}
+			prune = true
+		default:
+			job.Progress(StepDeploying, "This release no longer sets "+strings.Join(dropped, ", ")+", so the deploy removes those secrets from the container app")
+		}
+	}
+	job.Progress(StepDeploying, "Deploying "+r.state.Image)
 	// An app can't pull with a new identity until its role propagates, so
 	// an app that couldn't pull is tried again, whether Azure refused the
 	// PUT, failed the app or failed its revision. Container Apps only
@@ -178,21 +162,293 @@ func (a *Azure) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 		if attempt > 1 {
 			app.Properties.Template.RevisionSuffix = azureRetrySuffix(attempt)
 		}
-		live, derr := azureDeployApp(ctx, s, job, name, app, &state, save)
+		deployed, derr := azureDeployApp(ctx, s, job, name, app, &r.state, r.save)
 		if derr == nil {
-			return &Outcome{ExternalID: state.AppID, URL: s.URL(live), Image: state.Image, Revision: state.Image}, nil
+			if multiple {
+				if terr := azureTakeOver(ctx, s, r.state.AppID, deployed.Properties.LatestRevisionName); terr != nil {
+					return nil, azureLeftoverRefusal(job, name, terr)
+				}
+			}
+			if prune {
+				azurePruneNote(ctx, s, job, r.state.AppID)
+			}
+			return &Outcome{ExternalID: r.state.AppID, URL: s.URL(deployed), Image: r.state.Image, Revision: r.state.Image}, nil
 		}
 		var pe *azure.PullError
-		if pull.Identity == "" || !errors.As(derr, &pe) {
+		if r.pull.Identity == "" || !errors.As(derr, &pe) {
 			return nil, derr
 		}
-		if time.Now().Add(azurePullRetry).After(deadline) {
+		if time.Now().Add(azurePullRetry).After(r.deadline) {
 			return nil, fmt.Errorf("%w. The pull identity may need a few more minutes before it can pull from the container registry, so retry the deployment", derr)
 		}
 		job.Progress(StepDeploying, "Waiting for the pull identity's role to reach the container registry")
 		if serr := azureSleep(ctx, azurePullRetry); serr != nil {
 			return nil, serr
 		}
+	}
+}
+
+// azureRelease is what an action deploys on Azure once its image is
+// built: where, how its app pulls, and the image, in the checkpoint that
+// keeps it for a retry.
+type azureRelease struct {
+	location string
+	env      *azure.Environment
+	pull     azurePull
+	// deadline bounds waiting for a new pull identity, the grant and the
+	// first pulls after it together.
+	deadline time.Time
+	state    azureState
+	save     func()
+}
+
+// prepare sets up what an action's app needs, the resource group, the
+// container registry, the pull identity and the Container Apps
+// environment, and builds the image with a.build, the one build step,
+// unless the checkpoint has it already or the action reuses an earlier
+// build. Apply and ApplyCandidate both
+// start here. The context it returns shows progress as the action's.
+func (a *Azure) prepare(ctx context.Context, s *azure.Session, job *Job, cfg *planning.ServiceConfig) (context.Context, *azureRelease, error) {
+	r := &azureRelease{location: cmp.Or(job.Action.Region, azureRegion)}
+	if len(job.Resume) > 0 {
+		_ = json.Unmarshal(job.Resume, &r.state) //nolint:errcheck // an unreadable checkpoint starts over
+	}
+	r.save = func() {
+		data, _ := json.Marshal(r.state) //nolint:errcheck // a plain struct always encodes
+		_ = job.Checkpoint(data)         //nolint:errcheck // the next heartbeat retries it
+	}
+	status := StepBuilding
+	ctx = progress.With(ctx, func(m string) {
+		job.Progress(status, m)
+		r.save()
+	})
+
+	job.Progress(StepBuilding, "Setting up the resource group and container registry")
+	if rerr := s.EnsureRegistered(ctx); rerr != nil {
+		return nil, nil, rerr
+	}
+	if gerr := s.EnsureGroup(ctx, r.location); gerr != nil {
+		return nil, nil, fmt.Errorf("make resource group %s: %w", s.Credential().ResourceGroup, gerr)
+	}
+	reg, err := s.EnsureRegistry(ctx, r.location)
+	if err != nil {
+		return nil, nil, err
+	}
+	mode, err := s.PullMode(ctx)
+	if err != nil {
+		return nil, nil, fmt.Errorf("read whether apps may pull with an identity: %w", err)
+	}
+	r.pull = azurePull{Server: reg.Properties.LoginServer}
+	// One wait covers both the grant and the first pulls after it.
+	r.deadline = time.Now().Add(azurePullWait)
+	if mode == azure.PullModeIdentity {
+		// The role propagates while the build runs.
+		if r.pull.Identity, err = a.pullIdentity(ctx, s, job, r.location, reg.ID, r.deadline); err != nil {
+			return nil, nil, err
+		}
+	}
+	if r.state.Image == "" {
+		if r.state.Image = reusedImage(job); r.state.Image == "" {
+			image, berr := a.build(ctx, s, job, cfg, &r.state, r.save)
+			if berr != nil {
+				return nil, nil, berr
+			}
+			r.state.Image = image
+		}
+		r.save()
+	}
+
+	status = StepDeploying
+	job.Progress(StepDeploying, "Setting up the Container Apps environment in "+r.location)
+	if r.env, err = s.EnsureEnvironment(ctx, r.location); err != nil {
+		return nil, nil, err
+	}
+	if r.pull.Identity == "" {
+		if r.pull.Login, err = s.RegistryLogin(ctx); err != nil {
+			return nil, nil, fmt.Errorf("read the container registry's login: %w", err)
+		}
+	}
+	return ctx, r, nil
+}
+
+// azureTakeOver gives a new revision, ready beside what served in multiple
+// revisions mode, all of the traffic, then puts the app back in single
+// revision mode. A revision that isn't active and ready gets none, and
+// the traffic is left as it is.
+func azureTakeOver(ctx context.Context, s *azure.Session, appID, revision string) error {
+	rev, err := s.GetRevision(ctx, appID, revision)
+	if err != nil {
+		return fmt.Errorf("read whether revision %s can take the traffic: %w", revision, azureDeny(azureRevisionsRead, err))
+	}
+	if !rev.Up() {
+		return fmt.Errorf("revision %s can't take the traffic (%s), so the traffic was left as it is", revision, rev.Why())
+	}
+	if err := s.SetTraffic(ctx, appID, azure.MultipleRevisions, []azure.TrafficWeight{{RevisionName: revision, Weight: 100}}); err != nil {
+		return fmt.Errorf("give revision %s all of the traffic: %w", revision, err)
+	}
+	if err := s.SetTraffic(ctx, appID, azure.SingleRevision, azure.Latest()); err != nil {
+		return fmt.Errorf("revision %s has all of the traffic, but the app couldn't go back to single revision mode: %w", revision, err)
+	}
+	return nil
+}
+
+// What keeping a canary's leftovers takes.
+const (
+	azureRevisionsRead = "Microsoft.App/containerApps/revisions/read"
+	azureListSecrets   = "Microsoft.App/containerApps/listSecrets/action" //nolint:gosec // G101: an Azure action name, not a credential
+)
+
+// azureLeftoverSecretRE matches the name of a canary candidate's own
+// secret: the variable's, then the candidate's revision suffix.
+var azureLeftoverSecretRE = regexp.MustCompile(`-c[0-9a-f]{8}-\d+(-\d+)?$`)
+
+// azureDeploySuffix is a new revision suffix for a deploy in multiple
+// revisions mode.
+func azureDeploySuffix() string {
+	return "d" + strconv.FormatInt(time.Now().UnixMilli(), 36)
+}
+
+// azureDroppable are the secrets on the app that a PUT of release would
+// drop: those it has that release doesn't set.
+func azureDroppable(live *azure.App, release azure.App) []string {
+	var out []string
+	for _, sec := range live.Properties.Configuration.Secrets {
+		if !slices.ContainsFunc(release.Properties.Configuration.Secrets, func(r azure.Secret) bool { return r.Name == sec.Name }) {
+			out = append(out, sec.Name)
+		}
+	}
+	slices.Sort(out)
+	return out
+}
+
+// azureCanaryLeftovers reports whether an earlier canary left something on
+// the app: multiple revisions mode, or a candidate's own secrets.
+func azureCanaryLeftovers(live *azure.App) bool {
+	if strings.EqualFold(live.Properties.Configuration.ActiveRevisionsMode, azure.MultipleRevisions) {
+		return true
+	}
+	return slices.ContainsFunc(live.Properties.Configuration.Secrets, func(sec azure.Secret) bool { return azureLeftoverSecretRE.MatchString(sec.Name) })
+}
+
+// azureDeniedError is a call Azure refused because the principal may not make
+// it, with the action it takes.
+type azureDeniedError struct {
+	action string
+	err    error
+}
+
+func (e *azureDeniedError) Error() string { return e.err.Error() }
+func (e *azureDeniedError) Unwrap() error { return e.err }
+
+// azureDeny is err, marked with the action it takes when Azure refused it
+// for want of that action.
+func azureDeny(action string, err error) error {
+	if azure.IsForbidden(err) {
+		return &azureDeniedError{action: action, err: err}
+	}
+	return err
+}
+
+// azureLeftoverRefusal is why a deploy can't go ahead over what an
+// earlier canary left. When the principal may not read what it has to,
+// it says which action that takes.
+func azureLeftoverRefusal(job *Job, app string, err error) error {
+	var denied *azureDeniedError
+	if !errors.As(err, &denied) {
+		return err
+	}
+	conn := "the connection"
+	if job.Connection != nil && job.Connection.Name != "" {
+		conn = job.Connection.Name
+	}
+	return fmt.Errorf("%s can't deploy: an earlier canary left container app %s with revisions or secrets of its own, which this deploy would break unless it reads them first, and the service principal of %s isn't allowed %s. Grant it and check the connection again under Integrations: %w",
+		job.Action.Name, app, conn, denied.action, err)
+}
+
+// azureKeepSecrets adds to app each secret an active revision of the app
+// at appID reads that app doesn't set, with its value as Azure lists it.
+// A PUT replaces all of an app's secrets, so without them a revision that
+// still runs, such as one a canary promoted, which reads secrets of its
+// own, couldn't start a replica.
+func azureKeepSecrets(ctx context.Context, s *azure.Session, appID string, app *azure.App) error {
+	active, err := s.ActiveRevisions(ctx, appID)
+	if err != nil {
+		return azureDeny(azureRevisionsRead, err)
+	}
+	read := map[string]bool{}
+	for _, rev := range active {
+		for _, name := range rev.SecretsRead() {
+			read[name] = true
+		}
+	}
+	for _, sec := range app.Properties.Configuration.Secrets {
+		delete(read, sec.Name)
+	}
+	if len(read) == 0 {
+		return nil
+	}
+	listed, err := s.ListSecrets(ctx, appID)
+	if err != nil {
+		return azureDeny(azureListSecrets, err)
+	}
+	for _, sec := range listed {
+		if !read[sec.Name] {
+			continue
+		}
+		if sec.Value == "" && sec.KeyVaultURL == "" {
+			return fmt.Errorf("azure lists secret %s with no value, so it can't be kept", sec.Name)
+		}
+		app.Properties.Configuration.Secrets = append(app.Properties.Configuration.Secrets, sec)
+		delete(read, sec.Name)
+	}
+	if len(read) > 0 {
+		return fmt.Errorf("azure doesn't list the secrets running revisions read: %s", strings.Join(slices.Sorted(maps.Keys(read)), ", "))
+	}
+	return nil
+}
+
+// azurePruneSecrets drops the app's secrets nothing reads any more: no
+// active revision's variables and no registry login.
+func azurePruneSecrets(ctx context.Context, s *azure.Session, appID string) error {
+	active, err := s.ActiveRevisions(ctx, appID)
+	if err != nil {
+		return err
+	}
+	app, err := s.GetApp(ctx, appID)
+	if err != nil {
+		return err
+	}
+	read := map[string]bool{}
+	for _, rev := range active {
+		for _, name := range rev.SecretsRead() {
+			read[name] = true
+		}
+	}
+	for _, reg := range app.Properties.Configuration.Registries {
+		read[reg.PasswordSecretRef] = true
+	}
+	listed, err := s.ListSecrets(ctx, appID)
+	if err != nil {
+		return err
+	}
+	var keep []azure.Secret
+	for _, sec := range listed {
+		if read[sec.Name] {
+			keep = append(keep, sec)
+		}
+	}
+	if len(keep) == len(listed) {
+		return nil
+	}
+	return s.SetSecrets(ctx, appID, keep)
+}
+
+// azurePruneNote prunes the app's secrets once a deploy no longer needs
+// the ones it kept for revisions that ran before, and says so when it
+// can't. Whatever an active revision reads stays.
+func azurePruneNote(ctx context.Context, s *azure.Session, job *Job, appID string) {
+	if err := azurePruneSecrets(ctx, s, appID); err != nil {
+		job.Progress(StepDeploying, "Secrets nothing reads any more are left on the container app: "+err.Error())
 	}
 }
 
@@ -336,13 +592,13 @@ func (a *Azure) appName(s *azure.Session, job *Job) string {
 	return name
 }
 
-// azureApp is the container app a planned service runs as: public
-// services take traffic from anywhere, private ones only from apps in
-// their environment. Secret variables are app secrets, which Azure never
-// shows again, and so is the registry's password when the app pulls
-// with it.
-func azureApp(job *Job, cfg *planning.ServiceConfig, location, environment string, pull azurePull, image string) azure.App {
-	conf := azure.Configuration{ActiveRevisionsMode: "Single"}
+// azureApp is the container app a planned service runs as, in mode with
+// its traffic split as traffic says: public services take traffic from
+// anywhere, private ones only from apps in their environment. Secret
+// variables are app secrets, which Azure never shows again, and so is the
+// registry's password when the app pulls with it.
+func azureApp(job *Job, cfg *planning.ServiceConfig, location, environment string, pull azurePull, image, mode string, traffic []azure.TrafficWeight) azure.App {
+	conf := azure.Configuration{ActiveRevisionsMode: mode}
 	var identity *azure.ManagedIdentity
 	if pull.Identity != "" {
 		conf.Registries = []azure.AppRegistry{{Server: pull.Server, Identity: pull.Identity}}
@@ -351,17 +607,40 @@ func azureApp(job *Job, cfg *planning.ServiceConfig, location, environment strin
 		conf.Registries = []azure.AppRegistry{{Server: pull.Server, Username: pull.Login.Username, PasswordSecretRef: azureRegistrySecret}}
 		conf.Secrets = []azure.Secret{{Name: azureRegistrySecret, Value: pull.Login.Password}}
 	}
-	// A worker serves nothing, so it gets no ingress. A static site is the
-	// public web server in its image.
-	if cfg.Workload != provider.Worker {
-		port, external := cfg.Port, cfg.Public
-		if cfg.Workload == provider.StaticSite {
-			port, external = cmp.Or(port, azureStaticPort), true
-		}
-		if port > 0 {
-			conf.Ingress = &azure.Ingress{External: external, TargetPort: port, Transport: "auto"}
-		}
+	conf.Ingress = azureAppIngress(cfg, traffic)
+	t, secrets := azureTemplate(job, cfg, image)
+	conf.Secrets = append(conf.Secrets, secrets...)
+	return azure.App{
+		Location: location,
+		Tags:     map[string]string{"managed-by": "loomplane", "loomplane-project": job.Deployment.ProjectID, "loomplane-environment": job.Deployment.Environment},
+		Identity: identity,
+		Properties: azure.AppProperties{
+			EnvironmentID: environment, Configuration: conf, Template: t,
+		},
 	}
+}
+
+// azureAppIngress is how a planned service takes traffic, split as traffic
+// says, or nil: a worker serves nothing, so it gets no ingress, and a
+// static site is the public web server in its image.
+func azureAppIngress(cfg *planning.ServiceConfig, traffic []azure.TrafficWeight) *azure.Ingress {
+	if cfg.Workload == provider.Worker {
+		return nil
+	}
+	port, external := cfg.Port, cfg.Public
+	if cfg.Workload == provider.StaticSite {
+		port, external = cmp.Or(port, azureStaticPort), true
+	}
+	if port <= 0 {
+		return nil
+	}
+	return &azure.Ingress{External: external, TargetPort: port, Transport: "auto", Traffic: slices.Clone(traffic)}
+}
+
+// azureTemplate is the revision template a planned service runs as, and
+// the app secrets its secret variables read.
+func azureTemplate(job *Job, cfg *planning.ServiceConfig, image string) (azure.Template, []azure.Secret) {
+	var secrets []azure.Secret
 	c := azure.Container{Name: azureContainer, Image: image, Resources: azureResources(cfg.Size)}
 	for _, k := range slices.Sorted(maps.Keys(job.Env)) {
 		if !job.Secrets[k] {
@@ -369,7 +648,7 @@ func azureApp(job *Job, cfg *planning.ServiceConfig, location, environment strin
 			continue
 		}
 		secret := azureSecretName(k)
-		conf.Secrets = append(conf.Secrets, azure.Secret{Name: secret, Value: job.Env[k]})
+		secrets = append(secrets, azure.Secret{Name: secret, Value: job.Env[k]})
 		c.Env = append(c.Env, azure.EnvVar{Name: k, SecretRef: secret})
 	}
 	t := azure.Template{Containers: []azure.Container{c}}
@@ -384,14 +663,7 @@ func azureApp(job *Job, cfg *planning.ServiceConfig, location, environment strin
 	case cfg.Scale != nil:
 		t.Scale = &azure.Scale{MinReplicas: cfg.Scale.Min, MaxReplicas: cfg.Scale.Max}
 	}
-	return azure.App{
-		Location: location,
-		Tags:     map[string]string{"managed-by": "loomplane", "loomplane-project": job.Deployment.ProjectID, "loomplane-environment": job.Deployment.Environment},
-		Identity: identity,
-		Properties: azure.AppProperties{
-			EnvironmentID: environment, Configuration: conf, Template: t,
-		},
-	}
+	return t, secrets
 }
 
 // azureSecretName is the app secret a variable is kept in: lower case

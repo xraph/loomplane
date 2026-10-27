@@ -188,7 +188,9 @@ func Compute(in Input) *Result {
 	p.planDeletes()
 	p.refuseRoutedDeletes()
 	p.stillReplaced()
-	return p.finish()
+	r := p.finish()
+	planRelease(in, r)
+	return r
 }
 
 type planner struct {

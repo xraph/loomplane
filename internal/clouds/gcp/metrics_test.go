@@ -31,6 +31,8 @@ func TestServiceMetricsReadsRequestsAndP95(t *testing.T) {
 		}
 		q := r.URL.Query()
 		switch {
+		case strings.HasSuffix(q.Get("filter"), `response_code_class="5xx"`):
+			w.Write([]byte(`{}`))
 		case strings.HasSuffix(q.Get("filter"), `metric.type="run.googleapis.com/request_count"`):
 			requests = append(requests, q)
 			if q.Get("pageToken") == "" {
@@ -93,6 +95,114 @@ func TestServiceMetricsReadsRequestsAndP95(t *testing.T) {
 	}
 	if m.Latency != 123.5 || m.Statistic != metrics.P95 {
 		t.Errorf("latency: %v %q", m.Latency, m.Statistic)
+	}
+}
+
+// revisionServer answers every timeSeries call, recording each query.
+func revisionServer(t *testing.T, calls *[]url.Values) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		q := r.URL.Query()
+		*calls = append(*calls, q)
+		switch f := q.Get("filter"); {
+		case strings.HasSuffix(f, `response_code_class="5xx"`):
+			w.Write([]byte(`{"timeSeries":[{"points":[
+				{"interval":{"endTime":"2026-10-24T01:30:00Z"},"value":{"int64Value":"4"}},
+				{"interval":{"endTime":"2026-10-24T01:00:00Z"},"value":{"int64Value":"1"}}
+			]}]}`))
+		case strings.HasSuffix(f, `request_count"`):
+			w.Write([]byte(`{"timeSeries":[{"points":[{"interval":{"endTime":"2026-10-24T01:30:00Z"},"value":{"int64Value":"50"}}]}]}`))
+		default:
+			w.Write([]byte(`{"timeSeries":[{"points":[{"interval":{"endTime":"2026-10-24T01:30:00Z"},"value":{"doubleValue":80}}]}]}`))
+		}
+	}))
+}
+
+func TestRevisionMetricsFiltersByRevision(t *testing.T) {
+	var calls []url.Values
+	srv := revisionServer(t, &calls)
+	defer srv.Close()
+	if _, err := metricsSession(srv).RevisionMetrics(context.Background(), "europe-west1", "api", "api-c1a2b3c4-0", metricsWindow); err != nil {
+		t.Fatal(err)
+	}
+	if len(calls) != 3 {
+		t.Fatalf("calls: %d", len(calls))
+	}
+	for _, q := range calls {
+		if !strings.Contains(q.Get("filter"), `resource.labels.revision_name="api-c1a2b3c4-0"`) {
+			t.Errorf("filter: %q", q.Get("filter"))
+		}
+	}
+}
+
+func TestRevisionMetricsCountsFiveHundreds(t *testing.T) {
+	var calls []url.Values
+	srv := revisionServer(t, &calls)
+	defer srv.Close()
+	m, err := metricsSession(srv).RevisionMetrics(context.Background(), "europe-west1", "api", "api-c1a2b3c4-0", metricsWindow)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found bool
+	for _, q := range calls {
+		if strings.HasSuffix(q.Get("filter"), `metric.type="run.googleapis.com/request_count" AND metric.labels.response_code_class="5xx"`) {
+			found = true
+			if q.Get("aggregation.crossSeriesReducer") != "REDUCE_SUM" || q.Get("aggregation.alignmentPeriod") != "1800s" {
+				t.Errorf("5xx query: %v", q)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("no 5xx call: %v", calls)
+	}
+	want := []metrics.Point{
+		{T: time.Date(2026, 10, 24, 0, 30, 0, 0, time.UTC), V: 1},
+		{T: time.Date(2026, 10, 24, 1, 0, 0, 0, time.UTC), V: 4},
+	}
+	if !m.ErrorsCounted || len(m.Errors) != len(want) {
+		t.Fatalf("errors: %+v counted %v", m.Errors, m.ErrorsCounted)
+	}
+	for i, p := range m.Errors {
+		if !p.T.Equal(want[i].T) || p.V != want[i].V {
+			t.Errorf("error %d: %+v, want %+v", i, p, want[i])
+		}
+	}
+}
+
+func TestServiceMetricsHasNoRevisionFilter(t *testing.T) {
+	var calls []url.Values
+	srv := revisionServer(t, &calls)
+	defer srv.Close()
+	m, err := metricsSession(srv).RevisionMetrics(context.Background(), "europe-west1", "api", "", metricsWindow)
+	if err != nil || !m.ErrorsCounted {
+		t.Fatalf("%+v %v", m, err)
+	}
+	for _, q := range calls {
+		if strings.Contains(q.Get("filter"), "revision_name") {
+			t.Errorf("filter: %q", q.Get("filter"))
+		}
+	}
+}
+
+func TestRevisionMetricsOneMinuteAlignment(t *testing.T) {
+	var calls []url.Values
+	srv := revisionServer(t, &calls)
+	defer srv.Close()
+	w, err := metrics.ShortWindow(time.Date(2026, 10, 24, 0, 0, 0, 0, time.UTC), time.Date(2026, 10, 24, 0, 10, 0, 0, time.UTC))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := metricsSession(srv).RevisionMetrics(context.Background(), "europe-west1", "api", "api-1", w); err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range calls {
+		want := "60s"
+		if strings.Contains(q.Get("filter"), "request_latencies") {
+			want = "600s"
+		}
+		if got := q.Get("aggregation.alignmentPeriod"); got != want {
+			t.Errorf("%q aligned to %s, want %s", q.Get("filter"), got, want)
+		}
 	}
 }
 

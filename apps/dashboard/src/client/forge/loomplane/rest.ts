@@ -1324,6 +1324,22 @@ export class RESTClient extends Client {
 
   public readonly deployments = {
     /**
+     * The deployment's canary: where traffic is and every step's verdict
+     */
+    canary: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CanaryReport> => {
+      let __path = `/api/v1/deployments/${encodeURIComponent(String(id))}/canary`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CanaryReport"],
+      };
+
+      return this.request<types.CanaryReport>(config);
+    },
+
+    /**
      */
     cleanup: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.FailedCleanup> => {
       let __path = `/api/v1/deployments/${encodeURIComponent(String(id))}/cleanup`;

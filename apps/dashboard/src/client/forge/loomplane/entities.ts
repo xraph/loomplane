@@ -12,6 +12,8 @@ export const entities = {
   'BackupList': { fields: { 'backups': 'Backup' } },
   'Binding': { idField: 'id' },
   'BindingList': { fields: { 'bindings': 'Binding' } },
+  'CanaryReport': { fields: { 'verdicts': 'CanaryVerdict' } },
+  'CanaryVerdict': { idField: 'id' },
   'CatalogconnectEndpoint': { idField: 'id' },
   'CloudCompensation': { fields: { 'candidate': 'Binding', 'routes': 'CloudinfraRoute', 'source': 'Binding' } },
   'CloudSyncEvent': { idField: 'id' },

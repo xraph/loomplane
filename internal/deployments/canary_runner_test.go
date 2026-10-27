@@ -1,0 +1,1124 @@
+package deployments
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"reflect"
+	"slices"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/xraph/loomplane/internal/connections"
+	"github.com/xraph/loomplane/internal/orchestration"
+	"github.com/xraph/loomplane/internal/planning"
+	"github.com/xraph/loomplane/internal/releasehealth"
+)
+
+// weighted is a Weighted executor that records each canary call as
+// "<op> <service>[ <weight>]", and applies everything else as recorder
+// does.
+type weighted struct {
+	recorder
+	cmu       sync.Mutex
+	calls     []string
+	jobs      []*Job
+	revertErr error
+	// promoteFail and revertFail fail those calls for a service.
+	promoteFail map[string]error
+	revertFail  map[string]error
+	// onApply and onWeigh run inside ApplyCandidate and SetWeights, as
+	// a revert racing them would.
+	onApply func(job *Job)
+	onWeigh func(job *Job)
+}
+
+func (w *weighted) record(job *Job, call string) {
+	w.cmu.Lock()
+	defer w.cmu.Unlock()
+	w.calls = append(w.calls, call)
+	w.jobs = append(w.jobs, job)
+}
+
+func (w *weighted) log() []string {
+	w.cmu.Lock()
+	defer w.cmu.Unlock()
+	return slices.Clone(w.calls)
+}
+
+func (w *weighted) ApplyCandidate(_ context.Context, job *Job) (*CanaryTarget, error) {
+	name := job.Action.Name
+	w.record(job, "candidate "+name)
+	if w.onApply != nil {
+		w.onApply(job)
+	}
+	return &CanaryTarget{Baseline: name + "-00001", Candidate: name + "-00002", Image: "img:" + name + "-new",
+		Refs: map[string]string{"service": "loomplane-" + name}}, nil
+}
+
+func (w *weighted) SetWeights(_ context.Context, job *Job, t CanaryTarget, percent int) error {
+	w.record(job, fmt.Sprintf("weigh %s %s %d", job.Action.Name, t.Candidate, percent))
+	if w.onWeigh != nil {
+		w.onWeigh(job)
+	}
+	return nil
+}
+
+func (w *weighted) Promote(_ context.Context, job *Job, t CanaryTarget) (*Outcome, error) {
+	w.record(job, "promote "+job.Action.Name)
+	w.cmu.Lock()
+	err := w.promoteFail[job.Action.Name]
+	w.cmu.Unlock()
+	if err != nil {
+		return nil, err
+	}
+	return &Outcome{ExternalID: "ext-" + job.Action.Name, URL: "https://" + job.Action.Name + ".example", Image: t.Image, Revision: t.Image}, nil
+}
+
+func (w *weighted) Revert(_ context.Context, job *Job, t CanaryTarget) error {
+	w.record(job, "revert "+job.Action.Name+" "+t.Baseline)
+	w.cmu.Lock()
+	defer w.cmu.Unlock()
+	if err := w.revertFail[job.Action.Name]; err != nil {
+		return err
+	}
+	return w.revertErr
+}
+
+var _ Weighted = (*weighted)(nil)
+
+// canaryPlan updates api, which ramps, and the resource db, which doesn't.
+func canaryPlan() *planning.Plan {
+	return &planning.Plan{
+		ID: "plan_1", OrgID: "org_1", ProjectID: "proj_1", EnvironmentID: "env_1", Environment: "production",
+		Status: planning.StatusApproved, Executable: true,
+		Sources: []planning.PlanSource{{SourceID: "src_1", Alias: "mono", Repository: "acme/mono", AnalysisID: "anl_1",
+			CommitSHA: strings.Repeat("a", 40), InScope: true}},
+		Connections: map[string]string{"gcp": "conn_g"},
+		Release: &planning.Release{Strategy: "canary", Steps: []int{5, 25, 50, 100}, HoldSeconds: 600,
+			Thresholds: releasehealth.DefaultThresholds(), Canary: []string{"service:api"}},
+		Actions: []planning.Action{
+			{ID: "resource:db", Op: planning.Update, Subject: planning.ResourceSubject, Name: "db", Provider: "cloud-run", Step: 1,
+				Resource: &planning.ResourceConfig{}},
+			{ID: "service:api", Op: planning.Update, Subject: planning.ServiceSubject, Name: "api", Provider: "cloud-run", Step: 2,
+				Service: &planning.ServiceConfig{Provider: "cloud-run", Service: "svc:go:services/api", Public: true}},
+		},
+	}
+}
+
+// withWeb adds web, which ramps too, after api.
+func withWeb(plan *planning.Plan) *planning.Plan {
+	plan.Actions = append(plan.Actions, planning.Action{ID: "service:web", Op: planning.Update, Subject: planning.ServiceSubject,
+		Name: "web", Provider: "cloud-run", Step: 3,
+		Service: &planning.ServiceConfig{Provider: "cloud-run", Service: "svc:go:services/web", Public: true}})
+	plan.Release.Canary = append(plan.Release.Canary, "service:web")
+	return plan
+}
+
+// deployed binds each of the plan's actions as an earlier deployment left
+// them.
+func deployed(plans *fakePlans, plan *planning.Plan) {
+	for _, a := range plan.Actions {
+		plans.bindings[a.ID] = &planning.Binding{ID: "bind_" + a.Name, OrgID: plan.OrgID, ProjectID: plan.ProjectID,
+			EnvironmentID: plan.EnvironmentID, Subject: a.Subject, Name: a.Name, Provider: a.Provider, ConnectionID: "conn_g",
+			ExternalID: "ext-" + a.Name, URL: "https://" + a.Name + ".example", Revision: "img:" + a.Name + "-old", Config: json.RawMessage(`{}`)}
+	}
+}
+
+func newCanaryRunner(t *testing.T, plan *planning.Plan) (*Runner, *memStore, *fakePlans, *weighted) {
+	t.Helper()
+	exec := &weighted{recorder: recorder{url: answering(t, http.StatusOK)}}
+	r, store, plans := newRunner(t, plan, exec, nil)
+	deployed(plans, plan)
+	return r, store, plans, exec
+}
+
+// startCanary starts a deployment as a canary workflow does, and runs its
+// actions until one fails.
+func startCanary(t *testing.T, r *Runner, plan *planning.Plan) (string, error) {
+	t.Helper()
+	ctx := orchestration.CanaryContext(t.Context())
+	id, steps, err := r.Start(ctx, plan.OrgID, plan.ID)
+	if err != nil || id == "" {
+		t.Fatalf("start: %q %v", id, err)
+	}
+	if err = r.FetchSource(ctx, plan.OrgID, id); err != nil {
+		t.Fatal(err)
+	}
+	for _, group := range steps {
+		for _, action := range group {
+			if err = r.Run(ctx, plan.OrgID, id, action, nil, func([]byte) error { return nil }); err != nil {
+				return id, err
+			}
+		}
+	}
+	return id, nil
+}
+
+func getDeployment(t *testing.T, store *memStore, id string) *Deployment {
+	t.Helper()
+	d, err := store.GetDeployment(t.Context(), "org_1", id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return d
+}
+
+func TestStartRecordsTheCanary(t *testing.T) {
+	plan := canaryPlan()
+	r, store, _, _ := newCanaryRunner(t, plan)
+	id, _, err := r.Start(orchestration.CanaryContext(t.Context()), plan.OrgID, plan.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := getDeployment(t, store, id).Canary
+	if c == nil {
+		t.Fatal("no canary recorded")
+	}
+	if !c.UpdatedAt.Equal(store.d[id].StartedAt) {
+		t.Fatalf("updated at %v, want the start %v", c.UpdatedAt, store.d[id].StartedAt)
+	}
+	c.UpdatedAt = time.Time{}
+	want := &Canary{Status: CanaryPending, Steps: []int{5, 25, 50, 100}, HoldSeconds: 600, Thresholds: releasehealth.DefaultThresholds(),
+		Step: -1, Weight: 0, Services: []CanaryService{{ActionID: "service:api", Name: "api", Provider: "cloud-run", BindingID: "bind_api"}}}
+	if !reflect.DeepEqual(c, want) {
+		t.Fatalf("canary\n%+v\nwant\n%+v", c, want)
+	}
+
+	t.Run("without a release", func(t *testing.T) {
+		plan := canaryPlan()
+		plan.Release = nil
+		r, store, _, _ := newCanaryRunner(t, plan)
+		id, _, err := r.Start(orchestration.CanaryContext(t.Context()), plan.OrgID, plan.ID)
+		if err != nil || getDeployment(t, store, id).Canary != nil {
+			t.Fatalf("canary %+v, %v", store.d[id].Canary, err)
+		}
+	})
+	t.Run("with nothing that ramps", func(t *testing.T) {
+		plan := canaryPlan()
+		plan.Release.Canary = nil
+		r, store, _, _ := newCanaryRunner(t, plan)
+		id, _, err := r.Start(orchestration.CanaryContext(t.Context()), plan.OrgID, plan.ID)
+		if err != nil || getDeployment(t, store, id).Canary != nil {
+			t.Fatalf("canary %+v, %v", store.d[id].Canary, err)
+		}
+	})
+	t.Run("on a build that doesn't ramp", func(t *testing.T) {
+		plan := canaryPlan()
+		r, store, _, _ := newCanaryRunner(t, plan)
+		id, _, err := r.Start(t.Context(), plan.OrgID, plan.ID)
+		if err != nil || getDeployment(t, store, id).Canary != nil {
+			t.Fatalf("canary %+v, %v", store.d[id].Canary, err)
+		}
+	})
+}
+
+func TestRunDeploysTheCandidateDark(t *testing.T) {
+	plan := canaryPlan()
+	r, store, plans, exec := newCanaryRunner(t, plan)
+	before := *plans.bindings["service:api"]
+	id, err := startCanary(t, r, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := exec.log(); !slices.Equal(got, []string{"candidate api"}) {
+		t.Fatalf("canary calls %v", got)
+	}
+	for _, job := range exec.jobs {
+		if job.Action.Name == "api" && (job.Binding == nil || job.Binding.ID != "bind_api") {
+			t.Fatalf("the candidate's job names binding %+v", job.Binding)
+		}
+	}
+	for _, job := range exec.recorder.jobs {
+		if job.Action.Name == "api" {
+			t.Fatal("Apply deployed api all at once")
+		}
+	}
+	if got := *plans.bindings["service:api"]; !reflect.DeepEqual(got, before) {
+		t.Fatalf("binding changed:\n%+v\nwas\n%+v", got, before)
+	}
+	d := getDeployment(t, store, id)
+	step := d.Step("service:api")
+	if step.Status != StepRamping || step.Message != "The candidate is up and takes no traffic yet" {
+		t.Fatalf("step %s %q", step.Status, step.Message)
+	}
+	svc := d.Canary.Services[0]
+	if svc.Baseline != "api-00001" || svc.Candidate != "api-00002" || svc.Image != "img:api-new" || svc.Refs["service"] != "loomplane-api" {
+		t.Fatalf("canary service %+v", svc)
+	}
+	if d.Canary.Status != CanaryPending {
+		t.Fatalf("canary status %s before the ramp", d.Canary.Status)
+	}
+}
+
+func TestRunAgainOnARampingStepDoesNothing(t *testing.T) {
+	plan := canaryPlan()
+	r, store, _, exec := newCanaryRunner(t, plan)
+	id, err := startCanary(t, r, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	calls := len(exec.log())
+	if err = r.Run(orchestration.CanaryContext(t.Context()), plan.OrgID, id, "service:api", nil, func([]byte) error { return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if len(exec.log()) != calls {
+		t.Fatalf("a second run called the executor: %v", exec.log())
+	}
+	if s := getDeployment(t, store, id).Step("service:api"); s.Status != StepRamping {
+		t.Fatalf("step %s", s.Status)
+	}
+}
+
+func TestNonCanaryActionsDeployAsToday(t *testing.T) {
+	plan := canaryPlan()
+	r, store, plans, exec := newCanaryRunner(t, plan)
+	id, err := startCanary(t, r, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	applied := make([]string, 0, len(exec.recorder.jobs))
+	for _, job := range exec.recorder.jobs {
+		applied = append(applied, job.Action.Name)
+	}
+	if !slices.Equal(applied, []string{"db"}) {
+		t.Fatalf("applied %v, want db", applied)
+	}
+	if s := getDeployment(t, store, id).Step("resource:db"); s.Status != StepSucceeded {
+		t.Fatalf("db step %s", s.Status)
+	}
+	if b := plans.bindings["resource:db"]; b.PlanID != plan.ID {
+		t.Fatalf("db wasn't bound by the plan: %+v", b)
+	}
+}
+
+func TestWeighMovesEveryCanaryService(t *testing.T) {
+	plan := withWeb(canaryPlan())
+	r, store, _, exec := newCanaryRunner(t, plan)
+	at := time.Date(2026, 10, 25, 10, 0, 0, 0, time.UTC)
+	r.now = func() time.Time { return at }
+	id, err := startCanary(t, r, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	applied, err := r.CanaryWeigh(t.Context(), plan.OrgID, id, 1, 25)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !applied.Equal(at) {
+		t.Fatalf("applied at %v, want %v", applied, at)
+	}
+	want := []string{"candidate api", "candidate web", "weigh api api-00002 25", "weigh web web-00002 25"}
+	if got := exec.log(); !slices.Equal(got, want) {
+		t.Fatalf("calls %v, want %v", got, want)
+	}
+	for _, job := range exec.jobs[2:] {
+		if job.Connection == nil || job.Connection.ID != "conn_g" || string(job.Credential) != "secret-conn_g" || job.Binding == nil {
+			t.Fatalf("weigh job without its connection or binding: %+v", job)
+		}
+	}
+	c := getDeployment(t, store, id).Canary
+	if c.Status != CanaryRamping || c.Step != 1 || c.Weight != 25 || !c.UpdatedAt.Equal(at) {
+		t.Fatalf("canary %+v", c)
+	}
+}
+
+func TestPromoteBindsTheCandidate(t *testing.T) {
+	plan := canaryPlan()
+	r, store, plans, exec := newCanaryRunner(t, plan)
+	observed := &releaseLog{}
+	r.observers = []ReleaseObserver{observed}
+	id, err := startCanary(t, r, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = r.CanaryWeigh(t.Context(), plan.OrgID, id, 0, 5); err != nil {
+		t.Fatal(err)
+	}
+	if err = r.CanaryPromote(t.Context(), plan.OrgID, id); err != nil {
+		t.Fatal(err)
+	}
+	b := plans.bindings["service:api"]
+	if b.Revision != "img:api-new" || b.ID != "bind_api" || b.PlanID != plan.ID {
+		t.Fatalf("binding %+v", b)
+	}
+	if rel := observed.all(); len(rel) != 1 || rel[0].Binding.Name != "api" || rel[0].Removed {
+		t.Fatalf("observers heard %+v", rel)
+	}
+	d := getDeployment(t, store, id)
+	if s := d.Step("service:api"); s.Status != StepSucceeded || s.Image != "img:api-new" || s.FinishedAt == nil {
+		t.Fatalf("step %+v", s)
+	}
+	if d.Canary.Status != CanaryPromoted {
+		t.Fatalf("canary %s", d.Canary.Status)
+	}
+	calls := exec.log()
+	if err = r.CanaryPromote(t.Context(), plan.OrgID, id); err != nil {
+		t.Fatal(err)
+	}
+	if got := exec.log(); !slices.Equal(got, calls) || len(observed.all()) != 1 {
+		t.Fatalf("a second promote did something: %v", got)
+	}
+	if err = r.Finish(t.Context(), plan.OrgID, id, ""); err != nil {
+		t.Fatal(err)
+	}
+	if d = getDeployment(t, store, id); d.Status != StatusSucceeded || d.Canary.Status != CanaryPromoted {
+		t.Fatalf("finished %s, canary %s", d.Status, d.Canary.Status)
+	}
+}
+
+func TestRevertRestoresTheBaseline(t *testing.T) {
+	plan := withWeb(canaryPlan())
+	r, store, plans, exec := newCanaryRunner(t, plan)
+	before := map[string]planning.Binding{"api": *plans.bindings["service:api"], "web": *plans.bindings["service:web"]}
+	id, err := startCanary(t, r, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = r.CanaryWeigh(t.Context(), plan.OrgID, id, 1, 25); err != nil {
+		t.Fatal(err)
+	}
+	reason := "The canary failed at 25%: web: 3.2% of requests failed"
+	if err = r.CanaryRevert(t.Context(), plan.OrgID, id, reason); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"weigh api api-00002 0", "revert api api-00001", "weigh web web-00002 0", "revert web web-00001"}
+	if got := exec.log()[4:]; !slices.Equal(got, want) {
+		t.Fatalf("calls %v, want %v", got, want)
+	}
+	for name, b := range before {
+		if got := *plans.bindings["service:"+name]; !reflect.DeepEqual(got, b) {
+			t.Fatalf("%s's binding changed: %+v", name, got)
+		}
+	}
+	d := getDeployment(t, store, id)
+	for _, action := range []string{"service:api", "service:web"} {
+		if s := d.Step(action); s.Status != StepFailed || s.Message != reason || s.FinishedAt == nil {
+			t.Fatalf("%s step %+v", action, s)
+		}
+	}
+	if d.Canary.Status != CanaryRolledBack || d.Canary.Reason != reason || d.Canary.Weight != 0 {
+		t.Fatalf("canary %+v", d.Canary)
+	}
+	calls := exec.log()
+	if err = r.CanaryRevert(t.Context(), plan.OrgID, id, reason); err != nil {
+		t.Fatal(err)
+	}
+	if got := exec.log(); !slices.Equal(got, calls) {
+		t.Fatalf("a second revert did something: %v", got[len(calls):])
+	}
+	if err = r.Finish(t.Context(), plan.OrgID, id, reason); err != nil {
+		t.Fatal(err)
+	}
+	if d = getDeployment(t, store, id); d.Status != StatusFailed || d.Canary.Status != CanaryRolledBack {
+		t.Fatalf("finished %s, canary %s", d.Status, d.Canary.Status)
+	}
+}
+
+func TestRevertBeforeEveryCandidateIsUp(t *testing.T) {
+	plan := withWeb(canaryPlan())
+	plan.Actions = slices.Insert(plan.Actions, 2, planning.Action{ID: "service:worker", Op: planning.Update, Subject: planning.ServiceSubject,
+		Name: "worker", Provider: "cloud-run", Step: 3, Service: &planning.ServiceConfig{Provider: "cloud-run", Service: "svc:go:services/worker"}})
+	plan.Actions[3].Step = 4
+	r, store, _, exec := newCanaryRunner(t, plan)
+	exec.fail = map[string]error{"worker": errors.New("the worker's image didn't build")}
+	id, err := startCanary(t, r, plan)
+	if err == nil {
+		t.Fatal("the worker deployed")
+	}
+	if err = r.CanaryRevert(t.Context(), plan.OrgID, id, err.Error()); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"candidate api", "weigh api api-00002 0", "revert api api-00001"}
+	if got := exec.log(); !slices.Equal(got, want) {
+		t.Fatalf("calls %v, want %v", got, want)
+	}
+	d := getDeployment(t, store, id)
+	if s := d.Step("service:api"); s.Status != StepFailed {
+		t.Fatalf("api step %s", s.Status)
+	}
+	if s := d.Step("service:web"); s.Status != StepSkipped {
+		t.Fatalf("web step %s", s.Status)
+	}
+	if d.Canary.Status != CanaryRolledBack {
+		t.Fatalf("canary %s", d.Canary.Status)
+	}
+}
+
+func TestRevertErrorLeavesStatusReverting(t *testing.T) {
+	plan := withWeb(canaryPlan())
+	r, store, _, exec := newCanaryRunner(t, plan)
+	id, err := startCanary(t, r, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = r.CanaryWeigh(t.Context(), plan.OrgID, id, 0, 5); err != nil {
+		t.Fatal(err)
+	}
+	exec.revertErr = errors.New("permission denied")
+	err = r.CanaryRevert(t.Context(), plan.OrgID, id, "The canary failed at 5%: api: too slow")
+	if err == nil || !strings.Contains(err.Error(), "api: permission denied") || !strings.Contains(err.Error(), "web: permission denied") {
+		t.Fatalf("revert error %v, want it to name api and web", err)
+	}
+	if c := getDeployment(t, store, id).Canary; c.Status != CanaryReverting {
+		t.Fatalf("canary %s", c.Status)
+	}
+	if err = r.Finish(t.Context(), plan.OrgID, id, "The canary failed at 5%: api: too slow. Traffic may still be split: "+err.Error()); err != nil {
+		t.Fatal(err)
+	}
+	d := getDeployment(t, store, id)
+	if d.Canary.Status != CanaryRevertFailed {
+		t.Fatalf("canary %s after finishing", d.Canary.Status)
+	}
+	calls := len(exec.log())
+	if err = r.CanaryRevert(t.Context(), plan.OrgID, id, "late"); err == nil || len(exec.log()) != calls {
+		t.Fatalf("a late revert of a failed one ran: %v, calls %v", err, exec.log()[calls:])
+	}
+	if c := getDeployment(t, store, id).Canary; c.Status != CanaryRevertFailed {
+		t.Fatalf("a late revert left the canary %s", c.Status)
+	}
+	for _, action := range []string{"service:api", "service:web"} {
+		if s := d.Step(action); s.Status != StepFailed {
+			t.Fatalf("%s step %s after finishing", action, s.Status)
+		}
+	}
+}
+
+func TestFinishFailsAPromotingCanary(t *testing.T) {
+	plan := canaryPlan()
+	r, store, _, _ := newCanaryRunner(t, plan)
+	id, err := startCanary(t, r, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := getDeployment(t, store, id).Canary
+	c.Status = CanaryPromoting
+	if err = store.SetCanary(t.Context(), plan.OrgID, id, c); err != nil {
+		t.Fatal(err)
+	}
+	if err = r.Finish(t.Context(), plan.OrgID, id, "Traffic may still be split: the cloud is down."); err != nil {
+		t.Fatal(err)
+	}
+	d := getDeployment(t, store, id)
+	if d.Canary.Status != CanaryPromoteFailed || d.Step("service:api").Status != StepFailed {
+		t.Fatalf("canary %s, step %s", d.Canary.Status, d.Step("service:api").Status)
+	}
+}
+
+func TestRampOfADeploymentWithoutACanaryIsEmpty(t *testing.T) {
+	plan := canaryPlan()
+	plan.Release = nil
+	r, _, _, _ := newCanaryRunner(t, plan)
+	id, err := startCanary(t, r, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ramp, err := r.CanaryRamp(t.Context(), plan.OrgID, id)
+	if err != nil || !reflect.DeepEqual(ramp, orchestration.CanaryRamp{}) {
+		t.Fatalf("ramp %+v, %v", ramp, err)
+	}
+}
+
+func TestRampCarriesTheControllerBounds(t *testing.T) {
+	plan := canaryPlan()
+	r, _, _, _ := newCanaryRunner(t, plan)
+	id, err := startCanary(t, r, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ramp, err := r.CanaryRamp(t.Context(), plan.OrgID, id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := orchestration.CanaryRamp{Steps: []int{5, 25, 50, 100}, Hold: 10 * time.Minute, Lag: releasehealth.MetricsLag, MaxInconclusive: releasehealth.MaxInconclusive}
+	if !reflect.DeepEqual(ramp, want) {
+		t.Fatalf("ramp %+v, want %+v", ramp, want)
+	}
+}
+
+// driftStore is a DriftStore of fixed bindings that records each drift.
+type driftStore struct {
+	bindings []*planning.Binding
+	recorded []string
+}
+
+func (s *driftStore) AllBindings(_ context.Context, after string, limit int) ([]*planning.Binding, error) {
+	var out []*planning.Binding
+	for _, b := range s.bindings {
+		if b.ID > after && len(out) < limit {
+			out = append(out, b)
+		}
+	}
+	return out, nil
+}
+
+func (s *driftStore) RecordDrift(_ context.Context, _, id, _, _ string, _ time.Time) error {
+	s.recorded = append(s.recorded, id)
+	return nil
+}
+
+// observed is an executor whose Observe records each binding it reads and
+// finds image "img:live".
+type observed struct {
+	recorder
+	seen []string
+}
+
+func (o *observed) Observe(_ context.Context, _ *connections.Connection, _ []byte, b *planning.Binding) (*Observation, error) {
+	o.seen = append(o.seen, b.ID)
+	return &Observation{Exists: true, Revision: "img:live"}, nil
+}
+
+type canaryBindings map[string]bool
+
+func (c canaryBindings) CanaryBinding(_ context.Context, _, id string) (bool, error) {
+	return c[id], nil
+}
+
+func TestDriftSkipsBindingsInARunningCanary(t *testing.T) {
+	store := &driftStore{bindings: []*planning.Binding{
+		{ID: "bind_api", OrgID: "org_1", Name: "api", Provider: "cloud-run", ConnectionID: "conn_g", Revision: "img:api"},
+		{ID: "bind_web", OrgID: "org_1", Name: "web", Provider: "cloud-run", ConnectionID: "conn_g", Revision: "img:web"},
+	}}
+	exec := &observed{}
+	c := &DriftChecker{Store: store, Credentials: fakeCredentials{}, Executors: map[string]Executor{"cloud-run": exec},
+		Canaries: canaryBindings{"bind_api": true}}
+	rep, err := c.Check(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if rep.Skipped != 1 || rep.Checked != 1 || rep.Drifted != 1 {
+		t.Fatalf("report %+v", rep)
+	}
+	if !slices.Equal(exec.seen, []string{"bind_web"}) || !slices.Equal(store.recorded, []string{"bind_web"}) {
+		t.Fatalf("observed %v, recorded %v", exec.seen, store.recorded)
+	}
+}
+
+func TestCanaryJobCarriesAttachAndSource(t *testing.T) {
+	plan := canaryPlan()
+	plan.Actions[1].Service.Env = []planning.EnvLink{{Key: "DATABASE_URL", From: "db", Subject: planning.ResourceSubject}}
+	exec := &weighted{recorder: recorder{url: answering(t, http.StatusOK)}}
+	r, _, plans := newRunner(t, plan, exec, fakeVariables{"svc:go:services/api": {"DATABASE_URL": "postgres://pinned"}})
+	deployed(plans, plan)
+	id, err := startCanary(t, r, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = r.CanaryWeigh(t.Context(), plan.OrgID, id, 0, 5); err != nil {
+		t.Fatal(err)
+	}
+	if err = r.CanaryRevert(t.Context(), plan.OrgID, id, "The canary failed at 5%: api: too slow"); err != nil {
+		t.Fatal(err)
+	}
+	if len(exec.jobs) != 4 {
+		t.Fatalf("canary calls %v", exec.log())
+	}
+	for i, job := range exec.jobs {
+		if len(job.Attach) != 1 || job.Attach[0].ID != "bind_db" {
+			t.Fatalf("%s attaches %+v", exec.calls[i], job.Attach)
+		}
+		if job.Env["DATABASE_URL"] != "postgres://pinned" || job.SourceID != strings.Repeat("a", 40) {
+			t.Fatalf("%s env %v, source %q", exec.calls[i], job.Env, job.SourceID)
+		}
+		src, _, err := job.Source(t.Context())
+		if err != nil {
+			t.Fatalf("%s can't open its source: %v", exec.calls[i], err)
+		}
+		_ = src.Close()
+	}
+}
+
+func TestPromoteResumesAfterAServiceFails(t *testing.T) {
+	plan := withWeb(canaryPlan())
+	r, store, plans, exec := newCanaryRunner(t, plan)
+	id, err := startCanary(t, r, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exec.promoteFail = map[string]error{"web": errors.New("the rollout stalled")}
+	if err = r.CanaryPromote(t.Context(), plan.OrgID, id); err == nil || !strings.HasPrefix(err.Error(), "web: ") {
+		t.Fatalf("promote error %v, want it to name web", err)
+	}
+	d := getDeployment(t, store, id)
+	if d.Canary.Status != CanaryPromoting || d.Step("service:api").Status != StepSucceeded || d.Step("service:web").Status != StepRamping {
+		t.Fatalf("canary %s, api %s, web %s", d.Canary.Status, d.Step("service:api").Status, d.Step("service:web").Status)
+	}
+	if plans.bindings["service:api"].Revision != "img:api-new" || plans.bindings["service:web"].Revision != "img:web-old" {
+		t.Fatal("bindings don't show api promoted and web not")
+	}
+	exec.promoteFail = nil
+	calls := len(exec.log())
+	if err = r.CanaryPromote(t.Context(), plan.OrgID, id); err != nil {
+		t.Fatal(err)
+	}
+	if got := exec.log()[calls:]; !slices.Equal(got, []string{"promote web"}) {
+		t.Fatalf("resumed promote called %v", got)
+	}
+	if d = getDeployment(t, store, id); d.Canary.Status != CanaryPromoted || plans.bindings["service:web"].Revision != "img:web-new" {
+		t.Fatalf("canary %s, web %+v", d.Canary.Status, plans.bindings["service:web"])
+	}
+}
+
+func TestWeighSkipsAServiceARetryAlreadyPromoted(t *testing.T) {
+	plan := withWeb(canaryPlan())
+	r, store, _, exec := newCanaryRunner(t, plan)
+	id, err := startCanary(t, r, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exec.promoteFail = map[string]error{"web": errors.New("the rollout stalled")}
+	err = r.CanaryPromote(t.Context(), plan.OrgID, id)
+	if err == nil {
+		t.Fatal("web promoted")
+	}
+	if err = r.Finish(t.Context(), plan.OrgID, id, "Traffic may still be split: "+err.Error()); err != nil {
+		t.Fatal(err)
+	}
+	if c := getDeployment(t, store, id).Canary; c.Status != CanaryPromoteFailed {
+		t.Fatalf("canary %s", c.Status)
+	}
+	if ok, rerr := store.Reopen(t.Context(), plan.OrgID, id); !ok || rerr != nil {
+		t.Fatalf("reopen %v %v", ok, rerr)
+	}
+	exec.promoteFail = nil
+	calls := len(exec.log())
+	ctx := orchestration.CanaryContext(t.Context())
+	for _, action := range []string{"resource:db", "service:api", "service:web"} {
+		if err = r.Run(ctx, plan.OrgID, id, action, nil, func([]byte) error { return nil }); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err = r.CanaryWeigh(t.Context(), plan.OrgID, id, 0, 5); err != nil {
+		t.Fatal(err)
+	}
+	if err = r.CanaryPromote(t.Context(), plan.OrgID, id); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"candidate web", "weigh web web-00002 5", "promote web"}
+	if got := exec.log()[calls:]; !slices.Equal(got, want) {
+		t.Fatalf("retry called %v, want %v", got, want)
+	}
+	if c := getDeployment(t, store, id).Canary; c.Status != CanaryPromoted {
+		t.Fatalf("canary %s", c.Status)
+	}
+}
+
+func TestWeighRefuses(t *testing.T) {
+	plan := canaryPlan()
+	r, _, _, exec := newCanaryRunner(t, plan)
+	id, err := startCanary(t, r, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = r.CanaryWeigh(t.Context(), plan.OrgID, id, 1, 5); err == nil {
+		t.Fatal("weighed step 1 at 5%, which the canary's steps don't have")
+	}
+	if _, err = r.CanaryWeigh(t.Context(), plan.OrgID, id, 4, 100); err == nil {
+		t.Fatal("weighed a step past the last")
+	}
+	if err = r.CanaryRevert(t.Context(), plan.OrgID, id, "reverted"); err != nil {
+		t.Fatal(err)
+	}
+	calls := len(exec.log())
+	if _, err = r.CanaryWeigh(t.Context(), plan.OrgID, id, 0, 5); err == nil || !strings.Contains(err.Error(), CanaryRolledBack) {
+		t.Fatalf("weighed a rolled back canary: %v", err)
+	}
+	if slices.ContainsFunc(exec.log(), func(c string) bool { return strings.HasPrefix(c, "weigh api api-00002 5") }) || len(exec.log()) != calls {
+		t.Fatalf("a refused weigh moved traffic: %v", exec.log())
+	}
+}
+
+func TestARampingServiceThatMovesIsRefused(t *testing.T) {
+	plan := canaryPlan()
+	r, store, plans, exec := newCanaryRunner(t, plan)
+	plans.bindings["service:api"].Region = "europe-west1"
+	_, err := startCanary(t, r, plan)
+	if err == nil || !strings.Contains(err.Error(), "api moves, so it can't ramp as a canary") {
+		t.Fatalf("run error %v", err)
+	}
+	if len(exec.log()) != 0 || plans.bindings["service:api"].Region != "europe-west1" {
+		t.Fatalf("a moving canary deployed: %v", exec.log())
+	}
+	for _, d := range store.d {
+		if s := d.Step("service:api"); s.Status != StepFailed {
+			t.Fatalf("api step %s", s.Status)
+		}
+	}
+}
+
+// A plan approved before plans refused it can still list the database
+// gateway as ramping. Its start is refused before anything records the
+// gateway or mints its keys, and nothing deploys.
+func TestTheDatabaseGatewayNeverRamps(t *testing.T) {
+	plan := canaryPlan()
+	plan.Actions[1].Service.DatabaseGateway = &planning.DatabaseGatewayConfig{Name: "api", Suffix: "europe-west1.db.example.com", Resources: []string{"db"}}
+	r, store, _, exec := newCanaryRunner(t, plan)
+	_, err := startCanary(t, r, plan)
+	if err == nil || !strings.Contains(err.Error(), "api can't run a canary: it's the environment's database gateway") || !strings.Contains(err.Error(), "direct or blue_green") {
+		t.Fatalf("run error %v", err)
+	}
+	if len(exec.log()) != 0 {
+		t.Fatalf("the database gateway deployed: %v", exec.log())
+	}
+	for _, d := range store.d {
+		if s := d.Step("service:api"); s.Status != StepFailed {
+			t.Fatalf("api step %s", s.Status)
+		}
+		if svc := d.Canary.service("service:api"); svc == nil || svc.Candidate != "" {
+			t.Fatalf("canary service %+v", svc)
+		}
+	}
+}
+
+func TestRevertRetriesOnlyWhatsStillUp(t *testing.T) {
+	plan := withWeb(canaryPlan())
+	r, store, _, exec := newCanaryRunner(t, plan)
+	id, err := startCanary(t, r, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = r.CanaryWeigh(t.Context(), plan.OrgID, id, 0, 5); err != nil {
+		t.Fatal(err)
+	}
+	exec.revertFail = map[string]error{"web": errors.New("quota exceeded")}
+	reason := "The canary failed at 5%: api: too slow"
+	err = r.CanaryRevert(t.Context(), plan.OrgID, id, reason)
+	if err == nil || err.Error() != "web: quota exceeded" {
+		t.Fatalf("revert error %v", err)
+	}
+	d := getDeployment(t, store, id)
+	if d.Canary.Status != CanaryReverting || d.Canary.Services[0].Candidate != "" || d.Canary.Services[1].Candidate == "" {
+		t.Fatalf("canary %+v", d.Canary)
+	}
+	if d.Step("service:api").Status != StepFailed || d.Step("service:web").Status != StepRamping {
+		t.Fatalf("api %s, web %s", d.Step("service:api").Status, d.Step("service:web").Status)
+	}
+	exec.cmu.Lock()
+	exec.revertFail = nil
+	exec.cmu.Unlock()
+	calls := len(exec.log())
+	if err = r.CanaryRevert(t.Context(), plan.OrgID, id, reason); err != nil {
+		t.Fatal(err)
+	}
+	if got := exec.log()[calls:]; !slices.Equal(got, []string{"weigh web web-00002 0", "revert web web-00001"}) {
+		t.Fatalf("retried revert called %v", got)
+	}
+	d = getDeployment(t, store, id)
+	if d.Canary.Status != CanaryRolledBack || d.Step("service:web").Status != StepFailed || d.Step("service:web").Message != reason {
+		t.Fatalf("canary %s, web %+v", d.Canary.Status, d.Step("service:web"))
+	}
+}
+
+func TestTwoCanaryServicesInOneStep(t *testing.T) {
+	plan := withWeb(canaryPlan())
+	plan.Actions[2].Step = 2
+	r, store, _, _ := newCanaryRunner(t, plan)
+	id, err := startCanary(t, r, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := getDeployment(t, store, id).Canary
+	for i, name := range []string{"api", "web"} {
+		if svc := c.Services[i]; svc.Name != name || svc.Candidate != name+"-00002" || svc.Image != "img:"+name+"-new" {
+			t.Fatalf("service %d %+v", i, svc)
+		}
+	}
+}
+
+func TestFinishSettlesACanaryInFlight(t *testing.T) {
+	t.Run("with a candidate up", func(t *testing.T) {
+		plan := canaryPlan()
+		r, store, _, _ := newCanaryRunner(t, plan)
+		id, err := startCanary(t, r, plan)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = r.Finish(t.Context(), plan.OrgID, id, "The workflow stopped"); err != nil {
+			t.Fatal(err)
+		}
+		d := getDeployment(t, store, id)
+		if d.Canary.Status != CanaryRevertFailed || d.Canary.Reason != "The workflow stopped" || d.Step("service:api").Status != StepFailed {
+			t.Fatalf("canary %+v, api %s", d.Canary, d.Step("service:api").Status)
+		}
+	})
+	t.Run("before any candidate", func(t *testing.T) {
+		plan := canaryPlan()
+		r, store, _, exec := newCanaryRunner(t, plan)
+		exec.fail = map[string]error{"db": errors.New("the database didn't resize")}
+		id, err := startCanary(t, r, plan)
+		if err == nil {
+			t.Fatal("db deployed")
+		}
+		if err = r.Finish(t.Context(), plan.OrgID, id, err.Error()); err != nil {
+			t.Fatal(err)
+		}
+		d := getDeployment(t, store, id)
+		if d.Canary.Status != CanaryRolledBack || d.Canary.Reason != "the database didn't resize" || d.Step("service:api").Status != StepSkipped {
+			t.Fatalf("canary %+v, api %s", d.Canary, d.Step("service:api").Status)
+		}
+	})
+}
+
+// settleTo stores status on a deployment's canary, as a revert that ran
+// meanwhile would.
+func settleTo(t *testing.T, store *memStore, id, status string) {
+	t.Helper()
+	c := getDeployment(t, store, id).Canary
+	c.Status = status
+	if err := store.SetCanary(t.Context(), "org_1", id, c); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAWeighInFlightDoesntUndoARevert(t *testing.T) {
+	plan := canaryPlan()
+	r, store, _, exec := newCanaryRunner(t, plan)
+	id, err := startCanary(t, r, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exec.onWeigh = func(*Job) { settleTo(t, store, id, CanaryRolledBack) }
+	if _, err = r.CanaryWeigh(t.Context(), plan.OrgID, id, 0, 5); err == nil || !strings.Contains(err.Error(), "rolled_back") {
+		t.Fatalf("weigh: %v", err)
+	}
+	if c := getDeployment(t, store, id).Canary; c.Status != CanaryRolledBack || c.Weight != 0 {
+		t.Fatalf("canary %s at %d%%", c.Status, c.Weight)
+	}
+}
+
+func TestACandidateUpAfterARevertIsRemoved(t *testing.T) {
+	for _, status := range []string{CanaryReverting, CanaryRolledBack} {
+		t.Run(status, func(t *testing.T) {
+			plan := canaryPlan()
+			r, store, _, exec := newCanaryRunner(t, plan)
+			exec.onApply = func(job *Job) { settleTo(t, store, job.Deployment.ID, status) }
+			id, err := startCanary(t, r, plan)
+			if err == nil || !strings.Contains(err.Error(), "candidate was removed") {
+				t.Fatalf("run: %v", err)
+			}
+			if !slices.Contains(exec.log(), "revert api api-00001") {
+				t.Fatalf("calls %q", exec.log())
+			}
+			c := getDeployment(t, store, id).Canary
+			if c.Status != status || c.service("service:api").Candidate != "" {
+				t.Fatalf("canary %s with candidate %q", c.Status, c.service("service:api").Candidate)
+			}
+		})
+	}
+	t.Run("when it can't be removed", func(t *testing.T) {
+		plan := canaryPlan()
+		r, store, _, exec := newCanaryRunner(t, plan)
+		exec.revertErr = errors.New("quota exceeded")
+		exec.onApply = func(job *Job) { settleTo(t, store, job.Deployment.ID, CanaryRolledBack) }
+		id, err := startCanary(t, r, plan)
+		if err == nil || !strings.Contains(err.Error(), "couldn't be removed") {
+			t.Fatalf("run: %v", err)
+		}
+		c := getDeployment(t, store, id).Canary
+		if c.Status != CanaryRevertFailed || c.service("service:api").Candidate != "api-00002" || !strings.Contains(c.Reason, "Traffic may still be split") {
+			t.Fatalf("canary %+v", c)
+		}
+	})
+}
+
+func TestCanarySettleGivesUpWhateverTheDeploymentsStatus(t *testing.T) {
+	reason := "The deployment was cancelled Traffic may still be split: api: quota exceeded."
+	t.Run("a revert", func(t *testing.T) {
+		plan := canaryPlan()
+		r, store, _, _ := newCanaryRunner(t, plan)
+		id, err := startCanary(t, r, plan)
+		if err != nil {
+			t.Fatal(err)
+		}
+		settleTo(t, store, id, CanaryReverting)
+		c := getDeployment(t, store, id).Canary
+		c.Reason = "The deployment was cancelled"
+		if err = store.SetCanary(t.Context(), plan.OrgID, id, c); err != nil {
+			t.Fatal(err)
+		}
+		if id2, _ := store.RampingCanary(t.Context(), plan.OrgID, plan.EnvironmentID); id2 != id {
+			t.Fatalf("a reverting canary should hold the environment, got %q", id2)
+		}
+		if err = r.CanarySettle(t.Context(), plan.OrgID, id, reason); err != nil {
+			t.Fatal(err)
+		}
+		c = getDeployment(t, store, id).Canary
+		if c.Status != CanaryRevertFailed || c.Reason != reason {
+			t.Fatalf("canary %s: %q", c.Status, c.Reason)
+		}
+		if held, _ := store.RampingCanary(t.Context(), plan.OrgID, plan.EnvironmentID); held != "" {
+			t.Fatalf("%s still holds the environment", held)
+		}
+		// Settling again changes nothing.
+		if err = r.CanarySettle(t.Context(), plan.OrgID, id, "again"); err != nil {
+			t.Fatal(err)
+		}
+		if c = getDeployment(t, store, id).Canary; c.Status != CanaryRevertFailed || c.Reason != reason {
+			t.Fatalf("canary %s: %q after a repeat", c.Status, c.Reason)
+		}
+	})
+	t.Run("a promotion, on a cancelled deployment", func(t *testing.T) {
+		plan := canaryPlan()
+		r, store, _, _ := newCanaryRunner(t, plan)
+		id, err := startCanary(t, r, plan)
+		if err != nil {
+			t.Fatal(err)
+		}
+		settleTo(t, store, id, CanaryPromoting)
+		store.mu.Lock()
+		store.d[id].Status = StatusCancelled
+		store.mu.Unlock()
+		if err = r.CanarySettle(t.Context(), plan.OrgID, id, "Traffic may still be split: api: busy."); err != nil {
+			t.Fatal(err)
+		}
+		if c := getDeployment(t, store, id).Canary; c.Status != CanaryPromoteFailed || c.Reason != "Traffic may still be split: api: busy." {
+			t.Fatalf("canary %s: %q", c.Status, c.Reason)
+		}
+	})
+}
+
+// beginCanary starts a deployment as a canary workflow does, and runs only
+// the actions named, so a test can run the rest when it likes.
+func beginCanary(t *testing.T, r *Runner, plan *planning.Plan, actions ...string) string {
+	t.Helper()
+	ctx := orchestration.CanaryContext(t.Context())
+	id, _, err := r.Start(ctx, plan.OrgID, plan.ID)
+	if err != nil || id == "" {
+		t.Fatalf("start: %q %v", id, err)
+	}
+	if err = r.FetchSource(ctx, plan.OrgID, id); err != nil {
+		t.Fatal(err)
+	}
+	for _, action := range actions {
+		if err = runAction(t, r, plan, id, action); err != nil {
+			t.Fatalf("%s: %v", action, err)
+		}
+	}
+	return id
+}
+
+// runAction runs one of a canary deployment's actions, as the workflow
+// does.
+func runAction(t *testing.T, r *Runner, plan *planning.Plan, id, action string) error {
+	t.Helper()
+	return r.Run(orchestration.CanaryContext(t.Context()), plan.OrgID, id, action, nil, func([]byte) error { return nil })
+}
+
+// A candidate recorded after a revert read the deployment, but before it
+// marked the canary reverting, is reverted with the rest: the canary
+// never says rolled_back with a candidate up.
+func TestRevertRevertsACandidateRecordedAsItStarts(t *testing.T) {
+	plan := withWeb(canaryPlan())
+	r, store, plans, exec := newCanaryRunner(t, plan)
+	id := beginCanary(t, r, plan, "resource:db", "service:api")
+	var runErr error
+	plans.mu.Lock()
+	plans.onGetPlan = func() { runErr = runAction(t, r, plan, id, "service:web") }
+	plans.mu.Unlock()
+	reason := "The canary failed at 5%: api: too slow"
+	if err := r.CanaryRevert(t.Context(), plan.OrgID, id, reason); err != nil {
+		t.Fatal(err)
+	}
+	if runErr != nil {
+		t.Fatalf("web's candidate: %v", runErr)
+	}
+	if !slices.Contains(exec.log(), "revert web web-00001") {
+		t.Fatalf("web wasn't reverted: %q", exec.log())
+	}
+	d := getDeployment(t, store, id)
+	if d.Canary.Status != CanaryRolledBack || d.Canary.service("service:web").Candidate != "" {
+		t.Fatalf("canary %s with web's candidate %q", d.Canary.Status, d.Canary.service("service:web").Candidate)
+	}
+	if s := d.Step("service:web"); s.Status != StepFailed || s.Message != reason {
+		t.Fatalf("web step %+v", s)
+	}
+}
+
+// Settling decides from the canary as it is when it's stored, not as it
+// was when the deployment was read.
+func TestSettleDecidesFromTheCanaryAsItIs(t *testing.T) {
+	reverted := "The canary failed at 5%: api: too slow"
+	// revertedMeanwhile settles the canary as a revert finishing between
+	// the read and the write would.
+	revertedMeanwhile := func(t *testing.T, store *memStore, id string) {
+		store.mu.Lock()
+		defer store.mu.Unlock()
+		store.afterGet = func() {
+			c := getDeployment(t, store, id).Canary
+			c.Status, c.Reason, c.Weight = CanaryRolledBack, reverted, 0
+			c.Services[0].Candidate = ""
+			if err := store.SetCanary(t.Context(), "org_1", id, c); err != nil {
+				t.Error(err)
+			}
+		}
+	}
+	for name, settle := range map[string]func(r *Runner, id string) error{
+		"finish": func(r *Runner, id string) error { return r.Finish(t.Context(), "org_1", id, "The workflow stopped") },
+		"settle": func(r *Runner, id string) error {
+			return r.CanarySettle(t.Context(), "org_1", id, "Traffic may still be split: api: busy.")
+		},
+	} {
+		t.Run("after a revert finished meanwhile, by "+name, func(t *testing.T) {
+			plan := canaryPlan()
+			r, store, _, _ := newCanaryRunner(t, plan)
+			id, err := startCanary(t, r, plan)
+			if err != nil {
+				t.Fatal(err)
+			}
+			revertedMeanwhile(t, store, id)
+			if err = settle(r, id); err != nil {
+				t.Fatal(err)
+			}
+			if c := getDeployment(t, store, id).Canary; c.Status != CanaryRolledBack || c.Reason != reverted {
+				t.Fatalf("canary %s: %q", c.Status, c.Reason)
+			}
+		})
+	}
+	t.Run("with a candidate up meanwhile", func(t *testing.T) {
+		plan := canaryPlan()
+		r, store, _, _ := newCanaryRunner(t, plan)
+		id := beginCanary(t, r, plan, "resource:db")
+		var runErr error
+		store.mu.Lock()
+		store.afterGet = func() { runErr = runAction(t, r, plan, id, "service:api") }
+		store.mu.Unlock()
+		if err := r.Finish(t.Context(), plan.OrgID, id, "The workflow stopped"); err != nil {
+			t.Fatal(err)
+		}
+		if runErr != nil {
+			t.Fatalf("api's candidate: %v", runErr)
+		}
+		if c := getDeployment(t, store, id).Canary; c.Status != CanaryRevertFailed || c.service("service:api").Candidate != "api-00002" {
+			t.Fatalf("canary %s with api's candidate %q", c.Status, c.service("service:api").Candidate)
+		}
+	})
+}
+
+// A candidate that came up while a revert ran and couldn't be removed
+// leaves the canary revert_failed: the revert, finishing after it, doesn't
+// call that a rollback.
+func TestARevertKeepsARevertFailedRecordedMeanwhile(t *testing.T) {
+	plan := withWeb(canaryPlan())
+	r, store, _, exec := newCanaryRunner(t, plan)
+	id := beginCanary(t, r, plan, "resource:db", "service:api")
+	exec.revertFail = map[string]error{"web": errors.New("quota exceeded")}
+	var runErr error
+	var once sync.Once
+	exec.onWeigh = func(*Job) { once.Do(func() { runErr = runAction(t, r, plan, id, "service:web") }) }
+	if err := r.CanaryRevert(t.Context(), plan.OrgID, id, "The canary failed at 5%: api: too slow"); err != nil {
+		t.Fatal(err)
+	}
+	if runErr == nil || !strings.Contains(runErr.Error(), "couldn't be removed") {
+		t.Fatalf("web's late candidate: %v", runErr)
+	}
+	c := getDeployment(t, store, id).Canary
+	if c.Status != CanaryRevertFailed || c.service("service:web").Candidate != "web-00002" || c.service("service:api").Candidate != "" ||
+		!strings.Contains(c.Reason, "Traffic may still be split") {
+		t.Fatalf("canary %+v", c)
+	}
+}

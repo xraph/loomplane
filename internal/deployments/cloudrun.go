@@ -107,17 +107,58 @@ func (c *CloudRun) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 	if err != nil {
 		return nil, err
 	}
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	ctx, built, err := c.image(ctx, cancel, s, job, psc)
+	if err != nil {
+		return nil, err
+	}
+	job = built.job
+	job.Progress(StepDeploying, "Deploying "+built.image)
+	ext, url, err := c.run(ctx, job, built.image, built.check)
+	if err != nil {
+		return nil, err
+	}
+	return &Outcome{ExternalID: ext, URL: url, Image: built.image, Revision: built.image}, nil
+}
+
+// session authorizes as the job's connection.
+func (c *CloudRun) session(ctx context.Context, job *Job) (*gcp.Session, error) {
+	key, err := gcp.ParseKey(job.Credential)
+	if err != nil {
+		return nil, err
+	}
+	return c.Google.Session(ctx, key)
+}
+
+// cloudRunImage is an image ready to deploy, and what deploying it goes
+// on with.
+type cloudRunImage struct {
+	image string
+	// job is the job to deploy with: with a Cloud SQL PSC route, a copy
+	// whose environment carries the route.
+	job *Job
+	// check checks a Cloud SQL PSC route again before each change. It's
+	// nil without one.
+	check func(context.Context) error
+}
+
+// image is the job's image: the one an earlier attempt checkpointed, the
+// earlier build a promotion or rollback reuses, or a new build. The
+// context it returns reports each later wait as deploying, and keeps the
+// checkpoint fresh. With a Cloud SQL PSC route,
+// a checkpoint that can't be kept cancels ctx through cancel, since the
+// route's identities live in it.
+func (c *CloudRun) image(ctx context.Context, cancel context.CancelCauseFunc, s *gcp.Session, job *Job, psc *cloudRunPSC) (context.Context, cloudRunImage, error) {
 	var state cloudRunState
 	if len(job.Resume) > 0 {
 		if decodeErr := json.Unmarshal(job.Resume, &state); decodeErr != nil && psc != nil {
-			return nil, errors.New("cloud sql PSC application checkpoint cannot be read")
+			return ctx, cloudRunImage{}, errors.New("cloud sql PSC application checkpoint cannot be read")
 		}
 	}
 	if state.PSC != nil && psc == nil {
-		return nil, errors.New("cloud sql PSC application checkpoint requires its reviewed transport")
+		return ctx, cloudRunImage{}, errors.New("cloud sql PSC application checkpoint requires its reviewed transport")
 	}
-	ctx, cancel := context.WithCancelCause(ctx)
-	defer cancel(nil)
 	persist := func() error {
 		if ctx.Err() != nil {
 			return context.Cause(ctx)
@@ -145,7 +186,7 @@ func (c *CloudRun) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 	if psc != nil {
 		check = func(ctx context.Context) error { return psc.check(ctx, s, job, &state, persist) }
 		if checkErr := check(ctx); checkErr != nil {
-			return nil, checkErr
+			return ctx, cloudRunImage{}, checkErr
 		}
 		prepared := *job
 		prepared.Env = psc.env
@@ -156,25 +197,21 @@ func (c *CloudRun) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 		job.Progress(status, m)
 		save()
 	})
-
 	if state.Image == "" {
 		if state.Image = reusedImage(job); state.Image == "" {
-			if state.Image, err = c.build(ctx, s, job, &state, save); err != nil {
-				return nil, err
+			image, err := c.build(ctx, s, job, &state, save)
+			if err != nil {
+				return ctx, cloudRunImage{}, err
 			}
+			state.Image = image
 		}
 		save()
 	}
 	if state.Unpinned != "" {
-		job.Warn(unpinnedWarning(a.Name, state.Unpinned))
+		job.Warn(unpinnedWarning(job.Action.Name, state.Unpinned))
 	}
 	status = StepDeploying
-	job.Progress(StepDeploying, "Deploying "+state.Image)
-	ext, url, err := c.run(ctx, job, state.Image, check)
-	if err != nil {
-		return nil, err
-	}
-	return &Outcome{ExternalID: ext, URL: url, Image: state.Image, Revision: state.Image}, nil
+	return ctx, cloudRunImage{image: state.Image, job: job, check: check}, nil
 }
 
 // build runs the service's build on Cloud Build and returns its image.

@@ -467,6 +467,7 @@ func (e *Extension) Register(fapp forge.App) error {
 		Telemetry:            metrics,
 		CatalogHooks:         catalogHooks,
 		Observers:            observers,
+		Health:               &deployments.HealthReader{Bindings: planStore, Credentials: clouds, Meters: revisionMeters(executors)},
 	})
 	// Deleting a project or environment takes its database gateways' records
 	// with it, and this deletes their keys from Vault and warns about a
@@ -497,7 +498,7 @@ func (e *Extension) Register(fapp forge.App) error {
 	e.deployments.BindFailedCleanups(e.failedCleanups)
 	// Drift is checked on Dispatch's cron leader, so one replica checks.
 	engine.Register(e.engineOf(), orchestration.DriftJob(&deployments.DriftChecker{
-		Store: planStore, Credentials: clouds, Executors: executors, Telemetry: metrics,
+		Store: planStore, Credentials: clouds, Executors: executors, Telemetry: metrics, Canaries: deployStore,
 		Warn: func(msg string, err error) { log.Warn(msg, forge.F("error", err.Error())) },
 	}))
 	engine.Register(e.engineOf(), orchestration.ConnectionRefreshJob(clouds))
