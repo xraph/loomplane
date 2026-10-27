@@ -23,6 +23,7 @@ import (
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/deployments"
 	"github.com/xraph/loomplane/internal/ops"
+	"github.com/xraph/loomplane/internal/orchestration"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/providers"
@@ -384,7 +385,7 @@ func newSyncFixture(t *testing.T) *syncFixture {
 	auth := &syncAuth{}
 	service := planning.NewService(planning.Deps{Store: plans, Projects: projects.NewPgStore(db), CloudProfiles: st, Connections: accounts, Providers: providers.Registry(), Authz: auth})
 	newRunner := func() *deployments.Runner {
-		return deployments.NewRunner(deployments.RunnerDeps{Store: deployments.NewPgStore(db), Plans: plans, Credentials: accounts, Variables: syncVars{}, Sources: sources, Resources: secrets, Providers: providers.Registry(), Executors: map[string]deployments.Executor{"vercel": exec}, CloudProfiles: st, CloudSyncAuth: service})
+		return deployments.NewRunner(deployments.RunnerDeps{Store: deployments.NewPgStore(db), Plans: plans, Credentials: accounts, Variables: syncVars{}, Sources: sources, Resources: secrets, Providers: providers.Registry(), Executors: map[string]deployments.Executor{"vercel": exec}, CloudProfiles: st, CloudSyncAuth: service, Capacity: service})
 	}
 	runner := newRunner()
 	service.BindCloudSyncRunner(runner, runner)
@@ -393,7 +394,7 @@ func newSyncFixture(t *testing.T) *syncFixture {
 
 func TestCloudSyncRunnerPartialRecoveryRoutingCleanupAndRevert(t *testing.T) {
 	f := newSyncFixture(t)
-	ctx := t.Context()
+	ctx := orchestration.CapacityContext(t.Context())
 	service, exec, auth, conn := f.service, f.executor, f.auth, f.conn
 	actor := security.Principal{OrgID: "org", UserID: "usr"}
 	preview, err := service.PreviewCloudChange(ctx, actor, "proj", cloudprofiles.ChangeInput{CloudID: "cloud", TargetID: "target", Revision: 1, Provider: "vercel", ConnectionID: "new"})
@@ -507,7 +508,7 @@ func TestCloudSyncRunnerPartialRecoveryRoutingCleanupAndRevert(t *testing.T) {
 
 func TestCloudSyncRevertOwnsRemainingWork(t *testing.T) {
 	f := newSyncFixture(t)
-	ctx := t.Context()
+	ctx := orchestration.CapacityContext(t.Context())
 	actor := security.Principal{OrgID: "org", UserID: "usr"}
 	preview, err := f.service.PreviewCloudChange(ctx, actor, "proj", cloudprofiles.ChangeInput{CloudID: "cloud", TargetID: "target", Revision: 1, Provider: "vercel", ConnectionID: "new"})
 	if err != nil || len(preview.Blockers) > 0 {
@@ -661,7 +662,7 @@ func TestCloudSyncDatabaseReleaseSerialization(t *testing.T) {
 
 func TestCloudSyncRestartFromProviderCheckpoint(t *testing.T) {
 	f := newSyncFixture(t)
-	ctx := t.Context()
+	ctx := orchestration.CapacityContext(t.Context())
 	actor := security.Principal{OrgID: "org", UserID: "usr"}
 	preview, err := f.service.PreviewCloudChange(ctx, actor, "proj", cloudprofiles.ChangeInput{CloudID: "cloud", TargetID: "target", Revision: 1, Provider: "vercel", ConnectionID: "new"})
 	if err != nil || len(preview.Blockers) > 0 {
@@ -721,7 +722,7 @@ func TestCloudSyncEmptyAssignmentAndEnqueueRecovery(t *testing.T) {
 	workflow := &syncRecoveryWorkflow{unavailable: true}
 	plans := planning.NewPgStore(db)
 	service := planning.NewService(planning.Deps{Store: plans, Projects: projects.NewPgStore(db), CloudProfiles: st, Connections: accounts, Providers: providers.Registry(), Authz: &syncAuth{}, CloudSyncWorkflow: workflow})
-	runner := deployments.NewRunner(deployments.RunnerDeps{Store: deployments.NewPgStore(db), Plans: plans, Credentials: accounts, CloudProfiles: st, CloudSyncAuth: service})
+	runner := deployments.NewRunner(deployments.RunnerDeps{Store: deployments.NewPgStore(db), Plans: plans, Credentials: accounts, CloudProfiles: st, CloudSyncAuth: service, Capacity: service})
 	service.BindCloudSyncRunner(runner, runner)
 	preview, err := service.PreviewCloudChange(ctx, actor, "proj", cloudprofiles.ChangeInput{EnvironmentID: "env", CloudID: "cloud", Revision: 0})
 	if err != nil || len(preview.Blockers) > 0 {
@@ -764,7 +765,7 @@ func TestCloudSyncEmptyAssignmentAndEnqueueRecovery(t *testing.T) {
 func TestCloudSyncAssignmentMigrationAndMetadataAdoption(t *testing.T) {
 	t.Run("assignment", func(t *testing.T) {
 		f := newSyncFixture(t)
-		ctx := t.Context()
+		ctx := orchestration.CapacityContext(t.Context())
 		actor := security.Principal{OrgID: "org", UserID: "usr"}
 		now := time.Now().UTC()
 		if err := f.store.CreateProfile(ctx, &cloudprofiles.Profile{ID: "cloud-b", OrgID: "org", ProjectID: "proj", Name: "Cloud B", Revision: 1, CreatedAt: now, UpdatedAt: now}); err != nil {
@@ -809,7 +810,7 @@ func TestCloudSyncAssignmentMigrationAndMetadataAdoption(t *testing.T) {
 	})
 	t.Run("adoption", func(t *testing.T) {
 		f := newSyncFixture(t)
-		ctx := t.Context()
+		ctx := orchestration.CapacityContext(t.Context())
 		actor := security.Principal{OrgID: "org", UserID: "usr"}
 		preview, err := f.service.PreviewCloudChange(ctx, actor, "proj", cloudprofiles.ChangeInput{CloudID: "cloud", TargetID: "target", Revision: 1, Provider: "vercel", ConnectionID: "old"})
 		if err != nil || len(preview.Blockers) > 0 {
@@ -870,7 +871,7 @@ func TestCloudSyncRechecksAppliedInputsBeforeAcceptance(t *testing.T) {
 
 func TestCloudSyncConcurrentDuplicateDelivery(t *testing.T) {
 	f := newSyncFixture(t)
-	ctx := t.Context()
+	ctx := orchestration.CapacityContext(t.Context())
 	actor := security.Principal{OrgID: "org", UserID: "usr"}
 	preview, err := f.service.PreviewCloudChange(ctx, actor, "proj", cloudprofiles.ChangeInput{CloudID: "cloud", TargetID: "target", Revision: 1, Provider: "vercel", ConnectionID: "new"})
 	if err != nil || len(preview.Blockers) > 0 {
@@ -1011,7 +1012,7 @@ func TestCloudSyncRevertRejectsOwnershipChangeBeforeSnapshot(t *testing.T) {
 
 func TestCloudSyncRevertCleansUnpublishedProviderResources(t *testing.T) {
 	f := newSyncFixture(t)
-	ctx := t.Context()
+	ctx := orchestration.CapacityContext(t.Context())
 	actor := security.Principal{OrgID: "org", UserID: "usr"}
 	f.executor.trackPending = true
 	preview, err := f.service.PreviewCloudChange(ctx, actor, "proj", cloudprofiles.ChangeInput{CloudID: "cloud", TargetID: "target", Revision: 1, Provider: "vercel", ConnectionID: "new"})

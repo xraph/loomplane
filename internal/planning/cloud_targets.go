@@ -3,6 +3,7 @@ package planning
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"strings"
@@ -26,10 +27,14 @@ type CloudPlacement struct {
 	ConnectionGeneration int64  `json:"connection_generation,omitempty"`
 	CPUMillis            int64  `json:"cpu_millis,omitempty"`
 	MemoryBytes          int64  `json:"memory_bytes,omitempty"`
-	GrantRevision        int64  `json:"grant_revision,omitempty"`
-	CloudID              string `json:"cloud_id"`
-	CloudRevision        int64  `json:"cloud_revision"`
-	AssignmentRevision   int64  `json:"assignment_revision"`
+	// GPUKind and GPUs are what a pool reserves for a service that asks
+	// for GPUs. A CPU pin leaves them out, so its stored shape is unchanged.
+	GPUKind            string `json:"gpu_kind,omitempty"`
+	GPUs               int64  `json:"gpus,omitempty"`
+	GrantRevision      int64  `json:"grant_revision,omitempty"`
+	CloudID            string `json:"cloud_id"`
+	CloudRevision      int64  `json:"cloud_revision"`
+	AssignmentRevision int64  `json:"assignment_revision"`
 	// Default marks a service placed by the Cloud's default rather than a
 	// target. It has no target ID, name or revision; the Cloud revision pins it.
 	Default         bool   `json:"default,omitempty"`
@@ -255,93 +260,115 @@ func resolveCloudPlacements(m *manifest.Manifest, environment string, assignment
 		if !fallback && (set.Provider != "" || set.Target != "") {
 			return nil, nil, fmt.Errorf("%s conflicts with effective provider or target placement; remove direct placement, including defaults, to use a Cloud target", path)
 		}
-		if assignment == nil {
-			return nil, nil, fmt.Errorf("%s needs a Cloud assigned to this environment", path)
+		deferred := len(future) > 0 && future[0][name] != nil
+		placement, resolvedSet, placeErr := resolveCloudPlacement(name, path, set, fallback, assignment, options, pools, deferred)
+		if errors.Is(placeErr, errCapacityDeferred) {
+			s.Settings, s.Environments = resolvedSet, nil
+			out.Services[name] = s
+			continue
 		}
-		if assignment.CloudRevision < 1 || assignment.Revision < 1 {
-			return nil, nil, fmt.Errorf("%s has no reviewed Cloud or assignment revision", path)
+		if placeErr != nil {
+			return nil, nil, placeErr
 		}
-		if assignment.OrgID == "" || assignment.ProjectID == "" || assignment.EnvironmentID == "" || assignment.CloudID == "" {
-			return nil, nil, fmt.Errorf("%s has an invalid assignment scope", path)
-		}
-		var target cloudprofiles.Target
-		if fallback {
-			d := assignment.DefaultPlacement
-			target = cloudprofiles.Target{OrgID: assignment.OrgID, CloudID: assignment.CloudID, Provider: d.Provider, ConnectionID: d.ConnectionID, Region: d.Region}
-		} else {
-			selected, selectErr := SelectCloudTarget(set, assignment, path)
-			if selectErr != nil {
-				return nil, nil, selectErr
-			}
-			target = *selected
-			if target.Revision < 1 {
-				return nil, nil, fmt.Errorf("%s has no reviewed target revision", path)
-			}
-		}
-		if target.OrgID != assignment.OrgID || target.CloudID != assignment.CloudID {
-			return nil, nil, fmt.Errorf("%s: target is outside the assignment scope", path)
-		}
-		connectionID := target.ConnectionID
-		var pool *cloudinfra.Placement
-		if target.PoolID != "" {
-			if len(future) > 0 && future[0][name] != nil {
-				set.Provider, set.CloudTarget, set.CloudTags = target.Provider, "", nil
-				set.Target = ""
-				s.Settings, s.Environments = set, nil
-				out.Services[name] = s
-				continue
-			}
-			if pools[name] == nil {
-				return nil, nil, fmt.Errorf("%s needs resolved pool capacity", path)
-			}
-			pool = pools[name]
-			if pool.PoolID != target.PoolID {
-				return nil, nil, fmt.Errorf("%s resolved another pool", path)
-			}
-			connectionID = pool.ConnectionID
-		}
-		ci := slices.IndexFunc(options, func(c ConnectionOption) bool { return c.ID == connectionID })
-		if ci < 0 || !options[ci].Ready {
-			return nil, nil, fmt.Errorf("%s: target connection is missing or not ready; check it under Integrations", path)
-		}
-		c := options[ci]
-		identity := connections.AccountIdentity(c.Cloud, c.Account, c.Details)
-		if identity == "" {
-			return nil, nil, fmt.Errorf("%s: target account identity is unverified; recheck Vercel or reconnect owned infrastructure under Integrations", path)
-		}
-		regionSource := "manifest"
-		if set.Region == "" {
-			regionSource = "default"
-		}
-		set.Provider = target.Provider
-		if set.Region == "" {
-			set.Region = target.Region
-		}
-		if OwnedCloud(c.Cloud) {
-			set.Target = c.ID
-		}
-		placement := targetPlacement(assignment, target, c, identity, set.Region, regionSource)
-		placement.Default, placement.ConnectionID = fallback, connectionID
 		placements[name] = placement
-		if pool != nil {
-			p := placements[name]
-			p.PoolID = pool.PoolID
-			p.PoolRevision = pool.PoolRevision
-			p.ServerID = pool.ServerID
-			p.ServerRevision = pool.ServerRevision
-			p.ConnectionGeneration = pool.ConnectionGeneration
-			p.Allocation = pool.Allocation
-			p.CPUMillis = pool.CPUMillis
-			p.MemoryBytes = pool.MemoryBytes
-			placements[name] = p
-		}
-		set.CloudTarget, set.CloudTags = "", nil
-		s.Settings, s.Environments = set, nil
+		s.Settings, s.Environments = resolvedSet, nil
 		out.Services[name] = s
+	}
+	if err := resolveDatabaseGatewayPlacement(&out, environment, assignment, options, pools, placements); err != nil {
+		return nil, nil, err
 	}
 	// Every service the default tags applied to is resolved above.
 	out.Defaults.CloudTags = nil
 	return &out, placements, nil
+}
+
+// errCapacityDeferred is how resolveCloudPlacement says a pool service
+// waits on capacity a later plan creates, so it gets no placement yet.
+var errCapacityDeferred = errors.New("pool capacity deferred to a later plan")
+
+// resolveCloudPlacement pins the target set names or tags, or the Cloud's
+// default when fallback is set, and returns the settings with the target's
+// provider and region in place of the Cloud's names and tags. When deferred
+// is set and the target is a pool, it returns errCapacityDeferred with the
+// settings carrying only the target's provider.
+func resolveCloudPlacement(name, path string, set manifest.Settings, fallback bool, assignment *cloudprofiles.Assignment, options []ConnectionOption, pools map[string]*cloudinfra.Placement, deferred bool) (CloudPlacement, manifest.Settings, error) {
+	if assignment == nil {
+		return CloudPlacement{}, set, fmt.Errorf("%s needs a Cloud assigned to this environment", path)
+	}
+	if assignment.CloudRevision < 1 || assignment.Revision < 1 {
+		return CloudPlacement{}, set, fmt.Errorf("%s has no reviewed Cloud or assignment revision", path)
+	}
+	if assignment.OrgID == "" || assignment.ProjectID == "" || assignment.EnvironmentID == "" || assignment.CloudID == "" {
+		return CloudPlacement{}, set, fmt.Errorf("%s has an invalid assignment scope", path)
+	}
+	var target cloudprofiles.Target
+	if fallback {
+		d := assignment.DefaultPlacement
+		target = cloudprofiles.Target{OrgID: assignment.OrgID, CloudID: assignment.CloudID, Provider: d.Provider, ConnectionID: d.ConnectionID, Region: d.Region}
+	} else {
+		selected, selectErr := SelectCloudTarget(set, assignment, path)
+		if selectErr != nil {
+			return CloudPlacement{}, set, selectErr
+		}
+		target = *selected
+		if target.Revision < 1 {
+			return CloudPlacement{}, set, fmt.Errorf("%s has no reviewed target revision", path)
+		}
+	}
+	if target.OrgID != assignment.OrgID || target.CloudID != assignment.CloudID {
+		return CloudPlacement{}, set, fmt.Errorf("%s: target is outside the assignment scope", path)
+	}
+	connectionID := target.ConnectionID
+	var pool *cloudinfra.Placement
+	if target.PoolID != "" {
+		if deferred {
+			set.Provider, set.CloudTarget, set.CloudTags, set.Target = target.Provider, "", nil, ""
+			return CloudPlacement{}, set, errCapacityDeferred
+		}
+		if pools[name] == nil {
+			return CloudPlacement{}, set, fmt.Errorf("%s needs resolved pool capacity", path)
+		}
+		pool = pools[name]
+		if pool.PoolID != target.PoolID {
+			return CloudPlacement{}, set, fmt.Errorf("%s resolved another pool", path)
+		}
+		connectionID = pool.ConnectionID
+	}
+	ci := slices.IndexFunc(options, func(c ConnectionOption) bool { return c.ID == connectionID })
+	if ci < 0 || !options[ci].Ready {
+		return CloudPlacement{}, set, fmt.Errorf("%s: target connection is missing or not ready; check it under Integrations", path)
+	}
+	c := options[ci]
+	identity := connections.AccountIdentity(c.Cloud, c.Account, c.Details)
+	if identity == "" {
+		return CloudPlacement{}, set, fmt.Errorf("%s: target account identity is unverified; recheck Vercel or reconnect owned infrastructure under Integrations", path)
+	}
+	regionSource := "manifest"
+	if set.Region == "" {
+		regionSource = "default"
+	}
+	set.Provider = target.Provider
+	if set.Region == "" {
+		set.Region = target.Region
+	}
+	if OwnedCloud(c.Cloud) {
+		set.Target = c.ID
+	}
+	placement := targetPlacement(assignment, target, c, identity, set.Region, regionSource)
+	placement.Default, placement.ConnectionID = fallback, connectionID
+	if pool != nil {
+		placement.PoolID = pool.PoolID
+		placement.PoolRevision = pool.PoolRevision
+		placement.ServerID = pool.ServerID
+		placement.ServerRevision = pool.ServerRevision
+		placement.ConnectionGeneration = pool.ConnectionGeneration
+		placement.Allocation = pool.Allocation
+		placement.CPUMillis = pool.CPUMillis
+		placement.MemoryBytes = pool.MemoryBytes
+		placement.GPUKind, placement.GPUs = pool.GPUKind, pool.GPUs
+	}
+	set.CloudTarget, set.CloudTags = "", nil
+	return placement, set, nil
 }
 
 func serviceConnection(cfg *ServiceConfig) string {
@@ -462,6 +489,10 @@ func cloudResolutionManifest(m *manifest.Manifest, in Input) (*manifest.Manifest
 		needs.Explicit = needs.Explicit || set.CloudTarget != "" || len(set.CloudTags) > 0
 		needs.Fallback = needs.Fallback || set.CloudTarget == "" && len(set.CloudTags) == 0 && set.Provider == "" && set.Target == ""
 	}
+	if set, ok := dbGatewayToPlace(&out, in.Environment); ok {
+		needs.Explicit = needs.Explicit || len(set.CloudTags) > 0
+		needs.Fallback = needs.Fallback || set.Provider == "" && len(set.CloudTags) == 0
+	}
 	return &out, needs, nil
 }
 
@@ -494,7 +525,7 @@ func (p *planner) sameDeploymentAccount(a, b *Action) bool {
 
 // PoolPlacement returns the capacity fields used by admission and runtime checks.
 func (p *CloudPlacement) PoolPlacement() cloudinfra.Placement {
-	return cloudinfra.Placement{Allocation: p.Allocation, PoolID: p.PoolID, PoolRevision: p.PoolRevision, ServerID: p.ServerID, ServerRevision: p.ServerRevision, ConnectionID: p.ConnectionID, ConnectionGeneration: p.ConnectionGeneration, CPUMillis: p.CPUMillis, MemoryBytes: p.MemoryBytes}
+	return cloudinfra.Placement{Allocation: p.Allocation, PoolID: p.PoolID, PoolRevision: p.PoolRevision, ServerID: p.ServerID, ServerRevision: p.ServerRevision, ConnectionID: p.ConnectionID, ConnectionGeneration: p.ConnectionGeneration, CPUMillis: p.CPUMillis, MemoryBytes: p.MemoryBytes, GPUKind: p.GPUKind, GPUs: p.GPUs}
 }
 
 type poolResolver interface {
@@ -534,6 +565,7 @@ func (s *Service) resolvePools(ctx context.Context, plan *Plan, m *manifest.Mani
 			return nil, err
 		}
 		req := cloudinfra.PlacementRequest{PlanID: plan.ID, Planned: planned, OrgID: plan.OrgID, ProjectID: plan.ProjectID, EnvironmentID: plan.EnvironmentID, CloudID: a.CloudID, TargetID: t.ID, TargetRevision: t.Revision, PoolID: t.PoolID, Service: name, CPUMillis: cpu, MemoryBytes: mem, Replicas: 1}
+		req.GPUKind, req.GPUs = ServerGPUs(set.Size)
 		if set.Scale != nil {
 			if set.Scale.Min != 1 || set.Scale.Max != 1 {
 				return nil, fmt.Errorf("%s needs one replica on a pool server", name)
@@ -579,6 +611,9 @@ func (s *Service) resolvePools(ctx context.Context, plan *Plan, m *manifest.Mani
 				if err != nil {
 					return nil, err
 				}
+				// The GPUs stay the new size's: the runtime labels the
+				// container with them, so the reservation must hold the
+				// same count on the destination.
 				req.DestinationServerID = out[name].ServerID
 				out[name], err = resolver.PreviewPlacement(ctx, req)
 			}

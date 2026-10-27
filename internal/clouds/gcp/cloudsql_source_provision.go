@@ -2,10 +2,8 @@ package gcp
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/netip"
 	"net/url"
@@ -41,6 +39,8 @@ type PSCComputeState struct {
 
 // SQLPSCProvisionState is persisted before each owned network mutation.
 type SQLPSCProvisionState struct {
+	Source           SQLPSCSourceWitness   `json:"source,omitempty"`
+	AddressValue     string                `json:"address_value,omitempty"`
 	SourceProject    string                `json:"source_project"`
 	SourcePhysicalID string                `json:"source_physical_id"`
 	Version          int                   `json:"version"`
@@ -129,27 +129,16 @@ func (s *Session) pscSourceForwardingRule(ctx context.Context, spec SQLPSCProvis
 	if err := check(ctx); err != nil {
 		return nil, err
 	}
-	source, digest, err := s.readSQLPITRSource(ctx, spec.Source.Region, spec.Source.Name, spec.PhysicalID, spec.Source)
+	source, err := s.readPSCSourceWitness(ctx, spec, *checkpoint, provision)
 	if err != nil {
 		return nil, err
 	}
-	if !source.Settings.IPConfiguration.PSC.manualSourceConsumer(route.ConsumerProject) || !validSQLPSCName(source.DNSName) {
-		return nil, errPSCProvision
-	}
-	attachment := computeResource(source.PSCServiceAttachment)
-	parts := strings.Split(attachment, "/")
-	if len(parts) != 6 || parts[0] != "projects" || !validSQLPathID(parts[1]) || parts[2] != "regions" || parts[3] != spec.Source.Region || parts[4] != "serviceAttachments" || !sqlNativeName(parts[5]) {
-		return nil, errPSCProvision
-	}
-	subnet, err := s.readPSCSourceSubnet(ctx, spec.Source.Region, route, check)
+	attachment := source.ServiceAttachment
+	subnet, err := s.readPSCSubnetWitness(ctx, spec, *checkpoint, check, provision)
 	if err != nil {
 		return nil, err
 	}
-	raw, err := json.Marshal([]string{s.key.ProjectID, spec.Source.Name, spec.Source.Region, spec.PhysicalID, digest, attachment, source.DNSName, route.ConsumerProject, route.Network, route.Subnetwork, subnet.ID, subnet.IPCIDR, spec.Endpoint.ForwardingRule})
-	if err != nil {
-		return nil, err
-	}
-	scope := fmt.Sprintf("%x", sha256.Sum256(raw))
+	scope := pscSourceScope(s.key.ProjectID, spec, source, *subnet)
 	state := *checkpoint
 	persist := func(next SQLPSCProvisionState) error {
 		if err := check(ctx); err != nil {
@@ -162,11 +151,11 @@ func (s *Session) pscSourceForwardingRule(ctx context.Context, spec SQLPSCProvis
 		return nil
 	}
 	if state == (SQLPSCProvisionState{}) {
-		if err := persist(SQLPSCProvisionState{Version: 2, Scope: scope, SourceProject: s.key.ProjectID, SourcePhysicalID: spec.PhysicalID, Subnet: *subnet}); err != nil {
+		if err := persist(SQLPSCProvisionState{Version: 3, Source: source, Scope: scope, SourceProject: s.key.ProjectID, SourcePhysicalID: spec.PhysicalID, Subnet: *subnet}); err != nil {
 			return nil, err
 		}
 	} else {
-		if (state.Version != 1 && state.Version != 2) || state.Scope != scope || state.Subnet != *subnet {
+		if (state.Version != 1 && state.Version != 2 && state.Version != 3) || state.Scope != scope || state.Subnet != *subnet || state.Version == 3 && state.Source != source || state.Version < 3 && (state.Source != (SQLPSCSourceWitness{}) || state.AddressValue != "") {
 			return nil, errPSCProvision
 		}
 		if state.Version == 1 {
@@ -192,14 +181,14 @@ func (s *Session) pscSourceForwardingRule(ctx context.Context, spec SQLPSCProvis
 		if err := check(ctx); err != nil {
 			return err
 		}
-		fresh, freshDigest, err := s.readSQLPITRSource(ctx, spec.Source.Region, spec.Source.Name, spec.PhysicalID, spec.Source)
+		fresh, err := s.readPSCSourceWitness(ctx, spec, state, provision)
 		if err != nil {
 			return err
 		}
-		if freshDigest != digest || fresh.DNSName != source.DNSName || computeResource(fresh.PSCServiceAttachment) != attachment {
+		if fresh != source {
 			return errPSCProvision
 		}
-		current, err := s.readPSCSourceSubnet(ctx, spec.Source.Region, route, check)
+		current, err := s.readPSCSubnetWitness(ctx, spec, state, check, provision)
 		if err != nil {
 			return err
 		}
@@ -216,7 +205,19 @@ func (s *Session) pscSourceForwardingRule(ctx context.Context, spec SQLPSCProvis
 	readAddress := func(id string) error {
 		address = pscSourceAddress{}
 		if err := s.do(ctx, http.MethodGet, s.c.url("compute.googleapis.com", "/compute/v1/"+addressPath), nil, &address); err != nil {
+			if IsNotFound(err) && !provision && s.validPSCLossWitness(spec, state) && positiveComputeID(id) {
+				// Native operation identity still pins the absent object. A
+				// child rule needs the address captured before it was attempted.
+				if state.ForwardingRule.Attempted && state.AddressValue == "" {
+					return errPSCProvision
+				}
+				address = pscSourceAddress{ID: id, Address: state.AddressValue}
+				return nil
+			}
 			return err
+		}
+		if state.Version == 3 && state.AddressValue != "" && state.AddressValue != address.Address {
+			return errPSCProvision
 		}
 		if !address.matches(id, addressName, addressPath, prefix, description, spec, subnet.IPCIDR) {
 			return errPSCProvision
@@ -224,7 +225,14 @@ func (s *Session) pscSourceForwardingRule(ctx context.Context, spec SQLPSCProvis
 		return nil
 	}
 	addressBody := map[string]any{"name": addressName, "description": description, "addressType": "INTERNAL", "purpose": "GCE_ENDPOINT", "ipVersion": "IPV4", "subnetwork": route.Subnetwork, "networkTier": "PREMIUM"}
-	if err := s.ensurePSCCompute(ctx, prefix, addressPath, scope, state.Address, addressBody, readAddress, func(next PSCComputeState) error { updated := state; updated.Address = next; return persist(updated) }, guard, provision); err != nil {
+	if err := s.ensurePSCCompute(ctx, prefix, addressPath, scope, state.Address, addressBody, readAddress, func(next PSCComputeState) error {
+		updated := state
+		updated.Address = next
+		if next.Complete && updated.Version == 3 {
+			updated.AddressValue = address.Address
+		}
+		return persist(updated)
+	}, guard, provision); err != nil {
 		return nil, err
 	}
 	endpoint := &SQLPSCProvisionedEndpoint{DNSName: source.DNSName, ServiceAttachment: attachment}
@@ -233,13 +241,20 @@ func (s *Session) pscSourceForwardingRule(ctx context.Context, spec SQLPSCProvis
 	}
 	endpoint.AddressID, endpoint.Address = address.ID, address.Address
 	var rule sqlManualForwardingRule
+	ruleAbsent := false
 	readRule := func(id string) error {
 		var observed struct {
 			sqlManualForwardingRule
 			Description  string `json:"description"`
 			GlobalAccess bool   `json:"allowPscGlobalAccess"`
 		}
+		ruleAbsent = false
 		if err := s.do(ctx, http.MethodGet, s.c.url("compute.googleapis.com", "/compute/v1/"+spec.Endpoint.ForwardingRule), nil, &observed); err != nil {
+			if IsNotFound(err) && !provision && s.validPSCLossWitness(spec, state) && positiveComputeID(id) {
+				ruleAbsent = true
+				rule = sqlManualForwardingRule{ID: id}
+				return nil
+			}
 			return err
 		}
 		if observed.ID != id || observed.Description != description || observed.GlobalAccess || observed.Address != address.Address {
@@ -284,7 +299,7 @@ func (s *Session) pscSourceForwardingRule(ctx context.Context, spec SQLPSCProvis
 		if pending || !provision && rule.Status == "CLOSED" {
 			checked.Status = "ACCEPTED"
 		}
-		if !checked.matches(spec.Endpoint, spec.Source.Region, attachment) {
+		if !ruleAbsent && !checked.matches(spec.Endpoint, spec.Source.Region, attachment) {
 			return nil, errPSCProvision
 		}
 		if err := guard(ctx); err != nil {
@@ -307,6 +322,12 @@ func (s *Session) readPSCSourceSubnet(ctx context.Context, region string, route 
 		}
 		var subnet sqlApplicationSubnet
 		if err := s.do(ctx, http.MethodGet, s.c.url("compute.googleapis.com", "/compute/v1/"+route.Subnetwork), nil, &subnet); err != nil {
+			// A later absence must not discard a potentially replaced object
+			// observed in this scan. Only an initially absent subnet can use
+			// the saved cleanup witness.
+			if n > 0 && IsNotFound(err) {
+				return nil, errPSCProvision
+			}
 			return nil, err
 		}
 		prefix, err := netip.ParsePrefix(subnet.IPCIDR)

@@ -81,19 +81,21 @@ type Image struct {
 
 // Component is one container of a composition.
 type Component struct {
-	Name       string        `json:"name"` // DNS label, no "--"
-	Role       Role          `json:"role"`
-	Command    []string      `json:"command,omitempty"`
-	Args       []string      `json:"args,omitempty"`
-	Ports      []Port        `json:"ports,omitempty"` // processes only
-	Env        []EnvVar      `json:"env,omitempty"`
-	Files      []File        `json:"files,omitempty"` // rendered by CatalogHooks.Files
-	Readiness  *HTTPProbe    `json:"readiness,omitempty"`
-	Volume     *Volume       `json:"volume,omitempty"` // nil means stateless
-	Protection Protection    `json:"protection,omitempty"`
-	After      []string      `json:"after,omitempty"` // components that must be ready or have succeeded first
-	Resources  Resources     `json:"resources"`
-	Timeout    time.Duration `json:"timeout,omitempty"` // jobs only
+	Name      string     `json:"name"` // DNS label, no "--"
+	Role      Role       `json:"role"`
+	Command   []string   `json:"command,omitempty"`
+	Args      []string   `json:"args,omitempty"`
+	Ports     []Port     `json:"ports,omitempty"` // processes only
+	Env       []EnvVar   `json:"env,omitempty"`
+	Files     []File     `json:"files,omitempty"` // rendered by CatalogHooks.Files
+	Readiness *HTTPProbe `json:"readiness,omitempty"`
+	Volume    *Volume    `json:"volume,omitempty"` // nil means stateless
+	// WeightCache is a volume for downloaded files; only GPU components have one.
+	WeightCache *WeightCache  `json:"weight_cache,omitempty"`
+	Protection  Protection    `json:"protection,omitempty"`
+	After       []string      `json:"after,omitempty"` // components that must be ready or have succeeded first
+	Resources   Resources     `json:"resources"`
+	Timeout     time.Duration `json:"timeout,omitempty"` // jobs only
 	// KubernetesRules is the read-only discovery access a process gets
 	// through its own ServiceAccount on Kubernetes.
 	KubernetesRules []KubernetesRule `json:"kubernetes_rules,omitempty"`
@@ -134,10 +136,26 @@ type Volume struct {
 	FSGroup          int    `json:"fs_group,omitempty"`           // group that owns the volume on Kubernetes; 0 leaves it alone
 }
 
-// Resources is a component's CPU and memory request.
+// GPU is a component's GPU request. Kind "" lets the resource choose with its gpu setting.
+type GPU struct {
+	Kind         string `json:"kind,omitempty"`           // a provider.AcceleratorKinds ID, NVIDIA only
+	Count        int    `json:"count"`                    // default devices, 1 to 8; the resource may ask for more
+	MinMemoryGiB int    `json:"min_memory_gib,omitempty"` // per-device floor the chosen kind must meet
+}
+
+// Resources is a component's CPU, memory and GPU request.
 type Resources struct {
-	CPUMillis int `json:"cpu_millis"`
-	MemoryMB  int `json:"memory_mb"`
+	CPUMillis int  `json:"cpu_millis"`
+	MemoryMB  int  `json:"memory_mb"`
+	GPU       *GPU `json:"gpu,omitempty"`
+	ShmMB     int  `json:"shm_mb,omitempty"` // /dev/shm size; counts toward MemoryMB
+}
+
+// WeightCache is a persistent volume for downloaded files, such as model
+// weights, kept across restarts and releases so they aren't fetched again.
+type WeightCache struct {
+	MountPath        string `json:"mount_path"`
+	KubernetesSizeMB int    `json:"kubernetes_size_mb"` // PVC request; required on Kubernetes targets
 }
 
 // EnvVar sets exactly one of Value, Secret, From and Template.
@@ -372,6 +390,14 @@ func (c Component) clone() Component {
 	if c.Volume != nil {
 		volume := *c.Volume
 		c.Volume = &volume
+	}
+	if c.WeightCache != nil {
+		cache := *c.WeightCache
+		c.WeightCache = &cache
+	}
+	if c.Resources.GPU != nil {
+		gpu := *c.Resources.GPU
+		c.Resources.GPU = &gpu
 	}
 	c.After = slices.Clone(c.After)
 	c.KubernetesRules = slices.Clone(c.KubernetesRules)

@@ -48,6 +48,12 @@ func resourceKey(orgID, environmentID, resource, field string) string {
 	return ResourceKey(orgID, environmentID, resource, field)
 }
 
+// ResourceURLKey is the key a resource's address is kept under, so code
+// outside this package reads it without copying the key format.
+func ResourceURLKey(orgID, environmentID, resource string) string {
+	return resourceKey(orgID, environmentID, resource, ResourceURL)
+}
+
 // VaultResourceSecrets keeps resource credentials in Vault, encrypted and
 // versioned.
 type VaultResourceSecrets struct{ svc *secret.Service }
@@ -111,4 +117,19 @@ func (v *VaultResourceSecrets) Delete(ctx context.Context, key string) error {
 		return fmt.Errorf("delete resource credential: %w", err)
 	}
 	return nil
+}
+
+// Version says which version of a resource credential is stored without
+// decrypting it or counting as an access: its id, version number and update
+// time, which change whenever it is written again, deleted and written back
+// included. A missing one is ErrNoCredential.
+func (v *VaultResourceSecrets) Version(ctx context.Context, key string) (string, error) {
+	m, err := v.svc.GetMeta(ctx, key, ResourceVaultAppID)
+	if errors.Is(err, core.ErrSecretNotFound) {
+		return "", ErrNoCredential
+	}
+	if err != nil {
+		return "", fmt.Errorf("read resource credential metadata: %w", err)
+	}
+	return fmt.Sprintf("%s/%d/%d", m.ID, m.Version, m.UpdatedAt.UnixNano()), nil
 }

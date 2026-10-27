@@ -32,6 +32,11 @@ func AccountIdentity(cloud, account string, details map[string]string) string {
 			}
 			keys = []string{"user_id"}
 		}
+	case Cloudflare:
+		if strings.TrimSpace(details["account_id"]) == "" {
+			return ""
+		}
+		keys = []string{"account_id"}
 	case Render:
 		if strings.TrimSpace(details["owner_id"]) == "" {
 			return ""
@@ -86,6 +91,8 @@ func AccountIdentity(cloud, account string, details map[string]string) string {
 		// The verified project ID identifies this account.
 	case Vercel:
 		// User and team IDs already identify their scopes, including renames.
+	case Cloudflare:
+		// The verified account ID identifies this account.
 	case Render:
 		// The verified owner ID identifies this workspace.
 	case DigitalOcean:

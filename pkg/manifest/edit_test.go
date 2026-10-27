@@ -379,3 +379,61 @@ func TestWithUseSetsOneDependency(t *testing.T) {
 		}
 	}
 }
+
+func TestEdits_keepDatabaseGatewayFields(t *testing.T) {
+	doc := []byte(`# Acme's manifest.
+version: 1
+database_gateway:
+  provider: cloud-run # where the gateway runs
+  region: us-east1
+resources:
+  db:
+    kind: postgres
+    gateway: true
+    environments:
+      staging: {gateway: false}
+services:
+  api:
+    source: services/api
+    provider: cloud-run
+`)
+	check := func(step string, out []byte) {
+		t.Helper()
+		m, err := Parse(out)
+		if err != nil {
+			t.Fatalf("%s: %v\n%s", step, err, out)
+		}
+		if m.DatabaseGateway == nil || m.DatabaseGateway.Provider != "cloud-run" || m.DatabaseGateway.Region != "us-east1" {
+			t.Errorf("%s lost database_gateway:\n%s", step, out)
+		}
+		db := m.Resources["db"]
+		if !db.GatewayIn("production") || db.GatewayIn("staging") {
+			t.Errorf("%s lost the db's gateway settings:\n%s", step, out)
+		}
+		if !strings.Contains(string(out), "# where the gateway runs") {
+			t.Errorf("%s lost a comment:\n%s", step, out)
+		}
+	}
+	region := "eu-west-1"
+	out, err := WithPlacement(doc, Placement{Section: "services", Name: "api", Region: &region})
+	if err != nil {
+		t.Fatal(err)
+	}
+	check("a service placement edit", out)
+	provider := "cloud-sql"
+	out, err = WithPlacement(out, Placement{Section: "resources", Name: "db", Environment: "production", Provider: &provider})
+	if err != nil {
+		t.Fatal(err)
+	}
+	check("a resource placement edit", out)
+	out, err = WithResource(out, "cache", Resource{Kind: "redis"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	check("adding a resource", out)
+	out, err = WithIgnored(out, "mysql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	check("ignoring a kind", out)
+}

@@ -30,6 +30,7 @@ import (
 	"github.com/xraph/loomplane/database/migrations"
 	cloudinfraext "github.com/xraph/loomplane/extensions/cloudinfra"
 	connectionsext "github.com/xraph/loomplane/extensions/connections"
+	dbgatewayext "github.com/xraph/loomplane/extensions/dbgateway"
 	discoveryext "github.com/xraph/loomplane/extensions/discovery"
 	environmentsext "github.com/xraph/loomplane/extensions/environments"
 	federationext "github.com/xraph/loomplane/extensions/federation"
@@ -125,6 +126,10 @@ func Extensions(cfg config.Config) []forge.Extension {
 		// action; Loomplane's API reaches Ctrl Plane in-process instead.
 		cpext.WithDisableRoutes(),
 		cpext.WithDisableMigrate(),
+		// Its scheduler (reconciler, health checks, garbage collection, cert
+		// renewal) runs on one API replica, elected through a Postgres
+		// advisory lock. Without this, every replica runs every worker.
+		cpext.WithLeaderElection(""),
 	)
 
 	return []forge.Extension{
@@ -144,6 +149,7 @@ func Extensions(cfg config.Config) []forge.Extension {
 		federationext.New(cfg, ctrl.CtrlPlane),
 		realtimeext.New(cfg),
 		planningext.New(cfg, jobs.Engine, deployments, ctrl.CtrlPlane, plugs),
+		dbgatewayext.New(cfg),
 		infraext.New(cpAuth, ctrl.CtrlPlane),
 		web.New(cfg.Dashboard.Dir, "/api/", cfg.Identity.BasePath+"/", "/_/", "/.well-known/", "/catalog-admin/"),
 	}

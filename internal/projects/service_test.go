@@ -730,3 +730,74 @@ func TestService_aProjectStartsWithAtMostTenRepositories(t *testing.T) {
 		t.Fatalf("attached %v before refusing", f.attach.urls)
 	}
 }
+
+// reapRecorder is a Reaper that records what it was asked to read and
+// which of its clean ups ran.
+type reapRecorder struct {
+	reaped   []string
+	finished []string
+}
+
+func (r *reapRecorder) Reap(_ context.Context, orgID, projectID, environmentID string) func(context.Context) {
+	key := orgID + "/" + projectID + "/" + environmentID
+	r.reaped = append(r.reaped, key)
+	return func(context.Context) { r.finished = append(r.finished, key) }
+}
+
+func TestService_reapersRunAroundDeletion(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t)
+	reaper := &reapRecorder{}
+	f.svc.AddReaper(reaper)
+	dev := f.principal(t, "ausr_dev", security.RoleDeveloper)
+	p, err := f.svc.Create(ctx, dev, CreateProjectInput{Name: "Engine"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	envs, err := f.svc.Environments(ctx, dev, p.ID)
+	if err != nil || len(envs) < 2 {
+		t.Fatalf("environments: %d, %v", len(envs), err)
+	}
+	gone := org + "/" + p.ID + "/" + envs[0].ID
+	if err = f.svc.DeleteEnvironment(ctx, dev, p.ID, envs[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(reaper.reaped, []string{gone}) || !slices.Equal(reaper.finished, []string{gone}) {
+		t.Fatalf("after deleting an environment: reaped %v, finished %v", reaper.reaped, reaper.finished)
+	}
+
+	// A refused deletion reads but cleans up nothing.
+	for _, e := range envs[1 : len(envs)-1] {
+		if err = f.svc.DeleteEnvironment(ctx, dev, p.ID, e.ID); err != nil {
+			t.Fatal(err)
+		}
+	}
+	reaper.reaped, reaper.finished = nil, nil
+	last := envs[len(envs)-1]
+	if err = f.svc.DeleteEnvironment(ctx, dev, p.ID, last.ID); !errors.Is(err, ErrLastEnvironment) {
+		t.Fatalf("deleting the last environment: %v", err)
+	}
+	if len(reaper.reaped) != 1 || len(reaper.finished) != 0 {
+		t.Fatalf("a refused deletion: reaped %v, finished %v", reaper.reaped, reaper.finished)
+	}
+
+	// A caller who may not delete doesn't get as far as reading.
+	viewer := f.principal(t, "ausr_viewer", security.RoleViewer)
+	reaper.reaped = nil
+	if err = f.svc.DeleteEnvironment(ctx, viewer, p.ID, last.ID); !errors.Is(err, security.ErrForbidden) {
+		t.Fatalf("a viewer's deletion: %v", err)
+	}
+	if len(reaper.reaped) != 0 {
+		t.Fatalf("a forbidden deletion was reaped: %v", reaper.reaped)
+	}
+
+	// A project's deletion reads all its environments.
+	admin := f.principal(t, "ausr_admin", security.RoleAdmin)
+	whole := org + "/" + p.ID + "/"
+	if err = f.svc.Delete(ctx, admin, p.ID); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(reaper.reaped, []string{whole}) || !slices.Equal(reaper.finished, []string{whole}) {
+		t.Fatalf("after deleting the project: reaped %v, finished %v", reaper.reaped, reaper.finished)
+	}
+}

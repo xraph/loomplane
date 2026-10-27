@@ -42,7 +42,7 @@ func TestCapacityPolicyValidation(t *testing.T) {
 			p.FrontendLimits = []FrontendLimit{{TargetID: "target", Maximum: &n}}
 		}, true},
 		{"overflow minimum", func(p *CapacityPolicy) {
-			p.Limits = ResourceVector{math.MaxInt64, math.MaxInt64, math.MaxInt64, math.MaxInt64}
+			p.Limits = ResourceVector{Servers: math.MaxInt64, CPUMillis: math.MaxInt64, MemoryBytes: math.MaxInt64, StorageBytes: math.MaxInt64}
 			p.Pools[0].MinServers = math.MaxInt64
 			p.Pools[0].MaxServers = math.MaxInt64
 		}, true},

@@ -76,5 +76,8 @@ func CancelUnstartedCapacity(ctx context.Context, tx driver.Tx, org, plan, deplo
  WHERE w.org_id=$1 AND w.plan_id=$2 AND w.deployment_id=$3 AND NOT w.effects_started AND NOT w.legacy_unfenced
  AND NOT EXISTS(SELECT 1 FROM loomplane_pool_execution x WHERE x.org_id=w.org_id AND x.plan_id=w.plan_id AND x.service=w.service AND (x.started OR coalesce(octet_length(x.checkpoint),0)>0 OR x.phase NOT IN ('reserved','released')))
  AND NOT EXISTS(SELECT 1 FROM loomplane_capacity_reservations r WHERE r.org_id=w.org_id AND r.plan_id=w.plan_id AND r.service=w.service AND r.binding_id<>'')`, org, plan, deployment)
-	return err
+	if err != nil {
+		return err
+	}
+	return cancelFrontendSlots(ctx, tx, org, plan)
 }

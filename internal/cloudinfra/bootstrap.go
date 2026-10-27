@@ -10,8 +10,10 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"maps"
 	"net"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 
@@ -60,7 +62,12 @@ func (SSHRuntime) Inspect(ctx context.Context, raw []byte, settings map[string]s
 		storageBytes = &storage.TotalBytes
 		freeStorageBytes = &storage.FreeBytes
 	}
-	return RuntimeHealth{StorageBytes: storageBytes, FreeStorageBytes: freeStorageBytes, EffectiveCPUMillis: effectiveCPU, EffectiveMemoryBytes: effectiveMemory, DockerID: details["docker_id"], Architecture: details["architecture"], CPUs: cpus, MemoryBytes: memory, CheckedAt: time.Now().UTC()}, nil
+	health := RuntimeHealth{StorageBytes: storageBytes, FreeStorageBytes: freeStorageBytes, EffectiveCPUMillis: effectiveCPU, EffectiveMemoryBytes: effectiveMemory, DockerID: details["docker_id"], Architecture: details["architecture"], CPUs: cpus, MemoryBytes: memory, CheckedAt: time.Now().UTC()}
+	// GPUs reports a failed read as status unknown, so a GPU-less host never fails inspection.
+	if inv, gpuErr := client.GPUs(ctx); gpuErr == nil {
+		health.GPUs, health.GPURuntime, health.GPUMessage = inv.Devices, inv.Status, inv.Message
+	}
+	return health, nil
 }
 
 // Enrollment contains only the host's public key. The bearer token is accepted
@@ -156,10 +163,120 @@ for attempt in range(180):
 		return "", err
 	}
 	script = strings.ReplaceAll(strings.ReplaceAll(script, "ENDPOINT", string(ep)), "TOKEN", string(token))
-	document := map[string]any{"package_update": true, "groups": []string{"docker"}, "packages": []string{"docker.io", "python3", "iproute2"}, "users": []any{"default", map[string]any{"name": "loomplane", "groups": []string{"docker"}, "shell": "/bin/bash", "ssh_authorized_keys": []string{strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey())))}}}, "write_files": []any{map[string]any{"path": "/root/loomplane-enroll.py", "permissions": "0600", "content": script}}, "runcmd": []any{[]string{"systemctl", "enable", "--now", "docker"}, []string{"python3", "/root/loomplane-enroll.py"}}}
+	packages := []string{"docker.io", "python3", "iproute2"}
+	runcmd := []any{[]string{"systemctl", "enable", "--now", "docker"}, []string{"python3", "/root/loomplane-enroll.py"}}
+	if nvidiaAccelerator(o.Accelerator) {
+		// The GPU-ready image ships the driver and may ship Docker, so the
+		// script installs Docker only when it's missing, adds the NVIDIA
+		// Container Toolkit when that's missing, and Docker is pointed at it
+		// before the server enrolls. A failure here still enrolls the server,
+		// and its GPU check then says why it can't take GPU work.
+		packages = []string{"python3", "iproute2", "ca-certificates", "curl", "gnupg"}
+		runcmd = []any{[]string{"bash", "-c", nvidiaToolkitScript}, []string{"systemctl", "enable", "--now", "docker"}, []string{"nvidia-ctk", "runtime", "configure", "--runtime=docker"}, []string{"systemctl", "restart", "docker"}, []string{"python3", "/root/loomplane-enroll.py"}}
+	}
+	document := map[string]any{"package_update": true, "groups": []string{"docker"}, "packages": packages, "users": []any{"default", map[string]any{"name": "loomplane", "groups": []string{"docker"}, "shell": "/bin/bash", "ssh_authorized_keys": []string{strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey())))}}}, "write_files": []any{map[string]any{"path": "/root/loomplane-enroll.py", "permissions": "0600", "content": script}}, "runcmd": runcmd}
 	encoded, err := json.Marshal(document)
 	return "#cloud-config\n" + string(encoded), err
 }
+
+// nvidiaToolkitScript prepares a GPU-ready image for containers. It installs
+// Docker only when the image has none, so an engine the image ships stays,
+// then installs the NVIDIA Container Toolkit from NVIDIA's apt repository
+// unless nvidia-ctk is already there. It never installs a driver. Any failed
+// step stops the script, and the server's GPU check then says what's missing.
+const nvidiaToolkitScript = `set -euo pipefail
+export DEBIAN_FRONTEND=noninteractive
+if ! command -v docker >/dev/null 2>&1; then
+  apt-get -o DPkg::Lock::Timeout=300 update
+  apt-get -o DPkg::Lock::Timeout=300 install -y docker.io
+fi
+if command -v nvidia-ctk >/dev/null 2>&1; then exit 0; fi
+keyring=/usr/share/keyrings/nvidia-container-toolkit-keyring.gpg
+download=$(mktemp -d)
+curl -fsSL https://nvidia.github.io/libnvidia-container/gpgkey -o "$download/gpgkey"
+gpg --batch --yes --dearmor -o "$keyring" "$download/gpgkey"
+curl -fsSL https://nvidia.github.io/libnvidia-container/stable/deb/nvidia-container-toolkit.list -o "$download/list"
+sed "s#deb https://#deb [signed-by=$keyring] https://#g" "$download/list" > /etc/apt/sources.list.d/nvidia-container-toolkit.list
+apt-get -o DPkg::Lock::Timeout=300 update
+apt-get -o DPkg::Lock::Timeout=300 install -y nvidia-container-toolkit
+`
+
+func nvidiaAccelerator(a *provider.Accelerator) bool {
+	return a != nil && a.Vendor == provider.VendorNVIDIA
+}
+
+// gpuHealth keeps an NVIDIA server's GPU state honest. A probe that found no
+// GPU, or couldn't run, on a server bought with GPUs leaves the count unknown
+// rather than zero, and a server that can't take GPU work always says why.
+func gpuHealth(h RuntimeHealth, a *provider.Accelerator) RuntimeHealth {
+	if !nvidiaAccelerator(a) || h.GPURuntime == provider.GPUStatusReady {
+		return h
+	}
+	if h.GPURuntime == "" || h.GPURuntime == provider.GPUStatusNone {
+		h.GPURuntime = provider.GPUStatusUnknown
+	}
+	if h.GPUMessage == "" {
+		title := a.Kind
+		if k, ok := provider.LookupAcceleratorKind(a.Kind); ok {
+			title = k.Title
+		}
+		noun, them := "GPU", "it"
+		if a.Count != 1 {
+			noun, them = "GPUs", "them"
+		}
+		h.GPUMessage = fmt.Sprintf("This server was bought with %d %s %s, but Loomplane can't confirm Docker can use %s, so it takes no GPU work and still costs money. Nothing retries the setup by itself. Install the NVIDIA Container Toolkit on the server, run nvidia-ctk runtime configure --runtime=docker, restart Docker and check the server again, or delete the server.", a.Count, title, noun, them)
+	}
+	return h
+}
+
+// runtimeGPUDetails is the GPU inventory a runtime connection carries for
+// planning, or nil when the health check couldn't say anything about GPUs.
+func runtimeGPUDetails(h RuntimeHealth) map[string]string {
+	if h.GPURuntime == "" {
+		return nil
+	}
+	return provider.GPUInventory{Status: h.GPURuntime, Message: h.GPUMessage, Devices: h.GPUs, CheckedAt: h.CheckedAt}.Details()
+}
+
+// syncRuntimeGPUs writes the latest GPU inventory into a server's runtime
+// connection. It writes only when the status, message or devices changed, so
+// a routine check doesn't rewrite the connection.
+func (s *Service) syncRuntimeGPUs(ctx context.Context, conn *connections.Connection, h RuntimeHealth) error {
+	details := runtimeGPUDetails(h)
+	if details == nil || conn == nil {
+		return nil
+	}
+	if old, ok := provider.ParseGPUInventory(conn.Details); ok && conn.Details[provider.GPUDetailStatus] == h.GPURuntime && old.Status == h.GPURuntime && old.Message == h.GPUMessage && slices.Equal(old.Devices, h.GPUs) {
+		return nil
+	}
+	updated := *conn
+	updated.Details = maps.Clone(conn.Details)
+	if updated.Details == nil {
+		updated.Details = map[string]string{}
+	}
+	maps.Copy(updated.Details, details)
+	return s.RuntimeConnections.UpdateConnection(ctx, &updated)
+}
+
+// checkedRuntimeGPUs is syncRuntimeGPUs for a routine server check. A
+// connection changed under the check is read again and written once more; if
+// it changes again the check carries on, and the next one writes the inventory.
+func (s *Service) checkedRuntimeGPUs(ctx context.Context, org string, conn *connections.Connection, h RuntimeHealth) error {
+	err := s.syncRuntimeGPUs(ctx, conn, h)
+	if !errors.Is(err, connections.ErrChanged) {
+		return err
+	}
+	fresh, getErr := s.RuntimeConnections.GetConnection(ctx, org, conn.ID)
+	if getErr != nil {
+		return getErr
+	}
+	if err = s.syncRuntimeGPUs(ctx, fresh, h); errors.Is(err, connections.ErrChanged) {
+		s.warn("Couldn't write a server's GPU inventory to its runtime connection; the next check tries again", err)
+		return nil
+	}
+	return err
+}
+
 func (s *Service) bootstrapSecret(ctx context.Context, o *Operation) (*bootstrapSecret, error) {
 	raw, err := s.Secrets.Reveal(ctx, o.OrgID, bootstrapKey(o.ID))
 	if err != nil {
@@ -251,6 +368,7 @@ func (s *Service) Enroll(ctx context.Context, org, id, token string, in Enrollme
 func (s *Service) readyRuntime(ctx context.Context, o *Operation, v *Server) error {
 	var raw []byte
 	var settings map[string]string
+	var conn *connections.Connection
 	if o.Input.Kind == "create" {
 		secret, err := s.bootstrapSecret(ctx, o)
 		if err != nil {
@@ -262,12 +380,11 @@ func (s *Service) readyRuntime(ctx context.Context, o *Operation, v *Server) err
 			return err
 		}
 	} else {
-		conn, key, err := s.Connections.Credential(ctx, o.OrgID, v.RuntimeConnectionID)
+		current, key, err := s.Connections.Credential(ctx, o.OrgID, v.RuntimeConnectionID)
 		if err != nil {
 			return err
 		}
-		raw = key
-		settings = conn.Details
+		conn, raw, settings = current, key, current.Details
 	}
 	health, err := s.Runtime.Inspect(ctx, raw, settings, false)
 	if err != nil {
@@ -276,6 +393,9 @@ func (s *Service) readyRuntime(ctx context.Context, o *Operation, v *Server) err
 	if v.Health.DockerID != "" && health.DockerID != v.Health.DockerID {
 		return provider.ErrInfrastructureIdentity
 	}
+	// A GPU server enrolls even when Docker can't use its GPUs yet: it exists
+	// and costs money. Its health says why, and it takes no GPU work.
+	health = gpuHealth(health, o.Accelerator)
 	if o.Input.Kind == "create" {
 		config, configErr := server.ParseConfig(raw, settings)
 		if configErr != nil {
@@ -289,6 +409,8 @@ func (s *Service) readyRuntime(ctx context.Context, o *Operation, v *Server) err
 		}
 		now := s.now().UTC()
 		connection := &connections.Connection{ID: connectionID, OrgID: o.OrgID, Cloud: connections.Server, Name: "Server " + o.ServerID, Account: health.DockerID, Details: settings, Status: connections.StatusReady, CheckedAt: &now, CreatedBy: o.Principal.UserID, CreatedAt: now, UpdatedAt: now}
+		// Planning reads GPUs from the runtime connection, so it carries them from the start.
+		maps.Copy(connection.Details, runtimeGPUDetails(health))
 		err = s.RuntimeConnections.CreateConnection(ctx, connection)
 		if errors.Is(err, connections.ErrExists) {
 			existing, getErr := s.RuntimeConnections.GetConnection(ctx, o.OrgID, connectionID)
@@ -298,10 +420,20 @@ func (s *Service) readyRuntime(ctx context.Context, o *Operation, v *Server) err
 			if existing.Cloud != connections.Server || existing.Details["docker_id"] != health.DockerID || existing.Details["host_key"] != o.HostKey {
 				return ErrConflict
 			}
+			if syncErr := s.syncRuntimeGPUs(ctx, existing, health); syncErr != nil {
+				return syncErr
+			}
 		} else if err != nil {
 			return err
 		}
 		v.RuntimeConnectionID = connectionID
+	} else if conn != nil {
+		if syncErr := s.syncRuntimeGPUs(ctx, conn, health); syncErr != nil {
+			return syncErr
+		}
+	}
+	if o.Input.Kind == "create" || o.Input.Kind == "resize" {
+		priceServer(v, o)
 	}
 	v.Health = health
 	v.Status = "ready"

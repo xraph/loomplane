@@ -19,6 +19,7 @@ import {
   ActivityIcon,
   CloudsIcon,
   DeploymentsIcon,
+  DomainsIcon,
   InfrastructureIcon,
   OverviewIcon,
   ProjectsIcon,
@@ -145,6 +146,16 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
       link: <Link to="/services" />,
       isActive: path === "/services",
     },
+    ...(can("organization_cloud:manage")
+      ? [
+          {
+            title: "Domains",
+            icon: <DomainsIcon />,
+            link: <Link to="/domains" />,
+            isActive: path.startsWith("/domains"),
+          },
+        ]
+      : []),
     {
       title: "Clouds",
       icon: <CloudsIcon />,

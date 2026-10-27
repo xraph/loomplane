@@ -64,6 +64,9 @@ type Manifest struct {
 	Services   map[string]Service  `json:"services,omitempty" yaml:"services,omitempty"`
 	Resources  map[string]Resource `json:"resources,omitempty" yaml:"resources,omitempty"`
 	Gateways   map[string]Gateway  `json:"gateways,omitempty" yaml:"gateways,omitempty"`
+	// DatabaseGateway says where the database gateway runs, for the
+	// Postgres resources that opt in with gateway: true.
+	DatabaseGateway *DatabaseGateway `json:"database_gateway,omitempty" yaml:"database_gateway,omitempty"`
 	// Links join two clouds' private networks, so services on one reach
 	// what's private on the other.
 	Links  map[string]Link `json:"links,omitempty" yaml:"links,omitempty"`
@@ -207,7 +210,21 @@ type Size struct {
 	CPU float64 `json:"cpu" yaml:"cpu"`
 	// Memory is in MiB.
 	Memory int `json:"memory" yaml:"memory"`
+	// GPU asks for GPUs on the server or node the service runs on.
+	GPU *GPU `json:"gpu,omitempty" yaml:"gpu,omitempty"`
+	// Shm is MiB of /dev/shm. It counts toward Memory.
+	Shm int `json:"shm,omitempty" yaml:"shm,omitempty"`
 }
+
+// GPU asks for Count GPUs of Kind on one server or node. Planning checks
+// Kind against the target.
+type GPU struct {
+	Kind  string `json:"kind" yaml:"kind"`
+	Count int    `json:"count" yaml:"count"`
+}
+
+// MaxGPUs is the most GPUs a manifest can ask for on one server or node.
+const MaxGPUs = 8
 
 // Resource is a backing service the application needs, such as Postgres.
 type Resource struct {
@@ -222,12 +239,42 @@ type Resource struct {
 	// Version is the engine's version, such as "17" for Postgres. Empty
 	// lets the provider choose.
 	Version string `json:"version,omitempty" yaml:"version,omitempty"`
+	// Gateway puts a Postgres resource behind the database gateway.
+	// Only postgres resources can.
+	Gateway *bool `json:"gateway,omitempty" yaml:"gateway,omitempty"`
 	// Uses chooses, by dependency name, where a catalog resource gets each
 	// dependency. A dependency left out gets a new one of its own.
 	Uses map[string]Use `json:"uses,omitempty" yaml:"uses,omitempty"`
+	// GPU asks for GPUs, for catalog resources that can use them.
+	GPU *GPU `json:"gpu,omitempty" yaml:"gpu,omitempty"`
 	// Environments override the provider or region in one environment, or
 	// leave the resource out of it.
 	Environments map[string]ResourceSettings `json:"environments,omitempty" yaml:"environments,omitempty"`
+}
+
+// DatabaseGateway is where the database gateway runs: one per
+// application, in front of every Postgres resource that opts in. Loomplane
+// builds it and runs it like a service, on a provider, or on the one Cloud
+// target that carries every tag.
+type DatabaseGateway struct {
+	Provider string `json:"provider,omitempty" yaml:"provider,omitempty"`
+	Region   string `json:"region,omitempty" yaml:"region,omitempty"`
+	// CloudTags select the one target in the assigned Cloud that carries
+	// every tag. Can't be set with provider.
+	CloudTags []string `json:"cloud_tags,omitempty" yaml:"cloud_tags,omitempty"`
+	// Environments override the provider or region in one environment, or
+	// leave the database gateway out of it.
+	Environments map[string]ResourceSettings `json:"environments,omitempty" yaml:"environments,omitempty"`
+}
+
+// GatewayIn reports whether the resource is behind the database gateway in
+// env: the environment's setting if it has one, else the resource's own,
+// else no.
+func (r Resource) GatewayIn(env string) bool {
+	if o, ok := r.Environments[env]; ok && o.Gateway != nil {
+		return *o.Gateway
+	}
+	return r.Gateway != nil && *r.Gateway
 }
 
 // Use says how a composed catalog resource gets one of its dependencies:
@@ -271,6 +318,11 @@ type ResourceSettings struct {
 	Provider string `json:"provider,omitempty" yaml:"provider,omitempty"`
 	Region   string `json:"region,omitempty" yaml:"region,omitempty"`
 	Enabled  *bool  `json:"enabled,omitempty" yaml:"enabled,omitempty"`
+	// Gateway turns the database gateway on or off for a Postgres
+	// resource in one environment. Nothing else reads it.
+	Gateway *bool `json:"gateway,omitempty" yaml:"gateway,omitempty"`
+	// GPU replaces the resource's GPU request. Gateways can't use it.
+	GPU *GPU `json:"gpu,omitempty" yaml:"gpu,omitempty"`
 }
 
 // Ignore lists what analysis found that the application doesn't use, so
@@ -311,6 +363,7 @@ var (
 	nameRE        = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
 	envRE         = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
 	tokenRE       = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
+	gpuKindRE     = regexp.MustCompile(`^[a-z0-9-]+$`)
 	kindRE        = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
 	// versionRE allows what engines call versions: 17, 8.4, 7.2.4-alpine.
 	versionRE = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z._-]{0,31}$`)
@@ -467,6 +520,7 @@ func (m *Manifest) Validate() error {
 		add("gateways", "has %d gateways; the most is %d", len(m.Gateways), MaxGateways)
 	}
 	m.validateGateways(add)
+	m.validateDatabaseGateway(add)
 	m.validateLinks(add)
 
 	for _, name := range m.ResourceNames() {
@@ -492,6 +546,7 @@ func (m *Manifest) Validate() error {
 		if r.Version != "" && !versionRE.MatchString(r.Version) {
 			add(path+".version", "%q isn't a version", r.Version)
 		}
+		checkGatewayKind(add, path, r.Kind, r.Gateway)
 		m.validateUses(add, name, path, r.Uses)
 		for _, env := range sortedKeys(r.Environments) {
 			o := r.Environments[env]
@@ -501,7 +556,10 @@ func (m *Manifest) Validate() error {
 			}
 			checkToken(add, epath+".provider", "provider", o.Provider)
 			checkToken(add, epath+".region", "region", o.Region)
+			checkGatewayKind(add, epath, r.Kind, o.Gateway)
+			checkGPU(add, epath+".gpu", o.GPU)
 		}
+		checkGPU(add, path+".gpu", r.GPU)
 	}
 
 	for _, name := range m.ServiceNames() {
@@ -594,6 +652,23 @@ func checkToken(add func(string, string, ...any), path, what, value string) {
 	}
 }
 
+// checkGatewayKind refuses gateway: true on anything but Postgres. False
+// asks for nothing, so any resource may say it.
+func checkGatewayKind(add func(string, string, ...any), path, kind string, gateway *bool) {
+	if gateway != nil && *gateway && kind != "postgres" {
+		add(path+".gateway", "only postgres resources can use the database gateway")
+	}
+}
+
+// checkNoGateway refuses the gateway switch where no resource is: it
+// belongs on a resource, and an override of a gateway's own would be
+// ignored.
+func checkNoGateway(add func(string, string, ...any), path string, gateway *bool) {
+	if gateway != nil {
+		add(path+".gateway", "only resources can opt into the database gateway")
+	}
+}
+
 // MaxCloudTags bounds how many tags one service selects a target by.
 const MaxCloudTags = 8
 
@@ -655,6 +730,26 @@ func checkSettings(add func(string, string, ...any), path string, s Settings) {
 		if s.Size.Memory < MinMemory || s.Size.Memory > MaxMemory {
 			add(path+".size.memory", "must be between %d and %d MiB", MinMemory, MaxMemory)
 		}
+		checkGPU(add, path+".size.gpu", s.Size.GPU)
+		if s.Size.Shm < 0 {
+			add(path+".size.shm", "can't be negative")
+		} else if s.Size.Shm >= s.Size.Memory && s.Size.Shm > 0 {
+			add(path+".size.shm", "(%d MiB) must be less than memory (%d MiB), which it counts toward", s.Size.Shm, s.Size.Memory)
+		}
+	}
+}
+
+func checkGPU(add func(string, string, ...any), path string, g *GPU) {
+	if g == nil {
+		return
+	}
+	if g.Kind == "" {
+		add(path+".kind", "is required, such as nvidia-l4")
+	} else if !gpuKindRE.MatchString(g.Kind) {
+		add(path+".kind", "%q isn't a GPU kind", g.Kind)
+	}
+	if g.Count < 1 || g.Count > MaxGPUs {
+		add(path+".count", "must be between 1 and %d", MaxGPUs)
 	}
 }
 
@@ -809,7 +904,35 @@ func (m *Manifest) validateGateways(add func(string, string, ...any)) {
 			}
 			checkToken(add, epath+".provider", "provider", o.Provider)
 			checkToken(add, epath+".region", "region", o.Region)
+			checkNoGateway(add, epath, o.Gateway)
+			if o.GPU != nil {
+				add(epath+".gpu", "a gateway can't use GPUs")
+			}
 		}
+	}
+}
+
+func (m *Manifest) validateDatabaseGateway(add func(string, string, ...any)) {
+	g := m.DatabaseGateway
+	if g == nil {
+		return
+	}
+	const path = "database_gateway"
+	checkToken(add, path+".provider", "provider", g.Provider)
+	checkToken(add, path+".region", "region", g.Region)
+	checkCloudTags(add, path+".cloud_tags", g.CloudTags)
+	if len(g.CloudTags) > 0 && g.Provider != "" {
+		add(path+".cloud_tags", "can't be set with database_gateway.provider; choose Cloud tags or a provider")
+	}
+	for _, env := range sortedKeys(g.Environments) {
+		o := g.Environments[env]
+		epath := path + ".environments." + env
+		if !envRE.MatchString(env) {
+			add(epath, "isn't an environment name")
+		}
+		checkToken(add, epath+".provider", "provider", o.Provider)
+		checkToken(add, epath+".region", "region", o.Region)
+		checkNoGateway(add, epath, o.Gateway)
 	}
 }
 
@@ -927,9 +1050,13 @@ func cloudTagDefaults(out Settings, d Defaults) Settings {
 func (r Resource) For(env string, d Defaults) ResourceSettings {
 	out := ResourceSettings{}
 	out.Provider, out.Region = place(r.Provider, r.Region, d)
+	out.GPU = r.GPU
 	o, ok := r.Environments[env]
 	if !ok {
 		return out
+	}
+	if o.GPU != nil {
+		out.GPU = o.GPU
 	}
 	out.Provider, out.Region = override(out.Provider, out.Region, o.Provider, o.Region, d)
 	out.Enabled = o.Enabled

@@ -24,6 +24,7 @@ const (
 	Server       = "server"
 	Kubernetes   = "kubernetes"
 	Registry     = "registry"
+	Cloudflare   = "cloudflare"
 )
 
 // cloudTitles name the clouds that can be signed in to as people know

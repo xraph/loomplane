@@ -21,10 +21,10 @@ import (
 	heraldstore "github.com/xraph/herald/store"
 	heraldpg "github.com/xraph/herald/store/postgres"
 	"github.com/xraph/relay"
-	"github.com/xraph/relay/catalog"
 	relaypg "github.com/xraph/relay/store/postgres"
 
 	"github.com/xraph/loomplane/internal/config"
+	"github.com/xraph/loomplane/internal/pglock"
 	"github.com/xraph/loomplane/internal/security"
 )
 
@@ -78,7 +78,13 @@ func (s *Service) MailEnabled() bool          { return s.cfg.Notifications.MailE
 
 // Prepare is called after central migrations and before Authsome starts. It
 // configures exactly one application-owned SMTP provider and seeds templates.
+// Replicas that start together take turns: the provider has no unique
+// constraint, so two at once would each find none and create one.
 func (s *Service) Prepare(ctx context.Context) error {
+	return pglock.Do(ctx, s.pg, pglock.StartupSeed, s.prepare)
+}
+
+func (s *Service) prepare(ctx context.Context) error {
 	if err := s.herald.SeedDefaultTemplates(ctx, s.cfg.Identity.AppID); err != nil {
 		return err
 	}
@@ -100,20 +106,6 @@ func (s *Service) Prepare(ctx context.Context) error {
 		}
 	}
 	return s.herald.CreateProvider(ctx, &provider.Provider{AppID: s.cfg.Identity.AppID, Name: "loomplane-smtp", Channel: "email", Driver: "smtp", Credentials: creds, Settings: settings, Enabled: true})
-}
-
-// registerEventTypes tells Relay the webhook types this service sends.
-func (s *Service) registerEventTypes(ctx context.Context) error {
-	for _, status := range []string{"succeeded", "failed"} {
-		if _, err := s.relay.RegisterEventType(ctx, catalog.WebhookDefinition{Name: "deployment." + status, Description: "A deployment attempt completed", Group: "deployment", Version: "2026-10-18"}); err != nil {
-			return err
-		}
-	}
-	if _, err := s.relay.RegisterEventType(ctx, catalog.WebhookDefinition{Name: connectionSignInNeeded, Description: "A cloud connection needs signing in again", Group: "connection", Version: "2026-10-25"}); err != nil {
-		return err
-	}
-	_, err := s.relay.RegisterEventType(ctx, catalog.WebhookDefinition{Name: connectionKeylessRefused, Description: "A cloud no longer trusts Loomplane for a keyless connection", Group: "connection", Version: "2026-11-16"})
-	return err
 }
 func (s *Service) Run(ctx context.Context) error {
 	if err := s.registerEventTypes(ctx); err != nil {

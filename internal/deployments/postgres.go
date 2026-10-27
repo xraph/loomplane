@@ -49,7 +49,7 @@ func (e *OwnedTarget) applyDatabase(ctx context.Context, job *Job) (*Outcome, er
 	if err != nil {
 		return nil, err
 	}
-	adminPassword, err := retainedDatabaseSecret(ctx, job, "admin-password")
+	adminPassword, err := retainedDatabaseSecret(ctx, job, adminPasswordField)
 	if err != nil {
 		return nil, err
 	}

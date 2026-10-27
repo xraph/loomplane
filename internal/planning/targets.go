@@ -70,6 +70,7 @@ func (p *planner) configureTarget(name, base string, prov *provider.Provider, se
 			p.problem(Finding{Code: "target-unsupported", Subject: ServiceSubject, Name: name, Path: base,
 				Message: "Target, endpoint and remote build settings need a server or Kubernetes provider."})
 		}
+		p.serviceGPU(name, base, prov, set, cfg, nil)
 		return
 	}
 	cfg.Target, cfg.Endpoint = set.Target, set.Endpoint
@@ -95,6 +96,7 @@ func (p *planner) configureTarget(name, base string, prov *provider.Provider, se
 	if c != nil {
 		cfg.TargetSettings = ReviewedConnectionSettings(c.Cloud, c.Details)
 	}
+	p.serviceGPU(name, base, prov, set, cfg, c)
 	b := set.Build
 	if b == nil {
 		b = &manifest.Build{}

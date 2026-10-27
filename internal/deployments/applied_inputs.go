@@ -12,19 +12,26 @@ import (
 	"github.com/xraph/loomplane/internal/planning"
 )
 
-// appliedVariables contains only user variables. Dependency addresses are
-// resolved against the serving bindings each time the pinned service runs.
+// appliedVariables contains user variables and resource addresses. Service
+// addresses are resolved against the serving bindings each time the pinned
+// service runs. GatewayValues are the variables that go with a resource
+// behind the database gateway: <KEY>_GATEWAY, the gateway's address, and
+// <KEY>_DIRECT, the resource's own, which GatewaySecrets marks secret.
 type appliedVariables struct {
 	ResourceValues map[string]string `json:"resource_values,omitempty"`
+	GatewayValues  map[string]string `json:"gateway_values,omitempty"`
+	GatewaySecrets map[string]bool   `json:"gateway_secrets,omitempty"`
 	Values         map[string]string `json:"values"`
 	Secrets        map[string]bool   `json:"secrets"`
 }
 
-// captureAppliedVariables pins what a service is deployed with. resources
-// are the environment's resource bindings by name, which a per-consumer
-// output is issued from.
-func (r *Runner) captureAppliedVariables(ctx context.Context, d *Deployment, a *planning.Action, resources map[string]*planning.Binding) error {
-	if a.Service == nil || a.Service.Gateway != nil || r.resources == nil {
+// captureAppliedVariables pins what the service gets in this deployment.
+// The service's planned links say whether it reaches a resource through
+// the database gateway, and services, the environment's service bindings,
+// say where that gateway is. resources are the environment's resource
+// bindings by name, which a per-consumer output is issued from.
+func (r *Runner) captureAppliedVariables(ctx context.Context, d *Deployment, a *planning.Action, services, resources map[string]*planning.Binding) error {
+	if a.Service == nil || a.Service.Generated() || r.resources == nil {
 		return nil
 	}
 	cfg := *a.Service
@@ -65,7 +72,7 @@ func (r *Runner) captureAppliedVariables(ctx context.Context, d *Deployment, a *
 			}
 			ref = resourceKey(d.OrgID, d.EnvironmentID, "applied-inputs/"+d.ID, id.String())
 		}
-		resourceValues := map[string]string{}
+		resourceValues, gatewayValues, gatewaySecrets := map[string]string{}, map[string]string{}, map[string]bool{}
 		for _, link := range cfg.Env {
 			if link.Subject != planning.ResourceSubject {
 				continue
@@ -74,6 +81,9 @@ func (r *Runner) captureAppliedVariables(ctx context.Context, d *Deployment, a *
 				continue
 			}
 			if _, consumer := consumerOutput(link); consumer {
+				if e := consumerThroughGateway(a.Name, link); e != nil {
+					return fmt.Errorf("capture applied resource variable: %w", e)
+				}
 				// Issued again on every release, and kept only here.
 				value, e := r.bindConsumer(ctx, d, a.Name, link, resources)
 				if e != nil {
@@ -82,17 +92,19 @@ func (r *Runner) captureAppliedVariables(ctx context.Context, d *Deployment, a *
 				resourceValues[link.Key] = value
 				continue
 			}
-			field, e := linkField(link)
-			if e != nil {
-				return e
-			}
-			value, e := r.resources.Get(ctx, resourceKey(d.OrgID, d.EnvironmentID, link.From, field))
+			value, extra, e := r.resourceAddress(ctx, d, a.Name, services, link)
 			if e != nil {
 				return fmt.Errorf("capture applied resource variable: %w", e)
 			}
-			resourceValues[link.Key] = string(value)
+			resourceValues[link.Key] = value
+			for k, x := range extra {
+				gatewayValues[k] = x.Value
+				if x.Secret {
+					gatewaySecrets[k] = true
+				}
+			}
 		}
-		raw, err = json.Marshal(appliedVariables{Values: values, Secrets: secrets, ResourceValues: resourceValues})
+		raw, err = json.Marshal(appliedVariables{Values: values, Secrets: secrets, ResourceValues: resourceValues, GatewayValues: gatewayValues, GatewaySecrets: gatewaySecrets})
 		if err == nil {
 			err = r.resources.Put(ctx, ref, raw)
 		}
@@ -143,7 +155,7 @@ func (r *Runner) appliedSource(ctx context.Context, d *Deployment, a planning.Ac
 }
 
 func pinAppliedSource(d *Deployment, p *planning.Plan, a *planning.Action) {
-	if a.Service == nil || a.Service.Gateway != nil {
+	if a.Service == nil || a.Service.Generated() {
 		return
 	}
 	cfg := *a.Service

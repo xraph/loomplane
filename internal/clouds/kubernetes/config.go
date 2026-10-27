@@ -125,6 +125,19 @@ func ParseConfig(raw []byte, settings map[string]string) (*Config, error) {
 		}
 		details["storage_class"] = class
 	}
+	if class := strings.TrimSpace(settings["ingress_class"]); class != "" {
+		if len(validation.IsDNS1123Subdomain(class)) != 0 {
+			return nil, fmt.Errorf("%w: ingress_class must be a Kubernetes ingress class name", ErrInvalid)
+		}
+		details["ingress_class"] = class
+	}
+	if address := strings.TrimSpace(settings["ingress_address"]); address != "" {
+		normalized, ok := ingressAddress(address)
+		if !ok {
+			return nil, fmt.Errorf("%w: ingress_address must be an IP address or a hostname", ErrInvalid)
+		}
+		details["ingress_address"] = normalized
+	}
 	if rc.ServerName != "" {
 		details["tls_server_name"] = rc.ServerName
 	}

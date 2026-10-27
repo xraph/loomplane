@@ -1,13 +1,19 @@
 package manifest
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"os"
 	"reflect"
+	"regexp"
 	"slices"
 	"sort"
 	"strings"
 	"testing"
+
+	"github.com/santhosh-tekuri/jsonschema/v6"
+	"gopkg.in/yaml.v3"
 )
 
 const example = `version: 1
@@ -275,8 +281,10 @@ func TestSchema_matchesTypes(t *testing.T) {
 		{"size", props(defs["settings"].(map[string]any)["properties"].(map[string]any)["size"]), Size{}},
 		{"resource", props(defs["resource"]), Resource{}},
 		{"use", props(defs["use"]), Use{}},
+		{"gpu", props(defs["gpu"]), GPU{}},
 		{"resource settings", props(envOverride), ResourceSettings{}},
 		{"gateway", props(defs["gateway"]), Gateway{}},
+		{"database gateway", props(schema["properties"].(map[string]any)["database_gateway"]), DatabaseGateway{}},
 		{"link", props(defs["link"]), Link{}},
 		{"link settings", props(defs["link"].(map[string]any)["properties"].(map[string]any)["environments"].(map[string]any)["additionalProperties"]), LinkSettings{}},
 		{"route", props(defs["route"]), Route{}},
@@ -552,5 +560,300 @@ func TestNeedOptionsRoundTrip(t *testing.T) {
 	data, err := json.Marshal(m.Services["api"])
 	if err != nil || !strings.Contains(string(data), `"need_options"`) {
 		t.Errorf("JSON %s, %v", data, err)
+	}
+}
+
+const databaseGatewayDoc = `version: 1
+database_gateway:
+  provider: cloud-run
+  region: us-east1
+resources:
+  db:
+    kind: postgres
+    gateway: true
+`
+
+func TestManifestDatabaseGateway(t *testing.T) {
+	m, err := Parse([]byte(databaseGatewayDoc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dg := m.DatabaseGateway
+	if dg == nil || dg.Provider != "cloud-run" || dg.Region != "us-east1" {
+		t.Fatalf("database_gateway = %+v", dg)
+	}
+	if !m.Resources["db"].GatewayIn("production") {
+		t.Error("db isn't behind the gateway")
+	}
+	out, err := Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := Parse(out)
+	if err != nil || !reflect.DeepEqual(again, m) {
+		t.Fatalf("round trip: %v\n%s", err, out)
+	}
+	m, err = Parse([]byte("version: 1\nresources:\n  db: {kind: postgres}\n"))
+	if err != nil || m.DatabaseGateway != nil || m.Resources["db"].GatewayIn("production") {
+		t.Fatalf("a manifest with no gateway: %v %+v", err, m)
+	}
+	if out, _ := Marshal(m); strings.Contains(string(out), "gateway") {
+		t.Fatalf("Marshal wrote an unset gateway:\n%s", out)
+	}
+}
+
+func TestManifestDatabaseGatewayOptions(t *testing.T) {
+	m, err := Parse([]byte(`version: 1
+database_gateway:
+  cloud_tags: [eu, private]
+  environments:
+    staging: {provider: render, region: oregon}
+    preview: {enabled: false}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dg := m.DatabaseGateway
+	if !slices.Equal(dg.CloudTags, []string{"eu", "private"}) || dg.Environments["staging"].Provider != "render" || On(dg.Environments["preview"].Enabled) {
+		t.Fatalf("database_gateway = %+v", dg)
+	}
+}
+
+func TestDatabaseGatewayValidation(t *testing.T) {
+	for doc, want := range map[string]string{
+		"database_gateway: {provider: Cloud Run}\n":                                "database_gateway.provider: \"Cloud Run\" isn't a provider name",
+		"database_gateway: {region: US}\n":                                         "database_gateway.region: \"US\" isn't a region name",
+		"database_gateway: {cloud_tags: [Bad]}\n":                                  "database_gateway.cloud_tags: \"Bad\" must be a lowercase tag",
+		"database_gateway: {cloud_tags: [eu, eu]}\n":                               "database_gateway.cloud_tags: names \"eu\" twice",
+		"database_gateway: {cloud_tags: [a, b, c, d, e, f, g, h, i]}\n":            "database_gateway.cloud_tags: has 9 tags; the most is 8",
+		"database_gateway: {provider: cloud-run, cloud_tags: [eu]}\n":              "database_gateway.cloud_tags: can't be set with database_gateway.provider",
+		"database_gateway:\n  environments:\n    Prod: {region: us-east1}\n":       "database_gateway.environments.Prod: isn't an environment name",
+		"database_gateway:\n  environments:\n    prod: {provider: Bad Provider}\n": "database_gateway.environments.prod.provider",
+		"database_gateway:\n  environments:\n    prod: {gateway: true}\n":          "database_gateway.environments.prod.gateway: only resources can opt into the database gateway",
+		"gateways:\n  edge:\n    routes: [{path: /, to: web}]\n    environments:\n      prod: {gateway: true}\nservices:\n  web: {source: web}\n": "gateways.edge.environments.prod.gateway: only resources can opt into the database gateway",
+	} {
+		_, err := Parse([]byte("version: 1\n" + doc))
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%q: expected %q, got %v", doc, want, err)
+		}
+	}
+}
+
+func TestGatewayOnlyPostgres(t *testing.T) {
+	var ps Problems
+	_, err := Parse([]byte("version: 1\nresources:\n  cache: {kind: redis, gateway: true}\n"))
+	if !errors.As(err, &ps) || len(ps) != 1 || ps[0].Path != "resources.cache.gateway" || ps[0].Message != "only postgres resources can use the database gateway" {
+		t.Fatalf("problems: %v", err)
+	}
+	if want := "resources.cache.gateway: only postgres resources can use the database gateway"; !strings.Contains(err.Error(), want) {
+		t.Errorf("got %v, want %q", err, want)
+	}
+	_, err = Parse([]byte("version: 1\nresources:\n  cache:\n    kind: redis\n    environments:\n      prod: {gateway: true}\n"))
+	if want := "resources.cache.environments.prod.gateway: only postgres resources can use the database gateway"; err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("environment override: got %v, want %q", err, want)
+	}
+	// Turning it off is no claim on the gateway.
+	if _, err := Parse([]byte("version: 1\nresources:\n  cache:\n    kind: redis\n    gateway: false\n    environments:\n      prod: {gateway: false}\n")); err != nil {
+		t.Errorf("gateway: false on redis: %v", err)
+	}
+}
+
+func TestGatewayEnvOverride(t *testing.T) {
+	m, err := Parse([]byte(`version: 1
+resources:
+  on:
+    kind: postgres
+    gateway: true
+    environments:
+      staging: {gateway: false}
+      preview: {enabled: false}
+  off:
+    kind: postgres
+    environments:
+      production: {gateway: true}
+  plain:
+    kind: postgres
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		resource, env string
+		want          bool
+	}{
+		{"on", "production", true},
+		{"on", "staging", false},
+		{"on", "preview", true},
+		{"off", "production", true},
+		{"off", "staging", false},
+		{"plain", "production", false},
+	} {
+		if got := m.Resources[tc.resource].GatewayIn(tc.env); got != tc.want {
+			t.Errorf("%s in %s: GatewayIn = %v, want %v", tc.resource, tc.env, got, tc.want)
+		}
+	}
+}
+
+// The fixture is a manifest that uses every database gateway field, so it
+// has to parse and has to validate against the served schema. A bad value
+// fails the schema the way it fails Parse.
+func TestSchema_databaseGateway(t *testing.T) {
+	fixture, err := os.ReadFile("testdata/database_gateway.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Parse(fixture); err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	schema := compileSchema(t)
+	if err := schema.Validate(yamlToJSON(t, fixture)); err != nil {
+		t.Fatalf("the schema rejects the fixture: %v", err)
+	}
+	for _, doc := range []string{
+		"version: 1\ndatabase_gateway: {provider: cloud-run, cloud_tags: [eu]}\n",
+		"version: 1\ndatabase_gateway: {size: 2}\n",
+		"version: 1\ndatabase_gateway: {cloud_tags: [Bad]}\n",
+		"version: 1\ndatabase_gateway: {environments: {prod: {gateway: true}}}\n",
+		"version: 1\nresources:\n  db: {kind: postgres, gateway: \"yes\"}\n",
+		"version: 1\nresources:\n  db: {kind: postgres, environments: {prod: {gateway: 1}}}\n",
+	} {
+		if err := schema.Validate(yamlToJSON(t, []byte(doc))); err == nil {
+			t.Errorf("the schema accepts %q", doc)
+		}
+	}
+}
+
+func compileSchema(t *testing.T) *jsonschema.Schema {
+	t.Helper()
+	doc, err := jsonschema.UnmarshalJSON(bytes.NewReader(Schema))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c := jsonschema.NewCompiler()
+	c.UseRegexpEngine(goOrAnyRegexp)
+	if err = c.AddResource(SchemaID, doc); err != nil {
+		t.Fatal(err)
+	}
+	s, err := c.Compile(SchemaID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return s
+}
+
+func yamlToJSON(t *testing.T, data []byte) any {
+	t.Helper()
+	var v any
+	if err := yaml.Unmarshal(data, &v); err != nil {
+		t.Fatal(err)
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := jsonschema.UnmarshalJSON(bytes.NewReader(b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return out
+}
+
+// goOrAnyRegexp compiles a pattern with Go's regexp. A few of the schema's
+// patterns use lookahead, which Go doesn't have and which editors' engines
+// do; those match anything here, since only the database gateway's fields
+// are under test.
+func goOrAnyRegexp(pattern string) (jsonschema.Regexp, error) {
+	re, err := regexp.Compile(pattern)
+	if err != nil {
+		return anyRegexp(pattern), nil
+	}
+	return re, nil
+}
+
+type anyRegexp string
+
+func (a anyRegexp) MatchString(string) bool { return true }
+func (a anyRegexp) String() string          { return string(a) }
+
+const gpuResourceDoc = "version: 2\nresources:\n  llm: {kind: gpusample, provider: server, target: t, gpu: {kind: nvidia-l4, count: 1}, environments: {staging: {gpu: {kind: nvidia-t4, count: 1}}}}\n"
+
+// schemaAccepts reports the schema's verdict on a manifest document.
+func schemaAccepts(t *testing.T, doc string) error {
+	t.Helper()
+	return compileSchema(t).Validate(yamlToJSON(t, []byte(doc)))
+}
+
+func TestParse_gpuResourceMergesPerEnvironment(t *testing.T) {
+	m, err := Parse([]byte(gpuResourceDoc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := m.Resources["llm"]
+	if got := r.For("staging", m.Defaults).GPU; got == nil || got.Kind != "nvidia-t4" {
+		t.Errorf("staging GPU = %+v, want nvidia-t4", got)
+	}
+	if got := r.For("production", m.Defaults).GPU; got == nil || got.Kind != "nvidia-l4" || got.Count != 1 {
+		t.Errorf("production GPU = %+v, want nvidia-l4 x1", got)
+	}
+	if err := schemaAccepts(t, gpuResourceDoc); err != nil {
+		t.Errorf("schema: %v", err)
+	}
+}
+
+func TestParse_gpuOnService(t *testing.T) {
+	doc := "version: 2\nservices:\n  api:\n    source: a\n    size: {cpu: 4, memory: 16384, gpu: {kind: nvidia-l4, count: 2}, shm: 2048}\n"
+	m, err := Parse([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sz := m.Services["api"].Size
+	if sz.GPU == nil || sz.GPU.Kind != "nvidia-l4" || sz.GPU.Count != 2 || sz.Shm != 2048 {
+		t.Errorf("size = %+v", sz)
+	}
+	if err := schemaAccepts(t, doc); err != nil {
+		t.Errorf("schema: %v", err)
+	}
+}
+
+func TestParse_gpuRejects(t *testing.T) {
+	svc := func(size string) string {
+		return "version: 2\nservices:\n  api:\n    source: a\n    size: {cpu: 1, memory: 16384, " + size + "}\n"
+	}
+	res := func(gpu string) string {
+		return "version: 2\nresources:\n  llm: {kind: gpusample, gpu: " + gpu + "}\n"
+	}
+	tests := []struct {
+		name, doc, path string
+		schemaRejects   bool
+	}{
+		{"count 0", svc("gpu: {kind: nvidia-l4, count: 0}"), "services.api.size.gpu.count", true},
+		{"count 9", svc("gpu: {kind: nvidia-l4, count: 9}"), "services.api.size.gpu.count", true},
+		{"empty kind", svc(`gpu: {kind: "", count: 1}`), "services.api.size.gpu.kind", true},
+		{"shm equals memory", svc("shm: 16384"), "services.api.size.shm", false},
+		{"negative shm", svc("shm: -1"), "services.api.size.shm", true},
+		{"resource count 0", res("{kind: nvidia-l4, count: 0}"), "resources.llm.gpu.count", true},
+		{"resource env count 9", "version: 2\nresources:\n  llm: {kind: gpusample, environments: {staging: {gpu: {kind: nvidia-l4, count: 9}}}}\n", "resources.llm.environments.staging.gpu.count", true},
+		{"gateway env", "version: 2\nservices:\n  web: {source: a}\ngateways:\n  edge: {routes: [{path: /, to: web}], environments: {staging: {gpu: {kind: nvidia-l4, count: 1}}}}\n", "gateways.edge.environments.staging.gpu", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Parse([]byte(tt.doc))
+			var ps Problems
+			if !errors.As(err, &ps) {
+				t.Fatalf("Parse err = %v, want problems", err)
+			}
+			found := false
+			for _, p := range ps {
+				if p.Path == tt.path {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("no problem at %s: %v", tt.path, err)
+			}
+			if tt.schemaRejects && schemaAccepts(t, tt.doc) == nil {
+				t.Error("schema accepts it")
+			}
+		})
 	}
 }

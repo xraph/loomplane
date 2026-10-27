@@ -323,7 +323,10 @@ func pscMutationRejected(err error) bool {
 
 // ValidateSQLPSCCleanupOwnership checks a recovered prefix before source deletion.
 func (s *Session) ValidateSQLPSCCleanupOwnership(spec SQLPSCProvisionSpec, owned SQLPSCProvisionState, endpoint SQLPSCProvisionedEndpoint) error {
-	if !spec.Endpoint.Valid(spec.Source.Region) || owned.Version != 2 || owned.SourceProject != s.key.ProjectID || owned.SourcePhysicalID != spec.PhysicalID || s.checkSQLBackupSource(spec.Source.Region, spec.Source.Name, spec.PhysicalID) != nil || !validPSCScope(owned.Scope) || !validPSCDeletionOwnership(spec, owned, endpoint) || !validSQLPSCName(endpoint.DNSName) {
+	if !spec.Endpoint.Valid(spec.Source.Region) || (owned.Version != 2 && owned.Version != 3) || owned.SourceProject != s.key.ProjectID || owned.SourcePhysicalID != spec.PhysicalID || s.checkSQLBackupSource(spec.Source.Region, spec.Source.Name, spec.PhysicalID) != nil || !validPSCScope(owned.Scope) || !validPSCDeletionOwnership(spec, owned, endpoint) || !validSQLPSCName(endpoint.DNSName) {
+		return errPSCProvision
+	}
+	if owned.Version == 3 && (!s.validPSCLossWitness(spec, owned) || endpoint.DNSName != owned.Source.DNSName || endpoint.ServiceAttachment != owned.Source.ServiceAttachment || endpoint.Address != owned.AddressValue) {
 		return errPSCProvision
 	}
 	route := owned.Subnet.Route
