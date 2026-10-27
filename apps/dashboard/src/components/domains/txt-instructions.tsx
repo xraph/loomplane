@@ -5,6 +5,7 @@ import { useState } from "react"
 
 import { messageOf, statusOf } from "@/client/errors"
 import {
+  useDnsZonesGet,
   useDnsZonesUpdate,
   useDnsZonesVerify,
   useDomainsOverview,
@@ -36,6 +37,7 @@ export function RenewProof({ zone }: { zone: Zone }) {
       setNote(messageOf(err, "The proof wasn't renewed."))
     }
     invalidate(useDomainsOverview)
+    invalidate(useDnsZonesGet)
   }
   return (
     <div className="flex flex-wrap items-center gap-2.5">
@@ -129,7 +131,7 @@ export function ManagedProof({ zone }: { zone: Zone }) {
 }
 
 // An expired proof can't verify; a renewed one starts the 24 hours again.
-function proofExpired(zone: Zone, now: number): boolean {
+export function proofExpired(zone: Zone, now: number): boolean {
   return (
     isSet(zone.proofExpiresAt) && new Date(zone.proofExpiresAt).getTime() <= now
   )
@@ -163,32 +165,58 @@ function ProofTable({ zone }: { zone: Zone }) {
   )
 }
 
-function CheckAgain({ zone }: { zone: Zone }) {
+/** What a check found: the record, nothing yet, or why it couldn't look. */
+export type CheckOutcome =
+  | { kind: "verified" }
+  | { kind: "missing" }
+  | { kind: "failed"; message: string }
+
+/** useCheckAgain looks for a zone's TXT record now. */
+export function useCheckAgain(zone: Zone) {
   const verify = useMutation(useDnsZonesVerify)
   const invalidate = useInvalidate()
+  const check = async (): Promise<CheckOutcome> => {
+    let outcome: CheckOutcome = { kind: "verified" }
+    try {
+      await verify.mutateAsync({ path: { zoneId: zone.id } })
+    } catch (err) {
+      // A 409 is the record not found yet.
+      outcome =
+        statusOf(err) === 409
+          ? { kind: "missing" }
+          : {
+              kind: "failed",
+              message: messageOf(err, "The record couldn't be checked."),
+            }
+    }
+    // Every check saves on the zone, so later writes need its new revision.
+    invalidate(useDomainsOverview)
+    invalidate(useDnsZonesGet)
+    return outcome
+  }
+  return { check, pending: verify.isPending }
+}
+
+function CheckAgain({ zone }: { zone: Zone }) {
+  const { check: verify, pending } = useCheckAgain(zone)
   const now = useClock()
   const [note, setNote] = useState("")
-  // A 409 is the record not found yet. Not in the mock: a managed zone
-  // whose publish failed shows why above, so the note says only when.
+  // Not in the mock: a managed zone whose publish failed shows why above,
+  // so the note says only when.
   const [unproven, setUnproven] = useState(false)
   const check = async () => {
     setNote("")
     setUnproven(false)
-    try {
-      await verify.mutateAsync({ path: { zoneId: zone.id } })
-    } catch (err) {
-      if (statusOf(err) === 409) setUnproven(true)
-      else setNote(messageOf(err, "The record couldn't be checked."))
-    }
-    // Every check saves on the zone, so later writes need its new revision.
-    invalidate(useDomainsOverview)
+    const outcome = await verify()
+    if (outcome.kind === "missing") setUnproven(true)
+    if (outcome.kind === "failed") setNote(outcome.message)
   }
   return (
     <div className="flex flex-wrap items-center gap-2.5">
       <Button
         variant="outline"
         size="sm"
-        disabled={verify.isPending}
+        disabled={pending}
         onClick={() => void check()}
       >
         Check again

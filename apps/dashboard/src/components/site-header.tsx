@@ -41,6 +41,7 @@ export type Crumb = {
     | "/services"
     | "/clouds"
     | "/notifications"
+    | "/domains"
 }
 
 export function SiteHeader({ crumbs }: { crumbs: Crumb[] }) {

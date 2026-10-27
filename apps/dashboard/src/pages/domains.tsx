@@ -85,7 +85,8 @@ export function Domains({
   return <DomainsList key={session.orgId} search={search} onSearch={onSearch} />
 }
 
-function Restricted() {
+/** Restricted is what someone without Cloud access sees on a Domains page. */
+export function Restricted() {
   return (
     <ZeroState preview={false}>
       <ZeroStateHeader>

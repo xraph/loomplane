@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react"
 
 import { messageOf, statusOf } from "@/client/errors"
 import {
+  useDnsZonesGet,
   useDomainRegistrationsList,
   useDomainRegistrationsSetAutoRenew,
   useDomainsOverview,
@@ -16,28 +17,17 @@ import { Button } from "@/components/ui/button"
 import { formatDay, formatPrice } from "@/lib/domains"
 import { cn } from "@/lib/utils"
 
-export function RenewalBanner({
-  registration,
-  focus = false,
-}: {
-  registration: Registration
-  /** Scroll to and focus the switch, for the renewal notice's link. */
-  focus?: boolean
-}) {
+/**
+ * useAutoRenew is a registration's auto-renew switch: what it reads as
+ * now, with what it last wrote until the lists catch up, and the flip.
+ */
+export function useAutoRenew(registration: Registration) {
   const setAutoRenew = useMutation(useDomainRegistrationsSetAutoRenew)
   const invalidate = useInvalidate()
-  const button = useRef<HTMLButtonElement>(null)
   const [saved, setSaved] = useState<Registration>()
   const [error, setError] = useState("")
-  // What the switch wrote, until the lists catch up with it.
   const r =
     saved && saved.revision >= registration.revision ? saved : registration
-
-  useEffect(() => {
-    if (!focus) return
-    button.current?.scrollIntoView?.({ block: "center" })
-    button.current?.focus()
-  }, [focus])
 
   const flip = async () => {
     setError("")
@@ -58,7 +48,40 @@ export function RenewalBanner({
     }
     invalidate(useDomainsOverview)
     invalidate(useDomainRegistrationsList)
+    invalidate(useDnsZonesGet)
   }
+
+  return {
+    registration: r,
+    flip,
+    pending: setAutoRenew.isPending,
+    error,
+    label: r.autoRenew ? "Turn off auto-renew" : "Turn auto-renew back on",
+  }
+}
+
+export function RenewalBanner({
+  registration,
+  focus = false,
+}: {
+  registration: Registration
+  /** Scroll to and focus the switch, for the renewal notice's link. */
+  focus?: boolean
+}) {
+  const {
+    registration: r,
+    flip,
+    pending,
+    error,
+    label,
+  } = useAutoRenew(registration)
+  const button = useRef<HTMLButtonElement>(null)
+
+  useEffect(() => {
+    if (!focus) return
+    button.current?.scrollIntoView?.({ block: "center" })
+    button.current?.focus()
+  }, [focus])
 
   const day = formatDay(r.domainExpiresAt)
   const price = formatPrice(r.quote.currency, r.quote.renewalCost)
@@ -84,10 +107,10 @@ export function RenewalBanner({
         variant="outline"
         size="sm"
         className="text-foreground"
-        disabled={setAutoRenew.isPending}
+        disabled={pending}
         onClick={() => void flip()}
       >
-        {r.autoRenew ? "Turn off auto-renew" : "Turn auto-renew back on"}
+        {label}
       </Button>
     </div>
   )
