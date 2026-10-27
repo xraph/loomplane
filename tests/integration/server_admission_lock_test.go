@@ -5,6 +5,7 @@ package integration
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -316,5 +317,44 @@ func TestServerAdmissionRetirementWaitsOutsideOrganizationLock(t *testing.T) {
 		}
 	case <-time.After(15 * time.Second):
 		t.Fatalf("retirement never finished\n%s", lockReport(f))
+	}
+}
+
+// Nothing locks the connection row through a direct apply, so the
+// connection can be re-verified against another daemon after admission.
+// The run then refuses the credential instead of deploying through a
+// daemon it never admitted. The action names no connection of its own and
+// deploys through the plan's server connection, so the reviewed target
+// settings check, which only covers an action's own connection, can't
+// catch the move.
+func TestServerAdmissionRefusesConnectionMovedAfterAdmission(t *testing.T) {
+	f := newPoolFixture(t)
+	if _, err := f.sql.Exec(t.Context(), `DELETE FROM loomplane_server_pool_members`); err != nil {
+		t.Fatal(err)
+	}
+	directPlanIn(t, f, "direct", "env", "api")
+	if _, err := f.sql.Exec(t.Context(), `UPDATE loomplane_plans SET result=jsonb_set(jsonb_set(result,'{actions,0,connection_id}','""'),'{connections}','{"server":"runtime-1"}') WHERE id='direct'`); err != nil {
+		t.Fatal(err)
+	}
+	f.accept(t, "direct")
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	applyDone, release := pausedDirectApply(ctx, t, f, "api", beforeEffects)
+	if _, err := f.sql.Exec(t.Context(), `UPDATE loomplane_cloud_connections SET details=jsonb_set(details,'{docker_id}','"elsewhere"') WHERE id='runtime-1'`); err != nil {
+		release()
+		t.Fatal(err)
+	}
+	release()
+	select {
+	case err := <-applyDone:
+		if err == nil || !strings.Contains(err.Error(), "now reaches a different server than the one it was admitted on") {
+			t.Fatalf("direct apply through a moved connection: %v", err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatalf("direct apply never finished\n%s", lockReport(f))
+	}
+	var bound bool
+	if err := f.sql.QueryRow(t.Context(), `SELECT EXISTS(SELECT 1 FROM loomplane_bindings WHERE environment_id='env' AND name='api')`).Scan(&bound); err != nil || bound {
+		t.Fatalf("a refused apply left a binding: %v %v", bound, err)
 	}
 }

@@ -635,12 +635,13 @@ func (r *Runner) Run(ctx context.Context, orgID, deploymentID, actionID string, 
 		settled := runErr == nil && len(action.Routes) == 0 && plan.CloudSyncID == "" || finishedByProvider(runErr)
 		runErr = errors.Join(runErr, finishAttempt(settled))
 	}()
-	admission, err := r.directServerAdmission(ctx, plan, action)
+	admission, daemon, err := r.directServerAdmission(ctx, plan, action)
 	if err != nil {
 		return err
 	}
 	if admission != nil {
 		defer func() { _ = admission.Rollback() }() //nolint:errcheck // releasing a read-only admission lock
+		ctx = context.WithValue(ctx, admittedDaemonKey{}, daemon)
 	}
 	if checkErr := r.authorizeSync(ctx, plan); checkErr != nil {
 		return checkErr
@@ -816,6 +817,9 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 	unreachable := deleting && errors.Is(err, connections.ErrNotFound)
 	if err != nil && !unreachable {
 		return err
+	}
+	if checkErr := checkAdmittedDaemon(ctx, a, conn); checkErr != nil {
+		return checkErr
 	}
 	if !deleting && a.ConnectionID != "" {
 		if conn.Cloud != prov.Cloud || conn.Status != connections.StatusReady {

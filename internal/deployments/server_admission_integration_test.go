@@ -186,7 +186,7 @@ func TestDirectServerAdmission(t *testing.T) {
 // with a retirement already queued behind the admission.
 func testAdmissionAllowsFirstDeploymentProgress(t *testing.T, dsn, template string) {
 	c := admissionFixture(t, dsn, template)
-	admission, err := c.runner.directServerAdmission(t.Context(), c.plan, c.action)
+	admission, _, err := c.runner.directServerAdmission(t.Context(), c.plan, c.action)
 	if err != nil || admission == nil {
 		t.Fatalf("admit: %v", err)
 	}
@@ -227,7 +227,7 @@ func testAdmissionSerializesRetirement(t *testing.T, dsn, template string) {
 	c := admissionFixture(t, dsn, template)
 	infra := cloudinfra.NewPgStore(c.db)
 
-	admission, err := c.runner.directServerAdmission(t.Context(), c.plan, c.action)
+	admission, _, err := c.runner.directServerAdmission(t.Context(), c.plan, c.action)
 	if err != nil || admission == nil {
 		t.Fatalf("admit: %v", err)
 	}
@@ -251,7 +251,7 @@ func testAdmissionSerializesRetirement(t *testing.T, dsn, template string) {
 	if _, err = c.db.Exec(t.Context(), `UPDATE loomplane_plans SET status='rejected' WHERE id='plan'`); err != nil {
 		t.Fatal(err)
 	}
-	admission, err = c.runner.directServerAdmission(t.Context(), c.plan, c.action)
+	admission, _, err = c.runner.directServerAdmission(t.Context(), c.plan, c.action)
 	if err != nil || admission == nil {
 		t.Fatalf("admit: %v", err)
 	}
