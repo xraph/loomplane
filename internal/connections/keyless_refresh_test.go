@@ -12,6 +12,7 @@ import (
 // scheduled job has something to run against.
 type keylessRefreshRig struct {
 	*keylessRig
+	locked *lockingStore
 	lapsed []*Connection
 }
 
@@ -23,6 +24,7 @@ func newKeylessRefreshRig(t *testing.T) *keylessRefreshRig {
 	r := &keylessRefreshRig{keylessRig: base}
 	old := base.s
 	locked := &lockingStore{memStore: base.store}
+	r.locked = locked
 	r.s = NewService(locked, old.secrets, old.checkers, old.authz, old.audit, func(msg string, err error) {
 		r.warnings = append(r.warnings, msg+": "+err.Error())
 	})
@@ -126,5 +128,72 @@ func TestRefreshAllRotatesKeysAndSweepsReservations(t *testing.T) {
 	r.s.Rotate = nil
 	if err := r.s.RefreshAll(t.Context()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestKeylessCheckThatFailsAtTheCloudChangesNothing(t *testing.T) {
+	for name, down := range map[string]error{
+		"plain":       errors.New("connection reset"),
+		"unavailable": ErrUnavailable,
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := newKeylessRefreshRig(t)
+			c := r.connect(t)
+			before := r.store.rows[c.ID]
+			r.down = down
+			r.clock = r.clock.Add(48 * time.Hour)
+			report, err := r.s.RefreshDue(t.Context())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(r.checked) == 0 {
+				t.Fatal("the handout never reached the checker")
+			}
+			got := r.store.rows[c.ID]
+			if report.Failed != 1 || report.Lapsed != 0 || len(r.lapsed) != 0 || got.Status != StatusReady ||
+				got.Generation != before.Generation || !got.UpdatedAt.Equal(before.UpdatedAt) || !sameTime(got.CheckedAt, before.CheckedAt) {
+				t.Fatalf("report %+v, row %+v, lapsed %v", report, got, r.lapsed)
+			}
+		})
+	}
+}
+
+func sameTime(a, b *time.Time) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return a.Equal(*b)
+}
+
+func TestKeylessCheckOfAStaleCopyOfAFailedRowTellsNothing(t *testing.T) {
+	r := newKeylessRefreshRig(t)
+	c := r.connect(t)
+	stale := r.store.rows[c.ID]
+	row := r.store.rows[c.ID]
+	row.Status, row.Message = StatusFailed, "refused earlier"
+	r.store.rows[c.ID] = row
+	r.refuse = true
+	r.clock = r.clock.Add(48 * time.Hour)
+	var report RefreshReport
+	r.s.probeKeyless(t.Context(), &stale, &report)
+	got := r.store.rows[c.ID]
+	if report != (RefreshReport{}) || len(r.lapsed) != 0 || got.Message != "refused earlier" ||
+		!got.UpdatedAt.Equal(row.UpdatedAt) || !sameTime(got.CheckedAt, row.CheckedAt) {
+		t.Fatalf("report %+v, row %+v, lapsed %v", report, got, r.lapsed)
+	}
+}
+
+func TestKeylessRefusalIsToldEvenWhenTheLockFails(t *testing.T) {
+	r := newKeylessRefreshRig(t)
+	c := r.connect(t)
+	r.s.grants = failingLock{r.locked}
+	r.refuse = true
+	r.clock = r.clock.Add(48 * time.Hour)
+	report, err := r.s.RefreshDue(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.store.rows[c.ID].Status != StatusFailed || len(r.lapsed) != 1 || report.Failed != 1 || report.Lapsed != 0 {
+		t.Fatalf("report %+v, row %+v, lapsed %v", report, r.store.rows[c.ID], r.lapsed)
 	}
 }

@@ -59,7 +59,9 @@ func (fakeKeylessCloud) KeylessSetup(issuer, subject string) []keyless.Step {
 // account, and a handout's account is its role's. It refuses a handout
 // while refuse is set.
 type fakeKeylessChecker struct {
-	refuse  *bool
+	refuse *bool
+	// down, while set, is what a handout's check fails with, as an outage.
+	down    *error
 	checked *[]byte
 }
 
@@ -85,6 +87,9 @@ func (f fakeKeylessChecker) Check(_ context.Context, credential []byte, settings
 		*f.checked = append([]byte(nil), credential...)
 	}
 	if h, ok, _ := keyless.Parse(credential); ok {
+		if f.down != nil && *f.down != nil {
+			return Check{}, *f.down
+		}
 		if f.refuse != nil && *f.refuse {
 			return Check{}, fmt.Errorf("%w: not authorized to perform sts:AssumeRoleWithWebIdentity", aws.ErrRejected)
 		}
@@ -150,6 +155,7 @@ type keylessRig struct {
 	audit    *connAudit
 	clock    time.Time
 	refuse   bool
+	down     error
 	checked  []byte
 	warnings []string
 }
@@ -173,7 +179,7 @@ func newKeylessRig(t *testing.T) *keylessRig {
 		audit:   &connAudit{},
 		clock:   time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC),
 	}
-	checker := fakeKeylessChecker{refuse: &r.refuse, checked: &r.checked}
+	checker := fakeKeylessChecker{refuse: &r.refuse, down: &r.down, checked: &r.checked}
 	r.s = NewService(r.store, r.secrets, map[string]Checker{AWS: checker, GCP: checker, Vercel: checker},
 		inventoryAuthorization{}, r.audit, func(msg string, err error) { r.warnings = append(r.warnings, msg+": "+err.Error()) })
 	r.s.now = func() time.Time { return r.clock }
