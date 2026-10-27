@@ -66,15 +66,27 @@ func (s *PgStore) Zones(ctx context.Context, org string) ([]*Zone, error) {
 	return result, rows.Err()
 }
 
-// ZoneProofsDue reads managed zones whose proof the background still checks.
-// Unset times are stored as Go's zero time, which sorts before any check.
+// zoneBodyTime reads a time from a zone body, NULL unless it is RFC 3339,
+// so one malformed row can't fail a query over every zone.
+func zoneBodyTime(field string) string {
+	value := "body->>'" + field + "'"
+	return "(CASE WHEN " + value + ` ~ '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$' THEN (` + value + ")::timestamptz END)"
+}
+
+// ZoneProofsDue reads managed zones whose proof the background still checks,
+// across organizations. It serves the background check only. Unset times are
+// stored as Go's zero time, which sorts before any check. A row whose times
+// don't parse is left out, and one that doesn't decode is skipped, rather
+// than failing the pass.
 func (s *PgStore) ZoneProofsDue(ctx context.Context, now, checkedBefore time.Time, limit int) ([]*Zone, error) {
+	zero := "'0001-01-01T00:00:00Z'::timestamptz"
 	rows, err := s.db.Query(ctx, `SELECT body FROM loomplane_dns_zones
  WHERE body->>'mode'='managed'
- AND (body->>'verified_at')::timestamptz <= '0001-01-01T00:00:00Z'::timestamptz
- AND (body->>'proof_expires_at')::timestamptz > $1
- AND (body->>'proof_checked_at')::timestamptz <= $2
- ORDER BY (body->>'proof_checked_at')::timestamptz, id LIMIT $3`, now, checkedBefore, limit)
+ AND `+zoneBodyTime("verified_at")+` <= `+zero+`
+ AND `+zoneBodyTime("proof_expires_at")+` > $1
+ AND `+zoneBodyTime("proof_checked_at")+` <= $2
+ AND NOT (coalesce(body->>'proof_publish_attempted','false')='true' AND coalesce(`+zoneBodyTime("proof_publish_attempted_at")+`,`+zero+`) > $2)
+ ORDER BY `+zoneBodyTime("proof_checked_at")+`, id LIMIT $3`, now, checkedBefore, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -86,8 +98,8 @@ func (s *PgStore) ZoneProofsDue(ctx context.Context, now, checkedBefore time.Tim
 		if checkErr := rows.Scan(&raw); checkErr != nil {
 			return nil, checkErr
 		}
-		if checkErr := json.Unmarshal(raw, &zone); checkErr != nil {
-			return nil, checkErr
+		if json.Unmarshal(raw, &zone) != nil {
+			continue
 		}
 		result = append(result, &zone)
 	}

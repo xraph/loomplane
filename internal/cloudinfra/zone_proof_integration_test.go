@@ -36,6 +36,19 @@ func TestZoneProofsDueQuery(t *testing.T) {
 	zone("expired", "org", "managed", func(z *Zone) { z.ProofExpiresAt = now })
 	zone("external", "org", "external", nil)
 	zone("theirs", "other", "managed", func(z *Zone) { z.ProofCheckedAt = now.Add(-5 * time.Minute) })
+	// A write inside its grace window is left to the attempt that sent it.
+	zone("inflight", "org", "managed", func(z *Zone) {
+		z.ProofPublishAttempted, z.ProofPublishAttemptedAt = true, now.Add(-30*time.Second)
+	})
+	zone("settled", "org", "managed", func(z *Zone) {
+		z.ProofPublishAttempted, z.ProofPublishAttemptedAt, z.ProofCheckedAt = true, now.Add(-10*time.Minute), now.Add(-20*time.Minute)
+	})
+	// Malformed rows can't fail the pass.
+	if _, err := pg.Exec(ctx, `INSERT INTO loomplane_dns_zones VALUES
+ ('garbled','org','garbled.example.com','',1,'{"mode":"managed","proof_checked_at":"soon","proof_expires_at":"2026-11-05T13:00:00Z","verified_at":"0001-01-01T00:00:00Z"}'),
+ ('unverifiable','org','unverifiable.example.com','',1,'{"mode":"managed","verified_at":"never","proof_expires_at":"later"}')`); err != nil {
+		t.Fatal(err)
+	}
 
 	due, err := st.ZoneProofsDue(ctx, now, checkedBefore, 10)
 	if err != nil {
@@ -49,10 +62,10 @@ func TestZoneProofsDueQuery(t *testing.T) {
 		}
 	}
 	// Longest unchecked first, across organizations.
-	if want := []string{"never", "stale", "theirs", "edge"}; !slices.Equal(ids, want) {
+	if want := []string{"never", "settled", "stale", "theirs", "edge"}; !slices.Equal(ids, want) {
 		t.Fatalf("due %v, want %v", ids, want)
 	}
-	if due, err = st.ZoneProofsDue(ctx, now, checkedBefore, 2); err != nil || len(due) != 2 || due[0].ID != "never" || due[1].ID != "stale" {
+	if due, err = st.ZoneProofsDue(ctx, now, checkedBefore, 2); err != nil || len(due) != 2 || due[0].ID != "never" || due[1].ID != "settled" {
 		t.Fatalf("limit: %v %v", due, err)
 	}
 }

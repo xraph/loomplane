@@ -41,6 +41,8 @@ type Zone struct {
 	// ProofPublishAttempted says a write of the proof was sent and its
 	// answer isn't saved, so the next try only reconciles.
 	ProofPublishAttempted bool `json:"proof_publish_attempted,omitempty"`
+	// ProofPublishAttemptedAt is when the last write of the proof was sent.
+	ProofPublishAttemptedAt time.Time `json:"proof_publish_attempted_at"`
 	// ProofPublishError is why the last publish failed, for the owner.
 	ProofPublishError string `json:"proof_publish_error,omitempty"`
 	// RegistrationID names the registration that bought the domain, if one did.
