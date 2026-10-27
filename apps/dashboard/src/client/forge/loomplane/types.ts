@@ -855,6 +855,15 @@ export interface DomainCheckInputBody {
   domains: string[];
 }
 
+export interface DomainDetail {
+  domain: ZoneOverview;
+  parent?: ZoneOverview;
+  proofZone?: ZoneOverview;
+  records: ManagedRecord[];
+  registration?: Registration;
+  subdomains: ZoneOverview[];
+}
+
 export interface DomainOffer {
   name: string;
   price?: DomainPrice;
@@ -1361,6 +1370,19 @@ export interface ManagedDatabaseProfile {
   storageGb: number;
   storageType: string;
   version: string;
+}
+
+export interface ManagedRecord {
+  hostname?: string;
+  kind: string;
+  name: string;
+  projectId?: string;
+  projectName?: string;
+  routeId?: string;
+  ttl: number;
+  type: string;
+  value: string;
+  zoneId: string;
 }
 
 export interface Manifest {
@@ -3258,8 +3280,11 @@ export interface ZoneList {
 
 export interface ZoneOverview {
   hostnames: HostnameUse[];
+  parentZoneId?: string;
+  proofZoneId?: string;
   registrationId?: string;
   state: string;
+  subdomains: string[];
   wildcards: boolean;
   zone?: Zone;
 }

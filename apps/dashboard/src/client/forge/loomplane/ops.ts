@@ -723,6 +723,14 @@ export const ops = {
     invalidates: [],
     responseCodec: CODECS['ProviderZoneList'],
   },
+  'dnsZones.get': {
+    method: 'GET',
+    path: '/api/v1/dns-zones/{zoneId}',
+    rootType: 'DomainDetail',
+    provides: [],
+    invalidates: [],
+    responseCodec: CODECS['DomainDetail'],
+  },
   'dnsZones.setChallengeCredential': {
     method: 'POST',
     path: '/api/v1/dns-zones/{zoneId}/challenge-credential',
@@ -2249,6 +2257,7 @@ export const entities = {
   'DeliveryList': { fields: { 'items': 'Delivery' } },
   'Deployment': { idField: 'id' },
   'DeploymentList': { fields: { 'deployments': 'Deployment' } },
+  'DomainDetail': { fields: { 'domain': 'ZoneOverview', 'parent': 'ZoneOverview', 'proofZone': 'ZoneOverview', 'registration': 'Registration', 'subdomains': 'ZoneOverview' } },
   'DomainOverview': { fields: { 'zones': 'ZoneOverview' } },
   'Environment': { idField: 'id' },
   'EnvironmentList': { fields: { 'environments': 'Environment' } },

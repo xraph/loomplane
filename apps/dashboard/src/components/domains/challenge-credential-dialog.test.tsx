@@ -24,6 +24,7 @@ function overview(change: Partial<ZoneOverview["zone"]> = {}): ZoneOverview {
     state: "ready",
     wildcards: false,
     hostnames: [],
+    subdomains: [],
     zone: {
       id: "zone",
       orgId: "org",

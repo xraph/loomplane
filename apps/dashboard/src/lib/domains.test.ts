@@ -69,6 +69,7 @@ function zone(
 ): ZoneOverview {
   return {
     hostnames: [],
+    subdomains: [],
     state: verified ? "ready" : "awaiting_verification",
     wildcards: false,
     zone: {

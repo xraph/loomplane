@@ -1457,6 +1457,22 @@ export class RESTClient extends Client {
     },
 
     /**
+     * dnsZones.get
+     */
+    get: async (zoneId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.DomainDetail> => {
+      let __path = `/api/v1/dns-zones/${encodeURIComponent(String(zoneId))}`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["DomainDetail"],
+      };
+
+      return this.request<types.DomainDetail>(config);
+    },
+
+    /**
      * dnsZones.list
      */
     list: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ZoneList> => {
