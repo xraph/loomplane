@@ -235,3 +235,17 @@ func (s *Service) HuggingFaceTokenValue(ctx context.Context, orgID string) (toke
 	}
 	return token, st.HuggingFace.Revision, nil
 }
+
+// HuggingFaceTokenRevision returns the revision of the workspace's Hugging
+// Face token, or 0 when none is set, without reading its value. For what a
+// plan records: a new token changes the revision, never the value.
+func (s *Service) HuggingFaceTokenRevision(ctx context.Context, orgID string) (int64, error) {
+	st, err := s.store.Settings(ctx, orgID)
+	if err != nil {
+		return 0, err
+	}
+	if st.HuggingFace == nil {
+		return 0, nil
+	}
+	return st.HuggingFace.Revision, nil
+}

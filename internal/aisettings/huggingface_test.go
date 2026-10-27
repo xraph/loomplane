@@ -301,6 +301,35 @@ func TestHuggingFaceTokenValue(t *testing.T) {
 	}
 }
 
+func TestHuggingFaceTokenRevision(t *testing.T) {
+	ctx := context.Background()
+	h := newHFHarness(t)
+	if rev, err := h.svc.HuggingFaceTokenRevision(ctx, "org"); err != nil || rev != 0 {
+		t.Errorf("before any put: %d, %v, want 0", rev, err)
+	}
+	for want := int64(1); want <= 2; want++ {
+		if _, err := h.svc.PutHuggingFaceToken(ctx, admin, hfToken); err != nil {
+			t.Fatal(err)
+		}
+		if rev, err := h.svc.HuggingFaceTokenRevision(ctx, "org"); err != nil || rev != want {
+			t.Errorf("after put %d: %d, %v", want, rev, err)
+		}
+	}
+	// It never reads Vault, so a workspace whose value is unreadable still
+	// has a revision.
+	h.tokens = failingTokens{}
+	h.rebuild()
+	if rev, err := h.svc.HuggingFaceTokenRevision(ctx, "org"); err != nil || rev != 2 {
+		t.Errorf("without Vault: %d, %v", rev, err)
+	}
+	if err := h.store.ClearHuggingFaceToken(ctx, "org"); err != nil {
+		t.Fatal(err)
+	}
+	if rev, err := h.svc.HuggingFaceTokenRevision(ctx, "org"); err != nil || rev != 0 {
+		t.Errorf("after the token is cleared: %d, %v, want 0", rev, err)
+	}
+}
+
 func TestHuggingFaceTokenNeedsItsDependencies(t *testing.T) {
 	ctx := context.Background()
 	h := newHarness(t) // no token store, no checker

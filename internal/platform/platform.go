@@ -28,6 +28,7 @@ import (
 	groveext "github.com/xraph/grove/extension"
 
 	"github.com/xraph/loomplane/database/migrations"
+	aiext "github.com/xraph/loomplane/extensions/ai"
 	cloudinfraext "github.com/xraph/loomplane/extensions/cloudinfra"
 	connectionsext "github.com/xraph/loomplane/extensions/connections"
 	dbgatewayext "github.com/xraph/loomplane/extensions/dbgateway"
@@ -133,7 +134,7 @@ func Extensions(cfg config.Config) []forge.Extension {
 		cpext.WithLeaderElection(""),
 	)
 
-	return []forge.Extension{
+	exts := []forge.Extension{
 		newSchemaGuard(cfg),
 		db,
 		newFiles(cfg),
@@ -153,8 +154,13 @@ func Extensions(cfg config.Config) []forge.Extension {
 		octopusext.New(cfg, jobs.Engine),
 		dbgatewayext.New(cfg),
 		infraext.New(cpAuth, ctrl.CtrlPlane),
-		web.New(cfg.Dashboard.Dir, "/api/", cfg.Identity.BasePath+"/", "/_/", "/.well-known/", "/catalog-admin/"),
 	}
+	// The AI section exists only when ai.enabled is on: with it off, no AI
+	// route, hook or setting is registered at all.
+	if cfg.AI.Enabled {
+		exts = append(exts, aiext.New(cfg))
+	}
+	return append(exts, web.New(cfg.Dashboard.Dir, "/api/", cfg.Identity.BasePath+"/", "/_/", "/.well-known/", "/catalog-admin/"))
 }
 
 // NewWorker builds loomplane-worker: the process that analyzes
