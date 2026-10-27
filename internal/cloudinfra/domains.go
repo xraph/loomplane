@@ -51,6 +51,9 @@ type Zone struct {
 	// answers DNS-01 challenges for this zone's wildcard routes.
 	ChallengeConnectionID string `json:"challenge_connection_id,omitempty"`
 	Revision              int64  `json:"revision"`
+	// parent is the nearest zone of the same organization whose name this
+	// one's sits strictly under. LinkZoneParents sets it; it isn't stored.
+	parent *Zone
 }
 
 // Wildcards reports whether routes under the zone may use wildcard
@@ -287,23 +290,49 @@ func (s *Service) VerifyZone(ctx context.Context, p security.Principal, id strin
 	return zone, nil
 }
 
+// verifyZoneControl rechecks a zone before a route uses it: the zone's own
+// hosting, then the public TXT record of the zone whose proof applies,
+// which for a subdomain may be its domain's.
 func (s *Service) verifyZoneControl(ctx context.Context, zone *Zone) error {
-	if zone.Mode == "managed" {
-		adapter, credential, err := s.zoneCredential(ctx, zone)
-		if err != nil {
-			return err
-		}
-		current, err := adapter.GetZone(ctx, credential, zone.ProviderZone.Name)
-		if err != nil {
-			return err
-		}
-		if current.ID != zone.ProviderZone.ID || current.Name != zone.ProviderZone.Name || current.AccountID != zone.AccountID {
-			return provider.ErrInfrastructureIdentity
-		}
-		if _, err = zoneRelative(zone.Name, current.Name); err != nil {
-			return err
-		}
+	if err := s.verifyZoneHosting(ctx, zone); err != nil {
+		return err
 	}
+	return s.verifyZoneProof(ctx, zone.proofZone())
+}
+
+// verifyOwnZoneControl is verifyZoneControl against the zone's own proof
+// only. Check again uses it, so a zone is never stamped verified from its
+// domain's record: that would outlive the domain's verification.
+func (s *Service) verifyOwnZoneControl(ctx context.Context, zone *Zone) error {
+	if err := s.verifyZoneHosting(ctx, zone); err != nil {
+		return err
+	}
+	return s.verifyZoneProof(ctx, zone)
+}
+
+// verifyZoneHosting checks a managed zone's hosting zone is still the one
+// it was added in, in the same account, and still holds the zone's name.
+func (s *Service) verifyZoneHosting(ctx context.Context, zone *Zone) error {
+	if zone.Mode != "managed" {
+		return nil
+	}
+	adapter, credential, err := s.zoneCredential(ctx, zone)
+	if err != nil {
+		return err
+	}
+	current, err := adapter.GetZone(ctx, credential, zone.ProviderZone.Name)
+	if err != nil {
+		return err
+	}
+	if current.ID != zone.ProviderZone.ID || current.Name != zone.ProviderZone.Name || current.AccountID != zone.AccountID {
+		return provider.ErrInfrastructureIdentity
+	}
+	_, err = zoneRelative(zone.Name, current.Name)
+	return err
+}
+
+// verifyZoneProof looks for the zone's own TXT proof in public DNS.
+func (s *Service) verifyZoneProof(ctx context.Context, zone *Zone) error {
 	if !zone.hasControlProof() {
 		return ErrConflict
 	}
@@ -331,12 +360,6 @@ func (s *Service) verifyZoneControl(ctx context.Context, zone *Zone) error {
 // hasControlProof rejects legacy hosting-only verification and malformed scope.
 func (z *Zone) hasControlProof() bool {
 	return z.ProofName == "_loomplane."+z.Name && z.ProofValue != "" && !z.ProofExpiresAt.IsZero()
-}
-
-// verified is a zone a project can route through: checked, and checked
-// against its own TXT proof.
-func (z *Zone) verified() bool {
-	return !z.VerifiedAt.IsZero() && z.hasControlProof()
 }
 
 func (s *Service) renewZoneProof(zone *Zone) error {
@@ -393,7 +416,7 @@ func (s *Service) UpdateZone(ctx context.Context, p security.Principal, id strin
 	}
 	zone.ProjectIDs = append([]string{}, in.ProjectIDs...)
 	if in.RenewProof {
-		if !zone.VerifiedAt.IsZero() && zone.hasControlProof() {
+		if zone.ownVerified() {
 			return nil, ErrConflict
 		}
 		if proofErr := s.renewZoneProof(zone); proofErr != nil {
