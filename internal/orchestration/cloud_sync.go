@@ -98,11 +98,16 @@ func (d *Deployments) StartCloudSync(ctx context.Context, org, project, id strin
 func (d *Deployments) RecoverCloudSyncs(ctx context.Context) error {
 	d.mu.RLock()
 	reconciler := d.cloudSync
+	cleanup := d.failedCleanups
 	d.mu.RUnlock()
 	if reconciler == nil {
 		return errors.New("the Cloud sync reconciler is unavailable")
 	}
-	return reconciler.RecoverCloudSyncs(ctx)
+	var cleanupErr error
+	if cleanup != nil {
+		cleanupErr = cleanup.RecoverFailedCleanups(ctx)
+	}
+	return errors.Join(reconciler.RecoverCloudSyncs(ctx), cleanupErr)
 }
 
 const resumeReleaseWorkflow = "loomplane.release.resume.v1"

@@ -30,6 +30,7 @@ import {
 } from "@/client/forge/loomplane/hooks"
 import type { Action, Finding, Plan } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
+import { FailedDeploymentCleanup } from "@/components/failed-deployment-cleanup"
 import { ApprovalCard } from "@/components/approval"
 import { Page } from "@/components/page"
 import {
@@ -161,6 +162,7 @@ function Loaded({
   refetch: () => Promise<unknown>
 }) {
   const run = useRunFor(plan, refetch)
+  const { can } = useOrganization()
   const now = useNow()
   const person = usePeople()
   const lines = useMemo(() => runLog(run, (u) => person(u).name), [run, person])
@@ -183,6 +185,18 @@ function Loaded({
       />
       <Page>
         <Heading run={run} now={now} />
+        {plan.catalog &&
+          plan.actions.length === 1 &&
+          plan.actions[0].provider === "cloud-sql" &&
+          plan.actions[0].op === "create" &&
+          run.deployment &&
+          ["failed", "cancelled"].includes(run.deployment.status) && (
+            <FailedDeploymentCleanup
+              id={run.deployment.id}
+              canApprove={can("deployment:approve")}
+              onChanged={refetch}
+            />
+          )}
         <Progression
           run={run}
           now={now}
