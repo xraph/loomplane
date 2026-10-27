@@ -409,6 +409,17 @@ func (s *PgStore) AcceptRoute(ctx context.Context, op *RouteOperation) error {
 		if !slices.Contains(zone.ProjectIDs, route.ProjectID) || !zone.verified() {
 			return ErrNotFound
 		}
+		// Zones are added under the organization lock, so a subdomain that
+		// holds this name can't appear before the route is stored.
+		if names := deeperZoneNames(zone.Name, route.Input.Hostname); len(names) > 0 {
+			var sub string
+			if checkErr := tx.QueryRow(ctx, `SELECT coalesce((SELECT name FROM loomplane_dns_zones WHERE org_id=$1 AND name=ANY($2) ORDER BY length(name) DESC LIMIT 1),'')`, route.OrgID, names).Scan(&sub); checkErr != nil {
+				return checkErr
+			}
+			if sub != "" {
+				return errBelongsTo(route.Input.Hostname, sub)
+			}
+		}
 		// The zone row is locked, so its credential can't detach under this route.
 		if isWildcard(route.Input.Hostname) && !zone.Wildcards() {
 			return ErrWildcardUnsupported

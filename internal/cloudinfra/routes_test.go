@@ -158,6 +158,77 @@ func TestPrepareRouteHandoffRechecksTheDomainsRecord(t *testing.T) {
 	}
 }
 
+// subzoneOfGateway adds app.gateway.dev, granted to Docs only, under the
+// gateway.dev that Shop holds.
+func subzoneOfGateway(st *gatewayStore) {
+	st.zones = append(st.zones, &Zone{ID: "zone_app", OrgID: "org", Name: "app.gateway.dev", Mode: "external", ProjectIDs: []string{"docs"}, Revision: 1})
+}
+
+func TestPreviewRouteLeavesASubdomainsNamesToIt(t *testing.T) {
+	svc, st := gatewayFixture()
+	subzoneOfGateway(st)
+	for _, host := range []string{"app.gateway.dev", "x.app.gateway.dev"} {
+		in := gatewayInput()
+		in.Hostname = host
+		_, err := svc.PreviewRoute(t.Context(), overviewDev, "shop", in)
+		if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), host+" belongs to app.gateway.dev. Add it there") {
+			t.Fatalf("%s previewed on gateway.dev: %v", host, err)
+		}
+	}
+	if len(st.previewed) != 0 {
+		t.Fatal("a refused preview was stored", len(st.previewed))
+	}
+	in := gatewayInput()
+	in.Hostname = "www.gateway.dev"
+	if _, err := svc.PreviewRoute(t.Context(), overviewDev, "shop", in); err != nil {
+		t.Fatal("a sibling of the subdomain", err)
+	}
+}
+
+func TestApplyRouteRefusesANameASubdomainTookAfterPreview(t *testing.T) {
+	svc, st := gatewayFixture()
+	in := gatewayInput()
+	in.Hostname = "x.app.gateway.dev"
+	op, err := svc.PreviewRoute(t.Context(), overviewDev, "shop", in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	subzoneOfGateway(st)
+	_, err = svc.ApplyRoute(t.Context(), overviewDev, "shop", op.ID, ApplyInput{Review: op.Review})
+	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "x.app.gateway.dev belongs to app.gateway.dev. Add it there") {
+		t.Fatal("applied a name the subdomain now holds", err)
+	}
+	if len(st.accepted) != 0 {
+		t.Fatal("a refused apply was accepted", st.accepted)
+	}
+}
+
+func TestDeeperZoneMatchesTheBaseOnWholeLabels(t *testing.T) {
+	parent := &Zone{ID: "p", OrgID: "org", Name: "loomplane.com"}
+	zones := []*Zone{parent,
+		{ID: "a", OrgID: "org", Name: "app.loomplane.com"},
+		{ID: "d", OrgID: "org", Name: "deep.app.loomplane.com"},
+		{ID: "r", OrgID: "rival", Name: "www.loomplane.com"},
+	}
+	for host, want := range map[string]string{
+		"app.loomplane.com":        "app.loomplane.com",
+		"*.app.loomplane.com":      "app.loomplane.com",
+		"x.deep.app.loomplane.com": "deep.app.loomplane.com",
+		"*.loomplane.com":          "",
+		"myapp.loomplane.com":      "",
+		"www.loomplane.com":        "",
+		"loomplane.com":            "",
+	} {
+		got := ""
+		if z := deeperZone(parent, host, zones); z != nil {
+			got = z.Name
+		}
+		if got != want {
+			t.Errorf("%s: got %q, want %q", host, got, want)
+		}
+	}
+}
+
 func TestPreviewRouteInfersCloud(t *testing.T) {
 	svc, st := gatewayFixture()
 	op, err := svc.PreviewRoute(t.Context(), overviewDev, "shop", gatewayInput())
