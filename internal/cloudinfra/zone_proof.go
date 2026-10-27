@@ -160,13 +160,15 @@ func (s *Service) settleProofAttempt(ctx context.Context, adapter provider.DNSAd
 			}
 			wanted := desired
 			wanted.ID = r.ID
-			switch r {
-			case wanted:
+			switch {
+			case r == wanted:
 				// The update landed.
 				zone.ProofRecord = &r
 				return true, false, nil
-			case *zone.ProofRecord:
-				// It didn't. An update by ID can't make a second record.
+			case proofRecordIsOurs(zone, r, desired):
+				// It didn't, or an earlier value did. An update by ID can't
+				// make a second record.
+				zone.ProofRecord = &r
 				return false, false, nil
 			}
 			return false, false, provider.ErrInfrastructureDrift
@@ -237,12 +239,14 @@ func ownedProof(zone *Zone, records []provider.DNSRecord, name string) (*provide
 }
 
 // saveProofReceipt saves the record a write returned. A save lost to
-// another writer re-reads the zone and saves the receipt on top, as long
-// as the zone still wants the value the record holds. The save outlives
-// the caller's deadline: the record is already written.
+// another writer re-reads the zone and saves the receipt on top. A receipt
+// is kept even if the proof was renewed meanwhile: the next publish updates
+// that record, by its ID, to the new value. The save outlives the caller's
+// deadline, because the record is already written.
 func (s *Service) saveProofReceipt(ctx context.Context, st DomainStore, zone *Zone, receipt provider.DNSRecord) error {
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
 	defer cancel()
+	mine := zone.ProofPublishAttemptedAt
 	zone.ProofRecord, zone.ProofPublishAttempted, zone.ProofPublishError = &receipt, false, ""
 	err := st.SaveZone(ctx, zone)
 	for range zoneProofReceiptRetries {
@@ -253,11 +257,11 @@ func (s *Service) saveProofReceipt(ctx context.Context, st DomainStore, zone *Zo
 		if readErr != nil {
 			return readErr
 		}
-		if current.ProofValue != receipt.Value {
-			// Renewed meanwhile; that renewal's write settles the record.
-			return err
+		current.ProofRecord = &receipt
+		if !current.ProofPublishAttemptedAt.After(mine) {
+			// No later write is waiting on its answer.
+			current.ProofPublishAttempted, current.ProofPublishError = false, ""
 		}
-		current.ProofRecord, current.ProofPublishAttempted, current.ProofPublishError = &receipt, false, ""
 		*zone = *current
 		err = st.SaveZone(ctx, zone)
 	}

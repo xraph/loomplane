@@ -84,3 +84,45 @@ func TestRemoveZoneLeavesAnEditedRecordAlone(t *testing.T) {
 		t.Fatalf("edited record: %v deletes=%d", err, env.dns.deletes)
 	}
 }
+
+func TestZoneProofRenewInsideALostUpdatesWindowSettles(t *testing.T) {
+	for _, cloud := range []string{"vercel", "digitalocean"} {
+		t.Run(cloud, func(t *testing.T) {
+			env := newProofEnv(t, cloud)
+			zone := env.create(t, "managed")
+			first := env.dns.proofs()[0]
+			// The first renewal lands, but its answer is lost.
+			env.dns.loseResponse = true
+			env.renew(t, zone.ID)
+			env.dns.loseResponse = false
+			// The second comes inside that write's grace window.
+			again := env.renew(t, zone.ID)
+			env.pastGrace()
+			_, _ = env.svc.VerifyZone(t.Context(), proofManager, zone.ID)
+			proofs := env.dns.proofs()
+			stored := env.stored(t, zone.ID)
+			if len(proofs) != 1 || proofs[0].ID != first.ID || proofs[0].Value != again.ProofValue || stored.ProofRecord == nil || *stored.ProofRecord != proofs[0] || stored.ProofPublishError != "" {
+				t.Fatalf("proofs=%+v stored=%+v", proofs, stored)
+			}
+		})
+	}
+}
+
+func TestZoneProofReceiptIsKeptWhenRenewedMidWrite(t *testing.T) {
+	env := newProofEnv(t, "vercel")
+	var renewed *Zone
+	// The proof is renewed while its first write is in flight.
+	env.dns.during = func() { renewed = env.renew(t, env.store.zones[0].ID) }
+	zone := env.create(t, "managed")
+	stored := env.stored(t, zone.ID)
+	proofs := env.dns.proofs()
+	if stored.ProofRecord == nil || *stored.ProofRecord != proofs[0] {
+		t.Fatalf("receipt of a written record dropped: %+v", stored)
+	}
+	// The next check updates that record, by its ID, to the renewed value.
+	_, _ = env.svc.VerifyZone(t.Context(), proofManager, zone.ID)
+	proofs = env.dns.proofs()
+	if len(proofs) != 1 || proofs[0].Value != renewed.ProofValue || env.stored(t, zone.ID).ProofRecord.Value != renewed.ProofValue {
+		t.Fatalf("renewed value not published: %+v", proofs)
+	}
+}
