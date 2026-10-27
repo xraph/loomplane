@@ -1,6 +1,7 @@
 package cloudinfra
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"net"
@@ -465,6 +466,38 @@ func (s *Service) UpdateZone(ctx context.Context, p security.Principal, id strin
 	return zone, nil
 }
 
+// BlockingHostname is a hostname that keeps a zone from being removed.
+type BlockingHostname struct {
+	RouteID     string `json:"route_id"`
+	Hostname    string `json:"hostname"`
+	ZoneID      string `json:"zone_id"`
+	ZoneName    string `json:"zone_name"`
+	ProjectID   string `json:"project_id"`
+	ProjectName string `json:"project_name"`
+}
+
+// ZoneInUseError refuses removing a zone while hostnames use it or, when
+// Subdomains, the zones under it.
+type ZoneInUseError struct {
+	Zone       string
+	Subdomains bool
+	Hostnames  []BlockingHostname
+}
+
+func (e *ZoneInUseError) Error() string {
+	if e.Subdomains {
+		return "remove the hostnames that use " + e.Zone + " and its subdomains first"
+	}
+	return "remove the hostnames that use " + e.Zone + " first"
+}
+
+func (e *ZoneInUseError) Unwrap() error { return ErrConflict }
+
+// RemoveZone removes a zone and every zone under it, at the revision the
+// caller saw. Nothing goes while any hostname uses one of them. The
+// subdomains go first, deepest name first, each with its own proof record,
+// and the first one that can't be cleaned stops the rest: zones already
+// removed stay removed, and the others are kept whole.
 func (s *Service) RemoveZone(ctx context.Context, p security.Principal, id string, revision int64) error {
 	if err := s.domainScope(ctx, p, "", true); err != nil {
 		return err
@@ -473,26 +506,71 @@ func (s *Service) RemoveZone(ctx context.Context, p security.Principal, id strin
 	if err != nil {
 		return err
 	}
-	zone, err := st.Zone(ctx, p.OrgID, id)
+	zones, err := st.Zones(ctx, p.OrgID)
 	if err != nil {
 		return err
 	}
-	if zone.Mode == "managed" && (zone.ProofRecord != nil || zone.ProofPublishAttempted) {
-		// The proof record goes first, and only from the revision the
-		// caller saw. The zone goes at that same revision, so a check in
-		// between fails the removal rather than publishing the record again.
-		if zone.Revision != revision {
-			return ErrConflict
-		}
-		if proofErr := s.removeZoneProof(ctx, st, zone); proofErr != nil {
+	LinkZoneParents(zones)
+	i := slices.IndexFunc(zones, func(z *Zone) bool { return z.ID == id })
+	if i < 0 {
+		return ErrNotFound
+	}
+	zone := zones[i]
+	// The proof records go before their zones, so nothing is touched
+	// unless the caller saw this revision.
+	if zone.Revision != revision {
+		return ErrConflict
+	}
+	subdomains := subdomainsOf(zone, zones)
+	if inUse := s.zoneInUse(ctx, st, zone, subdomains); inUse != nil {
+		return inUse
+	}
+	// Longest name first: a zone is never left without the domain that
+	// proves it while it remains.
+	slices.SortStableFunc(subdomains, func(a, b *Zone) int { return cmp.Compare(len(b.Name), len(a.Name)) })
+	for _, z := range append(subdomains, zone) {
+		if proofErr := s.removeZoneProof(ctx, st, z); proofErr != nil {
 			return proofErr
 		}
+		if removeErr := st.RemoveZone(ctx, p.OrgID, z.ID, z.Revision); removeErr != nil {
+			return removeErr
+		}
+		s.domainAudit(ctx, p, "domain.zone.remove", z.ID, "")
 	}
-	err = st.RemoveZone(ctx, p.OrgID, id, revision)
-	if err == nil {
-		s.domainAudit(ctx, p, "domain.zone.remove", id, "")
+	return nil
+}
+
+// zoneInUse is the refusal for removing zone and its subdomains, or nil
+// when no route uses any of them. A failed read refuses too.
+func (s *Service) zoneInUse(ctx context.Context, st DomainStore, zone *Zone, subdomains []*Zone) error {
+	family := map[string]*Zone{zone.ID: zone}
+	for _, sub := range subdomains {
+		family[sub.ID] = sub
 	}
-	return err
+	routes, err := st.OrgRoutes(ctx, zone.OrgID)
+	if err != nil {
+		return err
+	}
+	inUse := &ZoneInUseError{Zone: zone.Name, Subdomains: len(subdomains) > 0}
+	for _, route := range routes {
+		if z, ok := family[route.Input.ZoneID]; ok && route.Status != "removed" {
+			inUse.Hostnames = append(inUse.Hostnames, BlockingHostname{RouteID: route.ID, Hostname: route.Input.Hostname, ZoneID: z.ID, ZoneName: z.Name, ProjectID: route.ProjectID})
+		}
+	}
+	if len(inUse.Hostnames) == 0 {
+		return nil
+	}
+	names, err := st.ProjectNames(ctx, zone.OrgID)
+	if err != nil {
+		return err
+	}
+	for i := range inUse.Hostnames {
+		inUse.Hostnames[i].ProjectName = names[inUse.Hostnames[i].ProjectID]
+	}
+	slices.SortFunc(inUse.Hostnames, func(a, b BlockingHostname) int {
+		return cmp.Or(cmp.Compare(a.Hostname, b.Hostname), cmp.Compare(a.RouteID, b.RouteID))
+	})
+	return inUse
 }
 
 type ProjectZone struct {

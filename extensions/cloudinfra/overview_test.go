@@ -2,8 +2,10 @@ package cloudinfra
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/xraph/forge"
@@ -45,7 +47,7 @@ func TestDomainOverviewRoutes(t *testing.T) {
 		return out.Code
 	}
 	denied := infra.NewService(infra.Deps{Authz: overviewAuthz{}})
-	for _, path := range []string{"/api/v1/domains", "/api/v1/projects/shop/domains", "/api/v1/projects/shop/domain-routes/route/status", "/api/v1/dns-zones/discover?connection_id=cf"} {
+	for _, path := range []string{"/api/v1/domains", "/api/v1/projects/shop/domains", "/api/v1/projects/shop/domain-routes/route/status", "/api/v1/dns-zones/discover?connection_id=cf", "/api/v1/dns-zones/zone"} {
 		if code := serve(denied, path, false); code != http.StatusUnauthorized {
 			t.Fatal(path, "signed out", code)
 		}
@@ -60,5 +62,79 @@ func TestDomainOverviewRoutes(t *testing.T) {
 	}
 	if code := serve(allowed, "/api/v1/dns-zones/discover", true); code != http.StatusUnprocessableEntity {
 		t.Fatal("missing connection_id", code)
+	}
+}
+
+// detailStore is one zone, example.com, with the routes given.
+type detailStore struct {
+	infra.DomainStore
+	routes []*infra.Route
+}
+
+func (detailStore) Zones(_ context.Context, org string) ([]*infra.Zone, error) {
+	return []*infra.Zone{{ID: "zone", OrgID: org, Name: "example.com", Mode: "external", ProjectIDs: []string{"shop"}, Revision: 1}}, nil
+}
+func (s detailStore) OrgRoutes(context.Context, string) ([]*infra.Route, error) { return s.routes, nil }
+func (detailStore) LatestRouteOperations(context.Context, string, []string) (map[string]*infra.RouteOperation, error) {
+	return map[string]*infra.RouteOperation{}, nil
+}
+func (detailStore) ProjectNames(context.Context, string) (map[string]string, error) {
+	return map[string]string{"shop": "Shop"}, nil
+}
+func (detailStore) RuntimeNames(context.Context, string) (map[string]string, error) {
+	return map[string]string{}, nil
+}
+
+func serveDomains(t *testing.T, svc *infra.Service, method, path, body string) *httptest.ResponseRecorder {
+	t.Helper()
+	r := forge.NewRouter()
+	e := &Extension{svc: svc}
+	if err := e.domainRoutes(r, nil); err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequestWithContext(t.Context(), method, path, strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req = req.WithContext(security.WithPrincipal(req.Context(), security.Principal{OrgID: "org", UserID: "member"}))
+	out := httptest.NewRecorder()
+	r.ServeHTTP(out, req)
+	return out
+}
+
+func TestDomainZoneDetailRoute(t *testing.T) {
+	var asked string
+	svc := infra.NewService(infra.Deps{Authz: overviewAuthz{allow: true}, Domains: detailStore{}, Connections: overviewCredentials{&asked}})
+	out := serveDomains(t, svc, http.MethodGet, "/api/v1/dns-zones/zone", "")
+	if out.Code != http.StatusOK {
+		t.Fatal("known zone", out.Code, out.Body.String())
+	}
+	var detail infra.DomainDetail
+	if err := json.Unmarshal(out.Body.Bytes(), &detail); err != nil || detail.Domain.Zone == nil || detail.Domain.Zone.Name != "example.com" {
+		t.Fatalf("detail: %s %v", out.Body.String(), err)
+	}
+	if out = serveDomains(t, svc, http.MethodGet, "/api/v1/dns-zones/missing", ""); out.Code != http.StatusNotFound {
+		t.Fatal("unknown zone", out.Code)
+	}
+	if out = serveDomains(t, svc, http.MethodGet, "/api/v1/dns-zones/discover?connection_id=cf", ""); out.Code != http.StatusNotFound || asked != "cf" {
+		t.Fatal("discover no longer reached", out.Code, asked)
+	}
+}
+
+func TestRemoveDomainZoneListsBlockingHostnames(t *testing.T) {
+	st := detailStore{routes: []*infra.Route{{ID: "route", OrgID: "org", ProjectID: "shop", Status: "ready", Input: infra.RouteInput{ZoneID: "zone", Hostname: "api.example.com"}}}}
+	svc := infra.NewService(infra.Deps{Authz: overviewAuthz{allow: true}, Domains: st})
+	out := serveDomains(t, svc, http.MethodPost, "/api/v1/dns-zones/zone/remove", `{"revision":1}`)
+	if out.Code != http.StatusConflict {
+		t.Fatal("removed a zone in use", out.Code, out.Body.String())
+	}
+	var refusal ZoneRemovalRefusal
+	if err := json.Unmarshal(out.Body.Bytes(), &refusal); err != nil {
+		t.Fatal(err)
+	}
+	if refusal.Code != "zone_in_use" || refusal.Message != "Remove the hostnames that use example.com first." || len(refusal.Details.Hostnames) != 1 {
+		t.Fatalf("refusal: %s", out.Body.String())
+	}
+	want := infra.BlockingHostname{RouteID: "route", Hostname: "api.example.com", ZoneID: "zone", ZoneName: "example.com", ProjectID: "shop", ProjectName: "Shop"}
+	if refusal.Details.Hostnames[0] != want {
+		t.Fatalf("hostname: %+v", refusal.Details.Hostnames[0])
 	}
 }

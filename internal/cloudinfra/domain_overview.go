@@ -38,6 +38,13 @@ type ZoneOverview struct {
 	Wildcards      bool          `json:"wildcards"`
 	RegistrationID string        `json:"registration_id,omitempty"`
 	Hostnames      []HostnameUse `json:"hostnames"`
+	// ParentZoneID is the nearest zone this one sits under, if any.
+	ParentZoneID string `json:"parent_zone_id,omitempty"`
+	// Subdomains are the IDs of every zone under this one, by name.
+	Subdomains []string `json:"subdomains"`
+	// ProofZoneID is the zone whose TXT record proves this one, when that
+	// isn't this zone.
+	ProofZoneID string `json:"proof_zone_id,omitempty"`
 }
 
 type DomainOverview struct {
@@ -89,6 +96,23 @@ func (s *Service) hostnameUses(ctx context.Context, st DomainStore, org string, 
 	return out, nil
 }
 
+// overviewOf is one zone's row: its state, where it sits among zones, and
+// its hostnames from uses. zones must be linked.
+func overviewOf(zone *Zone, zones []*Zone, uses map[string][]HostnameUse) ZoneOverview {
+	out := ZoneOverview{Zone: zone, State: zoneState(zone), Wildcards: zone.Wildcards(), RegistrationID: zone.RegistrationID,
+		Hostnames: append([]HostnameUse{}, uses[zone.ID]...), Subdomains: []string{}}
+	if zone.parent != nil {
+		out.ParentZoneID = zone.parent.ID
+	}
+	for _, sub := range subdomainsOf(zone, zones) {
+		out.Subdomains = append(out.Subdomains, sub.ID)
+	}
+	if proof := zone.proofZone(); proof != zone {
+		out.ProofZoneID = proof.ID
+	}
+	return out
+}
+
 func zoneState(zone *Zone) DomainState {
 	if !zone.verified() {
 		return DomainAwaitingVerification
@@ -121,7 +145,7 @@ func (s *Service) DomainOverview(ctx context.Context, p security.Principal) (*Do
 	}
 	out := &DomainOverview{Zones: make([]ZoneOverview, 0, len(zones)), Registrations: []*Registration{}}
 	for _, zone := range zones {
-		out.Zones = append(out.Zones, ZoneOverview{Zone: zone, State: zoneState(zone), Wildcards: zone.Wildcards(), RegistrationID: zone.RegistrationID, Hostnames: append([]HostnameUse{}, uses[zone.ID]...)})
+		out.Zones = append(out.Zones, overviewOf(zone, zones, uses))
 	}
 	// Without a registration store nothing can have been registered.
 	if registrations, storeErr := s.registrationStore(); storeErr == nil {
