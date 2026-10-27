@@ -18,7 +18,7 @@ type CloudSyncAuthorizer interface {
 
 // CheckAppliedInputs proves the pinned secret and artifact remain recoverable.
 func (r *Runner) CheckAppliedInputs(ctx context.Context, org, environment string, cfg *planning.ServiceConfig) error {
-	if cfg.Gateway != nil {
+	if cfg.Generated() {
 		return nil
 	}
 	inputs := cfg.AppliedInputs

@@ -119,7 +119,12 @@ func domainsDurableClaims(t *testing.T, cutoverTTL, rollbackTTL int, modes ...st
 		if _, err = svc.VerifyZone(ctx, p, zone.ID); err == nil {
 			t.Fatal("legacy hosting verification renewed without public proof")
 		}
-		renewed, renewErr := svc.UpdateZone(ctx, p, zone.ID, cloudinfra.ZoneUpdate{Revision: legacy.Revision, ProjectIDs: legacy.ProjectIDs, RenewProof: true})
+		// Every check is saved, so the renewal goes on the zone's new revision.
+		checked, checkErr := store.Zone(ctx, "org", zone.ID)
+		if checkErr != nil || checked.ProofCheckedAt.IsZero() {
+			t.Fatal("failed check not recorded", checked, checkErr)
+		}
+		renewed, renewErr := svc.UpdateZone(ctx, p, zone.ID, cloudinfra.ZoneUpdate{Revision: checked.Revision, ProjectIDs: legacy.ProjectIDs, RenewProof: true})
 		if renewErr != nil || !renewed.VerifiedAt.IsZero() || renewed.ProofName == "" {
 			t.Fatalf("legacy challenge renewal: %+v %v", renewed, renewErr)
 		}

@@ -68,9 +68,14 @@ func (c *Client) fencedRequest(ctx context.Context, mode string, f EffectFence, 
 		_ = session.Close()
 		return nil, err
 	}
+	script, err := fenceScript()
+	if err != nil {
+		_ = session.Close()
+		return nil, err
+	}
 	// The constant script contains no credentials. Request headers and bodies use
 	// stdin only and never enter a shell command, file log or error response.
-	if err = session.Start("python3 -c '" + strings.ReplaceAll(effectFenceScript, "'", "'\"'\"'") + "'"); err != nil {
+	if err = session.Start("python3 -c '" + strings.ReplaceAll(script, "'", "'\"'\"'") + "'"); err != nil {
 		_ = session.Close()
 		return nil, err
 	}
@@ -100,6 +105,15 @@ func (c *Client) fencedRequest(ctx context.Context, mode string, f EffectFence, 
 	}
 	response.Body = &fenceBody{ReadCloser: response.Body, closeSession: session.Close, stop: stop}
 	return response, nil
+}
+
+// fenceScript is effectFenceScript naming the images an owned proxy may run.
+func fenceScript() (string, error) {
+	images, err := json.Marshal(ingressImages())
+	if err != nil {
+		return "", err
+	}
+	return strings.Replace(effectFenceScript, "INGRESS_IMAGES", string(images), 1), nil
 }
 
 const effectFenceScript = `import os,sys,json,hashlib,fcntl,socket,http.client,signal,tempfile,stat,re,time,struct
@@ -173,9 +187,10 @@ def main():
   assert process['entrypoint']=='sh' and args[0]=='-c'
   admin=r"""` + ingressAdminScript + `"""
   probe=r"""` + ingressProbeScript + `"""
-  assert (len(args)==6 and args[1]==admin and args[2]=='ingress' and args[3] in ('read','apply')) or (len(args)==4 and args[1]==probe and args[2]=='probe' and re.fullmatch(r'[a-z0-9.-]+',args[3]))
+  token=r"""` + ingressTokenScript + `"""
+  assert (len(args)==6 and args[1]==admin and args[2]=='ingress' and args[3] in ('read','apply','reload')) or (len(args)==4 and args[1]==probe and args[2]=='probe' and re.fullmatch(r'[a-z0-9.-]+',args[3])) or (len(args)==4 and args[1]==token and args[2]=='dns' and re.fullmatch(r'[a-z0-9_]{1,64}',args[3]))
   c.request('GET','/containers/'+container+'/json');r=c.getresponse();owned=json.loads(r.read());assert r.status==200
-  assert owned['Id']==container and owned['State']['Running'] and owned['Config']['Image']=='` + IngressImage + `'
+  assert owned['Id']==container and owned['State']['Running'] and owned['Config']['Image'] in INGRESS_IMAGES
   assert owned['Config']['Labels'].get('loomplane.org') and owned['Config']['Labels'].get('loomplane.ingress')
   assert q['Fence']['operation']==owned['Config']['Labels']['loomplane.org']+'/ingress/'+owned['Config']['Labels']['loomplane.ingress']
  headers={k:','.join(v) for k,v in (q['Headers'] or {}).items()};headers['Content-Length']=str(size)

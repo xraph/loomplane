@@ -1,0 +1,40 @@
+{{- if .Values.httpRoute.enabled }}
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: {{ include "loomplane.fullname" . }}
+  labels:
+    {{- include "loomplane.labels" . | nindent 4 }}
+  {{- with .Values.httpRoute.annotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+spec:
+  parentRefs:
+    {{- required "httpRoute.parentRefs needs the Gateway to attach to" .Values.httpRoute.parentRefs | toYaml | nindent 4 }}
+  hostnames:
+    {{- if .Values.httpRoute.hostnames }}
+    {{- toYaml .Values.httpRoute.hostnames | nindent 4 }}
+    {{- else }}
+    - {{ include "loomplane.publicHost" . | quote }}
+    {{- end }}
+  rules:
+    {{- if .Values.httpRoute.blockInternalPaths }}
+    - matches:
+        {{- range list "/_/health" "/_/metrics" "/debug" }}
+        - path:
+            type: PathPrefix
+            value: {{ . }}
+        {{- end }}
+      backendRefs:
+        - name: {{ include "loomplane.fullname" . }}-blocked
+          port: 80
+    {{- end }}
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+      backendRefs:
+        - name: {{ include "loomplane.fullname" . }}
+          port: {{ .Values.service.port }}
+{{- end }}

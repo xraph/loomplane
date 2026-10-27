@@ -387,6 +387,15 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 				planned = append(planned, cloudinfra.PlannedPlacement{OrgID: plan.OrgID, ProjectID: plan.ProjectID, EnvironmentID: plan.EnvironmentID, Service: action.Name, Placement: action.Service.CloudPlacement.PoolPlacement()})
 			}
 		}
+		frontendPlan := *plan
+		frontendSyncID, frontendIDErr := capacitySyncID(preview.ID)
+		if frontendIDErr != nil {
+			return nil, frontendIDErr
+		}
+		frontendPlan.ID = migrationPlanID(frontendSyncID, env.ID)
+		if frontendErr := s.pinFrontendDemands(ctx, &frontendPlan, result); frontendErr != nil {
+			preview.Blockers = append(preview.Blockers, env.Name+": "+frontendErr.Error())
+		}
 		plan.setResult(result)
 		for _, finding := range result.Problems {
 			preview.Blockers = append(preview.Blockers, env.Name+": "+finding.Name+": "+finding.Message)
@@ -418,7 +427,7 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 					}
 				}
 			}
-			if a.Op != Keep && a.Service.Gateway == nil {
+			if a.Op != Keep && !a.Service.Generated() {
 				if s.appliedInputs == nil {
 					preview.Blockers = append(preview.Blockers, a.Name+": applied input verification is unavailable")
 				} else if e = s.appliedInputs.CheckAppliedInputs(ctx, p.OrgID, env.ID, a.Service); e != nil {
@@ -553,7 +562,7 @@ func (s *Service) ApplyCloudChange(ctx context.Context, p security.Principal, pr
 			return nil, decodeErr
 		}
 		for _, action := range plan.Actions {
-			if action.Op == Keep || action.Service == nil || action.Service.Gateway != nil {
+			if action.Op == Keep || action.Service == nil || action.Service.Generated() {
 				continue
 			}
 			if s.appliedInputs == nil {
@@ -570,7 +579,7 @@ func (s *Service) ApplyCloudChange(ctx context.Context, p security.Principal, pr
 		if decodeErr := json.Unmarshal(env.Plan, &plan); decodeErr != nil {
 			return nil, decodeErr
 		}
-		if slices.ContainsFunc(plan.Actions, func(a Action) bool { return a.Service != nil && a.Service.CapacityIntent != nil }) {
+		if slices.ContainsFunc(plan.Actions, HasCapacityIntent) {
 			reserved, idErr := capacitySyncID(preview.ID)
 			if idErr != nil {
 				return nil, idErr

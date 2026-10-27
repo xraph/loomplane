@@ -40,6 +40,9 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 	if err := e.domainRoutes(r, guard); err != nil {
 		return err
 	}
+	if err := e.registrationRoutes(r, guard); err != nil {
+		return err
+	}
 	g := r.Group("/api/v1/clouds/:cloudId", forge.WithGroupMiddleware(guard...), forge.WithGroupTags("Cloud infrastructure"))
 	routes := []route{
 		{http.MethodGet, "/servers/:serverId/usage", "cloudServers.usage", e.serverUsage, nil, infra.ServerUsage{}, http.StatusOK},
@@ -90,7 +93,7 @@ func result(c forge.Context, status int, value any, err error) error {
 	}
 	code := security.StatusFor(err)
 	switch {
-	case errors.Is(err, infra.ErrInvalid), errors.Is(err, provider.ErrInfrastructureInvalid):
+	case errors.Is(err, infra.ErrInvalid), errors.Is(err, provider.ErrInfrastructureInvalid), errors.Is(err, infra.ErrWildcardUnsupported):
 		code = http.StatusUnprocessableEntity
 	case errors.Is(err, infra.ErrNotFound), errors.Is(err, cloudprofiles.ErrNotFound), errors.Is(err, connections.ErrNotFound):
 		code = http.StatusNotFound
@@ -99,6 +102,12 @@ func result(c forge.Context, status int, value any, err error) error {
 	case errors.Is(err, provider.ErrInfrastructureScope):
 		code = http.StatusForbidden
 	case errors.Is(err, provider.ErrInfrastructureUnsupported):
+		code = http.StatusUnprocessableEntity
+	// A write whose outcome is unknown stays a server error whatever it wraps.
+	case errors.Is(err, provider.ErrInfrastructureAmbiguous):
+	case errors.Is(err, provider.ErrInfrastructureNotFound):
+		code = http.StatusNotFound
+	case errors.Is(err, provider.ErrInfrastructureIdentity):
 		code = http.StatusUnprocessableEntity
 	}
 	if code == http.StatusInternalServerError {

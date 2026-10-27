@@ -51,19 +51,25 @@ func routeDNSRecord(zone *Zone, hostname, address, owner string) (provider.DNSRe
 			return provider.DNSRecord{}, err
 		}
 	}
-	ip := net.ParseIP(address)
-	if ip == nil {
-		return provider.DNSRecord{}, ErrInvalid
-	}
-	kind := "A"
-	if ip.To4() == nil {
-		kind = "AAAA"
+	kind, value := "A", ""
+	if ip := net.ParseIP(address); ip != nil {
+		value = ip.String()
+		if ip.To4() == nil {
+			kind = "AAAA"
+		}
+	} else {
+		// A load balancer hostname takes a CNAME, which can't sit at the apex.
+		target, hostErr := NormalizeHostname(address)
+		if hostErr != nil || relative == "" {
+			return provider.DNSRecord{}, ErrInvalid
+		}
+		kind, value = "CNAME", target
 	}
 	token := ""
 	if zone.RecordOwnership {
 		token = "loomplane:route:" + owner
 	}
-	return provider.DNSRecord{ZoneID: zone.ProviderZone.ID, Name: relative, Type: kind, Value: ip.String(), TTL: 60, Owner: token}, nil
+	return provider.DNSRecord{ZoneID: zone.ProviderZone.ID, Name: relative, Type: kind, Value: value, TTL: 60, Owner: token}, nil
 }
 
 func (s *Service) preflightRouteDNS(ctx context.Context, zone *Zone, desired provider.DNSRecord) error {
@@ -79,7 +85,8 @@ func (s *Service) preflightRouteDNS(ctx context.Context, zone *Zone, desired pro
 		return err
 	}
 	for _, record := range records {
-		if record.Name == desired.Name && (record.Type == "A" || record.Type == "AAAA" || record.Type == "CNAME") {
+		// A CNAME can't share its name with any other record.
+		if record.Name == desired.Name && (record.Type == "A" || record.Type == "AAAA" || record.Type == "CNAME" || desired.Type == "CNAME") {
 			return provider.ErrInfrastructureDrift
 		}
 	}

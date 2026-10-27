@@ -101,7 +101,7 @@ func newCloudAPIVercel(t *testing.T) *cloudAPIVercel {
 	t.Cleanup(f.srv.Close)
 	return f
 }
-func cloudAPISetup(t *testing.T) (config.Config, *running, *client, string, string) {
+func cloudAPISetup(t *testing.T, configure ...func(*config.Config)) (config.Config, *running, *client, string, string) {
 	t.Helper()
 	cfg := config.Defaults()
 	cfg.Database.URL = freshDatabase(t)
@@ -109,6 +109,9 @@ func cloudAPISetup(t *testing.T) (config.Config, *running, *client, string, stri
 	cfg.GitHub.APIURL = fakeGitHubServing(t).URL
 	cfg.Analysis.WorkDir = t.TempDir()
 	cfg.Storage.URL = "file://" + t.TempDir()
+	for _, apply := range configure {
+		apply(&cfg)
+	}
 	// The fixture endpoint is set by callers before starting deployment work.
 	r := start(t, cfg)
 	c := &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}

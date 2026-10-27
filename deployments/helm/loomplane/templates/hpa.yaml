@@ -1,0 +1,37 @@
+{{- range $component := list "api" "worker" }}
+{{- $settings := index $.Values $component }}
+{{- if $settings.autoscaling.enabled }}
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: {{ if eq $component "api" }}{{ include "loomplane.fullname" $ }}{{ else }}{{ include "loomplane.workerName" $ }}{{ end }}
+  labels:
+    {{- include "loomplane.labels" $ | nindent 4 }}
+    app.kubernetes.io/component: {{ $component }}
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: {{ if eq $component "api" }}{{ include "loomplane.fullname" $ }}{{ else }}{{ include "loomplane.workerName" $ }}{{ end }}
+  minReplicas: {{ $settings.autoscaling.minReplicas }}
+  maxReplicas: {{ $settings.autoscaling.maxReplicas }}
+  metrics:
+    {{- with $settings.autoscaling.targetCPUUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: {{ . }}
+    {{- end }}
+    {{- with $settings.autoscaling.targetMemoryUtilizationPercentage }}
+    - type: Resource
+      resource:
+        name: memory
+        target:
+          type: Utilization
+          averageUtilization: {{ . }}
+    {{- end }}
+{{- end }}
+{{- end }}

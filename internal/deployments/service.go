@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/page"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/security"
@@ -47,6 +48,11 @@ type Service struct {
 
 // NewService returns a Service. audit may be nil.
 func NewService(store Store, authz Authorizer, retry Retrier, audit Auditor) *Service {
+	if st, ok := store.(*PgStore); ok {
+		if wake, available := retry.(cloudinfra.CapacityCloudWakeup); available {
+			st.frontendWake = wake
+		}
+	}
 	return &Service{store: store, authz: authz, retry: retry, audit: audit, now: time.Now}
 }
 

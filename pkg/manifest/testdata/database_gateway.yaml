@@ -1,0 +1,31 @@
+version: 1
+defaults:
+  provider: cloud-run
+  region: us-central1
+database_gateway:
+  provider: cloud-run
+  region: us-east1
+  environments:
+    staging:
+      region: us-west1
+    preview:
+      enabled: false
+services:
+  api:
+    source: services/api
+    needs: [db, cache]
+resources:
+  db:
+    kind: postgres
+    provider: cloud-sql
+    gateway: true
+    environments:
+      preview:
+        gateway: false
+  analytics:
+    kind: postgres
+    environments:
+      production:
+        gateway: true
+  cache:
+    kind: redis

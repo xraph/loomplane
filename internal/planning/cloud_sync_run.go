@@ -434,7 +434,7 @@ func (s *Service) acceptedCloudPlan(ctx context.Context, sync *cloudprofiles.Syn
 	saved, err := s.store.GetPlan(ctx, sync.OrgID, expected.ID)
 	if errors.Is(err, ErrNotFound) && env.AcceptedPlan == nil {
 		if slices.ContainsFunc(expected.Actions, func(a Action) bool {
-			return a.Service != nil && (a.Service.CapacityIntent != nil || a.Service.CloudPlacement != nil && a.Service.CloudPlacement.PoolID != "")
+			return a.Service != nil && (a.Service.CapacityIntent != nil || a.Service.FrontendDemand != nil || a.Service.CloudPlacement != nil && a.Service.CloudPlacement.PoolID != "")
 		}) {
 			return nil, fmt.Errorf("%w: this legacy Cloud sync has no accepted pool plan; review and accept a revert before reviewing the target change again", cloudprofiles.ErrConflict)
 		}

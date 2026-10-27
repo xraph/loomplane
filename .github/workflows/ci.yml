@@ -79,6 +79,10 @@ jobs:
         with:
           go-version-file: go.mod
       - run: python3 -m unittest discover -s scripts -p test_integration_cohorts.py
+      # A cold -race build of the suite can take longer than the cohort
+      # script's 300 second discovery bound on a slow runner. Building it
+      # here fills the build cache, so that bound times discovery alone.
+      - run: go test -race -tags=integration -c -o /dev/null ./tests/integration/
       - run: python3 scripts/integration-cohorts.py --shard ${{ matrix.shard }} --shards 8
 
   dashboard:
@@ -130,3 +134,44 @@ jobs:
           cache-to: type=gha,mode=max
       - name: Production Docker smoke test
         run: bash scripts/test-production.sh loomplane:ci
+
+  helm:
+    name: Helm chart
+    # Lints the chart, validates everything it renders, checks it refuses
+    # settings that can't be highly available, and that
+    # deployments/kubernetes/loomplane.yaml is current.
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: azure/setup-helm@v4
+      - name: Install kubeconform
+        run: |
+          curl -fsSL https://github.com/yannh/kubeconform/releases/download/v0.8.0/kubeconform-linux-amd64.tar.gz |
+            sudo tar -xz -C /usr/local/bin kubeconform
+      - run: bash scripts/check-helm.sh
+
+  kubernetes:
+    name: Kubernetes (kind)
+    # Installs the chart in a three-node kind cluster and keeps requests
+    # going through the Service while an API pod is deleted, both
+    # Deployments restart and a node drains. Any failed request fails it.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v7
+      - uses: azure/setup-helm@v4
+      - uses: helm/kind-action@v1
+        with:
+          install_only: true
+      - uses: docker/setup-buildx-action@v4
+      - name: Build the image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: deployments/docker/Dockerfile
+          push: false
+          load: true
+          tags: loomplane:k8s-test
+          build-args: VERSION=k8s-test
+          cache-from: type=gha
+      - run: bash scripts/test-kubernetes.sh loomplane:k8s-test

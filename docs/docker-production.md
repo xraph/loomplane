@@ -9,6 +9,7 @@ your workload before choosing a smaller host.
 This stack runs one API and dashboard, one analysis worker, Postgres 17 and
 Caddy. It tolerates container restarts. Host failure still takes it offline,
 so keep backups off the host. It does not provide high availability.
+For that, run the [Kubernetes chart](kubernetes.md).
 
 ## Install
 

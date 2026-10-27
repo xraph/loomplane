@@ -154,6 +154,11 @@ export interface Assignment {
   targets: Target[];
 }
 
+export interface AutoRenewInputBody {
+  autoRenew: boolean;
+  revision: number;
+}
+
 export interface Backup {
   attempt: number;
   bytes: number;
@@ -263,6 +268,11 @@ export interface CatalogproxySession {
   url: string;
 }
 
+export interface ChallengeCredentialInputBody {
+  connectionId: string;
+  revision: number;
+}
+
 export interface Change {
   field: string;
   from: string;
@@ -313,6 +323,16 @@ export interface CheckResult {
 
 export interface ChooseConnectionInputBody {
   connectionId: string;
+}
+
+export interface CleanupReview {
+  connectionId: string;
+  deploymentId: string;
+  effect: string;
+  provider: string;
+  region: string;
+  resource: string;
+  revision: string;
 }
 
 export interface CloudAdoption {
@@ -429,6 +449,21 @@ export interface CloudinfraRoute {
   status: string;
   updatedAt: string;
   verification: RouteVerification;
+}
+
+export interface CloudinfraRouteStatus {
+  backend: string;
+  certificate: string;
+  certificateExpiresAt: string;
+  checkedAt: string;
+  dns: string;
+  hostname: string;
+  message?: string;
+  operationId?: string;
+  retryable: boolean;
+  route: string;
+  routeId: string;
+  wildcard: boolean;
 }
 
 export interface CloudprofilesCreateInputBody {
@@ -645,6 +680,32 @@ export interface DNSZone {
   verified: boolean;
 }
 
+export interface DatabaseGateway {
+  cloudTags?: string[];
+  environments?: Record<string, any>;
+  provider?: string;
+  region?: string;
+}
+
+export interface DatabaseGatewayConfig {
+  name: string;
+  program: string;
+  resources: string[];
+  suffix: string;
+  trust?: string;
+}
+
+export interface DbgatewayRouteStatus {
+  backendConns: number;
+  id: string;
+  maxConnections: number;
+  pinRate: number;
+  reachable: boolean;
+  reported: boolean;
+  resource: string;
+  state: string;
+}
+
 export interface DecideInputBody {
   note?: string;
   revision?: string;
@@ -730,8 +791,36 @@ export interface DeploymentList {
   next?: string;
 }
 
+export interface DomainCheckInputBody {
+  connectionId: string;
+  domains: string[];
+}
+
+export interface DomainOffer {
+  name: string;
+  price?: DomainPrice;
+  reason?: string;
+  registrable: boolean;
+  tier?: string;
+}
+
+export interface DomainOfferList {
+  offers: DomainOffer[];
+}
+
 export interface DomainOperationList {
   operations: (RouteOperation | null)[];
+}
+
+export interface DomainOverview {
+  registrations: (Registration | null)[];
+  zones: ZoneOverview[];
+}
+
+export interface DomainPrice {
+  currency: string;
+  registrationCost: string;
+  renewalCost: string;
 }
 
 export interface DomainRouteList {
@@ -814,6 +903,7 @@ export interface EnvLink {
   address?: string;
   field?: string;
   from: string;
+  gateway?: string;
   key: string;
   options?: Record<string, any>;
   subject: string;
@@ -894,6 +984,18 @@ export interface FabriqKeyList {
   keys: ConsumerKey[];
 }
 
+export interface FailedCleanup {
+  attempt: number;
+  deploymentId: string;
+  error?: string;
+  revision: string;
+  status: string;
+}
+
+export interface FailedCleanupInputBody {
+  revision: string;
+}
+
 export interface Federation {
   accessGrants?: Record<string, any>;
   destinations?: Record<string, any>;
@@ -916,11 +1018,26 @@ export interface Finding {
   subject?: string;
 }
 
+export interface GatewayList {
+  gateways: GatewayStatus[];
+}
+
 export interface GatewayRoute {
   env: string;
   path: string;
   stripPrefix?: boolean;
   to: string;
+}
+
+export interface GatewayStatus {
+  environmentId: string;
+  id: string;
+  instances: InstanceStatus[];
+  name: string;
+  provider: string;
+  region: string;
+  routes: DbgatewayRouteStatus[];
+  snapshotVersion: number;
 }
 
 export interface GeneratedSecret {
@@ -983,6 +1100,18 @@ export interface Held {
   sameAddress?: string;
 }
 
+export interface HostnameUse {
+  environmentId: string;
+  hostname: string;
+  port: number;
+  projectId: string;
+  projectName: string;
+  routeId: string;
+  runsOn: string;
+  service: string;
+  status: CloudinfraRouteStatus;
+}
+
 export interface IdentitySession {
   orgId: string;
   permissions: string[];
@@ -1004,6 +1133,26 @@ export interface InfrastructureStatus {
   engine: string;
   providers: ProviderStatus[];
   store: string;
+}
+
+export interface InstanceRouteStats {
+  backendConns: number;
+  maxConnections: number;
+  pinRate: number;
+  pinned: number;
+  reachable: boolean;
+  routeId: string;
+  waitP95Ms: number;
+}
+
+export interface InstanceStatus {
+  behind: boolean;
+  draining: boolean;
+  id: string;
+  lastSeenAt: string;
+  reporting: boolean;
+  routes: InstanceRouteStats[];
+  snapshotVersion: number;
 }
 
 export interface KindInfo {
@@ -1077,6 +1226,7 @@ export interface ManagedDatabaseProfile {
 }
 
 export interface Manifest {
+  databaseGateway?: DatabaseGateway;
   defaults?: Defaults;
   federation?: Federation;
   gateways?: Record<string, any>;
@@ -1672,6 +1822,20 @@ export interface Project {
   updatedAt: string;
 }
 
+export interface ProjectDomain {
+  hostnames: HostnameUse[];
+  mode: string;
+  name: string;
+  provider?: string;
+  verified: boolean;
+  wildcards: boolean;
+  zoneId: string;
+}
+
+export interface ProjectDomainList {
+  domains: ProjectDomain[];
+}
+
 export interface ProjectGrant {
   cloudId: string;
   orgId: string;
@@ -1728,6 +1892,10 @@ export interface ProviderStatus {
   name: string;
   region: string;
   version: string;
+}
+
+export interface ProviderZoneList {
+  zones: DNSZone[];
 }
 
 export interface Provisions {
@@ -1829,6 +1997,69 @@ export interface Ref {
   component?: string;
   dependency?: string;
   field: string;
+}
+
+export interface Registration {
+  accountId: string;
+  attempt: number;
+  attempted: boolean;
+  autoRenew: boolean;
+  connectionId: string;
+  createdAt: string;
+  customRegistrant: boolean;
+  domainExpiresAt: string;
+  firstUnconfirmedAt: string;
+  id: string;
+  message: string;
+  name: string;
+  noticeSentFor: string;
+  orgId: string;
+  privacyMode: string;
+  projectIds: string[];
+  provider: string;
+  quote: DomainPrice;
+  refreshedAt: string;
+  resultNotifiedFor: string;
+  review: string;
+  reviewExpiresAt: string;
+  revision: number;
+  sandbox: boolean;
+  status: string;
+  updatedAt: string;
+  zoneId: string;
+}
+
+export interface RegistrationApprovalBody {
+  currency: string;
+  registrationCost: string;
+  review: string;
+}
+
+export interface RegistrationExtensionList {
+  extensions: string[];
+}
+
+export interface RegistrationInputBody {
+  autoRenew?: boolean;
+  connectionId: string;
+  name: string;
+  privacyMode?: string;
+  projectIds?: string[];
+  registrant?: {
+  city: string;
+  countryCode: string;
+  email: string;
+  name: string;
+  organization: string;
+  phone: string;
+  postalCode: string;
+  state: string;
+  street: string;
+};
+}
+
+export interface RegistrationList {
+  registrations: (Registration | null)[];
 }
 
 export interface RemoveRouteInputBody {
@@ -2090,19 +2321,24 @@ export interface RevisionList {
 
 export interface RouteBinding {
   address: string;
+  backend?: string;
   bindingId: string;
   configDigest: string;
   connectionGeneration: number;
   connectionId: string;
   containerId: string;
+  ingressClass?: string;
   instanceId: string;
+  namespace?: string;
   releaseId: string;
   runtimeId: string;
   serverId: string;
+  serviceName?: string;
   targetId: string;
 }
 
 export interface RouteInput {
+  blockedPathPrefixes?: string[];
   cloudId: string;
   environmentId: string;
   externalTtlSeconds?: number;
@@ -2113,6 +2349,7 @@ export interface RouteInput {
 }
 
 export interface RouteInputBody {
+  blockedPathPrefixes?: string[];
   cloudId: string;
   environmentId: string;
   externalTtlSeconds?: number;
@@ -2134,6 +2371,7 @@ export interface RouteOperation {
   kind: string;
   message: string;
   notBefore: string;
+  notices?: string[];
   previousReceipt?: DNSRecord;
   receipt?: DNSRecord;
   review: string;
@@ -2141,6 +2379,13 @@ export interface RouteOperation {
   route: CloudinfraRoute;
   source?: CloudinfraRoute;
   status: string;
+}
+
+export interface RouteSummary {
+  gatewayId: string;
+  id: string;
+  resource: string;
+  state: string;
 }
 
 export interface RouteTTLInputBody {
@@ -2152,6 +2397,7 @@ export interface RouteVerification {
   backend: boolean;
   backendError?: string;
   certExpires: string;
+  certState?: string;
   checkedAt: string;
   dns: boolean;
   dnsError?: string;
@@ -2178,6 +2424,7 @@ export interface RuntimeHealth {
 export interface SaveInputBody {
   baseRevision?: number;
   manifest?: {
+  databaseGateway?: DatabaseGateway;
   defaults?: Defaults;
   federation?: Federation;
   gateways?: Record<string, any>;
@@ -2333,6 +2580,7 @@ export interface ServiceConfig {
   commitSha?: string;
   component?: ComponentConfig;
   context?: string;
+  databaseGateway?: DatabaseGatewayConfig;
   ecosystem: string;
   endpoint?: ManifestEndpoint;
   env?: EnvLink[];
@@ -2712,6 +2960,7 @@ export interface Workspace {
 
 export interface Zone {
   accountId?: string;
+  challengeConnectionId?: string;
   connectionGeneration?: number;
   connectionId?: string;
   id: string;
@@ -2719,12 +2968,14 @@ export interface Zone {
   name: string;
   orgId: string;
   projectIds: string[];
+  proofCheckedAt: string;
   proofExpiresAt: string;
   proofName?: string;
   proofValue?: string;
   provider?: string;
   providerZone: DNSZone;
   recordOwnership: boolean;
+  registrationId?: string;
   revision: number;
   verifiedAt: string;
 }
@@ -2738,6 +2989,14 @@ export interface ZoneInputBody {
 
 export interface ZoneList {
   zones: (Zone | null)[];
+}
+
+export interface ZoneOverview {
+  hostnames: HostnameUse[];
+  registrationId?: string;
+  state: string;
+  wildcards: boolean;
+  zone?: Zone;
 }
 
 export interface ZoneUpdateBody {

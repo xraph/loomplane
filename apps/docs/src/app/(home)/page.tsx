@@ -21,10 +21,11 @@ export default function HomePage() {
         >
           <h1
             id="home-title"
-            className="rise"
+            className="hl rise"
             style={{ "--d": ".08s" } as CSSProperties}
           >
-            Your infrastructure, <span className="thread">woven together.</span>
+            <span className="hl-thin">Your infrastructure,</span>{" "}
+            <span className="hl-bold">woven together.</span>
           </h1>
           <p className="lede rise" style={{ "--d": ".18s" } as CSSProperties}>
             Give Loomplane your monorepo, or an application split across several
