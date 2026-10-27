@@ -119,8 +119,18 @@ func (s *PgStore) Gateway(ctx context.Context, ref GatewayRef) (*Gateway, error)
 
 // Gateways implements Store.
 func (s *PgStore) Gateways(ctx context.Context) ([]*Gateway, error) {
-	rows, err := s.db.Query(ctx, `SELECT `+gatewayColumns+` FROM loomplane_octopus_gateways
+	return s.listGateways(ctx, `SELECT `+gatewayColumns+` FROM loomplane_octopus_gateways
 		ORDER BY org_id, environment_id, resource`)
+}
+
+// GatewaysIn implements Store.
+func (s *PgStore) GatewaysIn(ctx context.Context, orgID, environmentID string) ([]*Gateway, error) {
+	return s.listGateways(ctx, `SELECT `+gatewayColumns+` FROM loomplane_octopus_gateways
+		WHERE org_id = $1 AND environment_id = $2 ORDER BY resource`, orgID, environmentID)
+}
+
+func (s *PgStore) listGateways(ctx context.Context, query string, args ...any) ([]*Gateway, error) {
+	rows, err := s.db.Query(ctx, query, args...)
 	if err != nil {
 		return nil, fmt.Errorf("list octopus gateways: %w", err)
 	}
@@ -388,13 +398,18 @@ func (s *PgStore) WithGatewayLock(ctx context.Context, ref GatewayRef, run func(
 	if err != nil {
 		return fmt.Errorf("lock octopus gateway: %w", err)
 	}
-	defer func() {
-		ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), leaseReleaseTimeout)
-		defer cancel()
-		// A lease that isn't given back runs out on its own.
-		_, _ = s.db.Exec(ctx, `UPDATE loomplane_octopus_gateways SET sync_lease_until = NULL
-			WHERE org_id = $1 AND environment_id = $2 AND resource = $3 AND sync_lease_token = $4`,
-			ref.OrgID, ref.EnvironmentID, ref.Resource, token) //nolint:errcheck // the lease expires by itself
-	}()
+	defer s.releaseLease(ctx, ref, token)
 	return run()
+}
+
+// releaseLease gives back the lease token holds, if it still does. A lease
+// that isn't given back runs out on its own, so a failure here only
+// delays the next sync.
+func (s *PgStore) releaseLease(ctx context.Context, ref GatewayRef, token string) {
+	releaseCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), leaseReleaseTimeout)
+	defer cancel()
+	//nolint:errcheck // the lease expires by itself
+	s.db.Exec(releaseCtx, `UPDATE loomplane_octopus_gateways SET sync_lease_until = NULL
+		WHERE org_id = $1 AND environment_id = $2 AND resource = $3 AND sync_lease_token = $4`,
+		ref.OrgID, ref.EnvironmentID, ref.Resource, token)
 }

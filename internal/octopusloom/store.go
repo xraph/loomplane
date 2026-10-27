@@ -47,6 +47,9 @@ type Store interface {
 	// Gateway returns ErrNotFound when the gateway doesn't exist.
 	Gateway(ctx context.Context, ref GatewayRef) (*Gateway, error)
 	Gateways(ctx context.Context) ([]*Gateway, error)
+	// GatewaysIn lists the gateways of one organization's environment,
+	// sorted by resource.
+	GatewaysIn(ctx context.Context, orgID, environmentID string) ([]*Gateway, error)
 	// SetFarpHostnames replaces the hostnames FARP routes answer on and bumps
 	// the generation. ErrStale on a revision mismatch.
 	SetFarpHostnames(ctx context.Context, ref GatewayRef, hostnames []string, revision int64) (*Gateway, error)

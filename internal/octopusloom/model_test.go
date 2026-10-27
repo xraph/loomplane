@@ -1,6 +1,7 @@
 package octopusloom
 
 import (
+	"encoding/json"
 	"errors"
 	"reflect"
 	"strings"
@@ -276,5 +277,26 @@ func TestWildcardHostnameNeverConflictsWithExactHost(t *testing.T) {
 	}
 	if err := CheckRouteConflicts(wild, "", RouteInput{Hostname: "*.acme.dev", Path: "/auth/*"}); !errors.Is(err, ErrConflict) {
 		t.Errorf("same wildcard host: %v", err)
+	}
+}
+
+func TestRouteJSONNamesItsGatewayInSnakeCase(t *testing.T) {
+	out, err := json.Marshal(Route{ID: "octoroute_1", GatewayRef: GatewayRef{OrgID: "o", ProjectID: "p", EnvironmentID: "e", Resource: "edge"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got map[string]any
+	if err := json.Unmarshal(out, &got); err != nil {
+		t.Fatal(err)
+	}
+	for key, want := range map[string]string{"org_id": "o", "project_id": "p", "environment_id": "e", "resource": "edge"} {
+		if got[key] != want {
+			t.Errorf("%s = %v in %s", key, got[key], out)
+		}
+	}
+	for _, key := range []string{"OrgID", "ProjectID", "EnvironmentID", "Resource"} {
+		if _, ok := got[key]; ok {
+			t.Errorf("%s leaked into %s", key, out)
+		}
 	}
 }

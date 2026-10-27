@@ -317,3 +317,33 @@ func TestPgStoreGatewayLockIsALeaseThatExpires(t *testing.T) {
 		t.Fatalf("lock after both released: %v", err)
 	}
 }
+
+func TestPgStoreGatewaysInFiltersByOrgAndEnvironment(t *testing.T) {
+	store, _ := scratchStore(t)
+	ctx := t.Context()
+	refs := []GatewayRef{
+		{OrgID: "org", ProjectID: "proj", EnvironmentID: "env", Resource: "edge"},
+		{OrgID: "org", ProjectID: "proj", EnvironmentID: "env", Resource: "inner"},
+		{OrgID: "org", ProjectID: "proj", EnvironmentID: "env-2", Resource: "edge"},
+		{OrgID: "org-2", ProjectID: "proj", EnvironmentID: "env", Resource: "edge"},
+	}
+	for _, r := range refs {
+		if err := store.EnsureGateway(ctx, &Gateway{GatewayRef: r, Provider: ProviderServer}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := store.GatewaysIn(ctx, "org", "env")
+	if err != nil {
+		t.Fatal(err)
+	}
+	names := make([]GatewayRef, 0, len(got))
+	for _, g := range got {
+		names = append(names, g.GatewayRef)
+	}
+	if want := refs[:2]; !reflect.DeepEqual(names, want) {
+		t.Fatalf("GatewaysIn = %v, want %v", names, want)
+	}
+	if got, err = store.GatewaysIn(ctx, "org", "env-none"); err != nil || len(got) != 0 {
+		t.Fatalf("GatewaysIn of an empty environment = %v, %v", got, err)
+	}
+}

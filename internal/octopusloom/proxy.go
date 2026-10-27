@@ -12,8 +12,9 @@ import (
 
 // AdminTarget opens Octopus's admin dashboard through Loomplane's admin
 // proxy, on the gateway's private admin port. Every request carries the
-// admin API token and nothing else of Loomplane's; the dashboard still asks
-// for its own password.
+// admin API token and nothing else of Loomplane's. In Octopus 0.5.0 the
+// X-Octopus-Admin-Token header opens the server-rendered admin pages as
+// well as the admin API, so the dashboard never asks for its password.
 func AdminTarget() catalogproxy.Target {
 	return catalogproxy.Target{
 		Component: recipes.OctopusGateway, Port: adminPort,

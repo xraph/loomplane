@@ -64,6 +64,10 @@ func (e loomplaneError) Is(target error) bool { return target == errLoomplaneSid
 
 func ours(err error) error { return loomplaneError{err: err} }
 
+// errNotDeployed is a gateway with no binding yet: its first deploy hasn't
+// finished, or never will. A sync of it is pending. Test with errors.Is.
+var errNotDeployed = errors.New("the gateway has no binding")
+
 // Origins of the routes Loomplane put in Octopus: from the config file it
 // rendered, or from the admin API. Octopus reports a config route replaced
 // at runtime as admin until it restarts.
@@ -176,7 +180,7 @@ func (s *Syncer) syncLocked(ctx context.Context, ref GatewayRef, open ChannelOpe
 		return s.failed(ctx, g, msgInternal, ours(err))
 	}
 	if !found {
-		return s.pending(ctx, g, nil, msgNotRunning, errors.New("the gateway has no binding"))
+		return s.pending(ctx, g, nil, msgNotRunning, errNotDeployed)
 	}
 	if open == nil || secret == nil {
 		return s.failed(ctx, g, msgInternal, ours(errors.New("the syncer has no way to reach Octopus")))

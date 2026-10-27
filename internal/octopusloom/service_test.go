@@ -15,6 +15,7 @@ import (
 	"github.com/xraph/loomplane/internal/deployments"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/security"
+	"github.com/xraph/loomplane/pkg/provider"
 )
 
 // serviceStore is a Store in memory with the Postgres store's revision and
@@ -45,6 +46,9 @@ func (s *serviceStore) Gateway(_ context.Context, ref GatewayRef) (*Gateway, err
 }
 
 func (s *serviceStore) Gateways(context.Context) ([]*Gateway, error) { return nil, errStoreNotUsed }
+func (s *serviceStore) GatewaysIn(context.Context, string, string) ([]*Gateway, error) {
+	return nil, errStoreNotUsed
+}
 
 func (s *serviceStore) SetFarpHostnames(_ context.Context, ref GatewayRef, hostnames []string, revision int64) (*Gateway, error) {
 	s.mu.Lock()
@@ -386,6 +390,19 @@ func TestCreateRouteRejectsBadTargets(t *testing.T) {
 	} {
 		if _, err := f.svc.CreateRoute(context.Background(), admin, f.ref, c.in); !errors.Is(err, ErrInvalid) || err.Error() != c.want {
 			t.Fatalf("%+v: %v, want %q", c.in, err, c.want)
+		}
+	}
+	// A service the board calls unroutable can't take a route: no port, or a
+	// workload that doesn't serve HTTP.
+	f.bindings = append(f.bindings,
+		serviceBinding(t, "portless", "conn_a", planning.ServiceConfig{}),
+		serviceBinding(t, "worker", "conn_a", planning.ServiceConfig{Port: 8080, Workload: provider.Worker}),
+		serviceBinding(t, "site", "conn_a", planning.ServiceConfig{Port: 8080, Workload: provider.StaticSite}),
+	)
+	for _, name := range []string{"portless", "worker", "site"} {
+		in := RouteInput{Path: "/x", Service: name, Port: 8080}
+		if _, err := f.svc.CreateRoute(context.Background(), admin, f.ref, in); !errors.Is(err, ErrInvalid) || err.Error() != name+" has no HTTP port, so it can't take a route." {
+			t.Fatalf("%s: %v", name, err)
 		}
 	}
 	// The brief's wording, with auth itself on another server.

@@ -196,7 +196,7 @@ func (h *Hooks) Released(ctx context.Context, r deployments.Release) error {
 	}
 	ctx, cancel := context.WithTimeout(ctx, h.releaseTimeout)
 	defer cancel()
-	gateways, err := h.d.Store.Gateways(ctx)
+	gateways, err := h.d.Store.GatewaysIn(ctx, r.OrgID, r.EnvironmentID)
 	if err != nil {
 		return fmt.Errorf("list the Octopus gateways: %w", err)
 	}
@@ -212,9 +212,6 @@ func (h *Hooks) Released(ctx context.Context, r deployments.Release) error {
 		}
 	}
 	for _, g := range gateways {
-		if g.OrgID != r.OrgID || g.EnvironmentID != r.EnvironmentID {
-			continue
-		}
 		affected, err := h.affects(ctx, g, b.Name, cfg)
 		if err != nil {
 			keep(err)

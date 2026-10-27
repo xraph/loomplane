@@ -75,8 +75,11 @@ func (m *memStore) saved() *Gateway {
 	return cloneGateway(m.gateway)
 }
 
-func (m *memStore) EnsureGateway(context.Context, *Gateway) error    { return errStoreNotUsed }
-func (m *memStore) Gateways(context.Context) ([]*Gateway, error)     { return nil, errStoreNotUsed }
+func (m *memStore) EnsureGateway(context.Context, *Gateway) error { return errStoreNotUsed }
+func (m *memStore) Gateways(context.Context) ([]*Gateway, error)  { return nil, errStoreNotUsed }
+func (m *memStore) GatewaysIn(context.Context, string, string) ([]*Gateway, error) {
+	return nil, errStoreNotUsed
+}
 func (m *memStore) BumpGeneration(context.Context, GatewayRef) error { return errStoreNotUsed }
 func (m *memStore) DeleteGateway(context.Context, GatewayRef) error  { return errStoreNotUsed }
 func (m *memStore) CreateRoute(context.Context, *Route) error        { return errStoreNotUsed }

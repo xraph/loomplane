@@ -274,17 +274,20 @@ func checkAttached(attached []ServiceHostname, resource, hostname string) error 
 }
 
 // checkTarget is ErrInvalid unless the gateway can send in to its service
-// port.
+// port: one the board calls routable, on the gateway's server or cluster.
 func checkTarget(bindings []*planning.Binding, resource string, in RouteInput) error {
 	env := newBoardEnv(BoardInput{Bindings: bindings})
 	svc := env.services[in.Service]
 	if svc == nil {
 		return invalidf("%s isn't a service in this environment.", in.Service)
 	}
+	if svc.cfg.Port <= 0 || !httpWorkload(svc.cfg.Workload) {
+		return invalidf("%s has no HTTP port, so it can't take a route.", in.Service)
+	}
 	if connection, found := gatewayConnection(bindings, resource); found && svc.binding.ConnectionID != connection {
 		return invalidf("%s runs on a different server or cluster, so Octopus can't reach it.", in.Service)
 	}
-	if svc.cfg.Port > 0 && svc.cfg.Port != in.Port {
+	if svc.cfg.Port != in.Port {
 		return invalidf("%s listens on %d.", in.Service, svc.cfg.Port)
 	}
 	return nil

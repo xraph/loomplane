@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -54,6 +55,23 @@ func TestReconcileJobSyncsEveryGatewayAndSurvivesOneFailure(t *testing.T) {
 		if strings.Contains(w, fakeAdminToken) || strings.Contains(w, fakeFarpToken) {
 			t.Fatalf("a warning holds a token: %q", w)
 		}
+	}
+}
+
+func TestReconcileJobDoesntWarnAboutAGatewayThatNeverDeployed(t *testing.T) {
+	f := reconcileFixture(t)
+	// side's first deploy never wrote its binding.
+	f.bindings = slices.DeleteFunc(f.bindings, func(b *planning.Binding) bool { return b.Name == "side--gateway" })
+	f.openErr["inner"] = errors.New("connection refused")
+	if err := ReconcileJob(f.syncer).Handler(context.Background(), ReconcilePayload{}); err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if g := f.gateway("side"); g.State.Error != msgNotRunning {
+		t.Fatalf("side's sync error = %q", g.State.Error)
+	}
+	// A real failure still warns.
+	if len(f.warns) != 1 || !strings.Contains(f.warns[0], "inner") {
+		t.Fatalf("warnings %q, want one for inner", f.warns)
 	}
 }
 

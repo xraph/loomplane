@@ -2,6 +2,7 @@ package octopusloom
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -32,8 +33,9 @@ var reconcileSyncTimeout = 10 * time.Second
 // which pushes what a write or a release didn't get through, puts back
 // what an Octopus restart lost and keeps Docker services' FARP
 // registrations alive. A gateway that doesn't sync is logged and left for
-// the next run; the job fails only when it can't list the gateways. It
-// isn't retried: the next run is 30 seconds away.
+// the next run, except one that has never deployed, which waits quietly.
+// The job fails only when it can't list the gateways. It isn't retried:
+// the next run is 30 seconds away.
 func ReconcileJob(s *Syncer) *job.Definition[ReconcilePayload] {
 	return job.NewDefinition(JobOctopusReconcile, func(ctx context.Context, _ ReconcilePayload) error {
 		return reconcile(ctx, s)
@@ -61,7 +63,10 @@ func reconcile(ctx context.Context, s *Syncer) error {
 			syncCtx, cancel := context.WithTimeout(ctx, reconcileSyncTimeout)
 			defer cancel()
 			res, err := s.Sync(syncCtx, ref)
-			if err != nil {
+			// A gateway that never deployed, such as an abandoned first
+			// deploy, waits quietly: warning about it every 30 seconds
+			// says nothing new.
+			if err != nil && !errors.Is(err, errNotDeployed) {
 				s.warn(fmt.Sprintf("Octopus gateway %s in environment %s didn't sync (%s): %s", ref.Resource, ref.EnvironmentID, res.State, res.Message), err)
 			}
 		}(g.GatewayRef)

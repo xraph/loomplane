@@ -23,10 +23,10 @@ const (
 
 // GatewayRef names a gateway: the Octopus resource of one environment.
 type GatewayRef struct {
-	OrgID         string
-	ProjectID     string
-	EnvironmentID string
-	Resource      string
+	OrgID         string `json:"org_id"`
+	ProjectID     string `json:"project_id"`
+	EnvironmentID string `json:"environment_id"`
+	Resource      string `json:"resource"`
 }
 
 // Gateway is the desired and last-synced state of one Octopus gateway.

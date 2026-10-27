@@ -26,6 +26,8 @@ type hookStore struct {
 	routes   []*Route
 	events   *[]string
 	saveErr  error
+	// listedAll counts the calls to Gateways, which lists every org's.
+	listedAll int
 }
 
 func newHookStore(events *[]string, gateways ...*Gateway) *hookStore {
@@ -69,12 +71,26 @@ func (s *hookStore) Gateway(_ context.Context, ref GatewayRef) (*Gateway, error)
 func (s *hookStore) Gateways(context.Context) ([]*Gateway, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	s.listedAll++
+	return s.sorted(func(*Gateway) bool { return true }), nil
+}
+
+func (s *hookStore) GatewaysIn(_ context.Context, orgID, environmentID string) ([]*Gateway, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.sorted(func(g *Gateway) bool { return g.OrgID == orgID && g.EnvironmentID == environmentID }), nil
+}
+
+// sorted is the gateways keep keeps, by resource. Hold mu.
+func (s *hookStore) sorted(keep func(*Gateway) bool) []*Gateway {
 	out := make([]*Gateway, 0, len(s.gateways))
 	for _, g := range s.gateways {
-		out = append(out, cloneGateway(g))
+		if keep(g) {
+			out = append(out, cloneGateway(g))
+		}
 	}
 	slices.SortFunc(out, func(a, b *Gateway) int { return strings.Compare(a.Resource, b.Resource) })
-	return out, nil
+	return out
 }
 
 func (s *hookStore) SaveSyncState(ctx context.Context, ref GatewayRef, applied int64, state SyncState) error {
@@ -528,6 +544,9 @@ func TestReleasedSyncsAffectedGatewaysOnly(t *testing.T) {
 	other.EnvironmentID = "env_other"
 	if g, _ := f.store.Gateway(context.Background(), other); g.Generation != 7 {
 		t.Fatal("the gateway of another environment was bumped")
+	}
+	if f.store.listedAll != 0 {
+		t.Fatalf("a release listed every org's gateways %d times", f.store.listedAll)
 	}
 }
 
