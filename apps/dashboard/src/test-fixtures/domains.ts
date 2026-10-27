@@ -209,3 +209,34 @@ export function stubFetch(
   )
   return writes
 }
+
+type Overview = ReturnType<typeof zoneWith>
+
+/** detailPath is where the API answers a zone's page. */
+export function detailPath(name: string): string {
+  return `/api/v1/dns-zones/${zoneID(name)}`
+}
+
+/**
+ * detailWith is a zone's page as the API answers it. Parent and proof zone
+ * carry no hostnames, as they don't there.
+ */
+export function detailWith(
+  domain: Overview,
+  options: {
+    parent?: Overview
+    proofZone?: Overview
+    subdomains?: Overview[]
+    records?: unknown[]
+    registration?: unknown
+  } = {}
+) {
+  return {
+    domain,
+    parent: options.parent && { ...options.parent, hostnames: [] },
+    proof_zone: options.proofZone && { ...options.proofZone, hostnames: [] },
+    subdomains: options.subdomains ?? [],
+    records: options.records ?? [],
+    registration: options.registration,
+  }
+}

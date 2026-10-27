@@ -1,15 +1,34 @@
 import { ClientProvider } from "@forge-go/client-react"
-import { cleanup, render, screen, waitFor } from "@testing-library/react"
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import { useState } from "react"
+import { type ReactNode, useState } from "react"
 import { afterEach, expect, it, vi } from "vitest"
 
 import type { ZoneOverview } from "@/client/forge/loomplane/types"
 import { forgeClient } from "@/client/runtime"
+import { DomainDetailPage } from "@/pages/domain-detail"
+import {
+  detailPath,
+  detailWith,
+  stubFetch,
+  zoneWith,
+} from "@/test-fixtures/domains"
 import { ChallengeCredentialDialog } from "./challenge-credential-dialog"
 
 vi.mock("@/lib/organization", () => ({
   useOrganization: () => ({ session: { orgId: "org" }, can: () => true }),
+}))
+// The domain's page, without the app around it.
+vi.mock("@/components/site-header", () => ({ SiteHeader: () => null }))
+vi.mock("@/lib/router", () => ({
+  Link: ({ children }: { children?: ReactNode }) => <a>{children}</a>,
+  useNavigate: () => () => {},
 }))
 
 afterEach(() => {
@@ -118,10 +137,39 @@ function mount(zone: ZoneOverview) {
 const copy =
   "Wildcard certificates need a second Cloudflare token with DNS Edit on acme.dev only. Loomplane stores it on each server and cluster that serves a wildcard for this zone, so keep its scope to this one zone."
 
-// Which domains offer it is the domain page's to decide now.
-it.todo(
-  "offers wildcard certificates only on a Cloudflare zone without a challenge token"
-)
+// The domain's page offers it from its Wildcards section.
+it("offers wildcard certificates only on a Cloudflare zone without a challenge token", async () => {
+  const setUp = { name: "Set up wildcard certificates" }
+  const page = async (change: (z: ReturnType<typeof zoneWith>) => void) => {
+    const z = zoneWith("acme.dev")
+    change(z)
+    stubFetch({ [detailPath("acme.dev")]: detailWith(z) })
+    render(
+      <ClientProvider client={forgeClient}>
+        <DomainDetailPage zoneId="zone-acme.dev" />
+      </ClientProvider>
+    )
+    await screen.findByRole("region", { name: "Status" })
+  }
+  await page((z) =>
+    Object.assign(z.zone, { challenge_connection_id: "cf-dns" })
+  )
+  expect(
+    within(screen.getByRole("region", { name: "Wildcards" })).getByText(
+      /Wildcard certificates are set up/
+    )
+  ).toBeTruthy()
+  expect(screen.queryByRole("button", setUp)).toBeNull()
+  cleanup()
+  forgeClient.clear()
+  await page((z) => Object.assign(z.zone, { provider: "digitalocean" }))
+  expect(screen.queryByRole("region", { name: "Wildcards" })).toBeNull()
+  expect(screen.queryByRole("button", setUp)).toBeNull()
+  cleanup()
+  forgeClient.clear()
+  await page(() => {})
+  expect(screen.getByRole("button", setUp)).toBeTruthy()
+})
 
 it("attaches a second Cloudflare connection on the zone's account", async () => {
   const posts = stub()

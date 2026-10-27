@@ -498,18 +498,6 @@ it("opens the domain an old link names once the list loads", async () => {
   )
 })
 
-// These open a domain's own page now, where they move with it.
-it.todo("shows TXT instructions and checks again")
-it.todo("publishes a managed zone's TXT record instead of asking for it")
-it.todo("waits for DNS once a managed zone's record is published")
-it.todo("shows why a managed zone's record didn't publish and checks again")
-it.todo(
-  "offers wildcard certificates only on a domain that is its own Cloudflare zone"
-)
-it.todo("renews a managed zone's proof once it expires")
-it.todo("offers a proof to a zone verified before proofs were required")
-it.todo("saves grants with the zone's revision after a failed check")
-
 it("shows a registration that has no zone yet", async () => {
   stubFetch({
     "/api/v1/domains": {

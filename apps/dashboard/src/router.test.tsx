@@ -1,5 +1,5 @@
 import { createMemoryHistory, RouterProvider } from "@tanstack/react-router"
-import { act, render, screen } from "@testing-library/react"
+import { act, cleanup, render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
@@ -36,6 +36,11 @@ vi.mock("@/pages/deployment", () => ({
 }))
 vi.mock("@/pages/project-detail", () => ({
   ProjectDetail: ({ id }: { id: string }) => <h1>Project {id}</h1>,
+}))
+vi.mock("@/pages/domain-detail", () => ({
+  DomainDetailPage: ({ zoneId }: { zoneId: string }) => (
+    <h1>Domain {zoneId}</h1>
+  ),
 }))
 vi.mock("@/pages/catalog-service", () => ({
   CatalogService: ({
@@ -171,6 +176,19 @@ describe("dashboard routes", () => {
     const { router } = await open("/domains?zone=zone_dev")
     expect(router.state.location.pathname).toBe("/domains/zone_dev")
     expect(router.state.location.search).toEqual({})
+  })
+
+  it("opens a domain's page by its zone ID", async () => {
+    await open("/domains/zone_dev")
+    expect(
+      await screen.findByRole("heading", { name: "Domain zone_dev" })
+    ).toBeInTheDocument()
+    cleanup()
+    // An ID is short; anything longer names no zone.
+    await open(`/domains/${"z".repeat(65)}`)
+    expect(
+      await screen.findByRole("heading", { name: "Domain" })
+    ).toBeInTheDocument()
   })
 
   it("retains invitation tokens in the URL", async () => {

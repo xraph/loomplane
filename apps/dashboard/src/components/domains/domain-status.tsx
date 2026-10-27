@@ -1,0 +1,132 @@
+// Where a domain stands on its page: verified or what it still needs, who
+// hosts its DNS, and for a subdomain, the domain it's part of. Not in the
+// mock, which has no page per domain; the proof parts are the list's.
+import type { ReactNode } from "react"
+
+import { useConnectionsList } from "@/client/forge/loomplane/hooks"
+import type { DomainDetail, Zone } from "@/client/forge/loomplane/types"
+import { useQuery } from "@/client/hooks"
+import {
+  ManagedProof,
+  RenewProof,
+  TxtInstructions,
+} from "@/components/domains/txt-instructions"
+import { providerLabel } from "@/lib/domains"
+import { Link } from "@/lib/router"
+
+export function DomainStatus({ detail }: { detail: DomainDetail }) {
+  const { domain, parent, proofZone } = detail
+  const z = domain.zone
+  const ready = domain.state === "ready"
+  // A subdomain without a proof of its own waits on the zone whose is.
+  const proving = proofZone?.zone ?? z
+  return (
+    <div className="divide-y divide-border/70">
+      {parent?.zone && (
+        <p className="px-4 py-3 text-[13px] leading-normal text-foreground/80">
+          Part of <ZoneLink zone={parent.zone} />
+          {domain.proofZoneId &&
+            (ready ? (
+              " · verified through it"
+            ) : (
+              <> · waits for {parent.zone.name}&apos;s verification</>
+            ))}
+        </p>
+      )}
+      {ready
+        ? // Inherited verification is said above.
+          !domain.proofZoneId && (
+            <p className="px-4 py-3 text-[13px] leading-normal text-foreground/80">
+              Verified. Projects you grant it to can point hostnames at it.
+            </p>
+          )
+        : proving && (
+            <div>
+              {proofZone?.zone && (
+                <p className="px-4 pt-3 text-[13px] leading-normal text-foreground/80">
+                  This is {proofZone.zone.name}&apos;s record.
+                </p>
+              )}
+              <Proof zone={proving} />
+            </div>
+          )}
+      {z && <Hosting zone={z} label={providerLabel(domain)} />}
+    </div>
+  )
+}
+
+function Proof({ zone }: { zone: Zone }) {
+  // A zone verified before TXT proofs were required has none to publish.
+  if (!zone.proofName)
+    return (
+      <div className="flex flex-col gap-2.5 px-4 py-3">
+        <p className="text-[13px] leading-normal text-foreground/80">
+          Loomplane now checks a TXT record before projects can use a domain,
+          and this one doesn&apos;t have one yet. Renew its proof to get the
+          record to add.
+        </p>
+        <RenewProof zone={zone} />
+      </div>
+    )
+  return zone.mode === "managed" ? (
+    <ManagedProof zone={zone} />
+  ) : (
+    <TxtInstructions zone={zone} />
+  )
+}
+
+function Hosting({ zone, label }: { zone: Zone; label: string }) {
+  const connections = useQuery(useConnectionsList)
+  const connection = connections.data?.connections.find(
+    (c) => c?.id === zone.connectionId
+  )
+  const managed = zone.mode === "managed"
+  const account = connection?.account || zone.accountId
+  // A subdomain of a bigger provider zone has its records written there.
+  const hostedIn =
+    managed && zone.providerZone.name && zone.providerZone.name !== zone.name
+      ? zone.providerZone.name
+      : ""
+  return (
+    <div className="flex flex-col gap-1.5 px-4 py-3">
+      <dl className="grid grid-cols-[minmax(0,120px)_minmax(0,1fr)] gap-x-4 gap-y-1.5 text-[13px]">
+        <Row label="DNS hosting">{label}</Row>
+        {managed && zone.connectionId && (
+          <Row label="Connection">{connection?.name ?? zone.connectionId}</Row>
+        )}
+        {managed && account && <Row label="Account">{account}</Row>}
+        {hostedIn && (
+          <Row label="Hosting zone">
+            <span className="font-mono text-[12.5px]">{hostedIn}</span>
+          </Row>
+        )}
+      </dl>
+      {!managed && (
+        <p className="text-[12.5px] text-muted-foreground">
+          You add each hostname&apos;s record where the domain is hosted.
+        </p>
+      )}
+    </div>
+  )
+}
+
+function Row({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <>
+      <dt className="text-muted-foreground">{label}</dt>
+      <dd className="min-w-0 break-words">{children}</dd>
+    </>
+  )
+}
+
+function ZoneLink({ zone }: { zone: Zone }) {
+  return (
+    <Link
+      to="/domains/$zoneId"
+      params={{ zoneId: zone.id }}
+      className="font-mono text-[12.5px] font-medium text-foreground underline-offset-4 hover:underline"
+    >
+      {zone.name}
+    </Link>
+  )
+}
