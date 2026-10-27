@@ -188,6 +188,10 @@ func TestAzureKeylessRefusalIsRejectedAndAnOutageIsNot(t *testing.T) {
 	if strings.Contains(err.Error(), "minted-for") || strings.Contains(err.Error(), "ticket-for") || strings.Contains(err.Error(), "No matching") {
 		t.Fatal("the refusal shows a secret or Entra's description")
 	}
+	// It names the keyless trust, not a service principal or a sign-in.
+	if msg := err.Error(); !strings.HasPrefix(msg, "Azure refused Loomplane's keyless token for this app") || strings.Contains(msg, "principal or sign-in") {
+		t.Fatalf("refusal says %q", msg)
+	}
 
 	// Without a minter nothing is asked, and it isn't a refusal.
 	trust.set(false, false)

@@ -87,7 +87,8 @@ func (l *lockingStore) KeylessConnections(context.Context) ([]*Connection, error
 	defer l.mu.Unlock()
 	var out []*Connection
 	for _, c := range l.rows {
-		if c.Method == MethodKeyless && (c.Status == StatusReady || c.Status == StatusIncomplete) {
+		if c.Method == MethodKeyless && (c.Status == StatusReady || c.Status == StatusIncomplete ||
+			c.Status == StatusFailed && strings.HasPrefix(c.Message, keylessCheckPrefix)) {
 			out = append(out, &c)
 		}
 	}

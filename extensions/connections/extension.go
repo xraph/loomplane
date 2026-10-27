@@ -58,6 +58,10 @@ type Extension struct {
 // startupRotateTimeout bounds the key rotation at startup.
 const startupRotateTimeout = time.Minute
 
+// issuerCheckTimeout bounds each fetch of the daily job's check that the
+// issuer is serving its keys.
+const issuerCheckTimeout = 10 * time.Second
+
 // New returns the extension.
 func New(cfg config.Config, plugs *plugins.Set) *Extension {
 	return &Extension{
@@ -176,6 +180,11 @@ func (e *Extension) Register(fapp forge.App) error {
 		connections.Azure: azureClient,
 	}
 	e.svc.Rotate = e.issuer.Rotate
+	// Before the daily job marks a keyless connection failed, it fetches
+	// the issuer's keys from the public URL, as a cloud would, so an outage
+	// of Loomplane's own doesn't fail every one.
+	selfCheck := &http.Client{Timeout: issuerCheckTimeout}
+	e.svc.IssuerServing = func(ctx context.Context) error { return e.issuer.Serving(ctx, selfCheck) }
 	mail, err := forge.InjectType[*notifications.Service](c)
 	if err != nil {
 		return fmt.Errorf("connections needs the notification delivery extension: %w", err)

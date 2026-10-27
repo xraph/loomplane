@@ -67,6 +67,11 @@ type Service struct {
 	// Rotate turns over the issuer's signing keys. The scheduled job calls
 	// it. It may be nil.
 	Rotate func(context.Context) error
+	// IssuerServing checks that Loomplane's issuer answers at its public
+	// URL with the key it signs with, as a cloud would fetch it. The
+	// background check asks it once a run, before it marks any keyless
+	// connection failed. Nil skips the check.
+	IssuerServing func(context.Context) error
 
 	// grants renews sign-ins. It's nil when the store can't lock a
 	// connection, and then nothing is renewed.

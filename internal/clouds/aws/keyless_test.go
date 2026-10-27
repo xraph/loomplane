@@ -33,6 +33,14 @@ type fakeSTS struct {
 	signers []string
 	expires func() time.Time
 	refuse  bool
+	// fail, when set, is what every assume answers instead.
+	fail *stsFailure
+}
+
+// stsFailure is an error STS answers an assume with.
+type stsFailure struct {
+	status        int
+	code, message string
 }
 
 func newFakeSTS(t *testing.T) *fakeSTS {
@@ -52,6 +60,11 @@ func (f *fakeSTS) serve(w http.ResponseWriter, r *http.Request) {
 	switch form.Get("Action") {
 	case "AssumeRoleWithWebIdentity":
 		f.assumed = append(f.assumed, form)
+		if f.fail != nil {
+			w.WriteHeader(f.fail.status)
+			_, _ = fmt.Fprintf(w, `<ErrorResponse><Error><Type>Sender</Type><Code>%s</Code><Message>%s</Message></Error><RequestId>1</RequestId></ErrorResponse>`, f.fail.code, f.fail.message)
+			return
+		}
 		if f.refuse {
 			w.WriteHeader(http.StatusForbidden)
 			_, _ = w.Write([]byte(`<ErrorResponse><Error><Type>Sender</Type><Code>AccessDenied</Code><Message>Not authorized to perform sts:AssumeRoleWithWebIdentity</Message></Error><RequestId>1</RequestId></ErrorResponse>`))
@@ -221,6 +234,69 @@ func TestKeylessRefusedTrustIsRejected(t *testing.T) {
 	_, err := New(sts.srv.URL).WithMinter(&countingMinter{}).Identify(t.Context(), testKeylessKey(t), "us-east-1")
 	if !errors.Is(err, ErrRejected) || strings.Contains(err.Error(), "token-1") || strings.Contains(err.Error(), testTicket) {
 		t.Fatalf("refused: rejected %v", errors.Is(err, ErrRejected))
+	}
+}
+
+// failingMinter can't mint, as when Loomplane's issuer can't read its key.
+type failingMinter struct{}
+
+func (failingMinter) Mint(context.Context, keyless.Handout) (string, error) {
+	return "", errors.New("vault is sealed")
+}
+
+// Loomplane or AWS failing isn't the role refusing Loomplane, so none of
+// these is ErrRejected, and a connection isn't marked failed over one.
+func TestKeylessOutageIsNotARefusal(t *testing.T) {
+	for name, fail := range map[string]*stsFailure{
+		"sts down":         {http.StatusServiceUnavailable, "ServiceUnavailable", "Service is unavailable"},
+		"idp unreachable":  {http.StatusBadRequest, "IDPCommunicationError", "Couldn't connect to the identity provider"},
+		"clocks disagree":  {http.StatusBadRequest, "ExpiredTokenException", "Token expired: current date/time 1 must be before the expiration date/time 0"},
+		"keys unreachable": {http.StatusBadRequest, "InvalidIdentityToken", "Couldn't retrieve verification key from your identity provider,  please reference AssumeRoleWithWebIdentity documentation for requirements"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel() // STS retries most of these, which takes seconds
+			sts := newFakeSTS(t)
+			sts.fail = fail
+			_, err := New(sts.srv.URL).WithMinter(&countingMinter{}).Identify(t.Context(), testKeylessKey(t), "us-east-1")
+			if err == nil || errors.Is(err, ErrRejected) {
+				t.Fatalf("err %v, rejected %v", err, errors.Is(err, ErrRejected))
+			}
+		})
+	}
+	sts := newFakeSTS(t)
+	for name, c := range map[string]*Client{"mint fails": New(sts.srv.URL).WithMinter(failingMinter{}), "no minter": New(sts.srv.URL)} {
+		_, err := c.Identify(t.Context(), testKeylessKey(t), "us-east-1")
+		if err == nil || errors.Is(err, ErrRejected) {
+			t.Errorf("%s: err %v, rejected %v", name, err, errors.Is(err, ErrRejected))
+		}
+	}
+	if _, err := New(sts.srv.URL).Identify(t.Context(), testKeylessKey(t), "us-east-1"); !errors.Is(err, keyless.ErrNoMinter) {
+		t.Fatalf("no minter: %v", err)
+	}
+}
+
+// The role's trust turning Loomplane's token away is a refusal, and says
+// so in the keyless trust's words, not an access key's.
+func TestKeylessTrustRefusalsAreRejected(t *testing.T) {
+	for name, fail := range map[string]*stsFailure{
+		"no provider":     {http.StatusBadRequest, "InvalidIdentityToken", "No OpenIDConnect provider found in your account for https://loomplane.example.com"},
+		"wrong audience":  {http.StatusBadRequest, "InvalidIdentityToken", "Incorrect token audience"},
+		"wrong issuer":    {http.StatusBadRequest, "InvalidIdentityToken", "Issuer does not match the provider's URL"},
+		"subject refused": {http.StatusForbidden, "AccessDenied", "Not authorized to perform sts:AssumeRoleWithWebIdentity"},
+		"claim refused":   {http.StatusForbidden, "IDPRejectedClaim", "The claim was rejected"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Parallel() // STS retries most of these, which takes seconds
+			sts := newFakeSTS(t)
+			sts.fail = fail
+			_, err := New(sts.srv.URL).WithMinter(&countingMinter{}).Identify(t.Context(), testKeylessKey(t), "us-east-1")
+			if !errors.Is(err, ErrRejected) {
+				t.Fatalf("err %v isn't a refusal", err)
+			}
+			if msg := err.Error(); !strings.HasPrefix(msg, "AWS refused Loomplane's keyless token for this role") || strings.Contains(msg, "access key") {
+				t.Fatalf("message %q", msg)
+			}
+		})
 	}
 }
 

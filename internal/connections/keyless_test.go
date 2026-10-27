@@ -51,8 +51,8 @@ func (fakeKeylessCloud) KeylessSettings(in map[string]string) (map[string]string
 
 func (fakeKeylessCloud) KeylessAudience(map[string]string) string { return "sts.amazonaws.com" }
 
-func (fakeKeylessCloud) KeylessSetup(issuer, subject string) []keyless.Step {
-	return []keyless.Step{{Title: "Trust Loomplane", Command: "trust " + issuer + " as " + subject}}
+func (fakeKeylessCloud) KeylessSetup(issuer, subject string) []keyless.SetupStep {
+	return []keyless.SetupStep{{Title: "Trust Loomplane", Command: "trust " + issuer + " as " + subject}}
 }
 
 // fakeKeylessChecker is AWS, roughly: a pasted key is "key:" and its
@@ -60,6 +60,8 @@ func (fakeKeylessCloud) KeylessSetup(issuer, subject string) []keyless.Step {
 // while refuse is set.
 type fakeKeylessChecker struct {
 	refuse *bool
+	// refusing, while it holds a handout's role, refuses that one alone.
+	refusing map[string]bool
 	// down, while set, is what a handout's check fails with, as an outage.
 	down    *error
 	checked *[]byte
@@ -90,7 +92,7 @@ func (f fakeKeylessChecker) Check(_ context.Context, credential []byte, settings
 		if f.down != nil && *f.down != nil {
 			return Check{}, *f.down
 		}
-		if f.refuse != nil && *f.refuse {
+		if f.refuse != nil && *f.refuse || f.refusing[h.Settings["role_arn"]] {
 			return Check{}, fmt.Errorf("%w: not authorized to perform sts:AssumeRoleWithWebIdentity", aws.ErrRejected)
 		}
 		c.Account = strings.Split(h.Settings["role_arn"], ":")[4]
@@ -104,20 +106,23 @@ func (f fakeKeylessChecker) Check(_ context.Context, credential []byte, settings
 type reservationStore struct {
 	AppStore
 	held map[string]*Reservation
+	// puts counts reservations held, put back ones included.
+	puts int
 }
 
 func (r *reservationStore) PutReservation(_ context.Context, v *Reservation) error {
 	if _, taken := r.held[v.ID]; taken {
 		return errors.New("reservation exists")
 	}
+	r.puts++
 	kept := *v
 	r.held[v.ID] = &kept
 	return nil
 }
 
-func (r *reservationStore) TakeReservation(_ context.Context, id string) (*Reservation, error) {
+func (r *reservationStore) TakeReservation(_ context.Context, orgID, id string) (*Reservation, error) {
 	v, ok := r.held[id]
-	if !ok {
+	if !ok || v.OrgID != orgID {
 		return nil, ErrNotFound
 	}
 	delete(r.held, id)
@@ -155,6 +160,7 @@ type keylessRig struct {
 	audit    *connAudit
 	clock    time.Time
 	refuse   bool
+	refusing map[string]bool
 	down     error
 	checked  []byte
 	warnings []string
@@ -172,14 +178,15 @@ var roleSettings = map[string]string{"role_arn": roleArn, "region": "us-east-1"}
 func newKeylessRig(t *testing.T) *keylessRig {
 	t.Helper()
 	r := &keylessRig{
-		store:   &memStore{rows: map[string]Connection{}},
-		secrets: &countingSecrets{memSecrets: &memSecrets{kept: map[string][]byte{}}},
-		held:    &reservationStore{held: map[string]*Reservation{}},
-		issuer:  &fakeIssuer{usable: true},
-		audit:   &connAudit{},
-		clock:   time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC),
+		store:    &memStore{rows: map[string]Connection{}},
+		secrets:  &countingSecrets{memSecrets: &memSecrets{kept: map[string][]byte{}}},
+		held:     &reservationStore{held: map[string]*Reservation{}},
+		issuer:   &fakeIssuer{usable: true},
+		audit:    &connAudit{},
+		clock:    time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC),
+		refusing: map[string]bool{},
 	}
-	checker := fakeKeylessChecker{refuse: &r.refuse, down: &r.down, checked: &r.checked}
+	checker := fakeKeylessChecker{refuse: &r.refuse, refusing: r.refusing, down: &r.down, checked: &r.checked}
 	r.s = NewService(r.store, r.secrets, map[string]Checker{AWS: checker, GCP: checker, Vercel: checker},
 		inventoryAuthorization{}, r.audit, func(msg string, err error) { r.warnings = append(r.warnings, msg+": "+err.Error()) })
 	r.s.now = func() time.Time { return r.clock }
@@ -306,6 +313,20 @@ func TestCreateKeylessTakesItsReservationOnce(t *testing.T) {
 	}
 	if len(r.store.rows) != 1 {
 		t.Fatalf("rows: %v", r.store.rows)
+	}
+}
+
+// Another organization's try finds nothing, so the reservation is never
+// taken and put back.
+func TestAnotherOrganizationNeverTakesAReservation(t *testing.T) {
+	r := newKeylessRig(t)
+	id := r.prepare(t, starter)
+	in := KeylessInput{ConnectionID: id, Name: "Prod", Settings: roleSettings}
+	if _, err := r.s.CreateKeyless(t.Context(), security.Principal{OrgID: "elsewhere", UserID: "eve"}, in); !errors.Is(err, ErrInvalid) {
+		t.Fatalf("other org: %v", err)
+	}
+	if held := r.held.held[id]; held == nil || held.OrgID != starter.OrgID || r.held.puts != 1 {
+		t.Fatalf("held %+v, put %d times", held, r.held.puts)
 	}
 }
 

@@ -21,9 +21,10 @@ type KeylessPrepareInput struct {
 }
 
 // KeylessReplaceInput is the body of PUT /api/v1/connections/:id/keyless:
-// the settings of the cloud's trust. None keeps the connection's own.
+// the settings of the cloud's trust, over the connection's own. None keeps
+// them all.
 type KeylessReplaceInput struct {
-	Settings map[string]string `json:"settings"`
+	Settings map[string]string `json:"settings,omitempty"`
 }
 
 // KeylessState says whether clouds can connect keylessly: Enabled when a

@@ -53,6 +53,8 @@ var (
 	ErrInvalidKey = errors.New("that isn't an AWS access key")
 	// ErrRejected is a key AWS refused.
 	ErrRejected = errors.New("aws refused the access key")
+	// errKeylessRefused is ErrRejected for a keyless key, in its words.
+	errKeylessRefused = keyless.Refusal(ErrRejected, "AWS refused Loomplane's keyless token for this role")
 
 	errNotFound = errors.New("not found")
 )
@@ -150,7 +152,10 @@ type Identity struct {
 func (c *Client) Identify(ctx context.Context, key *Key, region string) (*Identity, error) {
 	out, err := sts.NewFromConfig(c.Config(key, region)).GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
 	if err != nil {
-		if refused(err) {
+		switch {
+		case refused(err) && key.Keyless():
+			return nil, fmt.Errorf("%w: %w", errKeylessRefused, err)
+		case refused(err):
 			return nil, fmt.Errorf("%w: %w", ErrRejected, err)
 		}
 		return nil, err
@@ -187,6 +192,13 @@ func (c *Client) Missing(ctx context.Context, key *Key, region, principal string
 
 // refused reports whether AWS turned the request down for its key or its
 // permissions, as opposed to failing to answer.
+//
+// For a keyless token that means the role's trust refusing it. STS not
+// reaching Loomplane's issuer (IDPCommunicationError), or not fetching its
+// keys, which it files under InvalidIdentityToken, is Loomplane's to fix,
+// and so is a token it calls expired (ExpiredTokenException): each is
+// minted just before it's sent, so the clocks disagree. None of those is
+// a refusal.
 func refused(err error) bool {
 	var ae smithy.APIError
 	if !errors.As(err, &ae) {
@@ -194,12 +206,21 @@ func refused(err error) bool {
 	}
 	switch ae.ErrorCode() {
 	case "InvalidClientTokenId", "SignatureDoesNotMatch", "AccessDenied", "AccessDeniedException",
-		"UnrecognizedClientException", "ExpiredToken", "InvalidAccessKeyId",
-		// A role's trust refusing a keyless token.
-		"InvalidIdentityToken", "IDPRejectedClaim", "ExpiredTokenException":
+		"UnrecognizedClientException", "ExpiredToken", "InvalidAccessKeyId", "IDPRejectedClaim":
 		return true
+	case "InvalidIdentityToken":
+		return !keysUnreachable(ae.ErrorMessage())
 	}
 	return false
+}
+
+// keysUnreachable reports whether STS says it couldn't fetch or read the
+// issuer's keys, as opposed to the token not matching the trust: no
+// identity provider for the issuer, or the wrong audience or issuer.
+func keysUnreachable(message string) bool {
+	m := strings.ToLower(message)
+	return strings.Contains(m, "verification key") || strings.Contains(m, "jwks") ||
+		strings.Contains(m, "couldn't retrieve") || strings.Contains(m, "unable to retrieve")
 }
 
 // IsNotFound reports whether err is AWS saying something doesn't exist.

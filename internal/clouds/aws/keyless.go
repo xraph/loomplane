@@ -153,7 +153,7 @@ func (c *Client) KeylessAudience(map[string]string) string { return audience }
 // KeylessSetup implements connections.KeylessCloud: add the issuer as an
 // identity provider, make a role that trusts subject alone, and give the
 // role what a deployment needs.
-func (c *Client) KeylessSetup(issuer, subject string) []keyless.Step {
+func (c *Client) KeylessSetup(issuer, subject string) []keyless.SetupStep {
 	host := strings.TrimRight(issuer, "/")
 	if _, rest, ok := strings.Cut(host, "://"); ok {
 		host = rest
@@ -171,7 +171,7 @@ func (c *Client) KeylessSetup(issuer, subject string) []keyless.Step {
 		"Version":   "2012-10-17",
 		"Statement": []any{map[string]any{"Effect": "Allow", "Action": Actions, "Resource": "*"}},
 	}
-	return []keyless.Step{
+	return []keyless.SetupStep{
 		{
 			Title:   "Add Loomplane as an identity provider",
 			Body:    "In the AWS account you're connecting, add Loomplane's issuer as an OpenID Connect provider for STS. You can run this with the AWS CLI, or add it in the IAM console under Identity providers.",

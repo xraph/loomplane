@@ -60,10 +60,14 @@ func (e *Extension) clouds(ctx context.Context, p security.Principal) (CloudList
 				{Key: "project_id", Label: "Project ID", Required: true},
 				{Key: "workload_provider", Label: "Workload identity provider", Required: true},
 				{Key: "service_account", Label: "Service account email", Required: true},
+				{Key: "billing_export", Label: "Billing export table (optional)"},
 			}},
 		{Cloud: connections.Vercel, Title: "Vercel", Builtin: true},
 		{Cloud: connections.AWS, Title: "AWS", Builtin: true,
-			KeylessSettings: []sdk.Setting{{Key: "role_arn", Label: "Role ARN", Required: true}, {Key: "region", Label: "Region", Required: true}}},
+			KeylessSettings: []sdk.Setting{
+				{Key: "role_arn", Label: "Role ARN", Required: true}, {Key: "region", Label: "Region", Required: true},
+				{Key: "certificate_arn", Label: "Certificate ARN (optional)"},
+			}},
 		{Cloud: connections.Server, Title: "SSH server", Credential: "SSH private key", //nolint:gosec // Form label, not a credential.
 			Help:     "Use a PEM private key, or JSON with private_key and passphrase. Your SSH user needs access to an existing Linux Docker daemon. Copy the server's public host key from a trusted source.",
 			Settings: []sdk.Setting{{Key: "host", Label: "SSH host", Required: true}, {Key: "port", Label: "SSH port (default 22)"}, {Key: "user", Label: "SSH user", Required: true}, {Key: "host_key", Label: "Public host key", Required: true}, {Key: "docker_socket", Label: "Docker socket (default /var/run/docker.sock)"}, {Key: "advertise_host", Label: "Published address (optional)"}}},

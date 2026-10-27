@@ -21,6 +21,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"strings"
 	"sync"
 	"time"
@@ -46,6 +48,17 @@ const (
 	// cacheFor is how long a Service trusts what it read of its keys
 	// before reading them again.
 	cacheFor = time.Minute
+	// jwksFor is how long the JWKS serves the keys it read. Only a key
+	// published for a day signs, the first one aside, so this can't hide
+	// one a token carries.
+	jwksFor = 10 * time.Second
+	// backdate is how far before now a token's iat and nbf are, so a cloud
+	// whose clock is a little behind still takes a fresh one.
+	backdate = time.Minute
+	// servingTimeout bounds Serving's two fetches together.
+	servingTimeout = 10 * time.Second
+	// maxServed caps how much of discovery or the JWKS Serving reads.
+	maxServed = 1 << 20
 )
 
 // VaultAppID is the Vault app the issuer's secrets are kept under. Every
@@ -80,6 +93,14 @@ type Service struct {
 
 	mu    sync.Mutex
 	cache *cached
+	// published is what the JWKS last read of the keys, and when.
+	published *publishedKeys
+}
+
+// publishedKeys is a read of the keys the JWKS serves from.
+type publishedKeys struct {
+	at   time.Time
+	keys []Key
 }
 
 // cached is what a Service read of its keys, and when. It's replaced,
@@ -127,11 +148,13 @@ func (s *Service) Discovery() map[string]any {
 // JWKS is the issuer's public keys, served at /.well-known/jwks.json: the
 // current one, and any retired within publishRetired.
 //
-// It reads the keys afresh every time rather than from the cache. A
-// replica that has just rotated signs with its new key at once, and a
-// cloud that asks another replica for the keys has to find it there.
+// It reads the keys at most every jwksFor, apart from the signing cache.
+// A key signs only once it has been published for a day, but a new
+// issuer's first key signs at once, and a cloud that asks another replica
+// for the keys has to find it there. So a read that found no keys isn't
+// kept.
 func (s *Service) JWKS(ctx context.Context) (map[string]any, error) {
-	all, err := s.keys.Keys(ctx)
+	all, err := s.publishedKeys(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -143,6 +166,85 @@ func (s *Service) JWKS(ctx context.Context) (map[string]any, error) {
 		}
 	}
 	return map[string]any{"keys": keys}, nil
+}
+
+// publishedKeys is every key, read again once jwksFor has passed.
+func (s *Service) publishedKeys(ctx context.Context) ([]Key, error) {
+	now := s.now()
+	s.mu.Lock()
+	p := s.published
+	s.mu.Unlock()
+	if p != nil && now.Sub(p.at) < jwksFor && !now.Before(p.at) {
+		return p.keys, nil
+	}
+	all, err := s.keys.Keys(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if len(all) > 0 {
+		s.mu.Lock()
+		s.published = &publishedKeys{at: now, keys: all}
+		s.mu.Unlock()
+	}
+	return all, nil
+}
+
+// Serving checks the issuer the way a cloud would, at its public URL:
+// discovery names it and its JWKS, and the JWKS holds the key it signs
+// with. A failure means no cloud could check a token now, which is
+// Loomplane's to fix, not the trusts'. It fetches with client, both
+// fetches bounded by servingTimeout together.
+func (s *Service) Serving(ctx context.Context, client *http.Client) error {
+	c, err := s.signing(ctx)
+	if err != nil {
+		return fmt.Errorf("find the issuer's signing key: %w", err)
+	}
+	ctx, cancel := context.WithTimeout(ctx, servingTimeout)
+	defer cancel()
+	var discovery struct {
+		Issuer  string `json:"issuer"`
+		JWKSURI string `json:"jwks_uri"`
+	}
+	if err := fetchJSON(ctx, client, s.url+"/.well-known/openid-configuration", &discovery); err != nil {
+		return err
+	}
+	if discovery.Issuer != s.url || discovery.JWKSURI != s.url+"/.well-known/jwks.json" {
+		return fmt.Errorf("the discovery document at %s names issuer %q and keys at %q, not this issuer's", s.url, discovery.Issuer, discovery.JWKSURI)
+	}
+	var set struct {
+		Keys []struct {
+			KID string `json:"kid"`
+		} `json:"keys"`
+	}
+	if err := fetchJSON(ctx, client, discovery.JWKSURI, &set); err != nil {
+		return err
+	}
+	for _, k := range set.Keys {
+		if k.KID == c.current.KID {
+			return nil
+		}
+	}
+	return fmt.Errorf("the keys at %s don't include %s, the key Loomplane signs with", discovery.JWKSURI, c.current.KID)
+}
+
+// fetchJSON reads the JSON at url into v, up to maxServed bytes.
+func fetchJSON(ctx context.Context, client *http.Client, url string, v any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, http.NoBody)
+	if err != nil {
+		return fmt.Errorf("fetch %s: %w", url, err)
+	}
+	res, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("fetch %s: %w", url, err)
+	}
+	defer res.Body.Close() // read-only; a failed read is reported below
+	if res.StatusCode != http.StatusOK {
+		return fmt.Errorf("fetch %s: it answered %d", url, res.StatusCode)
+	}
+	if err := json.NewDecoder(io.LimitReader(res.Body, maxServed)).Decode(v); err != nil {
+		return fmt.Errorf("fetch %s: it didn't answer with JSON", url)
+	}
+	return nil
 }
 
 // Ticket is the issuer's HMAC over subject and audience, in base64url. A
@@ -193,14 +295,15 @@ func (s *Service) Mint(ctx context.Context, h keyless.Handout) (string, error) {
 	if _, err = rand.Read(jti); err != nil {
 		return "", fmt.Errorf("make a token ID: %w", err)
 	}
-	now := s.now().Unix()
+	now := s.now()
+	issued := now.Add(-backdate).Unix()
 	token := jwt.NewWithClaims(jwt.SigningMethodRS256, jwt.MapClaims{
 		"iss": s.url,
 		"sub": h.Subject,
 		"aud": h.Audience,
-		"iat": now,
-		"nbf": now,
-		"exp": now + int64(tokenTTL/time.Second),
+		"iat": issued,
+		"nbf": issued,
+		"exp": now.Add(tokenTTL).Unix(),
 		"jti": base64.RawURLEncoding.EncodeToString(jti),
 	})
 	token.Header["kid"] = c.current.KID
@@ -281,5 +384,5 @@ func (s *Service) load(ctx context.Context) (*cached, error) {
 func (s *Service) forget() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	s.cache = nil
+	s.cache, s.published = nil, nil
 }

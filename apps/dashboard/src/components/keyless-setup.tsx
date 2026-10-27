@@ -190,8 +190,12 @@ function SetupPanel({
 
   const connect = async () => {
     setError("")
+    // A switch sends every field, empty ones too: the server lays them over
+    // the connection's own settings, so an emptied one is cleared.
     const settings = Object.fromEntries(
-      fields.map((f) => [f.key, value(f.key).trim()]).filter(([, v]) => v)
+      fields
+        .map((f) => [f.key, value(f.key).trim()])
+        .filter(([, v]) => replacing || v)
     )
     try {
       const c = replacing
@@ -250,7 +254,10 @@ function SetupPanel({
                 <code className="min-w-0 flex-1 rounded-md bg-muted px-2 py-1.5 font-mono text-xs break-all whitespace-pre-wrap">
                   {s.command}
                 </code>
-                <CopyButton value={s.command} label="Copy command" />
+                <CopyButton
+                  value={s.command}
+                  label={`Copy command: ${s.title}`}
+                />
               </div>
             )}
           </li>

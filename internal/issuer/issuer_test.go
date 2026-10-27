@@ -10,6 +10,8 @@ import (
 	"encoding/json"
 	"errors"
 	"math/big"
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"sync"
@@ -239,12 +241,17 @@ func TestMintSignsAVerifiableToken(t *testing.T) {
 	if claims["aud"] != "sts.amazonaws.com" {
 		t.Errorf("aud = %v, want the string sts.amazonaws.com", claims["aud"])
 	}
+	// iat and nbf are a minute back, so a cloud whose clock is a little
+	// behind still takes a fresh token. It lapses ten minutes from now.
 	iat, exp, nbf := claims["iat"].(float64), claims["exp"].(float64), claims["nbf"].(float64)
-	if exp-iat != 600 {
-		t.Errorf("exp - iat = %v, want 600", exp-iat)
+	if exp-iat != 660 {
+		t.Errorf("exp - iat = %v, want 660", exp-iat)
 	}
-	if int64(iat) != c.now().Unix() || nbf != iat {
-		t.Errorf("iat = %v, nbf = %v, want %d for both", iat, nbf, c.now().Unix())
+	if int64(iat) != c.now().Unix()-60 || nbf != iat {
+		t.Errorf("iat = %v, nbf = %v, want %d for both", iat, nbf, c.now().Unix()-60)
+	}
+	if int64(exp) != c.now().Unix()+600 {
+		t.Errorf("exp = %v, want %d", exp, c.now().Unix()+600)
 	}
 	jti, _ := claims["jti"].(string)
 	if raw, jerr := base64.RawURLEncoding.DecodeString(jti); jerr != nil || len(raw) != 16 {
@@ -502,6 +509,9 @@ func TestUsable(t *testing.T) {
 		{"https://loomplane.example.com/#top", "production", false, "public_url can't have a fragment"},
 		{"https://loomplane.example.com#", "production", false, "public_url can't have a fragment"},
 		{"http://127.0.0.1:8780/?a=b", "development", false, "public_url can't have a query"},
+		{"https://loomplane.example.com/loomplane", "production", false, "public_url must not have a path for keyless"},
+		{"https://loomplane.example.com/loomplane/", "production", false, "public_url must not have a path for keyless"},
+		{"http://127.0.0.1:8780/api", "development", false, "public_url must not have a path for keyless"},
 	} {
 		ok, reason := Usable(tc.url, tc.env)
 		if ok != tc.ok || reason != tc.reason {
@@ -564,5 +574,128 @@ func TestTicketIsVersioned(t *testing.T) {
 	mac.Write([]byte("loomplane-keyless-ticket-v1\norg:o:connection:c\nsts.amazonaws.com"))
 	if ticket != base64.RawURLEncoding.EncodeToString(mac.Sum(nil)) {
 		t.Fatal("the ticket isn't the HMAC of the v1 label, subject and audience")
+	}
+}
+
+// countingKeys counts reads of the key table.
+type countingKeys struct {
+	*memKeys
+	mu    sync.Mutex
+	reads int
+}
+
+func (c *countingKeys) Keys(ctx context.Context) ([]Key, error) {
+	c.mu.Lock()
+	c.reads++
+	c.mu.Unlock()
+	return c.memKeys.Keys(ctx)
+}
+
+// Clouds fetch the JWKS often, so a replica reads its keys for it at most
+// every ten seconds. Rotating here reads them again at once.
+func TestJWKSReadsTheKeysAtMostEveryTenSeconds(t *testing.T) {
+	keys := &countingKeys{memKeys: &memKeys{}}
+	c := &clock{t: time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)}
+	s := New(testIssuer, "production", keys, &memSecrets{}, c.now)
+	ctx := context.Background()
+	if err := s.Rotate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	first := mustJWKS(t, s)
+	before := keys.reads
+	c.advance(9 * time.Second)
+	if got := mustJWKS(t, s); keys.reads != before || len(jwks(t, got)) != len(jwks(t, first)) {
+		t.Fatalf("read the keys %d more times within ten seconds", keys.reads-before)
+	}
+	c.advance(time.Second)
+	mustJWKS(t, s)
+	if keys.reads != before+1 {
+		t.Fatalf("read the keys %d more times after ten seconds, want 1", keys.reads-before)
+	}
+	c.advance(rotateEvery)
+	if err := s.Rotate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := jwks(t, mustJWKS(t, s)); len(got) != 2 {
+		t.Fatalf("just after rotating JWKS has %d keys, want 2", len(got))
+	}
+}
+
+// selfServed is s served at its own URL the way the API serves it, with
+// broken to change what a cloud would see.
+func selfServed(t *testing.T, broken func(path string, body map[string]any) map[string]any) (*Service, *httptest.Server) {
+	t.Helper()
+	var s *Service
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		switch r.URL.Path {
+		case "/.well-known/openid-configuration":
+			body = s.Discovery()
+		case "/.well-known/jwks.json":
+			var err error
+			if body, err = s.JWKS(r.Context()); err != nil {
+				http.Error(w, "no keys", http.StatusInternalServerError)
+				return
+			}
+		default:
+			http.NotFound(w, r)
+			return
+		}
+		if broken != nil {
+			if body = broken(r.URL.Path, body); body == nil {
+				http.Error(w, "down", http.StatusBadGateway)
+				return
+			}
+		}
+		_ = json.NewEncoder(w).Encode(body)
+	}))
+	t.Cleanup(srv.Close)
+	s = New(srv.URL, "development", &memKeys{}, &memSecrets{}, nil)
+	if err := s.Rotate(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	return s, srv
+}
+
+func TestServingFindsTheSigningKeyAtThePublicURL(t *testing.T) {
+	s, srv := selfServed(t, nil)
+	if err := s.Serving(t.Context(), srv.Client()); err != nil {
+		t.Fatalf("serving: %v", err)
+	}
+}
+
+func TestServingFailsWhenACloudWouldntFindTheKey(t *testing.T) {
+	for name, broken := range map[string]func(string, map[string]any) map[string]any{
+		"jwks down": func(path string, body map[string]any) map[string]any {
+			if path == "/.well-known/jwks.json" {
+				return nil
+			}
+			return body
+		},
+		"discovery down": func(path string, body map[string]any) map[string]any {
+			if path == "/.well-known/openid-configuration" {
+				return nil
+			}
+			return body
+		},
+		"another issuer": func(path string, body map[string]any) map[string]any {
+			if path == "/.well-known/openid-configuration" {
+				body["issuer"] = "https://elsewhere.example.com"
+			}
+			return body
+		},
+		"no signing key": func(path string, body map[string]any) map[string]any {
+			if path == "/.well-known/jwks.json" {
+				body["keys"] = []json.RawMessage{}
+			}
+			return body
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			s, srv := selfServed(t, broken)
+			if err := s.Serving(t.Context(), srv.Client()); err == nil {
+				t.Fatal("serving passed")
+			}
+		})
 	}
 }

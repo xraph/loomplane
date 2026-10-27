@@ -48,6 +48,8 @@ var (
 	// jwtRE is anything shaped like a signed token, which an error never
 	// repeats.
 	jwtRE = regexp.MustCompile(`eyJ[\w-]*\.[\w-]*\.[\w-]*`)
+	// errKeylessRefused is ErrRejected for a keyless key, in its words.
+	errKeylessRefused = keyless.Refusal(ErrRejected, "Google Cloud refused Loomplane's keyless token for this workload identity provider")
 )
 
 // CheckWorkloadProvider tells whether s is a workload identity pool
@@ -273,7 +275,7 @@ func stsAnswer(status int, body []byte) error {
 	}
 	refused := status == http.StatusBadRequest && (e.Error == "invalid_grant" || e.Error == "unauthorized_client" || e.Error == "invalid_target")
 	if refused && !issuerUnreachable(e.Description) {
-		return fmt.Errorf("%w: google's security token service refused Loomplane's token: %s", ErrRejected, why)
+		return fmt.Errorf("%w: %s", errKeylessRefused, why)
 	}
 	return fmt.Errorf("google's security token service answered %d: %s", status, why)
 }
@@ -298,7 +300,7 @@ func iamAnswer(status int, body []byte) error {
 	_ = json.Unmarshal(body, &e) //nolint:errcheck // an answer that isn't JSON has no reason to keep
 	why := cmp.Or(reason(e.Error.Message, maxReason), reason(e.Error.Status, maxErrorCode), "no reason given")
 	if status == http.StatusForbidden && e.Error.Status == "PERMISSION_DENIED" {
-		return fmt.Errorf("%w: google won't let this connection act as the service account: %s", ErrRejected, why)
+		return fmt.Errorf("%w: it won't let this connection act as the service account: %s", errKeylessRefused, why)
 	}
 	return fmt.Errorf("google's IAM credentials service answered %d: %s", status, why)
 }
@@ -354,22 +356,48 @@ func (c *Client) KeylessAudience(settings map[string]string) string {
 	return audiencePrefix + strings.TrimSpace(settings["workload_provider"])
 }
 
+// providerIDRE is what a workload provider's ID leaves out.
+var providerIDRE = regexp.MustCompile(`[^a-z0-9-]`)
+
+// providerID names subject's connection's workload provider, so every
+// connection to a project has its own in the shared pool: the connection's
+// ID in lower case, with an underscore as a hyphen and anything else
+// Google doesn't allow left out. An ID that is too short or doesn't start
+// with a letter gets loomplane- in front, and one too long keeps its end,
+// which tells IDs apart, behind lp-. Google takes 4 to 32 characters.
+func providerID(subject string) string {
+	id := subject
+	if i := strings.LastIndex(subject, ":connection:"); i >= 0 {
+		id = subject[i+len(":connection:"):]
+	}
+	id = strings.Trim(providerIDRE.ReplaceAllString(strings.ReplaceAll(strings.ToLower(id), "_", "-"), ""), "-")
+	if len(id) < 4 || id[0] < 'a' || id[0] > 'z' {
+		id = strings.TrimRight("loomplane-"+id, "-")
+	}
+	if len(id) > 32 {
+		id = strings.TrimRight("lp-"+strings.TrimLeft(id[len(id)-29:], "-"), "-")
+	}
+	return id
+}
+
 // KeylessSetup implements connections.KeylessCloud: make a workload
-// identity pool with a provider that trusts subject alone, let subject
-// act as a service account, and give the account what a deployment
-// needs.
-func (c *Client) KeylessSetup(issuer, subject string) []keyless.Step {
-	return []keyless.Step{
+// identity pool, unless the project has one, with a provider for this
+// connection that trusts subject alone, let subject act as a service
+// account, and give the account what a deployment needs.
+func (c *Client) KeylessSetup(issuer, subject string) []keyless.SetupStep {
+	provider := providerID(subject)
+	return []keyless.SetupStep{
 		{
-			Title:   "Create a workload identity pool",
-			Body:    "In the Google Cloud project you're connecting, create a pool for Loomplane. You can run these commands in Cloud Shell, or anywhere gcloud is set to the project.",
+			Title: "Create a workload identity pool",
+			Body: "In the Google Cloud project you're connecting, create a pool for Loomplane. You can run these commands in Cloud Shell, or anywhere gcloud is set to the project. " +
+				"If you've connected this project keylessly before, the pool is already there, so skip this step.",
 			Command: "gcloud iam workload-identity-pools create loomplane --location=global",
 		},
 		{
 			Title: "Add Loomplane as the pool's provider",
-			Body: "The provider trusts tokens from Loomplane's issuer, and its condition lets in this connection alone. " +
-				"You paste the provider's full name below. To print it, run gcloud iam workload-identity-pools providers describe loomplane --location=global --workload-identity-pool=loomplane --format='value(name)'.",
-			Command: "gcloud iam workload-identity-pools providers create-oidc loomplane --location=global --workload-identity-pool=loomplane " +
+			Body: "The provider trusts tokens from Loomplane's issuer, and its condition lets in this connection alone, so each connection gets its own. " +
+				"You paste the provider's full name below. To print it, run gcloud iam workload-identity-pools providers describe " + provider + " --location=global --workload-identity-pool=loomplane --format='value(name)'.",
+			Command: "gcloud iam workload-identity-pools providers create-oidc " + provider + " --location=global --workload-identity-pool=loomplane " +
 				"--issuer-uri=" + strings.TrimRight(issuer, "/") + " --attribute-mapping=google.subject=assertion.sub --attribute-condition=\"assertion.sub=='" + subject + "'\"",
 		},
 		{
@@ -382,6 +410,7 @@ func (c *Client) KeylessSetup(issuer, subject string) []keyless.Step {
 		{
 			Title: "Give the service account Loomplane's permissions",
 			Body: "This makes a custom role with the permissions a deployment needs and grants it to the service account. Put your project ID in place of <project-id>. " +
+				"If the project already has the loomplane role from another connection, skip the first command. " +
 				"Then paste the project ID, the provider's full name and the service account's email below, and Loomplane checks that Google lets this connection act as the account.",
 			Command: "gcloud iam roles create loomplane --project=<project-id> --title=Loomplane --permissions=" + strings.Join(Permissions, ",") + "\n" +
 				"gcloud projects add-iam-policy-binding <project-id> --member=serviceAccount:<service-account> --role=projects/<project-id>/roles/loomplane",

@@ -38,7 +38,7 @@ type KeylessCloud interface {
 	// KeylessAudience is the aud the cloud's trust expects.
 	KeylessAudience(settings map[string]string) string
 	// KeylessSetup is how to set up the cloud's trust in subject.
-	KeylessSetup(issuer, subject string) []keyless.Step
+	KeylessSetup(issuer, subject string) []keyless.SetupStep
 }
 
 // KeylessSetup is what you need to set up a cloud's trust in Loomplane:
@@ -46,12 +46,12 @@ type KeylessCloud interface {
 // the steps to take. It carries no ticket. ExpiresAt is when a new
 // connection's reserved ID lapses.
 type KeylessSetup struct {
-	ConnectionID string         `json:"connection_id"`
-	Issuer       string         `json:"issuer"`
-	Subject      string         `json:"subject"`
-	Audience     string         `json:"audience,omitempty"`
-	Steps        []keyless.Step `json:"steps"`
-	ExpiresAt    *time.Time     `json:"expires_at,omitempty"`
+	ConnectionID string              `json:"connection_id"`
+	Issuer       string              `json:"issuer"`
+	Subject      string              `json:"subject"`
+	Audience     string              `json:"audience,omitempty"`
+	Steps        []keyless.SetupStep `json:"steps"`
+	ExpiresAt    *time.Time          `json:"expires_at,omitempty"`
 }
 
 // KeylessInput connects a cloud keylessly, with the ID PrepareKeyless
@@ -192,17 +192,14 @@ func (s *Service) CreateKeyless(ctx context.Context, p security.Principal, in Ke
 	if id == "" {
 		return nil, unknown
 	}
-	r, err := s.Apps.TakeReservation(ctx, id)
+	// Another organization's reservation isn't found, so it stays theirs
+	// and nothing says it exists.
+	r, err := s.Apps.TakeReservation(ctx, p.OrgID, id)
 	if errors.Is(err, ErrNotFound) {
 		return nil, unknown
 	}
 	if err != nil {
 		return nil, err
-	}
-	if r.OrgID != p.OrgID {
-		// It stays the other organization's, and says nothing about it.
-		s.keepReservation(ctx, r)
-		return nil, unknown
 	}
 	if !s.now().Before(r.ExpiresAt) {
 		return nil, fmt.Errorf("%w: this keyless setup expired; start again", ErrInvalid)
@@ -240,7 +237,8 @@ func (s *Service) keepReservation(ctx context.Context, r *Reservation) {
 // ReplaceKeyless moves a connection to keyless, or changes a keyless
 // connection's settings, if the cloud's trust reaches the same account.
 // It keeps the connection's ID, and Vault no longer holds a secret for
-// it. Nil settings keep the connection's own.
+// it. settings go over the connection's own, so an optional one it isn't
+// given, such as a certificate, stays, and an empty one clears it.
 func (s *Service) ReplaceKeyless(ctx context.Context, p security.Principal, id string, settings map[string]string) (*Connection, error) {
 	if err := s.authz.Require(ctx, p, security.CloudAccountManage, ""); err != nil {
 		return nil, err
@@ -256,10 +254,12 @@ func (s *Service) ReplaceKeyless(ctx context.Context, p security.Principal, id s
 	if err != nil {
 		return nil, err
 	}
-	if settings == nil {
-		settings = c.Details
+	merged := maps.Clone(c.Details)
+	if merged == nil {
+		merged = map[string]string{}
 	}
-	if settings, err = keylessSettings(kc, settings); err != nil {
+	maps.Copy(merged, settings)
+	if settings, err = keylessSettings(kc, merged); err != nil {
 		return nil, err
 	}
 	handout, err := s.keylessHandout(ctx, &Connection{ID: c.ID, OrgID: c.OrgID, Cloud: c.Cloud, Details: settings})

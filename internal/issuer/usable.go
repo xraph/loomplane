@@ -23,7 +23,7 @@ var privateSuffixes = []string{".localhost", ".local", ".internal", ".lan", ".ho
 // Usable says whether a cloud can use issuerURL as an OpenID Connect
 // issuer. Clouds fetch discovery and keys themselves, so the issuer has to
 // be HTTPS on a host the internet reaches, with no user name, password,
-// query or fragment. In development an HTTP or HTTPS loopback issuer is
+// path, query or fragment. In development an HTTP or HTTPS loopback issuer is
 // allowed too, so keyless can be tried against fakes, and the reason says
 // no real cloud can reach it. Otherwise reason names what's wrong.
 func Usable(issuerURL, environment string) (ok bool, reason string) {
@@ -45,6 +45,10 @@ func Usable(issuerURL, environment string) (ok bool, reason string) {
 		return false, "public_url can't have a query"
 	case u.Fragment != "" || strings.Contains(issuerURL, "#"):
 		return false, "public_url can't have a fragment"
+	case strings.Trim(u.Path, "/") != "":
+		// Discovery and the JWKS are served at the root, whatever the
+		// public URL's path.
+		return false, "public_url must not have a path for keyless"
 	}
 	host := strings.TrimSuffix(strings.ToLower(u.Hostname()), ".")
 	if environment == developmentEnvironment && loopback(host) && (u.Scheme == "http" || u.Scheme == "https") {

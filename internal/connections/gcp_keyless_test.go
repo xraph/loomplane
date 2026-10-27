@@ -207,4 +207,9 @@ func TestGoogleKeylessRefusalIsRejectedAndAnOutageIsNot(t *testing.T) {
 	if strings.Contains(err.Error(), "minted-for") || strings.Contains(err.Error(), "ticket-for") {
 		t.Fatal("the refusal shows a secret")
 	}
+	// It names the keyless trust, not a key or a sign-in.
+	if msg := err.Error(); !strings.HasPrefix(msg, "Google Cloud refused Loomplane's keyless token for this workload identity provider") ||
+		strings.Contains(msg, "key or sign-in") {
+		t.Fatalf("refusal says %q", msg)
+	}
 }

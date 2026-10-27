@@ -175,7 +175,11 @@ func TestKeylessCheckOfAStaleCopyOfAFailedRowTellsNothing(t *testing.T) {
 	r.refuse = true
 	r.clock = r.clock.Add(48 * time.Hour)
 	var report RefreshReport
-	r.s.probeKeyless(t.Context(), &stale, &report)
+	refusal, _ := r.s.probeKeyless(t.Context(), &stale, &report)
+	if refusal == nil {
+		t.Fatal("the refusal wasn't returned")
+	}
+	r.s.markKeyless(t.Context(), *refusal, &report)
 	got := r.store.rows[c.ID]
 	if report != (RefreshReport{}) || len(r.lapsed) != 0 || got.Message != "refused earlier" ||
 		!got.UpdatedAt.Equal(row.UpdatedAt) || !sameTime(got.CheckedAt, row.CheckedAt) {
@@ -196,4 +200,184 @@ func TestKeylessRefusalIsToldEvenWhenTheLockFails(t *testing.T) {
 	if r.store.rows[c.ID].Status != StatusFailed || len(r.lapsed) != 1 || report.Failed != 1 || report.Lapsed != 0 {
 		t.Fatalf("report %+v, row %+v, lapsed %v", report, r.store.rows[c.ID], r.lapsed)
 	}
+}
+
+// connectAs connects cloud keylessly as name, assuming role.
+func (r *keylessRefreshRig) connectAs(t *testing.T, cloud, name, role string) *Connection {
+	t.Helper()
+	setup, err := r.s.PrepareKeyless(t.Context(), starter, cloud)
+	if err != nil {
+		t.Fatalf("prepare: %v", err)
+	}
+	c, err := r.s.CreateKeyless(t.Context(), starter, KeylessInput{ConnectionID: setup.ConnectionID, Name: name, Settings: map[string]string{"role_arn": role, "region": "us-east-1"}})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	return c
+}
+
+// unchanged fails t if c's row isn't as it was in before.
+func (r *keylessRefreshRig) unchanged(t *testing.T, before Connection) {
+	t.Helper()
+	got := r.store.rows[before.ID]
+	if got.Status != before.Status || got.Message != before.Message || got.Generation != before.Generation ||
+		!got.UpdatedAt.Equal(before.UpdatedAt) || !sameTime(got.CheckedAt, before.CheckedAt) {
+		t.Fatalf("row changed: %+v, was %+v", got, before)
+	}
+}
+
+// When Loomplane's own issuer isn't serving its keys at its public URL, no
+// cloud can check a token, so a refusal says nothing about the trust. The
+// run changes nothing, tells nobody, and warns once, having asked once.
+func TestKeylessCheckChangesNothingWhileTheIssuerIsntServing(t *testing.T) {
+	r := newKeylessRefreshRig(t)
+	a := r.connect(t)
+	g := r.connectAs(t, GCP, "Google", roleArn)
+	before := []Connection{r.store.rows[a.ID], r.store.rows[g.ID]}
+	asked := 0
+	r.s.IssuerServing = func(context.Context) error { asked++; return errors.New("the JWKS answered 502") }
+	r.refuse = true
+	r.clock = r.clock.Add(48 * time.Hour)
+	report, err := r.s.RefreshDue(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Failed != 2 || report.Lapsed != 0 || len(r.lapsed) != 0 || asked != 1 {
+		t.Fatalf("report %+v, lapsed %v, asked the issuer %d times", report, r.lapsed, asked)
+	}
+	for _, b := range before {
+		r.unchanged(t, b)
+	}
+	warned := 0
+	for _, w := range r.warnings {
+		if strings.Contains(w, "the JWKS answered 502") {
+			warned++
+		}
+	}
+	if warned != 1 {
+		t.Fatalf("warned %d times: %v", warned, r.warnings)
+	}
+}
+
+// The issuer is asked only when there's something to mark, and a refusal
+// it vouches for is marked as before.
+func TestKeylessCheckAsksTheIssuerOnlyBeforeMarking(t *testing.T) {
+	r := newKeylessRefreshRig(t)
+	c := r.connect(t)
+	asked := 0
+	r.s.IssuerServing = func(context.Context) error { asked++; return nil }
+	r.clock = r.clock.Add(48 * time.Hour)
+	if report, err := r.s.RefreshDue(t.Context()); err != nil || report.Probed != 1 || asked != 0 {
+		t.Fatalf("healthy run: %+v %v, asked %d times", report, err, asked)
+	}
+	r.refuse = true
+	r.clock = r.clock.Add(48 * time.Hour)
+	report, err := r.s.RefreshDue(t.Context())
+	if err != nil || report.Lapsed != 1 || asked != 1 || r.store.rows[c.ID].Status != StatusFailed || len(r.lapsed) != 1 {
+		t.Fatalf("refused run: %+v %v, asked %d times, row %+v", report, err, asked, r.store.rows[c.ID])
+	}
+}
+
+// Every keyless connection to one cloud refused in one run looks like
+// Loomplane's fault, not each trust's, so with two or more of them the run
+// changes nothing and warns. One refused among healthy ones is marked.
+func TestKeylessCheckTreatsACloudRefusingEveryConnectionAsLoomplanes(t *testing.T) {
+	r := newKeylessRefreshRig(t)
+	first := r.connectAs(t, AWS, "First", roleArn)
+	second := r.connectAs(t, AWS, "Second", otherRoleArn)
+	before := []Connection{r.store.rows[first.ID], r.store.rows[second.ID]}
+	r.refuse = true
+	r.clock = r.clock.Add(48 * time.Hour)
+	report, err := r.s.RefreshDue(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Failed != 2 || report.Lapsed != 0 || len(r.lapsed) != 0 {
+		t.Fatalf("report %+v, lapsed %v", report, r.lapsed)
+	}
+	for _, b := range before {
+		r.unchanged(t, b)
+	}
+	if !strings.Contains(strings.Join(r.warnings, "\n"), "aws") {
+		t.Fatalf("warnings: %v", r.warnings)
+	}
+
+	r.refuse = false
+	r.refusing[otherRoleArn] = true
+	report, err = r.s.RefreshDue(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report.Lapsed != 1 || report.Probed != 1 || r.store.rows[second.ID].Status != StatusFailed || r.store.rows[first.ID].Status != StatusReady {
+		t.Fatalf("one refused: %+v, rows %+v %+v", report, r.store.rows[first.ID], r.store.rows[second.ID])
+	}
+}
+
+// A connection the background check failed is checked again a day later,
+// and goes back to ready once the cloud trusts Loomplane again, without a
+// notice or a new generation.
+func TestKeylessCheckHealsWhatItFailedItself(t *testing.T) {
+	r := newKeylessRefreshRig(t)
+	c := r.connect(t)
+	r.refuse = true
+	r.clock = r.clock.Add(48 * time.Hour)
+	if _, err := r.s.RefreshDue(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	failed := r.store.rows[c.ID]
+	if failed.Status != StatusFailed || !strings.HasPrefix(failed.Message, keylessCheckPrefix) || len(r.lapsed) != 1 {
+		t.Fatalf("failed row %+v, lapsed %v", failed, r.lapsed)
+	}
+
+	// Still refused a day on: nobody is told again, and it waits a day.
+	r.clock = r.clock.Add(25 * time.Hour)
+	report, err := r.s.RefreshDue(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	still := r.store.rows[c.ID]
+	if report.Lapsed != 0 || len(r.lapsed) != 1 || still.Status != StatusFailed || still.CheckedAt == nil || !still.CheckedAt.Equal(r.clock) {
+		t.Fatalf("still refused: %+v, row %+v", report, still)
+	}
+	r.checked = nil
+	if _, err = r.s.RefreshDue(t.Context()); err != nil || len(r.checked) != 0 {
+		t.Fatalf("checked again within a day: %v", err)
+	}
+
+	r.refuse = false
+	r.clock = r.clock.Add(25 * time.Hour)
+	if report, err = r.s.RefreshDue(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	healed := r.store.rows[c.ID]
+	if report.Probed != 1 || healed.Status != StatusReady || healed.Message != "" || healed.Generation != c.Generation ||
+		healed.CheckedAt == nil || !healed.CheckedAt.Equal(r.clock) || len(r.lapsed) != 1 {
+		t.Fatalf("healed: %+v, row %+v, lapsed %v", report, healed, r.lapsed)
+	}
+}
+
+// A Recheck you ran that failed is yours to act on, so the background
+// check leaves it failed even once the cloud trusts Loomplane again.
+func TestKeylessCheckLeavesARecheckFailureAlone(t *testing.T) {
+	r := newKeylessRefreshRig(t)
+	c := r.connect(t)
+	r.refuse = true
+	if _, err := r.s.Recheck(t.Context(), starter, c.ID); err != nil {
+		t.Fatal(err)
+	}
+	failed := r.store.rows[c.ID]
+	if failed.Status != StatusFailed || strings.HasPrefix(failed.Message, keylessCheckPrefix) {
+		t.Fatalf("recheck: %+v", failed)
+	}
+	r.refuse = false
+	r.checked = nil
+	r.clock = r.clock.Add(48 * time.Hour)
+	report, err := r.s.RefreshDue(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if report != (RefreshReport{}) || len(r.checked) != 0 {
+		t.Fatalf("report %+v, checked %d bytes", report, len(r.checked))
+	}
+	r.unchanged(t, failed)
 }

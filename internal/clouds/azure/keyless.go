@@ -46,6 +46,9 @@ var trustRefused = map[string]bool{"70021": true, "70025": true, "700211": true,
 // disagree, which is Loomplane's to fix and not the trust's.
 var entraFailed = map[string]bool{"50000": true, "50166": true, "501661": true, "900612": true, "700027": true, "700024": true}
 
+// errKeylessRefused is ErrRejected for a keyless credential, in its words.
+var errKeylessRefused = keyless.Refusal(ErrRejected, "Azure refused Loomplane's keyless token for this app")
+
 // credentialNameRE is what a federated credential's name may hold besides
 // the loomplane- it starts with.
 var credentialNameRE = regexp.MustCompile(`[^A-Za-z0-9_-]`)
@@ -123,7 +126,7 @@ func assertionAnswer(status int, code string, codes []int, description string) e
 	case entraFailed[number]:
 		return fmt.Errorf("azure couldn't check Loomplane's token (%s); try again", why)
 	case trustRefused[number] || (code == "unauthorized_client"):
-		return fmt.Errorf("%w: Azure doesn't trust Loomplane for this app; check its federated credential (%s)", ErrRejected, why)
+		return fmt.Errorf("%w: check its federated credential (%s)", errKeylessRefused, why)
 	}
 	return fmt.Errorf("azure didn't take Loomplane's token (%s)", why)
 }
@@ -166,7 +169,7 @@ func credentialName(subject string) string {
 // KeylessSetup implements connections.KeylessCloud: add a federated
 // credential that trusts subject alone to an app registration, and make
 // the app a Contributor on the resource group.
-func (c *Client) KeylessSetup(issuer, subject string) []keyless.Step {
+func (c *Client) KeylessSetup(issuer, subject string) []keyless.SetupStep {
 	credential := struct {
 		Name      string   `json:"name"`
 		Issuer    string   `json:"issuer"`
@@ -180,7 +183,7 @@ func (c *Client) KeylessSetup(issuer, subject string) []keyless.Step {
 		// A struct of strings always encodes, so this doesn't happen.
 		return nil
 	}
-	return []keyless.Step{
+	return []keyless.SetupStep{
 		{
 			Title: "Let your app registration trust this connection",
 			Body: "Loomplane acts as an app registration in the tenant you're connecting. If you don't have one for it, run az ad app create --display-name loomplane, then az ad sp create --id <client-id> so the app can hold roles. " +

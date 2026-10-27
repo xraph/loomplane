@@ -157,3 +157,31 @@ func TestAWSKeylessLandsOnTheSameIdentityAsAKey(t *testing.T) {
 		t.Fatal("a keyless handout isn't a grant")
 	}
 }
+
+// Moving to keyless with only the role and region keeps the optional
+// settings the connection already had, such as its certificate.
+func TestSwitchToKeylessKeepsTheCertificate(t *testing.T) {
+	fake := &fakeAWSAccount{}
+	srv := httptest.NewServer(http.HandlerFunc(fake.serve))
+	t.Cleanup(srv.Close)
+	client := aws.New(srv.URL).WithMinter(ticketMinter{})
+	r := newKeylessRig(t)
+	r.s.checkers[AWS] = AWSChecker{Client: client}
+	r.s.KeylessClouds[AWS] = client
+	cert := "arn:aws:acm:us-east-1:111111111111:certificate/abc"
+	key := `{"access_key_id":"AKIAIOSFODNN7EXAMPLE","secret_access_key":"wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"}`
+	c, err := r.s.Create(t.Context(), starter, CreateInput{Cloud: AWS, Name: "Prod", Credential: key, Settings: map[string]string{"region": "us-east-1", "certificate_arn": cert}})
+	if err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	got, err := r.s.ReplaceKeyless(t.Context(), starter, c.ID, map[string]string{"role_arn": roleArn, "region": "us-east-1"})
+	if err != nil {
+		t.Fatalf("replace: %v", err)
+	}
+	if got.Details["certificate_arn"] != cert || got.Details["role_arn"] != roleArn {
+		t.Fatalf("details: %v", got.Details)
+	}
+	if _, ok := got.Details["access_key"]; ok {
+		t.Fatalf("details still name the key: %v", got.Details)
+	}
+}

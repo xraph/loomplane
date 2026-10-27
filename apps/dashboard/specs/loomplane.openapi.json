@@ -20310,7 +20310,7 @@
           "steps": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/KeylessStep"
+              "$ref": "#/components/schemas/SetupStep"
             }
           },
           "subject": {
@@ -20318,7 +20318,11 @@
           }
         }
       },
-      "KeylessStep": {
+      "SetupStep": {
+        "type": "object",
+        "required": [
+          "title"
+        ],
         "properties": {
           "body": {
             "type": "string"
@@ -20329,18 +20333,10 @@
           "title": {
             "type": "string"
           }
-        },
-        "required": [
-          "title"
-        ],
-        "type": "object",
-        "x-forge-type": "github.com/xraph/loomplane/internal/clouds/keyless.Step"
+        }
       },
       "KeylessReplaceInputBody": {
         "type": "object",
-        "required": [
-          "settings"
-        ],
         "properties": {
           "settings": {
             "type": "object",

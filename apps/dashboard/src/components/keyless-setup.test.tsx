@@ -100,7 +100,75 @@ it("copies each value", async () => {
   expect(await copied("Copy issuer")).toBe("https://loomplane.example")
   expect(await copied("Copy subject")).toBe("org:org_1:connection:conn_k1")
   expect(await copied("Copy audience")).toBe("sts.amazonaws.com")
-  expect(await copied("Copy command")).toBe(setup.steps[0]!.command)
+  expect(await copied("Copy command: Add the identity provider")).toBe(
+    setup.steps[0]!.command
+  )
+})
+
+it("names each step's command in its copy button", async () => {
+  const twoCommands = {
+    ...setup,
+    steps: [
+      setup.steps[0]!,
+      { title: "Make the role", command: "aws iam create-role" },
+    ],
+  }
+  stub([], twoCommands)
+  panel()
+  await screen.findByText("https://loomplane.example")
+  expect(
+    screen.getByRole("button", { name: "Copy command: Add the identity provider" })
+  ).toBeTruthy()
+  expect(
+    screen.getByRole("button", { name: "Copy command: Make the role" })
+  ).toBeTruthy()
+})
+
+it("keeps and clears optional settings on a switch", async () => {
+  const posted: Posted[] = []
+  stub(posted)
+  panel({
+    name: "",
+    fields: [
+      { key: "role_arn", label: "Role ARN", required: true },
+      { key: "certificate_arn", label: "Certificate ARN (optional)" },
+      { key: "billing_export", label: "Billing export table (optional)" },
+    ],
+    replacing: {
+      id: "conn_a",
+      name: "Prod AWS",
+      cloud: "aws",
+      method: "token",
+      status: "ready",
+      message: "",
+      account: "123456789012",
+      details: {
+        region: "eu-west-1",
+        certificate_arn: "arn:aws:acm:eu-west-1:1:certificate/old",
+        billing_export: "p.d.t",
+      },
+      missing: [],
+      createdAt: "2026-10-01T00:00:00Z",
+      createdBy: "u1",
+    } as unknown as Parameters<typeof KeylessSetup>[0]["replacing"],
+  })
+  const user = userEvent.setup()
+  await screen.findByText("https://loomplane.example")
+  expect(
+    (screen.getByLabelText("Certificate ARN (optional)") as HTMLInputElement)
+      .value
+  ).toBe("arn:aws:acm:eu-west-1:1:certificate/old")
+  await user.type(screen.getByLabelText("Role ARN"), "arn:aws:iam::1:role/x")
+  await user.clear(screen.getByLabelText("Billing export table (optional)"))
+  await user.click(screen.getByRole("button", { name: "Check and switch" }))
+  await waitFor(() => expect(posted).toHaveLength(1))
+  expect(posted[0]!.body).toEqual({
+    settings: {
+      role_arn: "arn:aws:iam::1:role/x",
+      certificate_arn: "arn:aws:acm:eu-west-1:1:certificate/old",
+      billing_export: "",
+    },
+  })
 })
 
 it("fills Google's audience from the provider", async () => {

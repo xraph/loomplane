@@ -21,17 +21,21 @@ func TestReservationIsTakenOnce(t *testing.T) {
 	if err := store.PutReservation(ctx, in); err == nil {
 		t.Fatal("an ID was reserved twice")
 	}
-	got, err := store.TakeReservation(ctx, "conn_1")
+	// Another organization's try finds nothing and leaves it.
+	if _, err := store.TakeReservation(ctx, "org_2", "conn_1"); !errors.Is(err, connections.ErrNotFound) {
+		t.Fatalf("other org: %v", err)
+	}
+	got, err := store.TakeReservation(ctx, "org_1", "conn_1")
 	if err != nil || *got != *in {
 		t.Fatalf("take: %+v %v", got, err)
 	}
 	if got.ExpiresAt.Location() != time.UTC || got.CreatedAt.Location() != time.UTC {
 		t.Fatalf("times aren't UTC: %v %v", got.ExpiresAt, got.CreatedAt)
 	}
-	if _, err := store.TakeReservation(ctx, "conn_1"); !errors.Is(err, connections.ErrNotFound) {
+	if _, err := store.TakeReservation(ctx, "org_1", "conn_1"); !errors.Is(err, connections.ErrNotFound) {
 		t.Fatalf("second take: %v", err)
 	}
-	if _, err := store.TakeReservation(ctx, "conn_unknown"); !errors.Is(err, connections.ErrNotFound) {
+	if _, err := store.TakeReservation(ctx, "org_1", "conn_unknown"); !errors.Is(err, connections.ErrNotFound) {
 		t.Fatalf("unknown: %v", err)
 	}
 }
@@ -50,11 +54,11 @@ func TestSweepReservationsDropsOnlyExpired(t *testing.T) {
 		t.Fatalf("sweep: %d %v", n, err)
 	}
 	for _, id := range []string{"old_1", "old_2"} {
-		if _, err = store.TakeReservation(ctx, id); !errors.Is(err, connections.ErrNotFound) {
+		if _, err = store.TakeReservation(ctx, "org_1", id); !errors.Is(err, connections.ErrNotFound) {
 			t.Fatalf("%s should be gone: %v", id, err)
 		}
 	}
-	if _, err = store.TakeReservation(ctx, "live"); err != nil {
+	if _, err = store.TakeReservation(ctx, "org_1", "live"); err != nil {
 		t.Fatalf("live reservation was swept: %v", err)
 	}
 }

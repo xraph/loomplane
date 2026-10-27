@@ -177,6 +177,32 @@ func TestCheckWorkloadProvider(t *testing.T) {
 	}
 }
 
+// Each connection gets a provider of its own in the shared pool, named
+// for its ID in a way Google and CheckWorkloadProvider both take.
+func TestWorkloadProviderIsNamedForTheConnection(t *testing.T) {
+	for subject, want := range map[string]string{
+		"org:org_1:connection:conn_01m5xpsa13ecsrk2gh2gytmj92":  "conn-01m5xpsa13ecsrk2gh2gytmj92",
+		"org:org_1:connection:conn_1":                           "conn-1",
+		"org:org_1:connection:Conn_ABC":                         "conn-abc",
+		"org:org_1:connection:a_b":                              "loomplane-a-b",
+		"org:org_1:connection:9lives":                           "loomplane-9lives",
+		"org:org_1:connection:conn_ä!x_y":                       "conn-x-y",
+		"org:org_1:connection:conn_" + strings.Repeat("ab", 20): "lp-b" + strings.Repeat("ab", 14),
+		"org:org_1:connection:___":                              "loomplane",
+	} {
+		got := providerID(subject)
+		if got != want {
+			t.Errorf("%s: %q, want %q", subject, got, want)
+		}
+		if err := CheckWorkloadProvider("projects/1/locations/global/workloadIdentityPools/loomplane/providers/" + got); err != nil {
+			t.Errorf("%s: %v", subject, err)
+		}
+	}
+	if providerID(keyless.Subject("org_1", "conn_01m5xpsa13ecsrk2gh2gytmj92")) == providerID(keyless.Subject("org_1", "conn_01m5xpsa13ecsrk2gh2gytmj93")) {
+		t.Error("two connections share a provider")
+	}
+}
+
 func TestParseKeyReadsAKeylessHandout(t *testing.T) {
 	key := testKeylessKey(t)
 	if !key.Keyless || key.User || key.ProjectID != "shop-prod" || key.ClientEmail != testAccount || key.WorkloadProvider != testProvider {
@@ -385,7 +411,7 @@ func TestKeylessSetupNamesTheSubject(t *testing.T) {
 	}
 	want := []string{
 		"gcloud iam workload-identity-pools create loomplane --location=global",
-		"gcloud iam workload-identity-pools providers create-oidc loomplane --location=global --workload-identity-pool=loomplane " +
+		"gcloud iam workload-identity-pools providers create-oidc conn-1 --location=global --workload-identity-pool=loomplane " +
 			"--issuer-uri=https://loomplane.example/oidc --attribute-mapping=google.subject=assertion.sub --attribute-condition=\"assertion.sub=='" + testSubject + "'\"",
 		"gcloud iam service-accounts add-iam-policy-binding <service-account> --role=roles/iam.workloadIdentityUser " +
 			"--member=principal://iam.googleapis.com/projects/<project-number>/locations/global/workloadIdentityPools/loomplane/subject/" + testSubject,
@@ -404,10 +430,21 @@ func TestKeylessSetupNamesTheSubject(t *testing.T) {
 			t.Errorf("step: %+v", step)
 		}
 	}
-	if !slices.ContainsFunc(steps, func(s keyless.Step) bool {
+	if !slices.ContainsFunc(steps, func(s keyless.SetupStep) bool {
 		return strings.Contains(s.Body, "workload_provider") || strings.Contains(s.Body, "provider's full name")
 	}) {
 		t.Error("no step says what to paste")
+	}
+	// The provider is this connection's, so its name is in the describe
+	// hint, and the pool and role, which every connection to the project
+	// shares, can be skipped once they're there.
+	if !strings.Contains(steps[1].Body, "providers describe conn-1 ") {
+		t.Errorf("describe hint: %s", steps[1].Body)
+	}
+	for _, i := range []int{0, 3} {
+		if !strings.Contains(steps[i].Body, "already") {
+			t.Errorf("step %d doesn't say to skip it when it's there: %s", i+1, steps[i].Body)
+		}
 	}
 	// A trailing slash names the same issuer as the token's iss.
 	if dev := New("").KeylessSetup("http://127.0.0.1:8080/", testSubject); !strings.Contains(dev[1].Command, "--issuer-uri=http://127.0.0.1:8080 ") {

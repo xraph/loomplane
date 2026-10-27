@@ -9,7 +9,7 @@ A keyless connection stores nothing you have to rotate. You tell AWS, Google Clo
 
 ## Before you start
 
-The clouds fetch Loomplane's keys themselves, over the internet, so your `public_url` has to be HTTPS on a host they can reach. A private address, a `.local` or `.internal` name, or plain `http` won't work. The issuer is your public URL with any trailing slash taken off, and the two documents the clouds read sit under it:
+The clouds fetch Loomplane's keys themselves, over the internet, so your `public_url` has to be HTTPS on a host they can reach. A private address, a `.local` or `.internal` name, or plain `http` won't work. Nor will a path such as `https://example.com/loomplane`: the two documents the clouds read are served at the root, so keyless stays off and says `public_url must not have a path for keyless`. The issuer is your public URL with any trailing slash taken off, and the documents sit under it:
 
 | What | Where |
 |---|---|
@@ -68,7 +68,7 @@ The audience is what each cloud expects to find in the token's `aud`:
 | Google Cloud | `//iam.googleapis.com/` followed by the workload identity provider's full name |
 | Azure | `api://AzureADTokenExchange` |
 
-Tokens are signed with RS256. Besides `iss`, `sub` and `aud` they carry `iat`, `nbf`, `exp` and a random `jti`, and `exp` is 10 minutes after `iat`.
+Tokens are signed with RS256. Besides `iss`, `sub` and `aud` they carry `iat`, `nbf`, `exp` and a random `jti`. A token works until 10 minutes after Loomplane signs it. Its `iat` and `nbf` are a minute before that moment, so a cloud whose clock runs a little behind still takes it, which makes `exp` 11 minutes after `iat`.
 
 ## AWS
 
@@ -110,7 +110,7 @@ aws iam create-role --role-name loomplane --assume-role-policy-document file://t
 aws iam put-role-policy --role-name loomplane --policy-name loomplane --policy-document file://permissions.json
 ```
 
-Back in the dialog, paste the role's ARN (`arn:aws:iam::123456789012:role/loomplane`) and the region. Loomplane assumes the role with `AssumeRoleWithWebIdentity` and names each session `loomplane-` followed by the connection ID, so CloudTrail shows which connection acted. The account number in the role's ARN and the region are the connection's account, the same as a key's.
+Back in the dialog, paste the role's ARN (`arn:aws:iam::123456789012:role/loomplane`) and the region, and an ACM certificate's ARN if you want public services on ECS to answer over HTTPS, as with a key. Loomplane assumes the role with `AssumeRoleWithWebIdentity` and names each session `loomplane-` followed by the connection ID, so CloudTrail shows which connection acted. The account number in the role's ARN and the region are the connection's account, the same as a key's.
 
 ## Google Cloud
 
@@ -120,12 +120,12 @@ You make a workload identity pool, add Loomplane as its provider, and let this c
 gcloud services enable iam.googleapis.com iamcredentials.googleapis.com sts.googleapis.com cloudresourcemanager.googleapis.com
 ```
 
-Then the pool and the provider:
+Then the pool and the provider. Every keyless connection to the project shares the pool, so if you've connected this project keylessly before, it's there already and you skip creating it. The provider is the connection's own, named after its ID: `conn_01m5x2a4bwfx8r0d1k3m7q9tzs` gets `conn-01m5x2a4bwfx8r0d1k3m7q9tzs`, in lower case with the underscore as a hyphen, the way Google wants a provider ID (4 to 32 letters, digits and hyphens). The dialog fills it in.
 
 ```bash
 gcloud iam workload-identity-pools create loomplane --location=global
 
-gcloud iam workload-identity-pools providers create-oidc loomplane --location=global \
+gcloud iam workload-identity-pools providers create-oidc conn-01m5x2a4bwfx8r0d1k3m7q9tzs --location=global \
   --workload-identity-pool=loomplane \
   --issuer-uri=https://loomplane.example.com \
   --attribute-mapping=google.subject=assertion.sub \
@@ -135,7 +135,7 @@ gcloud iam workload-identity-pools providers create-oidc loomplane --location=gl
 The condition lets in this one connection. The provider's default audience is its own full name with `//iam.googleapis.com/` in front, which is what Loomplane sends, so you don't need `--allowed-audiences`. To print the full name you'll paste later:
 
 ```bash
-gcloud iam workload-identity-pools providers describe loomplane --location=global \
+gcloud iam workload-identity-pools providers describe conn-01m5x2a4bwfx8r0d1k3m7q9tzs --location=global \
   --workload-identity-pool=loomplane --format='value(name)'
 ```
 
@@ -147,16 +147,16 @@ gcloud iam service-accounts add-iam-policy-binding <service-account> \
   --member=principal://iam.googleapis.com/projects/<project-number>/locations/global/workloadIdentityPools/loomplane/subject/org:aorg_...:connection:conn_...
 ```
 
-The last step makes a custom role called `loomplane` with every permission in [the Google Cloud page's table](/docs/clouds/google-cloud#connect-a-project) and grants it to the service account. The dialog's command lists them all:
+The last step makes a custom role called `loomplane` with every permission in [the Google Cloud page's table](/docs/clouds/google-cloud#connect-a-project) and grants it to the service account. The dialog's command lists them all. If another connection already made the role in this project, skip the first command:
 
 ```bash
 gcloud iam roles create loomplane --project=<project-id> --title=Loomplane --permissions=...
 gcloud projects add-iam-policy-binding <project-id> --member=serviceAccount:<service-account> --role=projects/<project-id>/roles/loomplane
 ```
 
-Then paste the project ID, the provider's full name (`projects/123456789012/locations/global/workloadIdentityPools/loomplane/providers/loomplane`) and the service account's email. Loomplane trades its token at Google's security token service, then asks IAM Credentials for the service account's access token, and checks the account's permissions on the project.
+Then paste the project ID, the provider's full name (`projects/123456789012/locations/global/workloadIdentityPools/loomplane/providers/conn-01m5x2a4bwfx8r0d1k3m7q9tzs`) and the service account's email. You can also name a billing export table, as you would for a key, so Loomplane reads the project's spend. Loomplane trades its token at Google's security token service, then asks IAM Credentials for the service account's access token, and checks the account's permissions on the project.
 
-The commands use fixed names, so a second keyless connection to the same project needs some editing. The pool and the custom role are there already, so skip creating them, then give the provider a new name such as `loomplane-2` in both provider commands and run the service account binding with the new subject. Each connection needs its own provider, because a provider's condition names one connection.
+A second keyless connection to the same project gets a provider of its own, because a provider's condition names one connection. Its commands already carry its own provider name and subject, so you skip the pool and the role and run the rest.
 
 ## Azure
 
@@ -195,13 +195,17 @@ The keys turn over when Loomplane starts and with the background job that runs e
 
 Say someone deletes the role, the identity provider, the pool or the federated credential, or edits its condition. From then on the cloud won't take Loomplane's tokens for that connection. Loomplane asks the cloud once a day whether it still trusts each keyless connection (the background job runs every 6 hours, and each connection is asked at most once a day), and a deployment that runs before the next check fails with the cloud's own error.
 
-Once the daily check gets a refusal, the connection shows as failed with the cloud's message, and nothing deploys through it. The person who made the connection and the organization's owners and admins hear about it in the inbox, and by email if mail is set up, as "*name* lost its keyless access to *cloud*". Every webhook endpoint gets a `connection.keyless_refused` event. You get one notice per refusal, not one a day.
+Once the daily check gets a refusal, the connection shows as failed with the cloud's message, starting `Daily check:`, and nothing deploys through it. The person who made the connection and the organization's owners and admins hear about it in the inbox, and by email if mail is set up, as "*name* lost its keyless access to *cloud*". Every webhook endpoint gets a `connection.keyless_refused` event. You get one notice per refusal, not one a day.
 
-Fix the trust in the cloud, then open the connection and choose **Check again**. The daily check leaves a failed connection alone, so it stays failed until you do. **Check again** asks the cloud right away, and a connection whose trust works is ready again with the same ID.
+Fix the trust in the cloud, then open the connection and choose **Check again**. It asks the cloud right away, and a connection whose trust works is ready again with the same ID. If you don't, the daily check asks again a day later, and once the cloud takes the token the connection goes back to ready on its own, with no notice. That's only for a connection the daily check failed. One that failed when you chose **Check again** stays failed until you check it again yourself.
+
+A refusal isn't always the trust's fault. If Loomplane's own issuer is down, or its public URL stops serving the keys, every cloud turns every token away. So before the daily check marks anything failed, Loomplane fetches its own discovery document and JWKS from the public URL, the way a cloud does, and looks for the key it signs with. If that fails, nothing is marked, nobody is told, and the server log has a warning. The same goes when every keyless connection to one cloud is refused in the same run and there are at least two of them: that looks like Loomplane's problem too. A server that can't reach its own public URL from inside your network never marks a keyless connection failed, so check that it can.
+
+On AWS, STS failing to reach the issuer or to fetch its keys, and a token it calls expired, count as Loomplane's problem rather than a refusal, and so do a 5xx answer and a token Loomplane couldn't sign.
 
 ## Switch to keyless
 
-An AWS, Google Cloud or Azure connection that uses a key, a secret or a sign-in can move to keyless. Open the connection and choose **Switch to keyless**. The dialog shows the same steps with the connection's own ID in the subject, so nothing is reserved and there's no time limit. Set up the trust and choose **Check and switch**. Loomplane checks the trust first, and if the cloud refuses it the connection stays as it was. Once it switches, Loomplane deletes the key, secret or sign-in grant it held for the connection.
+An AWS, Google Cloud or Azure connection that uses a key, a secret or a sign-in can move to keyless. Open the connection and choose **Switch to keyless**. The dialog shows the same steps with the connection's own ID in the subject, so nothing is reserved and there's no time limit. Set up the trust and choose **Check and switch**. Loomplane checks the trust first, and if the cloud refuses it the connection stays as it was. Once it switches, Loomplane deletes the key, secret or sign-in grant it held for the connection. Settings you had, such as an AWS certificate or a Google billing export, carry over unless you empty them in the dialog.
 
 The ID stays, and the account has to be the one the connection already uses: the AWS account and region, the Google project, or the Azure tenant, subscription and resource group. Nothing that refers to the connection breaks. To go back, choose **Replace credential** and paste a key.
 

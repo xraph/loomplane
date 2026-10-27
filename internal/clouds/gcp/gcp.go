@@ -17,6 +17,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	neturl "net/url"
 	"slices"
 	"strings"
 	"time"
@@ -345,6 +346,12 @@ func (s *Session) do(ctx context.Context, method, url string, in, out any) error
 func (s *Session) send(req *http.Request, out any) error {
 	res, err := s.http.Do(req)
 	if err != nil {
+		// A keyless refusal says what was refused, so the request it
+		// stopped isn't put in front of it.
+		var ue *neturl.Error
+		if errors.As(err, &ue) && keyless.Refused(ue.Err) {
+			return ue.Err
+		}
 		if errors.Is(err, ErrRejected) || errors.Is(err, ErrInvalidKey) {
 			return err
 		}

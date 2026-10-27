@@ -76,10 +76,33 @@ func Subject(orgID, connectionID string) string {
 	return "org:" + orgID + ":connection:" + connectionID
 }
 
-// Step is one step of setting up a cloud's trust that the dialog shows: a
-// title, what to do, and a command to copy when there's one. It lives here
-// so the cloud packages can return it without importing connections.
-type Step struct {
+// Refusal is a cloud refusing Loomplane's keyless token, in words that
+// name the keyless trust rather than a key or a sign-in. It wraps
+// rejected, the cloud's own refusal error, so it still counts as one.
+func Refusal(rejected error, words string) error {
+	return refusal{rejected: rejected, words: words}
+}
+
+type refusal struct {
+	rejected error
+	words    string
+}
+
+func (r refusal) Error() string { return r.words }
+func (r refusal) Unwrap() error { return r.rejected }
+
+// Refused reports whether err is, or wraps, a Refusal.
+func Refused(err error) bool {
+	var r refusal
+	return errors.As(err, &r)
+}
+
+// SetupStep is one step of setting up a cloud's trust that the dialog
+// shows: a title, what to do, and a command to copy when there's one. It
+// lives here so the cloud packages can return it without importing
+// connections. Its name is its own, so the API's schema for it doesn't
+// collide with a deployment's Step.
+type SetupStep struct {
 	Title   string `json:"title"`
 	Body    string `json:"body,omitempty"`
 	Command string `json:"command,omitempty"`

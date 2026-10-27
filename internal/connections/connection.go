@@ -27,9 +27,9 @@ const (
 	Cloudflare   = "cloudflare"
 )
 
-// cloudTitles name the clouds that can be signed in to as people know
-// them, as the API's list of clouds does.
-var cloudTitles = map[string]string{GCP: "Google Cloud", Azure: "Microsoft Azure", Vercel: "Vercel", DigitalOcean: "DigitalOcean"}
+// cloudTitles name the clouds that can be signed in to or connected
+// keylessly as people know them, as the API's list of clouds does.
+var cloudTitles = map[string]string{GCP: "Google Cloud", Azure: "Microsoft Azure", Vercel: "Vercel", DigitalOcean: "DigitalOcean", AWS: "AWS"}
 
 // cloudTitle is what a message to people calls cloud.
 func cloudTitle(cloud string) string {

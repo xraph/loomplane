@@ -438,8 +438,9 @@ func TestKeyless_googleEndToEnd(t *testing.T) {
 		return strings.Join(parts, ";")
 	}
 	for cloud, want := range map[string]string{
-		connections.AWS: "role_arn=Role ARN/true;region=Region/true",
-		connections.GCP: "project_id=Project ID/true;workload_provider=Workload identity provider/true;service_account=Service account email/true",
+		connections.AWS: "role_arn=Role ARN/true;region=Region/true;certificate_arn=Certificate ARN (optional)/false",
+		connections.GCP: "project_id=Project ID/true;workload_provider=Workload identity provider/true;service_account=Service account email/true;" +
+			"billing_export=Billing export table (optional)/false",
 		connections.Azure: "tenant_id=Directory (tenant) ID/true;client_id=Application (client) ID/true;subscription_id=Subscription ID/true;" +
 			"resource_group=Resource group (default loomplane)/false",
 	} {
@@ -495,8 +496,15 @@ func TestKeyless_googleEndToEnd(t *testing.T) {
 	if replaced.ID != conn.ID || replaced.Method != connections.MethodKeyless || replaced.Status != connections.StatusReady {
 		t.Fatalf("replaced %+v", replaced)
 	}
+	// Settings go over the connection's own, so naming one keeps the rest,
+	// and a bad one is refused.
+	a.send(http.StatusOK, http.MethodPut, "/api/v1/connections/"+conn.ID+"/keyless",
+		map[string]any{"settings": map[string]string{"project_id": "shop-prod"}}, &replaced)
+	if replaced.Details["workload_provider"] != good["workload_provider"] || replaced.Details["service_account"] != good["service_account"] {
+		t.Fatalf("a partial replace dropped settings: %v", replaced.Details)
+	}
 	a.send(http.StatusUnprocessableEntity, http.MethodPut, "/api/v1/connections/"+conn.ID+"/keyless",
-		map[string]any{"settings": map[string]string{"project_id": "shop-prod"}}, nil)
+		map[string]any{"settings": map[string]string{"workload_provider": "nope"}}, nil)
 
 	// A deployment recalls the credential: a handout, which the app's own
 	// Google client turns into a session that renews itself at STS.
@@ -632,6 +640,14 @@ func TestKeyless_everyCloudClientMints(t *testing.T) {
 	}
 	if err := svc.Rotate(t.Context()); err != nil {
 		t.Fatal(err)
+	}
+	// The daily job's check that the issuer serves its keys fetches them
+	// from the running server, as a cloud would.
+	if svc.IssuerServing == nil {
+		t.Fatal("the service has no IssuerServing")
+	}
+	if err := svc.IssuerServing(t.Context()); err != nil {
+		t.Fatalf("the issuer isn't serving: %v", err)
 	}
 	if got := slices.Sorted(func(yield func(string) bool) {
 		for k := range svc.KeylessClouds {

@@ -1233,7 +1233,7 @@ export interface KeylessPrepareInputBody {
 }
 
 export interface KeylessReplaceInputBody {
-  settings: Record<string, any>;
+  settings?: Record<string, any>;
 }
 
 export interface KeylessSetup {
@@ -1241,7 +1241,7 @@ export interface KeylessSetup {
   connectionId: string;
   expiresAt?: string;
   issuer: string;
-  steps: KeylessStep[];
+  steps: SetupStep[];
   subject: string;
 }
 
@@ -1249,12 +1249,6 @@ export interface KeylessState {
   enabled: boolean;
   issuer: string;
   reason: string;
-}
-
-export interface KeylessStep {
-  body?: string;
-  command?: string;
-  title: string;
 }
 
 export interface KindInfo {
@@ -2771,6 +2765,12 @@ export interface Setting {
   key: string;
   label: string;
   required?: boolean;
+}
+
+export interface SetupStep {
+  body?: string;
+  command?: string;
+  title: string;
 }
 
 export interface SignIn {

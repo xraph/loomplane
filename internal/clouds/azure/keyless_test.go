@@ -262,7 +262,7 @@ func TestBearerSaysTheTrustIsMissing(t *testing.T) {
 		if !strings.Contains(msg, tc.code) {
 			t.Errorf("%s: the error doesn't say %q", name, tc.code)
 		}
-		if tc.rejected && !strings.Contains(msg, "Azure doesn't trust Loomplane for this app; check its federated credential") {
+		if tc.rejected && !strings.HasPrefix(msg, "Azure refused Loomplane's keyless token for this app: check its federated credential") {
 			t.Errorf("%s: the refusal doesn't say what to check", name)
 		}
 		if reach := strings.Contains(msg, "check that its public URL is reachable"); reach != (name == "keys unreachable" || name == "issuer unreachable" || name == "keys unreadable") {

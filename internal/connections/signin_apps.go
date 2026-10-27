@@ -103,9 +103,10 @@ type AppStore interface {
 	// PutReservation holds a keyless connection's ID. An ID already held
 	// is an error.
 	PutReservation(ctx context.Context, r *Reservation) error
-	// TakeReservation removes and returns a reservation, so an ID is
-	// used once. One already taken is ErrNotFound.
-	TakeReservation(ctx context.Context, id string) (*Reservation, error)
+	// TakeReservation removes and returns orgID's reservation of id, so an
+	// ID is used once. One already taken, or another organization's, is
+	// ErrNotFound, and another organization's is left as it was.
+	TakeReservation(ctx context.Context, orgID, id string) (*Reservation, error)
 	// SweepReservations removes reservations that expired before the
 	// given time and says how many.
 	SweepReservations(ctx context.Context, before time.Time) (int64, error)

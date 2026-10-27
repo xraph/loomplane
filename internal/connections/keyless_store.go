@@ -21,11 +21,12 @@ func (s *PgStore) PutReservation(ctx context.Context, r *Reservation) error {
 }
 
 // TakeReservation implements AppStore with one DELETE, so two creates with
-// the same ID can't both win.
-func (s *PgStore) TakeReservation(ctx context.Context, id string) (*Reservation, error) {
+// the same ID can't both win, and one from another organization matches
+// nothing.
+func (s *PgStore) TakeReservation(ctx context.Context, orgID, id string) (*Reservation, error) {
 	var r Reservation
-	err := s.db.QueryRow(ctx, `DELETE FROM loomplane_keyless_reservations WHERE id = $1
-		RETURNING id, org_id, user_id, cloud, expires_at, created_at`, id).
+	err := s.db.QueryRow(ctx, `DELETE FROM loomplane_keyless_reservations WHERE id = $1 AND org_id = $2
+		RETURNING id, org_id, user_id, cloud, expires_at, created_at`, id, orgID).
 		Scan(&r.ID, &r.OrgID, &r.UserID, &r.Cloud, &r.ExpiresAt, &r.CreatedAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound
