@@ -16,6 +16,7 @@ import (
 	heraldstore "github.com/xraph/herald/store"
 	"github.com/xraph/relay/acceptance"
 
+	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/security"
 )
 
@@ -25,6 +26,16 @@ const kindConnection = "connection"
 
 // connectionSignInNeeded is the webhook and inbox type of a lapsed sign-in.
 const connectionSignInNeeded = "connection.sign_in_needed"
+
+// connectionKeylessRefused is the webhook and inbox type of a keyless trust
+// the cloud refused.
+const connectionKeylessRefused = "connection.keyless_refused"
+
+// Statuses a connection notice carries.
+const (
+	noticeSignInNeeded = "sign_in_needed"
+	noticeFailed       = "failed"
+)
 
 // lapseTimeout bounds the database work of ConnectionLapsed. The caller holds
 // a renewal slot, so it must not wait on a slow database.
@@ -44,6 +55,17 @@ type ConnectionPayload struct {
 // writes outbox rows. The drain loop sends everything, so this stays cheap.
 // Calling it again with the same at adds nothing.
 func (s *Service) ConnectionLapsed(ctx context.Context, orgID, connectionID, name, cloud, createdBy string, at time.Time) error {
+	return s.queueConnectionNotice(ctx, orgID, connectionID, name, cloud, createdBy, noticeSignInNeeded, at)
+}
+
+// ConnectionKeylessRefused queues a notice that the cloud stopped trusting
+// Loomplane for a keyless connection, for the same people as ConnectionLapsed
+// and with the same dedupe.
+func (s *Service) ConnectionKeylessRefused(ctx context.Context, orgID, connectionID, name, cloud, createdBy string, at time.Time) error {
+	return s.queueConnectionNotice(ctx, orgID, connectionID, name, cloud, createdBy, noticeFailed, at)
+}
+
+func (s *Service) queueConnectionNotice(ctx context.Context, orgID, connectionID, name, cloud, createdBy, status string, at time.Time) error {
 	ctx, cancel := context.WithTimeout(ctx, lapseTimeout)
 	defer cancel()
 	rows, err := s.pg.Query(ctx, `SELECT user_id FROM authsome_members WHERE org_id=$1 AND role IN ('owner','admin')`, orgID)
@@ -72,7 +94,7 @@ func (s *Service) ConnectionLapsed(ctx context.Context, orgID, connectionID, nam
 	if err != nil {
 		return err
 	}
-	payload, err := json.Marshal(ConnectionPayload{ConnectionID: connectionID, Name: name, Cloud: cloud, Status: "sign_in_needed"})
+	payload, err := json.Marshal(ConnectionPayload{ConnectionID: connectionID, Name: name, Cloud: cloud, Status: status})
 	if err != nil {
 		return err
 	}
@@ -103,13 +125,14 @@ func (s *Service) processConnection(ctx context.Context, item *outboxItem) error
 		return err
 	}
 	url := strings.TrimRight(s.cfg.PublicURL, "/") + "/clouds/accounts/" + payload.ConnectionID
+	kind, title, body, subject, mail := connectionCopy(payload, url)
 	if !item.webhookDone {
 		canonical, err := acceptance.CanonicalJSON(item.wire)
 		if err != nil {
 			return err
 		}
 		sum := sha256.Sum256(canonical)
-		_, err = s.relay.SendReliable(ctx, acceptance.Request{Producer: "loomplane", InstallationID: s.cfg.Identity.AppID, SourceKey: lapseSourceKey(item), SourceFingerprint: hex.EncodeToString(sum[:]), AppID: s.cfg.Identity.AppID, OrgID: item.org, TenantID: item.org, Type: connectionSignInNeeded, Data: canonical})
+		_, err = s.relay.SendReliable(ctx, acceptance.Request{Producer: "loomplane", InstallationID: s.cfg.Identity.AppID, SourceKey: lapseSourceKey(item), SourceFingerprint: hex.EncodeToString(sum[:]), AppID: s.cfg.Identity.AppID, OrgID: item.org, TenantID: item.org, Type: kind, Data: canonical})
 		if err != nil {
 			return err
 		}
@@ -134,7 +157,7 @@ func (s *Service) processConnection(ctx context.Context, item *outboxItem) error
 		}
 		_, err = s.mailStore.GetNotification(ctx, inboxID)
 		if errors.Is(err, heraldstore.ErrNotificationNotFound) {
-			err = s.mailStore.CreateNotification(ctx, &inbox.Notification{ID: inboxID, AppID: s.cfg.Identity.AppID, UserID: item.user, Type: connectionSignInNeeded, Title: payload.Name + " needs you to sign in again", Body: "The sign-in for this cloud account lapsed. Sign in again so deployments to it can continue.", ActionURL: url, CreatedAt: item.created, Metadata: map[string]string{"org_id": item.org, "kind": kindConnection, "connection_id": payload.ConnectionID, "status": payload.Status, "outbox_id": item.id}})
+			err = s.mailStore.CreateNotification(ctx, &inbox.Notification{ID: inboxID, AppID: s.cfg.Identity.AppID, UserID: item.user, Type: kind, Title: title, Body: body, ActionURL: url, CreatedAt: item.created, Metadata: map[string]string{"org_id": item.org, "kind": kindConnection, "connection_id": payload.ConnectionID, "status": payload.Status, "outbox_id": item.id}})
 		}
 		if err != nil {
 			return err
@@ -154,12 +177,30 @@ func (s *Service) processConnection(ctx context.Context, item *outboxItem) error
 		_, err = s.pg.Exec(ctx, `UPDATE loomplane_notification_outbox SET email_state='skipped' WHERE id=$1 AND lease_owner=$2`, item.id, item.owner)
 		return err
 	}
-	res, err := s.herald.Send(ctx, &herald.SendRequest{AppID: s.cfg.Identity.AppID, Channel: "email", To: []string{email}, Subject: "Loomplane: sign in to " + payload.Name + " again", Body: payload.Name + " needs you to sign in again.\n\nSign in: " + url})
+	res, err := s.herald.Send(ctx, &herald.SendRequest{AppID: s.cfg.Identity.AppID, Channel: "email", To: []string{email}, Subject: subject, Body: mail})
 	if deliveryErr := deliveryError(res, err); deliveryErr != nil {
 		return deliveryErr
 	}
 	_, err = s.pg.Exec(ctx, `UPDATE loomplane_notification_outbox SET email_state='sent' WHERE id=$1 AND lease_owner=$2`, item.id, item.owner)
 	return err
+}
+
+// connectionCopy is the event type and the words of a connection notice: a
+// lapsed sign-in, or a keyless trust the cloud refused.
+func connectionCopy(p ConnectionPayload, url string) (kind, title, body, subject, mail string) {
+	if p.Status == noticeFailed {
+		cloud := connections.CloudTitle(p.Cloud)
+		return connectionKeylessRefused,
+			p.Name + " lost its keyless access to " + cloud,
+			cloud + " no longer trusts Loomplane for this connection. Check the trust you set up there, then check the connection again.",
+			"Loomplane: " + p.Name + " can't reach " + cloud,
+			p.Name + " lost its keyless access to " + cloud + ".\n\nCheck the connection: " + url
+	}
+	return connectionSignInNeeded,
+		p.Name + " needs you to sign in again",
+		"The sign-in for this cloud account lapsed. Sign in again so deployments to it can continue.",
+		"Loomplane: sign in to " + p.Name + " again",
+		p.Name + " needs you to sign in again.\n\nSign in: " + url
 }
 
 // lapseSourceKey names the lapse, not the recipient. Every recipient's row

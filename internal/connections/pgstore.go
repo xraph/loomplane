@@ -104,6 +104,13 @@ func (s *PgStore) OAuthConnections(ctx context.Context) ([]*Connection, error) {
 		WHERE method = $1 AND status <> $2 ORDER BY org_id, id`, MethodOAuth, StatusSignInNeeded)
 }
 
+// KeylessConnections returns every organization's keyless connections that
+// are ready or incomplete, so one the cloud already refused is left alone.
+func (s *PgStore) KeylessConnections(ctx context.Context) ([]*Connection, error) {
+	return s.list(ctx, `SELECT `+columns+` FROM loomplane_cloud_connections
+		WHERE method = $1 AND status = ANY($2) ORDER BY org_id, id`, MethodKeyless, []string{StatusReady, StatusIncomplete})
+}
+
 // LeftSignIns returns signed-in connections to clouds whose signer is no
 // longer a member of the organization, other than those already waiting
 // for someone to sign in again.

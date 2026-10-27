@@ -183,9 +183,10 @@ func (s *Service) MarkRead(ctx context.Context, p security.Principal, value stri
 
 // webhookEventTypes is every event a webhook endpoint hears. Endpoints made
 // before connection.sign_in_needed existed get it from the
-// cloud_sign_in_webhooks migration.
+// cloud_sign_in_webhooks migration, and connection.keyless_refused from the
+// keyless one.
 func webhookEventTypes() []string {
-	return []string{"deployment.succeeded", "deployment.failed", connectionSignInNeeded}
+	return []string{"deployment.succeeded", "deployment.failed", connectionSignInNeeded, connectionKeylessRefused}
 }
 
 func publicEndpoint(ep *endpoint.Endpoint) WebhookEndpoint {

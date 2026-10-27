@@ -63,6 +63,9 @@ type Service struct {
 	// issuer, nothing keyless works.
 	Keyless       KeylessIssuer
 	KeylessClouds map[string]KeylessCloud
+	// Rotate turns over the issuer's signing keys. The scheduled job calls
+	// it. It may be nil.
+	Rotate func(context.Context) error
 
 	// grants renews sign-ins. It's nil when the store can't lock a
 	// connection, and then nothing is renewed.

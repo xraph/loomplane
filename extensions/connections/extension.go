@@ -154,8 +154,12 @@ func (e *Extension) Register(fapp forge.App) error {
 	}
 	// Lapsed only queues outbox rows. The drain loop sends them.
 	e.svc.Lapsed = func(ctx context.Context, conn *connections.Connection) {
-		if err := mail.ConnectionLapsed(ctx, conn.OrgID, conn.ID, conn.Name, conn.Cloud, conn.CreatedBy, time.Now()); err != nil {
-			log.Warn("queue the sign-in lapse notice", forge.F("connection", conn.ID), forge.F("error", err.Error()))
+		notify, what := mail.ConnectionLapsed, "sign-in lapse"
+		if conn.Method == connections.MethodKeyless {
+			notify, what = mail.ConnectionKeylessRefused, "keyless refusal"
+		}
+		if err := notify(ctx, conn.OrgID, conn.ID, conn.Name, conn.Cloud, conn.CreatedBy, time.Now()); err != nil {
+			log.Warn("queue the "+what+" notice", forge.F("connection", conn.ID), forge.F("error", err.Error()))
 		}
 	}
 	e.svc.Telemetry = telemetry.New(fapp.Metrics())

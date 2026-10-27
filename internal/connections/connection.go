@@ -38,6 +38,9 @@ func cloudTitle(cloud string) string {
 	return cloud
 }
 
+// CloudTitle is what a message to people calls cloud.
+func CloudTitle(cloud string) string { return cloudTitle(cloud) }
+
 // Methods say how a connection got its credential: someone pasted it, or
 // signed in to the cloud. A keyless connection has none: the cloud trusts
 // Loomplane's own tokens, and Vault holds nothing for it.

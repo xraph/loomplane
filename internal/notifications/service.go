@@ -109,7 +109,10 @@ func (s *Service) registerEventTypes(ctx context.Context) error {
 			return err
 		}
 	}
-	_, err := s.relay.RegisterEventType(ctx, catalog.WebhookDefinition{Name: connectionSignInNeeded, Description: "A cloud connection needs signing in again", Group: "connection", Version: "2026-10-25"})
+	if _, err := s.relay.RegisterEventType(ctx, catalog.WebhookDefinition{Name: connectionSignInNeeded, Description: "A cloud connection needs signing in again", Group: "connection", Version: "2026-10-25"}); err != nil {
+		return err
+	}
+	_, err := s.relay.RegisterEventType(ctx, catalog.WebhookDefinition{Name: connectionKeylessRefused, Description: "A cloud no longer trusts Loomplane for a keyless connection", Group: "connection", Version: "2026-11-16"})
 	return err
 }
 func (s *Service) Run(ctx context.Context) error {

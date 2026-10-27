@@ -188,3 +188,21 @@ func TestRenewalWaitsForAReplacement(t *testing.T) {
 		t.Fatalf("lock after replacement: %v", err)
 	}
 }
+
+func TestKeylessConnectionsListsOnlyThoseNotYetRefused(t *testing.T) {
+	f := newRefreshFixture(t)
+	now := time.Now().UTC()
+	for _, c := range []*connections.Connection{
+		{ID: "conn_k1", OrgID: "org_1", Cloud: connections.AWS, Name: "Ready", Method: connections.MethodKeyless, Status: connections.StatusReady, CreatedAt: now, UpdatedAt: now},
+		{ID: "conn_k2", OrgID: "org_2", Cloud: connections.GCP, Name: "Incomplete", Method: connections.MethodKeyless, Status: connections.StatusIncomplete, CreatedAt: now, UpdatedAt: now},
+		{ID: "conn_k3", OrgID: "org_1", Cloud: connections.GCP, Name: "Refused", Method: connections.MethodKeyless, Status: connections.StatusFailed, CreatedAt: now, UpdatedAt: now},
+	} {
+		if err := f.store.CreateConnection(t.Context(), c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	list, err := f.store.KeylessConnections(t.Context())
+	if err != nil || len(list) != 2 || list[0].ID != "conn_k1" || list[1].ID != "conn_k2" {
+		t.Fatalf("listed %v %v", list, err)
+	}
+}
