@@ -24,8 +24,9 @@ import (
 	"github.com/xraph/loomplane/pkg/provider/sdk"
 )
 
-// GCPChecker checks Google Cloud service account keys, and the
-// authorized_user keys a Google sign-in hands out.
+// GCPChecker checks Google Cloud service account keys, the
+// authorized_user keys a Google sign-in hands out, and keyless handouts
+// that impersonate a service account.
 type GCPChecker struct{ Client *gcp.Client }
 
 // IsGrant implements GrantChecker: an authorized_user key only ever comes
@@ -46,8 +47,13 @@ func (g GCPChecker) Parse(credential []byte, settings map[string]string) (Check,
 		return Check{}, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	details := map[string]string{"project_id": key.ProjectID, "service_account": key.ClientEmail}
-	if key.User {
+	switch {
+	case key.User:
 		details = map[string]string{"project_id": key.ProjectID, "signed_in_as": key.ClientEmail}
+	case key.Keyless:
+		// A handout is built from these details, so the provider stays in
+		// them.
+		details["workload_provider"] = key.WorkloadProvider
 	}
 	if table := strings.TrimSpace(settings[gcp.BillingExportSetting]); table != "" {
 		if billingErr := gcp.CheckBillingTable(table); billingErr != nil {
@@ -66,7 +72,9 @@ func (g GCPChecker) Parse(credential []byte, settings map[string]string) (Check,
 }
 
 // Check implements Checker: it asks Google which of the permissions a
-// deployment needs the service account, or the person, holds.
+// deployment needs the service account, or the person, holds. A keyless
+// handout first trades a minted token for the service account's, which a
+// trust that isn't set up refuses.
 func (g GCPChecker) Check(ctx context.Context, credential []byte, settings map[string]string) (Check, error) {
 	c, err := g.Parse(credential, settings)
 	if err != nil {
