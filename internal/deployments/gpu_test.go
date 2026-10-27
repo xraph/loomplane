@@ -1,6 +1,8 @@
 package deployments
 
 import (
+	"errors"
+	"slices"
 	"testing"
 
 	cpprovider "github.com/xraph/ctrlplane/provider"
@@ -9,6 +11,7 @@ import (
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/recipes"
+	"github.com/xraph/loomplane/internal/recipes/recipestest"
 	"github.com/xraph/loomplane/pkg/manifest"
 	"github.com/xraph/loomplane/pkg/provider"
 )
@@ -88,6 +91,77 @@ func TestOwnedSpecCarriesComponentGPUAndWeightCache(t *testing.T) {
 			}
 			if sp.Resources.GPU != "nvidia-l4:2" || sp.Resources.MemoryMB != 16384 {
 				t.Fatalf("component resources: %+v", sp.Resources)
+			}
+		})
+	}
+}
+
+// gpuComponentJob is the plan's action for one of llm's gpusample
+// components, carrying the GPU placement planning settled for it.
+func (f *componentFixture) gpuComponentJob(t *testing.T, name string, gpu *provider.GPUPlacement) *Job {
+	t.Helper()
+	composition, err := f.kinds.Resolve("gpusample", "1", "amd64", "server")
+	if err != nil {
+		t.Fatal(err)
+	}
+	i := slices.IndexFunc(composition.Components, func(c recipes.ResolvedComponent) bool { return c.Name == name })
+	if i < 0 {
+		t.Fatalf("no component %s", name)
+	}
+	c := composition.Components[i]
+	cfg := &planning.ResourceConfig{
+		Provider: "server", Target: "conn", TargetSettings: map[string]string{"architecture": "amd64"}, Kind: "gpusample", Version: "1",
+		Component: &planning.ComponentConfig{Kind: "gpusample", Resource: "llm", Revision: composition.Revision, Component: c, Protection: c.Protection, GPU: gpu},
+	}
+	return f.job(planning.ComponentActionName("llm", name), cfg)
+}
+
+func l4(count int) *provider.GPUPlacement {
+	return &provider.GPUPlacement{GPURequest: provider.GPURequest{Kind: "nvidia-l4", Count: count}}
+}
+
+func TestComponentWithAGPUPlacementApplies(t *testing.T) {
+	f := newComponentFixture(t, recipestest.Registry(t))
+	out, err := f.target.Apply(t.Context(), f.gpuComponentJob(t, "server", l4(2)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec, labels, _ := f.started(t, out)
+	if labels[owned.LabelGPU] != `{"kind":"nvidia-l4","count":2}` || spec.Resources.GPU != "nvidia-l4:2" {
+		t.Fatalf("applied GPU: %v %+v", labels, spec.Resources)
+	}
+
+	// The CPU sidecar beside it applies without one.
+	if _, err := f.target.Apply(t.Context(), f.gpuComponentJob(t, "sidecar", nil)); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestComponentGPUPlacementMustMatchTheRecipe(t *testing.T) {
+	fixed := recipestest.GPUSample()
+	fixed.Components[0].Resources.GPU = &recipes.GPU{Kind: "nvidia-l4", Count: 2}
+	fixedKinds := recipes.NewRegistry()
+	if err := fixedKinds.Register(fixed); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name      string
+		kinds     *recipes.Registry
+		component string
+		gpu       *provider.GPUPlacement
+	}{
+		{"placement on a CPU component", recipestest.Registry(t), "sidecar", l4(1)},
+		{"GPU component without a placement", recipestest.Registry(t), "server", nil},
+		{"fewer GPUs than the recipe asks", fixedKinds, "server", l4(1)},
+		{"another kind than the recipe fixes", fixedKinds, "server", &provider.GPUPlacement{GPURequest: provider.GPURequest{Kind: "nvidia-a100-80gb", Count: 2}}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newComponentFixture(t, tc.kinds)
+			if _, err := f.target.Apply(t.Context(), f.gpuComponentJob(t, tc.component, tc.gpu)); !errors.Is(err, errRecipeChanged) {
+				t.Fatalf("got %v, want the recipe changed", err)
+			}
+			if f.instances.creates != 0 {
+				t.Fatal("a refused component created an instance")
 			}
 		})
 	}

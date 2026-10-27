@@ -3,83 +3,135 @@ package deployments
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/xraph/grove/driver"
 
+	"github.com/xraph/loomplane/internal/cloudprofiles"
+	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/planning"
 )
 
-// Direct execution holds the same daemon lock as pool enrollment through its
-// external effects, including connections that alias an adopted daemon.
-// Pooled actions never take it, GPU or not. Their pool reservation admits
-// them, and this transaction keeps a share lock on the connection row open
-// through the run, while a pooled run takes the organization lock in later
-// transactions. Pool saves, cloud sync and plan approval take the
-// organization lock first and the connection rows after, so a pooled action
-// holding this lock could wait on them while they wait on it. Two GPU
-// applies on one daemon are kept apart by the server runtime's own
-// gpu-devices lock instead (server.GPULocks).
+// directServerAdmission admits a direct server action. It returns the
+// transaction that holds its daemon until the run ends, and the docker_id it
+// admitted, which run checks against the credential it deploys with.
 //
-// Locking protocol. The admission transaction stays open until Run returns
-// and holds two locks:
+// That transaction holds one lock, direct-apply/<docker_id>, and nothing
+// else. It reads and locks no rows, so the run can take the organization
+// lock inside its effects (MarkWorkloadEffects, PutBinding) without a cycle.
+// Pool saves, cloud sync and plan approval take the organization lock first
+// and the daemon's connection rows and host-admission lock after it. If the
+// run held either of those, one of them could wait on the run while the run
+// waits on its organization lock, and Postgres would never see the cycle
+// because one edge of it is this goroutine. Two direct applies on one
+// daemon still queue on direct-apply. A pool save that would enroll the
+// daemon tries the lock and refuses while it's held, rather than wait for
+// it under the organization lock.
 //
-//   - FOR SHARE on the target connection row. RetireServer and infrastructure
-//     operations take FOR UPDATE on that row and connection edits update it,
-//     so none of them can run while a deployment is admitted, and a
-//     deployment isn't admitted while one of them is in flight.
-//   - The host-admission advisory lock on the daemon identity. It serializes
-//     direct deployments with pool enrollment and plan acceptance on the same
-//     daemon, whichever connection reaches it.
+// The admission check runs in a short transaction of its own once the run
+// holds the daemon. It takes the connection row and host-admission, like
+// any approval or pool save, and so waits for whichever of those is in
+// flight to commit before the run checks pool membership.
+//
+// Who waits for direct-apply and who refuses. Anything that takes the
+// organization lock before it reaches the daemon mustn't wait for it.
+// SavePool and infrastructure operations on a server's own connection
+// (adoption, disconnect) try it under that lock and return ErrBusy.
+// RetireServer waits for it, but first, before the organization lock, so
+// a retirement still can't start while a deployment is admitted and a
+// deployment can't be admitted while a retirement is in flight. Connection
+// edits don't wait at all, so run refuses if the credential it reads after
+// admission names a different daemon.
 //
 // Run writes step progress in other transactions while admission is open.
 // Until the plan has a succeeded deployment, each write re-syncs the plan's
 // connection uses, and loomplane_retiring_server_use runs for every inserted
-// use. That trigger takes FOR SHARE as well (migration 20261030000300). It
-// used to take FOR UPDATE, which waited on this transaction's own share lock
-// and hung every first deployment of a plan with a direct server action.
-// Share locks don't conflict, and Postgres grants a share request next to an
-// existing share lock without queueing it behind a waiting FOR UPDATE, so a
-// retirement waiting for this admission can't stall the progress writes
-// either. Retirement still serializes with connection uses: its FOR UPDATE
-// conflicts with the trigger's FOR SHARE, so it either sees the new use and
-// refuses, or commits first and the trigger sees the retiring server and
-// refuses the use. Keep the row lock here: retirement doesn't take the
-// advisory lock, so the row lock is what keeps it out of an admitted
-// deployment.
-func (r *Runner) directServerAdmission(ctx context.Context, p *planning.Plan, a planning.Action) (driver.Tx, error) {
+// use and takes FOR SHARE on the connection row (migration 20261030000300).
+// Nothing in the hold transaction conflicts with that. Retirement still
+// serializes with connection uses: its FOR UPDATE conflicts with the
+// trigger's FOR SHARE, so it either sees the new use and refuses, or
+// commits first and the trigger sees the retiring server and refuses the
+// use.
+//
+// Pooled actions take neither lock, GPU or not. Their pool reservation
+// admits them, and the server runtime's gpu-devices lock keeps two GPU
+// applies on one daemon apart (server.GPULocks).
+func (r *Runner) directServerAdmission(ctx context.Context, p *planning.Plan, a planning.Action) (driver.Tx, string, error) {
 	if !holdsServerAdmission(a) {
-		return nil, nil
+		return nil, "", nil
 	}
 	st, ok := r.store.(*PgStore)
 	if !ok {
-		return nil, nil
-	}
-	tx, err := st.db.BeginTx(ctx, nil)
-	if err != nil {
-		return nil, err
+		return nil, "", nil
 	}
 	connectionID := a.ConnectionID
 	if connectionID == "" {
 		connectionID = p.Connections["server"]
 	}
+	const identityQuery = `SELECT coalesce(details->>'docker_id','') FROM loomplane_cloud_connections WHERE org_id=$1 AND id=$2`
 	var identity string
-	err = tx.QueryRow(ctx, `SELECT coalesce(details->>'docker_id','') FROM loomplane_cloud_connections WHERE org_id=$1 AND id=$2 FOR SHARE`, p.OrgID, connectionID).Scan(&identity)
-	if err == nil && identity == "" {
-		err = errors.New("server identity must be verified before deployment")
+	if err := st.db.QueryRow(ctx, identityQuery, p.OrgID, connectionID).Scan(&identity); err != nil {
+		return nil, "", err
 	}
-	if err == nil {
-		_, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('host-admission/'||$1,0))`, identity)
+	if identity == "" {
+		return nil, "", errors.New("server identity must be verified before deployment")
 	}
+	// Waiting here holds nothing else, so it can be as long as the direct
+	// apply ahead of it takes.
+	hold, err := st.db.BeginTx(ctx, nil)
 	if err != nil {
-		err = errors.Join(err, tx.Rollback())
-		return nil, err
+		return nil, "", err
 	}
-	return tx, nil
+	if _, err = hold.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('direct-apply/'||$1,0))`, identity); err != nil {
+		return nil, "", errors.Join(err, hold.Rollback())
+	}
+	if err = admitDirectServer(ctx, st, p.OrgID, connectionID, identity); err != nil {
+		return nil, "", errors.Join(err, hold.Rollback())
+	}
+	return hold, identity, nil
+}
+
+func admitDirectServer(ctx context.Context, st *PgStore, org, connectionID, identity string) error {
+	tx, err := st.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }() //nolint:errcheck // a no-op once committed
+	if boundErr := cloudprofiles.BoundLockWaits(ctx, tx); boundErr != nil {
+		return boundErr
+	}
+	var current string
+	err = tx.QueryRow(ctx, `SELECT coalesce(details->>'docker_id','') FROM loomplane_cloud_connections WHERE org_id=$1 AND id=$2 FOR SHARE`, org, connectionID).Scan(&current)
+	if err != nil {
+		return cloudprofiles.LockWaitError(err, "the server connection")
+	}
+	if current != identity {
+		return errors.New("server identity changed during admission; deploy again")
+	}
+	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('host-admission/'||$1,0))`, identity); err != nil {
+		return cloudprofiles.LockWaitError(err, "the server's admission lock")
+	}
+	return tx.Commit()
 }
 
 // holdsServerAdmission reports whether a server action holds its daemon's
-// host-admission lock through its effects. Only direct creates, replaces and
+// direct-apply lock through its effects. Only direct creates, replaces and
 // updates do.
 func holdsServerAdmission(a planning.Action) bool {
 	return a.Provider == "server" && !poolAction(a) && a.Op != planning.Delete && a.Op != planning.Keep
+}
+
+// admittedDaemonKey carries the docker_id a direct server action was
+// admitted on.
+type admittedDaemonKey struct{}
+
+// checkAdmittedDaemon refuses a credential that no longer reaches the daemon
+// the action was admitted on. The connection row isn't locked through the
+// run, so it can be re-verified against another daemon after admission.
+func checkAdmittedDaemon(ctx context.Context, a planning.Action, conn *connections.Connection) error {
+	admitted, ok := ctx.Value(admittedDaemonKey{}).(string)
+	if !ok || conn == nil || conn.Details["docker_id"] == admitted {
+		return nil
+	}
+	return fmt.Errorf("the connection for %s now reaches a different server than the one it was admitted on; deploy again", a.Name)
 }

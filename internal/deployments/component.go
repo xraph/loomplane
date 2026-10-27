@@ -201,11 +201,26 @@ func (e *OwnedTarget) checkComponent(cfg *planning.ResourceConfig) (recipes.Kind
 		return recipes.Kind{}, errRecipeChanged
 	}
 	resolved := composition.Components[i]
-	expected := planning.ComponentConfig{Kind: composition.Kind, Resource: c.Resource, Revision: composition.Revision, Component: resolved, Dependencies: c.Dependencies, Protection: planning.ComponentProtection(resolved.Component)}
+	if !gpuFits(resolved.Resources.GPU, c.GPU) {
+		return recipes.Kind{}, errRecipeChanged
+	}
+	expected := planning.ComponentConfig{Kind: composition.Kind, Resource: c.Resource, Revision: composition.Revision, Component: resolved, Dependencies: c.Dependencies, Protection: planning.ComponentProtection(resolved.Component), GPU: c.GPU}
 	if !sameJSON(expected, *c) {
 		return recipes.Kind{}, errRecipeChanged
 	}
 	return kind, nil
+}
+
+// gpuFits reports whether a plan's GPU placement is one planning could
+// have settled from the recipe's request: a placement only when the recipe
+// asks for a GPU, of the kind it fixes, and at least as many as it asks
+// for. The resource's gpu setting chooses the rest, so the placement
+// itself comes from the plan.
+func gpuFits(want *recipes.GPU, placed *provider.GPUPlacement) bool {
+	if want == nil || placed == nil {
+		return want == nil && placed == nil
+	}
+	return placed.Kind != "" && (want.Kind == "" || placed.Kind == want.Kind) && placed.Count >= want.Count
 }
 
 // applyComponent runs one component of a composed resource. A process runs
