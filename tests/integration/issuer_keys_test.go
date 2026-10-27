@@ -244,7 +244,7 @@ func TestKeylessSchema(t *testing.T) {
 			keylessMigration = m
 		}
 	}
-	if keylessMigration == nil || keylessMigration.Version != "20261116000100" {
+	if keylessMigration == nil || keylessMigration.Version != "20261117000100" {
 		t.Fatalf("keyless migration: %+v", keylessMigration)
 	}
 	if _, err = conn.Exec(ctx, `INSERT INTO relay_endpoints (id, tenant_id, url, event_types) VALUES
