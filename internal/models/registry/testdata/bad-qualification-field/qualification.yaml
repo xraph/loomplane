@@ -1,6 +1,7 @@
 results:
   - entry: acme/Small-1B-Instruct
     quantization: bf16
+    revision: 0123456789abcdef0123456789abcdef01234567
     gpu_kind: nvidia-l4
     gpus: 1
     max_model_len: 4096

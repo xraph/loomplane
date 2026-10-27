@@ -47,6 +47,8 @@ type Need struct {
 type shape struct {
 	weights       float64
 	kvPerToken    float64
+	kvHeads       int
+	latent        bool // multi-head latent attention
 	pooling       bool
 	extraOverhead float64 // vision and speech-to-text entries carry an encoder
 	contextLength int
@@ -61,6 +63,8 @@ func shapeOf(e Entry, q Quantization) shape {
 		contextLength: e.ContextLength,
 		ctxMin:        min(e.ContextLength, contextFloor),
 		ctxCap:        min(e.ContextLength, contextCeiling),
+		kvHeads:       e.Architecture.KVHeads,
+		latent:        e.Architecture.KVLoraRank > 0,
 	}
 	if !s.pooling {
 		s.kvPerToken = kvBytesPerToken(e.Architecture)
@@ -99,9 +103,25 @@ func (s shape) overhead(n int) float64 {
 	return base + 0.08*s.weights/float64(n) + s.extraOverhead
 }
 
-// vllmNeed is the memory one of n GPUs needs to serve ctx tokens on vLLM.
+// kvShards is how many ways tensor parallelism splits the KV cache over n
+// GPUs. vLLM gives each GPU whole KV heads, so with fewer KV heads than GPUs
+// each head is copied and the cache splits only kv_heads ways. Multi-head
+// latent attention keeps one latent cache, copied on every GPU.
+func (s shape) kvShards(n int) int {
+	if s.latent || s.kvHeads < 1 {
+		return 1
+	}
+	return min(n, s.kvHeads)
+}
+
+// vllmNeed is the memory one of n GPUs needs to serve ctx tokens on vLLM:
+//
+//	W/n + kvpt*ctx/2^30/min(n, kv_heads) + O   (kvpt*ctx/2^30 undivided for MLA)
+//
+// With n = 1 that's W + kv + O. Dividing the whole KV cache by n would
+// undercount it whenever it's copied.
 func (s shape) vllmNeed(n, ctx int) float64 {
-	return (s.weights+s.kvGiB(ctx))/float64(n) + s.overhead(n)
+	return s.weights/float64(n) + s.kvGiB(ctx)/float64(s.kvShards(n)) + s.overhead(n)
 }
 
 // llamaCPPGPUNeed is the memory llama.cpp needs on one GPU to serve ctx tokens.
@@ -189,7 +209,7 @@ func estimateVLLM(e Entry, q Quantization, kind string, count int) attempt {
 		a.memory = true
 		return a
 	}
-	perToken := s.kvPerToken / gibBytes / float64(count)
+	perToken := s.kvPerToken / gibBytes / float64(s.kvShards(count))
 	ctx := s.servedContext(s.weights/float64(count)+s.overhead(count), perToken, usable)
 	a.need = Need{PerGPUGiB: s.vllmNeed(count, ctx), MaxModelLen: ctx, GPUs: count}
 	a.ok = true

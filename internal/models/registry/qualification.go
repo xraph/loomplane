@@ -40,6 +40,7 @@ const (
 type Result struct {
 	Entry         string    `yaml:"entry" json:"entry"`
 	Quantization  string    `yaml:"quantization" json:"quantization"`
+	Revision      string    `yaml:"revision" json:"revision"` // the weights revision deployed, from Quantization.WeightsRepo
 	GPUKind       string    `yaml:"gpu_kind" json:"gpu_kind"` // a P1 kind ID, or "cpu"
 	GPUs          int       `yaml:"gpus" json:"gpus"`
 	MaxModelLen   int       `yaml:"max_model_len" json:"max_model_len"`
@@ -82,10 +83,13 @@ func (r *Registry) Results() []Result {
 // equals current[q.Engine]. A failed result makes the fit StatusFailed and
 // never fitting, whatever the estimate says.
 //
-// kind is a P1 GPU kind, or CPUKind for TEI and llama.cpp on CPU. A passed
-// result only counts when it ran on the GPU count the estimate offers and
-// served at least the estimated context, so the fit shown is the one a run
-// proved. An entry that isn't in r gets StatusUntested when it fits.
+// kind is a P1 GPU kind, or CPUKind for TEI and llama.cpp on CPU. A result
+// only counts when it deployed the weights revision q runs today, so a
+// re-pinned entry starts over as estimated. When the estimate fits, the
+// newest result on the offered GPU count decides, skipping passed runs at a
+// shorter context than the one served: they prove nothing about it, and a
+// failed run behind them still wins. An entry that isn't in r gets
+// StatusUntested when it fits.
 func (r *Registry) FitOn(e Entry, q Quantization, kind string, maxCount int, current map[Engine]string) Fit {
 	var need Need
 	var reason string
@@ -107,17 +111,18 @@ func (r *Registry) FitOn(e Entry, q Quantization, kind string, maxCount int, cur
 	}
 
 	version := current[q.Engine]
+	_, revision := q.WeightsRepo(e)
 	var newest *Result
 	for i := range r.results {
 		res := &r.results[i]
-		if version == "" || res.Entry != e.ID || res.Quantization != q.ID || res.GPUKind != kind ||
+		if version == "" || res.Entry != e.ID || res.Quantization != q.ID || res.Revision != revision || res.GPUKind != kind ||
 			res.Engine != q.Engine || res.EngineVersion != version {
 			continue
 		}
 		// When it fits, only a run on the offered GPU count says anything
 		// about this fit. When it doesn't, a failed run on any count the
 		// target has explains it better than the estimate does.
-		if ok && res.GPUs != need.GPUs {
+		if ok && (res.GPUs != need.GPUs || (res.Outcome == OutcomePassed && res.MaxModelLen < need.MaxModelLen)) {
 			continue
 		}
 		if !ok && (res.Outcome != OutcomeFailed || (kind != CPUKind && res.GPUs > maxCount)) {
@@ -134,7 +139,7 @@ func (r *Registry) FitOn(e Entry, q Quantization, kind string, maxCount int, cur
 		fit.Status, fit.Result, fit.Reason = StatusFailed, &res, failedReason(res)
 	case !ok:
 		fit.Status, fit.Reason = StatusNoFit, reason
-	case newest != nil && newest.MaxModelLen >= need.MaxModelLen:
+	case newest != nil:
 		res := *newest
 		fit.Status, fit.Result = StatusTested, &res
 	default:
@@ -195,6 +200,9 @@ func resultProblems(r *Registry, res Result) []string {
 		out = append(out, "the entry has no such quantization")
 	} else if q.Engine != res.Engine {
 		out = append(out, fmt.Sprintf("engine %q, but the quantization runs on %s", res.Engine, q.Engine))
+	}
+	if !revisionPattern.MatchString(res.Revision) {
+		out = append(out, fmt.Sprintf("revision %q isn't a 40-character commit SHA", res.Revision))
 	}
 	if res.GPUKind == CPUKind {
 		if res.GPUs != 0 {

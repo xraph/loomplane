@@ -20,3 +20,27 @@ results:
     outcome: maybe
     detail: ""
     run: ""
+  - entry: acme/Small-1B-Instruct
+    quantization: fp8
+    revision: 0123456789abcdef0123456789abcdef01234567
+    gpu_kind: nvidia-l4
+    gpus: 1
+    max_model_len: 4096
+    engine: vllm
+    engine_version: 0.31.0
+    outcome: passed
+    detail: ""
+    ran_at: 2026-11-03T06:12:00Z
+    run: ""
+  - entry: acme/Embed-Small
+    quantization: native
+    revision: fedcba9876543210fedcba9876543210fedcba98
+    gpu_kind: cpu
+    gpus: 1
+    max_model_len: 512
+    engine: tei
+    engine_version: 1.8.2
+    outcome: passed
+    detail: ""
+    ran_at: 2026-11-03T06:12:00Z
+    run: ""

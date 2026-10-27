@@ -404,7 +404,7 @@ func fitRegistry(e Entry, results ...Result) *Registry {
 
 func l4Result(e Entry, version, outcome, detail string, ranAt time.Time) Result {
 	return Result{
-		Entry: e.ID, Quantization: "bf16", GPUKind: "nvidia-l4", GPUs: 1, MaxModelLen: 22528,
+		Entry: e.ID, Quantization: "bf16", Revision: e.Revision, GPUKind: "nvidia-l4", GPUs: 1, MaxModelLen: 22528,
 		Engine: EngineVLLM, EngineVersion: version, Outcome: outcome, Detail: detail, RanAt: ranAt,
 		Run: "https://github.com/xraph/loomplane/actions/runs/1",
 	}
@@ -443,6 +443,33 @@ func TestFitOnUsesOnlyCurrentEngineResults(t *testing.T) {
 	laterFail.RanAt = day.Add(24 * time.Hour)
 	if fit := fitRegistry(e, laterFail, passed).FitOn(e, q, "nvidia-l4", 1, current); fit.Status != StatusFailed {
 		t.Errorf("failed after passed: %+v", fit)
+	}
+
+	// A run on the weights before a re-pin proves nothing about today's.
+	repinned := e
+	repinned.Revision = "89abcdef0123456789abcdef0123456789abcdef"
+	if fit := fitRegistry(repinned, passed).FitOn(repinned, q, "nvidia-l4", 1, current); fit.Status != StatusEstimated || fit.Result != nil {
+		t.Errorf("old revision: %+v", fit)
+	}
+	matching := passed
+	matching.Revision = repinned.Revision
+	if fit := fitRegistry(repinned, passed, matching).FitOn(repinned, q, "nvidia-l4", 1, current); fit.Status != StatusTested || fit.Result.Revision != repinned.Revision {
+		t.Errorf("matching revision: %+v", fit)
+	}
+
+	// A failed run at or below the served context outranks a newer pass at
+	// a shorter one, which proves nothing about the context served.
+	failedShorter := failed
+	failedShorter.MaxModelLen = 16384
+	passedShort := passed
+	passedShort.MaxModelLen = 8192
+	passedShort.RanAt = day.Add(24 * time.Hour)
+	if fit := fitRegistry(e, failedShorter, passedShort).FitOn(e, q, "nvidia-l4", 1, current); fit.Status != StatusFailed || fit.Result.MaxModelLen != 16384 {
+		t.Errorf("failed below served context, newer short pass: %+v", fit)
+	}
+	// A newer pass that covers the served context still wins.
+	if fit := fitRegistry(e, failedShorter, later).FitOn(e, q, "nvidia-l4", 1, current); fit.Status != StatusTested {
+		t.Errorf("failed, then a covering pass: %+v", fit)
 	}
 
 	// No current version for the engine: nothing counts.
@@ -505,7 +532,7 @@ func TestFitOnCPU(t *testing.T) {
 	e, q := cpuEntry(EngineTEI, 1<<30)
 	current := map[Engine]string{EngineTEI: "1.8.2"}
 	res := Result{
-		Entry: e.ID, Quantization: q.ID, GPUKind: CPUKind, MaxModelLen: 512, Engine: EngineTEI,
+		Entry: e.ID, Quantization: q.ID, Revision: e.Revision, GPUKind: CPUKind, MaxModelLen: 512, Engine: EngineTEI,
 		EngineVersion: "1.8.2", Outcome: OutcomePassed, RanAt: time.Date(2026, 11, 3, 6, 0, 0, 0, time.UTC),
 	}
 	fit := fitRegistry(e, res).FitOn(e, q, CPUKind, 0, current)
@@ -518,6 +545,57 @@ func TestFitOnCPU(t *testing.T) {
 	vllm := llama8B()
 	if fit := fitRegistry(vllm).FitOn(vllm, vllm.Quantizations[0], CPUKind, 0, current); fit.Status != StatusNoFit {
 		t.Errorf("vllm on cpu: %+v", fit)
+	}
+}
+
+func TestFitOnUsesTheQuantizationsOwnRevision(t *testing.T) {
+	e, q := cpuEntry(EngineLlamaCPP, q4Bytes())
+	q.Repo = "someone/Model-8B-GGUF"
+	q.Revision = "1111111111222222222233333333334444444444"
+	e.Quantizations = []Quantization{q}
+	current := map[Engine]string{EngineLlamaCPP: "b6000"}
+	res := Result{
+		Entry: e.ID, Quantization: q.ID, Revision: e.Revision, GPUKind: CPUKind, MaxModelLen: 8192,
+		Engine: EngineLlamaCPP, EngineVersion: "b6000", Outcome: OutcomePassed,
+		RanAt: time.Date(2026, 11, 3, 6, 0, 0, 0, time.UTC),
+	}
+	if fit := fitRegistry(e, res).FitOn(e, q, CPUKind, 0, current); fit.Status != StatusEstimated {
+		t.Errorf("entry revision on a GGUF repo: %+v", fit)
+	}
+	res.Revision = q.Revision
+	if fit := fitRegistry(e, res).FitOn(e, q, CPUKind, 0, current); fit.Status != StatusTested {
+		t.Errorf("GGUF repo revision: %+v", fit)
+	}
+}
+
+func TestKVCacheSplitsOnlyOverKVHeads(t *testing.T) {
+	// 2 KV heads on 8 GPUs: each GPU holds a copy of one head, so the KV
+	// cache splits two ways, not eight. kvpt = 2 x 32 x 2 x 128 x 2 = 32768
+	// bytes, half a GiB per 32768 tokens on each GPU.
+	e := fixtureEntry(148<<30, Architecture{Layers: 32, AttentionHeads: 64, KVHeads: 2, HeadDim: 128}, 131072, TaskChat)
+	q := e.Quantizations[0]
+	need, reason, ok := Estimate(e, q, "nvidia-l4", 8)
+	if !ok {
+		t.Fatalf("doesn't fit 8 L4s: %s", reason)
+	}
+	// Fixed per GPU: 148/8 + 1.5 + 0.08 x 148/8 = 21.48. Per token: 2^15 / 2^30 / 2.
+	// (21.6 - 21.48) x 65536 = 7864 tokens, rounded down to 7168.
+	if need.MaxModelLen != 7168 {
+		t.Errorf("context %d, want 7168", need.MaxModelLen)
+	}
+	if want := 21.48 + 7168.0/65536; math.Abs(need.PerGPUGiB-want) > 1e-9 {
+		t.Errorf("per GPU = %v, want %v", need.PerGPUGiB, want)
+	}
+
+	// MLA keeps one latent cache, copied on all 4 GPUs. 30 GiB of weights:
+	// 7.5 + 1.5 + 0.6 = 9.6, plus 32768 x 27 x 576 x 2 / 2^30 = 0.94921875.
+	mla := fixtureEntry(30<<30, Architecture{Layers: 27, AttentionHeads: 16, KVHeads: 16, HeadDim: 192, KVLoraRank: 512, RopeHeadDim: 64}, 163840, TaskChat)
+	need, reason, ok = Estimate(mla, mla.Quantizations[0], "nvidia-l4", 4)
+	if !ok || need.MaxModelLen != 32768 {
+		t.Fatalf("mla on 4 L4s: %+v %s", need, reason)
+	}
+	if want := 9.6 + 0.94921875; math.Abs(need.PerGPUGiB-want) > 1e-9 {
+		t.Errorf("mla per GPU = %v, want %v", need.PerGPUGiB, want)
 	}
 }
 
@@ -577,6 +655,9 @@ func TestLoadReadsQualificationResults(t *testing.T) {
 		`outcome "maybe"`,
 		"ran_at is required",
 		`engine "llamacpp", but the quantization runs on vllm`,
+		"the entry has no such quantization",
+		"a CPU run has gpus 0",
+		`revision "" isn't a 40-character commit SHA`,
 	} {
 		if !strings.Contains(err.Error(), want) {
 			t.Errorf("error doesn't say %q:\n%v", want, err)
