@@ -728,7 +728,7 @@ func TestAKeyRowThatFailsTakesItsPrivateKeyOutOfVault(t *testing.T) {
 func TestARetiredKeyStaysListedWhileVaultWontDeleteIt(t *testing.T) {
 	s, keys, secrets, c := newTestService(t)
 	stored := func(kid string) bool {
-		list, _ := keys.Keys(t.Context()) //nolint:errcheck // memKeys never fails to list
+		list, _ := keys.Keys(t.Context()) // memKeys never fails to list
 		return slices.ContainsFunc(list, func(k Key) bool { return k.KID == kid })
 	}
 	if err := s.Rotate(t.Context()); err != nil {
