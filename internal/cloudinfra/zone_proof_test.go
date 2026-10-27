@@ -174,6 +174,7 @@ func (s *overviewStore) RemoveZone(_ context.Context, org, id string, revision i
 				return ErrConflict
 			}
 			s.zones = append(s.zones[:i], s.zones[i+1:]...)
+			s.removed = append(s.removed, id)
 			return nil
 		}
 	}

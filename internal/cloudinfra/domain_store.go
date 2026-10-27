@@ -27,13 +27,37 @@ func (s *PgStore) DomainProject(ctx context.Context, org, project string) error 
 	return storeError(s.db.QueryRow(ctx, `SELECT id FROM loomplane_projects WHERE org_id=$1 AND id=$2`, org, project).Scan(&found))
 }
 
+// CreateZone stores a new zone. One without a proof of its own is verified
+// through the domain it sits under, so that domain must still be there.
+// The organization lock orders this with RemoveZone: a domain removed after
+// the caller looked fails the create, rather than leaving a zone nothing
+// proves.
 func (s *PgStore) CreateZone(ctx context.Context, zone *Zone) error {
 	raw, err := json.Marshal(zone)
 	if err != nil {
 		return err
 	}
-	_, err = s.db.Exec(ctx, `INSERT INTO loomplane_dns_zones(id,org_id,name,connection_id,revision,body) VALUES($1,$2,$3,$4,$5,$6)`, zone.ID, zone.OrgID, zone.Name, zone.ConnectionID, zone.Revision, raw)
-	return storeError(err)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer rollback(tx)
+	if checkErr := cloudprofiles.LockOrganization(ctx, tx, zone.OrgID); checkErr != nil {
+		return checkErr
+	}
+	if !zone.hasControlProof() && zone.VerifiedAt.IsZero() {
+		ancestors, checkErr := zonesForShare(ctx, tx, zone.OrgID, ancestorNames(zone.Name))
+		if checkErr != nil {
+			return checkErr
+		}
+		if len(ancestors) == 0 {
+			return fmt.Errorf("%w: the domain above %s was just removed, so %s wasn't added. Try again", ErrConflict, zone.Name, zone.Name)
+		}
+	}
+	if _, err = tx.Exec(ctx, `INSERT INTO loomplane_dns_zones(id,org_id,name,connection_id,revision,body) VALUES($1,$2,$3,$4,$5,$6)`, zone.ID, zone.OrgID, zone.Name, zone.ConnectionID, zone.Revision, raw); err != nil {
+		return storeError(err)
+	}
+	return tx.Commit()
 }
 
 func (s *PgStore) Zone(ctx context.Context, org, zoneID string) (*Zone, error) {
@@ -664,9 +688,32 @@ func (s *PgStore) PendingRoutes(ctx context.Context) ([]*RouteOperation, error) 
 	return result, rows.Err()
 }
 
+// RemoveZone deletes one zone at revision. A zone with another zone under
+// it is kept: its subdomains go first. That holds for one added since the
+// caller looked too, since the organization lock orders this with
+// CreateZone.
 func (s *PgStore) RemoveZone(ctx context.Context, org, zoneID string, revision int64) error {
-	err := s.db.QueryRow(ctx, `DELETE FROM loomplane_dns_zones WHERE org_id=$1 AND id=$2 AND revision=$3 RETURNING id`, org, zoneID, revision).Scan(new(string))
-	return storeError(err)
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer rollback(tx)
+	if checkErr := cloudprofiles.LockOrganization(ctx, tx, org); checkErr != nil {
+		return checkErr
+	}
+	var name string
+	var below bool
+	if checkErr := tx.QueryRow(ctx, `SELECT z.name, EXISTS(SELECT 1 FROM loomplane_dns_zones s WHERE s.org_id=z.org_id AND right(s.name, length(z.name)+1)='.'||z.name)
+ FROM loomplane_dns_zones z WHERE z.org_id=$1 AND z.id=$2 AND z.revision=$3`, org, zoneID, revision).Scan(&name, &below); checkErr != nil {
+		return storeError(checkErr)
+	}
+	if below {
+		return fmt.Errorf("%w: a subdomain was added under %s since you looked, so %s was kept", ErrConflict, name, name)
+	}
+	if checkErr := tx.QueryRow(ctx, `DELETE FROM loomplane_dns_zones WHERE org_id=$1 AND id=$2 AND revision=$3 RETURNING id`, org, zoneID, revision).Scan(new(string)); checkErr != nil {
+		return storeError(checkErr)
+	}
+	return tx.Commit()
 }
 
 func (s *PgStore) CompleteHandoff(ctx context.Context, op *RouteOperation) error {

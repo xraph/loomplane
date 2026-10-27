@@ -24,6 +24,8 @@ type overviewStore struct {
 	projects map[string]map[string]string
 	runtimes map[string]map[string]string
 	saves    int
+	// removed is every zone ID RemoveZone deleted, in order.
+	removed []string
 }
 
 func (s *overviewStore) DomainProject(_ context.Context, org, project string) error {

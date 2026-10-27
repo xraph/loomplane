@@ -807,6 +807,86 @@ func TestDomainsSubdomainInheritsVerification(t *testing.T) {
 	}
 }
 
+// domainWithSubdomain adds a verified example.com and app.example.com under
+// it, granted to proj.
+func domainWithSubdomain(t *testing.T, env *domainsRuntime) (domain, app *cloudinfra.Zone) {
+	t.Helper()
+	ctx, svc, p := t.Context(), env.svc, security.Principal{OrgID: "org", UserID: "manager"}
+	domain, err := svc.CreateZone(ctx, p, cloudinfra.ZoneInput{Name: "example.com", Mode: "external", ProjectIDs: []string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	env.resolver.proof = domain.ProofValue
+	if domain, err = svc.VerifyZone(ctx, p, domain.ID); err != nil {
+		t.Fatal(err)
+	}
+	if app, err = svc.CreateZone(ctx, p, cloudinfra.ZoneInput{Name: "app.example.com", Mode: "external", ProjectIDs: []string{"proj"}}); err != nil {
+		t.Fatal(err)
+	}
+	return domain, app
+}
+
+func zoneRows(t *testing.T, env *domainsRuntime) int {
+	t.Helper()
+	var n int
+	if err := env.sql.QueryRow(t.Context(), `SELECT count(*) FROM loomplane_dns_zones WHERE org_id='org'`).Scan(&n); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+func TestDomainsRemoveDomainWithSubdomain(t *testing.T) {
+	env := newDomainsRuntime(t)
+	ctx, svc, p := t.Context(), env.svc, security.Principal{OrgID: "org", UserID: "manager"}
+	domain, app := domainWithSubdomain(t, env)
+	preview, err := svc.PreviewRoute(ctx, p, "proj", cloudinfra.RouteInput{ZoneID: app.ID, CloudID: "cloud", EnvironmentID: "env", Service: "web", Hostname: "web.app.example.com", Port: 8080})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.ApplyRoute(ctx, p, "proj", preview.ID, cloudinfra.ApplyInput{Review: preview.Review}); err != nil {
+		t.Fatal(err)
+	}
+	err = svc.RemoveZone(ctx, p, domain.ID, domain.Revision)
+	var inUse *cloudinfra.ZoneInUseError
+	if !errors.As(err, &inUse) || !errors.Is(err, cloudinfra.ErrConflict) || len(inUse.Hostnames) != 1 || inUse.Hostnames[0].Hostname != "web.app.example.com" || inUse.Hostnames[0].ZoneName != "app.example.com" {
+		t.Fatalf("removed a domain whose subdomain is in use: %v %+v", err, inUse)
+	}
+	if n := zoneRows(t, env); n != 2 {
+		t.Fatal("rows left after a refused removal", n)
+	}
+	if _, err = env.sql.Exec(ctx, `UPDATE loomplane_domain_routes SET status='removed'`); err != nil {
+		t.Fatal(err)
+	}
+	if err = svc.RemoveZone(ctx, p, domain.ID, domain.Revision); err != nil {
+		t.Fatal(err)
+	}
+	if n := zoneRows(t, env); n != 0 {
+		t.Fatal("rows left after removing the domain", n)
+	}
+}
+
+// A subdomain added while its domain is being removed is caught by the
+// store either way round: the domain is kept while a zone sits under it,
+// and a zone that would be verified through a removed domain isn't added.
+func TestDomainsSubdomainRacingItsDomainsRemovalFailsClosed(t *testing.T) {
+	env := newDomainsRuntime(t)
+	ctx, p := t.Context(), security.Principal{OrgID: "org", UserID: "manager"}
+	domain, _ := domainWithSubdomain(t, env)
+	// The removal looked before app was added and now reaches the domain.
+	err := env.store.RemoveZone(ctx, "org", domain.ID, domain.Revision)
+	if !errors.Is(err, cloudinfra.ErrConflict) || zoneRows(t, env) != 2 {
+		t.Fatal("removed a domain with a zone under it", err)
+	}
+	if err = env.svc.RemoveZone(ctx, p, domain.ID, domain.Revision); err != nil {
+		t.Fatal(err)
+	}
+	// The create looked while the domain was still there.
+	late := &cloudinfra.Zone{ID: "zone_late", OrgID: "org", Name: "late.example.com", Mode: "external", ProjectIDs: []string{}, Revision: 1}
+	if err = env.store.CreateZone(ctx, late); !errors.Is(err, cloudinfra.ErrConflict) || zoneRows(t, env) != 0 {
+		t.Fatal("added a zone under a removed domain with no proof of its own", err)
+	}
+}
+
 // A composed catalog component on a Cloud server takes a route on a port its
 // recipe marks routable. Its control ports, engine databases, the composed
 // resource itself, its jobs and a dependency-only kind's component never do.
