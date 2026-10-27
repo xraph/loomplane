@@ -34,10 +34,19 @@ func (s *Session) postgresConnector(ctx context.Context, region, instance string
 		return nil, ErrInvalidKey
 	}
 	key, err := ParseKey(s.key.raw)
-	if err != nil || key.ProjectID != s.key.ProjectID || key.ClientEmail != s.key.ClientEmail {
+	if err != nil || key.ProjectID != s.key.ProjectID || key.ClientEmail != s.key.ClientEmail || key.Keyless != s.key.Keyless {
 		return nil, ErrInvalidKey
 	}
-	dialer, err := cloudsqlconn.NewDialer(ctx, cloudsqlconn.WithCredentialsJSON(key.raw), cloudsqlconn.WithUniverseDomain("googleapis.com"), cloudsqlconn.WithLazyRefresh(), cloudsqlconn.WithUserAgent("loomplane-native-recovery"))
+	// A keyless key has no credential JSON: the dialer uses the session's
+	// tokens, which impersonate the same service account.
+	credential := cloudsqlconn.WithCredentialsJSON(key.raw)
+	if key.Keyless {
+		if s.ts == nil {
+			return nil, ErrInvalidKey
+		}
+		credential = cloudsqlconn.WithTokenSource(s.ts)
+	}
+	dialer, err := cloudsqlconn.NewDialer(ctx, credential, cloudsqlconn.WithUniverseDomain("googleapis.com"), cloudsqlconn.WithLazyRefresh(), cloudsqlconn.WithUserAgent("loomplane-native-recovery"))
 	if err != nil {
 		return nil, errors.New("could not initialize the explicit Cloud SQL recovery credential")
 	}

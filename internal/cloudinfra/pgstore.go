@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -282,19 +283,29 @@ func (s *PgStore) ServerInUse(ctx context.Context, v *Server) (bool, error) {
 	return used, err
 }
 
+// RetireServer waits for any direct apply on the server's daemon to finish
+// before it starts, and refuses while anything still uses the server.
 func (s *PgStore) RetireServer(ctx context.Context, v *Server) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
 	}
 	defer rollback(tx)
+	daemon, err := waitForDirectApplies(ctx, tx, v.OrgID, v.RuntimeConnectionID)
+	if err != nil {
+		return err
+	}
 	if checkErr := lockCapacityCloud(ctx, tx, v.OrgID, v.CloudID); checkErr != nil {
 		return checkErr
 	}
 	if v.RuntimeConnectionID != "" {
-		var id string
-		if checkErr := tx.QueryRow(ctx, `SELECT id FROM loomplane_cloud_connections WHERE org_id=$1 AND id=$2 FOR UPDATE`, v.OrgID, v.RuntimeConnectionID).Scan(&id); checkErr != nil {
+		var current string
+		if checkErr := tx.QueryRow(ctx, `SELECT CASE WHEN cloud='server' THEN coalesce(details->>'docker_id','') ELSE '' END FROM loomplane_cloud_connections WHERE org_id=$1 AND id=$2 FOR UPDATE`, v.OrgID, v.RuntimeConnectionID).Scan(&current); checkErr != nil {
 			return storeError(checkErr)
+		}
+		// The connection moved to another daemon since the wait above.
+		if current != daemon {
+			return ErrConflict
 		}
 		var used bool
 		if checkErr := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_connection_uses WHERE org_id=$1 AND connection_id=$2 AND kind NOT IN ('cloud_server','infrastructure_operation'))`, v.OrgID, v.RuntimeConnectionID).Scan(&used); checkErr != nil {
@@ -326,6 +337,40 @@ func (s *PgStore) RetireServer(ctx context.Context, v *Server) error {
 	return tx.Commit()
 }
 
+// waitForDirectApplies waits until no direct server apply runs on the daemon
+// behind connection, and keeps others off it until tx ends. It returns the
+// daemon's docker_id, or "" when connection isn't a verified server
+// connection. Call it before the organization lock: a direct apply holds
+// direct-apply/<docker_id> through its effects and takes the organization
+// lock inside them, so waiting for it under that lock could close a cycle
+// Postgres can't see.
+func waitForDirectApplies(ctx context.Context, tx driver.Tx, org, connection string) (string, error) {
+	if connection == "" {
+		return "", nil
+	}
+	var daemon string
+	err := tx.QueryRow(ctx, `SELECT coalesce((SELECT details->>'docker_id' FROM loomplane_cloud_connections WHERE org_id=$1 AND id=$2 AND cloud='server'),'')`, org, connection).Scan(&daemon)
+	if err != nil || daemon == "" {
+		return "", err
+	}
+	_, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('direct-apply/'||$1,0))`, daemon)
+	return daemon, err
+}
+
+// refuseDuringDirectApply returns ErrBusy while a direct server apply runs
+// on the daemon behind connection. It never waits, so callers can use it
+// under the organization lock.
+func refuseDuringDirectApply(ctx context.Context, tx driver.Tx, org, connection string) error {
+	var free bool
+	if err := tx.QueryRow(ctx, `SELECT coalesce((SELECT pg_try_advisory_xact_lock(hashtextextended('direct-apply/'||(details->>'docker_id'),0)) FROM loomplane_cloud_connections WHERE org_id=$1 AND id=$2 AND cloud='server' AND coalesce(details->>'docker_id','')<>''),true)`, org, connection).Scan(&free); err != nil {
+		return err
+	}
+	if !free {
+		return fmt.Errorf("%w: a direct deployment is running on this server; try again after it finishes", ErrBusy)
+	}
+	return nil
+}
+
 func lockInfrastructureScope(ctx context.Context, tx driver.Tx, o *Operation) error {
 	if checkErr := cloudprofiles.LockOrganization(ctx, tx, o.OrgID); checkErr != nil {
 		return checkErr
@@ -345,7 +390,9 @@ func lockInfrastructureScope(ctx context.Context, tx driver.Tx, o *Operation) er
 	if (o.ConnectionGeneration == 0 && !connectionRevision.Equal(o.ConnectionRevision)) || (o.ConnectionGeneration != 0 && connectionGeneration != o.ConnectionGeneration) {
 		return ErrConflict
 	}
-	return nil
+	// Adoption and disconnects run on a server's own connection. Some callers
+	// already hold the organization lock here, so refuse rather than wait.
+	return refuseDuringDirectApply(ctx, tx, o.OrgID, o.ConnectionID)
 }
 
 func claimAdoption(ctx context.Context, tx driver.Tx, o *Operation) (*Server, error) {

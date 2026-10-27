@@ -1,6 +1,6 @@
 // Package aws talks to Amazon Web Services for Loomplane: it turns an
-// access key into SDK clients for one region, and checks what the key may
-// do.
+// access key, or a keyless handout that assumes a role, into SDK clients
+// for one region, and checks what the key may do.
 package aws
 
 import (
@@ -17,6 +17,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
 	"github.com/aws/smithy-go"
+
+	"github.com/xraph/loomplane/internal/clouds/keyless"
 )
 
 // Actions are what an access key needs for Loomplane to build a service
@@ -51,6 +53,8 @@ var (
 	ErrInvalidKey = errors.New("that isn't an AWS access key")
 	// ErrRejected is a key AWS refused.
 	ErrRejected = errors.New("aws refused the access key")
+	// errKeylessRefused is ErrRejected for a keyless key, in its words.
+	errKeylessRefused = keyless.Refusal(ErrRejected, "AWS refused Loomplane's keyless token for this role")
 
 	errNotFound = errors.New("not found")
 )
@@ -61,14 +65,25 @@ var (
 )
 
 // Key is an access key, as Loomplane stores it: JSON with the key's ID
-// and secret.
+// and secret. A keyless key has neither: it assumes RoleARN with a token
+// minted for its handout.
 type Key struct {
 	AccessKeyID     string `json:"access_key_id"`
 	SecretAccessKey string `json:"secret_access_key"`
+	RoleARN         string `json:"-"`
+
+	handout *keyless.Handout
 }
 
-// ParseKey reads a stored access key.
+// ParseKey reads a stored access key, or a keyless handout whose settings
+// name a role_arn and a region.
 func ParseKey(data []byte) (*Key, error) {
+	if h, ok, err := keyless.Parse(data); ok {
+		if err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrInvalidKey, err)
+		}
+		return keylessKey(h)
+	}
 	var k Key
 	if err := json.Unmarshal(data, &k); err != nil {
 		return nil, fmt.Errorf("%w: it isn't the JSON Loomplane stores keys as", ErrInvalidKey)
@@ -91,20 +106,35 @@ func CheckRegion(s string) error {
 	return nil
 }
 
+// CheckCertificateARN tells whether cert is an ACM certificate in region.
+func CheckCertificateARN(cert, region string) error {
+	if !strings.HasPrefix(cert, "arn:aws:acm:"+region+":") || !strings.Contains(cert, ":certificate/") {
+		return fmt.Errorf("%q isn't an ACM certificate in %s", cert, region)
+	}
+	return nil
+}
+
 // Client builds SDK configurations.
 type Client struct {
 	// endpoint replaces every AWS endpoint when set, for tests.
 	endpoint string
+	// minter mints a keyless key's tokens. Without one a keyless key gets
+	// no credentials.
+	minter keyless.Minter
 }
 
 // New returns a Client. An empty endpoint means AWS's own.
 func New(endpoint string) *Client { return &Client{endpoint: strings.TrimRight(endpoint, "/")} }
 
-// Config is an SDK configuration that acts as key in region.
+// Config is an SDK configuration that acts as key in region. A keyless
+// key assumes its role, and assumes it again with a fresh token when the
+// role's credentials expire.
 func (c *Client) Config(key *Key, region string) sdk.Config {
-	cfg := sdk.Config{
-		Region:      region,
-		Credentials: sdk.NewCredentialsCache(credentials.NewStaticCredentialsProvider(key.AccessKeyID, key.SecretAccessKey, "")),
+	cfg := sdk.Config{Region: region}
+	if key.Keyless() {
+		cfg.Credentials = sdk.NewCredentialsCache(c.webIdentity(key, region), func(o *sdk.CredentialsCacheOptions) { o.ExpiryWindow = renewBefore })
+	} else {
+		cfg.Credentials = sdk.NewCredentialsCache(credentials.NewStaticCredentialsProvider(key.AccessKeyID, key.SecretAccessKey, ""))
 	}
 	if c.endpoint != "" {
 		cfg.BaseEndpoint = sdk.String(c.endpoint)
@@ -122,7 +152,10 @@ type Identity struct {
 func (c *Client) Identify(ctx context.Context, key *Key, region string) (*Identity, error) {
 	out, err := sts.NewFromConfig(c.Config(key, region)).GetCallerIdentity(ctx, &sts.GetCallerIdentityInput{})
 	if err != nil {
-		if refused(err) {
+		switch {
+		case refused(err) && key.Keyless():
+			return nil, fmt.Errorf("%w: %w", errKeylessRefused, err)
+		case refused(err):
 			return nil, fmt.Errorf("%w: %w", ErrRejected, err)
 		}
 		return nil, err
@@ -132,8 +165,13 @@ func (c *Client) Identify(ctx context.Context, key *Key, region string) (*Identi
 
 // Missing returns which of Actions the key's principal isn't allowed,
 // asking IAM's policy simulator. checked is false when the key may not
-// run the simulator, so its permissions are unknown.
+// run the simulator, so its permissions are unknown. A keyless key's
+// principal is its role: the simulator doesn't take the assumed role's
+// session ARN.
 func (c *Client) Missing(ctx context.Context, key *Key, region, principal string) (missing []string, checked bool, err error) {
+	if key.Keyless() {
+		principal = key.RoleARN
+	}
 	out, err := iam.NewFromConfig(c.Config(key, region)).SimulatePrincipalPolicy(ctx, &iam.SimulatePrincipalPolicyInput{
 		PolicySourceArn: sdk.String(principal), ActionNames: Actions,
 	})
@@ -154,6 +192,13 @@ func (c *Client) Missing(ctx context.Context, key *Key, region, principal string
 
 // refused reports whether AWS turned the request down for its key or its
 // permissions, as opposed to failing to answer.
+//
+// For a keyless token that means the role's trust refusing it. STS not
+// reaching Loomplane's issuer (IDPCommunicationError), or not fetching its
+// keys, which it files under InvalidIdentityToken, is Loomplane's to fix,
+// and so is a token it calls expired (ExpiredTokenException): each is
+// minted just before it's sent, so the clocks disagree. None of those is
+// a refusal.
 func refused(err error) bool {
 	var ae smithy.APIError
 	if !errors.As(err, &ae) {
@@ -161,10 +206,21 @@ func refused(err error) bool {
 	}
 	switch ae.ErrorCode() {
 	case "InvalidClientTokenId", "SignatureDoesNotMatch", "AccessDenied", "AccessDeniedException",
-		"UnrecognizedClientException", "ExpiredToken", "InvalidAccessKeyId":
+		"UnrecognizedClientException", "ExpiredToken", "InvalidAccessKeyId", "IDPRejectedClaim":
 		return true
+	case "InvalidIdentityToken":
+		return !keysUnreachable(ae.ErrorMessage())
 	}
 	return false
+}
+
+// keysUnreachable reports whether STS says it couldn't fetch or read the
+// issuer's keys, as opposed to the token not matching the trust: no
+// identity provider for the issuer, or the wrong audience or issuer.
+func keysUnreachable(message string) bool {
+	m := strings.ToLower(message)
+	return strings.Contains(m, "verification key") || strings.Contains(m, "jwks") ||
+		strings.Contains(m, "couldn't retrieve") || strings.Contains(m, "unable to retrieve")
 }
 
 // IsNotFound reports whether err is AWS saying something doesn't exist.

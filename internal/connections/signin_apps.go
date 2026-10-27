@@ -100,6 +100,16 @@ type AppStore interface {
 	ClearAppProblem(ctx context.Context, orgID, cloud string) error
 	// AppProblems maps each cloud with a problem to its message.
 	AppProblems(ctx context.Context, orgID string) (map[string]string, error)
+	// PutReservation holds a keyless connection's ID. An ID already held
+	// is an error.
+	PutReservation(ctx context.Context, r *Reservation) error
+	// TakeReservation removes and returns orgID's reservation of id, so an
+	// ID is used once. One already taken, or another organization's, is
+	// ErrNotFound, and another organization's is left as it was.
+	TakeReservation(ctx context.Context, orgID, id string) (*Reservation, error)
+	// SweepReservations removes reservations that expired before the
+	// given time and says how many.
+	SweepReservations(ctx context.Context, before time.Time) (int64, error)
 }
 
 // AppAuditor records a change to a sign-in app. The Auditor given to

@@ -30,6 +30,25 @@ import (
 // any approval or pool save, and so waits for whichever of those is in
 // flight to commit before the run checks pool membership.
 //
+// Who waits for direct-apply and who refuses. Anything that takes the
+// organization lock before it reaches the daemon mustn't wait for it.
+// SavePool and infrastructure operations on a server's own connection
+// (adoption, disconnect) try it under that lock and return ErrBusy.
+// RetireServer waits for it, but first, before the organization lock, so
+// a retirement still can't start while a deployment is admitted and a
+// deployment can't be admitted while a retirement is in flight. Connection
+// edits don't wait at all.
+//
+// Run writes step progress in other transactions while admission is open.
+// Until the plan has a succeeded deployment, each write re-syncs the plan's
+// connection uses, and loomplane_retiring_server_use runs for every inserted
+// use and takes FOR SHARE on the connection row (migration 20261030000300).
+// Nothing in the hold transaction conflicts with that. Retirement still
+// serializes with connection uses: its FOR UPDATE conflicts with the
+// trigger's FOR SHARE, so it either sees the new use and refuses, or
+// commits first and the trigger sees the retiring server and refuses the
+// use.
+//
 // Pooled actions take neither lock, GPU or not. Their pool reservation
 // admits them, and the server runtime's gpu-devices lock keeps two GPU
 // applies on one daemon apart (server.GPULocks).

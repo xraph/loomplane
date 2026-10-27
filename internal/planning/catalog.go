@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"reflect"
 
-	"github.com/xraph/loomplane/internal/recipes"
 	"github.com/xraph/loomplane/pkg/manifest"
 )
 
@@ -41,7 +40,7 @@ func (p *planner) configureCatalog(name, base string, resource manifest.Resource
 	cfg.Target = connection.ID
 	cfg.TargetSettings = ReviewedConnectionSettings(connection.Cloud, connection.Details)
 	action.ConnectionID = connection.ID
-	recipe, err := recipes.LookupForTarget(cfg.Kind, cfg.Version, connection.Details["architecture"], cfg.Provider)
+	recipe, err := p.kinds().LookupEngine(cfg.Kind, cfg.Version, connection.Details["architecture"], cfg.Provider)
 	if err != nil {
 		p.problem(Finding{Code: "catalog-unavailable", Subject: ResourceSubject, Name: name, Path: base, Message: err.Error()})
 		return

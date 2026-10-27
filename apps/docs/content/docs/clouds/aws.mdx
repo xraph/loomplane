@@ -27,6 +27,14 @@ You can add an ACM certificate ARN for the same region as an optional setting. P
 
 Reading build logs also needs CloudWatch `GetLogEvents`. A cross-cloud link needs the VPN actions listed in the [manifest reference](/docs/reference/loomplane-yaml#links).
 
+## Connect keylessly
+
+You can skip the access key altogether. When Loomplane's public URL is HTTPS and reachable from the internet, the connect dialog offers **Connect keylessly** first. It gives you three things to do in the account: add Loomplane's issuer as an IAM OpenID Connect provider with `sts.amazonaws.com` as its client ID, create a role whose trust policy names this one connection, and attach a policy with the actions in the table above. Each comes with a command or policy to copy.
+
+Then paste the role's ARN and the region and choose **Check and connect**. Loomplane assumes the role with `AssumeRoleWithWebIdentity` each time it needs AWS, with a token it signs itself that lasts 10 minutes, so you have no access key to store or rotate. Sessions are named `loomplane-` and the connection's ID, which is what you'll see in CloudTrail.
+
+Loomplane asks AWS once a day whether the role still trusts it. If someone deleted the role or the provider, the connection shows as failed and you get a notice. [Connect a cloud keylessly](/docs/clouds/keyless) has the full trust policy, how the signing keys turn over, and how to move a key connection to keyless.
+
 ## Use it in a manifest
 
 ```yaml

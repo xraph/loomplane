@@ -192,6 +192,8 @@ func TestAppIsMissingWithoutConfigOrOrganization(t *testing.T) {
 	}
 }
 
+func (f *fakeAppStore) SweepReservations(context.Context, time.Time) (int64, error) { return 0, nil }
+
 func (f *fakeAppStore) SweepSignIns(_ context.Context, before time.Time) (int64, error) {
 	var n int64
 	for state, p := range f.signIns {

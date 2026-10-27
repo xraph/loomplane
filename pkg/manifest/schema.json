@@ -348,8 +348,65 @@
         "cloud_sql_network": {
           "description": "VPC and regional subnet for Cloud Run PSC database connections.",
           "$ref": "#/$defs/cloudSQLApplicationNetwork"
+        },
+        "farp": {
+          "$ref": "#/$defs/farp"
         }
       }
+    },
+    "farp": {
+      "description": "Opts the service in to FARP route discovery by an Octopus gateway. An empty block takes Octopus's defaults. An environment's block replaces the service's whole block.",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "gateway": {
+          "description": "The Octopus resource the service feeds. Without it, the manifest's only one.",
+          "$ref": "#/$defs/name"
+        },
+        "openapi": {
+          "$ref": "#/$defs/farpPath"
+        },
+        "asyncapi": {
+          "$ref": "#/$defs/farpPath"
+        },
+        "graphql": {
+          "$ref": "#/$defs/farpPath"
+        },
+        "health": {
+          "$ref": "#/$defs/farpPath"
+        },
+        "metrics": {
+          "$ref": "#/$defs/farpPath"
+        },
+        "grpc_reflection": {
+          "type": "boolean"
+        },
+        "capabilities": {
+          "description": "What the service speaks, such as rest or websocket.",
+          "type": "array",
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_-]{0,31}$"
+          }
+        },
+        "port": {
+          "description": "The port Octopus reaches the service on. Without it, the service's own port.",
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 65535
+        },
+        "enabled": {
+          "description": "False opts the service out of FARP, for example in one environment.",
+          "type": "boolean"
+        }
+      }
+    },
+    "farpPath": {
+      "type": "string",
+      "maxLength": 512,
+      "pattern": "^/[A-Za-z0-9/._~%+:@!$&'()*,;=-]*$"
     },
     "service": {
       "type": "object",

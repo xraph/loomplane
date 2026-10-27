@@ -653,3 +653,58 @@ func TestComponentsPublishLoopbackAndJoinTheEnvironmentNetwork(t *testing.T) {
 		t.Fatalf("networks: %+v", endpoints)
 	}
 }
+
+// A container records the readiness its component declares, the way the
+// Kubernetes runtime puts it on the workload's readiness probe, so you can
+// read it from the runtime object after the deployment's own wait has ended.
+func TestServerContainerRecordsDeclaredReadiness(t *testing.T) {
+	iid := id.New(id.PrefixInstance)
+	var create struct{ Labels map[string]string }
+	created := false
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/json"):
+			if !created {
+				http.NotFound(w, r)
+				return
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"Id": "container_one", "Config": map[string]any{"Labels": map[string]string{owned.LabelInstance: iid.String(), owned.LabelOrg: "org_fixture", owned.LabelProject: "proj_fixture", owned.LabelEnvironment: "env_fixture"}}, "State": map[string]any{"Running": true, "Status": "running"}, "NetworkSettings": map[string]any{"Ports": map[string]any{"8080/tcp": []map[string]string{{"HostIp": "127.0.0.1", "HostPort": "32001"}}}}})
+		case r.URL.Path == "/networks/"+NetworkName("org_fixture", "env_fixture"):
+			_ = json.NewEncoder(w).Encode(map[string]any{"Id": "network_one", "Labels": map[string]string{owned.LabelOrg: "org_fixture", owned.LabelEnvironment: "env_fixture"}})
+		case r.Method == http.MethodPost && r.URL.Path == "/containers/create":
+			if err := json.NewDecoder(r.Body).Decode(&create); err != nil {
+				t.Error(err)
+			}
+			created = true
+			w.WriteHeader(http.StatusCreated)
+			_, _ = io.WriteString(w, `{"Id":"container_one"}`)
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/start"):
+			w.WriteHeader(http.StatusNoContent)
+		default:
+			t.Errorf("unexpected runtime request: %s %s", r.Method, r.URL)
+			http.NotFound(w, r)
+		}
+	}))
+	defer api.Close()
+	u, err := url.Parse(api.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	runtime := &Runtime{Probe: func(context.Context, *Client, int, string) error { return nil }, Session: func(context.Context, map[string]string) (*Client, error) {
+		return &Client{Config: &Config{Details: map[string]string{"docker_id": "daemon_fixture"}}, HTTP: &http.Client{Transport: runtimeTransport(func(r *http.Request) (*http.Response, error) {
+			r.URL.Scheme, r.URL.Host = u.Scheme, u.Host
+			return http.DefaultTransport.RoundTrip(r)
+		})}}, nil
+	}}
+	labels := map[string]string{owned.LabelOrg: "org_fixture", owned.LabelEnvironment: "env_fixture", owned.LabelProject: "proj_fixture", owned.LabelConnection: "conn_fixture", owned.LabelPublic: "false", owned.LabelCatalogComponent: "api", owned.LabelHealth: "/readyz", owned.LabelHealthPort: "8080"}
+	spec := cpprovider.ServiceSpec{Name: "api", Image: "sha256:" + strings.Repeat("a", 64), Ports: []cpprovider.PortSpec{{Container: 8080, Protocol: "tcp"}}}
+	if _, err = runtime.Apply(t.Context(), iid, spec, labels); err != nil {
+		t.Fatal(err)
+	}
+	if create.Labels[owned.LabelHealth] != "/readyz" || create.Labels[owned.LabelHealthPort] != "8080" {
+		t.Fatalf("container labels drop the declared readiness: %v", create.Labels)
+	}
+	if _, ok := create.Labels[owned.LabelHealthProtocol]; ok {
+		t.Fatalf("an HTTP readiness check gained a protocol label: %v", create.Labels)
+	}
+}

@@ -1,4 +1,4 @@
-import { useRef, useState } from "react"
+import { useId, useRef, useState } from "react"
 import { messageOf } from "@/client/errors"
 import {
   useEnvironmentsList,
@@ -17,9 +17,20 @@ import { useOrganization } from "@/lib/organization"
 import { useNavigate } from "@/lib/router"
 
 const projections = {
-  falkordb: "FalkorDB",
-  elasticsearch: "Elasticsearch",
+  falkordb: {
+    title: "FalkorDB",
+    kind: "Graph",
+    removes: "its data",
+    queries: "Graph queries",
+  },
+  elasticsearch: {
+    title: "Elasticsearch",
+    kind: "Search",
+    removes: "its search index",
+    queries: "Search queries",
+  },
 } as const
+
 export function FabriqSettings({
   projectId,
   environmentId,
@@ -37,7 +48,12 @@ export function FabriqSettings({
   const plan = useMutation(usePlansCreate)
   const [changes, setChanges] = useState<Record<string, boolean>>({})
   const [error, setError] = useState("")
+  // Set when planning failed after the manifest edits were written. The
+  // manifest then holds the change, so a refetch leaves nothing pending, and
+  // the next review only has to plan.
+  const [planOnly, setPlanOnly] = useState(false)
   const submitting = useRef(false)
+  const descriptions = useId()
   const environment = environments.data?.environments.find(
     (e) => e.id === environmentId
   )?.name
@@ -52,17 +68,24 @@ export function FabriqSettings({
     if (isRecord(use) && typeof use.enabled === "boolean") return use.enabled
     return !!choices[id] && choices[id].mode !== "off"
   }
+  // A switch flipped and flipped back is not a change.
+  const pending = Object.entries(changes).filter(
+    ([id, enabled]) => enabled !== current(id)
+  )
   const busy = edit.isPending || plan.isPending
   async function review() {
     if (submitting.current || !environment || !allowed) return
     submitting.current = true
     setError("")
+    let written = planOnly
     try {
-      for (const [dependency, enabled] of Object.entries(changes))
+      for (const [dependency, enabled] of pending) {
         await edit.mutateAsync({
           path: { id: projectId },
           body: { setUse: { resource, dependency, use: { enabled } } },
         })
+        written = true
+      }
       const doc = manifest.data?.manifest
       const catalog =
         doc?.version === 1 &&
@@ -73,8 +96,10 @@ export function FabriqSettings({
         path: { id: projectId },
         body: { environment, ...(catalog ? { catalog: true } : {}) },
       })
+      setPlanOnly(false)
       await navigate({ to: "/deployments/$id", params: { id: result.id } })
     } catch (cause) {
+      setPlanOnly(written)
       setError(
         `The manifest may already contain your changes. Review again to retry planning. ${messageOf(cause, "The plan couldn't start.")}`
       )
@@ -102,28 +127,52 @@ export function FabriqSettings({
           retry={environments.refetch}
         />
       )}
-      {Object.entries(projections).map(([id, title]) => (
-        <label
-          key={id}
-          className="flex items-center justify-between gap-4 rounded-xl bg-card px-4 py-3.5 ring-1 ring-border"
-        >
-          <span className="grid gap-0.5">
-            <span className="text-[14px] font-semibold">{title}</span>
-            <span className="text-[12.5px] text-muted-foreground">
-              {id === "falkordb" ? "Graph" : "Search"} projections. Rebuilt from
-              Postgres, so no backups.
-            </span>
-          </span>
-          <Switch
-            aria-label={title}
-            checked={changes[id] ?? current(id)}
-            disabled={busy || !allowed}
-            onCheckedChange={(enabled) =>
-              setChanges((previous) => ({ ...previous, [id]: enabled }))
-            }
-          />
-        </label>
-      ))}
+      {Object.entries(projections).map(([id, projection]) => {
+        const { title } = projection
+        const checked = changes[id] ?? current(id)
+        const warn = !checked && current(id)
+        const about = `${descriptions}-${id}-about`
+        const warning = `${descriptions}-${id}-warning`
+        return (
+          <div
+            key={id}
+            className="grid gap-2 rounded-xl bg-card px-4 py-3.5 ring-1 ring-border"
+          >
+            <label className="flex items-center justify-between gap-4">
+              <span className="grid gap-0.5">
+                <span className="text-[14px] font-semibold">{title}</span>
+                <span
+                  id={about}
+                  className="text-[12.5px] text-muted-foreground"
+                >
+                  {projection.kind} projections. Rebuilt from Postgres, so no
+                  backups.
+                </span>
+              </span>
+              <Switch
+                aria-label={title}
+                aria-describedby={`${about} ${warning}`}
+                checked={checked}
+                disabled={busy || !allowed}
+                onCheckedChange={(enabled) =>
+                  setChanges((previous) => ({ ...previous, [id]: enabled }))
+                }
+              />
+            </label>
+            <div id={warning} aria-live="polite">
+              {warn && (
+                <p
+                  role="note"
+                  className="rounded-lg bg-weld-tint px-2.5 py-2 text-[12.5px] text-weld-ink"
+                >
+                  Turning {title} off removes it and {projection.removes}.{" "}
+                  {projection.queries} fail until you turn it back on.
+                </p>
+              )}
+            </div>
+          </div>
+        )
+      })}
       {error && (
         <Alert variant="destructive">
           <AlertDescription>{error}</AlertDescription>
@@ -139,7 +188,7 @@ export function FabriqSettings({
             !environment ||
             !manifest.data ||
             manifest.status === "error" ||
-            !Object.keys(changes).length ||
+            !(pending.length || planOnly) ||
             !allowed
           }
           onClick={() => void review()}

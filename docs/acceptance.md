@@ -34,7 +34,34 @@ This uses the same harness, ownership record and cleanup as `make acceptance-inf
 
 The test runs on the kind cluster first, then on the SSH/Docker server. On each, it adds the kind to a project, plans, approves and applies it. The kind provisions a Postgres, runs a `migrate` job that records one row, and starts an `api` that refuses to start without that row and answers `/readyz` only after a short warm-up. The test checks the declared readiness probe on the runtime object and reads the api's control port through the admin proxy and through `CatalogAccess.InternalChannel`. Then it removes the resource. Every binding has to go, with the containers on the server and the workloads, Services, Secrets and ConfigMaps on the cluster, and the Postgres data volume has to stay, as database retention says. On kind, the test makes a retained storage class first, since the default one deletes its volumes.
 
-Only the kind leg passes today. The server leg is wired the same way, but a first deployment to a server hangs on the host-admission lock on main: the admission transaction holds a share lock on the connection row while the step update's connection-use trigger asks for an update lock on it. Until that's fixed, expect the server subtest to wait out its 20 minute deadline and fail, and the app's shutdown to hang after it. You can stop it then; `run.py` still cleans up.
+Both legs pass. If other containers on your machine come and go while it runs, the last cleanup step can still fail: it checks that every container that existed before the run is still there, and someone else's may have gone. By then the run's own cluster, builder and network are already removed, so read the test result above the traceback.
+
+### Verify Octopus on SSH/Docker and kind
+
+This one runs against a disposable Docker server and a disposable kind cluster that you set up yourself. It deploys Octopus 0.5 and two services to each, then checks what the fakes can't: FARP discovery finds a real service, a route you add in Loomplane overrides its FARP route through Octopus's private port, deleting that route brings the FARP route back, the reconcile puts your route back after Octopus restarts, and the admin opens through the sandboxed admin proxy. Then it removes everything through the product.
+
+```bash
+export LOOMPLANE_ACCEPTANCE_SERVER=$HOME/acceptance/server.json
+export LOOMPLANE_ACCEPTANCE_KUBECONFIG=$HOME/acceptance/kind.kubeconfig
+export LOOMPLANE_ACCEPTANCE_KUBE_ARCHITECTURE=arm64
+export LOOMPLANE_ACCEPTANCE_FARP_IMAGE=registry.example.test/farp-sample@sha256:...
+LOOMPLANE_TEST_DATABASE_URL='postgres://loomplane:loomplane@localhost:55532/loomplane?sslmode=disable' \
+  go test -tags='integration acceptance' -count=1 -timeout=90m -v \
+  -run '^TestAcceptanceOctopus$' ./tests/integration
+```
+
+Each target skips on its own and names what it still needs, so you can run just the server or just the cluster. With nothing set, both skip and no database or app starts.
+
+| Variable | What it is |
+|---|---|
+| `LOOMPLANE_ACCEPTANCE_SERVER` | A JSON file for the Docker server, as the server connection takes it: `{"credential": ..., "settings": {"host", "user", "port", "host_key", "docker_socket"}}`. The credential is the SSH private key, or the `{private_key, passphrase}` JSON. |
+| `LOOMPLANE_ACCEPTANCE_KUBECONFIG` | A kubeconfig for the kind cluster, with embedded credentials that can create `serviceaccounts`, `roles` and `rolebindings` and use `services/proxy` in the namespace. `_KUBE_CONTEXT` and `_KUBE_NAMESPACE` pick them, or the kubeconfig's own are used. |
+| `LOOMPLANE_ACCEPTANCE_KUBE_ARCHITECTURE` | `amd64` or `arm64`, whichever your kind nodes run. Octopus is pinned to one on a cluster and the plan refuses a connection that names neither. There's no default, so without it the cluster target skips and names this variable. |
+| `LOOMPLANE_ACCEPTANCE_FARP_IMAGE` | The FARP sample service, pinned by digest. Both targets need it. It serves an OpenAPI 3 document at `/openapi.json` listing at least one GET path without parameters, answers that path with a 2xx, and isn't Caddy, which the run tells apart from the manual route's target. |
+| `LOOMPLANE_ACCEPTANCE_FARP_PORT` | The port the sample service listens on. 8080 by default. |
+| `LOOMPLANE_ACCEPTANCE_ZONE` | A Cloudflare zone. Optional. The cluster then gets a hostname in it with a Let's Encrypt staging certificate, and the run checks HTTPS reaches Octopus and `/admin` there is blocked. That also needs `LOOMPLANE_CF_SANDBOX_TOKEN`, `LOOMPLANE_CF_ACCOUNT_ID` and `LOOMPLANE_ACCEPTANCE_INGRESS_ADDRESS`, as [the domains run](domains.md#the-acceptance-run) does, plus cert-manager and an ingress controller in the cluster. |
+
+The server gets no domain check. A server serves hostnames only through a Cloud, and this run deploys to a bare connection.
 
 ### Verify the dashboard flow on Vercel
 

@@ -23,10 +23,11 @@ func directPlanIn(t *testing.T, f *poolFixture, id, env, name string) {
 	}
 }
 
-// pausedDirectApply runs an approved direct plan's service and holds it in
-// its executor, after admission and before the run records its binding.
-// release lets it go on.
-func pausedDirectApply(ctx context.Context, t *testing.T, f *poolFixture, plan, name string) (done <-chan error, release func()) {
+// pausedDirectApply runs the approved plan "direct" for one service and
+// holds it in its executor, after admission and before the run records its
+// binding. release lets it go on.
+func pausedDirectApply(ctx context.Context, t *testing.T, f *poolFixture, name string) (done <-chan error, release func()) {
+	const plan = "direct"
 	t.Helper()
 	executor := &blockingDirectPoolExecutor{entered: make(chan struct{}), release: make(chan struct{})}
 	runner := poolTestRunner(f, executor)
@@ -135,7 +136,7 @@ func TestServerAdmissionDirectApplyLetsApprovalThrough(t *testing.T) {
 	directPlanIn(t, f, "other", "stage", "worker")
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	applyDone, release := pausedDirectApply(ctx, t, f, "direct", "api")
+	applyDone, release := pausedDirectApply(ctx, t, f, "api")
 	results := letThrough(t, f, applyDone, release, cancel, lockUser{"plan approval", func(ctx context.Context) error {
 		ok, err := f.plans.Decide(ctx, "org", "other", "approved", "usr", "", time.Now())
 		if err == nil && !ok {
@@ -175,7 +176,7 @@ func TestServerAdmissionDirectApplyLetsCloudSyncThrough(t *testing.T) {
 	f.accept(t, "direct")
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	applyDone, release := pausedDirectApply(ctx, t, f, "direct", "worker")
+	applyDone, release := pausedDirectApply(ctx, t, f, "worker")
 	if _, err := f.sql.Exec(t.Context(), `INSERT INTO loomplane_server_pool_members SELECT * FROM jsonb_populate_recordset(NULL::loomplane_server_pool_members,$1::jsonb)`, members); err != nil {
 		t.Fatal(err)
 	}
@@ -201,7 +202,7 @@ func TestServerAdmissionDirectApplyLetsBindingsPastPoolSave(t *testing.T) {
 	f.accept(t, "direct")
 	ctx, cancel := context.WithCancel(t.Context())
 	defer cancel()
-	applyDone, release := pausedDirectApply(ctx, t, f, "direct", "api")
+	applyDone, release := pausedDirectApply(ctx, t, f, "api")
 	next := *f.pool
 	next.Revision++
 	now := time.Now().UTC()
@@ -238,5 +239,48 @@ func TestOrganizationLockBoundsLockWaits(t *testing.T) {
 	var limit string
 	if err = tx.QueryRow(t.Context(), `SELECT current_setting('lock_timeout')`).Scan(&limit); err != nil || limit != "1min" {
 		t.Fatalf("lock_timeout after the organization lock: %q %v", limit, err)
+	}
+}
+
+// Retiring a server waits for a direct apply on its daemon, as an admitted
+// deployment always kept retirement out. It waits on the daemon's
+// direct-apply lock before it takes the organization lock, so the apply's
+// own organization-lock steps still get through, and once the apply is done
+// the retirement sees the plan's connection use and refuses.
+func TestServerAdmissionRetirementWaitsOutsideOrganizationLock(t *testing.T) {
+	f := newPoolFixture(t)
+	if _, err := f.sql.Exec(t.Context(), `DELETE FROM loomplane_server_pool_members`); err != nil {
+		t.Fatal(err)
+	}
+	directPlanIn(t, f, "direct", "env", "api")
+	f.accept(t, "direct")
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	applyDone, release := pausedDirectApply(ctx, t, f, "api")
+	retired := make(chan error, 1)
+	go func() {
+		retired <- f.store.RetireServer(ctx, &cloudinfra.Server{ID: "server-1", OrgID: "org", CloudID: "cloud", RuntimeConnectionID: "runtime-1", Status: "ready"})
+	}()
+	select {
+	case err := <-retired:
+		release()
+		t.Fatalf("retirement ran beside a direct apply: %v", err)
+	case <-time.After(300 * time.Millisecond):
+	}
+	waitPoolSQL(t, f, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND wait_event='advisory' AND query LIKE '%direct-apply%')`)
+	results := letThrough(t, f, applyDone, release, cancel, lockUser{"binding", func(ctx context.Context) error {
+		now := time.Now().UTC()
+		return f.plans.PutBinding(ctx, &planning.Binding{ID: "unrelated", OrgID: "org", ProjectID: "second", EnvironmentID: "second-env", Subject: planning.ServiceSubject, Name: "web", Provider: "server", ConnectionID: "runtime-2", ExternalID: "web", CreatedAt: now, UpdatedAt: now})
+	}})
+	if err := results["binding"]; err != nil {
+		t.Fatalf("binding beside a queued retirement: %v", err)
+	}
+	select {
+	case err := <-retired:
+		if !errors.Is(err, cloudinfra.ErrConflict) {
+			t.Fatalf("retirement after the direct apply: %v", err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatalf("retirement never finished\n%s", lockReport(f))
 	}
 }

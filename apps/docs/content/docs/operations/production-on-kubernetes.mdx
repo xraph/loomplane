@@ -63,6 +63,8 @@ Open your hostname and create the first account. It owns the instance.
 
 The proxy buffering and timeout annotations matter: the dashboard streams live events over server-sent events and a WebSocket. The chart also sends `/_/health`, `/_/metrics` and `/debug` to a Service with no pods, so the public ingress refuses them. Prefer the Gateway API? Set `httpRoute.enabled` and `httpRoute.parentRefs` instead of `ingress`.
 
+`publicURL` is also the OpenID Connect issuer that AWS, Google Cloud and Azure trust for [keyless connections](/docs/clouds/keyless). They fetch `/.well-known/openid-configuration` and `/.well-known/jwks.json` from it over the internet, so keep it HTTPS on a hostname they can reach, and let `/.well-known/` through to the API if you put anything in front of the ingress. Every replica serves the same keys from the database.
+
 ## What survives what
 
 | Event | What happens |

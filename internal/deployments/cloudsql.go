@@ -115,6 +115,9 @@ func (c *CloudSQL) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 	if err != nil {
 		return nil, err
 	}
+	if state.FailedCreate != nil {
+		return nil, errors.New("cloud sql terminal create evidence permits cleanup only")
+	}
 	var password string
 	if job.Binding != nil {
 		password, err = originalSQLPassword(ctx, job)
@@ -293,7 +296,7 @@ func (c *CloudSQL) Remove(ctx context.Context, job *Job, b *planning.Binding) er
 			return sessionErr
 		}
 		absent := false
-		if job.pendingIdentity != nil && state.PSC != nil && state.PSC.Provision.Version == 3 && (!state.Uncertain || state.Operation == "") {
+		if job.pendingIdentity != nil && (state.PSC != nil && state.PSC.Provision.Version == 3 || pendingFailedCreate(job.pendingIdentity)) && (!state.Uncertain || state.Operation == "") {
 			_, readErr := s.GetSQLInstance(ctx, instance)
 			absent = gcp.IsNotFound(readErr)
 			if readErr != nil && !absent {
