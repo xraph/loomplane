@@ -311,15 +311,17 @@ func (d DigitalOceanChecker) Check(ctx context.Context, credential []byte, setti
 	return c, nil
 }
 
-// AzureChecker checks Azure service principals, and the azure_user keys
-// an Azure sign-in hands out. The credential is the principal's client
-// secret, or the key; the settings say where it deploys: tenant_id and
-// subscription_id, and resource_group, which defaults to loomplane. A
-// principal's settings also say whose it is, as client_id.
+// AzureChecker checks Azure service principals, the azure_user keys an
+// Azure sign-in hands out, and keyless handouts for an app whose
+// federated credential trusts Loomplane. The credential is the
+// principal's client secret, the key, or the handout; the settings say
+// where it deploys: tenant_id and subscription_id, and resource_group,
+// which defaults to loomplane. A principal's or keyless app's settings
+// also say whose it is, as client_id.
 type AzureChecker struct{ Client *azure.Client }
 
 // IsGrant implements GrantChecker: an azure_user key only ever comes from
-// a sign-in.
+// a sign-in, and a keyless handout only from Loomplane's issuer.
 func (AzureChecker) IsGrant(credential []byte) bool {
 	var k struct {
 		Type string `json:"type"`
@@ -328,7 +330,9 @@ func (AzureChecker) IsGrant(credential []byte) bool {
 }
 
 // Parse implements Checker. A signed-in person's key names them as
-// signed_in_as; the sign-in app's client isn't shown.
+// signed_in_as; the sign-in app's client isn't shown. A keyless app's
+// details are a principal's: a handout is built from them, so they keep
+// the app and every part of the placement a session needs.
 func (a AzureChecker) Parse(credential []byte, settings map[string]string) (Check, error) {
 	cred, err := azure.ParseCredential(credential, settings)
 	if err != nil {
@@ -346,9 +350,11 @@ func (a AzureChecker) Parse(credential []byte, settings map[string]string) (Chec
 	}}, nil
 }
 
-// Check implements Checker: it signs in as the principal, or renews the
-// person's sign-in, reads the subscription, and asks Azure which of the
-// actions a deployment needs their role assignments allow.
+// Check implements Checker: it signs in as the principal or the keyless
+// app, or renews the person's sign-in, reads the subscription, and asks
+// Azure which of the actions a deployment needs their role assignments
+// allow. A keyless app signs in with a minted token, which an app whose
+// federated credential isn't set up refuses.
 func (a AzureChecker) Check(ctx context.Context, credential []byte, settings map[string]string) (Check, error) {
 	c, err := a.Parse(credential, settings)
 	if err != nil {
