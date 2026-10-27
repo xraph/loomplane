@@ -234,14 +234,16 @@ func TestRemoveZoneReportsAChangedSubdomainAsAConflict(t *testing.T) {
 		t.Fatalf("a vanished subdomain: %v", err)
 	}
 
-	// The zone you asked to remove changing is still not found.
+	// The zone you asked to remove changing after its subdomains went is a
+	// conflict too: the first read found it, and some zones are gone.
 	svc, st, race, _ = racing(t)
 	race.before = func(id string) {
 		if id == "zone_root" {
 			bumpRevision(st, id)
 		}
 	}
-	if err = svc.RemoveZone(t.Context(), overviewAdmin, "zone_root", 4); !errors.Is(err, ErrNotFound) {
+	err = svc.RemoveZone(t.Context(), overviewAdmin, "zone_root", 4)
+	if errors.Is(err, ErrNotFound) || !errors.Is(err, ErrConflict) || !strings.Contains(err.Error(), ": loomplane.com changed since you looked. Try again") {
 		t.Fatalf("the requested zone: %v", err)
 	}
 }

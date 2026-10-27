@@ -533,10 +533,14 @@ func (s *Service) RemoveZone(ctx context.Context, p security.Principal, id strin
 		err = s.removeZoneProof(ctx, st, z)
 		if err == nil {
 			err = st.RemoveZone(ctx, p.OrgID, z.ID, z.Revision)
-			// Only the zone you asked for can be not found: a subdomain
-			// that changed or went since you looked is a conflict.
-			if z != zone && errors.Is(err, ErrNotFound) {
-				return fmt.Errorf("%w: %s changed since you looked, so %s was kept. Try again", ErrConflict, z.Name, zone.Name)
+			// The first read found every zone here, so one that changed
+			// or went since you looked is a conflict, the one you asked
+			// for included.
+			if errors.Is(err, ErrNotFound) {
+				if z != zone {
+					return fmt.Errorf("%w: %s changed since you looked, so %s was kept. Try again", ErrConflict, z.Name, zone.Name)
+				}
+				err = fmt.Errorf("%w: %s changed since you looked. Try again", ErrConflict, zone.Name)
 			}
 		}
 		if err != nil {

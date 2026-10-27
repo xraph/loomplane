@@ -4,7 +4,7 @@
 import { useId, useState } from "react"
 import { toast } from "sonner"
 
-import { messageOf, statusOf } from "@/client/errors"
+import { messageOf } from "@/client/errors"
 import {
   useDnsZonesGet,
   useDnsZonesRemove,
@@ -105,9 +105,11 @@ export function RemoveDomainDialog({
         return
       }
       setError(messageOf(err, `The ${kind} wasn't removed.`))
-      // A refusal for anything else, such as a stale revision, is read
-      // again so the next try has what changed.
-      if (statusOf(err) === 409) invalidate(useDnsZonesGet)
+      // Any other failure is read again, the list included: a stale
+      // revision needs the new one, and a removal that stopped part way
+      // has already taken some subdomains with it.
+      invalidate(useDnsZonesGet)
+      invalidate(useDomainsOverview)
       return
     }
     toast.success(`Removed ${name}`)
