@@ -491,7 +491,7 @@ test("domains empty state and no-zone state", async () => {
   expect(await screen.findByText("No domains yet")).toBeVisible()
   expect(
     screen.getByText(
-      "Octopus answers on the target's private network until you attach one. Pick a hostname from your organization's zones."
+      "Octopus answers on the target's private network until you attach one. Pick a hostname from your workspace's zones."
     )
   ).toBeVisible()
   expect(
@@ -504,10 +504,10 @@ test("domains empty state and no-zone state", async () => {
   mount(<DomainsPanel {...panelProps()} />)
   expect(
     await screen.findByText(
-      /Your organization has no zones this project can use\./
+      /Your workspace has no zones this project can use\./
     )
   ).toHaveTextContent(
-    "Your organization has no zones this project can use. Add one on the Domains page."
+    "Your workspace has no zones this project can use. Add one on the Domains page."
   )
   expect(screen.getByRole("link", { name: "Domains page" })).toHaveAttribute(
     "href",
@@ -535,7 +535,7 @@ test("a zone that isn't verified can't be picked, so it counts as none", async (
   mount(<DomainsPanel {...panelProps()} />)
   expect(
     await screen.findByText(
-      /Your organization has no zones this project can use\./
+      /Your workspace has no zones this project can use\./
     )
   ).toBeVisible()
   expect(screen.queryByRole("button", { name: "Attach a domain" })).toBeNull()

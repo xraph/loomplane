@@ -1,5 +1,11 @@
 import { useAuth } from "@authsome/ui-react"
-import { Navigate, Outlet } from "@tanstack/react-router"
+import {
+  Navigate,
+  Outlet,
+  useRouter,
+  useRouterState,
+} from "@tanstack/react-router"
+import { useCallback, useEffect } from "react"
 
 import { messageOf } from "@/client/errors"
 import { AppSidebar } from "@/components/app-sidebar"
@@ -8,7 +14,7 @@ import { AuthLayout } from "@/components/auth-layout"
 import { ShellProvider } from "@/components/shell"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
-import { PageLoading } from "@/components/route-feedback"
+import { PageLoading, WorkspaceNotFound } from "@/components/route-feedback"
 import { OrganizationGate, useOrganization } from "@/lib/organization"
 import { usePendingInvite } from "@/lib/invite"
 import { usePath } from "@/lib/router"
@@ -16,6 +22,7 @@ import { AcceptInvitation } from "@/pages/accept-invitation"
 import { AuthPage } from "@/pages/auth"
 import { Onboarding } from "@/pages/onboarding"
 import { RealtimeProvider } from "@/lib/realtime-provider"
+import { isUnprefixed, requestedWorkspace } from "@/lib/workspace-url"
 
 const authPaths = ["/sign-in", "/sign-up"]
 const recoveryPaths = ["/forgot-password", "/reset-password", "/verify-email"]
@@ -57,7 +64,7 @@ export function App() {
           mode={path === "/sign-up" ? "sign-up" : "sign-in"}
           notice={
             invite
-              ? "Sign in, or create an account with the email your invitation went to, to join the organization."
+              ? "Sign in, or create an account with the email your invitation went to, to join the workspace."
               : undefined
           }
         />
@@ -66,8 +73,21 @@ export function App() {
   }
   if (authPaths.includes(path)) return <Navigate to="/" replace />
   if (invite) return <AcceptInvitation token={invite} />
+  return <SignedIn />
+}
+
+function SignedIn() {
+  const router = useRouter()
+  const workspace = useRouterState({
+    select: (state) => requestedWorkspace(state.location),
+  })
+  // Another workspace's pages are another workspace's records: start over
+  // on its home page rather than at the same path.
+  const home = useCallback(() => router.navigate({ to: "/" }), [router])
   return (
     <OrganizationGate
+      workspace={workspace}
+      onSwitch={home}
       fallback={(state) => {
         switch (state.kind) {
           case "loading":
@@ -92,19 +112,35 @@ export function App() {
 }
 
 function Shell() {
-  const { session } = useOrganization()
+  const { session, missing } = useOrganization()
+  useWorkspaceAddress()
   return (
     <ShellProvider>
       <SidebarProvider>
         <AppSidebar />
         {/* Keyed on the organization, so switching remounts every page. */}
         <SidebarInset key={session.orgId} className="min-w-0">
-          <Outlet />
+          {missing ? <WorkspaceNotFound slug={missing} /> : <Outlet />}
           <AppStatusBar />
         </SidebarInset>
       </SidebarProvider>
     </ShellProvider>
   )
+}
+
+// An address without a workspace, from a bookmark or an old link, moves
+// under the current one. The router reads it again once the workspace is
+// known, in case the slug is also a page's name, such as /projects/projects.
+function useWorkspaceAddress() {
+  const router = useRouter()
+  const location = useRouterState({ select: (state) => state.location })
+  const { slug } = useOrganization()
+  const named = requestedWorkspace(location)
+  const stale =
+    named === null && !isUnprefixed(location.pathname) ? location.href : ""
+  useEffect(() => {
+    if (stale) void router.navigate({ href: stale, replace: true })
+  }, [router, stale, slug])
 }
 
 export function Problem({

@@ -33,6 +33,27 @@ export function PageNotFound() {
   )
 }
 
+/** WorkspaceNotFound answers an address in a workspace the person isn't in. */
+export function WorkspaceNotFound({ slug }: { slug: string }) {
+  return (
+    <div className="flex min-h-svh flex-1 flex-col items-start justify-center gap-4 p-6 md:p-10">
+      <div>
+        <h1 className="text-2xl font-semibold tracking-tight">
+          Workspace not found
+        </h1>
+        <p className="mt-2 text-sm text-muted-foreground">
+          There's no workspace at <code className="font-mono">{slug}</code> that
+          you're a member of. Ask its owner for an invitation, or go back to
+          your projects.
+        </p>
+      </div>
+      <Link to="/projects" className={buttonVariants()}>
+        Back to projects
+      </Link>
+    </div>
+  )
+}
+
 export function PageError() {
   return (
     <div

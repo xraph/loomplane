@@ -4020,6 +4020,24 @@ export class RESTClient extends Client {
     },
 
     /**
+     * Exclude services from a project's graph, plans and deploys, by service or path. A project setting: the repository doesn't change.
+     */
+    exclude: async (id: string, body: types.ExcludeInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Project> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/exclusions`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["ExcludeInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Project"],
+      };
+
+      return this.request<types.Project>(config);
+    },
+
+    /**
      * One project
      */
     get: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Project> => {
@@ -4049,6 +4067,24 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.ProjectView>(config);
+    },
+
+    /**
+     * Remove exclusions, bringing those services back into the graph and the next plan
+     */
+    include: async (id: string, body: types.IncludeInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Project> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/exclusions/remove`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["IncludeInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Project"],
+      };
+
+      return this.request<types.Project>(config);
     },
 
     /**

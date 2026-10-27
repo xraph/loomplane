@@ -56,7 +56,7 @@ export type DomainsSearch = {
 }
 
 const description =
-  "Domains your organization owns. Grant them to projects, then point hostnames at any service or gateway."
+  "Domains your workspace owns. Grant them to projects, then point hostnames at any service or gateway."
 
 export function Domains({
   search = {},
@@ -91,7 +91,7 @@ function Restricted() {
         </ZeroStateMedia>
         <ZeroStateTitle>Domain access is restricted</ZeroStateTitle>
         <ZeroStateDescription>
-          Ask your organization owner for permission to manage Cloud
+          Ask your workspace owner for permission to manage Cloud
           infrastructure.
         </ZeroStateDescription>
       </ZeroStateHeader>

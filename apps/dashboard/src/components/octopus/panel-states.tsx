@@ -35,7 +35,7 @@ export function Denied({ title }: { title: string }) {
         <ZeroStateTitle>{title}</ZeroStateTitle>
         <ZeroStateDescription>
           Your role doesn&apos;t include reading this project&apos;s
-          infrastructure. An organization owner can give you access.
+          infrastructure. A workspace owner can give you access.
         </ZeroStateDescription>
       </ZeroStateHeader>
     </ZeroState>
