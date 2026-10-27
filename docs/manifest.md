@@ -133,6 +133,8 @@ An environment's `farp` block replaces the service's whole block. It doesn't mer
 
 Names starting with `lp-` are reserved for the upstreams Loomplane registers with Octopus for manual routes. A service that opts in can't use one.
 
+[octopus.md](octopus.md) covers the rest: adding the gateway, what it does with these schemas, and the routes you add by hand.
+
 ## resources
 
 Backing services the application needs, by name. A resource can't share a service's name.
