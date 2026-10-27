@@ -350,7 +350,9 @@ func nonNilStrings(in []string) []string {
 
 // cardSet keeps a board's cards: the attached hostnames first, exact
 // before wildcard, then hostnames routes name that aren't attached, then
-// any host.
+// any host. The any-host card is there whenever FARP routes answer on any
+// host, which is when none of the FARP hostnames is attached, even before
+// FARP has found a route; otherwise only when a route lands on it.
 type cardSet struct {
 	cards map[string]*HostCard
 }
@@ -371,6 +373,9 @@ func newCardSet(attached []BoardHostname, farpHostnames []string) *cardSet {
 			Hostname: name, Attached: true, DomainRouteID: h.RouteID, Status: h.Status,
 			FarpHome: slices.Contains(farp, name), Routes: []BoardRoute{},
 		}
+	}
+	if len(farp) == 0 {
+		s.add("")
 	}
 	return s
 }
@@ -542,11 +547,14 @@ func groupBoardRoutes(infos []RouteInfo) []*boardLiveRoute {
 }
 
 // source is where the route comes from, or "" when it isn't a row of its
-// own: Loomplane's "lp-" routes are shown as the manual routes they come
-// from, whatever Octopus says their origin is.
+// own. Loomplane's routes are shown as the manual routes they come from:
+// an "lp-" id whose every entry came from its config file or the admin
+// API, the same rule the syncer uses (liveRoute.loomplanes). An "lp-" id
+// that FARP or Kubernetes discovery made, such as one named after an
+// lp-inst-... Service, is FARP's.
 func (lr *boardLiveRoute) source() string {
 	switch {
-	case strings.HasPrefix(lr.key, "lp-"):
+	case strings.HasPrefix(lr.key, "lp-") && lr.loomplanes():
 		return ""
 	case lr.origins[originFarp] || lr.origins[originKubernetes]:
 		return SourceFarp
@@ -554,6 +562,17 @@ func (lr *boardLiveRoute) source() string {
 		return SourceAdmin
 	}
 	return ""
+}
+
+// loomplanes reports whether every entry came from Loomplane's config file
+// or the admin API.
+func (lr *boardLiveRoute) loomplanes() bool {
+	for origin := range lr.origins {
+		if origin != originConfig && origin != originAdmin {
+			return false
+		}
+	}
+	return true
 }
 
 // methodsOn is the methods the route answers on host, empty for every one.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"slices"
 	"strings"
 	"sync"
@@ -183,12 +184,31 @@ type svcAccess struct {
 	octo  *fakeOctopus
 	down  bool
 	calls []string
+	// hangDial makes opening the channel wait for the context to end, and
+	// hang makes every request on it wait the same way.
+	hangDial, hang bool
 }
 
-func (a *svcAccess) Channel(_ context.Context, p security.Principal, need security.Permission, ref deployments.ComponentRef) (*deployments.ComponentChannel, error) {
+// hangingTransport answers nothing until the request's context ends.
+type hangingTransport struct{}
+
+func (hangingTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	<-req.Context().Done()
+	return nil, req.Context().Err()
+}
+
+func (a *svcAccess) Channel(ctx context.Context, p security.Principal, need security.Permission, ref deployments.ComponentRef) (*deployments.ComponentChannel, error) {
 	a.calls = append(a.calls, fmt.Sprintf("channel %s %s %s/%s/%s:%s", p.UserID, need.Name(), ref.ProjectID, ref.Resource, ref.Component, ref.Port))
-	if a.down {
+	switch {
+	case a.down:
 		return nil, errors.New("dial lp-inst-01h455vb4pex5vsknk084sn02q:9090: connection refused")
+	case a.hangDial:
+		<-ctx.Done()
+		return nil, ctx.Err()
+	case a.hang:
+		ch := a.octo.channel()
+		ch.Client = &http.Client{Transport: hangingTransport{}}
+		return ch, nil
 	}
 	return a.octo.channel(), nil
 }
@@ -500,7 +520,8 @@ func TestBoardReadsOctopusAsThePrincipal(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !b.Live || b.Gateway.Version != "0.5.0" || len(b.Hosts) != 1 || b.Hosts[0].Hostname != "api.acme.dev" || b.Hosts[0].Status == nil || len(b.Hosts[0].Routes) != 1 {
+	// No FARP hostnames: FARP answers on any host, so that card is there too.
+	if !b.Live || b.Gateway.Version != "0.5.0" || len(b.Hosts) != 2 || b.Hosts[0].Hostname != "api.acme.dev" || b.Hosts[0].Status == nil || len(b.Hosts[0].Routes) != 1 || b.Hosts[1].Hostname != "" {
 		t.Fatalf("board %+v", b)
 	}
 	want := []string{
@@ -559,6 +580,14 @@ func TestReadsOfAnotherProjectsGatewayAreNotFound(t *testing.T) {
 	if _, err := f.svc.CreateRoute(context.Background(), admin, other, authInput("")); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("create: %v", err)
 	}
+	// A gateway recorded without a project belongs to none.
+	f.store.gateway.ProjectID = ""
+	if _, err := f.svc.Board(context.Background(), admin, f.ref); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("board of a gateway with no project: %v", err)
+	}
+	if _, err := f.svc.Sync(context.Background(), admin, f.ref); !errors.Is(err, ErrNotFound) || f.syncer.count() != 0 {
+		t.Fatalf("sync of a gateway with no project: %v", err)
+	}
 	if len(f.store.stored()) != 0 {
 		t.Fatalf("stored %+v", f.store.stored())
 	}
@@ -583,5 +612,35 @@ func TestStatusReportsTheGatewayAndWhereToAttachIt(t *testing.T) {
 	f.bindings = f.bindings[1:]
 	if st, err = f.svc.Status(context.Background(), readOnly, f.ref); err != nil || st.PrivateURL != "" || st.Attach.CloudID != "" {
 		t.Fatalf("status without a binding %+v %v", st, err)
+	}
+}
+
+func TestReadsGiveUpOnAHangingOctopus(t *testing.T) {
+	for _, mode := range []string{"dial", "requests"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newServiceFixture(t)
+			f.access.hangDial, f.access.hang = mode == "dial", mode == "requests"
+			f.svc.readTimeout = 50 * time.Millisecond
+			start := time.Now()
+			b, err := f.svc.Board(context.Background(), admin, f.ref)
+			if err != nil || b.Live || b.LiveError != msgBoardUnreachable {
+				t.Fatalf("board %+v %v", b, err)
+			}
+			st, err := f.svc.Status(context.Background(), admin, f.ref)
+			if err != nil || st.Version != "" {
+				t.Fatalf("status %+v %v", st, err)
+			}
+			d, err := f.svc.Discovery(context.Background(), admin, f.ref)
+			if err != nil || d == nil {
+				t.Fatalf("discovery %+v %v", d, err)
+			}
+			// Three reads, each bounded by 50 ms, not by Admin's 10 s.
+			if took := time.Since(start); took > 2*time.Second {
+				t.Fatalf("the reads took %s", took)
+			}
+		})
+	}
+	if octopusReadTimeout != 5*time.Second {
+		t.Fatalf("octopusReadTimeout %s", octopusReadTimeout)
 	}
 }

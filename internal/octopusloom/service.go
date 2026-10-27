@@ -22,6 +22,10 @@ const (
 	// again while another sync holds the gateway.
 	busyEvery = 250 * time.Millisecond
 	busyFor   = 5 * time.Second
+	// octopusReadTimeout bounds one read of Octopus for a board, a status
+	// or discovery: opening the channel and every call on it, together.
+	// When it runs out the read is Octopus not answering.
+	octopusReadTimeout = 5 * time.Second
 )
 
 // GatewaySyncer pushes a gateway to Octopus. *Syncer is the real one.
@@ -71,11 +75,12 @@ type Service struct {
 	d                  ServiceDeps
 	busyEvery, busyFor time.Duration
 	syncTimeout        time.Duration
+	readTimeout        time.Duration
 }
 
 // NewService returns the Service.
 func NewService(d ServiceDeps) *Service {
-	return &Service{d: d, busyEvery: busyEvery, busyFor: busyFor, syncTimeout: writeSyncTimeout}
+	return &Service{d: d, busyEvery: busyEvery, busyFor: busyFor, syncTimeout: writeSyncTimeout, readTimeout: octopusReadTimeout}
 }
 
 func (s *Service) warn(msg string, err error) {
@@ -95,7 +100,7 @@ func (s *Service) gateway(ctx context.Context, p security.Principal, need securi
 	if err != nil {
 		return nil, ref, err
 	}
-	if g.ProjectID != "" && g.ProjectID != ref.ProjectID {
+	if g.ProjectID != ref.ProjectID {
 		return nil, ref, ErrNotFound
 	}
 	return g, ref, nil
@@ -121,14 +126,7 @@ func (s *Service) Status(ctx context.Context, p security.Principal, ref GatewayR
 	if err != nil {
 		return nil, err
 	}
-	var info *SystemInfo
-	if admin, closeCh := s.openAdmin(ctx, p, ref); admin != nil {
-		if got, infoErr := admin.SystemInfo(ctx); infoErr == nil {
-			info = &got
-		}
-		closeCh()
-	}
-	st := octopusStatus(*g, bindings, info)
+	st := octopusStatus(*g, bindings, s.systemInfo(ctx, p, ref))
 	return &st, nil
 }
 
@@ -176,8 +174,29 @@ func (s *Service) boardInput(ctx context.Context, p security.Principal, ref Gate
 	return &BoardInput{Gateway: *g, Bindings: bindings, Routes: routes, Hostnames: hostnames, Live: s.live(ctx, p, ref)}, nil
 }
 
+// systemInfo is what Octopus says about itself, read as p within
+// readTimeout, or nil when it doesn't answer in time.
+func (s *Service) systemInfo(ctx context.Context, p security.Principal, ref GatewayRef) *SystemInfo {
+	ctx, cancel := context.WithTimeout(ctx, s.readTimeout)
+	defer cancel()
+	admin, closeCh := s.openAdmin(ctx, p, ref)
+	if admin == nil {
+		return nil
+	}
+	defer closeCh()
+	info, err := admin.SystemInfo(ctx)
+	if err != nil {
+		return nil
+	}
+	return &info
+}
+
 // live is what Octopus reports, read as p, or nil when it doesn't answer.
+// Opening the channel and the four reads share readTimeout, so a slow or
+// hung Octopus costs a board at most that.
 func (s *Service) live(ctx context.Context, p security.Principal, ref GatewayRef) *LiveState {
+	ctx, cancel := context.WithTimeout(ctx, s.readTimeout)
+	defer cancel()
 	admin, closeCh := s.openAdmin(ctx, p, ref)
 	if admin == nil {
 		return nil

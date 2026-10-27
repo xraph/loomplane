@@ -401,3 +401,78 @@ func TestDiscoveryOnKubernetesReadsWhatOctopusFound(t *testing.T) {
 		t.Fatalf("services %+v", d.Services)
 	}
 }
+
+func TestBoardHasAnAnyHostCardWhenFarpAnswersOnAnyHost(t *testing.T) {
+	in := mockBoard(t)
+	in.Gateway.FarpHostnames = nil
+	in.Live = nil
+	b := BuildBoard(in)
+	if got, want := cardNames(b), []string{"acme.dev", "api.acme.dev", "*.acme.dev", ""}; !slices.Equal(got, want) {
+		t.Fatalf("cards %v, want %v", got, want)
+	}
+	if anyHost := card(t, b, ""); anyHost.Attached || anyHost.FarpHome || anyHost.Routes == nil || len(anyHost.Routes) != 0 {
+		t.Fatalf("any-host card %+v", anyHost)
+	}
+	// A FARP hostname that isn't attached any more leaves FARP on any host.
+	in.Gateway.FarpHostnames = []string{"gone.acme.dev"}
+	if got := cardNames(BuildBoard(in)); !slices.Contains(got, "") {
+		t.Fatalf("cards %v", got)
+	}
+	// FARP routes on api.acme.dev and no manual route on any host: no card.
+	in.Gateway.FarpHostnames = []string{"api.acme.dev"}
+	if got := cardNames(BuildBoard(in)); slices.Contains(got, "") {
+		t.Fatalf("cards %v", got)
+	}
+	// A manual route with no hostname has its card.
+	in.Routes = append(in.Routes, &Route{ID: "octoroute_any", GatewayRef: in.Gateway.GatewayRef, Path: "/health", Methods: []string{}, Service: "web", Port: 3000, Revision: 1})
+	if anyHost := card(t, BuildBoard(in), ""); len(anyHost.Routes) != 1 || anyHost.Routes[0].RouteID != "octoroute_any" {
+		t.Fatalf("any-host card %+v", anyHost)
+	}
+}
+
+func TestBoardShowsFarpRoutesWithLoomplaneLikeIDs(t *testing.T) {
+	const apiInstance = "inst_01jbzq7m0dxf4w3y5v8k2n6r9t"
+	iid, err := id.Parse(apiInstance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	k8sName := kubernetes.WorkloadName(iid)
+	in := mockBoard(t)
+	in.Gateway.Provider, in.Gateway.Namespace, in.Gateway.FarpHostnames = ProviderKubernetes, "apps", nil
+	apiBinding := serviceBinding(t, "api", "conn_a", planning.ServiceConfig{Port: 8080, Farp: farpOptIn(map[string]string{"farp.openapi.path": "/openapi.json"})})
+	apiBinding.ExternalID = apiInstance
+	in.Bindings = []*planning.Binding{gatewayBinding(t), apiBinding}
+	// Discovery named the route after the Service, which starts with lp-.
+	in.Live.Routes = liveEntries(k8sName+"-orders", "kubernetes", "/v1/orders/*", k8sName, []string{"GET"})
+	in.Live.Upstreams = []UpstreamInfo{upstream(k8sName, 8080)}
+	in.Routes = nil
+	row := rowAt(t, card(t, BuildBoard(in), ""), "/v1/orders/*", "farp")
+	if row.Service != "api" || row.Port != 8080 {
+		t.Fatalf("row %+v", row)
+	}
+	// One origin of Loomplane's and one of FARP's is FARP's.
+	in.Live.Routes = append(liveEntries("lp-mixed", "config", "/mixed", "api", []string{"GET"}),
+		liveEntries("lp-mixed", "farp", "/mixed", "api", []string{"POST"})...)
+	rowAt(t, card(t, BuildBoard(in), ""), "/mixed", "farp")
+}
+
+func TestBoardBringsTheFarpRouteBackWhenTheManualRouteGoes(t *testing.T) {
+	in := mockBoard(t)
+	in.Routes = slices.DeleteFunc(in.Routes, func(r *Route) bool { return r.ID == "octoroute_auth" })
+	b := BuildBoard(in)
+	api := card(t, b, "api.acme.dev")
+	auth := rowAt(t, api, "/auth/*", "farp")
+	if auth.Service != "auth" || auth.Port != 9000 || auth.Overrides {
+		t.Fatalf("FARP /auth/* row %+v", auth)
+	}
+	for _, c := range b.Hosts {
+		for _, r := range c.Routes {
+			if r.Overrides {
+				t.Fatalf("row %+v on %q overrides with no manual route on /auth/*", r, c.Hostname)
+			}
+		}
+	}
+	if len(api.Routes) != 4 || b.Counts != (SourceCounts{All: 6, Farp: 4, Here: 2}) {
+		t.Fatalf("api.acme.dev %+v, counts %+v", api.Routes, b.Counts)
+	}
+}

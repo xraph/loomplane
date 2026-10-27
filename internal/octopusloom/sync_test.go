@@ -101,12 +101,17 @@ func cloneGateway(g *Gateway) *Gateway {
 	return &out
 }
 
+// fakeHostnames is a HostnameSource that records which services it was
+// asked about. A reconcile asks from several goroutines at once.
 type fakeHostnames struct {
+	mu        sync.Mutex
 	hostnames []ServiceHostname
 	services  []string
 }
 
 func (f *fakeHostnames) ServiceHostnames(_ context.Context, _, _, _, service string) ([]ServiceHostname, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.services = append(f.services, service)
 	return f.hostnames, nil
 }
