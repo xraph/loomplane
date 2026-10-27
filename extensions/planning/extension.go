@@ -56,10 +56,13 @@ import (
 	"github.com/xraph/loomplane/internal/clouds/vercel"
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/connections"
+	"github.com/xraph/loomplane/internal/dbgateway"
+	"github.com/xraph/loomplane/internal/dbgateway/plane"
 	"github.com/xraph/loomplane/internal/deployments"
 	"github.com/xraph/loomplane/internal/discovery"
 	"github.com/xraph/loomplane/internal/environments"
 	"github.com/xraph/loomplane/internal/fabriqloom"
+	"github.com/xraph/loomplane/internal/gpus"
 	"github.com/xraph/loomplane/internal/manifests"
 	"github.com/xraph/loomplane/internal/orchestration"
 	"github.com/xraph/loomplane/internal/planning"
@@ -104,6 +107,7 @@ type Extension struct {
 	checkLimit          *checkLimiter // nil is checksPerMinute (see checks)
 	checkLimitOnce      sync.Once
 	catalogKinds        *recipes.Registry // nil is recipes.Default()
+	failedCleanups      *deployments.FailedCleanups
 	cloudStore          *cloudprofiles.PgStore
 	cloudRecoveryCancel context.CancelFunc
 	cloudRecoveryDone   chan struct{}
@@ -280,9 +284,16 @@ func (e *Extension) Register(fapp forge.App) error {
 	}
 	resourceSecrets := deployments.NewVaultResourceSecrets(
 		secret.NewService(vaultpg.New(db), resourceEnc, secret.WithAppID(deployments.ResourceVaultAppID)))
+	// The database gateway reads resource addresses through the same one.
+	if err = forge.ProvideValue(c, resourceSecrets); err != nil {
+		return fmt.Errorf("provide the resource secrets: %w", err)
+	}
 	// An external endpoint's DSN is a resource credential too.
 	e.endpoints = catalogconnect.NewService(catalogconnect.NewPgStore(pg), resourceSecrets, authz)
 	e.endpoints.Audit = endpointAuditor{chronicle: audit, appID: e.cfg.Identity.AppID, log: log}
+	e.endpoints.OrphanedDSN = func(_ context.Context, vaultKey string, err error) {
+		log.Warn("a deleted catalog endpoint's DSN is still in Vault; delete it by its key", forge.F("vault_key", vaultKey), forge.F("error", err.Error()))
+	}
 	ctrl := deployments.CtrlPlane{Providers: cp.Providers(), Instances: cp.Instances, Deploys: cp.Deploys}
 	routeService, err := forge.InjectType[*cloudinfra.Service](c)
 	if err != nil {
@@ -301,7 +312,13 @@ func (e *Extension) Register(fapp forge.App) error {
 	// observers hear of each service binding a deployment writes or
 	// deletes. A kind that tracks its consumers registers its own here.
 	observers := make([]deployments.ReleaseObserver, 0, 1)
-	serverTarget := &deployments.OwnedTarget{RouteGuard: routeService, Cloud: connections.Server, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, Ports: owned.NewReservations(pg), Hooks: catalogHooks, Endpoints: e.endpoints, Checker: checker}
+	// A component's rendered files show in its revision label only as a
+	// digest keyed by this installation.
+	filesKey, err := security.DeriveKey(e.cfg.SecretKey, deployments.FilesRevisionKeyLabel)
+	if err != nil {
+		return err
+	}
+	serverTarget := &deployments.OwnedTarget{RouteGuard: routeService, Cloud: connections.Server, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, Ports: owned.NewReservations(pg), GPULocks: owned.NewGPULocks(pg), Hooks: catalogHooks, Endpoints: e.endpoints, Checker: checker, FilesRevisionKey: filesKey}
 	// A cluster's endpoint checks dial from Loomplane's own network, so
 	// they never reach what Loomplane itself depends on.
 	denied, servicesErr := loomplaneServices(e.cfg)
@@ -309,7 +326,7 @@ func (e *Extension) Register(fapp forge.App) error {
 		log.Warn("endpoint checks from a cluster can reach the database", forge.F("error", servicesErr.Error()))
 	}
 	dialGuard := &deployments.DialGuard{Denied: e.cfg.Planning.EndpointDeniedCIDRs, Services: denied}
-	clusterTarget := &deployments.OwnedTarget{Cloud: connections.Kubernetes, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, Controllers: kubernetes.NewControllerStore(pg), Hooks: catalogHooks, Endpoints: e.endpoints, Checker: checker, DialGuard: dialGuard}
+	clusterTarget := &deployments.OwnedTarget{Cloud: connections.Kubernetes, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, Controllers: kubernetes.NewControllerStore(pg), Hooks: catalogHooks, Endpoints: e.endpoints, Checker: checker, DialGuard: dialGuard, FilesRevisionKey: filesKey}
 	serverTarget.Bindings, clusterTarget.Bindings = planStore.ListBindings, planStore.ListBindings
 	executors[connections.Server], executors[connections.Kubernetes] = serverTarget, clusterTarget
 	dialer := ownedDialer{credentials: clouds, targets: map[string]*deployments.OwnedTarget{connections.Server: serverTarget, connections.Kubernetes: clusterTarget}}
@@ -353,7 +370,7 @@ func (e *Extension) Register(fapp forge.App) error {
 		Store: planStore, Projects: prj, Analyses: discovery.NewPgStore(pg), Manifests: e.manifests,
 		CloudProfiles: e.cloudStore, CloudSyncWorkflow: e.deployments,
 		Providers: catalog, Connections: clouds, Authz: authz, Workflow: e.deployments, Audit: auditor,
-		Window: e.cfg.Planning.ApprovalWindow, Telemetry: metrics,
+		Window: e.cfg.Planning.ApprovalWindow, Telemetry: metrics, DatabaseGatewayTrust: databaseGatewayTrust(c),
 		Warn:      func(msg string, err error) { log.Warn(msg, forge.F("error", err.Error())) },
 		Endpoints: checker,
 		Dialer:    dialer,
@@ -394,6 +411,7 @@ func (e *Extension) Register(fapp forge.App) error {
 		}
 		return nil
 	}
+	gatewayStore := dbgateway.NewStore(pg)
 	runner := deployments.NewRunner(deployments.RunnerDeps{
 		Authz: authz, BackupPolicies: e.backups,
 		Logs: logStore, Routes: routeService, Capacity: e.plans,
@@ -402,12 +420,34 @@ func (e *Extension) Register(fapp forge.App) error {
 		Sources: &deployments.GitHubSources{
 			GitHub: repositories.NewGitHub(e.cfg.GitHub.APIURL), Tokens: github, Artifacts: e.artifacts,
 		},
-		Providers:    catalog,
-		Executors:    executors,
-		Resources:    resourceSecrets,
-		Telemetry:    metrics,
-		CatalogHooks: catalogHooks,
-		Observers:    observers,
+		Providers:            catalog,
+		Executors:            executors,
+		Resources:            resourceSecrets,
+		DatabaseGateways:     gatewayStore,
+		DatabaseGatewayTrust: databaseGatewayTrust(c),
+		PublicURL:            e.cfg.PublicURL,
+		Telemetry:            metrics,
+		CatalogHooks:         catalogHooks,
+		Observers:            observers,
+	})
+	// Deleting a project or environment takes its database gateways' records
+	// with it, and this deletes their keys from Vault and warns about a
+	// gateway still running in a cloud.
+	projectSvc, injectErr := forge.InjectType[*projects.Service](c)
+	if injectErr != nil {
+		return fmt.Errorf("planning needs the projects extension: %w", injectErr)
+	}
+	reapWarn := func(msg string, err error) { log.Warn(msg, forge.F("error", err.Error())) }
+	projectSvc.AddReaper(&deployments.DatabaseGatewayReaper{
+		Gateways: gatewayStore, Bindings: planStore, Environments: prj, Secrets: resourceSecrets, Executors: executors,
+		Warn: reapWarn,
+	})
+	// It takes every other service and resource's binding too, and this
+	// deletes their credentials from Vault and warns about each one still
+	// running in a cloud.
+	projectSvc.AddReaper(&deployments.BindingReaper{
+		Bindings: planStore, Environments: prj, Secrets: resourceSecrets, Executors: executors,
+		Warn: reapWarn,
 	})
 	if err := e.poolRecoveryRoutes(fapp.Router(), guard, cloudinfra.NewService(cloudinfra.Deps{Store: cloudinfra.NewPgStore(pg), Clouds: e.cloudStore, Authz: authz, PoolCleanup: runner})); err != nil {
 		return err
@@ -415,6 +455,8 @@ func (e *Extension) Register(fapp forge.App) error {
 	e.plans.BindCloudSyncRunner(runner, runner)
 	e.deployments.Bind(e.plans, runner, e.engineOf)
 	e.deployments.BindCloudSync(e.plans)
+	e.failedCleanups = deployments.NewFailedCleanups(runner, deployStore, e.deployments)
+	e.deployments.BindFailedCleanups(e.failedCleanups)
 	// Drift is checked on Dispatch's cron leader, so one replica checks.
 	engine.Register(e.engineOf(), orchestration.DriftJob(&deployments.DriftChecker{
 		Store: planStore, Credentials: clouds, Executors: executors, Telemetry: metrics,
@@ -438,7 +480,32 @@ func (e *Extension) Register(fapp forge.App) error {
 	if err := e.usageRoutes(fapp.Router(), guard, readings); err != nil {
 		return err
 	}
+	targets := gpus.NewService(gpus.Deps{
+		Connections: clouds, Bindings: planStore, Options: routeService, Servers: cloudinfra.NewPgStore(pg), Authz: authz,
+	})
+	if err := e.gpuTargetRoutes(fapp.Router(), guard, targets); err != nil {
+		return err
+	}
 	return e.routes(fapp.Router(), guard)
+}
+
+// databaseGatewayTrust returns the trust keys of the database gateway
+// service, looked up when a gateway is planned or deploys: the database gateway extension
+// registers after this one and provides the service then. A service that
+// isn't there is a wiring error, which it reports; one with no signing key
+// gives no keys, which the deploy reports as that. A key outside its window
+// gives the service's reason, so the deploy fails saying the key expired.
+func databaseGatewayTrust(c forge.Container) func() ([]plane.TrustKey, error) {
+	return func() ([]plane.TrustKey, error) {
+		svc, err := forge.InjectType[*dbgateway.Service](c)
+		if err != nil {
+			return nil, fmt.Errorf("the database gateway extension isn't registered: %w", err)
+		}
+		if err = svc.Ready(); err != nil && !errors.Is(err, dbgateway.ErrNotConfigured) {
+			return nil, err
+		}
+		return svc.TrustKeys(), nil
+	}
 }
 
 // Start schedules the drift check. Dispatch runs the workflow and the
@@ -541,7 +608,7 @@ func fail(err error) error {
 		errors.Is(err, deployments.ErrNotFound), errors.Is(err, deployments.ErrComponentNotFound), errors.Is(err, catalogproxy.ErrNotFound),
 		errors.Is(err, projects.ErrEnvironmentNotFound), errors.Is(err, manifests.ErrNotFound):
 		return forge.NewHTTPError(http.StatusNotFound, err.Error())
-	case errors.Is(err, cloudprofiles.ErrConflict), errors.Is(err, cloudprofiles.ErrExists), errors.Is(err, cloudprofiles.ErrInUse), errors.Is(err, cloudprofiles.ErrBusy), errors.Is(err, recovery.ErrConflict), errors.Is(err, planning.ErrConflict), errors.Is(err, manifests.ErrConflict), errors.Is(err, deployments.ErrNotFailed),
+	case errors.Is(err, deployments.ErrCleanupConflict), errors.Is(err, cloudprofiles.ErrConflict), errors.Is(err, cloudprofiles.ErrExists), errors.Is(err, cloudprofiles.ErrInUse), errors.Is(err, cloudprofiles.ErrBusy), errors.Is(err, recovery.ErrConflict), errors.Is(err, planning.ErrConflict), errors.Is(err, manifests.ErrConflict), errors.Is(err, deployments.ErrNotFailed),
 		errors.Is(err, planning.ErrStale), errors.Is(err, planning.ErrSuperseded), errors.Is(err, planning.ErrNotReady),
 		errors.Is(err, catalogconnect.ErrInUse):
 		return forge.NewHTTPError(http.StatusConflict, err.Error())
@@ -549,7 +616,7 @@ func fail(err error) error {
 		errors.Is(err, planning.ErrNoSources), errors.Is(err, planning.ErrNeverDeployed):
 		return forge.NewHTTPError(http.StatusPreconditionFailed, err.Error())
 	case errors.Is(err, cloudprofiles.ErrInvalid), errors.Is(err, recovery.ErrInvalid), errors.Is(err, planning.ErrInvalid), errors.Is(err, manifests.ErrInvalid), errors.Is(err, manifest.ErrInvalid),
-		errors.Is(err, catalogconnect.ErrInvalid), errors.Is(err, deployments.ErrNotControlPort), errors.Is(err, catalogproxy.ErrInvalid), errors.Is(err, usage.ErrInvalid):
+		errors.Is(err, catalogconnect.ErrInvalid), errors.Is(err, deployments.ErrNotControlPort), errors.Is(err, catalogproxy.ErrInvalid), errors.Is(err, usage.ErrInvalid), errors.Is(err, gpus.ErrInvalid):
 		return forge.NewHTTPError(http.StatusUnprocessableEntity, err.Error())
 	case errors.Is(err, planning.ErrUnavailable):
 		return forge.NewHTTPError(http.StatusServiceUnavailable, err.Error())

@@ -1,4 +1,4 @@
-import { useEffect, useRef } from "react"
+import { useEffect, useRef, useState } from "react"
 
 import { messageOf } from "@/client/errors"
 import {
@@ -20,7 +20,7 @@ import {
 } from "@/components/ui/card"
 import { Spinner } from "@/components/ui/spinner"
 import { Link, useNavigate } from "@/lib/router"
-import { signInCloud } from "@/lib/sign-in-cloud"
+import { signInCloud, takeVercelState } from "@/lib/sign-in-cloud"
 import { cn } from "@/lib/utils"
 
 export interface OAuthCallbackProps {
@@ -28,6 +28,8 @@ export interface OAuthCallbackProps {
   code: string
   error: string
   errorDescription: string
+  /** Vercel's install ID, which only its redirect carries. */
+  configurationId?: string
 }
 
 /**
@@ -40,6 +42,7 @@ export function OAuthCallback({
   code,
   error,
   errorDescription,
+  configurationId = "",
 }: OAuthCallbackProps) {
   const complete = useMutation(useConnectionSignInsComplete)
   const invalidate = useInvalidate()
@@ -47,20 +50,28 @@ export function OAuthCallback({
   // Once per visit: StrictMode runs effects twice in development, and the
   // code the cloud sent works only once.
   const sent = useRef(false)
-  const ready = !error && !!state && !!code
+  // Vercel can drop the state from its redirect. Then, and only for a Vercel
+  // install (it carries a configurationId), the state this browser started
+  // with stands in. Reading it removes it, so it's read once, on first render.
+  const [kept] = useState(() => {
+    const stored = takeVercelState()
+    return !state && configurationId ? stored : ""
+  })
+  const use = state || kept
+  const ready = !error && !!use && !!code
 
   useEffect(() => {
     if (sent.current || !ready) return
     sent.current = true
     complete
-      .mutateAsync({ body: { state, code } })
+      .mutateAsync({ body: { state: use, code } })
       .then((c) => {
         invalidate(useConnectionsList)
         invalidate(useConnectionsGet)
         return navigate({ to: "/clouds/accounts/$id", params: { id: c.id } })
       })
       .catch(() => undefined) // shown from the mutation's own error state
-  }, [ready, complete, invalidate, navigate, state, code])
+  }, [ready, complete, invalidate, navigate, use, code])
 
   // The cloud's own words come from the link, which anyone can craft, so
   // they're shown as the cloud's and kept short.

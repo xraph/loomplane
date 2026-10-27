@@ -255,7 +255,7 @@ function ProjectChoices({
   if (!environments.data) return <Skeleton className="h-24 w-full" />
   if (list.length === 0) {
     return (
-      <p className="text-sm text-muted-foreground">
+      <p className="text-[13px] text-muted-foreground">
         {project.name} is still being set up. Its environments appear in a
         moment.
       </p>
@@ -506,17 +506,21 @@ function Choices({
             <CardContent className="grid gap-3 sm:grid-cols-2 xl:grid-cols-1">
               {current.data?.manifest && (
                 <>
-                  <div className="hidden items-center justify-between text-sm xl:flex">
+                  <div className="hidden items-center justify-between text-[13px] xl:flex">
                     <span className="text-muted-foreground">
                       Services included
                     </span>
-                    <span>{summary?.services}</span>
+                    <span className="font-mono tabular-nums">
+                      {summary?.services}
+                    </span>
                   </div>
-                  <div className="hidden items-center justify-between text-sm xl:flex">
+                  <div className="hidden items-center justify-between text-[13px] xl:flex">
                     <span className="text-muted-foreground">
                       Backing resources
                     </span>
-                    <span>{summary?.resources}</span>
+                    <span className="font-mono tabular-nums">
+                      {summary?.resources}
+                    </span>
                   </div>
                 </>
               )}

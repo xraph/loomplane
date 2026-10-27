@@ -125,19 +125,20 @@ type AppliedInputs struct {
 }
 
 type ServiceConfig struct {
-	CapacityIntent *CapacityIntent    `json:"capacity_intent,omitempty"`
-	AppliedInputs  *AppliedInputs     `json:"applied_inputs,omitempty"`
-	CloudPlacement *CloudPlacement    `json:"cloud_placement,omitempty"`
-	Catalog        *recipes.Recipe    `json:"catalog,omitempty"`
-	Provider       string             `json:"provider"`
-	Region         string             `json:"region,omitempty"`
-	Target         string             `json:"target,omitempty"`
-	TargetSettings map[string]string  `json:"target_settings,omitempty"`
-	Endpoint       *manifest.Endpoint `json:"endpoint,omitempty"`
-	HealthPath     string             `json:"health_path,omitempty"`
-	BuildTarget    *BuildTarget       `json:"build_target,omitempty"`
-	Workload       provider.Workload  `json:"workload"`
-	Execution      provider.Execution `json:"execution"`
+	FrontendDemand *cloudinfra.FrontendDemand `json:"frontend_demand,omitempty"`
+	CapacityIntent *CapacityIntent            `json:"capacity_intent,omitempty"`
+	AppliedInputs  *AppliedInputs             `json:"applied_inputs,omitempty"`
+	CloudPlacement *CloudPlacement            `json:"cloud_placement,omitempty"`
+	Catalog        *recipes.Recipe            `json:"catalog,omitempty"`
+	Provider       string                     `json:"provider"`
+	Region         string                     `json:"region,omitempty"`
+	Target         string                     `json:"target,omitempty"`
+	TargetSettings map[string]string          `json:"target_settings,omitempty"`
+	Endpoint       *manifest.Endpoint         `json:"endpoint,omitempty"`
+	HealthPath     string                     `json:"health_path,omitempty"`
+	BuildTarget    *BuildTarget               `json:"build_target,omitempty"`
+	Workload       provider.Workload          `json:"workload"`
+	Execution      provider.Execution         `json:"execution"`
 	// Service is the service's ID in the analysis's graph, which its
 	// variables are set against.
 	Service string `json:"service"`
@@ -176,10 +177,40 @@ type ServiceConfig struct {
 	// Gateway are a gateway's routes. A service with routes is a gateway
 	// Loomplane generates and builds, not code from the repository.
 	Gateway []gateway.Route `json:"gateway,omitempty"`
+	// DatabaseGateway is set on the database gateway, a service Loomplane
+	// generates and builds in front of the Postgres resources that opt in.
+	DatabaseGateway *DatabaseGatewayConfig `json:"database_gateway,omitempty"`
 	// Component is the catalog component the service runs, when a
 	// composed catalog kind runs one as a service.
 	Component *ComponentConfig `json:"component,omitempty"`
+	// GPU is the reviewed GPU placement of a service whose size asks for GPUs.
+	GPU *provider.GPUPlacement `json:"gpu,omitempty"`
 }
+
+// DatabaseGatewayConfig is what the database gateway serves: the
+// resources behind it, each at <resource>.<Suffix>.
+type DatabaseGatewayConfig struct {
+	Name string `json:"name"`
+	// Suffix is <region>.db.<domain>, the domain being a DNS zone granted
+	// to the project.
+	Suffix string `json:"suffix"`
+	// Resources are the opted-in resources' names, sorted.
+	Resources []string `json:"resources"`
+	// Program is the ID of the gateway's generated source, so a Loomplane
+	// upgrade that changes the gateway's code changes its configuration
+	// and redeploys it.
+	Program string `json:"program"`
+	// Trust names the control-plane keys the gateway trusts, as
+	// plane.TrustDigest gives it, so a signing key added, renewed or
+	// expired redeploys the gateway with the keys it needs. The deploy
+	// hands it the keys themselves.
+	Trust string `json:"trust,omitempty"`
+}
+
+// Generated reports whether Loomplane generates the service from its own
+// code, as it does a gateway or the database gateway, rather than
+// building it from a repository.
+func (c *ServiceConfig) Generated() bool { return c.Gateway != nil || c.DatabaseGateway != nil }
 
 // BuildTarget pins the builder, registry and image reviewed in a plan.
 type BuildTarget struct {
@@ -225,6 +256,13 @@ type EnvLink struct {
 	// they share a network: http://name:port through ECS Service Connect.
 	// Empty means its public URL, known once it's deployed.
 	Address string `json:"address,omitempty"`
+	// Gateway is set when the service reaches the resource through the
+	// database gateway, so its variables hold the gateway's address. It's
+	// the suffix the gateway names the resource's host under,
+	// <region>.db.<domain>, and empty for a direct link. It's part of the
+	// configuration, so a resource opting in or out, or the gateway moving
+	// to another region or DNS zone, redeploys what needs it.
+	Gateway string `json:"gateway,omitempty"`
 	// Field is what of a composed catalog resource the variable holds:
 	// "url" for its primary output, "output:<name>" for another output,
 	// "consumer:<name>" for one issued to this service alone. It's empty
@@ -310,6 +348,8 @@ type ComponentConfig struct {
 	Component    recipes.ResolvedComponent   `json:"component"`
 	Dependencies map[string]DependencyChoice `json:"dependencies,omitempty"`
 	Protection   recipes.Protection          `json:"protection"`
+	// GPU is the reviewed GPU placement of a component that uses GPUs.
+	GPU *provider.GPUPlacement `json:"gpu,omitempty"`
 }
 
 // Change is one setting an update changes.

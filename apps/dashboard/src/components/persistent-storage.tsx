@@ -1,4 +1,4 @@
-import { DatabaseIcon } from "lucide-react"
+import { ServicesIcon } from "@/components/icons"
 import { useState } from "react"
 import { useQuery } from "@/client/hooks"
 import {
@@ -9,7 +9,7 @@ import {
 import type { Project, StoredVolume } from "@/client/forge/loomplane/types"
 import { QueryError } from "@/components/query-error"
 import { SectionHeading } from "@/components/page"
-import { Badge } from "@/components/ui/badge"
+import { StatusPill, type Tone } from "@/components/runs"
 import { Button, buttonVariants } from "@/components/ui/button"
 import {
   Select,
@@ -131,7 +131,7 @@ function StorageEmpty({
     <ZeroState>
       <ZeroStateHeader>
         <ZeroStateMedia variant="icon">
-          <DatabaseIcon />
+          <ServicesIcon />
         </ZeroStateMedia>
         <ZeroStateTitle>{title}</ZeroStateTitle>
         <ZeroStateDescription>{description}</ZeroStateDescription>
@@ -154,6 +154,13 @@ const statusLabels: Record<string, string> = {
   pending: "Pending",
   lost: "Lost",
   deleting: "Deleting",
+}
+const statusTones: Record<string, Tone> = {
+  "in-use": "live",
+  retained: "waiting",
+  pending: "flight",
+  lost: "failed",
+  deleting: "flight",
 }
 function capacity(volume: StoredVolume) {
   return volume.capacityBytes > 0
@@ -206,7 +213,7 @@ function StorageVolumes({
           action="Deploy a service"
         />
       ) : (
-        <div className="min-w-0 rounded-lg border">
+        <div className="min-w-0 overflow-hidden rounded-xl bg-card ring-1 ring-border">
           <Table className="table-fixed">
             <TableHeader>
               <TableRow>
@@ -244,20 +251,16 @@ function StorageVolumes({
                       </div>
                     </TableCell>
                     <TableCell className="hidden max-w-0 whitespace-normal sm:table-cell">
-                      <div className="text-sm break-words">{project}</div>
+                      <div className="text-[13px] break-words">{project}</div>
                       <div className="font-mono text-xs break-all text-muted-foreground">
                         {environmentNames.get(volume.environmentId) ??
                           volume.environmentId}
                       </div>
                     </TableCell>
                     <TableCell className="w-24 align-top">
-                      <Badge
-                        variant={
-                          volume.status === "lost" ? "destructive" : "outline"
-                        }
-                      >
+                      <StatusPill tone={statusTones[volume.status] ?? "quiet"}>
                         {statusLabels[volume.status] ?? volume.status}
-                      </Badge>
+                      </StatusPill>
                     </TableCell>
                     <TableCell className="hidden text-xs lg:table-cell">
                       {capacity(volume)}

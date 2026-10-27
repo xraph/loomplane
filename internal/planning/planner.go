@@ -24,11 +24,22 @@ const DefaultPort = 8080
 // Input is everything a plan is made from.
 type Input struct {
 	Routes []cloudinfra.Route
+	// Zones are the verified DNS zones granted to the project. The
+	// database gateway names its hosts in one of them.
+	Zones []cloudinfra.ProjectZone
+	// DatabaseGatewayTrust is plane.TrustDigest of the keys a database
+	// gateway deployed now would trust, or "" when Loomplane has none.
+	DatabaseGatewayTrust string
 
 	// Catalog requests a standalone service without repository sources.
 	Catalog         bool
 	CloudPlacements map[string]CloudPlacement
-	CapacityIntents map[string]*CapacityIntent
+	// UnverifiedPlacements are the composed resources on a target of the
+	// environment's Cloud that have no CloudPlacement because the Cloud's
+	// or the target's revisions, or its connection's account, aren't
+	// verified. Their catalog-cloud-placement-missing warning says so.
+	UnverifiedPlacements map[string]bool
+	CapacityIntents      map[string]*CapacityIntent
 	// Federation contains scoped persisted observations; nil leaves all federation capabilities unavailable.
 	Federation *FederationInput
 	// Environment is the environment's name, which picks the manifest's
@@ -159,9 +170,11 @@ func Compute(in Input) *Result {
 	p.planLinks()
 	p.planServices()
 	p.planGateways()
+	p.planDatabaseGateway()
 	p.checkTargetPlacements()
 	p.checkCloudSQLApplications()
 	p.checkFabriqDatabases()
+	p.checkServerGPUs()
 	p.readdress()
 	for p.routedReplacements() {
 		p.readdress()
@@ -173,6 +186,7 @@ func Compute(in Input) *Result {
 	p.checkFindings()
 	p.impact()
 	p.planDeletes()
+	p.refuseRoutedDeletes()
 	p.stillReplaced()
 	return p.finish()
 }
@@ -272,7 +286,9 @@ func (p *planner) use(prov *provider.Provider) {
 func (p *planner) checkHTTPS(chosen map[string]string) {
 	for _, name := range slices.Sorted(maps.Keys(p.services)) {
 		a := p.services[name]
-		if a.Provider != ecsFargate || a.Service == nil || !a.Service.Public || a.Service.Port == 0 {
+		// The database gateway must serve HTTPS, which
+		// checkDatabaseGatewayHTTPS makes a problem.
+		if a.Provider != ecsFargate || a.Service == nil || !a.Service.Public || a.Service.Port == 0 || a.Service.DatabaseGateway != nil {
 			continue
 		}
 		id := a.ConnectionID
@@ -283,13 +299,22 @@ func (p *planner) checkHTTPS(chosen map[string]string) {
 		if i < 0 || p.in.Connections[i].HTTPS {
 			continue
 		}
-		path := "services." + name
-		if a.Service.Gateway != nil {
-			path = "gateways." + name
-		}
+		path := servicePath(a)
 		p.warn(Finding{Code: "plain-http", Subject: ServiceSubject, Name: name, Path: path,
 			Message: fmt.Sprintf("%s will serve plain HTTP: %s has no certificate. Add an ACM certificate to the connection to serve HTTPS.", name, p.in.Connections[i].Name)})
 	}
+}
+
+// servicePath is where the manifest says how a service action runs: its
+// service, its gateway, or database_gateway.
+func servicePath(a *Action) string {
+	switch {
+	case a.Service != nil && a.Service.DatabaseGateway != nil:
+		return "database_gateway"
+	case a.Service != nil && a.Service.Gateway != nil:
+		return "gateways." + a.Name
+	}
+	return "services." + a.Name
 }
 
 // connect settles which connection each cloud the plan uses deploys
@@ -394,10 +419,7 @@ func (p *planner) checkRegions(chosen map[string]string) {
 		}
 		path := "resources." + a.Name + ".region"
 		if a.Subject == ServiceSubject {
-			path = "services." + a.Name + ".region"
-			if a.Service != nil && a.Service.Gateway != nil {
-				path = "gateways." + a.Name + ".region"
-			}
+			path = servicePath(a) + ".region"
 		}
 		title := cloudTitle(prov.Cloud)
 		p.problem(Finding{
@@ -472,6 +494,13 @@ func (p *planner) planResources() {
 		if p.kinds().Composed(r.Kind) {
 			composed = append(composed, name)
 			continue
+		}
+		if set.GPU != nil {
+			title := r.Kind
+			if engine, ok := p.kinds().Engine(r.Kind); ok {
+				title = engine.Title
+			}
+			p.unusedGPU(name, title)
 		}
 		for _, dep := range slices.Sorted(maps.Keys(r.Uses)) {
 			p.problem(Finding{
@@ -686,12 +715,13 @@ func (p *planner) readdress() {
 		}
 		var moved []string
 		for _, e := range a.Service.Env {
-			dep := p.planned(e.Subject, e.From)
-			if dep == nil || slices.Contains(moved, dep.Name) {
-				continue
-			}
-			if _, ok := p.readdressed(dep, e, a.Provider); ok {
-				moved = append(moved, dep.Name)
+			for _, dep := range p.linkTargets(e) {
+				if slices.Contains(moved, dep.Name) {
+					continue
+				}
+				if _, ok := p.readdressed(dep, e, a.Provider); ok {
+					moved = append(moved, dep.Name)
+				}
 			}
 		}
 		switch len(moved) {
@@ -844,37 +874,51 @@ func (p *planner) heldAddresses() {
 		}
 		var seen []string
 		for _, e := range u.env {
-			dep := p.planned(e.Subject, e.From)
-			if dep == nil || slices.Contains(seen, dep.ID) {
-				continue
+			for _, dep := range p.linkTargets(e) {
+				p.heldAddress(u.name, u.provider, who, scope, e, dep, &seen)
 			}
-			how, ok := p.readdressed(dep, e, u.provider)
-			if !ok {
-				continue
-			}
-			seen = append(seen, dep.ID)
-			p.addressed[dep.ID] = append(p.addressed[dep.ID], u.name)
-			if p.in.Manifest != nil && p.in.Manifest.Held.WarnSameAddress() && p.sameAddress(dep) {
-				p.warn(Finding{
-					Code: "held-address", Subject: ServiceSubject, Name: u.name, Path: "services." + u.name,
-					Message: fmt.Sprintf("%s, uses %s's address, and this plan creates %s again on Cloud Run with the name, region and connection it had, so it should get the same address, and %s should still reach it. %s if it doesn't.",
-						who, e.From, dep.Name, u.name, strings.TrimSuffix(scope, ".")),
-				})
-				continue
-			}
-			// A deployment removes what it replaces once the new one is up.
-			// What's created again was deleted outside Loomplane.
-			fate := "which this plan stops tracking"
-			if dep.Op == Replace {
-				fate = "which the deployment removes once the new one is up"
-			}
-			p.problem(Finding{
-				Code: "held-address", Subject: ServiceSubject, Name: u.name, Path: "services." + u.name,
-				Message: fmt.Sprintf("%s, uses %s's address, and this plan %s, so %s keeps the old one's address, %s. %s",
-					who, e.From, how, u.name, fate, scope),
-			})
 		}
+		p.heldGatewayUser(u.name, who, scope, u.env)
 	}
+}
+
+// heldAddress reports one link of name, a held user on target, to dep,
+// when this plan gives dep a new address, as heldAddresses says. seen
+// are what name's other links reported already.
+func (p *planner) heldAddress(name, target, who, scope string, e EnvLink, dep *Action, seen *[]string) {
+	if slices.Contains(*seen, dep.ID) {
+		return
+	}
+	how, ok := p.readdressed(dep, e, target)
+	if !ok {
+		return
+	}
+	*seen = append(*seen, dep.ID)
+	p.addressed[dep.ID] = append(p.addressed[dep.ID], name)
+	// A link through the database gateway uses the gateway's address too.
+	from := e.From
+	if dep.Name != e.From {
+		from = dep.Name
+	}
+	if p.in.Manifest != nil && p.in.Manifest.Held.WarnSameAddress() && p.sameAddress(dep) {
+		p.warn(Finding{
+			Code: "held-address", Subject: ServiceSubject, Name: name, Path: "services." + name,
+			Message: fmt.Sprintf("%s, uses %s's address, and this plan creates %s again on Cloud Run with the name, region and connection it had, so it should get the same address, and %s should still reach it. %s if it doesn't.",
+				who, from, dep.Name, name, strings.TrimSuffix(scope, ".")),
+		})
+		return
+	}
+	// A deployment removes what it replaces once the new one is up.
+	// What's created again was deleted outside Loomplane.
+	fate := "which this plan stops tracking"
+	if dep.Op == Replace {
+		fate = "which the deployment removes once the new one is up"
+	}
+	p.problem(Finding{
+		Code: "held-address", Subject: ServiceSubject, Name: name, Path: "services." + name,
+		Message: fmt.Sprintf("%s, uses %s's address, and this plan %s, so %s keeps the old one's address, %s. %s",
+			who, from, how, name, fate, scope),
+	})
 }
 
 // gatewayHeld warns about each name a gateway on here takes from what a
@@ -1205,10 +1249,11 @@ func (p *planner) retain() {
 			continue
 		}
 		var cfg ServiceConfig
-		if json.Unmarshal(b.Config, &cfg) != nil || cfg.Gateway != nil {
+		if json.Unmarshal(b.Config, &cfg) != nil || cfg.Generated() {
 			// A gateway is built from Loomplane's own code, not from any
 			// repository, so no plan holds it. planGateways plans it from
 			// the manifest, and planDeletes removes one the manifest dropped.
+			// The database gateway is the same.
 			continue
 		}
 		alias, held := p.heldRepo(cfg)
@@ -1665,6 +1710,14 @@ func (p *planner) link(name string, a *Action) {
 					p.problem(Finding{Code: "database-across-targets", Subject: ServiceSubject, Name: name, Path: base, Message: message})
 					continue
 				}
+			}
+			if r.GatewayIn(p.in.Environment) {
+				// The service reaches it through the database gateway's
+				// public address, from any cloud or account, and
+				// planDatabaseGateway orders the service after it.
+				a.Service.Env = append(a.Service.Env, EnvLink{Key: key, From: need, Subject: ResourceSubject})
+				a.DependsOn = append(a.DependsOn, dep.ID)
+				continue
 			}
 			if composed[i] {
 				p.linkComposition(a, need, outputs[i], options, count)
@@ -2419,7 +2472,7 @@ func (p *planner) heldBinding(b *Binding) (string, bool) {
 		return "", false
 	}
 	var cfg ServiceConfig
-	if json.Unmarshal(b.Config, &cfg) != nil || cfg.Gateway != nil {
+	if json.Unmarshal(b.Config, &cfg) != nil || cfg.Generated() {
 		return "", false
 	}
 	return p.heldRepo(cfg)
@@ -2485,6 +2538,9 @@ func (p *planner) wantedAsDeployed(b *Binding) (wanted, on bool) {
 func (p *planner) wanted(b *Binding) (wanted, on bool) {
 	m := p.in.Manifest
 	if b.Subject == ServiceSubject {
+		if p.isDatabaseGateway(b) {
+			return m.DatabaseGateway != nil, p.dbGatewayOn()
+		}
 		if g, ok := m.Gateways[b.Name]; ok {
 			return true, manifest.On(g.For(p.in.Environment, m.Defaults).Enabled)
 		}
@@ -2550,6 +2606,7 @@ func (p *planner) finish() *Result {
 	}
 	p.checkHTTPS(connections)
 	p.checkRegions(connections)
+	p.checkPoolGPUs()
 	r := &Result{Actions: make([]Action, 0, len(p.actions)), Problems: p.problems, Warnings: p.warnings, Connections: connections}
 	for _, a := range p.actions {
 		r.Actions = append(r.Actions, *a)

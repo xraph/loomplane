@@ -296,7 +296,7 @@ func (d *Deployments) WakeCapacityCloud(ctx context.Context, org, cloud, change 
 	if !ok {
 		return errors.New("capacity wake store is unavailable")
 	}
-	rows, err := st.db.Query(ctx, `SELECT d.id FROM loomplane_deployments d JOIN loomplane_plans p ON p.org_id=d.org_id AND p.id=d.plan_id WHERE d.org_id=$1 AND d.status='paused' AND EXISTS(SELECT 1 FROM jsonb_array_elements(p.result->'actions') a WHERE coalesce(a->'service'->'capacity_intent'->'demand'->>'cloud_id',a->'service'->'cloud_placement'->>'cloud_id',a->'resource'->'cloud_placement'->>'cloud_id')=$2)`, org, cloud)
+	rows, err := st.db.Query(ctx, `SELECT d.id FROM loomplane_deployments d JOIN loomplane_plans p ON p.org_id=d.org_id AND p.id=d.plan_id WHERE d.org_id=$1 AND d.status='paused' AND EXISTS(SELECT 1 FROM jsonb_array_elements(p.result->'actions') a WHERE coalesce(a->'service'->'frontend_demand'->>'cloud_id',a->'service'->'capacity_intent'->'demand'->>'cloud_id',a->'service'->'cloud_placement'->>'cloud_id',a->'resource'->'cloud_placement'->>'cloud_id')=$2)`, org, cloud)
 	if err != nil {
 		return err
 	}

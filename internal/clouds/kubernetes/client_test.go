@@ -34,6 +34,8 @@ func clusterFixture(t *testing.T, denySecret bool, denied ...string) (*httptest.
 			_, _ = w.Write([]byte(`{"major":"1","minor":"36","gitVersion":"v1.36.1"}`))
 		case r.URL.Path == "/apis/storage.k8s.io/v1/storageclasses/retained":
 			_, _ = w.Write([]byte(`{"kind":"StorageClass","apiVersion":"storage.k8s.io/v1","metadata":{"name":"retained","uid":"class-identity"},"provisioner":"example.csi","reclaimPolicy":"Retain","volumeBindingMode":"WaitForFirstConsumer","allowVolumeExpansion":true}`))
+		case r.URL.Path == "/api/v1/nodes":
+			_, _ = w.Write([]byte(`{"kind":"NodeList","apiVersion":"v1","metadata":{},"items":[]}`))
 		case strings.HasPrefix(r.URL.Path, "/api/v1/namespaces/"):
 			ns := strings.TrimPrefix(r.URL.Path, "/api/v1/namespaces/")
 			_ = json.NewEncoder(w).Encode(map[string]any{"kind": "Namespace", "apiVersion": "v1", "metadata": map[string]string{"name": ns, "uid": "uid-" + ns}})
@@ -45,7 +47,7 @@ func clusterFixture(t *testing.T, denySecret bool, denied ...string) (*httptest.
 				return
 			}
 			attrs := review.Spec.ResourceAttributes
-			if attrs == nil || strings.Contains(attrs.Resource, "/") || attrs.Namespace == "" && attrs.Resource != "persistentvolumes" {
+			if attrs == nil || strings.Contains(attrs.Resource, "/") || attrs.Namespace == "" && attrs.Resource != "persistentvolumes" && attrs.Resource != "nodes" {
 				t.Error("unscoped object permission check")
 				w.WriteHeader(400)
 				return

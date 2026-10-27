@@ -1,4 +1,4 @@
-import { CloudIcon } from "lucide-react"
+import { CloudsIcon } from "@/components/icons"
 import type { ReactNode } from "react"
 import {
   ZeroState,
@@ -19,7 +19,7 @@ export function NativeEmpty({
     <ZeroState variant="inline" className="p-3">
       <ZeroStateHeader>
         <ZeroStateMedia variant="icon">
-          <CloudIcon />
+          <CloudsIcon />
         </ZeroStateMedia>
         <ZeroStateTitle>{title}</ZeroStateTitle>
         <ZeroStateDescription>{children}</ZeroStateDescription>

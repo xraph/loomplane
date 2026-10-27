@@ -63,6 +63,9 @@ func (s *PgStore) SaveCapacityPolicy(ctx context.Context, policy *CapacityPolicy
 	if checkErr := capacityPolicyScopes(ctx, tx, policy); checkErr != nil {
 		return checkErr
 	}
+	if checkErr := s.backfillFrontendSlots(ctx, tx, policy); checkErr != nil {
+		return checkErr
+	}
 	raw, err := json.Marshal(policy)
 	if err != nil {
 		return err
@@ -80,11 +83,15 @@ func (s *PgStore) SaveCapacityPolicy(ctx context.Context, policy *CapacityPolicy
 
 func capacityPolicyScopes(ctx context.Context, tx driver.Tx, policy *CapacityPolicy) error {
 	for _, pool := range policy.Pools {
-		var id string
-		if err := tx.QueryRow(ctx, `SELECT id FROM loomplane_server_pools WHERE org_id=$1 AND cloud_id=$2 AND id=$3 FOR SHARE`, policy.OrgID, policy.CloudID, pool.PoolID).Scan(&id); err != nil {
+		var id, kind string
+		if err := tx.QueryRow(ctx, `SELECT id,coalesce(body->>'accelerator_kind','') FROM loomplane_server_pools WHERE org_id=$1 AND cloud_id=$2 AND id=$3 FOR SHARE`, policy.OrgID, policy.CloudID, pool.PoolID).Scan(&id, &kind); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
 				return ErrInvalid
 			}
+			return err
+		}
+		// The template buys servers for this pool, so both name the same GPU kind.
+		if err := poolKindMatchesTemplate(id, kind, pool.AcceleratorKind); err != nil {
 			return err
 		}
 		if pool.ConnectionID != "" {

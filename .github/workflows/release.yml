@@ -10,8 +10,8 @@ name: Release
 #       target "all" tags the commit you ran it from, which must be on
 #       main, and publishes everything. No PAT is needed: the tag, the
 #       GitHub release and every publish job happen in this one run.
-#       target "cli" or "docker" re-publishes one part of a release that
-#       already exists, from its tag, wherever you run it from.
+#       target "cli", "docker" or "helm" re-publishes one part of a release
+#       that already exists, from its tag, wherever you run it from.
 #
 # What a release publishes:
 #
@@ -23,6 +23,9 @@ name: Release
 #   docker    publish-docker.yml: smoke-tested AMD64 and ARM64 images on
 #             GHCR (and Docker Hub with its secrets), plus the deployment
 #             bundle on the release
+#   helm      publish-helm.yml, after docker: the Kubernetes chart on GHCR
+#             (oci://ghcr.io/xraph/charts/loomplane) and on the release,
+#             with the plain manifest for that version
 #
 # Lint, unit and integration tests gate all of it unless you tick
 # skip-tests, which is for re-publishing a tag that passed them already.
@@ -39,11 +42,11 @@ on:
         required: true
         type: string
       target:
-        description: all cuts a new release. cli or docker re-publishes one part of an existing one.
+        description: all cuts a new release. cli, docker or helm re-publishes one part of an existing one.
         required: true
         type: choice
         default: all
-        options: [all, cli, docker]
+        options: [all, cli, docker, helm]
       skip-tests:
         description: Skip lint and tests (only for a tag that passed them)
         required: false
@@ -68,6 +71,7 @@ jobs:
       create-release: ${{ steps.plan.outputs.create-release }}
       cli: ${{ steps.plan.outputs.cli }}
       docker: ${{ steps.plan.outputs.docker }}
+      helm: ${{ steps.plan.outputs.helm }}
       skip-tests: ${{ steps.plan.outputs.skip-tests }}
     steps:
       - uses: actions/checkout@v7
@@ -125,11 +129,12 @@ jobs:
             exit 1
           fi
 
-          cli=false docker=false
+          cli=false docker=false helm=false
           case "$target" in
-            all) cli=true docker=true ;;
+            all) cli=true docker=true helm=true ;;
             cli) cli=true ;;
             docker) docker=true ;;
+            helm) helm=true ;;
           esac
           {
             echo "tag=$tag"
@@ -137,6 +142,7 @@ jobs:
             echo "create-release=$create"
             echo "cli=$cli"
             echo "docker=$docker"
+            echo "helm=$helm"
             echo "skip-tests=$SKIP_TESTS"
           } | tee -a "$GITHUB_OUTPUT"
           {
@@ -148,6 +154,7 @@ jobs:
             echo "| New GitHub release | $create |"
             echo "| CLI and archives | $cli |"
             echo "| Docker | $docker |"
+            echo "| Helm chart | $helm |"
             echo "| Tests | $([ "$SKIP_TESTS" = true ] && echo skipped || echo run) |"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -191,15 +198,49 @@ jobs:
           version: v2.12.2
           args: --build-tags=integration --timeout=10m ./...
       - run: make lint-dashboard test
-      - run: go test -race -count=1 -tags=integration ./tests/integration/
+
+  integration:
+    name: Release integration tests (${{ matrix.shard }})
+    needs: plan
+    if: needs.plan.outputs.skip-tests != 'true'
+    # The whole suite under -race takes too long for one runner, so it runs
+    # in the same race-enabled cohorts as CI's integration job.
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3, 4, 5, 6, 7]
+    runs-on: ubuntu-24.04
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: loomplane
+          POSTGRES_PASSWORD: loomplane
+          POSTGRES_DB: loomplane
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U loomplane -d loomplane"
+          --health-interval 2s --health-timeout 3s --health-retries 30
+    env:
+      LOOMPLANE_TEST_DATABASE_URL: postgres://loomplane:loomplane@localhost:5432/loomplane?sslmode=disable
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ needs.plan.outputs.ref }}
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+      - run: python3 -m unittest discover -s scripts -p test_integration_cohorts.py
+      - run: python3 scripts/integration-cohorts.py --shard ${{ matrix.shard }} --shards 8
 
   release:
     name: Tag and GitHub release
-    needs: [plan, checks]
+    needs: [plan, checks, integration]
     if: >-
       always() && needs.plan.result == 'success' &&
       needs.plan.outputs.create-release == 'true' &&
-      contains(fromJSON('["success","skipped"]'), needs.checks.result)
+      contains(fromJSON('["success","skipped"]'), needs.checks.result) &&
+      contains(fromJSON('["success","skipped"]'), needs.integration.result)
     permissions:
       contents: write
     uses: xraph/workflows/.github/workflows/go-release.yml@adbc00609c913abaabd7b38d11533e0a44b92432 # v1.19.0
@@ -207,7 +248,7 @@ jobs:
       # Empty on a tag push, where go-release.yml reads the pushed tag. A
       # version makes it tag github.sha first.
       version: ${{ github.event_name == 'workflow_dispatch' && needs.plan.outputs.tag || '' }}
-      # The checks job above already ran them, with Postgres.
+      # The checks and integration jobs above already ran them, with Postgres.
       run-tests: false
       # A changelog commit would move the tag off the commit plan checked.
       update-changelog: false
@@ -216,11 +257,12 @@ jobs:
 
   cli:
     name: CLI and archives
-    needs: [plan, checks, release]
+    needs: [plan, checks, integration, release]
     if: >-
       always() && needs.plan.result == 'success' &&
       needs.plan.outputs.cli == 'true' &&
       contains(fromJSON('["success","skipped"]'), needs.checks.result) &&
+      contains(fromJSON('["success","skipped"]'), needs.integration.result) &&
       contains(fromJSON('["success","skipped"]'), needs.release.result)
     permissions:
       contents: write
@@ -240,11 +282,12 @@ jobs:
 
   docker:
     name: Docker
-    needs: [plan, checks, release]
+    needs: [plan, checks, integration, release]
     if: >-
       always() && needs.plan.result == 'success' &&
       needs.plan.outputs.docker == 'true' &&
       contains(fromJSON('["success","skipped"]'), needs.checks.result) &&
+      contains(fromJSON('["success","skipped"]'), needs.integration.result) &&
       contains(fromJSON('["success","skipped"]'), needs.release.result)
     permissions:
       contents: write
@@ -255,3 +298,20 @@ jobs:
     secrets:
       DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
       DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
+
+  helm:
+    name: Helm chart
+    # After docker, so the chart never points at an image that isn't there.
+    needs: [plan, checks, release, docker]
+    if: >-
+      always() && needs.plan.result == 'success' &&
+      needs.plan.outputs.helm == 'true' &&
+      contains(fromJSON('["success","skipped"]'), needs.checks.result) &&
+      contains(fromJSON('["success","skipped"]'), needs.release.result) &&
+      contains(fromJSON('["success","skipped"]'), needs.docker.result)
+    permissions:
+      contents: write
+      packages: write
+    uses: ./.github/workflows/publish-helm.yml
+    with:
+      tag: ${{ needs.plan.outputs.tag }}

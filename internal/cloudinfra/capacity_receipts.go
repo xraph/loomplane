@@ -61,6 +61,10 @@ func reconcileCapacityReservations(ctx context.Context, tx driver.Tx, org, cloud
 					complete = false
 				}
 			}
+			// GPUs the reservation holds stay held until inventory shows them.
+			if r.Target.GPUs > 0 && (record.GPUs == nil || record.GPUKind != r.Target.GPUKind || *record.GPUs < r.Target.GPUs) {
+				complete = false
+			}
 			if complete {
 				if _, err = tx.Exec(ctx, `UPDATE loomplane_cloud_capacity_reservations SET status='materialized' WHERE org_id=$1 AND cloud_id=$2 AND id=$3 AND status='reserved'`, org, cloud, r.OperationID); err != nil {
 					return err
@@ -89,7 +93,7 @@ func recordCapacityCleanup(ctx context.Context, tx driver.Tx, o *Operation) erro
 }
 
 func retainDisconnectedCapacity(ctx context.Context, tx driver.Tx, org, cloud string, records []CapacityRecord) ([]CapacityRecord, error) {
-	rows, err := tx.Query(ctx, `SELECT i.body,coalesce((s.body->>'state_revision')::bigint,0) FROM loomplane_cloud_capacity_inventory i JOIN loomplane_cloud_servers s ON s.org_id=i.org_id AND s.cloud_id=i.cloud_id AND s.id=i.server_id WHERE i.org_id=$1 AND i.cloud_id=$2 AND s.status IN ('disconnected','deleted') ORDER BY s.id`, org, cloud)
+	rows, err := tx.Query(ctx, `SELECT i.body,coalesce((s.body->>'state_revision')::bigint,0),s.body FROM loomplane_cloud_capacity_inventory i JOIN loomplane_cloud_servers s ON s.org_id=i.org_id AND s.cloud_id=i.cloud_id AND s.id=i.server_id WHERE i.org_id=$1 AND i.cloud_id=$2 AND s.status IN ('disconnected','deleted') ORDER BY s.id`, org, cloud)
 	if err != nil {
 		return nil, err
 	}
@@ -99,9 +103,9 @@ func retainDisconnectedCapacity(ctx context.Context, tx driver.Tx, org, cloud st
 		seen[recordKey(r)] = true
 	}
 	for rows.Next() {
-		var raw []byte
+		var raw, host []byte
 		var revision int64
-		if err := rows.Scan(&raw, &revision); err != nil {
+		if err := rows.Scan(&raw, &revision, &host); err != nil {
 			return nil, err
 		}
 		var r CapacityRecord
@@ -110,6 +114,14 @@ func retainDisconnectedCapacity(ctx context.Context, tx driver.Tx, org, cloud st
 		}
 		if seen[recordKey(r)] {
 			continue
+		}
+		// A record saved before GPU counts reads them from the host's last check.
+		if r.Kind == "server" && r.GPUs == nil {
+			var v Server
+			if err := json.Unmarshal(host, &v); err != nil {
+				return nil, err
+			}
+			r.GPUKind, r.GPUs = serverGPUFacts(&v, nil)
 		}
 		r.ServerStateRevision = revision
 		r.Observation = nil

@@ -16,6 +16,7 @@ import { FabriqError } from "@/components/fabriq/fabriq-error"
 import { OpenInAdmin } from "@/components/fabriq/open-admin-button"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
+import { Card } from "@/components/ui/card"
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
 import {
@@ -29,7 +30,6 @@ import {
 import type { CatalogPanelProps } from "@/lib/catalog-kinds"
 import { createdLabel, fabriqNeeds, validTenantId } from "@/lib/fabriq"
 import { useNow } from "@/lib/use-runs"
-import { cn } from "@/lib/utils"
 
 /** FabriqTenants lists a hosted Fabriq's tenants and creates new ones. */
 export function FabriqTenants({
@@ -89,15 +89,10 @@ export function FabriqTenants({
               type="button"
               variant="outline"
               size="sm"
-              className="h-8 border-input px-3 text-[12.5px] hover:bg-accent has-data-[icon=inline-start]:pl-3"
               aria-expanded={adding}
               onClick={() => setAdding(!adding)}
             >
-              <PlusIcon
-                className="size-[13px]"
-                data-icon="inline-start"
-                aria-hidden
-              />
+              <PlusIcon data-icon="inline-start" aria-hidden />
               New tenant
             </Button>
           )}
@@ -105,9 +100,9 @@ export function FabriqTenants({
       {adding && (
         <form
           onSubmit={(event) => void submit(event)}
-          className="flex flex-wrap items-end gap-2.5 rounded-[12px] border border-border-panel bg-surface-muted px-3.5 py-3"
+          className="flex flex-wrap items-end gap-2.5 rounded-xl bg-subtle p-3 ring-1 ring-border"
         >
-          <label className="grid flex-[1_1_200px] gap-[5px] text-[12.5px] font-medium text-label">
+          <label className="grid flex-[1_1_200px] gap-1.5 text-[12.5px] font-medium">
             Tenant ID
             <Input
               value={id}
@@ -116,16 +111,15 @@ export function FabriqTenants({
               autoComplete="off"
               spellCheck={false}
               aria-invalid={id !== "" && !validTenantId(id)}
-              className="h-[34px] rounded-[9px] bg-background font-mono"
+              className="bg-background font-mono"
             />
           </label>
-          <span className="flex-[1_1_220px] text-xs leading-[1.45] text-muted-foreground">
+          <span className="flex-[1_1_220px] text-xs text-muted-foreground">
             Lowercase letters, digits and dashes. Apps use it in the DSN and in
             requests.
           </span>
           <Button
             type="submit"
-            className="rounded-[9px] border-0 px-[13px] text-[12.5px] shadow-none hover:bg-primary hover:brightness-[1.12]"
             disabled={!validTenantId(id) || create.isPending}
           >
             Create tenant
@@ -161,18 +155,14 @@ export function FabriqTenants({
           )}
         </FabriqEmpty>
       ) : (
-        <div className="overflow-hidden rounded-[14px] border border-border-panel">
-          <Table
-            columns="minmax(0, 1fr) 170px 140px 130px"
-            scrollLabel="Tenant rows"
-            className="min-w-[640px]"
-          >
+        <Card className="py-0">
+          <Table className="min-w-[640px]">
             <TableHeader>
-              <TableRow className="bg-surface-muted hover:bg-surface-muted">
-                <Head>Tenant</Head>
-                <Head>Created</Head>
-                <Head>Default for</Head>
-                <Head className="text-right">Actions</Head>
+              <TableRow className="hover:bg-transparent">
+                <TableHead>Tenant</TableHead>
+                <TableHead>Created</TableHead>
+                <TableHead>Default for</TableHead>
+                <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
@@ -181,10 +171,10 @@ export function FabriqTenants({
                   <TableCell className="font-mono font-medium">
                     {tenant.id}
                   </TableCell>
-                  <TableCell className="text-[12.5px] text-label">
+                  <TableCell className="text-[12.5px] text-muted-foreground">
                     {createdLabel(tenant.createdAt, now)}
                   </TableCell>
-                  <TableCell className="text-[12.5px] text-label">
+                  <TableCell className="text-[12.5px] text-muted-foreground">
                     {defaultFor(tenant.id)}
                   </TableCell>
                   <TableCell className="text-right">
@@ -198,28 +188,8 @@ export function FabriqTenants({
               ))}
             </TableBody>
           </Table>
-        </div>
+        </Card>
       )}
     </section>
-  )
-}
-
-/** Head is a column heading of the panel's tables. */
-export function Head({
-  className,
-  children,
-}: {
-  className?: string
-  children: string
-}) {
-  return (
-    <TableHead
-      className={cn(
-        "h-9 text-[11.5px] font-medium tracking-[0.04em] text-caption uppercase",
-        className
-      )}
-    >
-      {children}
-    </TableHead>
   )
 }

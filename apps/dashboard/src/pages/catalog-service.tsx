@@ -95,11 +95,11 @@ export function CatalogService({
           { label: resource },
         ]}
       />
-      <Page className="has-[[data-catalog-layout=compact]]:max-w-[1180px] has-[[data-catalog-layout=compact]]:gap-4 has-[[data-catalog-layout=compact]]:px-7 has-[[data-catalog-layout=compact]]:pt-[22px] has-[[data-catalog-layout=compact]]:pb-8 has-[[data-catalog-layout=compact]]:leading-[normal] has-[[data-catalog-layout=compact]]:[&>a]:-mb-1.5">
+      <Page>
         <Link
           to="/projects/$id"
           params={{ id: projectId }}
-          className="-mb-2 inline-flex items-center gap-1.5 self-start text-[13px] text-muted-foreground hover:text-foreground"
+          className="-mb-2.5 inline-flex items-center gap-1.5 self-start text-[13px] text-muted-foreground hover:text-foreground"
         >
           <ChevronLeftIcon className="size-3.5" />
           {projectName}
@@ -199,24 +199,23 @@ function InEnvironment({
     (panel) => panel.id === module?.defaultPanel
   )
   const defaultTab = preferredPanel ? `panel:${preferredPanel.id}` : "overview"
-  const compact = module?.serviceLayout === "compact"
+  const title = module?.title ?? info?.title ?? kind
   return (
     <>
       <Header
         resource={resource}
         environment={environment.name}
         module={module}
-        title={module?.title ?? info?.title ?? kind}
+        title={title}
         description={module?.blurb ?? info?.description}
         version={versionOf(binding, config)}
         props={props}
       />
-      <Tabs defaultValue={defaultTab} className={compact ? "gap-4" : undefined}>
+      <Tabs defaultValue={defaultTab}>
         <TabsList
           variant="line"
-          density={compact ? "compact" : "default"}
-          aria-label={compact ? `${module.title} sections` : undefined}
-          className={compact ? "max-w-full" : "mb-3 max-w-full overflow-x-auto"}
+          aria-label={`${title} sections`}
+          className="mb-3 max-w-full overflow-x-auto"
         >
           <TabsTrigger value="overview">Overview</TabsTrigger>
           {panels.map((panel) => (
@@ -228,7 +227,7 @@ function InEnvironment({
             props={props}
             bindings={all}
             module={module}
-            title={module?.title ?? info?.title ?? kind}
+            title={title}
             environment={environment.name}
           />
         </TabsContent>
@@ -295,116 +294,42 @@ function Header({
   const state = stateOf(props.binding)
   const deployed = deployedState(module, props, state)
   const Actions = module?.actions
-  // A module's subtitle says which instance this is, so it stands in for
-  // the catalog's description of the kind.
+  // A module's subtitle says which instance this is, environment included,
+  // so it stands in for the catalog's description of the kind.
   const subtitle = module?.subtitle?.(props, environment)
-  const inline = module?.serviceLayout === "compact"
   return (
-    <header
-      data-catalog-layout={module?.serviceLayout}
-      className={
-        inline
-          ? "flex flex-wrap items-center gap-x-3.5 gap-y-3"
-          : "flex flex-col gap-3 sm:flex-row sm:items-center sm:gap-4"
-      }
-    >
-      <div
-        className={
-          inline
-            ? "contents"
-            : "flex min-w-0 flex-1 items-start gap-4 sm:items-center"
-        }
-      >
-        <ProductIcon
-          product={module?.logo}
-          fallback={kindIcon(module)}
-          label={title}
-          size="xl"
-          className={
-            inline ? "rounded-[12px] ring-border-panel ring-inset" : undefined
-          }
-        />
-        <div
-          className={
-            inline
-              ? "grid min-w-0 flex-[1_1_300px] gap-[3px]"
-              : "grid min-w-0 flex-1 gap-1"
-          }
-        >
-          <h1
-            className={
-              inline
-                ? "flex flex-wrap items-baseline gap-x-2 gap-y-1 text-2xl leading-[1.2] font-semibold tracking-[-0.025em]"
-                : "flex flex-wrap items-baseline gap-x-2 gap-y-1 text-[22px] leading-tight font-semibold tracking-[-0.025em] md:text-2xl"
-            }
-          >
-            <span className="min-w-0 break-all">{resource}</span>
-            <span
-              className={
-                inline
-                  ? "font-mono text-[13px] font-normal text-muted-foreground"
-                  : "text-sm font-normal text-muted-foreground"
-              }
-            >
-              {title}
-              {version && (
-                <span className={inline ? "ml-1" : "ml-1.5 font-mono"}>
-                  {version}
-                </span>
-              )}
-            </span>
-          </h1>
-          {subtitle ? (
-            <p
-              className={
-                inline
-                  ? "text-[13px] text-pretty text-muted-foreground"
-                  : "text-[13.5px] leading-relaxed text-pretty text-muted-foreground"
-              }
-            >
-              {subtitle}
-            </p>
-          ) : (
-            description && (
-              <p className="max-w-[72ch] text-[13.5px] leading-relaxed text-pretty text-muted-foreground">
-                {description}
-              </p>
-            )
-          )}
-        </div>
-      </div>
-      <div
-        className={
-          inline ? "contents" : "flex flex-wrap items-center gap-2 sm:shrink-0"
-        }
-      >
-        {(!inline || !subtitle) && (
-          <span className="inline-flex h-5 items-center rounded-full bg-muted px-2 text-xs font-medium text-muted-foreground capitalize">
-            {environment}
+    <header className="flex flex-wrap items-center gap-x-3.5 gap-y-3">
+      <ProductIcon
+        product={module?.logo}
+        fallback={kindIcon(module)}
+        label={title}
+        size="xl"
+      />
+      <div className="grid min-w-0 flex-[1_1_300px] gap-1">
+        <h1 className="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-[22px] leading-tight font-semibold tracking-[-0.025em] md:text-2xl">
+          <span className="min-w-0 break-all">{resource}</span>
+          <span className="font-mono text-[13px] font-normal tracking-normal text-muted-foreground">
+            {title}
+            {version && <span className="ml-1">{version}</span>}
           </span>
-        )}
-        <StatusPill
-          tone={deployed.tone}
-          className={
-            inline
-              ? "h-auto px-[9px] py-0.5 leading-[normal] [&>span]:bg-current"
-              : undefined
-          }
-        >
-          {deployed.label}
-        </StatusPill>
-        {Actions && (
-          <div
-            className={
-              inline
-                ? "flex flex-wrap items-center gap-2"
-                : "flex flex-wrap items-center gap-2 sm:ml-2"
-            }
-          >
-            <Actions {...props} />
-          </div>
+        </h1>
+        {(subtitle ?? description) && (
+          <p className="max-w-[72ch] text-[13px] text-pretty text-muted-foreground">
+            {subtitle ?? description}
+          </p>
         )}
       </div>
+      {!subtitle && (
+        <span className="inline-flex h-5 items-center rounded-full bg-muted px-2 text-xs font-medium text-muted-foreground capitalize">
+          {environment}
+        </span>
+      )}
+      <StatusPill tone={deployed.tone}>{deployed.label}</StatusPill>
+      {Actions && (
+        <div className="flex flex-wrap items-center gap-2">
+          <Actions {...props} />
+        </div>
+      )}
     </header>
   )
 }
@@ -575,7 +500,7 @@ function Row({
           <Icon className="size-4" />
         </span>
         <span className="grid min-w-0 gap-0.5">
-          <span className="truncate text-sm font-semibold">{name}</span>
+          <span className="truncate text-[13px] font-medium">{name}</span>
           <span className="truncate text-xs text-muted-foreground">
             {detail}
           </span>
@@ -628,7 +553,7 @@ function Details({
   return (
     <aside
       aria-label="Details"
-      className="grid gap-3 rounded-[14px] bg-subtle p-4 ring-1 ring-border"
+      className="grid gap-3 rounded-xl bg-subtle p-4 ring-1 ring-border"
     >
       <h2 className="text-[13px] font-semibold">Details</h2>
       <dl className="grid grid-cols-[6.5rem_minmax(0,1fr)] gap-x-3 gap-y-2 text-[12.5px]">

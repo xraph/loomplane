@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"cmp"
 	"context"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -127,9 +128,10 @@ func componentService(cfg *planning.ResourceConfig) *planning.ServiceConfig {
 }
 
 // componentSpec runs a component as its recipe declares: its command, every
-// port, its resources and its catalog labels. Only a component with a
-// volume is stateful.
-func componentSpec(sp *cpprovider.ServiceSpec, labels map[string]string, cfg *planning.ComponentConfig) {
+// port, its resources, its GPUs and its catalog labels. Only a component
+// with a volume or a weight cache is stateful. providerName is the
+// target's provider, since only Kubernetes sizes a weight cache.
+func componentSpec(sp *cpprovider.ServiceSpec, labels map[string]string, cfg *planning.ComponentConfig, providerName string) {
 	c := cfg.Component
 	sp.Command, sp.Args = c.Command, c.Args
 	sp.Ports = make([]cpprovider.PortSpec, 0, len(c.Ports))
@@ -159,6 +161,7 @@ func componentSpec(sp *cpprovider.ServiceSpec, labels map[string]string, cfg *pl
 		rules, _ := json.Marshal(c.KubernetesRules) //nolint:errcheck // string slices always encode
 		labels[owned.LabelKubernetesRules] = string(rules)
 	}
+	gpuSpec(sp, labels, cfg.GPU, c.Resources.ShmMB, c.WeightCache, providerName)
 }
 
 func componentPort(c recipes.Component, name string) (recipes.Port, bool) {
@@ -245,7 +248,9 @@ func (e *OwnedTarget) applyComponent(ctx context.Context, job *Job) (*Outcome, e
 	copyJob.Action.Resource = nil
 	copyJob.Action.Service = componentService(cfg)
 	copyJob.Env, copyJob.Secrets = maps.Clone(run.Env), secret
-	copyJob.files = files
+	if filesErr := e.withFiles(&copyJob, files); filesErr != nil {
+		return nil, filesErr
+	}
 	out, err := e.Apply(ctx, &copyJob)
 	if err != nil {
 		return nil, err
@@ -402,7 +407,9 @@ func (e *OwnedTarget) runJob(ctx context.Context, job *Job, kind recipes.Kind, j
 	copyJob.Action.Resource = nil
 	copyJob.Action.Service = componentService(cfg)
 	copyJob.Env, copyJob.Secrets = maps.Clone(run.Env), secret
-	copyJob.files = files
+	if filesErr := e.withFiles(&copyJob, files); filesErr != nil {
+		return result, filesErr
+	}
 	sp, labels := ownedSpec(&copyJob, component.Image, state)
 	defer func() {
 		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
@@ -537,16 +544,36 @@ func (e *OwnedTarget) renderFiles(ctx context.Context, kind recipes.Kind, run Co
 	return files, nil
 }
 
-// filesRevision is a digest of rendered files: each one's path, mode and
-// bytes, in path order.
-func filesRevision(files []runtimeFile) string {
-	sum := sha256.New()
+// FilesRevisionKeyLabel names the key, derived from secret_key, that
+// keys the digest of a component's rendered files in its revision label.
+const FilesRevisionKeyLabel = "loomplane/catalog files revision v1"
+
+// filesRevision is a digest of rendered files, keyed by the installation:
+// each one's path, mode and bytes, in path order. A file can hold a
+// secret, and the label is readable wherever the container is, so an
+// unkeyed digest would let anyone who reads it test guesses offline.
+func filesRevision(key []byte, files []runtimeFile) string {
+	sum := hmac.New(sha256.New, key)
 	for _, f := range files {
 		// Writing to a hash never fails.
 		_, _ = fmt.Fprintf(sum, "%s\x00%o\x00%d\x00", f.Path, f.Mode, len(f.Data))
 		_, _ = sum.Write(f.Data)
 	}
 	return hex.EncodeToString(sum.Sum(nil))[:16]
+}
+
+// withFiles gives a component's job its rendered files and their keyed
+// digest. Files need the installation's key; none need nothing.
+func (e *OwnedTarget) withFiles(job *Job, files []runtimeFile) error {
+	job.files, job.filesRevision = files, ""
+	if len(files) == 0 {
+		return nil
+	}
+	if len(e.FilesRevisionKey) == 0 {
+		return errors.New("a component with files needs the installation's files revision key")
+	}
+	job.filesRevision = filesRevision(e.FilesRevisionKey, files)
+	return nil
 }
 
 // keepRuntimeFiles keeps a component's rendered files beside its runtime
@@ -1265,10 +1292,21 @@ func (e *OwnedTarget) removeComposition(ctx context.Context, job *Job, b *planni
 		return ErrNoCredential
 	}
 	e.endSessions(ctx, job, b)
-	if err := e.hooks(c.Kind).Removed(ctx, ComposedResource{OrgID: b.OrgID, ProjectID: b.ProjectID, EnvironmentID: b.EnvironmentID, Resource: b.Name, Kind: c.Kind}); err != nil {
+	if err := e.hooks(c.Kind).Removed(ctx, composedResource(b, c)); err != nil {
 		return err
 	}
-	fields := []string{ResourceURL}
+	return e.forgetComposition(ctx, b, c)
+}
+
+func composedResource(b *planning.Binding, c *planning.CompositionConfig) ComposedResource {
+	return ComposedResource{OrgID: b.OrgID, ProjectID: b.ProjectID, EnvironmentID: b.EnvironmentID, Resource: b.Name, Kind: c.Kind}
+}
+
+// forgetComposition forgets a composed resource's address, outputs and
+// generated secrets.
+func (e *OwnedTarget) forgetComposition(ctx context.Context, b *planning.Binding, c *planning.CompositionConfig) error {
+	fields := make([]string, 0, 1+len(c.Outputs)+len(c.Secrets))
+	fields = append(fields, ResourceURL)
 	for _, output := range c.Outputs {
 		fields = append(fields, "output:"+output.Name)
 	}
@@ -1281,6 +1319,15 @@ func (e *OwnedTarget) removeComposition(ctx context.Context, job *Job, b *planni
 		}
 	}
 	return nil
+}
+
+// forgetComponent forgets a component's address and, for a
+// dependency-only kind's, what it published under its own name.
+func (e *OwnedTarget) forgetComponent(ctx context.Context, b *planning.Binding, c *planning.ComponentConfig) error {
+	if err := e.Secrets.Delete(ctx, resourceKey(b.OrgID, b.EnvironmentID, b.Name, componentAddressField)); err != nil {
+		return err
+	}
+	return e.forgetPublished(ctx, b, c)
 }
 
 // endSessions ends the admin sessions open on a composed resource being
@@ -1297,16 +1344,37 @@ func (e *OwnedTarget) endSessions(ctx context.Context, job *Job, b *planning.Bin
 
 var _ unreachableRemover = (*OwnedTarget)(nil)
 
-// removedUnreachable ends the admin sessions open on a composed resource
-// whose connection is gone, which nothing else of it can be reached
-// through. Anything else, and a removal that forgets nothing (see
-// forgetsKept), has nothing to end.
-func (e *OwnedTarget) removedUnreachable(ctx context.Context, job *Job, b *planning.Binding) {
+// removedUnreachable ends what Loomplane keeps for a composed resource,
+// one of its components or a dependency-only action whose connection is
+// gone, which nothing of it can be reached through: the admin sessions
+// open on a composed resource, its kind's Removed hook, which needs no
+// connection, and the values kept under its name. A hook that fails only
+// warns, since nothing would retry it. Anything else, and a removal that
+// forgets nothing (see forgetsKept), has nothing to end.
+func (e *OwnedTarget) removedUnreachable(ctx context.Context, job *Job, b *planning.Binding) error {
 	resource := boundResource(b)
-	if resource == nil || resource.Composition == nil || job.Deployment == nil || job.Deployment.OrgID != b.OrgID || !forgetsKept(job) {
-		return
+	if resource == nil || (resource.Composition == nil && resource.Component == nil) || job.Deployment == nil || job.Deployment.OrgID != b.OrgID || !forgetsKept(job) {
+		return nil
 	}
+	if c := resource.Component; c != nil {
+		if c.Component.Role == recipes.RoleJob {
+			// A job keeps no address and publishes nothing.
+			return nil
+		}
+		if e.Secrets == nil {
+			return ErrNoCredential
+		}
+		return e.forgetComponent(ctx, b, c)
+	}
+	if e.Secrets == nil {
+		return ErrNoCredential
+	}
+	c := resource.Composition
 	e.endSessions(ctx, job, b)
+	if err := e.hooks(c.Kind).Removed(ctx, composedResource(b, c)); err != nil {
+		job.Warn(fmt.Errorf("cleaning up after %s failed, and its connection is gone, so Loomplane won't try again: %w", b.Name, err))
+	}
+	return e.forgetComposition(ctx, b, c)
 }
 
 // forgetsKept reports whether removing what a job's action names forgets

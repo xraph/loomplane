@@ -3,6 +3,7 @@ package digitalocean
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -26,38 +27,49 @@ func (c *Client) web() string {
 
 // AuthorizeURL is the page to send someone to, to sign in to DigitalOcean
 // and let Loomplane read and write their team's resources. DigitalOcean
-// sends them back to redirect with a code and state.
-func (c *Client) AuthorizeURL(app oauth.App, redirect, state string) string {
+// sends them back to the redirect with a code and the state. It takes no
+// PKCE and no settings.
+func (c *Client) AuthorizeURL(app oauth.App, r oauth.AuthorizeRequest) string {
 	q := url.Values{
 		"client_id":     {app.ClientID},
-		"redirect_uri":  {redirect},
+		"redirect_uri":  {r.Redirect},
 		"response_type": {"code"},
 		"scope":         {"read write"},
-		"state":         {state},
+		"state":         {r.State},
 	}
 	return c.web() + "/v1/oauth/authorize?" + q.Encode()
 }
 
 // Exchange trades the code DigitalOcean sent back for a grant.
-func (c *Client) Exchange(ctx context.Context, app oauth.App, redirect, code string) (oauth.Grant, error) {
+func (c *Client) Exchange(ctx context.Context, app oauth.App, r oauth.CodeRequest) (oauth.Grant, error) {
 	return c.token(ctx, url.Values{
 		"grant_type":    {"authorization_code"},
-		"code":          {code},
+		"code":          {r.Code},
 		"client_id":     {app.ClientID},
 		"client_secret": {app.ClientSecret},
-		"redirect_uri":  {redirect},
+		"redirect_uri":  {r.Redirect},
 	})
 }
 
-// Refresh trades a refresh token for a new grant. DigitalOcean spends the
-// old refresh token, so the caller must keep the new one.
-func (c *Client) Refresh(ctx context.Context, app oauth.App, refreshToken string) (oauth.Grant, error) {
+// Refresh trades the grant's refresh token for a new grant. DigitalOcean
+// spends the old refresh token, so the caller must keep the new one.
+func (c *Client) Refresh(ctx context.Context, app oauth.App, g oauth.Grant) (oauth.Grant, error) {
 	return c.token(ctx, url.Values{
 		"grant_type":    {"refresh_token"},
-		"refresh_token": {refreshToken},
+		"refresh_token": {g.RefreshToken},
 		"client_id":     {app.ClientID},
 		"client_secret": {app.ClientSecret},
 	})
+}
+
+// Probe asks DigitalOcean whose account the grant's access token is for,
+// without renewing it. A token it no longer honors is oauth.ErrRefused.
+func (c *Client) Probe(ctx context.Context, _ oauth.App, g oauth.Grant) error {
+	_, err := c.Account(ctx, g.AccessToken)
+	if errors.Is(err, ErrRejected) {
+		return fmt.Errorf("%w: %w", oauth.ErrRefused, err)
+	}
+	return err
 }
 
 func (c *Client) token(ctx context.Context, form url.Values) (oauth.Grant, error) {
@@ -85,8 +97,11 @@ func (c *Client) token(ctx context.Context, form url.Values) (oauth.Grant, error
 			e.Error, e.Description = "", "" // a body that isn't JSON says nothing
 		}
 		if res.StatusCode == http.StatusBadRequest || res.StatusCode == http.StatusUnauthorized {
-			if e.Error == "invalid_grant" || e.Error == "invalid_client" {
+			switch e.Error {
+			case "invalid_grant":
 				return oauth.Grant{}, fmt.Errorf("%w: digitalocean answered %d: %s", oauth.ErrRefused, res.StatusCode, e.Error)
+			case "invalid_client", "unauthorized_client":
+				return oauth.Grant{}, fmt.Errorf("%w: digitalocean answered %d: %s", oauth.ErrAppRejected, res.StatusCode, e.Error)
 			}
 		}
 		// Only the error code is kept, never the raw body.

@@ -1,0 +1,12 @@
+# A control plane and two workers in two zones, so the chart's spreading and
+# disruption budgets have somewhere to act.
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+nodes:
+  - role: control-plane
+  - role: worker
+    labels:
+      topology.kubernetes.io/zone: zone-a
+  - role: worker
+    labels:
+      topology.kubernetes.io/zone: zone-b

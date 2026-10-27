@@ -526,6 +526,11 @@ func SchemaStatus(ctx context.Context, dsn string, groups []*migrate.Group) (*St
 // ErrNewerSchema is a database a newer Loomplane migrated.
 var ErrNewerSchema = errors.New("a newer Loomplane has migrated this database")
 
+// ErrPendingMigrations is a database this Loomplane still has to migrate.
+// `loomplane migrations --check` returns it, so a worker can wait for the
+// API to migrate before it starts.
+var ErrPendingMigrations = errors.New("the database has migrations still to apply")
+
 // CheckCompatible refuses a database a newer Loomplane migrated: an older
 // one would read and write a schema it doesn't know. Pending migrations
 // are fine; starting applies them.

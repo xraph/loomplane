@@ -99,12 +99,28 @@ func notificationDatabase(t *testing.T) *grove.DB {
 	if err = migrations.NotificationsMigration().Up(ctx, executor); err != nil {
 		t.Fatal(err)
 	}
-	// The cloud_sign_in migration adds the outbox's kind column. This helper
-	// only runs the notifications migration, so add it as that migration does.
-	if _, err = pg.Exec(ctx, `ALTER TABLE loomplane_notification_outbox ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'deployment'`); err != nil {
-		t.Fatal(err)
+	// The cloud_sign_in and notification_kinds migrations both add the
+	// outbox's kind column. This helper only runs the notifications
+	// migration, so it runs notification_kinds as well.
+	for _, m := range migrations.Group().Migrations() {
+		if m.Name == "notification_kinds" {
+			if err = m.Up(ctx, executor); err != nil {
+				t.Fatal(err)
+			}
+		}
 	}
 	return db
+}
+
+// cloudManagers grants organization cloud management to the listed users
+// only, and everything else to everyone.
+type cloudManagers map[string]bool
+
+func (c cloudManagers) Require(_ context.Context, p security.Principal, permission security.Permission, resource string) error {
+	if permission == security.OrganizationCloudManage && (!c[p.UserID] || resource != p.OrgID) {
+		return security.ErrForbidden
+	}
+	return nil
 }
 
 type roundTripFunc func(*http.Request) (*http.Response, error)
@@ -506,5 +522,168 @@ func TestPostgresEmailExhaustionRecoveryAndDeliveryTimeOptOut(t *testing.T) {
 	case <-messages:
 		t.Fatal("opted-out or removed member received email")
 	default:
+	}
+}
+
+func domainNoticeService(t *testing.T) (*Service, <-chan string) {
+	t.Helper()
+	db := notificationDatabase(t)
+	ctx := t.Context()
+	host, port, messages := smtpSink(t)
+	cfg := config.Config{PublicURL: "https://loomplane.example.com/", SecretKey: base64.StdEncoding.EncodeToString(make([]byte, 32)), Identity: config.IdentityConfig{AppID: "app"}, Notifications: config.NotificationsConfig{SMTPHost: host, SMTPPort: port, From: "loomplane@example.com"}}
+	svc, err := New(cfg, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = svc.mailStore.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err = svc.relayStore.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err = svc.Prepare(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err = svc.registerEventTypes(ctx); err != nil {
+		t.Fatal(err)
+	}
+	svc.SetAuthorizer(cloudManagers{"user-a": true})
+	for _, q := range []string{
+		`INSERT INTO authsome_users(id,app_id,email)VALUES('user-c','app','user-c@example.com')`,
+		`INSERT INTO authsome_members(org_id,user_id)VALUES('org-a','user-c')`,
+	} {
+		if _, err = svc.pg.Exec(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return svc, messages
+}
+
+func TestRenewalOutboxDeliversToCloudManagersOnly(t *testing.T) {
+	svc, messages := domainNoticeService(t)
+	ctx := t.Context()
+	manager := security.Principal{OrgID: "org-a", UserID: "user-a"}
+	// The renewal email is about the user's money, so it ignores the
+	// deployment email preference.
+	if _, err := svc.SetPreferences(ctx, manager, PreferenceInput{DeploymentEmail: false}); err != nil {
+		t.Fatal(err)
+	}
+	notice := RenewalNotice{OrgID: "org-a", RegistrationID: "reg_1", Domain: "acme.dev", RenewsOn: time.Date(2026, 11, 30, 0, 0, 0, 0, time.UTC), Currency: "USD", RenewalCost: "10.11"}
+	for range 2 {
+		if err := svc.EnqueueRenewalNotice(ctx, notice); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ids := []string{}
+	rows, err := svc.pg.Query(ctx, `SELECT id FROM loomplane_notification_outbox WHERE kind='domain.renewal' AND project_id='' AND attempt=0 AND id=deployment_id ORDER BY id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var id string
+		if err = rows.Scan(&id); err != nil {
+			t.Fatal(err)
+		}
+		ids = append(ids, id)
+	}
+	rows.Close()
+	if len(ids) != 2 || ids[0] != "renewal:reg_1:2026-11-30:user-a" || ids[1] != "renewal:reg_1:2026-11-30:user-c" {
+		t.Fatalf("outbox rows: %v", ids)
+	}
+	if err = svc.drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	list, err := svc.List(ctx, manager)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(list.Items) != 1 {
+		t.Fatalf("inbox: %+v", list)
+	}
+	item := list.Items[0]
+	if item.ActionURL != "https://loomplane.example.com/domains?registration=reg_1&action=auto-renew-off" || item.Title != "acme.dev renews on Nov 30, 2026" ||
+		item.Body != "Cloudflare renews acme.dev on Nov 30, 2026 for USD 10.11. Turn auto-renew off before then if you don't want to keep it." || item.EmailStatus != "sent" {
+		t.Fatalf("inbox item: %+v", item)
+	}
+	if err = svc.MarkRead(ctx, manager, item.ID); err != nil {
+		t.Fatal("mark read", err)
+	}
+	select {
+	case body := <-messages:
+		if !strings.Contains(body, "Subject: Loomplane: acme.dev renews on Nov 30, 2026") || !strings.Contains(body, "user-a@example.com") {
+			t.Fatalf("renewal email: %s", body)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("renewal email was not delivered")
+	}
+	var inboxDone, complete bool
+	var emailState string
+	if err = svc.pg.QueryRow(ctx, `SELECT inbox_done,email_state,completed_at IS NOT NULL FROM loomplane_notification_outbox WHERE user_id='user-c'`).Scan(&inboxDone, &emailState, &complete); err != nil {
+		t.Fatal(err)
+	}
+	if !inboxDone || emailState != "skipped" || !complete {
+		t.Fatalf("member without cloud management: inbox_done=%t email=%s complete=%t", inboxDone, emailState, complete)
+	}
+	other, err := svc.List(ctx, security.Principal{OrgID: "org-a", UserID: "user-c"})
+	if err != nil || len(other.Items) != 0 {
+		t.Fatalf("member without cloud management sees: %+v %v", other, err)
+	}
+	var count int
+	if err = svc.pg.QueryRow(ctx, `SELECT count(*) FROM herald_inbox`).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("inbox rows: %d %v", count, err)
+	}
+	// One webhook per notice, however many members the organization has.
+	types := []string{}
+	rows, err = svc.pg.Query(ctx, `SELECT type FROM relay_events`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var eventType string
+		if err = rows.Scan(&eventType); err != nil {
+			t.Fatal(err)
+		}
+		types = append(types, eventType)
+	}
+	rows.Close()
+	if len(types) != 1 || types[0] != "domain.renewal_upcoming" {
+		t.Fatalf("webhook events: %v", types)
+	}
+	select {
+	case <-messages:
+		t.Fatal("a member without cloud management received email")
+	default:
+	}
+}
+
+func TestRegistrationResultOutboxNotifiesCloudManagers(t *testing.T) {
+	svc, messages := domainNoticeService(t)
+	ctx := t.Context()
+	for range 2 {
+		if err := svc.EnqueueRegistrationResult(ctx, RegistrationResultNotice{OrgID: "org-a", RegistrationID: "reg_1", Domain: "acme.dev", Status: "succeeded"}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := svc.drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	list, err := svc.List(ctx, security.Principal{OrgID: "org-a", UserID: "user-a"})
+	if err != nil || len(list.Items) != 1 {
+		t.Fatalf("inbox: %+v %v", list, err)
+	}
+	if item := list.Items[0]; item.Title != "acme.dev is registered" || item.ActionURL != "https://loomplane.example.com/domains?registration=reg_1" || item.Body != "acme.dev is registered in your Cloudflare account, and Loomplane manages its DNS." {
+		t.Fatalf("inbox item: %+v", item)
+	}
+	var eventType string
+	if err = svc.pg.QueryRow(ctx, `SELECT type FROM relay_events`).Scan(&eventType); err != nil || eventType != "domain.registration_succeeded" {
+		t.Fatalf("webhook: %s %v", eventType, err)
+	}
+	select {
+	case body := <-messages:
+		if !strings.Contains(body, "Subject: Loomplane: acme.dev is registered") {
+			t.Fatalf("registration email: %s", body)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("registration email was not delivered")
 	}
 }

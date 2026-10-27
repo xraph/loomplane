@@ -1,0 +1,353 @@
+package cloudflare_test
+
+import (
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/xraph/loomplane/internal/clouds/cloudflare"
+	"github.com/xraph/loomplane/pkg/provider"
+)
+
+type recorded struct {
+	Method, Path, Query, Auth string
+	Body                      map[string]any
+}
+
+// fixture is a Cloudflare that records every request. Each probe answers
+// with the status its field holds.
+type fixture struct {
+	*httptest.Server
+	account, zone  string
+	zoneRead       int
+	dnsWrite       int
+	registrarRead  int
+	registrarWrite int
+	verifyStatus   string
+	noZones        bool
+	// otherZone lists a zone ahead of zone.
+	otherZone bool
+
+	mu       sync.Mutex
+	requests []recorded
+	deleted  map[string]bool
+}
+
+func newFixture(t *testing.T) *fixture {
+	t.Helper()
+	f := &fixture{
+		account: strings.Repeat("a", 32), zone: "zone1",
+		zoneRead: http.StatusOK, dnsWrite: http.StatusBadRequest,
+		registrarRead: http.StatusOK, registrarWrite: http.StatusNotFound,
+		verifyStatus: "active", deleted: map[string]bool{},
+	}
+	f.Server = httptest.NewServer(http.HandlerFunc(f.serve))
+	t.Cleanup(f.Close)
+	return f
+}
+
+// dropped is a status that closes the connection without an answer.
+const dropped = -1
+
+func (f *fixture) reply(w http.ResponseWriter, status int, result any) {
+	if status == dropped {
+		conn, _, err := w.(http.Hijacker).Hijack()
+		if err == nil {
+			_ = conn.Close()
+		}
+		return
+	}
+	w.WriteHeader(status)
+	if status >= 300 {
+		fmt.Fprint(w, `{"success":false,"errors":[{"code":10000,"message":"secret detail tok-secret"}],"result":null}`)
+		return
+	}
+	_ = json.NewEncoder(w).Encode(map[string]any{"success": true, "errors": []any{}, "result": result})
+}
+
+func (f *fixture) serve(w http.ResponseWriter, r *http.Request) {
+	rec := recorded{Method: r.Method, Path: r.URL.Path, Query: r.URL.RawQuery, Auth: r.Header.Get("Authorization")}
+	if r.Body != nil {
+		_ = json.NewDecoder(r.Body).Decode(&rec.Body)
+	}
+	f.mu.Lock()
+	f.requests = append(f.requests, rec)
+	f.mu.Unlock()
+	acct := "/accounts/" + f.account
+	switch {
+	case r.Method == http.MethodGet && r.URL.Path == acct+"/tokens/verify":
+		f.reply(w, http.StatusOK, map[string]any{"id": "tok1", "status": f.verifyStatus})
+	case r.Method == http.MethodGet && r.URL.Path == acct:
+		f.reply(w, http.StatusOK, map[string]any{"id": f.account, "name": "Acme"})
+	case r.Method == http.MethodGet && r.URL.Path == "/zones":
+		zones := []map[string]any{{"id": f.zone, "name": "acme.dev", "status": "active", "account": map[string]string{"id": f.account}}}
+		if f.otherZone {
+			zones = append([]map[string]any{{"id": "zone0", "name": "other.dev", "status": "active", "account": map[string]string{"id": f.account}}}, zones...)
+		}
+		if f.noZones {
+			zones = nil
+		}
+		f.reply(w, f.zoneRead, zones)
+	case r.Method == http.MethodPost && r.URL.Path == "/zones/"+f.zone+"/dns_records":
+		f.reply(w, f.dnsWrite, map[string]any{"id": "rec_probe"})
+	case r.Method == http.MethodDelete && strings.HasPrefix(r.URL.Path, "/zones/"+f.zone+"/dns_records/"):
+		f.mu.Lock()
+		f.deleted[strings.TrimPrefix(r.URL.Path, "/zones/"+f.zone+"/dns_records/")] = true
+		f.mu.Unlock()
+		f.reply(w, http.StatusOK, map[string]any{"id": "rec_probe"})
+	case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/registrations"):
+		f.reply(w, f.registrarRead, []any{})
+	case r.Method == http.MethodPatch && strings.HasSuffix(r.URL.Path, "/registrations/loomplane-permission-probe.invalid"):
+		f.reply(w, f.registrarWrite, map[string]any{})
+	default:
+		http.NotFound(w, r)
+	}
+}
+
+func (f *fixture) saw(path string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, r := range f.requests {
+		if r.Path == path {
+			return true
+		}
+	}
+	return false
+}
+
+func TestPermissionsProbeWithoutSideEffects(t *testing.T) {
+	f := newFixture(t)
+	f.dnsWrite, f.registrarWrite = http.StatusBadRequest, http.StatusForbidden
+	p, err := cloudflare.New(f.URL, false).Permissions(t.Context(), "tok", f.account)
+	if err != nil || p.ZoneRead != "granted" || p.DNSWrite != "granted" || p.RegistrarWrite != "missing" || p.RegistrarRead != "granted" {
+		t.Fatalf("%+v %v", p, err)
+	}
+	for _, r := range f.requests {
+		if r.Method == http.MethodPost && r.Path == "/zones/"+f.zone+"/dns_records" && r.Body["content"] != "permission-probe" {
+			t.Fatal("probe could be valid")
+		}
+		if r.Method == http.MethodPost && strings.Contains(r.Path, "/registrations") {
+			t.Fatal("the permission check sent a registration")
+		}
+		if r.Method == http.MethodPatch && (!strings.HasSuffix(r.Path, "/registrar/registrations/loomplane-permission-probe.invalid") || len(r.Body) != 1 || r.Body["auto_renew"] != false) {
+			t.Fatalf("registrar probe %s %v", r.Path, r.Body)
+		}
+		if r.Method != http.MethodGet && r.Method != http.MethodPost && r.Method != http.MethodPatch {
+			t.Fatalf("unexpected %s %s", r.Method, r.Path)
+		}
+		if r.Auth != "Bearer tok" {
+			t.Fatalf("authorization %q", r.Auth)
+		}
+	}
+	if f.deleted["rec_probe"] {
+		t.Fatal("deleted a record that was never created")
+	}
+}
+
+func TestPermissionsProbeTreatsSuccessAsAmbiguous(t *testing.T) {
+	f := newFixture(t)
+	f.dnsWrite = http.StatusOK // the fixture returns {"result":{"id":"rec_probe"}}
+	if _, err := cloudflare.New(f.URL, false).Permissions(t.Context(), "tok", f.account); !errors.Is(err, provider.ErrInfrastructureAmbiguous) {
+		t.Fatal(err)
+	}
+	if !f.deleted["rec_probe"] {
+		t.Fatal("accidental probe record kept")
+	}
+}
+
+func TestPermissionsRegistrarWriteSuccessIsAmbiguous(t *testing.T) {
+	f := newFixture(t)
+	f.registrarWrite = http.StatusOK
+	if _, err := cloudflare.New(f.URL, false).Permissions(t.Context(), "tok", f.account); !errors.Is(err, provider.ErrInfrastructureAmbiguous) {
+		t.Fatal(err)
+	}
+}
+
+func TestPermissionsRegistrarWriteProbeAnswers(t *testing.T) {
+	for status, want := range map[int]cloudflare.PermissionState{
+		http.StatusForbidden:  cloudflare.Missing,
+		http.StatusNotFound:   cloudflare.Granted,
+		http.StatusBadRequest: cloudflare.Granted,
+	} {
+		f := newFixture(t)
+		f.registrarWrite = status
+		p, err := cloudflare.New(f.URL, false).Permissions(t.Context(), "tok", f.account)
+		if err != nil || p.RegistrarWrite != want {
+			t.Fatalf("%d: %+v %v", status, p, err)
+		}
+	}
+}
+
+// A Cloudflare blip on the optional registrar probes leaves them unchecked
+// and the rest of the answer standing. A 401 is still a refusal.
+func TestPermissionsRegistrarBlipIsUnchecked(t *testing.T) {
+	for _, status := range []int{http.StatusTooManyRequests, http.StatusInternalServerError, http.StatusServiceUnavailable, dropped} {
+		for _, probe := range []string{"read", "write"} {
+			f := newFixture(t)
+			if probe == "read" {
+				f.registrarRead = status
+			} else {
+				f.registrarWrite = status
+			}
+			p, err := cloudflare.New(f.URL, false).Permissions(t.Context(), "tok", f.account)
+			if err != nil || p.ZoneRead != cloudflare.Granted || p.DNSWrite != cloudflare.Granted {
+				t.Fatalf("%s %d: %+v %v", probe, status, p, err)
+			}
+			if got := map[string]cloudflare.PermissionState{"read": p.RegistrarRead, "write": p.RegistrarWrite}[probe]; got != cloudflare.Unchecked {
+				t.Fatalf("%s %d: %s", probe, status, got)
+			}
+		}
+	}
+	for _, probe := range []string{"read", "write"} {
+		f := newFixture(t)
+		if probe == "read" {
+			f.registrarRead = http.StatusUnauthorized
+		} else {
+			f.registrarWrite = http.StatusUnauthorized
+		}
+		if _, err := cloudflare.New(f.URL, false).Permissions(t.Context(), "tok", f.account); !errors.Is(err, cloudflare.ErrRejected) {
+			t.Fatalf("%s 401: %v", probe, err)
+		}
+	}
+}
+
+func TestPermissionsMissingAndUnchecked(t *testing.T) {
+	f := newFixture(t)
+	f.zoneRead, f.registrarRead = http.StatusForbidden, http.StatusForbidden
+	p, err := cloudflare.New(f.URL, false).Permissions(t.Context(), "tok", f.account)
+	if err != nil || p.ZoneRead != "missing" || p.DNSWrite != "unchecked" || p.RegistrarRead != "missing" || p.RegistrarWrite != "granted" {
+		t.Fatalf("%+v %v", p, err)
+	}
+
+	f = newFixture(t)
+	f.noZones = true
+	p, err = cloudflare.New(f.URL, false).Permissions(t.Context(), "tok", f.account)
+	if err != nil || p.ZoneRead != "granted" || p.DNSWrite != "unchecked" {
+		t.Fatalf("no zones: %+v %v", p, err)
+	}
+}
+
+func TestPermissionsServerErrorIsNotAPermissionAnswer(t *testing.T) {
+	f := newFixture(t)
+	f.dnsWrite = http.StatusInternalServerError
+	if _, err := cloudflare.New(f.URL, false).Permissions(t.Context(), "tok", f.account); err == nil {
+		t.Fatal("a 500 was read as a permission answer")
+	}
+	f = newFixture(t)
+	f.zoneRead = http.StatusTooManyRequests
+	if _, err := cloudflare.New(f.URL, false).Permissions(t.Context(), "tok", f.account); err == nil {
+		t.Fatal("a 429 on Zone Read was read as a permission answer")
+	}
+}
+
+func TestSandboxUsesRegistrarSandboxPaths(t *testing.T) {
+	f := newFixture(t)
+	probe := "/registrations/loomplane-permission-probe.invalid"
+	p, err := cloudflare.New(f.URL, true).Permissions(t.Context(), "tok", f.account)
+	if err != nil || p.RegistrarWrite != cloudflare.Granted || !f.saw("/accounts/"+f.account+"/registrar-sandbox/registrations") || !f.saw("/accounts/"+f.account+"/registrar-sandbox"+probe) ||
+		f.saw("/accounts/"+f.account+"/registrar/registrations") || f.saw("/accounts/"+f.account+"/registrar"+probe) {
+		t.Fatal(f.requests, p, err)
+	}
+	f = newFixture(t)
+	p, err = cloudflare.New(f.URL, false).Permissions(t.Context(), "tok", f.account)
+	if err != nil || p.RegistrarWrite != cloudflare.Granted || !f.saw("/accounts/"+f.account+"/registrar/registrations") || !f.saw("/accounts/"+f.account+"/registrar"+probe) ||
+		f.saw("/accounts/"+f.account+"/registrar-sandbox/registrations") || f.saw("/accounts/"+f.account+"/registrar-sandbox"+probe) {
+		t.Fatal(f.requests, p, err)
+	}
+}
+
+func TestVerifyTokenAndAccount(t *testing.T) {
+	f := newFixture(t)
+	c := cloudflare.New(f.URL, false)
+	info, err := c.VerifyToken(t.Context(), "tok", f.account)
+	if err != nil || info.ID != "tok1" || info.Status != "active" {
+		t.Fatalf("%+v %v", info, err)
+	}
+	acct, err := c.Account(t.Context(), "tok", f.account)
+	if err != nil || acct.ID != f.account || acct.Name != "Acme" {
+		t.Fatalf("%+v %v", acct, err)
+	}
+	f.verifyStatus = "disabled"
+	if _, err := c.VerifyToken(t.Context(), "tok", f.account); !errors.Is(err, cloudflare.ErrRejected) {
+		t.Fatalf("inactive token: %v", err)
+	}
+}
+
+func TestVerifyTokenFallsBackToUserTokens(t *testing.T) {
+	var paths []string
+	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.URL.Path)
+		if r.URL.Path != "/user/tokens/verify" {
+			w.WriteHeader(http.StatusBadRequest)
+			fmt.Fprint(w, `{"success":false,"errors":[{"code":1000,"message":"Invalid API Token"}]}`)
+			return
+		}
+		fmt.Fprint(w, `{"success":true,"errors":[],"result":{"id":"utok","status":"active"}}`)
+	}))
+	defer api.Close()
+	info, err := cloudflare.New(api.URL, false).VerifyToken(t.Context(), "tok", strings.Repeat("b", 32))
+	if err != nil || info.ID != "utok" || len(paths) != 2 {
+		t.Fatalf("%+v %v %v", info, err, paths)
+	}
+}
+
+func TestErrorsKeepBodiesAndTokensOut(t *testing.T) {
+	f := newFixture(t)
+	f.zoneRead = http.StatusUnauthorized
+	_, err := cloudflare.New(f.URL, false).Permissions(t.Context(), "tok-secret", f.account)
+	if !errors.Is(err, cloudflare.ErrRejected) {
+		t.Fatal(err)
+	}
+	var ae *cloudflare.APIError
+	if !errors.As(err, &ae) || ae.Status != http.StatusUnauthorized || len(ae.Codes) != 1 || ae.Codes[0] != 10000 {
+		t.Fatalf("%+v", ae)
+	}
+	if strings.Contains(err.Error(), "tok-secret") || strings.Contains(err.Error(), "secret detail") {
+		t.Fatalf("leaked: %v", err)
+	}
+}
+
+func TestCheckToken(t *testing.T) {
+	for _, bad := range []string{"", "has space", strings.Repeat("x", 600)} {
+		if cloudflare.CheckToken(bad) == nil {
+			t.Errorf("%q accepted", bad)
+		}
+	}
+	if err := cloudflare.CheckToken(" abc_DEF-123 \n"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestChallengeScopeProbesTheNamedZone(t *testing.T) {
+	f := newFixture(t)
+	f.otherZone, f.registrarRead, f.registrarWrite = true, http.StatusForbidden, http.StatusForbidden
+	scope, err := cloudflare.New(f.URL, false).ChallengeScope(t.Context(), provider.InfrastructureCredential{Provider: "cloudflare", AccountID: f.account, Token: "tok"}, f.zone)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(scope.ZoneIDs) != 2 || scope.ZoneIDs[0] != "zone0" || scope.ZoneIDs[1] != f.zone {
+		t.Fatalf("zones: %v", scope.ZoneIDs)
+	}
+	p := scope.Permissions
+	if p.DNSWrite != cloudflare.Granted || p.RegistrarRead != cloudflare.Missing || p.RegistrarWrite != cloudflare.Missing {
+		t.Fatalf("%+v", p)
+	}
+	if f.saw("/zones/zone0/dns_records") || !f.saw("/zones/"+f.zone+"/dns_records") {
+		t.Fatal("the DNS Write probe aimed at the first listed zone")
+	}
+	if !f.saw("/accounts/" + f.account + "/tokens/verify") {
+		t.Fatal("the token wasn't verified")
+	}
+	// The checker still probes the first zone the token lists.
+	if _, err = cloudflare.New(f.URL, false).Permissions(t.Context(), "tok", f.account); err != nil || !f.saw("/zones/zone0/dns_records") {
+		t.Fatal("Permissions moved its probe", err)
+	}
+	if _, err = cloudflare.New(f.URL, false).ZonePermissions(t.Context(), "tok", f.account, ""); !errors.Is(err, provider.ErrInfrastructureInvalid) {
+		t.Fatal("probed without a zone", err)
+	}
+}

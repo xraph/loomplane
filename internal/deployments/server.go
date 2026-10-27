@@ -54,6 +54,9 @@ type OwnedTarget struct {
 	Secrets     ResourceSecrets
 	Builder     *ImageBuilder
 	Ports       owned.PortReservations
+	// GPULocks serializes GPU device picking per Docker daemon. Nil
+	// serializes it within this process only.
+	GPULocks    server.GPULocks
 	Controllers ControllerReceipts
 	ServerDial  func(context.Context, *server.Config) (*server.Client, error)
 	Backend     func(string, string) owned.Backend
@@ -78,6 +81,11 @@ type OwnedTarget struct {
 	// services Loomplane depends on and an operator's denied ranges. Nil
 	// refuses only its own host's addresses.
 	DialGuard *DialGuard
+	// FilesRevisionKey keys the digest of a component's rendered files in
+	// its revision label, derived from secret_key under
+	// FilesRevisionKeyLabel, so the label can't be used to guess a file's
+	// content offline. A component with files doesn't start without it.
+	FilesRevisionKey []byte
 
 	// Bindings lists what runs in an environment, for reaching the
 	// components of a composition from its hooks. Nil leaves a component
@@ -302,7 +310,7 @@ func (e *OwnedTarget) Register(org, connection string) string {
 	case e.Backend != nil:
 		backend = e.Backend(org, connection)
 	case e.Cloud == connections.Server:
-		backend = &server.Runtime{Session: e.serverSession(org, connection), Values: e.values, Ports: e.Ports}
+		backend = &server.Runtime{Session: e.serverSession(org, connection), Values: e.values, Ports: e.Ports, GPULocks: e.GPULocks}
 	default:
 		backend = e.kubernetesBackend(org, connection)
 	}
@@ -586,7 +594,7 @@ func ownedSpec(job *Job, image string, state ownedState) (sp cpprovider.ServiceS
 		sp.Ports = []cpprovider.PortSpec{{Container: cfg.Catalog.Port(), Protocol: "tcp"}}
 	}
 	if cfg.Component != nil {
-		componentSpec(&sp, labels, cfg.Component)
+		componentSpec(&sp, labels, cfg.Component, cfg.Provider)
 		if cfg.Provider == "server" {
 			for i := range sp.Volumes {
 				sp.Volumes[i].SizeMB = 0
@@ -621,6 +629,13 @@ func ownedSpec(job *Job, image string, state ownedState) (sp cpprovider.ServiceS
 		sp.Resources.CPUMillis = int(cfg.Size.CPU * 1000)
 		sp.Resources.MemoryMB = cfg.Size.Memory
 	}
+	if cfg.Component == nil {
+		shm := 0
+		if cfg.Size != nil {
+			shm = cfg.Size.Shm
+		}
+		gpuSpec(&sp, labels, cfg.GPU, shm, nil, cfg.Provider)
+	}
 	if labels[owned.LabelScaleMin] != labels[owned.LabelScaleMax] {
 		labels[owned.LabelManageHPA] = "true"
 		if sp.Resources.CPUMillis == 0 {
@@ -648,7 +663,7 @@ func ownedSpec(job *Job, image string, state ownedState) (sp cpprovider.ServiceS
 		// The rendered bytes are part of the revision, so a changed file
 		// starts another container. Only their digest is a label.
 		labels[owned.LabelRuntimeFiles] = "true"
-		labels[owned.LabelRevision] += "/" + filesRevision(job.files)
+		labels[owned.LabelRevision] += "/" + job.filesRevision
 	}
 	return sp, labels
 }
@@ -696,10 +711,7 @@ func (e *OwnedTarget) Remove(ctx context.Context, job *Job, b *planning.Binding)
 		if e.Secrets == nil {
 			return ErrNoCredential
 		}
-		if err := e.Secrets.Delete(ctx, resourceKey(b.OrgID, b.EnvironmentID, b.Name, componentAddressField)); err != nil {
-			return err
-		}
-		return e.forgetPublished(ctx, b, resource.Component)
+		return e.forgetComponent(ctx, b, resource.Component)
 	}
 	return nil
 }

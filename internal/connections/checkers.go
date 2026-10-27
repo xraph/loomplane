@@ -6,11 +6,13 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"regexp"
 	"strings"
 
 	"github.com/xraph/loomplane/internal/clouds/aws"
 	"github.com/xraph/loomplane/internal/clouds/azure"
+	"github.com/xraph/loomplane/internal/clouds/cloudflare"
 	"github.com/xraph/loomplane/internal/clouds/digitalocean"
 	"github.com/xraph/loomplane/internal/clouds/gcp"
 	"github.com/xraph/loomplane/internal/clouds/kubernetes"
@@ -23,17 +25,31 @@ import (
 	"github.com/xraph/loomplane/pkg/provider/sdk"
 )
 
-// GCPChecker checks Google Cloud service account keys.
+// GCPChecker checks Google Cloud service account keys, and the
+// authorized_user keys a Google sign-in hands out.
 type GCPChecker struct{ Client *gcp.Client }
 
+// IsGrant implements GrantChecker: an authorized_user key only ever comes
+// from a sign-in.
+func (GCPChecker) IsGrant(credential []byte) bool {
+	var k struct {
+		Type string `json:"type"`
+	}
+	return json.Unmarshal(bytes.TrimSpace(credential), &k) == nil && k.Type == "authorized_user"
+}
+
 // Parse implements Checker. Billing export and a native recovery VPC are
-// optional. Neither changes the identity derived from the service account.
+// optional. Neither changes the identity derived from the project. A
+// signed-in person's key names them as signed_in_as.
 func (g GCPChecker) Parse(credential []byte, settings map[string]string) (Check, error) {
 	key, err := gcp.ParseKey(credential)
 	if err != nil {
 		return Check{}, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	details := map[string]string{"project_id": key.ProjectID, "service_account": key.ClientEmail}
+	if key.User {
+		details = map[string]string{"project_id": key.ProjectID, "signed_in_as": key.ClientEmail}
+	}
 	if table := strings.TrimSpace(settings[gcp.BillingExportSetting]); table != "" {
 		if billingErr := gcp.CheckBillingTable(table); billingErr != nil {
 			return Check{}, fmt.Errorf("%w: %w", ErrInvalid, billingErr)
@@ -51,7 +67,7 @@ func (g GCPChecker) Parse(credential []byte, settings map[string]string) (Check,
 }
 
 // Check implements Checker: it asks Google which of the permissions a
-// deployment needs the service account holds.
+// deployment needs the service account, or the person, holds.
 func (g GCPChecker) Check(ctx context.Context, credential []byte, settings map[string]string) (Check, error) {
 	c, err := g.Parse(credential, settings)
 	if err != nil {
@@ -74,40 +90,152 @@ func (g GCPChecker) Check(ctx context.Context, credential []byte, settings map[s
 // teamRE matches Vercel team IDs, such as team_a1B2c3.
 var teamRE = regexp.MustCompile(`^team_[A-Za-z0-9]{1,64}$`)
 
-// VercelChecker checks Vercel access tokens.
+// VercelChecker checks Vercel access tokens and sign-in grants.
 type VercelChecker struct{ Client *vercel.Client }
 
+// vercelGrant reads a sign-in grant's JSON. ok is false for a credential
+// that isn't JSON, which is a pasted token.
+func vercelGrant(credential []byte) (g oauth.Grant, ok bool, err error) {
+	trimmed := bytes.TrimSpace(credential)
+	if !bytes.HasPrefix(trimmed, []byte("{")) {
+		return oauth.Grant{}, false, nil
+	}
+	if err := json.Unmarshal(trimmed, &g); err != nil {
+		return oauth.Grant{}, true, fmt.Errorf("%w: the sign-in grant isn't valid JSON", ErrInvalid)
+	}
+	if err := vercel.CheckToken(g.AccessToken); err != nil {
+		return oauth.Grant{}, true, fmt.Errorf("%w: the sign-in grant has no usable access token", ErrInvalid)
+	}
+	return g, true, nil
+}
+
+// IsGrant implements GrantChecker.
+func (VercelChecker) IsGrant(credential []byte) bool {
+	// A grant that doesn't parse is still a grant; Parse says what's wrong.
+	_, isGrant, _ := vercelGrant(credential) //nolint:errcheck // only whether it's a grant matters here
+	return isGrant
+}
+
 // Parse implements Checker. The one setting is team_id; without it the
-// token deploys to the person's own account.
+// token deploys to the person's own account. A grant says its own team,
+// and settings don't override it.
 func (v VercelChecker) Parse(credential []byte, settings map[string]string) (Check, error) {
-	if err := vercel.CheckToken(string(credential)); err != nil {
+	g, isGrant, err := vercelGrant(credential)
+	if err != nil {
+		return Check{}, err
+	}
+	team := strings.TrimSpace(settings["team_id"])
+	if isGrant {
+		team = strings.TrimSpace(g.Account["team_id"])
+	} else if err := vercel.CheckToken(string(credential)); err != nil {
 		return Check{}, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	details := map[string]string{}
-	if team := strings.TrimSpace(settings["team_id"]); team != "" {
+	if team != "" {
 		if !teamRE.MatchString(team) {
 			return Check{}, fmt.Errorf("%w: %q isn't a Vercel team ID; they look like team_ followed by letters and digits", ErrInvalid, team)
 		}
 		details["team_id"] = team
+	} else if user := strings.TrimSpace(g.Account["user_id"]); isGrant && user != "" {
+		details["user_id"] = user
 	}
 	return Check{Details: details}, nil
 }
 
-// Check implements Checker: it asks Vercel who the token is.
+// Check implements Checker: it asks Vercel who the token is. A grant is
+// asked about with its access token and team, so it gives the same
+// account a token would.
 func (v VercelChecker) Check(ctx context.Context, credential []byte, settings map[string]string) (Check, error) {
 	c, err := v.Parse(credential, settings)
 	if err != nil {
 		return Check{}, err
 	}
-	acct, err := v.Client.Check(ctx, vercel.Token{Value: strings.TrimSpace(string(credential)), TeamID: c.Details["team_id"]})
+	token := strings.TrimSpace(string(credential))
+	if g, isGrant, _ := vercelGrant(credential); isGrant { //nolint:errcheck // Parse refused a bad grant above
+		token = g.AccessToken
+	}
+	acct, err := v.Client.Check(ctx, vercel.Token{Value: token, TeamID: c.Details["team_id"]})
 	if err != nil {
 		return Check{}, err
 	}
 	c.Account = acct.Name
+	delete(c.Details, "user_id")
 	if acct.TeamID != "" {
 		c.Details["team_id"] = acct.TeamID
 	} else {
 		c.Details["user_id"] = acct.UserID
+	}
+	return c, nil
+}
+
+// cloudflareAccountRE matches Cloudflare account IDs: 32 lowercase hex digits.
+var cloudflareAccountRE = regexp.MustCompile(`^[0-9a-f]{32}$`)
+
+// CloudflareChecker checks Cloudflare API tokens. The one setting is
+// account_id, which is required: a token can reach several accounts, and
+// DNS and domains are made in one.
+type CloudflareChecker struct{ Client *cloudflare.Client }
+
+// Parse implements Checker.
+func (CloudflareChecker) Parse(credential []byte, settings map[string]string) (Check, error) {
+	if err := cloudflare.CheckToken(string(credential)); err != nil {
+		return Check{}, fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
+	account := strings.TrimSpace(settings["account_id"])
+	if !cloudflareAccountRE.MatchString(account) {
+		return Check{}, fmt.Errorf("%w: %q isn't a Cloudflare account ID; they are 32 lowercase letters and digits", ErrInvalid, account)
+	}
+	return Check{Details: map[string]string{"account_id": account}}, nil
+}
+
+// Check implements Checker: it verifies the token, reads the account, and
+// probes which permissions the token holds without changing anything.
+// Zone Read and DNS Write are needed; registrar access is optional and
+// only shows in the details.
+func (cf CloudflareChecker) Check(ctx context.Context, credential []byte, settings map[string]string) (Check, error) {
+	c, err := cf.Parse(credential, settings)
+	if err != nil {
+		return Check{}, err
+	}
+	token, account := strings.TrimSpace(string(credential)), c.Details["account_id"]
+	info, err := cf.Client.VerifyToken(ctx, token, account)
+	if err != nil {
+		return Check{}, err
+	}
+	// Account details need Account Settings Read, which the form doesn't
+	// ask for; without it the account ID names the connection.
+	acct, err := cf.Client.Account(ctx, token, account)
+	var ae *cloudflare.APIError
+	switch {
+	case errors.As(err, &ae) && ae.Status == http.StatusForbidden:
+		acct = cloudflare.Account{ID: account}
+	case err != nil:
+		return Check{}, err
+	}
+	perms, err := cf.Client.Permissions(ctx, token, account)
+	if err != nil {
+		return Check{}, err
+	}
+	c.Account = acct.Name
+	if c.Account == "" {
+		c.Account = acct.ID
+	}
+	c.Details["token_id"] = info.ID
+	c.Details["zone_read"], c.Details["dns_write"] = string(perms.ZoneRead), string(perms.DNSWrite)
+	c.Details["registrar_mode"] = cf.Client.RegistrarMode()
+	switch {
+	case perms.RegistrarRead == cloudflare.Missing || perms.RegistrarWrite == cloudflare.Missing:
+		c.Details["registrar"] = string(cloudflare.Missing)
+	case perms.RegistrarRead == cloudflare.Granted && perms.RegistrarWrite == cloudflare.Granted:
+		c.Details["registrar"] = string(cloudflare.Granted)
+	default:
+		c.Details["registrar"] = string(cloudflare.Unchecked)
+	}
+	if perms.ZoneRead == cloudflare.Missing {
+		c.Missing = append(c.Missing, "Zone Read")
+	}
+	if perms.DNSWrite == cloudflare.Missing {
+		c.Missing = append(c.Missing, "DNS Write")
 	}
 	return c, nil
 }
@@ -245,17 +373,34 @@ func (d DigitalOceanChecker) Check(ctx context.Context, credential []byte, setti
 	return c, nil
 }
 
-// AzureChecker checks Azure service principals. The credential is the
-// principal's client secret; the settings say whose it is and where it
-// deploys: tenant_id, client_id and subscription_id, and resource_group,
-// which defaults to loomplane.
+// AzureChecker checks Azure service principals, and the azure_user keys
+// an Azure sign-in hands out. The credential is the principal's client
+// secret, or the key; the settings say where it deploys: tenant_id and
+// subscription_id, and resource_group, which defaults to loomplane. A
+// principal's settings also say whose it is, as client_id.
 type AzureChecker struct{ Client *azure.Client }
 
-// Parse implements Checker.
+// IsGrant implements GrantChecker: an azure_user key only ever comes from
+// a sign-in.
+func (AzureChecker) IsGrant(credential []byte) bool {
+	var k struct {
+		Type string `json:"type"`
+	}
+	return json.Unmarshal(bytes.TrimSpace(credential), &k) == nil && k.Type == "azure_user"
+}
+
+// Parse implements Checker. A signed-in person's key names them as
+// signed_in_as; the sign-in app's client isn't shown.
 func (a AzureChecker) Parse(credential []byte, settings map[string]string) (Check, error) {
 	cred, err := azure.ParseCredential(credential, settings)
 	if err != nil {
 		return Check{}, fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
+	if cred.RefreshToken != "" {
+		return Check{Details: map[string]string{
+			"tenant_id": cred.TenantID, "subscription_id": cred.SubscriptionID,
+			"resource_group": cred.ResourceGroup, "signed_in_as": cred.Username,
+		}}, nil
 	}
 	return Check{Details: map[string]string{
 		"tenant_id": cred.TenantID, "client_id": cred.ClientID,
@@ -263,9 +408,9 @@ func (a AzureChecker) Parse(credential []byte, settings map[string]string) (Chec
 	}}, nil
 }
 
-// Check implements Checker: it signs in as the principal, reads its
-// subscription, and asks Azure which of the actions a deployment needs
-// its role assignments allow.
+// Check implements Checker: it signs in as the principal, or renews the
+// person's sign-in, reads the subscription, and asks Azure which of the
+// actions a deployment needs their role assignments allow.
 func (a AzureChecker) Check(ctx context.Context, credential []byte, settings map[string]string) (Check, error) {
 	c, err := a.Parse(credential, settings)
 	if err != nil {
@@ -309,17 +454,43 @@ func (a AzureChecker) Check(ctx context.Context, credential []byte, settings map
 func azureGUID(s string) bool { return len(s) == 36 && strings.Count(s, "-") == 4 }
 
 // rejected reports whether a check failed because the cloud refused the
-// credential, as opposed to the cloud being unreachable.
+// credential, as opposed to the cloud being unreachable. A Google, Vercel
+// or DigitalOcean answer counts only if it says no to the request; one
+// that says the cloud couldn't answer it, such as a 503, doesn't.
 func rejected(err error) bool {
 	var ge *gcp.APIError
 	var ve *vercel.APIError
 	var re *render.APIError
 	var de *digitalocean.APIError
-	return errors.Is(err, render.ErrRejected) || errors.As(err, &re) ||
-		errors.Is(err, digitalocean.ErrRejected) || errors.As(err, &de) || errors.Is(err, gcp.ErrRejected) || errors.Is(err, gcp.ErrInvalidKey) || errors.Is(err, vercel.ErrRejected) ||
+	var ce *cloudflare.APIError
+	return errors.Is(err, cloudflare.ErrRejected) || errors.As(err, &ce) || errors.Is(err, render.ErrRejected) || errors.As(err, &re) ||
+		errors.Is(err, digitalocean.ErrRejected) || (errors.As(err, &de) && refusedStatus(de.Status)) ||
+		errors.Is(err, gcp.ErrRejected) || errors.Is(err, gcp.ErrInvalidKey) || errors.Is(err, vercel.ErrRejected) ||
 		errors.Is(err, server.ErrRejected) || errors.Is(err, kubernetes.ErrRejected) || errors.Is(err, registry.ErrRejected) ||
 		errors.Is(err, aws.ErrRejected) || errors.Is(err, azure.ErrRejected) || errors.Is(err, sdk.ErrRejected) ||
-		errors.As(err, &ge) || errors.As(err, &ve)
+		(errors.As(err, &ge) && refusedStatus(ge.Status)) || (errors.As(err, &ve) && refusedStatus(ve.Status))
+}
+
+// refusedStatus reports whether an HTTP status says no to the request
+// itself: a 4xx other than a timeout or a rate limit, which a retry may
+// get past.
+func refusedStatus(status int) bool {
+	return status >= 400 && status < 500 && status != http.StatusRequestTimeout && status != http.StatusTooManyRequests
+}
+
+// refusedSignIn reports whether a check of a signed-in connection failed
+// because the cloud no longer honors the sign-in, as opposed to refusing
+// something else, such as a permission, or being unreachable: a renewal
+// refused as the background job's are, or the cloud answering 401. Only
+// Vercel says so with a 403, for a disabled integration.
+func refusedSignIn(err error) bool {
+	var ge *gcp.APIError
+	var ae *azure.APIError
+	var de *digitalocean.APIError
+	return errors.Is(err, oauth.ErrRefused) || vercel.Revoked(err) ||
+		(errors.As(err, &ge) && ge.Status == http.StatusUnauthorized) ||
+		(errors.As(err, &ae) && ae.Status == http.StatusUnauthorized) ||
+		(errors.As(err, &de) && de.Status == http.StatusUnauthorized)
 }
 
 // AWSChecker checks AWS access keys in a required region. Optional private

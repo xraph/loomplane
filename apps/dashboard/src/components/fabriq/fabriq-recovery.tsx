@@ -32,7 +32,7 @@ export function FabriqRecovery(props: CatalogPanelProps) {
   return (
     <div className="grid gap-3">
       {kubernetes && (
-        <p className="text-sm">
+        <p className="text-[13px]">
           Backups for these engines aren't available on Kubernetes yet.
         </p>
       )}
@@ -49,7 +49,7 @@ export function FabriqRecovery(props: CatalogPanelProps) {
               <h2 className="text-[15px] font-semibold">{engine.name}</h2>
             )}
             {engine.external ? (
-              <p className="text-sm text-muted-foreground">
+              <p className="text-[13px] text-muted-foreground">
                 Not managed by Loomplane: no backups or restores.
               </p>
             ) : !kubernetes && engine.resource ? (
@@ -72,17 +72,19 @@ export function FabriqRecovery(props: CatalogPanelProps) {
         tab to rebuild their projections.
       </p>
       {!kubernetes && !engines.some((engine) => engine.external) && (
-        <details className="grid gap-2 rounded-xl border border-border-panel bg-card px-3.5 py-3 text-[12.5px] leading-[1.5] text-muted-foreground">
+        <details className="grid gap-2 rounded-xl bg-card px-4 py-3.5 text-[12.5px] text-muted-foreground ring-1 ring-border">
           <summary className="cursor-pointer focus-visible:outline-2 focus-visible:outline-ring">
             Other targets and engine sources
           </summary>
           <p className="mt-2">
-            <strong>Kubernetes:</strong> Backups for these engines aren't
-            available on Kubernetes yet.
+            <span className="font-medium text-foreground">Kubernetes:</span>{" "}
+            Backups for these engines aren't available on Kubernetes yet.
           </p>
           <p className="mt-2">
-            <strong>External endpoint:</strong> Not managed by Loomplane: no
-            backups or restores.
+            <span className="font-medium text-foreground">
+              External endpoint:
+            </span>{" "}
+            Not managed by Loomplane: no backups or restores.
           </p>
         </details>
       )}

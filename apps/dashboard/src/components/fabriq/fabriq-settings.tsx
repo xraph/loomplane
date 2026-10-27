@@ -109,7 +109,7 @@ export function FabriqSettings({
   }
   return (
     <section aria-label="Optional projections" className="grid gap-3">
-      <p className="text-[12.5px] leading-[1.5] text-muted-foreground">
+      <p className="text-[12.5px] text-muted-foreground">
         Choose the projections you need. Changes take effect after you approve
         and deploy the plan.
       </p>
@@ -136,23 +136,20 @@ export function FabriqSettings({
         return (
           <div
             key={id}
-            className="grid gap-2 rounded-xl border border-border-panel bg-card px-3.5 py-3"
+            className="grid gap-2 rounded-xl bg-card px-4 py-3.5 ring-1 ring-border"
           >
             <label className="flex items-center justify-between gap-4">
-              <span>
-                <span className="text-[15px] leading-[normal] font-semibold">
-                  {title}
-                </span>
+              <span className="grid gap-0.5">
+                <span className="text-[14px] font-semibold">{title}</span>
                 <span
                   id={about}
-                  className="block text-[12.5px] leading-[1.5] text-muted-foreground"
+                  className="text-[12.5px] text-muted-foreground"
                 >
                   {projection.kind} projections. Rebuilt from Postgres, so no
                   backups.
                 </span>
               </span>
               <Switch
-                className="data-[size=default]:h-5"
                 aria-label={title}
                 aria-describedby={`${about} ${warning}`}
                 checked={checked}
@@ -166,7 +163,7 @@ export function FabriqSettings({
               {warn && (
                 <p
                   role="note"
-                  className="rounded-[9px] bg-notice-warning px-2.5 py-2 text-[12.5px] leading-normal text-notice-warning-ink"
+                  className="rounded-lg bg-weld-tint px-2.5 py-2 text-[12.5px] text-weld-ink"
                 >
                   Turning {title} off removes it and {projection.removes}.{" "}
                   {projection.queries} fail until you turn it back on.
@@ -186,7 +183,6 @@ export function FabriqSettings({
           Nothing changes on the target until you deploy.
         </span>
         <Button
-          className="h-8 rounded-[9px] px-3 text-[12.5px]"
           disabled={
             busy ||
             !environment ||

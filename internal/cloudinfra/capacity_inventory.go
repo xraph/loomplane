@@ -8,8 +8,10 @@ import (
 	"encoding/json"
 	"errors"
 	"math"
+	"reflect"
 	"slices"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/xraph/loomplane/internal/security"
@@ -30,6 +32,10 @@ type CapacityRecord struct {
 	Resources           CapacityResources    `json:"resources"`
 	Observation         *CapacityObservation `json:"observation,omitempty"`
 	CheckedAt           time.Time            `json:"checked_at"`
+	// GPUKind and GPUs count a server's GPUs. A nil GPUs is a count
+	// Loomplane couldn't read, which is never taken as zero.
+	GPUKind string `json:"gpu_kind,omitempty"`
+	GPUs    *int64 `json:"gpus,omitempty"`
 }
 type CapacityInventoryStore interface {
 	BeginCapacityRefresh(context.Context, string, string) (int64, error)
@@ -97,6 +103,15 @@ func (s *Service) refreshCapacity(ctx context.Context, org, cloud string) (*Capa
 		}
 	}
 	accounts := map[string]provider.CapacityInventory{}
+	catalogs := map[string]provider.ServerOptions{}
+	// Only an account holding a managed server without a current price has its
+	// catalog read, so a Cloud whose servers are priced makes no catalog calls.
+	unpriced := map[string]bool{}
+	for _, v := range servers {
+		if needsPrice(v) {
+			unpriced[v.Provider+"/"+v.AccountID] = true
+		}
+	}
 	ids := make([]string, 0, len(connectionIDs))
 	for id := range connectionIDs {
 		ids = append(ids, id)
@@ -131,6 +146,11 @@ func (s *Service) refreshCapacity(ctx context.Context, org, cloud string) (*Capa
 			return nil, provider.ErrInfrastructureIdentity
 		}
 		accounts[key] = snapshot
+		if unpriced[key] {
+			if options, ok := s.catalog(ctx, key, adapter, credential); ok {
+				catalogs[key] = options
+			}
+		}
 	}
 	records := make([]CapacityRecord, 0, len(servers))
 	for _, v := range servers {
@@ -148,7 +168,30 @@ func (s *Service) refreshCapacity(ctx context.Context, org, cloud string) (*Capa
 			}
 			v = checked
 		}
+		if options, ok := catalogs[v.Provider+"/"+v.AccountID]; ok && needsPrice(v) && catalogPrice(v, options) {
+			// A price is a display estimate. A server that changed under the
+			// refresh keeps its stored facts, and the next refresh prices it.
+			if e := s.Store.SaveServer(ctx, v); errors.Is(e, ErrConflict) {
+				s.warn("Couldn't save a server's catalog price; the next refresh tries again", e)
+				current, getErr := s.Store.GetServer(ctx, org, cloud, v.ID)
+				if getErr != nil {
+					return nil, getErr
+				}
+				v = current
+			} else if e != nil {
+				return nil, e
+			}
+		}
 		record := CapacityRecord{Kind: "server", Provider: v.Provider, AccountID: v.AccountID, ResourceID: "server:" + v.ResourceID, ServerID: v.ID, ServerStateRevision: v.StateRevision, CheckedAt: v.Health.CheckedAt, Resources: CapacityResources{Servers: number(1)}, Observation: capacityObservation(v.Health)}
+		var created *Operation
+		if len(v.Health.GPUs) == 0 && v.Health.GPURuntime != provider.GPUStatusNone && v.CreationOperationID != "" {
+			o, e := s.Store.GetOperation(ctx, org, cloud, v.CreationOperationID)
+			if e != nil && !errors.Is(e, ErrNotFound) {
+				return nil, e
+			}
+			created = o
+		}
+		record.GPUKind, record.GPUs = serverGPUFacts(v, created)
 		if v.Status != "ready" {
 			record.Observation = nil
 		}
@@ -242,6 +285,75 @@ func (s *Service) refreshCapacity(ctx context.Context, org, cloud string) (*Capa
 		return current, nil
 	}
 	return usage, nil
+}
+
+// catalogTTL bounds how often a provider catalog is read for prices. DigitalOcean
+// serves it over several paginated requests on the same token as inventory.
+const catalogTTL = time.Hour
+
+type catalogEntry struct {
+	options provider.ServerOptions
+	ok      bool
+	at      time.Time
+}
+
+// catalogCache keeps one catalog read per account, failed reads included, so
+// a rate-limited provider isn't asked again before the TTL runs out.
+type catalogCache struct {
+	mu      sync.Mutex
+	entries map[string]catalogEntry
+}
+
+// catalog returns the account's server catalog, read at most once per catalogTTL.
+func (s *Service) catalog(ctx context.Context, key string, adapter provider.ServerAdapter, credential provider.InfrastructureCredential) (provider.ServerOptions, bool) {
+	reader, ok := adapter.(provider.ServerOptionsAdapter)
+	if !ok {
+		return provider.ServerOptions{}, false
+	}
+	now := s.now()
+	s.catalogs.mu.Lock()
+	entry, cached := s.catalogs.entries[key]
+	s.catalogs.mu.Unlock()
+	if cached && now.Sub(entry.at) < catalogTTL {
+		return entry.options, entry.ok
+	}
+	options, err := reader.ServerOptions(ctx, credential)
+	if ctx.Err() != nil {
+		return provider.ServerOptions{}, false
+	}
+	entry = catalogEntry{options: options, ok: err == nil, at: now}
+	if err != nil {
+		s.warn("Couldn't read the server catalog for prices; the next read is in an hour", err)
+	}
+	s.catalogs.mu.Lock()
+	s.catalogs.entries[key] = entry
+	s.catalogs.mu.Unlock()
+	return entry.options, entry.ok
+}
+
+// needsPrice reports whether a managed provider server lacks a price for its current size.
+func needsPrice(v *Server) bool {
+	if v.Ownership != "managed" || v.Provider == "server" || v.Status == "deleted" || v.Status == "disconnected" {
+		return false
+	}
+	return !v.HourlyPriceKnown || v.PricedSize != v.Size
+}
+
+// catalogPrice updates a managed server's hourly price and GPUs from the
+// catalog row for its size. It reports whether anything changed. A size the
+// catalog no longer lists keeps its last known facts.
+func catalogPrice(v *Server, options provider.ServerOptions) bool {
+	for _, size := range options.Sizes {
+		if size.ID != v.Size {
+			continue
+		}
+		if v.PricedSize == size.ID && v.HourlyUSD == size.HourlyUSD && v.HourlyPriceKnown == size.HourlyPriceKnown && reflect.DeepEqual(v.Accelerator, size.Accelerator) {
+			return false
+		}
+		v.HourlyUSD, v.HourlyPriceKnown, v.Accelerator, v.PricedSize = size.HourlyUSD, size.HourlyPriceKnown, cloneAccelerator(size.Accelerator), size.ID
+		return true
+	}
+	return false
 }
 func (s *Service) recoverCapacity(ctx context.Context) error {
 	st, ok := s.Store.(capacityRecoveryStore)
@@ -399,6 +511,10 @@ func summarizeCapacity(records []CapacityRecord, pools []*Pool, policy CapacityP
 	}
 	out.Records = records
 	out.ObservedStorageBytes = out.Observed.StorageBytes
+	var err error
+	if out.GPUs, err = summarizeGPUs(records, policy); err != nil {
+		return nil, err
+	}
 	return out, nil
 }
 
@@ -537,6 +653,9 @@ func (s *PgStore) SaveCapacityInventory(ctx context.Context, org, cloud string, 
 		if _, e := sumResources(capacityResources(ResourceVector{}), r.Resources); e != nil {
 			return e
 		}
+		if !recordGPUsValid(r) {
+			return ErrInvalid
+		}
 
 		key := recordKey(r)
 		if seen[key] {
@@ -547,7 +666,7 @@ func (s *PgStore) SaveCapacityInventory(ctx context.Context, org, cloud string, 
 		if e != nil {
 			return e
 		}
-		_, err = tx.Exec(ctx, `INSERT INTO loomplane_cloud_capacity_inventory(org_id,cloud_id,id,server_id,provider,account_id,resource_id,servers,cpu_millis,memory_bytes,storage_bytes,observed_storage_bytes,checked_at,body) VALUES($1,$2,$3,nullif($4,''),$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)`, org, cloud, inventoryID(r), r.ServerID, r.Provider, r.AccountID, r.ResourceID, r.Resources.Servers, r.Resources.CPUMillis, r.Resources.MemoryBytes, r.Resources.StorageBytes, observedStorage(r), r.CheckedAt, raw)
+		_, err = tx.Exec(ctx, `INSERT INTO loomplane_cloud_capacity_inventory(org_id,cloud_id,id,server_id,provider,account_id,resource_id,servers,cpu_millis,memory_bytes,storage_bytes,observed_storage_bytes,checked_at,body,gpu_kind,gpus) VALUES($1,$2,$3,nullif($4,''),$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`, org, cloud, inventoryID(r), r.ServerID, r.Provider, r.AccountID, r.ResourceID, r.Resources.Servers, r.Resources.CPUMillis, r.Resources.MemoryBytes, r.Resources.StorageBytes, observedStorage(r), r.CheckedAt, raw, r.GPUKind, r.GPUs)
 		if err != nil {
 			return storeError(err)
 		}

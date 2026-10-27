@@ -175,6 +175,15 @@ func appliedCloudPlanWithIntents(bindings []*Binding, assignment *cloudprofiles.
 			a.Reason = "Adopt the reviewed Cloud placement."
 		}
 	}
+	// The database gateway keeps the configuration it was applied with,
+	// which is what its routes were settled to. Moving it gives it a new
+	// address, and the apps behind it pinned the old one in their applied
+	// variables, so a redeploy wouldn't refresh it.
+	for _, a := range p.actions {
+		if a.Op == Replace && a.Service.DatabaseGateway != nil {
+			blocked(a.Name, "The database gateway can't move in a Cloud switch yet: the apps behind it pinned its current address. Give database_gateway a provider of its own and deploy, so the switch leaves it where it is.")
+		}
+	}
 	p.routedReplacements()
 	// Follow the applied dependency graph transitively, including generated gateways.
 	for changed := true; changed; {
@@ -265,7 +274,7 @@ func appliedCloudPlanWithIntents(bindings []*Binding, assignment *cloudprofiles.
 		if b.Drift != "" {
 			blocked(a.Name, "Resolve the serving resource's drift before migration.")
 		}
-		if a.Service.Gateway != nil {
+		if a.Service.Generated() {
 			continue
 		}
 		inputs := a.Service.AppliedInputs
@@ -277,6 +286,7 @@ func appliedCloudPlanWithIntents(bindings []*Binding, assignment *cloudprofiles.
 		}
 	}
 	p.checkTargetPlacements()
+	p.checkServerGPUs()
 	// Reuse the planner's account, region and HTTPS checks for these ordinary actions.
 	result := p.finish()
 	return result

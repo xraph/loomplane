@@ -1,0 +1,531 @@
+# Loomplane for kubectl apply, rendered from deployments/helm/loomplane with
+# deployments/kubernetes/values.yaml. Don't edit it by hand: change those and
+# run make k8s-manifest. The Helm chart is the better way to run Loomplane;
+# this is for clusters without Helm. See docs/kubernetes.md.
+#
+# Before you apply it:
+#   1. Create the namespace and the Secret it reads:
+#        kubectl create namespace loomplane
+#        kubectl -n loomplane create secret generic loomplane \
+#          --from-literal=LOOMPLANE_SECRET_KEY="$(openssl rand -base64 32)" \
+#          --from-literal=LOOMPLANE_DATABASE_URL='postgres://...' \
+#          --from-literal=LOOMPLANE_STORAGE_URL='s3://REGION/BUCKET'
+#   2. Replace loomplane.example.com with your hostname, and pin the image
+#      to a release tag instead of main.
+#   3. kubectl apply -f loomplane.yaml
+---
+# Source: loomplane/templates/pdb.yaml
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: loomplane
+  labels:
+    helm.sh/chart: loomplane-0.1.0
+    app.kubernetes.io/name: loomplane
+    app.kubernetes.io/instance: loomplane
+    app.kubernetes.io/version: "main"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: loomplane
+    app.kubernetes.io/component: api
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: loomplane
+      app.kubernetes.io/instance: loomplane
+      app.kubernetes.io/component: api
+---
+# Source: loomplane/templates/pdb.yaml
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: loomplane-worker
+  labels:
+    helm.sh/chart: loomplane-0.1.0
+    app.kubernetes.io/name: loomplane
+    app.kubernetes.io/instance: loomplane
+    app.kubernetes.io/version: "main"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: loomplane
+    app.kubernetes.io/component: worker
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: loomplane
+      app.kubernetes.io/instance: loomplane
+      app.kubernetes.io/component: worker
+
+---
+# Source: loomplane/templates/serviceaccount.yaml
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: loomplane
+  labels:
+    helm.sh/chart: loomplane-0.1.0
+    app.kubernetes.io/name: loomplane
+    app.kubernetes.io/instance: loomplane
+    app.kubernetes.io/version: "main"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: loomplane
+automountServiceAccountToken: false
+
+---
+# Source: loomplane/templates/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: loomplane
+  labels:
+    helm.sh/chart: loomplane-0.1.0
+    app.kubernetes.io/name: loomplane
+    app.kubernetes.io/instance: loomplane
+    app.kubernetes.io/version: "main"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: loomplane
+data:
+  LOOMPLANE_ENVIRONMENT: "production"
+  LOOMPLANE_PUBLIC_URL: "https://loomplane.example.com"
+  LOOMPLANE_HTTP_ADDR: ":8780"
+  LOOMPLANE_WORKER_HTTP_ADDR: ":8781"
+  LOOMPLANE_ARTIFACT_BUCKET: "loomplane-artifacts"
+  LOOMPLANE_BACKUP_BUCKET: "loomplane-backups"
+  LOOMPLANE_GITHUB_API_URL: "https://api.github.com"
+  LOOMPLANE_GITHUB_WEB_URL: "https://github.com"
+
+---
+# Source: loomplane/templates/service.yaml
+apiVersion: v1
+kind: Service
+metadata:
+  name: loomplane
+  labels:
+    helm.sh/chart: loomplane-0.1.0
+    app.kubernetes.io/name: loomplane
+    app.kubernetes.io/instance: loomplane
+    app.kubernetes.io/version: "main"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: loomplane
+    app.kubernetes.io/component: api
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8780
+      targetPort: http
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: loomplane
+    app.kubernetes.io/instance: loomplane
+    app.kubernetes.io/component: api
+---
+# Source: loomplane/templates/service.yaml
+# Reaches the workers' health and metrics port; nothing else talks to them.
+apiVersion: v1
+kind: Service
+metadata:
+  name: loomplane-worker
+  labels:
+    helm.sh/chart: loomplane-0.1.0
+    app.kubernetes.io/name: loomplane
+    app.kubernetes.io/instance: loomplane
+    app.kubernetes.io/version: "main"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: loomplane
+    app.kubernetes.io/component: worker
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8781
+      targetPort: http
+      protocol: TCP
+  selector:
+    app.kubernetes.io/name: loomplane
+    app.kubernetes.io/instance: loomplane
+    app.kubernetes.io/component: worker
+---
+# Source: loomplane/templates/service.yaml
+# No pods match this Service, so an ingress or gateway sending health and
+# metrics paths here answers 503 instead of exposing them.
+apiVersion: v1
+kind: Service
+metadata:
+  name: loomplane-blocked
+  labels:
+    helm.sh/chart: loomplane-0.1.0
+    app.kubernetes.io/name: loomplane
+    app.kubernetes.io/instance: loomplane
+    app.kubernetes.io/version: "main"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: loomplane
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 80
+      protocol: TCP
+
+---
+# Source: loomplane/templates/api-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: loomplane
+  labels:
+    helm.sh/chart: loomplane-0.1.0
+    app.kubernetes.io/name: loomplane
+    app.kubernetes.io/instance: loomplane
+    app.kubernetes.io/version: "main"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: loomplane
+    app.kubernetes.io/component: api
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: loomplane
+      app.kubernetes.io/instance: loomplane
+      app.kubernetes.io/component: api
+  template:
+    metadata:
+      annotations:
+        checksum/config: e435b803e940df61b3e59b907d47c252a433abfc4fa65a983d8934781b797cf0
+      labels:
+        app.kubernetes.io/name: loomplane
+        app.kubernetes.io/instance: loomplane
+        app.kubernetes.io/component: api
+    spec:
+      serviceAccountName: loomplane
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        fsGroup: 10001
+        runAsGroup: 10001
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        # One pod migrates under a Postgres lock; the others wait for it and
+        # find nothing left. A failure here holds the rollout, and the pods
+        # already running keep serving.
+        - name: migrate
+          image: ghcr.io/xraph/loomplane:main
+          imagePullPolicy: Always
+          args: [migrate]
+          env:
+            - name: LOOMPLANE_PROCESS
+              value: api
+          envFrom:
+            - configMapRef:
+                name: loomplane
+            - secretRef:
+                name: loomplane
+          resources:
+            limits:
+              memory: 256Mi
+            requests:
+              cpu: 50m
+              memory: 64Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      containers:
+        - name: api
+          image: ghcr.io/xraph/loomplane:main
+          imagePullPolicy: Always
+          env:
+            - name: LOOMPLANE_PROCESS
+              value: api
+          envFrom:
+            - configMapRef:
+                name: loomplane
+            - secretRef:
+                name: loomplane
+          ports:
+            - name: http
+              containerPort: 8780
+              protocol: TCP
+          # The port opens once migrations and every extension have started.
+          startupProbe:
+            httpGet:
+              path: /_/health/live
+              port: http
+            periodSeconds: 5
+            failureThreshold: 120
+          livenessProbe:
+            httpGet:
+              path: /_/health/live
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /_/health/ready
+              port: http
+            initialDelaySeconds: 65
+            periodSeconds: 5
+            failureThreshold: 3
+          lifecycle:
+            preStop:
+              exec:
+                # Keep serving while the endpoint removal reaches every
+                # proxy, then let SIGTERM drain what's in flight.
+                command: [sleep, "10"]
+          resources:
+            limits:
+              memory: 2Gi
+            requests:
+              cpu: 250m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 2Gi
+      topologySpreadConstraints:
+        
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: loomplane
+              app.kubernetes.io/instance: loomplane
+              app.kubernetes.io/component: api
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: loomplane
+              app.kubernetes.io/instance: loomplane
+              app.kubernetes.io/component: api
+
+---
+# Source: loomplane/templates/worker-deployment.yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: loomplane-worker
+  labels:
+    helm.sh/chart: loomplane-0.1.0
+    app.kubernetes.io/name: loomplane
+    app.kubernetes.io/instance: loomplane
+    app.kubernetes.io/version: "main"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: loomplane
+    app.kubernetes.io/component: worker
+spec:
+  replicas: 2
+  revisionHistoryLimit: 5
+  strategy:
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: loomplane
+      app.kubernetes.io/instance: loomplane
+      app.kubernetes.io/component: worker
+  template:
+    metadata:
+      annotations:
+        checksum/config: e435b803e940df61b3e59b907d47c252a433abfc4fa65a983d8934781b797cf0
+      labels:
+        app.kubernetes.io/name: loomplane
+        app.kubernetes.io/instance: loomplane
+        app.kubernetes.io/component: worker
+    spec:
+      serviceAccountName: loomplane
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 60
+      securityContext:
+        fsGroup: 10001
+        runAsGroup: 10001
+        runAsNonRoot: true
+        runAsUser: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      initContainers:
+        # Only the API migrates. A worker starting first waits here until the
+        # schema is current, rather than running jobs against an old one.
+        - name: wait-for-schema
+          image: ghcr.io/xraph/loomplane:main
+          imagePullPolicy: Always
+          command:
+            - /bin/sh
+            - -c
+            - until loomplane migrations --check; do echo "waiting for the API to migrate"; sleep 5; done
+          envFrom:
+            - configMapRef:
+                name: loomplane
+            - secretRef:
+                name: loomplane
+          resources:
+            limits:
+              memory: 256Mi
+            requests:
+              cpu: 50m
+              memory: 64Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      containers:
+        - name: worker
+          image: ghcr.io/xraph/loomplane:main
+          imagePullPolicy: Always
+          env:
+            - name: LOOMPLANE_PROCESS
+              value: worker
+          envFrom:
+            - configMapRef:
+                name: loomplane
+            - secretRef:
+                name: loomplane
+          ports:
+            - name: http
+              containerPort: 8781
+              protocol: TCP
+          startupProbe:
+            httpGet:
+              path: /_/health/live
+              port: http
+            periodSeconds: 5
+            failureThreshold: 60
+          livenessProbe:
+            httpGet:
+              path: /_/health/live
+              port: http
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /_/health/ready
+              port: http
+            initialDelaySeconds: 65
+            periodSeconds: 5
+            failureThreshold: 3
+          resources:
+            limits:
+              memory: 2Gi
+            requests:
+              cpu: 250m
+              memory: 512Mi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+              - ALL
+            readOnlyRootFilesystem: true
+          volumeMounts:
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: tmp
+          emptyDir:
+            sizeLimit: 8Gi
+      topologySpreadConstraints:
+        
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: loomplane
+              app.kubernetes.io/instance: loomplane
+              app.kubernetes.io/component: worker
+        - maxSkew: 1
+          topologyKey: topology.kubernetes.io/zone
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app.kubernetes.io/name: loomplane
+              app.kubernetes.io/instance: loomplane
+              app.kubernetes.io/component: worker
+
+---
+# Source: loomplane/templates/ingress.yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: loomplane
+  labels:
+    helm.sh/chart: loomplane-0.1.0
+    app.kubernetes.io/name: loomplane
+    app.kubernetes.io/instance: loomplane
+    app.kubernetes.io/version: "main"
+    app.kubernetes.io/managed-by: Helm
+    app.kubernetes.io/part-of: loomplane
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: 64m
+    nginx.ingress.kubernetes.io/proxy-buffering: "off"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+      - loomplane.example.com
+      secretName: loomplane-tls
+  rules:
+    - host: "loomplane.example.com"
+      http:
+        paths:
+          - path: /_/health
+            pathType: Prefix
+            backend:
+              service:
+                name: loomplane-blocked
+                port:
+                  name: http
+          - path: /_/metrics
+            pathType: Prefix
+            backend:
+              service:
+                name: loomplane-blocked
+                port:
+                  name: http
+          - path: /debug
+            pathType: Prefix
+            backend:
+              service:
+                name: loomplane-blocked
+                port:
+                  name: http
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: loomplane
+                port:
+                  name: http

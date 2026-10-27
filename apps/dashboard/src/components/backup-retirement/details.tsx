@@ -170,7 +170,7 @@ function RetirementBody({
         <dt className="text-muted-foreground">Execution owner</dt>
         <dd className="break-all">{actor(record.executionBy)}</dd>
       </dl>
-      <div className="grid gap-1 text-sm">
+      <div className="grid gap-1 text-[13px]">
         <h3 className="font-medium">
           {record.status === "succeeded"
             ? "Recovery point protected during deletion"
@@ -229,7 +229,7 @@ function RetirementBody({
       )}
       <div className="grid min-w-0 gap-2">
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h3 className="text-sm font-medium">Deletion history</h3>
+          <h3 className="text-[13.5px] font-semibold">Deletion history</h3>
           <Button size="sm" variant="ghost" onClick={() => void poll()}>
             Refresh status
           </Button>
@@ -248,7 +248,7 @@ function RetirementBody({
             description="Refresh to check for committed job history."
           />
         ) : (
-          <div className="divide-y rounded-lg border px-3">
+          <div className="divide-y rounded-xl bg-card px-3 ring-1 ring-border">
             {history.data.events.map((event) => (
               <div key={event.cursor} className="grid gap-1 py-2 text-xs">
                 <div className="flex flex-wrap justify-between gap-1">

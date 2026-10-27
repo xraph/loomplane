@@ -11,7 +11,6 @@ export default defineCatalogKind({
   kind: "fabriq-library",
   title: "Fabriq library",
   deployedLabel: fabriqDeployedLabel,
-  serviceLayout: "compact",
   defaultPanel: "library",
   subtitle: useFabriqSubtitle,
   group: "data",

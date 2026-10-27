@@ -70,6 +70,13 @@ type ComponentRun struct {
 
 // ConsumerBinder is implemented by the hooks of a kind with an Output that
 // is PerConsumer. The runner type-asserts it on the kind's CatalogHooks.
+//
+// The runner captures a service's variables, and so calls BindConsumer,
+// before it creates or updates the service, and that can still fail
+// afterwards. A binder must therefore tolerate a credential it issued that
+// no service binding ever records: it may later be asked to release a
+// consumer whose create never finished, or never be asked at all, so it
+// shouldn't treat an issued credential as proof the service exists.
 type ConsumerBinder interface {
 	// BindConsumer issues the value one consuming service gets. The
 	// runner calls it on every release of the service and keeps the

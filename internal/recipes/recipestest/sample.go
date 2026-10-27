@@ -108,12 +108,59 @@ func Graph() recipes.Kind {
 	}
 }
 
-// Registry is a fresh registry with the built-in engines and Sample.
+// GPUSample is kind "gpusample": a process that needs a GPU, shared memory
+// and a weight cache, with an amd64-only image, beside a CPU sidecar.
+func GPUSample() recipes.Kind {
+	server := recipes.Image{Repository: "registry.example/gpusample", Digests: map[string]string{
+		"amd64": "sha256:5b3e8c3f2d1a2b5e9f4c0a6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f",
+	}}
+	sidecar := recipes.Image{Repository: "registry.example/gpusample-sidecar", Digests: map[string]string{
+		"amd64": "sha256:6c4f9d4a3e2b3c6f0a5d1b7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f70",
+		"arm64": "sha256:7d5a0e5b4f3c4d7a1b6e2c8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7081",
+	}}
+	return recipes.Kind{
+		Name:        "gpusample",
+		Title:       "GPU sample",
+		Description: "A test kind with a GPU process and a CPU sidecar.",
+		Placement:   recipes.PlacementAppProject,
+		Targets:     []string{"server", "kubernetes"},
+		Releases: []recipes.Release{{
+			Version: "1", Product: "1.0.0", Revision: "1",
+			Images: map[string]recipes.Image{"server": server, "sidecar": sidecar},
+		}},
+		Components: []recipes.Component{
+			{
+				Name:      "server",
+				Role:      recipes.RoleProcess,
+				Ports:     []recipes.Port{{Name: "http", Container: 8000, Protocol: "http", Routable: true}},
+				Readiness: &recipes.HTTPProbe{Port: "http", Path: "/health"},
+				Resources: recipes.Resources{
+					CPUMillis: 2000, MemoryMB: 8192,
+					GPU: &recipes.GPU{Count: 1, MinMemoryGiB: 20}, ShmMB: 2048,
+				},
+				WeightCache: &recipes.WeightCache{MountPath: "/cache", KubernetesSizeMB: 20480},
+			},
+			{
+				Name:      "sidecar",
+				Role:      recipes.RoleProcess,
+				Ports:     []recipes.Port{{Name: "health", Container: 8081, Protocol: "http"}},
+				Readiness: &recipes.HTTPProbe{Port: "health", Path: "/healthz"},
+			},
+		},
+		Outputs: []recipes.Output{
+			{Name: "url", EnvKey: "GPUSAMPLE_URL", From: &recipes.Ref{Component: "server", Field: "url:http"}},
+		},
+	}
+}
+
+// Registry is a fresh registry with the built-in engines, Sample and GPUSample.
 func Registry(t testing.TB) *recipes.Registry {
 	t.Helper()
 	r := recipes.NewRegistry()
-	if err := r.Register(Sample()); err != nil {
-		t.Fatalf("register sample kind: %v", err)
+	for _, k := range []recipes.Kind{Sample(), GPUSample()} {
+		if err := r.Register(k); err != nil {
+			t.Fatalf("register %s kind: %v", k.Name, err)
+		}
 	}
 	return r
 }

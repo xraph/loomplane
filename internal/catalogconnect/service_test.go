@@ -297,3 +297,32 @@ func TestDeleteRefusesEndpointInUse(t *testing.T) {
 		t.Fatalf("deleted twice: %v", err)
 	}
 }
+
+// stuckSecrets can't delete anything.
+type stuckSecrets struct{ memSecrets }
+
+func (stuckSecrets) Delete(context.Context, string) error { return errors.New("vault is sealed") }
+
+// When the endpoint row is gone but its DSN can't leave Vault, the orphan's
+// Vault key is reported, never its DSN, so it can be found and removed.
+func TestDeleteReportsAnOrphanedDSNByItsVaultKey(t *testing.T) {
+	store, secrets := newMemStore(), stuckSecrets{memSecrets{}}
+	svc := NewService(store, secrets, roleAuthz{})
+	var orphans []string
+	svc.OrphanedDSN = func(_ context.Context, vaultKey string, err error) {
+		orphans = append(orphans, vaultKey+": "+err.Error())
+	}
+	ep, err := svc.Create(t.Context(), admin, CreateInput{Name: "prod-pg", Engine: "postgres", DSN: testDSN})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = svc.Delete(t.Context(), admin, ep.ID); err == nil || strings.Contains(err.Error(), testDSN) {
+		t.Fatalf("delete: %v", err)
+	}
+	if want := []string{DSNKey("org", ep.ID) + ": vault is sealed"}; !slices.Equal(orphans, want) {
+		t.Fatalf("orphans %q, want %q", orphans, want)
+	}
+	if _, gerr := store.Get(t.Context(), "org", ep.ID); !errors.Is(gerr, ErrNotFound) {
+		t.Fatalf("the endpoint row survived: %v", gerr)
+	}
+}

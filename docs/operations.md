@@ -8,7 +8,7 @@ Proxy `/api/v1/realtime/ws` with WebSocket upgrades and leave `/api/v1/realtime/
 
 Events and build output are committed in Postgres before delivery. Conduit notifications wake other API replicas, which read the durable sequence. You can restart an API or deployment worker without relying on its memory for status or checkpoints. An interrupted Docker build may need rebuilding; its earlier attempt stays visible as incomplete.
 
-If a database timeout stops Dispatch's durable worker, the API starts a replacement on its own: one second later at first, doubling up to thirty seconds while the database stays down. Until a replacement is polling, `/_/health` reports the dispatch extension as unhealthy and the log has a `durable workflow worker stopped` warning for each attempt. A replacement only claims tasks whose lease has run out, so a plan the failed worker had claimed picks up again once that lease expires. If the extension stays unhealthy after the database is back, restart the API. Watch this health result in your process supervisor, because a running HTTP listener doesn't tell you deployment work is moving.
+When the database stops answering, Dispatch's durable worker keeps trying to claim work and backs off between attempts, and `/_/health` reports the dispatch extension as unhealthy until a claim gets through. A timeout while it saves a task's result can still stop the worker. The API then starts a replacement on its own: one second later at first, doubling up to thirty seconds while the database stays down. Until a replacement is polling, the extension stays unhealthy and the log has a `durable workflow worker stopped` warning for each attempt. A replacement only claims tasks whose lease has run out, so a plan the failed worker had claimed picks up again once that lease expires. If the extension stays unhealthy after the database is back, restart the API. Watch this health result in your process supervisor, because a running HTTP listener doesn't tell you deployment work is moving.
 
 Build output is retained for seven days, with 16 KiB per line and 10 MiB per action attempt. The deployment log endpoint pages retained output. A cursor older than retention produces a gap and a current snapshot. Collector checkpoints and cloud credentials are excluded from public events; runtime variables stay out of Docker build arguments.
 
@@ -100,6 +100,21 @@ providers:
 ```
 
 or set `LOOMPLANE_PAUSED_PROVIDERS=render,cloud-run`. Plans that use a paused target are still made, and can be reviewed and approved, but they say they're for review only, and approving one deploys nothing. What already runs there keeps running, and drift checks still read it. A name that isn't a target stops Loomplane from starting, so a typo can't leave a target running that you meant to pause. Restart Loomplane to pause or unpause one.
+
+## A server that refuses every deployment
+
+If every deployment to one SSH/Docker server fails with `runtime effect fence could not establish quiescence`, that server's fence journal is stuck. Loomplane keeps a small journal on each Docker host, under `/var/tmp/loomplane-fence-<hash>/`, so a deployment can tell whether the last write to that daemon finished. While a write is in flight the journal is marked dirty, and Loomplane won't touch the daemon again until the mark clears. Builds of main from late October 2026 left it dirty after a database readiness check, and nothing clears it on its own.
+
+Check that nothing Loomplane started is still working on that server (no deployment, route change or pool recovery in flight). Then run this on the server, as the SSH user Loomplane connects with:
+
+```bash
+D=/var/tmp/loomplane-fence-$(printf %s "$(docker info -f '{{.ID}}')" | sha256sum | cut -d' ' -f1)
+flock "$D/daemon.lock" python3 -c 'import json,sys;p=sys.argv[1]+"/state";s=json.load(open(p));s["dirty"]=False;open(p,"w").write(json.dumps(s))' "$D"
+```
+
+It takes the same lock the deployment helper takes, clears the mark and keeps the recorded generations, so an older attempt still can't write. Plan again afterwards.
+
+A journal can also go dirty for a reason that still matters: the host rebooting or the helper being killed in the middle of a Docker change. If that's what happened, look at the containers on that server first, because the change may be half done.
 
 ## Email and deployment notifications
 

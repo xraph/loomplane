@@ -7,6 +7,7 @@ import {
   SelectContent,
   SelectItem,
 } from "@/components/ui/select"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Field as FormField, FieldLabel } from "@/components/ui/field"
 import { useState } from "react"
@@ -23,6 +24,7 @@ import type {
 import { useMutation, useQuery } from "@/client/hooks"
 import { Link } from "@/lib/router"
 import { messageOf } from "@/client/errors"
+import { gpuTitle, gpusUnread, serverGpusOfKind } from "@/lib/gpu"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import {
@@ -56,6 +58,10 @@ export function Pools({
   const [moving, setMoving] = useState<Pool | null>(null)
   const [recovering, setRecovering] = useState(false)
   const list = pools.data?.pools.filter((p): p is Pool => !!p) ?? []
+  // A ready server whose GPUs can't be counted can hold back GPU growth.
+  const unread = list.some((p) => p.acceleratorKind)
+    ? servers.filter(gpusUnread).map((s) => s.name)
+    : []
   return (
     <section className="grid gap-3" aria-label="Server pools">
       <CloudSectionHead
@@ -83,6 +89,13 @@ export function Pools({
           </Button>
         </>
       </CloudSectionHead>
+      {unread.length > 0 && (
+        <Alert>
+          <AlertDescription>
+            {`The GPUs on ${unread.join(", ")} couldn't be read. Loomplane may not add GPU servers to this Cloud until a check succeeds.`}
+          </AlertDescription>
+        </Alert>
+      )}
       {pools.status === "error" ? (
         <QueryError
           error={pools.error}
@@ -101,11 +114,13 @@ export function Pools({
           {list.map((p) => (
             <Row key={p.id}>
               <div>
-                <p className="font-medium">{p.name}</p>
+                <p className="font-mono text-[13px] font-medium">{p.name}</p>
                 <p className="text-xs text-muted-foreground">
                   {p.members.length} members ·{" "}
                   {p.members.filter((m) => m.draining).length} draining ·
                   revision {p.revision}
+                  {p.acceleratorKind &&
+                    ` · ${p.members.reduce((n, m) => n + (m.gpus ?? 0), 0)} ${gpuTitle(p.acceleratorKind)} GPUs`}
                 </p>
               </div>
               <div className="flex flex-wrap gap-2">
@@ -173,7 +188,44 @@ function PoolEditor({
     name: pool?.name ?? "",
     revision: pool?.revision ?? 0,
     members: pool?.members ?? [],
+    ...(pool?.acceleratorKind ? { acceleratorKind: pool.acceleratorKind } : {}),
   })
+  const kind = input.acceleratorKind ?? ""
+  const memberServers = servers.filter((s) =>
+    input.members.some((m) => m.serverId === s.id)
+  )
+  const kinds = [
+    ...new Set([
+      ...memberServers.flatMap((s) =>
+        (s.health.gpus ?? []).map((d) => d.kind).filter(Boolean)
+      ),
+      ...(kind ? [kind] : []),
+    ]),
+  ].sort()
+  // A GPU pool holds only servers with its kind, each with a GPU budget no
+  // bigger than what it has. A CPU pool holds no GPU budgets.
+  const chooseKind = (next: string) =>
+    setInput({
+      ...input,
+      acceleratorKind: next || undefined,
+      members: next
+        ? input.members.flatMap((m) => {
+            const server = servers.find((s) => s.id === m.serverId)
+            const have = server ? serverGpusOfKind(server, next) : 0
+            if (!have) return []
+            return [{ ...m, gpus: m.gpus && m.gpus <= have ? m.gpus : have }]
+          })
+        : input.members.map((m) => ({ ...m, gpus: undefined })),
+    })
+  const gpusOf = (serverId: string) => {
+    const server = servers.find((s) => s.id === serverId)
+    return server && kind ? serverGpusOfKind(server, kind) : 0
+  }
+  // A budget is a whole number from one to the server's GPUs of the kind.
+  const badBudget = (gpus: number | undefined, have: number) =>
+    !Number.isInteger(gpus) || (gpus ?? 0) < 1 || (gpus ?? 0) > have
+  const budgetsValid =
+    !kind || input.members.every((m) => !badBudget(m.gpus, gpusOf(m.serverId)))
   const [error, setError] = useState("")
   const busy = create.isPending || update.isPending
   const save = async () => {
@@ -212,6 +264,24 @@ function PoolEditor({
             onChange={(e) => setInput({ ...input, name: e.target.value })}
           />
         </Field>
+        <Field label="GPU kind">
+          <Select
+            value={kind}
+            onValueChange={(e) => chooseKind(String(e ?? ""))}
+          >
+            <SelectTrigger aria-label="GPU kind" className={"w-full min-w-0"}>
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="">None</SelectItem>
+              {kinds.map((k) => (
+                <SelectItem key={k} value={k}>
+                  {gpuTitle(k)}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </Field>
         {servers
           .filter(
             (s) =>
@@ -220,15 +290,18 @@ function PoolEditor({
           )
           .map((s) => {
             const member = input.members.find((m) => m.serverId === s.id)
+            const have = kind ? serverGpusOfKind(s, kind) : 0
+            const blocked = !member && !!kind && !have
             return (
               <div key={s.id} className="grid gap-2 rounded-lg bg-muted p-3">
                 <FormField
                   orientation="horizontal"
-                  className="flex items-center gap-2 text-sm"
+                  className="flex items-center gap-2 text-[13px]"
                 >
                   <FieldLabel className="contents">
                     <Checkbox
                       checked={!!member}
+                      disabled={blocked}
                       onCheckedChange={(e) =>
                         setInput({
                           ...input,
@@ -240,6 +313,7 @@ function PoolEditor({
                                   cpuMillis: s.health.effectiveCpuMillis,
                                   memoryBytes: s.health.effectiveMemoryBytes,
                                   draining: s.draining,
+                                  ...(kind ? { gpus: have } : {}),
                                 },
                               ]
                             : input.members.filter((m) => m.serverId !== s.id),
@@ -249,6 +323,11 @@ function PoolEditor({
                     {s.name}
                   </FieldLabel>
                 </FormField>
+                {blocked && (
+                  <p className="text-xs text-muted-foreground">
+                    No {gpuTitle(kind)} GPUs
+                  </p>
+                )}
                 {member && (
                   <div className="grid gap-2 sm:grid-cols-2">
                     <Field label="CPU budget (millicores)">
@@ -291,6 +370,42 @@ function PoolEditor({
                         }
                       />
                     </Field>
+                    {kind && (
+                      <div className="grid gap-1">
+                        <Field label="GPU budget">
+                          <Input
+                            type="number"
+                            min={1}
+                            max={have}
+                            step={1}
+                            aria-label={`GPU budget for ${s.name}`}
+                            aria-invalid={badBudget(member.gpus, have)}
+                            value={member.gpus ?? ""}
+                            onChange={(e) =>
+                              setInput({
+                                ...input,
+                                members: input.members.map((m) =>
+                                  m.serverId === s.id
+                                    ? {
+                                        ...m,
+                                        gpus:
+                                          e.target.value === ""
+                                            ? undefined
+                                            : Number(e.target.value),
+                                      }
+                                    : m
+                                ),
+                              })
+                            }
+                          />
+                        </Field>
+                        {badBudget(member.gpus, have) && (
+                          <p className="text-xs text-destructive">
+                            {`Between 1 and ${have} GPUs`}
+                          </p>
+                        )}
+                      </div>
+                    )}
                     <FormField
                       orientation="horizontal"
                       className="flex items-center gap-2 text-xs"
@@ -321,7 +436,12 @@ function PoolEditor({
             Cancel
           </Button>
           <Button
-            disabled={busy || !input.name.trim() || !input.members.length}
+            disabled={
+              busy ||
+              !input.name.trim() ||
+              !input.members.length ||
+              !budgetsValid
+            }
             onClick={() => void save()}
           >
             Save pool budgets
@@ -397,7 +517,7 @@ function MoveEditor({
           </DialogDescription>
         </DialogHeader>
         {accepted ? (
-          <div className="grid gap-3 text-sm">
+          <div className="grid gap-3 text-[13px]">
             <p role="status">
               Move intent staged for {input.service}. It expires 15 minutes
               after acceptance. No deployment has started; the source still
@@ -511,7 +631,7 @@ function MoveEditor({
               </Select>
             </Field>
             {review && (
-              <p className="text-sm">
+              <p className="text-[13px]">
                 Source: {review.sourceServerId} · destination:{" "}
                 {input.destinationServerId}. Accept this exact reviewed
                 placement.
@@ -690,7 +810,7 @@ export function Recovery({
           />
         </Field>
         {review && (
-          <div className="grid gap-1 text-sm">
+          <div className="grid gap-1 text-[13px]">
             <p>
               Reservation: {review.phase} ·{" "}
               {review.active ? "active" : "inactive"} ·{" "}
