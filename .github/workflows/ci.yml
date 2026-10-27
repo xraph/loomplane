@@ -144,6 +144,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: azure/setup-helm@v4
+        with:
+          # The committed Kubernetes manifest is rendered with this version; a
+          # newer Helm can add blank lines and fail the staleness check.
+          version: v4.2.0
       - name: Install kubeconform
         run: |
           curl -fsSL https://github.com/yannh/kubeconform/releases/download/v0.8.0/kubeconform-linux-amd64.tar.gz |
@@ -160,6 +164,10 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: azure/setup-helm@v4
+        with:
+          # The committed Kubernetes manifest is rendered with this version; a
+          # newer Helm can add blank lines and fail the staleness check.
+          version: v4.2.0
       - uses: helm/kind-action@v1
         with:
           install_only: true
