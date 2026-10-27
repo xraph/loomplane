@@ -2,9 +2,7 @@ package deployments
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
-	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -139,13 +137,11 @@ func staleFinalization(ctx context.Context, d *Deployment) (bool, error) {
 // it encoded again. A deployment without a canary, or one whose canary has
 // settled, keeps what it has.
 func settleFinishedCanary(raw []byte, steps []Step, reason string, at time.Time) ([]byte, error) {
-	if len(raw) == 0 {
-		return raw, nil
+	c, err := decodeCanary(raw)
+	if err != nil {
+		return nil, err
 	}
-	d := &Deployment{Steps: steps}
-	if err := json.Unmarshal(raw, &d.Canary); err != nil {
-		return nil, fmt.Errorf("decode canary: %w", err)
-	}
+	d := &Deployment{Steps: steps, Canary: c}
 	if !settleFailedCanary(d, reason, false) {
 		return raw, nil
 	}

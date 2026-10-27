@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"maps"
+	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -130,5 +132,37 @@ func TestActiveCanaryStatusesAreDeploymentStatuses(t *testing.T) {
 	want := []string{CanaryPending, CanaryRamping, CanaryPromoting, CanaryReverting}
 	if !slices.Equal(canaryActive, want) {
 		t.Fatalf("active canary statuses %v, want %v", canaryActive, want)
+	}
+}
+
+// A canary service's provider handles stay in the stored canary, which the
+// executors read, and out of the deployment the API returns.
+func TestCanaryRefsAreStoredButNotShown(t *testing.T) {
+	c := &Canary{Status: CanaryRamping, Steps: []int{5, 100}, Services: []CanaryService{{
+		ActionID: "service:web", Name: "web", Provider: "ecs-fargate", BindingID: "bind_web", Baseline: "tg-blue", Candidate: "tg-green",
+		Refs: map[string]string{"listener": "arn:aws:elasticloadbalancing:eu-west-1:123:listener/app/web/1/2"},
+	}}}
+	shown, err := json.Marshal(&Deployment{ID: "dep_1", Canary: c})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(shown), "refs") || strings.Contains(string(shown), "arn:aws") || !strings.Contains(string(shown), "tg-green") {
+		t.Fatalf("the API shows %s", shown)
+	}
+	raw, err := encodeCanary(c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, err := decodeCanary(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got, c) {
+		t.Fatalf("stored canary came back as %+v, want %+v", got, c)
+	}
+	for _, none := range [][]byte{nil, []byte("null")} {
+		if got, err := decodeCanary(none); got != nil || err != nil {
+			t.Fatalf("decode %q: %+v %v", none, got, err)
+		}
 	}
 }

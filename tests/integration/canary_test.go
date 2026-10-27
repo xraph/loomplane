@@ -41,6 +41,7 @@ import (
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/providers"
+	"github.com/xraph/loomplane/internal/realtime"
 	"github.com/xraph/loomplane/internal/releasehealth"
 	"github.com/xraph/loomplane/internal/security"
 )
@@ -660,6 +661,45 @@ func TestCanaryVerdictEmitsRealtimeEvents(t *testing.T) {
 	}
 	if status, weight := latest(); status != deployments.CanaryRolledBack || weight != "0" {
 		t.Fatalf("deployment event after the rollback: %s at %s", status, weight)
+	}
+
+	// The row keeps each service's provider handles for the executors, but
+	// neither the events nor the snapshot carry them, as the API doesn't.
+	var stored string
+	if err = f.sql.QueryRow(ctx, `SELECT canary->'services'->0->'refs'->>'service' FROM loomplane_deployments WHERE id = 'dep_e'`).Scan(&stored); err != nil || stored != "api" {
+		t.Fatalf("stored refs: %q %v", stored, err)
+	}
+	rt := realtime.NewPgStore(f.db)
+	replay, found, err := rt.Events(ctx, "org", "org:0", realtime.MaxReplayEvents)
+	if err != nil || !found {
+		t.Fatalf("events: %v %v", found, err)
+	}
+	snapshot, err := rt.Snapshot(ctx, "org", nil, []string{"dep_e"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	seen := 0
+	for _, e := range append(replay, snapshot.Records...) {
+		if e.Type != "deployment.updated" || e.EntityID != "dep_e" {
+			continue
+		}
+		seen++
+		var data struct {
+			Canary struct {
+				Services []map[string]json.RawMessage `json:"services"`
+			} `json:"canary"`
+		}
+		if err = json.Unmarshal(e.Data, &data); err != nil {
+			t.Fatal(err)
+		}
+		for _, svc := range data.Canary.Services {
+			if _, ok := svc["refs"]; ok || len(svc) == 0 {
+				t.Fatalf("deployment event %s carries %s", e.ID, e.Data)
+			}
+		}
+	}
+	if seen < 2 {
+		t.Fatalf("saw %d deployment events", seen)
 	}
 }
 
