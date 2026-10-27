@@ -127,6 +127,11 @@ func (v *Vercel) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 	d, err := v.Client.WaitDeployment(ctx, tok, state.DeploymentID)
 	output.finish(ctx, d != nil)
 	if err != nil {
+		// Vercel returns the deployment with an error only once it ended
+		// in ERROR or CANCELED.
+		if d != nil {
+			return nil, &finishedFailure{err: err}
+		}
 		return nil, err
 	}
 	return &Outcome{ExternalID: project.ID, URL: d.Address(), Revision: d.ID}, nil

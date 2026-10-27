@@ -629,7 +629,11 @@ func (r *Runner) Run(ctx context.Context, orgID, deploymentID, actionID string, 
 		return err
 	}
 	defer func() {
-		runErr = errors.Join(runErr, finishAttempt(runErr == nil && len(action.Routes) == 0 && plan.CloudSyncID == ""))
+		// A failure the provider reported as final left nothing in flight,
+		// so the next release needn't recover this one first. Any other
+		// failure after the first effect keeps the service fenced.
+		settled := runErr == nil && len(action.Routes) == 0 && plan.CloudSyncID == "" || finishedByProvider(runErr)
+		runErr = errors.Join(runErr, finishAttempt(settled))
 	}()
 	admission, err := r.directServerAdmission(ctx, plan, action)
 	if err != nil {

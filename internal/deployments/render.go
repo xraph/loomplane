@@ -127,6 +127,11 @@ func (r *Render) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 	job.Collector(state.DeployID, job.LogAttempt()).RecordState(ctx, "", "unavailable", "Render's build-log API cannot isolate one deployment. Progress remains available.")
 	d, err := r.Client.WaitDeploy(ctx, key, svc.ID, state.DeployID)
 	if err != nil {
+		// Render returns the deploy with an error only once it ended in a
+		// failed, cancelled or deactivated status.
+		if d != nil {
+			return nil, &finishedFailure{err: err}
+		}
 		return nil, err
 	}
 	if svc, err = r.Client.GetService(ctx, key, svc.ID); err != nil {
