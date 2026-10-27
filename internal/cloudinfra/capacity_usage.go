@@ -3,6 +3,8 @@ package cloudinfra
 import (
 	"context"
 	"encoding/json"
+	"slices"
+	"strings"
 	"time"
 )
 
@@ -58,6 +60,9 @@ func (s *PgStore) GetCapacityUsage(ctx context.Context, org, cloud string) (*Cap
 	if missing {
 		usage.Provisioned = CapacityResources{}
 		usage.Fresh = false
+		for i := range usage.GPUs {
+			usage.GPUs[i].Provisioned = nil
+		}
 	}
 	usage.Reserved = capacityResources(ResourceVector{})
 	usage.Pending = capacityResources(ResourceVector{})
@@ -73,6 +78,11 @@ func (s *PgStore) GetCapacityUsage(ctx context.Context, org, cloud string) (*Cap
 		if err != nil {
 			return nil, err
 		}
+		gpus := r.reservation.Delta
+		if gpus.GPUs > 0 {
+			usage.GPUs = withGPUKind(usage.GPUs, gpus.GPUKind)
+			gpuUsageFor(usage.GPUs, gpus.GPUKind).Reserved += gpus.GPUs
+		}
 		var attempted bool
 		if checkErr := tx.QueryRow(ctx, `SELECT coalesce((body->>'attempted')::boolean,false) FROM loomplane_infrastructure_operations WHERE org_id=$1 AND cloud_id=$2 AND id=$3`, org, cloud, r.reservation.OperationID).Scan(&attempted); checkErr != nil {
 			return nil, checkErr
@@ -82,8 +92,20 @@ func (s *PgStore) GetCapacityUsage(ctx context.Context, org, cloud string) (*Cap
 			if err != nil {
 				return nil, err
 			}
+			if gpus.GPUs > 0 {
+				gpuUsageFor(usage.GPUs, gpus.GPUKind).Pending += gpus.GPUs
+			}
 		}
 	}
+	// A kind only reservations hold has none in a fully known inventory.
+	if _, known, gpuErr := inventoryGPUs(records); gpuErr == nil && known && !missing {
+		for i := range usage.GPUs {
+			if usage.GPUs[i].Provisioned == nil {
+				usage.GPUs[i].Provisioned = number(0)
+			}
+		}
+	}
+	slices.SortFunc(usage.GPUs, func(a, b GPUUsage) int { return strings.Compare(a.Kind, b.Kind) })
 	counted, err := sumResources(usage.Provisioned, usage.Reserved)
 	if err != nil {
 		return nil, err

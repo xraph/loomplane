@@ -158,13 +158,17 @@ func (p *planner) planComposition(name, base string, r manifest.Resource, kind r
 			return
 		}
 	}
+	off := offDependencies(r, kind)
+	if p.gpuOnArm64(name, base+".target", kind, off, connection) {
+		return
+	}
 	composition, err := p.kinds().Resolve(kind.Name, version, connection.Details["architecture"], prov.Cloud)
 	if err != nil {
 		p.problem(Finding{Code: "catalog-unavailable", Subject: ResourceSubject, Name: name, Path: base, Message: err.Error()})
 		return
 	}
 	// A component that requires an optional dependency runs only with it.
-	if off := offDependencies(r, kind); len(off) > 0 {
+	if len(off) > 0 {
 		composition = composition.Without(off)
 	}
 	if prov.Cloud == "kubernetes" && !p.clusterRuns(name, base, kind, composition, connection) {
@@ -210,6 +214,7 @@ func (p *planner) planComposition(name, base string, r manifest.Resource, kind r
 		parts = append(parts, id)
 		cfg := resource()
 		cfg.Component = &ComponentConfig{Kind: kind.Name, Resource: name, Revision: composition.Revision, Component: c, Dependencies: choices, Protection: ComponentProtection(c.Component)}
+		cfg.Component.GPU = p.componentGPU(name, p.gpuPath(name), kind, c.Component, set.GPU, connection)
 		creates := componentCreates(kind.Title, c.Component)
 		if c.Role != recipes.RoleJob {
 			for _, port := range c.Ports {
@@ -238,6 +243,9 @@ func (p *planner) planComposition(name, base string, r manifest.Resource, kind r
 		p.actions = append(p.actions, a)
 	}
 
+	if set.GPU != nil && !p.composedGPU(composition, choices) {
+		p.unusedGPU(name, kind.Title)
+	}
 	cfg := resource()
 	cfg.Composition = &CompositionConfig{Kind: kind.Name, Version: version, Revision: composition.Revision, Dependencies: choices, Outputs: kind.Outputs, Secrets: kind.Secrets}
 	sort.Strings(parts)
@@ -259,14 +267,14 @@ func (p *planner) planComposition(name, base string, r manifest.Resource, kind r
 }
 
 // clusterRuns reports, as problems, what a cluster connection lacks to run
-// a composition: retained storage when a component keeps a volume, Job
-// permissions when one is a job, the service proxy when one has a control
-// port, and permission to manage Roles when one has Kubernetes rules. A
-// composition never needs the database recovery permissions; a dependency
-// it provisions checks its own.
+// a composition: retained storage when a component keeps a volume or a
+// weight cache, Job permissions when one is a job, the service proxy when
+// one has a control port, and permission to manage Roles when one has
+// Kubernetes rules. A composition never needs the database recovery
+// permissions; a dependency it provisions checks its own.
 func (p *planner) clusterRuns(name, base string, kind recipes.Kind, composition *recipes.Composition, connection *ConnectionOption) bool {
 	ok := true
-	if i := slices.IndexFunc(composition.Components, func(c recipes.ResolvedComponent) bool { return c.Volume != nil }); i >= 0 && ValidateKubernetesDatabaseSettings(connection.Details) != nil {
+	if i := slices.IndexFunc(composition.Components, func(c recipes.ResolvedComponent) bool { return c.Volume != nil || c.WeightCache != nil }); i >= 0 && ValidateKubernetesDatabaseSettings(connection.Details) != nil {
 		p.problem(Finding{
 			Code: "catalog-storage-unavailable", Subject: ResourceSubject, Name: name, Path: base + ".target",
 			Message: fmt.Sprintf("%s's %s keeps data on a volume. Select and check a retained filesystem storage class for this cluster connection.", kind.Title, composition.Components[i].Name),
@@ -521,7 +529,7 @@ func (p *planner) sameTarget(name string, connected *Action) bool {
 func (p *planner) provision(name, base string, r manifest.Resource, dep recipes.Dependency, action string, prov *provider.Provider, set manifest.ResourceSettings, connection *ConnectionOption, region string) *Action {
 	kind := firstKind(dep)
 	if only, ok := p.kinds().Kind(kind); ok && only.Placement == recipes.PlacementDependency {
-		return p.provisionComponent(name, base, dep, only, action, prov, connection, region)
+		return p.provisionComponent(name, base, dep, only, action, prov, connection, region, set.GPU)
 	}
 	engine, ok := p.kinds().Engine(kind)
 	if !ok {
@@ -589,7 +597,7 @@ func (p *planner) provision(name, base string, r manifest.Resource, dep recipes.
 // a component action of its own, named for the dependency. It publishes
 // its own outputs and secrets, so it's its own resource; no composition
 // action is planned for it.
-func (p *planner) provisionComponent(name, base string, dep recipes.Dependency, kind recipes.Kind, action string, prov *provider.Provider, connection *ConnectionOption, region string) *Action {
+func (p *planner) provisionComponent(name, base string, dep recipes.Dependency, kind recipes.Kind, action string, prov *provider.Provider, connection *ConnectionOption, region string, gpu *manifest.GPU) *Action {
 	path := base + ".uses." + dep.Name
 	if p.componentNameTaken(name, dep.Name) {
 		return nil
@@ -599,6 +607,9 @@ func (p *planner) provisionComponent(name, base string, dep recipes.Dependency, 
 			Code: "catalog-target-unsupported", Subject: ResourceSubject, Name: name, Path: path,
 			Message: fmt.Sprintf("%s can't run %s, which %s needs for %s. Choose an existing server.", prov.Title, kind.Title, name, dep.Name),
 		})
+		return nil
+	}
+	if p.gpuOnArm64(name, path, kind, nil, connection) {
 		return nil
 	}
 	composition, err := p.kinds().Resolve(kind.Name, dep.Version, connection.Details["architecture"], prov.Cloud)
@@ -622,6 +633,7 @@ func (p *planner) provisionComponent(name, base string, dep recipes.Dependency, 
 		Kind: kind.Name, Version: composition.Version,
 		Component: &ComponentConfig{Kind: kind.Name, Resource: action, Revision: composition.Revision, Component: c, Protection: ComponentProtection(c.Component)},
 	}
+	cfg.Component.GPU = p.componentGPU(name, p.gpuPath(name), kind, c.Component, gpu, connection)
 	a := &Action{
 		ID: actionID(ResourceSubject, action), Subject: ResourceSubject, Name: action,
 		Provider: prov.Name, ConnectionID: connection.ID, Region: region, Engine: provider.ResourceEngine, Creates: componentCreates(kind.Title, c.Component),
@@ -691,8 +703,8 @@ func choiceName(c DependencyChoice) string {
 }
 
 // namedChanges says what changed in a component or composition by name:
-// its recipe revision and image, in place of one change to the whole
-// configuration.
+// its recipe revision, image and GPU placement, in place of one change to
+// the whole configuration.
 func (p *planner) namedChanges(a *Action) {
 	b := p.bindings[a.ID]
 	i := slices.IndexFunc(a.Changes, func(c Change) bool { return c.Field == "component" || c.Field == "composition" })
@@ -714,8 +726,12 @@ func (p *planner) namedChanges(a *Action) {
 		if w.Component.Image != n.Component.Image {
 			named = append(named, Change{Field: "image", From: w.Component.Image, To: n.Component.Image})
 		}
+		if from, to := gpuText(w.GPU), gpuText(n.GPU); from != to {
+			named = append(named, Change{Field: "gpu", From: from, To: to})
+		}
 		w.Revision, n.Revision = "", ""
 		w.Component.Image, n.Component.Image = "", ""
+		w.GPU, n.GPU = nil, nil
 		was, now = w, n
 	case a.Resource.Composition != nil && old.Composition != nil:
 		w, n := *old.Composition, *a.Resource.Composition

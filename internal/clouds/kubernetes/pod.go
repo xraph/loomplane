@@ -1,11 +1,14 @@
 package kubernetes
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"maps"
 	"slices"
 	"strconv"
+	"strings"
 
 	cpprovider "github.com/xraph/ctrlplane/provider"
 	corev1 "k8s.io/api/core/v1"
@@ -14,6 +17,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/intstr"
 
 	"github.com/xraph/loomplane/internal/clouds/owned"
+	"github.com/xraph/loomplane/pkg/provider"
 )
 
 // runtimePod keeps workload environment, ports, resource limits and readiness
@@ -79,9 +83,45 @@ func runtimePod(spec cpprovider.ServiceSpec, labels map[string]string, values ow
 		}
 		volumes = []corev1.Volume{{Name: runtimeFilesVolume, VolumeSource: corev1.VolumeSource{Secret: source}}}
 	}
+	placement, err := gpuPlacement(labels)
+	if err != nil {
+		return nil, nil, err
+	}
+	shm, err := shmSize(labels)
+	if err != nil {
+		return nil, nil, err
+	}
+	if shm != nil {
+		volumes = append(volumes, corev1.Volume{Name: shmVolume, VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{Medium: corev1.StorageMediumMemory, SizeLimit: shm}}})
+		container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{Name: shmVolume, MountPath: "/dev/shm"})
+	}
+	if placement != nil {
+		if container.Resources.Limits == nil {
+			container.Resources = corev1.ResourceRequirements{Requests: corev1.ResourceList{}, Limits: corev1.ResourceList{}}
+		}
+		count := *resource.NewQuantity(int64(placement.Count), resource.DecimalSI)
+		container.Resources.Limits[gpuResource] = count
+		container.Resources.Requests[gpuResource] = count.DeepCopy()
+	}
 	template := &corev1.PodTemplateSpec{ObjectMeta: metav1.ObjectMeta{Annotations: map[string]string{owned.LabelRevision: labels[owned.LabelRevision]}}, Spec: corev1.PodSpec{Containers: []corev1.Container{container}, ImagePullSecrets: pulls, Volumes: volumes}}
 	if architecture := labels[owned.LabelArchitecture]; architecture != "" {
 		template.Spec.NodeSelector = map[string]string{"kubernetes.io/arch": architecture}
+	}
+	if placement != nil {
+		// The wait reads the request back from the template to word its error.
+		template.Annotations[owned.LabelGPU] = labels[owned.LabelGPU]
+		if template.Spec.NodeSelector == nil && len(placement.NodeSelector) > 0 {
+			template.Spec.NodeSelector = map[string]string{}
+		}
+		for key, value := range placement.NodeSelector {
+			if key == "kubernetes.io/arch" && template.Spec.NodeSelector[key] != "" && template.Spec.NodeSelector[key] != value {
+				return nil, nil, fmt.Errorf("the GPU placement selects architecture %q but the workload runs on %q", value, template.Spec.NodeSelector[key])
+			}
+			template.Spec.NodeSelector[key] = value
+		}
+		for _, t := range placement.Tolerations {
+			template.Spec.Tolerations = append(template.Spec.Tolerations, corev1.Toleration{Key: t.Key, Operator: corev1.TolerationOperator(t.Operator), Value: t.Value, Effect: corev1.TaintEffect(t.Effect)})
+		}
 	}
 	switch {
 	case serviceAccount != "":
@@ -103,6 +143,60 @@ func runtimePod(spec cpprovider.ServiceSpec, labels map[string]string, values ow
 		template.Spec.SecurityContext = &corev1.PodSecurityContext{FSGroup: &group, FSGroupChangePolicy: &policy}
 	}
 	return template, servicePorts, nil
+}
+
+const shmVolume = "dshm"
+
+// gpuPlacement decodes the reviewed placement a workload's labels carry, or
+// nil when it asks for no GPU.
+func gpuPlacement(labels map[string]string) (*provider.GPUPlacement, error) {
+	raw := labels[owned.LabelGPU]
+	if raw == "" {
+		return nil, nil
+	}
+	var placement provider.GPUPlacement
+	if err := json.Unmarshal([]byte(raw), &placement); err != nil || placement.Count < 1 {
+		return nil, errors.New("invalid GPU placement")
+	}
+	return &placement, nil
+}
+
+// shmSize is the /dev/shm size the workload asked for, or nil.
+func shmSize(labels map[string]string) (*resource.Quantity, error) {
+	raw := labels[owned.LabelShmMB]
+	if raw == "" {
+		return nil, nil
+	}
+	mb, err := strconv.ParseInt(raw, 10, 32)
+	if err != nil || mb < 1 {
+		return nil, errors.New("invalid shared memory size")
+	}
+	return resource.NewQuantity(mb<<20, resource.BinarySI), nil
+}
+
+// unschedulableGPU is the error for a pod of the workload that no node has
+// room for, or nil. The template's annotation says what was asked for.
+func unschedulableGPU(ctx context.Context, c *Client, template corev1.PodTemplateSpec, selector *metav1.LabelSelector) error {
+	placement, err := gpuPlacement(map[string]string{owned.LabelGPU: template.Annotations[owned.LabelGPU]})
+	if err != nil || placement == nil || selector == nil {
+		return nil
+	}
+	pods, err := c.Kube.CoreV1().Pods(c.Config.Namespace).List(ctx, metav1.ListOptions{LabelSelector: metav1.FormatLabelSelector(selector)})
+	if err != nil {
+		return nil //nolint:nilerr // the wait carries on and times out with its own error
+	}
+	title := placement.Kind
+	if kind, ok := provider.LookupAcceleratorKind(placement.Kind); ok {
+		title = kind.Title
+	}
+	for _, pod := range pods.Items {
+		for _, condition := range pod.Status.Conditions {
+			if condition.Type == corev1.PodScheduled && condition.Status == corev1.ConditionFalse && condition.Reason == corev1.PodReasonUnschedulable && strings.Contains(condition.Message, gpuResource) {
+				return fmt.Errorf("no node has %d free %s GPUs: %s", placement.Count, title, condition.Message)
+			}
+		}
+	}
+	return nil
 }
 
 // runtimeFilesVolume is the volume a workload's rendered files are

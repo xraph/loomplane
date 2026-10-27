@@ -15,6 +15,7 @@ import (
 	"github.com/xraph/loomplane/internal/clouds/oauth"
 	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/internal/telemetry"
+	"github.com/xraph/loomplane/pkg/provider"
 )
 
 const maxName = 60
@@ -64,6 +65,9 @@ type Service struct {
 	grants grantStore
 	// renewals queues renewals before they take a database connection.
 	renewals *renewGate
+
+	// GPUReader reads a server or cluster's GPUs. Nil uses the real SSH and Kubernetes readers.
+	GPUReader func(ctx context.Context, c *Connection, credential []byte) (provider.GPUInventory, error)
 }
 
 // NewService returns a Service. checkers maps each cloud to its checker;

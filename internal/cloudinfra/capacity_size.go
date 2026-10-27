@@ -15,7 +15,9 @@ func (e *CapacityPlacementError) Error() string {
 }
 
 // SelectExpansionSize compares complete sizes after reserve. Price only breaks
-// equal-resource ties, and a missing price sorts behind a known estimate.
+// equal-resource ties, and a missing price sorts behind a known estimate. A
+// demand without GPUs never takes a size with an accelerator; a GPU demand
+// takes the fewest devices of its kind that fit, then the usual order.
 func SelectExpansionSize(options provider.ServerOptions, policy PoolExpansionPolicy, demand CapacityDemand) (string, error) {
 	if !nonnegativeCapacity(demand.Resources) || !nonnegativeCapacity(policy.SystemReserve) || demand.Resources.Servers != 0 || policy.SystemReserve.Servers != 0 {
 		return "", ErrInvalid
@@ -31,6 +33,10 @@ func SelectExpansionSize(options provider.ServerOptions, policy PoolExpansionPol
 	if architecture != "" && demand.Architecture != "" && architecture != demand.Architecture {
 		return "", &CapacityPlacementError{Reason: "placement_constraint"}
 	}
+	// A GPU pool refuses CPU work and a CPU pool refuses GPU work.
+	if !gpuDemandFitsPool(policy, demand.Resources) {
+		return "", &CapacityPlacementError{Reason: "placement_constraint"}
+	}
 	if architecture == "" {
 		architecture = demand.Architecture
 	}
@@ -44,6 +50,10 @@ func SelectExpansionSize(options provider.ServerOptions, policy PoolExpansionPol
 			return "", fmt.Errorf("%w: duplicate catalog size", ErrInvalid)
 		}
 		seen[size.ID] = true
+		// GPU sizes cost far more than CPU ones: CPU work never takes one.
+		if !sizeServesDemand(policy, demand.Resources, size) || !sizeAcceleratorValid(size) || !gpuReadyImage(options, policy.Image, size) {
+			continue
+		}
 		if validateOptions(options, ServerInput{Region: policy.Region, Image: policy.Image, Size: size.ID}) != nil {
 			continue
 		}
@@ -74,6 +84,14 @@ func SelectExpansionSize(options provider.ServerOptions, policy PoolExpansionPol
 		candidates = append(candidates, size)
 	}
 	slices.SortFunc(candidates, func(a, b provider.ServerSize) int {
+		_, ag := sizeGPUs(a)
+		_, bg := sizeGPUs(b)
+		if ag != bg {
+			if ag < bg {
+				return -1
+			}
+			return 1
+		}
 		for _, pair := range [][2]int{{a.CPUs, b.CPUs}, {a.MemoryMiB, b.MemoryMiB}, {a.DiskGB, b.DiskGB}} {
 			if pair[0] < pair[1] {
 				return -1
@@ -126,5 +144,10 @@ func sizeResources(size provider.ServerSize) (ResourceVector, error) {
 	if cpu.CPUMillis <= 0 || memory.MemoryBytes <= 0 || disk.StorageBytes <= 0 {
 		return ResourceVector{}, ErrInvalid
 	}
-	return ResourceVector{Servers: 1, CPUMillis: cpu.CPUMillis, MemoryBytes: memory.MemoryBytes, StorageBytes: disk.StorageBytes}, nil
+	// Pools count known NVIDIA GPUs only.
+	if err := sizeAcceleratorError(size); err != nil {
+		return ResourceVector{}, err
+	}
+	kind, gpus := sizeGPUs(size)
+	return ResourceVector{Servers: 1, CPUMillis: cpu.CPUMillis, MemoryBytes: memory.MemoryBytes, StorageBytes: disk.StorageBytes, GPUKind: kind, GPUs: gpus}, nil
 }

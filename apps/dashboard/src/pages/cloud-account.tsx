@@ -20,6 +20,7 @@ import {
   statusLabels,
   useSignInAgain,
 } from "@/components/cloud-connections"
+import { GpuInventory } from "@/components/gpu-inventory"
 import { Page } from "@/components/page"
 import { EnvBadge, StatusPill, type Tone } from "@/components/runs"
 import { SiteHeader } from "@/components/site-header"
@@ -228,6 +229,10 @@ export function CloudAccount({ id }: { id: string }) {
               />
               <AccountSpend connectionId={id} />
             </div>
+
+            {(c.cloud === "server" || c.cloud === "kubernetes") && (
+              <GpuInventory connectionId={id} cloud={c.cloud} />
+            )}
 
             <section className="overflow-hidden rounded-xl bg-card ring-1 ring-border">
               <h2 className="border-b px-4 py-3 text-sm font-semibold">

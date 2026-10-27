@@ -10,8 +10,16 @@ import {
   SelectTrigger,
   SelectValue,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
 } from "@/components/ui/select"
+import { Badge } from "@/components/ui/badge"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Field as FormField, FieldLabel } from "@/components/ui/field"
 import { useEffect, useState } from "react"
@@ -25,6 +33,8 @@ import type {
   Connection,
   Provider,
   ServerUsage,
+  ServerImage,
+  ServerSize,
 } from "@/client/forge/loomplane/types"
 import { useMutation, useQuery } from "@/client/hooks"
 import { messageOf, statusOf } from "@/client/errors"
@@ -41,6 +51,15 @@ import {
 import { Link } from "@/lib/router"
 import { QueryError } from "@/components/query-error"
 import { useOrganization } from "@/lib/organization"
+import {
+  acceleratorLabel,
+  formatHourly,
+  formatMonthly,
+  hourlyOrUnknown,
+  priceKnown,
+  serverGpuLabel,
+  serverHourly,
+} from "@/lib/gpu"
 import {
   CloudEmpty,
   CloudError,
@@ -237,7 +256,33 @@ function Capacity({ server, usage }: { server: Server; usage?: ServerUsage }) {
             )
           )
         : "…"}
+      {gpuCount(server) > 0 &&
+        ` · ${usage?.reservedGpus ?? "…"} of ${gpuCount(server)} GPUs reserved`}
     </span>
+  )
+}
+// How many GPUs a server has: its listed devices, else what its size bought.
+function gpuCount(server: Server) {
+  return server.health.gpus?.length || server.accelerator?.count || 0
+}
+// A GPU server whose runtime isn't ready can't run GPU containers. The
+// inventory's own message says why.
+function gpuProblem(server: Server) {
+  if (!gpuCount(server) || server.health.gpuRuntime === "ready") return null
+  return (
+    server.health.gpuMessage ||
+    `GPU status: ${server.health.gpuRuntime || "not checked yet"}.`
+  )
+}
+function GpuSummary({ server }: { server: Server }) {
+  const hourly = serverHourly(server)
+  return (
+    <>
+      {serverGpuLabel(server)} ·{" "}
+      {hourly === undefined
+        ? formatHourly(0, false)
+        : `${formatHourly(hourly, true)}, ${formatMonthly(hourly)} while it runs`}
+    </>
   )
 }
 function ServerRow({
@@ -252,6 +297,7 @@ function ServerRow({
   const usage = useQuery(api.useCloudServersUsage, {
     path: { cloudId, serverId: server.id },
   })
+  const problem = gpuProblem(server)
   return (
     <Row>
       <span
@@ -269,9 +315,26 @@ function ServerRow({
         </span>
         <span className="text-xs text-muted-foreground">
           {server.ownership} · {server.region || "SSH"} ·{" "}
-          {server.size || "Detected capacity"} · health checked{" "}
-          {server.health.checkedAt || "never"}
+          {server.size || "Detected capacity"}
+          {gpuCount(server) > 0 &&
+            ` · ${serverGpuLabel(server)} · ${hourlyOrUnknown(serverHourly(server), true)}`}{" "}
+          · health checked {server.health.checkedAt || "never"}
         </span>
+        {problem && (
+          <Tooltip>
+            <TooltipTrigger
+              render={
+                <Badge
+                  variant="outline"
+                  className="border-weld/60 bg-weld-tint text-weld-ink"
+                />
+              }
+            >
+              Can't take GPU work
+            </TooltipTrigger>
+            <TooltipContent>{problem}</TooltipContent>
+          </Tooltip>
+        )}
         {usage.status === "error" ? (
           <Alert variant="destructive">
             <AlertDescription>Capacity couldn't be loaded.</AlertDescription>
@@ -504,9 +567,9 @@ function ServerEditor({
                   Account: {operation.accountId || operation.connectionId} ·
                   ownership: {operation.ownership}
                 </p>
-                <p>
-                  Estimated hourly cost: ${operation.estimatedHourlyUsd ?? 0}
-                </p>
+                {["create", "resize"].includes(operation.input.kind) && (
+                  <p>{estimatedCost(operation)}</p>
+                )}
                 <p>Expires: {operation.expiresAt}</p>
                 {operation.actions.map((a, i) => (
                   <p key={i}>
@@ -571,6 +634,10 @@ function ServerOptions({
   const options = useQuery(api.useCloudServersOptions, {
     path: { cloudId, connectionId },
   })
+  const sizes =
+    options.data?.sizes.filter(
+      (s) => !input.region || s.regions.includes(input.region)
+    ) ?? []
   return options.status === "error" ? (
     <QueryError
       error={options.error}
@@ -607,20 +674,42 @@ function ServerOptions({
       <Field label="Server size">
         <Select
           value={input.size ?? ""}
-          onValueChange={(e) => update({ size: e ?? "" })}
+          onValueChange={(e) => {
+            const size = sizes.find((s) => s.id === e)
+            const fit = imagesFor(options.data?.images ?? [], size)
+            update({
+              size: e ?? "",
+              ...(input.kind === "create" &&
+              !fit.some((i) => i.id === input.image)
+                ? { image: size?.accelerator ? (fit[0]?.id ?? "") : "" }
+                : {}),
+            })
+          }}
         >
           <SelectTrigger aria-label="Server size" className={"w-full min-w-0"}>
             <SelectValue />
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="">Choose size</SelectItem>
-            {options.data.sizes
-              .filter((s) => !input.region || s.regions.includes(input.region))
+            {sizes
+              .filter((s) => !s.accelerator)
               .map((s) => (
                 <SelectItem key={s.id} value={s.id}>
-                  {s.id} · {s.cpus} CPU · {s.memoryMib} MiB · ${s.hourlyUsd}/h
+                  {`${s.id} · ${s.cpus} CPU · ${s.memoryMib} MiB · ${hourlyOrUnknown(s.hourlyUsd, s.hourlyPriceKnown)}`}
                 </SelectItem>
               ))}
+            {sizes.some((s) => s.accelerator) && (
+              <SelectGroup>
+                <SelectLabel>GPU</SelectLabel>
+                {sizes
+                  .filter((s) => s.accelerator)
+                  .map((s) => (
+                    <SelectItem key={s.id} value={s.id}>
+                      {gpuSizeLabel(s)}
+                    </SelectItem>
+                  ))}
+              </SelectGroup>
+            )}
           </SelectContent>
         </Select>
       </Field>
@@ -638,19 +727,48 @@ function ServerOptions({
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="">Choose image</SelectItem>
-              {options.data.images
-                .filter((i) => i.bootstrap)
-                .map((i) => (
-                  <SelectItem key={i.id} value={i.id}>
-                    {i.name}
-                  </SelectItem>
-                ))}
+              {imagesFor(
+                options.data.images,
+                sizes.find((s) => s.id === input.size)
+              ).map((i) => (
+                <SelectItem key={i.id} value={i.id}>
+                  {i.name}
+                </SelectItem>
+              ))}
             </SelectContent>
           </Select>
         </Field>
       )}
     </div>
   )
+}
+// A GPU size reads "gpu-h100x1-80gb · 1× NVIDIA H100 80GB · 80 GiB · 20 CPU ·
+// $3.39/hr", with the memory each GPU has.
+function gpuSizeLabel(s: ServerSize) {
+  const a = s.accelerator!
+  return `${s.id} · ${acceleratorLabel(a)} · ${a.memoryGib} GiB · ${s.cpus} CPU · ${hourlyOrUnknown(s.hourlyUsd, s.hourlyPriceKnown)}`
+}
+// A GPU size boots only an image that ships its vendor's drivers, and a CPU
+// size never needs one.
+function imagesFor(images: ServerImage[], size?: ServerSize) {
+  const vendor = size?.accelerator?.vendor
+  return images.filter(
+    (i) =>
+      i.bootstrap &&
+      (vendor
+        ? (i.accelerators ?? []).includes(vendor)
+        : !i.accelerators?.length)
+  )
+}
+function estimatedCost(o: Operation) {
+  const known = priceKnown(o.estimatedHourlyUsd, o.hourlyPriceKnown)
+  if (o.accelerator)
+    return known
+      ? `Estimated cost: ${formatHourly(o.estimatedHourlyUsd, true)}, ${formatMonthly(o.estimatedHourlyUsd)} while it runs`
+      : `Estimated cost: ${formatHourly(0, false)}`
+  return known
+    ? `Estimated hourly cost: $${o.estimatedHourlyUsd}`
+    : `Estimated hourly cost: ${formatHourly(0, false)}`
 }
 function ServerDetails({
   cloud,
@@ -711,6 +829,21 @@ function ServerDetails({
             inventory.
           </DialogDescription>
         </DialogHeader>
+        {gpuCount(server) > 0 && (
+          <div className="grid gap-2 text-sm">
+            <p>
+              <GpuSummary server={server} />
+            </p>
+            {gpuProblem(server) && (
+              <Alert>
+                <AlertDescription>
+                  <span className="font-medium">Can't take GPU work.</span>{" "}
+                  {gpuProblem(server)}
+                </AlertDescription>
+              </Alert>
+            )}
+          </div>
+        )}
         {usage.status === "error" ? (
           <QueryError
             error={usage.error}

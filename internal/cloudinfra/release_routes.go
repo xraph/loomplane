@@ -36,6 +36,14 @@ func (s *Service) ReconcileReleaseRoutes(ctx context.Context, p security.Princip
 		return err
 	}
 	for _, source := range in.Routes {
+		if source.OrgID != p.OrgID || source.ProjectID != in.ProjectID || source.Input.EnvironmentID != in.EnvironmentID || source.Input.Service != in.Service {
+			return ErrInvalid
+		}
+		// A Kubernetes route follows its Service by name, so a release has
+		// nothing to hand off.
+		if source.Binding.BackendName() == RouteBackendKubernetes {
+			continue
+		}
 		progress := cloudprofiles.SyncRoute{RouteID: source.ID, Hostname: source.Input.Hostname, PrepareID: releasePrepareID(in.Key, source.ID)}
 		reconcile := func(op *RouteOperation) error {
 			return s.reconcileReleaseProgress(ctx, p, op, &progress, in.Checkpoint)
@@ -44,9 +52,6 @@ func (s *Service) ReconcileReleaseRoutes(ctx context.Context, p security.Princip
 		drain, drainErr := ReviewedRouteDrain(source, in.DrainSeconds)
 		if drainErr != nil {
 			return drainErr
-		}
-		if source.OrgID != p.OrgID || source.ProjectID != in.ProjectID || source.Input.EnvironmentID != in.EnvironmentID || source.Input.Service != in.Service {
-			return ErrInvalid
 		}
 		preparedID := releasePrepareID(in.Key, source.ID)
 		prepared, readErr := st.RouteOperation(ctx, p.OrgID, preparedID)
@@ -162,7 +167,7 @@ func (s *Service) verifyReleasedDestination(ctx context.Context, op *RouteOperat
 	if err != nil {
 		return err
 	}
-	return s.Store.WithOperationLock(ctx, "ingress/"+op.Route.OrgID+"/"+op.Route.Binding.ServerID, func() error {
+	return s.Store.WithOperationLock(ctx, routeLockKey(op.Route), func() error {
 		current, readErr := st.Route(ctx, op.Route.OrgID, op.Route.ProjectID, op.Route.ID)
 		if readErr != nil {
 			return readErr

@@ -18,7 +18,7 @@ import (
 )
 
 func TestCloudSQLPartialCleanupReconcilesBeforeDeletingSource(t *testing.T) {
-	for _, stop := range []string{"sql-create", "sql-user", "none", "address", "rule", "zone", "records", "rule-replaced-source", "rule-changed-proof", "rule-lease-refused", "rule-sql-checkpoint-lost"} {
+	for _, stop := range []string{"sql-create", "sql-user", "none", "address", "rule", "zone", "records", "rule-source-lost-after-intent", "rule-delete-response-lost", "rule-source-missing", "rule-subnet-missing", "rule-both-missing", "records-source-missing", "records-subnet-missing", "records-both-missing", "rule-replaced-source", "rule-changed-proof", "rule-lease-refused", "rule-sql-checkpoint-lost"} {
 		t.Run(stop, func(t *testing.T) { testCloudSQLPartialCleanup(t, stop) })
 	}
 }
@@ -26,6 +26,8 @@ func testCloudSQLPartialCleanup(t *testing.T, stop string) {
 	scenario := stop
 	if strings.HasPrefix(stop, "rule-") {
 		stop = "rule"
+	} else if strings.HasPrefix(stop, "records-") {
+		stop = "records"
 	}
 	google := newFakeGoogle(t)
 	job := checkpointSQLJob(t, google)
@@ -41,6 +43,8 @@ func testCloudSQLPartialCleanup(t *testing.T, stop string) {
 		network.scenario = "normal"
 	}
 	created, removing, interrupted := false, false, false
+	sourceMissing := strings.HasSuffix(scenario, "source-missing") || strings.HasSuffix(scenario, "both-missing")
+	subnetMissing := strings.HasSuffix(scenario, "subnet-missing") || strings.HasSuffix(scenario, "both-missing")
 	createTime := "2026-10-21T00:00:00Z"
 	rejectRemoved := scenario == "rule-sql-checkpoint-lost"
 	deletes, forgets, sqlWrites := 0, 0, 0
@@ -51,7 +55,8 @@ func testCloudSQLPartialCleanup(t *testing.T, stop string) {
 			return errors.New("lease refused")
 		}
 		var stage struct {
-			Stage string `json:"stage"`
+			Stage     string `json:"stage"`
+			Uncertain bool   `json:"uncertain"`
 		}
 		if decodeErr := json.Unmarshal(raw, &stage); decodeErr != nil {
 			return decodeErr
@@ -59,6 +64,9 @@ func testCloudSQLPartialCleanup(t *testing.T, stop string) {
 		if !removing && (stop == "sql-create" && stage.Stage == "database" || stop == "sql-user" && stage.Stage == "ready") {
 			interrupted = true
 			return errors.New("lost SQL advance checkpoint")
+		}
+		if removing && scenario == "rule-source-lost-after-intent" && stage.Stage == "remove" && stage.Uncertain {
+			created = false
 		}
 		if removing && rejectRemoved && stage.Stage == "removed" {
 			rejectRemoved = false
@@ -84,6 +92,10 @@ func testCloudSQLPartialCleanup(t *testing.T, stop string) {
 	job.Forget = func(context.Context) error { forgets++; return nil }
 	google.deploy = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
+		if removing && subnetMissing && r.URL.Path == "/compute/v1/"+endpoint.ProvisionSubnetwork {
+			w.WriteHeader(404)
+			return
+		}
 		if network.serve(w, r) {
 			return
 		}
@@ -94,7 +106,7 @@ func testCloudSQLPartialCleanup(t *testing.T, stop string) {
 				json.NewEncoder(w).Encode(map[string]any{"kind": "sql#operation", "name": op, "status": "DONE", "targetProject": "acme-prod", "targetId": instance, "operationType": kind})
 				return
 			}
-			if !created {
+			if !created || removing && sourceMissing {
 				w.WriteHeader(404)
 				return
 			}
@@ -107,6 +119,11 @@ func testCloudSQLPartialCleanup(t *testing.T, stop string) {
 		op, kind := "create", "CREATE"
 		switch {
 		case r.Method == http.MethodDelete:
+			if scenario == "rule-delete-response-lost" {
+				deletes++
+				w.WriteHeader(503)
+				return
+			}
 			if r.URL.Query().Get("enableFinalBackup") != "true" {
 				t.Error("missing final backup")
 			}
@@ -148,6 +165,9 @@ func testCloudSQLPartialCleanup(t *testing.T, stop string) {
 	}
 	writesBeforeCleanup := sqlWrites
 	removing = true
+	if subnetMissing {
+		clear(network.objects)
+	}
 	job.Resume = saved
 	if scenario == "rule-runner" {
 		runPartialSQLCleanup(t, job, exec, network, saved, &deletes)
@@ -191,15 +211,33 @@ func testCloudSQLPartialCleanup(t *testing.T, stop string) {
 		network.lost = false
 	}
 	err = exec.RemovePendingCloudResource(t.Context(), job, pending)
-	if scenario == "rule" || scenario == "rule-sql-checkpoint-lost" {
-		if err == nil || deletes != 1 || forgets != 0 {
+	if scenario == "rule-delete-response-lost" {
+		if err == nil || deletes != 1 {
+			t.Fatal("missing uncertain delete failure", err, deletes)
+		}
+		job.Resume = saved
+		if retryErr := exec.RemovePendingCloudResource(t.Context(), job, pending); retryErr == nil || deletes != 1 || forgets != 0 {
+			t.Fatal("reissued uncertain deletion against existing source", retryErr, deletes, forgets)
+		}
+		return
+	}
+	if scenario == "rule" || scenario == "rule-sql-checkpoint-lost" || scenario == "rule-source-lost-after-intent" {
+		wantFailedDeletes := 1
+		if scenario == "rule-source-lost-after-intent" {
+			wantFailedDeletes = 0
+		}
+		if err == nil || deletes != wantFailedDeletes || forgets != 0 {
 			t.Fatal("lost deletion did not retain cleanup", err, deletes, forgets)
 		}
 		job.Resume = saved
 		exec = &deployments.CloudSQL{Google: gcp.New(google.srv.URL).WithDNSResolver(sourceFixtureDNS{})}
 		err = exec.RemovePendingCloudResource(t.Context(), job, pending)
 	}
-	if err != nil || deletes != 1 || forgets != 1 || len(network.objects) != 0 || network.zone != nil {
+	wantDeletes := 1
+	if sourceMissing || scenario == "rule-source-lost-after-intent" {
+		wantDeletes = 0
+	}
+	if err != nil || deletes != wantDeletes || forgets != 1 || len(network.objects) != 0 || network.zone != nil {
 		t.Fatal("partial cleanup", err, deletes, forgets, network.counts)
 	}
 	if sqlWrites != writesBeforeCleanup {
@@ -219,7 +257,11 @@ func testCloudSQLPartialCleanup(t *testing.T, stop string) {
 		want["records"] = 1
 	}
 	for kind, count := range want {
-		if network.counts["insert-"+kind] != count || network.counts["delete-"+kind] != count {
+		deleteCount := count
+		if subnetMissing && (kind == "address" || kind == "rule") {
+			deleteCount = 0
+		}
+		if network.counts["insert-"+kind] != count || network.counts["delete-"+kind] != deleteCount {
 			t.Fatal("cleanup created absent stages or leaked resources", kind, network.counts)
 		}
 	}

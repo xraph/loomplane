@@ -211,6 +211,30 @@ func (s *PgStore) ListServers(ctx context.Context, org, cloud string) ([]*Server
 	}
 	return out, rows.Err()
 }
+
+// RuntimeServers lists an organization's servers that run a connection,
+// across its Clouds, leaving out deleted and disconnected ones. GPU targets
+// read the price of the server behind each server connection from them.
+func (s *PgStore) RuntimeServers(ctx context.Context, org string) ([]*Server, error) {
+	rows, err := s.db.Query(ctx, `SELECT body FROM loomplane_cloud_servers WHERE org_id=$1 AND runtime_connection_id<>'' AND status NOT IN ('deleted','disconnected') ORDER BY id`, org)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := []*Server{}
+	for rows.Next() {
+		var raw []byte
+		var v Server
+		if checkErr := rows.Scan(&raw); checkErr != nil {
+			return nil, checkErr
+		}
+		if checkErr := json.Unmarshal(raw, &v); checkErr != nil {
+			return nil, checkErr
+		}
+		out = append(out, &v)
+	}
+	return out, rows.Err()
+}
 func (s *PgStore) SaveServer(ctx context.Context, v *Server) error {
 	previous := v.StateRevision
 	v.StateRevision++

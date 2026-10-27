@@ -212,7 +212,21 @@ type Size struct {
 	CPU float64 `json:"cpu" yaml:"cpu"`
 	// Memory is in MiB.
 	Memory int `json:"memory" yaml:"memory"`
+	// GPU asks for GPUs on the server or node the service runs on.
+	GPU *GPU `json:"gpu,omitempty" yaml:"gpu,omitempty"`
+	// Shm is MiB of /dev/shm. It counts toward Memory.
+	Shm int `json:"shm,omitempty" yaml:"shm,omitempty"`
 }
+
+// GPU asks for Count GPUs of Kind on one server or node. Planning checks
+// Kind against the target.
+type GPU struct {
+	Kind  string `json:"kind" yaml:"kind"`
+	Count int    `json:"count" yaml:"count"`
+}
+
+// MaxGPUs is the most GPUs a manifest can ask for on one server or node.
+const MaxGPUs = 8
 
 // Resource is a backing service the application needs, such as Postgres.
 type Resource struct {
@@ -233,6 +247,8 @@ type Resource struct {
 	// Uses chooses, by dependency name, where a catalog resource gets each
 	// dependency. A dependency left out gets a new one of its own.
 	Uses map[string]Use `json:"uses,omitempty" yaml:"uses,omitempty"`
+	// GPU asks for GPUs, for catalog resources that can use them.
+	GPU *GPU `json:"gpu,omitempty" yaml:"gpu,omitempty"`
 	// Environments override the provider or region in one environment, or
 	// leave the resource out of it.
 	Environments map[string]ResourceSettings `json:"environments,omitempty" yaml:"environments,omitempty"`
@@ -307,6 +323,8 @@ type ResourceSettings struct {
 	// Gateway turns the database gateway on or off for a Postgres
 	// resource in one environment. Nothing else reads it.
 	Gateway *bool `json:"gateway,omitempty" yaml:"gateway,omitempty"`
+	// GPU replaces the resource's GPU request. Gateways can't use it.
+	GPU *GPU `json:"gpu,omitempty" yaml:"gpu,omitempty"`
 }
 
 // Ignore lists what analysis found that the application doesn't use, so
@@ -347,6 +365,7 @@ var (
 	nameRE        = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
 	envRE         = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
 	tokenRE       = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
+	gpuKindRE     = regexp.MustCompile(`^[a-z0-9-]+$`)
 	kindRE        = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
 	// versionRE allows what engines call versions: 17, 8.4, 7.2.4-alpine.
 	versionRE = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z._-]{0,31}$`)
@@ -540,7 +559,9 @@ func (m *Manifest) Validate() error {
 			checkToken(add, epath+".provider", "provider", o.Provider)
 			checkToken(add, epath+".region", "region", o.Region)
 			checkGatewayKind(add, epath, r.Kind, o.Gateway)
+			checkGPU(add, epath+".gpu", o.GPU)
 		}
+		checkGPU(add, path+".gpu", r.GPU)
 	}
 
 	for _, name := range m.ServiceNames() {
@@ -712,6 +733,26 @@ func checkSettings(add func(string, string, ...any), path string, s Settings) {
 		if s.Size.Memory < MinMemory || s.Size.Memory > MaxMemory {
 			add(path+".size.memory", "must be between %d and %d MiB", MinMemory, MaxMemory)
 		}
+		checkGPU(add, path+".size.gpu", s.Size.GPU)
+		if s.Size.Shm < 0 {
+			add(path+".size.shm", "can't be negative")
+		} else if s.Size.Shm >= s.Size.Memory && s.Size.Shm > 0 {
+			add(path+".size.shm", "(%d MiB) must be less than memory (%d MiB), which it counts toward", s.Size.Shm, s.Size.Memory)
+		}
+	}
+}
+
+func checkGPU(add func(string, string, ...any), path string, g *GPU) {
+	if g == nil {
+		return
+	}
+	if g.Kind == "" {
+		add(path+".kind", "is required, such as nvidia-l4")
+	} else if !gpuKindRE.MatchString(g.Kind) {
+		add(path+".kind", "%q isn't a GPU kind", g.Kind)
+	}
+	if g.Count < 1 || g.Count > MaxGPUs {
+		add(path+".count", "must be between 1 and %d", MaxGPUs)
 	}
 }
 
@@ -867,6 +908,9 @@ func (m *Manifest) validateGateways(add func(string, string, ...any)) {
 			checkToken(add, epath+".provider", "provider", o.Provider)
 			checkToken(add, epath+".region", "region", o.Region)
 			checkNoGateway(add, epath, o.Gateway)
+			if o.GPU != nil {
+				add(epath+".gpu", "a gateway can't use GPUs")
+			}
 		}
 	}
 }
@@ -1009,9 +1053,13 @@ func cloudTagDefaults(out Settings, d Defaults) Settings {
 func (r Resource) For(env string, d Defaults) ResourceSettings {
 	out := ResourceSettings{}
 	out.Provider, out.Region = place(r.Provider, r.Region, d)
+	out.GPU = r.GPU
 	o, ok := r.Environments[env]
 	if !ok {
 		return out
+	}
+	if o.GPU != nil {
+		out.GPU = o.GPU
 	}
 	out.Provider, out.Region = override(out.Provider, out.Region, o.Provider, o.Region, d)
 	out.Enabled = o.Enabled

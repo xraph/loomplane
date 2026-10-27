@@ -406,6 +406,12 @@
               "type": "integer",
               "minimum": 128,
               "maximum": 32768
+            },
+            "gpu": { "$ref": "#/$defs/gpu" },
+            "shm": {
+              "description": "MiB of /dev/shm. Counts toward memory.",
+              "type": "integer",
+              "minimum": 0
             }
           }
         },
@@ -509,6 +515,16 @@
         }
       }
     },
+    "gpu": {
+      "description": "GPUs on one server or node. Planning checks the kind against the target.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["kind", "count"],
+      "properties": {
+        "kind": { "type": "string", "pattern": "^[a-z0-9-]+$" },
+        "count": { "type": "integer", "minimum": 1, "maximum": 8 }
+      }
+    },
     "resource": {
       "type": "object",
       "required": ["kind"],
@@ -535,6 +551,7 @@
         }
       ],
       "properties": {
+        "gpu": { "$ref": "#/$defs/gpu" },
         "cloud_sql_psc": {
           "description": "Manual PSC endpoint for a PostgreSQL 17 source. You manage the endpoint and DNS. Application attachment is not available yet.",
           "type": "object",
@@ -597,6 +614,7 @@
             "type": "object",
             "additionalProperties": false,
             "properties": {
+              "gpu": { "$ref": "#/$defs/gpu" },
               "provider": {
                 "$ref": "#/$defs/provider"
               },
