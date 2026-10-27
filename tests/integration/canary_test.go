@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"reflect"
 	"slices"
@@ -1223,7 +1224,27 @@ func TestPlansWithoutReleaseBlocksKeepTheirRevisionAcrossTheUpgrade(t *testing.T
 		t.Fatal(err)
 	}
 	for _, table := range []string{"loomplane_project_sources", "loomplane_analyses", "loomplane_manifests", "loomplane_plans", "loomplane_plan_sources", "loomplane_bindings", "loomplane_environment_sources", "loomplane_environment_connections"} {
-		if _, err = f.sql.Exec(ctx, `INSERT INTO `+table+` SELECT * FROM jsonb_populate_recordset(NULL::`+table+`, $1)`, []byte(fixture[table])); err != nil {
+		// Only the columns that Loomplane had: a column a later migration
+		// added takes its default, as an upgraded database's rows do.
+		var rows []map[string]json.RawMessage
+		if err = json.Unmarshal(fixture[table], &rows); err != nil {
+			t.Fatal(err)
+		}
+		if len(rows) == 0 {
+			continue
+		}
+		names := map[string]bool{}
+		for _, row := range rows {
+			for name := range row {
+				names[name] = true
+			}
+		}
+		columns := make([]string, 0, len(names))
+		for _, name := range slices.Sorted(maps.Keys(names)) {
+			columns = append(columns, pgx.Identifier{name}.Sanitize())
+		}
+		list := strings.Join(columns, ",")
+		if _, err = f.sql.Exec(ctx, `INSERT INTO `+table+` (`+list+`) SELECT `+list+` FROM jsonb_populate_recordset(NULL::`+table+`, $1)`, []byte(fixture[table])); err != nil {
 			t.Fatalf("restore %s: %v", table, err)
 		}
 	}
