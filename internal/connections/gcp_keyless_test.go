@@ -11,6 +11,7 @@ import (
 	"maps"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -73,7 +74,10 @@ func (f *fakeGoogleProject) serve(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"permissions": gcp.Permissions})
+		// The project grants everything Loomplane asks for, a canary's
+		// permissions included.
+		granted := append(slices.Clone(gcp.Permissions), gcp.CanaryPermissions...)
+		_ = json.NewEncoder(w).Encode(map[string]any{"permissions": granted})
 	default:
 		w.WriteHeader(http.StatusNotFound)
 	}
