@@ -403,11 +403,9 @@ func (s *Service) checkZoneProofInBackground(ctx context.Context, st DomainStore
 	defer cancel()
 	system := security.Principal{OrgID: zone.OrgID, UserID: zoneProofSystemUser}
 	wrote, err := s.checkZoneProof(ctx, st, zone)
-	if wrote {
-		s.domainAudit(ctx, system, "domain.zone.write", zone.ID, "")
-	}
-	if err == nil {
-		s.domainAudit(ctx, system, "domain.zone.write", zone.ID, "")
+	if wrote || err == nil {
+		// One event for the pass, kept even when the zone ran out of time.
+		s.domainAudit(context.WithoutCancel(ctx), system, "domain.zone.write", zone.ID, "")
 	}
 	// A record not visible yet is the usual answer while DNS propagates, a
 	// save lost to a check from the page is that check's to make, and a

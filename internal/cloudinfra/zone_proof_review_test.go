@@ -270,8 +270,8 @@ func TestZoneProofBackgroundWorkIsAudited(t *testing.T) {
 			found = append(found, e)
 		}
 	}
-	// One for the publish, one for the verification.
-	if len(found) != 2 {
+	// One event for a pass that wrote and verified.
+	if len(found) != 1 {
 		t.Fatalf("background work not audited: %+v", audit.events)
 	}
 }
