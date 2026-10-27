@@ -16,6 +16,7 @@ import {
   farpLandingCount,
   farpLandings,
   farpSchemas,
+  farpStranded,
   filterBoard,
   gatewayRouteInput,
   manualRoutes,
@@ -24,6 +25,7 @@ import {
   routeDraft,
   routeSourceLabel,
   splitPath,
+  strandedTail,
   unroutedSentence,
   validatePath,
 } from "@/lib/octopus"
@@ -180,10 +182,19 @@ test("discoverySentence covers landing hosts, any host and no services", () => {
     hosts: ["api.acme.dev"],
     tail: ".",
   })
-  // A picked hostname that's since been detached gets no FARP routes.
-  expect(discoverySentence(board(), "acme-shop", "production").hosts).toEqual(
-    []
-  )
+  // The only picked hostname was detached: FARP routes stay on it.
+  expect(discoverySentence(board(), "acme-shop", "production")).toEqual({
+    lead: "FARP is watching acme-shop / production. 3 services publish schemas. FARP routes land on ",
+    hosts: ["api.acme.dev"],
+    tail: ", which isn't attached any more. Pick a hostname on the Domains tab.",
+  })
+  const two = board()
+  two.gateway.farpHostnames = ["old.acme.dev", "api.acme.dev"]
+  expect(discoverySentence(two, "acme-shop", "production")).toEqual({
+    lead: "FARP is watching acme-shop / production. 3 services publish schemas. FARP routes land on ",
+    hosts: ["api.acme.dev", "old.acme.dev"],
+    tail: ", which aren't attached any more. Pick a hostname on the Domains tab.",
+  })
   const anyHost = board()
   anyHost.gateway.farpHostnames = []
   anyHost.discovery.services = anyHost.discovery.services.slice(0, 1)
@@ -352,15 +363,38 @@ test("with no hostname picked, FARP lands on every one and narrows when one is t
       host("*.acme.dev", []),
     ],
   })
-  // Only detached hostnames picked reads the same as none.
-  b.gateway.farpHostnames = ["old.acme.dev"]
+  b.gateway.farpHostnames = []
   expect(farpLandings(b)).toEqual([])
+  expect(farpStranded(b)).toEqual([])
   expect(farpLanding(b, "acme.dev")).toBe(true)
   expect(farpLandingCount(b)).toBe(3)
   expect(farpHostnamesWith(b, "api.acme.dev", false)).toEqual([
     "acme.dev",
     "*.acme.dev",
   ])
+})
+
+test("with only detached hostnames picked, FARP stays on them and turning one on picks it alone", () => {
+  const b = board({
+    hosts: [
+      host("acme.dev", []),
+      host("api.acme.dev", []),
+      host("*.acme.dev", []),
+    ],
+  })
+  b.gateway.farpHostnames = ["old.acme.dev", "Gone.acme.dev"]
+  expect(farpLandings(b)).toEqual([])
+  expect(farpStranded(b)).toEqual(["gone.acme.dev", "old.acme.dev"])
+  for (const h of ["acme.dev", "api.acme.dev", "*.acme.dev"])
+    expect(farpLanding(b, h)).toBe(false)
+  expect(farpLandingCount(b)).toBe(0)
+  expect(farpHostnamesWith(b, "api.acme.dev", true)).toEqual(["api.acme.dev"])
+  expect(strandedTail(1)).toBe(
+    ", which isn't attached any more. Pick a hostname on the Domains tab."
+  )
+  expect(strandedTail(2)).toBe(
+    ", which aren't attached any more. Pick a hostname on the Domains tab."
+  )
 })
 
 test("discovery states and schemas", () => {

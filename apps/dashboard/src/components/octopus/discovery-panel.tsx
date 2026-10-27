@@ -11,6 +11,7 @@ import type {
   DiscoverySummary,
 } from "@/client/forge/loomplane/types"
 import { useQuery } from "@/client/hooks"
+import { StrandedFarp } from "@/components/octopus/discovery-strip"
 import { PanelLoading, ReadFailed } from "@/components/octopus/panel-states"
 import { usePushRoutes } from "@/components/octopus/use-push-routes"
 import { QueryError } from "@/components/query-error"
@@ -29,6 +30,7 @@ import {
   farpExample,
   farpLandings,
   farpSchemas,
+  farpStranded,
 } from "@/lib/octopus"
 import { useOrganization } from "@/lib/organization"
 import { cn } from "@/lib/utils"
@@ -250,13 +252,18 @@ function Landing({
     path: { projectId, environmentId, resource },
   })
   const hostnames = board.data ? farpLandings(board.data) : []
+  const stranded = board.data ? farpStranded(board.data) : []
   return (
     <section
       aria-label="Where FARP routes land"
       className="grid gap-2.5 rounded-[14px] border border-border px-4 py-3.5"
     >
       <h3 className="text-sm font-semibold">Where FARP routes land</h3>
-      {board.data ? (
+      {board.data && stranded.length > 0 ? (
+        <p className="text-[12.5px] leading-normal text-weld-ink">
+          <StrandedFarp hosts={stranded} />
+        </p>
+      ) : board.data ? (
         <div className="flex flex-wrap items-center gap-2">
           {hostnames.length > 0 ? (
             hostnames.map((h) => (

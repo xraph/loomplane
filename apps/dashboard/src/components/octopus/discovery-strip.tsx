@@ -6,7 +6,11 @@ import { Fragment, type KeyboardEvent, type ReactNode } from "react"
 import type { Board } from "@/client/forge/loomplane/types"
 import { Button } from "@/components/ui/button"
 import { isSet, relativeTime, useClock } from "@/lib/domains"
-import { discoverySentence, type SourceFilter } from "@/lib/octopus"
+import {
+  discoverySentence,
+  strandedTail,
+  type SourceFilter,
+} from "@/lib/octopus"
 import { cn } from "@/lib/utils"
 
 const sources: { id: SourceFilter; label: string }[] = [
@@ -68,6 +72,33 @@ export function DiscoveryStrip({
   )
 }
 
+/** HostNames sets hostnames in mono, as "a, b and c". */
+export function HostNames({ hosts }: { hosts: string[] }) {
+  return (
+    <>
+      {hosts.map((host, i) => (
+        <Fragment key={host}>
+          {i > 0 && (i === hosts.length - 1 ? " and " : ", ")}
+          <span className="font-mono text-[12.5px]">{host}</span>
+        </Fragment>
+      ))}
+    </>
+  )
+}
+
+/**
+ * StrandedFarp says FARP routes stay on picked hostnames that are all
+ * detached, so they answer only on the target's private network.
+ */
+export function StrandedFarp({ hosts }: { hosts: string[] }) {
+  return (
+    <>
+      FARP routes land on <HostNames hosts={hosts} />
+      {strandedTail(hosts.length)}
+    </>
+  )
+}
+
 function Sentence({
   board,
   project,
@@ -81,12 +112,7 @@ function Sentence({
   return (
     <span>
       {boldScope(lead, `${project} / ${environment}`)}
-      {hosts.map((host, i) => (
-        <Fragment key={host}>
-          {i > 0 && (i === hosts.length - 1 ? " and " : ", ")}
-          <span className="font-mono text-[12.5px]">{host}</span>
-        </Fragment>
-      ))}
+      <HostNames hosts={hosts} />
       {tail}
     </span>
   )

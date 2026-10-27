@@ -108,15 +108,19 @@ test("where FARP routes land leaves out detached hostnames", async () => {
   view.unmount()
   forgeClient.clear()
 
-  // Only detached ones picked: FARP routes answer on every hostname.
+  // Only detached ones picked: FARP routes stay on them, not every hostname.
   b.gateway.farp_hostnames = ["gone.acme.dev"]
   serve({ board: b })
   mount(<DiscoveryPanel {...panelProps()} />)
-  const every = await screen.findByRole("region", {
+  const stranded = await screen.findByRole("region", {
     name: "Where FARP routes land",
   })
-  expect(await within(every).findByText("Every hostname")).toBeVisible()
-  expect(within(every).queryByText("gone.acme.dev")).toBeNull()
+  await vi.waitFor(() =>
+    expect(stranded).toHaveTextContent(
+      "FARP routes land on gone.acme.dev, which isn't attached any more. Pick a hostname on the Domains tab."
+    )
+  )
+  expect(within(stranded).queryByText("Every hostname")).toBeNull()
 })
 
 test("a failed push says why", async () => {

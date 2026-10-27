@@ -351,8 +351,10 @@ func nonNilStrings(in []string) []string {
 // cardSet keeps a board's cards: the attached hostnames first, exact
 // before wildcard, then hostnames routes name that aren't attached, then
 // any host. The any-host card is there whenever FARP routes answer on any
-// host, which is when none of the FARP hostnames is attached, even before
-// FARP has found a route; otherwise only when a route lands on it.
+// host, which is when no FARP hostname is picked, even before FARP has
+// found a route; otherwise only when a route lands on it. When every picked
+// FARP hostname is detached, FARP routes stay on those hostnames, so there
+// is no any-host card for them and no attached card is FARP's home.
 type cardSet struct {
 	cards map[string]*HostCard
 }
@@ -363,7 +365,7 @@ func newCardSet(attached []BoardHostname, farpHostnames []string) *cardSet {
 	for _, h := range attached {
 		names = append(names, h.Hostname)
 	}
-	farp := attachedFarpHostnames(farpHostnames, names)
+	farp := effectiveFarpHostnames(farpHostnames, names)
 	for _, h := range attached {
 		name := strings.ToLower(h.Hostname)
 		if name == "" || s.cards[name] != nil {

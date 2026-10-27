@@ -120,13 +120,32 @@ export function filterBoard(board: Board, source: SourceFilter): HostCard[] {
 }
 
 /**
- * farpLandings is where FARP routes land: the picked hostnames that are
- * still attached, as the server pushes them to Octopus. None means every
- * hostname.
+ * farpLandings is where FARP routes land on attached hostnames: the picked
+ * hostnames that are still attached, as the server pushes them to Octopus.
+ * None means every hostname, unless farpStranded has some.
  */
 export function farpLandings(board: Board): string[] {
   const attached = new Set(attachedHosts(board).map((h) => h.hostname))
   return board.gateway.farpHostnames.filter((h) => h && attached.has(h))
+}
+
+/**
+ * farpStranded is the picked FARP hostnames when none of them is attached
+ * any more, sorted. FARP routes stay on them, as the server pushes them,
+ * so they answer only on the target's private network rather than on
+ * every other hostname. Empty otherwise.
+ */
+export function farpStranded(board: Board): string[] {
+  if (farpLandings(board).length) return []
+  const picked = board.gateway.farpHostnames
+    .filter(Boolean)
+    .map((h) => h.toLowerCase())
+  return [...new Set(picked)].sort()
+}
+
+/** strandedTail follows the stranded FARP hostnames in a sentence. */
+export function strandedTail(count: number): string {
+  return `, which ${count === 1 ? "isn't" : "aren't"} attached any more. Pick a hostname on the Domains tab.`
 }
 
 /**
@@ -149,6 +168,13 @@ export function discoverySentence(
     }
   const publish =
     n === 1 ? "1 service publishes schemas" : `${n} services publish schemas`
+  const stranded = farpStranded(board)
+  if (stranded.length)
+    return {
+      lead: `${watching} ${publish}. FARP routes land on `,
+      hosts: stranded,
+      tail: strandedTail(stranded.length),
+    }
   const hosts = farpLandings(board)
   if (hosts.length === 0)
     return {
@@ -324,18 +350,22 @@ export function manualRoutes(host: HostCard): number {
 
 /**
  * farpLanding is whether FARP routes land on an attached hostname: it's
- * picked, or nothing is and they land everywhere.
+ * picked, or nothing is and they land everywhere. While every picked
+ * hostname is detached they land on none of the attached ones.
  */
 export function farpLanding(board: Board, hostname: string): boolean {
   const landings = farpLandings(board)
-  return landings.length === 0 || landings.includes(hostname)
+  if (landings.length) return landings.includes(hostname)
+  return farpStranded(board).length === 0
 }
 
 /**
  * farpLandingCount is how many attached hostnames FARP routes land on:
- * every one of them while none is picked.
+ * every one of them while none is picked, and none while every picked one
+ * is detached.
  */
 export function farpLandingCount(board: Board): number {
+  if (farpStranded(board).length) return 0
   return farpLandings(board).length || attachedHosts(board).length
 }
 
@@ -343,6 +373,7 @@ export function farpLandingCount(board: Board): number {
  * farpHostnamesWith is where FARP routes land once hostname is turned on
  * or off. While none is picked they land on every attached hostname, so
  * turning one off picks all the others; it never widens to every hostname.
+ * While every picked one is detached, turning one on picks it alone.
  */
 export function farpHostnamesWith(
   board: Board,
@@ -352,7 +383,9 @@ export function farpHostnamesWith(
   const landings = farpLandings(board)
   const base = landings.length
     ? landings
-    : attachedHosts(board).map((h) => h.hostname)
+    : farpStranded(board).length
+      ? []
+      : attachedHosts(board).map((h) => h.hostname)
   const kept = base.filter((h) => h !== hostname)
   return on ? [...kept, hostname] : kept
 }

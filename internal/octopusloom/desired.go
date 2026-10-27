@@ -33,6 +33,8 @@ type DesiredInput struct {
 type Desired struct {
 	Provider, Namespace, EnvironmentID, Resource string
 	// FarpHostnames are the hostnames FARP routes answer on. Empty means any.
+	// They can all be detached, which leaves FARP routes on the private
+	// network only (effectiveFarpHostnames).
 	FarpHostnames []string
 	Upstreams     []Upstream     // sorted by Name
 	Routes        []OctopusRoute // sorted by ID
@@ -102,7 +104,7 @@ func BuildDesired(in DesiredInput) Desired {
 	d := Desired{
 		Provider: g.Provider, Namespace: g.Namespace,
 		EnvironmentID: g.EnvironmentID, Resource: g.Resource,
-		FarpHostnames: attachedFarpHostnames(g.FarpHostnames, in.Hostnames),
+		FarpHostnames: effectiveFarpHostnames(g.FarpHostnames, in.Hostnames),
 		Skipped:       map[string]string{},
 	}
 
@@ -212,15 +214,26 @@ func octopusRoutes(r *Route, upstream string) []OctopusRoute {
 	return out
 }
 
-// attachedFarpHostnames keeps the FARP hostnames that are attached, sorted.
-func attachedFarpHostnames(farp, attached []string) []string {
-	var out []string
+// effectiveFarpHostnames is where FARP routes answer, lower-cased and
+// sorted. None picked is any host. Otherwise it's the picked ones that are
+// still attached, or, when none is, every picked one as it was: FARP routes
+// fail closed, answering only on the target's private network, rather than
+// widen to every hostname attached to the gateway.
+func effectiveFarpHostnames(farp, attached []string) []string {
+	var picked, live []string
 	for _, h := range farp {
 		h = strings.ToLower(h)
-		if slices.ContainsFunc(attached, func(a string) bool { return strings.EqualFold(a, h) }) && !slices.Contains(out, h) {
-			out = append(out, h)
+		if h == "" || slices.Contains(picked, h) {
+			continue
+		}
+		picked = append(picked, h)
+		if slices.ContainsFunc(attached, func(a string) bool { return strings.EqualFold(a, h) }) {
+			live = append(live, h)
 		}
 	}
-	slices.Sort(out)
-	return out
+	if len(live) == 0 {
+		live = picked
+	}
+	slices.Sort(live)
+	return live
 }

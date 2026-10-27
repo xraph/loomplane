@@ -26,6 +26,7 @@ import {
   type HostnameValue,
 } from "@/components/domains/hostname-field"
 import { useRouteLifecycle } from "@/components/domains/use-route-lifecycle"
+import { StrandedFarp } from "@/components/octopus/discovery-strip"
 import { PanelLoading, ReadFailed } from "@/components/octopus/panel-states"
 import { QueryError } from "@/components/query-error"
 import {
@@ -65,6 +66,8 @@ import {
   farpHostnamesWith,
   farpLanding,
   farpLandingCount,
+  farpLandings,
+  farpStranded,
   gatewayPort,
   gatewayRouteInput,
   manualRoutes,
@@ -128,6 +131,8 @@ function Domains({
   const [detaching, setDetaching] = useState<HostCard | null>(null)
 
   const hosts = attachedHosts(board)
+  const stranded = farpStranded(board)
+  const landings = farpLandings(board)
   const noZones =
     !!zones.data && !zones.data.domains.some((domain) => domain.verified)
   const domainRoute = (host: HostCard): CloudinfraRoute | undefined =>
@@ -161,6 +166,11 @@ function Domains({
           Domains attached to <b className="font-semibold">{resource}</b>. Each
           one is a Loomplane route to Octopus on port {gatewayPort}, and Octopus
           routes by host and path behind it.
+          {stranded.length > 0 && (
+            <span className="mt-1 block text-weld-ink">
+              <StrandedFarp hosts={stranded} />
+            </span>
+          )}
         </span>
         {writes && hosts.length > 0 && (
           <Button type="button" onClick={openAttach}>
@@ -255,6 +265,11 @@ function Domains({
         <DetachDialog
           projectId={projectId}
           host={detaching}
+          lastFarp={
+            hosts.length > 1 &&
+            landings.length === 1 &&
+            landings[0] === detaching.hostname
+          }
           route={domainRoute(detaching)}
           routesRead={!!routes.data || routes.status === "error"}
           onClose={() => setDetaching(null)}
@@ -401,12 +416,15 @@ function Blocked({
 function DetachDialog({
   projectId,
   host,
+  lastFarp,
   route,
   routesRead,
   onClose,
 }: {
   projectId: string
   host: HostCard
+  /** FARP routes land only on this hostname, and others stay attached. */
+  lastFarp: boolean
   /** The domain route to remove, once the domain routes are read. */
   route?: CloudinfraRoute
   /** The domain routes answered, or failed to: a missing route won't come. */
@@ -446,6 +464,13 @@ function DetachDialog({
           <AlertDialogDescription>
             Detach <span className="font-mono">{host.hostname}</span>? Loomplane
             removes its DNS record and stops serving it.
+            {lastFarp && (
+              <span className="mt-2 block">
+                FARP routes land only here. After you detach it they answer only
+                on the target&apos;s private network until you pick another
+                hostname.
+              </span>
+            )}
           </AlertDialogDescription>
         </AlertDialogHeader>
         {shown && (

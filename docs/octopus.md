@@ -72,11 +72,9 @@ On the Domains tab, choose **Attach a domain** and pick a hostname under a zone 
 
 ### Where FARP routes land
 
-FARP routes answer on every hostname until you pick where they land. Each attached hostname has a **FARP routes land here** switch. Turn one on and FARP routes answer only on the hostnames you've turned on, which keeps a schema's routes off a hostname you meant for something else.
+FARP routes answer on every hostname until you pick where they land. Each attached hostname has a **FARP routes land here** switch, and while nothing is picked every one of them shows on. Turn one off and the others stay picked, so from then on FARP routes answer only on those, which keeps a schema's routes off a hostname you meant for something else. Switching a hostname off never widens FARP routes to every hostname. After that you can turn hostnames on and off as you like, except the last one that's on. FARP routes have to land somewhere, so turn on another one first.
 
-While none is picked, every switch shows on. Turning one off then picks all the others, so switching a hostname off never widens FARP routes to every hostname. The last hostname that's on can't be switched off, because FARP routes have to land somewhere. Turn on another one first.
-
-Detaching is the exception. When you detach the only hostname picked for FARP, none is picked any more, and FARP routes go back to answering on every hostname. The same happens when none of the picked hostnames is still attached. Pick a hostname again on the Domains tab if you want them narrowed.
+Detaching doesn't widen them either. When you detach the only hostname picked for FARP and others stay attached, the confirm warns you first. Loomplane keeps that hostname as FARP's pick, and since it no longer routes to Octopus, FARP routes answer only on the target's private network until you pick another hostname. The same goes for a gateway whose picked hostnames are all detached. The Routes, Discovery and Domains tabs then say FARP routes land on a hostname that isn't attached any more, and every switch shows off. Turn one on and FARP routes land there alone.
 
 ## FARP discovery
 
@@ -146,4 +144,4 @@ A plan can also stop on `catalog-channel-unavailable`. Loomplane reaches Octopus
 
 ### A FARP route is missing
 
-Check the Discovery tab first. A service stays Waiting for a release until it's deployed with its `farp` block. On a Docker server, a Failed service shows the status Octopus answered with; fix the service and choose **Register again**. Then check where FARP routes land on the Domains tab: a FARP route only answers on the hostnames picked there, or on every hostname when none is.
+Check the Discovery tab first. A service stays Waiting for a release until it's deployed with its `farp` block. On a Docker server, a Failed service shows the status Octopus answered with; fix the service and choose **Register again**. Then check where FARP routes land on the Domains tab: a FARP route only answers on the hostnames picked there, or on every hostname when none is. When every hostname picked there has been detached, FARP routes answer only on the target's private network.

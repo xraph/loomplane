@@ -203,6 +203,79 @@ test("the last hostname FARP routes land on can't be turned off", async () => {
   ).not.toBeChecked()
 })
 
+test("with only detached hostnames picked no FARP switch is on and turning one on picks it alone", async () => {
+  const b = board()
+  b.gateway.farp_hostnames = ["gone.acme.dev"]
+  const writes = serve({ board: b, domainRoutes: domainRoutes() })
+  mount(<DomainsPanel {...panelProps()} />)
+  for (const name of ["acme.dev", "api.acme.dev", "*.acme.dev"]) {
+    const toggle = within(await hostRow(name)).getByRole("switch", {
+      name: "FARP routes land here",
+    })
+    expect(toggle).not.toBeChecked()
+    expect(toggle).not.toHaveAttribute("aria-disabled", "true")
+  }
+  expect(screen.getByRole("region", { name: "Domains" })).toHaveTextContent(
+    "FARP routes land on gone.acme.dev, which isn't attached any more. Pick a hostname on the Domains tab."
+  )
+
+  await userEvent.click(
+    within(await hostRow("api.acme.dev")).getByRole("switch", {
+      name: "FARP routes land here",
+    })
+  )
+  await vi.waitFor(() =>
+    expect(posts(writes).map((w) => w.body)).toEqual([
+      { hostnames: ["api.acme.dev"], revision: 2 },
+    ])
+  )
+})
+
+test("detaching the last hostname FARP routes land on warns they go private", async () => {
+  const b = board()
+  b.gateway.farp_hostnames = ["api.acme.dev", "gone.acme.dev"]
+  b.hosts = [
+    card("acme.dev", []),
+    card("api.acme.dev", [row({ path: "/v1/orders/*" })]),
+  ]
+  serve({ board: b, domainRoutes: domainRoutes() })
+  mount(<DomainsPanel {...panelProps()} />)
+  const warning =
+    "FARP routes land only here. After you detach it they answer only on the target's private network until you pick another hostname."
+
+  await userEvent.click(
+    within(await hostRow("api.acme.dev")).getByRole("button", {
+      name: "Detach",
+    })
+  )
+  let confirm = await screen.findByRole("alertdialog")
+  expect(confirm).toHaveTextContent(warning)
+  await userEvent.click(within(confirm).getByRole("button", { name: "Cancel" }))
+  await vi.waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull())
+
+  // A hostname FARP routes don't land on detaches without the warning.
+  await userEvent.click(
+    within(await hostRow("acme.dev")).getByRole("button", { name: "Detach" })
+  )
+  confirm = await screen.findByRole("alertdialog")
+  expect(confirm).not.toHaveTextContent(warning)
+})
+
+test("detaching the only hostname doesn't warn about FARP", async () => {
+  const b = board()
+  b.hosts = [card("api.acme.dev", [row({ path: "/v1/orders/*" })])]
+  serve({ board: b, domainRoutes: domainRoutes() })
+  mount(<DomainsPanel {...panelProps()} />)
+  await userEvent.click(
+    within(await hostRow("api.acme.dev")).getByRole("button", {
+      name: "Detach",
+    })
+  )
+  expect(await screen.findByRole("alertdialog")).not.toHaveTextContent(
+    "FARP routes land only here."
+  )
+})
+
 test("a refused detach keeps the dialog open with why", async () => {
   const b = board()
   b.hosts = [card("api.acme.dev", [row({ path: "/v1/orders/*" })])]

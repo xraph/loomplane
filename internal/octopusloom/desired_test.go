@@ -5,6 +5,8 @@ import (
 	"reflect"
 	"testing"
 
+	"gopkg.in/yaml.v3"
+
 	"github.com/xraph/loomplane/internal/planning"
 )
 
@@ -137,6 +139,30 @@ func TestDesiredFarpHostnamesAreTheAttachedOnes(t *testing.T) {
 	d = BuildDesired(DesiredInput{Gateway: g, ConnectionID: "conn_a", Hostnames: []string{"a.acme.dev"}})
 	if len(d.FarpHostnames) != 0 {
 		t.Fatalf("no FARP hostnames chosen, got %v", d.FarpHostnames)
+	}
+}
+
+func TestDesiredFarpHostnamesStayPutWhenNoneIsAttached(t *testing.T) {
+	// The only FARP hostname was detached. FARP routes keep it rather than
+	// widen to every attached hostname: they answer only on the private
+	// network until someone picks another.
+	g := serverGateway()
+	g.FarpHostnames = []string{"Old.acme.dev", "gone.acme.dev"}
+	d := BuildDesired(DesiredInput{Gateway: g, ConnectionID: "conn_a", Hostnames: []string{"a.acme.dev", "b.acme.dev"}})
+	if want := []string{"gone.acme.dev", "old.acme.dev"}; !reflect.DeepEqual(d.FarpHostnames, want) {
+		t.Fatalf("FarpHostnames = %v, want %v", d.FarpHostnames, want)
+	}
+	var r rendered
+	if err := yaml.Unmarshal(renderDesired(t, d), &r); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"gone.acme.dev", "old.acme.dev"}; !reflect.DeepEqual(r.Farp.Gateway.Hostnames, want) {
+		t.Fatalf("farp.gateway.hostnames = %v, want %v", r.Farp.Gateway.Hostnames, want)
+	}
+	// Nothing attached at all is the same.
+	d = BuildDesired(DesiredInput{Gateway: g, ConnectionID: "conn_a"})
+	if want := []string{"gone.acme.dev", "old.acme.dev"}; !reflect.DeepEqual(d.FarpHostnames, want) {
+		t.Fatalf("FarpHostnames = %v, want %v", d.FarpHostnames, want)
 	}
 }
 

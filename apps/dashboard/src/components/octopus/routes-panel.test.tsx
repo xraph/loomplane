@@ -235,6 +235,22 @@ test("any hostname, detached hosts and admin routes", async () => {
   )
 })
 
+test("the strip says FARP routes stay on hostnames that aren't attached", async () => {
+  const board = mockBoard()
+  ;(board.gateway as { farp_hostnames: string[] }).farp_hostnames = [
+    "gone.acme.dev",
+    "old.acme.dev",
+  ]
+  serve({ board })
+  mount(<RoutesPanel {...panelProps()} />)
+  const strip = await screen.findByRole("region", { name: "Discovery" })
+  await vi.waitFor(() =>
+    expect(strip).toHaveTextContent(
+      "FARP is watching acme-shop / production. 3 services publish schemas. FARP routes land on gone.acme.dev and old.acme.dev, which aren't attached any more. Pick a hostname on the Domains tab."
+    )
+  )
+})
+
 test("hides write actions without infrastructure:modify", async () => {
   permissions.can = (p) => p !== "infrastructure:modify"
   serve()

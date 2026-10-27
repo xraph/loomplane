@@ -434,10 +434,17 @@ func TestBoardHasAnAnyHostCardWhenFarpAnswersOnAnyHost(t *testing.T) {
 	if anyHost := card(t, b, ""); anyHost.Attached || anyHost.FarpHome || anyHost.Routes == nil || len(anyHost.Routes) != 0 {
 		t.Fatalf("any-host card %+v", anyHost)
 	}
-	// A FARP hostname that isn't attached any more leaves FARP on any host.
+	// A FARP hostname that isn't attached any more keeps FARP there, not on
+	// any host: no any-host card and no attached card is FARP's home.
 	in.Gateway.FarpHostnames = []string{"gone.acme.dev"}
-	if got := cardNames(BuildBoard(in)); !slices.Contains(got, "") {
+	detached := BuildBoard(in)
+	if got := cardNames(detached); slices.Contains(got, "") {
 		t.Fatalf("cards %v", got)
+	}
+	for _, c := range detached.Hosts {
+		if c.FarpHome {
+			t.Fatalf("%q is FARP's home while FARP's hostname is detached", c.Hostname)
+		}
 	}
 	// FARP routes on api.acme.dev and no manual route on any host: no card.
 	in.Gateway.FarpHostnames = []string{"api.acme.dev"}
