@@ -955,9 +955,6 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 			}
 		}
 	}
-	if ramps {
-		return r.deployCandidate(ctx, d, exec, job, step)
-	}
 	// What an executor warns about while it deploys reaches the step once
 	// it has deployed, since its progress may update the step meanwhile.
 	var applyMu sync.Mutex
@@ -966,6 +963,14 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 		applyMu.Lock()
 		defer applyMu.Unlock()
 		applyWarnings = append(applyWarnings, err.Error())
+	}
+	if ramps {
+		candidateErr := r.deployCandidate(ctx, d, exec, job, step)
+		job.warn = nil
+		if candidateErr == nil {
+			step.Warnings = append(step.Warnings, applyWarnings...)
+		}
+		return candidateErr
 	}
 	out, err := exec.Apply(ctx, job)
 	job.warn = nil
