@@ -358,46 +358,39 @@ func TestCanaryOnContainerAppsRefusesAnAppWideChange(t *testing.T) {
 }
 
 // A service that reaches Cloud SQL through a PSC route can't canary: its
-// candidate wouldn't carry the route. The plan says so and blocks, since a
-// canary environment promised a ramp.
-func TestCanaryRefusesACloudSQLPSCRoute(t *testing.T) {
+// candidate wouldn't carry the route. The plan warns and the service
+// deploys all at once while the rest of the release ramps.
+func TestCanaryWarnsOfACloudSQLPSCRoute(t *testing.T) {
 	in := releaseInput(t, releaseYAML(canaryRelease))
 	api := serviceAction("api", "cloud-run", Update, ServiceConfig{Public: true, Port: 8080, CloudSQLNetwork: &provider.CloudSQLApplicationNetwork{ConsumerProject: "shop", Network: "default", Subnetwork: "projects/shop/regions/europe-west1/subnetworks/default"}})
 	web := serviceAction("web", "cloud-run", Update, ServiceConfig{Public: true, Port: 8080})
 	r := &Result{Actions: []Action{api, web}, Executable: true}
 	planRelease(in, r)
-	if r.Executable || r.Release.Ramps(api.ID) || !r.Release.Ramps(web.ID) || len(r.Problems) != 1 {
-		t.Fatalf("executable %v, release %+v, problems %+v", r.Executable, r.Release, r.Problems)
+	if !r.Executable || len(r.Problems) != 0 || r.Release.Ramps(api.ID) || !r.Release.Ramps(web.ID) || len(r.Warnings) != 1 {
+		t.Fatalf("executable %v, release %+v, problems %+v, warnings %+v", r.Executable, r.Release, r.Problems, r.Warnings)
 	}
-	p := r.Problems[0]
-	for _, want := range []string{"api can't run a canary", "Private Service Connect", "direct or blue_green"} {
-		if p.Code != "canary-unsupported-database-route" || p.Name != "api" || p.Path != "services.api" || !strings.Contains(p.Message, want) {
-			t.Fatalf("problem %+v doesn't say %q", p, want)
+	w := r.Warnings[0]
+	for _, want := range []string{"api can't run a canary", "Private Service Connect", "It deploys all at once"} {
+		if w.Code != "canary-unavailable" || w.Name != "api" || !strings.Contains(w.Message, want) {
+			t.Fatalf("warning %+v doesn't say %q", w, want)
 		}
-	}
-	// A new one deploys all at once anyway, so nothing blocks.
-	api.Op = Create
-	r = &Result{Actions: []Action{api}, Executable: true}
-	planRelease(in, r)
-	if !r.Executable || len(r.Problems) != 0 || len(r.Warnings) != 1 {
-		t.Fatalf("executable %v, problems %+v, warnings %+v", r.Executable, r.Problems, r.Warnings)
 	}
 }
 
 // The database gateway never ramps: its record, keys and routes follow a
-// release in one go.
-func TestCanaryRefusesTheDatabaseGateway(t *testing.T) {
+// release in one go. It deploys all at once and the plan warns.
+func TestCanaryWarnsOfTheDatabaseGateway(t *testing.T) {
 	in := releaseInput(t, releaseYAML(canaryRelease))
 	gw := serviceAction(dbGatewayName, "cloud-run", Update, ServiceConfig{Port: 5432, Public: true, DatabaseGateway: &DatabaseGatewayConfig{Name: dbGatewayName, Suffix: "europe-west1.db.example.com", Resources: []string{"db"}}})
 	r := &Result{Actions: []Action{gw}, Executable: true}
 	planRelease(in, r)
-	if r.Executable || r.Release.Ramps(gw.ID) || len(r.Problems) != 1 {
-		t.Fatalf("executable %v, release %+v, problems %+v", r.Executable, r.Release, r.Problems)
+	if !r.Executable || len(r.Problems) != 0 || r.Release.Ramps(gw.ID) || len(r.Warnings) != 1 {
+		t.Fatalf("executable %v, release %+v, problems %+v, warnings %+v", r.Executable, r.Release, r.Problems, r.Warnings)
 	}
-	p := r.Problems[0]
-	for _, want := range []string{"can't run a canary", "database gateway", "direct or blue_green"} {
-		if p.Code != "canary-unsupported-database-gateway" || p.Name != dbGatewayName || !strings.Contains(p.Message, want) {
-			t.Fatalf("problem %+v doesn't say %q", p, want)
+	w := r.Warnings[0]
+	for _, want := range []string{"can't run a canary", "database gateway", "It deploys all at once"} {
+		if w.Code != "canary-unavailable" || w.Name != dbGatewayName || !strings.Contains(w.Message, want) {
+			t.Fatalf("warning %+v doesn't say %q", w, want)
 		}
 	}
 }

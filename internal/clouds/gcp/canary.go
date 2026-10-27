@@ -47,8 +47,9 @@ type RunRevision struct {
 // variables, the same secrets at the same versions, the same ports, size
 // and scaling, the same Cloud SQL instances, in-memory volumes and VPC
 // egress, and the same service account. A sidecar, such as a Cloud SQL
-// PSC transport's, makes two containers, which never match. A release on the same commit has
-// the same image, so the image alone can't tell a revision runs it.
+// PSC transport's, makes two containers, which never match. A release on
+// the same commit has the same image, so the image alone can't tell a
+// revision runs it.
 // Anything Cloud Run filled in that t leaves to its defaults reads as a
 // difference, which is the safe way to be wrong.
 func (r *RunRevision) Runs(t RunTemplate) bool {

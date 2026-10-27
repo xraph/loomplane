@@ -82,19 +82,17 @@ Only an update of something already running can ramp. A service gets no canary w
 - its domain routes switch over by DNS
 - it runs on a Cloud target
 - it's on ECS and takes no HTTP traffic or isn't behind the load balancer, or it's on Azure Container Apps and has no ingress
+- it reaches Cloud SQL through a Private Service Connect route, because a candidate wouldn't carry the route
+- it's the environment's database gateway, because its keys and routes follow each release in one go
 - its target has no native weighting (see the table above)
 
-The plan still goes ahead and those services deploy all at once. The approval card lists a warning for each one that says why, and it doesn't say "Approving starts a canary" for them.
+The plan still goes ahead. Those services deploy all at once while the rest of the release ramps. The approval card lists a warning for each one that says why, and it doesn't say "Approving starts a canary" for them.
 
 Some refusals block the plan instead, and the plan shows them as problems you have to fix before anyone can approve:
 
 - On ECS, Cloud Run or Azure Container Apps, the connection's credential may lack the permissions to split the service's traffic.
 - On Azure Container Apps, a release that changes app-wide ingress settings can't ramp, because those apply to every revision at once. Release that change with `direct` or `blue_green` first.
-- On Cloud Run, a release that changes `public` can't ramp either. Who may call a Cloud Run service is set on the service, not on a revision, so the old version would take the change while it still serves. Release that change with `direct` or `blue_green` first.
-- A service that reaches Cloud SQL through a Private Service Connect route can't ramp. Its candidate wouldn't carry the route, so it could take traffic without its database. Release that environment `direct` or `blue_green`.
-- The environment's database gateway never ramps, because its keys and routes follow each release in one go. Use `direct` or `blue_green` there too.
-
-A plan approved by an older Loomplane can still list one of the last two as ramping. The deployment then stops at that service, before it touches the cloud, with the same message.
+- On Cloud Run, a release that changes `public` can't ramp either. Who may call a Cloud Run service belongs to the service, not to a revision, so access only switches at Promote, for all of the traffic at once, and no step judges it. Release that change with `direct` or `blue_green` first.
 
 Two more only show up when the canary starts, and the deployment fails with a message that says which:
 

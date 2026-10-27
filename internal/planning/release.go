@@ -67,13 +67,6 @@ const (
 	// whose release changes what the target applies to every revision at
 	// once.
 	codeCanaryAppWide = "canary-app-wide-change" //nolint:gosec // G101: a finding code, not a credential
-	// codeCanaryDatabaseRoute blocks a canary for a service that reaches
-	// Cloud SQL through a Private Service Connect route, which a candidate
-	// doesn't carry.
-	codeCanaryDatabaseRoute = "canary-unsupported-database-route"
-	// codeCanaryDatabaseGateway blocks a canary for the environment's
-	// database gateway, which is replaced in one go.
-	codeCanaryDatabaseGateway = "canary-unsupported-database-gateway"
 )
 
 // planRelease pins the environment's release on r, and says which service
@@ -104,11 +97,6 @@ func planRelease(in Input, r *Result) {
 		case manifest.StrategyCanary:
 			reason := noCanary(in, r, a)
 			if reason == "" {
-				if code, message := unsupportedCanary(a); code != "" {
-					r.Problems = append(r.Problems, Finding{Code: code, Subject: ServiceSubject, Name: a.Name, Path: "services." + a.Name, Message: message})
-					r.Executable = false
-					continue
-				}
 				if changed := appWideChanges(a); len(changed) > 0 {
 					r.Problems = append(r.Problems, Finding{
 						Code: codeCanaryAppWide, Subject: ServiceSubject, Name: a.Name, Path: "services." + a.Name,
@@ -151,8 +139,8 @@ func planRelease(in Input, r *Result) {
 
 // noCanary says why a service action can't ramp as a canary, or "" when
 // it can: an update of an HTTP service on a target whose traffic weighting
-// Loomplane drives, outside a Cloud sync, Cloud placement and route
-// releases.
+// Loomplane drives, outside a Cloud sync, Cloud placement, route releases,
+// the database gateway and Cloud SQL Private Service Connect routes.
 func noCanary(in Input, r *Result, a Action) string {
 	cfg := a.Service
 	switch {
@@ -174,6 +162,12 @@ func noCanary(in Input, r *Result, a Action) string {
 		return "its domain routes switch over by DNS"
 	case cfg.CloudPlacement != nil:
 		return "it runs on a Cloud target"
+	// The gateway's record, keys and routes follow each release in one go.
+	case cfg.DatabaseGateway != nil:
+		return "it's the environment's database gateway, which Loomplane replaces in one go"
+	// A candidate doesn't carry the route's sidecar and checks.
+	case cfg.CloudSQLNetwork != nil:
+		return "it reaches Cloud SQL through a Private Service Connect route, which a canary candidate doesn't carry"
 	}
 	switch a.Provider {
 	case "ecs-fargate":
@@ -189,22 +183,6 @@ func noCanary(in Input, r *Result, a Action) string {
 		}
 	}
 	return ""
-}
-
-// unsupportedCanary blocks a canary for a service that could otherwise
-// ramp but whose candidate Loomplane can't start beside what runs: the
-// database gateway, whose record, keys and routes follow each release in
-// one go, and a service that reaches Cloud SQL through a Private Service
-// Connect route, whose sidecar and checks a candidate doesn't carry. It
-// returns the finding's code and message, or "" when nothing blocks it.
-func unsupportedCanary(a Action) (code, message string) {
-	switch cfg := a.Service; {
-	case cfg.DatabaseGateway != nil:
-		return codeCanaryDatabaseGateway, a.Name + " can't run a canary: it's the environment's database gateway, which Loomplane replaces in one go. Release this environment direct or blue_green."
-	case cfg.CloudSQLNetwork != nil:
-		return codeCanaryDatabaseRoute, a.Name + " can't run a canary: it reaches Cloud SQL through a Private Service Connect route, which a canary candidate doesn't carry. Release this environment direct or blue_green."
-	}
-	return "", ""
 }
 
 // appWideFields are the service settings, by provider, that apply to
