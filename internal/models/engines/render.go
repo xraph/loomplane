@@ -76,6 +76,9 @@ func Args(s Spec) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := checkTrust(s.Entry, s.Quantization); err != nil {
+		return nil, err
+	}
 	if err := checkArgs(s.Quantization.Engine, args, positional); err != nil {
 		return nil, fmt.Errorf("%s %s: %w", s.Entry.ID, s.Quantization.ID, err)
 	}
@@ -105,7 +108,7 @@ func vllmArgs(s Spec) ([]string, error) {
 		"--tensor-parallel-size=" + strconv.Itoa(s.GPUs),
 	}
 	if e.TrustRemoteCode {
-		args = append(args, "--trust-remote-code")
+		args = append(args, trustRemoteCode)
 	}
 	if !pooling && e.ToolParser != "" {
 		args = append(args, "--enable-auto-tool-choice", "--tool-call-parser="+e.ToolParser)
@@ -149,6 +152,26 @@ func llamaCPPArgs(s Spec) []string {
 		"--jinja",
 		"--n-gpu-layers=" + layers,
 	}, q.Args...)
+}
+
+// trustRemoteCode is the engine flag that runs Python shipped in a model
+// repo. Only a curated registry entry can ask for it, through
+// trust_remote_code, which is reviewed with the revision it pins.
+const trustRemoteCode = "--trust-remote-code"
+
+// checkTrust refuses remote code that didn't come from the registry: a
+// custom entry asking for it, or the flag among a quantization's extra
+// arguments, where it would skip the trust_remote_code review.
+func checkTrust(e registry.Entry, q registry.Quantization) error {
+	if e.TrustRemoteCode && strings.HasPrefix(e.ID, customPrefix) {
+		return fmt.Errorf("%s is a pasted Hugging Face repo, and only registry entries can run the repo's own code", e.ID)
+	}
+	for _, arg := range q.Args {
+		if flag, _, _ := strings.Cut(arg, "="); flag == trustRemoteCode {
+			return fmt.Errorf("%s %s: %s can't come through extra arguments; only a registry entry's trust_remote_code sets it", e.ID, q.ID, trustRemoteCode)
+		}
+	}
+	return nil
 }
 
 // checkArgs refuses an argument with a line break, which would split into
@@ -266,6 +289,9 @@ func FromSettings(ctx context.Context, r *registry.Registry, custom CustomEntrie
 		if ce.ID != id {
 			return Spec{}, fmt.Errorf("custom entry %s came back as %s", id, ce.ID)
 		}
+		if ce.TrustRemoteCode {
+			return Spec{}, fmt.Errorf("%s is a pasted Hugging Face repo, and only registry entries can run the repo's own code", id)
+		}
 		e = ce
 	} else {
 		re, ok := r.Entry(id)
@@ -282,6 +308,11 @@ func FromSettings(ctx context.Context, r *registry.Registry, custom CustomEntrie
 		return Spec{}, fmt.Errorf("%s %s runs on %s, not llama.cpp on a GPU", id, q.ID, q.Engine)
 	}
 	repo, revision := weightsRepo(e, q)
+	if strings.HasPrefix(id, customPrefix) {
+		if err := checkCustomPin(id, e, repo, revision); err != nil {
+			return Spec{}, err
+		}
+	}
 	if settings["model"] != repo || settings["revision"] != revision || settings["file"] != q.File {
 		return Spec{}, fmt.Errorf("%s %s is pinned to %s, but the resource asks for %s",
 			id, q.ID, weights(repo, revision, q.File), weights(settings["model"], settings["revision"], settings["file"]))
@@ -294,7 +325,29 @@ func FromSettings(ctx context.Context, r *registry.Registry, custom CustomEntrie
 	if err != nil || maxLen <= 0 {
 		return Spec{}, fmt.Errorf("%s: max_model_len %q isn't a positive number", id, settings["max_model_len"])
 	}
+	if !poolingOnly(e.Tasks) && maxLen > e.ContextLength {
+		return Spec{}, fmt.Errorf("%s: max_model_len %d is longer than the model's context of %d tokens", id, maxLen, e.ContextLength)
+	}
 	return Spec{Entry: e, Quantization: q, ServedName: served, MaxModelLen: maxLen, GPUs: gpus, OnGPU: onGPU}, nil
+}
+
+// checkCustomPin checks that a custom entry's ID, "hf:<repo>@<sha12>",
+// names the weights the entry downloads: the same repo, and a revision
+// starting with the same 12 hex, both the entry's and the weights'.
+func checkCustomPin(id string, e registry.Entry, repo, revision string) error {
+	rest := strings.TrimPrefix(id, customPrefix)
+	at := strings.LastIndex(rest, "@")
+	if at < 0 {
+		return fmt.Errorf("custom entry %s has no @<revision> in its ID", id)
+	}
+	idRepo, sha12 := rest[:at], rest[at+1:]
+	if len(sha12) != 12 || len(e.Revision) < 12 || e.Revision[:12] != sha12 || len(revision) < 12 || revision[:12] != sha12 {
+		return fmt.Errorf("custom entry %s is pinned to revision %s, not the one its ID names", id, e.Revision)
+	}
+	if idRepo != repo {
+		return fmt.Errorf("custom entry %s downloads its weights from %s, not the repo its ID names", id, repo)
+	}
+	return nil
 }
 
 // weightsRepo returns where q's weights live, as registry.WeightsRepo

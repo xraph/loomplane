@@ -6,6 +6,7 @@ import (
 	"reflect"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -502,5 +503,117 @@ func TestFromSettingsReadsCustomEntries(t *testing.T) {
 		"revision": "a09a35458c702b33eeacc393d103063234e8bc28", "quantization": "bf16", "served_name": "q", "max_model_len": "4096",
 	}, 1, false); !errors.Is(err, errNoCustomEntry) {
 		t.Errorf("FromSettings for an hf: ID of a registry repo: err = %v, want errNoCustomEntry", err)
+	}
+}
+
+func TestOnlyRegistryEntriesRunRemoteCode(t *testing.T) {
+	ctx := context.Background()
+	r := registry.Default()
+
+	// Through a quantization's extra arguments, on any entry.
+	e, q := curated(t, "Qwen/Qwen2.5-7B-Instruct", "bf16")
+	for _, arg := range []string{"--trust-remote-code", "--trust-remote-code=true"} {
+		q.Args = []string{"--max-num-seqs=8", arg}
+		_, err := Args(Spec{Entry: e, Quantization: q, ServedName: "qwen", MaxModelLen: 4096, GPUs: 1})
+		if err == nil || !strings.Contains(err.Error(), "--trust-remote-code") {
+			t.Errorf("Args with %s in the quantization args: err = %v, want one naming --trust-remote-code", arg, err)
+		}
+	}
+
+	// A pasted repo asking for it, in Args and in FromSettings.
+	ce := customChat()
+	ce.TrustRemoteCode = true
+	cq, _ := ce.Quantization("bf16")
+	s := Spec{Entry: ce, Quantization: cq, ServedName: "chat", MaxModelLen: 8192, GPUs: 1}
+	if _, err := Args(s); err == nil || !strings.Contains(err.Error(), "only registry entries") {
+		t.Errorf("Args for a custom entry with trust_remote_code: err = %v, want a refusal", err)
+	}
+	custom := fakeCustom{"org_1": {ce.ID: ce}}
+	if _, err := FromSettings(ctx, r, custom, "org_1", Settings(s), 1, false); err == nil || !strings.Contains(err.Error(), "only registry entries") {
+		t.Errorf("FromSettings for a custom entry with trust_remote_code: err = %v, want a refusal", err)
+	}
+
+	// A registry entry that sets trust_remote_code still gets the flag.
+	var trusted *registry.Entry
+	for _, re := range r.Entries() {
+		if re.TrustRemoteCode {
+			trusted = &re
+			break
+		}
+	}
+	if trusted == nil {
+		t.Fatal("the registry has no entry with trust_remote_code to check")
+	}
+	for _, tq := range trusted.Quantizations {
+		if tq.Engine != registry.EngineVLLM {
+			continue
+		}
+		args, err := Args(Spec{Entry: *trusted, Quantization: tq, ServedName: "m", MaxModelLen: 4096, GPUs: 1})
+		if err != nil {
+			t.Fatalf("%s %s: %v", trusted.ID, tq.ID, err)
+		}
+		if !slices.Contains(args, "--trust-remote-code") {
+			t.Errorf("%s %s: Args = %q, want --trust-remote-code", trusted.ID, tq.ID, args)
+		}
+		break
+	}
+}
+
+func TestFromSettingsRefusesContextBeyondTheModel(t *testing.T) {
+	ctx := context.Background()
+	r := registry.Default()
+	e, q := curated(t, "Qwen/Qwen2.5-7B-Instruct", "bf16")
+	settings := Settings(Spec{Entry: e, Quantization: q, ServedName: "qwen", MaxModelLen: e.ContextLength})
+	if _, err := FromSettings(ctx, r, nil, "org_1", settings, 1, false); err != nil {
+		t.Fatalf("FromSettings at the model's context: %v", err)
+	}
+	settings["max_model_len"] = strconv.Itoa(e.ContextLength + 1)
+	_, err := FromSettings(ctx, r, nil, "org_1", settings, 1, false)
+	if err == nil || !strings.Contains(err.Error(), "max_model_len") {
+		t.Errorf("FromSettings one token past the model's context: err = %v, want one naming max_model_len", err)
+	}
+
+	// A pooling model is served at min(context, 8192) whatever is stored.
+	pe, pq := curated(t, "BAAI/bge-m3", "native")
+	pooled := Settings(Spec{Entry: pe, Quantization: pq, ServedName: "bge", MaxModelLen: pe.ContextLength + 1})
+	if _, err := FromSettings(ctx, r, nil, "org_1", pooled, 0, false); err != nil {
+		t.Errorf("FromSettings for a pooling model past its context: %v", err)
+	}
+}
+
+func TestFromSettingsChecksTheCustomPin(t *testing.T) {
+	ctx := context.Background()
+	r := registry.Default()
+
+	// The entry's revision isn't the one its ID names.
+	moved := customChat()
+	moved.Revision = strings.Repeat("b", 40)
+	mq, _ := moved.Quantization("bf16")
+	settings := Settings(Spec{Entry: moved, Quantization: mq, ServedName: "chat", MaxModelLen: 8192, GPUs: 1})
+	_, err := FromSettings(ctx, r, fakeCustom{"org_1": {moved.ID: moved}}, "org_1", settings, 1, false)
+	if err == nil || !strings.Contains(err.Error(), "revision") {
+		t.Errorf("FromSettings for a custom entry whose revision moved: err = %v, want one about the revision", err)
+	}
+
+	// A quantization whose weights live in another repo.
+	elsewhere := customChat()
+	elsewhere.Quantizations[0].Repo = "evil/chat-7b"
+	elsewhere.Quantizations[0].Revision = customRevision
+	eq, _ := elsewhere.Quantization("bf16")
+	settings = Settings(Spec{Entry: elsewhere, Quantization: eq, ServedName: "chat", MaxModelLen: 8192, GPUs: 1})
+	_, err = FromSettings(ctx, r, fakeCustom{"org_1": {elsewhere.ID: elsewhere}}, "org_1", settings, 1, false)
+	if err == nil || !strings.Contains(err.Error(), "evil/chat-7b") {
+		t.Errorf("FromSettings for a custom entry with weights in another repo: err = %v, want one naming evil/chat-7b", err)
+	}
+
+	// Weights in another revision of the same repo.
+	other := customChat()
+	other.Quantizations[0].Repo = "acme/chat-7b"
+	other.Quantizations[0].Revision = strings.Repeat("c", 40)
+	oq, _ := other.Quantization("bf16")
+	settings = Settings(Spec{Entry: other, Quantization: oq, ServedName: "chat", MaxModelLen: 8192, GPUs: 1})
+	_, err = FromSettings(ctx, r, fakeCustom{"org_1": {other.ID: other}}, "org_1", settings, 1, false)
+	if err == nil || !strings.Contains(err.Error(), "revision") {
+		t.Errorf("FromSettings for a custom entry with weights at another revision: err = %v, want one about the revision", err)
 	}
 }

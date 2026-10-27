@@ -132,12 +132,14 @@ fetch_index() {
 	echo "$body"
 }
 
-# image_config REPO DIGEST prints the config of one platform image.
+# image_config REPO DIGEST prints the config of one platform image. Each
+# step returns on failure, since set -e is off when the caller tests the
+# result.
 image_config() {
-	tok=$(token "$1")
+	tok=$(token "$1") || return 1
 	config=$(curl -fsS -H "Authorization: Bearer $tok" \
 		-H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' \
-		"$(registry_api "$1")/manifests/$2" | jq -er .config.digest)
+		"$(registry_api "$1")/manifests/$2" | jq -er .config.digest) || return 1
 	curl -fsSL -H "Authorization: Bearer $tok" "$(registry_api "$1")/blobs/$config"
 }
 
@@ -199,9 +201,12 @@ done
 
 # check_root REPO DIGEST fails unless the image runs as root. The engine
 # reads the Hugging Face token from a file owned by root with mode 0400,
-# so an engine running as any other user couldn't read it.
+# so an engine running as any other user couldn't read it. The config goes
+# to a file first: piped straight into jq, a failed fetch would read as an
+# empty user, which passes.
 check_root() {
-	user=$(image_config "$1" "$2" | jq -r '.config.User // ""')
+	image_config "$1" "$2" >"$work/config.json" || die "$1@$2: can't read the image config"
+	user=$(jq -er '.config.User // ""' "$work/config.json") || die "$1@$2: the image config has no readable user"
 	case $user in
 	"" | root | 0 | root:* | 0:*) ;;
 	*) die "$1@$2 runs as user \"$user\", not root, so its engine couldn't read the Hugging Face token file (owned by root, mode 0400)" ;;
