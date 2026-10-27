@@ -504,3 +504,64 @@ func TestZoneProofLostCreateStaysReconcileOnlyWhenTheListingFails(t *testing.T) 
 		t.Fatal("no write once the listing answered", env.dns.writes)
 	}
 }
+
+func TestZoneProofRecordDeletedAtTheProviderIsPublishedAgain(t *testing.T) {
+	env := newProofEnv(t, "vercel")
+	zone := env.create(t, "managed")
+	first := *env.stored(t, zone.ID).ProofRecord
+
+	// Still there: keep waiting, write nothing.
+	if _, err := env.svc.VerifyZone(t.Context(), proofManager, zone.ID); !errors.Is(err, ErrConflict) {
+		t.Fatal(err)
+	}
+	if env.dns.writes != 1 || *env.stored(t, zone.ID).ProofRecord != first {
+		t.Fatal("present record rewritten", env.dns.writes)
+	}
+
+	// Someone deletes it at the provider.
+	env.dns.records = env.dns.records[:1]
+	if _, err := env.svc.VerifyZone(t.Context(), proofManager, zone.ID); !errors.Is(err, ErrConflict) {
+		t.Fatal(err)
+	}
+	proofs := env.dns.proofs()
+	stored := env.stored(t, zone.ID)
+	if env.dns.writes != 2 || len(proofs) != 1 || proofs[0].ID == first.ID || stored.ProofRecord == nil || *stored.ProofRecord != proofs[0] {
+		t.Fatalf("writes=%d proofs=%+v receipt=%+v", env.dns.writes, proofs, stored.ProofRecord)
+	}
+	// The fresh record is checked on the same pass.
+	if env.resolver.lookups != 3 {
+		t.Fatal("not checked again after publishing", env.resolver.lookups)
+	}
+}
+
+func TestZoneProofRecordWithARotatedIDStillCounts(t *testing.T) {
+	env := newProofEnv(t, "vercel")
+	zone := env.create(t, "managed")
+	// The provider rotated the record's ID; owner, name, type and value hold.
+	env.dns.records[1].ID = "rotated"
+	if _, err := env.svc.VerifyZone(t.Context(), proofManager, zone.ID); !errors.Is(err, ErrConflict) {
+		t.Fatal(err)
+	}
+	if env.dns.writes != 1 || len(env.dns.proofs()) != 1 {
+		t.Fatal("rotated record replaced", env.dns.writes)
+	}
+}
+
+func TestZoneProofListingFailureKeepsTheReceipt(t *testing.T) {
+	env := newProofEnv(t, "vercel")
+	zone := env.create(t, "managed")
+	receipt := *env.stored(t, zone.ID).ProofRecord
+	env.dns.listErr = errors.New("provider unavailable")
+	_, err := env.svc.VerifyZone(t.Context(), proofManager, zone.ID)
+	if err == nil || errors.Is(err, ErrConflict) {
+		t.Fatal("listing failure hidden", err)
+	}
+	stored := env.stored(t, zone.ID)
+	if stored.ProofRecord == nil || *stored.ProofRecord != receipt || stored.ProofPublishError == "" || stored.ProofCheckedAt.IsZero() || env.dns.writes != 1 {
+		t.Fatalf("receipt not kept: %+v", stored)
+	}
+	env.dns.listErr = nil
+	if _, err = env.svc.VerifyZone(t.Context(), proofManager, zone.ID); !errors.Is(err, ErrConflict) || env.stored(t, zone.ID).ProofPublishError != "" {
+		t.Fatal("error not cleared once the record was found", err)
+	}
+}

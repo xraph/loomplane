@@ -149,13 +149,15 @@ export function zoneDNSTone(z: ZoneOverview): PillTone {
 export type ProofPublishState = "publishing" | "waiting" | "failed"
 
 export function proofPublishState(z: Zone): ProofPublishState {
+  // A publish clears the error, so one next to a receipt is a record
+  // Loomplane couldn't confirm is still there.
+  if (z.proofPublishError) return "failed"
   // A write whose answer was lost, or a renewed value, isn't published yet.
   const published =
     !!z.proofRecord &&
     !z.proofPublishAttempted &&
     z.proofRecord.value === z.proofValue
-  if (published) return "waiting"
-  return z.proofPublishError ? "failed" : "publishing"
+  return published ? "waiting" : "publishing"
 }
 
 export function registrationLine(z: ZoneOverview, r?: Registration): string {

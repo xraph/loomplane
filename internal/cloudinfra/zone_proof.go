@@ -161,6 +161,16 @@ func (s *Service) checkZoneProof(ctx context.Context, st DomainStore, zone *Zone
 		return err
 	}
 	checkErr := s.verifyZoneControl(ctx, zone)
+	if errors.Is(checkErr, ErrConflict) && zone.Mode == "managed" && zone.proofPublished() && s.now().Before(zone.ProofExpiresAt) {
+		// Not visible yet. Make sure the record is still there to see.
+		republished, reclaimErr := s.republishMissingProof(ctx, st, zone)
+		switch {
+		case reclaimErr != nil:
+			checkErr = reclaimErr
+		case republished:
+			checkErr = s.verifyZoneControl(ctx, zone)
+		}
+	}
 	zone.ProofCheckedAt = s.now().UTC()
 	if checkErr == nil {
 		zone.VerifiedAt = zone.ProofCheckedAt
@@ -170,6 +180,45 @@ func (s *Service) checkZoneProof(ctx context.Context, st DomainStore, zone *Zone
 		return checkErr
 	}
 	return saveErr
+}
+
+// republishMissingProof looks for the receipt's record in the hosting zone.
+// One deleted at the provider loses its receipt and is published afresh;
+// one still there is left alone. A listing that fails keeps the receipt,
+// records why on the zone and returns the error.
+func (s *Service) republishMissingProof(ctx context.Context, st DomainStore, zone *Zone) (bool, error) {
+	adapter, cred, err := s.zoneCredential(ctx, zone)
+	var records []provider.DNSRecord
+	if err == nil {
+		records, err = adapter.ListRecords(ctx, cred, zone.ProviderZone)
+	}
+	if err != nil {
+		zone.ProofPublishError = fmt.Sprintf("Loomplane couldn't read the DNS records at %s to confirm the TXT record for %s is still there. Check again to retry.", dnsProviderName(zone.Provider), zone.ProofName)
+		return false, err
+	}
+	if proofReceiptPresent(records, *zone.ProofRecord) {
+		zone.ProofPublishError = ""
+		return false, nil
+	}
+	zone.ProofRecord = nil
+	if publishErr := s.publishZoneProof(ctx, st, zone); publishErr != nil {
+		return false, publishErr
+	}
+	return zone.proofPublished(), nil
+}
+
+// proofReceiptPresent finds the receipt's record by ID or, for a provider
+// that rotates IDs, by its owner token, name, type and value.
+func proofReceiptPresent(records []provider.DNSRecord, receipt provider.DNSRecord) bool {
+	for _, r := range records {
+		if r.ID == receipt.ID {
+			return true
+		}
+		if receipt.Owner != "" && r.Owner == receipt.Owner && r.Name == receipt.Name && r.Type == receipt.Type && r.Value == receipt.Value {
+			return true
+		}
+	}
+	return false
 }
 
 // zoneProofDue is a managed zone the background still checks: unverified,

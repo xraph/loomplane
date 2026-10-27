@@ -251,6 +251,14 @@ describe("zones", () => {
       ttl: 60,
     }
     expect(proofPublishState({ ...z, proofRecord: record })).toBe("waiting")
+    // A record Loomplane couldn't confirm is still there says why.
+    expect(
+      proofPublishState({
+        ...z,
+        proofRecord: record,
+        proofPublishError: "Couldn't read the records.",
+      })
+    ).toBe("failed")
     // A write whose answer was lost isn't published until it reconciles.
     expect(
       proofPublishState({
