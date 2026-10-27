@@ -233,6 +233,7 @@ func TestBearerSaysTheTrustIsMissing(t *testing.T) {
 		"filed as invalid_request": {400, `{"error":"invalid_request","error_description":"AADSTS70021: ` + echoed + `. Assertion Request: {}.","error_codes":[70021]}`, true, "invalid_request AADSTS70021"},
 		"request, code in text":    {400, `{"error":"invalid_request","error_description":"AADSTS70021: ` + echoed + `."}`, true, "invalid_request AADSTS70021"},
 		"no credential left":       {400, `{"error":"invalid_client","error_description":"AADSTS70025: Client application has no configured federated identity credentials.","error_codes":[70025]}`, true, "invalid_client AADSTS70025"},
+		"tenant gone":              {400, `{"error":"invalid_request","error_description":"AADSTS90002: Tenant 'contoso' not found.","error_codes":[90002]}`, true, "invalid_request AADSTS90002"},
 		"code only in the text":    {401, `{"error":"invalid_client","error_description":"AADSTS70021: ` + echoed + `."}`, true, "invalid_client AADSTS70021"},
 		"issuer doesn't match":     {400, `{"error":"invalid_client","error_description":"AADSTS700211: ` + echoed + ` issuer.","error_codes":[700211]}`, true, "invalid_client AADSTS700211"},
 		"audience doesn't match":   {400, `{"error":"invalid_client","error_description":"AADSTS700212: ` + echoed + ` audience.","error_codes":[700212]}`, true, "invalid_client AADSTS700212"},

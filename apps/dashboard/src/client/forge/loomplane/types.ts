@@ -1042,11 +1042,50 @@ export interface EnvironmentList {
   environments: Environment[];
 }
 
+export interface EnvironmentUsage {
+  assigned: boolean;
+  environmentId: string;
+  environmentName: string;
+  placements: PlacementUsage[];
+  projectId: string;
+  projectName: string;
+}
+
 export interface Evidence {
   detail: string;
   line?: number;
   path: string;
   source?: string;
+}
+
+export interface ExcludeInputBody {
+  exclusions: {
+  keepRunning?: boolean;
+  kind: string;
+  match: string;
+  name?: string;
+  reason: string;
+}[];
+}
+
+export interface Excluded {
+  rule: ExclusionRule;
+  service: Service;
+}
+
+export interface Exclusion {
+  createdAt: string;
+  createdBy: string;
+  keepRunning: boolean;
+  kind: string;
+  match: string;
+  name?: string;
+  reason: string;
+}
+
+export interface ExclusionRule {
+  kind: string;
+  match: string;
 }
 
 export interface FabriqKeyList {
@@ -1268,6 +1307,13 @@ export interface IdentitySession {
 
 export interface Ignore {
   resources?: string[];
+}
+
+export interface IncludeInputBody {
+  exclusions: {
+  kind: string;
+  match: string;
+}[];
 }
 
 export interface InfrastructureAction {
@@ -1868,6 +1914,12 @@ export interface Placement {
   serverRevision: number;
 }
 
+export interface PlacementUsage {
+  default?: boolean;
+  services: string[];
+  targetId?: string;
+}
+
 export interface Plan {
   actions: Action[];
   catalog: boolean;
@@ -2059,6 +2111,7 @@ export interface Project {
   createdAt: string;
   createdBy: string;
   description: string;
+  exclusions: Exclusion[];
   icon: string;
   id: string;
   name: string;
@@ -2097,6 +2150,7 @@ export interface ProjectList {
 }
 
 export interface ProjectView {
+  excluded: Excluded[];
   graph?: Graph;
   projectId: string;
   sources: SourceState[];
@@ -3204,6 +3258,11 @@ export interface UpdateTargetInputBody {
 export interface UpdateVariableInputBody {
   secret?: boolean;
   value: string;
+}
+
+export interface Usage {
+  cloudId: string;
+  environments: EnvironmentUsage[];
 }
 
 export interface UsageSource {

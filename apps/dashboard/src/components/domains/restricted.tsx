@@ -18,7 +18,7 @@ export function Restricted() {
         </ZeroStateMedia>
         <ZeroStateTitle>Domain access is restricted</ZeroStateTitle>
         <ZeroStateDescription>
-          Ask your organization owner for permission to manage Cloud
+          Ask your workspace owner for permission to manage Cloud
           infrastructure.
         </ZeroStateDescription>
       </ZeroStateHeader>

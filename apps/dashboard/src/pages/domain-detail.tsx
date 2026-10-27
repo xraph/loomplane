@@ -103,11 +103,11 @@ function NotFound() {
           <GlobeIcon />
         </ZeroStateMedia>
         <ZeroStateTitle>
-          This domain isn&apos;t in your organization
+          This domain isn&apos;t in your workspace
         </ZeroStateTitle>
         {/* Not in the mock. */}
         <ZeroStateDescription>
-          It may have been removed, or the link is for another organization.
+          It may have been removed, or the link is for another workspace.
         </ZeroStateDescription>
       </ZeroStateHeader>
       <ZeroStateContent>

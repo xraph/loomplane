@@ -733,7 +733,7 @@ export class RESTClient extends Client {
     /**
      * cloudSyncs.list
      */
-    list: async (id: string, before?: string | undefined, limit?: number | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CloudSyncList> => {
+    list: async (id: string, before?: string | undefined, limit?: number | undefined, cloud?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CloudSyncList> => {
       let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/cloud-syncs`;
       const queryParams: Record<string, any> = {};
       if (before !== undefined) {
@@ -741,6 +741,9 @@ export class RESTClient extends Client {
       }
       if (limit !== undefined) {
         queryParams['limit'] = limit;
+      }
+      if (cloud !== undefined) {
+        queryParams['cloud'] = cloud;
       }
       const queryString = new URLSearchParams(queryParams).toString();
       if (queryString) {
@@ -979,6 +982,22 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.Profile>(config);
+    },
+
+    /**
+     * clouds.usage
+     */
+    usage: async (id: string, cloudId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Usage> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/clouds/${encodeURIComponent(String(cloudId))}/usage`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Usage"],
+      };
+
+      return this.request<types.Usage>(config);
     },
 
   };
@@ -3544,7 +3563,7 @@ export class RESTClient extends Client {
     /**
      * organizationCloudSyncs.list
      */
-    list: async (before?: string | undefined, limit?: number | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CloudSyncList> => {
+    list: async (before?: string | undefined, limit?: number | undefined, cloud?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CloudSyncList> => {
       let __path = `/api/v1/clouds/syncs`;
       const queryParams: Record<string, any> = {};
       if (before !== undefined) {
@@ -3552,6 +3571,9 @@ export class RESTClient extends Client {
       }
       if (limit !== undefined) {
         queryParams['limit'] = limit;
+      }
+      if (cloud !== undefined) {
+        queryParams['cloud'] = cloud;
       }
       const queryString = new URLSearchParams(queryParams).toString();
       if (queryString) {
@@ -3842,6 +3864,22 @@ export class RESTClient extends Client {
       return this.request<types.Profile>(config);
     },
 
+    /**
+     * organizationClouds.usage
+     */
+    usage: async (cloudId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Usage> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/usage`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Usage"],
+      };
+
+      return this.request<types.Usage>(config);
+    },
+
   };
 
   public readonly plans = {
@@ -4020,6 +4058,24 @@ export class RESTClient extends Client {
     },
 
     /**
+     * Exclude services from a project's graph, plans and deploys, by service or path. A project setting: the repository doesn't change.
+     */
+    exclude: async (id: string, body: types.ExcludeInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Project> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/exclusions`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["ExcludeInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Project"],
+      };
+
+      return this.request<types.Project>(config);
+    },
+
+    /**
      * One project
      */
     get: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Project> => {
@@ -4049,6 +4105,24 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.ProjectView>(config);
+    },
+
+    /**
+     * Remove exclusions, bringing those services back into the graph and the next plan
+     */
+    include: async (id: string, body: types.IncludeInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Project> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/exclusions/remove`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["IncludeInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Project"],
+      };
+
+      return this.request<types.Project>(config);
     },
 
     /**

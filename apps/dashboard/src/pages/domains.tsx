@@ -60,7 +60,7 @@ export type DomainsSearch = {
 }
 
 const description =
-  "Domains your organization owns. Grant them to projects, then point hostnames at any service or gateway."
+  "Domains your workspace owns. Grant them to projects, then point hostnames at any service or gateway."
 
 export function Domains({
   search = {},

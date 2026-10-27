@@ -198,7 +198,7 @@ it("refreshes cached reservation usage after recovery before reopening the serve
   expect(
     screen.queryByRole("button", { name: "Review reservation recovery" })
   ).not.toBeInTheDocument()
-  expect(screen.getAllByText(/reserved 0 mCPU/).length).toBeGreaterThan(0)
+  expect(screen.getAllByText(/^0 of [\d.]+ vCPU/).length).toBeGreaterThan(0)
 })
 it.each(["projects", "providers", "connections"])(
   "shows failed %s reads and retry in zone setup",

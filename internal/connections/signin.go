@@ -75,7 +75,7 @@ func (s *Service) StartSignIn(ctx context.Context, p security.Principal, in Sign
 			return nil, err
 		}
 		if c.Cloud != cloud {
-			return nil, fmt.Errorf("%w: that connection is for %s, not %s", ErrInvalid, c.Cloud, cloud)
+			return nil, fmt.Errorf("%w: that connection is for %s, not %s", ErrInvalid, cloudTitle(c.Cloud), cloudTitle(cloud))
 		}
 		pending.ConnectionID = c.ID
 		// Signing in again keeps the connection where it is.

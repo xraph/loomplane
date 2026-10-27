@@ -219,7 +219,7 @@ func (s *Service) renew(ctx context.Context, c *Connection, held oauth.Grant, ah
 		}
 		provider, ok := s.Providers[c.Cloud]
 		if !ok {
-			return fmt.Errorf("%w: Loomplane has no sign-in for %s", ErrUnavailable, c.Cloud)
+			return fmt.Errorf("%w: Loomplane has no sign-in for %s", ErrUnavailable, cloudTitle(c.Cloud))
 		}
 		// The cloud may spend the old refresh token before its answer is
 		// read, so a caller giving up must not cut the answer off.
@@ -364,6 +364,11 @@ func (s *Service) refusedUnderLock(ctx context.Context, c *Connection, method, s
 		if latest.Method != method || latest.Generation != c.Generation || latest.Message == replacementInProgressMessage {
 			return ErrChanged
 		}
+		// Someone checked it after the refusal was seen, so that answer is
+		// the newer one.
+		if checked != nil && latest.CheckedAt != nil && latest.CheckedAt.After(*checked) {
+			return ErrChanged
+		}
 		if latest.Status != settled && checked != nil {
 			// mark saves only a change, so only a change is stamped.
 			latest.CheckedAt = checked
@@ -436,7 +441,7 @@ func (s *Service) probeQuiet(ctx context.Context, c *Connection, held oauth.Gran
 	}
 	provider, ok := s.Providers[c.Cloud]
 	if !ok {
-		fail(fmt.Errorf("%w: Loomplane has no sign-in for %s", ErrUnavailable, c.Cloud))
+		fail(fmt.Errorf("%w: Loomplane has no sign-in for %s", ErrUnavailable, cloudTitle(c.Cloud)))
 		return
 	}
 	var why string

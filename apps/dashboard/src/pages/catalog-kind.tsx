@@ -112,7 +112,7 @@ export function CatalogKind({ kind }: { kind: string }) {
             denied={{
               title: "You can't add catalog services",
               description:
-                "Your role doesn't include reading the catalog. An organization owner can give you access.",
+                "Your role doesn't include reading the catalog. A workspace owner can give you access.",
             }}
           />
         ) : !kinds.data ? (
@@ -278,7 +278,7 @@ function AddForm({
           denied={{
             title: "You can't see any projects",
             description:
-              "Your role doesn't include reading projects. An organization owner can give you access.",
+              "Your role doesn't include reading projects. A workspace owner can give you access.",
           }}
         />
       ) : !projects.data ? (
@@ -906,7 +906,7 @@ function Failed({
           </ZeroStateTitle>
           <ZeroStateDescription>
             {denied?.description ??
-              "Your role doesn't include reading it. An organization owner can give you access."}
+              "Your role doesn't include reading it. A workspace owner can give you access."}
           </ZeroStateDescription>
         </ZeroStateHeader>
       </ZeroState>

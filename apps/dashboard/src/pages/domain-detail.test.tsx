@@ -678,7 +678,7 @@ it("keeps loading, denied, not found and failed apart", async () => {
   const loading = open("zone-acme.dev")
   expect(document.querySelector("[aria-busy='true']")).toBeTruthy()
   expect(
-    screen.queryByText("This domain isn't in your organization")
+    screen.queryByText("This domain isn't in your workspace")
   ).toBeNull()
   loading.unmount()
   forgeClient.clear()
@@ -699,7 +699,7 @@ it("keeps loading, denied, not found and failed apart", async () => {
   })
   const missing = open("zone-acme.dev")
   expect(
-    await screen.findByText("This domain isn't in your organization")
+    await screen.findByText("This domain isn't in your workspace")
   ).toBeTruthy()
   expect(
     screen.getByRole("link", { name: "All domains" }).getAttribute("href")
@@ -716,7 +716,7 @@ it("keeps loading, denied, not found and failed apart", async () => {
   expect(await screen.findByText("Domains are unavailable.")).toBeTruthy()
   expect(screen.getByRole("button", { name: "Retry" })).toBeTruthy()
   expect(
-    screen.queryByText("This domain isn't in your organization")
+    screen.queryByText("This domain isn't in your workspace")
   ).toBeNull()
   expect(screen.queryByText("Domain access is restricted")).toBeNull()
 })

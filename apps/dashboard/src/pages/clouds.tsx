@@ -88,7 +88,7 @@ export function Clouds() {
           <EmptyClouds
             kind="notice"
             title="Cloud access is restricted"
-            description="Ask your organization owner for permission to view Cloud accounts."
+            description="Ask your workspace owner for permission to view Cloud accounts."
           />
         </Page>
       </>
@@ -150,7 +150,7 @@ function CloudsList() {
               <EmptyClouds
                 kind="notice"
                 title="Create a project first"
-                description="Your organization manager can create Clouds before projects exist. Create a project to use granted targets."
+                description="Your workspace manager can create Clouds before projects exist. Create a project to use granted targets."
               >
                 <Button nativeButton={false} render={<Link to="/projects" />}>
                   <PlusIcon />
@@ -757,7 +757,7 @@ function WorkspaceScope({
     <EmptyClouds
       kind="notice"
       title="Cloud access is restricted"
-      description="Ask your organization owner for permission to view Cloud accounts."
+      description="Ask your workspace owner for permission to view Cloud accounts."
     />
   ) : projects.status === "error" ? (
     <QueryError
@@ -771,7 +771,7 @@ function WorkspaceScope({
     <EmptyClouds
       kind="notice"
       title="Create a project first"
-      description="Your organization manager can create Clouds before projects exist. Create a project to use granted targets."
+      description="Your workspace manager can create Clouds before projects exist. Create a project to use granted targets."
     >
       <Link to="/projects">
         <Button>

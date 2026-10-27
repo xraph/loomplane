@@ -352,8 +352,8 @@ function DeleteEnvironment({
           <AlertDialogTitle>Delete {environment.name}?</AlertDialogTitle>
           <AlertDialogDescription>
             The variables set on it for {project.name} go with it, secrets
-            included. Organization-wide variables for {environment.name} stay,
-            for other projects.
+            included. Workspace-wide variables for {environment.name} stay, for
+            other projects.
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>

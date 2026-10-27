@@ -26,7 +26,7 @@ export function Activity() {
       <Page>
         <PageHeading
           title="Activity"
-          description="What Loomplane has done for this organization lately, counted from its own records."
+          description="What Loomplane has done for this workspace lately, counted from its own records."
           actions={
             <ToggleGroup
               spacing={0.5}

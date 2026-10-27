@@ -40,6 +40,7 @@ import { Route as CloudsAccountsIdRouteImport } from "./routes/clouds.accounts.$
 import { Route as IntegrationsGithubSetupRouteImport } from "./routes/integrations.github.setup"
 import { Route as IntegrationsOauthCallbackRouteImport } from "./routes/integrations.oauth.callback"
 import { Route as ProjectsIdCatalogResourceRouteImport } from "./routes/projects.$id_.catalog.$resource"
+import { Route as ProjectsIdServicesServiceRouteImport } from "./routes/projects.$id_.services.$service"
 
 const IndexRoute = IndexRouteImport.update({
   id: "/",
@@ -198,6 +199,12 @@ const ProjectsIdCatalogResourceRoute =
     path: "/projects/$id/catalog/$resource",
     getParentRoute: () => rootRouteImport,
   } as any)
+const ProjectsIdServicesServiceRoute =
+  ProjectsIdServicesServiceRouteImport.update({
+    id: "/projects/$id_/services/$service",
+    path: "/projects/$id/services/$service",
+    getParentRoute: () => rootRouteImport,
+  } as any)
 
 export interface FileRoutesByFullPath {
   "/": typeof IndexRoute
@@ -231,6 +238,7 @@ export interface FileRoutesByFullPath {
   "/integrations/github/setup": typeof IntegrationsGithubSetupRoute
   "/integrations/oauth/callback": typeof IntegrationsOauthCallbackRoute
   "/projects/$id/catalog/$resource": typeof ProjectsIdCatalogResourceRoute
+  "/projects/$id/services/$service": typeof ProjectsIdServicesServiceRoute
 }
 export interface FileRoutesByTo {
   "/": typeof IndexRoute
@@ -264,6 +272,7 @@ export interface FileRoutesByTo {
   "/integrations/github/setup": typeof IntegrationsGithubSetupRoute
   "/integrations/oauth/callback": typeof IntegrationsOauthCallbackRoute
   "/projects/$id/catalog/$resource": typeof ProjectsIdCatalogResourceRoute
+  "/projects/$id/services/$service": typeof ProjectsIdServicesServiceRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -298,6 +307,7 @@ export interface FileRoutesById {
   "/integrations/github/setup": typeof IntegrationsGithubSetupRoute
   "/integrations/oauth/callback": typeof IntegrationsOauthCallbackRoute
   "/projects/$id_/catalog/$resource": typeof ProjectsIdCatalogResourceRoute
+  "/projects/$id_/services/$service": typeof ProjectsIdServicesServiceRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -333,6 +343,7 @@ export interface FileRouteTypes {
     | "/integrations/github/setup"
     | "/integrations/oauth/callback"
     | "/projects/$id/catalog/$resource"
+    | "/projects/$id/services/$service"
   fileRoutesByTo: FileRoutesByTo
   to:
     | "/"
@@ -366,6 +377,7 @@ export interface FileRouteTypes {
     | "/integrations/github/setup"
     | "/integrations/oauth/callback"
     | "/projects/$id/catalog/$resource"
+    | "/projects/$id/services/$service"
   id:
     | "__root__"
     | "/"
@@ -399,6 +411,7 @@ export interface FileRouteTypes {
     | "/integrations/github/setup"
     | "/integrations/oauth/callback"
     | "/projects/$id_/catalog/$resource"
+    | "/projects/$id_/services/$service"
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -433,6 +446,7 @@ export interface RootRouteChildren {
   IntegrationsGithubSetupRoute: typeof IntegrationsGithubSetupRoute
   IntegrationsOauthCallbackRoute: typeof IntegrationsOauthCallbackRoute
   ProjectsIdCatalogResourceRoute: typeof ProjectsIdCatalogResourceRoute
+  ProjectsIdServicesServiceRoute: typeof ProjectsIdServicesServiceRoute
 }
 
 declare module "@tanstack/react-router" {
@@ -654,6 +668,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof ProjectsIdCatalogResourceRouteImport
       parentRoute: typeof rootRouteImport
     }
+    "/projects/$id_/services/$service": {
+      id: "/projects/$id_/services/$service"
+      path: "/projects/$id/services/$service"
+      fullPath: "/projects/$id/services/$service"
+      preLoaderRoute: typeof ProjectsIdServicesServiceRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -689,6 +710,7 @@ const rootRouteChildren: RootRouteChildren = {
   IntegrationsGithubSetupRoute: IntegrationsGithubSetupRoute,
   IntegrationsOauthCallbackRoute: IntegrationsOauthCallbackRoute,
   ProjectsIdCatalogResourceRoute: ProjectsIdCatalogResourceRoute,
+  ProjectsIdServicesServiceRoute: ProjectsIdServicesServiceRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

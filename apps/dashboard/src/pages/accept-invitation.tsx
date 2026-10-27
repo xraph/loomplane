@@ -45,7 +45,7 @@ export function AcceptInvitation({ token }: { token: string }) {
       // isn't necessarily the one signed in here.
       if (user && member.userId !== user.id) {
         setError(
-          "That invitation was for a different account. That account has joined; sign in with it to open the organization."
+          "That invitation was for a different account. That account has joined; sign in with it to open the workspace."
         )
         return
       }
@@ -73,10 +73,10 @@ export function AcceptInvitation({ token }: { token: string }) {
   }
 
   return (
-    <AuthLayout title="Join an organization">
+    <AuthLayout title="Join a workspace">
       <AuthCard
-        title="Join an organization"
-        description={`You've been invited to an organization on Loomplane${user?.email ? `, as ${user.email}` : ""}.`}
+        title="Join a workspace"
+        description={`You've been invited to a workspace on Loomplane${user?.email ? `, as ${user.email}` : ""}.`}
         logo={<BrandLogo />}
         align="left"
         variant="borderless"

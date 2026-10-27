@@ -568,11 +568,13 @@ func (s *PgStore) FindAccepted(ctx context.Context, org, project, key, preview s
 }
 
 // ListSyncPage reads a bounded keyset page without truncating project history.
-func (s *PgStore) ListSyncPage(ctx context.Context, org, project string, before page.Cursor, limit int) ([]*Sync, page.Cursor, error) {
+// A nonempty cloud keeps operations on that Cloud, including an environment
+// leaving it, whose review recorded the Cloud it was assigned before.
+func (s *PgStore) ListSyncPage(ctx context.Context, org, project, cloud string, before page.Cursor, limit int) ([]*Sync, page.Cursor, error) {
 	if limit < 1 || limit > page.Max {
 		return nil, page.Cursor{}, page.ErrBadLimit
 	}
-	rows, err := s.listSyncRows(ctx, `SELECT body,snapshot,version FROM loomplane_cloud_syncs s WHERE org_id=$1 AND `+syncViewScope+` AND ($3='' OR (created_at,id)<($4,$3)) ORDER BY created_at DESC,id DESC LIMIT $5`, org, project, before.ID, before.At, limit+1)
+	rows, err := s.listSyncRows(ctx, `SELECT body,snapshot,version FROM loomplane_cloud_syncs s WHERE org_id=$1 AND `+syncViewScope+` AND ($3='' OR (created_at,id)<($4,$3)) AND ($6='' OR s.cloud_id=$6 OR EXISTS(SELECT 1 FROM loomplane_cloud_previews r WHERE r.org_id=s.org_id AND r.id=s.preview_id AND r.body->'before_assignment'->>'cloud_id'=$6)) ORDER BY created_at DESC,id DESC LIMIT $5`, org, project, before.ID, before.At, limit+1, cloud)
 	if err != nil {
 		return nil, page.Cursor{}, err
 	}

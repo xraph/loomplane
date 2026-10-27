@@ -2,6 +2,7 @@ package projects
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 
@@ -32,7 +33,7 @@ const projectColumns = `id, org_id, name, slug, description, icon, color, status
 // name, each once even when several directories of it are attached. The sources table is discovery's; reading it here saves the
 // dashboard a request per project.
 const projectSelect = `SELECT p.id, p.org_id, p.name, p.slug, p.description, p.icon, p.color, p.status,
-	p.created_by, p.created_at, p.updated_at,
+	p.created_by, p.created_at, p.updated_at, p.exclusions,
 	COALESCE((SELECT array_agg(r.repository ORDER BY r.first_alias)
 		FROM (SELECT s.repository, min(s.alias) AS first_alias FROM loomplane_project_sources s
 			WHERE s.project_id = p.id AND s.removed_at IS NULL GROUP BY s.repository) r), '{}')
@@ -40,9 +41,15 @@ const projectSelect = `SELECT p.id, p.org_id, p.name, p.slug, p.description, p.i
 
 func scanProject(row pgx.Row) (*Project, error) {
 	var p Project
+	var exclusions []byte
 	if err := row.Scan(&p.ID, &p.OrgID, &p.Name, &p.Slug, &p.Description, &p.Icon, &p.Color, &p.Status,
-		&p.CreatedBy, &p.CreatedAt, &p.UpdatedAt, &p.Repositories); err != nil {
+		&p.CreatedBy, &p.CreatedAt, &p.UpdatedAt, &exclusions, &p.Repositories); err != nil {
 		return nil, err
+	}
+	if len(exclusions) > 0 {
+		if err := json.Unmarshal(exclusions, &p.Exclusions); err != nil {
+			return nil, fmt.Errorf("decode exclusions: %w", err)
+		}
 	}
 	p.normalize()
 	return &p, nil
@@ -134,6 +141,50 @@ func (s *PgStore) UpdateProject(ctx context.Context, p *Project) error {
 		return fmt.Errorf("update project: %w", err)
 	}
 	return requireOneRow(res)
+}
+
+// UpdateExclusions rewrites the project's exclusions in a transaction that
+// locks the row, so a concurrent change waits instead of being lost.
+func (s *PgStore) UpdateExclusions(ctx context.Context, orgID, id string, change func([]Exclusion) ([]Exclusion, error)) (p *Project, err error) {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return nil, fmt.Errorf("begin: %w", err)
+	}
+	defer func() { err = rollback(tx, err) }()
+	var raw []byte
+	err = tx.QueryRow(ctx, `SELECT exclusions FROM loomplane_projects WHERE org_id = $1 AND id = $2 FOR UPDATE`, orgID, id).Scan(&raw)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("read exclusions: %w", err)
+	}
+	list := []Exclusion{}
+	if len(raw) > 0 {
+		if err = json.Unmarshal(raw, &list); err != nil {
+			return nil, fmt.Errorf("decode exclusions: %w", err)
+		}
+	}
+	if list, err = change(list); err != nil {
+		return nil, err
+	}
+	if list == nil {
+		list = []Exclusion{}
+	}
+	enc, err := json.Marshal(list)
+	if err != nil {
+		return nil, fmt.Errorf("encode exclusions: %w", err)
+	}
+	if _, err = tx.Exec(ctx, `UPDATE loomplane_projects SET exclusions = $3, updated_at = now() WHERE org_id = $1 AND id = $2`, orgID, id, enc); err != nil {
+		return nil, fmt.Errorf("update exclusions: %w", err)
+	}
+	if p, err = scanProject(tx.QueryRow(ctx, projectSelect+` WHERE p.org_id = $1 AND p.id = $2`, orgID, id)); err != nil {
+		return nil, fmt.Errorf("reread project: %w", err)
+	}
+	if err = tx.Commit(); err != nil {
+		return nil, fmt.Errorf("commit: %w", err)
+	}
+	return p, nil
 }
 
 // DeleteProject removes the project; its environments go with it.
@@ -246,6 +297,12 @@ func (p *Project) normalize() {
 	p.CreatedAt, p.UpdatedAt = p.CreatedAt.UTC(), p.UpdatedAt.UTC()
 	if p.Repositories == nil {
 		p.Repositories = []string{}
+	}
+	if p.Exclusions == nil {
+		p.Exclusions = []Exclusion{}
+	}
+	for i := range p.Exclusions {
+		p.Exclusions[i].CreatedAt = p.Exclusions[i].CreatedAt.UTC()
 	}
 }
 

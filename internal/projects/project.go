@@ -60,11 +60,14 @@ type Project struct {
 	// Repositories are the "owner/name" of each repository the project
 	// builds from, each once, by its first alias. Its sources belong to discovery; the store
 	// reads them so a list of projects can show them.
-	Repositories []string  `json:"repositories"`
-	Status       string    `json:"status"`
-	CreatedBy    string    `json:"created_by"`
-	CreatedAt    time.Time `json:"created_at"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	Repositories []string `json:"repositories"`
+	// Exclusions keep analysis-found services out of the graph, plans
+	// and deploys. See Exclusion.
+	Exclusions []Exclusion `json:"exclusions"`
+	Status     string      `json:"status"`
+	CreatedBy  string      `json:"created_by"`
+	CreatedAt  time.Time   `json:"created_at"`
+	UpdatedAt  time.Time   `json:"updated_at"`
 }
 
 // Environment is a place a project deploys to, such as production.

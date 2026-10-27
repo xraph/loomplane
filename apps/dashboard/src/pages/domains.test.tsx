@@ -538,7 +538,7 @@ it("keeps denied, failed and empty apart", async () => {
   expect(screen.getByText("Domain access is restricted")).toBeTruthy()
   expect(
     screen.getByText(
-      "Ask your organization owner for permission to manage Cloud infrastructure."
+      "Ask your workspace owner for permission to manage Cloud infrastructure."
     )
   ).toBeTruthy()
   expect(screen.queryByRole("button", { name: "Bring a domain" })).toBeNull()

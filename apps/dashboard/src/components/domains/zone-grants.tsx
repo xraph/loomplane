@@ -104,7 +104,7 @@ export function ZoneGrants({
       <Skeleton className="h-16 rounded-lg" />
     ) : list.length === 0 ? (
       <p className="text-[12.5px] text-muted-foreground">
-        There are no projects in this organization yet.
+        There are no projects in this workspace yet.
       </p>
     ) : (
       <ul className="grid max-h-64 gap-1 overflow-y-auto">

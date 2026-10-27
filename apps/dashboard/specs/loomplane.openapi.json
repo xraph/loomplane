@@ -531,6 +531,13 @@
             "schema": {
               "type": "integer"
             }
+          },
+          {
+            "name": "cloud",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -1384,6 +1391,38 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/CloudProjectGrantList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clouds/{cloudId}/usage": {
+      "get": {
+        "tags": [
+          "Clouds"
+        ],
+        "summary": "organizationClouds.usage",
+        "operationId": "organizationClouds.usage",
+        "parameters": [
+          {
+            "name": "cloudId",
+            "in": "path",
+            "description": "Path parameter: cloudId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Usage"
                 }
               }
             }
@@ -4756,6 +4795,13 @@
             "schema": {
               "type": "integer"
             }
+          },
+          {
+            "name": "cloud",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
           }
         ],
         "responses": {
@@ -5182,6 +5228,47 @@
         "responses": {
           "200": {
             "description": "Success"
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{id}/clouds/{cloudId}/usage": {
+      "get": {
+        "tags": [
+          "Clouds"
+        ],
+        "summary": "clouds.usage",
+        "operationId": "clouds.usage",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cloudId",
+            "in": "path",
+            "description": "Path parameter: cloudId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Usage"
+                }
+              }
+            }
           }
         }
       }
@@ -5994,6 +6081,92 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/DeployedList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{id}/exclusions": {
+      "post": {
+        "tags": [
+          "Projects"
+        ],
+        "summary": "Exclude services from a project's graph, plans and deploys, by service or path. A project setting: the repository doesn't change.",
+        "operationId": "projects.exclude",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ExcludeInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The project",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Project"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{id}/exclusions/remove": {
+      "post": {
+        "tags": [
+          "Projects"
+        ],
+        "summary": "Remove exclusions, bringing those services back into the graph and the next plan",
+        "operationId": "projects.include",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/IncludeInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The project",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Project"
                 }
               }
             }
@@ -16524,6 +16697,7 @@
           "icon",
           "color",
           "repositories",
+          "exclusions",
           "status",
           "created_by",
           "created_at",
@@ -16542,6 +16716,12 @@
           },
           "description": {
             "type": "string"
+          },
+          "exclusions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Exclusion"
+            }
           },
           "icon": {
             "type": "string"
@@ -16678,9 +16858,16 @@
         "type": "object",
         "required": [
           "project_id",
-          "sources"
+          "sources",
+          "excluded"
         ],
         "properties": {
+          "excluded": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Excluded"
+            }
+          },
           "graph": {
             "$ref": "#/components/schemas/Graph"
           },
@@ -21376,6 +21563,40 @@
           }
         }
       },
+      "EnvironmentUsage": {
+        "type": "object",
+        "required": [
+          "project_id",
+          "project_name",
+          "environment_id",
+          "environment_name",
+          "assigned",
+          "placements"
+        ],
+        "properties": {
+          "assigned": {
+            "type": "boolean"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "environment_name": {
+            "type": "string"
+          },
+          "placements": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PlacementUsage"
+            }
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "project_name": {
+            "type": "string"
+          }
+        }
+      },
       "KeylessState": {
         "type": "object",
         "required": [
@@ -21481,6 +21702,171 @@
           "settings": {
             "type": "object",
             "additionalProperties": true
+          }
+        }
+      },
+      "ExcludeInputBody": {
+        "type": "object",
+        "required": [
+          "exclusions"
+        ],
+        "properties": {
+          "exclusions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "kind",
+                "match",
+                "reason"
+              ],
+              "properties": {
+                "keep_running": {
+                  "type": "boolean"
+                },
+                "kind": {
+                  "type": "string"
+                },
+                "match": {
+                  "type": "string"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "reason": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "Excluded": {
+        "type": "object",
+        "required": [
+          "service",
+          "rule"
+        ],
+        "properties": {
+          "rule": {
+            "$ref": "#/components/schemas/ExclusionRule"
+          },
+          "service": {
+            "$ref": "#/components/schemas/Service"
+          }
+        }
+      },
+      "Exclusion": {
+        "type": "object",
+        "required": [
+          "kind",
+          "match",
+          "reason",
+          "keep_running",
+          "created_by",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "type": "string"
+          },
+          "keep_running": {
+            "type": "boolean"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "match": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      },
+      "ExclusionRule": {
+        "type": "object",
+        "required": [
+          "kind",
+          "match"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "match": {
+            "type": "string"
+          }
+        }
+      },
+      "IncludeInputBody": {
+        "type": "object",
+        "required": [
+          "exclusions"
+        ],
+        "properties": {
+          "exclusions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "kind",
+                "match"
+              ],
+              "properties": {
+                "kind": {
+                  "type": "string"
+                },
+                "match": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      },
+      "PlacementUsage": {
+        "type": "object",
+        "required": [
+          "services"
+        ],
+        "properties": {
+          "default": {
+            "type": "boolean"
+          },
+          "services": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "target_id": {
+            "type": "string"
+          }
+        }
+      },
+      "Usage": {
+        "type": "object",
+        "required": [
+          "cloud_id",
+          "environments"
+        ],
+        "properties": {
+          "cloud_id": {
+            "type": "string"
+          },
+          "environments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EnvironmentUsage"
+            }
           }
         }
       }

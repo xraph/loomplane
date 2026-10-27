@@ -65,9 +65,9 @@ export function Pools({
   return (
     <section className="grid gap-3" aria-label="Server pools">
       <CloudSectionHead
-        title="Pools and reservations"
+        title="Pools"
         count={pools.data ? list.length : undefined}
-        description="Groups of ready servers, each with the CPU and memory it can give to services."
+        description="A pool groups servers and caps what each one gives to services. A target picks a pool."
       >
         <>
           {servers.length > 0 && (
@@ -116,9 +116,10 @@ export function Pools({
               <div>
                 <p className="font-mono text-[13px] font-medium">{p.name}</p>
                 <p className="text-xs text-muted-foreground">
-                  {p.members.length} members ·{" "}
-                  {p.members.filter((m) => m.draining).length} draining ·
-                  revision {p.revision}
+                  {p.members.length}{" "}
+                  {p.members.length === 1 ? "server" : "servers"}
+                  {p.members.some((m) => m.draining) &&
+                    ` · ${p.members.filter((m) => m.draining).length} draining`}
                   {p.acceleratorKind &&
                     ` · ${p.members.reduce((n, m) => n + (m.gpus ?? 0), 0)} ${gpuTitle(p.acceleratorKind)} GPUs`}
                 </p>
