@@ -5,6 +5,7 @@ import { afterEach, expect, test, vi } from "vitest"
 import { forgeClient } from "@/client/runtime"
 import { SettingsPanel } from "@/components/octopus/settings-panel"
 import {
+  json,
   mockStatus,
   mount,
   panelProps,
@@ -90,6 +91,24 @@ test("settings shows the sync error and hides the push without infrastructure:mo
   expect(
     within(sync).queryByRole("button", { name: "Push routes again" })
   ).toBeNull()
+})
+
+test("a push that can't reach Octopus says so", async () => {
+  serve({
+    write: (w) =>
+      w.path.endsWith("/sync")
+        ? json({ message: "Octopus isn't answering on its private port." }, 502)
+        : undefined,
+  })
+  mount(<SettingsPanel {...panelProps()} />)
+  await userEvent.click(
+    await screen.findByRole("button", { name: "Push routes again" })
+  )
+  await vi.waitFor(() =>
+    expect(toasts.toast.error).toHaveBeenCalledWith(
+      "Octopus isn't answering on its private port."
+    )
+  )
 })
 
 test("settings never shows a secret value", async () => {

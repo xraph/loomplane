@@ -12,6 +12,9 @@ import {
   exampleRequest,
   farpCollision,
   farpHostnamesWith,
+  farpLanding,
+  farpLandingCount,
+  farpLandings,
   farpSchemas,
   filterBoard,
   gatewayRouteInput,
@@ -171,11 +174,16 @@ test("filterBoard keeps the source's rows and drops empty cards", () => {
 })
 
 test("discoverySentence covers landing hosts, any host and no services", () => {
-  expect(discoverySentence(board(), "acme-shop", "production")).toEqual({
+  const landing = board({ hosts: [host("api.acme.dev", [])] })
+  expect(discoverySentence(landing, "acme-shop", "production")).toEqual({
     lead: "FARP is watching acme-shop / production. 3 services publish schemas, and their routes land on ",
     hosts: ["api.acme.dev"],
     tail: ".",
   })
+  // A picked hostname that's since been detached gets no FARP routes.
+  expect(discoverySentence(board(), "acme-shop", "production").hosts).toEqual(
+    []
+  )
   const anyHost = board()
   anyHost.gateway.farpHostnames = []
   anyHost.discovery.services = anyHost.discovery.services.slice(0, 1)
@@ -331,6 +339,28 @@ test("farpHostnamesWith keeps only attached hostnames", () => {
   ])
   expect(farpHostnamesWith(b, "api.acme.dev", false)).toEqual([])
   expect(manualRoutes(b.hosts[1])).toBe(1)
+  expect(farpLandings(b)).toEqual(["api.acme.dev"])
+  expect(farpLanding(b, "acme.dev")).toBe(false)
+  expect(farpLandingCount(b)).toBe(1)
+})
+
+test("with no hostname picked, FARP lands on every one and narrows when one is turned off", () => {
+  const b = board({
+    hosts: [
+      host("acme.dev", []),
+      host("api.acme.dev", []),
+      host("*.acme.dev", []),
+    ],
+  })
+  // Only detached hostnames picked reads the same as none.
+  b.gateway.farpHostnames = ["old.acme.dev"]
+  expect(farpLandings(b)).toEqual([])
+  expect(farpLanding(b, "acme.dev")).toBe(true)
+  expect(farpLandingCount(b)).toBe(3)
+  expect(farpHostnamesWith(b, "api.acme.dev", false)).toEqual([
+    "acme.dev",
+    "*.acme.dev",
+  ])
 })
 
 test("discovery states and schemas", () => {

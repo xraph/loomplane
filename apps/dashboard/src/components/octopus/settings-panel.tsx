@@ -1,17 +1,12 @@
 // The Settings tab: what Loomplane set up for Octopus and keeps for it.
 // Nothing here is a secret: the status names none.
 import type { ReactNode } from "react"
-import { toast } from "sonner"
 
-import { messageOf } from "@/client/errors"
-import {
-  useOctopusBoard,
-  useOctopusStatus,
-  useOctopusSync,
-} from "@/client/forge/loomplane/hooks"
-import type { OctopusStatus, SyncResult } from "@/client/forge/loomplane/types"
-import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
+import { useOctopusStatus } from "@/client/forge/loomplane/hooks"
+import type { OctopusStatus } from "@/client/forge/loomplane/types"
+import { useQuery } from "@/client/hooks"
 import { PanelLoading, ReadFailed } from "@/components/octopus/panel-states"
+import { usePushRoutes } from "@/components/octopus/use-push-routes"
 import { QueryError } from "@/components/query-error"
 import { Button } from "@/components/ui/button"
 import type { CatalogPanelProps } from "@/lib/catalog-kinds"
@@ -72,24 +67,8 @@ function Settings({
   status,
 }: CatalogPanelProps & { status: OctopusStatus }) {
   const { can } = useOrganization()
-  const invalidate = useInvalidate()
-  const sync = useMutation(useOctopusSync)
+  const sync = usePushRoutes({ projectId, environmentId, resource })
   const now = useClock()
-
-  const pushAgain = async () => {
-    try {
-      const result = (await sync.mutateAsync({
-        path: { projectId, environmentId, resource },
-      })) as SyncResult
-      if (result.state === "failed" && result.message)
-        toast.error(result.message)
-      else if (result.message) toast(result.message)
-    } catch (err) {
-      toast.error(messageOf(err, "Octopus wasn't synced."))
-    }
-    invalidate(useOctopusStatus)
-    invalidate(useOctopusBoard)
-  }
 
   return (
     <>
@@ -153,8 +132,8 @@ function Settings({
             <Button
               type="button"
               variant="outline"
-              disabled={sync.isPending}
-              onClick={() => void pushAgain()}
+              disabled={sync.pending}
+              onClick={() => void sync.push()}
             >
               Push routes again
             </Button>

@@ -5,6 +5,8 @@ import { afterEach, expect, test, vi } from "vitest"
 import { forgeClient } from "@/client/runtime"
 import { DiscoveryPanel } from "@/components/octopus/discovery-panel"
 import {
+  json,
+  mockBoard,
   mockDiscovery,
   mockStatus,
   mount,
@@ -51,7 +53,10 @@ test("discovery tab explains Kubernetes and Docker modes", async () => {
         },
       ],
     }),
-    status: { ...mockStatus(), provider: "kubernetes", farp_hostnames: [] },
+    board: {
+      ...mockBoard(),
+      gateway: { ...mockStatus(), provider: "kubernetes", farp_hostnames: [] },
+    },
   })
   const view = mount(<DiscoveryPanel {...panelProps()} />)
   const mode = await screen.findByRole("region", {
@@ -86,6 +91,56 @@ test("discovery tab explains Kubernetes and Docker modes", async () => {
     "font-mono"
   )
   expect(within(lands).queryByText("Every hostname")).toBeNull()
+})
+
+test("where FARP routes land leaves out detached hostnames", async () => {
+  const b = mockBoard() as Record<string, unknown> & {
+    gateway: { farp_hostnames: string[] }
+  }
+  b.gateway.farp_hostnames = ["api.acme.dev", "gone.acme.dev"]
+  serve({ board: b })
+  const view = mount(<DiscoveryPanel {...panelProps()} />)
+  const landing = await screen.findByRole("region", {
+    name: "Where FARP routes land",
+  })
+  expect(await within(landing).findByText("api.acme.dev")).toBeVisible()
+  expect(within(landing).queryByText("gone.acme.dev")).toBeNull()
+  view.unmount()
+  forgeClient.clear()
+
+  // Only detached ones picked: FARP routes answer on every hostname.
+  b.gateway.farp_hostnames = ["gone.acme.dev"]
+  serve({ board: b })
+  mount(<DiscoveryPanel {...panelProps()} />)
+  const every = await screen.findByRole("region", {
+    name: "Where FARP routes land",
+  })
+  expect(await within(every).findByText("Every hostname")).toBeVisible()
+  expect(within(every).queryByText("gone.acme.dev")).toBeNull()
+})
+
+test("a failed push says why", async () => {
+  serve({
+    write: (w) =>
+      w.path.endsWith("/sync")
+        ? json({
+            state: "failed",
+            generation: 5,
+            restarted: false,
+            restored: 0,
+            message: "Octopus refused billing's registration.",
+          })
+        : undefined,
+  })
+  mount(<DiscoveryPanel {...panelProps()} />)
+  await userEvent.click(
+    await screen.findByRole("button", { name: "Register again" })
+  )
+  await vi.waitFor(() =>
+    expect(toasts.toast.error).toHaveBeenCalledWith(
+      "Octopus refused billing's registration."
+    )
+  )
 })
 
 test("discovery lists services with their state and lets Docker register again", async () => {
@@ -175,8 +230,8 @@ test("loading, denied and failed requests stay distinct on each tab", async () =
   failed.unmount()
   forgeClient.clear()
 
-  // The landing hostnames come from the status; its failure stays in its section.
-  serve({ statusStatus: 500 })
+  // The landing hostnames come from the board; its failure stays in its section.
+  serve({ boardStatus: 500 })
   mount(<DiscoveryPanel {...panelProps()} />)
   expect(
     await screen.findByRole("table", { name: "FARP services" })

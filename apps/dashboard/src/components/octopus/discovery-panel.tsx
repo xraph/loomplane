@@ -1,22 +1,18 @@
 // The Discovery tab: how Octopus learns about services over FARP on this
 // target, what it found, where their routes land and how to opt in.
 import { RefreshCwIcon } from "lucide-react"
-import { toast } from "sonner"
 
-import { messageOf } from "@/client/errors"
 import {
   useOctopusBoard,
   useOctopusDiscovery,
-  useOctopusStatus,
-  useOctopusSync,
 } from "@/client/forge/loomplane/hooks"
 import type {
   DiscoveredService,
   DiscoverySummary,
-  SyncResult,
 } from "@/client/forge/loomplane/types"
-import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
+import { useQuery } from "@/client/hooks"
 import { PanelLoading, ReadFailed } from "@/components/octopus/panel-states"
+import { usePushRoutes } from "@/components/octopus/use-push-routes"
 import { QueryError } from "@/components/query-error"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -28,7 +24,12 @@ import {
 } from "@/components/zero-state"
 import type { CatalogPanelProps } from "@/lib/catalog-kinds"
 import { isSet, relativeTime, useClock } from "@/lib/domains"
-import { discoveryState, farpExample, farpSchemas } from "@/lib/octopus"
+import {
+  discoveryState,
+  farpExample,
+  farpLandings,
+  farpSchemas,
+} from "@/lib/octopus"
 import { useOrganization } from "@/lib/organization"
 import { cn } from "@/lib/utils"
 
@@ -82,25 +83,8 @@ function Discovery({
   discovery,
 }: CatalogPanelProps & { discovery: DiscoverySummary }) {
   const { can } = useOrganization()
-  const invalidate = useInvalidate()
-  const sync = useMutation(useOctopusSync)
+  const sync = usePushRoutes({ projectId, environmentId, resource })
   const push = discovery.mode === "push"
-
-  const registerAgain = async () => {
-    try {
-      const result = (await sync.mutateAsync({
-        path: { projectId, environmentId, resource },
-      })) as SyncResult
-      if (result.state === "failed" && result.message)
-        toast.error(result.message)
-      else if (result.message) toast(result.message)
-    } catch (err) {
-      toast.error(messageOf(err, "Octopus wasn't synced."))
-    }
-    invalidate(useOctopusDiscovery)
-    invalidate(useOctopusBoard)
-    invalidate(useOctopusStatus)
-  }
 
   return (
     <>
@@ -128,8 +112,8 @@ function Discovery({
           <Button
             type="button"
             variant="outline"
-            disabled={sync.isPending}
-            onClick={() => void registerAgain()}
+            disabled={sync.pending}
+            onClick={() => void sync.push()}
           >
             <RefreshCwIcon data-icon="inline-start" aria-hidden />
             Register again
@@ -250,7 +234,7 @@ function ServiceTable({ services }: { services: DiscoveredService[] }) {
   )
 }
 
-/** Landing is where FARP routes land, from the gateway's status. */
+/** Landing is where FARP routes land, from the gateway's board. */
 function Landing({
   projectId,
   environmentId,
@@ -260,17 +244,19 @@ function Landing({
   environmentId: string
   resource: string
 }) {
-  const status = useQuery(useOctopusStatus, {
+  // The board knows which hostnames are still attached; a picked one
+  // that isn't gets no FARP routes, as the server pushes it.
+  const board = useQuery(useOctopusBoard, {
     path: { projectId, environmentId, resource },
   })
-  const hostnames = status.data?.farpHostnames.filter(Boolean) ?? []
+  const hostnames = board.data ? farpLandings(board.data) : []
   return (
     <section
       aria-label="Where FARP routes land"
       className="grid gap-2.5 rounded-[14px] border border-border px-4 py-3.5"
     >
       <h3 className="text-sm font-semibold">Where FARP routes land</h3>
-      {status.data ? (
+      {board.data ? (
         <div className="flex flex-wrap items-center gap-2">
           {hostnames.length > 0 ? (
             hostnames.map((h) => (
@@ -290,11 +276,11 @@ function Landing({
             Change on the Domains tab
           </span>
         </div>
-      ) : status.status === "error" ? (
+      ) : board.status === "error" ? (
         <QueryError
-          error={status.error}
+          error={board.error}
           fallback="Where FARP routes land couldn't be loaded."
-          retry={status.refetch}
+          retry={board.refetch}
         />
       ) : (
         <Skeleton className="h-6 w-48 rounded-md" />

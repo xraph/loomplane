@@ -2,7 +2,7 @@
 // route to Octopus on port 8080, with where FARP routes land and the way
 // to attach or detach one.
 import { PlusIcon } from "lucide-react"
-import { useId, useState } from "react"
+import { useId, useState, type ReactNode } from "react"
 import { toast } from "sonner"
 
 import { messageOf, statusOf } from "@/client/errors"
@@ -63,6 +63,8 @@ import type { CatalogPanelProps } from "@/lib/catalog-kinds"
 import {
   attachedHosts,
   farpHostnamesWith,
+  farpLanding,
+  farpLandingCount,
   gatewayPort,
   gatewayRouteInput,
   manualRoutes,
@@ -199,7 +201,11 @@ function Domains({
                   key={host.hostname}
                   host={host}
                   zoneId={domainRoute(host)?.input.zoneId}
-                  farpOn={board.gateway.farpHostnames.includes(host.hostname)}
+                  farpOn={farpLanding(board, host.hostname)}
+                  farpLast={
+                    farpLanding(board, host.hostname) &&
+                    farpLandingCount(board) === 1
+                  }
                   busy={setFarp.isPending}
                   onFarp={
                     writes ? (on) => void toggleFarp(host, on) : undefined
@@ -250,6 +256,7 @@ function Domains({
           projectId={projectId}
           host={detaching}
           route={domainRoute(detaching)}
+          routesRead={!!routes.data || routes.status === "error"}
           onClose={() => setDetaching(null)}
         />
       )}
@@ -261,6 +268,7 @@ function HostnameRow({
   host,
   zoneId,
   farpOn,
+  farpLast,
   busy,
   onFarp,
   onDetach,
@@ -269,6 +277,8 @@ function HostnameRow({
   /** The hostname's zone, once the domain routes are read. */
   zoneId?: string
   farpOn: boolean
+  /** This is the only hostname FARP routes land on, so it stays on. */
+  farpLast: boolean
   busy: boolean
   /** Turns FARP on or off here, or undefined when the viewer can't. */
   onFarp?: (on: boolean) => void
@@ -305,12 +315,18 @@ function HostnameRow({
         </>
       )}
       <span role="cell" className="flex items-center gap-2">
-        <Switch
-          aria-labelledby={`${ids}-farp`}
-          checked={farpOn}
-          disabled={!onFarp || busy}
-          onCheckedChange={(on) => onFarp?.(on)}
-        />
+        {onFarp && farpLast ? (
+          <Blocked reason="FARP routes have to land somewhere. Turn on another hostname first.">
+            <Switch aria-labelledby={`${ids}-farp`} checked disabled />
+          </Blocked>
+        ) : (
+          <Switch
+            aria-labelledby={`${ids}-farp`}
+            checked={farpOn}
+            disabled={!onFarp || busy}
+            onCheckedChange={(on) => onFarp?.(on)}
+          />
+        )}
         <span id={`${ids}-farp`} className="text-[12.5px] text-foreground/80">
           FARP routes land here
         </span>
@@ -328,27 +344,19 @@ function HostnameRow({
         </Link>
         {onDetach &&
           (manual > 0 ? (
-            // A disabled button gets no pointer events, so the reason
-            // hangs on what wraps it.
-            <Tooltip>
-              <TooltipTrigger
-                delay={0}
-                render={<span tabIndex={0} className="inline-flex" />}
+            <Blocked
+              reason={`Move or delete its ${routeCountLabel(manual)} first.`}
+            >
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                className="text-xs"
+                disabled
               >
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="text-xs"
-                  disabled
-                >
-                  Detach
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>
-                Move or delete its {routeCountLabel(manual)} first.
-              </TooltipContent>
-            </Tooltip>
+                Detach
+              </Button>
+            </Blocked>
           ) : (
             <Button
               type="button"
@@ -365,30 +373,51 @@ function HostnameRow({
   )
 }
 
+/**
+ * Blocked is a disabled control with the reason it can't be used. A
+ * disabled control gets no pointer events, so the reason hangs on what
+ * wraps it.
+ */
+function Blocked({
+  reason,
+  children,
+}: {
+  reason: string
+  children: ReactNode
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        delay={0}
+        render={<span tabIndex={0} className="inline-flex" />}
+      >
+        {children}
+      </TooltipTrigger>
+      <TooltipContent>{reason}</TooltipContent>
+    </Tooltip>
+  )
+}
+
 function DetachDialog({
   projectId,
   host,
   route,
+  routesRead,
   onClose,
 }: {
   projectId: string
   host: HostCard
   /** The domain route to remove, once the domain routes are read. */
   route?: CloudinfraRoute
+  /** The domain routes answered, or failed to: a missing route won't come. */
+  routesRead: boolean
   onClose(): void
 }) {
   const invalidate = useInvalidate()
   const lifecycle = useRouteLifecycle(projectId)
-  const [error, setError] = useState("")
 
   const detach = async () => {
-    if (!route) {
-      setError(
-        "Loomplane couldn't read this domain's route yet. Try again in a moment."
-      )
-      return
-    }
-    setError("")
+    if (!route) return
     try {
       await lifecycle.remove(route)
       invalidate(useOctopusBoard)
@@ -398,7 +427,12 @@ function DetachDialog({
     }
   }
 
-  const shown = error || lifecycle.error
+  // The dialog stays open on a refusal, so the reason shows here.
+  const shown =
+    lifecycle.error ||
+    (!route && routesRead
+      ? "Loomplane couldn't read this domain's route. Try again in a moment."
+      : "")
   return (
     <AlertDialog
       open
@@ -425,7 +459,7 @@ function DetachDialog({
           </AlertDialogCancel>
           <AlertDialogAction
             variant="destructive"
-            disabled={lifecycle.pending}
+            disabled={lifecycle.pending || !route}
             onClick={() => void detach()}
           >
             Detach

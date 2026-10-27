@@ -119,9 +119,14 @@ export function filterBoard(board: Board, source: SourceFilter): HostCard[] {
     .filter((host) => host.routes.length > 0)
 }
 
-/** farpLandings is where FARP routes land, or none for every hostname. */
-function farpLandings(board: Board): string[] {
-  return board.gateway.farpHostnames.filter(Boolean)
+/**
+ * farpLandings is where FARP routes land: the picked hostnames that are
+ * still attached, as the server pushes them to Octopus. None means every
+ * hostname.
+ */
+export function farpLandings(board: Board): string[] {
+  const attached = new Set(attachedHosts(board).map((h) => h.hostname))
+  return board.gateway.farpHostnames.filter((h) => h && attached.has(h))
 }
 
 /**
@@ -318,18 +323,37 @@ export function manualRoutes(host: HostCard): number {
 }
 
 /**
+ * farpLanding is whether FARP routes land on an attached hostname: it's
+ * picked, or nothing is and they land everywhere.
+ */
+export function farpLanding(board: Board, hostname: string): boolean {
+  const landings = farpLandings(board)
+  return landings.length === 0 || landings.includes(hostname)
+}
+
+/**
+ * farpLandingCount is how many attached hostnames FARP routes land on:
+ * every one of them while none is picked.
+ */
+export function farpLandingCount(board: Board): number {
+  return farpLandings(board).length || attachedHosts(board).length
+}
+
+/**
  * farpHostnamesWith is where FARP routes land once hostname is turned on
- * or off: the attached ones already picked, with it added or dropped.
+ * or off. While none is picked they land on every attached hostname, so
+ * turning one off picks all the others; it never widens to every hostname.
  */
 export function farpHostnamesWith(
   board: Board,
   hostname: string,
   on: boolean
 ): string[] {
-  const attached = new Set(attachedHosts(board).map((h) => h.hostname))
-  const kept = board.gateway.farpHostnames.filter(
-    (h) => attached.has(h) && h !== hostname
-  )
+  const landings = farpLandings(board)
+  const base = landings.length
+    ? landings
+    : attachedHosts(board).map((h) => h.hostname)
+  const kept = base.filter((h) => h !== hostname)
   return on ? [...kept, hostname] : kept
 }
 

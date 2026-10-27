@@ -8,6 +8,7 @@ import {
   card,
   domainRoutes,
   here,
+  json,
   mockBoard,
   mount,
   panelProps,
@@ -152,6 +153,87 @@ test("turning FARP on for a hostname adds it to the attached ones", async () => 
   )
 })
 
+test("with no hostname picked every FARP switch is on and turning one off narrows", async () => {
+  const b = board()
+  b.gateway.farp_hostnames = []
+  const writes = serve({ board: b, domainRoutes: domainRoutes() })
+  mount(<DomainsPanel {...panelProps()} />)
+  for (const name of ["acme.dev", "api.acme.dev", "*.acme.dev"])
+    expect(
+      within(await hostRow(name)).getByRole("switch", {
+        name: "FARP routes land here",
+      })
+    ).toBeChecked()
+
+  await userEvent.click(
+    within(await hostRow("api.acme.dev")).getByRole("switch", {
+      name: "FARP routes land here",
+    })
+  )
+  await vi.waitFor(() =>
+    expect(posts(writes).map((w) => w.body)).toEqual([
+      { hostnames: ["acme.dev", "*.acme.dev"], revision: 2 },
+    ])
+  )
+})
+
+test("the last hostname FARP routes land on can't be turned off", async () => {
+  const b = board()
+  // gone.acme.dev isn't attached any more, so only api.acme.dev takes FARP.
+  b.gateway.farp_hostnames = ["api.acme.dev", "gone.acme.dev"]
+  const writes = serve({ board: b, domainRoutes: domainRoutes() })
+  mount(<DomainsPanel {...panelProps()} />)
+  const last = within(await hostRow("api.acme.dev")).getByRole("switch", {
+    name: "FARP routes land here",
+  })
+  expect(last).toBeChecked()
+  expect(last).toHaveAttribute("aria-disabled", "true")
+  await userEvent.click(last)
+  await userEvent.hover(last.parentElement!)
+  expect(
+    await screen.findByText(
+      "FARP routes have to land somewhere. Turn on another hostname first."
+    )
+  ).toBeInTheDocument()
+  expect(posts(writes)).toEqual([])
+  expect(
+    within(await hostRow("acme.dev")).getByRole("switch", {
+      name: "FARP routes land here",
+    })
+  ).not.toBeChecked()
+})
+
+test("a refused detach keeps the dialog open with why", async () => {
+  const b = board()
+  b.hosts = [card("api.acme.dev", [row({ path: "/v1/orders/*" })])]
+  serve({
+    board: b,
+    domainRoutes: domainRoutes(),
+    write: (w) =>
+      w.path.endsWith("/remove")
+        ? json(
+            { message: "The DNS provider refused to delete the record." },
+            422
+          )
+        : undefined,
+  })
+  mount(<DomainsPanel {...panelProps()} />)
+  await userEvent.click(
+    within(await hostRow("api.acme.dev")).getByRole("button", {
+      name: "Detach",
+    })
+  )
+  const confirm = await screen.findByRole("alertdialog")
+  const action = within(confirm).getByRole("button", { name: "Detach" })
+  // Detach waits for the domain route it removes.
+  await vi.waitFor(() => expect(action).toBeEnabled())
+  await userEvent.click(action)
+  expect(await within(confirm).findByRole("alert")).toHaveTextContent(
+    "The DNS provider refused to delete the record."
+  )
+  expect(screen.getByRole("alertdialog")).toBeVisible()
+})
+
 test("detach is blocked while routes use the hostname", async () => {
   const b = board()
   b.hosts = [
@@ -180,7 +262,9 @@ test("detach is blocked while routes use the hostname", async () => {
   expect(confirm).toHaveTextContent(
     "Detach api.acme.dev? Loomplane removes its DNS record and stops serving it."
   )
-  await userEvent.click(within(confirm).getByRole("button", { name: "Detach" }))
+  const action = within(confirm).getByRole("button", { name: "Detach" })
+  await vi.waitFor(() => expect(action).toBeEnabled())
+  await userEvent.click(action)
   await vi.waitFor(() =>
     expect(posts(writes)).toEqual([
       {
@@ -191,6 +275,24 @@ test("detach is blocked while routes use the hostname", async () => {
     ])
   )
   await vi.waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull())
+})
+
+test("detach says so when the domain route can't be found", async () => {
+  const b = board()
+  b.hosts = [card("api.acme.dev", [row({ path: "/v1/orders/*" })])]
+  const writes = serve({ board: b, domainRoutes: [] })
+  mount(<DomainsPanel {...panelProps()} />)
+  await userEvent.click(
+    within(await hostRow("api.acme.dev")).getByRole("button", {
+      name: "Detach",
+    })
+  )
+  const confirm = await screen.findByRole("alertdialog")
+  expect(await within(confirm).findByRole("alert")).toHaveTextContent(
+    "Loomplane couldn't read this domain's route. Try again in a moment."
+  )
+  expect(within(confirm).getByRole("button", { name: "Detach" })).toBeDisabled()
+  expect(posts(writes)).toEqual([])
 })
 
 test("attach previews then applies a gateway route", async () => {
@@ -299,6 +401,31 @@ test("domains empty state and no-zone state", async () => {
     "href",
     "/domains"
   )
+  expect(screen.queryByRole("button", { name: "Attach a domain" })).toBeNull()
+})
+
+test("a zone that isn't verified can't be picked, so it counts as none", async () => {
+  const empty = board()
+  empty.hosts = []
+  serve({
+    board: empty,
+    projectDomains: [
+      {
+        zone_id: "zone_new",
+        name: "acme.shop",
+        mode: "external",
+        verified: false,
+        wildcards: false,
+        hostnames: [],
+      },
+    ],
+  })
+  mount(<DomainsPanel {...panelProps()} />)
+  expect(
+    await screen.findByText(
+      /Your organization has no zones this project can use\./
+    )
+  ).toBeVisible()
   expect(screen.queryByRole("button", { name: "Attach a domain" })).toBeNull()
 })
 

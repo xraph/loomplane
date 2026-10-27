@@ -2,7 +2,6 @@
 // methods it answers and the service it sends to. A new domain is attached
 // through the Domains flow first, then the route lands on it.
 import { useId, useState, type FormEvent } from "react"
-import { toast } from "sonner"
 
 import { messageOf, statusOf } from "@/client/errors"
 import {
@@ -25,6 +24,7 @@ import {
   type HostnameValue,
 } from "@/components/domains/hostname-field"
 import { useRouteLifecycle } from "@/components/domains/use-route-lifecycle"
+import { reportSync } from "@/components/octopus/use-push-routes"
 import { QueryError } from "@/components/query-error"
 import {
   AlertDialog,
@@ -140,13 +140,6 @@ function hostOptions(
     { value: anyHost, label: "Any hostname" },
     { value: attachHost, label: "Attach another domain…" },
   ]
-}
-
-/** report tells the person how the push went once the route is saved. */
-function report(sync: SyncResult | undefined) {
-  if (!sync || sync.state === "applied" || !sync.message) return
-  if (sync.state === "failed") toast.error(`Saved. ${sync.message}`)
-  else toast(`Saved. ${sync.message}`)
 }
 
 export function RouteDialog(props: {
@@ -295,7 +288,7 @@ function RouteForm({
 
   const done = (sync: SyncResult | undefined) => {
     invalidate(useOctopusBoard)
-    report(sync)
+    reportSync(sync, "Saved. ")
     onOpenChange(false)
   }
 
