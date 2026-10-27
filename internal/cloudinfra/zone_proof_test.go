@@ -37,6 +37,9 @@ type proofDNS struct {
 	during func()
 	// block holds GetZone until the caller's context ends.
 	block bool
+	// blockWrite holds a write until the caller's context ends, then
+	// answers as the real adapters do for a write cut short.
+	blockWrite bool
 }
 
 func (a *proofDNS) SupportsDNSRecordOwnership() bool { return a.ownership }
@@ -64,8 +67,12 @@ func (a *proofDNS) ListRecords(context.Context, provider.InfrastructureCredentia
 	}
 	return slices.Clone(a.records), nil
 }
-func (a *proofDNS) UpsertRecord(_ context.Context, _ provider.InfrastructureCredential, req provider.DNSUpsertRequest) (provider.DNSRecord, error) {
+func (a *proofDNS) UpsertRecord(ctx context.Context, _ provider.InfrastructureCredential, req provider.DNSUpsertRequest) (provider.DNSRecord, error) {
 	a.last = req
+	if a.blockWrite {
+		<-ctx.Done()
+		return provider.DNSRecord{}, errors.Join(provider.ErrInfrastructureAmbiguous, ctx.Err())
+	}
 	if a.upsertErr != nil {
 		return provider.DNSRecord{}, a.upsertErr
 	}

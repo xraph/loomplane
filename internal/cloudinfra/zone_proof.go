@@ -39,6 +39,10 @@ var (
 	zoneProofZoneTimeout = 8 * time.Second
 )
 
+// zoneProofWriteTimeout bounds a publish from the page well inside the
+// grace window, so no other check writes the zone while it may still land.
+var zoneProofWriteTimeout = zoneProofCheckEvery - 30*time.Second
+
 // zoneProofSystemUser is who the background check acts as in the audit log.
 const zoneProofSystemUser = "system:zone-proof"
 
@@ -85,10 +89,13 @@ func (z *Zone) proofWriteInFlight(now time.Time) bool {
 // own connection. The attempt is saved before the write, and the receipt
 // before anything treats the proof as published. A write whose answer was
 // lost is settled from the provider's records once its grace window ends.
+// The whole publish has a deadline inside that window.
 // A provider failure is recorded on the zone as ProofPublishError and isn't
 // returned: the zone still exists, and the next check tries again. Only a
 // failed save is returned.
 func (s *Service) publishZoneProof(ctx context.Context, st DomainStore, zone *Zone) error {
+	ctx, cancel := context.WithTimeout(ctx, zoneProofWriteTimeout)
+	defer cancel()
 	now := s.now().UTC()
 	if zone.Mode != "managed" || !zone.hasControlProof() || zone.proofPublished() || !now.Before(zone.ProofExpiresAt) || zone.proofWriteInFlight(now) {
 		return nil
@@ -245,6 +252,9 @@ func (s *Service) proofPublishFailed(ctx context.Context, st DomainStore, zone *
 		zone.ProofPublishAttempted = false
 	}
 	zone.ProofPublishError = proofPublishMessage(zone, err)
+	// A write cut short by its deadline still needs its attempt saved.
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Second)
+	defer cancel()
 	return st.SaveZone(ctx, zone)
 }
 
