@@ -93,14 +93,16 @@ type RoleDef struct {
 func Catalog() []RoleDef {
 	viewer := []Permission{
 		ProjectRead, EnvironmentRead, DeploymentRead, InfrastructureRead, CloudAccountRead, MemberRead,
-		VariableRead, DestinationRead, NetworkRead, BackupRead,
+		VariableRead, DestinationRead, NetworkRead, BackupRead, AIRead,
 	}
 	developer := append(clone(viewer),
 		ProjectCreate, ProjectUpdate, EnvironmentManage, DeploymentCreate, AnalysisRun, VariableManage, GrantPropose,
+		AIEdit, AIToolSecret, AIPublishNonProduction,
 	)
 	admin := append(clone(developer),
 		OrganizationCloudManage, BackupManage, RestoreManage, ProjectDelete, DeploymentApprove, InfrastructureModify, CloudAccountManage, SecretManage, MemberManage,
 		RepositoryConnect, OrganizationVariableManage, DestinationManage, NetworkManage, ExportManage, GrantApprove, GrantRevoke, TrustManage,
+		AIManage,
 	)
 	owner := append(clone(admin), OrganizationAdminister, BackupRetire)
 	return []RoleDef{
