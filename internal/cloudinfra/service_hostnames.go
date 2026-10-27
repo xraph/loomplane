@@ -32,6 +32,7 @@ func (s *Service) ServiceHostnames(ctx context.Context, orgID, projectID, enviro
 	if err != nil {
 		return nil, err
 	}
+	LinkZoneParents(zones)
 	byID := map[string]*Zone{}
 	for _, zone := range zones {
 		byID[zone.ID] = zone

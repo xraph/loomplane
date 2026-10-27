@@ -110,6 +110,7 @@ func (s *Service) DomainOverview(ctx context.Context, p security.Principal) (*Do
 	if err != nil {
 		return nil, err
 	}
+	LinkZoneParents(zones)
 	routes, err := st.OrgRoutes(ctx, p.OrgID)
 	if err != nil {
 		return nil, err
@@ -152,6 +153,8 @@ func (s *Service) ProjectDomains(ctx context.Context, p security.Principal, proj
 	if err != nil {
 		return nil, err
 	}
+	// Linked before the filter: a subdomain's domain may not be granted.
+	LinkZoneParents(zones)
 	zones = slices.DeleteFunc(zones, func(zone *Zone) bool { return !slices.Contains(zone.ProjectIDs, project) })
 	routes, err := st.Routes(ctx, p.OrgID, project)
 	if err != nil {
@@ -188,7 +191,7 @@ func (s *Service) RouteStatus(ctx context.Context, p security.Principal, project
 	if route.Status == "removed" {
 		return RouteStatus{}, ErrNotFound
 	}
-	zone, err := st.Zone(ctx, p.OrgID, route.Input.ZoneID)
+	zone, err := s.linkedZone(ctx, st, p.OrgID, route.Input.ZoneID)
 	if errors.Is(err, ErrNotFound) {
 		zone, err = nil, nil
 	}

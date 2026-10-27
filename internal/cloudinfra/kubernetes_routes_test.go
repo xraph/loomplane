@@ -75,7 +75,9 @@ func (a orderedDNS) DeleteRecord(ctx context.Context, c provider.InfrastructureC
 type kubeRouteStore struct {
 	Store
 	DomainStore
-	zone      *Zone
+	zone *Zone
+	// ancestors are the organization's other zones, such as zone's domain.
+	ancestors []*Zone
 	binding   RouteBinding
 	route     *Route
 	op        RouteOperation
@@ -90,6 +92,16 @@ func (s *kubeRouteStore) WithOperationLock(_ context.Context, key string, run fu
 func (s *kubeRouteStore) Zone(context.Context, string, string) (*Zone, error) {
 	zone := *s.zone
 	return &zone, nil
+}
+func (s *kubeRouteStore) Zones(context.Context, string) ([]*Zone, error) {
+	zone := *s.zone
+	out := make([]*Zone, 0, 1+len(s.ancestors))
+	out = append(out, &zone)
+	for _, ancestor := range s.ancestors {
+		v := *ancestor
+		out = append(out, &v)
+	}
+	return out, nil
 }
 func (s *kubeRouteStore) RouteBindingCloud(context.Context, string, string, string, string) (string, error) {
 	return "", nil
@@ -206,6 +218,46 @@ func TestKubernetesRouteRefusesAddressMismatch(t *testing.T) {
 	kube.status.Addresses = nil
 	if err = svc.ReconcileRoute(t.Context(), "org", st.op.ID, nil); !errors.Is(err, ErrPending) || dns.writes != 0 || st.op.Message != "Waiting for the ingress controller to publish an address." {
 		t.Fatalf("no address yet: %v %q writes=%d", err, st.op.Message, dns.writes)
+	}
+}
+
+// The route runs on app.example.com, which has no proof of its own and is
+// verified through example.com. Execution rechecks that domain.
+func TestReconcileRouteRechecksTheDomainsVerification(t *testing.T) {
+	svc, st, kube, dns := kubernetesRouteFixture(t)
+	now := svc.now()
+	st.zone.Name, st.zone.ProofName, st.zone.ProofValue, st.zone.ProofExpiresAt, st.zone.VerifiedAt = "app.example.com", "", "", time.Time{}, time.Time{}
+	parent := &Zone{ID: "zone_root", OrgID: "org", Name: "example.com", Mode: "external", ProjectIDs: []string{}, VerifiedAt: now, Revision: 1,
+		ProofName: "_loomplane.example.com", ProofValue: "root-proof", ProofExpiresAt: now.Add(24 * time.Hour)}
+	st.ancestors = []*Zone{parent}
+	st.op.Route.Input.Hostname = "api.app.example.com"
+	record, err := routeDNSRecord(st.zone, "api.app.example.com", st.binding.Address, "route_k")
+	if err != nil {
+		t.Fatal(err)
+	}
+	st.op.DesiredRecord = record
+	resolver := perNameResolver{}
+	svc.Resolver = resolver
+	for _, refusal := range []struct {
+		name  string
+		setup func()
+	}{
+		{"record gone", func() {}},
+		{"domain unverified", func() { resolver["_loomplane.example.com"], parent.VerifiedAt = []string{"root-proof"}, time.Time{} }},
+	} {
+		st.op.Status = "pending"
+		refusal.setup()
+		if err = svc.ReconcileRoute(t.Context(), "org", st.op.ID, nil); err != nil {
+			t.Fatal(refusal.name, err)
+		}
+		if st.op.Status != "failed" || len(*kube.log) != 0 || dns.writes != 0 || st.published != 0 {
+			t.Fatalf("%s: ran on the cluster: %+v log=%q writes=%d", refusal.name, st.op, *kube.log, dns.writes)
+		}
+	}
+	parent.VerifiedAt = now
+	st.op.Status = "pending"
+	if err = svc.ReconcileRoute(t.Context(), "org", st.op.ID, nil); !errors.Is(err, ErrPending) || len(*kube.log) == 0 {
+		t.Fatalf("under a verified domain: %v log=%q", err, *kube.log)
 	}
 }
 

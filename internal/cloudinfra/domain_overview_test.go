@@ -424,3 +424,84 @@ func TestRouteByHostnameAndStatus(t *testing.T) {
 		t.Fatal("status of another project's route", err)
 	}
 }
+
+// withSubdomain adds a verified parent.dev granted to docs and a proofless
+// app.parent.dev under it granted to shop, with a ready route on it.
+func withSubdomain(svc *Service, st *overviewStore) *Zone {
+	now := svc.now()
+	parent := &Zone{ID: "zone_parent", OrgID: "org", Name: "parent.dev", Mode: "external", ProjectIDs: []string{"docs"}, VerifiedAt: now, Revision: 1,
+		ProofName: "_loomplane.parent.dev", ProofValue: "proof", ProofExpiresAt: now.Add(24 * time.Hour)}
+	st.zones = append(st.zones, parent, &Zone{ID: "zone_sub", OrgID: "org", Name: "app.parent.dev", Mode: "external", ProjectIDs: []string{"shop"}, Revision: 1})
+	ready := RouteVerification{DNS: true, TLS: true, Backend: true, CheckedAt: now, CertExpires: now.AddDate(0, 2, 0)}
+	st.routes = append(st.routes, &Route{ID: "route_sub", OrgID: "org", ProjectID: "shop", Status: "ready", Verification: ready,
+		Input: RouteInput{ZoneID: "zone_sub", EnvironmentID: "prod", Service: "web", Hostname: "www.app.parent.dev", Port: 8080}, Binding: RouteBinding{ServerID: "srv_1"}})
+	return parent
+}
+
+func TestProjectDomainsReportsInheritedVerification(t *testing.T) {
+	svc, st := overviewFixture()
+	withSubdomain(svc, st)
+	shop, err := svc.ProjectDomains(t.Context(), overviewDev, "shop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(shop) != 2 || shop[0].ZoneID != "zone" || shop[1].ZoneID != "zone_sub" || shop[1].Name != "app.parent.dev" || !shop[1].Verified {
+		t.Fatalf("shop domains: %+v", shop)
+	}
+	if !slices.Equal(hostnames(shop[1].Hostnames), []string{"www.app.parent.dev"}) || shop[1].Hostnames[0].Status.Route != DomainReady {
+		t.Fatalf("subdomain hostnames: %+v", shop[1].Hostnames)
+	}
+	zones, err := svc.ProjectZones(t.Context(), overviewDev, "shop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(zones) != 2 || zones[1].ID != "zone_sub" || !zones[1].Verified {
+		t.Fatalf("project zones: %+v", zones)
+	}
+}
+
+func TestDomainOverviewStateFollowsTheDomain(t *testing.T) {
+	svc, st := overviewFixture()
+	parent := withSubdomain(svc, st)
+	state := func() DomainState {
+		t.Helper()
+		got, err := svc.DomainOverview(t.Context(), overviewAdmin)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, zone := range got.Zones {
+			if zone.Zone.ID == "zone_sub" {
+				return zone.State
+			}
+		}
+		t.Fatal("subdomain missing from the overview")
+		return ""
+	}
+	if got := state(); got != DomainReady {
+		t.Fatalf("subdomain under a verified domain: %s", got)
+	}
+	parent.VerifiedAt = time.Time{}
+	if got := state(); got != DomainAwaitingVerification {
+		t.Fatalf("subdomain under an unverified domain: %s", got)
+	}
+}
+
+func TestRouteStatusAndServiceHostnamesUseInheritedVerification(t *testing.T) {
+	svc, st := overviewFixture()
+	withSubdomain(svc, st)
+	status, err := svc.RouteStatus(t.Context(), overviewDev, "shop", "route_sub")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if status.DNS != DomainReady || status.Certificate != DomainReady || status.Route != DomainReady {
+		t.Fatalf("route status: %+v", status)
+	}
+	got, err := svc.ServiceHostnames(t.Context(), "org", "shop", "prod", "web")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []ServiceHostname{{RouteID: "route_a", ZoneID: "zone", Hostname: "api.acme.dev", Status: "ready"}, {RouteID: "route_sub", ZoneID: "zone_sub", Hostname: "www.app.parent.dev", Status: "ready"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("service hostnames: %+v", got)
+	}
+}

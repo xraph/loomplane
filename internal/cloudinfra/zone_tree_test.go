@@ -236,3 +236,47 @@ func TestLinkedZoneLoadsTheOrganizationsTree(t *testing.T) {
 		t.Fatalf("another org's zone: %v", err)
 	}
 }
+
+func TestVerifyZoneControlNeedsAVerifiedProvingZone(t *testing.T) {
+	root := proven(treeZone("root", "org", "loomplane.com"), "root-proof", time.Time{})
+	app := treeZone("app", "org", "app.loomplane.com")
+	LinkZoneParents([]*Zone{root, app})
+	resolver := perNameResolver{"_loomplane.loomplane.com": {"root-proof"}}
+	svc := NewService(Deps{Resolver: resolver})
+	// A pending proof that public DNS already shows proves nothing until checked.
+	if err := svc.verifyZoneControl(t.Context(), app); !errors.Is(err, ErrConflict) {
+		t.Fatalf("subdomain passed through its domain's pending proof: %v", err)
+	}
+	if err := svc.verifyZoneControl(t.Context(), root); !errors.Is(err, ErrConflict) {
+		t.Fatalf("a domain passed on its pending proof: %v", err)
+	}
+
+	// An own-verified subdomain whose record vanished falls back to its verified domain.
+	proven(app, "app-proof", time.Now())
+	root.VerifiedAt = time.Now()
+	if err := svc.verifyZoneControl(t.Context(), app); err != nil {
+		t.Fatalf("own record gone, domain's record visible: %v", err)
+	}
+	// Its own visible record is enough while the domain isn't verified.
+	root.VerifiedAt = time.Time{}
+	resolver["_loomplane.app.loomplane.com"] = []string{"app-proof"}
+	if err := svc.verifyZoneControl(t.Context(), app); err != nil {
+		t.Fatalf("own record visible: %v", err)
+	}
+	delete(resolver, "_loomplane.app.loomplane.com")
+	if err := svc.verifyZoneControl(t.Context(), app); !errors.Is(err, ErrConflict) {
+		t.Fatalf("own record gone under an unverified domain: %v", err)
+	}
+
+	// Only the nearest verified domain counts, not a further one.
+	deep := treeZone("deep", "org", "x.app.loomplane.com")
+	root.VerifiedAt = time.Now()
+	LinkZoneParents([]*Zone{root, app, deep})
+	if err := svc.verifyZoneControl(t.Context(), deep); !errors.Is(err, ErrConflict) {
+		t.Fatalf("passed on a further domain's record while the nearest one's is gone: %v", err)
+	}
+	resolver["_loomplane.app.loomplane.com"] = []string{"app-proof"}
+	if err := svc.verifyZoneControl(t.Context(), deep); err != nil {
+		t.Fatalf("nearest verified domain's record visible: %v", err)
+	}
+}

@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/xraph/loomplane/internal/cloudinfra"
@@ -28,9 +29,18 @@ func (domainAuth) Require(_ context.Context, p security.Principal, _ security.Pe
 	return security.ErrForbidden
 }
 
-type domainDNS struct{ proof string }
+// domainDNS answers every TXT lookup with proof. during runs once, inside
+// the next lookup, before it answers.
+type domainDNS struct {
+	proof  string
+	during func()
+}
 
 func (r *domainDNS) LookupTXT(context.Context, string) ([]string, error) {
+	if during := r.during; during != nil {
+		r.during = nil
+		during()
+	}
 	return []string{r.proof}, nil
 }
 func (*domainDNS) LookupIPAddr(context.Context, string) ([]net.IPAddr, error) { return nil, nil }
@@ -58,7 +68,21 @@ func TestDomainsCompensationTrustedReceiptDeadline(t *testing.T) {
 	}
 }
 
-func domainsDurableClaims(t *testing.T, cutoverTTL, rollbackTTL int, modes ...string) {
+// domainsRuntime is a Cloud server running proj's web service, and the
+// domains service that routes to it. Zones are each test's to add.
+type domainsRuntime struct {
+	svc      *cloudinfra.Service
+	store    *cloudinfra.PgStore
+	cs       *connections.PgStore
+	sql      *pgx.Conn
+	resolver *domainDNS
+	workflow *domainWorkflow
+	conn     *connections.Connection
+	host     *cloudinfra.Server
+	now      time.Time
+}
+
+func newDomainsRuntime(t *testing.T) *domainsRuntime {
 	t.Helper()
 	clouds, sql, db := cloudSyncDatabase(t)
 	ctx := t.Context()
@@ -90,6 +114,14 @@ func domainsDurableClaims(t *testing.T, cutoverTTL, rollbackTTL int, modes ...st
 		t.Fatal(err)
 	}
 	svc := cloudinfra.NewService(cloudinfra.Deps{Store: store, Clouds: clouds, Authz: domainAuth{}, Resolver: resolver, Workflow: workflow, Adapters: adapters, Connections: &syncAccounts{store: cs}})
+	return &domainsRuntime{svc: svc, store: store, cs: cs, sql: sql, resolver: resolver, workflow: workflow, conn: conn, host: host, now: now}
+}
+
+func domainsDurableClaims(t *testing.T, cutoverTTL, rollbackTTL int, modes ...string) {
+	t.Helper()
+	env := newDomainsRuntime(t)
+	ctx := t.Context()
+	svc, store, cs, sql, resolver, workflow, conn, host, now := env.svc, env.store, env.cs, env.sql, env.resolver, env.workflow, env.conn, env.host, env.now
 	p := security.Principal{OrgID: "org", UserID: "manager"}
 	mode, dnsConnection := "external", ""
 	if len(modes) > 0 {
@@ -713,6 +745,66 @@ func (*controlDNSAdapter) UpsertRecord(_ context.Context, _ provider.Infrastruct
 }
 func TestDomainsManagedHostingRequiresPublicControl(t *testing.T) {
 	domainsDurableClaims(t, 60, 60, "managed")
+}
+
+// app.example.com has no proof of its own and routes through example.com's.
+// AcceptRoute rereads example.com inside its transaction, so the domain
+// losing its verification after the apply's own check still stops the route.
+func TestDomainsSubdomainInheritsVerification(t *testing.T) {
+	env := newDomainsRuntime(t)
+	ctx, svc, p := t.Context(), env.svc, security.Principal{OrgID: "org", UserID: "manager"}
+	domain, err := svc.CreateZone(ctx, p, cloudinfra.ZoneInput{Name: "example.com", Mode: "external", ProjectIDs: []string{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	env.resolver.proof = domain.ProofValue
+	if _, err = svc.VerifyZone(ctx, p, domain.ID); err != nil {
+		t.Fatal(err)
+	}
+	app, err := svc.CreateZone(ctx, p, cloudinfra.ZoneInput{Name: "app.example.com", Mode: "external", ProjectIDs: []string{"proj"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if app.ProofName != "" || app.ProofValue != "" {
+		t.Fatalf("subdomain got a proof of its own: %+v", app)
+	}
+	input := cloudinfra.RouteInput{ZoneID: app.ID, CloudID: "cloud", EnvironmentID: "env", Service: "web", Hostname: "web.app.example.com", Port: 8080}
+	preview, err := svc.PreviewRoute(ctx, p, "proj", input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if preview.DesiredRecord.Name != "web" {
+		t.Fatalf("record relative to the subdomain: %+v", preview.DesiredRecord)
+	}
+	if _, err = svc.ApplyRoute(ctx, p, "proj", preview.ID, cloudinfra.ApplyInput{Review: preview.Review}); err != nil {
+		t.Fatal(err)
+	}
+	input.Hostname = "api.app.example.com"
+	second, err := svc.PreviewRoute(ctx, p, "proj", input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The apply's own lookup of example.com's record succeeds; the domain
+	// is unverified before the acceptance transaction starts.
+	env.resolver.during = func() {
+		if _, execErr := env.sql.Exec(ctx, `UPDATE loomplane_dns_zones SET body=jsonb_set(body,'{verified_at}','"0001-01-01T00:00:00Z"') WHERE name='example.com'`); execErr != nil {
+			t.Error(execErr)
+		}
+	}
+	if _, err = svc.ApplyRoute(ctx, p, "proj", second.ID, cloudinfra.ApplyInput{Review: second.Review}); !errors.Is(err, cloudinfra.ErrNotFound) {
+		t.Fatal("accepted a route under a domain that lost its verification", err)
+	}
+	// With the domain unverified from the start, the apply's own check refuses.
+	if _, err = svc.ApplyRoute(ctx, p, "proj", second.ID, cloudinfra.ApplyInput{Review: second.Review}); !errors.Is(err, cloudinfra.ErrConflict) {
+		t.Fatal("apply's own check passed under an unverified domain", err)
+	}
+	if _, err = svc.PreviewRoute(ctx, p, "proj", input); !errors.Is(err, cloudinfra.ErrNotFound) {
+		t.Fatal("previewed under an unverified domain", err)
+	}
+	var claims int
+	if err = env.sql.QueryRow(ctx, `SELECT count(*) FROM loomplane_domain_routes`).Scan(&claims); err != nil || claims != 1 || env.workflow.routes != 1 {
+		t.Fatalf("routes accepted: %d queued %d %v", claims, env.workflow.routes, err)
+	}
 }
 
 // A composed catalog component on a Cloud server takes a route on a port its

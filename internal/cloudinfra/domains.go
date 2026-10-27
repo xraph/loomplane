@@ -159,11 +159,18 @@ func (s *Service) CreateZone(ctx context.Context, p security.Principal, in ZoneI
 	if err != nil {
 		return nil, err
 	}
+	zones, err := st.Zones(ctx, p.OrgID)
+	if err != nil {
+		return nil, err
+	}
+	// A subdomain is verified through its domain, so it gets no proof of
+	// its own: nothing is published for it or checked in the background.
+	ownProof := nearestAncestor(name, p.OrgID, zones) == nil
 	var zone *Zone
 	if in.Mode == "managed" {
-		zone, err = s.createManagedZone(ctx, p, name, in.ConnectionID, in.ProjectIDs)
+		zone, err = s.createManagedZone(ctx, p, name, in.ConnectionID, in.ProjectIDs, ownProof)
 	} else {
-		zone, err = s.externalZone(ctx, st, p, name, in)
+		zone, err = s.externalZone(ctx, st, p, name, in, ownProof)
 	}
 	if err != nil {
 		return nil, err
@@ -193,9 +200,10 @@ func zoneProjects(ctx context.Context, st DomainStore, org string, projectIDs []
 }
 
 // createManagedZone builds a zone in the most specific zone the connection's
-// DNS provider hosts. It waits on the TXT proof like an external zone. The
-// caller stores it, then publishes the proof with publishZoneProof.
-func (s *Service) createManagedZone(ctx context.Context, p security.Principal, name, connectionID string, projectIDs []string) (*Zone, error) {
+// DNS provider hosts. With ownProof it waits on its own TXT proof like an
+// external zone, and the caller stores it, then publishes the proof with
+// publishZoneProof. Without, it is verified through its domain.
+func (s *Service) createManagedZone(ctx context.Context, p security.Principal, name, connectionID string, projectIDs []string, ownProof bool) (*Zone, error) {
 	st, err := s.domainStore()
 	if err != nil {
 		return nil, err
@@ -246,13 +254,18 @@ func (s *Service) createManagedZone(ctx context.Context, p security.Principal, n
 	}
 	zone.ProviderZone = current
 	zone.Provider, zone.AccountID, zone.ConnectionGeneration = conn.Cloud, cred.AccountID, conn.Generation
+	if !ownProof {
+		return zone, nil
+	}
 	if proofErr := s.renewZoneProof(zone); proofErr != nil {
 		return nil, proofErr
 	}
 	return zone, nil
 }
 
-func (s *Service) externalZone(ctx context.Context, st DomainStore, p security.Principal, name string, in ZoneInput) (*Zone, error) {
+// externalZone builds a zone whose DNS its owner runs. With ownProof it
+// waits on its own TXT proof; without, it is verified through its domain.
+func (s *Service) externalZone(ctx context.Context, st DomainStore, p security.Principal, name string, in ZoneInput, ownProof bool) (*Zone, error) {
 	if err := zoneProjects(ctx, st, p.OrgID, in.ProjectIDs); err != nil {
 		return nil, err
 	}
@@ -264,6 +277,9 @@ func (s *Service) externalZone(ctx context.Context, st DomainStore, p security.P
 		return nil, ErrInvalid
 	}
 	zone := &Zone{ID: id, OrgID: p.OrgID, Name: name, Mode: "external", ProjectIDs: append([]string{}, in.ProjectIDs...), Revision: 1}
+	if !ownProof {
+		return zone, nil
+	}
 	if proofErr := s.renewZoneProof(zone); proofErr != nil {
 		return nil, proofErr
 	}
@@ -291,13 +307,24 @@ func (s *Service) VerifyZone(ctx context.Context, p security.Principal, id strin
 }
 
 // verifyZoneControl rechecks a zone before a route uses it: the zone's own
-// hosting, then the public TXT record of the zone whose proof applies,
-// which for a subdomain may be its domain's.
+// hosting, then a public TXT record of a zone already checked against it.
+// That is the zone's own record if the zone is verified and the record is
+// still there, else the record of its nearest verified domain. A proof that
+// is only pending never counts, even when public DNS shows it.
 func (s *Service) verifyZoneControl(ctx context.Context, zone *Zone) error {
 	if err := s.verifyZoneHosting(ctx, zone); err != nil {
 		return err
 	}
-	return s.verifyZoneProof(ctx, zone.proofZone())
+	err := ErrConflict
+	if zone.ownVerified() {
+		if err = s.verifyZoneProof(ctx, zone); err == nil {
+			return nil
+		}
+	}
+	if domain := zone.verifiedAncestor(); domain != nil {
+		return s.verifyZoneProof(ctx, domain)
+	}
+	return err
 }
 
 // verifyOwnZoneControl is verifyZoneControl against the zone's own proof
@@ -488,6 +515,8 @@ func (s *Service) ProjectZones(ctx context.Context, p security.Principal, projec
 	if err != nil {
 		return nil, err
 	}
+	// Linked before the filter: a subdomain's domain may not be granted.
+	LinkZoneParents(zones)
 	out := []ProjectZone{}
 	for _, zone := range zones {
 		if slices.Contains(zone.ProjectIDs, project) {

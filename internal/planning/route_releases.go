@@ -51,13 +51,7 @@ func (s *PgStore) ProjectZones(ctx context.Context, org, project string) ([]clou
 	if err != nil {
 		return nil, err
 	}
-	out := []cloudinfra.ProjectZone{}
-	for _, z := range zones {
-		if slices.Contains(z.ProjectIDs, project) && !z.VerifiedAt.IsZero() {
-			out = append(out, cloudinfra.ProjectZone{ID: z.ID, Name: z.Name, Mode: z.Mode, Verified: true})
-		}
-	}
-	return out, nil
+	return cloudinfra.VerifiedProjectZones(zones, project), nil
 }
 
 func (s *Service) projectZones(ctx context.Context, plan *Plan) ([]cloudinfra.ProjectZone, error) {
