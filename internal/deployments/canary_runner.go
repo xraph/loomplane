@@ -552,21 +552,8 @@ func (r *Runner) settleCanary(ctx context.Context, d *Deployment, reason string,
 		return nil
 	}
 	_, err := r.changeCanary(ctx, d.OrgID, d.ID, func(d *Deployment) error {
-		c := d.Canary
-		switch {
-		case c.Status == CanaryPromoting:
-			c.Status = CanaryPromoteFailed
-		case c.Status != CanaryPending && c.Status != CanaryRamping && c.Status != CanaryReverting:
+		if !settleFailedCanary(d, reason, replace) {
 			return errCanarySettled
-		case slices.ContainsFunc(c.Services, func(svc CanaryService) bool { return stillUp(d, svc) }):
-			c.Status = CanaryRevertFailed
-		case slices.ContainsFunc(c.Services, func(svc CanaryService) bool { return promoted(d, svc) }):
-			c.Status, c.Weight = CanaryPromoteFailed, 0
-		default:
-			c.Status, c.Weight = CanaryRolledBack, 0
-		}
-		if replace || c.Reason == "" {
-			c.Reason = reason
 		}
 		return nil
 	})
@@ -574,4 +561,55 @@ func (r *Runner) settleCanary(ctx context.Context, d *Deployment, reason string,
 		return nil
 	}
 	return err
+}
+
+// settleFailedCanary ends d's canary as its failed deployment leaves it,
+// from its services and steps as they are: revert_failed while a
+// candidate is still up beside a baseline, promote_failed once any service
+// was promoted or a promotion was under way, and rolled_back otherwise.
+// replace sets reason over one the canary has. It reports false, and
+// changes nothing, for a canary that already settled. It reads the steps,
+// so it runs before failFinishedSteps marks them.
+func settleFailedCanary(d *Deployment, reason string, replace bool) bool {
+	c := d.Canary
+	if c == nil {
+		return false
+	}
+	switch {
+	case c.Status == CanaryPromoting:
+		c.Status = CanaryPromoteFailed
+	case c.Status != CanaryPending && c.Status != CanaryRamping && c.Status != CanaryReverting:
+		return false
+	case slices.ContainsFunc(c.Services, func(svc CanaryService) bool { return stillUp(d, svc) }):
+		c.Status = CanaryRevertFailed
+	case slices.ContainsFunc(c.Services, func(svc CanaryService) bool { return promoted(d, svc) }):
+		c.Status, c.Weight = CanaryPromoteFailed, 0
+	default:
+		c.Status, c.Weight = CanaryRolledBack, 0
+	}
+	if replace || c.Reason == "" {
+		c.Reason = reason
+	}
+	return true
+}
+
+// failFinishedSteps marks the steps a failed deployment leaves: a pending
+// one skipped, and a ramping one, whose canary the failure ended, failed
+// with reason at at. It returns the indexes of the steps it changed.
+func failFinishedSteps(steps []Step, reason string, at time.Time) []int {
+	changed := make([]int, 0, len(steps))
+	for i := range steps {
+		s := &steps[i]
+		switch s.Status {
+		case StepPending:
+			s.Status, s.Message = StepSkipped, "Skipped after an earlier step failed"
+		case StepRamping:
+			finished := at
+			s.Status, s.Message, s.FinishedAt = StepFailed, reason, &finished
+		default:
+			continue
+		}
+		changed = append(changed, i)
+	}
+	return changed
 }
