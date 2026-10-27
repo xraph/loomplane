@@ -428,3 +428,44 @@ func TestFeaturesComeFromConfig(t *testing.T) {
 		}
 	}
 }
+
+func TestCheckRouteRefusesKindsOfAnOffFeature(t *testing.T) {
+	kinds := recipestest.Registry(t)
+	if err := kinds.Register(recipestest.Featured()); err != nil {
+		t.Fatal(err)
+	}
+	check := func(features map[string]bool) (*httptest.ResponseRecorder, int) {
+		t.Helper()
+		prober := &recordingProber{report: catalogconnect.Report{Version: "16.4"}}
+		svc := catalogconnect.NewService(&endpointStore{rows: map[string]catalogconnect.Endpoint{}}, endpointSecrets{}, secretManagers{})
+		ext := &Extension{
+			endpoints:      svc,
+			endpointChecks: &catalogconnect.Checker{Endpoints: svc, Probers: map[string]catalogconnect.Prober{"postgres": prober}},
+			endpointDialer: &checkDialer{clouds: map[string]string{"conn_server": connections.Server}},
+			catalogKinds:   kinds,
+			features:       features,
+			checkLimit:     newCheckLimiter(100, 100),
+		}
+		r := forge.NewRouter()
+		if err := ext.routes(r, nil); err != nil {
+			t.Fatal(err)
+		}
+		body := `{"engine":"postgres","dsn":"postgres://u:p@db.example:5432/app?sslmode=require","target":"conn_server","kind":"featured","dependency":"postgres"}`
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/v1/catalog/endpoints/checks", strings.NewReader(body))
+		req.Header.Set("Content-Type", "application/json")
+		req = req.WithContext(security.WithPrincipal(req.Context(), security.Principal{OrgID: "org", UserID: "admin"}))
+		out := httptest.NewRecorder()
+		r.ServeHTTP(out, req)
+		return out, len(prober.reqs)
+	}
+	for _, features := range []map[string]bool{nil, {recipes.FeatureAI: false}} {
+		out, probes := check(features)
+		if out.Code != http.StatusUnprocessableEntity || probes != 0 || !strings.Contains(out.Body.String(), `no catalog kind \"featured\"`) {
+			t.Errorf("features %v: %d %s (probes %d)", features, out.Code, out.Body.String(), probes)
+		}
+	}
+	out, probes := check(map[string]bool{recipes.FeatureAI: true})
+	if out.Code != http.StatusOK || probes != 1 {
+		t.Fatalf("AI on: %d %s (probes %d)", out.Code, out.Body.String(), probes)
+	}
+}

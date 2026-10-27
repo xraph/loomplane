@@ -143,8 +143,10 @@ func (e *Extension) checkEndpoint(c forge.Context, p security.Principal, in cata
 	if kinds == nil {
 		kinds = recipes.Default()
 	}
+	// A kind of a server feature that's off is refused as unknown, the
+	// way the catalog list leaves it out.
 	kind, ok := kinds.Kind(in.Kind)
-	if !ok {
+	if !ok || kind.Feature != "" && !e.features[kind.Feature] {
 		return catalogconnect.CheckResult{}, fmt.Errorf("%w: Loomplane has no catalog kind %q", catalogconnect.ErrInvalid, in.Kind)
 	}
 	i := slices.IndexFunc(kind.Dependencies, func(d recipes.Dependency) bool { return d.Name == in.Dependency })

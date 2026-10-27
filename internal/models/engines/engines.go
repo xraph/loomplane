@@ -24,7 +24,7 @@ type Release struct {
 var releases = []Release{
 	{Engine: registry.EngineVLLM, Version: "0.31", Product: "0.31.0"},
 	{Engine: registry.EngineTEI, Version: "1.9", Product: "1.9.4"},
-	{Engine: registry.EngineLlamaCPP, Version: "b11580", Product: "b11580"},
+	{Engine: registry.EngineLlamaCPP, Version: "11580", Product: "b11580"},
 }
 
 // Releases returns the pinned release of every engine.

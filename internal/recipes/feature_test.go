@@ -1,6 +1,7 @@
 package recipes_test
 
 import (
+	"slices"
 	"strings"
 	"testing"
 
@@ -37,14 +38,24 @@ func TestFeatureNameIsValidated(t *testing.T) {
 }
 
 // TestExistingKindsHaveNoFeature checks that every kind built into
-// Loomplane today is planned whatever the server's features are.
+// Loomplane before the AI section is planned whatever the server's
+// features are. The model kinds belong to AI, and only they do.
 func TestExistingKindsHaveNoFeature(t *testing.T) {
+	var ai []string
 	for _, info := range recipes.Default().Kinds() {
+		if info.Feature == recipes.FeatureAI {
+			ai = append(ai, info.Name)
+			continue
+		}
 		if info.Feature != "" {
 			t.Errorf("%s belongs to feature %q", info.Name, info.Feature)
 		}
 		if k, ok := recipes.Default().Kind(info.Name); ok && k.Feature != "" {
 			t.Errorf("kind %s belongs to feature %q", k.Name, k.Feature)
 		}
+	}
+	slices.Sort(ai)
+	if want := slices.Sorted(slices.Values(recipes.ModelKinds())); !slices.Equal(ai, want) {
+		t.Errorf("AI kinds = %v, want the model kinds %v", ai, want)
 	}
 }

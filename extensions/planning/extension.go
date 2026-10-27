@@ -208,7 +208,7 @@ func (e *Extension) Register(fapp forge.App) error {
 
 	pg := pgdriver.Unwrap(db)
 	log := e.Logger()
-	catalog := providers.Registry(e.cfg.Providers.Paused...)
+	catalog := providers.RegistryFor(e.features, e.cfg.Providers.Paused...)
 	metrics := telemetry.New(fapp.Metrics())
 	auditor := projectsext.NewAuditor(audit, e.cfg.Identity.AppID, log)
 	prj := projects.NewPgStore(pg)

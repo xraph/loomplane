@@ -48,12 +48,20 @@ var builtinKinds = []string{"postgres", "mysql", "mariadb", "redis", "valkey"}
 
 // Catalog returns the built-in targets, in the order a person choosing one
 // should see them. The server and Kubernetes targets also offer every kind
-// registered in internal/recipes that runs on them.
+// registered in internal/recipes that runs on them, except the kinds of a
+// server feature, which Catalog has off.
 func Catalog() []provider.Provider {
-	return catalogWith(recipes.Default())
+	return CatalogFor(nil)
 }
 
-func catalogWith(kinds *recipes.Registry) []provider.Provider {
+// CatalogFor is Catalog on a server whose features named true in features
+// are on, such as recipes.FeatureAI. A kind of a feature that's off isn't
+// offered, as planning refuses it.
+func CatalogFor(features map[string]bool) []provider.Provider {
+	return catalogWith(recipes.Default(), features)
+}
+
+func catalogWith(kinds *recipes.Registry, features map[string]bool) []provider.Provider {
 	all := []provider.Provider{
 		{
 			Name: "vercel", Title: "Vercel", Cloud: "vercel",
@@ -282,7 +290,7 @@ func catalogWith(kinds *recipes.Registry) []provider.Provider {
 		case "vercel":
 			all[i].Infrastructure = vercel.InfrastructureCapabilities()
 		case "server", "kubernetes":
-			all[i].Provisions = append(all[i].Provisions, registeredProvisions(kinds, all[i].Cloud)...)
+			all[i].Provisions = append(all[i].Provisions, registeredProvisions(kinds, features, all[i].Cloud)...)
 		}
 	}
 	return all
@@ -290,11 +298,15 @@ func catalogWith(kinds *recipes.Registry) []provider.Provider {
 
 // registeredProvisions describes the registered kinds, other than the five
 // built-in engines, that run on the cloud. A dependency-only kind is only
-// provisioned for another kind, so it isn't offered on its own.
-func registeredProvisions(kinds *recipes.Registry, cloud string) []provider.Provisions {
+// provisioned for another kind, so it isn't offered on its own, and a kind
+// of a feature that's off isn't offered at all.
+func registeredProvisions(kinds *recipes.Registry, features map[string]bool, cloud string) []provider.Provisions {
 	var out []provider.Provisions
 	for _, info := range kinds.Kinds() {
 		if slices.Contains(builtinKinds, info.Name) || !slices.Contains(info.Targets, cloud) || info.Placement == recipes.PlacementDependency {
+			continue
+		}
+		if info.Feature != "" && !features[info.Feature] {
 			continue
 		}
 		out = append(out, provider.Provisions{
@@ -323,10 +335,16 @@ func Pause(p *provider.Provider) {
 	p.Available, p.Note = false, PausedNote
 }
 
-// Registry returns a registry of the catalog.
-// Any named in paused are for review only.
+// Registry returns a registry of the catalog, with every server feature
+// off. Any named in paused are for review only.
 func Registry(paused ...string) *provider.Registry {
-	all := Catalog()
+	return RegistryFor(nil, paused...)
+}
+
+// RegistryFor is Registry on a server whose features named true in
+// features are on.
+func RegistryFor(features map[string]bool, paused ...string) *provider.Registry {
+	all := CatalogFor(features)
 	for i := range all {
 		if slices.Contains(paused, all[i].Name) {
 			Pause(&all[i])

@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/xraph/loomplane/internal/manageddb"
+	"github.com/xraph/loomplane/internal/recipes"
 	"github.com/xraph/loomplane/internal/recipes/recipestest"
 	"github.com/xraph/loomplane/pkg/provider"
 )
@@ -190,7 +191,7 @@ func TestServerProvisionsKeepBuiltInOrderThenRegisteredKinds(t *testing.T) {
 		t.Fatalf("default registry changed the server provisions: %+v", got)
 	}
 
-	got = provisionsOf(t, catalogWith(recipestest.Registry(t)), "server")
+	got = provisionsOf(t, catalogWith(recipestest.Registry(t), nil), "server")
 	if len(got) != 7 || !reflect.DeepEqual(got[:5], builtIn) {
 		t.Fatalf("built-in provisions moved or changed: %+v", got)
 	}
@@ -210,12 +211,12 @@ func TestKubernetesProvisionsAcceptRegisteredKinds(t *testing.T) {
 		t.Fatalf("default registry changed the Kubernetes provisions: %+v", got)
 	}
 
-	got = provisionsOf(t, catalogWith(recipestest.Registry(t)), "kubernetes")
+	got = provisionsOf(t, catalogWith(recipestest.Registry(t), nil), "kubernetes")
 	if len(got) != 3 || !reflect.DeepEqual(got[0], first) || got[2].Kind != "sample" || got[2].Creates != "Sample catalog service" {
 		t.Fatalf("Kubernetes provisions: %+v", got)
 	}
 	// Managed clouds don't gain registered kinds.
-	for _, p := range catalogWith(recipestest.Registry(t)) {
+	for _, p := range catalogWith(recipestest.Registry(t), nil) {
 		if p.Cloud == "server" || p.Cloud == "kubernetes" {
 			continue
 		}
@@ -225,7 +226,7 @@ func TestKubernetesProvisionsAcceptRegisteredKinds(t *testing.T) {
 			}
 		}
 	}
-	if _, err := provider.NewRegistry(catalogWith(recipestest.Registry(t))...); err != nil {
+	if _, err := provider.NewRegistry(catalogWith(recipestest.Registry(t), nil)...); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -235,7 +236,7 @@ func TestServerProvisionsSkipDependencyOnlyKinds(t *testing.T) {
 	if err := kinds.Register(recipestest.Graph()); err != nil {
 		t.Fatal(err)
 	}
-	all := catalogWith(kinds)
+	all := catalogWith(kinds, nil)
 	for _, name := range []string{"server", "kubernetes"} {
 		got := provisionsOf(t, all, name)
 		if !slices.ContainsFunc(got, func(p provider.Provisions) bool { return p.Kind == "sample" }) {
@@ -243,6 +244,74 @@ func TestServerProvisionsSkipDependencyOnlyKinds(t *testing.T) {
 		}
 		if slices.ContainsFunc(got, func(p provider.Provisions) bool { return p.Kind == "graph" }) {
 			t.Fatalf("%s offers a dependency-only kind: %+v", name, got)
+		}
+	}
+}
+
+func TestProvisionsHideKindsOfAnOffFeature(t *testing.T) {
+	kinds := recipestest.Registry(t)
+	if err := kinds.Register(recipestest.Featured()); err != nil {
+		t.Fatal(err)
+	}
+	offers := func(got []provider.Provisions, kind string) bool {
+		return slices.ContainsFunc(got, func(p provider.Provisions) bool { return p.Kind == kind })
+	}
+	for _, features := range []map[string]bool{nil, {recipes.FeatureAI: false}, {"other": true}} {
+		all := catalogWith(kinds, features)
+		for _, name := range []string{"server", "kubernetes"} {
+			got := provisionsOf(t, all, name)
+			if offers(got, "featured") {
+				t.Errorf("features %v: %s offers a kind of an off feature", features, name)
+			}
+			if !offers(got, "sample") {
+				t.Errorf("features %v: %s lost the sample kind", features, name)
+			}
+		}
+	}
+	all := catalogWith(kinds, map[string]bool{recipes.FeatureAI: true})
+	for _, name := range []string{"server", "kubernetes"} {
+		if got := provisionsOf(t, all, name); !offers(got, "featured") || !offers(got, "sample") {
+			t.Errorf("AI on: %s provisions %+v", name, got)
+		}
+	}
+}
+
+func TestModelKindsAreOfferedOnlyWithAI(t *testing.T) {
+	models := recipes.ModelKinds()
+	modelOffers := func(all []provider.Provider, name string) []string {
+		var out []string
+		for _, offer := range provisionsOf(t, all, name) {
+			if recipes.IsModelKind(offer.Kind) {
+				out = append(out, offer.Kind)
+			}
+		}
+		slices.Sort(out)
+		return out
+	}
+	for _, all := range [][]provider.Provider{Catalog(), CatalogFor(nil), CatalogFor(map[string]bool{recipes.FeatureAI: false})} {
+		for _, name := range []string{"server", "kubernetes"} {
+			if got := modelOffers(all, name); len(got) != 0 {
+				t.Errorf("AI off: %s offers %v", name, got)
+			}
+		}
+	}
+	on := CatalogFor(map[string]bool{recipes.FeatureAI: true})
+	for _, name := range []string{"server", "kubernetes"} {
+		if got, want := modelOffers(on, name), slices.Sorted(slices.Values(models)); !slices.Equal(got, want) {
+			t.Errorf("AI on: %s offers %v, want %v", name, got, want)
+		}
+	}
+	for _, features := range []map[string]bool{nil, {recipes.FeatureAI: true}} {
+		r := RegistryFor(features, "server")
+		p, err := r.Get("server")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if p.Available {
+			t.Errorf("features %v: paused server is available", features)
+		}
+		if _, ok := p.Provisioning(recipes.ModelTEIKind); ok != features[recipes.FeatureAI] {
+			t.Errorf("features %v: server provisions %s = %v", features, recipes.ModelTEIKind, ok)
 		}
 	}
 }
