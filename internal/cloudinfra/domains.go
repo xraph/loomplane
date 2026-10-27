@@ -317,6 +317,8 @@ func (s *Service) verifyZoneControl(ctx context.Context, zone *Zone) error {
 	}
 	err := ErrConflict
 	if zone.ownVerified() {
+		// Any failure here, a transient DNS error included, deliberately
+		// falls over to the verified domain's record below.
 		if err = s.verifyZoneProof(ctx, zone); err == nil {
 			return nil
 		}

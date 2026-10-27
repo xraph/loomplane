@@ -365,6 +365,38 @@ func TestDatabaseGatewayDomainNarrowsToRouteZones(t *testing.T) {
 	}
 }
 
+// A subdomain reads verified through its domain, so a project granted
+// both sees both. The gateway stays on the domain, as it did when the
+// subdomain's own proof was never verified.
+func TestDatabaseGatewayDomainPrefersTheDomainOverItsSubdomains(t *testing.T) {
+	zones := []cloudinfra.ProjectZone{{ID: "zone_app", Name: "app.example.com", Verified: true}, {ID: "zone_root", Name: "Example.com.", Verified: true}, {ID: "zone_eu", Name: "x.eu.example.com", Verified: true}}
+	r := dbgwCompute(t, dbgwManifest, zones)
+	if len(r.Problems) > 0 {
+		t.Fatalf("problems: %+v", r.Problems)
+	}
+	if gw := action(t, r, "service:db-gateway"); gw.Service.DatabaseGateway.Suffix != "us-east1.db.example.com" {
+		t.Fatalf("suffix = %s", gw.Service.DatabaseGateway.Suffix)
+	}
+	// Two separate domains are still ambiguous, subdomain or not.
+	f := finding(t, dbgwCompute(t, dbgwManifest, slices.Concat(zones, []cloudinfra.ProjectZone{{ID: "zone_org", Name: "example.org", Verified: true}})).Problems, "db-gateway-domain-ambiguous")
+	if !strings.Contains(f.Message, "app.example.com, example.com, example.org, x.eu.example.com") {
+		t.Fatalf("ambiguous finding: %+v", f)
+	}
+	// A lookalike isn't under example.com.
+	finding(t, dbgwCompute(t, dbgwManifest, []cloudinfra.ProjectZone{{ID: "zone_root", Name: "example.com", Verified: true}, {ID: "zone_like", Name: "notexample.com", Verified: true}}).Problems, "db-gateway-domain-ambiguous")
+	// Routes still pick first: routing only through the subdomain keeps the gateway there.
+	in := dbgwInput(t, dbgwManifest, zones)
+	in.Routes = []cloudinfra.Route{{ID: "route", Input: cloudinfra.RouteInput{ZoneID: "zone_app", Service: "api", Hostname: "api.app.example.com"}}}
+	if gw := action(t, Compute(in), "service:db-gateway"); gw.Service.DatabaseGateway.Suffix != "us-east1.db.app.example.com" {
+		t.Fatalf("routed suffix = %s", gw.Service.DatabaseGateway.Suffix)
+	}
+	// Routes through the domain and a subdomain collapse to the domain.
+	in.Routes = append(in.Routes, cloudinfra.Route{ID: "route2", Input: cloudinfra.RouteInput{ZoneID: "zone_root", Service: "web", Hostname: "example.com"}})
+	if gw := action(t, Compute(in), "service:db-gateway"); gw.Service.DatabaseGateway.Suffix != "us-east1.db.example.com" {
+		t.Fatalf("routed through both, suffix = %s", gw.Service.DatabaseGateway.Suffix)
+	}
+}
+
 func TestDatabaseGatewayLabels(t *testing.T) {
 	for name, ok := range map[string]bool{"db": true, "orders-2": true, "my_db": false, "db-": false, "a--b": false, "Orders": false, strings.Repeat("a", 41): false} {
 		if err := dbGatewayLabel(name); (err == nil) != ok {
