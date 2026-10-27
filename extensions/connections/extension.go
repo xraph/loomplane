@@ -30,6 +30,7 @@ import (
 	"github.com/xraph/loomplane/internal/clouds/vercel"
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/connections"
+	"github.com/xraph/loomplane/internal/issuer"
 	"github.com/xraph/loomplane/internal/notifications"
 	"github.com/xraph/loomplane/internal/plugins"
 	"github.com/xraph/loomplane/internal/security"
@@ -46,7 +47,15 @@ type Extension struct {
 	cfg     config.Config
 	plugins *plugins.Set
 	svc     *connections.Service
+	issuer  *issuer.Service
+	// rotating is closed once the startup key rotation is done, and
+	// stopRotating cuts it short.
+	rotating     chan struct{}
+	stopRotating context.CancelFunc
 }
+
+// startupRotateTimeout bounds the key rotation at startup.
+const startupRotateTimeout = time.Minute
 
 // New returns the extension.
 func New(cfg config.Config, plugs *plugins.Set) *Extension {
@@ -100,14 +109,22 @@ func (e *Extension) Register(fapp forge.App) error {
 	}
 	secrets := connections.NewVaultSecrets(secret.NewService(vaultpg.New(db), enc, secret.WithAppID(connections.VaultAppID)))
 	log := e.Logger()
+	// Loomplane's own OpenID Connect issuer, for keyless connections. Its
+	// private keys share the credentials' key but live under a Vault app
+	// of their own.
+	pg := pgdriver.Unwrap(db)
+	e.issuer = issuer.New(strings.TrimRight(e.cfg.PublicURL, "/"), e.cfg.Environment, issuer.NewPgKeyStore(pg),
+		connections.NewVaultSecretsFor(secret.NewService(vaultpg.New(db), enc, secret.WithAppID(issuer.VaultAppID)), issuer.VaultAppID), time.Now)
 	// The clouds that can be signed in to check and sign in through the
-	// same client, so both reach the same endpoint.
-	gcpClient, vercelClient := gcp.New(e.cfg.Clouds.GoogleEndpoint), vercel.New(e.cfg.Clouds.VercelEndpoint)
-	doClient, azureClient := digitalocean.New(e.cfg.Clouds.DigitalOceanEndpoint), azure.New(e.cfg.Clouds.AzureEndpoint)
+	// same client, so both reach the same endpoint. Those that connect
+	// keylessly mint their tokens with the issuer.
+	gcpClient, vercelClient := gcp.New(e.cfg.Clouds.GoogleEndpoint).WithMinter(e.issuer), vercel.New(e.cfg.Clouds.VercelEndpoint)
+	doClient, azureClient := digitalocean.New(e.cfg.Clouds.DigitalOceanEndpoint), azure.New(e.cfg.Clouds.AzureEndpoint).WithMinter(e.issuer)
+	awsClient := aws.New(e.cfg.Clouds.AWSEndpoint).WithMinter(e.issuer)
 	checkers := map[string]connections.Checker{
 		connections.GCP:          connections.GCPChecker{Client: gcpClient},
 		connections.Vercel:       connections.VercelChecker{Client: vercelClient},
-		connections.AWS:          connections.AWSChecker{Client: aws.New(e.cfg.Clouds.AWSEndpoint)},
+		connections.AWS:          connections.AWSChecker{Client: awsClient},
 		connections.Render:       connections.RenderChecker{Client: render.New(e.cfg.Clouds.RenderEndpoint)},
 		connections.DigitalOcean: connections.DigitalOceanChecker{Client: doClient},
 		connections.Azure:        connections.AzureChecker{Client: azureClient},
@@ -125,7 +142,7 @@ func (e *Extension) Register(fapp forge.App) error {
 			checkers[p.Cloud()] = connections.PluginChecker{Client: p.Client}
 		}
 	}
-	store := connections.NewPgStore(pgdriver.Unwrap(db))
+	store := connections.NewPgStore(pg)
 	e.svc = connections.NewService(
 		store, secrets,
 		checkers,
@@ -148,6 +165,15 @@ func (e *Extension) Register(fapp forge.App) error {
 		e.svc.ConfigApps[cloud] = oauth.App{ClientID: app.ClientID, ClientSecret: app.ClientSecret, Slug: app.Slug}
 	}
 	e.svc.CallbackURL = callbackURL(e.cfg.PublicURL)
+	// Connecting keylessly, and the daily job turning over the issuer's
+	// keys.
+	e.svc.Keyless = e.issuer
+	e.svc.KeylessClouds = map[string]connections.KeylessCloud{
+		connections.AWS:   awsClient,
+		connections.GCP:   gcpClient,
+		connections.Azure: azureClient,
+	}
+	e.svc.Rotate = e.issuer.Rotate
 	mail, err := forge.InjectType[*notifications.Service](c)
 	if err != nil {
 		return fmt.Errorf("connections needs the notification delivery extension: %w", err)
@@ -166,12 +192,41 @@ func (e *Extension) Register(fapp forge.App) error {
 	if err := forge.ProvideValue(c, e.svc); err != nil {
 		return fmt.Errorf("provide the connection service: %w", err)
 	}
+	// Deployments' cloud clients mint keyless tokens with the same issuer.
+	if err := forge.ProvideValue(c, e.issuer); err != nil {
+		return fmt.Errorf("provide the keyless issuer: %w", err)
+	}
 	return e.routes(fapp.Router(), guard)
 }
 
-// Start has nothing to start.
+// Start rotates the issuer's keys once, so the JWKS has a key before any
+// cloud asks for it. It runs in the background, after the migrations,
+// and a failure is only warned about: the daily job and the first token
+// try again.
 func (e *Extension) Start(context.Context) error {
+	ctx, cancel := context.WithTimeout(context.Background(), startupRotateTimeout)
+	e.rotating, e.stopRotating = make(chan struct{}), cancel
+	go func() {
+		defer close(e.rotating)
+		defer cancel()
+		if err := e.issuer.Rotate(ctx); err != nil {
+			e.Logger().Warn("rotate the keyless issuer's keys at startup", forge.F("error", err.Error()))
+		}
+	}()
 	e.MarkStarted()
+	return nil
+}
+
+// Stop cuts the startup rotation short and waits for it.
+func (e *Extension) Stop(ctx context.Context) error {
+	if e.stopRotating != nil {
+		e.stopRotating()
+		select {
+		case <-e.rotating:
+		case <-ctx.Done():
+		}
+	}
+	e.MarkStopped()
 	return nil
 }
 

@@ -60,6 +60,7 @@ import (
 	"github.com/xraph/loomplane/internal/discovery"
 	"github.com/xraph/loomplane/internal/environments"
 	"github.com/xraph/loomplane/internal/fabriqloom"
+	"github.com/xraph/loomplane/internal/issuer"
 	"github.com/xraph/loomplane/internal/manifests"
 	"github.com/xraph/loomplane/internal/orchestration"
 	"github.com/xraph/loomplane/internal/planning"
@@ -163,6 +164,16 @@ func (e *Extension) Register(fapp forge.App) error {
 	if err != nil {
 		return fmt.Errorf("planning needs the connections extension: %w", err)
 	}
+	// A keyless connection's sessions mint their own tokens with
+	// Loomplane's issuer, so every client that deploys to AWS, Google
+	// Cloud or Azure gets it.
+	minter, err := forge.InjectType[*issuer.Service](c)
+	if err != nil {
+		return fmt.Errorf("planning needs the connections extension's keyless issuer: %w", err)
+	}
+	googleClient := func() *gcp.Client { return gcp.New(e.cfg.Clouds.GoogleEndpoint).WithMinter(minter) }
+	awsClient := func() *aws.Client { return aws.New(e.cfg.Clouds.AWSEndpoint).WithMinter(minter) }
+	azureClient := func() *azure.Client { return azure.New(e.cfg.Clouds.AzureEndpoint).WithMinter(minter) }
 	variables, err := forge.InjectType[*environments.Service](c)
 	if err != nil {
 		return fmt.Errorf("planning needs the environments extension: %w", err)
@@ -213,7 +224,7 @@ func (e *Extension) Register(fapp forge.App) error {
 			return fmt.Errorf("native SQL transport dependency is nil")
 		}
 	}
-	google := gcp.New(e.cfg.Clouds.GoogleEndpoint)
+	google := googleClient()
 	if transports.CloudSQLDNS != nil {
 		google = google.WithDNSResolver(transports.CloudSQLDNS)
 	}
@@ -226,20 +237,20 @@ func (e *Extension) Register(fapp forge.App) error {
 		"vercel":               &deployments.Vercel{Client: vercel.New(e.cfg.Clouds.VercelEndpoint)},
 		"render":               &deployments.Render{Client: render.New(e.cfg.Clouds.RenderEndpoint)},
 		"digitalocean":         &deployments.DigitalOcean{Client: digitalocean.New(e.cfg.Clouds.DigitalOceanEndpoint)},
-		"azure-container-apps": &deployments.Azure{Client: azure.New(e.cfg.Clouds.AzureEndpoint)},
-		"azure-database":       &deployments.AzureDatabase{Client: azure.New(e.cfg.Clouds.AzureEndpoint)},
-		"azure-managed-redis":  &deployments.AzureRedis{Client: azure.New(e.cfg.Clouds.AzureEndpoint)},
+		"azure-container-apps": &deployments.Azure{Client: azureClient()},
+		"azure-database":       &deployments.AzureDatabase{Client: azureClient()},
+		"azure-managed-redis":  &deployments.AzureRedis{Client: azureClient()},
 		"cross-cloud-vpn": &deployments.VPN{
-			Google: gcp.New(e.cfg.Clouds.GoogleEndpoint), AWS: aws.New(e.cfg.Clouds.AWSEndpoint), Credentials: clouds,
+			Google: googleClient(), AWS: awsClient(), Credentials: clouds,
 		},
 		"cloud-sql":     &deployments.CloudSQL{Google: google, PSCConnector: transports.CloudSQL},
-		"cloud-storage": &deployments.CloudStorage{Google: gcp.New(e.cfg.Clouds.GoogleEndpoint)},
-		"memorystore":   &deployments.Memorystore{Google: gcp.New(e.cfg.Clouds.GoogleEndpoint)},
-		"rds":           &deployments.RDS{AWS: aws.New(e.cfg.Clouds.AWSEndpoint)},
-		"s3":            &deployments.S3{AWS: aws.New(e.cfg.Clouds.AWSEndpoint)},
-		"elasticache":   &deployments.ElastiCache{AWS: aws.New(e.cfg.Clouds.AWSEndpoint)},
+		"cloud-storage": &deployments.CloudStorage{Google: googleClient()},
+		"memorystore":   &deployments.Memorystore{Google: googleClient()},
+		"rds":           &deployments.RDS{AWS: awsClient()},
+		"s3":            &deployments.S3{AWS: awsClient()},
+		"elasticache":   &deployments.ElastiCache{AWS: awsClient()},
 		"ecs-fargate": &deployments.ECS{
-			AWS:         aws.New(e.cfg.Clouds.AWSEndpoint),
+			AWS:         awsClient(),
 			Ctrl:        deployments.CtrlPlane{Providers: cp.Providers(), Instances: cp.Instances, Deploys: cp.Deploys},
 			Credentials: clouds,
 		},
@@ -361,7 +372,7 @@ func (e *Extension) Register(fapp forge.App) error {
 
 	routeService.CapacityDemandAuthority = e.plans
 	nativeDatabases := &deployments.NativeDatabases{
-		AWS: aws.New(e.cfg.Clouds.AWSEndpoint), Google: google, Credentials: clouds, Secrets: resourceSecrets,
+		AWS: awsClient(), Google: google, Credentials: clouds, Secrets: resourceSecrets,
 		RDSConnector: transports.RDS, SQLConnector: transports.CloudSQL,
 	}
 
@@ -429,8 +440,8 @@ func (e *Extension) Register(fapp forge.App) error {
 	}
 	readings := usage.NewService(usage.Deps{
 		Connections: clouds, Bindings: planStore, Authz: authz, Meters: meters(executors),
-		Spenders: usage.Spenders(gcp.New(e.cfg.Clouds.GoogleEndpoint), aws.New(e.cfg.Clouds.AWSEndpoint),
-			azure.New(e.cfg.Clouds.AzureEndpoint), digitalocean.New(e.cfg.Clouds.DigitalOceanEndpoint)),
+		Spenders: usage.Spenders(googleClient(), awsClient(),
+			azureClient(), digitalocean.New(e.cfg.Clouds.DigitalOceanEndpoint)),
 		Title:     titled(catalog),
 		Warn:      func(msg string, err error) { log.Warn(msg, forge.F("error", err.Error())) },
 		Telemetry: metrics,

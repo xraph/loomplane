@@ -339,6 +339,7 @@ export interface CloudForm {
   cloud: string;
   credential?: string;
   help?: string;
+  keylessSettings?: Setting[];
   methods: string[];
   settings?: Setting[];
   signInSettings?: Setting[];
@@ -1004,6 +1005,41 @@ export interface InfrastructureStatus {
   engine: string;
   providers: ProviderStatus[];
   store: string;
+}
+
+export interface KeylessInputBody {
+  connectionId: string;
+  name: string;
+  settings: Record<string, any>;
+}
+
+export interface KeylessPrepareInputBody {
+  cloud: string;
+}
+
+export interface KeylessReplaceInputBody {
+  settings: Record<string, any>;
+}
+
+export interface KeylessSetup {
+  audience?: string;
+  connectionId: string;
+  expiresAt?: string;
+  issuer: string;
+  steps: KeylessStep[];
+  subject: string;
+}
+
+export interface KeylessState {
+  enabled: boolean;
+  issuer: string;
+  reason: string;
+}
+
+export interface KeylessStep {
+  body?: string;
+  command?: string;
+  title: string;
 }
 
 export interface KindInfo {
@@ -2404,6 +2440,7 @@ export interface SignInApp {
 export interface SignInAppList {
   apps: SignInApp[];
   callbackUrl: string;
+  keyless: KeylessState;
 }
 
 export interface SignInInputBody {

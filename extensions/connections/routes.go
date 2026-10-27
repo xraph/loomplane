@@ -36,8 +36,13 @@ type CloudForm struct {
 	// SignInSettings are what signing in asks for first, such as the
 	// Google Cloud project. A cloud that asks nothing has none.
 	SignInSettings []sdk.Setting `json:"sign_in_settings,omitempty"`
-	// Methods are the ways to connect it: oauth when the organization can
-	// sign in to the cloud, and token always.
+	// KeylessSettings are what connecting keylessly asks for, such as the
+	// role the cloud's trust lets Loomplane assume. A cloud that can't be
+	// connected keylessly has none.
+	KeylessSettings []sdk.Setting `json:"keyless_settings,omitempty"`
+	// Methods are the ways to connect it, in this order: oauth when the
+	// organization can sign in to the cloud, keyless when the cloud can
+	// trust Loomplane's issuer, and token always.
 	Methods []string `json:"methods"`
 }
 
@@ -49,9 +54,15 @@ type CloudList struct {
 func (e *Extension) clouds(ctx context.Context, p security.Principal) (CloudList, error) {
 	out := CloudList{Clouds: []CloudForm{
 		{Cloud: connections.GCP, Title: "Google Cloud", Builtin: true,
-			SignInSettings: []sdk.Setting{{Key: "project_id", Label: "Project ID", Required: true}}},
+			SignInSettings: []sdk.Setting{{Key: "project_id", Label: "Project ID", Required: true}},
+			KeylessSettings: []sdk.Setting{
+				{Key: "project_id", Label: "Project ID", Required: true},
+				{Key: "workload_provider", Label: "Workload identity provider", Required: true},
+				{Key: "service_account", Label: "Service account email", Required: true},
+			}},
 		{Cloud: connections.Vercel, Title: "Vercel", Builtin: true},
-		{Cloud: connections.AWS, Title: "AWS", Builtin: true},
+		{Cloud: connections.AWS, Title: "AWS", Builtin: true,
+			KeylessSettings: []sdk.Setting{{Key: "role_arn", Label: "Role ARN", Required: true}, {Key: "region", Label: "Region", Required: true}}},
 		{Cloud: connections.Server, Title: "SSH server", Credential: "SSH private key", //nolint:gosec // Form label, not a credential.
 			Help:     "Use a PEM private key, or JSON with private_key and passphrase. Your SSH user needs access to an existing Linux Docker daemon. Copy the server's public host key from a trusted source.",
 			Settings: []sdk.Setting{{Key: "host", Label: "SSH host", Required: true}, {Key: "port", Label: "SSH port (default 22)"}, {Key: "user", Label: "SSH user", Required: true}, {Key: "host_key", Label: "Public host key", Required: true}, {Key: "docker_socket", Label: "Docker socket (default /var/run/docker.sock)"}, {Key: "advertise_host", Label: "Published address (optional)"}}},
@@ -85,6 +96,12 @@ func (e *Extension) clouds(ctx context.Context, p security.Principal) (CloudList
 				{Key: "subscription_id", Label: "Subscription ID", Required: true},
 				{Key: "resource_group", Label: "Resource group (default loomplane)"},
 			},
+			KeylessSettings: []sdk.Setting{
+				{Key: "tenant_id", Label: "Directory (tenant) ID", Required: true},
+				{Key: "client_id", Label: "Application (client) ID", Required: true},
+				{Key: "subscription_id", Label: "Subscription ID", Required: true},
+				{Key: "resource_group", Label: "Resource group (default loomplane)"},
+			},
 		},
 	}}
 	plugs, err := e.plugins.Plugins()
@@ -109,11 +126,18 @@ func (e *Extension) clouds(ctx context.Context, p security.Principal) (CloudList
 	if err != nil {
 		return out, err
 	}
+	keylessOK, _ := e.keylessState()
 	for i := range out.Clouds {
-		out.Clouds[i].Methods = []string{connections.MethodToken}
-		if signIn[out.Clouds[i].Cloud] {
-			out.Clouds[i].Methods = []string{connections.MethodOAuth, connections.MethodToken}
+		cloud := out.Clouds[i].Cloud
+		methods := []string{}
+		if signIn[cloud] {
+			methods = append(methods, connections.MethodOAuth)
 		}
+		if _, ok := e.svc.KeylessClouds[cloud]; ok && keylessOK {
+			methods = append(methods, connections.MethodKeyless)
+		}
+		methods = append(methods, connections.MethodToken)
+		out.Clouds[i].Methods = methods
 	}
 	return out, nil
 }
@@ -200,6 +224,9 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 		return err
 	}
 	if err := e.signInRoutes(r, guard); err != nil {
+		return err
+	}
+	if err := e.keylessRoutes(r, guard); err != nil {
 		return err
 	}
 	return g.DELETE("/connections/:id", e.delete,
