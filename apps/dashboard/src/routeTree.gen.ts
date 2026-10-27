@@ -13,7 +13,6 @@ import { Route as IndexRouteImport } from "./routes/index"
 import { Route as ActivityRouteImport } from "./routes/activity"
 import { Route as ApiKeysRouteImport } from "./routes/api-keys"
 import { Route as CloudSignInRouteImport } from "./routes/cloud-sign-in"
-import { Route as DomainsRouteImport } from "./routes/domains"
 import { Route as ForgotPasswordRouteImport } from "./routes/forgot-password"
 import { Route as InfrastructureRouteImport } from "./routes/infrastructure"
 import { Route as MembersRouteImport } from "./routes/members"
@@ -29,6 +28,8 @@ import { Route as DeploymentsIndexRouteImport } from "./routes/deployments.index
 import { Route as DeploymentsIdRouteImport } from "./routes/deployments.$id"
 import { Route as DeploymentsNewRouteImport } from "./routes/deployments.new"
 import { Route as DesignDeploymentRouteImport } from "./routes/design.deployment"
+import { Route as DomainsIndexRouteImport } from "./routes/domains.index"
+import { Route as DomainsZoneIdRouteImport } from "./routes/domains.$zoneId"
 import { Route as IntegrationsIndexRouteImport } from "./routes/integrations.index"
 import { Route as InvitationsAcceptRouteImport } from "./routes/invitations.accept"
 import { Route as ProjectsIndexRouteImport } from "./routes/projects.index"
@@ -59,11 +60,6 @@ const ApiKeysRoute = ApiKeysRouteImport.update({
 const CloudSignInRoute = CloudSignInRouteImport.update({
   id: "/cloud-sign-in",
   path: "/cloud-sign-in",
-  getParentRoute: () => rootRouteImport,
-} as any)
-const DomainsRoute = DomainsRouteImport.update({
-  id: "/domains",
-  path: "/domains",
   getParentRoute: () => rootRouteImport,
 } as any)
 const ForgotPasswordRoute = ForgotPasswordRouteImport.update({
@@ -141,6 +137,16 @@ const DesignDeploymentRoute = DesignDeploymentRouteImport.update({
   path: "/design/deployment",
   getParentRoute: () => rootRouteImport,
 } as any)
+const DomainsIndexRoute = DomainsIndexRouteImport.update({
+  id: "/domains/",
+  path: "/domains/",
+  getParentRoute: () => rootRouteImport,
+} as any)
+const DomainsZoneIdRoute = DomainsZoneIdRouteImport.update({
+  id: "/domains/$zoneId",
+  path: "/domains/$zoneId",
+  getParentRoute: () => rootRouteImport,
+} as any)
 const IntegrationsIndexRoute = IntegrationsIndexRouteImport.update({
   id: "/integrations/",
   path: "/integrations/",
@@ -205,7 +211,6 @@ export interface FileRoutesByFullPath {
   "/activity": typeof ActivityRoute
   "/api-keys": typeof ApiKeysRoute
   "/cloud-sign-in": typeof CloudSignInRoute
-  "/domains": typeof DomainsRoute
   "/forgot-password": typeof ForgotPasswordRoute
   "/infrastructure": typeof InfrastructureRoute
   "/members": typeof MembersRoute
@@ -219,11 +224,13 @@ export interface FileRoutesByFullPath {
   "/deployments/$id": typeof DeploymentsIdRoute
   "/deployments/new": typeof DeploymentsNewRoute
   "/design/deployment": typeof DesignDeploymentRoute
+  "/domains/$zoneId": typeof DomainsZoneIdRoute
   "/invitations/accept": typeof InvitationsAcceptRoute
   "/projects/$id": typeof ProjectsIdRoute
   "/services/$kind": typeof ServicesKindRoute
   "/clouds/": typeof CloudsIndexRoute
   "/deployments/": typeof DeploymentsIndexRoute
+  "/domains/": typeof DomainsIndexRoute
   "/integrations/": typeof IntegrationsIndexRoute
   "/projects/": typeof ProjectsIndexRoute
   "/services/": typeof ServicesIndexRoute
@@ -238,7 +245,6 @@ export interface FileRoutesByTo {
   "/activity": typeof ActivityRoute
   "/api-keys": typeof ApiKeysRoute
   "/cloud-sign-in": typeof CloudSignInRoute
-  "/domains": typeof DomainsRoute
   "/forgot-password": typeof ForgotPasswordRoute
   "/infrastructure": typeof InfrastructureRoute
   "/members": typeof MembersRoute
@@ -252,11 +258,13 @@ export interface FileRoutesByTo {
   "/deployments/$id": typeof DeploymentsIdRoute
   "/deployments/new": typeof DeploymentsNewRoute
   "/design/deployment": typeof DesignDeploymentRoute
+  "/domains/$zoneId": typeof DomainsZoneIdRoute
   "/invitations/accept": typeof InvitationsAcceptRoute
   "/projects/$id": typeof ProjectsIdRoute
   "/services/$kind": typeof ServicesKindRoute
   "/clouds": typeof CloudsIndexRoute
   "/deployments": typeof DeploymentsIndexRoute
+  "/domains": typeof DomainsIndexRoute
   "/integrations": typeof IntegrationsIndexRoute
   "/projects": typeof ProjectsIndexRoute
   "/services": typeof ServicesIndexRoute
@@ -272,7 +280,6 @@ export interface FileRoutesById {
   "/activity": typeof ActivityRoute
   "/api-keys": typeof ApiKeysRoute
   "/cloud-sign-in": typeof CloudSignInRoute
-  "/domains": typeof DomainsRoute
   "/forgot-password": typeof ForgotPasswordRoute
   "/infrastructure": typeof InfrastructureRoute
   "/members": typeof MembersRoute
@@ -286,11 +293,13 @@ export interface FileRoutesById {
   "/deployments/$id": typeof DeploymentsIdRoute
   "/deployments/new": typeof DeploymentsNewRoute
   "/design/deployment": typeof DesignDeploymentRoute
+  "/domains/$zoneId": typeof DomainsZoneIdRoute
   "/invitations/accept": typeof InvitationsAcceptRoute
   "/projects/$id": typeof ProjectsIdRoute
   "/services/$kind": typeof ServicesKindRoute
   "/clouds/": typeof CloudsIndexRoute
   "/deployments/": typeof DeploymentsIndexRoute
+  "/domains/": typeof DomainsIndexRoute
   "/integrations/": typeof IntegrationsIndexRoute
   "/projects/": typeof ProjectsIndexRoute
   "/services/": typeof ServicesIndexRoute
@@ -307,7 +316,6 @@ export interface FileRouteTypes {
     | "/activity"
     | "/api-keys"
     | "/cloud-sign-in"
-    | "/domains"
     | "/forgot-password"
     | "/infrastructure"
     | "/members"
@@ -321,11 +329,13 @@ export interface FileRouteTypes {
     | "/deployments/$id"
     | "/deployments/new"
     | "/design/deployment"
+    | "/domains/$zoneId"
     | "/invitations/accept"
     | "/projects/$id"
     | "/services/$kind"
     | "/clouds/"
     | "/deployments/"
+    | "/domains/"
     | "/integrations/"
     | "/projects/"
     | "/services/"
@@ -340,7 +350,6 @@ export interface FileRouteTypes {
     | "/activity"
     | "/api-keys"
     | "/cloud-sign-in"
-    | "/domains"
     | "/forgot-password"
     | "/infrastructure"
     | "/members"
@@ -354,11 +363,13 @@ export interface FileRouteTypes {
     | "/deployments/$id"
     | "/deployments/new"
     | "/design/deployment"
+    | "/domains/$zoneId"
     | "/invitations/accept"
     | "/projects/$id"
     | "/services/$kind"
     | "/clouds"
     | "/deployments"
+    | "/domains"
     | "/integrations"
     | "/projects"
     | "/services"
@@ -373,7 +384,6 @@ export interface FileRouteTypes {
     | "/activity"
     | "/api-keys"
     | "/cloud-sign-in"
-    | "/domains"
     | "/forgot-password"
     | "/infrastructure"
     | "/members"
@@ -387,11 +397,13 @@ export interface FileRouteTypes {
     | "/deployments/$id"
     | "/deployments/new"
     | "/design/deployment"
+    | "/domains/$zoneId"
     | "/invitations/accept"
     | "/projects/$id"
     | "/services/$kind"
     | "/clouds/"
     | "/deployments/"
+    | "/domains/"
     | "/integrations/"
     | "/projects/"
     | "/services/"
@@ -407,7 +419,6 @@ export interface RootRouteChildren {
   ActivityRoute: typeof ActivityRoute
   ApiKeysRoute: typeof ApiKeysRoute
   CloudSignInRoute: typeof CloudSignInRoute
-  DomainsRoute: typeof DomainsRoute
   ForgotPasswordRoute: typeof ForgotPasswordRoute
   InfrastructureRoute: typeof InfrastructureRoute
   MembersRoute: typeof MembersRoute
@@ -421,11 +432,13 @@ export interface RootRouteChildren {
   DeploymentsIdRoute: typeof DeploymentsIdRoute
   DeploymentsNewRoute: typeof DeploymentsNewRoute
   DesignDeploymentRoute: typeof DesignDeploymentRoute
+  DomainsZoneIdRoute: typeof DomainsZoneIdRoute
   InvitationsAcceptRoute: typeof InvitationsAcceptRoute
   ProjectsIdRoute: typeof ProjectsIdRoute
   ServicesKindRoute: typeof ServicesKindRoute
   CloudsIndexRoute: typeof CloudsIndexRoute
   DeploymentsIndexRoute: typeof DeploymentsIndexRoute
+  DomainsIndexRoute: typeof DomainsIndexRoute
   IntegrationsIndexRoute: typeof IntegrationsIndexRoute
   ProjectsIndexRoute: typeof ProjectsIndexRoute
   ServicesIndexRoute: typeof ServicesIndexRoute
@@ -464,13 +477,6 @@ declare module "@tanstack/react-router" {
       path: "/cloud-sign-in"
       fullPath: "/cloud-sign-in"
       preLoaderRoute: typeof CloudSignInRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    "/domains": {
-      id: "/domains"
-      path: "/domains"
-      fullPath: "/domains"
-      preLoaderRoute: typeof DomainsRouteImport
       parentRoute: typeof rootRouteImport
     }
     "/forgot-password": {
@@ -578,6 +584,20 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof DesignDeploymentRouteImport
       parentRoute: typeof rootRouteImport
     }
+    "/domains/": {
+      id: "/domains/"
+      path: "/domains"
+      fullPath: "/domains/"
+      preLoaderRoute: typeof DomainsIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    "/domains/$zoneId": {
+      id: "/domains/$zoneId"
+      path: "/domains/$zoneId"
+      fullPath: "/domains/$zoneId"
+      preLoaderRoute: typeof DomainsZoneIdRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     "/integrations/": {
       id: "/integrations/"
       path: "/integrations"
@@ -663,7 +683,6 @@ const rootRouteChildren: RootRouteChildren = {
   ActivityRoute: ActivityRoute,
   ApiKeysRoute: ApiKeysRoute,
   CloudSignInRoute: CloudSignInRoute,
-  DomainsRoute: DomainsRoute,
   ForgotPasswordRoute: ForgotPasswordRoute,
   InfrastructureRoute: InfrastructureRoute,
   MembersRoute: MembersRoute,
@@ -677,11 +696,13 @@ const rootRouteChildren: RootRouteChildren = {
   DeploymentsIdRoute: DeploymentsIdRoute,
   DeploymentsNewRoute: DeploymentsNewRoute,
   DesignDeploymentRoute: DesignDeploymentRoute,
+  DomainsZoneIdRoute: DomainsZoneIdRoute,
   InvitationsAcceptRoute: InvitationsAcceptRoute,
   ProjectsIdRoute: ProjectsIdRoute,
   ServicesKindRoute: ServicesKindRoute,
   CloudsIndexRoute: CloudsIndexRoute,
   DeploymentsIndexRoute: DeploymentsIndexRoute,
+  DomainsIndexRoute: DomainsIndexRoute,
   IntegrationsIndexRoute: IntegrationsIndexRoute,
   ProjectsIndexRoute: ProjectsIndexRoute,
   ServicesIndexRoute: ServicesIndexRoute,

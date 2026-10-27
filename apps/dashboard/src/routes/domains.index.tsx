@@ -1,4 +1,4 @@
-import { createFileRoute } from "@tanstack/react-router"
+import { createFileRoute, redirect } from "@tanstack/react-router"
 
 import { Domains, type DomainsSearch } from "@/pages/domains"
 
@@ -9,7 +9,7 @@ function id(value: unknown): string | undefined {
     : undefined
 }
 
-export const Route = createFileRoute("/domains")({
+export const Route = createFileRoute("/domains/")({
   component: DomainsRoute,
   validateSearch: (search: Record<string, unknown>): DomainsSearch => {
     const out: DomainsSearch = {}
@@ -21,6 +21,17 @@ export const Route = createFileRoute("/domains")({
     // All is the default, so only "attention" lands in the URL.
     if (search.show === "attention") out.show = "attention"
     return out
+  },
+  // A zone link from before each domain had a page, such as Octopus's
+  // "Zone settings", opens that page. A zone ID has no dots; a name waits
+  // for the list to say which zone it is.
+  beforeLoad: ({ search }) => {
+    if (search.zone && !search.zone.includes("."))
+      throw redirect({
+        to: "/domains/$zoneId",
+        params: { zoneId: search.zone },
+        replace: true,
+      })
   },
 })
 

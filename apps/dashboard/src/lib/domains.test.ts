@@ -11,19 +11,25 @@ import {
   certificateLabel,
   dnsLabel,
   dnsTone,
+  domainGroups,
+  domainRollup,
   formatDay,
   formatPrice,
+  grantsLine,
+  groupNeedsAttention,
   hostnameInZone,
   isWildcardHostname,
   offerLabel,
   offerStatus,
   offerTone,
   ownedNames,
+  parentZoneOf,
   proofPublishState,
   registrationLine,
   registrationStatusLine,
   routeLabel,
   runsOnLabel,
+  sameHosting,
   stateTone,
   usedByLabel,
   zoneDNSLabel,
@@ -449,5 +455,170 @@ describe("offers", () => {
       "stuck.app",
       "unsure.app",
     ])
+  })
+})
+
+describe("domains and subdomains", () => {
+  // A zone named name, with parent and subdomains given by name too.
+  function named(
+    name: string,
+    over: Partial<ZoneOverview> = {},
+    verified = true
+  ): ZoneOverview {
+    const z = zone(over, verified)
+    z.zone = { ...z.zone!, id: `zone-${name}`, name }
+    return z
+  }
+  const ids = (zs: ZoneOverview[]) => zs.map((z) => z.zone?.id)
+  // Before the 2026-10-02 expiry the zone() proofs carry.
+  const now = Date.parse("2026-10-01T12:00:00Z")
+
+  it("groups zones under the root their parents reach", () => {
+    const groups = domainGroups([
+      named("x.app.loomplane.com", { parentZoneId: "zone-app.loomplane.com" }),
+      named("b.dev"),
+      named("app.loomplane.com", { parentZoneId: "zone-loomplane.com" }),
+      named("loomplane.com"),
+      // A parent the list doesn't hold can't swallow its child.
+      named("lost.gone.dev", { parentZoneId: "zone-gone.dev" }),
+    ])
+    expect(groups.map((g) => g.domain.zone?.name)).toEqual([
+      "b.dev",
+      "loomplane.com",
+      "lost.gone.dev",
+    ])
+    expect(ids(groups[1].subdomains)).toEqual([
+      "zone-app.loomplane.com",
+      "zone-x.app.loomplane.com",
+    ])
+    expect(groups[0].subdomains).toEqual([])
+  })
+
+  it("finds the parent on whole labels", () => {
+    const zones = [named("loomplane.com"), named("app.loomplane.com")]
+    expect(parentZoneOf("api.loomplane.com", zones)?.zone?.name).toBe(
+      "loomplane.com"
+    )
+    // The longest suffix wins.
+    expect(parentZoneOf("x.app.loomplane.com", zones)?.zone?.name).toBe(
+      "app.loomplane.com"
+    )
+    expect(parentZoneOf("API.Loomplane.com", zones)?.zone?.name).toBe(
+      "loomplane.com"
+    )
+    expect(parentZoneOf("notloomplane.com", zones)).toBeUndefined()
+    expect(parentZoneOf("loomplane.com", zones)).toBeUndefined()
+    expect(parentZoneOf("", zones)).toBeUndefined()
+  })
+
+  it("rolls up Ready, Verifying and Needs attention with a count", () => {
+    const domain = named("loomplane.com", { hostnames: [use()] })
+    const sub = (over: Partial<ZoneOverview> = {}, verified = true) =>
+      named(
+        "app.loomplane.com",
+        {
+          parentZoneId: "zone-loomplane.com",
+          proofZoneId: "zone-loomplane.com",
+          ...over,
+        },
+        verified
+      )
+
+    expect(
+      domainRollup({ domain, subdomains: [sub()] }, registration(), now)
+    ).toEqual({ label: "Ready", tone: "ok", count: 0 })
+
+    // Waiting on the domain's record, or on a certificate.
+    expect(
+      domainRollup({ domain, subdomains: [sub({}, false)] }, undefined, now)
+    ).toEqual({ label: "Verifying", tone: "warn", count: 0 })
+    expect(
+      domainRollup(
+        {
+          domain,
+          subdomains: [sub({ hostnames: [use({ certificate: "renewing" })] })],
+        },
+        undefined,
+        now
+      ).label
+    ).toBe("Verifying")
+
+    // A failed hostname, an unpublished record and an unfinished
+    // registration each count.
+    const unpublished = named("loomplane.com", {}, false)
+    unpublished.zone = {
+      ...unpublished.zone!,
+      proofPublishError: "The connection can't write DNS records.",
+    }
+    expect(
+      domainRollup(
+        {
+          domain: unpublished,
+          subdomains: [
+            sub({
+              hostnames: [
+                use({ dns: "failed" }),
+                use(),
+                use({ route: "failed" }),
+              ],
+            }),
+          ],
+        },
+        registration({ status: "action_required" }),
+        now
+      )
+    ).toEqual({ label: "Needs attention", tone: "failed", count: 4 })
+
+    // A proof that expired, and a zone with no proof to check at all.
+    const expired = named("loomplane.com", {}, false)
+    expect(
+      domainRollup({ domain: expired, subdomains: [] }, undefined, now).label
+    ).toBe("Verifying")
+    expect(
+      domainRollup(
+        { domain: expired, subdomains: [] },
+        undefined,
+        Date.parse("2026-10-03T00:00:00Z")
+      )
+    ).toEqual({ label: "Needs attention", tone: "failed", count: 1 })
+    const unproven = sub({ proofZoneId: undefined }, false)
+    unproven.zone = { ...unproven.zone!, proofName: undefined }
+    expect(
+      domainRollup({ domain, subdomains: [unproven] }, undefined, now)
+    ).toEqual({ label: "Needs attention", tone: "failed", count: 1 })
+  })
+
+  it("needs attention when the domain or any subdomain does", () => {
+    const domain = named("loomplane.com")
+    const ready = named("app.loomplane.com")
+    const failing = named("api.loomplane.com", {
+      hostnames: [use({ dns: "failed" })],
+    })
+    expect(groupNeedsAttention({ domain, subdomains: [ready] })).toBe(false)
+    expect(groupNeedsAttention({ domain, subdomains: [ready, failing] })).toBe(
+      true
+    )
+    expect(
+      groupNeedsAttention(
+        { domain, subdomains: [] },
+        registration({ status: "zone_pending" })
+      )
+    ).toBe(true)
+  })
+
+  it("compares hosting by mode, provider and connection", () => {
+    const a = named("loomplane.com").zone!
+    expect(sameHosting(a, { ...a, name: "app.loomplane.com" })).toBe(true)
+    expect(sameHosting(a, { ...a, provider: "vercel" })).toBe(false)
+    expect(sameHosting(a, { ...a, connectionId: "other" })).toBe(false)
+    expect(sameHosting(a, { ...a, mode: "external" })).toBe(false)
+  })
+
+  it("names the projects a zone is granted to", () => {
+    const names = new Map([["shop", "acme-shop"]])
+    expect(grantsLine(["shop", "blog"], names)).toBe(
+      "Granted to acme-shop, blog"
+    )
+    expect(grantsLine([], names)).toBe("Not granted to a project yet")
   })
 })

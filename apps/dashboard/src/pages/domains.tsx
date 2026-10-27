@@ -1,6 +1,6 @@
-// Domains: every zone the organization owns, the hostnames its projects
-// point at each, and the domains registered through Loomplane with their
-// renewals. Built to the redesign's Domains artboard.
+// Domains: every domain the organization owns with its subdomains inside
+// it, each opening its own page, and the domains registered through
+// Loomplane with their renewals. Built to the redesign's Domains artboard.
 import { GlobeIcon, LockIcon, PlusIcon } from "lucide-react"
 import { useEffect, useMemo, useState } from "react"
 
@@ -9,11 +9,7 @@ import {
   useDomainRegistrationsList,
   useDomainsOverview,
 } from "@/client/forge/loomplane/hooks"
-import type {
-  Registration,
-  Zone,
-  ZoneOverview,
-} from "@/client/forge/loomplane/types"
+import type { Registration, Zone } from "@/client/forge/loomplane/types"
 import { useQuery } from "@/client/hooks"
 import { BringDomainPanel } from "@/components/domains/bring-domain-panel"
 import { DomainCard, RegistrationCard } from "@/components/domains/domain-card"
@@ -32,15 +28,19 @@ import {
   ZeroStateTitle,
 } from "@/components/zero-state"
 import {
+  type DomainGroup,
+  domainGroups,
   endedWithoutZone,
+  groupNeedsAttention,
   inFlight,
   isSet,
+  plural,
   renewsSoon,
   settling,
   useClock,
-  zoneNeedsAttention,
 } from "@/lib/domains"
 import { useOrganization } from "@/lib/organization"
+import { useNavigate } from "@/lib/router"
 import { cn } from "@/lib/utils"
 
 export type DomainsShow = "all" | "attention"
@@ -50,7 +50,10 @@ export type DomainsSearch = {
   registration?: string
   /** From the renewal notice: focus the auto-renew switch. */
   action?: "auto-renew-off"
-  /** A zone to open, by ID or name. */
+  /**
+   * A zone to open, by ID or name, from a link made before each domain
+   * had a page. The route sends an ID straight there.
+   */
   zone?: string
   show?: DomainsShow
 }
@@ -115,9 +118,9 @@ function Empty({ title, children }: { title: string; children: string }) {
 
 type Item =
   | {
-      kind: "zone"
+      kind: "domain"
       id: string
-      zone: ZoneOverview
+      group: DomainGroup
       registration?: Registration
     }
   | { kind: "registration"; id: string; registration: Registration }
@@ -136,8 +139,7 @@ function DomainsList({
   const [registering, setRegistering] = useState(false)
   const [localShow, setLocalShow] = useState<DomainsShow>("all")
   const show = onSearch ? (search.show ?? "all") : localShow
-  // Cards opened or closed by hand; the rest follow the search params.
-  const [toggled, setToggled] = useState<Record<string, boolean>>({})
+  const navigate = useNavigate()
 
   const zones = useMemo(() => overview.data?.zones ?? [], [overview.data])
   // The registrations list is the fresher read; the overview carries the
@@ -163,16 +165,32 @@ function DomainsList({
     return () => window.clearInterval(timer)
   }, [moving, refetchOverview, refetchRegistrations])
 
+  // An old link names a zone; once the list says which, open its page.
+  const loaded = !!overview.data
+  useEffect(() => {
+    if (!search.zone || !loaded) return
+    const zone = zones.find(
+      (z) => z.zone?.id === search.zone || z.zone?.name === search.zone
+    )?.zone
+    if (zone)
+      void navigate({
+        to: "/domains/$zoneId",
+        params: { zoneId: zone.id },
+        replace: true,
+      })
+  }, [search.zone, loaded, zones, navigate])
+
   const items = useMemo<Item[]>(() => {
-    const registrationOf = (z: ZoneOverview) => {
-      const id = z.registrationId || z.zone?.registrationId
+    // A registration buys a domain, never a subdomain.
+    const registrationOf = ({ domain }: DomainGroup) => {
+      const id = domain.registrationId || domain.zone?.registrationId
       return id ? registrations.find((r) => r.id === id) : undefined
     }
-    const out: Item[] = zones.map((z) => ({
-      kind: "zone",
-      id: z.zone?.id ?? "",
-      zone: z,
-      registration: registrationOf(z),
+    const out: Item[] = domainGroups(zones).map((g) => ({
+      kind: "domain",
+      id: g.domain.zone?.id ?? "",
+      group: g,
+      registration: registrationOf(g),
     }))
     for (const r of registrations) {
       const unsettled =
@@ -189,7 +207,7 @@ function DomainsList({
 
   const attention = (item: Item) =>
     item.kind === "registration" ||
-    zoneNeedsAttention(item.zone, item.registration)
+    groupNeedsAttention(item.group, item.registration)
   const shown = items.filter((i) => show === "all" || attention(i))
   const hostnames = zones.reduce((n, z) => n + z.hostnames.length, 0)
   const banners = registrations.filter(
@@ -198,14 +216,6 @@ function DomainsList({
       isSet(r.domainExpiresAt) &&
       (renewsSoon(r, now) || r.id === search.registration)
   )
-
-  const isOpen = (item: Item) =>
-    toggled[item.id] ??
-    (item.kind === "zone" &&
-      ((!!search.zone &&
-        (item.id === search.zone || item.zone.zone?.name === search.zone)) ||
-        (!!search.registration &&
-          item.registration?.id === search.registration)))
 
   const pick = (next: DomainsShow) => {
     if (!onSearch) {
@@ -217,10 +227,11 @@ function DomainsList({
     onSearch(next === "all" ? rest : { ...rest, show: next })
   }
 
+  // The new domain's page holds its TXT instructions.
   const added = (zone: Zone) => {
     setBringing(false)
-    setToggled((t) => ({ ...t, [zone.id]: true }))
     void refetchOverview().catch(() => undefined)
+    void navigate({ to: "/domains/$zoneId", params: { zoneId: zone.id } })
   }
 
   const denied = overview.status === "error" && statusOf(overview.error) === 403
@@ -250,7 +261,9 @@ function DomainsList({
           }
         />
 
-        {bringing && !denied && <BringDomainPanel onAdded={added} />}
+        {bringing && !denied && (
+          <BringDomainPanel zones={zones} onAdded={added} />
+        )}
         <RegisterDomainDialog
           open={registering && !denied}
           onOpenChange={setRegistering}
@@ -345,15 +358,11 @@ function DomainsList({
               </Empty>
             ) : (
               shown.map((item) =>
-                item.kind === "zone" ? (
+                item.kind === "domain" ? (
                   <DomainCard
                     key={item.id}
-                    zone={item.zone}
+                    group={item.group}
                     registration={item.registration}
-                    expanded={isOpen(item)}
-                    onToggle={() =>
-                      setToggled((t) => ({ ...t, [item.id]: !isOpen(item) }))
-                    }
                   />
                 ) : (
                   <RegistrationCard
@@ -373,9 +382,4 @@ function DomainsList({
       </Page>
     </>
   )
-}
-
-// Not in the mock, whose sample only ever had several: "1 domain".
-function plural(n: number, noun: string): string {
-  return `${n} ${noun}${n === 1 ? "" : "s"}`
 }

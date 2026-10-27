@@ -14,9 +14,23 @@ import { afterEach, expect, it, vi } from "vitest"
 import { forgeClient } from "@/client/runtime"
 import { AppSidebar } from "@/components/app-sidebar"
 import { SidebarProvider } from "@/components/ui/sidebar"
+import {
+  host,
+  overviewWith,
+  registration,
+  stubFetch,
+  zero,
+  inTwelveDays,
+  zoneWith,
+} from "@/test-fixtures/domains"
 import { Domains } from "./domains"
 
 const access = vi.hoisted(() => ({ allowed: true }))
+// One function, as the router's is, so effects that use it run once.
+const navigation = vi.hoisted(() => {
+  const calls: unknown[] = []
+  return { calls, navigate: (to: unknown) => calls.push(to) }
+})
 vi.mock("@/lib/organization", () => ({
   useOrganization: () => ({
     session: { orgId: "org" },
@@ -29,17 +43,22 @@ vi.mock("@/lib/organization", () => ({
 vi.mock("@/components/site-header", () => ({ SiteHeader: () => null }))
 vi.mock("@/lib/router", () => ({
   usePath: () => "/domains",
-  useNavigate: () => () => {},
+  useNavigate: () => navigation.navigate,
   Link: ({
     children,
     to,
+    params,
     ...props
   }: {
     children?: ReactNode
     to: string
+    params?: Record<string, string>
     "data-active"?: string
   }) => (
-    <a href={to} data-active={props["data-active"]}>
+    <a
+      href={to.replace(/\$(\w+)/g, (_, key: string) => params?.[key] ?? "")}
+      data-active={props["data-active"]}
+    >
       {children}
     </a>
   ),
@@ -66,244 +85,12 @@ afterEach(() => {
   vi.unstubAllGlobals()
   forgeClient.clear()
   access.allowed = true
+  navigation.calls.length = 0
 })
-
-const zero = "0001-01-01T00:00:00Z"
-
-type Host = {
-  hostname: string
-  runs_on: string
-  backend: string
-  wildcard?: boolean
-  dns: string
-  certificate: string
-  route: string
-}
-
-function zoneWith(
-  name: string,
-  hostnames: Host[] = [],
-  options: {
-    external?: boolean
-    verified?: boolean
-    registration?: string
-    proof?: boolean
-    hostedIn?: string
-    published?: boolean
-    publishError?: string
-  } = {}
-) {
-  const proof = options.proof ?? options.external
-  const verified = options.verified ?? !options.external
-  const id = `zone-${name}`
-  return {
-    zone: {
-      id,
-      org_id: "org",
-      name,
-      mode: options.external ? "external" : "managed",
-      provider: options.external ? "" : "cloudflare",
-      connection_id: options.external ? "" : "cf",
-      project_ids: ["shop"],
-      proof_name: proof ? `_loomplane.${name}` : "",
-      proof_value: proof ? "lp-proof-123" : "",
-      proof_record: options.published
-        ? {
-            id: "rec",
-            zone_id: `cf-${options.hostedIn ?? name}`,
-            name: "_loomplane",
-            type: "TXT",
-            value: "lp-proof-123",
-            ttl: 60,
-            owner: `loomplane:zone-proof:${id}`,
-          }
-        : undefined,
-      proof_publish_error: options.publishError ?? "",
-      proof_checked_at: zero,
-      proof_expires_at: zero,
-      provider_zone: options.external
-        ? {}
-        : {
-            id: `cf-${options.hostedIn ?? name}`,
-            name: options.hostedIn ?? name,
-          },
-      record_ownership: true,
-      registration_id: options.registration ?? "",
-      revision: 2,
-      verified_at: verified ? "2026-10-01T00:00:00Z" : zero,
-    },
-    state: verified ? "ready" : "awaiting_verification",
-    wildcards: false,
-    registration_id: options.registration ?? "",
-    hostnames: hostnames.map((h, i) => ({
-      route_id: `route-${i}`,
-      hostname: h.hostname,
-      project_id: "shop",
-      project_name: "acme-shop",
-      environment_id: "env-prod",
-      service: "edge",
-      port: 8080,
-      runs_on: h.runs_on,
-      status: {
-        route_id: `route-${i}`,
-        hostname: h.hostname,
-        wildcard: !!h.wildcard,
-        backend: h.backend,
-        dns: h.dns,
-        certificate: h.certificate,
-        route: h.route,
-        certificate_expires_at: zero,
-        checked_at: zero,
-        retryable: false,
-      },
-    })),
-  }
-}
-
-function overviewWith(...zones: ReturnType<typeof zoneWith>[]): {
-  zones: unknown[]
-  registrations: unknown[]
-} {
-  return { zones, registrations: [] }
-}
-
-const inTwelveDays = new Date(Date.now() + 12 * 86400000).toISOString()
-
-function registration(over: Record<string, unknown> = {}) {
-  return {
-    id: "reg",
-    org_id: "org",
-    name: "acme.shop",
-    status: "succeeded",
-    auto_renew: true,
-    domain_expires_at: inTwelveDays,
-    quote: {
-      currency: "USD",
-      registration_cost: "10.11",
-      renewal_cost: "10.11",
-    },
-    revision: 3,
-    account_id: "acct",
-    connection_id: "cf",
-    zone_id: "zone-acme.shop",
-    message: "",
-    project_ids: [],
-    ...over,
-  }
-}
-
-type Write = { method: string; path: string; body: unknown }
-
-function stubFetch(
-  routes: Record<string, unknown | ((body: unknown) => Response)>
-) {
-  const writes: Write[] = []
-  vi.stubGlobal(
-    "fetch",
-    async (input: RequestInfo | URL, init?: RequestInit) => {
-      const path = new URL(String(input), "http://localhost").pathname
-      const method = init?.method ?? "GET"
-      const body = init?.body ? JSON.parse(String(init.body)) : undefined
-      if (method !== "GET") writes.push({ method, path, body })
-      const route = routes[`${method} ${path}`] ?? routes[path]
-      if (typeof route === "function") return route(body)
-      if (route !== undefined) return Response.json(route)
-      if (path === "/api/v1/domain-registrations")
-        return Response.json({
-          registrations:
-            (routes["/api/v1/domains"] as { registrations?: unknown[] })
-              ?.registrations ?? [],
-        })
-      if (path === "/api/v1/connections")
-        return Response.json({
-          connections: [
-            {
-              id: "cf",
-              cloud: "cloudflare",
-              name: "Acme Cloudflare",
-              account: "acct",
-              status: "ready",
-              details: {},
-              missing: [],
-            },
-          ],
-        })
-      if (path === "/api/v1/projects")
-        return Response.json({ projects: [{ id: "shop", name: "acme-shop" }] })
-      if (path.endsWith("/environments"))
-        return Response.json({
-          environments: [{ id: "env-prod", name: "production" }],
-        })
-      return Response.json({ message: `unexpected ${path}` }, { status: 404 })
-    }
-  )
-  return writes
-}
 
 function Wrapped({ children }: { children: ReactNode }) {
   return <ClientProvider client={forgeClient}>{children}</ClientProvider>
 }
-
-it("expands a domain into its hostname table", async () => {
-  stubFetch({
-    "/api/v1/domains": overviewWith(
-      zoneWith("acme.dev", [
-        {
-          hostname: "api.acme.dev",
-          runs_on: "web-1",
-          backend: "server",
-          dns: "ready",
-          certificate: "ready",
-          route: "ready",
-        },
-        {
-          hostname: "*.acme.dev",
-          runs_on: "web-1",
-          backend: "server",
-          wildcard: true,
-          dns: "ready",
-          certificate: "provisioning",
-          route: "provisioning",
-        },
-      ])
-    ),
-  })
-  render(
-    <Wrapped>
-      <Domains />
-    </Wrapped>
-  )
-  const header = await screen.findByRole("button", { name: /acme\.dev/ })
-  expect(header.getAttribute("aria-expanded")).toBe("false")
-  await userEvent.click(header)
-  expect(header.getAttribute("aria-expanded")).toBe("true")
-  for (const h of [
-    "Hostname",
-    "Used by",
-    "Runs on",
-    "DNS",
-    "Certificate",
-    "Route",
-  ])
-    expect(screen.getByText(h)).toBeTruthy()
-  const wildcard = screen.getByRole("row", { name: /\*\.acme\.dev/ })
-  expect(within(wildcard).getByText("Issuing (DNS-01)")).toBeTruthy()
-  expect(within(wildcard).getByText("Waiting for certificate")).toBeTruthy()
-  expect(within(wildcard).getByText("Docker · web-1")).toBeTruthy()
-  expect(
-    await within(wildcard).findByText("acme-shop / production / edge")
-  ).toBeTruthy()
-  const api = screen.getByRole("row", { name: /^api\.acme\.dev/ })
-  expect(within(api).getByText("Active")).toBeTruthy()
-  expect(screen.getByText("Managed by Cloudflare")).toBeTruthy()
-  expect(screen.getByText("Registered elsewhere")).toBeTruthy()
-  expect(screen.getByText("1 domain · 2 hostnames in use")).toBeTruthy()
-  expect(
-    screen.getByText(
-      "Domains you register here are bought with your own Cloudflare account and billed to it. Loomplane never pays for or holds a domain."
-    )
-  ).toBeTruthy()
-})
 
 it("filters to domains that need attention", async () => {
   const ready = zoneWith("acme.dev", [
@@ -351,7 +138,8 @@ it("filters to domains that need attention", async () => {
     await screen.findByRole("region", { name: "docs-example.org" })
   ).toBeTruthy()
   expect(screen.queryByRole("region", { name: "acme.dev" })).toBeNull()
-  expect(screen.getByText("Awaiting TXT record")).toBeTruthy()
+  // The card rolls the domain's state up; its own pill is on its page.
+  expect(screen.getByText("Verifying")).toBeTruthy()
   cleanup()
   forgeClient.clear()
 
@@ -493,288 +281,233 @@ it("brings a Cloudflare zone through the inline panel", async () => {
       },
     ])
   )
-  const card = await screen.findByRole("region", { name: "acme.dev" })
+  expect(await screen.findByRole("region", { name: "acme.dev" })).toBeTruthy()
   expect(screen.queryByRole("region", { name: "Bring a domain" })).toBeNull()
-  expect(
-    within(card)
-      .getByRole("button", { name: /acme\.dev/ })
-      .getAttribute("aria-expanded")
-  ).toBe("true")
 })
 
-it("shows TXT instructions and checks again", async () => {
-  const writes = stubFetch({
-    "/api/v1/domains": overviewWith(
-      zoneWith("docs-example.org", [], { external: true })
-    ),
-    "POST /api/v1/dns-zones/zone-docs-example.org/verify": () =>
-      Response.json({ message: "the record isn't there" }, { status: 409 }),
-  })
-  render(
-    <Wrapped>
-      <Domains search={{ zone: "zone-docs-example.org" }} onSearch={() => {}} />
-    </Wrapped>
-  )
-  const card = await screen.findByRole("region", { name: "docs-example.org" })
-  expect(
-    within(card).getByText(
-      /then check again\. Projects can't use the domain until it's verified\./
-    )
-  ).toBeTruthy()
-  expect(within(card).getByText("_loomplane.docs-example.org")).toBeTruthy()
-  expect(within(card).getByText("lp-proof-123")).toBeTruthy()
-  expect(within(card).getByText("TXT")).toBeTruthy()
-  await userEvent.click(
-    within(card).getByRole("button", { name: "Check again" })
-  )
-  expect(
-    await within(card).findByText(
-      "Checked just now. The record isn't visible yet."
-    )
-  ).toBeTruthy()
-  expect(writes).toEqual([
-    {
-      method: "POST",
-      path: "/api/v1/dns-zones/zone-docs-example.org/verify",
-      body: undefined,
+it("opens the new domain's page after bringing it", async () => {
+  let zones: unknown[] = []
+  stubFetch({
+    "/api/v1/domains": () => Response.json({ zones, registrations: [] }),
+    "POST /api/v1/dns-zones": () => {
+      zones = [zoneWith("docs-example.org", [], { external: true })]
+      return Response.json((zones[0] as { zone: unknown }).zone, {
+        status: 201,
+      })
     },
-  ])
-})
-
-it("publishes a managed zone's TXT record instead of asking for it", async () => {
-  stubFetch({
-    "/api/v1/domains": overviewWith(
-      zoneWith("acme.dev", [], { verified: false, proof: true })
-    ),
   })
   render(
     <Wrapped>
-      <Domains search={{ zone: "zone-acme.dev" }} onSearch={() => {}} />
+      <Domains />
     </Wrapped>
   )
-  const card = await screen.findByRole("region", { name: "acme.dev" })
-  expect(within(card).getByText("Verifying")).toBeTruthy()
-  expect(
-    within(card).getByText("Publishing the TXT record through Cloudflare.")
-  ).toBeTruthy()
-  expect(within(card).queryByText(/Add this TXT record/)).toBeNull()
-  expect(within(card).getByRole("button", { name: "Check again" })).toBeTruthy()
-})
-
-it("waits for DNS once a managed zone's record is published", async () => {
-  stubFetch({
-    "/api/v1/domains": overviewWith(
-      zoneWith("acme.dev", [], {
-        verified: false,
-        proof: true,
-        published: true,
-      })
-    ),
-  })
-  render(
-    <Wrapped>
-      <Domains search={{ zone: "zone-acme.dev" }} onSearch={() => {}} />
-    </Wrapped>
+  await screen.findByText("No domains yet")
+  await userEvent.click(screen.getByRole("button", { name: "Bring a domain" }))
+  const panel = screen.getByRole("region", { name: "Bring a domain" })
+  await userEvent.type(
+    within(panel).getByRole("textbox", { name: "Domain you own" }),
+    "docs-example.org"
   )
-  const card = await screen.findByRole("region", { name: "acme.dev" })
-  expect(
-    within(card).getByText("Waiting for DNS to show the TXT record.")
-  ).toBeTruthy()
-  expect(within(card).queryByText(/Add this TXT record/)).toBeNull()
-  // What was written stays visible, as secondary detail.
-  const details = within(card).getByText("Record details")
-  await userEvent.click(details)
-  expect(within(card).getByText("_loomplane.acme.dev")).toBeTruthy()
-  expect(within(card).getByText("lp-proof-123")).toBeTruthy()
-})
-
-it("shows why a managed zone's record didn't publish and checks again", async () => {
-  const writes = stubFetch({
-    "/api/v1/domains": overviewWith(
-      zoneWith("acme.dev", [], {
-        verified: false,
-        proof: true,
-        publishError:
-          "The Cloudflare connection can't write DNS records for acme.dev.",
-      })
-    ),
-    "POST /api/v1/dns-zones/zone-acme.dev/verify": () =>
-      Response.json({ message: "not yet" }, { status: 409 }),
-  })
-  render(
-    <Wrapped>
-      <Domains search={{ zone: "zone-acme.dev" }} onSearch={() => {}} />
-    </Wrapped>
-  )
-  const card = await screen.findByRole("region", { name: "acme.dev" })
-  expect(
-    within(card).getByText(
-      "The Cloudflare connection can't write DNS records for acme.dev."
-    )
-  ).toBeTruthy()
-  expect(within(card).queryByText(/Publishing the TXT record/)).toBeNull()
   await userEvent.click(
-    within(card).getByRole("button", { name: "Check again" })
+    within(panel).getByRole("button", { name: "Verify with TXT" })
   )
-  // The reason is above, so the note doesn't guess at visibility.
-  expect(await within(card).findByText("Checked just now.")).toBeTruthy()
-  expect(within(card).queryByText(/The record isn't visible yet/)).toBeNull()
+  // Its TXT instructions live on its page.
   await waitFor(() =>
-    expect(writes).toEqual([
-      {
-        method: "POST",
-        path: "/api/v1/dns-zones/zone-acme.dev/verify",
-        body: undefined,
-      },
+    expect(navigation.calls).toEqual([
+      { to: "/domains/$zoneId", params: { zoneId: "zone-docs-example.org" } },
     ])
   )
 })
 
-it("offers wildcard certificates only on a domain that is its own Cloudflare zone", async () => {
+it("says a name under a domain is its subdomain before adding it", async () => {
+  stubFetch({
+    "/api/v1/domains": overviewWith(zoneWith("loomplane.com")),
+  })
+  render(
+    <Wrapped>
+      <Domains />
+    </Wrapped>
+  )
+  await screen.findByRole("region", { name: "loomplane.com" })
+  await userEvent.click(screen.getByRole("button", { name: "Bring a domain" }))
+  const panel = screen.getByRole("region", { name: "Bring a domain" })
+  const field = within(panel).getByRole("textbox", { name: "Domain you own" })
+  const note =
+    "app.loomplane.com is a subdomain of loomplane.com, so it uses loomplane.com's verification."
+  await userEvent.type(field, "app.loomplane.com")
+  expect(within(panel).getByText(note)).toBeTruthy()
+  // Whole labels only, and never the domain itself.
+  for (const name of ["notloomplane.com", "loomplane.com"]) {
+    await userEvent.clear(field)
+    await userEvent.type(field, name)
+    expect(within(panel).queryByText(/is a subdomain of/)).toBeNull()
+  }
+})
+
+it("groups subdomains inside their domain", async () => {
+  stubFetch({
+    "/api/v1/domains": overviewWith(
+      zoneWith("x.app.loomplane.com", [], {
+        parent: "app.loomplane.com",
+        proofZone: "loomplane.com",
+      }),
+      zoneWith(
+        "app.loomplane.com",
+        [host("app.loomplane.com"), host("api.app.loomplane.com")],
+        {
+          parent: "loomplane.com",
+          proofZone: "loomplane.com",
+          subdomains: ["x.app.loomplane.com"],
+        }
+      ),
+      zoneWith("loomplane.com", [host("loomplane.com")], {
+        subdomains: ["app.loomplane.com", "x.app.loomplane.com"],
+      })
+    ),
+  })
+  render(
+    <Wrapped>
+      <Domains />
+    </Wrapped>
+  )
+  const card = await screen.findByRole("region", { name: "loomplane.com" })
+  expect(screen.getAllByRole("region")).toHaveLength(1)
+  expect(screen.getByText("1 domain · 3 hostnames in use")).toBeTruthy()
+  expect(
+    within(screen.getByRole("radiogroup", { name: "Show" })).getByRole(
+      "radio",
+      { name: /All/ }
+    ).textContent
+  ).toBe("All 1")
+
+  const header = within(card).getByRole("link", { name: /^loomplane\.com/ })
+  expect(header.getAttribute("href")).toBe("/domains/zone-loomplane.com")
+  expect(within(header).getByText("Registered elsewhere")).toBeTruthy()
+  expect(within(header).getByText("Cloudflare")).toBeTruthy()
+  expect(within(header).getByText("Ready")).toBeTruthy()
+  expect(await within(header).findByText("Granted to acme-shop")).toBeTruthy()
+
+  const subdomains = within(
+    within(card).getByRole("list", { name: "Subdomains" })
+  ).getAllByRole("link")
+  expect(subdomains.map((a) => a.getAttribute("href"))).toEqual([
+    "/domains/zone-app.loomplane.com",
+    "/domains/zone-x.app.loomplane.com",
+  ])
+  const [app, x] = subdomains
+  expect(within(app).getByText("app.loomplane.com")).toBeTruthy()
+  expect(within(app).getByText("2 hostnames")).toBeTruthy()
+  expect(within(app).getByText("Granted to acme-shop")).toBeTruthy()
+  expect(within(app).getByText("Managed by Cloudflare")).toBeTruthy()
+  expect(within(x).getByText("x.app.loomplane.com")).toBeTruthy()
+  expect(within(x).getByText("0 hostnames")).toBeTruthy()
+  // No hostname table on the list: it lives on the domain's page.
+  expect(screen.queryByRole("table")).toBeNull()
+  expect(
+    screen.getByText(
+      "Domains you register here are bought with your own Cloudflare account and billed to it. Loomplane never pays for or holds a domain."
+    )
+  ).toBeTruthy()
+})
+
+it("shows a subdomain's own hosting only when it differs", async () => {
+  stubFetch({
+    "/api/v1/domains": overviewWith(
+      zoneWith("loomplane.com", [], {
+        subdomains: ["api.loomplane.com", "app.loomplane.com"],
+      }),
+      zoneWith("app.loomplane.com", [], {
+        parent: "loomplane.com",
+        proofZone: "loomplane.com",
+        provider: "vercel",
+        connection: "vc",
+      }),
+      zoneWith("api.loomplane.com", [], {
+        parent: "loomplane.com",
+        proofZone: "loomplane.com",
+      })
+    ),
+  })
+  render(
+    <Wrapped>
+      <Domains />
+    </Wrapped>
+  )
+  const card = await screen.findByRole("region", { name: "loomplane.com" })
+  const app = within(card).getByRole("link", { name: /^app\.loomplane\.com/ })
+  const api = within(card).getByRole("link", { name: /^api\.loomplane\.com/ })
+  expect(within(app).getByText("Vercel")).toBeTruthy()
+  expect(within(api).queryByText("Cloudflare")).toBeNull()
+})
+
+it("rolls a subdomain that needs attention into its domain", async () => {
   stubFetch({
     "/api/v1/domains": overviewWith(
       zoneWith("acme.dev"),
-      zoneWith("shop.acme.org", [], { hostedIn: "acme.org" })
+      zoneWith("loomplane.com", [host("loomplane.com")], {
+        subdomains: ["app.loomplane.com"],
+      }),
+      zoneWith(
+        "app.loomplane.com",
+        [host("app.loomplane.com", { dns: "failed", route: "failed" })],
+        { parent: "loomplane.com", proofZone: "loomplane.com" }
+      )
     ),
   })
-  const setUp = { name: "Set up wildcard certificates" }
-  const view = render(
-    <Wrapped>
-      <Domains search={{ zone: "zone-acme.dev" }} onSearch={() => {}} />
-    </Wrapped>
-  )
-  const own = await screen.findByRole("region", { name: "acme.dev" })
-  expect(await within(own).findByRole("button", setUp)).toBeTruthy()
-  view.unmount()
   render(
     <Wrapped>
-      <Domains search={{ zone: "zone-shop.acme.org" }} onSearch={() => {}} />
+      <Domains />
     </Wrapped>
   )
-  const inside = await screen.findByRole("region", { name: "shop.acme.org" })
+  const card = await screen.findByRole("region", { name: "loomplane.com" })
+  const header = within(card).getByRole("link", { name: /^loomplane\.com/ })
+  expect(within(header).getByText("Needs attention").textContent).toBe(
+    "Needs attention 1"
+  )
+  const other = screen.getByRole("region", { name: "acme.dev" })
+  expect(within(other).getByText("Ready")).toBeTruthy()
+  const filters = screen.getByRole("radiogroup", { name: "Show" })
   expect(
-    await within(inside).findByText(/No hostnames use this domain yet/)
-  ).toBeTruthy()
-  expect(within(inside).queryByRole("button", setUp)).toBeNull()
+    within(filters).getByRole("radio", { name: /Needs attention/ }).textContent
+  ).toBe("Needs attention 1")
+  expect(within(filters).getByRole("radio", { name: /All/ }).textContent).toBe(
+    "All 2"
+  )
 })
 
-it("renews a managed zone's proof once it expires", async () => {
-  // Not in the mock: proofs there never expire.
-  let renewed = false
-  const awaiting = () => {
-    const z = zoneWith("acme.dev", [], { verified: false, proof: true })
-    z.zone.proof_expires_at = renewed
-      ? new Date(Date.now() + 86400000).toISOString()
-      : "2026-01-01T00:00:00Z"
-    z.zone.proof_value = renewed ? "lp-proof-456" : "lp-proof-123"
-    return z
-  }
-  const writes = stubFetch({
-    "/api/v1/domains": () =>
-      Response.json({ zones: [awaiting()], registrations: [] }),
-    "POST /api/v1/dns-zones/zone-acme.dev/update": () => {
-      renewed = true
-      return Response.json(awaiting().zone)
-    },
-  })
-  render(
-    <Wrapped>
-      <Domains search={{ zone: "zone-acme.dev" }} onSearch={() => {}} />
-    </Wrapped>
-  )
-  const card = await screen.findByRole("region", { name: "acme.dev" })
-  expect(await within(card).findByText(/This value expired/)).toBeTruthy()
-  expect(within(card).queryByRole("button", { name: "Check again" })).toBeNull()
-  await userEvent.click(
-    within(card).getByRole("button", { name: "Renew proof" })
-  )
-  expect(writes).toEqual([
-    {
-      method: "POST",
-      path: "/api/v1/dns-zones/zone-acme.dev/update",
-      body: { project_ids: ["shop"], renew_proof: true, revision: 2 },
-    },
-  ])
-  expect(await within(card).findByText("lp-proof-456")).toBeTruthy()
-  expect(within(card).getByRole("button", { name: "Check again" })).toBeTruthy()
-})
-
-it("offers a proof to a zone verified before proofs were required", async () => {
-  const writes = stubFetch({
+it("opens the domain an old link names once the list loads", async () => {
+  stubFetch({
     "/api/v1/domains": overviewWith(
-      // The API reads a verified zone with no proof as awaiting verification.
-      { ...zoneWith("acme.dev"), state: "awaiting_verification" }
+      zoneWith("docs-example.org", [], { external: true })
     ),
-    "POST /api/v1/dns-zones/zone-acme.dev/update": () =>
-      Response.json(zoneWith("acme.dev", [], { proof: true }).zone),
-  })
-  render(
-    <Wrapped>
-      <Domains search={{ zone: "zone-acme.dev" }} onSearch={() => {}} />
-    </Wrapped>
-  )
-  const card = await screen.findByRole("region", { name: "acme.dev" })
-  expect(within(card).getByText("Awaiting verification")).toBeTruthy()
-  expect(await within(card).findByText(/doesn't have one yet/)).toBeTruthy()
-  await userEvent.click(
-    within(card).getByRole("button", { name: "Renew proof" })
-  )
-  expect(writes).toEqual([
-    {
-      method: "POST",
-      path: "/api/v1/dns-zones/zone-acme.dev/update",
-      body: { project_ids: ["shop"], renew_proof: true, revision: 2 },
-    },
-  ])
-})
-
-it("saves grants with the zone's revision after a failed check", async () => {
-  let revision = 2
-  const external = () => {
-    const z = zoneWith("docs-example.org", [], { external: true })
-    z.zone.revision = revision
-    z.zone.project_ids = []
-    return z
-  }
-  const writes = stubFetch({
-    "/api/v1/domains": () =>
-      Response.json({ zones: [external()], registrations: [] }),
-    "POST /api/v1/dns-zones/zone-docs-example.org/verify": () => {
-      // A failed check saves when it looked, which moves the revision.
-      revision = 3
-      return Response.json({ message: "not yet" }, { status: 409 })
-    },
-    "POST /api/v1/dns-zones/zone-docs-example.org/update": () =>
-      Response.json(external().zone),
   })
   render(
     <Wrapped>
       <Domains search={{ zone: "docs-example.org" }} onSearch={() => {}} />
     </Wrapped>
   )
-  const card = await screen.findByRole("region", { name: "docs-example.org" })
-  await userEvent.click(
-    within(card).getByRole("button", { name: "Check again" })
-  )
-  await within(card).findByText(
-    "Checked just now. The record isn't visible yet."
-  )
-  await waitFor(() => expect(revision).toBe(3))
-  await userEvent.click(
-    within(card).getByRole("button", { name: "Not granted to a project yet" })
-  )
-  await userEvent.click(
-    await screen.findByRole("checkbox", { name: "acme-shop" })
-  )
-  await userEvent.click(screen.getByRole("button", { name: "Save" }))
   await waitFor(() =>
-    expect(writes.at(-1)).toEqual({
-      method: "POST",
-      path: "/api/v1/dns-zones/zone-docs-example.org/update",
-      body: { project_ids: ["shop"], renew_proof: false, revision: 3 },
-    })
+    expect(navigation.calls).toEqual([
+      {
+        to: "/domains/$zoneId",
+        params: { zoneId: "zone-docs-example.org" },
+        replace: true,
+      },
+    ])
   )
 })
+
+// These open a domain's own page now, where they move with it.
+it.todo("shows TXT instructions and checks again")
+it.todo("publishes a managed zone's TXT record instead of asking for it")
+it.todo("waits for DNS once a managed zone's record is published")
+it.todo("shows why a managed zone's record didn't publish and checks again")
+it.todo(
+  "offers wildcard certificates only on a domain that is its own Cloudflare zone"
+)
+it.todo("renews a managed zone's proof once it expires")
+it.todo("offers a proof to a zone verified before proofs were required")
+it.todo("saves grants with the zone's revision after a failed check")
 
 it("shows a registration that has no zone yet", async () => {
   stubFetch({

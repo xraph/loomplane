@@ -170,6 +170,13 @@ describe("dashboard routes", () => {
     ).toBeInTheDocument()
   })
 
+  it("sends an old zone link to the domain's page", async () => {
+    // Octopus's "Zone settings" still links to /domains?zone=<id>.
+    const { router } = await open("/domains?zone=zone_dev")
+    expect(router.state.location.pathname).toBe("/domains/zone_dev")
+    expect(router.state.location.search).toEqual({})
+  })
+
   it("retains invitation tokens in the URL", async () => {
     const { router } = await open("/invitations/accept?token=invite%2Bone")
     expect(router.state.location.search).toEqual({ token: "invite+one" })
