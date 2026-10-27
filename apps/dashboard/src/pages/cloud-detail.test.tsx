@@ -70,6 +70,7 @@ function fixture({
   granted = false,
   inUse = false,
   noTargets = false,
+  unused = false,
   profile = {} as Record<string, unknown>,
   syncs = [] as unknown[],
 } = {}) {
@@ -108,7 +109,8 @@ function fixture({
       if (path === "/api/v1/clouds/c") body = { ...cloud, ...profile }
       if (path === "/api/v1/projects/web/clouds")
         body = { clouds: [{ ...cloud, ...profile }] }
-      if (path.endsWith("/usage")) body = usage
+      if (path.endsWith("/usage"))
+        body = unused ? { cloud_id: "c", environments: [] } : usage
       if (path === "/api/v1/clouds/syncs" || path.endsWith("/cloud-syncs"))
         body = { syncs }
       if (path === "/api/v1/clouds/c/servers") body = { servers: [] }
@@ -220,6 +222,7 @@ it("shows where services go and how many run on each target", async () => {
   expect(
     await screen.findByRole("region", { name: "Environments on this Cloud" })
   ).toHaveTextContent(/production.*Web app.*3 services.*In sync/)
+  expect(screen.getByRole("banner")).toHaveTextContent("In sync")
   // History is asked for this Cloud only, not filtered from a page of all.
   expect(reads).toContain("/api/v1/clouds/syncs?cloud=c&limit=30")
 })
@@ -308,8 +311,12 @@ it("shows an organization's Cloud with the projects allowed on each target", asy
 
 it("gives a project access to only the targets you tick", async () => {
   const user = userEvent.setup()
-  const { writes } = fixture()
+  const { writes } = fixture({ unused: true })
   show()
+  // Nothing uses the Cloud yet, so there is nothing to call in sync.
+  await waitFor(() =>
+    expect(screen.getByRole("banner")).toHaveTextContent("Not in use")
+  )
   await openTab("Projects")
   expect(
     await screen.findByText("No project has access yet")
