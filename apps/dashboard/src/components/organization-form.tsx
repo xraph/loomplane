@@ -37,9 +37,7 @@ export function OrganizationForm({
   const submit = async (e: FormEvent) => {
     e.preventDefault()
     if (!slug) {
-      setError(
-        "Give the workspace a name with at least one letter or digit."
-      )
+      setError("Give the workspace a name with at least one letter or digit.")
       return
     }
     setBusy(true)

@@ -117,7 +117,9 @@ it("names each step's command in its copy button", async () => {
   panel()
   await screen.findByText("https://loomplane.example")
   expect(
-    screen.getByRole("button", { name: "Copy command: Add the identity provider" })
+    screen.getByRole("button", {
+      name: "Copy command: Add the identity provider",
+    })
   ).toBeTruthy()
   expect(
     screen.getByRole("button", { name: "Copy command: Make the role" })

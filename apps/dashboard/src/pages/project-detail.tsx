@@ -137,8 +137,8 @@ export function ProjectDetail({ id }: { id: string }) {
               <EmptyHeader>
                 <EmptyTitle>No such project here</EmptyTitle>
                 <EmptyDescription>
-                  It may have been deleted, or it belongs to another
-                  workspace. Pick one from the sidebar.
+                  It may have been deleted, or it belongs to another workspace.
+                  Pick one from the sidebar.
                 </EmptyDescription>
               </EmptyHeader>
               <EmptyContent>

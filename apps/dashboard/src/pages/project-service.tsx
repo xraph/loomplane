@@ -120,8 +120,7 @@ export function ProjectService({
               <EmptyHeader>
                 <EmptyTitle>No such project here</EmptyTitle>
                 <EmptyDescription>
-                  It may have been deleted, or it belongs to another
-                  workspace.
+                  It may have been deleted, or it belongs to another workspace.
                 </EmptyDescription>
               </EmptyHeader>
               <EmptyContent>

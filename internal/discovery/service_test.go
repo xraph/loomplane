@@ -349,6 +349,7 @@ type fixture struct {
 	fetch  *dirFetcher
 	authz  *security.Authorizer
 	access *fakeAccess
+	prj    fakeProjects
 }
 
 func newFixture(t *testing.T, maxAttempts int) *fixture {
@@ -364,6 +365,7 @@ func newFixture(t *testing.T, maxAttempts int) *fixture {
 		project:     {ID: project, OrgID: org},
 		"proj_bare": {ID: "proj_bare", OrgID: org},
 	}
+	f.prj = prj
 	f.svc = NewService(f.store, prj, authz, f.queue, f.audit)
 	f.svc.SetAccess(f.access)
 	f.source(t, project, "mono", "acme/mono", "")
@@ -785,6 +787,44 @@ func TestGitHubAccess_aCommitRefStillReadsTheRepository(t *testing.T) {
 	f := &refFetcher{err: repositories.ErrNotFound}
 	if err := (GitHubAccess{Fetcher: f}).Check(ctx, org, repo, commit); !errors.Is(err, repositories.ErrNotFound) {
 		t.Fatalf("a commit of a repository Loomplane can't read: %v", err)
+	}
+}
+
+func TestService_projectGraphLeavesOutExcludedServices(t *testing.T) {
+	ctx := context.Background()
+	f := newFixture(t, 2)
+	dev := f.as(t, "ausr_dev", security.RoleDeveloper)
+	queued, err := f.svc.Start(ctx, dev, project, StartAnalysisInput{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = f.runner.Run(ctx, org, queued[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	viewer := f.as(t, "ausr_viewer", security.RoleViewer)
+	all, err := f.svc.ProjectGraph(ctx, viewer, project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all.Excluded) != 0 || len(all.Graph.Services) < 2 {
+		t.Fatalf("before excluding: %d services, %d excluded", len(all.Graph.Services), len(all.Excluded))
+	}
+	gone := all.Graph.Services[0]
+	f.prj[project].Exclusions = []projects.Exclusion{{Kind: projects.ExclusionService, Match: gone.ID}}
+	view, err := f.svc.ProjectGraph(ctx, viewer, project)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(view.Graph.Services) != len(all.Graph.Services)-1 || slices.ContainsFunc(view.Graph.Services, func(s graph.Service) bool { return s.ID == gone.ID }) {
+		t.Fatalf("services after excluding %s: %+v", gone.ID, view.Graph.Services)
+	}
+	if len(view.Excluded) != 1 || view.Excluded[0].Service.ID != gone.ID || view.Excluded[0].Rule.Kind != graph.ExcludeService {
+		t.Fatalf("excluded = %+v", view.Excluded)
+	}
+	for _, e := range view.Graph.Edges {
+		if e.From == gone.ID || e.To == gone.ID {
+			t.Fatalf("edge %+v still touches the excluded service", e)
+		}
 	}
 }
 

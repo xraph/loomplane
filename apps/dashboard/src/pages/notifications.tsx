@@ -167,9 +167,7 @@ function NotificationContent({ admin }: { admin: boolean }) {
     setNotice("")
     try {
       await retry.mutateAsync({})
-      setNotice(
-        "Failed notification processing is queued for this workspace."
-      )
+      setNotice("Failed notification processing is queued for this workspace.")
       invalidate(useNotificationsList)
     } catch (err) {
       setError(messageOf(err, "Notification processing couldn't be retried."))

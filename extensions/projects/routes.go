@@ -59,6 +59,18 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 			forge.WithRequestSchema(projects.UpdateProjectInput{}),
 			forge.WithResponseSchema(http.StatusOK, "The project", projects.Project{}),
 		}},
+		{http.MethodPost, "/projects/:id/exclusions", e.exclude, []forge.RouteOption{
+			forge.WithName("projects.exclude"),
+			forge.WithSummary("Exclude services from a project's graph, plans and deploys, by service or path. A project setting: the repository doesn't change."),
+			forge.WithRequestSchema(projects.ExcludeInput{}),
+			forge.WithResponseSchema(http.StatusOK, "The project", projects.Project{}),
+		}},
+		{http.MethodPost, "/projects/:id/exclusions/remove", e.include, []forge.RouteOption{
+			forge.WithName("projects.include"),
+			forge.WithSummary("Remove exclusions, bringing those services back into the graph and the next plan"),
+			forge.WithRequestSchema(projects.IncludeInput{}),
+			forge.WithResponseSchema(http.StatusOK, "The project", projects.Project{}),
+		}},
 		{http.MethodDelete, "/projects/:id", e.remove, []forge.RouteOption{
 			forge.WithName("projects.delete"), forge.WithSummary("Delete a project and its environments"),
 			forge.WithNoContentResponse(),
@@ -161,6 +173,38 @@ func (e *Extension) update(c forge.Context) error {
 		return forge.NewHTTPError(http.StatusBadRequest, "the body must be a JSON project update")
 	}
 	proj, err := e.svc.Update(c.Request().Context(), p, c.Param("id"), in)
+	if err != nil {
+		return fail(err)
+	}
+	return c.JSON(http.StatusOK, proj)
+}
+
+func (e *Extension) exclude(c forge.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	var in projects.ExcludeInput
+	if err = c.BindJSON(&in); err != nil {
+		return forge.NewHTTPError(http.StatusBadRequest, "the body must be JSON: {\"exclusions\": [{\"kind\": \"path\", \"match\": \"tests/**\"}]}")
+	}
+	proj, err := e.svc.Exclude(c.Request().Context(), p, c.Param("id"), in)
+	if err != nil {
+		return fail(err)
+	}
+	return c.JSON(http.StatusOK, proj)
+}
+
+func (e *Extension) include(c forge.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	var in projects.IncludeInput
+	if err = c.BindJSON(&in); err != nil {
+		return forge.NewHTTPError(http.StatusBadRequest, "the body must be JSON: {\"exclusions\": [{\"kind\": \"path\", \"match\": \"tests/**\"}]}")
+	}
+	proj, err := e.svc.Include(c.Request().Context(), p, c.Param("id"), in)
 	if err != nil {
 		return fail(err)
 	}

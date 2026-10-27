@@ -239,8 +239,8 @@ function Domains({
             <ZeroStateTitle>No domains yet</ZeroStateTitle>
             {noZones ? (
               <ZeroStateDescription>
-                Your workspace has no zones this project can use. Add one on
-                the <Link to="/domains">Domains page</Link>.
+                Your workspace has no zones this project can use. Add one on the{" "}
+                <Link to="/domains">Domains page</Link>.
               </ZeroStateDescription>
             ) : (
               <ZeroStateDescription>

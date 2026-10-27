@@ -58,6 +58,11 @@ type Input struct {
 	// Held are the aliases of repositories this plan doesn't move: their
 	// services stay as deployed.
 	Held map[string]bool
+	// Excluded are the graph services the project excludes, by ID, each
+	// true when what's deployed of it stays running as it is. An excluded
+	// service is never created or changed; one that's deployed and not
+	// kept running is deleted.
+	Excluded map[string]bool
 	// Kinds are the catalog's engines and composed kinds. Nil means
 	// recipes.Default().
 	Kinds *recipes.Registry
@@ -156,6 +161,7 @@ func Compute(in Input) *Result {
 		bindings:  map[string]*Binding{},
 		heldNew:   map[string]string{},
 		held:      map[string]string{},
+		excluded:  map[string]bool{},
 		retained:  map[string]*Action{},
 		keptFor:   map[string][]string{},
 		taken:     map[string]string{},
@@ -219,6 +225,8 @@ type planner struct {
 	// held are the held services kept as they're deployed, by manifest
 	// name, with the alias of the repository that holds them.
 	held map[string]string
+	// excluded are the manifest services the project excludes, by name.
+	excluded map[string]bool
 	// retained are keep actions, by action ID, for what held services use
 	// that the plan would otherwise remove.
 	retained map[string]*Action
@@ -597,6 +605,19 @@ func (p *planner) planServices() {
 			continue
 		}
 		p.matched[gs.ID] = true
+		if keepRunning, ok := p.in.Excluded[gs.ID]; ok {
+			// Excluded before anything is planned for it. planDeletes
+			// removes what's deployed of it, unless it's kept running.
+			p.excluded[name] = true
+			if keepRunning && b != nil {
+				a := p.kept(b, "Excluded from this project, and left running as it is.")
+				p.held[name] = repo
+				p.services[name] = a
+				p.actions = append(p.actions, a)
+				held = append(held, name)
+			}
+			continue
+		}
 		p.graphServices[name] = gs
 		if !manifest.On(set.Enabled) {
 			continue
@@ -2218,7 +2239,7 @@ func (p *planner) checkFindings() {
 	for _, gs := range g.Services {
 		// A held repository's services aren't matched, and adding one to
 		// the manifest would wait anyway.
-		if !gs.Deployable || p.matched[gs.ID] || p.in.Held[gs.Source] {
+		if _, excluded := p.in.Excluded[gs.ID]; !gs.Deployable || p.matched[gs.ID] || p.in.Held[gs.Source] || excluded {
 			continue
 		}
 		p.warn(Finding{
@@ -2316,7 +2337,9 @@ func (p *planner) planDeletes() {
 			owner = &Binding{Subject: ResourceSubject, Name: of.parent}
 		}
 		reason := fmt.Sprintf("The manifest no longer has %s.", owner.Name)
-		if wanted, on := p.wanted(owner); part && p.resources[of.parent] != nil {
+		if !part && b.Subject == ServiceSubject && p.excluded[b.Name] {
+			reason = fmt.Sprintf("%s is excluded from this project.", b.Name)
+		} else if wanted, on := p.wanted(owner); part && p.resources[of.parent] != nil {
 			reason = fmt.Sprintf("%s no longer has %s.", of.parent, b.Name)
 		} else if wanted {
 			if on {

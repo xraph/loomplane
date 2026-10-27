@@ -308,8 +308,8 @@ function MemberRow({
                     Remove {member.name || member.email}?
                   </AlertDialogTitle>
                   <AlertDialogDescription>
-                    They lose access to this workspace's projects at once.
-                    You can invite them again later.
+                    They lose access to this workspace's projects at once. You
+                    can invite them again later.
                   </AlertDialogDescription>
                 </AlertDialogHeader>
                 <AlertDialogFooter>
