@@ -957,12 +957,12 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 		applyWarnings = append(applyWarnings, err.Error())
 	}
 	if ramps {
-		err := r.deployCandidate(ctx, d, exec, job, step)
+		candidateErr := r.deployCandidate(ctx, d, exec, job, step)
 		job.warn = nil
-		if err == nil {
+		if candidateErr == nil {
 			step.Warnings = append(step.Warnings, applyWarnings...)
 		}
-		return err
+		return candidateErr
 	}
 	out, err := exec.Apply(ctx, job)
 	job.warn = nil

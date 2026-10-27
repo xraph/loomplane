@@ -255,6 +255,26 @@ func TestRunDeploysTheCandidateDark(t *testing.T) {
 	}
 }
 
+// What an executor warns about while it starts a candidate, such as an
+// image it couldn't pin by digest, reaches the ramping step.
+func TestACandidatesWarningsReachItsStep(t *testing.T) {
+	plan := canaryPlan()
+	r, store, _, exec := newCanaryRunner(t, plan)
+	exec.onApply = func(job *Job) {
+		if job.Action.Name == "api" {
+			job.Warn(errors.New("api deploys by tag"))
+		}
+	}
+	id, err := startCanary(t, r, plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	step := getDeployment(t, store, id).Step("service:api")
+	if step.Status != StepRamping || !slices.Equal(step.Warnings, []string{"api deploys by tag"}) {
+		t.Fatalf("step %s, warnings %q", step.Status, step.Warnings)
+	}
+}
+
 func TestRunAgainOnARampingStepDoesNothing(t *testing.T) {
 	plan := canaryPlan()
 	r, store, _, exec := newCanaryRunner(t, plan)
