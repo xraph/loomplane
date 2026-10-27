@@ -60,6 +60,19 @@ type Service struct {
 	// honoring. It may be nil.
 	Lapsed func(ctx context.Context, c *Connection)
 
+	// Connecting keylessly. The extension sets these. Without a usable
+	// issuer, nothing keyless works.
+	Keyless       KeylessIssuer
+	KeylessClouds map[string]KeylessCloud
+	// Rotate turns over the issuer's signing keys. The scheduled job calls
+	// it. It may be nil.
+	Rotate func(context.Context) error
+	// IssuerServing checks that Loomplane's issuer answers at its public
+	// URL with the key it signs with, as a cloud would fetch it. The
+	// background check asks it once a run, before it marks any keyless
+	// connection failed. Nil skips the check.
+	IssuerServing func(context.Context) error
+
 	// grants renews sign-ins. It's nil when the store can't lock a
 	// connection, and then nothing is renewed.
 	grants grantStore
@@ -147,9 +160,13 @@ func (AzureChecker) PastedGrant() string {
 }
 
 // refusePastedGrant keeps Method true to what Vault holds: a pasted
-// credential that is really a sign-in grant is refused.
+// credential that is really a sign-in grant, or a keyless handout, is
+// refused.
 func refusePastedGrant(c Checker, cred []byte, method string) error {
 	if g, ok := c.(GrantChecker); ok && method == MethodToken && g.IsGrant(cred) {
+		if keylessJSON(cred) {
+			return fmt.Errorf("%w: that's a keyless handout, not a credential; connect keylessly from the connect dialog instead", ErrInvalid)
+		}
 		if a, ok := c.(pastedGrantAdvice); ok {
 			return fmt.Errorf("%w: %s", ErrInvalid, a.PastedGrant())
 		}
@@ -174,7 +191,16 @@ func (s *Service) Create(ctx context.Context, p security.Principal, in CreateInp
 	if err := s.authz.Require(ctx, p, security.CloudAccountManage, ""); err != nil {
 		return nil, err
 	}
-	return s.create(ctx, p, in.Cloud, in.Name, []byte(strings.TrimSpace(in.Credential)), nil, in.Settings, MethodToken)
+	return s.create(ctx, p, "", in.Cloud, in.Name, []byte(strings.TrimSpace(in.Credential)), nil, in.Settings, MethodToken)
+}
+
+// newConnectionID makes the ID of a new connection.
+func newConnectionID() (string, error) {
+	id, err := typeid.Generate("conn")
+	if err != nil {
+		return "", fmt.Errorf("generate connection id: %w", err)
+	}
+	return id.String(), nil
 }
 
 func validName(name string) (string, error) {
@@ -186,10 +212,11 @@ func validName(name string) (string, error) {
 }
 
 // create checks cred with its cloud and stores a new connection that got
-// its credential by method. checked is what the check gets instead of
-// cred, such as a sign-in's handout; nil checks cred. The caller has
-// checked the principal's role.
-func (s *Service) create(ctx context.Context, p security.Principal, cloud, name string, cred, checked []byte, settings map[string]string, method string) (*Connection, error) {
+// its credential by method, with ID id, or a new one when id is empty.
+// checked is what the check gets instead of cred, such as a sign-in's
+// handout; nil checks cred. A keyless connection writes nothing to Vault.
+// The caller has checked the principal's role.
+func (s *Service) create(ctx context.Context, p security.Principal, id, cloud, name string, cred, checked []byte, settings map[string]string, method string) (*Connection, error) {
 	cloud = strings.TrimSpace(cloud)
 	checker, err := s.checker(cloud)
 	if err != nil {
@@ -209,23 +236,29 @@ func (s *Service) create(ctx context.Context, p security.Principal, cloud, name 
 	if err != nil {
 		return nil, err
 	}
-	id, err := typeid.Generate("conn")
-	if err != nil {
-		return nil, fmt.Errorf("generate connection id: %w", err)
+	if id == "" {
+		if id, err = newConnectionID(); err != nil {
+			return nil, err
+		}
 	}
 	now := s.now().UTC()
-	c := &Connection{ID: id.String(), OrgID: p.OrgID, Cloud: cloud, Name: name, Method: method, CreatedBy: p.UserID, CreatedAt: now}
+	c := &Connection{ID: id, OrgID: p.OrgID, Cloud: cloud, Name: name, Method: method, CreatedBy: p.UserID, CreatedAt: now}
 	c.SignedInBy = signer(p, method)
 	apply(c, res, now)
+	keeps := method != MethodKeyless
 	// The secret first: a row without its secret would look connected and
 	// fail every deployment, where a secret without its row is unreachable
 	// and harmless.
-	if err := s.secrets.Put(ctx, p.OrgID, c.ID, cred); err != nil {
-		return nil, err
+	if keeps {
+		if err := s.secrets.Put(ctx, p.OrgID, c.ID, cred); err != nil {
+			return nil, err
+		}
 	}
 	if err := s.store.CreateConnection(ctx, c); err != nil {
-		if derr := s.secrets.Delete(context.WithoutCancel(ctx), p.OrgID, c.ID); derr != nil {
-			s.warn("remove the secret of a connection that wasn't saved", derr)
+		if keeps {
+			if derr := s.secrets.Delete(context.WithoutCancel(ctx), p.OrgID, c.ID); derr != nil {
+				s.warn("remove the secret of a connection that wasn't saved", derr)
+			}
 		}
 		return nil, err
 	}
@@ -289,6 +322,11 @@ func (s *Service) Recheck(ctx context.Context, p security.Principal, id string) 
 		}
 		if grantErr != nil {
 			return nil, grantErr
+		}
+	} else if c.Method == MethodKeyless {
+		// A trust the cloud refuses fails the way a refused token does.
+		if cred, err = s.keylessHandout(ctx, c); err != nil {
+			return nil, err
 		}
 	} else if cred, err = s.secrets.Reveal(ctx, p.OrgID, c.ID); err != nil {
 		return nil, err
@@ -367,8 +405,9 @@ func signer(p security.Principal, method string) string {
 
 // replace swaps connection id's credential for cred, which got there by
 // method, if the cloud accepts it for the same account. checked is what
-// the check gets instead of cred, as for create. The caller has checked
-// the principal's role.
+// the check gets instead of cred, as for create. A move to keyless writes
+// nothing to Vault; the caller removes the old secret. The caller has
+// checked the principal's role.
 func (s *Service) replace(ctx context.Context, p security.Principal, id string, cred, checked []byte, settings map[string]string, method string) (*Connection, error) {
 	c, err := s.store.GetConnection(ctx, p.OrgID, id)
 	if err != nil {
@@ -415,8 +454,10 @@ func (s *Service) replace(ctx context.Context, p security.Principal, id string, 
 	}
 	// Persistent stores serialize secret writes and invalidate old approvals first.
 	replace := func() error {
-		if err := s.secrets.Put(ctx, p.OrgID, c.ID, cred); err != nil {
-			return err
+		if method != MethodKeyless {
+			if err := s.secrets.Put(ctx, p.OrgID, c.ID, cred); err != nil {
+				return err
+			}
 		}
 		c.Method = method
 		c.SignedInBy = signer(p, method)
@@ -464,7 +505,8 @@ func (s *Service) Delete(ctx context.Context, p security.Principal, id string) e
 // deployment. It checks no role: only Loomplane's own workflow calls it,
 // for a plan someone was allowed to approve. A signed-in connection's
 // credential is its access token, renewed first if it expires within a
-// day, or its handout, for a cloud whose sessions renew themselves.
+// day, or its handout, for a cloud whose sessions renew themselves. A
+// keyless connection's is its keyless handout, and Vault isn't read.
 func (s *Service) Credential(ctx context.Context, orgID, id string) (*Connection, []byte, error) {
 	c, err := s.store.GetConnection(ctx, orgID, id)
 	if err != nil {
@@ -485,6 +527,10 @@ func (s *Service) Credential(ctx context.Context, orgID, id string) (*Connection
 			}
 		} else {
 			cred = []byte(g.AccessToken)
+		}
+	} else if c.Method == MethodKeyless {
+		if cred, err = s.keylessHandout(ctx, c); err != nil {
+			return nil, nil, err
 		}
 	} else if cred, err = s.secrets.Reveal(ctx, orgID, id); err != nil {
 		return nil, nil, err

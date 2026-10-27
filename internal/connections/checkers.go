@@ -25,8 +25,9 @@ import (
 	"github.com/xraph/loomplane/pkg/provider/sdk"
 )
 
-// GCPChecker checks Google Cloud service account keys, and the
-// authorized_user keys a Google sign-in hands out.
+// GCPChecker checks Google Cloud service account keys, the
+// authorized_user keys a Google sign-in hands out, and keyless handouts
+// that impersonate a service account.
 type GCPChecker struct{ Client *gcp.Client }
 
 // IsGrant implements GrantChecker: an authorized_user key only ever comes
@@ -35,7 +36,7 @@ func (GCPChecker) IsGrant(credential []byte) bool {
 	var k struct {
 		Type string `json:"type"`
 	}
-	return json.Unmarshal(bytes.TrimSpace(credential), &k) == nil && k.Type == "authorized_user"
+	return keylessJSON(credential) || json.Unmarshal(bytes.TrimSpace(credential), &k) == nil && k.Type == "authorized_user"
 }
 
 // Parse implements Checker. Billing export and a native recovery VPC are
@@ -47,8 +48,13 @@ func (g GCPChecker) Parse(credential []byte, settings map[string]string) (Check,
 		return Check{}, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
 	details := map[string]string{"project_id": key.ProjectID, "service_account": key.ClientEmail}
-	if key.User {
+	switch {
+	case key.User:
 		details = map[string]string{"project_id": key.ProjectID, "signed_in_as": key.ClientEmail}
+	case key.Keyless:
+		// A handout is built from these details, so the provider stays in
+		// them.
+		details["workload_provider"] = key.WorkloadProvider
 	}
 	if table := strings.TrimSpace(settings[gcp.BillingExportSetting]); table != "" {
 		if billingErr := gcp.CheckBillingTable(table); billingErr != nil {
@@ -67,7 +73,9 @@ func (g GCPChecker) Parse(credential []byte, settings map[string]string) (Check,
 }
 
 // Check implements Checker: it asks Google which of the permissions a
-// deployment needs the service account, or the person, holds.
+// deployment needs the service account, or the person, holds. A keyless
+// handout first trades a minted token for the service account's, which a
+// trust that isn't set up refuses.
 func (g GCPChecker) Check(ctx context.Context, credential []byte, settings map[string]string) (Check, error) {
 	c, err := g.Parse(credential, settings)
 	if err != nil {
@@ -113,7 +121,7 @@ func vercelGrant(credential []byte) (g oauth.Grant, ok bool, err error) {
 func (VercelChecker) IsGrant(credential []byte) bool {
 	// A grant that doesn't parse is still a grant; Parse says what's wrong.
 	_, isGrant, _ := vercelGrant(credential) //nolint:errcheck // only whether it's a grant matters here
-	return isGrant
+	return isGrant || keylessJSON(credential)
 }
 
 // Parse implements Checker. The one setting is team_id; without it the
@@ -250,6 +258,9 @@ var ownerRE = regexp.MustCompile(`^(tea|usr)-[a-z0-9]{1,64}$`)
 // error naming them.
 type RenderChecker struct{ Client *render.Client }
 
+// IsGrant implements GrantChecker.
+func (RenderChecker) IsGrant(credential []byte) bool { return keylessJSON(credential) }
+
 // Parse implements Checker.
 func (r RenderChecker) Parse(credential []byte, settings map[string]string) (Check, error) {
 	if err := render.CheckKey(string(credential)); err != nil {
@@ -319,7 +330,7 @@ func digitalOceanGrant(credential []byte) (g oauth.Grant, ok bool, err error) {
 func (DigitalOceanChecker) IsGrant(credential []byte) bool {
 	// A grant that doesn't parse is still a grant; Parse says what's wrong.
 	_, isGrant, _ := digitalOceanGrant(credential) //nolint:errcheck // only whether it's a grant matters here
-	return isGrant
+	return isGrant || keylessJSON(credential)
 }
 
 // Parse implements Checker. A grant says which account and team it's for.
@@ -373,24 +384,28 @@ func (d DigitalOceanChecker) Check(ctx context.Context, credential []byte, setti
 	return c, nil
 }
 
-// AzureChecker checks Azure service principals, and the azure_user keys
-// an Azure sign-in hands out. The credential is the principal's client
-// secret, or the key; the settings say where it deploys: tenant_id and
-// subscription_id, and resource_group, which defaults to loomplane. A
-// principal's settings also say whose it is, as client_id.
+// AzureChecker checks Azure service principals, the azure_user keys an
+// Azure sign-in hands out, and keyless handouts for an app whose
+// federated credential trusts Loomplane. The credential is the
+// principal's client secret, the key, or the handout; the settings say
+// where it deploys: tenant_id and subscription_id, and resource_group,
+// which defaults to loomplane. A principal's or keyless app's settings
+// also say whose it is, as client_id.
 type AzureChecker struct{ Client *azure.Client }
 
 // IsGrant implements GrantChecker: an azure_user key only ever comes from
-// a sign-in.
+// a sign-in, and a keyless handout only from Loomplane's issuer.
 func (AzureChecker) IsGrant(credential []byte) bool {
 	var k struct {
 		Type string `json:"type"`
 	}
-	return json.Unmarshal(bytes.TrimSpace(credential), &k) == nil && k.Type == "azure_user"
+	return keylessJSON(credential) || json.Unmarshal(bytes.TrimSpace(credential), &k) == nil && k.Type == "azure_user"
 }
 
 // Parse implements Checker. A signed-in person's key names them as
-// signed_in_as; the sign-in app's client isn't shown.
+// signed_in_as; the sign-in app's client isn't shown. A keyless app's
+// details are a principal's: a handout is built from them, so they keep
+// the app and every part of the placement a session needs.
 func (a AzureChecker) Parse(credential []byte, settings map[string]string) (Check, error) {
 	cred, err := azure.ParseCredential(credential, settings)
 	if err != nil {
@@ -408,9 +423,11 @@ func (a AzureChecker) Parse(credential []byte, settings map[string]string) (Chec
 	}}, nil
 }
 
-// Check implements Checker: it signs in as the principal, or renews the
-// person's sign-in, reads the subscription, and asks Azure which of the
-// actions a deployment needs their role assignments allow.
+// Check implements Checker: it signs in as the principal or the keyless
+// app, or renews the person's sign-in, reads the subscription, and asks
+// Azure which of the actions a deployment needs their role assignments
+// allow. A keyless app signs in with a minted token, which an app whose
+// federated credential isn't set up refuses.
 func (a AzureChecker) Check(ctx context.Context, credential []byte, settings map[string]string) (Check, error) {
 	c, err := a.Parse(credential, settings)
 	if err != nil {
@@ -493,9 +510,13 @@ func refusedSignIn(err error) bool {
 		(errors.As(err, &de) && de.Status == http.StatusUnauthorized)
 }
 
-// AWSChecker checks AWS access keys in a required region. Optional private
-// recovery route settings do not establish connectivity or SQL verification.
+// AWSChecker checks AWS access keys in a required region, and keyless
+// handouts that assume a role there. Optional private recovery route
+// settings do not establish connectivity or SQL verification.
 type AWSChecker struct{ Client *aws.Client }
+
+// IsGrant implements GrantChecker.
+func (AWSChecker) IsGrant(credential []byte) bool { return keylessJSON(credential) }
 
 // Parse implements Checker.
 func (a AWSChecker) Parse(credential []byte, settings map[string]string) (Check, error) {
@@ -507,12 +528,18 @@ func (a AWSChecker) Parse(credential []byte, settings map[string]string) (Check,
 	if err := aws.CheckRegion(region); err != nil {
 		return Check{}, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
-	details := map[string]string{"region": region, "access_key": "…" + key.AccessKeyID[len(key.AccessKeyID)-4:]}
+	details := map[string]string{"region": region}
+	if key.Keyless() {
+		// A handout is built from these details, so the role stays in them.
+		details["role_arn"] = key.RoleARN
+	} else {
+		details["access_key"] = "…" + key.AccessKeyID[len(key.AccessKeyID)-4:]
+	}
 	// An ACM certificate in the region serves public ECS services over
 	// HTTPS; without one they serve HTTP.
 	if cert := strings.TrimSpace(settings["certificate_arn"]); cert != "" {
-		if !strings.HasPrefix(cert, "arn:aws:acm:"+region+":") || !strings.Contains(cert, ":certificate/") {
-			return Check{}, fmt.Errorf("%w: %q isn't an ACM certificate in %s", ErrInvalid, cert, region)
+		if err := aws.CheckCertificateARN(cert, region); err != nil {
+			return Check{}, fmt.Errorf("%w: %w", ErrInvalid, err)
 		}
 		details["certificate_arn"] = cert
 	}
@@ -529,7 +556,9 @@ func (a AWSChecker) Parse(credential []byte, settings map[string]string) (Check,
 
 // Check implements Checker: it asks STS who the key is, then IAM's policy
 // simulator which actions a deployment needs it may take. A key that may
-// not run the simulator is ready, with its permissions unchecked.
+// not run the simulator is ready, with its permissions unchecked. A
+// keyless handout first assumes its role, which a trust that isn't set up
+// refuses.
 func (a AWSChecker) Check(ctx context.Context, credential []byte, settings map[string]string) (Check, error) {
 	c, err := a.Parse(credential, settings)
 	if err != nil {

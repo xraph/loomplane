@@ -97,12 +97,13 @@ func (s *Service) enqueueMembers(ctx context.Context, org, key, kind string, pay
 }
 
 func (s *Service) registerEventTypes(ctx context.Context) error {
-	definitions := make([]catalog.WebhookDefinition, 0, 4+len(registrationStatuses))
+	definitions := make([]catalog.WebhookDefinition, 0, 5+len(registrationStatuses))
 	for _, status := range []string{"succeeded", "failed"} {
 		definitions = append(definitions, catalog.WebhookDefinition{Name: "deployment." + status, Description: "A deployment attempt completed", Group: "deployment", Version: "2026-10-18"})
 	}
 	definitions = append(definitions,
 		catalog.WebhookDefinition{Name: connectionSignInNeeded, Description: "A cloud connection needs signing in again", Group: "connection", Version: "2026-10-25"},
+		catalog.WebhookDefinition{Name: connectionKeylessRefused, Description: "A cloud no longer trusts Loomplane for a keyless connection", Group: "connection", Version: "2026-11-16"},
 		catalog.WebhookDefinition{Name: "domain.renewal_upcoming", Description: "A registered domain renews soon", Group: "domain", Version: "2026-11-05"})
 	for _, status := range registrationStatuses {
 		definitions = append(definitions, catalog.WebhookDefinition{Name: "domain.registration_" + status, Description: "A domain registration ended", Group: "domain", Version: "2026-11-05"})

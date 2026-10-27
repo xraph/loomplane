@@ -13,7 +13,7 @@ The config directory is the current directory, or `LOOMPLANE_CONFIG_DIR`. The Do
 |---|---|---|
 | `LOOMPLANE_ENVIRONMENT` | `development` | `development`, `staging` or `production`. Production refuses the development secret key and an `http://` public URL |
 | `LOOMPLANE_HTTP_ADDR` | `:8780` | Where the API listens |
-| `LOOMPLANE_PUBLIC_URL` | `http://localhost:8780` | The address browsers and the CLI reach Loomplane at. Recovery and invitation links are built from it. Must be an absolute URL, and https in production |
+| `LOOMPLANE_PUBLIC_URL` | `http://localhost:8780` | The address browsers and the CLI reach Loomplane at. Recovery and invitation links are built from it, and it's the issuer [keyless connections](/docs/clouds/keyless) trust, which needs https on a host the internet reaches. Must be an absolute URL, and https in production |
 | `LOOMPLANE_SECRET_KEY` | A development key | 32 random bytes, base64 (`openssl rand -base64 32`). Every credential and secret is encrypted with keys derived from it. Keep it safe and away from your backups |
 | `LOOMPLANE_DATABASE_URL` | Required | PostgreSQL DSN. Falls back to `DATABASE_URL`, which platforms like App Platform, Render, Heroku and Miget set for you |
 | `LOOMPLANE_DASHBOARD_DIR` | `apps/dashboard/dist` | The built dashboard. Without one the API still runs and serves no dashboard |

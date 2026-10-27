@@ -5,6 +5,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -17,6 +20,11 @@ const refreshAhead = 24 * time.Hour
 // backgroundAhead is how close to expiry the background job renews a
 // sign-in, so one nobody deploys with still stays fresh.
 const backgroundAhead = 7 * 24 * time.Hour
+
+// keylessCheckPrefix starts the message of a keyless connection the
+// background check failed, so the check knows it may heal it. One a
+// Recheck failed doesn't have it.
+const keylessCheckPrefix = "Daily check: "
 
 // probeEvery is how long a sign-in that needs no renewing goes between
 // asks of the cloud whether it still honors it, so an uninstalled
@@ -39,6 +47,7 @@ const maxRenewals = 4
 type grantStore interface {
 	OAuthConnections(ctx context.Context) ([]*Connection, error)
 	LeftSignIns(ctx context.Context, clouds []string) ([]*Connection, error)
+	KeylessConnections(ctx context.Context) ([]*Connection, error)
 	WithConnectionLock(ctx context.Context, orgID, id string, fn func() error) error
 }
 
@@ -310,6 +319,20 @@ func (s *Service) needSignIn(ctx context.Context, c *Connection, why string) (*C
 	return c, nil
 }
 
+// refuseTrust marks keyless c as failed with the cloud's message. It
+// returns c if this call changed it, so Lapsed is told once. The account is
+// unchanged, so the store keeps the generation.
+func (s *Service) refuseTrust(ctx context.Context, c *Connection, why string) (*Connection, error) {
+	if c.Status == StatusFailed {
+		return nil, nil
+	}
+	c.Status, c.Message, c.UpdatedAt = StatusFailed, why, s.now().UTC()
+	if err := s.store.UpdateConnection(ctx, c); err != nil {
+		return nil, err
+	}
+	return c, nil
+}
+
 // tellLapsed passes a connection needSignIn changed to Lapsed. The change
 // is already saved, so a caller giving up now must not lose the notice.
 func (s *Service) tellLapsed(ctx context.Context, c *Connection) {
@@ -325,27 +348,35 @@ func (s *Service) tellLapsed(ctx context.Context, c *Connection) {
 // If the lock fails after the change was saved, the change stands, so
 // Lapsed is told here and the error is returned without it.
 func (s *Service) signInRefused(ctx context.Context, c *Connection, why string, checked *time.Time) (current, lapsed *Connection, err error) {
-	mark := func() error {
+	return s.refusedUnderLock(ctx, c, MethodOAuth, StatusSignInNeeded, why, checked, s.needSignIn)
+}
+
+// refusedUnderLock marks c, a connection of method, with mark under the
+// connection's lock, unless it changed since c was read. settled is the
+// status that needs no marking. A change is stamped as checked at checked,
+// if given. See signInRefused for what it returns.
+func (s *Service) refusedUnderLock(ctx context.Context, c *Connection, method, settled, why string, checked *time.Time, mark func(context.Context, *Connection, string) (*Connection, error)) (current, lapsed *Connection, err error) {
+	run := func() error {
 		latest, getErr := s.store.GetConnection(ctx, c.OrgID, c.ID)
 		if getErr != nil {
 			return getErr
 		}
-		if latest.Method != MethodOAuth || latest.Generation != c.Generation || latest.Message == replacementInProgressMessage {
+		if latest.Method != method || latest.Generation != c.Generation || latest.Message == replacementInProgressMessage {
 			return ErrChanged
 		}
-		if latest.Status != StatusSignInNeeded && checked != nil {
-			// needSignIn saves only a change, so only a change is stamped.
+		if latest.Status != settled && checked != nil {
+			// mark saves only a change, so only a change is stamped.
 			latest.CheckedAt = checked
 		}
 		current = latest
 		var markErr error
-		lapsed, markErr = s.needSignIn(ctx, latest, why)
+		lapsed, markErr = mark(ctx, latest, why)
 		return markErr
 	}
 	if s.grants == nil {
-		err = mark()
+		err = run()
 	} else {
-		err = s.grants.WithConnectionLock(ctx, c.OrgID, c.ID, mark)
+		err = s.grants.WithConnectionLock(ctx, c.OrgID, c.ID, run)
 	}
 	if err != nil && lapsed != nil {
 		s.tellLapsed(ctx, lapsed)
@@ -455,13 +486,181 @@ func (s *Service) probeQuiet(ctx context.Context, c *Connection, held oauth.Gran
 // under the connection's lock, unless it changed since c was read. Only
 // the check time is saved, so the generation stays.
 func (s *Service) stampChecked(ctx context.Context, c *Connection, checked time.Time) error {
+	return s.stampMethod(ctx, c, MethodOAuth, checked)
+}
+
+// stampMethod is stampChecked for a connection of method.
+func (s *Service) stampMethod(ctx context.Context, c *Connection, method string, checked time.Time) error {
 	return s.grants.WithConnectionLock(ctx, c.OrgID, c.ID, func() error {
 		latest, err := s.store.GetConnection(ctx, c.OrgID, c.ID)
 		if err != nil {
 			return err
 		}
-		if latest.Method != MethodOAuth || latest.Generation != c.Generation || latest.Status != c.Status || latest.Message == replacementInProgressMessage {
+		if latest.Method != method || latest.Generation != c.Generation || latest.Status != c.Status || latest.Message == replacementInProgressMessage {
 			return ErrChanged
+		}
+		latest.CheckedAt, latest.UpdatedAt = &checked, checked
+		return s.store.UpdateConnection(ctx, latest)
+	})
+}
+
+// keylessRefusal is a keyless connection whose cloud refused its trust in
+// this run, and why, waiting to be marked.
+type keylessRefusal struct {
+	c   *Connection
+	why string
+	at  time.Time
+}
+
+// checkKeyless asks the cloud, once a day, whether it still trusts
+// Loomplane for each keyless connection, with the handout a deployment
+// would get. An answer that it is trusted stamps CheckedAt, and moves a
+// connection this check failed itself back to ready. Any other failure
+// changes nothing and is counted as failed. One that fails doesn't stop
+// the rest.
+//
+// A refusal marks the connection failed with the cloud's message and
+// tells Lapsed once, unless it looks like Loomplane's own fault: its
+// issuer isn't serving the key it signs with at its public URL, which is
+// asked once, before anything is marked, or every connection to one cloud
+// was refused, two or more of them. Then the refusals are counted as
+// failed, nothing changes, and it warns once.
+func (s *Service) checkKeyless(ctx context.Context, report *RefreshReport) error {
+	conns, err := s.grants.KeylessConnections(ctx)
+	if err != nil {
+		return err
+	}
+	probed := map[string]int{}
+	refused := map[string][]keylessRefusal{}
+	for _, c := range conns {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		r, asked := s.probeKeyless(ctx, c, report)
+		if !asked || c.Status == StatusFailed {
+			// One this check failed already doesn't count toward the
+			// breaker, and its refusal has nothing left to mark.
+			continue
+		}
+		probed[c.Cloud]++
+		if r != nil {
+			refused[c.Cloud] = append(refused[c.Cloud], *r)
+		}
+	}
+	var pending []keylessRefusal
+	for _, cloud := range slices.Sorted(maps.Keys(refused)) {
+		list := refused[cloud]
+		if len(list) >= 2 && len(list) == probed[cloud] {
+			report.Failed += len(list)
+			s.warn("check keyless connections to "+cloud, fmt.Errorf("%s refused all %d of them, which looks like Loomplane's issuer and not their trusts, so none is marked failed", cloudTitle(cloud), len(list)))
+			continue
+		}
+		pending = append(pending, list...)
+	}
+	if len(pending) == 0 {
+		return nil
+	}
+	if s.IssuerServing != nil {
+		if err := s.IssuerServing(ctx); err != nil {
+			report.Failed += len(pending)
+			s.warn(fmt.Sprintf("check Loomplane's issuer before marking %d keyless connections failed; none is marked", len(pending)), err)
+			return nil
+		}
+	}
+	for _, r := range pending {
+		s.markKeyless(ctx, r, report)
+	}
+	return nil
+}
+
+// probeKeyless asks c's cloud whether it trusts Loomplane, unless that
+// was asked within probeEvery. asked says whether it was. A refusal of a
+// connection that isn't failed yet is returned, for checkKeyless to mark.
+// One this check failed and the cloud still refuses is stamped, so it's
+// asked again a day on.
+func (s *Service) probeKeyless(ctx context.Context, c *Connection, report *RefreshReport) (refusal *keylessRefusal, asked bool) {
+	now := s.now().UTC()
+	if c.CheckedAt != nil && now.Sub(*c.CheckedAt) < probeEvery {
+		return nil, false
+	}
+	fail := func(err error) {
+		report.Failed++
+		s.warn("check the keyless trust of "+c.ID, err)
+	}
+	checker, err := s.checker(c.Cloud)
+	if err != nil {
+		fail(err)
+		return nil, true
+	}
+	cred, err := s.keylessHandout(ctx, c)
+	if err != nil {
+		fail(err)
+		return nil, true
+	}
+	checkCtx, cancel := context.WithTimeout(ctx, renewTimeout)
+	res, err := s.check(checkCtx, c.Cloud, checker, cred, c.Details)
+	cancel()
+	switch {
+	case err == nil && c.Status == StatusFailed:
+		switch healErr := s.healKeyless(ctx, c, res, now); {
+		case errors.Is(healErr, ErrChanged):
+		case healErr != nil:
+			fail(healErr)
+		default:
+			report.Probed++
+		}
+	case err == nil:
+		switch stampErr := s.stampMethod(ctx, c, MethodKeyless, now); {
+		case errors.Is(stampErr, ErrChanged):
+		case stampErr != nil:
+			fail(stampErr)
+		default:
+			report.Probed++
+		}
+	case errors.Is(err, ErrInvalid) && c.Status == StatusFailed:
+		if stampErr := s.stampMethod(ctx, c, MethodKeyless, now); stampErr != nil && !errors.Is(stampErr, ErrChanged) {
+			fail(stampErr)
+		}
+	case errors.Is(err, ErrInvalid):
+		why := keylessCheckPrefix + strings.TrimPrefix(err.Error(), ErrInvalid.Error()+": ")
+		return &keylessRefusal{c: c, why: why, at: now}, true
+	default:
+		fail(err)
+	}
+	return nil, true
+}
+
+// markKeyless marks a refused keyless connection failed, under its lock,
+// and tells Lapsed once.
+func (s *Service) markKeyless(ctx context.Context, r keylessRefusal, report *RefreshReport) {
+	_, lapsed, err := s.refusedUnderLock(ctx, r.c, MethodKeyless, StatusFailed, r.why, &r.at, s.refuseTrust)
+	switch {
+	case errors.Is(err, ErrChanged):
+	case err != nil:
+		report.Failed++
+		s.warn("check the keyless trust of "+r.c.ID, err)
+	case lapsed != nil:
+		report.Lapsed++
+		s.tellLapsed(ctx, lapsed)
+	}
+}
+
+// healKeyless moves keyless c, which this check failed, back to what the
+// cloud just answered, under the connection's lock, unless it changed since
+// c was read or someone has checked it since. The account is unchanged, so
+// the generation stays, and nobody is told.
+func (s *Service) healKeyless(ctx context.Context, c *Connection, res Check, checked time.Time) error {
+	return s.grants.WithConnectionLock(ctx, c.OrgID, c.ID, func() error {
+		latest, err := s.store.GetConnection(ctx, c.OrgID, c.ID)
+		if err != nil {
+			return err
+		}
+		if latest.Method != MethodKeyless || latest.Generation != c.Generation || latest.Status != StatusFailed || !strings.HasPrefix(latest.Message, keylessCheckPrefix) {
+			return ErrChanged
+		}
+		latest.Status, latest.Missing, latest.Message = StatusReady, res.Missing, ""
+		if len(res.Missing) > 0 {
+			latest.Status = StatusIncomplete
 		}
 		latest.CheckedAt, latest.UpdatedAt = &checked, checked
 		return s.store.UpdateConnection(ctx, latest)
@@ -471,7 +670,8 @@ func (s *Service) stampChecked(ctx context.Context, c *Connection, checked time.
 // RefreshDue first asks for a new sign-in wherever the person who made it
 // has left, then renews every sign-in that expires within a week, so one
 // nobody deploys with stays usable. A sign-in with nothing to renew is
-// probed once a day instead. One that fails doesn't stop the rest.
+// probed once a day instead, as is each keyless connection's trust. One
+// that fails doesn't stop the rest.
 func (s *Service) RefreshDue(ctx context.Context) (RefreshReport, error) {
 	var report RefreshReport
 	if s.grants == nil {
@@ -517,6 +717,13 @@ func (s *Service) RefreshDue(ctx context.Context) (RefreshReport, error) {
 		report.Failed++
 		s.warn("renew the sign-in of "+c.ID, err)
 	}
+	if err := s.checkKeyless(ctx, &report); err != nil {
+		if ctx.Err() != nil {
+			return report, err
+		}
+		report.Failed++
+		s.warn("find keyless connections to check", err)
+	}
 	return report, nil
 }
 
@@ -529,12 +736,24 @@ func (s *Service) RefreshAll(ctx context.Context) error {
 			s.warn("sweep expired sign-ins", err)
 		}
 	}
+	// So are the reservations nobody used, and the signing keys are turned
+	// over. Neither stops the rest.
+	if s.Apps != nil {
+		if _, err := s.Apps.SweepReservations(ctx, s.now()); err != nil {
+			s.warn("sweep expired keyless reservations", err)
+		}
+	}
+	if s.Rotate != nil {
+		if err := s.Rotate(ctx); err != nil {
+			s.warn("rotate the issuer's signing keys", err)
+		}
+	}
 	report, err := s.RefreshDue(ctx)
 	if err != nil {
 		return err
 	}
 	if report.Lapsed > 0 || report.Left > 0 || report.Failed > 0 {
-		s.warn("renew cloud sign-ins", fmt.Errorf("%d renewed, %d checked, %d need signing in again, %d lost the person who signed in, %d failed",
+		s.warn("renew cloud sign-ins", fmt.Errorf("%d renewed, %d checked, %d need signing in again or lost their keyless trust, %d lost the person who signed in, %d failed",
 			report.Refreshed, report.Probed, report.Lapsed, report.Left, report.Failed))
 	}
 	return nil

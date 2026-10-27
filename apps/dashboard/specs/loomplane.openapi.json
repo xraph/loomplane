@@ -9716,6 +9716,143 @@
           }
         }
       }
+    },
+    "/api/v1/connections/keyless": {
+      "post": {
+        "tags": [
+          "Keyless"
+        ],
+        "summary": "Connect a cloud keylessly, with the reserved ID, once the cloud accepts Loomplane's token",
+        "operationId": "connectionKeyless.create",
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KeylessInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The connection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Connection"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/connections/keyless/prepare": {
+      "post": {
+        "tags": [
+          "Keyless"
+        ],
+        "summary": "Reserve a new keyless connection's ID for a day, and say how to set up the cloud's trust in it",
+        "operationId": "connectionKeyless.prepare",
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KeylessPrepareInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "How to set up the cloud's trust",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeylessSetup"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/connections/{id}/keyless": {
+      "get": {
+        "tags": [
+          "Keyless"
+        ],
+        "summary": "How to set up the cloud's trust in an existing connection, to move it to keyless",
+        "operationId": "connectionKeyless.setup",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "How to set up the cloud's trust",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/KeylessSetup"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "Keyless"
+        ],
+        "summary": "Move a connection to keyless, or change its keyless settings, if the cloud's trust reaches the same account",
+        "operationId": "connectionKeyless.replace",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/KeylessReplaceInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The connection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Connection"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -10963,6 +11100,12 @@
           },
           "help": {
             "type": "string"
+          },
+          "keyless_settings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Setting"
+            }
           },
           "methods": {
             "type": "array",
@@ -20884,7 +21027,8 @@
         "type": "object",
         "required": [
           "apps",
-          "callback_url"
+          "callback_url",
+          "keyless"
         ],
         "properties": {
           "apps": {
@@ -20895,6 +21039,9 @@
           },
           "callback_url": {
             "type": "string"
+          },
+          "keyless": {
+            "$ref": "#/components/schemas/KeylessState"
           }
         }
       },
@@ -21104,6 +21251,114 @@
           },
           "revision": {
             "type": "string"
+          }
+        }
+      },
+      "KeylessState": {
+        "type": "object",
+        "required": [
+          "enabled",
+          "issuer",
+          "reason"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "issuer": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      },
+      "KeylessInputBody": {
+        "type": "object",
+        "required": [
+          "connection_id",
+          "name",
+          "settings"
+        ],
+        "properties": {
+          "connection_id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "settings": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "KeylessPrepareInputBody": {
+        "type": "object",
+        "required": [
+          "cloud"
+        ],
+        "properties": {
+          "cloud": {
+            "type": "string"
+          }
+        }
+      },
+      "KeylessSetup": {
+        "type": "object",
+        "required": [
+          "connection_id",
+          "issuer",
+          "subject",
+          "steps"
+        ],
+        "properties": {
+          "audience": {
+            "type": "string"
+          },
+          "connection_id": {
+            "type": "string"
+          },
+          "expires_at": {
+            "type": "string"
+          },
+          "issuer": {
+            "type": "string"
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SetupStep"
+            }
+          },
+          "subject": {
+            "type": "string"
+          }
+        }
+      },
+      "SetupStep": {
+        "type": "object",
+        "required": [
+          "title"
+        ],
+        "properties": {
+          "body": {
+            "type": "string"
+          },
+          "command": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          }
+        }
+      },
+      "KeylessReplaceInputBody": {
+        "type": "object",
+        "properties": {
+          "settings": {
+            "type": "object",
+            "additionalProperties": true
           }
         }
       }

@@ -27,9 +27,9 @@ const (
 	Cloudflare   = "cloudflare"
 )
 
-// cloudTitles name the clouds that can be signed in to as people know
-// them, as the API's list of clouds does.
-var cloudTitles = map[string]string{GCP: "Google Cloud", Azure: "Microsoft Azure", Vercel: "Vercel", DigitalOcean: "DigitalOcean"}
+// cloudTitles name the clouds that can be signed in to or connected
+// keylessly as people know them, as the API's list of clouds does.
+var cloudTitles = map[string]string{GCP: "Google Cloud", Azure: "Microsoft Azure", Vercel: "Vercel", DigitalOcean: "DigitalOcean", AWS: "AWS"}
 
 // cloudTitle is what a message to people calls cloud.
 func cloudTitle(cloud string) string {
@@ -39,11 +39,16 @@ func cloudTitle(cloud string) string {
 	return cloud
 }
 
+// CloudTitle is what a message to people calls cloud.
+func CloudTitle(cloud string) string { return cloudTitle(cloud) }
+
 // Methods say how a connection got its credential: someone pasted it, or
-// signed in to the cloud.
+// signed in to the cloud. A keyless connection has none: the cloud trusts
+// Loomplane's own tokens, and Vault holds nothing for it.
 const (
-	MethodToken = "token"
-	MethodOAuth = "oauth"
+	MethodToken   = "token"
+	MethodOAuth   = "oauth"
+	MethodKeyless = "keyless"
 )
 
 // Statuses. A connection is checked when it's made and whenever someone
@@ -83,7 +88,7 @@ type Connection struct {
 	OrgID      string `json:"org_id"`
 	Cloud      string `json:"cloud"`
 	Name       string `json:"name"`
-	// Method is token or oauth. Empty means token.
+	// Method is token, oauth or keyless. Empty means token.
 	Method string `json:"method"`
 	// Account is what the credential acts as: a Google Cloud project, or
 	// a Vercel team or username.
@@ -187,9 +192,10 @@ type Checker interface {
 	Check(ctx context.Context, credential []byte, settings map[string]string) (Check, error)
 }
 
-// GrantChecker is a Checker for a cloud that can be signed in to. It tells
-// a sign-in grant from a pasted credential, so a grant only ever reaches
-// Vault through a sign-in.
+// GrantChecker is a Checker that tells what only Loomplane hands out, a
+// sign-in grant or a keyless handout, from a pasted credential, so a
+// grant only ever reaches Vault through a sign-in and a handout never
+// does. Every built-in checker is one.
 type GrantChecker interface {
 	IsGrant(credential []byte) bool
 }

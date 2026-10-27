@@ -1,5 +1,6 @@
 // Package azure talks to Microsoft Azure for Loomplane: it signs in as a
-// service principal, checks what the principal may do in a subscription,
+// service principal, a person, or an app that trusts Loomplane's tokens
+// keylessly, checks what the principal may do in a subscription,
 // builds images with ACR Tasks and runs them on Azure Container Apps.
 //
 // It uses Azure Resource Manager's REST API over net/http rather than the
@@ -21,6 +22,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/xraph/loomplane/internal/clouds/keyless"
 	"github.com/xraph/loomplane/internal/clouds/oauth"
 )
 
@@ -48,7 +50,8 @@ var (
 	ErrInvalid = errors.New("that isn't an Azure service principal or sign-in")
 	// ErrRejected is a principal Azure refused: a wrong secret, an
 	// expired one, or one with no access to the subscription. Or a
-	// sign-in whose refresh token Azure no longer takes.
+	// sign-in whose refresh token Azure no longer takes, or a keyless app
+	// whose federated credential doesn't trust Loomplane's token.
 	ErrRejected = errors.New("azure refused the service principal or sign-in")
 )
 
@@ -60,9 +63,10 @@ var (
 	groupRE = regexp.MustCompile(`^[A-Za-z0-9_().-]{0,89}[A-Za-z0-9_()-]$`)
 )
 
-// Credential is a service principal, or a person signed in through
-// Loomplane's sign-in app, and the subscription it deploys to. Secret
-// and RefreshToken are secrets; the rest is safe to show.
+// Credential is a service principal, a person signed in through
+// Loomplane's sign-in app, or a keyless app, and the subscription it
+// deploys to. Secret, RefreshToken and the handout's ticket are secrets;
+// the rest is safe to show.
 type Credential struct {
 	TenantID string
 	// ClientID is the principal's application, or the sign-in app's.
@@ -74,6 +78,10 @@ type Credential struct {
 	// itself from it as Username.
 	RefreshToken string
 	Username     string
+
+	// handout is set for a keyless app, whose session sends a token
+	// minted for it as the app's client assertion.
+	handout *keyless.Handout
 }
 
 // CheckPlacement checks where a connection deploys: tenant_id, a
@@ -104,10 +112,19 @@ func CheckPlacement(settings map[string]string) (tenant, subscription, group str
 // ParseCredential checks a client secret and the settings that go with
 // it: client_id and the placement CheckPlacement checks. A secret that
 // is JSON is the azure_user key a sign-in hands out, which carries its
-// own client. It asks Azure nothing.
+// own client, or a keyless handout, whose settings name the app as
+// client_id. It asks Azure nothing.
 func ParseCredential(secret []byte, settings map[string]string) (Credential, error) {
 	var c Credential
-	if trimmed := bytes.TrimSpace(secret); len(trimmed) > 0 && trimmed[0] == '{' {
+	trimmed := bytes.TrimSpace(secret)
+	if h, ok, err := keyless.Parse(trimmed); ok {
+		if err != nil {
+			return c, fmt.Errorf("%w: %w", ErrInvalid, err)
+		}
+		if c, err = keylessCredential(h); err != nil {
+			return c, err
+		}
+	} else if len(trimmed) > 0 && trimmed[0] == '{' {
 		user, err := parseUserKey(trimmed)
 		if err != nil {
 			return c, err
@@ -136,6 +153,9 @@ type Client struct {
 	http              *http.Client
 	// poll is how often a long-running operation is checked.
 	poll time.Duration
+	// minter mints a keyless credential's client assertions. Without one
+	// a keyless credential gets no session.
+	minter keyless.Minter
 }
 
 // New returns a Client. An empty endpoint means Azure's own hosts; any
@@ -182,8 +202,9 @@ type Session struct {
 	refresh string
 }
 
-// Session signs in as cred's service principal, or renews cred's
-// sign-in. A secret or refresh token Azure refuses is ErrRejected.
+// Session signs in as cred's service principal or keyless app, or renews
+// cred's sign-in. A secret, refresh token or keyless trust Azure refuses
+// is ErrRejected.
 func (c *Client) Session(ctx context.Context, cred Credential) (*Session, error) {
 	s := &Session{c: c, cred: cred, refresh: cred.RefreshToken}
 	if _, err := s.bearer(ctx); err != nil {
@@ -197,7 +218,8 @@ func (s *Session) Credential() Credential { return s.cred }
 
 // bearer returns a Resource Manager token, signing in again when the one
 // it has is about to expire. A signed-in person's session renews from its
-// refresh token, and keeps the one Azure hands back for next time.
+// refresh token, and keeps the one Azure hands back for next time. A
+// keyless app's session mints a fresh client assertion for each renewal.
 func (s *Session) bearer(ctx context.Context) (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -217,6 +239,19 @@ func (s *Session) bearer(ctx context.Context) (string, error) {
 			"client_secret": {s.cred.Secret},
 			"refresh_token": {s.refresh},
 			"scope":         {refreshScope},
+		}
+	}
+	if s.cred.handout != nil {
+		assertion, err := s.assertion(ctx)
+		if err != nil {
+			return "", err
+		}
+		form = url.Values{
+			"grant_type":            {"client_credentials"},
+			"client_id":             {s.cred.ClientID},
+			"client_assertion_type": {assertionType},
+			"client_assertion":      {assertion},
+			"scope":                 {DefaultManagement + "/.default"},
 		}
 	}
 	u := s.c.tokenURL(s.cred.TenantID)
@@ -240,6 +275,7 @@ func (s *Session) bearer(ctx context.Context) (string, error) {
 		ExpiresIn    int    `json:"expires_in"`
 		Error        string `json:"error"`
 		Description  string `json:"error_description"`
+		Codes        []int  `json:"error_codes"`
 	}
 	_ = json.Unmarshal(data, &out) //nolint:errcheck // an unreadable answer is judged by its status
 	switch {
@@ -255,6 +291,8 @@ func (s *Session) bearer(ctx context.Context) (string, error) {
 			return "", fmt.Errorf("%w: %w (%s)", ErrRejected, oauth.ErrAppRejected, errorCode(out.Error))
 		}
 		return "", fmt.Errorf("%w: %w (%s); sign in again", ErrRejected, oauth.ErrRefused, errorCode(out.Error))
+	case s.cred.handout != nil && res.StatusCode >= 300:
+		return "", assertionAnswer(res.StatusCode, out.Error, out.Codes, out.Description)
 	case res.StatusCode == http.StatusBadRequest || res.StatusCode == http.StatusUnauthorized:
 		// Microsoft Entra ID answers 400 for a wrong secret, an unknown
 		// application or an unknown tenant, with an AADSTS code that
