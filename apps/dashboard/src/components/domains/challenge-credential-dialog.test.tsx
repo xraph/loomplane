@@ -35,6 +35,7 @@ function overview(change: Partial<ZoneOverview["zone"]> = {}): ZoneOverview {
       projectIds: [],
       proofCheckedAt: zero,
       proofExpiresAt: zero,
+      proofPublishAttemptedAt: zero,
       providerZone: {
         accountId: "acct",
         id: "cfzone1",

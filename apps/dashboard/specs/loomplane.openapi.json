@@ -19156,6 +19156,7 @@
           "proof_expires_at",
           "proof_checked_at",
           "verified_at",
+            "proof_publish_attempted_at",
           "revision"
         ],
         "properties": {
@@ -19203,6 +19204,10 @@
           },
           "proof_publish_attempted": {
             "type": "boolean"
+          },
+          "proof_publish_attempted_at": {
+            "type": "string",
+            "format": "date-time"
           },
           "proof_publish_error": {
             "type": "string"

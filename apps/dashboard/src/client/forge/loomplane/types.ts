@@ -3081,6 +3081,7 @@ export interface Zone {
   proofExpiresAt: string;
   proofName?: string;
   proofPublishAttempted?: boolean;
+  proofPublishAttemptedAt: string;
   proofPublishError?: string;
   proofRecord?: DNSRecord;
   proofValue?: string;

@@ -80,6 +80,7 @@ function zone(
       proofCheckedAt: "0001-01-01T00:00:00Z",
       proofExpiresAt: "2026-10-02T00:00:00Z",
       proofName: "_loomplane.acme.dev",
+      proofPublishAttemptedAt: "0001-01-01T00:00:00Z",
       proofValue: "loomplane=zone-token",
       provider: mode === "managed" ? "cloudflare" : undefined,
       providerZone: {} as never,
