@@ -10,12 +10,15 @@ import userEvent from "@testing-library/user-event"
 import type { ReactNode } from "react"
 import { afterEach, expect, it, vi } from "vitest"
 
+import { useDomainsOverview } from "@/client/forge/loomplane/hooks"
+import { useQuery } from "@/client/hooks"
 import { forgeClient } from "@/client/runtime"
 import {
   detailPath,
   detailWith,
   host,
   inTwelveDays,
+  overviewWith,
   registration,
   stubFetch,
   zoneWith,
@@ -983,6 +986,55 @@ it("lists the hostnames that block removal", async () => {
   expect(navigate).not.toHaveBeenCalled()
   // The page reads its hostnames again too.
   await waitFor(() => expect(reads).toBe(2))
+})
+
+// Reads the domains list alongside the page, as the app shell would.
+function OverviewProbe() {
+  useQuery(useDomainsOverview)
+  return null
+}
+
+it("reads the page and the domains list again after a removal fails part way", async () => {
+  let reads = 0
+  let lists = 0
+  const api = zoneWith("api.loomplane.com", [], { parent: "loomplane.com" })
+  stubFetch({
+    [detailPath("loomplane.com")]: () => {
+      reads++
+      return Response.json(
+        detailWith(
+          zoneWith("loomplane.com", [], { subdomains: ["api.loomplane.com"] }),
+          { subdomains: [api] }
+        )
+      )
+    },
+    "/api/v1/domains": () => {
+      lists++
+      return Response.json(overviewWith())
+    },
+    // api.loomplane.com went, then cleaning loomplane.com failed.
+    "POST /api/v1/dns-zones/zone-loomplane.com/remove": () =>
+      Response.json({ message: "provider unavailable" }, { status: 502 }),
+  })
+  render(
+    <ClientProvider client={forgeClient}>
+      <OverviewProbe />
+      <DomainDetailPage zoneId="zone-loomplane.com" />
+    </ClientProvider>
+  )
+  await userEvent.click(
+    within(await section("Remove domain")).getByRole("button", {
+      name: "Remove domain",
+    })
+  )
+  const { dialog, confirm, field } = await confirmRemoval("loomplane.com")
+  await waitFor(() => expect(lists).toBe(1))
+  await userEvent.type(field, "loomplane.com")
+  await userEvent.click(confirm)
+  expect(await within(dialog).findByText("Provider unavailable.")).toBeTruthy()
+  await waitFor(() => expect(reads).toBe(2))
+  await waitFor(() => expect(lists).toBe(2))
+  expect(navigate).not.toHaveBeenCalled()
 })
 
 it("lists the subdomains that go with the domain", async () => {
