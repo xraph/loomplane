@@ -282,6 +282,7 @@ func TestSchema_matchesTypes(t *testing.T) {
 		{"size", props(defs["settings"].(map[string]any)["properties"].(map[string]any)["size"]), Size{}},
 		{"resource", props(defs["resource"]), Resource{}},
 		{"use", props(defs["use"]), Use{}},
+		{"gpu", props(defs["gpu"]), GPU{}},
 		{"resource settings", props(envOverride), ResourceSettings{}},
 		{"gateway", props(defs["gateway"]), Gateway{}},
 		{"database gateway", props(schema["properties"].(map[string]any)["database_gateway"]), DatabaseGateway{}},
@@ -850,5 +851,88 @@ services:
 	production.Farp.OpenAPI = "/changed"
 	if m.Services["api"].Farp.OpenAPI != "/a" {
 		t.Fatal("a service's farp block is shared with its settings")
+	}
+}
+
+const gpuResourceDoc = "version: 2\nresources:\n  llm: {kind: gpusample, provider: server, target: t, gpu: {kind: nvidia-l4, count: 1}, environments: {staging: {gpu: {kind: nvidia-t4, count: 1}}}}\n"
+
+// schemaAccepts reports the schema's verdict on a manifest document.
+func schemaAccepts(t *testing.T, doc string) error {
+	t.Helper()
+	return compileSchema(t).Validate(yamlToJSON(t, []byte(doc)))
+}
+
+func TestParse_gpuResourceMergesPerEnvironment(t *testing.T) {
+	m, err := Parse([]byte(gpuResourceDoc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := m.Resources["llm"]
+	if got := r.For("staging", m.Defaults).GPU; got == nil || got.Kind != "nvidia-t4" {
+		t.Errorf("staging GPU = %+v, want nvidia-t4", got)
+	}
+	if got := r.For("production", m.Defaults).GPU; got == nil || got.Kind != "nvidia-l4" || got.Count != 1 {
+		t.Errorf("production GPU = %+v, want nvidia-l4 x1", got)
+	}
+	if err := schemaAccepts(t, gpuResourceDoc); err != nil {
+		t.Errorf("schema: %v", err)
+	}
+}
+
+func TestParse_gpuOnService(t *testing.T) {
+	doc := "version: 2\nservices:\n  api:\n    source: a\n    size: {cpu: 4, memory: 16384, gpu: {kind: nvidia-l4, count: 2}, shm: 2048}\n"
+	m, err := Parse([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	sz := m.Services["api"].Size
+	if sz.GPU == nil || sz.GPU.Kind != "nvidia-l4" || sz.GPU.Count != 2 || sz.Shm != 2048 {
+		t.Errorf("size = %+v", sz)
+	}
+	if err := schemaAccepts(t, doc); err != nil {
+		t.Errorf("schema: %v", err)
+	}
+}
+
+func TestParse_gpuRejects(t *testing.T) {
+	svc := func(size string) string {
+		return "version: 2\nservices:\n  api:\n    source: a\n    size: {cpu: 1, memory: 16384, " + size + "}\n"
+	}
+	res := func(gpu string) string {
+		return "version: 2\nresources:\n  llm: {kind: gpusample, gpu: " + gpu + "}\n"
+	}
+	tests := []struct {
+		name, doc, path string
+		schemaRejects   bool
+	}{
+		{"count 0", svc("gpu: {kind: nvidia-l4, count: 0}"), "services.api.size.gpu.count", true},
+		{"count 9", svc("gpu: {kind: nvidia-l4, count: 9}"), "services.api.size.gpu.count", true},
+		{"empty kind", svc(`gpu: {kind: "", count: 1}`), "services.api.size.gpu.kind", true},
+		{"shm equals memory", svc("shm: 16384"), "services.api.size.shm", false},
+		{"negative shm", svc("shm: -1"), "services.api.size.shm", true},
+		{"resource count 0", res("{kind: nvidia-l4, count: 0}"), "resources.llm.gpu.count", true},
+		{"resource env count 9", "version: 2\nresources:\n  llm: {kind: gpusample, environments: {staging: {gpu: {kind: nvidia-l4, count: 9}}}}\n", "resources.llm.environments.staging.gpu.count", true},
+		{"gateway env", "version: 2\nservices:\n  web: {source: a}\ngateways:\n  edge: {routes: [{path: /, to: web}], environments: {staging: {gpu: {kind: nvidia-l4, count: 1}}}}\n", "gateways.edge.environments.staging.gpu", true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Parse([]byte(tt.doc))
+			var ps Problems
+			if !errors.As(err, &ps) {
+				t.Fatalf("Parse err = %v, want problems", err)
+			}
+			found := false
+			for _, p := range ps {
+				if p.Path == tt.path {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("no problem at %s: %v", tt.path, err)
+			}
+			if tt.schemaRejects && schemaAccepts(t, tt.doc) == nil {
+				t.Error("schema accepts it")
+			}
+		})
 	}
 }

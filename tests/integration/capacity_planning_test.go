@@ -37,17 +37,32 @@ func (c capacityPlanCandidate) EnsureCapacity(context.Context, cloudinfra.Capaci
 
 func futurePlan(t *testing.T, f *poolFixture, id, env string) *planning.Plan {
 	t.Helper()
+	return futurePlanWith(t, f, id, env, nil)
+}
+
+// futurePlanWith writes an approved-ready plan whose api service waits for
+// pool capacity. change edits the intent before it's hashed, and the
+// policy offers the intent's template.
+func futurePlanWith(t *testing.T, f *poolFixture, id, env string, change func(*planning.CapacityIntent)) *planning.Plan {
+	t.Helper()
 	req := f.request(env, "api")
 	template := cloudinfra.PoolExpansionPolicy{PoolID: "pool", ConnectionID: "runtime-1", Region: "region", Architecture: "amd64", Image: "ubuntu", AllowedSizes: []string{"small"}}
-	hash, _ := planning.Digest(template)
-	intent := &planning.CapacityIntent{ProviderPin: cloudinfra.CapacityTemplatePin{ConnectionGeneration: 1, AccountID: "runtime-1"}, Template: template, TemplateHash: hash, CommitSHA: "commit", AssignmentRevision: 1, CloudRevision: 1, TargetRevision: 1, GrantRevision: 1, TargetName: "shared", Demand: cloudinfra.CapacityDemand{OrgID: "org", CloudID: "cloud", PoolID: "pool", TargetID: "pool-target", ProjectID: req.ProjectID, EnvironmentID: env, PlanID: id, Service: "api", Architecture: "amd64", PolicyRevision: 1, Resources: cloudinfra.ResourceVector{CPUMillis: 2000, MemoryBytes: 512 << 20}}}
+	intent := &planning.CapacityIntent{ProviderPin: cloudinfra.CapacityTemplatePin{ConnectionGeneration: 1, AccountID: "runtime-1"}, Template: template, CommitSHA: "commit", AssignmentRevision: 1, CloudRevision: 1, TargetRevision: 1, GrantRevision: 1, TargetName: "shared", Demand: cloudinfra.CapacityDemand{OrgID: "org", CloudID: "cloud", PoolID: "pool", TargetID: "pool-target", ProjectID: req.ProjectID, EnvironmentID: env, PlanID: id, Service: "api", Architecture: "amd64", PolicyRevision: 1, Resources: cloudinfra.ResourceVector{CPUMillis: 2000, MemoryBytes: 512 << 20}}}
+	if change != nil {
+		change(intent)
+	}
+	intent.TemplateHash, _ = planning.Digest(intent.Template)
 	intent.Demand.IntentHash, _ = planning.Digest(intent)
-	policy := cloudinfra.CapacityPolicy{OrgID: "org", CloudID: "cloud", Revision: 1, Enabled: true, Limits: cloudinfra.ResourceVector{Servers: 10, CPUMillis: 20000, MemoryBytes: 20 << 30, StorageBytes: 100 << 30}, Pools: []cloudinfra.PoolExpansionPolicy{template}}
+	policy := cloudinfra.CapacityPolicy{OrgID: "org", CloudID: "cloud", Revision: 1, Enabled: true, Limits: cloudinfra.ResourceVector{Servers: 10, CPUMillis: 20000, MemoryBytes: 20 << 30, StorageBytes: 100 << 30}, Pools: []cloudinfra.PoolExpansionPolicy{intent.Template}}
 	raw, _ := json.Marshal(policy)
 	if _, err := f.sql.Exec(t.Context(), `INSERT INTO loomplane_cloud_capacity_policies(org_id,cloud_id,revision,enabled,servers,cpu_millis,memory_bytes,storage_bytes,body) VALUES('org','cloud',1,true,10,20000,21474836480,107374182400,$1) ON CONFLICT DO NOTHING`, raw); err != nil {
 		t.Fatal(err)
 	}
-	cfg := &planning.ServiceConfig{Provider: "server", CommitSHA: "commit", CapacityIntent: intent, Size: &manifest.Size{CPU: 2, Memory: 512}}
+	size := &manifest.Size{CPU: float64(intent.Demand.Resources.CPUMillis) / 1000, Memory: int(intent.Demand.Resources.MemoryBytes >> 20)}
+	if r := intent.Demand.Resources; r.GPUs > 0 {
+		size.GPU = &manifest.GPU{Kind: r.GPUKind, Count: int(r.GPUs)}
+	}
+	cfg := &planning.ServiceConfig{Provider: "server", CommitSHA: "commit", CapacityIntent: intent, Size: size}
 	result := planning.Result{Executable: true, Connections: map[string]string{}, Actions: []planning.Action{{ID: "service:api", Subject: planning.ServiceSubject, Name: "api", Op: planning.Create, Provider: "server", Service: cfg}}}
 	raw, _ = json.Marshal(result)
 	if _, err := f.sql.Exec(t.Context(), `INSERT INTO loomplane_plans(id,org_id,project_id,environment_id,environment,status,revision,manifest_id,manifest_revision,result,executable,created_by,created_at) VALUES($1,'org',$2,$3,'production','ready','future-review','pool-manifest-'||$2,1,$4,true,'usr',now())`, id, req.ProjectID, env, raw); err != nil {
@@ -120,6 +135,61 @@ func TestCapacityPlanningApprovalAndResolution(t *testing.T) {
 		t.Fatal("revoked actor accepted")
 	}
 }
+
+// TestCapacityIntentCarriesGPUs approves a service that waits for an L4 in
+// the GPU pool. The approved demand asks for the L4, a candidate without it
+// isn't what was approved, and the admitted pin reserves it on the server.
+func TestCapacityIntentCarriesGPUs(t *testing.T) {
+	f := newGPUPoolFixture(t)
+	ctx := t.Context()
+	plan := futurePlanWith(t, f, "future-gpu", "env", func(i *planning.CapacityIntent) {
+		i.Template.PoolID, i.Template.ConnectionID, i.Template.AcceleratorKind = "gpu-pool", "runtime-gpu", "nvidia-l4"
+		i.ProviderPin.AccountID = "runtime-gpu"
+		i.TargetName = "gpu"
+		i.Demand.PoolID, i.Demand.TargetID = "gpu-pool", "gpu-target"
+		i.Demand.Resources.GPUKind, i.Demand.Resources.GPUs = "nvidia-l4", 1
+	})
+	acceptFuture(t, f, plan.ID)
+	auth := &capacityPlanAuth{}
+	svc := planning.NewService(planning.Deps{Store: f.plans, Authz: auth})
+	demand, err := svc.ResolveApprovedCapacityDemand(ctx, "org", plan.ID, "api")
+	if err != nil || demand.Resources.GPUKind != "nvidia-l4" || demand.Resources.GPUs != 1 {
+		t.Fatalf("approved demand: %+v %v", demand, err)
+	}
+	req := gpuRequest(f, "api")
+	req.CPUMillis, req.PlanID = 2000, plan.ID
+	candidate, err := f.store.PreviewPlacement(ctx, req)
+	if err != nil || candidate.GPUKind != "nvidia-l4" || candidate.GPUs != 1 {
+		t.Fatalf("GPU candidate: %+v %v", candidate, err)
+	}
+
+	cpuOnly := *candidate
+	cpuOnly.GPUKind, cpuOnly.GPUs = "", 0
+	svc = planning.NewService(planning.Deps{Store: f.plans, Authz: auth, Capacity: capacityPlanCandidate{&cpuOnly}})
+	var review *cloudinfra.CapacityAdmissionError
+	if err = svc.ResolveCapacityIntents(ctx, "org", plan.ID); !errors.As(err, &review) || review.Block.Reason != "review_required" {
+		t.Fatalf("candidate without GPUs: %v", err)
+	}
+
+	svc = planning.NewService(planning.Deps{Store: f.plans, Authz: auth, Capacity: capacityPlanCandidate{candidate}})
+	if err = svc.ResolveCapacityIntents(ctx, "org", plan.ID); err != nil {
+		t.Fatal(err)
+	}
+	pins, err := f.plans.ResolvedCapacityPlacements(ctx, "org", plan.ID)
+	if err != nil || pins["api"].GPUKind != "nvidia-l4" || pins["api"].GPUs != 1 || pins["api"].ServerID != "server-gpu" {
+		t.Fatalf("admitted pin: %+v %v", pins, err)
+	}
+	var kind string
+	var gpus int64
+	if err = f.sql.QueryRow(ctx, `SELECT gpu_kind,gpus FROM loomplane_capacity_reservations WHERE plan_id=$1 AND service='api'`, plan.ID).Scan(&kind, &gpus); err != nil || kind != "nvidia-l4" || gpus != 1 {
+		t.Fatalf("reservation: %q %d %v", kind, gpus, err)
+	}
+	pin := pins["api"]
+	if err = f.store.ValidatePlacement(ctx, "org", "proj", "env", plan.ID, "api", pin.PoolPlacement()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestCapacityPlanningRaceAndChangedReview(t *testing.T) {
 	f := newPoolFixture(t)
 	first := futurePlan(t, f, "first", "env")

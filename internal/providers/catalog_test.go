@@ -191,12 +191,12 @@ func TestServerProvisionsKeepBuiltInOrderThenRegisteredKinds(t *testing.T) {
 	}
 
 	got = provisionsOf(t, catalogWith(recipestest.Registry(t)), "server")
-	if len(got) != 6 || !reflect.DeepEqual(got[:5], builtIn) {
+	if len(got) != 7 || !reflect.DeepEqual(got[:5], builtIn) {
 		t.Fatalf("built-in provisions moved or changed: %+v", got)
 	}
 	want := provider.Provisions{Kind: "sample", Creates: "Sample catalog service", Versions: []string{"1"}}
-	if !reflect.DeepEqual(got[5], want) {
-		t.Fatalf("registered kind: %+v, want %+v", got[5], want)
+	if !reflect.DeepEqual(got[6], want) {
+		t.Fatalf("registered kind: %+v, want %+v", got[6], want)
 	}
 }
 
@@ -211,7 +211,7 @@ func TestKubernetesProvisionsAcceptRegisteredKinds(t *testing.T) {
 	}
 
 	got = provisionsOf(t, catalogWith(recipestest.Registry(t)), "kubernetes")
-	if len(got) != 2 || !reflect.DeepEqual(got[0], first) || got[1].Kind != "sample" || got[1].Creates != "Sample catalog service" {
+	if len(got) != 3 || !reflect.DeepEqual(got[0], first) || got[2].Kind != "sample" || got[2].Creates != "Sample catalog service" {
 		t.Fatalf("Kubernetes provisions: %+v", got)
 	}
 	// Managed clouds don't gain registered kinds.

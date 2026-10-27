@@ -625,6 +625,13 @@ export const ops = {
     bodyCodec: CODECS['ReplaceInputBody'],
     responseCodec: CODECS['Connection'],
   },
+  'connectionGpus.get': {
+    method: 'GET',
+    path: '/api/v1/connections/{id}/gpus',
+    provides: [],
+    invalidates: [],
+    responseCodec: CODECS['GPUInventory'],
+  },
   'connectionStorage.list': {
     method: 'GET',
     path: '/api/v1/connections/{id}/storage',
@@ -860,6 +867,13 @@ export const ops = {
     provides: [],
     invalidates: [],
     responseCodec: CODECS['ConnectedRepositoryList'],
+  },
+  'gpuTargets.list': {
+    method: 'GET',
+    path: '/api/v1/gpu-targets',
+    provides: [],
+    invalidates: [],
+    responseCodec: CODECS['GPUTargetList'],
   },
   'infrastructure.get': {
     method: 'GET',

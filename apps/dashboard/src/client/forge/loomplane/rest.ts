@@ -1002,6 +1002,25 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly connectionGpus = {
+    /**
+     * GPUs a server or cluster connection can see, read live
+     */
+    get: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.GPUInventory> => {
+      let __path = `/api/v1/connections/${encodeURIComponent(String(id))}/gpus`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["GPUInventory"],
+      };
+
+      return this.request<types.GPUInventory>(config);
+    },
+
+  };
+
   public readonly connectionSignIns = {
     /**
      * Finish a sign-in with what the cloud sent back to the callback
@@ -2306,6 +2325,39 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.GitHubStatus>(config);
+    },
+
+  };
+
+  public readonly gpuTargets = {
+    /**
+     * Where GPUs can run and what they cost per hour
+     */
+    list: async (minMemoryGib?: number | undefined, count?: number | undefined, kind?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.GPUTargetList> => {
+      let __path = `/api/v1/gpu-targets`;
+      const queryParams: Record<string, any> = {};
+      if (minMemoryGib !== undefined) {
+        queryParams['min_memory_gib'] = minMemoryGib;
+      }
+      if (count !== undefined) {
+        queryParams['count'] = count;
+      }
+      if (kind !== undefined) {
+        queryParams['kind'] = kind;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["GPUTargetList"],
+      };
+
+      return this.request<types.GPUTargetList>(config);
     },
 
   };

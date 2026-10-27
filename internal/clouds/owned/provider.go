@@ -75,6 +75,13 @@ const (
 	FarpGatewayLabel = "loomplane.farp.gateway"
 )
 
+// LabelGPU is the reviewed provider.GPUPlacement, as JSON, of a workload
+// that uses GPUs. LabelShmMB is the size of its /dev/shm in MiB.
+const (
+	LabelGPU   = "loomplane.gpu"    // JSON provider.GPUPlacement
+	LabelShmMB = "loomplane.shm.mb" // decimal MiB
+)
+
 type Instances interface {
 	Get(context.Context, id.ID) (*instance.Instance, error)
 }

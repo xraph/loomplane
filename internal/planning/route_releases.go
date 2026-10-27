@@ -151,7 +151,7 @@ func (s *Service) reserveRoutedPlacements(ctx context.Context, plan *Plan, resul
 			if !ok {
 				return fmt.Errorf("routed overlap capacity resolver is unavailable")
 			}
-			req := cloudinfra.PlacementRequest{PlanID: plan.ID, Allocation: plan.ID, Planned: planned, OrgID: plan.OrgID, ProjectID: plan.ProjectID, EnvironmentID: plan.EnvironmentID, CloudID: pin.CloudID, TargetID: pin.TargetID, TargetRevision: pin.TargetRevision, PoolID: pin.PoolID, Service: a.Name, CPUMillis: pin.CPUMillis, MemoryBytes: pin.MemoryBytes, Replicas: 1, DestinationServerID: pin.ServerID}
+			req := cloudinfra.PlacementRequest{PlanID: plan.ID, Allocation: plan.ID, Planned: planned, OrgID: plan.OrgID, ProjectID: plan.ProjectID, EnvironmentID: plan.EnvironmentID, CloudID: pin.CloudID, TargetID: pin.TargetID, TargetRevision: pin.TargetRevision, PoolID: pin.PoolID, Service: a.Name, CPUMillis: pin.CPUMillis, MemoryBytes: pin.MemoryBytes, GPUKind: pin.GPUKind, GPUs: pin.GPUs, Replicas: 1, DestinationServerID: pin.ServerID}
 			for _, b := range bindings {
 				if b.Subject == ServiceSubject && b.Name == a.Name {
 					var old ServiceConfig

@@ -90,7 +90,8 @@ func readCloudSQLState(job *Job, cfg *planning.ResourceConfig, project, region, 
 			return nil, errors.New("cloud sql checkpoint original create request changed")
 		}
 	}
-	if state.Uncertain && state.Operation == "" && (state.Version < 3 || state.Stage != "instance" || mode != "apply" || job.Binding != nil) {
+	pendingRemoval := mode == "remove" && job.pendingIdentity != nil && state.PSC != nil && state.PSC.Provision.Version == 3 && state.ResourceID != ""
+	if state.Uncertain && state.Operation == "" && !pendingRemoval && (state.Version < 3 || state.Stage != "instance" || mode != "apply" || job.Binding != nil) {
 		return nil, errors.New("cloud sql checkpoint has an uncertain request without a captured operation; reconcile the original cloud operation before retrying")
 	}
 	restoreErr := state.restoreCloudSQLPSC(job, cfg, true)

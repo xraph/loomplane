@@ -54,6 +54,9 @@ type OwnedTarget struct {
 	Secrets     ResourceSecrets
 	Builder     *ImageBuilder
 	Ports       owned.PortReservations
+	// GPULocks serializes GPU device picking per Docker daemon. Nil
+	// serializes it within this process only.
+	GPULocks    server.GPULocks
 	Controllers ControllerReceipts
 	ServerDial  func(context.Context, *server.Config) (*server.Client, error)
 	Backend     func(string, string) owned.Backend
@@ -302,7 +305,7 @@ func (e *OwnedTarget) Register(org, connection string) string {
 	case e.Backend != nil:
 		backend = e.Backend(org, connection)
 	case e.Cloud == connections.Server:
-		backend = &server.Runtime{Session: e.serverSession(org, connection), Values: e.values, Ports: e.Ports}
+		backend = &server.Runtime{Session: e.serverSession(org, connection), Values: e.values, Ports: e.Ports, GPULocks: e.GPULocks}
 	default:
 		backend = e.kubernetesBackend(org, connection)
 	}
@@ -586,7 +589,7 @@ func ownedSpec(job *Job, image string, state ownedState) (sp cpprovider.ServiceS
 		sp.Ports = []cpprovider.PortSpec{{Container: cfg.Catalog.Port(), Protocol: "tcp"}}
 	}
 	if cfg.Component != nil {
-		componentSpec(&sp, labels, cfg.Component)
+		componentSpec(&sp, labels, cfg.Component, cfg.Provider)
 		if cfg.Provider == "server" {
 			for i := range sp.Volumes {
 				sp.Volumes[i].SizeMB = 0
@@ -620,6 +623,13 @@ func ownedSpec(job *Job, image string, state ownedState) (sp cpprovider.ServiceS
 	if cfg.Size != nil {
 		sp.Resources.CPUMillis = int(cfg.Size.CPU * 1000)
 		sp.Resources.MemoryMB = cfg.Size.Memory
+	}
+	if cfg.Component == nil {
+		shm := 0
+		if cfg.Size != nil {
+			shm = cfg.Size.Shm
+		}
+		gpuSpec(&sp, labels, cfg.GPU, shm, nil, cfg.Provider)
 	}
 	if labels[owned.LabelScaleMin] != labels[owned.LabelScaleMax] {
 		labels[owned.LabelManageHPA] = "true"

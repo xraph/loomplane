@@ -186,6 +186,8 @@ type ServiceConfig struct {
 	// Farp is how the service feeds an Octopus gateway's FARP route
 	// discovery. Only a service that opted in has one.
 	Farp *FarpConfig `json:"farp,omitempty"`
+	// GPU is the reviewed GPU placement of a service whose size asks for GPUs.
+	GPU *provider.GPUPlacement `json:"gpu,omitempty"`
 }
 
 // FarpConfig is a service's opt-in to FARP, resolved against the manifest's
@@ -361,6 +363,8 @@ type ComponentConfig struct {
 	Component    recipes.ResolvedComponent   `json:"component"`
 	Dependencies map[string]DependencyChoice `json:"dependencies,omitempty"`
 	Protection   recipes.Protection          `json:"protection"`
+	// GPU is the reviewed GPU placement of a component that uses GPUs.
+	GPU *provider.GPUPlacement `json:"gpu,omitempty"`
 }
 
 // Change is one setting an update changes.
