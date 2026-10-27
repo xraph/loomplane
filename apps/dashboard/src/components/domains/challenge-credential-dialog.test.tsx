@@ -1,11 +1,12 @@
 import { ClientProvider } from "@forge-go/client-react"
 import { cleanup, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
+import { useState } from "react"
 import { afterEach, expect, it, vi } from "vitest"
 
 import type { ZoneOverview } from "@/client/forge/loomplane/types"
 import { forgeClient } from "@/client/runtime"
-import { DomainCard } from "./domain-card"
+import { ChallengeCredentialDialog } from "./challenge-credential-dialog"
 
 vi.mock("@/lib/organization", () => ({
   useOrganization: () => ({ session: { orgId: "org" }, can: () => true }),
@@ -89,10 +90,27 @@ function stub(attach: () => Response = () => Response.json({})) {
   return posts
 }
 
+// The button a domain offers wildcards from, and the dialog it opens.
+function SetUp({ zone }: { zone: ZoneOverview }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <>
+      <button type="button" onClick={() => setOpen(true)}>
+        Set up wildcard certificates
+      </button>
+      <ChallengeCredentialDialog
+        zone={zone.zone!}
+        open={open}
+        onOpenChange={setOpen}
+      />
+    </>
+  )
+}
+
 function mount(zone: ZoneOverview) {
   render(
     <ClientProvider client={forgeClient}>
-      <DomainCard zone={zone} expanded onToggle={() => undefined} />
+      <SetUp zone={zone} />
     </ClientProvider>
   )
 }
@@ -100,23 +118,10 @@ function mount(zone: ZoneOverview) {
 const copy =
   "Wildcard certificates need a second Cloudflare token with DNS Edit on acme.dev only. Loomplane stores it on each server and cluster that serves a wildcard for this zone, so keep its scope to this one zone."
 
-it("offers wildcard certificates only on a Cloudflare zone without a challenge token", () => {
-  stub()
-  mount(overview({ challengeConnectionId: "cf-dns" }))
-  expect(
-    screen.queryByRole("button", { name: "Set up wildcard certificates" })
-  ).toBeNull()
-  cleanup()
-  mount(overview({ provider: "digitalocean" }))
-  expect(
-    screen.queryByRole("button", { name: "Set up wildcard certificates" })
-  ).toBeNull()
-  cleanup()
-  mount(overview())
-  expect(
-    screen.getByRole("button", { name: "Set up wildcard certificates" })
-  ).toBeTruthy()
-})
+// Which domains offer it is the domain page's to decide now.
+it.todo(
+  "offers wildcard certificates only on a Cloudflare zone without a challenge token"
+)
 
 it("attaches a second Cloudflare connection on the zone's account", async () => {
   const posts = stub()

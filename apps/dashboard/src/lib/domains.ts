@@ -118,6 +118,149 @@ export function zoneNeedsAttention(z: ZoneOverview, r?: Registration): boolean {
   return !!r && r.status !== "succeeded"
 }
 
+/** A domain and every zone under it, at any depth, sorted by name. */
+export type DomainGroup = { domain: ZoneOverview; subdomains: ZoneOverview[] }
+
+// By name, byte by byte, as the API sorts them.
+function byName(a: ZoneOverview, b: ZoneOverview): number {
+  const x = a.zone?.name ?? ""
+  const y = b.zone?.name ?? ""
+  return x < y ? -1 : x > y ? 1 : 0
+}
+
+/**
+ * domainGroups puts each zone under the domain its parent chain reaches.
+ * A domain is a zone with no parent; one whose parent isn't in the list
+ * counts as a domain too, so no zone is lost.
+ */
+export function domainGroups(zones: ZoneOverview[]): DomainGroup[] {
+  const byID = new Map(zones.map((z) => [z.zone?.id ?? "", z]))
+  const rootOf = (z: ZoneOverview) => {
+    const seen = new Set<ZoneOverview>()
+    let at = z
+    while (at.parentZoneId && !seen.has(at)) {
+      seen.add(at)
+      const parent = byID.get(at.parentZoneId)
+      if (!parent) break
+      at = parent
+    }
+    return at
+  }
+  const groups = new Map<ZoneOverview, DomainGroup>()
+  for (const z of zones) {
+    const root = rootOf(z)
+    const group = groups.get(root) ?? { domain: root, subdomains: [] }
+    groups.set(root, group)
+    if (root !== z) group.subdomains.push(z)
+  }
+  return [...groups.values()]
+    .sort((a, b) => byName(a.domain, b.domain))
+    .map((g) => ({ ...g, subdomains: g.subdomains.sort(byName) }))
+}
+
+/**
+ * parentZoneOf is the zone a new name would sit under: the one with the
+ * longest name it ends in, on whole labels, as the API decides. A bare
+ * top-level label is never one.
+ */
+export function parentZoneOf(
+  name: string,
+  zones: ZoneOverview[]
+): ZoneOverview | undefined {
+  let rest = name.trim().toLowerCase()
+  for (;;) {
+    const dot = rest.indexOf(".")
+    if (dot < 0) return undefined
+    rest = rest.slice(dot + 1)
+    if (!rest.includes(".")) return undefined
+    const parent = zones.find((z) => z.zone?.name.toLowerCase() === rest)
+    if (parent) return parent
+  }
+}
+
+/** groupNeedsAttention: the domain or any of its subdomains needs a look. */
+export function groupNeedsAttention(g: DomainGroup, r?: Registration): boolean {
+  return [g.domain, ...g.subdomains].some((z) => zoneNeedsAttention(z, r))
+}
+
+/** Rollup is a domain card's one pill for itself and its subdomains. */
+export type Rollup = {
+  label: "Ready" | "Verifying" | "Needs attention"
+  tone: PillTone
+  /** What needs you: zones, hostnames and the registration. */
+  count: number
+}
+
+// A zone that won't get verified without you: its record didn't publish,
+// its value expired, or it has no proof of its own or through a parent.
+function zoneStuck(z: ZoneOverview, now: number): boolean {
+  if (z.state === "ready" || !z.zone) return false
+  const expired =
+    isSet(z.zone.proofExpiresAt) &&
+    new Date(z.zone.proofExpiresAt).getTime() <= now
+  const unproven = !z.zone.proofName && !z.proofZoneId
+  return !!z.zone.proofPublishError || expired || unproven
+}
+
+const hostnameFailed = (h: HostnameUse) =>
+  h.status.dns === "failed" ||
+  h.status.certificate === "failed" ||
+  h.status.route === "failed"
+
+const hostnameMoving = (h: HostnameUse) =>
+  [h.status.dns, h.status.certificate, h.status.route].some(
+    (s) => s === "provisioning" || s === "renewing"
+  )
+
+/**
+ * domainRollup is Needs attention when anything in the group needs you,
+ * else Verifying while a zone or hostname is on its way, else Ready.
+ */
+export function domainRollup(
+  g: DomainGroup,
+  r: Registration | undefined,
+  now: number
+): Rollup {
+  const zones = [g.domain, ...g.subdomains]
+  let count = 0
+  for (const z of zones) {
+    if (zoneStuck(z, now)) count++
+    count += z.hostnames.filter(hostnameFailed).length
+  }
+  if (r && r.status !== "succeeded") count++
+  if (count > 0) return { label: "Needs attention", tone: "failed", count }
+  const moving = zones.some(
+    (z) => z.state !== "ready" || z.hostnames.some(hostnameMoving)
+  )
+  return moving
+    ? { label: "Verifying", tone: "warn", count: 0 }
+    : { label: "Ready", tone: "ok", count: 0 }
+}
+
+/** sameHosting: both zones' DNS sits with the same provider and account. */
+export function sameHosting(a: Zone, b: Zone): boolean {
+  return (
+    a.mode === b.mode &&
+    (a.provider ?? "") === (b.provider ?? "") &&
+    (a.connectionId ?? "") === (b.connectionId ?? "")
+  )
+}
+
+/** grantsLine names the projects a zone is granted to, by name if known. */
+export function grantsLine(
+  projectIds: string[],
+  names: Map<string, string>
+): string {
+  return projectIds.length
+    ? `Granted to ${projectIds.map((id) => names.get(id) ?? id).join(", ")}`
+    : "Not granted to a project yet"
+}
+
+/** plural is "1 hostname", "2 hostnames". */
+export function plural(n: number, noun: string): string {
+  return `${n} ${noun}${n === 1 ? "" : "s"}`
+}
+
 /** providerLabel names who hosts the zone's DNS. */
 export function providerLabel(z: ZoneOverview): string {
   if (z.zone?.mode === "external") return "External DNS"

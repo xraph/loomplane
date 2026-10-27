@@ -14,7 +14,8 @@ it("decodes a domain detail into camelCase", () => {
         state: "verified",
         wildcards: false,
         hostnames: [],
-        subdomains: ["api.example.com"],
+        // Zone IDs, not names.
+        subdomains: ["zone-api"],
         parent_zone_id: "zone-parent",
         proof_zone_id: "zone-parent",
         zone: { id: "zone-1", name: "app.example.com" },
@@ -32,7 +33,7 @@ it("decodes a domain detail into camelCase", () => {
 
   expect(domain.domain.parentZoneId).toBe("zone-parent")
   expect(domain.domain.proofZoneId).toBe("zone-parent")
-  expect(domain.domain.subdomains).toEqual(["api.example.com"])
+  expect(domain.domain.subdomains).toEqual(["zone-api"])
   expect(domain.records[0]?.routeId).toBe("route-1")
   expect(domain.records[0]?.projectName).toBe("storefront")
 })
