@@ -8883,6 +8883,468 @@
         }
       }
     },
+    "/api/v1/projects/{projectId}/environments/{environmentId}/octopus/{resource}/board": {
+      "get": {
+        "tags": [
+          "Octopus"
+        ],
+        "summary": "An Octopus gateway's routes by domain: the ones added here, the ones FARP found and the ones made in the Octopus admin",
+        "operationId": "octopus.board",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "description": "Path parameter: projectId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "environmentId",
+            "in": "path",
+            "description": "Path parameter: environmentId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "resource",
+            "in": "path",
+            "description": "Path parameter: resource",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The board, with live false and a reason when Octopus doesn't answer",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Board"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{projectId}/environments/{environmentId}/octopus/{resource}/discovery": {
+      "get": {
+        "tags": [
+          "Octopus"
+        ],
+        "summary": "The services an Octopus gateway's FARP discovery found or is waiting for",
+        "operationId": "octopus.discovery",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "description": "Path parameter: projectId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "environmentId",
+            "in": "path",
+            "description": "Path parameter: environmentId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "resource",
+            "in": "path",
+            "description": "Path parameter: resource",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "What FARP found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DiscoverySummary"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{projectId}/environments/{environmentId}/octopus/{resource}/farp-hostnames": {
+      "post": {
+        "tags": [
+          "Octopus"
+        ],
+        "summary": "Set the attached domains FARP routes answer on, at the gateway's revision; none is any host",
+        "operationId": "octopus.setFarpHostnames",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "description": "Path parameter: projectId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "environmentId",
+            "in": "path",
+            "description": "Path parameter: environmentId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "resource",
+            "in": "path",
+            "description": "Path parameter: resource",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FarpHostnamesInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The gateway's status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OctopusStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{projectId}/environments/{environmentId}/octopus/{resource}/routes": {
+      "post": {
+        "tags": [
+          "Octopus"
+        ],
+        "summary": "Add a route to an Octopus gateway and push it, without a redeploy",
+        "operationId": "octopus.createRoute",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "description": "Path parameter: projectId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "environmentId",
+            "in": "path",
+            "description": "Path parameter: environmentId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "resource",
+            "in": "path",
+            "description": "Path parameter: resource",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OctopusRouteInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The saved route and how pushing it went",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RouteResult"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{projectId}/environments/{environmentId}/octopus/{resource}/routes/{routeId}/remove": {
+      "post": {
+        "tags": [
+          "Octopus"
+        ],
+        "summary": "Remove a route at the revision read; a FARP route it hid comes back",
+        "operationId": "octopus.removeRoute",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "description": "Path parameter: projectId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "environmentId",
+            "in": "path",
+            "description": "Path parameter: environmentId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "resource",
+            "in": "path",
+            "description": "Path parameter: resource",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "routeId",
+            "in": "path",
+            "description": "Path parameter: routeId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RouteRevisionInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "How pushing the change went",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncResult"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{projectId}/environments/{environmentId}/octopus/{resource}/routes/{routeId}/update": {
+      "post": {
+        "tags": [
+          "Octopus"
+        ],
+        "summary": "Change a route at the revision read, and push it",
+        "operationId": "octopus.updateRoute",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "description": "Path parameter: projectId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "environmentId",
+            "in": "path",
+            "description": "Path parameter: environmentId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "resource",
+            "in": "path",
+            "description": "Path parameter: resource",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "routeId",
+            "in": "path",
+            "description": "Path parameter: routeId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OctopusRouteInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The saved route and how pushing it went",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RouteResult"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{projectId}/environments/{environmentId}/octopus/{resource}/status": {
+      "get": {
+        "tags": [
+          "Octopus"
+        ],
+        "summary": "An Octopus gateway's state, its last sync and what attaching a domain to it takes",
+        "operationId": "octopus.status",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "description": "Path parameter: projectId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "environmentId",
+            "in": "path",
+            "description": "Path parameter: environmentId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "resource",
+            "in": "path",
+            "description": "Path parameter: resource",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The gateway's status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OctopusStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{projectId}/environments/{environmentId}/octopus/{resource}/sync": {
+      "post": {
+        "tags": [
+          "Octopus"
+        ],
+        "summary": "Push an Octopus gateway's routes now, and register its services with FARP again",
+        "operationId": "octopus.sync",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "description": "Path parameter: projectId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "environmentId",
+            "in": "path",
+            "description": "Path parameter: environmentId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "resource",
+            "in": "path",
+            "description": "Path parameter: resource",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "How the push went",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SyncResult"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/cloud-sign-in/apps": {
       "get": {
         "tags": [
@@ -9606,6 +10068,35 @@
           }
         }
       },
+      "AttachDefaults": {
+        "type": "object",
+        "required": [
+          "environment_id",
+          "service",
+          "port",
+          "blocked_path_prefixes"
+        ],
+        "properties": {
+          "blocked_path_prefixes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "cloud_id": {
+            "type": "string"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer"
+          },
+          "service": {
+            "type": "string"
+          }
+        }
+      },
       "AutoRenewInputBody": {
         "type": "object",
         "required": [
@@ -9830,6 +10321,111 @@
         ],
         "type": "object",
         "x-forge-envelope": "bindings"
+      },
+      "Board": {
+        "type": "object",
+        "required": [
+          "gateway",
+          "discovery",
+          "hosts",
+          "unrouted",
+          "unroutable",
+          "counts",
+          "live"
+        ],
+        "properties": {
+          "counts": {
+            "$ref": "#/components/schemas/SourceCounts"
+          },
+          "discovery": {
+            "$ref": "#/components/schemas/DiscoverySummary"
+          },
+          "gateway": {
+            "$ref": "#/components/schemas/OctopusStatus"
+          },
+          "hosts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HostCard"
+            }
+          },
+          "live": {
+            "type": "boolean"
+          },
+          "live_error": {
+            "type": "string"
+          },
+          "unroutable": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UnroutableService"
+            }
+          },
+          "unrouted": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ServicePort"
+            }
+          }
+        }
+      },
+      "BoardRoute": {
+        "type": "object",
+        "required": [
+          "key",
+          "source",
+          "path",
+          "methods",
+          "service",
+          "port",
+          "note",
+          "strip_prefix",
+          "overrides"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "methods": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "note": {
+            "type": "string"
+          },
+          "overrides": {
+            "type": "boolean"
+          },
+          "path": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "route_id": {
+            "type": "string"
+          },
+          "service": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          },
+          "strip_prefix": {
+            "type": "boolean"
+          },
+          "sync": {
+            "type": "string"
+          },
+          "sync_error": {
+            "type": "string"
+          }
+        }
       },
       "Build": {
         "type": "object",
@@ -11508,6 +12104,67 @@
         "type": "object",
         "x-forge-envelope": "deployments"
       },
+      "DiscoveredService": {
+        "type": "object",
+        "required": [
+          "service",
+          "opted_in",
+          "state",
+          "routes",
+          "updated_at"
+        ],
+        "properties": {
+          "error": {
+            "type": "string"
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "opted_in": {
+            "type": "boolean"
+          },
+          "routes": {
+            "type": "integer"
+          },
+          "service": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "DiscoverySummary": {
+        "type": "object",
+        "required": [
+          "mode",
+          "services",
+          "last_change"
+        ],
+        "properties": {
+          "last_change": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "namespace": {
+            "type": "string"
+          },
+          "services": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DiscoveredService"
+            }
+          }
+        }
+      },
       "DomainCheckInputBody": {
         "type": "object",
         "required": [
@@ -12541,6 +13198,38 @@
         "properties": {
           "same_address": {
             "type": "string"
+          }
+        }
+      },
+      "HostCard": {
+        "type": "object",
+        "required": [
+          "hostname",
+          "attached",
+          "farp_home",
+          "routes"
+        ],
+        "properties": {
+          "attached": {
+            "type": "boolean"
+          },
+          "domain_route_id": {
+            "type": "string"
+          },
+          "farp_home": {
+            "type": "boolean"
+          },
+          "hostname": {
+            "type": "string"
+          },
+          "routes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BoardRoute"
+            }
+          },
+          "status": {
+            "$ref": "#/components/schemas/CloudinfraRouteStatus"
           }
         }
       },
@@ -13980,6 +14669,181 @@
             "type": "boolean"
           }
         }
+      },
+      "OctopusRouteInputBody": {
+        "type": "object",
+        "required": [
+          "hostname",
+          "path",
+          "methods",
+          "service",
+          "port",
+          "strip_prefix"
+        ],
+        "properties": {
+          "hostname": {
+            "type": "string"
+          },
+          "methods": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "note": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "service": {
+            "type": "string"
+          },
+          "strip_prefix": {
+            "type": "boolean"
+          }
+        }
+      },
+      "OctopusStatus": {
+        "type": "object",
+        "required": [
+          "resource",
+          "provider",
+          "farp_hostnames",
+          "generation",
+          "applied_generation",
+          "revision",
+          "synced_at",
+          "attach"
+        ],
+        "properties": {
+          "applied_generation": {
+            "type": "integer"
+          },
+          "attach": {
+            "$ref": "#/components/schemas/AttachDefaults"
+          },
+          "farp_hostnames": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "generation": {
+            "type": "integer"
+          },
+          "namespace": {
+            "type": "string"
+          },
+          "private_url": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "resource": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "start_time": {
+            "type": "string"
+          },
+          "sync_error": {
+            "type": "string"
+          },
+          "synced_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
+      "OctopusloomRoute": {
+        "properties": {
+          "EnvironmentID": {
+            "type": "string"
+          },
+          "OrgID": {
+            "type": "string"
+          },
+          "ProjectID": {
+            "type": "string"
+          },
+          "Resource": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "type": "string"
+          },
+          "hostname": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "methods": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "note": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "port": {
+            "type": "integer"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "service": {
+            "type": "string"
+          },
+          "strip_prefix": {
+            "type": "boolean"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "OrgID",
+          "ProjectID",
+          "EnvironmentID",
+          "Resource",
+          "hostname",
+          "path",
+          "methods",
+          "service",
+          "port",
+          "strip_prefix",
+          "revision",
+          "created_by",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/internal/octopusloom.Route"
       },
       "Operation": {
         "type": "object",
@@ -16930,6 +17794,31 @@
           }
         }
       },
+      "RouteResult": {
+        "type": "object",
+        "required": [
+          "sync"
+        ],
+        "properties": {
+          "route": {
+            "$ref": "#/components/schemas/OctopusloomRoute"
+          },
+          "sync": {
+            "$ref": "#/components/schemas/SyncResult"
+          }
+        }
+      },
+      "RouteRevisionInputBody": {
+        "type": "object",
+        "required": [
+          "revision"
+        ],
+        "properties": {
+          "revision": {
+            "type": "integer"
+          }
+        }
+      },
       "CloudinfraRouteStatus": {
         "type": "object",
         "required": [
@@ -17754,6 +18643,9 @@
           "execution": {
             "type": "string"
           },
+          "farp": {
+            "$ref": "#/components/schemas/FarpConfig"
+          },
           "framework": {
             "type": "string"
           },
@@ -17817,6 +18709,21 @@
           },
           "cloud_sql_network": {
             "$ref": "#/components/schemas/CloudSQLApplicationNetwork"
+          }
+        }
+      },
+      "ServicePort": {
+        "type": "object",
+        "required": [
+          "service",
+          "port"
+        ],
+        "properties": {
+          "port": {
+            "type": "integer"
+          },
+          "service": {
+            "type": "string"
           }
         }
       },
@@ -18013,6 +18920,25 @@
           },
           "repository": {
             "type": "string"
+          }
+        }
+      },
+      "SourceCounts": {
+        "type": "object",
+        "required": [
+          "all",
+          "farp",
+          "here"
+        ],
+        "properties": {
+          "all": {
+            "type": "integer"
+          },
+          "farp": {
+            "type": "integer"
+          },
+          "here": {
+            "type": "integer"
           }
         }
       },
@@ -18291,6 +19217,32 @@
           "updated_at": {
             "type": "string",
             "format": "date-time"
+          }
+        }
+      },
+      "SyncResult": {
+        "type": "object",
+        "required": [
+          "state",
+          "generation",
+          "restarted",
+          "restored"
+        ],
+        "properties": {
+          "generation": {
+            "type": "integer"
+          },
+          "message": {
+            "type": "string"
+          },
+          "restarted": {
+            "type": "boolean"
+          },
+          "restored": {
+            "type": "integer"
+          },
+          "state": {
+            "type": "string"
           }
         }
       },
@@ -19148,6 +20100,21 @@
           }
         }
       },
+      "UnroutableService": {
+        "type": "object",
+        "required": [
+          "service",
+          "reason"
+        ],
+        "properties": {
+          "reason": {
+            "type": "string"
+          },
+          "service": {
+            "type": "string"
+          }
+        }
+      },
       "ServiceTraffic": {
         "type": "object",
         "required": [
@@ -19567,6 +20534,43 @@
         "properties": {
           "revision": {
             "type": "string"
+          }
+        }
+      },
+      "FarpConfig": {
+        "type": "object",
+        "required": [
+          "gateway",
+          "port"
+        ],
+        "properties": {
+          "gateway": {
+            "type": "string"
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "port": {
+            "type": "integer"
+          }
+        }
+      },
+      "FarpHostnamesInputBody": {
+        "type": "object",
+        "required": [
+          "hostnames",
+          "revision"
+        ],
+        "properties": {
+          "hostnames": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "revision": {
+            "type": "integer"
           }
         }
       },

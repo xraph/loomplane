@@ -154,6 +154,14 @@ export interface Assignment {
   targets: Target[];
 }
 
+export interface AttachDefaults {
+  blockedPathPrefixes: string[];
+  cloudId?: string;
+  environmentId: string;
+  port: number;
+  service: string;
+}
+
 export interface AutoRenewInputBody {
   autoRenew: boolean;
   revision: number;
@@ -214,6 +222,33 @@ export interface Binding {
 
 export interface BindingList {
   bindings: Binding[];
+}
+
+export interface Board {
+  counts: SourceCounts;
+  discovery: DiscoverySummary;
+  gateway: OctopusStatus;
+  hosts: HostCard[];
+  live: boolean;
+  liveError?: string;
+  unroutable: UnroutableService[];
+  unrouted: ServicePort[];
+}
+
+export interface BoardRoute {
+  key: string;
+  methods: string[];
+  note: string;
+  overrides: boolean;
+  path: string;
+  port: number;
+  revision?: number;
+  routeId?: string;
+  service: string;
+  source: string;
+  stripPrefix: boolean;
+  sync?: string;
+  syncError?: string;
 }
 
 export interface Build {
@@ -791,6 +826,23 @@ export interface DeploymentList {
   next?: string;
 }
 
+export interface DiscoveredService {
+  error?: string;
+  metadata?: Record<string, any>;
+  optedIn: boolean;
+  routes: number;
+  service: string;
+  state: string;
+  updatedAt: string;
+}
+
+export interface DiscoverySummary {
+  lastChange: string;
+  mode: string;
+  namespace?: string;
+  services: DiscoveredService[];
+}
+
 export interface DomainCheckInputBody {
   connectionId: string;
   domains: string[];
@@ -996,6 +1048,17 @@ export interface FailedCleanupInputBody {
   revision: string;
 }
 
+export interface FarpConfig {
+  gateway: string;
+  metadata?: Record<string, any>;
+  port: number;
+}
+
+export interface FarpHostnamesInputBody {
+  hostnames: string[];
+  revision: number;
+}
+
 export interface Federation {
   accessGrants?: Record<string, any>;
   destinations?: Record<string, any>;
@@ -1098,6 +1161,15 @@ export interface HandoffReleaseInputBody {
 
 export interface Held {
   sameAddress?: string;
+}
+
+export interface HostCard {
+  attached: boolean;
+  domainRouteId?: string;
+  farpHome: boolean;
+  hostname: string;
+  routes: BoardRoute[];
+  status?: CloudinfraRouteStatus;
 }
 
 export interface HostnameUse {
@@ -1523,6 +1595,52 @@ export interface NotificationList {
 
 export interface OK {
   ok: boolean;
+}
+
+export interface OctopusRouteInputBody {
+  hostname: string;
+  methods: string[];
+  note?: string;
+  path: string;
+  port: number;
+  revision?: number;
+  service: string;
+  stripPrefix: boolean;
+}
+
+export interface OctopusStatus {
+  appliedGeneration: number;
+  attach: AttachDefaults;
+  farpHostnames: string[];
+  generation: number;
+  namespace?: string;
+  privateUrl?: string;
+  provider: string;
+  resource: string;
+  revision: number;
+  startTime?: string;
+  syncError?: string;
+  syncedAt: string;
+  version?: string;
+}
+
+export interface OctopusloomRoute {
+  environmentId: string;
+  orgId: string;
+  projectId: string;
+  resource: string;
+  createdAt: string;
+  createdBy: string;
+  hostname: string;
+  id: string;
+  methods: string[];
+  note?: string;
+  path: string;
+  port: number;
+  revision: number;
+  service: string;
+  stripPrefix: boolean;
+  updatedAt: string;
 }
 
 export interface Operation {
@@ -2381,6 +2499,15 @@ export interface RouteOperation {
   status: string;
 }
 
+export interface RouteResult {
+  route?: OctopusloomRoute;
+  sync: SyncResult;
+}
+
+export interface RouteRevisionInputBody {
+  revision: number;
+}
+
 export interface RouteSummary {
   gatewayId: string;
   id: string;
@@ -2585,6 +2712,7 @@ export interface ServiceConfig {
   endpoint?: ManifestEndpoint;
   env?: EnvLink[];
   execution: string;
+  farp?: FarpConfig;
   framework?: string;
   gateway?: GatewayRoute[];
   healthPath?: string;
@@ -2604,6 +2732,11 @@ export interface ServiceConfig {
   target?: string;
   targetSettings?: Record<string, any>;
   workload: string;
+}
+
+export interface ServicePort {
+  port: number;
+  service: string;
 }
 
 export interface ServiceTraffic {
@@ -2703,6 +2836,12 @@ export interface SourceArtifact {
   repository: string;
 }
 
+export interface SourceCounts {
+  all: number;
+  farp: number;
+  here: number;
+}
+
 export interface SourceList {
   sources: Source[];
 }
@@ -2800,6 +2939,14 @@ export interface Sync {
   updatedAt: string;
 }
 
+export interface SyncResult {
+  generation: number;
+  message?: string;
+  restarted: boolean;
+  restored: number;
+  state: string;
+}
+
 export interface SyncRoute {
   cutoverId?: string;
   hostname: string;
@@ -2856,6 +3003,11 @@ export interface TrafficReport {
   start: string;
   step: number;
   total: number;
+}
+
+export interface UnroutableService {
+  reason: string;
+  service: string;
 }
 
 export interface UpdateInputBody {
