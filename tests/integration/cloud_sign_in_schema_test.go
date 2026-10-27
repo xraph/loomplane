@@ -215,11 +215,11 @@ func TestCloudSignInPeopleMigrationGoesDownAndUp(t *testing.T) {
 	}
 	has := func() (column, table, index bool) {
 		t.Helper()
-		if err := conn.QueryRow(ctx, `SELECT
+		if qerr := conn.QueryRow(ctx, `SELECT
 			EXISTS (SELECT 1 FROM information_schema.columns WHERE table_name = 'loomplane_cloud_connections' AND column_name = 'signed_in_by'),
 			to_regclass('loomplane_oauth_app_problems') IS NOT NULL,
-			to_regclass('loomplane_oauth_sign_ins_expires_at') IS NOT NULL`).Scan(&column, &table, &index); err != nil {
-			t.Fatal(err)
+			to_regclass('loomplane_oauth_sign_ins_expires_at') IS NOT NULL`).Scan(&column, &table, &index); qerr != nil {
+			t.Fatal(qerr)
 		}
 		return column, table, index
 	}
