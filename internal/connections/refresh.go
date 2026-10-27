@@ -219,7 +219,7 @@ func (s *Service) renew(ctx context.Context, c *Connection, held oauth.Grant, ah
 		}
 		provider, ok := s.Providers[c.Cloud]
 		if !ok {
-			return fmt.Errorf("%w: Loomplane has no sign-in for %s", ErrUnavailable, c.Cloud)
+			return fmt.Errorf("%w: Loomplane has no sign-in for %s", ErrUnavailable, cloudTitle(c.Cloud))
 		}
 		// The cloud may spend the old refresh token before its answer is
 		// read, so a caller giving up must not cut the answer off.
@@ -441,7 +441,7 @@ func (s *Service) probeQuiet(ctx context.Context, c *Connection, held oauth.Gran
 	}
 	provider, ok := s.Providers[c.Cloud]
 	if !ok {
-		fail(fmt.Errorf("%w: Loomplane has no sign-in for %s", ErrUnavailable, c.Cloud))
+		fail(fmt.Errorf("%w: Loomplane has no sign-in for %s", ErrUnavailable, cloudTitle(c.Cloud)))
 		return
 	}
 	var why string

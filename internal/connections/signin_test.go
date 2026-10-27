@@ -617,3 +617,16 @@ func TestAppRejectedIsRecordedOnTheApp(t *testing.T) {
 		t.Fatalf("problems %v, rows %v", s.apps.problems, s.store.rows)
 	}
 }
+
+func TestSignInMessagesNameTheCloud(t *testing.T) {
+	r := newSignInRig(t)
+	r.store.rows["conn_gcp"] = Connection{ID: "conn_gcp", OrgID: "org", Cloud: GCP}
+	_, err := r.s.StartSignIn(t.Context(), starter, SignInInput{Cloud: DigitalOcean, ConnectionID: "conn_gcp"})
+	if want := "that connection is for Google Cloud, not DigitalOcean"; err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("other cloud: %v, want it to say %q", err, want)
+	}
+	_, err = r.s.StartSignIn(t.Context(), starter, SignInInput{Cloud: Azure, Name: "Acme"})
+	if want := "Loomplane has no sign-in for Microsoft Azure"; err == nil || !strings.Contains(err.Error(), want) {
+		t.Errorf("no provider: %v, want it to say %q", err, want)
+	}
+}
