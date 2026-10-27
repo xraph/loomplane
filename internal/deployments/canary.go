@@ -62,8 +62,10 @@ type CanaryService struct {
 	Baseline  string `json:"baseline,omitempty"`
 	Candidate string `json:"candidate,omitempty"`
 	Image     string `json:"image,omitempty"`
-	// Refs are provider-specific handles, such as target group ARNs.
-	Refs map[string]string `json:"refs,omitempty"`
+	// Refs are provider-specific handles, such as target group ARNs. The
+	// API and realtime events leave them out, as steps leave out what they
+	// replace: only the executors read them, through the stored canary.
+	Refs map[string]string `json:"-"`
 }
 
 // CanaryTarget is a candidate an executor started beside its service's

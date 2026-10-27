@@ -12,17 +12,56 @@ import (
 	"github.com/xraph/loomplane/internal/releasehealth"
 )
 
+// storedCanary is a canary as the canary column stores it: with each
+// service's provider handles, which the API and realtime events leave out.
+type storedCanary struct {
+	Canary
+	Services []storedCanaryService `json:"services"`
+}
+
+// storedCanaryService is a canary service with its provider handles.
+type storedCanaryService struct {
+	CanaryService
+	Refs map[string]string `json:"refs,omitempty"`
+}
+
 // encodeCanary is c as the canary column stores it, nil (SQL NULL) for no
 // canary.
 func encodeCanary(c *Canary) ([]byte, error) {
 	if c == nil {
 		return nil, nil
 	}
-	raw, err := json.Marshal(c)
+	stored := storedCanary{Canary: *c, Services: make([]storedCanaryService, len(c.Services))}
+	for i, svc := range c.Services {
+		stored.Services[i] = storedCanaryService{CanaryService: svc, Refs: svc.Refs}
+	}
+	raw, err := json.Marshal(stored)
 	if err != nil {
 		return nil, fmt.Errorf("encode canary: %w", err)
 	}
 	return raw, nil
+}
+
+// decodeCanary reads a canary column, provider handles included. NULL and
+// JSON null are no canary.
+func decodeCanary(raw []byte) (*Canary, error) {
+	if len(raw) == 0 {
+		return nil, nil
+	}
+	var stored *storedCanary
+	if err := json.Unmarshal(raw, &stored); err != nil {
+		return nil, fmt.Errorf("decode canary: %w", err)
+	}
+	if stored == nil {
+		return nil, nil
+	}
+	c := stored.Canary
+	c.Services = make([]CanaryService, len(stored.Services))
+	for i, svc := range stored.Services {
+		c.Services[i] = svc.CanaryService
+		c.Services[i].Refs = svc.Refs
+	}
+	return &c, nil
 }
 
 // SetCanary implements CanaryStore.

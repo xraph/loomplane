@@ -50,14 +50,12 @@ func scan(row pgx.Row) (*Deployment, error) {
 		return nil, fmt.Errorf("decode steps: %w", err)
 	}
 	if len(wait) > 0 {
-		if err := json.Unmarshal(wait, &d.CapacityWait); err != nil {
+		if err = json.Unmarshal(wait, &d.CapacityWait); err != nil {
 			return nil, fmt.Errorf("decode capacity wait: %w", err)
 		}
 	}
-	if len(canary) > 0 {
-		if err := json.Unmarshal(canary, &d.Canary); err != nil {
-			return nil, fmt.Errorf("decode canary: %w", err)
-		}
+	if d.Canary, err = decodeCanary(canary); err != nil {
+		return nil, err
 	}
 	d.normalize()
 	return &d, nil
@@ -268,9 +266,9 @@ func (s *PgStore) Reopen(ctx context.Context, orgID, id string) (ok bool, err er
 	}
 	// A canary starts over; its verdicts stay as the record of the failed run.
 	if len(rawCanary) > 0 {
-		var c *Canary
-		if err = json.Unmarshal(rawCanary, &c); err != nil {
-			return false, fmt.Errorf("decode canary: %w", err)
+		c, decodeErr := decodeCanary(rawCanary)
+		if decodeErr != nil {
+			return false, decodeErr
 		}
 		if c != nil {
 			c.reopen()
