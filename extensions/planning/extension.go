@@ -352,12 +352,11 @@ func (e *Extension) Register(fapp forge.App) error {
 	// them once it's up and whenever a service it serves is released, and
 	// ends its admin sessions when it goes. The octopus extension serves
 	// its API and runs the reconcile from the Syncer and Store provided
-	// here. Attached hostnames come from the Domains routes once they can
-	// list a service's; until then there are none.
+	// here. Attached hostnames are the Domains routes to the gateway.
 	octopusStore := octopusloom.NewPgStore(pg)
 	octopusSyncer := &octopusloom.Syncer{
 		Store: octopusStore, Open: octopusloom.InternalOpener(catalogAccess), Secret: octopusloom.InternalSecrets(catalogAccess),
-		Bindings: planStore.ListBindings, Hostnames: octopusloom.NoHostnames(),
+		Bindings: planStore.ListBindings, Hostnames: routeService,
 		Warn: func(msg string, err error) { log.Warn(msg, forge.F("error", err.Error())) },
 	}
 	octopusHooks := octopusloom.NewHooks(octopusloom.HookDeps{

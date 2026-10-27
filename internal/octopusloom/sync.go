@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/deployments"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/recipes"
@@ -80,33 +81,17 @@ type SecretReader func(ctx context.Context, ref GatewayRef, name string) ([]byte
 // BindingLister lists an environment's bindings.
 type BindingLister func(ctx context.Context, orgID, environmentID string) ([]*planning.Binding, error)
 
-// ServiceHostname is a hostname attached to a service. It mirrors
-// cloudinfra.ServiceHostname, which this package doesn't import.
-type ServiceHostname struct {
-	RouteID  string `json:"route_id"`
-	ZoneID   string `json:"zone_id"`
-	Hostname string `json:"hostname"`
-	Status   string `json:"status"`
-}
+// ServiceHostname is a hostname attached to a service, as the Domains
+// routes list it.
+type ServiceHostname = cloudinfra.ServiceHostname
 
 // HostnameSource lists the hostnames attached to a service. Every one it
-// returns counts as attached.
+// returns counts as attached. *cloudinfra.Service is the real one.
 type HostnameSource interface {
 	ServiceHostnames(ctx context.Context, orgID, projectID, environmentID, service string) ([]ServiceHostname, error)
 }
 
-// NoHostnames is a HostnameSource with no hostnames attached to any
-// service. Loomplane wires it until the Domains routes can list a service's
-// attached hostnames, when an adapter over cloudinfra.Service.ServiceHostnames
-// replaces it; until then FARP routes answer on any host and no attached
-// hostname reaches the config.
-func NoHostnames() HostnameSource { return noHostnames{} }
-
-type noHostnames struct{}
-
-func (noHostnames) ServiceHostnames(context.Context, string, string, string, string) ([]ServiceHostname, error) {
-	return nil, nil
-}
+var _ HostnameSource = (*cloudinfra.Service)(nil)
 
 // GatewayAction is the action name of a gateway's Octopus component, which
 // its hostnames and its binding are recorded under.

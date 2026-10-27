@@ -239,7 +239,7 @@ func newHookFixture(t *testing.T) *hookFixture {
 			}
 			return f.bindings, nil
 		},
-		Hostnames: NoHostnames(),
+		Hostnames: &fakeHostnames{},
 		Now:       func() time.Time { return t0 },
 		Warn: func(msg string, err error) {
 			f.mu.Lock()
