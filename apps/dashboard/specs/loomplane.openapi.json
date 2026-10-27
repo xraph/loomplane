@@ -9969,6 +9969,38 @@
           }
         }
       }
+    },
+    "/api/v1/dns-zones/{zoneId}": {
+      "get": {
+        "tags": [
+          "Domains"
+        ],
+        "summary": "dnsZones.get",
+        "operationId": "dnsZones.get",
+        "parameters": [
+          {
+            "name": "zoneId",
+            "in": "path",
+            "description": "Path parameter: zoneId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DomainDetail"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -21161,7 +21193,8 @@
         "required": [
           "state",
           "wildcards",
-          "hostnames"
+          "hostnames",
+          "subdomains"
         ],
         "properties": {
           "hostnames": {
@@ -21170,11 +21203,23 @@
               "$ref": "#/components/schemas/HostnameUse"
             }
           },
+          "parent_zone_id": {
+            "type": "string"
+          },
+          "proof_zone_id": {
+            "type": "string"
+          },
           "registration_id": {
             "type": "string"
           },
           "state": {
             "type": "string"
+          },
+          "subdomains": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           },
           "wildcards": {
             "type": "boolean"
@@ -22134,6 +22179,83 @@
           "settings": {
             "type": "object",
             "additionalProperties": true
+          }
+        }
+      },
+      "DomainDetail": {
+        "type": "object",
+        "required": [
+          "domain",
+          "subdomains",
+          "records"
+        ],
+        "properties": {
+          "domain": {
+            "$ref": "#/components/schemas/ZoneOverview"
+          },
+          "parent": {
+            "$ref": "#/components/schemas/ZoneOverview"
+          },
+          "proof_zone": {
+            "$ref": "#/components/schemas/ZoneOverview"
+          },
+          "records": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ManagedRecord"
+            }
+          },
+          "registration": {
+            "$ref": "#/components/schemas/Registration"
+          },
+          "subdomains": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ZoneOverview"
+            }
+          }
+        }
+      },
+      "ManagedRecord": {
+        "type": "object",
+        "required": [
+          "kind",
+          "zone_id",
+          "type",
+          "name",
+          "value",
+          "ttl"
+        ],
+        "properties": {
+          "hostname": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "project_name": {
+            "type": "string"
+          },
+          "route_id": {
+            "type": "string"
+          },
+          "ttl": {
+            "type": "integer"
+          },
+          "type": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          },
+          "zone_id": {
+            "type": "string"
           }
         }
       }

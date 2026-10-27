@@ -27,6 +27,7 @@ export const entities = {
   'Deployment': { idField: 'id' },
   'DeploymentList': { fields: { 'deployments': 'Deployment' } },
   'DiscoverySource': { idField: 'id' },
+  'DomainDetail': { fields: { 'domain': 'ZoneOverview', 'parent': 'ZoneOverview', 'proofZone': 'ZoneOverview', 'registration': 'Registration', 'subdomains': 'ZoneOverview' } },
   'DomainOverview': { fields: { 'zones': 'ZoneOverview' } },
   'Environment': { idField: 'id' },
   'EnvironmentList': { fields: { 'environments': 'Environment' } },
