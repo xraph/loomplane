@@ -124,7 +124,7 @@ func validateText(p *problems, e Entry) {
 		}
 	}
 	for _, field := range []struct{ name, value string }{{"title", e.Title}, {"summary", e.Summary}} {
-		if strings.ContainsAny(field.value, "—–") {
+		if strings.ContainsAny(field.value, "\u2014\u2013") {
 			p.add("%s has an em or en dash; use a comma, colon or full stop", field.name)
 		}
 	}

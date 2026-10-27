@@ -119,6 +119,21 @@ func TestDuplicateIDsAcrossFiles(t *testing.T) {
 	}
 }
 
+func TestYMLFileIsRefused(t *testing.T) {
+	_, err := loadFixture(t, "bad-yml")
+	if err == nil {
+		t.Fatal("Load ignored a .yml family file")
+	}
+	for _, want := range []string{"beta.yml", ".yaml"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error %q doesn't name %q", err, want)
+		}
+	}
+	if !errors.Is(err, ErrInvalid) {
+		t.Errorf("error %v isn't ErrInvalid", err)
+	}
+}
+
 func TestGoodEntriesValidate(t *testing.T) {
 	for _, e := range mustLoadGood(t).Entries() {
 		if err := Validate(e); err != nil {
@@ -169,8 +184,8 @@ func TestValidateEntry(t *testing.T) {
 			e.Embedding = &Embedding{Dimensions: 384, MaxInputTokens: 512}
 			return e
 		}, "embedding"},
-		{"em dash in summary", func() Entry { e := chat(); e.Summary = "A small model — fast."; return e }, "dash"},
-		{"en dash in title", func() Entry { e := chat(); e.Title = "Acme 1–2B"; return e }, "dash"},
+		{"em dash in summary", func() Entry { e := chat(); e.Summary = "A small model \u2014 fast."; return e }, "dash"},
+		{"en dash in title", func() Entry { e := chat(); e.Title = "Acme 1\u20132B"; return e }, "dash"},
 		{"trust_remote_code outside the allowlist", func() Entry { e := chat(); e.TrustRemoteCode = true; return e }, "trust_remote_code"},
 		{"MLA without rope_head_dim", func() Entry {
 			e := entry("beta/Reasoner-16B")
@@ -224,7 +239,7 @@ func TestValidateReportsEveryProblem(t *testing.T) {
 	e, _ := mustLoadGood(t).Entry("acme/Small-1B-Instruct")
 	e.Revision = "main"
 	e.Parameters = 0
-	e.Summary = "Fast — small."
+	e.Summary = "Fast \u2014 small."
 	err := Validate(e)
 	if err == nil {
 		t.Fatal("Validate accepted three problems")

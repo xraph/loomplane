@@ -49,7 +49,8 @@ type Registry struct {
 func Default() *Registry { return defaultRegistry }
 
 // Load reads every *.yaml file at the top of fsys except qualification.yaml.
-// Each file holds one family, named after the file. Decoding is strict, so
+// Each file holds one family, named after the file. A *.yml file is an
+// error, so a family can't drop out of the registry over its extension. Decoding is strict, so
 // an unknown field is an error, and every entry must pass Validate. IDs are
 // unique across files.
 func Load(fsys fs.FS) (*Registry, error) {
@@ -66,7 +67,14 @@ func Load(fsys fs.FS) (*Registry, error) {
 	var problems []error
 	for _, d := range dirEntries {
 		name := d.Name()
-		if d.IsDir() || path.Ext(name) != ".yaml" || name == qualificationFile {
+		if d.IsDir() {
+			continue
+		}
+		if path.Ext(name) == ".yml" {
+			problems = append(problems, invalidf("%s: name family files .yaml, not .yml", name))
+			continue
+		}
+		if path.Ext(name) != ".yaml" || name == qualificationFile {
 			continue
 		}
 		f, err := readFile(fsys, name)
