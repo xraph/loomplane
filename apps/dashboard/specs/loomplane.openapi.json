@@ -19201,6 +19201,15 @@
           "proof_name": {
             "type": "string"
           },
+          "proof_publish_attempted": {
+            "type": "boolean"
+          },
+          "proof_publish_error": {
+            "type": "string"
+          },
+          "proof_record": {
+            "$ref": "#/components/schemas/DNSRecord"
+          },
           "proof_value": {
             "type": "string"
           },

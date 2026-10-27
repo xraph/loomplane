@@ -3080,6 +3080,9 @@ export interface Zone {
   proofCheckedAt: string;
   proofExpiresAt: string;
   proofName?: string;
+  proofPublishAttempted?: boolean;
+  proofPublishError?: string;
+  proofRecord?: DNSRecord;
   proofValue?: string;
   provider?: string;
   providerZone: DNSZone;
