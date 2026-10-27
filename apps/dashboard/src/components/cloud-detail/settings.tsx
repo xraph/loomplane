@@ -92,9 +92,9 @@ export function Settings({
         </form>
         <CloudError message={error} />
       </Card>
-      <Card
-        size="sm"
-        className="flex flex-wrap items-center gap-x-4 gap-y-3 px-4 py-4 ring-destructive/30"
+      <section
+        aria-label="Delete this Cloud"
+        className="flex flex-wrap items-center gap-x-4 gap-y-3 rounded-xl bg-card px-4 py-4 ring-1 ring-destructive/30"
       >
         <div className="grid min-w-0 flex-[1_1_360px] gap-1">
           <h2 className="text-[14px] font-semibold">Delete this Cloud</h2>
@@ -119,7 +119,7 @@ export function Settings({
             <CloudError message={removeError} />
           </div>
         )}
-      </Card>
+      </section>
     </div>
   )
 }

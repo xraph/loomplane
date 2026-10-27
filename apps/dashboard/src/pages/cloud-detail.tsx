@@ -227,7 +227,10 @@ function ProjectCloud({ cloud, project }: { cloud: Profile; project: string }) {
 }
 
 /** headState is the Cloud's one-line state, from its latest changes. */
-function headState(syncs: Sync[]): { label: string; tone: Tone } {
+function headState(
+  syncs: Sync[],
+  environments?: number
+): { label: string; tone: Tone } {
   if (syncs.some((s) => s.status === "failed"))
     return { label: "A change failed", tone: "failed" }
   const waiting = syncs.filter((s) => s.status === "routing_pending").length
@@ -242,6 +245,8 @@ function headState(syncs: Sync[]): { label: string; tone: Tone } {
       label: `${moving} ${moving === 1 ? "change" : "changes"} in flight`,
       tone: "flight",
     }
+  // Nothing to keep in sync until an environment uses the Cloud.
+  if (environments === 0) return { label: "Not in use", tone: "quiet" }
   return { label: "In sync", tone: "live" }
 }
 
@@ -294,7 +299,7 @@ function CloudPage({
   const viewing = projectList.find((p) => p.id === project)
   const creator = projectList.find((p) => p.id === cloud.projectId)
   const environments = usage.data?.environments.filter((e) => e.assigned).length
-  const state = headState(syncs.list)
+  const state = headState(syncs.list, environments)
   const owner = !cloud.projectId ? "Workspace" : (creator?.name ?? "A project")
 
   const summary = project
