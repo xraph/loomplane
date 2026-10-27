@@ -251,6 +251,71 @@ it("shows a subdomain waiting on its domain and checks the domain again", async 
   )
 })
 
+it("lets a subdomain waiting on its domain verify on its own", async () => {
+  const domain = zoneWith("loomplane.com", [], {
+    external: true,
+    subdomains: ["api.loomplane.com"],
+  })
+  let own = false
+  let reads = 0
+  const writes = stubFetch({
+    [detailPath("api.loomplane.com")]: () => {
+      reads++
+      return Response.json(
+        own
+          ? detailWith(
+              zoneWith("api.loomplane.com", [], {
+                external: true,
+                verified: false,
+                parent: "loomplane.com",
+              }),
+              { parent: domain }
+            )
+          : detailWith(
+              zoneWith("api.loomplane.com", [], {
+                external: true,
+                proof: false,
+                verified: false,
+                parent: "loomplane.com",
+                proofZone: "loomplane.com",
+              }),
+              { parent: domain, proofZone: domain }
+            )
+      )
+    },
+    "POST /api/v1/dns-zones/zone-api.loomplane.com/update": () => {
+      own = true
+      return Response.json(
+        zoneWith("api.loomplane.com", [], { external: true, verified: false })
+          .zone
+      )
+    },
+  })
+  open("zone-api.loomplane.com")
+  const status = await section("Status")
+  await userEvent.click(
+    within(status).getByRole("button", { name: "Verify it on its own instead" })
+  )
+  expect(writes).toEqual([
+    {
+      method: "POST",
+      path: "/api/v1/dns-zones/zone-api.loomplane.com/update",
+      body: { project_ids: ["shop"], renew_proof: true, revision: 2 },
+    },
+  ])
+  // Read again, it shows its own record to add.
+  expect(
+    await within(status).findByText("_loomplane.api.loomplane.com")
+  ).toBeTruthy()
+  expect(reads).toBe(2)
+  expect(within(status).queryByText(/waits for/)).toBeNull()
+  expect(
+    within(status).queryByRole("button", {
+      name: "Verify it on its own instead",
+    })
+  ).toBeNull()
+})
+
 it("shows TXT instructions and checks again", async () => {
   const writes = stubFetch({
     [detailPath("docs-example.org")]: detailWith(

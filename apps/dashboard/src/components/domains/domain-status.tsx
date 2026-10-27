@@ -23,30 +23,38 @@ export function DomainStatus({ detail }: { detail: DomainDetail }) {
   // The zone that proves a nested subdomain can be further up than its
   // parent, and the line names that one.
   const through = proofZone?.zone ?? parent?.zone
+  // Waiting on another zone's proof, it can take one of its own instead.
+  const waiting = !ready && !!domain.proofZoneId && !!through
   return (
     <div className="divide-y divide-border/70">
       {parent?.zone && (
-        <p className="px-4 py-3 text-[13px] leading-normal text-foreground/80">
-          Part of <ZoneLink zone={parent.zone} />
-          {domain.proofZoneId &&
-            through &&
-            (ready ? (
-              through.id === parent.zone.id ? (
-                " · verified through it"
+        <div className="flex flex-col gap-2.5 px-4 py-3">
+          <p className="text-[13px] leading-normal text-foreground/80">
+            Part of <ZoneLink zone={parent.zone} />
+            {domain.proofZoneId &&
+              through &&
+              (ready ? (
+                through.id === parent.zone.id ? (
+                  " · verified through it"
+                ) : (
+                  <>
+                    {" "}
+                    · verified through <ZoneLink zone={through} />
+                  </>
+                )
               ) : (
                 <>
                   {" "}
-                  · verified through <ZoneLink zone={through} />
+                  · waits for <ZoneLink zone={through} />
+                  &apos;s verification
                 </>
-              )
-            ) : (
-              <>
-                {" "}
-                · waits for <ZoneLink zone={through} />
-                &apos;s verification
-              </>
-            ))}
-        </p>
+              ))}
+          </p>
+          {/* not in the mock */}
+          {waiting && z && (
+            <RenewProof zone={z} label="Verify it on its own instead" />
+          )}
+        </div>
       )}
       {ready
         ? // Inherited verification is said above.

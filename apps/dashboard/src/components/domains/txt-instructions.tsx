@@ -18,7 +18,14 @@ import { isSet, proofPublishState, relativeTime, useClock } from "@/lib/domains"
 
 // RenewProof issues a new TXT value with a fresh 24 hours to publish it.
 // Not in the mock: the mock's proofs never expire.
-export function RenewProof({ zone }: { zone: Zone }) {
+// A subdomain without a proof of its own gets its first one the same way.
+export function RenewProof({
+  zone,
+  label = "Renew proof",
+}: {
+  zone: Zone
+  label?: string
+}) {
   const update = useMutation(useDnsZonesUpdate)
   const invalidate = useInvalidate()
   const [note, setNote] = useState("")
@@ -47,7 +54,7 @@ export function RenewProof({ zone }: { zone: Zone }) {
         disabled={update.isPending}
         onClick={() => void renew()}
       >
-        Renew proof
+        {label}
       </Button>
       <span className="text-[12.5px] text-muted-foreground" aria-live="polite">
         {note}
