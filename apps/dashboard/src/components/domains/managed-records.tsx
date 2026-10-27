@@ -104,7 +104,7 @@ export function ManagedRecords({
             </span>
             {spans && (
               <span role="cell" className={cn(mono, "text-foreground/80")}>
-                {names.get(r.zoneId) ?? ""}
+                {names.get(r.zoneId) ?? r.zoneId}
               </span>
             )}
             <span role="cell" className="min-w-0 text-[12.5px] break-all">
