@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -297,5 +298,70 @@ func TestArchitectureOf(t *testing.T) {
 	}
 	if _, _, err := architectureOf(map[string]any{"num_hidden_layers": 2.0}); err == nil {
 		t.Error("a config with no architectures was accepted")
+	}
+}
+
+// refusingHub answers the way huggingface.co answers an anonymous client:
+// 401 for a repo that doesn't exist and for a gated repo's files, told apart
+// only by X-Error-Code.
+func refusingHub(t *testing.T) *httptest.Server {
+	t.Helper()
+	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/api/models/acme/Gated-8B":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"id": "acme/Gated-8B", "sha": shaGated, "gated": false,
+				"siblings": []map[string]any{{"rfilename": "model.safetensors", "size": 16_000_000_000}},
+			})
+		case strings.HasPrefix(r.URL.Path, "/acme/Gated-8B/"):
+			w.Header().Set("X-Error-Code", "GatedRepo")
+			http.Error(w, "Access to model acme/Gated-8B is restricted.", http.StatusUnauthorized)
+		default:
+			w.Header().Set("X-Error-Code", "RepoNotFound")
+			http.Error(w, "Repository not found", http.StatusUnauthorized)
+		}
+	}))
+}
+
+func TestHubTellsAMissingRepoFromAGatedOne(t *testing.T) {
+	srv := refusingHub(t)
+	defer srv.Close()
+	h := newHub(srv.URL, "", 0)
+
+	_, err := h.info(context.Background(), "acme/Mistyped-8B")
+	if !errors.Is(err, errRepoNotFound) || errors.Is(err, errNeedsToken) {
+		t.Errorf("missing repo: %v, want errRepoNotFound only", err)
+	}
+	_, err = h.config(context.Background(), "acme/Gated-8B", shaGated)
+	if !errors.Is(err, errNeedsToken) || errors.Is(err, errRepoNotFound) {
+		t.Errorf("gated repo: %v, want errNeedsToken only", err)
+	}
+}
+
+func TestMissingRepoCantPin(t *testing.T) {
+	srv := refusingHub(t)
+	defer srv.Close()
+	mistyped := strings.ReplaceAll(gatedEntry, "acme/Gated-8B", "acme/Mistyped-8B")
+	o := setup(t, map[string]string{"gated.yaml": gatedEntry, "mistyped.yaml": strings.Replace(mistyped, "family: gated", "family: mistyped", 1)})
+	o.hubURL = srv.URL
+	o.write = true
+
+	var out bytes.Buffer
+	if code, err := run(context.Background(), o, &out); err != nil || code != 1 {
+		t.Fatalf("code %d, err %v, want 1\n%s", code, err, out.String())
+	}
+	got := out.String()
+	_, cantPin, found := strings.Cut(got, "Can't pin")
+	if !found || !strings.Contains(cantPin, "unpinned/mistyped.yaml acme/Mistyped-8B: ") || !strings.Contains(cantPin, errRepoNotFound.Error()) {
+		t.Errorf("the missing repo isn't under Can't pin:\n%s", got)
+	}
+	if !strings.Contains(got, "acme/Gated-8B: gated, waiting for a Hugging Face token") {
+		t.Errorf("the gated repo doesn't wait for a token:\n%s", got)
+	}
+	if strings.Contains(got, "acme/Mistyped-8B: gated") {
+		t.Errorf("the missing repo reads as gated:\n%s", got)
+	}
+	if _, err := os.Stat(filepath.Join(o.unpinnedDir, "mistyped.yaml")); err != nil {
+		t.Errorf("the missing repo's entry left unpinned/: %v", err)
 	}
 }

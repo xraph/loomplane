@@ -16,7 +16,12 @@
 // the hand-written fields only, because the registry refuses an entry
 // without a revision. -write pins each one and moves it to the end of
 // data/<family>.yaml. A gated repo needs a token whose account accepted the
-// license, so without one its entries wait in unpinned/.
+// license, so without one its entries wait in unpinned/. A repo Hugging
+// Face says doesn't exist never waits: it's reported under "Can't pin".
+//
+// Once gated entries are pinned into data/, a check run without a token
+// can't read them either, so it reports them under "Can't pin" and exits 1.
+// Run it with HF_TOKEN set.
 //
 // Without -write the tool changes nothing: it prints what would change and
 // exits 1 if anything would, or if an entry can't be pinned.
@@ -156,6 +161,8 @@ func run(ctx context.Context, o options, out io.Writer) (int, error) {
 				continue
 			}
 			got, pinErr := p.pin(ctx, e)
+			// Only a gated repo waits. A missing one (errRepoNotFound,
+			// most often a mistyped ID) falls through to "Can't pin".
 			switch {
 			case errors.Is(pinErr, errNeedsToken) && o.token == "":
 				r.waiting = append(r.waiting, fmt.Sprintf("unpinned/%s.yaml %s: gated, waiting for a Hugging Face token", name, e.ID))

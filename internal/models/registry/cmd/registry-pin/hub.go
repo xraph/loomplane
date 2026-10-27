@@ -21,6 +21,17 @@ const maxBody = 32 << 20
 // the license.
 var errNeedsToken = errors.New("gated on Hugging Face: run with a token whose account accepted the license")
 
+// errRepoNotFound means Hugging Face has no repo by that ID, or none this
+// request may see. It answers an anonymous request for a missing repo with
+// 401, like a gated one, and tells the two apart only by X-Error-Code.
+var errRepoNotFound = errors.New("no such repo on Hugging Face: check the ID")
+
+// Values of the X-Error-Code header Hugging Face sets on a refusal.
+const (
+	hubRepoNotFound = "RepoNotFound"
+	hubGatedRepo    = "GatedRepo"
+)
+
 // sibling is one file in a repo at a revision.
 type sibling struct {
 	Name string `json:"rfilename"`
@@ -149,8 +160,9 @@ func (h *hub) once(ctx context.Context, path string) (body []byte, retryAfter ti
 		return nil, 0, err
 	}
 	if h.token != "" {
-		// net/http drops this header when a redirect leaves the host, so
-		// the CDN that serves files never sees the token.
+		// On a redirect, net/http forwards this header only to the same
+		// host or one of its subdomains (cdn-lfs.huggingface.co, say) and
+		// drops it anywhere else.
 		req.Header.Set("Authorization", "Bearer "+h.token)
 	}
 	resp, err := h.client.Do(req)
@@ -165,7 +177,10 @@ func (h *hub) once(ctx context.Context, path string) (body []byte, retryAfter ti
 	switch {
 	case resp.StatusCode == http.StatusOK:
 		return body, 0, nil
-	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
+	case resp.Header.Get("X-Error-Code") == hubRepoNotFound:
+		return nil, 0, fmt.Errorf("GET %s: %w", path, errRepoNotFound)
+	case resp.Header.Get("X-Error-Code") == hubGatedRepo,
+		resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
 		return nil, 0, fmt.Errorf("GET %s: %w", path, errNeedsToken)
 	case resp.StatusCode == http.StatusTooManyRequests:
 		return nil, retryDelay(resp.Header.Get("Retry-After")), fmt.Errorf("GET %s: Hugging Face is rate limiting this client", path)

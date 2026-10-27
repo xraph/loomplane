@@ -2,9 +2,12 @@ package registry
 
 import (
 	"errors"
+	"io/fs"
 	"os"
+	"slices"
 	"strings"
 	"testing"
+	"testing/fstest"
 )
 
 func loadFixture(t *testing.T, dir string) (*Registry, error) {
@@ -131,6 +134,46 @@ func TestYMLFileIsRefused(t *testing.T) {
 	}
 	if !errors.Is(err, ErrInvalid) {
 		t.Errorf("error %v isn't ErrInvalid", err)
+	}
+}
+
+// TestEmbedHoldsEveryDataFile checks that the binary embeds every file in
+// data/, whatever its extension, so a stray .yml reaches Load's guard.
+func TestEmbedHoldsEveryDataFile(t *testing.T) {
+	onDisk, err := os.ReadDir("data")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var want []string
+	for _, d := range onDisk {
+		// go:embed leaves out names that start with . or _.
+		if !strings.HasPrefix(d.Name(), ".") && !strings.HasPrefix(d.Name(), "_") {
+			want = append(want, d.Name())
+		}
+	}
+	embedded, err := fs.ReadDir(dataFS, "data")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make([]string, 0, len(embedded))
+	for _, d := range embedded {
+		got = append(got, d.Name())
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("embedded data/ holds %v, want every file on disk: %v", got, want)
+	}
+
+	// The embedded files plus a stray .yml, as the binary would hold them.
+	withYML := fstest.MapFS{"stray.yml": {Data: []byte("family: stray\n")}}
+	for _, name := range got {
+		raw, readErr := fs.ReadFile(dataFS, "data/"+name)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		withYML[name] = &fstest.MapFile{Data: raw}
+	}
+	if _, err := Load(withYML); err == nil || !strings.Contains(err.Error(), "stray.yml") {
+		t.Errorf("Load of the embedded files plus stray.yml: %v, want an error naming stray.yml", err)
 	}
 }
 

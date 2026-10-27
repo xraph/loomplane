@@ -18,10 +18,13 @@ import (
 // reads it with its own decoder once every family is in.
 const qualificationFile = "qualification.yaml"
 
-// dataFS holds the pinned family files and qualification.yaml. Entries
-// waiting for their first pin live in unpinned/, outside the binary.
+// dataFS holds every file in data/: the pinned family files and
+// qualification.yaml. It embeds the whole directory, not *.yaml, so a stray
+// .yml file reaches Load and fails it instead of dropping out unseen.
+// Entries waiting for their first pin live in unpinned/, a sibling of data/,
+// so they stay out of the binary.
 //
-//go:embed data/*.yaml
+//go:embed data
 var dataFS embed.FS
 
 var defaultRegistry = mustLoadDefault()
