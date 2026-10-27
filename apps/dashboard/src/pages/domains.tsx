@@ -1,7 +1,7 @@
 // Domains: every domain the organization owns with its subdomains inside
 // it, each opening its own page, and the domains registered through
 // Loomplane with their renewals. Built to the redesign's Domains artboard.
-import { GlobeIcon, LockIcon, PlusIcon } from "lucide-react"
+import { GlobeIcon, PlusIcon } from "lucide-react"
 import { useEffect, useMemo, useState } from "react"
 
 import { statusOf } from "@/client/errors"
@@ -15,6 +15,7 @@ import { BringDomainPanel } from "@/components/domains/bring-domain-panel"
 import { DomainCard, RegistrationCard } from "@/components/domains/domain-card"
 import { RegisterDomainDialog } from "@/components/domains/register-domain-dialog"
 import { RenewalBanner } from "@/components/domains/renewal-banner"
+import { Restricted } from "@/components/domains/restricted"
 import { Page, PageHeading } from "@/components/page"
 import { QueryError } from "@/components/query-error"
 import { SiteHeader } from "@/components/site-header"
@@ -83,24 +84,6 @@ export function Domains({
     )
   }
   return <DomainsList key={session.orgId} search={search} onSearch={onSearch} />
-}
-
-/** Restricted is what someone without Cloud access sees on a Domains page. */
-export function Restricted() {
-  return (
-    <ZeroState preview={false}>
-      <ZeroStateHeader>
-        <ZeroStateMedia variant="icon">
-          <LockIcon />
-        </ZeroStateMedia>
-        <ZeroStateTitle>Domain access is restricted</ZeroStateTitle>
-        <ZeroStateDescription>
-          Ask your organization owner for permission to manage Cloud
-          infrastructure.
-        </ZeroStateDescription>
-      </ZeroStateHeader>
-    </ZeroState>
-  )
 }
 
 function Empty({ title, children }: { title: string; children: string }) {

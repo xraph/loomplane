@@ -23,6 +23,7 @@ import { DomainStatePill } from "@/components/domains/domain-states"
 import { DomainStatus } from "@/components/domains/domain-status"
 import { HostnameTable } from "@/components/domains/hostname-table"
 import { useAutoRenew } from "@/components/domains/renewal-banner"
+import { Restricted } from "@/components/domains/restricted"
 import { SubdomainTable } from "@/components/domains/subdomain-table"
 import {
   proofExpired,
@@ -57,7 +58,6 @@ import {
 } from "@/lib/domains"
 import { useOrganization } from "@/lib/organization"
 import { Link } from "@/lib/router"
-import { Restricted } from "@/pages/domains"
 
 export function DomainDetailPage({ zoneId }: { zoneId: string }) {
   const { session, can } = useOrganization()

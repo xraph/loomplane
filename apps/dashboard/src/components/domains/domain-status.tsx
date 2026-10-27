@@ -20,16 +20,31 @@ export function DomainStatus({ detail }: { detail: DomainDetail }) {
   const ready = domain.state === "ready"
   // A subdomain without a proof of its own waits on the zone whose is.
   const proving = proofZone?.zone ?? z
+  // The zone that proves a nested subdomain can be further up than its
+  // parent, and the line names that one.
+  const through = proofZone?.zone ?? parent?.zone
   return (
     <div className="divide-y divide-border/70">
       {parent?.zone && (
         <p className="px-4 py-3 text-[13px] leading-normal text-foreground/80">
           Part of <ZoneLink zone={parent.zone} />
           {domain.proofZoneId &&
+            through &&
             (ready ? (
-              " · verified through it"
+              through.id === parent.zone.id ? (
+                " · verified through it"
+              ) : (
+                <>
+                  {" "}
+                  · verified through <ZoneLink zone={through} />
+                </>
+              )
             ) : (
-              <> · waits for {parent.zone.name}&apos;s verification</>
+              <>
+                {" "}
+                · waits for <ZoneLink zone={through} />
+                &apos;s verification
+              </>
             ))}
         </p>
       )}
