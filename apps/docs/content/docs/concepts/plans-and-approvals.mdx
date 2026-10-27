@@ -27,6 +27,18 @@ Warnings don't block, but you should read them. Expect them for a service that f
 
 Some plans are for review only: something in them has no adapter yet, or they use a [paused target](/docs/operations/monitoring#pausing-a-target). You can approve those, but approving deploys nothing.
 
+## Releases
+
+When the environment declares a `release` block in `loomplane.yaml`, the plan shows the release it pinned: the strategy, the canary's steps and hold, the thresholds it's judged against, and which services ramp. All of that is part of the revision you approve. Change the hold from 10 minutes to 15 and you get a new revision, so you never approve one release and get another.
+
+A release with a canary is still one decision. You approve the plan once, and the [canary](/docs/concepts/canary-releases) ramps, holds and judges each step by itself. Nobody approves individual steps.
+
+Only an update of something already running can ramp: an HTTP service on Cloud Run, a service behind the load balancer on ECS, or an app with ingress or a static site on Azure Container Apps. Every other service in a canary environment gets a `canary-unavailable` warning that says why (it's new, it's moving, it's a worker, its target has no traffic weighting Loomplane can drive) and deploys all at once. In a `blue_green` environment, a service with no route release to switch over gets a `blue-green-unavailable` warning and deploys the way it does today.
+
+While a canary ramps in an environment, a new plan for it is blocked with a `canary-in-progress` problem that names the deployment. Plan again once it finishes. A plan that was ready before the ramp started comes back stale if you approve it during the ramp, so two deployments never fight over one service's traffic.
+
+An environment without a `release` block plans exactly as it did before, with no release on the plan.
+
 ## Approve, reject or let it expire
 
 ```bash

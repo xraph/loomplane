@@ -29,7 +29,7 @@ All paths are under `/api/v1`.
 | `/projects/{id}/domain-routes`, `/route-operations` | Domain routes and their operations |
 | `/analyses` | One analysis and its graph |
 | `/plans` | Get a plan, approve it, reject it, read its deployment |
-| `/deployments` | Get a deployment, read its logs, retry it |
+| `/deployments` | Get a deployment, read its logs and its canary, retry it |
 | `/variables` | Organization-wide variables |
 | `/connections` | Cloud connections: create, check, replace a credential, delete, read storage |
 | `/connection-clouds`, `/providers` | The cloud types you can connect, and the provider catalog |
@@ -72,7 +72,9 @@ Planning runs in the background. The create call returns the plan at once, so re
 
 ## Live events
 
-`/api/v1/realtime/ws` upgrades to a WebSocket, `/api/v1/realtime/events` serves server-sent events, and `/api/v1/realtime/snapshot` returns the current state for REST recovery. All three use the same authenticated contract and an organization-scoped cursor. The dashboard falls back from WebSocket to SSE, then to REST recovery when the stream goes stale.
+`/api/v1/realtime/ws` upgrades to a WebSocket, `/api/v1/realtime/events` serves server-sent events, and `/api/v1/realtime/snapshot` returns the current state for REST recovery. All three use the same authenticated contract and an organization-scoped cursor.
+
+`GET /api/v1/deployments/{id}/canary` returns where a canary release has put traffic and the verdict of every step it judged: the weights, the error rate and latency it read, the verdict and the reason. It needs `deployment:read`. A deployment that deployed everything at once returns `canary: null` and no verdicts. A retry ramps again and judges afresh, so the verdicts are the current retry's; each carries its `retry`. The same verdicts arrive on the stream as `canary_verdict.updated` events, to a subscription that names the deployment (like build output), and in the snapshot for the deployments it names. The dashboard falls back from WebSocket to SSE, then to REST recovery when the stream goes stale.
 
 Proxy the WebSocket route with upgrades and keep the SSE route unbuffered. See [Monitoring](/docs/operations/monitoring).
 

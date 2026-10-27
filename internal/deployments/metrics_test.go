@@ -72,7 +72,7 @@ func TestCloudRun_measuresTheServiceItRan(t *testing.T) {
 	if err != nil || m == nil {
 		t.Fatalf("measure: %v %v", m, err)
 	}
-	if len(filters) != 2 {
+	if len(filters) != 3 {
 		t.Fatalf("asked %d times", len(filters))
 	}
 	for _, f := range filters {
@@ -139,7 +139,7 @@ func TestAzure_measuresTheAppItRan(t *testing.T) {
 	if _, err := exec.Measure(t.Context(), conn, []byte(azuretest.Secret), &planning.Binding{Name: "api", ExternalID: app}, measureWindow); err != nil {
 		t.Fatal(err)
 	}
-	if asked != 2 {
+	if asked != 3 {
 		t.Fatalf("asked Azure Monitor %d times", asked)
 	}
 }
@@ -161,7 +161,7 @@ func TestRender_measuresTheServiceItRan(t *testing.T) {
 	if _, err := exec.Measure(t.Context(), conn, []byte("rnd_key\n"), &planning.Binding{Name: "api", ExternalID: "srv-api"}, measureWindow); err != nil {
 		t.Fatal(err)
 	}
-	if asked != 2 {
+	if asked != 3 {
 		t.Fatalf("asked Render %d times", asked)
 	}
 	_, err := exec.Measure(t.Context(), conn, []byte("rnd_key"), &planning.Binding{Name: "db", ExternalID: "postgres/dpg-1"}, measureWindow)

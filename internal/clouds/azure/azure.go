@@ -183,6 +183,10 @@ func (e *APIError) Error() string {
 	return fmt.Sprintf("azure answered %d: %s", e.Status, e.Message)
 }
 
+// IsForbidden reports whether err is Azure's 403: the principal may not
+// do what it asked.
+func IsForbidden(err error) bool { return isForbidden(err) }
+
 // IsNotFound reports whether err is Azure's 404.
 func IsNotFound(err error) bool {
 	var ae *APIError

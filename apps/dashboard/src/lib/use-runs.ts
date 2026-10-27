@@ -323,7 +323,21 @@ export interface Person {
   initials: string
 }
 
-/** usePeople names the organization's members by user ID. */
+/** AUTOMATION_NAME is who acts for an automatic rollback. */
+export const AUTOMATION_NAME = "Loomplane automation"
+
+/**
+ * isAutomation reports whether a created_by, decided_by or started_by is
+ * the organization's Loomplane automation, which acts as loomplane:<org>.
+ */
+export function isAutomation(userID: string): boolean {
+  return userID.startsWith("loomplane:") && userID.length > "loomplane:".length
+}
+
+/**
+ * usePeople names the organization's members by user ID, and Loomplane
+ * automation by its own name.
+ */
 export function usePeople(): (userID: string) => Person {
   const members = useQuery(useMembersList)
   const byID = useMemo(
@@ -336,6 +350,8 @@ export function usePeople(): (userID: string) => Person {
   // Stable while the members don't change, so views can memoize on it.
   return useCallback(
     (id: string) => {
+      if (isAutomation(id))
+        return { name: AUTOMATION_NAME, initials: initialsOf(AUTOMATION_NAME) }
       const m = byID.get(id)
       const name = m?.name || m?.email || "Someone"
       return { name, initials: initialsOf(name) }

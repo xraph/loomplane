@@ -76,6 +76,22 @@ func (s *Session) EnsureRepository(ctx context.Context, region, repo string) err
 	}
 }
 
+// ImageDigest reads the digest a Docker repository's tag points at, for
+// an image the build pushed itself rather than through Cloud Build's
+// images, as pack does. It's empty when the tag names no version.
+func (s *Session) ImageDigest(ctx context.Context, region, repo, image, tag string) (string, error) {
+	var t struct {
+		Version string `json:"version"`
+	}
+	p := "/v1/projects/" + s.key.ProjectID + "/locations/" + region + "/repositories/" + repo +
+		"/packages/" + url.PathEscape(image) + "/tags/" + url.PathEscape(tag)
+	if err := s.do(ctx, http.MethodGet, s.c.url("artifactregistry.googleapis.com", p), nil, &t); err != nil {
+		return "", err
+	}
+	_, digest, _ := strings.Cut(t.Version, "/versions/")
+	return digest, nil
+}
+
 // ImageName is where Loomplane pushes a service's image.
 func ImageName(project, region, repo, name, tag string) string {
 	return region + "-docker.pkg.dev/" + project + "/" + repo + "/" + name + ":" + tag
@@ -194,6 +210,10 @@ type RunService struct {
 	Labels   map[string]string `json:"labels,omitempty"`
 	Ingress  string            `json:"ingress,omitempty"`
 	Template RunTemplate       `json:"template"`
+	// Traffic splits requests between revisions. Left out, Cloud Run sends
+	// all of them to the latest ready revision, which is what an ordinary
+	// deploy wants. Only a canary sets it.
+	Traffic []RunTraffic `json:"traffic,omitempty"`
 	// Read only.
 	URI                string         `json:"uri,omitempty"`
 	LatestReadyRev     string         `json:"latestReadyRevision,omitempty"`
@@ -202,15 +222,50 @@ type RunService struct {
 	Reconciling        bool           `json:"reconciling,omitempty"`
 	ObservedGeneration string         `json:"observedGeneration,omitempty"`
 	Conditions         []RunCondition `json:"conditions,omitempty"`
+	// TrafficStatuses is how traffic is split now.
+	TrafficStatuses []RunTraffic `json:"trafficStatuses,omitempty"`
 }
+
+// How a traffic target picks its revision.
+const (
+	// TrafficLatest follows the service's latest ready revision.
+	TrafficLatest = "TRAFFIC_TARGET_ALLOCATION_TYPE_LATEST"
+	// TrafficRevision names its revision.
+	TrafficRevision = "TRAFFIC_TARGET_ALLOCATION_TYPE_REVISION"
+)
+
+// RunTraffic is one share of a service's traffic: the latest ready
+// revision's, or a named one's.
+type RunTraffic struct {
+	Type     string `json:"type"`
+	Revision string `json:"revision,omitempty"`
+	Percent  int    `json:"percent"`
+}
+
+// LatestReady is the short name of the service's latest ready revision.
+func (s *RunService) LatestReady() string { return RevisionName(s.LatestReadyRev) }
+
+// LatestCreated is the short name of the service's latest revision.
+func (s *RunService) LatestCreated() string { return RevisionName(s.LatestCreatedRev) }
+
+// RevisionName is a revision's name without the resource path Cloud Run
+// may put in front of it.
+func RevisionName(name string) string { return name[strings.LastIndex(name, "/")+1:] }
 
 // RunTemplate is a service's revision template.
 type RunTemplate struct {
-	Labels     map[string]string `json:"labels,omitempty"`
-	Scaling    *RunScaling       `json:"scaling,omitempty"`
-	Containers []RunContainer    `json:"containers"`
-	Volumes    []RunVolume       `json:"volumes,omitempty"`
-	VPCAccess  *RunVPCAccess     `json:"vpcAccess,omitempty"`
+	// Revision names the revision the template makes. Left empty, Cloud
+	// Run names it. Only a canary's candidate is named, so the canary can
+	// tell it from the baseline.
+	Revision string `json:"revision,omitempty"`
+	// ServiceAccount is what the revision runs as. Loomplane sets none,
+	// so its revisions run as the project's default compute account.
+	ServiceAccount string            `json:"serviceAccount,omitempty"`
+	Labels         map[string]string `json:"labels,omitempty"`
+	Scaling        *RunScaling       `json:"scaling,omitempty"`
+	Containers     []RunContainer    `json:"containers"`
+	Volumes        []RunVolume       `json:"volumes,omitempty"`
+	VPCAccess      *RunVPCAccess     `json:"vpcAccess,omitempty"`
 }
 
 // RunVPCAccess sends a revision's traffic to private addresses through a

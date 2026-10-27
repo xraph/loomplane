@@ -1,0 +1,5 @@
+import type { Codec } from '../codec-runtime';
+import { codec_Health } from './Health';
+import { codec_Thresholds } from './Thresholds';
+
+export const codec_CanaryVerdict: Codec = {"kind": "object", "fields": {"action_id": {"ts": "actionId"}, "attempt": {"ts": "attempt"}, "baseline": {"ts": "baseline", "codec": () => codec_Health}, "baseline_fallback": {"ts": "baselineFallback"}, "candidate": {"ts": "candidate", "codec": () => codec_Health}, "decided_at": {"ts": "decidedAt"}, "deployment_id": {"ts": "deploymentId"}, "id": {"ts": "id"}, "org_id": {"ts": "orgId"}, "project_id": {"ts": "projectId"}, "reason": {"ts": "reason"}, "retry": {"ts": "retry"}, "service": {"ts": "service"}, "step": {"ts": "step"}, "thresholds": {"ts": "thresholds", "codec": () => codec_Thresholds}, "verdict": {"ts": "verdict"}, "weight": {"ts": "weight"}, "window_end": {"ts": "windowEnd"}, "window_start": {"ts": "windowStart"}}, "required": ["action_id", "attempt", "baseline", "baseline_fallback", "candidate", "decided_at", "deployment_id", "id", "org_id", "project_id", "reason", "retry", "service", "step", "thresholds", "verdict", "weight", "window_end", "window_start"]};

@@ -36,3 +36,39 @@ func TestProjectAuditPreservesExplicitFailureOutcome(t *testing.T) {
 		})
 	}
 }
+
+func TestAuditNamesTheAutomation(t *testing.T) {
+	mem := memory.New()
+	log, err := chronicle.New(chronicle.WithStore(store.NewAdapter(mem)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	recorder := NewAuditor(log, "app", nil)
+	recorder.Record(t.Context(), projects.AuditEvent{Action: "plan.approve", ProjectID: "project", Principal: security.SystemPrincipal("o"), Attributes: map[string]any{"trigger": "watch"}})
+	recorder.Record(t.Context(), projects.AuditEvent{Action: "plan.approve", ProjectID: "project", Principal: security.Principal{OrgID: "o", UserID: "usr_1"}, Attributes: map[string]any{"trigger": "watch"}})
+	result, err := mem.Query(t.Context(), &audit.Query{AppID: "app"})
+	if err != nil || len(result.Events) != 2 {
+		t.Fatalf("audit query: %+v %v", result, err)
+	}
+	byUser := map[string]*audit.Event{}
+	for _, e := range result.Events {
+		byUser[e.UserID] = e
+	}
+	auto := byUser["loomplane:o"]
+	if auto == nil {
+		t.Fatalf("no event by the automation in %+v", result.Events)
+	}
+	if auto.Metadata["actor"] != "system" || auto.Metadata["actor_name"] != "Loomplane automation" || auto.Metadata["trigger"] != "watch" {
+		t.Fatalf("automation metadata %v", auto.Metadata)
+	}
+	person := byUser["usr_1"]
+	if person == nil {
+		t.Fatal("no event by the person")
+	}
+	if _, ok := person.Metadata["actor"]; ok {
+		t.Fatalf("person metadata %v", person.Metadata)
+	}
+	if _, ok := person.Metadata["actor_name"]; ok {
+		t.Fatalf("person metadata %v", person.Metadata)
+	}
+}

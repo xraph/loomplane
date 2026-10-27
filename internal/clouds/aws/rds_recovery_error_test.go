@@ -33,7 +33,7 @@ func TestRDSRecoveryObservationRetainsOnlyUnresolvedNativeReads(t *testing.T) {
 		err     error
 		pending bool
 	}{
-		{"missing", errNotFound, true},
+		{"missing", ErrNotFound, true},
 		{"native-missing", &smithy.GenericAPIError{Code: "DBInstanceNotFound"}, true},
 		{"server", &smithy.GenericAPIError{Code: "InternalFailure", Fault: smithy.FaultServer}, true},
 		{"throttled", &smithy.GenericAPIError{Code: "ThrottlingException"}, true},

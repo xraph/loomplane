@@ -211,13 +211,15 @@ type finishBookkeepingPlans struct {
 func (p *finishBookkeepingPlans) GetPlan(context.Context, string, string) (*planning.Plan, error) {
 	return &planning.Plan{Sources: []planning.PlanSource{{SourceID: "source", InScope: true}}}, nil
 }
-func (p *finishBookkeepingPlans) RecordDeployed(_ context.Context, _ string, value *planning.DeployedSource) error {
+func (p *finishBookkeepingPlans) RecordRelease(_ context.Context, _ string, release *planning.DeployedRelease) error {
 	p.calls++
 	if p.fail {
 		p.fail = false
 		return errors.New("bookkeeping unavailable")
 	}
-	p.records = append(p.records, *value)
+	for _, value := range release.Sources {
+		p.records = append(p.records, *value)
+	}
 	return nil
 }
 

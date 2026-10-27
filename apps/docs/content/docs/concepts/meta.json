@@ -6,6 +6,7 @@
     "the-manifest",
     "plans-and-approvals",
     "deployments-and-recovery",
+    "canary-releases",
     "drift",
     "variables-and-secrets",
     "gateways-and-networking",

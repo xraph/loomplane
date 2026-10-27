@@ -412,6 +412,20 @@ type Action struct {
 	Changes  []Change        `json:"changes,omitempty"`
 }
 
+// AutomationName is how Loomplane automation, which rolls back a release
+// whose watch or canary failed, is named wherever it acts.
+const AutomationName = "Loomplane automation"
+
+// ActorName is how to show a created_by, decided_by or started_by, such as
+// Plan.DecidedBy: "Loomplane automation" for the organization's automation
+// (loomplane:<org>), else the ID as given.
+func ActorName(id string) string {
+	if org, ok := strings.CutPrefix(id, "loomplane:"); ok && org != "" {
+		return AutomationName
+	}
+	return id
+}
+
 // Plan is what deploying a manifest to an environment would do, waiting
 // for someone to approve or reject it.
 type Plan struct {
@@ -431,6 +445,47 @@ type Plan struct {
 	DecidedBy    string            `json:"decided_by,omitempty"`
 	DecisionNote string            `json:"decision_note,omitempty"`
 	CreatedAt    time.Time         `json:"created_at"`
+	// Release is how the plan rolls out; nil when the environment declares
+	// no release block.
+	Release *Release `json:"release,omitempty"`
+	// Kind is "release", "promotion" or "rollback".
+	Kind string `json:"kind"`
+	// From is the environment a promotion deploys from.
+	From      string           `json:"from_environment"`
+	Rollback  *Rollback        `json:"rollback"`
+	Leftovers []Leftover       `json:"leftovers"`
+	Artifacts []ArtifactChoice `json:"artifacts"`
+}
+
+// Rollback is what a rollback plan undoes and what it restores.
+type Rollback struct {
+	Reason              string    `json:"reason"`
+	Trigger             string    `json:"trigger"`
+	TargetDeploymentID  string    `json:"target_deployment_id"`
+	TargetPlanID        string    `json:"target_plan_id"`
+	RestoreDeploymentID string    `json:"restore_deployment_id"`
+	RestorePlanID       string    `json:"restore_plan_id"`
+	RestoreFinishedAt   time.Time `json:"restore_finished_at"`
+	WatchID             string    `json:"watch_id,omitempty"`
+}
+
+// Leftover is something a rollback leaves as the bad release made it.
+type Leftover struct {
+	Subject     string `json:"subject"`
+	Name        string `json:"name"`
+	Op          string `json:"op"`
+	DataBearing bool   `json:"data_bearing"`
+	Reason      string `json:"reason"`
+}
+
+// ArtifactChoice says whether a service reuses an earlier build.
+type ArtifactChoice struct {
+	Service   string `json:"service"`
+	Reused    bool   `json:"reused"`
+	Reference string `json:"reference,omitempty"`
+	Revision  string `json:"revision,omitempty"`
+	From      string `json:"from,omitempty"`
+	Reason    string `json:"reason,omitempty"`
 }
 
 // PlanSource is one repository a plan was made from, at the commit it
@@ -441,6 +496,7 @@ type PlanSource struct {
 	Repository string `json:"repository"`
 	CommitSHA  string `json:"commit_sha"`
 	InScope    bool   `json:"in_scope"`
+	FromPlanID string `json:"from_plan_id,omitempty"`
 }
 
 // Planning reports whether the plan is still being worked out.
@@ -472,6 +528,8 @@ type NewPlan struct {
 	Catalog     bool     `json:"catalog,omitempty"`
 	Environment string   `json:"environment"`
 	Scope       []string `json:"scope,omitempty"`
+	// From is the environment to promote from.
+	From string `json:"from,omitempty"`
 }
 
 // CreatePlan plans the project's current manifest for an environment.
@@ -525,12 +583,117 @@ type Deployment struct {
 	// repository, or each repository at its short commit.
 	CommitSHA string `json:"commit_sha,omitempty"`
 	// Sources are the repositories it moves, each at its commit.
-	Sources    []DeploymentSource `json:"sources,omitempty"`
-	Error      string             `json:"error,omitempty"`
-	Retries    int                `json:"retries"`
-	Steps      []Step             `json:"steps"`
-	StartedAt  time.Time          `json:"started_at"`
-	FinishedAt *time.Time         `json:"finished_at,omitempty"`
+	Sources []DeploymentSource `json:"sources,omitempty"`
+	Error   string             `json:"error,omitempty"`
+	Retries int                `json:"retries"`
+	Steps   []Step             `json:"steps"`
+	// Canary is the deployment's canary release; nil when it deploys all at
+	// once.
+	Canary     *Canary    `json:"canary,omitempty"`
+	StartedAt  time.Time  `json:"started_at"`
+	FinishedAt *time.Time `json:"finished_at,omitempty"`
+}
+
+// Release is how a plan rolls out: all at once, or as a canary through
+// weighted steps.
+type Release struct {
+	Strategy    string     `json:"strategy"`
+	Steps       []int      `json:"steps,omitempty"`
+	HoldSeconds int64      `json:"hold_seconds,omitempty"`
+	Thresholds  Thresholds `json:"thresholds"`
+	// Canary are the actions that ramp; the rest deploy all at once.
+	Canary []string `json:"canary,omitempty"`
+}
+
+// Thresholds are what a canary step is judged against. Rates are
+// fractions: 0.01 is 1%.
+type Thresholds struct {
+	ErrorRate       float64 `json:"error_rate"`
+	ErrorRateDelta  float64 `json:"error_rate_delta"`
+	P95LatencyRatio float64 `json:"p95_latency_ratio"`
+	MinRequests     float64 `json:"min_requests"`
+}
+
+// Canary statuses a person has to act on: traffic may still be split.
+const (
+	CanaryRevertFailed  = "revert_failed"
+	CanaryPromoteFailed = "promote_failed"
+)
+
+// Canary is a deployment's canary release.
+type Canary struct {
+	Status      string          `json:"status"`
+	Steps       []int           `json:"steps"`
+	HoldSeconds int64           `json:"hold_seconds"`
+	Thresholds  Thresholds      `json:"thresholds"`
+	Step        int             `json:"step"`
+	Weight      int             `json:"weight"`
+	Reason      string          `json:"reason,omitempty"`
+	Services    []CanaryService `json:"services"`
+	UpdatedAt   time.Time       `json:"updated_at"`
+}
+
+// NeedsAttention reports whether the canary ended with traffic that may
+// still be split, which a person has to look at.
+func (c *Canary) NeedsAttention() bool {
+	return c.Status == CanaryRevertFailed || c.Status == CanaryPromoteFailed
+}
+
+// CanaryService is one service a canary ramps.
+type CanaryService struct {
+	ActionID string `json:"action_id"`
+	Name     string `json:"name"`
+	Provider string `json:"provider"`
+}
+
+// Health is what one side of a canary step was judged on.
+type Health struct {
+	Requests  float64 `json:"requests"`
+	Errors    float64 `json:"errors"`
+	LatencyMS float64 `json:"latency_ms"`
+	Statistic string  `json:"statistic,omitempty"`
+	Available bool    `json:"available"`
+	Reason    string  `json:"reason,omitempty"`
+}
+
+// ErrorRate is the share of requests that failed, 0 when there were none.
+func (h Health) ErrorRate() float64 {
+	if h.Requests <= 0 {
+		return 0
+	}
+	return h.Errors / h.Requests
+}
+
+// CanaryVerdict is the judgement of one canary step for one service: pass,
+// fail or inconclusive.
+type CanaryVerdict struct {
+	ID           string    `json:"id"`
+	DeploymentID string    `json:"deployment_id"`
+	Retry        int       `json:"retry"`
+	ActionID     string    `json:"action_id"`
+	Service      string    `json:"service"`
+	Step         int       `json:"step"`
+	Attempt      int       `json:"attempt"`
+	Weight       int       `json:"weight"`
+	Verdict      string    `json:"verdict"`
+	Reason       string    `json:"reason"`
+	Baseline     Health    `json:"baseline"`
+	Candidate    Health    `json:"candidate"`
+	WindowStart  time.Time `json:"window_start"`
+	WindowEnd    time.Time `json:"window_end"`
+	DecidedAt    time.Time `json:"decided_at"`
+}
+
+// CanaryReport is a deployment's canary and its current retry's verdicts.
+type CanaryReport struct {
+	Canary   *Canary         `json:"canary"`
+	Verdicts []CanaryVerdict `json:"verdicts"`
+}
+
+// Canary reads a deployment's canary and the verdicts of its current retry.
+func (c *Client) Canary(ctx context.Context, deploymentID string) (*CanaryReport, error) {
+	var r CanaryReport
+	return &r, c.do(ctx, http.MethodGet, "/api/v1/deployments/"+esc(deploymentID)+"/canary", nil, &r)
 }
 
 // DeploymentSource is one repository a deployment moves.

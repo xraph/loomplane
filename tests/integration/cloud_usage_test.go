@@ -92,7 +92,7 @@ func TestCloudSyncPageFiltersByCloud(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		out := []string{}
+		out := make([]string, 0, len(rows))
 		for _, r := range rows {
 			out = append(out, r.ID)
 		}

@@ -103,6 +103,7 @@ export interface Analysis {
   finishedAt?: string;
   id: string;
   orgId: string;
+  pinned: boolean;
   projectId: string;
   ref: string;
   repository: string;
@@ -147,6 +148,15 @@ export interface ApplyCloudInputBody {
 
 export interface ApplyInputBody {
   review: string;
+}
+
+export interface ArtifactChoice {
+  from?: string;
+  reason?: string;
+  reference?: string;
+  reused: boolean;
+  revision?: string;
+  service: string;
 }
 
 export interface Assignment {
@@ -278,6 +288,109 @@ export interface BuildTarget {
   image?: string;
   registry?: string;
   registrySettings?: Record<string, any>;
+}
+
+export interface Canary {
+  holdSeconds: number;
+  reason?: string;
+  services: CanaryService[];
+  status: string;
+  step: number;
+  steps: number[];
+  thresholds: Thresholds;
+  updatedAt: string;
+  weight: number;
+}
+
+export interface CanaryReport {
+  canary?: Canary;
+  verdicts: CanaryVerdict[];
+}
+
+export interface CanaryService {
+  actionId: string;
+  baseline?: string;
+  bindingId: string;
+  candidate?: string;
+  image?: string;
+  name: string;
+  provider: string;
+}
+
+export interface CanaryVerdict {
+  actionId: string;
+  attempt: number;
+  baseline: Health;
+  baselineFallback: boolean;
+  candidate: Health;
+  decidedAt: string;
+  deploymentId: string;
+  id: string;
+  orgId: string;
+  projectId: string;
+  reason: string;
+  retry: number;
+  service: string;
+  step: number;
+  thresholds: Thresholds;
+  verdict: string;
+  weight: number;
+  windowEnd: string;
+  windowStart: string;
+}
+
+export interface CapacityBlock {
+  cloudId: string;
+  counted: number;
+  limit: number;
+  policyRevision: number;
+  poolId: string;
+  reason: string;
+  requested: number;
+  resource: string;
+  retryable: boolean;
+  targetId: string;
+}
+
+export interface CapacityDemand {
+  architecture: string;
+  cloudId: string;
+  environmentId: string;
+  intentHash: string;
+  localData: boolean;
+  orgId: string;
+  planId: string;
+  policyRevision: number;
+  poolId: string;
+  projectId: string;
+  resources: ResourceVector;
+  service: string;
+  stickyServerId: string;
+  targetId: string;
+}
+
+export interface CapacityIntent {
+  assignmentRevision: number;
+  cloudRevision: number;
+  commitSha: string;
+  demand: CapacityDemand;
+  grantRevision: number;
+  providerPin: CapacityTemplatePin;
+  targetName: string;
+  targetRevision: number;
+  template: PoolExpansionPolicy;
+  templateHash: string;
+}
+
+export interface CapacityTemplatePin {
+  accountId: string;
+  connectionGeneration: number;
+}
+
+export interface CapacityWait {
+  blocks: CapacityBlock[];
+  createdAt: string;
+  revision: number;
 }
 
 export interface CatalogKindList {
@@ -419,6 +532,8 @@ export interface CloudPlacement {
   connectionId: string;
   cpuMillis?: number;
   default?: boolean;
+  gpuKind?: string;
+  gpus?: number;
   grantRevision?: number;
   memoryBytes?: number;
   poolId?: string;
@@ -551,6 +666,7 @@ export interface CompleteInputBody {
 export interface ComponentConfig {
   component: ResolvedComponent;
   dependencies?: Record<string, any>;
+  gpu?: GPUPlacement;
   kind: string;
   protection: string;
   resource: string;
@@ -657,6 +773,7 @@ export interface CreateInvitationInputBody {
 export interface CreatePlanInputBody {
   catalog?: boolean;
   environment: string;
+  from?: string;
   scope?: string[];
 }
 
@@ -805,6 +922,8 @@ export interface DeployedRepository {
 }
 
 export interface Deployment {
+  canary?: Canary;
+  capacityWait?: CapacityWait;
   commitSha: string;
   environment: string;
   environmentId: string;
@@ -842,6 +961,20 @@ export interface DiscoveredService {
   routes: number;
   service: string;
   state: string;
+  updatedAt: string;
+}
+
+export interface DiscoverySource {
+  alias: string;
+  createdAt: string;
+  createdBy: string;
+  id: string;
+  orgId: string;
+  projectId: string;
+  ref: string;
+  removedAt?: string;
+  repository: string;
+  root: string;
   updatedAt: string;
 }
 
@@ -1138,6 +1271,22 @@ export interface Finding {
   subject?: string;
 }
 
+export interface FrontendDemand {
+  accountId: string;
+  cloudId: string;
+  connectionGeneration: number;
+  connectionId: string;
+  environmentId: string;
+  grantRevision: number;
+  orgId: string;
+  planId: string;
+  projectId: string;
+  provider: string;
+  service: string;
+  targetId: string;
+  targetRevision: number;
+}
+
 export interface GPUDevice {
   index: number;
   kind: string;
@@ -1166,6 +1315,13 @@ export interface GPUNodeGroup {
   product?: string;
   tolerations?: GPUToleration[];
   total: number;
+}
+
+export interface GPUPlacement {
+  count: number;
+  kind: string;
+  nodeSelector?: Record<string, any>;
+  tolerations?: GPUToleration[];
 }
 
 export interface GPUTarget {
@@ -1273,6 +1429,15 @@ export interface HandoffInputBody {
 
 export interface HandoffReleaseInputBody {
   drainSeconds: number;
+}
+
+export interface Health {
+  available: boolean;
+  errors: number;
+  latencyMs: number;
+  reason?: string;
+  requests: number;
+  statistic?: string;
 }
 
 export interface Held {
@@ -1404,6 +1569,14 @@ export interface KubernetesRule {
   verbs: string[];
 }
 
+export interface Leftover {
+  dataBearing: boolean;
+  name: string;
+  op: string;
+  reason: string;
+  subject: string;
+}
+
 export interface Log {
   actionId: string;
   attempt: string;
@@ -1470,6 +1643,7 @@ export interface ManagedRecord {
 export interface Manifest {
   databaseGateway?: DatabaseGateway;
   defaults?: Defaults;
+  environments?: Record<string, any>;
   federation?: Federation;
   gateways?: Record<string, any>;
   held?: Held;
@@ -1492,6 +1666,11 @@ export interface ManifestEndpoint {
   hostname?: string;
   ingressClass?: string;
   tlsSecret?: string;
+}
+
+export interface ManifestGPU {
+  count: number;
+  kind: string;
 }
 
 export interface MoveInput {
@@ -1928,6 +2107,7 @@ export interface PlacementUsage {
 
 export interface Plan {
   actions: Action[];
+  artifacts: ArtifactChoice[];
   catalog: boolean;
   cloudSyncId?: string;
   connections: Record<string, any>;
@@ -1941,14 +2121,20 @@ export interface Plan {
   error: string;
   executable: boolean;
   expiresAt?: string;
+  fromEnvironment: string;
+  fromEnvironmentId: string;
   id: string;
+  kind: string;
+  leftovers: Leftover[];
   manifestId: string;
   manifestRevision: number;
   orgId: string;
   plannedAt?: string;
   problems: Finding[];
   projectId: string;
+  release?: Release;
   revision: string;
+  rollback?: Rollback;
   sources: PlanSource[];
   status: string;
   summary: PlanningSummary;
@@ -1973,6 +2159,7 @@ export interface PlanSource {
   alias: string;
   analysisId: string;
   commitSha: string;
+  fromPlanId?: string;
   inScope: boolean;
   ref?: string;
   repository: string;
@@ -2039,6 +2226,21 @@ export interface Pool {
   name: string;
   orgId: string;
   revision: number;
+}
+
+export interface PoolExpansionPolicy {
+  acceleratorKind?: string;
+  allowedSizes: string[];
+  architecture: string;
+  bootstrapSize: string;
+  connectionId: string;
+  image: string;
+  limits?: ResourceVector;
+  maxServers: number;
+  minServers: number;
+  poolId: string;
+  region: string;
+  systemReserve: ResourceVector;
 }
 
 export interface PoolInputBody {
@@ -2294,6 +2496,12 @@ export interface Recipe {
   volumeSizeMb?: number;
 }
 
+export interface RecipesGPU {
+  count: number;
+  kind?: string;
+  minMemoryGib?: number;
+}
+
 export interface RecoveryInputBody {
   planId: string;
   review?: string;
@@ -2369,6 +2577,14 @@ export interface RegistrationList {
   registrations: (Registration | null)[];
 }
 
+export interface Release {
+  canary?: string[];
+  holdSeconds?: number;
+  steps?: number[];
+  strategy: string;
+  thresholds: Thresholds;
+}
+
 export interface RemoveRouteInputBody {
   revision: number;
 }
@@ -2422,6 +2638,7 @@ export interface ResolvedComponent {
   step: number;
   timeout?: number;
   volume?: Volume;
+  weightCache?: WeightCache;
 }
 
 export interface ResolvedVariable {
@@ -2464,7 +2681,9 @@ export interface ResourceVector {
 
 export interface Resources {
   cpuMillis: number;
+  gpu?: RecipesGPU;
   memoryMb: number;
+  shmMb?: number;
 }
 
 export interface Restore {
@@ -2619,6 +2838,16 @@ export interface RetirementRetryInputBody {
   requestId: string;
 }
 
+export interface ReusedArtifact {
+  architecture?: string;
+  commitSha: string;
+  digest?: string;
+  fromDeploymentId: string;
+  fromEnvironment: string;
+  reference?: string;
+  revision?: string;
+}
+
 export interface Revision {
   createdAt: string;
   createdBy: string;
@@ -2633,6 +2862,17 @@ export interface Revision {
 
 export interface RevisionList {
   revisions: Revision[];
+}
+
+export interface Rollback {
+  reason: string;
+  restoreDeploymentId: string;
+  restoreFinishedAt: string;
+  restorePlanId: string;
+  targetDeploymentId: string;
+  targetPlanId: string;
+  trigger: string;
+  watchId?: string;
 }
 
 export interface RouteBinding {
@@ -2756,6 +2996,7 @@ export interface SaveInputBody {
   manifest?: {
   databaseGateway?: DatabaseGateway;
   defaults?: Defaults;
+  environments?: Record<string, any>;
   federation?: Federation;
   gateways?: Record<string, any>;
   held?: Held;
@@ -2914,8 +3155,10 @@ export interface Service {
 
 export interface ServiceConfig {
   appliedInputs?: AppliedInputs;
+  artifact?: ReusedArtifact;
   build?: string;
   buildTarget?: BuildTarget;
+  capacityIntent?: CapacityIntent;
   catalog?: Recipe;
   cloudPlacement?: CloudPlacement;
   cloudSqlNetwork?: CloudSQLApplicationNetwork;
@@ -2929,7 +3172,9 @@ export interface ServiceConfig {
   execution: string;
   farp?: FarpConfig;
   framework?: string;
+  frontendDemand?: FrontendDemand;
   gateway?: GatewayRoute[];
+  gpu?: GPUPlacement;
   healthPath?: string;
   image?: string;
   internal?: boolean;
@@ -3018,7 +3263,9 @@ export interface SignInInputBody {
 
 export interface Size {
   cpu: number;
+  gpu?: ManifestGPU;
   memory: number;
+  shm?: number;
 }
 
 export interface Snapshot {
@@ -3065,7 +3312,7 @@ export interface SourceCounts {
 }
 
 export interface SourceList {
-  sources: Source[];
+  sources: DiscoverySource[];
 }
 
 export interface SourceRef {
@@ -3079,7 +3326,7 @@ export interface SourceRef {
 export interface SourceState {
   latest?: Analysis;
   shown?: Analysis;
-  source: Source;
+  source: DiscoverySource;
 }
 
 export interface SpendReport {
@@ -3114,6 +3361,7 @@ export interface Step {
   op: string;
   order: number;
   provider: string;
+  revision?: string;
   startedAt?: string;
   status: string;
   subject: string;
@@ -3213,6 +3461,13 @@ export interface TenantInputBody {
 
 export interface TenantList {
   tenants: Tenant[];
+}
+
+export interface Thresholds {
+  errorRate: number;
+  errorRateDelta: number;
+  minRequests: number;
+  p95LatencyRatio: number;
 }
 
 export interface TrafficReport {
@@ -3332,6 +3587,11 @@ export interface WebhookEndpointList {
 export interface WebhookEndpointSecret {
   endpoint: WebhookEndpoint;
   secret: string;
+}
+
+export interface WeightCache {
+  kubernetesSizeMb: number;
+  mountPath: string;
 }
 
 export interface Workspace {

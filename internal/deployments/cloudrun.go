@@ -74,6 +74,9 @@ type cloudRunState struct {
 	BuildRetry int               `json:"build_retry,omitempty"`
 	Image      string            `json:"image,omitempty"`
 	LogAttempt string            `json:"log_attempt,omitempty"`
+	// Unpinned is the permission the connection lacked to read Image's
+	// digest, when Image is a tag for want of it.
+	Unpinned string `json:"unpinned,omitempty"`
 }
 
 // RetainCheckpointOnRetry preserves build progress and PSC route identities.
@@ -104,17 +107,58 @@ func (c *CloudRun) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 	if err != nil {
 		return nil, err
 	}
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	ctx, built, err := c.image(ctx, cancel, s, job, psc)
+	if err != nil {
+		return nil, err
+	}
+	job = built.job
+	job.Progress(StepDeploying, "Deploying "+built.image)
+	ext, url, err := c.run(ctx, job, built.image, built.check)
+	if err != nil {
+		return nil, err
+	}
+	return &Outcome{ExternalID: ext, URL: url, Image: built.image, Revision: built.image}, nil
+}
+
+// session authorizes as the job's connection.
+func (c *CloudRun) session(ctx context.Context, job *Job) (*gcp.Session, error) {
+	key, err := gcp.ParseKey(job.Credential)
+	if err != nil {
+		return nil, err
+	}
+	return c.Google.Session(ctx, key)
+}
+
+// cloudRunImage is an image ready to deploy, and what deploying it goes
+// on with.
+type cloudRunImage struct {
+	image string
+	// job is the job to deploy with: with a Cloud SQL PSC route, a copy
+	// whose environment carries the route.
+	job *Job
+	// check checks a Cloud SQL PSC route again before each change. It's
+	// nil without one.
+	check func(context.Context) error
+}
+
+// image is the job's image: the one an earlier attempt checkpointed, the
+// earlier build a promotion or rollback reuses, or a new build. The
+// context it returns reports each later wait as deploying, and keeps the
+// checkpoint fresh. With a Cloud SQL PSC route,
+// a checkpoint that can't be kept cancels ctx through cancel, since the
+// route's identities live in it.
+func (c *CloudRun) image(ctx context.Context, cancel context.CancelCauseFunc, s *gcp.Session, job *Job, psc *cloudRunPSC) (context.Context, cloudRunImage, error) {
 	var state cloudRunState
 	if len(job.Resume) > 0 {
 		if decodeErr := json.Unmarshal(job.Resume, &state); decodeErr != nil && psc != nil {
-			return nil, errors.New("cloud sql PSC application checkpoint cannot be read")
+			return ctx, cloudRunImage{}, errors.New("cloud sql PSC application checkpoint cannot be read")
 		}
 	}
 	if state.PSC != nil && psc == nil {
-		return nil, errors.New("cloud sql PSC application checkpoint requires its reviewed transport")
+		return ctx, cloudRunImage{}, errors.New("cloud sql PSC application checkpoint requires its reviewed transport")
 	}
-	ctx, cancel := context.WithCancelCause(ctx)
-	defer cancel(nil)
 	persist := func() error {
 		if ctx.Err() != nil {
 			return context.Cause(ctx)
@@ -142,7 +186,7 @@ func (c *CloudRun) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 	if psc != nil {
 		check = func(ctx context.Context) error { return psc.check(ctx, s, job, &state, persist) }
 		if checkErr := check(ctx); checkErr != nil {
-			return nil, checkErr
+			return ctx, cloudRunImage{}, checkErr
 		}
 		prepared := *job
 		prepared.Env = psc.env
@@ -153,20 +197,21 @@ func (c *CloudRun) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 		job.Progress(status, m)
 		save()
 	})
-
 	if state.Image == "" {
-		if state.Image, err = c.build(ctx, s, job, &state, save); err != nil {
-			return nil, err
+		if state.Image = reusedImage(job); state.Image == "" {
+			image, err := c.build(ctx, s, job, &state, save)
+			if err != nil {
+				return ctx, cloudRunImage{}, err
+			}
+			state.Image = image
 		}
 		save()
 	}
-	status = StepDeploying
-	job.Progress(StepDeploying, "Deploying "+state.Image)
-	ext, url, err := c.run(ctx, job, state.Image, check)
-	if err != nil {
-		return nil, err
+	if state.Unpinned != "" {
+		job.Warn(unpinnedWarning(job.Action.Name, state.Unpinned))
 	}
-	return &Outcome{ExternalID: ext, URL: url, Image: state.Image, Revision: state.Image}, nil
+	status = StepDeploying
+	return ctx, cloudRunImage{image: state.Image, job: job, check: check}, nil
 }
 
 // build runs the service's build on Cloud Build and returns its image.
@@ -239,7 +284,31 @@ func (c *CloudRun) build(ctx context.Context, s *gcp.Session, job *Job, state *c
 	if buildErr != nil {
 		return "", buildErr
 	}
-	return image, nil
+	for _, pushed := range build.Results.Images {
+		if pushed.Name == image && pushed.Digest != "" {
+			return byDigest(image, pushed.Digest)
+		}
+	}
+	return pushedImage(ctx, s, a.Region, image, imageName(job), tag, state)
+}
+
+// pushedImage is the image a build pushed itself, as pack does, rather
+// than through Cloud Build: what Artifact Registry's tag points at. An
+// account that may not read tags gets the image by tag, and state says
+// why.
+func pushedImage(ctx context.Context, s *gcp.Session, region, image, name, tag string, state *cloudRunState) (string, error) {
+	digest, err := s.ImageDigest(ctx, region, imageRepository, name, tag)
+	if gcp.IsForbidden(err) {
+		state.Unpinned = "artifactregistry.tags.get"
+		return image, nil
+	}
+	if gcp.IsNotFound(err) {
+		return "", errNoDigest
+	}
+	if err != nil {
+		return "", fmt.Errorf("read the image's digest: %w", err)
+	}
+	return byDigest(image, digest)
 }
 
 // imageName names the service's image, unique within the project.
@@ -321,10 +390,10 @@ func sourceRoot(ctx context.Context, job *Job) (string, error) {
 	return root, nil
 }
 
-// principal is who Ctrl Plane sees acting: the person who approved the
-// plan, in its organization.
+// principal is who Ctrl Plane sees acting: whoever approved the plan, in
+// its organization. That's Loomplane automation for a rollback it approved.
 func principal(job *Job) security.Principal {
-	return security.Principal{OrgID: job.Deployment.OrgID, UserID: job.Deployment.StartedBy}
+	return security.ActorPrincipal(job.Deployment.OrgID, job.Deployment.StartedBy)
 }
 
 // provider registers the connection's Cloud Run provider for the region,

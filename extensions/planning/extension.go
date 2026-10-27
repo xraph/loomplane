@@ -399,9 +399,13 @@ func (e *Extension) Register(fapp forge.App) error {
 		return principalErr
 	}
 	e.deployments.BindRunStore(orchestration.NewPgRunStore(pg))
+	// A promotion analyzes a commit its source environment runs that
+	// nothing analyzed, on the same queue as any analysis.
+	commits := &discovery.CommitAnalyzer{Store: discovery.NewPgStore(pg), Enqueue: orchestration.NewEnqueuer(e.engineOf()), Audit: auditor}
 	e.plans = planning.NewService(planning.Deps{
 		Capacity: routeService, CapacityTemplates: routeService, CapacityPrincipal: principal,
-		Store: planStore, Projects: prj, Analyses: discovery.NewPgStore(pg), Manifests: e.manifests,
+		Store: planStore, Projects: prj, Analyses: discovery.NewPgStore(pg), Commits: commits, Manifests: e.manifests,
+		History:       &deployments.History{Store: deployStore, Plans: planStore, Providers: catalog},
 		CloudProfiles: e.cloudStore, CloudSyncWorkflow: e.deployments,
 		Providers: catalog, Connections: clouds, Authz: authz, Workflow: e.deployments, Audit: auditor,
 		Window: e.cfg.Planning.ApprovalWindow, Telemetry: metrics, DatabaseGatewayTrust: databaseGatewayTrust(c),
@@ -463,6 +467,7 @@ func (e *Extension) Register(fapp forge.App) error {
 		Telemetry:            metrics,
 		CatalogHooks:         catalogHooks,
 		Observers:            observers,
+		Health:               &deployments.HealthReader{Bindings: planStore, Credentials: clouds, Meters: revisionMeters(executors)},
 	})
 	// Deleting a project or environment takes its database gateways' records
 	// with it, and this deletes their keys from Vault and warns about a
@@ -493,7 +498,7 @@ func (e *Extension) Register(fapp forge.App) error {
 	e.deployments.BindFailedCleanups(e.failedCleanups)
 	// Drift is checked on Dispatch's cron leader, so one replica checks.
 	engine.Register(e.engineOf(), orchestration.DriftJob(&deployments.DriftChecker{
-		Store: planStore, Credentials: clouds, Executors: executors, Telemetry: metrics,
+		Store: planStore, Credentials: clouds, Executors: executors, Telemetry: metrics, Canaries: deployStore,
 		Warn: func(msg string, err error) { log.Warn(msg, forge.F("error", err.Error())) },
 	}))
 	engine.Register(e.engineOf(), orchestration.ConnectionRefreshJob(clouds))
@@ -644,7 +649,7 @@ func fail(err error) error {
 		return forge.NewHTTPError(http.StatusNotFound, err.Error())
 	case errors.Is(err, deployments.ErrCleanupConflict), errors.Is(err, cloudprofiles.ErrConflict), errors.Is(err, cloudprofiles.ErrExists), errors.Is(err, cloudprofiles.ErrInUse), errors.Is(err, cloudprofiles.ErrBusy), errors.Is(err, recovery.ErrConflict), errors.Is(err, planning.ErrConflict), errors.Is(err, manifests.ErrConflict), errors.Is(err, deployments.ErrNotFailed),
 		errors.Is(err, planning.ErrStale), errors.Is(err, planning.ErrSuperseded), errors.Is(err, planning.ErrNotReady),
-		errors.Is(err, catalogconnect.ErrInUse):
+		errors.Is(err, catalogconnect.ErrInUse), errors.Is(err, planning.ErrNotRunning):
 		return forge.NewHTTPError(http.StatusConflict, err.Error())
 	case errors.Is(err, planning.ErrNoManifest), errors.Is(err, planning.ErrNoAnalysis), errors.Is(err, discovery.ErrNoGraph),
 		errors.Is(err, planning.ErrNoSources), errors.Is(err, planning.ErrNeverDeployed):

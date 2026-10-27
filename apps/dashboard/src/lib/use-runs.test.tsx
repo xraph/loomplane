@@ -4,7 +4,7 @@ import type { ReactNode } from "react"
 import { afterEach, describe, expect, it, vi } from "vitest"
 
 import { forgeClient } from "@/client/runtime"
-import { useRunning, useRuns } from "@/lib/use-runs"
+import { usePeople, useRunning, useRuns } from "@/lib/use-runs"
 
 function wrapper({ children }: { children: ReactNode }) {
   return <ClientProvider client={forgeClient}>{children}</ClientProvider>
@@ -184,5 +184,32 @@ describe("older runs", () => {
         "plan_1",
       ])
     )
+  })
+})
+
+describe("people", () => {
+  it("names Loomplane automation, which no member is", async () => {
+    vi.stubGlobal("fetch", async () =>
+      json({
+        members: [
+          { user_id: "usr_2", name: "Pat Doe", email: "pat@example.com" },
+          // A member row can never make someone the automation.
+          {
+            user_id: "loomplane:org_1",
+            name: "Mallory",
+            email: "m@example.com",
+          },
+        ],
+      })
+    )
+    const { result } = renderHook(() => usePeople(), { wrapper })
+    await waitFor(() => expect(result.current("usr_2").name).toBe("Pat Doe"))
+    expect(result.current("loomplane:org_1")).toEqual({
+      name: "Loomplane automation",
+      initials: "LA",
+    })
+    // Neither an unknown person nor a bare prefix reads as the automation.
+    expect(result.current("usr_1").name).toBe("Someone")
+    expect(result.current("loomplane:").name).toBe("Someone")
   })
 })

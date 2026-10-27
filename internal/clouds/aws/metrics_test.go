@@ -374,3 +374,104 @@ func TestSpendUnavailable(t *testing.T) {
 		})
 	}
 }
+
+func TestServiceMetricsCountsTargetErrors(t *testing.T) {
+	w := testWindow()
+	cw := &fakeMetrics{pages: map[string]*cloudwatch.GetMetricDataOutput{
+		"": {MetricDataResults: []cwtypes.MetricDataResult{
+			{Id: sdk.String("requests"), Timestamps: []time.Time{w.Start}, Values: []float64{100}},
+			{Id: sdk.String("errors"), Timestamps: []time.Time{w.Start, w.Start.Add(w.Step)}, Values: []float64{4, 2}},
+		}},
+	}}
+
+	got, err := serviceMetrics(context.Background(), activeService(testTargetGroupARN), behindLoadBalancer(), cw, "c", "web", w)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !got.ErrorsCounted || len(got.Errors) != 2 || got.Errors[0].V != 4 || got.Errors[1].V != 2 || !got.Errors[1].T.Equal(w.Start.Add(w.Step)) {
+		t.Errorf("errors = %+v, counted %v", got.Errors, got.ErrorsCounted)
+	}
+	var found bool
+	for _, q := range cw.got[0].MetricDataQueries {
+		if sdk.ToString(q.Id) != "errors" {
+			continue
+		}
+		found = true
+		ms := q.MetricStat
+		if sdk.ToString(ms.Metric.MetricName) != "HTTPCode_Target_5XX_Count" || sdk.ToString(ms.Stat) != "Sum" ||
+			sdk.ToInt32(ms.Period) != int32(w.Step/time.Second) || len(ms.Metric.Dimensions) != 2 ||
+			sdk.ToString(ms.Metric.Dimensions[0].Value) != "targetgroup/web-tg/6d0ecf831eec9f09" {
+			t.Errorf("errors query = %+v", ms)
+		}
+	}
+	if !found {
+		t.Errorf("no errors query in %+v", cw.got[0].MetricDataQueries)
+	}
+}
+
+func TestServiceMetricsWithNoErrorsIsZeroNotUnknown(t *testing.T) {
+	w := testWindow()
+	cw := &fakeMetrics{pages: map[string]*cloudwatch.GetMetricDataOutput{
+		"": {MetricDataResults: []cwtypes.MetricDataResult{
+			{Id: sdk.String("requests"), Timestamps: []time.Time{w.Start}, Values: []float64{100}},
+			{Id: sdk.String("errors")},
+		}},
+	}}
+
+	got, err := serviceMetrics(context.Background(), activeService(testTargetGroupARN), behindLoadBalancer(), cw, "c", "web", w)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got.Errors) != 0 || !got.ErrorsCounted {
+		t.Errorf("errors = %+v, counted %v", got.Errors, got.ErrorsCounted)
+	}
+}
+
+func TestTargetGroupMetricsReadsThatGroupOnly(t *testing.T) {
+	w := testWindow()
+	const canary = "arn:aws:elasticloadbalancing:us-east-1:123456789012:targetgroup/canary/abc"
+	tgs := &fakeTargetGroups{out: &elb.DescribeTargetGroupsOutput{TargetGroups: []elbtypes.TargetGroup{{
+		TargetGroupArn: sdk.String(canary), LoadBalancerArns: []string{testLoadBalancerARN},
+	}}}}
+	cw := &fakeMetrics{pages: map[string]*cloudwatch.GetMetricDataOutput{
+		"": {MetricDataResults: []cwtypes.MetricDataResult{
+			{Id: sdk.String("requests"), Timestamps: []time.Time{w.Start}, Values: []float64{7}},
+		}},
+	}}
+
+	got, err := targetGroupMetrics(context.Background(), tgs, cw, canary, w)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if len(tgs.got.TargetGroupArns) != 1 || tgs.got.TargetGroupArns[0] != canary {
+		t.Errorf("described %+v", tgs.got)
+	}
+	if len(got.Requests) != 1 || got.Requests[0].V != 7 || !got.ErrorsCounted {
+		t.Errorf("got %+v", got)
+	}
+	for _, q := range cw.got[0].MetricDataQueries {
+		dims := q.MetricStat.Metric.Dimensions
+		if sdk.ToString(dims[0].Name) != "TargetGroup" || sdk.ToString(dims[0].Value) != "targetgroup/canary/abc" ||
+			sdk.ToString(dims[1].Name) != "LoadBalancer" || sdk.ToString(dims[1].Value) != "app/loomplane/50dc6c495c0c9188" {
+			t.Errorf("%s dims = %+v", sdk.ToString(q.Id), dims)
+		}
+	}
+}
+
+func TestTargetGroupMetricsWithoutALoadBalancerIsUnavailable(t *testing.T) {
+	tgs := &fakeTargetGroups{out: &elb.DescribeTargetGroupsOutput{TargetGroups: []elbtypes.TargetGroup{{
+		TargetGroupArn: sdk.String(testTargetGroupARN),
+	}}}}
+	cw := &fakeMetrics{}
+
+	_, err := targetGroupMetrics(context.Background(), tgs, cw, testTargetGroupARN, testWindow())
+
+	if reason, ok := metrics.IsUnavailable(err); !ok || reason != noTraffic {
+		t.Errorf("err = %v", err)
+	}
+	if len(cw.got) != 0 {
+		t.Errorf("asked CloudWatch anyway")
+	}
+}

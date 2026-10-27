@@ -72,3 +72,67 @@ func (r *Render) Measure(ctx context.Context, conn *connections.Connection, cred
 	}
 	return r.Client.ServiceMetrics(ctx, key, b.ExternalID, w)
 }
+
+// MeasureRevision reads one revision's traffic over w. An ECS revision is
+// the ARN of the target group that serves it, and an empty one is the
+// whole service.
+func (e *ECS) MeasureRevision(ctx context.Context, conn *connections.Connection, credential []byte, b *planning.Binding, revision string, w metrics.Window) (*metrics.Measurement, error) {
+	if revision == "" {
+		return e.Measure(ctx, conn, credential, b, w)
+	}
+	key, err := aws.ParseKey(credential)
+	if err != nil {
+		return nil, err
+	}
+	return e.AWS.Session(key, conn.Details["region"], conn.Account).TargetGroupMetrics(ctx, revision, w)
+}
+
+// MeasureRevision reads one Cloud Run revision from Cloud Monitoring, or the
+// whole service when revision is empty.
+func (c *CloudRun) MeasureRevision(ctx context.Context, conn *connections.Connection, credential []byte, b *planning.Binding, revision string, w metrics.Window) (*metrics.Measurement, error) {
+	if revision == "" {
+		return c.Measure(ctx, conn, credential, b, w)
+	}
+	iid, err := id.Parse(b.ExternalID)
+	if err != nil {
+		return nil, fmt.Errorf("the binding names no instance: %w", err)
+	}
+	key, err := gcp.ParseKey(credential)
+	if err != nil {
+		return nil, err
+	}
+	s, err := c.Google.Session(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	return s.RevisionMetrics(ctx, b.Region, cloudrun.ServiceName(iid), revision, w)
+}
+
+// MeasureRevision reads one container app revision from Azure Monitor, or the
+// whole app when revision is empty.
+func (a *Azure) MeasureRevision(ctx context.Context, conn *connections.Connection, credential []byte, b *planning.Binding, revision string, w metrics.Window) (*metrics.Measurement, error) {
+	if revision == "" {
+		return a.Measure(ctx, conn, credential, b, w)
+	}
+	s, err := azureSession(ctx, a.Client, conn, credential)
+	if err != nil {
+		return nil, err
+	}
+	return s.RevisionMetrics(ctx, b.ExternalID, revision, w)
+}
+
+// MeasureRevision reads the service. Render runs one release at a time, so it
+// has no revision to tell apart and refuses to name one.
+func (r *Render) MeasureRevision(ctx context.Context, conn *connections.Connection, credential []byte, b *planning.Binding, revision string, w metrics.Window) (*metrics.Measurement, error) {
+	if revision != "" {
+		return nil, metrics.Unavailablef("Render runs one release at a time, so it can't report a single revision's health.")
+	}
+	return r.Measure(ctx, conn, credential, b, w)
+}
+
+var (
+	_ RevisionMeter = (*ECS)(nil)
+	_ RevisionMeter = (*CloudRun)(nil)
+	_ RevisionMeter = (*Azure)(nil)
+	_ RevisionMeter = (*Render)(nil)
+)

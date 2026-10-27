@@ -29,35 +29,51 @@ const (
 	costReader    = "Give the application the Cost Management Reader role on the resource group so Loomplane can read what it costs"
 )
 
-// AppMetrics reads a container app's requests and average response time
-// over w from Azure Monitor. appID is the app's resource ID.
+// AppMetrics reads a container app's requests, 5xx responses and average
+// response time over w from Azure Monitor, across all its revisions.
+// appID is the app's resource ID.
 func (s *Session) AppMetrics(ctx context.Context, appID string, w metrics.Window) (*metrics.Measurement, error) {
+	return s.RevisionMetrics(ctx, appID, "", w)
+}
+
+// RevisionMetrics reads one revision's requests, 5xx responses and average
+// response time over w. An empty revision reads the whole app.
+func (s *Session) RevisionMetrics(ctx context.Context, appID, revision string, w metrics.Window) (*metrics.Measurement, error) {
 	span := w.Start.UTC().Format(time.RFC3339) + "/" + w.End.UTC().Format(time.RFC3339)
-	requests, err := s.monitor(ctx, appID, url.Values{
-		"metricnames": {"Requests"}, "aggregation": {"Total"},
-		"interval": {timeGrain(w.Step)}, "timespan": {span},
-	})
+	var revFilter string
+	if revision != "" {
+		revFilter = "revisionName eq '" + strings.ReplaceAll(revision, "'", "''") + "'"
+	}
+	errFilter := "statusCodeCategory eq '5xx'"
+	if revFilter != "" {
+		errFilter = revFilter + " and " + errFilter
+	}
+	query := func(name, aggregation, interval, filter string) url.Values {
+		q := url.Values{
+			"metricnames": {name}, "aggregation": {aggregation},
+			"interval": {interval}, "timespan": {span},
+		}
+		if filter != "" {
+			q.Set("$filter", filter)
+		}
+		return q
+	}
+	requests, err := s.monitor(ctx, appID, query("Requests", "Total", timeGrain(w.Step), revFilter))
 	if err != nil {
 		return nil, err
 	}
-	m := &metrics.Measurement{}
-	sums := map[time.Time]float64{}
-	for _, d := range requests {
-		if d.Total != nil {
-			sums[d.TimeStamp.UTC()] += *d.Total
-		}
+	failures, err := s.monitor(ctx, appID, query("Requests", "Total", timeGrain(w.Step), errFilter))
+	if err != nil {
+		return nil, err
 	}
-	for t, v := range sums {
-		m.Requests = append(m.Requests, metrics.Point{T: t, V: v})
-	}
-	sort.Slice(m.Requests, func(i, j int) bool { return m.Requests[i].T.Before(m.Requests[j].T) })
+	// Azure answered for errors, so an empty series means none fell.
+	m := &metrics.Measurement{ErrorsCounted: true}
+	m.Requests = totals(requests)
+	m.Errors = totals(failures)
 
 	// FULL is one value for the whole span. Container Apps reports no
 	// percentile, so this is an average and says so.
-	latency, err := s.monitor(ctx, appID, url.Values{
-		"metricnames": {"ResponseTime"}, "aggregation": {"Average"},
-		"interval": {"FULL"}, "timespan": {span},
-	})
+	latency, err := s.monitor(ctx, appID, query("ResponseTime", "Average", "FULL", revFilter))
 	if err != nil {
 		return nil, err
 	}
@@ -74,6 +90,22 @@ func (s *Session) AppMetrics(ctx context.Context, appID string, w metrics.Window
 		m.Latency, m.Statistic = sum/float64(n), metrics.Average
 	}
 	return m, nil
+}
+
+// totals adds the series' totals up per timestamp, oldest first.
+func totals(points []monitorPoint) []metrics.Point {
+	sums := map[time.Time]float64{}
+	for _, d := range points {
+		if d.Total != nil {
+			sums[d.TimeStamp.UTC()] += *d.Total
+		}
+	}
+	out := make([]metrics.Point, 0, len(sums))
+	for t, v := range sums {
+		out = append(out, metrics.Point{T: t, V: v})
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].T.Before(out[j].T) })
+	return out
 }
 
 // monitorPoint is one value of a metric in Azure Monitor's answer.

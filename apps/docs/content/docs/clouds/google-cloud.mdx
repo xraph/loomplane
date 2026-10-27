@@ -40,13 +40,16 @@ The project ID comes from the key. Only the project and the service account's em
 
 | Used for | Permissions Loomplane checks |
 |---|---|
-| Builds | `cloudbuild.builds.create`, `cloudbuild.builds.get`, `artifactregistry.repositories.create`, `artifactregistry.repositories.get` |
+| Builds | `cloudbuild.builds.create`, `cloudbuild.builds.get`, `artifactregistry.repositories.create`, `artifactregistry.repositories.get`. Recommended, not checked: `artifactregistry.tags.get` |
 | Cloud Run | `run.services.create`, `run.services.get`, `run.services.update`, `run.services.setIamPolicy`, `run.operations.get`, `iam.serviceAccounts.actAs` |
+| Canary releases only | `run.revisions.get`, `run.revisions.delete` |
 | Secrets | `secretmanager.secrets.create`, `secretmanager.secrets.setIamPolicy`, `secretmanager.versions.add` |
 | Cloud SQL | `cloudsql.instances.create`, `cloudsql.instances.delete`, `cloudsql.instances.get`, `cloudsql.databases.create`, `cloudsql.users.create`, `cloudsql.users.update` |
 | Memorystore | `redis.instances.create`, `redis.instances.delete`, `redis.instances.get`, `redis.instances.getAuthString` |
 | Cloud Storage | `storage.buckets.create`, `storage.buckets.delete`, `storage.buckets.get`, `storage.buckets.getIamPolicy`, `storage.buckets.setIamPolicy`, `storage.objects.create`, `storage.objects.delete`, `storage.objects.list` |
 | Project | `resourcemanager.projects.get` |
+
+Loomplane deploys each image by the digest its build pushed and records it with the release, so a promotion can deploy the exact image staging ran and a rollback the image the previous release ran. Cloud Build reports the digest of an image built from a Dockerfile. A service without one is built with buildpacks, which push the image themselves, and Loomplane reads its digest from Artifact Registry with `artifactregistry.tags.get`. Without that permission you can still deploy: the service runs its image by tag, the step warns you, and promoting or rolling back that service builds it again.
 
 Build logs come from Cloud Logging, so the account also needs permission to read there. Without it the deployment still works and the logs show as unavailable.
 
@@ -99,6 +102,14 @@ Regions Loomplane lists are `us-central1`, `us-east1`, `us-east4`, `us-west1`, `
 A private Cloud Run service only takes calls from the project's own services, which must send a Google ID token. Services that need a private one get its address in a variable.
 
 Cloud SQL is reached through the Cloud SQL connector. Memorystore only has an address on the project's default network, so Cloud Run services that need it send their private traffic there with direct VPC egress. Buckets are private, and services reach them as the Cloud Run runtime account, so `STORAGE_URL` carries no credentials (`gs://bucket`).
+
+A canary runs the new release as a second revision of the same Cloud Run service, named after the service and the deployment, and splits the service's traffic between that revision and the one that served before. Promoting it sends all of the traffic to the latest revision, so your next deploy takes everything again. A rollback gives the old revision all of the traffic, puts its template back and deletes the new one. Putting the template back makes one more revision with the old configuration, which takes no traffic.
+
+If an earlier canary couldn't roll back and left the traffic split, a new canary on that service won't start, since it can't tell which revision is the real baseline. Retry or roll back that deployment, or release once with `direct`, which gives the latest revision all of the traffic.
+
+The canary releases only permissions aren't needed for anything else, so a service account without them still deploys. The connection lists what's missing, and a canary on Cloud Run refuses to start, when you plan it and again when it runs. Grant them, or release that environment `direct` or `blue_green`.
+
+Each revision reads its secrets at the Secret Manager version it was started with, never `latest`. The candidate stores new versions, so an instance the old revision starts mid-canary still reads its own values.
 
 On Google Cloud you pick the region per service or resource. Moving one starts the new copy first. Cloud SQL instances and Cloud Storage buckets carry their region in their names, so the new one never collides with the one it replaces.
 

@@ -194,7 +194,9 @@ func Compute(in Input) *Result {
 	p.planDeletes()
 	p.refuseRoutedDeletes()
 	p.stillReplaced()
-	return p.finish()
+	r := p.finish()
+	planRelease(in, r)
+	return r
 }
 
 type planner struct {
@@ -2636,19 +2638,8 @@ func (p *planner) finish() *Result {
 	r := &Result{Actions: make([]Action, 0, len(p.actions)), Problems: p.problems, Warnings: p.warnings, Connections: connections}
 	for _, a := range p.actions {
 		r.Actions = append(r.Actions, *a)
-		switch a.Op {
-		case Create:
-			r.Summary.Create++
-		case Update:
-			r.Summary.Update++
-		case Replace:
-			r.Summary.Replace++
-		case Delete:
-			r.Summary.Delete++
-		case Keep:
-			r.Summary.Keep++
-		}
 	}
+	r.recount()
 	names := make([]string, 0, len(p.unready))
 	for name := range p.unready {
 		names = append(names, name)

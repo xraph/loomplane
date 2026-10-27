@@ -1,0 +1,118 @@
+---
+title: Canary releases
+description: Loomplane shifts traffic to a new version in steps, using each cloud's own weighting, and reads health from that cloud's own monitoring.
+---
+
+Loomplane shifts traffic to a new version with each cloud's own traffic weighting, so it never sits in the path of your application's requests. It reads health from the cloud's own monitoring, so what it judges is what the cloud already reports.
+
+## Where canaries run
+
+| Provider | Canary | Weighting | Requests | 5xx | Latency | Per revision | Note |
+|---|---|---|---|---|---|---|---|
+| `cloud-run` | Yes | Revision traffic | Yes | Yes | p95 | Yes | Traffic is split with revision traffic percentages on the service. |
+| `ecs-fargate` | Yes | ALB target groups | Yes | Yes | p95 | Yes | Traffic is split with weighted target groups on the ALB listener, for services behind the public or internal ALB. Service Connect calls stay on the baseline. |
+| `azure-container-apps` | Yes | Revision traffic | Yes | Yes | Average | Yes | Traffic is split with revision traffic weights, in multiple revisions mode, for apps with ingress. |
+| `kubernetes` | No | None | No | No | None | No | Services use a plain Ingress with no Gateway API, so there is no traffic weighting to drive. |
+| `server` | No | None | No | No | None | No | Route releases are a DNS cutover, so traffic moves all at once. |
+| `render` | No | None | Yes | Yes | p95 | No | Render has no traffic weighting. Its metrics are per service, not per revision. |
+| `vercel` | No | None | No | No | None | No | Vercel has no traffic weighting Loomplane drives. |
+| `digitalocean` | No | None | No | No | None | No | DigitalOcean has no traffic weighting. |
+
+Services on any other target deploy all at once, and the plan says so.
+
+## Turn one on
+
+Set a `release` block on the environment in `loomplane.yaml`, then plan as usual:
+
+```yaml
+environments:
+  production:
+    release:
+      strategy: canary
+      steps: [5, 25, 50, 100]
+      hold: 10m
+```
+
+Approving the plan starts the canary. You approve once per release, and nobody approves individual steps. The approval card on the deployment page says "Approving starts a canary" and repeats the steps and the hold, so you can see what you're agreeing to. The [manifest reference](/docs/reference/loomplane-yaml) lists every setting and its default.
+
+## How a ramp runs
+
+Loomplane starts the new version beside the current one, with no traffic on it. Then it moves the first step's share of traffic to the new version, waits, reads health, and decides. A pass moves on to the next step. The last step is 100%, and passing it promotes the new version for good.
+
+Each step holds for the `hold` you set (10 minutes by default). Cloud monitoring reports a few minutes late, so the first reading of a step also waits three more minutes after the hold ends. A 10 minute hold means about 13 minutes before the first verdict of that step. A four step ramp with the defaults takes close to an hour in total.
+
+The decision is made by Loomplane's own controller. It doesn't use the agent and works with the agent switched off.
+
+## What counts as healthy
+
+For each service, Loomplane reads the new version's requests, 5xx responses and latency from the cloud's own monitoring, along with the same figures for the version it replaces. A step fails when the new version:
+
+- has a failure share above `thresholds.error_rate`
+- has a failure share more than `thresholds.error_rate_delta` above the current version's
+- is slower than `thresholds.p95_latency_ratio` times the current version's latency
+
+The error share and latency comparisons only count when the current version also served at least `min_requests` requests. Latency is p95 on Cloud Run and ECS. Azure Container Apps only reports an average, so the dashboard marks those readings "avg".
+
+## Verdicts
+
+Every reading ends in one of three verdicts.
+
+`pass` means the step is healthy and the ramp moves on. `fail` means a threshold was crossed, and the canary rolls back right away.
+
+`inconclusive` means Loomplane couldn't tell. Either the new version served fewer than `min_requests` requests in the window, or the cloud had no metrics for it. An inconclusive step doesn't pass and doesn't fail. It holds for another window and is read again, up to three extra times. If it's still inconclusive after that, Loomplane fails safe: it rolls back rather than promote a version it couldn't check. A quiet service with little traffic will hit this, so lower `min_requests` for services that are quiet by nature.
+
+## What rolls back
+
+A failed step sends all traffic back to the current version, removes the new one, and ends the deployment as failed. The error says which step failed and why, for example "The canary failed at 25%". Services that deploy all at once aren't part of the ramp, and the canary leaves them alone.
+
+You can retry the deployment. The dashboard and the API then show only the verdicts of the latest retry.
+
+## When traffic may still be split
+
+Rollback calls the cloud's API, so it can fail too. Loomplane retries once a minute for up to an hour, so a stuck rollback can sit at "Rolling back" for a while. If it still can't move traffic back, the canary ends as `revert_failed`. If a failure hits while the new version is being promoted, it ends as `promote_failed`. In both cases the reason starts with "Traffic may still be split".
+
+You have to act here. Open the service in the cloud, check how it splits traffic between versions, and fix it before you retry. The deployment page shows this as a red "Needs you" notice, and `loomctl deployment` prints it as `NEEDS YOU:`.
+
+## Where a canary can't run
+
+Only an update of something already running can ramp. A service gets no canary when:
+
+- it's new, so there's nothing to compare it with, or it's moving to another target
+- it's a worker, so it takes no HTTP traffic
+- its domain routes switch over by DNS
+- it runs on a Cloud target
+- it's on ECS and takes no HTTP traffic or isn't behind the load balancer, or it's on Azure Container Apps and has no ingress
+- it reaches Cloud SQL through a Private Service Connect route, because a candidate wouldn't carry the route
+- it's the environment's database gateway, because its keys and routes follow each release in one go
+- its target has no native weighting (see the table above)
+
+The plan still goes ahead. Those services deploy all at once while the rest of the release ramps. The approval card lists a warning for each one that says why, and it doesn't say "Approving starts a canary" for them.
+
+Some refusals block the plan instead, and the plan shows them as problems you have to fix before anyone can approve:
+
+- On ECS, Cloud Run or Azure Container Apps, the connection's credential may lack the permissions to split the service's traffic.
+- On Azure Container Apps, a release that changes app-wide ingress settings can't ramp, because those apply to every revision at once. Release that change with `direct` or `blue_green` first.
+- On Cloud Run, a release that changes `public` can't ramp either. Who may call a Cloud Run service belongs to the service, not to a revision, so access only switches at Promote, for all of the traffic at once, and no step judges it. Release that change with `direct` or `blue_green` first.
+
+Two more only show up when the canary starts, and the deployment fails with a message that says which:
+
+- An earlier canary couldn't roll back and left the traffic split on a Cloud Run service or an Azure container app. The new canary can't tell which revision is the real one to compare against. Retry or roll back that deployment, or release once with `direct`, which gives the latest revision all of the traffic.
+- On Azure Container Apps, the release changes the registry the app pulls from or the identity it pulls as. Those are app-wide like ingress, but Loomplane only knows them once it has set the release up. Release that change with `direct` or `blue_green` first.
+
+## One canary per environment
+
+While a canary ramps, the environment is busy. A new plan for it is blocked with a `canary-in-progress` problem, and an older plan that was already waiting goes stale when you approve it. Plan again once the canary settles.
+
+## Read the verdicts
+
+In the dashboard, open the deployment. The Canary panel sits under the steps. It shows each step as passed, holding, failed or couldn't be judged, the reason for a rollback, and a table with one row per service, step and check: errors, latency, and the figures for the current version beside them.
+
+From a terminal:
+
+```bash
+loomctl deployment <deployment-id> --watch
+```
+
+This prints the canary block and a verdict table, and in watch mode each new verdict once.
+
+Over the API, `GET /api/v1/deployments/{id}` returns the `canary` block, and `GET /api/v1/deployments/{id}/canary` returns it with every verdict of the current retry. A plan's `release` field carries the steps, the hold and the thresholds it was planned with. Each verdict is also sent as a `canary_verdict.updated` realtime event.

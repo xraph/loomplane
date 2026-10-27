@@ -82,3 +82,16 @@ func TestEditManifestSendsLinkUnlinkAndSetUse(t *testing.T) {
 		}
 	}
 }
+
+func TestActorNameNamesTheAutomation(t *testing.T) {
+	for id, want := range map[string]string{
+		"loomplane:aorg_1": "Loomplane automation",
+		"ausr_1":           "ausr_1",
+		"loomplane:":       "loomplane:",
+		"":                 "",
+	} {
+		if got := ActorName(id); got != want {
+			t.Errorf("ActorName(%q) = %q, want %q", id, got, want)
+		}
+	}
+}

@@ -60,6 +60,9 @@ type ecsState struct {
 	BuildID    string `json:"build_id,omitempty"`
 	Image      string `json:"image,omitempty"`
 	LogAttempt string `json:"log_attempt,omitempty"`
+	// Unpinned is the permission the connection lacked to read Image's
+	// digest, when Image is a tag for want of it.
+	Unpinned string `json:"unpinned,omitempty"`
 }
 
 func (e *ECS) session(job *Job, cred []byte) (*aws.Session, error) {
@@ -84,6 +87,23 @@ func (e *ECS) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 	if err != nil {
 		return nil, err
 	}
+	ctx, image, err := e.image(ctx, s, job)
+	if err != nil {
+		return nil, err
+	}
+	job.Progress(StepDeploying, "Deploying "+image)
+	ext, url, err := e.run(ctx, s, job, image)
+	if err != nil {
+		return nil, err
+	}
+	return &Outcome{ExternalID: ext, URL: url, Image: image, Revision: image}, nil
+}
+
+// image is the job's image: the one an earlier attempt checkpointed, the
+// earlier build a promotion or rollback reuses, or a new build. The
+// context it returns reports each later wait as deploying, and keeps the
+// checkpoint fresh.
+func (e *ECS) image(ctx context.Context, s *aws.Session, job *Job) (context.Context, string, error) {
 	var state ecsState
 	if len(job.Resume) > 0 {
 		_ = json.Unmarshal(job.Resume, &state) //nolint:errcheck // an unreadable checkpoint starts over
@@ -98,18 +118,20 @@ func (e *ECS) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 		save()
 	})
 	if state.Image == "" {
-		if state.Image, err = e.build(ctx, s, job, &state, save); err != nil {
-			return nil, err
+		if state.Image = reusedImage(job); state.Image == "" {
+			image, err := e.build(ctx, s, job, &state, save)
+			if err != nil {
+				return nil, "", err
+			}
+			state.Image = image
 		}
 		save()
 	}
-	status = StepDeploying
-	job.Progress(StepDeploying, "Deploying "+state.Image)
-	ext, url, err := e.run(ctx, s, job, state.Image)
-	if err != nil {
-		return nil, err
+	if state.Unpinned != "" {
+		job.Warn(unpinnedWarning(job.Action.Name, state.Unpinned))
 	}
-	return &Outcome{ExternalID: ext, URL: url, Image: state.Image, Revision: state.Image}, nil
+	status = StepDeploying
+	return ctx, state.Image, nil
 }
 
 func sourceBucket(s *aws.Session) string { return "loomplane-" + s.Account() + "-" + s.Region() }
@@ -161,7 +183,19 @@ func (e *ECS) build(ctx context.Context, s *aws.Session, job *Job, state *ecsSta
 	if buildErr != nil {
 		return "", buildErr
 	}
-	return image, nil
+	digest, digestErr := s.ImageDigest(ctx, "loomplane/"+imageName(job), tag)
+	if aws.IsAccessDenied(digestErr) {
+		// The image deploys by tag, as it did before images were pinned.
+		state.Unpinned = "ecr:DescribeImages"
+		return image, nil
+	}
+	if errors.Is(digestErr, aws.ErrNotFound) {
+		return "", errNoDigest
+	}
+	if digestErr != nil {
+		return "", digestErr
+	}
+	return byDigest(image, digest)
 }
 
 // codeBuildPolicy lets CodeBuild read the sources, push to Loomplane's
@@ -421,46 +455,76 @@ func exposeInternally(ctx context.Context, s *aws.Session, job *Job, net *aws.Ne
 // run sets up the environment's network and load balancer, the service's
 // secrets, and runs it through Ctrl Plane.
 func (e *ECS) run(ctx context.Context, s *aws.Session, job *Job, image string) (externalID, url string, err error) {
+	p, err := e.prepare(ctx, s, job)
+	if err != nil {
+		return "", "", err
+	}
+	if serr := putSecrets(ctx, s, job, "loomplane/"+instanceSlug(job), p.labels); serr != nil {
+		return "", "", serr
+	}
+	if externalID, err = e.deploy(ctx, job, p, image); err != nil {
+		return "", "", err
+	}
+	return externalID, p.url, nil
+}
+
+// ecsPrepared is what a service runs with, set up in AWS and ready for
+// Ctrl Plane: the instance it updates, or none and the name for a new
+// one, its labels and its spec, without an image yet.
+type ecsPrepared struct {
+	key    string
+	region string
+	inst   *instance.Instance
+	name   string
+	labels map[string]string
+	spec   cpprovider.ServiceSpec
+	url    string
+	vpc    string
+}
+
+// prepare sets up the environment's network and load balancer and the
+// service's roles and log group. Its secret variables are putSecrets'.
+func (e *ECS) prepare(ctx context.Context, s *aws.Session, job *Job) (*ecsPrepared, error) {
 	cfg := job.Action.Service
 	net, err := s.DefaultNetwork(ctx)
 	if err != nil {
-		return "", "", err
+		return nil, err
 	}
 	if cerr := s.EnsureCluster(ctx, ecsCluster); cerr != nil {
-		return "", "", cerr
+		return nil, cerr
 	}
 	execRole, err := s.EnsureRole(ctx, ecsTaskRole, "ecs-tasks.amazonaws.com", []string{ecsExecPolicy}, executionPolicy(s))
 	if err != nil {
-		return "", "", err
+		return nil, err
 	}
 	roleName, rolePolicy := tasksRole(s, job)
 	appRole, err := s.EnsureRole(ctx, roleName, "ecs-tasks.amazonaws.com", nil, rolePolicy)
 	if err != nil {
-		return "", "", err
+		return nil, err
 	}
 	logGroup := "/loomplane/" + instanceSlug(job)
 	if lerr := s.EnsureLogGroup(ctx, logGroup); lerr != nil {
-		return "", "", lerr
+		return nil, lerr
 	}
 	envName := awsEnvironment(job)
 	lbGroup, err := s.EnsureSecurityGroup(ctx, net.VPC, "loomplane-"+envName+"-lb", "Loomplane load balancer for "+envName)
 	if err != nil {
-		return "", "", err
+		return nil, err
 	}
 	taskGroup, err := tasksGroup(ctx, s, net.VPC, envName)
 	if err != nil {
-		return "", "", err
+		return nil, err
 	}
 	if aerr := s.AllowFromGroup(ctx, taskGroup, lbGroup); aerr != nil {
-		return "", "", aerr
+		return nil, aerr
 	}
 	// The environment's tasks reach each other, privately, by name.
 	if aerr := s.AllowFromGroup(ctx, taskGroup, taskGroup); aerr != nil {
-		return "", "", aerr
+		return nil, aerr
 	}
 	namespace, err := s.EnsureNamespace(ctx, "loomplane-"+envName)
 	if err != nil {
-		return "", "", err
+		return nil, err
 	}
 	labels := map[string]string{
 		ecs.LabelCluster: ecsCluster, ecs.LabelSubnets: strings.Join(net.Subnets, ","), ecs.LabelGroup: taskGroup,
@@ -473,38 +537,30 @@ func (e *ECS) run(ctx context.Context, s *aws.Session, job *Job, image string) (
 	if cfg.Size != nil {
 		labels[ecs.LabelCPU] = strconv.Itoa(int(cfg.Size.CPU * 1024))
 	}
-	key := e.provider(job)
+	p := &ecsPrepared{key: e.provider(job), region: s.Region(), labels: labels, vpc: net.VPC}
 	ctx = infrastructure.WithPrincipal(ctx, principal(job))
-	inst, name, err := currentInstance(ctx, e.Ctrl, job, key)
-	if err != nil {
-		return "", "", err
+	if p.inst, p.name, err = currentInstance(ctx, e.Ctrl, job, p.key); err != nil {
+		return nil, err
 	}
 	switch {
 	case cfg.Public && cfg.Port > 0:
 		job.Progress(StepDeploying, "Setting up the load balancer")
-		tg, group := targetGroup(inst, name)
+		tg, group := targetGroup(p.inst, p.name)
 		tg, listener, lbURL, xerr := expose(ctx, s, job, net, lbGroup, envName, tg, group)
 		if xerr != nil {
-			return "", "", xerr
+			return nil, xerr
 		}
 		labels[ecs.LabelTargetGroup], labels[ecs.LabelListener] = tg, listener
-		url = lbURL
+		p.url = lbURL
 	case cfg.Internal && cfg.Port > 0:
 		job.Progress(StepDeploying, "Setting up the internal load balancer")
-		tg, group := targetGroup(inst, name)
+		tg, group := targetGroup(p.inst, p.name)
 		tg, listener, lbURL, xerr := exposeInternally(ctx, s, job, net, taskGroup, envName, tg, group)
 		if xerr != nil {
-			return "", "", xerr
+			return nil, xerr
 		}
 		labels[ecs.LabelTargetGroup], labels[ecs.LabelListener] = tg, listener
-		url = lbURL
-	}
-	for _, key := range sortedKeys(job.Secrets) {
-		arn, serr := s.PutSecret(ctx, "loomplane/"+instanceSlug(job)+"/"+key, job.Env[key])
-		if serr != nil {
-			return "", "", serr
-		}
-		labels[ecs.LabelSecret+key] = arn
+		p.url = lbURL
 	}
 	env := map[string]string{}
 	for k, v := range job.Env {
@@ -512,34 +568,56 @@ func (e *ECS) run(ctx context.Context, s *aws.Session, job *Job, image string) (
 			env[k] = v
 		}
 	}
-	spec := cpprovider.ServiceSpec{Name: mainService, Image: image, Env: env}
+	p.spec = cpprovider.ServiceSpec{Name: mainService, Env: env}
 	if cfg.Port > 0 {
-		spec.Ports = []cpprovider.PortSpec{{Container: cfg.Port, Protocol: "http"}}
+		p.spec.Ports = []cpprovider.PortSpec{{Container: cfg.Port, Protocol: "http"}}
 	}
 	if cfg.Size != nil {
-		spec.Resources.MemoryMB = cfg.Size.Memory
+		p.spec.Resources.MemoryMB = cfg.Size.Memory
 	}
+	return p, nil
+}
 
-	if inst == nil {
+// putSecrets writes the job's secret variables to Secrets Manager under
+// path, and labels each with the secret it's read from.
+func putSecrets(ctx context.Context, s *aws.Session, job *Job, path string, labels map[string]string) error {
+	for _, key := range sortedKeys(job.Secrets) {
+		arn, err := s.PutSecret(ctx, path+"/"+key, job.Env[key])
+		if err != nil {
+			return err
+		}
+		labels[ecs.LabelSecret+key] = arn
+	}
+	return nil
+}
+
+// deploy runs a prepared service on image through Ctrl Plane: it creates
+// the instance, or updates the one there and rolls it out, and returns
+// the instance's ID.
+func (e *ECS) deploy(ctx context.Context, job *Job, p *ecsPrepared, image string) (string, error) {
+	ctx = infrastructure.WithPrincipal(ctx, principal(job))
+	spec := p.spec
+	spec.Image = image
+	if p.inst == nil {
 		created, err := e.Ctrl.Instances.Create(ctx, instance.CreateRequest{
-			Name: name, ProviderName: key, Region: s.Region(),
-			Services: []cpprovider.ServiceSpec{spec}, Labels: labels,
+			Name: p.name, ProviderName: p.key, Region: p.region,
+			Services: []cpprovider.ServiceSpec{spec}, Labels: p.labels,
 		})
 		if err != nil {
-			return "", "", fmt.Errorf("create the ecs service: %w", err)
+			return "", fmt.Errorf("create the ecs service: %w", err)
 		}
-		return created.ID.String(), url, nil
+		return created.ID.String(), nil
 	}
-	if _, err := e.Ctrl.Instances.Update(ctx, inst.ID, instance.UpdateRequest{Services: []cpprovider.ServiceSpec{spec}, Labels: labels}); err != nil {
-		return "", "", fmt.Errorf("update the ecs service: %w", err)
+	if _, err := e.Ctrl.Instances.Update(ctx, p.inst.ID, instance.UpdateRequest{Services: []cpprovider.ServiceSpec{spec}, Labels: p.labels}); err != nil {
+		return "", fmt.Errorf("update the ecs service: %w", err)
 	}
 	if _, err := e.Ctrl.Deploys.Deploy(ctx, deploy.DeployRequest{
-		InstanceID: inst.ID, Services: []cpprovider.ServiceDeploySpec{{Name: mainService, Image: image, Env: env}},
+		InstanceID: p.inst.ID, Services: []cpprovider.ServiceDeploySpec{{Name: mainService, Image: image, Env: spec.Env}},
 		CommitSHA: job.CommitSHA, Notes: "Plan " + job.Plan.ID,
 	}); err != nil {
-		return "", "", fmt.Errorf("deploy to ecs: %w", err)
+		return "", fmt.Errorf("deploy to ecs: %w", err)
 	}
-	return inst.ID.String(), url, nil
+	return p.inst.ID.String(), nil
 }
 
 func listenerURL(dns string, l *aws.Listener) string {
