@@ -181,6 +181,8 @@ loomctl cloud-syncs routing my-project csync_... \
 
 This records your explicit evidence and schedules remaining cleanup. It does not perform DNS changes. Without that evidence, Loomplane keeps the old resources.
 
+To have Loomplane write the DNS records and certificates for hostnames under your own domain, see [domains.md](domains.md).
+
 ```sh
 loomctl cloud-syncs revert my-project csync_...
 loomctl cloud-syncs revert my-project csync_... \

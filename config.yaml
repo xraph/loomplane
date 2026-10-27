@@ -123,6 +123,9 @@ clouds:
   render_endpoint: "${LOOMPLANE_RENDER_ENDPOINT:-}"
   digitalocean_endpoint: "${LOOMPLANE_DIGITALOCEAN_ENDPOINT:-}"
   azure_endpoint: "${LOOMPLANE_AZURE_ENDPOINT:-}"
+  cloudflare_endpoint: "${LOOMPLANE_CLOUDFLARE_ENDPOINT:-}"
+  cloudflare_registrar_sandbox: "${LOOMPLANE_CLOUDFLARE_REGISTRAR_SANDBOX:-false}"
+  acme_directory: "${LOOMPLANE_ACME_DIRECTORY:-}"
   # Loomplane's sign-in app at each cloud, so people can connect by signing
   # in. Leave both empty to keep token entry only. Keep the secret in the
   # environment.

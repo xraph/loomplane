@@ -97,12 +97,14 @@ func TestDNSVerificationHTTPPropagation(t *testing.T) {
 			if c.status != tc.status {
 				t.Fatalf("status=%d want=%d", c.status, tc.status)
 			}
-			if tc.status != http.StatusOK && (st.saves != 0 || !st.zone.VerifiedAt.IsZero()) {
+			if tc.status != http.StatusOK && !st.zone.VerifiedAt.IsZero() {
 				t.Fatal("failed proof persisted verification")
 			}
 		})
 	}
-	if st.saves != 1 || st.zone.VerifiedAt.IsZero() {
+	// Every check is saved, failed ones included, so the page can say when
+	// the record was last looked for.
+	if st.saves != 5 || st.zone.VerifiedAt.IsZero() {
 		t.Fatal("visible proof not persisted")
 	}
 }

@@ -43,6 +43,16 @@ services:
 
 Replace those connection IDs with the ones you saved. Forge HTTP apps without a Dockerfile can use the generated Go build; a repository Dockerfile takes precedence. Forge's declared worker role keeps a worker from becoming an HTTP service. A private dependency must have a supported network path between its selected targets; choosing destinations does not create a cross-cluster network.
 
+## DNS and domains
+
+Three providers can hold your DNS for the [domains](domains.md) you bring or register. Cloudflare only does DNS and registration here, so it runs none of your services:
+
+| Provider | DNS | Registration | Compute |
+| --- | --- | --- | --- |
+| Cloudflare | Zones and records, and the DNS challenge for wildcard certificates | Through Cloudflare Registrar, in your own account | None |
+| DigitalOcean | Zones and records | None | App Platform and Managed Databases |
+| Vercel | Zones and records | None | Vercel |
+
 ## Build output
 
 | Target | Collection |

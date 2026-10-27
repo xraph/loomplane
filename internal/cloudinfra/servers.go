@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/xraph/loomplane/internal/cloudprofiles"
+	"github.com/xraph/loomplane/internal/clouds/server"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/security"
@@ -126,6 +127,8 @@ type ApplyInput struct {
 	Review string `json:"review"`
 }
 
+// Workflow starts durable server operations. The same value may also be a
+// RouteWorkflow and a RegistrationWorkflow; the service checks for each.
 type Workflow interface {
 	StartInfrastructure(context.Context, string, string, int) error
 }
@@ -146,6 +149,8 @@ type Deps struct {
 	// EnableAutomaticCapacity stays false until integrated qualification.
 	EnableAutomaticCapacity bool
 	Domains                 DomainStore
+	Registrations           RegistrationStore
+	Notices                 RenewalNotifier
 	Resolver                DomainResolver
 	PoolCleanup             PoolCleanup
 	Store                   Store
@@ -163,6 +168,9 @@ type Deps struct {
 	// Warn reports a failure the service works around, such as a price it
 	// couldn't save. Nil drops the report.
 	Warn func(string, error)
+	// ACMEDirectory is where Kubernetes routes order certificates. Empty
+	// means Let's Encrypt's production directory.
+	ACMEDirectory string
 }
 
 type Service struct {
@@ -171,13 +179,26 @@ type Service struct {
 	expansionSchedule *expansionSchedule
 	catalogs          *catalogCache
 	options           *optionsCache
+	// kubernetesRoutes and routeHTTPS reach a route's cluster and public
+	// hostname. Tests replace them.
+	kubernetesRoutes func(ctx context.Context, route Route, cleanup bool) (kubernetesRouteClient, error)
+	routeHTTPS       func(ctx context.Context, hostname string) (time.Time, int, error)
+	// ingressImagePinned and ingressNeedsUpgrade tell a wildcard preview
+	// whether its server's proxy has to restart. Tests replace them.
+	ingressImagePinned  func() bool
+	ingressNeedsUpgrade func(ctx context.Context, route Route) (bool, error)
+	// writeDNSToken puts a challenge token on a server. Tests replace it.
+	writeDNSToken func(ctx context.Context, c *server.Client, org, serverID, zoneID string, token []byte) error
 }
 
 func NewService(d Deps) *Service {
 	if d.Runtime == nil {
 		d.Runtime = SSHRuntime{}
 	}
-	return &Service{Deps: d, now: time.Now, expansionSchedule: &expansionSchedule{}, catalogs: &catalogCache{entries: map[string]catalogEntry{}}, options: &optionsCache{entries: map[string]optionsEntry{}}}
+	s := &Service{Deps: d, now: time.Now, expansionSchedule: &expansionSchedule{}, catalogs: &catalogCache{entries: map[string]catalogEntry{}}, options: &optionsCache{entries: map[string]optionsEntry{}}, routeHTTPS: probeRouteHTTPS, ingressImagePinned: server.IngressImagePinned, writeDNSToken: server.WriteIngressDNSToken}
+	s.kubernetesRoutes = s.openKubernetesRoute
+	s.ingressNeedsUpgrade = s.routeIngressNeedsUpgrade
+	return s
 }
 
 func (s *Service) warn(msg string, err error) {

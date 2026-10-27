@@ -161,6 +161,11 @@ export interface Assignment {
   targets: Target[];
 }
 
+export interface AutoRenewInputBody {
+  autoRenew: boolean;
+  revision: number;
+}
+
 export interface Backup {
   attempt: number;
   bytes: number;
@@ -268,6 +273,11 @@ export interface CatalogconnectEndpoint {
 export interface CatalogproxySession {
   expiresAt: string;
   url: string;
+}
+
+export interface ChallengeCredentialInputBody {
+  connectionId: string;
+  revision: number;
 }
 
 export interface Change {
@@ -446,6 +456,21 @@ export interface CloudinfraRoute {
   status: string;
   updatedAt: string;
   verification: RouteVerification;
+}
+
+export interface CloudinfraRouteStatus {
+  backend: string;
+  certificate: string;
+  certificateExpiresAt: string;
+  checkedAt: string;
+  dns: string;
+  hostname: string;
+  message?: string;
+  operationId?: string;
+  retryable: boolean;
+  route: string;
+  routeId: string;
+  wildcard: boolean;
 }
 
 export interface CloudprofilesCreateInputBody {
@@ -677,6 +702,17 @@ export interface DatabaseGatewayConfig {
   trust?: string;
 }
 
+export interface DbgatewayRouteStatus {
+  backendConns: number;
+  id: string;
+  maxConnections: number;
+  pinRate: number;
+  reachable: boolean;
+  reported: boolean;
+  resource: string;
+  state: string;
+}
+
 export interface DecideInputBody {
   note?: string;
   revision?: string;
@@ -762,8 +798,36 @@ export interface DeploymentList {
   next?: string;
 }
 
+export interface DomainCheckInputBody {
+  connectionId: string;
+  domains: string[];
+}
+
+export interface DomainOffer {
+  name: string;
+  price?: DomainPrice;
+  reason?: string;
+  registrable: boolean;
+  tier?: string;
+}
+
+export interface DomainOfferList {
+  offers: DomainOffer[];
+}
+
 export interface DomainOperationList {
   operations: (RouteOperation | null)[];
+}
+
+export interface DomainOverview {
+  registrations: (Registration | null)[];
+  zones: ZoneOverview[];
+}
+
+export interface DomainPrice {
+  currency: string;
+  registrationCost: string;
+  renewalCost: string;
 }
 
 export interface DomainRouteList {
@@ -1038,7 +1102,7 @@ export interface GatewayStatus {
   name: string;
   provider: string;
   region: string;
-  routes: RouteStatus[];
+  routes: DbgatewayRouteStatus[];
   snapshotVersion: number;
 }
 
@@ -1100,6 +1164,18 @@ export interface HandoffReleaseInputBody {
 
 export interface Held {
   sameAddress?: string;
+}
+
+export interface HostnameUse {
+  environmentId: string;
+  hostname: string;
+  port: number;
+  projectId: string;
+  projectName: string;
+  routeId: string;
+  runsOn: string;
+  service: string;
+  status: CloudinfraRouteStatus;
 }
 
 export interface IdentitySession {
@@ -1823,6 +1899,20 @@ export interface Project {
   updatedAt: string;
 }
 
+export interface ProjectDomain {
+  hostnames: HostnameUse[];
+  mode: string;
+  name: string;
+  provider?: string;
+  verified: boolean;
+  wildcards: boolean;
+  zoneId: string;
+}
+
+export interface ProjectDomainList {
+  domains: ProjectDomain[];
+}
+
 export interface ProjectGrant {
   cloudId: string;
   orgId: string;
@@ -1879,6 +1969,10 @@ export interface ProviderStatus {
   name: string;
   region: string;
   version: string;
+}
+
+export interface ProviderZoneList {
+  zones: DNSZone[];
 }
 
 export interface Provisions {
@@ -1980,6 +2074,69 @@ export interface Ref {
   component?: string;
   dependency?: string;
   field: string;
+}
+
+export interface Registration {
+  accountId: string;
+  attempt: number;
+  attempted: boolean;
+  autoRenew: boolean;
+  connectionId: string;
+  createdAt: string;
+  customRegistrant: boolean;
+  domainExpiresAt: string;
+  firstUnconfirmedAt: string;
+  id: string;
+  message: string;
+  name: string;
+  noticeSentFor: string;
+  orgId: string;
+  privacyMode: string;
+  projectIds: string[];
+  provider: string;
+  quote: DomainPrice;
+  refreshedAt: string;
+  resultNotifiedFor: string;
+  review: string;
+  reviewExpiresAt: string;
+  revision: number;
+  sandbox: boolean;
+  status: string;
+  updatedAt: string;
+  zoneId: string;
+}
+
+export interface RegistrationApprovalBody {
+  currency: string;
+  registrationCost: string;
+  review: string;
+}
+
+export interface RegistrationExtensionList {
+  extensions: string[];
+}
+
+export interface RegistrationInputBody {
+  autoRenew?: boolean;
+  connectionId: string;
+  name: string;
+  privacyMode?: string;
+  projectIds?: string[];
+  registrant?: {
+  city: string;
+  countryCode: string;
+  email: string;
+  name: string;
+  organization: string;
+  phone: string;
+  postalCode: string;
+  state: string;
+  street: string;
+};
+}
+
+export interface RegistrationList {
+  registrations: (Registration | null)[];
 }
 
 export interface RemoveRouteInputBody {
@@ -2250,19 +2407,24 @@ export interface RevisionList {
 
 export interface RouteBinding {
   address: string;
+  backend?: string;
   bindingId: string;
   configDigest: string;
   connectionGeneration: number;
   connectionId: string;
   containerId: string;
+  ingressClass?: string;
   instanceId: string;
+  namespace?: string;
   releaseId: string;
   runtimeId: string;
   serverId: string;
+  serviceName?: string;
   targetId: string;
 }
 
 export interface RouteInput {
+  blockedPathPrefixes?: string[];
   cloudId: string;
   environmentId: string;
   externalTtlSeconds?: number;
@@ -2273,6 +2435,7 @@ export interface RouteInput {
 }
 
 export interface RouteInputBody {
+  blockedPathPrefixes?: string[];
   cloudId: string;
   environmentId: string;
   externalTtlSeconds?: number;
@@ -2294,6 +2457,7 @@ export interface RouteOperation {
   kind: string;
   message: string;
   notBefore: string;
+  notices?: string[];
   previousReceipt?: DNSRecord;
   receipt?: DNSRecord;
   review: string;
@@ -2301,17 +2465,6 @@ export interface RouteOperation {
   route: CloudinfraRoute;
   source?: CloudinfraRoute;
   status: string;
-}
-
-export interface RouteStatus {
-  backendConns: number;
-  id: string;
-  maxConnections: number;
-  pinRate: number;
-  reachable: boolean;
-  reported: boolean;
-  resource: string;
-  state: string;
 }
 
 export interface RouteSummary {
@@ -2330,6 +2483,7 @@ export interface RouteVerification {
   backend: boolean;
   backendError?: string;
   certExpires: string;
+  certState?: string;
   checkedAt: string;
   dns: boolean;
   dnsError?: string;
@@ -2915,6 +3069,7 @@ export interface Workspace {
 
 export interface Zone {
   accountId?: string;
+  challengeConnectionId?: string;
   connectionGeneration?: number;
   connectionId?: string;
   id: string;
@@ -2922,12 +3077,14 @@ export interface Zone {
   name: string;
   orgId: string;
   projectIds: string[];
+  proofCheckedAt: string;
   proofExpiresAt: string;
   proofName?: string;
   proofValue?: string;
   provider?: string;
   providerZone: DNSZone;
   recordOwnership: boolean;
+  registrationId?: string;
   revision: number;
   verifiedAt: string;
 }
@@ -2941,6 +3098,14 @@ export interface ZoneInputBody {
 
 export interface ZoneList {
   zones: (Zone | null)[];
+}
+
+export interface ZoneOverview {
+  hostnames: HostnameUse[];
+  registrationId?: string;
+  state: string;
+  wildcards: boolean;
+  zone?: Zone;
 }
 
 export interface ZoneUpdateBody {

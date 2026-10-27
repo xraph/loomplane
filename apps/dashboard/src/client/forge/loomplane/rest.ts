@@ -1435,6 +1435,28 @@ export class RESTClient extends Client {
     },
 
     /**
+     * dnsZones.discover
+     */
+    discover: async (connectionId?: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ProviderZoneList> => {
+      let __path = `/api/v1/dns-zones/discover`;
+      const queryParams: Record<string, any> = {};
+      queryParams['connection_id'] = connectionId;
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ProviderZoneList"],
+      };
+
+      return this.request<types.ProviderZoneList>(config);
+    },
+
+    /**
      * dnsZones.list
      */
     list: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ZoneList> => {
@@ -1485,6 +1507,24 @@ export class RESTClient extends Client {
     },
 
     /**
+     * dnsZones.setChallengeCredential
+     */
+    setChallengeCredential: async (zoneId: string, body: types.ChallengeCredentialInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Zone> => {
+      let __path = `/api/v1/dns-zones/${encodeURIComponent(String(zoneId))}/challenge-credential`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["ChallengeCredentialInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Zone"],
+      };
+
+      return this.request<types.Zone>(config);
+    },
+
+    /**
      * dnsZones.update
      */
     update: async (zoneId: string, body: types.ZoneUpdateBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Zone> => {
@@ -1516,6 +1556,161 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.Zone>(config);
+    },
+
+  };
+
+  public readonly domainRegistration = {
+    /**
+     * domainRegistration.check
+     */
+    check: async (body: types.DomainCheckInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.DomainOfferList> => {
+      let __path = `/api/v1/domain-registration/check`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["DomainCheckInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["DomainOfferList"],
+      };
+
+      return this.request<types.DomainOfferList>(config);
+    },
+
+    /**
+     * domainRegistration.extensions
+     */
+    extensions: async (connectionId?: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RegistrationExtensionList> => {
+      let __path = `/api/v1/domain-registration/extensions`;
+      const queryParams: Record<string, any> = {};
+      queryParams['connection_id'] = connectionId;
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["RegistrationExtensionList"],
+      };
+
+      return this.request<types.RegistrationExtensionList>(config);
+    },
+
+    /**
+     * domainRegistration.search
+     */
+    search: async (connectionId?: string, q?: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.DomainOfferList> => {
+      let __path = `/api/v1/domain-registration/search`;
+      const queryParams: Record<string, any> = {};
+      queryParams['connection_id'] = connectionId;
+      queryParams['q'] = q;
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["DomainOfferList"],
+      };
+
+      return this.request<types.DomainOfferList>(config);
+    },
+
+  };
+
+  public readonly domainRegistrations = {
+    /**
+     * domainRegistrations.approve
+     */
+    approve: async (registrationId: string, body: types.RegistrationApprovalBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Registration> => {
+      let __path = `/api/v1/domain-registrations/${encodeURIComponent(String(registrationId))}/approve`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["RegistrationApprovalBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Registration"],
+      };
+
+      return this.request<types.Registration>(config);
+    },
+
+    /**
+     * domainRegistrations.get
+     */
+    get: async (registrationId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Registration> => {
+      let __path = `/api/v1/domain-registrations/${encodeURIComponent(String(registrationId))}`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Registration"],
+      };
+
+      return this.request<types.Registration>(config);
+    },
+
+    /**
+     * domainRegistrations.list
+     */
+    list: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RegistrationList> => {
+      let __path = `/api/v1/domain-registrations`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["RegistrationList"],
+      };
+
+      return this.request<types.RegistrationList>(config);
+    },
+
+    /**
+     * domainRegistrations.preview
+     */
+    preview: async (body: types.RegistrationInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Registration> => {
+      let __path = `/api/v1/domain-registrations/preview`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["RegistrationInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Registration"],
+      };
+
+      return this.request<types.Registration>(config);
+    },
+
+    /**
+     * domainRegistrations.setAutoRenew
+     */
+    setAutoRenew: async (registrationId: string, body: types.AutoRenewInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Registration> => {
+      let __path = `/api/v1/domain-registrations/${encodeURIComponent(String(registrationId))}/auto-renew`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["AutoRenewInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Registration"],
+      };
+
+      return this.request<types.Registration>(config);
     },
 
   };
@@ -1708,6 +1903,22 @@ export class RESTClient extends Client {
     },
 
     /**
+     * domainRoutes.status
+     */
+    status: async (projectId: string, routeId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CloudinfraRouteStatus> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/domain-routes/${encodeURIComponent(String(routeId))}/status`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CloudinfraRouteStatus"],
+      };
+
+      return this.request<types.CloudinfraRouteStatus>(config);
+    },
+
+    /**
      * domainRoutes.updateTTL
      */
     updateTTL: async (projectId: string, routeId: string, body: types.RouteTTLInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CloudinfraRoute> => {
@@ -1739,6 +1950,41 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.RouteOperation>(config);
+    },
+
+  };
+
+  public readonly domains = {
+    /**
+     * domains.overview
+     */
+    overview: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.DomainOverview> => {
+      let __path = `/api/v1/domains`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["DomainOverview"],
+      };
+
+      return this.request<types.DomainOverview>(config);
+    },
+
+    /**
+     * domains.project
+     */
+    project: async (projectId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ProjectDomainList> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/domains`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ProjectDomainList"],
+      };
+
+      return this.request<types.ProjectDomainList>(config);
     },
 
   };
