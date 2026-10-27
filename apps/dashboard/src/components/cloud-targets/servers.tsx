@@ -141,7 +141,7 @@ function ServerContent({ cloud }: { cloud: Profile }) {
             variant="outline"
             onClick={() => setEditing({ kind: "adopt" })}
           >
-            Connect a server
+            Connect existing server
           </Button>
           {create && (
             <Button onClick={() => setEditing({ kind: "create" })}>
