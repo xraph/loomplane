@@ -66,6 +66,32 @@ func (s *PgStore) Zones(ctx context.Context, org string) ([]*Zone, error) {
 	return result, rows.Err()
 }
 
+// zonesForShare reads the organization's zones with the given names inside
+// tx and locks them against change until it ends.
+func zonesForShare(ctx context.Context, tx driver.Tx, org string, names []string) ([]*Zone, error) {
+	out := []*Zone{}
+	if len(names) == 0 {
+		return out, nil
+	}
+	rows, err := tx.Query(ctx, `SELECT body FROM loomplane_dns_zones WHERE org_id=$1 AND name=ANY($2) FOR SHARE`, org, names)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var raw []byte
+		var zone Zone
+		if checkErr := rows.Scan(&raw); checkErr != nil {
+			return nil, checkErr
+		}
+		if checkErr := json.Unmarshal(raw, &zone); checkErr != nil {
+			return nil, checkErr
+		}
+		out = append(out, &zone)
+	}
+	return out, rows.Err()
+}
+
 // zoneBodyTime reads a time from a zone body, NULL unless it is RFC 3339,
 // so one malformed row can't fail a query over every zone.
 func zoneBodyTime(field string) string {
@@ -347,7 +373,16 @@ func (s *PgStore) AcceptRoute(ctx context.Context, op *RouteOperation) error {
 		if checkErr := json.Unmarshal(rawZone, &zone); checkErr != nil {
 			return checkErr
 		}
-		if !slices.Contains(zone.ProjectIDs, route.ProjectID) || zone.VerifiedAt.IsZero() || !zone.hasControlProof() {
+		// A subdomain is verified through its domain, so its ancestors are
+		// read and locked here too, after the zone itself. Removing zones
+		// must delete them in that same order. None can lose its
+		// verification under this route.
+		ancestors, ancestorErr := zonesForShare(ctx, tx, route.OrgID, ancestorNames(zone.Name))
+		if ancestorErr != nil {
+			return ancestorErr
+		}
+		LinkZoneParents(append([]*Zone{&zone}, ancestors...))
+		if !slices.Contains(zone.ProjectIDs, route.ProjectID) || !zone.verified() {
 			return ErrNotFound
 		}
 		// The zone row is locked, so its credential can't detach under this route.

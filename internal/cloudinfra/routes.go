@@ -203,11 +203,13 @@ func (s *Service) PreviewRoute(ctx context.Context, p security.Principal, projec
 	if checkErr := ValidateBlockedPathPrefixes(in.BlockedPathPrefixes); checkErr != nil {
 		return nil, checkErr
 	}
-	zone, err := st.Zone(ctx, p.OrgID, in.ZoneID)
+	// A subdomain is verified through its domain, which the project need
+	// not be granted.
+	zone, err := s.linkedZone(ctx, st, p.OrgID, in.ZoneID)
 	if err != nil {
 		return nil, err
 	}
-	if !slices.Contains(zone.ProjectIDs, project) || zone.VerifiedAt.IsZero() || !zone.hasControlProof() {
+	if !slices.Contains(zone.ProjectIDs, project) || !zone.verified() {
 		return nil, ErrNotFound
 	}
 	hostname, err := ValidateRouteHostname(zone, in.Hostname)
@@ -337,7 +339,7 @@ func (s *Service) ApplyRoute(ctx context.Context, p security.Principal, project,
 	if !s.now().Before(op.ExpiresAt) {
 		return nil, ErrConflict
 	}
-	zone, err := st.Zone(ctx, p.OrgID, op.Route.Input.ZoneID)
+	zone, err := s.linkedZone(ctx, st, p.OrgID, op.Route.Input.ZoneID)
 	if err != nil {
 		return nil, err
 	}

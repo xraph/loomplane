@@ -144,7 +144,8 @@ func (s *Service) executeRoute(ctx context.Context, st DomainStore, op *RouteOpe
 			}
 		}
 	}
-	zone, err := st.Zone(ctx, route.OrgID, route.Input.ZoneID)
+	// Linked, so a subdomain's recheck reads its domain's verification.
+	zone, err := s.linkedZone(ctx, st, route.OrgID, route.Input.ZoneID)
 	if err != nil {
 		return err
 	}

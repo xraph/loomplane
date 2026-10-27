@@ -94,6 +94,17 @@ func (z *Zone) proofZone() *Zone {
 	return inherited
 }
 
+// verifiedAncestor is the nearest ancestor checked against its own TXT
+// proof, or nil.
+func (z *Zone) verifiedAncestor() *Zone {
+	for a := z.parent; a != nil; a = a.parent {
+		if a.ownVerified() {
+			return a
+		}
+	}
+	return nil
+}
+
 // verified is a zone a project can route through: checked against its own
 // TXT proof, or against the proof of a domain it sits under.
 func (z *Zone) verified() bool {

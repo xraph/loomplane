@@ -69,7 +69,7 @@ func (s *Service) PrepareRouteHandoff(ctx context.Context, p security.Principal,
 	if checkErr := st.ValidateRetainedRoute(ctx, *source); checkErr != nil {
 		return nil, checkErr
 	}
-	zone, err := st.Zone(ctx, p.OrgID, input.ZoneID)
+	zone, err := s.linkedZone(ctx, st, p.OrgID, input.ZoneID)
 	if err != nil {
 		return nil, err
 	}
