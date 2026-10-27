@@ -244,3 +244,28 @@ it("stops showing the tick once the value changes", async () => {
   await user.type(screen.getByLabelText("Workload provider"), "b")
   expect(copy.querySelector(".lucide-check")).toBeNull()
 })
+
+it("drops the tick two seconds after a copy, even when the value comes back", async () => {
+  stub([], { ...setup, audience: undefined })
+  panel({
+    cloud: "gcp",
+    title: "Google Cloud",
+    fields: [{ key: "workload_provider", label: "Workload provider" }],
+  })
+  const user = userEvent.setup()
+  await screen.findByText("https://loomplane.example")
+  const field = screen.getByLabelText("Workload provider")
+  await user.type(field, "a")
+  const copy = screen.getByRole("button", { name: "Copy audience" })
+  await user.click(copy)
+  expect(copy.querySelector(".lucide-check")).toBeTruthy()
+  await waitFor(() => expect(copy.querySelector(".lucide-check")).toBeNull(), {
+    timeout: 3000,
+  })
+
+  await user.click(copy)
+  await user.type(field, "b")
+  await new Promise((done) => setTimeout(done, 2200))
+  await user.type(field, "{Backspace}")
+  expect(copy.querySelector(".lucide-check")).toBeNull()
+}, 10000)
