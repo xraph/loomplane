@@ -34,6 +34,7 @@ import {
 import type { Connection, SignIn } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
 import { CloudGlyph } from "@/components/cloud-glyph"
+import { KeylessSetup } from "@/components/keyless-setup"
 import { MetricCard } from "@/components/metric-card"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
@@ -446,6 +447,8 @@ export function ConnectDialog(props: {
   onOpenChange: (open: boolean) => void
   cloud?: string
   replacing?: Connection
+  /** keyless opens a replacing dialog on moving that connection to keyless. */
+  keyless?: boolean
   onConnected?: (connection: Connection) => void
 }) {
   return props.open ? (
@@ -456,17 +459,22 @@ export function ConnectDialog(props: {
   ) : null
 }
 
+const linkClass =
+  "text-sm text-muted-foreground underline underline-offset-4 hover:text-foreground"
+
 function ConnectForm({
   open,
   onOpenChange,
   cloud: initial = "gcp",
   replacing,
+  keyless: startKeyless = false,
   onConnected,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   cloud?: string
   replacing?: Connection
+  keyless?: boolean
   onConnected?: (connection: Connection) => void
 }) {
   const create = useMutation(useConnectionsCreate)
@@ -485,7 +493,19 @@ function ConnectForm({
   // switch clouds.
   const entry = (available.data?.clouds ?? []).find((c) => c.cloud === cloud)
   const [tokenFor, setTokenFor] = useState<string | null>(null)
-  const signIn = !!entry?.methods.includes("oauth") && tokenFor !== cloud
+  // Keyless is the next choice after signing in, or the first where there
+  // is no sign-in. Opening it shows the cloud's setup in place of the form.
+  const [keylessFor, setKeylessFor] = useState<string | null>(
+    startKeyless ? (replacing?.cloud ?? initial) : null
+  )
+  const keylessOffered = !!entry?.methods.includes("keyless")
+  const keylessOn = keylessOffered && keylessFor === cloud
+  const signIn =
+    !!entry?.methods.includes("oauth") && tokenFor !== cloud && !keylessOn
+  const keylessFirst =
+    keylessOffered && !entry?.methods.includes("oauth") && tokenFor !== cloud
+  const tokenLink =
+    cloud === "aws" ? "Use an access key instead" : "Use a token instead"
   const [extraSettings, setExtraSettings] = useState<Record<string, string>>(
     () => ({ ...(replacing?.details ?? {}) }) as Record<string, string>
   )
@@ -563,6 +583,7 @@ function ConnectForm({
   const submit = async (e: FormEvent) => {
     e.preventDefault()
     setError("")
+    if (keylessOn) return
     if (signIn) {
       await startSignIn()
       return
@@ -628,14 +649,18 @@ function ConnectForm({
         <form onSubmit={(e) => void submit(e)} className="grid gap-5">
           <DialogHeader>
             <DialogTitle>
-              {replacing
-                ? `Replace ${replacing.name}'s credential`
-                : "Connect an account"}
+              {replacing && keylessOn
+                ? `Switch ${replacing.name} to keyless`
+                : replacing
+                  ? `Replace ${replacing.name}'s credential`
+                  : "Connect an account"}
             </DialogTitle>
             <DialogDescription>
-              {replacing
-                ? "The new credential is checked first. If the cloud refuses it, the old one stays."
-                : "Loomplane checks the credential with the cloud before keeping it."}
+              {replacing && keylessOn
+                ? "Loomplane checks the cloud's trust first. If the cloud refuses it, the connection stays as it is."
+                : replacing
+                  ? "The new credential is checked first. If the cloud refuses it, the old one stays."
+                  : "Loomplane checks the credential with the cloud before keeping it."}
             </DialogDescription>
           </DialogHeader>
           <FieldGroup>
@@ -711,18 +736,62 @@ function ConnectForm({
                   somewhere else, make a new connection.
                 </FieldDescription>
               )}
-            {signIn ? (
+            {keylessOn ? (
+              <div className="grid justify-items-start gap-3">
+                <KeylessSetup
+                  cloud={cloud}
+                  name={name}
+                  fields={entry?.keylessSettings ?? []}
+                  replacing={replacing}
+                  onConnected={(c) => {
+                    onConnected?.(c)
+                    close(false)
+                  }}
+                />
+                {!startKeyless && (
+                  <button
+                    type="button"
+                    className={linkClass}
+                    onClick={() => setKeylessFor(null)}
+                  >
+                    Back
+                  </button>
+                )}
+              </div>
+            ) : keylessFirst ? (
+              <div className="grid justify-items-start gap-2">
+                <Button type="button" onClick={() => setKeylessFor(cloud)}>
+                  Connect keylessly
+                </Button>
+                <button
+                  type="button"
+                  className={linkClass}
+                  onClick={() => setTokenFor(cloud)}
+                >
+                  {tokenLink}
+                </button>
+              </div>
+            ) : signIn ? (
               <div className="grid justify-items-start gap-2">
                 <Button type="submit" disabled={busy}>
                   {busy && <Spinner />}
                   Sign in with {entry?.title ?? cloud}
                 </Button>
+                {keylessOffered && (
+                  <button
+                    type="button"
+                    className={linkClass}
+                    onClick={() => setKeylessFor(cloud)}
+                  >
+                    Connect keylessly instead
+                  </button>
+                )}
                 <button
                   type="button"
-                  className="text-sm text-muted-foreground underline underline-offset-4 hover:text-foreground"
+                  className={linkClass}
                   onClick={() => setTokenFor(cloud)}
                 >
-                  Use a token instead
+                  {tokenLink}
                 </button>
               </div>
             ) : cloud === "gcp" ? (
@@ -953,7 +1022,7 @@ function ConnectForm({
             >
               Cancel
             </Button>
-            {!signIn && (
+            {!signIn && !keylessOn && !keylessFirst && (
               <Button type="submit" disabled={busy}>
                 {busy && <Spinner />}
                 {replacing ? "Check and replace" : "Check and connect"}

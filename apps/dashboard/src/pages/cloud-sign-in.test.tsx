@@ -36,6 +36,12 @@ const callbackUrl = "https://loomplane.example/api/v1/cloud-sign-in/callback"
 
 type App = Record<string, unknown>
 
+let keyless: Record<string, unknown> = {
+  enabled: true,
+  issuer: "https://loomplane.example",
+  reason: "",
+}
+
 function stub(apps: App[], onPut?: (body: Record<string, unknown>) => void) {
   vi.stubGlobal(
     "fetch",
@@ -46,7 +52,7 @@ function stub(apps: App[], onPut?: (body: Record<string, unknown>) => void) {
         return Response.json({ cloud: "gcp", source: "organization" })
       }
       if (path.includes("cloud-sign-in/apps"))
-        return Response.json({ apps, callback_url: callbackUrl })
+        return Response.json({ apps, callback_url: callbackUrl, keyless })
       if (path.includes("members"))
         return Response.json({
           members: [
@@ -179,4 +185,40 @@ it("warns about Google testing mode", async () => {
       "While your Google OAuth app is in testing, Google ends sign-ins after 7 days. Publish the app to keep them."
     )
   ).toBeTruthy()
+})
+
+it("shows keyless on, with the issuer", async () => {
+  keyless = { enabled: true, issuer: "https://loomplane.example", reason: "" }
+  stub(mixed)
+  renderPage()
+  expect(
+    await screen.findByText("Keyless: on · https://loomplane.example")
+  ).toBeTruthy()
+})
+
+it("shows keyless off and why", async () => {
+  keyless = {
+    enabled: false,
+    issuer: "http://loomplane.example",
+    reason: "public_url isn't HTTPS",
+  }
+  stub(mixed)
+  renderPage()
+  expect(
+    await screen.findByText("Keyless: off · public_url isn't HTTPS")
+  ).toBeTruthy()
+})
+
+it("shows the warning when keyless is on in development", async () => {
+  keyless = {
+    enabled: true,
+    issuer: "http://localhost:8080",
+    reason: "the issuer is on a loopback address, which no cloud can reach",
+  }
+  stub(mixed)
+  renderPage()
+  expect(
+    await screen.findByText("Keyless: on · http://localhost:8080")
+  ).toBeTruthy()
+  expect(screen.getByText(/loopback address/)).toBeTruthy()
 })
