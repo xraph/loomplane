@@ -1,5 +1,5 @@
 # https://github.com/huggingface/text-embeddings-inference/blob/v1.9.4/README.md#supported-models
-# ghcr.io/huggingface/text-embeddings-inference@sha256:8419f533857b503ebf6ec292a95d4f1cf9c0464ac8b8abeef39518cf110e5726
+# Intended for ghcr.io/huggingface/text-embeddings-inference@sha256:8419f533857b503ebf6ec292a95d4f1cf9c0464ac8b8abeef39518cf110e5726
 # Written by hand: the config.json architecture of each model type the
 # README lists, taken from its example models where it names one. Loomplane
 # runs TEI on CPU only, so Mistral and Qwen2 are left out: TEI 1.9.4

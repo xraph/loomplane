@@ -38,10 +38,10 @@
     "guard": {
       "repository": "docker.io/library/caddy",
       "tag": "2.11.7",
-      "index_digest": "sha256:504a44d7d74bd2bc28a66afc4774912fc21223ca8a67734af1c54ab2f999b489",
+      "index_digest": "sha256:685ae3d7c34d9b5f8caeddc5d14051db7bbd88ff1f5a2fa0c16bd8ca328fb7af",
       "digests": {
-        "amd64": "sha256:04913b1da43339a40ad1ea87827d70a576ac5aa6cf674c6e24fdca675887533a",
-        "arm64": "sha256:cc447f149425221422153c6cdf33a123b3f458839679f950298f68a690a54a5b"
+        "amd64": "sha256:173b26306d711395accaeba8b67afcaad2a085ccb1e6bf26010bfe8c095a5229",
+        "arm64": "sha256:84058f1a0e5beb97664a9b79dcfd267b594c033d5bb88d8463cdfb59c0779197"
       }
     }
   }

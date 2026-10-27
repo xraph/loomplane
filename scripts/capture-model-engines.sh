@@ -5,15 +5,25 @@
 #   scripts/capture-model-engines.sh [--capabilities]
 #
 # The tags below are picked by hand on the day you run this: the newest
-# release of each image that is at least 14 days old. When a version
-# changes, rename the files under internal/models/engines/testdata and
-# update the releases in internal/models/engines/engines.go to match.
+# release of each image that is at least 14 days old. The rule holds for
+# the image you pin, not only the release, so the script reads each pinned
+# image's build date and fails when one is less than 14 days old. When a
+# version changes, rename the files under internal/models/engines/testdata
+# and update the releases in internal/models/engines/engines.go to match.
 #
 # It writes internal/recipes/testdata/model-engine-image-digests.json from
 # each tag's multi-arch index, read with an anonymous pull token (no login).
 # GPU images (vllm, llamacpp-gpu) keep only their amd64 digest. TEI
 # publishes arm64 under its own tag, so its arm64 digest comes from that
 # tag's index.
+#
+# The guard is pinned by index digest as well as tag. Docker's official
+# images rebuild caddy:<version> whenever its base image changes, so the
+# tag can point at an image a few days old even when the release is weeks
+# old. GUARD_INDEX keeps the pin on an image that has passed 14 days; the
+# script checks that image still carries Caddy GUARD_TAG and tells you
+# when the tag has moved on. Clear it to take whatever the tag points at
+# now, and the age check decides whether that image can be pinned yet.
 #
 # With --capabilities it also runs the amd64 images with Docker (no GPU
 # needed) and writes the flag, parser and architecture lists the engines
@@ -34,6 +44,11 @@ TEI_ARM64_TAG=cpu-arm64-1.9.4
 LLAMACPP_TAG=server-b11580
 LLAMACPP_GPU_TAG=server-cuda-b11580
 GUARD_TAG=2.11.7
+# caddy:2.11.7 as built on October 5, 2026, before the October 21 rebuild.
+GUARD_INDEX=sha256:685ae3d7c34d9b5f8caeddc5d14051db7bbd88ff1f5a2fa0c16bd8ca328fb7af
+
+# MIN_AGE_DAYS is how old every pinned image must be.
+MIN_AGE_DAYS=14
 
 VLLM_REPO=docker.io/vllm/vllm-openai
 TEI_REPO=ghcr.io/huggingface/text-embeddings-inference
@@ -96,8 +111,9 @@ registry_api() {
 	esac
 }
 
-# fetch_index REPO TAG saves the tag's multi-arch index and prints its path.
-# The digest the registry reports must match the bytes it sent.
+# fetch_index REPO REF saves the multi-arch index a tag or digest names and
+# prints its path. The digest the registry reports must match the bytes it
+# sent, and a digest REF must match both.
 fetch_index() {
 	name=$(echo "$1:$2" | tr '/:' '__')
 	body=$work/$name.json
@@ -110,7 +126,29 @@ fetch_index() {
 	reported=$(tr -d '\r' <"$headers" | awk 'tolower($1) == "docker-content-digest:" { print $2 }')
 	computed=sha256:$(sha256 "$body")
 	[ "$reported" = "$computed" ] || die "$1:$2: registry says $reported, body hashes to $computed"
+	case $2 in
+	sha256:*) [ "$computed" = "$2" ] || die "$1@$2: the registry sent $computed" ;;
+	esac
 	echo "$body"
+}
+
+# image_config REPO DIGEST prints the config of one platform image.
+image_config() {
+	tok=$(token "$1")
+	config=$(curl -fsS -H "Authorization: Bearer $tok" \
+		-H 'Accept: application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' \
+		"$(registry_api "$1")/manifests/$2" | jq -er .config.digest)
+	curl -fsSL -H "Authorization: Bearer $tok" "$(registry_api "$1")/blobs/$config"
+}
+
+# check_age REPO DIGEST fails unless the image was built at least
+# MIN_AGE_DAYS ago.
+check_age() {
+	image_config "$1" "$2" >"$work/config.json"
+	created=$(jq -er .created "$work/config.json")
+	days=$(jq -er '(now - (.created | sub("\\.[0-9]+"; "") | fromdateiso8601)) / 86400 | floor' "$work/config.json")
+	[ "$days" -ge "$MIN_AGE_DAYS" ] || die "$1@$2 was built $created, $days days ago; pin an image at least $MIN_AGE_DAYS days old"
+	echo "$1@$2 built $created ($days days ago)"
 }
 
 # index_digest INDEX_FILE prints the digest of a saved index.
@@ -135,7 +173,15 @@ tei_index=$(fetch_index "$TEI_REPO" "$TEI_TAG")
 tei_arm64_index=$(fetch_index "$TEI_REPO" "$TEI_ARM64_TAG")
 llamacpp_index=$(fetch_index "$LLAMACPP_REPO" "$LLAMACPP_TAG")
 llamacpp_gpu_index=$(fetch_index "$LLAMACPP_REPO" "$LLAMACPP_GPU_TAG")
-guard_index=$(fetch_index "$GUARD_REPO" "$GUARD_TAG")
+guard_tag_index=$(fetch_index "$GUARD_REPO" "$GUARD_TAG")
+if [ -n "${GUARD_INDEX-}" ]; then
+	guard_index=$(fetch_index "$GUARD_REPO" "$GUARD_INDEX")
+	moved=$(index_digest "$guard_tag_index")
+	[ "$moved" = "$GUARD_INDEX" ] ||
+		echo "note: $GUARD_REPO:$GUARD_TAG now points at $moved; keeping the hand-pinned $GUARD_INDEX" >&2
+else
+	guard_index=$guard_tag_index
+fi
 
 vllm_amd64=$(platform_digest "$vllm_index" amd64)
 tei_amd64=$(platform_digest "$tei_index" amd64)
@@ -145,6 +191,20 @@ llamacpp_arm64=$(platform_digest "$llamacpp_index" arm64)
 llamacpp_gpu_amd64=$(platform_digest "$llamacpp_gpu_index" amd64)
 guard_amd64=$(platform_digest "$guard_index" amd64)
 guard_arm64=$(platform_digest "$guard_index" arm64)
+
+for pin in "$guard_amd64" "$guard_arm64"; do
+	image_config "$GUARD_REPO" "$pin" | jq -e --arg v "CADDY_VERSION=v$GUARD_TAG" 'any(.config.Env[]; . == $v)' >/dev/null ||
+		die "$GUARD_REPO@$pin isn't Caddy $GUARD_TAG"
+done
+
+check_age "$VLLM_REPO" "$vllm_amd64"
+check_age "$TEI_REPO" "$tei_amd64"
+check_age "$TEI_REPO" "$tei_arm64"
+check_age "$LLAMACPP_REPO" "$llamacpp_amd64"
+check_age "$LLAMACPP_REPO" "$llamacpp_arm64"
+check_age "$LLAMACPP_REPO" "$llamacpp_gpu_amd64"
+check_age "$GUARD_REPO" "$guard_amd64"
+check_age "$GUARD_REPO" "$guard_arm64"
 
 jq -n \
 	--arg captured_at "$(date -u +%Y-%m-%d)" \
@@ -218,21 +278,44 @@ tei_image=$TEI_REPO@$tei_amd64
 llamacpp_image=$LLAMACPP_REPO@$llamacpp_amd64
 llamacpp_gpu_image=$LLAMACPP_REPO@$llamacpp_gpu_amd64
 
+# The parser and architecture lists are the keys of the registration dicts
+# vLLM builds its managers from. Each command also asks the manager itself
+# and fails if the two disagree, so a parser registered some other way
+# shows up as an error rather than a quiet change to the list.
+vllm_tool_parsers='
+import vllm.tool_parsers as m
+keys = sorted(m._TOOL_PARSERS_TO_REGISTER)
+assert keys == sorted(m.ToolParserManager.list_registered()), "ToolParserManager disagrees with _TOOL_PARSERS_TO_REGISTER"
+print("\n".join(keys))
+'
+vllm_reasoning_parsers='
+import vllm.reasoning as m
+keys = sorted(m._REASONING_PARSERS_TO_REGISTER)
+assert keys == sorted(m.ReasoningParserManager.list_registered()), "ReasoningParserManager disagrees with _REASONING_PARSERS_TO_REGISTER"
+print("\n".join(keys))
+'
+vllm_architectures='
+from vllm.model_executor.models import registry as m
+keys = sorted(m._VLLM_MODELS)
+assert keys == sorted(m.ModelRegistry.get_supported_archs()), "ModelRegistry disagrees with _VLLM_MODELS"
+print("\n".join(keys))
+'
+
 if ! skipped vllm; then
-	run "$vllm_image" vllm serve --help=all | option_flags |
-		write_list "$testdata/vllm-$vllm_version-flags.txt" "$vllm_image"
-	run "$vllm_image" python3 -c 'from vllm.tool_parsers import ToolParserManager; print("\n".join(ToolParserManager.list_registered()))' |
-		write_list "$testdata/vllm-$vllm_version-tool-parsers.txt" "$vllm_image"
-	run "$vllm_image" python3 -c 'from vllm.reasoning import ReasoningParserManager; print("\n".join(ReasoningParserManager.list_registered()))' |
-		write_list "$testdata/vllm-$vllm_version-reasoning-parsers.txt" "$vllm_image"
-	run "$vllm_image" python3 -c "from vllm.model_executor.models import ModelRegistry; print('\n'.join(sorted(ModelRegistry.get_supported_archs())))" |
-		write_list "$testdata/vllm-$vllm_version-architectures.txt" "$vllm_image"
+	run "$vllm_image" vllm serve --help=all >"$work/vllm-help" || die "vllm serve --help=all failed"
+	option_flags <"$work/vllm-help" | write_list "$testdata/vllm-$vllm_version-flags.txt" "$vllm_image"
+	run "$vllm_image" python3 -c "$vllm_tool_parsers" >"$work/tool-parsers" || die "reading vLLM's tool parsers failed"
+	write_list "$testdata/vllm-$vllm_version-tool-parsers.txt" "$vllm_image" <"$work/tool-parsers"
+	run "$vllm_image" python3 -c "$vllm_reasoning_parsers" >"$work/reasoning-parsers" || die "reading vLLM's reasoning parsers failed"
+	write_list "$testdata/vllm-$vllm_version-reasoning-parsers.txt" "$vllm_image" <"$work/reasoning-parsers"
+	run "$vllm_image" python3 -c "$vllm_architectures" >"$work/architectures" || die "reading vLLM's architectures failed"
+	write_list "$testdata/vllm-$vllm_version-architectures.txt" "$vllm_image" <"$work/architectures"
 	check_shell "$vllm_image"
 fi
 
 if ! skipped llamacpp; then
-	run "$llamacpp_image" /app/llama-server --help | option_flags |
-		write_list "$testdata/llamacpp-$llamacpp_build-flags.txt" "$llamacpp_image"
+	run "$llamacpp_image" /app/llama-server --help >"$work/llamacpp-help" || die "llama-server --help failed"
+	option_flags <"$work/llamacpp-help" | write_list "$testdata/llamacpp-$llamacpp_build-flags.txt" "$llamacpp_image"
 	check_shell "$llamacpp_image"
 fi
 

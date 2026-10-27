@@ -1,5 +1,5 @@
-# docker.io/vllm/vllm-openai@sha256:a4a4c0437bf7240089da5f08aa370c4aee17ae5290f7a3b468825ee26c4c3a6b
-# Not run in the image yet: the keys of _TOOL_PARSERS_TO_REGISTER in https://github.com/vllm-project/vllm/blob/v0.31.0/vllm/tool_parsers/__init__.py
+# Intended for docker.io/vllm/vllm-openai@sha256:a4a4c0437bf7240089da5f08aa370c4aee17ae5290f7a3b468825ee26c4c3a6b
+# Source: https://github.com/vllm-project/vllm/blob/v0.31.0/vllm/tool_parsers/__init__.py (the keys of _TOOL_PARSERS_TO_REGISTER; not run in the image yet)
 apertus
 cohere_command3
 cohere_command4
