@@ -364,6 +364,11 @@ func (s *Service) refusedUnderLock(ctx context.Context, c *Connection, method, s
 		if latest.Method != method || latest.Generation != c.Generation || latest.Message == replacementInProgressMessage {
 			return ErrChanged
 		}
+		// Someone checked it after the refusal was seen, so that answer is
+		// the newer one.
+		if checked != nil && latest.CheckedAt != nil && latest.CheckedAt.After(*checked) {
+			return ErrChanged
+		}
 		if latest.Status != settled && checked != nil {
 			// mark saves only a change, so only a change is stamped.
 			latest.CheckedAt = checked

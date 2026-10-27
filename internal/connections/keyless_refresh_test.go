@@ -381,3 +381,27 @@ func TestKeylessCheckLeavesARecheckFailureAlone(t *testing.T) {
 	}
 	r.unchanged(t, failed)
 }
+
+func TestKeylessRefusalSeenBeforeANewerCheckMarksNothing(t *testing.T) {
+	r := newKeylessRefreshRig(t)
+	c := r.connect(t)
+	r.refuse = true
+	r.clock = r.clock.Add(48 * time.Hour)
+	var report RefreshReport
+	stale := r.store.rows[c.ID]
+	refusal, _ := r.s.probeKeyless(t.Context(), &stale, &report)
+	if refusal == nil {
+		t.Fatal("the refusal wasn't returned")
+	}
+	// Someone presses Check again and the cloud answers before the run
+	// marks what it saw.
+	row := r.store.rows[c.ID]
+	later := refusal.at.Add(time.Second)
+	row.CheckedAt = &later
+	r.store.rows[c.ID] = row
+	r.s.markKeyless(t.Context(), *refusal, &report)
+	got := r.store.rows[c.ID]
+	if got.Status != StatusReady || got.Message != "" || len(r.lapsed) != 0 || report.Lapsed != 0 {
+		t.Fatalf("status %s, message %q, lapsed %d, report %+v", got.Status, got.Message, len(r.lapsed), report)
+	}
+}
