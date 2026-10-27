@@ -667,16 +667,32 @@ func TestServerPoolsEnrollmentSerializesDirectExecution(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("ordinary unclaimed host did not execute")
 	}
+	// Enrollment refuses while the direct apply runs. Waiting would hold the
+	// organization lock the apply needs for its binding.
 	enrolled := make(chan error, 1)
 	next := *f.pool
 	next.Revision++
 	go func() { enrolled <- f.store.SavePool(t.Context(), &next, 1) }()
-	waitPoolSQL(t, f, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND query LIKE 'SELECT c.id FROM loomplane_cloud_connections%')`)
-	close(executor.release)
-	if err = <-ran; err != nil {
-		t.Fatal(err)
+	select {
+	case err = <-enrolled:
+		if !errors.Is(err, cloudinfra.ErrBusy) {
+			close(executor.release)
+			t.Fatalf("enrollment beside a running direct apply: %v", err)
+		}
+	case <-time.After(15 * time.Second):
+		close(executor.release)
+		t.Fatalf("enrollment waited on a running direct apply\n%s", lockReport(f))
 	}
-	if err = <-enrolled; err == nil {
+	close(executor.release)
+	select {
+	case err = <-ran:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(15 * time.Second):
+		t.Fatalf("direct apply never finished\n%s", lockReport(f))
+	}
+	if err = f.store.SavePool(t.Context(), &next, 1); err == nil {
 		t.Fatal("enrollment ignored direct effects and binding")
 	}
 }

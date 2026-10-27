@@ -180,6 +180,16 @@ func (s *PgStore) SavePool(ctx context.Context, p *Pool, previous int64) error {
 	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended('host-admission/'||identity,0)) FROM (SELECT DISTINCT body->'health'->>'docker_id' identity FROM loomplane_cloud_servers WHERE org_id=$1 AND (id=ANY($2::text[]) OR id IN (SELECT server_id FROM loomplane_server_pool_members WHERE pool_id=$3)) ORDER BY identity) identities`, p.OrgID, memberIDs(p.Members), p.ID); err != nil {
 		return err
 	}
+	// A direct apply holds its daemon's direct-apply lock through its effects
+	// and takes the organization lock inside them. Waiting for it here, under
+	// the organization lock, could close a cycle, so refuse instead.
+	var free bool
+	if checkErr := tx.QueryRow(ctx, `SELECT coalesce(bool_and(pg_try_advisory_xact_lock(hashtextextended('direct-apply/'||identity,0))),true) FROM (SELECT DISTINCT body->'health'->>'docker_id' identity FROM loomplane_cloud_servers WHERE org_id=$1 AND (id=ANY($2::text[]) OR id IN (SELECT server_id FROM loomplane_server_pool_members WHERE pool_id=$3)) ORDER BY identity) identities`, p.OrgID, memberIDs(p.Members), p.ID).Scan(&free); checkErr != nil {
+		return checkErr
+	}
+	if !free {
+		return fmt.Errorf("%w: a direct deployment is running on a server in this pool; save the pool after it finishes", ErrBusy)
+	}
 	rows, err := tx.Query(ctx, `SELECT id FROM loomplane_cloud_servers WHERE org_id=$1 AND (id=ANY($2::text[]) OR id IN (SELECT server_id FROM loomplane_server_pool_members WHERE pool_id=$3)) ORDER BY id FOR UPDATE`, p.OrgID, memberIDs(p.Members), p.ID)
 	if err != nil {
 		return err
