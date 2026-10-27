@@ -62,6 +62,36 @@ test("a failed step is where the rollback stopped", () => {
   ).toEqual(["passed", "failed", "pending", "pending"])
 })
 
+test("a failed promotion passes every step only when no step failed", () => {
+  const passing = [0, 1, 2, 3].map((step) =>
+    verdict({ id: `d/web/${step}/0`, step })
+  )
+  expect(
+    states(canary({ status: "promote_failed", step: 3, weight: 0 }), passing)
+  ).toEqual(["passed", "passed", "passed", "passed"])
+  // A retry failed its second step after an earlier attempt promoted some
+  // services, so the canary ended promote_failed with a failed step.
+  expect(
+    states(canary({ status: "promote_failed", step: 1, weight: 0 }), [
+      verdict({ step: 0 }),
+      verdict({ id: "d/web/1/0", step: 1, weight: 25, verdict: "fail" }),
+    ])
+  ).toEqual(["passed", "failed", "pending", "pending"])
+  // It ran out of holds at its third step.
+  expect(
+    states(canary({ status: "promote_failed", step: 2, weight: 0 }), [
+      verdict({ step: 0 }),
+      verdict({ id: "d/web/1/0", step: 1, weight: 25 }),
+      verdict({
+        id: "d/web/2/0",
+        step: 2,
+        weight: 50,
+        verdict: "inconclusive",
+      }),
+    ])
+  ).toEqual(["passed", "passed", "inconclusive", "pending"])
+})
+
 test("a promoted canary passed every step", () => {
   expect(
     states(canary({ status: "promoted", step: 3, weight: 100 }), [])

@@ -83,30 +83,55 @@ function decided(
 }
 
 /**
+ * stoppedAt is the step a canary that ended stopped at: the first step a
+ * verdict failed, or the current one when its last verdict was
+ * inconclusive. It's -1 when every judged step passed.
+ */
+function stoppedAt(canary: Canary, verdicts: CanaryVerdict[]): number {
+  const steps = canary.steps ?? []
+  const failed = steps.findIndex(
+    (_, i) => decided(latestAt(verdicts, i)) === "fail"
+  )
+  if (failed >= 0) return failed
+  if (decided(latestAt(verdicts, canary.step)) === "inconclusive") {
+    return canary.step
+  }
+  return -1
+}
+
+/**
  * stepStates marks where the ramp is: steps before the current one passed,
  * the current one holds, and later ones wait. Once the canary ends in a
  * rollback, the step it stopped at failed, or ran out of holds without a
- * verdict ("inconclusive").
+ * verdict ("inconclusive"). A promotion that failed passed every step,
+ * unless the verdicts say a step failed: a retry can fail a step after an
+ * earlier attempt promoted some services, and that ends promote_failed too.
  */
 export function stepStates(
   canary: Canary,
   verdicts: CanaryVerdict[]
 ): StepState[] {
   const steps = canary.steps ?? []
-  const rolledBack =
+  const passed = steps.map((weight): StepState => ({ weight, state: "passed" }))
+  if (canary.status === "promoting" || canary.status === "promoted") {
+    return passed
+  }
+  let stopped: number | undefined
+  if (
     canary.status === "reverting" ||
     canary.status === "rolled_back" ||
     canary.status === "revert_failed"
-  const allPassed =
-    canary.status === "promoting" ||
-    canary.status === "promoted" ||
-    canary.status === "promote_failed"
+  ) {
+    stopped = canary.step
+  } else if (canary.status === "promote_failed") {
+    stopped = stoppedAt(canary, verdicts)
+    if (stopped < 0) return passed
+  }
   return steps.map((weight, i): StepState => {
     const verdict = decided(latestAt(verdicts, i))
-    if (allPassed) return { weight, state: "passed" }
-    if (rolledBack) {
-      if (i < canary.step) return { weight, state: "passed" }
-      if (i === canary.step) {
+    if (stopped !== undefined) {
+      if (i < stopped) return { weight, state: "passed" }
+      if (i === stopped) {
         return {
           weight,
           state: verdict === "inconclusive" ? "inconclusive" : "failed",
