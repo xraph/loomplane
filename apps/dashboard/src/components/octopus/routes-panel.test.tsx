@@ -63,6 +63,8 @@ test("renders one card per domain with pills and route rows", async () => {
   const auth = within(api).getByRole("row", { name: /\/auth\/\*/ })
   expect(within(auth).getByText("Added here")).toBeVisible()
   expect(within(auth).getByText("Overrides FARP")).toBeVisible()
+  // The server writes the strip line into the note, and it shows once.
+  expect(within(auth).getAllByText(/Strips \/auth/)).toHaveLength(1)
   expect(within(auth).getByText("Strips /auth before forwarding")).toBeVisible()
   expect(within(auth).getByText("Any")).toBeVisible()
   expect(within(auth).getByRole("button", { name: "Edit" })).toBeVisible()

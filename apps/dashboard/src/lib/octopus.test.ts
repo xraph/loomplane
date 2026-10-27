@@ -10,7 +10,7 @@ import {
   filterBoard,
   methodsLabel,
   routeCountLabel,
-  routeNote,
+  routeDraft,
   routeSourceLabel,
   splitPath,
   unroutedSentence,
@@ -82,21 +82,53 @@ test("splitPath and methodsLabel", () => {
   expect(methodsLabel(["GET", "POST"])).toBe("GET POST")
 })
 
-test("route sources, notes and counts read like the mock", () => {
+test("route sources and counts read like the mock", () => {
   expect(routeSourceLabel("farp")).toBe("FARP")
   expect(routeSourceLabel("here")).toBe("Added here")
   expect(routeSourceLabel("octopus-admin")).toBe("Octopus admin")
   expect(routeCountLabel(1)).toBe("1 route")
   expect(routeCountLabel(4)).toBe("4 routes")
+})
+
+test("routeDraft starts the dialog from a row without generated notes", () => {
+  const farp = route({
+    path: "/v1/orders/*",
+    methods: ["GET", "POST"],
+    note: "From the OpenAPI schema",
+  })
+  expect(routeDraft("override", "api.acme.dev", farp)).toEqual({
+    hostname: "api.acme.dev",
+    path: "/v1/orders/*",
+    methods: ["GET", "POST"],
+    service: "api",
+    port: 8080,
+    stripPrefix: false,
+  })
+  // The server writes the strip line when the route has no note of its own.
+  const strip = route({
+    source: "here",
+    path: "/auth/*",
+    service: "auth",
+    port: 9000,
+    stripPrefix: true,
+    note: "Strips /auth before forwarding",
+    routeId: "rt_1",
+    revision: 3,
+  })
+  expect(routeDraft("edit", "api.acme.dev", strip)).toEqual({
+    hostname: "api.acme.dev",
+    path: "/auth/*",
+    methods: [],
+    service: "auth",
+    port: 9000,
+    stripPrefix: true,
+    note: "",
+    routeId: "rt_1",
+    revision: 3,
+  })
   expect(
-    routeNote(route({ path: "/auth/*", source: "here", stripPrefix: true }))
-  ).toBe("Strips /auth before forwarding")
-  expect(
-    routeNote(route({ note: "Storefront", path: "/shop/*", stripPrefix: true }))
-  ).toBe("Storefront · Strips /shop before forwarding")
-  expect(routeNote(route({ note: "From the OpenAPI schema" }))).toBe(
-    "From the OpenAPI schema"
-  )
+    routeDraft("edit", "acme.dev", { ...strip, note: "Storefront" }).note
+  ).toBe("Storefront")
 })
 
 test("filterBoard keeps the source's rows and drops empty cards", () => {

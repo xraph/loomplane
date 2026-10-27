@@ -9,7 +9,7 @@ import {
   useOctopusBoard,
   useProjectsGet,
 } from "@/client/forge/loomplane/hooks"
-import type { Board, BoardRoute } from "@/client/forge/loomplane/types"
+import type { Board } from "@/client/forge/loomplane/types"
 import { useQuery } from "@/client/hooks"
 import { DiscoveryStrip } from "@/components/octopus/discovery-strip"
 import { HostCardView } from "@/components/octopus/host-card"
@@ -26,6 +26,7 @@ import {
 import type { CatalogPanelProps } from "@/lib/catalog-kinds"
 import {
   filterBoard,
+  routeDraft,
   unroutedParts,
   type RouteDraft,
   type RouteDialogMode,
@@ -47,19 +48,6 @@ function useRouteDialog() {
     open: (mode: RouteDialogMode, initial: RouteDraft = {}) =>
       setRequest({ mode, initial }),
     close: () => setRequest(null),
-  }
-}
-
-/** draftOf starts a dialog from a row on a host. */
-function draftOf(hostname: string, route: BoardRoute): RouteDraft {
-  return {
-    hostname,
-    path: route.path,
-    methods: route.methods,
-    service: route.service,
-    port: route.port,
-    stripPrefix: route.stripPrefix,
-    note: route.note,
   }
 }
 
@@ -142,16 +130,7 @@ function Routes({
           onRow={
             writes
               ? (kind, route) =>
-                  dialog.open(
-                    kind,
-                    kind === "edit"
-                      ? {
-                          ...draftOf(host.hostname, route),
-                          routeId: route.routeId,
-                          revision: route.revision,
-                        }
-                      : draftOf(host.hostname, route)
-                  )
+                  dialog.open(kind, routeDraft(kind, host.hostname, route))
               : undefined
           }
         />

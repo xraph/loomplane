@@ -66,17 +66,39 @@ export function routeCountLabel(n: number): string {
   return n === 1 ? "1 route" : `${n} routes`
 }
 
-/**
- * routeNote is the line under a row's path: its note, then what it strips
- * before forwarding.
- */
-export function routeNote(route: BoardRoute): string {
+/** stripNote is the note the server writes for a strip route without one. */
+function stripNote(route: BoardRoute): string {
   const { prefix } = splitPath(route.path)
-  const strips =
-    route.stripPrefix && prefix !== "/"
-      ? `Strips ${prefix} before forwarding`
-      : ""
-  return [route.note, strips].filter(Boolean).join(" · ")
+  return route.stripPrefix && prefix !== "/"
+    ? `Strips ${prefix} before forwarding`
+    : ""
+}
+
+/**
+ * routeDraft starts the route dialog from a row. A FARP row's note is
+ * generated from its schema, so an override starts without one, and so
+ * does an edit whose note is only the strip line the server fills in.
+ */
+export function routeDraft(
+  mode: "override" | "edit",
+  hostname: string,
+  route: BoardRoute
+): RouteDraft {
+  const draft: RouteDraft = {
+    hostname,
+    path: route.path,
+    methods: route.methods,
+    service: route.service,
+    port: route.port,
+    stripPrefix: route.stripPrefix,
+  }
+  if (mode === "override") return draft
+  return {
+    ...draft,
+    note: route.note === stripNote(route) ? "" : route.note,
+    routeId: route.routeId,
+    revision: route.revision,
+  }
 }
 
 /**

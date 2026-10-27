@@ -4,6 +4,7 @@ import { useOctopusBoard } from "@/client/forge/loomplane/hooks"
 import { useQuery } from "@/client/hooks"
 import { OpenAdminButton } from "@/components/octopus/open-admin-button"
 import { RoutesPanel } from "@/components/octopus/routes-panel"
+import { useOctopusSubtitle } from "@/components/octopus/use-octopus-subtitle"
 import { defineCatalogKind, type CatalogPanelProps } from "@/lib/catalog-kinds"
 
 /** useBoard reads the board the tabs and their counts share. */
@@ -29,6 +30,7 @@ export default defineCatalogKind({
     "Domains from your organization",
   ],
   actions: OpenAdminButton,
+  subtitle: useOctopusSubtitle,
   panels: [
     {
       id: "routes",

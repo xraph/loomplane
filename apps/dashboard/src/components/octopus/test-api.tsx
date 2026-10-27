@@ -124,6 +124,7 @@ export function mockBoard(): Json {
           }),
           here({
             path: "/auth/*",
+            note: "Strips /auth before forwarding",
             service: "auth",
             port: 9000,
             strip_prefix: true,
@@ -193,6 +194,12 @@ export function serve(fixture: Fixture = {}) {
           return json({ message: "Something went wrong." }, fixture.boardStatus)
         return json(fixture.board ?? mockBoard())
       }
+      if (path.endsWith("/connections"))
+        return json({
+          connections: [
+            { id: "conn_1", name: "edge-1", cloud: "server", status: "ready" },
+          ],
+        })
       if (path.endsWith("/projects/p/environments"))
         return json({ environments: [{ id: "env_prod", name: "production" }] })
       if (path.endsWith("/projects/p"))

@@ -10,7 +10,6 @@ import {
   hostPills,
   methodsLabel,
   routeCountLabel,
-  routeNote,
   routeSourceLabel,
   type RouteSource,
 } from "@/lib/octopus"
@@ -113,7 +112,8 @@ export function HostCardView({
 
 function RouteRow({ route, onRow }: { route: BoardRoute; onRow?: RowAction }) {
   const source = route.source as RouteSource
-  const note = routeNote(route)
+  // The server owns the note, strip line included.
+  const note = route.note
   const action =
     source === "farp" ? "override" : source === "here" ? "edit" : undefined
   return (

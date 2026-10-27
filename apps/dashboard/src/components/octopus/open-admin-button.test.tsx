@@ -91,6 +91,16 @@ test("without infrastructure:modify the button is disabled and says why", async 
   expect(open).not.toHaveBeenCalled()
 })
 
+test("the header names the gateway, environment and target", async () => {
+  serve()
+  const octopus = catalogKind("octopus")!
+  const Subtitle = () => <p>{octopus.subtitle!(panelProps(), "production")}</p>
+  mount(<Subtitle />)
+  expect(
+    await screen.findByText("API gateway · production · edge-1")
+  ).toBeVisible()
+})
+
 test("the module puts the button in the header", () => {
   const octopus = catalogKind("octopus")!
   expect(octopus.actions).toBe(OpenAdminButton)
