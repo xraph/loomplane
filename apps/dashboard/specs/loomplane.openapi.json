@@ -10001,6 +10001,38 @@
           }
         }
       }
+    },
+    "/api/v1/deployments/{id}/canary": {
+      "get": {
+        "tags": [
+          "Plans"
+        ],
+        "summary": "The deployment's canary: where traffic is and every step's verdict",
+        "operationId": "deployments.canary",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The canary and its verdicts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CanaryReport"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -12667,6 +12699,9 @@
             "items": {
               "$ref": "#/components/schemas/Step"
             }
+          },
+          "canary": {
+            "$ref": "#/components/schemas/Canary"
           }
         }
       },
@@ -14180,6 +14215,10 @@
           },
           "defaults": {
             "$ref": "#/components/schemas/Defaults"
+          },
+          "environments": {
+            "type": "object",
+            "additionalProperties": true
           },
           "federation": {
             "$ref": "#/components/schemas/Federation"
@@ -15755,6 +15794,9 @@
             "items": {
               "$ref": "#/components/schemas/Finding"
             }
+          },
+          "release": {
+            "$ref": "#/components/schemas/Release"
           }
         }
       },
@@ -18318,6 +18360,10 @@
               "defaults": {
                 "$ref": "#/components/schemas/Defaults"
               },
+              "environments": {
+                "type": "object",
+                "additionalProperties": true
+              },
               "federation": {
                 "$ref": "#/components/schemas/Federation"
               },
@@ -19012,6 +19058,9 @@
           },
           "farp": {
             "$ref": "#/components/schemas/FarpConfig"
+          },
+          "frontend_demand": {
+            "$ref": "#/components/schemas/FrontendDemand"
           }
         }
       },
@@ -22256,6 +22305,331 @@
           },
           "zone_id": {
             "type": "string"
+          }
+        }
+      },
+      "Canary": {
+        "type": "object",
+        "required": [
+          "status",
+          "steps",
+          "hold_seconds",
+          "thresholds",
+          "step",
+          "weight",
+          "services",
+          "updated_at"
+        ],
+        "properties": {
+          "hold_seconds": {
+            "type": "integer"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "services": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CanaryService"
+            }
+          },
+          "status": {
+            "type": "string"
+          },
+          "step": {
+            "type": "integer"
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          },
+          "thresholds": {
+            "$ref": "#/components/schemas/Thresholds"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "weight": {
+            "type": "integer"
+          }
+        }
+      },
+      "CanaryReport": {
+        "type": "object",
+        "required": [
+          "verdicts"
+        ],
+        "properties": {
+          "canary": {
+            "$ref": "#/components/schemas/Canary"
+          },
+          "verdicts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CanaryVerdict"
+            }
+          }
+        }
+      },
+      "CanaryService": {
+        "type": "object",
+        "required": [
+          "action_id",
+          "name",
+          "provider",
+          "binding_id"
+        ],
+        "properties": {
+          "action_id": {
+            "type": "string"
+          },
+          "baseline": {
+            "type": "string"
+          },
+          "binding_id": {
+            "type": "string"
+          },
+          "candidate": {
+            "type": "string"
+          },
+          "image": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          }
+        }
+      },
+      "CanaryVerdict": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "project_id",
+          "deployment_id",
+          "retry",
+          "action_id",
+          "service",
+          "step",
+          "attempt",
+          "weight",
+          "verdict",
+          "reason",
+          "baseline_fallback",
+          "baseline",
+          "candidate",
+          "thresholds",
+          "window_start",
+          "window_end",
+          "decided_at"
+        ],
+        "properties": {
+          "action_id": {
+            "type": "string"
+          },
+          "attempt": {
+            "type": "integer"
+          },
+          "baseline": {
+            "$ref": "#/components/schemas/Health"
+          },
+          "baseline_fallback": {
+            "type": "boolean"
+          },
+          "candidate": {
+            "$ref": "#/components/schemas/Health"
+          },
+          "decided_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "deployment_id": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "retry": {
+            "type": "integer"
+          },
+          "service": {
+            "type": "string"
+          },
+          "step": {
+            "type": "integer"
+          },
+          "thresholds": {
+            "$ref": "#/components/schemas/Thresholds"
+          },
+          "verdict": {
+            "type": "string"
+          },
+          "weight": {
+            "type": "integer"
+          },
+          "window_end": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "window_start": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "FrontendDemand": {
+        "type": "object",
+        "required": [
+          "org_id",
+          "cloud_id",
+          "target_id",
+          "project_id",
+          "environment_id",
+          "service",
+          "plan_id",
+          "provider",
+          "connection_id",
+          "account_id",
+          "target_revision",
+          "connection_generation",
+          "grant_revision"
+        ],
+        "properties": {
+          "account_id": {
+            "type": "string"
+          },
+          "cloud_id": {
+            "type": "string"
+          },
+          "connection_generation": {
+            "type": "integer"
+          },
+          "connection_id": {
+            "type": "string"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "grant_revision": {
+            "type": "integer"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "plan_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "service": {
+            "type": "string"
+          },
+          "target_id": {
+            "type": "string"
+          },
+          "target_revision": {
+            "type": "integer"
+          }
+        }
+      },
+      "Health": {
+        "type": "object",
+        "required": [
+          "requests",
+          "errors",
+          "latency_ms",
+          "available"
+        ],
+        "properties": {
+          "available": {
+            "type": "boolean"
+          },
+          "errors": {
+            "type": "number"
+          },
+          "latency_ms": {
+            "type": "number"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "requests": {
+            "type": "number"
+          },
+          "statistic": {
+            "type": "string"
+          }
+        }
+      },
+      "Release": {
+        "type": "object",
+        "required": [
+          "strategy",
+          "thresholds"
+        ],
+        "properties": {
+          "canary": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "hold_seconds": {
+            "type": "integer"
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "type": "integer"
+            }
+          },
+          "strategy": {
+            "type": "string"
+          },
+          "thresholds": {
+            "$ref": "#/components/schemas/Thresholds"
+          }
+        }
+      },
+      "Thresholds": {
+        "type": "object",
+        "required": [
+          "error_rate",
+          "error_rate_delta",
+          "p95_latency_ratio",
+          "min_requests"
+        ],
+        "properties": {
+          "error_rate": {
+            "type": "number"
+          },
+          "error_rate_delta": {
+            "type": "number"
+          },
+          "min_requests": {
+            "type": "number"
+          },
+          "p95_latency_ratio": {
+            "type": "number"
           }
         }
       }

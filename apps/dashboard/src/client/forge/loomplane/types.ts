@@ -290,6 +290,33 @@ export interface BuildTarget {
   registrySettings?: Record<string, any>;
 }
 
+export interface Canary {
+  holdSeconds: number;
+  reason?: string;
+  services: CanaryService[];
+  status: string;
+  step: number;
+  steps: number[];
+  thresholds: Thresholds;
+  updatedAt: string;
+  weight: number;
+}
+
+export interface CanaryReport {
+  canary?: Canary;
+  verdicts: CanaryVerdict[];
+}
+
+export interface CanaryService {
+  actionId: string;
+  baseline?: string;
+  bindingId: string;
+  candidate?: string;
+  image?: string;
+  name: string;
+  provider: string;
+}
+
 export interface CanaryVerdict {
   actionId: string;
   attempt: number;
@@ -892,6 +919,7 @@ export interface DeployedRepository {
 }
 
 export interface Deployment {
+  canary?: Canary;
   capacityWait?: CapacityWait;
   commitSha: string;
   environment: string;
@@ -1238,6 +1266,22 @@ export interface Finding {
   name?: string;
   path?: string;
   subject?: string;
+}
+
+export interface FrontendDemand {
+  accountId: string;
+  cloudId: string;
+  connectionGeneration: number;
+  connectionId: string;
+  environmentId: string;
+  grantRevision: number;
+  orgId: string;
+  planId: string;
+  projectId: string;
+  provider: string;
+  service: string;
+  targetId: string;
+  targetRevision: number;
 }
 
 export interface GPUDevice {
@@ -1589,6 +1633,7 @@ export interface ManagedRecord {
 export interface Manifest {
   databaseGateway?: DatabaseGateway;
   defaults?: Defaults;
+  environments?: Record<string, any>;
   federation?: Federation;
   gateways?: Record<string, any>;
   held?: Held;
@@ -2072,6 +2117,7 @@ export interface Plan {
   plannedAt?: string;
   problems: Finding[];
   projectId: string;
+  release?: Release;
   revision: string;
   rollback?: Rollback;
   sources: PlanSource[];
@@ -2509,6 +2555,14 @@ export interface RegistrationList {
   registrations: (Registration | null)[];
 }
 
+export interface Release {
+  canary?: string[];
+  holdSeconds?: number;
+  steps?: number[];
+  strategy: string;
+  thresholds: Thresholds;
+}
+
 export interface RemoveRouteInputBody {
   revision: number;
 }
@@ -2917,6 +2971,7 @@ export interface SaveInputBody {
   manifest?: {
   databaseGateway?: DatabaseGateway;
   defaults?: Defaults;
+  environments?: Record<string, any>;
   federation?: Federation;
   gateways?: Record<string, any>;
   held?: Held;
@@ -3092,6 +3147,7 @@ export interface ServiceConfig {
   execution: string;
   farp?: FarpConfig;
   framework?: string;
+  frontendDemand?: FrontendDemand;
   gateway?: GatewayRoute[];
   healthPath?: string;
   image?: string;
