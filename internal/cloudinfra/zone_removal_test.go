@@ -162,3 +162,81 @@ func TestRemoveZoneStopsAtTheFirstZoneItCannotClean(t *testing.T) {
 		}
 	}
 }
+
+// racingStore runs before just ahead of each RemoveZone, the way another
+// request can land between the cascade's checks and a delete. Like the
+// database, it deletes only at the revision given, and a zone that changed
+// or went is not found.
+type racingStore struct {
+	*overviewStore
+	before func(id string)
+}
+
+func (s *racingStore) RemoveZone(ctx context.Context, org, id string, revision int64) error {
+	if s.before != nil {
+		s.before(id)
+	}
+	if zone, err := s.Zone(ctx, org, id); err != nil || zone.Revision != revision {
+		return ErrNotFound
+	}
+	return s.overviewStore.RemoveZone(ctx, org, id, revision)
+}
+
+func racing(t *testing.T) (*Service, *overviewStore, *racingStore) {
+	t.Helper()
+	svc, st, _, _ := removalFixture(t)
+	withoutFamilyRoutes(st)
+	race := &racingStore{overviewStore: st}
+	svc.Domains = race
+	return svc, st, race
+}
+
+func bumpRevision(st *overviewStore, id string) {
+	for _, zone := range st.zones {
+		if zone.ID == id {
+			zone.Revision++
+		}
+	}
+}
+
+func TestRemoveZoneReportsAChangedSubdomainAsAConflict(t *testing.T) {
+	svc, st, race := racing(t)
+	race.before = func(id string) {
+		if id == "zone_app" {
+			bumpRevision(st, id)
+		}
+	}
+	err := svc.RemoveZone(t.Context(), overviewAdmin, "zone_root", 4)
+	if errors.Is(err, ErrNotFound) || !errors.Is(err, ErrConflict) {
+		t.Fatalf("a changed subdomain: %v", err)
+	}
+	if !strings.Contains(err.Error(), "app.loomplane.com changed since you looked, so loomplane.com was kept. Try again") {
+		t.Fatalf("message: %q", err.Error())
+	}
+	if ids := zoneIDs(st); !slices.Contains(ids, "zone_app") || !slices.Contains(ids, "zone_root") {
+		t.Fatalf("zones left: %v", ids)
+	}
+
+	// One that went is reported the same way.
+	svc, st, race = racing(t)
+	race.before = func(id string) {
+		if id == "zone_xapp" {
+			st.zones = slices.DeleteFunc(st.zones, func(z *Zone) bool { return z.ID == id })
+		}
+	}
+	err = svc.RemoveZone(t.Context(), overviewAdmin, "zone_root", 4)
+	if errors.Is(err, ErrNotFound) || !strings.Contains(err.Error(), "x.app.loomplane.com changed since you looked, so loomplane.com was kept") {
+		t.Fatalf("a vanished subdomain: %v", err)
+	}
+
+	// The zone you asked to remove changing is still not found.
+	svc, st, race = racing(t)
+	race.before = func(id string) {
+		if id == "zone_root" {
+			bumpRevision(st, id)
+		}
+	}
+	if err = svc.RemoveZone(t.Context(), overviewAdmin, "zone_root", 4); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("the requested zone: %v", err)
+	}
+}
