@@ -183,6 +183,8 @@ type ServiceConfig struct {
 	// Component is the catalog component the service runs, when a
 	// composed catalog kind runs one as a service.
 	Component *ComponentConfig `json:"component,omitempty"`
+	// GPU is the reviewed GPU placement of a service whose size asks for GPUs.
+	GPU *provider.GPUPlacement `json:"gpu,omitempty"`
 }
 
 // DatabaseGatewayConfig is what the database gateway serves: the
@@ -346,6 +348,8 @@ type ComponentConfig struct {
 	Component    recipes.ResolvedComponent   `json:"component"`
 	Dependencies map[string]DependencyChoice `json:"dependencies,omitempty"`
 	Protection   recipes.Protection          `json:"protection"`
+	// GPU is the reviewed GPU placement of a component that uses GPUs.
+	GPU *provider.GPUPlacement `json:"gpu,omitempty"`
 }
 
 // Change is one setting an update changes.

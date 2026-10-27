@@ -164,6 +164,11 @@ func (c *Client) Check(ctx context.Context) (*Result, error) {
 	if err := c.checkAccessPermissions(ctx, out); err != nil {
 		return nil, err
 	}
+	inv, gpuErr := c.GPUs(ctx)
+	if gpuErr != nil {
+		return nil, gpuErr
+	}
+	maps.Copy(out.Details, inv.Details())
 	return out, nil
 }
 

@@ -26,6 +26,13 @@ export interface APIKeyList {
   keys: APIKey[];
 }
 
+export interface Accelerator {
+  count: number;
+  kind: string;
+  memoryGib: number;
+  vendor: string;
+}
+
 export interface AccountSpend {
   cloud: string;
   connectionId: string;
@@ -1018,6 +1025,65 @@ export interface Finding {
   subject?: string;
 }
 
+export interface GPUDevice {
+  index: number;
+  kind: string;
+  memoryMib: number;
+  product: string;
+  uuid: string;
+}
+
+export interface GPUInventory {
+  checkedAt: string;
+  devices?: GPUDevice[];
+  message?: string;
+  nodes?: GPUNodeGroup[];
+  status: string;
+}
+
+export interface GPUNodeGroup {
+  hourlyPriceKnown: boolean;
+  hourlyUsd: number;
+  instanceType?: string;
+  kind: string;
+  memoryGib: number;
+  nodeSelector?: Record<string, any>;
+  nodes: number;
+  perNode: number;
+  product?: string;
+  tolerations?: GPUToleration[];
+  total: number;
+}
+
+export interface GPUTarget {
+  accelerator: Accelerator;
+  cloud: string;
+  code?: string;
+  connectionId: string;
+  fits: boolean;
+  free: number;
+  hourlyPriceKnown: boolean;
+  hourlyUsd: number;
+  message?: string;
+  name: string;
+  priceEstimate: boolean;
+  regions?: string[];
+  sizeId?: string;
+  source: string;
+}
+
+export interface GPUTargetList {
+  targets: GPUTarget[];
+  unreachable: UnreachableAccount[];
+}
+
+export interface GPUToleration {
+  effect: string;
+  key: string;
+  operator: string;
+  value?: string;
+}
+
 export interface GatewayList {
   gateways: GatewayStatus[];
 }
@@ -1526,11 +1592,15 @@ export interface OK {
 }
 
 export interface Operation {
+  absenceConfirmedAt?: string;
+  accelerator?: Accelerator;
   accountId: string;
   actions: InfrastructureAction[];
   attempt: number;
   attempted: boolean;
   bootstrapExpiresAt: string;
+  capacityCheckedAt?: string;
+  capacityTarget?: ResourceVector;
   cloudId: string;
   connectionGeneration?: number;
   connectionId: string;
@@ -1540,6 +1610,7 @@ export interface Operation {
   estimatedHourlyUsd: number;
   expiresAt: string;
   hostKey?: string;
+  hourlyPriceKnown?: boolean;
   id: string;
   input: ServerInput;
   message: string;
@@ -1618,6 +1689,8 @@ export interface Placement {
   connectionGeneration: number;
   connectionId: string;
   cpuMillis: number;
+  gpuKind?: string;
+  gpus?: number;
   memoryBytes: number;
   poolId: string;
   poolRevision: number;
@@ -1731,6 +1804,7 @@ export interface PolicyList {
 }
 
 export interface Pool {
+  acceleratorKind?: string;
   cloudId: string;
   id: string;
   members: PoolMember[];
@@ -1740,9 +1814,11 @@ export interface Pool {
 }
 
 export interface PoolInputBody {
+  acceleratorKind?: string;
   members: {
   cpuMillis: number;
   draining: boolean;
+  gpus?: number;
   memoryBytes: number;
   serverId: string;
 }[];
@@ -1757,6 +1833,7 @@ export interface PoolList {
 export interface PoolMember {
   cpuMillis: number;
   draining: boolean;
+  gpus?: number;
   memoryBytes: number;
   serverId: string;
 }
@@ -2146,6 +2223,15 @@ export interface ResourceConfig {
   version?: string;
 }
 
+export interface ResourceVector {
+  cpuMillis: number;
+  gpuKind?: string;
+  gpus?: number;
+  memoryBytes: number;
+  servers: number;
+  storageBytes: number;
+}
+
 export interface Resources {
   cpuMillis: number;
   memoryMb: number;
@@ -2418,7 +2504,12 @@ export interface RuntimeHealth {
   dockerId: string;
   effectiveCpuMillis: number;
   effectiveMemoryBytes: number;
+  freeStorageBytes?: number;
+  gpuMessage?: string;
+  gpuRuntime?: string;
+  gpus?: GPUDevice[];
   memoryBytes: number;
+  storageBytes?: number;
 }
 
 export interface SaveInputBody {
@@ -2444,6 +2535,7 @@ export interface Scale {
 }
 
 export interface Server {
+  accelerator?: Accelerator;
   accountId: string;
   cloudId: string;
   connectionId: string;
@@ -2451,10 +2543,13 @@ export interface Server {
   creationOperationId: string;
   draining: boolean;
   health: RuntimeHealth;
+  hourlyPriceKnown?: boolean;
+  hourlyUsd?: number;
   id: string;
   name: string;
   orgId: string;
   ownership: string;
+  pricedSize?: string;
   provider: string;
   region: string;
   resourceId: string;
@@ -2467,8 +2562,11 @@ export interface Server {
 }
 
 export interface ServerImage {
+  accelerators?: string[];
+  architecture?: string;
   bootstrap: boolean;
   id: string;
+  minDiskGb?: number;
   name: string;
   regions: string[];
 }
@@ -2515,8 +2613,11 @@ export interface ServerRegion {
 }
 
 export interface ServerSize {
+  accelerator?: Accelerator;
+  architectures?: string[];
   cpus: number;
   diskGb: number;
+  hourlyPriceKnown?: boolean;
   hourlyUsd: number;
   id: string;
   memoryMib: number;
@@ -2527,6 +2628,7 @@ export interface ServerSize {
 export interface ServerUsage {
   draining: boolean;
   reservedCpuMillis: number;
+  reservedGpus: number;
   reservedMemoryBytes: number;
   retainedStorage: RetainedPoolStorage[];
   serverId: string;
@@ -2540,6 +2642,7 @@ export interface ServerWorkload {
   deploymentId?: string;
   environmentId: string;
   executionRevision: number;
+  gpus: number;
   memoryBytes: number;
   phase: string;
   planId: string;
@@ -2856,6 +2959,12 @@ export interface TrafficReport {
   start: string;
   step: number;
   total: number;
+}
+
+export interface UnreachableAccount {
+  connectionId: string;
+  message: string;
+  name: string;
 }
 
 export interface UpdateInputBody {

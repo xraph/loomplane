@@ -27,10 +27,14 @@ type CloudPlacement struct {
 	ConnectionGeneration int64  `json:"connection_generation,omitempty"`
 	CPUMillis            int64  `json:"cpu_millis,omitempty"`
 	MemoryBytes          int64  `json:"memory_bytes,omitempty"`
-	GrantRevision        int64  `json:"grant_revision,omitempty"`
-	CloudID              string `json:"cloud_id"`
-	CloudRevision        int64  `json:"cloud_revision"`
-	AssignmentRevision   int64  `json:"assignment_revision"`
+	// GPUKind and GPUs are what a pool reserves for a service that asks
+	// for GPUs. A CPU pin leaves them out, so its stored shape is unchanged.
+	GPUKind            string `json:"gpu_kind,omitempty"`
+	GPUs               int64  `json:"gpus,omitempty"`
+	GrantRevision      int64  `json:"grant_revision,omitempty"`
+	CloudID            string `json:"cloud_id"`
+	CloudRevision      int64  `json:"cloud_revision"`
+	AssignmentRevision int64  `json:"assignment_revision"`
 	// Default marks a service placed by the Cloud's default rather than a
 	// target. It has no target ID, name or revision; the Cloud revision pins it.
 	Default         bool   `json:"default,omitempty"`
@@ -386,6 +390,7 @@ func resolveCloudPlacement(name, path string, set manifest.Settings, fallback bo
 		placement.Allocation = pool.Allocation
 		placement.CPUMillis = pool.CPUMillis
 		placement.MemoryBytes = pool.MemoryBytes
+		placement.GPUKind, placement.GPUs = pool.GPUKind, pool.GPUs
 	}
 	set.CloudTarget, set.CloudTags = "", nil
 	return placement, set, nil
@@ -545,7 +550,7 @@ func (p *planner) sameDeploymentAccount(a, b *Action) bool {
 
 // PoolPlacement returns the capacity fields used by admission and runtime checks.
 func (p *CloudPlacement) PoolPlacement() cloudinfra.Placement {
-	return cloudinfra.Placement{Allocation: p.Allocation, PoolID: p.PoolID, PoolRevision: p.PoolRevision, ServerID: p.ServerID, ServerRevision: p.ServerRevision, ConnectionID: p.ConnectionID, ConnectionGeneration: p.ConnectionGeneration, CPUMillis: p.CPUMillis, MemoryBytes: p.MemoryBytes}
+	return cloudinfra.Placement{Allocation: p.Allocation, PoolID: p.PoolID, PoolRevision: p.PoolRevision, ServerID: p.ServerID, ServerRevision: p.ServerRevision, ConnectionID: p.ConnectionID, ConnectionGeneration: p.ConnectionGeneration, CPUMillis: p.CPUMillis, MemoryBytes: p.MemoryBytes, GPUKind: p.GPUKind, GPUs: p.GPUs}
 }
 
 type poolResolver interface {
@@ -585,6 +590,7 @@ func (s *Service) resolvePools(ctx context.Context, plan *Plan, m *manifest.Mani
 			return nil, err
 		}
 		req := cloudinfra.PlacementRequest{PlanID: plan.ID, Planned: planned, OrgID: plan.OrgID, ProjectID: plan.ProjectID, EnvironmentID: plan.EnvironmentID, CloudID: a.CloudID, TargetID: t.ID, TargetRevision: t.Revision, PoolID: t.PoolID, Service: name, CPUMillis: cpu, MemoryBytes: mem, Replicas: 1}
+		req.GPUKind, req.GPUs = ServerGPUs(set.Size)
 		if set.Scale != nil {
 			if set.Scale.Min != 1 || set.Scale.Max != 1 {
 				return nil, fmt.Errorf("%s needs one replica on a pool server", name)
@@ -630,6 +636,9 @@ func (s *Service) resolvePools(ctx context.Context, plan *Plan, m *manifest.Mani
 				if err != nil {
 					return nil, err
 				}
+				// The GPUs stay the new size's: the runtime labels the
+				// container with them, so the reservation must hold the
+				// same count on the destination.
 				req.DestinationServerID = out[name].ServerID
 				out[name], err = resolver.PreviewPlacement(ctx, req)
 			}

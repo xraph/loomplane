@@ -110,7 +110,7 @@ func (s *FailedCleanups) Preview(ctx context.Context, p security.Principal, id s
 	if err != nil {
 		return nil, err
 	}
-	return &CleanupReview{DeploymentID: id, Revision: revision, Resource: a.Name, Provider: a.Provider, Region: a.Region, ConnectionID: cleanupConnection(plan, a), Effect: "Permanently stop deployment retries and delete its unpublished SQL instance and owned private endpoint. Request a final backup retained for 30 days. Unknown ownership blocks cleanup."}, nil
+	return &CleanupReview{DeploymentID: id, Revision: revision, Resource: a.Name, Provider: a.Provider, Region: a.Region, ConnectionID: cleanupConnection(plan, a), Effect: "Permanently stop deployment retries and delete its unpublished SQL instance and owned private endpoint. Request a final backup retained for 30 days. If the instance is already missing, no final backup can be created. Unknown ownership blocks cleanup."}, nil
 }
 
 func (s *FailedCleanups) load(ctx context.Context, org, id string) (*FailedCleanup, error) {

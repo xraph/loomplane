@@ -9,6 +9,8 @@ Loomplane can deploy to a Linux server over SSH, to a Kubernetes namespace, or t
 
 You need a Linux host with a Docker daemon, an existing private key and the server's verified public host key. The SSH user needs access to the Docker Unix socket and TCP forwarding for readiness checks. Loomplane doesn't install Docker and doesn't use sudo.
 
+If the server has NVIDIA GPUs, Loomplane finds them with `nvidia-smi` on every check. It needs the driver and the NVIDIA Container Toolkit in place first. [GPUs](/docs/clouds/gpus) has the steps.
+
 Choose a published host port for a public HTTP service. Private services use the environment's Docker network. A readiness path checks the application over SSH before its binding changes.
 
 ```yaml

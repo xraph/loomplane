@@ -10,6 +10,7 @@ import (
 	"github.com/xraph/loomplane/extensions/identity"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/security"
+	"github.com/xraph/loomplane/pkg/provider"
 	"github.com/xraph/loomplane/pkg/provider/sdk"
 )
 
@@ -193,6 +194,13 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 		forge.WithName("connectionStorage.list"),
 		forge.WithSummary("Owned persistent volumes and current attachment state"),
 		forge.WithResponseSchema(http.StatusOK, "Persistent storage", StorageVolumeList{}),
+	); err != nil {
+		return err
+	}
+	if err := g.GET("/connections/:id/gpus", e.gpus,
+		forge.WithName("connectionGpus.get"),
+		forge.WithSummary("GPUs a server or cluster connection can see, read live"),
+		forge.WithResponseSchema(http.StatusOK, "GPU inventory", provider.GPUInventory{}),
 	); err != nil {
 		return err
 	}

@@ -17,7 +17,7 @@ func (c *CloudSQL) ResolvePendingCloudResource(ctx context.Context, job *Job) (*
 	if err != nil {
 		return nil, err
 	}
-	if state.Stage == "instance" && !state.Uncertain && state.ResourceID == "" {
+	if state.FailedCreate == nil && state.Stage == "instance" && !state.Uncertain && state.ResourceID == "" {
 		raw, encodeErr := json.Marshal(state)
 		return &PendingCloudIdentity{Proof: raw}, encodeErr
 	}
@@ -26,6 +26,12 @@ func (c *CloudSQL) ResolvePendingCloudResource(ctx context.Context, job *Job) (*
 		return nil, err
 	}
 	cfg := job.Action.Resource
+	if state.Stage == "instance" && (state.FailedCreate != nil || state.Version >= 3 && state.Uncertain && state.Operation != "") {
+		identity, handled, inspectErr := state.resolveFailedCreate(ctx, client, sqlVersions[cfg.Kind+"/"+cfg.Version])
+		if handled || inspectErr != nil {
+			return identity, inspectErr
+		}
+	}
 	if recoverErr := state.recoverCreate(ctx, client, sqlVersions[cfg.Kind+"/"+cfg.Version]); recoverErr != nil {
 		return nil, recoverErr
 	}
@@ -39,7 +45,7 @@ func (c *CloudSQL) ResolvePendingCloudResource(ctx context.Context, job *Job) (*
 			return nil, checkErr
 		}
 	}
-	if checkErr := state.guarded(client, true).Check(ctx); checkErr != nil {
+	if checkErr := state.checkPendingSource(ctx, client); checkErr != nil {
 		return nil, checkErr
 	}
 	if state.PSC != nil {
@@ -120,6 +126,23 @@ func (c *CloudSQL) RemovePendingCloudResource(ctx context.Context, job *Job, ide
 	if !bytes.Equal([]byte(expected), owned) {
 		return errCloudSQLPSCOwnership
 	}
+	if state.FailedCreate != nil && state.FailedCreate.Absent {
+		if identity.ExternalID != "" || identity.PhysicalID != state.ResourceID {
+			return errors.New("absent failed create identity changed")
+		}
+		client, sessionErr := c.Google.Session(ctx, key)
+		if sessionErr != nil {
+			return sessionErr
+		}
+		proof, readErr := client.InspectSQLFailedCreate(ctx, state.FailedCreate.SQLCreateRequest, state.FailedCreate.Operation, func(ctx context.Context) error { return ctx.Err() })
+		if readErr != nil {
+			return readErr
+		}
+		if proof == nil || !proof.Absent || *proof != *state.FailedCreate {
+			return errors.New("failed create absence evidence changed")
+		}
+		return nil
+	}
 	if identity.ExternalID == "" {
 		if state.Stage != "instance" || state.Uncertain || state.ResourceID != "" || state.PSC != nil && state.PSC.Provision != (gcp.SQLPSCProvisionState{}) {
 			return errors.New("empty pending identity has creation evidence")
@@ -130,7 +153,7 @@ func (c *CloudSQL) RemovePendingCloudResource(ctx context.Context, job *Job, ide
 	if state.Uncertain || state.ResourceID == "" || state.ResourceID != identity.PhysicalID || identity.ExternalID != key.ProjectID+":"+cfg.Region+":"+state.Scope.Instance {
 		return errors.New("pending Cloud SQL identity differs from its original checkpoint")
 	}
-	if state.PSC != nil {
+	if state.PSC != nil && state.FailedCreate == nil {
 		client, sessionErr := c.Google.Session(ctx, key)
 		if sessionErr != nil {
 			return sessionErr
@@ -150,6 +173,16 @@ func (c *CloudSQL) RemovePendingCloudResource(ctx context.Context, job *Job, ide
 }
 
 func (s *cloudSQLState) restorePendingPSC(cfg *planning.ResourceConfig, b *planning.Binding, resumed bool, identity *PendingCloudIdentity) error {
+	if pendingFailedCreate(identity) {
+		var proof cloudSQLState
+		if err := decodeDatabaseCheckpoint(identity.Proof, &proof); err != nil {
+			return err
+		}
+		if proof.ResourceID != b.PhysicalID || proof.FailedCreate.Absent || proof.PSC != nil && (proof.PSC.Provision != (gcp.SQLPSCProvisionState{}) || proof.PSC.Endpoint != (gcp.SQLPSCProvisionedEndpoint{})) || s.PSC != nil || s.PSCCleanup != nil {
+			return errCloudSQLPSCOwnership
+		}
+		return nil
+	}
 	if !ownedCloudSQLPSC(cfg) {
 		return s.restorePSC(cfg, b, resumed)
 	}
@@ -174,4 +207,21 @@ func (s *cloudSQLState) restorePendingPSC(cfg *planning.ResourceConfig, b *plann
 		return errCloudSQLPSCOwnership
 	}
 	return nil
+}
+
+// A missing pinned source can be abandoned only when its endpoint has a saved
+// v3 source witness. The provider still validates that witness and every native
+// operation before exposing deletion ownership.
+func (s *cloudSQLState) checkPendingSource(ctx context.Context, client *gcp.Session) error {
+	if s.PSC == nil || s.PSC.Provision.Version != 3 || s.Uncertain || s.ResourceID == "" {
+		return s.guarded(client, true).Check(ctx)
+	}
+	in, err := client.GetSQLInstance(ctx, s.Scope.Instance)
+	if gcp.IsNotFound(err) {
+		return s.pscCheck(ctx)
+	}
+	if err != nil {
+		return err
+	}
+	return s.inspect(in, true)
 }

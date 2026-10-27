@@ -29,6 +29,9 @@ func (r *Registry) Resolve(kind, version, architecture, target string) (*Composi
 	c := &Composition{Kind: k.Name, Version: release.Version, Product: release.Product, Revision: release.Revision, Architecture: architecture, Target: target}
 	for _, component := range k.Components {
 		image := release.Images[component.Name]
+		if _, ok := image.Digests[architecture]; !ok {
+			return nil, fmt.Errorf("%s runs on NVIDIA GPUs and needs an amd64 target", kind)
+		}
 		c.Components = append(c.Components, ResolvedComponent{
 			Component: component,
 			Image:     image.Repository + "@" + image.Digests[architecture],

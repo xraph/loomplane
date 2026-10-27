@@ -11,6 +11,14 @@ import (
 
 // Direct execution holds the same daemon lock as pool enrollment through its
 // external effects, including connections that alias an adopted daemon.
+// Pooled actions never take it, GPU or not. Their pool reservation admits
+// them, and this transaction keeps a share lock on the connection row open
+// through the run, while a pooled run takes the organization lock in later
+// transactions. Pool saves, cloud sync and plan approval take the
+// organization lock first and the connection rows after, so a pooled action
+// holding this lock could wait on them while they wait on it. Two GPU
+// applies on one daemon are kept apart by the server runtime's own
+// gpu-devices lock instead (server.GPULocks).
 //
 // Locking protocol. The admission transaction stays open until Run returns
 // and holds two locks:
@@ -39,7 +47,7 @@ import (
 // advisory lock, so the row lock is what keeps it out of an admitted
 // deployment.
 func (r *Runner) directServerAdmission(ctx context.Context, p *planning.Plan, a planning.Action) (driver.Tx, error) {
-	if a.Provider != "server" || poolAction(a) || a.Op == planning.Delete || a.Op == planning.Keep {
+	if !holdsServerAdmission(a) {
 		return nil, nil
 	}
 	st, ok := r.store.(*PgStore)
@@ -67,4 +75,11 @@ func (r *Runner) directServerAdmission(ctx context.Context, p *planning.Plan, a 
 		return nil, err
 	}
 	return tx, nil
+}
+
+// holdsServerAdmission reports whether a server action holds its daemon's
+// host-admission lock through its effects. Only direct creates, replaces and
+// updates do.
+func holdsServerAdmission(a planning.Action) bool {
+	return a.Provider == "server" && !poolAction(a) && a.Op != planning.Delete && a.Op != planning.Keep
 }

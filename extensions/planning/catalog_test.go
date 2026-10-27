@@ -64,7 +64,7 @@ func TestCatalogKindListIncludesRegisteredKinds(t *testing.T) {
 	if last.Name != "sample" || last.Engine || last.Placement != recipes.PlacementAppProject {
 		t.Fatalf("last kind: %+v", last)
 	}
-	if len(list.Kinds) != 6 || list.Kinds[0].Name != "postgres" {
+	if len(list.Kinds) != 7 || list.Kinds[0].Name != "postgres" {
 		t.Fatalf("kinds: %+v", list.Kinds)
 	}
 }

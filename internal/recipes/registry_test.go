@@ -359,10 +359,10 @@ func TestKindsListsBuiltInsFirst(t *testing.T) {
 	for _, info := range infos {
 		names = append(names, info.Name)
 	}
-	if got := strings.Join(names, ","); got != "postgres,mysql,mariadb,redis,valkey,pgtest,sample" {
+	if got := strings.Join(names, ","); got != "postgres,mysql,mariadb,redis,valkey,gpusample,pgtest,sample" {
 		t.Fatalf("kinds in the wrong order: %s", got)
 	}
-	postgres, sample := infos[0], infos[6]
+	postgres, sample := infos[0], infos[7]
 	if !postgres.Engine || strings.Join(postgres.Versions, ",") != "17" || strings.Join(postgres.Targets, ",") != "server,kubernetes" || postgres.Placement != recipes.PlacementServiceProject {
 		t.Fatalf("postgres info: %+v", postgres)
 	}

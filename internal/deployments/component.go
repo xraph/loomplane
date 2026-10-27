@@ -128,9 +128,10 @@ func componentService(cfg *planning.ResourceConfig) *planning.ServiceConfig {
 }
 
 // componentSpec runs a component as its recipe declares: its command, every
-// port, its resources and its catalog labels. Only a component with a
-// volume is stateful.
-func componentSpec(sp *cpprovider.ServiceSpec, labels map[string]string, cfg *planning.ComponentConfig) {
+// port, its resources, its GPUs and its catalog labels. Only a component
+// with a volume or a weight cache is stateful. providerName is the
+// target's provider, since only Kubernetes sizes a weight cache.
+func componentSpec(sp *cpprovider.ServiceSpec, labels map[string]string, cfg *planning.ComponentConfig, providerName string) {
 	c := cfg.Component
 	sp.Command, sp.Args = c.Command, c.Args
 	sp.Ports = make([]cpprovider.PortSpec, 0, len(c.Ports))
@@ -160,6 +161,7 @@ func componentSpec(sp *cpprovider.ServiceSpec, labels map[string]string, cfg *pl
 		rules, _ := json.Marshal(c.KubernetesRules) //nolint:errcheck // string slices always encode
 		labels[owned.LabelKubernetesRules] = string(rules)
 	}
+	gpuSpec(sp, labels, cfg.GPU, c.Resources.ShmMB, c.WeightCache, providerName)
 }
 
 func componentPort(c recipes.Component, name string) (recipes.Port, bool) {
