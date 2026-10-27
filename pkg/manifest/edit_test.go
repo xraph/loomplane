@@ -437,3 +437,178 @@ services:
 	}
 	check("ignoring a kind", out)
 }
+
+const modelDoc = `# Acme's manifest.
+version: 1
+services:
+  api:
+    source: services/api
+    needs: [llm] # the model
+resources:
+  # The model, on the GPU server.
+  llm:
+    kind: sample # catalog kind
+    provider: server
+    target: conn_1
+    settings:
+      model: acme/x # the weights
+      file: model.gguf
+  db:
+    kind: postgres
+`
+
+func TestWithResourceUpdate(t *testing.T) {
+	target := "conn_2"
+	gpu := &GPU{Kind: "nvidia-l40s", Count: 1}
+	out, err := WithResourceUpdate([]byte(modelDoc), "llm", ResourceUpdate{
+		Target:   &target,
+		GPU:      &gpu,
+		Settings: map[string]string{"max_model_len": "8192", "file": ""},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []string{"# Acme's manifest.", "# The model, on the GPU server.", "# catalog kind", "# the weights", "# the model"} {
+		if !strings.Contains(string(out), c) {
+			t.Errorf("lost %q:\n%s", c, out)
+		}
+	}
+	m, err := Parse(out)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	want := Resource{
+		Kind: "sample", Provider: "server", Target: "conn_2", GPU: &GPU{Kind: "nvidia-l40s", Count: 1},
+		Settings: map[string]string{"model": "acme/x", "max_model_len": "8192"},
+	}
+	if got := m.Resources["llm"]; !reflect.DeepEqual(got, want) {
+		t.Errorf("llm = %+v, want %+v\n%s", got, want, out)
+	}
+	// The fields keep their order, and new ones go at the end.
+	text := string(out)
+	order := []string{"kind: sample", "provider: server", "target: conn_2", "settings:", "model: acme/x", "max_model_len", "gpu:"}
+	for i := 1; i < len(order); i++ {
+		if strings.Index(text, order[i-1]) >= strings.Index(text, order[i]) {
+			t.Errorf("%q isn't before %q:\n%s", order[i-1], order[i], out)
+		}
+	}
+
+	// A nil field keeps what is there; a GPU pointing at nil removes it,
+	// and so does deleting the last setting.
+	var none *GPU
+	out, err = WithResourceUpdate(out, "llm", ResourceUpdate{GPU: &none, Settings: map[string]string{"model": "", "max_model_len": ""}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, _ = Parse(out)
+	if got := m.Resources["llm"]; got.GPU != nil || got.Settings != nil || got.Target != "conn_2" || got.Provider != "server" {
+		t.Errorf("llm = %+v\n%s", got, out)
+	}
+
+	if _, err := WithResourceUpdate([]byte(modelDoc), "nope", ResourceUpdate{Target: &target}); !errors.Is(err, ErrInvalid) {
+		t.Errorf("unknown resource: %v", err)
+	}
+	if _, err := WithResourceUpdate([]byte(modelDoc), "llm", ResourceUpdate{Settings: map[string]string{"Bad": "x"}}); err == nil {
+		t.Error("a bad setting name was written")
+	}
+}
+
+func TestWithoutResource(t *testing.T) {
+	out, err := WithoutResource([]byte(modelDoc), "db")
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := Parse(out)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if _, ok := m.Resources["db"]; ok || m.Resources["llm"].Kind != "sample" {
+		t.Errorf("resources %+v\n%s", m.Resources, out)
+	}
+	if !strings.Contains(string(out), "# The model, on the GPU server.") {
+		t.Errorf("lost a comment:\n%s", out)
+	}
+
+	_, err = WithoutResource([]byte(modelDoc), "llm")
+	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "service api") {
+		t.Errorf("removing a needed resource: %v", err)
+	}
+	used := strings.Replace(modelDoc, "  db:\n    kind: postgres\n", "  db:\n    kind: postgres\n  fabriq:\n    kind: sample\n    uses:\n      postgres: {resource: db}\n", 1)
+	if _, err = WithoutResource([]byte(used), "db"); !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "resource fabriq") {
+		t.Errorf("removing a used resource: %v", err)
+	}
+	if _, err = WithoutResource([]byte(modelDoc), "nope"); !errors.Is(err, ErrInvalid) {
+		t.Errorf("unknown resource: %v", err)
+	}
+
+	// The last resource takes the section with it.
+	out, err = WithoutResource([]byte("version: 1\nresources:\n  db: {kind: postgres}\n"), "db")
+	if err != nil || strings.Contains(string(out), "resources") {
+		t.Errorf("%v\n%s", err, out)
+	}
+}
+
+func TestWithResourceEnabled(t *testing.T) {
+	doc := strings.Replace(modelDoc, "    target: conn_1\n", "    target: conn_1\n    environments:\n      production: {provider: kubernetes, region: eu} # the cluster\n", 1)
+	out, err := WithResourceEnabled([]byte(doc), "llm", "staging", false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := Parse(out)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	envs := m.Resources["llm"].Environments
+	if s := envs["staging"]; s.Enabled == nil || *s.Enabled {
+		t.Errorf("staging %+v\n%s", s, out)
+	}
+	if p := envs["production"]; p.Provider != "kubernetes" || p.Region != "eu" || p.Enabled != nil {
+		t.Errorf("production %+v\n%s", p, out)
+	}
+	if !strings.Contains(string(out), "# the cluster") {
+		t.Errorf("lost a comment:\n%s", out)
+	}
+
+	out, err = WithResourceEnabled(out, "llm", "staging", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, _ = Parse(out)
+	if s := m.Resources["llm"].Environments["staging"]; s.Enabled == nil || !*s.Enabled {
+		t.Errorf("staging %+v\n%s", s, out)
+	}
+	out, err = WithResourceEnabled(out, "llm", "production", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, _ = Parse(out)
+	if p := m.Resources["llm"].Environments["production"]; p.Provider != "kubernetes" || p.Region != "eu" || p.Enabled == nil || !*p.Enabled {
+		t.Errorf("production %+v\n%s", p, out)
+	}
+
+	if _, err := WithResourceEnabled([]byte(doc), "nope", "staging", true); !errors.Is(err, ErrInvalid) {
+		t.Errorf("unknown resource: %v", err)
+	}
+	if _, err := WithResourceEnabled([]byte(doc), "llm", "Staging!", true); !errors.Is(err, ErrInvalid) {
+		t.Errorf("bad environment name: %v", err)
+	}
+}
+
+func TestWithResourceWritesSettingsAndGPU(t *testing.T) {
+	want := Resource{
+		Kind: "sample", Provider: "server", Target: "conn_1",
+		GPU:      &GPU{Kind: "nvidia-l4", Count: 2},
+		Settings: map[string]string{"model": "acme/x", "size": "1"},
+	}
+	out, err := WithResource([]byte(commented), "llm", want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := Parse(out)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if got := m.Resources["llm"]; !reflect.DeepEqual(got, want) {
+		t.Errorf("llm = %+v, want %+v\n%s", got, want, out)
+	}
+}

@@ -7,6 +7,7 @@ import (
 
 	"github.com/xraph/loomplane/internal/catalogconnect"
 	"github.com/xraph/loomplane/internal/recipes"
+	"github.com/xraph/loomplane/pkg/provider"
 )
 
 // CatalogHooks is what a composed catalog kind does beyond its recipe.
@@ -72,6 +73,12 @@ type ComponentRun struct {
 	// component runs with, such as a cluster's "namespace". They're a
 	// copy: changing them changes nothing.
 	TargetSettings map[string]string
+	// Settings are the resource's settings, by name, defaults filled in,
+	// as the plan reviewed them. They're a copy.
+	Settings map[string]string
+	// GPU is the component's reviewed GPU placement, or nil without one.
+	// It's a copy.
+	GPU *provider.GPUPlacement
 }
 
 // ConsumerBinder is implemented by the hooks of a kind with an Output that

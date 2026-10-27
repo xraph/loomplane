@@ -327,7 +327,154 @@ func WithResource(doc []byte, name string, r Resource) ([]byte, error) {
 		}
 		value.Content = append(value.Content, scalar("uses"), uses)
 	}
+	if r.GPU != nil {
+		value.Content = append(value.Content, scalar("gpu"), gpuNode(*r.GPU))
+	}
+	if len(r.Settings) > 0 {
+		settings := &yaml.Node{Kind: yaml.MappingNode}
+		for _, key := range sortedKeys(r.Settings) {
+			settings.Content = append(settings.Content, scalar(key), scalar(r.Settings[key]))
+		}
+		value.Content = append(value.Content, scalar("settings"), settings)
+	}
 	resources.Content = append(resources.Content, scalar(name), value)
+	return encode(file)
+}
+
+// gpuNode is a GPU request as YAML.
+func gpuNode(g GPU) *yaml.Node {
+	return &yaml.Node{Kind: yaml.MappingNode, Content: []*yaml.Node{
+		scalar("kind"), scalar(g.Kind),
+		scalar("count"), {Kind: yaml.ScalarNode, Tag: "!!int", Value: strconv.Itoa(g.Count)},
+	}}
+}
+
+// ResourceUpdate changes an existing resource. A nil field keeps what is
+// there.
+type ResourceUpdate struct {
+	// Provider and Target replace the resource's own; "" removes it.
+	Provider, Target *string
+	// GPU replaces the resource's GPU request, or removes it when it
+	// points at nil.
+	GPU **GPU
+	// Settings sets each key, and "" deletes the key. Keys left out stay.
+	Settings map[string]string
+}
+
+// WithResourceUpdate changes an existing resource in place, keeping its
+// comments and the order of its fields. An unknown resource is an error.
+func WithResourceUpdate(doc []byte, resource string, u ResourceUpdate) ([]byte, error) {
+	root, file, err := mapping(doc)
+	if err != nil {
+		return nil, err
+	}
+	res, err := editTarget(root, "resources", resource)
+	if err != nil {
+		return nil, err
+	}
+	for _, field := range []struct {
+		key   string
+		value *string
+	}{{"provider", u.Provider}, {"target", u.Target}} {
+		key, value := field.key, field.value
+		switch {
+		case value == nil:
+		case *value == "":
+			removeChild(res, key)
+		default:
+			setChild(res, key, scalar(*value))
+		}
+	}
+	if u.GPU != nil {
+		if *u.GPU == nil {
+			removeChild(res, "gpu")
+		} else {
+			setChild(res, "gpu", gpuNode(**u.GPU))
+		}
+	}
+	if len(u.Settings) > 0 {
+		settings, err := editMapping(res, "settings")
+		if err != nil {
+			return nil, fmt.Errorf("%w: resources.%s.%w", ErrInvalid, resource, err)
+		}
+		for _, key := range sortedKeys(u.Settings) {
+			if u.Settings[key] == "" {
+				removeChild(settings, key)
+			} else {
+				setChild(settings, key, scalar(u.Settings[key]))
+			}
+		}
+		if len(settings.Content) == 0 {
+			removeChild(res, "settings")
+		}
+	}
+	return encode(file)
+}
+
+// WithoutResource removes a resource. It refuses while a service needs it
+// or another resource uses it, naming them, since the manifest wouldn't
+// make sense without it.
+func WithoutResource(doc []byte, resource string) ([]byte, error) {
+	root, file, err := mapping(doc)
+	if err != nil {
+		return nil, err
+	}
+	if _, err = editTarget(root, "resources", resource); err != nil {
+		return nil, err
+	}
+	m, err := Parse(doc)
+	if err != nil {
+		return nil, err
+	}
+	var users []string
+	for _, name := range m.ServiceNames() {
+		if slices.Contains(m.Services[name].Needs, resource) {
+			users = append(users, "service "+name)
+		}
+	}
+	for _, name := range m.ResourceNames() {
+		for _, u := range m.Resources[name].Uses {
+			if u.Resource == resource {
+				users = append(users, "resource "+name)
+				break
+			}
+		}
+	}
+	if len(users) > 0 {
+		return nil, fmt.Errorf("%w: %s still uses %s; unlink it first", ErrInvalid, strings.Join(users, ", "), resource)
+	}
+	resources := child(root, "resources")
+	removeChild(resources, resource)
+	if len(resources.Content) == 0 {
+		removeChild(root, "resources")
+	}
+	return encode(file)
+}
+
+// WithResourceEnabled turns a resource on or off in one environment, under
+// environments.<environment>.enabled. The environment's other overrides
+// stay as they are.
+func WithResourceEnabled(doc []byte, resource, environment string, enabled bool) ([]byte, error) {
+	root, file, err := mapping(doc)
+	if err != nil {
+		return nil, err
+	}
+	if !envRE.MatchString(environment) {
+		return nil, fmt.Errorf("%w: %q isn't an environment name", ErrInvalid, environment)
+	}
+	res, err := editTarget(root, "resources", resource)
+	if err != nil {
+		return nil, err
+	}
+	envs, err := editMapping(res, "environments")
+	if err != nil {
+		return nil, fmt.Errorf("%w: resources.%s.%w", ErrInvalid, resource, err)
+	}
+	env, err := editMapping(envs, environment)
+	if err != nil {
+		return nil, fmt.Errorf("%w: resources.%s.environments.%w", ErrInvalid, resource, err)
+	}
+	setChild(env, "enabled", &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: strconv.FormatBool(enabled)})
 	return encode(file)
 }
 
@@ -387,7 +534,7 @@ func WithNeed(doc []byte, service, need string, options map[string]string) ([]by
 		changed = true
 	}
 	if len(options) > 0 {
-		all, err := editMapping(svc, "need_options", true)
+		all, err := editMapping(svc, "need_options")
 		if err != nil {
 			return nil, fmt.Errorf("%w: services.%s.%w", ErrInvalid, service, err)
 		}
@@ -452,7 +599,7 @@ func WithUse(doc []byte, resource, dependency string, u Use) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	uses, err := editMapping(res, "uses", true)
+	uses, err := editMapping(res, "uses")
 	if err != nil {
 		return nil, fmt.Errorf("%w: resources.%s.%w", ErrInvalid, resource, err)
 	}
@@ -473,15 +620,15 @@ func editTarget(root *yaml.Node, section, name string) (*yaml.Node, error) {
 }
 
 // editMapping is the mapping under key, made if it's missing or empty.
-func editMapping(m *yaml.Node, key string, create bool) (*yaml.Node, error) {
+func editMapping(m *yaml.Node, key string) (*yaml.Node, error) {
 	n := child(m, key)
 	switch {
-	case n == nil && create:
+	case n == nil:
 		n = &yaml.Node{Kind: yaml.MappingNode}
 		m.Content = append(m.Content, scalar(key), n)
-	case n != nil && n.Kind == yaml.ScalarNode && n.Tag == "!!null":
+	case n.Kind == yaml.ScalarNode && n.Tag == "!!null":
 		n.Kind, n.Tag, n.Value, n.Style = yaml.MappingNode, "!!map", "", 0
-	case n == nil || n.Kind != yaml.MappingNode:
+	case n.Kind != yaml.MappingNode:
 		return nil, fmt.Errorf("%s isn't a mapping the edit can change", key)
 	}
 	return n, nil

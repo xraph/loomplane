@@ -113,6 +113,7 @@ func (p *planner) planComposed(name string) {
 		})
 		return
 	}
+	values := p.resourceSettings(name, base, r, kind)
 	set := r.For(p.in.Environment, m.Defaults)
 	var able []*provider.Provider
 	for _, prov := range p.in.Providers.List() {
@@ -124,7 +125,40 @@ func (p *planner) planComposed(name string) {
 	if prov == nil {
 		return
 	}
-	p.planComposition(name, base, r, kind, prov, set)
+	p.planComposition(name, base, r, kind, prov, set, values)
+}
+
+// resourceSettings checks a composed resource's settings against its
+// kind's, and returns every setting that has a value, defaults filled in.
+func (p *planner) resourceSettings(name, base string, r manifest.Resource, kind recipes.Kind) map[string]string {
+	for _, key := range slices.Sorted(maps.Keys(r.Settings)) {
+		if !slices.ContainsFunc(kind.Settings, func(s recipes.Setting) bool { return s.Name == key }) {
+			p.problem(Finding{
+				Code: "catalog-setting-unknown", Subject: ResourceSubject, Name: name, Path: base + ".settings." + key,
+				Message: fmt.Sprintf("%s has no setting %s.", name, key),
+			})
+		}
+	}
+	out := map[string]string{}
+	for _, s := range kind.Settings {
+		path := base + ".settings." + s.Name
+		value := r.Settings[s.Name]
+		switch {
+		case value == "" && s.Default != "":
+			out[s.Name] = s.Default
+		case value == "" && s.Required:
+			p.problem(Finding{Code: "catalog-setting-required", Subject: ResourceSubject, Name: name, Path: path, Message: fmt.Sprintf("%s needs %s.", name, s.Title)})
+		case value == "":
+		case !s.Matches(value):
+			p.problem(Finding{Code: "catalog-setting-invalid", Subject: ResourceSubject, Name: name, Path: path, Message: fmt.Sprintf("%s's %s doesn't look right.", name, s.Title)})
+		default:
+			out[s.Name] = value
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // planComposition expands a composed catalog resource into ordinary
@@ -132,7 +166,7 @@ func (p *planner) planComposed(name string) {
 // each component (step 2, or one after the deepest dependency action, plus
 // its start rank), and one for the resource itself, after its last
 // component, which publishes its outputs.
-func (p *planner) planComposition(name, base string, r manifest.Resource, kind recipes.Kind, prov *provider.Provider, set manifest.ResourceSettings) {
+func (p *planner) planComposition(name, base string, r manifest.Resource, kind recipes.Kind, prov *provider.Provider, set manifest.ResourceSettings, values map[string]string) {
 	if !OwnedCloud(prov.Cloud) || !slices.Contains(kind.Targets, prov.Cloud) {
 		p.problem(Finding{Code: "catalog-target-unsupported", Subject: ResourceSubject, Name: name, Path: base + ".provider", Message: fmt.Sprintf("%s can't run %s. Choose an existing server.", prov.Title, kind.Title)})
 		return
@@ -217,7 +251,7 @@ func (p *planner) planComposition(name, base string, r manifest.Resource, kind r
 		}
 		parts = append(parts, id)
 		cfg := resource()
-		cfg.Component = &ComponentConfig{Kind: kind.Name, Resource: name, Revision: composition.Revision, Component: c, Dependencies: choices, Protection: ComponentProtection(c.Component), Inputs: p.in.Inputs[name][c.Name]}
+		cfg.Component = &ComponentConfig{Kind: kind.Name, Resource: name, Revision: composition.Revision, Component: c, Dependencies: choices, Protection: ComponentProtection(c.Component), Inputs: p.in.Inputs[name][c.Name], Settings: maps.Clone(values)}
 		cfg.Component.GPU = p.componentGPU(name, p.gpuPath(name), kind, c.Component, set.GPU, connection)
 		creates := componentCreates(kind.Title, c.Component)
 		if c.Role != recipes.RoleJob {
@@ -738,9 +772,13 @@ func (p *planner) namedChanges(a *Action) {
 		if from, to := gpuText(w.GPU), gpuText(n.GPU); from != to {
 			named = append(named, Change{Field: "gpu", From: from, To: to})
 		}
+		if from, to := settingsText(w.Settings), settingsText(n.Settings); from != to {
+			named = append(named, Change{Field: "settings", From: from, To: to})
+		}
 		w.Revision, n.Revision = "", ""
 		w.Component.Image, n.Component.Image = "", ""
 		w.GPU, n.GPU = nil, nil
+		w.Settings, n.Settings = nil, nil
 		was, now = w, n
 	case a.Resource.Composition != nil && old.Composition != nil:
 		w, n := *old.Composition, *a.Resource.Composition
@@ -757,6 +795,16 @@ func (p *planner) namedChanges(a *Action) {
 	}
 	a.Changes = append(a.Changes, named...)
 	sort.SliceStable(a.Changes, func(i, j int) bool { return a.Changes[i].Field < a.Changes[j].Field })
+}
+
+// settingsText is a component's settings as one line, by name: name=value,
+// separated by commas.
+func settingsText(settings map[string]string) string {
+	parts := make([]string, 0, len(settings))
+	for _, name := range slices.Sorted(maps.Keys(settings)) {
+		parts = append(parts, name+"="+settings[name])
+	}
+	return strings.Join(parts, ", ")
 }
 
 // linkComposition gives a service a variable for each of a composed

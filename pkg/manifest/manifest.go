@@ -291,6 +291,9 @@ type Resource struct {
 	Uses map[string]Use `json:"uses,omitempty" yaml:"uses,omitempty"`
 	// GPU asks for GPUs, for catalog resources that can use them.
 	GPU *GPU `json:"gpu,omitempty" yaml:"gpu,omitempty"`
+	// Settings are values a catalog kind takes, by setting name. The kind
+	// says which it has and what each must look like; the planner checks.
+	Settings map[string]string `json:"settings,omitempty" yaml:"settings,omitempty"`
 	// Environments override the provider or region in one environment, or
 	// leave the resource out of it.
 	Environments map[string]ResourceSettings `json:"environments,omitempty" yaml:"environments,omitempty"`
@@ -427,6 +430,10 @@ var (
 
 // MaxOptionValue is the most characters one need option's value can have.
 const MaxOptionValue = 200
+
+// MaxSettingValue is the most characters one resource setting's value can
+// have.
+const MaxSettingValue = 1024
 
 // Problem is one thing wrong with a manifest, at a path such as
 // "services.api.scale".
@@ -606,6 +613,7 @@ func (m *Manifest) Validate() error {
 			checkGPU(add, epath+".gpu", o.GPU)
 		}
 		checkGPU(add, path+".gpu", r.GPU)
+		checkResourceSettings(add, path+".settings", r.Settings)
 	}
 
 	for _, name := range m.ServiceNames() {
@@ -820,6 +828,19 @@ func checkSettings(add func(string, string, ...any), path string, s Settings) {
 			add(path+".size.shm", "can't be negative")
 		} else if s.Size.Shm >= s.Size.Memory && s.Size.Shm > 0 {
 			add(path+".size.shm", "(%d MiB) must be less than memory (%d MiB), which it counts toward", s.Size.Shm, s.Size.Memory)
+		}
+	}
+}
+
+// checkResourceSettings checks a resource's settings: names and lengths.
+// Whether the kind takes them is the planner's question.
+func checkResourceSettings(add func(string, string, ...any), path string, settings map[string]string) {
+	for _, name := range sortedKeys(settings) {
+		if !optionRE.MatchString(name) {
+			add(path+"."+name, "the name must be a lower case letter, then up to 31 lower case letters, digits and underscores")
+		}
+		if n := utf8.RuneCountInString(settings[name]); n > MaxSettingValue {
+			add(path+"."+name, "is %d characters; the most is %d", n, MaxSettingValue)
 		}
 	}
 }

@@ -201,11 +201,33 @@ func (e *OwnedTarget) checkComponent(cfg *planning.ResourceConfig) (recipes.Kind
 		return recipes.Kind{}, errRecipeChanged
 	}
 	resolved := composition.Components[i]
-	expected := planning.ComponentConfig{Kind: composition.Kind, Resource: c.Resource, Revision: composition.Revision, Component: resolved, Dependencies: c.Dependencies, Protection: planning.ComponentProtection(resolved.Component)}
-	if !sameJSON(expected, *c) {
+	// The GPU placement, outside inputs and settings come from the reviewed
+	// plan, not the recipe. Settings still have to be ones the kind takes.
+	expected := planning.ComponentConfig{
+		Kind: composition.Kind, Resource: c.Resource, Revision: composition.Revision, Component: resolved, Dependencies: c.Dependencies, Protection: planning.ComponentProtection(resolved.Component),
+		GPU: c.GPU, Inputs: c.Inputs, Settings: c.Settings,
+	}
+	if !sameJSON(expected, *c) || !settingsFit(kind.Settings, c.Settings) {
 		return recipes.Kind{}, errRecipeChanged
 	}
 	return kind, nil
+}
+
+// settingsFit reports whether a component's settings are ones the kind
+// takes, each matching its pattern, with every required one set.
+func settingsFit(kind []recipes.Setting, settings map[string]string) bool {
+	for name, value := range settings {
+		i := slices.IndexFunc(kind, func(s recipes.Setting) bool { return s.Name == name })
+		if i < 0 || !kind[i].Matches(value) {
+			return false
+		}
+	}
+	for _, s := range kind {
+		if _, ok := settings[s.Name]; s.Required && !ok {
+			return false
+		}
+	}
+	return true
 }
 
 // applyComponent runs one component of a composed resource. A process runs
@@ -623,6 +645,18 @@ func (e *OwnedTarget) deleteRuntimeFiles(ctx context.Context, org, environment, 
 	return e.Secrets.Delete(ctx, ref+runtimeFilesSuffix)
 }
 
+// cloneGPUPlacement copies a GPU placement, so a hook can't change the
+// reviewed one.
+func cloneGPUPlacement(g *provider.GPUPlacement) *provider.GPUPlacement {
+	if g == nil {
+		return nil
+	}
+	out := *g
+	out.NodeSelector = maps.Clone(g.NodeSelector)
+	out.Tolerations = slices.Clone(g.Tolerations)
+	return &out
+}
+
 // declaresFiles reports whether a binding is a catalog component with
 // rendered files.
 func declaresFiles(b *planning.Binding) bool {
@@ -643,6 +677,8 @@ func (e *OwnedTarget) componentEnv(ctx context.Context, job *Job, kind recipes.K
 		Env: map[string]string{}, Secrets: map[string][]byte{},
 		Channel:        e.runChannel(job, nil),
 		TargetSettings: maps.Clone(cfg.TargetSettings),
+		Settings:       maps.Clone(cfg.Component.Settings),
+		GPU:            cloneGPUPlacement(cfg.Component.GPU),
 	}
 	reads := e.reads(job, kind, cfg.Component.Resource, cfg.Component.Dependencies)
 	if dependencyOnly(kind) {

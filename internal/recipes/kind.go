@@ -3,6 +3,7 @@ package recipes
 import (
 	"io/fs"
 	"maps"
+	"regexp"
 	"slices"
 	"time"
 )
@@ -58,6 +59,28 @@ type Kind struct {
 	// FeatureAI, or "" for none. Planning refuses the kind while that
 	// feature is off on the server, and the catalog doesn't list it.
 	Feature string `json:"feature,omitempty"` // ^[a-z]{0,16}$
+	// Settings are the values a resource of the kind sets under
+	// resources.<name>.settings. Planning checks them and hands every
+	// one, defaults filled, to each component.
+	Settings []Setting `json:"settings,omitempty"`
+}
+
+// Setting is a value a resource of the kind sets under
+// resources.<name>.settings.<Name>. A setting is copied verbatim into
+// plans, bindings and deployment runs, so a kind must never take a secret
+// as one.
+type Setting struct {
+	Name     string `json:"name"` // ^[a-z][a-z0-9_]{0,31}$
+	Title    string `json:"title"`
+	Pattern  string `json:"pattern"` // a Go regexp the whole value must match; required
+	Required bool   `json:"required,omitempty"`
+	Default  string `json:"default,omitempty"` // must match Pattern
+}
+
+// Matches reports whether value matches the setting's pattern as a whole.
+func (s Setting) Matches(value string) bool {
+	re, err := regexp.Compile(`^(?:` + s.Pattern + `)$`)
+	return err == nil && re.MatchString(value)
 }
 
 // FeatureAI is the feature of the kinds that need the server's AI section
@@ -381,6 +404,7 @@ func (k Kind) clone() Kind {
 		k.Outputs[i].From = k.Outputs[i].From.clone()
 	}
 	k.ConsumerOptions = slices.Clone(k.ConsumerOptions)
+	k.Settings = slices.Clone(k.Settings)
 	return k
 }
 

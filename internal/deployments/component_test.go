@@ -1640,6 +1640,82 @@ func TestComponentRunCarriesTargetSettings(t *testing.T) {
 	}
 }
 
+// sampleWithSettings is sampleWithFiles whose kind takes a required model
+// and a size.
+func sampleWithSettings(t *testing.T) *recipes.Registry {
+	t.Helper()
+	return sampleKinds(t, func(k *recipes.Kind) {
+		for i := range k.Components {
+			if k.Components[i].Name == "api" || k.Components[i].Name == "migrate" {
+				k.Components[i].Files = []recipes.File{{Path: sampleConfig}}
+			}
+		}
+		k.Settings = []recipes.Setting{
+			{Name: "model", Title: "Model", Pattern: "[a-z0-9-]+/[a-z0-9.-]+", Required: true},
+			{Name: "size", Title: "Size", Pattern: "[0-9]+", Default: "1"},
+		}
+	})
+}
+
+func TestComponentRunCarriesSettingsAndGPU(t *testing.T) {
+	f := newComponentFixture(t, sampleWithSettings(t))
+	hooks := &fileHooks{files: map[string][]byte{sampleConfig: []byte("listen: 8080\n")}}
+	f.target.Hooks["sample"] = hooks
+	f.secrets.m[ResourceKey("org", "env", "app--postgres", "url")] = []byte(postgresURL)
+	job := f.componentJob(t, "api", newPostgres)
+	cfg := job.Action.Resource.Component
+	cfg.Settings = map[string]string{"model": "acme/x", "size": "1"}
+	cfg.Inputs = "sha256:a"
+	cfg.GPU = &provider.GPUPlacement{
+		GPURequest:   provider.GPURequest{Kind: "nvidia-l4", Count: 1},
+		NodeSelector: map[string]string{"gpu": "l4"},
+		Tolerations:  []provider.GPUToleration{{Key: "nvidia.com/gpu", Operator: "Exists", Effect: "NoSchedule"}},
+	}
+	if _, err := f.target.Apply(t.Context(), job); err != nil {
+		t.Fatal(err)
+	}
+	for what, runs := range map[string][]ComponentRun{"files": hooks.rendered, "ready": hooks.ready} {
+		if len(runs) != 1 || !maps.Equal(runs[0].Settings, cfg.Settings) || !reflect.DeepEqual(runs[0].GPU, cfg.GPU) {
+			t.Fatalf("%s saw %+v", what, runs)
+		}
+	}
+	// The hooks get their own copies of what the plan reviewed.
+	run := hooks.rendered[0]
+	run.Settings["model"] = "changed"
+	run.GPU.Count = 8
+	run.GPU.NodeSelector["gpu"] = "changed"
+	run.GPU.Tolerations[0].Key = "changed"
+	if cfg.Settings["model"] != "acme/x" || cfg.GPU.Count != 1 || cfg.GPU.NodeSelector["gpu"] != "l4" || cfg.GPU.Tolerations[0].Key != "nvidia.com/gpu" {
+		t.Fatalf("a hook can change the reviewed config: %+v, %+v", cfg.Settings, cfg.GPU)
+	}
+
+	// Settings the kind doesn't take now, or without a required one, are
+	// from another recipe.
+	for _, settings := range []map[string]string{
+		{"model": "acme/x", "colour": "red"},
+		{"model": "Acme X"},
+		{"size": "1"},
+	} {
+		job := f.componentJob(t, "api", newPostgres)
+		job.Action.Resource.Component.Settings = settings
+		if _, err := f.target.Apply(t.Context(), job); !errors.Is(err, errRecipeChanged) {
+			t.Fatalf("settings %v: %v", settings, err)
+		}
+	}
+
+	// Without either, a hook sees neither.
+	f = newComponentFixture(t, sampleWithFiles(t))
+	hooks = &fileHooks{files: map[string][]byte{sampleConfig: []byte("listen: 8080\n")}}
+	f.target.Hooks["sample"] = hooks
+	f.secrets.m[ResourceKey("org", "env", "app--postgres", "url")] = []byte(postgresURL)
+	if _, err := f.target.Apply(t.Context(), f.componentJob(t, "api", newPostgres)); err != nil {
+		t.Fatal(err)
+	}
+	if len(hooks.rendered) != 1 || hooks.rendered[0].Settings != nil || hooks.rendered[0].GPU != nil {
+		t.Fatalf("files saw %+v", hooks.rendered)
+	}
+}
+
 func TestDeletingACompositionWarnsWhenItsSessionsOutliveIt(t *testing.T) {
 	kinds := recipestest.Registry(t)
 	f := newComponentFixture(t, kinds)

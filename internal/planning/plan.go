@@ -368,6 +368,10 @@ type ComponentConfig struct {
 	// Inputs is the digest of what the kind renders into the component
 	// from outside the manifest (see CatalogInputs), or "" for nothing.
 	Inputs string `json:"inputs,omitempty"`
+	// Settings are the resource's settings, by name: every setting of the
+	// kind that has a value, with defaults filled in. They're never
+	// secret (see recipes.Setting).
+	Settings map[string]string `json:"settings,omitempty"`
 }
 
 // Change is one setting an update changes.

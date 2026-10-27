@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/xraph/loomplane/internal/projects"
+	"github.com/xraph/loomplane/internal/recipes/recipestest"
 	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/pkg/manifest"
 )
@@ -42,6 +43,10 @@ type editProjects struct{}
 
 func (editProjects) GetProject(context.Context, string, string) (*projects.Project, error) {
 	return &projects.Project{}, nil
+}
+
+func (editProjects) ListEnvironments(context.Context, string, string) ([]*projects.Environment, error) {
+	return []*projects.Environment{{Name: "production"}, {Name: "staging"}}, nil
 }
 
 func TestEdit_refusesToOverwriteANewerRevision(t *testing.T) {
@@ -148,6 +153,111 @@ func TestEditLinkUnlinkSetUse(t *testing.T) {
 		_, err := edit(t, base, EditInput{Link: &ServiceLink{Service: "api", Need: "fabriq", Options: map[string]string{"Tenant": "x"}}})
 		if !errors.Is(err, manifest.ErrInvalid) {
 			t.Fatalf("got %v", err)
+		}
+	})
+}
+
+func TestAddResourceEnabledInOneEnvironment(t *testing.T) {
+	kind := recipestest.GPUSample().Name
+	in := EditInput{AddResource: &NewResource{
+		Name: "llm", Kind: kind, Provider: "server", Target: "conn_1", EnabledIn: "staging",
+		Settings: map[string]string{"model": "acme/x"},
+		GPU:      &manifest.GPU{Kind: "nvidia-l4", Count: 1},
+	}}
+	store := &editStore{current: &Revision{Revision: 1}}
+	svc := NewService(store, editProjects{}, editAuth{}, nil)
+	rev, _, err := svc.Edit(context.Background(), security.Principal{}, "p", in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	on := true
+	want := manifest.Resource{
+		Kind: kind, Provider: "server", Target: "conn_1",
+		Settings:     map[string]string{"model": "acme/x"},
+		GPU:          &manifest.GPU{Kind: "nvidia-l4", Count: 1},
+		Environments: map[string]manifest.ResourceSettings{"staging": {Enabled: &on}},
+	}
+	if got := rev.Manifest.Resources["llm"]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("stored %+v, want %+v\n%s", got, want, rev.YAML)
+	}
+	if store.writes != 1 {
+		t.Fatalf("%d revisions, want one", store.writes)
+	}
+
+	store = &editStore{current: &Revision{Revision: 1}}
+	svc = NewService(store, editProjects{}, editAuth{}, nil)
+	in.AddResource.EnabledIn = "qa"
+	if _, _, err := svc.Edit(context.Background(), security.Principal{}, "p", in); !errors.Is(err, ErrInvalid) || store.writes != 0 {
+		t.Fatalf("unknown environment: %v, %d writes", err, store.writes)
+	}
+}
+
+func TestEditUpdateAndRemoveResource(t *testing.T) {
+	const base = "version: 1\nservices:\n  api:\n    source: go:cmd/api\n    needs: [db]\nresources:\n  db:\n    kind: postgres\n  # The model.\n  llm:\n    kind: sample\n    target: conn_1\n    settings: {model: acme/x}\n"
+	edit := func(t *testing.T, in EditInput) (*Revision, *editStore, error) {
+		t.Helper()
+		store := &editStore{current: &Revision{Revision: 1, YAML: base}}
+		store.reads = 1
+		svc := NewService(store, editProjects{}, editAuth{}, nil)
+		rev, _, err := svc.Edit(context.Background(), security.Principal{}, "p", in)
+		return rev, store, err
+	}
+
+	t.Run("update", func(t *testing.T) {
+		target := "conn_2"
+		rev, store, err := edit(t, EditInput{UpdateResource: &ResourceUpdateInput{
+			Resource: " llm ", Target: &target, GPU: &manifest.GPU{Kind: "nvidia-l40s", Count: 1},
+			Settings: map[string]string{"max_model_len": "8192"},
+		}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := manifest.Resource{
+			Kind: "sample", Target: "conn_2", GPU: &manifest.GPU{Kind: "nvidia-l40s", Count: 1},
+			Settings: map[string]string{"model": "acme/x", "max_model_len": "8192"},
+		}
+		if got := rev.Manifest.Resources["llm"]; !reflect.DeepEqual(got, want) || store.writes != 1 {
+			t.Fatalf("stored %+v, want %+v\n%s", got, want, rev.YAML)
+		}
+		if !strings.Contains(rev.YAML, "# The model.") {
+			t.Fatalf("lost a comment:\n%s", rev.YAML)
+		}
+
+		rev, _, err = edit(t, EditInput{UpdateResource: &ResourceUpdateInput{Resource: "llm", ClearGPU: true, Settings: map[string]string{"model": ""}}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := rev.Manifest.Resources["llm"]; got.GPU != nil || got.Settings != nil {
+			t.Fatalf("stored %+v\n%s", got, rev.YAML)
+		}
+	})
+	t.Run("remove", func(t *testing.T) {
+		rev, store, err := edit(t, EditInput{RemoveResource: "llm"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := rev.Manifest.Resources["llm"]; ok || store.writes != 1 || rev.Manifest.Resources["db"].Kind != "postgres" {
+			t.Fatalf("stored %+v\n%s", rev.Manifest.Resources, rev.YAML)
+		}
+		if _, store, err := edit(t, EditInput{RemoveResource: "db"}); !errors.Is(err, manifest.ErrInvalid) || !strings.Contains(err.Error(), "service api") || store.writes != 0 {
+			t.Fatalf("removed a needed resource: %v", err)
+		}
+	})
+	t.Run("refused", func(t *testing.T) {
+		target := "conn_2"
+		for name, in := range map[string]EditInput{
+			"two edits":        {UpdateResource: &ResourceUpdateInput{Resource: "llm", Target: &target}, RemoveResource: "llm"},
+			"gpu and clear":    {UpdateResource: &ResourceUpdateInput{Resource: "llm", GPU: &manifest.GPU{Kind: "nvidia-l4", Count: 1}, ClearGPU: true}},
+			"unknown resource": {UpdateResource: &ResourceUpdateInput{Resource: "nope", Target: &target}},
+			"bad setting":      {UpdateResource: &ResourceUpdateInput{Resource: "llm", Settings: map[string]string{"Bad": "x"}}},
+		} {
+			_, store, err := edit(t, in)
+			if err == nil || store.writes != 0 {
+				t.Fatalf("%s: %v, %d writes", name, err, store.writes)
+			}
+			if name == "two edits" && (!errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "one edit at a time")) {
+				t.Fatalf("%s: %v", name, err)
+			}
 		}
 	})
 }

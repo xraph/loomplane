@@ -466,6 +466,8 @@ func validateKind(k Kind) []error {
 		}
 	}
 
+	validateSettings(f, k.Settings)
+
 	if len(k.Releases) == 0 {
 		f.add("kind has no releases")
 	}
@@ -487,6 +489,34 @@ func validateKind(k Kind) []error {
 		}
 	}
 	return f.errs
+}
+
+// validateSettings checks the settings a resource of the kind sets.
+func validateSettings(f *findings, settings []Setting) {
+	names := map[string]bool{}
+	for _, s := range settings {
+		if !optionPattern.MatchString(s.Name) {
+			f.add("setting name %q must be a lowercase letter then up to 31 lowercase letters, digits and underscores", s.Name)
+		}
+		if names[s.Name] {
+			f.add("setting %q is declared more than once", s.Name)
+		}
+		names[s.Name] = true
+		if s.Title == "" {
+			f.add("setting %q has no title", s.Name)
+		}
+		if s.Pattern == "" {
+			f.add("setting %q has no pattern", s.Name)
+			continue
+		}
+		if _, err := regexp.Compile(`^(?:` + s.Pattern + `)$`); err != nil {
+			f.add("setting %q pattern %q doesn't compile: %v", s.Name, s.Pattern, err)
+			continue
+		}
+		if s.Default != "" && !s.Matches(s.Default) {
+			f.add("setting %q default %q doesn't match its pattern %q", s.Name, s.Default, s.Pattern)
+		}
+	}
 }
 
 func validateComponent(f *findings, k Kind, c *Component, components map[string]*Component, dependencies map[string]Dependency, secrets map[string]bool) {
@@ -736,6 +766,9 @@ func validateDependencyOnly(f *findings, k Kind) {
 	}
 	if len(k.ConsumerOptions) > 0 {
 		f.add("a dependency-only kind has no consumers of its own, so it takes no consumer options")
+	}
+	if len(k.Settings) > 0 {
+		f.add("a dependency-only kind has no manifest resource of its own to set them, so it takes no settings")
 	}
 }
 

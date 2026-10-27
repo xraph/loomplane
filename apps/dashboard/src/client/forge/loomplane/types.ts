@@ -555,6 +555,7 @@ export interface ComponentConfig {
   protection: string;
   resource: string;
   revision: string;
+  settings?: Record<string, any>;
 }
 
 export interface ComponentInfo {
@@ -912,9 +913,12 @@ export interface Edge {
 
 export interface EditInputBody {
   addResource?: {
+  enabledIn?: string;
+  gpu?: ManifestGPU;
   kind: string;
   name: string;
   provider?: string;
+  settings?: Record<string, any>;
   target?: string;
   uses?: Record<string, any>;
   version?: string;
@@ -940,6 +944,7 @@ export interface EditInputBody {
   section: string;
   target?: string;
 };
+  removeResource?: string;
   setUse?: {
   dependency: string;
   resource: string;
@@ -949,6 +954,14 @@ export interface EditInputBody {
   need: string;
   options?: Record<string, any>;
   service: string;
+};
+  updateResource?: {
+  clearGpu?: boolean;
+  gpu?: ManifestGPU;
+  provider?: string;
+  resource: string;
+  settings?: Record<string, any>;
+  target?: string;
 };
 }
 
@@ -1424,6 +1437,11 @@ export interface ManifestEndpoint {
   hostname?: string;
   ingressClass?: string;
   tlsSecret?: string;
+}
+
+export interface ManifestGPU {
+  count: number;
+  kind: string;
 }
 
 export interface MoveInput {

@@ -11463,6 +11463,10 @@
           },
           "revision": {
             "type": "string"
+          },
+          "settings": {
+            "type": "object",
+            "additionalProperties": true
           }
         }
       },
@@ -12653,6 +12657,12 @@
               "kind"
             ],
             "properties": {
+              "enabled_in": {
+                "type": "string"
+              },
+              "gpu": {
+                "$ref": "#/components/schemas/ManifestGPU"
+              },
               "kind": {
                 "type": "string"
               },
@@ -12661,6 +12671,10 @@
               },
               "provider": {
                 "type": "string"
+              },
+              "settings": {
+                "type": "object",
+                "additionalProperties": true
               },
               "target": {
                 "type": "string"
@@ -12747,6 +12761,9 @@
               }
             }
           },
+          "remove_resource": {
+            "type": "string"
+          },
           "set_use": {
             "type": "object",
             "required": [
@@ -12781,6 +12798,33 @@
                 "additionalProperties": true
               },
               "service": {
+                "type": "string"
+              }
+            }
+          },
+          "update_resource": {
+            "type": "object",
+            "required": [
+              "resource"
+            ],
+            "properties": {
+              "clear_gpu": {
+                "type": "boolean"
+              },
+              "gpu": {
+                "$ref": "#/components/schemas/ManifestGPU"
+              },
+              "provider": {
+                "type": "string"
+              },
+              "resource": {
+                "type": "string"
+              },
+              "settings": {
+                "type": "object",
+                "additionalProperties": true
+              },
+              "target": {
                 "type": "string"
               }
             }
@@ -14252,6 +14296,22 @@
         },
         "type": "object",
         "x-forge-type": "github.com/xraph/loomplane/pkg/manifest.Endpoint"
+      },
+      "ManifestGPU": {
+        "properties": {
+          "count": {
+            "type": "integer"
+          },
+          "kind": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "count"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/pkg/manifest.GPU"
       },
       "MoveInput": {
         "type": "object",

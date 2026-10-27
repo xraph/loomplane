@@ -104,7 +104,10 @@ The dashboard and `POST /projects/:id/manifest/edits` can change these in place 
 | `version` | The engine's version, such as `"17"`. Without it, the provider's newest |
 | `target` | The `conn_...` of the checked server or Kubernetes connection a catalog resource runs on |
 | `uses` | Where a catalog resource gets each dependency |
+| `settings` | Values a catalog kind takes, by setting name. Names follow the need option rule; a value is up to 1024 characters. The kind says which settings it has and what each must look like, and that's checked when you plan |
 | `environments` | `provider`, `region` or `enabled` by environment name |
+
+`POST /projects/:id/manifest/edits` can change a resource in place as well. `update_resource` sets its `provider`, `target`, `gpu` or `settings`, leaving out what you don't send. A setting sent as `""` is deleted, and `clear_gpu` drops the GPU. `remove_resource` takes the resource out, but not while a service needs it or another resource uses it: unlink those first.
 
 ### uses
 

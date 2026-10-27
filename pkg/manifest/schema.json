@@ -583,6 +583,17 @@
             "$ref": "#/$defs/use"
           }
         },
+        "settings": {
+          "description": "Values the catalog kind takes, by setting name. The kind says which it has and what each must look like.",
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^[a-z][a-z0-9_]{0,31}$"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "maxLength": 1024
+          }
+        },
         "environments": {
           "description": "Overrides in one environment, by name.",
           "type": "object",

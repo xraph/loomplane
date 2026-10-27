@@ -936,3 +936,30 @@ func TestParse_gpuRejects(t *testing.T) {
 		})
 	}
 }
+
+func TestResourceSettingsParse(t *testing.T) {
+	doc := "version: 1\nresources:\n  llm:\n    kind: sample\n    settings: {model: acme/x, max_model_len: \"8192\"}\n"
+	m, err := Parse([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := m.Resources["llm"].Settings, map[string]string{"model": "acme/x", "max_model_len": "8192"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("settings %v, want %v", got, want)
+	}
+	schema := compileSchema(t)
+	if err := schema.Validate(yamlToJSON(t, []byte(doc))); err != nil {
+		t.Fatalf("the schema rejects settings: %v", err)
+	}
+	for name, bad := range map[string]string{
+		"a bad key":        "version: 1\nresources:\n  llm: {kind: sample, settings: {Bad: x}}\n",
+		"a long value":     "version: 1\nresources:\n  llm: {kind: sample, settings: {model: " + strings.Repeat("x", MaxSettingValue+1) + "}}\n",
+		"a value not text": "version: 1\nresources:\n  llm: {kind: sample, settings: {model: {name: x}}}\n",
+	} {
+		if err := schema.Validate(yamlToJSON(t, []byte(bad))); err == nil {
+			t.Errorf("%s: the schema accepts it", name)
+		}
+		if _, err := Parse([]byte(bad)); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s: Parse: %v", name, err)
+		}
+	}
+}
