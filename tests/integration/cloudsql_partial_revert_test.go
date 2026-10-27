@@ -39,7 +39,16 @@ func TestInstalledCloudSQLCleanupAfterSourceOrSubnetLoss(t *testing.T) {
 	}
 }
 
+func TestInstalledCloudSQLTerminalCreateCleanup(t *testing.T) {
+	for _, scenario := range []string{"terminal-present", "terminal-absent", "terminal-delete", "terminal-replacement"} {
+		t.Run(scenario, func(t *testing.T) { testInstalledPartialSQLCleanup(t, scenario) })
+	}
+}
+
 func testInstalledPartialSQLCleanup(t *testing.T, loss string) {
+	terminal := strings.HasPrefix(loss, "terminal-")
+	createdAt := time.Now().UTC()
+	var createOperation map[string]any
 	google := newFakeGoogle(t)
 	route := manageddb.CloudSQLSourceEndpoint{ConsumerProject: "acme-prod", Network: "projects/acme-prod/global/networks/apps", ForwardingRule: "projects/acme-prod/regions/us-central1/forwardingRules/database", ProvisionSubnetwork: "projects/acme-prod/regions/us-central1/subnetworks/psc"}
 	network := newSourceNetworkFixture(t, route, "", "provision-lost-rule")
@@ -75,6 +84,18 @@ func testInstalledPartialSQLCleanup(t *testing.T, loss string) {
 		}
 		if r.Method == http.MethodGet {
 			if strings.Contains(r.URL.Path, "/operations/") {
+				if terminal && strings.HasSuffix(r.URL.Path, "/create") {
+					if cleanupStarted && denyRecovery && loss != "terminal-delete" && loss != "terminal-replacement" {
+						w.WriteHeader(http.StatusForbidden)
+						return
+					}
+					_ = json.NewEncoder(w).Encode(createOperation)
+					return
+				}
+				if loss == "terminal-delete" && denyRecovery {
+					w.WriteHeader(http.StatusServiceUnavailable)
+					return
+				}
 				_ = json.NewEncoder(w).Encode(map[string]any{"kind": "sql#operation", "name": "remove", "status": "DONE", "targetProject": "acme-prod", "targetId": instance, "operationType": "DELETE"})
 				return
 			}
@@ -90,11 +111,18 @@ func testInstalledPartialSQLCleanup(t *testing.T, loss string) {
 					sourceLost = true
 				}
 			}
-			if instance == "" || sqlDeleted || sourceLost {
+			if instance == "" || sqlDeleted || sourceLost || loss == "terminal-absent" {
 				w.WriteHeader(http.StatusNotFound)
 				return
 			}
-			_ = json.NewEncoder(w).Encode(map[string]any{"kind": "sql#instance", "name": instance, "project": "acme-prod", "region": "us-central1", "createTime": "2026-10-21T00:00:00Z", "state": "RUNNABLE", "databaseVersion": "POSTGRES_17", "connectionName": "acme-prod:us-central1:" + instance, "settings": settings, "pscServiceAttachmentLink": "projects/sql-tenant/regions/us-central1/serviceAttachments/source", "dnsName": instance + ".sql.goog."})
+			sourceTime, sourceState := createdAt, "RUNNABLE"
+			if terminal {
+				sourceState = "FAILED"
+			}
+			if cleanupStarted && denyRecovery && loss == "terminal-replacement" {
+				sourceTime = sourceTime.Add(time.Hour)
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"kind": "sql#instance", "name": instance, "project": "acme-prod", "region": "us-central1", "createTime": sourceTime.Format(time.RFC3339Nano), "state": sourceState, "databaseVersion": "POSTGRES_17", "connectionName": "acme-prod:us-central1:" + instance, "settings": settings, "pscServiceAttachmentLink": "projects/sql-tenant/regions/us-central1/serviceAttachments/source", "dnsName": instance + ".sql.goog."})
 			return
 		}
 		writes[r.Method+" "+r.URL.Path]++
@@ -103,7 +131,11 @@ func testInstalledPartialSQLCleanup(t *testing.T, loss string) {
 				t.Error("missing final backup policy")
 			}
 			sqlDeleted = true
-			_ = json.NewEncoder(w).Encode(map[string]any{"kind": "sql#operation", "name": "remove", "status": "DONE", "targetProject": "acme-prod", "targetId": instance, "operationType": "DELETE"})
+			deleteStatus := "DONE"
+			if loss == "terminal-delete" {
+				deleteStatus = "RUNNING"
+			}
+			_ = json.NewEncoder(w).Encode(map[string]any{"kind": "sql#operation", "name": "remove", "status": deleteStatus, "targetProject": "acme-prod", "targetId": instance, "operationType": "DELETE"})
 			return
 		}
 		if r.Method != http.MethodPost || !strings.HasSuffix(r.URL.Path, "/instances") {
@@ -122,6 +154,12 @@ func testInstalledPartialSQLCleanup(t *testing.T, loss string) {
 		instance, settings = body.Name, body.Settings
 		settings["settingsVersion"] = "1"
 		network.instance = instance
+		if terminal {
+			createdAt = time.Now().UTC()
+			createOperation = map[string]any{"kind": "sql#operation", "name": "create", "status": "DONE", "targetProject": "acme-prod", "targetId": instance, "operationType": "CREATE", "user": "loomplane@acme-prod.iam.gserviceaccount.com", "insertTime": createdAt.Format(time.RFC3339Nano), "startTime": createdAt.Format(time.RFC3339Nano), "endTime": createdAt.Add(time.Millisecond).Format(time.RFC3339Nano), "error": map[string]any{"errors": []any{map[string]string{"message": "native create failed"}}}}
+			_ = json.NewEncoder(w).Encode(createOperation)
+			return
+		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"kind": "sql#operation", "name": "create", "status": "DONE", "targetProject": "acme-prod", "targetId": instance, "operationType": "CREATE"})
 	})
 	cfg, app, c, org, project := cloudAPISetup(t, func(cfg *config.Config) {
@@ -218,6 +256,9 @@ func testInstalledPartialSQLCleanup(t *testing.T, loss string) {
 	}
 	mu.Lock()
 	partial := network.lost && network.counts["insert-address"] == 1 && network.counts["insert-rule"] == 1 && network.counts["insert-zone"] == 0 && len(writes) == 1
+	if terminal {
+		partial = len(writes) == 1 && len(network.objects) == 0 && len(network.counts) == 0
+	}
 	mu.Unlock()
 	if !partial {
 		t.Fatal("did not reach lost forwarding-rule response", failed.Error, writes, network.counts)
@@ -282,13 +323,16 @@ func testInstalledPartialSQLCleanup(t *testing.T, loss string) {
 		t.Fatal("cleanup review lacks revision")
 	}
 	mu.Lock()
-	if len(writes) != 1 || len(network.objects) != 2 || network.counts["delete-rule"] != 0 || network.counts["delete-address"] != 0 {
+	if len(writes) != 1 || (!terminal && len(network.objects) != 2) || (terminal && len(network.objects) != 0) || network.counts["delete-rule"] != 0 || network.counts["delete-address"] != 0 {
 		t.Error("unrelated revert deleted partial SQL", writes, network.counts)
 	}
 	holdRecovery = false
 	network.scenario = "provision-remove-retry"
 	network.lost = false
 	cleanupStarted = true
+	if terminal {
+		denyRecovery = true
+	}
 	sourceLost = loss == "source" || loss == "both"
 	subnetLost = loss == "subnet" || loss == "both"
 	if sourceLost {
@@ -334,7 +378,11 @@ func testInstalledPartialSQLCleanup(t *testing.T, loss string) {
 	}
 	waitCleanup("failed")
 	mu.Lock()
-	if subnetLost || loss == "source-after-intent" {
+	if loss == "terminal-delete" {
+		if !sqlDeleted || len(writes) != 2 || len(network.counts) != 0 {
+			t.Error("delete progress lost", cleanup.Error, writes, network.counts)
+		}
+	} else if terminal || subnetLost || loss == "source-after-intent" {
 		if sqlDeleted || len(writes) != 1 || network.counts["delete-rule"] != 0 || network.counts["delete-address"] != 0 {
 			t.Error("denied recovery mutated resources", cleanup.Error, writes, network.counts)
 		}
@@ -383,13 +431,13 @@ func testInstalledPartialSQLCleanup(t *testing.T, loss string) {
 		}
 	}
 	wantWrites, wantNetworkDeletes := 2, 1
-	if sourceLost {
+	if sourceLost || loss == "terminal-absent" {
 		wantWrites = 1
 	}
-	if subnetLost {
+	if subnetLost || terminal {
 		wantNetworkDeletes = 0
 	}
-	if sqlDeleted == sourceLost || len(writes) != wantWrites || len(network.objects) != 0 || network.counts["delete-rule"] != wantNetworkDeletes || network.counts["delete-address"] != wantNetworkDeletes || network.counts["request-delete-rule"] != wantNetworkDeletes || network.counts["request-delete-address"] != wantNetworkDeletes || network.counts["insert-zone"] != 0 {
+	if sqlDeleted == (sourceLost || loss == "terminal-absent") || len(writes) != wantWrites || len(network.objects) != 0 || network.counts["delete-rule"] != wantNetworkDeletes || network.counts["delete-address"] != wantNetworkDeletes || network.counts["request-delete-rule"] != wantNetworkDeletes || network.counts["request-delete-address"] != wantNetworkDeletes || network.counts["insert-zone"] != 0 {
 		t.Fatal("incomplete or repeated cleanup", writes, network.counts)
 	}
 }
