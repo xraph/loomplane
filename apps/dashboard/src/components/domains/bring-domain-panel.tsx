@@ -45,7 +45,12 @@ export function BringDomainPanel({
   const [connecting, setConnecting] = useState("")
   const [error, setError] = useState("")
   const domain = name.trim().toLowerCase()
-  const parent = parentZoneOf(domain, zones)?.zone?.name
+  const ancestor = parentZoneOf(domain, zones)
+  const parent = ancestor?.zone?.name
+  // The zone whose TXT record verifies the ancestor verifies this one too.
+  const proving =
+    zones.find((z) => z.zone && z.zone.id === ancestor?.proofZoneId)?.zone
+      ?.name ?? parent
   const ready = (cloud: string) =>
     (connections.data?.connections ?? []).filter(
       (c) => c.cloud === cloud && c.status === "ready"
@@ -124,7 +129,7 @@ export function BringDomainPanel({
           id={noteID}
           className="-mt-1 text-[12.5px] leading-normal text-muted-foreground"
         >
-          {domain} is a subdomain of {parent}, so it uses {parent}&apos;s
+          {domain} is a subdomain of {parent}, so it uses {proving}&apos;s
           verification.
         </p>
       )}

@@ -297,9 +297,18 @@ function Sections({ detail, zone }: { detail: DomainDetail; zone: Zone }) {
         <div className="flex flex-col gap-2.5 px-4 py-3">
           <ZoneGrants zone={zone} inline />
           {/* Not in the mock. */}
-          <p className="text-[12.5px] text-muted-foreground">
-            Subdomains have their own projects.
-          </p>
+          {detail.parent?.zone ? (
+            <p className="text-[12.5px] text-muted-foreground">
+              Projects granted {detail.parent.zone.name} don&apos;t get this
+              subdomain.
+            </p>
+          ) : (
+            subdomains.length > 0 && (
+              <p className="text-[12.5px] text-muted-foreground">
+                Subdomains have their own projects.
+              </p>
+            )
+          )}
         </div>
       </Section>
 
