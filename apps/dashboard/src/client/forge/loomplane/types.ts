@@ -233,6 +233,109 @@ export interface BuildTarget {
   registrySettings?: Record<string, any>;
 }
 
+export interface Canary {
+  holdSeconds: number;
+  reason?: string;
+  services: CanaryService[];
+  status: string;
+  step: number;
+  steps: number[];
+  thresholds: Thresholds;
+  updatedAt: string;
+  weight: number;
+}
+
+export interface CanaryReport {
+  canary?: Canary;
+  verdicts: CanaryVerdict[];
+}
+
+export interface CanaryService {
+  actionId: string;
+  baseline?: string;
+  bindingId: string;
+  candidate?: string;
+  image?: string;
+  name: string;
+  provider: string;
+}
+
+export interface CanaryVerdict {
+  actionId: string;
+  attempt: number;
+  baseline: Health;
+  baselineFallback: boolean;
+  candidate: Health;
+  decidedAt: string;
+  deploymentId: string;
+  id: string;
+  orgId: string;
+  projectId: string;
+  reason: string;
+  retry: number;
+  service: string;
+  step: number;
+  thresholds: Thresholds;
+  verdict: string;
+  weight: number;
+  windowEnd: string;
+  windowStart: string;
+}
+
+export interface CapacityBlock {
+  cloudId: string;
+  counted: number;
+  limit: number;
+  policyRevision: number;
+  poolId: string;
+  reason: string;
+  requested: number;
+  resource: string;
+  retryable: boolean;
+  targetId: string;
+}
+
+export interface CapacityDemand {
+  architecture: string;
+  cloudId: string;
+  environmentId: string;
+  intentHash: string;
+  localData: boolean;
+  orgId: string;
+  planId: string;
+  policyRevision: number;
+  poolId: string;
+  projectId: string;
+  resources: ResourceVector;
+  service: string;
+  stickyServerId: string;
+  targetId: string;
+}
+
+export interface CapacityIntent {
+  assignmentRevision: number;
+  cloudRevision: number;
+  commitSha: string;
+  demand: CapacityDemand;
+  grantRevision: number;
+  providerPin: CapacityTemplatePin;
+  targetName: string;
+  targetRevision: number;
+  template: PoolExpansionPolicy;
+  templateHash: string;
+}
+
+export interface CapacityTemplatePin {
+  accountId: string;
+  connectionGeneration: number;
+}
+
+export interface CapacityWait {
+  blocks: CapacityBlock[];
+  createdAt: string;
+  revision: number;
+}
+
 export interface CatalogKindList {
   kinds: KindInfo[];
 }
@@ -725,6 +828,8 @@ export interface DeployedRepository {
 }
 
 export interface Deployment {
+  canary?: Canary;
+  capacityWait?: CapacityWait;
   commitSha: string;
   environment: string;
   environmentId: string;
@@ -753,6 +858,20 @@ export interface DeploymentCounts {
 export interface DeploymentList {
   deployments: Deployment[];
   next?: string;
+}
+
+export interface DiscoverySource {
+  alias: string;
+  createdAt: string;
+  createdBy: string;
+  id: string;
+  orgId: string;
+  projectId: string;
+  ref: string;
+  removedAt?: string;
+  repository: string;
+  root: string;
+  updatedAt: string;
 }
 
 export interface DomainOperationList {
@@ -954,6 +1073,22 @@ export interface Finding {
   subject?: string;
 }
 
+export interface FrontendDemand {
+  accountId: string;
+  cloudId: string;
+  connectionGeneration: number;
+  connectionId: string;
+  environmentId: string;
+  grantRevision: number;
+  orgId: string;
+  planId: string;
+  projectId: string;
+  provider: string;
+  service: string;
+  targetId: string;
+  targetRevision: number;
+}
+
 export interface GatewayList {
   gateways: GatewayStatus[];
 }
@@ -1030,6 +1165,15 @@ export interface HandoffInputBody {
 
 export interface HandoffReleaseInputBody {
   drainSeconds: number;
+}
+
+export interface Health {
+  available: boolean;
+  errors: number;
+  latencyMs: number;
+  reason?: string;
+  requests: number;
+  statistic?: string;
 }
 
 export interface Held {
@@ -1152,6 +1296,7 @@ export interface ManagedDatabaseProfile {
 export interface Manifest {
   databaseGateway?: DatabaseGateway;
   defaults?: Defaults;
+  environments?: Record<string, any>;
   federation?: Federation;
   gateways?: Record<string, any>;
   held?: Held;
@@ -1450,11 +1595,14 @@ export interface OK {
 }
 
 export interface Operation {
+  absenceConfirmedAt?: string;
   accountId: string;
   actions: InfrastructureAction[];
   attempt: number;
   attempted: boolean;
   bootstrapExpiresAt: string;
+  capacityCheckedAt?: string;
+  capacityTarget?: ResourceVector;
   cloudId: string;
   connectionGeneration?: number;
   connectionId: string;
@@ -1571,6 +1719,7 @@ export interface Plan {
   plannedAt?: string;
   problems: Finding[];
   projectId: string;
+  release?: Release;
   revision: string;
   sources: PlanSource[];
   status: string;
@@ -1661,6 +1810,20 @@ export interface Pool {
   name: string;
   orgId: string;
   revision: number;
+}
+
+export interface PoolExpansionPolicy {
+  allowedSizes: string[];
+  architecture: string;
+  bootstrapSize: string;
+  connectionId: string;
+  image: string;
+  limits?: ResourceVector;
+  maxServers: number;
+  minServers: number;
+  poolId: string;
+  region: string;
+  systemReserve: ResourceVector;
 }
 
 export interface PoolInputBody {
@@ -1905,6 +2068,14 @@ export interface Ref {
   field: string;
 }
 
+export interface Release {
+  canary?: string[];
+  holdSeconds?: number;
+  steps?: number[];
+  strategy: string;
+  thresholds: Thresholds;
+}
+
 export interface RemoveRouteInputBody {
   revision: number;
 }
@@ -1987,6 +2158,13 @@ export interface ResourceConfig {
   target?: string;
   targetSettings?: Record<string, any>;
   version?: string;
+}
+
+export interface ResourceVector {
+  cpuMillis: number;
+  memoryBytes: number;
+  servers: number;
+  storageBytes: number;
 }
 
 export interface Resources {
@@ -2264,7 +2442,9 @@ export interface RuntimeHealth {
   dockerId: string;
   effectiveCpuMillis: number;
   effectiveMemoryBytes: number;
+  freeStorageBytes?: number;
   memoryBytes: number;
+  storageBytes?: number;
 }
 
 export interface SaveInputBody {
@@ -2272,6 +2452,7 @@ export interface SaveInputBody {
   manifest?: {
   databaseGateway?: DatabaseGateway;
   defaults?: Defaults;
+  environments?: Record<string, any>;
   federation?: Federation;
   gateways?: Record<string, any>;
   held?: Held;
@@ -2313,8 +2494,10 @@ export interface Server {
 }
 
 export interface ServerImage {
+  architecture?: string;
   bootstrap: boolean;
   id: string;
+  minDiskGb?: number;
   name: string;
   regions: string[];
 }
@@ -2361,8 +2544,10 @@ export interface ServerRegion {
 }
 
 export interface ServerSize {
+  architectures?: string[];
   cpus: number;
   diskGb: number;
+  hourlyPriceKnown?: boolean;
   hourlyUsd: number;
   id: string;
   memoryMib: number;
@@ -2420,6 +2605,7 @@ export interface ServiceConfig {
   appliedInputs?: AppliedInputs;
   build?: string;
   buildTarget?: BuildTarget;
+  capacityIntent?: CapacityIntent;
   catalog?: Recipe;
   cloudPlacement?: CloudPlacement;
   cloudSqlNetwork?: CloudSQLApplicationNetwork;
@@ -2432,6 +2618,7 @@ export interface ServiceConfig {
   env?: EnvLink[];
   execution: string;
   framework?: string;
+  frontendDemand?: FrontendDemand;
   gateway?: GatewayRoute[];
   healthPath?: string;
   image?: string;
@@ -2550,7 +2737,7 @@ export interface SourceArtifact {
 }
 
 export interface SourceList {
-  sources: Source[];
+  sources: DiscoverySource[];
 }
 
 export interface SourceRef {
@@ -2564,7 +2751,7 @@ export interface SourceRef {
 export interface SourceState {
   latest?: Analysis;
   shown?: Analysis;
-  source: Source;
+  source: DiscoverySource;
 }
 
 export interface SpendReport {
@@ -2690,6 +2877,13 @@ export interface TenantInputBody {
 
 export interface TenantList {
   tenants: Tenant[];
+}
+
+export interface Thresholds {
+  errorRate: number;
+  errorRateDelta: number;
+  minRequests: number;
+  p95LatencyRatio: number;
 }
 
 export interface TrafficReport {

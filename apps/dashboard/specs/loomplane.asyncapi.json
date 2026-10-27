@@ -68,6 +68,15 @@
           "title": "build.log event",
           "summary": "SSE event: build.log"
         },
+        "canary_verdict.deleted": {
+          "payload": {
+            "$ref": "#/components/schemas/CanaryVerdict"
+          },
+          "contentType": "text/event-stream",
+          "name": "canary_verdict.deleted",
+          "title": "canary_verdict.deleted event",
+          "summary": "SSE event: canary_verdict.deleted"
+        },
         "canary_verdict.updated": {
           "payload": {
             "$ref": "#/components/schemas/CanaryVerdict"
@@ -474,6 +483,15 @@
           "type": "github.com/xraph/loomplane/internal/deployments.CanaryVerdict"
         },
         {
+          "entityType": "CanaryVerdict",
+          "intent": "evict",
+          "invalidates": [
+            "CanaryReport"
+          ],
+          "message": "canary_verdict.deleted",
+          "type": "github.com/xraph/loomplane/internal/deployments.CanaryVerdict"
+        },
+        {
           "entityType": "Profile",
           "intent": "upsert",
           "invalidates": [
@@ -757,6 +775,15 @@
           "type": "github.com/xraph/loomplane/internal/deployments.CanaryVerdict"
         },
         {
+          "entityType": "CanaryVerdict",
+          "intent": "evict",
+          "invalidates": [
+            "CanaryReport"
+          ],
+          "message": "canary_verdict.deleted",
+          "type": "github.com/xraph/loomplane/internal/deployments.CanaryVerdict"
+        },
+        {
           "entityType": "Profile",
           "intent": "upsert",
           "invalidates": [
@@ -864,6 +891,9 @@
         },
         {
           "$ref": "#/channels/api-v1-realtime-events/messages/build.log"
+        },
+        {
+          "$ref": "#/channels/api-v1-realtime-events/messages/canary_verdict.deleted"
         },
         {
           "$ref": "#/channels/api-v1-realtime-events/messages/canary_verdict.updated"
@@ -1280,10 +1310,6 @@
           },
           "provider": {
             "type": "string"
-          },
-          "refs": {
-            "type": "object",
-            "additionalProperties": true
           }
         }
       },
@@ -1645,6 +1671,47 @@
           },
           "target_revision": {
             "type": "integer"
+          }
+        }
+      },
+      "CloudSQLApplicationNetwork": {
+        "type": "object",
+        "required": [
+          "consumer_project",
+          "network",
+          "subnetwork"
+        ],
+        "properties": {
+          "consumer_project": {
+            "type": "string"
+          },
+          "network": {
+            "type": "string"
+          },
+          "subnetwork": {
+            "type": "string"
+          }
+        }
+      },
+      "CloudSQLSourceEndpoint": {
+        "type": "object",
+        "required": [
+          "consumer_project",
+          "network",
+          "forwarding_rule"
+        ],
+        "properties": {
+          "consumer_project": {
+            "type": "string"
+          },
+          "forwarding_rule": {
+            "type": "string"
+          },
+          "network": {
+            "type": "string"
+          },
+          "provision_subnetwork": {
+            "type": "string"
           }
         }
       },
@@ -2113,6 +2180,65 @@
           },
           "subject": {
             "type": "string"
+          }
+        }
+      },
+      "FrontendDemand": {
+        "type": "object",
+        "required": [
+          "org_id",
+          "cloud_id",
+          "target_id",
+          "project_id",
+          "environment_id",
+          "service",
+          "plan_id",
+          "provider",
+          "connection_id",
+          "account_id",
+          "target_revision",
+          "connection_generation",
+          "grant_revision"
+        ],
+        "properties": {
+          "account_id": {
+            "type": "string"
+          },
+          "cloud_id": {
+            "type": "string"
+          },
+          "connection_generation": {
+            "type": "integer"
+          },
+          "connection_id": {
+            "type": "string"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "grant_revision": {
+            "type": "integer"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "plan_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "service": {
+            "type": "string"
+          },
+          "target_id": {
+            "type": "string"
+          },
+          "target_revision": {
+            "type": "integer"
           }
         }
       },
@@ -3062,6 +3188,9 @@
           "cloud_placement": {
             "$ref": "#/components/schemas/CloudPlacement"
           },
+          "cloud_sql_network": {
+            "$ref": "#/components/schemas/CloudSQLApplicationNetwork"
+          },
           "commit_sha": {
             "type": "string"
           },
@@ -3091,6 +3220,9 @@
           },
           "framework": {
             "type": "string"
+          },
+          "frontend_demand": {
+            "$ref": "#/components/schemas/FrontendDemand"
           },
           "gateway": {
             "type": "array",
@@ -3149,9 +3281,6 @@
           },
           "workload": {
             "type": "string"
-          },
-          "cloud_sql_network": {
-            "$ref": "#/components/schemas/CloudSQLApplicationNetwork"
           }
         }
       },
@@ -4435,47 +4564,6 @@
             }
           }
         }
-      },
-      "CloudSQLSourceEndpoint": {
-        "type": "object",
-        "required": [
-          "consumer_project",
-          "network",
-          "forwarding_rule"
-        ],
-        "properties": {
-          "consumer_project": {
-            "type": "string"
-          },
-          "forwarding_rule": {
-            "type": "string"
-          },
-          "network": {
-            "type": "string"
-          },
-          "provision_subnetwork": {
-            "type": "string"
-          }
-        }
-      },
-      "CloudSQLApplicationNetwork": {
-        "type": "object",
-        "required": [
-          "consumer_project",
-          "network",
-          "subnetwork"
-        ],
-        "properties": {
-          "consumer_project": {
-            "type": "string"
-          },
-          "network": {
-            "type": "string"
-          },
-          "subnetwork": {
-            "type": "string"
-          }
-        }
       }
     },
     "messages": {
@@ -4692,6 +4780,10 @@
             "org_id": {
               "type": "string"
             },
+            "owned_resources": {
+              "type": "object",
+              "additionalProperties": true
+            },
             "physical_id": {
               "type": "string"
             },
@@ -4793,6 +4885,10 @@
             },
             "org_id": {
               "type": "string"
+            },
+            "owned_resources": {
+              "type": "object",
+              "additionalProperties": true
             },
             "physical_id": {
               "type": "string"
@@ -4954,6 +5050,98 @@
         "name": "build.log",
         "title": "build.log event",
         "summary": "SSE event: build.log"
+      },
+      "api-v1-realtime-eventscanary_verdict.deleted": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "id",
+            "org_id",
+            "project_id",
+            "deployment_id",
+            "retry",
+            "action_id",
+            "service",
+            "step",
+            "attempt",
+            "weight",
+            "verdict",
+            "reason",
+            "baseline_fallback",
+            "baseline",
+            "candidate",
+            "thresholds",
+            "window_start",
+            "window_end",
+            "decided_at"
+          ],
+          "properties": {
+            "action_id": {
+              "type": "string"
+            },
+            "attempt": {
+              "type": "integer"
+            },
+            "baseline": {
+              "$ref": "#/components/schemas/Health"
+            },
+            "baseline_fallback": {
+              "type": "boolean"
+            },
+            "candidate": {
+              "$ref": "#/components/schemas/Health"
+            },
+            "decided_at": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "deployment_id": {
+              "type": "string"
+            },
+            "id": {
+              "type": "string"
+            },
+            "org_id": {
+              "type": "string"
+            },
+            "project_id": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "retry": {
+              "type": "integer"
+            },
+            "service": {
+              "type": "string"
+            },
+            "step": {
+              "type": "integer"
+            },
+            "thresholds": {
+              "$ref": "#/components/schemas/Thresholds"
+            },
+            "verdict": {
+              "type": "string"
+            },
+            "weight": {
+              "type": "integer"
+            },
+            "window_end": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "window_start": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "canary_verdict.deleted",
+        "title": "canary_verdict.deleted event",
+        "summary": "SSE event: canary_verdict.deleted"
       },
       "api-v1-realtime-eventscanary_verdict.updated": {
         "payload": {
@@ -5386,6 +5574,7 @@
             "org_id",
             "cloud",
             "name",
+            "method",
             "account",
             "details",
             "status",
@@ -5429,6 +5618,9 @@
             "message": {
               "type": "string"
             },
+            "method": {
+              "type": "string"
+            },
             "missing": {
               "type": "array",
               "items": {
@@ -5439,6 +5631,9 @@
               "type": "string"
             },
             "org_id": {
+              "type": "string"
+            },
+            "signed_in_by": {
               "type": "string"
             },
             "status": {
@@ -5464,6 +5659,7 @@
             "org_id",
             "cloud",
             "name",
+            "method",
             "account",
             "details",
             "status",
@@ -5507,6 +5703,9 @@
             "message": {
               "type": "string"
             },
+            "method": {
+              "type": "string"
+            },
             "missing": {
               "type": "array",
               "items": {
@@ -5517,6 +5716,9 @@
               "type": "string"
             },
             "org_id": {
+              "type": "string"
+            },
+            "signed_in_by": {
               "type": "string"
             },
             "status": {
