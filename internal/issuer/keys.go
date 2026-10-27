@@ -124,10 +124,14 @@ func (s *PgKeyStore) WithKeyLock(ctx context.Context, fn func() error) error {
 }
 
 // Rotate keeps the issuer's keys in order, under the key lock. With no
-// current key it makes one, and the ticket key if the issuer is new. A
-// current key older than rotateEvery is retired for a new one. A retired
-// key stays in the JWKS for publishRetired, so tokens it signed still
-// verify, and after that its row and its private key are deleted.
+// current key it makes one, and the ticket key if the issuer is new, and
+// that key signs at once. Once the current key is older than rotateEvery
+// less prePublish, Rotate makes its successor. The successor is in the
+// JWKS for prePublish before it signs, so a cloud that cached the keys
+// before it existed has fetched them again by then. When the successor
+// becomes current, the key before it is retired. A retired key stays in
+// the JWKS for publishRetired, so tokens it signed still verify, and
+// after that its row and its private key are deleted.
 //
 // Mint and Ticket call it when they find no key. Otherwise it's for the
 // background job, and any replica can run it: the lock makes them take
@@ -143,23 +147,26 @@ func (s *Service) rotate(ctx context.Context) error {
 		return err
 	}
 	now := s.now()
-	current := currentKey(keys)
+	current := currentKey(keys, now)
 	if current == nil {
 		if err := s.ensureTicketKey(ctx, len(keys) == 0); err != nil {
 			return err
 		}
-	}
-	if current == nil || now.Sub(current.CreatedAt) >= rotateEvery {
 		k, addErr := s.addKey(ctx, now)
 		if addErr != nil {
 			return addErr
 		}
 		current = &k
+	} else if now.Sub(current.CreatedAt) >= rotateEvery-prePublish && !hasSuccessor(keys, current) {
+		if _, addErr := s.addKey(ctx, now); addErr != nil {
+			return addErr
+		}
 	}
-	// Every key but the current one is retired, so one a crash left
-	// unretired after its replacement is caught here.
+	// Every key older than the current one is retired, so a key a crash
+	// left unretired after its successor took over is caught here. A
+	// newer key is a successor still being published, and is left alone.
 	for _, k := range keys {
-		if k.RetiredAt == nil && k.KID != current.KID {
+		if k.RetiredAt == nil && older(k, *current) {
 			if err := s.keys.RetireKey(ctx, k.KID, now); err != nil {
 				return err
 			}
@@ -232,19 +239,47 @@ func (s *Service) addKey(ctx context.Context, now time.Time) (Key, error) {
 	return k, nil
 }
 
-// currentKey is the newest key that isn't retired, or nil.
-func currentKey(keys []Key) *Key {
-	var current *Key
+// currentKey is the key that signs at now: the newest unretired key that
+// has been published for prePublish. When none has, it's the oldest
+// unretired key, which on a new issuer is its only one, so a new issuer
+// signs at once. With no unretired key it's nil.
+func currentKey(keys []Key, now time.Time) *Key {
+	var current, oldest *Key
 	for i := range keys {
 		k := &keys[i]
 		if k.RetiredAt != nil {
 			continue
 		}
-		if current == nil || k.CreatedAt.After(current.CreatedAt) || (k.CreatedAt.Equal(current.CreatedAt) && k.KID > current.KID) {
+		if oldest == nil || older(*k, *oldest) {
+			oldest = k
+		}
+		if now.Sub(k.CreatedAt) >= prePublish && (current == nil || older(*current, *k)) {
 			current = k
 		}
 	}
+	if current == nil {
+		return oldest
+	}
 	return current
+}
+
+// hasSuccessor says whether a key newer than current is waiting to take
+// over from it.
+func hasSuccessor(keys []Key, current *Key) bool {
+	for _, k := range keys {
+		if k.RetiredAt == nil && older(*current, k) {
+			return true
+		}
+	}
+	return false
+}
+
+// older orders keys by when they were made, then by kid.
+func older(a, b Key) bool {
+	if !a.CreatedAt.Equal(b.CreatedAt) {
+		return a.CreatedAt.Before(b.CreatedAt)
+	}
+	return a.KID < b.KID
 }
 
 // jwk is a public RSA signing key in the order clouds print it.

@@ -3,6 +3,7 @@ package issuer
 import (
 	"context"
 	"crypto"
+	"crypto/hmac"
 	"crypto/rsa"
 	"crypto/sha256"
 	"encoding/base64"
@@ -298,47 +299,100 @@ func TestMintRefusesAForgedTicket(t *testing.T) {
 	}
 }
 
+// mintedKID mints for h and returns the kid the token was signed with,
+// after checking the signature against the JWKS.
+func mintedKID(t *testing.T, s *Service, h keyless.Handout) string {
+	t.Helper()
+	token, err := s.Mint(context.Background(), h)
+	if err != nil {
+		t.Fatalf("Mint: %v", err)
+	}
+	header, _ := verified(t, s, token)
+	kid, _ := header["kid"].(string)
+	return kid
+}
+
+func kids(t *testing.T, s *Service) []string {
+	t.Helper()
+	set := jwks(t, mustJWKS(t, s))
+	out := make([]string, 0, len(set))
+	for _, k := range set {
+		out = append(out, k["kid"].(string))
+	}
+	slices.Sort(out)
+	return out
+}
+
+// A key's successor is published prePublish before it signs, so a cloud
+// that cached the JWKS before the successor existed has fetched it again
+// by the time a token needs it. The key it replaces stays publishRetired
+// after it's retired, then it's gone from the JWKS and from Vault.
 func TestRotationKeepsThePreviousKeyForADay(t *testing.T) {
-	s, _, secrets, c := newTestService(t)
+	s, keys, secrets, c := newTestService(t)
 	ctx := context.Background()
 	if err := s.Rotate(ctx); err != nil {
 		t.Fatal(err)
 	}
-	first := jwks(t, mustJWKS(t, s))
+	first := kids(t, s)
 	if len(first) != 1 {
 		t.Fatalf("after the first rotation JWKS has %d keys, want 1", len(first))
 	}
-	oldKID := first[0]["kid"].(string)
+	oldKID := first[0]
 	if !secrets.has(oldKID) || !secrets.has(ticketKeyID) {
 		t.Fatal("the first rotation should keep a private key and the ticket key in Vault")
 	}
 	h := handout(t, s, keyless.Subject("org_1", "conn_1"), "//iam.googleapis.com/projects/1/locations/global/workloadIdentityPools/loomplane/providers/loomplane")
+	// A new issuer has nobody's cached keys to wait for, so it signs at once.
+	if kid := mintedKID(t, s, h); kid != oldKID {
+		t.Fatalf("a new issuer signed with %s, want its only key %s", kid, oldKID)
+	}
 
-	c.advance(rotateEvery + time.Minute)
+	// A day before the key is due, its successor is made and published,
+	// and tokens still carry the old kid. Rotating again adds no other.
+	c.advance(rotateEvery - prePublish + time.Minute)
+	for range 2 {
+		if err := s.Rotate(ctx); err != nil {
+			t.Fatal(err)
+		}
+	}
+	published := kids(t, s)
+	if len(published) != 2 {
+		t.Fatalf("with a successor published JWKS has %d keys, want 2", len(published))
+	}
+	newKID := published[0]
+	if newKID == oldKID {
+		newKID = published[1]
+	}
+	if kid := mintedKID(t, s, h); kid != oldKID {
+		t.Fatal("the successor signed before it had been published for a day")
+	}
+	all, _ := keys.Keys(ctx)
+	for _, k := range all {
+		if k.RetiredAt != nil {
+			t.Fatalf("%s was retired before its successor took over", k.KID)
+		}
+	}
+
+	// A day on, the successor signs and the old key is retired but still
+	// published.
+	c.advance(prePublish)
 	if err := s.Rotate(ctx); err != nil {
 		t.Fatal(err)
 	}
-	both := jwks(t, mustJWKS(t, s))
-	if len(both) != 2 {
-		t.Fatalf("just after rotating JWKS has %d keys, want 2", len(both))
+	if kid := mintedKID(t, s, h); kid != newKID {
+		t.Fatalf("after the switch tokens carry %s, want the successor %s", kid, newKID)
 	}
-	token, err := s.Mint(ctx, h)
-	if err != nil {
-		t.Fatalf("Mint after rotating: %v", err)
+	if got := kids(t, s); len(got) != 2 {
+		t.Fatalf("just after the switch JWKS has %d keys, want 2", len(got))
 	}
-	header, _ := verified(t, s, token)
-	if header["kid"] == oldKID {
-		t.Fatal("a new token still uses the retired key")
-	}
-	newKID := header["kid"]
 
+	// A day after it was retired, the old key is gone.
 	c.advance(25 * time.Hour)
-	if err = s.Rotate(ctx); err != nil {
+	if err := s.Rotate(ctx); err != nil {
 		t.Fatal(err)
 	}
-	last := jwks(t, mustJWKS(t, s))
-	if len(last) != 1 || last[0]["kid"] != newKID {
-		t.Fatalf("a day after rotating JWKS = %v, want only %v", last, newKID)
+	if got := kids(t, s); len(got) != 1 || got[0] != newKID {
+		t.Fatalf("a day after retiring JWKS = %v, want only %v", got, newKID)
 	}
 	if secrets.has(oldKID) {
 		t.Fatal("the retired private key is still in Vault")
@@ -347,8 +401,8 @@ func TestRotationKeepsThePreviousKeyForADay(t *testing.T) {
 		t.Fatal("rotation dropped the ticket key")
 	}
 	// The ticket key outlives signing keys, so a handout keeps working.
-	if _, err = s.Mint(ctx, h); err != nil {
-		t.Fatalf("Mint with the first handout after two rotations: %v", err)
+	if kid := mintedKID(t, s, h); kid != newKID {
+		t.Fatalf("the first handout after two rotations signed with %s", kid)
 	}
 }
 
@@ -441,6 +495,13 @@ func TestUsable(t *testing.T) {
 		{"http://127.0.0.1:8780", "production", false, "public_url isn't HTTPS"},
 		{"http://127.0.0.1:8780", "staging", false, "public_url isn't HTTPS"},
 		{"", "production", false, "public_url isn't set"},
+		{"https://ops:hunter2@loomplane.example.com", "production", false, "public_url can't have a user name or password"},
+		{"https://ops@loomplane.example.com", "production", false, "public_url can't have a user name or password"},
+		{"https://loomplane.example.com/?tenant=1", "production", false, "public_url can't have a query"},
+		{"https://loomplane.example.com?", "production", false, "public_url can't have a query"},
+		{"https://loomplane.example.com/#top", "production", false, "public_url can't have a fragment"},
+		{"https://loomplane.example.com#", "production", false, "public_url can't have a fragment"},
+		{"http://127.0.0.1:8780/?a=b", "development", false, "public_url can't have a query"},
 	} {
 		ok, reason := Usable(tc.url, tc.env)
 		if ok != tc.ok || reason != tc.reason {
@@ -454,24 +515,17 @@ func TestUsable(t *testing.T) {
 	}
 }
 
-// A replica that rotates signs with its new key at once, so every other
-// replica's JWKS has to show that key straight away, not a minute later.
+// A new issuer signs with its first key at once, so every other replica's
+// JWKS has to show that key straight away, not after a cache runs out.
 func TestJWKSShowsAnotherReplicasNewKey(t *testing.T) {
 	keys, secrets := &memKeys{}, &memSecrets{}
 	c := &clock{t: time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)}
 	a := New(testIssuer, "production", keys, secrets, c.now)
 	b := New(testIssuer, "production", keys, secrets, c.now)
 	ctx := context.Background()
-	if err := a.Rotate(ctx); err != nil {
-		t.Fatal(err)
-	}
-	c.advance(rotateEvery)
-	// b has just served the keys when a rotates.
-	if got := jwks(t, mustJWKS(t, b)); len(got) != 1 {
-		t.Fatalf("b's JWKS has %d keys, want 1", len(got))
-	}
-	if err := a.Rotate(ctx); err != nil {
-		t.Fatal(err)
+	// b has just served the keys, none yet, when a makes the first one.
+	if got := jwks(t, mustJWKS(t, b)); len(got) != 0 {
+		t.Fatalf("b's JWKS has %d keys, want none", len(got))
 	}
 	h := handout(t, a, keyless.Subject("org_1", "conn_1"), "sts.amazonaws.com")
 	token, err := a.Mint(ctx, h)
@@ -482,8 +536,9 @@ func TestJWKSShowsAnotherReplicasNewKey(t *testing.T) {
 	verified(t, b, token)
 }
 
-// The ticket covers subject + "\n" + audience, so neither may hold a line
-// break: otherwise two different pairs could share one ticket.
+// The ticket covers a versioned label, the subject and the audience, one
+// to a line, so neither may hold a line break: otherwise two different
+// pairs could share one ticket.
 func TestTicketRefusesLineBreaks(t *testing.T) {
 	s, _, _, _ := newTestService(t)
 	ctx := context.Background()
@@ -492,5 +547,22 @@ func TestTicketRefusesLineBreaks(t *testing.T) {
 	}
 	if _, err := s.Ticket(ctx, "org:o:connection:c", "sts.amazonaws.com\nx"); err == nil {
 		t.Error("an audience with a line break got a ticket")
+	}
+}
+
+func TestTicketIsVersioned(t *testing.T) {
+	s, _, secrets, _ := newTestService(t)
+	ticket, err := s.Ticket(context.Background(), "org:o:connection:c", "sts.amazonaws.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	key, err := secrets.Reveal(context.Background(), vaultOrg, ticketKeyID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mac := hmac.New(sha256.New, key)
+	mac.Write([]byte("loomplane-keyless-ticket-v1\norg:o:connection:c\nsts.amazonaws.com"))
+	if ticket != base64.RawURLEncoding.EncodeToString(mac.Sum(nil)) {
+		t.Fatal("the ticket isn't the HMAC of the v1 label, subject and audience")
 	}
 }

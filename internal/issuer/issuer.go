@@ -36,6 +36,10 @@ const (
 	// rotateEvery is how old the current key gets before a new one
 	// replaces it.
 	rotateEvery = 30 * 24 * time.Hour
+	// prePublish is how long a new key is in the JWKS before it signs.
+	// Azure caches an issuer's keys for up to a day, so a key that signed
+	// as soon as it was made could be refused for that long.
+	prePublish = 24 * time.Hour
 	// publishRetired is how long a retired key stays in the JWKS, so the
 	// tokens it signed last still verify.
 	publishRetired = 24 * time.Hour
@@ -158,9 +162,13 @@ func (s *Service) Ticket(ctx context.Context, subject, audience string) (string,
 	return base64.RawURLEncoding.EncodeToString(ticketMAC(c.ticketKey, subject, audience)), nil
 }
 
+// ticketLabel names what the ticket key's MAC is for, and its version, so
+// the key can't be made to mean anything else.
+const ticketLabel = "loomplane-keyless-ticket-v1"
+
 func ticketMAC(key []byte, subject, audience string) []byte {
 	mac := hmac.New(sha256.New, key)
-	mac.Write([]byte(subject + "\n" + audience))
+	mac.Write([]byte(ticketLabel + "\n" + subject + "\n" + audience))
 	return mac.Sum(nil)
 }
 
@@ -237,7 +245,7 @@ func (s *Service) load(ctx context.Context) (*cached, error) {
 		if err != nil {
 			return nil, err
 		}
-		c = &cached{at: now, keys: keys, current: currentKey(keys)}
+		c = &cached{at: now, keys: keys, current: currentKey(keys, now)}
 		s.cache = c
 	}
 	if c.current == nil || c.signer != nil {

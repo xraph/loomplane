@@ -145,41 +145,50 @@ func TestKeysAreCreatedOnceAcrossReplicas(t *testing.T) {
 		t.Fatalf("public JWK %s doesn't name its kid", keys[0].Public)
 	}
 
-	// A month on, one replica rotates. The old key is retired, not gone,
-	// until a day after.
-	clockMu.Lock()
-	now = now.Add(31 * 24 * time.Hour)
-	clockMu.Unlock()
+	// A month on, one replica makes the successor, which is published
+	// but doesn't sign yet. A day later, after the other replica has
+	// rotated, the successor signs and the old key is retired, not gone.
+	// A day after that, the old key is deleted.
+	retired := func(want int, when string) {
+		t.Helper()
+		got, kerr := store.Keys(ctx)
+		if kerr != nil {
+			t.Fatal(kerr)
+		}
+		n := 0
+		for _, k := range got {
+			if k.RetiredAt != nil {
+				n++
+			}
+		}
+		if len(got) != 2 || n != want {
+			t.Fatalf("%s: %d key rows with %d retired, want 2 with %d", when, len(got), n, want)
+		}
+	}
+	advance := func(d time.Duration) {
+		clockMu.Lock()
+		now = now.Add(d)
+		clockMu.Unlock()
+	}
+	advance(31 * 24 * time.Hour)
 	if err = replicas[0].Rotate(ctx); err != nil {
 		t.Fatal(err)
 	}
-	keys, err = store.Keys(ctx)
-	if err != nil {
+	retired(0, "with a successor published")
+	advance(25 * time.Hour)
+	if err = replicas[1].Rotate(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if len(keys) != 2 {
-		t.Fatalf("after rotating: %d key rows, want 2", len(keys))
-	}
-	retired := 0
-	for _, k := range keys {
-		if k.RetiredAt != nil {
-			retired++
-		}
-	}
-	if retired != 1 {
-		t.Fatalf("after rotating: %d keys retired, want 1", retired)
-	}
-	clockMu.Lock()
-	now = now.Add(25 * time.Hour)
-	clockMu.Unlock()
-	if err = replicas[1].Rotate(ctx); err != nil {
+	retired(1, "after the switch")
+	advance(25 * time.Hour)
+	if err = replicas[0].Rotate(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if keys, err = store.Keys(ctx); err != nil {
 		t.Fatal(err)
 	}
 	if len(keys) != 1 || keys[0].RetiredAt != nil {
-		t.Fatalf("a day after rotating: keys = %+v, want the one current key", keys)
+		t.Fatalf("a day after the switch: keys = %+v, want the one current key", keys)
 	}
 }
 
