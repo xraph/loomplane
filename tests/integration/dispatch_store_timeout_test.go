@@ -16,15 +16,17 @@ import (
 )
 
 // A Dispatch store call that outlasts the durable worker's store timeout
-// stops the worker, the way an overloaded Postgres did, and the
-// supervisor in internal/platform has to replace it. Loomplane doesn't
-// set the worker's timing, so this relies on Dispatch v1.9.2's defaults: a
-// 30-second lease and a store timeout of min(5s, lease/4).
+// mustn't leave plans in planning, the way an overloaded Postgres did.
+// Since Dispatch v1.9.3 a claim that times out leaves the worker polling and
+// the health check unhealthy until a claim gets through. A task result that
+// can't be saved still stops the worker once Dispatch's own retries run out,
+// and the supervisor in internal/platform has to replace it. Loomplane
+// doesn't set the worker's timing, so this relies on Dispatch v1.9.3's
+// defaults: a 30-second lease and a store timeout of min(5s, lease/4).
 //
-// The deployment and capacity workers share one health check with the
-// same message, so the health check only proves a worker stopped and was
-// replaced, not which one. New plans run on the capacity build, so the
-// plans prove the worker that runs them kept working.
+// The deployment and capacity workers share one health check, so it only
+// proves a worker failed and recovered, not which one. New plans run on the
+// capacity build, so the plans prove the worker that runs them kept working.
 func TestDispatch_aStoreTimeoutDoesNotStopDurableWork(t *testing.T) {
 	last := time.Now()
 	took := func(what string) {
@@ -126,25 +128,27 @@ func TestDispatch_aStoreTimeoutDoesNotStopDurableWork(t *testing.T) {
 		}
 	}
 	// injected waits until waiting() shows the store call stuck in
-	// Postgres and the health check reports a stopped worker.
-	injected := func(what string, waiting func() bool) {
+	// Postgres and the health check reports the worker failing in the way
+	// the case expects: claims it can't make, or a stop.
+	injected := func(what, failing string, within time.Duration, waiting func() bool) {
 		t.Helper()
-		seen, stopped := false, false
-		deadline := time.Now().Add(30 * time.Second)
-		for !seen || !stopped {
+		seen, failed := false, false
+		deadline := time.Now().Add(within)
+		for !seen || !failed {
 			if time.Now().After(deadline) {
-				t.Fatalf("no injected failure after 30s: %s %t, a worker stopped %t", what, seen, stopped)
+				t.Fatalf("no injected failure after %s: %s %t, the worker %s %t", within, what, seen, failing, failed)
 			}
 			seen = seen || waiting()
-			if health := jobs.Health(t.Context()); health != nil && strings.Contains(health.Error(), "durable workflow worker stopped") {
-				stopped = true
+			if health := jobs.Health(t.Context()); health != nil && strings.Contains(health.Error(), failing) {
+				failed = true
 			}
 			time.Sleep(50 * time.Millisecond)
 		}
 	}
-	// replaced waits for the health check to pass again. A stopped worker
-	// never runs again, so that means the supervisor replaced it.
-	replaced := func() {
+	// recovered waits for the health check to pass again: a claim got
+	// through, or the supervisor replaced a stopped worker, which never runs
+	// again.
+	recovered := func() {
 		t.Helper()
 		deadline := time.Now().Add(30 * time.Second)
 		for jobs.Health(t.Context()) != nil {
@@ -156,8 +160,8 @@ func TestDispatch_aStoreTimeoutDoesNotStopDurableWork(t *testing.T) {
 	}
 
 	// The worker times out while it's idle: a lock on the task table makes
-	// its next claim wait past the store timeout. A plan made once the lock
-	// is gone is planned.
+	// its next claim wait past the store timeout, and the worker keeps
+	// polling. A plan made once the lock is gone is planned.
 	healthy()
 	tx, err := conn.Begin(t.Context())
 	if err != nil {
@@ -170,7 +174,7 @@ func TestDispatch_aStoreTimeoutDoesNotStopDurableWork(t *testing.T) {
 	if _, err = tx.Exec(t.Context(), "LOCK TABLE dispatch_execution_tasks IN ACCESS EXCLUSIVE MODE"); err != nil {
 		t.Fatal(err)
 	}
-	injected("a query waiting on the lock", func() bool {
+	injected("a query waiting on the lock", "can't claim tasks", 30*time.Second, func() bool {
 		if _, clearErr := tx.Exec(t.Context(), "SELECT pg_stat_clear_snapshot()"); clearErr != nil {
 			t.Fatal(clearErr)
 		}
@@ -188,7 +192,7 @@ func TestDispatch_aStoreTimeoutDoesNotStopDurableWork(t *testing.T) {
 		t.Fatal(err)
 	}
 	planned(create())
-	replaced()
+	recovered()
 	took("the idle timeout")
 
 	// The worker times out with a plan in flight: a trigger stalls the
@@ -224,7 +228,8 @@ func TestDispatch_aStoreTimeoutDoesNotStopDurableWork(t *testing.T) {
 		t.Fatal(err)
 	}
 	inFlight := create()
-	injected("the activity's completion sleeping in the trigger", func() bool {
+	// Dispatch retries the save three times before the worker stops.
+	injected("the activity's completion sleeping in the trigger", "stopped", 60*time.Second, func() bool {
 		var n int
 		if scanErr := conn.QueryRow(t.Context(), `SELECT count(*) FROM pg_stat_activity WHERE datname=current_database()
 			AND wait_event='PgSleep'`).Scan(&n); scanErr != nil {
@@ -256,6 +261,6 @@ func TestDispatch_aStoreTimeoutDoesNotStopDurableWork(t *testing.T) {
 		time.Sleep(200 * time.Millisecond)
 	}
 	planned(inFlight)
-	replaced()
+	recovered()
 	took("the in-flight timeout")
 }
