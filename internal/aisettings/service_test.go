@@ -52,6 +52,7 @@ type memStore struct {
 	settings    map[string]Settings
 	keys        map[string]map[string]ProviderKey
 	allocations map[string]map[string]Allocation
+	hfRevisions map[string]int64
 	nextID      int
 }
 
@@ -60,6 +61,7 @@ func newMemStore() *memStore {
 		settings:    map[string]Settings{},
 		keys:        map[string]map[string]ProviderKey{},
 		allocations: map[string]map[string]Allocation{},
+		hfRevisions: map[string]int64{},
 	}
 }
 
@@ -78,6 +80,10 @@ func (m *memStore) Settings(_ context.Context, orgID string) (*Settings, error) 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if s, ok := m.settings[orgID]; ok {
+		if s.HuggingFace != nil {
+			hf := *s.HuggingFace
+			s.HuggingFace = &hf
+		}
 		return &s, nil
 	}
 	return &Settings{OrgID: orgID, MonthlyBudgetUSD: "0.00", Embeddings: LocalEmbeddings()}, nil
@@ -232,6 +238,32 @@ func (m *memStore) SetBudget(_ context.Context, orgID, budgetUSD, by string) (*S
 	s.MonthlyBudgetUSD, s.UpdatedBy, s.Revision = usd(cents(budgetUSD)), by, s.Revision+1
 	m.settings[orgID] = s
 	return &s, nil
+}
+
+func (m *memStore) SetHuggingFaceToken(_ context.Context, orgID, hint, account string) (*HuggingFaceToken, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s := m.ensure(orgID)
+	m.hfRevisions[orgID]++
+	s.HuggingFace = &HuggingFaceToken{
+		Hint: hint, Account: account, SetAt: time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC), Revision: m.hfRevisions[orgID],
+	}
+	m.settings[orgID] = s
+	hf := *s.HuggingFace
+	return &hf, nil
+}
+
+func (m *memStore) ClearHuggingFaceToken(_ context.Context, orgID string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	s, ok := m.settings[orgID]
+	if !ok {
+		return nil
+	}
+	m.hfRevisions[orgID]++
+	s.HuggingFace = nil
+	m.settings[orgID] = s
+	return nil
 }
 
 // memKeys is Keys in memory, recording each Put.

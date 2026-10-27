@@ -191,13 +191,16 @@ func (in ProviderKeyInput) LogValue() slog.Value {
 // Deps are what a Service needs. Notify may be nil, and bound later with
 // SetNotifier.
 type Deps struct {
-	Store    Store
-	Keys     Keys
-	Authz    Authorizer // *security.Authorizer
-	Audit    Auditor    // the projects.Auditor already used across Loomplane
-	Projects Projects   // *projects.PgStore
-	Notify   ChangeNotifier
-	Now      func() time.Time // nil: time.Now
+	Store Store
+	Keys  Keys
+	// HuggingFace keeps the workspace Hugging Face token's value. Nil leaves
+	// the token methods refusing to work.
+	HuggingFace HuggingFaceTokens
+	Authz       Authorizer // *security.Authorizer
+	Audit       Auditor    // the projects.Auditor already used across Loomplane
+	Projects    Projects   // *projects.PgStore
+	Notify      ChangeNotifier
+	Now         func() time.Time // nil: time.Now
 }
 
 // Service is the workspace AI settings API. Every method that takes a
@@ -205,13 +208,16 @@ type Deps struct {
 type Service struct {
 	store    Store
 	keys     Keys
+	hfTokens HuggingFaceTokens
 	authz    Authorizer
 	audit    Auditor
 	projects Projects
 	now      func() time.Time
 
-	mu     sync.RWMutex
-	notify ChangeNotifier
+	mu      sync.RWMutex
+	notify  ChangeNotifier
+	checker TokenChecker
+	gated   GatedModels
 }
 
 // NewService returns a Service.
@@ -221,7 +227,7 @@ func NewService(d Deps) *Service {
 		now = time.Now
 	}
 	return &Service{
-		store: d.Store, keys: d.Keys, authz: d.Authz, audit: d.Audit, projects: d.Projects,
+		store: d.Store, keys: d.Keys, hfTokens: d.HuggingFace, authz: d.Authz, audit: d.Audit, projects: d.Projects,
 		notify: d.Notify, now: now,
 	}
 }

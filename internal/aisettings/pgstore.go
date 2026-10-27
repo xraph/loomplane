@@ -26,7 +26,10 @@ func NewPgStore(db *pgdriver.PgDB) *PgStore { return &PgStore{db: db, now: time.
 var _ Store = (*PgStore)(nil)
 
 // Money goes in and out as text, so no amount passes through a float.
-const settingsColumns = `org_id, monthly_budget_usd::text, embeddings, revision, updated_by, updated_at`
+const settingsColumns = `org_id, monthly_budget_usd::text, embeddings, revision, updated_by, updated_at,
+	huggingface_hint, huggingface_account, huggingface_set_at, huggingface_revision`
+
+const huggingFaceColumns = `huggingface_hint, huggingface_account, huggingface_set_at, huggingface_revision`
 
 const keyColumns = `id, org_id, name, type, fields, models, key_hint, projects, revision,
 	created_by, updated_by, created_at, updated_at`
@@ -39,15 +42,29 @@ func scanSettings(row scanner) (*Settings, error) {
 	var (
 		s          Settings
 		embeddings []byte
+		hf         HuggingFaceToken
+		hfSetAt    *time.Time
 	)
-	if err := row.Scan(&s.OrgID, &s.MonthlyBudgetUSD, &embeddings, &s.Revision, &s.UpdatedBy, &s.UpdatedAt); err != nil {
+	if err := row.Scan(&s.OrgID, &s.MonthlyBudgetUSD, &embeddings, &s.Revision, &s.UpdatedBy, &s.UpdatedAt,
+		&hf.Hint, &hf.Account, &hfSetAt, &hf.Revision); err != nil {
 		return nil, err
 	}
 	if err := json.Unmarshal(embeddings, &s.Embeddings); err != nil {
 		return nil, fmt.Errorf("decode AI embeddings setting: %w", err)
 	}
 	s.UpdatedAt = s.UpdatedAt.UTC()
+	s.HuggingFace = huggingFaceToken(hf, hfSetAt)
 	return &s, nil
+}
+
+// huggingFaceToken is the token a row records, or nil when its set_at is
+// null: none is set.
+func huggingFaceToken(hf HuggingFaceToken, setAt *time.Time) *HuggingFaceToken {
+	if setAt == nil {
+		return nil
+	}
+	hf.SetAt = setAt.UTC()
+	return &hf
 }
 
 func scanKey(row scanner) (*ProviderKey, error) {
@@ -374,4 +391,38 @@ func (s *PgStore) SetBudget(ctx context.Context, orgID, budgetUSD, by string) (*
 		return nil, fmt.Errorf("save AI budget: %w", err)
 	}
 	return got, nil
+}
+
+// SetHuggingFaceToken implements Store.
+func (s *PgStore) SetHuggingFaceToken(ctx context.Context, orgID, hint, account string) (*HuggingFaceToken, error) {
+	var (
+		hf    HuggingFaceToken
+		setAt *time.Time
+	)
+	err := s.db.QueryRow(ctx, `INSERT INTO loomplane_ai_settings AS s
+			(org_id, huggingface_hint, huggingface_account, huggingface_set_at, huggingface_revision)
+		VALUES ($1, $2, $3, $4, 1)
+		ON CONFLICT (org_id) DO UPDATE SET
+			huggingface_hint = EXCLUDED.huggingface_hint,
+			huggingface_account = EXCLUDED.huggingface_account,
+			huggingface_set_at = EXCLUDED.huggingface_set_at,
+			huggingface_revision = s.huggingface_revision + 1
+		RETURNING `+huggingFaceColumns, orgID, hint, account, s.now().UTC()).
+		Scan(&hf.Hint, &hf.Account, &setAt, &hf.Revision)
+	if err != nil {
+		return nil, fmt.Errorf("save the Hugging Face token: %w", err)
+	}
+	return huggingFaceToken(hf, setAt), nil
+}
+
+// ClearHuggingFaceToken implements Store.
+func (s *PgStore) ClearHuggingFaceToken(ctx context.Context, orgID string) error {
+	_, err := s.db.Exec(ctx, `UPDATE loomplane_ai_settings
+		SET huggingface_hint = '', huggingface_account = '', huggingface_set_at = NULL,
+			huggingface_revision = huggingface_revision + 1
+		WHERE org_id = $1`, orgID)
+	if err != nil {
+		return fmt.Errorf("clear the Hugging Face token: %w", err)
+	}
+	return nil
 }

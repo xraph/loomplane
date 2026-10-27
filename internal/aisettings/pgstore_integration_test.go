@@ -22,11 +22,15 @@ import (
 	"github.com/xraph/loomplane/database/migrations"
 )
 
-const settingsMigration = "20261125000100"
+// The migrations this package's tables come from, by version and name.
+var settingsMigrations = map[string]string{
+	"20261125000100": "ai_settings",
+	"20261126000100": "ai_huggingface_token",
+}
 
 // scratchStore is a PgStore over a database of its own, dropped when the
-// test ends, with the AI settings migration applied twice (a rerun must be
-// harmless).
+// test ends, with the AI settings migrations applied twice each (a rerun
+// must be harmless).
 func scratchStore(t *testing.T) (*PgStore, *pgdriver.PgDB) {
 	t.Helper()
 	dsn := os.Getenv("LOOMPLANE_TEST_DATABASE_URL")
@@ -64,22 +68,26 @@ func scratchStore(t *testing.T) (*PgStore, *pgdriver.PgDB) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, m := range migrations.Group().Migrations() {
-		if m.Version != settingsMigration {
+	applied := 0
+	for _, m := range migrations.Group().Migrations() { // in version order
+		name, ok := settingsMigrations[m.Version]
+		if !ok {
 			continue
 		}
-		if m.Name != "ai_settings" {
-			t.Fatalf("migration %s is %q", settingsMigration, m.Name)
+		if m.Name != name {
+			t.Fatalf("migration %s is %q, want %q", m.Version, m.Name, name)
 		}
 		for range 2 {
 			if err = m.Up(ctx, exec); err != nil {
 				t.Fatal(err)
 			}
 		}
-		return NewPgStore(pg), pg
+		applied++
 	}
-	t.Fatalf("no migration %s", settingsMigration)
-	return nil, nil
+	if applied != len(settingsMigrations) {
+		t.Fatalf("applied %d of the %d AI settings migrations", applied, len(settingsMigrations))
+	}
+	return NewPgStore(pg), pg
 }
 
 func TestSettingsDefaultsForANewWorkspace(t *testing.T) {
@@ -383,5 +391,59 @@ func TestSaveSettingsIsOptimistic(t *testing.T) {
 	}
 	if second.Revision != 3 || second.MonthlyBudgetUSD != "25.50" || second.Embeddings != LocalEmbeddings() || second.UpdatedBy != "usr_b" {
 		t.Fatalf("save after a budget change: %+v", second)
+	}
+}
+
+func TestHuggingFaceTokenMetadata(t *testing.T) {
+	st, pg := scratchStore(t)
+	ctx := t.Context()
+	at := time.Date(2026, 10, 27, 12, 0, 0, 0, time.UTC)
+	st.now = func() time.Time { return at }
+
+	// A workspace with no row gets one, with the token's first revision and
+	// the settings' defaults.
+	hf, err := st.SetHuggingFaceToken(ctx, "org_a", "hf_\u2026wxyz", "rex")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := &HuggingFaceToken{Hint: "hf_\u2026wxyz", Account: "rex", SetAt: at, Revision: 1}
+	if !reflect.DeepEqual(hf, want) {
+		t.Fatalf("set:\n got %+v\nwant %+v", hf, want)
+	}
+	got, err := st.Settings(ctx, "org_a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(got.HuggingFace, want) || got.Revision != 1 || got.MonthlyBudgetUSD != "0.00" {
+		t.Fatalf("settings after set: %+v (token %+v)", got, got.HuggingFace)
+	}
+
+	// Setting and clearing bump the token's revision, never the settings'.
+	if hf, err = st.SetHuggingFaceToken(ctx, "org_a", "hf_\u20269876", "rex-org"); err != nil || hf.Revision != 2 || hf.Account != "rex-org" {
+		t.Fatalf("second set = %+v, %v", hf, err)
+	}
+	if err = st.ClearHuggingFaceToken(ctx, "org_a"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err = st.Settings(ctx, "org_a"); err != nil || got.HuggingFace != nil || got.Revision != 1 {
+		t.Fatalf("settings after clear: %+v, %v", got, err)
+	}
+	if hf, err = st.SetHuggingFaceToken(ctx, "org_a", "hf_\u2026abcd", "rex"); err != nil || hf.Revision != 4 {
+		t.Fatalf("set after clear = %+v, %v; want revision 4", hf, err)
+	}
+	// Clearing a workspace with no row writes nothing.
+	if err = st.ClearHuggingFaceToken(ctx, "org_none"); err != nil {
+		t.Fatal(err)
+	}
+	var rows int
+	if err = pg.QueryRow(ctx, `SELECT count(*) FROM loomplane_ai_settings WHERE org_id = 'org_none'`).Scan(&rows); err != nil || rows != 0 {
+		t.Fatalf("rows for org_none: %d, %v", rows, err)
+	}
+	// The settings writes leave the token alone.
+	if _, err = st.SetBudget(ctx, "org_a", "10", "usr_a"); err != nil {
+		t.Fatal(err)
+	}
+	if got, err = st.Settings(ctx, "org_a"); err != nil || got.HuggingFace == nil || got.HuggingFace.Revision != 4 {
+		t.Fatalf("token after a budget change: %+v, %v", got.HuggingFace, err)
 	}
 }

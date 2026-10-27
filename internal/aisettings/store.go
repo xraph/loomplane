@@ -55,4 +55,13 @@ type Store interface {
 	// SetBudget locks the same row and refuses ErrUnderAllocated when the
 	// allocations already sum above the new budget. A change bumps Revision.
 	SetBudget(ctx context.Context, orgID, budgetUSD, by string) (*Settings, error)
+
+	// SetHuggingFaceToken records that the workspace has a Hugging Face
+	// token, with its hint and account, set at now. It bumps the token's
+	// revision, not the settings', and returns what it stored.
+	SetHuggingFaceToken(ctx context.Context, orgID, hint, account string) (*HuggingFaceToken, error)
+	// ClearHuggingFaceToken records that the workspace has no Hugging Face
+	// token, bumping the token's revision. Clearing when there's none is not
+	// an error.
+	ClearHuggingFaceToken(ctx context.Context, orgID string) error
 }

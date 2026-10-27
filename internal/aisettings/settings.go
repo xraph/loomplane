@@ -1,7 +1,8 @@
 // Package aisettings keeps a workspace's AI settings: its monthly AI
 // budget and how that budget is shared out, the embeddings model its
-// gateways use, and the provider keys they reach model providers with. Key
-// values live in Vault; this package's tables hold only their metadata.
+// gateways use, the provider keys they reach model providers with, and the
+// Hugging Face token gated models download with. Key and token values live
+// in Vault; this package's tables hold only their metadata.
 package aisettings
 
 import "time"
@@ -14,6 +15,18 @@ type Settings struct {
 	Revision         int64      `json:"revision"` // 0 until the row is first written
 	UpdatedBy        string     `json:"updated_by,omitempty"`
 	UpdatedAt        time.Time  `json:"updated_at"`
+	// HuggingFace is the workspace's Hugging Face token, without its value;
+	// nil when none is set. Setting or deleting it leaves Revision alone.
+	HuggingFace *HuggingFaceToken `json:"huggingface,omitempty"`
+}
+
+// HuggingFaceToken is what the workspace knows of its Hugging Face token.
+// The value is in Vault, and no answer ever carries it.
+type HuggingFaceToken struct {
+	Hint     string    `json:"hint"` // "hf_" + "…" + the last four characters
+	Account  string    `json:"account"`
+	SetAt    time.Time `json:"set_at"`
+	Revision int64     `json:"revision"` // bumped by every put and delete
 }
 
 // EmbeddingMode says where a workspace's embeddings come from.
