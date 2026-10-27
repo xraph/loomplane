@@ -20,6 +20,7 @@ import (
 
 	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/connections"
+	"github.com/xraph/loomplane/internal/orchestration"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/providers"
@@ -236,7 +237,7 @@ func TestSharedCloudCleanupSurvivesGrantRevocation(t *testing.T) {
 	f := newSyncFixture(t)
 	f.executor.failStage = false
 	actor := security.Principal{OrgID: "org", UserID: "usr"}
-	ctx := t.Context()
+	ctx := orchestration.CapacityContext(t.Context())
 	preview, err := f.service.PreviewCloudChange(ctx, actor, "proj", cloudprofiles.ChangeInput{CloudID: "cloud", TargetID: "target", Revision: 1, Provider: "vercel", ConnectionID: "new"})
 	if err != nil {
 		t.Fatal(err)

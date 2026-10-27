@@ -1,4 +1,3 @@
-import { CheckIcon, CopyIcon } from "lucide-react"
 import { type FormEvent, useState } from "react"
 import { toast } from "sonner"
 
@@ -9,9 +8,10 @@ import {
   useCloudSignInAppsSet,
   useConnectionCloudsList,
 } from "@/client/forge/loomplane/hooks"
-import type { SignInApp } from "@/client/forge/loomplane/types"
+import type { KeylessState, SignInApp } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
 import { CloudGlyph } from "@/components/cloud-glyph"
+import { CopyButton } from "@/components/keyless-setup"
 import { Page, PageHeading } from "@/components/page"
 import { SiteHeader } from "@/components/site-header"
 import { Alert, AlertDescription } from "@/components/ui/alert"
@@ -81,6 +81,7 @@ export function CloudSignIn() {
         {apps.data && (
           <>
             <CallbackUrl url={apps.data.callbackUrl} />
+            <KeylessStatus state={apps.data.keyless} />
             <Card className="gap-0 py-0">
               {apps.data.apps.map((app) => (
                 <div
@@ -149,15 +150,6 @@ export function CloudSignIn() {
 }
 
 function CallbackUrl({ url }: { url: string }) {
-  const [copied, setCopied] = useState(false)
-  const copy = async () => {
-    try {
-      await navigator.clipboard.writeText(url)
-      setCopied(true)
-    } catch {
-      toast.error("The URL wasn't copied.")
-    }
-  }
   return (
     <Card className="gap-2 px-4 py-3">
       <div className="text-sm font-medium">Callback URL</div>
@@ -168,15 +160,29 @@ function CallbackUrl({ url }: { url: string }) {
         <code className="min-w-0 flex-1 truncate rounded-md bg-muted px-2 py-1.5 font-mono text-xs">
           {url}
         </code>
-        <Button
-          variant="outline"
-          size="icon"
-          onClick={() => void copy()}
-          aria-label="Copy callback URL"
-        >
-          {copied ? <CheckIcon /> : <CopyIcon />}
-        </Button>
+        <CopyButton value={url} label="Copy callback URL" />
       </div>
+    </Card>
+  )
+}
+
+/** KeylessState says whether clouds can trust Loomplane's tokens, and why not. */
+function KeylessStatus({ state }: { state?: KeylessState }) {
+  if (!state) return null
+  return (
+    <Card className="gap-1 px-4 py-3">
+      <div className="text-sm font-medium">
+        {state.enabled
+          ? `Keyless: on · ${state.issuer}`
+          : `Keyless: off · ${state.reason}`}
+      </div>
+      <p className="text-sm text-muted-foreground">
+        A cloud can trust Loomplane directly, so you paste no token and none
+        lapses.
+      </p>
+      {state.enabled && state.reason && (
+        <p className="text-sm text-weld">{state.reason}</p>
+      )}
     </Card>
   )
 }

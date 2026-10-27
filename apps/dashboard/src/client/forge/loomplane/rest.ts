@@ -1021,6 +1021,79 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly connectionKeyless = {
+    /**
+     * Connect a cloud keylessly, with the reserved ID, once the cloud accepts Loomplane's token
+     */
+    create: async (body: types.KeylessInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Connection> => {
+      let __path = `/api/v1/connections/keyless`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["KeylessInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Connection"],
+      };
+
+      return this.request<types.Connection>(config);
+    },
+
+    /**
+     * Reserve a new keyless connection's ID for a day, and say how to set up the cloud's trust in it
+     */
+    prepare: async (body: types.KeylessPrepareInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.KeylessSetup> => {
+      let __path = `/api/v1/connections/keyless/prepare`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["KeylessPrepareInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["KeylessSetup"],
+      };
+
+      return this.request<types.KeylessSetup>(config);
+    },
+
+    /**
+     * Move a connection to keyless, or change its keyless settings, if the cloud's trust reaches the same account
+     */
+    replace: async (id: string, body: types.KeylessReplaceInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Connection> => {
+      let __path = `/api/v1/connections/${encodeURIComponent(String(id))}/keyless`;
+      const config: RequestConfig = {
+        method: 'PUT',
+        url: __path,
+        body,
+        bodyCodec: CODECS["KeylessReplaceInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Connection"],
+      };
+
+      return this.request<types.Connection>(config);
+    },
+
+    /**
+     * How to set up the cloud's trust in an existing connection, to move it to keyless
+     */
+    setup: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.KeylessSetup> => {
+      let __path = `/api/v1/connections/${encodeURIComponent(String(id))}/keyless`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["KeylessSetup"],
+      };
+
+      return this.request<types.KeylessSetup>(config);
+    },
+
+  };
+
   public readonly connectionSignIns = {
     /**
      * Finish a sign-in with what the cloud sent back to the callback

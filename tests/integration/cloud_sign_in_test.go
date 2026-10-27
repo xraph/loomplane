@@ -293,7 +293,8 @@ func TestCloudSignIn_googleEndToEnd(t *testing.T) {
 			continue
 		}
 		found = true
-		if strings.Join(f.Methods, ",") != "oauth,token" {
+		// Development on a loopback public URL can connect keylessly too.
+		if strings.Join(f.Methods, ",") != "oauth,keyless,token" {
 			t.Fatalf("gcp methods %v", f.Methods)
 		}
 		if len(f.SignInSettings) != 1 || f.SignInSettings[0].Key != "project_id" || f.SignInSettings[0].Label != "Project ID" || !f.SignInSettings[0].Required {

@@ -556,6 +556,9 @@ type fakeVercelDeploys struct {
 	env      map[string]any
 	deployed []map[string]any
 	polls    int
+	// buildFails ends every build in ERROR, and dropPolls closes the
+	// connection on every status read, the way a lost answer looks.
+	buildFails, dropPolls bool
 }
 
 func newFakeVercelDeploys(t *testing.T, token string) *fakeVercelDeploys {
@@ -631,6 +634,16 @@ func (f *fakeVercelDeploys) serve(w http.ResponseWriter, r *http.Request) {
 		f.deployed = append(f.deployed, d)
 		reply(200, map[string]any{"id": "dpl_1", "url": "web-abc.vercel.app", "readyState": "QUEUED"})
 	case r.Method == http.MethodGet && p == "/v13/deployments/dpl_1":
+		if f.dropPolls {
+			if conn, _, err := w.(http.Hijacker).Hijack(); err == nil {
+				_ = conn.Close()
+			}
+			return
+		}
+		if f.buildFails {
+			reply(200, map[string]any{"id": "dpl_1", "readyState": "ERROR", "errorMessage": "build failed"})
+			return
+		}
 		f.polls++
 		if f.polls < 2 {
 			reply(200, map[string]any{"id": "dpl_1", "readyState": "BUILDING"})
