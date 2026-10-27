@@ -58,6 +58,12 @@ Forge HTTP apps without a Dockerfile can use a generated Go build, and a reposit
 
 Docker publishing and server pulls accept a registry bearer token, or a repository token from your reviewed token service. Username and password connections need a bearer token exchange for authenticated Docker operations. Basic-only credentials can check registry API access but can't be delegated to Docker. Loomplane sends registry credentials only to the selected registry or its approved token endpoint. If you use a private CA, install its trust on the builder daemon, the target daemon and the Kubernetes nodes that contact the registry.
 
+### The cluster Loomplane runs in
+
+If Loomplane runs in Kubernetes and your operator [turned it on](/docs/operations/production-on-kubernetes#deploying-into-the-same-cluster), the Kubernetes dialog opens on that cluster. There's no kubeconfig to paste: Loomplane connects as its own service account. Name the connection, pick one of the namespaces your operator set aside, and connect. From there it works like any other Kubernetes connection, and plans pin the namespace's UID the same way.
+
+You can't pick the namespace Loomplane runs in, or `kube-system` and its neighbours. If you'd rather use your own credentials, choose **Use a kubeconfig instead**.
+
 ## Persistent storage
 
 Docker databases keep a named volume that survives container replacement and removal. Kubernetes uses a StatefulSet and a retained PVC. [Storage inventory](/docs/services/storage-inventory) shows what's retained.

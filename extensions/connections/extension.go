@@ -26,6 +26,7 @@ import (
 	"github.com/xraph/loomplane/internal/clouds/cloudflare"
 	"github.com/xraph/loomplane/internal/clouds/digitalocean"
 	"github.com/xraph/loomplane/internal/clouds/gcp"
+	"github.com/xraph/loomplane/internal/clouds/kubernetes"
 	"github.com/xraph/loomplane/internal/clouds/oauth"
 	"github.com/xraph/loomplane/internal/clouds/render"
 	"github.com/xraph/loomplane/internal/clouds/vercel"
@@ -185,6 +186,7 @@ func (e *Extension) Register(fapp forge.App) error {
 	// of Loomplane's own doesn't fail every one.
 	selfCheck := &http.Client{Timeout: issuerCheckTimeout}
 	e.svc.IssuerServing = func(ctx context.Context) error { return e.issuer.Serving(ctx, selfCheck) }
+	e.useInCluster(log)
 	mail, err := forge.InjectType[*notifications.Service](c)
 	if err != nil {
 		return fmt.Errorf("connections needs the notification delivery extension: %w", err)
@@ -208,6 +210,25 @@ func (e *Extension) Register(fapp forge.App) error {
 		return fmt.Errorf("provide the keyless issuer: %w", err)
 	}
 	return e.routes(fapp.Router(), guard)
+}
+
+// useInCluster turns on connecting the cluster Loomplane runs in, when the
+// operator asked for it and the pod has its service account token. One
+// without the token stays off and says why, so a chart that forgot to
+// mount it doesn't fail the whole API.
+func (e *Extension) useInCluster(log forge.Logger) {
+	if !e.cfg.Clouds.KubernetesInCluster {
+		kubernetes.UseInCluster(nil)
+		return
+	}
+	ic, err := kubernetes.DetectInCluster()
+	if err != nil {
+		kubernetes.UseInCluster(nil)
+		log.Warn("kubernetes_in_cluster is on, but the cluster Loomplane runs in can't be connected", forge.F("error", err.Error()))
+		return
+	}
+	kubernetes.UseInCluster(ic)
+	log.Info("organizations may connect the cluster Loomplane runs in", forge.F("endpoint", ic.Host), forge.F("namespace", ic.Namespace))
 }
 
 // Start rotates the issuer's keys once, so the JWKS has a key before any

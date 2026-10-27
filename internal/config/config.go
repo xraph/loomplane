@@ -275,6 +275,11 @@ type CloudsConfig struct {
 	// ACMEDirectory replaces the ACME directory certificates are ordered
 	// from. Empty means Let's Encrypt's production directory.
 	ACMEDirectory string
+	// KubernetesInCluster lets organizations connect the Kubernetes cluster
+	// Loomplane runs in, as Loomplane's own service account. Every
+	// organization on the instance shares that account, so it's off unless
+	// the operator turns it on, and needs the pod's token mounted.
+	KubernetesInCluster bool
 	// OAuth holds the sign-in app Loomplane registered with each cloud,
 	// keyed by connection cloud such as "digitalocean". A cloud appears
 	// only when both its client ID and secret are set.
@@ -431,6 +436,7 @@ func FromSource(src Getter) (Config, error) {
 	r.str(&c.Clouds.CloudflareEndpoint, "clouds.cloudflare_endpoint")
 	r.boolean(&c.Clouds.CloudflareRegistrarSandbox, "clouds.cloudflare_registrar_sandbox")
 	r.str(&c.Clouds.ACMEDirectory, "clouds.acme_directory")
+	r.boolean(&c.Clouds.KubernetesInCluster, "clouds.kubernetes_in_cluster")
 	c.Clouds.OAuth = r.oauthApps(c.Clouds.OAuth, "clouds.oauth")
 	r.plugins(&c.Providers.Plugins, "providers.plugins")
 	r.names(&c.Providers.Paused, "providers.paused")

@@ -31,8 +31,14 @@ type Config struct {
 	Details   map[string]string
 }
 
-// ParseConfig accepts embedded credentials only, with no ambient loading rules.
+// ParseConfig accepts embedded credentials only, with no ambient loading
+// rules. The one exception is the in-cluster credential, which stands for
+// Loomplane's own service account and works only where the operator
+// turned that on (UseInCluster).
 func ParseConfig(raw []byte, settings map[string]string) (*Config, error) {
+	if IsInClusterCredential(raw) {
+		return parseInCluster(settings)
+	}
 	if len(raw) == 0 || len(raw) > 256<<10 {
 		return nil, fmt.Errorf("%w: provide a self-contained kubeconfig of at most 256 KiB", ErrInvalid)
 	}
@@ -111,7 +117,13 @@ func ParseConfig(raw []byte, settings map[string]string) (*Config, error) {
 	// Even HTTP_PROXY must not change the connection the person selected.
 	rc.Proxy = func(*http.Request) (*url.URL, error) { return nil, nil }
 	rc.UserAgent = "loomplane"
-	ca := sha256.Sum256(config.Clusters[chosen.Cluster].CertificateAuthorityData)
+	return configFor(rc, contextName, namespace, config.Clusters[chosen.Cluster].CertificateAuthorityData, settings)
+}
+
+// configFor finishes a Config for rc: the details anyone may see, and the
+// optional placement settings, checked.
+func configFor(rc *rest.Config, contextName, namespace string, caData []byte, settings map[string]string) (*Config, error) {
+	ca := sha256.Sum256(caData)
 	details := map[string]string{"endpoint": rc.Host, "namespace": namespace, "context": contextName, "cluster_ca": hex.EncodeToString(ca[:])}
 	if architecture := strings.TrimSpace(settings["architecture"]); architecture != "" {
 		if architecture != "amd64" && architecture != "arm64" {

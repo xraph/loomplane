@@ -48,8 +48,11 @@ func (ServerChecker) Check(ctx context.Context, raw []byte, settings map[string]
 
 type KubernetesChecker struct{}
 
-// IsGrant implements GrantChecker.
-func (KubernetesChecker) IsGrant(raw []byte) bool { return keylessJSON(raw) }
+// IsGrant implements GrantChecker. The in-cluster credential counts, so
+// nobody can paste it to borrow Loomplane's own service account.
+func (KubernetesChecker) IsGrant(raw []byte) bool {
+	return keylessJSON(raw) || kubernetes.IsInClusterCredential(raw)
+}
 
 func (KubernetesChecker) Parse(raw []byte, settings map[string]string) (Check, error) {
 	cfg, err := kubernetes.ParseConfig(raw, settings)
