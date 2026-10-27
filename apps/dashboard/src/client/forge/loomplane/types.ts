@@ -465,6 +465,7 @@ export interface CloudForm {
   cloud: string;
   credential?: string;
   help?: string;
+  inClusterSettings?: Setting[];
   keylessSettings?: Setting[];
   methods: string[];
   settings?: Setting[];
@@ -1378,6 +1379,11 @@ export interface IdentitySession {
 
 export interface Ignore {
   resources?: string[];
+}
+
+export interface InClusterInputBody {
+  name: string;
+  settings: Record<string, any>;
 }
 
 export interface IncludeInputBody {

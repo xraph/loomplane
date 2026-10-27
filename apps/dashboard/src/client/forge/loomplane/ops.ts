@@ -579,6 +579,16 @@ export const ops = {
     bodyCodec: CODECS['ConnectionsCreateInputBody'],
     responseCodec: CODECS['Connection'],
   },
+  'connectionInCluster.create': {
+    method: 'POST',
+    path: '/api/v1/connections/in-cluster',
+    entity: 'Connection',
+    rootType: 'Connection',
+    provides: ['Connection:{id}'],
+    invalidates: ['Connection[]'],
+    bodyCodec: CODECS['InClusterInputBody'],
+    responseCodec: CODECS['Connection'],
+  },
   'connectionKeyless.create': {
     method: 'POST',
     path: '/api/v1/connections/keyless',

@@ -25,13 +25,18 @@ import { messageOf } from "@/client/errors"
 import {
   useConnectionsCheck,
   useConnectionCloudsList,
+  useConnectionInClusterCreate,
   useConnectionsCreate,
   useConnectionsDelete,
   useConnectionSignInsStart,
   useConnectionsList,
   useConnectionsReplace,
 } from "@/client/forge/loomplane/hooks"
-import type { Connection, SignIn } from "@/client/forge/loomplane/types"
+import type {
+  Connection,
+  Setting,
+  SignIn,
+} from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
 import { CloudGlyph } from "@/components/cloud-glyph"
 import { KeylessSetup } from "@/components/keyless-setup"
@@ -462,6 +467,37 @@ export function ConnectDialog(props: {
 const linkClass =
   "text-sm text-muted-foreground underline underline-offset-4 hover:text-foreground"
 
+/** SettingFields are the inputs for the settings a cloud's form lists. */
+function SettingFields({
+  fields,
+  values,
+  onChange,
+}: {
+  fields: Setting[]
+  values: Record<string, string>
+  onChange: (
+    next: (current: Record<string, string>) => Record<string, string>
+  ) => void
+}) {
+  return fields.map((st) => (
+    <Field key={st.key}>
+      <FieldLabel htmlFor={`connection-setting-${st.key}`}>
+        {st.label}
+        {/* Some labels already say so. */}
+        {!st.required && !st.label.endsWith("(optional)") && " (optional)"}
+      </FieldLabel>
+      <Input
+        id={`connection-setting-${st.key}`}
+        value={values[st.key] ?? ""}
+        onChange={(e) =>
+          onChange((cur) => ({ ...cur, [st.key]: e.target.value }))
+        }
+        required={st.required}
+      />
+    </Field>
+  ))
+}
+
 function ConnectForm({
   open,
   onOpenChange,
@@ -478,6 +514,7 @@ function ConnectForm({
   onConnected?: (connection: Connection) => void
 }) {
   const create = useMutation(useConnectionsCreate)
+  const createInCluster = useMutation(useConnectionInClusterCreate)
   const replace = useMutation(useConnectionsReplace)
   const signInStart = useMutation(useConnectionSignInsStart)
   const invalidate = useInvalidate()
@@ -510,6 +547,13 @@ function ConnectForm({
     keylessOffered && !entry?.methods.includes("oauth") && tokenFor !== cloud
   const tokenLink =
     cloud === "aws" ? "Use an access key instead" : "Use a token instead"
+  // When Loomplane runs in a Kubernetes cluster it may deploy to, that
+  // cluster comes first: it connects as Loomplane's own service account, so
+  // there's no kubeconfig to paste. A replaced connection keeps the kind of
+  // credential it has.
+  const inClusterOffered =
+    !replacing && !!entry?.methods.includes("in_cluster")
+  const inClusterOn = inClusterOffered && tokenFor !== cloud
   const [extraSettings, setExtraSettings] = useState<Record<string, string>>(
     () => ({ ...(replacing?.details ?? {}) }) as Record<string, string>
   )
@@ -534,7 +578,11 @@ function ConnectForm({
     (replacing?.details.billing_export as string | undefined) ?? ""
   )
   const [error, setError] = useState("")
-  const busy = create.isPending || replace.isPending || signInStart.isPending
+  const busy =
+    create.isPending ||
+    createInCluster.isPending ||
+    replace.isPending ||
+    signInStart.isPending
 
   const close = (next: boolean) => {
     if (!next) {
@@ -584,6 +632,17 @@ function ConnectForm({
     }
   }
 
+  const connected = (c: Connection) => {
+    invalidate(useConnectionsList)
+    toast.success(
+      c.status === "ready"
+        ? `${c.name} is connected and ready`
+        : `${c.name} is connected, but missing permissions`
+    )
+    onConnected?.(c)
+    close(false)
+  }
+
   const submit = async (e: FormEvent) => {
     e.preventDefault()
     setError("")
@@ -597,6 +656,18 @@ function ConnectForm({
         .map(([k, v]) => [k, v.trim()])
         .filter(([, v]) => v !== "")
     )
+    if (inClusterOn) {
+      try {
+        connected(
+          await createInCluster.mutateAsync({
+            body: { name: name.trim(), settings: trimmed },
+          })
+        )
+      } catch (err) {
+        setError(messageOf(err, "The cluster wasn't connected."))
+      }
+      return
+    }
     const gcpSettings = {
       ...cloudSQLRecoverySettings(extraSettings),
       ...(billingExport.trim() ? { billing_export: billingExport.trim() } : {}),
@@ -633,14 +704,7 @@ function ConnectForm({
         : await create.mutateAsync({
             body: { cloud, name: name.trim(), credential: secret, settings },
           })
-      invalidate(useConnectionsList)
-      toast.success(
-        c.status === "ready"
-          ? `${c.name} is connected and ready`
-          : `${c.name} is connected, but missing permissions`
-      )
-      onConnected?.(c)
-      close(false)
+      connected(c)
     } catch (err) {
       setError(messageOf(err, "The cloud wasn't connected."))
     }
@@ -799,6 +863,27 @@ function ConnectForm({
                   {tokenLink}
                 </button>
               </div>
+            ) : inClusterOn ? (
+              <>
+                <FieldDescription>
+                  Loomplane runs in a Kubernetes cluster that it may deploy to.
+                  It connects as its own service account, so there&apos;s no
+                  kubeconfig to paste. Choose a namespace your operator gave it,
+                  never the one Loomplane runs in.
+                </FieldDescription>
+                <SettingFields
+                  fields={entry?.inClusterSettings ?? []}
+                  values={extraSettings}
+                  onChange={setExtraSettings}
+                />
+                <button
+                  type="button"
+                  className={`${linkClass} justify-self-start`}
+                  onClick={() => setTokenFor(cloud)}
+                >
+                  Use a kubeconfig instead
+                </button>
+              </>
             ) : cloud === "gcp" ? (
               <>
                 <Field>
@@ -957,25 +1042,20 @@ function ConnectForm({
                     <FieldDescription>{extra.help}</FieldDescription>
                   )}
                 </Field>
-                {(extra.settings ?? []).map((st) => (
-                  <Field key={st.key}>
-                    <FieldLabel htmlFor={`connection-setting-${st.key}`}>
-                      {st.label}
-                      {!st.required && " (optional)"}
-                    </FieldLabel>
-                    <Input
-                      id={`connection-setting-${st.key}`}
-                      value={extraSettings[st.key] ?? ""}
-                      onChange={(e) =>
-                        setExtraSettings((cur) => ({
-                          ...cur,
-                          [st.key]: e.target.value,
-                        }))
-                      }
-                      required={st.required}
-                    />
-                  </Field>
-                ))}
+                <SettingFields
+                  fields={extra.settings ?? []}
+                  values={extraSettings}
+                  onChange={setExtraSettings}
+                />
+                {inClusterOffered && (
+                  <button
+                    type="button"
+                    className={`${linkClass} justify-self-start`}
+                    onClick={() => setTokenFor(null)}
+                  >
+                    Connect the cluster Loomplane runs in instead
+                  </button>
+                )}
               </>
             ) : (
               <>

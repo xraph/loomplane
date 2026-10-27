@@ -9937,6 +9937,38 @@
           }
         }
       }
+    },
+    "/api/v1/connections/in-cluster": {
+      "post": {
+        "tags": [
+          "Cloud connections"
+        ],
+        "summary": "Connect the Kubernetes cluster Loomplane runs in, as Loomplane's own service account, checking the namespace first",
+        "operationId": "connectionInCluster.create",
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InClusterInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The connection",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Connection"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -11301,6 +11333,12 @@
           },
           "help": {
             "type": "string"
+          },
+          "in_cluster_settings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Setting"
+            }
           },
           "keyless_settings": {
             "type": "array",
@@ -22080,6 +22118,22 @@
             "items": {
               "$ref": "#/components/schemas/EnvironmentUsage"
             }
+          }
+        }
+      },
+      "InClusterInputBody": {
+        "type": "object",
+        "required": [
+          "name",
+          "settings"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "settings": {
+            "type": "object",
+            "additionalProperties": true
           }
         }
       }

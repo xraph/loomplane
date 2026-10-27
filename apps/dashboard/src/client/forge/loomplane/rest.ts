@@ -1040,6 +1040,27 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly connectionInCluster = {
+    /**
+     * Connect the Kubernetes cluster Loomplane runs in, as Loomplane's own service account, checking the namespace first
+     */
+    create: async (body: types.InClusterInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Connection> => {
+      let __path = `/api/v1/connections/in-cluster`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["InClusterInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Connection"],
+      };
+
+      return this.request<types.Connection>(config);
+    },
+
+  };
+
   public readonly connectionKeyless = {
     /**
      * Connect a cloud keylessly, with the reserved ID, once the cloud accepts Loomplane's token

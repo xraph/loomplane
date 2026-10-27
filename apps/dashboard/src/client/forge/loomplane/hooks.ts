@@ -72,6 +72,7 @@ export const useOrganizationCloudsUsage = query<Usage>(ops['organizationClouds.u
 export const useConnectionCloudsList = query<ConnectionsCloudList>(ops['connectionClouds.list']);
 export const useConnectionsList = query<ConnectionList>(ops['connections.list']);
 export const useConnectionsCreate = mutation<Connection, Connection>(ops['connections.create']);
+export const useConnectionInClusterCreate = mutation<Connection, Connection>(ops['connectionInCluster.create']);
 export const useConnectionKeylessCreate = mutation<Connection, Connection>(ops['connectionKeyless.create']);
 export const useConnectionKeylessPrepare = mutation(ops['connectionKeyless.prepare']);
 export const useConnectionSignInsStart = mutation(ops['connectionSignIns.start']);
