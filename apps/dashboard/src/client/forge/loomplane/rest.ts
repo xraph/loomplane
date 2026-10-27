@@ -3278,6 +3278,145 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly octopus = {
+    /**
+     * An Octopus gateway's routes by domain: the ones added here, the ones FARP found and the ones made in the Octopus admin
+     */
+    board: async (projectId: string, environmentId: string, resource: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Board> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/octopus/${encodeURIComponent(String(resource))}/board`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Board"],
+      };
+
+      return this.request<types.Board>(config);
+    },
+
+    /**
+     * Add a route to an Octopus gateway and push it, without a redeploy
+     */
+    createRoute: async (projectId: string, environmentId: string, resource: string, body: types.OctopusRouteInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RouteResult> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/octopus/${encodeURIComponent(String(resource))}/routes`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["OctopusRouteInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["RouteResult"],
+      };
+
+      return this.request<types.RouteResult>(config);
+    },
+
+    /**
+     * The services an Octopus gateway's FARP discovery found or is waiting for
+     */
+    discovery: async (projectId: string, environmentId: string, resource: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.DiscoverySummary> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/octopus/${encodeURIComponent(String(resource))}/discovery`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["DiscoverySummary"],
+      };
+
+      return this.request<types.DiscoverySummary>(config);
+    },
+
+    /**
+     * Remove a route at the revision read; a FARP route it hid comes back
+     */
+    removeRoute: async (projectId: string, environmentId: string, resource: string, routeId: string, body: types.RouteRevisionInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.SyncResult> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/octopus/${encodeURIComponent(String(resource))}/routes/${encodeURIComponent(String(routeId))}/remove`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["RouteRevisionInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["SyncResult"],
+      };
+
+      return this.request<types.SyncResult>(config);
+    },
+
+    /**
+     * Set the attached domains FARP routes answer on, at the gateway's revision; none is any host
+     */
+    setFarpHostnames: async (projectId: string, environmentId: string, resource: string, body: types.FarpHostnamesInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.OctopusStatus> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/octopus/${encodeURIComponent(String(resource))}/farp-hostnames`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["FarpHostnamesInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["OctopusStatus"],
+      };
+
+      return this.request<types.OctopusStatus>(config);
+    },
+
+    /**
+     * An Octopus gateway's state, its last sync and what attaching a domain to it takes
+     */
+    status: async (projectId: string, environmentId: string, resource: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.OctopusStatus> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/octopus/${encodeURIComponent(String(resource))}/status`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["OctopusStatus"],
+      };
+
+      return this.request<types.OctopusStatus>(config);
+    },
+
+    /**
+     * Push an Octopus gateway's routes now, and register its services with FARP again
+     */
+    sync: async (projectId: string, environmentId: string, resource: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.SyncResult> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/octopus/${encodeURIComponent(String(resource))}/sync`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["SyncResult"],
+      };
+
+      return this.request<types.SyncResult>(config);
+    },
+
+    /**
+     * Change a route at the revision read, and push it
+     */
+    updateRoute: async (projectId: string, environmentId: string, resource: string, routeId: string, body: types.OctopusRouteInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RouteResult> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/octopus/${encodeURIComponent(String(resource))}/routes/${encodeURIComponent(String(routeId))}/update`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["OctopusRouteInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["RouteResult"],
+      };
+
+      return this.request<types.RouteResult>(config);
+    },
+
+  };
+
   public readonly organizationCloudChanges = {
     /**
      * organizationCloudChanges.apply

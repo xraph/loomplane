@@ -140,7 +140,7 @@ func TestElasticsearchKind(t *testing.T) {
 	if c.Name != "elasticsearch" || c.Role != recipes.RoleProcess {
 		t.Fatalf("got %+v", c)
 	}
-	if !reflect.DeepEqual(c.Ports, []recipes.Port{{Name: "http", Container: 9200, Protocol: "http"}}) || c.Readiness == nil || *c.Readiness != (recipes.HTTPProbe{Port: "http", Path: "/_cluster/health?wait_for_status=yellow&timeout=5s"}) {
+	if !reflect.DeepEqual(c.Ports, []recipes.Port{{Name: "http", Container: 9200, Protocol: "http"}}) || c.Readiness == nil || *c.Readiness != (recipes.HTTPProbe{Port: "http", Path: "/"}) {
 		t.Fatalf("ports %+v readiness %+v", c.Ports, c.Readiness)
 	}
 	if c.Volume == nil || *c.Volume != (recipes.Volume{MountPath: "/usr/share/elasticsearch/data", KubernetesSizeMB: 10240, FSGroup: 1000}) || c.Protection != recipes.ProtectionRebuildable {
@@ -174,7 +174,7 @@ func TestElasticsearchKind(t *testing.T) {
 	}
 	release := kind.Releases[0]
 	image := release.Images["elasticsearch"]
-	if release.Version != "9.4" || release.Product != "9.4.1" || image.Repository != "docker.io/library/elasticsearch" {
+	if release.Version != "9.4" || release.Product != "9.4.1" || release.Revision != "2" || image.Repository != "docker.io/library/elasticsearch" {
 		t.Fatalf("release %+v", release)
 	}
 	if image.Digests["amd64"] != "sha256:8a232d1f9fa617d2b3c9478746ef7b295e15eee963b2dd5a40e0488df6ab25b4" || image.Digests["arm64"] != "sha256:d0c208251c5d06f93ae800f43ca9a8a0958959cc1d01df716a08892e009a750a" {

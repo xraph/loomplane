@@ -472,33 +472,37 @@ func (q *qualifier) elasticsearch(t *testing.T) {
 		t.Fatal(err)
 	}
 	base := "http://" + strings.TrimSpace(strings.SplitN(out, "\n", 2)[0])
-	get := func(path, user string) (int, string) {
+	send := func(method, path, user, body string) (int, string) {
 		ctx, cancel := context.WithTimeout(t.Context(), 100*time.Second)
 		defer cancel()
-		request, err := http.NewRequestWithContext(ctx, http.MethodGet, base+path, nil)
+		request, err := http.NewRequestWithContext(ctx, method, base+path, strings.NewReader(body))
 		if err != nil {
 			t.Fatal(err)
 		}
 		if user != "" {
 			request.SetBasicAuth(user, password)
 		}
+		if body != "" {
+			request.Header.Set("Content-Type", "application/json")
+		}
 		response, err := http.DefaultClient.Do(request)
 		if err != nil {
 			return 0, err.Error()
 		}
 		defer response.Body.Close()
-		body, _ := io.ReadAll(io.LimitReader(response.Body, 1<<16))
-		return response.StatusCode, string(body)
+		out, _ := io.ReadAll(io.LimitReader(response.Body, 1<<16))
+		return response.StatusCode, string(out)
 	}
+	get := func(path, user string) (int, string) { return send(http.MethodGet, path, user, "") }
 
 	// The same unauthenticated request the readiness probe sends.
 	waitFor(t, "Elasticsearch", 8*time.Minute, func(context.Context) error {
-		if status, body := get("/_cluster/health?wait_for_status=yellow&timeout=60s", ""); status != http.StatusOK {
+		if status, body := get("/", ""); status != http.StatusOK {
 			return errors.New(fmt.Sprint(status, " ", body))
 		}
 		return nil
 	})
-	// Cluster health turns green before the native realm has created its
+	// The root document answers before the native realm has created its
 	// security index, and until then even the right password is refused.
 	// Wait for it, and say how long it took.
 	began := time.Now()
@@ -508,16 +512,33 @@ func (q *qualifier) elasticsearch(t *testing.T) {
 		}
 		return nil
 	})
-	t.Logf("the elastic password was accepted %s after cluster health", time.Since(began).Round(time.Second))
-	if status, body := get("/_cat/indices", ""); status != http.StatusUnauthorized {
-		t.Errorf("/_cat/indices without credentials = %d %s, want 401", status, body)
+	t.Logf("the elastic password was accepted %s after the root document answered", time.Since(began).Round(time.Second))
+	// An index named like a tenant's, created by the elastic user, must stay
+	// invisible to the anonymous role.
+	const index = "tenant-acme-projection"
+	if status, body := send(http.MethodPut, "/"+index, "elastic", "{}"); status != http.StatusOK {
+		t.Fatalf("creating %s as elastic = %d %s", index, status, body)
 	}
-	if status, body := get("/_cat/indices", "elastic"); status != http.StatusOK {
-		t.Errorf("/_cat/indices as elastic = %d %s, want 200", status, body)
+	if status, body := get("/_cat/indices", "elastic"); status != http.StatusOK || !strings.Contains(body, index) {
+		t.Errorf("/_cat/indices as elastic = %d %s, want 200 listing %s", status, body, index)
 	}
-	// The anonymous role reads cluster health and nothing else.
-	if status, _ := get("/", ""); status == http.StatusOK {
-		t.Error("an anonymous request read the cluster's root")
+	// The anonymous role reads the root document and nothing else. In
+	// particular no health call may answer, because level=indices and the
+	// per-index form both name every index.
+	if status, body := get("/", ""); status != http.StatusOK || !strings.Contains(body, "cluster_name") {
+		t.Errorf("anonymous / = %d %s, want 200", status, body)
+	}
+	for _, path := range []string{
+		"/_cluster/health",
+		"/_cluster/health?level=indices",
+		"/_cluster/health/" + index,
+		"/_cluster/health/.security-7",
+		"/_cat/indices",
+		"/" + index + "/_search",
+	} {
+		if status, body := get(path, ""); status != http.StatusUnauthorized && status != http.StatusForbidden {
+			t.Errorf("anonymous %s = %d %s, want 401 or 403", path, status, body)
+		}
 	}
 	if status, body := get("/_cluster/health", "elastic"); status != http.StatusOK {
 		t.Errorf("cluster health as elastic = %d %s", status, body)

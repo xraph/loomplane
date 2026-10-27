@@ -120,9 +120,10 @@ func (r *fakeRegistrar) SetAutoRenew(_ context.Context, _ provider.Infrastructur
 	return provider.RegisteredDomain{Name: name, AutoRenew: enabled, ExpiresAt: r.expires}, nil
 }
 
-// registrationDNS has no zone until CreateZone is called.
+// registrationDNS has no zone until CreateZone is called. Its records live
+// in proofDNS, which keeps owner tokens the way Cloudflare does.
 type registrationDNS struct {
-	provider.DNSAdapter
+	*proofDNS
 	zone    *provider.DNSZone
 	creates int
 }
@@ -293,7 +294,7 @@ func newRegistrationEnv(t *testing.T) *registrationEnv {
 	t.Helper()
 	env := &registrationEnv{
 		registrar:  &fakeRegistrar{extensions: []string{"co.uk", "dev", "uk"}, price: provider.DomainPrice{Currency: "USD", RegistrationCost: "10.11", RenewalCost: "10.11"}, expires: time.Date(2027, 11, 5, 0, 0, 0, 0, time.UTC), mode: "production"},
-		dns:        &registrationDNS{},
+		dns:        &registrationDNS{proofDNS: &proofDNS{ownership: true}},
 		store:      &memoryRegistrations{bodies: map[string][]byte{}},
 		domains:    &overviewStore{projects: map[string]map[string]string{"org": {"shop": "Shop", "docs": "Docs"}}},
 		secrets:    memorySecrets{},
@@ -1275,5 +1276,32 @@ func TestRegistrationResultRetriesAfterAFailedEnqueue(t *testing.T) {
 	other.now = other.now.Add(8 * 24 * time.Hour)
 	if err := other.svc.RecoverRegistrations(t.Context()); err != nil || len(late.results) != 0 {
 		t.Fatal("an old registration was notified", err, late.results)
+	}
+}
+
+func TestRegisteredZoneProofPublishesAndVerifiesInTheBackground(t *testing.T) {
+	env := newRegistrationEnv(t)
+	resolver := &proofLookups{}
+	env.svc.Resolver = resolver
+	env.dns.zone = &provider.DNSZone{ID: "cf_zone", Name: "acme.dev", AccountID: "account", Verified: true}
+	op := approvedRegistration(t, env.svc)
+	if err := env.svc.ReconcileRegistration(t.Context(), "org", op.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(env.domains.zones) != 1 {
+		t.Fatal("no zone handed off", len(env.domains.zones))
+	}
+	zone := env.domains.zones[0]
+	proofs := env.dns.proofs()
+	if len(proofs) != 1 || proofs[0].Name != "_loomplane" || proofs[0].Value != zone.ProofValue || proofs[0].Owner != "loomplane:zone-proof:"+zone.ID || zone.ProofRecord == nil || !zone.VerifiedAt.IsZero() {
+		t.Fatalf("proof not published on handoff: %+v %+v", proofs, zone)
+	}
+	// Nobody presses Check again: the background check finds the record.
+	resolver.values = []string{zone.ProofValue}
+	if err := env.svc.CheckZoneProofs(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if env.domains.zones[0].VerifiedAt.IsZero() {
+		t.Fatal("registered zone not verified in the background")
 	}
 }

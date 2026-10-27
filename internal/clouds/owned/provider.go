@@ -53,7 +53,11 @@ const (
 // recipes.KubernetesRule a process gets through its own ServiceAccount on
 // Kubernetes. LabelHealthProtocol is "redis" when readiness is a RESP PING;
 // absent, it is HTTP. LabelFSGroup is the group that owns a component's
-// volume on Kubernetes.
+// volume on Kubernetes. LabelFarp is the JSON a service that opted in to FARP
+// sends the Kubernetes runtime, {"gateway": "<resource>", "metadata": {...}}.
+// It is transport only: the runtime turns it into FarpEnabledLabel and
+// FarpGatewayLabel on the Service and its metadata into annotations, and it
+// never becomes an object label.
 const (
 	LabelCatalogKind      = "loomplane.catalog.kind"
 	LabelCatalogResource  = "loomplane.catalog.resource"
@@ -63,6 +67,12 @@ const (
 	LabelKubernetesRules  = "loomplane.kubernetes.rules"
 	LabelHealthProtocol   = "loomplane.health.protocol"
 	LabelFSGroup          = "loomplane.fs.group"
+	LabelFarp             = "loomplane.farp"
+
+	// FarpEnabledLabel and FarpGatewayLabel are what Octopus selects a
+	// Kubernetes Service by.
+	FarpEnabledLabel = "farp.enabled"
+	FarpGatewayLabel = "loomplane.farp.gateway"
 )
 
 // LabelGPU is the reviewed provider.GPUPlacement, as JSON, of a workload

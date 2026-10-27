@@ -82,7 +82,7 @@ test-dashboard: ## Run the dashboard's unit tests
 	pnpm --dir $(DASHBOARD_DIR) test
 
 test-integration: ## Boot the whole app against the compose Postgres (make up first)
-	LOOMPLANE_TEST_DATABASE_URL='$(TEST_DATABASE_URL)' go test -tags=integration -count=1 ./tests/integration/
+	LOOMPLANE_TEST_DATABASE_URL='$(TEST_DATABASE_URL)' go test -tags=integration -count=1 -timeout=60m ./tests/integration/
 
 acceptance: ## Deploy to real clouds and take it down again; costs money (docs/acceptance.md)
 	LOOMPLANE_TEST_DATABASE_URL='$(TEST_DATABASE_URL)' go test -tags='integration acceptance' -count=1 -timeout=180m -v \

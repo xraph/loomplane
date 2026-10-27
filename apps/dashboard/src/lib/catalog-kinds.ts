@@ -62,6 +62,12 @@ export type CatalogPanelProps = {
    * serviceBindings). Empty for a resource that isn't composed.
    */
   components: Binding[]
+  /**
+   * The project resources a composed resource connects instead of
+   * provisioning its own, as deployed in this environment (see
+   * serviceBindings). One that isn't deployed is missing.
+   */
+  linked: Binding[]
 }
 
 export type CatalogPanel = {
@@ -99,8 +105,16 @@ export type CatalogKindModule = {
   blurb: string
   features: string[]
   panels: CatalogPanel[]
-  /** The normal deployed state. Drift warnings always take precedence. */
-  deployedLabel?: string
+  /**
+   * The normal deployed state, or a function that names it from what is
+   * deployed, with the tone its pill wears (live unless it says waiting).
+   * Drift warnings always take precedence.
+   */
+  deployedLabel?:
+    | string
+    | ((
+        props: CatalogPanelProps
+      ) => string | { label: string; tone: "live" | "waiting" })
   /** Panel ID to open first, falling back to Overview when unavailable. */
   defaultPanel?: string
   /** Buttons at the right of the service page's header. */
@@ -260,22 +274,29 @@ export function componentName(resource: string, part: string): string {
  * the bindings of its parts: its components, which name it as their
  * resource, and the dependencies provisioned for it, which its composition
  * names. A resource that only shares the name prefix isn't one of them.
+ * Linked are the project resources its composition connects, which are
+ * resources of their own, not parts.
  */
 export function serviceBindings(
   bindings: Binding[],
   resource: string
-): { binding?: Binding; components: Binding[] } {
+): { binding?: Binding; components: Binding[]; linked: Binding[] } {
   const resources = bindings.filter((b) => b.subject === "resource")
   const binding = resources.find((b) => b.name === resource)
   const config = binding && parseResourceConfig(binding)
-  if (!config?.composition) return { binding, components: [] }
-  const provisioned = new Set(
-    dependencyChoices(config)
-      .filter(([, choice]) => choice.mode === "new" && choice.resource)
-      .map(([, choice]) => choice.resource)
-  )
+  if (!config?.composition) return { binding, components: [], linked: [] }
+  const choices = dependencyChoices(config)
+  const named = (mode: string) =>
+    new Set(
+      choices
+        .filter(([, choice]) => choice.mode === mode && choice.resource)
+        .map(([, choice]) => choice.resource)
+    )
+  const provisioned = named("new")
+  const connected = named("resource")
   return {
     binding,
+    linked: resources.filter((b) => connected.has(b.name)),
     components: resources
       .filter((b) => {
         if (b.name === resource) return false

@@ -34,8 +34,11 @@ type fakeFabriq struct {
 	refuse   int
 	// failRevoke answers DELETE /admin/keys/:id with 500.
 	failRevoke bool
-	types      []string
-	applied    []string
+	// revokeNotFound answers DELETE /admin/keys/:id with 404, as Fabriq
+	// does for a key it no longer has, and leaves the key as it was.
+	revokeNotFound bool
+	types          []string
+	applied        []string
 	// noMigrations answers GET /admin/migrations with this status.
 	noMigrations int
 }
@@ -158,6 +161,10 @@ func (f *fakeFabriq) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusInternalServerError)
 			return
 		}
+		if f.revokeNotFound {
+			writeJSON(w, http.StatusNotFound, map[string]string{"error": "not found"})
+			return
+		}
 		id := strings.TrimPrefix(r.URL.Path, "/admin/keys/")
 		for _, k := range f.keys {
 			if k.ID == id {
@@ -206,6 +213,10 @@ func (f *fakeFabriq) RoundTrip(r *http.Request) (*http.Response, error) {
 	}
 	if r.Header.Get("Authorization") != "" {
 		return nil, errors.New("a component channel can't carry an Authorization header")
+	}
+	// A request whose context has ended fails, as it would on the wire.
+	if err := r.Context().Err(); err != nil {
+		return nil, err
 	}
 	w := httptest.NewRecorder()
 	f.ServeHTTP(w, r)

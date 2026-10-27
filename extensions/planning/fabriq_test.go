@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -82,5 +83,20 @@ func TestTenantsUnavailableIs503WithReason(t *testing.T) {
 	}
 	if out = send(http.MethodPost, "fabriq/rebuilds", `{"projection":"graph","request_id":"request-0001"}`); out.Code != http.StatusUnprocessableEntity || !strings.Contains(out.Body.String(), "FalkorDB is off for this Fabriq") {
 		t.Fatalf("rebuild with falkordb off: %d %s", out.Code, out.Body.String())
+	}
+}
+
+// A key change that lost its lock to another is a conflict you can retry,
+// and says so.
+func TestBusyFabriqKeyIs409(t *testing.T) {
+	r := forge.NewRouter()
+	busy := fmt.Errorf("another change to api's key: %w", fabriqloom.ErrBusy)
+	if err := r.POST("/busy", func(c forge.Context) error { return failFabriq(c, busy) }); err != nil {
+		t.Fatal(err)
+	}
+	out := httptest.NewRecorder()
+	r.ServeHTTP(out, httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/busy", nil))
+	if out.Code != http.StatusConflict || !strings.Contains(out.Body.String(), busy.Error()) {
+		t.Fatalf("busy: %d %s", out.Code, out.Body.String())
 	}
 }

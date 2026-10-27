@@ -3,10 +3,23 @@ package recipes
 // Elasticsearch is provisioned only as a dependency. Security is on, so
 // every index needs the elastic password; the anonymous user holds one role,
 // loomplane_probe, which fabriqloom.SearchHooks renders into roles.yml and
-// which can read cluster health and nothing else. That lets the
-// unauthenticated readiness probe pass without opening any data. Without a
-// password, any container on the environment network could read every
-// tenant's projections and bypass row-level security.
+// which holds only cluster:monitor/main, so GET / answers and nothing else
+// does. That lets the unauthenticated readiness probe pass without opening
+// any data. Without a password, any container on the environment network
+// could read every tenant's projections and bypass row-level security.
+//
+// The role must not grant cluster:monitor/health. Verified on the pinned
+// 9.4.1 image: with it, an anonymous GET /_cluster/health?level=indices
+// returns every index name (tenant-named Fabriq indices and .security-7
+// included), and /_cluster/health/<index> answers per index.
+//
+// Trade-off: GET / answers as soon as the node serves HTTP, before the
+// cluster is yellow and before the elastic password is accepted (the native
+// realm's security index is created a few seconds later, and until then the
+// password gets a 401). So "ready" here means the node is up, not that the
+// elastic user works. A Fabriq server that starts inside that window fails
+// its own readiness check and is restarted. We accept that to keep index
+// names private.
 //
 // Image pins belong to index
 // sha256:43b9eb68c147dd82aa0933812103631135aa95d283e46cf6d86f4c5c959ee3b7
@@ -19,7 +32,7 @@ func init() {
 		Name: "elasticsearch", Title: "Elasticsearch", Placement: PlacementDependency,
 		Description: "Search index for a Fabriq stack. Reached only on the environment network, with a generated password. Its data is rebuilt from Fabriq's source of truth, not backed up.",
 		Targets:     []string{"server", "kubernetes"},
-		Releases: []Release{{Version: "9.4", Product: "9.4.1", Revision: "1", Images: map[string]Image{"elasticsearch": {
+		Releases: []Release{{Version: "9.4", Product: "9.4.1", Revision: "2", Images: map[string]Image{"elasticsearch": {
 			Repository: "docker.io/library/elasticsearch", Digests: map[string]string{
 				"amd64": "sha256:8a232d1f9fa617d2b3c9478746ef7b295e15eee963b2dd5a40e0488df6ab25b4",
 				"arm64": "sha256:d0c208251c5d06f93ae800f43ca9a8a0958959cc1d01df716a08892e009a750a",
@@ -29,7 +42,7 @@ func init() {
 		Components: []Component{{
 			Name: "elasticsearch", Role: RoleProcess,
 			Ports:     []Port{{Name: "http", Container: 9200, Protocol: "http"}},
-			Readiness: &HTTPProbe{Port: "http", Path: "/_cluster/health?wait_for_status=yellow&timeout=5s"},
+			Readiness: &HTTPProbe{Port: "http", Path: "/"},
 			Volume:    &Volume{MountPath: "/usr/share/elasticsearch/data", KubernetesSizeMB: 10240, FSGroup: 1000}, Protection: ProtectionRebuildable,
 			Files: []File{{Path: "/usr/share/elasticsearch/config/roles.yml"}},
 			Env: []EnvVar{

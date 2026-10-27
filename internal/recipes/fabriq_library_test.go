@@ -1,6 +1,7 @@
 package recipes_test
 
 import (
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -49,5 +50,46 @@ func TestFabriqLibraryKind(t *testing.T) {
 		if !slices.Equal(fabriqComponent(t, enabled, name).After, []string{"worker"}) {
 			t.Fatal("rebuild starts before worker")
 		}
+	}
+}
+
+// TestFabriqLibraryOutputsAreTheServersEnv ties what a consuming app gets
+// to what the hosted server runs with, so the two can't drift.
+func TestFabriqLibraryOutputsAreTheServersEnv(t *testing.T) {
+	hosted, _ := recipes.Default().Kind("fabriq")
+	var server recipes.Component
+	for _, c := range hosted.Components {
+		if c.Name == "server" {
+			server = c
+		}
+	}
+	env := envOf(t, server)
+	library, _ := recipes.Default().Kind("fabriq-library")
+	want := []string{"FABRIQ_POSTGRES_DSN", "FABRIQ_REDIS_ADDR", "FABRIQ_REDIS_USERNAME", "FABRIQ_REDIS_PASSWORD",
+		"FABRIQ_FALKORDB_ADDR", "FABRIQ_FALKORDB_USERNAME", "FABRIQ_FALKORDB_PASSWORD",
+		"FABRIQ_ELASTICSEARCH_ADDRS", "FABRIQ_ELASTICSEARCH_USERNAME", "FABRIQ_ELASTICSEARCH_PASSWORD"}
+	got := make([]string, 0, len(library.Outputs))
+	for _, o := range library.Outputs {
+		got = append(got, o.EnvKey)
+		e, ok := env[o.EnvKey]
+		if !ok {
+			t.Fatalf("the server doesn't set %s", o.EnvKey)
+		}
+		source := e.Template
+		if e.Value != "" {
+			source = e.Value
+		}
+		if e.Secret != "" {
+			source = "${secret:" + e.Secret + "}"
+		}
+		if o.Template != source || !reflect.DeepEqual(o.From, e.From) || o.Requires != e.Requires {
+			t.Fatalf("%s: library %+v (from %+v), server %+v (from %+v)", o.EnvKey, o, o.From, e, e.From)
+		}
+		if o.From != nil && o.From == e.From {
+			t.Fatalf("%s shares the server's Ref", o.EnvKey)
+		}
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("outputs %v, want %v", got, want)
 	}
 }

@@ -259,10 +259,11 @@ func (p *planner) planComposition(name, base string, r manifest.Resource, kind r
 	p.resources[name] = a
 	p.actions = append(p.actions, a)
 	if !placed {
-		p.warn(Finding{
-			Code: "catalog-cloud-placement-missing", Subject: ResourceSubject, Name: name, Path: base + ".target",
-			Message: fmt.Sprintf("%s isn't on a target of this environment's Cloud, so it can't take domain routes.", name),
-		})
+		message := fmt.Sprintf("%s isn't on a target of this environment's Cloud, so it can't take domain routes.", name)
+		if p.in.UnverifiedPlacements[name] {
+			message = fmt.Sprintf("%s is on a target of this environment's Cloud, but the Cloud's or the target's revision, or the target connection's account, isn't verified, so it can't take domain routes yet. Check the target's connection, then plan again.", name)
+		}
+		p.warn(Finding{Code: "catalog-cloud-placement-missing", Subject: ResourceSubject, Name: name, Path: base + ".target", Message: message})
 	}
 }
 

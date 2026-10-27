@@ -23,6 +23,7 @@ type overviewStore struct {
 	ops      []*RouteOperation
 	projects map[string]map[string]string
 	runtimes map[string]map[string]string
+	saves    int
 }
 
 func (s *overviewStore) DomainProject(_ context.Context, org, project string) error {
@@ -65,6 +66,7 @@ func (s *overviewStore) SaveZone(_ context.Context, zone *Zone) error {
 			zone.Revision++
 			v := *zone
 			s.zones[i] = &v
+			s.saves++
 			return nil
 		}
 	}

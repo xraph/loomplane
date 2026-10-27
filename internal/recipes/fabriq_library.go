@@ -36,17 +36,63 @@ func fabriqLibrary(hosted Kind) Kind {
 		}
 		library.Components = append(library.Components, component)
 	}
-	library.Outputs = []Output{
-		{Name: "url", EnvKey: "FABRIQ_POSTGRES_DSN", Secret: true, Template: "postgres://fabriq_app:${secret:app-password}@${dep:postgres:hostport}/${dep:postgres:database}?${dep:postgres:query}"},
-		{Name: "redis-addr", EnvKey: "FABRIQ_REDIS_ADDR", Secret: true, From: &Ref{Dependency: "redis", Field: FieldHostPort}},
-		{Name: "redis-username", EnvKey: "FABRIQ_REDIS_USERNAME", Secret: true, From: &Ref{Dependency: "redis", Field: FieldUsername}},
-		{Name: "redis-password", EnvKey: "FABRIQ_REDIS_PASSWORD", Secret: true, From: &Ref{Dependency: "redis", Field: FieldPassword}},
-		{Name: "falkordb-addr", EnvKey: "FABRIQ_FALKORDB_ADDR", Secret: true, Requires: "falkordb", From: &Ref{Dependency: "falkordb", Field: FieldURL}},
-		{Name: "falkordb-username", EnvKey: "FABRIQ_FALKORDB_USERNAME", Secret: true, Requires: "falkordb", Template: "default"},
-		{Name: "falkordb-password", EnvKey: "FABRIQ_FALKORDB_PASSWORD", Secret: true, Requires: "falkordb", From: &Ref{Dependency: "falkordb", Field: "secret:password"}},
-		{Name: "elasticsearch-addrs", EnvKey: "FABRIQ_ELASTICSEARCH_ADDRS", Secret: true, Requires: "elasticsearch", From: &Ref{Dependency: "elasticsearch", Field: FieldURL}},
-		{Name: "elasticsearch-username", EnvKey: "FABRIQ_ELASTICSEARCH_USERNAME", Secret: true, Requires: "elasticsearch", Template: "elastic"},
-		{Name: "elasticsearch-password", EnvKey: "FABRIQ_ELASTICSEARCH_PASSWORD", Secret: true, Requires: "elasticsearch", From: &Ref{Dependency: "elasticsearch", Field: "secret:password"}},
-	}
+	library.Outputs = libraryOutputs(library.Components)
 	return library
+}
+
+// fabriqLibraryOutputs are what an app that embeds Fabriq gets, by output
+// name and the variable the worker reads it from.
+var fabriqLibraryOutputs = []struct{ name, env string }{
+	{"url", "FABRIQ_POSTGRES_DSN"},
+	{"redis-addr", "FABRIQ_REDIS_ADDR"},
+	{"redis-username", "FABRIQ_REDIS_USERNAME"},
+	{"redis-password", "FABRIQ_REDIS_PASSWORD"},
+	{"falkordb-addr", "FABRIQ_FALKORDB_ADDR"},
+	{"falkordb-username", "FABRIQ_FALKORDB_USERNAME"},
+	{"falkordb-password", "FABRIQ_FALKORDB_PASSWORD"},
+	{"elasticsearch-addrs", "FABRIQ_ELASTICSEARCH_ADDRS"},
+	{"elasticsearch-username", "FABRIQ_ELASTICSEARCH_USERNAME"},
+	{"elasticsearch-password", "FABRIQ_ELASTICSEARCH_PASSWORD"},
+}
+
+// libraryOutputs builds the library's outputs from the worker's own
+// environment, which is the hosted server's, so the app reaches Postgres,
+// Redis and the projections exactly as the stock worker does. Every one is
+// secret: each carries a credential or says where to use one.
+func libraryOutputs(components []Component) []Output {
+	var env []EnvVar
+	for _, c := range components {
+		if c.Name == "worker" {
+			env = c.Env
+		}
+	}
+	outputs := make([]Output, 0, len(fabriqLibraryOutputs))
+	for _, want := range fabriqLibraryOutputs {
+		i := slices.IndexFunc(env, func(e EnvVar) bool { return e.Name == want.env })
+		if i < 0 {
+			panic("recipes: the Fabriq worker doesn't set " + want.env)
+		}
+		outputs = append(outputs, outputFrom(want.name, env[i]))
+	}
+	return outputs
+}
+
+// outputFrom is an output that reads what e does: the same reference,
+// template, generated secret or literal, with the same requirement.
+func outputFrom(name string, e EnvVar) Output {
+	o := Output{Name: name, EnvKey: e.Name, Secret: true, Template: e.Template, Requires: e.Requires}
+	if e.From != nil {
+		ref := *e.From
+		o.From = &ref
+	}
+	switch {
+	case e.Secret != "":
+		o.Template = "${secret:" + e.Secret + "}"
+	case e.Value != "":
+		if strings.Contains(e.Value, "${") {
+			panic("recipes: " + e.Name + "'s literal reads as a template")
+		}
+		o.Template = e.Value
+	}
+	return o
 }

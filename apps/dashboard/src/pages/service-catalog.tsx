@@ -749,6 +749,15 @@ function Recovery({
   const active =
     points.some((b) => ["queued", "running", "retiring"].includes(b.status)) ||
     copies.some((r) => ["queued", "running", "deleting"].includes(r.status))
+  // The copies list opens when a copy starts working and stays as the
+  // reader leaves it, so it doesn't fold shut under them when the copy
+  // finishes.
+  const [copiesOpen, setCopiesOpen] = useState(false)
+  const [wasActive, setWasActive] = useState(false)
+  if (active !== wasActive) {
+    setWasActive(active)
+    if (active) setCopiesOpen(true)
+  }
   const { refetch: refreshBackups } = backups
   const { refetch: refreshRestores } = restores
   const { refetch: refreshBindings } = bindings
@@ -1051,7 +1060,15 @@ function Recovery({
       {!managedRecovery && (!embeddedTitle || copies.length > 0) && (
         <CopiesContainer
           className="min-w-0"
-          open={embeddedTitle && active ? true : undefined}
+          {...(embeddedTitle
+            ? {
+                open: copiesOpen,
+                onToggle: (event: { currentTarget: Element }) =>
+                  setCopiesOpen(
+                    (event.currentTarget as HTMLDetailsElement).open
+                  ),
+              }
+            : {})}
         >
           {embeddedTitle ? (
             <summary className="cursor-pointer text-xs text-muted-foreground focus-visible:outline-2 focus-visible:outline-ring">
