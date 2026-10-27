@@ -1691,18 +1691,18 @@ export interface OctopusStatus {
 }
 
 export interface OctopusloomRoute {
-  environmentId: string;
-  orgId: string;
-  projectId: string;
-  resource: string;
   createdAt: string;
   createdBy: string;
+  environmentId: string;
   hostname: string;
   id: string;
   methods: string[];
   note?: string;
+  orgId: string;
   path: string;
   port: number;
+  projectId: string;
+  resource: string;
   revision: number;
   service: string;
   stripPrefix: boolean;

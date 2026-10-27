@@ -15083,23 +15083,14 @@
       },
       "OctopusloomRoute": {
         "properties": {
-          "EnvironmentID": {
-            "type": "string"
-          },
-          "OrgID": {
-            "type": "string"
-          },
-          "ProjectID": {
-            "type": "string"
-          },
-          "Resource": {
-            "type": "string"
-          },
           "created_at": {
             "type": "string",
             "format": "date-time"
           },
           "created_by": {
+            "type": "string"
+          },
+          "environment_id": {
             "type": "string"
           },
           "hostname": {
@@ -15118,11 +15109,20 @@
           "note": {
             "type": "string"
           },
+          "org_id": {
+            "type": "string"
+          },
           "path": {
             "type": "string"
           },
           "port": {
             "type": "integer"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "resource": {
+            "type": "string"
           },
           "revision": {
             "type": "integer"
@@ -15140,10 +15140,10 @@
         },
         "required": [
           "id",
-          "OrgID",
-          "ProjectID",
-          "EnvironmentID",
-          "Resource",
+          "org_id",
+          "project_id",
+          "environment_id",
+          "resource",
           "hostname",
           "path",
           "methods",
