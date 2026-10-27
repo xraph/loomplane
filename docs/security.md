@@ -49,6 +49,16 @@ Anyone with Docker access to the host can read that token file. On Kubernetes, s
 
 Caddy's Cloudflare module prints any token it refuses in its error, so Loomplane checks every challenge token against the format that module accepts. That check runs with the others, when you attach the token and before each write to a server or a cluster, and a malformed token is refused before Loomplane asks Cloudflare anything about it.
 
+## Octopus discovery access
+
+On Kubernetes, an [Octopus gateway](octopus.md) finds the services that opt in to FARP by watching the cluster, so it runs with a ServiceAccount of its own. Loomplane binds it to a Role in the connection's namespace that can get, list and watch `services`, `endpoints` and `endpointslices`. It can't read Secrets, ConfigMaps or pods, can't write anything, and has no access outside that namespace.
+
+The Role covers every Service and endpoint in the namespace, though, not just the project's. Octopus only routes to the Services labelled for it (`farp.enabled=true`, its environment and its own name), but a namespace shared by several projects lets it see their Service names, labels, annotations and endpoint addresses. It still can't see their Secrets. If that's more than you want one project's gateway to know, give the project its own namespace through a connection of its own.
+
+On a Docker server Octopus watches nothing. Loomplane registers each opted-in service with it over the private admin port, with the FARP token Octopus requires for every registration.
+
+Octopus's credentials are the four secrets Loomplane generates for it: the admin password, the admin session secret, the admin API token and the FARP token. They live in Vault, reach Octopus as secrets, and never appear in its config file, which names the FARP token only by placeholder, or in the Routes, Domains, Discovery or Settings tabs. Its admin port is never routed publicly, and every domain route to it refuses `/__farp`, `/_farp` and `/admin`.
+
 ## What runs where
 
 Nothing from a repository runs on a Loomplane machine. Analysis only reads files, in pure Go parsers behind size and file-count limits. Builds run on the clouds' own builders (Cloud Build, CodeBuild, Vercel), in your accounts. Gateways and provider plugins run on your infrastructure, and application traffic never passes through Loomplane.

@@ -1235,3 +1235,46 @@ func TestServiceVariableComesFromThePlansOwnEngines(t *testing.T) {
 		t.Fatalf("env: %+v %+v", web.Service.Env, r.Problems)
 	}
 }
+
+// A standalone engine resource is pinned from the plan's own registry,
+// like everything else composition planning resolves.
+func TestEngineResourceComesFromThePlansOwnRegistry(t *testing.T) {
+	kinds := recipes.NewRegistry()
+	err := kinds.RegisterEngine(recipes.Engine{
+		Kind: "pgtest", Family: "postgres", Title: "PostgreSQL test engine", EnvKey: "DATABASE_URL",
+		Targets: []string{"server"},
+		Releases: []recipes.EngineRelease{{
+			Version: "16", Product: "16.4", Revision: "1",
+			Image: recipes.Image{Repository: "registry.example/pgtest", Digests: map[string]string{
+				"amd64": "sha256:11538f20d0d489fad2dc7d30eeaafd731bd8405e25b1696d86571282ab6cdf25",
+				"arm64": "sha256:61581a49b789716d4da7a45ce7fd3c944b60150492ccece97b11b0b497f49aa8",
+			}},
+			MountPath: "/var/lib/postgresql/data", BackupFormat: "pg-dump-custom-v1",
+		}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	all := providers.Catalog()
+	for i := range all {
+		if all[i].Name == "server" {
+			all[i].Provisions = append(all[i].Provisions, provider.Provisions{Kind: "pgtest", Creates: "PostgreSQL test engine container", Versions: []string{"16"}})
+		}
+	}
+	offered, err := provider.NewRegistry(all...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc := "version: 1\nresources:\n  db: {kind: pgtest, provider: server, target: " + targetA + "}\n"
+	r := Compute(Input{
+		Environment: "production", Graph: infrastructureGraph(), Manifest: parse(t, doc), Providers: offered,
+		Connections: composedConnections(t), Kinds: kinds,
+	})
+	db := findAction(r, "resource:db")
+	if db == nil || db.Resource == nil || db.Resource.Catalog == nil {
+		t.Fatalf("db: %+v %+v", db, r.Problems)
+	}
+	if got := db.Resource.Catalog; got.ID != "pgtest-16" || !strings.HasPrefix(got.Image, "registry.example/pgtest@sha256:") || got.Family != "postgres" {
+		t.Fatalf("recipe %+v", got)
+	}
+}

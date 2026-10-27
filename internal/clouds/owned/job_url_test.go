@@ -1,6 +1,7 @@
 package owned
 
 import (
+	"fmt"
 	"math/rand/v2"
 	"slices"
 	"strings"
@@ -31,8 +32,8 @@ const (
 
 func TestSensitivePartsOfAnAddress(t *testing.T) {
 	for value, want := range map[string][]string{
-		// A password, and a user that looks like a token.
-		gitRemote: {"x-oauth-basic", userToken},
+		// A password, a user that looks like a token, and the path.
+		gitRemote: {"x-oauth-basic", userToken, "/acme/app.git"},
 		// Without a password the whole address stays secret, since its
 		// path can be one too, and a token user counts on its own.
 		registry: {registry, registryToken},
@@ -43,11 +44,11 @@ func TestSensitivePartsOfAnAddress(t *testing.T) {
 		// A parameter's name says it's secret only as a whole word, and
 		// a value that's only digits, or has the separators of a region
 		// or a time, isn't a token.
-		mongo: {"pw-Secret-1", "Abc12345", "xyz9", "d3adb33f", "s3cr3tPw", "Qx7pRt9z"},
+		mongo: {"pw-Secret-1", "/app", "Abc12345", "xyz9", "d3adb33f", "s3cr3tPw", "Qx7pRt9z"},
 		// An escaped value counts as it's spelled too.
 		"https://hooks.example.com/x?token=Ab%2BCd%2FEf12": {"https://hooks.example.com/x?token=Ab%2BCd%2FEf12", "Ab+Cd/Ef12", "Ab%2BCd%2FEf12"},
 		// A short user is an ordinary word, beside a password.
-		dsn: {"pg-Secret-Value-17x"},
+		dsn: {"pg-Secret-Value-17x", "/app__postgres"},
 		// An address with nothing secret in it is all secret, as before.
 		"postgres://postgres@db:5432/app": {"postgres://postgres@db:5432/app"},
 		"not a url":                       {"not a url"},
@@ -106,11 +107,12 @@ func TestJobOutputNeverShowsFourBytesOfAURLsToken(t *testing.T) {
 }
 
 func TestJobOutputLeavesAnAddressesOrdinaryWords(t *testing.T) {
-	// Addresses with a password: what isn't secret in them stays.
+	// Addresses with a password: what isn't secret in them stays. Their
+	// paths are secret, since a path can hold a token.
 	secrets := map[string]string{"GIT_REMOTE": gitRemote, "DATABASE_URL": dsn, "MONGO_URL": mongo}
 	const ordinary = "connecting to postgres://db:5432\n" +
-		"pushing to git.example.com/acme/app.git\n" +
-		"lp-inst-db:5432/app__postgres sslmode=disable: connected successfully\n" +
+		"pushing to git.example.com\n" +
+		"lp-inst-db:5432 sslmode=disable: connected successfully\n" +
 		"user loomplane signed in\n" +
 		"signed in as admin with /etc/ssl/client.key and /etc/ssl/client.crt\n" +
 		"region us-east-1 since 2024-01-01T00:00:00Z, chat_id=87654321 ignored\n" +
@@ -118,10 +120,52 @@ func TestJobOutputLeavesAnAddressesOrdinaryWords(t *testing.T) {
 	if output := tailed(secrets, ordinary); output != ordinary {
 		t.Fatalf("output: %q", output)
 	}
-	// Split, a token as the user goes and the rest stays.
+	// Split, a token as the user and the path go, and the host stays.
 	at := strings.Index(gitRemote, "Ef56")
 	output := tailed(secrets, "push "+gitRemote[:at], "warn: slow\n", gitRemote[at:]+"\n")
-	if want := "push https://[redacted]warn: slow\n[redacted]:[redacted]@git.example.com/acme/app.git\n"; output != want {
+	if want := "push https://[redacted]warn: slow\n[redacted]:[redacted]@git.example.com[redacted]\n"; output != want {
 		t.Fatalf("output: %q", output)
+	}
+}
+
+// TestJobOutputNeverShowsFourBytesOfAPasswordURLsPath splits an address
+// with a password and a token in its path and fragment at every point,
+// and at random points between other output, and checks no four bytes of
+// either token are shown. Its scheme and bare host stay readable.
+func TestJobOutputNeverShowsFourBytesOfAPasswordURLsPath(t *testing.T) {
+	const (
+		fragmentToken = "Fr4gM3ntT0k3nZz9"
+		hook          = "https://relay:pw-Hook-Secret-7@hooks.example.com/services/" + pathToken + "/send#" + fragmentToken
+	)
+	secrets := map[string]string{"HOOK_URL": hook}
+	tokens := []string{pathToken, fragmentToken, "pw-Hook-Secret-7"}
+	check := func(label, output string) {
+		t.Helper()
+		for _, token := range tokens {
+			if piece := shows(output, token); piece != "" {
+				t.Fatalf("%s: output %q shows %q of %s", label, output, piece, token)
+			}
+		}
+	}
+	for cut := range len(hook) {
+		check(fmt.Sprintf("cut at %d", cut), tailed(secrets, "post "+hook[:cut], "warn: slow\n", hook[cut:]+"\n"))
+		check(fmt.Sprintf("tail from %d", cut), tailed(secrets, hook[cut:]+"\nsent\n"))
+	}
+	random := rand.New(rand.NewPCG(5, 6))
+	noise := []string{"warn: slow\n", "ok\n", "\n", "posting to hooks.example.com\n"}
+	for round := range 300 {
+		var writes []string
+		start := random.IntN(len(hook))
+		piece := hook[start : start+1+random.IntN(len(hook)-start)]
+		for piece != "" {
+			n := 1 + random.IntN(len(piece))
+			writes = append(writes, piece[:n], noise[random.IntN(len(noise))])
+			piece = piece[n:]
+		}
+		check(fmt.Sprintf("round %d", round), tailed(secrets, writes...))
+	}
+	const ordinary = "posting to hooks.example.com over https\n"
+	if output := tailed(secrets, ordinary); output != ordinary {
+		t.Fatalf("the host or scheme was hidden: %q", output)
 	}
 }

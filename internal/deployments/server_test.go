@@ -301,3 +301,24 @@ func TestOwnedTarget_resumesCommittedWorkloadWithoutRedeploy(t *testing.T) {
 		t.Fatalf("resume: %+v %v", outcome, err)
 	}
 }
+
+func TestOwnedSpecSetsFarpLabelOnlyOnKubernetes(t *testing.T) {
+	farp := &planning.FarpConfig{Gateway: "edge", Port: 8080, Metadata: map[string]string{"farp.openapi.path": "/openapi.json", "farp.port": "8080"}}
+	build := func(cloud string) map[string]string {
+		job := &Job{Deployment: &Deployment{OrgID: "org_fixture", ProjectID: "proj_fixture", EnvironmentID: "env_fixture"}, Connection: &connections.Connection{ID: "conn_fixture", Cloud: cloud}, Action: planning.Action{Name: "api", Provider: cloud, Service: &planning.ServiceConfig{Provider: cloud, Farp: farp}}}
+		_, labels := ownedSpec(job, "image", ownedState{})
+		return labels
+	}
+	labels := build(connections.Kubernetes)
+	if got, want := labels[owned.LabelFarp], `{"gateway":"edge","metadata":{"farp.openapi.path":"/openapi.json","farp.port":"8080"}}`; got != want {
+		t.Fatalf("kubernetes farp label = %q, want %q", got, want)
+	}
+	if _, ok := build(connections.Server)[owned.LabelFarp]; ok {
+		t.Fatal("a Docker server got a FARP label")
+	}
+	plain := &Job{Deployment: &Deployment{OrgID: "org_fixture"}, Connection: &connections.Connection{ID: "conn_fixture", Cloud: connections.Kubernetes}, Action: planning.Action{Name: "api", Provider: connections.Kubernetes, Service: &planning.ServiceConfig{}}}
+	_, plainLabels := ownedSpec(plain, "image", ownedState{})
+	if _, ok := plainLabels[owned.LabelFarp]; ok {
+		t.Fatal("a service that did not opt in got a FARP label")
+	}
+}

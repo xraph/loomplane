@@ -21,8 +21,9 @@ import (
 )
 
 // scratchKeys is a PgStore over a database of its own, dropped when the
-// test ends, with the fabriq migration applied twice (central migrations
-// aren't transactional, so a rerun must be harmless).
+// test ends, with the fabriq migrations applied twice (central migrations
+// aren't transactional, so a rerun must be harmless). The migration it
+// returns is the one that makes the key table.
 func scratchKeys(t *testing.T) (*PgStore, *pgdriver.PgDB, *migrate.Migration, migrate.Executor) {
 	t.Helper()
 	dsn := os.Getenv("LOOMPLANE_TEST_DATABASE_URL")
@@ -60,51 +61,267 @@ func scratchKeys(t *testing.T) (*PgStore, *pgdriver.PgDB, *migrate.Migration, mi
 	if err != nil {
 		t.Fatal(err)
 	}
+	want := map[string]string{"20261115000100": "fabriq", "20261115000200": "fabriq_key_locks"}
+	var keys *migrate.Migration
 	for _, m := range migrations.Group().Migrations() {
-		if m.Version != "20261115000100" {
+		name, ok := want[m.Version]
+		if !ok {
 			continue
 		}
-		if m.Name != "fabriq" {
-			t.Fatalf("migration 20261115000100 is %q", m.Name)
+		if m.Name != name {
+			t.Fatalf("migration %s is %q", m.Version, m.Name)
 		}
+		delete(want, m.Version)
 		for range 2 {
 			if err = m.Up(ctx, exec); err != nil {
 				t.Fatal(err)
 			}
 		}
-		return NewPgStore(pg), pg, m, exec
+		if name == "fabriq" {
+			keys = m
+		}
 	}
-	t.Fatal("no fabriq migration")
-	return nil, nil, nil, nil
+	if len(want) != 0 {
+		t.Fatalf("missing migrations: %v", want)
+	}
+	return NewPgStore(pg), pg, keys, exec
 }
 
-func TestServiceKeyLockCoordinatesStoreInstances(t *testing.T) {
+// lockWithin is LockService with a deadline: an error means the lock
+// wasn't free by then.
+func lockWithin(t *testing.T, s *PgStore, wait time.Duration, service string) (func(), error) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(t.Context(), wait)
+	defer cancel()
+	_, release, err := s.LockService(ctx, "org", "env", "fabriq", service)
+	return release, err
+}
+
+// apiLease is who holds the lease on api's keys, or "".
+func apiLease(t *testing.T, db *pgdriver.PgDB) string {
+	t.Helper()
+	var holder string
+	err := db.QueryRow(t.Context(), `SELECT coalesce((SELECT holder FROM loomplane_fabriq_key_locks
+		WHERE org_id = 'org' AND environment_id = 'env' AND resource = 'fabriq' AND service = 'api'), '')`).Scan(&holder)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return holder
+}
+
+func TestServiceKeyLockIsALease(t *testing.T) {
 	s, db, _, _ := scratchKeys(t)
 	other := NewPgStore(db)
-	release, err := s.LockService(t.Context(), "org", "env", "fabriq", "api")
+	// Two holders of one service's keys take turns.
+	_, release, err := s.LockService(t.Context(), "org", "env", "fabriq", "api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(release)
+	if unlock, lockErr := lockWithin(t, other, 300*time.Millisecond, "api"); lockErr == nil {
+		unlock()
+		t.Fatal("two holders held api's keys at once")
+	}
+	// It holds no connection while the holder works: the holder's lease is
+	// a row, and no transaction stays open.
+	var open int
+	if err = db.QueryRow(t.Context(), `SELECT count(*) FROM pg_stat_activity
+		WHERE datname = current_database() AND state LIKE 'idle in transaction%'`).Scan(&open); err != nil || open != 0 {
+		t.Fatalf("%d sessions idle in transaction: %v", open, err)
+	}
+	// Other services, environments and resources don't wait.
+	unlockWeb, err := lockWithin(t, other, 2*time.Second, "web")
+	if err != nil {
+		t.Fatalf("web waited for api: %v", err)
+	}
+	unlockWeb()
+	envCtx, cancelEnv := context.WithTimeout(t.Context(), 2*time.Second)
+	defer cancelEnv()
+	_, unlockEnv, err := other.LockService(envCtx, "org", "env2", "fabriq", "api")
+	if err != nil {
+		t.Fatalf("another environment's api waited: %v", err)
+	}
+	unlockEnv()
+	// A waiter gets the lock as soon as it's released.
+	got := make(chan error, 1)
+	go func() {
+		unlock, lockErr := lockWithin(t, other, 10*time.Second, "api")
+		if lockErr == nil {
+			unlock()
+		}
+		got <- lockErr
+	}()
+	release()
+	if err = <-got; err != nil {
+		t.Fatalf("the waiter didn't get the released lock: %v", err)
+	}
+	if h := apiLease(t, db); h != "" {
+		t.Fatalf("release left a lease held by %s", h)
+	}
+}
+
+func TestServiceKeyLockTakesOverAnExpiredLease(t *testing.T) {
+	s, db, _, _ := scratchKeys(t)
+	// A holder that died left its lease behind; it has expired.
+	if _, err := db.Exec(t.Context(), `INSERT INTO loomplane_fabriq_key_locks (org_id, environment_id, resource, service, holder, expires_at)
+		VALUES ('org', 'env', 'fabriq', 'api', 'dead', now() - interval '1 second')`); err != nil {
+		t.Fatal(err)
+	}
+	release, err := lockWithin(t, s, 2*time.Second, "api")
+	if err != nil {
+		t.Fatalf("an expired lease kept the lock: %v", err)
+	}
+	t.Cleanup(release)
+	mine := apiLease(t, db)
+	if mine == "" || mine == "dead" {
+		t.Fatalf("holder: %q", mine)
+	}
+	// Its own lease expires while it works, and another holder takes it.
+	if _, err = db.Exec(t.Context(), `UPDATE loomplane_fabriq_key_locks SET expires_at = now() - interval '1 second'`); err != nil {
+		t.Fatal(err)
+	}
+	other := NewPgStore(db)
+	unlockOther, err := lockWithin(t, other, 2*time.Second, "api")
+	if err != nil {
+		t.Fatalf("takeover: %v", err)
+	}
+	t.Cleanup(unlockOther)
+	theirs := apiLease(t, db)
+	// Releasing deletes only the releaser's own lease.
+	release()
+	if h := apiLease(t, db); h != theirs {
+		t.Fatalf("a stale release removed the new holder's lease: %q", h)
+	}
+	if unlock, lockErr := lockWithin(t, s, 300*time.Millisecond, "api"); lockErr == nil {
+		unlock()
+		t.Fatal("the lock was free while the new holder held it")
+	}
+	unlockOther()
+	if h := apiLease(t, db); h != "" {
+		t.Fatalf("lease left behind: %q", h)
+	}
+}
+
+// apiExpiry is when the lease on api's keys expires.
+func apiExpiry(t *testing.T, db *pgdriver.PgDB) time.Time {
+	t.Helper()
+	var at time.Time
+	if err := db.QueryRow(t.Context(), `SELECT expires_at FROM loomplane_fabriq_key_locks
+		WHERE org_id = 'org' AND environment_id = 'env' AND resource = 'fabriq' AND service = 'api'`).Scan(&at); err != nil {
+		t.Fatal(err)
+	}
+	return at
+}
+
+func TestServiceKeyLockRenewsItsLease(t *testing.T) {
+	s, db, _, _ := scratchKeys(t)
+	s.lease = 1500 * time.Millisecond
+	ctx, release, err := s.LockService(t.Context(), "org", "env", "fabriq", "api")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer release()
-	ctx, cancel := context.WithTimeout(t.Context(), 150*time.Millisecond)
-	defer cancel()
-	if unlock, lockErr := other.LockService(ctx, "org", "env", "fabriq", "api"); lockErr == nil {
-		unlock()
-		t.Fatal("two store instances held the same service key lock")
+	first, holder := apiExpiry(t, db), apiLease(t, db)
+	// The holder pushes its expiry past the first one while it works.
+	deadline := time.Now().Add(15 * time.Second)
+	for !apiExpiry(t, db).After(first) {
+		if time.Now().After(deadline) {
+			t.Fatal("the lease was never renewed")
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("the holder lost its lease: %v", context.Cause(ctx))
+		case <-time.After(50 * time.Millisecond):
+		}
 	}
-	ctxOther, cancelOther := context.WithTimeout(t.Context(), 2*time.Second)
-	defer cancelOther()
-	unlockOther, err := other.LockService(ctxOther, "org", "env", "fabriq", "web")
+	if apiLease(t, db) != holder || ctx.Err() != nil {
+		t.Fatalf("holder %q, ctx %v", apiLease(t, db), ctx.Err())
+	}
+}
+
+func TestServiceKeyLockLostEndsTheWork(t *testing.T) {
+	s, db, _, _ := scratchKeys(t)
+	s.lease = 900 * time.Millisecond
+	ctx, release, err := s.LockService(t.Context(), "org", "env", "fabriq", "api")
 	if err != nil {
-		t.Fatalf("unrelated service blocked: %v", err)
+		t.Fatal(err)
 	}
-	unlockOther()
-	release()
-	unlockAgain, err := other.LockService(ctxOther, "org", "env", "fabriq", "api")
+	defer release()
+	// Someone deletes the lease out from under the holder.
+	if _, err = db.Exec(t.Context(), `DELETE FROM loomplane_fabriq_key_locks`); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-ctx.Done():
+	case <-time.After(15 * time.Second):
+		t.Fatal("the holder kept working without its lease")
+	}
+	if !errors.Is(context.Cause(ctx), ErrLeaseLost) {
+		t.Fatalf("cause: %v", context.Cause(ctx))
+	}
+	// The caller's own context ending stops the renewal too.
+	callerCtx, cancel := context.WithCancel(t.Context())
+	leased, releaseAgain, err := s.LockService(callerCtx, "org", "env", "fabriq", "web")
 	if err != nil {
-		t.Fatalf("service lock wasn't released: %v", err)
+		t.Fatal(err)
 	}
-	unlockAgain()
+	defer releaseAgain()
+	cancel()
+	<-leased.Done()
+}
+
+func TestServiceKeyLockFencesWrites(t *testing.T) {
+	s, db, _, _ := scratchKeys(t)
+	at := time.Date(2026, 10, 22, 9, 0, 0, 0, time.UTC)
+	record := func(id string, state KeyState) *KeyRecord {
+		return &KeyRecord{ID: id, OrgID: "org", ProjectID: "proj", EnvironmentID: "env", Resource: "fabriq", Service: "api",
+			Tenant: "acme", Prefix: "fq_" + id, State: state, CreatedAt: at, UpdatedAt: at}
+	}
+	ctx, release, err := s.LockService(t.Context(), "org", "env", "fabriq", "api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	// Held, writes go through.
+	if err = s.Insert(ctx, record("k1", KeyActive)); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.SetState(ctx, "org", "k1", []KeyState{KeyActive}, KeyRetiring); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Insert(ctx, record("k2", KeyActive)); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Insert(ctx, record("k3", KeyActive)); !errors.Is(err, ErrConflict) {
+		t.Fatalf("a second active key under the lease: %v", err)
+	}
+	if err = s.SetState(ctx, "org", "nope", []KeyState{KeyActive}, KeyRetiring); !errors.Is(err, ErrStateChanged) {
+		t.Fatalf("an unknown key under the lease: %v", err)
+	}
+	// The lease expires and another holder takes it over before this one
+	// notices: its writes are refused.
+	if _, err = db.Exec(t.Context(), `UPDATE loomplane_fabriq_key_locks SET expires_at = now() - interval '1 second'`); err != nil {
+		t.Fatal(err)
+	}
+	_, unlockOther, err := NewPgStore(db).LockService(t.Context(), "org", "env", "fabriq", "api")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlockOther()
+	if err = s.Insert(ctx, record("k4", KeyPending)); !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("insert after losing the lease: %v", err)
+	}
+	if err = s.SetState(ctx, "org", "k2", []KeyState{KeyActive}, KeyRetiring); !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("state change after losing the lease: %v", err)
+	}
+	keys, err := s.ForService(t.Context(), "org", "env", "fabriq", "api")
+	if err != nil || len(keys) != 2 || keys[0].ID != "k2" || keys[0].State != KeyActive {
+		t.Fatalf("a refused write landed: %+v %v", keys, err)
+	}
+	// Writes outside any lock, as Removed makes them, aren't fenced.
+	if err = s.SetState(t.Context(), "org", "k2", []KeyState{KeyActive}, KeyRevoked); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestKeyStorePG(t *testing.T) {

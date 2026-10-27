@@ -140,6 +140,10 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 	if labels[owned.LabelStateful] == "true" {
 		return nil, errors.New("a stateful workload cannot drop its persistent volumes")
 	}
+	farp, err := farpFromLabels(labels)
+	if err != nil {
+		return nil, err
+	}
 	c, err := r.Session(ctx, owned.ForOperation(labels, "apply"))
 	if err != nil {
 		return nil, err
@@ -229,7 +233,11 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 	}
 
 	if len(servicePorts) > 0 {
-		service := &corev1.Service{ObjectMeta: meta(name), Spec: corev1.ServiceSpec{Type: corev1.ServiceTypeClusterIP, Selector: maps.Clone(identity), Ports: servicePorts}}
+		// The Service is rebuilt from the labels on every Apply, so a
+		// service that stopped opting in loses its FARP labels and annotations.
+		serviceMeta := meta(name)
+		farp.decorate(&serviceMeta)
+		service := &corev1.Service{ObjectMeta: serviceMeta, Spec: corev1.ServiceSpec{Type: corev1.ServiceTypeClusterIP, Selector: maps.Clone(identity), Ports: servicePorts}}
 		if old.service != nil {
 			service.ResourceVersion = old.service.ResourceVersion
 			service.Spec.ClusterIP = old.service.Spec.ClusterIP

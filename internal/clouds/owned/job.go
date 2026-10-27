@@ -35,10 +35,8 @@ func JobOutput(output []byte, secrets map[string]string) string {
 			continue
 		}
 		values = append(values, value)
-		for _, part := range sensitiveParts(value) {
-			for i := 0; i+jobRedactRun <= len(part); i++ {
-				pieces[part[i:i+jobRedactRun]] = true
-			}
+		for _, piece := range sensitivePieces(value) {
+			pieces[piece] = true
 		}
 	}
 	slices.SortFunc(values, func(a, b string) int { return len(b) - len(a) })
@@ -59,13 +57,14 @@ func JobOutput(output []byte, secrets map[string]string) string {
 // address (a URL with a scheme and a host) with a password it's what's
 // secret in it: its password, its user when that looks like a token
 // (urlTokenUser), and its query values that look secret
-// (secretQueryValue), each as decoded and as the address spells it. Its
-// host, path and an ordinary user, such as postgres, are left, so output
-// naming them stays readable. An address without a password is secret
-// whole, since its path can hold the secret (a bot's token, a webhook's
-// key), and its token user and secret query values count on their own
-// too. Anything else is secret whole. A value of several lines is covered
-// line by line too, since its pieces include each line's.
+// (secretQueryValue), and its path and fragment, each as decoded and as
+// the address spells it. Its scheme, host and an ordinary user, such as
+// postgres, are left, so output naming them stays readable. An address
+// without a password is secret whole, since its path can hold the secret
+// (a bot's token, a webhook's key), and its token user and secret query
+// values count on their own too. Anything else is secret whole. A value
+// of several lines is covered line by line too, since its pieces include
+// each line's.
 func sensitiveParts(value string) []string {
 	u, err := url.Parse(value)
 	if err != nil || u.Scheme == "" || u.Host == "" {
@@ -92,6 +91,10 @@ func sensitiveParts(value string) []string {
 		}
 		if password, ok := u.User.Password(); ok && password != "" {
 			add(password, rawPassword)
+			// Its path and fragment can hold a token too, as a
+			// webhook's does. Its scheme and host stay readable.
+			add(u.Path, u.EscapedPath())
+			add(u.Fragment, u.EscapedFragment())
 		}
 		if user := u.User.Username(); len(user) >= urlTokenUser {
 			add(user, rawUser)
@@ -109,6 +112,38 @@ func sensitiveParts(value string) []string {
 		}
 	}
 	return parts
+}
+
+// sensitivePieces are the jobRedactRun-byte pieces of value's sensitive
+// parts. A piece of an address's path or fragment that its scheme and host
+// spell too isn't one, so output naming them stays readable: a database
+// named app__postgres doesn't hide "postgres" in postgresql://. Those
+// pieces are public in the address already.
+func sensitivePieces(value string) []string {
+	var public string
+	located := map[string]bool{}
+	if u, err := url.Parse(value); err == nil && u.Scheme != "" && u.Host != "" {
+		if password, ok := u.User.Password(); ok && password != "" {
+			public = strings.ToLower(u.Scheme + "://" + u.Host)
+			for _, part := range []string{u.Path, u.EscapedPath(), u.Fragment, u.EscapedFragment()} {
+				located[part] = true
+			}
+			for _, part := range []string{password, u.User.Username()} {
+				delete(located, part)
+			}
+		}
+	}
+	var pieces []string
+	for _, part := range sensitiveParts(value) {
+		for i := 0; i+jobRedactRun <= len(part); i++ {
+			piece := part[i : i+jobRedactRun]
+			if located[part] && strings.Contains(public, strings.ToLower(piece)) {
+				continue
+			}
+			pieces = append(pieces, piece)
+		}
+	}
+	return pieces
 }
 
 // urlTokenUser is the shortest user of an address that is a secret

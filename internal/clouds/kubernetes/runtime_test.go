@@ -385,3 +385,120 @@ func TestKubernetesRESPReadinessIsTCP(t *testing.T) {
 		t.Fatal("applied an unknown readiness protocol")
 	}
 }
+
+const farpLabel = `{"gateway":"edge","metadata":{"farp.openapi.path":"/openapi.json","farp.port":"8080"}}`
+
+func farpFixture() (*Runtime, *fake.Clientset, cpprovider.ServiceSpec, map[string]string) {
+	kube := fake.NewClientset()
+	client := &Client{Config: &Config{Namespace: "selected"}, Kube: kube}
+	runtime := &Runtime{WaitReady: func(context.Context, *Client, string) error { return nil }, Session: func(context.Context, map[string]string) (*Client, error) { return client, nil }}
+	spec := cpprovider.ServiceSpec{Name: "api", Image: "registry.example.com/api@sha256:fixture", Ports: []cpprovider.PortSpec{{Container: 8080}}}
+	labels := map[string]string{owned.LabelOrg: "org_fixture", owned.LabelProject: "proj_fixture", owned.LabelEnvironment: "env_fixture", owned.LabelFarp: farpLabel}
+	return runtime, kube, spec, labels
+}
+
+func TestKubernetesServiceCarriesFarpLabelsAndAnnotations(t *testing.T) {
+	runtime, kube, spec, labels := farpFixture()
+	iid := id.New(id.PrefixInstance)
+	if _, err := runtime.Apply(t.Context(), iid, spec, labels); err != nil {
+		t.Fatal(err)
+	}
+	name := WorkloadName(iid)
+	service, err := kube.CoreV1().Services("selected").Get(t.Context(), name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := objectLabels(iid, labels)
+	want["farp.enabled"] = "true"
+	want["loomplane.farp.gateway"] = "edge"
+	if !reflect.DeepEqual(service.Labels, want) {
+		t.Fatalf("service labels: %v, want %v", service.Labels, want)
+	}
+	if wantNotes := map[string]string{"farp.openapi.path": "/openapi.json", "farp.port": "8080"}; !reflect.DeepEqual(service.Annotations, wantNotes) {
+		t.Fatalf("service annotations: %v", service.Annotations)
+	}
+	deployment, err := kube.AppsV1().Deployments("selected").Get(t.Context(), name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(deployment.Labels, objectLabels(iid, labels)) || !reflect.DeepEqual(deployment.Spec.Template.Labels, objectLabels(iid, labels)) {
+		t.Fatalf("workload labels changed: %v %v", deployment.Labels, deployment.Spec.Template.Labels)
+	}
+	if _, found := deployment.Annotations["farp.port"]; found {
+		t.Fatal("a FARP annotation reached the Deployment")
+	}
+	for _, object := range []map[string]string{service.Labels, deployment.Labels, deployment.Spec.Template.Labels} {
+		if _, found := object[owned.LabelFarp]; found {
+			t.Fatalf("the transport label reached an object: %v", object)
+		}
+	}
+}
+
+func TestKubernetesServiceDropsFarpWhenOptedOut(t *testing.T) {
+	runtime, kube, spec, labels := farpFixture()
+	iid := id.New(id.PrefixInstance)
+	if _, err := runtime.Apply(t.Context(), iid, spec, labels); err != nil {
+		t.Fatal(err)
+	}
+	name := WorkloadName(iid)
+	service, err := kube.CoreV1().Services("selected").Get(t.Context(), name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service.Spec.ClusterIP, service.Spec.ClusterIPs = "10.0.0.7", []string{"10.0.0.7"}
+	if _, err = kube.CoreV1().Services("selected").Update(t.Context(), service, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	delete(labels, owned.LabelFarp)
+	if _, err = runtime.Apply(t.Context(), iid, spec, labels); err != nil {
+		t.Fatal(err)
+	}
+	service, err = kube.CoreV1().Services("selected").Get(t.Context(), name, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(service.Labels, objectLabels(iid, labels)) {
+		t.Fatalf("service labels after opting out: %v", service.Labels)
+	}
+	for key := range service.Annotations {
+		if strings.HasPrefix(key, "farp.") {
+			t.Fatalf("annotation %s survived opting out", key)
+		}
+	}
+	if service.Spec.ClusterIP != "10.0.0.7" {
+		t.Fatalf("cluster IP lost: %q", service.Spec.ClusterIP)
+	}
+}
+
+func TestKubernetesFarpLabelRejectsUnsafeMetadata(t *testing.T) {
+	cases := map[string]string{
+		"foreign key":    `{"gateway":"edge","metadata":{"kubernetes.io/ingress.class":"nginx"}}`,
+		"long value":     `{"gateway":"edge","metadata":{"farp.openapi.path":"/` + strings.Repeat("a", 1024) + `"}}`,
+		"bad gateway":    `{"gateway":"not a label value","metadata":{"farp.port":"8080"}}`,
+		"empty gateway":  `{"gateway":"","metadata":{"farp.port":"8080"}}`,
+		"not json":       `edge`,
+		"unknown field":  `{"gateway":"edge","metadata":{},"extra":true}`,
+		"trailing value": `{"gateway":"edge","metadata":{}} {}`,
+	}
+	for name, label := range cases {
+		t.Run(name, func(t *testing.T) {
+			runtime, kube, spec, labels := farpFixture()
+			labels[owned.LabelFarp] = label
+			if _, err := runtime.Apply(t.Context(), id.New(id.PrefixInstance), spec, labels); err == nil {
+				t.Fatal("unsafe FARP label accepted")
+			}
+			for _, action := range kube.Actions() {
+				if action.GetVerb() != "get" {
+					t.Fatalf("a refused FARP label wrote %s %s", action.GetVerb(), action.GetResource().Resource)
+				}
+			}
+		})
+	}
+	t.Run("exactly 1024 bytes", func(t *testing.T) {
+		runtime, _, spec, labels := farpFixture()
+		labels[owned.LabelFarp] = `{"gateway":"edge","metadata":{"farp.openapi.path":"` + strings.Repeat("a", 1024) + `"}}`
+		if _, err := runtime.Apply(t.Context(), id.New(id.PrefixInstance), spec, labels); err != nil {
+			t.Fatal(err)
+		}
+	})
+}

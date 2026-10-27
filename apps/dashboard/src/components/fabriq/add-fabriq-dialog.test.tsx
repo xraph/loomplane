@@ -200,7 +200,10 @@ test("connecting an existing Postgres checks, saves and selects it", async () =>
   const dsn = screen.getByLabelText("Postgres connection string")
   expect(dsn).toHaveAttribute("type", "password")
   expect(dsn).toHaveAttribute("autocomplete", "new-password")
-  await userEvent.type(dsn, "postgres://fabriq:s3cret@db.internal:5432/fabriq")
+  // Paste it: typing a connection string key by key re-renders the whole
+  // dialog for each character and was most of this test's time.
+  await userEvent.click(dsn)
+  await userEvent.paste("postgres://fabriq:s3cret@db.internal:5432/fabriq")
   expect(button).toBeDisabled()
   await userEvent.click(
     screen.getByRole("button", { name: "Check connection" })
@@ -256,10 +259,8 @@ test("a failed check keeps Review plan off and says why", async () => {
       name: "Connect existing",
     })
   )
-  await userEvent.type(
-    screen.getByLabelText("Postgres connection string"),
-    "postgres://u@db.internal/fabriq"
-  )
+  await userEvent.click(screen.getByLabelText("Postgres connection string"))
+  await userEvent.paste("postgres://u@db.internal/fabriq")
   await userEvent.click(
     screen.getByRole("button", { name: "Check connection" })
   )

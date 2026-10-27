@@ -140,6 +140,28 @@ test("times read as a person would say them", () => {
   expect(ago("not a time", noon)).toBe("not a time")
 })
 
+test("times near a bucket edge move up instead of reading 60 minutes or 24 hours", () => {
+  expect(ago(before(59 * minute), noon)).toBe("59 minutes ago")
+  expect(ago(before(59.5 * minute), noon)).toBe("1 hour ago")
+  expect(ago(before(89 * minute), noon)).toBe("1 hour ago")
+  expect(ago(before(23 * hour), noon)).toBe("23 hours ago")
+  expect(ago(before(23.4 * hour), noon)).toBe("23 hours ago")
+  expect(ago(before(23.6 * hour), noon)).toBe("yesterday")
+  expect(ago(before(24 * hour), noon)).toBe("yesterday")
+})
+
+test("a time earlier the same day is never yesterday", () => {
+  const late = new Date(2026, 9, 22, 23, 50, 0).getTime()
+  const sameDay = new Date(late - 23.6 * hour)
+  expect(sameDay.getDate()).toBe(22)
+  expect(ago(sameDay.toISOString(), late)).toBe("23 hours ago")
+  // Once the date has changed, the same distance is yesterday.
+  const early = new Date(2026, 9, 22, 0, 10, 0).getTime()
+  expect(ago(new Date(early - 23.6 * hour).toISOString(), early)).toBe(
+    "yesterday"
+  )
+})
+
 test("services that need a Fabriq, and those that don't", () => {
   const services = {
     web: {

@@ -276,6 +276,7 @@ func TestSchema_matchesTypes(t *testing.T) {
 		{"service", append(props(defs["service"]), props(defs["settings"])...), Service{}},
 		{"build", props(defs["build"]), Build{}},
 		{"endpoint", props(defs["endpoint"]), Endpoint{}},
+		{"farp", props(defs["farp"]), Farp{}},
 		{"settings", props(defs["settings"]), Settings{}},
 		{"scale", props(defs["settings"].(map[string]any)["properties"].(map[string]any)["scale"]), Scale{}},
 		{"size", props(defs["settings"].(map[string]any)["properties"].(map[string]any)["size"]), Size{}},
@@ -774,6 +775,84 @@ type anyRegexp string
 
 func (a anyRegexp) MatchString(string) bool { return true }
 func (a anyRegexp) String() string          { return string(a) }
+
+func TestFarpValidation(t *testing.T) {
+	for doc, want := range map[string]string{
+		`{source: a, farp: {openapi: openapi.json}}`:                          "services.api.farp.openapi: must start with /",
+		`{source: a, farp: {health: "/h?x"}}`:                                 "services.api.farp.health",
+		`{source: a, farp: {capabilities: [REST]}}`:                           "services.api.farp.capabilities",
+		`{source: a, farp: {capabilities: [a, b, c, d, e, f, g, h, i]}}`:      "services.api.farp.capabilities: has 9",
+		`{source: a, farp: {port: 70000}}`:                                    "services.api.farp.port",
+		`{source: a, farp: {gateway: Bad}}`:                                   "services.api.farp.gateway",
+		`{source: a, environments: {staging: {farp: {metrics: "no-slash"}}}}`: "services.api.environments.staging.farp.metrics: must start with /",
+		`{source: a, farp: {capabilities: [rest, rest]}}`:                     "names \"rest\" twice",
+		`{source: a, farp: {asyncapi: "/a b"}}`:                               "services.api.farp.asyncapi",
+		`{source: a, farp: {graphql: "/g#frag"}}`:                             "services.api.farp.graphql",
+	} {
+		_, err := Parse([]byte("version: 1\nservices:\n  api: " + doc + "\n"))
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: expected %q, got %v", doc, want, err)
+		}
+	}
+
+	// A bare block, defaults, a port left out and the largest port are all fine.
+	for _, doc := range []string{
+		`{source: a, farp: {}}`,
+		`{source: a, port: 8080, farp: {gateway: edge, openapi: /openapi.json, asyncapi: /asyncapi.json, graphql: /graphql, health: /health, metrics: /metrics, grpc_reflection: true, capabilities: [rest, websocket], port: 65535}}`,
+		`{source: a, farp: {enabled: false}}`,
+	} {
+		if _, err := Parse([]byte("version: 1\nservices:\n  api: " + doc + "\nresources:\n  edge: {kind: octopus}\n")); err != nil {
+			t.Errorf("%s: %v", doc, err)
+		}
+	}
+}
+
+func TestFarpRoundTrips(t *testing.T) {
+	m, err := Parse([]byte("version: 1\nservices:\n  api: {source: a, farp: {}}\n  web: {source: w}\n"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Services["api"].Farp == nil || m.Services["web"].Farp != nil {
+		t.Fatalf("farp blocks: %+v, %+v", m.Services["api"].Farp, m.Services["web"].Farp)
+	}
+	out, err := Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, err := Parse(out)
+	if err != nil || again.Services["api"].Farp == nil || again.Services["web"].Farp != nil {
+		t.Fatalf("round trip: %v\n%s", err, out)
+	}
+}
+
+func TestFarpEnvironmentReplacesBlock(t *testing.T) {
+	m, err := Parse([]byte(`version: 1
+services:
+  api:
+    source: a
+    farp: {openapi: /a, health: /h}
+    environments:
+      staging:
+        farp: {enabled: false}
+`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	staging := m.Services["api"].For("staging", m.Defaults)
+	off := false
+	if want := (&Farp{Enabled: &off}); !reflect.DeepEqual(staging.Farp, want) {
+		t.Fatalf("staging farp: %+v", staging.Farp)
+	}
+	production := m.Services["api"].For("production", m.Defaults)
+	if production.Farp == nil || production.Farp.OpenAPI != "/a" || production.Farp.Health != "/h" || production.Farp.Enabled != nil {
+		t.Fatalf("production farp: %+v", production.Farp)
+	}
+	// Settings are copies: changing one doesn't change the manifest.
+	production.Farp.OpenAPI = "/changed"
+	if m.Services["api"].Farp.OpenAPI != "/a" {
+		t.Fatal("a service's farp block is shared with its settings")
+	}
+}
 
 const gpuResourceDoc = "version: 2\nresources:\n  llm: {kind: gpusample, provider: server, target: t, gpu: {kind: nvidia-l4, count: 1}, environments: {staging: {gpu: {kind: nvidia-t4, count: 1}}}}\n"
 

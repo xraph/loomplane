@@ -714,3 +714,61 @@ func (*controlDNSAdapter) UpsertRecord(_ context.Context, _ provider.Infrastruct
 func TestDomainsManagedHostingRequiresPublicControl(t *testing.T) {
 	domainsDurableClaims(t, 60, 60, "managed")
 }
+
+// A composed catalog component on a Cloud server takes a route on a port its
+// recipe marks routable. Its control ports, engine databases, the composed
+// resource itself, its jobs and a dependency-only kind's component never do.
+func TestDomainsRouteComposedComponentRoutablePorts(t *testing.T) {
+	_, sql, db := cloudSyncDatabase(t)
+	ctx := t.Context()
+	store := cloudinfra.NewPgStore(db)
+	cs := connections.NewPgStore(db)
+	now := time.Now().UTC()
+	conn := &connections.Connection{ID: "runtime", OrgID: "org", Cloud: "server", Name: "Runtime", Status: "ready", Details: map[string]string{"host": "192.0.2.42", "docker_id": "daemon"}, CreatedAt: now, UpdatedAt: now}
+	if err := cs.CreateConnection(ctx, conn); err != nil {
+		t.Fatal(err)
+	}
+	host := &cloudinfra.Server{ID: "host", OrgID: "org", CloudID: "cloud", Name: "Host", Ownership: "adopted", Provider: "server", AccountID: "daemon", ResourceID: "daemon", ConnectionID: "runtime", RuntimeConnectionID: "runtime", Revision: 1, Status: "ready"}
+	if err := store.SaveServer(ctx, host); err != nil {
+		t.Fatal(err)
+	}
+	placement := `"cloud_placement":{"cloud_id":"cloud","target_id":"target","server_id":"host"}`
+	for _, statement := range []string{
+		`CREATE TABLE cp_instances(id TEXT PRIMARY KEY,tenant_id TEXT,current_release TEXT,service_refs JSONB,services JSONB,labels JSONB,state TEXT)`,
+		`CREATE TABLE cp_deployments(id TEXT PRIMARY KEY,tenant_id TEXT,instance_id TEXT,release_id TEXT,state TEXT,created_at TIMESTAMPTZ DEFAULT now())`,
+		`UPDATE loomplane_cloud_targets SET provider='server',connection_id='runtime',revision=revision+1 WHERE id='target'`,
+		`INSERT INTO cp_instances VALUES('api','org',NULL,'{"main":"api-container"}','[{"name":"main","ports":[{"container":8080},{"container":9090}]}]','{"loomplane.revision":"deployment/api"}','running')`,
+		`INSERT INTO cp_instances VALUES('db','org',NULL,'{"main":"db-container"}','[{"name":"main","ports":[{"container":5432}]}]','{"loomplane.revision":"deployment/db"}','running')`,
+		`INSERT INTO loomplane_bindings(id,org_id,project_id,environment_id,subject,name,provider,engine,external_id,connection_id,config,created_at,updated_at) VALUES
+		('api','org','proj','env','resource','app--api','server','resource','api','runtime','{"provider":"server","kind":"sample","component":{"kind":"sample","resource":"app","component":{"name":"api","role":"process"}},"routable_ports":[8080],` + placement + `}',now(),now()),
+		('parent','org','proj','env','resource','app','server','resource','api','runtime','{"provider":"server","kind":"sample","composition":{"kind":"sample","version":"1","revision":"r"},"routable_ports":[8080],` + placement + `}',now(),now()),
+		('migrate','org','proj','env','resource','app--migrate','server','resource','api','runtime','{"provider":"server","kind":"sample","component":{"kind":"sample","resource":"app","component":{"name":"migrate","role":"job"}},"routable_ports":[8080],` + placement + `}',now(),now()),
+		('db','org','proj','env','resource','db','server','postgres','db','runtime','{"provider":"server","kind":"postgres","catalog":{"id":"postgres-17"},"routable_ports":[5432],` + placement + `}',now(),now()),
+		('graph','org','proj','env','resource','app--graph','server','resource','api','runtime','{"provider":"server","kind":"graph","component":{"kind":"graph","resource":"app--graph","component":{"name":"server","role":"process"}},"routable_ports":[8080],` + placement + `}',now(),now())`,
+	} {
+		if _, err := sql.Exec(ctx, statement); err != nil {
+			t.Fatal(err)
+		}
+	}
+	input := func(name string, port int) cloudinfra.RouteInput {
+		return cloudinfra.RouteInput{CloudID: "cloud", EnvironmentID: "env", Service: name, Port: port}
+	}
+	binding, err := store.ResolveRouteBinding(ctx, "org", "proj", input("app--api", 8080))
+	if err != nil || binding.BindingID != "api" || binding.ServerID != "host" || binding.ContainerID != "api-container" || binding.ReleaseID != "deployment/api" {
+		t.Fatalf("routable component port: %+v %v", binding, err)
+	}
+	for _, refused := range []struct {
+		why string
+		in  cloudinfra.RouteInput
+	}{
+		{"control port", input("app--api", 9090)},
+		{"composed parent", input("app", 8080)},
+		{"job component", input("app--migrate", 8080)},
+		{"engine database", input("db", 5432)},
+		{"dependency-only component", input("app--graph", 8080)},
+	} {
+		if got, refuseErr := store.ResolveRouteBinding(ctx, "org", "proj", refused.in); !errors.Is(refuseErr, cloudinfra.ErrNotFound) {
+			t.Errorf("%s resolved: %+v %v", refused.why, got, refuseErr)
+		}
+	}
+}

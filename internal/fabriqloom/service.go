@@ -32,6 +32,9 @@ var (
 	// ErrUnavailable is a Fabriq whose console can't be reached, or whose
 	// admin API failed. Errors that are it are *UnavailableError.
 	ErrUnavailable = errors.New("Fabriq isn't reachable right now") //nolint:staticcheck // ST1005: a sentence people read, and Fabriq is a name
+	// ErrBusy is a change to a service's keys that lost its lock to
+	// another change partway. Trying again works.
+	ErrBusy = errors.New("another change to the service's Fabriq key was in progress")
 )
 
 // refusal is an error whose message is all there is to say, and which is
@@ -70,7 +73,27 @@ func unavailable(err error) error {
 	return &UnavailableError{Reason: scrub(err.Error())}
 }
 
-// Catalog is how the panel's service reaches a hosted Fabriq.
+// leaseLost is err, unless the lock on service's keys was lost under it
+// (ctx is the lock's): then whatever failed failed because of that, and
+// it's ErrBusy.
+func leaseLost(ctx context.Context, service string, err error) error {
+	if err == nil || !errors.Is(err, ErrLeaseLost) && !errors.Is(context.Cause(ctx), ErrLeaseLost) {
+		return err
+	}
+	return &refusal{msg: fmt.Sprintf("Another change to %s's Fabriq key was in progress. Try again.", service), kind: ErrBusy}
+}
+
+// sweepFailure is unavailable(err) when the orphan sweep failed in Fabriq
+// or on the way to it, and err as it is when the key store or Vault did.
+func sweepFailure(err error) error {
+	var remote *fabriqError
+	if errors.As(err, &remote) {
+		return unavailable(err)
+	}
+	return err
+}
+
+// Catalog is how the panel's service reaches a Fabriq, hosted or library.
 // *deployments.CatalogAccess is the real one: Components and Channel check
 // the principal's permission on the project first.
 type Catalog interface {
@@ -123,9 +146,9 @@ func (s *Service) hooks() *Hooks {
 	return NewHooks(HookDeps{Keys: s.Keys, Secrets: s.Secrets, Warn: s.Warn, Now: s.Now})
 }
 
-// Status is what the panel shows of a hosted Fabriq's stack. When its
-// console can't be reached, Reachable is false, Reason says why, and the
-// counts are zero.
+// Status is what the panel shows of a Fabriq's stack. When its console (or
+// a library's worker) can't be reached, Reachable is false, Reason says
+// why, and the counts are zero.
 type Status struct {
 	Kind      string `json:"kind"`
 	Version   string `json:"version"`
@@ -161,10 +184,22 @@ type ConsumerKey struct {
 	LastUsedKnown bool `json:"last_used_known"`
 }
 
-// The kinds the panel serves.
-var fabriqKinds = []string{"fabriq", "fabriq-library"}
+// The kinds the panel serves: the hosted stack and the library.
+const (
+	hostedKind  = "fabriq"
+	libraryKind = "fabriq-library"
+)
 
-// composition checks p's permission and that ref is a hosted Fabriq in its
+var fabriqKinds = []string{hostedKind, libraryKind}
+
+// Where a library's status asks the stock worker's readiness: it has no
+// console.
+const (
+	workerComponent = "worker"
+	workerPort      = "api"
+)
+
+// composition checks p's permission and that ref is a Fabriq in its
 // project and environment, and returns its composition and its bindings:
 // the resource's own first, then its components'.
 func (s *Service) composition(ctx context.Context, p security.Principal, need security.Permission, ref deployments.ResourceRef) (*planning.CompositionConfig, []*planning.Binding, error) {
@@ -188,8 +223,8 @@ func (s *Service) hosted(ctx context.Context, p security.Principal, need securit
 	if err != nil {
 		return err
 	}
-	if comp.Kind == "fabriq-library" {
-		return invalid("fabriq-library has no tenants or keys")
+	if comp.Kind == libraryKind {
+		return invalid("%s has no tenants or keys", libraryKind)
 	}
 	return nil
 }
@@ -204,15 +239,16 @@ func (s *Service) console(ctx context.Context, p security.Principal, need securi
 	return &AdminClient{Channel: ch}, func() { _ = ch.Close() }, nil //nolint:errcheck // nothing to do about it
 }
 
-// Status reports a hosted Fabriq's stack. It answers when Fabriq doesn't,
-// so the panel can show the stack from its bindings and say why.
+// Status reports a Fabriq's stack: a hosted one's through its console, a
+// library's from its worker's readiness. It answers when Fabriq doesn't, so
+// the panel can show the stack from its bindings and say why.
 func (s *Service) Status(ctx context.Context, p security.Principal, ref deployments.ResourceRef) (*Status, error) {
 	comp, _, err := s.composition(ctx, p, security.DeploymentRead, ref)
 	if err != nil {
 		return nil, err
 	}
 	st := &Status{Kind: comp.Kind, Version: comp.Version}
-	if comp.Kind == "fabriq-library" {
+	if comp.Kind == libraryKind {
 		err = s.readWorkerStatus(ctx, p, ref, st)
 	} else {
 		err = s.readStatus(ctx, p, ref, st)
@@ -227,8 +263,10 @@ func (s *Service) Status(ctx context.Context, p security.Principal, ref deployme
 	return st, nil
 }
 
+// readWorkerStatus marks a library reachable when its stock worker says
+// it is ready.
 func (s *Service) readWorkerStatus(ctx context.Context, p security.Principal, ref deployments.ResourceRef, st *Status) error {
-	ch, err := s.Access.Channel(ctx, p, security.DeploymentRead, deployments.ComponentRef{ResourceRef: ref, Component: "worker", Port: "api"})
+	ch, err := s.Access.Channel(ctx, p, security.DeploymentRead, deployments.ComponentRef{ResourceRef: ref, Component: workerComponent, Port: workerPort})
 	if err != nil {
 		return unavailable(err)
 	}
@@ -243,7 +281,7 @@ func (s *Service) readWorkerStatus(ctx context.Context, p security.Principal, re
 	}
 	defer func() { _ = res.Body.Close() }()
 	if res.StatusCode != http.StatusOK {
-		return unavailable(fmt.Errorf("fabriq worker readiness returned HTTP %d", res.StatusCode))
+		return unavailable(fmt.Errorf("The Fabriq worker isn't ready (HTTP %d)", res.StatusCode)) //nolint:staticcheck // ST1005: the panel shows this sentence as written
 	}
 	st.Reachable = true
 	return nil
@@ -455,11 +493,17 @@ func (s *Service) Rotate(ctx context.Context, p security.Principal, ref deployme
 	if err := s.hosted(ctx, p, security.SecretManage, ref); err != nil {
 		return nil, err
 	}
-	unlock, err := s.Keys.LockService(ctx, p.OrgID, ref.EnvironmentID, ref.Resource, service)
+	held, unlock, err := s.Keys.LockService(ctx, p.OrgID, ref.EnvironmentID, ref.Resource, service)
 	if err != nil {
 		return nil, err
 	}
 	defer unlock()
+	key, err := s.rotate(held, p, ref, service)
+	return key, leaseLost(held, service, err)
+}
+
+// rotate is Rotate under the lock on service's keys, which ctx is.
+func (s *Service) rotate(ctx context.Context, p security.Principal, ref deployments.ResourceRef, service string) (*ConsumerKey, error) {
 	records, err := s.Keys.ForService(ctx, p.OrgID, ref.EnvironmentID, ref.Resource, service)
 	if err != nil {
 		return nil, err
@@ -476,15 +520,15 @@ func (s *Service) Rotate(ctx context.Context, p security.Principal, ref deployme
 		return nil, err
 	}
 	defer done()
+	h := s.hooks()
 	consumer := deployments.Consumer{OrgID: p.OrgID, ProjectID: ref.ProjectID, EnvironmentID: ref.EnvironmentID, Resource: ref.Resource, Service: service}
-	if err = s.hooks().revokeOrphans(ctx, admin, consumer); err != nil {
-		return nil, unavailable(err)
+	if err = h.revokeOrphans(ctx, admin, consumer); err != nil {
+		return nil, sweepFailure(err)
 	}
 	issued, err := admin.IssueKey(ctx, KeyLabel(service))
 	if err != nil {
 		return nil, unavailable(err)
 	}
-	h := s.hooks()
 	if err = s.Secrets.Put(ctx, VaultKey(p.OrgID, ref.EnvironmentID, ref.Resource, issued.ID), []byte(issued.Key)); err != nil {
 		h.discard(ctx, admin, consumer, issued.ID)
 		return nil, fmt.Errorf("keep %s's rotated Fabriq key: %w", service, err)
@@ -497,7 +541,8 @@ func (s *Service) Rotate(ctx context.Context, p security.Principal, ref deployme
 		if !errors.Is(err, ErrConflict) {
 			return nil, fmt.Errorf("record %s's rotated Fabriq key: %w", service, err)
 		}
-		// Another rotation recorded its key first: that one stands.
+		// The service lock keeps a second rotation out, so this is
+		// defensive: a pending key recorded anyway stands.
 	}
 	if records, err = s.Keys.ForService(ctx, p.OrgID, ref.EnvironmentID, ref.Resource, service); err != nil {
 		return nil, err
@@ -513,11 +558,17 @@ func (s *Service) Revoke(ctx context.Context, p security.Principal, ref deployme
 	if err := s.hosted(ctx, p, security.SecretManage, ref); err != nil {
 		return nil, err
 	}
-	unlock, err := s.Keys.LockService(ctx, p.OrgID, ref.EnvironmentID, ref.Resource, service)
+	held, unlock, err := s.Keys.LockService(ctx, p.OrgID, ref.EnvironmentID, ref.Resource, service)
 	if err != nil {
 		return nil, err
 	}
 	defer unlock()
+	key, err := s.revoke(held, p, ref, service)
+	return key, leaseLost(held, service, err)
+}
+
+// revoke is Revoke under the lock on service's keys, which ctx is.
+func (s *Service) revoke(ctx context.Context, p security.Principal, ref deployments.ResourceRef, service string) (*ConsumerKey, error) {
 	records, err := s.Keys.ForService(ctx, p.OrgID, ref.EnvironmentID, ref.Resource, service)
 	if err != nil {
 		return nil, err
@@ -531,36 +582,34 @@ func (s *Service) Revoke(ctx context.Context, p security.Principal, ref deployme
 			live = append(live, r)
 		}
 	}
-	{
-		admin, done, cerr := s.console(ctx, p, security.SecretManage, ref)
-		if cerr != nil {
-			return nil, cerr
+	admin, done, err := s.console(ctx, p, security.SecretManage, ref)
+	if err != nil {
+		return nil, err
+	}
+	defer done()
+	h := s.hooks()
+	consumer := deployments.Consumer{OrgID: p.OrgID, ProjectID: ref.ProjectID, EnvironmentID: ref.EnvironmentID, Resource: ref.Resource, Service: service}
+	if err = h.revokeOrphans(ctx, admin, consumer); err != nil {
+		return nil, sweepFailure(err)
+	}
+	var errs []error
+	for _, r := range live {
+		// A key Fabriq still accepts is never recorded revoked.
+		if rerr := admin.RevokeKey(ctx, r.ID); rerr != nil {
+			errs = append(errs, unavailable(rerr))
+			continue
 		}
-		defer done()
-		h := s.hooks()
-		consumer := deployments.Consumer{OrgID: p.OrgID, ProjectID: ref.ProjectID, EnvironmentID: ref.EnvironmentID, Resource: ref.Resource, Service: service}
-		if err = h.revokeOrphans(ctx, admin, consumer); err != nil {
-			return nil, unavailable(err)
+		errs = append(errs, h.forget(ctx, p.OrgID, ref.EnvironmentID, ref.Resource, r))
+	}
+	if err = errors.Join(errs...); err != nil {
+		var down *UnavailableError
+		if errors.As(err, &down) {
+			return nil, down
 		}
-		var errs []error
-		for _, r := range live {
-			// A key Fabriq still accepts is never recorded revoked.
-			if rerr := admin.RevokeKey(ctx, r.ID); rerr != nil {
-				errs = append(errs, unavailable(rerr))
-				continue
-			}
-			errs = append(errs, h.forget(ctx, p.OrgID, ref.EnvironmentID, ref.Resource, r))
-		}
-		if err = errors.Join(errs...); err != nil {
-			var down *UnavailableError
-			if errors.As(err, &down) {
-				return nil, down
-			}
-			return nil, err
-		}
-		if records, err = s.Keys.ForService(ctx, p.OrgID, ref.EnvironmentID, ref.Resource, service); err != nil {
-			return nil, err
-		}
+		return nil, err
+	}
+	if records, err = s.Keys.ForService(ctx, p.OrgID, ref.EnvironmentID, ref.Resource, service); err != nil {
+		return nil, err
 	}
 	return s.keyOf(records, service), nil
 }
