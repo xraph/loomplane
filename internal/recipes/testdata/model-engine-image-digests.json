@@ -1,0 +1,48 @@
+{
+  "captured_at": "2026-10-27",
+  "images": {
+    "vllm": {
+      "repository": "docker.io/vllm/vllm-openai",
+      "tag": "v0.31.0",
+      "index_digest": "sha256:c1c9f6fd5c109ba7f0546a59f5b2f15fb87f64c77782e90a27b648b42a8e67c3",
+      "digests": {
+        "amd64": "sha256:a4a4c0437bf7240089da5f08aa370c4aee17ae5290f7a3b468825ee26c4c3a6b"
+      }
+    },
+    "tei": {
+      "repository": "ghcr.io/huggingface/text-embeddings-inference",
+      "tag": "cpu-1.9.4",
+      "index_digest": "sha256:2538ea1c9640d3763b15af668039d24172d063b42337b0c27796fc2be180c78d",
+      "digests": {
+        "amd64": "sha256:8419f533857b503ebf6ec292a95d4f1cf9c0464ac8b8abeef39518cf110e5726",
+        "arm64": "sha256:7a1b4aa11c491f39cea38eb0a210afe68a78dd5edee11c8f44f46c3529b27cd8"
+      }
+    },
+    "llamacpp": {
+      "repository": "ghcr.io/ggml-org/llama.cpp",
+      "tag": "server-b11580",
+      "index_digest": "sha256:c789283572ba78c2699b8945a96e654c850f938a717883f2e6187a14adac698f",
+      "digests": {
+        "amd64": "sha256:ba384e66b3f3b6474dc0285ed44466b6f025c7106865d915f1fe5ae2a2da7411",
+        "arm64": "sha256:21397f7329ff6fd5705b0bcedcb7e2ce10b5ce97cc12e6564278ac7133523ea6"
+      }
+    },
+    "llamacpp-gpu": {
+      "repository": "ghcr.io/ggml-org/llama.cpp",
+      "tag": "server-cuda-b11580",
+      "index_digest": "sha256:c4348afb91499b10fad12f92626c7a8ca8b69d6475d10c793b810cb61237ce00",
+      "digests": {
+        "amd64": "sha256:76062e392cb17528254c845322e9ec72aa62e583e230277a743d898538b1470e"
+      }
+    },
+    "guard": {
+      "repository": "docker.io/library/caddy",
+      "tag": "2.11.7",
+      "index_digest": "sha256:504a44d7d74bd2bc28a66afc4774912fc21223ca8a67734af1c54ab2f999b489",
+      "digests": {
+        "amd64": "sha256:04913b1da43339a40ad1ea87827d70a576ac5aa6cf674c6e24fdca675887533a",
+        "arm64": "sha256:cc447f149425221422153c6cdf33a123b3f458839679f950298f68a690a54a5b"
+      }
+    }
+  }
+}
