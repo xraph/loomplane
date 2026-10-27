@@ -137,3 +137,53 @@ func TestCloudSignInWebhookBackfill(t *testing.T) {
 		}
 	}
 }
+
+// Plan 2 adds who signed in, a slug per app, what a pending sign-in
+// needs to finish, and a place to say why an app stopped working.
+func TestCloudSignInPeopleSchema(t *testing.T) {
+	dsn := freshDatabase(t)
+	ctx := context.Background()
+	if err := ops.Migrate(ctx, dsn, migrations.All()); err != nil {
+		t.Fatal(err)
+	}
+	conn, err := pgx.Connect(ctx, dsn)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(ctx)
+	now := time.Now().UTC()
+
+	if _, err = conn.Exec(ctx, `INSERT INTO loomplane_cloud_connections (id, org_id, cloud, name, status, created_by, created_at, updated_at)
+		VALUES ('conn_1', 'org_1', 'gcp', 'main', 'connected', 'usr_1', $1, $1)`, now); err != nil {
+		t.Fatal(err)
+	}
+	var signedInBy string
+	if err = conn.QueryRow(ctx, `SELECT signed_in_by FROM loomplane_cloud_connections WHERE id = 'conn_1'`).Scan(&signedInBy); err != nil {
+		t.Fatal(err)
+	}
+	if signedInBy != "" {
+		t.Fatalf("signed_in_by = %q, want empty", signedInBy)
+	}
+
+	if _, err = conn.Exec(ctx, `INSERT INTO loomplane_oauth_sign_ins (state, org_id, user_id, cloud, name, expires_at)
+		VALUES ('state_1', 'org_1', 'usr_1', 'gcp', 'main', $1)`, now.Add(10*time.Minute)); err != nil {
+		t.Fatal(err)
+	}
+	var settings, verifier string
+	if err = conn.QueryRow(ctx, `SELECT settings::text, verifier FROM loomplane_oauth_sign_ins WHERE state = 'state_1'`).Scan(&settings, &verifier); err != nil {
+		t.Fatal(err)
+	}
+	if settings != "{}" || verifier != "" {
+		t.Fatalf("settings = %q, verifier = %q, want {} and empty", settings, verifier)
+	}
+
+	insertProblem := `INSERT INTO loomplane_oauth_app_problems (org_id, cloud, message, at) VALUES ('org_1', 'vercel', 'bad secret', now())`
+	if _, err = conn.Exec(ctx, insertProblem); err != nil {
+		t.Fatal(err)
+	}
+	_, err = conn.Exec(ctx, insertProblem)
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "23505" {
+		t.Fatalf("second problem for one org and cloud: err = %v, want a unique violation", err)
+	}
+}

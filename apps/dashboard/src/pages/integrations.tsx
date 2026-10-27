@@ -1,44 +1,29 @@
-// Integrations, laid out like the overview: what's connected at a glance,
-// then the GitHub accounts Loomplane reads code through, the repositories
-// they let it read, and a tile for each cloud it deploys to.
-import {
-  BookMarkedIcon,
-  CloudIcon,
-  EllipsisIcon,
-  ExternalLinkIcon,
-  FolderGit2Icon,
-  GitBranchIcon,
-  LockIcon,
-  PlugIcon,
-  PlusIcon,
-  SearchIcon,
-} from "lucide-react"
-import { type ReactNode, useMemo, useState } from "react"
+// Integrations: a catalog of everything Loomplane can connect to, and what's
+// connected now: the GitHub accounts it reads code through, the repositories
+// they let it read, and the cloud accounts it deploys to.
+import { BookMarkedIcon, LockIcon, SearchIcon } from "lucide-react"
+import { type ReactNode, useState } from "react"
 import { toast } from "sonner"
 
 import { messageOf } from "@/client/errors"
 import {
+  useConnectionCloudsList,
   useConnectionsList,
   useGithubDisconnect,
   useGithubRepositories,
   useGithubStatus,
+  useProjectsList,
 } from "@/client/forge/loomplane/hooks"
-import type {
-  ConnectedRepository,
-  GitHubInstallation,
-  GitHubStatus,
-} from "@/client/forge/loomplane/types"
+import type { GitHubInstallation } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
-import { CloudConnections, ConnectDialog } from "@/components/cloud-connections"
-import { DotProgress } from "@/components/dots"
+import { CloudGlyph } from "@/components/cloud-glyph"
+import { ConnectDialog, statusLabels } from "@/components/cloud-connections"
 import { IntegrationCatalog } from "@/components/integration-catalog"
-import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { Figure, MetricCard, QuickAction } from "@/components/metric-card"
 import { NewProjectDialog } from "@/components/new-project-dialog"
 import { Page, PageHeading } from "@/components/page"
 import { QueryError } from "@/components/query-error"
+import { StatusPill } from "@/components/runs"
 import { SiteHeader } from "@/components/site-header"
-import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
   AlertDialog,
   AlertDialogAction,
@@ -50,22 +35,7 @@ import {
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog"
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar"
-import { Badge } from "@/components/ui/badge"
 import { Button, buttonVariants } from "@/components/ui/button"
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card"
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu"
 import {
   Empty,
   EmptyContent,
@@ -74,25 +44,19 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty"
-import {
-  InputGroup,
-  InputGroupAddon,
-  InputGroupInput,
-} from "@/components/ui/input-group"
-import {
-  Item,
-  ItemActions,
-  ItemContent,
-  ItemDescription,
-  ItemGroup,
-  ItemMedia,
-  ItemTitle,
-} from "@/components/ui/item"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
+import {
+  Tabs,
+  TabsContent,
+  TabsCount,
+  TabsList,
+  TabsTrigger,
+} from "@/components/ui/tabs"
 import { formatDate } from "@/lib/format"
-import { cloudHealth, groupRepositories } from "@/lib/integrations"
+import { cloudHealth, cloudPurposes } from "@/lib/integrations"
 import { useOrganization } from "@/lib/organization"
+import { Link } from "@/lib/router"
 import { cn } from "@/lib/utils"
 
 export type IntegrationsTab = "catalog" | "connected"
@@ -111,6 +75,13 @@ export function Integrations({
   const go = (t: IntegrationsTab) => (onTab ? onTab(t) : setShown(t))
   // The repository a new project starts with, while its dialog is open.
   const [starting, setStarting] = useState<string | null>(null)
+  const forms = useQuery(useConnectionCloudsList)
+  const github = useQuery(useGithubStatus)
+  const clouds = useQuery(useConnectionsList)
+  const connectedCount =
+    github.data && clouds.data
+      ? github.data.installations.length + clouds.data.connections.length
+      : undefined
 
   return (
     <>
@@ -126,8 +97,18 @@ export function Integrations({
           className="gap-5"
         >
           <TabsList variant="line">
-            <TabsTrigger value="catalog">Catalog</TabsTrigger>
-            <TabsTrigger value="connected">Connected</TabsTrigger>
+            <TabsTrigger value="catalog">
+              Catalog
+              {forms.data && (
+                <TabsCount>{forms.data.clouds.length + 1}</TabsCount>
+              )}
+            </TabsTrigger>
+            <TabsTrigger value="connected">
+              Connected
+              {connectedCount !== undefined && (
+                <TabsCount>{connectedCount}</TabsCount>
+              )}
+            </TabsTrigger>
           </TabsList>
           <TabsContent value="catalog">
             <IntegrationCatalog
@@ -138,24 +119,16 @@ export function Integrations({
               onManage={() => go("connected")}
             />
           </TabsContent>
-          <TabsContent value="connected">
-            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-12">
-              <Summary
-                className="sm:col-span-2 lg:col-span-6"
-                onConnectCloud={() => {
-                  setConnectCloud(undefined)
+          <TabsContent value="connected" className="grid gap-4">
+            <ConnectedStats />
+            <div className="grid items-start gap-3 lg:grid-cols-2">
+              <GitHubPanel onStart={setStarting} />
+              <CloudsPanel
+                onConnect={(cloud) => {
+                  setConnectCloud(cloud)
                   setConnecting(true)
                 }}
-                onNewProject={() => setStarting("")}
               />
-              <RepositoryFigure className="lg:col-span-3" />
-              <CloudFigure className="lg:col-span-3" />
-              <GitHubCard className="sm:col-span-2 lg:col-span-7" />
-              <RepositoriesCard
-                className="sm:col-span-2 lg:col-span-5"
-                onStart={setStarting}
-              />
-              <CloudConnections className="sm:col-span-2 lg:col-span-12" />
             </div>
           </TabsContent>
         </Tabs>
@@ -194,233 +167,204 @@ function GitHubMark({ className }: { className?: string }) {
 /* ------------------------------------------------------------------------ */
 /* At a glance                                                                */
 
-function Summary({
-  className,
-  onConnectCloud,
-  onNewProject,
+function Stat({
+  label,
+  value,
+  note,
+  tone,
 }: {
-  className?: string
-  onConnectCloud: () => void
-  onNewProject: () => void
+  label: string
+  value: ReactNode
+  note: ReactNode
+  tone?: "good" | "attention"
 }) {
-  const { can } = useOrganization()
+  return (
+    <section className="grid gap-1 rounded-[14px] bg-card px-4 py-3.5 ring-1 ring-border">
+      <span className="text-[12.5px] text-muted-foreground">{label}</span>
+      <span
+        className={cn(
+          "font-mono text-2xl leading-tight font-medium tabular-nums",
+          tone === "good" && "text-overdye-ink",
+          tone === "attention" && "text-weld-ink"
+        )}
+      >
+        {value}
+      </span>
+      <span className="text-[12.5px] text-muted-foreground">{note}</span>
+    </section>
+  )
+}
+
+function ConnectedStats() {
   const github = useQuery(useGithubStatus)
   const clouds = useQuery(useConnectionsList)
-  const accounts = github.data?.installations.length ?? 0
-  const connected = clouds.data?.connections.length ?? 0
-  const total = accounts + connected
-  const loading = !github.data || !clouds.data
-
+  const installs = github.data?.installations.length ?? 0
+  const accounts = clouds.data?.connections.length ?? 0
+  const health = cloudHealth(clouds.data?.connections ?? [])
+  const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`
   return (
-    <Card className={cn("hero-glow isolate", className)}>
-      <CardHeader>
-        <CardTitle className="flex items-center gap-2 text-[15px] font-normal text-muted-foreground">
-          <PlugIcon className="size-4" />
-          Connected
-        </CardTitle>
-        <CardDescription className="grid gap-2 pt-1">
-          {loading ? (
-            <Skeleton className="h-11 w-48" />
-          ) : (
-            <span className="flex items-baseline gap-2 text-foreground">
-              <span className="text-[44px] leading-none font-semibold tracking-[-0.03em] tabular-nums">
-                {total}
-              </span>
-              <span className="text-2xl font-medium tracking-tight text-muted-foreground">
-                {total === 1 ? "account" : "accounts"}
-              </span>
-            </span>
-          )}
-          {!loading && summaryLine(github.data, accounts, connected)}
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="grid grid-cols-3 gap-2 sm:flex sm:flex-wrap">
-        <QuickAction
-          icon={GitHubMark}
-          label="Install on GitHub"
-          href={github.data?.installUrl}
-          disabled={!github.data?.installUrl}
-        />
-        <QuickAction
-          icon={CloudIcon}
-          label="Connect a cloud"
-          disabled={!can("cloud_account:manage")}
-          onClick={onConnectCloud}
-        />
-        <QuickAction
-          icon={PlusIcon}
-          label="New project"
-          disabled={!can("project:create")}
-          onClick={onNewProject}
-        />
-      </CardContent>
-      <CardFooter className="border-t-0 bg-transparent text-xs text-muted-foreground">
-        Public repositories need nothing here. For a private one, Loomplane gets
-        a read-only token for that one repository, for as long as an analysis
-        takes, and keeps none.
-      </CardFooter>
-    </Card>
-  )
-}
-
-function summaryLine(
-  github: GitHubStatus | undefined,
-  accounts: number,
-  clouds: number
-): string {
-  if (accounts + clouds === 0) {
-    return github?.configured
-      ? "Nothing connected yet. Install the GitHub App on an organization, then connect a cloud to deploy to."
-      : "Nothing connected yet. Connect a cloud to deploy to."
-  }
-  const parts = []
-  if (accounts > 0) parts.push(`${accounts} on GitHub`)
-  if (clouds > 0) parts.push(`${clouds} ${clouds === 1 ? "cloud" : "clouds"}`)
-  return parts.join(" and ")
-}
-
-function RepositoryFigure({ className }: { className?: string }) {
-  const github = useQuery(useGithubStatus)
-  const installations = github.data?.installations ?? []
-
-  return (
-    <MetricCard
-      icon={BookMarkedIcon}
-      title="Repositories"
-      className={className}
-    >
-      {!github.data ? (
-        <Skeleton className="h-12 w-32" />
-      ) : installations.length > 0 ? (
-        <RepositoryCount accounts={installations.length} />
-      ) : (
-        <Figure
-          value={<span className="text-muted-foreground">Public</span>}
-          note={
-            github.data.configured
-              ? "Only public ones, until an account is connected"
-              : "Only public ones: no GitHub App is set up"
-          }
-        />
-      )}
-    </MetricCard>
-  )
-}
-
-// RepositoryCount asks GitHub, so it's only shown once an account is
-// connected.
-function RepositoryCount({ accounts }: { accounts: number }) {
-  const repos = useQuery(useGithubRepositories)
-  if (repos.status === "error") {
-    return (
-      <Figure
-        value={<span className="text-muted-foreground">?</span>}
-        note="GitHub didn't answer"
-      />
-    )
-  }
-  if (!repos.data) return <Skeleton className="h-12 w-32" />
-  const list = repos.data.repositories
-  const hidden = list.filter((r) => r.private).length
-  return (
-    <Figure
-      value={list.length}
-      unit="Loomplane can read"
-      note={`${hidden} private, across ${accounts} ${accounts === 1 ? "account" : "accounts"}`}
-    />
-  )
-}
-
-function CloudFigure({ className }: { className?: string }) {
-  const list = useQuery(useConnectionsList)
-  const health = cloudHealth(list.data?.connections ?? [])
-
-  return (
-    <MetricCard icon={CloudIcon} title="Clouds ready" className={className}>
-      {list.status === "error" ? (
-        <QueryError
-          error={list.error}
-          fallback="Cloud connections couldn't be loaded."
-          retry={list.refetch}
-        />
-      ) : !list.data ? (
-        <Skeleton className="h-12 w-32" />
+    <div className="grid gap-3 sm:grid-cols-3">
+      {!github.data || !clouds.data ? (
+        [0, 1, 2].map((i) => (
+          <Skeleton key={i} className="h-[92px] rounded-[14px]" />
+        ))
       ) : (
         <>
-          <Figure
-            value={health.ready}
-            unit={health.total > 0 ? `of ${health.total}` : undefined}
+          <Stat
+            label="Connected"
+            value={installs + accounts}
             note={
-              health.total === 0 ? (
-                "None connected yet"
-              ) : health.attention > 0 ? (
-                <span className="text-weld-ink">
-                  {health.attention} {health.attention === 1 ? "needs" : "need"}{" "}
-                  attention
-                </span>
-              ) : (
-                "All checked and ready"
-              )
+              installs + accounts === 0
+                ? "Nothing connected yet"
+                : `${plural(installs, "GitHub account")} and ${plural(accounts, "cloud account")}`
             }
           />
-          <DotProgress
-            size="sm"
-            className="mt-auto"
-            value={health.total > 0 ? health.ready / health.total : 0}
-            label={`${health.ready} of ${health.total} clouds ready`}
+          {installs > 0 ? (
+            <RepositoryStat />
+          ) : (
+            <Stat
+              label="Repositories"
+              value={<span className="text-muted-foreground">Public</span>}
+              note={
+                github.data.configured
+                  ? "Only public ones, until an account is connected"
+                  : "Only public ones: no GitHub App is set up"
+              }
+            />
+          )}
+          <Stat
+            label="Clouds ready"
+            value={health.total ? `${health.ready} of ${health.total}` : "None"}
+            tone={
+              !health.total
+                ? undefined
+                : health.attention
+                  ? "attention"
+                  : "good"
+            }
+            note={
+              !health.total
+                ? "None connected yet"
+                : health.attention
+                  ? `${health.attention} ${health.attention === 1 ? "needs" : "need"} attention`
+                  : "All checked and ready"
+            }
           />
         </>
       )}
-    </MetricCard>
+    </div>
+  )
+}
+
+// RepositoryStat asks GitHub, so it's only shown once an account is in.
+function RepositoryStat() {
+  const repos = useQuery(useGithubRepositories)
+  if (repos.status === "error")
+    return <Stat label="Repositories" value="?" note="GitHub didn't answer" />
+  if (!repos.data) return <Skeleton className="h-[92px] rounded-[14px]" />
+  const list = repos.data.repositories
+  const hidden = list.filter((r) => r.private).length
+  return (
+    <Stat
+      label="Repositories"
+      value={list.length}
+      note={
+        hidden ? `Loomplane can read, ${hidden} private` : "Loomplane can read"
+      }
+    />
   )
 }
 
 /* ------------------------------------------------------------------------ */
 /* GitHub                                                                     */
 
-function GitHubCard({ className }: { className?: string }) {
+function Panel({
+  title,
+  description,
+  media,
+  action,
+  children,
+  footer,
+}: {
+  title: string
+  description?: ReactNode
+  media?: ReactNode
+  action?: ReactNode
+  children: ReactNode
+  footer?: ReactNode
+}) {
+  return (
+    <section
+      aria-label={title}
+      className="overflow-hidden rounded-[14px] bg-card ring-1 ring-border"
+    >
+      <div className="flex items-center gap-2.5 border-b px-4 py-3">
+        {media}
+        <div className="grid min-w-0 flex-1 gap-0.5">
+          <h2 className="text-sm font-semibold">{title}</h2>
+          {description && (
+            <p className="text-[12.5px] leading-relaxed text-muted-foreground">
+              {description}
+            </p>
+          )}
+        </div>
+        {action}
+      </div>
+      {children}
+      {footer && (
+        <div className="border-t bg-subtle px-4 py-2.5 text-xs leading-relaxed text-muted-foreground">
+          {footer}
+        </div>
+      )}
+    </section>
+  )
+}
+
+function GitHubPanel({ onStart }: { onStart: (repository: string) => void }) {
   const { can } = useOrganization()
   const status = useQuery(useGithubStatus)
-  const has = (status.data?.installations.length ?? 0) > 0
+  const installations = status.data?.installations ?? []
   const mayConnect = can("repository:connect")
-
   return (
-    <MetricCard
-      icon={GitHubMark}
+    <Panel
       title="GitHub"
-      className={className}
+      media={
+        <span className="flex size-[30px] shrink-0 items-center justify-center rounded-lg bg-foreground text-background">
+          <GitHubMark className="size-4" />
+        </span>
+      }
       action={
-        has && status.data?.installUrl ? (
+        installations.length > 0 &&
+        status.data?.installUrl && (
           // A link, not a button: it leaves for GitHub.
           <a
             href={status.data.installUrl}
-            className={cn(
-              buttonVariants({ variant: "outline", size: "sm" }),
-              "-mt-1 rounded-full"
-            )}
+            className={buttonVariants({ variant: "outline", size: "sm" })}
           >
-            <PlusIcon />
             Install on another account
           </a>
-        ) : undefined
+        )
       }
+      footer="Public repositories need nothing here. For a private one, Loomplane gets a read-only token for that one repository, for as long as an analysis takes, and keeps none."
     >
-      {status.status === "error" && (
-        <Alert variant="destructive">
-          <AlertDescription>
-            {messageOf(
-              status.error,
-              "The GitHub connection couldn't be loaded."
-            )}
-          </AlertDescription>
-        </Alert>
-      )}
-      {!status.data && status.status !== "error" && (
-        <Skeleton className="h-40 w-full rounded-xl" />
-      )}
-      {status.data && !status.data.configured && <SetUpGitHub />}
-      {status.data?.configured && !has && (
-        <Empty className="flex-1">
+      {status.status === "error" ? (
+        <div className="p-4">
+          <QueryError
+            error={status.error}
+            fallback="The GitHub connection couldn't be loaded."
+            retry={status.refetch}
+          />
+        </div>
+      ) : !status.data ? (
+        <div className="p-4">
+          <Skeleton className="h-32 w-full" />
+        </div>
+      ) : !status.data.configured ? (
+        <div className="p-4">
+          <SetUpGitHub />
+        </div>
+      ) : installations.length === 0 ? (
+        <Empty variant="inline">
           <EmptyHeader>
             <EmptyMedia variant="icon">
               <GitHubMark className="size-4" />
@@ -434,135 +378,318 @@ function GitHubCard({ className }: { className?: string }) {
           </EmptyHeader>
           {status.data.installUrl && (
             <EmptyContent>
-              <a
-                href={status.data.installUrl}
-                className={cn(buttonVariants(), "rounded-full")}
-              >
+              <a href={status.data.installUrl} className={buttonVariants()}>
                 <GitHubMark className="size-4" />
                 Install on GitHub
               </a>
             </EmptyContent>
           )}
         </Empty>
+      ) : (
+        <>
+          <ul className="divide-y border-b">
+            {installations.map((inst) => (
+              <InstallationRow
+                key={inst.id}
+                installation={inst}
+                mayConnect={mayConnect}
+              />
+            ))}
+          </ul>
+          <Repositories onStart={onStart} />
+        </>
       )}
-      {status.data && has && (
-        <Installations
-          installations={status.data.installations}
-          mayConnect={mayConnect}
-        />
-      )}
-    </MetricCard>
+    </Panel>
   )
 }
 
-// Installations asks GitHub how many repositories each lets Loomplane
-// read, so it's only shown once an account is connected.
-function Installations({
-  installations,
-  mayConnect,
-}: {
-  installations: GitHubInstallation[]
-  mayConnect: boolean
-}) {
-  const repos = useQuery(useGithubRepositories)
-  const counts = useMemo(() => {
-    const m = new Map<string, number>()
-    for (const r of repos.data?.repositories ?? []) {
-      m.set(r.installation, (m.get(r.installation) ?? 0) + 1)
-    }
-    return m
-  }, [repos.data])
-  return (
-    <ItemGroup className="gap-2">
-      {installations.map((inst) => (
-        <Installation
-          key={inst.id}
-          installation={inst}
-          repositories={repos.data ? (counts.get(inst.id) ?? 0) : undefined}
-          mayConnect={mayConnect}
-        />
-      ))}
-    </ItemGroup>
-  )
-}
-
-function Installation({
+function InstallationRow({
   installation: inst,
-  repositories,
   mayConnect,
 }: {
   installation: GitHubInstallation
-  repositories?: number
   mayConnect: boolean
 }) {
   const [disconnecting, setDisconnecting] = useState(false)
-  const kind = inst.accountType === "User" ? "Personal" : "Organization"
-
   return (
-    <Item variant="outline" className="rounded-xl bg-background/50">
-      <ItemMedia>
-        <AccountAvatar account={inst.account} src={inst.avatarUrl} />
-      </ItemMedia>
-      <ItemContent>
-        <ItemTitle>
+    <li className="flex flex-wrap items-center gap-x-3.5 gap-y-2 px-4 py-2.5">
+      <AccountAvatar account={inst.account} src={inst.avatarUrl} />
+      <span className="grid min-w-0 flex-[1_1_160px] gap-0.5">
+        <span className="truncate text-[13.5px] font-medium">
           {inst.account}
-          <Badge variant="outline" className="font-normal">
-            {kind}
-          </Badge>
-        </ItemTitle>
-        <ItemDescription className="text-xs">
-          {repositories === undefined
-            ? "Connected"
-            : `${repositories} ${repositories === 1 ? "repository" : "repositories"}, connected`}{" "}
+        </span>
+        <span className="text-xs text-muted-foreground">
+          {inst.accountType === "User" ? "Personal" : "Organization"} ·
+          connected{" "}
           <time dateTime={inst.createdAt}>{formatDate(inst.createdAt)}</time>
-        </ItemDescription>
-      </ItemContent>
-      <ItemActions>
-        {inst.manageUrl && (
-          <a
-            href={inst.manageUrl}
-            target="_blank"
-            rel="noreferrer"
-            className={cn(
-              buttonVariants({ variant: "ghost", size: "sm" }),
-              "rounded-full"
-            )}
-          >
-            Choose repositories
-            <ExternalLinkIcon />
-          </a>
-        )}
-        {mayConnect && (
-          <DropdownMenu>
-            <DropdownMenuTrigger
-              render={
-                <Button
-                  variant="ghost"
-                  size="icon-sm"
-                  className="text-muted-foreground"
-                  aria-label={`${inst.account} options`}
-                />
-              }
-            >
-              <EllipsisIcon />
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="w-44">
-              <DropdownMenuItem
-                variant="destructive"
-                onClick={() => setDisconnecting(true)}
-              >
-                Disconnect
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-        )}
-      </ItemActions>
+        </span>
+      </span>
+      <StatusPill tone="live">Connected</StatusPill>
+      {inst.manageUrl && (
+        <a
+          href={inst.manageUrl}
+          target="_blank"
+          rel="noreferrer"
+          className={buttonVariants({ variant: "outline", size: "sm" })}
+        >
+          Choose repositories
+        </a>
+      )}
+      {mayConnect && (
+        <Button
+          variant="outline"
+          size="sm"
+          className="text-destructive"
+          onClick={() => setDisconnecting(true)}
+        >
+          Disconnect
+        </Button>
+      )}
       <Disconnect
         installation={inst}
         open={disconnecting}
         onOpenChange={setDisconnecting}
       />
-    </Item>
+    </li>
+  )
+}
+
+function Repositories({ onStart }: { onStart: (repository: string) => void }) {
+  const { can } = useOrganization()
+  const repos = useQuery(useGithubRepositories)
+  const projects = useQuery(useProjectsList)
+  const [query, setQuery] = useState("")
+  const all = repos.data?.repositories ?? []
+  const q = query.trim().toLowerCase()
+  const shown = all.filter((r) => !q || r.fullName.toLowerCase().includes(q))
+  const projectFor = (fullName: string) =>
+    projects.data?.projects.find((p) => p.repositories.includes(fullName))
+  const mayCreate = can("project:create")
+
+  if (repos.status === "error")
+    return (
+      <div className="p-4">
+        <QueryError
+          error={repos.error}
+          fallback="The repositories couldn't be listed."
+          retry={repos.refetch}
+        />
+      </div>
+    )
+  if (!repos.data)
+    return (
+      <div className="grid gap-2 p-4">
+        <Skeleton className="h-8 w-full" />
+        <Skeleton className="h-24 w-full" />
+      </div>
+    )
+  if (all.length === 0)
+    return (
+      <Empty variant="inline">
+        <EmptyHeader>
+          <EmptyTitle>No repositories available</EmptyTitle>
+          <EmptyDescription>
+            Choose repositories in the App&apos;s settings on GitHub.
+          </EmptyDescription>
+        </EmptyHeader>
+      </Empty>
+    )
+  return (
+    <>
+      <div className="border-b px-3 py-2.5">
+        <label className="relative flex items-center">
+          <SearchIcon className="pointer-events-none absolute left-2.5 size-3.5 text-muted-foreground" />
+          <input
+            type="search"
+            aria-label="Search repositories"
+            placeholder={`Search ${all.length} ${all.length === 1 ? "repository" : "repositories"}`}
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            className="h-8 w-full rounded-[9px] border border-transparent bg-subtle pr-2.5 pl-8 text-[12.5px] outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/40"
+          />
+        </label>
+      </div>
+      {shown.length === 0 ? (
+        <p className="px-4 py-4 text-[13px] text-muted-foreground">
+          No repository matches &ldquo;{query.trim()}&rdquo;.{" "}
+          <button
+            type="button"
+            className="font-medium text-brand-ink hover:underline"
+            onClick={() => setQuery("")}
+          >
+            Clear search
+          </button>
+        </p>
+      ) : (
+        <ul className="max-h-[26rem] divide-y overflow-y-auto">
+          {shown.map((r) => {
+            const project = projectFor(r.fullName)
+            return (
+              <li
+                key={r.fullName}
+                className="flex items-center gap-2.5 px-4 py-2"
+              >
+                {r.private ? (
+                  <LockIcon
+                    className="size-3.5 shrink-0 text-muted-foreground"
+                    aria-label="Private"
+                  />
+                ) : (
+                  <BookMarkedIcon
+                    className="size-3.5 shrink-0 text-muted-foreground"
+                    aria-label="Public"
+                  />
+                )}
+                <a
+                  href={r.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="min-w-0 flex-1 truncate font-mono text-[12.5px] hover:underline"
+                >
+                  {r.fullName}
+                </a>
+                <span className="hidden truncate text-xs text-muted-foreground sm:inline">
+                  {project ? `In ${project.name}` : "Not in a project"}
+                </span>
+                {project ? (
+                  <Link
+                    to="/projects/$id"
+                    params={{ id: project.id }}
+                    className="shrink-0 text-[12.5px] font-medium text-brand-ink hover:underline"
+                  >
+                    Open project
+                  </Link>
+                ) : (
+                  mayCreate && (
+                    <button
+                      type="button"
+                      onClick={() => onStart(r.fullName)}
+                      className="shrink-0 text-[12.5px] font-medium text-brand-ink hover:underline"
+                    >
+                      Project
+                    </button>
+                  )
+                )}
+              </li>
+            )
+          })}
+        </ul>
+      )}
+    </>
+  )
+}
+
+/* ------------------------------------------------------------------------ */
+/* Clouds                                                                     */
+
+const accountDot: Record<string, string> = {
+  ready: "bg-overdye",
+  incomplete: "bg-weld",
+  failed: "bg-failed",
+}
+
+function CloudsPanel({ onConnect }: { onConnect: (cloud: string) => void }) {
+  const { can } = useOrganization()
+  const manage = can("cloud_account:manage")
+  const forms = useQuery(useConnectionCloudsList)
+  const connections = useQuery(useConnectionsList)
+  const list = connections.data?.connections ?? []
+  // Providers with accounts first, then the rest, each in the API's order.
+  const providers = [...(forms.data?.clouds ?? [])].sort(
+    (a, b) =>
+      Number(list.some((c) => c.cloud === b.cloud)) -
+      Number(list.some((c) => c.cloud === a.cloud))
+  )
+  return (
+    <Panel
+      title="Clouds"
+      description="Where Loomplane deploys. Each credential is checked with its cloud before it's kept, stored encrypted, and never shown again."
+    >
+      {forms.status === "error" || connections.status === "error" ? (
+        <div className="p-4">
+          <QueryError
+            error={forms.error ?? connections.error}
+            fallback="Cloud accounts couldn't be loaded."
+            retry={() =>
+              Promise.allSettled([forms.refetch(), connections.refetch()])
+            }
+          />
+        </div>
+      ) : !forms.data || !connections.data ? (
+        <div className="p-4">
+          <Skeleton className="h-48 w-full" />
+        </div>
+      ) : (
+        <ul className="divide-y">
+          {providers.map((f) => {
+            const mine = list.filter((c) => c.cloud === f.cloud)
+            return (
+              <li key={f.cloud} className="grid gap-1.5 px-4 py-2.5">
+                <div className="flex items-center gap-2.5">
+                  <CloudGlyph cloud={f.cloud} size="sm" />
+                  <span className="grid min-w-0 flex-1 gap-px">
+                    <span className="truncate text-[13.5px] font-semibold">
+                      {f.title}
+                    </span>
+                    <span className="truncate text-xs text-muted-foreground">
+                      {cloudPurposes[f.cloud] ?? "Deploy services to it"}
+                    </span>
+                  </span>
+                  {manage && (
+                    <Button
+                      size="sm"
+                      variant={mine.length ? "outline" : "default"}
+                      onClick={() => onConnect(f.cloud)}
+                    >
+                      {mine.length ? "Add" : "Connect"}
+                    </Button>
+                  )}
+                </div>
+                {mine.length === 0 ? (
+                  <span className="ml-[38px] text-[12.5px] text-muted-foreground">
+                    Not connected.
+                  </span>
+                ) : (
+                  mine.map((c) => (
+                    <Link
+                      key={c.id}
+                      to="/clouds/accounts/$id"
+                      params={{ id: c.id }}
+                      className="ml-[38px] flex items-center gap-2 rounded-md text-[12.5px] hover:underline"
+                    >
+                      <span
+                        aria-hidden="true"
+                        className={cn(
+                          "size-1.5 shrink-0 rounded-full",
+                          accountDot[c.status] ?? "bg-muted-foreground/50"
+                        )}
+                      />
+                      <span className="truncate font-medium">{c.name}</span>
+                      <span className="truncate text-muted-foreground">
+                        {c.account}
+                      </span>
+                      <span className="flex-1" />
+                      <span
+                        className={cn(
+                          "shrink-0",
+                          c.status === "ready"
+                            ? "text-overdye-ink"
+                            : c.status === "failed"
+                              ? "text-destructive"
+                              : "text-weld-ink"
+                        )}
+                      >
+                        {statusLabels[c.status] ?? c.status}
+                      </span>
+                    </Link>
+                  ))
+                )}
+              </li>
+            )
+          })}
+        </ul>
+      )}
+    </Panel>
   )
 }
 
@@ -584,6 +711,11 @@ function AccountAvatar({
     </Avatar>
   )
 }
+
+/**
+ * SetUpGitHub is for a Loomplane with no GitHub App: whoever runs it
+ * creates one, once, for the whole instance.
+ */
 
 /**
  * SetUpGitHub is for a Loomplane with no GitHub App: whoever runs it
@@ -684,229 +816,5 @@ function Disconnect({
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
-  )
-}
-
-/* ------------------------------------------------------------------------ */
-/* Repositories                                                               */
-
-function RepositoriesCard({
-  className,
-  onStart,
-}: {
-  className?: string
-  onStart: (repository: string) => void
-}) {
-  const status = useQuery(useGithubStatus)
-  const installations = status.data?.installations ?? []
-
-  return (
-    <MetricCard
-      icon={FolderGit2Icon}
-      title="Repositories"
-      className={className}
-    >
-      {status.status === "error" ? (
-        <QueryError
-          error={status.error}
-          fallback="GitHub couldn't be loaded."
-          retry={status.refetch}
-        />
-      ) : !status.data ? (
-        <Skeleton className="h-40 w-full" />
-      ) : installations.length > 0 ? (
-        <RepositoryBrowser installations={installations} onStart={onStart} />
-      ) : (
-        <Empty variant="inline" className="p-0">
-          <EmptyHeader>
-            <EmptyTitle>No repositories connected</EmptyTitle>
-            <EmptyDescription>
-              {status.data.configured
-                ? "Install the App on an account to see the repositories it lets Loomplane read."
-                : "Once the GitHub App is set up, the repositories it can read are listed here."}
-            </EmptyDescription>
-          </EmptyHeader>
-          {status.data.installUrl && (
-            <EmptyContent>
-              <a
-                href={status.data.installUrl}
-                className={buttonVariants({ variant: "outline", size: "sm" })}
-              >
-                Install on GitHub
-              </a>
-            </EmptyContent>
-          )}
-        </Empty>
-      )}
-    </MetricCard>
-  )
-}
-
-function RepositoryBrowser({
-  installations,
-  onStart,
-}: {
-  installations: GitHubInstallation[]
-  onStart: (repository: string) => void
-}) {
-  const { can } = useOrganization()
-  const repos = useQuery(useGithubRepositories)
-  const [query, setQuery] = useState("")
-  const all = useMemo(() => repos.data?.repositories ?? [], [repos.data])
-  const groups = useMemo(
-    () => groupRepositories(all, installations, query),
-    [all, installations, query]
-  )
-  const mayCreate = can("project:create")
-
-  if (repos.status === "error") {
-    return (
-      <QueryError
-        error={repos.error}
-        fallback="The repositories couldn't be listed."
-        retry={repos.refetch}
-      />
-    )
-  }
-  if (!repos.data) {
-    return (
-      <div className="grid gap-2">
-        <Skeleton className="h-9 w-full" />
-        <Skeleton className="h-40 w-full" />
-      </div>
-    )
-  }
-  if (all.length === 0) {
-    return (
-      <Empty variant="inline" className="p-0">
-        <EmptyHeader>
-          <EmptyTitle>No repositories available</EmptyTitle>
-          <EmptyDescription>
-            Choose repositories in the App&apos;s settings on GitHub.
-          </EmptyDescription>
-        </EmptyHeader>
-        <EmptyContent>
-          {installations
-            .filter((i) => i.manageUrl)
-            .map((i) => (
-              <a
-                key={i.id}
-                href={i.manageUrl}
-                className="text-sm underline underline-offset-4"
-              >
-                Manage {i.account}
-              </a>
-            ))}
-        </EmptyContent>
-      </Empty>
-    )
-  }
-  return (
-    <>
-      <InputGroup>
-        <InputGroupAddon>
-          <SearchIcon />
-        </InputGroupAddon>
-        <InputGroupInput
-          placeholder={`Search ${all.length} ${all.length === 1 ? "repository" : "repositories"}`}
-          aria-label="Search repositories"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-        />
-      </InputGroup>
-      <div className="-mx-3 grid max-h-[26rem] content-start gap-4 overflow-y-auto px-3">
-        {groups.length === 0 && (
-          <Empty variant="inline" className="p-0">
-            <EmptyHeader>
-              <EmptyTitle>No repositories match</EmptyTitle>
-              <EmptyDescription>
-                No repository matches &ldquo;{query.trim()}&rdquo;.
-              </EmptyDescription>
-            </EmptyHeader>
-            <EmptyContent>
-              <Button variant="outline" size="sm" onClick={() => setQuery("")}>
-                Clear search
-              </Button>
-            </EmptyContent>
-          </Empty>
-        )}
-        {groups.map((g) => (
-          <section key={g.key} className="grid gap-1">
-            <h3 className="flex items-center gap-2 text-xs font-medium text-muted-foreground">
-              <AccountAvatar
-                account={g.account}
-                src={g.avatarUrl}
-                className="size-4 rounded-[4px] after:rounded-[4px]"
-              />
-              {g.account}
-              <span className="tabular-nums">{g.repositories.length}</span>
-            </h3>
-            <ItemGroup className="gap-0.5">
-              {g.repositories.map((r) => (
-                <RepositoryRow
-                  key={r.fullName}
-                  repository={r}
-                  onStart={mayCreate ? onStart : undefined}
-                />
-              ))}
-            </ItemGroup>
-          </section>
-        ))}
-      </div>
-    </>
-  )
-}
-
-function RepositoryRow({
-  repository: r,
-  onStart,
-}: {
-  repository: ConnectedRepository
-  onStart?: (repository: string) => void
-}) {
-  const name = r.fullName.split("/").slice(1).join("/") || r.fullName
-  return (
-    <Item size="sm" className="group/repo -mx-3">
-      <ItemContent>
-        <ItemTitle className="font-mono text-[13px]">
-          {name}
-          {r.private && (
-            <LockIcon
-              className="size-3 text-muted-foreground"
-              aria-label="Private"
-            />
-          )}
-        </ItemTitle>
-        <ItemDescription className="flex items-center gap-1 text-xs">
-          <GitBranchIcon className="size-3" aria-hidden="true" />
-          {r.defaultBranch || "main"}
-        </ItemDescription>
-      </ItemContent>
-      <ItemActions className="gap-0.5">
-        {onStart && (
-          <Button
-            variant="ghost"
-            size="sm"
-
-            onClick={() => onStart(r.fullName)}
-          >
-            <PlusIcon />
-            Project
-          </Button>
-        )}
-        <a
-          href={r.url}
-          target="_blank"
-          rel="noreferrer"
-          aria-label={`${r.fullName} on GitHub`}
-          className={cn(
-            buttonVariants({ variant: "ghost", size: "icon-sm" }),
-            "rounded-full text-muted-foreground"
-          )}
-        >
-          <ExternalLinkIcon />
-        </a>
-      </ItemActions>
-    </Item>
   )
 }

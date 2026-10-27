@@ -26,6 +26,13 @@ export interface APIKeyList {
   keys: APIKey[];
 }
 
+export interface Accelerator {
+  count: number;
+  kind: string;
+  memoryGib: number;
+  vendor: string;
+}
+
 export interface AccountSpend {
   cloud: string;
   connectionId: string;
@@ -124,6 +131,7 @@ export interface AnalysisList {
 export interface AppInputBody {
   clientId: string;
   clientSecret: string;
+  slug?: string;
 }
 
 export interface AppliedInputs {
@@ -161,6 +169,11 @@ export interface Assignment {
   projectId: string;
   revision: number;
   targets: Target[];
+}
+
+export interface AutoRenewInputBody {
+  autoRenew: boolean;
+  revision: number;
 }
 
 export interface Backup {
@@ -326,6 +339,11 @@ export interface CatalogproxySession {
   url: string;
 }
 
+export interface ChallengeCredentialInputBody {
+  connectionId: string;
+  revision: number;
+}
+
 export interface Change {
   field: string;
   from: string;
@@ -378,6 +396,16 @@ export interface ChooseConnectionInputBody {
   connectionId: string;
 }
 
+export interface CleanupReview {
+  connectionId: string;
+  deploymentId: string;
+  effect: string;
+  provider: string;
+  region: string;
+  resource: string;
+  revision: string;
+}
+
 export interface CloudAdoption {
   bindingId: string;
   configDigest: string;
@@ -404,6 +432,7 @@ export interface CloudForm {
   help?: string;
   methods: string[];
   settings?: Setting[];
+  signInSettings?: Setting[];
   title: string;
 }
 
@@ -491,6 +520,21 @@ export interface CloudinfraRoute {
   status: string;
   updatedAt: string;
   verification: RouteVerification;
+}
+
+export interface CloudinfraRouteStatus {
+  backend: string;
+  certificate: string;
+  certificateExpiresAt: string;
+  checkedAt: string;
+  dns: string;
+  hostname: string;
+  message?: string;
+  operationId?: string;
+  retryable: boolean;
+  route: string;
+  routeId: string;
+  wildcard: boolean;
 }
 
 export interface CloudprofilesCreateInputBody {
@@ -589,6 +633,7 @@ export interface Connection {
   missing: string[];
   name: string;
   orgId: string;
+  signedInBy?: string;
   status: string;
   updatedAt: string;
 }
@@ -722,6 +767,17 @@ export interface DatabaseGatewayConfig {
   trust?: string;
 }
 
+export interface DbgatewayRouteStatus {
+  backendConns: number;
+  id: string;
+  maxConnections: number;
+  pinRate: number;
+  reachable: boolean;
+  reported: boolean;
+  resource: string;
+  state: string;
+}
+
 export interface DecideInputBody {
   note?: string;
   revision?: string;
@@ -822,8 +878,36 @@ export interface DiscoverySource {
   updatedAt: string;
 }
 
+export interface DomainCheckInputBody {
+  connectionId: string;
+  domains: string[];
+}
+
+export interface DomainOffer {
+  name: string;
+  price?: DomainPrice;
+  reason?: string;
+  registrable: boolean;
+  tier?: string;
+}
+
+export interface DomainOfferList {
+  offers: DomainOffer[];
+}
+
 export interface DomainOperationList {
   operations: (RouteOperation | null)[];
+}
+
+export interface DomainOverview {
+  registrations: (Registration | null)[];
+  zones: ZoneOverview[];
+}
+
+export interface DomainPrice {
+  currency: string;
+  registrationCost: string;
+  renewalCost: string;
 }
 
 export interface DomainRouteList {
@@ -987,6 +1071,18 @@ export interface FabriqKeyList {
   keys: ConsumerKey[];
 }
 
+export interface FailedCleanup {
+  attempt: number;
+  deploymentId: string;
+  error?: string;
+  revision: string;
+  status: string;
+}
+
+export interface FailedCleanupInputBody {
+  revision: string;
+}
+
 export interface Federation {
   accessGrants?: Record<string, any>;
   destinations?: Record<string, any>;
@@ -1009,6 +1105,65 @@ export interface Finding {
   subject?: string;
 }
 
+export interface GPUDevice {
+  index: number;
+  kind: string;
+  memoryMib: number;
+  product: string;
+  uuid: string;
+}
+
+export interface GPUInventory {
+  checkedAt: string;
+  devices?: GPUDevice[];
+  message?: string;
+  nodes?: GPUNodeGroup[];
+  status: string;
+}
+
+export interface GPUNodeGroup {
+  hourlyPriceKnown: boolean;
+  hourlyUsd: number;
+  instanceType?: string;
+  kind: string;
+  memoryGib: number;
+  nodeSelector?: Record<string, any>;
+  nodes: number;
+  perNode: number;
+  product?: string;
+  tolerations?: GPUToleration[];
+  total: number;
+}
+
+export interface GPUTarget {
+  accelerator: Accelerator;
+  cloud: string;
+  code?: string;
+  connectionId: string;
+  fits: boolean;
+  free: number;
+  hourlyPriceKnown: boolean;
+  hourlyUsd: number;
+  message?: string;
+  name: string;
+  priceEstimate: boolean;
+  regions?: string[];
+  sizeId?: string;
+  source: string;
+}
+
+export interface GPUTargetList {
+  targets: GPUTarget[];
+  unreachable: UnreachableAccount[];
+}
+
+export interface GPUToleration {
+  effect: string;
+  key: string;
+  operator: string;
+  value?: string;
+}
+
 export interface GatewayList {
   gateways: GatewayStatus[];
 }
@@ -1027,7 +1182,7 @@ export interface GatewayStatus {
   name: string;
   provider: string;
   region: string;
-  routes: RouteStatus[];
+  routes: DbgatewayRouteStatus[];
   snapshotVersion: number;
 }
 
@@ -1089,6 +1244,18 @@ export interface HandoffReleaseInputBody {
 
 export interface Held {
   sameAddress?: string;
+}
+
+export interface HostnameUse {
+  environmentId: string;
+  hostname: string;
+  port: number;
+  projectId: string;
+  projectName: string;
+  routeId: string;
+  runsOn: string;
+  service: string;
+  status: CloudinfraRouteStatus;
 }
 
 export interface IdentitySession {
@@ -1514,6 +1681,7 @@ export interface OK {
 
 export interface Operation {
   absenceConfirmedAt?: string;
+  accelerator?: Accelerator;
   accountId: string;
   actions: InfrastructureAction[];
   attempt: number;
@@ -1530,6 +1698,7 @@ export interface Operation {
   estimatedHourlyUsd: number;
   expiresAt: string;
   hostKey?: string;
+  hourlyPriceKnown?: boolean;
   id: string;
   input: ServerInput;
   message: string;
@@ -1608,6 +1777,8 @@ export interface Placement {
   connectionGeneration: number;
   connectionId: string;
   cpuMillis: number;
+  gpuKind?: string;
+  gpus?: number;
   memoryBytes: number;
   poolId: string;
   poolRevision: number;
@@ -1728,6 +1899,7 @@ export interface PolicyList {
 }
 
 export interface Pool {
+  acceleratorKind?: string;
   cloudId: string;
   id: string;
   members: PoolMember[];
@@ -1751,9 +1923,11 @@ export interface PoolExpansionPolicy {
 }
 
 export interface PoolInputBody {
+  acceleratorKind?: string;
   members: {
   cpuMillis: number;
   draining: boolean;
+  gpus?: number;
   memoryBytes: number;
   serverId: string;
 }[];
@@ -1768,6 +1942,7 @@ export interface PoolList {
 export interface PoolMember {
   cpuMillis: number;
   draining: boolean;
+  gpus?: number;
   memoryBytes: number;
   serverId: string;
 }
@@ -1833,6 +2008,20 @@ export interface Project {
   updatedAt: string;
 }
 
+export interface ProjectDomain {
+  hostnames: HostnameUse[];
+  mode: string;
+  name: string;
+  provider?: string;
+  verified: boolean;
+  wildcards: boolean;
+  zoneId: string;
+}
+
+export interface ProjectDomainList {
+  domains: ProjectDomain[];
+}
+
 export interface ProjectGrant {
   cloudId: string;
   orgId: string;
@@ -1889,6 +2078,10 @@ export interface ProviderStatus {
   name: string;
   region: string;
   version: string;
+}
+
+export interface ProviderZoneList {
+  zones: DNSZone[];
 }
 
 export interface Provisions {
@@ -1992,6 +2185,69 @@ export interface Ref {
   field: string;
 }
 
+export interface Registration {
+  accountId: string;
+  attempt: number;
+  attempted: boolean;
+  autoRenew: boolean;
+  connectionId: string;
+  createdAt: string;
+  customRegistrant: boolean;
+  domainExpiresAt: string;
+  firstUnconfirmedAt: string;
+  id: string;
+  message: string;
+  name: string;
+  noticeSentFor: string;
+  orgId: string;
+  privacyMode: string;
+  projectIds: string[];
+  provider: string;
+  quote: DomainPrice;
+  refreshedAt: string;
+  resultNotifiedFor: string;
+  review: string;
+  reviewExpiresAt: string;
+  revision: number;
+  sandbox: boolean;
+  status: string;
+  updatedAt: string;
+  zoneId: string;
+}
+
+export interface RegistrationApprovalBody {
+  currency: string;
+  registrationCost: string;
+  review: string;
+}
+
+export interface RegistrationExtensionList {
+  extensions: string[];
+}
+
+export interface RegistrationInputBody {
+  autoRenew?: boolean;
+  connectionId: string;
+  name: string;
+  privacyMode?: string;
+  projectIds?: string[];
+  registrant?: {
+  city: string;
+  countryCode: string;
+  email: string;
+  name: string;
+  organization: string;
+  phone: string;
+  postalCode: string;
+  state: string;
+  street: string;
+};
+}
+
+export interface RegistrationList {
+  registrations: (Registration | null)[];
+}
+
 export interface RemoveRouteInputBody {
   revision: number;
 }
@@ -2078,6 +2334,8 @@ export interface ResourceConfig {
 
 export interface ResourceVector {
   cpuMillis: number;
+  gpuKind?: string;
+  gpus?: number;
   memoryBytes: number;
   servers: number;
   storageBytes: number;
@@ -2279,19 +2537,24 @@ export interface Rollback {
 
 export interface RouteBinding {
   address: string;
+  backend?: string;
   bindingId: string;
   configDigest: string;
   connectionGeneration: number;
   connectionId: string;
   containerId: string;
+  ingressClass?: string;
   instanceId: string;
+  namespace?: string;
   releaseId: string;
   runtimeId: string;
   serverId: string;
+  serviceName?: string;
   targetId: string;
 }
 
 export interface RouteInput {
+  blockedPathPrefixes?: string[];
   cloudId: string;
   environmentId: string;
   externalTtlSeconds?: number;
@@ -2302,6 +2565,7 @@ export interface RouteInput {
 }
 
 export interface RouteInputBody {
+  blockedPathPrefixes?: string[];
   cloudId: string;
   environmentId: string;
   externalTtlSeconds?: number;
@@ -2323,6 +2587,7 @@ export interface RouteOperation {
   kind: string;
   message: string;
   notBefore: string;
+  notices?: string[];
   previousReceipt?: DNSRecord;
   receipt?: DNSRecord;
   review: string;
@@ -2330,17 +2595,6 @@ export interface RouteOperation {
   route: CloudinfraRoute;
   source?: CloudinfraRoute;
   status: string;
-}
-
-export interface RouteStatus {
-  backendConns: number;
-  id: string;
-  maxConnections: number;
-  pinRate: number;
-  reachable: boolean;
-  reported: boolean;
-  resource: string;
-  state: string;
 }
 
 export interface RouteSummary {
@@ -2359,6 +2613,7 @@ export interface RouteVerification {
   backend: boolean;
   backendError?: string;
   certExpires: string;
+  certState?: string;
   checkedAt: string;
   dns: boolean;
   dnsError?: string;
@@ -2380,6 +2635,9 @@ export interface RuntimeHealth {
   effectiveCpuMillis: number;
   effectiveMemoryBytes: number;
   freeStorageBytes?: number;
+  gpuMessage?: string;
+  gpuRuntime?: string;
+  gpus?: GPUDevice[];
   memoryBytes: number;
   storageBytes?: number;
 }
@@ -2407,6 +2665,7 @@ export interface Scale {
 }
 
 export interface Server {
+  accelerator?: Accelerator;
   accountId: string;
   cloudId: string;
   connectionId: string;
@@ -2414,10 +2673,13 @@ export interface Server {
   creationOperationId: string;
   draining: boolean;
   health: RuntimeHealth;
+  hourlyPriceKnown?: boolean;
+  hourlyUsd?: number;
   id: string;
   name: string;
   orgId: string;
   ownership: string;
+  pricedSize?: string;
   provider: string;
   region: string;
   resourceId: string;
@@ -2430,6 +2692,7 @@ export interface Server {
 }
 
 export interface ServerImage {
+  accelerators?: string[];
   architecture?: string;
   bootstrap: boolean;
   id: string;
@@ -2480,6 +2743,7 @@ export interface ServerRegion {
 }
 
 export interface ServerSize {
+  accelerator?: Accelerator;
   architectures?: string[];
   cpus: number;
   diskGb: number;
@@ -2494,6 +2758,7 @@ export interface ServerSize {
 export interface ServerUsage {
   draining: boolean;
   reservedCpuMillis: number;
+  reservedGpus: number;
   reservedMemoryBytes: number;
   retainedStorage: RetainedPoolStorage[];
   serverId: string;
@@ -2507,6 +2772,7 @@ export interface ServerWorkload {
   deploymentId?: string;
   environmentId: string;
   executionRevision: number;
+  gpus: number;
   memoryBytes: number;
   phase: string;
   planId: string;
@@ -2605,11 +2871,14 @@ export interface Setting {
 
 export interface SignIn {
   authorizeUrl: string;
+  state: string;
 }
 
 export interface SignInApp {
   clientId?: string;
   cloud: string;
+  problem?: string;
+  slug?: string;
   source: string;
   updatedAt?: string;
   updatedBy?: string;
@@ -2624,6 +2893,7 @@ export interface SignInInputBody {
   cloud: string;
   connectionId?: string;
   name: string;
+  settings?: Record<string, any>;
 }
 
 export interface Size {
@@ -2824,6 +3094,12 @@ export interface TrafficReport {
   total: number;
 }
 
+export interface UnreachableAccount {
+  connectionId: string;
+  message: string;
+  name: string;
+}
+
 export interface UpdateInputBody {
   name: string;
   revision: number;
@@ -2926,6 +3202,7 @@ export interface Workspace {
 
 export interface Zone {
   accountId?: string;
+  challengeConnectionId?: string;
   connectionGeneration?: number;
   connectionId?: string;
   id: string;
@@ -2933,12 +3210,14 @@ export interface Zone {
   name: string;
   orgId: string;
   projectIds: string[];
+  proofCheckedAt: string;
   proofExpiresAt: string;
   proofName?: string;
   proofValue?: string;
   provider?: string;
   providerZone: DNSZone;
   recordOwnership: boolean;
+  registrationId?: string;
   revision: number;
   verifiedAt: string;
 }
@@ -2952,6 +3231,14 @@ export interface ZoneInputBody {
 
 export interface ZoneList {
   zones: (Zone | null)[];
+}
+
+export interface ZoneOverview {
+  hostnames: HostnameUse[];
+  registrationId?: string;
+  state: string;
+  wildcards: boolean;
+  zone?: Zone;
 }
 
 export interface ZoneUpdateBody {

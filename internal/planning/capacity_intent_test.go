@@ -2,6 +2,8 @@ package planning
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"strings"
 	"testing"
 
@@ -125,4 +127,101 @@ type futureTemplateValidator struct{}
 
 func (futureTemplateValidator) ValidateCapacityTemplate(context.Context, security.Principal, cloudinfra.CapacityDemand, cloudinfra.PoolExpansionPolicy) (*cloudinfra.CapacityTemplatePin, error) {
 	return &cloudinfra.CapacityTemplatePin{ConnectionGeneration: 1, AccountID: "provider"}, nil
+}
+
+// storedCPUIntent is an approved intent body as written before capacity had a
+// GPU dimension. Loading re-hashes it, so new fields must not change its digest.
+const storedCPUIntent = `{"demand":{"org_id":"org","cloud_id":"cloud","pool_id":"pool","target_id":"target","project_id":"project","environment_id":"env","plan_id":"plan","service":"web","architecture":"amd64","sticky_server_id":"","resources":{"servers":0,"cpu_millis":1000,"memory_bytes":536870912,"storage_bytes":0},"local_data":false,"policy_revision":1,"intent_hash":"0d0956b300639d27557fa45861fa51c4b811b62fad91b325c1590a42c2d8bc11"},"provider_pin":{"connection_generation":1,"account_id":"account"},"template":{"bootstrap_size":"","pool_id":"pool","connection_id":"provider","region":"region","architecture":"amd64","image":"image","allowed_sizes":["size"],"min_servers":0,"max_servers":0,"limits":null,"system_reserve":{"servers":0,"cpu_millis":250,"memory_bytes":268435456,"storage_bytes":0}},"template_hash":"055c8bb206dec8b49e1c053a12faddd5118161c0b4220eaf839bd2b09d68c87d","commit_sha":"commit","assignment_revision":2,"cloud_revision":3,"target_revision":5,"grant_revision":4,"target_name":""}`
+
+func TestStoredCPUIntentDigestUnchanged(t *testing.T) {
+	var intent CapacityIntent
+	if err := json.Unmarshal([]byte(storedCPUIntent), &intent); err != nil {
+		t.Fatal(err)
+	}
+	saved := intent.Demand.IntentHash
+	intent.Demand.IntentHash = ""
+	if hash, err := Digest(intent); err != nil || hash != saved {
+		t.Fatalf("stored intent digest moved: %s, want %s (%v)", hash, saved, err)
+	}
+	if hash, err := capacityTemplateHash(intent.Template); err != nil || hash != intent.TemplateHash {
+		t.Fatalf("stored template hash moved: %s, want %s (%v)", hash, intent.TemplateHash, err)
+	}
+	intent.Demand.IntentHash = saved
+	raw, err := json.Marshal(intent)
+	if err != nil || string(raw) != storedCPUIntent {
+		t.Fatalf("stored intent re-encodes differently:\n%s\n%s", raw, storedCPUIntent)
+	}
+
+	// A fresh intent for the same CPU workload still hashes the same way.
+	p, a, target, req, policy := intentFixture()
+	policy.Pools[0].SystemReserve = cloudinfra.ResourceVector{CPUMillis: 250, MemoryBytes: 256 << 20}
+	fresh, err := newCapacityIntent(p, a, target, req, policy, "app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fresh.ProviderPin = cloudinfra.CapacityTemplatePin{AccountID: "account", ConnectionGeneration: 1}
+	fresh.Demand.IntentHash = ""
+	if hash, hashErr := Digest(fresh); hashErr != nil || hash != saved {
+		t.Fatalf("fresh CPU intent digest moved: %s, want %s (%v)", hash, saved, hashErr)
+	}
+}
+
+func TestCapacityIntentCarriesGPUs(t *testing.T) {
+	p, a, target, req, policy := intentFixture()
+	req.GPUKind, req.GPUs = "nvidia-l4", 1
+	policy.Pools[0].AcceleratorKind = "nvidia-l4"
+	got, err := newCapacityIntent(p, a, target, req, policy, "app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r := got.Demand.Resources; r.GPUKind != "nvidia-l4" || r.GPUs != 1 || r.CPUMillis != 1000 {
+		t.Fatalf("GPU demand: %+v", r)
+	}
+
+	policy.Pools[0].AcceleratorKind = "nvidia-h100-80gb"
+	_, err = newCapacityIntent(p, a, target, req, policy, "app")
+	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "this pool's servers have nvidia-h100-80gb GPUs; the service asks for nvidia-l4") {
+		t.Fatalf("GPU kind mismatch: %v", err)
+	}
+}
+
+// A GPU pool grows only for GPU work, and a CPU pool never for GPU work.
+func TestCapacityIntentKeepsGPUAndCPUPoolsApart(t *testing.T) {
+	p, a, target, req, policy := intentFixture()
+	policy.Pools[0].AcceleratorKind = "nvidia-l4"
+	if _, err := newCapacityIntent(p, a, target, req, policy, "app"); !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "GPU pool") {
+		t.Fatalf("CPU work in a GPU pool: %v", err)
+	}
+	policy.Pools[0].AcceleratorKind = ""
+	req.GPUKind, req.GPUs = "nvidia-l4", 1
+	if _, err := newCapacityIntent(p, a, target, req, policy, "app"); !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "CPU pool") {
+		t.Fatalf("GPU work in a CPU pool: %v", err)
+	}
+}
+
+// Admission takes only a candidate with the GPUs the approved demand asks for.
+func TestCapacityAdmissionComparesGPUs(t *testing.T) {
+	p, a, target, req, policy := intentFixture()
+	req.GPUKind, req.GPUs = "nvidia-l4", 1
+	policy.Pools[0].AcceleratorKind = "nvidia-l4"
+	intent, err := newCapacityIntent(p, a, target, req, policy, "app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	action := Action{Name: "web", Service: &ServiceConfig{CapacityIntent: intent}}
+	matching := cloudinfra.Placement{PoolID: "pool", ServerID: "host", ConnectionID: "runtime", CPUMillis: 1000, MemoryBytes: 512 << 20, GPUKind: "nvidia-l4", GPUs: 1}
+	for name, candidate := range map[string]cloudinfra.Placement{
+		"no GPUs":     {PoolID: "pool", ServerID: "host", ConnectionID: "runtime", CPUMillis: 1000, MemoryBytes: 512 << 20},
+		"other kind":  {PoolID: "pool", ServerID: "host", ConnectionID: "runtime", CPUMillis: 1000, MemoryBytes: 512 << 20, GPUKind: "nvidia-h100-80gb", GPUs: 1},
+		"other count": {PoolID: "pool", ServerID: "host", ConnectionID: "runtime", CPUMillis: 1000, MemoryBytes: 512 << 20, GPUKind: "nvidia-l4", GPUs: 2},
+	} {
+		// The store is never reached: a mismatch is refused before any query.
+		var admission *cloudinfra.CapacityAdmissionError
+		if err = (&PgStore{}).admitCapacityPlacement(t.Context(), p, action, candidate); !errors.As(err, &admission) || admission.Block.Reason != "review_required" {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+	if !capacityCandidateFits(intent.Demand, matching) {
+		t.Fatal("matching GPU candidate refused")
+	}
 }

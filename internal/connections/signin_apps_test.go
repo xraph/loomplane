@@ -13,8 +13,9 @@ import (
 
 type fakeAppStore struct {
 	AppStore
-	apps    map[string]*StoredApp
-	signIns map[string]*PendingSignIn
+	apps     map[string]*StoredApp
+	signIns  map[string]*PendingSignIn
+	problems map[string]string
 }
 
 func (f *fakeAppStore) key(org, cloud string) string { return org + "/" + cloud }
@@ -188,5 +189,98 @@ func TestAppIsMissingWithoutConfigOrOrganization(t *testing.T) {
 	s, _, _, _ := signInService(nil, security.Permission{})
 	if _, err := s.app(t.Context(), "org", DigitalOcean); !errors.Is(err, ErrNoApp) {
 		t.Fatalf("got %v", err)
+	}
+}
+
+func (f *fakeAppStore) SweepSignIns(_ context.Context, before time.Time) (int64, error) {
+	var n int64
+	for state, p := range f.signIns {
+		if p.ExpiresAt.Before(before) {
+			delete(f.signIns, state)
+			n++
+		}
+	}
+	return n, nil
+}
+
+func (f *fakeAppStore) SetAppProblem(_ context.Context, org, cloud, message string, _ time.Time) error {
+	if f.problems == nil {
+		f.problems = map[string]string{}
+	}
+	f.problems[f.key(org, cloud)] = message
+	return nil
+}
+
+func (f *fakeAppStore) ClearAppProblem(_ context.Context, org, cloud string) error {
+	delete(f.problems, f.key(org, cloud))
+	return nil
+}
+
+func (f *fakeAppStore) AppProblems(_ context.Context, org string) (map[string]string, error) {
+	out := map[string]string{}
+	for k, v := range f.problems {
+		if cloud, ok := strings.CutPrefix(k, org+"/"); ok {
+			out[cloud] = v
+		}
+	}
+	return out, nil
+}
+
+// Vercel's install page is addressed by the app's slug, so a Vercel app
+// can't be saved without one.
+func TestSetSignInAppNeedsASlugForVercel(t *testing.T) {
+	s, store, secrets, _ := signInService(nil, security.Permission{})
+	s.Providers[Vercel] = noProvider{}
+	if _, err := s.SetSignInApp(t.Context(), viewer, Vercel, AppInput{ClientID: "oac_1", ClientSecret: "sec"}); !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "slug") {
+		t.Fatalf("no slug: %v", err)
+	}
+	if len(secrets.kept) != 0 || len(store.apps) != 0 {
+		t.Fatalf("kept %v, stored %v", secrets.kept, store.apps)
+	}
+	got, err := s.SetSignInApp(t.Context(), viewer, Vercel, AppInput{ClientID: "oac_1", ClientSecret: "sec", Slug: " loomplane "})
+	if err != nil || got.Slug != "loomplane" || store.apps["org/"+Vercel].Slug != "loomplane" {
+		t.Fatalf("returned %+v, stored %+v: %v", got, store.apps["org/"+Vercel], err)
+	}
+	if app, err := s.app(t.Context(), "org", Vercel); err != nil || app.Slug != "loomplane" {
+		t.Fatalf("app %+v: %v", app, err)
+	}
+	apps, _ := s.SignInApps(t.Context(), viewer)
+	if v := apps[len(apps)-1]; v.Cloud != Vercel || v.Slug != "loomplane" {
+		t.Fatalf("listed %+v", v)
+	}
+
+	// Configuration's slug is the one listed when configuration sets the app.
+	s.ConfigApps = map[string]oauth.App{Vercel: {ClientID: "cfg", ClientSecret: "x", Slug: "lp-config"}}
+	apps, _ = s.SignInApps(t.Context(), viewer)
+	if v := apps[len(apps)-1]; v.Source != AppFromConfig || v.Slug != "lp-config" {
+		t.Fatalf("listed %+v", v)
+	}
+	if app, _ := s.app(t.Context(), "org", Vercel); app.Slug != "lp-config" {
+		t.Fatalf("app %+v", app)
+	}
+}
+
+// A removed app's problem goes with it, so a new app doesn't start out
+// showing the old one's.
+func TestDeleteSignInAppClearsItsProblem(t *testing.T) {
+	s, store, _, _ := signInService(nil, security.Permission{})
+	if _, err := s.SetSignInApp(t.Context(), viewer, GCP, AppInput{ClientID: "org-id", ClientSecret: "old"}); err != nil {
+		t.Fatal(err)
+	}
+	s.appRejected(t.Context(), "org", GCP)
+	if store.problems["org/"+GCP] == "" {
+		t.Fatal("no problem was recorded")
+	}
+	if err := s.DeleteSignInApp(t.Context(), viewer, GCP); err != nil {
+		t.Fatal(err)
+	}
+	apps, err := s.SignInApps(t.Context(), viewer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, a := range apps {
+		if a.Problem != "" {
+			t.Fatalf("the deleted app's problem stayed: %+v", a)
+		}
 	}
 }

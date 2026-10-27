@@ -78,6 +78,15 @@ func (p *planner) routedReplacements() bool {
 		if a == nil || a.Op == Keep || a.Op == Delete || slices.ContainsFunc(a.Routes, func(r cloudinfra.Route) bool { return r.ID == route.ID }) {
 			continue
 		}
+		// A Kubernetes route reaches its Service by name, so an update in
+		// place keeps serving it with no handoff. A new runtime would leave
+		// the route on a Service that goes away.
+		if route.Binding.BackendName() == cloudinfra.RouteBackendKubernetes {
+			if a.Op != Update {
+				p.problem(Finding{Code: "route-release", Subject: ServiceSubject, Name: a.Name, Message: fmt.Sprintf("%s would get a new runtime, which %s doesn't follow on Kubernetes. Remove that route, then plan again.", a.Name, route.Input.Hostname)})
+			}
+			continue
+		}
 		a.Routes = append(a.Routes, route)
 		b := p.bindings[a.ID]
 		if err := routedReplacementAllowed(a, b, route); err != nil {
@@ -142,7 +151,7 @@ func (s *Service) reserveRoutedPlacements(ctx context.Context, plan *Plan, resul
 			if !ok {
 				return fmt.Errorf("routed overlap capacity resolver is unavailable")
 			}
-			req := cloudinfra.PlacementRequest{PlanID: plan.ID, Allocation: plan.ID, Planned: planned, OrgID: plan.OrgID, ProjectID: plan.ProjectID, EnvironmentID: plan.EnvironmentID, CloudID: pin.CloudID, TargetID: pin.TargetID, TargetRevision: pin.TargetRevision, PoolID: pin.PoolID, Service: a.Name, CPUMillis: pin.CPUMillis, MemoryBytes: pin.MemoryBytes, Replicas: 1, DestinationServerID: pin.ServerID}
+			req := cloudinfra.PlacementRequest{PlanID: plan.ID, Allocation: plan.ID, Planned: planned, OrgID: plan.OrgID, ProjectID: plan.ProjectID, EnvironmentID: plan.EnvironmentID, CloudID: pin.CloudID, TargetID: pin.TargetID, TargetRevision: pin.TargetRevision, PoolID: pin.PoolID, Service: a.Name, CPUMillis: pin.CPUMillis, MemoryBytes: pin.MemoryBytes, GPUKind: pin.GPUKind, GPUs: pin.GPUs, Replicas: 1, DestinationServerID: pin.ServerID}
 			for _, b := range bindings {
 				if b.Subject == ServiceSubject && b.Name == a.Name {
 					var old ServiceConfig
@@ -176,7 +185,8 @@ func (s *PgStore) CurrentReleaseRoutes(ctx context.Context, org, project, enviro
 	}
 	var out []cloudinfra.Route
 	for _, r := range routes {
-		if r.Input.EnvironmentID == environment && r.Input.Service == service && r.Status != "removed" {
+		// Releases never carry Kubernetes routes; see routedReplacements.
+		if r.Input.EnvironmentID == environment && r.Input.Service == service && r.Status != "removed" && r.Binding.BackendName() != cloudinfra.RouteBackendKubernetes {
 			out = append(out, *r)
 		}
 	}

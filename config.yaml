@@ -23,7 +23,9 @@ secret_key: "${LOOMPLANE_SECRET_KEY:-}"
 database:
   # postgres://user:password@host:port/db?sslmode=disable
   url: "${LOOMPLANE_DATABASE_URL:-}"
-  pool_size: 16
+  # Connections each process keeps open. Each API process runs about two dozen
+  # job pollers, so raise it when the database is a slow network hop away.
+  pool_size: "${LOOMPLANE_DATABASE_POOL_SIZE:-16}"
 
 identity:
   base_path: /authsome
@@ -121,6 +123,9 @@ clouds:
   render_endpoint: "${LOOMPLANE_RENDER_ENDPOINT:-}"
   digitalocean_endpoint: "${LOOMPLANE_DIGITALOCEAN_ENDPOINT:-}"
   azure_endpoint: "${LOOMPLANE_AZURE_ENDPOINT:-}"
+  cloudflare_endpoint: "${LOOMPLANE_CLOUDFLARE_ENDPOINT:-}"
+  cloudflare_registrar_sandbox: "${LOOMPLANE_CLOUDFLARE_REGISTRAR_SANDBOX:-false}"
+  acme_directory: "${LOOMPLANE_ACME_DIRECTORY:-}"
   # Loomplane's sign-in app at each cloud, so people can connect by signing
   # in. Leave both empty to keep token entry only. Keep the secret in the
   # environment.
@@ -128,6 +133,17 @@ clouds:
     digitalocean:
       client_id: "${LOOMPLANE_DIGITALOCEAN_OAUTH_CLIENT_ID:-}"
       client_secret: "${LOOMPLANE_DIGITALOCEAN_OAUTH_CLIENT_SECRET:-}"
+    vercel:
+      client_id: "${LOOMPLANE_VERCEL_OAUTH_CLIENT_ID:-}"
+      client_secret: "${LOOMPLANE_VERCEL_OAUTH_CLIENT_SECRET:-}"
+      # The integration's slug in its Vercel install address.
+      slug: "${LOOMPLANE_VERCEL_OAUTH_SLUG:-}"
+    gcp:
+      client_id: "${LOOMPLANE_GCP_OAUTH_CLIENT_ID:-}"
+      client_secret: "${LOOMPLANE_GCP_OAUTH_CLIENT_SECRET:-}"
+    azure:
+      client_id: "${LOOMPLANE_AZURE_OAUTH_CLIENT_ID:-}"
+      client_secret: "${LOOMPLANE_AZURE_OAUTH_CLIENT_SECRET:-}"
 
 providers:
   # Deployment targets that run as their own services, built with

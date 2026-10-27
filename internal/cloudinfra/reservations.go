@@ -182,7 +182,7 @@ func (s *PgStore) previewMove(ctx context.Context, org, cloud string, in MoveInp
 	if pin.CloudID != cloud || pin.PoolID != in.PoolID || in.DestinationServerID == "" || pin.ServerID == in.DestinationServerID {
 		return nil, ErrInvalid
 	}
-	placement, err := s.PreviewPlacement(ctx, PlacementRequest{OrgID: org, ProjectID: in.ProjectID, EnvironmentID: in.EnvironmentID, CloudID: cloud, TargetID: pin.TargetID, TargetRevision: pin.TargetRevision, PoolID: in.PoolID, Service: in.Service, CPUMillis: pin.CPUMillis, MemoryBytes: pin.MemoryBytes, Replicas: 1, Architecture: old.TargetSettings["architecture"], StickyServerID: pin.ServerID, DestinationServerID: in.DestinationServerID})
+	placement, err := s.PreviewPlacement(ctx, PlacementRequest{OrgID: org, ProjectID: in.ProjectID, EnvironmentID: in.EnvironmentID, CloudID: cloud, TargetID: pin.TargetID, TargetRevision: pin.TargetRevision, PoolID: in.PoolID, Service: in.Service, CPUMillis: pin.CPUMillis, MemoryBytes: pin.MemoryBytes, GPUKind: pin.GPUKind, GPUs: pin.GPUs, Replicas: 1, Architecture: old.TargetSettings["architecture"], StickyServerID: pin.ServerID, DestinationServerID: in.DestinationServerID})
 	if err != nil {
 		return nil, err
 	}

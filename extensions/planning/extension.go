@@ -62,6 +62,7 @@ import (
 	"github.com/xraph/loomplane/internal/discovery"
 	"github.com/xraph/loomplane/internal/environments"
 	"github.com/xraph/loomplane/internal/fabriqloom"
+	"github.com/xraph/loomplane/internal/gpus"
 	"github.com/xraph/loomplane/internal/manifests"
 	"github.com/xraph/loomplane/internal/orchestration"
 	"github.com/xraph/loomplane/internal/planning"
@@ -106,6 +107,7 @@ type Extension struct {
 	checkLimit          *checkLimiter // nil is checksPerMinute (see checks)
 	checkLimitOnce      sync.Once
 	catalogKinds        *recipes.Registry // nil is recipes.Default()
+	failedCleanups      *deployments.FailedCleanups
 	cloudStore          *cloudprofiles.PgStore
 	cloudRecoveryCancel context.CancelFunc
 	cloudRecoveryDone   chan struct{}
@@ -307,7 +309,7 @@ func (e *Extension) Register(fapp forge.App) error {
 	// observers hear of each service binding a deployment writes or
 	// deletes. A kind that tracks its consumers registers its own here.
 	observers := make([]deployments.ReleaseObserver, 0, 1)
-	serverTarget := &deployments.OwnedTarget{RouteGuard: routeService, Cloud: connections.Server, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, Ports: owned.NewReservations(pg), Hooks: catalogHooks, Endpoints: e.endpoints, Checker: checker}
+	serverTarget := &deployments.OwnedTarget{RouteGuard: routeService, Cloud: connections.Server, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, Ports: owned.NewReservations(pg), GPULocks: owned.NewGPULocks(pg), Hooks: catalogHooks, Endpoints: e.endpoints, Checker: checker}
 	// A cluster's endpoint checks dial from Loomplane's own network, so
 	// they never reach what Loomplane itself depends on.
 	denied, servicesErr := loomplaneServices(e.cfg)
@@ -430,9 +432,17 @@ func (e *Extension) Register(fapp forge.App) error {
 	if injectErr != nil {
 		return fmt.Errorf("planning needs the projects extension: %w", injectErr)
 	}
+	reapWarn := func(msg string, err error) { log.Warn(msg, forge.F("error", err.Error())) }
 	projectSvc.AddReaper(&deployments.DatabaseGatewayReaper{
 		Gateways: gatewayStore, Bindings: planStore, Environments: prj, Secrets: resourceSecrets, Executors: executors,
-		Warn: func(msg string, err error) { log.Warn(msg, forge.F("error", err.Error())) },
+		Warn: reapWarn,
+	})
+	// It takes every other service and resource's binding too, and this
+	// deletes their credentials from Vault and warns about each one still
+	// running in a cloud.
+	projectSvc.AddReaper(&deployments.BindingReaper{
+		Bindings: planStore, Environments: prj, Secrets: resourceSecrets, Executors: executors,
+		Warn: reapWarn,
 	})
 	if err := e.poolRecoveryRoutes(fapp.Router(), guard, cloudinfra.NewService(cloudinfra.Deps{Store: cloudinfra.NewPgStore(pg), Clouds: e.cloudStore, Authz: authz, PoolCleanup: runner})); err != nil {
 		return err
@@ -440,6 +450,8 @@ func (e *Extension) Register(fapp forge.App) error {
 	e.plans.BindCloudSyncRunner(runner, runner)
 	e.deployments.Bind(e.plans, runner, e.engineOf)
 	e.deployments.BindCloudSync(e.plans)
+	e.failedCleanups = deployments.NewFailedCleanups(runner, deployStore, e.deployments)
+	e.deployments.BindFailedCleanups(e.failedCleanups)
 	// Drift is checked on Dispatch's cron leader, so one replica checks.
 	engine.Register(e.engineOf(), orchestration.DriftJob(&deployments.DriftChecker{
 		Store: planStore, Credentials: clouds, Executors: executors, Telemetry: metrics,
@@ -461,6 +473,12 @@ func (e *Extension) Register(fapp forge.App) error {
 		Telemetry: metrics,
 	})
 	if err := e.usageRoutes(fapp.Router(), guard, readings); err != nil {
+		return err
+	}
+	targets := gpus.NewService(gpus.Deps{
+		Connections: clouds, Bindings: planStore, Options: routeService, Servers: cloudinfra.NewPgStore(pg), Authz: authz,
+	})
+	if err := e.gpuTargetRoutes(fapp.Router(), guard, targets); err != nil {
 		return err
 	}
 	return e.routes(fapp.Router(), guard)
@@ -585,7 +603,7 @@ func fail(err error) error {
 		errors.Is(err, deployments.ErrNotFound), errors.Is(err, deployments.ErrComponentNotFound), errors.Is(err, catalogproxy.ErrNotFound),
 		errors.Is(err, projects.ErrEnvironmentNotFound), errors.Is(err, manifests.ErrNotFound):
 		return forge.NewHTTPError(http.StatusNotFound, err.Error())
-	case errors.Is(err, cloudprofiles.ErrConflict), errors.Is(err, cloudprofiles.ErrExists), errors.Is(err, cloudprofiles.ErrInUse), errors.Is(err, cloudprofiles.ErrBusy), errors.Is(err, recovery.ErrConflict), errors.Is(err, planning.ErrConflict), errors.Is(err, manifests.ErrConflict), errors.Is(err, deployments.ErrNotFailed),
+	case errors.Is(err, deployments.ErrCleanupConflict), errors.Is(err, cloudprofiles.ErrConflict), errors.Is(err, cloudprofiles.ErrExists), errors.Is(err, cloudprofiles.ErrInUse), errors.Is(err, cloudprofiles.ErrBusy), errors.Is(err, recovery.ErrConflict), errors.Is(err, planning.ErrConflict), errors.Is(err, manifests.ErrConflict), errors.Is(err, deployments.ErrNotFailed),
 		errors.Is(err, planning.ErrStale), errors.Is(err, planning.ErrSuperseded), errors.Is(err, planning.ErrNotReady),
 		errors.Is(err, catalogconnect.ErrInUse), errors.Is(err, planning.ErrNotRunning):
 		return forge.NewHTTPError(http.StatusConflict, err.Error())
@@ -593,7 +611,7 @@ func fail(err error) error {
 		errors.Is(err, planning.ErrNoSources), errors.Is(err, planning.ErrNeverDeployed):
 		return forge.NewHTTPError(http.StatusPreconditionFailed, err.Error())
 	case errors.Is(err, cloudprofiles.ErrInvalid), errors.Is(err, recovery.ErrInvalid), errors.Is(err, planning.ErrInvalid), errors.Is(err, manifests.ErrInvalid), errors.Is(err, manifest.ErrInvalid),
-		errors.Is(err, catalogconnect.ErrInvalid), errors.Is(err, deployments.ErrNotControlPort), errors.Is(err, catalogproxy.ErrInvalid), errors.Is(err, usage.ErrInvalid):
+		errors.Is(err, catalogconnect.ErrInvalid), errors.Is(err, deployments.ErrNotControlPort), errors.Is(err, catalogproxy.ErrInvalid), errors.Is(err, usage.ErrInvalid), errors.Is(err, gpus.ErrInvalid):
 		return forge.NewHTTPError(http.StatusUnprocessableEntity, err.Error())
 	case errors.Is(err, planning.ErrUnavailable):
 		return forge.NewHTTPError(http.StatusServiceUnavailable, err.Error())

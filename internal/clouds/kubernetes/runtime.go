@@ -223,6 +223,10 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 		replicas = int32(n)
 	}
 	deployment := &appsv1.Deployment{ObjectMeta: meta(name), Spec: appsv1.DeploymentSpec{Replicas: &replicas, Selector: &metav1.LabelSelector{MatchLabels: maps.Clone(identity)}, Template: *template}}
+	if labels[owned.LabelGPU] != "" {
+		// A surge pod would wait for a GPU the old pod still holds.
+		deployment.Spec.Strategy = appsv1.DeploymentStrategy{Type: appsv1.RecreateDeploymentStrategyType}
+	}
 
 	if len(servicePorts) > 0 {
 		service := &corev1.Service{ObjectMeta: meta(name), Spec: corev1.ServiceSpec{Type: corev1.ServiceTypeClusterIP, Selector: maps.Clone(identity), Ports: servicePorts}}
@@ -352,6 +356,9 @@ func (r *Runtime) waitReady(ctx context.Context, c *Client, applied *appsv1.Depl
 			if condition.Type == appsv1.DeploymentProgressing && condition.Status == corev1.ConditionFalse && deployment.Status.ObservedGeneration >= applied.Generation {
 				return fmt.Errorf("kubernetes rollout failed: %s", condition.Message)
 			}
+		}
+		if gpuErr := unschedulableGPU(ctx, c, applied.Spec.Template, applied.Spec.Selector); gpuErr != nil {
+			return gpuErr
 		}
 		if time.Now().After(deadline) {
 			return errors.New("kubernetes rollout did not become ready")

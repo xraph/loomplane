@@ -187,6 +187,11 @@ type Deps struct {
 
 // NewService returns a Service.
 func NewService(d Deps) *Service {
+	if st, ok := d.Store.(*PgStore); ok {
+		if wake, available := d.Capacity.(cloudinfra.CapacityCloudWakeup); available {
+			st.frontendWake = wake
+		}
+	}
 	warn := d.Warn
 	if warn == nil {
 		warn = func(string, error) {}
@@ -758,6 +763,10 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 	}
 	if routeErr = s.reserveRoutedPlacements(ctx, plan, result, bindings); routeErr != nil {
 		result.Problems = append(result.Problems, Finding{Code: "route-capacity", Message: routeErr.Error()})
+		result.Executable = false
+	}
+	if frontendErr := s.pinFrontendDemands(ctx, plan, result); frontendErr != nil {
+		result.Problems = append(result.Problems, Finding{Code: "frontend-governance", Message: frontendErr.Error()})
 		result.Executable = false
 	}
 	s.checkBackupPreview(ctx, plan, result)

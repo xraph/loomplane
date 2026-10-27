@@ -16,6 +16,7 @@ import {
 import {
   Field,
   FieldDescription,
+  FieldError,
   FieldGroup,
   FieldLabel,
 } from "@/components/ui/field"
@@ -64,7 +65,7 @@ export interface VariableDialogProps {
 export function VariableDialog(props: VariableDialogProps) {
   return (
     <Dialog open={props.open} onOpenChange={props.onOpenChange}>
-      <DialogContent className="sm:max-w-lg">
+      <DialogContent className="sm:max-w-[500px]">
         {/* Mounted fresh each time it opens, so it starts from its props. */}
         {props.open && <VariableForm {...props} />}
       </DialogContent>
@@ -122,7 +123,7 @@ function VariableForm({
           <FieldLabel htmlFor="variable-key">Key</FieldLabel>
           <Input
             id="variable-key"
-            className="font-mono"
+            className="font-mono text-[13px]"
             value={key}
             onChange={(e) => setKey(e.target.value)}
             placeholder="DATABASE_URL"
@@ -131,36 +132,53 @@ function VariableForm({
             autoFocus={!editing && !presetKey}
             required
           />
-          {badKey && (
-            <FieldDescription>
-              Letters, digits and underscores, not starting with a digit.
-            </FieldDescription>
+          {badKey ? (
+            <FieldError>
+              That key won&apos;t work. Use letters, digits and underscores, not
+              starting with a digit.
+            </FieldError>
+          ) : (
+            !editing && (
+              <FieldDescription>
+                Letters, digits and underscores, not starting with a digit.
+              </FieldDescription>
+            )
           )}
         </Field>
         <Field>
           <FieldLabel htmlFor="variable-value">Value</FieldLabel>
           <Textarea
             id="variable-value"
-            className="min-h-20 font-mono"
+            className="min-h-16 font-mono text-[12.5px]"
             value={value}
             onChange={(e) => setValue(e.target.value)}
             placeholder={
               editing?.secret
                 ? "Enter a new value; the old one can't be shown"
-                : ""
+                : "The value"
             }
             autoFocus={!!editing || !!presetKey}
             required={!!editing?.secret}
           />
         </Field>
-        <Field orientation="horizontal">
+        <Field
+          orientation="horizontal"
+          className="items-start rounded-lg bg-subtle px-3 py-2.5"
+        >
           <Checkbox
             id="variable-secret"
+            className="mt-0.5"
             checked={secret}
             onCheckedChange={(checked) => setSecret(checked)}
           />
-          <FieldLabel htmlFor="variable-secret" className="font-normal">
-            Secret: encrypt it, and never show it again
+          <FieldLabel
+            htmlFor="variable-secret"
+            className="grid gap-0.5 text-[13px] font-medium"
+          >
+            Secret
+            <span className="font-normal text-muted-foreground">
+              Encrypt it, and never show it again.
+            </span>
           </FieldLabel>
         </Field>
         {!editing && environments.mode === "project" && (

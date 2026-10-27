@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/xraph/loomplane/internal/cloudinfra"
+	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/security"
 )
 
@@ -86,7 +87,7 @@ func (r *Runner) AssessCapacity(ctx context.Context, orgID, deploymentID string)
 	}
 	needs := false
 	for _, a := range plan.Actions {
-		if a.Service != nil && a.Service.CapacityIntent != nil {
+		if planning.HasCapacityIntent(a) {
 			needs = true
 		}
 	}

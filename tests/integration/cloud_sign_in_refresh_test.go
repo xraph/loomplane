@@ -25,20 +25,22 @@ type countingRenewer struct {
 	refused bool
 }
 
-func (*countingRenewer) AuthorizeURL(oauth.App, string, string) string { return "" }
+func (*countingRenewer) AuthorizeURL(oauth.App, oauth.AuthorizeRequest) string { return "" }
 
-func (*countingRenewer) Exchange(context.Context, oauth.App, string, string) (oauth.Grant, error) {
+func (*countingRenewer) Exchange(context.Context, oauth.App, oauth.CodeRequest) (oauth.Grant, error) {
 	return oauth.Grant{}, oauth.ErrRefused
 }
 
-func (r *countingRenewer) Refresh(_ context.Context, _ oauth.App, refreshToken string) (oauth.Grant, error) {
+func (r *countingRenewer) Refresh(_ context.Context, _ oauth.App, held oauth.Grant) (oauth.Grant, error) {
 	r.calls.Add(1)
 	time.Sleep(50 * time.Millisecond)
-	if r.refused || refreshToken != "rt-1" {
+	if r.refused || held.RefreshToken != "rt-1" {
 		return oauth.Grant{}, oauth.ErrRefused
 	}
 	return oauth.Grant{AccessToken: "at-2", RefreshToken: "rt-2", Expiry: time.Now().Add(30 * 24 * time.Hour)}, nil
 }
+
+func (*countingRenewer) Probe(context.Context, oauth.App, oauth.Grant) error { return nil }
 
 type refreshFixture struct {
 	store   *connections.PgStore

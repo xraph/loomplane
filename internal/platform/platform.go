@@ -126,6 +126,10 @@ func Extensions(cfg config.Config) []forge.Extension {
 		// action; Loomplane's API reaches Ctrl Plane in-process instead.
 		cpext.WithDisableRoutes(),
 		cpext.WithDisableMigrate(),
+		// Its scheduler (reconciler, health checks, garbage collection, cert
+		// renewal) runs on one API replica, elected through a Postgres
+		// advisory lock. Without this, every replica runs every worker.
+		cpext.WithLeaderElection(""),
 	)
 
 	return []forge.Extension{

@@ -220,6 +220,10 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 			forge.WithSummary("One deployment, with each step's progress"),
 			forge.WithResponseSchema(http.StatusOK, "The deployment", deployments.Deployment{}),
 		}},
+		{http.MethodPost, "/deployments/:id/cleanup/preview", e.previewFailedCleanup, []forge.RouteOption{forge.WithName("deployments.cleanupPreview"), forge.WithResponseSchema(http.StatusOK, "The cleanup review", deployments.CleanupReview{})}},
+		{http.MethodPost, "/deployments/:id/cleanup/apply", e.applyFailedCleanup, []forge.RouteOption{forge.WithName("deployments.cleanupApply"), forge.WithRequestSchema(FailedCleanupInput{}), forge.WithResponseSchema(http.StatusAccepted, "The accepted cleanup", deployments.FailedCleanup{})}},
+		{http.MethodGet, "/deployments/:id/cleanup", e.getFailedCleanup, []forge.RouteOption{forge.WithName("deployments.cleanup"), forge.WithResponseSchema(http.StatusOK, "Cleanup progress", deployments.FailedCleanup{})}},
+		{http.MethodPost, "/deployments/:id/cleanup/retry", e.retryFailedCleanup, []forge.RouteOption{forge.WithName("deployments.cleanupRetry"), forge.WithResponseSchema(http.StatusAccepted, "Cleanup retry", deployments.FailedCleanup{})}},
 		{http.MethodPost, "/deployments/:id/retry", e.retryDeployment, []forge.RouteOption{
 			forge.WithName("deployments.retry"),
 			forge.WithSummary("Run a failed deployment's failed and skipped steps again, with the plan that was approved"),

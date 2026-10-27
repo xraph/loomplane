@@ -12,6 +12,7 @@ const products: Record<string, ProductKey> = {
   gcp: "gcp",
   render: "render",
   digitalocean: "digitalocean",
+  cloudflare: "cloudflare",
   kubernetes: "kubernetes",
 }
 

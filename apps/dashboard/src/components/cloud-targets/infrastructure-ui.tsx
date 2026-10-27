@@ -8,6 +8,7 @@ import { statusOf } from "@/client/errors"
 import { QueryError } from "@/components/query-error"
 import type { ComponentType } from "react"
 import { CloudsIcon } from "@/components/icons"
+import { StatusPill, type Tone } from "@/components/runs"
 import {
   ZeroState,
   ZeroStateHeader,
@@ -114,11 +115,11 @@ export function CloudSectionHead({
   return (
     <div className="flex flex-wrap items-start justify-between gap-3">
       <div className="grid max-w-[64ch] min-w-0 gap-0.5">
-        <h2 className="flex items-center gap-2 text-[15px] font-semibold">
+        <h2 className="text-[15px] font-semibold">
           {title}
           {count !== undefined && " "}
           {count !== undefined && (
-            <span className="rounded-full bg-muted px-1.5 font-mono text-[11px] font-normal text-muted-foreground tabular-nums">
+            <span className="font-mono text-xs font-normal text-muted-foreground tabular-nums">
               {count}
             </span>
           )}
@@ -156,9 +157,16 @@ export function Field({
     </FormField>
   )
 }
+/**
+ * listItemClass makes an Item a plain row of a divided list card. Item draws
+ * its own transparent border, which hides the list's dividers, so a row
+ * draws the divider itself.
+ */
+export const listItemClass =
+  "rounded-none border-0 border-border px-4 not-last:border-b"
 export function Rows({ children }: { children: ReactNode }) {
   return (
-    <ItemGroup className="gap-0 divide-y overflow-hidden rounded-xl bg-card ring-1 ring-border">
+    <ItemGroup className="gap-0 overflow-hidden rounded-xl bg-card ring-1 ring-border">
       {children}
     </ItemGroup>
   )
@@ -168,7 +176,7 @@ export function Row({ className, ...props }: ComponentProps<typeof Item>) {
     <Item
       role="listitem"
       size="sm"
-      className={cn("justify-between", className)}
+      className={cn("justify-between", listItemClass, className)}
       {...props}
     />
   )
@@ -184,6 +192,31 @@ export function CloudLoading({ children }: { children: ReactNode }) {
     </div>
   )
 }
+// Servers, operations and syncs report free-form statuses. These name the
+// tone StatusPill draws each in, and a status as a word rather than a key.
+const liveStates = ["ready", "succeeded", "applied", "completed", "synced"]
+const movingStates = ["running", "applying", "provisioning", "prepare"]
+const waitingStates = ["pending", "waiting", "preview", "draining"]
+
+export function stateTone(status: string): Tone {
+  if (liveStates.includes(status)) return "live"
+  if (status === "failed" || status === "error") return "failed"
+  if (movingStates.includes(status)) return "flight"
+  if (waitingStates.includes(status) || status.endsWith("_pending"))
+    return "waiting"
+  return "quiet"
+}
+
+/** StatePill is an infrastructure status in its tone. */
+export function StatePill({ status }: { status: string }) {
+  const word = status.replace(/_/g, " ")
+  return (
+    <StatusPill tone={stateTone(status)}>
+      {word.charAt(0).toUpperCase() + word.slice(1)}
+    </StatusPill>
+  )
+}
+
 export const rowClass =
   "flex flex-wrap items-center justify-between gap-3 p-3 text-[13px]"
 

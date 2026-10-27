@@ -1,12 +1,7 @@
 // What a repository analysis found, in the pieces the project page lays
 // out: the controls that start one, its progress, the services table, the
 // detail sheets with the lines each finding was read from, and the history.
-import {
-  ExternalLinkIcon,
-  FolderGit2Icon,
-  GitBranchIcon,
-  ScanSearchIcon,
-} from "lucide-react"
+import { ExternalLinkIcon, GitBranchIcon, ScanSearchIcon } from "lucide-react"
 import {
   type CSSProperties,
   type FormEvent,
@@ -40,6 +35,7 @@ import {
   useQuery,
   useRefetchWhile,
 } from "@/client/hooks"
+import { NoMatchIcon, ProjectsIcon } from "@/components/icons"
 import {
   type GraphSelection,
   needsReview,
@@ -193,7 +189,7 @@ export function AnalyzeActions({
           Another branch
         </Button>
       )}
-      <Button onClick={() => void run("")} disabled={busy}>
+      <Button variant="outline" onClick={() => void run("")} disabled={busy}>
         {busy ? <Spinner /> : <ScanSearchIcon />}
         {running ? "Analyzing" : "Analyze"}
       </Button>
@@ -276,7 +272,7 @@ function Running({ analysis }: { analysis: Analysis }) {
       }
     >
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
-        <span className="text-sm font-medium">
+        <span className="text-[13px] font-medium">
           Analyzing {analysis.ref || "the default branch"}
         </span>
         <span className="text-xs text-muted-foreground">
@@ -350,7 +346,7 @@ export function ConnectRepository({
     <Empty>
       <EmptyHeader>
         <EmptyMedia variant="icon">
-          <FolderGit2Icon />
+          <ProjectsIcon />
         </EmptyMedia>
         <EmptyTitle>No repository yet</EmptyTitle>
         <EmptyDescription>
@@ -374,7 +370,7 @@ export function ConnectRepository({
                   setRepo(githubRepo(v) || v.trim())
                 }}
                 placeholder="acme/storefront"
-                className="font-mono text-sm"
+                className="font-mono text-[13px]"
                 spellCheck={false}
                 required
               />
@@ -412,7 +408,7 @@ export function NotAnalyzed({
     <Empty>
       <EmptyHeader>
         <EmptyMedia variant="icon">
-          <ScanSearchIcon />
+          <NoMatchIcon />
         </EmptyMedia>
         <EmptyTitle>
           {running ? "Analyzing" : "Nothing discovered yet"}
@@ -467,7 +463,7 @@ function AnalyzeOnce({ project }: { project: Project }) {
 export function GraphCaption({ graph }: { graph: Graph }) {
   const read = (graph.sources ?? []).filter((s) => s.commitSha)
   return (
-    <p className="text-xs text-muted-foreground">
+    <p className="text-[12.5px] text-muted-foreground">
       Read from{" "}
       {read.map((s, i) => (
         <span key={s.alias}>
@@ -575,7 +571,7 @@ export function ServicesTable({
         </TableBody>
       </Table>
       {graph.services.length === 0 && (
-        <p className="border-t px-4 py-8 text-center text-sm text-muted-foreground">
+        <p className="border-t px-4 py-3.5 text-[13px] text-muted-foreground">
           No services found. Loomplane reads Go, Rust, Node, Python and JVM
           manifests, Dockerfiles and Compose files; this commit has none it
           recognizes as something that runs.
@@ -608,17 +604,17 @@ export function Structure({
     return null
   }
   return (
-    <div className="grid gap-3 text-sm">
+    <div className="grid gap-3 text-[13px]">
       {tooling.length > 0 && (
         <p className="text-muted-foreground">
           Monorepo tooling: {tooling.join(", ")}.
         </p>
       )}
       {graph.packages.length > 0 && (
-        <details className="group rounded-xl border px-4 py-3">
-          <summary className="cursor-pointer font-medium">
+        <details className="group rounded-xl bg-card px-4 py-2.5 ring-1 ring-border">
+          <summary className="cursor-pointer font-semibold">
             Shared packages{" "}
-            <span className="text-muted-foreground tabular-nums">
+            <span className="font-mono text-xs font-normal text-muted-foreground">
               {graph.packages.length}
             </span>
           </summary>
@@ -656,10 +652,10 @@ export function Structure({
         </details>
       )}
       {graph.notes.length > 0 && (
-        <details className="rounded-xl border px-4 py-3">
-          <summary className="cursor-pointer font-medium">
+        <details className="rounded-xl bg-card px-4 py-2.5 ring-1 ring-border">
+          <summary className="cursor-pointer font-semibold">
             Skipped{" "}
-            <span className="text-muted-foreground tabular-nums">
+            <span className="font-mono text-xs font-normal text-muted-foreground">
               {graph.notes.length}
             </span>
           </summary>
@@ -682,7 +678,7 @@ export function AnalysisHistory({ analyses }: { analyses: Analysis[] }) {
   if (analyses.length === 0) {
     return (
       <Card className="py-0">
-        <p className="px-4 py-8 text-center text-sm text-muted-foreground">
+        <p className="px-4 py-3.5 text-[13px] text-muted-foreground">
           No analyses yet.
         </p>
       </Card>
@@ -708,9 +704,11 @@ export function AnalysisHistory({ analyses }: { analyses: Analysis[] }) {
                 <time dateTime={a.createdAt}>{formatDate(a.createdAt)}</time>
               </TableCell>
               {federated && (
-                <TableCell className="font-mono text-xs">{a.source}</TableCell>
+                <TableCell className="font-mono text-[12.5px]">
+                  {a.source}
+                </TableCell>
               )}
-              <TableCell className="font-mono text-xs">
+              <TableCell className="font-mono text-[12.5px]">
                 {a.ref || (
                   <span className="font-sans text-muted-foreground">
                     default branch
@@ -723,7 +721,7 @@ export function AnalysisHistory({ analyses }: { analyses: Analysis[] }) {
                     href={commitURL(a.repository, a.commitSha)}
                     target="_blank"
                     rel="noreferrer"
-                    className="font-mono text-xs underline-offset-4 hover:underline"
+                    className="font-mono text-[12.5px] underline-offset-4 hover:underline"
                   >
                     {shortSHA(a.commitSha)}
                   </a>
@@ -732,7 +730,13 @@ export function AnalysisHistory({ analyses }: { analyses: Analysis[] }) {
                 )}
               </TableCell>
               <TableCell>
-                <span className="inline-flex items-center gap-2">
+                <span
+                  className={cn(
+                    "inline-flex items-center gap-2 text-[12.5px]",
+                    a.status === "succeeded" && "text-overdye-ink",
+                    a.status === "failed" && "text-destructive"
+                  )}
+                >
                   <span
                     aria-hidden="true"
                     className={cn(
@@ -796,7 +800,7 @@ export function ConfidenceBadge({
 
 function Facts({ rows }: { rows: [string, ReactNode][] }) {
   return (
-    <dl className="grid grid-cols-[7rem_1fr] gap-x-4 gap-y-2 text-sm">
+    <dl className="grid grid-cols-[7rem_1fr] gap-x-4 gap-y-2 text-[13px]">
       {rows.map(([k, v]) => (
         <div key={k} className="contents">
           <dt className="text-muted-foreground">{k}</dt>
@@ -931,7 +935,7 @@ export function ServiceDetail({
           <DetailSection title="Connections">
             {needs.length > 0 && (
               <div className="grid gap-1.5">
-                <span className="text-sm">Needs</span>
+                <span className="text-[13px]">Needs</span>
                 <Chips
                   onSelect={onSelect}
                   items={needs.map((n) => ({
@@ -945,7 +949,7 @@ export function ServiceDetail({
             )}
             {uses.length > 0 && (
               <div className="grid gap-1.5">
-                <span className="text-sm">Uses</span>
+                <span className="text-[13px]">Uses</span>
                 <Chips
                   onSelect={onSelect}
                   items={uses.map((p) => ({

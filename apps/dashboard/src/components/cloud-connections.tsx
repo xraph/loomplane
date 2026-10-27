@@ -83,7 +83,7 @@ import {
 import { formatDate } from "@/lib/format"
 import { cloudCatalogue, cloudPurposes } from "@/lib/integrations"
 import { useOrganization } from "@/lib/organization"
-import { rememberSignInCloud } from "@/lib/sign-in-cloud"
+import { rememberSignInCloud, rememberVercelState } from "@/lib/sign-in-cloud"
 import { cn } from "@/lib/utils"
 
 export function CloudConnections({ className }: { className?: string }) {
@@ -96,7 +96,7 @@ export function CloudConnections({ className }: { className?: string }) {
 
   return (
     <MetricCard icon={CloudIcon} title="Clouds" className={className}>
-      <p className="-mt-1 max-w-3xl text-sm text-muted-foreground">
+      <p className="-mt-1 max-w-3xl text-[13px] text-muted-foreground">
         Where Loomplane deploys. Each credential is checked with its cloud
         before it&apos;s kept, stored encrypted, and never shown again.
       </p>
@@ -145,12 +145,12 @@ function CloudTile({
   return (
     <section
       aria-label={title}
-      className="flex flex-col gap-4 rounded-xl border bg-background/50 p-4"
+      className="flex flex-col gap-4 rounded-xl bg-subtle p-4"
     >
       <div className="flex items-start gap-3">
         <CloudGlyph cloud={cloud} size="lg" />
         <div className="grid min-w-0 flex-1 gap-0.5">
-          <h3 className="font-medium">{title}</h3>
+          <h3 className="text-[14px] font-semibold">{title}</h3>
           <p className="text-xs text-muted-foreground">
             {cloudPurposes[cloud] ?? "Added by a provider plugin"}
           </p>
@@ -159,7 +159,6 @@ function CloudTile({
           <Button
             variant="outline"
             size="sm"
-
             onClick={() => setConnecting(true)}
           >
             <PlusIcon />
@@ -214,6 +213,7 @@ export function useSignInAgain() {
         body: { cloud: c.cloud, name: "", connectionId: c.id },
       })
       rememberSignInCloud(cloudLabel(c.cloud))
+      if (c.cloud === "vercel") rememberVercelState((started as SignIn).state)
       // The generated hook doesn't type this response.
       window.location.assign((started as SignIn).authorizeUrl)
     } catch (err) {
@@ -270,7 +270,7 @@ function ConnectionRow({
           )}
         />
         <div className="grid min-w-0 flex-1 gap-0.5">
-          <span className="truncate text-sm font-medium">{c.name}</span>
+          <span className="truncate text-[13px] font-medium">{c.name}</span>
           <span className="truncate text-xs text-muted-foreground">
             {statusLabels[c.status] ?? c.status}
             {c.account && (
@@ -489,6 +489,11 @@ function ConnectForm({
   const [extraSettings, setExtraSettings] = useState<Record<string, string>>(
     () => ({ ...(replacing?.details ?? {}) }) as Record<string, string>
   )
+  // What the cloud asks for before sign-in, like Google's project. Until
+  // someone types, a replaced connection shows the values it already has.
+  const [signInValues, setSignInValues] = useState<Record<string, string>>({})
+  const signInValue = (key: string) =>
+    signInValues[key] ?? String(replacing?.details[key] ?? "")
   const [name, setName] = useState("")
   const [credential, setCredential] = useState("")
   const [team, setTeam] = useState(
@@ -532,12 +537,22 @@ function ConnectForm({
     try {
       // Signing in for an existing connection replaces its credential and
       // keeps its name, so none is sent.
+      const fields = entry?.signInSettings ?? []
+      const settings =
+        fields.length > 0
+          ? {
+              settings: Object.fromEntries(
+                fields.map((f) => [f.key, signInValue(f.key).trim()])
+              ),
+            }
+          : {}
       const started = await signInStart.mutateAsync({
         body: replacing
-          ? { cloud, name: "", connectionId: replacing.id }
-          : { cloud, name: name.trim() },
+          ? { cloud, name: "", connectionId: replacing.id, ...settings }
+          : { cloud, name: name.trim(), ...settings },
       })
       rememberSignInCloud(entry?.title ?? cloudLabel(cloud))
+      if (cloud === "vercel") rememberVercelState((started as SignIn).state)
       // The generated hook doesn't type this response.
       window.location.assign((started as SignIn).authorizeUrl)
     } catch (err) {
@@ -665,6 +680,37 @@ function ConnectForm({
                 </Field>
               </>
             )}
+            {signIn &&
+              (entry?.signInSettings ?? []).map((f) => (
+                <Field key={f.key}>
+                  <FieldLabel htmlFor={`sign-in-${f.key}`}>
+                    {f.label}
+                  </FieldLabel>
+                  {/* The server keeps a replaced connection's own
+                      placement, so it can't be changed here. */}
+                  <Input
+                    id={`sign-in-${f.key}`}
+                    value={signInValue(f.key)}
+                    onChange={(e) =>
+                      setSignInValues({
+                        ...signInValues,
+                        [f.key]: e.target.value,
+                      })
+                    }
+                    readOnly={!!replacing}
+                    autoComplete="off"
+                    required={f.required}
+                  />
+                </Field>
+              ))}
+            {signIn &&
+              replacing &&
+              (entry?.signInSettings ?? []).length > 0 && (
+                <FieldDescription>
+                  A new sign-in keeps this connection where it is. To deploy
+                  somewhere else, make a new connection.
+                </FieldDescription>
+              )}
             {signIn ? (
               <div className="grid justify-items-start gap-2">
                 <Button type="submit" disabled={busy}>

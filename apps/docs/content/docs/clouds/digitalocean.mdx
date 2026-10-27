@@ -87,6 +87,8 @@ A private service is only reachable from inside its own App Platform app, and ea
 
 You can also provision managed Droplets in an organization Cloud, adopt a pinned SSH/Docker host, and place services through server pools. That uses the server runtime, and your App Platform manifests keep using the managed runtime. [Your own servers](/docs/clouds/your-own-servers) has the commands.
 
+GPU Droplets work too, with a GPU-ready image and the NVIDIA Container Toolkit set up for you at first boot. The hourly price shows before you approve. See [GPUs](/docs/clouds/gpus) for pools, ceilings and what happens if the setup fails.
+
 DigitalOcean's compute and DNS capabilities are checked independently. Your App Platform token scopes don't establish Droplet or DNS permissions, so an operation without the permission it needs fails before any new effects. For a managed DNS zone you can use a different account than the one for compute.
 
 <Callout type="warn">

@@ -48,8 +48,7 @@ export function AppStatusBar() {
         <StatusItem
           hint={`Ctrl Plane keeps deployment state in ${infra.data.store}`}
         >
-          <StatusLight tone="ok" />
-          {infra.data.engine}
+          <span className="font-mono">{infra.data.engine}</span>
         </StatusItem>
       )}
       {infra.status === "error" && (

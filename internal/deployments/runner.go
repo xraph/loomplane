@@ -64,6 +64,7 @@ type Observation struct {
 
 // Job is one action to carry out, with everything its executor needs.
 type Job struct {
+	cleanupCheck     func(context.Context) error
 	pendingIdentity  *PendingCloudIdentity
 	cleanupSyncID    string
 	BuildCredentials Credentials
@@ -570,6 +571,18 @@ func (r *Runner) Run(ctx context.Context, orgID, deploymentID, actionID string, 
 	if err != nil {
 		return err
 	}
+	if deferredPlan(plan) {
+		if checkErr := legacyCapacityGuard(ctx, plan); checkErr != nil {
+			return checkErr
+		}
+		wait, checkErr := r.AssessCapacity(ctx, orgID, deploymentID)
+		if checkErr != nil {
+			return checkErr
+		}
+		if wait != nil {
+			return ErrCapacityPaused
+		}
+	}
 	execution, err := r.executionPlan(ctx, plan)
 	if err != nil {
 		return err
@@ -578,6 +591,18 @@ func (r *Runner) Run(ctx context.Context, orgID, deploymentID, actionID string, 
 	for _, a := range execution.Actions {
 		if a.ID == actionID {
 			action = a
+		}
+	}
+	if action.Provider == "cloud-sql" && ctx.Value(sqlActionLockKey{}) == nil {
+		if _, installed := r.store.(*PgStore); installed {
+			return r.withSQLActionLock(ctx, d, action, func(work context.Context) error {
+				return r.Run(work, orgID, deploymentID, actionID, resume, func(raw []byte) error {
+					if lockErr := checkSQLActionLock(work); lockErr != nil {
+						return lockErr
+					}
+					return heartbeat(raw)
+				})
+			})
 		}
 	}
 	if action.Compensation != nil {
@@ -826,7 +851,7 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 			if r.resources == nil {
 				return nil
 			}
-			for _, field := range []string{ResourceURL, passwordField} {
+			for _, field := range resourceCredentialFields {
 				if derr := r.resources.Delete(ctx, resourceKey(d.OrgID, d.EnvironmentID, a.Name, field)); derr != nil {
 					return derr
 				}
@@ -1171,10 +1196,18 @@ func (r *Runner) deleteBound(ctx context.Context, job *Job, exec Executor, bound
 		if fenceErr != nil {
 			return fenceErr
 		}
+		if err := validateFrontendCleanup(exec, job, bound); err != nil {
+			return err
+		}
 		job.warn = warn
 		err := exec.Remove(removalCtx, job, bound)
 		job.warn = nil
 		if err != nil {
+			return err
+		}
+	}
+	if !unreachable {
+		if err := r.confirmFrontendRemoval(ctx, exec, job, bound); err != nil {
 			return err
 		}
 	}
@@ -1342,11 +1375,17 @@ func (r *Runner) removeOne(ctx context.Context, job *Job, old *planning.Binding,
 	if fenceErr != nil {
 		return false, fenceErr
 	}
+	if err := validateFrontendCleanup(exec, &gone, old); err != nil {
+		return false, err
+	}
 	if err := removePendingOrBound(removalCtx, exec, &gone, old); err != nil {
 		if deleting {
 			return false, untracked(fmt.Errorf("remove the old %s on %s: %w", a.Name, placement(old.Provider, old.Region), err))
 		}
 		return false, fmt.Errorf("remove the %s it replaces on %s: %w", a.Name, placement(old.Provider, old.Region), err)
+	}
+	if err := r.confirmFrontendRemoval(ctx, exec, &gone, old); err != nil {
+		return false, err
 	}
 	return true, nil
 }

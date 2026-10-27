@@ -41,7 +41,6 @@ export function OpenAdminButton(props: Target) {
     <Button
       type="button"
       variant="outline"
-      className="h-9 gap-[7px] border-input px-3 hover:bg-accent has-data-[icon=inline-end]:pr-3 [&_svg]:size-3.5"
       disabled={admin.pending}
       onClick={() => void admin.open()}
     >
@@ -61,7 +60,6 @@ export function OpenInAdmin(props: Target) {
       type="button"
       variant="outline"
       size="sm"
-      className="h-[30px] rounded-lg border-input text-xs hover:bg-accent"
       disabled={admin.pending}
       onClick={() => void admin.open()}
     >

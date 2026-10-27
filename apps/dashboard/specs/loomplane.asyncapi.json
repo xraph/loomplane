@@ -2903,6 +2903,9 @@
           "address": {
             "type": "string"
           },
+          "backend": {
+            "type": "string"
+          },
           "binding_id": {
             "type": "string"
           },
@@ -2918,7 +2921,13 @@
           "container_id": {
             "type": "string"
           },
+          "ingress_class": {
+            "type": "string"
+          },
           "instance_id": {
+            "type": "string"
+          },
+          "namespace": {
             "type": "string"
           },
           "release_id": {
@@ -2928,6 +2937,9 @@
             "type": "string"
           },
           "server_id": {
+            "type": "string"
+          },
+          "service_name": {
             "type": "string"
           },
           "target_id": {
@@ -2946,6 +2958,12 @@
           "port"
         ],
         "properties": {
+          "blocked_path_prefixes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
           "cloud_id": {
             "type": "string"
           },
@@ -2988,6 +3006,9 @@
           "cert_expires": {
             "type": "string",
             "format": "date-time"
+          },
+          "cert_state": {
+            "type": "string"
           },
           "checked_at": {
             "type": "string",
@@ -3769,6 +3790,9 @@
             "type": "string"
           },
           "org_id": {
+            "type": "string"
+          },
+          "signed_in_by": {
             "type": "string"
           },
           "status": {

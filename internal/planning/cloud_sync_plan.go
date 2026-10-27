@@ -289,6 +289,7 @@ func appliedCloudPlanWithIntents(bindings []*Binding, assignment *cloudprofiles.
 		}
 	}
 	p.checkTargetPlacements()
+	p.checkServerGPUs()
 	// Reuse the planner's account, region and HTTPS checks for these ordinary actions.
 	result := p.finish()
 	return result

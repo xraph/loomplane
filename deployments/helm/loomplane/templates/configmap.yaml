@@ -1,0 +1,47 @@
+{{- include "loomplane.validate" . -}}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "loomplane.fullname" . }}
+  labels:
+    {{- include "loomplane.labels" . | nindent 4 }}
+data:
+  LOOMPLANE_ENVIRONMENT: {{ .Values.environment | quote }}
+  LOOMPLANE_PUBLIC_URL: {{ required "publicURL is required, e.g. https://loomplane.example.com" .Values.publicURL | quote }}
+  LOOMPLANE_HTTP_ADDR: ":8780"
+  LOOMPLANE_WORKER_HTTP_ADDR: ":8781"
+  {{- with .Values.database.poolSize }}
+  LOOMPLANE_DATABASE_POOL_SIZE: {{ . | toString | quote }}
+  {{- end }}
+  LOOMPLANE_ARTIFACT_BUCKET: {{ .Values.storage.artifactBucket | quote }}
+  LOOMPLANE_BACKUP_BUCKET: {{ .Values.storage.backupBucket | quote }}
+  LOOMPLANE_GITHUB_API_URL: {{ .Values.github.apiURL | quote }}
+  LOOMPLANE_GITHUB_WEB_URL: {{ .Values.github.webURL | quote }}
+  {{- with .Values.github.appID }}
+  LOOMPLANE_GITHUB_APP_ID: {{ . | toString | quote }}
+  {{- end }}
+  {{- with .Values.github.appSlug }}
+  LOOMPLANE_GITHUB_APP_SLUG: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.github.clientID }}
+  LOOMPLANE_GITHUB_CLIENT_ID: {{ . | quote }}
+  {{- end }}
+  {{- if .Values.notifications.smtpHost }}
+  LOOMPLANE_NOTIFICATIONS_SMTP_HOST: {{ .Values.notifications.smtpHost | quote }}
+  LOOMPLANE_NOTIFICATIONS_SMTP_PORT: {{ .Values.notifications.smtpPort | toString | quote }}
+  LOOMPLANE_NOTIFICATIONS_SMTP_USERNAME: {{ .Values.notifications.smtpUsername | quote }}
+  LOOMPLANE_NOTIFICATIONS_SMTP_TLS: {{ .Values.notifications.smtpTLS | toString | quote }}
+  LOOMPLANE_NOTIFICATIONS_FROM: {{ .Values.notifications.from | quote }}
+  {{- end }}
+  {{- with .Values.pausedProviders }}
+  LOOMPLANE_PAUSED_PROVIDERS: {{ . | quote }}
+  {{- end }}
+  {{- with .Values.trustedProxies }}
+  AUTHSOME_TRUSTED_PROXIES: {{ . | quote }}
+  {{- end }}
+  {{- if .Values.storage.persistence.enabled }}
+  LOOMPLANE_STORAGE_URL: file:///var/lib/loomplane
+  {{- end }}
+  {{- range $key, $value := .Values.env }}
+  {{ $key }}: {{ $value | toString | quote }}
+  {{- end }}

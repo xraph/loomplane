@@ -156,7 +156,7 @@ func (s *PgStore) createExpansion(ctx context.Context, e *Expansion, token strin
 	if err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO loomplane_cloud_expansions(org_id,cloud_id,id,pool_id,status,intent_hash,policy_revision,servers,cpu_millis,memory_bytes,storage_bytes,provider,account_id,connection_id,connection_generation,region,size,architecture,image,body,revision) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)`, e.OrgID, e.CloudID, e.ID, e.PoolID, e.Status, e.IntentHash, e.PolicyRevision, e.Resources.Servers, e.Resources.CPUMillis, e.Resources.MemoryBytes, e.Resources.StorageBytes, e.Provider, e.AccountID, e.ConnectionID, e.ConnectionGeneration, e.Region, e.Size, e.Architecture, e.Image, raw, e.Revision)
+	_, err = tx.Exec(ctx, `INSERT INTO loomplane_cloud_expansions(org_id,cloud_id,id,pool_id,status,intent_hash,policy_revision,servers,cpu_millis,memory_bytes,storage_bytes,provider,account_id,connection_id,connection_generation,region,size,architecture,image,body,revision,gpu_kind,gpus) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23)`, e.OrgID, e.CloudID, e.ID, e.PoolID, e.Status, e.IntentHash, e.PolicyRevision, e.Resources.Servers, e.Resources.CPUMillis, e.Resources.MemoryBytes, e.Resources.StorageBytes, e.Provider, e.AccountID, e.ConnectionID, e.ConnectionGeneration, e.Region, e.Size, e.Architecture, e.Image, raw, e.Revision, e.Resources.GPUKind, e.Resources.GPUs)
 	if err != nil {
 		return storeError(err)
 	}
@@ -374,7 +374,7 @@ func (s *PgStore) capacityCandidate(ctx context.Context, d CapacityDemand, serve
 	if scanErr := s.db.QueryRow(ctx, `SELECT revision FROM loomplane_cloud_targets WHERE org_id=$1 AND cloud_id=$2 AND id=$3 AND pool_id=$4`, d.OrgID, d.CloudID, d.TargetID, d.PoolID).Scan(&revision); scanErr != nil {
 		return nil, storeError(scanErr)
 	}
-	return s.PreviewPlacement(ctx, PlacementRequest{OrgID: d.OrgID, ProjectID: d.ProjectID, EnvironmentID: d.EnvironmentID, PlanID: d.PlanID, CloudID: d.CloudID, TargetID: d.TargetID, PoolID: d.PoolID, Service: d.Service, TargetRevision: revision, CPUMillis: d.Resources.CPUMillis, MemoryBytes: d.Resources.MemoryBytes, Architecture: d.Architecture, StickyServerID: d.StickyServerID, DestinationServerID: server, LocalData: d.LocalData, Replicas: 1})
+	return s.PreviewPlacement(ctx, PlacementRequest{OrgID: d.OrgID, ProjectID: d.ProjectID, EnvironmentID: d.EnvironmentID, PlanID: d.PlanID, CloudID: d.CloudID, TargetID: d.TargetID, PoolID: d.PoolID, Service: d.Service, TargetRevision: revision, CPUMillis: d.Resources.CPUMillis, MemoryBytes: d.Resources.MemoryBytes, GPUKind: d.Resources.GPUKind, GPUs: d.Resources.GPUs, Architecture: d.Architecture, StickyServerID: d.StickyServerID, DestinationServerID: server, LocalData: d.LocalData, Replicas: 1})
 }
 
 func (s *PgStore) expansionApprovalPrincipal(ctx context.Context, e *Expansion) (security.Principal, error) {

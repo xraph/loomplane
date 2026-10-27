@@ -1,0 +1,308 @@
+# Loomplane on Kubernetes. The defaults run it highly available: two API
+# replicas and two worker replicas, spread across nodes and zones, with
+# disruption budgets and rolling updates that never drop below the replicas
+# you asked for. You bring PostgreSQL and S3-compatible object storage; see
+# docs/kubernetes.md.
+
+image:
+  repository: ghcr.io/xraph/loomplane
+  # Defaults to the chart's appVersion: the release tag for a published
+  # chart, or "main" from a checkout.
+  tag: ""
+  # Pins the image by digest; when set it wins over the tag.
+  digest: ""
+  # Empty pulls "main" on every start, since that tag moves, and any other
+  # tag once.
+  pullPolicy: ""
+
+imagePullSecrets: []
+nameOverride: ""
+fullnameOverride: ""
+
+# The URL people open Loomplane at, https in production. Required.
+publicURL: ""
+
+# production checks the settings production needs (an https publicURL and a
+# real secret key) and refuses to start without them.
+environment: production
+
+# ── Secrets ──────────────────────────────────────────────────────────────────
+secrets:
+  # Name a Secret you manage (sealed-secrets, External Secrets, Vault...) and
+  # the chart creates none. It holds the variables below by their LOOMPLANE_
+  # names: LOOMPLANE_SECRET_KEY and LOOMPLANE_DATABASE_URL at least, plus
+  # LOOMPLANE_STORAGE_URL, LOOMPLANE_BACKUP_URL,
+  # LOOMPLANE_NOTIFICATIONS_SMTP_PASSWORD, LOOMPLANE_GITHUB_PRIVATE_KEY,
+  # LOOMPLANE_GITHUB_CLIENT_SECRET and LOOMPLANE_GITHUB_WEBHOOK_SECRET when
+  # you use them.
+  existingSecret: ""
+  # Otherwise the chart makes one from these values.
+  #
+  # 32 random bytes, base64: openssl rand -base64 32. It encrypts stored
+  # credentials, so keep it safe and never change it on a running install.
+  secretKey: ""
+  # postgres://USER:PASSWORD@HOST:5432/DATABASE?sslmode=require
+  databaseURL: ""
+  smtpPassword: ""
+  githubPrivateKey: ""
+  githubClientSecret: ""
+  githubWebhookSecret: ""
+
+# ── Database ─────────────────────────────────────────────────────────────────
+database:
+  # Connections each pod keeps open; empty keeps Loomplane's 16. Each API pod
+  # runs about two dozen job pollers, so raise it when your database is a
+  # slow network hop away, and size max_connections to match.
+  poolSize: ""
+
+# ── Storage ──────────────────────────────────────────────────────────────────
+# Source archives and backups. Every API and worker replica has to see the
+# same files, so with more than one replica use S3 or an S3-compatible store
+# (MinIO, R2, Spaces, GCS interoperability...), or a ReadWriteMany volume.
+storage:
+  # s3://REGION/BUCKET uses the pod's cloud identity (IRSA, Pod Identity or
+  # workload identity through serviceAccount.annotations).
+  # s3://KEY:SECRET@REGION/BUCKET?endpoint=https://minio.example&path_style=true
+  # for anything else. It goes in the Secret, since it can carry keys.
+  url: ""
+  # Defaults to url.
+  backupURL: ""
+  # Both buckets have to exist already when storage is S3.
+  artifactBucket: loomplane-artifacts
+  backupBucket: loomplane-backups
+  # Files on a shared volume instead of S3. With more than one replica the
+  # claim has to be ReadWriteMany.
+  persistence:
+    enabled: false
+    existingClaim: ""
+    storageClass: ""
+    accessModes: [ReadWriteMany]
+    size: 50Gi
+
+# ── Integrations ─────────────────────────────────────────────────────────────
+github:
+  apiURL: https://api.github.com
+  webURL: https://github.com
+  appID: ""
+  appSlug: ""
+  clientID: ""
+
+notifications:
+  smtpHost: ""
+  smtpPort: 465
+  smtpUsername: ""
+  smtpTLS: true
+  from: ""
+
+# Comma-separated CIDRs of the proxies in front of Loomplane, so sign-in rate
+# limits see real client addresses. Empty trusts private ranges, which covers
+# an ingress controller inside the cluster.
+trustedProxies: ""
+
+# Comma-separated provider names to pause, e.g. "aws,azure".
+pausedProviders: ""
+
+# More LOOMPLANE_ settings, as plain environment variables.
+env: {}
+#   LOOMPLANE_DRIFT_INTERVAL: 6h
+extraEnv: []
+extraEnvFrom: []
+# Mounted into the API and the worker, e.g. the SPIRE agent socket and the
+# signing keys federation needs (docs/federation-agent.md).
+extraVolumes: []
+extraVolumeMounts: []
+
+# Settings that only config.yaml carries, such as database.pool_size or
+# provider plugins and their tokens. Mounted as config.local.yaml beside the
+# image's config.yaml, from a Secret.
+configFile: ""
+#   database:
+#     pool_size: 24
+
+# ── Migrations ───────────────────────────────────────────────────────────────
+# Each API pod applies pending migrations in an init container before it
+# starts. A Postgres lock makes one pod do the work while the rest wait and
+# find nothing left. A failed migration stops the rollout while the pods you
+# already have keep serving. Workers wait until the schema is current.
+migrations:
+  enabled: true
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      memory: 256Mi
+
+# ── API and dashboard ────────────────────────────────────────────────────────
+api:
+  replicaCount: 2
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      memory: 2Gi
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 75
+    targetMemoryUtilizationPercentage: 0
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+    maxUnavailable: ""
+  # A new pod has to be ready before an old one goes.
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  # Kubernetes stops sending traffic while the pod sleeps in preStop, then
+  # Loomplane has 30 seconds to finish in-flight requests.
+  preStopSleepSeconds: 10
+  terminationGracePeriodSeconds: 60
+  # Scratch space for backups of NATS and RabbitMQ services and ECS bundles.
+  tmpSize: 2Gi
+  probes:
+    # Up to 10 minutes to open the port: a pod may wait its turn at the
+    # startup lock while another seeds. It only counts until the first pass.
+    startup:
+      periodSeconds: 5
+      failureThreshold: 120
+    liveness:
+      periodSeconds: 10
+      failureThreshold: 3
+    # Loomplane reports ready for its first 60 seconds whatever its health,
+    # so the first check waits past that: a new pod has to pass a real check
+    # before a rollout retires an old one.
+    readiness:
+      initialDelaySeconds: 65
+      periodSeconds: 5
+      failureThreshold: 3
+  podAnnotations: {}
+  podLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  # Empty spreads replicas across nodes and zones when it can (soft). Set
+  # your own constraints to replace that.
+  topologySpreadConstraints: []
+
+# ── Repository analysis worker ───────────────────────────────────────────────
+worker:
+  replicaCount: 2
+  resources:
+    requests:
+      cpu: 250m
+      memory: 512Mi
+    limits:
+      memory: 2Gi
+  autoscaling:
+    enabled: false
+    minReplicas: 2
+    maxReplicas: 6
+    targetCPUUtilizationPercentage: 75
+    targetMemoryUtilizationPercentage: 0
+  podDisruptionBudget:
+    enabled: true
+    minAvailable: 1
+    maxUnavailable: ""
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
+  # A job still running when time is up goes back on the queue for another
+  # worker.
+  terminationGracePeriodSeconds: 60
+  # Repository checkouts. One analysis can unpack 2 GiB and a worker runs
+  # two at once.
+  tmpSize: 8Gi
+  probes:
+    startup:
+      periodSeconds: 5
+      failureThreshold: 60
+    liveness:
+      periodSeconds: 10
+      failureThreshold: 3
+    # Loomplane reports ready for its first 60 seconds whatever its health,
+    # so the first check waits past that: a new pod has to pass a real check
+    # before a rollout retires an old one.
+    readiness:
+      initialDelaySeconds: 65
+      periodSeconds: 5
+      failureThreshold: 3
+  podAnnotations: {}
+  podLabels: {}
+  nodeSelector: {}
+  tolerations: []
+  affinity: {}
+  topologySpreadConstraints: []
+
+# ── Pods ─────────────────────────────────────────────────────────────────────
+serviceAccount:
+  create: true
+  name: ""
+  # Cloud identity for S3, e.g. eks.amazonaws.com/role-arn.
+  annotations: {}
+  # Loomplane doesn't call this cluster's API.
+  automountToken: false
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: [ALL]
+
+# ── Traffic ──────────────────────────────────────────────────────────────────
+service:
+  type: ClusterIP
+  port: 8780
+  annotations: {}
+
+ingress:
+  enabled: false
+  className: ""
+  # The dashboard streams live events over server-sent events and a
+  # WebSocket. Behind ingress-nginx, for example:
+  #   nginx.ingress.kubernetes.io/proxy-buffering: "off"
+  #   nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
+  #   nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
+  #   nginx.ingress.kubernetes.io/proxy-body-size: 64m
+  annotations: {}
+  # Defaults to publicURL's host.
+  host: ""
+  tls: []
+  #  - secretName: loomplane-tls
+  #    hosts: [loomplane.example.com]
+  # Health checks and metrics answer anyone who reaches them. These paths go
+  # to a Service with no pods, so the ingress refuses them, as the Docker
+  # setup's Caddyfile does.
+  blockInternalPaths: true
+
+# Gateway API instead of an Ingress.
+httpRoute:
+  enabled: false
+  parentRefs: []
+  #  - name: public
+  #    namespace: gateway
+  # Defaults to publicURL's host.
+  hostnames: []
+  annotations: {}
+  blockInternalPaths: true
+
+metrics:
+  serviceMonitor:
+    enabled: false
+    interval: 30s
+    scrapeTimeout: 10s
+    labels: {}

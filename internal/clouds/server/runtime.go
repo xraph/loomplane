@@ -26,6 +26,7 @@ import (
 	"github.com/xraph/loomplane/internal/clouds/owned"
 	nativerabbit "github.com/xraph/loomplane/internal/clouds/rabbitmq"
 	nativecache "github.com/xraph/loomplane/internal/clouds/redis"
+	"github.com/xraph/loomplane/pkg/provider"
 )
 
 var ErrOwned = errors.New("the matching Docker resource is not owned by this service")
@@ -40,6 +41,12 @@ type Runtime struct {
 	Probe     func(context.Context, *Client, int, string) error
 	ProbeRESP func(context.Context, *Client, int) error
 	Wait      time.Duration
+	// GPUReader reads the server's GPUs for device assignment; nil is
+	// (*Client).GPUs.
+	GPUReader func(context.Context, *Client) (provider.GPUInventory, error)
+	// GPULocks keeps two GPU applies on one daemon from both reading a
+	// device as free. Nil serializes them within this process only.
+	GPULocks GPULocks
 }
 
 var _ owned.Backend = (*Runtime)(nil)
@@ -166,6 +173,12 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 	}
 	if previous != nil && stopped != nil {
 		return nil, errors.New("multiple previous server containers need reconciliation")
+	}
+	own := map[string]bool{}
+	for _, existing := range []*containerInfo{old, previous, stopped} {
+		if existing != nil {
+			own[existing.ID] = true
+		}
 	}
 	for _, existing := range []*containerInfo{old, previous, stopped} {
 		if existing != nil {
@@ -295,7 +308,7 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 		variables = append(variables, key+"="+env[key])
 	}
 	containerLabels := map[string]string{owned.LabelOrg: labels[owned.LabelOrg], owned.LabelProject: labels[owned.LabelProject], owned.LabelEnvironment: labels[owned.LabelEnvironment], owned.LabelInstance: iid.String(), owned.LabelRevision: labels[owned.LabelRevision], owned.LabelHostPort: labels[owned.LabelHostPort], owned.LabelConnection: labels[owned.LabelConnection]}
-	for _, key := range []string{owned.LabelPublic, LabelDatabase, LabelRecovery, nativemysql.LabelDatabase, nativemysql.LabelEngine, nativecache.LabelEngine, nativenats.LabelEngine, nativerabbit.LabelEngine} {
+	for _, key := range []string{owned.LabelPublic, LabelDatabase, LabelRecovery, nativemysql.LabelDatabase, nativemysql.LabelEngine, nativecache.LabelEngine, nativenats.LabelEngine, nativerabbit.LabelEngine, owned.LabelGPU, owned.LabelShmMB} {
 		if labels[key] != "" {
 			containerLabels[key] = labels[key]
 		}
@@ -316,7 +329,15 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 			ports[key] = []map[string]string{{"HostIp": host, "HostPort": hostPort}}
 		}
 	}
-	body := map[string]any{"Image": spec.Image, "Env": variables, "Labels": containerLabels, "ExposedPorts": exposed, "HostConfig": map[string]any{"Init": true, "Mounts": mounts, "RestartPolicy": map[string]string{"Name": "unless-stopped"}, "PortBindings": ports, "Memory": int64(spec.Resources.MemoryMB) * (1 << 20), "NanoCpus": int64(spec.Resources.CPUMillis) * 1000000}, "NetworkingConfig": map[string]any{"EndpointsConfig": map[string]any{network: map[string]any{"Aliases": []string{name}}}}}
+	hostConfig := map[string]any{"Init": true, "Mounts": mounts, "RestartPolicy": map[string]string{"Name": "unless-stopped"}, "PortBindings": ports, "Memory": int64(spec.Resources.MemoryMB) * (1 << 20), "NanoCpus": int64(spec.Resources.CPUMillis) * 1000000}
+	if raw := labels[owned.LabelShmMB]; raw != "" {
+		shm, parseErr := strconv.Atoi(raw)
+		if parseErr != nil || shm < 1 {
+			return nil, errors.New("invalid server shared memory size")
+		}
+		hostConfig["ShmSize"] = int64(shm) << 20
+	}
+	body := map[string]any{"Image": spec.Image, "Env": variables, "Labels": containerLabels, "ExposedPorts": exposed, "HostConfig": hostConfig, "NetworkingConfig": map[string]any{"EndpointsConfig": map[string]any{network: map[string]any{"Aliases": []string{name}}}}}
 	if len(spec.Command) > 0 {
 		body["Entrypoint"] = spec.Command
 	}
@@ -333,6 +354,31 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 			}
 			return &cpprovider.ProvisionResult{ProviderRef: name, ServiceRefs: map[string]string{spec.Name: old.ID}, Endpoints: r.endpoints(c, iid, spec, labels)}, nil
 		}
+	}
+	// Devices are assigned before the old container stops, so a refusal
+	// leaves it running. Its own devices count as free: it stops before
+	// the new one starts. Two applies can't both read a device as free:
+	// each holds the daemon's GPU lock from listing its containers until
+	// the new container, labelled with its devices, exists. Direct and
+	// pooled applies take the same lock. Nothing between the two touches
+	// the database, so the lock never waits behind the organization lock
+	// or a connection row.
+	unlockGPUs := func() {}
+	if raw := labels[owned.LabelGPU]; raw != "" {
+		unlock, lockErr := r.lockGPUs(ctx, c)
+		if lockErr != nil {
+			return nil, lockErr
+		}
+		defer unlock()
+		unlockGPUs = unlock
+		devices, gpuErr := r.gpuDevices(ctx, c, raw, own, old)
+		if gpuErr != nil {
+			return nil, gpuErr
+		}
+		hostConfig["DeviceRequests"] = []map[string]any{{"Driver": "nvidia", "DeviceIDs": devices, "Capabilities": [][]string{{"gpu"}}}}
+		containerLabels[LabelGPUDevices] = strings.Join(devices, ",")
+	}
+	if old != nil {
 		changed = true
 		if checkErr := dockerSetRunning(ctx, c, old.ID, false); checkErr != nil {
 			return nil, checkErr
@@ -348,6 +394,9 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 	if checkErr := dockerJSON(ctx, c, http.MethodPost, "/containers/create?name="+name, body, &result); checkErr != nil {
 		return nil, checkErr
 	}
+	// The created container carries its device label, so the next apply's
+	// listing sees those devices as held.
+	unlockGPUs()
 	if checkErr := uploadFiles(ctx, c, result.ID, values); checkErr != nil {
 		return nil, checkErr
 	}

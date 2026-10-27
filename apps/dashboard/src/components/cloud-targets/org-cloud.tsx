@@ -1,5 +1,5 @@
 import { CloudSelect as Select } from "@/components/cloud-targets/cloud-select"
-import { CloudsIcon } from "@/components/icons"
+import { CloudsIcon, ProjectsIcon } from "@/components/icons"
 import { Card } from "@/components/ui/card"
 import { Item, ItemGroup } from "@/components/ui/item"
 import { Alert, AlertDescription } from "@/components/ui/alert"
@@ -19,7 +19,7 @@ import {
 // A Cloud the organization owns: its targets, and the projects allowed to
 // place services on them. A project gets the Cloud with a chosen set of its
 // targets, so one Cloud can serve many projects, each on only what it needs.
-import { CloudIcon, PlusIcon } from "lucide-react"
+import { PlusIcon } from "lucide-react"
 import { useState } from "react"
 
 import { messageOf, statusOf } from "@/client/errors"
@@ -42,14 +42,6 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import {
-  Empty,
-  EmptyContent,
-  EmptyDescription,
-  EmptyHeader,
-  EmptyMedia,
-  EmptyTitle,
-} from "@/components/ui/empty"
 import { Input } from "@/components/ui/input"
 import { Skeleton } from "@/components/ui/skeleton"
 import { cloudLabel } from "@/lib/clouds"
@@ -58,7 +50,13 @@ import { ProjectIcon, projectStyle } from "@/lib/project-style"
 import { Link } from "@/lib/router"
 import { cn } from "@/lib/utils"
 
-import { CloudTabs, CloudEmpty, type CloudTab } from "./infrastructure-ui"
+import {
+  CloudTabs,
+  CloudEmpty,
+  CloudSectionHead,
+  listItemClass,
+  type CloudTab,
+} from "./infrastructure-ui"
 import { Servers, InfrastructureActivity } from "./servers"
 import { Domains } from "./domains"
 import { OrganizationActivity } from "./organization-activity"
@@ -191,20 +189,18 @@ function Targets({ cloud }: { cloud: Profile }) {
   const [editing, setEditing] = useState<Target | "new" | null>(null)
   return (
     <section aria-label="Targets" className="grid gap-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="grid gap-0.5">
-          <h2 className="text-[15px] font-semibold">Targets</h2>
-          <p className="text-[12.5px] text-muted-foreground">
-            Choose a managed deployment or a server pool for each target.
-          </p>
-        </div>
+      <CloudSectionHead
+        title="Targets"
+        count={targets.data ? list.length : undefined}
+        description="Choose a managed deployment or a server pool for each target."
+      >
         {manage && (
           <Button onClick={() => setEditing("new")}>
             <PlusIcon />
             Add target
           </Button>
         )}
-      </div>
+      </CloudSectionHead>
       {targets.status === "error" || connections.status === "error" ? (
         <QueryError
           error={targets.error ?? connections.error}
@@ -216,24 +212,18 @@ function Targets({ cloud }: { cloud: Profile }) {
       ) : !targets.data || !connections.data ? (
         <Skeleton className="h-28 rounded-xl" />
       ) : list.length === 0 ? (
-        <Empty>
-          <EmptyHeader>
-            <EmptyMedia variant="icon">
-              <CloudIcon />
-            </EmptyMedia>
-            <EmptyTitle>No targets yet</EmptyTitle>
-            <EmptyDescription>
-              Add a target such as frontend or backend and pick the account it
-              runs on. Targets can use different providers, and several accounts
-              of the same one.
-            </EmptyDescription>
-          </EmptyHeader>
-          {manage && (
-            <EmptyContent>
+        <CloudEmpty
+          title="No targets yet"
+          action={
+            manage && (
               <Button onClick={() => setEditing("new")}>Add target</Button>
-            </EmptyContent>
-          )}
-        </Empty>
+            )
+          }
+        >
+          Add a target such as frontend or backend and pick the account it runs
+          on. Targets can use different providers, and several accounts of the
+          same one.
+        </CloudEmpty>
       ) : (
         <TargetTable
           targets={list}
@@ -287,14 +277,11 @@ function ProjectAccess({
   )
   return (
     <section aria-label="Projects" className="grid gap-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="grid gap-0.5">
-          <h2 className="text-[15px] font-semibold">Projects</h2>
-          <p className="text-[12.5px] text-muted-foreground">
-            Projects that can place services on this Cloud, and the targets each
-            one may use.
-          </p>
-        </div>
+      <CloudSectionHead
+        title="Projects"
+        count={grants.data ? active.length : undefined}
+        description="Projects that can place services on this Cloud, and the targets each one may use."
+      >
         {manage && (
           <Button
             variant="outline"
@@ -305,7 +292,7 @@ function ProjectAccess({
             Give a project access
           </Button>
         )}
-      </div>
+      </CloudSectionHead>
       {grants.status === "error" || projects.status === "error" ? (
         <QueryError
           error={grants.error ?? projects.error}
@@ -317,20 +304,11 @@ function ProjectAccess({
       ) : !grants.data || !projects.data ? (
         <Skeleton className="h-20 rounded-xl" />
       ) : active.length === 0 ? (
-        <Empty>
-          <EmptyHeader>
-            <EmptyMedia variant="icon">
-              <CloudIcon />
-            </EmptyMedia>
-            <EmptyTitle>No project uses this Cloud yet</EmptyTitle>
-            <EmptyDescription>
-              {projects.data.projects.length === 0
-                ? "Create a project, then grant the whole Cloud or specific targets."
-                : "Grant the whole Cloud, including its default provider, or choose specific targets. Then assign a project environment."}
-            </EmptyDescription>
-          </EmptyHeader>
-          {projects.data.projects.length === 0 && (
-            <EmptyContent>
+        <CloudEmpty
+          icon={ProjectsIcon}
+          title="No project uses this Cloud yet"
+          action={
+            projects.data.projects.length === 0 && (
               <Button
                 nativeButton={false}
                 variant="outline"
@@ -338,11 +316,15 @@ function ProjectAccess({
               >
                 Create a project
               </Button>
-            </EmptyContent>
-          )}
-        </Empty>
+            )
+          }
+        >
+          {projects.data.projects.length === 0
+            ? "Create a project, then grant the whole Cloud or specific targets."
+            : "Grant the whole Cloud, including its default provider, or choose specific targets. Then assign a project environment."}
+        </CloudEmpty>
       ) : (
-        <ItemGroup className="gap-0 divide-y rounded-xl bg-card ring-1 ring-border">
+        <ItemGroup className="gap-0 overflow-hidden rounded-xl bg-card ring-1 ring-border">
           {active.map((g) => {
             const p = projectOf(g.projectId)
             const s = p ? projectStyle(p) : null
@@ -352,7 +334,10 @@ function ProjectAccess({
                 role="listitem"
                 size="sm"
                 key={g.projectId}
-                className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3"
+                className={cn(
+                  listItemClass,
+                  "flex flex-wrap items-center gap-x-4 gap-y-2 py-3"
+                )}
               >
                 <span className="flex min-w-0 flex-[1_1_200px] items-center gap-2.5">
                   {s && <ProjectIcon icon={s.icon} color={s.color} size="sm" />}
@@ -565,7 +550,7 @@ function GrantDialog({
             })}
           </FieldSet>
           {error && (
-            <Alert variant="destructive" className="text-sm text-destructive">
+            <Alert variant="destructive">
               <AlertDescription>{error}</AlertDescription>
             </Alert>
           )}
@@ -662,11 +647,11 @@ function DefaultPlacementCard({
       size="sm"
       role="region"
       aria-label="Default provider"
-      className="grid gap-2 p-3"
+      className="grid gap-2.5 px-4 py-3.5"
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="grid max-w-[64ch] gap-0.5">
-          <h2 className="text-[15px] font-semibold">Default provider</h2>
+          <h2 className="text-[14px] font-semibold">Default provider</h2>
           <p className="text-[12.5px] leading-relaxed text-muted-foreground">
             {targets.length === 0
               ? "With no targets, every service on it runs here."
@@ -739,7 +724,7 @@ function DefaultPlacementCard({
         </p>
       )}
       {error && !editing && (
-        <Alert variant="destructive" className="text-[13px] text-destructive">
+        <Alert variant="destructive">
           <AlertDescription>{error}</AlertDescription>
         </Alert>
       )}
@@ -1006,7 +991,7 @@ function DefaultPlacementDialog({
           }}
         />
         {error && (
-          <Alert variant="destructive" className="text-[13px] text-destructive">
+          <Alert variant="destructive">
             <AlertDescription>{error}</AlertDescription>
           </Alert>
         )}

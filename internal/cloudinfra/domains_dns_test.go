@@ -44,6 +44,16 @@ func dnsProofFixture() (*Service, *dnsProofStore, *dnsProofResolver) {
 	resolver := &dnsProofResolver{}
 	return NewService(Deps{Domains: st, Resolver: resolver, Authz: cleanupTestAuth{}}), st, resolver
 }
+
+// checkedOnly reports whether a failed check left the zone as it was, apart
+// from the time it was checked. VerifyZone records that on every check.
+func checkedOnly(before, after Zone) bool {
+	if after.ProofCheckedAt.IsZero() {
+		return false
+	}
+	after.ProofCheckedAt = before.ProofCheckedAt
+	return reflect.DeepEqual(before, after)
+}
 func TestDNSProofAbsentThenVisible(t *testing.T) {
 	for _, wrapped := range []bool{false, true} {
 		t.Run(fmt.Sprint(wrapped), func(t *testing.T) {
@@ -57,13 +67,13 @@ func TestDNSProofAbsentThenVisible(t *testing.T) {
 			if _, err := svc.VerifyZone(t.Context(), p, "zone"); !errors.Is(err, ErrConflict) {
 				t.Fatalf("missing proof must be conflict: %v", err)
 			}
-			if st.saves != 0 || !reflect.DeepEqual(before, st.zone) {
+			if st.saves != 1 || !checkedOnly(before, st.zone) {
 				t.Fatal("missing proof changed verification")
 			}
 			r.err = nil
 			r.values = []string{"unrelated", st.zone.ProofValue}
 			verified, err := svc.VerifyZone(t.Context(), p, "zone")
-			if err != nil || verified == nil || verified.VerifiedAt.IsZero() || st.saves != 1 {
+			if err != nil || verified == nil || verified.VerifiedAt.IsZero() || st.saves != 2 {
 				t.Fatalf("visible proof: %+v %v saves=%d", verified, err, st.saves)
 			}
 		})
@@ -101,7 +111,7 @@ func TestDNSProofFailuresPreserveVerification(t *testing.T) {
 			} else if !errors.Is(err, tc.err) || errors.Is(err, ErrConflict) {
 				t.Fatalf("resolver failure changed: %v", err)
 			}
-			if st.saves != 0 || !reflect.DeepEqual(before, st.zone) {
+			if st.saves != 1 || !checkedOnly(before, st.zone) {
 				t.Fatal("failure changed stored verification")
 			}
 		})
@@ -143,11 +153,12 @@ func TestDNSManagedProofRequiresProviderAndPublicControl(t *testing.T) {
 	if _, err := svc.VerifyZone(t.Context(), p, "zone"); !errors.Is(err, ErrConflict) {
 		t.Fatalf("public absence: %v", err)
 	}
-	if st.saves != 0 || !reflect.DeepEqual(before, st.zone) {
+	if !checkedOnly(before, st.zone) {
 		t.Fatal("failed managed proof changed verification")
 	}
 	r.err = nil
-	if _, err := svc.VerifyZone(t.Context(), p, "zone"); err != nil || st.saves != 1 {
+	saved := st.saves
+	if _, err := svc.VerifyZone(t.Context(), p, "zone"); err != nil || st.saves != saved+1 {
 		t.Fatalf("managed visible proof: %v saves=%d", err, st.saves)
 	}
 }

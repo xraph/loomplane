@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -220,6 +221,16 @@ func (s *PgStore) reserveInfrastructureCapacity(ctx context.Context, tx driver.T
 	if b := checkCapacityLimit(p, d, used, delta, capacityResources(p.Limits), "hard_limit"); b != nil {
 		return b, nil
 	}
+	// GPU ceilings are per kind, counted from inventory plus pending growth.
+	if delta.GPUs > 0 {
+		counted, countErr := cloudGPUs(records, reservations, d.CloudID, delta.GPUKind)
+		if countErr != nil {
+			return nil, countErr
+		}
+		if b := checkGPULimit(p, d, delta.GPUKind, counted, delta.GPUs); b != nil {
+			return b, nil
+		}
+	}
 	for _, pool := range p.Pools {
 		var member bool
 		if checkErr := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_server_pool_members WHERE org_id=$1 AND pool_id=$2 AND server_id=$3)`, d.OrgID, pool.PoolID, o.ServerID).Scan(&member); checkErr != nil {
@@ -231,6 +242,16 @@ func (s *PgStore) reserveInfrastructureCapacity(ctx context.Context, tx driver.T
 		poolUsed, e := capacityPoolUsage(ctx, tx, d.OrgID, d.CloudID, pool.PoolID, records)
 		if e != nil {
 			return nil, e
+		}
+		// The pool's GPUs of the delta's kind, from its inventoried members plus
+		// the reservations counted to it below.
+		var poolGPUs *int64
+		if delta.GPUs > 0 {
+			members, memberErr := poolMemberSet(ctx, tx, d.OrgID, pool.PoolID)
+			if memberErr != nil {
+				return nil, memberErr
+			}
+			poolGPUs = poolInventoryGPUs(records, members, delta.GPUKind)
 		}
 		for _, r := range reservations {
 			if r.cloud != d.CloudID {
@@ -245,6 +266,11 @@ func (s *PgStore) reserveInfrastructureCapacity(ctx context.Context, tx driver.T
 				if e != nil {
 					return nil, e
 				}
+				if r.reservation.Delta.GPUKind == delta.GPUKind {
+					if poolGPUs, e = addGPUCount(poolGPUs, r.reservation.Delta.GPUs); e != nil {
+						return nil, e
+					}
+				}
 			}
 		}
 		limits := CapacityResources{Servers: number(pool.MaxServers)}
@@ -255,6 +281,10 @@ func (s *PgStore) reserveInfrastructureCapacity(ctx context.Context, tx driver.T
 		poolDemand := d
 		poolDemand.PoolID = pool.PoolID
 		if b := checkCapacityLimit(p, poolDemand, poolUsed, delta, limits, "hard_limit"); b != nil {
+			return b, nil
+		}
+		// capacityResources keeps four dimensions, so the pool's GPU ceiling is checked here.
+		if b := checkPoolGPULimit(p, poolDemand, pool, delta.GPUKind, poolGPUs, delta.GPUs); b != nil {
 			return b, nil
 		}
 	}
@@ -347,24 +377,29 @@ func capacityRecordsTx(ctx context.Context, tx driver.Tx, org, cloud string) ([]
 	}
 	return out, rows.Err()
 }
-func capacityPoolUsage(ctx context.Context, tx driver.Tx, org, _, pool string, records []CapacityRecord) (CapacityResources, error) {
-	used := capacityResources(ResourceVector{})
+
+// poolMemberSet lists the servers in a pool.
+func poolMemberSet(ctx context.Context, tx driver.Tx, org, pool string) (map[string]bool, error) {
 	rows, err := tx.Query(ctx, `SELECT server_id FROM loomplane_server_pool_members WHERE org_id=$1 AND pool_id=$2 ORDER BY server_id`, org, pool)
 	if err != nil {
-		return used, err
+		return nil, err
 	}
+	defer rows.Close()
 	ids := map[string]bool{}
 	for rows.Next() {
 		var id string
-		if err = rows.Scan(&id); err != nil {
-			rows.Close()
-			return used, err
+		if scanErr := rows.Scan(&id); scanErr != nil {
+			return nil, scanErr
 		}
 		ids[id] = true
 	}
-	rows.Close()
-	if checkErr := rows.Err(); checkErr != nil {
-		return used, checkErr
+	return ids, rows.Err()
+}
+func capacityPoolUsage(ctx context.Context, tx driver.Tx, org, _, pool string, records []CapacityRecord) (CapacityResources, error) {
+	used := capacityResources(ResourceVector{})
+	ids, err := poolMemberSet(ctx, tx, org, pool)
+	if err != nil {
+		return used, err
 	}
 	for _, r := range records {
 		if ids[r.ServerID] {
@@ -477,6 +512,12 @@ func checkPoolCapacityEdit(ctx context.Context, tx driver.Tx, pool *Pool) error 
 		return checkErr
 	}
 	delta := ResourceVector{}
+	// The pool's GPU ceiling covers its own kind: GPUs already in the pool, and
+	// the GPUs newly added members bring.
+	gpuKind := limits.AcceleratorKind
+	oldGPUs := poolInventoryGPUs(records, oldIDs, gpuKind)
+	var addedGPUs int64
+	gpusUnknown := false
 	newIDs := map[string]bool{}
 	for _, member := range pool.Members {
 		newIDs[member.ServerID] = true
@@ -502,6 +543,15 @@ func checkPoolCapacityEdit(ctx context.Context, tx driver.Tx, pool *Pool) error 
 			if err != nil {
 				return err
 			}
+			switch {
+			case record.GPUs == nil:
+				gpusUnknown = true
+			case record.GPUKind == gpuKind:
+				if *record.GPUs > math.MaxInt64-addedGPUs {
+					return ErrInvalid
+				}
+				addedGPUs += *record.GPUs
+			}
 		}
 		if !found {
 			return &CapacityAdmissionError{Block: CapacityBlock{Reason: "stale_inventory", Resource: "pool", CloudID: pool.CloudID, PoolID: pool.ID}}
@@ -522,8 +572,19 @@ func checkPoolCapacityEdit(ctx context.Context, tx driver.Tx, pool *Pool) error 
 		switch {
 		case r.PoolID == pool.ID || oldIDs[r.ServerID]:
 			old, err = sumResources(old, capacityResources(r.Delta))
+			if err == nil && r.Delta.GPUKind == gpuKind {
+				oldGPUs, err = addGPUCount(oldGPUs, r.Delta.GPUs)
+			}
 		case newIDs[r.ServerID]:
-			delta, err = addCapacity(delta, r.Delta)
+			// The four counted dimensions take any GPU kind; the pool's GPU
+			// ceiling below counts only its own.
+			delta, err = addCapacity(delta, withoutGPUs(r.Delta))
+			if err == nil && r.Delta.GPUKind == gpuKind {
+				if r.Delta.GPUs > math.MaxInt64-addedGPUs {
+					return ErrInvalid
+				}
+				addedGPUs += r.Delta.GPUs
+			}
 		default:
 			continue
 		}
@@ -539,7 +600,15 @@ func checkPoolCapacityEdit(ctx context.Context, tx driver.Tx, pool *Pool) error 
 			ceilings.Servers = number(limits.MaxServers)
 		}
 	}
-	if b := checkCapacityLimit(policy, CapacityDemand{OrgID: pool.OrgID, CloudID: pool.CloudID, PoolID: pool.ID}, old, delta, ceilings, "hard_limit"); b != nil {
+	demand := CapacityDemand{OrgID: pool.OrgID, CloudID: pool.CloudID, PoolID: pool.ID}
+	if b := checkCapacityLimit(policy, demand, old, delta, ceilings, "hard_limit"); b != nil {
+		return &CapacityAdmissionError{Block: *b}
+	}
+	// A new member whose GPUs Loomplane couldn't read can't join a GPU-capped pool.
+	if gpusUnknown && limits.Limits != nil && limits.Limits.GPUs > 0 {
+		return &CapacityAdmissionError{Block: *capacityBlock(policy, demand, "stale_inventory", "gpus:"+gpuKind)}
+	}
+	if b := checkPoolGPULimit(policy, demand, *limits, gpuKind, oldGPUs, addedGPUs); b != nil {
 		return &CapacityAdmissionError{Block: *b}
 	}
 	return nil
@@ -585,7 +654,21 @@ func operationCapacityDelta(ctx context.Context, tx driver.Tx, o *Operation, p *
 				return ResourceVector{}, &CapacityAdmissionError{Block: *capacityBlock(p, d, "stale_inventory", "server")}
 			}
 		}
+		target := delta
 		delta = positiveCapacityDelta(delta, ResourceVector{Servers: *facts[0], CPUMillis: *facts[1], MemoryBytes: *facts[2], StorageBytes: *facts[3]})
+		// A resize onto GPUs adds the devices the server doesn't have yet.
+		if target.GPUs > 0 {
+			if r.GPUs == nil {
+				return ResourceVector{}, &CapacityAdmissionError{Block: *capacityBlock(p, d, "stale_inventory", "gpus:"+target.GPUKind)}
+			}
+			have := int64(0)
+			if r.GPUKind == target.GPUKind {
+				have = *r.GPUs
+			}
+			if target.GPUs > have {
+				delta.GPUKind, delta.GPUs = target.GPUKind, target.GPUs-have
+			}
+		}
 	}
 	return delta, nil
 }

@@ -1,50 +1,18 @@
 // The deployed parts and recovery evidence of a Fabriq resource.
-import type { ReactNode } from "react"
-import { toneClass, type Tone } from "@/components/runs"
+import { Panel } from "@/components/panel"
+import { StatusPill, type Tone } from "@/components/runs"
 import type { CatalogPanelProps } from "@/lib/catalog-kinds"
 import { ago, type StackState } from "@/lib/fabriq"
 import { cn } from "@/lib/utils"
 import { useFabriqStack } from "./use-fabriq-stack"
 
-export const stackTones: Record<StackState, Tone | "completed"> = {
+export const stackTones: Record<StackState, Tone> = {
   Running: "live",
-  Completed: "completed",
+  Completed: "quiet",
   Off: "quiet",
   External: "quiet",
   Linked: "quiet",
   "Not running": "waiting",
-}
-
-const pillTones = {
-  ...toneClass,
-  completed: { tint: "bg-secondary", ink: "text-label" },
-  quiet: { tint: "bg-secondary", ink: "text-muted-foreground" },
-  waiting: { tint: "bg-notice-warning", ink: "text-status-waiting-ink" },
-}
-
-/** StatePill is a part's state in its tone: green running, grey done or off. */
-export function StatePill({
-  tone,
-  title,
-  children,
-}: {
-  tone: Tone | "completed"
-  title?: string
-  children: ReactNode
-}) {
-  const t = pillTones[tone]
-  return (
-    <span
-      title={title}
-      className={cn(
-        "inline-flex shrink-0 items-center rounded-full px-[7px] py-px text-[11.5px] leading-[normal] font-medium whitespace-nowrap",
-        t.tint,
-        t.ink
-      )}
-    >
-      {children}
-    </span>
-  )
 }
 
 export function FabriqStack(props: CatalogPanelProps) {
@@ -67,23 +35,19 @@ export function FabriqStack(props: CatalogPanelProps) {
         )}
       >
         {parts.map((part) => (
-          <div
+          <Panel
             key={part.id}
-            className={cn(
-              "grid content-start gap-1 rounded-[12px] border border-border-panel px-3 py-2.5",
-              part.state === "Off"
-                ? "border-dashed bg-surface-muted"
-                : "bg-card"
-            )}
+            dashed={part.state === "Off"}
+            className="gap-1 px-3 py-2.5"
           >
             <span className="flex items-center justify-between gap-1.5">
               <span className="text-[13px] font-semibold">{part.name}</span>
-              <StatePill tone={stackTones[part.state]}>{part.state}</StatePill>
+              <StatusPill tone={stackTones[part.state]}>
+                {part.state}
+              </StatusPill>
             </span>
-            <span className="text-xs leading-[1.45] text-muted-foreground">
-              {part.detail}
-            </span>
-          </div>
+            <span className="text-xs text-muted-foreground">{part.detail}</span>
+          </Panel>
         ))}
       </div>
     </section>

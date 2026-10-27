@@ -247,6 +247,8 @@ func TestPSCSourceForwardingRulePersistsBeforeMutationAndResumes(t *testing.T) {
 			state = saved
 			if scenario == "legacy-checkpoint" {
 				state.Version = 1
+				state.Source = SQLPSCSourceWitness{}
+				state.AddressValue = ""
 				state.SourceProject = ""
 				state.SourcePhysicalID = ""
 			}

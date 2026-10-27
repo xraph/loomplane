@@ -1,4 +1,6 @@
-import { CheckIcon, CopyIcon, UserPlusIcon } from "lucide-react"
+import { Radio } from "@base-ui/react/radio"
+import { RadioGroup } from "@base-ui/react/radio-group"
+import { CheckIcon, CopyIcon, PlusIcon } from "lucide-react"
 import { type FormEvent, useState } from "react"
 import { toast } from "sonner"
 
@@ -15,7 +17,7 @@ import type {
   OrgMember,
 } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
-import { Page, PageHeading, SectionHeading } from "@/components/page"
+import { Page, PageHeading } from "@/components/page"
 import { SiteHeader } from "@/components/site-header"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
@@ -41,12 +43,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import {
-  Field,
-  FieldDescription,
-  FieldGroup,
-  FieldLabel,
-} from "@/components/ui/field"
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import {
   Select,
@@ -67,7 +64,14 @@ import {
 } from "@/components/ui/table"
 import { formatDate } from "@/lib/format"
 import { useOrganization } from "@/lib/organization"
-import { grantable, memberRoleFor, type Role, roleLabel } from "@/lib/roles"
+import { cn } from "@/lib/utils"
+import {
+  grantable,
+  memberRoleFor,
+  type Role,
+  roleLabel,
+  roles,
+} from "@/lib/roles"
 
 export function Members() {
   const { session, can } = useOrganization()
@@ -79,14 +83,14 @@ export function Members() {
   return (
     <>
       <SiteHeader crumbs={[{ label: "Members" }]} />
-      <Page>
+      <Page className="max-w-[980px]">
         <PageHeading
           title="Members"
           description="Everyone in this organization, and what each of them can do."
           actions={
             mayManage && (
               <Button onClick={() => setInviting(true)}>
-                <UserPlusIcon />
+                <PlusIcon />
                 Invite
               </Button>
             )
@@ -135,6 +139,25 @@ export function Members() {
         )}
 
         {mayManage && <PendingInvitations />}
+
+        <Card className="gap-0 py-0">
+          <h2 className="border-b px-4 py-3 text-[14px] font-semibold">
+            What each role can do
+          </h2>
+          <dl className="grid divide-y lg:grid-cols-4 lg:divide-x lg:divide-y-0">
+            {roles.map((r) => (
+              <div
+                key={r.value}
+                className="grid content-start gap-0.5 px-4 py-3"
+              >
+                <dt className="text-[13.5px] font-semibold">{r.label}</dt>
+                <dd className="text-[12.5px] leading-snug text-muted-foreground">
+                  {r.description}
+                </dd>
+              </div>
+            ))}
+          </dl>
+        </Card>
       </Page>
 
       {mayManage && (
@@ -209,18 +232,21 @@ function MemberRow({
     <TableRow>
       <TableCell>
         <div className="flex items-center gap-3">
-          <Avatar className="size-8 rounded-lg">
-            <AvatarFallback className="rounded-lg text-xs font-medium">
+          <Avatar className="size-8">
+            <AvatarFallback className="text-xs font-medium">
               {initialsOf(member.name || member.email)}
             </AvatarFallback>
           </Avatar>
           <div className="grid min-w-0">
-            <div className="flex items-center gap-2 font-medium">
+            <div className="flex items-center gap-2 text-[13.5px] font-medium">
               <span className="truncate">
                 {member.name || member.email || member.userId}
               </span>
               {isMe && (
-                <Badge variant="secondary" className="font-normal">
+                <Badge
+                  variant="secondary"
+                  className="bg-brand-tint text-[11.5px] text-brand-ink"
+                >
                   You
                 </Badge>
               )}
@@ -253,7 +279,9 @@ function MemberRow({
             </SelectContent>
           </Select>
         ) : (
-          <span className="text-sm">{roleLabel(member.role)}</span>
+          <span className="text-muted-foreground">
+            {roleLabel(member.role)}
+          </span>
         )}
       </TableCell>
       <TableCell className="hidden text-muted-foreground md:table-cell">
@@ -306,15 +334,21 @@ function MemberRow({
 
 function PendingInvitations() {
   const invitations = useQuery(useInvitationsList)
-  const list = invitations.data?.invitations ?? []
-  if (!invitations.data || list.length === 0) return null
+  if (!invitations.data) return null
+  const list = invitations.data.invitations
   return (
-    <section className="grid gap-3">
-      <SectionHeading
-        title="Pending invitations"
-        description="Each link works once, for a week, for the email it was sent to."
-      />
-      <Card className="py-0">
+    <Card className="gap-0 py-0">
+      <div className="grid gap-0.5 border-b px-4 py-3">
+        <h2 className="text-[14px] font-semibold">Pending invitations</h2>
+        <p className="text-[12.5px] text-muted-foreground">
+          Each link works once, for a week, for the email it was sent to.
+        </p>
+      </div>
+      {list.length === 0 ? (
+        <p className="px-4 py-3.5 text-muted-foreground">
+          No invitations waiting.
+        </p>
+      ) : (
         <Table>
           <TableHeader>
             <TableRow className="hover:bg-transparent">
@@ -328,7 +362,9 @@ function PendingInvitations() {
             {list.map((inv) => (
               <TableRow key={inv.id}>
                 <TableCell className="font-medium">{inv.email}</TableCell>
-                <TableCell>{roleLabel(inv.role)}</TableCell>
+                <TableCell>
+                  <Badge variant="outline">{roleLabel(inv.role)}</Badge>
+                </TableCell>
                 <TableCell className="hidden text-muted-foreground md:table-cell">
                   {inv.invitedBy}
                 </TableCell>
@@ -341,8 +377,8 @@ function PendingInvitations() {
             ))}
           </TableBody>
         </Table>
-      </Card>
-    </section>
+      )}
+    </Card>
   )
 }
 
@@ -411,7 +447,7 @@ function InviteDialog({
 
   return (
     <Dialog open={open} onOpenChange={close}>
-      <DialogContent className="sm:max-w-md">
+      <DialogContent className="sm:max-w-[520px]">
         {link ? (
           <>
             <DialogHeader>
@@ -434,6 +470,7 @@ function InviteDialog({
                 readOnly
                 value={link}
                 aria-label="Invitation link"
+                className="bg-subtle font-mono text-xs"
                 onFocus={(e) => e.currentTarget.select()}
               />
               <Button
@@ -472,29 +509,49 @@ function InviteDialog({
                 />
               </Field>
               <Field>
-                <FieldLabel>Role</FieldLabel>
-                <Select
-                  items={choices.map((r) => ({
-                    label: r.label,
-                    value: r.value,
-                  }))}
+                <FieldLabel id="invite-role">Role</FieldLabel>
+                <RadioGroup
                   value={role}
                   onValueChange={(v) => setRole(v as Role)}
+                  aria-labelledby="invite-role"
+                  className="grid gap-1.5"
                 >
-                  <SelectTrigger aria-label="Role" className="w-full">
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {choices.map((r) => (
-                      <SelectItem key={r.value} value={r.value}>
-                        {r.label}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <FieldDescription>
-                  {choices.find((r) => r.value === role)?.description}
-                </FieldDescription>
+                  {choices.map((r) => {
+                    const on = role === r.value
+                    return (
+                      <Radio.Root
+                        key={r.value}
+                        value={r.value}
+                        nativeButton
+                        render={<button type="button" />}
+                        className={cn(
+                          "flex items-center gap-2.5 rounded-lg border px-3 py-2 text-left transition-colors",
+                          on
+                            ? "border-brand-line bg-brand-soft"
+                            : "border-border bg-card hover:border-foreground/25"
+                        )}
+                      >
+                        <span
+                          aria-hidden="true"
+                          className={cn(
+                            "size-3.5 shrink-0 rounded-full",
+                            on
+                              ? "border-4 border-brand"
+                              : "border-[1.5px] border-muted-foreground/50"
+                          )}
+                        />
+                        <span className="grid gap-px">
+                          <span className="text-[13px] font-semibold">
+                            {r.label}
+                          </span>
+                          <span className="text-xs text-muted-foreground">
+                            {r.description}
+                          </span>
+                        </span>
+                      </Radio.Root>
+                    )
+                  })}
+                </RadioGroup>
               </Field>
               {error && (
                 <Alert variant="destructive">

@@ -29,7 +29,8 @@ var ErrConflict = errors.New("another plan for this environment was just started
 // PgStore is the Postgres Store. The schema is migration group "loomplane"
 // (database/migrations).
 type PgStore struct {
-	db *pgdriver.PgDB
+	frontendWake cloudinfra.CapacityCloudWakeup
+	db           *pgdriver.PgDB
 }
 
 // NewPgStore returns a Store over db.
@@ -508,18 +509,28 @@ func (s *PgStore) PutBinding(ctx context.Context, b *Binding) error {
 		return err
 	}
 	defer func() { _ = tx.Rollback() }() //nolint:errcheck // a no-op once committed
+	if checkErr := cloudprofiles.LockOrganization(ctx, tx, b.OrgID); checkErr != nil {
+		return checkErr
+	}
 	if guardErr := cloudinfra.GuardPoolWrite(ctx, tx); guardErr != nil {
 		return guardErr
 	}
-	if err := putBinding(ctx, tx, b); err != nil {
-		return err
+	if checkErr := cloudinfra.ActivateFrontendBinding(ctx, tx, b.OrgID, b.PlanID, b.Name, b.ConnectionID, b.ExternalID); checkErr != nil {
+		return checkErr
+	}
+	if checkErr := putBinding(ctx, tx, b); checkErr != nil {
+		return checkErr
 	}
 	if id != "" {
 		if err := s.checkpointCloudBinding(ctx, tx, id, b.OrgID, b.ID); err != nil {
 			return err
 		}
 	}
-	return tx.Commit()
+	if commitErr := tx.Commit(); commitErr != nil {
+		return commitErr
+	}
+	s.wakeFrontendPlan(ctx, b.OrgID, b.PlanID, "frontend-active/"+b.PlanID+"/"+b.Name)
+	return nil
 }
 
 func putBinding(ctx context.Context, db bindingExecutor, b *Binding) error {
@@ -657,4 +668,38 @@ func (s *PgStore) SetEnvironmentConnection(ctx context.Context, orgID, projectID
 		return fmt.Errorf("set environment connection: %w", err)
 	}
 	return nil
+}
+
+// GPUBindings sums the GPUs the organization's current bindings hold, by
+// connection and kind: a service's gpu, or a catalog component's. GPU
+// targets subtract them from what a server has.
+func (s *PgStore) GPUBindings(ctx context.Context, orgID string) (map[string]map[string]int, error) {
+	rows, err := s.db.Query(ctx, `SELECT connection_id, g->>'kind', sum(floor((g->>'count')::numeric))::bigint
+		FROM (SELECT connection_id, coalesce(nullif(config->'gpu', 'null'::jsonb), nullif(config->'component'->'gpu', 'null'::jsonb)) AS g
+			FROM loomplane_bindings WHERE org_id = $1 AND connection_id <> '' AND jsonb_typeof(config) = 'object') b
+		WHERE jsonb_typeof(g) = 'object' AND coalesce(g->>'kind', '') <> '' AND jsonb_typeof(g->'count') = 'number'
+		GROUP BY 1, 2`, orgID)
+	if err != nil {
+		return nil, fmt.Errorf("sum the GPUs bindings hold: %w", err)
+	}
+	defer rows.Close() // read-only; Err below reports iteration failures
+	out := map[string]map[string]int{}
+	for rows.Next() {
+		var connection, kind string
+		var count int64
+		if err := rows.Scan(&connection, &kind, &count); err != nil {
+			return nil, fmt.Errorf("sum the GPUs bindings hold: %w", err)
+		}
+		if count <= 0 {
+			continue
+		}
+		if out[connection] == nil {
+			out[connection] = map[string]int{}
+		}
+		out[connection][kind] = int(count)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("sum the GPUs bindings hold: %w", err)
+	}
+	return out, nil
 }

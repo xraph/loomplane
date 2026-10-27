@@ -267,6 +267,14 @@ type CloudsConfig struct {
 	// AzureEndpoint replaces Microsoft Entra ID's sign-in and Azure
 	// Resource Manager.
 	AzureEndpoint string
+	// CloudflareEndpoint replaces Cloudflare's API.
+	CloudflareEndpoint string
+	// CloudflareRegistrarSandbox sends registrar calls to Cloudflare's
+	// sandbox, which never registers or charges for a real domain.
+	CloudflareRegistrarSandbox bool
+	// ACMEDirectory replaces the ACME directory certificates are ordered
+	// from. Empty means Let's Encrypt's production directory.
+	ACMEDirectory string
 	// OAuth holds the sign-in app Loomplane registered with each cloud,
 	// keyed by connection cloud such as "digitalocean". A cloud appears
 	// only when both its client ID and secret are set.
@@ -277,10 +285,13 @@ type CloudsConfig struct {
 type OAuthApp struct {
 	ClientID     string
 	ClientSecret string
+	// Slug names the app in the cloud's own address, which Vercel's
+	// install page needs. Only Vercel sets it.
+	Slug string
 }
 
 // oauthClouds are the clouds that can connect by signing in.
-var oauthClouds = []string{"digitalocean"}
+var oauthClouds = []string{"digitalocean", "vercel", "gcp", "azure"}
 
 // Bounds on the approval window: long enough to reach a person, short
 // enough that an approved plan still describes the world.
@@ -417,6 +428,9 @@ func FromSource(src Getter) (Config, error) {
 	r.str(&c.Clouds.DigitalOceanEndpoint, "clouds.digitalocean_endpoint")
 	r.str(&c.Clouds.AzureEndpoint, "clouds.azure_endpoint")
 	r.str(&c.Clouds.AWSEndpoint, "clouds.aws_endpoint")
+	r.str(&c.Clouds.CloudflareEndpoint, "clouds.cloudflare_endpoint")
+	r.boolean(&c.Clouds.CloudflareRegistrarSandbox, "clouds.cloudflare_registrar_sandbox")
+	r.str(&c.Clouds.ACMEDirectory, "clouds.acme_directory")
 	c.Clouds.OAuth = r.oauthApps(c.Clouds.OAuth, "clouds.oauth")
 	r.plugins(&c.Providers.Plugins, "providers.plugins")
 	r.names(&c.Providers.Paused, "providers.paused")
@@ -634,12 +648,14 @@ func (r *reader) prefixes(dst *[]netip.Prefix, key string) {
 }
 
 // oauthApps reads <key>.<cloud>.client_id and client_secret for each cloud
-// that can sign in. A cloud with only one of the two is an error.
+// that can sign in, and slug for Vercel. A cloud with only one of the
+// two is an error, and so is a Vercel app without its slug.
 func (r *reader) oauthApps(dst map[string]OAuthApp, key string) map[string]OAuthApp {
 	for _, cloud := range oauthClouds {
 		var app OAuthApp
 		r.str(&app.ClientID, key+"."+cloud+".client_id")
 		r.str(&app.ClientSecret, key+"."+cloud+".client_secret")
+		r.str(&app.Slug, key+"."+cloud+".slug")
 		switch {
 		case app.ClientID == "" && app.ClientSecret == "":
 			continue
@@ -648,6 +664,10 @@ func (r *reader) oauthApps(dst map[string]OAuthApp, key string) map[string]OAuth
 			continue
 		case app.ClientSecret == "":
 			r.errs = append(r.errs, fmt.Errorf("%s.%s.client_secret is required when client_id is set", key, cloud))
+			continue
+		}
+		if cloud == "vercel" && app.Slug == "" {
+			r.errs = append(r.errs, fmt.Errorf("%s.%s.slug is required when client_id and client_secret are set", key, cloud))
 			continue
 		}
 		if dst == nil {

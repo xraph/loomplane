@@ -31,6 +31,8 @@ func Credential(connection *connections.Connection, raw []byte) (provider.Infras
 			credential.TeamID = team
 			credential.AccountID = team
 		}
+	case connections.Cloudflare:
+		credential.AccountID = connection.Details["account_id"]
 	default:
 		return provider.InfrastructureCredential{}, &provider.UnsupportedCapabilityError{Provider: connection.Cloud, Capability: "infrastructure"}
 	}

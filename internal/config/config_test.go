@@ -121,6 +121,38 @@ func TestLoad_readsFilesAndEnvironment(t *testing.T) {
 	}
 }
 
+// The repository's config.yaml takes the pool size from the environment, so
+// the Kubernetes chart can set it without a config file.
+func TestLoad_poolSizeFromEnvironment(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		name, env string
+		want      int
+	}{
+		{"default", "", 16},
+		{"set", "40", 40},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "config.yaml"), raw, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("LOOMPLANE_DATABASE_URL", testDSN)
+			t.Setenv("LOOMPLANE_DATABASE_POOL_SIZE", tt.env)
+			c, err := Load(dir)
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if c.Database.PoolSize != tt.want {
+				t.Fatalf("pool size %d, want %d", c.Database.PoolSize, tt.want)
+			}
+		})
+	}
+}
+
 func TestLoad_requiresConfigFile(t *testing.T) {
 	if _, err := Load(t.TempDir()); err == nil {
 		t.Fatal("Load succeeded without config.yaml")

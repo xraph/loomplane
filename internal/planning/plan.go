@@ -141,19 +141,20 @@ type AppliedInputs struct {
 }
 
 type ServiceConfig struct {
-	CapacityIntent *CapacityIntent    `json:"capacity_intent,omitempty"`
-	AppliedInputs  *AppliedInputs     `json:"applied_inputs,omitempty"`
-	CloudPlacement *CloudPlacement    `json:"cloud_placement,omitempty"`
-	Catalog        *recipes.Recipe    `json:"catalog,omitempty"`
-	Provider       string             `json:"provider"`
-	Region         string             `json:"region,omitempty"`
-	Target         string             `json:"target,omitempty"`
-	TargetSettings map[string]string  `json:"target_settings,omitempty"`
-	Endpoint       *manifest.Endpoint `json:"endpoint,omitempty"`
-	HealthPath     string             `json:"health_path,omitempty"`
-	BuildTarget    *BuildTarget       `json:"build_target,omitempty"`
-	Workload       provider.Workload  `json:"workload"`
-	Execution      provider.Execution `json:"execution"`
+	FrontendDemand *cloudinfra.FrontendDemand `json:"frontend_demand,omitempty"`
+	CapacityIntent *CapacityIntent            `json:"capacity_intent,omitempty"`
+	AppliedInputs  *AppliedInputs             `json:"applied_inputs,omitempty"`
+	CloudPlacement *CloudPlacement            `json:"cloud_placement,omitempty"`
+	Catalog        *recipes.Recipe            `json:"catalog,omitempty"`
+	Provider       string                     `json:"provider"`
+	Region         string                     `json:"region,omitempty"`
+	Target         string                     `json:"target,omitempty"`
+	TargetSettings map[string]string          `json:"target_settings,omitempty"`
+	Endpoint       *manifest.Endpoint         `json:"endpoint,omitempty"`
+	HealthPath     string                     `json:"health_path,omitempty"`
+	BuildTarget    *BuildTarget               `json:"build_target,omitempty"`
+	Workload       provider.Workload          `json:"workload"`
+	Execution      provider.Execution         `json:"execution"`
 	// Service is the service's ID in the analysis's graph, which its
 	// variables are set against.
 	Service string `json:"service"`
@@ -198,6 +199,8 @@ type ServiceConfig struct {
 	// Component is the catalog component the service runs, when a
 	// composed catalog kind runs one as a service.
 	Component *ComponentConfig `json:"component,omitempty"`
+	// GPU is the reviewed GPU placement of a service whose size asks for GPUs.
+	GPU *provider.GPUPlacement `json:"gpu,omitempty"`
 	// Artifact is an image (or provider revision) this action deploys
 	// instead of building. It is excluded from change detection.
 	Artifact *ReusedArtifact `json:"artifact,omitempty"`
@@ -424,6 +427,8 @@ type ComponentConfig struct {
 	Component    recipes.ResolvedComponent   `json:"component"`
 	Dependencies map[string]DependencyChoice `json:"dependencies,omitempty"`
 	Protection   recipes.Protection          `json:"protection"`
+	// GPU is the reviewed GPU placement of a component that uses GPUs.
+	GPU *provider.GPUPlacement `json:"gpu,omitempty"`
 }
 
 // Change is one setting an update changes.

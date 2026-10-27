@@ -10,6 +10,7 @@ import (
 	"github.com/xraph/loomplane/extensions/identity"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/security"
+	"github.com/xraph/loomplane/pkg/provider"
 	"github.com/xraph/loomplane/pkg/provider/sdk"
 )
 
@@ -33,6 +34,9 @@ type CloudForm struct {
 	Credential string        `json:"credential,omitempty"`
 	Help       string        `json:"help,omitempty"`
 	Settings   []sdk.Setting `json:"settings,omitempty"`
+	// SignInSettings are what signing in asks for first, such as the
+	// Google Cloud project. A cloud that asks nothing has none.
+	SignInSettings []sdk.Setting `json:"sign_in_settings,omitempty"`
 	// Methods are the ways to connect it: oauth when the organization can
 	// sign in to the cloud, and token always.
 	Methods []string `json:"methods"`
@@ -45,7 +49,8 @@ type CloudList struct {
 
 func (e *Extension) clouds(ctx context.Context, p security.Principal) (CloudList, error) {
 	out := CloudList{Clouds: []CloudForm{
-		{Cloud: connections.GCP, Title: "Google Cloud", Builtin: true},
+		{Cloud: connections.GCP, Title: "Google Cloud", Builtin: true,
+			SignInSettings: []sdk.Setting{{Key: "project_id", Label: "Project ID", Required: true}}},
 		{Cloud: connections.Vercel, Title: "Vercel", Builtin: true},
 		{Cloud: connections.AWS, Title: "AWS", Builtin: true},
 		{Cloud: connections.Server, Title: "SSH server", Credential: "SSH private key", //nolint:gosec // Form label, not a credential.
@@ -53,7 +58,7 @@ func (e *Extension) clouds(ctx context.Context, p security.Principal) (CloudList
 			Settings: []sdk.Setting{{Key: "host", Label: "SSH host", Required: true}, {Key: "port", Label: "SSH port (default 22)"}, {Key: "user", Label: "SSH user", Required: true}, {Key: "host_key", Label: "Public host key", Required: true}, {Key: "docker_socket", Label: "Docker socket (default /var/run/docker.sock)"}, {Key: "advertise_host", Label: "Published address (optional)"}}},
 		{Cloud: connections.Kubernetes, Title: "Kubernetes", Credential: "Self-contained kubeconfig",
 			Help:     "Use an HTTPS API with an embedded CA and token or client certificate. The namespace must already exist. File references and executable authentication plugins are refused. For private images, select an existing namespace pull Secret that you manage. Persistent services need a retained storage class and an explicit amd64 or arm64 architecture.",
-			Settings: []sdk.Setting{{Key: "context", Label: "Context (optional)"}, {Key: "namespace", Label: "Namespace (defaults to kubeconfig)"}, {Key: "image_pull_secret", Label: "Existing image pull Secret (optional)"}, {Key: "storage_class", Label: "Retained storage class (optional)"}, {Key: "architecture", Label: "Persistent service architecture (amd64 or arm64)"}}},
+			Settings: []sdk.Setting{{Key: "context", Label: "Context (optional)"}, {Key: "namespace", Label: "Namespace (defaults to kubeconfig)"}, {Key: "image_pull_secret", Label: "Existing image pull Secret (optional)"}, {Key: "storage_class", Label: "Retained storage class (optional)"}, {Key: "architecture", Label: "Persistent service architecture (amd64 or arm64)"}, {Key: "ingress_class", Label: "Ingress class for routes (optional)"}, {Key: "ingress_address", Label: "Ingress load balancer address (IP or hostname)"}}},
 		{Cloud: connections.Registry, Title: "Image registry", Credential: "Credential JSON", //nolint:gosec // Form label, not a credential.
 			Help:     "Use username/password or token JSON, with optional ca PEM. Use {} for anonymous access. HTTPS is required outside loopback. A separate token service needs an approved auth endpoint. Docker publishing and server pulls use bearer tokens; Basic-only registries need a token service. Kubernetes pulls use your existing namespace Secret.",
 			Settings: []sdk.Setting{{Key: "endpoint", Label: "Registry endpoint", Required: true}, {Key: "repository", Label: "Repository prefix", Required: true}, {Key: "auth_endpoint", Label: "Token service endpoint (optional)"}}},
@@ -68,11 +73,21 @@ func (e *Extension) clouds(ctx context.Context, p security.Principal) (CloudList
 			Help: "Create a personal access token in DigitalOcean under API, Tokens, with read and write access to App Platform and Databases. App Platform builds from your repositories through DigitalOcean's own GitHub connection, so give it access to them under Settings, GitHub. The token's team is where everything is made.",
 		},
 		{
+			Cloud: connections.Cloudflare, Title: "Cloudflare", Credential: "API token",
+			Help:     "Create an API token in Cloudflare under My Profile, API Tokens, scoped to this account, with Zone Read and DNS Edit for the zones Loomplane manages. Add Registrar edit only if you want to register domains from Loomplane. Loomplane checks each permission without changing anything and says which are missing. If the token can read account settings, the connection shows the account's name; otherwise Loomplane shows the account ID.",
+			Settings: []sdk.Setting{{Key: "account_id", Label: "Account ID", Required: true}},
+		},
+		{
 			Cloud: connections.Azure, Title: "Microsoft Azure", Credential: "Client secret",
 			Help: "Register an application in Microsoft Entra ID, add a client secret under Certificates & secrets, and give it the Contributor role on the subscription, or on the resource group to deploy into. Loomplane makes the resource group if it isn't there, then a container registry and a Container Apps environment in it. The check lists any action the role leaves out.",
 			Settings: []sdk.Setting{
 				{Key: "tenant_id", Label: "Directory (tenant) ID", Required: true},
 				{Key: "client_id", Label: "Application (client) ID", Required: true},
+				{Key: "subscription_id", Label: "Subscription ID", Required: true},
+				{Key: "resource_group", Label: "Resource group (default loomplane)"},
+			},
+			SignInSettings: []sdk.Setting{
+				{Key: "tenant_id", Label: "Directory (tenant) ID", Required: true},
 				{Key: "subscription_id", Label: "Subscription ID", Required: true},
 				{Key: "resource_group", Label: "Resource group (default loomplane)"},
 			},
@@ -179,6 +194,13 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 		forge.WithName("connectionStorage.list"),
 		forge.WithSummary("Owned persistent volumes and current attachment state"),
 		forge.WithResponseSchema(http.StatusOK, "Persistent storage", StorageVolumeList{}),
+	); err != nil {
+		return err
+	}
+	if err := g.GET("/connections/:id/gpus", e.gpus,
+		forge.WithName("connectionGpus.get"),
+		forge.WithSummary("GPUs a server or cluster connection can see, read live"),
+		forge.WithResponseSchema(http.StatusOK, "GPU inventory", provider.GPUInventory{}),
 	); err != nil {
 		return err
 	}

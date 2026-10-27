@@ -1,0 +1,71 @@
+name: Publish (Helm)
+
+# The chart half of a release. release.yml calls it with a tag that already
+# has a GitHub release, after the images for that tag are published.
+#
+# It versions the chart as the release (v1.2.3 becomes chart 1.2.3, running
+# image v1.2.3), pushes it to GHCR as an OCI artifact, and attaches it and
+# the plain manifest for that version to the release:
+#
+#   helm install loomplane oci://ghcr.io/xraph/charts/loomplane --version 1.2.3
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: Release tag to publish the chart for, e.g. v1.2.3.
+        required: true
+        type: string
+
+env:
+  CHART_DIR: deployments/helm/loomplane
+  OCI_REGISTRY: oci://ghcr.io/${{ github.repository_owner }}/charts
+
+jobs:
+  helm:
+    name: Package and publish the chart
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag }}
+      - uses: azure/setup-helm@v4
+      - name: Version
+        id: version
+        env:
+          TAG: ${{ inputs.tag }}
+        run: echo "chart=${TAG#v}" >> "$GITHUB_OUTPUT"
+      - name: Package
+        id: package
+        env:
+          TAG: ${{ inputs.tag }}
+          VERSION: ${{ steps.version.outputs.chart }}
+        run: |
+          helm lint "$CHART_DIR" --strict -f "$CHART_DIR/ci/ha-values.yaml"
+          mkdir -p dist
+          helm package "$CHART_DIR" --version "$VERSION" --app-version "$TAG" --destination dist
+          echo "chart=dist/loomplane-${VERSION}.tgz" >> "$GITHUB_OUTPUT"
+      - name: Plain manifest for this release
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          bash scripts/render-k8s-manifest.sh --set image.tag="$TAG" > "dist/loomplane-${TAG}-kubernetes.yaml"
+          grep -q "ghcr.io/xraph/loomplane:${TAG}" "dist/loomplane-${TAG}-kubernetes.yaml"
+      - name: Push to GHCR
+        env:
+          GH_ACTOR: ${{ github.actor }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CHART: ${{ steps.package.outputs.chart }}
+        run: |
+          echo "$GH_TOKEN" | helm registry login ghcr.io -u "$GH_ACTOR" --password-stdin
+          helm push "$CHART" "$OCI_REGISTRY"
+      - name: Attach to the release
+        env:
+          TAG: ${{ inputs.tag }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CHART: ${{ steps.package.outputs.chart }}
+        run: gh release upload "$TAG" "$CHART" "dist/loomplane-${TAG}-kubernetes.yaml" --clobber

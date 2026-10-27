@@ -1,5 +1,11 @@
 import { ClientProvider } from "@forge-go/client-react"
-import { cleanup, render, screen, waitFor } from "@testing-library/react"
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, expect, it, vi } from "vitest"
 import { forgeClient } from "@/client/runtime"
@@ -591,8 +597,511 @@ it("refreshes both persisted activity lists when returning after server or place
   rerender(content(false))
   changed = true
   rerender(content(true))
-  expect(
-    await screen.findByText(/resize shared-host: waiting/)
-  ).toBeInTheDocument()
+  expect(await screen.findByText("resize shared-host")).toBeInTheDocument()
+  expect(screen.getByText("Waiting")).toBeInTheDocument()
   expect(await screen.findByText(/provider \/ new-account/)).toBeInTheDocument()
+})
+
+const l4Device = (index: number) => ({
+  index,
+  uuid: `GPU-${index}`,
+  kind: "nvidia-l4",
+  product: "NVIDIA L4",
+  memory_mib: 23034,
+})
+const gpuHealth = {
+  effective_cpu_millis: 8000,
+  effective_memory_bytes: 34359738368,
+  checked_at: "2026-10-25T12:00:00Z",
+}
+function gpuFixture({
+  servers = [],
+  pools = [],
+  operation = {},
+}: {
+  servers?: Record<string, unknown>[]
+  pools?: Record<string, unknown>[]
+  operation?: Record<string, unknown>
+} = {}) {
+  writes.length = 0
+  vi.stubGlobal(
+    "fetch",
+    async (input: RequestInfo | URL, init?: RequestInit) => {
+      const path = new URL(String(input), "http://localhost").pathname
+      const body = JSON.parse(String(init?.body ?? "{}"))
+      if (init?.method && init.method !== "GET") {
+        writes.push({ path, body })
+        if (path.endsWith("/servers/preview"))
+          return Response.json({
+            id: "op",
+            review: "immutable",
+            status: "preview",
+            input: body,
+            actions: [],
+            ...operation,
+          })
+        return Response.json({ id: "pool", revision: 1, members: [] })
+      }
+      if (path.endsWith("/connections"))
+        return Response.json({
+          connections: [
+            {
+              id: "do",
+              name: "DigitalOcean",
+              cloud: "digitalocean",
+              status: "ready",
+            },
+          ],
+        })
+      if (path.endsWith("/providers"))
+        return Response.json({
+          providers: [
+            {
+              name: "digitalocean",
+              cloud: "digitalocean",
+              available: true,
+              infrastructure: ["server:provision", "server:resize"],
+            },
+          ],
+        })
+      if (path.includes("/server-options/"))
+        return Response.json({
+          regions: [{ id: "tor1", name: "Toronto 1" }],
+          sizes: [
+            {
+              id: "s-2vcpu-4gb",
+              cpus: 2,
+              memory_mib: 4096,
+              disk_gb: 80,
+              hourly_usd: 0.03571,
+              hourly_price_known: true,
+              monthly_usd: 24,
+              regions: ["tor1"],
+            },
+            {
+              id: "s-unpriced",
+              cpus: 1,
+              memory_mib: 1024,
+              disk_gb: 25,
+              hourly_usd: 0,
+              monthly_usd: 0,
+              regions: ["tor1"],
+            },
+            {
+              id: "gpu-h100x1-80gb",
+              cpus: 20,
+              memory_mib: 245760,
+              disk_gb: 720,
+              hourly_usd: 3.39,
+              hourly_price_known: true,
+              monthly_usd: 2474.7,
+              regions: ["tor1"],
+              accelerator: {
+                count: 1,
+                kind: "nvidia-h100-80gb",
+                memory_gib: 80,
+                vendor: "nvidia",
+              },
+            },
+          ],
+          images: [
+            {
+              id: "ubuntu-24-04-x64",
+              name: "ubuntu-24-04-x64",
+              bootstrap: true,
+              regions: ["tor1"],
+            },
+            {
+              id: "gpu-h100x1-base",
+              name: "gpu-h100x1-base",
+              bootstrap: true,
+              accelerators: ["nvidia"],
+              regions: ["tor1"],
+            },
+          ],
+        })
+      if (path.endsWith("/servers")) return Response.json({ servers })
+      if (path.endsWith("/usage"))
+        return Response.json({
+          workloads: [],
+          retained_storage: [],
+          reserved_cpu_millis: 0,
+          reserved_memory_bytes: 0,
+          reserved_gpus: 0,
+        })
+      if (path.endsWith("/pools")) return Response.json({ pools })
+      return Response.json({})
+    }
+  )
+}
+async function openCreate(user: ReturnType<typeof userEvent.setup>) {
+  await user.click(
+    (await screen.findAllByRole("button", { name: "Create server" }))[0]!
+  )
+  await user.type(screen.getByRole("textbox", { name: "Server name" }), "gpu")
+  await user.click(screen.getByRole("combobox", { name: "Server account" }))
+  await user.click(await screen.findByRole("option", { name: "DigitalOcean" }))
+}
+const h100Option =
+  "gpu-h100x1-80gb · 1× NVIDIA H100 80GB · 80 GiB · 20 CPU · $3.39/hr"
+
+it("groups GPU sizes and prices them per hour", async () => {
+  gpuFixture()
+  const user = userEvent.setup()
+  show(<Servers cloud={cloud as never} />)
+  await openCreate(user)
+  await user.click(await screen.findByRole("combobox", { name: "Server size" }))
+  const gpu = await screen.findByRole("group", { name: "GPU" })
+  expect(
+    within(gpu).getByRole("option", { name: h100Option })
+  ).toBeInTheDocument()
+  // CPU sizes keep their line and stay out of the GPU group.
+  expect(
+    screen.getByRole("option", { name: /^s-2vcpu-4gb · 2 CPU · 4096 MiB/ })
+  ).toBeInTheDocument()
+  expect(
+    within(gpu).queryByRole("option", { name: /s-2vcpu-4gb/ })
+  ).not.toBeInTheDocument()
+})
+
+it("only offers GPU-ready images for a GPU size", async () => {
+  gpuFixture()
+  const user = userEvent.setup()
+  show(<Servers cloud={cloud as never} />)
+  await openCreate(user)
+  await user.click(await screen.findByRole("combobox", { name: "Server size" }))
+  await user.click(await screen.findByRole("option", { name: h100Option }))
+  const image = screen.getByRole("combobox", { name: "Server image" })
+  expect(image).toHaveTextContent("gpu-h100x1-base")
+  await user.click(image)
+  expect(
+    await screen.findByRole("option", { name: "gpu-h100x1-base" })
+  ).toBeInTheDocument()
+  expect(
+    screen.queryByRole("option", { name: "ubuntu-24-04-x64" })
+  ).not.toBeInTheDocument()
+})
+
+it("shows the monthly estimate before creating a GPU server", async () => {
+  gpuFixture({
+    operation: {
+      estimated_hourly_usd: 3.39,
+      hourly_price_known: true,
+      accelerator: {
+        count: 1,
+        kind: "nvidia-h100-80gb",
+        memory_gib: 80,
+        vendor: "nvidia",
+      },
+    },
+  })
+  const user = userEvent.setup()
+  show(<Servers cloud={cloud as never} />)
+  await openCreate(user)
+  await user.click(screen.getByRole("button", { name: "Review server" }))
+  expect(
+    await screen.findByText(
+      "Estimated cost: $3.39/hr, about $2,475/mo while it runs"
+    )
+  ).toBeInTheDocument()
+  expect(screen.queryByText(/Estimated hourly cost/)).not.toBeInTheDocument()
+})
+
+it("never shows an unknown GPU price as $0", async () => {
+  gpuFixture({
+    servers: [
+      {
+        id: "s1",
+        name: "gpu-unpriced",
+        status: "ready",
+        ownership: "managed",
+        size: "gpu-h100x1-80gb",
+        accelerator: {
+          count: 1,
+          kind: "nvidia-h100-80gb",
+          memory_gib: 80,
+          vendor: "nvidia",
+        },
+        hourly_usd: 0,
+        health: { ...gpuHealth, gpu_runtime: "ready" },
+      },
+    ],
+    operation: {
+      estimated_hourly_usd: 0,
+      hourly_price_known: false,
+      accelerator: {
+        count: 1,
+        kind: "nvidia-h100-80gb",
+        memory_gib: 80,
+        vendor: "nvidia",
+      },
+    },
+  })
+  const user = userEvent.setup()
+  show(<Servers cloud={cloud as never} />)
+  expect(
+    await screen.findByText(/1× NVIDIA H100 80GB · price unknown/)
+  ).toBeInTheDocument()
+  await openCreate(user)
+  await user.click(screen.getByRole("button", { name: "Review server" }))
+  expect(
+    await screen.findByText("Estimated cost: price unknown")
+  ).toBeInTheDocument()
+  expect(screen.queryByText(/\$0(\.00)?\b/)).not.toBeInTheDocument()
+})
+
+it("marks a GPU server that can't take GPU work", async () => {
+  const message =
+    "The NVIDIA Container Toolkit isn't installed, so Docker can't give containers GPUs."
+  gpuFixture({
+    servers: [
+      {
+        id: "s1",
+        name: "gpu-host",
+        status: "ready",
+        ownership: "managed",
+        size: "gpu-h100x1-80gb",
+        priced_size: "gpu-h100x1-80gb",
+        accelerator: {
+          count: 1,
+          kind: "nvidia-h100-80gb",
+          memory_gib: 80,
+          vendor: "nvidia",
+        },
+        hourly_usd: 3.39,
+        hourly_price_known: true,
+        health: {
+          ...gpuHealth,
+          gpu_runtime: "toolkit_missing",
+          gpu_message: message,
+        },
+      },
+    ],
+  })
+  const user = userEvent.setup()
+  show(<Servers cloud={cloud as never} />)
+  expect(
+    await screen.findByText(/1× NVIDIA H100 80GB · \$3\.39\/hr/)
+  ).toBeInTheDocument()
+  const badge = screen.getByText("Can't take GPU work")
+  await user.hover(badge)
+  expect(await screen.findByText(message)).toBeInTheDocument()
+  await user.unhover(badge)
+  await user.click(screen.getByRole("button", { name: "Inspect gpu-host" }))
+  const details = await screen.findByRole("dialog")
+  expect(within(details).getByText(message)).toBeInTheDocument()
+  expect(
+    within(details).getByText(/about \$2,475\/mo while it runs/)
+  ).toBeInTheDocument()
+})
+
+it("budgets GPUs per member in a GPU pool", async () => {
+  gpuFixture({
+    servers: [
+      {
+        id: "gpu",
+        name: "gpu-box",
+        status: "ready",
+        ownership: "adopted",
+        health: {
+          ...gpuHealth,
+          gpu_runtime: "ready",
+          gpus: [l4Device(0), l4Device(1)],
+        },
+      },
+      {
+        id: "cpu",
+        name: "cpu-box",
+        status: "ready",
+        ownership: "adopted",
+        health: { ...gpuHealth, gpu_runtime: "none" },
+      },
+    ],
+  })
+  const user = userEvent.setup()
+  show(<Servers cloud={cloud as never} />)
+  await user.click(await screen.findByRole("button", { name: "Add pool" }))
+  await user.type(screen.getByRole("textbox", { name: "Pool name" }), "gpus")
+  await user.click(screen.getByRole("checkbox", { name: "gpu-box" }))
+  await user.click(screen.getByRole("combobox", { name: "GPU kind" }))
+  await user.click(await screen.findByRole("option", { name: "NVIDIA L4" }))
+  const budget = screen.getByRole("spinbutton", {
+    name: "GPU budget for gpu-box",
+  })
+  expect(budget).toHaveAttribute("max", "2")
+  expect(budget).toHaveValue(2)
+  expect(screen.getByRole("checkbox", { name: "cpu-box" })).toHaveAttribute(
+    "aria-disabled",
+    "true"
+  )
+  expect(screen.getByText("No NVIDIA L4 GPUs")).toBeInTheDocument()
+  await user.clear(budget)
+  await user.type(budget, "1")
+  await user.click(screen.getByRole("button", { name: "Save pool budgets" }))
+  await waitFor(() => expect(writes).toHaveLength(1))
+  expect(writes[0]!.body).toMatchObject({
+    name: "gpus",
+    accelerator_kind: "nvidia-l4",
+    members: [{ server_id: "gpu", gpus: 1 }],
+  })
+})
+
+it("says why a GPU pool can't grow while a server's GPUs are unread", async () => {
+  gpuFixture({
+    servers: [
+      {
+        id: "gpu",
+        name: "gpu-box",
+        status: "ready",
+        ownership: "adopted",
+        health: { ...gpuHealth, gpu_runtime: "unknown" },
+      },
+    ],
+    pools: [
+      {
+        id: "p",
+        name: "inference",
+        revision: 2,
+        accelerator_kind: "nvidia-l4",
+        members: [
+          {
+            server_id: "gpu",
+            cpu_millis: 8000,
+            memory_bytes: 34359738368,
+            draining: false,
+            gpus: 2,
+          },
+        ],
+      },
+    ],
+  })
+  show(<Servers cloud={cloud as never} />)
+  expect(
+    await screen.findByText(
+      "The GPUs on gpu-box couldn't be read. Loomplane may not add GPU servers to this Cloud until a check succeeds."
+    )
+  ).toBeInTheDocument()
+  expect(screen.getByText(/2 NVIDIA L4 GPUs/)).toBeInTheDocument()
+})
+
+const gpuPool = {
+  id: "p",
+  name: "inference",
+  revision: 2,
+  accelerator_kind: "nvidia-l4",
+  members: [
+    {
+      server_id: "gpu",
+      cpu_millis: 8000,
+      memory_bytes: 34359738368,
+      draining: false,
+      gpus: 2,
+    },
+  ],
+}
+const readGpuBox = {
+  id: "gpu",
+  name: "gpu-box",
+  status: "ready",
+  ownership: "adopted",
+  health: {
+    ...gpuHealth,
+    gpu_runtime: "ready",
+    gpus: [l4Device(0), l4Device(1)],
+  },
+}
+
+it("shows no GPU hint when every ready server's GPUs were read", async () => {
+  gpuFixture({
+    servers: [
+      readGpuBox,
+      {
+        id: "cpu",
+        name: "cpu-box",
+        status: "ready",
+        ownership: "adopted",
+        health: { ...gpuHealth, gpu_runtime: "none" },
+      },
+    ],
+    pools: [gpuPool],
+  })
+  show(<Servers cloud={cloud as never} />)
+  expect(await screen.findByText(/2 NVIDIA L4 GPUs/)).toBeInTheDocument()
+  expect(screen.queryByText(/couldn't be read/)).not.toBeInTheDocument()
+})
+
+it("doesn't blame a provisioning or never-probed CPU server for GPU growth", async () => {
+  gpuFixture({
+    servers: [
+      readGpuBox,
+      {
+        id: "new",
+        name: "new-box",
+        status: "provisioning",
+        ownership: "managed",
+        size: "s-2vcpu-4gb",
+        health: { ...gpuHealth, gpu_runtime: "unknown" },
+      },
+      {
+        id: "old",
+        name: "old-cpu",
+        status: "ready",
+        ownership: "managed",
+        size: "s-2vcpu-4gb",
+        health: gpuHealth,
+      },
+    ],
+    pools: [gpuPool],
+  })
+  show(<Servers cloud={cloud as never} />)
+  expect(await screen.findByText(/2 NVIDIA L4 GPUs/)).toBeInTheDocument()
+  expect(await screen.findByText("old-cpu")).toBeInTheDocument()
+  expect(screen.queryByText(/couldn't be read/)).not.toBeInTheDocument()
+})
+
+it("prices CPU sizes the same way, unknown when the price is", async () => {
+  gpuFixture()
+  const user = userEvent.setup()
+  show(<Servers cloud={cloud as never} />)
+  await openCreate(user)
+  await user.click(await screen.findByRole("combobox", { name: "Server size" }))
+  expect(
+    await screen.findByRole("option", {
+      name: "s-2vcpu-4gb · 2 CPU · 4096 MiB · $0.04/hr",
+    })
+  ).toBeInTheDocument()
+  expect(
+    screen.getByRole("option", {
+      name: "s-unpriced · 1 CPU · 1024 MiB · price unknown",
+    })
+  ).toBeInTheDocument()
+  expect(screen.queryByRole("option", { name: /\$0\/h|undefined/ })).toBeNull()
+})
+
+it("keeps a GPU budget between one and the server's GPUs", async () => {
+  gpuFixture({ servers: [readGpuBox] })
+  const user = userEvent.setup()
+  show(<Servers cloud={cloud as never} />)
+  await user.click(await screen.findByRole("button", { name: "Add pool" }))
+  await user.type(screen.getByRole("textbox", { name: "Pool name" }), "gpus")
+  await user.click(screen.getByRole("checkbox", { name: "gpu-box" }))
+  await user.click(screen.getByRole("combobox", { name: "GPU kind" }))
+  await user.click(await screen.findByRole("option", { name: "NVIDIA L4" }))
+  const budget = screen.getByRole("spinbutton", {
+    name: "GPU budget for gpu-box",
+  })
+  const save = screen.getByRole("button", { name: "Save pool budgets" })
+  await user.clear(budget)
+  await user.type(budget, "3")
+  expect(budget).toHaveAttribute("aria-invalid", "true")
+  expect(screen.getByText("Between 1 and 2 GPUs")).toBeInTheDocument()
+  expect(save).toBeDisabled()
+  await user.clear(budget)
+  await user.type(budget, "0")
+  expect(budget).toHaveAttribute("aria-invalid", "true")
+  expect(save).toBeDisabled()
+  await user.clear(budget)
+  await user.type(budget, "2")
+  expect(budget).not.toHaveAttribute("aria-invalid", "true")
+  expect(save).toBeEnabled()
 })
