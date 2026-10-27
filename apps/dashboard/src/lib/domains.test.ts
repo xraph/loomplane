@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest"
 
+import { HTTPError } from "@/client/forge/loomplane/fetch"
+
 import type {
   CloudinfraRouteStatus,
   DomainOffer,
@@ -11,22 +13,31 @@ import {
   certificateLabel,
   dnsLabel,
   dnsTone,
+  domainGroups,
+  domainRollup,
   formatDay,
   formatPrice,
+  grantsLine,
+  groupNeedsAttention,
   hostnameInZone,
   isWildcardHostname,
   offerLabel,
   offerStatus,
   offerTone,
   ownedNames,
+  parentZoneOf,
   proofPublishState,
   registrationLine,
   registrationStatusLine,
   routeLabel,
   runsOnLabel,
+  sameHosting,
   stateTone,
+  subdomainName,
   usedByLabel,
+  validSubdomainLabel,
   zoneDNSLabel,
+  zoneInUse,
   zoneNeedsAttention,
 } from "./domains"
 
@@ -69,6 +80,7 @@ function zone(
 ): ZoneOverview {
   return {
     hostnames: [],
+    subdomains: [],
     state: verified ? "ready" : "awaiting_verification",
     wildcards: false,
     zone: {
@@ -448,5 +460,277 @@ describe("offers", () => {
       "stuck.app",
       "unsure.app",
     ])
+  })
+})
+
+describe("domains and subdomains", () => {
+  // A zone named name, with parent and subdomains given by name too.
+  function named(
+    name: string,
+    over: Partial<ZoneOverview> = {},
+    verified = true
+  ): ZoneOverview {
+    const z = zone(over, verified)
+    z.zone = { ...z.zone!, id: `zone-${name}`, name }
+    return z
+  }
+  const ids = (zs: ZoneOverview[]) => zs.map((z) => z.zone?.id)
+  // Before the 2026-10-02 expiry the zone() proofs carry.
+  const now = Date.parse("2026-10-01T12:00:00Z")
+
+  it("groups zones under the root their parents reach", () => {
+    const groups = domainGroups([
+      named("x.app.loomplane.com", { parentZoneId: "zone-app.loomplane.com" }),
+      named("b.dev"),
+      named("app.loomplane.com", { parentZoneId: "zone-loomplane.com" }),
+      named("loomplane.com"),
+      // A parent the list doesn't hold can't swallow its child.
+      named("lost.gone.dev", { parentZoneId: "zone-gone.dev" }),
+    ])
+    expect(groups.map((g) => g.domain.zone?.name)).toEqual([
+      "b.dev",
+      "loomplane.com",
+      "lost.gone.dev",
+    ])
+    expect(ids(groups[1].subdomains)).toEqual([
+      "zone-app.loomplane.com",
+      "zone-x.app.loomplane.com",
+    ])
+    expect(groups[0].subdomains).toEqual([])
+  })
+
+  it("finds the parent on whole labels", () => {
+    const zones = [named("loomplane.com"), named("app.loomplane.com")]
+    expect(parentZoneOf("api.loomplane.com", zones)?.zone?.name).toBe(
+      "loomplane.com"
+    )
+    // The longest suffix wins.
+    expect(parentZoneOf("x.app.loomplane.com", zones)?.zone?.name).toBe(
+      "app.loomplane.com"
+    )
+    expect(parentZoneOf("API.Loomplane.com", zones)?.zone?.name).toBe(
+      "loomplane.com"
+    )
+    expect(parentZoneOf("notloomplane.com", zones)).toBeUndefined()
+    expect(parentZoneOf("loomplane.com", zones)).toBeUndefined()
+    expect(parentZoneOf("", zones)).toBeUndefined()
+  })
+
+  it("rolls up Ready, Verifying and Needs attention with a count", () => {
+    const domain = named("loomplane.com", { hostnames: [use()] })
+    const sub = (over: Partial<ZoneOverview> = {}, verified = true) =>
+      named(
+        "app.loomplane.com",
+        {
+          parentZoneId: "zone-loomplane.com",
+          proofZoneId: "zone-loomplane.com",
+          ...over,
+        },
+        verified
+      )
+
+    expect(
+      domainRollup({ domain, subdomains: [sub()] }, registration(), now)
+    ).toEqual({ label: "Ready", tone: "ok", count: 0 })
+
+    // Waiting on the domain's record, or on a certificate.
+    expect(
+      domainRollup({ domain, subdomains: [sub({}, false)] }, undefined, now)
+    ).toEqual({ label: "Verifying", tone: "warn", count: 0 })
+    expect(
+      domainRollup(
+        {
+          domain,
+          subdomains: [sub({ hostnames: [use({ certificate: "renewing" })] })],
+        },
+        undefined,
+        now
+      ).label
+    ).toBe("Verifying")
+
+    // A failed hostname, an unpublished record and an unfinished
+    // registration each count.
+    const unpublished = named("loomplane.com", {}, false)
+    unpublished.zone = {
+      ...unpublished.zone!,
+      proofPublishError: "The connection can't write DNS records.",
+    }
+    expect(
+      domainRollup(
+        {
+          domain: unpublished,
+          subdomains: [
+            sub({
+              hostnames: [
+                use({ dns: "failed" }),
+                use(),
+                use({ route: "failed" }),
+              ],
+            }),
+          ],
+        },
+        registration({ status: "action_required" }),
+        now
+      )
+    ).toEqual({ label: "Needs attention", tone: "failed", count: 4 })
+
+    // A proof that expired, and a zone with no proof to check at all.
+    const expired = named("loomplane.com", {}, false)
+    expect(
+      domainRollup({ domain: expired, subdomains: [] }, undefined, now).label
+    ).toBe("Verifying")
+    expect(
+      domainRollup(
+        { domain: expired, subdomains: [] },
+        undefined,
+        Date.parse("2026-10-03T00:00:00Z")
+      )
+    ).toEqual({ label: "Needs attention", tone: "failed", count: 1 })
+    const unproven = sub({ proofZoneId: undefined }, false)
+    unproven.zone = { ...unproven.zone!, proofName: undefined }
+    expect(
+      domainRollup({ domain, subdomains: [unproven] }, undefined, now)
+    ).toEqual({ label: "Needs attention", tone: "failed", count: 1 })
+
+    // A record you still add, or a route being removed, isn't settled.
+    for (const waiting of [
+      use({ dns: "awaiting_verification" }),
+      use({ dns: "cleanup_pending", route: "cleanup_pending" }),
+    ])
+      expect(
+        domainRollup(
+          { domain, subdomains: [sub({ hostnames: [waiting] })] },
+          undefined,
+          now
+        )
+      ).toEqual({ label: "Verifying", tone: "warn", count: 0 })
+
+    // The pill never says Ready for a group the filter counts.
+    const statuses = [
+      "ready",
+      "provisioning",
+      "renewing",
+      "failed",
+      "awaiting_verification",
+      "cleanup_pending",
+    ]
+    const zones = [
+      domain,
+      sub(),
+      sub({}, false),
+      unpublished,
+      expired,
+      unproven,
+      ...statuses.flatMap((dns) =>
+        statuses.map((certificate) =>
+          sub({ hostnames: [use({ dns, certificate })] })
+        )
+      ),
+    ]
+    const registrations = [
+      undefined,
+      registration(),
+      registration({ status: "zone_pending" }),
+    ]
+    for (const d of zones)
+      for (const s of zones)
+        for (const r of registrations) {
+          const g = { domain: d, subdomains: [s] }
+          if (domainRollup(g, r, now).label === "Ready")
+            expect(groupNeedsAttention(g, r)).toBe(false)
+        }
+  })
+
+  it("needs attention when the domain or any subdomain does", () => {
+    const domain = named("loomplane.com")
+    const ready = named("app.loomplane.com")
+    const failing = named("api.loomplane.com", {
+      hostnames: [use({ dns: "failed" })],
+    })
+    expect(groupNeedsAttention({ domain, subdomains: [ready] })).toBe(false)
+    expect(groupNeedsAttention({ domain, subdomains: [ready, failing] })).toBe(
+      true
+    )
+    expect(
+      groupNeedsAttention(
+        { domain, subdomains: [] },
+        registration({ status: "zone_pending" })
+      )
+    ).toBe(true)
+  })
+
+  it("compares hosting by mode, provider and connection", () => {
+    const a = named("loomplane.com").zone!
+    expect(sameHosting(a, { ...a, name: "app.loomplane.com" })).toBe(true)
+    expect(sameHosting(a, { ...a, provider: "vercel" })).toBe(false)
+    expect(sameHosting(a, { ...a, connectionId: "other" })).toBe(false)
+    expect(sameHosting(a, { ...a, mode: "external" })).toBe(false)
+  })
+
+  it("names the projects a zone is granted to", () => {
+    const names = new Map([["shop", "acme-shop"]])
+    expect(grantsLine(["shop", "blog"], names)).toBe(
+      "Granted to acme-shop, blog"
+    )
+    expect(grantsLine([], names)).toBe("Not granted to a project yet")
+  })
+})
+
+describe("adding and removing", () => {
+  it("builds a subdomain name from a label", () => {
+    expect(subdomainName("api.eu", "loomplane.com")).toBe(
+      "api.eu.loomplane.com"
+    )
+    expect(subdomainName("  App ", "Loomplane.com")).toBe("app.loomplane.com")
+    for (const ok of ["app", "api.eu", "a1-b", "x"])
+      expect(validSubdomainLabel(ok)).toBe(true)
+    for (const bad of [
+      "",
+      " ",
+      "*",
+      "*.app",
+      "-app",
+      "app-",
+      ".app",
+      "app.",
+      "a..b",
+      "app_1",
+      "a.-b",
+      "x".repeat(64),
+    ])
+      expect(validSubdomainLabel(bad)).toBe(false)
+  })
+
+  it("reads the blocking hostnames from a refusal", () => {
+    const refusal = new HTTPError(409, "Remove these hostnames first.", "", {
+      hostnames: [
+        {
+          route_id: "r1",
+          hostname: "api.loomplane.com",
+          zone_id: "zone-loomplane.com",
+          zone_name: "loomplane.com",
+          project_id: "shop",
+          project_name: "acme-shop",
+        },
+      ],
+    })
+    expect(zoneInUse(refusal)).toEqual([
+      {
+        routeId: "r1",
+        hostname: "api.loomplane.com",
+        zoneId: "zone-loomplane.com",
+        zoneName: "loomplane.com",
+        projectId: "shop",
+        projectName: "acme-shop",
+      },
+    ])
+    // A stale revision is a 409 with only a message.
+    expect(
+      zoneInUse(new HTTPError(409, "stale", "", { message: "stale" }))
+    ).toBeNull()
+    expect(
+      zoneInUse(new HTTPError(404, "gone", "", { hostnames: [] }))
+    ).toBeNull()
+    expect(zoneInUse(new Error("boom"))).toBeNull()
   })
 })

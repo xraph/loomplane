@@ -3,6 +3,7 @@ import { cleanup, render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, expect, it, vi } from "vitest"
 
+import type { ZoneOverview } from "@/client/forge/loomplane/types"
 import { forgeClient } from "@/client/runtime"
 import { BringDomainPanel } from "./bring-domain-panel"
 
@@ -191,4 +192,27 @@ it("asks for the domain before adding anything", async () => {
   await userEvent.click(screen.getByRole("button", { name: "Verify with TXT" }))
   expect(await screen.findByText("Enter the domain you own.")).toBeTruthy()
   expect(posts).toEqual([])
+})
+
+it("names the zone whose verification a new subdomain uses", async () => {
+  stub([])
+  // app.loomplane.com has no proof of its own: loomplane.com proves it.
+  const zones = [
+    { zone: { id: "zone-loomplane.com", name: "loomplane.com" } },
+    {
+      zone: { id: "zone-app.loomplane.com", name: "app.loomplane.com" },
+      proofZoneId: "zone-loomplane.com",
+    },
+  ] as ZoneOverview[]
+  render(
+    <ClientProvider client={forgeClient}>
+      <BringDomainPanel zones={zones} onAdded={vi.fn()} />
+    </ClientProvider>
+  )
+  await typeName("x.app.loomplane.com")
+  expect(
+    screen.getByText(
+      "x.app.loomplane.com is a subdomain of app.loomplane.com, so it uses loomplane.com's verification."
+    )
+  ).toBeTruthy()
 })

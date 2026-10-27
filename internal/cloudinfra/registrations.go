@@ -837,7 +837,7 @@ func (s *Service) handOffZone(ctx context.Context, st RegistrationStore, reg *Re
 			return checkErr
 		}
 	}
-	zone, err := s.createManagedZone(ctx, reg.Principal, reg.Name, reg.ConnectionID, projectIDs)
+	zone, err := s.createManagedZone(ctx, reg.Principal, reg.Name, reg.ConnectionID, projectIDs, true)
 	if err != nil {
 		return err
 	}

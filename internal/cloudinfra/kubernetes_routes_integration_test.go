@@ -4,6 +4,7 @@ package cloudinfra
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
@@ -302,5 +303,92 @@ func TestDomainScopeChecksRouteBackend(t *testing.T) {
 		if err := exec(`UPDATE loomplane_domain_routes SET status='removed' WHERE id=$1`, id); err != nil || uses(id) != 0 {
 			t.Fatal("removing", id, err)
 		}
+	}
+}
+
+// TestAcceptRouteLeavesASubdomainsNamesToIt pins the deepest-zone rule at
+// apply, under the organization lock: a name a subdomain of the zone holds
+// is refused, a sibling and another organization's zone aren't, and a
+// route that predates the subdomain is still removed.
+func TestAcceptRouteLeavesASubdomainsNamesToIt(t *testing.T) {
+	pg := routeBindingDatabase(t)
+	ctx := t.Context()
+	exec := func(query string, args ...any) {
+		t.Helper()
+		if _, err := pg.Exec(ctx, query, args...); err != nil {
+			t.Fatal(err)
+		}
+	}
+	exec(`INSERT INTO loomplane_projects(id,org_id,name,slug,status,created_by,created_at,updated_at) VALUES('shop','org','Shop','shop','ready','usr',now(),now())`)
+	exec(`INSERT INTO loomplane_environments(id,org_id,project_id,name,kind,created_at,updated_at) VALUES('prod','org','shop','production','production',now(),now())`)
+	now := time.Now().UTC()
+	details := map[string]string{"namespace": "shop", "namespace_uid": "ns-uid", "ingress_class": "nginx", "ingress_address": "203.0.113.10", "endpoint": "https://cluster.example.test"}
+	if err := connections.NewPgStore(pg).CreateConnection(ctx, &connections.Connection{ID: "conn_k8s", OrgID: "org", Cloud: "kubernetes", Name: "Cluster", Status: connections.StatusReady, Details: details, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	exec(`CREATE TABLE cp_instances(id TEXT PRIMARY KEY,tenant_id TEXT,current_release TEXT,service_refs JSONB,services JSONB,labels JSONB,state TEXT)`)
+	exec(`CREATE TABLE cp_deployments(id TEXT PRIMARY KEY,tenant_id TEXT,instance_id TEXT,release_id TEXT,state TEXT,created_at TIMESTAMPTZ DEFAULT now())`)
+	instance := id.New(id.PrefixInstance)
+	exec(`INSERT INTO cp_instances VALUES($1,'org',NULL,'{}',jsonb_build_array(jsonb_build_object('name','gateway','ports','[{"container":8080}]'::jsonb)),'{}','running')`, instance.String())
+	exec(`INSERT INTO loomplane_bindings(id,org_id,project_id,environment_id,subject,name,provider,engine,external_id,connection_id,config,created_at,updated_at) VALUES('b_web','org','shop','prod','resource','web--gateway','kubernetes','http',$1,'conn_k8s',$2,now(),now())`,
+		instance.String(), `{"component":{"kind":"octopus","resource":"web","component":{"name":"gateway","role":"process"}},"routable_ports":[8080]}`)
+	zone := func(org, zoneID, name, projects string) {
+		t.Helper()
+		exec(`INSERT INTO loomplane_dns_zones(id,org_id,name,connection_id,revision,body) VALUES($1,$2,$3,'',1,$4)`, zoneID, org, name,
+			`{"id":"`+zoneID+`","org_id":"`+org+`","name":"`+name+`","mode":"external","project_ids":[`+projects+`],"proof_name":"_loomplane.`+name+`","proof_value":"proof","proof_expires_at":"2026-11-06T12:00:00Z","verified_at":"2026-11-05T12:00:00Z","revision":1}`)
+	}
+	zone("org", "zone", "example.com", `"shop"`)
+	st := NewPgStore(pg)
+	in := RouteInput{ZoneID: "zone", EnvironmentID: "prod", Service: "web--gateway", Port: 8080}
+	binding, err := st.ResolveRouteBinding(ctx, "org", "shop", in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	accept := func(routeID, hostname string) (*RouteOperation, error) {
+		t.Helper()
+		route := in
+		route.Hostname = hostname
+		op := &RouteOperation{ID: "op_" + routeID, Kind: "apply", Status: "preview", Revision: 1, Principal: security.Principal{OrgID: "org", UserID: "usr"},
+			Route: Route{ID: routeID, OrgID: "org", ProjectID: "shop", Input: route, Binding: binding, Status: "pending", OperationID: "op_" + routeID, Revision: 1}}
+		if previewErr := st.PreviewRoute(ctx, op); previewErr != nil {
+			t.Fatal(previewErr)
+		}
+		op.Status = "pending"
+		return op, st.AcceptRoute(ctx, op)
+	}
+	// This route predates the subdomain.
+	old, err := accept("route_old", "old.app.example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	zone("org", "zone_app", "app.example.com", `"docs"`)
+	zone("rival", "zone_www", "www.example.com", `"rival"`)
+	for _, host := range []string{"app.example.com", "x.app.example.com", "*.app.example.com"} {
+		if _, acceptErr := accept("route_"+strings.ReplaceAll(host, "*", "w"), host); !errors.Is(acceptErr, ErrInvalid) || !strings.Contains(acceptErr.Error(), host+" belongs to app.example.com. Pick that domain") {
+			t.Fatalf("%s accepted on example.com: %v", host, acceptErr)
+		}
+	}
+	if _, err = accept("route_www", "www.example.com"); err != nil {
+		t.Fatal("a sibling, and another organization's zone of its name", err)
+	}
+	var stored []string
+	rows, err := pg.Query(ctx, `SELECT hostname FROM loomplane_domain_routes ORDER BY hostname`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var h string
+		if scanErr := rows.Scan(&h); scanErr != nil {
+			t.Fatal(scanErr)
+		}
+		stored = append(stored, h)
+	}
+	rows.Close()
+	if strings.Join(stored, ",") != "old.app.example.com,www.example.com" {
+		t.Fatal("stored routes", stored)
+	}
+	remove := &RouteOperation{ID: "op_remove", Kind: "remove", Status: "pending", Attempt: 1, Revision: 1, Principal: old.Principal, Route: old.Route}
+	if err = st.AcceptRoute(ctx, remove); err != nil {
+		t.Fatal("removing a route that predates the subdomain", err)
 	}
 }

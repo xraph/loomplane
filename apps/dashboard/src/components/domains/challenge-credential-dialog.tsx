@@ -6,6 +6,7 @@ import { useState } from "react"
 import { messageOf, statusOf } from "@/client/errors"
 import {
   useConnectionsList,
+  useDnsZonesGet,
   useDnsZonesSetChallengeCredential,
   useDomainsOverview,
   useDomainsProject,
@@ -66,11 +67,13 @@ export function ChallengeCredentialDialog({
         body: { connectionId: connection.id, revision: zone.revision },
       })
       invalidate(useDomainsOverview)
+      invalidate(useDnsZonesGet)
       invalidate(useDomainsProject)
       onOpenChange(false)
     } catch (err) {
       if (statusOf(err) === 409) {
         invalidate(useDomainsOverview)
+        invalidate(useDnsZonesGet)
         setError(
           "This domain changed since you opened it. Close this and try again."
         )

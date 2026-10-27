@@ -240,7 +240,8 @@ func (p *planner) linkTargets(e EnvLink) []*Action {
 
 // dbGatewayDomain is the DNS zone the database gateway names its hosts
 // in: the only verified zone granted to the project, or else the only one
-// of them this environment's domain routes use.
+// of them this environment's domain routes use. When every candidate left
+// sits under one of them, that one is the domain and the gateway goes there.
 func (p *planner) dbGatewayDomain(path string) (string, bool) {
 	var zones []cloudinfra.ProjectZone
 	for _, z := range p.in.Zones {
@@ -258,6 +259,9 @@ func (p *planner) dbGatewayDomain(path string) (string, bool) {
 		if len(routed) > 0 {
 			zones = routed
 		}
+	}
+	if domain, ok := enclosingZone(zones); ok {
+		zones = []cloudinfra.ProjectZone{domain}
 	}
 	switch len(zones) {
 	case 0:
@@ -279,6 +283,26 @@ func (p *planner) dbGatewayDomain(path string) (string, bool) {
 		Message: fmt.Sprintf("Several DNS zones could name the database gateway's hosts: %s. Grant this project only the one to use, or route this environment's services through only that one.", strings.Join(names, ", ")),
 	})
 	return "", false
+}
+
+// enclosingZone is the zone every other zone in zones sits under, matched
+// on whole labels the way the zone tree is, when there's more than one.
+// A subdomain reads verified through its domain, so a project granted
+// both sees both.
+func enclosingZone(zones []cloudinfra.ProjectZone) (cloudinfra.ProjectZone, bool) {
+	if len(zones) < 2 {
+		return cloudinfra.ProjectZone{}, false
+	}
+	name := func(z cloudinfra.ProjectZone) string { return strings.ToLower(strings.TrimSuffix(z.Name, ".")) }
+	for _, candidate := range zones {
+		under := func(z cloudinfra.ProjectZone) bool {
+			return z.ID == candidate.ID || strings.HasSuffix(name(z), "."+name(candidate))
+		}
+		if !slices.ContainsFunc(zones, func(z cloudinfra.ProjectZone) bool { return !under(z) }) {
+			return candidate, true
+		}
+	}
+	return cloudinfra.ProjectZone{}, false
 }
 
 // dependOnDatabaseGateway marks each link a service has to a resource

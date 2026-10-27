@@ -203,16 +203,22 @@ func (s *Service) PreviewRoute(ctx context.Context, p security.Principal, projec
 	if checkErr := ValidateBlockedPathPrefixes(in.BlockedPathPrefixes); checkErr != nil {
 		return nil, checkErr
 	}
-	zone, err := st.Zone(ctx, p.OrgID, in.ZoneID)
+	// A subdomain is verified through its domain, which the project need
+	// not be granted.
+	zone, zones, err := s.linkedZones(ctx, st, p.OrgID, in.ZoneID)
 	if err != nil {
 		return nil, err
 	}
-	if !slices.Contains(zone.ProjectIDs, project) || zone.VerifiedAt.IsZero() || !zone.hasControlProof() {
+	if !slices.Contains(zone.ProjectIDs, project) || !zone.verified() {
 		return nil, ErrNotFound
 	}
 	hostname, err := ValidateRouteHostname(zone, in.Hostname)
 	if err != nil {
 		return nil, err
+	}
+	// A name under a subdomain is routed there, under its own grants.
+	if checkErr := checkDeepestZone(zone, hostname.Hostname, zones); checkErr != nil {
+		return nil, checkErr
 	}
 	in.Hostname = hostname.Hostname
 	if checkErr := s.verifyZoneControl(ctx, zone); checkErr != nil {
@@ -337,9 +343,13 @@ func (s *Service) ApplyRoute(ctx context.Context, p security.Principal, project,
 	if !s.now().Before(op.ExpiresAt) {
 		return nil, ErrConflict
 	}
-	zone, err := st.Zone(ctx, p.OrgID, op.Route.Input.ZoneID)
+	zone, zones, err := s.linkedZones(ctx, st, p.OrgID, op.Route.Input.ZoneID)
 	if err != nil {
 		return nil, err
+	}
+	// A subdomain added since the preview takes its names.
+	if checkErr := checkDeepestZone(zone, op.Route.Input.Hostname, zones); checkErr != nil {
+		return nil, checkErr
 	}
 	if checkErr := s.verifyZoneControl(ctx, zone); checkErr != nil {
 		return nil, checkErr

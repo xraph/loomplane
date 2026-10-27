@@ -8,13 +8,18 @@ import {
   useConnectionsList,
   useDnsZonesCreate,
 } from "@/client/forge/loomplane/hooks"
-import type { Connection, Zone } from "@/client/forge/loomplane/types"
+import type {
+  Connection,
+  Zone,
+  ZoneOverview,
+} from "@/client/forge/loomplane/types"
 import { useMutation, useQuery } from "@/client/hooks"
 import { ConnectDialog } from "@/components/cloud-connections"
 import { ProductMark } from "@/components/product-icon"
 import type { ProductKey } from "@/components/product-logos"
 import { Button } from "@/components/ui/button"
 import { cloudLabel } from "@/lib/clouds"
+import { parentZoneOf } from "@/lib/domains"
 
 const managed: { cloud: string; product: ProductKey }[] = [
   { cloud: "cloudflare", product: "cloudflare" },
@@ -23,11 +28,15 @@ const managed: { cloud: string; product: ProductKey }[] = [
 ]
 
 export function BringDomainPanel({
+  zones = [],
   onAdded,
 }: {
+  /** The organization's zones, to tell a subdomain from a domain. */
+  zones?: ZoneOverview[]
   onAdded: (zone: Zone) => void
 }) {
   const fieldID = useId()
+  const noteID = useId()
   const connections = useQuery(useConnectionsList)
   const create = useMutation(useDnsZonesCreate)
   const [name, setName] = useState("")
@@ -36,6 +45,12 @@ export function BringDomainPanel({
   const [connecting, setConnecting] = useState("")
   const [error, setError] = useState("")
   const domain = name.trim().toLowerCase()
+  const ancestor = parentZoneOf(domain, zones)
+  const parent = ancestor?.zone?.name
+  // The zone whose TXT record verifies the ancestor verifies this one too.
+  const proving =
+    zones.find((z) => z.zone && z.zone.id === ancestor?.proofZoneId)?.zone
+      ?.name ?? parent
   const ready = (cloud: string) =>
     (connections.data?.connections ?? []).filter(
       (c) => c.cloud === cloud && c.status === "ready"
@@ -53,7 +68,7 @@ export function BringDomainPanel({
           name: domain,
           mode: connection ? "managed" : "external",
           connectionId: connection?.id,
-          // Granted to projects afterwards, from the domain's card.
+          // Granted to projects afterwards, from the domain's page.
           projectIds: [],
         },
       })
@@ -98,6 +113,7 @@ export function BringDomainPanel({
         Domain you own
         <input
           id={fieldID}
+          aria-describedby={parent ? noteID : undefined}
           type="text"
           value={name}
           onChange={(e) => setName(e.target.value)}
@@ -107,6 +123,16 @@ export function BringDomainPanel({
           className="h-9 rounded-[9px] border border-input bg-background px-2.5 font-mono text-[13px] font-normal text-foreground outline-none placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/40"
         />
       </label>
+      {parent && (
+        // Not in the mock: the redesign's sentence for a subdomain.
+        <p
+          id={noteID}
+          className="-mt-1 text-[12.5px] leading-normal text-muted-foreground"
+        >
+          {domain} is a subdomain of {parent}, so it uses {proving}&apos;s
+          verification.
+        </p>
+      )}
       <div className="grid grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-2">
         <div className={option}>
           <span className="text-[13px] font-semibold">
