@@ -1,3 +1,25 @@
-# Not a family file. Load skips it, so its shape never reaches the strict
-# family decoder.
-results: []
+# Not a family file. Load reads it with its own strict decoder after the
+# families, and checks each result against them.
+results:
+  - entry: acme/Small-1B-Instruct
+    quantization: bf16
+    gpu_kind: nvidia-l4
+    gpus: 1
+    max_model_len: 32768
+    engine: vllm
+    engine_version: 0.31.0
+    outcome: passed
+    detail: first token 210 ms, 61 tokens/s
+    ran_at: 2026-11-03T06:12:00Z
+    run: https://github.com/xraph/loomplane/actions/runs/1
+  - entry: acme/Embed-Small
+    quantization: native
+    gpu_kind: cpu
+    gpus: 0
+    max_model_len: 512
+    engine: tei
+    engine_version: 1.8.2
+    outcome: failed
+    detail: the container never answered /health
+    ran_at: 2026-11-03T06:40:00Z
+    run: https://github.com/xraph/loomplane/actions/runs/1

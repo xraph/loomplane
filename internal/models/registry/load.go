@@ -15,7 +15,7 @@ import (
 )
 
 // qualificationFile holds qualification results, not a family, so Load
-// leaves it to its own reader.
+// reads it with its own decoder once every family is in.
 const qualificationFile = "qualification.yaml"
 
 // The "all:" prefix keeps data/.keep, so the embed compiles while data/ has
@@ -42,17 +42,20 @@ func mustLoadDefault() *Registry {
 type Registry struct {
 	entries []Entry
 	byID    map[string]int // index into entries
+	results []Result       // from qualification.yaml, in file order
 }
 
 // Default returns the registry built into the binary. A bad embedded file
 // panics when the package initializes, so a broken registry never ships.
 func Default() *Registry { return defaultRegistry }
 
-// Load reads every *.yaml file at the top of fsys except qualification.yaml.
-// Each file holds one family, named after the file. A *.yml file is an
+// Load reads every *.yaml file at the top of fsys. Each file except
+// qualification.yaml holds one family, named after the file. A *.yml file is an
 // error, so a family can't drop out of the registry over its extension. Decoding is strict, so
 // an unknown field is an error, and every entry must pass Validate. IDs are
-// unique across files.
+// unique across files. qualification.yaml, when there is one, is decoded
+// just as strictly, and every result must name an entry, quantization and
+// GPU kind that exist.
 func Load(fsys fs.FS) (*Registry, error) {
 	dirEntries, err := fs.ReadDir(fsys, ".")
 	if err != nil {
@@ -101,6 +104,11 @@ func Load(fsys fs.FS) (*Registry, error) {
 	if len(problems) > 0 {
 		return nil, errors.Join(problems...)
 	}
+	results, qualErr := readQualification(fsys, r)
+	if qualErr != nil {
+		return nil, qualErr
+	}
+	r.results = results
 	return r, nil
 }
 

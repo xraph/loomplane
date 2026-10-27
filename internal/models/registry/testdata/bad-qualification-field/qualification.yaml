@@ -1,0 +1,13 @@
+results:
+  - entry: acme/Small-1B-Instruct
+    quantization: bf16
+    gpu_kind: nvidia-l4
+    gpus: 1
+    max_model_len: 4096
+    engine: vllm
+    engine_version: 0.31.0
+    outcome: passed
+    tested: true
+    detail: ""
+    ran_at: 2026-11-03T06:12:00Z
+    run: ""
