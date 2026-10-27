@@ -177,8 +177,8 @@ function KeylessStatus({ state }: { state?: KeylessState }) {
           : `Keyless: off · ${state.reason}`}
       </div>
       <p className="text-sm text-muted-foreground">
-        Keyless lets a cloud trust Loomplane directly, so there is no token to
-        paste or to lapse.
+        A cloud can trust Loomplane directly, so you paste no token and none
+        lapses.
       </p>
       {state.enabled && state.reason && (
         <p className="text-sm text-weld">{state.reason}</p>

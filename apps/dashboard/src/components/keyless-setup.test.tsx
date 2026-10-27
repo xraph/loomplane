@@ -59,6 +59,7 @@ function panel(props: Partial<Parameters<typeof KeylessSetup>[0]> = {}) {
     <ClientProvider client={forgeClient}>
       <KeylessSetup
         cloud="aws"
+        title="AWS"
         name="Prod"
         fields={[
           { key: "role_arn", label: "Role ARN", required: true },
@@ -83,6 +84,8 @@ it("shows what to paste into the cloud", async () => {
   ).toBeTruthy()
   expect(screen.getByText("Make the role")).toBeTruthy()
   expect(screen.getByText(/Reserved until/)).toBeTruthy()
+  expect(screen.getByText(/you'll get a new subject/)).toBeTruthy()
+  expect(screen.getByText(/Set up AWS to trust/)).toBeTruthy()
 })
 
 it("copies each value", async () => {
@@ -104,6 +107,7 @@ it("fills Google's audience from the provider", async () => {
   stub([], { ...setup, audience: undefined })
   panel({
     cloud: "gcp",
+    title: "Google Cloud",
     fields: [
       { key: "project_id", label: "Project ID", required: true },
       { key: "workload_provider", label: "Workload provider", required: true },
@@ -112,6 +116,10 @@ it("fills Google's audience from the provider", async () => {
   const user = userEvent.setup()
   await screen.findByText("https://loomplane.example")
   expect(screen.getByText("//iam.googleapis.com/")).toBeTruthy()
+  expect(
+    (screen.getByRole("button", { name: "Copy audience" }) as HTMLButtonElement)
+      .disabled
+  ).toBe(true)
   const provider =
     "projects/1/locations/global/workloadIdentityPools/p/providers/q"
   await user.type(screen.getByLabelText("Workload provider"), ` ${provider}`)
@@ -142,4 +150,27 @@ it("connects with the reserved id", async () => {
     name: "Prod",
     settings: { role_arn: "arn:aws:iam::1:role/x" },
   })
+})
+
+it("names the cloud in the intro", async () => {
+  stub()
+  panel({ cloud: "azure", title: "Azure" })
+  expect(await screen.findByText(/Set up Azure to trust/)).toBeTruthy()
+})
+
+it("stops showing the tick once the value changes", async () => {
+  stub([], { ...setup, audience: undefined })
+  panel({
+    cloud: "gcp",
+    title: "Google Cloud",
+    fields: [{ key: "workload_provider", label: "Workload provider" }],
+  })
+  const user = userEvent.setup()
+  await screen.findByText("https://loomplane.example")
+  await user.type(screen.getByLabelText("Workload provider"), "a")
+  const copy = screen.getByRole("button", { name: "Copy audience" })
+  await user.click(copy)
+  expect(copy.querySelector(".lucide-check")).toBeTruthy()
+  await user.type(screen.getByLabelText("Workload provider"), "b")
+  expect(copy.querySelector(".lucide-check")).toBeNull()
 })

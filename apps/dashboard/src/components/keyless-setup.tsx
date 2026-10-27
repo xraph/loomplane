@@ -28,12 +28,26 @@ import { Spinner } from "@/components/ui/spinner"
 import { formatDate } from "@/lib/format"
 
 /** CopyButton copies value, with label naming what it copies. */
-export function CopyButton({ value, label }: { value: string; label: string }) {
-  const [copied, setCopied] = useState(false)
+export function CopyButton({
+  value,
+  label,
+  disabled,
+}: {
+  value: string
+  label: string
+  disabled?: boolean
+}) {
+  const [done, setDone] = useState<string | null>(null)
+  const copied = done === value
+  useEffect(() => {
+    if (!copied) return
+    const t = window.setTimeout(() => setDone(null), 2000)
+    return () => window.clearTimeout(t)
+  }, [copied])
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(value)
-      setCopied(true)
+      setDone(value)
     } catch {
       toast.error("It wasn't copied.")
     }
@@ -45,6 +59,7 @@ export function CopyButton({ value, label }: { value: string; label: string }) {
       size="icon"
       onClick={() => void copy()}
       aria-label={label}
+      disabled={disabled}
     >
       {copied ? <CheckIcon /> : <CopyIcon />}
     </Button>
@@ -55,10 +70,12 @@ function Copyable({
   name,
   value,
   noun = name,
+  disabled,
 }: {
   name: string
   value: string
   noun?: string
+  disabled?: boolean
 }) {
   return (
     <div className="grid gap-1">
@@ -67,7 +84,11 @@ function Copyable({
         <code className="min-w-0 flex-1 rounded-md bg-muted px-2 py-1.5 font-mono text-xs break-all">
           {value}
         </code>
-        <CopyButton value={value} label={`Copy ${noun.toLowerCase()}`} />
+        <CopyButton
+          value={value}
+          label={`Copy ${noun.toLowerCase()}`}
+          disabled={disabled}
+        />
       </div>
     </div>
   )
@@ -79,6 +100,7 @@ const googleAudience = "//iam.googleapis.com/"
 
 type Props = {
   cloud: string
+  title: string
   name: string
   fields: Setting[]
   replacing?: Connection
@@ -143,6 +165,7 @@ function Problem({ text }: { text: string }) {
 
 function SetupPanel({
   cloud,
+  title,
   name,
   fields,
   replacing,
@@ -198,13 +221,17 @@ function SetupPanel({
   return (
     <div className="grid gap-4">
       <p className="text-[13px] text-muted-foreground">
-        Set up {cloud === "gcp" ? "Google Cloud" : "the cloud"} to trust
-        Loomplane&apos;s tokens. Nothing secret is pasted here.
+        Set up {title} to trust tokens from Loomplane. You won&apos;t paste a
+        key or secret anywhere.
       </p>
       <div className="grid gap-3">
         <Copyable name="Issuer" value={handout.issuer} />
         <Copyable name="Subject" value={handout.subject} />
-        <Copyable name="Audience" value={audience} />
+        <Copyable
+          name="Audience"
+          value={audience}
+          disabled={audience === googleAudience}
+        />
       </div>
       <ol className="grid gap-3">
         {handout.steps.map((s, i) => (
@@ -249,8 +276,8 @@ function SetupPanel({
       )}
       {handout.expiresAt && !replacing && (
         <p className="text-xs text-muted-foreground">
-          Reserved until {formatDate(handout.expiresAt)}. After that, start
-          again.
+          Reserved until {formatDate(handout.expiresAt)}. If you close this,
+          you&apos;ll get a new subject and have to set up the trust again.
         </p>
       )}
       {error && (

@@ -740,6 +740,7 @@ function ConnectForm({
               <div className="grid justify-items-start gap-3">
                 <KeylessSetup
                   cloud={cloud}
+                  title={entry?.title ?? cloudLabel(cloud)}
                   name={name}
                   fields={entry?.keylessSettings ?? []}
                   replacing={replacing}
