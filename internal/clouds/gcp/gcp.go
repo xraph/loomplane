@@ -1,7 +1,9 @@
 // Package gcp talks to Google Cloud for Loomplane: it turns a service
-// account key into an authorized client and checks what that account may
-// do. Provisioning uses Google's REST APIs. PostgreSQL connections use the
-// official Cloud SQL Go Connector for IAM authorization and TLS.
+// account key, a sign-in, or a keyless handout that impersonates a
+// service account, into an authorized client and checks what that
+// account may do. Provisioning uses Google's REST APIs. PostgreSQL
+// connections use the official Cloud SQL Go Connector for IAM
+// authorization and TLS.
 package gcp
 
 import (
@@ -15,6 +17,7 @@ import (
 	"net"
 	"net/http"
 	"net/netip"
+	neturl "net/url"
 	"slices"
 	"strings"
 	"time"
@@ -22,6 +25,7 @@ import (
 	"golang.org/x/oauth2"
 	"golang.org/x/oauth2/google"
 
+	"github.com/xraph/loomplane/internal/clouds/keyless"
 	"github.com/xraph/loomplane/internal/clouds/oauth"
 )
 
@@ -89,24 +93,39 @@ var (
 )
 
 // Key is a parsed service account key, or a signed-in person's
-// authorized_user key. Only its project and email are ever shown; the
-// private key or refresh token stays in the bytes it came from.
+// authorized_user key, or a keyless handout. Only its project and email
+// are ever shown; the private key, refresh token or ticket stays in the
+// bytes it came from.
 type Key struct {
 	ProjectID string
 	// ClientEmail is the service account's email, or the person's.
 	ClientEmail string
 	// User is true for a person's authorized_user key.
 	User bool
+	// Keyless is true for a keyless handout, which holds no secret of
+	// Google's: Google's STS trusts a token minted for it through
+	// WorkloadProvider, and the session acts as the service account.
+	Keyless          bool
+	WorkloadProvider string
 	// quotaProject is the project a person's API calls are billed to.
 	quotaProject string
+	handout      *keyless.Handout
 	raw          []byte
 }
 
 // ParseKey reads a service account key, as downloaded from the console,
-// or the authorized_user key a Google sign-in hands out.
+// the authorized_user key a Google sign-in hands out, or a keyless
+// handout whose settings name a project_id, a workload_provider and a
+// service_account.
 func ParseKey(data []byte) (*Key, error) {
 	if len(data) > maxKey {
 		return nil, fmt.Errorf("%w: it's larger than %d KiB", ErrInvalidKey, maxKey>>10)
+	}
+	if h, ok, err := keyless.Parse(data); ok {
+		if err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrInvalidKey, err)
+		}
+		return keylessKey(h, data)
 	}
 	var k struct {
 		Type         string `json:"type"`
@@ -143,6 +162,9 @@ type Client struct {
 	// poll is how often a long-running operation is checked.
 	poll     time.Duration
 	resolver DNSResolver
+	// minter mints a keyless key's tokens. Without one a keyless key gets
+	// no session.
+	minter keyless.Minter
 }
 
 // DNSResolver resolves a provider-owned PSC name from the verifier network.
@@ -178,33 +200,48 @@ func (c *Client) url(host, path string) string {
 
 // Session is an authorized client for one service account or person.
 type Session struct {
-	c    *Client
-	key  *Key
+	c   *Client
+	key *Key
+	// ts is the session's access tokens, renewed as they expire.
+	ts   oauth2.TokenSource
 	http *http.Client
 }
 
 // Session authorizes as key's service account, or as the person a user
-// key signed in. Either renews its own access token.
+// key signed in, or as the service account a keyless key impersonates.
+// Each renews its own access token; a keyless one mints a fresh token to
+// do it.
 func (c *Client) Session(ctx context.Context, key *Key) (*Session, error) {
-	kind := google.ServiceAccount
-	if key.User {
-		kind = google.AuthorizedUser
-	}
 	// The token source keeps the context it's made with, so every
 	// renewal goes through the base client and shares its timeout.
 	ctx = context.WithValue(ctx, oauth2.HTTPClient, c.base)
-	creds, err := google.CredentialsFromJSONWithType(ctx, key.raw, kind, Scope)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %w", ErrInvalidKey, err)
-	}
-	ts := oauth2.ReuseTokenSource(nil, creds.TokenSource)
+	var ts oauth2.TokenSource
 	base := c.base.Transport
-	if key.User {
-		base = userProject{project: key.quotaProject, next: base}
+	if key.Keyless {
+		// It acts as the service account, so its calls bill to the
+		// account's project without X-Goog-User-Project.
+		var err error
+		if ts, err = c.keylessTokens(ctx, key); err != nil {
+			return nil, err
+		}
+	} else {
+		kind := google.ServiceAccount
+		if key.User {
+			kind = google.AuthorizedUser
+		}
+		creds, err := google.CredentialsFromJSONWithType(ctx, key.raw, kind, Scope)
+		if err != nil {
+			return nil, fmt.Errorf("%w: %w", ErrInvalidKey, err)
+		}
+		ts = oauth2.ReuseTokenSource(nil, creds.TokenSource)
+		if key.User {
+			base = userProject{project: key.quotaProject, next: base}
+		}
 	}
-	return &Session{c: c, key: key, http: &http.Client{
+	ts = oauth2.ReuseTokenSource(nil, tokenSource{ts: ts})
+	return &Session{c: c, key: key, ts: ts, http: &http.Client{
 		Timeout:   requestTimeout,
-		Transport: &oauth2.Transport{Source: oauth2.ReuseTokenSource(nil, tokenSource{ts: ts}), Base: base},
+		Transport: &oauth2.Transport{Source: ts, Base: base},
 	}}, nil
 }
 
@@ -316,6 +353,12 @@ func (s *Session) do(ctx context.Context, method, url string, in, out any) error
 func (s *Session) send(req *http.Request, out any) error {
 	res, err := s.http.Do(req)
 	if err != nil {
+		// A keyless refusal says what was refused, so the request it
+		// stopped isn't put in front of it.
+		var ue *neturl.Error
+		if errors.As(err, &ue) && keyless.Refused(ue.Err) {
+			return ue.Err
+		}
 		if errors.Is(err, ErrRejected) || errors.Is(err, ErrInvalidKey) {
 			return err
 		}
@@ -348,9 +391,9 @@ func (s *Session) send(req *http.Request, out any) error {
 }
 
 // Missing returns which of Permissions the service account lacks on its
-// project, or which of UserPermissions the signed-in person lacks. Any
-// caller may ask this of any project, so it works before anything else
-// does.
+// project, keyless or not, or which of UserPermissions the signed-in
+// person lacks. Any caller may ask this of any project, so it works
+// before anything else does.
 func (s *Session) Missing(ctx context.Context) ([]string, error) {
 	var out struct {
 		Permissions []string `json:"permissions"`

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"maps"
@@ -380,6 +381,7 @@ func newComponentFixture(t *testing.T, kinds *recipes.Registry) *componentFixtur
 		Cloud: connections.Server, Ctrl: CtrlPlane{Providers: providers, Instances: instances, Deploys: &ownedDeploys{}},
 		Secrets: f.secrets, Backend: func(string, string) owned.Backend { return f.backend },
 		Kinds: kinds, Hooks: map[string]CatalogHooks{"sample": f.hooks},
+		FilesRevisionKey: []byte("component-fixture-revision-key"),
 	}
 	return f
 }
@@ -1150,7 +1152,9 @@ func TestComponentFilesComeFromHooksAndStayInVault(t *testing.T) {
 	revision := func(mode fs.FileMode, data string) string {
 		copyJob := *api
 		copyJob.Action.Resource, copyJob.Action.Service = nil, componentService(api.Action.Resource)
-		copyJob.files = []runtimeFile{{Path: sampleConfig, Mode: mode, Data: []byte(data)}}
+		if filesErr := f.target.withFiles(&copyJob, []runtimeFile{{Path: sampleConfig, Mode: mode, Data: []byte(data)}}); filesErr != nil {
+			t.Fatal(filesErr)
+		}
 		_, l := ownedSpec(&copyJob, "", ownedState{})
 		return l[owned.LabelRevision]
 	}
@@ -1689,5 +1693,107 @@ func TestComponentVolumeSizeIsOnlyRequestedOnKubernetes(t *testing.T) {
 				t.Fatalf("volume size on %s: %+v", target.provider, spec.Volumes)
 			}
 		})
+	}
+}
+
+type failingRemovedHooks struct{ recordedHooks }
+
+func (h *failingRemovedHooks) Removed(ctx context.Context, res ComposedResource) error {
+	_ = h.recordedHooks.Removed(ctx, res)
+	return errors.New("the kind's cleanup is down")
+}
+
+// A delete whose connection is gone still runs the kind's Removed hook,
+// which needs no connection, and forgets what the composition, its
+// components and a dependency-only action kept. A replace forgets nothing.
+func TestUnreachableDeleteForgetsWhatACompositionKept(t *testing.T) {
+	kinds := graphKinds(t, nil)
+	sample, _ := kinds.Kind("sample")
+	parentFields := []string{"url", "output:admin", "secret:admin-password"}
+	parentConfig := &planning.ResourceConfig{
+		Provider: "server", Target: "conn", TargetSettings: map[string]string{"architecture": "amd64"}, Kind: "sample", Version: "1",
+		Composition: &planning.CompositionConfig{Kind: "sample", Version: "1", Revision: "1", Dependencies: newPostgres, Outputs: sample.Outputs, Secrets: sample.Secrets},
+	}
+	for _, tt := range []struct {
+		name    string
+		job     func(*componentFixture) *Job
+		fields  []string
+		removed int
+	}{
+		{"composed parent", func(f *componentFixture) *Job { return f.job("app", parentConfig) }, parentFields, 1},
+		{"component", func(f *componentFixture) *Job { return f.componentJob(t, "api", newPostgres) }, []string{"address"}, 0},
+		{"dependency-only action", func(f *componentFixture) *Job { return f.graphJob(t) }, []string{"address", "url", "output:host", "secret:password"}, 0},
+	} {
+		for _, op := range []planning.Op{planning.Replace, planning.Delete} {
+			for _, hookFails := range []bool{false, true} {
+				t.Run(fmt.Sprintf("%s %s hook fails %v", tt.name, op, hookFails), func(t *testing.T) {
+					f := newComponentFixture(t, kinds)
+					hooks := &failingRemovedHooks{}
+					if hookFails {
+						f.target.Hooks["sample"] = hooks
+					}
+					job := tt.job(f)
+					job.Action.Op = op
+					for _, field := range tt.fields {
+						f.secrets.m[ResourceKey("org", "env", job.Action.Name, field)] = []byte("kept")
+					}
+					var warnings []string
+					job.warn = func(err error) { warnings = append(warnings, err.Error()) }
+					if err := f.target.removedUnreachable(t.Context(), job, bound(job, &Outcome{ExternalID: "catalog/" + job.Action.Name})); err != nil {
+						t.Fatal(err)
+					}
+					deleting := op == planning.Delete
+					for _, field := range tt.fields {
+						if _, kept := f.secrets.m[ResourceKey("org", "env", job.Action.Name, field)]; kept == deleting {
+							t.Errorf("%s kept %v after an unreachable %s", field, kept, op)
+						}
+					}
+					ran := len(f.hooks.removed) + len(hooks.removed)
+					if want := tt.removed; !deleting && ran != 0 || deleting && ran != want {
+						t.Errorf("Removed hook ran %d times", ran)
+					}
+					warned := slices.ContainsFunc(warnings, func(w string) bool { return strings.Contains(w, "the kind's cleanup is down") })
+					if warned != (deleting && hookFails && tt.removed > 0) {
+						t.Errorf("warnings %q", warnings)
+					}
+				})
+			}
+		}
+	}
+}
+
+// The files digest in a component's revision label is keyed by the
+// installation, so the label can't be used to guess a low-entropy file
+// offline. Without a key a component with files doesn't start.
+func TestComponentFilesRevisionIsKeyedByTheInstallation(t *testing.T) {
+	const content = "admin_password: 1234\n"
+	revision := func(key []byte) (string, error) {
+		f := newComponentFixture(t, sampleWithFiles(t))
+		f.target.FilesRevisionKey = key
+		f.target.Hooks["sample"] = &fileHooks{files: map[string][]byte{sampleConfig: []byte(content)}}
+		f.secrets.m[resourceKey("org", "env", "app--postgres", "url")] = []byte(postgresURL)
+		out, err := f.target.Apply(t.Context(), f.componentJob(t, "api", newPostgres))
+		if err != nil {
+			return "", err
+		}
+		_, labels, _ := f.started(t, out)
+		return labels[owned.LabelRevision], nil
+	}
+	one, err := revision([]byte("installation-one-revision-key-32"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	again, _ := revision([]byte("installation-one-revision-key-32"))
+	other, _ := revision([]byte("installation-two-revision-key-32"))
+	digest, _ := strings.CutPrefix(one, "dep/resource:app--api/")
+	sum := sha256.New()
+	_, _ = fmt.Fprintf(sum, "%s\x00%o\x00%d\x00", sampleConfig, owned.DefaultFileMode, len(content))
+	_, _ = sum.Write([]byte(content))
+	unkeyed := hex.EncodeToString(sum.Sum(nil))[:16]
+	if one != again || one == other || digest == one || len(digest) != 16 || digest == unkeyed {
+		t.Fatalf("revisions %q, %q, %q; unkeyed %q", one, again, other, unkeyed)
+	}
+	if _, err := revision(nil); err == nil || !strings.Contains(err.Error(), "key") {
+		t.Fatalf("a component with files started without a revision key: %v", err)
 	}
 }

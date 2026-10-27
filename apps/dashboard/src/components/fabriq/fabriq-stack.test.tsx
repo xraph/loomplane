@@ -90,13 +90,78 @@ test("the stack says what Fabriq doesn't report", () => {
   expect(detail(parts, "falkordb")?.state).toBe("Running")
 })
 
-test("a Postgres Loomplane doesn't run has no backups to describe", () => {
-  const parts = stackParts({ ...docker, postgres: "linked", redis: "linked" })
+test("a project-resource Postgres is backed up with its resource, and its Redis reads as provisioned", () => {
+  const parts = stackParts({
+    ...docker,
+    postgres: "resource",
+    postgresResource: "shared-db",
+    redis: "resource",
+  })
   expect(detail(parts, "postgres")?.detail).toBe(
-    "TimescaleDB, pgvector, PostGIS. Connected to your engine. See Recovery for its backup options."
+    "TimescaleDB, pgvector, PostGIS. Backed up with shared-db."
   )
   expect(detail(parts, "redis")?.detail).toBe(
-    "Outbox stream and cache. Run by you."
+    "Outbox stream and cache. AOF every second."
+  )
+})
+
+test("a project-resource Postgres on Kubernetes names the Kubernetes limit, not a backup", () => {
+  const parts = stackParts({
+    ...docker,
+    provider: "kubernetes",
+    postgres: "resource",
+    postgresResource: "shared-db",
+  })
+  expect(detail(parts, "postgres")?.detail).toBe(
+    "TimescaleDB, pgvector, PostGIS. Backups on Kubernetes aren’t available yet."
+  )
+})
+
+test("an engine with no choice makes no backup or persistence claim", () => {
+  const parts = stackParts({ ...docker, postgres: "unset", redis: "unset" })
+  expect(detail(parts, "postgres")?.detail).toBe(
+    "TimescaleDB, pgvector, PostGIS."
+  )
+  expect(detail(parts, "redis")?.detail).toBe("Outbox stream and cache.")
+})
+
+test("the stack reads a missing or off Postgres and Redis as not provisioned", () => {
+  serve()
+  const props = panelProps()
+  delete props.config.composition!.dependencies.postgres
+  props.config.composition!.dependencies.redis = { mode: "off" }
+  mount(<FabriqStack {...props} />)
+  expect(screen.getByText("TimescaleDB, pgvector, PostGIS.")).toBeVisible()
+  expect(screen.getByText("Outbox stream and cache.")).toBeVisible()
+  expect(screen.queryByText(/AOF every second/)).toBeNull()
+})
+
+test("an external engine is not managed by Loomplane", () => {
+  const parts = stackParts({
+    ...docker,
+    postgres: "external",
+    redis: "external",
+  })
+  for (const id of ["postgres", "redis"]) {
+    const text = detail(parts, id)?.detail
+    expect(text).toContain("Not managed by Loomplane: no backups or restores.")
+    expect(text).not.toMatch(/Run by you|Backed up|Runs as|AOF/)
+  }
+  expect(detail(parts, "postgres")?.detail).toBe(
+    "TimescaleDB, pgvector, PostGIS. Not managed by Loomplane: no backups or restores."
+  )
+  expect(detail(parts, "redis")?.detail).toBe(
+    "Outbox stream and cache. Not managed by Loomplane: no backups or restores."
+  )
+})
+
+test("a provisioned engine keeps its backup and persistence copy", () => {
+  const parts = stackParts(docker)
+  expect(detail(parts, "postgres")?.detail).toBe(
+    "TimescaleDB, pgvector, PostGIS. Backups daily, last restore verified yesterday."
+  )
+  expect(detail(parts, "redis")?.detail).toBe(
+    "Outbox stream and cache. AOF every second."
   )
 })
 
@@ -270,3 +335,46 @@ test("library worker uses the approved copy with reported entity counts only", (
     )?.detail
   ).toBe("Stock worker.")
 })
+
+test.each(["loading", "unavailable"] as const)(
+  "the stack does not claim no restore verified yet when restores are %s",
+  (restoreStatus) => {
+    const text = detail(
+      stackParts({ ...docker, restoreVerifiedAt: undefined, restoreStatus }),
+      "postgres"
+    )?.detail
+    expect(text).not.toContain("no restore verified yet")
+    expect(text).toContain("Backups daily")
+  }
+)
+
+test("the stack says nothing about restores while they load", async () => {
+  let release!: () => void
+  serve({ hold: new Promise<void>((resolve) => (release = resolve)) })
+  mount(<FabriqStack {...panelProps()} />)
+  expect(
+    await screen.findByText("TimescaleDB, pgvector, PostGIS. Backups daily.")
+  ).toBeVisible()
+  expect(screen.queryByText(/no restore verified yet/)).toBeNull()
+  release()
+  expect(
+    await screen.findByText(/Backups daily, no restore verified yet\./)
+  ).toBeVisible()
+})
+
+test.each([
+  [{ backupsError: 403 }],
+  [{ backupsError: 503 }],
+  [{ restoresError: 403 }],
+  [{ restoresError: 503 }],
+] as const)(
+  "the stack does not claim no restore when the restore history fails: %s",
+  async (fixture) => {
+    serve(fixture)
+    mount(<FabriqStack {...panelProps()} />)
+    expect(
+      await screen.findByText(/Backups daily, restore history unavailable\./)
+    ).toBeVisible()
+    expect(screen.queryByText(/no restore verified yet/)).toBeNull()
+  }
+)

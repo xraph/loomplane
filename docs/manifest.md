@@ -83,6 +83,7 @@ What the application runs, by name. Names are lower case letters, digits and hyp
 | `needs`              | The resources and services it talks to. Each one it names gets it an address in a variable, and it deploys after them.                                                                                                                                                                                                                                                                                                                           |
 | `need_options`       | Options this service passes to a need, by need and then by option name. See [Passing options](#passing-options-to-what-a-service-needs).                                                                                                                                                                                                                                                                                                         |
 | `enabled`            | `false` leaves it out.                                                                                                                                                                                                                                                                                                                                                                                                                           |
+| `farp`               | Opts the service in to [FARP discovery](#farp-discovery) by an Octopus gateway.                                                                                                                                                                                                                                                                                                                                                                  |
 | `environments`       | Overrides by environment name: any of the fields above but `source`, `kind`, `build`, `needs` and `need_options`.                                                                                                                                                                                                                                                                                                                                |
 
 A Dockerfile that copies from across the repository, such as a Go service that needs the module's `go.mod` at the root, has to build from the root:
@@ -101,6 +102,38 @@ A service gets a variable for each thing it `needs`. A resource's is named for i
 Resource addresses hold credentials, so they're secrets: they reach the service through its cloud's secret store, never as plain variables.
 
 How a service reaches another depends on where both run. Two services on ECS in the same environment reach each other inside the VPC, at `http://name:port`, whether or not the one they need is public. A private Cloud Run service only takes calls from the project's own services, which have to send a Google ID token. A private service needed from another cloud is a problem on the plan, unless a [link](#links) joins the two clouds' networks and the caller is on Google Cloud.
+
+### FARP discovery
+
+A service opts in to FARP route discovery by having a `farp` block. Octopus then reads the service's API description and builds its routes from it, so you don't write those routes by hand. This is the smallest block that says something useful:
+
+```yaml
+services:
+  billing:
+    port: 8080
+    farp:
+      openapi: /openapi.json
+      capabilities: [rest, websocket]
+```
+
+`farp: {}` opts in too, and takes Octopus's defaults, `/openapi.json` and `/health`. Set `enabled: false` to opt out, which is how you turn it off in one environment.
+
+| Key                                                   | What it does                                                                                      |
+| ----------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| `gateway`                                             | The Octopus resource the service feeds. Without it, the manifest's only one.                      |
+| `openapi`, `asyncapi`, `graphql`, `health`, `metrics` | Paths on the service, each starting with `/` and with no query string. Left out, Octopus chooses. |
+| `grpc_reflection`                                     | `true` if the service answers gRPC reflection.                                                    |
+| `capabilities`                                        | What the service speaks, such as `rest` or `websocket`. Lower case words, at most eight.          |
+| `port`                                                | The port Octopus reaches the service on. Without it, the service's own `port`.                    |
+| `enabled`                                             | `false` opts the service out.                                                                     |
+
+With two or more Octopus resources in the manifest, set `gateway` on each service, or the plan stops and lists them. The service and its gateway also have to run on the same server or cluster, because Octopus reaches the service by its private address. A service with neither a `port` nor a `farp.port` is a problem on the plan.
+
+An environment's `farp` block replaces the service's whole block. It doesn't merge. A staging block of `{enabled: false}` switches FARP off there, and one of `{health: /ready}` drops the service's `openapi` path in that environment too, so repeat whatever you still want.
+
+Names starting with `lp-` are reserved for the upstreams Loomplane registers with Octopus for manual routes. A service that opts in can't use one.
+
+[octopus.md](octopus.md) covers the rest: adding the gateway, what it does with these schemas, and the routes you add by hand.
 
 ## resources
 

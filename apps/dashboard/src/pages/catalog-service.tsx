@@ -162,7 +162,7 @@ function InEnvironment({
     )
   if (!bindings.data) return <Loading resource={resource} />
   const all = bindings.data.bindings
-  const { binding, components } = serviceBindings(all, resource)
+  const { binding, components, linked } = serviceBindings(all, resource)
   if (!binding)
     return (
       <Missing
@@ -186,6 +186,7 @@ function InEnvironment({
     binding,
     config,
     components,
+    linked,
   }
   const panels = (module?.panels ?? [])
     .filter((panel) => !panel.when || panel.when(props))
@@ -291,6 +292,7 @@ function Header({
   props: CatalogPanelProps
 }) {
   const state = stateOf(props.binding)
+  const deployed = deployedState(module, props, state)
   const Actions = module?.actions
   // A module's subtitle says which instance this is, environment included,
   // so it stands in for the catalog's description of the kind.
@@ -322,9 +324,7 @@ function Header({
           {environment}
         </span>
       )}
-      <StatusPill tone={state.drift ? "waiting" : "live"}>
-        {state.drift ? state.label : (module?.deployedLabel ?? state.label)}
-      </StatusPill>
+      <StatusPill tone={deployed.tone}>{deployed.label}</StatusPill>
       {Actions && (
         <div className="flex flex-wrap items-center gap-2">
           <Actions {...props} />
@@ -570,6 +570,19 @@ function Details({
 
 type State = { label: string; drift: boolean }
 
+function deployedState(
+  module: CatalogKindModule | undefined,
+  props: CatalogPanelProps,
+  state: State
+): { label: string; tone: "live" | "waiting" } {
+  if (state.drift) return { label: state.label, tone: "waiting" }
+  const named =
+    typeof module?.deployedLabel === "function"
+      ? module.deployedLabel(props)
+      : (module?.deployedLabel ?? state.label)
+  return typeof named === "string" ? { label: named, tone: "live" } : named
+}
+
 function stateOf(binding: Binding): State {
   if (binding.drift === "missing")
     return { label: "Deleted outside Loomplane", drift: true }
@@ -676,7 +689,7 @@ function Failed({
           <ZeroStateTitle>You can&apos;t see this service</ZeroStateTitle>
           <ZeroStateDescription>
             Your role doesn&apos;t include reading this project&apos;s
-            deployments. An organization owner can give you access.
+            deployments. A workspace owner can give you access.
           </ZeroStateDescription>
         </ZeroStateHeader>
       </ZeroState>

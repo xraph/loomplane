@@ -13,7 +13,13 @@ import { type ProductKey, productLogos } from "@/components/product-logos"
 type Tile = { id: string; title: string; mark: ReactNode; color: string }
 
 // Marks drawn in near-black would vanish on the dark panel; they glint white.
-const darkMarks = new Set<ProductKey>(["vercel", "github", "render", "aws", "mariadb"])
+const darkMarks = new Set<ProductKey>([
+  "vercel",
+  "github",
+  "render",
+  "aws",
+  "mariadb",
+])
 
 function product(key: ProductKey): Tile {
   const logo = productLogos[key]
@@ -33,17 +39,37 @@ const groups: { label: string; area: string; tiles: Tile[] }[] = [
   {
     label: "Clouds and clusters",
     area: "clouds",
-    tiles: (["vercel", "gcp", "aws", "render", "digitalocean", "kubernetes"] as const).map(product),
+    tiles: (
+      ["vercel", "gcp", "aws", "render", "digitalocean", "kubernetes"] as const
+    ).map(product),
   },
-  { label: "Languages", area: "langs", tiles: (["go", "nodejs"] as const).map(product) },
-  { label: "Connectors", area: "conn", tiles: (["github", "docker"] as const).map(product) },
+  {
+    label: "Languages",
+    area: "langs",
+    tiles: (["go", "nodejs"] as const).map(product),
+  },
+  {
+    label: "Connectors",
+    area: "conn",
+    tiles: (["github", "docker"] as const).map(product),
+  },
   {
     label: "Services",
     area: "services",
     tiles: [
       ...(["postgresql", "mysql", "mariadb", "redis"] as const).map(product),
-      { id: "octopus", title: "Octopus", color: "#5aaee5", mark: <ArrowsSplitIcon weight="duotone" /> },
-      { id: "fabriq", title: "Fabriq", color: "#8f9cf3", mark: <StackIcon weight="duotone" /> },
+      {
+        id: "octopus",
+        title: "Octopus",
+        color: "#5aaee5",
+        mark: <ArrowsSplitIcon weight="duotone" />,
+      },
+      {
+        id: "fabriq",
+        title: "Fabriq",
+        color: "#8f9cf3",
+        mark: <StackIcon weight="duotone" />,
+      },
     ],
   },
 ]

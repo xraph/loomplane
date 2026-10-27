@@ -199,6 +199,9 @@ type ServiceConfig struct {
 	// Component is the catalog component the service runs, when a
 	// composed catalog kind runs one as a service.
 	Component *ComponentConfig `json:"component,omitempty"`
+	// Farp is how the service feeds an Octopus gateway's FARP route
+	// discovery. Only a service that opted in has one.
+	Farp *FarpConfig `json:"farp,omitempty"`
 	// GPU is the reviewed GPU placement of a service whose size asks for GPUs.
 	GPU *provider.GPUPlacement `json:"gpu,omitempty"`
 	// Artifact is an image (or provider revision) this action deploys
@@ -264,6 +267,18 @@ func DataBearing(a Action) bool {
 			(a.Service.Component != nil && a.Service.Component.Protection != recipes.ProtectionNone))
 	}
 	return false
+}
+
+// FarpConfig is a service's opt-in to FARP, resolved against the manifest's
+// Octopus resources.
+type FarpConfig struct {
+	// Gateway is the manifest name of the Octopus resource the service feeds.
+	Gateway string `json:"gateway"`
+	// Port is the port Octopus reaches the service on.
+	Port int `json:"port"`
+	// Metadata is the FARP metadata the service is registered with, such as
+	// the Kubernetes Service's labels or the Docker registration.
+	Metadata map[string]string `json:"metadata,omitempty"`
 }
 
 // DatabaseGatewayConfig is what the database gateway serves: the

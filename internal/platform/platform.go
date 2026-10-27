@@ -37,6 +37,7 @@ import (
 	"github.com/xraph/loomplane/extensions/identity"
 	infraext "github.com/xraph/loomplane/extensions/infrastructure"
 	notificationsext "github.com/xraph/loomplane/extensions/notifications"
+	octopusext "github.com/xraph/loomplane/extensions/octopus"
 	planningext "github.com/xraph/loomplane/extensions/planning"
 	projectsext "github.com/xraph/loomplane/extensions/projects"
 	realtimeext "github.com/xraph/loomplane/extensions/realtime"
@@ -149,9 +150,10 @@ func Extensions(cfg config.Config) []forge.Extension {
 		federationext.New(cfg, ctrl.CtrlPlane),
 		realtimeext.New(cfg),
 		planningext.New(cfg, jobs.Engine, deployments, ctrl.CtrlPlane, plugs),
+		octopusext.New(cfg, jobs.Engine),
 		dbgatewayext.New(cfg),
 		infraext.New(cpAuth, ctrl.CtrlPlane),
-		web.New(cfg.Dashboard.Dir, "/api/", cfg.Identity.BasePath+"/", "/_/", "/catalog-admin/"),
+		web.New(cfg.Dashboard.Dir, "/api/", cfg.Identity.BasePath+"/", "/_/", "/.well-known/", "/catalog-admin/"),
 	}
 }
 

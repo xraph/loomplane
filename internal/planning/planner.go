@@ -34,7 +34,12 @@ type Input struct {
 	// Catalog requests a standalone service without repository sources.
 	Catalog         bool
 	CloudPlacements map[string]CloudPlacement
-	CapacityIntents map[string]*CapacityIntent
+	// UnverifiedPlacements are the composed resources on a target of the
+	// environment's Cloud that have no CloudPlacement because the Cloud's
+	// or the target's revisions, or its connection's account, aren't
+	// verified. Their catalog-cloud-placement-missing warning says so.
+	UnverifiedPlacements map[string]bool
+	CapacityIntents      map[string]*CapacityIntent
 	// Federation contains scoped persisted observations; nil leaves all federation capabilities unavailable.
 	Federation *FederationInput
 	// Environment is the environment's name, which picks the manifest's
@@ -53,6 +58,11 @@ type Input struct {
 	// Held are the aliases of repositories this plan doesn't move: their
 	// services stay as deployed.
 	Held map[string]bool
+	// Excluded are the graph services the project excludes, by ID, each
+	// true when what's deployed of it stays running as it is. An excluded
+	// service is never created or changed; one that's deployed and not
+	// kept running is deleted.
+	Excluded map[string]bool
 	// Kinds are the catalog's engines and composed kinds. Nil means
 	// recipes.Default().
 	Kinds *recipes.Registry
@@ -62,6 +72,10 @@ type Input struct {
 	// endpointKey instead. A connected endpoint with no check can't be
 	// used.
 	Endpoints map[string]EndpointCheck
+	// FabriqPostgres are the external endpoints that Fabriq resources in
+	// the organization's other environments connect as their Postgres, each
+	// with one that does. A Fabriq here can't connect them too.
+	FabriqPostgres map[string]FabriqUser
 }
 
 // ConnectionOption is a cloud connection a plan could deploy with.
@@ -147,6 +161,7 @@ func Compute(in Input) *Result {
 		bindings:  map[string]*Binding{},
 		heldNew:   map[string]string{},
 		held:      map[string]string{},
+		excluded:  map[string]bool{},
 		retained:  map[string]*Action{},
 		keptFor:   map[string][]string{},
 		taken:     map[string]string{},
@@ -164,6 +179,7 @@ func Compute(in Input) *Result {
 	p.planDatabaseGateway()
 	p.checkTargetPlacements()
 	p.checkCloudSQLApplications()
+	p.checkFabriqDatabases()
 	p.checkServerGPUs()
 	p.readdress()
 	for p.routedReplacements() {
@@ -176,6 +192,7 @@ func Compute(in Input) *Result {
 	p.checkFindings()
 	p.impact()
 	p.planDeletes()
+	p.refuseRoutedDeletes()
 	p.stillReplaced()
 	return p.finish()
 }
@@ -208,6 +225,8 @@ type planner struct {
 	// held are the held services kept as they're deployed, by manifest
 	// name, with the alias of the repository that holds them.
 	held map[string]string
+	// excluded are the manifest services the project excludes, by name.
+	excluded map[string]bool
 	// retained are keep actions, by action ID, for what held services use
 	// that the plan would otherwise remove.
 	retained map[string]*Action
@@ -586,6 +605,19 @@ func (p *planner) planServices() {
 			continue
 		}
 		p.matched[gs.ID] = true
+		if keepRunning, ok := p.in.Excluded[gs.ID]; ok {
+			// Excluded before anything is planned for it. planDeletes
+			// removes what's deployed of it, unless it's kept running.
+			p.excluded[name] = true
+			if keepRunning && b != nil {
+				a := p.kept(b, "Excluded from this project, and left running as it is.")
+				p.held[name] = repo
+				p.services[name] = a
+				p.actions = append(p.actions, a)
+				held = append(held, name)
+			}
+			continue
+		}
 		p.graphServices[name] = gs
 		if !manifest.On(set.Enabled) {
 			continue
@@ -599,6 +631,9 @@ func (p *planner) planServices() {
 	}
 	p.retain()
 	p.markInternal()
+	// FARP is part of a service's configuration, so it's settled before
+	// the links, which compare that configuration with what's deployed.
+	p.planFarp()
 	// Needs are settled once every service has its action, since a service
 	// can need one planned after it. A held service keeps the links it was
 	// deployed with.
@@ -2204,7 +2239,7 @@ func (p *planner) checkFindings() {
 	for _, gs := range g.Services {
 		// A held repository's services aren't matched, and adding one to
 		// the manifest would wait anyway.
-		if !gs.Deployable || p.matched[gs.ID] || p.in.Held[gs.Source] {
+		if _, excluded := p.in.Excluded[gs.ID]; !gs.Deployable || p.matched[gs.ID] || p.in.Held[gs.Source] || excluded {
 			continue
 		}
 		p.warn(Finding{
@@ -2302,7 +2337,9 @@ func (p *planner) planDeletes() {
 			owner = &Binding{Subject: ResourceSubject, Name: of.parent}
 		}
 		reason := fmt.Sprintf("The manifest no longer has %s.", owner.Name)
-		if wanted, on := p.wanted(owner); part && p.resources[of.parent] != nil {
+		if !part && b.Subject == ServiceSubject && p.excluded[b.Name] {
+			reason = fmt.Sprintf("%s is excluded from this project.", b.Name)
+		} else if wanted, on := p.wanted(owner); part && p.resources[of.parent] != nil {
 			reason = fmt.Sprintf("%s no longer has %s.", of.parent, b.Name)
 		} else if wanted {
 			if on {

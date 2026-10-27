@@ -220,7 +220,7 @@ func (s *Service) CompleteSignIn(ctx context.Context, p security.Principal, in C
 		maps.Copy(settings, pending.Settings)
 		return s.replace(ctx, p, pending.ConnectionID, cred, checked, settings, MethodOAuth)
 	}
-	return s.create(ctx, p, pending.Cloud, pending.Name, cred, checked, pending.Settings, MethodOAuth)
+	return s.create(ctx, p, "", pending.Cloud, pending.Name, cred, checked, pending.Settings, MethodOAuth)
 }
 
 // checkable is what a check of signed-in c gets for grant g: a handout,

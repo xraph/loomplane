@@ -82,6 +82,19 @@ func (l *lockingStore) OAuthConnections(context.Context) ([]*Connection, error) 
 	return out, nil
 }
 
+func (l *lockingStore) KeylessConnections(context.Context) ([]*Connection, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	var out []*Connection
+	for _, c := range l.rows {
+		if c.Method == MethodKeyless && (c.Status == StatusReady || c.Status == StatusIncomplete ||
+			c.Status == StatusFailed && strings.HasPrefix(c.Message, keylessCheckPrefix)) {
+			out = append(out, &c)
+		}
+	}
+	return out, nil
+}
+
 func (l *lockingStore) LeftSignIns(_ context.Context, clouds []string) ([]*Connection, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -829,6 +842,10 @@ func TestRefreshAllSweepsExpiredSignIns(t *testing.T) {
 }
 
 type failingSweep struct{ AppStore }
+
+func (failingSweep) SweepReservations(context.Context, time.Time) (int64, error) {
+	return 0, nil
+}
 
 func (failingSweep) SweepSignIns(context.Context, time.Time) (int64, error) {
 	return 0, errors.New("database is down")

@@ -162,6 +162,31 @@ func composedPlacements(m *manifest.Manifest, environment string, names []string
 	return out
 }
 
+// unverifiedPlacements are the named composed resources whose target is a
+// direct-connection target of the assignment's Cloud that composedPlacements
+// still doesn't place: the Cloud's or the target's revision isn't
+// reviewed, or the target's connection is missing or has no verified
+// account.
+func unverifiedPlacements(m *manifest.Manifest, environment string, names []string, assignment *cloudprofiles.Assignment, options []ConnectionOption) map[string]bool {
+	out := map[string]bool{}
+	if assignment == nil {
+		return out
+	}
+	placed := composedPlacements(m, environment, names, assignment, options)
+	for _, name := range names {
+		if _, ok := placed[name]; ok {
+			continue
+		}
+		r := m.Resources[name]
+		if slices.ContainsFunc(assignment.Targets, func(t cloudprofiles.Target) bool {
+			return t.PoolID == "" && t.ConnectionID != "" && t.ConnectionID == r.Target && t.OrgID == assignment.OrgID && t.CloudID == assignment.CloudID
+		}) {
+			out[name] = true
+		}
+	}
+	return out
+}
+
 // SelectCloudTarget returns the target a service's settings name or tag, or
 // nil when they select none. Tags match the targets the project's grant
 // allows; a service gets a target only when exactly one carries every tag.
@@ -409,6 +434,8 @@ func stripProviderMetadata(config map[string]any) {
 	delete(config, "cloud_placement")
 	delete(config, "applied_inputs")
 	delete(config, "artifact")
+	// A frontend demand names the plan that counted it.
+	delete(config, "frontend_demand")
 }
 
 // CloudAdoption identifies the serving binding reviewed for metadata adoption.

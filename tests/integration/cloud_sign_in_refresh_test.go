@@ -188,3 +188,26 @@ func TestRenewalWaitsForAReplacement(t *testing.T) {
 		t.Fatalf("lock after replacement: %v", err)
 	}
 }
+
+// The background check sees keyless connections that are ready or
+// incomplete, and those it failed itself, whose message it starts with
+// "Daily check: ", so it can heal them. One a Recheck failed isn't listed.
+func TestKeylessConnectionsListsThoseTheCheckMayChange(t *testing.T) {
+	f := newRefreshFixture(t)
+	now := time.Now().UTC()
+	for _, c := range []*connections.Connection{
+		{ID: "conn_k1", OrgID: "org_1", Cloud: connections.AWS, Name: "Ready", Method: connections.MethodKeyless, Status: connections.StatusReady, CreatedAt: now, UpdatedAt: now},
+		{ID: "conn_k2", OrgID: "org_2", Cloud: connections.GCP, Name: "Incomplete", Method: connections.MethodKeyless, Status: connections.StatusIncomplete, CreatedAt: now, UpdatedAt: now},
+		{ID: "conn_k3", OrgID: "org_1", Cloud: connections.GCP, Name: "Refused", Method: connections.MethodKeyless, Status: connections.StatusFailed, Message: "Google Cloud refused it", CreatedAt: now, UpdatedAt: now},
+		{ID: "conn_k4", OrgID: "org_1", Cloud: connections.AWS, Name: "Checked", Method: connections.MethodKeyless, Status: connections.StatusFailed, Message: "Daily check: AWS refused it", CreatedAt: now, UpdatedAt: now},
+		{ID: "conn_k5", OrgID: "org_1", Cloud: connections.AWS, Name: "Key", Method: connections.MethodToken, Status: connections.StatusFailed, Message: "Daily check: AWS refused it", CreatedAt: now, UpdatedAt: now},
+	} {
+		if err := f.store.CreateConnection(t.Context(), c); err != nil {
+			t.Fatal(err)
+		}
+	}
+	list, err := f.store.KeylessConnections(t.Context())
+	if err != nil || len(list) != 3 || list[0].ID != "conn_k1" || list[1].ID != "conn_k4" || list[2].ID != "conn_k2" {
+		t.Fatalf("listed %v %v", list, err)
+	}
+}

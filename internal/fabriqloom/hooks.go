@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/xraph/loomplane/internal/deployments"
@@ -76,7 +78,10 @@ func NewHooks(d HookDeps) *Hooks {
 // Ready implements deployments.CatalogHooks. Once the console is up, the
 // operator key it sends for Loomplane must open Fabriq's admin API. A
 // server that isn't answering, or that speaks another admin API version,
-// says so in its own words instead.
+// says so in its own words instead. With the key proven, it revokes every
+// key Loomplane labelled that no live record of the resource names: keys a
+// removed Fabriq left in a Postgres that outlived it, and keys a crash kept
+// Loomplane from recording.
 func (h *Hooks) Ready(ctx context.Context, run deployments.ComponentRun) error {
 	if run.Component.Name != consoleComponent {
 		return nil
@@ -86,12 +91,55 @@ func (h *Hooks) Ready(ctx context.Context, run deployments.ComponentRun) error {
 		return fmt.Errorf("reach Fabriq's console: %w", err)
 	}
 	defer func() { _ = ch.Close() }() //nolint:errcheck // nothing to do about it
-	_, err = (&AdminClient{Channel: ch}).Tenants(ctx)
+	admin := &AdminClient{Channel: ch}
+	_, err = admin.Tenants(ctx)
 	var status *StatusError
 	if errors.As(err, &status) && !errors.Is(err, ErrUnreachable) && !errors.Is(err, ErrAPIVersion) {
 		return fmt.Errorf("Fabriq refused Loomplane's operator key (HTTP %d)", status.Status) //nolint:staticcheck // ST1005: the step shows this sentence as written
 	}
-	return err
+	if err != nil {
+		return err
+	}
+	return h.sweep(ctx, admin, run.OrgID, run.EnvironmentID, run.Resource)
+}
+
+// sweep revokes, for every service, the keys labelled for it that no live
+// record of the resource names, each service under its lock as a bind
+// takes it.
+func (h *Hooks) sweep(ctx context.Context, admin *AdminClient, orgID, environmentID, resource string) error {
+	keys, err := admin.Keys(ctx)
+	if err != nil {
+		return fmt.Errorf("list Fabriq's keys: %w", err)
+	}
+	records, err := h.d.Keys.ForResource(ctx, orgID, environmentID, resource)
+	if err != nil {
+		return err
+	}
+	live := liveIDs(records)
+	// Only services with a key no record names are locked; under the lock
+	// revokeUnrecorded reads their records again.
+	var services []string
+	for _, k := range keys {
+		service, ours := strings.CutPrefix(k.Label, keyLabelPrefix)
+		if ours && k.RevokedAt == nil && !live[k.ID] && !slices.Contains(services, service) {
+			services = append(services, service)
+		}
+	}
+	slices.Sort(services)
+	var errs []error
+	for _, service := range services {
+		errs = append(errs, h.sweepService(ctx, admin, keys, orgID, environmentID, resource, service))
+	}
+	return errors.Join(errs...)
+}
+
+func (h *Hooks) sweepService(ctx context.Context, admin *AdminClient, keys []KeyInfo, orgID, environmentID, resource, service string) error {
+	ctx, unlock, err := h.d.Keys.LockService(ctx, orgID, environmentID, resource, service)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	return h.revokeUnrecorded(ctx, admin, keys, orgID, environmentID, resource, service)
 }
 
 // BindConsumer implements deployments.ConsumerBinder. Each service gets
@@ -105,7 +153,7 @@ func (h *Hooks) BindConsumer(ctx context.Context, c deployments.Consumer) (strin
 	if !ValidTenant(tenant) {
 		return "", fmt.Errorf("%s's default tenant %q isn't a tenant id: use lowercase letters, digits and dashes", c.Service, tenant)
 	}
-	unlock, err := h.d.Keys.LockService(ctx, c.OrgID, c.EnvironmentID, c.Resource, c.Service)
+	ctx, unlock, err := h.d.Keys.LockService(ctx, c.OrgID, c.EnvironmentID, c.Resource, c.Service)
 	if err != nil {
 		return "", err
 	}
@@ -181,10 +229,9 @@ func (h *Hooks) current(ctx context.Context, admin *AdminClient, c deployments.C
 	return "", nil
 }
 
-// issue issues the service a new key for tenant and records it active,
-// after revoking any key Fabriq has for the service that Loomplane has no
-// live record of: one issued before a crash kept Loomplane from recording
-// it.
+// issue issues the service a new key for tenant and records it active.
+// BindConsumer has already revoked the keys labelled for the service that
+// no live record names.
 func (h *Hooks) issue(ctx context.Context, admin *AdminClient, c deployments.Consumer, tenant string) (string, error) {
 	issued, err := admin.IssueKey(ctx, KeyLabel(c.Service))
 	if err != nil {
@@ -205,7 +252,8 @@ func (h *Hooks) issue(ctx context.Context, admin *AdminClient, c deployments.Con
 	if !errors.Is(err, ErrConflict) {
 		return "", fmt.Errorf("record %s's Fabriq key: %w", c.Service, err)
 	}
-	// Another release of the service recorded its key first: use that one.
+	// The service lock keeps a second writer out, so this is defensive: if
+	// an active key was recorded anyway, use it.
 	records, rerr := h.d.Keys.ForService(ctx, c.OrgID, c.EnvironmentID, c.Resource, c.Service)
 	if rerr != nil {
 		return "", rerr
@@ -223,33 +271,54 @@ func (h *Hooks) issue(ctx context.Context, admin *AdminClient, c deployments.Con
 // record names, and forgets them. The service lock ensures a rotation cannot
 // still be recording one while this reconciliation runs.
 func (h *Hooks) revokeOrphans(ctx context.Context, admin *AdminClient, c deployments.Consumer) error {
-	records, err := h.d.Keys.ForService(ctx, c.OrgID, c.EnvironmentID, c.Resource, c.Service)
+	keys, err := admin.Keys(ctx)
+	if err != nil {
+		return &fabriqError{fmt.Errorf("list Fabriq's keys: %w", err)}
+	}
+	return h.revokeUnrecorded(ctx, admin, keys, c.OrgID, c.EnvironmentID, c.Resource, c.Service)
+}
+
+// revokeUnrecorded revokes the keys in keys labelled for service that no
+// live record of it names, and forgets them. The caller holds the
+// service's lock, so the records it reads are the last word.
+func (h *Hooks) revokeUnrecorded(ctx context.Context, admin *AdminClient, keys []KeyInfo, orgID, environmentID, resource, service string) error {
+	records, err := h.d.Keys.ForService(ctx, orgID, environmentID, resource, service)
 	if err != nil {
 		return err
 	}
+	live := liveIDs(records)
+	label := KeyLabel(service)
+	for _, k := range keys {
+		if k.Label != label || k.RevokedAt != nil || live[k.ID] {
+			continue
+		}
+		if err := admin.RevokeKey(ctx, k.ID); err != nil {
+			return &fabriqError{fmt.Errorf("revoke an unrecorded Fabriq key of %s: %w", service, err)}
+		}
+		if err := h.d.Secrets.Delete(ctx, VaultKey(orgID, environmentID, resource, k.ID)); err != nil {
+			return fmt.Errorf("forget an unrecorded Fabriq key of %s (%s): %w", service, k.Prefix, err)
+		}
+	}
+	return nil
+}
+
+// fabriqError is an error from Fabriq's admin API or the channel to it,
+// as opposed to one from the key store or Vault. The panel reports the
+// first as Fabriq being unavailable and the second as what it is.
+type fabriqError struct{ err error }
+
+func (e *fabriqError) Error() string { return e.err.Error() }
+func (e *fabriqError) Unwrap() error { return e.err }
+
+// liveIDs are the ids of the records that aren't revoked.
+func liveIDs(records []*KeyRecord) map[string]bool {
 	live := map[string]bool{}
 	for _, r := range records {
 		if r.State != KeyRevoked {
 			live[r.ID] = true
 		}
 	}
-	keys, err := admin.Keys(ctx)
-	if err != nil {
-		return fmt.Errorf("list Fabriq's keys: %w", err)
-	}
-	label := KeyLabel(c.Service)
-	for _, k := range keys {
-		if k.Label != label || k.RevokedAt != nil || live[k.ID] {
-			continue
-		}
-		if err := admin.RevokeKey(ctx, k.ID); err != nil {
-			return fmt.Errorf("revoke an unrecorded Fabriq key of %s: %w", c.Service, err)
-		}
-		if err := h.d.Secrets.Delete(ctx, VaultKey(c.OrgID, c.EnvironmentID, c.Resource, k.ID)); err != nil {
-			return err
-		}
-	}
-	return nil
+	return live
 }
 
 // discard revokes a key just issued that Loomplane won't record, and
@@ -277,9 +346,14 @@ func (h *Hooks) kept(ctx context.Context, c deployments.Consumer, id string) (st
 }
 
 // ReleaseConsumer implements deployments.ConsumerBinder: it revokes every
-// key the service holds and forgets them.
+// key the service holds and forgets them, along with any key labelled for
+// it that Loomplane never recorded (a bind that crashed between issuing
+// and recording one). With nothing recorded, a Fabriq that can't be
+// reached or fails the sweep is no error, only a warning: there is nothing
+// Loomplane knows to be valid, and the next sweep that reaches Fabriq
+// revokes what is left.
 func (h *Hooks) ReleaseConsumer(ctx context.Context, c deployments.Consumer) error {
-	unlock, err := h.d.Keys.LockService(ctx, c.OrgID, c.EnvironmentID, c.Resource, c.Service)
+	ctx, unlock, err := h.d.Keys.LockService(ctx, c.OrgID, c.EnvironmentID, c.Resource, c.Service)
 	if err != nil {
 		return err
 	}
@@ -294,17 +368,23 @@ func (h *Hooks) ReleaseConsumer(ctx context.Context, c deployments.Consumer) err
 			live = append(live, r)
 		}
 	}
-	if len(live) == 0 {
-		return nil
-	}
 	ch, err := c.Channel(ctx, consoleComponent, consolePort)
 	if err != nil {
+		if len(live) == 0 {
+			h.d.warn("sweep the unrecorded Fabriq keys of "+c.Service, err)
+			return nil
+		}
 		return fmt.Errorf("reach Fabriq's console: %w", err)
 	}
 	defer func() { _ = ch.Close() }() //nolint:errcheck // nothing to do about it
 	admin := &AdminClient{Channel: ch}
-	var errs []error
-	errs = append(errs, h.revokeOrphans(ctx, admin, c))
+	sweep := h.revokeOrphans(ctx, admin, c)
+	var remote *fabriqError
+	if len(live) == 0 && errors.As(sweep, &remote) {
+		h.d.warn("sweep the unrecorded Fabriq keys of "+c.Service, sweep)
+		return nil
+	}
+	errs := []error{sweep}
 	for _, r := range live {
 		errs = append(errs, h.revoke(ctx, admin, c.OrgID, c.EnvironmentID, c.Resource, r))
 	}
@@ -330,9 +410,10 @@ func (h *Hooks) forget(ctx context.Context, orgID, environmentID, resource strin
 }
 
 // Removed implements deployments.CatalogHooks. It revokes every key the
-// resource issued while Fabriq still answers, which it may not: its server
-// may be gone already. Either way, Loomplane records them revoked and
-// forgets them.
+// resource issued while Fabriq still answers, which it usually doesn't:
+// Removed runs once the composition's components are gone. Either way,
+// Loomplane records them revoked and forgets them. A Fabriq added again
+// on a Postgres that outlived it revokes them when its console is Ready.
 func (h *Hooks) Removed(ctx context.Context, res deployments.ComposedResource) error {
 	records, err := h.d.Keys.ForResource(ctx, res.OrgID, res.EnvironmentID, res.Resource)
 	if err != nil {

@@ -226,10 +226,11 @@ func (s *Service) ResolveCapacityIntents(ctx context.Context, org, planID string
 		var checkErr error
 		switch {
 		case !HasCapacityIntent(a):
-			if a.Op == Delete || a.Op == Keep || !cloudinfra.ManagedFrontend(a.Provider, a.Service.Workload, a.Service.Execution) {
+			connection := s.frontendConnection(a, plan.Connections)
+			if a.Op == Delete || a.Op == Keep || connection == "" || !cloudinfra.ManagedFrontend(a.Provider, a.Service.Workload, a.Service.Execution) {
 				continue
 			}
-			block, legacyErr := cloudinfra.NewPgStore(st.db).CheckLegacyFrontend(ctx, cloudinfra.FrontendDemand{OrgID: plan.OrgID, ProjectID: plan.ProjectID, EnvironmentID: plan.EnvironmentID, PlanID: plan.ID, Service: a.Name, Provider: a.Provider, ConnectionID: a.ConnectionID})
+			block, legacyErr := cloudinfra.NewPgStore(st.db).CheckLegacyFrontend(ctx, cloudinfra.FrontendDemand{OrgID: plan.OrgID, ProjectID: plan.ProjectID, EnvironmentID: plan.EnvironmentID, PlanID: plan.ID, Service: a.Name, Provider: a.Provider, ConnectionID: connection})
 			checkErr = legacyErr
 			if block != nil {
 				checkErr = &cloudinfra.CapacityAdmissionError{Block: *block}

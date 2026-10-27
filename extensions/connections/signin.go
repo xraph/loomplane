@@ -12,10 +12,12 @@ import (
 
 // SignInAppList is the body of GET /api/v1/cloud-sign-in/apps: each cloud
 // that can be signed in to, where its app comes from, and the callback URL
-// to register with an app.
+// to register with an app. Keyless says whether clouds can connect
+// keylessly, through Loomplane's own issuer.
 type SignInAppList struct {
 	Apps        []connections.SignInApp `json:"apps"`
 	CallbackURL string                  `json:"callback_url"`
+	Keyless     KeylessState            `json:"keyless"`
 }
 
 func (e *Extension) signInRoutes(r forge.Router, guard identity.Guard) error {
@@ -70,7 +72,9 @@ func (e *Extension) signInApps(c forge.Context) error {
 	if err != nil {
 		return fail(err)
 	}
-	return c.JSON(http.StatusOK, SignInAppList{Apps: apps, CallbackURL: e.svc.CallbackURL})
+	enabled, reason := e.keylessState()
+	return c.JSON(http.StatusOK, SignInAppList{Apps: apps, CallbackURL: e.svc.CallbackURL,
+		Keyless: KeylessState{Enabled: enabled, Issuer: e.issuer.URL(), Reason: reason}})
 }
 
 func (e *Extension) setSignInApp(c forge.Context) error {

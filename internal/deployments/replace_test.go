@@ -663,7 +663,7 @@ func TestRunner_aRemovalsWarningLandsOnItsStep(t *testing.T) {
 func TestRunner_aDeleteWhoseConnectionIsGoneEndsAComposedResourcesSessions(t *testing.T) {
 	for _, revokeErr := range []error{nil, errors.New("the session store is down")} {
 		var revoked []string
-		exec := &OwnedTarget{Cloud: connections.Server, CompositionRemoved: func(_ context.Context, orgID, environmentID, resource string) error {
+		exec := &OwnedTarget{Cloud: connections.Server, Secrets: &memSecrets{m: map[string][]byte{}}, CompositionRemoved: func(_ context.Context, orgID, environmentID, resource string) error {
 			revoked = append(revoked, orgID+"/"+environmentID+"/"+resource)
 			return revokeErr
 		}}

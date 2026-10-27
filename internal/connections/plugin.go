@@ -15,6 +15,9 @@ import (
 // so every deployment gets them back.
 type PluginChecker struct{ Client *plugins.Client }
 
+// IsGrant implements GrantChecker.
+func (PluginChecker) IsGrant(credential []byte) bool { return keylessJSON(credential) }
+
 // Parse implements Checker: the plugin decides what a credential looks
 // like, so all Loomplane can check is that there is one.
 func (p PluginChecker) Parse(credential []byte, settings map[string]string) (Check, error) {

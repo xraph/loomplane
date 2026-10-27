@@ -171,6 +171,14 @@ export interface Assignment {
   targets: Target[];
 }
 
+export interface AttachDefaults {
+  blockedPathPrefixes: string[];
+  cloudId?: string;
+  environmentId: string;
+  port: number;
+  service: string;
+}
+
 export interface AutoRenewInputBody {
   autoRenew: boolean;
   revision: number;
@@ -231,6 +239,33 @@ export interface Binding {
 
 export interface BindingList {
   bindings: Binding[];
+}
+
+export interface Board {
+  counts: SourceCounts;
+  discovery: DiscoverySummary;
+  gateway: OctopusStatus;
+  hosts: HostCard[];
+  live: boolean;
+  liveError?: string;
+  unroutable: UnroutableService[];
+  unrouted: ServicePort[];
+}
+
+export interface BoardRoute {
+  key: string;
+  methods: string[];
+  note: string;
+  overrides: boolean;
+  path: string;
+  port: number;
+  revision?: number;
+  routeId?: string;
+  service: string;
+  source: string;
+  stripPrefix: boolean;
+  sync?: string;
+  syncError?: string;
 }
 
 export interface Build {
@@ -430,6 +465,7 @@ export interface CloudForm {
   cloud: string;
   credential?: string;
   help?: string;
+  keylessSettings?: Setting[];
   methods: string[];
   settings?: Setting[];
   signInSettings?: Setting[];
@@ -864,6 +900,16 @@ export interface DeploymentList {
   next?: string;
 }
 
+export interface DiscoveredService {
+  error?: string;
+  metadata?: Record<string, any>;
+  optedIn: boolean;
+  routes: number;
+  service: string;
+  state: string;
+  updatedAt: string;
+}
+
 export interface DiscoverySource {
   alias: string;
   createdAt: string;
@@ -876,6 +922,13 @@ export interface DiscoverySource {
   repository: string;
   root: string;
   updatedAt: string;
+}
+
+export interface DiscoverySummary {
+  lastChange: string;
+  mode: string;
+  namespace?: string;
+  services: DiscoveredService[];
 }
 
 export interface DomainCheckInputBody {
@@ -1067,6 +1120,36 @@ export interface Evidence {
   source?: string;
 }
 
+export interface ExcludeInputBody {
+  exclusions: {
+  keepRunning?: boolean;
+  kind: string;
+  match: string;
+  name?: string;
+  reason: string;
+}[];
+}
+
+export interface Excluded {
+  rule: ExclusionRule;
+  service: Service;
+}
+
+export interface Exclusion {
+  createdAt: string;
+  createdBy: string;
+  keepRunning: boolean;
+  kind: string;
+  match: string;
+  name?: string;
+  reason: string;
+}
+
+export interface ExclusionRule {
+  kind: string;
+  match: string;
+}
+
 export interface FabriqKeyList {
   keys: ConsumerKey[];
 }
@@ -1081,6 +1164,17 @@ export interface FailedCleanup {
 
 export interface FailedCleanupInputBody {
   revision: string;
+}
+
+export interface FarpConfig {
+  gateway: string;
+  metadata?: Record<string, any>;
+  port: number;
+}
+
+export interface FarpHostnamesInputBody {
+  hostnames: string[];
+  revision: number;
 }
 
 export interface Federation {
@@ -1246,6 +1340,15 @@ export interface Held {
   sameAddress?: string;
 }
 
+export interface HostCard {
+  attached: boolean;
+  domainRouteId?: string;
+  farpHome: boolean;
+  hostname: string;
+  routes: BoardRoute[];
+  status?: CloudinfraRouteStatus;
+}
+
 export interface HostnameUse {
   environmentId: string;
   hostname: string;
@@ -1266,6 +1369,13 @@ export interface IdentitySession {
 
 export interface Ignore {
   resources?: string[];
+}
+
+export interface IncludeInputBody {
+  exclusions: {
+  kind: string;
+  match: string;
+}[];
 }
 
 export interface InfrastructureAction {
@@ -1299,6 +1409,35 @@ export interface InstanceStatus {
   reporting: boolean;
   routes: InstanceRouteStats[];
   snapshotVersion: number;
+}
+
+export interface KeylessInputBody {
+  connectionId: string;
+  name: string;
+  settings: Record<string, any>;
+}
+
+export interface KeylessPrepareInputBody {
+  cloud: string;
+}
+
+export interface KeylessReplaceInputBody {
+  settings?: Record<string, any>;
+}
+
+export interface KeylessSetup {
+  audience?: string;
+  connectionId: string;
+  expiresAt?: string;
+  issuer: string;
+  steps: SetupStep[];
+  subject: string;
+}
+
+export interface KeylessState {
+  enabled: boolean;
+  issuer: string;
+  reason: string;
 }
 
 export interface KindInfo {
@@ -1679,6 +1818,52 @@ export interface OK {
   ok: boolean;
 }
 
+export interface OctopusRouteInputBody {
+  hostname: string;
+  methods: string[];
+  note?: string;
+  path: string;
+  port: number;
+  revision?: number;
+  service: string;
+  stripPrefix: boolean;
+}
+
+export interface OctopusStatus {
+  appliedGeneration: number;
+  attach: AttachDefaults;
+  farpHostnames: string[];
+  generation: number;
+  namespace?: string;
+  privateUrl?: string;
+  provider: string;
+  resource: string;
+  revision: number;
+  startTime?: string;
+  syncError?: string;
+  syncedAt: string;
+  version?: string;
+}
+
+export interface OctopusloomRoute {
+  createdAt: string;
+  createdBy: string;
+  environmentId: string;
+  hostname: string;
+  id: string;
+  methods: string[];
+  note?: string;
+  orgId: string;
+  path: string;
+  port: number;
+  projectId: string;
+  resource: string;
+  revision: number;
+  service: string;
+  stripPrefix: boolean;
+  updatedAt: string;
+}
+
 export interface Operation {
   absenceConfirmedAt?: string;
   accelerator?: Accelerator;
@@ -1998,6 +2183,7 @@ export interface Project {
   createdAt: string;
   createdBy: string;
   description: string;
+  exclusions: Exclusion[];
   icon: string;
   id: string;
   name: string;
@@ -2036,6 +2222,7 @@ export interface ProjectList {
 }
 
 export interface ProjectView {
+  excluded: Excluded[];
   graph?: Graph;
   projectId: string;
   sources: SourceState[];
@@ -2597,6 +2784,15 @@ export interface RouteOperation {
   status: string;
 }
 
+export interface RouteResult {
+  route?: OctopusloomRoute;
+  sync: SyncResult;
+}
+
+export interface RouteRevisionInputBody {
+  revision: number;
+}
+
 export interface RouteSummary {
   gatewayId: string;
   id: string;
@@ -2820,6 +3016,7 @@ export interface ServiceConfig {
   endpoint?: ManifestEndpoint;
   env?: EnvLink[];
   execution: string;
+  farp?: FarpConfig;
   framework?: string;
   gateway?: GatewayRoute[];
   healthPath?: string;
@@ -2839,6 +3036,11 @@ export interface ServiceConfig {
   target?: string;
   targetSettings?: Record<string, any>;
   workload: string;
+}
+
+export interface ServicePort {
+  port: number;
+  service: string;
 }
 
 export interface ServiceTraffic {
@@ -2869,6 +3071,12 @@ export interface Setting {
   required?: boolean;
 }
 
+export interface SetupStep {
+  body?: string;
+  command?: string;
+  title: string;
+}
+
 export interface SignIn {
   authorizeUrl: string;
   state: string;
@@ -2887,6 +3095,7 @@ export interface SignInApp {
 export interface SignInAppList {
   apps: SignInApp[];
   callbackUrl: string;
+  keyless: KeylessState;
 }
 
 export interface SignInInputBody {
@@ -2936,6 +3145,12 @@ export interface SourceArtifact {
   commitSha: string;
   key: string;
   repository: string;
+}
+
+export interface SourceCounts {
+  all: number;
+  farp: number;
+  here: number;
 }
 
 export interface SourceList {
@@ -3036,6 +3251,14 @@ export interface Sync {
   updatedAt: string;
 }
 
+export interface SyncResult {
+  generation: number;
+  message?: string;
+  restarted: boolean;
+  restored: number;
+  state: string;
+}
+
 export interface SyncRoute {
   cutoverId?: string;
   hostname: string;
@@ -3098,6 +3321,11 @@ export interface UnreachableAccount {
   connectionId: string;
   message: string;
   name: string;
+}
+
+export interface UnroutableService {
+  reason: string;
+  service: string;
 }
 
 export interface UpdateInputBody {
@@ -3213,6 +3441,10 @@ export interface Zone {
   proofCheckedAt: string;
   proofExpiresAt: string;
   proofName?: string;
+  proofPublishAttempted?: boolean;
+  proofPublishAttemptedAt: string;
+  proofPublishError?: string;
+  proofRecord?: DNSRecord;
   proofValue?: string;
   provider?: string;
   providerZone: DNSZone;

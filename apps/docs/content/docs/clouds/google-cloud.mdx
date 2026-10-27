@@ -62,6 +62,14 @@ The connection acts as you, so your own IAM roles in the project are what it can
 
 Publish the OAuth app. While it's in testing, Google ends every sign-in after 7 days. Once it's published as an **External** app, people see Google's unverified-app warning and no more than 100 of them can sign in until Google verifies it, because `cloud-platform` is a sensitive scope. An **Internal** app, for a Google Workspace, needs neither. [Connect a cloud by signing in](/docs/clouds/cloud-sign-in) covers registering the client and what happens if Google stops accepting the sign-in.
 
+## Connect keylessly
+
+With workload identity federation you don't need a key or a sign-in. When Loomplane's public URL is HTTPS and reachable from the internet, the connect dialog offers **Connect keylessly** (or **Connect keylessly instead**, under the sign-in button). Its four steps make a workload identity pool called `loomplane`, add Loomplane's issuer as an OIDC provider in it, named after the connection's ID, with a condition that lets in this connection's subject alone, let that subject act as a service account through `roles/iam.workloadIdentityUser`, and grant the account a custom role with the permissions in the table above. You copy each `gcloud` command from the dialog.
+
+Paste the project ID, the provider's full name and the service account's email, then choose **Check and connect**. Loomplane trades a 10-minute token it signs itself at Google's security token service, impersonates the service account with what comes back, and checks the account's permissions on the project like a key's. The audience is `//iam.googleapis.com/` followed by the provider's full name, which is the provider's default.
+
+A second keyless connection in the same project skips the pool and the role, which are there already, and its commands make a provider of its own. Loomplane asks Google once a day whether it still trusts each connection, and a refusal marks the connection failed and sends a notice. [Connect a cloud keylessly](/docs/clouds/keyless) has every command and what to do when the trust breaks.
+
 ## Use it in a manifest
 
 ```yaml

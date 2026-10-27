@@ -25,8 +25,9 @@ func TestSearchHooksRenderProbeRole(t *testing.T) {
 	if path != "/usr/share/elasticsearch/config/roles.yml" {
 		t.Fatalf("declared path %q", path)
 	}
-	// An anonymous request can read cluster health and nothing else.
-	const want = "loomplane_probe:\n  cluster: [\"cluster:monitor/health\"]\n"
+	// An anonymous request can read the root document (cluster name and
+	// version) and nothing else, so it learns no index names.
+	const want = "loomplane_probe:\n  cluster: [\"cluster:monitor/main\"]\n"
 	if len(files) != 1 || string(files[path]) != want {
 		t.Fatalf("got %q", files)
 	}

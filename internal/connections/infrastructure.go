@@ -12,6 +12,9 @@ import (
 
 type ServerChecker struct{}
 
+// IsGrant implements GrantChecker.
+func (ServerChecker) IsGrant(raw []byte) bool { return keylessJSON(raw) }
+
 func (ServerChecker) Parse(raw []byte, settings map[string]string) (Check, error) {
 	cfg, err := server.ParseConfig(raw, settings)
 	if err != nil {
@@ -45,6 +48,9 @@ func (ServerChecker) Check(ctx context.Context, raw []byte, settings map[string]
 
 type KubernetesChecker struct{}
 
+// IsGrant implements GrantChecker.
+func (KubernetesChecker) IsGrant(raw []byte) bool { return keylessJSON(raw) }
+
 func (KubernetesChecker) Parse(raw []byte, settings map[string]string) (Check, error) {
 	cfg, err := kubernetes.ParseConfig(raw, settings)
 	if err != nil {
@@ -73,6 +79,9 @@ func (KubernetesChecker) Check(ctx context.Context, raw []byte, settings map[str
 }
 
 type RegistryChecker struct{}
+
+// IsGrant implements GrantChecker.
+func (RegistryChecker) IsGrant(raw []byte) bool { return keylessJSON(raw) }
 
 func (RegistryChecker) Parse(raw []byte, settings map[string]string) (Check, error) {
 	cfg, err := registry.ParseConfig(raw, settings)

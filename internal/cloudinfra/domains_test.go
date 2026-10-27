@@ -70,6 +70,7 @@ type scopedZoneStore struct {
 
 func (*scopedZoneStore) DomainProject(context.Context, string, string) error { return nil }
 func (s *scopedZoneStore) CreateZone(_ context.Context, z *Zone) error       { s.zone = z; return nil }
+func (s *scopedZoneStore) SaveZone(_ context.Context, z *Zone) error         { s.zone = z; return nil }
 
 type scopedZoneAdapter struct{ routeDNSAdapter }
 

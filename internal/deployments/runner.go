@@ -127,6 +127,8 @@ type Job struct {
 	// files are a catalog component's rendered files, which an owned
 	// target keeps in Vault beside its runtime values.
 	files []runtimeFile
+	// filesRevision is files' digest, keyed by the installation.
+	filesRevision string
 	// replacing is a Remove of what an action ran as before it moved.
 	// What's kept under the action's name is the replacement's then.
 	replacing bool
@@ -632,14 +634,19 @@ func (r *Runner) Run(ctx context.Context, orgID, deploymentID, actionID string, 
 		return err
 	}
 	defer func() {
-		runErr = errors.Join(runErr, finishAttempt(runErr == nil && len(action.Routes) == 0 && plan.CloudSyncID == ""))
+		// A failure the provider reported as final left nothing in flight,
+		// so the next release needn't recover this one first. Any other
+		// failure after the first effect keeps the service fenced.
+		settled := runErr == nil && len(action.Routes) == 0 && plan.CloudSyncID == "" || finishedByProvider(runErr)
+		runErr = errors.Join(runErr, finishAttempt(settled))
 	}()
-	admission, err := r.directServerAdmission(ctx, plan, action)
+	admission, daemon, err := r.directServerAdmission(ctx, plan, action)
 	if err != nil {
 		return err
 	}
 	if admission != nil {
 		defer func() { _ = admission.Rollback() }() //nolint:errcheck // releasing a read-only admission lock
+		ctx = context.WithValue(ctx, admittedDaemonKey{}, daemon)
 	}
 	if checkErr := r.authorizeSync(ctx, plan); checkErr != nil {
 		return checkErr
@@ -815,6 +822,9 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 	unreachable := deleting && errors.Is(err, connections.ErrNotFound)
 	if err != nil && !unreachable {
 		return err
+	}
+	if checkErr := checkAdmittedDaemon(ctx, a, conn); checkErr != nil {
+		return checkErr
 	}
 	if !deleting && a.ConnectionID != "" {
 		if conn.Cloud != prov.Cloud || conn.Status != connections.StatusReady {
@@ -1181,8 +1191,11 @@ func (r *Runner) deleteBound(ctx context.Context, job *Job, exec Executor, bound
 		// What Loomplane itself keeps open on it still ends.
 		if remover, ok := exec.(unreachableRemover); ok {
 			job.warn = warn
-			remover.removedUnreachable(ctx, job, bound)
+			err := remover.removedUnreachable(ctx, job, bound)
 			job.warn = nil
+			if err != nil {
+				return err
+			}
 		}
 		if err := job.Forget(ctx); err != nil {
 			return err
@@ -1227,7 +1240,7 @@ func (r *Runner) deleteBound(ctx context.Context, job *Job, exec Executor, bound
 // unreachableRemover is an executor with something of its own to end when
 // what it deployed is deleted through a connection that's gone.
 type unreachableRemover interface {
-	removedUnreachable(ctx context.Context, job *Job, b *planning.Binding)
+	removedUnreachable(ctx context.Context, job *Job, b *planning.Binding) error
 }
 
 // removeReplaced removes what an action ran as before it moved, which its

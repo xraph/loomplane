@@ -48,9 +48,20 @@ func routeAttemptFixture(t *testing.T) (*poolFixture, *cloudinfra.RouteOperation
 	return f, op
 }
 
+// approvedWorkloadPlan saves an approved plan with no actions. Effects
+// only start under an approved plan, which they check for frontend demand.
+func approvedWorkloadPlan(t *testing.T, f *poolFixture, id string) {
+	t.Helper()
+	if _, err := f.sql.Exec(t.Context(), `INSERT INTO loomplane_plans(id,org_id,project_id,environment_id,environment,status,revision,manifest_id,manifest_revision,result,executable,created_by,created_at) VALUES($1,'org','proj','env','production','ready','review','pool-manifest-proj',1,'{"executable":true,"connections":{},"actions":[]}',true,'usr',now())`, id); err != nil {
+		t.Fatal(err)
+	}
+	f.accept(t, id)
+}
+
 func TestRouteWorkloadAttachmentSurvivesRestart(t *testing.T) {
 	f, op := routeAttemptFixture(t)
 	ctx := t.Context()
+	approvedWorkloadPlan(t, f, "direct")
 	in := cloudinfra.WorkloadAttempt{Org: "org", Project: "proj", Environment: "env", Service: "web", Plan: "direct", Deployment: "deployment"}
 	first, err := f.store.BeginWorkloadAttempt(ctx, in, nil, false)
 	if err != nil {

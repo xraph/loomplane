@@ -37,9 +37,7 @@ export function OrganizationForm({
   const submit = async (e: FormEvent) => {
     e.preventDefault()
     if (!slug) {
-      setError(
-        "Give the organization a name with at least one letter or digit."
-      )
+      setError("Give the workspace a name with at least one letter or digit.")
       return
     }
     setBusy(true)
@@ -59,7 +57,7 @@ export function OrganizationForm({
       })
       await onCreated(org.id)
     } catch (err) {
-      setError(messageOf(err, "The organization wasn't created. Try again."))
+      setError(messageOf(err, "The workspace wasn't created. Try again."))
     } finally {
       setBusy(false)
     }
@@ -69,7 +67,7 @@ export function OrganizationForm({
     <form onSubmit={submit}>
       <FieldGroup>
         <Field data-invalid={!!error || undefined}>
-          <FieldLabel htmlFor="org-name">Organization name</FieldLabel>
+          <FieldLabel htmlFor="org-name">Workspace name</FieldLabel>
           <Input
             id="org-name"
             value={name}
@@ -93,7 +91,7 @@ export function OrganizationForm({
         <Field>
           <Button type="submit" disabled={busy}>
             {busy && <Spinner />}
-            Create organization
+            Create workspace
           </Button>
         </Field>
       </FieldGroup>

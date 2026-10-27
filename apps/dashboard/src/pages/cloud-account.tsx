@@ -6,6 +6,7 @@ import { toast } from "sonner"
 
 import { messageOf, statusOf } from "@/client/errors"
 import {
+  useConnectionCloudsList,
   useConnectionsCheck,
   useConnectionsGet,
   useMembersList,
@@ -62,6 +63,8 @@ export function CloudAccount({ id }: { id: string }) {
   const running = useRunning()
   const projects = useQuery(useProjectsList)
   const [replacing, setReplacing] = useState(false)
+  const [switching, setSwitching] = useState(false)
+  const clouds = useQuery(useConnectionCloudsList)
   const [removing, setRemoving] = useState(false)
   const c = connection.data
   const manage = can("cloud_account:manage")
@@ -73,6 +76,13 @@ export function CloudAccount({ id }: { id: string }) {
   const signedInBy = who
     ? who.name || who.email || c?.signedInBy
     : c?.signedInBy
+  // Keyless is offered where the cloud has it and the connection isn't
+  // there already.
+  const canSwitch =
+    c?.method !== "keyless" &&
+    !!clouds.data?.clouds
+      .find((f) => f.cloud === c?.cloud)
+      ?.methods.includes("keyless")
   const missing =
     connection.status === "error" && statusOf(connection.error) === 404
 
@@ -118,7 +128,7 @@ export function CloudAccount({ id }: { id: string }) {
             <EmptyHeader>
               <EmptyTitle>No connected account here</EmptyTitle>
               <EmptyDescription>
-                It may have been removed, or it belongs to another organization.
+                It may have been removed, or it belongs to another workspace.
               </EmptyDescription>
             </EmptyHeader>
             <EmptyContent>
@@ -157,6 +167,11 @@ export function CloudAccount({ id }: { id: string }) {
                     {" · connected "}
                     {formatDate(c.createdAt)} by {person(c.createdBy).name}
                   </span>
+                  {c.method === "keyless" && (
+                    <span className="text-[13px] text-muted-foreground">
+                      Connected keylessly
+                    </span>
+                  )}
                   {signedInAs && (
                     <span
                       className="text-[13px] text-muted-foreground"
@@ -190,6 +205,14 @@ export function CloudAccount({ id }: { id: string }) {
                   <Button variant="outline" onClick={() => setReplacing(true)}>
                     Replace credential
                   </Button>
+                  {canSwitch && (
+                    <Button
+                      variant="outline"
+                      onClick={() => setSwitching(true)}
+                    >
+                      Switch to keyless
+                    </Button>
+                  )}
                 </div>
               )}
             </header>
@@ -325,6 +348,14 @@ export function CloudAccount({ id }: { id: string }) {
               onOpenChange={setReplacing}
               cloud={c.cloud}
               replacing={c}
+              onConnected={() => void connection.refetch()}
+            />
+            <ConnectDialog
+              open={switching}
+              onOpenChange={setSwitching}
+              cloud={c.cloud}
+              replacing={c}
+              keyless
               onConnected={() => void connection.refetch()}
             />
             <RemoveDialog

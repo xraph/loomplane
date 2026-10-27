@@ -308,7 +308,9 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 		variables = append(variables, key+"="+env[key])
 	}
 	containerLabels := map[string]string{owned.LabelOrg: labels[owned.LabelOrg], owned.LabelProject: labels[owned.LabelProject], owned.LabelEnvironment: labels[owned.LabelEnvironment], owned.LabelInstance: iid.String(), owned.LabelRevision: labels[owned.LabelRevision], owned.LabelHostPort: labels[owned.LabelHostPort], owned.LabelConnection: labels[owned.LabelConnection]}
-	for _, key := range []string{owned.LabelPublic, LabelDatabase, LabelRecovery, nativemysql.LabelDatabase, nativemysql.LabelEngine, nativecache.LabelEngine, nativenats.LabelEngine, nativerabbit.LabelEngine, owned.LabelGPU, owned.LabelShmMB} {
+	// The declared readiness stays on the container, as it does on a
+	// Kubernetes workload's readiness probe.
+	for _, key := range []string{owned.LabelPublic, LabelDatabase, LabelRecovery, nativemysql.LabelDatabase, nativemysql.LabelEngine, nativecache.LabelEngine, nativenats.LabelEngine, nativerabbit.LabelEngine, owned.LabelHealth, owned.LabelHealthPort, owned.LabelHealthProtocol, owned.LabelGPU, owned.LabelShmMB} {
 		if labels[key] != "" {
 			containerLabels[key] = labels[key]
 		}

@@ -10,7 +10,7 @@
 import { query, mutation } from '@forge-go/client-core';
 import { ops } from './ops';
 
-import type { APIKeyList, ActivitySummary, Analysis, AnalysisGraph, AnalysisList, Backup, BackupList, BindingList, CatalogKindList, CatalogconnectEndpoint, CloudProjectGrantList, CloudSyncList, CloudTargetList, CloudinfraRoute, CloudinfraRouteStatus, ConnectedRepositoryList, Connection, ConnectionList, ConnectionsCloudList, ConsumerKey, DeliveryList, DeployedList, Deployment, DeploymentList, DiscoverySource, DomainOfferList, DomainOperationList, DomainOverview, DomainRouteList, EndpointList, Environment, EnvironmentCloud, EnvironmentConnections, EnvironmentList, FabriqKeyList, FailedCleanup, GPUInventory, GPUTargetList, GatewayList, GitHubInstallation, GitHubStatus, IdentitySession, InfrastructureStatus, LogPage, ManifestDraft, NativeInventory, NativePITRWindow, NativeRecoveryCopies, NativeRecoverySources, NativeRestore, NativeRetentionPolicy, NativeRetentionPolicyState, NativeRetirement, NativeRetirementPage, NotificationList, Operation, OperationList, OrgInvitationList, OrgMemberList, Plan, PlanList, PlanningCloudList, Policy, PolicyList, Pool, PoolList, Preferences, Preview, Profile, Project, ProjectDomainList, ProjectList, ProjectView, ProjectZoneList, ProviderList, ProviderZoneList, PublicConfig, Rebuild, RebuildList, Registration, RegistrationExtensionList, RegistrationList, Resolution, Restore, RestoreList, RetentionPolicy, RetentionPolicyHistory, RetentionPolicyState, RetentionPreview, Retirement, RetirementHistory, RetirementPage, Revision, RevisionList, RouteOperation, RouteSummary, Server, ServerList, ServerOptions, ServerUsage, SignInAppList, Snapshot, SourceList, SpendReport, Status, StorageVolumeList, Sync, Target, Tenant, TenantList, TrafficReport, Variable, VariableList, WebhookEndpointList, Zone, ZoneList } from './types';
+import type { APIKeyList, ActivitySummary, Analysis, AnalysisGraph, AnalysisList, Backup, BackupList, BindingList, Board, CatalogKindList, CatalogconnectEndpoint, CloudProjectGrantList, CloudSyncList, CloudTargetList, CloudinfraRoute, CloudinfraRouteStatus, ConnectedRepositoryList, Connection, ConnectionList, ConnectionsCloudList, ConsumerKey, DeliveryList, DeployedList, Deployment, DeploymentList, DiscoverySource, DiscoverySummary, DomainOfferList, DomainOperationList, DomainOverview, DomainRouteList, EndpointList, Environment, EnvironmentCloud, EnvironmentConnections, EnvironmentList, FabriqKeyList, FailedCleanup, GPUInventory, GPUTargetList, GatewayList, GitHubInstallation, GitHubStatus, IdentitySession, InfrastructureStatus, KeylessSetup, LogPage, ManifestDraft, NativeInventory, NativePITRWindow, NativeRecoveryCopies, NativeRecoverySources, NativeRestore, NativeRetentionPolicy, NativeRetentionPolicyState, NativeRetirement, NativeRetirementPage, NotificationList, OctopusStatus, Operation, OperationList, OrgInvitationList, OrgMemberList, Plan, PlanList, PlanningCloudList, Policy, PolicyList, Pool, PoolList, Preferences, Preview, Profile, Project, ProjectDomainList, ProjectList, ProjectView, ProjectZoneList, ProviderList, ProviderZoneList, PublicConfig, Rebuild, RebuildList, Registration, RegistrationExtensionList, RegistrationList, Resolution, Restore, RestoreList, RetentionPolicy, RetentionPolicyHistory, RetentionPolicyState, RetentionPreview, Retirement, RetirementHistory, RetirementPage, Revision, RevisionList, RouteOperation, RouteSummary, Server, ServerList, ServerOptions, ServerUsage, SignInAppList, Snapshot, SourceList, SpendReport, Status, StorageVolumeList, Sync, Target, Tenant, TenantList, TrafficReport, Variable, VariableList, WebhookEndpointList, Zone, ZoneList } from './types';
 
 export const useActivityGet = query<ActivitySummary>(ops['activity.get']);
 export const useAnalysesGet = query<Analysis>(ops['analyses.get']);
@@ -71,6 +71,8 @@ export const useOrganizationCloudTargetsDelete = mutation(ops['organizationCloud
 export const useConnectionCloudsList = query<ConnectionsCloudList>(ops['connectionClouds.list']);
 export const useConnectionsList = query<ConnectionList>(ops['connections.list']);
 export const useConnectionsCreate = mutation<Connection, Connection>(ops['connections.create']);
+export const useConnectionKeylessCreate = mutation<Connection, Connection>(ops['connectionKeyless.create']);
+export const useConnectionKeylessPrepare = mutation(ops['connectionKeyless.prepare']);
 export const useConnectionSignInsStart = mutation(ops['connectionSignIns.start']);
 export const useConnectionSignInsComplete = mutation<Connection, Connection>(ops['connectionSignIns.complete']);
 export const useConnectionsGet = query<Connection>(ops['connections.get']);
@@ -78,6 +80,8 @@ export const useConnectionsDelete = mutation(ops['connections.delete']);
 export const useConnectionsCheck = mutation<Connection, Connection>(ops['connections.check']);
 export const useConnectionsReplace = mutation<Connection, Connection>(ops['connections.replace']);
 export const useConnectionGpusGet = query<GPUInventory>(ops['connectionGpus.get']);
+export const useConnectionKeylessSetup = query<KeylessSetup>(ops['connectionKeyless.setup']);
+export const useConnectionKeylessReplace = mutation<Connection, Connection>(ops['connectionKeyless.replace']);
 export const useConnectionStorageList = query<StorageVolumeList>(ops['connectionStorage.list']);
 export const useDeploymentsGet = query<Deployment>(ops['deployments.get']);
 export const useDeploymentsCleanup = query<FailedCleanup>(ops['deployments.cleanup']);
@@ -185,6 +189,8 @@ export const useEnvironmentCloudsPreview = mutation<Preview, Preview>(ops['envir
 export const useEnvironmentConnectionsGet = query<EnvironmentConnections>(ops['environmentConnections.get']);
 export const useEnvironmentConnectionsChoose = mutation(ops['environmentConnections.choose']);
 export const useDeployedList = query<DeployedList>(ops['deployed.list']);
+export const useProjectsExclude = mutation<Project, Project>(ops['projects.exclude']);
+export const useProjectsInclude = mutation<Project, Project>(ops['projects.include']);
 export const useProjectsGraph = query<ProjectView>(ops['projects.graph']);
 export const useManifestsCurrent = query<Revision>(ops['manifests.current']);
 export const useManifestsSave = mutation<Revision, Revision>(ops['manifests.save']);
@@ -225,6 +231,14 @@ export const useFabriqRebuildsList = query<RebuildList>(ops['fabriqRebuilds.list
 export const useFabriqRebuildsCreate = mutation<Rebuild, Rebuild>(ops['fabriqRebuilds.create']);
 export const useFabriqTenantsList = query<TenantList>(ops['fabriqTenants.list']);
 export const useFabriqTenantsCreate = mutation<Tenant, Tenant>(ops['fabriqTenants.create']);
+export const useOctopusBoard = query<Board>(ops['octopus.board']);
+export const useOctopusDiscovery = query<DiscoverySummary>(ops['octopus.discovery']);
+export const useOctopusSetFarpHostnames = mutation(ops['octopus.setFarpHostnames']);
+export const useOctopusCreateRoute = mutation(ops['octopus.createRoute']);
+export const useOctopusRemoveRoute = mutation(ops['octopus.removeRoute']);
+export const useOctopusUpdateRoute = mutation(ops['octopus.updateRoute']);
+export const useOctopusStatus = query<OctopusStatus>(ops['octopus.status']);
+export const useOctopusSync = mutation(ops['octopus.sync']);
 export const useDomainRoutesOperation = query<RouteOperation>(ops['domainRoutes.operation']);
 export const useDomainRoutesApply = mutation<RouteOperation, RouteOperation>(ops['domainRoutes.apply']);
 export const useDomainRoutesCutover = mutation<RouteOperation, RouteOperation>(ops['domainRoutes.cutover']);

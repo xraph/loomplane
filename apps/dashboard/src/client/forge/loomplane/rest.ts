@@ -1021,6 +1021,79 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly connectionKeyless = {
+    /**
+     * Connect a cloud keylessly, with the reserved ID, once the cloud accepts Loomplane's token
+     */
+    create: async (body: types.KeylessInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Connection> => {
+      let __path = `/api/v1/connections/keyless`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["KeylessInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Connection"],
+      };
+
+      return this.request<types.Connection>(config);
+    },
+
+    /**
+     * Reserve a new keyless connection's ID for a day, and say how to set up the cloud's trust in it
+     */
+    prepare: async (body: types.KeylessPrepareInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.KeylessSetup> => {
+      let __path = `/api/v1/connections/keyless/prepare`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["KeylessPrepareInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["KeylessSetup"],
+      };
+
+      return this.request<types.KeylessSetup>(config);
+    },
+
+    /**
+     * Move a connection to keyless, or change its keyless settings, if the cloud's trust reaches the same account
+     */
+    replace: async (id: string, body: types.KeylessReplaceInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Connection> => {
+      let __path = `/api/v1/connections/${encodeURIComponent(String(id))}/keyless`;
+      const config: RequestConfig = {
+        method: 'PUT',
+        url: __path,
+        body,
+        bodyCodec: CODECS["KeylessReplaceInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Connection"],
+      };
+
+      return this.request<types.Connection>(config);
+    },
+
+    /**
+     * How to set up the cloud's trust in an existing connection, to move it to keyless
+     */
+    setup: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.KeylessSetup> => {
+      let __path = `/api/v1/connections/${encodeURIComponent(String(id))}/keyless`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["KeylessSetup"],
+      };
+
+      return this.request<types.KeylessSetup>(config);
+    },
+
+  };
+
   public readonly connectionSignIns = {
     /**
      * Finish a sign-in with what the cloud sent back to the callback
@@ -3205,6 +3278,145 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly octopus = {
+    /**
+     * An Octopus gateway's routes by domain: the ones added here, the ones FARP found and the ones made in the Octopus admin
+     */
+    board: async (projectId: string, environmentId: string, resource: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Board> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/octopus/${encodeURIComponent(String(resource))}/board`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Board"],
+      };
+
+      return this.request<types.Board>(config);
+    },
+
+    /**
+     * Add a route to an Octopus gateway and push it, without a redeploy
+     */
+    createRoute: async (projectId: string, environmentId: string, resource: string, body: types.OctopusRouteInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RouteResult> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/octopus/${encodeURIComponent(String(resource))}/routes`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["OctopusRouteInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["RouteResult"],
+      };
+
+      return this.request<types.RouteResult>(config);
+    },
+
+    /**
+     * The services an Octopus gateway's FARP discovery found or is waiting for
+     */
+    discovery: async (projectId: string, environmentId: string, resource: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.DiscoverySummary> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/octopus/${encodeURIComponent(String(resource))}/discovery`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["DiscoverySummary"],
+      };
+
+      return this.request<types.DiscoverySummary>(config);
+    },
+
+    /**
+     * Remove a route at the revision read; a FARP route it hid comes back
+     */
+    removeRoute: async (projectId: string, environmentId: string, resource: string, routeId: string, body: types.RouteRevisionInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.SyncResult> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/octopus/${encodeURIComponent(String(resource))}/routes/${encodeURIComponent(String(routeId))}/remove`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["RouteRevisionInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["SyncResult"],
+      };
+
+      return this.request<types.SyncResult>(config);
+    },
+
+    /**
+     * Set the attached domains FARP routes answer on, at the gateway's revision; none is any host
+     */
+    setFarpHostnames: async (projectId: string, environmentId: string, resource: string, body: types.FarpHostnamesInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.OctopusStatus> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/octopus/${encodeURIComponent(String(resource))}/farp-hostnames`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["FarpHostnamesInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["OctopusStatus"],
+      };
+
+      return this.request<types.OctopusStatus>(config);
+    },
+
+    /**
+     * An Octopus gateway's state, its last sync and what attaching a domain to it takes
+     */
+    status: async (projectId: string, environmentId: string, resource: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.OctopusStatus> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/octopus/${encodeURIComponent(String(resource))}/status`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["OctopusStatus"],
+      };
+
+      return this.request<types.OctopusStatus>(config);
+    },
+
+    /**
+     * Push an Octopus gateway's routes now, and register its services with FARP again
+     */
+    sync: async (projectId: string, environmentId: string, resource: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.SyncResult> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/octopus/${encodeURIComponent(String(resource))}/sync`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["SyncResult"],
+      };
+
+      return this.request<types.SyncResult>(config);
+    },
+
+    /**
+     * Change a route at the revision read, and push it
+     */
+    updateRoute: async (projectId: string, environmentId: string, resource: string, routeId: string, body: types.OctopusRouteInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RouteResult> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/octopus/${encodeURIComponent(String(resource))}/routes/${encodeURIComponent(String(routeId))}/update`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["OctopusRouteInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["RouteResult"],
+      };
+
+      return this.request<types.RouteResult>(config);
+    },
+
+  };
+
   public readonly organizationCloudChanges = {
     /**
      * organizationCloudChanges.apply
@@ -3792,6 +4004,24 @@ export class RESTClient extends Client {
     },
 
     /**
+     * Exclude services from a project's graph, plans and deploys, by service or path. A project setting: the repository doesn't change.
+     */
+    exclude: async (id: string, body: types.ExcludeInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Project> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/exclusions`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["ExcludeInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Project"],
+      };
+
+      return this.request<types.Project>(config);
+    },
+
+    /**
      * One project
      */
     get: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Project> => {
@@ -3821,6 +4051,24 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.ProjectView>(config);
+    },
+
+    /**
+     * Remove exclusions, bringing those services back into the graph and the next plan
+     */
+    include: async (id: string, body: types.IncludeInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Project> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/exclusions/remove`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["IncludeInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Project"],
+      };
+
+      return this.request<types.Project>(config);
     },
 
     /**

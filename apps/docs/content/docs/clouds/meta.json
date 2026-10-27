@@ -8,6 +8,7 @@
     "render",
     "digitalocean",
     "cloud-sign-in",
+    "keyless",
     "azure",
     "your-own-servers",
     "gpus",

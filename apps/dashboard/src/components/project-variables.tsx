@@ -211,7 +211,7 @@ function Panel({
       </div>
       <p className="text-[12.5px] text-muted-foreground">
         A value set for a service beats one set for the project, which beats the
-        organization&apos;s, and a value for one environment beats one for every
+        workspace&apos;s, and a value for one environment beats one for every
         environment.
         {services.length === 0 &&
           " Analyze the repository to set variables for one service."}
@@ -287,7 +287,7 @@ function Resolved({
       <Card className="py-0">
         <p className="px-4 py-3.5 text-[13px] text-muted-foreground">
           Nothing set for {target.serviceName ?? "this project"} in{" "}
-          {environment} yet, here or organization-wide.
+          {environment} yet, here or workspace-wide.
         </p>
       </Card>
     )
