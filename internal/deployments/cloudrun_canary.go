@@ -500,6 +500,12 @@ func (c *CloudRun) ApplyCandidate(ctx context.Context, job *Job) (*CanaryTarget,
 	} else if current == nil || current.ID != inst.ID {
 		return nil, fmt.Errorf("%s can't ramp a canary on Cloud Run: the binding names Ctrl Plane instance %s, but this release would deploy another", a.Name, inst.ID)
 	}
+	// Who may call the service is the service's, not a revision's, so a
+	// candidate can't try a change to it; Promote would switch it for all
+	// of the traffic with no step judging it.
+	if (inst.Labels[cloudrun.LabelPublic] == "true") != a.Service.Public {
+		return nil, fmt.Errorf("%s can't run a canary: this release changes who may call the Cloud Run service (public), which Cloud Run applies to the whole service, the revision serving now included. Release this environment direct or blue_green once to make that change", a.Name)
+	}
 	restore, err := instanceTemplate(inst)
 	if err != nil {
 		return nil, err

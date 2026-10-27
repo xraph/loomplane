@@ -1281,3 +1281,20 @@ func TestCloudRunCanaryRefusesACloudSQLPSCRoute(t *testing.T) {
 		})
 	}
 }
+
+// Who may call a Cloud Run service is the service's, so a release that
+// flips public is refused at start, before any read or write, as Azure
+// refuses an app-wide change.
+func TestCloudRunCanaryRefusesFlippingPublic(t *testing.T) {
+	e := newRunCanaryEnv(t)
+	e.job.Action.Service.Public = !e.job.Action.Service.Public
+	_, err := e.exec.ApplyCandidate(t.Context(), e.job)
+	for _, want := range []string{"api can't run a canary", "public", "direct or blue_green"} {
+		if err == nil || !strings.Contains(err.Error(), want) {
+			t.Fatalf("error %v doesn't say %q", err, want)
+		}
+	}
+	if len(e.g.calls) != 0 || len(e.g.asked) != 0 || len(e.ctrl.updates) != 0 {
+		t.Fatalf("a refused canary called %v, asked %v and updated %v", e.g.calls, e.g.asked, e.ctrl.updates)
+	}
+}
