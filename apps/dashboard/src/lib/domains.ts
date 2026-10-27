@@ -8,6 +8,7 @@ import type {
   DomainOffer,
   HostnameUse,
   Registration,
+  Zone,
   ZoneOverview,
 } from "@/client/forge/loomplane/types"
 import { cloudLabel } from "@/lib/clouds"
@@ -126,8 +127,10 @@ export function providerLabel(z: ZoneOverview): string {
 export function zoneDNSLabel(z: ZoneOverview): string {
   if (z.state !== "ready") {
     // Not in the mock: "Awaiting verification" for a zone with no TXT proof
-    // yet, such as one verified before proofs were required.
-    return z.zone?.proofName ? "Awaiting TXT record" : "Awaiting verification"
+    // yet, such as one verified before proofs were required, and
+    // "Verifying" for a managed zone, whose record Loomplane publishes.
+    if (!z.zone?.proofName) return "Awaiting verification"
+    return z.zone.mode === "managed" ? "Verifying" : "Awaiting TXT record"
   }
   // Not in the mock: an external zone after its TXT record was found.
   if (z.zone?.mode === "external") return "Verified by TXT record"
@@ -136,6 +139,23 @@ export function zoneDNSLabel(z: ZoneOverview): string {
 
 export function zoneDNSTone(z: ZoneOverview): PillTone {
   return z.state === "ready" ? "ok" : "warn"
+}
+
+/**
+ * Where the TXT record Loomplane publishes for a managed zone stands:
+ * still being written, written and waiting for public DNS to show it, or
+ * not written, with the reason on the zone. Not in the mock.
+ */
+export type ProofPublishState = "publishing" | "waiting" | "failed"
+
+export function proofPublishState(z: Zone): ProofPublishState {
+  // A write whose answer was lost, or a renewed value, isn't published yet.
+  const published =
+    !!z.proofRecord &&
+    !z.proofPublishAttempted &&
+    z.proofRecord.value === z.proofValue
+  if (published) return "waiting"
+  return z.proofPublishError ? "failed" : "publishing"
 }
 
 export function registrationLine(z: ZoneOverview, r?: Registration): string {

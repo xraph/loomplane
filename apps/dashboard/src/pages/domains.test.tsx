@@ -89,6 +89,8 @@ function zoneWith(
     registration?: string
     proof?: boolean
     hostedIn?: string
+    published?: boolean
+    publishError?: string
   } = {}
 ) {
   const proof = options.proof ?? options.external
@@ -105,6 +107,18 @@ function zoneWith(
       project_ids: ["shop"],
       proof_name: proof ? `_loomplane.${name}` : "",
       proof_value: proof ? "lp-proof-123" : "",
+      proof_record: options.published
+        ? {
+            id: "rec",
+            zone_id: `cf-${options.hostedIn ?? name}`,
+            name: "_loomplane",
+            type: "TXT",
+            value: "lp-proof-123",
+            ttl: 60,
+            owner: `loomplane:zone-proof:${id}`,
+          }
+        : undefined,
+      proof_publish_error: options.publishError ?? "",
       proof_checked_at: zero,
       proof_expires_at: zero,
       provider_zone: options.external
@@ -527,7 +541,7 @@ it("shows TXT instructions and checks again", async () => {
   ])
 })
 
-it("shows TXT instructions for a managed zone awaiting its proof", async () => {
+it("publishes a managed zone's TXT record instead of asking for it", async () => {
   stubFetch({
     "/api/v1/domains": overviewWith(
       zoneWith("acme.dev", [], { verified: false, proof: true })
@@ -539,9 +553,78 @@ it("shows TXT instructions for a managed zone awaiting its proof", async () => {
     </Wrapped>
   )
   const card = await screen.findByRole("region", { name: "acme.dev" })
-  expect(within(card).getByText("Awaiting TXT record")).toBeTruthy()
-  expect(within(card).getByText("_loomplane.acme.dev")).toBeTruthy()
+  expect(within(card).getByText("Verifying")).toBeTruthy()
+  expect(
+    within(card).getByText("Publishing the TXT record through Cloudflare.")
+  ).toBeTruthy()
+  expect(within(card).queryByText(/Add this TXT record/)).toBeNull()
   expect(within(card).getByRole("button", { name: "Check again" })).toBeTruthy()
+})
+
+it("waits for DNS once a managed zone's record is published", async () => {
+  stubFetch({
+    "/api/v1/domains": overviewWith(
+      zoneWith("acme.dev", [], {
+        verified: false,
+        proof: true,
+        published: true,
+      })
+    ),
+  })
+  render(
+    <Wrapped>
+      <Domains search={{ zone: "zone-acme.dev" }} onSearch={() => {}} />
+    </Wrapped>
+  )
+  const card = await screen.findByRole("region", { name: "acme.dev" })
+  expect(
+    within(card).getByText("Waiting for DNS to show the TXT record.")
+  ).toBeTruthy()
+  expect(within(card).queryByText(/Add this TXT record/)).toBeNull()
+  // What was written stays visible, as secondary detail.
+  const details = within(card).getByText("Record details")
+  await userEvent.click(details)
+  expect(within(card).getByText("_loomplane.acme.dev")).toBeTruthy()
+  expect(within(card).getByText("lp-proof-123")).toBeTruthy()
+})
+
+it("shows why a managed zone's record didn't publish and checks again", async () => {
+  const writes = stubFetch({
+    "/api/v1/domains": overviewWith(
+      zoneWith("acme.dev", [], {
+        verified: false,
+        proof: true,
+        publishError:
+          "The Cloudflare connection can't write DNS records for acme.dev.",
+      })
+    ),
+    "POST /api/v1/dns-zones/zone-acme.dev/verify": () =>
+      Response.json({ message: "not yet" }, { status: 409 }),
+  })
+  render(
+    <Wrapped>
+      <Domains search={{ zone: "zone-acme.dev" }} onSearch={() => {}} />
+    </Wrapped>
+  )
+  const card = await screen.findByRole("region", { name: "acme.dev" })
+  expect(
+    within(card).getByText(
+      "The Cloudflare connection can't write DNS records for acme.dev."
+    )
+  ).toBeTruthy()
+  expect(within(card).queryByText(/Publishing the TXT record/)).toBeNull()
+  await userEvent.click(
+    within(card).getByRole("button", { name: "Check again" })
+  )
+  await waitFor(() =>
+    expect(writes).toEqual([
+      {
+        method: "POST",
+        path: "/api/v1/dns-zones/zone-acme.dev/verify",
+        body: undefined,
+      },
+    ])
+  )
 })
 
 it("offers wildcard certificates only on a domain that is its own Cloudflare zone", async () => {
