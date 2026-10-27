@@ -422,8 +422,9 @@ func refusedSignIn(err error) bool {
 		(errors.As(err, &de) && de.Status == http.StatusUnauthorized)
 }
 
-// AWSChecker checks AWS access keys in a required region. Optional private
-// recovery route settings do not establish connectivity or SQL verification.
+// AWSChecker checks AWS access keys in a required region, and keyless
+// handouts that assume a role there. Optional private recovery route
+// settings do not establish connectivity or SQL verification.
 type AWSChecker struct{ Client *aws.Client }
 
 // IsGrant implements GrantChecker.
@@ -439,12 +440,18 @@ func (a AWSChecker) Parse(credential []byte, settings map[string]string) (Check,
 	if err := aws.CheckRegion(region); err != nil {
 		return Check{}, fmt.Errorf("%w: %w", ErrInvalid, err)
 	}
-	details := map[string]string{"region": region, "access_key": "…" + key.AccessKeyID[len(key.AccessKeyID)-4:]}
+	details := map[string]string{"region": region}
+	if key.Keyless() {
+		// A handout is built from these details, so the role stays in them.
+		details["role_arn"] = key.RoleARN
+	} else {
+		details["access_key"] = "…" + key.AccessKeyID[len(key.AccessKeyID)-4:]
+	}
 	// An ACM certificate in the region serves public ECS services over
 	// HTTPS; without one they serve HTTP.
 	if cert := strings.TrimSpace(settings["certificate_arn"]); cert != "" {
-		if !strings.HasPrefix(cert, "arn:aws:acm:"+region+":") || !strings.Contains(cert, ":certificate/") {
-			return Check{}, fmt.Errorf("%w: %q isn't an ACM certificate in %s", ErrInvalid, cert, region)
+		if err := aws.CheckCertificateARN(cert, region); err != nil {
+			return Check{}, fmt.Errorf("%w: %w", ErrInvalid, err)
 		}
 		details["certificate_arn"] = cert
 	}
@@ -461,7 +468,9 @@ func (a AWSChecker) Parse(credential []byte, settings map[string]string) (Check,
 
 // Check implements Checker: it asks STS who the key is, then IAM's policy
 // simulator which actions a deployment needs it may take. A key that may
-// not run the simulator is ready, with its permissions unchecked.
+// not run the simulator is ready, with its permissions unchecked. A
+// keyless handout first assumes its role, which a trust that isn't set up
+// refuses.
 func (a AWSChecker) Check(ctx context.Context, credential []byte, settings map[string]string) (Check, error) {
 	c, err := a.Parse(credential, settings)
 	if err != nil {
