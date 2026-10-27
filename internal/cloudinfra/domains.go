@@ -4,6 +4,7 @@ import (
 	"cmp"
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	"slices"
 	"strings"
@@ -533,6 +534,11 @@ func (s *Service) RemoveZone(ctx context.Context, p security.Principal, id strin
 			return proofErr
 		}
 		if removeErr := st.RemoveZone(ctx, p.OrgID, z.ID, z.Revision); removeErr != nil {
+			// Only the zone you asked for can be not found: a subdomain
+			// that changed or went since you looked is a conflict.
+			if z != zone && errors.Is(removeErr, ErrNotFound) {
+				return fmt.Errorf("%w: %s changed since you looked, so %s was kept. Try again", ErrConflict, z.Name, zone.Name)
+			}
 			return removeErr
 		}
 		s.domainAudit(ctx, p, "domain.zone.remove", z.ID, "")
