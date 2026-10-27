@@ -197,6 +197,24 @@ for pin in "$guard_amd64" "$guard_arm64"; do
 		die "$GUARD_REPO@$pin isn't Caddy $GUARD_TAG"
 done
 
+# check_root REPO DIGEST fails unless the image runs as root. The engine
+# reads the Hugging Face token from a file owned by root with mode 0400,
+# so an engine running as any other user couldn't read it.
+check_root() {
+	user=$(image_config "$1" "$2" | jq -r '.config.User // ""')
+	case $user in
+	"" | root | 0 | root:* | 0:*) ;;
+	*) die "$1@$2 runs as user \"$user\", not root, so its engine couldn't read the Hugging Face token file (owned by root, mode 0400)" ;;
+	esac
+}
+
+check_root "$VLLM_REPO" "$vllm_amd64"
+check_root "$TEI_REPO" "$tei_amd64"
+check_root "$TEI_REPO" "$tei_arm64"
+check_root "$LLAMACPP_REPO" "$llamacpp_amd64"
+check_root "$LLAMACPP_REPO" "$llamacpp_arm64"
+check_root "$LLAMACPP_REPO" "$llamacpp_gpu_amd64"
+
 check_age "$VLLM_REPO" "$vllm_amd64"
 check_age "$TEI_REPO" "$tei_amd64"
 check_age "$TEI_REPO" "$tei_arm64"
