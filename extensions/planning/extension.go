@@ -106,6 +106,7 @@ type Extension struct {
 	checkLimit          *checkLimiter // nil is checksPerMinute (see checks)
 	checkLimitOnce      sync.Once
 	catalogKinds        *recipes.Registry // nil is recipes.Default()
+	failedCleanups      *deployments.FailedCleanups
 	cloudStore          *cloudprofiles.PgStore
 	cloudRecoveryCancel context.CancelFunc
 	cloudRecoveryDone   chan struct{}
@@ -436,6 +437,8 @@ func (e *Extension) Register(fapp forge.App) error {
 	e.plans.BindCloudSyncRunner(runner, runner)
 	e.deployments.Bind(e.plans, runner, e.engineOf)
 	e.deployments.BindCloudSync(e.plans)
+	e.failedCleanups = deployments.NewFailedCleanups(runner, deployStore, e.deployments)
+	e.deployments.BindFailedCleanups(e.failedCleanups)
 	// Drift is checked on Dispatch's cron leader, so one replica checks.
 	engine.Register(e.engineOf(), orchestration.DriftJob(&deployments.DriftChecker{
 		Store: planStore, Credentials: clouds, Executors: executors, Telemetry: metrics,
@@ -581,7 +584,7 @@ func fail(err error) error {
 		errors.Is(err, deployments.ErrNotFound), errors.Is(err, deployments.ErrComponentNotFound), errors.Is(err, catalogproxy.ErrNotFound),
 		errors.Is(err, projects.ErrEnvironmentNotFound), errors.Is(err, manifests.ErrNotFound):
 		return forge.NewHTTPError(http.StatusNotFound, err.Error())
-	case errors.Is(err, cloudprofiles.ErrConflict), errors.Is(err, cloudprofiles.ErrExists), errors.Is(err, cloudprofiles.ErrInUse), errors.Is(err, cloudprofiles.ErrBusy), errors.Is(err, recovery.ErrConflict), errors.Is(err, planning.ErrConflict), errors.Is(err, manifests.ErrConflict), errors.Is(err, deployments.ErrNotFailed),
+	case errors.Is(err, deployments.ErrCleanupConflict), errors.Is(err, cloudprofiles.ErrConflict), errors.Is(err, cloudprofiles.ErrExists), errors.Is(err, cloudprofiles.ErrInUse), errors.Is(err, cloudprofiles.ErrBusy), errors.Is(err, recovery.ErrConflict), errors.Is(err, planning.ErrConflict), errors.Is(err, manifests.ErrConflict), errors.Is(err, deployments.ErrNotFailed),
 		errors.Is(err, planning.ErrStale), errors.Is(err, planning.ErrSuperseded), errors.Is(err, planning.ErrNotReady),
 		errors.Is(err, catalogconnect.ErrInUse):
 		return forge.NewHTTPError(http.StatusConflict, err.Error())

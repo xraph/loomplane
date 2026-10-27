@@ -63,6 +63,7 @@ type Observation struct {
 
 // Job is one action to carry out, with everything its executor needs.
 type Job struct {
+	cleanupCheck     func(context.Context) error
 	pendingIdentity  *PendingCloudIdentity
 	cleanupSyncID    string
 	BuildCredentials Credentials
@@ -585,6 +586,18 @@ func (r *Runner) Run(ctx context.Context, orgID, deploymentID, actionID string, 
 	for _, a := range execution.Actions {
 		if a.ID == actionID {
 			action = a
+		}
+	}
+	if action.Provider == "cloud-sql" && ctx.Value(sqlActionLockKey{}) == nil {
+		if _, installed := r.store.(*PgStore); installed {
+			return r.withSQLActionLock(ctx, d, action, func(work context.Context) error {
+				return r.Run(work, orgID, deploymentID, actionID, resume, func(raw []byte) error {
+					if lockErr := checkSQLActionLock(work); lockErr != nil {
+						return lockErr
+					}
+					return heartbeat(raw)
+				})
+			})
 		}
 	}
 	if action.Compensation != nil {
