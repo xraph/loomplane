@@ -79,17 +79,17 @@ func (s *PgStore) CloudUsage(ctx context.Context, org, project, cloud string) (*
 	index := map[string]int{}
 	for rows.Next() {
 		var e EnvironmentUsage
-		if err = rows.Scan(&e.ProjectID, &e.ProjectName, &e.EnvironmentID, &e.EnvironmentName, &e.Assigned); err != nil {
+		if scanErr := rows.Scan(&e.ProjectID, &e.ProjectName, &e.EnvironmentID, &e.EnvironmentName, &e.Assigned); scanErr != nil {
 			rows.Close()
-			return nil, err
+			return nil, scanErr
 		}
 		e.Placements = []PlacementUsage{}
 		index[e.EnvironmentID] = len(out.Environments)
 		out.Environments = append(out.Environments, e)
 	}
 	rows.Close()
-	if err = rows.Err(); err != nil {
-		return nil, err
+	if rowsErr := rows.Err(); rowsErr != nil {
+		return nil, rowsErr
 	}
 	rows, err = s.db.Query(ctx, `SELECT environment_id,coalesce(config->'cloud_placement'->>'target_id',''),coalesce((config->'cloud_placement'->>'default')::boolean,false),array_agg(name ORDER BY name)
  FROM loomplane_bindings
@@ -102,8 +102,8 @@ func (s *PgStore) CloudUsage(ctx context.Context, org, project, cloud string) (*
 	for rows.Next() {
 		var env string
 		var placed PlacementUsage
-		if err = rows.Scan(&env, &placed.TargetID, &placed.Default, &placed.Services); err != nil {
-			return nil, err
+		if scanErr := rows.Scan(&env, &placed.TargetID, &placed.Default, &placed.Services); scanErr != nil {
+			return nil, scanErr
 		}
 		if i, ok := index[env]; ok {
 			out.Environments[i].Placements = append(out.Environments[i].Placements, placed)
