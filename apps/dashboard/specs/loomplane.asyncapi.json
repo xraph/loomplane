@@ -1663,6 +1663,12 @@
           "default": {
             "type": "boolean"
           },
+          "gpu_kind": {
+            "type": "string"
+          },
+          "gpus": {
+            "type": "integer"
+          },
           "grant_revision": {
             "type": "integer"
           },
@@ -1811,6 +1817,9 @@
           "dependencies": {
             "type": "object",
             "additionalProperties": true
+          },
+          "gpu": {
+            "$ref": "#/components/schemas/GPUPlacement"
           },
           "kind": {
             "type": "string"
@@ -2687,6 +2696,9 @@
           "system_reserve"
         ],
         "properties": {
+          "accelerator_kind": {
+            "type": "string"
+          },
           "allowed_sizes": {
             "type": "array",
             "items": {
@@ -2928,6 +2940,9 @@
           },
           "volume": {
             "$ref": "#/components/schemas/Volume"
+          },
+          "weight_cache": {
+            "$ref": "#/components/schemas/WeightCache"
           }
         }
       },
@@ -2992,6 +3007,12 @@
           "cpu_millis": {
             "type": "integer"
           },
+          "gpu_kind": {
+            "type": "string"
+          },
+          "gpus": {
+            "type": "integer"
+          },
           "memory_bytes": {
             "type": "integer"
           },
@@ -3013,7 +3034,13 @@
           "cpu_millis": {
             "type": "integer"
           },
+          "gpu": {
+            "$ref": "#/components/schemas/RecipesGPU"
+          },
           "memory_mb": {
+            "type": "integer"
+          },
+          "shm_mb": {
             "type": "integer"
           }
         }
@@ -3376,6 +3403,9 @@
           },
           "frontend_demand": {
             "$ref": "#/components/schemas/FrontendDemand"
+          },
+          "gpu": {
+            "$ref": "#/components/schemas/GPUPlacement"
           }
         }
       },
@@ -3389,7 +3419,13 @@
           "cpu": {
             "type": "number"
           },
+          "gpu": {
+            "$ref": "#/components/schemas/ManifestGPU"
+          },
           "memory": {
+            "type": "integer"
+          },
+          "shm": {
             "type": "integer"
           }
         }
@@ -4200,9 +4236,6 @@
             "items": {
               "$ref": "#/components/schemas/Step"
             }
-          },
-          "canary": {
-            "$ref": "#/components/schemas/Canary"
           }
         }
       },
@@ -4493,9 +4526,6 @@
             "items": {
               "$ref": "#/components/schemas/Finding"
             }
-          },
-          "release": {
-            "$ref": "#/components/schemas/Release"
           }
         }
       },
@@ -4763,255 +4793,6 @@
           }
         }
       },
-      "Canary": {
-        "type": "object",
-        "required": [
-          "status",
-          "steps",
-          "hold_seconds",
-          "thresholds",
-          "step",
-          "weight",
-          "services",
-          "updated_at"
-        ],
-        "properties": {
-          "hold_seconds": {
-            "type": "integer"
-          },
-          "reason": {
-            "type": "string"
-          },
-          "services": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/CanaryService"
-            }
-          },
-          "status": {
-            "type": "string"
-          },
-          "step": {
-            "type": "integer"
-          },
-          "steps": {
-            "type": "array",
-            "items": {
-              "type": "integer"
-            }
-          },
-          "thresholds": {
-            "$ref": "#/components/schemas/Thresholds"
-          },
-          "updated_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "weight": {
-            "type": "integer"
-          }
-        }
-      },
-      "CanaryService": {
-        "type": "object",
-        "required": [
-          "action_id",
-          "name",
-          "provider",
-          "binding_id"
-        ],
-        "properties": {
-          "action_id": {
-            "type": "string"
-          },
-          "baseline": {
-            "type": "string"
-          },
-          "binding_id": {
-            "type": "string"
-          },
-          "candidate": {
-            "type": "string"
-          },
-          "image": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
-          },
-          "provider": {
-            "type": "string"
-          }
-        }
-      },
-      "Health": {
-        "type": "object",
-        "required": [
-          "requests",
-          "errors",
-          "latency_ms",
-          "available"
-        ],
-        "properties": {
-          "available": {
-            "type": "boolean"
-          },
-          "errors": {
-            "type": "number"
-          },
-          "latency_ms": {
-            "type": "number"
-          },
-          "reason": {
-            "type": "string"
-          },
-          "requests": {
-            "type": "number"
-          },
-          "statistic": {
-            "type": "string"
-          }
-        }
-      },
-      "Release": {
-        "type": "object",
-        "required": [
-          "strategy",
-          "thresholds"
-        ],
-        "properties": {
-          "canary": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          },
-          "hold_seconds": {
-            "type": "integer"
-          },
-          "steps": {
-            "type": "array",
-            "items": {
-              "type": "integer"
-            }
-          },
-          "strategy": {
-            "type": "string"
-          },
-          "thresholds": {
-            "$ref": "#/components/schemas/Thresholds"
-          }
-        }
-      },
-      "Thresholds": {
-        "type": "object",
-        "required": [
-          "error_rate",
-          "error_rate_delta",
-          "p95_latency_ratio",
-          "min_requests"
-        ],
-        "properties": {
-          "error_rate": {
-            "type": "number"
-          },
-          "error_rate_delta": {
-            "type": "number"
-          },
-          "min_requests": {
-            "type": "number"
-          },
-          "p95_latency_ratio": {
-            "type": "number"
-          }
-        }
-      },
-      "CanaryVerdict": {
-        "type": "object",
-        "required": [
-          "id",
-          "org_id",
-          "project_id",
-          "deployment_id",
-          "retry",
-          "action_id",
-          "service",
-          "step",
-          "attempt",
-          "weight",
-          "verdict",
-          "reason",
-          "baseline_fallback",
-          "baseline",
-          "candidate",
-          "thresholds",
-          "window_start",
-          "window_end",
-          "decided_at"
-        ],
-        "properties": {
-          "action_id": {
-            "type": "string"
-          },
-          "attempt": {
-            "type": "integer"
-          },
-          "baseline": {
-            "$ref": "#/components/schemas/Health"
-          },
-          "baseline_fallback": {
-            "type": "boolean"
-          },
-          "candidate": {
-            "$ref": "#/components/schemas/Health"
-          },
-          "decided_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "deployment_id": {
-            "type": "string"
-          },
-          "id": {
-            "type": "string"
-          },
-          "org_id": {
-            "type": "string"
-          },
-          "project_id": {
-            "type": "string"
-          },
-          "reason": {
-            "type": "string"
-          },
-          "retry": {
-            "type": "integer"
-          },
-          "service": {
-            "type": "string"
-          },
-          "step": {
-            "type": "integer"
-          },
-          "thresholds": {
-            "$ref": "#/components/schemas/Thresholds"
-          },
-          "verdict": {
-            "type": "string"
-          },
-          "weight": {
-            "type": "integer"
-          },
-          "window_end": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "window_start": {
-            "type": "string",
-            "format": "date-time"
-          }
-        }
-      },
       "FrontendDemand": {
         "type": "object",
         "required": [
@@ -5068,6 +4849,102 @@
           },
           "target_revision": {
             "type": "integer"
+          }
+        }
+      },
+      "GPUPlacement": {
+        "type": "object",
+        "required": [
+          "kind",
+          "count"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "node_selector": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "tolerations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GPUToleration"
+            }
+          }
+        }
+      },
+      "GPUToleration": {
+        "type": "object",
+        "required": [
+          "key",
+          "operator",
+          "effect"
+        ],
+        "properties": {
+          "effect": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "operator": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
+          }
+        }
+      },
+      "ManifestGPU": {
+        "properties": {
+          "count": {
+            "type": "integer"
+          },
+          "kind": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "count"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/pkg/manifest.GPU"
+      },
+      "RecipesGPU": {
+        "properties": {
+          "count": {
+            "type": "integer"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "min_memory_gib": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "count"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/internal/recipes.GPU"
+      },
+      "WeightCache": {
+        "type": "object",
+        "required": [
+          "mount_path",
+          "kubernetes_size_mb"
+        ],
+        "properties": {
+          "kubernetes_size_mb": {
+            "type": "integer"
+          },
+          "mount_path": {
+            "type": "string"
           }
         }
       }
@@ -6327,9 +6204,6 @@
               "items": {
                 "$ref": "#/components/schemas/Step"
               }
-            },
-            "canary": {
-              "$ref": "#/components/schemas/Canary"
             }
           }
         },
@@ -6416,9 +6290,6 @@
               "items": {
                 "$ref": "#/components/schemas/Step"
               }
-            },
-            "canary": {
-              "$ref": "#/components/schemas/Canary"
             }
           }
         },
@@ -6839,9 +6710,6 @@
               "items": {
                 "$ref": "#/components/schemas/Finding"
               }
-            },
-            "release": {
-              "$ref": "#/components/schemas/Release"
             }
           }
         },
@@ -7002,9 +6870,6 @@
               "items": {
                 "$ref": "#/components/schemas/Finding"
               }
-            },
-            "release": {
-              "$ref": "#/components/schemas/Release"
             }
           }
         },
@@ -7025,6 +6890,7 @@
             "icon",
             "color",
             "repositories",
+            "exclusions",
             "status",
             "created_by",
             "created_at",
@@ -7043,6 +6909,12 @@
             },
             "description": {
               "type": "string"
+            },
+            "exclusions": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/Exclusion"
+              }
             },
             "icon": {
               "type": "string"
@@ -7092,6 +6964,7 @@
             "icon",
             "color",
             "repositories",
+            "exclusions",
             "status",
             "created_by",
             "created_at",
@@ -7110,6 +6983,12 @@
             },
             "description": {
               "type": "string"
+            },
+            "exclusions": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/Exclusion"
+              }
             },
             "icon": {
               "type": "string"
@@ -7377,190 +7256,6 @@
         "name": "SendMessage",
         "title": "Client to Server Message",
         "summary": "Messages sent from client to server"
-      },
-      "api-v1-realtime-eventscanary_verdict.updated": {
-        "payload": {
-          "type": "object",
-          "required": [
-            "id",
-            "org_id",
-            "project_id",
-            "deployment_id",
-            "retry",
-            "action_id",
-            "service",
-            "step",
-            "attempt",
-            "weight",
-            "verdict",
-            "reason",
-            "baseline_fallback",
-            "baseline",
-            "candidate",
-            "thresholds",
-            "window_start",
-            "window_end",
-            "decided_at"
-          ],
-          "properties": {
-            "action_id": {
-              "type": "string"
-            },
-            "attempt": {
-              "type": "integer"
-            },
-            "baseline": {
-              "$ref": "#/components/schemas/Health"
-            },
-            "baseline_fallback": {
-              "type": "boolean"
-            },
-            "candidate": {
-              "$ref": "#/components/schemas/Health"
-            },
-            "decided_at": {
-              "type": "string",
-              "format": "date-time"
-            },
-            "deployment_id": {
-              "type": "string"
-            },
-            "id": {
-              "type": "string"
-            },
-            "org_id": {
-              "type": "string"
-            },
-            "project_id": {
-              "type": "string"
-            },
-            "reason": {
-              "type": "string"
-            },
-            "retry": {
-              "type": "integer"
-            },
-            "service": {
-              "type": "string"
-            },
-            "step": {
-              "type": "integer"
-            },
-            "thresholds": {
-              "$ref": "#/components/schemas/Thresholds"
-            },
-            "verdict": {
-              "type": "string"
-            },
-            "weight": {
-              "type": "integer"
-            },
-            "window_end": {
-              "type": "string",
-              "format": "date-time"
-            },
-            "window_start": {
-              "type": "string",
-              "format": "date-time"
-            }
-          }
-        },
-        "contentType": "text/event-stream",
-        "name": "canary_verdict.updated",
-        "title": "canary_verdict.updated event",
-        "summary": "SSE event: canary_verdict.updated"
-      },
-      "api-v1-realtime-eventscanary_verdict.deleted": {
-        "payload": {
-          "type": "object",
-          "required": [
-            "id",
-            "org_id",
-            "project_id",
-            "deployment_id",
-            "retry",
-            "action_id",
-            "service",
-            "step",
-            "attempt",
-            "weight",
-            "verdict",
-            "reason",
-            "baseline_fallback",
-            "baseline",
-            "candidate",
-            "thresholds",
-            "window_start",
-            "window_end",
-            "decided_at"
-          ],
-          "properties": {
-            "action_id": {
-              "type": "string"
-            },
-            "attempt": {
-              "type": "integer"
-            },
-            "baseline": {
-              "$ref": "#/components/schemas/Health"
-            },
-            "baseline_fallback": {
-              "type": "boolean"
-            },
-            "candidate": {
-              "$ref": "#/components/schemas/Health"
-            },
-            "decided_at": {
-              "type": "string",
-              "format": "date-time"
-            },
-            "deployment_id": {
-              "type": "string"
-            },
-            "id": {
-              "type": "string"
-            },
-            "org_id": {
-              "type": "string"
-            },
-            "project_id": {
-              "type": "string"
-            },
-            "reason": {
-              "type": "string"
-            },
-            "retry": {
-              "type": "integer"
-            },
-            "service": {
-              "type": "string"
-            },
-            "step": {
-              "type": "integer"
-            },
-            "thresholds": {
-              "$ref": "#/components/schemas/Thresholds"
-            },
-            "verdict": {
-              "type": "string"
-            },
-            "weight": {
-              "type": "integer"
-            },
-            "window_end": {
-              "type": "string",
-              "format": "date-time"
-            },
-            "window_start": {
-              "type": "string",
-              "format": "date-time"
-            }
-          }
-        },
-        "contentType": "text/event-stream",
-        "name": "canary_verdict.deleted",
-        "title": "canary_verdict.deleted event",
-        "summary": "SSE event: canary_verdict.deleted"
       }
     }
   },
