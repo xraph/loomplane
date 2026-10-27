@@ -74,10 +74,22 @@ func (s *Service) publishZoneProof(ctx context.Context, st DomainStore, zone *Zo
 	if err != nil {
 		return s.proofPublishFailed(ctx, st, zone, err)
 	}
-	reconcile := zone.ProofPublishAttempted
+	attempted := zone.ProofPublishAttempted
+	reconcile := attempted
+	if reconcile && zone.ProofRecord == nil {
+		// A create whose answer was lost. A duplicate proof TXT is harmless,
+		// unlike a route record, so when the provider definitely shows
+		// nothing of ours at the name, this attempt writes it again.
+		records, listErr := adapter.ListRecords(ctx, cred, zone.ProviderZone)
+		if listErr != nil {
+			// Unknown still: stay reconcile-only.
+			return s.proofPublishFailed(ctx, st, zone, errors.Join(provider.ErrInfrastructureAmbiguous, listErr))
+		}
+		reconcile = proofCreateLanded(records, desired)
+	}
 	zone.ProofPublishAttempted = true
 	if err = st.SaveZone(ctx, zone); err != nil {
-		zone.ProofPublishAttempted = reconcile
+		zone.ProofPublishAttempted = attempted
 		return err
 	}
 	receipt, err := adapter.UpsertRecord(ctx, cred, provider.DNSUpsertRequest{Zone: zone.ProviderZone, Record: desired, Expected: zone.ProofRecord, ReconcileOnly: reconcile})
@@ -86,6 +98,21 @@ func (s *Service) publishZoneProof(ctx context.Context, st DomainStore, zone *Zo
 	}
 	zone.ProofRecord, zone.ProofPublishAttempted, zone.ProofPublishError = &receipt, false, ""
 	return st.SaveZone(ctx, zone)
+}
+
+// proofCreateLanded reports whether a create of desired may be at the
+// provider: a TXT record at its name that carries its owner token or, on a
+// provider without owner tokens, its value. Reconciling settles which.
+func proofCreateLanded(records []provider.DNSRecord, desired provider.DNSRecord) bool {
+	for _, r := range records {
+		if r.Name != desired.Name || r.Type != desired.Type {
+			continue
+		}
+		if (desired.Owner != "" && r.Owner == desired.Owner) || (desired.Owner == "" && r.Value == desired.Value) {
+			return true
+		}
+	}
+	return false
 }
 
 // proofPublishFailed records why the proof isn't published. Only an

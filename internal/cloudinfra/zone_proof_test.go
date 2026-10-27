@@ -28,7 +28,10 @@ type proofDNS struct {
 	upsertErr error
 	// loseResponse lands the write and loses its answer.
 	loseResponse bool
-	deleteErr    error
+	// dropWrite loses the write and its answer: nothing lands.
+	dropWrite bool
+	deleteErr error
+	listErr   error
 }
 
 func (a *proofDNS) SupportsDNSRecordOwnership() bool { return a.ownership }
@@ -46,12 +49,21 @@ func (*proofDNS) CreateZone(context.Context, provider.InfrastructureCredential, 
 	return provider.DNSZone{}, provider.ErrInfrastructureUnsupported
 }
 func (a *proofDNS) ListRecords(context.Context, provider.InfrastructureCredential, provider.DNSZone) ([]provider.DNSRecord, error) {
+	if a.listErr != nil {
+		return nil, a.listErr
+	}
 	return slices.Clone(a.records), nil
 }
 func (a *proofDNS) UpsertRecord(_ context.Context, _ provider.InfrastructureCredential, req provider.DNSUpsertRequest) (provider.DNSRecord, error) {
 	a.last = req
 	if a.upsertErr != nil {
 		return provider.DNSRecord{}, a.upsertErr
+	}
+	if a.listErr != nil {
+		return provider.DNSRecord{}, a.listErr
+	}
+	if a.dropWrite {
+		return provider.DNSRecord{}, errors.Join(provider.ErrInfrastructureAmbiguous, errors.New("connection reset"))
 	}
 	if req.ReconcileOnly && req.Expected != nil {
 		for _, r := range a.records {
@@ -448,5 +460,47 @@ func TestZoneProofBackgroundSkipsExpiredProofs(t *testing.T) {
 	env.now = env.now.Add(25 * time.Hour)
 	if err := env.svc.CheckZoneProofs(t.Context()); err != nil || env.resolver.lookups != 0 || env.dns.writes != 1 {
 		t.Fatal("expired proof checked", err, env.resolver.lookups)
+	}
+}
+
+func TestZoneProofLostCreateThatNeverLandedIsWrittenAgain(t *testing.T) {
+	for _, cloud := range []string{"vercel", "digitalocean"} {
+		t.Run(cloud, func(t *testing.T) {
+			env := newProofEnv(t, cloud)
+			env.dns.dropWrite = true
+			zone := env.create(t, "managed")
+			if stored := env.stored(t, zone.ID); !stored.ProofPublishAttempted || stored.ProofRecord != nil {
+				t.Fatalf("unknown outcome not durable: %+v", stored)
+			}
+			env.dns.dropWrite = false
+			_, _ = env.svc.VerifyZone(t.Context(), proofManager, zone.ID)
+			// The provider shows nothing at the name, so the same attempt writes.
+			proofs := env.dns.proofs()
+			if env.dns.writes != 1 || len(proofs) != 1 || env.dns.last.ReconcileOnly {
+				t.Fatalf("writes=%d reconcile=%v proofs=%+v", env.dns.writes, env.dns.last.ReconcileOnly, proofs)
+			}
+			stored := env.stored(t, zone.ID)
+			if stored.ProofRecord == nil || *stored.ProofRecord != proofs[0] || stored.ProofPublishAttempted || stored.ProofPublishError != "" {
+				t.Fatalf("receipt: %+v", stored)
+			}
+		})
+	}
+}
+
+func TestZoneProofLostCreateStaysReconcileOnlyWhenTheListingFails(t *testing.T) {
+	env := newProofEnv(t, "vercel")
+	env.dns.dropWrite = true
+	zone := env.create(t, "managed")
+	env.dns.dropWrite = false
+	env.dns.listErr = errors.New("provider unavailable")
+	_, _ = env.svc.VerifyZone(t.Context(), proofManager, zone.ID)
+	stored := env.stored(t, zone.ID)
+	if env.dns.writes != 0 || !stored.ProofPublishAttempted || stored.ProofRecord != nil || !strings.Contains(stored.ProofPublishError, "didn't confirm") {
+		t.Fatalf("writes=%d %+v", env.dns.writes, stored)
+	}
+	env.dns.listErr = nil
+	_, _ = env.svc.VerifyZone(t.Context(), proofManager, zone.ID)
+	if env.dns.writes != 1 || env.stored(t, zone.ID).ProofRecord == nil {
+		t.Fatal("no write once the listing answered", env.dns.writes)
 	}
 }
