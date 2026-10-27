@@ -35,6 +35,14 @@ type Zone struct {
 	ProofExpiresAt       time.Time        `json:"proof_expires_at"`
 	ProofCheckedAt       time.Time        `json:"proof_checked_at"`
 	VerifiedAt           time.Time        `json:"verified_at"`
+	// ProofRecord is the receipt for the TXT record Loomplane published for
+	// a managed zone's proof. Only that exact record is ever changed.
+	ProofRecord *provider.DNSRecord `json:"proof_record,omitempty"`
+	// ProofPublishAttempted says a write of the proof was sent and its
+	// answer isn't saved, so the next try only reconciles.
+	ProofPublishAttempted bool `json:"proof_publish_attempted,omitempty"`
+	// ProofPublishError is why the last publish failed, for the owner.
+	ProofPublishError string `json:"proof_publish_error,omitempty"`
 	// RegistrationID names the registration that bought the domain, if one did.
 	RegistrationID string `json:"registration_id,omitempty"`
 	// ChallengeConnectionID is the second Cloudflare connection whose token
@@ -159,6 +167,11 @@ func (s *Service) CreateZone(ctx context.Context, p security.Principal, in ZoneI
 		return nil, checkErr
 	}
 	s.domainAudit(ctx, p, "domain.zone.write", zone.ID, "")
+	// The zone exists whether or not its proof publishes; a failure is on
+	// the zone, and Check again or the background check retries it.
+	if publishErr := s.publishZoneProof(ctx, st, zone); publishErr != nil {
+		s.warn("Publish zone proof", publishErr)
+	}
 	return zone, nil
 }
 
@@ -176,7 +189,7 @@ func zoneProjects(ctx context.Context, st DomainStore, org string, projectIDs []
 
 // createManagedZone builds a zone in the most specific zone the connection's
 // DNS provider hosts. It waits on the TXT proof like an external zone. The
-// caller stores it.
+// caller stores it, then publishes the proof with publishZoneProof.
 func (s *Service) createManagedZone(ctx context.Context, p security.Principal, name, connectionID string, projectIDs []string) (*Zone, error) {
 	st, err := s.domainStore()
 	if err != nil {
@@ -264,18 +277,9 @@ func (s *Service) VerifyZone(ctx context.Context, p security.Principal, id strin
 	if err != nil {
 		return nil, err
 	}
-	// Every check is saved, so the page can say when the record was last looked for.
-	checkErr := s.verifyZoneControl(ctx, zone)
-	zone.ProofCheckedAt = s.now().UTC()
-	if checkErr == nil {
-		zone.VerifiedAt = zone.ProofCheckedAt
-	}
-	saveErr := st.SaveZone(ctx, zone)
-	if checkErr != nil {
+	// A managed zone's proof is published first if it still needs to be.
+	if checkErr := s.checkZoneProof(ctx, st, zone); checkErr != nil {
 		return nil, checkErr
-	}
-	if saveErr != nil {
-		return nil, saveErr
 	}
 	s.domainAudit(ctx, p, "domain.zone.write", zone.ID, "")
 	return zone, nil
@@ -398,6 +402,12 @@ func (s *Service) UpdateZone(ctx context.Context, p security.Principal, id strin
 		return nil, checkErr
 	}
 	s.domainAudit(ctx, p, "domain.zone.update", zone.ID, "")
+	if in.RenewProof {
+		// The published record takes the new value in place, by its receipt.
+		if publishErr := s.publishZoneProof(ctx, st, zone); publishErr != nil {
+			s.warn("Publish renewed zone proof", publishErr)
+		}
+	}
 	return zone, nil
 }
 
@@ -408,6 +418,25 @@ func (s *Service) RemoveZone(ctx context.Context, p security.Principal, id strin
 	st, err := s.domainStore()
 	if err != nil {
 		return err
+	}
+	zone, err := st.Zone(ctx, p.OrgID, id)
+	if err != nil {
+		return err
+	}
+	if zone.Mode == "managed" && zone.ProofRecord != nil {
+		// The proof record goes first, by its receipt, and only from the
+		// revision the caller saw.
+		if zone.Revision != revision {
+			return ErrConflict
+		}
+		if proofErr := s.removeZoneProof(ctx, st, zone); proofErr != nil {
+			return proofErr
+		}
+		zone.ProofRecord = nil
+		if saveErr := st.SaveZone(ctx, zone); saveErr != nil {
+			return saveErr
+		}
+		revision = zone.Revision
 	}
 	err = st.RemoveZone(ctx, p.OrgID, id, revision)
 	if err == nil {

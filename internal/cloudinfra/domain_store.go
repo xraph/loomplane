@@ -66,6 +66,34 @@ func (s *PgStore) Zones(ctx context.Context, org string) ([]*Zone, error) {
 	return result, rows.Err()
 }
 
+// ZoneProofsDue reads managed zones whose proof the background still checks.
+// Unset times are stored as Go's zero time, which sorts before any check.
+func (s *PgStore) ZoneProofsDue(ctx context.Context, now, checkedBefore time.Time, limit int) ([]*Zone, error) {
+	rows, err := s.db.Query(ctx, `SELECT body FROM loomplane_dns_zones
+ WHERE body->>'mode'='managed'
+ AND (body->>'verified_at')::timestamptz <= '0001-01-01T00:00:00Z'::timestamptz
+ AND (body->>'proof_expires_at')::timestamptz > $1
+ AND (body->>'proof_checked_at')::timestamptz <= $2
+ ORDER BY (body->>'proof_checked_at')::timestamptz, id LIMIT $3`, now, checkedBefore, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []*Zone{}
+	for rows.Next() {
+		var raw []byte
+		var zone Zone
+		if checkErr := rows.Scan(&raw); checkErr != nil {
+			return nil, checkErr
+		}
+		if checkErr := json.Unmarshal(raw, &zone); checkErr != nil {
+			return nil, checkErr
+		}
+		result = append(result, &zone)
+	}
+	return result, rows.Err()
+}
+
 func (s *PgStore) SaveZone(ctx context.Context, zone *Zone) error {
 	prior := zone.Revision
 	zone.Revision++

@@ -1,0 +1,452 @@
+package cloudinfra
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/xraph/loomplane/internal/security"
+	"github.com/xraph/loomplane/pkg/provider"
+)
+
+// proofDNS is the hosting zone example.com in memory. It writes the way the
+// real adapters do, through PlanDNSUpsert, and keeps a record's ID across an
+// update the way Cloudflare does.
+type proofDNS struct {
+	ownership bool
+	records   []provider.DNSRecord
+	writes    int
+	deletes   int
+	last      provider.DNSUpsertRequest
+	next      int
+	// upsertErr refuses a write before anything is sent.
+	upsertErr error
+	// loseResponse lands the write and loses its answer.
+	loseResponse bool
+	deleteErr    error
+}
+
+func (a *proofDNS) SupportsDNSRecordOwnership() bool { return a.ownership }
+
+func (*proofDNS) ListZones(_ context.Context, c provider.InfrastructureCredential) ([]provider.DNSZone, error) {
+	return []provider.DNSZone{{ID: "parent", Name: "example.com", AccountID: c.AccountID, Verified: true}}, nil
+}
+func (*proofDNS) GetZone(_ context.Context, c provider.InfrastructureCredential, name string) (provider.DNSZone, error) {
+	if name != "example.com" {
+		return provider.DNSZone{}, provider.ErrInfrastructureNotFound
+	}
+	return provider.DNSZone{ID: "parent", Name: name, AccountID: c.AccountID, Verified: true}, nil
+}
+func (*proofDNS) CreateZone(context.Context, provider.InfrastructureCredential, provider.DNSZoneSpec) (provider.DNSZone, error) {
+	return provider.DNSZone{}, provider.ErrInfrastructureUnsupported
+}
+func (a *proofDNS) ListRecords(context.Context, provider.InfrastructureCredential, provider.DNSZone) ([]provider.DNSRecord, error) {
+	return slices.Clone(a.records), nil
+}
+func (a *proofDNS) UpsertRecord(_ context.Context, _ provider.InfrastructureCredential, req provider.DNSUpsertRequest) (provider.DNSRecord, error) {
+	a.last = req
+	if a.upsertErr != nil {
+		return provider.DNSRecord{}, a.upsertErr
+	}
+	if req.ReconcileOnly && req.Expected != nil {
+		for _, r := range a.records {
+			if r.ID != req.Expected.ID {
+				continue
+			}
+			switch r {
+			case req.Record:
+				return r, nil
+			case *req.Expected:
+				return provider.DNSRecord{}, provider.ErrInfrastructureAmbiguous
+			}
+			return provider.DNSRecord{}, provider.ErrInfrastructureDrift
+		}
+		return provider.DNSRecord{}, provider.ErrInfrastructureDrift
+	}
+	prior, done, err := provider.PlanDNSUpsert(req, a.records, a.ownership)
+	if err != nil || done {
+		return prior, err
+	}
+	a.writes++
+	record := req.Record
+	if req.Expected == nil {
+		a.next++
+		record.ID = fmt.Sprintf("rec-%d", a.next)
+		a.records = append(a.records, record)
+	} else {
+		for i := range a.records {
+			if a.records[i].ID == prior.ID {
+				a.records[i] = record
+			}
+		}
+	}
+	if a.loseResponse {
+		return provider.DNSRecord{}, errors.Join(provider.ErrInfrastructureAmbiguous, errors.New("connection reset"))
+	}
+	return record, nil
+}
+func (a *proofDNS) DeleteRecord(_ context.Context, _ provider.InfrastructureCredential, req provider.DNSDeleteRequest) error {
+	if a.deleteErr != nil {
+		return a.deleteErr
+	}
+	for i, r := range a.records {
+		if r.ID == req.Expected.ID {
+			if err := provider.MatchDNSPrior(req.Expected, r); err != nil {
+				return err
+			}
+			a.deletes++
+			a.records = append(a.records[:i], a.records[i+1:]...)
+			return nil
+		}
+	}
+	return provider.ErrInfrastructureNotFound
+}
+
+// proofs is every record at a _loomplane name.
+func (a *proofDNS) proofs() []provider.DNSRecord {
+	out := []provider.DNSRecord{}
+	for _, r := range a.records {
+		if strings.HasPrefix(r.Name, "_loomplane") {
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// proofLookups is public DNS: it holds values, or nothing at all.
+type proofLookups struct {
+	values  []string
+	lookups int
+}
+
+func (r *proofLookups) LookupTXT(_ context.Context, name string) ([]string, error) {
+	r.lookups++
+	if len(r.values) == 0 {
+		return nil, &net.DNSError{Err: "no such host", Name: name, IsNotFound: true}
+	}
+	return r.values, nil
+}
+func (*proofLookups) LookupIPAddr(context.Context, string) ([]net.IPAddr, error) { return nil, nil }
+
+func (s *overviewStore) RemoveZone(_ context.Context, org, id string, revision int64) error {
+	for i, zone := range s.zones {
+		if zone.OrgID == org && zone.ID == id {
+			if zone.Revision != revision {
+				return ErrConflict
+			}
+			s.zones = append(s.zones[:i], s.zones[i+1:]...)
+			return nil
+		}
+	}
+	return ErrNotFound
+}
+
+func (s *overviewStore) ZoneProofsDue(_ context.Context, now, checkedBefore time.Time, limit int) ([]*Zone, error) {
+	out := []*Zone{}
+	for _, zone := range s.zones {
+		if zone.Mode == "managed" && zone.VerifiedAt.IsZero() && zone.ProofExpiresAt.After(now) && !zone.ProofCheckedAt.After(checkedBefore) && len(out) < limit {
+			v := *zone
+			out = append(out, &v)
+		}
+	}
+	return out, nil
+}
+
+var proofManager = security.Principal{OrgID: "org", UserID: "manager"}
+
+type proofEnv struct {
+	svc      *Service
+	store    *overviewStore
+	dns      *proofDNS
+	resolver *proofLookups
+	now      time.Time
+}
+
+// newProofEnv hosts example.com through cloud. Vercel keeps owner tokens on
+// records; DigitalOcean doesn't, so its records are Loomplane's by receipt.
+func newProofEnv(t *testing.T, cloud string) *proofEnv {
+	t.Helper()
+	env := &proofEnv{
+		store:    &overviewStore{projects: map[string]map[string]string{"org": {"shop": "Shop"}}},
+		dns:      &proofDNS{ownership: cloud == "vercel", records: []provider.DNSRecord{{ID: "mail", ZoneID: "parent", Name: "mail", Type: "TXT", Value: "keep", TTL: 300}}},
+		resolver: &proofLookups{},
+		now:      time.Date(2026, 11, 5, 12, 0, 0, 0, time.UTC),
+	}
+	registry := NewAdapters()
+	if err := registry.RegisterDNS(cloud, env.dns); err != nil {
+		t.Fatal(err)
+	}
+	env.svc = NewService(Deps{Domains: env.store, Authz: cleanupTestAuth{}, Connections: routeDNSCredentials{cloud}, Adapters: registry, Resolver: env.resolver})
+	env.svc.now = func() time.Time { return env.now }
+	return env
+}
+
+func (env *proofEnv) create(t *testing.T, mode string) *Zone {
+	t.Helper()
+	in := ZoneInput{Name: "shop.example.com", Mode: mode, ProjectIDs: []string{"shop"}}
+	if mode == "managed" {
+		in.ConnectionID = "dns"
+	}
+	zone, err := env.svc.CreateZone(t.Context(), proofManager, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return zone
+}
+
+func (env *proofEnv) stored(t *testing.T, id string) *Zone {
+	t.Helper()
+	zone, err := env.store.Zone(t.Context(), "org", id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return zone
+}
+
+func TestManagedZoneCreatePublishesOwnedProof(t *testing.T) {
+	for _, cloud := range []string{"vercel", "digitalocean"} {
+		t.Run(cloud, func(t *testing.T) {
+			env := newProofEnv(t, cloud)
+			zone := env.create(t, "managed")
+			proofs := env.dns.proofs()
+			if env.dns.writes != 1 || len(proofs) != 1 {
+				t.Fatalf("writes=%d proofs=%+v", env.dns.writes, proofs)
+			}
+			owner := ""
+			if cloud == "vercel" {
+				owner = "loomplane:zone-proof:" + zone.ID
+			}
+			// The zone is a namespace inside the hosting zone example.com.
+			want := provider.DNSRecord{ID: proofs[0].ID, ZoneID: "parent", Name: "_loomplane.shop", Type: "TXT", Value: zone.ProofValue, TTL: 60, Owner: owner}
+			if proofs[0] != want {
+				t.Fatalf("published %+v, want %+v", proofs[0], want)
+			}
+			stored := env.stored(t, zone.ID)
+			if stored.ProofRecord == nil || *stored.ProofRecord != want || stored.ProofPublishAttempted || stored.ProofPublishError != "" {
+				t.Fatalf("receipt not saved: %+v", stored)
+			}
+			if zone.ProofRecord == nil || zone.Revision != stored.Revision {
+				t.Fatalf("returned zone is behind the stored one: %+v", zone)
+			}
+			if len(env.dns.records) != 2 || env.dns.records[0].Value != "keep" {
+				t.Fatal("unrelated record touched", env.dns.records)
+			}
+		})
+	}
+}
+
+func TestExternalZoneCreateWritesNothing(t *testing.T) {
+	env := newProofEnv(t, "vercel")
+	zone := env.create(t, "external")
+	if env.dns.writes != 0 || zone.ProofRecord != nil || env.stored(t, zone.ID).ProofRecord != nil {
+		t.Fatalf("external zone published: writes=%d %+v", env.dns.writes, zone)
+	}
+}
+
+func TestZoneProofPublishFailureKeepsZoneAndCheckRetries(t *testing.T) {
+	env := newProofEnv(t, "vercel")
+	env.dns.upsertErr = errors.New("provider unavailable")
+	zone := env.create(t, "managed")
+	stored := env.stored(t, zone.ID)
+	if stored.ProofRecord != nil || stored.ProofPublishAttempted || stored.ProofPublishError == "" || zone.ProofPublishError == "" {
+		t.Fatalf("failure not recorded: %+v", stored)
+	}
+
+	env.dns.upsertErr = nil
+	env.resolver.values = []string{zone.ProofValue}
+	verified, err := env.svc.VerifyZone(t.Context(), proofManager, zone.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if env.dns.writes != 1 || verified.ProofRecord == nil || verified.ProofPublishError != "" || verified.VerifiedAt.IsZero() {
+		t.Fatalf("check again didn't publish and verify: writes=%d %+v", env.dns.writes, verified)
+	}
+}
+
+func TestZoneProofLostResponseNeverWritesTwice(t *testing.T) {
+	for _, cloud := range []string{"vercel", "digitalocean"} {
+		t.Run(cloud, func(t *testing.T) {
+			env := newProofEnv(t, cloud)
+			env.dns.loseResponse = true
+			zone := env.create(t, "managed")
+			stored := env.stored(t, zone.ID)
+			if !stored.ProofPublishAttempted || stored.ProofRecord != nil || stored.ProofPublishError == "" {
+				t.Fatalf("unknown outcome not durable: %+v", stored)
+			}
+			env.dns.loseResponse = false
+			_, _ = env.svc.VerifyZone(t.Context(), proofManager, zone.ID)
+			if !env.dns.last.ReconcileOnly || env.dns.writes != 1 || len(env.dns.proofs()) != 1 {
+				t.Fatalf("lost response replayed: reconcile=%v writes=%d proofs=%+v", env.dns.last.ReconcileOnly, env.dns.writes, env.dns.proofs())
+			}
+			stored = env.stored(t, zone.ID)
+			if cloud == "vercel" {
+				// The owner token finds the record the lost answer described.
+				if stored.ProofRecord == nil || stored.ProofRecord.ID != env.dns.proofs()[0].ID || stored.ProofPublishAttempted || stored.ProofPublishError != "" {
+					t.Fatalf("owned record not recovered: %+v", stored)
+				}
+			} else if stored.ProofRecord != nil || stored.ProofPublishError == "" {
+				// Without owner tokens a record nobody has a receipt for stays unclaimed.
+				t.Fatalf("ownerless record adopted: %+v", stored)
+			}
+		})
+	}
+}
+
+func TestZoneProofLeavesAForeignRecordAlone(t *testing.T) {
+	env := newProofEnv(t, "vercel")
+	foreign := provider.DNSRecord{ID: "user", ZoneID: "parent", Name: "_loomplane.shop", Type: "TXT", Value: "set-by-hand", TTL: 300}
+	env.dns.records = append(env.dns.records, foreign)
+	zone := env.create(t, "managed")
+	stored := env.stored(t, zone.ID)
+	if env.dns.writes != 0 || stored.ProofRecord != nil || !strings.Contains(stored.ProofPublishError, "didn't create") || !strings.Contains(stored.ProofPublishError, "_loomplane.shop.example.com") {
+		t.Fatalf("foreign record: writes=%d %+v", env.dns.writes, stored)
+	}
+	if _, err := env.svc.VerifyZone(t.Context(), proofManager, zone.ID); !errors.Is(err, ErrConflict) {
+		t.Fatal("unproven zone verified", err)
+	}
+	if env.dns.writes != 0 || env.dns.deletes != 0 || !slices.Contains(env.dns.records, foreign) {
+		t.Fatal("foreign record overwritten", env.dns.records)
+	}
+	// The owner can still publish the value next to their own record.
+	env.resolver.values = []string{"set-by-hand", zone.ProofValue}
+	if verified, err := env.svc.VerifyZone(t.Context(), proofManager, zone.ID); err != nil || verified.VerifiedAt.IsZero() {
+		t.Fatal("hand-published proof refused", err)
+	}
+}
+
+func TestZoneProofCheckThenRenewUpdatesInPlace(t *testing.T) {
+	env := newProofEnv(t, "vercel")
+	zone := env.create(t, "managed")
+	first := env.dns.proofs()[0]
+	if _, err := env.svc.VerifyZone(t.Context(), proofManager, zone.ID); !errors.Is(err, ErrConflict) {
+		t.Fatal("verified before DNS showed the record", err)
+	}
+	checked := env.stored(t, zone.ID)
+	if checked.ProofCheckedAt.IsZero() || env.dns.writes != 1 {
+		t.Fatalf("check: writes=%d %+v", env.dns.writes, checked)
+	}
+
+	renewed, err := env.svc.UpdateZone(t.Context(), proofManager, zone.ID, ZoneUpdate{Revision: checked.Revision, ProjectIDs: checked.ProjectIDs, RenewProof: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	proofs := env.dns.proofs()
+	if renewed.ProofValue == zone.ProofValue || env.dns.writes != 2 || len(proofs) != 1 || proofs[0].ID != first.ID || proofs[0].Value != renewed.ProofValue {
+		t.Fatalf("renew didn't update in place: writes=%d %+v", env.dns.writes, proofs)
+	}
+	stored := env.stored(t, zone.ID)
+	if stored.ProofRecord == nil || *stored.ProofRecord != proofs[0] || stored.Revision != renewed.Revision {
+		t.Fatalf("renewed receipt: %+v", stored)
+	}
+
+	env.resolver.values = []string{zone.ProofValue}
+	if _, err = env.svc.VerifyZone(t.Context(), proofManager, zone.ID); !errors.Is(err, ErrConflict) {
+		t.Fatal("old value verified the renewed proof", err)
+	}
+	env.resolver.values = []string{renewed.ProofValue}
+	verified, err := env.svc.VerifyZone(t.Context(), proofManager, zone.ID)
+	if err != nil || verified.VerifiedAt.IsZero() || env.dns.writes != 2 {
+		t.Fatalf("renewed value: writes=%d %v", env.dns.writes, err)
+	}
+}
+
+func TestRemoveZoneDeletesItsProofByReceipt(t *testing.T) {
+	t.Run("deleted", func(t *testing.T) {
+		env := newProofEnv(t, "digitalocean")
+		zone := env.create(t, "managed")
+		if err := env.svc.RemoveZone(t.Context(), proofManager, zone.ID, zone.Revision); err != nil {
+			t.Fatal(err)
+		}
+		if env.dns.deletes != 1 || len(env.dns.proofs()) != 0 || len(env.store.zones) != 0 || len(env.dns.records) != 1 {
+			t.Fatalf("deletes=%d records=%+v zones=%d", env.dns.deletes, env.dns.records, len(env.store.zones))
+		}
+	})
+	t.Run("already gone", func(t *testing.T) {
+		env := newProofEnv(t, "vercel")
+		zone := env.create(t, "managed")
+		env.dns.records = env.dns.records[:1]
+		if err := env.svc.RemoveZone(t.Context(), proofManager, zone.ID, zone.Revision); err != nil || len(env.store.zones) != 0 {
+			t.Fatal("missing record blocked removal", err)
+		}
+	})
+	t.Run("delete fails", func(t *testing.T) {
+		env := newProofEnv(t, "vercel")
+		zone := env.create(t, "managed")
+		env.dns.deleteErr = errors.New("provider unavailable")
+		err := env.svc.RemoveZone(t.Context(), proofManager, zone.ID, zone.Revision)
+		if !errors.Is(err, ErrConflict) || !strings.Contains(err.Error(), "TXT record") || len(env.store.zones) != 1 || len(env.dns.proofs()) != 1 {
+			t.Fatalf("failed delete: %v zones=%d", err, len(env.store.zones))
+		}
+		if stored := env.stored(t, zone.ID); stored.ProofRecord == nil {
+			t.Fatal("receipt dropped although the record is still there")
+		}
+	})
+	t.Run("routes still use it", func(t *testing.T) {
+		env := newProofEnv(t, "vercel")
+		zone := env.create(t, "managed")
+		env.store.routes = append(env.store.routes, &Route{ID: "route", OrgID: "org", ProjectID: "shop", Status: "ready", Input: RouteInput{ZoneID: zone.ID}})
+		if err := env.svc.RemoveZone(t.Context(), proofManager, zone.ID, zone.Revision); err == nil || env.dns.deletes != 0 || len(env.dns.proofs()) != 1 {
+			t.Fatal("proof deleted from a zone that stays", err)
+		}
+	})
+	t.Run("stale revision", func(t *testing.T) {
+		env := newProofEnv(t, "vercel")
+		zone := env.create(t, "managed")
+		if err := env.svc.RemoveZone(t.Context(), proofManager, zone.ID, zone.Revision-1); !errors.Is(err, ErrConflict) || env.dns.deletes != 0 {
+			t.Fatal("stale removal deleted the proof", err)
+		}
+	})
+}
+
+func TestZoneProofBackgroundCheckIsRateLimited(t *testing.T) {
+	env := newProofEnv(t, "vercel")
+	env.dns.upsertErr = errors.New("provider unavailable")
+	zone := env.create(t, "managed")
+	external := env.create(t, "external")
+	env.dns.upsertErr = nil
+
+	if err := env.svc.CheckZoneProofs(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	// The pending publish was retried, then public DNS was looked at.
+	if env.dns.writes != 1 || env.resolver.lookups != 1 || env.stored(t, zone.ID).ProofRecord == nil {
+		t.Fatalf("background retry: writes=%d lookups=%d", env.dns.writes, env.resolver.lookups)
+	}
+	env.now = env.now.Add(time.Minute)
+	if err := env.svc.CheckZoneProofs(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if env.resolver.lookups != 1 {
+		t.Fatal("checked again within two minutes", env.resolver.lookups)
+	}
+	env.now = env.now.Add(time.Minute)
+	env.resolver.values = []string{zone.ProofValue}
+	if err := env.svc.CheckZoneProofs(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if env.resolver.lookups != 2 || env.stored(t, zone.ID).VerifiedAt.IsZero() {
+		t.Fatalf("due check: lookups=%d", env.resolver.lookups)
+	}
+	if !env.stored(t, external.ID).ProofCheckedAt.IsZero() {
+		t.Fatal("external zone checked in the background")
+	}
+	// A verified zone is done.
+	env.now = env.now.Add(time.Hour)
+	if err := env.svc.CheckZoneProofs(t.Context()); err != nil || env.resolver.lookups != 2 {
+		t.Fatal("verified zone checked again", err, env.resolver.lookups)
+	}
+}
+
+func TestZoneProofBackgroundSkipsExpiredProofs(t *testing.T) {
+	env := newProofEnv(t, "vercel")
+	env.create(t, "managed")
+	env.now = env.now.Add(25 * time.Hour)
+	if err := env.svc.CheckZoneProofs(t.Context()); err != nil || env.resolver.lookups != 0 || env.dns.writes != 1 {
+		t.Fatal("expired proof checked", err, env.resolver.lookups)
+	}
+}

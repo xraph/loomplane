@@ -139,6 +139,8 @@ func TestDNSManagedProofRequiresProviderAndPublicControl(t *testing.T) {
 	svc.Adapters, svc.Connections = registry, routeDNSCredentials{"vercel"}
 	st.zone.Mode, st.zone.ConnectionID, st.zone.Provider, st.zone.AccountID, st.zone.ConnectionGeneration = "managed", "dns", "vercel", "account", 1
 	st.zone.ProviderZone = provider.DNSZone{ID: "zone", Name: "example.com", AccountID: "account"}
+	// The proof is already published, so each check only looks it up.
+	st.zone.ProofRecord = &provider.DNSRecord{ID: "proof", ZoneID: "zone", Name: "_loomplane", Type: "TXT", Value: st.zone.ProofValue, TTL: 60}
 	before := st.zone
 	p := security.Principal{OrgID: "org", UserID: "manager"}
 	for _, failure := range []error{errors.New("provider unavailable"), &net.DNSError{IsNotFound: true}} {

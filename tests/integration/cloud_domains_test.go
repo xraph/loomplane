@@ -702,6 +702,15 @@ func (*controlDNSAdapter) GetZone(_ context.Context, c provider.InfrastructureCr
 func (*controlDNSAdapter) ListRecords(context.Context, provider.InfrastructureCredential, provider.DNSZone) ([]provider.DNSRecord, error) {
 	return nil, nil
 }
+
+// UpsertRecord accepts the zone's TXT proof and hands back its receipt.
+func (*controlDNSAdapter) UpsertRecord(_ context.Context, _ provider.InfrastructureCredential, req provider.DNSUpsertRequest) (provider.DNSRecord, error) {
+	record := req.Record
+	if record.ID == "" {
+		record.ID = "proof"
+	}
+	return record, nil
+}
 func TestDomainsManagedHostingRequiresPublicControl(t *testing.T) {
 	domainsDurableClaims(t, 60, 60, "managed")
 }
