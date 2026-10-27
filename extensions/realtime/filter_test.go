@@ -111,3 +111,21 @@ func TestRealtimeCanaryVerdictPermission(t *testing.T) {
 		t.Fatalf("without deployment:read: %+v %v", got, err)
 	}
 }
+
+// A verdict deleted with its deployment is declared, and reaches only a
+// subscription naming that deployment, with deployment:read.
+func TestRealtimeCanaryVerdictDeletion(t *testing.T) {
+	if got := permission("canary_verdict.deleted"); got != security.DeploymentRead {
+		t.Fatalf("canary_verdict.deleted needs %s", got)
+	}
+	input := []store.Event{
+		{ProjectID: "proj_a", Type: "canary_verdict.deleted", Data: json.RawMessage(`{"deployment_id":"dep_a"}`)},
+		{ProjectID: "proj_a", Type: "canary_verdict.deleted", Data: json.RawMessage(`{"deployment_id":"dep_b"}`)},
+	}
+	p := security.Principal{OrgID: "org_a", UserID: "usr_a"}
+	e := &Extension{authz: permissionFixture{}}
+	got, err := e.filter(t.Context(), p, Subscription{ProjectIDs: []string{"proj_a"}, DeploymentIDs: []string{"dep_a"}}, input)
+	if err != nil || len(got) != 1 || string(got[0].Data) != `{"deployment_id":"dep_a"}` {
+		t.Fatalf("subscription naming dep_a: %+v %v", got, err)
+	}
+}
