@@ -66,6 +66,46 @@ func (s *PgStore) Zones(ctx context.Context, org string) ([]*Zone, error) {
 	return result, rows.Err()
 }
 
+// zoneBodyTime reads a time from a zone body, NULL unless it is RFC 3339,
+// so one malformed row can't fail a query over every zone.
+func zoneBodyTime(field string) string {
+	value := "body->>'" + field + "'"
+	return "(CASE WHEN " + value + ` ~ '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$' THEN (` + value + ")::timestamptz END)"
+}
+
+// ZoneProofsDue reads managed zones whose proof the background still checks,
+// across organizations. It serves the background check only. Unset times are
+// stored as Go's zero time, which sorts before any check. A row whose times
+// don't parse is left out, and one that doesn't decode is skipped, rather
+// than failing the pass.
+func (s *PgStore) ZoneProofsDue(ctx context.Context, now, checkedBefore time.Time, limit int) ([]*Zone, error) {
+	zero := "'0001-01-01T00:00:00Z'::timestamptz"
+	rows, err := s.db.Query(ctx, `SELECT body FROM loomplane_dns_zones
+ WHERE body->>'mode'='managed'
+ AND `+zoneBodyTime("verified_at")+` <= `+zero+`
+ AND `+zoneBodyTime("proof_expires_at")+` > $1
+ AND `+zoneBodyTime("proof_checked_at")+` <= $2
+ AND NOT (coalesce(body->>'proof_publish_attempted','false')='true' AND coalesce(`+zoneBodyTime("proof_publish_attempted_at")+`,`+zero+`) > $2)
+ ORDER BY `+zoneBodyTime("proof_checked_at")+`, id LIMIT $3`, now, checkedBefore, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	result := []*Zone{}
+	for rows.Next() {
+		var raw []byte
+		var zone Zone
+		if checkErr := rows.Scan(&raw); checkErr != nil {
+			return nil, checkErr
+		}
+		if json.Unmarshal(raw, &zone) != nil {
+			continue
+		}
+		result = append(result, &zone)
+	}
+	return result, rows.Err()
+}
+
 func (s *PgStore) SaveZone(ctx context.Context, zone *Zone) error {
 	prior := zone.Revision
 	zone.Revision++
@@ -87,14 +127,29 @@ const routeRuntimeJoin = ` LEFT JOIN LATERAL (SELECT d.id,d.release_id,d.state F
 const routeRuntimeRevision = `CASE WHEN i.state='running' AND deployment.id IS NULL AND coalesce(i.labels->>'` + owned.LabelReceiptRelease + `','')='' THEN i.labels->>'` + owned.LabelRevision + `' WHEN i.state='running' AND deployment.state='succeeded' AND deployment.release_id=i.labels->>'` + owned.LabelReceiptRelease + `' AND deployment.release_id=i.labels->>'` + owned.LabelRevision + `' THEN deployment.release_id ELSE '' END`
 const routedRuntimeContainer = `CASE WHEN deployment.id IS NULL THEN i.service_refs->>routed.name ELSE i.labels->>('` + owned.LabelReceiptServicePrefix + `'||routed.name) END`
 
+// routableComponent matches a composed catalog component's process on a port
+// its recipe marks routable. Planning lists only those in routable_ports, never
+// a control port, and gives engine databases, the composed resource itself and
+// its jobs none; the role and shape checks keep a stray list from widening it.
+// A dependency-only kind's component is its own composed resource (its
+// component config names itself), which is never routed. port is the query
+// parameter holding the routed port.
+func routableComponentOn(port string) string {
+	return `b.subject='resource' AND b.config->'component' IS NOT NULL AND b.config->'composition' IS NULL AND b.config->'catalog' IS NULL
+ AND b.config->'component'->>'resource' <> b.name
+ AND b.config->'component'->'component'->>'role'='process' AND jsonb_typeof(b.config->'routable_ports')='array' AND b.config->'routable_ports' @> jsonb_build_array(` + port + `::int)`
+}
+
+var routableComponent = routableComponentOn("$6")
+
 // A service binding routes a port on its main service. A catalog component
-// routes only a port its recipe listed in routable_ports, on the service that
-// declares it, so a database or private admin port never takes a public route.
+// that routableComponent accepts routes the port on the service that declares
+// it, so a database or private admin port never takes a public route.
 const routedService = ` JOIN LATERAL (SELECT svc->>'name' AS name FROM jsonb_array_elements(i.services) svc
  WHERE (b.subject='resource' OR svc->>'name'='main') AND EXISTS(SELECT 1 FROM jsonb_array_elements(svc->'ports') p WHERE (p->>'container')::int=$6)
  ORDER BY svc->>'name' LIMIT 1) routed ON true`
 
-const routeBindingQuery = `SELECT b.id,b.config,s.id,t.id,c.id,c.generation,b.external_id,coalesce(c.details->>'docker_id',''),coalesce(` + routeRuntimeRevision + `,''),coalesce(` + routedRuntimeContainer + `,''),coalesce(nullif(c.details->>'advertise_host',''),c.details->>'host','')
+var routeBindingQuery = `SELECT b.id,b.config,s.id,t.id,c.id,c.generation,b.external_id,coalesce(c.details->>'docker_id',''),coalesce(` + routeRuntimeRevision + `,''),coalesce(` + routedRuntimeContainer + `,''),coalesce(nullif(c.details->>'advertise_host',''),c.details->>'host','')
  FROM loomplane_bindings b
  JOIN loomplane_environments e ON e.org_id=b.org_id AND e.project_id=b.project_id AND e.id=b.environment_id
  JOIN loomplane_cloud_targets t ON t.org_id=b.org_id AND t.cloud_id=$5 AND t.id=b.config->'cloud_placement'->>'target_id'
@@ -103,7 +158,7 @@ const routeBindingQuery = `SELECT b.id,b.config,s.id,t.id,c.id,c.generation,b.ex
  JOIN loomplane_cloud_connections c ON c.org_id=s.org_id AND c.id=s.runtime_connection_id AND c.id=b.connection_id AND c.status='ready'
  JOIN cp_instances i ON i.tenant_id=b.org_id AND i.id=b.external_id` + routeRuntimeJoin + routedService + `
  WHERE b.org_id=$1 AND b.project_id=$2 AND b.environment_id=$3 AND b.name=$4 AND b.provider='server'
- AND (b.subject='service' OR (b.subject='resource' AND b.config->'routable_ports' @> jsonb_build_array($6::int)))
+ AND (b.subject='service' OR (` + routableComponent + `))
  ORDER BY b.subject='service' DESC`
 
 func scanRouteBinding(row pgx.Row) (RouteBinding, error) {
@@ -125,13 +180,13 @@ func scanRouteBinding(row pgx.Row) (RouteBinding, error) {
 // and that target, or one of the Cloud's for the default, on its connection.
 // Without one it must have no placement at all: it runs on the environment's
 // own connection, and the project's infrastructure permission authorizes it.
-const kubernetesRouteBindingQuery = `SELECT b.id,c.id,c.generation,b.external_id,coalesce(b.config->'cloud_placement'->>'target_id',''),coalesce(c.details->>'namespace_uid',''),coalesce(c.details->>'namespace',''),coalesce(c.details->>'ingress_class',''),coalesce(c.details->>'ingress_address','')
+var kubernetesRouteBindingQuery = `SELECT b.id,c.id,c.generation,b.external_id,coalesce(b.config->'cloud_placement'->>'target_id',''),coalesce(c.details->>'namespace_uid',''),coalesce(c.details->>'namespace',''),coalesce(c.details->>'ingress_class',''),coalesce(c.details->>'ingress_address','')
  FROM loomplane_bindings b
  JOIN loomplane_environments e ON e.org_id=b.org_id AND e.project_id=b.project_id AND e.id=b.environment_id
  JOIN loomplane_cloud_connections c ON c.org_id=b.org_id AND c.id=b.connection_id AND c.cloud='kubernetes' AND c.status='ready'
  JOIN cp_instances i ON i.tenant_id=b.org_id AND i.id=b.external_id` + routedService + `
  WHERE b.org_id=$1 AND b.project_id=$2 AND b.environment_id=$3 AND b.name=$4 AND b.provider='kubernetes'
- AND (b.subject='service' OR (b.subject='resource' AND b.config->'routable_ports' @> jsonb_build_array($6::int)))
+ AND (b.subject='service' OR (` + routableComponent + `))
  AND CASE WHEN $5='' THEN coalesce(b.config->'cloud_placement','null'::jsonb)='null'::jsonb
  ELSE b.config->'cloud_placement'->>'cloud_id'=$5 AND EXISTS(SELECT 1 FROM loomplane_cloud_project_grants g WHERE g.org_id=b.org_id AND g.cloud_id=$5 AND g.project_id=b.project_id AND NOT g.revoked
  AND CASE WHEN coalesce(b.config->'cloud_placement'->>'target_id','')='' THEN coalesce((b.config->'cloud_placement'->>'default')::boolean,false) AND cardinality(g.target_ids)=0
@@ -540,7 +595,7 @@ func (s *PgStore) ValidateRouteCleanup(ctx context.Context, r Route) error {
 // A route accepted on a catalog component checks the container of the service
 // that declares its port, as routeBindingQuery chose it. Anything else, including
 // a binding that no longer exists, checks main as before. Cleanup skips the
-// routable_ports test so a port that stopped being routable can still be removed.
+// routableComponent test so a port that stopped being routable can still be removed.
 const retainedRoutedService = ` LEFT JOIN loomplane_bindings b ON b.org_id=i.tenant_id AND b.project_id=$7 AND b.environment_id=$14 AND b.name=$15 AND b.id=$13 AND b.subject='resource' AND b.provider='server'
  CROSS JOIN LATERAL (SELECT CASE WHEN b.id IS NULL THEN 'main' ELSE (SELECT svc->>'name' FROM jsonb_array_elements(i.services) svc
  WHERE EXISTS(SELECT 1 FROM jsonb_array_elements(svc->'ports') p WHERE (p->>'container')::int=$16) ORDER BY svc->>'name' LIMIT 1) END AS name) routed`
@@ -551,7 +606,7 @@ func (s *PgStore) validateRetainedRoute(ctx context.Context, r Route, cleanup bo
  JOIN loomplane_cloud_servers s ON s.org_id=i.tenant_id AND s.id=$3 AND s.cloud_id=$4 AND s.runtime_connection_id=$5 AND s.status='ready'
  JOIN loomplane_cloud_connections c ON c.org_id=s.org_id AND c.id=s.runtime_connection_id AND ($11 OR c.generation=$6) AND c.status='ready'
  WHERE i.tenant_id=$1 AND i.id=$2 AND `+routeRuntimeRevision+`=$9 AND `+routedRuntimeContainer+`=$10
- AND (b.id IS NULL OR $11 OR b.config->'routable_ports' @> jsonb_build_array($16::int))
+ AND (b.id IS NULL OR $11 OR (`+routableComponentOn("$16")+`))
  AND ($11 OR EXISTS(SELECT 1 FROM loomplane_cloud_project_grants g WHERE g.org_id=s.org_id AND g.cloud_id=s.cloud_id AND g.project_id=$7 AND NOT g.revoked AND (cardinality(g.target_ids)=0 OR $8=ANY(g.target_ids))))
  AND $12<>'' AND c.details->>'docker_id'=$12`, r.OrgID, r.Binding.InstanceID, r.Binding.ServerID, r.Input.CloudID, r.Binding.ConnectionID, r.Binding.ConnectionGeneration, r.ProjectID, r.Binding.TargetID, r.Binding.ReleaseID, r.Binding.ContainerID, cleanup, r.Binding.RuntimeID,
 		r.Binding.BindingID, r.Input.EnvironmentID, r.Input.Service, r.Input.Port).Scan(&instance))

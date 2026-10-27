@@ -16,6 +16,7 @@ import {
   RouteStates,
 } from "@/components/domains/domain-states"
 import {
+  ManagedProof,
   RenewProof,
   TxtInstructions,
 } from "@/components/domains/txt-instructions"
@@ -51,7 +52,8 @@ export function DomainCard({
 }) {
   const z = zone.zone
   const name = z?.name ?? ""
-  // Managed zones wait on the same TXT proof as external ones.
+  // Managed zones wait on the same TXT proof as external ones, though
+  // Loomplane publishes theirs.
   const verifying = zone.state !== "ready" && !!z?.proofName
   // A zone verified before TXT proofs were required has none to publish.
   const unproven = zone.state !== "ready" && !!z && !z.proofName
@@ -104,7 +106,13 @@ export function DomainCard({
           {zone.hostnames.length > 0 && (
             <HostnameTable hostnames={zone.hostnames} />
           )}
-          {verifying && z && <TxtInstructions zone={z} />}
+          {verifying &&
+            z &&
+            (z.mode === "managed" ? (
+              <ManagedProof zone={z} />
+            ) : (
+              <TxtInstructions zone={z} />
+            ))}
           {unproven && z && (
             // Not in the mock: zones there were all verified by TXT record.
             <div className="flex flex-col gap-2.5 px-4 py-3">

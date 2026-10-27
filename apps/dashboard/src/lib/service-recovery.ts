@@ -42,6 +42,17 @@ const kubernetesNotYet: ProtectionView = {
   label: "Backups on Kubernetes aren’t available yet.",
 }
 
+/**
+ * hasNativeBackups reports whether recovery has a backup adapter for a
+ * config kind. The database recipes have one, and so does timescaledb,
+ * the Postgres a Fabriq provisions and the TimescaleDB module deploys. It
+ * stays out of the recipes themselves because those also list the engines
+ * a person can add on the Services page.
+ */
+function hasNativeBackups(kind: unknown): boolean {
+  return isDatabaseKind(kind) || kind === "timescaledb"
+}
+
 /** isRecord reports whether a value is a JSON object: not null, not an array. */
 export function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value)
@@ -70,9 +81,9 @@ export function bindingConfig(
  * without an adapter says backups aren't available there yet), with these
  * differences:
  *
- *   - native is decided for the five built-in engine kinds only. The API
- *     also maps engine families, such as an engine registered as postgres
- *     under another name, which this doesn't know about.
+ *   - native is decided for the built-in engine kinds and timescaledb
+ *     only. The API also maps engine families, such as an engine registered
+ *     as postgres under another name, which this doesn't know about.
  *   - native reads the binding's provider, as recoverySelection always has,
  *     not the provider in its config.
  *   - an external dependency has no binding, so its choice stands in for
@@ -96,7 +107,7 @@ export function protectionOf(
     )
   if (isRecord(config.composition)) return view("none")
   if (
-    isDatabaseKind(config.kind) &&
+    hasNativeBackups(config.kind) &&
     isRecord(config.catalog) &&
     (binding.provider === "server" ||
       (binding.provider === "kubernetes" && config.kind === "postgres"))

@@ -52,6 +52,7 @@ import {
   fabriqKindFor,
   fabriqSummary,
   fabriqUses,
+  kubernetesBackupsSentence,
   type CheckEngine,
   type FabriqChoice,
   type FabriqLink,
@@ -475,7 +476,7 @@ export function AddFabriqDialog({
                         <span className="text-xs text-muted-foreground">
                           {engine.id === "pg" &&
                           selected?.connection.cloud === "kubernetes"
-                            ? "With TimescaleDB, pgvector and PostGIS. Backups on Kubernetes aren’t available yet."
+                            ? `With TimescaleDB, pgvector and PostGIS. ${kubernetesBackupsSentence}`
                             : engine.detail}
                         </span>
                       </span>

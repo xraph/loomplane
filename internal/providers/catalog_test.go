@@ -181,6 +181,7 @@ func TestServerProvisionsKeepBuiltInOrderThenRegisteredKinds(t *testing.T) {
 		provider.Provisions{Kind: "fabriq-library", Creates: "Fabriq library catalog service", Versions: []string{"1.9"}},
 		provider.Provisions{Kind: "memcached", Creates: "Memcached catalog service", Versions: []string{"1.6"}},
 		provider.Provisions{Kind: "nats", Creates: "NATS JetStream catalog service", Versions: []string{"2.11"}},
+		provider.Provisions{Kind: "octopus", Creates: "Octopus catalog service", Versions: []string{"0.5"}},
 		provider.Provisions{Kind: "rabbitmq", Creates: "RabbitMQ catalog service", Versions: []string{"4.3"}},
 		provider.Provisions{Kind: "timescaledb", Creates: "PostgreSQL 16 with TimescaleDB catalog service", Versions: []string{"16"}},
 	)
@@ -204,7 +205,8 @@ func TestKubernetesProvisionsAcceptRegisteredKinds(t *testing.T) {
 	got := provisionsOf(t, Catalog(), "kubernetes")
 	fabriq := provider.Provisions{Kind: "fabriq", Creates: "Fabriq catalog service", Versions: []string{"1.9"}}
 	timescaledb := provider.Provisions{Kind: "timescaledb", Creates: "PostgreSQL 16 with TimescaleDB catalog service", Versions: []string{"16"}}
-	if !reflect.DeepEqual(got, []provider.Provisions{first, fabriq, {Kind: "fabriq-library", Creates: "Fabriq library catalog service", Versions: []string{"1.9"}}, timescaledb}) {
+	octopus := provider.Provisions{Kind: "octopus", Creates: "Octopus catalog service", Versions: []string{"0.5"}}
+	if !reflect.DeepEqual(got, []provider.Provisions{first, fabriq, {Kind: "fabriq-library", Creates: "Fabriq library catalog service", Versions: []string{"1.9"}}, octopus, timescaledb}) {
 		t.Fatalf("default registry changed the Kubernetes provisions: %+v", got)
 	}
 

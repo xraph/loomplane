@@ -112,3 +112,38 @@ it("protection copy on Kubernetes", () => {
     "No Loomplane backups on this target"
   )
 })
+
+it("backs up the Postgres a Fabriq provisions as TimescaleDB on a server", () => {
+  const binding = (provider: string, kind: string) =>
+    ({
+      subject: "resource",
+      provider,
+      config: {
+        kind,
+        provider,
+        catalog: { id: `${kind}-${provider}`, kind },
+      },
+    }) as unknown as Binding
+  expect(protectionOf(binding("server", "timescaledb"))).toEqual({
+    protection: "native",
+    label: "Native backups and test restores",
+  })
+  expect(protectionOf(binding("kubernetes", "timescaledb"))?.label).toBe(
+    "Backups on Kubernetes aren’t available yet."
+  )
+  expect(
+    recoverySelection(
+      [
+        {
+          ...binding("server", "timescaledb"),
+          name: "fabriq--postgres",
+          environmentId: "production",
+        } as Binding,
+      ],
+      [],
+      [],
+      "production",
+      ""
+    ).live
+  ).toBe(true)
+})

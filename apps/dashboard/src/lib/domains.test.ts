@@ -19,6 +19,7 @@ import {
   offerStatus,
   offerTone,
   ownedNames,
+  proofPublishState,
   registrationLine,
   registrationStatusLine,
   routeLabel,
@@ -29,7 +30,9 @@ import {
   zoneNeedsAttention,
 } from "./domains"
 
-function status(over: Partial<CloudinfraRouteStatus> = {}): CloudinfraRouteStatus {
+function status(
+  over: Partial<CloudinfraRouteStatus> = {}
+): CloudinfraRouteStatus {
   return {
     backend: "server",
     certificate: "ready",
@@ -77,6 +80,7 @@ function zone(
       proofCheckedAt: "0001-01-01T00:00:00Z",
       proofExpiresAt: "2026-10-02T00:00:00Z",
       proofName: "_loomplane.acme.dev",
+      proofPublishAttemptedAt: "0001-01-01T00:00:00Z",
       proofValue: "loomplane=zone-token",
       provider: mode === "managed" ? "cloudflare" : undefined,
       providerZone: {} as never,
@@ -226,11 +230,48 @@ describe("zones", () => {
     expect(zoneDNSLabel(zone({}, false, "external"))).toBe(
       "Awaiting TXT record"
     )
-    // A managed zone waits on the same TXT proof.
-    expect(zoneDNSLabel(zone({}, false))).toBe("Awaiting TXT record")
+    // Loomplane publishes a managed zone's proof itself.
+    expect(zoneDNSLabel(zone({}, false))).toBe("Verifying")
     const legacy = zone({}, false)
     legacy.zone = { ...legacy.zone!, proofName: undefined }
     expect(zoneDNSLabel(legacy)).toBe("Awaiting verification")
+  })
+
+  it("follows the TXT record Loomplane publishes for a managed zone", () => {
+    const z = zone({}, false).zone!
+    expect(proofPublishState(z)).toBe("publishing")
+    expect(proofPublishState({ ...z, proofPublishError: "Denied." })).toBe(
+      "failed"
+    )
+    const record = {
+      id: "rec",
+      zoneId: "cf",
+      name: "_loomplane",
+      type: "TXT",
+      value: z.proofValue!,
+      ttl: 60,
+    }
+    expect(proofPublishState({ ...z, proofRecord: record })).toBe("waiting")
+    // A record Loomplane couldn't confirm is still there says why.
+    expect(
+      proofPublishState({
+        ...z,
+        proofRecord: record,
+        proofPublishError: "Couldn't read the records.",
+      })
+    ).toBe("failed")
+    // A write whose answer was lost isn't published until it reconciles.
+    expect(
+      proofPublishState({
+        ...z,
+        proofRecord: record,
+        proofPublishAttempted: true,
+      })
+    ).toBe("publishing")
+    // A renewed value replaces the published one.
+    expect(
+      proofPublishState({ ...z, proofRecord: { ...record, value: "old" } })
+    ).toBe("publishing")
   })
 
   it("says where the domain was registered", () => {

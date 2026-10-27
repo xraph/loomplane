@@ -16,18 +16,19 @@ import (
 )
 
 type cloudSQLState struct {
-	PSC             *cloudSQLPSCOwnership   `json:"psc,omitempty"`
-	PSCCleanup      *gcp.SQLPSCCleanupState `json:"psc_cleanup,omitempty"`
-	Version         int                     `json:"cloud_sql_checkpoint"`
-	Scope           databaseCheckpointScope `json:"scope"`
-	Stage           string                  `json:"stage"`
-	Operation       string                  `json:"operation,omitempty"`
-	ResourceID      string                  `json:"resource_id,omitempty"`
-	Intent          string                  `json:"intent"`
-	RequestedAt     *time.Time              `json:"requested_at,omitempty"`
-	Caller          string                  `json:"caller,omitempty"`
-	RecoveredCreate *gcp.SQLCreateProof     `json:"recovered_create,omitempty"`
-	Uncertain       bool                    `json:"uncertain,omitempty"`
+	PSC             *cloudSQLPSCOwnership     `json:"psc,omitempty"`
+	PSCCleanup      *gcp.SQLPSCCleanupState   `json:"psc_cleanup,omitempty"`
+	Version         int                       `json:"cloud_sql_checkpoint"`
+	Scope           databaseCheckpointScope   `json:"scope"`
+	Stage           string                    `json:"stage"`
+	Operation       string                    `json:"operation,omitempty"`
+	ResourceID      string                    `json:"resource_id,omitempty"`
+	Intent          string                    `json:"intent"`
+	RequestedAt     *time.Time                `json:"requested_at,omitempty"`
+	Caller          string                    `json:"caller,omitempty"`
+	FailedCreate    *gcp.SQLFailedCreateProof `json:"failed_create,omitempty"`
+	RecoveredCreate *gcp.SQLCreateProof       `json:"recovered_create,omitempty"`
+	Uncertain       bool                      `json:"uncertain,omitempty"`
 	checkpoint      func([]byte) error
 }
 
@@ -90,7 +91,12 @@ func readCloudSQLState(job *Job, cfg *planning.ResourceConfig, project, region, 
 			return nil, errors.New("cloud sql checkpoint original create request changed")
 		}
 	}
-	pendingRemoval := mode == "remove" && job.pendingIdentity != nil && state.PSC != nil && state.PSC.Provision.Version == 3 && state.ResourceID != ""
+	if proof := state.FailedCreate; proof != nil {
+		if state.Version < 3 || mode != "apply" || state.Stage != "instance" || state.Uncertain || state.RecoveredCreate != nil || proof.Validate(project, region, instance, state.ResourceID, state.Intent, sqlVersions[cfg.Kind+"/"+cfg.Version]) != nil || state.PSC != nil && (state.PSC.Provision != (gcp.SQLPSCProvisionState{}) || state.PSC.Endpoint != (gcp.SQLPSCProvisionedEndpoint{})) {
+			return nil, errors.New("cloud sql failed create cleanup evidence is inconsistent")
+		}
+	}
+	pendingRemoval := mode == "remove" && job.pendingIdentity != nil && state.ResourceID != "" && (state.PSC != nil && state.PSC.Provision.Version == 3 || pendingFailedCreate(job.pendingIdentity))
 	if state.Uncertain && state.Operation == "" && !pendingRemoval && (state.Version < 3 || state.Stage != "instance" || mode != "apply" || job.Binding != nil) {
 		return nil, errors.New("cloud sql checkpoint has an uncertain request without a captured operation; reconcile the original cloud operation before retrying")
 	}

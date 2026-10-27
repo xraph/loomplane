@@ -12,6 +12,8 @@ Choose **Connect existing** for Postgres or Redis. You can select a compatible r
 
 An external Postgres must be version 16 or newer, have the `timescaledb`, `vector` and `postgis` extensions installed, preload TimescaleDB and allow the connecting role to create roles. Fabriq uses that connection for migrations and creates its own application role. Redis must be version 7 or newer; TLS Redis endpoints are not supported by this profile yet. The connection check runs from the selected target.
 
+Each Fabriq needs a Postgres server of its own, because it creates the server-wide `fabriq_app` role. A second database on the same server isn't enough. That means one external Postgres can't serve a Fabriq that runs in more than one environment, since the connection is the same in all of them. Turn Fabriq off in all but one environment, let Loomplane provision its Postgres, or connect a project resource, which each environment runs separately.
+
 External engines remain yours to operate. Loomplane does not back them up or restore them. A project resource keeps its own recovery controls.
 
 ## Connect a service to hosted Fabriq
@@ -30,7 +32,17 @@ services:
 
 Keep your service's existing provider and target settings. On its next release, Loomplane creates the tenant if needed and injects `FABRIQ_URL`, a `fabriq://` DSN containing that service's key, the private server address and its default tenant. Keys stay in Vault and are not shown in the panel.
 
-Each service gets a separate key. The tenant in the DSN is a default, not a restriction on which tenants that key may access: your app can choose another tenant per request, using `client.WithTenant(id)` in the Go client. Fabriq applies row-level security for the selected tenant. Service keys cannot manage other keys.
+Each service gets a separate key. The tenant in the DSN is a default, not a restriction on which tenants that key may access: your app can choose another tenant per request. In the Go client, `WithTenant` is a method on the client you already have. It returns a copy bound to the tenant you name and leaves the original alone:
+
+```go
+c, err := client.Connect(ctx, os.Getenv("FABRIQ_URL"))
+if err != nil {
+    return err
+}
+globex := c.WithTenant("globex") // same key, other tenant
+```
+
+Fabriq applies row-level security for the selected tenant. Service keys cannot manage other keys.
 
 **Rotate** creates a pending replacement. The old key keeps working until the service's next release installs the replacement and writes its binding. **Revoke** cuts access immediately. A later release issues a new key if the service still needs Fabriq, so remove that need when you want access to stay revoked. Rotation and revocation require permission to manage secrets.
 
@@ -40,7 +52,7 @@ Use **Open Fabriq admin** to open a short-lived console session through Loomplan
 
 On Docker, a new Fabriq Postgres is scheduled for a backup every 24 hours, starting 24 hours after its policy is installed. This applies to hosted and library mode. The schedule appears in the deployment plan, and you need backup management permission to approve it. Installation follows the database binding; if it fails, the deployment step fails and can be retried. A retry preserves any schedule you have already changed or paused.
 
-Open Recovery to change or pause the schedule, request a backup, or verify a restore into a separate copy. The Stack card reads the saved policy and reports paused schedules, changed intervals and scheduling errors. A successful backup does not count as a verified restore. TimescaleDB restores preserve extension-owned objects, hypertables and application ownership.
+Open Recovery to see the backups of a Fabriq Postgres on Docker, change or pause the schedule, request a backup, or verify a restore into a separate copy. The Stack card reads the saved policy and reports paused schedules, changed intervals and scheduling errors. A successful backup does not count as a verified restore. TimescaleDB restores preserve extension-owned objects, hypertables and application ownership.
 
 The daily default applies only to newly provisioned Postgres. Existing Fabriq stacks and linked project resources keep their current policies, and external databases remain yours to back up. Redis has backup and isolated restore controls on Docker, but no automatic daily policy. Configure its schedule separately if you need one.
 

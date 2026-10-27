@@ -599,6 +599,10 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 	if err != nil {
 		return nil, "", err
 	}
+	fabriqPostgres, err := s.fabriqPostgres(ctx, plan, rev.Manifest)
+	if err != nil {
+		return nil, "", err
+	}
 	resolutionManifest, needs, resolutionErr := cloudResolutionManifest(rev.Manifest, Input{Environment: plan.Environment, Graph: g, Bindings: bindings, Held: held})
 	// A composed resource on one of the Cloud's targets is placed there too.
 	composed := composedResources(rev.Manifest, plan.Environment, s.kinds)
@@ -659,10 +663,11 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 		maps.Copy(placed, composedPlacements(resolved, plan.Environment, composed, assignment, options))
 		result = Compute(Input{
 			Catalog: plan.Catalog, Routes: routes, Zones: zones, DatabaseGatewayTrust: trust,
-			Federation: federation, CloudPlacements: placed, CapacityIntents: intents,
+			Federation: federation, CloudPlacements: placed, UnverifiedPlacements: unverifiedPlacements(resolved, plan.Environment, composed, assignment, options), CapacityIntents: intents,
 			Environment: plan.Environment, Graph: g, Manifest: resolved, Providers: s.providers, Bindings: bindings,
 			Connections: options, Chosen: chosen, Held: held,
 			Kinds: s.kinds, Endpoints: s.checkEndpoints(ctx, plan.OrgID, plan.Environment, resolved),
+			FabriqPostgres: fabriqPostgres,
 		})
 	}
 	if resolutionErr == nil && poolRelocation(bindings, placements) {

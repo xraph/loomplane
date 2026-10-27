@@ -46,6 +46,10 @@ type Service struct {
 	// Audit records each create, delete and check, never a DSN. It may be
 	// nil.
 	Audit Auditor
+	// OrphanedDSN hears of a DSN left in Vault after its endpoint was
+	// deleted, by its Vault key and the error deleting it, so the orphan
+	// can be found and removed. It's never given the DSN. It may be nil.
+	OrphanedDSN func(ctx context.Context, vaultKey string, err error)
 }
 
 // NewService returns a Service.
@@ -138,6 +142,9 @@ func (s *Service) Delete(ctx context.Context, p security.Principal, id string) (
 		return err
 	}
 	if err := s.secrets.Delete(ctx, DSNKey(p.OrgID, id)); err != nil {
+		if s.OrphanedDSN != nil {
+			s.OrphanedDSN(ctx, DSNKey(p.OrgID, id), err)
+		}
 		return fmt.Errorf("the endpoint is gone, but its DSN is still in Vault: %w", err)
 	}
 	return nil

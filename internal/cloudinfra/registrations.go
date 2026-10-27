@@ -846,6 +846,10 @@ func (s *Service) handOffZone(ctx context.Context, st RegistrationStore, reg *Re
 		return createErr
 	}
 	s.domainAudit(ctx, reg.Principal, "domain.zone.write", zone.ID, "")
+	// A proof that doesn't publish now is retried by the background check.
+	if publishErr := s.publishZoneProof(ctx, domains, zone); publishErr != nil {
+		s.warn("Publish registered zone proof", publishErr)
+	}
 	return s.zoneHandedOff(ctx, st, reg, zone)
 }
 

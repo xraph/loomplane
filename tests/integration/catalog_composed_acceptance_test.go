@@ -139,9 +139,8 @@ func TestAcceptanceCatalogComposed(t *testing.T) {
 	}
 	t.Logf("connections ready: server %s (architecture %s), cluster %s (storage class %s)", serverConn.ID, serverConn.Details["architecture"], clusterConn.ID, storageClass)
 
-	// The cluster goes first: a server deployment can hang on the
-	// host-admission lock until its wait gives up, and the cluster's result
-	// shouldn't depend on it.
+	// Each target is its own subtest, cluster first, so one target failing
+	// doesn't hide the other's result.
 	targets := []struct{ provider, connection string }{
 		{"kubernetes", clusterConn.ID},
 		{"server", serverConn.ID},

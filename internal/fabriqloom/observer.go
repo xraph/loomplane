@@ -61,7 +61,7 @@ func (o *Observer) Released(ctx context.Context, r deployments.Release) error {
 // retire revokes the service's retiring keys on one resource.
 func (o *Observer) retire(ctx context.Context, r deployments.Release, resource string) error {
 	service := r.Binding.Name
-	unlock, err := o.h.d.Keys.LockService(ctx, r.OrgID, r.EnvironmentID, resource, service)
+	ctx, unlock, err := o.h.d.Keys.LockService(ctx, r.OrgID, r.EnvironmentID, resource, service)
 	if err != nil {
 		return err
 	}

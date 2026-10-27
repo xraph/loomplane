@@ -196,6 +196,50 @@ type Settings struct {
 	Public *bool `json:"public,omitempty" yaml:"public,omitempty"`
 	// Enabled false leaves the service out, here or in one environment.
 	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty"`
+	// Farp opts the service in to FARP route discovery by an Octopus
+	// gateway. An environment's block replaces the service's whole block.
+	Farp *Farp `json:"farp,omitempty" yaml:"farp,omitempty"`
+}
+
+// Farp is what a service tells an Octopus gateway about itself. The block
+// being there is the opt-in: an empty one takes Octopus's defaults, and
+// enabled: false opts out, for example in one environment.
+type Farp struct {
+	// Gateway names the Octopus resource the service feeds. Empty means
+	// the manifest's only one.
+	Gateway string `json:"gateway,omitempty" yaml:"gateway,omitempty"`
+	// OpenAPI, AsyncAPI, GraphQL, Health and Metrics are paths on the
+	// service. Empty leaves the choice to Octopus.
+	OpenAPI        string `json:"openapi,omitempty" yaml:"openapi,omitempty"`
+	AsyncAPI       string `json:"asyncapi,omitempty" yaml:"asyncapi,omitempty"`
+	GraphQL        string `json:"graphql,omitempty" yaml:"graphql,omitempty"`
+	Health         string `json:"health,omitempty" yaml:"health,omitempty"`
+	Metrics        string `json:"metrics,omitempty" yaml:"metrics,omitempty"`
+	GRPCReflection bool   `json:"grpc_reflection,omitempty" yaml:"grpc_reflection,omitempty"`
+	// Capabilities are what the service speaks, such as rest or websocket.
+	Capabilities []string `json:"capabilities,omitempty" yaml:"capabilities,omitempty"`
+	// Port is the port Octopus reaches the service on. Empty means the
+	// service's own port.
+	Port int `json:"port,omitempty" yaml:"port,omitempty"`
+	// Enabled false opts the service out.
+	Enabled *bool `json:"enabled,omitempty" yaml:"enabled,omitempty"`
+}
+
+// MaxFarpCapabilities is the most capabilities a farp block can name.
+const MaxFarpCapabilities = 8
+
+// clone copies the block, so settings never share its slice or pointer.
+func (f *Farp) clone() *Farp {
+	if f == nil {
+		return nil
+	}
+	out := *f
+	out.Capabilities = slices.Clone(f.Capabilities)
+	if f.Enabled != nil {
+		enabled := *f.Enabled
+		out.Enabled = &enabled
+	}
+	return &out
 }
 
 // Scale is how many instances of a service run.
@@ -361,6 +405,8 @@ var serviceKinds = []string{"http-service", "web-app", "static-site", "worker"}
 var (
 	cloudTargetRE = regexp.MustCompile(`^[a-z][a-z0-9]*(-[a-z0-9]+)*$`)
 	nameRE        = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
+	farpPathRE    = regexp.MustCompile(`^/[A-Za-z0-9/._~%+:@!$&'()*,;=-]*$`)
+	farpCapRE     = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
 	envRE         = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
 	tokenRE       = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
 	gpuKindRE     = regexp.MustCompile(`^[a-z0-9-]+$`)
@@ -688,6 +734,44 @@ func checkCloudTags(add func(string, string, ...any), path string, tags []string
 	}
 }
 
+// checkFarp reports what is wrong with a farp block. Which Octopus it
+// feeds, and whether the service has a port, are the planner's questions.
+func checkFarp(add func(string, string, ...any), path string, f *Farp) {
+	if f == nil {
+		return
+	}
+	if f.Gateway != "" && !nameRE.MatchString(f.Gateway) {
+		add(path+".gateway", "the name must be lower case letters, digits and hyphens, starting with a letter, at most 40 long")
+	}
+	for _, p := range []struct{ key, value string }{
+		{"openapi", f.OpenAPI}, {"asyncapi", f.AsyncAPI}, {"graphql", f.GraphQL}, {"health", f.Health}, {"metrics", f.Metrics},
+	} {
+		switch {
+		case p.value == "":
+		case !strings.HasPrefix(p.value, "/"):
+			add(path+"."+p.key, "must start with /")
+		case len(p.value) > 512 || !farpPathRE.MatchString(p.value):
+			add(path+"."+p.key, "must be a path of at most 512 characters, with no query string, fragment or spaces")
+		}
+	}
+	if len(f.Capabilities) > MaxFarpCapabilities {
+		add(path+".capabilities", "has %d capabilities; the most is %d", len(f.Capabilities), MaxFarpCapabilities)
+	}
+	seen := map[string]bool{}
+	for _, c := range f.Capabilities {
+		if !farpCapRE.MatchString(c) {
+			add(path+".capabilities", "%q must be a lowercase word of at most 32 characters", c)
+		}
+		if seen[c] {
+			add(path+".capabilities", "names %q twice", c)
+		}
+		seen[c] = true
+	}
+	if f.Port < 0 || f.Port > MaxPort {
+		add(path+".port", "must be between 1 and %d", MaxPort)
+	}
+}
+
 func checkSettings(add func(string, string, ...any), path string, s Settings) {
 	if n := s.CloudSQLNetwork; n != nil {
 		region := s.Region
@@ -708,6 +792,7 @@ func checkSettings(add func(string, string, ...any), path string, s Settings) {
 	checkToken(add, path+".provider", "provider", s.Provider)
 	checkToken(add, path+".region", "region", s.Region)
 	checkInfrastructure(add, path, s)
+	checkFarp(add, path+".farp", s.Farp)
 	if s.Port < 0 || s.Port > MaxPort {
 		add(path+".port", "must be between 1 and %d", MaxPort)
 	}
@@ -1030,12 +1115,17 @@ func (s Service) For(env string, d Defaults) Settings {
 	if o.Enabled != nil {
 		out.Enabled = o.Enabled
 	}
+	// An environment's block replaces the service's whole block.
+	if o.Farp != nil {
+		out.Farp = o.Farp
+	}
 	return cloudTagDefaults(out, d)
 }
 
 // cloudTagDefaults gives a service with no placement of its own the
 // manifest's default Cloud tags.
 func cloudTagDefaults(out Settings, d Defaults) Settings {
+	out.Farp = out.Farp.clone()
 	if out.CloudSQLNetwork != nil {
 		network := *out.CloudSQLNetwork
 		out.CloudSQLNetwork = &network
