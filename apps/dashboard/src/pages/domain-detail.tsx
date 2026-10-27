@@ -23,6 +23,7 @@ import { ChallengeCredentialDialog } from "@/components/domains/challenge-creden
 import { DomainStatePill } from "@/components/domains/domain-states"
 import { DomainStatus } from "@/components/domains/domain-status"
 import { HostnameTable } from "@/components/domains/hostname-table"
+import { ManagedRecords } from "@/components/domains/managed-records"
 import { RemoveDomainDialog } from "@/components/domains/remove-domain-dialog"
 import { useAutoRenew } from "@/components/domains/renewal-banner"
 import { Restricted } from "@/components/domains/restricted"
@@ -314,8 +315,15 @@ function Sections({ detail, zone }: { detail: DomainDetail; zone: Zone }) {
         </div>
       </Section>
 
-      {/* Task 8 lists the records Loomplane wrote here. */}
-      <Section title="DNS records" />
+      <Section
+        title="DNS records Loomplane manages"
+        count={detail.records.length}
+      >
+        <ManagedRecords
+          records={detail.records}
+          zones={[domain, ...subdomains]}
+        />
+      </Section>
 
       {wildcards && (
         <Section title="Wildcards">
