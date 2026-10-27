@@ -1145,6 +1145,40 @@ it("removes a subdomain from its own page and goes back to its domain", async ()
   expect(writes).toHaveLength(1)
 })
 
+it("counts a removal done when leaving the page fails", async () => {
+  let reads = 0
+  stubFetch({
+    [detailPath("loomplane.com")]: () => {
+      reads++
+      return Response.json(detailWith(zoneWith("loomplane.com")))
+    },
+    "POST /api/v1/dns-zones/zone-loomplane.com/remove": () =>
+      new Response(null, { status: 204 }),
+  })
+  navigate.mockImplementation(() =>
+    Promise.reject(new Error("navigation failed"))
+  )
+  open("zone-loomplane.com")
+  await userEvent.click(
+    within(await section("Remove domain")).getByRole("button", {
+      name: "Remove domain",
+    })
+  )
+  const { confirm, field } = await confirmRemoval("loomplane.com")
+  await userEvent.type(field, "loomplane.com")
+  await userEvent.click(confirm)
+  await waitFor(() => expect(navigate).toHaveBeenCalledTimes(1))
+  // The page still reads again, and nothing says the removal failed.
+  await waitFor(() => expect(reads).toBe(2))
+  await userEvent.click(
+    within(await section("Remove domain")).getByRole("button", {
+      name: "Remove domain",
+    })
+  )
+  const again = await screen.findByRole("alertdialog")
+  expect(within(again).queryByRole("alert")).toBeNull()
+})
+
 it("sends one removal for a double click", async () => {
   stubFetch({
     [detailPath("loomplane.com")]: detailWith(zoneWith("loomplane.com")),
@@ -1355,6 +1389,29 @@ it("shows a Subdomain column when records span zones", async () => {
   expect(within(v1).getByText("api.loomplane.com")).toBeTruthy()
   const proof = within(dns).getByRole("row", { name: /^TXT/ })
   expect(within(proof).getByText("loomplane.com")).toBeTruthy()
+})
+
+it("names a record's zone by its ID when the page doesn't list it", async () => {
+  stubFetch({
+    [detailPath("loomplane.com")]: detailWith(zoneWith("loomplane.com"), {
+      records: [
+        record("v1.gone.loomplane.com", {
+          zone_id: "zone-gone",
+          route_id: "route-gone",
+          hostname: "v1.gone.loomplane.com",
+        }),
+        proofRecord("loomplane.com"),
+      ],
+    }),
+  })
+  open("zone-loomplane.com")
+  const dns = await records()
+  const v1 = within(dns).getByRole("row", { name: /v1\.gone\.loomplane\.com/ })
+  expect(
+    within(v1)
+      .getAllByRole("cell")
+      .map((c) => c.textContent)[4]
+  ).toBe("zone-gone")
 })
 
 it("shows no Subdomain column for records in one zone", async () => {

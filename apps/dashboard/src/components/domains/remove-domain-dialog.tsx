@@ -96,13 +96,6 @@ export function RemoveDomainDialog({
         path: { zoneId: z.id },
         body: { revision: z.revision },
       })
-      toast.success(`Removed ${name}`)
-      show(false)
-      // Leaving a removed zone's own page first keeps it from reading the
-      // zone again and showing not found.
-      await onRemoved()
-      invalidate(useDomainsOverview)
-      invalidate(useDnsZonesGet)
     } catch (err) {
       const inUse = zoneInUse(err)
       if (inUse && inUse.length > 0) {
@@ -115,6 +108,20 @@ export function RemoveDomainDialog({
       // A refusal for anything else, such as a stale revision, is read
       // again so the next try has what changed.
       if (statusOf(err) === 409) invalidate(useDnsZonesGet)
+      return
+    }
+    toast.success(`Removed ${name}`)
+    show(false)
+    // Leaving a removed zone's own page first keeps it from reading the
+    // zone again and showing not found. The zone is gone even if leaving
+    // fails, so that isn't a failed removal, and the page still reads again.
+    try {
+      await onRemoved()
+    } catch {
+      // Reading again below shows where things stand.
+    } finally {
+      invalidate(useDomainsOverview)
+      invalidate(useDnsZonesGet)
     }
   }
 
