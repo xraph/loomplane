@@ -14,6 +14,20 @@ func HasCapacityIntent(a Action) bool {
 	return a.Service != nil && (a.Service.CapacityIntent != nil || a.Service.FrontendDemand != nil)
 }
 
+// frontendConnection is the connection a frontend action deploys with,
+// picked the way the runner picks it: the action's own, or else the plan's
+// connection for the provider's cloud. It's empty when there's neither.
+func (s *Service) frontendConnection(a Action, chosen map[string]string) string {
+	if a.ConnectionID != "" || s.providers == nil {
+		return a.ConnectionID
+	}
+	p, err := s.providers.Get(a.Provider)
+	if err != nil {
+		return ""
+	}
+	return chosen[p.Cloud]
+}
+
 func (s *Service) pinFrontendDemands(ctx context.Context, plan *Plan, result *Result) error {
 	st, ok := s.store.(*PgStore)
 	if !ok {
@@ -28,7 +42,13 @@ func (s *Service) pinFrontendDemands(ctx context.Context, plan *Plan, result *Re
 		if a.Op == Delete || a.Op == Keep || !cloudinfra.ManagedFrontend(a.Provider, a.Service.Workload, a.Service.Execution) {
 			continue
 		}
-		d := cloudinfra.FrontendDemand{OrgID: plan.OrgID, ProjectID: plan.ProjectID, EnvironmentID: plan.EnvironmentID, PlanID: plan.ID, Service: a.Name, Provider: a.Provider, ConnectionID: a.ConnectionID}
+		connection := s.frontendConnection(*a, result.Connections)
+		if connection == "" {
+			// Nothing deploys it yet, and the plan already says which
+			// connection is missing.
+			continue
+		}
+		d := cloudinfra.FrontendDemand{OrgID: plan.OrgID, ProjectID: plan.ProjectID, EnvironmentID: plan.EnvironmentID, PlanID: plan.ID, Service: a.Name, Provider: a.Provider, ConnectionID: connection}
 		var resolved *cloudinfra.FrontendDemand
 		var err error
 		if pin := a.Service.CloudPlacement; pin != nil && pin.TargetID != "" {
@@ -36,7 +56,7 @@ func (s *Service) pinFrontendDemands(ctx context.Context, plan *Plan, result *Re
 			d.GrantRevision = pin.GrantRevision
 			var account, connectionCloud string
 			var raw []byte
-			err = st.db.QueryRow(ctx, `SELECT generation,account,details,cloud FROM loomplane_cloud_connections WHERE org_id=$1 AND id=$2 AND status='ready'`, plan.OrgID, a.ConnectionID).Scan(&d.ConnectionGeneration, &account, &raw, &connectionCloud)
+			err = st.db.QueryRow(ctx, `SELECT generation,account,details,cloud FROM loomplane_cloud_connections WHERE org_id=$1 AND id=$2 AND status='ready'`, plan.OrgID, d.ConnectionID).Scan(&d.ConnectionGeneration, &account, &raw, &connectionCloud)
 			if err != nil {
 				return err
 			}
@@ -59,6 +79,11 @@ func (s *Service) pinFrontendDemands(ctx context.Context, plan *Plan, result *Re
 			}
 		}
 		a.Service.FrontendDemand = resolved
+		if resolved != nil {
+			// The approved demand names the connection it counts against,
+			// so the action deploys with that one too.
+			a.ConnectionID = connection
+		}
 	}
 	return nil
 }

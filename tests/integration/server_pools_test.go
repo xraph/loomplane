@@ -640,9 +640,15 @@ type blockingDirectPoolExecutor struct {
 	entered, release chan struct{}
 }
 
+// Apply also gives up when the test ends, so a failed test rolls back the
+// admission it holds instead of hanging its cleanup.
 func (e *blockingDirectPoolExecutor) Apply(ctx context.Context, j *deployments.Job) (*deployments.Outcome, error) {
 	close(e.entered)
-	<-e.release
+	select {
+	case <-e.release:
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	}
 	return e.poolExecutor.Apply(ctx, j)
 }
 func TestServerPoolsEnrollmentSerializesDirectExecution(t *testing.T) {
