@@ -35,14 +35,16 @@ const (
 )
 
 // DeployInput is what someone asked to deploy, kept on the row while the
-// model waits for a server so the deploy can carry on once it's there. The
-// deploy task adds the target and the server approval.
+// model waits for a server so the deploy can carry on once it's there.
+// Creating that server first, with its approval, comes with the
+// server-first deploy.
 type DeployInput struct {
-	EntryID          string `json:"entry_id"`
-	Quantization     string `json:"quantization,omitempty"`  // "" picks the best that fits the target
-	Resource         string `json:"resource,omitempty"`      // "" is DefaultResource(entry)
-	MaxModelLen      int    `json:"max_model_len,omitempty"` // 0 is the largest that fits, at most 32768
-	MonthlyBudgetUSD string `json:"monthly_budget_usd,omitempty"`
+	EntryID          string       `json:"entry_id"`
+	Quantization     string       `json:"quantization,omitempty"` // "" picks the best that fits the target
+	Target           TargetChoice `json:"target"`
+	Resource         string       `json:"resource,omitempty"`      // "" is DefaultResource(entry)
+	MaxModelLen      int          `json:"max_model_len,omitempty"` // 0 is the largest that fits, at most 32768
+	MonthlyBudgetUSD string       `json:"monthly_budget_usd,omitempty"`
 }
 
 // Deployment is a model deployed to one environment, as Loomplane tracks

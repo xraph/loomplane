@@ -535,6 +535,17 @@ func (e *Extension) Register(fapp forge.App) error {
 	if err := e.gpuTargetRoutes(fapp.Router(), guard, targets); err != nil {
 		return err
 	}
+	// The AI extension, which registers after this one, deploys models
+	// through the same manifests, plans and GPU targets.
+	if err := forge.ProvideValue(c, e.manifests); err != nil {
+		return fmt.Errorf("provide the manifests service: %w", err)
+	}
+	if err := forge.ProvideValue(c, e.plans); err != nil {
+		return fmt.Errorf("provide the planning service: %w", err)
+	}
+	if err := forge.ProvideValue(c, targets); err != nil {
+		return fmt.Errorf("provide the GPU targets: %w", err)
+	}
 	return e.routes(fapp.Router(), guard)
 }
 

@@ -70,6 +70,21 @@ type Deps struct {
 	Connections ConnectionLister
 	Authz       Authorizer
 	Now         func() time.Time
+
+	// What deploying needs. Browsing works without them.
+
+	// Store keeps the model deployments.
+	Store Store
+	// Manifests and Plans edit a project's manifest and plan an
+	// environment, as the principal who deploys.
+	Manifests Manifests
+	Plans     Planner
+	Projects  Projects
+	// TokenGuard is *aisettings.Service, beside Settings: a gated model's
+	// row is written under the workspace's token lock.
+	TokenGuard TokenGuard
+	// Audit may be nil.
+	Audit Auditor
 }
 
 // Service is the model registry as a workspace sees it: what it can

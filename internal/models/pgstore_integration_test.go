@@ -437,3 +437,40 @@ func TestAccrueTakesTheRowLock(t *testing.T) {
 		t.Fatalf("%d accruals of 0.0125: %s", writers, got.MonthCostUSD)
 	}
 }
+
+// Ruling M24: the Reaper reads a deleted environment's rows before the
+// deletion and deletes them after it, leaving every other environment's,
+// and the stored Request carries its target through Postgres.
+func TestReaperDeletesAnEnvironmentsRows(t *testing.T) {
+	st, _ := scratchStore(t)
+	ctx := t.Context()
+	waiting := llamaRow("org_a", "env_1")
+	waiting.Request.Target = TargetChoice{Source: TargetServerSize, ConnectionID: "conn_do", SizeID: "gpu-l40sx1-48gb", Region: "tor1"}
+	kept := llamaRow("org_a", "env_2")
+	other := llamaRow("org_b", "env_1")
+	for _, d := range []*Deployment{waiting, kept, other} {
+		if err := st.Create(ctx, d); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := st.Get(ctx, "org_a", "proj_1", "env_1", "llama")
+	if err != nil || got.Request == nil || got.Request.Target != waiting.Request.Target {
+		t.Fatalf("stored request %+v, %v", got.Request, err)
+	}
+
+	var warned []string
+	r := &Reaper{Store: st, Warn: func(msg string, err error) { warned = append(warned, msg+": "+err.Error()) }}
+	after := r.Reap(ctx, "org_a", "proj_1", "env_1")
+	if after == nil || len(warned) != 1 || !strings.Contains(warned[0], "gpu-box") {
+		t.Fatalf("warnings %v", warned)
+	}
+	after(ctx)
+	if _, err = st.Get(ctx, "org_a", "proj_1", "env_1", "llama"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("the deleted environment's row: %v", err)
+	}
+	for _, d := range []*Deployment{kept, other} {
+		if _, err = st.Get(ctx, d.OrgID, d.ProjectID, d.EnvironmentID, d.Resource); err != nil {
+			t.Errorf("%s/%s: %v", d.OrgID, d.EnvironmentID, err)
+		}
+	}
+}

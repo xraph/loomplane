@@ -12,10 +12,14 @@ import (
 	aiext "github.com/xraph/loomplane/extensions/ai"
 	"github.com/xraph/loomplane/internal/aisettings"
 	"github.com/xraph/loomplane/internal/config"
+	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/deployments"
+	"github.com/xraph/loomplane/internal/gpus"
+	"github.com/xraph/loomplane/internal/manifests"
 	"github.com/xraph/loomplane/internal/models"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/platform"
+	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/recipes"
 	"github.com/xraph/loomplane/internal/security"
 )
@@ -53,8 +57,9 @@ func TestRoutesAreAbsentWhenAIIsOff(t *testing.T) {
 }
 
 func TestModelHooksAreRegistered(t *testing.T) {
-	// What identity and planning provide. Registering opens nothing, so a
-	// pool that was never connected will do.
+	// What identity, projects, connections and planning provide.
+	// Registering opens nothing, so a pool that was never connected and
+	// services that are never called will do.
 	db, err := grove.Open(pgdriver.New())
 	if err != nil {
 		t.Fatal(err)
@@ -68,6 +73,11 @@ func TestModelHooksAreRegistered(t *testing.T) {
 		forge.ProvideValue(c, &chronicle.Chronicle{}),
 		forge.ProvideValue(c, hooks),
 		forge.ProvideValue(c, inputs),
+		forge.ProvideValue(c, new(manifests.Service)),
+		forge.ProvideValue(c, new(planning.Service)),
+		forge.ProvideValue(c, gpus.NewService(gpus.Deps{})),
+		forge.ProvideValue(c, new(connections.Service)),
+		forge.ProvideValue(c, new(projects.Service)),
 	} {
 		if provide != nil {
 			t.Fatal(provide)
@@ -104,6 +114,9 @@ func TestModelHooksAreRegistered(t *testing.T) {
 	}
 	if svc, err := forge.InjectType[*aisettings.Service](c); err != nil || svc == nil {
 		t.Errorf("AI settings not provided: %v", err)
+	}
+	if svc, err := forge.InjectType[*models.Service](c); err != nil || svc == nil {
+		t.Errorf("the models service not provided: %v", err)
 	}
 }
 

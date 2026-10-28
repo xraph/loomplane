@@ -21,8 +21,12 @@ import (
 	projectsext "github.com/xraph/loomplane/extensions/projects"
 	"github.com/xraph/loomplane/internal/aisettings"
 	"github.com/xraph/loomplane/internal/config"
+	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/deployments"
+	"github.com/xraph/loomplane/internal/gpus"
+	"github.com/xraph/loomplane/internal/manifests"
 	"github.com/xraph/loomplane/internal/models"
+	"github.com/xraph/loomplane/internal/models/hfhub"
 	"github.com/xraph/loomplane/internal/models/registry"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/projects"
@@ -33,8 +37,8 @@ import (
 // Name is the extension's name.
 const Name = "loomplane-ai"
 
-// Extension builds the AI settings service and registers the model kinds'
-// hooks and plan inputs with the planning extension.
+// Extension builds the AI settings and models services and registers the
+// model kinds' hooks and plan inputs with the planning extension.
 //
 // The model crons to come (cost accrual and budget alerts) will need
 // Dispatch's engine, which New will then take as the octopus extension's
@@ -43,6 +47,7 @@ type Extension struct {
 	*forge.BaseExtension
 	cfg      config.Config
 	settings *aisettings.Service
+	models   *models.Service
 	hooks    *models.Hooks
 }
 
@@ -56,14 +61,15 @@ func New(cfg config.Config) *Extension {
 
 // Dependencies implements forge.Extension. Identity checks permissions and
 // keeps the audit trail; planning provides the catalog hook and input maps
-// this extension adds the model kinds to.
+// this extension adds the model kinds to, and the manifests, plans and GPU
+// targets models deploy through.
 func (e *Extension) Dependencies() []string {
 	return []string{identity.Name, planningext.Name}
 }
 
-// Register builds the settings service over its own Vault app and the
-// model kinds' hooks and inputs, adds them to planning's maps, and provides
-// the settings service.
+// Register builds the settings service over its own Vault app, the
+// models service, and the model kinds' hooks and inputs, adds the hooks
+// and inputs to planning's maps, and provides both services.
 func (e *Extension) Register(fapp forge.App) error {
 	if err := e.BaseExtension.Register(fapp); err != nil {
 		return err
@@ -113,16 +119,67 @@ func (e *Extension) Register(fapp forge.App) error {
 		Projects: projects.NewPgStore(pg),
 	})
 
-	// Until the AI gateway lands, the hooks tell no gateway, and only
-	// registry entries deploy: pasted repos come with the models service.
-	e.hooks = models.NewHooks(models.HooksDeps{Registry: registry.Default(), Settings: e.settings})
-	inputs := models.Inputs{Registry: registry.Default(), Settings: e.settings}
+	modelStore := models.NewPgStore(pg)
+	if err := e.registerModels(c, authz, projectsext.NewAuditor(audit, e.cfg.Identity.AppID, e.Logger()), modelStore, pg); err != nil {
+		return err
+	}
+
+	// Until the AI gateway lands, the hooks tell no gateway. Models pasted
+	// from Hugging Face are found in the workspace's stored entries.
+	e.hooks = models.NewHooks(models.HooksDeps{Registry: registry.Default(), Custom: modelStore, Settings: e.settings})
+	inputs := models.Inputs{Registry: registry.Default(), Custom: modelStore, Settings: e.settings}
 	for _, kind := range recipes.ModelKinds() {
 		hookMap[kind] = e.hooks
 		inputMap[kind] = inputs
 	}
 	if err := forge.ProvideValue(c, e.settings); err != nil {
 		return fmt.Errorf("provide the AI settings: %w", err)
+	}
+	return nil
+}
+
+// registerModels builds the models service over what the planning and
+// connections extensions provide, binds it and the Hugging Face client to
+// AI settings, has project and environment deletions take their model
+// rows, and provides it.
+//
+// The Hub is huggingface.co. The ai.models.huggingface_url key that points
+// it at a mirror comes with the models API.
+func (e *Extension) registerModels(c forge.Container, authz *security.Authorizer, auditor projects.Auditor, store *models.PgStore, pg *pgdriver.PgDB) error {
+	mf, err := forge.InjectType[*manifests.Service](c)
+	if err != nil {
+		return fmt.Errorf("ai needs the planning extension's manifests: %w", err)
+	}
+	plans, err := forge.InjectType[*planning.Service](c)
+	if err != nil {
+		return fmt.Errorf("ai needs the planning extension's plans: %w", err)
+	}
+	targets, err := forge.InjectType[*gpus.Service](c)
+	if err != nil {
+		return fmt.Errorf("ai needs the planning extension's GPU targets: %w", err)
+	}
+	conns, err := forge.InjectType[*connections.Service](c)
+	if err != nil {
+		return fmt.Errorf("ai needs the connections extension: %w", err)
+	}
+	projectSvc, err := forge.InjectType[*projects.Service](c)
+	if err != nil {
+		return fmt.Errorf("ai needs the projects extension: %w", err)
+	}
+	hub := hfhub.New(hfhub.DefaultURL, nil)
+	e.models = models.NewService(models.Deps{
+		Registry: registry.Default(), Hub: hub, Settings: e.settings, Custom: store, GPUs: targets, Connections: conns,
+		Authz: authz, Store: store, Manifests: mf, Plans: plans, Projects: projects.NewPgStore(pg), TokenGuard: e.settings,
+		Audit: auditor,
+	})
+	e.settings.SetTokenChecker(hub)
+	e.settings.SetGatedModels(e.models)
+	log := e.Logger()
+	projectSvc.AddReaper(&models.Reaper{Store: store, Warn: func(msg string, err error) {
+		log.Warn(msg, forge.F("error", err.Error()))
+	}})
+	if err := forge.ProvideValue(c, e.models); err != nil {
+		return fmt.Errorf("provide the models service: %w", err)
 	}
 	return nil
 }
