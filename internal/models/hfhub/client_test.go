@@ -384,11 +384,11 @@ func TestOversizedResponsesAreRefused(t *testing.T) {
 	for _, declared := range []bool{true, false} {
 		declare = declared
 		size = maxModelBytes + 1
-		if _, err := c.Model(ctx, "Qwen/Qwen2.5-7B-Instruct", "", ""); err == nil || !strings.Contains(err.Error(), "limit") {
+		if _, err := c.Model(ctx, "Qwen/Qwen2.5-7B-Instruct", "", ""); !errors.Is(err, ErrTooLarge) || !strings.Contains(err.Error(), "limit") {
 			t.Errorf("Model over 4 MiB (Content-Length %v): err = %v", declared, err)
 		}
 		size = 11
-		if _, err := c.RawFile(ctx, "acme/model", qwenSHA, "config.json", "", 10); err == nil || !strings.Contains(err.Error(), "limit") {
+		if _, err := c.RawFile(ctx, "acme/model", qwenSHA, "config.json", "", 10); !errors.Is(err, ErrTooLarge) || !strings.Contains(err.Error(), "limit") {
 			t.Errorf("RawFile of 11 bytes with a limit of 10 (Content-Length %v): err = %v", declared, err)
 		}
 		size = 10

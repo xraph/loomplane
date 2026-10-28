@@ -48,9 +48,11 @@ const (
 // model, whatever context the model claims.
 const poolingContextCap = 8192
 
-// minCacheMB is the smallest weight cache, the size the model kinds start
-// with on Kubernetes.
-const minCacheMB = 20480
+// MinCacheMB is the smallest weight cache, the size the model kinds start
+// with on Kubernetes. The CPU kinds (TEI and llama.cpp on CPU) keep it:
+// their cache is a plain volume of this fixed size there, which the
+// cache_mb setting doesn't change.
+const MinCacheMB = 20480
 
 // ContextWindow is the context window Loomplane advertises for the model
 // (TEI may serve more for some entries): MaxModelLen,
@@ -259,7 +261,7 @@ func Settings(s Spec) map[string]string {
 		"quantization":  s.Quantization.ID,
 		"served_name":   s.ServedName,
 		"max_model_len": strconv.Itoa(s.MaxModelLen),
-		"cache_mb":      strconv.FormatInt(cacheMB(s.Quantization.WeightBytes), 10),
+		"cache_mb":      strconv.FormatInt(CacheMB(s.Quantization.WeightBytes), 10),
 	}
 	if s.Quantization.File != "" {
 		out["file"] = s.Quantization.File
@@ -267,14 +269,14 @@ func Settings(s Spec) map[string]string {
 	return out
 }
 
-// cacheMB sizes a weight cache: 1.25 times the weights, rounded up to a
+// CacheMB sizes a weight cache: 1.25 times the weights, rounded up to a
 // whole GiB, so the tokenizer and config files fit beside the download.
-// It's never less than minCacheMB.
-func cacheMB(weightBytes int64) int64 {
+// It's never less than MinCacheMB.
+func CacheMB(weightBytes int64) int64 {
 	const gib = int64(1) << 30
 	// ceil(1.25 x w / 2^30) == ceil(5w / 2^32)
 	gibs := (5*weightBytes + 4*gib - 1) / (4 * gib)
-	return max(minCacheMB, gibs*1024)
+	return max(MinCacheMB, gibs*1024)
 }
 
 // FromSettings rebuilds the Spec from a resource's settings and the

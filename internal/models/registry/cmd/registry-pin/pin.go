@@ -7,31 +7,17 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/xraph/loomplane/internal/models/hfhub"
 	"github.com/xraph/loomplane/internal/models/registry"
 )
 
-var (
-	revisionPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
-
-	// variantShard matches a second copy of the weights in another dtype,
-	// like model.fp32-00001-of-00002.safetensors next to model.safetensors.
-	// It holds the same tensors, so counting it would double the weights.
-	variantShard = regexp.MustCompile(`^[^/]+\.(fp16|fp32|bf16)(-\d+-of-\d+)?\.safetensors$`)
-)
+var revisionPattern = regexp.MustCompile(`^[0-9a-f]{40}$`)
 
 // checkedLicenses are the license tags that name exactly one registry
 // license. Tags like "other" can't be checked.
 var checkedLicenses = map[string]bool{
 	"apache-2.0": true, "mit": true, "gemma": true,
 	"llama3.1": true, "llama3.2": true, "llama3.3": true, "llama4": true,
-}
-
-// attentionLayerTypes are the layer_types and layers_block_type entries that
-// keep a KV cache per token. Sliding-window layers count as full ones, so
-// the estimate never undercounts the cache; mamba and linear attention
-// layers keep none per token.
-var attentionLayerTypes = map[string]bool{
-	"attention": true, "full_attention": true, "sliding_attention": true, "chunked_attention": true,
 }
 
 // pinner fills the measured fields of entries from the Hub.
@@ -56,7 +42,7 @@ func (p *pinner) pin(ctx context.Context, e registry.Entry) (registry.Entry, err
 	if err != nil {
 		return e, err
 	}
-	arch, contextLength, err := architectureOf(cfg)
+	arch, contextLength, err := hfhub.ArchitectureOf(cfg)
 	if err != nil {
 		return e, fmt.Errorf("config.json at %s: %w", info.SHA, err)
 	}
@@ -120,27 +106,14 @@ func (p *pinner) pinQuantization(ctx context.Context, entry *modelInfo, q regist
 	return q, nil
 }
 
-// weightBytes is the size of the weights an engine loads: every top-level
-// .safetensors file except Mistral's consolidated copies and second dtype
-// variants, or the pytorch_model .bin files when there are no safetensors.
+// weightBytes is the size of the weights an engine loads, as
+// hfhub.WeightBytes counts it.
 func weightBytes(files []sibling) int64 {
-	var safetensors, bin int64
-	for _, f := range files {
-		name := f.Name
-		switch {
-		case strings.Contains(name, "/"):
-		case strings.HasSuffix(name, ".safetensors"):
-			if !strings.HasPrefix(name, "consolidated") && !variantShard.MatchString(name) {
-				safetensors += f.size()
-			}
-		case strings.HasPrefix(name, "pytorch_model") && strings.HasSuffix(name, ".bin"):
-			bin += f.size()
-		}
+	infos := make([]hfhub.FileInfo, len(files))
+	for i, f := range files {
+		infos[i] = hfhub.FileInfo{Name: f.Name, Size: f.size()}
 	}
-	if safetensors > 0 {
-		return safetensors
-	}
-	return bin
+	return hfhub.WeightBytes(infos)
 }
 
 // parametersOf is the safetensors parameter count Hugging Face lists, or,
@@ -161,105 +134,6 @@ func parametersOf(info *modelInfo, cfg map[string]any, qs []registry.Quantizatio
 	for _, q := range qs {
 		if q.Repo == "" && !strings.HasPrefix(q.ID, "gguf-") {
 			return q.WeightBytes / size
-		}
-	}
-	return 0
-}
-
-// architectureOf reads the facts the memory math needs from config.json,
-// and the context length. Multimodal configs keep the language model's
-// facts under text_config, and Whisper's decoder is what keeps a KV cache.
-func architectureOf(cfg map[string]any) (registry.Architecture, int, error) {
-	var a registry.Architecture
-	if names, ok := cfg["architectures"].([]any); ok && len(names) > 0 {
-		a.Name = asString(names[0])
-	}
-	if a.Name == "" {
-		return a, 0, errors.New("it names no architecture")
-	}
-
-	c := lookup{cfg}
-	if text, ok := cfg["text_config"].(map[string]any); ok {
-		c = lookup{text, cfg}
-	}
-	var hidden, contextLength int
-	if c.has("decoder_layers") && c.has("d_model") {
-		a.Layers = c.int("decoder_layers")
-		a.AttentionHeads = c.int("decoder_attention_heads")
-		hidden = c.int("d_model")
-		contextLength = c.int("max_target_positions")
-	} else {
-		a.Layers = c.int("num_hidden_layers", "n_layer", "num_layers")
-		a.AttentionHeads = c.int("num_attention_heads", "n_head")
-		a.KVHeads = c.int("num_key_value_heads")
-		a.HeadDim = c.int("head_dim")
-		a.KVLoraRank = c.int("kv_lora_rank")
-		a.RopeHeadDim = c.int("qk_rope_head_dim")
-		hidden = c.int("hidden_size", "n_embd", "d_model")
-		contextLength = c.int("max_position_embeddings", "n_positions", "seq_length", "max_sequence_length")
-	}
-	if a.KVHeads == 0 {
-		a.KVHeads = a.AttentionHeads
-	}
-	if a.HeadDim == 0 && a.AttentionHeads > 0 {
-		a.HeadDim = hidden / a.AttentionHeads
-	}
-	if n := c.attentionLayers(); n > 0 && n < a.Layers {
-		a.AttentionLayers = n
-	}
-	switch {
-	case a.Layers <= 0:
-		return a, 0, errors.New("it gives no layer count")
-	case a.AttentionHeads <= 0:
-		return a, 0, errors.New("it gives no attention head count")
-	case a.HeadDim <= 0:
-		return a, 0, errors.New("it gives no head_dim or hidden_size")
-	case contextLength <= 0:
-		return a, 0, errors.New("it gives no context length")
-	}
-	return a, contextLength, nil
-}
-
-// lookup reads keys from the first map that has them.
-type lookup []map[string]any
-
-func (l lookup) has(key string) bool {
-	for _, m := range l {
-		if v, ok := m[key]; ok && v != nil {
-			return true
-		}
-	}
-	return false
-}
-
-// int returns the first of keys that holds a number, or 0.
-func (l lookup) int(keys ...string) int {
-	for _, key := range keys {
-		for _, m := range l {
-			if v, ok := m[key].(float64); ok {
-				return int(v)
-			}
-		}
-	}
-	return 0
-}
-
-// attentionLayers counts the layers in layer_types or layers_block_type
-// that keep a KV cache, or returns 0 when the config lists neither.
-func (l lookup) attentionLayers() int {
-	for _, key := range []string{"layer_types", "layers_block_type"} {
-		for _, m := range l {
-			types, ok := m[key].([]any)
-			if !ok {
-				continue
-			}
-			n := 0
-			for _, t := range types {
-				if attentionLayerTypes[asString(t)] {
-					n++
-				}
-			}
-			return n
 		}
 	}
 	return 0

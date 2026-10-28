@@ -24,6 +24,7 @@ var (
 	ErrGated        = errors.New("gated on Hugging Face: the token's account hasn't been granted access")
 	ErrUnauthorized = errors.New("the token wasn't accepted by Hugging Face")
 	ErrUnavailable  = errors.New("no answer from Hugging Face")
+	ErrTooLarge     = errors.New("the file is over the size limit")
 )
 
 // DefaultURL is the Hub. Config ai.models.huggingface_url overrides it for
@@ -367,14 +368,14 @@ func (c *Client) get(ctx context.Context, kind requestKind, method, path, query,
 		return nil, nil
 	}
 	if resp.ContentLength > limit {
-		return nil, fmt.Errorf("%s %s: the answer is %d bytes, over the %d byte limit", method, path, resp.ContentLength, limit)
+		return nil, fmt.Errorf("%w: %s %s is %d bytes, over the %d byte limit", ErrTooLarge, method, path, resp.ContentLength, limit)
 	}
 	body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
 	if err != nil {
 		return nil, fail(token, ErrUnavailable, "%s %s: %v", method, path, err)
 	}
 	if int64(len(body)) > limit {
-		return nil, fmt.Errorf("%s %s: the answer is over the %d byte limit", method, path, limit)
+		return nil, fmt.Errorf("%w: %s %s is over the %d byte limit", ErrTooLarge, method, path, limit)
 	}
 	return body, nil
 }
