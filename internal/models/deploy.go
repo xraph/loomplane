@@ -971,9 +971,40 @@ func (s *Service) Deploy(ctx context.Context, p security.Principal, projectID, e
 // (placementUpdate). The manifest is read at the edit, not taken from the
 // preview, so a deploy of the same model to another environment that got
 // there first is joined. One that lands between that read and the save
-// (manifests.ErrConflict, or an add refused because the name is there
-// now) is read again and decided once more.
+// is read again and decided once more (decideEdit).
 func (s *Service) placeResource(ctx context.Context, p security.Principal, projectID string, env *projects.Environment, pv *DeployPreview) (*manifests.Revision, error) {
+	join := false
+	rev, err := s.decideEdit(ctx, p, projectID, fmt.Sprintf("deploying %s to %s", pv.Resource, env.Name), func(cur *manifests.Revision) (manifests.EditInput, error) {
+		in, adds, refused := placementEdit(cur.Manifest, env.Name, pv)
+		if refused != nil {
+			return in, &ProblemError{Problem: *refused}
+		}
+		join = adds
+		return in, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	attrs := map[string]any{
+		"entry": pv.entry.ID, "quantization": pv.quant.ID, "target": pv.Target.ConnectionID, "resource": pv.Resource,
+		"environment": env.Name, "kind": pv.Kind, "manifest_revision": rev.Revision,
+	}
+	if join {
+		attrs["adds_environment"] = true
+	}
+	s.audit(ctx, p, projectID, "ai.model.deploy", attrs)
+	return rev, nil
+}
+
+// decideEdit makes one manifest edit decided from the current revision.
+// decide reads that revision and returns the edit it calls for, and the
+// edit is made against that revision alone (EditInput.BaseRevision). A
+// save from another environment that lands between the read and the edit
+// is read and decided once more, so a decision about the other copies,
+// such as whether this is the last one or whether only this environment
+// reads a field, is never applied to a manifest it didn't see. A second
+// race is a conflict that says what was being done.
+func (s *Service) decideEdit(ctx context.Context, p security.Principal, projectID, doing string, decide func(cur *manifests.Revision) (manifests.EditInput, error)) (*manifests.Revision, error) {
 	for retried := false; ; retried = true {
 		cur, err := s.d.Manifests.Current(ctx, p, projectID)
 		if err != nil {
@@ -982,43 +1013,19 @@ func (s *Service) placeResource(ctx context.Context, p security.Principal, proje
 		if cur.Manifest == nil {
 			return nil, errors.New("models: the project's manifest doesn't parse")
 		}
-		in, join, refused := placementEdit(cur.Manifest, env.Name, pv)
-		if refused != nil {
-			return nil, &ProblemError{Problem: *refused}
-		}
-		rev, _, err := s.d.Manifests.Edit(ctx, p, projectID, in)
-		if err == nil {
-			attrs := map[string]any{
-				"entry": pv.entry.ID, "quantization": pv.quant.ID, "target": pv.Target.ConnectionID, "resource": pv.Resource,
-				"environment": env.Name, "kind": pv.Kind, "manifest_revision": rev.Revision,
-			}
-			if join {
-				attrs["adds_environment"] = true
-			}
-			s.audit(ctx, p, projectID, "ai.model.deploy", attrs)
-			return rev, nil
-		}
-		if retried || !s.raced(ctx, p, projectID, in, err) {
+		in, err := decide(cur)
+		if err != nil {
 			return nil, err
 		}
+		in.BaseRevision = &cur.Revision
+		rev, _, err := s.d.Manifests.Edit(ctx, p, projectID, in)
+		switch {
+		case !errors.Is(err, manifests.ErrConflict):
+			return rev, err
+		case retried:
+			return nil, fmt.Errorf("%w: the project's manifest changed twice while %s. Load it again and retry", manifests.ErrConflict, doing)
+		}
 	}
-}
-
-// raced reports whether in failed because another save got there first:
-// a conflict, or an add of a name the manifest has now.
-func (s *Service) raced(ctx context.Context, p security.Principal, projectID string, in manifests.EditInput, err error) bool {
-	if errors.Is(err, manifests.ErrConflict) {
-		return true
-	}
-	if in.AddResource == nil {
-		return false
-	}
-	cur, cerr := s.d.Manifests.Current(ctx, p, projectID)
-	if cerr != nil || cur.Manifest == nil {
-		return false
-	}
-	_, there := cur.Manifest.Resources[in.AddResource.Name]
-	return there
 }
 
 // placementEdit is the edit that puts pv's model in env, given the

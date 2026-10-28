@@ -113,6 +113,11 @@ type EditInput struct {
 	Link           *ServiceLink         `json:"link,omitempty"`
 	Unlink         *ServiceLink         `json:"unlink,omitempty"`
 	SetUse         *ResourceUse         `json:"set_use,omitempty"`
+	// BaseRevision makes the edit conditional on the revision the caller
+	// decided it from: when another save landed since, the edit is
+	// ErrConflict and changes nothing. Nil edits whatever is current. It
+	// isn't part of the API: a caller there edits the current revision.
+	BaseRevision *int `json:"-"`
 }
 
 // ResourceUpdateInput changes an existing resource. A field left out
@@ -181,6 +186,9 @@ func (s *Service) Edit(ctx context.Context, p security.Principal, projectID stri
 	cur, err := s.store.CurrentRevision(ctx, p.OrgID, projectID)
 	if err != nil {
 		return nil, false, err
+	}
+	if in.BaseRevision != nil && *in.BaseRevision != cur.Revision {
+		return nil, false, ErrConflict
 	}
 	var out []byte
 	edits := 0

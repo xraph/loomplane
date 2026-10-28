@@ -1049,6 +1049,101 @@ func TestRemoveLastEnvironmentRemovesTheResource(t *testing.T) {
 	}
 }
 
+// joinMeanwhile has production join resource ahead of the first edit
+// edits sees, reading the top level: another environment's deploy saving
+// between this change's read and its edit.
+func joinMeanwhile(t *testing.T, d *deploySetup, resource string) *recordingManifests {
+	t.Helper()
+	inner := d.svc.d.Manifests
+	edits := d.recordEdits()
+	edits.before = func(n int) error {
+		if n != 1 {
+			return nil
+		}
+		yes := true
+		_, _, err := inner.Edit(context.Background(), member, projectID, manifests.EditInput{UpdateResource: &manifests.ResourceUpdateInput{
+			Resource: resource, Environment: "production", Enabled: &yes,
+		}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return nil
+	}
+	return edits
+}
+
+// Final review I1: staging runs llm alone, and production joins between
+// Remove(staging)'s read and its edit. The remove is decided again, so
+// it turns staging off and leaves llm and production's copy alone.
+func TestRemoveDecidesAgainWhenACopyJoinsMeanwhile(t *testing.T) {
+	ctx := context.Background()
+	targets, conns := copyServers()
+	d := newDeploy(t, deployRegistry(t, llamaRev, ""), aiAdmin, targets, conns...)
+	putLLM(t, d, map[string]manifest.ResourceSettings{"staging": on()})
+	llmRow(t, d, stagingID)
+	edits := joinMeanwhile(t, d, "llm")
+
+	if _, err := d.svc.Remove(ctx, member, projectID, stagingID, "llm"); err != nil {
+		t.Fatal(err)
+	}
+	if len(edits.edits) != 2 || edits.edits[0].RemoveResource != "llm" || edits.edits[1].UpdateResource == nil {
+		t.Fatalf("edits %+v", edits.edits)
+	}
+	if u := edits.edits[1].UpdateResource; u.Environment != "staging" || u.Enabled == nil || *u.Enabled {
+		t.Errorf("the second decision %+v", u)
+	}
+	m := current(t, d)
+	llm, ok := m.Resources["llm"]
+	if !ok || !enabledIn(llm, "production") || enabledIn(llm, "staging") || llm.For("production", m.Defaults).Target != gpuConn {
+		t.Errorf("manifest %+v", m.Resources)
+	}
+}
+
+// Final review I1: a top-level move of staging's copy that production
+// joins meanwhile goes to staging's block instead, so production's copy
+// stays where it is.
+func TestMoveDecidesAgainWhenACopyJoinsMeanwhile(t *testing.T) {
+	ctx := context.Background()
+	targets, conns := copyServers()
+	d := newDeploy(t, deployRegistry(t, llamaRev, ""), aiAdmin, targets, conns...)
+	putLLM(t, d, map[string]manifest.ResourceSettings{"staging": on()})
+	edits := joinMeanwhile(t, d, "llm")
+
+	_, err := d.svc.Move(ctx, member, projectID, stagingID, "llm", MoveInput{
+		Target:       TargetChoice{Source: TargetConnection, ConnectionID: gpuConn4, GPU: &provider.GPURequest{Kind: "nvidia-l40s"}},
+		Quantization: "bf16", MaxModelLen: 8192,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(edits.edits) != 2 || edits.edits[0].UpdateResource.Environment != "" || edits.edits[1].UpdateResource.Environment != "staging" {
+		t.Fatalf("edits %+v", edits.edits)
+	}
+	m := current(t, d)
+	llm := m.Resources["llm"]
+	if llm.Target != gpuConn || llm.For("production", m.Defaults).Target != gpuConn || llm.For("staging", m.Defaults).Target != gpuConn4 {
+		t.Errorf("manifest %+v", llm)
+	}
+}
+
+// A change that races twice changes nothing, and says why.
+func TestRemoveRacedTwiceIsAConflict(t *testing.T) {
+	ctx := context.Background()
+	targets, conns := copyServers()
+	d := newDeploy(t, deployRegistry(t, llamaRev, ""), aiAdmin, targets, conns...)
+	putLLM(t, d, map[string]manifest.ResourceSettings{"staging": on()})
+	edits := d.recordEdits()
+	edits.before = func(int) error { return manifests.ErrConflict }
+
+	_, err := d.svc.Remove(ctx, member, projectID, stagingID, "llm")
+	if !errors.Is(err, manifests.ErrConflict) || !strings.Contains(err.Error(), "changed twice while removing llm from staging") || len(edits.edits) != 2 {
+		t.Fatalf("err %v, edits %d", err, len(edits.edits))
+	}
+	if _, ok := current(t, d).Resources["llm"]; !ok || len(d.plans.asked) != 0 {
+		t.Errorf("a refused remove changed something: plans %+v", d.plans.asked)
+	}
+}
+
 func TestRemovalUpdateClearsTheBlock(t *testing.T) {
 	block := on()
 	block.Target, block.Provider, block.GPU = gpuConn2, "kubernetes", &manifest.GPU{Kind: "nvidia-h100", Count: 1}

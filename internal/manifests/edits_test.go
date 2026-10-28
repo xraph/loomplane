@@ -61,6 +61,30 @@ func TestEdit_refusesToOverwriteANewerRevision(t *testing.T) {
 	}
 }
 
+// An edit decided from an older revision than the current one changes
+// nothing, and one decided from the current revision goes through.
+func TestEditChecksItsBaseRevision(t *testing.T) {
+	ctx := context.Background()
+	provider := "ecs-fargate"
+	placement := &manifest.Placement{Section: "services", Name: "api", Environment: "preview", Provider: &provider}
+	cur := &Revision{Revision: 1, YAML: "version: 1\nservices:\n  api:\n    source: go:cmd/api\n    provider: cloud-run\n"}
+
+	store := &editStore{current: cur}
+	svc := NewService(store, editProjects{}, editAuth{}, nil)
+	older := 0
+	if _, _, err := svc.Edit(ctx, security.Principal{}, "p", EditInput{Placement: placement, BaseRevision: &older}); !errors.Is(err, ErrConflict) || store.writes != 0 {
+		t.Fatalf("an edit from revision 0 against revision 1: err=%v writes=%d", err, store.writes)
+	}
+
+	store = &editStore{current: cur}
+	svc = NewService(store, editProjects{}, editAuth{}, nil)
+	same := 1
+	rev, _, err := svc.Edit(ctx, security.Principal{}, "p", EditInput{Placement: placement, BaseRevision: &same})
+	if err != nil || store.writes != 1 || rev.Manifest.Services["api"].Environments["preview"].Provider != provider {
+		t.Fatalf("an edit from the current revision: rev=%+v err=%v writes=%d", rev, err, store.writes)
+	}
+}
+
 func TestEditAddResourcePassesCatalogFields(t *testing.T) {
 	store := &editStore{}
 	store.current = &Revision{Revision: 1}

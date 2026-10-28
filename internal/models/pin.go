@@ -11,6 +11,7 @@ import (
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/manifests"
 	"github.com/xraph/loomplane/internal/models/engines"
+	"github.com/xraph/loomplane/internal/models/registry"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/recipes"
@@ -93,14 +94,23 @@ func (s *Service) modelResource(ctx context.Context, p security.Principal, proje
 	if err != nil {
 		return manifest.Resource{}, nil, err
 	}
-	r, ok := rev.Manifest.Resources[resource]
+	here, err = modelIn(rev.Manifest, env, resource)
+	return here, rev.Manifest, err
+}
+
+// modelIn is the model resource of m that runs in env, as env runs it.
+func modelIn(m *manifest.Manifest, env *projects.Environment, resource string) (manifest.Resource, error) {
+	if m == nil {
+		return manifest.Resource{}, errors.New("models: the project's manifest doesn't parse")
+	}
+	r, ok := m.Resources[resource]
 	if !ok || !recipes.IsModelKind(r.Kind) {
-		return manifest.Resource{}, nil, fmt.Errorf("%w: the manifest has no model %s", ErrNotFound, resource)
+		return manifest.Resource{}, fmt.Errorf("%w: the manifest has no model %s", ErrNotFound, resource)
 	}
 	if !enabledIn(r, env.Name) {
-		return manifest.Resource{}, nil, fmt.Errorf("%w: %s doesn't run in %s", ErrNotFound, resource, env.Name)
+		return manifest.Resource{}, fmt.Errorf("%w: %s doesn't run in %s", ErrNotFound, resource, env.Name)
 	}
-	return r.In(env.Name, rev.Manifest.Defaults), rev.Manifest, nil
+	return r.In(env.Name, m.Defaults), nil
 }
 
 // MoveToPin is the one-click fix for a model deployed before a registry
@@ -123,38 +133,44 @@ func (s *Service) MoveToPin(ctx context.Context, p security.Principal, projectID
 	if aerr := s.d.Authz.Require(ctx, p, writeNeed(env), ""); aerr != nil {
 		return nil, aerr
 	}
-	if s.d.Plans == nil {
+	if s.d.Plans == nil || s.d.Manifests == nil {
 		return nil, errors.New("models: planning isn't configured")
 	}
-	here, m, err := s.modelResource(ctx, p, projectID, env, resource)
-	if err != nil {
-		return nil, err
-	}
-	e, q, ok := registryQuantization(s.d.Registry, here.Settings)
-	if !ok {
-		return nil, fmt.Errorf("%w: %s doesn't run a registry quantization, so there's no pin to move it to", ErrInvalid, resource)
-	}
+	// The pin and the edit are decided from the manifest the edit is made
+	// to (decideEdit).
+	var e registry.Entry
+	var q registry.Quantization
 	var repinned *RepinnedError
-	if err = checkPin(resource, e, q, here.Settings); !errors.As(err, &repinned) {
-		return nil, fmt.Errorf("%w: %s already runs the weights the registry pins in %s", ErrInvalid, resource, env.Name)
-	}
-	need := engines.CacheMB(q.WeightBytes)
-	if cacheGrows(here.Kind, here.Settings, need) {
-		fixed, ferr := s.fixedCache(ctx, p.OrgID, env.ID, resource, "")
-		if ferr != nil {
-			return nil, ferr
+	rev, err := s.decideEdit(ctx, p, projectID, fmt.Sprintf("moving %s in %s to the new pin", resource, env.Name), func(cur *manifests.Revision) (manifests.EditInput, error) {
+		here, merr := modelIn(cur.Manifest, env, resource)
+		if merr != nil {
+			return manifests.EditInput{}, merr
 		}
-		if fixed {
-			return nil, fmt.Errorf("%w: %s keeps its weight cache on a Kubernetes volume, which can't grow in place. Remove %s from %s and deploy it again to move to the new pin",
-				ErrInvalid, resource, resource, env.Name)
+		var ok bool
+		if e, q, ok = registryQuantization(s.d.Registry, here.Settings); !ok {
+			return manifests.EditInput{}, fmt.Errorf("%w: %s doesn't run a registry quantization, so there's no pin to move it to", ErrInvalid, resource)
 		}
-	}
-	update, err := pinUpdate(m.Resources[resource], env.Name, repinned, need)
-	if err != nil {
-		return nil, err
-	}
-	update.Resource = resource
-	rev, _, err := s.d.Manifests.Edit(ctx, p, projectID, manifests.EditInput{UpdateResource: update})
+		if perr := checkPin(resource, e, q, here.Settings); !errors.As(perr, &repinned) {
+			return manifests.EditInput{}, fmt.Errorf("%w: %s already runs the weights the registry pins in %s", ErrInvalid, resource, env.Name)
+		}
+		need := engines.CacheMB(q.WeightBytes)
+		if cacheGrows(here.Kind, here.Settings, need) {
+			fixed, ferr := s.fixedCache(ctx, p.OrgID, env.ID, resource, "")
+			if ferr != nil {
+				return manifests.EditInput{}, ferr
+			}
+			if fixed {
+				return manifests.EditInput{}, fmt.Errorf("%w: %s keeps its weight cache on a Kubernetes volume, which can't grow in place. Remove %s from %s and deploy it again to move to the new pin",
+					ErrInvalid, resource, resource, env.Name)
+			}
+		}
+		update, uerr := pinUpdate(cur.Manifest.Resources[resource], env.Name, repinned, need)
+		if uerr != nil {
+			return manifests.EditInput{}, uerr
+		}
+		update.Resource = resource
+		return manifests.EditInput{UpdateResource: update}, nil
+	})
 	if err != nil {
 		return nil, err
 	}

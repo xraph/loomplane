@@ -316,6 +316,30 @@ func TestMoveToPinChangesOnlyItsEnvironment(t *testing.T) {
 	}
 }
 
+// Final review I1: production joins between MoveToPin(staging)'s read
+// and its edit. The pin move is decided again and goes to staging's
+// block, so production keeps its weights.
+func TestMoveToPinDecidesAgainWhenACopyJoinsMeanwhile(t *testing.T) {
+	ctx := context.Background()
+	newRev := strings.Repeat("e", 40)
+	d := newDeploy(t, deployRegistry(t, newRev, ""), deployer, []gpus.GPUTarget{l40sServer()})
+	staleLlama(t, d, map[string]manifest.ResourceSettings{"staging": on()})
+	edits := joinMeanwhile(t, d, "llama-8b")
+
+	if _, err := d.svc.MoveToPin(ctx, member, projectID, stagingID, "llama-8b"); err != nil {
+		t.Fatal(err)
+	}
+	if len(edits.edits) != 2 || edits.edits[0].UpdateResource.Environment != "" || edits.edits[1].UpdateResource.Environment != "staging" {
+		t.Fatalf("edits %+v", edits.edits)
+	}
+	if got := revisionIn(t, d, "production"); got != llamaRev {
+		t.Errorf("production runs %s", got)
+	}
+	if got := revisionIn(t, d, "staging"); got != newRev {
+		t.Errorf("staging runs %s", got)
+	}
+}
+
 // Review Focus 4: each environment says whether its own copy has an
 // update.
 func TestUpdateAvailablePerEnvironment(t *testing.T) {

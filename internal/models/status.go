@@ -862,28 +862,37 @@ func (s *Service) plan(ctx context.Context, p security.Principal, projectID stri
 // and never shrinks the weight cache. A setting the new quantization
 // doesn't have, a GGUF file, is deleted.
 func (s *Service) moveResource(ctx context.Context, p security.Principal, projectID string, env *projects.Environment, pv *DeployPreview) (*manifests.Revision, error) {
-	cur, m, err := s.modelResource(ctx, p, projectID, env, pv.Resource)
-	if err != nil {
-		return nil, err
+	if s.d.Manifests == nil {
+		return nil, errors.New("models: manifests aren't configured")
 	}
-	settings := moveSettings(cur, pv)
-	refusal, err := s.cacheRefusal(ctx, p.OrgID, env, cur, pv, settings)
-	if err != nil {
-		return nil, err
-	}
-	if refusal != "" {
-		return nil, fmt.Errorf("%w: %s", ErrInvalid, refusal)
-	}
-	update, err := moveUpdate(m.Resources[pv.Resource], cur, env.Name, m.Defaults, pv, settings)
-	if err != nil {
-		return nil, err
-	}
-	rev, _, err := s.d.Manifests.Edit(ctx, p, projectID, manifests.EditInput{UpdateResource: update})
+	// Whether the edit goes to the top level or env's block is decided from
+	// the manifest the edit is made to (decideEdit).
+	var from string
+	rev, err := s.decideEdit(ctx, p, projectID, fmt.Sprintf("moving %s in %s", pv.Resource, env.Name), func(m *manifests.Revision) (manifests.EditInput, error) {
+		cur, err := modelIn(m.Manifest, env, pv.Resource)
+		if err != nil {
+			return manifests.EditInput{}, err
+		}
+		settings := moveSettings(cur, pv)
+		refusal, err := s.cacheRefusal(ctx, p.OrgID, env, cur, pv, settings)
+		if err != nil {
+			return manifests.EditInput{}, err
+		}
+		if refusal != "" {
+			return manifests.EditInput{}, fmt.Errorf("%w: %s", ErrInvalid, refusal)
+		}
+		update, err := moveUpdate(m.Manifest.Resources[pv.Resource], cur, env.Name, m.Manifest.Defaults, pv, settings)
+		if err != nil {
+			return manifests.EditInput{}, err
+		}
+		from = cur.Target
+		return manifests.EditInput{UpdateResource: update}, nil
+	})
 	if err != nil {
 		return nil, err
 	}
 	s.audit(ctx, p, projectID, "ai.model.move", map[string]any{
-		"resource": pv.Resource, "environment": env.Name, "from": cur.Target, "target": pv.Target.ConnectionID,
+		"resource": pv.Resource, "environment": env.Name, "from": from, "target": pv.Target.ConnectionID,
 		"quantization": pv.quant.ID, "manifest_revision": rev.Revision,
 	})
 	return rev, nil
@@ -1090,35 +1099,43 @@ func (s *Service) Remove(ctx context.Context, p security.Principal, projectID, e
 	if werr := waitingRefusal(row, "remove"); werr != nil {
 		return nil, werr
 	}
-	rev, err := s.d.Manifests.Current(ctx, p, projectID)
+	// Whether this is the last copy is decided from the manifest the edit
+	// is made to (decideEdit): a copy another environment adds meanwhile
+	// keeps the resource.
+	var (
+		m      *manifest.Manifest
+		users  []string
+		last   bool
+		server string
+	)
+	edited, err := s.decideEdit(ctx, p, projectID, fmt.Sprintf("removing %s from %s", resource, env.Name), func(cur *manifests.Revision) (manifests.EditInput, error) {
+		m = cur.Manifest
+		r, ok := m.Resources[resource]
+		if !ok || !recipes.IsModelKind(r.Kind) || !enabledIn(r, env.Name) {
+			return manifests.EditInput{}, fmt.Errorf("%w: %s has no model %s", ErrNotFound, env.Name, resource)
+		}
+		users = servicesNeeding(m, resource)
+		last = !slices.ContainsFunc(slices.Collect(maps.Keys(r.Environments)), func(name string) bool { return name != env.Name && enabledIn(r, name) })
+		if last && len(users) > 0 {
+			verb, them := "links", "it"
+			if len(users) > 1 {
+				verb, them = "link", "them"
+			}
+			return manifests.EditInput{}, fmt.Errorf("%w: %s in %s %s to it. Unlink %s first", ErrInUse, joinNames(users), env.Name, verb, them)
+		}
+		server = s.connectionNames(ctx, p)[r.For(env.Name, m.Defaults).Target]
+		if !last {
+			u := removalUpdate(r, env.Name)
+			u.Resource = resource
+			return manifests.EditInput{UpdateResource: u}, nil
+		}
+		return manifests.EditInput{RemoveResource: resource}, nil
+	})
 	if err != nil {
 		return nil, err
 	}
-	r, ok := rev.Manifest.Resources[resource]
-	if !ok || !recipes.IsModelKind(r.Kind) || !enabledIn(r, env.Name) {
-		return nil, fmt.Errorf("%w: %s has no model %s", ErrNotFound, env.Name, resource)
-	}
-	users := servicesNeeding(rev.Manifest, resource)
-	last := !slices.ContainsFunc(slices.Collect(maps.Keys(r.Environments)), func(name string) bool { return name != env.Name && enabledIn(r, name) })
-	if last && len(users) > 0 {
-		verb, them := "links", "it"
-		if len(users) > 1 {
-			verb, them = "link", "them"
-		}
-		return nil, fmt.Errorf("%w: %s in %s %s to it. Unlink %s first", ErrInUse, joinNames(users), env.Name, verb, them)
-	}
-	server := s.connectionNames(ctx, p)[r.For(env.Name, rev.Manifest.Defaults).Target]
 	if server == "" && row != nil {
 		server = row.ServerName
-	}
-	edit := manifests.EditInput{RemoveResource: resource}
-	if !last {
-		edit = manifests.EditInput{UpdateResource: removalUpdate(r, env.Name)}
-		edit.UpdateResource.Resource = resource
-	}
-	edited, _, err := s.d.Manifests.Edit(ctx, p, projectID, edit)
-	if err != nil {
-		return nil, err
 	}
 	attrs := map[string]any{"resource": resource, "environment": env.Name, "manifest_revision": edited.Revision}
 	if !last {
@@ -1140,7 +1157,7 @@ func (s *Service) Remove(ctx context.Context, p security.Principal, projectID, e
 	res := &DeployResult{PlanID: plan.ID, Deployment: row, Message: weightsStay(resource, server, createdServer(row))}
 	// Only services that run in env lose MODEL_URL there.
 	here := slices.DeleteFunc(slices.Clone(users), func(name string) bool {
-		return !manifest.On(rev.Manifest.Services[name].For(env.Name, rev.Manifest.Defaults).Enabled)
+		return !manifest.On(m.Services[name].For(env.Name, m.Defaults).Enabled)
 	})
 	if !last && len(here) > 0 {
 		res.Message += " " + needOff(here, resource, env.Name)
