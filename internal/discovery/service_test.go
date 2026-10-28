@@ -116,7 +116,7 @@ func (m *memStore) ActiveAnalysis(_ context.Context, orgID, sourceID string, sin
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	for _, a := range m.analyses {
-		if a.OrgID == orgID && a.SourceID == sourceID && !a.Finished() && a.CreatedAt.After(since) {
+		if a.OrgID == orgID && a.SourceID == sourceID && !a.Pinned && !a.Finished() && a.CreatedAt.After(since) {
 			c := *a
 			return &c, nil
 		}

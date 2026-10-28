@@ -20,6 +20,7 @@ import (
 	"github.com/xraph/loomplane/internal/providers"
 	"github.com/xraph/loomplane/internal/recipes"
 	"github.com/xraph/loomplane/internal/recipes/recipestest"
+	"github.com/xraph/loomplane/internal/security"
 )
 
 // unpinnedStore holds one plan and records how it was settled. Every
@@ -399,5 +400,82 @@ func TestCreatePlanReportsACloudLookupFailureOnTheComposedResource(t *testing.T)
 	}
 	if f := result.Problems[0]; f.Code != "cloud-target" || f.Subject != ResourceSubject || f.Name != "edge" || f.Path != "resources.edge.target" || f.Message != "cloud assignments are unavailable" {
 		t.Fatalf("finding: %+v", f)
+	}
+}
+
+// refusingAuthz fails the test on any check: the paths below refuse the
+// automation before they ask Warden anything.
+type refusingAuthz struct{ t *testing.T }
+
+func (a refusingAuthz) Require(_ context.Context, p security.Principal, perm security.Permission, _ string) error {
+	a.t.Errorf("checked %s for %+v", perm.Name(), p)
+	return nil
+}
+
+// TestPublicPathsRefuseTheSystemPrincipal: only the automatic rollback
+// acts as Loomplane automation. Every other way into the service refuses
+// it before it reads anything (the store is nil, so a read panics).
+func TestPublicPathsRefuseTheSystemPrincipal(t *testing.T) {
+	ctx := context.Background()
+	s := NewService(Deps{Authz: refusingAuthz{t}})
+	p := security.SystemPrincipal("org")
+	paths := map[string]func() error{
+		"Create": func() error {
+			_, err := s.Create(ctx, p, "proj", CreatePlanInput{Environment: "production"})
+			return err
+		},
+		"Approve": func() error {
+			_, err := s.Approve(ctx, p, "plan", DecideInput{Revision: "r"})
+			return err
+		},
+		"Reject": func() error {
+			_, err := s.Reject(ctx, p, "plan", DecideInput{})
+			return err
+		},
+		"ChooseConnection": func() error {
+			_, err := s.ChooseConnection(ctx, p, "proj", "production", "gcp", ChooseConnectionInput{})
+			return err
+		},
+		"DraftManifest": func() error {
+			_, err := s.DraftManifest(ctx, p, "proj")
+			return err
+		},
+		// The automation holds deployment:approve, which is all a
+		// project's Cloud change asks for.
+		"PreviewCloudChange": func() error {
+			_, err := s.PreviewCloudChange(ctx, p, "proj", cloudprofiles.ChangeInput{})
+			return err
+		},
+		"ApplyCloudChange": func() error {
+			_, err := s.ApplyCloudChange(ctx, p, "proj", "preview", "rev", "key")
+			return err
+		},
+		"RetryCloudSync": func() error {
+			_, err := s.RetryCloudSync(ctx, p, "proj", "sync")
+			return err
+		},
+		"CompleteCloudRouting": func() error {
+			_, err := s.CompleteCloudRouting(ctx, p, "proj", "sync", "production", "evidence")
+			return err
+		},
+		"CloudPreview": func() error {
+			_, err := s.CloudPreview(ctx, p, "proj", "preview")
+			return err
+		},
+		"PreviewCloudRevert": func() error {
+			_, err := s.PreviewCloudRevert(ctx, p, "proj", "sync")
+			return err
+		},
+		"ApplyCloudRevert": func() error {
+			_, err := s.ApplyCloudRevert(ctx, p, "proj", "preview", "rev", "key")
+			return err
+		},
+	}
+	for name, call := range paths {
+		t.Run(name, func(t *testing.T) {
+			if err := call(); !errors.Is(err, security.ErrForbidden) {
+				t.Fatalf("%s as the automation: %v, want ErrForbidden", name, err)
+			}
+		})
 	}
 }

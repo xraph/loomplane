@@ -55,6 +55,9 @@ func ProjectGraph(ctx context.Context, g Graphs, orgID, projectID string) (*grap
 		}
 		st := SourceState{Source: *src}
 		part := graph.Part{Source: graph.SourceRef{Alias: src.Alias, Repository: src.Repository, Root: src.Root}}
+		// A pinned analysis served one promotion; it says nothing about
+		// the source's branch.
+		list = unpinned(list)
 		if len(list) > 0 {
 			st.Latest = analysisView(list[0], nil, nil)
 		}
@@ -104,4 +107,15 @@ func (s *Service) ProjectGraph(ctx context.Context, p security.Principal, projec
 	}
 	g, excluded := graph.Exclude(g, proj.ExclusionRules())
 	return &ProjectView{ProjectID: projectID, Graph: g, Sources: states, Excluded: excluded}, nil
+}
+
+// unpinned is list without its pinned analyses, in a new slice.
+func unpinned(list []*Analysis) []*Analysis {
+	out := make([]*Analysis, 0, len(list))
+	for _, a := range list {
+		if !a.Pinned {
+			out = append(out, a)
+		}
+	}
+	return out
 }

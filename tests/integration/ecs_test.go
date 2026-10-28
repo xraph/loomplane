@@ -102,6 +102,16 @@ func installFakeECS(t *testing.T, f *fakeAWS) *fakeECS {
 		e.repos[name] = awsAccount + ".dkr.ecr.us-east-1.amazonaws.com/" + name
 		return 200, map[string]any{"repository": map[string]any{"repositoryName": name, "repositoryUri": e.repos[name]}}
 	})
+	// ECR holds what each build pushed, by digest.
+	j("AmazonEC2ContainerRegistry_V20150921.DescribeImages", func(in map[string]any) (int, any) {
+		name := in["repositoryName"].(string)
+		tag := in["imageIds"].([]any)[0].(map[string]any)["imageTag"].(string)
+		uri, ok := e.repos[name]
+		if !ok {
+			return notFound("RepositoryNotFoundException")
+		}
+		return 200, map[string]any{"imageDetails": []any{map[string]any{"repositoryName": name, "imageDigest": fakeDigest(uri + ":" + tag), "imageTags": []string{tag}}}}
+	})
 	// CodeBuild.
 	j("CodeBuild_20161006.CreateProject", func(in map[string]any) (int, any) {
 		return 200, map[string]any{"project": map[string]any{"name": in["name"]}}
@@ -513,6 +523,7 @@ func TestDeploy_servicesRunOnECSFargate(t *testing.T) {
 		Message  string `json:"message"`
 		URL      string `json:"url"`
 		Image    string `json:"image"`
+		Revision string `json:"revision"`
 	}
 	for i := range d.Steps {
 		switch d.Steps[i].ActionID {
@@ -522,7 +533,11 @@ func TestDeploy_servicesRunOnECSFargate(t *testing.T) {
 			worker = &d.Steps[i]
 		}
 	}
-	if api.URL != fake.srv.URL || !strings.HasPrefix(api.Image, awsAccount+".dkr.ecr.us-east-1.amazonaws.com/loomplane/api-") || worker.URL != "" {
+	// Each deploys what its build pushed, by the digest ECR holds it under.
+	apiRepo, _, _ := strings.Cut(api.Image, "@")
+	if api.URL != fake.srv.URL || !strings.HasPrefix(api.Image, awsAccount+".dkr.ecr.us-east-1.amazonaws.com/loomplane/api-") ||
+		api.Image != pinned(apiRepo+":"+exampleSHA[:12]) ||
+		!strings.Contains(worker.Image, "/loomplane/worker-") || !strings.Contains(worker.Image, "@sha256:") || worker.URL != "" {
 		t.Fatalf("api %+v, worker %+v", api, worker)
 	}
 
@@ -592,6 +607,9 @@ func TestDeploy_servicesRunOnECSFargate(t *testing.T) {
 		return kv["name"] == "API_URL" && kv["value"] == "http://api:8080"
 	}) {
 		t.Fatalf("worker's environment %+v", workerTask["environment"])
+	}
+	if apiTask["image"] != api.Image || workerTask["image"] != worker.Image {
+		t.Fatalf("the task definitions name %v and %v", apiTask["image"], workerTask["image"])
 	}
 	sec := apiTask["secrets"].([]any)[0].(map[string]any)
 	if sec["name"] != "API_TOKEN" || !strings.HasPrefix(sec["valueFrom"].(string), "arn:aws:secretsmanager:") {

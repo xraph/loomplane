@@ -76,6 +76,22 @@ func (s *Session) EnsureRepository(ctx context.Context, region, repo string) err
 	}
 }
 
+// ImageDigest reads the digest a Docker repository's tag points at, for
+// an image the build pushed itself rather than through Cloud Build's
+// images, as pack does. It's empty when the tag names no version.
+func (s *Session) ImageDigest(ctx context.Context, region, repo, image, tag string) (string, error) {
+	var t struct {
+		Version string `json:"version"`
+	}
+	p := "/v1/projects/" + s.key.ProjectID + "/locations/" + region + "/repositories/" + repo +
+		"/packages/" + url.PathEscape(image) + "/tags/" + url.PathEscape(tag)
+	if err := s.do(ctx, http.MethodGet, s.c.url("artifactregistry.googleapis.com", p), nil, &t); err != nil {
+		return "", err
+	}
+	_, digest, _ := strings.Cut(t.Version, "/versions/")
+	return digest, nil
+}
+
 // ImageName is where Loomplane pushes a service's image.
 func ImageName(project, region, repo, name, tag string) string {
 	return region + "-docker.pkg.dev/" + project + "/" + repo + "/" + name + ":" + tag

@@ -74,6 +74,9 @@ type cloudRunState struct {
 	BuildRetry int               `json:"build_retry,omitempty"`
 	Image      string            `json:"image,omitempty"`
 	LogAttempt string            `json:"log_attempt,omitempty"`
+	// Unpinned is the permission the connection lacked to read Image's
+	// digest, when Image is a tag for want of it.
+	Unpinned string `json:"unpinned,omitempty"`
 }
 
 // RetainCheckpointOnRetry preserves build progress and PSC route identities.
@@ -155,10 +158,15 @@ func (c *CloudRun) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 	})
 
 	if state.Image == "" {
-		if state.Image, err = c.build(ctx, s, job, &state, save); err != nil {
-			return nil, err
+		if state.Image = reusedImage(job); state.Image == "" {
+			if state.Image, err = c.build(ctx, s, job, &state, save); err != nil {
+				return nil, err
+			}
 		}
 		save()
+	}
+	if state.Unpinned != "" {
+		job.Warn(unpinnedWarning(a.Name, state.Unpinned))
 	}
 	status = StepDeploying
 	job.Progress(StepDeploying, "Deploying "+state.Image)
@@ -239,7 +247,31 @@ func (c *CloudRun) build(ctx context.Context, s *gcp.Session, job *Job, state *c
 	if buildErr != nil {
 		return "", buildErr
 	}
-	return image, nil
+	for _, pushed := range build.Results.Images {
+		if pushed.Name == image && pushed.Digest != "" {
+			return byDigest(image, pushed.Digest)
+		}
+	}
+	return pushedImage(ctx, s, a.Region, image, imageName(job), tag, state)
+}
+
+// pushedImage is the image a build pushed itself, as pack does, rather
+// than through Cloud Build: what Artifact Registry's tag points at. An
+// account that may not read tags gets the image by tag, and state says
+// why.
+func pushedImage(ctx context.Context, s *gcp.Session, region, image, name, tag string, state *cloudRunState) (string, error) {
+	digest, err := s.ImageDigest(ctx, region, imageRepository, name, tag)
+	if gcp.IsForbidden(err) {
+		state.Unpinned = "artifactregistry.tags.get"
+		return image, nil
+	}
+	if gcp.IsNotFound(err) {
+		return "", errNoDigest
+	}
+	if err != nil {
+		return "", fmt.Errorf("read the image's digest: %w", err)
+	}
+	return byDigest(image, digest)
 }
 
 // imageName names the service's image, unique within the project.
@@ -321,10 +353,10 @@ func sourceRoot(ctx context.Context, job *Job) (string, error) {
 	return root, nil
 }
 
-// principal is who Ctrl Plane sees acting: the person who approved the
-// plan, in its organization.
+// principal is who Ctrl Plane sees acting: whoever approved the plan, in
+// its organization. That's Loomplane automation for a rollback it approved.
 func principal(job *Job) security.Principal {
-	return security.Principal{OrgID: job.Deployment.OrgID, UserID: job.Deployment.StartedBy}
+	return security.ActorPrincipal(job.Deployment.OrgID, job.Deployment.StartedBy)
 }
 
 // provider registers the connection's Cloud Run provider for the region,

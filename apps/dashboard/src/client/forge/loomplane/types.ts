@@ -103,6 +103,7 @@ export interface Analysis {
   finishedAt?: string;
   id: string;
   orgId: string;
+  pinned: boolean;
   projectId: string;
   ref: string;
   repository: string;
@@ -147,6 +148,15 @@ export interface ApplyCloudInputBody {
 
 export interface ApplyInputBody {
   review: string;
+}
+
+export interface ArtifactChoice {
+  from?: string;
+  reason?: string;
+  reference?: string;
+  reused: boolean;
+  revision?: string;
+  service: string;
 }
 
 export interface Assignment {
@@ -278,6 +288,60 @@ export interface BuildTarget {
   image?: string;
   registry?: string;
   registrySettings?: Record<string, any>;
+}
+
+export interface CapacityBlock {
+  cloudId: string;
+  counted: number;
+  limit: number;
+  policyRevision: number;
+  poolId: string;
+  reason: string;
+  requested: number;
+  resource: string;
+  retryable: boolean;
+  targetId: string;
+}
+
+export interface CapacityDemand {
+  architecture: string;
+  cloudId: string;
+  environmentId: string;
+  intentHash: string;
+  localData: boolean;
+  orgId: string;
+  planId: string;
+  policyRevision: number;
+  poolId: string;
+  projectId: string;
+  resources: ResourceVector;
+  service: string;
+  stickyServerId: string;
+  targetId: string;
+}
+
+export interface CapacityIntent {
+  assignmentRevision: number;
+  cloudRevision: number;
+  commitSha: string;
+  demand: CapacityDemand;
+  grantRevision: number;
+  providerPin: CapacityTemplatePin;
+  targetName: string;
+  targetRevision: number;
+  template: PoolExpansionPolicy;
+  templateHash: string;
+}
+
+export interface CapacityTemplatePin {
+  accountId: string;
+  connectionGeneration: number;
+}
+
+export interface CapacityWait {
+  blocks: CapacityBlock[];
+  createdAt: string;
+  revision: number;
 }
 
 export interface CatalogKindList {
@@ -656,6 +720,7 @@ export interface CreateInvitationInputBody {
 export interface CreatePlanInputBody {
   catalog?: boolean;
   environment: string;
+  from?: string;
   scope?: string[];
 }
 
@@ -804,6 +869,7 @@ export interface DeployedRepository {
 }
 
 export interface Deployment {
+  capacityWait?: CapacityWait;
   commitSha: string;
   environment: string;
   environmentId: string;
@@ -841,6 +907,20 @@ export interface DiscoveredService {
   routes: number;
   service: string;
   state: string;
+  updatedAt: string;
+}
+
+export interface DiscoverySource {
+  alias: string;
+  createdAt: string;
+  createdBy: string;
+  id: string;
+  orgId: string;
+  projectId: string;
+  ref: string;
+  removedAt?: string;
+  repository: string;
+  root: string;
   updatedAt: string;
 }
 
@@ -1380,6 +1460,14 @@ export interface KubernetesRule {
   verbs: string[];
 }
 
+export interface Leftover {
+  dataBearing: boolean;
+  name: string;
+  op: string;
+  reason: string;
+  subject: string;
+}
+
 export interface Log {
   actionId: string;
   attempt: string;
@@ -1885,6 +1973,7 @@ export interface Placement {
 
 export interface Plan {
   actions: Action[];
+  artifacts: ArtifactChoice[];
   catalog: boolean;
   cloudSyncId?: string;
   connections: Record<string, any>;
@@ -1898,7 +1987,11 @@ export interface Plan {
   error: string;
   executable: boolean;
   expiresAt?: string;
+  fromEnvironment: string;
+  fromEnvironmentId: string;
   id: string;
+  kind: string;
+  leftovers: Leftover[];
   manifestId: string;
   manifestRevision: number;
   orgId: string;
@@ -1906,6 +1999,7 @@ export interface Plan {
   problems: Finding[];
   projectId: string;
   revision: string;
+  rollback?: Rollback;
   sources: PlanSource[];
   status: string;
   summary: PlanningSummary;
@@ -1930,6 +2024,7 @@ export interface PlanSource {
   alias: string;
   analysisId: string;
   commitSha: string;
+  fromPlanId?: string;
   inScope: boolean;
   ref?: string;
   repository: string;
@@ -1996,6 +2091,20 @@ export interface Pool {
   name: string;
   orgId: string;
   revision: number;
+}
+
+export interface PoolExpansionPolicy {
+  allowedSizes: string[];
+  architecture: string;
+  bootstrapSize: string;
+  connectionId: string;
+  image: string;
+  limits?: ResourceVector;
+  maxServers: number;
+  minServers: number;
+  poolId: string;
+  region: string;
+  systemReserve: ResourceVector;
 }
 
 export interface PoolInputBody {
@@ -2576,6 +2685,16 @@ export interface RetirementRetryInputBody {
   requestId: string;
 }
 
+export interface ReusedArtifact {
+  architecture?: string;
+  commitSha: string;
+  digest?: string;
+  fromDeploymentId: string;
+  fromEnvironment: string;
+  reference?: string;
+  revision?: string;
+}
+
 export interface Revision {
   createdAt: string;
   createdBy: string;
@@ -2590,6 +2709,17 @@ export interface Revision {
 
 export interface RevisionList {
   revisions: Revision[];
+}
+
+export interface Rollback {
+  reason: string;
+  restoreDeploymentId: string;
+  restoreFinishedAt: string;
+  restorePlanId: string;
+  targetDeploymentId: string;
+  targetPlanId: string;
+  trigger: string;
+  watchId?: string;
 }
 
 export interface RouteBinding {
@@ -2871,8 +3001,10 @@ export interface Service {
 
 export interface ServiceConfig {
   appliedInputs?: AppliedInputs;
+  artifact?: ReusedArtifact;
   build?: string;
   buildTarget?: BuildTarget;
+  capacityIntent?: CapacityIntent;
   catalog?: Recipe;
   cloudPlacement?: CloudPlacement;
   cloudSqlNetwork?: CloudSQLApplicationNetwork;
@@ -3022,7 +3154,7 @@ export interface SourceCounts {
 }
 
 export interface SourceList {
-  sources: Source[];
+  sources: DiscoverySource[];
 }
 
 export interface SourceRef {
@@ -3036,7 +3168,7 @@ export interface SourceRef {
 export interface SourceState {
   latest?: Analysis;
   shown?: Analysis;
-  source: Source;
+  source: DiscoverySource;
 }
 
 export interface SpendReport {
@@ -3071,6 +3203,7 @@ export interface Step {
   op: string;
   order: number;
   provider: string;
+  revision?: string;
   startedAt?: string;
   status: string;
   subject: string;

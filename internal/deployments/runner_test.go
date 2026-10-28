@@ -128,12 +128,27 @@ type fakePlans struct {
 	plan     *planning.Plan
 	bindings map[string]*planning.Binding
 	deployed []planning.DeployedSource
+	// releases are the RecordRelease writes, and single counts the
+	// RecordDeployed ones.
+	releases []planning.DeployedRelease
+	single   int
 }
 
 func (f *fakePlans) RecordDeployed(_ context.Context, _ string, d *planning.DeployedSource) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.single++
 	f.deployed = append(f.deployed, *d)
+	return nil
+}
+
+func (f *fakePlans) RecordRelease(_ context.Context, _ string, r *planning.DeployedRelease) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.releases = append(f.releases, *r)
+	for _, d := range r.Sources {
+		f.deployed = append(f.deployed, *d)
+	}
 	return nil
 }
 
@@ -642,6 +657,52 @@ func TestRunner_recordsWhatsDeployedOnlyOnSuccess(t *testing.T) {
 	}
 	if len(plans.deployed) != 0 {
 		t.Fatalf("a failed deployment recorded %+v", plans.deployed)
+	}
+}
+
+func TestRunner_recordsEveryMovedSourceInOneWrite(t *testing.T) {
+	ctx := t.Context()
+	at := time.Date(2026, 10, 24, 9, 0, 0, 0, time.UTC)
+	plan := threeRepos()
+	plan.ManifestID, plan.ManifestRevision = "man_5", 5
+	r, _, plans := newRunner(t, plan, &recorder{}, fakeVariables{})
+	r.now = func() time.Time { return at }
+	id, _, err := r.Start(ctx, "org_1", "plan_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = r.Finish(ctx, "org_1", id, ""); err != nil {
+		t.Fatal(err)
+	}
+	if plans.single != 0 || len(plans.releases) != 1 {
+		t.Fatalf("RecordDeployed %d times, RecordRelease %d times", plans.single, len(plans.releases))
+	}
+	got := plans.releases[0]
+	if got.EnvironmentID != "env_1" || got.PlanID != "plan_1" || got.ManifestID != "man_5" || got.ManifestRevision != 5 || !got.DeployedAt.Equal(at) {
+		t.Fatalf("release %+v", got)
+	}
+	moved := make([]string, 0, len(got.Sources))
+	for _, d := range got.Sources {
+		moved = append(moved, d.SourceID+"@"+d.CommitSHA)
+	}
+	if !slices.Equal(moved, []string{"src_web@" + shaWeb, "src_api@" + shaAPI}) {
+		t.Fatalf("moved %v", moved)
+	}
+
+	// A catalog plan moves no repository and isn't a release of the
+	// environment's manifest, so it records nothing.
+	catalog := webAndAPI()
+	catalog.Catalog, catalog.Sources = true, nil
+	r, _, plans = newRunner(t, catalog, &recorder{}, fakeVariables{})
+	id, _, err = r.Start(ctx, "org_1", "plan_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = r.Finish(ctx, "org_1", id, ""); err != nil {
+		t.Fatal(err)
+	}
+	if len(plans.releases) != 0 || plans.single != 0 {
+		t.Fatalf("a catalog plan recorded %+v", plans.releases)
 	}
 }
 
@@ -1849,5 +1910,34 @@ func TestReleaseCopiesTheBinding(t *testing.T) {
 	*c.ObservedAt = at.Add(time.Hour)
 	if string(b.Config) != `{"a":1}` || string(b.Replaced[0].Config) != `{"b":2}` || b.Replaced[0].ExternalID != "old" || !b.ObservedAt.Equal(at) {
 		t.Fatalf("the copy shares with the binding: %+v", b)
+	}
+}
+
+// revisioned is an executor whose outcome names a digest reference and a
+// provider revision, as DigitalOcean's deployment ID is.
+type revisioned struct{ *recorder }
+
+func (r revisioned) Apply(ctx context.Context, job *Job) (*Outcome, error) {
+	out, err := r.recorder.Apply(ctx, job)
+	if out != nil {
+		out.Image, out.Revision = "i@sha256:"+strings.Repeat("0", 64), "dep_do_9"
+		job.Warn(errors.New(job.Action.Name + " warned while it deployed"))
+	}
+	return out, err
+}
+
+// The step keeps what the executor deployed, and what it warned about.
+func TestRunner_recordsTheRevisionOnTheStep(t *testing.T) {
+	exec := revisioned{&recorder{url: answering(t, http.StatusOK)}}
+	r, store, _ := newRunner(t, webAndAPI(), exec, nil)
+	id, err := runAll(t, r, webAndAPI())
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, _ := store.GetDeployment(t.Context(), "org_1", id)
+	api := d.Step("service:api")
+	if api == nil || api.Image != "i@sha256:"+strings.Repeat("0", 64) || api.Revision != "dep_do_9" ||
+		!slices.Contains(api.Warnings, "api warned while it deployed") {
+		t.Fatalf("api step %+v", api)
 	}
 }

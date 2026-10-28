@@ -42,6 +42,9 @@ func (s *Service) syncStore() (cloudprofiles.SyncStore, error) {
 	return st, nil
 }
 func (s *Service) authorizeCloudSync(ctx context.Context, p security.Principal, project string) error {
+	if err := refuseAutomation(p); err != nil {
+		return err
+	}
 	if project == "" {
 		return s.authz.Require(ctx, p, security.OrganizationCloudManage, p.OrgID)
 	}

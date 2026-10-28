@@ -2,6 +2,7 @@ package deployments
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -97,5 +98,28 @@ func TestRunnerReturningToOwnedResourceRequiresItsOwnership(t *testing.T) {
 				t.Fatal("verified return failed", b, err)
 			}
 		})
+	}
+}
+
+func TestRunnerBindingKeepsNoReusedImage(t *testing.T) {
+	plans := &fakePlans{bindings: map[string]*planning.Binding{}}
+	r := &Runner{plans: plans, now: time.Now}
+	d := &Deployment{OrgID: "org", ProjectID: "project", EnvironmentID: "production", PlanID: "plan"}
+	artifact := &planning.ReusedArtifact{Reference: "registry.example/app/api@sha256:" + strings.Repeat("a", 64), FromEnvironment: "staging"}
+	a := planning.Action{Subject: planning.ServiceSubject, Name: "api", Provider: "cloud-run", Region: "us-central1",
+		Service: &planning.ServiceConfig{Provider: "cloud-run", CommitSHA: "abc", Artifact: artifact}}
+	b, err := r.bind(t.Context(), d, a, nil, &Outcome{ExternalID: "api"}, "connection", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg planning.ServiceConfig
+	if err := json.Unmarshal(b.Config, &cfg); err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Artifact != nil || strings.Contains(string(b.Config), `"artifact"`) {
+		t.Fatalf("binding config keeps the reused image: %s", b.Config)
+	}
+	if cfg.CommitSHA != "abc" || a.Service.Artifact != artifact {
+		t.Fatalf("binding config %s, action artifact %+v", b.Config, a.Service.Artifact)
 	}
 }

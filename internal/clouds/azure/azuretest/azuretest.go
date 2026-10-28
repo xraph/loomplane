@@ -10,7 +10,9 @@ package azuretest
 
 import (
 	"cmp"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -54,6 +56,9 @@ type Fake struct {
 	Actions, NotActions []string
 	// FailBuild makes every ACR Tasks run fail.
 	FailBuild bool
+	// NoDigest makes a finished run name no image it pushed, as a run
+	// whose push step reported nothing would.
+	NoDigest bool
 	// PrincipalMissingFor makes the first N role assignments fail with
 	// PrincipalNotFound, as they do while Entra ID hasn't replicated a new
 	// identity yet.
@@ -82,6 +87,8 @@ type Fake struct {
 	Uploads map[string][]byte
 	// Tasks are the ACR Tasks files of the runs started, decoded.
 	Tasks []string
+	// runTasks are those files by run ID.
+	runTasks map[string]string
 	// Apps are the container app bodies Loomplane PUT, by name, and
 	// AppPuts every one of them in order.
 	Apps    map[string]map[string]any
@@ -117,12 +124,35 @@ func New(t *testing.T) *Fake {
 	f := &Fake{
 		Actions: []string{"*"}, NotActions: []string{"Microsoft.Authorization/*/Write", "Microsoft.Authorization/*/Delete"},
 		groups: map[string]string{}, registered: map[string]bool{}, resources: map[string]map[string]any{},
-		polls: map[string]int{}, Uploads: map[string][]byte{}, Apps: map[string]map[string]any{},
+		polls: map[string]int{}, Uploads: map[string][]byte{}, Apps: map[string]map[string]any{}, runTasks: map[string]string{},
 		pullDenied: map[string]bool{}, provisionFailed: map[string]bool{}, unseen: map[string]int{}, FirewallRules: map[string]map[string]any{},
 	}
 	f.Server = httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(f.Server.Close)
 	return f
+}
+
+// Digest is the digest the fake reports for the image it pushed as ref,
+// a repository and tag.
+func Digest(ref string) string {
+	sum := sha256.Sum256([]byte(ref))
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+// pushed are the images a task file's push steps name, as ACR Tasks
+// reports them on the run.
+func pushed(server, task string) []map[string]string {
+	var out []map[string]string
+	for _, line := range strings.Split(task, "\n") {
+		ref, ok := strings.CutPrefix(strings.TrimSpace(line), `- "{{.Run.Registry}}/`)
+		if !ok {
+			continue
+		}
+		ref = strings.TrimSuffix(ref, `"`)
+		repo, tag, _ := strings.Cut(ref, ":")
+		out = append(out, map[string]string{"registry": server, "repository": repo, "tag": tag, "digest": Digest(ref)})
+	}
+	return out
 }
 
 // URL is the fake's address, which replaces Azure's hosts.
@@ -366,6 +396,7 @@ func (f *Fake) resource(w http.ResponseWriter, r *http.Request, reply func(int, 
 		}
 		f.Tasks = append(f.Tasks, string(task))
 		run := "cb" + string(rune('0'+len(f.Tasks)))
+		f.runTasks[run] = string(task)
 		reply(http.StatusOK, map[string]any{"name": run, "properties": map[string]any{"runId": run, "status": "Queued"}})
 	case kind == "microsoft.containerregistry/registries" && len(rest) == 2 && rest[0] == "runs":
 		key := id + "/runs/" + rest[1]
@@ -377,7 +408,11 @@ func (f *Fake) resource(w http.ResponseWriter, r *http.Request, reply func(int, 
 				status = "Failed"
 			}
 		}
-		reply(http.StatusOK, map[string]any{"properties": map[string]any{"runId": rest[1], "status": status, "runErrorMessage": map[bool]string{true: "The command returned a non-zero code: 1"}[status == "Failed"]}})
+		props := map[string]any{"runId": rest[1], "status": status, "runErrorMessage": map[bool]string{true: "The command returned a non-zero code: 1"}[status == "Failed"]}
+		if status == "Succeeded" && !f.NoDigest {
+			props["outputImages"] = pushed(name+".azurecr.io", f.runTasks[rest[1]])
+		}
+		reply(http.StatusOK, map[string]any{"properties": props})
 	case kind == "microsoft.containerregistry/registries" && len(rest) == 4 && rest[0] == "providers" && rest[1] == "microsoft.authorization" && rest[2] == "roleassignments" && r.Method == http.MethodPut:
 		if f.resources[id] == nil {
 			notFound("ParentResourceNotFound")

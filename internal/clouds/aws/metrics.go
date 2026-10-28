@@ -239,11 +239,4 @@ func dimensions(targetGroupARN, loadBalancerARN string) ([]cwtypes.Dimension, er
 
 // denied reports whether AWS refused the request for want of a
 // permission.
-func denied(err error) bool {
-	var ae smithy.APIError
-	if !errors.As(err, &ae) {
-		return false
-	}
-	code := ae.ErrorCode()
-	return code == "AccessDenied" || code == "AccessDeniedException"
-}
+func denied(err error) bool { return IsAccessDenied(err) }

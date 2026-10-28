@@ -1050,6 +1050,33 @@
           }
         }
       },
+      "ArtifactChoice": {
+        "type": "object",
+        "required": [
+          "service",
+          "reused"
+        ],
+        "properties": {
+          "from": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "reference": {
+            "type": "string"
+          },
+          "reused": {
+            "type": "boolean"
+          },
+          "revision": {
+            "type": "string"
+          },
+          "service": {
+            "type": "string"
+          }
+        }
+      },
       "Binding": {
         "type": "object",
         "required": [
@@ -1169,6 +1196,201 @@
           "registry_settings": {
             "type": "object",
             "additionalProperties": true
+          }
+        }
+      },
+      "CapacityBlock": {
+        "type": "object",
+        "required": [
+          "reason",
+          "resource",
+          "cloud_id",
+          "pool_id",
+          "target_id",
+          "limit",
+          "counted",
+          "requested",
+          "policy_revision",
+          "retryable"
+        ],
+        "properties": {
+          "cloud_id": {
+            "type": "string"
+          },
+          "counted": {
+            "type": "integer"
+          },
+          "limit": {
+            "type": "integer"
+          },
+          "policy_revision": {
+            "type": "integer"
+          },
+          "pool_id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "requested": {
+            "type": "integer"
+          },
+          "resource": {
+            "type": "string"
+          },
+          "retryable": {
+            "type": "boolean"
+          },
+          "target_id": {
+            "type": "string"
+          }
+        }
+      },
+      "CapacityDemand": {
+        "type": "object",
+        "required": [
+          "org_id",
+          "cloud_id",
+          "pool_id",
+          "target_id",
+          "project_id",
+          "environment_id",
+          "plan_id",
+          "service",
+          "architecture",
+          "sticky_server_id",
+          "resources",
+          "local_data",
+          "policy_revision",
+          "intent_hash"
+        ],
+        "properties": {
+          "architecture": {
+            "type": "string"
+          },
+          "cloud_id": {
+            "type": "string"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "intent_hash": {
+            "type": "string"
+          },
+          "local_data": {
+            "type": "boolean"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "plan_id": {
+            "type": "string"
+          },
+          "policy_revision": {
+            "type": "integer"
+          },
+          "pool_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "resources": {
+            "$ref": "#/components/schemas/ResourceVector"
+          },
+          "service": {
+            "type": "string"
+          },
+          "sticky_server_id": {
+            "type": "string"
+          },
+          "target_id": {
+            "type": "string"
+          }
+        }
+      },
+      "CapacityIntent": {
+        "type": "object",
+        "required": [
+          "demand",
+          "provider_pin",
+          "template",
+          "template_hash",
+          "commit_sha",
+          "assignment_revision",
+          "cloud_revision",
+          "target_revision",
+          "grant_revision",
+          "target_name"
+        ],
+        "properties": {
+          "assignment_revision": {
+            "type": "integer"
+          },
+          "cloud_revision": {
+            "type": "integer"
+          },
+          "commit_sha": {
+            "type": "string"
+          },
+          "demand": {
+            "$ref": "#/components/schemas/CapacityDemand"
+          },
+          "grant_revision": {
+            "type": "integer"
+          },
+          "provider_pin": {
+            "$ref": "#/components/schemas/CapacityTemplatePin"
+          },
+          "target_name": {
+            "type": "string"
+          },
+          "target_revision": {
+            "type": "integer"
+          },
+          "template": {
+            "$ref": "#/components/schemas/PoolExpansionPolicy"
+          },
+          "template_hash": {
+            "type": "string"
+          }
+        }
+      },
+      "CapacityTemplatePin": {
+        "type": "object",
+        "required": [
+          "connection_generation",
+          "account_id"
+        ],
+        "properties": {
+          "account_id": {
+            "type": "string"
+          },
+          "connection_generation": {
+            "type": "integer"
+          }
+        }
+      },
+      "CapacityWait": {
+        "type": "object",
+        "required": [
+          "revision",
+          "blocks",
+          "created_at"
+        ],
+        "properties": {
+          "blocks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CapacityBlock"
+            }
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "revision": {
+            "type": "integer"
           }
         }
       },
@@ -1335,6 +1557,47 @@
           },
           "target_revision": {
             "type": "integer"
+          }
+        }
+      },
+      "CloudSQLApplicationNetwork": {
+        "type": "object",
+        "required": [
+          "consumer_project",
+          "network",
+          "subnetwork"
+        ],
+        "properties": {
+          "consumer_project": {
+            "type": "string"
+          },
+          "network": {
+            "type": "string"
+          },
+          "subnetwork": {
+            "type": "string"
+          }
+        }
+      },
+      "CloudSQLSourceEndpoint": {
+        "type": "object",
+        "required": [
+          "consumer_project",
+          "network",
+          "forwarding_rule"
+        ],
+        "properties": {
+          "consumer_project": {
+            "type": "string"
+          },
+          "forwarding_rule": {
+            "type": "string"
+          },
+          "network": {
+            "type": "string"
+          },
+          "provision_subnetwork": {
+            "type": "string"
           }
         }
       },
@@ -1737,25 +2000,6 @@
           }
         }
       },
-      "FarpConfig": {
-        "type": "object",
-        "required": [
-          "gateway",
-          "port"
-        ],
-        "properties": {
-          "gateway": {
-            "type": "string"
-          },
-          "metadata": {
-            "type": "object",
-            "additionalProperties": true
-          },
-          "port": {
-            "type": "integer"
-          }
-        }
-      },
       "Federation": {
         "type": "object",
         "properties": {
@@ -1958,6 +2202,33 @@
           }
         }
       },
+      "Leftover": {
+        "type": "object",
+        "required": [
+          "subject",
+          "name",
+          "op",
+          "data_bearing",
+          "reason"
+        ],
+        "properties": {
+          "data_bearing": {
+            "type": "boolean"
+          },
+          "name": {
+            "type": "string"
+          },
+          "op": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          }
+        }
+      },
       "ManagedDatabaseConfig": {
         "type": "object",
         "required": [
@@ -2148,6 +2419,9 @@
           "commit_sha": {
             "type": "string"
           },
+          "from_plan_id": {
+            "type": "string"
+          },
           "in_scope": {
             "type": "boolean"
           },
@@ -2223,6 +2497,59 @@
         ],
         "type": "object",
         "x-forge-type": "github.com/xraph/loomplane/internal/planning.Summary"
+      },
+      "PoolExpansionPolicy": {
+        "type": "object",
+        "required": [
+          "bootstrap_size",
+          "pool_id",
+          "connection_id",
+          "region",
+          "architecture",
+          "image",
+          "allowed_sizes",
+          "min_servers",
+          "max_servers",
+          "system_reserve"
+        ],
+        "properties": {
+          "allowed_sizes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "architecture": {
+            "type": "string"
+          },
+          "bootstrap_size": {
+            "type": "string"
+          },
+          "connection_id": {
+            "type": "string"
+          },
+          "image": {
+            "type": "string"
+          },
+          "limits": {
+            "$ref": "#/components/schemas/ResourceVector"
+          },
+          "max_servers": {
+            "type": "integer"
+          },
+          "min_servers": {
+            "type": "integer"
+          },
+          "pool_id": {
+            "type": "string"
+          },
+          "region": {
+            "type": "string"
+          },
+          "system_reserve": {
+            "$ref": "#/components/schemas/ResourceVector"
+          }
+        }
       },
       "Port": {
         "type": "object",
@@ -2449,6 +2776,29 @@
           }
         }
       },
+      "ResourceVector": {
+        "type": "object",
+        "required": [
+          "servers",
+          "cpu_millis",
+          "memory_bytes",
+          "storage_bytes"
+        ],
+        "properties": {
+          "cpu_millis": {
+            "type": "integer"
+          },
+          "memory_bytes": {
+            "type": "integer"
+          },
+          "servers": {
+            "type": "integer"
+          },
+          "storage_bytes": {
+            "type": "integer"
+          }
+        }
+      },
       "Resources": {
         "type": "object",
         "required": [
@@ -2461,6 +2811,76 @@
           },
           "memory_mb": {
             "type": "integer"
+          }
+        }
+      },
+      "ReusedArtifact": {
+        "type": "object",
+        "required": [
+          "commit_sha",
+          "from_environment",
+          "from_deployment_id"
+        ],
+        "properties": {
+          "architecture": {
+            "type": "string"
+          },
+          "commit_sha": {
+            "type": "string"
+          },
+          "digest": {
+            "type": "string"
+          },
+          "from_deployment_id": {
+            "type": "string"
+          },
+          "from_environment": {
+            "type": "string"
+          },
+          "reference": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
+          }
+        }
+      },
+      "Rollback": {
+        "type": "object",
+        "required": [
+          "reason",
+          "trigger",
+          "target_deployment_id",
+          "target_plan_id",
+          "restore_deployment_id",
+          "restore_plan_id",
+          "restore_finished_at"
+        ],
+        "properties": {
+          "reason": {
+            "type": "string"
+          },
+          "restore_deployment_id": {
+            "type": "string"
+          },
+          "restore_finished_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "restore_plan_id": {
+            "type": "string"
+          },
+          "target_deployment_id": {
+            "type": "string"
+          },
+          "target_plan_id": {
+            "type": "string"
+          },
+          "trigger": {
+            "type": "string"
+          },
+          "watch_id": {
+            "type": "string"
           }
         }
       },
@@ -2638,17 +3058,26 @@
           "applied_inputs": {
             "$ref": "#/components/schemas/AppliedInputs"
           },
+          "artifact": {
+            "$ref": "#/components/schemas/ReusedArtifact"
+          },
           "build": {
             "type": "string"
           },
           "build_target": {
             "$ref": "#/components/schemas/BuildTarget"
           },
+          "capacity_intent": {
+            "$ref": "#/components/schemas/CapacityIntent"
+          },
           "catalog": {
             "$ref": "#/components/schemas/Recipe"
           },
           "cloud_placement": {
             "$ref": "#/components/schemas/CloudPlacement"
+          },
+          "cloud_sql_network": {
+            "$ref": "#/components/schemas/CloudSQLApplicationNetwork"
           },
           "commit_sha": {
             "type": "string"
@@ -2676,9 +3105,6 @@
           },
           "execution": {
             "type": "string"
-          },
-          "farp": {
-            "$ref": "#/components/schemas/FarpConfig"
           },
           "framework": {
             "type": "string"
@@ -2741,8 +3167,8 @@
           "workload": {
             "type": "string"
           },
-          "cloud_sql_network": {
-            "$ref": "#/components/schemas/CloudSQLApplicationNetwork"
+          "farp": {
+            "$ref": "#/components/schemas/FarpConfig"
           }
         }
       },
@@ -2856,6 +3282,9 @@
           "provider": {
             "type": "string"
           },
+          "revision": {
+            "type": "string"
+          },
           "started_at": {
             "type": "string"
           },
@@ -2951,6 +3380,7 @@
           "repository",
           "ref",
           "commit_sha",
+          "pinned",
           "error",
           "summary",
           "created_by",
@@ -2979,6 +3409,9 @@
           },
           "org_id": {
             "type": "string"
+          },
+          "pinned": {
+            "type": "boolean"
           },
           "project_id": {
             "type": "string"
@@ -3393,6 +3826,9 @@
           "started_at"
         ],
         "properties": {
+          "capacity_wait": {
+            "$ref": "#/components/schemas/CapacityWait"
+          },
           "commit_sha": {
             "type": "string"
           },
@@ -3588,6 +4024,11 @@
         "type": "object",
         "required": [
           "catalog",
+          "kind",
+          "from_environment",
+          "from_environment_id",
+          "leftovers",
+          "artifacts",
           "id",
           "org_id",
           "project_id",
@@ -3615,6 +4056,12 @@
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/Action"
+            }
+          },
+          "artifacts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ArtifactChoice"
             }
           },
           "catalog": {
@@ -3658,9 +4105,24 @@
           "expires_at": {
             "type": "string"
           },
+          "from_environment": {
+            "type": "string"
+          },
+          "from_environment_id": {
+            "type": "string"
+          },
           "id": {
             "type": "string",
             "x-forge-id": true
+          },
+          "kind": {
+            "type": "string"
+          },
+          "leftovers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Leftover"
+            }
           },
           "manifest_id": {
             "type": "string"
@@ -3685,6 +4147,9 @@
           },
           "revision": {
             "type": "string"
+          },
+          "rollback": {
+            "$ref": "#/components/schemas/Rollback"
           },
           "sources": {
             "type": "array",
@@ -3916,44 +4381,22 @@
           }
         }
       },
-      "CloudSQLSourceEndpoint": {
+      "FarpConfig": {
         "type": "object",
         "required": [
-          "consumer_project",
-          "network",
-          "forwarding_rule"
+          "gateway",
+          "port"
         ],
         "properties": {
-          "consumer_project": {
+          "gateway": {
             "type": "string"
           },
-          "forwarding_rule": {
-            "type": "string"
+          "metadata": {
+            "type": "object",
+            "additionalProperties": true
           },
-          "network": {
-            "type": "string"
-          },
-          "provision_subnetwork": {
-            "type": "string"
-          }
-        }
-      },
-      "CloudSQLApplicationNetwork": {
-        "type": "object",
-        "required": [
-          "consumer_project",
-          "network",
-          "subnetwork"
-        ],
-        "properties": {
-          "consumer_project": {
-            "type": "string"
-          },
-          "network": {
-            "type": "string"
-          },
-          "subnetwork": {
-            "type": "string"
+          "port": {
+            "type": "integer"
           }
         }
       },
@@ -4007,6 +4450,7 @@
             "repository",
             "ref",
             "commit_sha",
+            "pinned",
             "error",
             "summary",
             "created_by",
@@ -4035,6 +4479,9 @@
             },
             "org_id": {
               "type": "string"
+            },
+            "pinned": {
+              "type": "boolean"
             },
             "project_id": {
               "type": "string"
@@ -4080,6 +4527,7 @@
             "repository",
             "ref",
             "commit_sha",
+            "pinned",
             "error",
             "summary",
             "created_by",
@@ -4108,6 +4556,9 @@
             },
             "org_id": {
               "type": "string"
+            },
+            "pinned": {
+              "type": "boolean"
             },
             "project_id": {
               "type": "string"
@@ -4206,6 +4657,10 @@
             },
             "org_id": {
               "type": "string"
+            },
+            "owned_resources": {
+              "type": "object",
+              "additionalProperties": true
             },
             "physical_id": {
               "type": "string"
@@ -4308,6 +4763,10 @@
             },
             "org_id": {
               "type": "string"
+            },
+            "owned_resources": {
+              "type": "object",
+              "additionalProperties": true
             },
             "physical_id": {
               "type": "string"
@@ -4976,6 +5435,9 @@
             "started_at"
           ],
           "properties": {
+            "capacity_wait": {
+              "$ref": "#/components/schemas/CapacityWait"
+            },
             "commit_sha": {
               "type": "string"
             },
@@ -5056,6 +5518,9 @@
             "started_at"
           ],
           "properties": {
+            "capacity_wait": {
+              "$ref": "#/components/schemas/CapacityWait"
+            },
             "commit_sha": {
               "type": "string"
             },
@@ -5381,6 +5846,11 @@
           "type": "object",
           "required": [
             "catalog",
+            "kind",
+            "from_environment",
+            "from_environment_id",
+            "leftovers",
+            "artifacts",
             "id",
             "org_id",
             "project_id",
@@ -5408,6 +5878,12 @@
               "type": "array",
               "items": {
                 "$ref": "#/components/schemas/Action"
+              }
+            },
+            "artifacts": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/ArtifactChoice"
               }
             },
             "catalog": {
@@ -5451,9 +5927,24 @@
             "expires_at": {
               "type": "string"
             },
+            "from_environment": {
+              "type": "string"
+            },
+            "from_environment_id": {
+              "type": "string"
+            },
             "id": {
               "type": "string",
               "x-forge-id": true
+            },
+            "kind": {
+              "type": "string"
+            },
+            "leftovers": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/Leftover"
+              }
             },
             "manifest_id": {
               "type": "string"
@@ -5478,6 +5969,9 @@
             },
             "revision": {
               "type": "string"
+            },
+            "rollback": {
+              "$ref": "#/components/schemas/Rollback"
             },
             "sources": {
               "type": "array",
@@ -5509,6 +6003,11 @@
           "type": "object",
           "required": [
             "catalog",
+            "kind",
+            "from_environment",
+            "from_environment_id",
+            "leftovers",
+            "artifacts",
             "id",
             "org_id",
             "project_id",
@@ -5536,6 +6035,12 @@
               "type": "array",
               "items": {
                 "$ref": "#/components/schemas/Action"
+              }
+            },
+            "artifacts": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/ArtifactChoice"
               }
             },
             "catalog": {
@@ -5579,9 +6084,24 @@
             "expires_at": {
               "type": "string"
             },
+            "from_environment": {
+              "type": "string"
+            },
+            "from_environment_id": {
+              "type": "string"
+            },
             "id": {
               "type": "string",
               "x-forge-id": true
+            },
+            "kind": {
+              "type": "string"
+            },
+            "leftovers": {
+              "type": "array",
+              "items": {
+                "$ref": "#/components/schemas/Leftover"
+              }
             },
             "manifest_id": {
               "type": "string"
@@ -5606,6 +6126,9 @@
             },
             "revision": {
               "type": "string"
+            },
+            "rollback": {
+              "$ref": "#/components/schemas/Rollback"
             },
             "sources": {
               "type": "array",

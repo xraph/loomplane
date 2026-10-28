@@ -196,8 +196,9 @@ func TestAuthorizer_ensureTenantIsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(roles) != len(Catalog()) {
-		t.Fatalf("%d roles after two ensures, want %d", len(roles), len(Catalog()))
+	// The member roles and the automation's.
+	if len(roles) != len(Catalog())+1 {
+		t.Fatalf("%d roles after two ensures, want %d", len(roles), len(Catalog())+1)
 	}
 }
 
