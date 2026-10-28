@@ -78,19 +78,22 @@ function Amount({
   onChange: (next: number) => void
 }) {
   return (
-    <Field label={label}>
-      <Input
-        type="number"
-        min={0}
-        step={step}
-        className="w-28"
-        value={value ? Number((value / scale).toFixed(2)) : ""}
-        placeholder="0"
-        onChange={(e) =>
-          onChange(Math.max(0, Math.round(Number(e.target.value) * scale)))
-        }
-      />
-    </Field>
+    <FormField className="w-auto gap-1 text-xs">
+      <FieldLabel className="contents">
+        {label}
+        <Input
+          type="number"
+          min={0}
+          step={step}
+          className="w-28"
+          value={value ? Number((value / scale).toFixed(2)) : ""}
+          placeholder="0"
+          onChange={(e) =>
+            onChange(Math.max(0, Math.round(Number(e.target.value) * scale)))
+          }
+        />
+      </FieldLabel>
+    </FormField>
   )
 }
 
