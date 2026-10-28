@@ -1,5 +1,6 @@
 import { Link } from "@tanstack/react-router"
 
+import { SystemAddress, SystemPage } from "@/components/system-page"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { Spinner } from "@/components/ui/spinner"
 
@@ -33,24 +34,39 @@ export function PageNotFound() {
   )
 }
 
-/** WorkspaceNotFound answers an address in a workspace the person isn't in. */
-export function WorkspaceNotFound({ slug }: { slug: string }) {
+/**
+ * WorkspaceNotFound answers an address in a workspace the person isn't in.
+ * It's a full page, outside the shell: the sidebar belongs to a workspace,
+ * and this address doesn't open one.
+ */
+export function WorkspaceNotFound({
+  slug,
+  path,
+  current,
+}: {
+  slug: string
+  /** The rest of the address, after the slug. */
+  path: string
+  /** The name of the workspace the person is signed in to. */
+  current: string
+}) {
   return (
-    <div className="flex min-h-svh flex-1 flex-col items-start justify-center gap-4 p-6 md:p-10">
-      <div>
-        <h1 className="text-2xl font-semibold tracking-tight">
-          Workspace not found
-        </h1>
-        <p className="mt-2 text-sm text-muted-foreground">
-          There's no workspace at <code className="font-mono">{slug}</code> that
-          you're a member of. Ask its owner for an invitation, or go back to
-          your projects.
-        </p>
-      </div>
-      <Link to="/projects" className={buttonVariants()}>
-        Back to projects
-      </Link>
-    </div>
+    <SystemPage
+      tone="problem"
+      title="Workspace not found"
+      lede="You're not a member of a workspace at this address. Ask its owner for an invitation, or go back to your own."
+      actions={
+        <Link to="/" className={buttonVariants()}>
+          Go to {current}
+        </Link>
+      }
+    >
+      <SystemAddress
+        before={`${window.location.host}/`}
+        marked={slug}
+        after={path === "/" ? "" : path}
+      />
+    </SystemPage>
   )
 }
 

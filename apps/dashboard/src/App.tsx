@@ -12,7 +12,8 @@ import { AppSidebar } from "@/components/app-sidebar"
 import { AppStatusBar } from "@/components/app-status-bar"
 import { AuthLayout } from "@/components/auth-layout"
 import { ShellProvider } from "@/components/shell"
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { SystemAddress, SystemPage } from "@/components/system-page"
+import { Button } from "@/components/ui/button"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { PageLoading, WorkspaceNotFound } from "@/components/route-feedback"
 import { OrganizationGate, useOrganization } from "@/lib/organization"
@@ -73,6 +74,9 @@ export function App() {
   }
   if (authPaths.includes(path)) return <Navigate to="/" replace />
   if (invite) return <AcceptInvitation token={invite} />
+  // An invitation link without its token: the route says so on a page of
+  // its own, since no workspace is involved yet.
+  if (path === "/invitations/accept") return <Outlet />
   return <SignedIn />
 }
 
@@ -112,15 +116,26 @@ function SignedIn() {
 }
 
 function Shell() {
-  const { session, missing } = useOrganization()
+  const { session, organizations, missing } = useOrganization()
+  const path = usePath()
   useWorkspaceAddress()
+  if (missing) {
+    const current = organizations.find((o) => o.id === session.orgId)
+    return (
+      <WorkspaceNotFound
+        slug={missing}
+        path={path}
+        current={current?.name ?? "your workspace"}
+      />
+    )
+  }
   return (
     <ShellProvider>
       <SidebarProvider>
         <AppSidebar />
         {/* Keyed on the organization, so switching remounts every page. */}
         <SidebarInset key={session.orgId} className="min-w-0">
-          {missing ? <WorkspaceNotFound slug={missing} /> : <Outlet />}
+          <Outlet />
           <AppStatusBar />
         </SidebarInset>
       </SidebarProvider>
@@ -146,17 +161,29 @@ function useWorkspaceAddress() {
 export function Problem({
   title,
   message,
+  address,
+  retry = true,
 }: {
   title: string
   message: string
+  /** The address that failed, when there is one worth showing. */
+  address?: string
+  /** Whether trying again could help. A broken link can't be retried. */
+  retry?: boolean
 }) {
   return (
-    <div className="flex min-h-svh items-center justify-center p-6">
-      <Alert variant="destructive" className="max-w-md">
-        <AlertTitle>{title}</AlertTitle>
-        <AlertDescription>{message}</AlertDescription>
-      </Alert>
-    </div>
+    <SystemPage
+      tone="problem"
+      title={title}
+      lede={message}
+      actions={
+        retry && (
+          <Button onClick={() => window.location.reload()}>Try again</Button>
+        )
+      }
+    >
+      {address && <SystemAddress before={address} />}
+    </SystemPage>
   )
 }
 

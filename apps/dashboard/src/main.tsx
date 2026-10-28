@@ -57,7 +57,8 @@ try {
   root.render(
     <Problem
       title="Loomplane isn't answering"
-      message="The dashboard couldn't reach Loomplane's API. Check that it's running, then reload."
+      message="The dashboard couldn't reach Loomplane's API. If it's restarting, try again in a moment. Otherwise check that it's running."
+      address={`${window.location.host}/api`}
     />
   )
 }
