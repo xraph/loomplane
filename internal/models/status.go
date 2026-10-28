@@ -867,6 +867,10 @@ func (s *Service) moveResource(ctx context.Context, p security.Principal, projec
 	}
 	// Whether the edit goes to the top level or env's block is decided from
 	// the manifest the edit is made to (decideEdit).
+	live, err := s.liveEnvironments(ctx, p.OrgID, projectID)
+	if err != nil {
+		return nil, err
+	}
 	var from string
 	rev, err := s.decideEdit(ctx, p, projectID, fmt.Sprintf("moving %s in %s", pv.Resource, env.Name), func(m *manifests.Revision) (manifests.EditInput, error) {
 		cur, err := modelIn(m.Manifest, env, pv.Resource)
@@ -881,7 +885,7 @@ func (s *Service) moveResource(ctx context.Context, p security.Principal, projec
 		if refusal != "" {
 			return manifests.EditInput{}, fmt.Errorf("%w: %s", ErrInvalid, refusal)
 		}
-		update, err := moveUpdate(m.Manifest.Resources[pv.Resource], cur, env.Name, m.Manifest.Defaults, pv, settings)
+		update, err := moveUpdate(liveIn(m.Manifest.Resources[pv.Resource], live), cur, env.Name, m.Manifest.Defaults, pv, settings)
 		if err != nil {
 			return manifests.EditInput{}, err
 		}
@@ -952,8 +956,12 @@ func (s *Service) moveProblem(ctx context.Context, p security.Principal, project
 	if err != nil {
 		return err
 	}
+	live, err := s.liveEnvironments(ctx, p.OrgID, projectID)
+	if err != nil {
+		return err
+	}
 	settings := moveSettings(cur, pv)
-	_, err = moveUpdate(m.Resources[pv.Resource], cur, env.Name, m.Defaults, pv, settings)
+	_, err = moveUpdate(liveIn(m.Resources[pv.Resource], live), cur, env.Name, m.Defaults, pv, settings)
 	if pe := (*ProblemError)(nil); errors.As(err, &pe) {
 		pv.Problems = append(pv.Problems, pe.Problem)
 		return nil
@@ -1102,6 +1110,12 @@ func (s *Service) Remove(ctx context.Context, p security.Principal, projectID, e
 	// Whether this is the last copy is decided from the manifest the edit
 	// is made to (decideEdit): a copy another environment adds meanwhile
 	// keeps the resource.
+	// A block or a row of an environment the project no longer has runs
+	// nowhere, so it's no other copy.
+	live, err := s.liveEnvironments(ctx, p.OrgID, projectID)
+	if err != nil {
+		return nil, err
+	}
 	var (
 		m      *manifest.Manifest
 		users  []string
@@ -1114,10 +1128,11 @@ func (s *Service) Remove(ctx context.Context, p security.Principal, projectID, e
 		if !ok || !recipes.IsModelKind(r.Kind) || !enabledIn(r, env.Name) {
 			return manifests.EditInput{}, fmt.Errorf("%w: %s has no model %s", ErrNotFound, env.Name, resource)
 		}
+		r = liveIn(r, live)
 		users = servicesNeeding(m, resource)
 		// A copy that waits for its GPU server is another copy too: the
 		// resource stays for it to join once the server is up.
-		waiting, werr := s.waitingElsewhere(ctx, p.OrgID, projectID, env, resource)
+		waiting, werr := s.waitingElsewhere(ctx, p.OrgID, projectID, env, resource, live)
 		if werr != nil {
 			return manifests.EditInput{}, werr
 		}
@@ -1180,8 +1195,9 @@ func (s *Service) Remove(ctx context.Context, p security.Principal, projectID, e
 }
 
 // waitingElsewhere is the IDs of the environments other than env whose
-// copy of resource waits for its GPU server.
-func (s *Service) waitingElsewhere(ctx context.Context, orgID, projectID string, env *projects.Environment, resource string) (map[string]bool, error) {
+// copy of resource waits for its GPU server, of those in live when it
+// isn't nil.
+func (s *Service) waitingElsewhere(ctx context.Context, orgID, projectID string, env *projects.Environment, resource string, live []*projects.Environment) (map[string]bool, error) {
 	if s.d.Store == nil {
 		return nil, nil
 	}
@@ -1191,7 +1207,37 @@ func (s *Service) waitingElsewhere(ctx context.Context, orgID, projectID string,
 	}
 	waiting := waitingIn(rows, resource)
 	delete(waiting, env.ID)
+	if live != nil {
+		maps.DeleteFunc(waiting, func(id string, _ bool) bool {
+			return !slices.ContainsFunc(live, func(e *projects.Environment) bool { return e.ID == id })
+		})
+	}
 	return waiting, nil
+}
+
+// liveEnvironments is the project's environments, nil when the service
+// has no projects to ask. Unlike environmentsOf, a failed read is an
+// error: a decision about the other copies can't be made without them.
+func (s *Service) liveEnvironments(ctx context.Context, orgID, projectID string) ([]*projects.Environment, error) {
+	if s.d.Projects == nil {
+		return nil, nil
+	}
+	return s.d.Projects.ListEnvironments(ctx, orgID, projectID)
+}
+
+// liveIn is raw with the blocks of the environments in live alone, or raw
+// as it is when live is nil. A block left behind by an environment the
+// project no longer has runs nowhere, so it's never another copy: not to
+// Remove's last-copy check, and not to soleReader.
+func liveIn(raw manifest.Resource, live []*projects.Environment) manifest.Resource {
+	if live == nil || raw.Environments == nil {
+		return raw
+	}
+	raw.Environments = maps.Clone(raw.Environments)
+	maps.DeleteFunc(raw.Environments, func(name string, _ manifest.ResourceSettings) bool {
+		return !slices.ContainsFunc(live, func(e *projects.Environment) bool { return e.Name == name })
+	})
+	return raw
 }
 
 // removalUpdate takes env's copy of raw out and leaves the rest of raw

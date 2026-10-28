@@ -138,6 +138,10 @@ func (s *Service) MoveToPin(ctx context.Context, p security.Principal, projectID
 	}
 	// The pin and the edit are decided from the manifest the edit is made
 	// to (decideEdit).
+	live, err := s.liveEnvironments(ctx, p.OrgID, projectID)
+	if err != nil {
+		return nil, err
+	}
 	var e registry.Entry
 	var q registry.Quantization
 	var repinned *RepinnedError
@@ -164,7 +168,7 @@ func (s *Service) MoveToPin(ctx context.Context, p security.Principal, projectID
 					ErrInvalid, resource, resource, env.Name)
 			}
 		}
-		update, uerr := pinUpdate(cur.Manifest.Resources[resource], env.Name, repinned, need)
+		update, uerr := pinUpdate(liveIn(cur.Manifest.Resources[resource], live), env.Name, repinned, need)
 		if uerr != nil {
 			return manifests.EditInput{}, uerr
 		}

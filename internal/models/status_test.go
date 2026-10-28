@@ -1176,6 +1176,44 @@ func TestRemoveKeepsTheResourceForAWaitingCopy(t *testing.T) {
 	}
 }
 
+// Final review M2: a block left by qa, an environment the project no
+// longer has, is no other copy. Removing staging's copy is removing the
+// last one: refused while checkout links to it, and the resource goes
+// once it doesn't. A move of staging's copy edits the top level, which
+// only staging reads.
+func TestAGoneEnvironmentsBlockIsNoOtherCopy(t *testing.T) {
+	ctx := context.Background()
+	targets, conns := copyServers()
+	d := newDeploy(t, deployRegistry(t, llamaRev, ""), aiAdmin, targets, conns...)
+	putLLM(t, d, map[string]manifest.ResourceSettings{"staging": on(), "qa": on()})
+	saveServices(t, d, map[string]manifest.Service{"checkout": linkedService("go:cmd/checkout", "llm")})
+	edits := d.recordEdits()
+
+	if _, err := d.svc.Move(ctx, member, projectID, stagingID, "llm", MoveInput{
+		Target:       TargetChoice{Source: TargetConnection, ConnectionID: gpuConn4, GPU: &provider.GPURequest{Kind: "nvidia-l40s"}},
+		Quantization: "bf16", MaxModelLen: 8192,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(edits.edits) != 1 || edits.edits[0].UpdateResource.Environment != "" {
+		t.Fatalf("staging's move: %+v", edits.edits)
+	}
+
+	if _, err := d.svc.Remove(ctx, member, projectID, stagingID, "llm"); !errors.Is(err, ErrInUse) || len(edits.edits) != 1 {
+		t.Fatalf("linked: %v, edits %+v", err, edits.edits)
+	}
+	saveServices(t, d, map[string]manifest.Service{})
+	if _, err := d.svc.Remove(ctx, member, projectID, stagingID, "llm"); err != nil {
+		t.Fatal(err)
+	}
+	if len(edits.edits) != 2 || edits.edits[1].RemoveResource != "llm" {
+		t.Errorf("edits %+v", edits.edits)
+	}
+	if _, ok := current(t, d).Resources["llm"]; ok {
+		t.Error("the manifest still has llm, on in qa alone")
+	}
+}
+
 func TestRemovalUpdateClearsTheBlock(t *testing.T) {
 	block := on()
 	block.Target, block.Provider, block.GPU = gpuConn2, "kubernetes", &manifest.GPU{Kind: "nvidia-h100", Count: 1}
