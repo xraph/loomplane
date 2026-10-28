@@ -531,3 +531,19 @@ it("says pools won't grow on their own while automatic expansion is off, and sav
     })
   )
 })
+
+it("says which limits are missing before letting pools grow", async () => {
+  const user = userEvent.setup()
+  const { writes } = fixture()
+  show()
+  await openTab("Capacity")
+  await user.click(
+    await screen.findByRole("switch", { name: "Let pools on this Cloud grow" })
+  )
+  await user.type(screen.getByRole("spinbutton", { name: "Servers" }), "2")
+  await user.click(screen.getByRole("button", { name: "Save policy" }))
+  expect(await screen.findByRole("alert")).toHaveTextContent(
+    "set the most this Cloud may hold for vCPU, memory, storage"
+  )
+  expect(writes).toEqual([])
+})
