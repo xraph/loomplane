@@ -289,7 +289,7 @@ func (s *Service) preview(ctx context.Context, p security.Principal, projectID s
 		s.checkName(ctx, p, projectID, env, e, in.Resource, pv, problem)
 	}
 
-	t, ok := s.resolveTarget(ctx, p, in.Target, problem)
+	t, ok := s.resolveTarget(ctx, p, in.Target, in.Moving, problem)
 	if !ok {
 		return pv, nil
 	}
@@ -458,8 +458,13 @@ func enabledIn(r manifest.Resource, env string) bool {
 	return on != nil && *on
 }
 
-// resolveTarget finds the target the deploy asked for.
-func (s *Service) resolveTarget(ctx context.Context, p security.Principal, choice TargetChoice, problem func(code, format string, args ...any)) (deployTarget, bool) {
+// resolveTarget finds the target the deploy asked for. A move onto the
+// GPUs its model already holds gets them back as free: the runtimes stop
+// the old engine before the new one starts (Docker counts the old
+// container's devices as free, Kubernetes recreates a GPU pod).
+func (s *Service) resolveTarget(ctx context.Context, p security.Principal, choice TargetChoice, moving *MovingFrom,
+	problem func(code, format string, args ...any),
+) (deployTarget, bool) {
 	switch choice.Source {
 	case TargetConnection:
 	case TargetServerSize:
@@ -487,6 +492,9 @@ func (s *Service) resolveTarget(ctx context.Context, p security.Principal, choic
 		}
 		if t.Cloud != connections.Server && t.Cloud != connections.Kubernetes {
 			break
+		}
+		if moving != nil && moving.ConnectionID == t.ConnectionID && moving.GPUKind == t.Accelerator.Kind && moving.GPUs > 0 {
+			t.Free = min(t.Free+moving.GPUs, t.Accelerator.Count)
 		}
 		if t.Free < 1 {
 			msg := t.Message

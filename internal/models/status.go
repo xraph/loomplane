@@ -1,6 +1,7 @@
 package models
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -119,37 +120,87 @@ const (
 	hintStillServes = "The version deployed before is still running, so linked services keep working while you fix this."
 )
 
-// List lists every model deployment the caller can read, across the
-// workspace's projects. ai:read. A deployment whose project the caller
-// can't read, or whose environment is gone, is left out.
+// List lists every model the caller can read, across the workspace's
+// projects: each deployment row, and each model a manifest runs in an
+// environment that no deploy recorded (one added by hand), with the same
+// cost rules as Status. ai:read. A project whose manifest the caller
+// can't read is left out, and so is a row whose environment is gone.
 func (s *Service) List(ctx context.Context, p security.Principal) ([]*Status, error) {
 	if err := s.d.Authz.Require(ctx, p, security.AIRead, ""); err != nil {
 		return nil, err
 	}
-	if s.d.Store == nil {
+	if s.d.Store == nil || s.d.Projects == nil {
 		return []*Status{}, nil
 	}
-	rows, err := s.d.Store.List(ctx, p.OrgID)
+	projectList, err := s.d.Projects.ListProjects(ctx, p.OrgID)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]*Status, 0, len(rows))
+	out := []*Status{}
+	for _, project := range projectList {
+		statuses, perr := s.listProject(ctx, p, project.ID)
+		if errors.Is(perr, security.ErrForbidden) {
+			continue
+		}
+		if perr != nil {
+			return nil, fmt.Errorf("project %s: %w", project.Slug, perr)
+		}
+		out = append(out, statuses...)
+	}
+	return out, nil
+}
+
+// listProject is List for one project: its rows, then the models its
+// manifest runs that have none.
+func (s *Service) listProject(ctx context.Context, p security.Principal, projectID string) ([]*Status, error) {
+	m, err := s.manifestOf(ctx, p, projectID)
+	if err != nil {
+		return nil, err
+	}
+	envs, err := s.d.Projects.ListEnvironments(ctx, p.OrgID, projectID)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := s.d.Store.ListProject(ctx, p.OrgID, projectID)
+	if err != nil {
+		return nil, err
+	}
+	byID := map[string]*projects.Environment{}
+	for _, env := range envs {
+		byID[env.ID] = env
+	}
+	out := []*Status{}
+	recorded := map[string]bool{}
 	for _, d := range rows {
-		env, err := s.environment(ctx, p.OrgID, d.ProjectID, d.EnvironmentID)
-		if errors.Is(err, projects.ErrEnvironmentNotFound) || errors.Is(err, projects.ErrNotFound) {
+		env := byID[d.EnvironmentID]
+		if env == nil {
 			continue
 		}
-		if err != nil {
-			return nil, err
-		}
-		st, err := s.status(ctx, p, d.ProjectID, env, d.Resource, d)
-		if errors.Is(err, security.ErrForbidden) || errors.Is(err, ErrNotFound) {
+		recorded[d.EnvironmentID+"/"+d.Resource] = true
+		st, serr := s.status(ctx, p, projectID, env, d.Resource, d)
+		if errors.Is(serr, ErrNotFound) {
 			continue
 		}
-		if err != nil {
-			return nil, fmt.Errorf("model %s: %w", d.Resource, err)
+		if serr != nil {
+			return nil, fmt.Errorf("model %s: %w", d.Resource, serr)
 		}
 		out = append(out, st)
+	}
+	if m == nil {
+		return out, nil
+	}
+	for _, env := range envs {
+		for _, name := range slices.Sorted(maps.Keys(m.Resources)) {
+			r := m.Resources[name]
+			if !recipes.IsModelKind(r.Kind) || !enabledIn(r, env.Name) || recorded[env.ID+"/"+name] {
+				continue
+			}
+			st, serr := s.status(ctx, p, projectID, env, name, nil)
+			if serr != nil {
+				return nil, fmt.Errorf("model %s: %w", name, serr)
+			}
+			out = append(out, st)
+		}
 	}
 	return out, nil
 }
@@ -305,6 +356,11 @@ func (s *Service) status(ctx context.Context, p security.Principal, projectID st
 	}
 	st.Linked = linked(env, m, resource, st.ConnectionID, names, bindings)
 	st.Cost = s.costOf(ctx, p, st.Kind, st.GPU, st.ConnectionID, override)
+	if r == nil && row.Request != nil && row.Request.Target.Source == TargetServerSize {
+		// Waiting for a new server: the whole server is the model's, at the
+		// size's price.
+		st.Cost = s.sizeCost(ctx, p, row.Request.Target, override)
+	}
 	st.ProjectedUSD = projected(st.Cost, st.MonthToDateUSD, now)
 	if allowed, aerr := s.d.Authz.Allowed(ctx, p, writeNeed(env)); aerr == nil {
 		st.CanEdit = allowed
@@ -392,6 +448,28 @@ func (s *Service) costOf(ctx context.Context, p security.Principal, kind string,
 		return Cost{Source: CostSourceUnknown}
 	}
 	return HourlyCost(s.gpuTarget(ctx, p, connectionID, gpu.Kind), gpu.Count, override)
+}
+
+// sizeCost is what the server a server size target creates costs per
+// hour: the size's list price for all its GPUs, unknown when the size or
+// its price isn't known, and the override when there is one.
+func (s *Service) sizeCost(ctx context.Context, p security.Principal, t TargetChoice, override string) Cost {
+	if c := HourlyCost(gpus.GPUTarget{}, 0, override); c.Source == CostSourceOverride {
+		return c
+	}
+	if s.d.GPUs == nil || t.GPU == nil {
+		return Cost{Source: CostSourceUnknown}
+	}
+	list, err := s.d.GPUs.Targets(ctx, p, gpus.GPUTargetQuery{Count: 1})
+	if err != nil {
+		return Cost{Source: CostSourceUnknown}
+	}
+	for _, row := range list.Targets {
+		if row.Source == gpus.SourceServerSize && row.ConnectionID == t.ConnectionID && row.SizeID == t.SizeID && row.Accelerator.Kind == t.GPU.Kind {
+			return serverCost(row.Accelerator, row.HourlyUSD, row.HourlyPriceKnown)
+		}
+	}
+	return Cost{Source: CostSourceUnknown}
 }
 
 // gpuTarget is the GPU target row of a connection's GPU kind, the zero
@@ -592,7 +670,12 @@ func (s *Service) moveRequest(ctx context.Context, p security.Principal, project
 	if werr := waitingRefusal(row, "move"); werr != nil {
 		return nil, DeployInput{}, werr
 	}
-	from := &MovingFrom{Kind: r.Kind}
+	from := &MovingFrom{Kind: r.Kind, ConnectionID: r.Target}
+	if m, merr := s.manifestOf(ctx, p, projectID); merr == nil && m != nil {
+		if g := r.For(env.Name, m.Defaults).GPU; g != nil {
+			from.GPUKind, from.GPUs = g.Kind, g.Count
+		}
+	}
 	if row != nil {
 		from.Phase, from.ServerName, from.PlanID = row.Phase, row.ServerName, row.PlanID
 		from.ServerCloudID, from.ServerOperationID = row.ServerCloudID, row.ServerOperationID
@@ -641,9 +724,15 @@ func (s *Service) Move(ctx context.Context, p security.Principal, projectID, env
 		return nil, err
 	}
 	var res *DeployResult
+	left := ""
 	if row != nil {
+		if pv.Target.ConnectionID != din.Moving.ConnectionID {
+			// Off the server: a server Loomplane created for the model stays.
+			left = leftServer(row)
+			row.ServerCloudID, row.ServerOperationID = "", ""
+		}
 		row.Phase, row.Quantization, row.Engine, row.ServerName = PhasePlanned, pv.quant.ID, string(pv.quant.Engine), pv.TargetName
-		row.ServerCloudID, row.ServerOperationID, row.Message = "", "", ""
+		row.Message = ""
 		res, err = s.planRow(ctx, p, projectID, env, rev, row, true)
 	} else {
 		res, err = s.plan(ctx, p, projectID, env, rev, &PlanAfterEditError{Resource: resource, Environment: env.Name, Move: true})
@@ -652,7 +741,40 @@ func (s *Service) Move(ctx context.Context, p security.Principal, projectID, env
 		return res, err
 	}
 	s.modelsChanged(ctx, p.OrgID, projectID)
+	if left != "" {
+		res.Message = left
+		if merr := s.sayOnRow(ctx, row, left); merr != nil {
+			return res, merr
+		}
+	}
 	return res, nil
+}
+
+// leftServer says that the GPU server Loomplane created for d keeps
+// running once the model moves off it, "" when Loomplane created none.
+func leftServer(d *Deployment) string {
+	if d == nil || d.ServerCloudID == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s keeps running and costs money until you delete it in Infrastructure.", serverOf(d))
+}
+
+// createdServer is the name of the GPU server Loomplane created for d, ""
+// when it created none.
+func createdServer(d *Deployment) string {
+	if d == nil || d.ServerCloudID == "" {
+		return ""
+	}
+	return serverOf(d)
+}
+
+// sayOnRow puts msg on d, so the model's page shows it.
+func (s *Service) sayOnRow(ctx context.Context, d *Deployment, msg string) error {
+	d.Message = msg
+	if err := s.d.Store.Update(context.WithoutCancel(ctx), d); err != nil {
+		return fmt.Errorf("the move is planned, but its deployment row doesn't say so: %w", err)
+	}
+	return nil
 }
 
 // plan plans env from rev, for a model without a row. A failure is
@@ -746,7 +868,7 @@ func (s *Service) moveServerFirst(ctx context.Context, p security.Principal, pro
 	if err := s.d.Store.Update(ctx, row); err != nil {
 		return nil, err
 	}
-	return s.applyServer(ctx, p, projectID, env, pv, row, func(ctx context.Context) error {
+	res, err := s.applyServer(ctx, p, projectID, env, pv, row, func(ctx context.Context) error {
 		back := before
 		back.Revision = row.Revision
 		if err := s.d.Store.Update(ctx, &back); err != nil {
@@ -755,6 +877,10 @@ func (s *Service) moveServerFirst(ctx context.Context, p security.Principal, pro
 		*row = back
 		return nil
 	})
+	if res != nil {
+		res.Message = leftServer(&before)
+	}
+	return res, err
 }
 
 // Remove takes the model out of the manifest and plans its environment.
@@ -822,7 +948,7 @@ func (s *Service) Remove(ctx context.Context, p security.Principal, projectID, e
 		}
 		return &DeployResult{Deployment: row}, perr
 	}
-	res := &DeployResult{PlanID: plan.ID, Deployment: row, Message: weightsStay(resource, server)}
+	res := &DeployResult{PlanID: plan.ID, Deployment: row, Message: weightsStay(resource, server, createdServer(row))}
 	if row != nil {
 		if derr := s.d.Store.Delete(ctx, row.OrgID, row.ProjectID, row.EnvironmentID, row.Resource); derr != nil && !errors.Is(derr, ErrNotFound) {
 			s.modelsChanged(ctx, p.OrgID, projectID)
@@ -833,12 +959,18 @@ func (s *Service) Remove(ctx context.Context, p security.Principal, projectID, e
 	return res, nil
 }
 
-// weightsStay says what a removed model leaves on its server.
-func weightsStay(resource, server string) string {
+// weightsStay says what a removed model leaves on its server, and when
+// Loomplane created that server for it (made, its name), that the server
+// itself stays too.
+func weightsStay(resource, server, made string) string {
 	if server == "" {
-		server = "its server"
+		server = cmp.Or(made, "its server")
 	}
-	return fmt.Sprintf("The plan removes %s. Its downloaded weights stay on %s as retained storage, so deploying it there again doesn't download them again. Delete them from the server's storage when you no longer need them.", resource, server)
+	msg := fmt.Sprintf("The plan removes %s. Its downloaded weights stay on %s as retained storage, so deploying it there again doesn't download them again. Delete them from the server's storage when you no longer need them.", resource, server)
+	if made != "" {
+		msg += fmt.Sprintf(" Loomplane created %s for this model, and it keeps running and costs money until you delete it in Infrastructure.", made)
+	}
+	return msg
 }
 
 // servicesNeeding lists, by name, the services of m that need resource.

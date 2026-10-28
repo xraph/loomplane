@@ -150,6 +150,14 @@ func (m memProjects) GetEnvironment(_ context.Context, orgID, project, id string
 	return nil, projects.ErrEnvironmentNotFound
 }
 
+func (m memProjects) ListProjects(_ context.Context, orgID string) ([]*projects.Project, error) {
+	if orgID != "org" {
+		return []*projects.Project{}, nil
+	}
+	p, err := m.GetProject(context.Background(), orgID, projectID)
+	return []*projects.Project{p}, err
+}
+
 func (m memProjects) ListEnvironments(_ context.Context, orgID, project string) ([]*projects.Environment, error) {
 	if orgID != "org" || project != projectID {
 		return nil, projects.ErrNotFound

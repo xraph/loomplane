@@ -58,5 +58,5 @@ func (b CapacityBlock) Summary() string {
 	case "placement_constraint":
 		return "no pool can place it"
 	}
-	return "it holds " + what + " back"
+	return "a limit on " + what + " applies"
 }

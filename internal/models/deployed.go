@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	"github.com/xraph/loomplane/internal/catalogstate"
+	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/deployments"
 	"github.com/xraph/loomplane/internal/page"
 	"github.com/xraph/loomplane/internal/planning"
@@ -30,6 +31,9 @@ type Deployed interface {
 	// MODEL_API_KEY. It's a secret: it goes to a gateway, never to a page,
 	// a log or an error.
 	APIKey(ctx context.Context, orgID, projectID, environmentID, resource string) (string, error)
+	// ConnectionNames names the organization's connections by ID, for
+	// what a background read says.
+	ConnectionNames(ctx context.Context, orgID string) (map[string]string, error)
 }
 
 // Secrets reads what a deployment kept for a resource. deployments'
@@ -69,6 +73,8 @@ type DeployedFacts struct {
 	Secrets Secrets
 	// Generated reads the model's key.
 	Generated InternalSecrets
+	// ListConnections is connections' PgStore.ListConnections.
+	ListConnections func(ctx context.Context, orgID string) ([]*connections.Connection, error)
 }
 
 var _ Deployed = (*DeployedFacts)(nil)
@@ -152,4 +158,20 @@ func (f *DeployedFacts) APIKey(ctx context.Context, orgID, projectID, environmen
 		return "", fmt.Errorf("read %s's key: %w", resource, err)
 	}
 	return string(v), nil
+}
+
+// ConnectionNames implements Deployed.
+func (f *DeployedFacts) ConnectionNames(ctx context.Context, orgID string) (map[string]string, error) {
+	out := map[string]string{}
+	if f.ListConnections == nil {
+		return out, nil
+	}
+	conns, err := f.ListConnections(ctx, orgID)
+	if err != nil {
+		return nil, err
+	}
+	for _, c := range conns {
+		out[c.ID] = c.Name
+	}
+	return out, nil
 }

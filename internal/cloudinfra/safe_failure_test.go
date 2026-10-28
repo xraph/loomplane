@@ -36,7 +36,7 @@ func TestCapacityBlockSummaries(t *testing.T) {
 		{CapacityBlock{Reason: "stale_inventory", Resource: "gpus:some-new-gpu"}, "its count of some-new-gpu GPUs is out of date"},
 		{CapacityBlock{Reason: "review_required", Resource: "policy"}, "it waits for an admin to approve it"},
 		{CapacityBlock{Reason: "placement_constraint", Resource: "pool"}, "no pool can place it"},
-		{CapacityBlock{Reason: "something_new", Resource: "rollout"}, "it holds servers and their resources back"},
+		{CapacityBlock{Reason: "something_new", Resource: "rollout"}, "a limit on servers and their resources applies"},
 	} {
 		if got := c.block.Summary(); got != c.want {
 			t.Errorf("%s on %s: %q", c.block.Reason, c.block.Resource, got)

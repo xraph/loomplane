@@ -78,13 +78,13 @@ func TestEndpointsFromAPlacement(t *testing.T) {
 	qr, br := rows["qwen"].Resource, rows["bge"].Resource
 	want := []Endpoint{
 		{Deployment: rows["bge"].ID, Resource: br, EnvironmentID: productID, Provider: ProviderName(br),
-			BaseURL: "http://" + br + "--guard:8080/v1", APIKey: "lpm_" + br + "_key", ServedName: bgeSmall,
+			BaseURL: "http://" + br + "--guard:8080/v1", APIKey: Secret("lpm_" + br + "_key"), ServedName: bgeSmall,
 			Task: registry.TaskEmbedding, ContextWindow: 512, MaxOutput: 256, Dimensions: 384, Alias: "bge-small-en-v1.5"},
 		{Resource: "handmade", EnvironmentID: productID, Provider: "model-handmade",
 			BaseURL: "http://handmade--guard:8080/v1", APIKey: "lpm_handmade_key", ServedName: qwen7B,
 			Task: registry.TaskChat, ContextWindow: 32768, MaxOutput: 8192, Alias: "qwen2.5-7b-instruct"},
 		{Deployment: rows["qwen"].ID, Resource: qr, EnvironmentID: productID, Provider: ProviderName(qr),
-			BaseURL: "http://" + qr + "--guard:8080/v1", APIKey: "lpm_" + qr + "_key", ServedName: qwen7B,
+			BaseURL: "http://" + qr + "--guard:8080/v1", APIKey: Secret("lpm_" + qr + "_key"), ServedName: qwen7B,
 			Task: registry.TaskChat, ContextWindow: 32768, MaxOutput: 8192, Alias: "qwen2.5-7b-instruct"},
 	}
 	if len(got) != len(want) {
@@ -118,7 +118,7 @@ func TestEndpointsSkipOtherConnections(t *testing.T) {
 	if err != nil || len(got) != 0 {
 		t.Fatalf("endpoints %+v, %v", got, err)
 	}
-	reason := "runs on " + gpuConn + ", and a caller on " + cpuConn + " can't reach it. Run them on the same server or cluster."
+	reason := "runs on gpu-box, and a caller on cpu-box can't reach it. Run them on the same server or cluster."
 	for _, name := range []string{"bge", "qwen"} {
 		want := Skipped{Resource: rows[name].Resource, EnvironmentID: productID, Reason: reason}
 		if !slices.Contains(skipped, want) {

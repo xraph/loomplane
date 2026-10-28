@@ -1,9 +1,12 @@
 package models
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"log/slog"
 	"slices"
 	"strings"
 	"sync"
@@ -70,6 +73,14 @@ func (f *fakeDeployed) APIKey(_ context.Context, _, _, environmentID, resource s
 		return "", errors.New("no key")
 	}
 	return key, nil
+}
+
+// ConnectionNames names the two boxes.
+func (f *fakeDeployed) ConnectionNames(_ context.Context, orgID string) (map[string]string, error) {
+	if orgID != "org" {
+		return map[string]string{}, nil
+	}
+	return map[string]string{gpuConn: "gpu-box", cpuConn: "cpu-box"}, nil
 }
 
 // running says resource runs ready in env on gpu-box, bound, behind the
@@ -569,5 +580,103 @@ func TestRetryReplansAFailedStart(t *testing.T) {
 	st, err := d.svc.Retry(ctx, member, projectID, stagingID, llamaResource)
 	if err != nil || len(d.plans.asked) != 2 || st.Deployment.PlanID != "plan_2" || d.revisions.count() != 2 {
 		t.Errorf("retry: %+v, %v, plans %+v", st, err, d.plans.asked)
+	}
+}
+
+// Ruling M30: a move on the model's own one-GPU server gets its GPU back
+// as free, since the runtimes stop the old engine before the new one
+// starts. Another model still can't have it.
+func TestMoveOnItsOwnServer(t *testing.T) {
+	ctx := context.Background()
+	d := newDeploy(t, deployRegistry(t, llamaRev, ""), deployer, []gpus.GPUTarget{l40sServer()}, boxes()...)
+	deployLlama(t, d, stagingID)
+	// gpu-box's one GPU is the model's now.
+	held := l40sServer()
+	held.Free, held.Message = 0, "gpu-box has 1 NVIDIA L40S GPUs and 1 are given to other services, so 0 are free."
+	d.targets.targets = []gpus.GPUTarget{held}
+
+	res, err := d.svc.Move(ctx, member, projectID, stagingID, llamaResource, MoveInput{Target: onGPU("nvidia-l40s"), MaxModelLen: 16384})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := current(t, d).Resources[llamaResource]
+	if r.Target != gpuConn || r.Settings["max_model_len"] != "16384" || r.GPU == nil || r.GPU.Count != 1 || res.PlanID == "" || res.Message != "" {
+		t.Errorf("moved on its own server: %+v, %+v", r, res)
+	}
+	pv, err := d.svc.Preview(ctx, member, projectID, stagingID, DeployInput{EntryID: qwen7B, Target: onGPU("nvidia-l40s")})
+	if err != nil || len(pv.Problems) != 1 || pv.Problems[0].Code != ProblemTarget || pv.Problems[0].Message != held.Message {
+		t.Errorf("another model on the held GPU: %+v, %v", pv.Problems, err)
+	}
+}
+
+// Ruling M30: an endpoint's key never prints or encodes.
+func TestEndpointKeyNeverPrints(t *testing.T) {
+	e := Endpoint{Resource: "llm", APIKey: Secret("lpm_supersecret")}
+	raw, err := json.Marshal(e)
+	if err != nil || strings.Contains(string(raw), "supersecret") || !strings.Contains(string(raw), `"APIKey":"[redacted]"`) {
+		t.Errorf("JSON %s, %v", raw, err)
+	}
+	for _, verb := range []string{"%v", "%+v", "%#v", "%s"} {
+		if got := fmt.Sprintf(verb, e); strings.Contains(got, "supersecret") {
+			t.Errorf("%s: %s", verb, got)
+		}
+	}
+	var logged bytes.Buffer
+	slog.New(slog.NewJSONHandler(&logged, nil)).Info("endpoint", "key", e.APIKey)
+	if strings.Contains(logged.String(), "supersecret") {
+		t.Errorf("log %s", logged.String())
+	}
+	if e.APIKey.Reveal() != "lpm_supersecret" {
+		t.Error("Reveal")
+	}
+}
+
+// Ruling M30: a model added to the manifest by hand, which no deploy
+// recorded, is listed too, with its GPU's cost.
+func TestListIncludesModelsAddedByHand(t *testing.T) {
+	ctx := context.Background()
+	d := newDeploy(t, deployRegistry(t, llamaRev, ""), aiAdmin, []gpus.GPUTarget{l40sServer()}, boxes()...)
+	deployLlama(t, d, stagingID)
+	e := mustEntry(t, qwen7B)
+	q, _ := e.Quantization("bf16")
+	if _, _, err := d.svc.d.Manifests.Edit(ctx, member, projectID, manifests.EditInput{AddResource: &manifests.NewResource{
+		Name: "handmade", Kind: recipes.ModelVLLMKind, Provider: "server", Target: gpuConn, Version: "0.31",
+		Settings: engines.Settings(engines.Spec{Entry: e, Quantization: q, ServedName: qwen7B, MaxModelLen: 8192, GPUs: 1}),
+		GPU:      &manifest.GPU{Kind: "nvidia-l40s", Count: 1}, EnabledIn: "production",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	list, err := d.svc.List(ctx, member)
+	if err != nil || len(list) != 2 {
+		t.Fatalf("list %+v, %v", list, err)
+	}
+	hand := list[1]
+	if hand.Deployment != nil || hand.Entry.ID != qwen7B || hand.Kind != recipes.ModelVLLMKind || hand.Environments[0].Environment != "production" {
+		t.Errorf("hand-made model %+v", hand)
+	}
+	if hand.Cost.Source != CostSourceServer || hand.Cost.HourlyUSD != "1.5700" || hand.ProjectedUSD == "" {
+		t.Errorf("hand-made cost %+v, projected %q", hand.Cost, hand.ProjectedUSD)
+	}
+	// Someone who can't read the project sees none of it.
+	if list, err = newDeploy(t, deployRegistry(t, llamaRev, ""), viewer, nil).svc.List(ctx, member); err != nil || len(list) != 0 {
+		t.Errorf("without project:read: %+v, %v", list, err)
+	}
+}
+
+// Ruling M30: DeployInput.Moving is Move's own. Sent by a client, Preview
+// and Deploy ignore it, so it can't skip the name check.
+func TestClientCantSetMoving(t *testing.T) {
+	ctx := context.Background()
+	d := newDeploy(t, deployRegistry(t, llamaRev, ""), deployer, []gpus.GPUTarget{l40sServer()}, boxes()...)
+	deployLlama(t, d, stagingID)
+	in := DeployInput{EntryID: llama8BID, Target: onGPU("nvidia-l40s"), Resource: llamaResource, Moving: &MovingFrom{Kind: recipes.ModelVLLMKind}}
+	pv, err := d.svc.Preview(ctx, member, projectID, stagingID, in)
+	if err != nil || len(pv.Problems) == 0 || pv.Problems[0].Code != ProblemExists {
+		t.Errorf("preview: %+v, %v", pv.Problems, err)
+	}
+	revs := d.revisions.count()
+	var refused *ProblemError
+	if _, err = d.svc.Deploy(ctx, member, projectID, stagingID, in); !errors.As(err, &refused) || refused.Problem.Code != ProblemExists || d.revisions.count() != revs {
+		t.Errorf("deploy: %v", err)
 	}
 }

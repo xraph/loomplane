@@ -31,6 +31,8 @@ type Planner interface {
 type Projects interface {
 	GetProject(ctx context.Context, orgID, id string) (*projects.Project, error)
 	GetEnvironment(ctx context.Context, orgID, projectID, id string) (*projects.Environment, error)
+	ListProjects(ctx context.Context, orgID string) ([]*projects.Project, error)
+	ListEnvironments(ctx context.Context, orgID, projectID string) ([]*projects.Environment, error)
 }
 
 // TokenGuard runs fn under the workspace's Hugging Face token lock, with

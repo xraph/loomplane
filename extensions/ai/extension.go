@@ -216,7 +216,7 @@ func (e *Extension) registerModels(c forge.Container, authz *security.Authorizer
 	planStore, runStore := planning.NewPgStore(pg), deployments.NewPgStore(pg)
 	deployed := &models.DeployedFacts{
 		ListBindings: planStore.ListBindings, ListPlans: planStore.ListPlans, ListRuns: runStore.ListDeployments,
-		Secrets: resourceSecrets, Generated: access,
+		Secrets: resourceSecrets, Generated: access, ListConnections: connections.NewPgStore(pg).ListConnections,
 	}
 	e.models = models.NewService(models.Deps{
 		Registry: registry.Default(), Hub: hub, Settings: e.settings, Custom: store, GPUs: targets, Connections: conns,

@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"slices"
 	"strconv"
 	"strings"
@@ -42,14 +43,40 @@ type Placement struct {
 	SharedNetworks []string
 }
 
+// Secret is a value that's never printed, logged or encoded: String,
+// GoString, MarshalJSON and LogValue all give "[redacted]". Reveal is the
+// one way to read it, for the gateway that sends it.
+type Secret string
+
+const redacted = "[redacted]"
+
+// Reveal returns the secret's value.
+func (s Secret) Reveal() string { return string(s) }
+
+// String implements fmt.Stringer.
+func (Secret) String() string { return redacted }
+
+// GoString implements fmt.GoStringer, for %#v.
+func (Secret) GoString() string { return redacted }
+
+// MarshalJSON implements json.Marshaler.
+func (Secret) MarshalJSON() ([]byte, error) { return json.Marshal(redacted) }
+
+// LogValue implements slog.LogValuer.
+func (Secret) LogValue() slog.Value { return slog.StringValue(redacted) }
+
 // Endpoint is one deployed model as a caller at a Placement reaches it.
+// It holds the model's key, so it's for the gateway's own sync only: no
+// route returns it (Task 25 must not route Endpoints), and the key is a
+// Secret that never prints or encodes.
 type Endpoint struct {
 	Deployment, Resource, EnvironmentID string
 	// Provider is ProviderName(Resource).
 	Provider string
 	// BaseURL is the guard's URL and "/v1".
-	BaseURL    string
-	APIKey     string
+	BaseURL string
+	// APIKey is the model's key; Reveal reads it.
+	APIKey     Secret
 	ServedName string
 	Task       registry.Task
 	// ContextWindow is engines.Spec.ContextWindow: for a pooling model the
@@ -129,7 +156,9 @@ func (s *Service) Endpoints(ctx context.Context, orgID, projectID string, from P
 		switch {
 		case d.EnvironmentID != from.EnvironmentID:
 			skipped = append(skipped, Skipped{Resource: d.Resource, EnvironmentID: d.EnvironmentID, Reason: "runs in " + envName(d.EnvironmentID)})
-		case d.Phase == PhaseWaitingForServer || d.Phase == PhaseNeedsAttention:
+		case (d.Phase == PhaseWaitingForServer || d.Phase == PhaseNeedsAttention) && (d.Request == nil || d.Request.Moving == nil):
+			// A model moving onto a new server still serves where it is; a
+			// new one waiting for its server doesn't serve yet.
 			skipped = append(skipped, Skipped{Resource: d.Resource, EnvironmentID: d.EnvironmentID, Reason: "is waiting for its GPU server"})
 			seen[d.Resource] = true
 		default:
@@ -148,9 +177,15 @@ func (s *Service) Endpoints(ctx context.Context, orgID, projectID string, from P
 		}
 	}
 
+	// Connection names are for the reasons only; IDs stand in when they
+	// can't be read.
+	names, nerr := s.d.Deployed.ConnectionNames(ctx, orgID)
+	if nerr != nil {
+		names = map[string]string{}
+	}
 	var out []Endpoint
 	for _, c := range here {
-		e, reason, eerr := s.endpoint(ctx, orgID, projectID, from, c.resource, bindings)
+		e, reason, eerr := s.endpoint(ctx, orgID, projectID, from, c.resource, bindings, names)
 		if eerr != nil {
 			return nil, nil, eerr
 		}
@@ -170,7 +205,9 @@ func (s *Service) Endpoints(ctx context.Context, orgID, projectID string, from P
 
 // endpoint is one model of from's environment as a caller at from reaches
 // it, or why it can't.
-func (s *Service) endpoint(ctx context.Context, orgID, projectID string, from Placement, resource string, bindings []*planning.Binding) (Endpoint, string, error) {
+func (s *Service) endpoint(ctx context.Context, orgID, projectID string, from Placement, resource string, bindings []*planning.Binding,
+	names map[string]string,
+) (Endpoint, string, error) {
 	fact, err := s.d.Deployed.State(ctx, orgID, projectID, from.EnvironmentID, resource)
 	if err != nil {
 		return Endpoint{}, "", err
@@ -179,8 +216,9 @@ func (s *Service) endpoint(ctx context.Context, orgID, projectID string, from Pl
 		return Endpoint{}, "isn't ready: it's " + fact.Value, nil
 	}
 	if fact.ConnectionID != from.ConnectionID {
+		name := func(id string) string { return cmp.Or(names[id], id) }
 		return Endpoint{}, fmt.Sprintf("runs on %s, and a caller on %s can't reach it. Run them on the same server or cluster.",
-			fact.ConnectionID, cmp.Or(from.ConnectionID, "no server or cluster")), nil
+			name(fact.ConnectionID), cmp.Or(name(from.ConnectionID), "no server or cluster")), nil
 	}
 	settings, gpus, kind := engineSettings(bindings, resource)
 	if settings == nil {
@@ -203,7 +241,7 @@ func (s *Service) endpoint(ctx context.Context, orgID, projectID string, from Pl
 	}
 	e := Endpoint{
 		Resource: resource, EnvironmentID: from.EnvironmentID, Provider: ProviderName(resource),
-		BaseURL: strings.TrimRight(url, "/") + "/v1", APIKey: key, ServedName: spec.ServedName,
+		BaseURL: strings.TrimRight(url, "/") + "/v1", APIKey: Secret(key), ServedName: spec.ServedName,
 		ContextWindow: spec.ContextWindow(), Alias: DefaultAlias(spec.Entry),
 	}
 	e.MaxOutput = min(maxOutputCap, e.ContextWindow/2)

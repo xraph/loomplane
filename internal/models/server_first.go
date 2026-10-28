@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -128,6 +129,21 @@ func serverNameFor(projectSlug, resource string) string {
 	return name + suffix
 }
 
+// freeServerName is name, or when a server has it, name and "-2", "-3"
+// and so on, still a DNS label of at most 63 characters.
+func freeServerName(name string, taken map[string]bool) string {
+	if !taken[name] {
+		return name
+	}
+	for n := 2; ; n++ {
+		suffix := "-" + strconv.Itoa(n)
+		candidate := strings.TrimRight(name[:min(len(name), 63-len(suffix))], "-") + suffix
+		if !taken[candidate] {
+			return candidate
+		}
+	}
+}
+
 // reviewServer works out the GPU server a server size target creates
 // first. Only an admin creates GPU servers, and only on a DigitalOcean
 // account the environment's cloud has. A plain preview stops there, priced
@@ -166,6 +182,23 @@ func (s *Service) reviewServer(ctx context.Context, p security.Principal, projec
 		problem(ProblemNoCloud, "Add this DigitalOcean account to %s's cloud first.", env.Name)
 		return
 	}
+	// A model moving off a server Loomplane made for it, or a name the
+	// cloud already has, gets the next free name, so two servers never
+	// share one.
+	servers, err := s.d.Servers.ListServers(ctx, p, assignment.CloudID)
+	if err != nil {
+		problem(ProblemTarget, "Loomplane couldn't read %s's servers. Try again.", env.Name)
+		return
+	}
+	taken := map[string]bool{}
+	for _, v := range servers {
+		taken[v.Name] = true
+	}
+	if in.Moving != nil && in.Moving.ServerName != "" {
+		taken[in.Moving.ServerName] = true
+	}
+	name = freeServerName(name, taken)
+	pv.TargetName = name
 
 	if in.Server != nil {
 		s.checkApproval(ctx, p, assignment.CloudID, name, in, pv, problem)
@@ -778,6 +811,10 @@ func (s *Service) serverUp(ctx context.Context, d *Deployment, p security.Princi
 	}
 	if moving {
 		s.modelsChanged(ctx, d.OrgID, d.ProjectID)
+		from := d.Request.Moving
+		if from.ServerCloudID != "" && from.ServerName != "" {
+			return s.sayOnRow(ctx, d, leftServer(&Deployment{ServerCloudID: from.ServerCloudID, ServerName: from.ServerName}))
+		}
 	}
 	return nil
 }

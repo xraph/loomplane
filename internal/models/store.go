@@ -54,15 +54,21 @@ type DeployInput struct {
 	Server *ServerApproval `json:"server,omitempty"`
 	// Moving is set only by Move, never from a request: the request moves
 	// a deployed model, and this is the deployment it moves from, to put
-	// back if the move is cancelled. Deploy and Preview clear it.
+	// back if the move is cancelled. Deploy and Preview clear it. It's
+	// kept in the row's request, so it has a JSON name, but it isn't API
+	// input: the Task 25 graft of DeployInput leaves it out.
 	Moving *MovingFrom `json:"moving,omitempty"`
 }
 
 // MovingFrom is a deployment as it was before a move started: its kind,
-// and the row's phase, server and plan, to put back if the move onto a
-// GPU server Loomplane creates first is cancelled.
+// where it runs and on how many GPUs, and the row's phase, server and
+// plan, to put back if the move onto a GPU server Loomplane creates first
+// is cancelled.
 type MovingFrom struct {
 	Kind              string `json:"kind"`
+	ConnectionID      string `json:"connection_id,omitempty"`
+	GPUKind           string `json:"gpu_kind,omitempty"`
+	GPUs              int    `json:"gpus,omitempty"`
 	Phase             string `json:"phase,omitempty"`
 	ServerName        string `json:"server_name,omitempty"`
 	ServerCloudID     string `json:"server_cloud_id,omitempty"`

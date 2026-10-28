@@ -1290,6 +1290,10 @@ func TestMoveOntoANewServerWaitsForIt(t *testing.T) {
 	if previews, applies, _ := sf.servers.calls(); previews != 1 || applies != 1 {
 		t.Errorf("%d reviews, %d applies", previews, applies)
 	}
+	// It still serves where it is while it moves.
+	if got, _, eerr := sf.svc.Endpoints(ctx, "org", projectID, Placement{EnvironmentID: stagingID, ConnectionID: gpuConn}); eerr != nil || len(got) != 1 || got[0].Resource != d.Resource {
+		t.Errorf("endpoints while moving: %+v, %v", got, eerr)
+	}
 
 	sf.servers.succeed(pv.Server.ID)
 	sf.gpusReady(provider.GPUStatusReady)
@@ -1376,5 +1380,98 @@ func TestStrandedMoveFinishes(t *testing.T) {
 	}
 	if d = sf.row(t); d.Phase != PhasePlanned || d.PlanID == "" || current(t, sf.deploySetup).Resources[d.Resource].Target != newConn {
 		t.Errorf("finished move: %+v", d)
+	}
+}
+
+// onItsNewServer deploys Qwen 7B onto a new L40S server and carries the
+// deploy on until it's planned there.
+func (sf *serverFirstSetup) onItsNewServer(t *testing.T) *DeployPreview {
+	t.Helper()
+	pv, _ := sf.deployOnNewServer(t)
+	sf.servers.succeed(pv.Server.ID)
+	sf.gpusReady(provider.GPUStatusReady)
+	if err := sf.svc.Reconcile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if d := sf.row(t); d.Phase != PhasePlanned || d.ServerCloudID != cloudID || d.ServerName != serverName {
+		t.Fatalf("on its new server: %+v", d)
+	}
+	return pv
+}
+
+// Ruling M30: moving off a GPU server Loomplane created says the server
+// keeps billing, and a move onto another new server never reuses its
+// name.
+func TestMoveOffALoomplaneServerSaysItStays(t *testing.T) {
+	ctx := context.Background()
+	sf := newServerFirst(t, cloudAdmin)
+	sf.onItsNewServer(t)
+	sf.targets.targets = append(sf.targets.targets, l40sServer())
+	res, err := sf.svc.Move(ctx, member, projectID, stagingID, "qwen2-5-7b-instruct", MoveInput{Target: onGPU("nvidia-l40s")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := serverName + " keeps running and costs money until you delete it in Infrastructure."
+	d := sf.row(t)
+	if res.Message != want || d.Message != want || d.ServerName != "gpu-box" || d.ServerCloudID != "" {
+		t.Errorf("result %q, row %+v", res.Message, d)
+	}
+
+	// The next new server gets a name of its own.
+	pv, err := sf.svc.MovePreview(ctx, member, projectID, stagingID, "qwen2-5-7b-instruct", MoveInput{Target: onSize(), ReviewServer: true})
+	if err != nil || pv.Server == nil || pv.TargetName != serverName+"-2" || pv.Server.Input.Name != serverName+"-2" {
+		t.Errorf("second server: %q, %+v, %v", pv.TargetName, pv.Server, err)
+	}
+	if got := freeServerName(strings.Repeat("a", 59)+"-gpu", map[string]bool{strings.Repeat("a", 59) + "-gpu": true}); len(got) > 63 || !strings.HasSuffix(got, "-2") {
+		t.Errorf("long name %q", got)
+	}
+}
+
+// Removing a model from a server Loomplane created for it says the
+// server stays and bills, as well as the weights.
+func TestRemoveSaysALoomplaneServerStays(t *testing.T) {
+	ctx := context.Background()
+	sf := newServerFirst(t, cloudAdmin)
+	sf.onItsNewServer(t)
+	res, err := sf.svc.Remove(ctx, member, projectID, stagingID, "qwen2-5-7b-instruct")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.Message, "as retained storage") || !strings.HasSuffix(res.Message, "Loomplane created "+serverName+" for this model, and it keeps running and costs money until you delete it in Infrastructure.") {
+		t.Errorf("message %q", res.Message)
+	}
+}
+
+// Ruling M30: a model waiting for its new server costs what the size
+// costs, and an unknown price stays unknown.
+func TestWaitingModelShowsTheServersPrice(t *testing.T) {
+	ctx := context.Background()
+	sf := newServerFirst(t, cloudAdmin)
+	sf.deployOnNewServer(t)
+	st, err := sf.svc.Status(ctx, member, projectID, stagingID, "qwen2-5-7b-instruct")
+	if err != nil || st.State != StateWaitingForServer || st.Cost.Source != CostSourceServer || st.Cost.HourlyUSD != "1.5700" || st.ProjectedUSD == "" {
+		t.Fatalf("waiting: %+v, %v", st, err)
+	}
+	sf.targets.targets[0].HourlyPriceKnown, sf.targets.targets[0].HourlyUSD = false, 0
+	if st, err = sf.svc.Status(ctx, member, projectID, stagingID, "qwen2-5-7b-instruct"); err != nil ||
+		st.Cost.Source != CostSourceUnknown || st.Cost.HourlyUSD != "" || st.ProjectedUSD != "" {
+		t.Errorf("unknown price: %+v, %v", st.Cost, err)
+	}
+}
+
+// A plain MovePreview onto a server size writes nothing: no review, no
+// row change, no manifest revision.
+func TestPlainMovePreviewWritesNothing(t *testing.T) {
+	ctx := context.Background()
+	sf := newServerFirst(t, cloudAdmin)
+	sf.qwenOnGPUBox(t)
+	before, revisions := sf.row(t), sf.revisions.count()
+	pv, err := sf.svc.MovePreview(ctx, member, projectID, stagingID, before.Resource, MoveInput{Target: onSize()})
+	if err != nil || !pv.ServerReviewNeeded || pv.CanDeploy || pv.Server != nil {
+		t.Fatalf("plain move preview: %+v, %v", pv, err)
+	}
+	previews, applies, _ := sf.servers.calls()
+	if after := sf.row(t); previews != 0 || applies != 0 || after.Revision != before.Revision || sf.revisions.count() != revisions {
+		t.Errorf("wrote: %d reviews, %d applies, row %d to %d, %d revisions", previews, applies, before.Revision, after.Revision, sf.revisions.count())
 	}
 }
