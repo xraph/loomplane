@@ -20,6 +20,7 @@ import (
 	"math"
 	"strconv"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 
@@ -37,6 +38,21 @@ type Config struct {
 	MaxRunHours    float64  `yaml:"max_run_hours"`    // 4
 	SamplesPerRun  int      `yaml:"samples_per_run"`  // 8
 	StaleAfterDays int      `yaml:"stale_after_days"` // 30
+	// BalanceLagHours is how long after the account's last Droplet
+	// activity a run waits, so DigitalOcean's balance holds the last run.
+	// Zero is the default, 24.
+	BalanceLagHours float64 `yaml:"balance_lag_hours"`
+}
+
+// defaultBalanceLag is BalanceLagHours when the config leaves it out.
+const defaultBalanceLag = 24 * time.Hour
+
+// BalanceLag is how long a run waits after the last Droplet activity.
+func (c Config) BalanceLag() time.Duration {
+	if c.BalanceLagHours == 0 {
+		return defaultBalanceLag
+	}
+	return time.Duration(c.BalanceLagHours * float64(time.Hour))
 }
 
 // AccountEnv is the environment variable that holds the qualification
@@ -118,6 +134,9 @@ func (c Config) Validate() error {
 	}
 	if c.StaleAfterDays < 1 {
 		problems = append(problems, "stale_after_days must be at least 1")
+	}
+	if c.BalanceLagHours < 0 || math.IsNaN(c.BalanceLagHours) || c.BalanceLagHours > 24*31 {
+		problems = append(problems, "balance_lag_hours must be from 0 (the default, 24) to 744")
 	}
 	if len(problems) > 0 {
 		return fmt.Errorf("%w: %s", ErrInvalidConfig, strings.Join(problems, "; "))

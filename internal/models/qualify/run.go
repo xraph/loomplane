@@ -48,6 +48,13 @@ const TeardownHours = 0.5
 // still tearing down.
 const expiryMargin = time.Hour
 
+// KeyGrace is how long a run's SSH key is kept from sweeps: the run's
+// hours and the expiry margin, so a sweep never takes the key of a run
+// still starting its Droplet.
+func (c Config) KeyGrace() time.Duration {
+	return time.Duration(c.MaxRunHours*float64(time.Hour)) + expiryMargin
+}
+
 // SpeechClipPath is where the speech probe's recording goes: "Loomplane
 // qualification check", 16 kHz mono WAV, under five seconds. Until it's
 // there, speech samples don't run.
@@ -103,6 +110,9 @@ type Host interface {
 	Logs(ctx context.Context, c *Container) ([]byte, error)
 	// GPUKinds is the kind of every GPU the host's Docker hands out.
 	GPUKinds(ctx context.Context) ([]string, error)
+	// MetadataBlocked checks a container can't reach the cloud's metadata
+	// service, which serves the Droplet's user data.
+	MetadataBlocked(ctx context.Context) error
 	// Remove deletes c and its weight volume.
 	Remove(ctx context.Context, c *Container) error
 	Close() error
@@ -170,7 +180,10 @@ type RunDeps struct {
 	// StartTimeout replaces the kind's start timeout when set; tests
 	// shorten it.
 	StartTimeout time.Duration
-	Log          io.Writer // progress lines; nil discards them
+	// DeleteRetryWait is the pause between deletes after a failed Create;
+	// zero is thirty seconds.
+	DeleteRetryWait time.Duration
+	Log             io.Writer // progress lines; nil discards them
 	// Report, when set, is filled with the run's results and every sample
 	// that didn't run.
 	Report *Report
@@ -209,6 +222,11 @@ func Run(ctx context.Context, d RunDeps) (results []registry.Result, err error) 
 	if !d.Confirm {
 		return nil, ErrNotConfirmed
 	}
+	if d.RunID != "" {
+		if rErr := CheckRunID(d.RunID); rErr != nil {
+			return nil, rErr
+		}
+	}
 	if vErr := d.Config.Validate(); vErr != nil {
 		return nil, vErr
 	}
@@ -233,7 +251,7 @@ func Run(ctx context.Context, d RunDeps) (results []registry.Result, err error) 
 	if len(live) > 0 {
 		return nil, fmt.Errorf("%w: %s hasn't expired, so nothing starts", ErrAnotherRun, strings.Join(live, ", "))
 	}
-	if bErr := CheckBalanceCurrent(ctx, d.Spend); bErr != nil {
+	if bErr := CheckBalanceCurrent(ctx, d.Spend, d.now(), d.Config.BalanceLag()); bErr != nil {
 		return nil, bErr
 	}
 
@@ -294,6 +312,12 @@ func Run(ctx context.Context, d RunDeps) (results []registry.Result, err error) 
 	// this run's Droplet and key by the run tag, which also finds a
 	// Droplet a failed Create may have made, then sweeps only expired
 	// leftovers, so it never touches another run.
+	//
+	// After a failed Create the Droplet may exist without DigitalOcean
+	// listing it under its tag yet, so the delete is tried again for about
+	// two minutes. Not on a cancel: the runner kills the job seconds after
+	// its SIGINT, and the workflow's next step deletes the run by its ID.
+	createFailed := false
 	defer func() {
 		if p := recover(); p != nil {
 			err = errors.Join(err, fmt.Errorf("the qualification run crashed: %s", redact(fmt.Sprint(p), d.HFToken)))
@@ -302,7 +326,11 @@ func Run(ctx context.Context, d RunDeps) (results []registry.Result, err error) 
 	defer func() {
 		tctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), teardownTimeout)
 		defer cancel()
-		gone, tErr := d.Machines.DeleteRun(tctx, runID)
+		attempts := 1
+		if createFailed && ctx.Err() == nil {
+			attempts = deleteAttempts
+		}
+		gone, tErr := d.deleteRun(tctx, runID, attempts)
 		left, sErr := d.Machines.Sweep(tctx, d.now(), true)
 		for _, s := range append(gone, left...) {
 			d.logf("Deleted %s.", s)
@@ -316,6 +344,7 @@ func Run(ctx context.Context, d RunDeps) (results []registry.Result, err error) 
 	d.logf("Creating a %s Droplet (%s, %s an hour) for up to %g hours.", kind, offer.Size, usd(offer.HourlyUSD), hours)
 	machine, err := d.Machines.Create(ctx, spec)
 	if err != nil {
+		createFailed = true
 		skip(0, "the Droplet couldn't be created")
 		return nil, fmt.Errorf("couldn't create the Droplet: %w", err)
 	}
@@ -328,6 +357,10 @@ func Run(ctx context.Context, d RunDeps) (results []registry.Result, err error) 
 	if gErr := checkGPUs(ctx, host, kind); gErr != nil {
 		skip(0, gErr.Error())
 		return nil, gErr
+	}
+	if mErr := host.MetadataBlocked(ctx); mErr != nil {
+		skip(0, "containers aren't kept off the metadata service")
+		return nil, mErr
 	}
 
 	// The run ends at MaxRunHours from the Droplet's start, or at a cap.
@@ -369,6 +402,37 @@ func Run(ctx context.Context, d RunDeps) (results []registry.Result, err error) 
 		return results, context.Cause(runCtx)
 	}
 	return results, nil
+}
+
+// deleteAttempts is how many times teardown deletes the run after a failed
+// Create: about two minutes with the default wait.
+const deleteAttempts = 5
+
+// deleteRun deletes the run's Droplets and key, up to attempts times until
+// a Droplet is gone, waiting DeleteRetryWait between tries.
+func (d *RunDeps) deleteRun(ctx context.Context, runID string, attempts int) ([]string, error) {
+	wait := d.DeleteRetryWait
+	if wait <= 0 {
+		wait = 30 * time.Second
+	}
+	var deleted []string
+	var err error
+	for i := range attempts {
+		if i > 0 {
+			select {
+			case <-ctx.Done():
+				return deleted, errors.Join(err, ctx.Err())
+			case <-time.After(wait):
+			}
+		}
+		var gone []string
+		gone, err = d.Machines.DeleteRun(ctx, runID)
+		deleted = append(deleted, gone...)
+		if err == nil && slices.ContainsFunc(gone, func(s string) bool { return strings.HasPrefix(s, "Droplet ") }) {
+			break
+		}
+	}
+	return deleted, err
 }
 
 // watchSpend re-reads the month's spend on every tick and stops the run
@@ -456,6 +520,12 @@ func (d *RunDeps) sample(ctx context.Context, host Host, s Sample) (res registry
 	}
 	secrets := []string{d.HFToken, key}
 	defer func() {
+		// Once the run is stopping, the Droplet's deletion removes the
+		// container and its volume. Cleaning up over SSH first could use
+		// the seconds a cancelled job has before it's killed.
+		if ctx.Err() != nil {
+			return
+		}
 		rctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Minute)
 		defer cancel()
 		if rErr := host.Remove(rctx, c); rErr != nil {

@@ -25,3 +25,7 @@ max_run_hours: 4
 samples_per_run: 8
 # A result older than this is run again.
 stale_after_days: 30
+# A run waits this long after the account's last Droplet activity, so
+# DigitalOcean's balance (which trails usage) holds the last run before the
+# monthly cap is checked against it.
+balance_lag_hours: 24

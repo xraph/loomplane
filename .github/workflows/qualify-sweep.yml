@@ -1,6 +1,6 @@
 name: Sweep qualification Droplets
 
-# Every day, delete the Droplets tagged loomplane-qualify whose run has
+# Every hour, delete the Droplets tagged loomplane-qualify whose run has
 # expired, and their lpq-* SSH keys, so nothing a crashed or cancelled
 # qualification run left keeps billing. A run's Droplet expires an hour
 # after its run's time limit, so this never deletes one a run still uses.
@@ -14,7 +14,7 @@ name: Sweep qualification Droplets
 
 on:
   schedule:
-    - cron: "30 5 * * *"
+    - cron: "17 * * * *"
   workflow_dispatch:
 
 permissions:

@@ -19,33 +19,43 @@ type Spend interface {
 	// BalanceGeneratedAt is when DigitalOcean last worked out the balance
 	// (generated_at). Usage after it isn't in MonthToDateUSD yet.
 	BalanceGeneratedAt(ctx context.Context) (time.Time, error)
-	// LastDropletDeleted is when the account's last Droplet stopped
-	// billing, from its destroy action; zero when there's none.
-	LastDropletDeleted(ctx context.Context) (time.Time, error)
+	// LastDropletActivity is the latest time any Droplet action in the
+	// account finished (or started, when it hasn't); zero when the account
+	// has no actions at all.
+	LastDropletActivity(ctx context.Context) (time.Time, error)
 }
 
-// ErrStaleBalance is a balance older than the last run's end: the month to
-// date may be missing that run, so the monthly cap can't be checked.
-var ErrStaleBalance = errors.New("the balance predates the last qualification run's end")
+// ErrStaleBalance is a balance that may not hold the last run yet: the
+// month to date may be missing it, so the monthly cap can't be checked.
+var ErrStaleBalance = errors.New("the balance may not hold the last qualification run yet")
 
-// CheckBalanceCurrent refuses when DigitalOcean's balance was generated
-// before the account's last Droplet was deleted. The balance lags real
-// usage, so without this a second run soon after the first would check the
-// monthly cap against a month to date that leaves the first run out. The
-// run in progress is never in the balance either, which is why Guard adds
+// CheckBalanceCurrent refuses a run while DigitalOcean's balance may still
+// leave out the last run. That's when the balance was generated before the
+// account's last Droplet activity, or when that activity was less than lag
+// ago: generated_at can be the time of the response rather than of the
+// usage it counts, so only time settles it. Weekly runs are far past the
+// lag; a same-day rerun waits. Anything it can't read refuses. The run in
+// progress is never in the balance either, which is why Guard adds
 // spentThisRun to the month to date itself.
-func CheckBalanceCurrent(ctx context.Context, s Spend) error {
+func CheckBalanceCurrent(ctx context.Context, s Spend, now time.Time, lag time.Duration) error {
 	generated, err := s.BalanceGeneratedAt(ctx)
 	if err != nil {
 		return fmt.Errorf("%w: couldn't read when the balance was generated: %w", ErrSpendUnknown, err)
 	}
-	last, err := s.LastDropletDeleted(ctx)
+	last, err := s.LastDropletActivity(ctx)
 	if err != nil {
-		return fmt.Errorf("%w: couldn't read when the last Droplet was deleted: %w", ErrSpendUnknown, err)
+		return fmt.Errorf("%w: couldn't tell when the last Droplet stopped: %w", ErrSpendUnknown, err)
+	}
+	if last.IsZero() {
+		return nil
 	}
 	if last.After(generated) {
-		return fmt.Errorf("%w: DigitalOcean generated the balance at %s, before the last Droplet stopped at %s, so this month's spend may leave that run out. Try again once the balance is regenerated",
+		return fmt.Errorf("%w: DigitalOcean generated the balance at %s, before the last Droplet activity at %s. Try again once the balance is regenerated",
 			ErrStaleBalance, generated.UTC().Format(time.RFC3339), last.UTC().Format(time.RFC3339))
+	}
+	if wait := last.Add(lag); now.Before(wait) {
+		return fmt.Errorf("%w: the last Droplet activity was at %s, and the balance can trail usage by up to %s, so a run can start from %s",
+			ErrStaleBalance, last.UTC().Format(time.RFC3339), lag, wait.UTC().Format(time.RFC3339))
 	}
 	return nil
 }
@@ -185,12 +195,18 @@ func (d *DigitalOceanSpend) BalanceGeneratedAt(ctx context.Context) (time.Time, 
 	return b.GeneratedAt, err
 }
 
-// LastDropletDeleted implements Spend from the account's actions: the
-// latest time a Droplet's destroy action finished, or started when it
-// hasn't. The account holds nothing but qualification Droplets, so that's
-// when the last run's Droplet stopped billing.
-func (d *DigitalOceanSpend) LastDropletDeleted(ctx context.Context) (time.Time, error) {
+// LastDropletActivity implements Spend from the account's actions: the
+// latest time any Droplet action finished, or started when it hasn't,
+// whatever its type. The account holds nothing but qualification
+// Droplets, so a run's create, power and destroy actions all land here and
+// the last of them is no earlier than when its Droplet stopped billing.
+//
+// It fails closed: an action list with actions but none on a Droplet, a
+// Droplet action without a type or a start time, or a failed call is an
+// error, never "no activity".
+func (d *DigitalOceanSpend) LastDropletActivity(ctx context.Context) (time.Time, error) {
 	var last time.Time
+	var actions, droplets int
 	err := d.api.pages(ctx, "/v2/actions", nil, func(raw json.RawMessage) error {
 		var page struct {
 			Actions []struct {
@@ -204,8 +220,13 @@ func (d *DigitalOceanSpend) LastDropletDeleted(ctx context.Context) (time.Time, 
 			return err
 		}
 		for _, a := range page.Actions {
-			if a.Type != "destroy" || a.ResourceType != "droplet" {
+			actions++
+			if a.ResourceType != "droplet" {
 				continue
+			}
+			droplets++
+			if a.Type == "" || a.StartedAt.IsZero() {
+				return errors.New("a Droplet action has no type or start time")
 			}
 			at := a.StartedAt
 			if a.CompletedAt != nil && !a.CompletedAt.IsZero() {
@@ -219,6 +240,9 @@ func (d *DigitalOceanSpend) LastDropletDeleted(ctx context.Context) (time.Time, 
 	})
 	if err != nil {
 		return time.Time{}, fmt.Errorf("read the account's actions: %w", err)
+	}
+	if actions > 0 && droplets == 0 {
+		return time.Time{}, fmt.Errorf("the account has %d actions and none on a Droplet, so Loomplane can't tell when the last run ended", actions)
 	}
 	return last, nil
 }

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/rand"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -19,12 +20,16 @@ import (
 	"sync"
 	"time"
 
+	cpprovider "github.com/xraph/ctrlplane/provider"
 	"golang.org/x/crypto/ssh"
 
 	"github.com/xraph/loomplane/internal/clouds/digitalocean"
 	"github.com/xraph/loomplane/internal/clouds/gpusizes"
 	"github.com/xraph/loomplane/internal/clouds/owned"
 	"github.com/xraph/loomplane/internal/clouds/server"
+	"github.com/xraph/loomplane/internal/models/engines"
+	"github.com/xraph/loomplane/internal/models/registry"
+	"github.com/xraph/loomplane/internal/recipes"
 	"github.com/xraph/loomplane/pkg/provider"
 )
 
@@ -41,8 +46,45 @@ const (
 	namePrefix = "lpq-"
 )
 
-// runIDPattern is what a run ID may be: it goes into tags and names.
-var runIDPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
+// Run IDs go into tags and names. A workflow run's is gh-<run id>-<attempt>,
+// so the step after it can delete exactly that run's Droplet; one started
+// by hand is newRunID's <yyyymmdd>t<hhmm>-<6 hex>.
+var (
+	runIDPattern       = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
+	workflowRunPattern = regexp.MustCompile(`^gh-[1-9]\d{0,19}-[1-9]\d{0,3}$`)
+	localRunPattern    = regexp.MustCompile(`^\d{8}t\d{4}-[0-9a-f]{6}$`)
+)
+
+// CheckRunID refuses a run ID that isn't gh-<run id>-<attempt> or one
+// newRunID makes.
+func CheckRunID(id string) error {
+	if !workflowRunPattern.MatchString(id) && !localRunPattern.MatchString(id) {
+		return fmt.Errorf("%q isn't a run ID: use gh-<GitHub run id>-<attempt>, or leave it out to make one", id)
+	}
+	return nil
+}
+
+// KeyName names a run's SSH key: lpq-<run>.<unix seconds it was added>.
+// DigitalOcean doesn't say when a key was added, so the name does, and a
+// sweep can leave a key alone while its run may still be starting.
+func KeyName(runID string, added time.Time) string {
+	return namePrefix + runID + "." + strconv.FormatInt(added.Unix(), 10)
+}
+
+// keyRun reads a key name back: the run ID and when the key was added,
+// zero when the name doesn't say. A name without lpq- has no run.
+func keyRun(name string) (runID string, added time.Time) {
+	rest, ok := strings.CutPrefix(name, namePrefix)
+	if !ok {
+		return "", time.Time{}
+	}
+	if run, raw, found := strings.Cut(rest, "."); found {
+		if unix, err := strconv.ParseInt(raw, 10, 64); err == nil {
+			return run, time.Unix(unix, 0)
+		}
+	}
+	return rest, time.Time{}
+}
 
 // Machine is a Droplet a run created.
 type Machine struct {
@@ -70,7 +112,7 @@ func (s MachineSpec) GoString() string { return s.String() }
 
 // Machines creates and deletes the run's Droplet.
 type Machines interface {
-	// Create adds UserKey as the SSH key lpq-<run> and creates the
+	// Create adds UserKey as the SSH key lpq-<run>.<unix> and creates the
 	// Droplet lpq-<run>, tagged loomplane-qualify, lpq-run-<run> and
 	// lpq-expires-<unix>, then waits for its public address. A Machine
 	// with an ID comes back with any error once the Droplet exists, so
@@ -225,12 +267,20 @@ type DigitalOceanMachines struct {
 	api  doAPI
 	poll time.Duration
 	boot time.Duration
+	now  func() time.Time
+	// KeyGrace is how long after it's added a run's SSH key is safe from
+	// Sweep, so a sweep never takes the key of a run whose Droplet doesn't
+	// exist yet. Zero is DefaultKeyGrace.
+	KeyGrace time.Duration
 }
+
+// DefaultKeyGrace is the longest run (4.5 hours) and its expiry margin.
+const DefaultKeyGrace = time.Duration(maxRunHours*float64(time.Hour)) + expiryMargin
 
 // NewDigitalOceanMachines talks to endpoint, or DigitalOcean's own API when
 // it's empty. The token never appears in an error or a string.
 func NewDigitalOceanMachines(endpoint, token string) *DigitalOceanMachines {
-	m := &DigitalOceanMachines{api: newDOAPI(endpoint, token), poll: 10 * time.Second, boot: 15 * time.Minute}
+	m := &DigitalOceanMachines{api: newDOAPI(endpoint, token), poll: 10 * time.Second, boot: 15 * time.Minute, now: time.Now}
 	if endpoint != "" {
 		m.poll = 10 * time.Millisecond
 	}
@@ -276,7 +326,7 @@ func (m *DigitalOceanMachines) Create(ctx context.Context, spec MachineSpec) (*M
 		SSHKey sshKey `json:"ssh_key"`
 	}
 	public := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(spec.UserKey)))
-	if err := m.api.do(ctx, http.MethodPost, "/v2/account/keys", nil, map[string]string{"name": name, "public_key": public}, &key); err != nil {
+	if err := m.api.do(ctx, http.MethodPost, "/v2/account/keys", nil, map[string]string{"name": KeyName(spec.RunID, m.now()), "public_key": public}, &key); err != nil {
 		return nil, fmt.Errorf("add the run's SSH key: %w", err)
 	}
 	in := map[string]any{
@@ -380,7 +430,7 @@ func (m *DigitalOceanMachines) deleteKey(ctx context.Context, k sshKey) (string,
 }
 
 // DeleteRun implements Machines: the Droplets tagged lpq-run-<runID> and
-// the SSH key lpq-<runID>, and nothing else. It keeps going past a failed
+// the run's SSH key, and nothing else. It keeps going past a failed
 // delete and returns every failure.
 func (m *DigitalOceanMachines) DeleteRun(ctx context.Context, runID string) ([]string, error) {
 	if !runIDPattern.MatchString(runID) {
@@ -405,7 +455,7 @@ func (m *DigitalOceanMachines) DeleteRun(ctx context.Context, runID string) ([]s
 		return deleted, errors.Join(append(problems, err)...)
 	}
 	for _, k := range ks {
-		if k.Name != namePrefix+runID {
+		if run, _ := keyRun(k.Name); run != runID {
 			continue
 		}
 		what, kErr := m.deleteKey(ctx, k)
@@ -420,7 +470,8 @@ func (m *DigitalOceanMachines) DeleteRun(ctx context.Context, runID string) ([]s
 
 // Sweep implements Machines. It keeps going past a failed delete, so one
 // stuck Droplet doesn't keep the rest running, and returns every failure.
-// A run's SSH key goes only once its Droplets do.
+// A run's SSH key goes only once its Droplets do, and never within
+// KeyGrace of being added, while its Droplet may not exist yet.
 func (m *DigitalOceanMachines) Sweep(ctx context.Context, now time.Time, onlyExpired bool) ([]string, error) {
 	var deleted []string
 	var problems []error
@@ -449,8 +500,13 @@ func (m *DigitalOceanMachines) Sweep(ctx context.Context, now time.Time, onlyExp
 	if err != nil {
 		return deleted, errors.Join(append(problems, err)...)
 	}
+	grace := m.KeyGrace
+	if grace <= 0 {
+		grace = DefaultKeyGrace
+	}
 	for _, k := range ks {
-		if live[strings.TrimPrefix(k.Name, namePrefix)] {
+		run, added := keyRun(k.Name)
+		if live[run] || (!added.IsZero() && now.Sub(added) < grace) {
 			continue
 		}
 		what, kErr := m.deleteKey(ctx, k)
@@ -724,6 +780,65 @@ func (h *dockerHost) Remove(ctx context.Context, c *Container) error {
 }
 
 func (h *dockerHost) Close() error { return h.client.Close() }
+
+// metadataProbe tries DigitalOcean's metadata service from a container
+// and says which way it went. It passes only when wget ran and was
+// refused: a missing wget or anything unexpected fails the check.
+const metadataProbe = `if wget -q -T 5 -O /dev/null http://169.254.169.254/metadata/v1/id 2>/dev/null; then echo LPQ_METADATA_REACHABLE; exit 3; fi
+command -v wget >/dev/null 2>&1 || { echo LPQ_NO_WGET; exit 4; }
+echo LPQ_METADATA_BLOCKED`
+
+// metadataInstance names the probe's (empty) rendered values.
+const metadataInstance = "lpq-metadata-probe"
+
+// MetadataBlocked starts a throwaway container from the guard's pinned
+// image, on the network the engines get, and checks it can't reach the
+// metadata service. Anything but a clean refusal is an error, so the run
+// stops before a model's code could read the user data.
+func (h *dockerHost) MetadataBlocked(ctx context.Context) error {
+	version := ""
+	for _, r := range engines.Releases() {
+		if r.Engine == registry.EngineVLLM {
+			version = r.Version
+		}
+	}
+	composition, err := recipes.Default().Resolve(recipes.ModelVLLMKind, version, "amd64", "server")
+	if err != nil {
+		return err
+	}
+	i := slices.IndexFunc(composition.Components, func(c recipes.ResolvedComponent) bool { return c.Name == recipes.ModelGuard })
+	if i < 0 {
+		return errors.New("the model kinds have no guard image to probe with")
+	}
+	h.mu.Lock()
+	h.values[metadataInstance] = owned.RuntimeValues{}
+	h.mu.Unlock()
+	defer func() {
+		h.mu.Lock()
+		delete(h.values, metadataInstance)
+		h.mu.Unlock()
+	}()
+	labels := map[string]string{
+		owned.LabelOrg: labelOrg, owned.LabelProject: labelProject, owned.LabelEnvironment: "metadata-probe",
+		owned.LabelConnection: "lpq-metadata-probe", owned.LabelInstance: metadataInstance, owned.LabelRevision: "1",
+	}
+	b := make([]byte, 6)
+	if _, rErr := rand.Read(b); rErr != nil {
+		return rErr
+	}
+	spec := cpprovider.ServiceSpec{
+		Name: "metadata-probe", Image: composition.Components[i].Image, Command: []string{"/bin/sh", "-c", metadataProbe},
+		Resources: cpprovider.ResourceSpec{CPUMillis: 100, MemoryMB: 64},
+	}
+	res, err := h.runtime.RunJob(ctx, fmt.Sprintf("lp-job-%x", b), spec, labels, 2*time.Minute)
+	if err != nil {
+		return fmt.Errorf("couldn't check containers are kept off the metadata service: %w", err)
+	}
+	if res.ExitCode != 0 || !strings.Contains(res.Output, "LPQ_METADATA_BLOCKED") {
+		return fmt.Errorf("a container on the Droplet can reach the metadata service, or the check couldn't tell (exit %d: %s)", res.ExitCode, oneLine(res.Output))
+	}
+	return nil
+}
 
 // GPUKinds reads the kind of every GPU Docker can hand out on the Droplet,
 // from nvidia-smi's own product names.

@@ -42,6 +42,25 @@ func TestRunNeedsTheAccountAndToken(t *testing.T) {
 	}
 }
 
+func TestRunIDFlag(t *testing.T) {
+	for _, cmd := range []string{"run", "sweep"} {
+		var stdout, stderr bytes.Buffer
+		args := []string{cmd, "--config", config, "--confirm", "--run-id", "gh-1-1; rm -rf /"}
+		if cmd == "sweep" {
+			args = []string{cmd, "--config", config, "--run-id", "gh-1-1; rm -rf /"}
+		}
+		if code := run(t.Context(), args, env(nil), &stdout, &stderr); code != 1 || !strings.Contains(stderr.String(), "isn't a run ID") {
+			t.Fatalf("%s: code %d, stderr %q", cmd, code, stderr.String())
+		}
+	}
+	// A good ID gets as far as the token, which the test doesn't have.
+	var stdout, stderr bytes.Buffer
+	code := run(t.Context(), []string{"run", "--config", config, "--confirm", "--run-id", "gh-123456-2"}, env(nil), &stdout, &stderr)
+	if code != 1 || !strings.Contains(stderr.String(), "QUALIFY_DO_TOKEN") {
+		t.Fatalf("code %d, stderr %q", code, stderr.String())
+	}
+}
+
 func TestPlanSpendsNothing(t *testing.T) {
 	var stdout, stderr bytes.Buffer
 	if code := run(t.Context(), []string{"plan", "--config", config, "--week", "2026-W47"}, env(nil), &stdout, &stderr); code != 0 {

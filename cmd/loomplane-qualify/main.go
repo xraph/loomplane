@@ -2,8 +2,8 @@
 // qualify-models workflow runs it once a week; nothing else should.
 //
 //	loomplane-qualify plan  --config .github/qualification.yaml [--week 2026-W45]
-//	loomplane-qualify run   --config .github/qualification.yaml --confirm --out results.json
-//	loomplane-qualify sweep --config .github/qualification.yaml [--only-expired=false]
+//	loomplane-qualify run   --config .github/qualification.yaml --confirm --out results.json [--run-id gh-<run>-<attempt>]
+//	loomplane-qualify sweep --config .github/qualification.yaml [--run-id gh-<run>-<attempt>] [--only-expired=false]
 //	loomplane-qualify merge [--data internal/models/registry/data/qualification.yaml] [--summary summary.md] results.json
 //
 // plan prints what a run would sample this week and its worst-case cost,
@@ -11,7 +11,9 @@
 // account, qualifies the samples on it and deletes it; it costs money, so
 // it needs --confirm. sweep deletes the Droplets the job tagged once their
 // run has expired, and their SSH keys, so nothing a crashed run left keeps
-// billing and nothing a live run uses goes. merge folds a run's results
+// billing and nothing a live run uses goes. With --run-id it first deletes
+// that run's Droplet and key whatever their expiry, which is how the
+// workflow cleans up after a cancelled run. merge folds a run's results
 // into the registry's qualification.yaml.
 //
 // run and sweep read the DigitalOcean token from QUALIFY_DO_TOKEN and the
@@ -150,11 +152,17 @@ func runCommand(ctx context.Context, args []string, getenv func(string) string, 
 	out := fl.String("out", "results.json", "where to write the results")
 	week := fl.String("week", "", "the ISO week to run, like 2026-W45; empty is this week")
 	clip := fl.String("speech", qualify.SpeechClipPath, "the speech probe's recording; speech samples don't run without it")
+	runID := fl.String("run-id", "", "the run's ID, gh-<GitHub run id>-<attempt>; empty makes one")
 	if err := fl.Parse(args); err != nil {
 		return err
 	}
 	if !*confirm {
 		return qualify.ErrNotConfirmed
+	}
+	if *runID != "" {
+		if err := qualify.CheckRunID(*runID); err != nil {
+			return err
+		}
 	}
 	cfg, err := loadConfig(*config, getenv)
 	if err != nil {
@@ -172,10 +180,10 @@ func runCommand(ctx context.Context, args []string, getenv func(string) string, 
 	r := registry.Default()
 	rep := &qualify.Report{}
 	d := qualify.RunDeps{
-		Config: cfg, Registry: r, Results: r.Results(), Week: *week, Confirm: *confirm,
+		Config: cfg, Registry: r, Results: r.Results(), Week: *week, Confirm: *confirm, RunID: *runID,
 		RunURL: runURL(getenv), HFToken: strings.TrimSpace(getenv(hfTokenEnv)), Speech: speech,
 		Spend:    qualify.NewDigitalOceanSpend("", token),
-		Machines: qualify.NewDigitalOceanMachines("", token),
+		Machines: machines(token, cfg),
 		Offers:   qualify.NewDigitalOceanOffers(client, token, cfg.AccountUUID),
 		Connect:  qualify.Connect,
 		Log:      stderr,
@@ -228,8 +236,14 @@ func sweepCommand(ctx context.Context, args []string, getenv func(string) string
 	fl := flag.NewFlagSet("sweep", flag.ContinueOnError)
 	config := fl.String("config", ".github/qualification.yaml", "the qualification config")
 	onlyExpired := fl.Bool("only-expired", true, "delete only Droplets whose run is past its expiry; false deletes live runs' Droplets too")
+	runID := fl.String("run-id", "", "first delete this run's Droplet and SSH key, whatever their expiry")
 	if err := fl.Parse(args); err != nil {
 		return err
+	}
+	if *runID != "" {
+		if err := qualify.CheckRunID(*runID); err != nil {
+			return err
+		}
 	}
 	cfg, err := loadConfig(*config, getenv)
 	if err != nil {
@@ -252,7 +266,14 @@ func sweepCommand(ctx context.Context, args []string, getenv func(string) string
 	// Deleting never waits on a cancel: a half-done sweep leaves spend.
 	sctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 10*time.Minute)
 	defer cancel()
-	deleted, err := qualify.NewDigitalOceanMachines("", token).Sweep(sctx, time.Now(), *onlyExpired)
+	m := machines(token, cfg)
+	deleted := []string{}
+	if *runID != "" {
+		gone, dErr := m.DeleteRun(sctx, *runID)
+		deleted, err = append(deleted, gone...), dErr
+	}
+	swept, sErr := m.Sweep(sctx, time.Now(), *onlyExpired)
+	deleted, err = append(deleted, swept...), errors.Join(err, sErr)
 	for _, s := range deleted {
 		fmt.Fprintf(stdout, "Deleted %s.\n", s)
 	}
@@ -260,6 +281,13 @@ func sweepCommand(ctx context.Context, args []string, getenv func(string) string
 		fmt.Fprintln(stdout, "Nothing to delete.")
 	}
 	return err
+}
+
+// machines is the DigitalOcean Machines for cfg's runs.
+func machines(token string, cfg qualify.Config) *qualify.DigitalOceanMachines {
+	m := qualify.NewDigitalOceanMachines("", token)
+	m.KeyGrace = cfg.KeyGrace()
+	return m
 }
 
 func mergeCommand(args []string, stdout io.Writer) error {

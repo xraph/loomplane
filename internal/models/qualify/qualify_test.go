@@ -157,14 +157,14 @@ func TestPickOnlyFittingSamples(t *testing.T) {
 
 // fakeSpend is the account's balance.
 type fakeSpend struct {
-	mu          sync.Mutex
-	account     string
-	accountErr  error
-	mtd         string
-	mtdErr      error
-	reads       int
-	generatedAt time.Time // zero is an hour ago
-	lastDeleted time.Time // zero is none
+	mu           sync.Mutex
+	account      string
+	accountErr   error
+	mtd          string
+	mtdErr       error
+	reads        int
+	generatedAt  time.Time // zero is an hour ago
+	lastActivity time.Time // zero is none
 }
 
 func (f *fakeSpend) MonthToDateUSD(context.Context) (string, error) {
@@ -183,7 +183,30 @@ func (f *fakeSpend) BalanceGeneratedAt(context.Context) (time.Time, error) {
 	return f.generatedAt, nil
 }
 
-func (f *fakeSpend) LastDropletDeleted(context.Context) (time.Time, error) { return f.lastDeleted, nil }
+func (f *fakeSpend) LastDropletActivity(context.Context) (time.Time, error) {
+	return f.lastActivity, nil
+}
+
+// eventLog is the order the fakes were called in.
+type eventLog struct {
+	mu    sync.Mutex
+	items []string
+}
+
+func (l *eventLog) add(s string) {
+	if l == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.items = append(l.items, s)
+}
+
+func (l *eventLog) list() []string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return slices.Clone(l.items)
+}
 
 func (f *fakeSpend) set(mtd string) {
 	f.mu.Lock()
@@ -194,14 +217,22 @@ func (f *fakeSpend) set(mtd string) {
 // fakeMachines records what the run created and deleted.
 type fakeMachines struct {
 	mu         sync.Mutex
+	log        *eventLog
 	created    []MachineSpec
 	deletedRun []string
 	sweeps     []bool // onlyExpired of each sweep
 	live       []string
 	createErr  error
+	onCreate   func()
+	// dropletOnDelete is the DeleteRun call (1-based) that finds the
+	// Droplet; 0 is the first.
+	dropletOnDelete int
 }
 
 func (f *fakeMachines) Create(_ context.Context, spec MachineSpec) (*Machine, error) {
+	if f.onCreate != nil {
+		f.onCreate()
+	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.created = append(f.created, spec)
@@ -212,13 +243,18 @@ func (f *fakeMachines) Create(_ context.Context, spec MachineSpec) (*Machine, er
 }
 
 func (f *fakeMachines) DeleteRun(_ context.Context, runID string) ([]string, error) {
+	f.log.add("delete-run " + runID)
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.deletedRun = append(f.deletedRun, runID)
+	if len(f.deletedRun) >= max(f.dropletOnDelete, 1) {
+		return []string{"Droplet 4242 (lpq-" + runID + ")"}, nil
+	}
 	return nil, nil
 }
 
 func (f *fakeMachines) Sweep(_ context.Context, _ time.Time, onlyExpired bool) ([]string, error) {
+	f.log.add("sweep")
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.sweeps = append(f.sweeps, onlyExpired)
@@ -246,6 +282,8 @@ type fakeHost struct {
 	logsErr   error
 	logs      []byte
 	gpus      []string
+	metadata  error
+	log       *eventLog
 	onStart   func(n int)
 	onRemove  func(n int)
 	// handle, when set, answers the probe paths in place of engineAnswer.
@@ -357,7 +395,10 @@ func (h *fakeHost) Logs(context.Context, *Container) ([]byte, error) {
 
 func (h *fakeHost) GPUKinds(context.Context) ([]string, error) { return h.gpus, nil }
 
+func (h *fakeHost) MetadataBlocked(context.Context) error { return h.metadata }
+
 func (h *fakeHost) Remove(_ context.Context, c *Container) error {
+	h.log.add("remove")
 	h.mu.Lock()
 	h.removed = append(h.removed, c)
 	n, hook := len(h.removed), h.onRemove
@@ -376,24 +417,28 @@ type runFixture struct {
 	machines *fakeMachines
 	host     *fakeHost
 	report   *Report
+	log      *eventLog
 	deps     RunDeps
 }
 
 func newRun(t *testing.T) *runFixture {
 	t.Helper()
 	r := testRegistry(t)
+	log := &eventLog{}
 	f := &runFixture{
 		spend:    &fakeSpend{account: "acct-qualify", mtd: "10.00"},
-		machines: &fakeMachines{},
+		machines: &fakeMachines{log: log},
 		host:     newFakeHost(t, r),
 		report:   &Report{},
+		log:      log,
 	}
+	f.host.log = log
 	f.deps = RunDeps{
-		Config: testConfig(), Registry: r, Week: week46, Confirm: true, RunID: "test-run", RunURL: "https://github.com/xraph/loomplane/actions/runs/7",
+		Config: testConfig(), Registry: r, Week: week46, Confirm: true, RunID: "gh-7-1", RunURL: "https://github.com/xraph/loomplane/actions/runs/7",
 		Spend: f.spend, Machines: f.machines,
 		Offers:  fakeOffers{offer: Offer{Size: "gpu-l40sx1-48gb", Image: "gpu-h100x1-base", GPUs: 1, HourlyUSD: 1.57}},
 		Connect: func(context.Context, *Machine, Keys) (Host, error) { return f.host, nil },
-		Ticks:   make(chan time.Time, 1), Poll: time.Millisecond, Report: f.report,
+		Ticks:   make(chan time.Time, 1), Poll: time.Millisecond, Report: f.report, DeleteRetryWait: time.Millisecond,
 	}
 	return f
 }
@@ -409,8 +454,8 @@ func (f *runFixture) tornDown(t *testing.T) {
 	t.Helper()
 	f.machines.mu.Lock()
 	defer f.machines.mu.Unlock()
-	if !slices.Equal(f.machines.deletedRun, []string{"test-run"}) {
-		t.Fatalf("deleted runs %v, want only test-run", f.machines.deletedRun)
+	if !slices.Equal(f.machines.deletedRun, []string{"gh-7-1"}) {
+		t.Fatalf("deleted runs %v, want only gh-7-1", f.machines.deletedRun)
 	}
 	if len(f.machines.sweeps) != 2 || slices.Contains(f.machines.sweeps, false) {
 		t.Fatalf("sweeps %v, want two that delete only expired Droplets", f.machines.sweeps)
@@ -444,7 +489,7 @@ func TestRunQualifiesEverySample(t *testing.T) {
 	}
 	f.tornDown(t)
 	spec := f.machines.created[0]
-	if spec.Size != "gpu-l40sx1-48gb" || spec.Region != "tor1" || spec.RunID != "test-run" || !strings.Contains(spec.UserData, "nvidia-container-toolkit") {
+	if spec.Size != "gpu-l40sx1-48gb" || spec.Region != "tor1" || spec.RunID != "gh-7-1" || !strings.Contains(spec.UserData, "nvidia-container-toolkit") {
 		t.Fatalf("machine spec %+v", spec.RunID)
 	}
 	// The Droplet stays live through the run's hours and an hour of
@@ -452,7 +497,7 @@ func TestRunQualifiesEverySample(t *testing.T) {
 	if want := start.Add(5 * time.Hour); !spec.Expires.Equal(want) {
 		t.Fatalf("expires %s, want %s", spec.Expires, want)
 	}
-	if f.report.RunID != "test-run" {
+	if f.report.RunID != "gh-7-1" {
 		t.Fatalf("report run ID %q", f.report.RunID)
 	}
 	if len(f.host.removed) != len(samples) {
@@ -564,7 +609,8 @@ func TestRunStopsWhenTheTickerSeesTheCap(t *testing.T) {
 	if len(f.report.NotRun) != len(f.samples()) {
 		t.Fatalf("not run %d, want every sample: a stopped sample is never failed", len(f.report.NotRun))
 	}
-	if len(f.host.removed) != 1 {
+	// The stopped sample's container goes with the Droplet, not over SSH.
+	if len(f.host.removed) != 0 {
 		t.Fatalf("removed %d", len(f.host.removed))
 	}
 	f.tornDown(t)
@@ -627,6 +673,85 @@ func TestRunAlwaysTearsDown(t *testing.T) {
 		t.Fatal("a failed Create didn't fail the run")
 	}
 	f.tornDown(t)
+}
+
+func TestFailedCreateRetriesTheDelete(t *testing.T) {
+	// DigitalOcean lists the Droplet under its tag only on the third try.
+	f := newRun(t)
+	f.machines.createErr = errors.New("digitalocean timed out")
+	f.machines.dropletOnDelete = 3
+	if _, err := Run(t.Context(), f.deps); err == nil {
+		t.Fatal("a failed Create didn't fail the run")
+	}
+	if len(f.machines.deletedRun) != 3 {
+		t.Fatalf("deleted %d times, want 3: until the Droplet turned up", len(f.machines.deletedRun))
+	}
+
+	// It never finds one: five tries, then teardown gives up and sweeps.
+	f = newRun(t)
+	f.machines.createErr = errors.New("digitalocean timed out")
+	f.machines.dropletOnDelete = 99
+	_, _ = Run(t.Context(), f.deps)
+	if len(f.machines.deletedRun) != deleteAttempts {
+		t.Fatalf("deleted %d times, want %d", len(f.machines.deletedRun), deleteAttempts)
+	}
+
+	// A cancel during Create gets one delete, at once: the runner kills a
+	// cancelled job within seconds, and the next step deletes by run ID.
+	f = newRun(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	f.machines.onCreate = cancel
+	f.machines.createErr = context.Canceled
+	f.machines.dropletOnDelete = 99
+	_, _ = Run(ctx, f.deps)
+	if len(f.machines.deletedRun) != 1 {
+		t.Fatalf("deleted %d times on a cancel, want 1", len(f.machines.deletedRun))
+	}
+}
+
+func TestCancelGoesStraightToDeleteRun(t *testing.T) {
+	f := newRun(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	f.host.onStart = func(int) { cancel() }
+	if _, err := Run(ctx, f.deps); err == nil {
+		t.Fatal("a cancelled run returned no error")
+	}
+	// No container cleanup over SSH: the Droplet's deletion does it, and
+	// it comes first, before the sweep.
+	if got := f.log.list(); !slices.Equal(got, []string{"sweep", "delete-run gh-7-1", "sweep"}) {
+		t.Fatalf("calls %q", got)
+	}
+	if len(f.host.removed) != 0 {
+		t.Fatalf("removed %d containers on a cancel", len(f.host.removed))
+	}
+}
+
+func TestRunAbortsWhenContainersReachMetadata(t *testing.T) {
+	f := newRun(t)
+	f.host.metadata = errors.New("a container on the Droplet can reach the metadata service")
+	results, err := Run(t.Context(), f.deps)
+	if err == nil || len(results) != 0 || len(f.host.started) != 0 || len(f.report.NotRun) != len(f.samples()) {
+		t.Fatalf("err = %v, %d results, %d started, %d not run", err, len(results), len(f.host.started), len(f.report.NotRun))
+	}
+	f.tornDown(t)
+}
+
+func TestRunIDs(t *testing.T) {
+	for _, id := range []string{"gh-12345678901-1", "gh-1-12", newRunID(time.Now())} {
+		if err := CheckRunID(id); err != nil {
+			t.Errorf("%s: %v", id, err)
+		}
+	}
+	for _, id := range []string{"", "gh-0-1", "gh-12-", "gh-12-1; rm -rf /", "GH-12-1", "test-run", "gh-12-1-2"} {
+		if err := CheckRunID(id); err == nil {
+			t.Errorf("%q was accepted", id)
+		}
+	}
+	f := newRun(t)
+	f.deps.RunID = "not a run"
+	if _, err := Run(t.Context(), f.deps); err == nil || f.spend.reads != 0 || len(f.machines.sweeps) != 0 {
+		t.Fatalf("err = %v; a bad run ID must refuse before touching the account", err)
+	}
 }
 
 func TestResultsNeverCarrySecrets(t *testing.T) {
@@ -1024,7 +1149,13 @@ func TestSweepDeletesEverythingTagged(t *testing.T) {
 				{ID: 3, Name: "lpq-noexpiry", Tags: []string{Tag, "lpq-run-noexpiry"}},
 				{ID: 4, Name: "someone-elses", Tags: []string{"web"}},
 			},
-			keys: []sshKey{{ID: 11, Name: "lpq-old"}, {ID: 12, Name: "lpq-live"}, {ID: 13, Name: "rex-laptop"}},
+			// Key 14 belongs to a run still creating its Droplet: added a
+			// minute ago, inside the grace, so no sweep takes it. Key 15
+			// was added long ago and its run is gone.
+			keys: []sshKey{
+				{ID: 11, Name: "lpq-old"}, {ID: 12, Name: "lpq-live"}, {ID: 13, Name: "rex-laptop"},
+				{ID: 14, Name: KeyName("gh-9-1", now.Add(-time.Minute))}, {ID: 15, Name: KeyName("gh-8-1", now.Add(-6*time.Hour))},
+			},
 		}
 		srv := httptest.NewServer(http.HandlerFunc(f.handler))
 		t.Cleanup(srv.Close)
@@ -1036,7 +1167,7 @@ func TestSweepDeletesEverythingTagged(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"/v2/droplets/1", "/v2/droplets/2", "/v2/droplets/3", "/v2/account/keys/11", "/v2/account/keys/12"}
+	want := []string{"/v2/droplets/1", "/v2/droplets/2", "/v2/droplets/3", "/v2/account/keys/11", "/v2/account/keys/12", "/v2/account/keys/15"}
 	if !slices.Equal(f.deleted, want) || len(deleted) != len(want) {
 		t.Fatalf("deleted %v (%v), want %v", f.deleted, deleted, want)
 	}
@@ -1045,7 +1176,7 @@ func TestSweepDeletesEverythingTagged(t *testing.T) {
 	if _, err = m.Sweep(t.Context(), now, true); err != nil {
 		t.Fatal(err)
 	}
-	want = []string{"/v2/droplets/1", "/v2/droplets/3", "/v2/account/keys/11"}
+	want = []string{"/v2/droplets/1", "/v2/droplets/3", "/v2/account/keys/11", "/v2/account/keys/15"}
 	if !slices.Equal(f.deleted, want) {
 		t.Fatalf("only expired: deleted %v, want %v", f.deleted, want)
 	}
@@ -1068,7 +1199,7 @@ func TestDeleteRunTouchesOnlyItsRun(t *testing.T) {
 			{ID: 2, Name: "lpq-other", Tags: []string{Tag, "lpq-run-other", "lpq-expires-" + future}},
 			{ID: 4, Name: "someone-elses", Tags: []string{"lpq-run-mine"}},
 		},
-		keys: []sshKey{{ID: 11, Name: "lpq-mine"}, {ID: 12, Name: "lpq-other"}},
+		keys: []sshKey{{ID: 11, Name: "lpq-mine"}, {ID: 12, Name: "lpq-other"}, {ID: 13, Name: KeyName("mine", now)}, {ID: 16, Name: KeyName("mine2", now)}},
 	}
 	srv := httptest.NewServer(http.HandlerFunc(f.handler))
 	t.Cleanup(srv.Close)
@@ -1076,7 +1207,7 @@ func TestDeleteRunTouchesOnlyItsRun(t *testing.T) {
 	if _, err := m.DeleteRun(t.Context(), "mine"); err != nil {
 		t.Fatal(err)
 	}
-	if want := []string{"/v2/droplets/1", "/v2/account/keys/11"}; !slices.Equal(f.deleted, want) {
+	if want := []string{"/v2/droplets/1", "/v2/account/keys/11", "/v2/account/keys/13"}; !slices.Equal(f.deleted, want) {
 		t.Fatalf("deleted %v, want %v", f.deleted, want)
 	}
 	live, err := m.Live(t.Context(), now)
@@ -1101,57 +1232,106 @@ func TestRunRefusesWhileAnotherRunIsLive(t *testing.T) {
 }
 
 func TestRunRefusesAStaleBalance(t *testing.T) {
-	f := newRun(t)
-	f.spend.generatedAt = time.Date(2026, 11, 9, 0, 0, 0, 0, time.UTC)
-	f.spend.lastDeleted = time.Date(2026, 11, 9, 10, 30, 0, 0, time.UTC)
-	_, err := Run(t.Context(), f.deps)
-	if !errors.Is(err, ErrStaleBalance) || len(f.machines.created) != 0 {
-		t.Fatalf("err = %v, created %d", err, len(f.machines.created))
+	last := time.Date(2026, 11, 9, 10, 30, 0, 0, time.UTC)
+	cases := []struct {
+		name      string
+		generated time.Time
+		now       time.Time
+		want      error
+	}{
+		{"generated before the last Droplet activity", last.Add(-time.Hour), last.Add(48 * time.Hour), ErrStaleBalance},
+		// generated_at may be the response time, so only the lag settles it.
+		{"inside the lag", last.Add(time.Hour), last.Add(20 * time.Hour), ErrStaleBalance},
+		{"past the lag", last.Add(time.Hour), last.Add(25 * time.Hour), nil},
 	}
-	// A balance generated after the last Droplet went is current.
-	f = newRun(t)
-	f.spend.generatedAt = time.Date(2026, 11, 9, 12, 0, 0, 0, time.UTC)
-	f.spend.lastDeleted = time.Date(2026, 11, 9, 10, 30, 0, 0, time.UTC)
-	if _, err = Run(t.Context(), f.deps); err != nil {
-		t.Fatal(err)
+	for _, c := range cases {
+		f := newRun(t)
+		f.spend.generatedAt, f.spend.lastActivity = c.generated, last
+		f.deps.Now = func() time.Time { return c.now }
+		_, err := Run(t.Context(), f.deps)
+		if (c.want == nil) != (err == nil) || (c.want != nil && !errors.Is(err, c.want)) {
+			t.Errorf("%s: err = %v", c.name, err)
+		}
+		if c.want != nil && len(f.machines.created) != 0 {
+			t.Errorf("%s: created a Droplet", c.name)
+		}
+	}
+
+	f := newRun(t)
+	f.spend.generatedAt, f.spend.lastActivity = last.Add(time.Hour), last
+	f.deps.Now = func() time.Time { return last.Add(20 * time.Hour) }
+	if _, err := Run(t.Context(), f.deps); err == nil || !strings.Contains(err.Error(), "a run can start from 2026-11-10T10:30:00Z") {
+		t.Fatalf("the refusal doesn't say when to try again: %v", err)
 	}
 }
 
 func TestDigitalOceanSpend(t *testing.T) {
-	mux := http.NewServeMux()
-	mux.HandleFunc("GET /v2/customers/my/balance", func(w http.ResponseWriter, _ *http.Request) {
-		fmt.Fprint(w, `{"month_to_date_usage":"41.27","generated_at":"2026-11-09T05:00:00Z"}`)
-	})
-	mux.HandleFunc("GET /v2/actions", func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("page") == "1" {
-			fmt.Fprint(w, `{"actions":[{"type":"create","resource_type":"droplet","started_at":"2026-11-09T07:00:00Z","completed_at":"2026-11-09T07:01:00Z"},
-				{"type":"destroy","resource_type":"droplet","started_at":"2026-11-02T09:00:00Z","completed_at":"2026-11-02T09:01:00Z"}],
-				"links":{"pages":{"next":"page 2"}}}`)
-			return
-		}
-		fmt.Fprint(w, `{"actions":[{"type":"destroy","resource_type":"droplet","started_at":"2026-11-08T10:00:00Z","completed_at":null},
+	actions := func(pages ...string) *DigitalOceanSpend {
+		mux := http.NewServeMux()
+		mux.HandleFunc("GET /v2/customers/my/balance", func(w http.ResponseWriter, _ *http.Request) {
+			fmt.Fprint(w, `{"month_to_date_usage":"41.27","generated_at":"2026-11-09T05:00:00Z"}`)
+		})
+		mux.HandleFunc("GET /v2/actions", func(w http.ResponseWriter, r *http.Request) {
+			n, _ := strconv.Atoi(r.URL.Query().Get("page"))
+			if n < 1 || n > len(pages) {
+				http.Error(w, `{"message":"no such page"}`, http.StatusNotFound)
+				return
+			}
+			fmt.Fprint(w, pages[n-1])
+		})
+		mux.HandleFunc("GET /v2/account", func(w http.ResponseWriter, _ *http.Request) {
+			fmt.Fprint(w, `{"account":{"uuid":"user-uuid","team":{"uuid":"team-uuid"}}}`)
+		})
+		srv := httptest.NewServer(mux)
+		t.Cleanup(srv.Close)
+		return NewDigitalOceanSpend(srv.URL, "do-token")
+	}
+
+	s := actions(
+		`{"actions":[{"type":"create","resource_type":"droplet","started_at":"2026-11-02T07:00:00Z","completed_at":"2026-11-02T07:01:00Z"},
+			{"type":"destroy","resource_type":"droplet","started_at":"2026-11-02T09:00:00Z","completed_at":"2026-11-02T09:01:00Z"}],
+			"links":{"pages":{"next":"page 2"}}}`,
+		// A type Loomplane has never seen still counts, and one still in
+		// progress counts from its start. A volume's doesn't.
+		`{"actions":[{"type":"delete_and_scrub","resource_type":"droplet","started_at":"2026-11-08T10:00:00Z","completed_at":null},
 			{"type":"destroy","resource_type":"volume","started_at":"2026-11-09T11:00:00Z","completed_at":"2026-11-09T11:00:00Z"}]}`)
-	})
-	mux.HandleFunc("GET /v2/account", func(w http.ResponseWriter, _ *http.Request) {
-		fmt.Fprint(w, `{"account":{"uuid":"user-uuid","team":{"uuid":"team-uuid"}}}`)
-	})
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
-	s := NewDigitalOceanSpend(srv.URL, "do-token")
 	if mtd, err := s.MonthToDateUSD(t.Context()); err != nil || mtd != "41.27" {
 		t.Fatalf("mtd %q, %v", mtd, err)
 	}
 	if at, err := s.BalanceGeneratedAt(t.Context()); err != nil || !at.Equal(time.Date(2026, 11, 9, 5, 0, 0, 0, time.UTC)) {
 		t.Fatalf("generated %s, %v", at, err)
 	}
-	if at, err := s.LastDropletDeleted(t.Context()); err != nil || !at.Equal(time.Date(2026, 11, 8, 10, 0, 0, 0, time.UTC)) {
-		t.Fatalf("last deleted %s, %v", at, err)
+	if at, err := s.LastDropletActivity(t.Context()); err != nil || !at.Equal(time.Date(2026, 11, 8, 10, 0, 0, 0, time.UTC)) {
+		t.Fatalf("last activity %s, %v", at, err)
 	}
 	if id, err := s.AccountUUID(t.Context()); err != nil || id != "team-uuid" {
 		t.Fatalf("account %q, %v", id, err)
 	}
 	if fmt.Sprint(s) != "DigitalOcean spend" {
 		t.Fatal("the spend reader prints more than its name")
+	}
+
+	// An account with no actions has had no runs.
+	if at, err := actions(`{"actions":[]}`).LastDropletActivity(t.Context()); err != nil || !at.IsZero() {
+		t.Fatalf("no actions: %s, %v", at, err)
+	}
+	// Everything else it can't read refuses.
+	for name, page := range map[string]string{
+		"no Droplet actions":     `{"actions":[{"type":"create","resource_type":"volume","started_at":"2026-11-08T10:00:00Z"}]}`,
+		"a Droplet action typed": `{"actions":[{"type":"","resource_type":"droplet","started_at":"2026-11-08T10:00:00Z"}]}`,
+		"no start time":          `{"actions":[{"type":"destroy","resource_type":"droplet"}]}`,
+		"not JSON":               `<html>`,
+	} {
+		if _, err := actions(page).LastDropletActivity(t.Context()); err == nil {
+			t.Errorf("%s: no error", name)
+		}
+	}
+	if _, err := actions().LastDropletActivity(t.Context()); err == nil {
+		t.Error("a failed actions call: no error")
+	}
+	// And CheckBalanceCurrent refuses with it.
+	if err := CheckBalanceCurrent(t.Context(), actions(`{"actions":[{"type":"create","resource_type":"volume","started_at":"2026-11-08T10:00:00Z"}]}`), time.Now(), time.Hour); !errors.Is(err, ErrSpendUnknown) {
+		t.Fatalf("err = %v", err)
 	}
 }
 
@@ -1171,7 +1351,7 @@ func TestCreateTagsTheDroplet(t *testing.T) {
 	if m.ID != "555" || m.IPv4 != "203.0.113.9" || m.Name != "lpq-run-1" {
 		t.Fatalf("machine %+v", m)
 	}
-	if f.keyAdded["name"] != "lpq-run-1" || !strings.HasPrefix(f.keyAdded["public_key"], "ssh-ed25519 ") {
+	if !strings.HasPrefix(f.keyAdded["name"], "lpq-run-1.") || !strings.HasPrefix(f.keyAdded["public_key"], "ssh-ed25519 ") {
 		t.Fatalf("SSH key %v", f.keyAdded)
 	}
 	tags, _ := f.created["tags"].([]any)
@@ -1360,7 +1540,7 @@ func TestSpeechSkipsWithoutAClip(t *testing.T) {
 		}
 	}
 	q := speech.Quantizations[0]
-	d := RunDeps{Registry: r, RunID: "test-run", Poll: time.Millisecond}
+	d := RunDeps{Registry: r, RunID: "gh-7-1", Poll: time.Millisecond}
 	host := newFakeHost(t, r)
 	_, why := d.sample(t.Context(), host, Sample{Entry: speech.ID, Quantization: q.ID, GPUKind: "nvidia-l40s", GPUs: 1})
 	if !strings.Contains(why, "add a recorded speech clip at "+SpeechClipPath) {

@@ -16,8 +16,10 @@ name: Qualify models
 #   skips the job;
 # - the monthly and per-run caps in .github/qualification.yaml are checked
 #   before the Droplet starts, before every sample and every five minutes;
-# - the Droplet is deleted however the run ends, and a sweep afterwards
-#   deletes any expired leftovers.
+# - the Droplet is deleted however the run ends. The run's ID is
+#   gh-<run id>-<attempt>, so even when a cancel kills the job before its
+#   own teardown finishes, the step after it deletes that run's Droplet
+#   and SSH key by ID, then any expired leftovers.
 #
 # The publish job holds no DigitalOcean secret. It takes the results from
 # the qualify job and opens the pull request.
@@ -47,6 +49,7 @@ jobs:
       results: ${{ steps.results.outputs.present }}
     env:
       QUALIFY_DO_ACCOUNT_UUID: ${{ vars.QUALIFY_DO_ACCOUNT_UUID }}
+      QUALIFY_RUN_ID: gh-${{ github.run_id }}-${{ github.run_attempt }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -66,13 +69,13 @@ jobs:
         env:
           QUALIFY_DO_TOKEN: ${{ secrets.QUALIFY_DO_TOKEN }}
           QUALIFY_HF_TOKEN: ${{ secrets.QUALIFY_HF_TOKEN }}
-        run: exec "$RUNNER_TEMP/loomplane-qualify" run --config .github/qualification.yaml --confirm --out results.json
+        run: exec "$RUNNER_TEMP/loomplane-qualify" run --config .github/qualification.yaml --confirm --out results.json --run-id "$QUALIFY_RUN_ID"
 
-      - name: Delete expired leftovers
+      - name: Delete this run's Droplet and expired leftovers
         if: ${{ always() }}
         env:
           QUALIFY_DO_TOKEN: ${{ secrets.QUALIFY_DO_TOKEN }}
-        run: exec "$RUNNER_TEMP/loomplane-qualify" sweep --config .github/qualification.yaml --only-expired
+        run: exec "$RUNNER_TEMP/loomplane-qualify" sweep --config .github/qualification.yaml --run-id "$QUALIFY_RUN_ID" --only-expired
 
       - name: Note whether there are results
         id: results
