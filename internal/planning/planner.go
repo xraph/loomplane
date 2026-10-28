@@ -499,7 +499,7 @@ func (p *planner) planResources() {
 	m := p.in.Manifest
 	var composed []string
 	for _, name := range m.ResourceNames() {
-		r := m.Resources[name]
+		r := p.resource(name)
 		base := "resources." + name
 		set := r.For(p.in.Environment, m.Defaults)
 		if !p.resourceOn(name) || p.noLinkKind(name, base, r) {
@@ -517,7 +517,7 @@ func (p *planner) planResources() {
 		// unknown, as on a catalog kind without settings.
 		for _, key := range slices.Sorted(maps.Keys(r.Settings)) {
 			p.problem(Finding{
-				Code: "catalog-setting-unknown", Subject: ResourceSubject, Name: name, Path: base + ".settings." + key,
+				Code: "catalog-setting-unknown", Subject: ResourceSubject, Name: name, Path: overridePath(r, name, p.in.Environment, "settings."+key),
 				Message: fmt.Sprintf("%s has no setting %s.", name, key),
 			})
 		}
@@ -1755,9 +1755,13 @@ func (p *planner) link(name string, a *Action) {
 							missing = append(missing, outputKey(need, o, count))
 						}
 					}
+					advice := p.kinds().OptInAdvice(r.Kind, need, p.in.Environment)
+					if advice == "" {
+						advice = fmt.Sprintf("Enable it with resources.%s.environments.%s.enabled: true.", need, p.in.Environment)
+					}
 					p.warn(Finding{
 						Code: "need-off", Subject: ServiceSubject, Name: name, Path: base,
-						Message: fmt.Sprintf("%s gets no %s in %s: %s doesn't run there. Enable it with resources.%s.environments.%s.enabled: true.", name, orList(missing), p.in.Environment, need, need, p.in.Environment),
+						Message: fmt.Sprintf("%s gets no %s in %s: %s doesn't run there. %s", name, orList(missing), p.in.Environment, need, advice),
 					})
 				default:
 					p.problem(Finding{

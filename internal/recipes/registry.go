@@ -247,6 +247,18 @@ func (r *Registry) EnvironmentOptIn(kind string) bool {
 	return r.kinds[kind].EnvironmentOptIn
 }
 
+// OptInAdvice is kind's advice for running resource in environment, or ""
+// when the kind gives none.
+func (r *Registry) OptInAdvice(kind, resource, environment string) string {
+	r.mu.RLock()
+	advice := r.kinds[kind].OptInAdvice
+	r.mu.RUnlock()
+	if advice == "" {
+		return ""
+	}
+	return strings.NewReplacer("{resource}", resource, "{environment}", environment).Replace(advice)
+}
+
 // defaultVersion is the newest release of a registered engine or kind.
 func (r *Registry) defaultVersion(kind string) string {
 	if e, ok := r.engine(kind); ok && len(e.Releases) > 0 {

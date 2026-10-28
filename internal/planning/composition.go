@@ -78,6 +78,48 @@ func (p *planner) resourceOn(name string) bool {
 	return resourceOn(p.kinds(), m.Resources[name], p.in.Environment, m.Defaults)
 }
 
+// resource is the manifest's resource name as this plan's environment
+// runs it: its own target, GPU and settings when the environment sets
+// them. Every read of a resource's target, GPU or settings goes through
+// here; placement is read with For, which fills in the defaults.
+func (p *planner) resource(name string) manifest.Resource {
+	m := p.in.Manifest
+	return m.Resources[name].In(p.in.Environment, m.Defaults)
+}
+
+// overridePath is where field of resource name is set for env: under
+// the environment when it sets its own, else at the top. field is target,
+// gpu or settings.<key>.
+func overridePath(r manifest.Resource, name, env, field string) string {
+	return overrideField(r, "resources."+name, env, field)
+}
+
+// targetPath is where resource name's target is set for this plan's
+// environment.
+func (p *planner) targetPath(name string) string {
+	return overridePath(p.in.Manifest.Resources[name], name, p.in.Environment, "target")
+}
+
+// overrideField is overridePath from a resource's path.
+func overrideField(r manifest.Resource, base, env, field string) string {
+	o, ok := r.Environments[env]
+	set := false
+	key, setting := strings.CutPrefix(field, "settings.")
+	switch {
+	case !ok:
+	case setting:
+		_, set = o.Settings[key]
+	case field == "target":
+		set = o.Target != ""
+	case field == "gpu":
+		set = o.GPU != nil
+	}
+	if set {
+		return base + ".environments." + env + "." + field
+	}
+	return base + "." + field
+}
+
 // planCompositions plans the manifest's composed catalog resources, after
 // every other resource, so a dependency connected from the manifest has
 // its action already. A composed resource connected as another's
@@ -118,7 +160,7 @@ func (p *planner) planCompositions(names []string) {
 // planComposed settles a composed resource's provider and plans it.
 func (p *planner) planComposed(name string) {
 	m := p.in.Manifest
-	r := m.Resources[name]
+	r := p.resource(name)
 	base := "resources." + name
 	kind, ok := p.kinds().Kind(r.Kind)
 	if !ok {
@@ -150,20 +192,22 @@ func (p *planner) planComposed(name string) {
 	p.planComposition(name, base, r, kind, prov, set, values)
 }
 
-// resourceSettings checks a composed resource's settings against its
-// kind's, and returns every setting that has a value, defaults filled in.
+// resourceSettings checks a composed resource's settings, as the plan's
+// environment runs it, against its kind's, and returns every setting that
+// has a value, defaults filled in.
 func (p *planner) resourceSettings(name, base string, r manifest.Resource, kind recipes.Kind) map[string]string {
+	env := p.in.Environment
 	for _, key := range slices.Sorted(maps.Keys(r.Settings)) {
 		if !slices.ContainsFunc(kind.Settings, func(s recipes.Setting) bool { return s.Name == key }) {
 			p.problem(Finding{
-				Code: "catalog-setting-unknown", Subject: ResourceSubject, Name: name, Path: base + ".settings." + key,
+				Code: "catalog-setting-unknown", Subject: ResourceSubject, Name: name, Path: overrideField(r, base, env, "settings."+key),
 				Message: fmt.Sprintf("%s has no setting %s.", name, key),
 			})
 		}
 	}
 	out := map[string]string{}
 	for _, s := range kind.Settings {
-		path := base + ".settings." + s.Name
+		path := overrideField(r, base, env, "settings."+s.Name)
 		value := r.Settings[s.Name]
 		switch {
 		case value == "" && s.Default != "":
@@ -214,18 +258,18 @@ func (p *planner) planComposition(name, base string, r manifest.Resource, kind r
 		})
 		return
 	}
-	connection := p.targetConnection(name, base+".target", "target", prov.Cloud, r.Target)
+	connection := p.targetConnection(name, p.targetPath(name), "target", prov.Cloud, r.Target)
 	if connection == nil {
 		return
 	}
 	if prov.Cloud == "kubernetes" {
 		if err := ValidateKubernetesWorkloadSettings(connection.Details); err != nil {
-			p.problem(Finding{Code: "catalog-unavailable", Subject: ResourceSubject, Name: name, Path: base + ".target", Message: err.Error()})
+			p.problem(Finding{Code: "catalog-unavailable", Subject: ResourceSubject, Name: name, Path: p.targetPath(name), Message: err.Error()})
 			return
 		}
 	}
 	off := offDependencies(r, kind)
-	if p.gpuOnArm64(name, base+".target", kind, off, connection) {
+	if p.gpuOnArm64(name, p.targetPath(name), kind, off, connection) {
 		return
 	}
 	composition, err := p.kinds().Resolve(kind.Name, version, connection.Details["architecture"], prov.Cloud)
@@ -248,7 +292,7 @@ func (p *planner) planComposition(name, base string, r manifest.Resource, kind r
 	placed = placed && placement.Provider == prov.Name
 	placement.Region = region
 	if placed {
-		p.checkCloudServer(ResourceSubject, name, base+".target", placement)
+		p.checkCloudServer(ResourceSubject, name, p.targetPath(name), placement)
 	}
 	resource := func() *ResourceConfig {
 		cfg := &ResourceConfig{Provider: prov.Name, Region: region, Target: connection.ID, TargetSettings: settings, Kind: kind.Name, Version: version}
@@ -331,7 +375,7 @@ func (p *planner) planComposition(name, base string, r manifest.Resource, kind r
 		if p.in.UnverifiedPlacements[name] {
 			message = fmt.Sprintf("%s is on a target of this environment's Cloud, but the Cloud's or the target's revision, or the target connection's account, isn't verified, so it can't take domain routes yet. Check the target's connection, then plan again.", name)
 		}
-		p.warn(Finding{Code: "catalog-cloud-placement-missing", Subject: ResourceSubject, Name: name, Path: base + ".target", Message: message})
+		p.warn(Finding{Code: "catalog-cloud-placement-missing", Subject: ResourceSubject, Name: name, Path: p.targetPath(name), Message: message})
 	}
 }
 
@@ -345,14 +389,14 @@ func (p *planner) clusterRuns(name, base string, kind recipes.Kind, composition 
 	ok := true
 	if i := slices.IndexFunc(composition.Components, func(c recipes.ResolvedComponent) bool { return c.Volume != nil || c.WeightCache != nil }); i >= 0 && ValidateKubernetesDatabaseSettings(connection.Details) != nil {
 		p.problem(Finding{
-			Code: "catalog-storage-unavailable", Subject: ResourceSubject, Name: name, Path: base + ".target",
+			Code: "catalog-storage-unavailable", Subject: ResourceSubject, Name: name, Path: p.targetPath(name),
 			Message: fmt.Sprintf("%s's %s keeps data on a volume. Select and check a retained filesystem storage class for this cluster connection.", kind.Title, composition.Components[i].Name),
 		})
 		ok = false
 	}
 	if i := slices.IndexFunc(composition.Components, func(c recipes.ResolvedComponent) bool { return c.Role == recipes.RoleJob }); i >= 0 && connection.Details["jobs"] != "ready" {
 		p.problem(Finding{
-			Code: "catalog-jobs-unavailable", Subject: ResourceSubject, Name: name, Path: base + ".target",
+			Code: "catalog-jobs-unavailable", Subject: ResourceSubject, Name: name, Path: p.targetPath(name),
 			Message: fmt.Sprintf("This connection needs namespace Job and pod log permissions to run %s's %s job. Check the connection after granting them.", kind.Title, composition.Components[i].Name),
 		})
 		ok = false
@@ -363,7 +407,7 @@ func (p *planner) clusterRuns(name, base string, kind recipes.Kind, composition 
 			continue
 		}
 		p.problem(Finding{
-			Code: "catalog-channel-unavailable", Subject: ResourceSubject, Name: name, Path: base + ".target",
+			Code: "catalog-channel-unavailable", Subject: ResourceSubject, Name: name, Path: p.targetPath(name),
 			Message: fmt.Sprintf("Loomplane reaches %s's %s %s port through the cluster's service proxy. Grant this connection get and create on services/proxy in its namespace, then check it.", kind.Title, c.Name, c.Ports[i].Name),
 		})
 		ok = false
@@ -576,7 +620,7 @@ func (p *planner) checkExternal(name, path string, kind recipes.Kind, dep recipe
 // sameTarget reports whether a connected resource runs on the composed
 // resource's target network.
 func (p *planner) sameTarget(name string, connected *Action) bool {
-	r := p.in.Manifest.Resources[name]
+	r := p.resource(name)
 	set := r.For(p.in.Environment, p.in.Manifest.Defaults)
 	prov, err := p.in.Providers.Get(set.Provider)
 	if err != nil {
@@ -650,7 +694,9 @@ func (p *planner) provision(name, base string, r manifest.Resource, dep recipes.
 		Provider: prov.Name, Region: cfg.Region, Engine: provider.ResourceEngine, Creates: offer.Creates,
 		Resource: cfg, Step: 1,
 	}
-	p.configureCatalog(action, base, manifest.Resource{Kind: kind, Provider: prov.Name, Target: r.Target}, cfg, a)
+	// It runs on the composed resource's target, so a finding about the
+	// target points where this environment sets it.
+	p.configureCatalog(action, base, manifest.Resource{Kind: kind, Provider: prov.Name, Target: r.Target, Environments: r.Environments}, cfg, a)
 	p.diff(a, cfg, cfg.Provider, cfg.Region)
 	if hours := dep.BackupEveryHours[prov.Cloud]; hours > 0 && a.Op == Create && cfg.Catalog != nil {
 		a.BackupEveryHours = hours

@@ -455,3 +455,29 @@ func TestModelEntrySettingTakesEveryEntryID(t *testing.T) {
 		}
 	}
 }
+
+// TestModelKindsAdviseDeployingFromTheModelPage: a service that needs a
+// model in an environment it doesn't run in is told to deploy it there
+// from the model page, which adds that environment's copy.
+func TestModelKindsAdviseDeployingFromTheModelPage(t *testing.T) {
+	const want = "Deploy {resource} to {environment} from its model page."
+	kinds := recipes.Default()
+	for _, name := range []string{recipes.ModelVLLMKind, recipes.ModelTEIKind, recipes.ModelLlamaCPPKind, recipes.ModelLlamaCPPGPUKind} {
+		k, ok := kinds.Kind(name)
+		if !ok {
+			t.Fatalf("%s isn't registered", name)
+		}
+		if k.OptInAdvice != want {
+			t.Errorf("%s OptInAdvice = %q, want %q", name, k.OptInAdvice, want)
+		}
+		if got := kinds.OptInAdvice(name, "llm", "production"); got != "Deploy llm to production from its model page." {
+			t.Errorf("%s advice = %q", name, got)
+		}
+	}
+	if got := kinds.OptInAdvice("postgres", "db", "production"); got != "" {
+		t.Errorf("an engine without advice gave %q", got)
+	}
+	if got := kinds.OptInAdvice("nothing", "db", "production"); got != "" {
+		t.Errorf("an unknown kind gave %q", got)
+	}
+}

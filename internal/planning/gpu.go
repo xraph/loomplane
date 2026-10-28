@@ -124,7 +124,7 @@ func (p *planner) cacheResize(name, base string, kind recipes.Kind, a *Action, c
 	}
 	path, what := base, "its size"
 	if i := slices.IndexFunc(kind.Settings, func(s recipes.Setting) bool { return s.Name == w.SizeSetting }); i >= 0 {
-		path, what = base+".settings."+w.SizeSetting, kind.Settings[i].Title
+		path, what = overrideField(p.in.Manifest.Resources[name], base, p.in.Environment, "settings."+w.SizeSetting), kind.Settings[i].Title
 	}
 	p.problem(Finding{
 		Code: "catalog-cache-resize", Subject: ResourceSubject, Name: name, Path: path,
@@ -153,11 +153,7 @@ func (p *planner) gpuOnArm64(name, path string, kind recipes.Kind, off map[strin
 // gpuPath is where a resource's gpu setting is in the manifest: under the
 // environment when it sets its own.
 func (p *planner) gpuPath(name string) string {
-	r := p.in.Manifest.Resources[name]
-	if o, ok := r.Environments[p.in.Environment]; ok && o.GPU != nil {
-		return "resources." + name + ".environments." + p.in.Environment + ".gpu"
-	}
-	return "resources." + name + ".gpu"
+	return overridePath(p.in.Manifest.Resources[name], name, p.in.Environment, "gpu")
 }
 
 // unusedGPU warns about a resource's gpu setting that nothing it runs uses.
@@ -168,7 +164,7 @@ func (p *planner) unusedGPU(name, title string) {
 // actionGPU is the GPU placement an action holds on a server, and the
 // manifest path that asks for it. A service on a Cloud pool, or one waiting
 // for pool capacity, gets its GPUs from the pool's reservation instead.
-func actionGPU(a *Action) (gpu *provider.GPUPlacement, path string) {
+func (p *planner) actionGPU(a *Action) (gpu *provider.GPUPlacement, path string) {
 	switch {
 	case a.Service != nil:
 		cfg := a.Service
@@ -178,7 +174,7 @@ func actionGPU(a *Action) (gpu *provider.GPUPlacement, path string) {
 		return cfg.GPU, "services." + a.Name + ".size.gpu"
 	case a.Resource != nil && a.Resource.Component != nil:
 		parent, _, _ := strings.Cut(a.Name, "--")
-		return a.Resource.Component.GPU, "resources." + parent + ".gpu"
+		return a.Resource.Component.GPU, p.gpuPath(parent)
 	}
 	return nil, ""
 }
@@ -229,7 +225,7 @@ func (p *planner) checkServerGPUs() {
 		}
 	}
 	for _, a := range p.actions {
-		g, path := actionGPU(a)
+		g, path := p.actionGPU(a)
 		if g == nil || a.Op == Delete {
 			continue
 		}

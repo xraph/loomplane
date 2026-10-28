@@ -140,11 +140,12 @@ func composedPlacements(m *manifest.Manifest, environment string, names []string
 		return out
 	}
 	for _, name := range names {
-		r := m.Resources[name]
+		// The resource runs on the target its environment gives it.
+		set := m.Resources[name].For(environment, m.Defaults)
 		i := slices.IndexFunc(assignment.Targets, func(t cloudprofiles.Target) bool {
-			return t.PoolID == "" && t.ConnectionID != "" && t.ConnectionID == r.Target && t.OrgID == assignment.OrgID && t.CloudID == assignment.CloudID && t.Revision > 0
+			return t.PoolID == "" && t.ConnectionID != "" && t.ConnectionID == set.Target && t.OrgID == assignment.OrgID && t.CloudID == assignment.CloudID && t.Revision > 0
 		})
-		ci := slices.IndexFunc(options, func(c ConnectionOption) bool { return c.ID == r.Target })
+		ci := slices.IndexFunc(options, func(c ConnectionOption) bool { return c.ID == set.Target })
 		if i < 0 || ci < 0 {
 			continue
 		}
@@ -152,7 +153,6 @@ func composedPlacements(m *manifest.Manifest, environment string, names []string
 		if identity == "" {
 			continue
 		}
-		set := r.For(environment, m.Defaults)
 		regionSource := "manifest"
 		if set.Region == "" {
 			regionSource = "default"
@@ -177,9 +177,9 @@ func unverifiedPlacements(m *manifest.Manifest, environment string, names []stri
 		if _, ok := placed[name]; ok {
 			continue
 		}
-		r := m.Resources[name]
+		target := m.Resources[name].For(environment, m.Defaults).Target
 		if slices.ContainsFunc(assignment.Targets, func(t cloudprofiles.Target) bool {
-			return t.PoolID == "" && t.ConnectionID != "" && t.ConnectionID == r.Target && t.OrgID == assignment.OrgID && t.CloudID == assignment.CloudID
+			return t.PoolID == "" && t.ConnectionID != "" && t.ConnectionID == target && t.OrgID == assignment.OrgID && t.CloudID == assignment.CloudID
 		}) {
 			out[name] = true
 		}

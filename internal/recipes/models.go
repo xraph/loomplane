@@ -193,7 +193,7 @@ func (m modelKind) kind(images map[string]Image) Kind {
 	return Kind{
 		Name: m.name, Title: m.title, Description: m.description,
 		Placement: PlacementAppProject, Targets: []string{"server", "kubernetes"},
-		Feature: FeatureAI, EnvironmentOptIn: true,
+		Feature: FeatureAI, EnvironmentOptIn: true, OptInAdvice: "Deploy {resource} to {environment} from its model page.",
 		Releases: []Release{{Version: m.version, Product: m.product, Revision: "1", Images: map[string]Image{
 			ModelEngine: engineImage, ModelGuard: guardImage,
 		}}},

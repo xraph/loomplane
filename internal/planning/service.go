@@ -930,9 +930,10 @@ func (s *Service) checkEndpoints(ctx context.Context, orgID, environment string,
 	}
 	uses := map[string]use{} // by endpointKey
 	for _, name := range slices.Sorted(maps.Keys(m.Resources)) {
-		r := m.Resources[name]
+		// Each environment checks from the target its copy runs on.
+		r := m.Resources[name].In(environment, m.Defaults)
 		kind, ok := kinds.Kind(r.Kind)
-		if !ok || r.Target == "" || !resourceOn(kinds, r, environment, m.Defaults) {
+		if !ok || r.Target == "" || !resourceOn(kinds, m.Resources[name], environment, m.Defaults) {
 			continue
 		}
 		for _, dep := range kind.Dependencies {

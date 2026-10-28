@@ -68,6 +68,11 @@ type Kind struct {
 	// environments where environments.<env>.enabled is true. Everywhere
 	// else planning treats it as off, as an explicit enabled: false.
 	EnvironmentOptIn bool `json:"environment_opt_in,omitempty"`
+	// OptInAdvice tells someone whose service needs a resource of an
+	// opt-in kind how to run it in an environment it doesn't run in yet:
+	// one sentence, with {resource} and {environment} for the names. The
+	// planner falls back to naming the enabled setting without it.
+	OptInAdvice string `json:"-"`
 }
 
 // Setting is a value a resource of the kind sets under

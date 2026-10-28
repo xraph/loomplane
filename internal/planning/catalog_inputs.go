@@ -18,7 +18,8 @@ type CatalogInputs interface {
 	// Digest returns, by component name, a digest of what the kind renders
 	// into its components from outside the manifest. r is the resource as
 	// the plan's own manifest revision has it, which may not be the
-	// project's latest. It holds no secret, and neither does its error: the
+	// project's latest, and as the plan's environment runs it: that
+	// environment's target, GPU and settings (manifest.Resource.In). It holds no secret, and neither does its error: the
 	// error's text reaches the plan's failure reason and the API.
 	Digest(ctx context.Context, orgID, projectID, environmentID, resource string, r manifest.Resource) (map[string]string, error)
 }
@@ -92,7 +93,9 @@ func (s *Service) catalogInputs(ctx context.Context, plan *Plan, m *manifest.Man
 		if source == nil {
 			continue
 		}
-		digests, err := source.Digest(ctx, plan.OrgID, plan.ProjectID, plan.EnvironmentID, name, m.Resources[name])
+		// The source digests the resource as this environment runs it, so
+		// a setting only production changes reaches production's digest.
+		digests, err := source.Digest(ctx, plan.OrgID, plan.ProjectID, plan.EnvironmentID, name, m.Resources[name].In(plan.Environment, m.Defaults))
 		if err != nil {
 			return nil, &catalogInputsError{resource: name, err: err}
 		}
