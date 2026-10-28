@@ -1227,3 +1227,154 @@ func TestApprovalAfterCancelIsLogged(t *testing.T) {
 		t.Errorf("warned %v", warned)
 	}
 }
+
+// qwenOnGPUBox deploys Qwen 7B onto gpu-box in staging and says it runs
+// there.
+func (sf *serverFirstSetup) qwenOnGPUBox(t *testing.T) {
+	t.Helper()
+	sf.targets.targets = append(sf.targets.targets, l40sServer())
+	res, err := sf.svc.Deploy(context.Background(), member, projectID, stagingID, DeployInput{EntryID: qwen7B, Target: onGPU("nvidia-l40s")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := current(t, sf.deploySetup).Resources[res.Deployment.Resource]
+	sf.facts.running(stagingID, res.Deployment.Resource, r.Kind, r.Settings, 1)
+}
+
+// moveOntoNewServer reviews a new L40S server for Qwen 7B and moves it
+// there, with the review approved.
+func (sf *serverFirstSetup) moveOntoNewServer(t *testing.T) (*DeployPreview, error) {
+	t.Helper()
+	ctx := context.Background()
+	in := MoveInput{Target: onSize(), ReviewServer: true}
+	pv, err := sf.svc.MovePreview(ctx, member, projectID, stagingID, "qwen2-5-7b-instruct", in)
+	if err != nil || len(pv.Problems) != 0 || pv.Server == nil || !pv.CanDeploy {
+		t.Fatalf("move preview: %+v, %v", pv, err)
+	}
+	in.ReviewServer, in.Server = false, &ServerApproval{CloudID: pv.Server.CloudID, OperationID: pv.Server.ID, Review: pv.Server.Review}
+	_, err = sf.svc.Move(ctx, member, projectID, stagingID, "qwen2-5-7b-instruct", in)
+	return pv, err
+}
+
+// A move onto a GPU server Loomplane creates first waits for it, as a
+// deploy does, with the model running where it was until then. Nothing
+// approves a second server for it, and once the server is up the cron
+// moves it.
+func TestMoveOntoANewServerWaitsForIt(t *testing.T) {
+	ctx := context.Background()
+	sf := newServerFirst(t, cloudAdmin)
+	sf.qwenOnGPUBox(t)
+	revisions := sf.revisions.count()
+	pv, err := sf.moveOntoNewServer(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := sf.row(t)
+	if d.Phase != PhaseWaitingForServer || d.ServerOperationID != pv.Server.ID || d.ServerName != serverName || d.Request == nil ||
+		d.Request.Moving == nil || d.Request.Moving.ServerName != "gpu-box" || d.Request.Moving.Phase != PhasePlanned {
+		t.Fatalf("moving row %+v, request %+v", d, d.Request)
+	}
+	if sf.revisions.count() != revisions || current(t, sf.deploySetup).Resources[d.Resource].Target != gpuConn {
+		t.Error("the manifest moved before the server was up")
+	}
+	if st, serr := sf.svc.Status(ctx, member, projectID, stagingID, d.Resource); serr != nil || st.State != StateWaitingForServer {
+		t.Errorf("status while moving: %+v, %v", st, serr)
+	}
+	// A second move, or removing it, waits for this one.
+	if _, err = sf.svc.Move(ctx, member, projectID, stagingID, d.Resource, MoveInput{Target: onSize(), Server: &ServerApproval{CloudID: cloudID, OperationID: pv.Server.ID, Review: pv.Server.Review}}); !errors.Is(err, ErrInvalid) {
+		t.Errorf("second move: %v", err)
+	}
+	if _, err = sf.svc.Remove(ctx, member, projectID, stagingID, d.Resource); !errors.Is(err, ErrInvalid) {
+		t.Errorf("remove while moving: %v", err)
+	}
+	if previews, applies, _ := sf.servers.calls(); previews != 1 || applies != 1 {
+		t.Errorf("%d reviews, %d applies", previews, applies)
+	}
+
+	sf.servers.succeed(pv.Server.ID)
+	sf.gpusReady(provider.GPUStatusReady)
+	if err = sf.svc.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	r := current(t, sf.deploySetup).Resources[d.Resource]
+	if r.Target != newConn || r.GPU == nil || r.GPU.Kind != "nvidia-l40s" || !enabledIn(r, "staging") {
+		t.Errorf("moved resource %+v", r)
+	}
+	d = sf.row(t)
+	if d.Phase != PhasePlanned || d.PlanID == "" || d.Message != "" || d.ServerName != serverName {
+		t.Errorf("row after the move %+v", d)
+	}
+	if sf.gateways.count() != 1 {
+		t.Errorf("gateways told %d times", sf.gateways.count())
+	}
+	if previews, applies, _ := sf.servers.calls(); previews != 1 || applies != 1 {
+		t.Errorf("%d reviews, %d applies after the move", previews, applies)
+	}
+}
+
+// Cancelling a move puts the model back as it was, and says the server
+// it approved is coming. A move whose server the capacity policy refuses
+// puts it back too.
+func TestCancelledMoveKeepsTheModelWhereItWas(t *testing.T) {
+	ctx := context.Background()
+	sf := newServerFirst(t, cloudAdmin)
+	sf.qwenOnGPUBox(t)
+	before := sf.row(t)
+	if _, err := sf.moveOntoNewServer(t); err != nil {
+		t.Fatal(err)
+	}
+	res, err := sf.svc.CancelWaiting(ctx, member, projectID, stagingID, before.Resource)
+	if err != nil || !strings.Contains(res.Message, "was already approved and is being created") {
+		t.Fatalf("cancel: %+v, %v", res, err)
+	}
+	d := sf.row(t)
+	if d.Phase != before.Phase || d.ServerName != "gpu-box" || d.ServerOperationID != "" || d.PlanID != before.PlanID || d.Request != nil {
+		t.Errorf("row after cancel %+v", d)
+	}
+	if current(t, sf.deploySetup).Resources[d.Resource].Target != gpuConn {
+		t.Error("the cancel moved the model")
+	}
+
+	sf.servers.applyErrs = []error{gpuCeiling()}
+	_, err = sf.moveOntoNewServer(t)
+	var refused *ProblemError
+	if !errors.As(err, &refused) || refused.Problem.Code != ProblemCapacity {
+		t.Fatalf("refused move: %v", err)
+	}
+	if d = sf.row(t); d.Phase != before.Phase || d.ServerName != "gpu-box" || d.Request != nil {
+		t.Errorf("row after a refused move %+v", d)
+	}
+}
+
+// The cron stopped a move between marking it planned and its plan. The
+// next run puts it back to waiting, never deletes it, and the one after
+// finishes the move.
+func TestStrandedMoveFinishes(t *testing.T) {
+	ctx := context.Background()
+	sf := newServerFirst(t, cloudAdmin)
+	sf.qwenOnGPUBox(t)
+	pv, err := sf.moveOntoNewServer(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sf.servers.succeed(pv.Server.ID)
+	sf.gpusReady(provider.GPUStatusReady)
+	d := sf.row(t)
+	d.Phase, d.PlanID = PhasePlanned, ""
+	if err = sf.rows.Update(ctx, d); err != nil {
+		t.Fatal(err)
+	}
+	sf.advance(StrandedAfter + time.Minute)
+	if err = sf.svc.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if d = sf.row(t); d.Phase != PhaseWaitingForServer {
+		t.Fatalf("stranded move: %+v", d)
+	}
+	if err = sf.svc.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if d = sf.row(t); d.Phase != PhasePlanned || d.PlanID == "" || current(t, sf.deploySetup).Resources[d.Resource].Target != newConn {
+		t.Errorf("finished move: %+v", d)
+	}
+}

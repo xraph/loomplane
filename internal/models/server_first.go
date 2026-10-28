@@ -297,6 +297,22 @@ func (s *Service) deployServerFirst(ctx context.Context, p security.Principal, p
 	if err := s.createRow(ctx, p.OrgID, pv.entry, row); err != nil {
 		return nil, err
 	}
+	return s.applyServer(ctx, p, projectID, env, pv, row, func(ctx context.Context) error {
+		// Nothing points at the row, so it goes.
+		return s.d.Store.Delete(ctx, p.OrgID, projectID, env.ID, row.Resource)
+	})
+}
+
+// applyServer approves the GPU server of a row that waits for it. A
+// capacity policy that holds the server back for now leaves the row
+// waiting, with the reason; one that refuses it, or an apply that fails
+// while the review is still open, undoes the row and refuses. An apply
+// that failed after the server was approved anyway keeps the row: its
+// server is on its way, and undoing it would let a retry buy a second.
+func (s *Service) applyServer(ctx context.Context, p security.Principal, projectID string, env *projects.Environment, pv *DeployPreview,
+	row *Deployment, undo func(context.Context) error,
+) (*DeployResult, error) {
+	op := pv.Server
 	_, err := s.d.Servers.ApplyServerOperation(ctx, p, op.CloudID, op.ID, cloudinfra.ApplyInput{Review: op.Review})
 	var blocked *cloudinfra.CapacityAdmissionError
 	switch {
@@ -307,16 +323,14 @@ func (s *Service) deployServerFirst(ctx context.Context, p security.Principal, p
 		}
 	case err != nil:
 		// The accept may have gone through anyway: a cron run approved the
-		// same review first, or the error came after the commit. A row
-		// whose server is on its way never goes, or a retry would buy a
-		// second one.
+		// same review first, or the error came after the commit.
 		left, rerr := s.leftPreview(ctx, p, op)
 		if rerr != nil {
 			return &DeployResult{Deployment: row}, errors.Join(err, fmt.Errorf("and Loomplane couldn't tell whether the GPU server was approved, so its deployment row stays: %w", rerr))
 		}
 		if !left {
-			if derr := s.d.Store.Delete(context.WithoutCancel(ctx), p.OrgID, projectID, env.ID, row.Resource); derr != nil {
-				return nil, errors.Join(err, fmt.Errorf("and its deployment row stays: %w", derr))
+			if uerr := undo(context.WithoutCancel(ctx)); uerr != nil {
+				return nil, errors.Join(err, fmt.Errorf("and its deployment row stays: %w", uerr))
 			}
 			if blocked != nil {
 				return nil, &ProblemError{Problem: Problem{Code: ProblemCapacity, Message: capacitySentence(blocked.Block)}}
@@ -324,7 +338,11 @@ func (s *Service) deployServerFirst(ctx context.Context, p security.Principal, p
 			return nil, err
 		}
 	}
-	s.audit(ctx, p, projectID, "ai.model.server", map[string]any{
+	action := "ai.model.server"
+	if row.Request != nil && row.Request.Moving != nil {
+		action = "ai.model.move_server"
+	}
+	s.audit(ctx, p, projectID, action, map[string]any{
 		"entry": pv.entry.ID, "resource": row.Resource, "environment": env.Name, "cloud_id": op.CloudID,
 		"operation_id": op.ID, "server": op.Input.Name, "size": op.Input.Size, "region": op.Input.Region,
 	})
@@ -395,25 +413,6 @@ func capacityResource(resource string) string {
 	return cloudinfra.CapacityResourceName(resource)
 }
 
-// Retry puts a deployment that needs attention back to waiting for its
-// server, carried on as the caller from now on. It needs WriteNeed of the
-// environment. A server that failed is retried in Infrastructure first.
-func (s *Service) Retry(ctx context.Context, p security.Principal, projectID, environmentID, resource string) (*Deployment, error) {
-	d, err := s.waitingRow(ctx, p, projectID, environmentID, resource)
-	if err != nil {
-		return nil, err
-	}
-	if d.Phase != PhaseNeedsAttention || d.ServerOperationID == "" {
-		return nil, fmt.Errorf("%w: only a model whose GPU server needs attention can be retried", ErrInvalid)
-	}
-	d.Phase, d.Message, d.RequestedBy = PhaseWaitingForServer, "", p
-	if uerr := s.d.Store.Update(ctx, d); uerr != nil {
-		return nil, uerr
-	}
-	s.audit(ctx, p, projectID, "ai.model.retry", map[string]any{"resource": resource, "operation_id": d.ServerOperationID})
-	return d, nil
-}
-
 // CancelResult is what cancelling a waiting deployment leaves behind.
 type CancelResult struct {
 	// Message says the GPU server was already approved, so it's coming or
@@ -439,13 +438,31 @@ func (s *Service) CancelWaiting(ctx context.Context, p security.Principal, proje
 	if d.Phase != PhaseWaitingForServer && d.Phase != PhaseNeedsAttention {
 		return nil, fmt.Errorf("%w: only a model waiting for its GPU server can be cancelled", ErrInvalid)
 	}
-	if derr := s.d.Store.Delete(ctx, d.OrgID, d.ProjectID, d.EnvironmentID, d.Resource); derr != nil {
+	waiting := *d
+	if d.Request != nil && d.Request.Moving != nil {
+		// A move's model still runs where it was: the row goes back to it.
+		if uerr := s.restoreMove(ctx, d); uerr != nil {
+			return nil, uerr
+		}
+	} else if derr := s.d.Store.Delete(ctx, d.OrgID, d.ProjectID, d.EnvironmentID, d.Resource); derr != nil {
 		return nil, derr
 	}
 	s.audit(ctx, p, projectID, "ai.model.cancel", map[string]any{
-		"resource": resource, "server": d.ServerName, "cloud_id": d.ServerCloudID, "operation_id": d.ServerOperationID,
+		"resource": resource, "server": waiting.ServerName, "cloud_id": waiting.ServerCloudID, "operation_id": waiting.ServerOperationID,
 	})
-	return &CancelResult{Message: s.serverAfterCancel(ctx, p, d)}, nil
+	return &CancelResult{Message: s.serverAfterCancel(ctx, p, &waiting)}, nil
+}
+
+// restoreMove puts a deployment whose move onto a new GPU server was
+// cancelled back as it was before the move.
+func (s *Service) restoreMove(ctx context.Context, d *Deployment) error {
+	from := d.Request.Moving
+	d.Phase, d.ServerName, d.ServerCloudID, d.ServerOperationID = from.Phase, from.ServerName, from.ServerCloudID, from.ServerOperationID
+	d.PlanID, d.Message, d.Request = from.PlanID, "", nil
+	if d.Phase == "" || d.Phase == PhaseWaitingForServer || d.Phase == PhaseNeedsAttention {
+		d.Phase = PhaseActive
+	}
+	return s.d.Store.Update(ctx, d)
 }
 
 // serverAfterCancel reads a cancelled deployment's server operation again,
@@ -733,21 +750,34 @@ func (s *Service) serverUp(ctx context.Context, d *Deployment, p security.Princi
 	}
 	// The row says planned before the edit, so a stop between the two
 	// leaves a stranded row the next run tidies.
-	d.Phase, d.Message, d.Quantization, d.Engine = PhasePlanned, "", pv.quant.ID, string(pv.quant.Engine)
+	moving := d.Request.Moving != nil
+	d.Phase, d.Message, d.Quantization, d.Engine, d.PlanID = PhasePlanned, "", pv.quant.ID, string(pv.quant.Engine), ""
 	if uerr := s.d.Store.Update(ctx, d); uerr != nil {
 		return uerr
 	}
-	rev, err := s.addResource(ctx, p, d.ProjectID, env, pv)
-	if err != nil {
-		return s.attention(context.WithoutCancel(ctx), d, fmt.Sprintf("%s is ready, but Loomplane couldn't add %s to the manifest: %v", v.Name, d.Resource, err))
+	var rev *manifests.Revision
+	if moving {
+		rev, err = s.moveResource(ctx, p, d.ProjectID, env, pv)
+	} else {
+		rev, err = s.addResource(ctx, p, d.ProjectID, env, pv)
 	}
-	if _, err = s.planRow(ctx, p, d.ProjectID, env, rev, d); err != nil {
+	if err != nil {
+		what := "add " + d.Resource + " to the manifest"
+		if moving {
+			what = "move " + d.Resource + " onto it in the manifest"
+		}
+		return s.attention(context.WithoutCancel(ctx), d, fmt.Sprintf("%s is ready, but Loomplane couldn't %s: %v", v.Name, what, err))
+	}
+	if _, err = s.planRow(ctx, p, d.ProjectID, env, rev, d, moving); err != nil {
 		var perr *PlanAfterEditError
 		if errors.As(err, &perr) {
 			// The row says how to plan it from the project.
 			return nil
 		}
 		return err
+	}
+	if moving {
+		s.modelsChanged(ctx, d.OrgID, d.ProjectID)
 	}
 	return nil
 }
@@ -850,6 +880,13 @@ func (s *Service) reconcileStranded(ctx context.Context, d *Deployment) error {
 	}
 	if gone {
 		return s.d.Store.Delete(ctx, d.OrgID, d.ProjectID, d.EnvironmentID, d.Resource)
+	}
+	if d.Request != nil && d.Request.Moving != nil && d.ServerOperationID != "" {
+		// A move the cron stopped between marking it planned and its plan.
+		// Its server is up, and the edit is the same however often it's
+		// made, so waiting again, the next run finishes it.
+		d.Phase = PhaseWaitingForServer
+		return s.d.Store.Update(ctx, d)
 	}
 	if s.d.Manifests == nil {
 		return nil

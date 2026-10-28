@@ -105,6 +105,15 @@ type Deps struct {
 	// Warn logs what the cron does that someone should know about, such as
 	// a GPU server left behind by a deleted environment. It may be nil.
 	Warn func(msg string, err error)
+
+	// What a model's status and endpoints read.
+
+	// Deployed reads what deployments left behind: state, bindings, the
+	// guard's address and the model's key.
+	Deployed Deployed
+	// Gateways is told when a project's models change. Nil is noGateways
+	// until SetGateways binds one.
+	Gateways Gateways
 }
 
 // Service is the model registry as a workspace sees it: what it can
@@ -117,6 +126,9 @@ type Service struct {
 
 	cards     *ttlCache[cardKey, *Card]
 	inspected *ttlCache[customKey, registry.Entry]
+
+	gatewaysMu sync.RWMutex
+	gateways   Gateways
 }
 
 // How long a model card and an inspected repo are kept.
@@ -134,11 +146,13 @@ func NewService(d Deps) *Service {
 	if d.Now == nil {
 		d.Now = time.Now
 	}
-	return &Service{
+	s := &Service{
 		d:         d,
 		cards:     newTTLCache[cardKey, *Card](cardTTL, cacheItems, d.Now),
 		inspected: newTTLCache[customKey, registry.Entry](inspectTTL, cacheItems, d.Now),
 	}
+	s.SetGateways(d.Gateways)
+	return s
 }
 
 // Size buckets of RegistryQuery.Size, by parameter count.

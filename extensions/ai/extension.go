@@ -197,6 +197,14 @@ func (e *Extension) registerModels(c forge.Container, authz *security.Authorizer
 	if err != nil {
 		return fmt.Errorf("ai needs the identity extension's API keys: %w", err)
 	}
+	access, err := forge.InjectType[*deployments.CatalogAccess](c)
+	if err != nil {
+		return fmt.Errorf("ai needs the planning extension's catalog access: %w", err)
+	}
+	resourceSecrets, err := forge.InjectType[*deployments.VaultResourceSecrets](c)
+	if err != nil {
+		return fmt.Errorf("ai needs the planning extension's resource secrets: %w", err)
+	}
 	e.engine, err = forge.InjectType[*engine.Engine](c)
 	if err != nil {
 		return fmt.Errorf("ai needs the dispatch extension's engine: %w", err)
@@ -205,10 +213,15 @@ func (e *Extension) registerModels(c forge.Container, authz *security.Authorizer
 		return errors.New("ai needs the dispatch extension's engine")
 	}
 	hub := hfhub.New(hfhub.DefaultURL, nil)
+	planStore, runStore := planning.NewPgStore(pg), deployments.NewPgStore(pg)
+	deployed := &models.DeployedFacts{
+		ListBindings: planStore.ListBindings, ListPlans: planStore.ListPlans, ListRuns: runStore.ListDeployments,
+		Secrets: resourceSecrets, Generated: access,
+	}
 	e.models = models.NewService(models.Deps{
 		Registry: registry.Default(), Hub: hub, Settings: e.settings, Custom: store, GPUs: targets, Connections: conns,
 		Authz: authz, Store: store, Manifests: mf, Plans: plans, Projects: projects.NewPgStore(pg), TokenGuard: e.settings,
-		Audit: auditor, Servers: servers, Clouds: clouds, Waiting: store, Principals: keys,
+		Audit: auditor, Servers: servers, Clouds: clouds, Waiting: store, Principals: keys, Deployed: deployed,
 		Warn: func(msg string, err error) { e.Logger().Warn(msg, forge.F("error", err.Error())) },
 	})
 	// The reconcile is the one caller of the store's cross-organization

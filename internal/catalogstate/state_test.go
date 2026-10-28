@@ -82,16 +82,16 @@ func TestStateFromFacts(t *testing.T) {
 		{"bound and succeeded", facts{
 			bindings: []*planning.Binding{modelBinding(model, "conn_gpu")},
 			last:     run(deployments.StatusSucceeded, step(deployments.StepSucceeded, "")),
-		}, State{Value: Ready, DeploymentID: "dep_1", ConnectionID: "conn_gpu"}},
+		}, State{Value: Ready, DeploymentID: "dep_1", ConnectionID: "conn_gpu", Bound: true}},
 		{"bound with an update planned", facts{
 			bindings: []*planning.Binding{modelBinding(model, "conn_gpu")},
 			plans:    []*planning.Plan{openPlan("plan_2", planning.Update)},
 			last:     run(deployments.StatusSucceeded, step(deployments.StepSucceeded, "")),
-		}, State{Value: Ready, PlanID: "plan_2", DeploymentID: "dep_1", ConnectionID: "conn_gpu"}},
+		}, State{Value: Ready, PlanID: "plan_2", DeploymentID: "dep_1", ConnectionID: "conn_gpu", Bound: true}},
 		{"its step is done while the run goes on", facts{
 			bindings: []*planning.Binding{modelBinding(model, "conn_gpu")},
 			last:     run(deployments.StatusRunning, step(deployments.StepSucceeded, "")),
-		}, State{Value: Ready, DeploymentID: "dep_1", ConnectionID: "conn_gpu"}},
+		}, State{Value: Ready, DeploymentID: "dep_1", ConnectionID: "conn_gpu", Bound: true}},
 		{"its step failed", facts{
 			last: run(deployments.StatusFailed, step(deployments.StepFailed, "CUDA error: out of memory")),
 		}, State{Value: Failed, DeploymentID: "dep_1", Message: "CUDA error: out of memory"}},
@@ -107,7 +107,11 @@ func TestStateFromFacts(t *testing.T) {
 		{"another step failed after its own succeeded", facts{
 			bindings: []*planning.Binding{modelBinding(model, "conn_gpu")},
 			last:     run(deployments.StatusFailed, step(deployments.StepSucceeded, "")),
-		}, State{Value: Ready, DeploymentID: "dep_1", ConnectionID: "conn_gpu"}},
+		}, State{Value: Ready, DeploymentID: "dep_1", ConnectionID: "conn_gpu", Bound: true}},
+		{"a later deployment failed while it stays bound", facts{
+			bindings: []*planning.Binding{modelBinding(model, "conn_gpu")},
+			last:     run(deployments.StatusFailed, step(deployments.StepFailed, "CUDA error: out of memory")),
+		}, State{Value: Failed, DeploymentID: "dep_1", Message: "CUDA error: out of memory", ConnectionID: "conn_gpu", Bound: true}},
 		{"a long failure is cut", facts{
 			last: run(deployments.StatusFailed, step(deployments.StepFailed, long)),
 		}, State{Value: Failed, DeploymentID: "dep_1", Message: strings.Repeat("é", 256)}},

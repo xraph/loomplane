@@ -481,12 +481,14 @@ func TestAccrueTakesTheRowLock(t *testing.T) {
 
 // Ruling M24: the Reaper reads a deleted environment's rows before the
 // deletion and deletes them after it, leaving every other environment's,
-// and the stored Request carries its target through Postgres.
+// and the stored Request carries its target, and a move's starting point,
+// through Postgres.
 func TestReaperDeletesAnEnvironmentsRows(t *testing.T) {
 	st, _ := scratchStore(t)
 	ctx := t.Context()
 	waiting := llamaRow("org_a", "env_1")
 	waiting.Request.Target = TargetChoice{Source: TargetServerSize, ConnectionID: "conn_do", SizeID: "gpu-l40sx1-48gb", Region: "tor1"}
+	waiting.Request.Moving = &MovingFrom{Kind: "model-vllm", Phase: PhaseActive, ServerName: "gpu-box", PlanID: "plan_1"}
 	kept := llamaRow("org_a", "env_2")
 	other := llamaRow("org_b", "env_1")
 	for _, d := range []*Deployment{waiting, kept, other} {
@@ -495,7 +497,7 @@ func TestReaperDeletesAnEnvironmentsRows(t *testing.T) {
 		}
 	}
 	got, err := st.Get(ctx, "org_a", "proj_1", "env_1", "llama")
-	if err != nil || got.Request == nil || got.Request.Target != waiting.Request.Target {
+	if err != nil || got.Request == nil || got.Request.Target != waiting.Request.Target || got.Request.Moving == nil || *got.Request.Moving != *waiting.Request.Moving {
 		t.Fatalf("stored request %+v, %v", got.Request, err)
 	}
 

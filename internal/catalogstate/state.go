@@ -47,6 +47,10 @@ type State struct {
 	// ConnectionID is the resource's target connection: its binding's, or
 	// the open plan's while it has none.
 	ConnectionID string
+	// Bound is true when a deployment bound the resource, whatever Value
+	// is: a failed one that's bound still has what an earlier deployment
+	// left running.
+	Bound bool
 }
 
 // Deps read the facts. Each is required.
@@ -83,6 +87,7 @@ func Of(ctx context.Context, d Deps, orgID, environmentID, resource string) (Sta
 	for _, b := range bindings {
 		if b.Subject == planning.ResourceSubject && b.Name == resource {
 			bound, s.ConnectionID = true, b.ConnectionID
+			s.Bound = true
 			break
 		}
 	}

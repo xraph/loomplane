@@ -148,6 +148,9 @@ type DeployPreview struct {
 type DeployResult struct {
 	Deployment *Deployment `json:"deployment"`
 	PlanID     string      `json:"plan_id,omitempty"`
+	// Message says what the change leaves behind, such as the weights a
+	// removed model keeps on its server.
+	Message string `json:"message,omitempty"`
 }
 
 // ProblemError is a deploy refused for a Problem. It matches ErrInvalid,
@@ -162,12 +165,19 @@ func (e *ProblemError) Unwrap() error { return ErrInvalid }
 // resource, so planning the environment from the project deploys it.
 type PlanAfterEditError struct {
 	Resource, Environment string
-	// Repin is true for MoveToPin's edit.
-	Repin bool
-	err   error
+	// Repin is true for MoveToPin's edit, Move for Move's and Removal for
+	// Remove's.
+	Repin, Move, Removal bool
+	err                  error
 }
 
 func (e *PlanAfterEditError) Error() string {
+	switch {
+	case e.Removal:
+		return fmt.Sprintf("The manifest no longer has %s. Plan %s from the project to remove it. Planning failed: %v", e.Resource, e.Environment, e.err)
+	case e.Move:
+		return fmt.Sprintf("The manifest has %s on its new target now. Plan %s from the project to move it. Planning failed: %v", e.Resource, e.Environment, e.err)
+	}
 	if e.Repin {
 		return fmt.Sprintf("The manifest has %s on the registry's new pin now. Plan %s from the project to update it. Planning failed: %v", e.Resource, e.Environment, e.err)
 	}
@@ -226,6 +236,7 @@ func (s *Service) Preview(ctx context.Context, p security.Principal, projectID, 
 	if err != nil {
 		return nil, err
 	}
+	in.Moving = nil
 	pv, err := s.preview(ctx, p, projectID, env, in, false)
 	if err != nil {
 		return nil, err
@@ -271,7 +282,12 @@ func (s *Service) preview(ctx context.Context, p security.Principal, projectID s
 	}
 
 	s.checkBudget(pv, in.MonthlyBudgetUSD, problem)
-	s.checkName(ctx, p, projectID, env, e, in.Resource, pv, problem)
+	if in.Moving != nil {
+		// A move keeps the resource it moves.
+		pv.Resource = in.Resource
+	} else {
+		s.checkName(ctx, p, projectID, env, e, in.Resource, pv, problem)
+	}
 
 	t, ok := s.resolveTarget(ctx, p, in.Target, problem)
 	if !ok {
@@ -296,6 +312,10 @@ func (s *Service) preview(ctx context.Context, p security.Principal, projectID s
 		return pv, nil
 	}
 	pv.Kind, pv.Version = kind, k.Releases[0].Version
+	if in.Moving != nil && in.Moving.Kind != "" && in.Moving.Kind != kind {
+		problem(ProblemEngine, "%s runs as a %s, and on %s it would run as a %s. Remove it and deploy it there instead.", in.Resource, in.Moving.Kind, t.name, kind)
+		return pv, nil
+	}
 
 	need, count := fit.Need, 0
 	if onGPU {
@@ -624,6 +644,7 @@ func (s *Service) Deploy(ctx context.Context, p security.Principal, projectID, e
 	if s.d.Store == nil || s.d.Manifests == nil || s.d.Plans == nil {
 		return nil, errors.New("models: deploying isn't configured")
 	}
+	in.Moving = nil
 	pv, err := s.preview(ctx, p, projectID, env, in, true)
 	if err != nil {
 		return nil, err
@@ -661,7 +682,7 @@ func (s *Service) Deploy(ctx context.Context, p security.Principal, projectID, e
 		}
 		return nil, err
 	}
-	return s.planRow(ctx, p, projectID, env, rev, row)
+	return s.planRow(ctx, p, projectID, env, rev, row, false)
 }
 
 // addResource makes a deploy's one manifest edit: the resource, running
@@ -688,11 +709,16 @@ func (s *Service) addResource(ctx context.Context, p security.Principal, project
 // planRow plans env from rev and records the plan on row. When planning
 // fails, the row says how to deploy it from the project, and the error is
 // a PlanAfterEditError.
-func (s *Service) planRow(ctx context.Context, p security.Principal, projectID string, env *projects.Environment, rev *manifests.Revision, row *Deployment) (*DeployResult, error) {
+//
+// move is true for Move's edit: the row then says how to finish the move.
+func (s *Service) planRow(ctx context.Context, p security.Principal, projectID string, env *projects.Environment, rev *manifests.Revision, row *Deployment, move bool) (*DeployResult, error) {
 	plan, err := s.d.Plans.Create(ctx, p, projectID, planning.CreatePlanInput{Environment: env.Name, Catalog: rev.Manifest.CatalogOnly()})
 	if err != nil {
-		perr := &PlanAfterEditError{Resource: row.Resource, Environment: env.Name, err: err}
+		perr := &PlanAfterEditError{Resource: row.Resource, Environment: env.Name, Move: move, err: err}
 		row.Message = fmt.Sprintf("The manifest has %s now. Plan %s from the project to deploy it.", row.Resource, env.Name)
+		if move {
+			row.Message = fmt.Sprintf("The manifest has %s on its new target now. Plan %s from the project to move it.", row.Resource, env.Name)
+		}
 		if uerr := s.d.Store.Update(context.WithoutCancel(ctx), row); uerr != nil {
 			return &DeployResult{Deployment: row}, errors.Join(perr, uerr)
 		}

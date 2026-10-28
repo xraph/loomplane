@@ -54,6 +54,27 @@ var (
 	_ projects.Reaper        = (*Reaper)(nil)
 )
 
+// SetGateways binds what's told when a project's models change: after a
+// move or a removal is planned. Nil unbinds it. W1's gateway sync is the
+// real one; until then it's noGateways.
+func (s *Service) SetGateways(g Gateways) {
+	if g == nil {
+		g = noGateways{}
+	}
+	s.gatewaysMu.Lock()
+	defer s.gatewaysMu.Unlock()
+	s.gateways = g
+}
+
+// modelsChanged tells the project's gateways its models changed. It never
+// fails what called it.
+func (s *Service) modelsChanged(ctx context.Context, orgID, projectID string) {
+	s.gatewaysMu.RLock()
+	g := s.gateways
+	s.gatewaysMu.RUnlock()
+	g.ModelsChanged(context.WithoutCancel(ctx), orgID, projectID)
+}
+
 // environment returns one of the project's environments.
 func (s *Service) environment(ctx context.Context, orgID, projectID, environmentID string) (*projects.Environment, error) {
 	if s.d.Projects == nil {

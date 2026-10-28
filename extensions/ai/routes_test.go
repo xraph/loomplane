@@ -96,6 +96,8 @@ func TestModelHooksAreRegistered(t *testing.T) {
 		forge.ProvideValue(c, new(projects.Service)),
 		forge.ProvideValue(c, new(cloudinfra.Service)),
 		forge.ProvideValue(c, new(cloudprofiles.Service)),
+		forge.ProvideValue(c, new(deployments.CatalogAccess)),
+		forge.ProvideValue(c, new(deployments.VaultResourceSecrets)),
 		forge.ProvideValue[security.PrincipalVerifier](c, rejectAll{}),
 		forge.ProvideValue(c, eng),
 	} {

@@ -354,6 +354,8 @@ type deploySetup struct {
 	rows      *memDeployments
 	guard     *fakeGuard
 	audit     *memAudit
+	facts     *fakeDeployed
+	gateways  *countGateways
 }
 
 // l40sServer is gpu-box, a server with one free NVIDIA L40S at $1.57 an hour.
@@ -383,7 +385,8 @@ const startYAML = "version: 1\nservices:\n  api:\n    source: go:cmd/api\n    pr
 func newDeploy(t *testing.T, r *registry.Registry, authz Authorizer, targets []gpus.GPUTarget, conns ...*connections.Connection) *deploySetup {
 	t.Helper()
 	b := newBrowse(t, r, authz, targets, conns...)
-	d := &deploySetup{browseSetup: b, revisions: &memRevisions{}, plans: &fakePlans{}, rows: &memDeployments{}, audit: &memAudit{}}
+	d := &deploySetup{browseSetup: b, revisions: &memRevisions{}, plans: &fakePlans{}, rows: &memDeployments{}, audit: &memAudit{},
+		facts: &fakeDeployed{}, gateways: &countGateways{}}
 	d.guard = &fakeGuard{tokens: b.tokens}
 	mf := manifests.NewService(d.revisions, memProjects{}, authz, nil)
 	start := manifests.NewService(d.revisions, memProjects{}, aiAdmin, nil)
@@ -395,6 +398,7 @@ func newDeploy(t *testing.T, r *registry.Registry, authz Authorizer, targets []g
 		GPUs: b.targets, Connections: fakeConnections{authz: authz, list: conns}, Authz: authz,
 		Now:   func() time.Time { return *b.now },
 		Store: d.rows, Manifests: mf, Plans: d.plans, Projects: memProjects{}, TokenGuard: d.guard, Audit: d.audit,
+		Deployed: d.facts, Gateways: d.gateways,
 	})
 	return d
 }

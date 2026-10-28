@@ -52,6 +52,22 @@ type DeployInput struct {
 	// review a ReviewServer preview returned in DeployPreview.Server.
 	// Deploy refuses a server size without it.
 	Server *ServerApproval `json:"server,omitempty"`
+	// Moving is set only by Move, never from a request: the request moves
+	// a deployed model, and this is the deployment it moves from, to put
+	// back if the move is cancelled. Deploy and Preview clear it.
+	Moving *MovingFrom `json:"moving,omitempty"`
+}
+
+// MovingFrom is a deployment as it was before a move started: its kind,
+// and the row's phase, server and plan, to put back if the move onto a
+// GPU server Loomplane creates first is cancelled.
+type MovingFrom struct {
+	Kind              string `json:"kind"`
+	Phase             string `json:"phase,omitempty"`
+	ServerName        string `json:"server_name,omitempty"`
+	ServerCloudID     string `json:"server_cloud_id,omitempty"`
+	ServerOperationID string `json:"server_operation_id,omitempty"`
+	PlanID            string `json:"plan_id,omitempty"`
 }
 
 // ServerApproval names the reviewed GPU server operation a deploy
