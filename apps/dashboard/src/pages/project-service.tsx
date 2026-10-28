@@ -49,6 +49,7 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty"
 import { Skeleton } from "@/components/ui/skeleton"
+import { ServiceScaling } from "@/components/service-scaling"
 import {
   Tabs,
   TabsContent,
@@ -523,6 +524,12 @@ function Loaded({
             project={project}
             row={row}
             environments={environments}
+          />
+          <ServiceScaling
+            project={project}
+            name={name}
+            environments={environments}
+            deployed={row.deployed}
           />
           {can("project:update") && (
             <section className="flex flex-wrap items-center gap-3 rounded-xl px-4 py-3.5 ring-1 ring-border">

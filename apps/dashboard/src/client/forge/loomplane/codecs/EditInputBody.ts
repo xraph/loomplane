@@ -4,5 +4,7 @@ import { codec_EditInputBody_link } from './EditInputBody.link';
 import { codec_EditInputBody_placement } from './EditInputBody.placement';
 import { codec_EditInputBody_set_use } from './EditInputBody.set_use';
 import { codec_EditInputBody_unlink } from './EditInputBody.unlink';
+import { codec_Scale } from './Scale';
+import { codec_SizeEdit } from './SizeEdit';
 
-export const codec_EditInputBody: Codec = {"kind": "object", "fields": {"add_resource": {"ts": "addResource", "codec": () => codec_EditInputBody_add_resource}, "ignore": {"ts": "ignore"}, "link": {"ts": "link", "codec": () => codec_EditInputBody_link}, "placement": {"ts": "placement", "codec": () => codec_EditInputBody_placement}, "set_use": {"ts": "setUse", "codec": () => codec_EditInputBody_set_use}, "unlink": {"ts": "unlink", "codec": () => codec_EditInputBody_unlink}}};
+export const codec_EditInputBody: Codec = {"kind": "object", "fields": {"add_resource": {"ts": "addResource", "codec": () => codec_EditInputBody_add_resource}, "ignore": {"ts": "ignore"}, "link": {"ts": "link", "codec": () => codec_EditInputBody_link}, "placement": {"ts": "placement", "codec": () => codec_EditInputBody_placement}, "scale": {"ts": "scale", "codec": () => codec_Scale}, "set_use": {"ts": "setUse", "codec": () => codec_EditInputBody_set_use}, "size": {"ts": "size", "codec": () => codec_SizeEdit}, "unlink": {"ts": "unlink", "codec": () => codec_EditInputBody_unlink}}};

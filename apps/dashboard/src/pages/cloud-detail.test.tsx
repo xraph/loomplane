@@ -86,6 +86,11 @@ function fixture({
       if (method !== "GET") {
         const sent = JSON.parse(String(init?.body ?? "{}"))
         writes.push({ method, path, body: sent })
+        if (path.endsWith("/capacity-policy"))
+          return Response.json({
+            policy: { ...sent.policy, revision: 1 },
+            automatic_expansion: false,
+          })
         if (path.endsWith("/default-placement"))
           return inUse
             ? Response.json(
@@ -114,7 +119,39 @@ function fixture({
       if (path === "/api/v1/clouds/syncs" || path.endsWith("/cloud-syncs"))
         body = { syncs }
       if (path === "/api/v1/clouds/c/servers") body = { servers: [] }
-      if (path === "/api/v1/clouds/c/pools") body = { pools: [] }
+      if (path === "/api/v1/clouds/c/pools")
+        body = {
+          pools: [
+            {
+              id: "web",
+              name: "web",
+              cloud_id: "c",
+              org_id: "org",
+              revision: 1,
+              members: [],
+            },
+          ],
+        }
+      if (path === "/api/v1/clouds/c/capacity-policy")
+        body = {
+          automatic_expansion: false,
+          policy: {
+            org_id: "org",
+            cloud_id: "c",
+            revision: 0,
+            enabled: false,
+            require_expansion_approval: true,
+            limits: {
+              servers: 0,
+              cpu_millis: 0,
+              memory_bytes: 0,
+              storage_bytes: 0,
+            },
+            pools: [],
+            frontend_limits: [],
+          },
+        }
+      if (path === "/api/v1/clouds/c/expansions") body = { expansions: [] }
       if (path === "/api/v1/clouds/c/operations") body = { operations: [] }
       if (path === "/api/v1/members") body = { members: [] }
       if (path.endsWith("/environments")) body = { environments: [] }
@@ -456,4 +493,41 @@ it("reviews a default provider switch through the organization Cloud change cont
   expect(
     screen.getByRole("button", { name: "Review default switch" })
   ).toBeInTheDocument()
+})
+
+it("says pools won't grow on their own while automatic expansion is off, and saves the policy", async () => {
+  const user = userEvent.setup()
+  const { writes } = fixture()
+  show()
+  await openTab("Capacity")
+  expect(
+    await screen.findByText(
+      "Automatic expansion isn't on for this Loomplane yet"
+    )
+  ).toBeInTheDocument()
+  expect(
+    screen.getByText(/nothing will appear here until it's turned on/)
+  ).toBeInTheDocument()
+  // A pool without a rule never grows.
+  expect(
+    screen.getByText("No rule, so this pool never grows.")
+  ).toBeInTheDocument()
+  await user.type(screen.getByRole("spinbutton", { name: "Servers" }), "3")
+  await user.type(screen.getByRole("spinbutton", { name: "vCPU" }), "8")
+  await user.click(screen.getByRole("button", { name: "Save policy" }))
+  await waitFor(() =>
+    expect(writes.at(-1)).toMatchObject({
+      method: "POST",
+      path: "/api/v1/clouds/c/capacity-policy",
+      body: {
+        expected_revision: 0,
+        policy: {
+          enabled: false,
+          require_expansion_approval: true,
+          limits: { servers: 3, cpu_millis: 8000 },
+          pools: [],
+        },
+      },
+    })
+  )
 })
