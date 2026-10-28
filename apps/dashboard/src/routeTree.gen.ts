@@ -22,6 +22,7 @@ import { Route as SignInRouteImport } from "./routes/sign-in"
 import { Route as SignUpRouteImport } from "./routes/sign-up"
 import { Route as VariablesRouteImport } from "./routes/variables"
 import { Route as VerifyEmailRouteImport } from "./routes/verify-email"
+import { Route as AiSettingsRouteImport } from "./routes/ai.settings"
 import { Route as CloudsIndexRouteImport } from "./routes/clouds.index"
 import { Route as CloudsIdRouteImport } from "./routes/clouds.$id"
 import { Route as DeploymentsIndexRouteImport } from "./routes/deployments.index"
@@ -105,6 +106,11 @@ const VariablesRoute = VariablesRouteImport.update({
 const VerifyEmailRoute = VerifyEmailRouteImport.update({
   id: "/verify-email",
   path: "/verify-email",
+  getParentRoute: () => rootRouteImport,
+} as any)
+const AiSettingsRoute = AiSettingsRouteImport.update({
+  id: "/ai/settings",
+  path: "/ai/settings",
   getParentRoute: () => rootRouteImport,
 } as any)
 const CloudsIndexRoute = CloudsIndexRouteImport.update({
@@ -220,6 +226,7 @@ export interface FileRoutesByFullPath {
   "/sign-up": typeof SignUpRoute
   "/variables": typeof VariablesRoute
   "/verify-email": typeof VerifyEmailRoute
+  "/ai/settings": typeof AiSettingsRoute
   "/clouds/$id": typeof CloudsIdRoute
   "/deployments/$id": typeof DeploymentsIdRoute
   "/deployments/new": typeof DeploymentsNewRoute
@@ -254,6 +261,7 @@ export interface FileRoutesByTo {
   "/sign-up": typeof SignUpRoute
   "/variables": typeof VariablesRoute
   "/verify-email": typeof VerifyEmailRoute
+  "/ai/settings": typeof AiSettingsRoute
   "/clouds/$id": typeof CloudsIdRoute
   "/deployments/$id": typeof DeploymentsIdRoute
   "/deployments/new": typeof DeploymentsNewRoute
@@ -289,6 +297,7 @@ export interface FileRoutesById {
   "/sign-up": typeof SignUpRoute
   "/variables": typeof VariablesRoute
   "/verify-email": typeof VerifyEmailRoute
+  "/ai/settings": typeof AiSettingsRoute
   "/clouds/$id": typeof CloudsIdRoute
   "/deployments/$id": typeof DeploymentsIdRoute
   "/deployments/new": typeof DeploymentsNewRoute
@@ -325,6 +334,7 @@ export interface FileRouteTypes {
     | "/sign-up"
     | "/variables"
     | "/verify-email"
+    | "/ai/settings"
     | "/clouds/$id"
     | "/deployments/$id"
     | "/deployments/new"
@@ -359,6 +369,7 @@ export interface FileRouteTypes {
     | "/sign-up"
     | "/variables"
     | "/verify-email"
+    | "/ai/settings"
     | "/clouds/$id"
     | "/deployments/$id"
     | "/deployments/new"
@@ -393,6 +404,7 @@ export interface FileRouteTypes {
     | "/sign-up"
     | "/variables"
     | "/verify-email"
+    | "/ai/settings"
     | "/clouds/$id"
     | "/deployments/$id"
     | "/deployments/new"
@@ -428,6 +440,7 @@ export interface RootRouteChildren {
   SignUpRoute: typeof SignUpRoute
   VariablesRoute: typeof VariablesRoute
   VerifyEmailRoute: typeof VerifyEmailRoute
+  AiSettingsRoute: typeof AiSettingsRoute
   CloudsIdRoute: typeof CloudsIdRoute
   DeploymentsIdRoute: typeof DeploymentsIdRoute
   DeploymentsNewRoute: typeof DeploymentsNewRoute
@@ -540,6 +553,13 @@ declare module "@tanstack/react-router" {
       path: "/verify-email"
       fullPath: "/verify-email"
       preLoaderRoute: typeof VerifyEmailRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    "/ai/settings": {
+      id: "/ai/settings"
+      path: "/ai/settings"
+      fullPath: "/ai/settings"
+      preLoaderRoute: typeof AiSettingsRouteImport
       parentRoute: typeof rootRouteImport
     }
     "/clouds/": {
@@ -692,6 +712,7 @@ const rootRouteChildren: RootRouteChildren = {
   SignUpRoute: SignUpRoute,
   VariablesRoute: VariablesRoute,
   VerifyEmailRoute: VerifyEmailRoute,
+  AiSettingsRoute: AiSettingsRoute,
   CloudsIdRoute: CloudsIdRoute,
   DeploymentsIdRoute: DeploymentsIdRoute,
   DeploymentsNewRoute: DeploymentsNewRoute,

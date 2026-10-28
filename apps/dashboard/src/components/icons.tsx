@@ -26,4 +26,5 @@ export {
   LightningIcon as QuickIcon,
   MagnifyingGlassIcon as NoMatchIcon,
   WebhooksLogoIcon as WebhooksIcon,
+  SlidersHorizontalIcon as AISettingsIcon,
 } from "@phosphor-icons/react"

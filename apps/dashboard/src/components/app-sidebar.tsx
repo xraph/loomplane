@@ -31,6 +31,8 @@ import { NavMain, type NavItem } from "@/components/sidebar/nav-main"
 import { type Attention, NavProjects } from "@/components/sidebar/nav-projects"
 import { NavUser } from "@/components/sidebar/nav-user"
 import { TeamSwitcher } from "@/components/sidebar/team-switcher"
+import { aiNavItems } from "@/lib/ai-nav"
+import { useFeatures } from "@/lib/features"
 import { isReady } from "@/lib/projects"
 import {
   Dialog,
@@ -75,6 +77,7 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
   const path = usePath()
   const { can } = useOrganization()
   const { openNewProject } = useShell()
+  const features = useFeatures()
   const { runs } = useRuns()
   const status = useRouterState({
     select: (s) =>
@@ -220,6 +223,9 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
       </SidebarHeader>
       <SidebarContent>
         <NavMain items={nav} />
+        {features.ai && can("ai:read") && (
+          <NavMain items={aiNavItems({ path, can })} label="AI" />
+        )}
         <Projects
           path={path}
           runs={runs}
