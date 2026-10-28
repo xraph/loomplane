@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strconv"
 
+	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/manifests"
 	"github.com/xraph/loomplane/internal/models/engines"
 	"github.com/xraph/loomplane/internal/planning"
@@ -137,7 +138,18 @@ func (s *Service) MoveToPin(ctx context.Context, p security.Principal, projectID
 	if err = checkPin(resource, e, q, here.Settings); !errors.As(err, &repinned) {
 		return nil, fmt.Errorf("%w: %s already runs the weights the registry pins in %s", ErrInvalid, resource, env.Name)
 	}
-	update := pinUpdate(m.Resources[resource], env.Name, repinned, engines.CacheMB(q.WeightBytes))
+	need := engines.CacheMB(q.WeightBytes)
+	if cacheGrows(here.Settings, need) {
+		fixed, ferr := s.fixedCache(ctx, p.OrgID, env.ID, resource, "")
+		if ferr != nil {
+			return nil, ferr
+		}
+		if fixed {
+			return nil, fmt.Errorf("%w: %s keeps its weight cache on a Kubernetes volume, which can't grow in place. Remove %s from %s and deploy it again to move to the new pin",
+				ErrInvalid, resource, resource, env.Name)
+		}
+	}
+	update := pinUpdate(m.Resources[resource], env.Name, repinned, need)
 	update.Resource = resource
 	rev, _, err := s.d.Manifests.Edit(ctx, p, projectID, manifests.EditInput{UpdateResource: update})
 	if err != nil {
@@ -177,12 +189,20 @@ func (s *Service) MoveToPin(ctx context.Context, p security.Principal, projectID
 // otherwise. The caller sets Resource.
 func pinUpdate(raw manifest.Resource, env string, repinned *RepinnedError, needCacheMB int64) *manifests.ResourceUpdateInput {
 	settings := map[string]string{"model": repinned.Model, "revision": repinned.Revision, "file": repinned.File}
-	keys := []string{"model", "revision", "file"}
-	have, err := strconv.ParseInt(raw.For(env, manifest.Defaults{}).Settings["cache_mb"], 10, 64)
-	if err != nil || have < needCacheMB {
+	if cacheGrows(raw.For(env, manifest.Defaults{}).Settings, needCacheMB) {
 		settings["cache_mb"] = strconv.FormatInt(needCacheMB, 10)
-		// A grown cache at the top level would grow another copy's too.
-		keys = append(keys, "cache_mb")
+	}
+	// What the edit changes: a key whose new value differs from the top
+	// level's, or from env's own block where that sets it (then only the
+	// block moves env). A file the pin doesn't have that neither has
+	// changes nothing.
+	block := raw.Environments[env].Settings
+	var keys []string
+	for _, key := range slices.Sorted(maps.Keys(settings)) {
+		own, set := block[key]
+		if settings[key] != raw.Settings[key] || (set && own != settings[key]) {
+			keys = append(keys, key)
+		}
 	}
 	u := &manifests.ResourceUpdateInput{Settings: settings}
 	if !soleReader(raw, env, keys...) {
@@ -191,29 +211,53 @@ func pinUpdate(raw manifest.Resource, env string, repinned *RepinnedError, needC
 	return u
 }
 
+// fixedCache reports whether env's deployed engine of resource keeps its
+// weights on a Kubernetes volume, on connectionID ("" for wherever it
+// runs). The volume's size can't change in place, so the planner refuses
+// an update that grows it (catalog-cache-resize), and a change that needs
+// a bigger cache there is refused before the manifest is edited. A
+// replace onto another target gets a new volume, so it isn't held to it.
+func (s *Service) fixedCache(ctx context.Context, orgID, environmentID, resource, connectionID string) (bool, error) {
+	if s.d.Deployed == nil {
+		return false, nil
+	}
+	bindings, err := s.d.Deployed.Bindings(ctx, orgID, environmentID)
+	if err != nil {
+		return false, err
+	}
+	b, cfg := engineBinding(bindings, resource)
+	return b != nil && b.Provider == connections.Kubernetes && cfg.Component.WeightCache != nil &&
+		(connectionID == "" || b.ConnectionID == connectionID), nil
+}
+
+// cacheGrows reports whether settings' weight cache is smaller than
+// needMB, or has no size yet.
+func cacheGrows(settings map[string]string, needMB int64) bool {
+	have, err := strconv.ParseInt(settings["cache_mb"], 10, 64)
+	return err != nil || have < needMB
+}
+
 // soleReader reports whether env is the only environment raw runs in
 // that reads any of keys from raw's top level, so an edit of those keys
 // there changes env's copy alone. An environment reads a key from the top
-// level when the top level sets it and the environment's block doesn't.
-// "target", "provider" and "gpu" are fields of the block; any other key
-// is one of its settings. It's false when env's own block sets one of
-// keys, since a top-level edit wouldn't reach env then.
+// level whenever its block doesn't set it, whether the top level sets it
+// or not: a key added there reaches every block without one. "target",
+// "provider" and "gpu" are fields of the block; any other key is one of
+// its settings. It's false when env's own block sets one of keys, since
+// a top-level edit wouldn't reach env then.
 func soleReader(raw manifest.Resource, env string, keys ...string) bool {
-	sets := func(target, provider string, gpu *manifest.GPU, settings map[string]string, key string) bool {
-		switch key {
-		case "target":
-			return target != ""
-		case "provider":
-			return provider != ""
-		case "gpu":
-			return gpu != nil
-		}
-		_, ok := settings[key]
-		return ok
-	}
 	inBlock := func(name, key string) bool {
 		o := raw.Environments[name]
-		return sets(o.Target, o.Provider, o.GPU, o.Settings, key)
+		switch key {
+		case "target":
+			return o.Target != ""
+		case "provider":
+			return o.Provider != ""
+		case "gpu":
+			return o.GPU != nil
+		}
+		_, ok := o.Settings[key]
+		return ok
 	}
 	for _, key := range keys {
 		if inBlock(env, key) {
@@ -225,7 +269,7 @@ func soleReader(raw manifest.Resource, env string, keys ...string) bool {
 			continue
 		}
 		for _, key := range keys {
-			if sets(raw.Target, raw.Provider, raw.GPU, raw.Settings, key) && !inBlock(name, key) {
+			if !inBlock(name, key) {
 				return false
 			}
 		}

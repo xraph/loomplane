@@ -929,6 +929,23 @@ func TestMoveUpdateLeavesSharedSettings(t *testing.T) {
 	if u.Environment != "staging" || *u.Target != gpuConn3 || !maps.Equal(u.Settings, map[string]string{"max_model_len": "16384"}) {
 		t.Errorf("a longer context beside production: %+v", u)
 	}
+	// A model added by hand with no top-level context: adding one there
+	// would reach production's copy too.
+	bare := raw
+	bare.Settings = maps.Clone(settings)
+	delete(bare.Settings, "max_model_len")
+	if u = moveUpdate(bare, cur, "staging", manifest.Defaults{}, pv, maps.Clone(longer)); u.Environment != "staging" || u.Settings["max_model_len"] != "16384" {
+		t.Errorf("no top-level context: %+v", u)
+	}
+	// staging's own block sets the context: moving it changes the block,
+	// even where the new value is the top level's.
+	own := raw
+	own.Environments = maps.Clone(raw.Environments)
+	own.Environments["production"] = manifest.ResourceSettings{Enabled: on().Enabled, Target: gpuConn2, Settings: map[string]string{"max_model_len": "8192"}}
+	own.Environments["staging"] = manifest.ResourceSettings{Enabled: on().Enabled, Settings: map[string]string{"max_model_len": "4096"}}
+	if u = moveUpdate(own, own.In("staging", manifest.Defaults{}), "staging", manifest.Defaults{}, pv, maps.Clone(settings)); u.Environment != "staging" || u.Settings["max_model_len"] != "8192" {
+		t.Errorf("staging's own context: %+v", u)
+	}
 	// With production's own context, the top level is staging's alone.
 	raw.Environments["production"] = manifest.ResourceSettings{Enabled: on().Enabled, Target: gpuConn2, Settings: map[string]string{"max_model_len": "8192"}}
 	if u = moveUpdate(raw, cur, "staging", manifest.Defaults{}, pv, maps.Clone(longer)); u.Environment != "" || u.Settings["max_model_len"] != "16384" {
@@ -946,7 +963,11 @@ func TestRemoveOneEnvironmentKeepsTheResource(t *testing.T) {
 	production := on()
 	production.Target, production.Settings = gpuConn2, map[string]string{"max_model_len": "4096"}
 	putLLM(t, d, map[string]manifest.ResourceSettings{"staging": on(), "production": production})
-	saveServices(t, d, map[string]manifest.Service{"checkout": linkedService("go:cmd/checkout", "llm")})
+	// worker is off in production, so it loses nothing there.
+	worker := linkedService("go:cmd/worker", "llm")
+	no := false
+	worker.Environments = map[string]manifest.Settings{"production": {Enabled: &no}}
+	saveServices(t, d, map[string]manifest.Service{"checkout": linkedService("go:cmd/checkout", "llm"), "worker": worker})
 	staged := llmRow(t, d, stagingID)
 	llmRow(t, d, productID)
 	edits := d.recordEdits()
@@ -979,7 +1000,8 @@ func TestRemoveOneEnvironmentKeepsTheResource(t *testing.T) {
 		t.Errorf("staging's row: %+v, %v", after, gerr)
 	}
 	want := "checkout in production gets no MODEL_URL once this plan is approved. The plan warns need-off for it until you deploy llm to production again or unlink it."
-	if !strings.Contains(res.Message, "weights stay on gpu-box-2 as retained storage") || !strings.HasSuffix(res.Message, " "+want) {
+	if !strings.Contains(res.Message, "weights stay on gpu-box-2 as retained storage") || !strings.HasSuffix(res.Message, " "+want) ||
+		strings.Contains(res.Message, "worker") {
 		t.Errorf("message %q", res.Message)
 	}
 
@@ -1039,5 +1061,43 @@ func TestRemovalUpdateClearsTheBlock(t *testing.T) {
 	}
 	if u = removalUpdate(raw, "staging"); u.ClearGPU || u.Settings != nil {
 		t.Errorf("a bare block %+v", u)
+	}
+}
+
+// onKubernetes says resource's engine in env runs on the kube cluster,
+// with its weights on a Kubernetes volume.
+func onKubernetes(d *deploySetup, env, resource string, settings map[string]string) {
+	component := planning.ResourceConfig{Kind: recipes.ModelVLLMKind, Component: &planning.ComponentConfig{Kind: recipes.ModelVLLMKind, Resource: resource, Settings: settings,
+		Component: recipes.ResolvedComponent{Component: recipes.Component{Name: recipes.ModelEngine, WeightCache: &recipes.WeightCache{MountPath: "/cache", KubernetesSizeMB: 1024, SizeSetting: "cache_mb"}}}}}
+	engine, _ := json.Marshal(component)
+	d.facts.mu.Lock()
+	defer d.facts.mu.Unlock()
+	if d.facts.bindings == nil {
+		d.facts.bindings = map[string][]*planning.Binding{}
+	}
+	d.facts.bindings[env] = append(d.facts.bindings[env], &planning.Binding{Subject: planning.ResourceSubject,
+		Name: planning.ComponentActionName(resource, recipes.ModelEngine), Provider: connections.Kubernetes, ConnectionID: kubeConn, Config: engine})
+}
+
+// A move on the same cluster that needs a bigger weight cache is refused
+// before the manifest changes: the volume can't grow in place.
+func TestMoveRefusesToGrowAKubernetesCache(t *testing.T) {
+	ctx := context.Background()
+	kube := l40sOn(kubeConn, "kube", 1.57)
+	kube.Cloud = connections.Kubernetes
+	d := newDeploy(t, deployRegistry(t, llamaRev, ""), aiAdmin, []gpus.GPUTarget{kube}, cpuCluster())
+	settings := llmSettings(t)
+	settings["cache_mb"] = "1024"
+	putResource(t, d, "llm", manifest.Resource{Kind: recipes.ModelVLLMKind, Provider: "kubernetes", Target: kubeConn, Version: "0.31",
+		GPU: &manifest.GPU{Kind: "nvidia-l40s", Count: 1}, Settings: settings, Environments: map[string]manifest.ResourceSettings{"staging": on()}})
+	onKubernetes(d, stagingID, "llm", settings)
+	revisions := d.revisions.count()
+	in := MoveInput{Target: TargetChoice{Source: TargetConnection, ConnectionID: kubeConn, GPU: &provider.GPURequest{Kind: "nvidia-l40s"}}, Quantization: "bf16", MaxModelLen: 16384}
+	_, err := d.svc.Move(ctx, member, projectID, stagingID, "llm", in)
+	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "llm keeps its weight cache on a Kubernetes volume, which can't grow in place") {
+		t.Errorf("move: %v", err)
+	}
+	if d.revisions.count() != revisions || len(d.plans.asked) != 0 {
+		t.Error("the refused move wrote something")
 	}
 }

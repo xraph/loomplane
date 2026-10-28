@@ -1052,6 +1052,10 @@ func TestChooseName(t *testing.T) {
 			{EnvironmentID: productID, Resource: "llm", EntryID: qwen7B, Phase: PhaseWaitingForServer},
 			{EnvironmentID: productID, Resource: "other", EntryID: llama8BID, Phase: PhaseWaitingForServer},
 		}, env: staging, want: "llm"},
+		{name: "waiting copies by name", rows: []*Deployment{
+			{EnvironmentID: productID, Resource: "zeta", EntryID: qwen7B, Phase: PhaseWaitingForServer},
+			{EnvironmentID: "env_dev", Resource: "alpha", EntryID: qwen7B, Phase: PhaseWaitingForServer},
+		}, env: staging, want: "alpha"},
 		{name: "a copy needing attention in another environment", rows: []*Deployment{{EnvironmentID: productID, Resource: "llm", EntryID: qwen7B, Phase: PhaseNeedsAttention}},
 			env: staging, want: "llm"},
 		{name: "a waiting copy whose name is taken now", resources: "  llm: {kind: postgres, provider: cloud-sql}\n",
@@ -1333,5 +1337,24 @@ func TestPreviewPrefersTheExistingKind(t *testing.T) {
 	pv, err = d.svc.Preview(ctx, member, projectID, productID, DeployInput{EntryID: qwen7B, Target: onGPU2("nvidia-l40s")})
 	if err != nil || len(pv.Problems) != 0 || pv.AddsTo != "llm" || pv.Quantization != awq.ID || pv.Kind != recipes.ModelVLLMKind {
 		t.Errorf("joining llm: %q %q adds to %q %+v, %v", pv.Quantization, pv.Kind, pv.AddsTo, pv.Problems, err)
+	}
+}
+
+// A copy waiting in another environment whose kind can't be told, with no
+// request kept, isn't joined: the deploy could put llm in two kinds.
+func TestPreviewRefusesAWaitingCopyOfUnknownKind(t *testing.T) {
+	ctx := context.Background()
+	d := newDeploy(t, deployRegistry(t, llamaRev, ""), aiAdmin, []gpus.GPUTarget{l40sServer()})
+	if err := d.rows.Create(ctx, &Deployment{OrgID: "org", ProjectID: projectID, EnvironmentID: productID, Resource: "llm", EntryID: qwen7B,
+		Quantization: "bf16", Engine: "vllm", Phase: PhaseNeedsAttention}); err != nil {
+		t.Fatal(err)
+	}
+	pv, err := d.svc.Preview(ctx, member, projectID, stagingID, DeployInput{EntryID: qwen7B, Target: onGPU("nvidia-l40s")})
+	if err != nil || pv.Resource != "llm" || !slices.Equal(codes(pv), []string{ProblemEngine}) || pv.AddsTo != "" || pv.CanDeploy ||
+		!strings.HasPrefix(pv.Problems[0].Message, "llm is waiting for its GPU server in another environment, and Loomplane can't tell which engine it runs there.") {
+		t.Errorf("preview %+v, %v", pv, err)
+	}
+	if k := waitingKind(&Deployment{Engine: "nope", Request: &DeployInput{}}); k != "" {
+		t.Errorf("an unknown engine's kind %q", k)
 	}
 }

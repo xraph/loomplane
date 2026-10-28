@@ -874,6 +874,16 @@ func (s *Service) moveResource(ctx context.Context, p security.Principal, projec
 			settings[name] = ""
 		}
 	}
+	if need, nerr := strconv.ParseInt(settings["cache_mb"], 10, 64); nerr == nil && cacheGrows(cur.Settings, need) {
+		fixed, ferr := s.fixedCache(ctx, p.OrgID, env.ID, pv.Resource, pv.Target.ConnectionID)
+		if ferr != nil {
+			return nil, ferr
+		}
+		if fixed {
+			return nil, fmt.Errorf("%w: %s keeps its weight cache on a Kubernetes volume, which can't grow in place, and %s needs a bigger one. Remove %s from %s and deploy it again to move it",
+				ErrInvalid, pv.Resource, pv.Quantization, pv.Resource, env.Name)
+		}
+	}
 	update := moveUpdate(m.Resources[pv.Resource], cur, env.Name, m.Defaults, pv, settings)
 	rev, _, err := s.d.Manifests.Edit(ctx, p, projectID, manifests.EditInput{UpdateResource: update})
 	if err != nil {
@@ -902,15 +912,22 @@ func moveUpdate(raw, cur manifest.Resource, env string, d manifest.Defaults, pv 
 	case cur.GPU != nil:
 		top.ClearGPU = true
 	}
+	// What the edit changes: a field whose new value differs from the
+	// top level's, or from env's own block where that sets it. A field
+	// env's block sets can't move at the top level, so soleReader sends
+	// the edit to the block then.
+	block := raw.Environments[env]
+	sameGPU := func(a, b *manifest.GPU) bool { return (a == nil) == (b == nil) && (a == nil || *a == *b) }
 	changed := []string{"target"}
-	if pv.Target.Provider != raw.Provider {
+	if pv.Target.Provider != raw.Provider || (block.Provider != "" && block.Provider != pv.Target.Provider) {
 		changed = append(changed, "provider")
 	}
-	if (gpu == nil) != (raw.GPU == nil) || (gpu != nil && *gpu != *raw.GPU) {
+	if !sameGPU(gpu, raw.GPU) || (block.GPU != nil && !sameGPU(gpu, block.GPU)) {
 		changed = append(changed, "gpu")
 	}
 	for _, key := range slices.Sorted(maps.Keys(settings)) {
-		if settings[key] != raw.Settings[key] {
+		own, set := block.Settings[key]
+		if settings[key] != raw.Settings[key] || (set && own != settings[key]) {
 			changed = append(changed, key)
 		}
 	}
@@ -1055,8 +1072,12 @@ func (s *Service) Remove(ctx context.Context, p security.Principal, projectID, e
 		return &DeployResult{Deployment: row}, perr
 	}
 	res := &DeployResult{PlanID: plan.ID, Deployment: row, Message: weightsStay(resource, server, createdServer(row))}
-	if !last && len(users) > 0 {
-		res.Message += " " + needOff(users, resource, env.Name)
+	// Only services that run in env lose MODEL_URL there.
+	here := slices.DeleteFunc(slices.Clone(users), func(name string) bool {
+		return !manifest.On(rev.Manifest.Services[name].For(env.Name, rev.Manifest.Defaults).Enabled)
+	})
+	if !last && len(here) > 0 {
+		res.Message += " " + needOff(here, resource, env.Name)
 	}
 	if row != nil {
 		if derr := s.d.Store.Delete(ctx, row.OrgID, row.ProjectID, row.EnvironmentID, row.Resource); derr != nil && !errors.Is(derr, ErrNotFound) {

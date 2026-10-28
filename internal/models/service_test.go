@@ -407,19 +407,63 @@ func TestSoleReader(t *testing.T) {
 		want bool
 	}{
 		{"staging", []string{"target"}, true},                        // production has its own target
-		{"staging", []string{"model", "revision", "file"}, true},     // and its own pin; nobody sets file
+		{"staging", []string{"model", "revision"}, true},             // and its own pin
+		{"staging", []string{"model", "revision", "file"}, false},    // a file added there reaches production
 		{"production", []string{"target"}, false},                    // its block sets it
-		{"staging", []string{"max_model_len"}, true},                 // the top level doesn't set it
-		{"staging", []string{"gpu", "provider"}, true},               // nor these
+		{"staging", []string{"max_model_len"}, false},                // production would get one too
+		{"staging", []string{"gpu"}, false},                          // and a GPU
 		{"production", []string{"model", "revision", "file"}, false}, // its block sets them
 	} {
 		if got := soleReader(raw, c.env, c.keys...); got != c.want {
 			t.Errorf("soleReader(%s, %v) = %v", c.env, c.keys, got)
 		}
 	}
-	raw.Settings["max_model_len"] = "8192"
-	if soleReader(raw, "staging", "max_model_len") {
-		t.Error("production reads the top-level context")
+}
+
+// Decision 6 with keys the top level doesn't set: a cache size written
+// there would reach production, which overrides the pin and not the
+// cache, so it goes in staging's block. A file the new pin doesn't have,
+// where the top level has none, changes nothing there.
+func TestPinUpdateLeavesSharedSettings(t *testing.T) {
+	repinned := &RepinnedError{Model: "m", Revision: "new"}
+	raw := manifest.Resource{Settings: map[string]string{"model": "m", "revision": "old"}, Environments: map[string]manifest.ResourceSettings{
+		"staging": on(), "production": {Enabled: on().Enabled, Settings: map[string]string{"model": "m", "revision": "new", "file": ""}},
+	}}
+	u := pinUpdate(raw, "staging", repinned, 20480)
+	if u.Environment != "staging" || u.Settings["cache_mb"] != "20480" {
+		t.Errorf("a grown cache beside production: %+v", u)
+	}
+	raw.Settings["cache_mb"] = "30000"
+	if u = pinUpdate(raw, "staging", repinned, 20480); u.Environment != "" || u.Settings["file"] != "" {
+		t.Errorf("a cache that's big enough: %+v", u)
+	}
+}
+
+// A pin move whose weights need a bigger cache than the Kubernetes volume
+// it has is refused before the manifest changes.
+func TestMoveToPinRefusesToGrowAKubernetesCache(t *testing.T) {
+	ctx := context.Background()
+	d := newDeploy(t, deployRegistry(t, strings.Repeat("e", 40), ""), deployer, []gpus.GPUTarget{l40sServer()})
+	staleLlama(t, d, map[string]manifest.ResourceSettings{"staging": on()})
+	m := current(t, d)
+	r := m.Resources["llama-8b"]
+	r.Settings = maps.Clone(r.Settings)
+	r.Settings["cache_mb"] = "1024"
+	putResource(t, d, "llama-8b", r)
+	onKubernetes(d, stagingID, "llama-8b", r.Settings)
+	revisions := d.revisions.count()
+	_, err := d.svc.MoveToPin(ctx, member, projectID, stagingID, "llama-8b")
+	want := "llama-8b keeps its weight cache on a Kubernetes volume, which can't grow in place. Remove llama-8b from staging and deploy it again to move to the new pin"
+	if !errors.Is(err, ErrInvalid) || !strings.HasSuffix(err.Error(), want) {
+		t.Errorf("move to pin: %v", err)
+	}
+	if d.revisions.count() != revisions || len(d.plans.asked) != 0 {
+		t.Error("the refused move wrote something")
+	}
+	// On a server the cache grows with the move.
+	d.facts.bindings = nil
+	if _, err = d.svc.MoveToPin(ctx, member, projectID, stagingID, "llama-8b"); err != nil || current(t, d).Resources["llama-8b"].Settings["cache_mb"] == "1024" {
+		t.Errorf("on a server: %v", err)
 	}
 }
 

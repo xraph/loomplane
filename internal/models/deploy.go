@@ -488,7 +488,14 @@ func (s *Service) checkName(ctx context.Context, p security.Principal, projectID
 		if w == nil {
 			return
 		}
-		pv.AddsTo, pv.joinKind = chosen, waitingKind(w)
+		kind := waitingKind(w)
+		if kind == "" {
+			// Joining a copy whose kind isn't known could put the model
+			// in two kinds (Decision 2), so it's refused.
+			problem(ProblemEngine, "%s is waiting for its GPU server in another environment, and Loomplane can't tell which engine it runs there. Wait until it runs, or deploy this one under another name.", chosen)
+			return
+		}
+		pv.AddsTo, pv.joinKind = chosen, kind
 	default:
 		return
 	}
@@ -561,7 +568,8 @@ func waitingCopy(rows []*Deployment, entryID, envID, resource string) *Deploymen
 
 // waitingKind is the model kind a waiting copy runs as once its server is
 // up: its engine, on the GPU it asked for or on CPU. "" when the row
-// doesn't say.
+// doesn't say, with no request kept or an engine no kind runs, and then
+// checkName refuses to join it.
 func waitingKind(d *Deployment) string {
 	if d.Request == nil {
 		return ""
@@ -627,9 +635,15 @@ func chooseName(m *manifest.Manifest, rows []*Deployment, e registry.Entry, env 
 	if i := slices.IndexFunc(names, ours); i >= 0 {
 		return names[i], true, nil
 	}
+	waiting := map[string]bool{}
 	for _, d := range rows {
-		if d.EntryID == e.ID && d.EnvironmentID != env.ID && waitsForServer(d) && clash(d.Resource) == nil {
-			return d.Resource, false, nil
+		if d.EntryID == e.ID && d.EnvironmentID != env.ID && waitsForServer(d) {
+			waiting[d.Resource] = true
+		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(waiting)) {
+		if clash(name) == nil {
+			return name, false, nil
 		}
 	}
 	if clash(def) == nil {
