@@ -7,6 +7,7 @@ import (
 	"maps"
 	"regexp"
 	"slices"
+	"strconv"
 	"strings"
 
 	"github.com/xraph/loomplane/internal/cloudinfra"
@@ -48,9 +49,9 @@ type TargetChoice struct {
 	SizeID string               `json:"size_id,omitempty"` // server size only
 }
 
-// Reach says how the services of one environment reach the model. Until
-// the gateway, a model runs in one environment, and only that one's
-// services link to it.
+// Reach says how the services of one environment reach the model. Each
+// environment the model runs in runs its own copy, on its own target, and
+// a service links only to its own environment's copy.
 type Reach struct {
 	EnvironmentID string `json:"environment_id"`
 	Environment   string `json:"environment"`
@@ -110,6 +111,10 @@ type DeployPreview struct {
 	// MaxModelLen is the context the model is served at.
 	MaxModelLen int    `json:"max_model_len"`
 	Resource    string `json:"resource"`
+	// AddsTo is the manifest resource this deploy adds the environment
+	// to, the same model already running in other environments, or "" for
+	// a new resource.
+	AddsTo string `json:"adds_to,omitempty"`
 	// Cost is what its GPUs cost per hour. Source "cpu" is never free: the
 	// model's cost is part of TargetName's.
 	Cost         Cost      `json:"cost"`
@@ -142,6 +147,9 @@ type DeployPreview struct {
 	quant     registry.Quantization
 	spec      engines.Spec
 	budgetUSD string
+	// joinKind is the kind of the resource the deploy adds the environment
+	// to, and servedName its served_name setting.
+	joinKind, servedName string
 }
 
 // DeployResult is the deployment a deploy recorded, and the plan it made.
@@ -294,7 +302,7 @@ func (s *Service) preview(ctx context.Context, p security.Principal, projectID s
 		return pv, nil
 	}
 	pv.Target.Provider, pv.TargetName = t.provider, t.name
-	q, fit, ok := s.pickQuantization(e, in.Quantization, t, problem)
+	q, fit, ok := s.pickQuantization(e, in.Quantization, t, pv.joinKind, problem)
 	if !ok {
 		return pv, nil
 	}
@@ -305,6 +313,11 @@ func (s *Service) preview(ctx context.Context, p security.Principal, projectID s
 	k, found := recipes.Default().Kind(kind)
 	if !found || len(k.Releases) == 0 {
 		problem(ProblemEngine, "Loomplane has no model kind that runs %s %s here.", e.Title, q.ID)
+		return pv, nil
+	}
+	if pv.joinKind != "" && kind != pv.joinKind {
+		// Decision 2: one resource has one kind in every environment.
+		problem(ProblemEngine, "%s", otherKind(pv.AddsTo, pv.joinKind, kind, t.name))
 		return pv, nil
 	}
 	if !slices.Contains(k.Targets, t.provider) {
@@ -370,8 +383,13 @@ func (s *Service) preview(ctx context.Context, p security.Principal, projectID s
 		pv.Cost = HourlyCost(gpus.GPUTarget{}, 0, "")
 	}
 
+	served := repoOf(e)
+	if pv.servedName != "" {
+		// Callers use one model name in every environment.
+		served = pv.servedName
+	}
 	pv.spec = engines.Spec{
-		Entry: e, Quantization: q, ServedName: repoOf(e), MaxModelLen: pv.MaxModelLen, GPUs: count,
+		Entry: e, Quantization: q, ServedName: served, MaxModelLen: pv.MaxModelLen, GPUs: count,
 		OnGPU: kind == recipes.ModelLlamaCPPGPUKind,
 	}
 	if _, err := engines.Args(pv.spec); err != nil {
@@ -402,25 +420,23 @@ func (s *Service) checkBudget(pv *DeployPreview, budget string, problem func(cod
 }
 
 // checkName picks the resource name and checks the manifest has room for
-// it. A model runs in one environment, so the same entry deployed in
-// another environment gets a new name: the default, or when that's taken,
-// the default and the environment's name.
+// it (chooseName). When the same model already runs in other
+// environments, the deploy adds env to that resource: pv.AddsTo names it,
+// and the preview lists every environment it will run in.
 //
-// The project's deployment rows take their names too, in any environment:
-// a model waiting for a GPU server Loomplane is creating has no manifest
-// resource until the server is up, and its name must still be free then.
-// self is the row a waiting deploy carries on, which doesn't count.
+// The project's deployment rows count too: a model waiting for a GPU
+// server Loomplane is creating has no manifest resource until the server
+// is up. self is the row a waiting deploy carries on, which doesn't count.
 func (s *Service) checkName(ctx context.Context, p security.Principal, projectID string, env *projects.Environment, e registry.Entry,
 	asked, self string, pv *DeployPreview, problem func(code, format string, args ...any),
 ) {
 	name := strings.TrimSpace(asked)
-	given := name != ""
-	if !given {
-		name = DefaultResource(e)
-	}
 	pv.Resource = name
-	if !resourceName.MatchString(name) {
-		problem(ProblemName, "Name the model with lowercase letters, digits and hyphens, starting with a letter, at most 40 characters. %q isn't one.", name)
+	if name == "" {
+		pv.Resource = DefaultResource(e)
+	}
+	if !resourceName.MatchString(pv.Resource) {
+		problem(ProblemName, "Name the model with lowercase letters, digits and hyphens, starting with a letter, at most 40 characters. %q isn't one.", pv.Resource)
 		return
 	}
 	if s.d.Manifests == nil {
@@ -437,65 +453,148 @@ func (s *Service) checkName(ctx context.Context, p security.Principal, projectID
 		return
 	}
 	m := rev.Manifest
-	for _, other := range slices.Sorted(maps.Keys(m.Resources)) {
-		r := m.Resources[other]
-		if recipes.IsModelKind(r.Kind) && r.Settings["entry"] == e.ID && enabledIn(r, env.Name) {
-			problem(ProblemExists, "%s already runs %s in %s.", other, e.Title, env.Name)
-			return
-		}
-	}
-	rows, ok := s.rowNames(ctx, p.OrgID, projectID, self, m)
+	rows, ok := s.projectRows(ctx, p.OrgID, projectID, self)
 	if !ok {
 		problem(ProblemNoManifest, "Loomplane couldn't read this project's models. Try again.")
 		return
 	}
-	for _, name := range slices.Sorted(maps.Keys(rows)) {
-		if d := rows[name]; d.EnvironmentID == env.ID && d.EntryID == e.ID {
-			problem(ProblemExists, "%s is already deploying %s in %s.", name, e.Title, env.Name)
-			return
-		}
-	}
-	free := func(name string) bool { return !taken(m, name) && rows[name] == nil }
-	if free(name) {
+	chosen, join, refused := chooseName(m, rows, e, env, name)
+	pv.Resource = chosen
+	if refused != nil {
+		pv.Problems = append(pv.Problems, *refused)
 		return
 	}
-	if !given {
-		alt := strings.TrimRight(name[:min(len(name), maxResourceName-len(env.Name)-1)], "-") + "-" + env.Name
-		if resourceName.MatchString(alt) && free(alt) {
-			pv.Resource = alt
-			return
-		}
-	}
-	if taken(m, pv.Resource) {
-		problem(ProblemNameTaken, "%s is already in this project's manifest. Pick another name.", pv.Resource)
+	if !join {
 		return
 	}
-	problem(ProblemNameTaken, "%s is already a model in this project. Pick another name.", pv.Resource)
+	r := m.Resources[chosen]
+	pv.AddsTo, pv.joinKind, pv.servedName = chosen, r.Kind, r.Settings["served_name"]
+	pv.Environments = s.copiesOf(ctx, p.OrgID, projectID, env, chosen, r)
 }
 
-// rowNames is the project's deployment rows that have no resource in m,
-// by resource name: models waiting for a GPU server, and rows a deploy is
-// still writing. self's row isn't one. ok is false when the rows can't be
-// read.
-func (s *Service) rowNames(ctx context.Context, orgID, projectID, self string, m *manifest.Manifest) (map[string]*Deployment, bool) {
-	out := map[string]*Deployment{}
+// copiesOf is how each environment reaches the resource name, r, once env
+// runs it too: env first, then the environments r already runs in, by
+// name.
+func (s *Service) copiesOf(ctx context.Context, orgID, projectID string, env *projects.Environment, name string, r manifest.Resource) []Reach {
+	out := []Reach{{EnvironmentID: env.ID, Environment: env.Name, Mode: ReachHome,
+		Message: fmt.Sprintf("Adds %s to %s. Services in %s link to this copy.", env.Name, name, env.Name)}}
+	if s.d.Projects == nil {
+		return out
+	}
+	envs, err := s.d.Projects.ListEnvironments(ctx, orgID, projectID)
+	if err != nil {
+		return out
+	}
+	slices.SortFunc(envs, func(a, b *projects.Environment) int { return strings.Compare(a.Name, b.Name) })
+	for _, other := range envs {
+		if other.ID == env.ID || !enabledIn(r, other.Name) {
+			continue
+		}
+		out = append(out, Reach{EnvironmentID: other.ID, Environment: other.Name, Mode: ReachHome,
+			Message: fmt.Sprintf("Runs in %s on its own target. Services in %s link to that copy.", other.Name, other.Name)})
+	}
+	return out
+}
+
+// chooseName is the resource a deploy of e to env runs as, and whether
+// that resource is already in m, running e in other environments (join).
+// asked is the name the deploy asked for, "" for none. rows are the
+// project's deployment rows, the deploy's own left out. In order:
+//
+//  1. e already running in env, under any name, or a row for e in env,
+//     is ProblemExists.
+//  2. A model resource of e named asked is joined. A service, resource or
+//     gateway of that name, or a row of that name for another entry, is
+//     ProblemNameTaken; otherwise asked is a new resource. A row of e in
+//     another environment is the same model, so it doesn't block it.
+//  3. With no name asked, a model resource of e in m is joined:
+//     DefaultResource(e) first, else the first by name. Otherwise
+//     DefaultResource(e) when it's free, else the first free of
+//     "<default>-2", "<default>-3" and so on.
+func chooseName(m *manifest.Manifest, rows []*Deployment, e registry.Entry, env *projects.Environment, asked string) (name string, join bool, p *Problem) {
+	names := slices.Sorted(maps.Keys(m.Resources))
+	for _, other := range names {
+		if r := m.Resources[other]; modelOf(r, e.ID, env.Name, m.Defaults) && enabledIn(r, env.Name) {
+			return other, false, &Problem{Code: ProblemExists, Message: fmt.Sprintf("%s already runs %s in %s.", other, e.Title, env.Name)}
+		}
+	}
+	rows = slices.Clone(rows)
+	slices.SortFunc(rows, func(a, b *Deployment) int { return strings.Compare(a.Resource, b.Resource) })
+	for _, d := range rows {
+		if d.EnvironmentID == env.ID && d.EntryID == e.ID {
+			return d.Resource, false, &Problem{Code: ProblemExists, Message: fmt.Sprintf("%s is already deploying %s in %s.", d.Resource, e.Title, env.Name)}
+		}
+	}
+	ours := func(name string) bool {
+		r, ok := m.Resources[name]
+		return ok && modelOf(r, e.ID, env.Name, m.Defaults)
+	}
+	clash := func(name string) *Problem {
+		if taken(m, name) {
+			return &Problem{Code: ProblemNameTaken, Message: name + " is already in this project's manifest. Pick another name."}
+		}
+		if slices.ContainsFunc(rows, func(d *Deployment) bool { return d.Resource == name && d.EntryID != e.ID }) {
+			return &Problem{Code: ProblemNameTaken, Message: name + " is already a model in this project. Pick another name."}
+		}
+		return nil
+	}
+	if asked != "" {
+		if ours(asked) {
+			return asked, true, nil
+		}
+		return asked, false, clash(asked)
+	}
+	def := DefaultResource(e)
+	if ours(def) {
+		return def, true, nil
+	}
+	if i := slices.IndexFunc(names, ours); i >= 0 {
+		return names[i], true, nil
+	}
+	if clash(def) == nil {
+		return def, false, nil
+	}
+	for n := 2; ; n++ {
+		suffix := "-" + strconv.Itoa(n)
+		candidate := strings.TrimRight(def[:min(len(def), maxResourceName-len(suffix))], "-") + suffix
+		if clash(candidate) == nil {
+			return candidate, false, nil
+		}
+	}
+}
+
+// modelOf reports whether r is a model resource of the entry entryID, read
+// as env runs it.
+func modelOf(r manifest.Resource, entryID, env string, d manifest.Defaults) bool {
+	return recipes.IsModelKind(r.Kind) && r.For(env, d).Settings["entry"] == entryID
+}
+
+// otherKind says a model can't run as kind on target, since resource runs
+// as was in its other environments (Decision 2).
+func otherKind(resource, was, kind, target string) string {
+	return fmt.Sprintf("%s runs as %s in its other environments, and on %s it would run as %s. Pick a target it runs on as %s, or deploy it as a separately named model.",
+		resource, kindTitle(was), target, kindTitle(kind), kindTitle(was))
+}
+
+// kindTitle is a model kind's title, "vLLM model", or its name.
+func kindTitle(kind string) string {
+	if k, ok := recipes.Default().Kind(kind); ok {
+		return k.Title
+	}
+	return kind
+}
+
+// projectRows is the project's deployment rows, all but self's. ok is
+// false when they can't be read.
+func (s *Service) projectRows(ctx context.Context, orgID, projectID, self string) ([]*Deployment, bool) {
 	if s.d.Store == nil {
-		return out, true
+		return nil, true
 	}
 	rows, err := s.d.Store.ListProject(ctx, orgID, projectID)
 	if err != nil {
 		return nil, false
 	}
-	for _, d := range rows {
-		if d.ID == self && self != "" {
-			continue
-		}
-		if _, in := m.Resources[d.Resource]; in {
-			continue
-		}
-		out[d.Resource] = d
-	}
-	return out, true
+	return slices.DeleteFunc(rows, func(d *Deployment) bool { return self != "" && d.ID == self }), true
 }
 
 // taken reports whether a service, resource or gateway of m has name.
@@ -590,16 +689,31 @@ func (s *Service) cpuTarget(ctx context.Context, p security.Principal, id string
 }
 
 // pickQuantization is the one asked for, or the first of the entry's that
-// fits the target. A configuration a qualification run failed never fits.
-func (s *Service) pickQuantization(e registry.Entry, asked string, t deployTarget, problem func(code, format string, args ...any)) (registry.Quantization, registry.Fit, bool) {
+// fits the target. With kind, the quantizations that run as kind on t come
+// first, then the rest, so a model joining a resource of that kind keeps
+// it where it can, and the kind check names the mismatch where it can't.
+// A configuration a qualification run failed never fits.
+func (s *Service) pickQuantization(e registry.Entry, asked string, t deployTarget, kind string, problem func(code, format string, args ...any)) (registry.Quantization, registry.Fit, bool) {
 	candidates := e.Quantizations
-	if asked != "" {
+	switch {
+	case asked != "":
 		q, ok := e.Quantization(asked)
 		if !ok {
 			problem(ProblemQuantization, "%s has no quantization %s.", e.Title, asked)
 			return registry.Quantization{}, registry.Fit{}, false
 		}
 		candidates = []registry.Quantization{q}
+	case kind != "":
+		ordered := make([]registry.Quantization, 0, len(candidates))
+		var rest []registry.Quantization
+		for _, q := range candidates {
+			if k, _ := recipes.ModelKindFor(string(q.Engine), t.gpu != nil); k == kind {
+				ordered = append(ordered, q)
+			} else {
+				rest = append(rest, q)
+			}
+		}
+		candidates = slices.Concat(ordered, rest)
 	}
 	var reason string
 	for _, q := range candidates {
@@ -736,7 +850,7 @@ func (s *Service) Deploy(ctx context.Context, p security.Principal, projectID, e
 	if cerr := s.createRow(ctx, p.OrgID, e, row); cerr != nil {
 		return nil, cerr
 	}
-	rev, err := s.addResource(ctx, p, projectID, env, pv)
+	rev, err := s.placeResource(ctx, p, projectID, env, pv)
 	if err != nil {
 		// Nothing points at the row yet, so it goes.
 		if derr := s.d.Store.Delete(context.WithoutCancel(ctx), p.OrgID, projectID, env.ID, pv.Resource); derr != nil {
@@ -747,25 +861,117 @@ func (s *Service) Deploy(ctx context.Context, p security.Principal, projectID, e
 	return s.planRow(ctx, p, projectID, env, rev, row, false)
 }
 
-// addResource makes a deploy's one manifest edit: the resource, running
-// in env on the preview's target and nowhere else.
-func (s *Service) addResource(ctx context.Context, p security.Principal, projectID string, env *projects.Environment, pv *DeployPreview) (*manifests.Revision, error) {
-	var gpu *manifest.GPU
+// placeResource makes a deploy's one manifest edit. A new resource is
+// added running in env on the preview's target and nowhere else. A model
+// resource of the entry not running in env yet gets env added: its own
+// target, and the provider, GPU and settings where they differ
+// (placementUpdate). The manifest is read at the edit, not taken from the
+// preview, so a deploy of the same model to another environment that got
+// there first is joined. One that lands between that read and the save
+// (manifests.ErrConflict, or an add refused because the name is there
+// now) is read again and decided once more.
+func (s *Service) placeResource(ctx context.Context, p security.Principal, projectID string, env *projects.Environment, pv *DeployPreview) (*manifests.Revision, error) {
+	for retried := false; ; retried = true {
+		cur, err := s.d.Manifests.Current(ctx, p, projectID)
+		if err != nil {
+			return nil, err
+		}
+		if cur.Manifest == nil {
+			return nil, errors.New("models: the project's manifest doesn't parse")
+		}
+		in, join, refused := placementEdit(cur.Manifest, env.Name, pv)
+		if refused != nil {
+			return nil, &ProblemError{Problem: *refused}
+		}
+		rev, _, err := s.d.Manifests.Edit(ctx, p, projectID, in)
+		if err == nil {
+			attrs := map[string]any{
+				"entry": pv.entry.ID, "quantization": pv.quant.ID, "target": pv.Target.ConnectionID, "resource": pv.Resource,
+				"environment": env.Name, "kind": pv.Kind, "manifest_revision": rev.Revision,
+			}
+			if join {
+				attrs["adds_environment"] = true
+			}
+			s.audit(ctx, p, projectID, "ai.model.deploy", attrs)
+			return rev, nil
+		}
+		if retried || !s.raced(ctx, p, projectID, in, err) {
+			return nil, err
+		}
+	}
+}
+
+// raced reports whether in failed because another save got there first:
+// a conflict, or an add of a name the manifest has now.
+func (s *Service) raced(ctx context.Context, p security.Principal, projectID string, in manifests.EditInput, err error) bool {
+	if errors.Is(err, manifests.ErrConflict) {
+		return true
+	}
+	if in.AddResource == nil {
+		return false
+	}
+	cur, cerr := s.d.Manifests.Current(ctx, p, projectID)
+	if cerr != nil || cur.Manifest == nil {
+		return false
+	}
+	_, there := cur.Manifest.Resources[in.AddResource.Name]
+	return there
+}
+
+// placementEdit is the edit that puts pv's model in env, given the
+// manifest m as it is now, and whether it adds env to a resource already
+// there (join).
+func placementEdit(m *manifest.Manifest, env string, pv *DeployPreview) (in manifests.EditInput, join bool, p *Problem) {
+	r, ok := m.Resources[pv.Resource]
+	switch {
+	case !ok:
+		var gpu *manifest.GPU
+		if pv.GPU != nil {
+			gpu = &manifest.GPU{Kind: pv.GPU.Kind, Count: pv.GPU.Count}
+		}
+		return manifests.EditInput{AddResource: &manifests.NewResource{
+			Name: pv.Resource, Kind: pv.Kind, Provider: pv.Target.Provider, Target: pv.Target.ConnectionID, Version: pv.Version,
+			Settings: engines.Settings(pv.spec), GPU: gpu, EnabledIn: env,
+		}}, false, nil
+	case !modelOf(r, pv.entry.ID, env, m.Defaults):
+		return in, false, &Problem{Code: ProblemNameTaken, Message: pv.Resource + " is already in this project's manifest. Pick another name."}
+	case enabledIn(r, env):
+		return in, false, &Problem{Code: ProblemExists, Message: fmt.Sprintf("%s already runs %s in %s.", pv.Resource, pv.entry.Title, env)}
+	case r.Kind != pv.Kind:
+		return in, false, &Problem{Code: ProblemEngine, Message: otherKind(pv.Resource, r.Kind, pv.Kind, pv.TargetName)}
+	}
+	return manifests.EditInput{UpdateResource: placementUpdate(r, env, m.Defaults, pv)}, true, nil
+}
+
+// placementUpdate turns raw on in env, on the preview's target, writing
+// under env only what env doesn't already read: the provider, the GPU and
+// each setting where pv differs from raw as env runs it. entry and
+// served_name are never written per environment, so the model has one
+// name everywhere.
+func placementUpdate(raw manifest.Resource, env string, d manifest.Defaults, pv *DeployPreview) *manifests.ResourceUpdateInput {
+	on, target := true, pv.Target.ConnectionID
+	u := &manifests.ResourceUpdateInput{Resource: pv.Resource, Environment: env, Enabled: &on, Target: &target}
+	view := raw.For(env, d)
+	if cloud := pv.Target.Provider; cloud != view.Provider {
+		u.Provider = &cloud
+	}
 	if pv.GPU != nil {
-		gpu = &manifest.GPU{Kind: pv.GPU.Kind, Count: pv.GPU.Count}
+		gpu := manifest.GPU{Kind: pv.GPU.Kind, Count: pv.GPU.Count}
+		if view.GPU == nil || *view.GPU != gpu {
+			u.GPU = &gpu
+		}
 	}
-	rev, _, err := s.d.Manifests.Edit(ctx, p, projectID, manifests.EditInput{AddResource: &manifests.NewResource{
-		Name: pv.Resource, Kind: pv.Kind, Provider: pv.Target.Provider, Target: pv.Target.ConnectionID, Version: pv.Version,
-		Settings: engines.Settings(pv.spec), GPU: gpu, EnabledIn: env.Name,
-	}})
-	if err != nil {
-		return nil, err
+	settings := engines.Settings(pv.spec)
+	for _, key := range slices.Sorted(maps.Keys(settings)) {
+		if key == "entry" || key == "served_name" || settings[key] == view.Settings[key] {
+			continue
+		}
+		if u.Settings == nil {
+			u.Settings = map[string]string{}
+		}
+		u.Settings[key] = settings[key]
 	}
-	s.audit(ctx, p, projectID, "ai.model.deploy", map[string]any{
-		"entry": pv.entry.ID, "quantization": pv.quant.ID, "target": pv.Target.ConnectionID, "resource": pv.Resource,
-		"environment": env.Name, "kind": pv.Kind, "manifest_revision": rev.Revision,
-	})
-	return rev, nil
+	return u
 }
 
 // planRow plans env from rev and records the plan on row. When planning

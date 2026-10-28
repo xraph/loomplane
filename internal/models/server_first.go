@@ -118,12 +118,14 @@ func operationCost(op *cloudinfra.Operation) Cost {
 	return serverCost(*op.Accelerator, op.EstimatedHourlyUSD, op.HourlyPriceKnown)
 }
 
-// serverNameFor is the name of the GPU server a deploy creates for resource
-// in the project: "<project slug>-<resource>-gpu", a DNS label of at most
-// 63 characters.
-func serverNameFor(projectSlug, resource string) string {
+// serverNameFor is the name of the GPU server a deploy creates for
+// resource's copy in environment of the project:
+// "<project slug>-<resource>-<environment>-gpu", a DNS label of at most
+// 63 characters. Each environment's copy runs on its own server, so the
+// environment keeps two of them from coming out as "-gpu" and "-gpu-2".
+func serverNameFor(projectSlug, resource, environment string) string {
 	const suffix = "-gpu"
-	name := strings.Trim(nonLabel.ReplaceAllString(strings.ToLower(projectSlug+"-"+resource), "-"), "-")
+	name := strings.Trim(nonLabel.ReplaceAllString(strings.ToLower(projectSlug+"-"+resource+"-"+environment), "-"), "-")
 	if len(name) > 63-len(suffix) {
 		name = strings.TrimRight(name[:63-len(suffix)], "-")
 	}
@@ -231,7 +233,7 @@ func (s *Service) reviewServer(ctx context.Context, p security.Principal, projec
 		problem(ProblemTarget, "Loomplane couldn't read this project. Try again.")
 		return
 	}
-	name := serverNameFor(project.Slug, pv.Resource)
+	name := serverNameFor(project.Slug, pv.Resource, env.Name)
 	pv.TargetName = name
 
 	assignment, _, err := s.d.Clouds.EnvironmentCloud(ctx, p, projectID, env.ID)
@@ -884,7 +886,7 @@ func (s *Service) serverUp(ctx context.Context, d *Deployment, p security.Princi
 	if moving {
 		rev, err = s.moveResource(ctx, p, d.ProjectID, env, pv)
 	} else {
-		rev, err = s.addResource(ctx, p, d.ProjectID, env, pv)
+		rev, err = s.placeResource(ctx, p, d.ProjectID, env, pv)
 	}
 	if err != nil {
 		what := "add " + d.Resource + " to the manifest"
@@ -1000,8 +1002,10 @@ func (s *Service) environmentDeleted(ctx context.Context, d *Deployment) error {
 }
 
 // reconcileStranded tidies a planned row a deploy stopped writing: gone
-// when its environment is, or when the manifest never got its resource;
-// otherwise it says how to plan it from the project.
+// when its environment is, or when the manifest never got the resource
+// running in the row's environment; otherwise it says how to plan it from
+// the project. The resource running only in another environment is
+// another copy, so it doesn't count.
 func (s *Service) reconcileStranded(ctx context.Context, d *Deployment) error {
 	gone, err := s.environmentGone(ctx, d)
 	if err != nil {
@@ -1031,7 +1035,11 @@ func (s *Service) reconcileStranded(ctx context.Context, d *Deployment) error {
 	case err != nil:
 		return err
 	}
-	if _, ok := rev.Manifest.Resources[d.Resource]; !ok {
+	env, err := s.environment(ctx, d.OrgID, d.ProjectID, d.EnvironmentID)
+	if err != nil {
+		return err
+	}
+	if r, ok := rev.Manifest.Resources[d.Resource]; !ok || !enabledIn(r, env.Name) {
 		if d.ServerOperationID != "" {
 			// The cron stopped between marking it planned and the edit, and
 			// its server is up. Waiting again, the next run makes the edit.
@@ -1039,10 +1047,6 @@ func (s *Service) reconcileStranded(ctx context.Context, d *Deployment) error {
 			return s.d.Store.Update(ctx, d)
 		}
 		return s.d.Store.Delete(ctx, d.OrgID, d.ProjectID, d.EnvironmentID, d.Resource)
-	}
-	env, err := s.environment(ctx, d.OrgID, d.ProjectID, d.EnvironmentID)
-	if err != nil {
-		return err
 	}
 	return s.waitWith(ctx, d, fmt.Sprintf("The manifest has %s now. Plan %s from the project to deploy it.", d.Resource, env.Name))
 }

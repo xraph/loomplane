@@ -319,8 +319,9 @@ func onSize() TargetChoice {
 	return TargetChoice{Source: TargetServerSize, ConnectionID: doConn, Region: "tor1", SizeID: l40sSize, GPU: &provider.GPURequest{Kind: "nvidia-l40s"}}
 }
 
-// serverName is the server a deploy of Qwen 7B in the shop project creates.
-const serverName = "shop-qwen2-5-7b-instruct-gpu"
+// serverName is the server a deploy of Qwen 7B to staging in the shop
+// project creates.
+const serverName = "shop-qwen2-5-7b-instruct-staging-gpu"
 
 // deployOnNewServer previews Qwen 7B on a new L40S server in staging and
 // deploys it with the review approved.
@@ -966,13 +967,17 @@ func TestCapacitySentences(t *testing.T) {
 	}
 }
 
-func TestServerNameIsADNSLabel(t *testing.T) {
-	if got := serverNameFor("shop", "qwen3-8b"); got != "shop-qwen3-8b-gpu" {
+func TestServerNameForIncludesTheEnvironment(t *testing.T) {
+	if got := serverNameFor("shop", "llm", "production"); got != "shop-llm-production-gpu" {
 		t.Errorf("short: %q", got)
 	}
-	long := serverNameFor(strings.Repeat("p", 40), strings.Repeat("r", 40))
-	if len(long) > 63 || !strings.HasSuffix(long, "-gpu") || strings.Contains(long, "--") {
-		t.Errorf("long: %q (%d)", long, len(long))
+	for _, long := range []string{
+		serverNameFor(strings.Repeat("p", 70), "llm", "production"),
+		serverNameFor(strings.Repeat("p", 40), strings.Repeat("r", 40), "staging"),
+	} {
+		if len(long) > 63 || !strings.HasSuffix(long, "-gpu") || strings.Contains(long, "--") {
+			t.Errorf("long: %q (%d)", long, len(long))
+		}
 	}
 }
 
@@ -1530,11 +1535,11 @@ func TestServersOnTheirWayKeepTheirNames(t *testing.T) {
 	if len(sf.servers.servers) != 0 {
 		t.Fatal("the fake made a server row before the create started")
 	}
-	// Ruling M42: staging's waiting model has the default name, so
-	// production's gets its own, and its server's name with it.
+	// Staging's waiting model is the same model, so production's copy has
+	// its name, and its server the environment's name.
 	const production = "shop-qwen2-5-7b-instruct-production-gpu"
 	pv, _ := sf.reviewIn(t, productID)
-	if pv.Resource != "qwen2-5-7b-instruct-production" || pv.TargetName != production || pv.Server.Input.Name != production {
+	if pv.Resource != "qwen2-5-7b-instruct" || pv.TargetName != production || pv.Server.Input.Name != production {
 		t.Fatalf("production's model %q, server %q, review %q", pv.Resource, pv.TargetName, pv.Server.Input.Name)
 	}
 	// Another model waiting for a server of that name takes it.
@@ -1570,27 +1575,27 @@ func TestServersOnTheirWayKeepTheirNames(t *testing.T) {
 	}
 }
 
-// Ruling M42: a model waiting for its GPU server keeps its name. A deploy
-// in another environment meanwhile, onto a server you have or onto a new
-// one, gets the environment's name, and the waiting model plans onto its
-// server once it's up.
+// A model waiting for its GPU server keeps its name. Another model can't
+// take it, the same model deployed to another environment meanwhile is
+// another copy of it, and the waiting model adds its environment to that
+// resource once its server is up (Review Focus 2).
 func TestWaitingModelKeepsItsName(t *testing.T) {
 	ctx := context.Background()
 	sf := newServerFirst(t, cloudAdmin)
 	pv, _ := sf.deployOnNewServer(t)
 	sf.targets.targets = append(sf.targets.targets, l40sServer())
-	res, err := sf.svc.Deploy(ctx, member, projectID, productID, DeployInput{EntryID: qwen7B, Target: onGPU("nvidia-l40s")})
-	if err != nil || res.Deployment.Resource != "qwen2-5-7b-instruct-production" {
-		t.Fatalf("production on gpu-box: %+v, %v", res, err)
-	}
 	// The name staging's model waits with is a model's in this project,
 	// even with no manifest resource yet.
 	named := DeployInput{EntryID: llama8BID, Target: onGPU("nvidia-l40s"), Resource: "qwen2-5-7b-instruct"}
-	_, err = sf.svc.Deploy(ctx, member, projectID, productID, named)
+	_, err := sf.svc.Deploy(ctx, member, projectID, productID, named)
 	var refused *ProblemError
 	if !errors.As(err, &refused) || refused.Problem.Code != ProblemNameTaken ||
 		err.Error() != "qwen2-5-7b-instruct is already a model in this project. Pick another name." {
 		t.Errorf("taking the waiting model's name: %v", err)
+	}
+	res, err := sf.svc.Deploy(ctx, member, projectID, productID, DeployInput{EntryID: qwen7B, Target: onGPU("nvidia-l40s")})
+	if err != nil || res.Deployment.Resource != "qwen2-5-7b-instruct" {
+		t.Fatalf("production on gpu-box: %+v, %v", res, err)
 	}
 	// The same entry in staging again is the one on its way.
 	again, err := sf.svc.Preview(ctx, member, projectID, stagingID, DeployInput{EntryID: qwen7B, Target: onGPU("nvidia-l40s")})
@@ -1608,22 +1613,22 @@ func TestWaitingModelKeepsItsName(t *testing.T) {
 		t.Fatalf("staging once its server is up: %+v", d)
 	}
 	m := current(t, sf.deploySetup)
-	if r := m.Resources["qwen2-5-7b-instruct"]; r.Target != newConn || !enabledIn(r, "staging") {
-		t.Errorf("staging's resource %+v", r)
-	}
-	if r := m.Resources["qwen2-5-7b-instruct-production"]; r.Target != gpuConn || !enabledIn(r, "production") {
-		t.Errorf("production's resource %+v", r)
+	r := m.Resources["qwen2-5-7b-instruct"]
+	if len(m.Resources) != 1 || r.Target != gpuConn || !enabledIn(r, "production") || !enabledIn(r, "staging") ||
+		r.For("staging", m.Defaults).Target != newConn {
+		t.Errorf("resources %+v", m.Resources)
 	}
 }
 
-// Ruling M42: two models waiting for new GPU servers in two environments
-// get a name each, and both plan once their servers are up.
-func TestTwoWaitingModelsGetANameEach(t *testing.T) {
+// The same model waiting for new GPU servers in two environments gets a
+// server each, named for its environment, and once both are up the one
+// resource runs in both.
+func TestTwoWaitingCopiesGetAServerEach(t *testing.T) {
 	ctx := context.Background()
 	sf := newServerFirst(t, cloudAdmin)
 	staging, _ := sf.deployOnNewServer(t)
 	production, in := sf.reviewIn(t, productID)
-	if production.Resource != "qwen2-5-7b-instruct-production" || production.TargetName != "shop-qwen2-5-7b-instruct-production-gpu" {
+	if production.Resource != "qwen2-5-7b-instruct" || production.TargetName != "shop-qwen2-5-7b-instruct-production-gpu" {
 		t.Fatalf("production's review: %q on %q", production.Resource, production.TargetName)
 	}
 	if _, err := sf.svc.Deploy(ctx, member, projectID, productID, in); err != nil {
@@ -1635,14 +1640,14 @@ func TestTwoWaitingModelsGetANameEach(t *testing.T) {
 	if err := sf.svc.Reconcile(ctx); err != nil {
 		t.Fatal(err)
 	}
-	for _, key := range []struct{ env, resource string }{{stagingID, "qwen2-5-7b-instruct"}, {productID, "qwen2-5-7b-instruct-production"}} {
-		d, err := sf.rows.Get(ctx, "org", projectID, key.env, key.resource)
+	for _, env := range []string{stagingID, productID} {
+		d, err := sf.rows.Get(ctx, "org", projectID, env, "qwen2-5-7b-instruct")
 		if err != nil || d.Phase != PhasePlanned || d.PlanID == "" || d.Message != "" {
-			t.Errorf("%s: %+v, %v", key.resource, d, err)
+			t.Errorf("%s: %+v, %v", env, d, err)
 		}
 	}
 	m := current(t, sf.deploySetup)
-	if !enabledIn(m.Resources["qwen2-5-7b-instruct"], "staging") || !enabledIn(m.Resources["qwen2-5-7b-instruct-production"], "production") {
+	if r := m.Resources["qwen2-5-7b-instruct"]; len(m.Resources) != 1 || !enabledIn(r, "staging") || !enabledIn(r, "production") {
 		t.Errorf("resources %+v", m.Resources)
 	}
 }
@@ -1655,19 +1660,27 @@ func TestTwoDeploysNeverShareAServerName(t *testing.T) {
 	ctx := context.Background()
 	sf := newServerFirst(t, cloudAdmin)
 	staging, stagingIn := sf.reviewIn(t, stagingID)
-	production, productionIn := sf.reviewIn(t, productID)
-	if staging.Server.Input.Name != serverName || production.Server.Input.Name != serverName {
-		t.Fatalf("reviews %q and %q", staging.Server.Input.Name, production.Server.Input.Name)
+	if staging.Server.Input.Name != serverName {
+		t.Fatalf("review %q", staging.Server.Input.Name)
 	}
-	if _, err := sf.svc.Deploy(ctx, member, projectID, stagingID, stagingIn); err != nil {
+	// Another model's deploy, approved first, waits for a server of the
+	// name staging's review has.
+	first := &Deployment{OrgID: "org", ProjectID: projectID, EnvironmentID: productID, Resource: "other-model", EntryID: llama8BID,
+		Quantization: "bf16", Engine: "vllm", Phase: PhaseWaitingForServer, ServerCloudID: cloudID, ServerOperationID: "infraop_other",
+		ServerName: serverName}
+	if err := sf.rows.Create(ctx, first); err != nil {
 		t.Fatal(err)
 	}
 	var refused *ProblemError
-	if _, err := sf.svc.Deploy(ctx, member, projectID, productID, productionIn); !errors.As(err, &refused) || refused.Problem.Code != ProblemServerReview {
+	if _, err := sf.svc.Deploy(ctx, member, projectID, stagingID, stagingIn); !errors.As(err, &refused) || refused.Problem.Code != ProblemServerReview {
 		t.Fatalf("second deploy of the same name: %v", err)
 	}
-	if _, applies, _ := sf.servers.calls(); applies != 1 {
+	if _, applies, _ := sf.servers.calls(); applies != 0 {
 		t.Errorf("%d servers approved", applies)
+	}
+	production, _ := sf.reviewIn(t, productID)
+	if production.Server.Input.Name == serverName {
+		t.Errorf("production's review %q has staging's name", production.Server.Input.Name)
 	}
 
 	// Both pass the name check, then each writes its row. Production's
@@ -1840,5 +1853,81 @@ func TestCreatedServerChargesTheWholeServer(t *testing.T) {
 	}
 	if d = accrue(start.Add(2 * time.Hour)); d.MonthCostUSD != "14.1300" {
 		t.Errorf("an hour sharing the server: %s", d.MonthCostUSD)
+	}
+}
+
+// Review Focus 2: production's copy waits for its GPU server while
+// staging's deploys onto a server you have. Staging's deploy adds the
+// resource; once production's server is up, it adds production to it.
+func TestServerUpAddsTheEnvironment(t *testing.T) {
+	ctx := context.Background()
+	sf := newServerFirst(t, cloudAdmin)
+	pv, in := sf.reviewIn(t, productID)
+	if _, err := sf.svc.Deploy(ctx, member, projectID, productID, in); err != nil {
+		t.Fatal(err)
+	}
+	sf.targets.targets = append(sf.targets.targets, l40sServer())
+	res, err := sf.svc.Deploy(ctx, member, projectID, stagingID, DeployInput{EntryID: qwen7B, Target: onGPU("nvidia-l40s")})
+	if err != nil || res.Deployment.Resource != "qwen2-5-7b-instruct" {
+		t.Fatalf("staging on gpu-box: %+v, %v", res, err)
+	}
+	edits := sf.recordEdits()
+
+	sf.servers.succeed(pv.Server.ID)
+	sf.gpusReady(provider.GPUStatusReady)
+	sf.targets.targets = append(sf.targets.targets, l40sServer())
+	if err = sf.svc.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(edits.edits) != 1 || edits.edits[0].AddResource != nil || edits.edits[0].UpdateResource == nil {
+		t.Fatalf("edits %+v", edits.edits)
+	}
+	u := edits.edits[0].UpdateResource
+	if u.Resource != "qwen2-5-7b-instruct" || u.Environment != "production" || u.Enabled == nil || !*u.Enabled || u.Target == nil || *u.Target != newConn {
+		t.Errorf("update %+v", u)
+	}
+	d, err := sf.rows.Get(ctx, "org", projectID, productID, "qwen2-5-7b-instruct")
+	if err != nil || d.Phase != PhasePlanned || d.PlanID == "" || d.Message != "" {
+		t.Errorf("production's row %+v, %v", d, err)
+	}
+	m := current(t, sf.deploySetup)
+	if r := m.Resources["qwen2-5-7b-instruct"]; len(m.Resources) != 1 || !enabledIn(r, "production") || !enabledIn(r, "staging") ||
+		r.Target != gpuConn || r.For("production", m.Defaults).Target != newConn {
+		t.Errorf("resources %+v", m.Resources)
+	}
+}
+
+// A stranded row counts as edited only when the manifest runs its
+// resource in the row's environment: the resource running in staging
+// alone is staging's copy, not production's.
+func TestReconcileStrandedChecksTheEnvironment(t *testing.T) {
+	ctx := context.Background()
+	for _, serverFirst := range []bool{false, true} {
+		sf := newServerFirst(t, cloudAdmin)
+		if _, _, err := manifests.NewService(sf.revisions, memProjects{}, aiAdmin, nil).Edit(ctx, member, projectID, manifests.EditInput{
+			AddResource: &manifests.NewResource{Name: "llm", Kind: "model-tei", Provider: "server", Target: cpuConn, Version: "1.9", EnabledIn: "staging",
+				Settings: map[string]string{"entry": bgeSmall}},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		d := &Deployment{OrgID: "org", ProjectID: projectID, EnvironmentID: productID, Resource: "llm", EntryID: bgeSmall,
+			Quantization: "fp32", Engine: "tei", Phase: PhasePlanned, RequestedBy: member}
+		if serverFirst {
+			d.ServerCloudID, d.ServerOperationID, d.ServerName = cloudID, "infraop_x", "shop-llm-production-gpu"
+		}
+		if err := sf.rows.Create(ctx, d); err != nil {
+			t.Fatal(err)
+		}
+		sf.advance(StrandedAfter + time.Minute)
+		if err := sf.svc.Reconcile(ctx); err != nil {
+			t.Fatal(err)
+		}
+		got, err := sf.rows.Get(ctx, "org", projectID, productID, "llm")
+		switch {
+		case !serverFirst && !errors.Is(err, ErrNotFound):
+			t.Errorf("a deploy that never reached production's block stays: %+v, %v", got, err)
+		case serverFirst && (err != nil || got.Phase != PhaseWaitingForServer):
+			t.Errorf("a server-first row: %+v, %v", got, err)
+		}
 	}
 }

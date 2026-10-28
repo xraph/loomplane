@@ -782,9 +782,9 @@ func TestDeployToProductionNeedsAIManage(t *testing.T) {
 	}
 }
 
-// Ruling M6: a model runs in one environment, so the same entry deployed
-// in another one gets its own resource name, and a name the manifest has
-// is refused.
+// Ruling M44: the same entry deployed to another environment adds that
+// environment to the resource it has, and a name the manifest has for
+// something else is refused.
 func TestDeployRefusesATakenName(t *testing.T) {
 	ctx := context.Background()
 	d := newDeploy(t, deployRegistry(t, llamaRev, ""), aiAdmin, []gpus.GPUTarget{l40sServer()})
@@ -794,16 +794,20 @@ func TestDeployRefusesATakenName(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The same entry in staging gets the environment in its name.
-	pv, err := d.svc.Preview(ctx, member, projectID, stagingID, in)
-	if err != nil || len(pv.Problems) != 0 || pv.Resource != "llama-3-1-8b-instruct-staging" {
-		t.Fatalf("second environment: %q %+v, %v", pv.Resource, pv.Problems, err)
-	}
-	// A name the manifest has, for a resource or a service, is taken.
-	for _, name := range []string{"llama-3-1-8b-instruct", "api"} {
+	// The same entry in staging, by its name or none, is another copy.
+	for _, name := range []string{"", "llama-3-1-8b-instruct"} {
 		named := in
 		named.Resource = name
-		_, err = d.svc.Deploy(ctx, member, projectID, stagingID, named)
+		pv, err := d.svc.Preview(ctx, member, projectID, stagingID, named)
+		if err != nil || len(pv.Problems) != 0 || pv.Resource != "llama-3-1-8b-instruct" || pv.AddsTo != "llama-3-1-8b-instruct" {
+			t.Fatalf("second environment %q: %q adds to %q %+v, %v", name, pv.Resource, pv.AddsTo, pv.Problems, err)
+		}
+	}
+	// A name the manifest has for something else is taken.
+	for _, name := range []string{"api"} {
+		named := in
+		named.Resource = name
+		_, err := d.svc.Deploy(ctx, member, projectID, stagingID, named)
 		var refused *ProblemError
 		if !errors.As(err, &refused) || refused.Problem.Code != ProblemNameTaken ||
 			err.Error() != name+" is already in this project's manifest. Pick another name." {
@@ -813,7 +817,8 @@ func TestDeployRefusesATakenName(t *testing.T) {
 	// Not a resource name at all.
 	bad := in
 	bad.Resource = "Llama 8B"
-	if pv, err = d.svc.Preview(ctx, member, projectID, stagingID, bad); err != nil || !slices.Equal(codes(pv), []string{ProblemName}) {
+	pv, err := d.svc.Preview(ctx, member, projectID, stagingID, bad)
+	if err != nil || !slices.Equal(codes(pv), []string{ProblemName}) {
 		t.Errorf("bad name: %+v, %v", pv.Problems, err)
 	}
 	// The same entry again in production is the model it already has.
@@ -962,5 +967,361 @@ func TestDefaultResourceAndAlias(t *testing.T) {
 		if got := DefaultAlias(e); got != want[1] {
 			t.Errorf("DefaultAlias(%s) = %q, want %q", id, got, want[1])
 		}
+	}
+}
+
+// recordingManifests is Manifests that records each edit. before, when
+// set, runs ahead of the n-th edit (from 1): what another save does
+// meanwhile. A non-nil error it returns is the edit's.
+type recordingManifests struct {
+	Manifests
+	mu     sync.Mutex
+	edits  []manifests.EditInput
+	before func(n int) error
+}
+
+func (r *recordingManifests) Edit(ctx context.Context, p security.Principal, projectID string, in manifests.EditInput) (*manifests.Revision, bool, error) {
+	r.mu.Lock()
+	r.edits = append(r.edits, in)
+	n, before := len(r.edits), r.before
+	r.mu.Unlock()
+	if before != nil {
+		if err := before(n); err != nil {
+			return nil, false, err
+		}
+	}
+	return r.Manifests.Edit(ctx, p, projectID, in)
+}
+
+func (d *deploySetup) recordEdits() *recordingManifests {
+	r := &recordingManifests{Manifests: d.svc.d.Manifests}
+	d.svc.d.Manifests = r
+	return r
+}
+
+// gpuBox2 is a second server with one free L40S.
+const gpuConn2 = "conn_gpu2"
+
+func l40sServer2() gpus.GPUTarget {
+	t := l40sServer()
+	t.ConnectionID, t.Name = gpuConn2, "gpu-box-2"
+	return t
+}
+
+// qwenEntry is Qwen 7B from the registry.
+func qwenEntry(t *testing.T) registry.Entry {
+	t.Helper()
+	e, ok := registry.Default().Entry(qwen7B)
+	if !ok {
+		t.Fatal("no Qwen 7B")
+	}
+	return e
+}
+
+func TestChooseName(t *testing.T) {
+	e := qwenEntry(t)
+	const def = "qwen2-5-7b-instruct"
+	staging := &projects.Environment{ID: stagingID, Name: "staging"}
+	production := &projects.Environment{ID: productID, Name: "production"}
+	model := func(name, entry, env string) string {
+		return "  " + name + ":\n    kind: model-vllm\n    provider: server\n    target: c1\n    settings: {entry: " + entry + "}\n" +
+			"    environments: {" + env + ": {enabled: true}}\n"
+	}
+	for _, c := range []struct {
+		name      string
+		resources string
+		rows      []*Deployment
+		env       *projects.Environment
+		asked     string
+		want      string
+		join      bool
+		problem   *Problem
+	}{
+		{name: "fresh manifest", env: staging, want: def},
+		{name: "joins the default", resources: model(def, qwen7B, "staging"), env: production, want: def, join: true},
+		{name: "joins another name", resources: model("llm", qwen7B, "staging"), env: production, want: "llm", join: true},
+		{name: "already runs", resources: model(def, qwen7B, "production"), env: production, want: def,
+			problem: &Problem{Code: ProblemExists, Message: def + " already runs Qwen2.5 7B Instruct in production."}},
+		{name: "default held by a database", resources: "  " + def + ": {kind: postgres, provider: cloud-sql}\n", env: staging, want: def + "-2"},
+		{name: "asked for another entry's model", resources: model("llm", llama8BID, "staging"), env: production, asked: "llm", want: "llm",
+			problem: &Problem{Code: ProblemNameTaken, Message: "llm is already in this project's manifest. Pick another name."}},
+		{name: "asked for a new name", resources: model(def, qwen7B, "staging"), env: production, asked: "chat", want: "chat"},
+		{name: "a copy waiting in another environment", rows: []*Deployment{{EnvironmentID: productID, Resource: def, EntryID: qwen7B}},
+			env: staging, want: def},
+		{name: "another entry's row has the default", rows: []*Deployment{{EnvironmentID: productID, Resource: def, EntryID: llama8BID}},
+			env: staging, want: def + "-2"},
+		{name: "a row in this environment", rows: []*Deployment{{EnvironmentID: stagingID, Resource: "llm", EntryID: qwen7B}},
+			env: staging, want: "llm",
+			problem: &Problem{Code: ProblemExists, Message: "llm is already deploying Qwen2.5 7B Instruct in staging."}},
+		{name: "another entry's row has the asked name", rows: []*Deployment{{EnvironmentID: productID, Resource: "llm", EntryID: llama8BID}},
+			env: staging, asked: "llm", want: "llm",
+			problem: &Problem{Code: ProblemNameTaken, Message: "llm is already a model in this project. Pick another name."}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			doc := "version: 1\n"
+			if c.resources != "" {
+				doc += "resources:\n" + c.resources
+			}
+			m, err := manifest.Parse([]byte(doc))
+			if err != nil {
+				t.Fatal(err)
+			}
+			name, join, p := chooseName(m, c.rows, e, c.env, c.asked)
+			if name != c.want || join != c.join {
+				t.Errorf("got %q join %v, want %q join %v", name, join, c.want, c.join)
+			}
+			switch {
+			case c.problem == nil && p != nil:
+				t.Errorf("problem %+v", p)
+			case c.problem != nil && (p == nil || *p != *c.problem):
+				t.Errorf("problem %+v, want %+v", p, c.problem)
+			}
+		})
+	}
+}
+
+func TestPlacementUpdateWritesOnlyWhatDiffers(t *testing.T) {
+	e := qwenEntry(t)
+	bf16, _ := e.Quantization("bf16")
+	awq, _ := e.Quantization("awq-int4")
+	spec := engines.Spec{Entry: e, Quantization: bf16, ServedName: "chat", MaxModelLen: 8192, GPUs: 1}
+	raw := manifest.Resource{Kind: recipes.ModelVLLMKind, Provider: "server", Target: "c1", GPU: &manifest.GPU{Kind: "nvidia-l4", Count: 1},
+		Settings: engines.Settings(spec)}
+
+	pv := &DeployPreview{Resource: "llm", Target: TargetChoice{ConnectionID: "c2", Provider: "server"},
+		GPU: &provider.GPURequest{Kind: "nvidia-l4", Count: 1}, spec: spec}
+	u := placementUpdate(raw, "production", manifest.Defaults{}, pv)
+	if u.Resource != "llm" || u.Environment != "production" || u.Enabled == nil || !*u.Enabled || u.Target == nil || *u.Target != "c2" ||
+		u.Provider != nil || u.GPU != nil || len(u.Settings) != 0 {
+		t.Errorf("same placement on c2: %+v", u)
+	}
+
+	other := spec
+	other.Quantization, other.ServedName = awq, "Qwen/Qwen2.5-7B-Instruct"
+	pv = &DeployPreview{Resource: "llm", Target: TargetChoice{ConnectionID: "k1", Provider: "kubernetes"},
+		GPU: &provider.GPURequest{Kind: "nvidia-h100", Count: 1}, spec: other}
+	u = placementUpdate(raw, "production", manifest.Defaults{}, pv)
+	if u.Provider == nil || *u.Provider != "kubernetes" || u.GPU == nil || *u.GPU != (manifest.GPU{Kind: "nvidia-h100", Count: 1}) {
+		t.Errorf("kubernetes: %+v", u)
+	}
+	want := engines.Settings(other)
+	for _, key := range []string{"quantization", "model", "revision"} {
+		if u.Settings[key] != want[key] || want[key] == raw.Settings[key] {
+			t.Errorf("%s = %q, want %q (top level %q)", key, u.Settings[key], want[key], raw.Settings[key])
+		}
+	}
+	for _, key := range []string{"entry", "served_name", "max_model_len", "cache_mb"} {
+		if _, ok := u.Settings[key]; ok {
+			t.Errorf("wrote %s: %v", key, u.Settings)
+		}
+	}
+
+	// What production's block already says isn't written again.
+	raw.Environments = map[string]manifest.ResourceSettings{"production": {Provider: "kubernetes", GPU: &manifest.GPU{Kind: "nvidia-h100", Count: 1},
+		Settings: map[string]string{"quantization": awq.ID}}}
+	u = placementUpdate(raw, "production", manifest.Defaults{}, pv)
+	if u.Provider != nil || u.GPU != nil || u.Settings["quantization"] != "" || u.Settings["model"] != want["model"] {
+		t.Errorf("over production's block: %+v", u)
+	}
+}
+
+// deployLLM deploys Qwen 7B as llm to env on target, with the
+// quantization asked for, "" for the best.
+func (d *deploySetup) deployLLM(t *testing.T, env, quantization string, target TargetChoice) *DeployResult {
+	t.Helper()
+	res, err := d.svc.Deploy(context.Background(), member, projectID, env, DeployInput{EntryID: qwen7B, Resource: "llm", Quantization: quantization, Target: target})
+	if err != nil {
+		t.Fatalf("deploy llm to %s: %v", env, err)
+	}
+	return res
+}
+
+func onGPU2(kind string) TargetChoice {
+	t := onGPU(kind)
+	t.ConnectionID = gpuConn2
+	return t
+}
+
+func TestDeployAddsAnEnvironment(t *testing.T) {
+	ctx := context.Background()
+	d := newDeploy(t, deployRegistry(t, llamaRev, ""), aiAdmin, []gpus.GPUTarget{l40sServer(), l40sServer2()})
+	d.deployLLM(t, stagingID, "", onGPU("nvidia-l40s"))
+	staged, err := d.rows.Get(ctx, "org", projectID, stagingID, "llm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	stagedCopy := *staged
+	edits := d.recordEdits()
+	plans := len(d.plans.asked)
+
+	in := DeployInput{EntryID: qwen7B, Target: onGPU2("nvidia-l40s")}
+	pv, err := d.svc.Preview(ctx, member, projectID, productID, in)
+	if err != nil || len(pv.Problems) != 0 || !pv.CanDeploy || pv.Resource != "llm" || pv.AddsTo != "llm" {
+		t.Fatalf("preview: %q adds to %q %+v, %v", pv.Resource, pv.AddsTo, pv.Problems, err)
+	}
+	if len(pv.Environments) != 2 || pv.Environments[0].EnvironmentID != productID ||
+		pv.Environments[0].Message != "Adds production to llm. Services in production link to this copy." || pv.Environments[1].EnvironmentID != stagingID {
+		t.Errorf("environments %+v", pv.Environments)
+	}
+	if len(edits.edits) != 0 {
+		t.Fatal("Preview edited the manifest")
+	}
+
+	if _, err = d.svc.Deploy(ctx, member, projectID, productID, in); err != nil {
+		t.Fatal(err)
+	}
+	if len(edits.edits) != 1 || edits.edits[0].AddResource != nil || edits.edits[0].UpdateResource == nil {
+		t.Fatalf("edits %+v", edits.edits)
+	}
+	u := edits.edits[0].UpdateResource
+	if u.Resource != "llm" || u.Environment != "production" || u.Enabled == nil || !*u.Enabled || u.Target == nil || *u.Target != gpuConn2 ||
+		u.Provider != nil || u.GPU != nil || len(u.Settings) != 0 {
+		t.Errorf("update %+v", u)
+	}
+	if len(d.plans.asked) != plans+1 || d.plans.asked[plans].Environment != "production" {
+		t.Errorf("plans %+v", d.plans.asked)
+	}
+	row, err := d.rows.Get(ctx, "org", projectID, productID, "llm")
+	if err != nil || row.EnvironmentID != productID || row.Resource != "llm" || row.PlanID == "" || row.ServerName != "gpu-box-2" {
+		t.Errorf("production's row %+v, %v", row, err)
+	}
+	if after, _ := d.rows.Get(ctx, "org", projectID, stagingID, "llm"); after.Revision != stagedCopy.Revision || after.PlanID != stagedCopy.PlanID {
+		t.Errorf("staging's row changed: %+v", after)
+	}
+	m := current(t, d)
+	llm := m.Resources["llm"]
+	if len(m.Resources) != 1 || llm.Target != gpuConn || !enabledIn(llm, "staging") || !enabledIn(llm, "production") ||
+		llm.For("production", m.Defaults).Target != gpuConn2 || llm.For("staging", m.Defaults).Target != gpuConn {
+		t.Errorf("manifest %+v", m.Resources)
+	}
+	last := d.audit.events[len(d.audit.events)-1]
+	if last.Action != "ai.model.deploy" || last.Attributes["adds_environment"] != true || last.Attributes["environment"] != "production" {
+		t.Errorf("audit %+v", last)
+	}
+	if first := d.audit.events[0]; first.Attributes["adds_environment"] != nil {
+		t.Errorf("a new resource's audit says it adds an environment: %+v", first)
+	}
+}
+
+// Review Focus 2: two deploys of the same model to two environments at
+// once. The one that saves second finds the resource there and adds its
+// environment to it, never a second resource or a "resource already
+// exists" error.
+func TestDeployJoinsAResourceAddedMeanwhile(t *testing.T) {
+	ctx := context.Background()
+	e := qwenEntry(t)
+	bf16, _ := e.Quantization("bf16")
+	stagingAdd := manifests.EditInput{AddResource: &manifests.NewResource{
+		Name: "llm", Kind: recipes.ModelVLLMKind, Provider: "server", Target: gpuConn2, Version: "0.31", EnabledIn: "staging",
+		GPU:      &manifest.GPU{Kind: "nvidia-l40s", Count: 1},
+		Settings: engines.Settings(engines.Spec{Entry: e, Quantization: bf16, ServedName: qwen7B, MaxModelLen: 32768, GPUs: 1}),
+	}}
+	for name, err := range map[string]error{"a conflict": manifests.ErrConflict, "the name taken": nil} {
+		t.Run(name, func(t *testing.T) {
+			d := newDeploy(t, deployRegistry(t, llamaRev, ""), aiAdmin, []gpus.GPUTarget{l40sServer(), l40sServer2()})
+			inner := d.svc.d.Manifests
+			edits := d.recordEdits()
+			edits.before = func(n int) error {
+				if n != 1 {
+					return nil
+				}
+				// Staging's deploy saves first.
+				if _, _, aerr := inner.Edit(ctx, member, projectID, stagingAdd); aerr != nil {
+					t.Fatal(aerr)
+				}
+				return err
+			}
+			res := d.deployLLM(t, productID, "", onGPU("nvidia-l40s"))
+			if len(edits.edits) != 2 || edits.edits[0].AddResource == nil || edits.edits[1].UpdateResource == nil {
+				t.Fatalf("edits %+v", edits.edits)
+			}
+			if u := edits.edits[1].UpdateResource; u.Environment != "production" || u.Enabled == nil || !*u.Enabled || *u.Target != gpuConn {
+				t.Errorf("update %+v", u)
+			}
+			if len(d.plans.asked) != 1 || d.plans.asked[0].Environment != "production" || res.PlanID == "" {
+				t.Errorf("plans %+v", d.plans.asked)
+			}
+			m := current(t, d)
+			if llm := m.Resources["llm"]; len(m.Resources) != 1 || !enabledIn(llm, "staging") || !enabledIn(llm, "production") ||
+				llm.For("production", m.Defaults).Target != gpuConn {
+				t.Errorf("manifest %+v", m.Resources)
+			}
+		})
+	}
+
+	// Something else called llm meanwhile refuses the deploy, and its row
+	// goes.
+	d := newDeploy(t, deployRegistry(t, llamaRev, ""), aiAdmin, []gpus.GPUTarget{l40sServer()})
+	inner := d.svc.d.Manifests
+	edits := d.recordEdits()
+	edits.before = func(n int) error {
+		if n == 1 {
+			_, _, aerr := inner.Edit(ctx, member, projectID, manifests.EditInput{AddResource: &manifests.NewResource{Name: "llm", Kind: "postgres", Provider: "cloud-sql"}})
+			return aerr
+		}
+		return nil
+	}
+	_, err := d.svc.Deploy(ctx, member, projectID, productID, DeployInput{EntryID: qwen7B, Resource: "llm", Target: onGPU("nvidia-l40s")})
+	var refused *ProblemError
+	if !errors.As(err, &refused) || refused.Problem.Code != ProblemNameTaken || len(edits.edits) != 1 || len(d.rows.rows) != 0 {
+		t.Errorf("name taken meanwhile: %v, %d edits, %d rows", err, len(edits.edits), len(d.rows.rows))
+	}
+}
+
+// Review Focus 5 and Decision 2: one resource has one kind. Adding an
+// environment on a target the kind doesn't run on is refused, and the
+// same model under its own name deploys there.
+func TestPreviewRefusesAnotherKindForAnExistingModel(t *testing.T) {
+	ctx := context.Background()
+	d := newDeploy(t, deployRegistry(t, llamaRev, ""), aiAdmin, []gpus.GPUTarget{l40sServer()}, cpuServer())
+	d.deployLLM(t, stagingID, "", onGPU("nvidia-l40s"))
+	cpu := DeployInput{EntryID: qwen7B, Target: TargetChoice{Source: TargetConnection, ConnectionID: cpuConn}}
+	pv, err := d.svc.Preview(ctx, member, projectID, productID, cpu)
+	if err != nil || !slices.Equal(codes(pv), []string{ProblemEngine}) || pv.CanDeploy {
+		t.Fatalf("preview: %+v, %v", pv, err)
+	}
+	want := "llm runs as vLLM model in its other environments, and on cpu-box it would run as llama.cpp model. Pick a target it runs on as vLLM model, or deploy it as a separately named model."
+	if msg := pv.Problems[0].Message; msg != want || !strings.Contains(msg, "on cpu-box it would run as") || !strings.HasSuffix(msg, "or deploy it as a separately named model.") {
+		t.Errorf("message %q", msg)
+	}
+	if _, err = d.svc.Deploy(ctx, member, projectID, productID, cpu); err == nil || len(current(t, d).Resources) != 1 {
+		t.Errorf("deploy: %v", err)
+	}
+
+	cpu.Resource = "llm-cpu"
+	pv, err = d.svc.Preview(ctx, member, projectID, productID, cpu)
+	if err != nil || len(pv.Problems) != 0 || pv.AddsTo != "" || pv.Kind != recipes.ModelLlamaCPPKind || !pv.CanDeploy {
+		t.Errorf("separately named: %q adds to %q %+v, %v", pv.Kind, pv.AddsTo, pv.Problems, err)
+	}
+}
+
+// Decision 2: a model joining a resource prefers the quantizations of
+// that resource's kind, where a new one takes the first that fits.
+func TestPreviewPrefersTheExistingKind(t *testing.T) {
+	ctx := context.Background()
+	e := qwenEntry(t)
+	gguf, _ := e.Quantization("gguf-q4_k_m")
+	awq, _ := e.Quantization("awq-int4")
+	e.Quantizations = []registry.Quantization{gguf, awq}
+	raw, err := yaml.Marshal(registry.File{Family: e.Family, Entries: []registry.Entry{e}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, err := registry.Load(fstest.MapFS{e.Family + ".yaml": &fstest.MapFile{Data: raw}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	d := newDeploy(t, r, aiAdmin, []gpus.GPUTarget{l40sServer(), l40sServer2()})
+
+	// A new model takes the first that fits: the GGUF, on llama.cpp.
+	pv, err := d.svc.Preview(ctx, member, projectID, productID, DeployInput{EntryID: qwen7B, Target: onGPU2("nvidia-l40s")})
+	if err != nil || len(pv.Problems) != 0 || pv.Quantization != gguf.ID || pv.Kind != recipes.ModelLlamaCPPGPUKind {
+		t.Fatalf("new model: %q %q %+v, %v", pv.Quantization, pv.Kind, pv.Problems, err)
+	}
+
+	d.deployLLM(t, stagingID, awq.ID, onGPU("nvidia-l40s"))
+	pv, err = d.svc.Preview(ctx, member, projectID, productID, DeployInput{EntryID: qwen7B, Target: onGPU2("nvidia-l40s")})
+	if err != nil || len(pv.Problems) != 0 || pv.AddsTo != "llm" || pv.Quantization != awq.ID || pv.Kind != recipes.ModelVLLMKind {
+		t.Errorf("joining llm: %q %q adds to %q %+v, %v", pv.Quantization, pv.Kind, pv.AddsTo, pv.Problems, err)
 	}
 }
