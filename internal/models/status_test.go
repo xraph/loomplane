@@ -680,3 +680,30 @@ func TestClientCantSetMoving(t *testing.T) {
 		t.Errorf("deploy: %v", err)
 	}
 }
+
+// Ruling M31: a move onto the model's own server gives back the GPUs its
+// deployed engine holds, never what the manifest asks for. One that was
+// planned and never deployed holds none, so it can't take a GPU another
+// service holds.
+func TestMoveCreditsOnlyTheGPUsItsEngineHolds(t *testing.T) {
+	ctx := context.Background()
+	d := newDeploy(t, deployRegistry(t, llamaRev, ""), deployer, []gpus.GPUTarget{l40sServer()}, boxes()...)
+	d.grantLlama()
+	if _, err := d.svc.Deploy(ctx, member, projectID, stagingID, DeployInput{EntryID: llama8BID, Target: onGPU("nvidia-l40s")}); err != nil {
+		t.Fatal(err)
+	}
+	held := l40sServer()
+	held.Free, held.Message = 0, "gpu-box has 1 NVIDIA L40S GPUs and 1 are given to other services, so 0 are free."
+	d.targets.targets = []gpus.GPUTarget{held}
+	var refused *ProblemError
+	_, err := d.svc.Move(ctx, member, projectID, stagingID, llamaResource, MoveInput{Target: onGPU("nvidia-l40s"), MaxModelLen: 16384})
+	if !errors.As(err, &refused) || refused.Problem.Code != ProblemTarget || refused.Problem.Message != held.Message {
+		t.Fatalf("move of an undeployed model onto a held GPU: %v", err)
+	}
+	// Once its engine holds the GPU, it's its own to move onto.
+	r := current(t, d).Resources[llamaResource]
+	d.facts.running(stagingID, llamaResource, r.Kind, r.Settings, 1)
+	if _, err = d.svc.Move(ctx, member, projectID, stagingID, llamaResource, MoveInput{Target: onGPU("nvidia-l40s"), MaxModelLen: 16384}); err != nil {
+		t.Errorf("move on its own GPU: %v", err)
+	}
+}

@@ -225,6 +225,8 @@ type memDeployments struct {
 	mu   sync.Mutex
 	rows map[string]*Deployment
 	now  func() time.Time
+	// onCreate runs after each Create: what happens elsewhere meanwhile.
+	onCreate func()
 }
 
 func deploymentKey(org, project, env, resource string) string {
@@ -257,6 +259,11 @@ func (m *memDeployments) Create(_ context.Context, d *Deployment) error {
 	}
 	row := *d
 	m.rows[k] = &row
+	if hook := m.onCreate; hook != nil {
+		m.mu.Unlock()
+		hook()
+		m.mu.Lock()
+	}
 	return nil
 }
 

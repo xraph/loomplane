@@ -78,6 +78,12 @@ type Status struct {
 	// Cost is what its GPUs cost per hour. Source "cpu" isn't free: the
 	// model's cost is part of its server's, ConnectionName.
 	Cost Cost `json:"cost"`
+	// MoveCost is what the GPU server a model moves onto costs per hour,
+	// while the move waits for that server; nil otherwise. The model keeps
+	// running where it is until the move finishes, so once the new server
+	// is up both bill: Cost and MoveCost together. An unknown price stays
+	// unknown, never "0.00".
+	MoveCost *Cost `json:"move_cost,omitempty"`
 	// MonthToDateUSD is what it cost this month so far, four places.
 	MonthToDateUSD string `json:"month_to_date_usd"`
 	// ProjectedUSD is month to date plus the hourly price for the hours
@@ -360,6 +366,12 @@ func (s *Service) status(ctx context.Context, p security.Principal, projectID st
 		// Waiting for a new server: the whole server is the model's, at the
 		// size's price.
 		st.Cost = s.sizeCost(ctx, p, row.Request.Target, override)
+	}
+	if row != nil && waitsForServer(row) && row.Request != nil && row.Request.Moving != nil && row.Request.Target.Source == TargetServerSize {
+		// The new server is the move's, at its size's price. The override is
+		// what the owner says the GPUs it runs on now cost, so it isn't used.
+		c := s.sizeCost(ctx, p, row.Request.Target, "")
+		st.MoveCost = &c
 	}
 	st.ProjectedUSD = projected(st.Cost, st.MonthToDateUSD, now)
 	if allowed, aerr := s.d.Authz.Allowed(ctx, p, writeNeed(env)); aerr == nil {
@@ -671,9 +683,16 @@ func (s *Service) moveRequest(ctx context.Context, p security.Principal, project
 		return nil, DeployInput{}, werr
 	}
 	from := &MovingFrom{Kind: r.Kind, ConnectionID: r.Target}
-	if m, merr := s.manifestOf(ctx, p, projectID); merr == nil && m != nil {
-		if g := r.For(env.Name, m.Defaults).GPU; g != nil {
-			from.GPUKind, from.GPUs = g.Kind, g.Count
+	// The GPUs it gives back are the ones its deployed engine holds, never
+	// what the manifest asks for: a manifest edited and not deployed yet
+	// holds nothing more, and one never deployed holds nothing.
+	if s.d.Deployed != nil {
+		bindings, berr := s.d.Deployed.Bindings(ctx, p.OrgID, env.ID)
+		if berr != nil {
+			return nil, DeployInput{}, berr
+		}
+		if b, cfg := engineBinding(bindings, resource); b != nil && b.ConnectionID == r.Target && cfg.GPU != nil {
+			from.GPUKind, from.GPUs = cfg.GPU.Kind, cfg.GPU.Count
 		}
 	}
 	if row != nil {
@@ -868,7 +887,7 @@ func (s *Service) moveServerFirst(ctx context.Context, p security.Principal, pro
 	if err := s.d.Store.Update(ctx, row); err != nil {
 		return nil, err
 	}
-	res, err := s.applyServer(ctx, p, projectID, env, pv, row, func(ctx context.Context) error {
+	undo := func(ctx context.Context) error {
 		back := before
 		back.Revision = row.Revision
 		if err := s.d.Store.Update(ctx, &back); err != nil {
@@ -876,8 +895,15 @@ func (s *Service) moveServerFirst(ctx context.Context, p security.Principal, pro
 		}
 		*row = back
 		return nil
-	})
-	if res != nil {
+	}
+	if err := s.giveWayOnName(ctx, row, undo); err != nil {
+		return nil, err
+	}
+	res, err := s.applyServer(ctx, p, projectID, env, pv, row, undo)
+	// Only an approved server moves the model off the old one. A move the
+	// capacity policy paused says so on the row, and one that failed moves
+	// nothing.
+	if err == nil && res != nil && row.Message == "" {
 		res.Message = leftServer(&before)
 	}
 	return res, err

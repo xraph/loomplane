@@ -266,6 +266,19 @@ func resourceConfig(b *planning.Binding) *planning.ResourceConfig {
 // engineSettings are the settings, GPU count and kind the model's engine
 // was deployed with, from its component's binding: what it serves now.
 func engineSettings(bindings []*planning.Binding, resource string) (settings map[string]string, gpus int, kind string) {
+	_, cfg := engineBinding(bindings, resource)
+	if cfg == nil {
+		return nil, 0, ""
+	}
+	if cfg.GPU != nil {
+		gpus = cfg.GPU.Count
+	}
+	return cfg.Settings, gpus, cfg.Kind
+}
+
+// engineBinding is the binding of the model's engine component, with its
+// config, nil when it has none: what deployed it, where, and on which GPUs.
+func engineBinding(bindings []*planning.Binding, resource string) (*planning.Binding, *planning.ComponentConfig) {
 	name := planning.ComponentActionName(resource, recipes.ModelEngine)
 	for _, b := range bindings {
 		if b.Subject != planning.ResourceSubject || b.Name != name {
@@ -273,14 +286,11 @@ func engineSettings(bindings []*planning.Binding, resource string) (settings map
 		}
 		cfg := resourceConfig(b)
 		if cfg == nil || cfg.Component == nil {
-			return nil, 0, ""
+			return nil, nil
 		}
-		if cfg.Component.GPU != nil {
-			gpus = cfg.Component.GPU.Count
-		}
-		return cfg.Component.Settings, gpus, cfg.Component.Kind
+		return b, cfg.Component
 	}
-	return nil, 0, ""
+	return nil, nil
 }
 
 // servedSpec reads what a model's settings serve. Unlike the hooks, it

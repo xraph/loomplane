@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -183,6 +184,22 @@ func (f *fakeServers) ListServers(ctx context.Context, p security.Principal, clo
 	for _, v := range f.servers {
 		if v.CloudID == cloud {
 			c := *v
+			out = append(out, &c)
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeServers) ListOperations(ctx context.Context, p security.Principal, cloud string) ([]*cloudinfra.Operation, error) {
+	if err := f.allowed(ctx, p); err != nil {
+		return nil, err
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []*cloudinfra.Operation
+	for _, id := range slices.Sorted(maps.Keys(f.ops)) {
+		if op := f.ops[id]; op.CloudID == cloud && op.OrgID == p.OrgID {
+			c := *op
 			out = append(out, &c)
 		}
 	}
@@ -1473,5 +1490,164 @@ func TestPlainMovePreviewWritesNothing(t *testing.T) {
 	previews, applies, _ := sf.servers.calls()
 	if after := sf.row(t); previews != 0 || applies != 0 || after.Revision != before.Revision || sf.revisions.count() != revisions {
 		t.Errorf("wrote: %d reviews, %d applies, row %d to %d, %d revisions", previews, applies, before.Revision, after.Revision, sf.revisions.count())
+	}
+}
+
+// reviewIn reviews a new L40S server for Qwen 7B in env, and returns the
+// deploy that approves it.
+func (sf *serverFirstSetup) reviewIn(t *testing.T, env string) (*DeployPreview, DeployInput) {
+	t.Helper()
+	in := DeployInput{EntryID: qwen7B, Target: onSize(), ReviewServer: true}
+	pv, err := sf.svc.Preview(context.Background(), member, projectID, env, in)
+	if err != nil || len(pv.Problems) != 0 || pv.Server == nil {
+		t.Fatalf("review in %s: %+v, %v", env, pv, err)
+	}
+	in.ReviewServer = false
+	in.Server = &ServerApproval{CloudID: pv.Server.CloudID, OperationID: pv.Server.ID, Review: pv.Server.Review}
+	return pv, in
+}
+
+// Ruling M31: a server that's approved but not created yet has no server
+// row, so its name is taken by the model waiting for it and by its open
+// create. A review only previewed takes no name.
+func TestServersOnTheirWayKeepTheirNames(t *testing.T) {
+	sf := newServerFirst(t, cloudAdmin)
+	sf.deployOnNewServer(t)
+	if len(sf.servers.servers) != 0 {
+		t.Fatal("the fake made a server row before the create started")
+	}
+	pv, _ := sf.reviewIn(t, productID)
+	if pv.TargetName != serverName+"-2" || pv.Server.Input.Name != serverName+"-2" {
+		t.Fatalf("production's server %q, review %q", pv.TargetName, pv.Server.Input.Name)
+	}
+	// Reviewing again keeps the name: the first review is only previewed.
+	if pv, _ = sf.reviewIn(t, productID); pv.Server.Input.Name != serverName+"-2" {
+		t.Errorf("second review %q", pv.Server.Input.Name)
+	}
+	// A create approved in Infrastructure, with no model row, takes its
+	// name too until it's done.
+	running := pv.Server.ID
+	sf.servers.set(running, func(op *cloudinfra.Operation) { op.Status = "running" })
+	if pv, _ = sf.reviewIn(t, productID); pv.Server.Input.Name != serverName+"-3" {
+		t.Errorf("review beside a running create %q", pv.Server.Input.Name)
+	}
+	// Once that create failed, its name is free again.
+	sf.servers.set(running, func(op *cloudinfra.Operation) { op.Status = "failed" })
+	if pv, _ = sf.reviewIn(t, productID); pv.Server.Input.Name != serverName+"-2" {
+		t.Errorf("review once the other creates ended %q", pv.Server.Input.Name)
+	}
+}
+
+// Ruling M31: two deploys that reviewed the same name never both get it.
+// The second to be approved is told to review again, and when both are
+// approved at the same moment, the one that finds the other gives way
+// before its server is approved.
+func TestTwoDeploysNeverShareAServerName(t *testing.T) {
+	ctx := context.Background()
+	sf := newServerFirst(t, cloudAdmin)
+	staging, stagingIn := sf.reviewIn(t, stagingID)
+	production, productionIn := sf.reviewIn(t, productID)
+	if staging.Server.Input.Name != serverName || production.Server.Input.Name != serverName {
+		t.Fatalf("reviews %q and %q", staging.Server.Input.Name, production.Server.Input.Name)
+	}
+	if _, err := sf.svc.Deploy(ctx, member, projectID, stagingID, stagingIn); err != nil {
+		t.Fatal(err)
+	}
+	var refused *ProblemError
+	if _, err := sf.svc.Deploy(ctx, member, projectID, productID, productionIn); !errors.As(err, &refused) || refused.Problem.Code != ProblemServerReview {
+		t.Fatalf("second deploy of the same name: %v", err)
+	}
+	if _, applies, _ := sf.servers.calls(); applies != 1 {
+		t.Errorf("%d servers approved", applies)
+	}
+
+	// Both pass the name check, then each writes its row. Production's
+	// lands while staging's deploy is between its row and its approval.
+	sf = newServerFirst(t, cloudAdmin)
+	_, stagingIn = sf.reviewIn(t, stagingID)
+	production, _ = sf.reviewIn(t, productID)
+	sf.rows.onCreate = func() {
+		sf.rows.onCreate = nil // the other deploy's own Create runs no hook
+		other := &Deployment{OrgID: "org", ProjectID: projectID, EnvironmentID: productID, Resource: "qwen2-5-7b-instruct", EntryID: qwen7B,
+			Quantization: "bf16", Engine: "vllm", Phase: PhaseWaitingForServer, ServerCloudID: cloudID,
+			ServerOperationID: production.Server.ID, ServerName: serverName}
+		if err := sf.rows.Create(ctx, other); err != nil {
+			t.Error(err)
+		}
+	}
+	_, err := sf.svc.Deploy(ctx, member, projectID, stagingID, stagingIn)
+	if !errors.As(err, &refused) || refused.Problem.Code != ProblemServerReview || !strings.Contains(refused.Problem.Message, serverName) {
+		t.Fatalf("deploy that lost the name: %v", err)
+	}
+	if _, gerr := sf.rows.Get(ctx, "org", projectID, stagingID, "qwen2-5-7b-instruct"); !errors.Is(gerr, ErrNotFound) {
+		t.Errorf("the row that gave way stays: %v", gerr)
+	}
+	if _, applies, _ := sf.servers.calls(); applies != 0 {
+		t.Errorf("%d servers approved after the clash", applies)
+	}
+}
+
+// Ruling M31: a move off a server Loomplane created says that server
+// keeps billing only once the new one is approved. A paused or refused
+// move hasn't moved the model.
+func TestOnlyAnApprovedMoveSaysItLeftItsServer(t *testing.T) {
+	ctx := context.Background()
+	move := func(t *testing.T, applyErrs ...error) (*serverFirstSetup, *DeployResult, error) {
+		sf := newServerFirst(t, cloudAdmin)
+		sf.onItsNewServer(t)
+		sf.servers.applyErrs = applyErrs
+		in := MoveInput{Target: onSize(), ReviewServer: true}
+		pv, err := sf.svc.MovePreview(ctx, member, projectID, stagingID, "qwen2-5-7b-instruct", in)
+		if err != nil || pv.Server == nil {
+			t.Fatalf("move preview: %+v, %v", pv, err)
+		}
+		in.ReviewServer, in.Server = false, &ServerApproval{CloudID: pv.Server.CloudID, OperationID: pv.Server.ID, Review: pv.Server.Review}
+		res, err := sf.svc.Move(ctx, member, projectID, stagingID, "qwen2-5-7b-instruct", in)
+		return sf, res, err
+	}
+	left := serverName + " keeps running and costs money until you delete it in Infrastructure."
+
+	_, res, err := move(t)
+	if err != nil || res.Message != left {
+		t.Errorf("approved move: %+v, %v", res, err)
+	}
+	sf, res, err := move(t, staleCount())
+	if d := sf.row(t); err != nil || res.Message != "" || d.Phase != PhaseWaitingForServer || !strings.Contains(d.Message, "out of date") {
+		t.Errorf("paused move: %+v, %v, row %+v", res, err, d)
+	}
+	if _, res, err = move(t, gpuCeiling()); err == nil || (res != nil && res.Message != "") {
+		t.Errorf("refused move: %+v, %v", res, err)
+	}
+	if _, res, err = move(t, errors.New("the cloud is down")); err == nil || (res != nil && res.Message != "") {
+		t.Errorf("failed move: %+v, %v", res, err)
+	}
+}
+
+// Ruling M31: while a model moves onto a new server, its page shows what
+// it costs where it runs and what the new server costs, since both bill
+// once the new one is up. An unknown price stays unknown.
+func TestMovingModelShowsBothServersPrices(t *testing.T) {
+	ctx := context.Background()
+	sf := newServerFirst(t, cloudAdmin)
+	sf.qwenOnGPUBox(t)
+	st, err := sf.svc.Status(ctx, member, projectID, stagingID, "qwen2-5-7b-instruct")
+	if err != nil || st.MoveCost != nil {
+		t.Fatalf("before the move: %+v, %v", st, err)
+	}
+	if _, err = sf.moveOntoNewServer(t); err != nil {
+		t.Fatal(err)
+	}
+	st, err = sf.svc.Status(ctx, member, projectID, stagingID, "qwen2-5-7b-instruct")
+	if err != nil || st.State != StateWaitingForServer || st.Cost.Source != CostSourceServer || st.Cost.HourlyUSD != "1.5700" {
+		t.Fatalf("moving: %+v, %v", st, err)
+	}
+	if st.MoveCost == nil || st.MoveCost.Source != CostSourceServer || st.MoveCost.HourlyUSD != "1.5700" || st.MoveCost.MonthlyUSD != "1146.10" {
+		t.Errorf("new server's cost %+v", st.MoveCost)
+	}
+	sf.targets.targets[0].HourlyPriceKnown, sf.targets.targets[0].HourlyUSD = false, 0
+	st, err = sf.svc.Status(ctx, member, projectID, stagingID, "qwen2-5-7b-instruct")
+	if err != nil || st.MoveCost == nil || st.MoveCost.Source != CostSourceUnknown || st.MoveCost.HourlyUSD != "" || st.MoveCost.Known ||
+		st.Cost.HourlyUSD != "1.5700" {
+		t.Errorf("unknown new price: %+v, %v", st.MoveCost, err)
 	}
 }

@@ -28,6 +28,7 @@ type Servers interface {
 	PreviewServer(ctx context.Context, p security.Principal, cloud string, in cloudinfra.ServerInput) (*cloudinfra.Operation, error)
 	ApplyServerOperation(ctx context.Context, p security.Principal, cloud, id string, in cloudinfra.ApplyInput) (*cloudinfra.Operation, error)
 	GetOperation(ctx context.Context, p security.Principal, cloud, id string) (*cloudinfra.Operation, error)
+	ListOperations(ctx context.Context, p security.Principal, cloud string) ([]*cloudinfra.Operation, error)
 	ListServers(ctx context.Context, p security.Principal, cloud string) ([]*cloudinfra.Server, error)
 }
 
@@ -144,6 +145,83 @@ func freeServerName(name string, taken map[string]bool) string {
 	}
 }
 
+// namesComing adds to taken the names of GPU servers that are on their way
+// but have no server row yet: cloudinfra writes one only when the create
+// starts. They're the servers the project's waiting models wait for, and
+// the cloud's approved creates that haven't finished. A review that's only
+// previewed isn't counted, so reviewing again keeps its name; two deploys
+// that reviewed the same name are told apart when they're approved.
+// resource in environmentID is the model asking, and its own row doesn't
+// count.
+func (s *Service) namesComing(ctx context.Context, p security.Principal, cloudID, projectID, environmentID, resource string, taken map[string]bool) error {
+	if s.d.Store != nil {
+		rows, err := s.d.Store.ListProject(ctx, p.OrgID, projectID)
+		if err != nil {
+			return err
+		}
+		for _, d := range rows {
+			if d.EnvironmentID == environmentID && d.Resource == resource {
+				continue
+			}
+			if waitsForServer(d) && d.ServerName != "" {
+				taken[d.ServerName] = true
+			}
+		}
+	}
+	ops, err := s.d.Servers.ListOperations(ctx, p, cloudID)
+	if err != nil {
+		return err
+	}
+	for _, op := range ops {
+		if op.Input.Kind == "create" && createOpen(op.Status) {
+			taken[op.Input.Name] = true
+		}
+	}
+	return nil
+}
+
+// waitsForServer reports whether d waits for a GPU server Loomplane is
+// creating, or did and needs attention there.
+func waitsForServer(d *Deployment) bool {
+	return d.Phase == PhaseWaitingForServer || d.Phase == PhaseNeedsAttention
+}
+
+// createOpen reports whether a server operation in status was approved and
+// hasn't finished: its server is coming.
+func createOpen(status string) bool {
+	switch status {
+	case "preview", "succeeded", "failed", "cancelled":
+		return false
+	}
+	return true
+}
+
+// nameClash reports whether another of the project's models waits for a
+// GPU server of d's name. Two deploys approved at the same moment both
+// pass the name check before either row is written, so each looks again
+// once its own row is there. Whichever finds the other gives way, and when
+// both do, neither server is approved, which costs a retry and never a
+// second server of one name.
+func (s *Service) nameClash(ctx context.Context, d *Deployment) (bool, error) {
+	rows, err := s.d.Store.ListProject(ctx, d.OrgID, d.ProjectID)
+	if err != nil {
+		return false, err
+	}
+	for _, other := range rows {
+		if other.ID != d.ID && waitsForServer(other) && other.ServerName == d.ServerName {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// nameTaken is the refusal of a deploy or move whose server's name another
+// deploy took first.
+func nameTaken(name string) error {
+	return &ProblemError{Problem: Problem{Code: ProblemServerReview,
+		Message: fmt.Sprintf("Another model in this project is getting a GPU server named %s. Preview again to review a server with a name of its own.", name)}}
+}
+
 // reviewServer works out the GPU server a server size target creates
 // first. Only an admin creates GPU servers, and only on a DigitalOcean
 // account the environment's cloud has. A plain preview stops there, priced
@@ -196,6 +274,10 @@ func (s *Service) reviewServer(ctx context.Context, p security.Principal, projec
 	}
 	if in.Moving != nil && in.Moving.ServerName != "" {
 		taken[in.Moving.ServerName] = true
+	}
+	if nerr := s.namesComing(ctx, p, assignment.CloudID, projectID, env.ID, pv.Resource, taken); nerr != nil {
+		problem(ProblemTarget, "Loomplane couldn't read %s's servers. Try again.", env.Name)
+		return
 	}
 	name = freeServerName(name, taken)
 	pv.TargetName = name
@@ -330,10 +412,31 @@ func (s *Service) deployServerFirst(ctx context.Context, p security.Principal, p
 	if err := s.createRow(ctx, p.OrgID, pv.entry, row); err != nil {
 		return nil, err
 	}
-	return s.applyServer(ctx, p, projectID, env, pv, row, func(ctx context.Context) error {
+	undo := func(ctx context.Context) error {
 		// Nothing points at the row, so it goes.
 		return s.d.Store.Delete(ctx, p.OrgID, projectID, env.ID, row.Resource)
-	})
+	}
+	if err := s.giveWayOnName(ctx, row, undo); err != nil {
+		return nil, err
+	}
+	return s.applyServer(ctx, p, projectID, env, pv, row, undo)
+}
+
+// giveWayOnName undoes row, just written, and refuses when another of the
+// project's models waits for a server of its name (nameClash). Its server
+// isn't approved yet, so nothing is paid for.
+func (s *Service) giveWayOnName(ctx context.Context, row *Deployment, undo func(context.Context) error) error {
+	clash, err := s.nameClash(ctx, row)
+	if err == nil && !clash {
+		return nil
+	}
+	if uerr := undo(context.WithoutCancel(ctx)); uerr != nil {
+		return errors.Join(err, fmt.Errorf("and its deployment row stays: %w", uerr))
+	}
+	if err != nil {
+		return err
+	}
+	return nameTaken(row.ServerName)
 }
 
 // applyServer approves the GPU server of a row that waits for it. A
