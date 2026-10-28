@@ -1885,6 +1885,9 @@
           "gpu": {
             "$ref": "#/components/schemas/GPUPlacement"
           },
+          "inputs": {
+            "type": "string"
+          },
           "kind": {
             "type": "string"
           },
@@ -1896,6 +1899,10 @@
           },
           "revision": {
             "type": "string"
+          },
+          "settings": {
+            "type": "object",
+            "additionalProperties": true
           }
         }
       },
@@ -5028,6 +5035,9 @@
             "type": "integer"
           },
           "mount_path": {
+            "type": "string"
+          },
+          "size_setting": {
             "type": "string"
           }
         }

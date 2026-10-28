@@ -25689,6 +25689,9 @@
           },
           "mount_path": {
             "type": "string"
+          },
+          "size_setting": {
+            "type": "string"
           }
         }
       },

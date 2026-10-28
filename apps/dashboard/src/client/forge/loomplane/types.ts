@@ -4177,6 +4177,7 @@ export interface WebhookEndpointSecret {
 export interface WeightCache {
   kubernetesSizeMb: number;
   mountPath: string;
+  sizeSetting?: string;
 }
 
 export interface Workspace {

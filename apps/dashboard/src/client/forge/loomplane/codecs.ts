@@ -789,7 +789,7 @@ export const CODECS: Record<string, Codec> = {
   "WebhookEndpointList": {"kind": "object", "fields": {"items": {"ts": "items", "codec": () => CODECS["WebhookEndpointList.items"]}}, "required": ["items"]},
   "WebhookEndpointList.items": {"kind": "array", "items": () => CODECS["WebhookEndpoint"]},
   "WebhookEndpointSecret": {"kind": "object", "fields": {"endpoint": {"ts": "endpoint", "codec": () => CODECS["WebhookEndpoint"]}, "secret": {"ts": "secret"}}, "required": ["endpoint", "secret"]},
-  "WeightCache": {"kind": "object", "fields": {"kubernetes_size_mb": {"ts": "kubernetesSizeMb"}, "mount_path": {"ts": "mountPath"}}, "required": ["kubernetes_size_mb", "mount_path"]},
+  "WeightCache": {"kind": "object", "fields": {"kubernetes_size_mb": {"ts": "kubernetesSizeMb"}, "mount_path": {"ts": "mountPath"}, "size_setting": {"ts": "sizeSetting"}}, "required": ["kubernetes_size_mb", "mount_path"]},
   "Workspace": {"kind": "object", "fields": {"ecosystem": {"ts": "ecosystem"}, "evidence": {"ts": "evidence", "codec": () => CODECS["Workspace.evidence"]}, "members": {"ts": "members", "codec": () => CODECS["Workspace.members"]}, "path": {"ts": "path"}, "source": {"ts": "source"}, "tool": {"ts": "tool"}}, "required": ["ecosystem", "evidence", "members", "path", "tool"]},
   "Workspace.evidence": {"kind": "array", "items": () => CODECS["Evidence"]},
   "Workspace.members": {"kind": "array"},
