@@ -402,7 +402,11 @@ func (s *Service) ReconcileInfrastructure(ctx context.Context, org, id string, h
 	})
 }
 func safeFailure(err error) string {
+	var blocked *CapacityAdmissionError
 	switch {
+	// Before ErrConflict, which a capacity block also matches.
+	case errors.As(err, &blocked):
+		return "The cloud's capacity policy blocked this server before it was created (" + blocked.Block.Reason + " on " + blocked.Block.Resource + "). Change the policy or free capacity, then retry."
 	case errors.Is(err, provider.ErrInfrastructureAmbiguous):
 		return "The provider outcome is unresolved. Retry reconciles the existing intent without creating a replacement."
 	case errors.Is(err, ErrConflict):

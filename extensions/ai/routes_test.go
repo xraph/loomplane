@@ -7,6 +7,7 @@ import (
 
 	"github.com/xraph/chronicle"
 	"github.com/xraph/dispatch"
+	"github.com/xraph/dispatch/cron"
 	"github.com/xraph/dispatch/engine"
 	"github.com/xraph/dispatch/store/memory"
 	"github.com/xraph/forge"
@@ -42,13 +43,13 @@ func extensionNames(cfg config.Config) []string {
 
 func TestRoutesAreAbsentWhenAIIsOff(t *testing.T) {
 	var cfg config.Config
-	if names := extensionNames(cfg); slices.Contains(names, aiext.Name) {
-		t.Errorf("AI off, and the platform registers %s: %v", aiext.Name, names)
+	if names := extensionNames(cfg); slices.Contains(names, aiext.Name) || !slices.Contains(names, aiext.OffName) {
+		t.Errorf("AI off, and the platform registers %v", names)
 	}
 	cfg.AI.Enabled = true
 	names := extensionNames(cfg)
-	if !slices.Contains(names, aiext.Name) {
-		t.Fatalf("AI on, and the platform doesn't register %s: %v", aiext.Name, names)
+	if !slices.Contains(names, aiext.Name) || slices.Contains(names, aiext.OffName) {
+		t.Fatalf("AI on, and the platform registers %v", names)
 	}
 	// It registers after what it depends on, and before the dashboard's
 	// catch-all.
@@ -166,4 +167,34 @@ func keys[V any](m map[string]V) []string {
 		out = append(out, k)
 	}
 	return out
+}
+
+// With AI off, the reconcile's cron entry left from when it was on goes,
+// so Dispatch doesn't fire a job nothing handles every minute. Other
+// schedules stay, and running it again is harmless.
+func TestAIOffDropsItsSchedule(t *testing.T) {
+	dispatcher, err := dispatch.New(dispatch.WithStore(memory.New()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng, err := engine.Build(dispatcher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := t.Context()
+	for _, name := range []string{aiext.JobReconcileModels, orchestration.JobDriftCheck} {
+		if err = engine.RegisterCron(ctx, eng, &cron.Definition[struct{}]{Name: name, JobName: name, Schedule: "@every 1m", Queue: orchestration.Queue}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	off := aiext.NewOff(func() *engine.Engine { return eng })
+	for range 2 {
+		if err = off.Start(ctx); err != nil {
+			t.Fatal(err)
+		}
+		crons, lerr := eng.CronStore().ListCrons(ctx)
+		if lerr != nil || len(crons) != 1 || crons[0].JobName != orchestration.JobDriftCheck {
+			t.Errorf("crons %+v, %v", crons, lerr)
+		}
+	}
 }
