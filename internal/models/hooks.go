@@ -40,6 +40,9 @@ type HooksDeps struct {
 	// Gateways is told when a model is ready or removed. Nil is noGateways
 	// until SetGateways binds one.
 	Gateways Gateways
+	// HuggingFaceURL is ai.models.huggingface_url. A mirror there is where
+	// the engines download weights from.
+	HuggingFaceURL string
 }
 
 // Hooks are the model kinds' catalog hooks: they render the engine's
@@ -49,6 +52,7 @@ type Hooks struct {
 	registry *registry.Registry
 	custom   engines.CustomEntries
 	tokens   Tokens
+	hub      string // engines.HubEndpoint of the config
 
 	mu       sync.RWMutex
 	gateways Gateways
@@ -58,7 +62,7 @@ var _ deployments.CatalogHooks = (*Hooks)(nil)
 
 // NewHooks returns the model kinds' hooks.
 func NewHooks(d HooksDeps) *Hooks {
-	h := &Hooks{registry: d.Registry, custom: d.Custom, tokens: d.Settings}
+	h := &Hooks{registry: d.Registry, custom: d.Custom, tokens: d.Settings, hub: engines.HubEndpoint(d.HuggingFaceURL)}
 	h.SetGateways(d.Gateways)
 	return h
 }
@@ -81,8 +85,10 @@ func (h *Hooks) gatewaysOf() Gateways {
 }
 
 // Files implements deployments.CatalogHooks. The engine gets its arguments,
-// one per line, and the workspace's Hugging Face token when its weights are
-// gated (an empty file when they aren't). The guard gets its Caddyfile.
+// one per line, the workspace's Hugging Face token when its weights are
+// gated (an empty file when they aren't), and the Hugging Face mirror it
+// downloads from (an empty file for huggingface.co). The guard gets its
+// Caddyfile.
 // The token goes into its own file and nowhere else: never an argument, an
 // environment variable the plan records, or an error.
 func (h *Hooks) Files(ctx context.Context, run deployments.ComponentRun) (map[string][]byte, error) {
@@ -101,6 +107,7 @@ func (h *Hooks) Files(ctx context.Context, run deployments.ComponentRun) (map[st
 	if err != nil {
 		return nil, err
 	}
+	spec.Hub = h.hub
 	args, err := engines.Args(spec)
 	if err != nil {
 		return nil, err
@@ -122,8 +129,9 @@ func (h *Hooks) Files(ctx context.Context, run deployments.ComponentRun) (map[st
 		token = []byte(value)
 	}
 	return map[string][]byte{
-		recipes.ModelArgsPath:  argsFile(args),
-		recipes.ModelTokenPath: token,
+		recipes.ModelArgsPath:     argsFile(args),
+		recipes.ModelTokenPath:    token,
+		recipes.ModelEndpointPath: engines.Endpoint(spec),
 	}, nil
 }
 

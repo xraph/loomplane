@@ -34,16 +34,20 @@ const (
 	// ModelTokenPath holds the Hugging Face token for gated weights, or
 	// nothing.
 	ModelTokenPath = "/etc/loomplane/hf/token" //nolint:gosec // G101: a file path, not a credential
+	// ModelEndpointPath holds the Hugging Face mirror the engine downloads
+	// from, or nothing for huggingface.co.
+	ModelEndpointPath = "/etc/loomplane/hf/endpoint"
 	// ModelGuardConfig is the guard's Caddyfile.
 	ModelGuardConfig = "/etc/caddy/Caddyfile"
 	// ModelCachePath is where the engine keeps downloaded weights.
 	ModelCachePath = "/cache"
 
 	// ModelEngineWrapper starts the engine. It exports HF_TOKEN only when
-	// the token file has one, so the token never reaches argv, then
+	// the token file has one, so the token never reaches argv, and
+	// HF_ENDPOINT only when the endpoint file names a mirror. Then it
 	// appends each line of the args file to the engine command it was
 	// given and execs it. A line is one argument, spaces and all.
-	ModelEngineWrapper = "set -eu\nif [ -s /etc/loomplane/hf/token ]; then HF_TOKEN=\"$(cat /etc/loomplane/hf/token)\"; export HF_TOKEN; fi\nwhile IFS= read -r arg || [ -n \"$arg\" ]; do set -- \"$@\" \"$arg\"; done < /etc/loomplane/engine.args\nexec \"$@\"\n"
+	ModelEngineWrapper = "set -eu\nif [ -s /etc/loomplane/hf/token ]; then HF_TOKEN=\"$(cat /etc/loomplane/hf/token)\"; export HF_TOKEN; fi\nif [ -s /etc/loomplane/hf/endpoint ]; then HF_ENDPOINT=\"$(cat /etc/loomplane/hf/endpoint)\"; export HF_ENDPOINT; fi\nwhile IFS= read -r arg || [ -n \"$arg\" ]; do set -- \"$@\" \"$arg\"; done < /etc/loomplane/engine.args\nexec \"$@\"\n"
 )
 
 // Engine names ModelKindFor takes, the same as the model registry's.
@@ -161,7 +165,7 @@ func (m modelKind) kind(images map[string]Image) Kind {
 		Args:      slices.Clone(m.binary),
 		Ports:     []Port{{Name: ModelEnginePort, Container: 8000, Protocol: "http"}},
 		Readiness: &HTTPProbe{Port: ModelEnginePort, Path: "/health"},
-		Files:     []File{{Path: ModelArgsPath, Mode: 0o444}, {Path: ModelTokenPath, Mode: 0o400}},
+		Files:     []File{{Path: ModelArgsPath, Mode: 0o444}, {Path: ModelTokenPath, Mode: 0o400}, {Path: ModelEndpointPath, Mode: 0o444}},
 		Env:       slices.Clone(m.env),
 		Resources: m.resources, StartTimeout: m.startTimeout,
 	}

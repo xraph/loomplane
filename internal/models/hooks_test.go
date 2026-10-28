@@ -189,8 +189,11 @@ func TestEngineFilesForAGatedModel(t *testing.T) {
 		if got := string(files[recipes.ModelTokenPath]); got != hfToken {
 			t.Errorf("token file = %q", got)
 		}
-		if len(files) != 2 {
-			t.Errorf("files: %v, want the args and the token", slicesOfKeys(files))
+		if len(files) != 3 {
+			t.Errorf("files: %v, want the args, the token and the endpoint", slicesOfKeys(files))
+		}
+		if endpoint, ok := files[recipes.ModelEndpointPath]; !ok || len(endpoint) != 0 {
+			t.Errorf("endpoint file = %q (present %v), want present and empty for huggingface.co", endpoint, ok)
 		}
 		// The token goes only into its own file.
 		if strings.Contains(string(files[recipes.ModelArgsPath]), hfToken) {
@@ -440,5 +443,55 @@ func TestHooksCheckACustomEntrysEngine(t *testing.T) {
 	_, err := h.Files(ctx, run(t, recipes.ModelVLLMKind, recipes.ModelEngine, settings, 1))
 	if err == nil || !strings.Contains(err.Error(), "runs on tei, which model-vllm doesn't run. Deploy it as model-tei") {
 		t.Errorf("on vLLM: %v", err)
+	}
+}
+
+// Ruling M42: with ai.models.huggingface_url on a mirror, vLLM and Text
+// Embeddings Inference get it as HF_ENDPOINT through the endpoint file,
+// and llama.cpp downloads its GGUF from it. huggingface.co, with or
+// without a trailing slash, is no mirror.
+func TestEnginesDownloadFromTheMirror(t *testing.T) {
+	ctx := context.Background()
+	reg := fixture(t, llamaRevision, "--enforce-eager")
+	tokens := &fakeTokens{token: hfToken, revision: 1}
+	const mirror = "https://hf-mirror.example.com"
+
+	for _, url := range []string{"", "https://huggingface.co", "https://huggingface.co/"} {
+		h := NewHooks(HooksDeps{Registry: reg, Settings: tokens, HuggingFaceURL: url})
+		files, err := h.Files(ctx, run(t, recipes.ModelVLLMKind, recipes.ModelEngine, settingsFor(t, reg, llamaID, "bf16"), 1))
+		if err != nil || len(files[recipes.ModelEndpointPath]) != 0 {
+			t.Errorf("%q: endpoint %q, %v", url, files[recipes.ModelEndpointPath], err)
+		}
+	}
+
+	h := NewHooks(HooksDeps{Registry: reg, Settings: tokens, HuggingFaceURL: mirror + "/"})
+	files, err := h.Files(ctx, run(t, recipes.ModelVLLMKind, recipes.ModelEngine, settingsFor(t, reg, llamaID, "bf16"), 1))
+	if err != nil || string(files[recipes.ModelEndpointPath]) != mirror {
+		t.Errorf("vLLM endpoint %q, %v", files[recipes.ModelEndpointPath], err)
+	}
+	if strings.Contains(string(files[recipes.ModelArgsPath]), "huggingface.co") {
+		t.Errorf("vLLM args name huggingface.co:\n%s", files[recipes.ModelArgsPath])
+	}
+
+	bge := NewHooks(HooksDeps{Registry: registry.Default(), HuggingFaceURL: mirror})
+	files, err = bge.Files(ctx, run(t, recipes.ModelTEIKind, recipes.ModelEngine, settingsFor(t, registry.Default(), "BAAI/bge-small-en-v1.5", "native"), 0))
+	if err != nil || string(files[recipes.ModelEndpointPath]) != mirror {
+		t.Errorf("TEI endpoint %q, %v", files[recipes.ModelEndpointPath], err)
+	}
+
+	gguf := settingsFor(t, reg, llamaID, "gguf-q4_k_m")
+	for _, kind := range []string{recipes.ModelLlamaCPPKind, recipes.ModelLlamaCPPGPUKind} {
+		gpus := 0
+		if kind == recipes.ModelLlamaCPPGPUKind {
+			gpus = 1
+		}
+		files, err = h.Files(ctx, run(t, kind, recipes.ModelEngine, gguf, gpus))
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := "--model-url=" + mirror + "/bartowski/Meta-Llama-3.1-8B-Instruct-GGUF/resolve/" + ggufRevision + "/Meta-Llama-3.1-8B-Instruct-Q4_K_M.gguf\n"
+		if !strings.Contains(string(files[recipes.ModelArgsPath]), want) || len(files[recipes.ModelEndpointPath]) != 0 {
+			t.Errorf("%s: endpoint %q, args:\n%s", kind, files[recipes.ModelEndpointPath], files[recipes.ModelArgsPath])
+		}
 	}
 }

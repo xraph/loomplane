@@ -112,7 +112,7 @@ These have no variable wired in `config.yaml`. Set them in `config.local.yaml`.
 | Variable | Default | Meaning |
 |---|---|---|
 | `LOOMPLANE_AI_ENABLED` | `false` | Turns on the [AI section](/docs/ai) (`ai.enabled`): the Models and AI settings pages, their API and the model kinds. Off, a plan with a model resource gets a `catalog-feature-off` problem, and models already running keep running |
-| `LOOMPLANE_AI_MODELS_HUGGINGFACE_URL` | `https://huggingface.co` | The Hugging Face Hub, or a mirror of it, that Loomplane reads repos, model cards and gated checks from (`ai.models.huggingface_url`). The workspace's Hugging Face token is sent there, so it must be https, with plain http allowed only for `localhost` or a loopback address. A user, query or fragment stops startup. Engines still download weights from `huggingface.co` |
+| `LOOMPLANE_AI_MODELS_HUGGINGFACE_URL` | `https://huggingface.co` | The Hugging Face Hub, or a mirror of it, that Loomplane reads repos, model cards and gated checks from, and that model engines download weights from (`ai.models.huggingface_url`). The workspace's Hugging Face token is sent there, so it must be https, with plain http allowed only for `localhost` or a loopback address. A user, query or fragment stops startup. vLLM and Text Embeddings Inference get a mirror as `HF_ENDPOINT`, and llama.cpp fetches its GGUF from it |
 
 ## Process and container
 

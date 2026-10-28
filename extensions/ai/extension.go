@@ -163,8 +163,9 @@ func (e *Extension) Register(fapp forge.App) error {
 
 	// Until the AI gateway lands, the hooks tell no gateway. Models pasted
 	// from Hugging Face are found in the workspace's stored entries.
-	e.hooks = models.NewHooks(models.HooksDeps{Registry: registry.Default(), Custom: modelStore, Settings: e.settings})
-	inputs := models.Inputs{Registry: registry.Default(), Custom: modelStore, Settings: e.settings}
+	hub := e.cfg.AI.Models.HuggingFaceURL
+	e.hooks = models.NewHooks(models.HooksDeps{Registry: registry.Default(), Custom: modelStore, Settings: e.settings, HuggingFaceURL: hub})
+	inputs := models.Inputs{Registry: registry.Default(), Custom: modelStore, Settings: e.settings, HuggingFaceURL: hub}
 	for _, kind := range recipes.ModelKinds() {
 		hookMap[kind] = e.hooks
 		inputMap[kind] = inputs

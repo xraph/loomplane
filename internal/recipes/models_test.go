@@ -234,7 +234,7 @@ func TestModelKindShape(t *testing.T) {
 		if !reflect.DeepEqual(engine.Readiness, &recipes.HTTPProbe{Port: "http", Path: "/health"}) {
 			t.Errorf("%s engine readiness %+v", tc.kind, engine.Readiness)
 		}
-		if want := []recipes.File{{Path: recipes.ModelArgsPath, Mode: 0o444}, {Path: recipes.ModelTokenPath, Mode: 0o400}}; !reflect.DeepEqual(engine.Files, want) {
+		if want := []recipes.File{{Path: recipes.ModelArgsPath, Mode: 0o444}, {Path: recipes.ModelTokenPath, Mode: 0o400}, {Path: recipes.ModelEndpointPath, Mode: 0o444}}; !reflect.DeepEqual(engine.Files, want) {
 			t.Errorf("%s engine files %+v", tc.kind, engine.Files)
 		}
 		if !reflect.DeepEqual(engine.Resources, tc.resources) || engine.StartTimeout != tc.start {
@@ -315,7 +315,7 @@ func TestEngineWrapperIsTheConstant(t *testing.T) {
 	if strings.ContainsAny(w, "\u2013\u2014") {
 		t.Error("the wrapper has an en or em dash")
 	}
-	for _, path := range []string{recipes.ModelArgsPath, recipes.ModelTokenPath} {
+	for _, path := range []string{recipes.ModelArgsPath, recipes.ModelTokenPath, recipes.ModelEndpointPath} {
 		if !strings.Contains(w, path) {
 			t.Errorf("the wrapper doesn't read %s", path)
 		}

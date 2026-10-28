@@ -16,14 +16,16 @@ import (
 )
 
 // Inputs digests what the model kinds render into their components from
-// outside the manifest: the registry's engine arguments for the entry and
-// the workspace's Hugging Face token. A plan records the digest, so a
-// registry change to an entry's arguments, or a new token for a gated
-// model, plans an update of the engine.
+// outside the manifest: the registry's engine arguments for the entry, the
+// workspace's Hugging Face token and the Hugging Face mirror. A plan
+// records the digest, so a registry change to an entry's arguments, a new
+// token for a gated model or a new mirror plans an update of the engine.
 type Inputs struct {
 	Registry *registry.Registry
 	Custom   engines.CustomEntries
 	Settings Tokens // *aisettings.Service
+	// HuggingFaceURL is ai.models.huggingface_url, as Hooks have it.
+	HuggingFaceURL string
 }
 
 // RepinnedError and GatedError are planning.InputsProblems, which
@@ -63,6 +65,7 @@ func (i Inputs) Digest(ctx context.Context, orgID, _, _, resource string, r mani
 	if err != nil {
 		return nil, err
 	}
+	spec.Hub = engines.HubEndpoint(i.HuggingFaceURL)
 	args, err := engines.Args(spec)
 	if err != nil {
 		return nil, err
@@ -81,6 +84,10 @@ func (i Inputs) Digest(ctx context.Context, orgID, _, _, resource string, r mani
 		}
 	}
 	engine := append(argsFile(args), "hf-token-revision:"+strconv.FormatInt(tokenRevision, 10)...)
+	if endpoint := engines.Endpoint(spec); len(endpoint) > 0 {
+		// Only a mirror adds to the digest, so huggingface.co's stays as it was.
+		engine = append(engine, "\nhf-endpoint:"+string(endpoint)...)
+	}
 	return map[string]string{
 		recipes.ModelEngine: digest(engine),
 		recipes.ModelGuard:  digest(engines.GuardConfig()),

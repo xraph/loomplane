@@ -708,6 +708,8 @@ func NewContainer(e registry.Entry, q registry.Quantization, s Sample, need regi
 	files := map[string][]byte{
 		recipes.ModelArgsPath:  []byte(strings.Join(args, "\n") + "\n"),
 		recipes.ModelTokenPath: {},
+		// The job downloads from huggingface.co itself.
+		recipes.ModelEndpointPath: {},
 	}
 	if e.Gated {
 		files[recipes.ModelTokenPath] = []byte(token)

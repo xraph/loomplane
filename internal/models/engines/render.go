@@ -18,6 +18,34 @@ type Spec struct {
 	MaxModelLen  int
 	GPUs         int  // 0 on CPU
 	OnGPU        bool // llama.cpp only: true for model-llamacpp-gpu
+	// Hub is the Hugging Face mirror the engine downloads from, as
+	// HubEndpoint gives it: "" for huggingface.co.
+	Hub string
+}
+
+// defaultHub is where an engine downloads weights from without a mirror.
+const defaultHub = "https://huggingface.co"
+
+// HubEndpoint is the mirror an engine downloads from for
+// ai.models.huggingface_url: "" when that's huggingface.co or unset, else
+// the URL without a trailing slash.
+func HubEndpoint(huggingFaceURL string) string {
+	u := strings.TrimRight(strings.TrimSpace(huggingFaceURL), "/")
+	if u == "" || strings.EqualFold(u, defaultHub) {
+		return ""
+	}
+	return u
+}
+
+// Endpoint is what the engine's endpoint file holds, the HF_ENDPOINT its
+// wrapper exports: the mirror for vLLM and Text Embeddings Inference, which
+// download through the Hugging Face libraries. llama.cpp downloads from
+// its --model-url instead, so its file is empty.
+func Endpoint(s Spec) []byte {
+	if s.Hub == "" || s.Quantization.Engine == registry.EngineLlamaCPP {
+		return []byte{}
+	}
+	return []byte(s.Hub)
 }
 
 // CustomEntries finds the entries a workspace built from a pasted Hugging
@@ -152,8 +180,12 @@ func llamaCPPArgs(s Spec) []string {
 	if s.OnGPU {
 		layers = "999"
 	}
+	hub := s.Hub
+	if hub == "" {
+		hub = defaultHub
+	}
 	return append([]string{
-		"--model-url=https://huggingface.co/" + repo + "/resolve/" + revision + "/" + q.File,
+		"--model-url=" + hub + "/" + repo + "/resolve/" + revision + "/" + q.File,
 		// The revision in the file name keeps a re-pinned file from
 		// reusing the old download.
 		"--model=" + cacheDir + "/" + revision[:min(12, len(revision))] + "-" + q.File,

@@ -98,6 +98,18 @@ func TestDigestChangesWithArgsAndToken(t *testing.T) {
 		t.Error("a new token left the gated engine's digest alone")
 	}
 
+	// A mirror changes it, and huggingface.co named outright doesn't.
+	hub := digestOf(t, in, m)
+	in.HuggingFaceURL = "https://huggingface.co/"
+	if same := digestOf(t, in, m); !maps.Equal(same, hub) {
+		t.Errorf("huggingface.co named outright changed the digest: %v, was %v", same, hub)
+	}
+	in.HuggingFaceURL = "https://hf-mirror.example.com"
+	if mirrored := digestOf(t, in, m); mirrored[recipes.ModelEngine] == hub[recipes.ModelEngine] || mirrored[recipes.ModelGuard] != hub[recipes.ModelGuard] {
+		t.Errorf("a mirror: %v, was %v", mirrored, hub)
+	}
+	in.HuggingFaceURL = ""
+
 	// An ungated model never downloads with the token, so its digest
 	// doesn't follow it.
 	qwen := settingsFor(t, registry.Default(), "Qwen/Qwen2.5-7B-Instruct", "bf16")

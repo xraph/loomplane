@@ -663,3 +663,33 @@ func TestFromSettingsChecksTheCustomPin(t *testing.T) {
 		t.Errorf("FromSettings for a custom entry with weights at another revision: err = %v, want one about the revision", err)
 	}
 }
+
+// A mirror is ai.models.huggingface_url when it isn't huggingface.co: the
+// endpoint vLLM and TEI get, and llama.cpp's download host.
+func TestHubEndpoint(t *testing.T) {
+	for url, want := range map[string]string{
+		"":                                "",
+		"https://huggingface.co":          "",
+		"https://huggingface.co/":         "",
+		"HTTPS://HuggingFace.co":          "",
+		"https://hf-mirror.example.com/":  "https://hf-mirror.example.com",
+		" https://hf.internal:8443/hub/ ": "https://hf.internal:8443/hub",
+		"http://127.0.0.1:9000":           "http://127.0.0.1:9000",
+	} {
+		if got := HubEndpoint(url); got != want {
+			t.Errorf("HubEndpoint(%q) = %q, want %q", url, got, want)
+		}
+	}
+	for engine, want := range map[registry.Engine]string{
+		registry.EngineVLLM: "https://hf.internal", registry.EngineTEI: "https://hf.internal", registry.EngineLlamaCPP: "",
+	} {
+		s := Spec{Quantization: registry.Quantization{Engine: engine}, Hub: "https://hf.internal"}
+		if got := string(Endpoint(s)); got != want {
+			t.Errorf("%s endpoint %q, want %q", engine, got, want)
+		}
+		s.Hub = ""
+		if got := Endpoint(s); len(got) != 0 {
+			t.Errorf("%s endpoint without a mirror %q", engine, got)
+		}
+	}
+}

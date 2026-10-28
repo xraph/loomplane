@@ -48,11 +48,11 @@ A new token changes what a gated model's engine starts with, so the next plan of
 
 ### Where it goes
 
-The token is kept in Vault, never in the database. Loomplane itself sends it only to the Hugging Face host in `ai.models.huggingface_url`, to check whose it is and to read gated or private repos. When a gated model deploys, the token goes into a file only that model's engine can read, and the engine sends it to `huggingface.co` to download the weights. It never appears in a plan, a log, an error or the audit log. [The security model](/docs/operations/security-model#models) has the details.
+The token is kept in Vault, never in the database. Loomplane itself sends it only to the Hugging Face host in `ai.models.huggingface_url`, to check whose it is and to read gated or private repos. When a gated model deploys, the token goes into a file only that model's engine can read, and the engine sends it to the same host to download the weights. It never appears in a plan, a log, an error or the audit log. [The security model](/docs/operations/security-model#models) has the details.
 
 ## A Hugging Face mirror
 
-`ai.models.huggingface_url` (`LOOMPLANE_AI_MODELS_HUGGINGFACE_URL`) is where Loomplane reads Hugging Face: a pasted repo's metadata and `config.json`, model cards, and the gated checks. It defaults to `https://huggingface.co`.
+`ai.models.huggingface_url` (`LOOMPLANE_AI_MODELS_HUGGINGFACE_URL`) is where Loomplane and your model engines read Hugging Face: a pasted repo's metadata and `config.json`, model cards, the gated checks and the weights themselves. It defaults to `https://huggingface.co`.
 
 ```yaml
 ai:
@@ -62,4 +62,4 @@ ai:
 
 It has to be https, because the workspace's token is sent there. Plain http works only for `localhost` or a loopback address. A URL with a user, a query or a fragment stops Loomplane at startup.
 
-The mirror covers what Loomplane reads. Engines still download weights from `huggingface.co`, so the servers that run your models need to reach it.
+The mirror covers engine downloads too. vLLM and Text Embeddings Inference get it as `HF_ENDPOINT`, and llama.cpp fetches its GGUF file from it, so the servers that run your models need to reach the mirror, not `huggingface.co`. Change the URL and the next plan of each environment shows an update for its models; approve it to restart their engines against the new host.
