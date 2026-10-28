@@ -15,7 +15,7 @@ import type {
   Project,
 } from "@/client/forge/loomplane/types"
 import { useMutation, useQuery } from "@/client/hooks"
-import { Field } from "@/components/cloud-targets/infrastructure-ui"
+import { Field as FormField, FieldLabel } from "@/components/ui/field"
 import { QueryError } from "@/components/query-error"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -208,7 +208,7 @@ function ScaleForm({
       }}
     >
       <div className="flex flex-wrap items-end gap-3">
-        <Field label={range ? "Fewest instances" : "Instances"}>
+        <Compact label={range ? "Fewest instances" : "Instances"}>
           <Input
             type="number"
             min={range ? 0 : 1}
@@ -217,9 +217,9 @@ function ScaleForm({
             disabled={disabled}
             onChange={(e) => setMin(e.target.value)}
           />
-        </Field>
+        </Compact>
         {range && (
-          <Field label="Most instances">
+          <Compact label="Most instances">
             <Input
               type="number"
               min={1}
@@ -228,11 +228,11 @@ function ScaleForm({
               disabled={disabled}
               onChange={(e) => setMax(e.target.value)}
             />
-          </Field>
+          </Compact>
         )}
         {!special && (
           <>
-            <Field label="vCPU each">
+            <Compact label="vCPU each">
               <Input
                 type="number"
                 min={0}
@@ -243,8 +243,8 @@ function ScaleForm({
                 disabled={disabled}
                 onChange={(e) => setCpu(e.target.value)}
               />
-            </Field>
-            <Field label="Memory each, MiB">
+            </Compact>
+            <Compact label="Memory each, MiB">
               <Input
                 type="number"
                 min={0}
@@ -255,7 +255,7 @@ function ScaleForm({
                 disabled={disabled}
                 onChange={(e) => setMemory(e.target.value)}
               />
-            </Field>
+            </Compact>
           </>
         )}
         <Button type="submit" disabled={disabled || !valid || !changed}>
@@ -270,5 +270,23 @@ function ScaleForm({
         the next deployment of {envName}.
       </p>
     </form>
+  )
+}
+
+/** Compact is a labelled field as wide as its input, for a row of numbers. */
+function Compact({
+  label,
+  children,
+}: {
+  label: string
+  children: React.ReactNode
+}) {
+  return (
+    <FormField className="w-auto gap-1 text-xs">
+      <FieldLabel className="contents">
+        {label}
+        {children}
+      </FieldLabel>
+    </FormField>
   )
 }
