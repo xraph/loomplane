@@ -24,6 +24,7 @@ func (a *App) commands() []cli.Command {
 		a.cloudSyncsCommand(),
 		a.cloudServersCommand(),
 		a.cloudPoolsCommand(),
+		a.cloudCapacityCommand(),
 		a.dnsZonesCommand(),
 		a.domainRoutesCommand(),
 		a.cloudGrantsCommand(),
@@ -86,6 +87,12 @@ func (a *App) commands() []cli.Command {
 		cli.NewCommand("retry", "Retry a failed deployment from the step that failed", a.retry,
 			cli.WithUsage("retry <deployment-id> [--no-wait]"),
 			cli.WithFlag(cli.NewBoolFlag("no-wait", "", "Retry and return", false))),
+		cli.NewCommand("resume", "Check capacity again for a deployment paused for it", a.resume,
+			cli.WithUsage("resume <deployment-id> --revision <n>"),
+			cli.WithFlags(pauseRevisionFlag(), jsonFlag)),
+		cli.NewCommand("cancel", "Cancel a deployment paused for capacity; finished steps stay", a.cancel,
+			cli.WithUsage("cancel <deployment-id> --revision <n>"),
+			cli.WithFlags(pauseRevisionFlag(), jsonFlag)),
 		cli.NewCommand("status", "What runs each of a project's services and resources, and any drift", a.status,
 			cli.WithUsage("status <project>"), cli.WithFlag(jsonFlag)),
 		cli.NewCommand("vars", "List a project's variables; secrets show no value", a.vars,
@@ -589,6 +596,10 @@ func (a *App) follow(ctx cli.CommandContext, c *client.Client, id string) error 
 	}
 	a.printf("\n")
 	a.printDeployment(ctx, c, d)
+	if d.Paused() {
+		a.printWait(d)
+		return nil
+	}
 	if d.Status == "failed" {
 		return fmt.Errorf("the deployment failed; retry it from where it stopped with `loomctl retry %s`", d.ID)
 	}

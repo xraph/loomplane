@@ -579,6 +579,8 @@ type Deployment struct {
 	PlanID      string `json:"plan_id"`
 	Environment string `json:"environment"`
 	Status      string `json:"status"`
+	// CapacityWait says what a paused deployment waits for.
+	CapacityWait *CapacityWait `json:"capacity_wait,omitempty"`
 	// CommitSHA names what the deployment moves: the commit of its one
 	// repository, or each repository at its short commit.
 	CommitSHA string `json:"commit_sha,omitempty"`
@@ -703,8 +705,15 @@ type DeploymentSource struct {
 	CommitSHA  string `json:"commit_sha"`
 }
 
-// Done reports whether the deployment has finished, either way.
-func (d *Deployment) Done() bool { return d.Status == "succeeded" || d.Status == "failed" }
+// Done reports whether the deployment has finished: succeeded, failed or
+// cancelled.
+func (d *Deployment) Done() bool {
+	return d.Status == "succeeded" || d.Status == "failed" || d.Status == "cancelled"
+}
+
+// Paused reports whether the deployment waits for capacity. It isn't done:
+// resume it or cancel it at its CapacityWait revision.
+func (d *Deployment) Paused() bool { return d.Status == "paused" }
 
 // Deployments lists a project's deployments, newest first.
 func (c *Client) Deployments(ctx context.Context, projectID string) ([]Deployment, error) {
@@ -834,8 +843,8 @@ func (c *Client) WaitPlan(ctx context.Context, id string) (*Plan, error) {
 	})
 }
 
-// WaitDeployment reads the deployment until it finishes, calling seen with
-// each reading, which may be nil.
+// WaitDeployment reads the deployment until it finishes or pauses for
+// capacity, calling seen with each reading, which may be nil.
 func (c *Client) WaitDeployment(ctx context.Context, id string, seen func(*Deployment)) (*Deployment, error) {
 	return wait(ctx, func() (*Deployment, bool, error) {
 		d, err := c.Deployment(ctx, id)
@@ -845,8 +854,7 @@ func (c *Client) WaitDeployment(ctx context.Context, id string, seen func(*Deplo
 		if seen != nil {
 			seen(d)
 		}
-		done := d.Done()
-		return d, done, nil
+		return d, d.Done() || d.Paused(), nil
 	})
 }
 
