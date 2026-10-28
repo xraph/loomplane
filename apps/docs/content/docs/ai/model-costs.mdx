@@ -11,12 +11,15 @@ Loomplane prices the GPUs a model holds, by where it runs:
 
 | Where it runs | Price | Shown as |
 |---|---|---|
-| A DigitalOcean GPU server Loomplane created | The server's price from DigitalOcean, for the share of its GPUs the model holds | "$1.57/hr", "The server's price for 1 of 2 GPUs." |
+| A DigitalOcean GPU server Loomplane created for the model | The whole server's price from DigitalOcean, while nothing else holds a GPU there | "$12.56/hr", "The server's price for 8 of 8 GPUs." |
+| A GPU server Loomplane created that other workloads share | The server's price for the share of its GPUs the model holds | "$1.57/hr", "The server's price for 1 of 8 GPUs." |
 | A Kubernetes cluster | The node's list price, for the model's share of its GPUs | "~$0.82/hr", marked estimate |
 | A server you connected yourself | Unknown, until you set one | "Price unknown" |
 | CPU, on any server or cluster | Part of that server's own cost | "Runs on CPU. Its cost is part of gpu-1." |
 
 List prices are reference prices, not your bill. Anything from them says "estimate".
+
+A server Loomplane created for a model was bought for that model, so the model pays for all of it, even when it needs one GPU of eight. The deploy dialog, the model's page, the month and the budget alerts all use that price. Once another model or service holds a GPU on the same server, each one shows its share instead, and the server's other GPUs aren't charged to anyone.
 
 A model on CPU never shows $0.00. It has no GPU of its own to price, so its cost is the server's, and its page says which server. It has no projection and no budget alert.
 
@@ -30,7 +33,7 @@ An unknown price is never shown as $0.00, and it's never added in as zero. The m
 
 ## This month and the projection
 
-Every five minutes, Loomplane adds what each model cost since the last count to its month. A model counts while it's **Deploying** or **Ready**, at the price of the GPUs its engine actually holds. Months are calendar months in UTC.
+Every five minutes, Loomplane adds what each model cost since the last count to its month. A model counts while it's **Deploying** or **Ready**, at the price of the GPUs its engine actually holds, or of the whole server when Loomplane created that server for it and nothing else holds a GPU there. Months are calendar months in UTC.
 
 **Projected** is this month so far plus the hourly price for every hour left in the month. The deploy dialog quotes a simpler figure before anything runs: the hourly price times 730, as "about $1,146/mo while it runs".
 
@@ -55,6 +58,6 @@ Anyone who can change the model can set its budget and its price: `ai:edit`, or 
 
 ## What the model's cost leaves out
 
-The figures are the model's share of its GPUs. They aren't your cloud bill. A GPU server Loomplane created for a model bills for all of it, from the moment it's created until you delete it in **Infrastructure**. Removing or moving the model doesn't delete that server, and the model page tells you when one is left behind. While a model moves to a new GPU server, both places bill once the new one is up, and the page shows the new server's price beside the old.
+The figures are the model's share of its GPUs, or its whole server when the model has that server to itself. They aren't your cloud bill. A GPU server Loomplane created for a model bills for all of it, even once other workloads share it, from the moment it's created until you delete it in **Infrastructure**. Removing or moving the model doesn't delete that server, and the model page tells you when one is left behind. While a model moves to a new GPU server, both places bill once the new one is up, and the page shows the new server's price beside the old.
 
 [Spend and traffic](/docs/clouds/spend-and-traffic) covers what your Clouds cost as a whole.

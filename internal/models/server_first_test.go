@@ -17,6 +17,7 @@ import (
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/gpus"
 	"github.com/xraph/loomplane/internal/manifests"
+	"github.com/xraph/loomplane/internal/notifications"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/pkg/provider"
@@ -1747,5 +1748,87 @@ func TestMovingModelShowsBothServersPrices(t *testing.T) {
 	if err != nil || st.MoveCost == nil || st.MoveCost.Source != CostSourceUnknown || st.MoveCost.HourlyUSD != "" || st.MoveCost.Known ||
 		st.Cost.HourlyUSD != "1.5700" {
 		t.Errorf("unknown new price: %+v, %v", st.MoveCost, err)
+	}
+}
+
+// Ruling M42: a GPU server Loomplane created for a model is the model's,
+// all of it, while nothing else holds a GPU there, even when the model
+// needs one of its eight. The preview, the page, the month's cost and the
+// budget notices all charge the whole server. Once another model holds a
+// GPU there, each charges its share.
+func TestCreatedServerChargesTheWholeServer(t *testing.T) {
+	ctx := context.Background()
+	sf := newServerFirst(t, cloudAdmin)
+	budget := &fakeBudget{}
+	sf.svc.d.Prices, sf.svc.d.Budget = pricesOf{sf.targets}, budget
+	// An eight-L40S size at $12.56 an hour.
+	sf.targets.targets[0].Accelerator.Count, sf.targets.targets[0].Free, sf.targets.targets[0].HourlyUSD = 8, 8, 12.56
+	sf.servers.hourly = 12.56
+	plain, err := sf.svc.Preview(ctx, member, projectID, stagingID, DeployInput{EntryID: qwen7B, Target: onSize()})
+	if err != nil || plain.GPU == nil || plain.GPU.Count != 1 || plain.Cost.HourlyUSD != "12.5600" || plain.Cost.Share != "8 of 8 GPUs" {
+		t.Fatalf("preview: %+v, %v", plain, err)
+	}
+	pv, _ := sf.deployOnNewServer(t)
+	if pv.Cost.HourlyUSD != "12.5600" {
+		t.Fatalf("reviewed preview: %+v", pv.Cost)
+	}
+	sf.servers.succeed(pv.Server.ID)
+	sf.gpusReady(provider.GPUStatusReady)
+	host := &sf.targets.targets[1]
+	host.Accelerator.Count, host.Free, host.HourlyUSD = 8, 8, 12.56
+	if err = sf.svc.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	cost := func(want, share string) {
+		t.Helper()
+		st, serr := sf.svc.Status(ctx, member, projectID, stagingID, "qwen2-5-7b-instruct")
+		if serr != nil || st.Cost.HourlyUSD != want || st.Cost.Share != share || st.Cost.Source != CostSourceServer {
+			t.Fatalf("status: %+v, %v", st, serr)
+		}
+	}
+	// Planned, then running on one of the eight.
+	cost("12.5600", "8 of 8 GPUs")
+	r := current(t, sf.deploySetup).Resources["qwen2-5-7b-instruct"]
+	sf.facts.runningOn(newConn, stagingID, "qwen2-5-7b-instruct", r.Kind, r.Settings, 1)
+	host.Free = 7
+	cost("12.5600", "8 of 8 GPUs")
+
+	// The month's cost, and a budget only the whole server's price is on
+	// track to pass.
+	d := sf.row(t)
+	d.MonthlyBudgetUSD = "2000.00"
+	if err = sf.rows.Update(ctx, d); err != nil {
+		t.Fatal(err)
+	}
+	accrue := func(at time.Time) *Deployment {
+		t.Helper()
+		if aerr := sf.svc.Accrue(ctx, at); aerr != nil {
+			t.Fatal(aerr)
+		}
+		return sf.row(t)
+	}
+	start := *sf.now
+	accrue(start)
+	if d = accrue(start.Add(time.Hour)); d.MonthCostUSD != "12.5600" {
+		t.Fatalf("an hour on the whole server: %s", d.MonthCostUSD)
+	}
+	if sent := budget.notices(); len(sent) != 1 || sent[0].Kind != notifications.ModelBudgetProjected {
+		t.Fatalf("notices %+v", sent)
+	}
+
+	// A move that stays on the server keeps all of it.
+	same := MoveInput{Target: TargetChoice{Source: TargetConnection, ConnectionID: newConn, GPU: &provider.GPURequest{Kind: "nvidia-l40s", Count: 2}}}
+	if mv, merr := sf.svc.MovePreview(ctx, member, projectID, stagingID, "qwen2-5-7b-instruct", same); merr != nil || mv.Cost.HourlyUSD != "12.5600" {
+		t.Errorf("move on the server: %+v, %v", mv, merr)
+	}
+
+	// Another model takes a GPU there: each charges its share.
+	host.Free = 6
+	cost("1.5700", "1 of 8 GPUs")
+	if mv, merr := sf.svc.MovePreview(ctx, member, projectID, stagingID, "qwen2-5-7b-instruct", same); merr != nil || mv.Cost.HourlyUSD != "3.1400" {
+		t.Errorf("move on the shared server: %+v, %v", mv, merr)
+	}
+	if d = accrue(start.Add(2 * time.Hour)); d.MonthCostUSD != "14.1300" {
+		t.Errorf("an hour sharing the server: %s", d.MonthCostUSD)
 	}
 }

@@ -357,6 +357,14 @@ func (s *Service) preview(ctx context.Context, p security.Principal, projectID s
 		pv.Cost = serverCost(t.gpu.Accelerator, t.gpu.HourlyUSD, t.gpu.HourlyPriceKnown)
 	case onGPU:
 		pv.Cost = HourlyCost(*t.gpu, count, "")
+		if m := in.Moving; m != nil && m.ServerCloudID != "" && m.ConnectionID == t.gpu.ConnectionID {
+			// A move on the server Loomplane created for the model keeps all
+			// of it when nothing else holds a GPU there. t.Free already
+			// counts the GPUs the model gives back.
+			if c, whole := wholeServerCost(*t.gpu, 0, ""); whole {
+				pv.Cost = c
+			}
+		}
 	default:
 		// A CPU engine holds no GPU: its cost is part of the server's.
 		pv.Cost = HourlyCost(gpus.GPUTarget{}, 0, "")

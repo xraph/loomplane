@@ -86,7 +86,11 @@ func (f *fakeDeployed) ConnectionNames(_ context.Context, orgID string) (map[str
 // running says resource runs ready in env on gpu-box, bound, behind the
 // guard at url with key, its engine deployed with settings.
 func (f *fakeDeployed) running(env, resource, kind string, settings map[string]string, gpu int) {
-	const connection = gpuConn
+	f.runningOn(gpuConn, env, resource, kind, settings, gpu)
+}
+
+// runningOn is running, on connection.
+func (f *fakeDeployed) runningOn(connection, env, resource, kind string, settings map[string]string, gpu int) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.states == nil {

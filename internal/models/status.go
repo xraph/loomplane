@@ -367,6 +367,17 @@ func (s *Service) status(ctx context.Context, p security.Principal, projectID st
 	}
 	st.Linked = linked(env, m, resource, st.ConnectionID, names, bindings)
 	st.Cost = s.costOf(ctx, p, st.Kind, st.GPU, st.ConnectionID, override)
+	if ownsServer(row) && gpuKind(st.Kind) && st.GPU != nil && st.ConnectionID != "" {
+		// A server Loomplane created for the model is all the model's
+		// until another workload holds a GPU there.
+		own := 0
+		if b, engine := engineBinding(bindings, resource); b != nil && b.ConnectionID == st.ConnectionID && engine.GPU != nil && engine.GPU.Kind == st.GPU.Kind {
+			own = engine.GPU.Count
+		}
+		if c, ok := wholeServerCost(s.gpuTarget(ctx, p, st.ConnectionID, st.GPU.Kind), own, override); ok {
+			st.Cost = c
+		}
+	}
 	if r == nil && row.Request != nil && row.Request.Target.Source == TargetServerSize {
 		// Waiting for a new server: the whole server is the model's, at the
 		// size's price.

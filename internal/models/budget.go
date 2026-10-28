@@ -149,7 +149,8 @@ func (s *Service) accrueRow(ctx context.Context, d *Deployment, now time.Time, p
 // binding of its deployed engine: unknown while it isn't ready or
 // deploying, or when its GPUs or their price aren't known (Ruling M25). A
 // CPU engine's cost is its server's, "0.00" with source cpu. An override
-// wins once the model runs.
+// wins once the model runs. On a server Loomplane created for d, with no
+// other workload holding its GPUs, it's the whole server (Ruling M42).
 func (s *Service) runningCost(ctx context.Context, d *Deployment, prices func() ([]gpus.GPUTarget, error)) (Cost, error) {
 	unknown := Cost{Source: CostSourceUnknown}
 	fact, err := s.d.Deployed.State(ctx, d.OrgID, d.ProjectID, d.EnvironmentID, d.Resource)
@@ -189,6 +190,13 @@ func (s *Service) runningCost(ctx context.Context, d *Deployment, prices func() 
 		if t.Source == gpus.SourceConnection && t.ConnectionID == b.ConnectionID && t.Accelerator.Kind == engine.GPU.Kind {
 			host = t
 			break
+		}
+	}
+	if ownsServer(d) {
+		// A server Loomplane created for the model is all the model's until
+		// another workload holds a GPU there.
+		if c, ok := wholeServerCost(host, engine.GPU.Count, d.HourlyUSDOverride); ok {
+			return c, nil
 		}
 	}
 	return HourlyCost(host, engine.GPU.Count, d.HourlyUSDOverride), nil

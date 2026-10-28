@@ -80,6 +80,35 @@ func HourlyCost(target gpus.GPUTarget, gpusHeld int, override string) Cost {
 	}
 }
 
+// wholeServerCost is what all of host's GPUs cost, for a model that holds
+// own of them and is the only workload there. ok is false when anything
+// else holds a GPU of host, or host isn't a server or cluster with GPUs.
+//
+// A server Loomplane created for a model is that model's, whatever share
+// of its GPUs the engine holds, until another workload takes a GPU there
+// (Ruling M42). own is what the model's deployed engine holds, 0 before
+// it's deployed, since host.Free counts deployed workloads only.
+func wholeServerCost(host gpus.GPUTarget, own int, override string) (Cost, bool) {
+	count := host.Accelerator.Count
+	if host.Source != gpus.SourceConnection || count <= 0 || count-host.Free-own > 0 {
+		return Cost{}, false
+	}
+	return HourlyCost(host, count, override), true
+}
+
+// ownsServer reports whether Loomplane created the server d's model runs
+// on, for d. While d moves onto a new server, that's the server it runs on
+// until the move finishes, which the move recorded.
+func ownsServer(d *Deployment) bool {
+	if d == nil {
+		return false
+	}
+	if waitsForServer(d) && d.Request != nil && d.Request.Moving != nil {
+		return d.Request.Moving.ServerCloudID != ""
+	}
+	return d.ServerCloudID != ""
+}
+
 // gpuShare says how much of the host a model holds: "1 of 2 GPUs".
 func gpuShare(held, count int) string {
 	if held <= 0 || count <= 0 {
