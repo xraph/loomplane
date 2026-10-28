@@ -190,6 +190,7 @@ A few rules for the blocks:
 - `target` is optional at the top level. Each environment needs one, from its own block or from the top level, and when neither has one, only that environment's plan stops and asks for it. A block that runs the model on another provider doesn't take the top-level target with it.
 - One model runs on one engine everywhere. If production needs another engine, say llama.cpp on a CPU server while staging runs vLLM on a GPU, deploy it to production as a separately named model.
 - When Loomplane adds an environment, the block's `settings` get only what differs from the top level: `quantization`, `model`, `revision`, `file`, `max_model_len` or `cache_mb`. It never writes `entry` or `served_name` there, so your code asks for the same model name in every environment.
+- A block can't say "no file". If the top level names a GGUF `file` that another environment reads, you can't add an environment with weights that have no file: the preview refuses it before anything is written, and tells you to deploy it there as a separately named model or remove it from the other environments first.
 
 The model page shows one environment's copy at a time. When the model runs in more than one, the header links each of them.
 

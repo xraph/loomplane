@@ -1206,6 +1206,29 @@ func TestPlacementRefusesATopLevelFile(t *testing.T) {
 	}
 }
 
+// Final review M6: the preview says the same before anything is
+// written, so Plan it never offers a deploy the edit refuses.
+func TestPreviewRefusesATopLevelFile(t *testing.T) {
+	targets, conns := copyServers()
+	d := newDeploy(t, deployRegistry(t, llamaRev, ""), aiAdmin, targets, conns...)
+	settings := llmSettings(t)
+	settings["file"] = "old.gguf"
+	putResource(t, d, "llm", manifest.Resource{
+		Kind: recipes.ModelVLLMKind, Provider: "server", Target: gpuConn, Version: "0.31", GPU: &manifest.GPU{Kind: "nvidia-l40s", Count: 1},
+		Settings: settings, Environments: map[string]manifest.ResourceSettings{"staging": on()},
+	})
+	pv, err := d.svc.Preview(context.Background(), member, projectID, productID, DeployInput{
+		EntryID: qwen7B, Resource: "llm", Quantization: "bf16", Target: onGPU2("nvidia-l40s"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := Problem{Code: ProblemQuantization, Message: "bf16 has no file, and production would still read file old.gguf from the top level of the model's manifest entry, which its other environments run. Deploy it to production as a separately named model, or remove it from the project's other environments first."}
+	if pv.AddsTo != "llm" || len(pv.Problems) != 1 || pv.Problems[0] != want || pv.CanDeploy {
+		t.Errorf("adds to %q, problems %+v, can deploy %v", pv.AddsTo, pv.Problems, pv.CanDeploy)
+	}
+}
+
 // deployLLM deploys Qwen 7B as llm to env on target, with the
 // quantization asked for, "" for the best.
 func (d *deploySetup) deployLLM(t *testing.T, env, quantization string, target TargetChoice) *DeployResult {
