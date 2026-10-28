@@ -43,9 +43,14 @@ type DeployInput struct {
 	Resource         string       `json:"resource,omitempty"`      // "" is DefaultResource(entry)
 	MaxModelLen      int          `json:"max_model_len,omitempty"` // 0 is the largest that fits, at most 32768
 	MonthlyBudgetUSD string       `json:"monthly_budget_usd,omitempty"`
+	// ReviewServer asks Preview to review the GPU server a server size
+	// target creates. A review asks the provider for its sizes and records
+	// an operation in Infrastructure, so the page sends it only from its
+	// explicit "Review server" step, never on every change of the form.
+	ReviewServer bool `json:"review_server,omitempty"`
 	// Server approves the GPU server a server size target creates: the
-	// review Preview returned in DeployPreview.Server. Deploy refuses a
-	// server size without it.
+	// review a ReviewServer preview returned in DeployPreview.Server.
+	// Deploy refuses a server size without it.
 	Server *ServerApproval `json:"server,omitempty"`
 }
 

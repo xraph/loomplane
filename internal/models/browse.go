@@ -102,6 +102,9 @@ type Deps struct {
 	// Principals rechecks an API key behind a stored principal before the
 	// cron acts as it. Nil refuses every key.
 	Principals security.PrincipalVerifier
+	// Warn logs what the cron does that someone should know about, such as
+	// a GPU server left behind by a deleted environment. It may be nil.
+	Warn func(msg string, err error)
 }
 
 // Service is the model registry as a workspace sees it: what it can

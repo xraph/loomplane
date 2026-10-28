@@ -102,7 +102,7 @@ func (f *fakeServers) PreviewServer(ctx context.Context, p security.Principal, c
 		Review: fmt.Sprintf("review-%d", len(f.previews)), Input: in, Provider: connections.DigitalOcean, ConnectionID: in.ConnectionID,
 		Status: "preview", Ownership: "managed", EstimatedHourlyUSD: f.hourly, HourlyPriceKnown: f.priced,
 		Accelerator: &provider.Accelerator{Kind: "nvidia-l40s", Vendor: provider.VendorNVIDIA, Count: 1, MemoryGiB: 48},
-		CreatedAt:   f.now(), UpdatedAt: f.now(), ExpiresAt: f.now().Add(15 * time.Minute),
+		CreatedAt:   f.now(), UpdatedAt: f.now(), ExpiresAt: f.now().Add(15 * time.Minute), CapacityCheckedAt: f.now(),
 	}
 	if f.ops == nil {
 		f.ops = map[string]*cloudinfra.Operation{}
@@ -129,6 +129,12 @@ func (f *fakeServers) ApplyServerOperation(ctx context.Context, p security.Princ
 	if len(f.applyErrs) > 0 {
 		err := f.applyErrs[0]
 		f.applyErrs = f.applyErrs[1:]
+		var late afterAcceptError
+		if errors.As(err, &late) {
+			// The accept committed, then the caller got an error.
+			op.Status, op.UpdatedAt = "pending", f.now()
+			return nil, late.err
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -139,6 +145,12 @@ func (f *fakeServers) ApplyServerOperation(ctx context.Context, p security.Princ
 	out := *op
 	return &out, nil
 }
+
+// afterAcceptError is an apply error that comes after the accept committed: a
+// lost race with another apply, or a failure on the way back.
+type afterAcceptError struct{ err error }
+
+func (a afterAcceptError) Error() string { return a.err.Error() }
 
 func (f *fakeServers) GetOperation(ctx context.Context, p security.Principal, cloud, id string) (*cloudinfra.Operation, error) {
 	if err := f.allowed(ctx, p); err != nil {
@@ -289,11 +301,12 @@ const serverName = "shop-qwen2-5-7b-instruct-gpu"
 func (sf *serverFirstSetup) deployOnNewServer(t *testing.T) (*DeployPreview, *DeployResult) {
 	t.Helper()
 	ctx := context.Background()
-	in := DeployInput{EntryID: qwen7B, Target: onSize()}
+	in := DeployInput{EntryID: qwen7B, Target: onSize(), ReviewServer: true}
 	pv, err := sf.svc.Preview(ctx, member, projectID, stagingID, in)
 	if err != nil || len(pv.Problems) != 0 || pv.Server == nil {
 		t.Fatalf("preview: %+v, %v", pv, err)
 	}
+	in.ReviewServer = false
 	in.Server = &ServerApproval{CloudID: pv.Server.CloudID, OperationID: pv.Server.ID, Review: pv.Server.Review}
 	res, err := sf.svc.Deploy(ctx, member, projectID, stagingID, in)
 	if err != nil {
@@ -332,9 +345,20 @@ func (sf *serverFirstSetup) advance(d time.Duration) { *sf.now = sf.now.Add(d) }
 func TestPreviewCreatesAServerReview(t *testing.T) {
 	sf := newServerFirst(t, cloudAdmin)
 	sf.servers.hourly = 1.99 // the provider's price now, not the cached list
+
+	// A plain preview prices the size and reviews nothing (Ruling M28).
 	pv, err := sf.svc.Preview(context.Background(), member, projectID, stagingID, DeployInput{EntryID: qwen7B, Target: onSize()})
-	if err != nil || len(pv.Problems) != 0 || !pv.CanDeploy {
-		t.Fatalf("preview: %+v, %v", pv, err)
+	if err != nil || len(pv.Problems) != 0 || pv.CanDeploy || !pv.ServerReviewNeeded || pv.Server != nil || pv.TargetName != serverName {
+		t.Fatalf("plain preview: problems %v can deploy %v review needed %v, %v", pv.Problems, pv.CanDeploy, pv.ServerReviewNeeded, err)
+	}
+	if pv.Cost.HourlyUSD != "1.5700" || pv.Cost.Source != CostSourceServer || len(sf.servers.previews) != 0 {
+		t.Fatalf("plain preview cost %+v, %d reviews", pv.Cost, len(sf.servers.previews))
+	}
+
+	// The review step asks the provider and records the review.
+	pv, err = sf.svc.Preview(context.Background(), member, projectID, stagingID, DeployInput{EntryID: qwen7B, Target: onSize(), ReviewServer: true})
+	if err != nil || len(pv.Problems) != 0 || !pv.CanDeploy || pv.ServerReviewNeeded {
+		t.Fatalf("review: problems %v can deploy %v, %v", pv.Problems, pv.CanDeploy, err)
 	}
 	if len(sf.servers.previews) != 1 {
 		t.Fatalf("previews %+v", sf.servers.previews)
@@ -359,7 +383,7 @@ func TestPreviewCreatesAServerReview(t *testing.T) {
 
 	// A price the provider doesn't know is unknown, never zero.
 	sf.servers.priced, sf.servers.hourly = false, 0
-	pv, err = sf.svc.Preview(context.Background(), member, projectID, stagingID, DeployInput{EntryID: qwen7B, Target: onSize()})
+	pv, err = sf.svc.Preview(context.Background(), member, projectID, stagingID, DeployInput{EntryID: qwen7B, Target: onSize(), ReviewServer: true})
 	if err != nil || pv.Cost.Source != CostSourceUnknown || pv.Cost.HourlyUSD != "" || pv.Cost.Known {
 		t.Errorf("unknown price: %+v, %v", pv.Cost, err)
 	}
@@ -367,7 +391,7 @@ func TestPreviewCreatesAServerReview(t *testing.T) {
 
 func TestServerFirstNeedsAnAdmin(t *testing.T) {
 	sf := newServerFirst(t, deployer)
-	pv, err := sf.svc.Preview(context.Background(), member, projectID, stagingID, DeployInput{EntryID: qwen7B, Target: onSize()})
+	pv, err := sf.svc.Preview(context.Background(), member, projectID, stagingID, DeployInput{EntryID: qwen7B, Target: onSize(), ReviewServer: true})
 	if err != nil || !slices.Equal(codes(pv), []string{ProblemServerAdmin}) || pv.CanDeploy ||
 		pv.Problems[0].Message != "An admin creates GPU servers. Ask one to deploy this, or pick a server you have." {
 		t.Fatalf("developer: %+v, %v", pv, err)
@@ -408,10 +432,12 @@ func TestDeployAppliesTheServerAndWaits(t *testing.T) {
 	if _, err := sf.svc.Deploy(ctx, member, projectID, stagingID, in); !errors.As(err, &refused) || refused.Problem.Code != ProblemServerReview {
 		t.Errorf("no approval: %v", err)
 	}
+	in.ReviewServer = true
 	pv, err := sf.svc.Preview(ctx, member, projectID, stagingID, in)
 	if err != nil {
 		t.Fatal(err)
 	}
+	in.ReviewServer = false
 	in.Server = &ServerApproval{CloudID: cloudID, OperationID: pv.Server.ID, Review: "not-the-review"}
 	if _, err = sf.svc.Deploy(ctx, member, projectID, stagingID, in); !errors.As(err, &refused) || refused.Problem.Code != ProblemServerReview {
 		t.Errorf("wrong review: %v", err)
@@ -493,11 +519,12 @@ func TestCapacityRefusal(t *testing.T) {
 	ctx := context.Background()
 	sf := newServerFirst(t, cloudAdmin)
 	sf.servers.applyErrs = []error{gpuCeiling()}
-	in := DeployInput{EntryID: qwen7B, Target: onSize()}
+	in := DeployInput{EntryID: qwen7B, Target: onSize(), ReviewServer: true}
 	pv, err := sf.svc.Preview(ctx, member, projectID, stagingID, in)
 	if err != nil {
 		t.Fatal(err)
 	}
+	in.ReviewServer = false
 	in.Server = &ServerApproval{CloudID: cloudID, OperationID: pv.Server.ID, Review: pv.Server.Review}
 	_, err = sf.svc.Deploy(ctx, member, projectID, stagingID, in)
 	want := "The GPU server would take the cloud past its capacity limit of 2 NVIDIA L40S GPUs: 2 are counted and it needs 1 more. An admin can raise the limit, then deploy the model again."
@@ -633,7 +660,7 @@ func TestReconcileStopsOnAFailedServer(t *testing.T) {
 func TestReconcileTimesOutAServerThatNeverStarts(t *testing.T) {
 	ctx := context.Background()
 	sf := newServerFirst(t, cloudAdmin)
-	sf.deployOnNewServer(t)
+	pv, _ := sf.deployOnNewServer(t)
 	sf.advance(44 * time.Minute)
 	if err := sf.svc.Reconcile(ctx); err != nil {
 		t.Fatal(err)
@@ -645,8 +672,33 @@ func TestReconcileTimesOutAServerThatNeverStarts(t *testing.T) {
 	if err := sf.svc.Reconcile(ctx); err != nil {
 		t.Fatal(err)
 	}
-	if d := sf.row(t); d.Phase != PhaseNeedsAttention || d.Message != "The server took too long to start." {
-		t.Errorf("at 46 min: %s %q", d.Phase, d.Message)
+	d := sf.row(t)
+	if d.Phase != PhaseNeedsAttention || d.Message != tooLong || !strings.Contains(d.Message, "Check it in Infrastructure") {
+		t.Fatalf("at 46 min: %s %q", d.Phase, d.Message)
+	}
+
+	// Retried in Infrastructure, the operation has a new attempt with its
+	// own enrollment deadline: a Retry here waits for it instead of
+	// bouncing straight back.
+	sf.servers.set(pv.Server.ID, func(o *cloudinfra.Operation) {
+		o.Status, o.Attempt, o.UpdatedAt, o.BootstrapExpiresAt = "running", 2, *sf.now, sf.now.Add(45*time.Minute)
+	})
+	if _, err := sf.svc.Retry(ctx, member, projectID, stagingID, d.Resource); err != nil {
+		t.Fatal(err)
+	}
+	sf.advance(30 * time.Minute)
+	if err := sf.svc.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if d = sf.row(t); d.Phase != PhaseWaitingForServer {
+		t.Errorf("after retry, still within the attempt: %s %q", d.Phase, d.Message)
+	}
+	sf.advance(21 * time.Minute)
+	if err := sf.svc.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if d = sf.row(t); d.Phase != PhaseNeedsAttention {
+		t.Errorf("past the attempt's deadline: %s", d.Phase)
 	}
 }
 
@@ -765,8 +817,8 @@ func TestReconcileNeverCreatesAServerUnasked(t *testing.T) {
 	}
 }
 
-// Ruling M24: a waiting row whose environment is gone goes, unless a
-// server was being created for it, which stays on screen.
+// Rulings M24 and M28: a waiting row whose environment is gone goes; a
+// server being created for it is logged and stays in Infrastructure.
 func TestReconcileHandlesADeletedEnvironment(t *testing.T) {
 	ctx := context.Background()
 	sf := newServerFirst(t, cloudAdmin)
@@ -780,15 +832,21 @@ func TestReconcileHandlesADeletedEnvironment(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	var warned []string
+	sf.svc.d.Warn = func(msg string, err error) { warned = append(warned, msg+": "+err.Error()) }
 	if err := sf.svc.Reconcile(ctx); err != nil {
 		t.Fatal(err)
 	}
-	d, err := sf.rows.Get(ctx, "org", projectID, "env_gone", "with-server")
-	if err != nil || d.Phase != PhaseNeedsAttention || !strings.Contains(d.Message, "shop-with-server-gpu stays on the cloud's servers") {
-		t.Errorf("with a server: %+v, %v", d, err)
+	// Nothing could show or cancel either row, so both go, and the server
+	// that stays in Infrastructure is logged.
+	if _, err := sf.rows.Get(ctx, "org", projectID, "env_gone", "with-server"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("with a server: %v", err)
 	}
-	if _, err = sf.rows.Get(ctx, "org", "prj_gone", "env_x", "without"); !errors.Is(err, ErrNotFound) {
+	if _, err := sf.rows.Get(ctx, "org", "prj_gone", "env_x", "without"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("without a server: %v", err)
+	}
+	if len(warned) != 1 || !strings.Contains(warned[0], "shop-with-server-gpu") || !strings.Contains(warned[0], "infraop_1") {
+		t.Errorf("warnings %v", warned)
 	}
 	if p, a, r := sf.servers.calls(); p+a+r != 0 {
 		t.Error("a deleted environment's row reached cloudinfra")
@@ -878,5 +936,207 @@ func TestHourlyText(t *testing.T) {
 		if got := hourlyText(usd); got != want {
 			t.Errorf("%v: %q", usd, got)
 		}
+	}
+}
+
+// Ruling M28: an apply that fails after the accept went through, a race
+// lost to the cron or an error on the way back, keeps the row. Deleting it
+// would leave a server Loomplane is creating with nothing pointing at it,
+// and a retry would buy a second.
+func TestDeployKeepsTheRowOfAnApprovedServer(t *testing.T) {
+	ctx := context.Background()
+	for name, late := range map[string]error{
+		"lost the race":      afterAcceptError{cloudinfra.ErrConflict},
+		"error after commit": afterAcceptError{errors.New("connection reset by peer")},
+	} {
+		sf := newServerFirst(t, cloudAdmin)
+		sf.servers.applyErrs = []error{late}
+		pv, res := sf.deployOnNewServer(t)
+		d := sf.row(t)
+		if res.Deployment == nil || d.Phase != PhaseWaitingForServer || d.ServerOperationID != pv.Server.ID || d.Message != "" {
+			t.Errorf("%s: row %+v", name, d)
+		}
+		// The cron carries it on as a server on its way, never approving it again.
+		if err := sf.svc.Reconcile(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if _, applies, _ := sf.servers.calls(); applies != 1 || sf.row(t).Phase != PhaseWaitingForServer {
+			t.Errorf("%s: %d applies, %s", name, applies, sf.row(t).Phase)
+		}
+	}
+
+	// An error with the review still in preview is a real failure: the
+	// row goes and the deploy says why.
+	sf := newServerFirst(t, cloudAdmin)
+	sf.servers.applyErrs = []error{errors.New("the database is down")}
+	in := DeployInput{EntryID: qwen7B, Target: onSize(), ReviewServer: true}
+	pv, err := sf.svc.Preview(ctx, member, projectID, stagingID, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in.ReviewServer, in.Server = false, &ServerApproval{CloudID: cloudID, OperationID: pv.Server.ID, Review: pv.Server.Review}
+	if _, err = sf.svc.Deploy(ctx, member, projectID, stagingID, in); err == nil || len(sf.rows.rows) != 0 {
+		t.Errorf("failed apply: %v, %d rows", err, len(sf.rows.rows))
+	}
+}
+
+// Ruling M28: the cron approves a review again only for a row that
+// recorded a capacity pause. One without is a deploy still applying.
+func TestReconcileLeavesAnInFlightDeployAlone(t *testing.T) {
+	ctx := context.Background()
+	sf := newServerFirst(t, cloudAdmin)
+	in := DeployInput{EntryID: qwen7B, Target: onSize(), ReviewServer: true}
+	pv, err := sf.svc.Preview(ctx, member, projectID, stagingID, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The row as Deploy writes it, just before it applies the review.
+	in.ReviewServer, in.Server = false, &ServerApproval{CloudID: cloudID, OperationID: pv.Server.ID, Review: pv.Server.Review}
+	in.Resource, in.Quantization = "qwen2-5-7b-instruct", "bf16"
+	row := &Deployment{OrgID: "org", ProjectID: projectID, EnvironmentID: stagingID, Resource: "qwen2-5-7b-instruct", EntryID: qwen7B,
+		Quantization: "bf16", Engine: "vllm", Phase: PhaseWaitingForServer, ServerCloudID: cloudID, ServerOperationID: pv.Server.ID,
+		ServerName: serverName, Request: &in, RequestedBy: member}
+	if err = sf.rows.Create(ctx, row); err != nil {
+		t.Fatal(err)
+	}
+	if err = sf.svc.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, applies, _ := sf.servers.calls(); applies != 0 || sf.row(t).Phase != PhaseWaitingForServer {
+		t.Errorf("the cron raced the deploy: %d applies, %s", applies, sf.row(t).Phase)
+	}
+	// A deploy that never applied before its review expired needs attention.
+	sf.advance(16 * time.Minute)
+	if err = sf.svc.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if d := sf.row(t); d.Phase != PhaseNeedsAttention || !strings.Contains(d.Message, "never approved") {
+		t.Errorf("expired: %s %q", d.Phase, d.Message)
+	}
+	if _, applies, _ := sf.servers.calls(); applies != 0 {
+		t.Errorf("%d applies", applies)
+	}
+}
+
+// Ruling M28: two cron runs approving the same paused review: the one that
+// loses sees the server on its way and keeps waiting.
+func TestOverlappingReconcilesKeepWaiting(t *testing.T) {
+	ctx := context.Background()
+	sf := newServerFirst(t, cloudAdmin)
+	sf.servers.applyErrs = []error{staleCount(), afterAcceptError{cloudinfra.ErrConflict}}
+	sf.deployOnNewServer(t)
+	if d := sf.row(t); d.Message == "" {
+		t.Fatal("the pause wasn't recorded")
+	}
+	if err := sf.svc.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	d := sf.row(t)
+	if d.Phase != PhaseWaitingForServer || d.Message != "" {
+		t.Errorf("lost the race: %s %q", d.Phase, d.Message)
+	}
+	// With the server on its way, later runs don't approve it again.
+	if err := sf.svc.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, applies, _ := sf.servers.calls(); applies != 2 {
+		t.Errorf("%d applies", applies)
+	}
+}
+
+// Ruling M28: cloudinfra won't accept a review whose capacity reading is
+// more than five minutes old, and approving it again never refreshes it.
+// That's a refusal, not a pause.
+func TestAStaleReviewNeedsANewOne(t *testing.T) {
+	ctx := context.Background()
+	staleRequest := &cloudinfra.CapacityAdmissionError{Block: cloudinfra.CapacityBlock{Reason: "stale_inventory", Resource: "request", Retryable: true}}
+
+	// At deploy.
+	sf := newServerFirst(t, cloudAdmin)
+	sf.servers.applyErrs = []error{staleRequest}
+	in := DeployInput{EntryID: qwen7B, Target: onSize(), ReviewServer: true}
+	pv, err := sf.svc.Preview(ctx, member, projectID, stagingID, in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	in.ReviewServer, in.Server = false, &ServerApproval{CloudID: cloudID, OperationID: pv.Server.ID, Review: pv.Server.Review}
+	var refused *ProblemError
+	if _, err = sf.svc.Deploy(ctx, member, projectID, stagingID, in); !errors.As(err, &refused) || err.Error() != staleReview {
+		t.Errorf("deploy: %v", err)
+	}
+	// Deploy checks the reading's age itself before it writes anything.
+	sf.servers.set(pv.Server.ID, func(o *cloudinfra.Operation) { o.CapacityCheckedAt = sf.now.Add(-6 * time.Minute) })
+	if _, err = sf.svc.Deploy(ctx, member, projectID, stagingID, in); !errors.As(err, &refused) || refused.Problem.Code != ProblemServerReview ||
+		err.Error() != staleReview {
+		t.Errorf("old review: %v", err)
+	}
+	if len(sf.rows.rows) != 0 {
+		t.Error("a stale review left a row")
+	}
+
+	// In the cron, after a pause.
+	sf = newServerFirst(t, cloudAdmin)
+	sf.servers.applyErrs = []error{staleCount(), staleRequest}
+	sf.deployOnNewServer(t)
+	sf.advance(6 * time.Minute)
+	if err = sf.svc.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if d := sf.row(t); d.Phase != PhaseNeedsAttention || d.Message != staleReview {
+		t.Errorf("cron: %s %q", d.Phase, d.Message)
+	}
+}
+
+// Ruling M28: a stranded row its requester can no longer read says so,
+// which takes it off the list the cron reads every minute.
+func TestStrandedRowItsRequesterCantRead(t *testing.T) {
+	ctx := context.Background()
+	authz := &byUser{users: map[string]perms{"usr_1": cloudAdmin}}
+	sf := newServerFirst(t, authz)
+	gone := security.Principal{UserID: "usr_left", OrgID: "org"}
+	d := &Deployment{OrgID: "org", ProjectID: projectID, EnvironmentID: stagingID, Resource: "bge", EntryID: bgeSmall,
+		Quantization: "fp32", Engine: "tei", Phase: PhasePlanned, RequestedBy: gone}
+	if err := sf.rows.Create(ctx, d); err != nil {
+		t.Fatal(err)
+	}
+	sf.advance(StrandedAfter + time.Minute)
+	if err := sf.svc.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	got, err := sf.rows.Get(ctx, "org", projectID, stagingID, "bge")
+	if err != nil || !strings.Contains(got.Message, "can't read the project any more") {
+		t.Fatalf("row %+v, %v", got, err)
+	}
+	if left, _ := sf.rows.Stranded(ctx, sf.now.Add(time.Hour)); len(left) != 0 {
+		t.Errorf("still stranded: %+v", left)
+	}
+}
+
+// A server-first row the cron marked planned, then stopped before the
+// edit, has a server that's up: it goes back to waiting, never away, and
+// the next run plans the model onto the server.
+func TestStrandedServerFirstRowWaitsAgain(t *testing.T) {
+	ctx := context.Background()
+	sf := newServerFirst(t, cloudAdmin)
+	pv, _ := sf.deployOnNewServer(t)
+	sf.servers.succeed(pv.Server.ID)
+	sf.gpusReady(provider.GPUStatusReady)
+	d := sf.row(t)
+	d.Phase = PhasePlanned
+	if err := sf.rows.Update(ctx, d); err != nil {
+		t.Fatal(err)
+	}
+	sf.advance(StrandedAfter + time.Minute)
+	if err := sf.svc.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if d = sf.row(t); d.Phase != PhaseWaitingForServer {
+		t.Fatalf("stranded server-first row: %s", d.Phase)
+	}
+	if err := sf.svc.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if d = sf.row(t); d.Phase != PhasePlanned || d.PlanID == "" || len(sf.plans.asked) != 1 {
+		t.Errorf("next run: %s plan %q", d.Phase, d.PlanID)
 	}
 }

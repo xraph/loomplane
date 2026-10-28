@@ -123,7 +123,19 @@ type DeployPreview struct {
 	// Server is the review of the GPU server a server size target creates
 	// first, with its hourly price and GPUs. Deploy approves it: send its
 	// cloud_id, id and review back as DeployInput.Server.
+	//
+	// The contract for a server size, for the API and the deploy dialog:
+	// a plain Preview prices the server from the size's list price, writes
+	// nothing and sets ServerReviewNeeded. The "Review server" step sends
+	// the same input with review_server true; that Preview asks the
+	// provider, records the review operation and returns it here, priced
+	// from the provider, with CanDeploy. Deploy then sends the input with
+	// server set from it, within five minutes, since cloudinfra accepts a
+	// review only while its capacity reading is fresh.
 	Server *cloudinfra.Operation `json:"server,omitempty"`
+	// ServerReviewNeeded is true for a server size previewed without a
+	// review: CanDeploy waits for the review.
+	ServerReviewNeeded bool `json:"server_review_needed,omitempty"`
 
 	env       *projects.Environment
 	entry     registry.Entry
@@ -223,7 +235,7 @@ func (s *Service) Preview(ctx context.Context, p security.Principal, projectID, 
 	if err != nil {
 		return nil, err
 	}
-	pv.CanDeploy = len(pv.Problems) == 0 && allowed
+	pv.CanDeploy = len(pv.Problems) == 0 && allowed && !pv.ServerReviewNeeded
 	return pv, nil
 }
 

@@ -209,6 +209,7 @@ func (e *Extension) registerModels(c forge.Container, authz *security.Authorizer
 		Registry: registry.Default(), Hub: hub, Settings: e.settings, Custom: store, GPUs: targets, Connections: conns,
 		Authz: authz, Store: store, Manifests: mf, Plans: plans, Projects: projects.NewPgStore(pg), TokenGuard: e.settings,
 		Audit: auditor, Servers: servers, Clouds: clouds, Waiting: store, Principals: keys,
+		Warn: func(msg string, err error) { e.Logger().Warn(msg, forge.F("error", err.Error())) },
 	})
 	// The reconcile is the one caller of the store's cross-organization
 	// read, through Reconcile.

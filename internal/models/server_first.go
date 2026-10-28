@@ -44,8 +44,12 @@ var (
 // How long the reconcile cron waits before it gives up on a step.
 const (
 	// serverStartLimit is how long a deployment waits for its server to be
-	// created and enrolled, from the deploy.
+	// created and enrolled, from the operation's latest attempt, or for
+	// an accepted operation not attempted yet, its last change.
 	serverStartLimit = 45 * time.Minute
+	// enrollGrace is how long past its enrollment deadline an operation
+	// still running is given to fail on its own first.
+	enrollGrace = 5 * time.Minute
 	// gpuReadyLimit is how long an enrolled server has to report its GPUs
 	// ready, from the operation's success.
 	gpuReadyLimit = 20 * time.Minute
@@ -125,10 +129,12 @@ func serverNameFor(projectSlug, resource string) string {
 }
 
 // reviewServer works out the GPU server a server size target creates
-// first. Preview asks cloudinfra to review a new one; Deploy checks the
-// review it's given is that server's, still open. Only an admin creates
-// GPU servers, and only on a DigitalOcean account the environment's cloud
-// has.
+// first. Only an admin creates GPU servers, and only on a DigitalOcean
+// account the environment's cloud has. A plain preview stops there, priced
+// from the size. With in.ReviewServer it asks cloudinfra to review a new
+// server, which asks the provider and records an operation, so it's the
+// page's explicit "Review server" step and nothing else. Deploy checks the
+// review it's given is that server's, still open and fresh.
 func (s *Service) reviewServer(ctx context.Context, p security.Principal, projectID string, env *projects.Environment, in DeployInput,
 	deploying bool, pv *DeployPreview, problem func(code, format string, args ...any),
 ) {
@@ -166,7 +172,13 @@ func (s *Service) reviewServer(ctx context.Context, p security.Principal, projec
 		return
 	}
 	if deploying {
-		problem(ProblemServerReview, "Review the GPU server first: preview the deploy, then approve the server it shows.")
+		problem(ProblemServerReview, "Review the GPU server first: preview the deploy with review_server, then approve the server it shows.")
+		return
+	}
+	if !in.ReviewServer {
+		// A plain preview prices the server from the size and asks the
+		// provider nothing. The review is its own step.
+		pv.ServerReviewNeeded = true
 		return
 	}
 	options, err := s.d.Servers.ServerOptions(ctx, p, assignment.CloudID, in.Target.ConnectionID)
@@ -250,8 +262,14 @@ func (s *Service) checkApproval(ctx context.Context, p security.Principal, cloud
 		problem(ProblemServerReview, "The GPU server you approved isn't the one this deploy needs. Preview the deploy again.")
 		return
 	}
-	if op.Status != "preview" || !s.d.Now().Before(op.ExpiresAt) {
+	now := s.d.Now()
+	if op.Status != "preview" || !now.Before(op.ExpiresAt) {
 		problem(ProblemServerReview, "The GPU server's review has expired or was used. Preview the deploy again.")
+		return
+	}
+	// cloudinfra accepts a review only while its capacity reading is fresh.
+	if !op.CapacityCheckedAt.IsZero() && now.Sub(op.CapacityCheckedAt) > cloudinfra.CapacityFreshness {
+		problem(ProblemServerReview, staleReview)
 		return
 	}
 	pv.Server = op
@@ -288,13 +306,23 @@ func (s *Service) deployServerFirst(ctx context.Context, p security.Principal, p
 			return &DeployResult{Deployment: row}, uerr
 		}
 	case err != nil:
-		if derr := s.d.Store.Delete(context.WithoutCancel(ctx), p.OrgID, projectID, env.ID, row.Resource); derr != nil {
-			err = errors.Join(err, fmt.Errorf("and its deployment row stays: %w", derr))
+		// The accept may have gone through anyway: a cron run approved the
+		// same review first, or the error came after the commit. A row
+		// whose server is on its way never goes, or a retry would buy a
+		// second one.
+		left, rerr := s.leftPreview(ctx, p, op)
+		if rerr != nil {
+			return &DeployResult{Deployment: row}, errors.Join(err, fmt.Errorf("and Loomplane couldn't tell whether the GPU server was approved, so its deployment row stays: %w", rerr))
 		}
-		if blocked != nil {
-			return nil, &ProblemError{Problem: Problem{Code: ProblemCapacity, Message: capacitySentence(blocked.Block)}}
+		if !left {
+			if derr := s.d.Store.Delete(context.WithoutCancel(ctx), p.OrgID, projectID, env.ID, row.Resource); derr != nil {
+				return nil, errors.Join(err, fmt.Errorf("and its deployment row stays: %w", derr))
+			}
+			if blocked != nil {
+				return nil, &ProblemError{Problem: Problem{Code: ProblemCapacity, Message: capacitySentence(blocked.Block)}}
+			}
+			return nil, err
 		}
-		return nil, err
 	}
 	s.audit(ctx, p, projectID, "ai.model.server", map[string]any{
 		"entry": pv.entry.ID, "resource": row.Resource, "environment": env.Name, "cloud_id": op.CloudID,
@@ -303,17 +331,36 @@ func (s *Service) deployServerFirst(ctx context.Context, p security.Principal, p
 	return &DeployResult{Deployment: row}, nil
 }
 
+// leftPreview reads op again, whatever ctx's state, and reports whether
+// it has left preview: accepted, so its server is being created.
+func (s *Service) leftPreview(ctx context.Context, p security.Principal, op *cloudinfra.Operation) (bool, error) {
+	got, err := s.d.Servers.GetOperation(context.WithoutCancel(ctx), p, op.CloudID, op.ID)
+	if err != nil {
+		return false, err
+	}
+	return got.Status != "preview", nil
+}
+
 // capacityPaused reports whether a capacity block holds the server back
 // for now, so the deployment keeps waiting: a count that's out of date, or
 // an approval or expansion still to come. Anything else, a ceiling or a
 // provider quota, refuses it until someone changes the policy.
+//
+// A review whose own capacity reading is too old (stale_inventory on
+// "request") never gets fresher by applying it again, so that's a
+// refusal: the deploy needs a new review.
 func capacityPaused(b cloudinfra.CapacityBlock) bool {
-	switch b.Reason {
-	case "expansion_approval", "review_required", "provisioning":
+	switch {
+	case b.Reason == "stale_inventory" && b.Resource == "request":
+		return false
+	case b.Reason == "expansion_approval", b.Reason == "review_required", b.Reason == "provisioning":
 		return true
 	}
 	return b.Retryable
 }
+
+// staleReview is what a review too old for cloudinfra to accept means.
+const staleReview = "The GPU server's review is more than five minutes old. Preview the deploy again."
 
 // capacitySentence says what a capacity block means for the server, for
 // the page.
@@ -321,6 +368,9 @@ func capacitySentence(b cloudinfra.CapacityBlock) string {
 	what := capacityResource(b.Resource)
 	switch b.Reason {
 	case "stale_inventory":
+		if b.Resource == "request" {
+			return staleReview
+		}
 		return fmt.Sprintf("The cloud's capacity count of %s is out of date, so the GPU server waits until Loomplane has counted again.", what)
 	case "expansion_approval", "review_required":
 		return "The GPU server waits for an admin to approve it in the cloud's capacity policy."
@@ -508,6 +558,15 @@ func (s *Service) reconcileWaiting(ctx context.Context, d *Deployment) error {
 	now := s.d.Now()
 	switch op.Status {
 	case "preview":
+		// Only a deploy the capacity policy paused, which says so on the
+		// row, is approved again. A row without that is a deploy still
+		// applying its review, and the cron leaves it to that.
+		if d.Message == "" {
+			if now.Before(op.ExpiresAt) {
+				return nil
+			}
+			return s.attention(ctx, d, "The GPU server was never approved, and its review has expired. Cancel this and deploy the model again.")
+		}
 		return s.applyAgain(ctx, d, p, op, now)
 	case "failed":
 		msg := strings.TrimSpace(op.Message)
@@ -521,10 +580,25 @@ func (s *Service) reconcileWaiting(ctx context.Context, d *Deployment) error {
 		return s.serverUp(ctx, d, p, env, op, now)
 	}
 	// Pending, running or waiting for the provider or enrollment.
-	if now.Sub(d.CreatedAt) > serverStartLimit {
-		return s.attention(ctx, d, "The server took too long to start.")
+	if startedTooLongAgo(op, now) {
+		return s.attention(ctx, d, tooLong)
 	}
 	return s.waitWith(ctx, d, "")
+}
+
+// tooLong is what a server that never came up needs.
+const tooLong = "The server took too long to start. Check it in Infrastructure before you deploy the model again: it may still be there, and cost money."
+
+// startedTooLongAgo reports whether an accepted operation is past its
+// time. It counts from the operation's own state, so a Retry here while
+// it's still working waits instead of bouncing back: an attempt has until
+// its enrollment deadline and a little more, and one not attempted yet
+// has serverStartLimit from its last change.
+func startedTooLongAgo(op *cloudinfra.Operation, now time.Time) bool {
+	if !op.BootstrapExpiresAt.IsZero() {
+		return now.After(op.BootstrapExpiresAt.Add(enrollGrace))
+	}
+	return now.Sub(op.UpdatedAt) > serverStartLimit
 }
 
 // applyAgain approves the server once more, for a deployment whose server
@@ -540,6 +614,17 @@ func (s *Service) applyAgain(ctx context.Context, d *Deployment, p security.Prin
 		return s.attention(ctx, d, "The GPU server's review isn't the one this deploy approved. Cancel this, or deploy the model again.")
 	}
 	_, err := s.d.Servers.ApplyServerOperation(ctx, p, d.ServerCloudID, op.ID, cloudinfra.ApplyInput{Review: op.Review})
+	if err != nil {
+		// Another run, or the deploy, may have approved it first; then the
+		// server is on its way and the row waits for it.
+		left, rerr := s.leftPreview(ctx, p, op)
+		if rerr != nil {
+			return errors.Join(err, rerr)
+		}
+		if left {
+			return s.waitWith(ctx, d, "")
+		}
+	}
 	var blocked *cloudinfra.CapacityAdmissionError
 	switch {
 	case errors.As(err, &blocked) && capacityPaused(blocked.Block):
@@ -566,8 +651,8 @@ func (s *Service) serverUp(ctx context.Context, d *Deployment, p security.Princi
 	}
 	i := slices.IndexFunc(servers, func(v *cloudinfra.Server) bool { return v.ID == op.ServerID })
 	if i < 0 || servers[i].RuntimeConnectionID == "" {
-		if now.Sub(d.CreatedAt) > serverStartLimit {
-			return s.attention(ctx, d, "The server took too long to start.")
+		if now.Sub(op.UpdatedAt) > serverStartLimit {
+			return s.attention(ctx, d, tooLong)
 		}
 		return s.waitWith(ctx, d, "")
 	}
@@ -683,15 +768,21 @@ func (s *Service) stillAllowed(ctx context.Context, p security.Principal, env *p
 	return s.d.Authz.Allowed(ctx, p, writeNeed(env))
 }
 
-// environmentDeleted handles a waiting deployment whose environment is
-// gone. Without a server it goes. With one it needs attention, since the
-// deletion doesn't stop the server: it stays on the cloud's servers, and
-// costs money, until someone deletes it.
+// environmentDeleted deletes a waiting deployment whose environment is
+// gone, since nothing could show it or cancel it any more. A server being
+// created for it isn't stopped by that: it's said in the log, and the
+// server stays on the cloud's servers in Infrastructure, costing money,
+// until someone deletes it.
 func (s *Service) environmentDeleted(ctx context.Context, d *Deployment) error {
-	if d.ServerOperationID == "" {
-		return s.d.Store.Delete(ctx, d.OrgID, d.ProjectID, d.EnvironmentID, d.Resource)
+	if err := s.d.Store.Delete(ctx, d.OrgID, d.ProjectID, d.EnvironmentID, d.Resource); err != nil {
+		return err
 	}
-	return s.attention(ctx, d, fmt.Sprintf("Its environment was deleted. %s stays on the cloud's servers, and costs money while it runs, until you delete it from Infrastructure.", serverOf(d)))
+	if d.ServerOperationID != "" && s.d.Warn != nil {
+		s.d.Warn(fmt.Sprintf("%s was waiting for a GPU server when its environment was deleted", d.Resource),
+			fmt.Errorf("loomplane was creating %s for %s (cloud %s, operation %s). It stays on the cloud's servers and costs money until you delete it",
+				serverOf(d), d.Resource, d.ServerCloudID, d.ServerOperationID))
+	}
+	return nil
 }
 
 // reconcileStranded tidies a planned row a deploy stopped writing: gone
@@ -713,12 +804,19 @@ func (s *Service) reconcileStranded(ctx context.Context, d *Deployment) error {
 	case errors.Is(err, manifests.ErrNotFound) || errors.Is(err, projects.ErrNotFound):
 		return s.d.Store.Delete(ctx, d.OrgID, d.ProjectID, d.EnvironmentID, d.Resource)
 	case errors.Is(err, security.ErrForbidden):
-		// Whoever asked can't read the project any more; leave it.
-		return nil
+		// Whoever asked can't read the project any more, so the cron can't
+		// tell. Saying so takes the row off the stranded list.
+		return s.waitWith(ctx, d, "Loomplane can't tell whether this deploy reached the manifest, since the person who asked can't read the project any more. Plan the environment from the project, or remove the model.")
 	case err != nil:
 		return err
 	}
 	if _, ok := rev.Manifest.Resources[d.Resource]; !ok {
+		if d.ServerOperationID != "" {
+			// The cron stopped between marking it planned and the edit, and
+			// its server is up. Waiting again, the next run makes the edit.
+			d.Phase = PhaseWaitingForServer
+			return s.d.Store.Update(ctx, d)
+		}
 		return s.d.Store.Delete(ctx, d.OrgID, d.ProjectID, d.EnvironmentID, d.Resource)
 	}
 	env, err := s.environment(ctx, d.OrgID, d.ProjectID, d.EnvironmentID)
