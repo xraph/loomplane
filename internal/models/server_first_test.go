@@ -980,6 +980,26 @@ func TestServerNameForIncludesTheEnvironment(t *testing.T) {
 			t.Errorf("long: %q (%d)", long, len(long))
 		}
 	}
+	// Final review M7: the longest slug (48) and resource (40) keep the
+	// environment, so two environments' servers never fall back to "-gpu"
+	// and "-gpu-2".
+	slug, resource := "s"+strings.Repeat("-a", 23)+"z", strings.Repeat("r", 40)
+	names := map[string]bool{}
+	for _, env := range []string{"staging", "production", "preview-" + strings.Repeat("e", 24)} {
+		name := serverNameFor(slug, resource, env)
+		if len(name) > 63 || !strings.HasSuffix(name, "-"+env+"-gpu") || strings.Contains(name, "--") || !strings.HasPrefix(name, "s-a") ||
+			!strings.Contains(name, "-rrrr") {
+			t.Errorf("%s: %q (%d)", env, name, len(name))
+		}
+		names[name] = true
+	}
+	if len(names) != 3 {
+		t.Errorf("names %v", names)
+	}
+	// A short slug leaves the resource the rest.
+	if got := serverNameFor("shop", strings.Repeat("r", 60), "staging"); got != "shop-"+strings.Repeat("r", 63-len("shop--staging-gpu"))+"-staging-gpu" {
+		t.Errorf("short slug: %q", got)
+	}
 }
 
 func TestHourlyText(t *testing.T) {

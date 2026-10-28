@@ -123,13 +123,28 @@ func operationCost(op *cloudinfra.Operation) Cost {
 // "<project slug>-<resource>-<environment>-gpu", a DNS label of at most
 // 63 characters. Each environment's copy runs on its own server, so the
 // environment keeps two of them from coming out as "-gpu" and "-gpu-2".
+// A name that's too long keeps "-<environment>-gpu" whole and shortens the
+// slug and the resource instead: the longer one first, down to an even
+// share each.
 func serverNameFor(projectSlug, resource, environment string) string {
-	const suffix = "-gpu"
-	name := strings.Trim(nonLabel.ReplaceAllString(strings.ToLower(projectSlug+"-"+resource+"-"+environment), "-"), "-")
-	if len(name) > 63-len(suffix) {
-		name = strings.TrimRight(name[:63-len(suffix)], "-")
+	label := func(s string) string { return strings.Trim(nonLabel.ReplaceAllString(strings.ToLower(s), "-"), "-") }
+	cut := func(s string, n int) string { return strings.TrimRight(s[:min(len(s), n)], "-") }
+	// An environment name is at most 32 characters (projects), so the
+	// slug and the resource always have room.
+	tail := "-" + cut(label(environment), 32) + "-gpu"
+	slug, res := label(projectSlug), label(resource)
+	if room := 63 - len(tail) - 1; len(slug)+len(res) > room {
+		half := room / 2
+		switch {
+		case len(slug) <= half:
+			res = cut(res, room-len(slug))
+		case len(res) <= half:
+			slug = cut(slug, room-len(res))
+		default:
+			slug, res = cut(slug, half), cut(res, room-half)
+		}
 	}
-	return name + suffix
+	return strings.Trim(slug+"-"+res, "-") + tail
 }
 
 // freeServerName is name, or when a server has it, name and "-2", "-3"
