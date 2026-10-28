@@ -432,10 +432,16 @@ func WithResourceUpdate(doc []byte, resource string, u ResourceUpdate) ([]byte, 
 	}
 	dst, path := res, "resources."+resource
 	var envs *yaml.Node
+	// An environment block, or the environments key, that this edit
+	// creates and leaves empty goes again. One already in the file stays,
+	// with whatever comment it carries.
+	var keepEnvs, keepEnv func()
 	if u.Environment != "" {
+		keepEnvs = keepEmpty(res, "environments")
 		if envs, err = editMapping(res, "environments"); err != nil {
 			return nil, fmt.Errorf("%w: %s.%w", ErrInvalid, path, err)
 		}
+		keepEnv = keepEmpty(envs, u.Environment)
 		if dst, err = editMapping(envs, u.Environment); err != nil {
 			return nil, fmt.Errorf("%w: %s.environments.%w", ErrInvalid, path, err)
 		}
@@ -448,14 +454,45 @@ func WithResourceUpdate(doc []byte, resource string, u ResourceUpdate) ([]byte, 
 		return nil, err
 	}
 	if envs != nil {
-		if len(dst.Content) == 0 {
-			removeChild(envs, u.Environment)
-		}
-		if len(envs.Content) == 0 {
-			removeChild(res, "environments")
-		}
+		keepEnv()
+		keepEnvs()
 	}
 	return encode(file)
+}
+
+// keepEmpty notes how key stands in m before an edit that may create it
+// or turn its null into a mapping, and returns what to do once the edit
+// is done: take key away again when the edit created it and left it
+// empty, and keep it, comment and all, when it was already there. An
+// empty mapping under a key that carries a comment doesn't encode, so a
+// null comes back as it was and an emptied block carries the comment.
+func keepEmpty(m *yaml.Node, key string) func() {
+	old := child(m, key)
+	if old == nil {
+		return func() {
+			if n := child(m, key); n != nil && len(n.Content) == 0 {
+				removeChild(m, key)
+			}
+		}
+	}
+	was := *old
+	return func() {
+		if old.Kind != yaml.MappingNode || len(old.Content) != 0 {
+			return
+		}
+		if was.Kind == yaml.ScalarNode {
+			*old = was
+			return
+		}
+		// A block mapping emptied by the edit encodes as {} after the
+		// key, so the key's comment moves behind it.
+		old.Style = yaml.FlowStyle
+		for i := 0; i+1 < len(m.Content); i += 2 {
+			if k := m.Content[i]; k.Value == key && k.LineComment != "" && old.LineComment == "" {
+				old.LineComment, k.LineComment = k.LineComment, ""
+			}
+		}
+	}
 }
 
 // updateResourceFields writes an update's provider, target, GPU and

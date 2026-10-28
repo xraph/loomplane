@@ -1217,10 +1217,25 @@ func (r Resource) For(env string, d Defaults) ResourceSettings {
 // For resolves, and the environment's provider and region when it sets
 // them. It doesn't fill in the defaults, so r.In(env, d).For(env, d) is
 // r.For(env, d). Environments stay, so On and GatewayIn read the same.
+// Uses and the GPU are copies, so writing to them leaves r alone.
 func (r Resource) In(env string, d Defaults) Resource {
 	s := r.For(env, d)
 	out := r
 	out.Target, out.GPU, out.Settings = s.Target, s.GPU, s.Settings
+	if out.GPU != nil {
+		gpu := *out.GPU
+		out.GPU = &gpu
+	}
+	if r.Uses != nil {
+		out.Uses = make(map[string]Use, len(r.Uses))
+		for name, u := range r.Uses {
+			if u.Enabled != nil {
+				enabled := *u.Enabled
+				u.Enabled = &enabled
+			}
+			out.Uses[name] = u
+		}
+	}
 	o, ok := r.Environments[env]
 	if !ok {
 		return out

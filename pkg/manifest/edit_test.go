@@ -685,6 +685,106 @@ services:
 	}
 }
 
+// TestWithResourceUpdateKeepsEnvironmentBlocksInTheFile: an edit takes
+// away only the environment block it created. One already in the file,
+// empty or not, stays with its comment.
+func TestWithResourceUpdateKeepsEnvironmentBlocksInTheFile(t *testing.T) {
+	empty := ""
+	var none *GPU
+	for name, tt := range map[string]struct {
+		doc  string
+		want []string
+	}{
+		"a null block with a comment": {
+			doc: `version: 1
+resources:
+  llm:
+    kind: sample
+    target: c1
+    environments:
+      production:  # pin later
+`,
+			want: []string{"production:", "# pin later"},
+		},
+		"an empty mapping": {
+			doc: `version: 1
+resources:
+  llm:
+    kind: sample
+    target: c1
+    environments:
+      production: {}  # pin later
+`,
+			want: []string{"production:", "# pin later"},
+		},
+		"an empty environments key": {
+			doc: `version: 1
+resources:
+  llm:
+    kind: sample
+    target: c1
+    environments: {}  # per environment copies go here
+`,
+			want: []string{"environments:", "# per environment copies go here"},
+		},
+		"a null environments key": {
+			doc: `version: 1
+resources:
+  llm:
+    kind: sample
+    target: c1
+    environments:  # copies
+`,
+			want: []string{"environments:", "# copies"},
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			env := "production"
+			if strings.Contains(name, "environments key") {
+				env = "staging"
+			}
+			out, err := WithResourceUpdate([]byte(tt.doc), "llm", ResourceUpdate{Environment: env, Target: &empty, GPU: &none})
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, w := range tt.want {
+				if !strings.Contains(string(out), w) {
+					t.Errorf("lost %q:\n%s", w, out)
+				}
+			}
+			if strings.Contains(name, "environments key") && strings.Contains(string(out), "staging") {
+				t.Errorf("left the staging block this edit created:\n%s", out)
+			}
+			m, err := Parse(out)
+			if err != nil {
+				t.Fatalf("%v\n%s", err, out)
+			}
+			if got := m.Resources["llm"]; got.Target != "c1" {
+				t.Errorf("llm = %+v", got)
+			}
+		})
+	}
+
+	// Clearing the last field of a block already in the file keeps the
+	// block, now empty, and its comment.
+	const doc = `version: 1
+resources:
+  llm:
+    kind: sample
+    target: c1
+    environments:
+      production:  # its own server
+        target: c2
+`
+	out, err := WithResourceUpdate([]byte(doc), "llm", ResourceUpdate{Environment: "production", Target: &empty})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), "production:") || !strings.Contains(string(out), "# its own server") || strings.Contains(string(out), "c2") {
+		t.Errorf("want the production block kept with its comment and no target:\n%s", out)
+	}
+}
+
 func TestWithResourceUpdateInOneEnvironment(t *testing.T) {
 	const doc = `version: 1
 resources:

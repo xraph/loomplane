@@ -1191,6 +1191,35 @@ func TestResourceInMatchesFor(t *testing.T) {
 	}
 }
 
+// TestResourceInCopiesUsesAndGPU: In hands back copies, so a caller
+// writing to the view never changes the manifest's resource.
+func TestResourceInCopiesUsesAndGPU(t *testing.T) {
+	on := true
+	r := Resource{
+		Kind: "sample", Target: "c1", GPU: &GPU{Kind: "nvidia-l4", Count: 1},
+		Uses: map[string]Use{"db": {Resource: "pg", Enabled: &on}},
+		Environments: map[string]ResourceSettings{
+			"production": {GPU: &GPU{Kind: "nvidia-l40s", Count: 2}},
+		},
+	}
+	for _, env := range []string{"staging", "production"} {
+		in := r.In(env, Defaults{})
+		in.GPU.Count = 7
+		*in.Uses["db"].Enabled = false
+		in.Uses["db"] = Use{Resource: "other"}
+		in.Uses["cache"] = Use{Resource: "redis"}
+		if r.GPU.Count != 1 || r.Environments["production"].GPU.Count != 2 {
+			t.Errorf("%s: writing the view's GPU changed the resource: %+v, %+v", env, r.GPU, r.Environments["production"].GPU)
+		}
+		if !reflect.DeepEqual(r.Uses, map[string]Use{"db": {Resource: "pg", Enabled: &on}}) || !on {
+			t.Errorf("%s: writing the view's uses changed the resource: %+v (enabled %v)", env, r.Uses, on)
+		}
+	}
+	if in := (Resource{Kind: "sample"}).In("production", Defaults{}); in.Uses != nil || in.GPU != nil {
+		t.Errorf("a resource with no uses or GPU = %+v, want both nil", in)
+	}
+}
+
 func TestValidateEnvironmentTargetAndSettings(t *testing.T) {
 	const services = "services:\n  web: {source: a}\n"
 	tests := []struct {
