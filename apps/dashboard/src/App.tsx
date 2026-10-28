@@ -1,14 +1,21 @@
 import { useAuth } from "@authsome/ui-react"
-import { Navigate, Outlet } from "@tanstack/react-router"
+import {
+  Navigate,
+  Outlet,
+  useRouter,
+  useRouterState,
+} from "@tanstack/react-router"
+import { useCallback, useEffect } from "react"
 
 import { messageOf } from "@/client/errors"
 import { AppSidebar } from "@/components/app-sidebar"
 import { AppStatusBar } from "@/components/app-status-bar"
 import { AuthLayout } from "@/components/auth-layout"
 import { ShellProvider } from "@/components/shell"
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { SystemAddress, SystemPage } from "@/components/system-page"
+import { Button } from "@/components/ui/button"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
-import { PageLoading } from "@/components/route-feedback"
+import { PageLoading, WorkspaceNotFound } from "@/components/route-feedback"
 import { OrganizationGate, useOrganization } from "@/lib/organization"
 import { usePendingInvite } from "@/lib/invite"
 import { usePath } from "@/lib/router"
@@ -16,6 +23,7 @@ import { AcceptInvitation } from "@/pages/accept-invitation"
 import { AuthPage } from "@/pages/auth"
 import { Onboarding } from "@/pages/onboarding"
 import { RealtimeProvider } from "@/lib/realtime-provider"
+import { isUnprefixed, requestedWorkspace } from "@/lib/workspace-url"
 
 const authPaths = ["/sign-in", "/sign-up"]
 const recoveryPaths = ["/forgot-password", "/reset-password", "/verify-email"]
@@ -57,7 +65,7 @@ export function App() {
           mode={path === "/sign-up" ? "sign-up" : "sign-in"}
           notice={
             invite
-              ? "Sign in, or create an account with the email your invitation went to, to join the organization."
+              ? "Sign in, or create an account with the email your invitation went to, to join the workspace."
               : undefined
           }
         />
@@ -66,8 +74,24 @@ export function App() {
   }
   if (authPaths.includes(path)) return <Navigate to="/" replace />
   if (invite) return <AcceptInvitation token={invite} />
+  // An invitation link without its token: the route says so on a page of
+  // its own, since no workspace is involved yet.
+  if (path === "/invitations/accept") return <Outlet />
+  return <SignedIn />
+}
+
+function SignedIn() {
+  const router = useRouter()
+  const workspace = useRouterState({
+    select: (state) => requestedWorkspace(state.location),
+  })
+  // Another workspace's pages are another workspace's records: start over
+  // on its home page rather than at the same path.
+  const home = useCallback(() => router.navigate({ to: "/" }), [router])
   return (
     <OrganizationGate
+      workspace={workspace}
+      onSwitch={home}
       fallback={(state) => {
         switch (state.kind) {
           case "loading":
@@ -92,7 +116,19 @@ export function App() {
 }
 
 function Shell() {
-  const { session } = useOrganization()
+  const { session, organizations, missing } = useOrganization()
+  const path = usePath()
+  useWorkspaceAddress()
+  if (missing) {
+    const current = organizations.find((o) => o.id === session.orgId)
+    return (
+      <WorkspaceNotFound
+        slug={missing}
+        path={path}
+        current={current?.name ?? "your workspace"}
+      />
+    )
+  }
   return (
     <ShellProvider>
       <SidebarProvider>
@@ -107,20 +143,47 @@ function Shell() {
   )
 }
 
+// An address without a workspace, from a bookmark or an old link, moves
+// under the current one. The router reads it again once the workspace is
+// known, in case the slug is also a page's name, such as /projects/projects.
+function useWorkspaceAddress() {
+  const router = useRouter()
+  const location = useRouterState({ select: (state) => state.location })
+  const { slug } = useOrganization()
+  const named = requestedWorkspace(location)
+  const stale =
+    named === null && !isUnprefixed(location.pathname) ? location.href : ""
+  useEffect(() => {
+    if (stale) void router.navigate({ href: stale, replace: true })
+  }, [router, stale, slug])
+}
+
 export function Problem({
   title,
   message,
+  address,
+  retry = true,
 }: {
   title: string
   message: string
+  /** The address that failed, when there is one worth showing. */
+  address?: string
+  /** Whether trying again could help. A broken link can't be retried. */
+  retry?: boolean
 }) {
   return (
-    <div className="flex min-h-svh items-center justify-center p-6">
-      <Alert variant="destructive" className="max-w-md">
-        <AlertTitle>{title}</AlertTitle>
-        <AlertDescription>{message}</AlertDescription>
-      </Alert>
-    </div>
+    <SystemPage
+      tone="problem"
+      title={title}
+      lede={message}
+      actions={
+        retry && (
+          <Button onClick={() => window.location.reload()}>Try again</Button>
+        )
+      }
+    >
+      {address && <SystemAddress before={address} />}
+    </SystemPage>
   )
 }
 

@@ -493,6 +493,8 @@ func TestBearerTellsARefusedAppFromARefusedSignIn(t *testing.T) {
 		"wrong secret": {401, `{"error":"invalid_client","error_description":"AADSTS7000215: Invalid client secret provided."}`, true, true},
 		"unknown app":  {400, `{"error":"unauthorized_client","error_description":"AADSTS700016: Application not found."}`, true, true},
 		"down":         {503, `{"error":"temporarily_unavailable"}`, false, false},
+		"consent":      {400, `{"error":"consent_required","error_description":"AADSTS65001: consent needed"}`, true, false},
+		"bad request":  {400, `{"error":"invalid_request","error_description":"AADSTS900144: The request body must contain scope."}`, false, false},
 	} {
 		c, _ := newTokenServer(t, answering(tc.status, tc.body))
 		cred, err := ParseCredential(mustKey(t, "rt-1"), placement())

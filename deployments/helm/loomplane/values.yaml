@@ -246,8 +246,27 @@ serviceAccount:
   name: ""
   # Cloud identity for S3, e.g. eks.amazonaws.com/role-arn.
   annotations: {}
-  # Loomplane doesn't call this cluster's API.
+  # Loomplane calls this cluster's API only to deploy into it (inCluster,
+  # below), and then only the API pods get the token.
   automountToken: false
+
+# ── This cluster as a deployment target ──────────────────────────────────────
+# Lets people connect this cluster under Integrations with no kubeconfig.
+# Loomplane deploys there as its own service account, which every
+# organization on this instance shares, so turn it on only where they all
+# may deploy here. Loomplane's own namespace and the kube-* ones are always
+# refused.
+inCluster:
+  enabled: false
+  # Namespaces it may deploy into. The chart binds a Role in each.
+  namespaces: []
+  # Make the namespaces above too. Leave it false when you manage them.
+  createNamespaces: false
+  # Grant the cluster-wide permissions too: reading nodes and storage
+  # classes, and reading and updating persistent volumes. GPU inventory,
+  # retained storage and database recovery need them; without them those
+  # show as unavailable on the connection.
+  clusterPermissions: true
 
 podSecurityContext:
   runAsNonRoot: true

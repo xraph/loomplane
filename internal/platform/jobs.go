@@ -3,11 +3,13 @@ package platform
 import (
 	"context"
 	"errors"
+	"fmt"
 
 	"github.com/xraph/dispatch/durable"
 	drt "github.com/xraph/dispatch/durable/runtime"
 	"github.com/xraph/dispatch/engine"
 	dispatchext "github.com/xraph/dispatch/extension"
+	"github.com/xraph/dispatch/telemetry"
 	"github.com/xraph/forge"
 
 	"github.com/xraph/loomplane/internal/orchestration"
@@ -15,15 +17,21 @@ import (
 
 // jobsExtension is Dispatch's extension with its durable worker
 // supervised, so a database timeout doesn't stop deployments until the
-// process restarts. orchestration.DurableSupervisor explains why.
+// process restarts. orchestration.DurableSupervisor explains why. Each
+// later workflow build runs a supervised worker of its own beside it.
 type jobsExtension struct {
 	*dispatchext.Extension
-	durable         *orchestration.DurableSupervisor
-	capacity        *orchestration.DurableSupervisor
-	capacityOptions drt.Options
-	bindCapacity    func(*drt.Worker)
-	capacityCancel  context.CancelFunc
-	capacityDone    chan struct{}
+	durable *orchestration.DurableSupervisor
+	builds  []*buildWorker
+}
+
+// buildWorker runs one workflow build's worker.
+type buildWorker struct {
+	options    drt.Options
+	bind       func(*drt.Worker)
+	supervisor *orchestration.DurableSupervisor
+	cancel     context.CancelFunc
+	done       chan struct{}
 }
 
 func newJobs(options drt.Options, opts ...dispatchext.ExtOption) *jobsExtension {
@@ -34,7 +42,8 @@ func newJobs(options drt.Options, opts ...dispatchext.ExtOption) *jobsExtension 
 	return e
 }
 
-// Start starts Dispatch, then watches the durable worker it started.
+// Start starts Dispatch, then watches the durable worker it started, then
+// starts each build's worker.
 func (e *jobsExtension) Start(ctx context.Context) error {
 	if err := e.Extension.Start(ctx); err != nil {
 		return err
@@ -47,60 +56,90 @@ func (e *jobsExtension) Start(ctx context.Context) error {
 	if err := e.durable.Start(eng.DurableWorker(), store, eng.Telemetry()); err != nil {
 		return err
 	}
-	if e.capacity == nil {
-		return nil
-	}
-	options := e.capacityOptions
-	options.Telemetry = eng.Telemetry()
-	worker, err := drt.NewWorker(store, options)
-	if err != nil {
-		return errors.Join(err, e.durable.Stop(ctx), e.Extension.Stop(ctx))
-	}
-	e.bindCapacity(worker)
-	runCtx, cancel := context.WithCancel(context.Background())
-	e.capacityCancel = cancel
-	e.capacityDone = make(chan struct{})
-	go func() {
-		defer close(e.capacityDone)
-		if runErr := worker.Run(runCtx); runErr != nil && runCtx.Err() == nil {
-			e.Logger().Warn("capacity workflow worker stopped", forge.F("error", runErr.Error()))
-		}
-	}()
-	if err = e.capacity.Start(worker, store, eng.Telemetry()); err != nil {
-		cancel()
-		return errors.Join(err, e.durable.Stop(ctx), e.Extension.Stop(ctx))
+	if err := e.startBuilds(store, eng.Telemetry()); err != nil {
+		return errors.Join(err, e.stopBuilds(ctx), e.durable.Stop(ctx), e.Extension.Stop(ctx))
 	}
 	return nil
 }
 
-// Stop stops any replacement worker before Dispatch stops the rest.
-func (e *jobsExtension) Stop(ctx context.Context) error {
-	var err error
-	if e.capacityCancel != nil {
-		e.capacityCancel()
-		err = e.capacity.Stop(ctx)
-		select {
-		case <-e.capacityDone:
-		case <-ctx.Done():
-			err = errors.Join(err, ctx.Err())
+// startBuilds binds, runs and supervises each build's worker.
+func (e *jobsExtension) startBuilds(store durable.Store, tel *telemetry.Telemetry) error {
+	for _, b := range e.builds {
+		options := b.options
+		options.Telemetry = tel
+		worker, err := drt.NewWorker(store, options)
+		if err != nil {
+			return err
+		}
+		b.bind(worker)
+		runCtx, cancel := context.WithCancel(context.Background())
+		b.cancel, b.done = cancel, make(chan struct{})
+		go func(build string, done chan struct{}) {
+			defer close(done)
+			if runErr := worker.Run(runCtx); runErr != nil && runCtx.Err() == nil {
+				e.warn("workflow worker stopped", forge.F("build", build), forge.F("error", runErr.Error()))
+			}
+		}(options.BuildID, b.done)
+		if err := b.supervisor.Start(worker, store, tel); err != nil {
+			return err
 		}
 	}
-	return errors.Join(err, e.durable.Stop(ctx), e.Extension.Stop(ctx))
+	return nil
 }
 
+// stopBuilds stops each build's worker that started.
+func (e *jobsExtension) stopBuilds(ctx context.Context) error {
+	var errs []error
+	for _, b := range e.builds {
+		if b.cancel == nil {
+			continue
+		}
+		b.cancel()
+		errs = append(errs, b.supervisor.Stop(ctx))
+		select {
+		case <-b.done:
+		case <-ctx.Done():
+			errs = append(errs, ctx.Err())
+		}
+	}
+	return errors.Join(errs...)
+}
+
+// Stop stops every build's worker before Dispatch stops the rest.
+func (e *jobsExtension) Stop(ctx context.Context) error {
+	return errors.Join(e.stopBuilds(ctx), e.durable.Stop(ctx), e.Extension.Stop(ctx))
+}
+
+// WithBuild runs and supervises one more workflow build's worker. bind
+// receives the worker once it's built, to start and signal that build's
+// runs.
+func (e *jobsExtension) WithBuild(options drt.Options, bind func(*drt.Worker)) {
+	e.builds = append(e.builds, &buildWorker{options: options, bind: bind,
+		supervisor: orchestration.NewDurableSupervisor(options, func(msg string, err error) {
+			e.warn(msg, forge.F("build", options.BuildID), forge.F("error", err.Error()))
+		})})
+}
+
+// warn logs once the extension has a logger, which it has from
+// registration on.
+func (e *jobsExtension) warn(msg string, fields ...forge.Field) {
+	if l := e.Logger(); l != nil {
+		l.Warn(msg, fields...)
+	}
+}
+
+// WithCapacity runs the v3 build's worker.
 func (e *jobsExtension) WithCapacity(options drt.Options, bind func(*drt.Worker)) {
-	e.capacityOptions = options
-	e.bindCapacity = bind
-	e.capacity = orchestration.NewDurableSupervisor(options, func(msg string, err error) { e.Logger().Warn(msg, forge.F("error", err.Error())) })
+	e.WithBuild(options, bind)
 }
 
 // Health reports the durable worker that's polling now. Dispatch's own
 // check keeps failing after its worker stops, even once a replacement
 // runs, so this one asks the supervisor and pings the store itself.
 func (e *jobsExtension) Health(ctx context.Context) error {
-	if e.capacity != nil {
-		if err := e.capacity.Health(); err != nil {
-			return err
+	for _, b := range e.builds {
+		if err := b.supervisor.Health(); err != nil {
+			return fmt.Errorf("%s: %w", b.options.BuildID, err)
 		}
 	}
 	if err := e.durable.Health(); err != nil {

@@ -1,14 +1,34 @@
 import { ClientProvider } from "@forge-go/client-react"
-import { cleanup, render, screen, waitFor } from "@testing-library/react"
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
+import { type ReactNode, useState } from "react"
 import { afterEach, expect, it, vi } from "vitest"
 
 import type { ZoneOverview } from "@/client/forge/loomplane/types"
 import { forgeClient } from "@/client/runtime"
-import { DomainCard } from "./domain-card"
+import { DomainDetailPage } from "@/pages/domain-detail"
+import {
+  detailPath,
+  detailWith,
+  stubFetch,
+  zoneWith,
+} from "@/test-fixtures/domains"
+import { ChallengeCredentialDialog } from "./challenge-credential-dialog"
 
 vi.mock("@/lib/organization", () => ({
   useOrganization: () => ({ session: { orgId: "org" }, can: () => true }),
+}))
+// The domain's page, without the app around it.
+vi.mock("@/components/site-header", () => ({ SiteHeader: () => null }))
+vi.mock("@/lib/router", () => ({
+  Link: ({ children }: { children?: ReactNode }) => <a>{children}</a>,
+  useNavigate: () => () => {},
 }))
 
 afterEach(() => {
@@ -24,6 +44,7 @@ function overview(change: Partial<ZoneOverview["zone"]> = {}): ZoneOverview {
     state: "ready",
     wildcards: false,
     hostnames: [],
+    subdomains: [],
     zone: {
       id: "zone",
       orgId: "org",
@@ -88,10 +109,27 @@ function stub(attach: () => Response = () => Response.json({})) {
   return posts
 }
 
+// The button a domain offers wildcards from, and the dialog it opens.
+function SetUp({ zone }: { zone: ZoneOverview }) {
+  const [open, setOpen] = useState(false)
+  return (
+    <>
+      <button type="button" onClick={() => setOpen(true)}>
+        Set up wildcard certificates
+      </button>
+      <ChallengeCredentialDialog
+        zone={zone.zone!}
+        open={open}
+        onOpenChange={setOpen}
+      />
+    </>
+  )
+}
+
 function mount(zone: ZoneOverview) {
   render(
     <ClientProvider client={forgeClient}>
-      <DomainCard zone={zone} expanded onToggle={() => undefined} />
+      <SetUp zone={zone} />
     </ClientProvider>
   )
 }
@@ -99,22 +137,38 @@ function mount(zone: ZoneOverview) {
 const copy =
   "Wildcard certificates need a second Cloudflare token with DNS Edit on acme.dev only. Loomplane stores it on each server and cluster that serves a wildcard for this zone, so keep its scope to this one zone."
 
-it("offers wildcard certificates only on a Cloudflare zone without a challenge token", () => {
-  stub()
-  mount(overview({ challengeConnectionId: "cf-dns" }))
+// The domain's page offers it from its Wildcards section.
+it("offers wildcard certificates only on a Cloudflare zone without a challenge token", async () => {
+  const setUp = { name: "Set up wildcard certificates" }
+  const page = async (change: (z: ReturnType<typeof zoneWith>) => void) => {
+    const z = zoneWith("acme.dev")
+    change(z)
+    stubFetch({ [detailPath("acme.dev")]: detailWith(z) })
+    render(
+      <ClientProvider client={forgeClient}>
+        <DomainDetailPage zoneId="zone-acme.dev" />
+      </ClientProvider>
+    )
+    await screen.findByRole("region", { name: "Status" })
+  }
+  await page((z) =>
+    Object.assign(z.zone, { challenge_connection_id: "cf-dns" })
+  )
   expect(
-    screen.queryByRole("button", { name: "Set up wildcard certificates" })
-  ).toBeNull()
-  cleanup()
-  mount(overview({ provider: "digitalocean" }))
-  expect(
-    screen.queryByRole("button", { name: "Set up wildcard certificates" })
-  ).toBeNull()
-  cleanup()
-  mount(overview())
-  expect(
-    screen.getByRole("button", { name: "Set up wildcard certificates" })
+    within(screen.getByRole("region", { name: "Wildcards" })).getByText(
+      /Wildcard certificates are set up/
+    )
   ).toBeTruthy()
+  expect(screen.queryByRole("button", setUp)).toBeNull()
+  cleanup()
+  forgeClient.clear()
+  await page((z) => Object.assign(z.zone, { provider: "digitalocean" }))
+  expect(screen.queryByRole("region", { name: "Wildcards" })).toBeNull()
+  expect(screen.queryByRole("button", setUp)).toBeNull()
+  cleanup()
+  forgeClient.clear()
+  await page(() => {})
+  expect(screen.getByRole("button", setUp)).toBeTruthy()
 })
 
 it("attaches a second Cloudflare connection on the zone's account", async () => {

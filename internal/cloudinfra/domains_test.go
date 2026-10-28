@@ -46,12 +46,17 @@ func TestDomainProofExpirationAndContinuedControl(t *testing.T) {
 	svc := NewService(Deps{Resolver: proofResolver{[]string{"expected"}}})
 	svc.now = func() time.Time { return now }
 	zone := &Zone{Mode: "external", Name: "example.com", ProofName: "_loomplane.example.com", ProofValue: "expected", ProofExpiresAt: now.Add(-time.Second)}
-	if err := svc.verifyZoneControl(t.Context(), zone); !errors.Is(err, ErrConflict) {
+	// Check again reads an unverified proof until it expires.
+	if err := svc.verifyOwnZoneControl(t.Context(), zone); !errors.Is(err, ErrConflict) {
 		t.Fatal("expired unverified proof accepted", err)
 	}
 	zone.ProofExpiresAt = now.Add(time.Minute)
-	if err := svc.verifyZoneControl(t.Context(), zone); err != nil {
+	if err := svc.verifyOwnZoneControl(t.Context(), zone); err != nil {
 		t.Fatal(err)
+	}
+	// A route never passes on a proof that is only pending.
+	if err := svc.verifyZoneControl(t.Context(), zone); !errors.Is(err, ErrConflict) {
+		t.Fatal("pending proof authorized a route", err)
 	}
 	zone.VerifiedAt, zone.ProofExpiresAt = now.Add(-time.Hour), now.Add(-time.Minute)
 	if err := svc.verifyZoneControl(t.Context(), zone); err != nil {
@@ -69,8 +74,14 @@ type scopedZoneStore struct {
 }
 
 func (*scopedZoneStore) DomainProject(context.Context, string, string) error { return nil }
-func (s *scopedZoneStore) CreateZone(_ context.Context, z *Zone) error       { s.zone = z; return nil }
-func (s *scopedZoneStore) SaveZone(_ context.Context, z *Zone) error         { s.zone = z; return nil }
+func (s *scopedZoneStore) Zones(context.Context, string) ([]*Zone, error) {
+	if s.zone == nil {
+		return []*Zone{}, nil
+	}
+	return []*Zone{s.zone}, nil
+}
+func (s *scopedZoneStore) CreateZone(_ context.Context, z *Zone) error { s.zone = z; return nil }
+func (s *scopedZoneStore) SaveZone(_ context.Context, z *Zone) error   { s.zone = z; return nil }
 
 type scopedZoneAdapter struct{ routeDNSAdapter }
 
@@ -94,6 +105,8 @@ func TestManagedProofNamespaceAndHostedZoneRemainDistinct(t *testing.T) {
 	if zone.ProviderZone.ID != "child" || zone.ProviderZone.Name != "child.example.com" || zone.Name != "app.child.example.com" || zone.ProofName != "_loomplane.app.child.example.com" || !zone.VerifiedAt.IsZero() {
 		t.Fatalf("scope widened: %+v", zone)
 	}
+	// Checked, the way Check again would stamp it.
+	zone.VerifiedAt = time.Now()
 	svc.Resolver = proofResolver{[]string{zone.ProofValue}}
 	if err = svc.verifyZoneControl(t.Context(), zone); err != nil {
 		t.Fatal(err)

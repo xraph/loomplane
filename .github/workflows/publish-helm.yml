@@ -34,6 +34,10 @@ jobs:
         with:
           ref: ${{ inputs.tag }}
       - uses: azure/setup-helm@v4
+        with:
+          # The committed Kubernetes manifest is rendered with this version; a
+          # newer Helm can add blank lines and fail the staleness check.
+          version: v4.2.0
       - name: Version
         id: version
         env:

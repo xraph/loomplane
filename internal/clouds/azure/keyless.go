@@ -32,10 +32,12 @@ var aadstsRE = regexp.MustCompile(`AADSTS(\d{1,9})`)
 // Loomplane's token: no federated credential matches it (70021), or none
 // matches its issuer, audience or subject (700211, 700212, 700213), the
 // app has no federated credential left at all (70025), or the app isn't
-// in the tenant (700016) or is disabled (7000112). Entra files 70021
+// in the tenant (700016), is disabled (7000112) or its tenant is gone
+// (90002). The tenant was checked when the connection was made, so a
+// tenant Entra can't find was deleted. Entra files 70021
 // under invalid_request as well as invalid_client, so the number decides,
 // not the error. Trying again won't change any of them.
-var trustRefused = map[string]bool{"70021": true, "70025": true, "700211": true, "700212": true, "700213": true, "700016": true, "7000112": true}
+var trustRefused = map[string]bool{"70021": true, "70025": true, "700211": true, "700212": true, "700213": true, "700016": true, "7000112": true, "90002": true}
 
 // entraFailed are the AADSTS numbers that say Entra couldn't judge the
 // token, whatever error it's filed under: its own service failing

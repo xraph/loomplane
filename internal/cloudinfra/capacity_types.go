@@ -162,7 +162,10 @@ type CapacityAccountSnapshot struct {
 	CheckedAt   time.Time              `json:"checked_at"`
 }
 
+// CapacityUsage is identified by its Cloud, so the dashboard's cached usage
+// refreshes when that Cloud's capacity changes.
 type CapacityUsage struct {
+	CloudID              string                    `json:"cloud_id" forge:"id"`
 	Accounts             []CapacityAccountSnapshot `json:"accounts"`
 	Records              []CapacityRecord          `json:"records"`
 	Provisioned          CapacityResources         `json:"provisioned"`
@@ -172,17 +175,20 @@ type CapacityUsage struct {
 	SystemReserve        CapacityResources         `json:"system_reserve"`
 	Allocatable          CapacityResources         `json:"allocatable"`
 	Headroom             CapacityResources         `json:"headroom"`
-	ObservedStorageBytes *int64                    `json:"observed_storage_bytes"`
+	ObservedStorageBytes *int64                    `json:"observed_storage_bytes" nullable:"true" required:"true"`
 	CheckedAt            time.Time                 `json:"checked_at"`
 	Fresh                bool                      `json:"fresh"`
 	GPUs                 []GPUUsage                `json:"gpus"`
+	// Frontends counts hosted frontend slots per managed target. It is read
+	// with the usage and never persisted.
+	Frontends []FrontendUsage `json:"frontends"`
 }
 
 // GPUUsage counts one GPU kind. Provisioned and Limit are null when unknown.
 type GPUUsage struct {
 	Kind        string `json:"kind"`
-	Provisioned *int64 `json:"provisioned"`
+	Provisioned *int64 `json:"provisioned" nullable:"true" required:"true"`
 	Pending     int64  `json:"pending"`
 	Reserved    int64  `json:"reserved"`
-	Limit       *int64 `json:"limit"`
+	Limit       *int64 `json:"limit" nullable:"true" required:"true"`
 }

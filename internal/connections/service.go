@@ -12,6 +12,7 @@ import (
 
 	"go.jetify.com/typeid/v2"
 
+	"github.com/xraph/loomplane/internal/clouds/kubernetes"
 	"github.com/xraph/loomplane/internal/clouds/oauth"
 	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/internal/telemetry"
@@ -214,8 +215,8 @@ func validName(name string) (string, error) {
 // create checks cred with its cloud and stores a new connection that got
 // its credential by method, with ID id, or a new one when id is empty.
 // checked is what the check gets instead of cred, such as a sign-in's
-// handout; nil checks cred. A keyless connection writes nothing to Vault.
-// The caller has checked the principal's role.
+// handout; nil checks cred. A keyless or in-cluster connection writes
+// nothing to Vault. The caller has checked the principal's role.
 func (s *Service) create(ctx context.Context, p security.Principal, id, cloud, name string, cred, checked []byte, settings map[string]string, method string) (*Connection, error) {
 	cloud = strings.TrimSpace(cloud)
 	checker, err := s.checker(cloud)
@@ -245,7 +246,7 @@ func (s *Service) create(ctx context.Context, p security.Principal, id, cloud, n
 	c := &Connection{ID: id, OrgID: p.OrgID, Cloud: cloud, Name: name, Method: method, CreatedBy: p.UserID, CreatedAt: now}
 	c.SignedInBy = signer(p, method)
 	apply(c, res, now)
-	keeps := method != MethodKeyless
+	keeps := method != MethodKeyless && method != MethodInCluster
 	// The secret first: a row without its secret would look connected and
 	// fail every deployment, where a secret without its row is unreachable
 	// and harmless.
@@ -328,6 +329,9 @@ func (s *Service) Recheck(ctx context.Context, p security.Principal, id string) 
 		if cred, err = s.keylessHandout(ctx, c); err != nil {
 			return nil, err
 		}
+	} else if c.Method == MethodInCluster {
+		// With the operator's switch off, the check fails it, and says why.
+		cred = kubernetes.InClusterCredential()
 	} else if cred, err = s.secrets.Reveal(ctx, p.OrgID, c.ID); err != nil {
 		return nil, err
 	}
@@ -506,7 +510,8 @@ func (s *Service) Delete(ctx context.Context, p security.Principal, id string) e
 // for a plan someone was allowed to approve. A signed-in connection's
 // credential is its access token, renewed first if it expires within a
 // day, or its handout, for a cloud whose sessions renew themselves. A
-// keyless connection's is its keyless handout, and Vault isn't read.
+// keyless connection's is its keyless handout, and an in-cluster one's
+// the in-cluster credential, and for neither is Vault read.
 func (s *Service) Credential(ctx context.Context, orgID, id string) (*Connection, []byte, error) {
 	c, err := s.store.GetConnection(ctx, orgID, id)
 	if err != nil {
@@ -532,6 +537,8 @@ func (s *Service) Credential(ctx context.Context, orgID, id string) (*Connection
 		if cred, err = s.keylessHandout(ctx, c); err != nil {
 			return nil, nil, err
 		}
+	} else if c.Method == MethodInCluster {
+		cred = kubernetes.InClusterCredential()
 	} else if cred, err = s.secrets.Reveal(ctx, orgID, id); err != nil {
 		return nil, nil, err
 	}

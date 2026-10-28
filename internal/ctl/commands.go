@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/xraph/forge/cli"
 
@@ -23,6 +24,7 @@ func (a *App) commands() []cli.Command {
 		a.cloudSyncsCommand(),
 		a.cloudServersCommand(),
 		a.cloudPoolsCommand(),
+		a.cloudCapacityCommand(),
 		a.dnsZonesCommand(),
 		a.domainRoutesCommand(),
 		a.cloudGrantsCommand(),
@@ -85,6 +87,12 @@ func (a *App) commands() []cli.Command {
 		cli.NewCommand("retry", "Retry a failed deployment from the step that failed", a.retry,
 			cli.WithUsage("retry <deployment-id> [--no-wait]"),
 			cli.WithFlag(cli.NewBoolFlag("no-wait", "", "Retry and return", false))),
+		cli.NewCommand("resume", "Check capacity again for a deployment paused for it", a.resume,
+			cli.WithUsage("resume <deployment-id> --revision <n>"),
+			cli.WithFlags(pauseRevisionFlag(), jsonFlag)),
+		cli.NewCommand("cancel", "Cancel a deployment paused for capacity; finished steps stay", a.cancel,
+			cli.WithUsage("cancel <deployment-id> --revision <n>"),
+			cli.WithFlags(pauseRevisionFlag(), jsonFlag)),
 		cli.NewCommand("status", "What runs each of a project's services and resources, and any drift", a.status,
 			cli.WithUsage("status <project>"), cli.WithFlag(jsonFlag)),
 		cli.NewCommand("vars", "List a project's variables; secrets show no value", a.vars,
@@ -414,6 +422,9 @@ func (a *App) printPlan(p *client.Plan) {
 		}
 		a.table([]string{"STEP", "OP", "NAME", "PROVIDER", "WHY"}, rows)
 	}
+	if p.Release != nil {
+		a.printf("\nRelease: %s\n", releaseLine(p.Release))
+	}
 	for _, f := range p.Problems {
 		a.printf("\nProblem (%s): %s", f.Code, f.Message)
 	}
@@ -547,7 +558,7 @@ func (a *App) deployment(ctx cli.CommandContext) error {
 	if ctx.Bool("json") {
 		return a.json(d)
 	}
-	a.printDeployment(d)
+	a.printDeployment(ctx, c, d)
 	return nil
 }
 
@@ -555,6 +566,7 @@ func (a *App) deployment(ctx cli.CommandContext) error {
 // fails if it did.
 func (a *App) follow(ctx cli.CommandContext, c *client.Client, id string) error {
 	seen := map[string]string{}
+	judged := map[string]bool{}
 	d, err := c.WaitDeployment(ctxOf(ctx), id, func(d *client.Deployment) {
 		for _, s := range d.Steps {
 			line := s.Status + " " + s.Message
@@ -563,19 +575,38 @@ func (a *App) follow(ctx cli.CommandContext, c *client.Client, id string) error 
 				a.printf("%-10s %-24s %s\n", s.Status, s.Name, s.Message)
 			}
 		}
+		if d.Canary == nil {
+			return
+		}
+		// A verdict prints when it first appears, not on every poll. A
+		// failed read is tried again on the next one.
+		report, err := c.Canary(ctxOf(ctx), d.ID)
+		if err != nil {
+			return
+		}
+		for _, v := range report.Verdicts {
+			if !judged[v.ID] {
+				judged[v.ID] = true
+				a.printf("%-10s %-24s %s\n", "verdict", fmt.Sprintf("%s at %d%%", v.Service, v.Weight), v.Verdict+": "+v.Reason)
+			}
+		}
 	})
 	if err != nil {
 		return err
 	}
 	a.printf("\n")
-	a.printDeployment(d)
+	a.printDeployment(ctx, c, d)
+	if d.Paused() {
+		a.printWait(d)
+		return nil
+	}
 	if d.Status == "failed" {
 		return fmt.Errorf("the deployment failed; retry it from where it stopped with `loomctl retry %s`", d.ID)
 	}
 	return nil
 }
 
-func (a *App) printDeployment(d *client.Deployment) {
+func (a *App) printDeployment(ctx cli.CommandContext, c *client.Client, d *client.Deployment) {
 	a.printf("Deployment %s to %s: %s\n", d.ID, d.Environment, d.Status)
 	if d.Error != "" {
 		a.printf("  %s\n", d.Error)
@@ -585,6 +616,91 @@ func (a *App) printDeployment(d *client.Deployment) {
 		rows = append(rows, []string{s.Name, s.Op, s.Status, orDash(s.URL), orDash(s.Message)})
 	}
 	a.table([]string{"NAME", "OP", "STATUS", "URL", "MESSAGE"}, rows)
+	if d.Canary != nil {
+		a.printCanary(ctx, c, d)
+	}
+}
+
+// releaseLine says how a plan rolls out. A canary that no service in the
+// plan can ramp says so; the plan's warnings say why.
+func releaseLine(r *client.Release) string {
+	if r.Strategy != "canary" {
+		return r.Strategy
+	}
+	steps := make([]string, 0, len(r.Steps))
+	for _, w := range r.Steps {
+		steps = append(steps, fmt.Sprintf("%d%%", w))
+	}
+	line := "canary at " + strings.Join(steps, ", ")
+	if r.HoldSeconds > 0 {
+		line += ", holding " + holdText(time.Duration(r.HoldSeconds)*time.Second) + " at each step"
+	}
+	if len(r.Canary) == 0 {
+		line += " (no service in this plan can ramp)"
+	}
+	return line
+}
+
+// holdText is a hold as 10m or 1h30m, not 10m0s.
+func holdText(d time.Duration) string {
+	if d%time.Minute != 0 {
+		return d.String()
+	}
+	if m := int(d / time.Minute); m%60 == 0 {
+		return fmt.Sprintf("%dh", m/60)
+	} else if m > 60 {
+		return fmt.Sprintf("%dh%dm", m/60, m%60)
+	}
+	return fmt.Sprintf("%dm", int(d/time.Minute))
+}
+
+// printCanary prints the canary block: where it is, what a person has to
+// do when it ended with traffic that may still be split, and the verdicts
+// of the deployment's current retry.
+func (a *App) printCanary(ctx cli.CommandContext, c *client.Client, d *client.Deployment) {
+	cn := d.Canary
+	a.printf("\nCanary: %s at %d%%\n", strings.ReplaceAll(cn.Status, "_", " "), cn.Weight)
+	if cn.NeedsAttention() {
+		a.printf("  NEEDS YOU: %s\n", orDefault(cn.Reason, "Traffic may still be split."))
+		a.printf("  Check how the service splits traffic in the cloud before you retry.\n")
+	} else if cn.Reason != "" {
+		a.printf("  %s\n", cn.Reason)
+	}
+	report, err := c.Canary(ctxOf(ctx), d.ID)
+	if err != nil {
+		a.printf("  The verdicts couldn't be read: %v\n", err)
+		return
+	}
+	if len(report.Verdicts) == 0 {
+		return
+	}
+	rows := make([][]string, 0, len(report.Verdicts))
+	for _, v := range report.Verdicts {
+		rows = append(rows, []string{fmt.Sprint(v.Step + 1), fmt.Sprintf("%d%%", v.Weight), v.Service, v.Verdict, errorsText(v.Candidate), latencyText(v.Candidate), orDash(v.Reason)})
+	}
+	a.printf("\n")
+	a.table([]string{"STEP", "WEIGHT", "SERVICE", "VERDICT", "ERRORS", "LATENCY", "REASON"}, rows)
+}
+
+func errorsText(h client.Health) string {
+	if !h.Available {
+		return "-"
+	}
+	return fmt.Sprintf("%.1f%%", h.ErrorRate()*100)
+}
+
+func latencyText(h client.Health) string {
+	if !h.Available {
+		return "-"
+	}
+	return strings.TrimSpace(fmt.Sprintf("%.0fms %s", h.LatencyMS, h.Statistic))
+}
+
+func orDefault(s, fallback string) string {
+	if s == "" {
+		return fallback
+	}
+	return s
 }
 
 func (a *App) retry(ctx cli.CommandContext) error {

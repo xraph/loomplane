@@ -31,7 +31,23 @@ func (s *Service) GetCapacityPolicy(ctx context.Context, p security.Principal, c
 	if !ok {
 		return nil, ErrInvalid
 	}
-	return st.GetCapacityPolicy(ctx, p.OrgID, cloudID)
+	policy, err := st.GetCapacityPolicy(ctx, p.OrgID, cloudID)
+	if err != nil {
+		return nil, err
+	}
+	return withPolicyLists(policy), nil
+}
+
+// withPolicyLists gives clients empty lists, never null, for a Cloud with no
+// pools or frontend limits. The stored body is unchanged.
+func withPolicyLists(policy *CapacityPolicy) *CapacityPolicy {
+	if policy.Pools == nil {
+		policy.Pools = []PoolExpansionPolicy{}
+	}
+	if policy.FrontendLimits == nil {
+		policy.FrontendLimits = []FrontendLimit{}
+	}
+	return policy
 }
 
 func (s *Service) SaveCapacityPolicy(ctx context.Context, p security.Principal, cloudID string, in CapacityPolicyInput) (*CapacityPolicy, error) {
@@ -45,6 +61,22 @@ func (s *Service) SaveCapacityPolicy(ctx context.Context, p security.Principal, 
 	if !ok {
 		return nil, ErrInvalid
 	}
+	policy, err := s.prepareCapacityPolicy(ctx, p, cloudID, in)
+	if err != nil {
+		return nil, err
+	}
+	if checkErr := st.SaveCapacityPolicy(ctx, policy, in.ExpectedRevision); checkErr != nil {
+		return nil, checkErr
+	}
+	s.capacityPolicySaved(ctx, p, policy)
+	return withPolicyLists(policy), nil
+}
+
+// prepareCapacityPolicy checks a policy the caller is about to save over
+// in.ExpectedRevision. It reads each enabled pool's provider options before
+// any transaction opens, picks the bootstrap sizes, and captures p as the
+// policy's authority.
+func (s *Service) prepareCapacityPolicy(ctx context.Context, p security.Principal, cloudID string, in CapacityPolicyInput) (*CapacityPolicy, error) {
 	if in.ExpectedRevision < 0 || in.ExpectedRevision == math.MaxInt64 {
 		return nil, ErrInvalid
 	}
@@ -75,14 +107,15 @@ func (s *Service) SaveCapacityPolicy(ctx context.Context, p security.Principal, 
 		return nil, err
 	}
 	policy.authority = &p
-	if err := st.SaveCapacityPolicy(ctx, &policy, in.ExpectedRevision); err != nil {
-		return nil, err
-	}
-	if s.Audit != nil {
-		s.Audit.Record(ctx, projects.AuditEvent{Action: "cloud.capacity_policy.write", Severity: "info", Principal: p, Attributes: map[string]any{"cloud_id": cloudID, "revision": policy.Revision, "enabled": policy.Enabled, "require_expansion_approval": policy.RequireExpansionApproval}})
-	}
-	s.wakeCapacityCloud(ctx, p.OrgID, cloudID, fmt.Sprintf("policy:%d", policy.Revision))
 	return &policy, nil
+}
+
+// capacityPolicySaved records a saved policy and wakes the Cloud's capacity work.
+func (s *Service) capacityPolicySaved(ctx context.Context, p security.Principal, policy *CapacityPolicy) {
+	if s.Audit != nil {
+		s.Audit.Record(ctx, projects.AuditEvent{Action: "cloud.capacity_policy.write", Severity: "info", Principal: p, Attributes: map[string]any{"cloud_id": policy.CloudID, "revision": policy.Revision, "enabled": policy.Enabled, "require_expansion_approval": policy.RequireExpansionApproval}})
+	}
+	s.wakeCapacityCloud(ctx, p.OrgID, policy.CloudID, fmt.Sprintf("policy:%d", policy.Revision))
 }
 
 func validateCapacityPolicy(policy CapacityPolicy, options map[string]provider.ServerOptions) error {
@@ -91,6 +124,10 @@ func validateCapacityPolicy(policy CapacityPolicy, options map[string]provider.S
 	}
 	return validateCapacityPolicyChoices(&policy, options)
 }
+
+// capacityCeilingNames names each capacityValues dimension in error messages.
+var capacityCeilingNames = [4]string{"server", "CPU", "memory", "storage"}
+
 func capacityValues(v ResourceVector) []int64 {
 	return []int64{v.Servers, v.CPUMillis, v.MemoryBytes, v.StorageBytes}
 }
@@ -149,9 +186,9 @@ func validateCapacityPolicyShape(policy CapacityPolicy) error {
 		return ErrInvalid
 	}
 	if policy.Enabled {
-		for _, n := range capacityValues(policy.Limits) {
+		for i, n := range capacityValues(policy.Limits) {
 			if n <= 0 {
-				return fmt.Errorf("%w: enablement needs positive finite ceilings", ErrInvalid)
+				return fmt.Errorf("%w: enablement needs a positive %s ceiling", ErrInvalid, capacityCeilingNames[i])
 			}
 		}
 	}

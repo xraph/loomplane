@@ -165,6 +165,7 @@ upgrade.
 | `ingress.blockInternalPaths` | `true` | Sends `/_/health`, `/_/metrics` and `/debug` to a Service with no pods |
 | `metrics.serviceMonitor.enabled` | `false` | Prometheus Operator scraping for both processes |
 | `extraVolumes`, `extraVolumeMounts` | | The SPIRE socket and signing keys for [federation](federation-agent.md) |
+| `inCluster.enabled` | `false` | Lets people deploy into this cluster with no kubeconfig ([below](#deploying-into-the-same-cluster)) |
 
 `values.yaml` documents the rest.
 
@@ -177,6 +178,49 @@ Each API pod also runs about two dozen job pollers on its pool. With the
 database a millisecond away that's plenty. If the API logs `begin tx:
 context deadline exceeded` and goes unready, the pool is the bottleneck:
 raise `database.poolSize` and `max_connections` together.
+
+## Deploying into the same cluster
+
+You can let people deploy to the cluster Loomplane itself runs in, with no
+kubeconfig to paste. List the namespaces it may use:
+
+```yaml
+inCluster:
+  enabled: true
+  namespaces: [apps, preview]
+  createNamespaces: true # leave it false when you make them yourself
+```
+
+The chart then mounts the service account token in the API pods (the
+workers never call the cluster, so they still get none), sets
+`LOOMPLANE_KUBERNETES_IN_CLUSTER`, and binds a Role in each namespace that
+grants exactly what a Kubernetes connection's check asks for. Under
+Integrations, the Kubernetes dialog now opens on this cluster. You pick a
+namespace and connect.
+
+Think about who's on your instance before you turn it on. Loomplane deploys
+there as its own service account, and every organization shares it, so any
+of them can deploy into any namespace you list. On a single-team install
+that's exactly what you want. On a shared one, leave it off and give each
+team a kubeconfig scoped to its own namespace.
+
+Loomplane's own namespace is never a target, because its database password
+and secret key live there. The chart won't render with it in the list, and
+the API refuses it as well, along with `kube-system`, `kube-public` and
+`kube-node-lease`.
+
+`inCluster.clusterPermissions`, on by default, adds a ClusterRole for the
+few things that aren't namespaced: listing nodes for GPU inventory, reading
+storage classes, and reading and updating persistent volumes so a
+database's volume survives recovery. Turn it off and those show as
+unavailable on the connection. Plain deployments still work.
+
+Loomplane keeps no copy of the token. Every connection reads the file the
+kubelet mounted, so rotation needs nothing from you. Without Helm, set
+`LOOMPLANE_KUBERNETES_IN_CLUSTER=true` on the API, set
+`automountServiceAccountToken: true` on its pods, and grant its service
+account what `templates/in-cluster-rbac.yaml` grants. If the token isn't
+there, the API logs a warning at start and leaves the option off.
 
 ## Probes and shutdown
 

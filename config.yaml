@@ -126,6 +126,12 @@ clouds:
   cloudflare_endpoint: "${LOOMPLANE_CLOUDFLARE_ENDPOINT:-}"
   cloudflare_registrar_sandbox: "${LOOMPLANE_CLOUDFLARE_REGISTRAR_SANDBOX:-false}"
   acme_directory: "${LOOMPLANE_ACME_DIRECTORY:-}"
+  # Lets people connect the Kubernetes cluster Loomplane runs in without a
+  # kubeconfig. Loomplane deploys there as its own service account, which
+  # every organization on this instance then shares, so turn it on only
+  # where they all may deploy to this cluster. The pod needs its service
+  # account token mounted; the Helm chart's inCluster values do both.
+  kubernetes_in_cluster: "${LOOMPLANE_KUBERNETES_IN_CLUSTER:-false}"
   # Loomplane's sign-in app at each cloud, so people can connect by signing
   # in. Leave both empty to keep token entry only. Keep the secret in the
   # environment.

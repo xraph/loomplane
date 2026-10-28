@@ -1,8 +1,9 @@
 import { createMemoryHistory, RouterProvider } from "@tanstack/react-router"
-import { act, render, screen } from "@testing-library/react"
+import { act, cleanup, render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
+import { requestedWorkspace, setWorkspaceSlug } from "@/lib/workspace-url"
 import { createDashboardRouter } from "./router"
 
 // Exercise the actual generated routes without starting an auth session or
@@ -37,6 +38,11 @@ vi.mock("@/pages/deployment", () => ({
 vi.mock("@/pages/project-detail", () => ({
   ProjectDetail: ({ id }: { id: string }) => <h1>Project {id}</h1>,
 }))
+vi.mock("@/pages/domain-detail", () => ({
+  DomainDetailPage: ({ zoneId }: { zoneId: string }) => (
+    <h1>Domain {zoneId}</h1>
+  ),
+}))
 vi.mock("@/pages/catalog-service", () => ({
   CatalogService: ({
     projectId,
@@ -58,7 +64,10 @@ beforeEach(() => {
   vi.spyOn(window, "scrollTo").mockImplementation(() => {})
 })
 
-afterEach(() => vi.restoreAllMocks())
+afterEach(() => {
+  vi.restoreAllMocks()
+  setWorkspaceSlug("")
+})
 
 async function open(path: string) {
   const history = createMemoryHistory({ initialEntries: [path] })
@@ -166,9 +175,92 @@ describe("dashboard routes", () => {
     ).toBeInTheDocument()
   })
 
+  it("sends an old zone link to the domain's page", async () => {
+    // Octopus's "Zone settings" still links to /domains?zone=<id>.
+    const { router } = await open("/domains?zone=zone_dev")
+    expect(router.state.location.pathname).toBe("/domains/zone_dev")
+    expect(router.state.location.search).toEqual({})
+  })
+
+  it("opens a domain's page by its zone ID", async () => {
+    await open("/domains/zone_dev")
+    expect(
+      await screen.findByRole("heading", { name: "Domain zone_dev" })
+    ).toBeInTheDocument()
+    cleanup()
+    // An ID is short; anything longer names no zone.
+    await open(`/domains/${"z".repeat(65)}`)
+    expect(
+      await screen.findByRole("heading", { name: "Domain" })
+    ).toBeInTheDocument()
+  })
+
   it("retains invitation tokens in the URL", async () => {
     const { router } = await open("/invitations/accept?token=invite%2Bone")
     expect(router.state.location.search).toEqual({ token: "invite+one" })
     expect(await screen.findByText("Incomplete invitation")).toBeInTheDocument()
+  })
+})
+
+describe("workspace addresses", () => {
+  beforeEach(() => setWorkspaceSlug("acme-inc"))
+
+  it("opens a page under the workspace's slug", async () => {
+    const { router } = await open("/acme-inc/projects/p1")
+    expect(
+      await screen.findByRole("heading", { name: "Project p1" })
+    ).toBeInTheDocument()
+    expect(router.state.location.pathname).toBe("/projects/p1")
+    expect(requestedWorkspace(router.state.location)).toBe("acme-inc")
+  })
+
+  it("puts the workspace in every link", async () => {
+    await open("/acme-inc/projects")
+    expect(
+      await screen.findByRole("link", { name: "Open members" })
+    ).toHaveAttribute("href", "/acme-inc/members")
+  })
+
+  it("keeps the workspace through navigation", async () => {
+    const { router, history } = await open("/acme-inc")
+    await act(async () => {
+      await router.navigate({ to: "/deployments/$id", params: { id: "p 1" } })
+    })
+    expect(history.location.pathname).toBe("/acme-inc/deployments/p%201")
+    expect(
+      await screen.findByRole("heading", { name: "Deployment p 1" })
+    ).toBeInTheDocument()
+  })
+
+  // The router settles the first address before the gate knows the
+  // workspace, as it does in the browser.
+  async function openBeforeGate(path: string) {
+    setWorkspaceSlug("")
+    const opened = await open(path)
+    setWorkspaceSlug("acme-inc")
+    return opened
+  }
+
+  it("still opens an address from before workspaces were in it", async () => {
+    const { router } = await openBeforeGate("/deployments/plan_123")
+    expect(
+      await screen.findByRole("heading", { name: "Deployment plan_123" })
+    ).toBeInTheDocument()
+    expect(requestedWorkspace(router.state.location)).toBeNull()
+  })
+
+  it("reads another workspace's slug for the gate to decide", async () => {
+    const { router } = await openBeforeGate("/other-co/deployments")
+    expect(router.state.location.pathname).toBe("/deployments")
+    expect(requestedWorkspace(router.state.location)).toBe("other-co")
+  })
+
+  it("leaves emailed and callback addresses without a workspace", async () => {
+    const { router, history } = await open(
+      "/invitations/accept?token=invite%2Bone"
+    )
+    expect(requestedWorkspace(router.state.location)).toBeNull()
+    expect(history.location.pathname).toBe("/invitations/accept")
+    expect(router.buildLocation({ to: "/sign-in" }).publicHref).toBe("/sign-in")
   })
 })

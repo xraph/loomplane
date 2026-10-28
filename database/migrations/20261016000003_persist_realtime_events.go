@@ -126,47 +126,7 @@ END $$`)
 		return fmt.Errorf("create function loomplane_append_event: %w", err)
 	}
 
-	_, err = db.Exec(ctx, `CREATE OR REPLACE FUNCTION loomplane_state_event_trigger() RETURNS TRIGGER
-LANGUAGE plpgsql AS $$
-DECLARE
-	doc JSONB;
-	project TEXT;
-	entity_type TEXT;
-	event_type TEXT;
-BEGIN
-	IF TG_OP='UPDATE' AND to_jsonb(OLD)=to_jsonb(NEW) THEN RETURN NULL; END IF;
-	IF TG_OP='DELETE' THEN doc:=to_jsonb(OLD); ELSE doc:=to_jsonb(NEW); END IF;
-	entity_type:=TG_ARGV[0];
-	project:=coalesce(doc->>'project_id','');
-
-	IF entity_type='project' THEN
-		project:=doc->>'id';
-		doc:=doc-'repository_url' || jsonb_build_object('repositories',coalesce((
-			SELECT jsonb_agg(repository ORDER BY alias)
-			FROM (
-				SELECT DISTINCT ON(repository) repository,alias
-				FROM loomplane_project_sources
-				WHERE project_id=project AND removed_at IS NULL
-				ORDER BY repository,alias
-			) repositories),'[]'));
-	ELSIF entity_type='analysis' THEN
-		doc:=doc-'graph'-'attempts' || jsonb_build_object('source',coalesce((SELECT alias FROM loomplane_project_sources WHERE id=doc->>'source_id'),''));
-	ELSIF entity_type='plan' THEN
-		doc:=doc-'result' || jsonb_build_object('actions','[]'::jsonb,'problems','[]'::jsonb,'warnings','[]'::jsonb,'connections','{}'::jsonb,'summary','{}'::jsonb)
-			|| coalesce(nullif(doc->'result','null'::jsonb),'{}')
-			|| jsonb_build_object('sources',coalesce((SELECT jsonb_agg(to_jsonb(ps)-'plan_id' ORDER BY alias) FROM loomplane_plan_sources ps WHERE plan_id=doc->>'id'),'[]'));
-	ELSIF entity_type='binding' THEN
-		doc:=doc-'replaced';
-	ELSIF entity_type='manifest' THEN
-		doc:=doc-'body' || jsonb_build_object('yaml',doc->'body');
-	END IF;
-
-	event_type:=entity_type||'.updated';
-	IF TG_OP='DELETE' THEN event_type:=entity_type||'.deleted'; END IF;
-	PERFORM loomplane_append_event(doc->>'org_id',project,event_type,doc->>'id',doc);
-
-	RETURN NULL;
-END $$`)
+	_, err = db.Exec(ctx, stateEventTriggerFunction)
 	if err != nil {
 		return fmt.Errorf("create function loomplane_state_event_trigger: %w", err)
 	}
@@ -190,40 +150,7 @@ END $$`)
 		return fmt.Errorf("create triggers loomplane_state_event: %w", err)
 	}
 
-	_, err = db.Exec(ctx, `CREATE OR REPLACE FUNCTION loomplane_parent_event_trigger() RETURNS TRIGGER
-LANGUAGE plpgsql AS $$
-DECLARE
-	child JSONB;
-	doc JSONB;
-	parent TEXT;
-BEGIN
-	IF TG_OP='DELETE' THEN child:=to_jsonb(OLD); ELSE child:=to_jsonb(NEW); END IF;
-
-	IF TG_TABLE_NAME='loomplane_project_sources' THEN
-		parent:=child->>'project_id';
-		SELECT to_jsonb(p) INTO doc FROM loomplane_projects p WHERE id=parent;
-		IF doc IS NULL THEN RETURN NULL; END IF;
-		doc:=doc-'repository_url' || jsonb_build_object('repositories',coalesce((
-			SELECT jsonb_agg(repository ORDER BY alias)
-			FROM (
-				SELECT DISTINCT ON(repository) repository,alias
-				FROM loomplane_project_sources
-				WHERE project_id=parent AND removed_at IS NULL
-				ORDER BY repository,alias
-			) sources),'[]'));
-		PERFORM loomplane_append_event(doc->>'org_id',parent,'project.updated',parent,doc);
-	ELSE
-		parent:=child->>'plan_id';
-		SELECT to_jsonb(p) INTO doc FROM loomplane_plans p WHERE id=parent;
-		IF doc IS NULL THEN RETURN NULL; END IF;
-		doc:=doc-'result' || jsonb_build_object('actions','[]'::jsonb,'problems','[]'::jsonb,'warnings','[]'::jsonb,'connections','{}'::jsonb,'summary','{}'::jsonb)
-			|| coalesce(nullif(doc->'result','null'::jsonb),'{}')
-			|| jsonb_build_object('sources',coalesce((SELECT jsonb_agg(to_jsonb(ps)-'plan_id' ORDER BY alias) FROM loomplane_plan_sources ps WHERE plan_id=parent),'[]'));
-		PERFORM loomplane_append_event(doc->>'org_id',doc->>'project_id','plan.updated',parent,doc);
-	END IF;
-
-	RETURN NULL;
-END $$`)
+	_, err = db.Exec(ctx, parentEventTriggerFunction)
 	if err != nil {
 		return fmt.Errorf("create function loomplane_parent_event_trigger: %w", err)
 	}
@@ -301,3 +228,86 @@ FOR EACH ROW EXECUTE FUNCTION loomplane_parent_event_trigger()`)
 		PrimaryKey("org_id", "deployment_id", "action_id", "attempt", "operation_id").
 		Exec(ctx)
 }
+
+// stateEventTriggerFunction defines the trigger that appends an event for
+// each change to a realtime entity's row. plan_promotion_rollback redefines
+// it from this text, and its down restores this.
+const stateEventTriggerFunction = `CREATE OR REPLACE FUNCTION loomplane_state_event_trigger() RETURNS TRIGGER
+LANGUAGE plpgsql AS $$
+DECLARE
+	doc JSONB;
+	project TEXT;
+	entity_type TEXT;
+	event_type TEXT;
+BEGIN
+	IF TG_OP='UPDATE' AND to_jsonb(OLD)=to_jsonb(NEW) THEN RETURN NULL; END IF;
+	IF TG_OP='DELETE' THEN doc:=to_jsonb(OLD); ELSE doc:=to_jsonb(NEW); END IF;
+	entity_type:=TG_ARGV[0];
+	project:=coalesce(doc->>'project_id','');
+
+	IF entity_type='project' THEN
+		project:=doc->>'id';
+		doc:=doc-'repository_url' || jsonb_build_object('repositories',coalesce((
+			SELECT jsonb_agg(repository ORDER BY alias)
+			FROM (
+				SELECT DISTINCT ON(repository) repository,alias
+				FROM loomplane_project_sources
+				WHERE project_id=project AND removed_at IS NULL
+				ORDER BY repository,alias
+			) repositories),'[]'));
+	ELSIF entity_type='analysis' THEN
+		doc:=doc-'graph'-'attempts' || jsonb_build_object('source',coalesce((SELECT alias FROM loomplane_project_sources WHERE id=doc->>'source_id'),''));
+	ELSIF entity_type='plan' THEN
+		doc:=doc-'result' || jsonb_build_object('actions','[]'::jsonb,'problems','[]'::jsonb,'warnings','[]'::jsonb,'connections','{}'::jsonb,'summary','{}'::jsonb)
+			|| coalesce(nullif(doc->'result','null'::jsonb),'{}')
+			|| jsonb_build_object('sources',coalesce((SELECT jsonb_agg(to_jsonb(ps)-'plan_id' ORDER BY alias) FROM loomplane_plan_sources ps WHERE plan_id=doc->>'id'),'[]'));
+	ELSIF entity_type='binding' THEN
+		doc:=doc-'replaced';
+	ELSIF entity_type='manifest' THEN
+		doc:=doc-'body' || jsonb_build_object('yaml',doc->'body');
+	END IF;
+
+	event_type:=entity_type||'.updated';
+	IF TG_OP='DELETE' THEN event_type:=entity_type||'.deleted'; END IF;
+	PERFORM loomplane_append_event(doc->>'org_id',project,event_type,doc->>'id',doc);
+
+	RETURN NULL;
+END $$`
+
+// parentEventTriggerFunction defines the trigger that appends a project or
+// plan event when one of its sources changes. plan_promotion_rollback
+// redefines it from this text, and its down restores this.
+const parentEventTriggerFunction = `CREATE OR REPLACE FUNCTION loomplane_parent_event_trigger() RETURNS TRIGGER
+LANGUAGE plpgsql AS $$
+DECLARE
+	child JSONB;
+	doc JSONB;
+	parent TEXT;
+BEGIN
+	IF TG_OP='DELETE' THEN child:=to_jsonb(OLD); ELSE child:=to_jsonb(NEW); END IF;
+
+	IF TG_TABLE_NAME='loomplane_project_sources' THEN
+		parent:=child->>'project_id';
+		SELECT to_jsonb(p) INTO doc FROM loomplane_projects p WHERE id=parent;
+		IF doc IS NULL THEN RETURN NULL; END IF;
+		doc:=doc-'repository_url' || jsonb_build_object('repositories',coalesce((
+			SELECT jsonb_agg(repository ORDER BY alias)
+			FROM (
+				SELECT DISTINCT ON(repository) repository,alias
+				FROM loomplane_project_sources
+				WHERE project_id=parent AND removed_at IS NULL
+				ORDER BY repository,alias
+			) sources),'[]'));
+		PERFORM loomplane_append_event(doc->>'org_id',parent,'project.updated',parent,doc);
+	ELSE
+		parent:=child->>'plan_id';
+		SELECT to_jsonb(p) INTO doc FROM loomplane_plans p WHERE id=parent;
+		IF doc IS NULL THEN RETURN NULL; END IF;
+		doc:=doc-'result' || jsonb_build_object('actions','[]'::jsonb,'problems','[]'::jsonb,'warnings','[]'::jsonb,'connections','{}'::jsonb,'summary','{}'::jsonb)
+			|| coalesce(nullif(doc->'result','null'::jsonb),'{}')
+			|| jsonb_build_object('sources',coalesce((SELECT jsonb_agg(to_jsonb(ps)-'plan_id' ORDER BY alias) FROM loomplane_plan_sources ps WHERE plan_id=parent),'[]'));
+		PERFORM loomplane_append_event(doc->>'org_id',doc->>'project_id','plan.updated',parent,doc);
+	END IF;
+
+	RETURN NULL;
+END $$`

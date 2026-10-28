@@ -174,6 +174,7 @@ func (s *overviewStore) RemoveZone(_ context.Context, org, id string, revision i
 				return ErrConflict
 			}
 			s.zones = append(s.zones[:i], s.zones[i+1:]...)
+			s.removed = append(s.removed, id)
 			return nil
 		}
 	}
@@ -598,5 +599,35 @@ func TestZoneProofListingFailureKeepsTheReceipt(t *testing.T) {
 	env.dns.listErr = nil
 	if _, err = env.svc.VerifyZone(t.Context(), proofManager, zone.ID); !errors.Is(err, ErrConflict) || env.stored(t, zone.ID).ProofPublishError != "" {
 		t.Fatal("error not cleared once the record was found", err)
+	}
+}
+
+func TestCreateZoneUnderADomainHasNoProofOfItsOwn(t *testing.T) {
+	env := newProofEnv(t, "vercel")
+	env.store.zones = append(env.store.zones, &Zone{ID: "zone_root", OrgID: "org", Name: "example.com", Mode: "external", ProjectIDs: []string{}, VerifiedAt: env.now, Revision: 1,
+		ProofName: "_loomplane.example.com", ProofValue: "root-proof", ProofExpiresAt: env.now.Add(24 * time.Hour)})
+	managed, err := env.svc.CreateZone(t.Context(), proofManager, ZoneInput{Name: "app.example.com", Mode: "managed", ConnectionID: "dns", ProjectIDs: []string{"shop"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if managed.ProofName != "" || managed.ProofValue != "" || !managed.ProofExpiresAt.IsZero() || env.stored(t, managed.ID).ProofName != "" {
+		t.Fatalf("managed subdomain proof: %+v", managed)
+	}
+	if env.dns.writes != 0 || env.dns.last.Record.Name != "" || len(env.dns.proofs()) != 0 {
+		t.Fatalf("a subdomain's proof was published: writes=%d last=%+v", env.dns.writes, env.dns.last)
+	}
+	external, err := env.svc.CreateZone(t.Context(), proofManager, ZoneInput{Name: "www.example.com", Mode: "external", ProjectIDs: []string{"shop"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if external.ProofName != "" || external.ProofValue != "" {
+		t.Fatalf("external subdomain proof: %+v", external)
+	}
+	if due, _ := env.store.ZoneProofsDue(t.Context(), env.now, env.now, 10); len(due) != 0 {
+		t.Fatalf("a subdomain is background-checked: %+v", due)
+	}
+	zones, err := env.svc.ProjectZones(t.Context(), proofManager, "shop")
+	if err != nil || len(zones) != 2 || !zones[0].Verified || !zones[1].Verified {
+		t.Fatalf("subdomains read as verified through example.com: %+v %v", zones, err)
 	}
 }

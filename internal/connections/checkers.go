@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/xraph/loomplane/internal/clouds/aws"
@@ -73,9 +74,10 @@ func (g GCPChecker) Parse(credential []byte, settings map[string]string) (Check,
 }
 
 // Check implements Checker: it asks Google which of the permissions a
-// deployment needs the service account, or the person, holds. A keyless
-// handout first trades a minted token for the service account's, which a
-// trust that isn't set up refuses.
+// deployment needs the service account, or the person, holds, and which
+// of those only a canary needs. A keyless handout first trades a minted
+// token for the service account's, which a trust that isn't set up
+// refuses.
 func (g GCPChecker) Check(ctx context.Context, credential []byte, settings map[string]string) (Check, error) {
 	c, err := g.Parse(credential, settings)
 	if err != nil {
@@ -89,8 +91,27 @@ func (g GCPChecker) Check(ctx context.Context, credential []byte, settings map[s
 	if err != nil {
 		return Check{}, err
 	}
-	if c.Missing, err = s.Missing(ctx); err != nil {
+	// A signed-in person needs a little more than a service account does.
+	needed := gcp.Permissions
+	if key.User {
+		needed = gcp.UserPermissions
+	}
+	missing, err := s.MissingOf(ctx, append(slices.Clone(needed), gcp.CanaryPermissions...))
+	if err != nil {
 		return Check{}, err
+	}
+	// An account without what only a canary needs is still complete: a
+	// canary release on Cloud Run refuses to start instead.
+	var canary []string
+	for _, m := range missing {
+		if slices.Contains(gcp.CanaryPermissions, m) {
+			canary = append(canary, m)
+		} else {
+			c.Missing = append(c.Missing, m)
+		}
+	}
+	if len(canary) > 0 {
+		c.Details[DetailCanaryMissing] = strings.Join(canary, ",")
 	}
 	return c, nil
 }
@@ -460,6 +481,15 @@ func (a AzureChecker) Check(ctx context.Context, credential []byte, settings map
 	if c.Missing, err = s.Missing(ctx); err != nil {
 		return Check{}, err
 	}
+	// A principal without what only a canary needs is still complete: a
+	// canary release on Container Apps refuses to start instead.
+	canary, err := s.MissingOf(ctx, azure.CanaryActions)
+	if err != nil {
+		return Check{}, err
+	}
+	if len(canary) > 0 {
+		c.Details[DetailCanaryMissing] = strings.Join(canary, ",")
+	}
 	// Pulling with an identity takes more than Contributor, so it's
 	// reported, never required.
 	if c.Details["registry_pull"], err = s.PullMode(ctx); err != nil {
@@ -480,7 +510,8 @@ func rejected(err error) bool {
 	var re *render.APIError
 	var de *digitalocean.APIError
 	var ce *cloudflare.APIError
-	return errors.Is(err, cloudflare.ErrRejected) || errors.As(err, &ce) || errors.Is(err, render.ErrRejected) || errors.As(err, &re) ||
+	return errors.Is(err, cloudflare.ErrRejected) || (errors.As(err, &ce) && refusedStatus(ce.Status)) ||
+		errors.Is(err, render.ErrRejected) || (errors.As(err, &re) && refusedStatus(re.Status)) ||
 		errors.Is(err, digitalocean.ErrRejected) || (errors.As(err, &de) && refusedStatus(de.Status)) ||
 		errors.Is(err, gcp.ErrRejected) || errors.Is(err, gcp.ErrInvalidKey) || errors.Is(err, vercel.ErrRejected) ||
 		errors.Is(err, server.ErrRejected) || errors.Is(err, kubernetes.ErrRejected) || errors.Is(err, registry.ErrRejected) ||
@@ -574,27 +605,26 @@ func (a AWSChecker) Check(ctx context.Context, credential []byte, settings map[s
 	}
 	c.Account = who.Account
 	c.Details["principal"] = who.ARN
-	missing, checked, err := a.Client.Missing(ctx, key, c.Details["region"], principalARN(who.ARN))
+	asked := append(slices.Clone(aws.Actions), aws.CanaryActions...)
+	missing, checked, err := a.Client.MissingOf(ctx, key, c.Details["region"], aws.PrincipalARN(who.ARN), asked)
 	if err != nil {
 		return Check{}, err
 	}
 	if !checked {
 		c.Details["permissions"] = "unchecked"
 	}
-	c.Missing = missing
+	// A key without what only a canary needs is still complete: a canary
+	// release on ECS refuses to start instead.
+	var canary []string
+	for _, m := range missing {
+		if slices.Contains(aws.CanaryActions, m) {
+			canary = append(canary, m)
+		} else {
+			c.Missing = append(c.Missing, m)
+		}
+	}
+	if len(canary) > 0 {
+		c.Details[DetailCanaryMissing] = strings.Join(canary, ",")
+	}
 	return c, nil
-}
-
-// principalARN is what the policy simulator takes for an identity: an
-// assumed role's session ARN names the role instead.
-func principalARN(arn string) string {
-	if !strings.Contains(arn, ":assumed-role/") {
-		return arn
-	}
-	parts := strings.Split(arn, ":")
-	if len(parts) < 6 {
-		return arn
-	}
-	role := strings.Split(strings.TrimPrefix(parts[5], "assumed-role/"), "/")[0]
-	return "arn:aws:iam::" + parts[4] + ":role/" + role
 }

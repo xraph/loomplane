@@ -10,6 +10,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/pkg/provider"
 )
@@ -369,11 +370,12 @@ func (s *Service) blockExpansion(ctx context.Context, st *PgStore, e *Expansion,
 	return st.saveExpansion(ctx, e, token)
 }
 func (s *Service) ApproveExpansion(ctx context.Context, p security.Principal, cloud, id string, expectedRevision int64) (*Expansion, error) {
-	if _, authErr := s.authorizeCapacityPrincipal(ctx, p, cloud); authErr != nil {
-		return nil, authErr
-	}
+	// A read-only key is refused as forbidden before its saved authority is checked.
 	if p.ReadOnly {
 		return nil, security.ErrForbidden
+	}
+	if _, authErr := s.authorizeCapacityPrincipal(ctx, p, cloud); authErr != nil {
+		return nil, authErr
 	}
 	st, ok := s.Store.(*PgStore)
 	if !ok {
@@ -416,6 +418,9 @@ func (s *Service) ApproveExpansion(ctx context.Context, p security.Principal, cl
 		return nil
 	})
 	if err == nil {
+		if s.Audit != nil {
+			s.Audit.Record(ctx, projects.AuditEvent{Action: "cloud.expansion.approve", Severity: "info", Principal: p, Attributes: map[string]any{"cloud_id": cloud, "expansion_id": e.ID, "pool_id": e.PoolID, "size": e.Size, "policy_revision": e.PolicyRevision}})
+		}
 		s.wakeCapacityCloud(ctx, p.OrgID, cloud, fmt.Sprintf("approval:%s:%d", e.ID, e.Revision))
 	}
 	return e, err

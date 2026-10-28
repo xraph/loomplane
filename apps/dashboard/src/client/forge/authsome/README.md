@@ -57,7 +57,3 @@ This API supports the following authentication methods:
 - **REST Endpoints**: 15
 - **Secured Endpoints**: 15
 
-### Servers
-
-- **http://localhost:8780**: Development server
-

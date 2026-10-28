@@ -384,6 +384,11 @@ func (s *Service) ReconcileInfrastructure(ctx context.Context, org, id string, h
 		case errors.Is(err, ErrPending):
 			o.Status = "waiting"
 			o.Message = "Waiting for provider actions, enrollment or verified runtime readiness."
+		case errors.Is(err, ErrDirectApplyRunning):
+			// A claim refused beside a running direct apply retries once it ends.
+			o.Status = "waiting"
+			o.Message = "Waiting for a direct deployment on this server to finish."
+			err = errors.Join(ErrPending, err)
 		case err != nil:
 			o.Status = "failed"
 			o.Message = safeFailure(err)
@@ -418,6 +423,8 @@ func safeFailure(err error) string {
 		return "The reviewed connection or server changed. Resolve the recorded operation before continuing."
 	case errors.Is(err, security.ErrForbidden):
 		return "Organization management access was revoked."
+	case errors.Is(err, ErrDirectApplyRunning):
+		return "A direct deployment is running on this server. Retry once it finishes."
 	default:
 		return "Infrastructure verification failed. Check the connection, provider scope and pinned server runtime before retrying."
 	}

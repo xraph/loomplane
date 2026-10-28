@@ -292,8 +292,12 @@ func (t tokenSource) Token() (*oauth2.Token, error) {
 		return nil, fmt.Errorf("google answered %d from its token endpoint: %s", status, code)
 	case re.ErrorCode == "invalid_client" || re.ErrorCode == "unauthorized_client":
 		return nil, fmt.Errorf("%w: %w: google answered %d: %s", ErrRejected, oauth.ErrAppRejected, status, code)
+	case re.ErrorCode == "invalid_grant":
+		// The background job counts only this as a refusal too, so a
+		// session and the job agree on what needs a new sign-in.
+		return nil, fmt.Errorf("%w: %w: %s", ErrRejected, oauth.ErrRefused, cmp.Or(reason(re.ErrorDescription, maxReason), code))
 	default:
-		return nil, fmt.Errorf("%w: %w: %s", ErrRejected, oauth.ErrRefused, cmp.Or(re.ErrorDescription, code))
+		return nil, fmt.Errorf("google answered %d from its token endpoint: %s", status, code)
 	}
 }
 
@@ -314,6 +318,13 @@ func (e *APIError) Error() string {
 func IsNotFound(err error) bool {
 	var ae *APIError
 	return errors.As(err, &ae) && ae.Status == http.StatusNotFound
+}
+
+// IsForbidden reports whether err is Google's 403: the account lacks a
+// permission.
+func IsForbidden(err error) bool {
+	var ae *APIError
+	return errors.As(err, &ae) && ae.Status == http.StatusForbidden
 }
 
 // IsConflict reports whether err is Google's 409, such as creating
@@ -388,19 +399,25 @@ func (s *Session) send(req *http.Request, out any) error {
 // person lacks. Any caller may ask this of any project, so it works
 // before anything else does.
 func (s *Session) Missing(ctx context.Context) ([]string, error) {
-	var out struct {
-		Permissions []string `json:"permissions"`
-	}
 	needed := Permissions
 	if s.key.User {
 		needed = UserPermissions
 	}
+	return s.MissingOf(ctx, needed)
+}
+
+// MissingOf returns which of permissions the service account, or the
+// signed-in person, lacks on its project.
+func (s *Session) MissingOf(ctx context.Context, permissions []string) ([]string, error) {
+	var out struct {
+		Permissions []string `json:"permissions"`
+	}
 	url := s.c.url("cloudresourcemanager.googleapis.com", "/v3/projects/"+s.key.ProjectID+":testIamPermissions")
-	if err := s.do(ctx, http.MethodPost, url, map[string]any{"permissions": needed}, &out); err != nil {
+	if err := s.do(ctx, http.MethodPost, url, map[string]any{"permissions": permissions}, &out); err != nil {
 		return nil, err
 	}
 	var missing []string
-	for _, p := range needed {
+	for _, p := range permissions {
 		if !slices.Contains(out.Permissions, p) {
 			missing = append(missing, p)
 		}

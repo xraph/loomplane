@@ -10,6 +10,13 @@ import (
 )
 
 func (d *Deployments) workflowV3(w *drt.Workflow, input []byte) ([]byte, error) {
+	return awaitDecision(w, input, deployV3)
+}
+
+// awaitDecision plans, waits for the plan's one decision and deploys an
+// approved plan with deploy. v3 and v4 share it, so its command IDs are
+// both builds' and must not change.
+func awaitDecision(w *drt.Workflow, input []byte, deploy func(*drt.Workflow, DeploymentInput) ([]byte, error)) ([]byte, error) {
 	w.SetQueryHandler("execution-state", func([]byte) ([]byte, error) { return []byte("{}"), nil })
 	var in DeploymentInput
 	if err := json.Unmarshal(input, &in); err != nil {
@@ -48,7 +55,7 @@ func (d *Deployments) workflowV3(w *drt.Workflow, input []byte) ([]byte, error) 
 			return nil, err
 		}
 		if status == PlanApproved {
-			return deployV3(w, in)
+			return deploy(w, in)
 		}
 		if status != PlanReady {
 			return finished(status)
@@ -62,6 +69,15 @@ func (d *Deployments) workflowV3(w *drt.Workflow, input []byte) ([]byte, error) 
 }
 
 func deployV3(w *drt.Workflow, in DeploymentInput) ([]byte, error) {
+	return deployWith(w, in, runStepsV3)
+}
+
+// stepsFunc carries out a started deployment's steps and settles it.
+type stepsFunc func(w *drt.Workflow, org string, started deployStarted, interval time.Duration) error
+
+// deployWith records an approved plan's deployment and carries it out with
+// steps.
+func deployWith(w *drt.Workflow, in DeploymentInput, steps stepsFunc) ([]byte, error) {
 	var started deployStarted
 	if err := callInto(w, "deploy-start", ActivityDeployStart, in, activityTimeout, 0, activityAttempts, &started); err != nil {
 		return nil, err
@@ -69,22 +85,33 @@ func deployV3(w *drt.Workflow, in DeploymentInput) ([]byte, error) {
 	if started.DeploymentID == "" {
 		return finished(PlanApproved)
 	}
-	if err := runStepsV3(w, in.OrgID, started, in.ReconcileInterval); err != nil {
+	if err := steps(w, in.OrgID, started, in.ReconcileInterval); err != nil {
 		return nil, err
 	}
 	return json.Marshal(Outcome{Status: PlanApproved, Deployment: started.DeploymentID})
 }
 func (d *Deployments) retryV3(w *drt.Workflow, raw []byte) ([]byte, error) {
+	return retryWith(w, raw, runStepsV3)
+}
+
+// retryWith runs a reopened deployment's steps again with steps.
+func retryWith(w *drt.Workflow, raw []byte, steps stepsFunc) ([]byte, error) {
 	var in retryInput
 	if err := json.Unmarshal(raw, &in); err != nil {
 		return nil, err
 	}
-	if err := runStepsV3(w, in.OrgID, deployStarted{DeploymentID: in.DeploymentID, Steps: in.Steps, Timeouts: in.Timeouts}, in.ReconcileInterval); err != nil {
+	if err := steps(w, in.OrgID, deployStarted{DeploymentID: in.DeploymentID, Steps: in.Steps, Timeouts: in.Timeouts}, in.ReconcileInterval); err != nil {
 		return nil, err
 	}
 	return json.Marshal(Outcome{Status: PlanApproved, Deployment: in.DeploymentID})
 }
 func (d *Deployments) resumeReleaseV3(w *drt.Workflow, input []byte) ([]byte, error) {
+	return resumeWith(w, input, deployV3)
+}
+
+// resumeWith waits for the environment to take a release again, then
+// deploys the plan with deploy.
+func resumeWith(w *drt.Workflow, input []byte, deploy func(*drt.Workflow, DeploymentInput) ([]byte, error)) ([]byte, error) {
 	w.SetQueryHandler("execution-state", func([]byte) ([]byte, error) { return []byte("{}"), nil })
 	var in DeploymentInput
 	if err := json.Unmarshal(input, &in); err != nil {
@@ -96,7 +123,7 @@ func (d *Deployments) resumeReleaseV3(w *drt.Workflow, input []byte) ([]byte, er
 			return nil, err
 		}
 		if available {
-			return deployV3(w, in)
+			return deploy(w, in)
 		}
 		if _, err := w.Timer(fmt.Sprintf("wait-%d", attempt), time.Minute).Get(); err != nil {
 			return nil, err

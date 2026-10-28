@@ -27,16 +27,19 @@ type PgStore struct {
 // NewPgStore returns a Store over db.
 func NewPgStore(db *pgdriver.PgDB) *PgStore { return &PgStore{db: db} }
 
-var _ Store = (*PgStore)(nil)
+var (
+	_ Store       = (*PgStore)(nil)
+	_ CanaryStore = (*PgStore)(nil)
+)
 
 const columns = `id, org_id, project_id, environment_id, environment, plan_id, commit_sha, status, sources,
-	error, steps, retries, started_by, started_at, finished_at, capacity_revision, capacity_wait`
+	error, steps, retries, started_by, started_at, finished_at, capacity_revision, capacity_wait, canary`
 
 func scan(row pgx.Row) (*Deployment, error) {
 	var d Deployment
-	var sources, steps, wait []byte
+	var sources, steps, wait, canary []byte
 	if err := row.Scan(&d.ID, &d.OrgID, &d.ProjectID, &d.EnvironmentID, &d.Environment, &d.PlanID, &d.CommitSHA,
-		&d.Status, &sources, &d.Error, &steps, &d.Retries, &d.StartedBy, &d.StartedAt, &d.FinishedAt, &d.CapacityRevision, &wait); err != nil {
+		&d.Status, &sources, &d.Error, &steps, &d.Retries, &d.StartedBy, &d.StartedAt, &d.FinishedAt, &d.CapacityRevision, &wait, &canary); err != nil {
 		return nil, err
 	}
 	if err := json.Unmarshal(sources, &d.Sources); err != nil {
@@ -47,9 +50,12 @@ func scan(row pgx.Row) (*Deployment, error) {
 		return nil, fmt.Errorf("decode steps: %w", err)
 	}
 	if len(wait) > 0 {
-		if err := json.Unmarshal(wait, &d.CapacityWait); err != nil {
+		if err = json.Unmarshal(wait, &d.CapacityWait); err != nil {
 			return nil, fmt.Errorf("decode capacity wait: %w", err)
 		}
+	}
+	if d.Canary, err = decodeCanary(canary); err != nil {
+		return nil, err
 	}
 	d.normalize()
 	return &d, nil
@@ -67,11 +73,15 @@ func (s *PgStore) CreateDeployment(ctx context.Context, d *Deployment) (*Deploym
 	if err != nil {
 		return nil, fmt.Errorf("encode sources: %w", err)
 	}
+	canary, err := encodeCanary(d.Canary)
+	if err != nil {
+		return nil, err
+	}
 	_, err = s.db.Exec(ctx, `INSERT INTO loomplane_deployments (`+columns+`)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 0, NULL)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, 0, NULL, $16)
 		ON CONFLICT (plan_id) DO NOTHING`,
 		d.ID, d.OrgID, d.ProjectID, d.EnvironmentID, d.Environment, d.PlanID, d.CommitSHA, d.Status, sources,
-		d.Error, steps, d.Retries, d.StartedBy, d.StartedAt, d.FinishedAt)
+		d.Error, steps, d.Retries, d.StartedBy, d.StartedAt, d.FinishedAt, canary)
 	if err != nil {
 		return nil, fmt.Errorf("insert deployment: %w", err)
 	}
@@ -228,9 +238,9 @@ func (s *PgStore) Reopen(ctx context.Context, orgID, id string) (ok bool, err er
 		return false, fmt.Errorf("begin: %w", err)
 	}
 	defer func() { err = rollback(tx, err) }()
-	var raw []byte
-	err = tx.QueryRow(ctx, `SELECT steps FROM loomplane_deployments
-		WHERE org_id = $1 AND id = $2 AND status = 'failed' FOR UPDATE`, orgID, id).Scan(&raw)
+	var raw, rawCanary []byte
+	err = tx.QueryRow(ctx, `SELECT steps, canary FROM loomplane_deployments
+		WHERE org_id = $1 AND id = $2 AND status = 'failed' FOR UPDATE`, orgID, id).Scan(&raw, &rawCanary)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// Not failed: end the transaction here, since the deferred
 		// rollback only runs on an error.
@@ -247,16 +257,29 @@ func (s *PgStore) Reopen(ctx context.Context, orgID, id string) (ok bool, err er
 		return false, fmt.Errorf("decode steps: %w", err)
 	}
 	for i := range steps {
-		if steps[i].Status == StepFailed || steps[i].Status == StepSkipped {
+		if retried(steps[i].Status) {
 			steps[i].Status, steps[i].Message, steps[i].StartedAt, steps[i].FinishedAt = StepPending, "Waiting to retry", nil, nil
 		}
 	}
 	if raw, err = encodeSteps(steps); err != nil {
 		return false, fmt.Errorf("encode steps: %w", err)
 	}
+	// A canary starts over; its verdicts stay as the record of the failed run.
+	if len(rawCanary) > 0 {
+		c, decodeErr := decodeCanary(rawCanary)
+		if decodeErr != nil {
+			return false, decodeErr
+		}
+		if c != nil {
+			c.reopen()
+		}
+		if rawCanary, err = encodeCanary(c); err != nil {
+			return false, err
+		}
+	}
 	if _, err = tx.Exec(ctx, `UPDATE loomplane_deployments
-		SET status = 'running', error = '', finished_at = NULL, steps = $3, retries = retries + 1
-		WHERE org_id = $1 AND id = $2`, orgID, id, raw); err != nil {
+		SET status = 'running', error = '', finished_at = NULL, steps = $3, canary = $4, retries = retries + 1
+		WHERE org_id = $1 AND id = $2`, orgID, id, raw, rawCanary); err != nil {
 		return false, fmt.Errorf("reopen deployment: %w", err)
 	}
 	if err = tx.Commit(); err != nil {

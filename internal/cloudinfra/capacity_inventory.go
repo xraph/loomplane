@@ -55,7 +55,16 @@ func (s *Service) RefreshCapacity(ctx context.Context, p security.Principal, clo
 	if p.ReadOnly {
 		return nil, security.ErrForbidden
 	}
-	return s.refreshCapacity(ctx, p.OrgID, cloudID)
+	usage, err := s.refreshCapacity(ctx, p.OrgID, cloudID)
+	if err != nil {
+		return nil, err
+	}
+	// The refreshed usage answers the same shape as GetCapacityUsage.
+	if st, ok := s.Store.(capacityUsageStore); ok {
+		return withFrontends(ctx, st, p.OrgID, cloudID, usage)
+	}
+	usage.CloudID = cloudID
+	return withUsageLists(usage), nil
 }
 func (s *Service) refreshCapacity(ctx context.Context, org, cloud string) (*CapacityUsage, error) {
 	st, ok := s.Store.(CapacityInventoryStore)

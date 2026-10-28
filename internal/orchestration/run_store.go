@@ -94,16 +94,13 @@ func (d *Deployments) currentExecution(ctx context.Context, key durable.Key) (du
 	}
 }
 func (d *Deployments) signalRun(ctx context.Context, r durable.SignalRequest) error {
-	if r.BuildID == CapacityBuild {
-		w, err := d.capacityWorker()
+	if r.BuildID != DeploymentBuild {
+		w, err := d.worker(r.BuildID)
 		if err != nil {
 			return err
 		}
 		_, err = w.SignalExecution(ctx, r)
 		return err
-	}
-	if r.BuildID != DeploymentBuild {
-		return fmt.Errorf("unsupported workflow build %q", r.BuildID)
 	}
 	eng, err := d.engine()
 	if err != nil {
@@ -121,20 +118,20 @@ func (d *Deployments) startRun(ctx context.Context, r DeploymentRun) error {
 			return err
 		}
 	}
-	if r.Request.BuildID == CapacityBuild {
-		w, err := d.capacityWorker()
-		if err != nil {
-			return err
-		}
-		if _, err = w.StartExecution(ctx, r.Request); err != nil {
-			return err
-		}
-	} else {
+	if r.Request.BuildID == DeploymentBuild {
 		eng, err := d.engine()
 		if err != nil {
 			return err
 		}
 		if _, err = eng.StartDurableWorkflow(ctx, r.Request); err != nil {
+			return err
+		}
+	} else {
+		w, err := d.worker(r.Request.BuildID)
+		if err != nil {
+			return err
+		}
+		if _, err = w.StartExecution(ctx, r.Request); err != nil {
 			return err
 		}
 	}

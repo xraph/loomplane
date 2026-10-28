@@ -106,6 +106,7 @@ func TestRouteWorkloadDirectPreflightAllowsReplan(t *testing.T) {
 func TestRouteWorkloadEffectBoundaryFencesSettlement(t *testing.T) {
 	f, _ := routeAttemptFixture(t)
 	ctx := t.Context()
+	approvedWorkloadPlan(t, f, "plan")
 	in := cloudinfra.WorkloadAttempt{Org: "org", Project: "proj", Environment: "env", Service: "web", Plan: "plan", Deployment: "deployment"}
 	first, err := f.store.BeginWorkloadAttempt(ctx, in, nil, false)
 	if err != nil {

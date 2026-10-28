@@ -19,7 +19,18 @@ var (
 	ErrConflict = errors.New("infrastructure changed; review again")
 	ErrBusy     = errors.New("infrastructure operation is already running")
 	ErrPending  = errors.New("infrastructure operation is waiting for verification")
+	// ErrDirectApplyRunning refuses a change to a server while a direct
+	// deployment runs on its daemon. errors.Is reports it as ErrBusy.
+	ErrDirectApplyRunning error = directApplyRunningError{}
 )
+
+type directApplyRunningError struct{}
+
+func (directApplyRunningError) Error() string {
+	return "a direct deployment is running on this server; try again after it finishes"
+}
+
+func (directApplyRunningError) Is(target error) bool { return target == ErrBusy }
 
 // Server is organization capacity, independent of project release access.
 type Server struct {

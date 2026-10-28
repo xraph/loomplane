@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"maps"
 	"net/http"
@@ -28,6 +29,34 @@ type memStore struct {
 	d              map[string]*Deployment
 	capacityEvents []CapacityTransition
 	capacityAcks   map[string]bool
+	verdicts       map[string]CanaryVerdict
+	// afterGet runs once, after the next GetDeployment read, as a change
+	// made between a read and a later write would.
+	afterGet func()
+}
+
+var _ CanaryStore = (*memStore)(nil)
+
+// copyDeployment is d without anything it shares with the stored one.
+func copyDeployment(d *Deployment) *Deployment {
+	c := *d
+	c.Steps = slices.Clone(d.Steps)
+	c.Sources = slices.Clone(d.Sources)
+	c.Canary = copyCanary(d.Canary)
+	return &c
+}
+
+func copyCanary(c *Canary) *Canary {
+	if c == nil {
+		return nil
+	}
+	out := *c
+	out.Steps = slices.Clone(c.Steps)
+	out.Services = slices.Clone(c.Services)
+	for i := range out.Services {
+		out.Services[i].Refs = maps.Clone(c.Services[i].Refs)
+	}
+	return &out
 }
 
 func (m *memStore) CreateDeployment(_ context.Context, d *Deployment) (*Deployment, error) {
@@ -35,29 +64,27 @@ func (m *memStore) CreateDeployment(_ context.Context, d *Deployment) (*Deployme
 	defer m.mu.Unlock()
 	for _, x := range m.d {
 		if x.PlanID == d.PlanID {
-			c := *x
-			return &c, nil
+			return copyDeployment(x), nil
 		}
 	}
-	c := *d
-	c.Steps = slices.Clone(d.Steps)
-	c.Sources = slices.Clone(d.Sources)
-	m.d[d.ID] = &c
-	out := c
-	return &out, nil
+	m.d[d.ID] = copyDeployment(d)
+	return copyDeployment(d), nil
 }
 
 func (m *memStore) GetDeployment(_ context.Context, _, id string) (*Deployment, error) {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	d, ok := m.d[id]
 	if !ok {
+		m.mu.Unlock()
 		return nil, ErrNotFound
 	}
-	c := *d
-	c.Steps = slices.Clone(d.Steps)
-	c.Sources = slices.Clone(d.Sources)
-	return &c, nil
+	out, after := copyDeployment(d), m.afterGet
+	m.afterGet = nil
+	m.mu.Unlock()
+	if after != nil {
+		after()
+	}
+	return out, nil
 }
 
 func (m *memStore) ForPlan(_ context.Context, _, planID string) (*Deployment, error) {
@@ -65,8 +92,7 @@ func (m *memStore) ForPlan(_ context.Context, _, planID string) (*Deployment, er
 	defer m.mu.Unlock()
 	for _, d := range m.d {
 		if d.PlanID == planID {
-			c := *d
-			return &c, nil
+			return copyDeployment(d), nil
 		}
 	}
 	return nil, ErrNotFound
@@ -115,12 +141,135 @@ func (m *memStore) Reopen(_ context.Context, _, id string) (bool, error) {
 	}
 	d.Status, d.Error, d.FinishedAt = StatusRunning, "", nil
 	for i := range d.Steps {
-		if d.Steps[i].Status == StepFailed || d.Steps[i].Status == StepSkipped {
+		if retried(d.Steps[i].Status) {
 			d.Steps[i].Status = StepPending
 		}
 	}
+	if d.Canary != nil {
+		d.Canary.reopen()
+	}
 	d.Retries++
 	return true, nil
+}
+
+func (m *memStore) SetCanary(_ context.Context, _, id string, c *Canary) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	d, ok := m.d[id]
+	if !ok {
+		return ErrNotFound
+	}
+	d.Canary = copyCanary(c)
+	return nil
+}
+
+func (m *memStore) UpdateCanary(_ context.Context, _, id string, change func(*Deployment) error) (*Deployment, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	stored, ok := m.d[id]
+	if !ok {
+		return nil, ErrNotFound
+	}
+	if stored.Canary == nil {
+		return nil, fmt.Errorf("deployment %s has no canary", id)
+	}
+	d := copyDeployment(stored)
+	if err := change(d); err != nil {
+		return nil, err
+	}
+	stored.Canary = copyCanary(d.Canary)
+	return d, nil
+}
+
+func (m *memStore) RecordVerdict(_ context.Context, v *CanaryVerdict) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	d, ok := m.d[v.DeploymentID]
+	if !ok || d.OrgID != v.OrgID {
+		return ErrNotFound
+	}
+	v.ID, v.ProjectID = VerdictID(v.DeploymentID, v.Retry, v.ActionID, v.Step, v.Attempt), d.ProjectID
+	if m.verdicts == nil {
+		m.verdicts = map[string]CanaryVerdict{}
+	}
+	if _, ok := m.verdicts[v.ID]; !ok {
+		m.verdicts[v.ID] = *v
+	}
+	return nil
+}
+
+func (m *memStore) Verdicts(_ context.Context, org, id string) ([]CanaryVerdict, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := []CanaryVerdict{}
+	for _, v := range m.verdicts {
+		if v.OrgID == org && v.DeploymentID == id {
+			out = append(out, v)
+		}
+	}
+	slices.SortFunc(out, func(a, b CanaryVerdict) int {
+		if a.Retry != b.Retry {
+			return a.Retry - b.Retry
+		}
+		if a.Step != b.Step {
+			return a.Step - b.Step
+		}
+		if a.Attempt != b.Attempt {
+			return a.Attempt - b.Attempt
+		}
+		return strings.Compare(a.ActionID, b.ActionID)
+	})
+	return out, nil
+}
+
+func (m *memStore) RecentCanaries(_ context.Context, org, project, environment string, limit int) ([]*Deployment, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	out := []*Deployment{}
+	for _, d := range m.d {
+		if d.OrgID == org && d.ProjectID == project && d.EnvironmentID == environment && d.Canary != nil {
+			out = append(out, copyDeployment(d))
+		}
+	}
+	slices.SortFunc(out, func(a, b *Deployment) int {
+		if c := b.StartedAt.Compare(a.StartedAt); c != 0 {
+			return c
+		}
+		return strings.Compare(b.ID, a.ID)
+	})
+	return out[:min(limit, len(out))], nil
+}
+
+// holdsCanary is a running or paused deployment whose canary still holds
+// its environment.
+func holdsCanary(d *Deployment) bool {
+	return (d.Status == StatusRunning || d.Status == StatusPaused) && d.Canary != nil && slices.Contains(canaryActive, d.Canary.Status)
+}
+
+func (m *memStore) RampingCanary(_ context.Context, org, environment string) (string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var found *Deployment
+	for _, d := range m.d {
+		if d.OrgID == org && d.EnvironmentID == environment && holdsCanary(d) && (found == nil || d.StartedAt.After(found.StartedAt)) {
+			found = d
+		}
+	}
+	if found == nil {
+		return "", nil
+	}
+	return found.ID, nil
+}
+
+func (m *memStore) CanaryBinding(_ context.Context, org, binding string) (bool, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	for _, d := range m.d {
+		if d.OrgID == org && holdsCanary(d) && slices.ContainsFunc(d.Canary.Services, func(s CanaryService) bool { return s.BindingID == binding }) {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 type fakePlans struct {
@@ -128,16 +277,40 @@ type fakePlans struct {
 	plan     *planning.Plan
 	bindings map[string]*planning.Binding
 	deployed []planning.DeployedSource
+	// releases are the RecordRelease writes, and single counts the
+	// RecordDeployed ones.
+	releases []planning.DeployedRelease
+	single   int
+	// onGetPlan runs once, inside the next GetPlan.
+	onGetPlan func()
 }
 
 func (f *fakePlans) RecordDeployed(_ context.Context, _ string, d *planning.DeployedSource) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	f.single++
 	f.deployed = append(f.deployed, *d)
 	return nil
 }
 
+func (f *fakePlans) RecordRelease(_ context.Context, _ string, r *planning.DeployedRelease) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.releases = append(f.releases, *r)
+	for _, d := range r.Sources {
+		f.deployed = append(f.deployed, *d)
+	}
+	return nil
+}
+
 func (f *fakePlans) GetPlan(context.Context, string, string) (*planning.Plan, error) {
+	f.mu.Lock()
+	hook := f.onGetPlan
+	f.onGetPlan = nil
+	f.mu.Unlock()
+	if hook != nil {
+		hook()
+	}
 	return f.plan, nil
 }
 
@@ -642,6 +815,52 @@ func TestRunner_recordsWhatsDeployedOnlyOnSuccess(t *testing.T) {
 	}
 	if len(plans.deployed) != 0 {
 		t.Fatalf("a failed deployment recorded %+v", plans.deployed)
+	}
+}
+
+func TestRunner_recordsEveryMovedSourceInOneWrite(t *testing.T) {
+	ctx := t.Context()
+	at := time.Date(2026, 10, 24, 9, 0, 0, 0, time.UTC)
+	plan := threeRepos()
+	plan.ManifestID, plan.ManifestRevision = "man_5", 5
+	r, _, plans := newRunner(t, plan, &recorder{}, fakeVariables{})
+	r.now = func() time.Time { return at }
+	id, _, err := r.Start(ctx, "org_1", "plan_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = r.Finish(ctx, "org_1", id, ""); err != nil {
+		t.Fatal(err)
+	}
+	if plans.single != 0 || len(plans.releases) != 1 {
+		t.Fatalf("RecordDeployed %d times, RecordRelease %d times", plans.single, len(plans.releases))
+	}
+	got := plans.releases[0]
+	if got.EnvironmentID != "env_1" || got.PlanID != "plan_1" || got.ManifestID != "man_5" || got.ManifestRevision != 5 || !got.DeployedAt.Equal(at) {
+		t.Fatalf("release %+v", got)
+	}
+	moved := make([]string, 0, len(got.Sources))
+	for _, d := range got.Sources {
+		moved = append(moved, d.SourceID+"@"+d.CommitSHA)
+	}
+	if !slices.Equal(moved, []string{"src_web@" + shaWeb, "src_api@" + shaAPI}) {
+		t.Fatalf("moved %v", moved)
+	}
+
+	// A catalog plan moves no repository and isn't a release of the
+	// environment's manifest, so it records nothing.
+	catalog := webAndAPI()
+	catalog.Catalog, catalog.Sources = true, nil
+	r, _, plans = newRunner(t, catalog, &recorder{}, fakeVariables{})
+	id, _, err = r.Start(ctx, "org_1", "plan_1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = r.Finish(ctx, "org_1", id, ""); err != nil {
+		t.Fatal(err)
+	}
+	if len(plans.releases) != 0 || plans.single != 0 {
+		t.Fatalf("a catalog plan recorded %+v", plans.releases)
 	}
 }
 
@@ -1849,5 +2068,34 @@ func TestReleaseCopiesTheBinding(t *testing.T) {
 	*c.ObservedAt = at.Add(time.Hour)
 	if string(b.Config) != `{"a":1}` || string(b.Replaced[0].Config) != `{"b":2}` || b.Replaced[0].ExternalID != "old" || !b.ObservedAt.Equal(at) {
 		t.Fatalf("the copy shares with the binding: %+v", b)
+	}
+}
+
+// revisioned is an executor whose outcome names a digest reference and a
+// provider revision, as DigitalOcean's deployment ID is.
+type revisioned struct{ *recorder }
+
+func (r revisioned) Apply(ctx context.Context, job *Job) (*Outcome, error) {
+	out, err := r.recorder.Apply(ctx, job)
+	if out != nil {
+		out.Image, out.Revision = "i@sha256:"+strings.Repeat("0", 64), "dep_do_9"
+		job.Warn(errors.New(job.Action.Name + " warned while it deployed"))
+	}
+	return out, err
+}
+
+// The step keeps what the executor deployed, and what it warned about.
+func TestRunner_recordsTheRevisionOnTheStep(t *testing.T) {
+	exec := revisioned{&recorder{url: answering(t, http.StatusOK)}}
+	r, store, _ := newRunner(t, webAndAPI(), exec, nil)
+	id, err := runAll(t, r, webAndAPI())
+	if err != nil {
+		t.Fatal(err)
+	}
+	d, _ := store.GetDeployment(t.Context(), "org_1", id)
+	api := d.Step("service:api")
+	if api == nil || api.Image != "i@sha256:"+strings.Repeat("0", 64) || api.Revision != "dep_do_9" ||
+		!slices.Contains(api.Warnings, "api warned while it deployed") {
+		t.Fatalf("api step %+v", api)
 	}
 }

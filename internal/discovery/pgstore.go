@@ -26,10 +26,10 @@ var _ Store = (*PgStore)(nil)
 
 // source_id is nullable: an analysis of a project whose URL wasn't on
 // GitHub has none.
-const analysisColumns = `id, org_id, project_id, COALESCE(source_id, ''), alias, status, repository, ref, commit_sha, error, summary,
+const analysisColumns = `id, org_id, project_id, COALESCE(source_id, ''), alias, status, repository, ref, commit_sha, pinned, error, summary,
 	created_by, created_at, started_at, finished_at`
 
-const analysisInsertColumns = `id, org_id, project_id, source_id, alias, status, repository, ref, commit_sha, error, summary,
+const analysisInsertColumns = `id, org_id, project_id, source_id, alias, status, repository, ref, commit_sha, pinned, error, summary,
 	created_by, created_at, started_at, finished_at`
 
 // unfinished lists the statuses of an analysis still running.
@@ -38,7 +38,7 @@ const unfinished = `('queued', 'fetching', 'analyzing')`
 func scanAnalysis(row pgx.Row) (*Analysis, error) {
 	var a Analysis
 	var summary []byte
-	if err := row.Scan(&a.ID, &a.OrgID, &a.ProjectID, &a.SourceID, &a.Source, &a.Status, &a.Repository, &a.Ref, &a.CommitSHA, &a.Error, &summary,
+	if err := row.Scan(&a.ID, &a.OrgID, &a.ProjectID, &a.SourceID, &a.Source, &a.Status, &a.Repository, &a.Ref, &a.CommitSHA, &a.Pinned, &a.Error, &summary,
 		&a.CreatedBy, &a.CreatedAt, &a.StartedAt, &a.FinishedAt); err != nil {
 		return nil, err
 	}
@@ -56,8 +56,8 @@ func (s *PgStore) CreateAnalysis(ctx context.Context, a *Analysis) error {
 		return fmt.Errorf("encode analysis summary: %w", err)
 	}
 	_, err = s.db.Exec(ctx, `INSERT INTO loomplane_analyses (`+analysisInsertColumns+`)
-		VALUES ($1, $2, $3, NULLIF($4, ''), $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
-		a.ID, a.OrgID, a.ProjectID, a.SourceID, a.Source, a.Status, a.Repository, a.Ref, a.CommitSHA, a.Error, summary,
+		VALUES ($1, $2, $3, NULLIF($4, ''), $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)`,
+		a.ID, a.OrgID, a.ProjectID, a.SourceID, a.Source, a.Status, a.Repository, a.Ref, a.CommitSHA, a.Pinned, a.Error, summary,
 		a.CreatedBy, a.CreatedAt, a.StartedAt, a.FinishedAt)
 	if err != nil {
 		return fmt.Errorf("insert analysis: %w", err)
@@ -131,10 +131,10 @@ func (s *PgStore) ListSourceAnalyses(ctx context.Context, orgID, sourceID string
 }
 
 // ActiveAnalysis returns the source's newest running analysis created
-// after since, or ErrNotFound.
+// after since, or ErrNotFound. A pinned analysis doesn't count.
 func (s *PgStore) ActiveAnalysis(ctx context.Context, orgID, sourceID string, since time.Time) (*Analysis, error) {
 	a, err := scanAnalysis(s.db.QueryRow(ctx, `SELECT `+analysisColumns+` FROM loomplane_analyses
-		WHERE org_id = $1 AND source_id = $2 AND status IN `+unfinished+` AND created_at > $3
+		WHERE org_id = $1 AND source_id = $2 AND status IN `+unfinished+` AND created_at > $3 AND NOT pinned
 		ORDER BY created_at DESC LIMIT 1`, orgID, sourceID, since))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, ErrNotFound

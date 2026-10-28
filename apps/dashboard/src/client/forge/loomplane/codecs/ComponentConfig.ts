@@ -1,6 +1,7 @@
 import type { Codec } from '../codec-runtime';
 import { codec_ComponentConfig_dependencies } from './ComponentConfig.dependencies';
 import { codec_ComponentConfig_settings } from './ComponentConfig.settings';
+import { codec_GPUPlacement } from './GPUPlacement';
 import { codec_ResolvedComponent } from './ResolvedComponent';
 
-export const codec_ComponentConfig: Codec = {"kind": "object", "fields": {"component": {"ts": "component", "codec": () => codec_ResolvedComponent}, "dependencies": {"ts": "dependencies", "codec": () => codec_ComponentConfig_dependencies}, "inputs": {"ts": "inputs"}, "kind": {"ts": "kind"}, "protection": {"ts": "protection"}, "resource": {"ts": "resource"}, "revision": {"ts": "revision"}, "settings": {"ts": "settings", "codec": () => codec_ComponentConfig_settings}}, "required": ["component", "kind", "protection", "resource", "revision"]};
+export const codec_ComponentConfig: Codec = {"kind": "object", "fields": {"component": {"ts": "component", "codec": () => codec_ResolvedComponent}, "dependencies": {"ts": "dependencies", "codec": () => codec_ComponentConfig_dependencies}, "gpu": {"ts": "gpu", "codec": () => codec_GPUPlacement}, "inputs": {"ts": "inputs"}, "kind": {"ts": "kind"}, "protection": {"ts": "protection"}, "resource": {"ts": "resource"}, "revision": {"ts": "revision"}, "settings": {"ts": "settings", "codec": () => codec_ComponentConfig_settings}}, "required": ["component", "kind", "protection", "resource", "revision"]};

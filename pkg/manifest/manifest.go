@@ -69,9 +69,11 @@ type Manifest struct {
 	DatabaseGateway *DatabaseGateway `json:"database_gateway,omitempty" yaml:"database_gateway,omitempty"`
 	// Links join two clouds' private networks, so services on one reach
 	// what's private on the other.
-	Links  map[string]Link `json:"links,omitempty" yaml:"links,omitempty"`
-	Ignore Ignore          `json:"ignore,omitzero" yaml:"ignore,omitempty" optional:"true"`
-	Held   Held            `json:"held,omitzero" yaml:"held,omitempty" optional:"true"`
+	Links map[string]Link `json:"links,omitempty" yaml:"links,omitempty"`
+	// Environments declare how each environment's releases go live.
+	Environments map[string]Environment `json:"environments,omitempty" yaml:"environments,omitempty"`
+	Ignore       Ignore                 `json:"ignore,omitzero" yaml:"ignore,omitempty" optional:"true"`
+	Held         Held                   `json:"held,omitzero" yaml:"held,omitempty" optional:"true"`
 }
 
 // Link is a private network link between two clouds: an HA VPN between
@@ -676,6 +678,7 @@ func (m *Manifest) Validate() error {
 	if a := m.Held.SameAddress; a != "" && !slices.Contains(sameAddressChoices, a) {
 		add("held.same_address", "%q isn't a choice; use %s", a, strings.Join(sameAddressChoices, " or "))
 	}
+	m.validateEnvironments(add)
 	ps = append(ps, ValidateFederation(m)...)
 	if len(ps) > 0 {
 		return ps

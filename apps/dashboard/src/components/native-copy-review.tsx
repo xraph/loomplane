@@ -218,7 +218,7 @@ export function NativeCopyReview({
           <p role="status">Loading granted Clouds…</p>
         ) : !list.length ? (
           <NativeEmpty title="No granted Cloud targets">
-            Ask your organization manager to grant this project a Cloud with a
+            Ask your workspace manager to grant this project a Cloud with a
             {source.provider === "rds"
               ? "managed RDS target with a private recovery route in the source account and region."
               : cloudSQLPITR

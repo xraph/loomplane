@@ -44,11 +44,14 @@ func CloudTitle(cloud string) string { return cloudTitle(cloud) }
 
 // Methods say how a connection got its credential: someone pasted it, or
 // signed in to the cloud. A keyless connection has none: the cloud trusts
-// Loomplane's own tokens, and Vault holds nothing for it.
+// Loomplane's own tokens, and Vault holds nothing for it. Nor does an
+// in-cluster one, which reaches the Kubernetes cluster Loomplane runs in
+// as Loomplane's own service account.
 const (
-	MethodToken   = "token"
-	MethodOAuth   = "oauth"
-	MethodKeyless = "keyless"
+	MethodToken     = "token"
+	MethodOAuth     = "oauth"
+	MethodKeyless   = "keyless"
+	MethodInCluster = "in_cluster"
 )
 
 // Statuses. A connection is checked when it's made and whenever someone
@@ -80,6 +83,13 @@ var (
 	ErrNoApp = errors.New("this cloud's sign-in isn't set up")
 )
 
+// DetailCanaryMissing is the detail listing, comma separated, what a
+// credential lacks that only a canary release needs: the actions an AWS
+// key lacks for one on ECS, the permissions a Google Cloud service
+// account lacks for one on Cloud Run, or the actions an Azure service
+// principal lacks for one on Container Apps.
+const DetailCanaryMissing = "canary_missing"
+
 // Connection is one cloud account an organization deploys to.
 type Connection struct {
 	// Generation changes with credentials or verified placement configuration, not health checks.
@@ -88,7 +98,7 @@ type Connection struct {
 	OrgID      string `json:"org_id"`
 	Cloud      string `json:"cloud"`
 	Name       string `json:"name"`
-	// Method is token, oauth or keyless. Empty means token.
+	// Method is token, oauth, keyless or in_cluster. Empty means token.
 	Method string `json:"method"`
 	// Account is what the credential acts as: a Google Cloud project, or
 	// a Vercel team or username.
@@ -98,6 +108,8 @@ type Connection struct {
 	AccountIdentity string `json:"account_identity,omitempty"`
 	// Details are facts about the credential that are safe to show, such
 	// as a service account's email. Never the credential.
+	// DetailCanaryMissing, when set, lists what the key lacks to ramp a
+	// canary, which doesn't make the connection incomplete.
 	Details map[string]string `json:"details"`
 	Status  string            `json:"status"`
 	// Missing lists the permissions an incomplete connection lacks.

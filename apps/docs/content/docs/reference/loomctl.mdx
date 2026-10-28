@@ -41,11 +41,11 @@ You can also install it from the `xraph` Scoop bucket, or unpack a release archi
 |---|---|
 | `plan PROJECT [--env production] [--scope ALIAS] [--catalog] [--no-wait] [--json]` | Plans a manifest for an environment. `--scope` is repeatable. `--catalog` plans standalone resources |
 | `plans PROJECT [--json]` | Lists a project's plans |
-| `show PLAN_ID [--json]` | Shows what a plan would do and anything in the way |
+| `show PLAN_ID [--json]` | Shows what a plan would do and anything in the way, with a `Release:` line when the environment sets a release strategy |
 | `approve PLAN_ID [--yes] [--note TEXT] [--no-wait]` | Approves a plan, which deploys it, and follows the deployment |
 | `reject PLAN_ID [--note TEXT]` | Rejects a plan |
 | `deployments PROJECT [--json]` | Lists a project's deployments |
-| `deployment ID [--watch] [--json]` | Shows a deployment step by step. `--watch` follows it |
+| `deployment ID [--watch] [--json]` | Shows a deployment step by step. A canary adds a `Canary:` line and a table of the current retry's verdicts (step, weight, service, verdict, errors, latency and reason). When a revert or promotion failed it adds a `NEEDS YOU` line, because traffic may still be split. `--watch` follows it and prints each verdict once as it arrives |
 | `retry DEPLOYMENT_ID [--no-wait]` | Retries a failed deployment from the step that failed |
 | `status PROJECT [--json]` | What runs each service and resource, with addresses and drift |
 

@@ -33,13 +33,20 @@ func (missingZoneDNS) GetZone(context.Context, provider.InfrastructureCredential
 	return provider.DNSZone{}, provider.ErrInfrastructureNotFound
 }
 
+// noZonesStore is an organization without zones.
+type noZonesStore struct{ infra.DomainStore }
+
+func (noZonesStore) Zones(context.Context, string) ([]*infra.Zone, error) {
+	return []*infra.Zone{}, nil
+}
+
 func TestCreateZoneProviderErrorStatuses(t *testing.T) {
 	adapters := infra.NewAdapters()
 	if err := adapters.RegisterDNS("cloudflare", missingZoneDNS{}); err != nil {
 		t.Fatal(err)
 	}
 	create := func(details map[string]string) int {
-		svc := infra.NewService(infra.Deps{Authz: overviewAuthz{allow: true}, Domains: struct{ infra.DomainStore }{}, Connections: zoneCredentials{details}, Adapters: adapters})
+		svc := infra.NewService(infra.Deps{Authz: overviewAuthz{allow: true}, Domains: noZonesStore{}, Connections: zoneCredentials{details}, Adapters: adapters})
 		r := forge.NewRouter()
 		if err := (&Extension{svc: svc}).domainRoutes(r, nil); err != nil {
 			t.Fatal(err)
@@ -68,6 +75,10 @@ type wildcardStore struct{ infra.DomainStore }
 func (wildcardStore) Zone(_ context.Context, org, id string) (*infra.Zone, error) {
 	return &infra.Zone{ID: id, OrgID: org, Name: "acme.dev", Mode: "external", ProjectIDs: []string{"shop"}, VerifiedAt: time.Now(), Revision: 1,
 		ProofName: "_loomplane.acme.dev", ProofValue: "proof", ProofExpiresAt: time.Now().Add(time.Hour)}, nil
+}
+func (s wildcardStore) Zones(ctx context.Context, org string) ([]*infra.Zone, error) {
+	zone, err := s.Zone(ctx, org, "zone")
+	return []*infra.Zone{zone}, err
 }
 func (wildcardStore) OrgRoutes(context.Context, string) ([]*infra.Route, error) {
 	return []*infra.Route{{ID: "route_w", Status: "ready", Input: infra.RouteInput{ZoneID: "zone", Hostname: "*.acme.dev"}}}, nil

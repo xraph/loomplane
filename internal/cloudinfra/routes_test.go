@@ -18,6 +18,7 @@ type gatewayStore struct {
 	*overviewStore
 	clouds    map[string]string
 	previewed []*RouteOperation
+	accepted  []*RouteOperation
 }
 
 func (s *gatewayStore) RouteBindingCloud(_ context.Context, org, project, environment, service string) (string, error) {
@@ -40,6 +41,21 @@ func (s *gatewayStore) PreviewRoute(_ context.Context, op *RouteOperation) error
 	s.previewed = append(s.previewed, op)
 	return nil
 }
+func (s *gatewayStore) RouteOperation(_ context.Context, org, id string) (*RouteOperation, error) {
+	for _, op := range s.previewed {
+		if op.Route.OrgID == org && op.ID == id {
+			v := *op
+			return &v, nil
+		}
+	}
+	return nil, ErrNotFound
+}
+func (s *gatewayStore) AcceptRoute(_ context.Context, op *RouteOperation) error {
+	v := *op
+	s.accepted = append(s.accepted, &v)
+	return nil
+}
+func (*gatewayStore) ValidateRetainedRoute(context.Context, Route) error { return nil }
 
 func gatewayFixture() (*Service, *gatewayStore) {
 	svc, base := overviewFixture()
@@ -51,6 +67,166 @@ func gatewayFixture() (*Service, *gatewayStore) {
 
 func gatewayInput() RouteInput {
 	return RouteInput{ZoneID: "zone_gw", EnvironmentID: "prod", Service: "octo--gateway", Hostname: "api.gateway.dev", Port: 8080}
+}
+
+// subdomainFixture adds app.gateway.dev to gatewayFixture with no proof of
+// its own. Shop holds a grant on the subdomain, not on gateway.dev.
+func subdomainFixture() (*Service, *gatewayStore, *Zone) {
+	svc, st := gatewayFixture()
+	parent := st.zones[len(st.zones)-1]
+	parent.ProjectIDs = []string{}
+	st.zones = append(st.zones, &Zone{ID: "zone_app", OrgID: "org", Name: "app.gateway.dev", Mode: "external", ProjectIDs: []string{"shop"}, Revision: 1})
+	return svc, st, parent
+}
+
+func subdomainInput() RouteInput {
+	in := gatewayInput()
+	in.ZoneID, in.Hostname = "zone_app", "api.app.gateway.dev"
+	return in
+}
+
+func TestPreviewRouteOnASubdomainUsesItsDomainsProof(t *testing.T) {
+	svc, st, parent := subdomainFixture()
+	op, err := svc.PreviewRoute(t.Context(), overviewDev, "shop", subdomainInput())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if op.Route.Input.Hostname != "api.app.gateway.dev" || op.DesiredRecord.Name != "api" {
+		t.Fatalf("preview: %+v %+v", op.Route.Input, op.DesiredRecord)
+	}
+	svc.Resolver = proofResolver{}
+	if _, err = svc.PreviewRoute(t.Context(), overviewDev, "shop", subdomainInput()); !errors.Is(err, ErrConflict) {
+		t.Fatal("previewed without the domain's public record", err)
+	}
+	svc.Resolver = proofResolver{[]string{"proof"}}
+	parent.VerifiedAt = time.Time{}
+	if _, err = svc.PreviewRoute(t.Context(), overviewDev, "shop", subdomainInput()); !errors.Is(err, ErrNotFound) {
+		t.Fatal("previewed under an unverified domain", err)
+	}
+	if len(st.previewed) != 1 {
+		t.Fatal("a refused preview was stored", len(st.previewed))
+	}
+}
+
+func TestApplyRouteRechecksTheDomainsRecord(t *testing.T) {
+	svc, st, parent := subdomainFixture()
+	op, err := svc.PreviewRoute(t.Context(), overviewDev, "shop", subdomainInput())
+	if err != nil {
+		t.Fatal(err)
+	}
+	svc.Resolver = proofResolver{}
+	if _, err = svc.ApplyRoute(t.Context(), overviewDev, "shop", op.ID, ApplyInput{Review: op.Review}); !errors.Is(err, ErrConflict) {
+		t.Fatal("applied after the domain's record disappeared", err)
+	}
+	svc.Resolver = proofResolver{[]string{"proof"}}
+	parent.VerifiedAt = time.Time{}
+	if _, err = svc.ApplyRoute(t.Context(), overviewDev, "shop", op.ID, ApplyInput{Review: op.Review}); !errors.Is(err, ErrConflict) {
+		t.Fatal("applied after the domain lost its verification", err)
+	}
+	if len(st.accepted) != 0 {
+		t.Fatal("a refused apply was accepted", st.accepted)
+	}
+	parent.VerifiedAt = svc.now()
+	if _, err = svc.ApplyRoute(t.Context(), overviewDev, "shop", op.ID, ApplyInput{Review: op.Review}); err != nil || len(st.accepted) != 1 {
+		t.Fatal("apply under a verified domain", err, len(st.accepted))
+	}
+}
+
+func TestPrepareRouteHandoffRechecksTheDomainsRecord(t *testing.T) {
+	svc, st, parent := subdomainFixture()
+	in := subdomainInput()
+	in.CloudID = "cloud_1"
+	st.routes = append(st.routes, &Route{ID: "route_app", OrgID: "org", ProjectID: "shop", Status: "ready", Revision: 1, Input: in,
+		Binding: RouteBinding{BindingID: "binding_old", ServerID: "srv_old", Address: "192.0.2.9"}})
+	handoff := HandoffInput{Revision: 1, DestinationCloudID: "cloud_1"}
+	svc.Resolver = proofResolver{}
+	if _, err := svc.PrepareRouteHandoff(t.Context(), overviewDev, "shop", "route_app", handoff); !errors.Is(err, ErrConflict) {
+		t.Fatal("handoff prepared without the domain's public record", err)
+	}
+	svc.Resolver = proofResolver{[]string{"proof"}}
+	parent.VerifiedAt = time.Time{}
+	if _, err := svc.PrepareRouteHandoff(t.Context(), overviewDev, "shop", "route_app", handoff); !errors.Is(err, ErrConflict) {
+		t.Fatal("handoff prepared under an unverified domain", err)
+	}
+	if len(st.accepted) != 0 {
+		t.Fatal("a refused handoff was accepted", st.accepted)
+	}
+	parent.VerifiedAt = svc.now()
+	op, err := svc.PrepareRouteHandoff(t.Context(), overviewDev, "shop", "route_app", handoff)
+	if err != nil || op.Kind != "prepare" || len(st.accepted) != 1 || op.DesiredRecord.Name != "api" {
+		t.Fatalf("handoff under a verified domain: %+v %v", op, err)
+	}
+}
+
+// subzoneOfGateway adds app.gateway.dev, granted to Docs only, under the
+// gateway.dev that Shop holds.
+func subzoneOfGateway(st *gatewayStore) {
+	st.zones = append(st.zones, &Zone{ID: "zone_app", OrgID: "org", Name: "app.gateway.dev", Mode: "external", ProjectIDs: []string{"docs"}, Revision: 1})
+}
+
+func TestPreviewRouteLeavesASubdomainsNamesToIt(t *testing.T) {
+	svc, st := gatewayFixture()
+	subzoneOfGateway(st)
+	for _, host := range []string{"app.gateway.dev", "x.app.gateway.dev"} {
+		in := gatewayInput()
+		in.Hostname = host
+		_, err := svc.PreviewRoute(t.Context(), overviewDev, "shop", in)
+		if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), host+" belongs to app.gateway.dev. Pick that domain") {
+			t.Fatalf("%s previewed on gateway.dev: %v", host, err)
+		}
+	}
+	if len(st.previewed) != 0 {
+		t.Fatal("a refused preview was stored", len(st.previewed))
+	}
+	in := gatewayInput()
+	in.Hostname = "www.gateway.dev"
+	if _, err := svc.PreviewRoute(t.Context(), overviewDev, "shop", in); err != nil {
+		t.Fatal("a sibling of the subdomain", err)
+	}
+}
+
+func TestApplyRouteRefusesANameASubdomainTookAfterPreview(t *testing.T) {
+	svc, st := gatewayFixture()
+	in := gatewayInput()
+	in.Hostname = "x.app.gateway.dev"
+	op, err := svc.PreviewRoute(t.Context(), overviewDev, "shop", in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	subzoneOfGateway(st)
+	_, err = svc.ApplyRoute(t.Context(), overviewDev, "shop", op.ID, ApplyInput{Review: op.Review})
+	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "x.app.gateway.dev belongs to app.gateway.dev. Pick that domain") {
+		t.Fatal("applied a name the subdomain now holds", err)
+	}
+	if len(st.accepted) != 0 {
+		t.Fatal("a refused apply was accepted", st.accepted)
+	}
+}
+
+func TestDeeperZoneMatchesTheBaseOnWholeLabels(t *testing.T) {
+	parent := &Zone{ID: "p", OrgID: "org", Name: "loomplane.com"}
+	zones := []*Zone{parent,
+		{ID: "a", OrgID: "org", Name: "app.loomplane.com"},
+		{ID: "d", OrgID: "org", Name: "deep.app.loomplane.com"},
+		{ID: "r", OrgID: "rival", Name: "www.loomplane.com"},
+	}
+	for host, want := range map[string]string{
+		"app.loomplane.com":        "app.loomplane.com",
+		"*.app.loomplane.com":      "app.loomplane.com",
+		"x.deep.app.loomplane.com": "deep.app.loomplane.com",
+		"*.loomplane.com":          "",
+		"myapp.loomplane.com":      "",
+		"www.loomplane.com":        "",
+		"loomplane.com":            "",
+	} {
+		got := ""
+		if z := deeperZone(parent, host, zones); z != nil {
+			got = z.Name
+		}
+		if got != want {
+			t.Errorf("%s: got %q, want %q", host, got, want)
+		}
+	}
 }
 
 func TestPreviewRouteInfersCloud(t *testing.T) {

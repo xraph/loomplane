@@ -32,6 +32,9 @@ import type { Action, Finding, Plan } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
 import { FailedDeploymentCleanup } from "@/components/failed-deployment-cleanup"
 import { ApprovalCard } from "@/components/approval"
+import { CanaryPanel } from "@/components/canary"
+import { DeploymentCapacityWait } from "@/components/deployment-capacity-wait"
+import { showsCanary } from "@/lib/canary"
 import { Page } from "@/components/page"
 import {
   Code,
@@ -126,7 +129,7 @@ export function DeploymentPage({ id }: { id: string }) {
               <EmptyHeader>
                 <EmptyTitle>No deployment here by that ID</EmptyTitle>
                 <EmptyDescription>
-                  It may belong to another organization, or the link is wrong.
+                  It may belong to another workspace, or the link is wrong.
                 </EmptyDescription>
               </EmptyHeader>
               <EmptyContent>
@@ -206,7 +209,16 @@ function Loaded({
             setTab("logs")
           }}
         />
+        {showsCanary(run) && (
+          <CanaryPanel
+            deploymentId={run.deployment?.id}
+            release={run.plan.release}
+          />
+        )}
         {run.status === "waiting" && <ApprovalCard run={run} />}
+        {run.deployment && (
+          <DeploymentCapacityWait deployment={run.deployment} />
+        )}
         {run.status === "blocked" && <BlockedAlert run={run} />}
         <div className="grid items-start gap-5 lg:grid-cols-[minmax(0,1fr)_300px]">
           <Tabs

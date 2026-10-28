@@ -434,10 +434,14 @@ func (s *PgStore) backfillFrontendSlots(ctx context.Context, tx driver.Tx, p *Ca
 
 // FrontendUsage counts each logical slot once, even when several revisions or
 // source resources remain. Pending includes accepted effects awaiting a binding.
+// A nil Maximum is an unlimited target.
 type FrontendUsage struct {
-	TargetID                           string
-	Maximum                            *int64
-	Counted, Active, Pending, Retained int64
+	TargetID string `json:"target_id"`
+	Maximum  *int64 `json:"maximum"`
+	Counted  int64  `json:"counted"`
+	Active   int64  `json:"active"`
+	Pending  int64  `json:"pending"`
+	Retained int64  `json:"retained"`
 }
 
 func (s *PgStore) FrontendUsage(ctx context.Context, org, cloud string) ([]FrontendUsage, error) {

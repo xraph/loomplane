@@ -16,6 +16,7 @@ import { opLabel } from "@/lib/plans"
 export type RunStatus =
   | "running"
   | "waiting"
+  | "paused"
   | "blocked"
   | "approved"
   | "succeeded"
@@ -63,6 +64,7 @@ export interface Run {
 export const runStatusText: Record<RunStatus, string> = {
   running: "In progress",
   waiting: "Needs approval",
+  paused: "Paused for capacity",
   blocked: "Blocked",
   approved: "Approved",
   succeeded: "Succeeded",
@@ -72,7 +74,9 @@ export const runStatusText: Record<RunStatus, string> = {
 
 /** isLive reports whether a run is still moving or waiting on someone. */
 export function isLive(r: Run): boolean {
-  return r.status === "running" || r.status === "waiting"
+  return (
+    r.status === "running" || r.status === "waiting" || r.status === "paused"
+  )
 }
 
 // A building step is a third of the way, deploying two thirds, verifying
@@ -81,6 +85,7 @@ const stepProgress: Record<string, number> = {
   building: 0.3,
   deploying: 0.65,
   verifying: 0.9,
+  ramping: 0.8,
 }
 
 const stepDetail: Record<string, string> = {
@@ -88,6 +93,7 @@ const stepDetail: Record<string, string> = {
   building: "Building",
   deploying: "Deploying",
   verifying: "Verifying",
+  ramping: "Taking a share of traffic",
   succeeded: "Done",
   failed: "Failed",
   skipped: "Skipped",
@@ -104,6 +110,7 @@ function stepState(status: string): ThreadState {
     case "building":
     case "deploying":
     case "verifying":
+    case "ramping":
       return "running"
     default:
       return "pending"
@@ -116,6 +123,10 @@ function statusOf(plan: Plan, d?: Deployment): RunStatus {
   if (d) {
     if (d.status === "succeeded") return "succeeded"
     if (d.status === "failed") return "failed"
+    // A deployment paused at a capacity limit waits for capacity or for
+    // someone to resume or cancel it; it isn't in progress.
+    if (d.status === "paused") return "paused"
+    if (d.status === "cancelled") return "canceled"
     return "running"
   }
   switch (plan.status) {
@@ -190,7 +201,10 @@ export function thread(plan: Plan, d?: Deployment): ThreadStep[] {
     .filter((a) => a.op !== "keep")
     .sort((a, b) => a.step - b.step)
   const stepsByAction = new Map(d?.steps.map((s) => [s.actionId, s]))
-  const stopped = closed.has(plan.status) || plan.status === "failed"
+  const stopped =
+    closed.has(plan.status) ||
+    plan.status === "failed" ||
+    d?.status === "cancelled"
   if (actions.length === 0) {
     out.push({
       key: "nothing",
@@ -225,8 +239,15 @@ export function thread(plan: Plan, d?: Deployment): ThreadStep[] {
   return out
 }
 
-function phaseOf(status: RunStatus, plan: Plan, steps: ThreadStep[]): string {
+function phaseOf(
+  status: RunStatus,
+  plan: Plan,
+  steps: ThreadStep[],
+  d?: Deployment
+): string {
   if (status === "waiting") return "Waiting for approval"
+  if (status === "paused") return "Paused for capacity"
+  if (d?.status === "cancelled") return "Deployment canceled"
   if (status === "blocked") return "Blocked by problems in the plan"
   if (status === "canceled") {
     return plan.status === "superseded"
@@ -259,7 +280,7 @@ export function toRun(plan: Plan, d?: Deployment, project?: Project): Run {
     projectId: plan.projectId,
     environment: plan.environment,
     status,
-    phase: phaseOf(status, plan, steps),
+    phase: phaseOf(status, plan, steps, d),
     createdAt: plan.createdAt,
     // A run that stopped short of a deployment ends where it stopped: a
     // blocked plan waits for a new plan, not for anyone's approval.
@@ -468,6 +489,10 @@ export function runLog(
       add(d.finishedAt, "info", "deploy", "Deployment succeeded")
     if (d.status === "failed")
       add(d.finishedAt, "error", "deploy", "Deployment failed")
+    if (d.status === "paused" && d.capacityWait)
+      add(d.capacityWait.createdAt, "warn", "deploy", "Paused for capacity")
+    if (d.status === "cancelled")
+      add(d.finishedAt, "warn", "deploy", "Deployment canceled")
   }
   return out.sort((a, b) => a.ts - b.ts)
 }

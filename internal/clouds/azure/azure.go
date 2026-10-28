@@ -183,6 +183,10 @@ func (e *APIError) Error() string {
 	return fmt.Sprintf("azure answered %d: %s", e.Status, e.Message)
 }
 
+// IsForbidden reports whether err is Azure's 403: the principal may not
+// do what it asked.
+func IsForbidden(err error) bool { return isForbidden(err) }
+
 // IsNotFound reports whether err is Azure's 404.
 func IsNotFound(err error) bool {
 	var ae *APIError
@@ -287,10 +291,15 @@ func (s *Session) bearer(ctx context.Context) (string, error) {
 		if res.StatusCode != http.StatusBadRequest && res.StatusCode != http.StatusUnauthorized {
 			return "", fmt.Errorf("azure sign-in answered %d: %s", res.StatusCode, errorCode(out.Error))
 		}
-		if out.Error == "invalid_client" || out.Error == "unauthorized_client" {
+		switch out.Error {
+		case "invalid_client", "unauthorized_client":
 			return "", fmt.Errorf("%w: %w (%s)", ErrRejected, oauth.ErrAppRejected, errorCode(out.Error))
+		case "invalid_grant", "interaction_required", "consent_required":
+			// The same codes a renewal counts as refused, so a session
+			// and the background job agree.
+			return "", fmt.Errorf("%w: %w (%s); sign in again", ErrRejected, oauth.ErrRefused, errorCode(out.Error))
 		}
-		return "", fmt.Errorf("%w: %w (%s); sign in again", ErrRejected, oauth.ErrRefused, errorCode(out.Error))
+		return "", fmt.Errorf("azure sign-in answered %d: %s", res.StatusCode, errorCode(out.Error))
 	case s.cred.handout != nil && res.StatusCode >= 300:
 		return "", assertionAnswer(res.StatusCode, out.Error, out.Codes, out.Description)
 	case res.StatusCode == http.StatusBadRequest || res.StatusCode == http.StatusUnauthorized:

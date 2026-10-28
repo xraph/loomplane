@@ -167,9 +167,7 @@ function NotificationContent({ admin }: { admin: boolean }) {
     setNotice("")
     try {
       await retry.mutateAsync({})
-      setNotice(
-        "Failed notification processing is queued for this organization."
-      )
+      setNotice("Failed notification processing is queued for this workspace.")
       invalidate(useNotificationsList)
     } catch (err) {
       setError(messageOf(err, "Notification processing couldn't be retried."))
@@ -182,7 +180,7 @@ function NotificationContent({ admin }: { admin: boolean }) {
       <Page className="max-w-[980px]">
         <PageHeading
           title="Notifications"
-          description="Deployment results for you, and webhooks for this organization."
+          description="Deployment results for you, and webhooks for this workspace."
           actions={
             <>
               <Button
@@ -272,7 +270,7 @@ function NotificationContent({ admin }: { admin: boolean }) {
                     variant="ghost"
                     size="sm"
                     disabled={retry.isPending}
-                    title="Retry exhausted email and event processing for this organization. Webhook delivery retries are handled by Relay."
+                    title="Retry exhausted email and event processing for this workspace. Webhook delivery retries are handled by Relay."
                     onClick={() => void retryProcessing()}
                   >
                     {retry.isPending && <Spinner />}Retry notification
@@ -517,12 +515,12 @@ function WebhookContent({
 
   return (
     <section
-      aria-label="Organization webhooks"
+      aria-label="Workspace webhooks"
       className="overflow-hidden rounded-[14px] bg-card ring-1 ring-border"
     >
       <div className="flex flex-wrap items-center justify-between gap-2 border-b px-4 py-3">
         <div className="grid gap-0.5">
-          <h2 className="text-[14px] font-semibold">Organization webhooks</h2>
+          <h2 className="text-[14px] font-semibold">Workspace webhooks</h2>
           <span className="text-[12.5px] text-muted-foreground">
             Relay signs deployment events and retries delivery failures.
           </span>
@@ -566,7 +564,7 @@ function WebhookContent({
                 <ZeroStateTitle>No webhooks configured</ZeroStateTitle>
                 <ZeroStateDescription>
                   Add a public HTTPS endpoint to receive deployment results for
-                  this organization.
+                  this workspace.
                 </ZeroStateDescription>
               </ZeroStateHeader>
             </ZeroState>

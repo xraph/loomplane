@@ -224,10 +224,27 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 		{http.MethodPost, "/deployments/:id/cleanup/apply", e.applyFailedCleanup, []forge.RouteOption{forge.WithName("deployments.cleanupApply"), forge.WithRequestSchema(FailedCleanupInput{}), forge.WithResponseSchema(http.StatusAccepted, "The accepted cleanup", deployments.FailedCleanup{})}},
 		{http.MethodGet, "/deployments/:id/cleanup", e.getFailedCleanup, []forge.RouteOption{forge.WithName("deployments.cleanup"), forge.WithResponseSchema(http.StatusOK, "Cleanup progress", deployments.FailedCleanup{})}},
 		{http.MethodPost, "/deployments/:id/cleanup/retry", e.retryFailedCleanup, []forge.RouteOption{forge.WithName("deployments.cleanupRetry"), forge.WithResponseSchema(http.StatusAccepted, "Cleanup retry", deployments.FailedCleanup{})}},
+		{http.MethodGet, "/deployments/:id/canary", e.getCanary, []forge.RouteOption{
+			forge.WithName("deployments.canary"),
+			forge.WithSummary("The deployment's canary: where traffic is and every step's verdict"),
+			forge.WithResponseSchema(http.StatusOK, "The canary and its verdicts", deployments.CanaryReport{}),
+		}},
 		{http.MethodPost, "/deployments/:id/retry", e.retryDeployment, []forge.RouteOption{
 			forge.WithName("deployments.retry"),
 			forge.WithSummary("Run a failed deployment's failed and skipped steps again, with the plan that was approved"),
 			forge.WithResponseSchema(http.StatusOK, "The deployment, running again", deployments.Deployment{}),
+		}},
+		{http.MethodPost, "/deployments/:id/capacity/resume", e.resumeCapacity, []forge.RouteOption{
+			forge.WithName("deployments.resumeCapacity"),
+			forge.WithSummary("Check capacity again for a deployment paused waiting for it; the deployment keeps its steps and retries"),
+			forge.WithRequestSchema(CapacityWaitInput{}),
+			forge.WithResponseSchema(http.StatusOK, "The deployment, running again", deployments.Deployment{}),
+		}},
+		{http.MethodPost, "/deployments/:id/capacity/cancel", e.cancelCapacity, []forge.RouteOption{
+			forge.WithName("deployments.cancelCapacity"),
+			forge.WithSummary("Cancel a deployment paused waiting for capacity; steps that finished stay as they are"),
+			forge.WithRequestSchema(CapacityWaitInput{}),
+			forge.WithResponseSchema(http.StatusOK, "The cancelled deployment", deployments.Deployment{}),
 		}},
 		{http.MethodGet, "/plans/:id/deployment", e.planDeployment, []forge.RouteOption{
 			forge.WithName("deployments.forPlan"),
@@ -598,6 +615,18 @@ func (e *Extension) getDeployment(c forge.Context) error {
 		return fail(err)
 	}
 	return c.JSON(http.StatusOK, d)
+}
+
+func (e *Extension) getCanary(c forge.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	report, err := e.deploys.Canary(c.Request().Context(), p, c.Param("id"))
+	if err != nil {
+		return fail(err)
+	}
+	return c.JSON(http.StatusOK, report)
 }
 
 func (e *Extension) planDeployment(c forge.Context) error {

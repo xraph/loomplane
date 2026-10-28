@@ -205,3 +205,34 @@ it("says a connection is connected keylessly", async () => {
   expect(await screen.findByText("Connected keylessly")).toBeTruthy()
   expect(screen.queryByRole("button", { name: "Switch to keyless" })).toBeNull()
 })
+
+it("replaces a keyless connection's credential with a key, not keyless again", async () => {
+  stub()
+  render(
+    <ClientProvider client={forgeClient}>
+      <ConnectDialog
+        open
+        cloud="aws"
+        onOpenChange={vi.fn()}
+        replacing={
+          {
+            id: "conn_k",
+            name: "Prod AWS",
+            cloud: "aws",
+            method: "keyless",
+            status: "ready",
+            message: "",
+            account: "123456789012",
+            details: { region: "eu-west-1", role_arn: "arn:aws:iam::1:role/x" },
+            missing: [],
+            createdAt: "2026-10-01T00:00:00Z",
+            createdBy: "u1",
+          } as unknown as Parameters<typeof ConnectDialog>[0]["replacing"]
+        }
+      />
+    </ClientProvider>
+  )
+  expect(await screen.findByLabelText(/Secret access key/i)).toBeTruthy()
+  expect(screen.queryByRole("button", { name: "Connect keylessly" })).toBeNull()
+  expect(screen.queryByText("Connect keylessly instead")).toBeNull()
+})

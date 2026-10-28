@@ -42,6 +42,9 @@ func (s *Service) syncStore() (cloudprofiles.SyncStore, error) {
 	return st, nil
 }
 func (s *Service) authorizeCloudSync(ctx context.Context, p security.Principal, project string) error {
+	if err := refuseAutomation(p); err != nil {
+		return err
+	}
 	if project == "" {
 		return s.authz.Require(ctx, p, security.OrganizationCloudManage, p.OrgID)
 	}
@@ -801,7 +804,8 @@ func decodeCloudBindings(raw []byte) ([]*Binding, error) {
 }
 
 // CloudSyncPage returns persisted operations after enforcing the full project scope.
-func (s *Service) CloudSyncPage(ctx context.Context, p security.Principal, project string, before page.Cursor, limit int) ([]*cloudprofiles.Sync, page.Cursor, error) {
+// A nonempty cloud keeps only that Cloud's operations.
+func (s *Service) CloudSyncPage(ctx context.Context, p security.Principal, project, cloud string, before page.Cursor, limit int) ([]*cloudprofiles.Sync, page.Cursor, error) {
 	if err := s.authorizeCloudRead(ctx, p, project); err != nil {
 		return nil, page.Cursor{}, err
 	}
@@ -811,12 +815,12 @@ func (s *Service) CloudSyncPage(ctx context.Context, p security.Principal, proje
 		}
 	}
 	st, ok := s.cloudProfiles.(interface {
-		ListSyncPage(context.Context, string, string, page.Cursor, int) ([]*cloudprofiles.Sync, page.Cursor, error)
+		ListSyncPage(context.Context, string, string, string, page.Cursor, int) ([]*cloudprofiles.Sync, page.Cursor, error)
 	})
 	if !ok {
 		return nil, page.Cursor{}, errors.New("cloud sync pagination unavailable")
 	}
-	syncs, next, err := st.ListSyncPage(ctx, p.OrgID, project, before, limit)
+	syncs, next, err := st.ListSyncPage(ctx, p.OrgID, project, cloud, before, limit)
 	for _, sync := range syncs {
 		if filterErr := s.filterCloudSync(ctx, p, sync, project); filterErr != nil {
 			return nil, page.Cursor{}, filterErr

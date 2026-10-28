@@ -661,6 +661,127 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly cloudCapacity = {
+    /**
+     * cloudCapacity.approveExpansion
+     */
+    approveExpansion: async (cloudId: string, expansionId: string, body: types.ApproveExpansionInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Expansion> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/expansions/${encodeURIComponent(String(expansionId))}/approve`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["ApproveExpansionInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Expansion"],
+      };
+
+      return this.request<types.Expansion>(config);
+    },
+
+    /**
+     * cloudCapacity.createScalingPool
+     */
+    createScalingPool: async (cloudId: string, body: types.ScalingPoolInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ScalingPool> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/scaling-pools`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["ScalingPoolInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ScalingPool"],
+      };
+
+      return this.request<types.ScalingPool>(config);
+    },
+
+    /**
+     * cloudCapacity.getPolicy
+     */
+    getPolicy: async (cloudId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CapacityPolicyView> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/capacity-policy`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CapacityPolicyView"],
+      };
+
+      return this.request<types.CapacityPolicyView>(config);
+    },
+
+    /**
+     * cloudCapacity.listExpansions
+     */
+    listExpansions: async (cloudId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ExpansionList> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/expansions`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ExpansionList"],
+      };
+
+      return this.request<types.ExpansionList>(config);
+    },
+
+    /**
+     * cloudCapacity.refresh
+     */
+    refresh: async (cloudId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CapacityUsage> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/capacity-usage/refresh`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CapacityUsage"],
+      };
+
+      return this.request<types.CapacityUsage>(config);
+    },
+
+    /**
+     * cloudCapacity.savePolicy
+     */
+    savePolicy: async (cloudId: string, body: types.CapacityPolicyInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CapacityPolicyView> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/capacity-policy`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["CapacityPolicyInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CapacityPolicyView"],
+      };
+
+      return this.request<types.CapacityPolicyView>(config);
+    },
+
+    /**
+     * cloudCapacity.usage
+     */
+    usage: async (cloudId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CapacityUsage> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/capacity-usage`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CapacityUsage"],
+      };
+
+      return this.request<types.CapacityUsage>(config);
+    },
+
+  };
+
   public readonly cloudChanges = {
     /**
      * cloudChanges.apply
@@ -1072,7 +1193,7 @@ export class RESTClient extends Client {
     /**
      * cloudSyncs.list
      */
-    list: async (id: string, before?: string | undefined, limit?: number | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CloudSyncList> => {
+    list: async (id: string, before?: string | undefined, limit?: number | undefined, cloud?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CloudSyncList> => {
       let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/cloud-syncs`;
       const queryParams: Record<string, any> = {};
       if (before !== undefined) {
@@ -1080,6 +1201,9 @@ export class RESTClient extends Client {
       }
       if (limit !== undefined) {
         queryParams['limit'] = limit;
+      }
+      if (cloud !== undefined) {
+        queryParams['cloud'] = cloud;
       }
       const queryString = new URLSearchParams(queryParams).toString();
       if (queryString) {
@@ -1320,6 +1444,22 @@ export class RESTClient extends Client {
       return this.request<types.Profile>(config);
     },
 
+    /**
+     * clouds.usage
+     */
+    usage: async (id: string, cloudId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Usage> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/clouds/${encodeURIComponent(String(cloudId))}/usage`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Usage"],
+      };
+
+      return this.request<types.Usage>(config);
+    },
+
   };
 
   public readonly connectionClouds = {
@@ -1356,6 +1496,27 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.GPUInventory>(config);
+    },
+
+  };
+
+  public readonly connectionInCluster = {
+    /**
+     * Connect the Kubernetes cluster Loomplane runs in, as Loomplane's own service account, checking the namespace first
+     */
+    create: async (body: types.InClusterInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Connection> => {
+      let __path = `/api/v1/connections/in-cluster`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["InClusterInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Connection"],
+      };
+
+      return this.request<types.Connection>(config);
     },
 
   };
@@ -1663,6 +1824,40 @@ export class RESTClient extends Client {
 
   public readonly deployments = {
     /**
+     * The deployment's canary: where traffic is and every step's verdict
+     */
+    canary: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CanaryReport> => {
+      let __path = `/api/v1/deployments/${encodeURIComponent(String(id))}/canary`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CanaryReport"],
+      };
+
+      return this.request<types.CanaryReport>(config);
+    },
+
+    /**
+     * Cancel a deployment paused waiting for capacity; steps that finished stay as they are
+     */
+    cancelCapacity: async (id: string, body: types.CapacityWaitInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Deployment> => {
+      let __path = `/api/v1/deployments/${encodeURIComponent(String(id))}/capacity/cancel`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["CapacityWaitInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Deployment"],
+      };
+
+      return this.request<types.Deployment>(config);
+    },
+
+    /**
      */
     cleanup: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.FailedCleanup> => {
       let __path = `/api/v1/deployments/${encodeURIComponent(String(id))}/cleanup`;
@@ -1810,6 +2005,24 @@ export class RESTClient extends Client {
     },
 
     /**
+     * Check capacity again for a deployment paused waiting for it; the deployment keeps its steps and retries
+     */
+    resumeCapacity: async (id: string, body: types.CapacityWaitInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Deployment> => {
+      let __path = `/api/v1/deployments/${encodeURIComponent(String(id))}/capacity/resume`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["CapacityWaitInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Deployment"],
+      };
+
+      return this.request<types.Deployment>(config);
+    },
+
+    /**
      * Run a failed deployment's failed and skipped steps again, with the plan that was approved
      */
     retry: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Deployment> => {
@@ -1866,6 +2079,22 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.ProviderZoneList>(config);
+    },
+
+    /**
+     * dnsZones.get
+     */
+    get: async (zoneId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.DomainDetail> => {
+      let __path = `/api/v1/dns-zones/${encodeURIComponent(String(zoneId))}`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["DomainDetail"],
+      };
+
+      return this.request<types.DomainDetail>(config);
     },
 
     /**
@@ -3867,7 +4096,7 @@ export class RESTClient extends Client {
     /**
      * organizationCloudSyncs.list
      */
-    list: async (before?: string | undefined, limit?: number | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CloudSyncList> => {
+    list: async (before?: string | undefined, limit?: number | undefined, cloud?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CloudSyncList> => {
       let __path = `/api/v1/clouds/syncs`;
       const queryParams: Record<string, any> = {};
       if (before !== undefined) {
@@ -3875,6 +4104,9 @@ export class RESTClient extends Client {
       }
       if (limit !== undefined) {
         queryParams['limit'] = limit;
+      }
+      if (cloud !== undefined) {
+        queryParams['cloud'] = cloud;
       }
       const queryString = new URLSearchParams(queryParams).toString();
       if (queryString) {
@@ -4165,6 +4397,22 @@ export class RESTClient extends Client {
       return this.request<types.Profile>(config);
     },
 
+    /**
+     * organizationClouds.usage
+     */
+    usage: async (cloudId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Usage> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/usage`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Usage"],
+      };
+
+      return this.request<types.Usage>(config);
+    },
+
   };
 
   public readonly plans = {
@@ -4343,6 +4591,24 @@ export class RESTClient extends Client {
     },
 
     /**
+     * Exclude services from a project's graph, plans and deploys, by service or path. A project setting: the repository doesn't change.
+     */
+    exclude: async (id: string, body: types.ExcludeInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Project> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/exclusions`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["ExcludeInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Project"],
+      };
+
+      return this.request<types.Project>(config);
+    },
+
+    /**
      * One project
      */
     get: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Project> => {
@@ -4372,6 +4638,24 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.ProjectView>(config);
+    },
+
+    /**
+     * Remove exclusions, bringing those services back into the graph and the next plan
+     */
+    include: async (id: string, body: types.IncludeInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Project> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/exclusions/remove`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["IncludeInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Project"],
+      };
+
+      return this.request<types.Project>(config);
     },
 
     /**
@@ -4890,7 +5174,7 @@ export class RESTClient extends Client {
     /**
      * Attach a repository, or a directory of one, after checking Loomplane can read it
      */
-    create: async (id: string, body: types.AddSourceInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Source> => {
+    create: async (id: string, body: types.AddSourceInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.DiscoverySource> => {
       let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/sources`;
       const config: RequestConfig = {
         method: 'POST',
@@ -4899,10 +5183,10 @@ export class RESTClient extends Client {
         bodyCodec: CODECS["AddSourceInputBody"],
         signal: options?.signal,
         retry: options?.retry,
-        responseCodec: CODECS["Source"],
+        responseCodec: CODECS["DiscoverySource"],
       };
 
-      return this.request<types.Source>(config);
+      return this.request<types.DiscoverySource>(config);
     },
 
     /**
@@ -4940,7 +5224,7 @@ export class RESTClient extends Client {
     /**
      * Change the directory or branch a source reads
      */
-    update: async (id: string, alias: string, body: types.UpdateSourceInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Source> => {
+    update: async (id: string, alias: string, body: types.UpdateSourceInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.DiscoverySource> => {
       let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/sources/${encodeURIComponent(String(alias))}`;
       const config: RequestConfig = {
         method: 'PATCH',
@@ -4949,10 +5233,10 @@ export class RESTClient extends Client {
         bodyCodec: CODECS["UpdateSourceInputBody"],
         signal: options?.signal,
         retry: options?.retry,
-        responseCodec: CODECS["Source"],
+        responseCodec: CODECS["DiscoverySource"],
       };
 
-      return this.request<types.Source>(config);
+      return this.request<types.DiscoverySource>(config);
     },
 
   };

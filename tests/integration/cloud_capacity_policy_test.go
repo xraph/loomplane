@@ -5,6 +5,7 @@ package integration
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	pgmigrate "github.com/xraph/grove/drivers/pgdriver/pgmigrate"
@@ -90,7 +91,7 @@ func TestCapacityPolicyAuthorization(t *testing.T) {
 		t.Fatalf("store foreign Cloud: %v", err)
 	}
 	input.Policy.FrontendLimits[0].TargetID = "foreign-target"
-	if _, err = f.svc.SaveCapacityPolicy(ctx, f.p, "cloud", input); !errors.Is(err, cloudinfra.ErrInvalid) {
+	if _, err = f.svc.SaveCapacityPolicy(ctx, f.p, "cloud", input); !errors.Is(err, cloudinfra.ErrInvalid) || !strings.Contains(err.Error(), "target foreign-target names no managed target") {
 		t.Fatalf("foreign target: %v", err)
 	}
 	input.Policy.FrontendLimits = nil
@@ -177,7 +178,7 @@ func TestCapacityPolicyFrontendTargets(t *testing.T) {
 	}
 	for _, target := range []string{"database-target", "pool-target"} {
 		input := cloudinfra.CapacityPolicyInput{Policy: cloudinfra.CapacityPolicy{FrontendLimits: []cloudinfra.FrontendLimit{{TargetID: target}}}}
-		if _, err := f.svc.SaveCapacityPolicy(ctx, f.p, "cloud", input); !errors.Is(err, cloudinfra.ErrInvalid) {
+		if _, err := f.svc.SaveCapacityPolicy(ctx, f.p, "cloud", input); !errors.Is(err, cloudinfra.ErrInvalid) || !strings.Contains(err.Error(), target) {
 			t.Fatalf("non-frontend target %s: %v", target, err)
 		}
 	}

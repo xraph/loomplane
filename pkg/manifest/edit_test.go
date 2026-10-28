@@ -612,3 +612,75 @@ func TestWithResourceWritesSettingsAndGPU(t *testing.T) {
 		t.Errorf("llm = %+v, want %+v\n%s", got, want, out)
 	}
 }
+
+func TestWithPlacement_scaleAndSize(t *testing.T) {
+	doc := []byte(`version: 1
+services:
+  api:
+    source: ./api
+    # Keep the GPU when CPU and memory change.
+    size:
+      cpu: 1
+      memory: 1024
+      gpu:
+        kind: nvidia-l4
+        count: 1
+`)
+	out, err := WithPlacement(doc, Placement{Section: "services", Name: "api", Environment: "production", Scale: &Scale{Min: 2, Max: 5}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := Parse(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if s := m.Services["api"].For("production", m.Defaults).Scale; s == nil || s.Min != 2 || s.Max != 5 {
+		t.Fatalf("production scale: %+v", s)
+	}
+	if s := m.Services["api"].For("staging", m.Defaults).Scale; s != nil {
+		t.Fatalf("an edit for production reached staging: %+v", s)
+	}
+
+	out, err = WithPlacement(out, Placement{Section: "services", Name: "api", Size: &SizeEdit{CPU: 2, Memory: 4096}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), "# Keep the GPU when CPU and memory change.") {
+		t.Fatalf("comment lost:\n%s", out)
+	}
+	m, err = Parse(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	size := m.Services["api"].Size
+	if size == nil || size.CPU != 2 || size.Memory != 4096 || size.GPU == nil || size.GPU.Count != 1 {
+		t.Fatalf("size edit lost what it didn't change: %+v", size)
+	}
+
+	// Zero values restore inheritance.
+	out, err = WithPlacement(out, Placement{Section: "services", Name: "api", Environment: "production", Scale: &Scale{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err = WithPlacement(out, Placement{Section: "services", Name: "api", Size: &SizeEdit{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err = Parse(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if set := m.Services["api"].For("production", m.Defaults); set.Scale != nil || set.Size != nil {
+		t.Fatalf("zero edits kept settings: %+v %+v", set.Scale, set.Size)
+	}
+
+	for name, p := range map[string]Placement{
+		"min above max": {Section: "services", Name: "api", Scale: &Scale{Min: 4, Max: 2}},
+		"no memory":     {Section: "services", Name: "api", Size: &SizeEdit{CPU: 1}},
+		"not a service": {Section: "resources", Name: "api", Scale: &Scale{Min: 1, Max: 1}},
+	} {
+		if _, err := WithPlacement(doc, p); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}

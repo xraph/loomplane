@@ -15,6 +15,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/ec2"
 	ec2types "github.com/aws/aws-sdk-go-v2/service/ec2/types"
 	"github.com/aws/aws-sdk-go-v2/service/ecr"
+	ecrtypes "github.com/aws/aws-sdk-go-v2/service/ecr/types"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	s3types "github.com/aws/aws-sdk-go-v2/service/s3/types"
@@ -243,6 +244,24 @@ func (s *Session) EnsureRepository(ctx context.Context, name string) (string, er
 		return "", fmt.Errorf("create repository %s: %w", name, err)
 	}
 	return sdk.ToString(out.Repository.RepositoryUri), nil
+}
+
+// ImageDigest reads the digest of the image a repository's tag names,
+// which is what a push left there. A tag no push made wraps ErrNotFound.
+func (s *Session) ImageDigest(ctx context.Context, repository, tag string) (string, error) {
+	out, err := ecr.NewFromConfig(s.cfg).DescribeImages(ctx, &ecr.DescribeImagesInput{
+		RepositoryName: sdk.String(repository), ImageIds: []ecrtypes.ImageIdentifier{{ImageTag: sdk.String(tag)}},
+	})
+	if err != nil && IsNotFound(err) {
+		return "", fmt.Errorf("image %s:%s: %w", repository, tag, ErrNotFound)
+	}
+	if err != nil {
+		return "", fmt.Errorf("find image %s:%s: %w", repository, tag, err)
+	}
+	if len(out.ImageDetails) == 0 || sdk.ToString(out.ImageDetails[0].ImageDigest) == "" {
+		return "", fmt.Errorf("image %s:%s: %w", repository, tag, ErrNotFound)
+	}
+	return sdk.ToString(out.ImageDetails[0].ImageDigest), nil
 }
 
 // --- CodeBuild ---

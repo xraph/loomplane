@@ -152,6 +152,17 @@ func awaitCapacity(w *drt.Workflow, dep deployInput, prefix string, interval tim
 	}
 }
 func runStepsV3(w *drt.Workflow, org string, started deployStarted, interval time.Duration) error {
+	reason, stopped, err := capacityEffects(w, org, started, interval)
+	if err != nil || stopped {
+		return err
+	}
+	return finishCapacity(w, org, started.DeploymentID, reason, interval)
+}
+
+// capacityEffects stores the source and runs each action once capacity
+// admits it, until one fails. It returns why one failed, or stopped when
+// capacity cancelled the deployment, which then has nothing left to settle.
+func capacityEffects(w *drt.Workflow, org string, started deployStarted, interval time.Duration) (reason string, stopped bool, err error) {
 	dep := deployInput{OrgID: org, DeploymentID: started.DeploymentID}
 	effects := []struct {
 		id, name           string
@@ -171,24 +182,23 @@ func runStepsV3(w *drt.Workflow, org string, started deployStarted, interval tim
 			}{id, ActivityDeployAction, step, started.timeout(id), actionHeartbeat, actionAttempts})
 		}
 	}
-	reason := ""
 	for _, effect := range effects {
 		for attempt := 0; ; attempt++ {
 			id := fmt.Sprintf("%s-effect-%s-%d", started.DeploymentID, effect.id, attempt)
-			ready, err := awaitCapacity(w, dep, id, interval)
-			if err != nil {
-				return err
+			ready, awaitErr := awaitCapacity(w, dep, id, interval)
+			if awaitErr != nil {
+				return "", false, awaitErr
 			}
 			if !ready {
-				return nil
+				return "", true, nil
 			}
 			var result capacityEffectResult
-			if err = callInto(w, id, effect.name, effect.input, effect.timeout, effect.heartbeat, effect.attempts, &result); err != nil {
-				reason = err.Error()
+			if callErr := callInto(w, id, effect.name, effect.input, effect.timeout, effect.heartbeat, effect.attempts, &result); callErr != nil {
+				reason = callErr.Error()
 				break
 			}
 			if result.Status == "cancelled" {
-				return nil
+				return "", true, nil
 			}
 			if result.Status == "paused" {
 				continue
@@ -196,12 +206,19 @@ func runStepsV3(w *drt.Workflow, org string, started deployStarted, interval tim
 			break
 		}
 		if reason != "" {
-			break
+			return reason, false, nil
 		}
 	}
-	// Finish can race a pause too. It must re-assess instead of settling paused work.
+	return "", false, nil
+}
+
+// finishCapacity settles the deployment, failed with reason or succeeded,
+// once capacity admits it. Finish can race a pause too. It must re-assess
+// instead of settling paused work.
+func finishCapacity(w *drt.Workflow, org, deploymentID, reason string, interval time.Duration) error {
+	dep := deployInput{OrgID: org, DeploymentID: deploymentID}
 	for attempt := 0; ; attempt++ {
-		id := fmt.Sprintf("%s-finish-%d", started.DeploymentID, attempt)
+		id := fmt.Sprintf("%s-finish-%d", deploymentID, attempt)
 		ready, err := awaitCapacity(w, dep, id, interval)
 		if err != nil {
 			return err
@@ -221,20 +238,32 @@ func runStepsV3(w *drt.Workflow, org string, started deployStarted, interval tim
 	}
 }
 
-func (d *Deployments) capacityWorker() (*drt.Worker, error) {
+// worker is the client that starts, signals and cancels runs of build. The
+// engine runs DeploymentBuild; each later build has a worker of its own.
+func (d *Deployments) worker(build string) (*drt.Worker, error) {
 	d.mu.RLock()
 	defer d.mu.RUnlock()
-	if d.capacityClient == nil {
-		return nil, errors.New("capacity workflow worker is unavailable")
+	w := d.workers[build]
+	if w == nil {
+		return nil, fmt.Errorf("no workflow worker runs build %q", build)
 	}
-	return d.capacityClient, nil
+	return w, nil
 }
 
-// BindCapacityWorker keeps the immutable client for v3 starts and signals. Supervisors own polling replacements.
-func (d *Deployments) BindCapacityWorker(worker *drt.Worker) {
+// BindWorker keeps the immutable client for build's starts, signals and
+// cancellations. Supervisors own polling replacements.
+func (d *Deployments) BindWorker(build string, worker *drt.Worker) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
-	d.capacityClient = worker
+	if d.workers == nil {
+		d.workers = map[string]*drt.Worker{}
+	}
+	d.workers[build] = worker
+}
+
+// BindCapacityWorker binds the v3 build's worker.
+func (d *Deployments) BindCapacityWorker(worker *drt.Worker) {
+	d.BindWorker(CapacityBuild, worker)
 }
 
 func (d *Deployments) SignalCapacity(ctx context.Context, org, dep string, revision int64) error {

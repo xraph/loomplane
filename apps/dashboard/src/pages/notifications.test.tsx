@@ -130,7 +130,7 @@ it("allows an administrator to retry exhausted notification processing", async (
     screen.getByRole("button", { name: "Retry notification processing" })
   )
   expect(await screen.findByRole("status")).toHaveTextContent(
-    "Failed notification processing is queued for this organization."
+    "Failed notification processing is queued for this workspace."
   )
 })
 

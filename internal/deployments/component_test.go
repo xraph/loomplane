@@ -1650,27 +1650,45 @@ func sampleWithSettings(t *testing.T) *recipes.Registry {
 				k.Components[i].Files = []recipes.File{{Path: sampleConfig}}
 			}
 		}
-		k.Settings = []recipes.Setting{
-			{Name: "model", Title: "Model", Pattern: "[a-z0-9-]+/[a-z0-9.-]+", Required: true},
-			{Name: "size", Title: "Size", Pattern: "[0-9]+", Default: "1"},
-		}
+		k.Settings = sampleSettings()
 	})
 }
 
+func sampleSettings() []recipes.Setting {
+	return []recipes.Setting{
+		{Name: "model", Title: "Model", Pattern: "[a-z0-9-]+/[a-z0-9.-]+", Required: true},
+		{Name: "size", Title: "Size", Pattern: "[0-9]+", Default: "1"},
+	}
+}
+
+// gpuSampleWithSettings is the gpusample kind taking sampleWithSettings'
+// settings, whose GPU server declares a rendered config file.
+func gpuSampleWithSettings(t *testing.T) *recipes.Registry {
+	t.Helper()
+	k := recipestest.GPUSample()
+	k.Components[0].Files = []recipes.File{{Path: sampleConfig}}
+	k.Settings = sampleSettings()
+	r := recipes.NewRegistry()
+	if err := r.Register(k); err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
 func TestComponentRunCarriesSettingsAndGPU(t *testing.T) {
-	f := newComponentFixture(t, sampleWithSettings(t))
+	// The GPU goes on the component whose recipe asks for one: a
+	// placement on any other is from another recipe.
+	f := newComponentFixture(t, gpuSampleWithSettings(t))
 	hooks := &fileHooks{files: map[string][]byte{sampleConfig: []byte("listen: 8080\n")}}
-	f.target.Hooks["sample"] = hooks
-	f.secrets.m[ResourceKey("org", "env", "app--postgres", "url")] = []byte(postgresURL)
-	job := f.componentJob(t, "api", newPostgres)
-	cfg := job.Action.Resource.Component
-	cfg.Settings = map[string]string{"model": "acme/x", "size": "1"}
-	cfg.Inputs = "sha256:a"
-	cfg.GPU = &provider.GPUPlacement{
+	f.target.Hooks["gpusample"] = hooks
+	job := f.gpuComponentJob(t, "server", &provider.GPUPlacement{
 		GPURequest:   provider.GPURequest{Kind: "nvidia-l4", Count: 1},
 		NodeSelector: map[string]string{"gpu": "l4"},
 		Tolerations:  []provider.GPUToleration{{Key: "nvidia.com/gpu", Operator: "Exists", Effect: "NoSchedule"}},
-	}
+	})
+	cfg := job.Action.Resource.Component
+	cfg.Settings = map[string]string{"model": "acme/x", "size": "1"}
+	cfg.Inputs = "sha256:a"
 	if _, err := f.target.Apply(t.Context(), job); err != nil {
 		t.Fatal(err)
 	}
@@ -1691,6 +1709,9 @@ func TestComponentRunCarriesSettingsAndGPU(t *testing.T) {
 
 	// Settings the kind doesn't take now, or without a required one, are
 	// from another recipe.
+	f = newComponentFixture(t, sampleWithSettings(t))
+	f.target.Hooks["sample"] = &fileHooks{files: map[string][]byte{sampleConfig: []byte("listen: 8080\n")}}
+	f.secrets.m[ResourceKey("org", "env", "app--postgres", "url")] = []byte(postgresURL)
 	for _, settings := range []map[string]string{
 		{"model": "acme/x", "colour": "red"},
 		{"model": "Acme X"},

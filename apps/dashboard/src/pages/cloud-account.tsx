@@ -128,7 +128,7 @@ export function CloudAccount({ id }: { id: string }) {
             <EmptyHeader>
               <EmptyTitle>No connected account here</EmptyTitle>
               <EmptyDescription>
-                It may have been removed, or it belongs to another organization.
+                It may have been removed, or it belongs to another workspace.
               </EmptyDescription>
             </EmptyHeader>
             <EmptyContent>

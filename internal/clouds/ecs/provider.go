@@ -146,7 +146,14 @@ func (p *Provider) apply(ctx context.Context, instanceID id.ID, spec cpprovider.
 	if err != nil {
 		return err
 	}
-	name := ServiceName(instanceID)
+	return Run(ctx, s, ServiceName(instanceID), spec, labels)
+}
+
+// Run registers spec as a task in the family name and runs it as the ECS
+// service name, where labels say: its cluster, network, roles, secrets
+// and target group. It waits until the rollout is done. An instance's
+// service runs this way, and so does a canary's candidate beside it.
+func Run(ctx context.Context, s *aws.Session, name string, spec cpprovider.ServiceSpec, labels map[string]string) error {
 	var port int32
 	if len(spec.Ports) > 0 {
 		port = int32(spec.Ports[0].Container) //nolint:gosec // G115: a port, validated by the manifest

@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest"
 
 import type { Action, Deployment, Plan } from "@/client/forge/loomplane/types"
-import { commitLabel, matches, runLog, toRun } from "@/lib/runs"
+import { commitLabel, isLive, matches, runLog, toRun } from "@/lib/runs"
 
 const action = (id: string, step: number, op = "create"): Action => ({
   id,
@@ -24,6 +24,11 @@ const plan = (status: string, extra: Partial<Plan> = {}): Plan => ({
   environmentId: "env_1",
   status,
   actions: [action("api", 1), action("web", 2)],
+  artifacts: [],
+  fromEnvironment: "",
+  fromEnvironmentId: "",
+  kind: "release",
+  leftovers: [],
   connections: {},
   createdAt: "2026-10-12T10:00:00Z",
   createdBy: "user_1",
@@ -108,6 +113,22 @@ describe("toRun", () => {
     expect(toRun(p, deployment("running", [])).status).toBe("running")
     expect(toRun(p, deployment("succeeded", [])).status).toBe("succeeded")
     expect(toRun(p, deployment("failed", [])).status).toBe("failed")
+  })
+
+  it("shows a paused deployment as paused, not in progress", () => {
+    const p = plan("approved")
+    const paused = toRun(p, deployment("paused", []))
+    expect(paused.status).toBe("paused")
+    expect(paused.phase).toBe("Paused for capacity")
+    expect(isLive(paused)).toBe(true)
+    const cancelled = toRun(p, deployment("cancelled", []))
+    expect(cancelled.status).toBe("canceled")
+    expect(cancelled.phase).toBe("Deployment canceled")
+    expect(isLive(cancelled)).toBe(false)
+    expect(cancelled.thread.slice(2).map((s) => s.state)).toEqual([
+      "canceled",
+      "canceled",
+    ])
   })
 })
 

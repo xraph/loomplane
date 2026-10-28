@@ -172,10 +172,10 @@ func dropGPUMembers(t *testing.T, f *poolFixture) {
 }
 
 // waitDaemonWaiter waits until a session queues on the daemon's
-// admission lock or its GPU lock.
+// direct-apply lock or its GPU lock.
 func waitDaemonWaiter(t *testing.T, f *poolFixture) {
 	t.Helper()
-	waitPoolSQL(t, f, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND wait_event='advisory' AND (query LIKE '%host-admission%' OR query LIKE '%gpu-devices%'))`)
+	waitPoolSQL(t, f, `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event_type='Lock' AND wait_event='advisory' AND (query LIKE '%direct-apply%' OR query LIKE '%gpu-devices%'))`)
 }
 
 func entered(e *gpuDaemonExecutor, within time.Duration) bool {
@@ -188,8 +188,8 @@ func entered(e *gpuDaemonExecutor, within time.Duration) bool {
 }
 
 // serializeGPUApplies runs first until it has read a free device, then
-// runs second. Second must wait on the daemon's admission lock (two direct
-// applies) or its GPU lock until first has written its label, and then
+// runs second. Second must wait on the daemon's direct-apply lock (two
+// direct applies) or its GPU lock until first has written its label, and then
 // take the other device.
 func serializeGPUApplies(t *testing.T, f *poolFixture, d *gpuDaemon, first, second gpuApply) {
 	t.Helper()

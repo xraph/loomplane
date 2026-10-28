@@ -112,6 +112,7 @@ export interface Analysis {
   finishedAt?: string;
   id: string;
   orgId: string;
+  pinned: boolean;
   projectId: string;
   ref: string;
   repository: string;
@@ -156,6 +157,19 @@ export interface ApplyCloudInputBody {
 
 export interface ApplyInputBody {
   review: string;
+}
+
+export interface ApproveExpansionInputBody {
+  expectedRevision: number;
+}
+
+export interface ArtifactChoice {
+  from?: string;
+  reason?: string;
+  reference?: string;
+  reused: boolean;
+  revision?: string;
+  service: string;
 }
 
 export interface Assignment {
@@ -289,8 +303,209 @@ export interface BuildTarget {
   registrySettings?: Record<string, any>;
 }
 
+export interface Canary {
+  holdSeconds: number;
+  reason?: string;
+  services: CanaryService[];
+  status: string;
+  step: number;
+  steps: number[];
+  thresholds: Thresholds;
+  updatedAt: string;
+  weight: number;
+}
+
+export interface CanaryReport {
+  canary?: Canary;
+  verdicts: CanaryVerdict[];
+}
+
+export interface CanaryService {
+  actionId: string;
+  baseline?: string;
+  bindingId: string;
+  candidate?: string;
+  image?: string;
+  name: string;
+  provider: string;
+}
+
+export interface CanaryVerdict {
+  actionId: string;
+  attempt: number;
+  baseline: Health;
+  baselineFallback: boolean;
+  candidate: Health;
+  decidedAt: string;
+  deploymentId: string;
+  id: string;
+  orgId: string;
+  projectId: string;
+  reason: string;
+  retry: number;
+  service: string;
+  step: number;
+  thresholds: Thresholds;
+  verdict: string;
+  weight: number;
+  windowEnd: string;
+  windowStart: string;
+}
+
 export interface CancelResult {
   message?: string;
+}
+
+export interface CapacityAccountSnapshot {
+  accountId: string;
+  checkedAt: string;
+  provider: string;
+  provisioned: CapacityResources;
+  quota: CapacityQuota;
+}
+
+export interface CapacityBlock {
+  cloudId: string;
+  counted: number;
+  limit: number;
+  policyRevision: number;
+  poolId: string;
+  reason: string;
+  requested: number;
+  resource: string;
+  retryable: boolean;
+  targetId: string;
+}
+
+export interface CapacityChange {
+  cloudId: string;
+  entityId: string;
+  kind: string;
+  orgId: string;
+  revision: number;
+  status?: string;
+}
+
+export interface CapacityDemand {
+  architecture: string;
+  cloudId: string;
+  environmentId: string;
+  intentHash: string;
+  localData: boolean;
+  orgId: string;
+  planId: string;
+  policyRevision: number;
+  poolId: string;
+  projectId: string;
+  resources: ResourceVector;
+  service: string;
+  stickyServerId: string;
+  targetId: string;
+}
+
+export interface CapacityIntent {
+  assignmentRevision: number;
+  cloudRevision: number;
+  commitSha: string;
+  demand: CapacityDemand;
+  grantRevision: number;
+  providerPin: CapacityTemplatePin;
+  targetName: string;
+  targetRevision: number;
+  template: PoolExpansionPolicy;
+  templateHash: string;
+}
+
+export interface CapacityObservation {
+  checkedAt: string;
+  cpuMillis?: number;
+  freeStorageBytes?: number;
+  memoryBytes?: number;
+  storageBytes?: number;
+}
+
+export interface CapacityPolicy {
+  cloudId: string;
+  enabled: boolean;
+  frontendLimits: FrontendLimit[];
+  gpuLimits?: GPULimit[];
+  limits: ResourceVector;
+  orgId: string;
+  pools: PoolExpansionPolicy[];
+  requireExpansionApproval: boolean;
+  revision: number;
+}
+
+export interface CapacityPolicyInputBody {
+  expectedRevision: number;
+  policy: CapacityPolicy;
+}
+
+export interface CapacityPolicyView {
+  automaticExpansion: boolean;
+  cloudId: string;
+  policy?: CapacityPolicy;
+}
+
+export interface CapacityQuota {
+  cpuMillis?: number;
+  memoryBytes?: number;
+  servers?: number;
+  storageBytes?: number;
+}
+
+export interface CapacityRecord {
+  accountId: string;
+  checkedAt: string;
+  gpuKind?: string;
+  gpus?: number;
+  kind: string;
+  observation?: CapacityObservation;
+  provider: string;
+  resourceId: string;
+  resources: CapacityResources;
+  serverId?: string;
+  serverStateRevision: number;
+}
+
+export interface CapacityResources {
+  cpuMillis?: number;
+  memoryBytes?: number;
+  servers?: number;
+  storageBytes?: number;
+}
+
+export interface CapacityTemplatePin {
+  accountId: string;
+  connectionGeneration: number;
+}
+
+export interface CapacityUsage {
+  accounts: CapacityAccountSnapshot[];
+  allocatable: CapacityResources;
+  checkedAt: string;
+  cloudId: string;
+  fresh: boolean;
+  frontends: FrontendUsage[];
+  gpus: GPUUsage[];
+  headroom: CapacityResources;
+  observed: CapacityResources;
+  observedStorageBytes: number | null;
+  pending: CapacityResources;
+  provisioned: CapacityResources;
+  records: CapacityRecord[];
+  reserved: CapacityResources;
+  systemReserve: CapacityResources;
+}
+
+export interface CapacityWait {
+  blocks: CapacityBlock[];
+  createdAt: string;
+  revision: number;
+}
+
+export interface CapacityWaitInputBody {
+  expectedRevision: number;
 }
 
 export interface Card {
@@ -420,6 +635,7 @@ export interface CloudForm {
   cloud: string;
   credential?: string;
   help?: string;
+  inClusterSettings?: Setting[];
   keylessSettings?: Setting[];
   methods: string[];
   settings?: Setting[];
@@ -437,6 +653,8 @@ export interface CloudPlacement {
   connectionId: string;
   cpuMillis?: number;
   default?: boolean;
+  gpuKind?: string;
+  gpus?: number;
   grantRevision?: number;
   memoryBytes?: number;
   poolId?: string;
@@ -569,6 +787,7 @@ export interface CompleteInputBody {
 export interface ComponentConfig {
   component: ResolvedComponent;
   dependencies?: Record<string, any>;
+  gpu?: GPUPlacement;
   inputs?: string;
   kind: string;
   protection: string;
@@ -686,6 +905,7 @@ export interface CreateInvitationInputBody {
 export interface CreatePlanInputBody {
   catalog?: boolean;
   environment: string;
+  from?: string;
   scope?: string[];
 }
 
@@ -883,6 +1103,8 @@ export interface DeployedRepository {
 }
 
 export interface Deployment {
+  canary?: Canary;
+  capacityWait?: CapacityWait;
   commitSha: string;
   environment: string;
   environmentId: string;
@@ -923,6 +1145,20 @@ export interface DiscoveredService {
   updatedAt: string;
 }
 
+export interface DiscoverySource {
+  alias: string;
+  createdAt: string;
+  createdBy: string;
+  id: string;
+  orgId: string;
+  projectId: string;
+  ref: string;
+  removedAt?: string;
+  repository: string;
+  root: string;
+  updatedAt: string;
+}
+
 export interface DiscoverySummary {
   lastChange: string;
   mode: string;
@@ -933,6 +1169,15 @@ export interface DiscoverySummary {
 export interface DomainCheckInputBody {
   connectionId: string;
   domains: string[];
+}
+
+export interface DomainDetail {
+  domain: ZoneOverview;
+  parent?: ZoneOverview;
+  proofZone?: ZoneOverview;
+  records: ManagedRecord[];
+  registration?: Registration;
+  subdomains: ZoneOverview[];
 }
 
 export interface DomainOffer {
@@ -1022,11 +1267,13 @@ export interface EditInputBody {
   target?: string;
 };
   removeResource?: string;
+  scale?: Scale;
   setUse?: {
   dependency: string;
   resource: string;
   use: Use;
 };
+  size?: SizeEdit;
   unlink?: {
   need: string;
   options?: Record<string, any>;
@@ -1172,11 +1419,85 @@ export interface EnvironmentList {
   environments: Environment[];
 }
 
+export interface EnvironmentUsage {
+  assigned: boolean;
+  environmentId: string;
+  environmentName: string;
+  placements: PlacementUsage[];
+  projectId: string;
+  projectName: string;
+}
+
 export interface Evidence {
   detail: string;
   line?: number;
   path: string;
   source?: string;
+}
+
+export interface ExcludeInputBody {
+  exclusions: {
+  keepRunning?: boolean;
+  kind: string;
+  match: string;
+  name?: string;
+  reason: string;
+}[];
+}
+
+export interface Excluded {
+  rule: ExclusionRule;
+  service: Service;
+}
+
+export interface Exclusion {
+  createdAt: string;
+  createdBy: string;
+  keepRunning: boolean;
+  kind: string;
+  match: string;
+  name?: string;
+  reason: string;
+}
+
+export interface ExclusionRule {
+  kind: string;
+  match: string;
+}
+
+export interface Expansion {
+  accelerator?: Accelerator;
+  accountId: string;
+  approvedAt?: string;
+  approvedBy: string;
+  architecture: string;
+  block?: CapacityBlock;
+  cloudId: string;
+  connectionGeneration: number;
+  connectionId: string;
+  createdAt: string;
+  estimatedHourlyUsd?: number;
+  hourlyPriceKnown?: boolean;
+  id: string;
+  image: string;
+  intentHash: string;
+  minimum: boolean;
+  operationId: string;
+  orgId: string;
+  policyRevision: number;
+  poolId: string;
+  provider: string;
+  region: string;
+  resources: ResourceVector;
+  revision: number;
+  size: string;
+  status: string;
+  template: PoolExpansionPolicy;
+  updatedAt: string;
+}
+
+export interface ExpansionList {
+  expansions: Expansion[];
 }
 
 export interface FabriqKeyList {
@@ -1240,6 +1561,36 @@ export interface Fit {
   status: string;
 }
 
+export interface FrontendDemand {
+  accountId: string;
+  cloudId: string;
+  connectionGeneration: number;
+  connectionId: string;
+  environmentId: string;
+  grantRevision: number;
+  orgId: string;
+  planId: string;
+  projectId: string;
+  provider: string;
+  service: string;
+  targetId: string;
+  targetRevision: number;
+}
+
+export interface FrontendLimit {
+  maximum?: number;
+  targetId: string;
+}
+
+export interface FrontendUsage {
+  active: number;
+  counted: number;
+  maximum?: number;
+  pending: number;
+  retained: number;
+  targetId: string;
+}
+
 export interface GPUDevice {
   index: number;
   kind: string;
@@ -1256,6 +1607,11 @@ export interface GPUInventory {
   status: string;
 }
 
+export interface GPULimit {
+  kind: string;
+  maximum: number;
+}
+
 export interface GPUNodeGroup {
   hourlyPriceKnown: boolean;
   hourlyUsd: number;
@@ -1268,6 +1624,13 @@ export interface GPUNodeGroup {
   product?: string;
   tolerations?: GPUToleration[];
   total: number;
+}
+
+export interface GPUPlacement {
+  count: number;
+  kind: string;
+  nodeSelector?: Record<string, any>;
+  tolerations?: GPUToleration[];
 }
 
 export interface GPURequest {
@@ -1302,6 +1665,14 @@ export interface GPUToleration {
   key: string;
   operator: string;
   value?: string;
+}
+
+export interface GPUUsage {
+  kind: string;
+  limit: number | null;
+  pending: number;
+  provisioned: number | null;
+  reserved: number;
 }
 
 export interface GatewayList {
@@ -1382,6 +1753,15 @@ export interface HandoffReleaseInputBody {
   drainSeconds: number;
 }
 
+export interface Health {
+  available: boolean;
+  errors: number;
+  latencyMs: number;
+  reason?: string;
+  requests: number;
+  statistic?: string;
+}
+
 export interface Held {
   sameAddress?: string;
 }
@@ -1426,6 +1806,18 @@ export interface IdentitySession {
 
 export interface Ignore {
   resources?: string[];
+}
+
+export interface InClusterInputBody {
+  name: string;
+  settings: Record<string, any>;
+}
+
+export interface IncludeInputBody {
+  exclusions: {
+  kind: string;
+  match: string;
+}[];
 }
 
 export interface InfrastructureAction {
@@ -1517,6 +1909,14 @@ export interface KubernetesRule {
   verbs: string[];
 }
 
+export interface Leftover {
+  dataBearing: boolean;
+  name: string;
+  op: string;
+  reason: string;
+  subject: string;
+}
+
 export interface LicenseInfo {
   commercial: boolean;
   id: string;
@@ -1582,9 +1982,23 @@ export interface ManagedDatabaseProfile {
   version: string;
 }
 
+export interface ManagedRecord {
+  hostname?: string;
+  kind: string;
+  name: string;
+  projectId?: string;
+  projectName?: string;
+  routeId?: string;
+  ttl: number;
+  type: string;
+  value: string;
+  zoneId: string;
+}
+
 export interface Manifest {
   databaseGateway?: DatabaseGateway;
   defaults?: Defaults;
+  environments?: Record<string, any>;
   federation?: Federation;
   gateways?: Record<string, any>;
   held?: Held;
@@ -2145,8 +2559,15 @@ export interface Placement {
   serverRevision: number;
 }
 
+export interface PlacementUsage {
+  default?: boolean;
+  services: string[];
+  targetId?: string;
+}
+
 export interface Plan {
   actions: Action[];
+  artifacts: ArtifactChoice[];
   catalog: boolean;
   cloudSyncId?: string;
   connections: Record<string, any>;
@@ -2160,14 +2581,20 @@ export interface Plan {
   error: string;
   executable: boolean;
   expiresAt?: string;
+  fromEnvironment: string;
+  fromEnvironmentId: string;
   id: string;
+  kind: string;
+  leftovers: Leftover[];
   manifestId: string;
   manifestRevision: number;
   orgId: string;
   plannedAt?: string;
   problems: Finding[];
   projectId: string;
+  release?: Release;
   revision: string;
+  rollback?: Rollback;
   sources: PlanSource[];
   status: string;
   summary: PlanningSummary;
@@ -2192,6 +2619,7 @@ export interface PlanSource {
   alias: string;
   analysisId: string;
   commitSha: string;
+  fromPlanId?: string;
   inScope: boolean;
   ref?: string;
   repository: string;
@@ -2258,6 +2686,21 @@ export interface Pool {
   name: string;
   orgId: string;
   revision: number;
+}
+
+export interface PoolExpansionPolicy {
+  acceleratorKind?: string;
+  allowedSizes: string[];
+  architecture: string;
+  bootstrapSize: string;
+  connectionId: string;
+  image: string;
+  limits?: ResourceVector;
+  maxServers: number;
+  minServers: number;
+  poolId: string;
+  region: string;
+  systemReserve: ResourceVector;
 }
 
 export interface PoolInputBody {
@@ -2341,6 +2784,7 @@ export interface Project {
   createdAt: string;
   createdBy: string;
   description: string;
+  exclusions: Exclusion[];
   icon: string;
   id: string;
   name: string;
@@ -2379,6 +2823,7 @@ export interface ProjectList {
 }
 
 export interface ProjectView {
+  excluded: Excluded[];
   graph?: Graph;
   projectId: string;
   sources: SourceState[];
@@ -2553,6 +2998,12 @@ export interface Recipe {
   volumeSizeMb?: number;
 }
 
+export interface RecipesGPU {
+  count: number;
+  kind?: string;
+  minMemoryGib?: number;
+}
+
 export interface RecoveryInputBody {
   planId: string;
   review?: string;
@@ -2634,6 +3085,14 @@ export interface RegistryList {
   fitsNotice?: string;
 }
 
+export interface Release {
+  canary?: string[];
+  holdSeconds?: number;
+  steps?: number[];
+  strategy: string;
+  thresholds: Thresholds;
+}
+
 export interface RemoveRouteInputBody {
   revision: number;
 }
@@ -2688,6 +3147,7 @@ export interface ResolvedComponent {
   step: number;
   timeout?: number;
   volume?: Volume;
+  weightCache?: WeightCache;
 }
 
 export interface ResolvedVariable {
@@ -2736,8 +3196,10 @@ export interface ResourceVector {
 
 export interface Resources {
   cpuMillis: number;
+  gpu?: RecipesGPU;
   memoryMb: number;
   perGpu?: ResourceStep;
+  shmMb?: number;
 }
 
 export interface Restore {
@@ -2907,6 +3369,16 @@ export interface RetirementRetryInputBody {
   requestId: string;
 }
 
+export interface ReusedArtifact {
+  architecture?: string;
+  commitSha: string;
+  digest?: string;
+  fromDeploymentId: string;
+  fromEnvironment: string;
+  reference?: string;
+  revision?: string;
+}
+
 export interface Revision {
   createdAt: string;
   createdBy: string;
@@ -2921,6 +3393,17 @@ export interface Revision {
 
 export interface RevisionList {
   revisions: Revision[];
+}
+
+export interface Rollback {
+  reason: string;
+  restoreDeploymentId: string;
+  restoreFinishedAt: string;
+  restorePlanId: string;
+  targetDeploymentId: string;
+  targetPlanId: string;
+  trigger: string;
+  watchId?: string;
 }
 
 export interface RouteBinding {
@@ -3044,6 +3527,7 @@ export interface SaveInputBody {
   manifest?: {
   databaseGateway?: DatabaseGateway;
   defaults?: Defaults;
+  environments?: Record<string, any>;
   federation?: Federation;
   gateways?: Record<string, any>;
   held?: Held;
@@ -3059,6 +3543,19 @@ export interface SaveInputBody {
 export interface Scale {
   max: number;
   min: number;
+}
+
+export interface ScalingPool {
+  policy?: CapacityPolicy;
+  pool?: Pool;
+}
+
+export interface ScalingPoolInputBody {
+  acceleratorKind?: string;
+  expectedRevision: number;
+  name: string;
+  policy: CapacityPolicy;
+  template: PoolExpansionPolicy;
 }
 
 export interface Server {
@@ -3202,8 +3699,10 @@ export interface Service {
 
 export interface ServiceConfig {
   appliedInputs?: AppliedInputs;
+  artifact?: ReusedArtifact;
   build?: string;
   buildTarget?: BuildTarget;
+  capacityIntent?: CapacityIntent;
   catalog?: Recipe;
   cloudPlacement?: CloudPlacement;
   cloudSqlNetwork?: CloudSQLApplicationNetwork;
@@ -3217,7 +3716,9 @@ export interface ServiceConfig {
   execution: string;
   farp?: FarpConfig;
   framework?: string;
+  frontendDemand?: FrontendDemand;
   gateway?: GatewayRoute[];
+  gpu?: GPUPlacement;
   healthPath?: string;
   image?: string;
   internal?: boolean;
@@ -3314,6 +3815,13 @@ export interface SignInInputBody {
 
 export interface Size {
   cpu: number;
+  gpu?: ManifestGPU;
+  memory: number;
+  shm?: number;
+}
+
+export interface SizeEdit {
+  cpu: number;
   memory: number;
 }
 
@@ -3361,7 +3869,7 @@ export interface SourceCounts {
 }
 
 export interface SourceList {
-  sources: Source[];
+  sources: DiscoverySource[];
 }
 
 export interface SourceRef {
@@ -3375,7 +3883,7 @@ export interface SourceRef {
 export interface SourceState {
   latest?: Analysis;
   shown?: Analysis;
-  source: Source;
+  source: DiscoverySource;
 }
 
 export interface SpendReport {
@@ -3410,6 +3918,7 @@ export interface Step {
   op: string;
   order: number;
   provider: string;
+  revision?: string;
   startedAt?: string;
   status: string;
   subject: string;
@@ -3520,6 +4029,13 @@ export interface TenantList {
   tenants: Tenant[];
 }
 
+export interface Thresholds {
+  errorRate: number;
+  errorRateDelta: number;
+  minRequests: number;
+  p95LatencyRatio: number;
+}
+
 export interface TrafficReport {
   end: string;
   previousTotal: number;
@@ -3569,6 +4085,11 @@ export interface UpdateTargetInputBody {
 export interface UpdateVariableInputBody {
   secret?: boolean;
   value: string;
+}
+
+export interface Usage {
+  cloudId: string;
+  environments: EnvironmentUsage[];
 }
 
 export interface UsageSource {
@@ -3649,6 +4170,11 @@ export interface WebhookEndpointSecret {
   secret: string;
 }
 
+export interface WeightCache {
+  kubernetesSizeMb: number;
+  mountPath: string;
+}
+
 export interface Workspace {
   ecosystem: string;
   evidence: Evidence[];
@@ -3697,8 +4223,11 @@ export interface ZoneList {
 
 export interface ZoneOverview {
   hostnames: HostnameUse[];
+  parentZoneId?: string;
+  proofZoneId?: string;
   registrationId?: string;
   state: string;
+  subdomains: string[];
   wildcards: boolean;
   zone?: Zone;
 }

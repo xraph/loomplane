@@ -28,6 +28,18 @@ func meters(executors map[string]deployments.Executor) map[string]usage.Meter {
 	return out
 }
 
+// revisionMeters are the executors whose clouds report one revision's
+// traffic, which a canary is judged on.
+func revisionMeters(executors map[string]deployments.Executor) map[string]deployments.RevisionMeter {
+	out := map[string]deployments.RevisionMeter{}
+	for name, exec := range executors {
+		if m, ok := exec.(deployments.RevisionMeter); ok {
+			out[name] = m
+		}
+	}
+	return out
+}
+
 // titled names a provider as the catalog does, or by its name.
 func titled(catalog *provider.Registry) func(string) string {
 	return func(name string) string {

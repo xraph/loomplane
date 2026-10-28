@@ -68,7 +68,7 @@ func TestAIPermissionNames(t *testing.T) {
 
 func TestEnsureTenantAddsAIToExistingRoles(t *testing.T) {
 	store := memory.New()
-	if err := NewAuthorizer(nil, store, nil).EnsureTenant(t.Context(), org); err != nil {
+	if err := NewAuthorizer(&recordingEngine{}, store, nil).EnsureTenant(t.Context(), org); err != nil {
 		t.Fatal(err)
 	}
 	// Rewrite every role as the catalog was before the AI permissions.
@@ -88,7 +88,7 @@ func TestEnsureTenantAddsAIToExistingRoles(t *testing.T) {
 		}
 	}
 	// A fresh process has an empty ensured cache and runs the new catalog.
-	if err := NewAuthorizer(nil, store, nil).EnsureTenant(t.Context(), org); err != nil {
+	if err := NewAuthorizer(&recordingEngine{}, store, nil).EnsureTenant(t.Context(), org); err != nil {
 		t.Fatal(err)
 	}
 	for _, def := range Catalog() {

@@ -60,6 +60,16 @@ type Projects interface {
 // found. discovery.PgStore is the real one.
 type Analyses = discovery.Graphs
 
+// CommitAnalyzer finds or queues an analysis of one exact commit of a
+// source, for a promotion from an environment whose release of that
+// commit wasn't recorded. *discovery.CommitAnalyzer is the real one.
+type CommitAnalyzer interface {
+	// AnalyzeCommit returns a succeeded or in-flight analysis of exactly
+	// commitSHA, or queues one pinned to it.
+	AnalyzeCommit(ctx context.Context, orgID string, src *discovery.Source, commitSHA, createdBy string) (*discovery.Analysis, error)
+	Analysis(ctx context.Context, orgID, id string) (*discovery.Analysis, error)
+}
+
 // Manifests reads manifest revisions.
 type Manifests interface {
 	Latest(ctx context.Context, orgID, projectID string) (*manifests.Revision, error)
@@ -110,6 +120,8 @@ type Service struct {
 	store             Store
 	projects          Projects
 	analyses          Analyses
+	commits           CommitAnalyzer
+	history           ReleaseHistory
 	manifests         Manifests
 	providers         *provider.Registry
 	clouds            Connections
@@ -118,6 +130,7 @@ type Service struct {
 	audit             projects.Auditor
 	window            time.Duration
 	now               func() time.Time
+	sleep             func(ctx context.Context, d time.Duration) error
 	warn              func(msg string, err error)
 	telemetry         *telemetry.Recorder
 	dbTrust           func() ([]plane.TrustKey, error)
@@ -139,8 +152,16 @@ type Deps struct {
 	Store             Store
 	Projects          Projects
 	Analyses          Analyses
-	Manifests         Manifests
-	Providers         *provider.Registry
+	// Commits analyzes a commit a promotion's source environment runs
+	// that nothing analyzed. Nil refuses such a promotion with
+	// ErrNoAnalysis.
+	Commits CommitAnalyzer
+	// History reads what an environment's releases ran, so a promotion
+	// deploys the From environment's images where it can. Nil disables
+	// image reuse: every service builds again.
+	History   ReleaseHistory
+	Manifests Manifests
+	Providers *provider.Registry
 	// Connections are the organization's cloud accounts. Nil means none,
 	// so no plan that needs one is executable.
 	Connections Connections
@@ -187,9 +208,9 @@ func NewService(d Deps) *Service {
 	return &Service{
 		capacityTemplates: d.CapacityTemplates, capacity: d.Capacity, capacityPrincipal: d.CapacityPrincipal,
 		appliedInputs: d.AppliedInputs, cloudSyncWorkflow: d.CloudSyncWorkflow,
-		cloudProfiles: d.CloudProfiles, store: d.Store, projects: d.Projects, analyses: d.Analyses, manifests: d.Manifests,
+		cloudProfiles: d.CloudProfiles, store: d.Store, projects: d.Projects, analyses: d.Analyses, commits: d.Commits, history: d.History, manifests: d.Manifests,
 		providers: d.Providers, clouds: d.Connections, authz: d.Authz, workflow: d.Workflow, audit: d.Audit,
-		window: d.Window, now: time.Now, warn: warn, telemetry: d.Telemetry, dbTrust: d.DatabaseGatewayTrust,
+		window: d.Window, now: time.Now, sleep: waitFor, warn: warn, telemetry: d.Telemetry, dbTrust: d.DatabaseGatewayTrust,
 		kinds: d.Kinds, endpoints: d.Endpoints, dialer: d.Dialer,
 		features: d.Features, inputs: d.CatalogInputs,
 	}
@@ -206,6 +227,11 @@ type CreatePlanInput struct {
 	// Scope names the repositories the plan moves. Empty means all of
 	// them; the rest stay at what's deployed.
 	Scope []string `json:"scope,omitempty"`
+	// From is the environment to promote from. Each in-scope source is
+	// pinned to the commit (and analysis) that environment's last
+	// successful deployment of it recorded, and the plan uses the manifest
+	// revision that environment last deployed with; the rest are held.
+	From string `json:"from,omitempty"`
 }
 
 // DecideInput approves or rejects a plan.
@@ -216,10 +242,23 @@ type DecideInput struct {
 	Note     string `json:"note,omitempty"`
 }
 
+// refuseAutomation keeps Loomplane automation off the paths people take.
+// Its role lets it approve a deployment, so the code, not only Warden,
+// limits it to the automatic rollback.
+func refuseAutomation(p security.Principal) error {
+	if p.IsSystem() {
+		return fmt.Errorf("%w: %s only rolls back automatically", security.ErrForbidden, security.SystemActorName)
+	}
+	return nil
+}
+
 // Create plans an environment from the project's current manifest, the
 // latest analysis of each repository it moves, and what's deployed of each
 // it holds. It supersedes the environment's open plan, if any.
 func (s *Service) Create(ctx context.Context, p security.Principal, projectID string, in CreatePlanInput) (*Plan, error) {
+	if err := refuseAutomation(p); err != nil {
+		return nil, err
+	}
 	if err := s.authz.Require(ctx, p, security.DeploymentCreate, projectID); err != nil {
 		return nil, err
 	}
@@ -229,6 +268,9 @@ func (s *Service) Create(ctx context.Context, p security.Principal, projectID st
 	env, err := s.environment(ctx, p.OrgID, projectID, strings.TrimSpace(in.Environment))
 	if err != nil {
 		return nil, err
+	}
+	if from := strings.TrimSpace(in.From); from != "" {
+		return s.createFrom(ctx, p, projectID, env, from, in)
 	}
 	rev, err := s.manifests.Latest(ctx, p.OrgID, projectID)
 	if errors.Is(err, manifests.ErrNotFound) {
@@ -248,16 +290,61 @@ func (s *Service) Create(ctx context.Context, p security.Principal, projectID st
 			return nil, err
 		}
 	}
+	return s.start(ctx, p, &Plan{
+		OrgID: p.OrgID, ProjectID: projectID, EnvironmentID: env.ID, Environment: env.Name,
+		Sources: pinned, Catalog: in.Catalog, ManifestID: rev.ID, ManifestRevision: rev.Revision,
+	})
+}
 
+// createFrom plans env from what the from environment runs: its commits
+// and the manifest revision it last deployed with.
+func (s *Service) createFrom(ctx context.Context, p security.Principal, projectID string, env *projects.Environment, from string, in CreatePlanInput) (*Plan, error) {
+	switch {
+	case in.Catalog:
+		return nil, fmt.Errorf("%w: a standalone catalog plan can't promote from another environment", ErrInvalid)
+	case from == env.Name:
+		return nil, fmt.Errorf("%w: %s can't promote from itself", ErrInvalid, env.Name)
+	}
+	source, err := s.environment(ctx, p.OrgID, projectID, from)
+	if err != nil {
+		return nil, err
+	}
+	pinned, deployed, err := s.pinFrom(ctx, p, projectID, env, source, in.Scope)
+	if err != nil {
+		return nil, err
+	}
+	var rev *manifests.Revision
+	if deployed != nil {
+		if rev, err = s.manifests.Get(ctx, p.OrgID, deployed.ManifestID); err != nil {
+			return nil, fmt.Errorf("load manifest revision %d, which %s deployed with: %w", deployed.ManifestRevision, source.Name, err)
+		}
+		if rev.Manifest == nil {
+			return nil, fmt.Errorf("%w: manifest revision %d, which %s deployed with, no longer parses", ErrInvalid, rev.Revision, source.Name)
+		}
+	} else {
+		rev, err = s.manifests.Latest(ctx, p.OrgID, projectID)
+		if errors.Is(err, manifests.ErrNotFound) {
+			return nil, ErrNoManifest
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
+	return s.start(ctx, p, &Plan{
+		OrgID: p.OrgID, ProjectID: projectID, EnvironmentID: env.ID, Environment: env.Name,
+		Kind: KindPromotion, From: source.Name, FromEnvironmentID: source.ID,
+		Sources: pinned, ManifestID: rev.ID, ManifestRevision: rev.Revision,
+	})
+}
+
+// start stores a new plan, superseding the environment's open plan, and
+// starts planning it.
+func (s *Service) start(ctx context.Context, p security.Principal, plan *Plan) (*Plan, error) {
 	id, err := typeid.Generate("plan")
 	if err != nil {
 		return nil, fmt.Errorf("generate plan id: %w", err)
 	}
-	plan := &Plan{
-		ID: id.String(), OrgID: p.OrgID, ProjectID: projectID, EnvironmentID: env.ID, Environment: env.Name,
-		Status: StatusPlanning, Sources: pinned, Catalog: in.Catalog,
-		ManifestID: rev.ID, ManifestRevision: rev.Revision, CreatedBy: p.UserID, CreatedAt: s.now().UTC(),
-	}
+	plan.ID, plan.Status, plan.CreatedBy, plan.CreatedAt = id.String(), StatusPlanning, p.UserID, s.now().UTC()
 	plan.normalize()
 	superseded, err := s.store.CreatePlan(ctx, plan)
 	if err != nil {
@@ -279,10 +366,11 @@ func (s *Service) Create(ctx context.Context, p security.Principal, projectID st
 	}
 	if s.audit != nil {
 		s.audit.Record(ctx, projects.AuditEvent{
-			Action: "plan.create", Severity: "info", ProjectID: projectID, Principal: p,
+			Action: "plan.create", Severity: "info", ProjectID: plan.ProjectID, Principal: p,
 			Attributes: map[string]any{
-				"plan_id": plan.ID, "environment": env.Name, "sources": lockDescription(pinned),
+				"plan_id": plan.ID, "environment": plan.Environment, "sources": lockDescription(plan.Sources),
 				"manifest_revision": plan.ManifestRevision, "superseded": superseded,
+				"kind": plan.Kind, "from": plan.From,
 			},
 		})
 	}
@@ -318,7 +406,9 @@ func (s *Service) pin(ctx context.Context, orgID, projectID string, env *project
 			return nil, lerr
 		}
 		for _, a := range list {
-			if a.Status == discovery.StatusSucceeded {
+			// A pinned analysis is of an older commit a promotion
+			// deployed, not the branch's latest.
+			if a.Status == discovery.StatusSucceeded && !a.Pinned {
 				latest[src.ID] = a
 				break
 			}
@@ -349,20 +439,15 @@ func lockDescription(ps []PlanSource) []string {
 }
 
 // settle waits a moment for the workflow to move a plan on, and returns it
-// as it is then. It never fails: the plan as it was is a fine answer.
+// as it is then. It never fails: the plan as it was is a fine answer. It
+// polls at most settleWait/settlePoll times as well as until the clock
+// passes settleWait, so a test that stops the clock still returns.
 func (s *Service) settle(ctx context.Context, plan *Plan) *Plan {
 	status := plan.Status
-	deadline := time.NewTimer(settleWait)
-	defer deadline.Stop()
-	tick := time.NewTicker(settlePoll)
-	defer tick.Stop()
-	for {
-		select {
-		case <-ctx.Done():
+	deadline := s.now().Add(settleWait)
+	for polls := 0; polls < int(settleWait/settlePoll) && s.now().Before(deadline); polls++ {
+		if s.sleep(ctx, settlePoll) != nil {
 			return plan
-		case <-deadline.C:
-			return plan
-		case <-tick.C:
 		}
 		got, err := s.store.GetPlan(ctx, plan.OrgID, plan.ID)
 		if err != nil {
@@ -372,6 +457,7 @@ func (s *Service) settle(ctx context.Context, plan *Plan) *Plan {
 			return got
 		}
 	}
+	return plan
 }
 
 // List returns a page of a project's plans older than before, newest
@@ -420,6 +506,9 @@ func (s *Service) Reject(ctx context.Context, p security.Principal, id string, i
 }
 
 func (s *Service) decide(ctx context.Context, p security.Principal, id string, approve bool, in DecideInput) (*Plan, error) {
+	if err := refuseAutomation(p); err != nil {
+		return nil, err
+	}
 	if err := s.authz.Require(ctx, p, security.DeploymentApprove, ""); err != nil {
 		return nil, err
 	}
@@ -539,6 +628,14 @@ type revisionInput struct {
 	Manifest      string        `json:"manifest"`
 	Deployed      []deployedRef `json:"deployed"`
 	Result        *Result       `json:"result"`
+	// From and Rollback are left out when empty, so a release's revision
+	// is what it was before promotions and rollbacks.
+	From     string    `json:"from,omitempty"`
+	Rollback *Rollback `json:"rollback,omitempty"`
+	// Exclusions are the project's exclusions that matched a service, so
+	// excluding or including one makes a plan stale. Omitted when empty,
+	// so plans from before exclusions keep their revision.
+	Exclusions []string `json:"exclusions,omitempty"`
 }
 
 type deployedRef struct {
@@ -554,6 +651,38 @@ type deployedRef struct {
 
 // compute plans a plan from its pinned commits and manifest, against what's
 // deployed now, and returns the result with its revision.
+// excluded reads the project's exclusions and returns the graph services
+// they exclude, by ID, each true when it's kept running, and the
+// exclusions that matched, as "kind:match[:keep]" for the revision.
+func (s *Service) excluded(ctx context.Context, plan *Plan, g *graph.Graph) (keep map[string]bool, used []string, err error) {
+	if s.projects == nil || plan.ProjectID == "" {
+		return nil, nil, nil
+	}
+	proj, err := s.projects.GetProject(ctx, plan.OrgID, plan.ProjectID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("load the project's exclusions: %w", err)
+	}
+	if len(proj.Exclusions) == 0 {
+		return nil, nil, nil
+	}
+	_, matched := graph.Exclude(g, proj.ExclusionRules())
+	keep = map[string]bool{}
+	for _, x := range matched {
+		i := slices.IndexFunc(proj.Exclusions, func(e projects.Exclusion) bool { return e.Kind == x.Rule.Kind && e.Match == x.Rule.Match })
+		kept := i >= 0 && proj.Exclusions[i].KeepRunning
+		keep[x.Service.ID] = kept
+		ref := x.Rule.Kind + ":" + x.Rule.Match
+		if kept {
+			ref += ":keep"
+		}
+		if !slices.Contains(used, ref) {
+			used = append(used, ref)
+		}
+	}
+	slices.Sort(used)
+	return keep, used, nil
+}
+
 func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, error) {
 	// An older plan the backfill couldn't pin would plan from an empty
 	// graph, so it fails instead of proposing to tear down what's deployed.
@@ -576,6 +705,10 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 		}
 	}
 	g := graph.Compose(parts)
+	excluded, exclusions, err := s.excluded(ctx, plan, g)
+	if err != nil {
+		return nil, "", err
+	}
 	rev, err := s.manifests.Get(ctx, plan.OrgID, plan.ManifestID)
 	if err != nil {
 		return nil, "", fmt.Errorf("load the manifest: %w", err)
@@ -679,13 +812,19 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 			Catalog: plan.Catalog, Routes: routes, Zones: zones, DatabaseGatewayTrust: trust,
 			Federation: federation, CloudPlacements: placed, UnverifiedPlacements: unverifiedPlacements(resolved, plan.Environment, composed, assignment, options), CapacityIntents: intents,
 			Environment: plan.Environment, Graph: g, Manifest: resolved, Providers: s.providers, Bindings: bindings,
-			Connections: options, Chosen: chosen, Held: held,
+			Connections: options, Chosen: chosen, Held: held, Excluded: excluded,
 			Kinds: s.kinds, Endpoints: s.checkEndpoints(ctx, plan.OrgID, plan.Environment, resolved),
 			FabriqPostgres: fabriqPostgres, Features: s.features, Inputs: inputs,
 		})
 	}
 	if resolutionErr == nil && poolRelocation(bindings, placements) {
 		result = appliedCloudPlan(bindings, assignment, "", options, s.providers, placements, routes)
+		planRelease(Input{Environment: plan.Environment, Manifest: resolved, Providers: s.providers}, result)
+	}
+	// Asked before anything is reserved, so a store that can't tell fails
+	// the plan with nothing to undo.
+	if rampErr := s.rampingCanary(ctx, plan, result); rampErr != nil {
+		return nil, "", rampErr
 	}
 	if routeErr = s.reserveRoutedPlacements(ctx, plan, result, bindings); routeErr != nil {
 		result.Problems = append(result.Problems, Finding{Code: "route-capacity", Message: routeErr.Error()})
@@ -696,9 +835,23 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 		result.Executable = false
 	}
 	s.checkBackupPreview(ctx, plan, result)
+	warnings, err := s.promotionWarnings(ctx, plan, rev.Revision)
+	if err != nil {
+		return nil, "", err
+	}
+	result.Warnings = append(result.Warnings, warnings...)
+	released, reuse, err := s.releasedImages(ctx, plan)
+	if err != nil {
+		return nil, "", fmt.Errorf("read what %s ran: %w", plan.From, err)
+	}
+	if reuse {
+		s.applyArtifacts(plan, result, released, plan.From)
+	}
 	in := revisionInput{
 		EnvironmentID: plan.EnvironmentID, Environment: plan.Environment, Sources: plan.Sources,
 		Manifest: rev.Digest, Deployed: make([]deployedRef, 0, len(bindings)), Result: result,
+		From: plan.From, Rollback: plan.Rollback,
+		Exclusions: exclusions,
 	}
 	for _, b := range bindings {
 		in.Deployed = append(in.Deployed, deployedRef{
@@ -883,13 +1036,16 @@ func (s *Service) Plan(ctx context.Context, orgID, planID string) (string, error
 	if plan.Status != StatusPlanning {
 		return plan.Status, nil
 	}
+	failure, err := s.awaitAnalyses(ctx, plan)
+	if err != nil {
+		return "", err
+	}
+	if failure != "" {
+		return s.failPlanning(ctx, orgID, planID, failure)
+	}
 	result, revision, err := s.compute(ctx, plan)
 	if permanent(err) {
-		if ferr := s.store.FailPlanning(ctx, orgID, planID, err.Error(), s.now().UTC()); ferr != nil {
-			return "", ferr
-		}
-		s.telemetry.Planned(StatusFailed)
-		return StatusFailed, nil
+		return s.failPlanning(ctx, orgID, planID, err.Error())
 	}
 	if err != nil {
 		return "", err
@@ -913,6 +1069,15 @@ func (s *Service) Plan(ctx context.Context, orgID, planID string) (string, error
 	}
 	s.telemetry.Planned(plan.Status)
 	return plan.Status, nil
+}
+
+// failPlanning settles a plan that can never be planned as failed, saying why.
+func (s *Service) failPlanning(ctx context.Context, orgID, planID, reason string) (string, error) {
+	if err := s.store.FailPlanning(ctx, orgID, planID, reason, s.now().UTC()); err != nil {
+		return "", err
+	}
+	s.telemetry.Planned(StatusFailed)
+	return StatusFailed, nil
 }
 
 func (s *Service) status(ctx context.Context, orgID, planID string) (string, error) {
@@ -952,7 +1117,7 @@ func (s *Service) ApplyDecision(ctx context.Context, orgID, planID string, d orc
 	if checkErr := s.checkBackupDecision(ctx, plan, d); checkErr != nil {
 		return "", checkErr
 	}
-	_, revision, err := s.compute(ctx, plan)
+	result, revision, err := s.compute(ctx, plan)
 	if failsPlanning(err) {
 		return s.settleAs(ctx, plan, StatusStale, d.By, unreadableInputs(err), now)
 	}
@@ -963,7 +1128,16 @@ func (s *Service) ApplyDecision(ctx context.Context, orgID, planID string, d orc
 		return "", err
 	}
 	if revision != plan.Revision {
-		return s.settleAs(ctx, plan, StatusStale, d.By, "What's deployed changed after this plan was made. Plan again.", now)
+		note := "What's deployed changed after this plan was made. Plan again."
+		// A canary ramping since says so: planning again is blocked until
+		// it finishes.
+		for _, f := range result.Problems {
+			if f.Code == codeCanaryInProgress {
+				note = f.Message
+				break
+			}
+		}
+		return s.settleAs(ctx, plan, StatusStale, d.By, note, now)
 	}
 	if d.Actor != nil {
 		if d.Actor.OrgID != orgID || d.Actor.UserID != d.By || d.Actor.ReadOnly {
@@ -1020,10 +1194,14 @@ type ManifestDraft struct {
 // It saves nothing: the caller reviews it and saves it as the first
 // revision.
 func (s *Service) DraftManifest(ctx context.Context, p security.Principal, projectID string) (*ManifestDraft, error) {
+	if err := refuseAutomation(p); err != nil {
+		return nil, err
+	}
 	if err := s.authz.Require(ctx, p, security.ProjectRead, projectID); err != nil {
 		return nil, err
 	}
-	if _, err := s.projects.GetProject(ctx, p.OrgID, projectID); err != nil {
+	proj, err := s.projects.GetProject(ctx, p.OrgID, projectID)
+	if err != nil {
 		return nil, err
 	}
 	g, states, err := discovery.ProjectGraph(ctx, s.analyses, p.OrgID, projectID)
@@ -1033,6 +1211,8 @@ func (s *Service) DraftManifest(ctx context.Context, p security.Principal, proje
 	if !slices.ContainsFunc(states, func(st discovery.SourceState) bool { return st.Shown != nil }) {
 		return nil, ErrNoAnalysis
 	}
+	// An excluded service is never proposed.
+	g, _ = graph.Exclude(g, proj.ExclusionRules())
 	m := Draft(g, s.providers)
 	data, err := manifest.Marshal(m)
 	if err != nil {
@@ -1067,6 +1247,9 @@ type ChooseConnectionInput struct {
 // ChooseConnection sets which connection an environment deploys to a
 // cloud with. It's an admin's choice, like connecting the account.
 func (s *Service) ChooseConnection(ctx context.Context, p security.Principal, projectID, environment, cloud string, in ChooseConnectionInput) (map[string]string, error) {
+	if err := refuseAutomation(p); err != nil {
+		return nil, err
+	}
 	if err := s.authz.Require(ctx, p, security.CloudAccountManage, projectID); err != nil {
 		return nil, err
 	}

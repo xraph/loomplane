@@ -195,12 +195,26 @@ export function CloudLoading({ children }: { children: ReactNode }) {
 // Servers, operations and syncs report free-form statuses. These name the
 // tone StatusPill draws each in, and a status as a word rather than a key.
 const liveStates = ["ready", "succeeded", "applied", "completed", "synced"]
-const movingStates = ["running", "applying", "provisioning", "prepare"]
-const waitingStates = ["pending", "waiting", "preview", "draining"]
+const movingStates = [
+  "running",
+  "applying",
+  "provisioning",
+  "prepare",
+  "reserved",
+  "enrolling",
+]
+const waitingStates = [
+  "pending",
+  "waiting",
+  "preview",
+  "draining",
+  "awaiting_approval",
+]
 
 export function stateTone(status: string): Tone {
   if (liveStates.includes(status)) return "live"
-  if (status === "failed" || status === "error") return "failed"
+  if (status === "failed" || status === "error" || status === "blocked")
+    return "failed"
   if (movingStates.includes(status)) return "flight"
   if (waitingStates.includes(status) || status.endsWith("_pending"))
     return "waiting"
