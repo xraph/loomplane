@@ -17435,6 +17435,9 @@
               "$ref": "#/components/schemas/QuantizationView"
             }
           },
+          "query_prefix": {
+            "type": "string"
+          },
           "revision": {
             "type": "string"
           },
@@ -17508,6 +17511,9 @@
             "type": "integer"
           },
           "publisher": {
+            "type": "string"
+          },
+          "query_prefix": {
             "type": "string"
           },
           "summary": {

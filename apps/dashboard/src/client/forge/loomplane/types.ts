@@ -1319,6 +1319,7 @@ export interface EntryDetail {
   parameters: number;
   publisher: string;
   quantizations: QuantizationView[];
+  queryPrefix?: string;
   revision: string;
   summary: string;
   tasks: string[];
@@ -1338,6 +1339,7 @@ export interface EntrySummary {
   minGpuMemoryGib: number;
   parameters: number;
   publisher: string;
+  queryPrefix?: string;
   summary: string;
   tasks: string[];
   testedOn: string[];

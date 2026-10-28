@@ -7,6 +7,23 @@ export type Snippet = { id: string; label: string; code: string }
 
 const base = `$MODEL_URL`
 
+/**
+ * str is text as a string literal JSON, Python and JavaScript all read the
+ * same way, so a served name with a quote or a backslash in it stays one
+ * string.
+ */
+function str(text: string): string {
+  return JSON.stringify(text)
+}
+
+/**
+ * inSingleQuotes makes text safe inside a shell's single quotes, where a
+ * single quote ends the string: each one becomes '\''.
+ */
+function inSingleQuotes(text: string): string {
+  return text.replace(/'/g, `'\\''`)
+}
+
 function chat(model: string): Snippet[] {
   return [
     {
@@ -16,7 +33,7 @@ function chat(model: string): Snippet[] {
   -H "Authorization: Bearer $MODEL_API_KEY" \\
   -H "Content-Type: application/json" \\
   -d '{
-    "model": "${model}",
+    "model": ${inSingleQuotes(str(model))},
     "messages": [{"role": "user", "content": "Say hello."}]
   }'`,
     },
@@ -32,7 +49,7 @@ client = OpenAI(
 )
 
 reply = client.chat.completions.create(
-    model="${model}",
+    model=${str(model)},
     messages=[{"role": "user", "content": "Say hello."}],
 )
 print(reply.choices[0].message.content)`,
@@ -48,7 +65,7 @@ const client = new OpenAI({
 })
 
 const reply = await client.chat.completions.create({
-  model: "${model}",
+  model: ${str(model)},
   messages: [{ role: "user", content: "Say hello." }],
 })
 console.log(reply.choices[0].message.content)`,
@@ -56,7 +73,8 @@ console.log(reply.choices[0].message.content)`,
   ]
 }
 
-function embedding(model: string): Snippet[] {
+function embedding(model: string, prefix = ""): Snippet[] {
+  const query = str(`${prefix}How do I reset my password?`)
   return [
     {
       id: "curl",
@@ -64,7 +82,7 @@ function embedding(model: string): Snippet[] {
       code: `curl "${base}/v1/embeddings" \\
   -H "Authorization: Bearer $MODEL_API_KEY" \\
   -H "Content-Type: application/json" \\
-  -d '{"model": "${model}", "input": ["How do I reset my password?"]}'`,
+  -d '{"model": ${inSingleQuotes(str(model))}, "input": [${inSingleQuotes(query)}]}'`,
     },
     {
       id: "python",
@@ -78,8 +96,8 @@ client = OpenAI(
 )
 
 result = client.embeddings.create(
-    model="${model}",
-    input=["How do I reset my password?"],
+    model=${str(model)},
+    input=[${query}],
 )
 print(len(result.data[0].embedding))`,
     },
@@ -94,8 +112,8 @@ const client = new OpenAI({
 })
 
 const result = await client.embeddings.create({
-  model: "${model}",
-  input: ["How do I reset my password?"],
+  model: ${str(model)},
+  input: [${query}],
 })
 console.log(result.data[0].embedding.length)`,
     },
@@ -157,7 +175,7 @@ function speech(model: string): Snippet[] {
       label: "curl",
       code: `curl "${base}/v1/audio/transcriptions" \\
   -H "Authorization: Bearer $MODEL_API_KEY" \\
-  -F model="${model}" \\
+  -F '${inSingleQuotes(`model=${model}`)}' \\
   -F file=@meeting.wav`,
     },
     {
@@ -172,7 +190,7 @@ client = OpenAI(
 )
 
 with open("meeting.wav", "rb") as audio:
-    text = client.audio.transcriptions.create(model="${model}", file=audio)
+    text = client.audio.transcriptions.create(model=${str(model)}, file=audio)
 print(text.text)`,
     },
     {
@@ -187,7 +205,7 @@ const client = new OpenAI({
 })
 
 const text = await client.audio.transcriptions.create({
-  model: "${model}",
+  model: ${str(model)},
   file: fs.createReadStream("meeting.wav"),
 })
 console.log(text.text)`,
@@ -196,10 +214,15 @@ console.log(text.text)`,
 }
 
 /** snippets are the examples for a task, each calling the model by name. */
-export function snippets(task: ExampleTask, model: string): Snippet[] {
+export function snippets(
+  task: ExampleTask,
+  model: string,
+  /** What an embedding model wants in front of each query. */
+  queryPrefix = ""
+): Snippet[] {
   switch (task) {
     case "embedding":
-      return embedding(model)
+      return embedding(model, queryPrefix)
     case "rerank":
       return rerank()
     case "speech-to-text":

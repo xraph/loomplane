@@ -760,3 +760,33 @@ func (h *fakeHub) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	refuse(http.StatusUnauthorized, "RepoNotFound")
 }
+
+func TestEntrySummaryCarriesTheQueryPrefix(t *testing.T) {
+	b := newBrowse(t, browseRegistry(t, ""), developer, nil)
+	want := ""
+	if e, ok := registry.Default().Entry(bgeSmall); ok && e.Embedding != nil {
+		want = e.Embedding.QueryPrefix
+	}
+	if want == "" {
+		t.Fatalf("%s has no query prefix in the registry", bgeSmall)
+	}
+	d, err := b.svc.Entry(context.Background(), member, bgeSmall)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.QueryPrefix != want {
+		t.Errorf("bge query prefix %q, want %q", d.QueryPrefix, want)
+	}
+	// A chat model has none, and the field is left out of its JSON.
+	d, err = b.svc.Entry(context.Background(), member, qwen7B)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(d.EntrySummary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.QueryPrefix != "" || strings.Contains(string(raw), "query_prefix") {
+		t.Errorf("qwen: prefix %q, JSON %s", d.QueryPrefix, raw)
+	}
+}

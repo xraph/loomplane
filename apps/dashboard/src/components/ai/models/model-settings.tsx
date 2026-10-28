@@ -27,6 +27,7 @@ import {
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import { Spinner } from "@/components/ui/spinner"
+import { useOnce } from "@/lib/use-once"
 
 export function ModelSettings(props: ModelProps) {
   const { status, production } = props
@@ -154,7 +155,10 @@ function Remove({
   const [refused, setRefused] = useState("")
   const server = status.connectionName || "its server"
 
-  async function go() {
+  const once = useOnce()
+  const go = () => once("remove", goNow)
+
+  async function goNow() {
     setConfirming(false)
     setRefused("")
     notify(undefined)

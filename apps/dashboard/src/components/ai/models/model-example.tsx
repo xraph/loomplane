@@ -11,7 +11,6 @@ import { Button } from "@/components/ui/button"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { snippets, taskTitles } from "@/lib/model-examples"
 import { exampleTasks, servedNameOf } from "@/lib/models"
-import { Link } from "@/lib/router"
 
 export function ModelExample({ status, projectId }: ModelProps) {
   const manifest = useQuery(useManifestsCurrent, { path: { id: projectId } })
@@ -42,11 +41,8 @@ export function ModelExample({ status, projectId }: ModelProps) {
           key={task}
           task={task}
           served={served}
-          entryId={
-            status.entry.id && !status.entry.id.startsWith("hf:")
-              ? status.entry.id
-              : undefined
-          }
+          entryId={status.entry.id}
+          queryPrefix={status.entry.queryPrefix}
           multiple={tasks.length > 1}
         />
       ))}
@@ -58,15 +54,20 @@ function Task({
   task,
   served,
   entryId,
+  queryPrefix,
   multiple,
 }: {
   task: Parameters<typeof snippets>[0]
   served: string
-  /** The registry entry, for its card; none for a pasted repo. */
-  entryId?: string
+  entryId: string
+  /** What the entry wants in front of each query, from the registry. */
+  queryPrefix?: string
   multiple: boolean
 }) {
-  const list = snippets(task, served)
+  const list = snippets(task, served, queryPrefix)
+  // A repo pasted from Hugging Face isn't in the registry, so nobody knows
+  // its prefix: its card on Hugging Face says.
+  const pasted = /^hf:([^@]+)/.exec(entryId)?.[1]
   return (
     <section aria-label={taskTitles[task]} className="grid min-w-0 gap-2">
       {multiple && (
@@ -82,24 +83,32 @@ function Task({
           .
         </p>
       )}
-      {task === "embedding" && (
-        <p className="text-[12.5px] text-muted-foreground">
-          Many embedding models want a prefix on each query, such as{" "}
-          <span className="font-mono">&quot;query: &quot;</span>, and some want
-          another on documents. Add it to the text you send. The model&apos;s
-          card says which{entryId ? ": " : "."}
-          {entryId && (
-            <Link
-              to="/ai/models/$"
-              params={{ _splat: entryId }}
+      {task === "embedding" &&
+        (queryPrefix ? (
+          <p className="text-[12.5px] text-muted-foreground">
+            It wants{" "}
+            <span className="font-mono whitespace-pre-wrap text-foreground">
+              {JSON.stringify(queryPrefix)}
+            </span>{" "}
+            in front of each query, and the examples add it. Send documents as
+            they are.
+          </p>
+        ) : pasted ? (
+          <p className="text-[12.5px] text-muted-foreground">
+            Many embedding models want a prefix on each query, such as{" "}
+            <span className="font-mono">&quot;query: &quot;</span>. Loomplane
+            doesn&apos;t know this one&apos;s, so check{" "}
+            <a
+              href={`https://huggingface.co/${pasted}`}
+              target="_blank"
+              rel="noreferrer"
               className="font-medium text-primary hover:underline"
             >
-              open its card
-            </Link>
-          )}
-          {entryId && "."}
-        </p>
-      )}
+              its card on Hugging Face
+            </a>
+            .
+          </p>
+        ) : null)}
       {task === "rerank" && (
         <p className="text-[12.5px] text-muted-foreground">
           Reranking uses the engine&apos;s own{" "}

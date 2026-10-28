@@ -51,6 +51,7 @@ import {
 } from "@/lib/models"
 import { unlinkedServices } from "@/lib/fabriq"
 import { useOrganization } from "@/lib/organization"
+import { useOnce } from "@/lib/use-once"
 import { Link } from "@/lib/router"
 import { cn } from "@/lib/utils"
 
@@ -141,9 +142,12 @@ function StateLine({
   const stillServes = !!status.internalUrl
   const state = modelState(status.state, stillServes)
   const busy = retry.isPending || cancel.isPending
+  const once = useOnce()
   const why = status.canEdit ? undefined : noEdit(status, production)
 
-  async function tryAgain() {
+  const tryAgain = () => once("retry", tryAgainNow)
+
+  async function tryAgainNow() {
     setRefused("")
     notify(undefined)
     try {
@@ -162,7 +166,9 @@ function StateLine({
     }
   }
 
-  async function stopWaiting() {
+  const stopWaiting = () => once("cancel", stopWaitingNow)
+
+  async function stopWaitingNow() {
     setRefused("")
     notify(undefined)
     try {
@@ -305,7 +311,10 @@ function UpdateAvailable({
   }>()
   const pin = status.pin ? shortPin(status.pin) : "the new pin"
 
-  async function go() {
+  const once = useOnce()
+  const go = () => once("move-to-pin", goNow)
+
+  async function goNow() {
     setConfirming(false)
     setResult(undefined)
     try {
@@ -444,19 +453,23 @@ function CostCard({
   environmentId,
   production,
 }: ModelProps) {
-  const { can } = useOrganization()
   const invalidate = useInvalidate()
   const update = useMutation(useAiModelDeploymentsUpdate)
   const row = status.deployment
   const label = costLabel(status.cost, status.connectionName)
   const cpu = label.kind === "cpu"
   const projected = wholeDollars(status.projectedUsd)
-  // The server lets whoever may change the model set its price. A budget
-  // alert goes to admins, so only an admin sets one.
-  const manage = can("ai:manage")
 
+  // The fields start from the row as read, and start again from it when
+  // its revision changes: a refetch, or someone else's save.
   const [budget, setBudget] = useState(row?.monthlyBudgetUsd ?? "")
   const [hourly, setHourly] = useState(row?.hourlyUsdOverride ?? "")
+  const [revision, setRevision] = useState(row?.revision)
+  if (row?.revision !== revision) {
+    setRevision(row?.revision)
+    setBudget(row?.monthlyBudgetUsd ?? "")
+    setHourly(row?.hourlyUsdOverride ?? "")
+  }
   const [saved, setSaved] = useState<{ text: string; failed?: boolean }>()
 
   async function save(body: {
@@ -488,15 +501,10 @@ function CostCard({
   const handmade = !row
     ? "This model was added to the manifest by hand, so Loomplane keeps no budget or price for it."
     : undefined
-  const priceWhy =
+  // Whoever may change the model sets its price and its budget alert:
+  // ai:edit, or ai:manage in production, as the server checks.
+  const why =
     handmade ?? (status.canEdit ? undefined : noEdit(status, production))
-  const budgetWhy =
-    handmade ??
-    (!status.canEdit
-      ? noEdit(status, production)
-      : manage
-        ? undefined
-        : "Only a workspace admin sets a budget alert. The alert goes to admins.")
   const unknown = label.kind === "unknown"
   const month = monthLabel(status)
 
@@ -560,7 +568,7 @@ function CostCard({
               prefix="$"
               value={hourly}
               placeholder={unknown ? "For example 1.20" : "Optional"}
-              disabled={!!priceWhy}
+              disabled={!!why}
               onChange={setHourly}
               onSave={() => void save({ hourlyUsdOverride: hourly.trim() })}
               busy={update.isPending}
@@ -570,9 +578,6 @@ function CostCard({
               For a GPU Loomplane can&apos;t price, or one you pay a different
               price for. Clear it to go back to the list price.
             </p>
-            {priceWhy && !handmade && (
-              <p className="text-[12.5px] text-weld-ink">{priceWhy}</p>
-            )}
           </div>
           <div className="grid min-w-0 content-start gap-1.5">
             <label htmlFor="model-budget" className="text-[12.5px] font-medium">
@@ -583,7 +588,7 @@ function CostCard({
               prefix="$"
               value={budget}
               placeholder="Optional"
-              disabled={!!budgetWhy}
+              disabled={!!why}
               onChange={setBudget}
               onSave={() => void save({ monthlyBudgetUsd: budget.trim() })}
               busy={update.isPending}
@@ -592,13 +597,15 @@ function CostCard({
             <p className="text-[12.5px] text-muted-foreground">
               We&apos;ll tell admins before it passes this. We never stop it.
             </p>
-            {budgetWhy && !handmade && budgetWhy !== priceWhy && (
-              <p className="text-[12.5px] text-weld-ink">{budgetWhy}</p>
-            )}
           </div>
-          {handmade && (
-            <p className="text-[12.5px] text-muted-foreground sm:col-span-2">
-              {handmade}
+          {why && (
+            <p
+              className={cn(
+                "text-[12.5px] sm:col-span-2",
+                handmade ? "text-muted-foreground" : "text-weld-ink"
+              )}
+            >
+              {why}
             </p>
           )}
           {saved && (

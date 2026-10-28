@@ -209,6 +209,10 @@ type EntrySummary struct {
 	// could be read: whether it fits a GPU or CPU target the workspace has
 	// or can create.
 	FitsHere *bool `json:"fits_here,omitempty"`
+	// QueryPrefix is what an embedding model wants in front of each query,
+	// such as "query: ". Empty when it wants none, or isn't an embedding
+	// model.
+	QueryPrefix string `json:"query_prefix,omitempty"`
 }
 
 // RegistryList is the registry as one query sees it.
@@ -423,6 +427,9 @@ func (s *Service) view(e registry.Entry) entryView {
 		Tasks: slices.Clone(e.Tasks), Parameters: e.Parameters, ContextLength: e.ContextLength,
 		License: licenseOf(e), Gated: e.Gated, Verification: registry.StatusEstimated, TestedOn: []string{},
 	}}
+	if e.Embedding != nil {
+		v.summary.QueryPrefix = e.Embedding.QueryPrefix
+	}
 	if !listed {
 		v.summary.Verification = registry.StatusUntested
 	}

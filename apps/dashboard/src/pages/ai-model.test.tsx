@@ -414,7 +414,168 @@ it("says who can change a production model", async () => {
   expect(state).toHaveTextContent(
     "Only a workspace admin can change models in production."
   )
+  // The server's rule decides, for the price and the budget alike.
   expect(screen.getByLabelText("Budget alert per month")).toBeDisabled()
+  expect(screen.getByLabelText("It costs me per hour")).toBeDisabled()
+  expect(
+    within(screen.getByRole("region", { name: "Cost" })).getByText(
+      "Only a workspace admin can change models in production."
+    )
+  ).toBeInTheDocument()
+})
+
+it("lets a developer set the budget of a model they may change", async () => {
+  // ai:edit without ai:manage, on a staging model the server says they
+  // may change.
+  perms.granted = new Set(["ai:read", "ai:edit"])
+  const asked = routes(modelStatus(), {
+    [`PATCH ${modelPath}`]: () => Response.json(modelStatus()),
+  })
+  await openModel()
+  const budget = screen.getByLabelText("Budget alert per month")
+  expect(budget).toBeEnabled()
+  expect(document.body.textContent).not.toContain("Only a workspace admin")
+  await userEvent.type(budget, "300")
+  await userEvent.click(screen.getByRole("button", { name: "Save budget" }))
+  await waitFor(() =>
+    expect(asked.find((a) => a.method === "PATCH")?.body).toEqual({
+      monthly_budget_usd: "300",
+      revision: 3,
+    })
+  )
+})
+
+it("shows a budget someone else saved once the model is read again", async () => {
+  let current = modelStatus()
+  routes(undefined, {
+    [modelPath]: () => Response.json(current),
+    [`PATCH ${modelPath}`]: () => {
+      // Someone else saved a budget first; the page reads the model again.
+      current = modelStatus({
+        deployment: deployment({
+          revision: 5,
+          monthly_budget_usd: "450",
+          hourly_usd_override: "2.10",
+        }),
+      })
+      return Response.json(
+        {
+          code: "stale",
+          message:
+            "qwen2-5-7b-instruct changed since you read it. Load it again",
+        },
+        { status: 409 }
+      )
+    },
+  })
+  await openModel()
+  await userEvent.type(screen.getByLabelText("Budget alert per month"), "300")
+  await userEvent.click(screen.getByRole("button", { name: "Save budget" }))
+  await waitFor(() =>
+    expect(screen.getByLabelText("Budget alert per month")).toHaveValue("450")
+  )
+  expect(screen.getByLabelText("It costs me per hour")).toHaveValue("2.10")
+  expect(
+    screen.getByText(/Someone else changed this model/)
+  ).toBeInTheDocument()
+})
+
+it("sends one retry, one cancel, one move to the pin and one removal for two quick clicks", async () => {
+  const held = <T,>() => {
+    let release: (v: T) => void = () => {}
+    const p = new Promise<T>((resolve) => {
+      release = resolve
+    })
+    return { p, release }
+  }
+  const retry = held<Response>()
+  const asked = routes(
+    modelStatus({
+      state: "needs_attention",
+      deployment: deployment({ phase: "needs_attention" }),
+    }),
+    {
+      [`POST ${modelPath}/retry`]: () => retry.p,
+      [`DELETE ${modelPath}/waiting`]: () => new Promise(() => {}),
+    }
+  )
+  await openModel()
+  const state = screen.getByRole("region", { name: "State" })
+  const twice = (b: HTMLElement) =>
+    act(() => {
+      b.click()
+      b.click()
+    })
+  twice(within(state).getByRole("button", { name: "Retry" }))
+  await waitFor(() =>
+    expect(asked.filter((a) => a.url.pathname.endsWith("/retry"))).toHaveLength(
+      1
+    )
+  )
+  retry.release(Response.json(modelStatus()))
+  await waitFor(() =>
+    expect(
+      within(screen.getByRole("region", { name: "State" })).getByRole(
+        "button",
+        { name: "Cancel" }
+      )
+    ).toBeEnabled()
+  )
+  twice(
+    within(screen.getByRole("region", { name: "State" })).getByRole("button", {
+      name: "Cancel",
+    })
+  )
+  await waitFor(() =>
+    expect(
+      asked.filter((a) => a.url.pathname.endsWith("/waiting"))
+    ).toHaveLength(1)
+  )
+
+  fresh()
+  const pinned = routes(
+    modelStatus({
+      update_available: true,
+      pin: { update_available: true, model: "Qwen/Qwen2.5-7B-Instruct" },
+    }),
+    {
+      [`POST ${modelPath}/move-to-pin`]: () => new Promise(() => {}),
+      [`DELETE ${modelPath}`]: () => new Promise(() => {}),
+    }
+  )
+  await openModel()
+  await userEvent.click(
+    screen.getByRole("button", { name: /^Move to Qwen\/Qwen2.5-7B-Instruct/ })
+  )
+  twice(
+    within(await screen.findByRole("alertdialog")).getByRole("button", {
+      name: "Plan the move",
+    })
+  )
+  await waitFor(() =>
+    expect(
+      pinned.filter((a) => a.url.pathname.endsWith("/move-to-pin"))
+    ).toHaveLength(1)
+  )
+  await userEvent.click(screen.getByRole("tab", { name: "Settings" }))
+  await userEvent.click(
+    within(screen.getByRole("region", { name: "Remove" })).getByRole("button", {
+      name: "Remove qwen2-5-7b-instruct",
+    })
+  )
+  twice(
+    within(await screen.findByRole("alertdialog")).getByRole("button", {
+      name: "Remove qwen2-5-7b-instruct",
+    })
+  )
+  await waitFor(() =>
+    expect(pinned.filter((a) => a.method === "DELETE")).toHaveLength(1)
+  )
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  expect(pinned.filter((a) => a.method === "DELETE")).toHaveLength(1)
+  expect(
+    pinned.filter((a) => a.url.pathname.endsWith("/move-to-pin"))
+  ).toHaveLength(1)
 })
 
 it("shows the server's sentence after a cancel", async () => {
@@ -446,6 +607,7 @@ it("shows MODEL_URL examples for each task", async () => {
     modelStatus({
       entry: summary({
         tasks: ["chat", "embedding", "rerank", "speech-to-text"],
+        query_prefix: "query: ",
       }),
     })
   )
@@ -477,10 +639,13 @@ it("shows MODEL_URL examples for each task", async () => {
   expect(
     within(embeddings).getByLabelText("Embeddings in curl")
   ).toHaveTextContent("$MODEL_URL/v1/embeddings")
-  expect(embeddings).toHaveTextContent("a prefix on each query")
+  // The registry's prefix, said and sent.
+  expect(embeddings).toHaveTextContent(
+    'It wants "query: " in front of each query'
+  )
   expect(
-    within(embeddings).getByRole("link", { name: "open its card" })
-  ).toHaveAttribute("href", "/ai/models/Qwen/Qwen2.5-7B-Instruct")
+    within(embeddings).getByLabelText("Embeddings in curl")
+  ).toHaveTextContent('"input": ["query: How do I reset my password?"]')
 
   expect(
     within(screen.getByRole("region", { name: "Reranking" })).getByLabelText(
@@ -673,4 +838,23 @@ it("keeps loading, denied, missing and failed apart", async () => {
   expect(
     await screen.findByRole("button", { name: "Retry" })
   ).toBeInTheDocument()
+})
+
+it("sends a pasted repo's queries to its card for the prefix", async () => {
+  routes(
+    modelStatus({
+      entry: summary({
+        id: "hf:acme/tiny-embed@0123456789ab",
+        tasks: ["embedding"],
+      }),
+    })
+  )
+  await openModel(`${page}&tab=example`)
+  const embeddings = screen.getByRole("region", { name: "Embeddings" })
+  expect(
+    within(embeddings).getByRole("link", { name: "its card on Hugging Face" })
+  ).toHaveAttribute("href", "https://huggingface.co/acme/tiny-embed")
+  expect(
+    within(embeddings).getByLabelText("Embeddings in curl")
+  ).toHaveTextContent('"input": ["How do I reset my password?"]')
 })
