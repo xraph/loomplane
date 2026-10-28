@@ -27,4 +27,5 @@ export {
   MagnifyingGlassIcon as NoMatchIcon,
   WebhooksLogoIcon as WebhooksIcon,
   SlidersHorizontalIcon as AISettingsIcon,
+  BrainIcon as ModelsIcon,
 } from "@phosphor-icons/react"

@@ -131,7 +131,27 @@ it("shows Settings under AI for members", () => {
     a.textContent?.trim(),
     a.getAttribute("href"),
   ])
-  expect(links).toEqual([["Settings", "/ai/settings"]])
+  expect(links).toContainEqual(["Settings", "/ai/settings"])
   // The workspace's own Settings stay in the main group.
   expect(screen.getAllByText("Settings")).toHaveLength(2)
+})
+
+function aiLinks() {
+  const group = screen
+    .getByText("AI")
+    .closest('[data-sidebar="group"]') as HTMLElement
+  return Array.from(group.querySelectorAll("a")).map((a) => [
+    a.textContent?.trim(),
+    a.getAttribute("href"),
+  ])
+}
+
+it("adds Models to the AI group", () => {
+  access.denied = ["ai:manage"]
+  sidebar(true)
+  // Models first, then the AI settings.
+  expect(aiLinks()).toEqual([
+    ["Models", "/ai/models"],
+    ["Settings", "/ai/settings"],
+  ])
 })
