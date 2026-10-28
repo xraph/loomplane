@@ -86,10 +86,17 @@ type outboxMessage struct {
 	subject, emailBody                string
 	// alwaysEmail ignores the deployment email preference.
 	alwaysEmail bool
+	// need is the organization permission the notice is sent under, when
+	// project read isn't it: ai:manage for a model's budget notice.
+	need *security.Permission
 }
 
 func (s *Service) wirePayload(item *outboxItem) ([]byte, error) {
-	if item.kind != kindDeployment {
+	switch item.kind {
+	case kindDeployment:
+	case kindModelBudget:
+		return s.modelBudgetWire(item)
+	default:
 		return s.domainWire(item)
 	}
 	var payload DeploymentPayload
@@ -123,9 +130,12 @@ func (s *Service) process(ctx context.Context, item *outboxItem) error {
 		}
 		item.wire = wire
 	}
-	build := deploymentMessage
-	if item.kind != kindDeployment {
-		build = domainMessage
+	build := domainMessage
+	switch item.kind {
+	case kindDeployment:
+		build = deploymentMessage
+	case kindModelBudget:
+		build = modelBudgetMessage
 	}
 	d, err := build(item)
 	if err != nil {
@@ -151,7 +161,7 @@ func (s *Service) process(ctx context.Context, item *outboxItem) error {
 		item.webhookDone = true
 	}
 	p := security.Principal{OrgID: item.org, UserID: item.user}
-	email, authorized, err := s.recipient(ctx, p, d.project)
+	email, authorized, err := s.recipient(ctx, p, d.project, d.need)
 	if err != nil {
 		return err
 	}
@@ -197,8 +207,10 @@ func (s *Service) process(ctx context.Context, item *outboxItem) error {
 }
 
 // recipient rechecks the grant a notice is sent under: project read for a
-// deployment, organization cloud management for a domain notice.
-func (s *Service) recipient(ctx context.Context, p security.Principal, project string) (address string, authorized bool, err error) {
+// deployment, organization cloud management for a domain notice, and need
+// when the notice names one, as a model's budget notice does with
+// ai:manage.
+func (s *Service) recipient(ctx context.Context, p security.Principal, project string, need *security.Permission) (address string, authorized bool, err error) {
 	var email string
 	if project == "" {
 		err = s.pg.QueryRow(ctx, `SELECT u.email FROM authsome_users u JOIN authsome_members m ON m.user_id=u.id WHERE m.org_id=$1 AND u.id=$2 AND u.app_id=$3 AND u.deleted_at IS NULL AND NOT u.banned LIMIT 1`, p.OrgID, p.UserID, s.cfg.Identity.AppID).Scan(&email)
@@ -215,7 +227,10 @@ func (s *Service) recipient(ctx context.Context, p security.Principal, project s
 		return "", false, fmt.Errorf("notifications authorization unavailable")
 	}
 	permission, resource := security.ProjectRead, project
-	if project == "" {
+	switch {
+	case need != nil:
+		permission, resource = *need, ""
+	case project == "":
 		permission, resource = security.OrganizationCloudManage, p.OrgID
 	}
 	err = s.authz.Require(ctx, p, permission, resource)

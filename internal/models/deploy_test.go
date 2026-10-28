@@ -21,6 +21,7 @@ import (
 	"github.com/xraph/loomplane/internal/models/engines"
 	"github.com/xraph/loomplane/internal/models/hfhub"
 	"github.com/xraph/loomplane/internal/models/registry"
+	"github.com/xraph/loomplane/internal/notifications"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/recipes"
@@ -310,6 +311,9 @@ func (m *memDeployments) Update(_ context.Context, d *Deployment) error {
 	if old.Revision != d.Revision {
 		return ErrStale
 	}
+	// As in Postgres, accrual and budget notices aren't Update's to write.
+	d.Month, d.MonthCostUSD, d.AccruedAt = old.Month, old.MonthCostUSD, old.AccruedAt
+	d.AlertedProjected, d.AlertedCrossed = old.AlertedProjected, old.AlertedCrossed
 	d.Revision++
 	if m.now != nil {
 		d.UpdatedAt = m.now()
@@ -330,8 +334,81 @@ func (m *memDeployments) Delete(_ context.Context, org, project, env, resource s
 	return nil
 }
 
-func (m *memDeployments) Accrue(context.Context, *Deployment, string, string, time.Time) error {
-	return errors.New("not in these tests")
+// byID finds a row by organization and ID. The caller holds mu.
+func (m *memDeployments) byID(org, id string) *Deployment {
+	for _, d := range m.rows {
+		if d.OrgID == org && d.ID == id {
+			return d
+		}
+	}
+	return nil
+}
+
+// Accrue is PgStore's Accrue in memory: the read's AccruedAt must still be
+// the stored one, an older month is stale and a newer one starts from 0.
+func (m *memDeployments) Accrue(_ context.Context, d *Deployment, month, addUSD string, at time.Time) error {
+	add, err := costAmount.parse(addUSD)
+	if err != nil {
+		return err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	row := m.byID(d.OrgID, d.ID)
+	switch {
+	case row == nil:
+		return ErrNotFound
+	case !row.AccruedAt.Equal(d.AccruedAt):
+		return fmt.Errorf("%w: it was accrued again since it was read", ErrStale)
+	case month < row.Month:
+		return fmt.Errorf("%w: it's accruing %s already", ErrStale, row.Month)
+	}
+	total := add
+	if month == row.Month && row.MonthCostUSD != "" {
+		cost, perr := costAmount.parse(row.MonthCostUSD)
+		if perr != nil {
+			return perr
+		}
+		total += cost
+	}
+	row.Month, row.MonthCostUSD, row.AccruedAt = month, formatUSD(total), at.UTC()
+	d.Month, d.MonthCostUSD, d.AccruedAt = row.Month, row.MonthCostUSD, row.AccruedAt
+	return nil
+}
+
+// MarkAlerted is PgStore's MarkAlerted in memory. The send gets no
+// transaction: these tests' notices are recorded by a fake.
+func (m *memDeployments) MarkAlerted(ctx context.Context, org, id, kind, month string, send func(context.Context, notifications.Execer) error) (bool, error) {
+	if _, err := alertedColumn(kind); err != nil {
+		return false, err
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	row := m.byID(org, id)
+	if row == nil {
+		return false, ErrNotFound
+	}
+	field := &row.AlertedProjected
+	if kind == notifications.ModelBudgetCrossed {
+		field = &row.AlertedCrossed
+	}
+	if *field == month {
+		return false, nil
+	}
+	if err := send(ctx, nil); err != nil {
+		return false, err
+	}
+	*field = month
+	return true, nil
+}
+
+func (m *memDeployments) Organizations(context.Context) ([]string, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	seen := map[string]bool{}
+	for _, d := range m.rows {
+		seen[d.OrgID] = true
+	}
+	return slices.Sorted(maps.Keys(seen)), nil
 }
 
 // fakeGuard is the workspace's token lock: it counts its holders and

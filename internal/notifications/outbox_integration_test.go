@@ -687,3 +687,136 @@ func TestRegistrationResultOutboxNotifiesCloudManagers(t *testing.T) {
 		t.Fatal("registration email was not delivered")
 	}
 }
+
+// aiAdmins grants ai:manage to the listed users only, and everything else
+// to everyone. It can take the grant away again.
+type aiAdmins struct {
+	mu    sync.Mutex
+	users map[string]bool
+}
+
+func (a *aiAdmins) Require(_ context.Context, p security.Principal, permission security.Permission, _ string) error {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if permission == security.AIManage && !a.users[p.UserID] {
+		return security.ErrForbidden
+	}
+	return nil
+}
+
+func (a *aiAdmins) revoke(user string) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	delete(a.users, user)
+}
+
+// TestModelBudgetNoticesAreForAdmins: Rulings M8 and M24. A budget notice
+// queued inside its caller's transaction goes to admins, who hold
+// ai:manage, in the inbox and by email. A developer gets no inbox row
+// and no email, and the organization gets one webhook. An admin who loses
+// ai:manage no longer sees it, and a transaction that rolls back queues
+// nothing.
+func TestModelBudgetNoticesAreForAdmins(t *testing.T) {
+	svc, messages := domainNoticeService(t)
+	ctx := t.Context()
+	authz := &aiAdmins{users: map[string]bool{"user-a": true}}
+	svc.SetAuthorizer(authz)
+	notice := ModelBudgetNotice{
+		OrgID: "org-a", ProjectID: "project-a", EnvironmentID: "env-prod", DeploymentID: "aimodel_1", Resource: "llama",
+		Month: "2026-11", Kind: ModelBudgetProjected, ProjectedUSD: "676.80", BudgetUSD: "500.00",
+	}
+	enqueue := func(commit bool) {
+		tx, err := svc.pg.BeginTx(ctx, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = svc.EnqueueModelBudgetNoticeIn(ctx, tx, notice); err != nil {
+			_ = tx.Rollback()
+			t.Fatal(err)
+		}
+		if !commit {
+			if err = tx.Rollback(); err != nil {
+				t.Fatal(err)
+			}
+			return
+		}
+		if err = tx.Commit(); err != nil {
+			t.Fatal(err)
+		}
+	}
+	enqueue(false)
+	var count int
+	if err := svc.pg.QueryRow(ctx, `SELECT count(*) FROM loomplane_notification_outbox`).Scan(&count); err != nil || count != 0 {
+		t.Fatalf("a rolled back notice queued %d rows: %v", count, err)
+	}
+	enqueue(true)
+	enqueue(true) // the same notice again adds nothing
+	if err := svc.pg.QueryRow(ctx, `SELECT count(*) FROM loomplane_notification_outbox WHERE kind='model.budget' AND project_id='project-a'`).Scan(&count); err != nil || count != 2 {
+		t.Fatalf("outbox rows: %d %v", count, err)
+	}
+	if err := svc.drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+
+	admin, developer := security.Principal{OrgID: "org-a", UserID: "user-a"}, security.Principal{OrgID: "org-a", UserID: "user-c"}
+	list, err := svc.List(ctx, admin)
+	if err != nil || len(list.Items) != 1 {
+		t.Fatalf("admin's inbox: %+v %v", list, err)
+	}
+	item := list.Items[0]
+	if item.Title != "llama is on track to cost $676.80 this month" ||
+		item.Body != "Its budget is $500.00. Loomplane won't stop it. Open the model to change where it runs or remove it." ||
+		item.ActionURL != "https://loomplane.example.com/projects/project-a/ai/models/llama?environment=env-prod" || item.ProjectID != "project-a" ||
+		item.EmailStatus != "sent" {
+		t.Fatalf("inbox item: %+v", item)
+	}
+	for _, text := range []string{item.Title, item.Body} {
+		if strings.ContainsAny(text, "\u2014\u2013") {
+			t.Errorf("a dash in %q", text)
+		}
+	}
+	select {
+	case body := <-messages:
+		if !strings.Contains(body, "Subject: Loomplane: llama is on track to cost $676.80 this month") || !strings.Contains(body, "user-a@example.com") {
+			t.Fatalf("budget email: %s", body)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("the admin's budget email was not delivered")
+	}
+
+	// The developer gets no inbox row and no email.
+	var inboxDone, complete bool
+	var emailState string
+	if err = svc.pg.QueryRow(ctx, `SELECT inbox_done,email_state,completed_at IS NOT NULL FROM loomplane_notification_outbox WHERE user_id='user-c'`).Scan(&inboxDone, &emailState, &complete); err != nil {
+		t.Fatal(err)
+	}
+	if !inboxDone || emailState != "skipped" || !complete {
+		t.Fatalf("developer: inbox_done=%t email=%s complete=%t", inboxDone, emailState, complete)
+	}
+	if other, lerr := svc.List(ctx, developer); lerr != nil || len(other.Items) != 0 {
+		t.Fatalf("the developer sees: %+v %v", other, lerr)
+	}
+	if err = svc.pg.QueryRow(ctx, `SELECT count(*) FROM herald_inbox`).Scan(&count); err != nil || count != 1 {
+		t.Fatalf("inbox rows: %d %v", count, err)
+	}
+	select {
+	case <-messages:
+		t.Fatal("the developer received budget email")
+	default:
+	}
+
+	// One webhook for the organization, of the model group's type.
+	var eventType string
+	if err = svc.pg.QueryRow(ctx, `SELECT type FROM relay_events`).Scan(&eventType); err != nil || eventType != "model.budget_projected" {
+		t.Fatalf("webhook: %s %v", eventType, err)
+	}
+
+	// An admin who loses ai:manage no longer sees it.
+	authz.revoke("user-a")
+	if list, err = svc.List(ctx, admin); err != nil || len(list.Items) != 0 {
+		t.Errorf("former admin's inbox: %+v %v", list, err)
+	}
+	if err = svc.MarkRead(ctx, admin, item.ID); !errors.Is(err, security.ErrForbidden) {
+		t.Errorf("former admin marks it read: %v", err)
+	}
+}

@@ -24,6 +24,7 @@ import (
 	"github.com/xraph/loomplane/internal/gpus"
 	"github.com/xraph/loomplane/internal/manifests"
 	"github.com/xraph/loomplane/internal/models"
+	"github.com/xraph/loomplane/internal/notifications"
 	"github.com/xraph/loomplane/internal/orchestration"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/platform"
@@ -98,6 +99,7 @@ func TestModelHooksAreRegistered(t *testing.T) {
 		forge.ProvideValue(c, new(cloudprofiles.Service)),
 		forge.ProvideValue(c, new(deployments.CatalogAccess)),
 		forge.ProvideValue(c, new(deployments.VaultResourceSecrets)),
+		forge.ProvideValue(c, new(notifications.Service)),
 		forge.ProvideValue[security.PrincipalVerifier](c, rejectAll{}),
 		forge.ProvideValue(c, eng),
 	} {
@@ -112,17 +114,26 @@ func TestModelHooksAreRegistered(t *testing.T) {
 	if err = ext.Register(app); err != nil {
 		t.Fatal(err)
 	}
-	// The reconcile job is registered, and Start schedules it every minute
-	// on Loomplane's queue.
-	if _, ok := eng.Registry().Get(aiext.JobReconcileModels); !ok {
-		t.Errorf("no %s job: %v", aiext.JobReconcileModels, eng.Registry().Names())
+	// The reconcile and accrual jobs are registered, and Start schedules
+	// them on Loomplane's queue: the reconcile every minute, the accrual
+	// every five.
+	for _, name := range []string{aiext.JobReconcileModels, aiext.JobAccrueModels} {
+		if _, ok := eng.Registry().Get(name); !ok {
+			t.Errorf("no %s job: %v", name, eng.Registry().Names())
+		}
 	}
 	if err = ext.Start(t.Context()); err != nil {
 		t.Fatal(err)
 	}
 	crons, err := eng.CronStore().ListCrons(t.Context())
-	if err != nil || len(crons) != 1 || crons[0].JobName != aiext.JobReconcileModels || crons[0].Schedule != "@every 1m" ||
-		crons[0].Queue != orchestration.Queue {
+	schedules := map[string]string{}
+	for _, entry := range crons {
+		if entry.Queue != orchestration.Queue {
+			t.Errorf("cron %s on queue %q", entry.JobName, entry.Queue)
+		}
+		schedules[entry.JobName] = entry.Schedule
+	}
+	if err != nil || len(crons) != 2 || schedules[aiext.JobReconcileModels] != "@every 1m" || schedules[aiext.JobAccrueModels] != "@every 5m" {
 		t.Errorf("crons %+v, %v", crons, err)
 	}
 
@@ -171,9 +182,10 @@ func keys[V any](m map[string]V) []string {
 	return out
 }
 
-// With AI off, the reconcile's cron entry left from when it was on keeps
-// firing, and its job runs and does nothing instead of failing for want
-// of a handler. Off deletes no schedule, so a replica with AI on during a
+// With AI off, the reconcile's and the accrual's cron entries left from
+// when it was on keep firing, and their jobs run and do nothing instead of
+// failing for want of a handler. With AI off the accrual counts nothing
+// and sends no budget notice. Off deletes no schedule, so a replica with AI on during a
 // rollout keeps its own.
 func TestAIOffQuietsItsSchedule(t *testing.T) {
 	dispatcher, err := dispatch.New(dispatch.WithStore(memory.New()))
@@ -185,7 +197,7 @@ func TestAIOffQuietsItsSchedule(t *testing.T) {
 		t.Fatal(err)
 	}
 	ctx := t.Context()
-	for _, name := range []string{aiext.JobReconcileModels, orchestration.JobDriftCheck} {
+	for _, name := range []string{aiext.JobReconcileModels, aiext.JobAccrueModels, orchestration.JobDriftCheck} {
 		if err = engine.RegisterCron(ctx, eng, &cron.Definition[struct{}]{Name: name, JobName: name, Schedule: "@every 1m", Queue: orchestration.Queue}); err != nil {
 			t.Fatal(err)
 		}
@@ -198,21 +210,23 @@ func TestAIOffQuietsItsSchedule(t *testing.T) {
 	if err = off.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
-	run, ok := eng.Registry().Get(aiext.JobReconcileModels)
-	if !ok {
-		t.Fatalf("no %s handler with AI off: %v", aiext.JobReconcileModels, eng.Registry().Names())
-	}
-	// What the cron enqueues runs, and does nothing.
-	for _, payload := range [][]byte{nil, []byte("{}")} {
-		if err = run(ctx, payload); err != nil {
-			t.Errorf("the reconcile with AI off, payload %q: %v", payload, err)
+	for _, name := range []string{aiext.JobReconcileModels, aiext.JobAccrueModels} {
+		run, ok := eng.Registry().Get(name)
+		if !ok {
+			t.Fatalf("no %s handler with AI off: %v", name, eng.Registry().Names())
+		}
+		// What the cron enqueues runs, and does nothing.
+		for _, payload := range [][]byte{nil, []byte("{}")} {
+			if err = run(ctx, payload); err != nil {
+				t.Errorf("%s with AI off, payload %q: %v", name, payload, err)
+			}
 		}
 	}
-	if names := eng.Registry().Names(); len(names) != 1 {
+	if names := eng.Registry().Names(); len(names) != 2 {
 		t.Errorf("AI off registers %v", names)
 	}
 	crons, err := eng.CronStore().ListCrons(ctx)
-	if err != nil || len(crons) != 2 {
+	if err != nil || len(crons) != 3 {
 		t.Errorf("crons %+v, %v", crons, err)
 	}
 }

@@ -175,8 +175,7 @@ func TestStatusCombinesFactsAndCost(t *testing.T) {
 	row := deployLlama(t, d, stagingID)
 	// It ran 2.04 hours this month, at $1.57 an hour.
 	*d.now = time.Date(2026, 11, 15, 0, 0, 0, 0, time.UTC)
-	row.Month, row.MonthCostUSD = "2026-11", "3.2000"
-	if err := d.rows.Update(ctx, row); err != nil {
+	if err := d.rows.Accrue(ctx, row, "2026-11", "3.2000", *d.now); err != nil {
 		t.Fatal(err)
 	}
 

@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/xraph/loomplane/internal/notifications"
 	"github.com/xraph/loomplane/internal/security"
 )
 
@@ -124,7 +125,8 @@ type Deployment struct {
 	MonthCostUSD string    `json:"month_cost_usd"` // four places
 	AccruedAt    time.Time `json:"accrued_at"`
 	// AlertedProjected and AlertedCrossed are the months the last "on track
-	// to cross" and "crossed" budget notices went out for.
+	// to cross" and "crossed" budget notices went out for. Only
+	// MarkAlerted changes them.
 	AlertedProjected string    `json:"-"`
 	AlertedCrossed   string    `json:"-"`
 	Revision         int64     `json:"revision"`
@@ -148,8 +150,9 @@ type Store interface {
 	ListProject(ctx context.Context, orgID, projectID string) ([]*Deployment, error)
 	// Update writes d over the row with d's org and ID when the stored
 	// Revision is d.Revision, and bumps it. ErrStale otherwise. It never
-	// changes the row's project, environment, resource or month's cost:
-	// accrual goes through Accrue. On success d holds the stored row.
+	// changes the row's project, environment, resource, month's cost or
+	// budget notice months: accrual goes through Accrue and notices through
+	// MarkAlerted. On success d holds the stored row.
 	Update(ctx context.Context, d *Deployment) error
 	// Delete deletes one row, or returns ErrNotFound.
 	Delete(ctx context.Context, orgID, projectID, environmentID, resource string) error
@@ -162,6 +165,13 @@ type Store interface {
 	// Accrual leaves Revision alone, so it never makes an edit stale. On
 	// success d holds the new month, cost and AccruedAt.
 	Accrue(ctx context.Context, d *Deployment, month, addUSD string, at time.Time) error
+	// MarkAlerted records that the budget notice of kind ("projected" or
+	// "crossed", notifications.ModelBudget*) went out for month, in one
+	// transaction with send, which queues it there. Under the row's lock
+	// it sends nothing and reports false when the row already says month,
+	// so a retry never sends twice; a send that fails records nothing.
+	// It leaves Revision alone, so it never makes an edit stale.
+	MarkAlerted(ctx context.Context, orgID, id, kind, month string, send func(ctx context.Context, tx notifications.Execer) error) (bool, error)
 }
 
 // WaitingLister is the one read across organizations, for the reconcile
@@ -175,6 +185,9 @@ type WaitingLister interface {
 	// stopped writing: no plan, no message, someone who asked, and no
 	// change since before.
 	Stranded(ctx context.Context, before time.Time) ([]*Deployment, error)
+	// Organizations lists the organizations that have model deployments,
+	// so the accrual cron can read each one's rows through Store.
+	Organizations(ctx context.Context) ([]string, error)
 }
 
 // Money is decimal text, parsed to whole ten-thousandths of a dollar for

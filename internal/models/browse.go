@@ -114,6 +114,14 @@ type Deps struct {
 	// Gateways is told when a project's models change. Nil is noGateways
 	// until SetGateways binds one.
 	Gateways Gateways
+
+	// What the accrual cron reads and sends.
+
+	// Prices reads what an organization's connected GPUs cost, with no
+	// principal. Without it no GPU model's cost is known to the cron.
+	Prices GPUPrices
+	// Budget queues the budget notices admins get. Nil sends none.
+	Budget BudgetNotices
 }
 
 // Service is the model registry as a workspace sees it: what it can

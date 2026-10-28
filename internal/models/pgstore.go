@@ -13,6 +13,7 @@ import (
 	"github.com/xraph/grove/drivers/pgdriver"
 	"go.jetify.com/typeid/v2"
 
+	"github.com/xraph/loomplane/internal/notifications"
 	"github.com/xraph/loomplane/internal/security"
 )
 
@@ -203,6 +204,28 @@ func (s *PgStore) Stranded(ctx context.Context, before time.Time) ([]*Deployment
 		ORDER BY updated_at, id`, before.UTC())
 }
 
+// Organizations implements WaitingLister. It reads only organization IDs
+// across organizations; each one's rows are read through Store.List.
+func (s *PgStore) Organizations(ctx context.Context) ([]string, error) {
+	rows, err := s.db.Query(ctx, `SELECT DISTINCT org_id FROM loomplane_ai_model_deployments ORDER BY org_id`)
+	if err != nil {
+		return nil, fmt.Errorf("list the organizations with model deployments: %w", err)
+	}
+	defer rows.Close() // read-only; Err below reports iteration failures
+	out := []string{}
+	for rows.Next() {
+		var org string
+		if err := rows.Scan(&org); err != nil {
+			return nil, fmt.Errorf("list the organizations with model deployments: %w", err)
+		}
+		out = append(out, org)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list the organizations with model deployments: %w", err)
+	}
+	return out, nil
+}
+
 func (s *PgStore) list(ctx context.Context, query string, args ...any) ([]*Deployment, error) {
 	rows, err := s.db.Query(ctx, query, args...)
 	if err != nil {
@@ -236,14 +259,14 @@ func (s *PgStore) Update(ctx context.Context, d *Deployment) error {
 			entry_id = $4, quantization = $5, engine = $6,
 			monthly_budget_usd = $7::numeric(12, 2), hourly_usd_override = $8::numeric(10, 4), phase = $9,
 			server_cloud_id = $10, server_operation_id = $11, server_name = $12, plan_id = $13, message = $14,
-			request = $15, requested_by = $16, alerted_projected = $17, alerted_crossed = $18,
-			revision = revision + 1, updated_at = $19
+			request = $15, requested_by = $16,
+			revision = revision + 1, updated_at = $17
 		WHERE org_id = $1 AND id = $2 AND revision = $3
 		RETURNING `+deploymentColumns,
 		d.OrgID, d.ID, d.Revision, d.EntryID, d.Quantization, d.Engine,
 		v.budget, v.override, d.Phase,
 		d.ServerCloudID, d.ServerOperationID, d.ServerName, d.PlanID, d.Message,
-		v.request, v.principal, d.AlertedProjected, d.AlertedCrossed, s.now().UTC()))
+		v.request, v.principal, s.now().UTC()))
 	if errors.Is(err, pgx.ErrNoRows) {
 		return s.missingOrStale(ctx, d.OrgID, d.ID)
 	}
@@ -355,4 +378,57 @@ func (s *PgStore) Accrue(ctx context.Context, d *Deployment, month, addUSD strin
 	}
 	d.Month, d.MonthCostUSD, d.AccruedAt = gotMonth, gotCost, gotAt.UTC()
 	return nil
+}
+
+// alertedColumn is the column that keeps the month of a budget notice
+// kind's last notice.
+func alertedColumn(kind string) (string, error) {
+	switch kind {
+	case notifications.ModelBudgetProjected:
+		return "alerted_projected", nil
+	case notifications.ModelBudgetCrossed:
+		return "alerted_crossed", nil
+	}
+	return "", fmt.Errorf("%w: budget notice kind %q", ErrInvalid, kind)
+}
+
+// MarkAlerted implements Store.
+func (s *PgStore) MarkAlerted(ctx context.Context, orgID, id, kind, month string, send func(ctx context.Context, tx notifications.Execer) error) (bool, error) {
+	column, err := alertedColumn(kind)
+	if err != nil {
+		return false, err
+	}
+	if !monthPattern.MatchString(month) {
+		return false, fmt.Errorf("%w: month %q isn't like 2026-11", ErrInvalid, month)
+	}
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return false, fmt.Errorf("mark a budget notice: %w", err)
+	}
+	defer rollback(tx)
+
+	// column is one of alertedColumn's two constants, never input.
+	var stored string
+	err = tx.QueryRow(ctx, `SELECT `+column+` FROM loomplane_ai_model_deployments
+		WHERE org_id = $1 AND id = $2 FOR UPDATE`, orgID, id).Scan(&stored)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, ErrNotFound
+	}
+	if err != nil {
+		return false, fmt.Errorf("lock model deployment: %w", err)
+	}
+	if stored == month {
+		return false, nil
+	}
+	if serr := send(ctx, tx); serr != nil {
+		return false, serr
+	}
+	if _, err = tx.Exec(ctx, `UPDATE loomplane_ai_model_deployments SET `+column+` = $3 WHERE org_id = $1 AND id = $2`,
+		orgID, id, month); err != nil {
+		return false, storeError("mark a budget notice", err)
+	}
+	if err = tx.Commit(); err != nil {
+		return false, fmt.Errorf("mark a budget notice: %w", err)
+	}
+	return true, nil
 }

@@ -90,14 +90,21 @@ func (s *Service) EnqueueRegistrationResult(ctx context.Context, n RegistrationR
 }
 
 func (s *Service) enqueueMembers(ctx context.Context, org, key, kind string, payload []byte) error {
-	_, err := s.pg.Exec(ctx, `INSERT INTO loomplane_notification_outbox(id,org_id,project_id,user_id,deployment_id,attempt,payload,kind)
- SELECT DISTINCT $1::text||':'||m.user_id,m.org_id,'',m.user_id,$1::text||':'||m.user_id,0,$3::jsonb,$4::text FROM authsome_members m JOIN authsome_users u ON u.id=m.user_id
- WHERE m.org_id=$2 AND u.app_id=$5 AND u.deleted_at IS NULL AND NOT u.banned ON CONFLICT DO NOTHING`, key, org, string(payload), kind, s.cfg.Identity.AppID)
+	return s.enqueueMembersIn(ctx, s.pg, org, "", key, kind, payload)
+}
+
+// enqueueMembersIn queues one row per member of org on exec, which may be
+// a transaction. project is the project the notice is about, "" for one
+// that's the organization's.
+func (s *Service) enqueueMembersIn(ctx context.Context, exec Execer, org, project, key, kind string, payload []byte) error {
+	_, err := exec.Exec(ctx, `INSERT INTO loomplane_notification_outbox(id,org_id,project_id,user_id,deployment_id,attempt,payload,kind)
+ SELECT DISTINCT $1::text||':'||m.user_id,m.org_id,$6::text,m.user_id,$1::text||':'||m.user_id,0,$3::jsonb,$4::text FROM authsome_members m JOIN authsome_users u ON u.id=m.user_id
+ WHERE m.org_id=$2 AND u.app_id=$5 AND u.deleted_at IS NULL AND NOT u.banned ON CONFLICT DO NOTHING`, key, org, string(payload), kind, s.cfg.Identity.AppID, project)
 	return err
 }
 
 func (s *Service) registerEventTypes(ctx context.Context) error {
-	definitions := make([]catalog.WebhookDefinition, 0, 5+len(registrationStatuses))
+	definitions := make([]catalog.WebhookDefinition, 0, 7+len(registrationStatuses))
 	for _, status := range []string{"succeeded", "failed"} {
 		definitions = append(definitions, catalog.WebhookDefinition{Name: "deployment." + status, Description: "A deployment attempt completed", Group: "deployment", Version: "2026-10-18"})
 	}
@@ -108,6 +115,9 @@ func (s *Service) registerEventTypes(ctx context.Context) error {
 	for _, status := range registrationStatuses {
 		definitions = append(definitions, catalog.WebhookDefinition{Name: "domain.registration_" + status, Description: "A domain registration ended", Group: "domain", Version: "2026-11-05"})
 	}
+	definitions = append(definitions,
+		catalog.WebhookDefinition{Name: "model.budget_" + ModelBudgetProjected, Description: "A GPU model is on track to pass its monthly budget", Group: "model", Version: "2026-11-26"},
+		catalog.WebhookDefinition{Name: "model.budget_" + ModelBudgetCrossed, Description: "A GPU model passed its monthly budget", Group: "model", Version: "2026-11-26"})
 	for _, definition := range definitions {
 		if _, err := s.relay.RegisterEventType(ctx, definition); err != nil {
 			return err

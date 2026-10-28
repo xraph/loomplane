@@ -20,6 +20,7 @@ import (
 	"github.com/xraph/grove/migrate"
 
 	"github.com/xraph/loomplane/database/migrations"
+	"github.com/xraph/loomplane/internal/notifications"
 	"github.com/xraph/loomplane/internal/security"
 )
 
@@ -130,6 +131,7 @@ func TestCreateGetUpdate(t *testing.T) {
 	got.Phase, got.PlanID, got.Message = PhasePlanned, "plan_1", ""
 	got.Request, got.RequestedBy = nil, security.Principal{}
 	got.HourlyUSDOverride, got.MonthlyBudgetUSD = "1.2345", ""
+	// Budget notice months are MarkAlerted's: Update leaves them.
 	got.AlertedProjected = "2026-11"
 	// What identifies the row never moves, whatever the caller sends.
 	got.ProjectID, got.EnvironmentID, got.Resource = "proj_other", "env_other", "other"
@@ -142,7 +144,7 @@ func TestCreateGetUpdate(t *testing.T) {
 	if got.ProjectID != "proj_1" || got.EnvironmentID != "env_1" || got.Resource != "llama" {
 		t.Fatalf("identity moved: %s/%s/%s", got.ProjectID, got.EnvironmentID, got.Resource)
 	}
-	if got.Request != nil || got.RequestedBy != (security.Principal{}) || got.HourlyUSDOverride != "1.2345" || got.MonthlyBudgetUSD != "" || got.AlertedProjected != "2026-11" {
+	if got.Request != nil || got.RequestedBy != (security.Principal{}) || got.HourlyUSDOverride != "1.2345" || got.MonthlyBudgetUSD != "" || got.AlertedProjected != "" {
 		t.Fatalf("updated fields: %+v", got)
 	}
 	again, err := st.Get(ctx, "org_a", "proj_1", "env_1", "llama")
@@ -515,5 +517,88 @@ func TestReaperDeletesAnEnvironmentsRows(t *testing.T) {
 		if _, err = st.Get(ctx, d.OrgID, d.ProjectID, d.EnvironmentID, d.Resource); err != nil {
 			t.Errorf("%s/%s: %v", d.OrgID, d.EnvironmentID, err)
 		}
+	}
+}
+
+// TestMarkAlertedSendsOnceInItsTransaction: Ruling M24. The notice is
+// queued in the transaction that records it, so a send that fails
+// records nothing and a retry after a success sends nothing. It leaves
+// Revision alone, and an edit read before it neither goes stale nor
+// undoes it.
+func TestMarkAlertedSendsOnceInItsTransaction(t *testing.T) {
+	ctx := context.Background()
+	st, _ := scratchStore(t)
+	if _, err := st.db.Exec(ctx, `CREATE TABLE sent_notices (kind TEXT NOT NULL, month TEXT NOT NULL)`); err != nil {
+		t.Fatal(err)
+	}
+	d := llamaRow("org_a", "env_1")
+	if err := st.Create(ctx, d); err != nil {
+		t.Fatal(err)
+	}
+	edit, err := st.Get(ctx, "org_a", "proj_1", "env_1", "llama")
+	if err != nil {
+		t.Fatal(err)
+	}
+	queue := func(fail bool) func(context.Context, notifications.Execer) error {
+		return func(ctx context.Context, tx notifications.Execer) error {
+			if _, xerr := tx.Exec(ctx, `INSERT INTO sent_notices VALUES ('projected', '2026-11')`); xerr != nil {
+				return xerr
+			}
+			if fail {
+				return errors.New("the outbox refused it")
+			}
+			return nil
+		}
+	}
+	count := func() int {
+		var n int
+		if cerr := st.db.QueryRow(ctx, `SELECT count(*) FROM sent_notices`).Scan(&n); cerr != nil {
+			t.Fatal(cerr)
+		}
+		return n
+	}
+
+	if sent, merr := st.MarkAlerted(ctx, "org_a", d.ID, notifications.ModelBudgetProjected, "2026-11", queue(true)); merr == nil || sent {
+		t.Fatalf("failed send: %v, %v", sent, merr)
+	}
+	if got, _ := st.Get(ctx, "org_a", "proj_1", "env_1", "llama"); got.AlertedProjected != "" || count() != 0 {
+		t.Fatalf("a failed send left %q and %d notices", got.AlertedProjected, count())
+	}
+	if sent, merr := st.MarkAlerted(ctx, "org_a", d.ID, notifications.ModelBudgetProjected, "2026-11", queue(false)); merr != nil || !sent {
+		t.Fatalf("send: %v, %v", sent, merr)
+	}
+	called := false
+	if sent, merr := st.MarkAlerted(ctx, "org_a", d.ID, notifications.ModelBudgetProjected, "2026-11", func(context.Context, notifications.Execer) error {
+		called = true
+		return nil
+	}); merr != nil || sent || called {
+		t.Fatalf("retry: sent %v called %v, %v", sent, called, merr)
+	}
+	got, err := st.Get(ctx, "org_a", "proj_1", "env_1", "llama")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.AlertedProjected != "2026-11" || got.AlertedCrossed != "" || got.Revision != edit.Revision || count() != 1 {
+		t.Fatalf("after the notice: projected %q crossed %q revision %d (was %d), %d notices", got.AlertedProjected, got.AlertedCrossed, got.Revision, edit.Revision, count())
+	}
+	edit.Message = "an edit"
+	if err = st.Update(ctx, edit); err != nil {
+		t.Fatalf("an edit read before the notice: %v", err)
+	}
+	if edit.AlertedProjected != "2026-11" {
+		t.Fatalf("the edit undid the notice: %q", edit.AlertedProjected)
+	}
+	// Another organization's row isn't there, and a kind must be one.
+	if _, err = st.MarkAlerted(ctx, "org_b", d.ID, notifications.ModelBudgetCrossed, "2026-11", queue(false)); !errors.Is(err, ErrNotFound) {
+		t.Errorf("another org: %v", err)
+	}
+	if _, err = st.MarkAlerted(ctx, "org_a", d.ID, "soon", "2026-11", queue(false)); !errors.Is(err, ErrInvalid) {
+		t.Errorf("bad kind: %v", err)
+	}
+	if err = st.Create(ctx, llamaRow("org_b", "env_1")); err != nil {
+		t.Fatal(err)
+	}
+	if orgs, oerr := st.Organizations(ctx); oerr != nil || !slices.Equal(orgs, []string{"org_a", "org_b"}) {
+		t.Errorf("organizations %v, %v", orgs, oerr)
 	}
 }

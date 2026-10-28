@@ -8,6 +8,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/xraph/chronicle"
 	"github.com/xraph/dispatch/cron"
@@ -23,6 +24,7 @@ import (
 
 	cloudinfraext "github.com/xraph/loomplane/extensions/cloudinfra"
 	"github.com/xraph/loomplane/extensions/identity"
+	notificationsext "github.com/xraph/loomplane/extensions/notifications"
 	planningext "github.com/xraph/loomplane/extensions/planning"
 	projectsext "github.com/xraph/loomplane/extensions/projects"
 	"github.com/xraph/loomplane/internal/aisettings"
@@ -36,6 +38,7 @@ import (
 	"github.com/xraph/loomplane/internal/models"
 	"github.com/xraph/loomplane/internal/models/hfhub"
 	"github.com/xraph/loomplane/internal/models/registry"
+	"github.com/xraph/loomplane/internal/notifications"
 	"github.com/xraph/loomplane/internal/orchestration"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/projects"
@@ -56,6 +59,17 @@ const reconcileModelsEvery = "@every 1m"
 
 // reconcilePayload is the reconcile job's input: there is none.
 type reconcilePayload struct{}
+
+// JobAccrueModels adds what each GPU model cost since its last run to its
+// month and sends the budget notices that are due. Its cron runs it every
+// five minutes.
+const JobAccrueModels = "ai-models.accrue"
+
+// accrueModelsEvery is how often the accrual runs.
+const accrueModelsEvery = "@every 5m"
+
+// accruePayload is the accrual job's input: there is none.
+type accruePayload struct{}
 
 // Extension builds the AI settings and models services and registers the
 // model kinds' hooks and plan inputs with the planning extension, and the
@@ -83,7 +97,7 @@ func New(cfg config.Config) *Extension {
 // targets and cloud assignments models deploy through; cloudinfra creates
 // the GPU servers a model needs first; Dispatch runs the reconcile.
 func (e *Extension) Dependencies() []string {
-	return []string{identity.Name, dispatchext.ExtensionName, cloudinfraext.Name, planningext.Name}
+	return []string{identity.Name, dispatchext.ExtensionName, cloudinfraext.Name, planningext.Name, notificationsext.DeliveryName}
 }
 
 // Register builds the settings service over its own Vault app, the
@@ -197,6 +211,10 @@ func (e *Extension) registerModels(c forge.Container, authz *security.Authorizer
 	if err != nil {
 		return fmt.Errorf("ai needs the identity extension's API keys: %w", err)
 	}
+	notices, err := forge.InjectType[*notifications.Service](c)
+	if err != nil {
+		return fmt.Errorf("ai needs the notifications extension: %w", err)
+	}
 	access, err := forge.InjectType[*deployments.CatalogAccess](c)
 	if err != nil {
 		return fmt.Errorf("ai needs the planning extension's catalog access: %w", err)
@@ -222,6 +240,7 @@ func (e *Extension) registerModels(c forge.Container, authz *security.Authorizer
 		Registry: registry.Default(), Hub: hub, Settings: e.settings, Custom: store, GPUs: targets, Connections: conns,
 		Authz: authz, Store: store, Manifests: mf, Plans: plans, Projects: projects.NewPgStore(pg), TokenGuard: e.settings,
 		Audit: auditor, Servers: servers, Clouds: clouds, Waiting: store, Principals: keys, Deployed: deployed,
+		Prices: targets, Budget: notices,
 		Warn: func(msg string, err error) { e.Logger().Warn(msg, forge.F("error", err.Error())) },
 	})
 	// The reconcile is the one caller of the store's cross-organization
@@ -229,6 +248,11 @@ func (e *Extension) registerModels(c forge.Container, authz *security.Authorizer
 	svc := e.models
 	engine.Register(e.engine, job.NewDefinition(JobReconcileModels, func(ctx context.Context, _ reconcilePayload) error {
 		return svc.Reconcile(ctx)
+	}, job.WithMaxRetries(0)))
+	// So is the accrual, through Accrue, which reads only organization IDs
+	// across organizations and each one's rows on their own.
+	engine.Register(e.engine, job.NewDefinition(JobAccrueModels, func(ctx context.Context, _ accruePayload) error {
+		return svc.Accrue(ctx, time.Now())
 	}, job.WithMaxRetries(0)))
 	e.settings.SetTokenChecker(hub)
 	e.settings.SetGatedModels(e.models)
@@ -242,14 +266,21 @@ func (e *Extension) registerModels(c forge.Container, authz *security.Authorizer
 	return nil
 }
 
-// Start schedules the model reconcile, which runs on the cron leader only.
-// The schedule needs the database, which is migrated by now.
+// Start schedules the model reconcile and the accrual, which run on the
+// cron leader only. The schedules need the database, which is migrated by
+// now.
 func (e *Extension) Start(ctx context.Context) error {
 	def := &cron.Definition[reconcilePayload]{
 		Name: JobReconcileModels, JobName: JobReconcileModels, Schedule: reconcileModelsEvery, Queue: orchestration.Queue,
 	}
 	if err := engine.RegisterCron(ctx, e.engine, def); err != nil {
 		return fmt.Errorf("schedule the model reconcile: %w", err)
+	}
+	accrue := &cron.Definition[accruePayload]{
+		Name: JobAccrueModels, JobName: JobAccrueModels, Schedule: accrueModelsEvery, Queue: orchestration.Queue,
+	}
+	if err := engine.RegisterCron(ctx, e.engine, accrue); err != nil {
+		return fmt.Errorf("schedule the model accrual: %w", err)
 	}
 	e.MarkStarted()
 	return nil

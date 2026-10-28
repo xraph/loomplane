@@ -67,4 +67,7 @@ func RegisterOffJobs(eng *engine.Engine) {
 	engine.Register(eng, job.NewDefinition(JobReconcileModels, func(context.Context, reconcilePayload) error {
 		return nil
 	}, job.WithMaxRetries(0)))
+	engine.Register(eng, job.NewDefinition(JobAccrueModels, func(context.Context, accruePayload) error {
+		return nil
+	}, job.WithMaxRetries(0)))
 }

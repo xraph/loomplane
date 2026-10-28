@@ -530,7 +530,7 @@ func (e *Extension) Register(fapp forge.App) error {
 		return err
 	}
 	targets := gpus.NewService(gpus.Deps{
-		Connections: clouds, Bindings: planStore, Options: routeService, Servers: cloudinfra.NewPgStore(pg), Authz: authz,
+		Connections: clouds, Stored: connections.NewPgStore(pg), Bindings: planStore, Options: routeService, Servers: cloudinfra.NewPgStore(pg), Authz: authz,
 	})
 	if err := e.gpuTargetRoutes(fapp.Router(), guard, targets); err != nil {
 		return err

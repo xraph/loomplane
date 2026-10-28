@@ -188,13 +188,18 @@ func orgNotice(n *inbox.Notification) bool {
 
 // requireReader rechecks the grant the notification was sent under. A
 // connection notice went to its connection's maker and the organization's
-// owners and admins, so it needs no further grant.
+// owners and admins, so it needs no further grant. A model's budget
+// notice needs ai:manage.
 func (s *Service) requireReader(ctx context.Context, p security.Principal, n *inbox.Notification) error {
 	if n.Metadata["kind"] == kindConnection {
 		return nil
 	}
 	if domainNotice(n) {
 		return s.require(ctx, p, security.OrganizationCloudManage, p.OrgID)
+	}
+	if n.Metadata["kind"] == kindModelBudget {
+		// A model's budget notice went to admins only.
+		return s.require(ctx, p, security.AIManage, "")
 	}
 	return s.require(ctx, p, security.ProjectRead, n.Metadata["project_id"])
 }
