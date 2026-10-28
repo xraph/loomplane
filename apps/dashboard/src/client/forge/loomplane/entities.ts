@@ -33,6 +33,7 @@ export const entities = {
   'DomainOverview': { fields: { 'zones': 'ZoneOverview' } },
   'Environment': { idField: 'id' },
   'EnvironmentList': { fields: { 'environments': 'Environment' } },
+  'Expansion': { idField: 'id' },
   'FabriqKeyList': { fields: { 'keys': 'ConsumerKey' } },
   'GatewayList': { fields: { 'gateways': 'GatewayStatus' } },
   'GatewayStatus': { idField: 'id' },

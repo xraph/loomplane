@@ -38,7 +38,13 @@ import { EnvironmentsOnCloud } from "./environments"
 import { RunsOn } from "./targets"
 
 export type CloudTab =
-  "overview" | "targets" | "projects" | "servers" | "changes" | "settings"
+  | "overview"
+  | "targets"
+  | "projects"
+  | "servers"
+  | "capacity"
+  | "changes"
+  | "settings"
 
 type Problem = {
   key: string

@@ -13,6 +13,7 @@ import type {
 } from "@/client/forge/loomplane/types"
 import { useQuery } from "@/client/hooks"
 import { messageOf, statusOf } from "@/client/errors"
+import { Capacity } from "@/components/cloud-detail/capacity"
 import { Changes } from "@/components/cloud-detail/changes"
 import {
   movingSync,
@@ -346,6 +347,7 @@ function CloudPage({
         count: servers?.length,
         show: !project,
       },
+      { id: "capacity", label: "Capacity", show: !project },
       {
         id: "changes",
         label: "Changes",
@@ -456,6 +458,15 @@ function CloudPage({
           {!project && (
             <TabsContent value="servers">
               <Servers cloud={cloud} />
+            </TabsContent>
+          )}
+          {!project && (
+            <TabsContent value="capacity">
+              <Capacity
+                cloudId={cloud.id}
+                pools={pools ?? []}
+                connections={accounts}
+              />
             </TabsContent>
           )}
           <TabsContent value="changes">

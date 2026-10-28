@@ -1596,6 +1596,163 @@
         }
       }
     },
+    "/api/v1/clouds/{cloudId}/capacity-policy": {
+      "get": {
+        "tags": [
+          "Cloud infrastructure"
+        ],
+        "summary": "cloudCapacity.getPolicy",
+        "operationId": "cloudCapacity.getPolicy",
+        "parameters": [
+          {
+            "name": "cloudId",
+            "in": "path",
+            "description": "Path parameter: cloudId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapacityPolicyView"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Cloud infrastructure"
+        ],
+        "summary": "cloudCapacity.savePolicy",
+        "operationId": "cloudCapacity.savePolicy",
+        "parameters": [
+          {
+            "name": "cloudId",
+            "in": "path",
+            "description": "Path parameter: cloudId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CapacityPolicyInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapacityPolicyView"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clouds/{cloudId}/expansions": {
+      "get": {
+        "tags": [
+          "Cloud infrastructure"
+        ],
+        "summary": "cloudCapacity.listExpansions",
+        "operationId": "cloudCapacity.listExpansions",
+        "parameters": [
+          {
+            "name": "cloudId",
+            "in": "path",
+            "description": "Path parameter: cloudId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExpansionList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clouds/{cloudId}/expansions/{expansionId}/approve": {
+      "post": {
+        "tags": [
+          "Cloud infrastructure"
+        ],
+        "summary": "cloudCapacity.approveExpansion",
+        "operationId": "cloudCapacity.approveExpansion",
+        "parameters": [
+          {
+            "name": "cloudId",
+            "in": "path",
+            "description": "Path parameter: cloudId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "expansionId",
+            "in": "path",
+            "description": "Path parameter: expansionId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ApproveExpansionInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Expansion"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/clouds/{cloudId}/servers/preview": {
       "post": {
         "tags": [
@@ -10521,6 +10678,17 @@
           }
         }
       },
+      "ApproveExpansionInputBody": {
+        "type": "object",
+        "required": [
+          "expected_revision"
+        ],
+        "properties": {
+          "expected_revision": {
+            "type": "integer"
+          }
+        }
+      },
       "ArtifactChoice": {
         "type": "object",
         "required": [
@@ -11351,6 +11519,86 @@
           },
           "template_hash": {
             "type": "string"
+          }
+        }
+      },
+      "CapacityPolicy": {
+        "type": "object",
+        "required": [
+          "org_id",
+          "cloud_id",
+          "revision",
+          "enabled",
+          "require_expansion_approval",
+          "limits",
+          "pools",
+          "frontend_limits"
+        ],
+        "properties": {
+          "cloud_id": {
+            "type": "string"
+          },
+          "enabled": {
+            "type": "boolean"
+          },
+          "frontend_limits": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FrontendLimit"
+            }
+          },
+          "gpu_limits": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GPULimit"
+            }
+          },
+          "limits": {
+            "$ref": "#/components/schemas/ResourceVector"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "pools": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PoolExpansionPolicy"
+            }
+          },
+          "require_expansion_approval": {
+            "type": "boolean"
+          },
+          "revision": {
+            "type": "integer"
+          }
+        }
+      },
+      "CapacityPolicyInputBody": {
+        "type": "object",
+        "required": [
+          "expected_revision",
+          "policy"
+        ],
+        "properties": {
+          "expected_revision": {
+            "type": "integer"
+          },
+          "policy": {
+            "$ref": "#/components/schemas/CapacityPolicy"
+          }
+        }
+      },
+      "CapacityPolicyView": {
+        "type": "object",
+        "required": [
+          "automatic_expansion"
+        ],
+        "properties": {
+          "automatic_expansion": {
+            "type": "boolean"
+          },
+          "policy": {
+            "$ref": "#/components/schemas/CapacityPolicy"
           }
         }
       },
@@ -13747,6 +13995,9 @@
               }
             }
           },
+          "scale": {
+            "$ref": "#/components/schemas/Scale"
+          },
           "set_use": {
             "type": "object",
             "required": [
@@ -13765,6 +14016,9 @@
                 "$ref": "#/components/schemas/Use"
               }
             }
+          },
+          "size": {
+            "$ref": "#/components/schemas/SizeEdit"
           },
           "unlink": {
             "type": "object",
@@ -14212,6 +14466,149 @@
           }
         }
       },
+      "Expansion": {
+        "type": "object",
+        "required": [
+          "revision",
+          "minimum",
+          "template",
+          "id",
+          "org_id",
+          "cloud_id",
+          "pool_id",
+          "operation_id",
+          "status",
+          "intent_hash",
+          "policy_revision",
+          "resources",
+          "provider",
+          "account_id",
+          "connection_id",
+          "connection_generation",
+          "region",
+          "size",
+          "architecture",
+          "image",
+          "approved_by",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "accelerator": {
+            "$ref": "#/components/schemas/Accelerator"
+          },
+          "account_id": {
+            "type": "string"
+          },
+          "approved_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "approved_by": {
+            "type": "string"
+          },
+          "architecture": {
+            "type": "string"
+          },
+          "block": {
+            "$ref": "#/components/schemas/CapacityBlock"
+          },
+          "cloud_id": {
+            "type": "string"
+          },
+          "connection_generation": {
+            "type": "integer"
+          },
+          "connection_id": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "estimated_hourly_usd": {
+            "type": "number"
+          },
+          "hourly_price_known": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "image": {
+            "type": "string"
+          },
+          "intent_hash": {
+            "type": "string"
+          },
+          "minimum": {
+            "type": "boolean"
+          },
+          "operation_id": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "policy_revision": {
+            "type": "integer"
+          },
+          "pool_id": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "region": {
+            "type": "string"
+          },
+          "resources": {
+            "$ref": "#/components/schemas/ResourceVector"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "size": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "template": {
+            "$ref": "#/components/schemas/PoolExpansionPolicy"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "ExpansionList": {
+        "type": "object",
+        "required": [
+          "expansions"
+        ],
+        "properties": {
+          "expansions": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/Expansion"
+                },
+                {
+                  "type": "object",
+                  "nullable": true,
+                  "enum": [
+                    null
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        "x-forge-envelope": "expansions"
+      },
       "FabriqKeyList": {
         "properties": {
           "keys": {
@@ -14429,6 +14826,20 @@
           }
         }
       },
+      "FrontendLimit": {
+        "type": "object",
+        "required": [
+          "target_id"
+        ],
+        "properties": {
+          "maximum": {
+            "type": "integer"
+          },
+          "target_id": {
+            "type": "string"
+          }
+        }
+      },
       "GPUDevice": {
         "type": "object",
         "required": [
@@ -14484,6 +14895,21 @@
           },
           "status": {
             "type": "string"
+          }
+        }
+      },
+      "GPULimit": {
+        "type": "object",
+        "required": [
+          "kind",
+          "maximum"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "maximum": {
+            "type": "integer"
           }
         }
       },
@@ -21416,6 +21842,21 @@
             "type": "integer"
           },
           "shm": {
+            "type": "integer"
+          }
+        }
+      },
+      "SizeEdit": {
+        "type": "object",
+        "required": [
+          "cpu",
+          "memory"
+        ],
+        "properties": {
+          "cpu": {
+            "type": "number"
+          },
+          "memory": {
             "type": "integer"
           }
         }

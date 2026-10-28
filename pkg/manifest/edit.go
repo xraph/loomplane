@@ -36,6 +36,19 @@ type Placement struct {
 	Endpoint   *Endpoint `json:"endpoint,omitempty"`
 	Build      *Build    `json:"build,omitempty"`
 	Enabled    *bool     `json:"enabled,omitempty"`
+	// Scale replaces how many instances run. A zero Scale restores inheritance.
+	Scale *Scale `json:"scale,omitempty"`
+	// Size sets each instance's CPU and memory, keeping any GPU or shm the
+	// same size block already asks for. A zero Size restores inheritance.
+	Size *SizeEdit `json:"size,omitempty"`
+}
+
+// SizeEdit is the part of a service's size people change by hand.
+type SizeEdit struct {
+	// CPU is in virtual CPUs, such as 0.5 or 2.
+	CPU float64 `json:"cpu"`
+	// Memory is in MiB.
+	Memory int `json:"memory"`
 }
 
 // WithPlacement edits only placement fields, preserving source, needs and
@@ -45,11 +58,11 @@ func WithPlacement(doc []byte, p Placement) ([]byte, error) {
 		return nil, err
 	}
 	if !slices.Contains([]string{"services", "resources", "gateways"}, p.Section) ||
-		(p.CloudSQLNetwork == nil && p.CloudTarget == nil && p.CloudTags == nil && p.Provider == nil && p.Region == nil && p.Enabled == nil && p.Target == nil && p.HealthPath == nil && p.Endpoint == nil && p.Build == nil) {
+		(p.CloudSQLNetwork == nil && p.CloudTarget == nil && p.CloudTags == nil && p.Provider == nil && p.Region == nil && p.Enabled == nil && p.Target == nil && p.HealthPath == nil && p.Endpoint == nil && p.Build == nil && p.Scale == nil && p.Size == nil) {
 		return nil, fmt.Errorf("%w: name a service, resource or gateway and its placement changes", ErrInvalid)
 	}
-	if p.Section != "services" && (p.CloudSQLNetwork != nil || p.CloudTarget != nil || p.CloudTags != nil || p.Target != nil || p.HealthPath != nil || p.Endpoint != nil || p.Build != nil) {
-		return nil, fmt.Errorf("%w: cloud_sql_network, cloud_target, cloud_tags, target, endpoint, health_path and build edits need a service", ErrInvalid)
+	if p.Section != "services" && (p.CloudSQLNetwork != nil || p.CloudTarget != nil || p.CloudTags != nil || p.Target != nil || p.HealthPath != nil || p.Endpoint != nil || p.Build != nil || p.Scale != nil || p.Size != nil) {
+		return nil, fmt.Errorf("%w: cloud_sql_network, cloud_target, cloud_tags, target, endpoint, health_path, build, scale and size edits need a service", ErrInvalid)
 	}
 	if p.Environment == "" && p.Section != "services" && p.Enabled != nil {
 		return nil, fmt.Errorf("%w: enabled on %s needs an environment", ErrInvalid, p.Section)
@@ -142,6 +155,37 @@ func WithPlacement(doc []byte, p Placement) ([]byte, error) {
 			return nil, err
 		}
 		setPlacementField(target, "enabled", value, false)
+	}
+	if p.Scale != nil {
+		value := &yaml.Node{}
+		if err := value.Encode(p.Scale); err != nil {
+			return nil, err
+		}
+		setPlacementField(target, "scale", value, *p.Scale == (Scale{}))
+	}
+	if p.Size != nil {
+		if *p.Size == (SizeEdit{}) {
+			setPlacementField(target, "size", nil, true)
+		} else {
+			size := child(target, "size")
+			if size == nil {
+				size = &yaml.Node{Kind: yaml.MappingNode}
+				target.Content = append(target.Content, scalar("size"), size)
+			}
+			if err := placementMapping(size); err != nil {
+				return nil, err
+			}
+			for _, field := range []struct {
+				key   string
+				value any
+			}{{"cpu", p.Size.CPU}, {"memory", p.Size.Memory}} {
+				value := &yaml.Node{}
+				if err := value.Encode(field.value); err != nil {
+					return nil, err
+				}
+				setPlacementField(size, field.key, value, false)
+			}
+		}
 	}
 	out, encodeErr := encode(file)
 	if encodeErr != nil || p.Section != "services" {

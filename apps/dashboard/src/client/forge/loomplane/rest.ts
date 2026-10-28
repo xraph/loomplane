@@ -322,6 +322,77 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly cloudCapacity = {
+    /**
+     * cloudCapacity.approveExpansion
+     */
+    approveExpansion: async (cloudId: string, expansionId: string, body: types.ApproveExpansionInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Expansion> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/expansions/${encodeURIComponent(String(expansionId))}/approve`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["ApproveExpansionInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Expansion"],
+      };
+
+      return this.request<types.Expansion>(config);
+    },
+
+    /**
+     * cloudCapacity.getPolicy
+     */
+    getPolicy: async (cloudId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CapacityPolicyView> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/capacity-policy`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CapacityPolicyView"],
+      };
+
+      return this.request<types.CapacityPolicyView>(config);
+    },
+
+    /**
+     * cloudCapacity.listExpansions
+     */
+    listExpansions: async (cloudId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ExpansionList> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/expansions`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ExpansionList"],
+      };
+
+      return this.request<types.ExpansionList>(config);
+    },
+
+    /**
+     * cloudCapacity.savePolicy
+     */
+    savePolicy: async (cloudId: string, body: types.CapacityPolicyInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CapacityPolicyView> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/capacity-policy`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["CapacityPolicyInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CapacityPolicyView"],
+      };
+
+      return this.request<types.CapacityPolicyView>(config);
+    },
+
+  };
+
   public readonly cloudChanges = {
     /**
      * cloudChanges.apply

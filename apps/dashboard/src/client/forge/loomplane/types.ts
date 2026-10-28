@@ -150,6 +150,10 @@ export interface ApplyInputBody {
   review: string;
 }
 
+export interface ApproveExpansionInputBody {
+  expectedRevision: number;
+}
+
 export interface ArtifactChoice {
   from?: string;
   reason?: string;
@@ -380,6 +384,28 @@ export interface CapacityIntent {
   targetRevision: number;
   template: PoolExpansionPolicy;
   templateHash: string;
+}
+
+export interface CapacityPolicy {
+  cloudId: string;
+  enabled: boolean;
+  frontendLimits: FrontendLimit[];
+  gpuLimits?: GPULimit[];
+  limits: ResourceVector;
+  orgId: string;
+  pools: PoolExpansionPolicy[];
+  requireExpansionApproval: boolean;
+  revision: number;
+}
+
+export interface CapacityPolicyInputBody {
+  expectedRevision: number;
+  policy: CapacityPolicy;
+}
+
+export interface CapacityPolicyView {
+  automaticExpansion: boolean;
+  policy?: CapacityPolicy;
 }
 
 export interface CapacityTemplatePin {
@@ -1082,11 +1108,13 @@ export interface EditInputBody {
   section: string;
   target?: string;
 };
+  scale?: Scale;
   setUse?: {
   dependency: string;
   resource: string;
   use: Use;
 };
+  size?: SizeEdit;
   unlink?: {
   need: string;
   options?: Record<string, any>;
@@ -1222,6 +1250,41 @@ export interface ExclusionRule {
   match: string;
 }
 
+export interface Expansion {
+  accelerator?: Accelerator;
+  accountId: string;
+  approvedAt?: string;
+  approvedBy: string;
+  architecture: string;
+  block?: CapacityBlock;
+  cloudId: string;
+  connectionGeneration: number;
+  connectionId: string;
+  createdAt: string;
+  estimatedHourlyUsd?: number;
+  hourlyPriceKnown?: boolean;
+  id: string;
+  image: string;
+  intentHash: string;
+  minimum: boolean;
+  operationId: string;
+  orgId: string;
+  policyRevision: number;
+  poolId: string;
+  provider: string;
+  region: string;
+  resources: ResourceVector;
+  revision: number;
+  size: string;
+  status: string;
+  template: PoolExpansionPolicy;
+  updatedAt: string;
+}
+
+export interface ExpansionList {
+  expansions: (Expansion | null)[];
+}
+
 export interface FabriqKeyList {
   keys: ConsumerKey[];
 }
@@ -1287,6 +1350,11 @@ export interface FrontendDemand {
   targetRevision: number;
 }
 
+export interface FrontendLimit {
+  maximum?: number;
+  targetId: string;
+}
+
 export interface GPUDevice {
   index: number;
   kind: string;
@@ -1301,6 +1369,11 @@ export interface GPUInventory {
   message?: string;
   nodes?: GPUNodeGroup[];
   status: string;
+}
+
+export interface GPULimit {
+  kind: string;
+  maximum: number;
 }
 
 export interface GPUNodeGroup {
@@ -3266,6 +3339,11 @@ export interface Size {
   gpu?: ManifestGPU;
   memory: number;
   shm?: number;
+}
+
+export interface SizeEdit {
+  cpu: number;
+  memory: number;
 }
 
 export interface Snapshot {
