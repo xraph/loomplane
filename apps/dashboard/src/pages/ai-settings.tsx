@@ -112,8 +112,8 @@ function HuggingFaceSection({
           Hugging Face token
         </h2>
         <p className="max-w-[64ch] text-[13px] leading-relaxed text-pretty text-muted-foreground">
-          Gated or private Hugging Face models download with it. Loomplane
-          keeps it encrypted and never shows it again.
+          Gated or private Hugging Face models download with it. Loomplane keeps
+          it encrypted and never shows it again.
         </p>
       </div>
       {token ? <TokenSummary token={token} /> : <NoToken manage={manage} />}
