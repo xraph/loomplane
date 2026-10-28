@@ -160,13 +160,13 @@ func (s *Service) accrueRow(ctx context.Context, d *Deployment, now time.Time, p
 // from to to, to month. Whole seconds are counted, and the clock stops at
 // the last one, so the part of a second left over counts in the next run.
 // added is false when there wasn't a whole second to count.
-func (s *Service) accrueSpan(ctx context.Context, d *Deployment, hourly int64, from, to time.Time, month string) (added bool, err error) {
+func (s *Service) accrueSpan(ctx context.Context, d *Deployment, hourly int64, from, to time.Time, month string) (bool, error) {
 	seconds := int64(to.Sub(from) / time.Second)
 	if seconds <= 0 {
 		return false, nil
 	}
 	add := (hourly*seconds + 1800) / 3600
-	if err = s.d.Store.Accrue(ctx, d, month, formatUSD(add), from.Add(time.Duration(seconds)*time.Second)); err != nil {
+	if err := s.d.Store.Accrue(ctx, d, month, formatUSD(add), from.Add(time.Duration(seconds)*time.Second)); err != nil {
 		return false, err
 	}
 	return true, nil
