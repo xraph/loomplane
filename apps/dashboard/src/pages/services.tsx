@@ -135,6 +135,8 @@ const groupLabels: Record<Group, string> = {
   cache: "Cache",
   gateway: "Gateway",
   data: "Data",
+  // Model kinds are hidden from the catalog; a model's own page names it.
+  ai: "AI model",
 }
 
 /** A kind the API registered beyond the five databases. */

@@ -25,7 +25,7 @@ import {
 import { ModelsIcon } from "@/components/icons"
 import { Page, PageHeading } from "@/components/page"
 import { QueryError } from "@/components/query-error"
-import { StatusPill, type Tone } from "@/components/runs"
+import { StatusPill } from "@/components/runs"
 import { SiteHeader } from "@/components/site-header"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
@@ -53,6 +53,7 @@ import { acceleratorLabel } from "@/lib/gpu"
 import {
   costLabel,
   deployedSummary,
+  modelState,
   monthLabel,
   registryQuery,
   type ModelsSearch,
@@ -255,20 +256,6 @@ function licensesOf(entries: EntrySummary[]): LicenseOption[] {
 /* ------------------------------------------------------------------------ */
 /* Deployed                                                                   */
 
-const states: Record<string, { label: string; tone: Tone }> = {
-  ready: { label: "Ready", tone: "live" },
-  deploying: { label: "Deploying", tone: "flight" },
-  planned: { label: "Planned", tone: "flight" },
-  waiting_for_server: { label: "Waiting for a server", tone: "waiting" },
-  needs_attention: { label: "Needs attention", tone: "failed" },
-  failed: { label: "Failed", tone: "failed" },
-  absent: { label: "Not deployed", tone: "quiet" },
-}
-
-function stateOf(state: string): { label: string; tone: Tone } {
-  return states[state] ?? { label: state, tone: "quiet" }
-}
-
 function Deployed({ onBrowse }: { onBrowse: () => void }) {
   const list = useQuery(useAiModelDeploymentsList)
   const projects = useQuery(useProjectsList)
@@ -354,7 +341,7 @@ function DeployedRow({
   model: ModelsStatus
   project?: string
 }) {
-  const state = stateOf(m.state)
+  const state = modelState(m.state, !!m.internalUrl)
   const cost = costLabel(m.cost, m.connectionName)
   const environment = m.environments[0]?.environment ?? ""
   const environmentId = m.environments[0]?.environmentId
@@ -371,7 +358,7 @@ function DeployedRow({
       <div className="grid min-w-0 gap-0.5">
         {m.projectId && m.resource ? (
           <Link
-            to="/projects/$id/catalog/$resource"
+            to="/projects/$id/ai/models/$resource"
             params={{ id: m.projectId, resource: m.resource }}
             search={{ environment: environmentId }}
             className="truncate text-[13.5px] font-medium hover:underline"

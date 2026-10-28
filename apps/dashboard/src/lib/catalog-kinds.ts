@@ -6,6 +6,7 @@
 import {
   BoxesIcon,
   BoxIcon,
+  BrainIcon,
   DatabaseIcon,
   PlugIcon,
   ZapIcon,
@@ -101,7 +102,7 @@ export type CatalogKindModule = {
   kind: string
   title: string
   logo?: ProductKey
-  group: "database" | "cache" | "gateway" | "data"
+  group: "database" | "cache" | "gateway" | "data" | "ai"
   blurb: string
   features: string[]
   panels: CatalogPanel[]
@@ -138,6 +139,7 @@ export const groupIcons: Record<CatalogKindModule["group"], LucideIcon> = {
   cache: ZapIcon,
   gateway: PlugIcon,
   data: BoxesIcon,
+  ai: BrainIcon,
 }
 
 /** How the catalog names the targets a kind runs on. */

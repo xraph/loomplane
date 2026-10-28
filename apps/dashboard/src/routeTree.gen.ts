@@ -44,6 +44,7 @@ import { Route as IntegrationsGithubSetupRouteImport } from "./routes/integratio
 import { Route as IntegrationsOauthCallbackRouteImport } from "./routes/integrations.oauth.callback"
 import { Route as ProjectsIdCatalogResourceRouteImport } from "./routes/projects.$id_.catalog.$resource"
 import { Route as ProjectsIdServicesServiceRouteImport } from "./routes/projects.$id_.services.$service"
+import { Route as ProjectsIdAiModelsResourceRouteImport } from "./routes/projects.$id_.ai.models.$resource"
 
 const IndexRoute = IndexRouteImport.update({
   id: "/",
@@ -223,6 +224,12 @@ const ProjectsIdServicesServiceRoute =
     path: "/projects/$id/services/$service",
     getParentRoute: () => rootRouteImport,
   } as any)
+const ProjectsIdAiModelsResourceRoute =
+  ProjectsIdAiModelsResourceRouteImport.update({
+    id: "/projects/$id_/ai/models/$resource",
+    path: "/projects/$id/ai/models/$resource",
+    getParentRoute: () => rootRouteImport,
+  } as any)
 
 export interface FileRoutesByFullPath {
   "/": typeof IndexRoute
@@ -260,6 +267,7 @@ export interface FileRoutesByFullPath {
   "/ai/models/": typeof AiModelsIndexRoute
   "/projects/$id/catalog/$resource": typeof ProjectsIdCatalogResourceRoute
   "/projects/$id/services/$service": typeof ProjectsIdServicesServiceRoute
+  "/projects/$id/ai/models/$resource": typeof ProjectsIdAiModelsResourceRoute
 }
 export interface FileRoutesByTo {
   "/": typeof IndexRoute
@@ -297,6 +305,7 @@ export interface FileRoutesByTo {
   "/ai/models": typeof AiModelsIndexRoute
   "/projects/$id/catalog/$resource": typeof ProjectsIdCatalogResourceRoute
   "/projects/$id/services/$service": typeof ProjectsIdServicesServiceRoute
+  "/projects/$id/ai/models/$resource": typeof ProjectsIdAiModelsResourceRoute
 }
 export interface FileRoutesById {
   __root__: typeof rootRouteImport
@@ -335,6 +344,7 @@ export interface FileRoutesById {
   "/ai/models/": typeof AiModelsIndexRoute
   "/projects/$id_/catalog/$resource": typeof ProjectsIdCatalogResourceRoute
   "/projects/$id_/services/$service": typeof ProjectsIdServicesServiceRoute
+  "/projects/$id_/ai/models/$resource": typeof ProjectsIdAiModelsResourceRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
@@ -374,6 +384,7 @@ export interface FileRouteTypes {
     | "/ai/models/"
     | "/projects/$id/catalog/$resource"
     | "/projects/$id/services/$service"
+    | "/projects/$id/ai/models/$resource"
   fileRoutesByTo: FileRoutesByTo
   to:
     | "/"
@@ -411,6 +422,7 @@ export interface FileRouteTypes {
     | "/ai/models"
     | "/projects/$id/catalog/$resource"
     | "/projects/$id/services/$service"
+    | "/projects/$id/ai/models/$resource"
   id:
     | "__root__"
     | "/"
@@ -448,6 +460,7 @@ export interface FileRouteTypes {
     | "/ai/models/"
     | "/projects/$id_/catalog/$resource"
     | "/projects/$id_/services/$service"
+    | "/projects/$id_/ai/models/$resource"
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
@@ -486,6 +499,7 @@ export interface RootRouteChildren {
   AiModelsIndexRoute: typeof AiModelsIndexRoute
   ProjectsIdCatalogResourceRoute: typeof ProjectsIdCatalogResourceRoute
   ProjectsIdServicesServiceRoute: typeof ProjectsIdServicesServiceRoute
+  ProjectsIdAiModelsResourceRoute: typeof ProjectsIdAiModelsResourceRoute
 }
 
 declare module "@tanstack/react-router" {
@@ -735,6 +749,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof ProjectsIdServicesServiceRouteImport
       parentRoute: typeof rootRouteImport
     }
+    "/projects/$id_/ai/models/$resource": {
+      id: "/projects/$id_/ai/models/$resource"
+      path: "/projects/$id/ai/models/$resource"
+      fullPath: "/projects/$id/ai/models/$resource"
+      preLoaderRoute: typeof ProjectsIdAiModelsResourceRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
@@ -774,6 +795,7 @@ const rootRouteChildren: RootRouteChildren = {
   AiModelsIndexRoute: AiModelsIndexRoute,
   ProjectsIdCatalogResourceRoute: ProjectsIdCatalogResourceRoute,
   ProjectsIdServicesServiceRoute: ProjectsIdServicesServiceRoute,
+  ProjectsIdAiModelsResourceRoute: ProjectsIdAiModelsResourceRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

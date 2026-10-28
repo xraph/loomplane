@@ -358,8 +358,13 @@ it("creates a GPU server first for admins and shows its review", async () => {
 
   await waitFor(() => expect(create).toBeEnabled())
   await userEvent.click(create)
-  await waitFor(() => expect(router.state.location.pathname).toBe("/ai/models"))
-  expect(router.state.location.search).toEqual({ tab: "deployed" })
+  // A model waiting for its server goes to its own page.
+  await waitFor(() =>
+    expect(router.state.location.pathname).toBe(
+      "/projects/proj_1/ai/models/qwen2-5-7b-instruct"
+    )
+  )
+  expect(router.state.location.search).toEqual({ environment: "env_stg" })
   const sent = asked.find(
     (a) => a.method === "POST" && a.url.pathname.endsWith("/ai/models")
   )

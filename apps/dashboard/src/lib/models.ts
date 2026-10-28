@@ -446,3 +446,116 @@ export function deployCost(cost: Cost, server?: string): DeployCost {
     kind: label.kind,
   }
 }
+
+/* ------------------------------------------------------------------------ */
+/* A deployed model                                                           */
+
+/** The tones a model's state wears: status colors, never the accent. */
+export type StateTone = "live" | "waiting" | "flight" | "failed" | "quiet"
+
+const modelStates: Record<string, { label: string; tone: StateTone }> = {
+  ready: { label: "Ready", tone: "live" },
+  deploying: { label: "Deploying", tone: "flight" },
+  planned: { label: "Planned", tone: "flight" },
+  waiting_for_server: { label: "Waiting for a server", tone: "waiting" },
+  needs_attention: { label: "Needs attention", tone: "failed" },
+  failed: { label: "Failed", tone: "failed" },
+  absent: { label: "Not deployed", tone: "quiet" },
+}
+
+/**
+ * modelState names a deployed model's state, and its tone. A model whose
+ * change failed while the version before it still serves says so.
+ */
+export function modelState(
+  state: string,
+  stillServes = false
+): { label: string; tone: StateTone } {
+  if (state === "failed" && stillServes)
+    return { label: "Update failed", tone: "failed" }
+  return modelStates[state] ?? { label: state, tone: "quiet" }
+}
+
+/** engineOfKind is the engine a model kind runs: "model-vllm" is vllm. */
+export function engineOfKind(kind: string): string {
+  switch (kind) {
+    case "model-vllm":
+      return "vllm"
+    case "model-tei":
+      return "tei"
+    case "model-llamacpp":
+    case "model-llamacpp-gpu":
+      return "llamacpp"
+  }
+  return ""
+}
+
+/**
+ * servedNameOf is the name a model answers to, what a request's model
+ * field says: its served_name setting, else its Hugging Face repo, which is
+ * what Loomplane serves it as by default. A pasted repo's entry ID is
+ * hf:<repo>@<revision>.
+ */
+export function servedNameOf(
+  entryId: string,
+  settings?: Record<string, unknown>
+): string {
+  const set = settings?.served_name
+  if (typeof set === "string" && set.trim()) return set.trim()
+  const custom = /^hf:([^@]+)(@.*)?$/.exec(entryId)
+  return custom ? custom[1] : entryId
+}
+
+/** What a linked service can ask a model for, by the API it calls. */
+export type ExampleTask = "chat" | "embedding" | "rerank" | "speech-to-text"
+
+/**
+ * exampleTasks is what the Example tab shows for a model's tasks: chat
+ * for every task that's a chat completion (reasoning, code and vision
+ * too), and each other task once. A model whose tasks nobody knows gets
+ * chat.
+ */
+export function exampleTasks(tasks: string[]): ExampleTask[] {
+  const out: ExampleTask[] = []
+  for (const t of tasks) {
+    const task: ExampleTask | undefined =
+      t === "embedding" || t === "rerank" || t === "speech-to-text"
+        ? t
+        : t === "chat" || t === "reasoning" || t === "code" || t === "vision"
+          ? "chat"
+          : undefined
+    if (task && !out.includes(task)) out.push(task)
+  }
+  return out.length ? out : ["chat"]
+}
+
+/**
+ * wholeDollars is an amount in dollars to the dollar: "1146.10" is
+ * "$1,146". undefined when it isn't an amount, so it reads as unknown,
+ * never $0.
+ */
+export function wholeDollars(text: string | undefined): string | undefined {
+  const n = amount(text)
+  if (n === undefined) return undefined
+  return `$${Math.round(n).toLocaleString("en-US")}`
+}
+
+/** dollars is an amount to the cent: "12.3400" is "$12.34". */
+export function dollars(text: string | undefined): string | undefined {
+  const n = amount(text)
+  return n === undefined ? undefined : usd.format(n)
+}
+
+/**
+ * shortPin names the weights a registry re-pin moves a model to:
+ * "Qwen/Qwen2.5-7B-Instruct at 1a2b3c4", with its file for a GGUF.
+ */
+export function shortPin(pin: {
+  model?: string
+  revision?: string
+  file?: string
+}): string {
+  const at = pin.revision ? ` at ${pin.revision.slice(0, 7)}` : ""
+  const file = pin.file ? ` (${pin.file})` : ""
+  return `${pin.model || "the new pin"}${at}${file}`
+}

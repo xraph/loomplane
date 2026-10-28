@@ -349,7 +349,7 @@ it("sums GPU cost on the Deployed tab and counts unknown prices apart", async ()
   const [served, estimated, waiting, cpu] = rows
   expect(
     within(served).getByRole("link", { name: "Qwen2.5 7B Instruct" })
-  ).toHaveAttribute("href", "/projects/proj_1/catalog/qwen?environment=env_1")
+  ).toHaveAttribute("href", "/projects/proj_1/ai/models/qwen?environment=env_1")
   await waitFor(() => expect(served).toHaveTextContent("Checkout / production"))
   expect(served).toHaveTextContent("1× NVIDIA L40S on gpu-box")
   expect(served).toHaveTextContent("Ready")
@@ -365,7 +365,7 @@ it("sums GPU cost on the Deployed tab and counts unknown prices apart", async ()
     within(estimated).getByRole("link", { name: "Qwen2.5 7B Instruct" })
   ).toHaveAttribute(
     "href",
-    "/projects/proj_1/catalog/handmade?environment=env_2"
+    "/projects/proj_1/ai/models/handmade?environment=env_2"
   )
   expect(waiting).toHaveTextContent("Waiting for a server")
   expect(waiting).toHaveTextContent("unknown")

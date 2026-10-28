@@ -4,16 +4,22 @@ import type { Cost, Fit } from "@/client/forge/loomplane/types"
 import {
   costLabel,
   deployedSummary,
+  dollars,
+  engineOfKind,
+  exampleTasks,
   formatContext,
   formatParams,
   gpuNeed,
   looksLikeToken,
+  modelState,
   modelsSearch,
   monthLabel,
   registryQuery,
   repoOf,
+  servedNameOf,
   sizeBucket,
   verificationLabel,
+  wholeDollars,
 } from "@/lib/models"
 
 it("formats parameter counts", () => {
@@ -220,5 +226,42 @@ describe("the URL", () => {
     expect(repoOf("not a repo")).toBeUndefined()
     expect(looksLikeToken("hf_abcdefghijklmnop")).toBe(true)
     expect(looksLikeToken("Qwen/Qwen2.5-7B-Instruct")).toBe(false)
+  })
+})
+
+describe("a deployed model", () => {
+  it("calls a model by its served name, else its repo", () => {
+    expect(
+      servedNameOf("Qwen/Qwen2.5-7B-Instruct", { served_name: "chat" })
+    ).toBe("chat")
+    expect(servedNameOf("Qwen/Qwen2.5-7B-Instruct", {})).toBe(
+      "Qwen/Qwen2.5-7B-Instruct"
+    )
+    expect(servedNameOf("hf:acme/tiny@0123456789ab")).toBe("acme/tiny")
+  })
+
+  it("shows each kind of example once, chat for every chat task", () => {
+    expect(exampleTasks(["chat", "code", "vision"])).toEqual(["chat"])
+    expect(exampleTasks(["embedding", "rerank"])).toEqual([
+      "embedding",
+      "rerank",
+    ])
+    expect(exampleTasks([])).toEqual(["chat"])
+  })
+
+  it("never turns an unknown amount into $0", () => {
+    expect(wholeDollars("1146.10")).toBe("$1,146")
+    expect(wholeDollars("")).toBeUndefined()
+    expect(dollars("12.3400")).toBe("$12.34")
+    expect(dollars(undefined)).toBeUndefined()
+  })
+
+  it("says when a failed change still serves", () => {
+    expect(modelState("failed", true)).toEqual({
+      label: "Update failed",
+      tone: "failed",
+    })
+    expect(modelState("failed").label).toBe("Failed")
+    expect(engineOfKind("model-llamacpp-gpu")).toBe("llamacpp")
   })
 })

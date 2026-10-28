@@ -417,3 +417,95 @@ export const previewPath =
   "POST /api/v1/projects/proj_1/environments/env_stg/ai/models/preview"
 export const deployPath =
   "POST /api/v1/projects/proj_1/environments/env_stg/ai/models"
+
+export const modelPath =
+  "/api/v1/projects/proj_1/environments/env_stg/ai/models/qwen2-5-7b-instruct"
+
+/** deployment is the row Loomplane keeps for a model it deployed. */
+export function deployment(over: Record<string, unknown> = {}) {
+  return {
+    id: "aimodel_1",
+    accrued_at: "2026-11-10T00:00:00Z",
+    created_at: "2026-11-01T00:00:00Z",
+    updated_at: "2026-11-10T00:00:00Z",
+    engine: "vllm",
+    entry_id: qwen,
+    environment_id: "env_stg",
+    project_id: "proj_1",
+    month: "2026-11",
+    month_cost_usd: "120.5000",
+    phase: "active",
+    quantization: "bf16",
+    resource: "qwen2-5-7b-instruct",
+    revision: 3,
+    ...over,
+  }
+}
+
+/** modelStatus is a ready bf16 model on gpu-box in staging. */
+export function modelStatus(over: Record<string, unknown> = {}) {
+  return {
+    can_edit: true,
+    connection_id: "conn_gpu",
+    connection_name: "gpu-box",
+    cost: knownCost,
+    deployment: deployment(),
+    engine_version: "0.31.0",
+    entry: summary(),
+    environments: [reach],
+    gpu: { kind: "nvidia-l40s", count: 1 },
+    internal_url: "http://qwen2-5-7b-instruct.staging.internal:8080",
+    kind: "model-vllm",
+    linked: [],
+    max_model_len: 32768,
+    month_to_date_usd: "120.5000",
+    project_id: "proj_1",
+    projected_usd: "1146.10",
+    resource: "qwen2-5-7b-instruct",
+    state: "ready",
+    update_available: false,
+    verification: {
+      gpu_kind: "nvidia-l40s",
+      need: { gpus: 1, max_model_len: 32768, per_gpu_gib: 18 },
+      status: "tested",
+      result: tested,
+    },
+    ...over,
+  }
+}
+
+/** manifest is the project's manifest with the model and two services. */
+export function manifest(needs: Record<string, string[]> = {}) {
+  return {
+    id: "rev_1",
+    org_id: "org",
+    project_id: "proj_1",
+    revision: 4,
+    digest: "d",
+    created_at: "2026-11-01T00:00:00Z",
+    created_by: "u",
+    yaml: "",
+    manifest: {
+      version: 1,
+      resources: {
+        "qwen2-5-7b-instruct": {
+          kind: "model-vllm",
+          settings: { entry: qwen, served_name: "qwen-chat" },
+        },
+      },
+      services: {
+        checkout: { needs: needs.checkout ?? [] },
+        search: { needs: needs.search ?? [] },
+      },
+    },
+  }
+}
+
+/** The routes every model page test needs, besides the model itself. */
+export function modelRoutes(): Record<string, Handler> {
+  return {
+    ...dialogRoutes(),
+    "/api/v1/projects/proj_1": () => Response.json(projects.projects[0]),
+    "/api/v1/projects/proj_1/manifest": () => Response.json(manifest()),
+  }
+}
