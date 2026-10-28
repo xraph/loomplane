@@ -546,6 +546,9 @@ func (e *Extension) Register(fapp forge.App) error {
 	if err := forge.ProvideValue(c, targets); err != nil {
 		return fmt.Errorf("provide the GPU targets: %w", err)
 	}
+	if err := forge.ProvideValue(c, e.cloudProfiles); err != nil {
+		return fmt.Errorf("provide the clouds service: %w", err)
+	}
 	return e.routes(fapp.Router(), guard)
 }
 

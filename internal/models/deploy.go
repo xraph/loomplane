@@ -9,6 +9,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/gpus"
 	"github.com/xraph/loomplane/internal/manifests"
@@ -80,6 +81,16 @@ const (
 	ProblemBudget       = "model-budget"
 	ProblemNoManifest   = "model-no-manifest"
 	ProblemEngine       = "model-engine"
+	// ProblemNoCloud: the environment's cloud doesn't have the provider
+	// account a GPU server would be created with.
+	ProblemNoCloud = "model-no-cloud"
+	// ProblemServerAdmin: only an admin creates GPU servers.
+	ProblemServerAdmin = "model-server-needs-admin"
+	// ProblemServerReview: the GPU server's review is missing, expired or
+	// for another server.
+	ProblemServerReview = "model-server-review"
+	// ProblemCapacity: the cloud's capacity policy refuses the server.
+	ProblemCapacity = "model-capacity"
 )
 
 // DeployPreview is what a deploy would do, and why it can't when it
@@ -109,6 +120,10 @@ type DeployPreview struct {
 	// CanDeploy is true when there are no problems and the caller may
 	// write this environment's models.
 	CanDeploy bool `json:"can_deploy"`
+	// Server is the review of the GPU server a server size target creates
+	// first, with its hourly price and GPUs. Deploy approves it: send its
+	// cloud_id, id and review back as DeployInput.Server.
+	Server *cloudinfra.Operation `json:"server,omitempty"`
 
 	env       *projects.Environment
 	entry     registry.Entry
@@ -199,7 +214,7 @@ func (s *Service) Preview(ctx context.Context, p security.Principal, projectID, 
 	if err != nil {
 		return nil, err
 	}
-	pv, err := s.preview(ctx, p, projectID, env, in)
+	pv, err := s.preview(ctx, p, projectID, env, in, false)
 	if err != nil {
 		return nil, err
 	}
@@ -213,15 +228,19 @@ func (s *Service) Preview(ctx context.Context, p security.Principal, projectID, 
 }
 
 // deployTarget is the place a preview resolved: a connection, and for a GPU the
-// target row with its kind.
+// target row with its kind. For a server size, size is true and gpu is the
+// size's row.
 type deployTarget struct {
 	name, provider string
 	gpu            *gpus.GPUTarget // nil on CPU
+	size           bool
 }
 
 // preview works the deploy out. It returns an error only when it can't
-// answer at all; everything that stops the deploy is a Problem.
-func (s *Service) preview(ctx context.Context, p security.Principal, projectID string, env *projects.Environment, in DeployInput) (*DeployPreview, error) {
+// answer at all; everything that stops the deploy is a Problem. deploying
+// is true for Deploy, which needs the GPU server a server size creates
+// approved in in.Server.
+func (s *Service) preview(ctx context.Context, p security.Principal, projectID string, env *projects.Environment, in DeployInput, deploying bool) (*DeployPreview, error) {
 	if in.MaxModelLen < 0 {
 		return nil, fmt.Errorf("%w: max_model_len can't be negative", ErrInvalid)
 	}
@@ -299,9 +318,14 @@ func (s *Service) preview(ctx context.Context, p security.Principal, projectID s
 		}
 	}
 
-	if onGPU {
+	switch {
+	case t.size:
+		// The server is created for the model, so its whole price is the
+		// model's. The review below prices it again from the provider.
+		pv.Cost = serverCost(t.gpu.Accelerator, t.gpu.HourlyUSD, t.gpu.HourlyPriceKnown)
+	case onGPU:
 		pv.Cost = HourlyCost(*t.gpu, count, "")
-	} else {
+	default:
 		// A CPU engine holds no GPU: its cost is part of the server's.
 		pv.Cost = HourlyCost(gpus.GPUTarget{}, 0, "")
 	}
@@ -315,6 +339,9 @@ func (s *Service) preview(ctx context.Context, p security.Principal, projectID s
 	}
 	if e.Gated {
 		s.checkGated(ctx, p.OrgID, e, q, pv, problem)
+	}
+	if t.size && len(pv.Problems) == 0 {
+		s.reviewServer(ctx, p, projectID, env, in, deploying, pv, problem)
 	}
 	return pv, nil
 }
@@ -404,8 +431,7 @@ func (s *Service) resolveTarget(ctx context.Context, p security.Principal, choic
 	switch choice.Source {
 	case TargetConnection:
 	case TargetServerSize:
-		problem(ProblemTarget, "Loomplane can't create a GPU server for a model yet. Pick a server or cluster you have.")
-		return deployTarget{}, false
+		return s.sizeTarget(ctx, p, choice, problem)
 	default:
 		problem(ProblemTarget, "Pick a server or cluster to deploy the model on.")
 		return deployTarget{}, false
@@ -571,6 +597,10 @@ func gpuTitle(kind string) string {
 //
 // When the plan fails after the manifest edit, the row stays, with a
 // message, and the error is a PlanAfterEditError.
+//
+// A server size target creates the GPU server first: in.Server approves
+// the review Preview made, and the deployment waits for the server, with
+// no manifest edit yet. Reconcile carries it on once the server is up.
 func (s *Service) Deploy(ctx context.Context, p security.Principal, projectID, environmentID string, in DeployInput) (*DeployResult, error) {
 	env, err := s.environment(ctx, p.OrgID, projectID, environmentID)
 	if err != nil {
@@ -582,7 +612,7 @@ func (s *Service) Deploy(ctx context.Context, p security.Principal, projectID, e
 	if s.d.Store == nil || s.d.Manifests == nil || s.d.Plans == nil {
 		return nil, errors.New("models: deploying isn't configured")
 	}
-	pv, err := s.preview(ctx, p, projectID, env, in)
+	pv, err := s.preview(ctx, p, projectID, env, in, true)
 	if err != nil {
 		return nil, err
 	}
@@ -599,6 +629,10 @@ func (s *Service) Deploy(ctx context.Context, p security.Principal, projectID, e
 		}
 	}
 
+	if pv.Server != nil {
+		return s.deployServerFirst(ctx, p, projectID, env, in, pv)
+	}
+
 	row := &Deployment{
 		OrgID: p.OrgID, ProjectID: projectID, EnvironmentID: env.ID, Resource: pv.Resource, EntryID: e.ID,
 		Quantization: q.ID, Engine: string(q.Engine), MonthlyBudgetUSD: pv.budgetUSD, Phase: PhasePlanned,
@@ -607,7 +641,20 @@ func (s *Service) Deploy(ctx context.Context, p security.Principal, projectID, e
 	if cerr := s.createRow(ctx, p.OrgID, e, row); cerr != nil {
 		return nil, cerr
 	}
+	rev, err := s.addResource(ctx, p, projectID, env, pv)
+	if err != nil {
+		// Nothing points at the row yet, so it goes.
+		if derr := s.d.Store.Delete(context.WithoutCancel(ctx), p.OrgID, projectID, env.ID, pv.Resource); derr != nil {
+			err = errors.Join(err, fmt.Errorf("and its deployment row stays: %w", derr))
+		}
+		return nil, err
+	}
+	return s.planRow(ctx, p, projectID, env, rev, row)
+}
 
+// addResource makes a deploy's one manifest edit: the resource, running
+// in env on the preview's target and nowhere else.
+func (s *Service) addResource(ctx context.Context, p security.Principal, projectID string, env *projects.Environment, pv *DeployPreview) (*manifests.Revision, error) {
 	var gpu *manifest.GPU
 	if pv.GPU != nil {
 		gpu = &manifest.GPU{Kind: pv.GPU.Kind, Count: pv.GPU.Count}
@@ -617,21 +664,23 @@ func (s *Service) Deploy(ctx context.Context, p security.Principal, projectID, e
 		Settings: engines.Settings(pv.spec), GPU: gpu, EnabledIn: env.Name,
 	}})
 	if err != nil {
-		// Nothing points at the row yet, so it goes.
-		if derr := s.d.Store.Delete(context.WithoutCancel(ctx), p.OrgID, projectID, env.ID, pv.Resource); derr != nil {
-			err = errors.Join(err, fmt.Errorf("and its deployment row stays: %w", derr))
-		}
 		return nil, err
 	}
 	s.audit(ctx, p, projectID, "ai.model.deploy", map[string]any{
-		"entry": e.ID, "quantization": q.ID, "target": pv.Target.ConnectionID, "resource": pv.Resource,
+		"entry": pv.entry.ID, "quantization": pv.quant.ID, "target": pv.Target.ConnectionID, "resource": pv.Resource,
 		"environment": env.Name, "kind": pv.Kind, "manifest_revision": rev.Revision,
 	})
+	return rev, nil
+}
 
+// planRow plans env from rev and records the plan on row. When planning
+// fails, the row says how to deploy it from the project, and the error is
+// a PlanAfterEditError.
+func (s *Service) planRow(ctx context.Context, p security.Principal, projectID string, env *projects.Environment, rev *manifests.Revision, row *Deployment) (*DeployResult, error) {
 	plan, err := s.d.Plans.Create(ctx, p, projectID, planning.CreatePlanInput{Environment: env.Name, Catalog: rev.Manifest.CatalogOnly()})
 	if err != nil {
-		perr := &PlanAfterEditError{Resource: pv.Resource, Environment: env.Name, err: err}
-		row.Message = fmt.Sprintf("The manifest has %s now. Plan %s from the project to deploy it.", pv.Resource, env.Name)
+		perr := &PlanAfterEditError{Resource: row.Resource, Environment: env.Name, err: err}
+		row.Message = fmt.Sprintf("The manifest has %s now. Plan %s from the project to deploy it.", row.Resource, env.Name)
 		if uerr := s.d.Store.Update(context.WithoutCancel(ctx), row); uerr != nil {
 			return &DeployResult{Deployment: row}, errors.Join(perr, uerr)
 		}

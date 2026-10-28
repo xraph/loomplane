@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"os"
 	"reflect"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -358,6 +359,46 @@ func TestWaitingListsEveryOrg(t *testing.T) {
 	}
 	if strings.Join(got, " ") != "org_b/env_1 org_a/env_1" {
 		t.Fatalf("waiting: %v", got)
+	}
+}
+
+// Stranded lists, across organizations, the planned rows a deploy stopped
+// writing before since: no plan, no message, a requester.
+func TestStrandedListsEveryOrg(t *testing.T) {
+	st, now := scratchStore(t)
+	ctx := t.Context()
+	add := func(org, env string, change func(*Deployment)) {
+		t.Helper()
+		d := llamaRow(org, env)
+		d.Phase = PhasePlanned
+		change(d)
+		if err := st.Create(ctx, d); err != nil {
+			t.Fatal(err)
+		}
+	}
+	keep := func(*Deployment) {}
+	add("org_b", "env_1", keep)
+	add("org_a", "env_1", keep)
+	add("org_a", "env_2", func(d *Deployment) { d.PlanID = "plan_1" })
+	add("org_a", "env_3", func(d *Deployment) { d.Message = "Plan staging from the project to deploy it." })
+	add("org_a", "env_4", func(d *Deployment) { d.RequestedBy = security.Principal{} })
+	add("org_a", "env_5", func(d *Deployment) { d.Phase = PhaseWaitingForServer })
+	cutoff := now.Add(time.Minute)
+	*now = now.Add(2 * time.Minute)
+	add("org_a", "env_6", keep) // too young
+
+	var lister WaitingLister = st
+	rows, err := lister.Stranded(ctx, cutoff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := make([]string, 0, len(rows))
+	for _, d := range rows {
+		got = append(got, d.OrgID+"/"+d.EnvironmentID)
+	}
+	slices.Sort(got)
+	if strings.Join(got, " ") != "org_a/env_1 org_b/env_1" {
+		t.Errorf("stranded: %v", got)
 	}
 }
 

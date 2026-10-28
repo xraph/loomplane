@@ -87,6 +87,21 @@ type Deps struct {
 	TokenGuard TokenGuard
 	// Audit may be nil.
 	Audit Auditor
+
+	// What creating a GPU server first needs. Without them a server size
+	// target is a problem.
+
+	// Servers previews, approves and reads GPU servers, as the principal
+	// who deploys.
+	Servers Servers
+	// Clouds says which cloud an environment deploys to.
+	Clouds Clouds
+	// Waiting lists the rows the reconcile cron carries on, across
+	// organizations. Only Reconcile reads it.
+	Waiting WaitingLister
+	// Principals rechecks an API key behind a stored principal before the
+	// cron acts as it. Nil refuses every key.
+	Principals security.PrincipalVerifier
 }
 
 // Service is the model registry as a workspace sees it: what it can

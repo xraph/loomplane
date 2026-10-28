@@ -211,10 +211,12 @@ func (f *fakePlans) Create(_ context.Context, _ security.Principal, _ string, in
 	return &planning.Plan{ID: fmt.Sprintf("plan_%d", len(f.asked)), Environment: in.Environment}, nil
 }
 
-// memDeployments is a Store in memory.
+// memDeployments is a Store in memory. With now set, it stamps rows as
+// Postgres does.
 type memDeployments struct {
 	mu   sync.Mutex
 	rows map[string]*Deployment
+	now  func() time.Time
 }
 
 func deploymentKey(org, project, env, resource string) string {
@@ -242,6 +244,9 @@ func (m *memDeployments) Create(_ context.Context, d *Deployment) error {
 		d.ID = id.String()
 	}
 	d.Revision = 1
+	if m.now != nil {
+		d.CreatedAt, d.UpdatedAt = m.now(), m.now()
+	}
 	row := *d
 	m.rows[k] = &row
 	return nil
@@ -291,6 +296,9 @@ func (m *memDeployments) Update(_ context.Context, d *Deployment) error {
 		return ErrStale
 	}
 	d.Revision++
+	if m.now != nil {
+		d.UpdatedAt = m.now()
+	}
 	row := *d
 	m.rows[k] = &row
 	return nil

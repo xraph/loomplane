@@ -195,6 +195,14 @@ func (s *PgStore) Waiting(ctx context.Context) ([]*Deployment, error) {
 		WHERE phase = 'waiting_for_server' ORDER BY updated_at, id`)
 }
 
+// Stranded implements WaitingLister. Like Waiting, only the reconcile cron
+// reads it.
+func (s *PgStore) Stranded(ctx context.Context, before time.Time) ([]*Deployment, error) {
+	return s.list(ctx, `SELECT `+deploymentColumns+` FROM loomplane_ai_model_deployments
+		WHERE phase = 'planned' AND plan_id = '' AND message = '' AND requested_by IS NOT NULL AND updated_at < $1
+		ORDER BY updated_at, id`, before.UTC())
+}
+
 func (s *PgStore) list(ctx context.Context, query string, args ...any) ([]*Deployment, error) {
 	rows, err := s.db.Query(ctx, query, args...)
 	if err != nil {

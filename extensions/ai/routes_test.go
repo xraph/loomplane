@@ -1,22 +1,29 @@
 package ai_test
 
 import (
+	"context"
 	"slices"
 	"testing"
 
 	"github.com/xraph/chronicle"
+	"github.com/xraph/dispatch"
+	"github.com/xraph/dispatch/engine"
+	"github.com/xraph/dispatch/store/memory"
 	"github.com/xraph/forge"
 	"github.com/xraph/grove"
 	"github.com/xraph/grove/drivers/pgdriver"
 
 	aiext "github.com/xraph/loomplane/extensions/ai"
 	"github.com/xraph/loomplane/internal/aisettings"
+	"github.com/xraph/loomplane/internal/cloudinfra"
+	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/deployments"
 	"github.com/xraph/loomplane/internal/gpus"
 	"github.com/xraph/loomplane/internal/manifests"
 	"github.com/xraph/loomplane/internal/models"
+	"github.com/xraph/loomplane/internal/orchestration"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/platform"
 	"github.com/xraph/loomplane/internal/projects"
@@ -46,7 +53,7 @@ func TestRoutesAreAbsentWhenAIIsOff(t *testing.T) {
 	// It registers after what it depends on, and before the dashboard's
 	// catch-all.
 	ai := slices.Index(names, aiext.Name)
-	for _, before := range []string{"loomplane-identity", "loomplane-planning"} {
+	for _, before := range []string{"loomplane-identity", "loomplane-planning", "loomplane-cloud-infrastructure"} {
 		if i := slices.Index(names, before); i < 0 || i > ai {
 			t.Errorf("%s at %d, %s at %d: %v", before, i, aiext.Name, ai, names)
 		}
@@ -64,6 +71,14 @@ func TestModelHooksAreRegistered(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	dispatcher, err := dispatch.New(dispatch.WithStore(memory.New()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng, err := engine.Build(dispatcher)
+	if err != nil {
+		t.Fatal(err)
+	}
 	hooks, inputs := deployments.CatalogHookMap{}, planning.CatalogInputMap{}
 	app := forge.New(forge.WithAppName("ai-test"))
 	c := app.Container()
@@ -78,6 +93,10 @@ func TestModelHooksAreRegistered(t *testing.T) {
 		forge.ProvideValue(c, gpus.NewService(gpus.Deps{})),
 		forge.ProvideValue(c, new(connections.Service)),
 		forge.ProvideValue(c, new(projects.Service)),
+		forge.ProvideValue(c, new(cloudinfra.Service)),
+		forge.ProvideValue(c, new(cloudprofiles.Service)),
+		forge.ProvideValue[security.PrincipalVerifier](c, rejectAll{}),
+		forge.ProvideValue(c, eng),
 	} {
 		if provide != nil {
 			t.Fatal(provide)
@@ -86,8 +105,22 @@ func TestModelHooksAreRegistered(t *testing.T) {
 	var cfg config.Config
 	cfg.AI.Enabled = true
 	cfg.SecretKey = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
-	if err = aiext.New(cfg).Register(app); err != nil {
+	ext := aiext.New(cfg)
+	if err = ext.Register(app); err != nil {
 		t.Fatal(err)
+	}
+	// The reconcile job is registered, and Start schedules it every minute
+	// on Loomplane's queue.
+	if _, ok := eng.Registry().Get(aiext.JobReconcileModels); !ok {
+		t.Errorf("no %s job: %v", aiext.JobReconcileModels, eng.Registry().Names())
+	}
+	if err = ext.Start(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	crons, err := eng.CronStore().ListCrons(t.Context())
+	if err != nil || len(crons) != 1 || crons[0].JobName != aiext.JobReconcileModels || crons[0].Schedule != "@every 1m" ||
+		crons[0].Queue != orchestration.Queue {
+		t.Errorf("crons %+v, %v", crons, err)
 	}
 
 	// The maps planning shares hold every model kind, and only those.
@@ -118,6 +151,13 @@ func TestModelHooksAreRegistered(t *testing.T) {
 	if svc, err := forge.InjectType[*models.Service](c); err != nil || svc == nil {
 		t.Errorf("the models service not provided: %v", err)
 	}
+}
+
+// rejectAll is an API key check that rejects every key.
+type rejectAll struct{}
+
+func (rejectAll) ValidatePrincipal(context.Context, security.Principal) error {
+	return security.ErrForbidden
 }
 
 func keys[V any](m map[string]V) []string {

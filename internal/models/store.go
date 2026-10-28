@@ -36,8 +36,6 @@ const (
 
 // DeployInput is what someone asked to deploy, kept on the row while the
 // model waits for a server so the deploy can carry on once it's there.
-// Creating that server first, with its approval, comes with the
-// server-first deploy.
 type DeployInput struct {
 	EntryID          string       `json:"entry_id"`
 	Quantization     string       `json:"quantization,omitempty"` // "" picks the best that fits the target
@@ -45,6 +43,18 @@ type DeployInput struct {
 	Resource         string       `json:"resource,omitempty"`      // "" is DefaultResource(entry)
 	MaxModelLen      int          `json:"max_model_len,omitempty"` // 0 is the largest that fits, at most 32768
 	MonthlyBudgetUSD string       `json:"monthly_budget_usd,omitempty"`
+	// Server approves the GPU server a server size target creates: the
+	// review Preview returned in DeployPreview.Server. Deploy refuses a
+	// server size without it.
+	Server *ServerApproval `json:"server,omitempty"`
+}
+
+// ServerApproval names the reviewed GPU server operation a deploy
+// approves, with the review token that applies it.
+type ServerApproval struct {
+	CloudID     string `json:"cloud_id"`
+	OperationID string `json:"operation_id"`
+	Review      string `json:"review"`
 }
 
 // Deployment is a model deployed to one environment, as Loomplane tracks
@@ -134,6 +144,10 @@ type WaitingLister interface {
 	// Waiting lists the rows waiting for a server in every organization,
 	// oldest change first.
 	Waiting(ctx context.Context) ([]*Deployment, error)
+	// Stranded lists, in every organization, the planned rows a deploy
+	// stopped writing: no plan, no message, someone who asked, and no
+	// change since before.
+	Stranded(ctx context.Context, before time.Time) ([]*Deployment, error)
 }
 
 // Money is decimal text, parsed to whole ten-thousandths of a dollar for

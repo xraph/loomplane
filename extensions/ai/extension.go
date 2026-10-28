@@ -5,10 +5,15 @@
 package ai
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
 	"github.com/xraph/chronicle"
+	"github.com/xraph/dispatch/cron"
+	"github.com/xraph/dispatch/engine"
+	dispatchext "github.com/xraph/dispatch/extension"
+	"github.com/xraph/dispatch/job"
 	"github.com/xraph/forge"
 	"github.com/xraph/grove"
 	"github.com/xraph/grove/drivers/pgdriver"
@@ -16,10 +21,13 @@ import (
 	"github.com/xraph/vault/secret"
 	vaultpg "github.com/xraph/vault/store/postgres"
 
+	cloudinfraext "github.com/xraph/loomplane/extensions/cloudinfra"
 	"github.com/xraph/loomplane/extensions/identity"
 	planningext "github.com/xraph/loomplane/extensions/planning"
 	projectsext "github.com/xraph/loomplane/extensions/projects"
 	"github.com/xraph/loomplane/internal/aisettings"
+	"github.com/xraph/loomplane/internal/cloudinfra"
+	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/deployments"
@@ -28,6 +36,7 @@ import (
 	"github.com/xraph/loomplane/internal/models"
 	"github.com/xraph/loomplane/internal/models/hfhub"
 	"github.com/xraph/loomplane/internal/models/registry"
+	"github.com/xraph/loomplane/internal/orchestration"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/recipes"
@@ -37,18 +46,27 @@ import (
 // Name is the extension's name.
 const Name = "loomplane-ai"
 
+// JobReconcileModels carries on the model deployments waiting for a GPU
+// server, and tidies the ones a deploy stopped writing. Its cron runs it
+// every minute.
+const JobReconcileModels = "ai-models.reconcile"
+
+// reconcileModelsEvery is how often the reconcile runs.
+const reconcileModelsEvery = "@every 1m"
+
+// reconcilePayload is the reconcile job's input: there is none.
+type reconcilePayload struct{}
+
 // Extension builds the AI settings and models services and registers the
-// model kinds' hooks and plan inputs with the planning extension.
-//
-// The model crons to come (cost accrual and budget alerts) will need
-// Dispatch's engine, which New will then take as the octopus extension's
-// does.
+// model kinds' hooks and plan inputs with the planning extension, and the
+// model reconcile with Dispatch.
 type Extension struct {
 	*forge.BaseExtension
 	cfg      config.Config
 	settings *aisettings.Service
 	models   *models.Service
 	hooks    *models.Hooks
+	engine   *engine.Engine
 }
 
 // New returns the extension.
@@ -61,10 +79,11 @@ func New(cfg config.Config) *Extension {
 
 // Dependencies implements forge.Extension. Identity checks permissions and
 // keeps the audit trail; planning provides the catalog hook and input maps
-// this extension adds the model kinds to, and the manifests, plans and GPU
-// targets models deploy through.
+// this extension adds the model kinds to, and the manifests, plans, GPU
+// targets and cloud assignments models deploy through; cloudinfra creates
+// the GPU servers a model needs first; Dispatch runs the reconcile.
 func (e *Extension) Dependencies() []string {
-	return []string{identity.Name, planningext.Name}
+	return []string{identity.Name, dispatchext.ExtensionName, cloudinfraext.Name, planningext.Name}
 }
 
 // Register builds the settings service over its own Vault app, the
@@ -166,12 +185,37 @@ func (e *Extension) registerModels(c forge.Container, authz *security.Authorizer
 	if err != nil {
 		return fmt.Errorf("ai needs the projects extension: %w", err)
 	}
+	servers, err := forge.InjectType[*cloudinfra.Service](c)
+	if err != nil {
+		return fmt.Errorf("ai needs the cloud infrastructure extension: %w", err)
+	}
+	clouds, err := forge.InjectType[*cloudprofiles.Service](c)
+	if err != nil {
+		return fmt.Errorf("ai needs the planning extension's clouds: %w", err)
+	}
+	keys, err := forge.InjectType[security.PrincipalVerifier](c)
+	if err != nil {
+		return fmt.Errorf("ai needs the identity extension's API keys: %w", err)
+	}
+	e.engine, err = forge.InjectType[*engine.Engine](c)
+	if err != nil {
+		return fmt.Errorf("ai needs the dispatch extension's engine: %w", err)
+	}
+	if e.engine == nil {
+		return errors.New("ai needs the dispatch extension's engine")
+	}
 	hub := hfhub.New(hfhub.DefaultURL, nil)
 	e.models = models.NewService(models.Deps{
 		Registry: registry.Default(), Hub: hub, Settings: e.settings, Custom: store, GPUs: targets, Connections: conns,
 		Authz: authz, Store: store, Manifests: mf, Plans: plans, Projects: projects.NewPgStore(pg), TokenGuard: e.settings,
-		Audit: auditor,
+		Audit: auditor, Servers: servers, Clouds: clouds, Waiting: store, Principals: keys,
 	})
+	// The reconcile is the one caller of the store's cross-organization
+	// read, through Reconcile.
+	svc := e.models
+	engine.Register(e.engine, job.NewDefinition(JobReconcileModels, func(ctx context.Context, _ reconcilePayload) error {
+		return svc.Reconcile(ctx)
+	}, job.WithMaxRetries(0)))
 	e.settings.SetTokenChecker(hub)
 	e.settings.SetGatedModels(e.models)
 	log := e.Logger()
@@ -181,5 +225,18 @@ func (e *Extension) registerModels(c forge.Container, authz *security.Authorizer
 	if err := forge.ProvideValue(c, e.models); err != nil {
 		return fmt.Errorf("provide the models service: %w", err)
 	}
+	return nil
+}
+
+// Start schedules the model reconcile, which runs on the cron leader only.
+// The schedule needs the database, which is migrated by now.
+func (e *Extension) Start(ctx context.Context) error {
+	def := &cron.Definition[reconcilePayload]{
+		Name: JobReconcileModels, JobName: JobReconcileModels, Schedule: reconcileModelsEvery, Queue: orchestration.Queue,
+	}
+	if err := engine.RegisterCron(ctx, e.engine, def); err != nil {
+		return fmt.Errorf("schedule the model reconcile: %w", err)
+	}
+	e.MarkStarted()
 	return nil
 }
