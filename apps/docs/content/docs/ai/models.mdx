@@ -187,7 +187,7 @@ print(reply.choices[0].message.content)
 
 The `model` field is the name the model is served as, its Hugging Face repo unless `served_name` says otherwise. The model page's **Example** tab has curl, Python and JavaScript for the model's own tasks: embeddings at `/v1/embeddings` (with the query prefix the model wants, such as `"query: "`, when the registry knows it), reranking at `POST $MODEL_URL/rerank`, and transcription at `POST $MODEL_URL/v1/audio/transcriptions`.
 
-A service that needs the model in an environment where it doesn't run gets a `need-off` warning on that environment's plans, saying it gets no `MODEL_URL` there because the model doesn't run there. The warning doesn't block those deploys. It suggests enabling the model in that environment, which would run a second copy on the same target. To pick where production's copy runs, deploy the model to production from the Models page.
+A service that needs the model in an environment where it doesn't run gets a `need-off` warning on that environment's plans, saying it gets no `MODEL_URL` there because the model doesn't run there. The warning doesn't block those deploys. It suggests enabling the model in that environment, which would run a second copy on the same target.
 
 ## Any Hugging Face model
 
