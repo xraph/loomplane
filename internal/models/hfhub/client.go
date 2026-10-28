@@ -271,8 +271,17 @@ func (c *Client) RawFile(ctx context.Context, repo, revision, path, token string
 // SHA: HEAD /<repo>/resolve/<revision>/config.json. nil when it may,
 // ErrGated when the Hub refuses (401 or 403), ErrNotFound when there's no
 // such repo or file. A redirect counts as access and isn't followed.
+//
+// A GGUF repo often has no config.json, so its answer is ErrNotFound
+// whoever asks. Ask AccessFile with one of the repo's own files then.
 func (c *Client) Access(ctx context.Context, repo, revision, token string) error {
-	p, err := filePath(repo, revision, "config.json")
+	return c.AccessFile(ctx, repo, revision, "config.json", token)
+}
+
+// AccessFile is Access for one file of the repo: HEAD
+// /<repo>/resolve/<revision>/<path>.
+func (c *Client) AccessFile(ctx context.Context, repo, revision, path, token string) error {
+	p, err := filePath(repo, revision, path)
 	if err != nil {
 		return err
 	}

@@ -585,6 +585,39 @@ func TestCardStripsFrontMatter(t *testing.T) {
 	}
 }
 
+// A custom entry read from a private repo with the workspace's token is
+// marked gated. Its card answers an anonymous request as if it had none,
+// so the card is asked for again with the token, and a "no card" read
+// without one isn't kept for a day.
+func TestCardOfAPrivateRepoUsesTheToken(t *testing.T) {
+	ctx := context.Background()
+	b := newBrowse(t, browseRegistry(t, ""), developer, nil)
+	repo := qwenRepo(t)
+	repo.id, repo.private, repo.readme = "acme/private-7b", true, "# Private\n"
+	b.hub.add(repo)
+	b.tokens.token = hfToken
+	b.hub.grant(hfToken)
+	d, err := b.svc.Inspect(ctx, member, repo.id, "")
+	if err != nil || !d.Gated {
+		t.Fatalf("inspect: %+v, %v", d, err)
+	}
+
+	// The token is gone for now: no card, and nothing kept.
+	b.tokens.token = ""
+	c, err := b.svc.Card(ctx, member, d.ID)
+	if err != nil || c.Markdown != "" || c.Note != repo.id+" has no model card." {
+		t.Errorf("without a token: %+v, %v", c, err)
+	}
+	b.tokens.token = hfToken
+	if c, err = b.svc.Card(ctx, member, d.ID); err != nil || c.Markdown != "# Private\n" {
+		t.Errorf("with the token again: %+v, %v", c, err)
+	}
+	want := "GET /" + repo.id + "/resolve/" + qwenSHA + "/README.md token " + hfToken
+	if got := b.hub.requests(); got[len(got)-1] != want {
+		t.Errorf("last request %q", got[len(got)-1])
+	}
+}
+
 func TestCPUCacheProblem(t *testing.T) {
 	small := registry.Quantization{ID: "gguf-q4_k_m", Engine: registry.EngineLlamaCPP, File: "m-Q4_K_M.gguf", WeightBytes: 5 << 30}
 	if got := CPUCacheProblem(small); got != "" {
@@ -617,6 +650,7 @@ type hubRepo struct {
 	files             map[string]int64
 	gated, private    bool
 	config, readme    string
+	params            int64 // safetensors.total, 0 for none
 }
 
 func newFakeHub(t *testing.T) *fakeHub {
@@ -676,9 +710,13 @@ func (h *fakeHub) serve(w http.ResponseWriter, r *http.Request) {
 		if repo.gated {
 			gated = "manual"
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{
+		meta := map[string]any{
 			"id": repo.id, "sha": repo.sha, "pipeline_tag": repo.pipeline, "gated": gated, "tags": repo.tags, "siblings": siblings,
-		})
+		}
+		if repo.params > 0 {
+			meta["safetensors"] = map[string]any{"total": repo.params}
+		}
+		_ = json.NewEncoder(w).Encode(meta)
 		return
 	}
 	for id, repo := range h.repos {
@@ -687,8 +725,17 @@ func (h *fakeHub) serve(w http.ResponseWriter, r *http.Request) {
 		if !ok {
 			continue
 		}
-		if (repo.gated || repo.private) && !h.granted[token] {
+		// A private repo's files answer an anonymous request as if the repo
+		// weren't there; a gated one's say it's gated.
+		if repo.private && !h.granted[token] {
+			refuse(http.StatusUnauthorized, "RepoNotFound")
+			return
+		}
+		if repo.gated && !h.granted[token] {
 			refuse(http.StatusForbidden, "GatedRepo")
+			return
+		}
+		if _, listed := repo.files[file]; listed && r.Method == http.MethodHead {
 			return
 		}
 		var body string

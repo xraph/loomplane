@@ -40,7 +40,10 @@ var customIDPattern = regexp.MustCompile(`^hf:[A-Za-z0-9][A-Za-z0-9._-]{0,95}/[A
 
 // checkCustom refuses an entry that isn't one Build would make: an ID that
 // isn't engines.CustomEntryID of its repo and 40-hex revision, one that
-// asks to run its repo's code, or weights from another repo.
+// asks to run its repo's code, weights from another repo, extra engine
+// arguments, or a GGUF file name Build wouldn't use. Build never gives a
+// quantization arguments, so a stored row that has some was edited by hand,
+// and they'd reach the engine's command line.
 func checkCustom(e registry.Entry) error {
 	if !customIDPattern.MatchString(e.ID) {
 		return fmt.Errorf("%w: custom entry ID %q isn't hf:<repo>@<12 hex of the revision>", ErrInvalid, e.ID)
@@ -54,6 +57,12 @@ func checkCustom(e registry.Entry) error {
 	for _, q := range e.Quantizations {
 		if q.Repo != "" || q.Revision != "" {
 			return fmt.Errorf("%w: custom entry %s keeps %s's weights in another repo", ErrInvalid, e.ID, q.ID)
+		}
+		if len(q.Args) > 0 {
+			return fmt.Errorf("%w: custom entry %s gives %s extra engine arguments", ErrInvalid, e.ID, q.ID)
+		}
+		if q.File != "" && !hfhub.GGUFName(q.File) {
+			return fmt.Errorf("%w: custom entry %s names a GGUF file Loomplane doesn't use", ErrInvalid, e.ID)
 		}
 	}
 	return nil
@@ -209,11 +218,17 @@ func (s *Service) Inspect(ctx context.Context, p security.Principal, repo, revis
 	if err != nil {
 		return nil, err
 	}
-	config, err := s.config(ctx, p.OrgID, src)
+	config, baseParams, err := s.config(ctx, p.OrgID, src)
 	if err != nil {
 		return nil, err
 	}
-	e, err := hfhub.Build(src.info, config)
+	info := *src.info
+	if info.Params <= 0 {
+		// A GGUF repo's metadata rarely counts parameters, and its base
+		// model's safetensors do.
+		info.Params = baseParams
+	}
+	e, err := hfhub.Build(&info, config)
 	if err != nil {
 		return nil, err
 	}
@@ -274,7 +289,15 @@ func (s *Service) open(ctx context.Context, orgID, repo, revision string) (repoA
 			return repoAt{}, &GatedError{Title: repo}
 		}
 	}
-	switch err := s.d.Hub.Access(ctx, info.ID, info.SHA, token); {
+	err = s.d.Hub.Access(ctx, info.ID, info.SHA, token)
+	if errors.Is(err, hfhub.ErrNotFound) {
+		// A GGUF repo usually has no config.json to ask about, whoever
+		// asks. Ask about a file it has instead.
+		if file := firstGGUF(info); file != "" {
+			err = s.d.Hub.AccessFile(ctx, info.ID, info.SHA, file, token)
+		}
+	}
+	switch {
 	case errors.Is(err, hfhub.ErrGated):
 		return repoAt{}, gatedAccessError(repo)
 	case err != nil:
@@ -284,29 +307,61 @@ func (s *Service) open(ctx context.Context, orgID, repo, revision string) (repoA
 }
 
 // config reads the repo's config.json. A GGUF repo usually has none, so
-// its base model's is read instead, from the "base_model" tag.
-func (s *Service) config(ctx context.Context, orgID string, src repoAt) ([]byte, error) {
-	config, err := s.d.Hub.RawFile(ctx, src.info.ID, src.info.SHA, "config.json", src.token, maxConfigBytes)
+// its base model's is read instead, from the "base_model" tag, along with
+// the base model's parameter count from its safetensors (0 when the Hub
+// doesn't give one).
+func (s *Service) config(ctx context.Context, orgID string, src repoAt) (config []byte, baseParams int64, err error) {
+	config, err = s.d.Hub.RawFile(ctx, src.info.ID, src.info.SHA, "config.json", src.token, maxConfigBytes)
 	if err == nil || !errors.Is(err, hfhub.ErrNotFound) {
 		if err != nil {
-			return nil, fmt.Errorf("read %s's config.json: %w", src.info.ID, err)
+			return nil, 0, fmt.Errorf("read %s's config.json: %w", src.info.ID, err)
 		}
-		return config, nil
+		return config, 0, nil
 	}
 	base := baseModel(src.info)
 	if base == "" || !hasGGUF(src.info) {
-		return nil, fmt.Errorf("%w: %s has no config.json, so Loomplane can't work out how much memory it needs", hfhub.ErrRefused, src.info.ID)
+		return nil, 0, fmt.Errorf("%w: %s has no config.json, so Loomplane can't work out how much memory it needs", hfhub.ErrRefused, src.info.ID)
 	}
 	from, err := s.open(ctx, orgID, base, "")
 	if err != nil {
-		return nil, fmt.Errorf("%s has no config.json, and reading its base model's failed: %w", src.info.ID, err)
+		var gated *GatedError
+		var access *GatedAccessError
+		if errors.As(err, &gated) || errors.As(err, &access) {
+			return nil, 0, &BaseGatedError{Repo: src.info.ID, Base: base, NoToken: gated != nil, err: err}
+		}
+		return nil, 0, fmt.Errorf("%s has no config.json, and reading its base model's failed: %w", src.info.ID, err)
 	}
 	config, err = s.d.Hub.RawFile(ctx, from.info.ID, from.info.SHA, "config.json", from.token, maxConfigBytes)
 	if err != nil {
-		return nil, fmt.Errorf("%s has no config.json, and reading its base model %s's failed: %w", src.info.ID, base, err)
+		return nil, 0, fmt.Errorf("%s has no config.json, and reading its base model %s's failed: %w", src.info.ID, base, err)
 	}
-	return config, nil
+	return config, from.info.Params, nil
 }
+
+// BaseGatedError is a GGUF repo, public or not, whose base model is gated:
+// Loomplane sizes the GGUF from the base model's config.json, and only
+// reading that needs the workspace's Hugging Face token. It says so, names
+// the base model, and holds nothing secret.
+type BaseGatedError struct {
+	Repo, Base string
+	// NoToken is true when the workspace has no token, false when its
+	// token's account hasn't been granted access to Base.
+	NoToken bool
+	err     error
+}
+
+func (e *BaseGatedError) Error() string {
+	head := e.Repo + " has no config.json, so Loomplane sizes it from its base model " + e.Base +
+		", which is gated on Hugging Face. The workspace's Hugging Face token is needed only for that, to read " + e.Base + "'s config.json"
+	if e.NoToken {
+		return head + ". Add a token that can read " + e.Base + " in AI settings, then try again"
+	}
+	return head + ", and its account hasn't been granted access to " + e.Base +
+		". Accept " + e.Base + "'s license on Hugging Face with that account, then try again"
+}
+
+// Unwrap returns the GatedError or GatedAccessError about the base model.
+func (e *BaseGatedError) Unwrap() error { return e.err }
 
 // baseModel is the repo a GGUF repo says it was made from, from its
 // "base_model:quantized:<repo>" tag, or "base_model:<repo>".
@@ -330,6 +385,17 @@ func hasGGUF(info *hfhub.ModelInfo) bool {
 		}
 	}
 	return false
+}
+
+// firstGGUF is the first GGUF file at the top of the repo that Loomplane
+// would use, or "".
+func firstGGUF(info *hfhub.ModelInfo) string {
+	for _, f := range info.Files {
+		if hfhub.GGUFName(f.Name) {
+			return f.Name
+		}
+	}
+	return ""
 }
 
 func revisionOrMain(revision string) string {

@@ -326,6 +326,15 @@ func TestCheckCustom(t *testing.T) {
 		"a quantization in another repo": func(e *registry.Entry) {
 			e.Quantizations[0].Repo, e.Quantizations[0].Revision = "acme/other", qwenSHA
 		},
+		// Build never gives a quantization arguments; these would reach
+		// the engine's command line.
+		"extra arguments": func(e *registry.Entry) { e.Quantizations[0].Args = []string{"--enable-lora"} },
+		"a GGUF file name with a query": func(e *registry.Entry) {
+			e.Quantizations[0].Engine, e.Quantizations[0].File = registry.EngineLlamaCPP, "m.gguf?x=1"
+		},
+		"a GGUF file in a folder": func(e *registry.Entry) {
+			e.Quantizations[0].Engine, e.Quantizations[0].File = registry.EngineLlamaCPP, "q/m.gguf"
+		},
 	} {
 		bad := e
 		bad.Quantizations = slices.Clone(e.Quantizations)
@@ -333,5 +342,99 @@ func TestCheckCustom(t *testing.T) {
 		if err := checkCustom(bad); !errors.Is(err, ErrInvalid) {
 			t.Errorf("%s: %v", name, err)
 		}
+	}
+}
+
+// A gated GGUF-only repo has no config.json, so asking Hugging Face about
+// it would say "not found" whoever asked. Access is asked about one of its
+// GGUF files instead.
+func TestInspectChecksAGatedGGUFRepoByItsFile(t *testing.T) {
+	ctx := context.Background()
+	b := newBrowse(t, browseRegistry(t, ""), developer, nil, cpuServer())
+	b.hub.add(qwenRepo(t))
+	gguf := ggufRepo(4683074240)
+	gguf.gated = true
+	b.hub.add(gguf)
+	b.tokens.token = hfToken
+	b.hub.grant(hfToken)
+
+	d, err := b.svc.Inspect(ctx, member, gguf.id, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !d.Gated || len(d.Quantizations) != 1 {
+		t.Errorf("gated %v quantizations %+v", d.Gated, d.Quantizations)
+	}
+	file := "HEAD /" + gguf.id + "/resolve/" + gguf.sha + "/Qwen2.5-7B-Instruct-Q4_K_M.gguf token " + hfToken
+	if !slices.Contains(b.hub.requests(), file) {
+		t.Errorf("never asked about the GGUF file: %v", b.hub.requests())
+	}
+}
+
+// A public GGUF of a gated base model needs the workspace's token only to
+// read the base model's config.json, and the error says so and names it.
+func TestInspectSaysTheTokenIsForTheBaseModel(t *testing.T) {
+	ctx := context.Background()
+	b := newBrowse(t, browseRegistry(t, ""), developer, nil, cpuServer())
+	base := qwenRepo(t)
+	base.gated = true
+	b.hub.add(base)
+	b.hub.add(ggufRepo(4683074240))
+
+	_, err := b.svc.Inspect(ctx, member, "acme/Qwen2.5-7B-Instruct-GGUF", "")
+	var baseGated *BaseGatedError
+	var gated *GatedError
+	if !errors.As(err, &baseGated) || !errors.As(err, &gated) || !baseGated.NoToken {
+		t.Fatalf("without a token: %v", err)
+	}
+	want := "acme/Qwen2.5-7B-Instruct-GGUF has no config.json, so Loomplane sizes it from its base model " + qwen7B +
+		", which is gated on Hugging Face. The workspace's Hugging Face token is needed only for that, to read " + qwen7B +
+		"'s config.json. Add a token that can read " + qwen7B + " in AI settings, then try again"
+	if err.Error() != want {
+		t.Errorf("without a token:\n got %q\nwant %q", err, want)
+	}
+
+	// Another account's access doesn't help the workspace's token.
+	b.hub.grant("hf_someoneElsesTokenVALUE")
+	b.tokens.token = hfToken
+	_, err = b.svc.Inspect(ctx, member, "acme/Qwen2.5-7B-Instruct-GGUF", "")
+	if !errors.As(err, &baseGated) || baseGated.NoToken ||
+		!strings.Contains(err.Error(), "needed only for that") || !strings.Contains(err.Error(), "Accept "+qwen7B+"'s license") {
+		t.Errorf("a token without access: %v", err)
+	}
+	if strings.Contains(err.Error(), hfToken) {
+		t.Error("the error holds the token")
+	}
+
+	b.hub.grant(hfToken)
+	if _, err = b.svc.Inspect(ctx, member, "acme/Qwen2.5-7B-Instruct-GGUF", ""); err != nil {
+		t.Errorf("granted: %v", err)
+	}
+}
+
+// A GGUF repo's parameter count comes from its base model's safetensors
+// when the Hub gives one, and otherwise from what a weight takes in the
+// quantization, never half the file's bytes.
+func TestInspectCountsAGGUFsParameters(t *testing.T) {
+	ctx := context.Background()
+	b := newBrowse(t, browseRegistry(t, ""), developer, nil, cpuServer())
+	b.hub.add(qwenRepo(t))
+	b.hub.add(ggufRepo(4683074240))
+	d, err := b.svc.Inspect(ctx, member, "acme/Qwen2.5-7B-Instruct-GGUF", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 4683074240 bytes at about 0.56 a weight.
+	if d.Parameters != 8362632571 {
+		t.Errorf("without the base model's count: %d", d.Parameters)
+	}
+
+	b = newBrowse(t, browseRegistry(t, ""), developer, nil, cpuServer())
+	base := qwenRepo(t)
+	base.params = 7615616512
+	b.hub.add(base)
+	b.hub.add(ggufRepo(4683074240))
+	if d, err = b.svc.Inspect(ctx, member, "acme/Qwen2.5-7B-Instruct-GGUF", ""); err != nil || d.Parameters != 7615616512 {
+		t.Errorf("with the base model's count: %d, %v", d.Parameters, err)
 	}
 }

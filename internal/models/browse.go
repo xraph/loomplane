@@ -36,6 +36,7 @@ type Hub interface {
 	Model(ctx context.Context, repo, revision, token string) (*hfhub.ModelInfo, error)
 	RawFile(ctx context.Context, repo, revision, path, token string, limit int64) ([]byte, error)
 	Access(ctx context.Context, repo, revision, token string) error
+	AccessFile(ctx context.Context, repo, revision, path, token string) error
 }
 
 // GPUTargets lists where GPUs can run. *gpus.Service is the real one.
@@ -554,20 +555,34 @@ func (s *Service) Card(ctx context.Context, p security.Principal, id string) (*C
 	repo, revision := repoOf(v.entry), v.entry.Revision
 	card := &Card{SourceURL: hfhub.DefaultURL + "/" + repo + "/blob/" + revision + "/README.md"}
 	body, err := s.d.Hub.RawFile(ctx, repo, revision, "README.md", "", maxCardBytes)
-	if errors.Is(err, hfhub.ErrGated) {
+	// A custom entry is marked gated when it took the workspace's token to
+	// read, and a private repo answers an anonymous request as if it had no
+	// card. Ask again with the token.
+	private := strings.HasPrefix(v.entry.ID, customPrefix) && v.entry.Gated && errors.Is(err, hfhub.ErrNotFound)
+	tokenRetry := false
+	if errors.Is(err, hfhub.ErrGated) || private {
 		// Some gated repos keep even the card behind the license.
 		token, terr := s.token(ctx, p.OrgID)
 		if terr != nil {
 			return nil, terr
 		}
-		if token == "" {
+		switch {
+		case token != "":
+			body, err = s.d.Hub.RawFile(ctx, repo, revision, "README.md", token, maxCardBytes)
+		case private:
+			// The card may be there for a token added later, so this
+			// answer isn't kept.
+			tokenRetry = true
+		default:
 			return nil, &GatedError{Title: v.entry.Title}
 		}
-		body, err = s.d.Hub.RawFile(ctx, repo, revision, "README.md", token, maxCardBytes)
 	}
 	switch {
 	case errors.Is(err, hfhub.ErrNotFound):
 		card.Note = repo + " has no model card."
+		if tokenRetry {
+			return card, nil
+		}
 	case errors.Is(err, hfhub.ErrTooLarge):
 		card.Note = "This model card is longer than Loomplane shows. Read it on Hugging Face."
 	case errors.Is(err, hfhub.ErrGated):

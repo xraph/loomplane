@@ -194,6 +194,54 @@ func TestBuildFindsGGUFFiles(t *testing.T) {
 	}
 }
 
+// A GGUF name that isn't plain letters, digits, dots, underscores and
+// hyphens ending ".gguf" is skipped, so nothing that needs escaping ever
+// reaches --model-url, and a repo with one odd name still builds.
+func TestBuildSkipsGGUFNamesItWontUse(t *testing.T) {
+	info, config := qwenModel(t)
+	info.Params = 0
+	info.Files = []FileInfo{
+		{Name: "Qwen2.5-7B-Instruct-Q8_0.GGUF", Size: 8098525888},
+		{Name: "Qwen 2.5 7B Q8_0.gguf", Size: 8098525888},
+		{Name: "x?y-q8_0.gguf", Size: 8098525888},
+		{Name: "Qwen2.5-7B-Instruct-Q4_K_M.gguf", Size: 4683074240},
+	}
+	e, err := Build(info, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(e.Quantizations) != 1 || e.Quantizations[0].File != "Qwen2.5-7B-Instruct-Q4_K_M.gguf" {
+		t.Errorf("quantizations %+v", e.Quantizations)
+	}
+	// About 0.56 bytes a weight in Q4_K_M, not two.
+	if e.Parameters != 8362632571 {
+		t.Errorf("parameters %d", e.Parameters)
+	}
+
+	for name, want := range map[string]bool{
+		"Qwen2.5-7B-Instruct-Q4_K_M.gguf": true, "m.gguf": true,
+		"m.GGUF": false, "a/m.gguf": false, "m .gguf": false, "m%2F.gguf": false, "..gguf": false, "m.gguf\n": false, "": false,
+	} {
+		if got := GGUFName(name); got != want {
+			t.Errorf("GGUFName(%q) = %v", name, got)
+		}
+	}
+}
+
+func TestBuildCountsGGUFParameters(t *testing.T) {
+	info, config := qwenModel(t)
+	info.Params = 0
+	info.Files = []FileInfo{{Name: "Qwen2.5-7B-Instruct-Q8_0.gguf", Size: 8098525888}}
+	e, err := Build(info, config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// About 1.06 bytes a weight in Q8_0.
+	if e.Parameters != 7640118762 {
+		t.Errorf("parameters %d", e.Parameters)
+	}
+}
+
 func TestBuildNeedsWeights(t *testing.T) {
 	info, config := qwenModel(t)
 	info.Files = []FileInfo{{Name: "config.json", Size: 663}}

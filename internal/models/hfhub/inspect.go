@@ -47,6 +47,27 @@ var ggufSuffixes = []struct{ suffix, id string }{
 // --model-url can't download.
 var splitGGUF = regexp.MustCompile(`(?i)-\d{5}-of-\d{5}\.gguf$`)
 
+// ggufName is a GGUF file Loomplane hands llama.cpp: one name at the top of
+// the repo, of letters, digits, dots, underscores and hyphens, ending in a
+// lowercase ".gguf". The name goes into --model-url and the cache path, so
+// nothing that would need escaping there is ever used.
+var ggufName = regexp.MustCompile(`^[A-Za-z0-9._-]+\.gguf$`)
+
+// GGUFName reports whether name is a GGUF file Loomplane would use.
+func GGUFName(name string) bool {
+	return ggufName.MatchString(name) && !strings.Contains(name, "..")
+}
+
+// ggufBytesPerParameter is about what one weight takes in each GGUF
+// quantization, from llama.cpp's own sizes: Q8_0 is 8.5 bits a weight and
+// Q4_K_M about 4.5, with some tensors kept at higher precision. MXFP4 is
+// 4.25 bits a weight on the experts and more elsewhere, close to Q4_K_M.
+var ggufBytesPerParameter = map[string]float64{
+	"gguf-q8_0":   1.06,
+	"gguf-q4_k_m": 0.56,
+	"gguf-mxfp4":  0.56,
+}
+
 // quantMethods maps config.json's quantization_config.quant_method to the
 // quantization an entry calls it.
 var quantMethods = map[string]string{"fp8": "fp8", "awq": "awq-int4", "mxfp4": "mxfp4"}
@@ -60,6 +81,10 @@ var quantMethods = map[string]string{"fp8": "fp8", "awq": "awq-int4", "mxfp4": "
 // quantizations. Without them the config gives one vLLM quantization when
 // the pinned vLLM knows the architecture, and embedding and rerank models
 // TEI knows also get "native" on TEI when their weights are under 1.5 GiB.
+//
+// The parameter count is info.Params, which a caller sizing a GGUF repo
+// from its base model may set to the base model's. Without one it's worked
+// out from the weights.
 func Build(info *ModelInfo, config []byte) (registry.Entry, error) {
 	if info == nil || !ValidRepo(info.ID) {
 		return registry.Entry{}, errors.New("hfhub: Build needs a model's metadata")
@@ -183,7 +208,9 @@ func commercial(id string) bool {
 }
 
 // ggufQuantizations finds the single-file GGUF weights at the top of the
-// repo, one per quantization, when llama.cpp can serve every task.
+// repo, one per quantization, when llama.cpp can serve every task. A file
+// whose name isn't GGUFName, say one ending ".GGUF", is skipped rather
+// than refusing the repo.
 func ggufQuantizations(files []FileInfo, tasks []registry.Task) []registry.Quantization {
 	for _, t := range tasks {
 		if t != registry.TaskChat && t != registry.TaskReasoning && t != registry.TaskCode {
@@ -194,7 +221,7 @@ func ggufQuantizations(files []FileInfo, tasks []registry.Task) []registry.Quant
 	for _, s := range ggufSuffixes {
 		for _, f := range files {
 			name := strings.ToLower(f.Name)
-			if strings.Contains(f.Name, "/") || f.Size <= 0 || splitGGUF.MatchString(name) || !strings.HasSuffix(name, s.suffix) {
+			if !GGUFName(f.Name) || f.Size <= 0 || splitGGUF.MatchString(name) || !strings.HasSuffix(name, s.suffix) {
 				continue
 			}
 			out = append(out, registry.Quantization{ID: s.id, Engine: registry.EngineLlamaCPP, File: f.Name, WeightBytes: f.Size})
@@ -226,9 +253,14 @@ func needsRepositoryCode(cfg map[string]any) bool {
 }
 
 // parametersFromWeights works the parameter count out from the weights'
-// size and the dtype config.json names, two bytes a weight when it names
-// none Loomplane knows.
+// size: for GGUF weights from what a weight takes in the quantization,
+// and otherwise from the dtype config.json names, two bytes a weight when
+// it names none Loomplane knows. A GGUF repo's config.json is its base
+// model's, whose dtype says nothing about the GGUF file.
 func parametersFromWeights(cfg map[string]any, qs []registry.Quantization) int64 {
+	if perParameter, ok := ggufBytesPerParameter[qs[0].ID]; ok && qs[0].Engine == registry.EngineLlamaCPP {
+		return int64(float64(qs[0].WeightBytes) / perParameter)
+	}
 	dtype := asString(cfg["torch_dtype"])
 	if dtype == "" {
 		dtype = asString(cfg["dtype"])

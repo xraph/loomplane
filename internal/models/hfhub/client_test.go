@@ -148,6 +148,21 @@ func TestAccessReportsGated(t *testing.T) {
 		t.Errorf("request %s %s", method, path)
 	}
 
+	// AccessFile asks about one file the repo has, for a GGUF repo with
+	// no config.json.
+	mu.Lock()
+	status, header = http.StatusOK, ""
+	mu.Unlock()
+	if err := c.AccessFile(context.Background(), "acme/Qwen-GGUF", qwenSHA, "Qwen-Q4_K_M.gguf", testToken); err != nil {
+		t.Errorf("AccessFile: %v", err)
+	}
+	if method != http.MethodHead || path != "/acme/Qwen-GGUF/resolve/"+qwenSHA+"/Qwen-Q4_K_M.gguf" {
+		t.Errorf("AccessFile request %s %s", method, path)
+	}
+	if err := c.AccessFile(context.Background(), "acme/Qwen-GGUF", qwenSHA, "../other/x.gguf", testToken); !errors.Is(err, ErrNotFound) {
+		t.Errorf("AccessFile out of the repo: %v", err)
+	}
+
 	// Access takes a commit SHA, never a branch.
 	if err := c.Access(context.Background(), "meta-llama/Llama-3.1-8B-Instruct", "main", testToken); err == nil {
 		t.Error("Access at main: no error")
