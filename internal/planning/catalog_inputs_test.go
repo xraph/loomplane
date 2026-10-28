@@ -11,7 +11,9 @@ import (
 	"github.com/xraph/loomplane/internal/manifests"
 	"github.com/xraph/loomplane/internal/orchestration"
 	"github.com/xraph/loomplane/internal/providers"
+	"github.com/xraph/loomplane/internal/recipes"
 	"github.com/xraph/loomplane/internal/recipes/recipestest"
+	"github.com/xraph/loomplane/pkg/manifest"
 )
 
 func inputsPlan(t *testing.T, inputs map[string]map[string]string, bindings ...*Binding) *Result {
@@ -66,8 +68,8 @@ type digests struct {
 	asked []string
 }
 
-func (d *digests) Digest(_ context.Context, orgID, projectID, environmentID, resource string) (map[string]string, error) {
-	d.asked = append(d.asked, orgID+"/"+projectID+"/"+environmentID+"/"+resource)
+func (d *digests) Digest(_ context.Context, orgID, projectID, environmentID, resource string, r manifest.Resource) (map[string]string, error) {
+	d.asked = append(d.asked, orgID+"/"+projectID+"/"+environmentID+"/"+resource+" "+r.Kind)
 	return d.out, d.err
 }
 
@@ -119,7 +121,7 @@ func TestServiceAsksEachEnabledResourceForItsInputs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(inputs.asked, []string{"org/project/env/app"}) {
+	if !slices.Equal(inputs.asked, []string{"org/project/env/app sample"}) {
 		t.Fatalf("asked %v", inputs.asked)
 	}
 	if a := findAction(result, "resource:app--api"); a == nil || a.Resource.Component.Inputs != "sha256:a" {
@@ -131,7 +133,7 @@ func TestServiceAsksEachEnabledResourceForItsInputs(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(inputs.asked, []string{"org/project/env/app", "org/project/env/helper"}) {
+	if !slices.Equal(inputs.asked, []string{"org/project/env/app sample", "org/project/env/helper featured"}) {
 		t.Fatalf("asked %v", inputs.asked)
 	}
 	if a := findAction(result, "resource:helper--api"); a == nil || a.Resource.Component.Inputs != "sha256:a" {
@@ -180,5 +182,94 @@ func TestApprovalWithUnreadableInputsSaysWhy(t *testing.T) {
 	}
 	if want := "Couldn't check what app is configured with. Plan again."; store.note != want {
 		t.Fatalf("settled with %q, want %q", store.note, want)
+	}
+}
+
+// revisions is a project's manifest history: Get finds a revision by ID,
+// and Latest is the newest one.
+type revisions struct {
+	Manifests
+	byID   map[string]*manifests.Revision
+	latest string
+}
+
+func (r *revisions) Get(_ context.Context, _, id string) (*manifests.Revision, error) {
+	if rev, ok := r.byID[id]; ok {
+		return rev, nil
+	}
+	return nil, manifests.ErrNotFound
+}
+
+func (r *revisions) Latest(context.Context, string, string) (*manifests.Revision, error) {
+	return r.byID[r.latest], nil
+}
+
+// settingDigest digests one setting of the resource it's given, as a kind
+// that renders it into a component would.
+type settingDigest struct{ setting string }
+
+func (d settingDigest) Digest(_ context.Context, _, _, _, _ string, r manifest.Resource) (map[string]string, error) {
+	return map[string]string{"engine": "sha256:" + r.Settings[d.setting]}, nil
+}
+
+// A teammate saving the manifest again after a plan was made doesn't make
+// the plan stale: the approval digests the plan's own revision.
+func TestApprovalDigestsThePlansOwnManifest(t *testing.T) {
+	doc := func(maxLen string) *manifests.Revision {
+		return &manifests.Revision{Manifest: parse(t, "version: 1\nresources:\n  llm: {kind: "+recipes.ModelTEIKind+", provider: server, target: "+targetA+
+			", settings: {entry: BAAI/bge-small-en-v1.5, model: BAAI/bge-small-en-v1.5, revision: 5c38ec7c405ec4b44b94cc5a9bb96e735b38267a, quantization: native, served_name: bge-small, max_model_len: '"+maxLen+"'}, environments: {production: {enabled: true}}}\n")}
+	}
+	history := &revisions{byID: map[string]*manifests.Revision{"man_7": doc("512"), "man_8": doc("1024")}, latest: "man_7"}
+	ai := map[string]bool{recipes.FeatureAI: true}
+	plan := &Plan{ID: "plan_1", Catalog: true, OrgID: "org", ProjectID: "project", EnvironmentID: "env", Environment: "production", ManifestID: "man_7", Status: StatusReady}
+	store := &planningStore{plan: plan}
+	svc := NewService(Deps{
+		Store: store, Manifests: history, Providers: providers.RegistryFor(ai), Connections: serverClouds{}, Features: ai,
+		CatalogInputs: CatalogInputMap{recipes.ModelTEIKind: settingDigest{setting: "max_model_len"}},
+	})
+	result, revision, err := svc.compute(t.Context(), plan)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a := findAction(result, "resource:llm--engine"); a == nil || a.Resource.Component.Inputs != "sha256:512" {
+		t.Fatalf("engine: %+v", a)
+	}
+	plan.Revision = revision
+
+	// Revision 8 changes the setting the digest reads.
+	history.latest = "man_8"
+	status, err := svc.ApplyDecision(t.Context(), "org", "plan_1", orchestration.Decision{Approve: true, Revision: revision, By: "usr_1"})
+	if err != nil || status != StatusApproved || store.settled != StatusApproved {
+		t.Fatalf("approve: %q, %v, settled %q (%s)", status, err, store.settled, store.note)
+	}
+}
+
+// fixable is an InputsProblem: it says what to change.
+type fixable struct{}
+
+func (fixable) Error() string {
+	return "app asks for v1, which is gone. Set its version to v2, then plan again"
+}
+func (fixable) InputsProblem() {}
+
+func TestInputsProblemsSayWhatToChange(t *testing.T) {
+	cause := fmt.Errorf("wrapped: %w", fixable{})
+	store := &planningStore{plan: &Plan{ID: "plan_1", Catalog: true, OrgID: "org", ProjectID: "project", EnvironmentID: "env", Environment: "production", Status: StatusPlanning}}
+	svc := inputsService(t, store, sampleApp, &digests{err: cause}, nil)
+	status, err := svc.Plan(t.Context(), "org", "plan_1")
+	if err != nil || status != StatusFailed {
+		t.Fatalf("plan: %q, %v", status, err)
+	}
+	if want := (fixable{}).Error(); store.failed != want {
+		t.Errorf("failed with %q, want %q", store.failed, want)
+	}
+
+	store.plan = &Plan{ID: "plan_1", Catalog: true, OrgID: "org", ProjectID: "project", EnvironmentID: "env", Environment: "production", Status: StatusReady, Revision: "r1"}
+	status, err = svc.ApplyDecision(t.Context(), "org", "plan_1", orchestration.Decision{Approve: true, Revision: "r1", By: "usr_1"})
+	if err != nil || status != StatusStale {
+		t.Fatalf("approve: %q, %v", status, err)
+	}
+	if want := (fixable{}).Error() + "."; store.note != want {
+		t.Errorf("settled with %q, want %q", store.note, want)
 	}
 }

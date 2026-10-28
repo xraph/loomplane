@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"maps"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 
@@ -17,26 +19,6 @@ import (
 	"github.com/xraph/loomplane/internal/recipes"
 	"github.com/xraph/loomplane/pkg/manifest"
 )
-
-// fakeManifest is a project's current manifest.
-type fakeManifest struct {
-	m   *manifest.Manifest
-	err error
-}
-
-func (f fakeManifest) Resource(_ context.Context, orgID, projectID, resource string) (*manifest.Resource, error) {
-	if f.err != nil {
-		return nil, f.err
-	}
-	if orgID != "org" || projectID != "shop" {
-		return nil, errors.New("another project")
-	}
-	r, ok := f.m.Resources[resource]
-	if !ok {
-		return nil, nil
-	}
-	return &r, nil
-}
 
 // modelManifest is a manifest with one model resource, llama-8b, of kind
 // with settings, enabled in staging on one server.
@@ -58,9 +40,10 @@ func modelManifest(t *testing.T, kind string, settings map[string]string) *manif
 	return m
 }
 
-func digestOf(t *testing.T, in Inputs) map[string]string {
+// digestOf digests llama-8b as m has it.
+func digestOf(t *testing.T, in Inputs, m *manifest.Manifest) map[string]string {
 	t.Helper()
-	d, err := in.Digest(context.Background(), "org", "shop", "env_staging", "llama-8b")
+	d, err := in.Digest(context.Background(), "org", "shop", "env_staging", "llama-8b", m.Resources["llama-8b"])
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -72,18 +55,23 @@ func TestDigestChangesWithArgsAndToken(t *testing.T) {
 	tokens := &fakeTokens{token: hfToken, revision: 1}
 	settings := settingsFor(t, reg, llamaID, "bf16")
 	delete(settings, "max_model_len") // the kind's default fills it
-	in := Inputs{Registry: reg, Settings: tokens, Manifests: fakeManifest{m: modelManifest(t, recipes.ModelVLLMKind, settings)}}
+	m := modelManifest(t, recipes.ModelVLLMKind, settings)
+	in := Inputs{Registry: reg, Settings: tokens}
 
-	base := digestOf(t, in)
+	base := digestOf(t, in, m)
 	if len(base) != 2 || !strings.HasPrefix(base[recipes.ModelEngine], "sha256:") || base[recipes.ModelGuard] != digest(engines.GuardConfig()) {
 		t.Fatalf("digest = %v", base)
 	}
-	if again := digestOf(t, in); !maps.Equal(again, base) {
+	if again := digestOf(t, in, m); !maps.Equal(again, base) {
 		t.Errorf("the same inputs digest differently: %v, %v", base, again)
 	}
 	// The engine's digest is its arguments, as the engine gets them, and
 	// the token's revision; the guard's is its Caddyfile.
-	spec, err := engines.FromSettings(context.Background(), reg, nil, "org", withDefaults(mustKind(t, recipes.ModelVLLMKind), settings), 1, false)
+	filled, ok := kindSettings(mustKind(t, recipes.ModelVLLMKind), settings)
+	if !ok || filled["max_model_len"] != "4096" {
+		t.Fatalf("settings with defaults: %v, %v", filled, ok)
+	}
+	spec, err := engines.FromSettings(context.Background(), reg, nil, "org", filled, 1, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,7 +86,7 @@ func TestDigestChangesWithArgsAndToken(t *testing.T) {
 	// A registry change to the entry's arguments changes the engine's digest
 	// and not the guard's.
 	in.Registry = fixture(t, llamaRevision, "--max-num-seqs=64")
-	changed := digestOf(t, in)
+	changed := digestOf(t, in, m)
 	if changed[recipes.ModelEngine] == base[recipes.ModelEngine] || changed[recipes.ModelGuard] != base[recipes.ModelGuard] {
 		t.Errorf("args changed: %v, was %v", changed, base)
 	}
@@ -106,17 +94,17 @@ func TestDigestChangesWithArgsAndToken(t *testing.T) {
 
 	// A new token for a gated model changes it too.
 	tokens.revision = 2
-	if rotated := digestOf(t, in); rotated[recipes.ModelEngine] == base[recipes.ModelEngine] {
+	if rotated := digestOf(t, in, m); rotated[recipes.ModelEngine] == base[recipes.ModelEngine] {
 		t.Error("a new token left the gated engine's digest alone")
 	}
 
 	// An ungated model never downloads with the token, so its digest
 	// doesn't follow it.
 	qwen := settingsFor(t, registry.Default(), "Qwen/Qwen2.5-7B-Instruct", "bf16")
-	ungated := Inputs{Registry: registry.Default(), Settings: tokens, Manifests: fakeManifest{m: modelManifest(t, recipes.ModelVLLMKind, qwen)}}
-	first := digestOf(t, ungated)
+	ungated, qm := Inputs{Registry: registry.Default(), Settings: tokens}, modelManifest(t, recipes.ModelVLLMKind, qwen)
+	first := digestOf(t, ungated, qm)
 	tokens.revision = 3
-	if second := digestOf(t, ungated); !maps.Equal(first, second) {
+	if second := digestOf(t, ungated, qm); !maps.Equal(first, second) {
 		t.Errorf("a new token changed an ungated model's digest: %v, %v", first, second)
 	}
 
@@ -139,14 +127,60 @@ func mustKind(t *testing.T, name string) recipes.Kind {
 	return k
 }
 
-func TestDigestOfAResourceTheManifestDropped(t *testing.T) {
-	in := Inputs{Registry: registry.Default(), Manifests: fakeManifest{m: &manifest.Manifest{}}}
-	if d, err := in.Digest(context.Background(), "org", "shop", "env_staging", "llama-8b"); err != nil || d != nil {
-		t.Errorf("digest = %v, %v, want nothing", d, err)
+// Settings the kind itself refuses get no digest, so the planner reports
+// each at its path instead of the plan failing on the engine's account of
+// it.
+func TestDigestLeavesBadSettingsToThePlanner(t *testing.T) {
+	reg := fixture(t, llamaRevision, "--enforce-eager")
+	in := Inputs{Registry: reg, Settings: &fakeTokens{token: hfToken, revision: 1}}
+	good := settingsFor(t, reg, llamaID, "gguf-q4_k_m")
+	for name, edit := range map[string]func(map[string]string){
+		"malformed revision": func(s map[string]string) { s["revision"] = "main" },
+		"no served name":     func(s map[string]string) { delete(s, "served_name") },
+		"no GGUF file":       func(s map[string]string) { delete(s, "file") },
+		"unknown setting":    func(s map[string]string) { s["dtype"] = "half" },
+		"bad context":        func(s map[string]string) { s["max_model_len"] = "4k" },
+	} {
+		settings := maps.Clone(good)
+		edit(settings)
+		m := modelManifest(t, recipes.ModelLlamaCPPKind, settings)
+		d, err := in.Digest(context.Background(), "org", "shop", "env_staging", "llama-8b", m.Resources["llama-8b"])
+		if err != nil || d != nil {
+			t.Errorf("%s: %v, %v, want no digest and no error", name, d, err)
+			continue
+		}
+		// The planner reports it at the setting's path.
+		r := planWith(t, m, d, nil)
+		if r.Executable || !slices.ContainsFunc(r.Problems, func(f planning.Finding) bool {
+			return strings.HasPrefix(f.Path, "resources.llama-8b.settings.") && strings.HasPrefix(f.Code, "catalog-setting-")
+		}) {
+			t.Errorf("%s: plan problems %+v", name, r.Problems)
+		}
 	}
-	in.Manifests = fakeManifest{err: errors.New("database is down")}
-	if _, err := in.Digest(context.Background(), "org", "shop", "env_staging", "llama-8b"); err == nil || !strings.Contains(err.Error(), "database is down") {
-		t.Errorf("unreadable manifest: %v", err)
+}
+
+// A gated model with no workspace token fails the plan with the sentence
+// that says what to do, instead of planning an engine that can't start.
+func TestDigestOfAGatedModelWithoutAToken(t *testing.T) {
+	reg := fixture(t, llamaRevision, "--enforce-eager")
+	m := modelManifest(t, recipes.ModelVLLMKind, settingsFor(t, reg, llamaID, "bf16"))
+	tokens := &fakeTokens{token: hfToken, revision: 1}
+	in := Inputs{Registry: reg, Settings: tokens}
+	if _, err := in.Digest(context.Background(), "org", "shop", "env_staging", "llama-8b", m.Resources["llama-8b"]); err != nil {
+		t.Fatalf("with a token: %v", err)
+	}
+	const sentence = "Llama 3.1 8B Instruct is gated on Hugging Face. Add a Hugging Face token that has accepted its license in AI settings"
+	for name, in := range map[string]Inputs{"token cleared": {Registry: reg, Settings: &fakeTokens{}}, "no settings": {Registry: reg}} {
+		_, err := in.Digest(context.Background(), "org", "shop", "env_staging", "llama-8b", m.Resources["llama-8b"])
+		var gated *GatedError
+		if !errors.As(err, &gated) || err.Error() != sentence {
+			t.Errorf("%s: %v, want %q", name, err, sentence)
+		}
+	}
+	// An ungated model doesn't need one.
+	qwen := modelManifest(t, recipes.ModelVLLMKind, settingsFor(t, registry.Default(), "Qwen/Qwen2.5-7B-Instruct", "bf16"))
+	if _, err := (Inputs{Registry: registry.Default(), Settings: &fakeTokens{}}).Digest(context.Background(), "org", "shop", "env_staging", "llama-8b", qwen.Resources["llama-8b"]); err != nil {
+		t.Errorf("ungated without a token: %v", err)
 	}
 }
 
@@ -158,7 +192,10 @@ func TestDigestErrorsCarryNoSecret(t *testing.T) {
 	old := settingsFor(t, fixture(t, llamaRevision, "--enforce-eager"), llamaID, "bf16")
 	unknown := maps.Clone(settingsFor(t, reg, llamaID, "bf16"))
 	unknown["quantization"] = "fp4"
+	// The GGUF's file isn't a vLLM setting; without it the engine is the
+	// only thing wrong.
 	gguf := settingsFor(t, reg, llamaID, "gguf-q4_k_m")
+	delete(gguf, "file")
 
 	for name, c := range map[string]struct {
 		kind     string
@@ -169,8 +206,8 @@ func TestDigestErrorsCarryNoSecret(t *testing.T) {
 		"no such quant": {recipes.ModelVLLMKind, unknown, `has no quantization "fp4"`},
 		"wrong engine":  {recipes.ModelVLLMKind, gguf, "Deploy it as model-llamacpp-gpu"},
 	} {
-		in := Inputs{Registry: reg, Settings: tokens, Manifests: fakeManifest{m: modelManifest(t, c.kind, c.settings)}}
-		_, err := in.Digest(context.Background(), "org", "shop", "env_staging", "llama-8b")
+		in := Inputs{Registry: reg, Settings: tokens}
+		_, err := in.Digest(context.Background(), "org", "shop", "env_staging", "llama-8b", modelManifest(t, c.kind, c.settings).Resources["llama-8b"])
 		if err == nil || !strings.Contains(err.Error(), c.want) {
 			t.Errorf("%s: %v, want %q", name, err, c.want)
 			continue
@@ -224,14 +261,14 @@ func TestNewTokenPlansAnUpdateWithoutTheToken(t *testing.T) {
 	reg := fixture(t, llamaRevision, "--enforce-eager")
 	tokens := &fakeTokens{token: hfToken, revision: 1}
 	m := modelManifest(t, recipes.ModelLlamaCPPKind, settingsFor(t, reg, llamaID, "gguf-q4_k_m"))
-	in := Inputs{Registry: reg, Settings: tokens, Manifests: fakeManifest{m: m}}
+	in := Inputs{Registry: reg, Settings: tokens}
 
-	first := planWith(t, m, digestOf(t, in), nil)
+	first := planWith(t, m, digestOf(t, in, m), nil)
 	if !first.Executable {
 		t.Fatalf("first plan: %+v", first.Problems)
 	}
 	tokens.revision = 2
-	second := planWith(t, m, digestOf(t, in), boundFrom(t, first))
+	second := planWith(t, m, digestOf(t, in, m), boundFrom(t, first))
 	if !second.Executable {
 		t.Fatalf("second plan: %+v", second.Problems)
 	}
@@ -250,6 +287,28 @@ func TestNewTokenPlansAnUpdateWithoutTheToken(t *testing.T) {
 		}
 		if strings.Contains(string(raw), hfToken) || secretLike.Match(raw) {
 			t.Errorf("the plan holds a secret:\n%s", raw)
+		}
+	}
+}
+
+// A re-pin and a missing token are problems a plan shows as they are, with
+// the fix in them, at planning and at approval (planning.InputsProblem).
+func TestDigestProblemsKeepTheirFix(t *testing.T) {
+	reg := fixture(t, llamaRepin, "--enforce-eager")
+	repinned := modelManifest(t, recipes.ModelVLLMKind, settingsFor(t, fixture(t, llamaRevision, "--enforce-eager"), llamaID, "bf16"))
+	gated := modelManifest(t, recipes.ModelVLLMKind, settingsFor(t, reg, llamaID, "bf16"))
+	for name, c := range map[string]struct {
+		in   Inputs
+		m    *manifest.Manifest
+		want string
+	}{
+		"re-pinned": {Inputs{Registry: reg, Settings: &fakeTokens{token: hfToken, revision: 1}}, repinned, "then plan again"},
+		"no token":  {Inputs{Registry: reg, Settings: &fakeTokens{}}, gated, "in AI settings"},
+	} {
+		_, err := c.in.Digest(context.Background(), "org", "shop", "env_staging", "llama-8b", c.m.Resources["llama-8b"])
+		var problem planning.InputsProblem
+		if !errors.As(fmt.Errorf("wrapped: %w", err), &problem) || !strings.HasSuffix(problem.Error(), c.want) {
+			t.Errorf("%s: %v is no InputsProblem ending %q", name, err, c.want)
 		}
 	}
 }

@@ -108,12 +108,12 @@ func (h *Hooks) Files(ctx context.Context, run deployments.ComponentRun) (map[st
 	token := []byte{}
 	if spec.Entry.Gated {
 		if h.tokens == nil {
-			return nil, gatedError(spec.Entry)
+			return nil, &GatedError{Title: spec.Entry.Title}
 		}
 		value, _, terr := h.tokens.HuggingFaceTokenValue(ctx, run.OrgID)
 		switch {
 		case errors.Is(terr, aisettings.ErrNotFound):
-			return nil, gatedError(spec.Entry)
+			return nil, &GatedError{Title: spec.Entry.Title}
 		case terr != nil:
 			// The error comes from reading the value, so it could quote
 			// what it read. Say what failed without it.
@@ -149,11 +149,17 @@ func argsFile(args []string) []byte {
 	return []byte(strings.Join(args, "\n") + "\n")
 }
 
-// gatedError is why a gated model can't start without the workspace's
-// token.
-func gatedError(e registry.Entry) error {
-	return fmt.Errorf("%s is gated on Hugging Face. Add a Hugging Face token that has accepted its license in AI settings", e.Title)
+// GatedError is a gated model with no workspace Hugging Face token to
+// download it with. It says what to do, and holds nothing secret.
+type GatedError struct{ Title string }
+
+func (e *GatedError) Error() string {
+	return e.Title + " is gated on Hugging Face. Add a Hugging Face token that has accepted its license in AI settings"
 }
+
+// InputsProblem implements planning.InputsProblem: a plan shows the
+// sentence as it is.
+func (*GatedError) InputsProblem() {}
 
 // modelSpec rebuilds a model resource's engine Spec from its settings, and
 // checks that the quantization runs on the kind's engine and, for a registry
@@ -250,6 +256,10 @@ type RepinnedError struct {
 	// Asked is what the resource's settings name.
 	Asked string
 }
+
+// InputsProblem implements planning.InputsProblem: a plan shows the
+// sentence as it is.
+func (*RepinnedError) InputsProblem() {}
 
 func (e *RepinnedError) Error() string {
 	set := "model: " + e.Model + ", revision: " + e.Revision

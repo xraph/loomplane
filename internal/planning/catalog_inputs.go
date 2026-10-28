@@ -16,10 +16,20 @@ import (
 // the kind reads plans an update of that component.
 type CatalogInputs interface {
 	// Digest returns, by component name, a digest of what the kind renders
-	// into its components from outside the manifest. It holds no secret,
-	// and neither does its error: the error's text reaches the plan's
-	// failure reason and the API.
-	Digest(ctx context.Context, orgID, projectID, environmentID, resource string) (map[string]string, error)
+	// into its components from outside the manifest. r is the resource as
+	// the plan's own manifest revision has it, which may not be the
+	// project's latest. It holds no secret, and neither does its error: the
+	// error's text reaches the plan's failure reason and the API.
+	Digest(ctx context.Context, orgID, projectID, environmentID, resource string, r manifest.Resource) (map[string]string, error)
+}
+
+// InputsProblem is a CatalogInputs error about the resource itself that
+// says what to change, such as settings naming something the kind no
+// longer offers. Its text is shown as it is: as the plan's failure reason,
+// and as why an approval found the plan stale.
+type InputsProblem interface {
+	error
+	InputsProblem()
 }
 
 // CatalogInputMap holds each kind's CatalogInputs, by kind name. The
@@ -36,6 +46,10 @@ type catalogInputsError struct {
 }
 
 func (e *catalogInputsError) Error() string {
+	var problem InputsProblem
+	if errors.As(e.err, &problem) {
+		return problem.Error()
+	}
 	return fmt.Sprintf("couldn't read what %s is configured with: %v", e.resource, e.err)
 }
 
@@ -78,7 +92,7 @@ func (s *Service) catalogInputs(ctx context.Context, plan *Plan, m *manifest.Man
 		if source == nil {
 			continue
 		}
-		digests, err := source.Digest(ctx, plan.OrgID, plan.ProjectID, plan.EnvironmentID, name)
+		digests, err := source.Digest(ctx, plan.OrgID, plan.ProjectID, plan.EnvironmentID, name, m.Resources[name])
 		if err != nil {
 			return nil, &catalogInputsError{resource: name, err: err}
 		}
@@ -102,7 +116,12 @@ func failsPlanning(err error) bool {
 
 // unreadableInputs is why an approval settles a plan stale when what a
 // resource is configured with couldn't be read: planning again may read it.
+// An InputsProblem says itself what to change.
 func unreadableInputs(err error) string {
+	var problem InputsProblem
+	if errors.As(err, &problem) {
+		return problem.Error() + "."
+	}
 	var inputs *catalogInputsError
 	if !errors.As(err, &inputs) {
 		return err.Error()

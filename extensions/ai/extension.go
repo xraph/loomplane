@@ -5,7 +5,6 @@
 package ai
 
 import (
-	"context"
 	"errors"
 	"fmt"
 
@@ -23,14 +22,12 @@ import (
 	"github.com/xraph/loomplane/internal/aisettings"
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/deployments"
-	"github.com/xraph/loomplane/internal/manifests"
 	"github.com/xraph/loomplane/internal/models"
 	"github.com/xraph/loomplane/internal/models/registry"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/recipes"
 	"github.com/xraph/loomplane/internal/security"
-	"github.com/xraph/loomplane/pkg/manifest"
 )
 
 // Name is the extension's name.
@@ -119,7 +116,7 @@ func (e *Extension) Register(fapp forge.App) error {
 	// Until the AI gateway lands, the hooks tell no gateway, and only
 	// registry entries deploy: pasted repos come with the models service.
 	e.hooks = models.NewHooks(models.HooksDeps{Registry: registry.Default(), Settings: e.settings})
-	inputs := models.Inputs{Registry: registry.Default(), Settings: e.settings, Manifests: currentManifests{store: manifests.NewPgStore(pg)}}
+	inputs := models.Inputs{Registry: registry.Default(), Settings: e.settings}
 	for _, kind := range recipes.ModelKinds() {
 		hookMap[kind] = e.hooks
 		inputMap[kind] = inputs
@@ -128,25 +125,4 @@ func (e *Extension) Register(fapp forge.App) error {
 		return fmt.Errorf("provide the AI settings: %w", err)
 	}
 	return nil
-}
-
-// currentManifests reads a resource of a project's current manifest.
-type currentManifests struct{ store *manifests.PgStore }
-
-func (m currentManifests) Resource(ctx context.Context, orgID, projectID, resource string) (*manifest.Resource, error) {
-	rev, err := m.store.CurrentRevision(ctx, orgID, projectID)
-	if errors.Is(err, manifests.ErrNotFound) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	if rev.Manifest == nil {
-		return nil, nil
-	}
-	r, ok := rev.Manifest.Resources[resource]
-	if !ok {
-		return nil, nil
-	}
-	return &r, nil
 }
