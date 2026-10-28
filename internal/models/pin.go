@@ -219,11 +219,19 @@ func pinUpdate(raw manifest.Resource, env string, repinned *RepinnedError, needC
 	u.Environment = env
 	for _, key := range keys {
 		if settings[key] == "" && raw.Settings[key] != "" {
-			return nil, fmt.Errorf("%w: the registry's new pin has no %s, and %s would still read %s %s from the top level of the model's manifest entry, which its other environments run. Remove the model from %s and deploy it again to move to the new pin",
-				ErrInvalid, key, env, key, raw.Settings[key], env)
+			return nil, fmt.Errorf("%w: %s", ErrInvalid, topLevelRefusal("the registry's new pin", key, env, raw.Settings[key]))
 		}
 	}
 	return u, nil
+}
+
+// topLevelRefusal says why env's block can't take weights, what, that
+// have no key while raw's top level sets it to value: a block can't say
+// "no file", so env would still read the top level's. It has no full
+// stop, so it ends an error or, with one, a preview's problem.
+func topLevelRefusal(what, key, env, value string) string {
+	return fmt.Sprintf("%s has no %s, and %s would still read %s %s from the top level of the model's manifest entry, which its other environments run. Deploy it to %s as a separately named model, or remove it from the project's other environments first",
+		what, key, env, key, value, env)
 }
 
 // fixedCache reports whether env's deployed engine of resource keeps its
@@ -246,34 +254,57 @@ func (s *Service) fixedCache(ctx context.Context, orgID, environmentID, resource
 }
 
 // cacheGrows reports whether the weight cache of a kind resource with
-// settings is smaller than needMB: its cache_mb, or with none the size
-// the kind's recipe starts the cache at.
+// settings is smaller than needMB (cacheMB).
 func cacheGrows(kind string, settings map[string]string, needMB int64) bool {
+	return cacheMB(kind, settings) < needMB
+}
+
+// cacheMB is the weight cache a kind resource with settings has on
+// Kubernetes, sized the way the planner sizes the volume
+// (recipes.WeightCache.SizeMB): its cache_mb when that's larger than the
+// recipe's, else the recipe's, so a move or pin move refuses exactly the
+// growth the planner would (catalog-cache-resize). An engine that keeps
+// its weights on a plain volume has its cache_mb or the volume's size,
+// and a kind the recipes don't have its cache_mb or the smallest cache.
+func cacheMB(kind string, settings map[string]string) int64 {
+	c, ok := engineComponent(kind)
+	if ok && c.WeightCache != nil {
+		return int64(c.WeightCache.SizeMB(settings))
+	}
 	have, err := strconv.ParseInt(settings["cache_mb"], 10, 64)
 	if err != nil {
-		have = defaultCacheMB(kind)
+		return defaultCacheMB(kind)
 	}
-	return have < needMB
+	return have
 }
 
 // defaultCacheMB is the weight cache a model kind's engine starts with on
 // Kubernetes, the KubernetesSizeMB of its recipe, or the smallest cache
 // for a kind the recipes don't have.
 func defaultCacheMB(kind string) int64 {
-	k, ok := recipes.Default().Kind(kind)
-	if !ok {
-		return engines.MinCacheMB
-	}
-	for _, c := range k.Components {
-		switch {
-		case c.Name != recipes.ModelEngine:
-		case c.WeightCache != nil:
-			return int64(c.WeightCache.KubernetesSizeMB)
-		case c.Volume != nil:
-			return int64(c.Volume.KubernetesSizeMB)
-		}
+	c, ok := engineComponent(kind)
+	switch {
+	case !ok:
+	case c.WeightCache != nil:
+		return int64(c.WeightCache.KubernetesSizeMB)
+	case c.Volume != nil:
+		return int64(c.Volume.KubernetesSizeMB)
 	}
 	return engines.MinCacheMB
+}
+
+// engineComponent is the model engine component of kind's recipe.
+func engineComponent(kind string) (recipes.Component, bool) {
+	k, ok := recipes.Default().Kind(kind)
+	if !ok {
+		return recipes.Component{}, false
+	}
+	for _, c := range k.Components {
+		if c.Name == recipes.ModelEngine {
+			return c, true
+		}
+	}
+	return recipes.Component{}, false
 }
 
 // soleReader reports whether env is the only environment raw runs in

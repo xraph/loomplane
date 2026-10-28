@@ -925,7 +925,7 @@ func TestMoveUpdateLeavesSharedSettings(t *testing.T) {
 
 	// Production reads the top-level context, so staging's longer one goes
 	// in its block.
-	u := moveUpdate(raw, cur, "staging", manifest.Defaults{}, pv, maps.Clone(longer))
+	u := mustUpdate(t)(moveUpdate(raw, cur, "staging", manifest.Defaults{}, pv, maps.Clone(longer)))
 	if u.Environment != "staging" || *u.Target != gpuConn3 || !maps.Equal(u.Settings, map[string]string{"max_model_len": "16384"}) {
 		t.Errorf("a longer context beside production: %+v", u)
 	}
@@ -934,7 +934,7 @@ func TestMoveUpdateLeavesSharedSettings(t *testing.T) {
 	bare := raw
 	bare.Settings = maps.Clone(settings)
 	delete(bare.Settings, "max_model_len")
-	if u = moveUpdate(bare, cur, "staging", manifest.Defaults{}, pv, maps.Clone(longer)); u.Environment != "staging" || u.Settings["max_model_len"] != "16384" {
+	if u = mustUpdate(t)(moveUpdate(bare, cur, "staging", manifest.Defaults{}, pv, maps.Clone(longer))); u.Environment != "staging" || u.Settings["max_model_len"] != "16384" {
 		t.Errorf("no top-level context: %+v", u)
 	}
 	// staging's own block sets the context: moving it changes the block,
@@ -943,12 +943,12 @@ func TestMoveUpdateLeavesSharedSettings(t *testing.T) {
 	own.Environments = maps.Clone(raw.Environments)
 	own.Environments["production"] = manifest.ResourceSettings{Enabled: on().Enabled, Target: gpuConn2, Settings: map[string]string{"max_model_len": "8192"}}
 	own.Environments["staging"] = manifest.ResourceSettings{Enabled: on().Enabled, Settings: map[string]string{"max_model_len": "4096"}}
-	if u = moveUpdate(own, own.In("staging", manifest.Defaults{}), "staging", manifest.Defaults{}, pv, maps.Clone(settings)); u.Environment != "staging" || u.Settings["max_model_len"] != "8192" {
+	if u = mustUpdate(t)(moveUpdate(own, own.In("staging", manifest.Defaults{}), "staging", manifest.Defaults{}, pv, maps.Clone(settings))); u.Environment != "staging" || u.Settings["max_model_len"] != "8192" {
 		t.Errorf("staging's own context: %+v", u)
 	}
 	// With production's own context, the top level is staging's alone.
 	raw.Environments["production"] = manifest.ResourceSettings{Enabled: on().Enabled, Target: gpuConn2, Settings: map[string]string{"max_model_len": "8192"}}
-	if u = moveUpdate(raw, cur, "staging", manifest.Defaults{}, pv, maps.Clone(longer)); u.Environment != "" || u.Settings["max_model_len"] != "16384" {
+	if u = mustUpdate(t)(moveUpdate(raw, cur, "staging", manifest.Defaults{}, pv, maps.Clone(longer))); u.Environment != "" || u.Settings["max_model_len"] != "16384" {
 		t.Errorf("production on its own context: %+v", u)
 	}
 }
@@ -1080,12 +1080,14 @@ func onKubernetes(d *deploySetup, resource string, settings map[string]string) {
 }
 
 // A move on the same cluster that needs a bigger weight cache is refused
-// before the manifest changes: the volume can't grow in place.
+// before the manifest changes: the volume can't grow in place. Its
+// cache_mb of 1024 leaves it at the recipe's 20480 MB, and bf16 needs
+// 25600 MB here.
 func TestMoveRefusesToGrowAKubernetesCache(t *testing.T) {
 	ctx := context.Background()
 	kube := l40sOn(kubeConn, "kube", 1.57)
 	kube.Cloud = connections.Kubernetes
-	d := newDeploy(t, deployRegistry(t, llamaRev, ""), aiAdmin, []gpus.GPUTarget{kube}, cpuCluster())
+	d := newDeploy(t, deployRegistryWith(t, llamaRev, "", bigBF16), aiAdmin, []gpus.GPUTarget{kube}, cpuCluster())
 	settings := llmSettings(t)
 	settings["cache_mb"] = "1024"
 	putResource(t, d, "llm", manifest.Resource{Kind: recipes.ModelVLLMKind, Provider: "kubernetes", Target: kubeConn, Version: "0.31",
@@ -1103,21 +1105,23 @@ func TestMoveRefusesToGrowAKubernetesCache(t *testing.T) {
 }
 
 // The move's preview shows the same refusal, so it never offers a move
-// Move refuses. A model with no cache_mb has the recipe's cache, which is
-// enough for weights that need no more, so that move goes ahead.
+// Move refuses. With weights that need no more than the recipe's 20480
+// MB, a cache_mb of 1024 or none leaves the volume at that size, as the
+// planner sizes it, so that move goes ahead.
 func TestMovePreviewShowsTheKubernetesCacheRefusal(t *testing.T) {
 	ctx := context.Background()
 	kube := l40sOn(kubeConn, "kube", 1.57)
 	kube.Cloud = connections.Kubernetes
-	d := newDeploy(t, deployRegistry(t, llamaRev, ""), aiAdmin, []gpus.GPUTarget{kube}, cpuCluster())
 	settings := llmSettings(t)
 	settings["cache_mb"] = "1024"
-	put := func() {
+	setup := func(reg *registry.Registry) *deploySetup {
+		d := newDeploy(t, reg, aiAdmin, []gpus.GPUTarget{kube}, cpuCluster())
 		putResource(t, d, "llm", manifest.Resource{Kind: recipes.ModelVLLMKind, Provider: "kubernetes", Target: kubeConn, Version: "0.31",
 			GPU: &manifest.GPU{Kind: "nvidia-l40s", Count: 1}, Settings: settings, Environments: map[string]manifest.ResourceSettings{"staging": on()}})
+		onKubernetes(d, "llm", settings)
+		return d
 	}
-	put()
-	onKubernetes(d, "llm", settings)
+	d := setup(deployRegistryWith(t, llamaRev, "", bigBF16))
 	in := MoveInput{Target: TargetChoice{Source: TargetConnection, ConnectionID: kubeConn, GPU: &provider.GPURequest{Kind: "nvidia-l40s"}}, Quantization: "bf16", MaxModelLen: 16384}
 	pv, err := d.svc.MovePreview(ctx, member, projectID, stagingID, "llm", in)
 	want := Problem{Code: ProblemTarget, Message: "llm keeps its weight cache on a Kubernetes volume, which can't grow in place, and bf16 needs a bigger one. Remove llm from staging and deploy it again to move it."}
@@ -1129,13 +1133,44 @@ func TestMovePreviewShowsTheKubernetesCacheRefusal(t *testing.T) {
 		t.Errorf("move: %v", err)
 	}
 
-	delete(settings, "cache_mb")
-	put()
-	if pv, err = d.svc.MovePreview(ctx, member, projectID, stagingID, "llm", in); err != nil || !pv.CanDeploy || len(pv.Problems) != 0 {
-		t.Fatalf("the recipe's cache: %+v, %v", pv, err)
+	for _, cache := range []string{"1024", ""} {
+		if cache == "" {
+			delete(settings, "cache_mb")
+		}
+		d = setup(deployRegistry(t, llamaRev, ""))
+		if pv, err = d.svc.MovePreview(ctx, member, projectID, stagingID, "llm", in); err != nil || !pv.CanDeploy || len(pv.Problems) != 0 {
+			t.Fatalf("cache_mb %q: %+v, %v", cache, pv, err)
+		}
+		if _, err = d.svc.Move(ctx, member, projectID, stagingID, "llm", in); err != nil {
+			t.Errorf("move with cache_mb %q: %v", cache, err)
+		}
 	}
-	if _, err = d.svc.Move(ctx, member, projectID, stagingID, "llm", in); err != nil {
-		t.Errorf("move with the recipe's cache: %v", err)
+}
+
+// A move of staging's copy to weights with no file, while the top level
+// names a file production reads, is refused in the preview and by Move:
+// staging's block can't say "no file".
+func TestMoveRefusesToLeaveATopLevelFile(t *testing.T) {
+	ctx := context.Background()
+	d := newDeploy(t, deployRegistry(t, llamaRev, ""), aiAdmin, []gpus.GPUTarget{l40sServer(), l40sOn(gpuConn2, "gpu-box-2", 1.57)})
+	settings := llmSettings(t)
+	settings["file"] = "old.gguf"
+	putLLM(t, d, map[string]manifest.ResourceSettings{"staging": on(), "production": on()})
+	r := current(t, d).Resources["llm"]
+	r.Settings = settings
+	putResource(t, d, "llm", r)
+	revisions := d.revisions.count()
+	in := MoveInput{Target: TargetChoice{Source: TargetConnection, ConnectionID: gpuConn2, GPU: &provider.GPURequest{Kind: "nvidia-l40s"}}, Quantization: "bf16", MaxModelLen: 8192}
+	want := Problem{Code: ProblemQuantization, Message: "bf16 has no file, and staging would still read file old.gguf from the top level of the model's manifest entry, which its other environments run. Deploy it to staging as a separately named model, or remove it from the project's other environments first."}
+	pv, err := d.svc.MovePreview(ctx, member, projectID, stagingID, "llm", in)
+	if err != nil || pv.CanDeploy || len(pv.Problems) != 1 || pv.Problems[0] != want {
+		t.Fatalf("preview: %+v, %v", pv.Problems, err)
+	}
+	if _, err = d.svc.Move(ctx, member, projectID, stagingID, "llm", in); !errors.Is(err, ErrInvalid) || err.Error() != want.Message {
+		t.Errorf("move: %v", err)
+	}
+	if d.revisions.count() != revisions {
+		t.Error("the refused move wrote something")
 	}
 }
 
@@ -1147,7 +1182,9 @@ func TestCacheGrows(t *testing.T) {
 	}{
 		{map[string]string{}, 20480, false},                    // the recipe's 20480 MB
 		{map[string]string{}, 30720, true},                     // more than it
-		{map[string]string{"cache_mb": "1024"}, 20480, true},   // a smaller one set by hand
+		{map[string]string{"cache_mb": "1024"}, 20480, false},  // below the recipe's: the planner's 20480
+		{map[string]string{"cache_mb": "1024"}, 30720, true},   // and more than that
+		{map[string]string{"cache_mb": "25600"}, 30720, true},  // a bigger one set by hand, still too small
 		{map[string]string{"cache_mb": "40960"}, 30720, false}, // big enough
 		{map[string]string{"cache_mb": "big"}, 20480, false},   // not a size: the recipe's
 	} {

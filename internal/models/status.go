@@ -679,7 +679,7 @@ func (s *Service) MovePreview(ctx context.Context, p security.Principal, project
 	if err != nil {
 		return nil, err
 	}
-	if cerr := s.cacheProblem(ctx, p, projectID, env, pv); cerr != nil {
+	if cerr := s.moveProblem(ctx, p, projectID, env, pv); cerr != nil {
 		return nil, cerr
 	}
 	allowed, err := s.d.Authz.Allowed(ctx, p, writeNeed(env))
@@ -755,7 +755,7 @@ func (s *Service) Move(ctx context.Context, p security.Principal, projectID, env
 	if err != nil {
 		return nil, err
 	}
-	if cerr := s.cacheProblem(ctx, p, projectID, env, pv); cerr != nil {
+	if cerr := s.moveProblem(ctx, p, projectID, env, pv); cerr != nil {
 		return nil, cerr
 	}
 	if len(pv.Problems) > 0 {
@@ -874,7 +874,10 @@ func (s *Service) moveResource(ctx context.Context, p security.Principal, projec
 	if refusal != "" {
 		return nil, fmt.Errorf("%w: %s", ErrInvalid, refusal)
 	}
-	update := moveUpdate(m.Resources[pv.Resource], cur, env.Name, m.Defaults, pv, settings)
+	update, err := moveUpdate(m.Resources[pv.Resource], cur, env.Name, m.Defaults, pv, settings)
+	if err != nil {
+		return nil, err
+	}
 	rev, _, err := s.d.Manifests.Edit(ctx, p, projectID, manifests.EditInput{UpdateResource: update})
 	if err != nil {
 		return nil, err
@@ -926,18 +929,30 @@ func (s *Service) cacheRefusal(ctx context.Context, orgID string, env *projects.
 		pv.Resource, pv.Quantization, pv.Resource, env.Name), nil
 }
 
-// cacheProblem adds cacheRefusal to a move's preview as a problem, so the
-// preview never offers a move that Move refuses. A preview that already
-// has a problem has no settings to check.
-func (s *Service) cacheProblem(ctx context.Context, p security.Principal, projectID string, env *projects.Environment, pv *DeployPreview) error {
-	if len(pv.Problems) > 0 || pv.Target.Source == TargetServerSize {
+// moveProblem adds the refusals Move makes after its preview to the
+// preview as problems, so the preview never offers a move that Move
+// refuses: weights with no file that env's block can't take
+// (environmentUpdate), and cacheRefusal. A preview that already has a
+// problem has no settings to check, and a server Loomplane creates has a
+// cache of its own.
+func (s *Service) moveProblem(ctx context.Context, p security.Principal, projectID string, env *projects.Environment, pv *DeployPreview) error {
+	if len(pv.Problems) > 0 {
 		return nil
 	}
-	cur, _, err := s.modelResource(ctx, p, projectID, env, pv.Resource)
+	cur, m, err := s.modelResource(ctx, p, projectID, env, pv.Resource)
 	if err != nil {
 		return err
 	}
-	refusal, err := s.cacheRefusal(ctx, p.OrgID, env, cur, pv, moveSettings(cur, pv))
+	settings := moveSettings(cur, pv)
+	_, err = moveUpdate(m.Resources[pv.Resource], cur, env.Name, m.Defaults, pv, settings)
+	if pe := (*ProblemError)(nil); errors.As(err, &pe) {
+		pv.Problems = append(pv.Problems, pe.Problem)
+		return nil
+	}
+	if pv.Target.Source == TargetServerSize {
+		return nil
+	}
+	refusal, err := s.cacheRefusal(ctx, p.OrgID, env, cur, pv, settings)
 	if err != nil {
 		return err
 	}
@@ -953,7 +968,7 @@ func (s *Service) cacheProblem(ctx context.Context, p security.Principal, projec
 // in that reads every field the edit changes there (soleReader), so no
 // other copy moves. Otherwise it edits env's own block, writing only what
 // env doesn't already read.
-func moveUpdate(raw, cur manifest.Resource, env string, d manifest.Defaults, pv *DeployPreview, settings map[string]string) *manifests.ResourceUpdateInput {
+func moveUpdate(raw, cur manifest.Resource, env string, d manifest.Defaults, pv *DeployPreview, settings map[string]string) (*manifests.ResourceUpdateInput, error) {
 	top := &manifests.ResourceUpdateInput{Resource: pv.Resource, Provider: &pv.Target.Provider, Target: &pv.Target.ConnectionID, Settings: settings}
 	var gpu *manifest.GPU
 	switch {
@@ -983,7 +998,7 @@ func moveUpdate(raw, cur manifest.Resource, env string, d manifest.Defaults, pv 
 		}
 	}
 	if soleReader(raw, env, changed...) {
-		return top
+		return top, nil
 	}
 	return environmentUpdate(raw, env, d, pv, settings)
 }

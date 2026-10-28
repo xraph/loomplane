@@ -150,6 +150,9 @@ type DeployPreview struct {
 	// joinKind is the kind of the resource the deploy adds the environment
 	// to, and servedName its served_name setting.
 	joinKind, servedName string
+	// joinFile is the top-level file setting of the resource the deploy
+	// adds the environment to, which a block can't take away.
+	joinFile string
 }
 
 // DeployResult is the deployment a deploy recorded, and the plan it made.
@@ -331,6 +334,11 @@ func (s *Service) preview(ctx context.Context, p security.Principal, projectID s
 		problem(ProblemEngine, "%s", otherKind(pv.AddsTo, pv.joinKind, kind, t.name))
 		return pv, nil
 	}
+	if pv.joinFile != "" && q.File == "" {
+		// The edit would refuse it (environmentUpdate).
+		problem(ProblemQuantization, "%s.", topLevelRefusal(q.ID, "file", env.Name, pv.joinFile))
+		return pv, nil
+	}
 	if !slices.Contains(k.Targets, t.provider) {
 		problem(ProblemTarget, "%s doesn't run on a %s target.", k.Title, t.provider)
 		return pv, nil
@@ -478,7 +486,7 @@ func (s *Service) checkName(ctx context.Context, p security.Principal, projectID
 	r, there := m.Resources[chosen]
 	switch {
 	case join:
-		pv.AddsTo, pv.joinKind, pv.servedName = chosen, r.Kind, r.Settings["served_name"]
+		pv.AddsTo, pv.joinKind, pv.servedName, pv.joinFile = chosen, r.Kind, r.Settings["served_name"], r.Settings["file"]
 	case !there:
 		// A copy of the same model waiting for its GPU server in another
 		// environment has no manifest resource yet, and the deploy joins
@@ -1035,19 +1043,31 @@ func placementEdit(m *manifest.Manifest, env string, pv *DeployPreview) (in mani
 	case r.Kind != pv.Kind:
 		return in, false, &Problem{Code: ProblemEngine, Message: otherKind(pv.Resource, r.Kind, pv.Kind, pv.TargetName)}
 	}
-	return manifests.EditInput{UpdateResource: placementUpdate(r, env, m.Defaults, pv)}, true, nil
+	u, err := placementUpdate(r, env, m.Defaults, pv)
+	if pe := (*ProblemError)(nil); errors.As(err, &pe) {
+		return in, false, &pe.Problem
+	}
+	return manifests.EditInput{UpdateResource: u}, true, nil
 }
 
 // placementUpdate turns raw on in env, on the preview's target, writing
 // under env only what env doesn't already read: the provider, the GPU and
 // each setting where pv differs from raw as env runs it. entry and
 // served_name are never written per environment, so the model has one
-// name everywhere.
-func placementUpdate(raw manifest.Resource, env string, d manifest.Defaults, pv *DeployPreview) *manifests.ResourceUpdateInput {
+// name everywhere. Weights with no file delete a file env's block still
+// has from before. It's refused as environmentUpdate is.
+func placementUpdate(raw manifest.Resource, env string, d manifest.Defaults, pv *DeployPreview) (*manifests.ResourceUpdateInput, error) {
 	on := true
-	u := environmentUpdate(raw, env, d, pv, engines.Settings(pv.spec))
+	settings := engines.Settings(pv.spec)
+	if _, ok := settings["file"]; !ok {
+		settings["file"] = ""
+	}
+	u, err := environmentUpdate(raw, env, d, pv, settings)
+	if err != nil {
+		return nil, err
+	}
 	u.Enabled = &on
-	return u
+	return u, nil
 }
 
 // environmentUpdate is an edit of env's block of raw that puts env's copy
@@ -1055,7 +1075,15 @@ func placementUpdate(raw manifest.Resource, env string, d manifest.Defaults, pv 
 // GPU and each setting where they differ from what env reads now. A
 // setting set to "" is deleted from the block when the block has it.
 // entry and served_name are never written per environment.
-func environmentUpdate(raw manifest.Resource, env string, d manifest.Defaults, pv *DeployPreview, settings map[string]string) *manifests.ResourceUpdateInput {
+//
+// A block can't say "no file", so weights with no file while raw's top
+// level names one are refused with a ProblemError (topLevelRefusal): env
+// would still read the top level's file, whether the block had one or
+// not.
+func environmentUpdate(raw manifest.Resource, env string, d manifest.Defaults, pv *DeployPreview, settings map[string]string) (*manifests.ResourceUpdateInput, error) {
+	if file := raw.Settings["file"]; file != "" && settings["file"] == "" {
+		return nil, &ProblemError{Problem: Problem{Code: ProblemQuantization, Message: topLevelRefusal(pv.Quantization, "file", env, file) + "."}}
+	}
 	target := pv.Target.ConnectionID
 	u := &manifests.ResourceUpdateInput{Resource: pv.Resource, Environment: env, Target: &target}
 	view := raw.For(env, d)
@@ -1082,7 +1110,7 @@ func environmentUpdate(raw manifest.Resource, env string, d manifest.Defaults, p
 		}
 		u.Settings[key] = value
 	}
-	return u
+	return u, nil
 }
 
 // planRow plans env from rev and records the plan on row. When planning

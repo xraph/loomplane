@@ -453,7 +453,7 @@ func TestPinUpdateToAPinWithNoFile(t *testing.T) {
 	repinned := &RepinnedError{Model: "m", Revision: "new"}
 	raw := manifest.Resource{Kind: recipes.ModelVLLMKind, Settings: map[string]string{"model": "m", "revision": "old", "file": "old.gguf"},
 		Environments: map[string]manifest.ResourceSettings{"staging": on(), "production": on()}}
-	want := "the registry's new pin has no file, and staging would still read file old.gguf from the top level of the model's manifest entry, which its other environments run. Remove the model from staging and deploy it again to move to the new pin"
+	want := "the registry's new pin has no file, and staging would still read file old.gguf from the top level of the model's manifest entry, which its other environments run. Deploy it to staging as a separately named model, or remove it from the project's other environments first"
 	if u, err := pinUpdate(raw, "staging", repinned, 20480); !errors.Is(err, ErrInvalid) || !strings.HasSuffix(err.Error(), want) {
 		t.Errorf("the top level's file: %+v, %v", u, err)
 	}
@@ -491,10 +491,12 @@ func TestPinUpdateToAPinWithNoFile(t *testing.T) {
 }
 
 // A pin move whose weights need a bigger cache than the Kubernetes volume
-// it has is refused before the manifest changes.
+// it has is refused before the manifest changes. A cache_mb below the
+// recipe's leaves the volume at the recipe's 20480 MB, as the planner
+// sizes it, so the new pin's weights need 25600 MB here.
 func TestMoveToPinRefusesToGrowAKubernetesCache(t *testing.T) {
 	ctx := context.Background()
-	d := newDeploy(t, deployRegistry(t, strings.Repeat("e", 40), ""), deployer, []gpus.GPUTarget{l40sServer()})
+	d := newDeploy(t, deployRegistryWith(t, strings.Repeat("e", 40), "", bigBF16), deployer, []gpus.GPUTarget{l40sServer()})
 	staleLlama(t, d, map[string]manifest.ResourceSettings{"staging": on()})
 	m := current(t, d)
 	r := m.Resources["llama-8b"]

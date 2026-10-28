@@ -82,8 +82,20 @@ func deployEntries(revision string) []registry.Entry {
 // results (YAML list items, "" for none).
 func deployRegistry(t *testing.T, revision, results string) *registry.Registry {
 	t.Helper()
+	return deployRegistryWith(t, revision, results, nil)
+}
+
+// deployRegistryWith is deployRegistry with edit applied to each entry,
+// nil for none.
+func deployRegistryWith(t *testing.T, revision, results string, edit func(*registry.Entry)) *registry.Registry {
+	t.Helper()
 	fsys := fstest.MapFS{}
 	put := func(family string, entries []registry.Entry) {
+		if edit != nil {
+			for i := range entries {
+				edit(&entries[i])
+			}
+		}
 		raw, err := yaml.Marshal(registry.File{Family: family, Entries: entries})
 		if err != nil {
 			t.Fatal(err)
@@ -106,6 +118,29 @@ func deployRegistry(t *testing.T, revision, results string) *registry.Registry {
 		t.Fatal(err)
 	}
 	return r
+}
+
+// bigBF16 makes an entry's bf16 weights 20 GiB, which need a 25600 MB
+// cache: more than the vLLM recipe's 20480 MB.
+func bigBF16(e *registry.Entry) {
+	for i, q := range e.Quantizations {
+		if q.ID == "bf16" {
+			q.WeightBytes = 20 << 30
+			q.MinGPUMemoryGiB = registry.MinGPUMemoryGiB(*e, q)
+			e.Quantizations[i] = q
+		}
+	}
+}
+
+// mustUpdate fails t when an edit is refused.
+func mustUpdate(t *testing.T) func(*manifests.ResourceUpdateInput, error) *manifests.ResourceUpdateInput {
+	return func(u *manifests.ResourceUpdateInput, err error) *manifests.ResourceUpdateInput {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return u
+	}
 }
 
 // Permissions of the deploy tests' members.
@@ -1104,7 +1139,7 @@ func TestPlacementUpdateWritesOnlyWhatDiffers(t *testing.T) {
 
 	pv := &DeployPreview{Resource: "llm", Target: TargetChoice{ConnectionID: "c2", Provider: "server"},
 		GPU: &provider.GPURequest{Kind: "nvidia-l4", Count: 1}, spec: spec}
-	u := placementUpdate(raw, "production", manifest.Defaults{}, pv)
+	u := mustUpdate(t)(placementUpdate(raw, "production", manifest.Defaults{}, pv))
 	if u.Resource != "llm" || u.Environment != "production" || u.Enabled == nil || !*u.Enabled || u.Target == nil || *u.Target != "c2" ||
 		u.Provider != nil || u.GPU != nil || len(u.Settings) != 0 {
 		t.Errorf("same placement on c2: %+v", u)
@@ -1114,7 +1149,7 @@ func TestPlacementUpdateWritesOnlyWhatDiffers(t *testing.T) {
 	other.Quantization, other.ServedName = awq, "Qwen/Qwen2.5-7B-Instruct"
 	pv = &DeployPreview{Resource: "llm", Target: TargetChoice{ConnectionID: "k1", Provider: "kubernetes"},
 		GPU: &provider.GPURequest{Kind: "nvidia-h100", Count: 1}, spec: other}
-	u = placementUpdate(raw, "production", manifest.Defaults{}, pv)
+	u = mustUpdate(t)(placementUpdate(raw, "production", manifest.Defaults{}, pv))
 	if u.Provider == nil || *u.Provider != "kubernetes" || u.GPU == nil || *u.GPU != (manifest.GPU{Kind: "nvidia-h100", Count: 1}) {
 		t.Errorf("kubernetes: %+v", u)
 	}
@@ -1133,9 +1168,41 @@ func TestPlacementUpdateWritesOnlyWhatDiffers(t *testing.T) {
 	// What production's block already says isn't written again.
 	raw.Environments = map[string]manifest.ResourceSettings{"production": {Provider: "kubernetes", GPU: &manifest.GPU{Kind: "nvidia-h100", Count: 1},
 		Settings: map[string]string{"quantization": awq.ID}}}
-	u = placementUpdate(raw, "production", manifest.Defaults{}, pv)
+	u = mustUpdate(t)(placementUpdate(raw, "production", manifest.Defaults{}, pv))
 	if u.Provider != nil || u.GPU != nil || u.Settings["quantization"] != "" || u.Settings["model"] != want["model"] {
 		t.Errorf("over production's block: %+v", u)
+	}
+}
+
+// A block can't say "no file", so adding production with weights that
+// have none, to a model whose top level names a file staging reads, is
+// refused before any edit: production would still read that file.
+func TestPlacementRefusesATopLevelFile(t *testing.T) {
+	e := qwenEntry(t)
+	bf16, _ := e.Quantization("bf16")
+	spec := engines.Spec{Entry: e, Quantization: bf16, ServedName: "chat", MaxModelLen: 8192, GPUs: 1}
+	settings := engines.Settings(spec)
+	settings["file"] = "old.gguf"
+	m := &manifest.Manifest{Version: 1, Resources: map[string]manifest.Resource{"llm": {Kind: recipes.ModelVLLMKind, Provider: "server", Target: "c1",
+		Settings: settings, Environments: map[string]manifest.ResourceSettings{"staging": on()}}}}
+	pv := &DeployPreview{Resource: "llm", Kind: recipes.ModelVLLMKind, Quantization: "bf16", Target: TargetChoice{ConnectionID: "c2", Provider: "server"}, entry: e, spec: spec}
+	want := Problem{Code: ProblemQuantization, Message: "bf16 has no file, and production would still read file old.gguf from the top level of the model's manifest entry, which its other environments run. Deploy it to production as a separately named model, or remove it from the project's other environments first."}
+	if _, join, p := placementEdit(m, "production", pv); p == nil || *p != want || join {
+		t.Errorf("placement: %+v", p)
+	}
+	// production's own file doesn't help: deleting it reads the top
+	// level's again.
+	r := m.Resources["llm"]
+	r.Environments["production"] = manifest.ResourceSettings{Settings: map[string]string{"file": "mine.gguf"}}
+	m.Resources["llm"] = r
+	if _, _, p := placementEdit(m, "production", pv); p == nil || *p != want {
+		t.Errorf("over production's own file: %+v", p)
+	}
+	// With no file at the top level, production's block loses its own.
+	delete(r.Settings, "file")
+	u := mustUpdate(t)(placementUpdate(r, "production", manifest.Defaults{}, pv))
+	if file, set := u.Settings["file"]; !set || file != "" {
+		t.Errorf("production's file stays: %+v", u)
 	}
 }
 
