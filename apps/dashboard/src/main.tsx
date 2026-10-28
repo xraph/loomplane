@@ -13,7 +13,7 @@ import { forgeClient, setAuthsomeApp } from "@/client/runtime"
 import { SessionRefreshBridge } from "@/client/session-refresh-bridge"
 import { authStorage, forgetStoredSession } from "@/client/auth-storage"
 import { applyAccent } from "@/lib/accent"
-import { FeaturesProvider } from "@/lib/features"
+import { FeaturesProvider, setFeatures } from "@/lib/features"
 import { captureInvite } from "@/lib/invite"
 import { ThemeProvider } from "@/components/theme-provider.tsx"
 import { Toaster } from "@/components/ui/sonner"
@@ -34,6 +34,8 @@ forgetStoredSession()
 try {
   const config = await publicConfig().fetch()
   setAuthsomeApp(config)
+  // Once, before the router's first load runs the routes' feature checks.
+  setFeatures(config.features)
   root.render(
     <StrictMode>
       <ThemeProvider>

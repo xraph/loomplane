@@ -2,7 +2,7 @@
 // hides a feature's pages and links when it's off, and a route for one
 // sends you home.
 import { redirect } from "@tanstack/react-router"
-import { createContext, type ReactNode, useContext } from "react"
+import { createContext, type ReactNode, useContext, useMemo } from "react"
 
 export type Features = { ai: boolean }
 
@@ -11,10 +11,14 @@ const off: Features = { ai: false }
 const FeaturesContext = createContext<Features>(off)
 
 // Routes check features before anything renders, outside React, so the
-// provider also keeps the latest set here.
+// dashboard records them here once at startup, from the same public config
+// the provider gets.
 const current: { features: Features } = { features: off }
 
-/** setFeatures records what the server has on, for requireFeature. */
+/**
+ * setFeatures records what the server has on, for requireFeature. main.tsx
+ * calls it once, before the router loads; tests call it to switch AI on.
+ */
 export function setFeatures(features: Features | undefined): void {
   current.features = { ...off, ...features }
 }
@@ -26,8 +30,7 @@ export function FeaturesProvider({
   features: Features | undefined
   children: ReactNode
 }) {
-  const value = { ...off, ...features }
-  setFeatures(value)
+  const value = useMemo(() => ({ ...off, ...features }), [features])
   return (
     <FeaturesContext.Provider value={value}>
       {children}

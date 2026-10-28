@@ -286,11 +286,9 @@ function TokenForm({ hasToken }: { hasToken: boolean }) {
             )}
           </div>
         </div>
-        <FieldDescription>
-          {hasToken
-            ? "Saving a new one replaces it. A read token from your Hugging Face settings is enough."
-            : "A read token from your Hugging Face settings is enough."}
-        </FieldDescription>
+        {hasToken && (
+          <FieldDescription>Saving a new one replaces it.</FieldDescription>
+        )}
       </Field>
       {saved && (
         <p
