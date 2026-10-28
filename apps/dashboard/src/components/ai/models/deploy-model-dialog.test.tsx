@@ -7,6 +7,7 @@ import { setFeatures } from "@/lib/features"
 import {
   deployPath,
   dialogRoutes,
+  environments,
   modelPath,
   modelRoutes,
   modelStatus,
@@ -239,6 +240,23 @@ it("says when you can't deploy to production", async () => {
   )
   await within(dialog).findByText("Runs in production.")
   expect(within(dialog).getByRole("button", { name: "Plan it" })).toBeDisabled()
+})
+
+it("doesn't point at another environment when there's none you can pick", async () => {
+  perms.granted = new Set(developer)
+  routes({
+    "/api/v1/projects/proj_1/environments": () =>
+      Response.json({ environments: [environments.environments[1]] }),
+    "POST /api/v1/projects/proj_1/environments/env_prod/ai/models/preview":
+      () => Response.json(preview({ can_deploy: false })),
+  })
+  const { dialog } = await openDialog()
+  expect(
+    await within(dialog).findByText(
+      "Only a workspace admin can deploy models to production. Ask one."
+    )
+  ).toBeInTheDocument()
+  expect(dialog).not.toHaveTextContent("pick another environment")
 })
 
 it("blocks a gated model without a token and links to settings for admins", async () => {

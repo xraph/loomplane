@@ -432,6 +432,8 @@ function DeployForm({
     )
 
   const blockedEnv = env && !mayWrite(env)
+  // Another environment the caller may deploy to, to point at instead.
+  const elsewhere = choosable.some((e) => e.id !== env?.id && mayWrite(e))
   // What this deploy adds, once the preview for this environment says.
   const adds =
     pv?.addsTo && pv.environments[0]?.environmentId === env?.id ? pv : undefined
@@ -525,7 +527,7 @@ function DeployForm({
           {blockedEnv && (
             <Note tone="weld">
               {env.kind === "production"
-                ? `Only a workspace admin can deploy models to ${env.name}. Ask one, or pick another environment.`
+                ? `Only a workspace admin can deploy models to ${env.name}. ${elsewhere ? "Ask one, or pick another environment." : "Ask one."}`
                 : `You can't deploy models to ${env.name}. Ask a workspace admin for permission.`}
             </Note>
           )}

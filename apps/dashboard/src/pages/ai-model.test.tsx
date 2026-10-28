@@ -937,6 +937,15 @@ it("offers deploying to another environment", async () => {
     screen.queryByRole("button", { name: "Deploy to another environment" })
   ).toBeNull()
 
+  // Production is the only one left, and ai:edit can't deploy there.
+  fresh()
+  perms.granted = new Set(["ai:read", "ai:edit"])
+  routes()
+  await openModel()
+  expect(
+    screen.queryByRole("button", { name: "Deploy to another environment" })
+  ).toBeNull()
+
   // Someone who can't deploy models isn't offered it.
   fresh()
   perms.granted = new Set(["ai:read"])

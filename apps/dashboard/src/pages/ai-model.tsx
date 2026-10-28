@@ -294,7 +294,7 @@ function EnvironmentSwitcher({
 
 /**
  * DeployElsewhere adds another of the project's environments to the model,
- * for someone who may deploy models, while there's one it doesn't run in.
+ * while there's one it doesn't run in that the caller may deploy models to.
  */
 function DeployElsewhere({
   status,
@@ -308,9 +308,14 @@ function DeployElsewhere({
   const { can } = useOrganization()
   const [open, setOpen] = useState(false)
   const runsIn = status.environments.map((e) => e.environmentId)
-  const left = environments.some((e) => !runsIn.includes(e.id))
-  if (!status.entry.id || !left || !(can("ai:edit") || can("ai:manage")))
-    return null
+  // One the model doesn't run in yet that the caller may deploy to:
+  // production takes ai:manage, the others ai:edit.
+  const left = environments.some(
+    (e) =>
+      !runsIn.includes(e.id) &&
+      can(e.kind === "production" ? "ai:manage" : "ai:edit")
+  )
+  if (!status.entry.id || !left) return null
   return (
     <>
       <Button variant="outline" onClick={() => setOpen(true)}>
