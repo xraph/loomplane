@@ -32,6 +32,8 @@ type fakeModels struct {
 	query  models.RegistryQuery
 	ids    []string
 	inputs []models.DeployInput
+	// preview is what Preview answers, when it's set.
+	preview *models.DeployPreview
 }
 
 func (f *fakeModels) record(op string, p security.Principal, extra ...any) error {
@@ -83,6 +85,9 @@ func (f *fakeModels) Preview(_ context.Context, p security.Principal, projectID,
 	f.inputs = append(f.inputs, in)
 	if err := f.record("preview", p, projectID, "/", environmentID, " ", in.EntryID); err != nil {
 		return nil, err
+	}
+	if f.preview != nil {
+		return f.preview, nil
 	}
 	return &models.DeployPreview{Resource: "llm"}, nil
 }
@@ -452,6 +457,29 @@ func TestDeployBodyCannotSetMoving(t *testing.T) {
 	svc = slices.DeleteFunc(svc, func(f string) bool { return strings.HasPrefix(f, "moving:") })
 	if !slices.Equal(api, svc) {
 		t.Errorf("API DeployInput %v, service %v without moving", api, svc)
+	}
+}
+
+// A deploy that adds an environment to a model already running in
+// another says which resource it adds to.
+func TestPreviewCarriesAddsTo(t *testing.T) {
+	m := &fakeModels{preview: &models.DeployPreview{Resource: "llm", AddsTo: "llm"}}
+	r := mounted(t, nil, m, &fakeSettings{})
+	out := do(t, r, call{http.MethodPost, envBase + "/preview", `{"entry_id":"Qwen/Qwen2.5-7B-Instruct","target":{"source":"connection","connection_id":"conn_1"}}`}, member)
+	if out.Code != http.StatusOK {
+		t.Fatalf("%d %s", out.Code, out.Body.String())
+	}
+	var body struct {
+		Resource string `json:"resource"`
+		AddsTo   string `json:"adds_to"`
+	}
+	if err := json.Unmarshal(out.Body.Bytes(), &body); err != nil || body.Resource != "llm" || body.AddsTo != "llm" {
+		t.Errorf("preview %s, %v", out.Body.String(), err)
+	}
+	// A new resource adds to nothing, and says nothing about it.
+	m.preview = &models.DeployPreview{Resource: "llm"}
+	if out = do(t, r, call{http.MethodPost, envBase + "/preview", `{"entry_id":"Qwen/Qwen2.5-7B-Instruct"}`}, member); strings.Contains(out.Body.String(), "adds_to") {
+		t.Errorf("a new resource: %s", out.Body.String())
 	}
 }
 

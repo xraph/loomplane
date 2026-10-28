@@ -193,6 +193,29 @@ func TestModelsAPIPublishedContract(t *testing.T) {
 	if len(seen) == 0 {
 		t.Error("the AI paths reach no schema")
 	}
+	// The copies of a model in each environment: a deploy's preview says
+	// which resource it adds an environment to, and the manifest edit
+	// (not an AI path, so not walked above) edits one environment's
+	// block. A pin move plans one environment, so a deploy's result has
+	// one plan.
+	for _, doc := range []struct {
+		name string
+		doc  openAPIDocument
+	}{{"served", served}, {"committed", committed}} {
+		for _, prop := range [][2]string{{"DeployPreview", "adds_to"}, {"EditInputBody", "update_resource.environment"}, {"EditInputBody", "update_resource.enabled"}} {
+			if property(t, doc.doc, prop[0], prop[1]) == nil {
+				t.Errorf("the %s spec's %s has no %s", doc.name, prop[0], prop[1])
+			}
+		}
+		if property(t, doc.doc, "DeployResult", "plans") != nil {
+			t.Errorf("the %s spec's DeployResult has plans", doc.name)
+		}
+	}
+	for _, prop := range [][2]string{{"DeployPreview", "adds_to"}, {"EditInputBody", "update_resource.environment"}, {"EditInputBody", "update_resource.enabled"}} {
+		if !jsonEqual(property(t, served, prop[0], prop[1]), property(t, committed, prop[0], prop[1])) {
+			t.Errorf("the committed spec's %s.%s differs from the served one", prop[0], prop[1])
+		}
+	}
 	if output := os.Getenv("LOOMPLANE_TEST_OPENAPI_OUTPUT"); output != "" {
 		if err := os.WriteFile(output, raw, 0o600); err != nil {
 			t.Fatal(err)
@@ -215,6 +238,23 @@ func openAPIDoc(t *testing.T, raw []byte) openAPIDocument {
 		t.Fatal(err)
 	}
 	return doc
+}
+
+// property is the schema of a property of a component schema, by a dotted
+// path through nested objects ("update_resource.environment"), or nil.
+func property(t *testing.T, doc openAPIDocument, schema, path string) json.RawMessage {
+	t.Helper()
+	raw := doc.Components.Schemas[schema]
+	for name := range strings.SplitSeq(path, ".") {
+		var s struct {
+			Properties map[string]json.RawMessage `json:"properties"`
+		}
+		if raw == nil || json.Unmarshal(raw, &s) != nil {
+			return nil
+		}
+		raw = s.Properties[name]
+	}
+	return raw
 }
 
 // jsonEqual compares two JSON values whatever their key order and layout.

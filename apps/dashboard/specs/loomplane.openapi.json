@@ -15319,6 +15319,12 @@
               "clear_gpu": {
                 "type": "boolean"
               },
+              "enabled": {
+                "type": "boolean"
+              },
+              "environment": {
+                "type": "string"
+              },
               "gpu": {
                 "$ref": "#/components/schemas/ManifestGPU"
               },
@@ -17270,6 +17276,9 @@
           "can_deploy"
         ],
         "properties": {
+          "adds_to": {
+            "type": "string"
+          },
           "can_deploy": {
             "type": "boolean"
           },

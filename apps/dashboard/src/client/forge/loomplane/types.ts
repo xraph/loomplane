@@ -1063,6 +1063,7 @@ export interface DeployInputBody {
 }
 
 export interface DeployPreview {
+  addsTo?: string;
   canDeploy: boolean;
   cost: Cost;
   entry: EntrySummary;
@@ -1281,6 +1282,8 @@ export interface EditInputBody {
 };
   updateResource?: {
   clearGpu?: boolean;
+  enabled?: boolean;
+  environment?: string;
   gpu?: ManifestGPU;
   provider?: string;
   resource: string;
