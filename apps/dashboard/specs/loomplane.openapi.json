@@ -17913,7 +17913,13 @@
           "plan_id": {
             "type": "string"
           },
+          "project_id": {
+            "type": "string"
+          },
           "projected_usd": {
+            "type": "string"
+          },
+          "resource": {
             "type": "string"
           },
           "state": {
@@ -17927,6 +17933,8 @@
           }
         },
         "required": [
+          "project_id",
+          "resource",
           "state",
           "entry",
           "kind",

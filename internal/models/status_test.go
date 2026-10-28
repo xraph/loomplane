@@ -653,6 +653,12 @@ func TestListIncludesModelsAddedByHand(t *testing.T) {
 	if hand.Deployment != nil || hand.Entry.ID != qwen7B || hand.Kind != recipes.ModelVLLMKind || hand.Environments[0].Environment != "production" {
 		t.Errorf("hand-made model %+v", hand)
 	}
+	if hand.ProjectID != projectID || hand.Resource != "handmade" {
+		t.Errorf("hand-made model names project %q, resource %q", hand.ProjectID, hand.Resource)
+	}
+	if row := list[0]; row.ProjectID != projectID || row.Resource != llamaResource {
+		t.Errorf("deployed model names project %q, resource %q", row.ProjectID, row.Resource)
+	}
 	if hand.Cost.Source != CostSourceServer || hand.Cost.HourlyUSD != "1.5700" || hand.ProjectedUSD == "" {
 		t.Errorf("hand-made cost %+v, projected %q", hand.Cost, hand.ProjectedUSD)
 	}

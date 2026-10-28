@@ -245,7 +245,9 @@ function status(over: Record<string, unknown>) {
     linked: [],
     max_model_len: 32768,
     month_to_date_usd: "0.0000",
+    project_id: "proj_1",
     projected_usd: "",
+    resource: "qwen",
     state: "ready",
     update_available: false,
     verification: {
@@ -304,6 +306,14 @@ it("sums GPU cost on the Deployed tab and counts unknown prices apart", async ()
             },
             month_to_date_usd: "3.0000",
             deployment: undefined,
+            resource: "handmade",
+            environments: [
+              {
+                environment: "staging",
+                environment_id: "env_2",
+                mode: "home",
+              },
+            ],
           }),
           status({
             gpu: { kind: "nvidia-h100-80gb", count: 2 },
@@ -346,7 +356,16 @@ it("sums GPU cost on the Deployed tab and counts unknown prices apart", async ()
   expect(served).toHaveTextContent("$40.25")
   expect(estimated).toHaveTextContent("~$0.43/hr")
   expect(estimated).toHaveTextContent("estimate")
-  expect(estimated).toHaveTextContent("added to the manifest by hand")
+  // A model added to the manifest by hand names and links its project too.
+  expect(estimated).toHaveTextContent(
+    "Checkout / staging, added to the manifest by hand"
+  )
+  expect(
+    within(estimated).getByRole("link", { name: "Qwen2.5 7B Instruct" })
+  ).toHaveAttribute(
+    "href",
+    "/projects/proj_1/catalog/handmade?environment=env_2"
+  )
   expect(waiting).toHaveTextContent("Waiting for a server")
   expect(waiting).toHaveTextContent("unknown")
   expect(cpu).toHaveTextContent("Runs on CPU. Its cost is part of build-box.")

@@ -53,8 +53,12 @@ type Status struct {
 	// Deployment is the row Loomplane keeps, nil for a model added to the
 	// manifest by hand that no deploy recorded.
 	Deployment *Deployment `json:"deployment"`
-	State      string      `json:"state"` // one of the State constants
-	Message    string      `json:"message,omitempty"`
+	// ProjectID and Resource name the model for every row, a hand-added
+	// one too: its project, and its resource in that project's manifest.
+	ProjectID string `json:"project_id"`
+	Resource  string `json:"resource"`
+	State     string `json:"state"` // one of the State constants
+	Message   string `json:"message,omitempty"`
 	// Hint says what to try after a failed start, and whether the version
 	// deployed before still serves.
 	Hint string `json:"hint,omitempty"`
@@ -276,7 +280,8 @@ func (s *Service) status(ctx context.Context, p security.Principal, projectID st
 	}
 	now := s.d.Now()
 	st := &Status{
-		Deployment: row, Environments: []Reach{homeReach(env)}, Linked: []LinkedService{},
+		Deployment: row, ProjectID: projectID, Resource: resource,
+		Environments: []Reach{homeReach(env)}, Linked: []LinkedService{},
 		MonthToDateUSD: monthToDate(row, now),
 	}
 

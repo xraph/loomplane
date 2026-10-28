@@ -2095,7 +2095,9 @@ export interface ModelsStatus {
   moveCost?: Cost;
   pin?: PinStatus;
   planId?: string;
+  projectId: string;
   projectedUsd: string;
+  resource: string;
   state: string;
   updateAvailable: boolean;
   verification: Fit;

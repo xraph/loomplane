@@ -335,14 +335,9 @@ function Deployed({ onBrowse }: { onBrowse: () => void }) {
         <ul aria-label="Deployed models">
           {models.map((m, i) => (
             <DeployedRow
-              key={
-                m.deployment?.id ??
-                `${m.environments[0]?.environmentId ?? ""}/${m.entry.id}/${i}`
-              }
+              key={`${m.projectId}/${m.environments[0]?.environmentId ?? ""}/${m.resource}/${i}`}
               model={m}
-              project={
-                m.deployment ? names.get(m.deployment.projectId) : undefined
-              }
+              project={names.get(m.projectId)}
             />
           ))}
         </ul>
@@ -361,23 +356,23 @@ function DeployedRow({
   const state = stateOf(m.state)
   const cost = costLabel(m.cost, m.connectionName)
   const environment = m.environments[0]?.environment ?? ""
-  const where = m.deployment
-    ? `${project ?? "Project"} / ${environment}`
-    : `${environment}, added to the manifest by hand`
-  const title = m.entry.title || m.deployment?.resource || "Model"
+  const environmentId = m.environments[0]?.environmentId
+  // Every row names its project and resource, a model added to the
+  // manifest by hand too.
+  const where = `${project ?? "Project"} / ${environment}${
+    m.deployment ? "" : ", added to the manifest by hand"
+  }`
+  const title = m.entry.title || m.resource || "Model"
   // Why it failed and what to try, in full on hover.
   const trouble = [m.message, m.hint].filter(Boolean).join(" ")
   return (
     <li className="grid gap-x-4 gap-y-1.5 border-t px-4 py-3 first:border-t-0 lg:grid-cols-[minmax(0,2fr)_minmax(0,1.5fr)_minmax(0,1.3fr)_8.5rem_7rem_7rem] lg:items-center">
       <div className="grid min-w-0 gap-0.5">
-        {m.deployment ? (
+        {m.projectId && m.resource ? (
           <Link
             to="/projects/$id/catalog/$resource"
-            params={{
-              id: m.deployment.projectId,
-              resource: m.deployment.resource,
-            }}
-            search={{ environment: m.deployment.environmentId }}
+            params={{ id: m.projectId, resource: m.resource }}
+            search={{ environment: environmentId }}
             className="truncate text-[13.5px] font-medium hover:underline"
           >
             {title}
