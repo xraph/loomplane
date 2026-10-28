@@ -77,6 +77,9 @@ type fakeServers struct {
 	applies   []string
 	reads     int
 	applyErrs []error // returned by the next applies, in order
+	// onApply runs at the start of each apply: what happens elsewhere
+	// while it's in flight.
+	onApply func()
 }
 
 func (f *fakeServers) allowed(ctx context.Context, p security.Principal) error {
@@ -119,6 +122,9 @@ func (f *fakeServers) ApplyServerOperation(ctx context.Context, p security.Princ
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.applies = append(f.applies, id)
+	if f.onApply != nil {
+		f.onApply()
+	}
 	op, ok := f.ops[id]
 	if !ok || op.CloudID != cloud {
 		return nil, cloudinfra.ErrNotFound
@@ -754,8 +760,13 @@ func TestCancelKeepsTheServer(t *testing.T) {
 	pv, _ := sf.deployOnNewServer(t)
 	sf.servers.succeed(pv.Server.ID)
 	previews, applies, _ := sf.servers.calls()
-	if err := sf.svc.CancelWaiting(ctx, member, projectID, stagingID, "qwen2-5-7b-instruct"); err != nil {
+	res, err := sf.svc.CancelWaiting(ctx, member, projectID, stagingID, "qwen2-5-7b-instruct")
+	if err != nil {
 		t.Fatal(err)
+	}
+	// The server is up, so the result says where to delete it.
+	if want := serverName + " was already approved and is up. Delete it in Infrastructure if you don't want it: it costs money while it runs."; res.Message != want {
+		t.Errorf("cancel message %q", res.Message)
 	}
 	if _, err := sf.rows.Get(ctx, "org", projectID, stagingID, "qwen2-5-7b-instruct"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("row after cancel: %v", err)
@@ -769,11 +780,11 @@ func TestCancelKeepsTheServer(t *testing.T) {
 		t.Errorf("audit %+v", sf.audit.events)
 	}
 	// Nothing left to cancel, and production's models need ai:manage.
-	if err := sf.svc.CancelWaiting(ctx, member, projectID, stagingID, "qwen2-5-7b-instruct"); !errors.Is(err, ErrNotFound) {
+	if _, err := sf.svc.CancelWaiting(ctx, member, projectID, stagingID, "qwen2-5-7b-instruct"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("cancel again: %v", err)
 	}
 	dev := newServerFirst(t, deployer)
-	if err := dev.svc.CancelWaiting(ctx, member, projectID, productID, "x"); !errors.Is(err, security.ErrForbidden) {
+	if _, err := dev.svc.CancelWaiting(ctx, member, projectID, productID, "x"); !errors.Is(err, security.ErrForbidden) {
 		t.Errorf("developer in production: %v", err)
 	}
 }
@@ -911,6 +922,10 @@ func TestCapacitySentences(t *testing.T) {
 			"The GPU server would take the cloud past its capacity limit of 3 servers: 3 are counted and it needs 1 more. An admin can raise the limit, then deploy the model again."},
 		{cloudinfra.CapacityBlock{Reason: "provider_quota", Resource: "servers", Limit: 10, Counted: 10, Requested: 1}, false,
 			"The DigitalOcean account's quota has no room for the GPU server's servers: it allows 10, 10 are counted and it needs 1 more."},
+		// A reason this page has no sentence of its own for still reads as
+		// words, never as codes.
+		{cloudinfra.CapacityBlock{Reason: "placement_constraint", Resource: "pool"}, false,
+			"The cloud's capacity policy holds the GPU server back: no pool can place it."},
 	} {
 		if got := capacitySentence(c.block); got != c.want {
 			t.Errorf("%s %s: %q", c.block.Reason, c.block.Resource, got)
@@ -1138,5 +1153,77 @@ func TestStrandedServerFirstRowWaitsAgain(t *testing.T) {
 	}
 	if d = sf.row(t); d.Phase != PhasePlanned || d.PlanID == "" || len(sf.plans.asked) != 1 {
 		t.Errorf("next run: %s plan %q", d.Phase, d.PlanID)
+	}
+}
+
+// Ruling M29: someone cancels a deployment whose server the capacity
+// policy paused, while a cron run approves that same review. The row goes
+// either way; the cancel says the server is coming and where to delete it,
+// and the log says so too.
+func TestCancelSaysTheServerIsAlreadyComing(t *testing.T) {
+	ctx := context.Background()
+	sf := newServerFirst(t, cloudAdmin)
+	var warned []string
+	sf.svc.d.Warn = func(msg string, err error) { warned = append(warned, msg+": "+err.Error()) }
+	sf.servers.applyErrs = []error{staleCount()}
+	sf.deployOnNewServer(t)
+
+	// Still paused: nothing was approved, so there's nothing to say.
+	res, err := sf.svc.CancelWaiting(ctx, member, projectID, stagingID, "qwen2-5-7b-instruct")
+	if err != nil || res.Message != "" || len(warned) != 0 {
+		t.Fatalf("paused cancel: %+v, %v, warned %v", res, err, warned)
+	}
+
+	// A cron run approved the review by the time the cancel reads it again.
+	sf.servers.applyErrs = []error{staleCount()}
+	pv, _ := sf.deployOnNewServer(t)
+	sf.servers.set(pv.Server.ID, func(op *cloudinfra.Operation) { op.Status = "pending" })
+	res, err = sf.svc.CancelWaiting(ctx, member, projectID, stagingID, "qwen2-5-7b-instruct")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := serverName + " was already approved and is being created. Delete it in Infrastructure if you don't want it: it costs money once it's up."
+	if res.Message != want {
+		t.Errorf("cancel message %q", res.Message)
+	}
+	if _, err = sf.rows.Get(ctx, "org", projectID, stagingID, "qwen2-5-7b-instruct"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("row after cancel: %v", err)
+	}
+	if len(warned) != 1 || !strings.Contains(warned[0], pv.Server.ID) || !strings.Contains(warned[0], serverName) {
+		t.Errorf("warned %v", warned)
+	}
+
+	// Someone who can't read the cloud's servers is told to ask an admin.
+	dev := newServerFirst(t, cloudAdmin)
+	dev.servers.applyErrs = []error{staleCount()}
+	pv, _ = dev.deployOnNewServer(t)
+	dev.servers.set(pv.Server.ID, func(op *cloudinfra.Operation) { op.Status = "pending" })
+	dev.svc.d.Authz, dev.servers.authz = deployer, deployer
+	res, err = dev.svc.CancelWaiting(ctx, member, projectID, stagingID, "qwen2-5-7b-instruct")
+	if err != nil || !strings.HasPrefix(res.Message, serverName+" may already be on its way. Ask an admin to check Infrastructure") {
+		t.Errorf("developer cancel: %+v, %v", res, err)
+	}
+}
+
+// The other side of the race: the cron's approval goes through after the
+// cancel took the row. The server is coming with nothing waiting for it,
+// so the cron logs it, and the run doesn't fail.
+func TestApprovalAfterCancelIsLogged(t *testing.T) {
+	ctx := context.Background()
+	sf := newServerFirst(t, cloudAdmin)
+	var warned []string
+	sf.svc.d.Warn = func(msg string, err error) { warned = append(warned, msg+": "+err.Error()) }
+	sf.servers.applyErrs = []error{staleCount()}
+	pv, _ := sf.deployOnNewServer(t)
+	sf.servers.onApply = func() {
+		if err := sf.rows.Delete(ctx, "org", projectID, stagingID, "qwen2-5-7b-instruct"); err != nil {
+			t.Error(err)
+		}
+	}
+	if err := sf.svc.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if len(warned) != 1 || !strings.Contains(warned[0], "was cancelled while its GPU server was being approved") || !strings.Contains(warned[0], pv.Server.ID) {
+		t.Errorf("warned %v", warned)
 	}
 }

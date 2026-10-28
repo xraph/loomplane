@@ -169,10 +169,11 @@ func keys[V any](m map[string]V) []string {
 	return out
 }
 
-// With AI off, the reconcile's cron entry left from when it was on goes,
-// so Dispatch doesn't fire a job nothing handles every minute. Other
-// schedules stay, and running it again is harmless.
-func TestAIOffDropsItsSchedule(t *testing.T) {
+// With AI off, the reconcile's cron entry left from when it was on keeps
+// firing, and its job runs and does nothing instead of failing for want
+// of a handler. Off deletes no schedule, so a replica with AI on during a
+// rollout keeps its own.
+func TestAIOffQuietsItsSchedule(t *testing.T) {
 	dispatcher, err := dispatch.New(dispatch.WithStore(memory.New()))
 	if err != nil {
 		t.Fatal(err)
@@ -187,14 +188,29 @@ func TestAIOffDropsItsSchedule(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	app := forge.New(forge.WithAppName("ai-off-test"))
 	off := aiext.NewOff(func() *engine.Engine { return eng })
-	for range 2 {
-		if err = off.Start(ctx); err != nil {
-			t.Fatal(err)
+	if err = off.Register(app); err != nil {
+		t.Fatal(err)
+	}
+	if err = off.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	run, ok := eng.Registry().Get(aiext.JobReconcileModels)
+	if !ok {
+		t.Fatalf("no %s handler with AI off: %v", aiext.JobReconcileModels, eng.Registry().Names())
+	}
+	// What the cron enqueues runs, and does nothing.
+	for _, payload := range [][]byte{nil, []byte("{}")} {
+		if err = run(ctx, payload); err != nil {
+			t.Errorf("the reconcile with AI off, payload %q: %v", payload, err)
 		}
-		crons, lerr := eng.CronStore().ListCrons(ctx)
-		if lerr != nil || len(crons) != 1 || crons[0].JobName != orchestration.JobDriftCheck {
-			t.Errorf("crons %+v, %v", crons, lerr)
-		}
+	}
+	if names := eng.Registry().Names(); len(names) != 1 {
+		t.Errorf("AI off registers %v", names)
+	}
+	crons, err := eng.CronStore().ListCrons(ctx)
+	if err != nil || len(crons) != 2 {
+		t.Errorf("crons %+v, %v", crons, err)
 	}
 }

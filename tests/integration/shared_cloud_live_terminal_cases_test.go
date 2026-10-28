@@ -141,4 +141,8 @@ func TestSharedCloudLiveTerminalUnavailable(t *testing.T) {
 			t.Fatal("unsafe operation failure code")
 		}
 	}
+	blocked := cloudinfra.CapacityBlockedPrefix + cloudinfra.CapacityBlock{Reason: "hard_limit", Resource: "gpus:nvidia-l40s", Limit: 1, Counted: 1, Requested: 1}.Summary() + ". Change the policy or free capacity, then retry."
+	if code := liveOperationCode(blocked); code != "capacity_blocked" {
+		t.Fatalf("capacity failure code %q", code)
+	}
 }

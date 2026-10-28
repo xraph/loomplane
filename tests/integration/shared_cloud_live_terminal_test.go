@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/xraph/loomplane/internal/cloudinfra"
@@ -109,7 +110,9 @@ func liveOperationCode(message string) string {
 		return "manager_revoked"
 	case "Infrastructure verification failed. Check the connection, provider scope and pinned server runtime before retrying.":
 		return "verification_failed"
-	default:
-		return "unknown"
 	}
+	if strings.HasPrefix(message, cloudinfra.CapacityBlockedPrefix) {
+		return "capacity_blocked"
+	}
+	return "unknown"
 }

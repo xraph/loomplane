@@ -160,8 +160,9 @@ func Extensions(cfg config.Config) []forge.Extension {
 	if cfg.AI.Enabled {
 		exts = append(exts, aiext.New(cfg))
 	} else {
-		// What AI scheduled while it was on stays in the database; this
-		// removes it, and adds nothing of the AI section.
+		// What AI scheduled while it was on stays in the database and keeps
+		// firing; this gives those jobs handlers that do nothing, and adds
+		// nothing else of the AI section.
 		exts = append(exts, aiext.NewOff(jobs.Engine))
 	}
 	return append(exts, web.New(cfg.Dashboard.Dir, "/api/", cfg.Identity.BasePath+"/", "/_/", "/.well-known/", "/catalog-admin/"))

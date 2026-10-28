@@ -386,27 +386,13 @@ func capacitySentence(b cloudinfra.CapacityBlock) string {
 		return fmt.Sprintf("The DigitalOcean account's quota has no room for the GPU server's %s: it allows %d, %d are counted and it needs %d more.",
 			what, b.Limit, b.Counted, b.Requested)
 	}
-	return fmt.Sprintf("The cloud's capacity policy holds the GPU server back (%s, %s).", b.Reason, what)
+	return "The cloud's capacity policy holds the GPU server back: " + b.Summary() + "."
 }
 
-// capacityResource names a capacity dimension for a sentence.
+// capacityResource names a capacity dimension for a sentence, as
+// cloudinfra's own failures do.
 func capacityResource(resource string) string {
-	if kind, ok := strings.CutPrefix(resource, "gpus:"); ok {
-		return gpuTitle(kind) + " GPUs"
-	}
-	switch resource {
-	case "servers":
-		return "servers"
-	case "cpu_millis":
-		return "CPU millicores"
-	case "memory_bytes":
-		return "memory bytes"
-	case "storage_bytes":
-		return "storage bytes"
-	case "", "request", "inventory", "account", "host", "server":
-		return "servers and their resources"
-	}
-	return resource
+	return cloudinfra.CapacityResourceName(resource)
 }
 
 // Retry puts a deployment that needs attention back to waiting for its
@@ -428,25 +414,81 @@ func (s *Service) Retry(ctx context.Context, p security.Principal, projectID, en
 	return d, nil
 }
 
+// CancelResult is what cancelling a waiting deployment leaves behind.
+type CancelResult struct {
+	// Message says the GPU server was already approved, so it's coming or
+	// up and costs money until someone deletes it, or that Loomplane
+	// couldn't tell. Empty when no server was approved.
+	Message string `json:"message,omitempty"`
+}
+
 // CancelWaiting stops a deployment that's waiting for its GPU server, or
 // needs attention there. The row goes; the server, if Loomplane created
 // one, stays on the cloud's servers until someone deletes it from
 // Infrastructure. It needs WriteNeed of the environment.
-func (s *Service) CancelWaiting(ctx context.Context, p security.Principal, projectID, environmentID, resource string) error {
+//
+// The cron may approve a paused server's review while the row is being
+// deleted, so the operation is read again once the row is gone: when it
+// left preview, the result says the server is on its way and where to
+// delete it.
+func (s *Service) CancelWaiting(ctx context.Context, p security.Principal, projectID, environmentID, resource string) (*CancelResult, error) {
 	d, err := s.waitingRow(ctx, p, projectID, environmentID, resource)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if d.Phase != PhaseWaitingForServer && d.Phase != PhaseNeedsAttention {
-		return fmt.Errorf("%w: only a model waiting for its GPU server can be cancelled", ErrInvalid)
+		return nil, fmt.Errorf("%w: only a model waiting for its GPU server can be cancelled", ErrInvalid)
 	}
 	if derr := s.d.Store.Delete(ctx, d.OrgID, d.ProjectID, d.EnvironmentID, d.Resource); derr != nil {
-		return derr
+		return nil, derr
 	}
 	s.audit(ctx, p, projectID, "ai.model.cancel", map[string]any{
 		"resource": resource, "server": d.ServerName, "cloud_id": d.ServerCloudID, "operation_id": d.ServerOperationID,
 	})
-	return nil
+	return &CancelResult{Message: s.serverAfterCancel(ctx, p, d)}, nil
+}
+
+// serverAfterCancel reads a cancelled deployment's server operation again,
+// whatever ctx's state, and says what became of the server: nothing when
+// it was never approved, or that it's on its way or up and where to
+// delete it.
+func (s *Service) serverAfterCancel(ctx context.Context, p security.Principal, d *Deployment) string {
+	if d.ServerOperationID == "" || s.d.Servers == nil {
+		return ""
+	}
+	server := serverOf(d)
+	op, err := s.d.Servers.GetOperation(context.WithoutCancel(ctx), p, d.ServerCloudID, d.ServerOperationID)
+	switch {
+	case errors.Is(err, cloudinfra.ErrNotFound):
+		return ""
+	case errors.Is(err, security.ErrForbidden):
+		return fmt.Sprintf("%s may already be on its way. Ask an admin to check Infrastructure: a GPU server there costs money until it's deleted.", server)
+	case err != nil:
+		return fmt.Sprintf("Loomplane couldn't tell whether %s was already approved. Check Infrastructure: a GPU server there costs money until it's deleted.", server)
+	}
+	var msg string
+	switch op.Status {
+	case "preview", "failed", "cancelled":
+		return ""
+	case "succeeded":
+		msg = fmt.Sprintf("%s was already approved and is up. Delete it in Infrastructure if you don't want it: it costs money while it runs.", server)
+	default:
+		msg = fmt.Sprintf("%s was already approved and is being created. Delete it in Infrastructure if you don't want it: it costs money once it's up.", server)
+	}
+	s.warnServerWithoutRow(d, "was cancelled after its GPU server was approved")
+	return msg
+}
+
+// warnServerWithoutRow logs a GPU server Loomplane approved for d that no
+// deployment waits for any more, since it costs money until someone
+// deletes it.
+func (s *Service) warnServerWithoutRow(d *Deployment, what string) {
+	if s.d.Warn == nil {
+		return
+	}
+	s.d.Warn(fmt.Sprintf("%s %s", d.Resource, what),
+		fmt.Errorf("loomplane is creating %s for %s (cloud %s, operation %s), and nothing waits for it now. It stays on the cloud's servers and costs money until you delete it",
+			serverOf(d), d.Resource, d.ServerCloudID, d.ServerOperationID))
 }
 
 // waitingRow reads a deployment the caller may change.
@@ -622,7 +664,7 @@ func (s *Service) applyAgain(ctx context.Context, d *Deployment, p security.Prin
 			return errors.Join(err, rerr)
 		}
 		if left {
-			return s.waitWith(ctx, d, "")
+			return s.approved(ctx, d)
 		}
 	}
 	var blocked *cloudinfra.CapacityAdmissionError
@@ -638,7 +680,20 @@ func (s *Service) applyAgain(ctx context.Context, d *Deployment, p security.Prin
 	case err != nil:
 		return err
 	}
-	return s.waitWith(ctx, d, "")
+	return s.approved(ctx, d)
+}
+
+// approved records that d's server is on its way. A row that's gone by
+// now was cancelled while the cron approved its server, so a server is
+// coming that nothing waits for: that's logged, and the next run has
+// nothing to carry on.
+func (s *Service) approved(ctx context.Context, d *Deployment) error {
+	d.Message = ""
+	err := s.d.Store.Update(ctx, d)
+	if errors.Is(err, ErrNotFound) {
+		s.warnServerWithoutRow(d, "was cancelled while its GPU server was being approved")
+	}
+	return err
 }
 
 // serverUp continues a deployment whose server was created: once the
