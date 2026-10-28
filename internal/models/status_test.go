@@ -22,6 +22,7 @@ import (
 	"github.com/xraph/loomplane/internal/models/engines"
 	"github.com/xraph/loomplane/internal/models/registry"
 	"github.com/xraph/loomplane/internal/planning"
+	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/providers"
 	"github.com/xraph/loomplane/internal/recipes"
 	"github.com/xraph/loomplane/internal/security"
@@ -850,6 +851,54 @@ func TestListShowsEachEnvironmentCopy(t *testing.T) {
 	}
 	if !maps.Equal(got, map[string]string{stagingID: gpuConn, productID: gpuConn2}) {
 		t.Errorf("copies %v", got)
+	}
+}
+
+// countingStore counts the reads of a project's rows.
+type countingStore struct {
+	Store
+	lists int
+}
+
+func (c *countingStore) ListProject(ctx context.Context, orgID, projectID string) ([]*Deployment, error) {
+	c.lists++
+	return c.Store.ListProject(ctx, orgID, projectID)
+}
+
+// countingProjects counts the reads of a project's environments.
+type countingProjects struct {
+	memProjects
+	lists int
+}
+
+func (c *countingProjects) ListEnvironments(ctx context.Context, orgID, projectID string) ([]*projects.Environment, error) {
+	c.lists++
+	return c.memProjects.ListEnvironments(ctx, orgID, projectID)
+}
+
+// Final review M8: a list reads the project's rows and environments once,
+// however many models it has.
+func TestListReadsTheProjectOnce(t *testing.T) {
+	ctx := context.Background()
+	targets, conns := copyServers()
+	d := newDeploy(t, deployRegistry(t, llamaRev, ""), aiAdmin, targets, conns...)
+	putLLM(t, d, map[string]manifest.ResourceSettings{"staging": on(), "production": on()})
+	putResource(t, d, "chat", current(t, d).Resources["llm"])
+	llmRow(t, d, stagingID)
+	store, envs := &countingStore{Store: d.rows}, &countingProjects{}
+	d.svc.d.Store, d.svc.d.Projects = store, envs
+
+	list, err := d.svc.List(ctx, member)
+	if err != nil || len(list) != 4 {
+		t.Fatalf("list %d, %v", len(list), err)
+	}
+	if store.lists != 1 || envs.lists != 1 {
+		t.Errorf("read the rows %d times and the environments %d times", store.lists, envs.lists)
+	}
+	for _, st := range list {
+		if len(st.Environments) != 2 {
+			t.Errorf("%s: environments %+v", st.Resource, st.Environments)
+		}
 	}
 }
 

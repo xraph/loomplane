@@ -188,7 +188,7 @@ func (s *Service) listProject(ctx context.Context, p security.Principal, project
 			continue
 		}
 		recorded[d.EnvironmentID+"/"+d.Resource] = true
-		st, serr := s.status(ctx, p, projectID, env, d.Resource, d)
+		st, serr := s.statusFrom(ctx, p, projectID, env, d.Resource, d, rows, envs)
 		if errors.Is(serr, ErrNotFound) {
 			continue
 		}
@@ -206,7 +206,7 @@ func (s *Service) listProject(ctx context.Context, p security.Principal, project
 			if !recipes.IsModelKind(r.Kind) || !enabledIn(r, env.Name) || recorded[env.ID+"/"+name] {
 				continue
 			}
-			st, serr := s.status(ctx, p, projectID, env, name, nil)
+			st, serr := s.statusFrom(ctx, p, projectID, env, name, nil, rows, envs)
 			if serr != nil {
 				return nil, fmt.Errorf("model %s: %w", name, serr)
 			}
@@ -263,6 +263,16 @@ func (s *Service) manifestOf(ctx context.Context, p security.Principal, projectI
 // status works a model's status out. The caller has checked p may read
 // it. row may be nil, for a model the manifest has and no deploy recorded.
 func (s *Service) status(ctx context.Context, p security.Principal, projectID string, env *projects.Environment, resource string, row *Deployment) (*Status, error) {
+	rows, _ := s.projectRows(ctx, p.OrgID, projectID, "")
+	return s.statusFrom(ctx, p, projectID, env, resource, row, rows, s.environmentsOf(ctx, p.OrgID, projectID, env))
+}
+
+// statusFrom is status with the project's deployment rows and
+// environments already read, so a list reads them once per project
+// rather than once per model.
+func (s *Service) statusFrom(ctx context.Context, p security.Principal, projectID string, env *projects.Environment, resource string, row *Deployment,
+	rows []*Deployment, envs []*projects.Environment,
+) (*Status, error) {
 	if s.d.Deployed == nil {
 		return nil, errors.New("models: deployment facts aren't configured")
 	}
@@ -287,10 +297,9 @@ func (s *Service) status(ctx context.Context, p security.Principal, projectID st
 		return nil, fmt.Errorf("%w: %s has no model %s", ErrNotFound, env.Name, resource)
 	}
 	now := s.d.Now()
-	rows, _ := s.projectRows(ctx, p.OrgID, projectID, "")
 	st := &Status{
 		Deployment: row, ProjectID: projectID, Resource: resource,
-		Environments: copiesOf(raw, s.environmentsOf(ctx, p.OrgID, projectID, env), env, waitingIn(rows, resource)),
+		Environments: copiesOf(raw, envs, env, waitingIn(rows, resource)),
 		Linked:       []LinkedService{}, MonthToDateUSD: monthToDate(row, now),
 	}
 
