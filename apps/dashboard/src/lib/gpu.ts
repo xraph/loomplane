@@ -18,6 +18,11 @@ const gpuTitles: Record<string, string> = {
   "nvidia-v100-32gb": "NVIDIA V100 32GB",
 }
 
+/** nvidiaKinds are the kinds a GPU ceiling can name: the table's NVIDIA ones. */
+export const nvidiaKinds = Object.keys(gpuTitles).filter((k) =>
+  k.startsWith("nvidia-")
+)
+
 export const gpuDocsUrl = "https://loomplane.dev/docs/clouds/gpus"
 
 const hoursPerMonth = 730

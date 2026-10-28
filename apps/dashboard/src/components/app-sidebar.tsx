@@ -292,6 +292,9 @@ function attentionFor(latest?: Run): Attention | undefined {
   if (latest.status === "waiting") {
     return { tone: "waiting", note: "waiting for approval" }
   }
+  if (latest.status === "paused") {
+    return { tone: "waiting", note: "paused for capacity" }
+  }
   if (latest.status === "failed") {
     return { tone: "failed", note: "last deploy failed" }
   }

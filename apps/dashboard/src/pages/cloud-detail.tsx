@@ -48,10 +48,19 @@ import {
 import { useOrganization } from "@/lib/organization"
 import { Link } from "@/lib/router"
 
-export function CloudDetail({ id, project }: { id: string; project?: string }) {
+export function CloudDetail({
+  id,
+  project,
+  tab,
+}: {
+  id: string
+  project?: string
+  /** The view the page opens on; Overview when unset. */
+  tab?: CloudTab
+}) {
   const { session, can } = useOrganization()
   return can("organization_cloud:manage") ? (
-    <FromOrganization key={`${session.orgId}:${id}`} id={id} />
+    <FromOrganization key={`${session.orgId}:${id}`} id={id} tab={tab} />
   ) : project ? (
     <FromProject
       key={`${session.orgId}:${id}:${project}`}
@@ -62,7 +71,7 @@ export function CloudDetail({ id, project }: { id: string; project?: string }) {
     <Frame loading={false} missing={false} restricted />
   )
 }
-function FromOrganization({ id }: { id: string }) {
+function FromOrganization({ id, tab }: { id: string; tab?: CloudTab }) {
   const cloud = useQuery(api.useOrganizationCloudsGet, {
     path: { cloudId: id },
   })
@@ -87,6 +96,7 @@ function FromOrganization({ id }: { id: string }) {
       {profile && (
         <OrganizationCloud
           cloud={profile}
+          tab={tab}
           onSaved={(next) => {
             setSaved(next)
             void cloud.refetch()
@@ -184,9 +194,11 @@ function Frame({
 /** The organization's view: every project's share, servers and settings. */
 function OrganizationCloud({
   cloud,
+  tab,
   onSaved,
 }: {
   cloud: Profile
+  tab?: CloudTab
   onSaved: (cloud: Profile) => void
 }) {
   const grants = useQuery(api.useOrganizationCloudsListGrants, {
@@ -199,6 +211,7 @@ function OrganizationCloud({
   return (
     <CloudPage
       scope={{ cloud, project: "" }}
+      initialTab={tab}
       manage
       grants={(grants.data?.grants ?? []).filter(
         (g): g is ProjectGrant => !!g && !g.revoked
@@ -210,6 +223,7 @@ function OrganizationCloud({
       onChanged={() => {
         void grants.refetch()
         void servers.refetch()
+        void pools.refetch()
       }}
     />
   )
@@ -256,6 +270,7 @@ const plural = (n: number, one: string, many = `${one}s`) =>
 
 function CloudPage({
   scope,
+  initialTab = "overview",
   manage,
   grants,
   grantsQuery,
@@ -265,6 +280,7 @@ function CloudPage({
   onChanged,
 }: {
   scope: CloudScope
+  initialTab?: CloudTab
   manage: boolean
   grants?: ProjectGrant[]
   grantsQuery?: {
@@ -278,7 +294,7 @@ function CloudPage({
   onChanged: () => void
 }) {
   const { cloud, project } = scope
-  const [tab, setTab] = useState<CloudTab>("overview")
+  const [tab, setTab] = useState<CloudTab>(initialTab)
   const targets = useScopedTargets(scope)
   const usage = useScopedUsage(scope)
   const syncs = useScopedSyncs(scope)
@@ -466,6 +482,7 @@ function CloudPage({
                 cloudId={cloud.id}
                 pools={pools ?? []}
                 connections={accounts}
+                onPoolsChanged={onChanged}
               />
             </TabsContent>
           )}

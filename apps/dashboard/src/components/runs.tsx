@@ -10,6 +10,7 @@ import {
   DownloadIcon,
   HourglassIcon,
   LoaderCircleIcon,
+  PauseIcon,
   SearchIcon,
   TriangleAlertIcon,
   XIcon,
@@ -246,7 +247,8 @@ export function RunDot({
         status === "canceled" && "bg-muted-foreground/50",
         status === "approved" && "bg-overdye/50",
         status === "running" && "thread-shuttle bg-weld",
-        status === "waiting" && "bg-weld/20 ring-1 ring-weld ring-inset",
+        (status === "waiting" || status === "paused") &&
+          "bg-weld/20 ring-1 ring-weld ring-inset",
         className
       )}
     />
@@ -270,6 +272,7 @@ export function toneOf(status: RunStatus): Tone {
     case "succeeded":
       return "live"
     case "waiting":
+    case "paused":
       return "waiting"
     case "running":
     case "approved":
@@ -300,6 +303,7 @@ export const toneClass: Record<
 const statusIcons: Record<RunStatus, typeof CheckIcon> = {
   succeeded: CheckIcon,
   waiting: HourglassIcon,
+  paused: PauseIcon,
   running: LoaderCircleIcon,
   approved: LoaderCircleIcon,
   failed: XIcon,

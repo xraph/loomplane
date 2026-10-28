@@ -1,5 +1,11 @@
 import { ClientProvider } from "@forge-go/client-react"
-import { cleanup, render, screen, waitFor } from "@testing-library/react"
+import {
+  cleanup,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, expect, it, vi } from "vitest"
 
@@ -64,6 +70,31 @@ const usage = {
       ],
     },
   ],
+}
+
+const none = { servers: 0, cpu_millis: 0, memory_bytes: 0, storage_bytes: 0 }
+const unknown = {
+  servers: null,
+  cpu_millis: null,
+  memory_bytes: null,
+  storage_bytes: null,
+}
+const capacityUsage = {
+  cloud_id: "c",
+  accounts: [],
+  records: [],
+  provisioned: none,
+  pending: none,
+  reserved: none,
+  observed: unknown,
+  system_reserve: none,
+  allocatable: unknown,
+  headroom: none,
+  observed_storage_bytes: null,
+  checked_at: "2026-10-20T00:00:00Z",
+  fresh: true,
+  gpus: [],
+  frontends: [],
 }
 
 function fixture({
@@ -152,6 +183,7 @@ function fixture({
           },
         }
       if (path === "/api/v1/clouds/c/expansions") body = { expansions: [] }
+      if (path === "/api/v1/clouds/c/capacity-usage") body = capacityUsage
       if (path === "/api/v1/clouds/c/operations") body = { operations: [] }
       if (path === "/api/v1/members") body = { members: [] }
       if (path.endsWith("/environments")) body = { environments: [] }
@@ -238,10 +270,10 @@ function fixture({
   return { writes, reads }
 }
 
-const show = (project?: string) =>
+const show = (project?: string, tab?: "capacity") =>
   render(
     <ClientProvider client={forgeClient}>
-      <CloudDetail id="c" project={project} />
+      <CloudDetail id="c" project={project} tab={tab} />
     </ClientProvider>
   )
 const openTab = async (name: string) =>
@@ -514,6 +546,16 @@ it("says pools won't grow on their own while automatic expansion is off, and sav
   ).toBeInTheDocument()
   await user.type(screen.getByRole("spinbutton", { name: "Servers" }), "3")
   await user.type(screen.getByRole("spinbutton", { name: "vCPU" }), "8")
+  // A saved limit is enforced even while pools don't grow, so an empty one
+  // is never saved as 0.
+  await user.click(screen.getByRole("button", { name: "Save policy" }))
+  expect(await screen.findByRole("alert")).toHaveTextContent("before you save")
+  expect(writes).toEqual([])
+  await user.type(screen.getByRole("spinbutton", { name: "Memory, GiB" }), "16")
+  await user.type(
+    screen.getByRole("spinbutton", { name: "Storage, GB" }),
+    "200"
+  )
   await user.click(screen.getByRole("button", { name: "Save policy" }))
   await waitFor(() =>
     expect(writes.at(-1)).toMatchObject({
@@ -524,7 +566,12 @@ it("says pools won't grow on their own while automatic expansion is off, and sav
         policy: {
           enabled: false,
           require_expansion_approval: true,
-          limits: { servers: 3, cpu_millis: 8000 },
+          limits: {
+            servers: 3,
+            cpu_millis: 8000,
+            memory_bytes: 16 * 2 ** 30,
+            storage_bytes: 200e9,
+          },
           pools: [],
         },
       },
@@ -546,4 +593,35 @@ it("says which limits are missing before letting pools grow", async () => {
     "set the most this Cloud may hold for vCPU, memory, storage"
   )
   expect(writes).toEqual([])
+})
+
+// A paused deployment's "Review capacity" opens the Cloud on its Capacity
+// tab, with ?project= set. A manager lands there with usage, the growth
+// policy, the pools' rules with New scaling pool, and waiting servers.
+it("opens on the Capacity tab with usage, the policy, pools and expansions", async () => {
+  const { reads } = fixture()
+  show("web", "capacity")
+  expect(
+    await screen.findByRole("tab", { name: /^Capacity/, selected: true })
+  ).toBeInTheDocument()
+  const usage = await screen.findByRole("region", { name: "Capacity usage" })
+  const policy = await screen.findByRole("region", { name: "Growth policy" })
+  const pools = screen.getByRole("region", { name: "How each pool grows" })
+  const waiting = screen.getByRole("region", {
+    name: "Servers waiting for approval",
+  })
+  const after = (a: Element, b: Element) =>
+    !!(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING)
+  expect(
+    after(usage, policy) && after(policy, pools) && after(pools, waiting)
+  ).toBe(true)
+  expect(
+    within(pools).getByRole("button", { name: "New scaling pool" })
+  ).toBeInTheDocument()
+  await waitFor(() => expect(reads).toContain("/api/v1/clouds/c/expansions"))
+  // Capacity lives on its own tab; Servers doesn't mount a second copy.
+  await openTab("Servers")
+  expect(
+    screen.queryByRole("region", { name: "Capacity usage" })
+  ).not.toBeInTheDocument()
 })

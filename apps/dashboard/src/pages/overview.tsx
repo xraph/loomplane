@@ -52,10 +52,11 @@ function greeting(now: number) {
 const counted = ["One", "Two", "Three", "Four", "Five"]
 
 /** summary is the line under the greeting: what needs you, then the rest. */
-function summary(runs: Run[]): string {
+export function summary(runs: Run[]): string {
   if (runs.length === 0)
     return "Plan your first deployment and it shows up here."
   const waiting = runs.filter((r) => r.status === "waiting").length
+  const paused = runs.filter((r) => r.status === "paused").length
   const running = runs.filter((r) => r.status === "running").length
   // The latest finished run of each environment says whether it's live.
   const latest = new Map<string, Run>()
@@ -72,6 +73,10 @@ function summary(runs: Run[]): string {
   if (waiting)
     parts.push(
       `${n(waiting)} ${waiting === 1 ? "deploy is" : "deploys are"} waiting on you.`
+    )
+  if (paused)
+    parts.push(
+      `${n(paused)} ${paused === 1 ? "deploy is" : "deploys are"} paused for capacity.`
     )
   if (running)
     parts.push(`${n(running)} ${running === 1 ? "is" : "are"} deploying now.`)
@@ -574,6 +579,18 @@ function useEvents(runs: Run[]) {
             </>
           ),
         })
+      } else if (r.status === "paused") {
+        out.push({
+          ...base,
+          id: `${r.id}-pause`,
+          ts: Date.parse(r.deployment?.capacityWait?.createdAt ?? r.createdAt),
+          dot: "bg-weld",
+          text: (
+            <>
+              The deploy of {name(r)} to {r.environment} paused for capacity
+            </>
+          ),
+        })
       } else if (r.status === "blocked") {
         const n = r.plan.problems.length
         out.push({
@@ -607,11 +624,16 @@ function useEvents(runs: Run[]) {
           id: `${r.id}-cancel`,
           ts,
           dot: "bg-muted-foreground/50",
-          text: (
-            <>
-              The plan for {name(r)} to {r.environment} was {r.plan.status}
-            </>
-          ),
+          text:
+            r.deployment?.status === "cancelled" ? (
+              <>
+                The deploy of {name(r)} to {r.environment} was canceled
+              </>
+            ) : (
+              <>
+                The plan for {name(r)} to {r.environment} was {r.plan.status}
+              </>
+            ),
         })
       } else if (r.status === "succeeded") {
         out.push({

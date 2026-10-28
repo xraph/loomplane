@@ -1,7 +1,7 @@
-// How a Cloud's server pools may grow: the policy, one rule per pool, and
-// the servers waiting for someone to approve them. Pools never shrink on
-// their own, and nothing grows while this Loomplane keeps automatic
-// expansion off.
+// How a Cloud's server pools may grow: what the Cloud counts now, the
+// policy, one rule per pool, and the servers waiting for someone to approve
+// them. Pools never shrink on their own, and nothing grows while this
+// Loomplane keeps automatic expansion off.
 import type { UseQueryResult } from "@forge-go/client-react"
 import { useState } from "react"
 
@@ -13,15 +13,13 @@ import type {
   Expansion,
   ExpansionList,
   Pool,
-  PoolExpansionPolicy,
-  ResourceVector,
+  Target,
 } from "@/client/forge/loomplane/types"
 import { useMutation, useQuery } from "@/client/hooks"
 import { CloudSelect as Select } from "@/components/cloud-targets/cloud-select"
 import {
   CloudError,
   CloudSectionHead,
-  Field,
   Row,
   Rows,
 } from "@/components/cloud-targets/infrastructure-ui"
@@ -48,63 +46,47 @@ import {
 } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Switch } from "@/components/ui/switch"
+import { blockText, conflictText, staleText } from "@/lib/capacity"
+import {
+  blankRule,
+  ceilings,
+  check,
+  checkRule,
+  cloudValues,
+  draftOf,
+  frontendTargets,
+  read,
+  tighterFrom,
+  type Draft,
+  type FrontendDraft,
+  type RuleDraft,
+} from "@/lib/capacity-policy"
 import { relative } from "@/lib/format"
+import { acceleratorLabel, gpuTitle, nvidiaKinds, priceKnown } from "@/lib/gpu"
 import { useNow } from "@/lib/use-runs"
 
+import { CapacityUsage } from "./capacity-usage"
+import { RuleFields, TextAmount } from "./capacity-rule"
+import { NewScalingPool } from "./scaling-pool"
 import { RunsOn } from "./targets"
 
 const GIB = 2 ** 30
-const GB = 1_000_000_000
 
-const emptyVector: ResourceVector = {
-  servers: 0,
-  cpuMillis: 0,
-  memoryBytes: 0,
-  storageBytes: 0,
-}
-
-/** A number field in the unit people think in, stored as the API's unit. */
-function Amount({
-  label,
-  value,
-  scale,
-  step = 1,
-  onChange,
-}: {
-  label: string
-  value: number
-  scale: number
-  step?: number
-  onChange: (next: number) => void
-}) {
-  return (
-    <FormField className="w-auto gap-1 text-xs">
-      <FieldLabel className="contents">
-        {label}
-        <Input
-          type="number"
-          min={0}
-          step={step}
-          className="w-28"
-          value={value ? Number((value / scale).toFixed(2)) : ""}
-          placeholder="0"
-          onChange={(e) =>
-            onChange(Math.max(0, Math.round(Number(e.target.value) * scale)))
-          }
-        />
-      </FieldLabel>
-    </FormField>
-  )
-}
+// The 422 a save gets when the server has no sentence of its own for it.
+const invalidText =
+  "The policy wasn't saved. Check that each pool may grow to no more servers than the Cloud allows, and that its account still offers the region, image and sizes you chose."
 
 export function Capacity({
   cloudId,
   pools,
   connections,
+  onPoolsChanged,
 }: {
   cloudId: string
   pools: Pool[]
   connections: Connection[]
+  /** A pool was created here, so the page reads its pools again. */
+  onPoolsChanged?: () => void
 }) {
   const view = useQuery(api.useCloudCapacityGetPolicy, { path: { cloudId } })
   const expansions = useQuery(api.useCloudCapacityListExpansions, {
@@ -121,7 +103,7 @@ export function Capacity({
   if (!view.data?.policy) return <Skeleton className="h-64 rounded-xl" />
   const automatic = view.data.automaticExpansion
   return (
-    <div className="grid gap-6">
+    <div className="grid min-w-0 gap-6">
       {!automatic && (
         <section
           aria-label="Automatic expansion is off"
@@ -145,13 +127,15 @@ export function Capacity({
           </span>
         </section>
       )}
+      <CapacityUsage cloudId={cloudId} />
       <PolicyEditor
-        key={view.data.policy.revision}
         cloudId={cloudId}
         policy={view.data.policy}
+        automatic={automatic}
         pools={pools}
         connections={connections}
-        onSaved={() => void view.refetch()}
+        reload={view.refetch}
+        onPoolsChanged={onPoolsChanged}
       />
       <Expansions
         cloudId={cloudId}
@@ -164,90 +148,148 @@ export function Capacity({
   )
 }
 
+/** The accounts Loomplane can create servers with. */
+function useEligible(connections: Connection[]) {
+  const providers = useQuery(api.useProvidersList)
+  return connections.filter(
+    (c) =>
+      c.status === "ready" &&
+      supports(providers.data?.providers ?? [], c, "server:provision")
+  )
+}
+
 function PolicyEditor({
   cloudId,
   policy,
+  automatic,
   pools,
   connections,
-  onSaved,
+  reload,
+  onPoolsChanged,
 }: {
   cloudId: string
   policy: CapacityPolicy
+  automatic: boolean
   pools: Pool[]
   connections: Connection[]
-  onSaved: () => void
+  reload: () => Promise<unknown>
+  onPoolsChanged?: () => void
 }) {
   const save = useMutation(api.useCloudCapacitySavePolicy)
-  const [draft, setDraft] = useState<CapacityPolicy>(policy)
-  const [editing, setEditing] = useState<Pool | null>(null)
+  const providers = useQuery(api.useProvidersList)
+  const targetList = useQuery(api.useOrganizationCloudTargetsList, {
+    path: { cloudId },
+  })
+  const accounts = useEligible(connections)
+  // The policy the draft was opened from. A refetch moves `policy`, never
+  // these while someone has changes, so nothing typed is lost; Reload
+  // starts again from the newest.
+  const [base, setBase] = useState(policy)
+  const [draft, setDraft] = useState<Draft>(() => draftOf(policy))
+  const [stale, setStale] = useState(false)
   const [error, setError] = useState("")
-  const dirty = JSON.stringify(draft) !== JSON.stringify(policy)
-  const limits = draft.limits ?? emptyVector
-  const setLimits = (next: Partial<ResourceVector>) =>
-    setDraft({ ...draft, limits: { ...limits, ...next } })
-  // GPU kinds the pools grow by, each with its own ceiling.
+  const [editing, setEditing] = useState<Pool | null>(null)
+  const [scaling, setScaling] = useState(false)
+  // Kinds someone added a GPU ceiling for, kept while the field is empty.
+  const [added, setAdded] = useState<string[]>([])
+  const dirty = JSON.stringify(draft) !== JSON.stringify(draftOf(base))
+  if (policy.revision !== base.revision && !dirty && !stale) {
+    // Nothing is being edited, so a newer saved policy simply shows.
+    setBase(policy)
+    setDraft(draftOf(policy))
+  }
+  // Frontend limits are rebuilt from the live targets on every save, so the
+  // targets must be read first or a save would drop the saved limits.
+  const targetsRead = !!targetList.data && !!providers.data
+  const targets = frontendTargets(
+    (targetList.data?.targets ?? []).filter((t): t is Target => !!t),
+    providers.data?.providers ?? []
+  )
+  const cloud = cloudValues(draft, base)
+  const set = (patch: Partial<Draft>) => setDraft((d) => ({ ...d, ...patch }))
+  const setCeiling = (key: (typeof ceilings)[number]["key"], v: string) =>
+    setDraft((d) => ({ ...d, ceilings: { ...d.ceilings, [key]: v } }))
+
+  // GPU kinds the pools grow by, and any ceiling saved or added, each with
+  // its own ceiling.
   const kinds = [
     ...new Set([
-      ...(draft.gpuLimits ?? []).map((g) => g.kind),
+      ...Object.keys(draft.gpus),
       ...pools.flatMap((p) => (p.acceleratorKind ? [p.acceleratorKind] : [])),
+      ...added,
     ]),
   ]
-  const gpuLimit = (kind: string) =>
-    draft.gpuLimits?.find((g) => g.kind === kind)?.maximum ?? 0
+  const zeroTyped = ceilings.some(
+    (c) => read(draft.ceilings[c.key], c.whole) === 0
+  )
+  const stuckKinds = kinds.filter(
+    (k) =>
+      pools.some((p) => p.acceleratorKind === k) &&
+      !((read(draft.gpus[k] ?? "", true) ?? 0) > 0)
+  )
+
   const submit = async () => {
     setError("")
-    // Growing needs a ceiling on every dimension; say which ones are missing.
-    const missing = [
-      ["servers", limits.servers],
-      ["vCPU", limits.cpuMillis],
-      ["memory", limits.memoryBytes],
-      ["storage", limits.storageBytes],
-    ]
-      .filter(([, n]) => !n)
-      .map(([name]) => name)
-    if (draft.enabled && missing.length) {
-      setError(
-        `To let pools grow, set the most this Cloud may hold for ${missing.join(", ")}.`
-      )
+    setStale(false)
+    const checked = check(draft, base, pools, targets)
+    if (!checked.policy) {
+      setError(checked.problems.join(" "))
       return
     }
     try {
-      await save.mutateAsync({
+      const saved = await save.mutateAsync({
         path: { cloudId },
-        body: { expectedRevision: policy.revision, policy: draft },
+        body: { expectedRevision: base.revision, policy: checked.policy },
       })
-      onSaved()
+      if (saved.policy) {
+        setBase(saved.policy)
+        setDraft(draftOf(saved.policy))
+      }
+      void reload().catch(() => undefined)
     } catch (err) {
-      setError(
-        statusOf(err) === 409
-          ? "Someone saved this policy meanwhile. Reload to see theirs."
-          : statusOf(err) === 422
-            ? "The policy wasn't saved. Check that each pool may grow to no more servers than the Cloud allows, and that its account still offers the region, image and sizes you chose."
-            : messageOf(
-                err,
-                "The policy wasn't saved. Turning growth on needs every limit above zero, and a rule for each pool that may grow."
-              )
-      )
+      const raw = err instanceof Error ? err.message : ""
+      if (statusOf(err) === 409) {
+        // Kept until the next Save, Reload or Discard, while the newer
+        // policy loads underneath.
+        setStale(true)
+        void reload().catch(() => undefined)
+      } else if (
+        statusOf(err) === 422 &&
+        /^invalid infrastructure request/i.test(raw)
+      ) {
+        setError(invalidText)
+      } else {
+        setError(
+          messageOf(
+            err,
+            "The policy wasn't saved. Turning growth on needs every limit above zero, and a rule for each pool that may grow."
+          )
+        )
+      }
     }
   }
+  const restart = () => {
+    setBase(policy)
+    setDraft(draftOf(policy))
+    setAdded([])
+    setStale(false)
+    setError("")
+  }
+
   return (
     <>
-      <section aria-label="Growth policy" className="grid gap-3">
+      <section aria-label="Growth policy" className="grid min-w-0 gap-3">
         <CloudSectionHead
           title="Growth policy"
-          description={`When a deployment needs more room than a pool has, Loomplane may add a server within these limits.${policy.revision ? ` Saved as revision ${policy.revision}.` : " Not saved yet."}`}
+          description={`When a deployment needs more room than a pool has, Loomplane may add a server within these limits.${base.revision ? ` Saved as revision ${base.revision}.` : " Not saved yet."}`}
         >
           {dirty && (
-            <Button
-              variant="ghost"
-              disabled={save.isPending}
-              onClick={() => setDraft(policy)}
-            >
+            <Button variant="ghost" disabled={save.isPending} onClick={restart}>
               Discard
             </Button>
           )}
           <Button
-            disabled={!dirty || save.isPending}
+            disabled={!dirty || save.isPending || !targetsRead}
             onClick={() => void submit()}
           >
             Save policy
@@ -262,13 +304,15 @@ function PolicyEditor({
                     Let pools on this Cloud grow
                   </span>
                   <span className="text-xs font-normal text-muted-foreground">
-                    Off keeps every pool at the servers it has.
+                    {automatic
+                      ? "Off keeps every pool at the servers it has."
+                      : "Off keeps every pool at the servers it has. On is saved, but nothing grows until automatic expansion is on for this Loomplane."}
                   </span>
                 </span>
                 <Switch
                   aria-label="Let pools on this Cloud grow"
                   checked={draft.enabled}
-                  onCheckedChange={(enabled) => setDraft({ ...draft, enabled })}
+                  onCheckedChange={(enabled) => set({ enabled })}
                 />
               </FieldLabel>
             </FormField>
@@ -287,10 +331,8 @@ function PolicyEditor({
                 </span>
                 <Switch
                   aria-label="Ask before adding a server"
-                  checked={draft.requireExpansionApproval}
-                  onCheckedChange={(requireExpansionApproval) =>
-                    setDraft({ ...draft, requireExpansionApproval })
-                  }
+                  checked={draft.approval}
+                  onCheckedChange={(approval) => set({ approval })}
                 />
               </FieldLabel>
             </FormField>
@@ -301,155 +343,161 @@ function PolicyEditor({
                 Most this Cloud may hold
               </span>
               <span className="text-xs text-muted-foreground">
-                Across every server it has, including ones it adds.
+                Across every server it has, including ones it adds. Once saved,
+                these apply to servers you create, adopt or resize too, even
+                while pools don&apos;t grow.
               </span>
             </span>
-            <Amount
-              label="Servers"
-              value={limits.servers}
-              scale={1}
-              onChange={(servers) => setLimits({ servers })}
-            />
-            <Amount
-              label="vCPU"
-              value={limits.cpuMillis}
-              scale={1000}
-              step={0.5}
-              onChange={(cpuMillis) => setLimits({ cpuMillis })}
-            />
-            <Amount
-              label="Memory, GiB"
-              value={limits.memoryBytes}
-              scale={GIB}
-              onChange={(memoryBytes) => setLimits({ memoryBytes })}
-            />
-            <Amount
-              label="Storage, GB"
-              value={limits.storageBytes}
-              scale={GB}
-              onChange={(storageBytes) => setLimits({ storageBytes })}
-            />
-            {kinds.map((kind) => (
-              <Amount
-                key={kind}
-                label={`${kind} GPUs`}
-                value={gpuLimit(kind)}
-                scale={1}
-                onChange={(maximum) =>
-                  setDraft({
-                    ...draft,
-                    gpuLimits: [
-                      ...(draft.gpuLimits ?? []).filter((g) => g.kind !== kind),
-                      { kind, maximum },
-                    ],
-                  })
-                }
+            {ceilings.map((c) => (
+              <TextAmount
+                key={c.key}
+                label={c.label}
+                value={draft.ceilings[c.key]}
+                whole={c.whole}
+                onChange={(v) => setCeiling(c.key, v)}
               />
             ))}
+            {kinds.map((kind) => (
+              <TextAmount
+                key={kind}
+                label={`${gpuTitle(kind)} GPUs`}
+                value={draft.gpus[kind] ?? ""}
+                whole
+                onChange={(maximum) => {
+                  const gpus = { ...draft.gpus }
+                  // An empty GPU field is no ceiling at all, never 0.
+                  if (maximum.trim() === "") delete gpus[kind]
+                  else gpus[kind] = maximum
+                  set({ gpus })
+                }}
+              />
+            ))}
+            <AddGpuCeiling
+              used={kinds}
+              onAdd={(kind) => setAdded((a) => [...a, kind])}
+            />
           </Row>
+          {(zeroTyped || stuckKinds.length > 0) && (
+            <Row className="grid gap-1 text-xs text-muted-foreground">
+              {zeroTyped && (
+                <span>
+                  A limit of 0 is a real limit: nothing more of it fits on this
+                  Cloud, including servers you add yourself.
+                </span>
+              )}
+              {stuckKinds.map((k) => (
+                <span key={k}>
+                  {`Pools of ${gpuTitle(k)} can't grow until its GPU ceiling is above zero.`}
+                </span>
+              ))}
+            </Row>
+          )}
         </Rows>
+        {stale && (
+          <div className="flex flex-wrap items-center gap-3">
+            <div className="min-w-0 flex-[1_1_240px]">
+              <CloudError message={staleText} />
+            </div>
+            <Button variant="outline" size="sm" onClick={restart}>
+              Reload
+            </Button>
+          </div>
+        )}
         <CloudError message={error} />
       </section>
 
-      <section aria-label="How each pool grows" className="grid gap-3">
+      <section aria-label="How each pool grows" className="grid min-w-0 gap-3">
         <CloudSectionHead
           title="How each pool grows"
           count={pools.length}
           description="A pool without a rule never grows. A new server joins with its size's capacity, less what you keep back for the system. Changes here are part of the policy, so save it after."
-        />
+        >
+          <Button variant="outline" onClick={() => setScaling(true)}>
+            New scaling pool
+          </Button>
+        </CloudSectionHead>
         {pools.length === 0 ? (
           <p className="rounded-xl px-4 py-3 text-[13px] text-muted-foreground ring-1 ring-border">
-            This Cloud has no pools yet. Add one on the Servers tab, then give
-            it a rule here.
+            This Cloud has no pools yet. Start one with no servers using New
+            scaling pool, or add one from servers you have on the Servers tab
+            and give it a rule here.
           </p>
         ) : (
           <Rows>
-            {pools.map((pool) => {
-              const rule = draft.pools.find((r) => r.poolId === pool.id)
-              return (
-                <Row key={pool.id} className="flex-wrap gap-y-2">
-                  <span className="grid min-w-32 flex-[1_1_120px] gap-0.5">
-                    <span className="font-mono text-[13px] font-medium">
-                      {pool.name}
-                    </span>
-                    <span className="text-xs text-muted-foreground">
-                      {pool.members.length}{" "}
-                      {pool.members.length === 1 ? "server" : "servers"} now
-                    </span>
-                  </span>
-                  {rule ? (
-                    <>
-                      <span className="min-w-0 flex-[2_1_240px]">
-                        <RunsOn
-                          target={{
-                            runtime: "managed",
-                            provider: "",
-                            connectionId: rule.connectionId,
-                            region: `${rule.region} · ${rule.architecture}`,
-                          }}
-                          connections={connections}
-                        />
-                      </span>
-                      <span className="flex min-w-0 flex-[2_1_200px] flex-wrap gap-1">
-                        {rule.allowedSizes.map((s) => (
-                          <span
-                            key={s}
-                            className="rounded-md bg-muted px-1.5 font-mono text-[11.5px]"
-                          >
-                            {s}
-                          </span>
-                        ))}
-                      </span>
-                      <span className="w-24 text-[13px]">
-                        <span className="font-mono">
-                          {rule.minServers} to {rule.maxServers}
-                        </span>{" "}
-                        <span className="text-xs text-muted-foreground">
-                          servers
-                        </span>
-                      </span>
-                      <span className="w-36 text-[12.5px] text-muted-foreground">
-                        Keeps back{" "}
-                        {Number(
-                          (rule.systemReserve.cpuMillis / 1000).toFixed(2)
-                        )}{" "}
-                        vCPU,{" "}
-                        {Number(
-                          (rule.systemReserve.memoryBytes / GIB).toFixed(2)
-                        )}{" "}
-                        GiB
-                      </span>
-                    </>
-                  ) : (
-                    <span className="flex-[6_1_400px] text-[12.5px] text-muted-foreground">
-                      No rule, so this pool never grows.
-                    </span>
-                  )}
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    aria-label={`${rule ? "Edit" : "Add"} the rule for pool ${pool.name}`}
-                    onClick={() => setEditing(pool)}
-                  >
-                    {rule ? "Edit rule" : "Add rule"}
-                  </Button>
-                </Row>
-              )
-            })}
+            {pools.map((pool) => (
+              <PoolRow
+                key={pool.id}
+                pool={pool}
+                rule={draft.rules[pool.id]}
+                connections={connections}
+                onEdit={() => setEditing(pool)}
+              />
+            ))}
           </Rows>
         )}
       </section>
+
+      {targets.length > 0 && (
+        <section aria-label="Frontend limits" className="grid min-w-0 gap-3">
+          <CloudSectionHead
+            title="Frontend limits"
+            count={targets.length}
+            description="How many hosted frontends each target may run. Services already there can still redeploy at the limit. These are part of the policy, so save it after."
+          />
+          <Rows>
+            {targets.map((t) => (
+              <FrontendRow
+                key={t.id}
+                name={t.displayName || t.name || t.id}
+                value={
+                  draft.frontends[t.id] ?? { unlimited: true, maximum: "" }
+                }
+                onChange={(f) =>
+                  set({ frontends: { ...draft.frontends, [t.id]: f } })
+                }
+              />
+            ))}
+          </Rows>
+        </section>
+      )}
+
       {editing && (
         <PoolRuleDialog
           cloudId={cloudId}
           pool={editing}
-          rule={draft.pools.find((r) => r.poolId === editing.id)}
-          connections={connections}
+          rule={draft.rules[editing.id]}
+          accounts={accounts}
+          enabled={draft.enabled}
+          cloud={cloud}
+          start={() =>
+            tighterFrom(
+              draft.ceilings,
+              draft.gpus[editing.acceleratorKind ?? ""] ?? ""
+            )
+          }
           onClose={() => setEditing(null)}
           onDone={(rule) => {
-            const rest = draft.pools.filter((r) => r.poolId !== editing.id)
-            setDraft({ ...draft, pools: rule ? [...rest, rule] : rest })
+            const rules = { ...draft.rules }
+            if (rule) rules[editing.id] = rule
+            else delete rules[editing.id]
+            set({ rules })
             setEditing(null)
+          }}
+        />
+      )}
+      {scaling && (
+        <NewScalingPool
+          cloudId={cloudId}
+          policy={policy}
+          automatic={automatic}
+          unsaved={dirty}
+          pools={pools}
+          accounts={accounts}
+          reload={reload}
+          onClose={() => setScaling(false)}
+          onCreated={() => {
+            setScaling(false)
+            onPoolsChanged?.()
           }}
         />
       )}
@@ -457,132 +505,182 @@ function PolicyEditor({
   )
 }
 
+/** AddGpuCeiling offers the GPU kinds that have no ceiling field yet. */
+function AddGpuCeiling({
+  used,
+  onAdd,
+}: {
+  used: string[]
+  onAdd: (kind: string) => void
+}) {
+  const left = nvidiaKinds.filter((k) => !used.includes(k))
+  if (!left.length) return null
+  return (
+    <Select value="" onValueChange={(v) => v && onAdd(String(v))}>
+      <SelectTrigger aria-label="Add a GPU ceiling" className="w-44">
+        <SelectValue placeholder="Add a GPU ceiling" />
+      </SelectTrigger>
+      <SelectContent>
+        {left.map((k) => (
+          <SelectItem key={k} value={k}>
+            {gpuTitle(k)}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  )
+}
+
+function PoolRow({
+  pool,
+  rule,
+  connections,
+  onEdit,
+}: {
+  pool: Pool
+  rule?: RuleDraft
+  connections: Connection[]
+  onEdit: () => void
+}) {
+  const active = rule?.connectionId ? rule : undefined
+  return (
+    <Row className="flex-wrap gap-y-2">
+      <span className="grid min-w-32 flex-[1_1_120px] gap-0.5">
+        <span className="font-mono text-[13px] font-medium break-all">
+          {pool.name}
+        </span>
+        <span className="text-xs text-muted-foreground">
+          {pool.members.length}{" "}
+          {pool.members.length === 1 ? "server" : "servers"} now
+          {pool.acceleratorKind ? ` · ${gpuTitle(pool.acceleratorKind)}` : ""}
+        </span>
+      </span>
+      {active ? (
+        <>
+          <span className="min-w-0 flex-[2_1_240px]">
+            <RunsOn
+              target={{
+                runtime: "managed",
+                provider: "",
+                connectionId: active.connectionId,
+                region: `${active.region} · ${active.architecture}`,
+              }}
+              connections={connections}
+            />
+          </span>
+          <span className="flex min-w-0 flex-[2_1_200px] flex-wrap gap-1">
+            {active.allowedSizes.map((s) => (
+              <span
+                key={s}
+                className="rounded-md bg-muted px-1.5 font-mono text-[11.5px] break-all"
+              >
+                {s}
+              </span>
+            ))}
+          </span>
+          <span className="w-24 text-[13px]">
+            <span className="font-mono">
+              {active.minServers} to {active.maxServers}
+            </span>{" "}
+            <span className="text-xs text-muted-foreground">servers</span>
+          </span>
+          <span className="w-36 text-[12.5px] text-muted-foreground">
+            Keeps back{" "}
+            {Number((active.systemReserve.cpuMillis / 1000).toFixed(2))} vCPU,{" "}
+            {Number((active.systemReserve.memoryBytes / GIB).toFixed(2))} GiB
+            {active.limits ? ", with its own limits" : ""}
+          </span>
+        </>
+      ) : (
+        <span className="flex-[6_1_400px] text-[12.5px] text-muted-foreground">
+          No rule, so this pool never grows.
+        </span>
+      )}
+      <Button
+        size="sm"
+        variant="outline"
+        aria-label={`${active ? "Edit" : "Add"} the rule for pool ${pool.name}`}
+        onClick={onEdit}
+      >
+        {active ? "Edit rule" : "Add rule"}
+      </Button>
+    </Row>
+  )
+}
+
 function PoolRuleDialog({
   cloudId,
   pool,
   rule,
-  connections,
+  accounts,
+  enabled,
+  cloud,
+  start,
   onClose,
   onDone,
 }: {
   cloudId: string
   pool: Pool
-  rule?: PoolExpansionPolicy
-  connections: Connection[]
+  rule?: RuleDraft
+  accounts: Connection[]
+  enabled: boolean
+  cloud: ReturnType<typeof cloudValues>
+  /** Where the pool's own limits start: the Cloud's, as typed now. */
+  start: () => NonNullable<RuleDraft["limits"]>
   onClose: () => void
   /** The edited rule, or null to remove it. */
-  onDone: (rule: PoolExpansionPolicy | null) => void
+  onDone: (rule: RuleDraft | null) => void
 }) {
-  const providers = useQuery(api.useProvidersList)
-  const accounts = connections.filter(
-    (c) =>
-      c.status === "ready" &&
-      supports(providers.data?.providers ?? [], c, "server:provision")
-  )
-  const [value, setValue] = useState<PoolExpansionPolicy>(
-    rule ?? {
-      poolId: pool.id,
-      acceleratorKind: pool.acceleratorKind,
-      connectionId: "",
-      region: "",
-      architecture: "amd64",
-      image: "",
-      bootstrapSize: "",
-      allowedSizes: [],
-      minServers: 0,
-      maxServers: 1,
-      systemReserve: {
-        ...emptyVector,
-        cpuMillis: 250,
-        memoryBytes: 512 * 2 ** 20,
-      },
-    }
-  )
-  const set = (next: Partial<PoolExpansionPolicy>) =>
-    setValue({ ...value, ...next })
-  const complete =
+  const [value, setValue] = useState<RuleDraft>(rule ?? blankRule)
+  const kind = pool.acceleratorKind ?? ""
+  const set = (next: Partial<RuleDraft>) => setValue((v) => ({ ...v, ...next }))
+  const checked = checkRule(value, pool, cloud, enabled)
+  const chosen =
     !!value.connectionId &&
     !!value.region &&
     !!value.image &&
-    value.allowedSizes.length > 0 &&
-    value.minServers <= value.maxServers
+    value.allowedSizes.length > 0
+  const problems = [
+    ...(value.connectionId && !chosen
+      ? ["Choose a region, an image and at least one size."]
+      : []),
+    ...checked.problems,
+  ]
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="max-h-[90dvh] overflow-y-auto sm:max-w-lg">
         <DialogHeader>
-          <DialogTitle>How pool {pool.name} grows</DialogTitle>
+          <DialogTitle className="break-all">
+            How pool {pool.name} grows
+          </DialogTitle>
           <DialogDescription>
             New servers for this pool are created on this account, in this
             region, from one of the sizes you tick.
           </DialogDescription>
         </DialogHeader>
-        <div className="grid gap-3">
-          <Field label="Account">
-            <Select
-              value={value.connectionId}
-              onValueChange={(v) =>
-                set({
-                  connectionId: v ?? "",
-                  region: "",
-                  image: "",
-                  allowedSizes: [],
-                })
-              }
-            >
-              <SelectTrigger aria-label="Account" className="w-full min-w-0">
-                <SelectValue placeholder="An account that can create servers" />
-              </SelectTrigger>
-              <SelectContent>
-                {accounts.map((c) => (
-                  <SelectItem key={c.id} value={c.id}>
-                    {c.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </Field>
-          {value.connectionId && (
-            <CatalogFields
-              key={value.connectionId}
-              cloudId={cloudId}
-              pool={pool}
-              value={value}
-              set={set}
-            />
-          )}
-          <div className="flex flex-wrap gap-3">
-            <Amount
-              label="Fewest servers"
-              value={value.minServers}
-              scale={1}
-              onChange={(minServers) => set({ minServers })}
-            />
-            <Amount
-              label="Most servers"
-              value={value.maxServers}
-              scale={1}
-              onChange={(maxServers) => set({ maxServers })}
-            />
-            <Amount
-              label="Keep back, vCPU"
-              value={value.systemReserve.cpuMillis}
-              scale={1000}
-              step={0.25}
-              onChange={(cpuMillis) =>
-                set({ systemReserve: { ...value.systemReserve, cpuMillis } })
-              }
-            />
-            <Amount
-              label="Keep back, GiB"
-              value={value.systemReserve.memoryBytes}
-              scale={GIB}
-              step={0.25}
-              onChange={(memoryBytes) =>
-                set({ systemReserve: { ...value.systemReserve, memoryBytes } })
-              }
-            />
-          </div>
-        </div>
+        <p className="text-xs text-muted-foreground">
+          {kind
+            ? `GPU kind: ${gpuTitle(kind)}, so only its sizes and images with NVIDIA drivers are offered. Change the kind in the pool editor on the Servers tab.`
+            : "A CPU pool, so only sizes and images without GPUs are offered. Give it a GPU kind in the pool editor on the Servers tab."}
+        </p>
+        <RuleFields
+          cloudId={cloudId}
+          kind={kind}
+          value={value}
+          accounts={accounts}
+          set={set}
+          onTighter={(on) => set({ limits: on ? start() : null })}
+        />
+        {problems.length > 0 && (
+          <ul
+            aria-live="polite"
+            className="grid gap-1 text-xs text-muted-foreground"
+          >
+            {problems.map((p) => (
+              <li key={p}>{p}</li>
+            ))}
+          </ul>
+        )}
         <DialogFooter className="flex-wrap">
           {rule && (
             <Button
@@ -596,7 +694,10 @@ function PoolRuleDialog({
           <Button variant="outline" onClick={onClose}>
             Cancel
           </Button>
-          <Button disabled={!complete} onClick={() => onDone(value)}>
+          <Button
+            disabled={!chosen || !checked.template}
+            onClick={() => onDone(value)}
+          >
             Done
           </Button>
         </DialogFooter>
@@ -605,159 +706,57 @@ function PoolRuleDialog({
   )
 }
 
-/** CatalogFields offers the regions, images and sizes one account sells. */
-function CatalogFields({
-  cloudId,
-  pool,
+function FrontendRow({
+  name,
   value,
-  set,
+  onChange,
 }: {
-  cloudId: string
-  pool: Pool
-  value: PoolExpansionPolicy
-  set: (next: Partial<PoolExpansionPolicy>) => void
+  name: string
+  value: FrontendDraft
+  onChange: (f: FrontendDraft) => void
 }) {
-  const options = useQuery(api.useCloudServersOptions, {
-    path: { cloudId, connectionId: value.connectionId },
-  })
-  const catalog = options.data
-  const sizes = (catalog?.sizes ?? []).filter(
-    (s) =>
-      (!value.region || s.regions.includes(value.region)) &&
-      (!s.architectures?.length ||
-        s.architectures.includes(value.architecture)) &&
-      (s.accelerator?.kind ?? "") === (pool.acceleratorKind ?? "")
-  )
-  const images = (catalog?.images ?? []).filter(
-    (i) =>
-      (!value.region || i.regions.includes(value.region)) &&
-      (!i.architecture || i.architecture === value.architecture)
-  )
+  const n = read(value.maximum, true)
   return (
-    <>
-      {options.status === "error" && (
-        <QueryError
-          error={options.error}
-          fallback="This account's regions and sizes couldn't be loaded."
-          retry={options.refetch}
-        />
-      )}
-      {catalog && (
-        <>
-          <div className="grid grid-cols-2 gap-3">
-            <Field label="Region">
-              <Select
-                value={value.region}
-                onValueChange={(v) =>
-                  set({ region: v ?? "", image: "", allowedSizes: [] })
-                }
-              >
-                <SelectTrigger aria-label="Region" className="w-full min-w-0">
-                  <SelectValue placeholder="Choose a region" />
-                </SelectTrigger>
-                <SelectContent>
-                  {catalog.regions.map((r) => (
-                    <SelectItem key={r.id} value={r.id}>
-                      {r.name || r.id}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </Field>
-            <Field label="Architecture">
-              <Select
-                value={value.architecture}
-                onValueChange={(v) =>
-                  set({
-                    architecture: v ?? "amd64",
-                    image: "",
-                    allowedSizes: [],
-                  })
-                }
-              >
-                <SelectTrigger
-                  aria-label="Architecture"
-                  className="w-full min-w-0"
-                >
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="amd64">x86 (amd64)</SelectItem>
-                  <SelectItem value="arm64">Arm (arm64)</SelectItem>
-                </SelectContent>
-              </Select>
-            </Field>
-          </div>
-          <Field label="Image">
-            <Select
-              value={value.image}
-              onValueChange={(v) => set({ image: v ?? "" })}
-            >
-              <SelectTrigger aria-label="Image" className="w-full min-w-0">
-                <SelectValue placeholder="Choose an image" />
-              </SelectTrigger>
-              <SelectContent>
-                {images.map((i) => (
-                  <SelectItem key={i.id} value={i.id}>
-                    {i.name || i.id}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </Field>
-          <fieldset className="grid gap-1.5">
-            <legend className="mb-1.5 text-xs">Sizes it may add</legend>
-            {sizes.length === 0 ? (
-              <p className="text-[12.5px] text-muted-foreground">
-                {value.region
-                  ? "No size here fits this pool's region and architecture."
-                  : "Choose a region first."}
-              </p>
-            ) : (
-              sizes.map((s) => {
-                const on = value.allowedSizes.includes(s.id)
-                return (
-                  <FormField
-                    key={s.id}
-                    orientation="horizontal"
-                    className="flex items-center gap-3 rounded-lg px-3 py-2 ring-1 ring-border"
-                  >
-                    <FieldLabel className="contents">
-                      <Checkbox
-                        checked={on}
-                        onCheckedChange={() =>
-                          set({
-                            allowedSizes: on
-                              ? value.allowedSizes.filter((x) => x !== s.id)
-                              : [...value.allowedSizes, s.id],
-                          })
-                        }
-                      />
-                      <span className="min-w-0 flex-1 truncate font-mono text-[12.5px]">
-                        {s.id}
-                      </span>
-                      <span className="text-xs text-muted-foreground">
-                        {s.cpus} vCPU ·{" "}
-                        {Number((s.memoryMib / 1024).toFixed(1))} GiB
-                        {s.hourlyPriceKnown !== false && s.monthlyUsd
-                          ? ` · $${Math.round(s.monthlyUsd)} a month`
-                          : ""}
-                      </span>
-                    </FieldLabel>
-                  </FormField>
-                )
-              })
+    <Row className="flex-wrap items-start">
+      <span className="min-w-0 flex-[1_1_160px] pt-1 text-[13px] break-all">
+        {name}
+      </span>
+      <div className="flex flex-wrap items-start gap-x-4 gap-y-2">
+        <label className="flex items-center gap-2 pt-1 text-[13px]">
+          <Checkbox
+            aria-label={`Unlimited frontends on ${name}`}
+            checked={value.unlimited}
+            onCheckedChange={(on) => onChange({ ...value, unlimited: on })}
+          />
+          Unlimited
+        </label>
+        {!value.unlimited && (
+          <div className="grid w-28 gap-1">
+            <Input
+              type="number"
+              min={0}
+              step={1}
+              aria-label={`Frontend limit for ${name}`}
+              value={value.maximum}
+              aria-invalid={Number.isNaN(n) || undefined}
+              onChange={(e) => onChange({ ...value, maximum: e.target.value })}
+            />
+            {n === 0 && (
+              <span className="text-xs text-muted-foreground">
+                No new frontends
+              </span>
             )}
-          </fieldset>
-        </>
-      )}
-    </>
+          </div>
+        )}
+      </div>
+    </Row>
   )
 }
 
 const blockWords: Record<string, string> = {
   expansion_approval: "Waiting for approval",
   review_required: "Needs review",
+  hard_limit: "Over a limit",
   limit: "Over a limit",
   provisioning: "Being created",
 }
@@ -775,29 +774,15 @@ function Expansions({
   connections: Connection[]
   query: UseQueryResult<ExpansionList>
 }) {
-  const approve = useMutation(api.useCloudCapacityApproveExpansion)
-  const now = useNow()
-  const [error, setError] = useState("")
   const waiting = (query.data?.expansions ?? []).filter(
     (e): e is Expansion =>
       !!e && (e.status === "awaiting_approval" || e.status === "blocked")
   )
-  const act = async (e: Expansion) => {
-    setError("")
-    try {
-      await approve.mutateAsync({
-        path: { cloudId, expansionId: e.id },
-        body: { expectedRevision: e.revision },
-      })
-      await query.refetch()
-    } catch (err) {
-      setError(
-        messageOf(err, "The server wasn't approved. Refresh and try again.")
-      )
-    }
-  }
   return (
-    <section aria-label="Servers waiting for approval" className="grid gap-3">
+    <section
+      aria-label="Servers waiting for approval"
+      className="grid min-w-0 gap-3"
+    >
       <CloudSectionHead
         title="Servers waiting for approval"
         count={query.data ? waiting.length : undefined}
@@ -819,54 +804,135 @@ function Expansions({
         </p>
       ) : (
         <Rows>
-          {waiting.map((e) => {
-            const pool = pools.find((p) => p.id === e.poolId)
-            const account = connections.find((c) => c.id === e.connectionId)
-            const reason = e.block?.reason ?? ""
-            return (
-              <Row key={e.id} className="flex-wrap gap-y-2">
-                <span className="grid min-w-0 flex-[1_1_360px] gap-0.5">
-                  <span className="flex flex-wrap items-center gap-2">
-                    <span className="text-[13px] font-semibold">
-                      Add a {e.size} server to pool{" "}
-                      {pool?.name ?? "that was removed"}
-                    </span>
-                    <StatusPill
-                      tone={
-                        e.status === "awaiting_approval" ? "waiting" : "failed"
-                      }
-                    >
-                      {e.status === "awaiting_approval"
-                        ? "Waiting for you"
-                        : (blockWords[reason] ?? "Blocked")}
-                    </StatusPill>
-                  </span>
-                  <span className="text-xs text-muted-foreground">
-                    {[
-                      account?.name ?? "A removed account",
-                      e.region,
-                      e.hourlyPriceKnown && e.estimatedHourlyUsd
-                        ? `about $${(e.estimatedHourlyUsd * 730).toFixed(0)} a month`
-                        : "price unknown",
-                      `asked ${relative(Date.parse(e.createdAt), now)}`,
-                    ].join(" · ")}
-                  </span>
-                </span>
-                {automatic && e.status === "awaiting_approval" && (
-                  <Button
-                    size="sm"
-                    disabled={approve.isPending}
-                    onClick={() => void act(e)}
-                  >
-                    Approve
-                  </Button>
-                )}
-              </Row>
-            )
-          })}
+          {waiting.map((e) => (
+            // Keyed by ID alone: after a 409 the reload sentence stays while
+            // the row shows the new revision, until the next approval.
+            <ExpansionRow
+              key={e.id}
+              cloudId={cloudId}
+              expansion={e}
+              automatic={automatic}
+              pool={pools.find((p) => p.id === e.poolId)?.name}
+              account={connections.find((c) => c.id === e.connectionId)?.name}
+              reload={query.refetch}
+            />
+          ))}
         </Rows>
       )}
-      <CloudError message={error} />
     </section>
+  )
+}
+
+// A price reads per month, and an unknown one says so, never $0.
+function expansionPrice(e: Expansion): string {
+  return priceKnown(e.estimatedHourlyUsd, e.hourlyPriceKnown)
+    ? `about $${Math.round(e.estimatedHourlyUsd * 730).toLocaleString("en-US")} a month`
+    : "price unknown"
+}
+
+function expansionGpus(e: Expansion): string {
+  if (e.accelerator?.count) return acceleratorLabel(e.accelerator)
+  const r = e.resources
+  if (r?.gpus && r.gpuKind)
+    return acceleratorLabel({ count: r.gpus, kind: r.gpuKind })
+  return ""
+}
+
+function ExpansionRow({
+  cloudId,
+  expansion: e,
+  automatic,
+  pool,
+  account,
+  reload,
+}: {
+  cloudId: string
+  expansion: Expansion
+  automatic: boolean
+  pool?: string
+  account?: string
+  reload: () => Promise<unknown>
+}) {
+  const approve = useMutation(api.useCloudCapacityApproveExpansion)
+  const now = useNow()
+  const [error, setError] = useState("")
+  const reason = e.block?.reason ?? ""
+  // Over a hard limit, nothing is approved until the limit goes up. Saving
+  // a higher limit offers the server for approval again.
+  const overLimit = reason === "hard_limit"
+  const blockSentence = e.block ? blockText(e.block) : ""
+  // Once the reload shows the saved block, the same sentence isn't repeated.
+  const shownError = error === blockSentence ? "" : error
+  const gpus = expansionGpus(e)
+  const act = async () => {
+    setError("")
+    try {
+      await approve.mutateAsync({
+        path: { cloudId, expansionId: e.id },
+        body: { expectedRevision: e.revision },
+      })
+      await reload()
+    } catch (err) {
+      const status = statusOf(err)
+      // A 409 is a moved expansion or work already running; a 422 carries
+      // the block's sentence. Either way the row reads again.
+      setError(
+        status === 409
+          ? conflictText(err)
+          : messageOf(err, "The server wasn't approved. Refresh and try again.")
+      )
+      if (status === 409 || status === 422) void reload().catch(() => undefined)
+    }
+  }
+  return (
+    <Row className="flex-wrap gap-y-2">
+      <span className="grid min-w-0 flex-[1_1_300px] gap-0.5">
+        <span className="flex flex-wrap items-center gap-2">
+          <span className="text-[13px] font-semibold break-words">
+            Add a {e.size} server to pool {pool ?? "that was removed"}
+          </span>
+          <StatusPill
+            tone={e.status === "awaiting_approval" ? "waiting" : "failed"}
+          >
+            {e.status === "awaiting_approval"
+              ? "Waiting for you"
+              : (blockWords[reason] ?? "Blocked")}
+          </StatusPill>
+        </span>
+        <span className="text-xs break-words text-muted-foreground">
+          {[
+            account ?? "A removed account",
+            e.region,
+            gpus,
+            expansionPrice(e),
+            `asked ${relative(Date.parse(e.createdAt), now)}`,
+          ]
+            .filter(Boolean)
+            .join(" · ")}
+        </span>
+        {blockSentence && (
+          <span className="text-xs break-words">{blockSentence}</span>
+        )}
+        {overLimit && (
+          <span className="text-xs break-words text-muted-foreground">
+            To approve it, raise this limit under Growth policy and save.
+          </span>
+        )}
+        {shownError && (
+          <span className="mt-1">
+            <CloudError message={shownError} />
+          </span>
+        )}
+      </span>
+      {automatic && e.status === "awaiting_approval" && !overLimit && (
+        <Button
+          size="sm"
+          disabled={approve.isPending}
+          onClick={() => void act()}
+        >
+          Approve
+        </Button>
+      )}
+    </Row>
   )
 }
