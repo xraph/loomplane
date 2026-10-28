@@ -59,6 +59,10 @@ type DeployInput struct {
 	// kept in the row's request, so it has a JSON name, but it isn't API
 	// input: the Task 25 graft of DeployInput leaves it out.
 	Moving *MovingFrom `json:"moving,omitempty"`
+	// self is the ID of the deployment row the deploy carries on, set only
+	// by the reconcile once the row's GPU server is up, so the row doesn't
+	// take its own name. It's never JSON.
+	self string
 }
 
 // MovingFrom is a deployment as it was before a move started: its kind,

@@ -864,7 +864,7 @@ func (s *Service) serverUp(ctx context.Context, d *Deployment, p security.Princi
 	}
 
 	in := *d.Request
-	in.Resource, in.Server = d.Resource, nil
+	in.Resource, in.Server, in.self = d.Resource, nil, d.ID
 	in.Target = TargetChoice{Source: TargetConnection, ConnectionID: v.RuntimeConnectionID, Provider: connections.Server, GPU: d.Request.Target.GPU}
 	pv, err := s.preview(ctx, p, d.ProjectID, env, in, true)
 	if err != nil {

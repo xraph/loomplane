@@ -286,7 +286,7 @@ func (s *Service) preview(ctx context.Context, p security.Principal, projectID s
 		// A move keeps the resource it moves.
 		pv.Resource = in.Resource
 	} else {
-		s.checkName(ctx, p, projectID, env, e, in.Resource, pv, problem)
+		s.checkName(ctx, p, projectID, env, e, in.Resource, in.self, pv, problem)
 	}
 
 	t, ok := s.resolveTarget(ctx, p, in.Target, in.Moving, problem)
@@ -397,8 +397,13 @@ func (s *Service) checkBudget(pv *DeployPreview, budget string, problem func(cod
 // it. A model runs in one environment, so the same entry deployed in
 // another environment gets a new name: the default, or when that's taken,
 // the default and the environment's name.
+//
+// The project's deployment rows take their names too, in any environment:
+// a model waiting for a GPU server Loomplane is creating has no manifest
+// resource until the server is up, and its name must still be free then.
+// self is the row a waiting deploy carries on, which doesn't count.
 func (s *Service) checkName(ctx context.Context, p security.Principal, projectID string, env *projects.Environment, e registry.Entry,
-	asked string, pv *DeployPreview, problem func(code, format string, args ...any),
+	asked, self string, pv *DeployPreview, problem func(code, format string, args ...any),
 ) {
 	name := strings.TrimSpace(asked)
 	given := name != ""
@@ -431,17 +436,58 @@ func (s *Service) checkName(ctx context.Context, p security.Principal, projectID
 			return
 		}
 	}
-	if !taken(m, name) {
+	rows, ok := s.rowNames(ctx, p.OrgID, projectID, self, m)
+	if !ok {
+		problem(ProblemNoManifest, "Loomplane couldn't read this project's models. Try again.")
+		return
+	}
+	for _, name := range slices.Sorted(maps.Keys(rows)) {
+		if d := rows[name]; d.EnvironmentID == env.ID && d.EntryID == e.ID {
+			problem(ProblemExists, "%s is already deploying %s in %s.", name, e.Title, env.Name)
+			return
+		}
+	}
+	free := func(name string) bool { return !taken(m, name) && rows[name] == nil }
+	if free(name) {
 		return
 	}
 	if !given {
 		alt := strings.TrimRight(name[:min(len(name), maxResourceName-len(env.Name)-1)], "-") + "-" + env.Name
-		if resourceName.MatchString(alt) && !taken(m, alt) {
+		if resourceName.MatchString(alt) && free(alt) {
 			pv.Resource = alt
 			return
 		}
 	}
-	problem(ProblemNameTaken, "%s is already in this project's manifest. Pick another name.", pv.Resource)
+	if taken(m, pv.Resource) {
+		problem(ProblemNameTaken, "%s is already in this project's manifest. Pick another name.", pv.Resource)
+		return
+	}
+	problem(ProblemNameTaken, "%s is already a model in this project. Pick another name.", pv.Resource)
+}
+
+// rowNames is the project's deployment rows that have no resource in m,
+// by resource name: models waiting for a GPU server, and rows a deploy is
+// still writing. self's row isn't one. ok is false when the rows can't be
+// read.
+func (s *Service) rowNames(ctx context.Context, orgID, projectID, self string, m *manifest.Manifest) (map[string]*Deployment, bool) {
+	out := map[string]*Deployment{}
+	if s.d.Store == nil {
+		return out, true
+	}
+	rows, err := s.d.Store.ListProject(ctx, orgID, projectID)
+	if err != nil {
+		return nil, false
+	}
+	for _, d := range rows {
+		if d.ID == self && self != "" {
+			continue
+		}
+		if _, in := m.Resources[d.Resource]; in {
+			continue
+		}
+		out[d.Resource] = d
+	}
+	return out, true
 }
 
 // taken reports whether a service, resource or gateway of m has name.
