@@ -134,6 +134,6 @@ jobs:
             echo "No new results to record."
             exit 0
           fi
-          git commit -m "Record qualification results for ${kind}, ${date}"
+          git commit -m "chore(qualify): record results for ${kind}, ${date}"
           git push origin "$branch"
-          gh pr create --head "$branch" --title "Qualification results for ${kind}, ${date}" --body-file summary.md
+          gh pr create --head "$branch" --title "chore(qualify): record results for ${kind}, ${date}" --body-file summary.md
