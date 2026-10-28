@@ -19,6 +19,8 @@ gpu_kinds:
 # deletes its Droplet when either cap is reached.
 monthly_cap_usd: "150.00"
 run_cap_usd: "25.00"
+# At most 4.5, so the run and half an hour of teardown fit the workflow
+# step's 300 minutes. Every cap check counts the teardown half hour too.
 max_run_hours: 4
 samples_per_run: 8
 # A result older than this is run again.

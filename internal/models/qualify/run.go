@@ -36,7 +36,22 @@ import (
 var (
 	ErrNotConfirmed = errors.New("a qualification run creates a GPU Droplet that costs money; pass --confirm to start one")
 	ErrWrongAccount = errors.New("this token isn't the qualification account")
+	ErrAnotherRun   = errors.New("another run is live")
 )
+
+// TeardownHours is the time a run allows for deleting its Droplet after
+// MaxRunHours. Every Guard covers it, since the Droplet bills until then.
+const TeardownHours = 0.5
+
+// expiryMargin is how long after MaxRunHours a run's Droplet counts as
+// live. Sweeps delete only expired Droplets, so a sweep never kills a run
+// still tearing down.
+const expiryMargin = time.Hour
+
+// SpeechClipPath is where the speech probe's recording goes: "Loomplane
+// qualification check", 16 kHz mono WAV, under five seconds. Until it's
+// there, speech samples don't run.
+const SpeechClipPath = "internal/models/qualify/testdata/speech.wav"
 
 // SpendCheckInterval is how often a run re-reads the month's spend.
 const SpendCheckInterval = 5 * time.Minute
@@ -48,6 +63,7 @@ const teardownTimeout = 10 * time.Minute
 // Report is the results JSON a run writes: what passed and failed, and
 // what never ran and why. Only Results go into qualification.yaml.
 type Report struct {
+	RunID     string            `json:"run_id"`
 	Kind      string            `json:"kind"`
 	Week      string            `json:"week"`
 	Run       string            `json:"run"`
@@ -85,6 +101,8 @@ type Host interface {
 	State(ctx context.Context, c *Container) (running bool, exitCode int, err error)
 	// Logs returns the end of c's output.
 	Logs(ctx context.Context, c *Container) ([]byte, error)
+	// GPUKinds is the kind of every GPU the host's Docker hands out.
+	GPUKinds(ctx context.Context) ([]string, error)
 	// Remove deletes c and its weight volume.
 	Remove(ctx context.Context, c *Container) error
 	Close() error
@@ -134,6 +152,9 @@ type RunDeps struct {
 	RunID    string            // empty generates one
 	RunURL   string            // recorded on every result
 	HFToken  string            // for gated weights; never logged
+	// Speech is the speech probe's recording (SpeechClipPath). Without
+	// one, speech samples are recorded as not run.
+	Speech []byte
 
 	Spend    Spend
 	Machines Machines
@@ -146,7 +167,10 @@ type RunDeps struct {
 	Now   func() time.Time
 	Ticks <-chan time.Time // nil ticks every SpendCheckInterval
 	Poll  time.Duration    // how often /health is tried; 0 is five seconds
-	Log   io.Writer        // progress lines; nil discards them
+	// StartTimeout replaces the kind's start timeout when set; tests
+	// shorten it.
+	StartTimeout time.Duration
+	Log          io.Writer // progress lines; nil discards them
 	// Report, when set, is filled with the run's results and every sample
 	// that didn't run.
 	Report *Report
@@ -195,12 +219,22 @@ func Run(ctx context.Context, d RunDeps) (results []registry.Result, err error) 
 	if account != d.Config.AccountUUID {
 		return nil, ErrWrongAccount
 	}
-	swept, err := d.Machines.Sweep(ctx, d.now(), false)
+	swept, err := d.Machines.Sweep(ctx, d.now(), true)
 	if err != nil {
 		return nil, fmt.Errorf("couldn't delete what an earlier run left, so nothing starts: %w", err)
 	}
 	for _, s := range swept {
 		d.logf("Deleted %s, left by an earlier run.", s)
+	}
+	live, err := d.Machines.Live(ctx, d.now())
+	if err != nil {
+		return nil, fmt.Errorf("couldn't tell whether another run is live, so nothing starts: %w", err)
+	}
+	if len(live) > 0 {
+		return nil, fmt.Errorf("%w: %s hasn't expired, so nothing starts", ErrAnotherRun, strings.Join(live, ", "))
+	}
+	if bErr := CheckBalanceCurrent(ctx, d.Spend); bErr != nil {
+		return nil, bErr
 	}
 
 	week := d.Week
@@ -232,7 +266,8 @@ func Run(ctx context.Context, d RunDeps) (results []registry.Result, err error) 
 	}
 	rep.Size, rep.HourlyUSD = offer.Size, offer.HourlyUSD
 	hours := d.Config.MaxRunHours
-	if gErr := Guard(ctx, d.Spend, d.Config, offer.HourlyUSD, hours, 0); gErr != nil {
+	billed := hours + TeardownHours // the Droplet bills until it's deleted
+	if gErr := Guard(ctx, d.Spend, d.Config, offer.HourlyUSD, billed, 0); gErr != nil {
 		skip(0, gErr.Error())
 		rep.Stopped = gErr.Error()
 		return nil, gErr
@@ -246,18 +281,19 @@ func Run(ctx context.Context, d RunDeps) (results []registry.Result, err error) 
 	if runID == "" {
 		runID = newRunID(d.now())
 	}
-	d.RunID = runID
+	d.RunID, rep.RunID = runID, runID
 	start := d.now()
 	spec := MachineSpec{
 		RunID: runID, Region: d.Config.Region, Size: offer.Size, Image: offer.Image,
-		UserData: userData, UserKey: keys.User.PublicKey(), Expires: start.Add(time.Duration(hours * float64(time.Hour))),
+		UserData: userData, UserKey: keys.User.PublicKey(), Expires: start.Add(time.Duration(hours*float64(time.Hour)) + expiryMargin),
 	}
 
 	// Teardown is registered before the Droplet exists, so a panic, a
 	// cancel or an error anywhere after Create still deletes it. It runs
-	// on its own context: the run's may already be cancelled. A Create
-	// that failed may still have made a Droplet, so it sweeps too.
-	var machine *Machine
+	// on its own context: the run's may already be cancelled. It deletes
+	// this run's Droplet and key by the run tag, which also finds a
+	// Droplet a failed Create may have made, then sweeps only expired
+	// leftovers, so it never touches another run.
 	defer func() {
 		if p := recover(); p != nil {
 			err = errors.Join(err, fmt.Errorf("the qualification run crashed: %s", redact(fmt.Sprint(p), d.HFToken)))
@@ -266,12 +302,9 @@ func Run(ctx context.Context, d RunDeps) (results []registry.Result, err error) 
 	defer func() {
 		tctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), teardownTimeout)
 		defer cancel()
-		var tErr error
-		if machine != nil && machine.ID != "" {
-			tErr = d.Machines.Delete(tctx, machine.ID)
-		}
-		left, sErr := d.Machines.Sweep(tctx, d.now(), false)
-		for _, s := range left {
+		gone, tErr := d.Machines.DeleteRun(tctx, runID)
+		left, sErr := d.Machines.Sweep(tctx, d.now(), true)
+		for _, s := range append(gone, left...) {
 			d.logf("Deleted %s.", s)
 		}
 		if tErr = errors.Join(tErr, sErr); tErr != nil {
@@ -281,7 +314,7 @@ func Run(ctx context.Context, d RunDeps) (results []registry.Result, err error) 
 	}()
 
 	d.logf("Creating a %s Droplet (%s, %s an hour) for up to %g hours.", kind, offer.Size, usd(offer.HourlyUSD), hours)
-	machine, err = d.Machines.Create(ctx, spec)
+	machine, err := d.Machines.Create(ctx, spec)
 	if err != nil {
 		skip(0, "the Droplet couldn't be created")
 		return nil, fmt.Errorf("couldn't create the Droplet: %w", err)
@@ -292,6 +325,10 @@ func Run(ctx context.Context, d RunDeps) (results []registry.Result, err error) 
 		return nil, fmt.Errorf("the Droplet never became ready: %w", err)
 	}
 	defer host.Close()
+	if gErr := checkGPUs(ctx, host, kind); gErr != nil {
+		skip(0, gErr.Error())
+		return nil, gErr
+	}
 
 	// The run ends at MaxRunHours from the Droplet's start, or at a cap.
 	limit := start.Add(time.Duration(hours * float64(time.Hour))).Sub(d.now())
@@ -311,7 +348,7 @@ func Run(ctx context.Context, d RunDeps) (results []registry.Result, err error) 
 			return results, context.Cause(runCtx)
 		}
 		elapsed := d.now().Sub(start).Hours()
-		if gErr := Guard(runCtx, d.Spend, d.Config, offer.HourlyUSD, hours-elapsed, offer.HourlyUSD*elapsed); gErr != nil {
+		if gErr := Guard(runCtx, d.Spend, d.Config, offer.HourlyUSD, billed-elapsed, offer.HourlyUSD*elapsed); gErr != nil {
 			skip(i, gErr.Error())
 			rep.Stopped = gErr.Error()
 			return results, gErr
@@ -367,8 +404,9 @@ func (d *RunDeps) watchSpend(ctx context.Context, stop context.CancelCauseFunc, 
 			}
 			return
 		}
-		if AtCap(mtd, d.Config) {
-			stop(fmt.Errorf("%w: this month's qualification spend reached %s, the %s cap", ErrOverCap, usd(mtd), d.Config.MonthlyCapUSD))
+		// The balance never holds the run in progress, so add it.
+		if spent := mtd + hourly*d.now().Sub(start).Hours(); AtCap(spent, d.Config) {
+			stop(fmt.Errorf("%w: this month's qualification spend reached about %s, the $%s cap", ErrOverCap, usd(spent), d.Config.MonthlyCapUSD))
 			return
 		}
 	}
@@ -402,6 +440,9 @@ func (d *RunDeps) sample(ctx context.Context, host Host, s Sample) (res registry
 	if e.Gated && d.HFToken == "" {
 		return res, "the weights are gated and the run has no Hugging Face token"
 	}
+	if len(e.Tasks) > 0 && e.Tasks[0] == registry.TaskSpeech && len(d.Speech) == 0 {
+		return res, "no speech clip to probe with: add a recorded speech clip at " + SpeechClipPath + " (\"Loomplane qualification check\", 16 kHz mono WAV, under five seconds)"
+	}
 	key, err := apiKey()
 	if err != nil {
 		return res, err.Error()
@@ -409,6 +450,9 @@ func (d *RunDeps) sample(ctx context.Context, host Host, s Sample) (res registry
 	c, err := NewContainer(e, q, s, need, key, d.HFToken, d.RunID)
 	if err != nil {
 		return res, err.Error()
+	}
+	if d.StartTimeout > 0 {
+		c.StartTimeout = d.StartTimeout
 	}
 	secrets := []string{d.HFToken, key}
 	defer func() {
@@ -424,15 +468,21 @@ func (d *RunDeps) sample(ctx context.Context, host Host, s Sample) (res registry
 		Engine: q.Engine, EngineVersion: engines.Current()[q.Engine], Run: d.RunURL,
 	}
 	_, res.Revision = q.WeightsRepo(e)
+	// failed records what the engine itself did wrong, with its log. A
+	// log the job can't read means the connection to the Droplet is in
+	// doubt, so the sample is not run instead.
 	failed := func(why string) (registry.Result, string) {
 		lctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), time.Minute)
 		defer cancel()
 		logs, lErr := host.Logs(lctx, c)
 		if lErr != nil {
-			why += " (its log couldn't be read)"
+			return res, "the engine looked broken (" + redact(why, secrets...) + "), but its log couldn't be read: " + redact(lErr.Error(), secrets...)
 		}
 		res.Outcome, res.Detail, res.RanAt = registry.OutcomeFailed, failureDetail(why, logs, secrets...), d.now().UTC().Truncate(time.Second)
 		return res, ""
+	}
+	lost := func(err error) (registry.Result, string) {
+		return res, "lost the connection to the engine: " + redact(err.Error(), secrets...)
 	}
 
 	if sErr := host.Start(ctx, c); sErr != nil {
@@ -445,21 +495,29 @@ func (d *RunDeps) sample(ctx context.Context, host Host, s Sample) (res registry
 		DialContext:       func(ctx context.Context, _, _ string) (net.Conn, error) { return host.Dial(ctx, c, enginePort) },
 		DisableKeepAlives: true,
 	}}
-	if why := d.waitHealthy(ctx, host, client, c); why != "" {
-		if ctx.Err() != nil {
-			return res, stopReason(ctx)
-		}
+	why, stateErr := d.waitHealthy(ctx, host, client, c)
+	switch {
+	case why == "":
+	case ctx.Err() != nil:
+		return res, stopReason(ctx)
+	case stateErr != nil:
+		return lost(stateErr)
+	default:
 		return failed(why)
 	}
 	probe := d.Probe
 	if probe == nil {
-		probe = Probe
+		probe = func(ctx context.Context, client *http.Client, e registry.Entry, c *Container) (string, error) {
+			return Probe(ctx, client, e, c, d.Speech)
+		}
 	}
 	detail, err := probe(ctx, client, e, c)
-	if ctx.Err() != nil {
+	switch {
+	case ctx.Err() != nil:
 		return res, stopReason(ctx)
-	}
-	if err != nil {
+	case err != nil && IsTransport(err):
+		return lost(err)
+	case err != nil:
 		return failed(err.Error())
 	}
 	res.Outcome, res.Detail, res.RanAt = registry.OutcomePassed, redact(detail, secrets...), d.now().UTC().Truncate(time.Second)
@@ -467,28 +525,50 @@ func (d *RunDeps) sample(ctx context.Context, host Host, s Sample) (res registry
 }
 
 // waitHealthy polls /health until it answers 200, the container exits, or
-// the kind's start timeout passes. It returns "" once healthy, else why
-// not.
-func (d *RunDeps) waitHealthy(ctx context.Context, host Host, client *http.Client, c *Container) string {
+// the start timeout passes. It returns "" once healthy, else why not, and
+// the last error reading the container's state: an engine that never got
+// healthy is its own failure only while the job could still read its
+// state.
+func (d *RunDeps) waitHealthy(ctx context.Context, host Host, client *http.Client, c *Container) (string, error) {
 	poll := d.Poll
 	if poll <= 0 {
 		poll = 5 * time.Second
 	}
 	wctx, cancel := context.WithTimeout(ctx, c.StartTimeout)
 	defer cancel()
+	var stateErr error
 	for {
-		if running, code, err := host.State(wctx, c); err == nil && !running {
-			return fmt.Sprintf("the engine exited with code %d before /health answered", code)
+		running, code, err := host.State(wctx, c)
+		switch {
+		case err != nil:
+			stateErr = err
+		case !running:
+			return fmt.Sprintf("the engine exited with code %d before /health answered", code), nil
+		default:
+			stateErr = nil
 		}
-		if healthy(wctx, client) {
-			return ""
+		if stateErr == nil && healthy(wctx, client) {
+			return "", nil
 		}
 		select {
 		case <-wctx.Done():
-			return fmt.Sprintf("the engine didn't answer /health within %s, the kind's start timeout", c.StartTimeout)
+			return fmt.Sprintf("the engine didn't answer /health within %s, the kind's start timeout", c.StartTimeout), stateErr
 		case <-time.After(poll):
 		}
 	}
+}
+
+// checkGPUs refuses a Droplet whose GPUs aren't one of kind, as nvidia-smi
+// names them. A result is only tested on the GPU it names.
+func checkGPUs(ctx context.Context, host Host, kind string) error {
+	kinds, err := host.GPUKinds(ctx)
+	if err != nil {
+		return fmt.Errorf("couldn't read the Droplet's GPUs: %w", err)
+	}
+	if len(kinds) != DropletGPUs || slices.ContainsFunc(kinds, func(k string) bool { return k != kind }) {
+		return fmt.Errorf("the Droplet's GPUs read as %q, not one %s, so nothing it ran would be a %s result", kinds, kind, kind)
+	}
+	return nil
 }
 
 func healthy(ctx context.Context, client *http.Client) bool {
@@ -646,7 +726,8 @@ func runKeys() (Keys, string, error) {
 
 // CloudInit is the Droplet's cloud-config. It replaces the image's host
 // keys with the run's ED25519 key, so the job knows the key before the
-// Droplet boots, then runs P1's NVIDIA toolkit script and points Docker at
+// Droplet boots, blocks containers from the metadata service that serves
+// this document, then runs P1's NVIDIA toolkit script and points Docker at
 // the toolkit, as Loomplane's own GPU servers do. It holds a private key:
 // it's sent to DigitalOcean and never logged.
 func CloudInit(hostKey ed25519.PrivateKey) (string, error) {
@@ -668,7 +749,9 @@ func CloudInit(hostKey ed25519.PrivateKey) (string, error) {
 		"package_update": true,
 		"packages":       []string{"ca-certificates", "curl", "gnupg"},
 		"runcmd": []any{
+			[]string{"bash", "-c", blockMetadata},
 			[]string{"bash", "-c", cloudinfra.NVIDIAToolkitScript},
+			[]string{"bash", "-c", blockMetadata},
 			[]string{"systemctl", "enable", "--now", "docker"},
 			[]string{"nvidia-ctk", "runtime", "configure", "--runtime=docker"},
 			[]string{"systemctl", "restart", "docker"},
@@ -681,6 +764,16 @@ func CloudInit(hostKey ed25519.PrivateKey) (string, error) {
 	// JSON is valid YAML.
 	return "#cloud-config\n" + string(encoded), nil
 }
+
+// blockMetadata keeps containers off DigitalOcean's metadata service,
+// which serves the user data, host key and all. DOCKER-USER is the chain
+// Docker leaves alone and checks before forwarding any container's
+// traffic, so the rule holds through Docker's restarts. It runs before
+// Docker is installed or started, and again after the toolkit script in
+// case that installed Docker and its first start rebuilt the chains. The
+// job starts no container before cloud-init is done.
+const blockMetadata = `iptables -N DOCKER-USER 2>/dev/null || true
+iptables -C DOCKER-USER -d 169.254.169.254 -j REJECT 2>/dev/null || iptables -I DOCKER-USER -d 169.254.169.254 -j REJECT`
 
 // apiKey is a fresh key for one sample's engine.
 func apiKey() (string, error) {

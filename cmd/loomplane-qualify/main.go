@@ -3,20 +3,22 @@
 //
 //	loomplane-qualify plan  --config .github/qualification.yaml [--week 2026-W45]
 //	loomplane-qualify run   --config .github/qualification.yaml --confirm --out results.json
-//	loomplane-qualify sweep --config .github/qualification.yaml [--only-expired]
+//	loomplane-qualify sweep --config .github/qualification.yaml [--only-expired=false]
 //	loomplane-qualify merge [--data internal/models/registry/data/qualification.yaml] [--summary summary.md] results.json
 //
 // plan prints what a run would sample this week and its worst-case cost,
 // and spends nothing. run creates one GPU Droplet in the qualification
 // account, qualifies the samples on it and deletes it; it costs money, so
-// it needs --confirm. sweep deletes every Droplet and SSH key the job
-// tagged, so nothing a crashed run left keeps billing. merge folds a run's
-// results into the registry's qualification.yaml.
+// it needs --confirm. sweep deletes the Droplets the job tagged once their
+// run has expired, and their SSH keys, so nothing a crashed run left keeps
+// billing and nothing a live run uses goes. merge folds a run's results
+// into the registry's qualification.yaml.
 //
 // run and sweep read the DigitalOcean token from QUALIFY_DO_TOKEN and the
 // account's UUID from the config or QUALIFY_DO_ACCOUNT_UUID, and refuse a
 // token from any other account. run reads a Hugging Face token for gated
-// weights from QUALIFY_HF_TOKEN. Tokens never reach a log line, an error,
+// weights from QUALIFY_HF_TOKEN, and the speech probe's recording from
+// internal/models/qualify/testdata/speech.wav when it's there. Tokens never reach a log line, an error,
 // the results or a container's arguments.
 package main
 
@@ -61,7 +63,7 @@ func main() {
 const usage = `usage: loomplane-qualify plan|run|sweep|merge [flags]
   plan   print this week's samples and worst-case cost; spends nothing
   run    qualify this week's samples on a GPU Droplet; costs money, needs --confirm
-  sweep  delete every Droplet and SSH key the job tagged
+  sweep  delete the job's expired Droplets and their SSH keys
   merge  fold a run's results.json into qualification.yaml`
 
 // run is the command; it returns the exit code.
@@ -130,10 +132,11 @@ func planCommand(args []string, getenv func(string) string, stdout io.Writer) er
 		fmt.Fprintf(stdout, "  %s\n", s)
 	}
 	price := "unknown"
+	billed := cfg.MaxRunHours + qualify.TeardownHours
 	for _, size := range gpusizes.For("digitalocean") {
 		if a := size.Accelerator; a != nil && a.Kind == kind && a.Count == qualify.DropletGPUs && size.HourlyPriceKnown {
-			price = fmt.Sprintf("$%.2f (%s at Loomplane's reference price of $%.2f an hour, as of %s, for %g hours)",
-				size.HourlyUSD*cfg.MaxRunHours, size.ID, size.HourlyUSD, gpusizes.PricesAsOf, cfg.MaxRunHours)
+			price = fmt.Sprintf("$%.2f (%s at Loomplane's reference price of $%.2f an hour, as of %s, for %g hours with teardown)",
+				size.HourlyUSD*billed, size.ID, size.HourlyUSD, gpusizes.PricesAsOf, billed)
 		}
 	}
 	fmt.Fprintf(stdout, "Worst case: %s. Caps: $%s a month, $%s a run.\n", price, cfg.MonthlyCapUSD, cfg.RunCapUSD)
@@ -146,6 +149,7 @@ func runCommand(ctx context.Context, args []string, getenv func(string) string, 
 	confirm := fl.Bool("confirm", false, "create a GPU Droplet, which costs money")
 	out := fl.String("out", "results.json", "where to write the results")
 	week := fl.String("week", "", "the ISO week to run, like 2026-W45; empty is this week")
+	clip := fl.String("speech", qualify.SpeechClipPath, "the speech probe's recording; speech samples don't run without it")
 	if err := fl.Parse(args); err != nil {
 		return err
 	}
@@ -160,13 +164,17 @@ func runCommand(ctx context.Context, args []string, getenv func(string) string, 
 	if token == "" {
 		return fmt.Errorf("set %s to the qualification account's DigitalOcean token", doTokenEnv)
 	}
+	speech, err := readSpeech(*clip)
+	if err != nil {
+		return err
+	}
 	client := digitalocean.New("")
 	r := registry.Default()
 	rep := &qualify.Report{}
 	d := qualify.RunDeps{
 		Config: cfg, Registry: r, Results: r.Results(), Week: *week, Confirm: *confirm,
-		RunURL: runURL(getenv), HFToken: strings.TrimSpace(getenv(hfTokenEnv)),
-		Spend:    qualify.NewDigitalOceanSpend(client, token),
+		RunURL: runURL(getenv), HFToken: strings.TrimSpace(getenv(hfTokenEnv)), Speech: speech,
+		Spend:    qualify.NewDigitalOceanSpend("", token),
 		Machines: qualify.NewDigitalOceanMachines("", token),
 		Offers:   qualify.NewDigitalOceanOffers(client, token, cfg.AccountUUID),
 		Connect:  qualify.Connect,
@@ -181,6 +189,22 @@ func runCommand(ctx context.Context, args []string, getenv func(string) string, 
 		fmt.Fprintf(stdout, "Wrote %d results and %d samples that didn't run to %s.\n", len(rep.Results), len(rep.NotRun), *out)
 	}
 	return runErr
+}
+
+// readSpeech reads the speech probe's recording, or nil when there's none
+// yet. A file that isn't a short 16-bit mono WAV is an error.
+func readSpeech(path string) ([]byte, error) {
+	b, err := os.ReadFile(path)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if cErr := qualify.CheckSpeechClip(b); cErr != nil {
+		return nil, fmt.Errorf("%s: %w", path, cErr)
+	}
+	return b, nil
 }
 
 // runURL is the GitHub Actions run, or "local".
@@ -203,7 +227,7 @@ func writeReport(path string, rep *qualify.Report) error {
 func sweepCommand(ctx context.Context, args []string, getenv func(string) string, stdout io.Writer) error {
 	fl := flag.NewFlagSet("sweep", flag.ContinueOnError)
 	config := fl.String("config", ".github/qualification.yaml", "the qualification config")
-	onlyExpired := fl.Bool("only-expired", false, "delete only Droplets whose run is past its expiry")
+	onlyExpired := fl.Bool("only-expired", true, "delete only Droplets whose run is past its expiry; false deletes live runs' Droplets too")
 	if err := fl.Parse(args); err != nil {
 		return err
 	}
@@ -218,7 +242,7 @@ func sweepCommand(ctx context.Context, args []string, getenv func(string) string
 	if token == "" {
 		return fmt.Errorf("set %s to the qualification account's DigitalOcean token", doTokenEnv)
 	}
-	account, err := qualify.NewDigitalOceanSpend(digitalocean.New(""), token).AccountUUID(ctx)
+	account, err := qualify.NewDigitalOceanSpend("", token).AccountUUID(ctx)
 	if err != nil {
 		return fmt.Errorf("couldn't read which account the token belongs to, so nothing is deleted: %w", err)
 	}

@@ -76,10 +76,17 @@ type Machines interface {
 	// with an ID comes back with any error once the Droplet exists, so
 	// the caller can delete it.
 	Create(ctx context.Context, spec MachineSpec) (*Machine, error)
-	Delete(ctx context.Context, id string) error
+	// DeleteRun deletes one run's Droplets (tagged lpq-run-<run>) and its
+	// SSH key, and nothing else, so a run's teardown never touches
+	// another run.
+	DeleteRun(ctx context.Context, runID string) ([]string, error)
 	// Sweep deletes Droplets tagged loomplane-qualify (only expired ones
-	// when asked) and SSH keys named lpq-*, and says what it deleted.
+	// when asked) and SSH keys named lpq-* whose run has no Droplet left,
+	// and says what it deleted.
 	Sweep(ctx context.Context, now time.Time, onlyExpired bool) ([]string, error)
+	// Live lists the loomplane-qualify Droplets whose expiry hasn't
+	// passed: a run that may still be using them.
+	Live(ctx context.Context, now time.Time) ([]string, error)
 }
 
 // Tags are a run's Droplet tags.
@@ -99,27 +106,21 @@ func expired(tags []string, now time.Time) bool {
 	return true
 }
 
-// DigitalOceanMachines is Machines on DigitalOcean's API. It acts only on
-// Droplets tagged loomplane-qualify and SSH keys named lpq-*.
-type DigitalOceanMachines struct {
+// doAPI calls DigitalOcean's API with one token. The token never appears in
+// an error or a string.
+type doAPI struct {
 	endpoint string
 	token    string
 	http     *http.Client
-	poll     time.Duration
-	boot     time.Duration
 }
 
-// NewDigitalOceanMachines talks to endpoint, or DigitalOcean's own API when
-// it's empty. The token never appears in an error or a string.
-func NewDigitalOceanMachines(endpoint, token string) *DigitalOceanMachines {
-	m := &DigitalOceanMachines{endpoint: digitalocean.DefaultEndpoint, token: strings.TrimSpace(token), http: &http.Client{Timeout: time.Minute}, poll: 10 * time.Second, boot: 15 * time.Minute}
+func newDOAPI(endpoint, token string) doAPI {
+	a := doAPI{endpoint: digitalocean.DefaultEndpoint, token: strings.TrimSpace(token), http: &http.Client{Timeout: time.Minute}}
 	if endpoint != "" {
-		m.endpoint, m.poll = strings.TrimRight(endpoint, "/"), 10*time.Millisecond
+		a.endpoint = strings.TrimRight(endpoint, "/")
 	}
-	return m
+	return a
 }
-
-func (*DigitalOceanMachines) String() string { return "DigitalOcean machines" }
 
 // apiError is a DigitalOcean error answer.
 type apiError struct {
@@ -136,7 +137,7 @@ func notFound(err error) bool {
 	return errors.As(err, &ae) && ae.status == http.StatusNotFound
 }
 
-func (m *DigitalOceanMachines) do(ctx context.Context, method, path string, query url.Values, in, out any) error {
+func (a doAPI) do(ctx context.Context, method, path string, query url.Values, in, out any) error {
 	var body io.Reader
 	if in != nil {
 		data, err := json.Marshal(in)
@@ -145,7 +146,7 @@ func (m *DigitalOceanMachines) do(ctx context.Context, method, path string, quer
 		}
 		body = bytes.NewReader(data)
 	}
-	u := m.endpoint + path
+	u := a.endpoint + path
 	if len(query) > 0 {
 		u += "?" + query.Encode()
 	}
@@ -153,12 +154,12 @@ func (m *DigitalOceanMachines) do(ctx context.Context, method, path string, quer
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+m.token)
+	req.Header.Set("Authorization", "Bearer "+a.token)
 	req.Header.Set("Accept", "application/json")
 	if in != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	res, err := m.http.Do(req)
+	res, err := a.http.Do(req)
 	if err != nil {
 		return fmt.Errorf("digitalocean %s %s: %w", method, path, err)
 	}
@@ -175,13 +176,68 @@ func (m *DigitalOceanMachines) do(ctx context.Context, method, path string, quer
 		if json.Unmarshal(data, &e) == nil && e.Message != "" {
 			msg = oneLine(e.Message)
 		}
-		return &apiError{status: res.StatusCode, message: redact(msg, m.token)}
+		return &apiError{status: res.StatusCode, message: redact(msg, a.token)}
 	}
 	if out == nil || len(data) == 0 {
 		return nil
 	}
 	return json.Unmarshal(data, out)
 }
+
+// pages calls GET path page by page, up to maxPages, and hands each page's
+// body to each. It stops when DigitalOcean names no next page.
+func (a doAPI) pages(ctx context.Context, path string, query url.Values, each func(raw json.RawMessage) error) error {
+	for page := 1; page <= maxPages; page++ {
+		q := url.Values{"page": {strconv.Itoa(page)}, "per_page": {"200"}}
+		for k, v := range query {
+			q[k] = v
+		}
+		var raw json.RawMessage
+		if err := a.do(ctx, http.MethodGet, path, q, nil, &raw); err != nil {
+			return err
+		}
+		if err := each(raw); err != nil {
+			return err
+		}
+		var links struct {
+			Links struct {
+				Pages struct {
+					Next string `json:"next"`
+				} `json:"pages"`
+			} `json:"links"`
+		}
+		if err := json.Unmarshal(raw, &links); err != nil {
+			return err
+		}
+		if links.Links.Pages.Next == "" {
+			return nil
+		}
+	}
+	return fmt.Errorf("digitalocean listed more than %d pages of %s", maxPages, path)
+}
+
+// maxPages bounds every listing.
+const maxPages = 50
+
+// DigitalOceanMachines is Machines on DigitalOcean's API. It acts only on
+// Droplets tagged loomplane-qualify and SSH keys named lpq-*.
+type DigitalOceanMachines struct {
+	api  doAPI
+	poll time.Duration
+	boot time.Duration
+}
+
+// NewDigitalOceanMachines talks to endpoint, or DigitalOcean's own API when
+// it's empty. The token never appears in an error or a string.
+func NewDigitalOceanMachines(endpoint, token string) *DigitalOceanMachines {
+	m := &DigitalOceanMachines{api: newDOAPI(endpoint, token), poll: 10 * time.Second, boot: 15 * time.Minute}
+	if endpoint != "" {
+		m.poll = 10 * time.Millisecond
+	}
+	return m
+}
+
+func (*DigitalOceanMachines) String() string { return "DigitalOcean machines" }
 
 type droplet struct {
 	ID       int64    `json:"id"`
@@ -220,7 +276,7 @@ func (m *DigitalOceanMachines) Create(ctx context.Context, spec MachineSpec) (*M
 		SSHKey sshKey `json:"ssh_key"`
 	}
 	public := strings.TrimSpace(string(ssh.MarshalAuthorizedKey(spec.UserKey)))
-	if err := m.do(ctx, http.MethodPost, "/v2/account/keys", nil, map[string]string{"name": name, "public_key": public}, &key); err != nil {
+	if err := m.api.do(ctx, http.MethodPost, "/v2/account/keys", nil, map[string]string{"name": name, "public_key": public}, &key); err != nil {
 		return nil, fmt.Errorf("add the run's SSH key: %w", err)
 	}
 	in := map[string]any{
@@ -231,7 +287,7 @@ func (m *DigitalOceanMachines) Create(ctx context.Context, spec MachineSpec) (*M
 	var out struct {
 		Droplet droplet `json:"droplet"`
 	}
-	if err := m.do(ctx, http.MethodPost, "/v2/droplets", nil, in, &out); err != nil {
+	if err := m.api.do(ctx, http.MethodPost, "/v2/droplets", nil, in, &out); err != nil {
 		return nil, fmt.Errorf("create the Droplet: %w", err)
 	}
 	if out.Droplet.ID < 1 {
@@ -244,7 +300,7 @@ func (m *DigitalOceanMachines) Create(ctx context.Context, spec MachineSpec) (*M
 		var got struct {
 			Droplet droplet `json:"droplet"`
 		}
-		if err := m.do(wait, http.MethodGet, "/v2/droplets/"+machine.ID, nil, nil, &got); err != nil && !notFound(err) {
+		if err := m.api.do(wait, http.MethodGet, "/v2/droplets/"+machine.ID, nil, nil, &got); err != nil && !notFound(err) {
 			return machine, fmt.Errorf("read the Droplet: %w", err)
 		}
 		if ip := got.Droplet.publicIPv4(); got.Droplet.Status == "active" && ip != "" {
@@ -259,91 +315,168 @@ func (m *DigitalOceanMachines) Create(ctx context.Context, spec MachineSpec) (*M
 	}
 }
 
-// Delete implements Machines. A Droplet that's already gone is deleted.
-func (m *DigitalOceanMachines) Delete(ctx context.Context, id string) error {
-	if n, err := strconv.ParseInt(id, 10, 64); err != nil || n < 1 || strconv.FormatInt(n, 10) != id {
-		return fmt.Errorf("%q isn't a Droplet ID", id)
+// droplets lists the Droplets carrying tag, and drops any that don't
+// carry loomplane-qualify too: the filter is DigitalOcean's, so it's
+// checked here as well.
+func (m *DigitalOceanMachines) droplets(ctx context.Context, tag string) ([]droplet, error) {
+	var out []droplet
+	err := m.api.pages(ctx, "/v2/droplets", url.Values{"tag_name": {tag}}, func(raw json.RawMessage) error {
+		var page struct {
+			Droplets []droplet `json:"droplets"`
+		}
+		if err := json.Unmarshal(raw, &page); err != nil {
+			return err
+		}
+		for _, d := range page.Droplets {
+			if slices.Contains(d.Tags, Tag) && slices.Contains(d.Tags, tag) {
+				out = append(out, d)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list the qualification Droplets: %w", err)
 	}
-	err := m.do(ctx, http.MethodDelete, "/v2/droplets/"+id, nil, nil, nil)
-	if err != nil && !notFound(err) {
-		return fmt.Errorf("delete Droplet %s: %w", id, err)
+	return out, nil
+}
+
+// keys lists the SSH keys named lpq-*.
+func (m *DigitalOceanMachines) keys(ctx context.Context) ([]sshKey, error) {
+	var out []sshKey
+	err := m.api.pages(ctx, "/v2/account/keys", nil, func(raw json.RawMessage) error {
+		var page struct {
+			SSHKeys []sshKey `json:"ssh_keys"`
+		}
+		if err := json.Unmarshal(raw, &page); err != nil {
+			return err
+		}
+		for _, k := range page.SSHKeys {
+			if strings.HasPrefix(k.Name, namePrefix) {
+				out = append(out, k)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list SSH keys: %w", err)
 	}
-	return nil
+	return out, nil
+}
+
+func (m *DigitalOceanMachines) deleteDroplet(ctx context.Context, d droplet) (string, error) {
+	id := strconv.FormatInt(d.ID, 10)
+	if err := m.api.do(ctx, http.MethodDelete, "/v2/droplets/"+id, nil, nil, nil); err != nil && !notFound(err) {
+		return "", fmt.Errorf("delete Droplet %s: %w", id, err)
+	}
+	return fmt.Sprintf("Droplet %s (%s)", id, d.Name), nil
+}
+
+func (m *DigitalOceanMachines) deleteKey(ctx context.Context, k sshKey) (string, error) {
+	id := strconv.FormatInt(k.ID, 10)
+	if err := m.api.do(ctx, http.MethodDelete, "/v2/account/keys/"+id, nil, nil, nil); err != nil && !notFound(err) {
+		return "", fmt.Errorf("delete SSH key %s: %w", id, err)
+	}
+	return fmt.Sprintf("SSH key %s (%s)", id, k.Name), nil
+}
+
+// DeleteRun implements Machines: the Droplets tagged lpq-run-<runID> and
+// the SSH key lpq-<runID>, and nothing else. It keeps going past a failed
+// delete and returns every failure.
+func (m *DigitalOceanMachines) DeleteRun(ctx context.Context, runID string) ([]string, error) {
+	if !runIDPattern.MatchString(runID) {
+		return nil, fmt.Errorf("%q isn't a run ID", runID)
+	}
+	var deleted []string
+	var problems []error
+	ds, err := m.droplets(ctx, runTagPrefix+runID)
+	if err != nil {
+		return nil, err
+	}
+	for _, d := range ds {
+		what, dErr := m.deleteDroplet(ctx, d)
+		if dErr != nil {
+			problems = append(problems, dErr)
+			continue
+		}
+		deleted = append(deleted, what)
+	}
+	ks, err := m.keys(ctx)
+	if err != nil {
+		return deleted, errors.Join(append(problems, err)...)
+	}
+	for _, k := range ks {
+		if k.Name != namePrefix+runID {
+			continue
+		}
+		what, kErr := m.deleteKey(ctx, k)
+		if kErr != nil {
+			problems = append(problems, kErr)
+			continue
+		}
+		deleted = append(deleted, what)
+	}
+	return deleted, errors.Join(problems...)
 }
 
 // Sweep implements Machines. It keeps going past a failed delete, so one
 // stuck Droplet doesn't keep the rest running, and returns every failure.
+// A run's SSH key goes only once its Droplets do.
 func (m *DigitalOceanMachines) Sweep(ctx context.Context, now time.Time, onlyExpired bool) ([]string, error) {
 	var deleted []string
 	var problems []error
 	live := map[string]bool{} // run IDs of Droplets kept
-	for page := 1; ; page++ {
-		var out struct {
-			Droplets []droplet `json:"droplets"`
-			Links    struct {
-				Pages struct {
-					Next string `json:"next"`
-				} `json:"pages"`
-			} `json:"links"`
-		}
-		q := url.Values{"tag_name": {Tag}, "page": {strconv.Itoa(page)}, "per_page": {"200"}}
-		if err := m.do(ctx, http.MethodGet, "/v2/droplets", q, nil, &out); err != nil {
-			return deleted, fmt.Errorf("list the qualification Droplets: %w", err)
-		}
-		for _, d := range out.Droplets {
-			// The tag filter is DigitalOcean's; check it here too.
-			if !slices.Contains(d.Tags, Tag) {
-				continue
-			}
-			if onlyExpired && !expired(d.Tags, now) {
-				for _, t := range d.Tags {
-					if run, ok := strings.CutPrefix(t, runTagPrefix); ok {
-						live[run] = true
-					}
-				}
-				continue
-			}
-			id := strconv.FormatInt(d.ID, 10)
-			if err := m.Delete(ctx, id); err != nil {
-				problems = append(problems, err)
-				continue
-			}
-			deleted = append(deleted, fmt.Sprintf("Droplet %s (%s)", id, d.Name))
-		}
-		if out.Links.Pages.Next == "" || page >= 100 {
-			break
-		}
+	ds, err := m.droplets(ctx, Tag)
+	if err != nil {
+		return nil, err
 	}
-	for page := 1; ; page++ {
-		var out struct {
-			SSHKeys []sshKey `json:"ssh_keys"`
-			Links   struct {
-				Pages struct {
-					Next string `json:"next"`
-				} `json:"pages"`
-			} `json:"links"`
-		}
-		q := url.Values{"page": {strconv.Itoa(page)}, "per_page": {"200"}}
-		if err := m.do(ctx, http.MethodGet, "/v2/account/keys", q, nil, &out); err != nil {
-			return deleted, errors.Join(append(problems, fmt.Errorf("list SSH keys: %w", err))...)
-		}
-		for _, k := range out.SSHKeys {
-			run, ok := strings.CutPrefix(k.Name, namePrefix)
-			if !ok || live[run] {
-				continue
+	for _, d := range ds {
+		if onlyExpired && !expired(d.Tags, now) {
+			for _, t := range d.Tags {
+				if run, ok := strings.CutPrefix(t, runTagPrefix); ok {
+					live[run] = true
+				}
 			}
-			id := strconv.FormatInt(k.ID, 10)
-			if err := m.do(ctx, http.MethodDelete, "/v2/account/keys/"+id, nil, nil, nil); err != nil && !notFound(err) {
-				problems = append(problems, fmt.Errorf("delete SSH key %s: %w", id, err))
-				continue
-			}
-			deleted = append(deleted, fmt.Sprintf("SSH key %s (%s)", id, k.Name))
+			continue
 		}
-		if out.Links.Pages.Next == "" || page >= 100 {
-			break
+		what, dErr := m.deleteDroplet(ctx, d)
+		if dErr != nil {
+			problems = append(problems, dErr)
+			continue
 		}
+		deleted = append(deleted, what)
+	}
+	ks, err := m.keys(ctx)
+	if err != nil {
+		return deleted, errors.Join(append(problems, err)...)
+	}
+	for _, k := range ks {
+		if live[strings.TrimPrefix(k.Name, namePrefix)] {
+			continue
+		}
+		what, kErr := m.deleteKey(ctx, k)
+		if kErr != nil {
+			problems = append(problems, kErr)
+			continue
+		}
+		deleted = append(deleted, what)
 	}
 	return deleted, errors.Join(problems...)
+}
+
+// Live implements Machines: every loomplane-qualify Droplet whose expiry
+// hasn't passed.
+func (m *DigitalOceanMachines) Live(ctx context.Context, now time.Time) ([]string, error) {
+	ds, err := m.droplets(ctx, Tag)
+	if err != nil {
+		return nil, err
+	}
+	var live []string
+	for _, d := range ds {
+		if !expired(d.Tags, now) {
+			live = append(live, fmt.Sprintf("Droplet %d (%s)", d.ID, d.Name))
+		}
+	}
+	return live, nil
 }
 
 // Offer is the Droplet a run buys for a GPU kind.
@@ -591,3 +724,20 @@ func (h *dockerHost) Remove(ctx context.Context, c *Container) error {
 }
 
 func (h *dockerHost) Close() error { return h.client.Close() }
+
+// GPUKinds reads the kind of every GPU Docker can hand out on the Droplet,
+// from nvidia-smi's own product names.
+func (h *dockerHost) GPUKinds(ctx context.Context) ([]string, error) {
+	inv, err := h.client.GPUs(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if inv.Status != provider.GPUStatusReady {
+		return nil, fmt.Errorf("the GPUs aren't ready for Docker: %s", inv.Message)
+	}
+	kinds := make([]string, 0, len(inv.Devices))
+	for _, d := range inv.Devices {
+		kinds = append(kinds, d.Kind)
+	}
+	return kinds, nil
+}

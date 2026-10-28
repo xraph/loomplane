@@ -157,12 +157,14 @@ func TestPickOnlyFittingSamples(t *testing.T) {
 
 // fakeSpend is the account's balance.
 type fakeSpend struct {
-	mu         sync.Mutex
-	account    string
-	accountErr error
-	mtd        string
-	mtdErr     error
-	reads      int
+	mu          sync.Mutex
+	account     string
+	accountErr  error
+	mtd         string
+	mtdErr      error
+	reads       int
+	generatedAt time.Time // zero is an hour ago
+	lastDeleted time.Time // zero is none
 }
 
 func (f *fakeSpend) MonthToDateUSD(context.Context) (string, error) {
@@ -174,6 +176,15 @@ func (f *fakeSpend) MonthToDateUSD(context.Context) (string, error) {
 
 func (f *fakeSpend) AccountUUID(context.Context) (string, error) { return f.account, f.accountErr }
 
+func (f *fakeSpend) BalanceGeneratedAt(context.Context) (time.Time, error) {
+	if f.generatedAt.IsZero() {
+		return time.Now().Add(-time.Hour), nil
+	}
+	return f.generatedAt, nil
+}
+
+func (f *fakeSpend) LastDropletDeleted(context.Context) (time.Time, error) { return f.lastDeleted, nil }
+
 func (f *fakeSpend) set(mtd string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -182,11 +193,12 @@ func (f *fakeSpend) set(mtd string) {
 
 // fakeMachines records what the run created and deleted.
 type fakeMachines struct {
-	mu        sync.Mutex
-	created   []MachineSpec
-	deleted   []string
-	sweeps    int
-	createErr error
+	mu         sync.Mutex
+	created    []MachineSpec
+	deletedRun []string
+	sweeps     []bool // onlyExpired of each sweep
+	live       []string
+	createErr  error
 }
 
 func (f *fakeMachines) Create(_ context.Context, spec MachineSpec) (*Machine, error) {
@@ -199,19 +211,21 @@ func (f *fakeMachines) Create(_ context.Context, spec MachineSpec) (*Machine, er
 	return &Machine{ID: "4242", Name: "lpq-" + spec.RunID, IPv4: "203.0.113.7"}, nil
 }
 
-func (f *fakeMachines) Delete(_ context.Context, id string) error {
+func (f *fakeMachines) DeleteRun(_ context.Context, runID string) ([]string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.deleted = append(f.deleted, id)
-	return nil
-}
-
-func (f *fakeMachines) Sweep(context.Context, time.Time, bool) ([]string, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.sweeps++
+	f.deletedRun = append(f.deletedRun, runID)
 	return nil, nil
 }
+
+func (f *fakeMachines) Sweep(_ context.Context, _ time.Time, onlyExpired bool) ([]string, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.sweeps = append(f.sweeps, onlyExpired)
+	return nil, nil
+}
+
+func (f *fakeMachines) Live(context.Context, time.Time) ([]string, error) { return f.live, nil }
 
 type fakeOffers struct{ offer Offer }
 
@@ -228,16 +242,21 @@ type fakeHost struct {
 	removed   []*Container
 	exited    bool
 	unhealthy bool
+	stateErr  error
+	logsErr   error
 	logs      []byte
+	gpus      []string
 	onStart   func(n int)
 	onRemove  func(n int)
+	// handle, when set, answers the probe paths in place of engineAnswer.
+	handle http.HandlerFunc
 }
 
 func newFakeHost(t *testing.T, r *registry.Registry) *fakeHost {
-	h := &fakeHost{t: t}
+	h := &fakeHost{t: t, gpus: []string{"nvidia-l40s"}}
 	h.engine = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
 		h.mu.Lock()
-		c, unhealthy := h.current, h.unhealthy
+		c, unhealthy, handle := h.current, h.unhealthy, h.handle
 		h.mu.Unlock()
 		if req.URL.Path == "/health" {
 			if unhealthy {
@@ -247,6 +266,10 @@ func newFakeHost(t *testing.T, r *registry.Registry) *fakeHost {
 		}
 		if c == nil || req.Header.Get("Authorization") != "Bearer "+c.Key {
 			http.Error(w, "no key", http.StatusUnauthorized)
+			return
+		}
+		if handle != nil {
+			handle(w, req)
 			return
 		}
 		engineAnswer(w, req, r)
@@ -286,6 +309,14 @@ func engineAnswer(w http.ResponseWriter, req *http.Request, r *registry.Registry
 	}
 }
 
+// hangUp drops the connection without answering, as a reset would.
+func hangUp(w http.ResponseWriter, _ *http.Request) {
+	conn, _, err := w.(http.Hijacker).Hijack()
+	if err == nil {
+		_ = conn.Close()
+	}
+}
+
 func (h *fakeHost) Start(_ context.Context, c *Container) error {
 	h.mu.Lock()
 	h.current = c
@@ -309,13 +340,22 @@ func (h *fakeHost) Dial(ctx context.Context, _ *Container, port int) (net.Conn, 
 func (h *fakeHost) State(context.Context, *Container) (running bool, exitCode int, err error) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
+	if h.stateErr != nil {
+		return false, 0, h.stateErr
+	}
 	if h.exited {
 		return false, 1, nil
 	}
 	return true, 0, nil
 }
 
-func (h *fakeHost) Logs(context.Context, *Container) ([]byte, error) { return h.logs, nil }
+func (h *fakeHost) Logs(context.Context, *Container) ([]byte, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.logs, h.logsErr
+}
+
+func (h *fakeHost) GPUKinds(context.Context) ([]string, error) { return h.gpus, nil }
 
 func (h *fakeHost) Remove(_ context.Context, c *Container) error {
 	h.mu.Lock()
@@ -363,8 +403,24 @@ func (f *runFixture) samples() []Sample {
 	return s
 }
 
+// tornDown reports whether the run deleted its own Droplet and key, and
+// swept only expired leftovers.
+func (f *runFixture) tornDown(t *testing.T) {
+	t.Helper()
+	f.machines.mu.Lock()
+	defer f.machines.mu.Unlock()
+	if !slices.Equal(f.machines.deletedRun, []string{"test-run"}) {
+		t.Fatalf("deleted runs %v, want only test-run", f.machines.deletedRun)
+	}
+	if len(f.machines.sweeps) != 2 || slices.Contains(f.machines.sweeps, false) {
+		t.Fatalf("sweeps %v, want two that delete only expired Droplets", f.machines.sweeps)
+	}
+}
+
 func TestRunQualifiesEverySample(t *testing.T) {
 	f := newRun(t)
+	start := time.Date(2026, 11, 9, 6, 0, 0, 0, time.UTC)
+	f.deps.Now = func() time.Time { return start }
 	samples := f.samples()
 	results, err := Run(t.Context(), f.deps)
 	if err != nil {
@@ -383,12 +439,21 @@ func TestRunQualifiesEverySample(t *testing.T) {
 			t.Errorf("result %d: %+v for %s", i, res, s)
 		}
 	}
-	if len(f.machines.created) != 1 || !slices.Equal(f.machines.deleted, []string{"4242"}) {
-		t.Fatalf("created %d, deleted %v", len(f.machines.created), f.machines.deleted)
+	if len(f.machines.created) != 1 {
+		t.Fatalf("created %d", len(f.machines.created))
 	}
+	f.tornDown(t)
 	spec := f.machines.created[0]
 	if spec.Size != "gpu-l40sx1-48gb" || spec.Region != "tor1" || spec.RunID != "test-run" || !strings.Contains(spec.UserData, "nvidia-container-toolkit") {
 		t.Fatalf("machine spec %+v", spec.RunID)
+	}
+	// The Droplet stays live through the run's hours and an hour of
+	// teardown, so no sweep deletes it under a run.
+	if want := start.Add(5 * time.Hour); !spec.Expires.Equal(want) {
+		t.Fatalf("expires %s, want %s", spec.Expires, want)
+	}
+	if f.report.RunID != "test-run" {
+		t.Fatalf("report run ID %q", f.report.RunID)
 	}
 	if len(f.host.removed) != len(samples) {
 		t.Fatalf("removed %d of %d containers", len(f.host.removed), len(samples))
@@ -402,8 +467,8 @@ func TestRunRefusesTheWrongAccount(t *testing.T) {
 	if !errors.Is(err, ErrWrongAccount) || err.Error() != "this token isn't the qualification account" {
 		t.Fatalf("err = %v", err)
 	}
-	if len(f.machines.created) != 0 || f.machines.sweeps != 0 {
-		t.Fatalf("created %d, swept %d times", len(f.machines.created), f.machines.sweeps)
+	if len(f.machines.created) != 0 || len(f.machines.sweeps) != 0 {
+		t.Fatalf("created %d, swept %d times", len(f.machines.created), len(f.machines.sweeps))
 	}
 }
 
@@ -413,7 +478,7 @@ func TestRunRefusesWithoutConfirm(t *testing.T) {
 	if _, err := Run(t.Context(), f.deps); !errors.Is(err, ErrNotConfirmed) {
 		t.Fatalf("err = %v", err)
 	}
-	if f.spend.reads != 0 || len(f.machines.created) != 0 || f.machines.sweeps != 0 {
+	if f.spend.reads != 0 || len(f.machines.created) != 0 || len(f.machines.sweeps) != 0 {
 		t.Fatal("touched the account without --confirm")
 	}
 }
@@ -428,8 +493,9 @@ func TestRunRefusesOverTheCap(t *testing.T) {
 	if !errors.Is(err, ErrOverCap) || !errors.As(err, &over) || over.Cap != "monthly" {
 		t.Fatalf("err = %v", err)
 	}
-	// 140 + 3.39 x 4 = 153.56, past 150.
-	if !strings.Contains(err.Error(), "$13.56") || !strings.Contains(err.Error(), "$153.56") || !strings.Contains(err.Error(), "$150.00") {
+	// 140 + 3.39 x (4 hours + half an hour of teardown) is about 155.26,
+	// past 150.
+	if over.SpentUSD != 140 || over.Hours != 4.5 || over.HourlyUSD != 3.39 || !strings.Contains(err.Error(), "from $140.00 to $155.2") || !strings.Contains(err.Error(), "past the $150.00 cap") {
 		t.Fatalf("the refusal doesn't give the numbers: %v", err)
 	}
 	if len(f.machines.created) != 0 {
@@ -439,7 +505,7 @@ func TestRunRefusesOverTheCap(t *testing.T) {
 		t.Fatalf("report: %+v", f.report)
 	}
 
-	// The per-run cap holds too: 3.39 x 4 is fine under 25, 7.00 x 4 isn't.
+	// The per-run cap holds too: 7.00 x 4.5 is past 25.
 	f = newRun(t)
 	f.deps.Offers = fakeOffers{offer: Offer{Size: "gpu-l40sx1-48gb", Image: "gpu-h100x1-base", GPUs: 1, HourlyUSD: 7}}
 	if _, err := Run(t.Context(), f.deps); !errors.As(err, &over) || over.Cap != "per-run" || len(f.machines.created) != 0 {
@@ -471,9 +537,7 @@ func TestRunStopsAtTheCapMidway(t *testing.T) {
 	if len(f.report.NotRun) != len(samples)-2 || f.report.Stopped == "" {
 		t.Fatalf("not run %d of %d, stopped %q", len(f.report.NotRun), len(samples)-2, f.report.Stopped)
 	}
-	if !slices.Equal(f.machines.deleted, []string{"4242"}) {
-		t.Fatalf("deleted %v", f.machines.deleted)
-	}
+	f.tornDown(t)
 }
 
 func TestRunStopsWhenTheTickerSeesTheCap(t *testing.T) {
@@ -500,9 +564,10 @@ func TestRunStopsWhenTheTickerSeesTheCap(t *testing.T) {
 	if len(f.report.NotRun) != len(f.samples()) {
 		t.Fatalf("not run %d, want every sample: a stopped sample is never failed", len(f.report.NotRun))
 	}
-	if len(f.host.removed) != 1 || !slices.Equal(f.machines.deleted, []string{"4242"}) {
-		t.Fatalf("removed %d, deleted %v", len(f.host.removed), f.machines.deleted)
+	if len(f.host.removed) != 1 {
+		t.Fatalf("removed %d", len(f.host.removed))
 	}
+	f.tornDown(t)
 }
 
 func TestBalanceFailureRefuses(t *testing.T) {
@@ -527,7 +592,7 @@ func TestRunAlwaysTearsDown(t *testing.T) {
 		if calls == 2 {
 			panic("probe bug")
 		}
-		return Probe(ctx, client, e, c)
+		return Probe(ctx, client, e, c, nil)
 	}
 	results, err := Run(t.Context(), f.deps)
 	if err == nil || !strings.Contains(err.Error(), "crashed") {
@@ -539,25 +604,29 @@ func TestRunAlwaysTearsDown(t *testing.T) {
 	if len(f.report.Results) != 1 {
 		t.Fatalf("report has %d results", len(f.report.Results))
 	}
-	if !slices.Equal(f.machines.deleted, []string{"4242"}) || len(f.host.removed) != 2 {
-		t.Fatalf("deleted %v, removed %d", f.machines.deleted, len(f.host.removed))
+	if len(f.host.removed) != 2 {
+		t.Fatalf("removed %d", len(f.host.removed))
 	}
+	f.tornDown(t)
 
 	// A cancel mid-sample tears down too, and records nothing as failed.
 	f = newRun(t)
 	ctx, cancel := context.WithCancel(t.Context())
 	f.host.onStart = func(int) { cancel() }
 	results, err = Run(ctx, f.deps)
-	if err == nil || len(results) != 0 || !slices.Equal(f.machines.deleted, []string{"4242"}) {
-		t.Fatalf("err = %v, results %d, deleted %v", err, len(results), f.machines.deleted)
+	if err == nil || len(results) != 0 {
+		t.Fatalf("err = %v, results %d", err, len(results))
 	}
+	f.tornDown(t)
 
-	// A Create that fails still sweeps for what it may have made.
+	// A Create that fails still deletes what it may have made, by the
+	// run's tag.
 	f = newRun(t)
 	f.machines.createErr = errors.New("digitalocean timed out")
-	if _, err = Run(t.Context(), f.deps); err == nil || f.machines.sweeps != 2 {
-		t.Fatalf("err = %v, swept %d times", err, f.machines.sweeps)
+	if _, err = Run(t.Context(), f.deps); err == nil {
+		t.Fatal("a failed Create didn't fail the run")
 	}
+	f.tornDown(t)
 }
 
 func TestResultsNeverCarrySecrets(t *testing.T) {
@@ -632,6 +701,76 @@ func TestNeverTestedWithoutAPassingProbe(t *testing.T) {
 	if err != nil || len(results) != 0 || len(f.report.NotRun) != len(f.samples()) {
 		t.Fatalf("err = %v, %d results, %d not run", err, len(results), len(f.report.NotRun))
 	}
+}
+
+func TestTransportErrorsAreNotRun(t *testing.T) {
+	notRun := func(t *testing.T, f *runFixture, want string) {
+		t.Helper()
+		results, err := Run(t.Context(), f.deps)
+		if err != nil || len(results) != 0 {
+			t.Fatalf("err = %v, results %+v; a transport failure is never a result", err, results)
+		}
+		if len(f.report.NotRun) != len(f.samples()) {
+			t.Fatalf("not run %d of %d", len(f.report.NotRun), len(f.samples()))
+		}
+		for _, s := range f.report.NotRun {
+			if !strings.Contains(s.Reason, want) {
+				t.Fatalf("not run because %q, want %q", s.Reason, want)
+			}
+		}
+	}
+
+	t.Run("the probe's connection drops", func(t *testing.T) {
+		f := newRun(t)
+		f.host.handle = hangUp
+		notRun(t, f, "lost the connection to the engine")
+	})
+	t.Run("a probe's dial fails", func(t *testing.T) {
+		f := newRun(t)
+		f.deps.Probe = func(context.Context, *http.Client, registry.Entry, *Container) (string, error) {
+			return "", &net.OpError{Op: "dial", Net: "tcp", Err: errors.New("ssh: channel open failed")}
+		}
+		notRun(t, f, "lost the connection to the engine")
+	})
+	t.Run("the container's state can't be read", func(t *testing.T) {
+		f := newRun(t)
+		f.host.unhealthy, f.host.stateErr = true, errors.New("ssh: disconnected")
+		f.deps.StartTimeout = 20 * time.Millisecond
+		notRun(t, f, "ssh: disconnected")
+	})
+	t.Run("the log can't be read", func(t *testing.T) {
+		f := newRun(t)
+		f.host.exited, f.host.logsErr = true, errors.New("ssh: disconnected")
+		notRun(t, f, "its log couldn't be read")
+	})
+}
+
+func TestEngineThatNeverGetsHealthyFails(t *testing.T) {
+	f := newRun(t)
+	f.host.unhealthy = true
+	f.deps.StartTimeout = 20 * time.Millisecond
+	results, err := Run(t.Context(), f.deps)
+	if err != nil || len(results) != len(f.samples()) {
+		t.Fatalf("err = %v, %d results", err, len(results))
+	}
+	for _, res := range results {
+		if res.Outcome != registry.OutcomeFailed || !strings.Contains(res.Detail, "didn't answer /health within 20ms") {
+			t.Fatalf("result %+v", res)
+		}
+	}
+}
+
+func TestNeverTestedOnTheWrongGPU(t *testing.T) {
+	f := newRun(t)
+	f.host.gpus = []string{"nvidia-l4"}
+	results, err := Run(t.Context(), f.deps)
+	if err == nil || !strings.Contains(err.Error(), `["nvidia-l4"]`) || len(results) != 0 || len(f.host.started) != 0 {
+		t.Fatalf("err = %v, %d results, %d started", err, len(results), len(f.host.started))
+	}
+	if len(f.report.NotRun) != len(f.samples()) {
+		t.Fatalf("not run %d", len(f.report.NotRun))
+	}
+	f.tornDown(t)
 }
 
 type failingHost struct{ *fakeHost }
@@ -739,37 +878,50 @@ func TestCloudInitPinsTheHostKey(t *testing.T) {
 	if _, err := ssh.ParsePrivateKey([]byte(doc.Keys["ed25519_private"])); err != nil {
 		t.Fatal(err)
 	}
-	if len(doc.RunCmd) == 0 || !slices.Equal(doc.RunCmd[0], []string{"bash", "-c", cloudinfra.NVIDIAToolkitScript}) {
+	// Containers lose the metadata service (which serves this document)
+	// before Docker is installed or started, and again after the toolkit.
+	toolkit := slices.IndexFunc(doc.RunCmd, func(c []string) bool { return slices.Equal(c, []string{"bash", "-c", cloudinfra.NVIDIAToolkitScript}) })
+	docker := slices.IndexFunc(doc.RunCmd, func(c []string) bool { return slices.Equal(c, []string{"systemctl", "enable", "--now", "docker"}) })
+	block := []string{"bash", "-c", blockMetadata}
+	if toolkit < 1 || docker < toolkit || !slices.Equal(doc.RunCmd[0], block) || !slices.Equal(doc.RunCmd[toolkit+1], block) {
 		t.Fatalf("runcmd %q", doc.RunCmd)
+	}
+	if !strings.Contains(blockMetadata, "DOCKER-USER -d 169.254.169.254 -j REJECT") {
+		t.Fatalf("block %q", blockMetadata)
 	}
 }
 
 func TestGuard(t *testing.T) {
 	cfg := testConfig()
-	spend := &fakeSpend{mtd: "130.00"}
 	cases := []struct {
 		name          string
+		mtd           string
 		hourly, hours float64
 		spent         float64
 		want          error
 	}{
-		{"fits", 4.41, 4, 0, nil},
-		{"exactly the monthly cap", 5, 4, 0, nil},
-		{"a cent past the monthly cap", 5.0025, 4, 0, ErrOverCap},
-		{"exactly the run cap", 1, 5, 20, nil},
-		{"past the run cap", 1, 5, 20.01, ErrOverCap},
-		{"unknown price", 0, 4, 0, ErrSpendUnknown},
-		{"no time left", 1, 0, 0, ErrOverCap},
+		{"fits", "130.00", 4.41, 4, 0, nil},
+		{"exactly the monthly cap", "130.00", 5, 4, 0, nil},
+		{"a cent past the monthly cap", "130.00", 5.0025, 4, 0, ErrOverCap},
+		{"exactly the run cap", "0.00", 1, 5, 20, nil},
+		{"past the run cap", "0.00", 1, 5, 20.01, ErrOverCap},
+		// The balance never holds the run in progress, so its spend so far
+		// counts toward the month too: 130 + 19 + 1 is 150, 130 + 19.01 + 1
+		// isn't.
+		{"this run's spend at the monthly cap", "130.00", 1, 1, 19, nil},
+		{"this run's spend past the monthly cap", "130.00", 1, 1, 19.01, ErrOverCap},
+		{"unknown price", "0.00", 0, 4, 0, ErrSpendUnknown},
+		{"no time left", "0.00", 1, 0, 0, ErrOverCap},
 	}
 	for _, c := range cases {
-		err := Guard(t.Context(), spend, cfg, c.hourly, c.hours, c.spent)
+		err := Guard(t.Context(), &fakeSpend{mtd: c.mtd}, cfg, c.hourly, c.hours, c.spent)
 		if (c.want == nil) != (err == nil) || (c.want != nil && !errors.Is(err, c.want)) {
 			t.Errorf("%s: err = %v, want %v", c.name, err, c.want)
 		}
 	}
 	bad := cfg
 	bad.MonthlyCapUSD = ""
-	if err := Guard(t.Context(), spend, bad, 1, 1, 0); !errors.Is(err, ErrInvalidConfig) {
+	if err := Guard(t.Context(), &fakeSpend{mtd: "0"}, bad, 1, 1, 0); !errors.Is(err, ErrInvalidConfig) {
 		t.Fatalf("an empty cap: err = %v", err)
 	}
 }
@@ -830,10 +982,19 @@ func (f *fakeDigitalOcean) handler(w http.ResponseWriter, r *http.Request) {
 	}
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == "/v2/droplets":
-		if r.URL.Query().Get("tag_name") != Tag {
-			f.t.Errorf("listed Droplets without the tag filter: %s", r.URL.RawQuery)
+		tag := r.URL.Query().Get("tag_name")
+		if tag == "" {
+			f.t.Errorf("listed Droplets without a tag filter: %s", r.URL.RawQuery)
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"droplets": f.droplets})
+		// A leaky filter: the untagged Droplet 4 always comes back, and
+		// the job has to drop it itself.
+		out := []droplet{}
+		for _, d := range f.droplets {
+			if slices.Contains(d.Tags, tag) || d.ID == 4 {
+				out = append(out, d)
+			}
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{"droplets": out})
 	case r.Method == http.MethodGet && r.URL.Path == "/v2/account/keys":
 		_ = json.NewEncoder(w).Encode(map[string]any{"ssh_keys": f.keys})
 	case r.Method == http.MethodDelete:
@@ -895,6 +1056,102 @@ func TestSweepDeletesEverythingTagged(t *testing.T) {
 	_, err = NewDigitalOceanMachines(srv.URL, "wrong-token").Sweep(t.Context(), now, false)
 	if err == nil || strings.Contains(err.Error(), "wrong-token") {
 		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestDeleteRunTouchesOnlyItsRun(t *testing.T) {
+	now := time.Date(2026, 11, 9, 6, 0, 0, 0, time.UTC)
+	future := strconv.FormatInt(now.Add(time.Hour).Unix(), 10)
+	f := &fakeDigitalOcean{t: t,
+		droplets: []droplet{
+			{ID: 1, Name: "lpq-mine", Tags: []string{Tag, "lpq-run-mine", "lpq-expires-" + future}},
+			{ID: 2, Name: "lpq-other", Tags: []string{Tag, "lpq-run-other", "lpq-expires-" + future}},
+			{ID: 4, Name: "someone-elses", Tags: []string{"lpq-run-mine"}},
+		},
+		keys: []sshKey{{ID: 11, Name: "lpq-mine"}, {ID: 12, Name: "lpq-other"}},
+	}
+	srv := httptest.NewServer(http.HandlerFunc(f.handler))
+	t.Cleanup(srv.Close)
+	m := NewDigitalOceanMachines(srv.URL, "do-token")
+	if _, err := m.DeleteRun(t.Context(), "mine"); err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"/v2/droplets/1", "/v2/account/keys/11"}; !slices.Equal(f.deleted, want) {
+		t.Fatalf("deleted %v, want %v", f.deleted, want)
+	}
+	live, err := m.Live(t.Context(), now)
+	if err != nil || len(live) != 2 || !strings.Contains(live[1], "lpq-other") {
+		t.Fatalf("live %v, err %v", live, err)
+	}
+	if live, _ = m.Live(t.Context(), now.Add(2*time.Hour)); len(live) != 0 {
+		t.Fatalf("expired Droplets read as live: %v", live)
+	}
+}
+
+func TestRunRefusesWhileAnotherRunIsLive(t *testing.T) {
+	f := newRun(t)
+	f.machines.live = []string{"Droplet 9 (lpq-other)"}
+	_, err := Run(t.Context(), f.deps)
+	if !errors.Is(err, ErrAnotherRun) || !strings.Contains(err.Error(), "another run is live") || !strings.Contains(err.Error(), "lpq-other") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(f.machines.created) != 0 || len(f.machines.deletedRun) != 0 || !slices.Equal(f.machines.sweeps, []bool{true}) {
+		t.Fatalf("created %d, deleted runs %v, sweeps %v; the live run must be left alone", len(f.machines.created), f.machines.deletedRun, f.machines.sweeps)
+	}
+}
+
+func TestRunRefusesAStaleBalance(t *testing.T) {
+	f := newRun(t)
+	f.spend.generatedAt = time.Date(2026, 11, 9, 0, 0, 0, 0, time.UTC)
+	f.spend.lastDeleted = time.Date(2026, 11, 9, 10, 30, 0, 0, time.UTC)
+	_, err := Run(t.Context(), f.deps)
+	if !errors.Is(err, ErrStaleBalance) || len(f.machines.created) != 0 {
+		t.Fatalf("err = %v, created %d", err, len(f.machines.created))
+	}
+	// A balance generated after the last Droplet went is current.
+	f = newRun(t)
+	f.spend.generatedAt = time.Date(2026, 11, 9, 12, 0, 0, 0, time.UTC)
+	f.spend.lastDeleted = time.Date(2026, 11, 9, 10, 30, 0, 0, time.UTC)
+	if _, err = Run(t.Context(), f.deps); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestDigitalOceanSpend(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /v2/customers/my/balance", func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"month_to_date_usage":"41.27","generated_at":"2026-11-09T05:00:00Z"}`)
+	})
+	mux.HandleFunc("GET /v2/actions", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("page") == "1" {
+			fmt.Fprint(w, `{"actions":[{"type":"create","resource_type":"droplet","started_at":"2026-11-09T07:00:00Z","completed_at":"2026-11-09T07:01:00Z"},
+				{"type":"destroy","resource_type":"droplet","started_at":"2026-11-02T09:00:00Z","completed_at":"2026-11-02T09:01:00Z"}],
+				"links":{"pages":{"next":"page 2"}}}`)
+			return
+		}
+		fmt.Fprint(w, `{"actions":[{"type":"destroy","resource_type":"droplet","started_at":"2026-11-08T10:00:00Z","completed_at":null},
+			{"type":"destroy","resource_type":"volume","started_at":"2026-11-09T11:00:00Z","completed_at":"2026-11-09T11:00:00Z"}]}`)
+	})
+	mux.HandleFunc("GET /v2/account", func(w http.ResponseWriter, _ *http.Request) {
+		fmt.Fprint(w, `{"account":{"uuid":"user-uuid","team":{"uuid":"team-uuid"}}}`)
+	})
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	s := NewDigitalOceanSpend(srv.URL, "do-token")
+	if mtd, err := s.MonthToDateUSD(t.Context()); err != nil || mtd != "41.27" {
+		t.Fatalf("mtd %q, %v", mtd, err)
+	}
+	if at, err := s.BalanceGeneratedAt(t.Context()); err != nil || !at.Equal(time.Date(2026, 11, 9, 5, 0, 0, 0, time.UTC)) {
+		t.Fatalf("generated %s, %v", at, err)
+	}
+	if at, err := s.LastDropletDeleted(t.Context()); err != nil || !at.Equal(time.Date(2026, 11, 8, 10, 0, 0, 0, time.UTC)) {
+		t.Fatalf("last deleted %s, %v", at, err)
+	}
+	if id, err := s.AccountUUID(t.Context()); err != nil || id != "team-uuid" {
+		t.Fatalf("account %q, %v", id, err)
+	}
+	if fmt.Sprint(s) != "DigitalOcean spend" {
+		t.Fatal("the spend reader prints more than its name")
 	}
 }
 
@@ -1001,14 +1258,14 @@ func TestProbesPassAndFail(t *testing.T) {
 	for _, e := range []registry.Entry{chat, embedding, rerank, speech} {
 		probe := *c
 		probe.ServedName = e.ID
-		detail, err := Probe(t.Context(), healthy, entry(e.ID), &probe)
+		detail, err := Probe(t.Context(), healthy, entry(e.ID), &probe, testClip(t, 2))
 		if err != nil || detail == "" {
 			t.Errorf("%s (%s): detail %q, err %v", e.ID, e.Tasks[0], detail, err)
 		}
 	}
 	chatC := *c
 	chatC.ServedName = chat.ID
-	if detail, _ := Probe(t.Context(), healthy, chat, &chatC); !strings.HasPrefix(detail, "first token ") || !strings.HasSuffix(detail, " tokens/s") {
+	if detail, _ := Probe(t.Context(), healthy, chat, &chatC, nil); !strings.HasPrefix(detail, "first token ") || !strings.HasSuffix(detail, " tokens/s") {
 		t.Errorf("chat detail %q", detail)
 	}
 
@@ -1034,16 +1291,89 @@ func TestProbesPassAndFail(t *testing.T) {
 	for name, f := range failing {
 		probe := *c
 		probe.ServedName = f.e.ID
-		if detail, err := Probe(t.Context(), serve(f.h), f.e, &probe); err == nil {
+		detail, err := Probe(t.Context(), serve(f.h), f.e, &probe, testClip(t, 2))
+		if err == nil {
 			t.Errorf("%s passed: %q", name, detail)
+		} else if IsTransport(err) {
+			t.Errorf("%s: the engine answered, but the error reads as a transport failure: %v", name, err)
+		}
+	}
+
+	// No answer at all is a transport failure, never the engine's.
+	for _, e := range []registry.Entry{chat, embedding} {
+		probe := *c
+		probe.ServedName = e.ID
+		_, err := Probe(t.Context(), serve(hangUp), e, &probe, nil)
+		if err == nil || !IsTransport(err) {
+			t.Errorf("%s: a hung-up connection gave %v", e.ID, err)
+		}
+	}
+	probe := *c
+	probe.ServedName = speech.ID
+	if _, err := Probe(t.Context(), healthy, speech, &probe, nil); err == nil || !strings.Contains(err.Error(), SpeechClipPath) {
+		t.Errorf("a speech probe without a clip: %v", err)
+	}
+}
+
+// testClip is seconds of silence as a 16 kHz mono 16-bit WAV.
+func testClip(t *testing.T, seconds float64) []byte {
+	t.Helper()
+	return wav(1, 16000, 16, int(seconds*32000))
+}
+
+func wav(channels, rate, bits uint16, dataBytes int) []byte {
+	le16 := func(v uint16) []byte { return []byte{byte(v), byte(v >> 8)} }
+	le32 := func(v uint32) []byte { return []byte{byte(v), byte(v >> 8), byte(v >> 16), byte(v >> 24)} }
+	fmtChunk := append(append(append(append(append(le16(1), le16(channels)...), le32(uint32(rate))...), le32(uint32(rate)*uint32(channels)*uint32(bits)/8)...), le16(channels*bits/8)...), le16(bits)...)
+	body := append([]byte("WAVEfmt "), le32(uint32(len(fmtChunk)))...)
+	body = append(body, fmtChunk...)
+	body = append(append(body, "data"...), le32(uint32(dataBytes))...)
+	body = append(body, make([]byte, dataBytes)...)
+	return append(append([]byte("RIFF"), le32(uint32(len(body)))...), body...)
+}
+
+func TestCheckSpeechClip(t *testing.T) {
+	if err := CheckSpeechClip(testClip(t, 2.5)); err != nil {
+		t.Fatal(err)
+	}
+	for name, clip := range map[string][]byte{
+		"too long": testClip(t, 6),
+		"stereo":   wav(2, 16000, 16, 32000),
+		"44.1 kHz": wav(1, 44100, 16, 32000),
+		"8-bit":    wav(1, 16000, 8, 16000),
+		"not WAV":  []byte("ID3 an mp3"),
+		"silent":   wav(1, 16000, 16, 0),
+	} {
+		if err := CheckSpeechClip(clip); err == nil {
+			t.Errorf("%s: accepted", name)
 		}
 	}
 }
 
-func TestSpeechRecordingIsShort(t *testing.T) {
-	// A 16 kHz mono 16-bit WAV: 32000 bytes a second, plus the header.
-	if len(speechWAV) < 1000 || string(speechWAV[:4]) != "RIFF" || string(speechWAV[8:12]) != "WAVE" || len(speechWAV) > 5*32000+1024 {
-		t.Fatalf("speech.wav is %d bytes", len(speechWAV))
+func TestSpeechSkipsWithoutAClip(t *testing.T) {
+	r := registry.Default()
+	var speech registry.Entry
+	for _, e := range r.Entries() {
+		if e.Tasks[0] == registry.TaskSpeech {
+			speech = e
+			break
+		}
+	}
+	q := speech.Quantizations[0]
+	d := RunDeps{Registry: r, RunID: "test-run", Poll: time.Millisecond}
+	host := newFakeHost(t, r)
+	_, why := d.sample(t.Context(), host, Sample{Entry: speech.ID, Quantization: q.ID, GPUKind: "nvidia-l40s", GPUs: 1})
+	if !strings.Contains(why, "add a recorded speech clip at "+SpeechClipPath) {
+		t.Fatalf("not run because %q", why)
+	}
+	if len(host.started) != 0 {
+		t.Fatal("started an engine it couldn't probe")
+	}
+	// With a clip it runs and passes.
+	d.Speech = testClip(t, 2)
+	res, why := d.sample(t.Context(), host, Sample{Entry: speech.ID, Quantization: q.ID, GPUKind: "nvidia-l40s", GPUs: 1})
+	if why != "" || res.Outcome != registry.OutcomePassed {
+		t.Fatalf("not run %q, result %+v", why, res)
 	}
 }
 

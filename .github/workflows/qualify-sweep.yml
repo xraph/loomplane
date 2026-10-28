@@ -1,10 +1,16 @@
 name: Sweep qualification Droplets
 
-# Every day, delete every Droplet tagged loomplane-qualify and every SSH key
-# named lpq-* in the qualification account, so nothing a crashed or
-# cancelled qualification run left keeps billing. It creates nothing and
-# spends nothing. It shares the qualification job's concurrency group, so
-# it never runs while a qualification run is using its Droplet.
+# Every day, delete the Droplets tagged loomplane-qualify whose run has
+# expired, and their lpq-* SSH keys, so nothing a crashed or cancelled
+# qualification run left keeps billing. A run's Droplet expires an hour
+# after its run's time limit, so this never deletes one a run still uses.
+#
+# It creates nothing and spends nothing, so it has an environment of its
+# own, model-qualification-sweep: no required reviewer, deployment branches
+# main only, and one secret, QUALIFY_DO_SWEEP_TOKEN, a DigitalOcean token
+# for the qualification account with droplet:read, droplet:delete,
+# ssh_key:read, ssh_key:delete and account:read, and no create scope. Its
+# concurrency group is its own, so it never waits on a run or holds one up.
 
 on:
   schedule:
@@ -15,26 +21,31 @@ permissions:
   contents: read
 
 concurrency:
-  group: model-qualification
+  group: model-qualification-sweep
   cancel-in-progress: false
 
 jobs:
   sweep:
-    name: Delete leftover qualification Droplets
-    if: ${{ vars.QUALIFY_DO_ACCOUNT_UUID != '' && github.event_name != 'pull_request' }}
+    name: Delete expired qualification Droplets
+    if: ${{ vars.QUALIFY_DO_ACCOUNT_UUID != '' && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
-    environment: model-qualification
+    environment: model-qualification-sweep
     timeout-minutes: 20
     env:
       QUALIFY_DO_ACCOUNT_UUID: ${{ vars.QUALIFY_DO_ACCOUNT_UUID }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
 
-      - name: Delete everything the qualification job tagged
+      - name: Build the qualification job
+        run: go build -o "$RUNNER_TEMP/loomplane-qualify" ./cmd/loomplane-qualify
+
+      - name: Delete expired Droplets and their SSH keys
         env:
-          QUALIFY_DO_TOKEN: ${{ secrets.QUALIFY_DO_TOKEN }}
-        run: go run ./cmd/loomplane-qualify sweep --config .github/qualification.yaml --only-expired=false
+          QUALIFY_DO_TOKEN: ${{ secrets.QUALIFY_DO_SWEEP_TOKEN }}
+        run: exec "$RUNNER_TEMP/loomplane-qualify" sweep --config .github/qualification.yaml --only-expired

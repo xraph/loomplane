@@ -4,20 +4,23 @@ name: Qualify models
 # GPU Droplet, probes each one, deletes the Droplet and opens a pull request
 # with what passed and failed. It spends real money, so:
 #
-# - it runs only on the schedule or by hand, never on a pull request, so a
-#   fork's code never reaches the token;
-# - the job needs the model-qualification environment, whose required
-#   reviewer approves every run, and which holds the secrets
-#   QUALIFY_DO_TOKEN (a DigitalOcean token for the qualification account
-#   alone) and QUALIFY_HF_TOKEN (a read-only Hugging Face token for gated
-#   weights);
+# - it runs only on the schedule or by hand, from main, never on a pull
+#   request, so no branch or fork's code reaches the token;
+# - the qualify job needs the model-qualification environment, whose
+#   required reviewer approves every run and whose deployment branches are
+#   main only. It holds QUALIFY_DO_TOKEN (a DigitalOcean token for the
+#   qualification account alone) and QUALIFY_HF_TOKEN (a read-only Hugging
+#   Face token for gated weights);
 # - the QUALIFY_DO_ACCOUNT_UUID repository variable names that account, the
 #   job refuses a token from any other, and a repository without it (a fork)
 #   skips the job;
 # - the monthly and per-run caps in .github/qualification.yaml are checked
 #   before the Droplet starts, before every sample and every five minutes;
 # - the Droplet is deleted however the run ends, and a sweep afterwards
-#   deletes anything tagged loomplane-qualify that's left.
+#   deletes any expired leftovers.
+#
+# The publish job holds no DigitalOcean secret. It takes the results from
+# the qualify job and opens the pull request.
 
 on:
   schedule:
@@ -27,8 +30,6 @@ on:
 permissions:
   contents: read
 
-# One qualification job at a time, this one or the daily sweep, so a sweep
-# never deletes a running job's Droplet.
 concurrency:
   group: model-qualification
   cancel-in-progress: false
@@ -36,49 +37,92 @@ concurrency:
 jobs:
   qualify:
     name: Qualify a sample of models
-    if: ${{ vars.QUALIFY_DO_ACCOUNT_UUID != '' && github.event_name != 'pull_request' }}
+    if: ${{ vars.QUALIFY_DO_ACCOUNT_UUID != '' && github.ref == 'refs/heads/main' }}
     runs-on: ubuntu-latest
     environment: model-qualification
     timeout-minutes: 330
     permissions:
-      contents: write
-      pull-requests: write
+      contents: read
+    outputs:
+      results: ${{ steps.results.outputs.present }}
     env:
       QUALIFY_DO_ACCOUNT_UUID: ${{ vars.QUALIFY_DO_ACCOUNT_UUID }}
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
 
-      - uses: actions/setup-go@v7
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
 
+      # Built first and started with exec, so a cancel's SIGINT reaches the
+      # job itself and its own teardown deletes the Droplet.
+      - name: Build the qualification job
+        run: go build -o "$RUNNER_TEMP/loomplane-qualify" ./cmd/loomplane-qualify
+
       - name: Qualify this week's sample
+        timeout-minutes: 300
         env:
           QUALIFY_DO_TOKEN: ${{ secrets.QUALIFY_DO_TOKEN }}
           QUALIFY_HF_TOKEN: ${{ secrets.QUALIFY_HF_TOKEN }}
-        run: go run ./cmd/loomplane-qualify run --config .github/qualification.yaml --confirm --out results.json
+        run: exec "$RUNNER_TEMP/loomplane-qualify" run --config .github/qualification.yaml --confirm --out results.json
 
-      - name: Delete anything the run left
+      - name: Delete expired leftovers
         if: ${{ always() }}
         env:
           QUALIFY_DO_TOKEN: ${{ secrets.QUALIFY_DO_TOKEN }}
-        run: go run ./cmd/loomplane-qualify sweep --config .github/qualification.yaml
+        run: exec "$RUNNER_TEMP/loomplane-qualify" sweep --config .github/qualification.yaml --only-expired
+
+      - name: Note whether there are results
+        id: results
+        if: ${{ always() }}
+        run: |
+          if [ -f results.json ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: ${{ always() && steps.results.outputs.present == 'true' }}
+        with:
+          name: qualification-results
+          path: results.json
+          retention-days: 30
+          if-no-files-found: error
+
+  publish:
+    name: Open a pull request with the results
+    needs: qualify
+    if: ${{ !cancelled() && needs.qualify.outputs.results == 'true' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: qualification-results
 
       - name: Merge the results
-        id: merge
-        if: ${{ !cancelled() && hashFiles('results.json') != '' }}
         run: |
           go run ./cmd/loomplane-qualify merge --summary summary.md results.json
           go test ./internal/models/registry -count=1
 
-      - name: Open a pull request with the results
-        if: ${{ !cancelled() && steps.merge.outcome == 'success' }}
+      - name: Open the pull request
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           date=$(date -u +%Y-%m-%d)
           kind=$(jq -r .kind results.json)
-          branch="qualification/${date}"
+          run_id=$(jq -r .run_id results.json)
+          branch="qualification/${date}-${run_id}"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git switch -c "$branch"

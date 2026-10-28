@@ -207,7 +207,8 @@ func Summary(rep *Report) string {
 	section("Passed", passed)
 	section("Failed", failed)
 	section("Not run", notRun)
-	b.WriteString("Only passed results make a fit tested, and only on the revision and engine release they ran. Failed results stop the fit being offered on that GPU.\n")
+	b.WriteString("Only passed results make a fit tested, and only on the revision and engine release they ran. Failed results stop the fit being offered on that GPU.\n\n")
+	b.WriteString("CPU results (TEI, and llama.cpp on CPU) ran on the GPU Droplet's host CPUs, inside the CPU and memory limits their model kind sets, not on a CPU-only server.\n")
 	return b.String()
 }
 

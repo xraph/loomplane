@@ -43,9 +43,9 @@ type Config struct {
 // account's UUID when the config file leaves account_uuid empty.
 const AccountEnv = "QUALIFY_DO_ACCOUNT_UUID"
 
-// maxRunHours keeps a run inside one GitHub Actions job, which ends at six
-// hours, with time left for the sweep and the pull request.
-const maxRunHours = 5.0
+// maxRunHours keeps a run, plus its teardown, inside the workflow step's
+// 300 minute limit, so the step after it still has time to sweep.
+const maxRunHours = 4.5
 
 // ErrInvalidConfig is a qualification config that breaks a rule.
 var ErrInvalidConfig = errors.New("invalid qualification config")

@@ -48,8 +48,24 @@ func TestPlanSpendsNothing(t *testing.T) {
 		t.Fatalf("code %d: %s", code, stderr.String())
 	}
 	out := stdout.String()
-	if !strings.Contains(out, "runs on nvidia-h100-80gb") || !strings.Contains(out, "Worst case: $17.64") || !strings.Contains(out, "Caps: $150.00 a month, $25.00 a run.") {
+	// 4.41 an hour for 4 hours plus half an hour of teardown.
+	if !strings.Contains(out, "runs on nvidia-h100-80gb") || !strings.Contains(out, "Worst case: $19.8") || !strings.Contains(out, "for 4.5 hours with teardown") ||
+		!strings.Contains(out, "Caps: $150.00 a month, $25.00 a run.") {
 		t.Fatalf("plan:\n%s", out)
+	}
+}
+
+func TestReadSpeech(t *testing.T) {
+	dir := t.TempDir()
+	if clip, err := readSpeech(filepath.Join(dir, "speech.wav")); err != nil || clip != nil {
+		t.Fatalf("a missing clip: %v, %d bytes", err, len(clip))
+	}
+	bad := filepath.Join(dir, "bad.wav")
+	if err := os.WriteFile(bad, []byte("not audio"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readSpeech(bad); err == nil {
+		t.Fatal("a clip that isn't a WAV was accepted")
 	}
 }
 
