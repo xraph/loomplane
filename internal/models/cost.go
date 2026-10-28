@@ -22,6 +22,10 @@ const monthlyHours = 730
 
 // Cost is what a model's GPUs cost per hour. Money is decimal text and an
 // unknown price is an empty string, never "0.00".
+//
+// Source "cpu" with HourlyUSD "0.00" doesn't mean the model is free. It
+// means the model runs on CPU and its cost is part of its server's, so a
+// page shows that sentence, never "$0.00".
 type Cost struct {
 	HourlyUSD  string `json:"hourly_usd"` // four places, "" when unknown
 	Known      bool   `json:"known"`
@@ -34,6 +38,11 @@ type Cost struct {
 // HourlyCost attributes the GPU host's price by the share of its GPUs the
 // model holds. An override wins. A model that holds no GPU runs on CPU, and
 // its cost is part of its server's. A host without a known price is unknown.
+//
+// Pass gpusHeld 0 only for a CPU engine (TEI, or llama.cpp on CPU). A GPU
+// model whose held count isn't known yet, say one that isn't scheduled,
+// has an unknown cost (Source "unknown"). Don't call this with 0 for it:
+// the result would say Source "cpu" and "0.00", which looks free.
 //
 // The target's float price is converted once, here, to whole
 // ten-thousandths of a dollar, rounding half away from zero, and everything
