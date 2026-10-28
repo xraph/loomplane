@@ -314,6 +314,9 @@ func (m *memDeployments) Update(_ context.Context, d *Deployment) error {
 	// As in Postgres, accrual and budget notices aren't Update's to write.
 	d.Month, d.MonthCostUSD, d.AccruedAt = old.Month, old.MonthCostUSD, old.AccruedAt
 	d.AlertedProjected, d.AlertedCrossed = old.AlertedProjected, old.AlertedCrossed
+	if !sameBudget(old.MonthlyBudgetUSD, d.MonthlyBudgetUSD) {
+		d.AlertedProjected, d.AlertedCrossed = "", ""
+	}
 	d.Revision++
 	if m.now != nil {
 		d.UpdatedAt = m.now()
@@ -332,6 +335,17 @@ func (m *memDeployments) Delete(_ context.Context, org, project, env, resource s
 	}
 	delete(m.rows, k)
 	return nil
+}
+
+// sameBudget compares budgets as Postgres compares NUMERIC: "500" is
+// "500.00", and "" is none.
+func sameBudget(a, b string) bool {
+	if a == "" || b == "" {
+		return a == b
+	}
+	x, xerr := budgetAmount.parse(a)
+	y, yerr := budgetAmount.parse(b)
+	return xerr == nil && yerr == nil && x == y
 }
 
 // byID finds a row by organization and ID. The caller holds mu.

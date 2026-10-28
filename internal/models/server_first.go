@@ -28,7 +28,7 @@ type Servers interface {
 	PreviewServer(ctx context.Context, p security.Principal, cloud string, in cloudinfra.ServerInput) (*cloudinfra.Operation, error)
 	ApplyServerOperation(ctx context.Context, p security.Principal, cloud, id string, in cloudinfra.ApplyInput) (*cloudinfra.Operation, error)
 	GetOperation(ctx context.Context, p security.Principal, cloud, id string) (*cloudinfra.Operation, error)
-	ListOperations(ctx context.Context, p security.Principal, cloud string) ([]*cloudinfra.Operation, error)
+	OpenServerCreates(ctx context.Context, p security.Principal, cloud string) ([]*cloudinfra.Operation, error)
 	ListServers(ctx context.Context, p security.Principal, cloud string) ([]*cloudinfra.Server, error)
 }
 
@@ -148,7 +148,8 @@ func freeServerName(name string, taken map[string]bool) string {
 // namesComing adds to taken the names of GPU servers that are on their way
 // but have no server row yet: cloudinfra writes one only when the create
 // starts. They're the servers the project's waiting models wait for, and
-// the cloud's approved creates that haven't finished. A review that's only
+// the cloud's approved creates that haven't finished, however old (a
+// failed one can be retried, so it keeps its name). A review that's only
 // previewed isn't counted, so reviewing again keeps its name; two deploys
 // that reviewed the same name are told apart when they're approved.
 // resource in environmentID is the model asking, and its own row doesn't
@@ -168,14 +169,12 @@ func (s *Service) namesComing(ctx context.Context, p security.Principal, cloudID
 			}
 		}
 	}
-	ops, err := s.d.Servers.ListOperations(ctx, p, cloudID)
+	ops, err := s.d.Servers.OpenServerCreates(ctx, p, cloudID)
 	if err != nil {
 		return err
 	}
 	for _, op := range ops {
-		if op.Input.Kind == "create" && createOpen(op.Status) {
-			taken[op.Input.Name] = true
-		}
+		taken[op.Input.Name] = true
 	}
 	return nil
 }
@@ -184,16 +183,6 @@ func (s *Service) namesComing(ctx context.Context, p security.Principal, cloudID
 // creating, or did and needs attention there.
 func waitsForServer(d *Deployment) bool {
 	return d.Phase == PhaseWaitingForServer || d.Phase == PhaseNeedsAttention
-}
-
-// createOpen reports whether a server operation in status was approved and
-// hasn't finished: its server is coming.
-func createOpen(status string) bool {
-	switch status {
-	case "preview", "succeeded", "failed", "cancelled":
-		return false
-	}
-	return true
 }
 
 // nameClash reports whether another of the project's models waits for a

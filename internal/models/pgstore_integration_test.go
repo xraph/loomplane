@@ -21,6 +21,7 @@ import (
 
 	"github.com/xraph/loomplane/database/migrations"
 	"github.com/xraph/loomplane/internal/notifications"
+	"github.com/xraph/loomplane/internal/recipes"
 	"github.com/xraph/loomplane/internal/security"
 )
 
@@ -600,5 +601,75 @@ func TestMarkAlertedSendsOnceInItsTransaction(t *testing.T) {
 	}
 	if orgs, oerr := st.Organizations(ctx); oerr != nil || !slices.Equal(orgs, []string{"org_a", "org_b"}) {
 		t.Errorf("organizations %v, %v", orgs, oerr)
+	}
+}
+
+// TestNewBudgetRearmsNoticesInPostgres: Ruling M32, against the real
+// store. A crossed notice at 500, the budget raised to 1000 and crossed
+// again sends a second notice; saving the same budget again, even as
+// other text, or from a read taken before a notice, sends nothing twice
+// and undoes nothing.
+func TestNewBudgetRearmsNoticesInPostgres(t *testing.T) {
+	ctx := context.Background()
+	st, _ := scratchStore(t)
+	b := newBudget(t, recipes.ModelVLLMKind, 1)
+	mem := b.row(t)
+	row := *mem
+	row.Revision = 0
+	if err := st.Create(ctx, &row); err != nil {
+		t.Fatal(err)
+	}
+	b.svc.d.Store, b.svc.d.Waiting = st, st
+	get := func() *Deployment {
+		d, err := st.Get(ctx, "org", projectID, stagingID, llamaResource)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return d
+	}
+	setBudget := func(d *Deployment, usd string) {
+		d.MonthlyBudgetUSD = usd
+		if err := st.Update(ctx, d); err != nil {
+			t.Fatal(err)
+		}
+	}
+	accrue := func(at time.Time) {
+		if err := b.svc.Accrue(ctx, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	spend := func(usd string, at time.Time) {
+		if err := st.Accrue(ctx, get(), "2026-11", usd, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	nov28 := time.Date(2026, 11, 28, 0, 0, 0, 0, time.UTC)
+	setBudget(get(), "500.00")
+	spend("499", nov28)
+	stale := get()
+	accrue(nov28.Add(time.Hour))
+	if d := get(); d.AlertedCrossed != "2026-11" {
+		t.Fatalf("crossed %q", d.AlertedCrossed)
+	}
+	// An edit read before the notice, budget unchanged, doesn't undo it.
+	stale.Message = "an edit"
+	if err := st.Update(ctx, stale); err != nil || stale.AlertedCrossed != "2026-11" {
+		t.Fatalf("stale edit: %q, %v", stale.AlertedCrossed, err)
+	}
+	setBudget(get(), "500")
+	if d := get(); d.AlertedCrossed != "2026-11" {
+		t.Fatalf("the same budget as other text cleared it: %q", d.AlertedCrossed)
+	}
+	setBudget(get(), "1000.00")
+	if d := get(); d.AlertedCrossed != "" || d.AlertedProjected != "" {
+		t.Fatalf("a new budget kept the old notices: %q %q", d.AlertedProjected, d.AlertedCrossed)
+	}
+	accrue(nov28.Add(2 * time.Hour))
+	spend("500", nov28.Add(2*time.Hour))
+	accrue(nov28.Add(3 * time.Hour))
+	accrue(nov28.Add(4 * time.Hour))
+	sent := b.budget.notices()
+	if len(sent) != 2 || sent[0].BudgetUSD != "500.00" || sent[1].BudgetUSD != "1000.00" || sent[1].Kind != notifications.ModelBudgetCrossed {
+		t.Fatalf("notices %+v", sent)
 	}
 }

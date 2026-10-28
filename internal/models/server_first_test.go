@@ -190,7 +190,8 @@ func (f *fakeServers) ListServers(ctx context.Context, p security.Principal, clo
 	return out, nil
 }
 
-func (f *fakeServers) ListOperations(ctx context.Context, p security.Principal, cloud string) ([]*cloudinfra.Operation, error) {
+// OpenServerCreates is PgStore.OpenCreates over the fake's operations.
+func (f *fakeServers) OpenServerCreates(ctx context.Context, p security.Principal, cloud string) ([]*cloudinfra.Operation, error) {
 	if err := f.allowed(ctx, p); err != nil {
 		return nil, err
 	}
@@ -198,7 +199,8 @@ func (f *fakeServers) ListOperations(ctx context.Context, p security.Principal, 
 	defer f.mu.Unlock()
 	var out []*cloudinfra.Operation
 	for _, id := range slices.Sorted(maps.Keys(f.ops)) {
-		if op := f.ops[id]; op.CloudID == cloud && op.OrgID == p.OrgID {
+		op := f.ops[id]
+		if op.CloudID == cloud && op.OrgID == p.OrgID && op.Input.Kind == "create" && !slices.Contains([]string{"preview", "succeeded", "cancelled"}, op.Status) {
 			c := *op
 			out = append(out, &c)
 		}
@@ -1531,8 +1533,13 @@ func TestServersOnTheirWayKeepTheirNames(t *testing.T) {
 	if pv, _ = sf.reviewIn(t, productID); pv.Server.Input.Name != serverName+"-3" {
 		t.Errorf("review beside a running create %q", pv.Server.Input.Name)
 	}
-	// Once that create failed, its name is free again.
+	// A failed create can be retried, so it keeps its name; once it's
+	// cancelled the name is free again.
 	sf.servers.set(running, func(op *cloudinfra.Operation) { op.Status = "failed" })
+	if pv, _ = sf.reviewIn(t, productID); pv.Server.Input.Name != serverName+"-3" {
+		t.Errorf("review beside a failed create %q", pv.Server.Input.Name)
+	}
+	sf.servers.set(running, func(op *cloudinfra.Operation) { op.Status = "cancelled" })
 	if pv, _ = sf.reviewIn(t, productID); pv.Server.Input.Name != serverName+"-2" {
 		t.Errorf("review once the other creates ended %q", pv.Server.Input.Name)
 	}

@@ -260,6 +260,8 @@ func (s *PgStore) Update(ctx context.Context, d *Deployment) error {
 			monthly_budget_usd = $7::numeric(12, 2), hourly_usd_override = $8::numeric(10, 4), phase = $9,
 			server_cloud_id = $10, server_operation_id = $11, server_name = $12, plan_id = $13, message = $14,
 			request = $15, requested_by = $16,
+			alerted_projected = CASE WHEN monthly_budget_usd IS DISTINCT FROM $7::numeric(12, 2) THEN '' ELSE alerted_projected END,
+			alerted_crossed = CASE WHEN monthly_budget_usd IS DISTINCT FROM $7::numeric(12, 2) THEN '' ELSE alerted_crossed END,
 			revision = revision + 1, updated_at = $17
 		WHERE org_id = $1 AND id = $2 AND revision = $3
 		RETURNING `+deploymentColumns,

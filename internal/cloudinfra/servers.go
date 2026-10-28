@@ -235,6 +235,16 @@ func (s *Service) ListOperations(ctx context.Context, p security.Principal, clou
 	return s.Store.ListOperations(ctx, p.OrgID, cloud)
 }
 
+// OpenServerCreates lists the cloud's create operations that were approved
+// and haven't finished, however old, so a caller naming a new server can
+// keep clear of theirs. See PgStore.OpenCreates.
+func (s *Service) OpenServerCreates(ctx context.Context, p security.Principal, cloud string) ([]*Operation, error) {
+	if _, err := s.authorize(ctx, p, cloud); err != nil {
+		return nil, err
+	}
+	return s.Store.OpenCreates(ctx, p.OrgID, cloud)
+}
+
 // CheckServer refreshes health through the recorded pinned runtime connection.
 func (s *Service) CheckServer(ctx context.Context, p security.Principal, cloud, id string) (*Server, error) {
 	if _, err := s.authorize(ctx, p, cloud); err != nil {

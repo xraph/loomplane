@@ -339,3 +339,53 @@ func TestBudgetNeverStopsAModel(t *testing.T) {
 		}
 	}
 }
+
+// Ruling M32: each run counts whole seconds and stops its clock at the
+// last one, so the part of a second left over counts in the next run.
+// At $3.60 an hour, a second is exactly 0.0010, and runs a third of a
+// second off the five minutes add up to every whole second elapsed.
+func TestAccrualCountsEverySecond(t *testing.T) {
+	b := newBudget(t, recipes.ModelVLLMKind, 1)
+	b.targets.targets[0].HourlyUSD = 3.60
+	b.accrue(t, nov3)
+	tick := 5*time.Minute + 370*time.Millisecond
+	var d *Deployment
+	for k := 1; k <= 200; k++ {
+		d = b.accrue(t, nov3.Add(time.Duration(k)*tick))
+	}
+	seconds := int64(200 * tick / time.Second)
+	if want := formatUSD(seconds * 10); d.MonthCostUSD != want {
+		t.Errorf("after 200 runs: %s, want %s", d.MonthCostUSD, want)
+	}
+	if want := nov3.Add(time.Duration(seconds) * time.Second); !d.AccruedAt.Equal(want) {
+		t.Errorf("clock at %v, want %v", d.AccruedAt, want)
+	}
+}
+
+// Ruling M32: a new budget gets its own notices. Crossing 500, then 1000
+// after the budget was raised, sends both; saving the same budget again
+// sends nothing more.
+func TestNewBudgetGetsItsOwnNotices(t *testing.T) {
+	b := newBudget(t, recipes.ModelVLLMKind, 1)
+	b.setBudget(t, "500.00")
+	nov28 := time.Date(2026, 11, 28, 0, 0, 0, 0, time.UTC)
+	b.spent(t, "499", nov28)
+	b.accrue(t, nov28.Add(time.Hour))
+	b.setBudget(t, "1000.00")
+	if d := b.row(t); d.AlertedCrossed != "" || d.AlertedProjected != "" {
+		t.Fatalf("a new budget kept the old notices: %q %q", d.AlertedProjected, d.AlertedCrossed)
+	}
+	b.accrue(t, nov28.Add(2*time.Hour))
+	b.spent(t, "500", nov28.Add(2*time.Hour))
+	b.accrue(t, nov28.Add(3*time.Hour))
+	sent := b.budget.notices()
+	if len(sent) != 2 || sent[0].Kind != notifications.ModelBudgetCrossed || sent[0].BudgetUSD != "500.00" ||
+		sent[1].Kind != notifications.ModelBudgetCrossed || sent[1].BudgetUSD != "1000.00" {
+		t.Fatalf("notices %+v", sent)
+	}
+	b.setBudget(t, "1000")
+	b.accrue(t, nov28.Add(4*time.Hour))
+	if len(b.budget.notices()) != 2 {
+		t.Errorf("the same budget saved again sent %+v", b.budget.notices())
+	}
+}

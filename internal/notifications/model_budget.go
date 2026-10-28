@@ -52,8 +52,12 @@ type modelBudgetPayload struct {
 	URL            string `json:"url,omitempty"`
 }
 
-func modelBudgetKey(deploymentID, month, kind string) string {
-	return "model-budget:" + deploymentID + ":" + month + ":" + kind
+// modelBudgetKey names a notice by its model, month, kind and budget. The
+// budget is part of it because outbox rows are never deleted and a key
+// already there queues nothing: a model whose budget changed gets the new
+// budget's notices.
+func modelBudgetKey(deploymentID, month, kind, budget string) string {
+	return "model-budget:" + deploymentID + ":" + month + ":" + kind + ":" + budget
 }
 
 // EnqueueModelBudgetNotice queues the notice for every member of the
@@ -79,7 +83,7 @@ func (s *Service) EnqueueModelBudgetNoticeIn(ctx context.Context, tx Execer, n M
 	if err != nil {
 		return err
 	}
-	return s.enqueueMembersIn(ctx, tx, n.OrgID, n.ProjectID, modelBudgetKey(n.DeploymentID, n.Month, n.Kind), kindModelBudget, payload)
+	return s.enqueueMembersIn(ctx, tx, n.OrgID, n.ProjectID, modelBudgetKey(n.DeploymentID, n.Month, n.Kind, n.BudgetUSD), kindModelBudget, payload)
 }
 
 // modelURL is the model's page.
@@ -129,7 +133,7 @@ func modelBudgetMessage(item *outboxItem) (*outboxMessage, error) {
 	// The organization gets one webhook however many admins it has, so
 	// the rows share the notice's key.
 	return &outboxMessage{
-		sourceKey: modelBudgetKey(p.DeploymentID, p.Month, p.Kind), event: "model.budget_" + p.Kind, project: p.ProjectID,
+		sourceKey: modelBudgetKey(p.DeploymentID, p.Month, p.Kind, p.BudgetUSD), event: "model.budget_" + p.Kind, project: p.ProjectID,
 		need: &security.AIManage, inboxType: kindModelBudget, title: title, body: body, actionURL: p.URL, metadata: meta,
 		subject: "Loomplane: " + title, emailBody: body + "\n\nOpen the model: " + p.URL, alwaysEmail: true,
 	}, nil

@@ -62,6 +62,17 @@ func (s *PgStore) GetOperation(ctx context.Context, org, cloud, id string) (*Ope
 func (s *PgStore) ListOperations(ctx context.Context, org, cloud string) ([]*Operation, error) {
 	return s.operations(ctx, `SELECT body,principal FROM loomplane_infrastructure_operations WHERE org_id=$1 AND cloud_id=$2 ORDER BY updated_at DESC,id LIMIT 100`, org, cloud)
 }
+
+// OpenCreates lists a cloud's create operations that were approved and
+// haven't finished: their server is coming, or can be retried, and has a
+// name. A preview isn't one, nor a create that succeeded or was
+// cancelled. Unlike ListOperations it has no limit, so an old open create
+// is never missed.
+func (s *PgStore) OpenCreates(ctx context.Context, org, cloud string) ([]*Operation, error) {
+	return s.operations(ctx, `SELECT body,principal FROM loomplane_infrastructure_operations
+		WHERE org_id=$1 AND cloud_id=$2 AND status NOT IN ('preview','succeeded','cancelled') AND body->'input'->>'kind'='create'
+		ORDER BY updated_at,id`, org, cloud)
+}
 func (s *PgStore) Pending(ctx context.Context) ([]*Operation, error) {
 	return s.operations(ctx, `SELECT body,principal FROM loomplane_infrastructure_operations WHERE status IN ('pending','running','waiting') ORDER BY updated_at,id LIMIT 100`)
 }

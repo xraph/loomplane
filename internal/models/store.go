@@ -125,8 +125,8 @@ type Deployment struct {
 	MonthCostUSD string    `json:"month_cost_usd"` // four places
 	AccruedAt    time.Time `json:"accrued_at"`
 	// AlertedProjected and AlertedCrossed are the months the last "on track
-	// to cross" and "crossed" budget notices went out for. Only
-	// MarkAlerted changes them.
+	// to cross" and "crossed" budget notices went out for. MarkAlerted sets
+	// them, and a change of budget clears them.
 	AlertedProjected string    `json:"-"`
 	AlertedCrossed   string    `json:"-"`
 	Revision         int64     `json:"revision"`
@@ -152,7 +152,10 @@ type Store interface {
 	// Revision is d.Revision, and bumps it. ErrStale otherwise. It never
 	// changes the row's project, environment, resource, month's cost or
 	// budget notice months: accrual goes through Accrue and notices through
-	// MarkAlerted. On success d holds the stored row.
+	// MarkAlerted. The one exception: when the stored budget differs from
+	// d's, the notice months are cleared, so a new budget gets its own
+	// notices. That's decided against the stored row, so a write from a
+	// stale read can't undo a notice. On success d holds the stored row.
 	Update(ctx context.Context, d *Deployment) error
 	// Delete deletes one row, or returns ErrNotFound.
 	Delete(ctx context.Context, orgID, projectID, environmentID, resource string) error

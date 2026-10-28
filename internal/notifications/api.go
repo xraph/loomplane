@@ -206,10 +206,11 @@ func (s *Service) requireReader(ctx context.Context, p security.Principal, n *in
 
 // webhookEventTypes is every event a webhook endpoint hears. Endpoints made
 // before connection.sign_in_needed existed get it from the
-// cloud_sign_in_webhooks migration, and connection.keyless_refused from the
-// keyless one.
+// cloud_sign_in_webhooks migration, connection.keyless_refused from the
+// keyless one, and the model budget events from ai_model_budget_webhooks.
 func webhookEventTypes() []string {
-	return []string{"deployment.succeeded", "deployment.failed", connectionSignInNeeded, connectionKeylessRefused}
+	return []string{"deployment.succeeded", "deployment.failed", connectionSignInNeeded, connectionKeylessRefused,
+		"model.budget_" + ModelBudgetProjected, "model.budget_" + ModelBudgetCrossed}
 }
 
 func publicEndpoint(ep *endpoint.Endpoint) WebhookEndpoint {

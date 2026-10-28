@@ -120,6 +120,7 @@ func (s *Service) accrueRow(ctx context.Context, d *Deployment, now time.Time, p
 		return err
 	}
 	var add int64
+	at := now
 	if !d.AccruedAt.IsZero() && cost.Known {
 		hourly, perr := costAmount.parse(cost.HourlyUSD)
 		if perr != nil {
@@ -129,10 +130,16 @@ func (s *Service) accrueRow(ctx context.Context, d *Deployment, now time.Time, p
 		if start := monthStart(now); from.Before(start) {
 			from = start
 		}
+		// Whole seconds are counted, and the clock stops at the last one, so
+		// the part of a second left over counts in the next run.
 		seconds := int64(now.Sub(from) / time.Second)
+		if seconds <= 0 {
+			return nil
+		}
 		add = (hourly*seconds + 1800) / 3600
+		at = from.Add(time.Duration(seconds) * time.Second)
 	}
-	if aerr := s.d.Store.Accrue(ctx, d, monthOf(now), formatUSD(add), now); aerr != nil {
+	if aerr := s.d.Store.Accrue(ctx, d, monthOf(now), formatUSD(add), at); aerr != nil {
 		return aerr
 	}
 	return s.budgetNotice(ctx, d, cost, now)

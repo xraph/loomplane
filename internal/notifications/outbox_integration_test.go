@@ -744,21 +744,26 @@ func TestModelBudgetNoticesAreForAdmins(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	admin, developer := security.Principal{OrgID: "org-a", UserID: "user-a"}, security.Principal{OrgID: "org-a", UserID: "user-c"}
+	// An endpoint made now hears the budget events.
+	hook, err := svc.CreateEndpoint(ctx, admin, WebhookEndpointInput{URL: "https://8.8.8.8/hook", Description: "Budgets"})
+	if err != nil {
+		t.Fatal(err)
+	}
 	enqueue(false)
 	var count int
-	if err := svc.pg.QueryRow(ctx, `SELECT count(*) FROM loomplane_notification_outbox`).Scan(&count); err != nil || count != 0 {
+	if err = svc.pg.QueryRow(ctx, `SELECT count(*) FROM loomplane_notification_outbox`).Scan(&count); err != nil || count != 0 {
 		t.Fatalf("a rolled back notice queued %d rows: %v", count, err)
 	}
 	enqueue(true)
 	enqueue(true) // the same notice again adds nothing
-	if err := svc.pg.QueryRow(ctx, `SELECT count(*) FROM loomplane_notification_outbox WHERE kind='model.budget' AND project_id='project-a'`).Scan(&count); err != nil || count != 2 {
+	if err = svc.pg.QueryRow(ctx, `SELECT count(*) FROM loomplane_notification_outbox WHERE kind='model.budget' AND project_id='project-a'`).Scan(&count); err != nil || count != 2 {
 		t.Fatalf("outbox rows: %d %v", count, err)
 	}
-	if err := svc.drain(ctx); err != nil {
+	if err = svc.drain(ctx); err != nil {
 		t.Fatal(err)
 	}
 
-	admin, developer := security.Principal{OrgID: "org-a", UserID: "user-a"}, security.Principal{OrgID: "org-a", UserID: "user-c"}
 	list, err := svc.List(ctx, admin)
 	if err != nil || len(list.Items) != 1 {
 		t.Fatalf("admin's inbox: %+v %v", list, err)
@@ -805,10 +810,55 @@ func TestModelBudgetNoticesAreForAdmins(t *testing.T) {
 	default:
 	}
 
-	// One webhook for the organization, of the model group's type.
+	// One webhook for the organization, of the model group's type, and the
+	// endpoint has it to deliver.
 	var eventType string
 	if err = svc.pg.QueryRow(ctx, `SELECT type FROM relay_events`).Scan(&eventType); err != nil || eventType != "model.budget_projected" {
 		t.Fatalf("webhook: %s %v", eventType, err)
+	}
+	deliveries, err := svc.Deliveries(ctx, admin, hook.Endpoint.ID)
+	if err != nil || len(deliveries.Items) != 1 || deliveries.Items[0].EventType != "model.budget_projected" {
+		t.Fatalf("endpoint deliveries: %+v %v", deliveries, err)
+	}
+
+	// Ruling M32: the same notice for a new budget is a new notice; for
+	// the same budget it queues nothing.
+	notice.BudgetUSD = "1000.00"
+	enqueue(true)
+	enqueue(true)
+	if err = svc.pg.QueryRow(ctx, `SELECT count(*) FROM loomplane_notification_outbox WHERE kind='model.budget'`).Scan(&count); err != nil || count != 4 {
+		t.Fatalf("outbox rows after a new budget: %d %v", count, err)
+	}
+	var keys []string
+	rows, err := svc.pg.Query(ctx, `SELECT id FROM loomplane_notification_outbox WHERE user_id='user-a' ORDER BY id`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for rows.Next() {
+		var key string
+		if err = rows.Scan(&key); err != nil {
+			t.Fatal(err)
+		}
+		keys = append(keys, key)
+	}
+	rows.Close()
+	if len(keys) != 2 || keys[0] != "model-budget:aimodel_1:2026-11:projected:1000.00:user-a" || keys[1] != "model-budget:aimodel_1:2026-11:projected:500.00:user-a" {
+		t.Fatalf("outbox keys %v", keys)
+	}
+	if err = svc.drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if list, err = svc.List(ctx, admin); err != nil || len(list.Items) != 2 {
+		t.Fatalf("admin's inbox after a new budget: %+v %v", list, err)
+	}
+	select {
+	case <-messages:
+	case <-time.After(time.Second):
+		t.Fatal("the new budget's email was not delivered")
+	}
+	item = list.Items[0]
+	if item.Title != "llama is on track to cost $676.80 this month" || !strings.Contains(item.Body, "$1000.00") {
+		t.Errorf("new budget's item: %+v", item)
 	}
 
 	// An admin who loses ai:manage no longer sees it.
