@@ -570,6 +570,16 @@ func TestCapacityRefusal(t *testing.T) {
 	if d := sf.row(t); d.Phase != PhaseNeedsAttention || d.Message != want {
 		t.Errorf("refused later: %s %q", d.Phase, d.Message)
 	}
+	// The review was never applied, so Retry has nothing to carry on: it
+	// says to review a new server, and the row keeps its reason.
+	_, err = sf.svc.Retry(ctx, member, projectID, stagingID, "qwen2-5-7b-instruct")
+	if !errors.Is(err, ErrInvalid) || !strings.HasSuffix(err.Error(),
+		": "+serverName+" was never created, and Retry can't approve its review again. Cancel this and deploy the model again to review a new server") {
+		t.Errorf("retry after a refusal: %v", err)
+	}
+	if d := sf.row(t); d.Phase != PhaseNeedsAttention || d.Message != want {
+		t.Errorf("after the refused retry: %s %q", d.Phase, d.Message)
+	}
 }
 
 func TestReconcilePlansOnceTheGPUIsReady(t *testing.T) {

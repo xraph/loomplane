@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/xraph/loomplane/internal/catalogstate"
+	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/gpus"
 	"github.com/xraph/loomplane/internal/manifests"
 	"github.com/xraph/loomplane/internal/models/engines"
@@ -785,6 +786,29 @@ func (s *Service) Move(ctx context.Context, p security.Principal, projectID, env
 	return res, nil
 }
 
+// retryableServer refuses a Retry of row while its GPU server's operation
+// is still a review nobody's create went through, as after the capacity
+// policy refused it. The reconcile approves a review again only for a row
+// the capacity policy paused, so a Retry there would wait until the review
+// expired. Any other operation goes on to the reconcile, which says what's
+// wrong with it.
+func (s *Service) retryableServer(ctx context.Context, p security.Principal, row *Deployment) error {
+	if s.d.Servers == nil {
+		return nil
+	}
+	op, err := s.d.Servers.GetOperation(ctx, p, row.ServerCloudID, row.ServerOperationID)
+	switch {
+	case errors.Is(err, security.ErrForbidden) || errors.Is(err, cloudinfra.ErrNotFound):
+		return nil
+	case err != nil:
+		return err
+	case op.Status == "preview":
+		return fmt.Errorf("%w: %s was never created, and Retry can't approve its review again. Cancel this and deploy the model again to review a new server",
+			ErrInvalid, serverOf(row))
+	}
+	return nil
+}
+
 // leftServer says that the GPU server Loomplane created for d keeps
 // running once the model moves off it, "" when Loomplane created none.
 func leftServer(d *Deployment) string {
@@ -1047,6 +1071,9 @@ func (s *Service) Retry(ctx context.Context, p security.Principal, projectID, en
 	}
 	switch {
 	case row.Phase == PhaseNeedsAttention && row.ServerOperationID != "":
+		if perr := s.retryableServer(ctx, p, row); perr != nil {
+			return nil, perr
+		}
 		row.Phase, row.Message, row.RequestedBy = PhaseWaitingForServer, "", p
 		if uerr := s.d.Store.Update(ctx, row); uerr != nil {
 			return nil, uerr
