@@ -878,7 +878,7 @@ it("adds an environment to a model that runs elsewhere", async () => {
   )
   expect(
     await within(dialog).findByText(
-      "Adds production to qwen2-5-7b-instruct. It keeps running in staging. Each environment runs its own copy, on its own server, at its own cost."
+      "Adds production to qwen2-5-7b-instruct. It keeps running in staging. Each environment runs its own copy, with its own key and cost, on the server you pick for it."
     )
   ).toBeInTheDocument()
   // The server's sentence for production says the same, so it shows once.

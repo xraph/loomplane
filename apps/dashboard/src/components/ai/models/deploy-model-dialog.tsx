@@ -7,7 +7,7 @@
 //
 // From a deployed model's page it adds an environment to that model: the
 // environments it runs in already can't be picked, and the new one gets its
-// own copy, on its own server, at its own cost.
+// own copy, with its own key and cost, on the server picked for it.
 import { useEffect, useRef, useState } from "react"
 
 import { statusOf } from "@/client/errors"
@@ -511,8 +511,8 @@ function DeployForm({
             <p className="text-[12.5px] text-pretty text-muted-foreground">
               Adds {env.name} to {adds.addsTo}.
               {others.length > 0 && ` It keeps running in ${listOf(others)}.`}{" "}
-              Each environment runs its own copy, on its own server, at its own
-              cost.
+              Each environment runs its own copy, with its own key and cost, on
+              the server you pick for it.
             </p>
           ) : env ? (
             <p className="text-[12.5px] text-muted-foreground">

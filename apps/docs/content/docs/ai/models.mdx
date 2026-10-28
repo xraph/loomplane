@@ -183,7 +183,7 @@ resources:
           max_model_len: "16384"
 ```
 
-Staging reads everything from the top level. Production reads the top level too, except where its block says otherwise, so its copy runs on its own server, on an H100, with a 16,384 token context. Each copy has its own server, its own `MODEL_API_KEY`, its own cost and its own budget alert, and its own row on the **Deployed** tab. A service that needs `qwen2-5-7b-instruct` lists that one name, and in each environment it gets that environment's `MODEL_URL`.
+Staging reads everything from the top level. Production reads the top level too, except where its block says otherwise, so its copy runs on the production GPU server, on an H100, with a 16,384 token context. Each copy has its own `MODEL_API_KEY`, its own cost and budget alert, and its own row on the **Deployed** tab. Copies usually run on different servers, but nothing stops you picking the server another environment's copy already uses, and then the two share it. A service that needs `qwen2-5-7b-instruct` lists that one name, and in each environment it gets that environment's `MODEL_URL`.
 
 A few rules for the blocks:
 
