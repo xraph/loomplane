@@ -159,6 +159,10 @@ type Target =
 // refused, with the Cloud whose Capacity tab says why.
 type CapacityOutcome = { message: string; cloudId?: string; paused: boolean }
 
+// Why a deploy didn't go through, and what to do next when that isn't
+// the server's sentence.
+type DeployError = { message: string; next?: string }
+
 function DeployForm({
   entry,
   quantization,
@@ -278,17 +282,22 @@ function DeployForm({
   const size = target?.runsOn === "gpu" && target.gpu.source === "server_size"
 
   const [capacity, setCapacity] = useState<CapacityOutcome>()
-  const [error, setError] = useState("")
+  const [error, setError] = useState<DeployError>()
 
   const change = (f: () => void) => {
     f()
-    setError("")
+    setError(undefined)
     setReviewError("")
     setCapacity(undefined)
   }
 
+  // A second click before the first request's state shows would send a
+  // second request, and for a review a second record in Infrastructure.
+  const inFlight = useRef({ review: false, deploy: false })
+
   async function reviewServer() {
-    if (!body || !path || reviewing) return
+    if (!body || !path || reviewing || inFlight.current.review) return
+    inFlight.current.review = true
     setReviewing(true)
     setReviewError("")
     try {
@@ -297,18 +306,24 @@ function DeployForm({
         body: { ...body, reviewServer: true },
       })
       setReview({ key, pv: r as DeployPreview })
+      // What the last deploy said was about the review this one replaces.
+      setError(undefined)
+      setCapacity(undefined)
     } catch (err) {
       setReviewError(said(err, "Loomplane couldn't review the GPU server."))
     } finally {
+      inFlight.current.review = false
       setReviewing(false)
     }
   }
 
   async function deploy() {
-    if (!body || !path || deployMutation.isPending) return
+    if (!body || !path || deployMutation.isPending || inFlight.current.deploy)
+      return
     const server = size ? reviewed?.server : undefined
     if (size && !server) return
-    setError("")
+    inFlight.current.deploy = true
+    setError(undefined)
     setCapacity(undefined)
     try {
       const res = (await deployMutation.mutateAsync({
@@ -354,8 +369,31 @@ function DeployForm({
         setReview(undefined)
         return
       }
-      if (code === "model-server-review") setReview(undefined)
-      setError(said(err, "The model wasn't deployed."))
+      if (code === "model-server-review") {
+        // The review expired. The control that makes a new one is Review
+        // server, whatever the server's sentence calls it.
+        setReview(undefined)
+        setError({
+          message: said(err, "The GPU server's review has expired."),
+          next: "Review the server again.",
+        })
+        return
+      }
+      const status = statusOf(err)
+      if (server && (status === 0 || status >= 500)) {
+        // The server's approval went with the request, so it may have been
+        // recorded before the failure. Deploying again could create a
+        // second server.
+        setError({
+          message:
+            "Loomplane couldn't confirm the deploy. The GPU server may already be approved and on its way.",
+          next: "Check the model page before you deploy again.",
+        })
+        return
+      }
+      setError({ message: said(err, "The model wasn't deployed.") })
+    } finally {
+      inFlight.current.deploy = false
     }
   }
 
@@ -1021,7 +1059,7 @@ function Summary({
   working: boolean
   error?: string
   capacity?: CapacityOutcome
-  deployError: string
+  deployError?: DeployError
 }) {
   if (!pv && !error && !working)
     return (
@@ -1087,7 +1125,14 @@ function Summary({
           <CapacityLink cloudId={capacity.cloudId} indent />
         </div>
       )}
-      {deployError && <Note tone="failed">{deployError}</Note>}
+      {deployError && (
+        <Note tone="failed">
+          {deployError.message}
+          {deployError.next && (
+            <span className="block text-foreground">{deployError.next}</span>
+          )}
+        </Note>
+      )}
     </div>
   )
 }

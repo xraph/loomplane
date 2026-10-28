@@ -1,4 +1,4 @@
-import { screen, waitFor, within } from "@testing-library/react"
+import { act, screen, waitFor, within } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import { afterEach, beforeEach, expect, it, vi } from "vitest"
 
@@ -606,4 +606,193 @@ it("runs a CPU engine on a ready server and says its cost is the server's", asyn
     source: "connection",
     connection_id: "conn_cpu",
   })
+})
+
+// reviewsNumbered answers each review with a new operation, op_1, op_2 and
+// so on, the way the server records each one.
+function reviewsNumbered(): Handler {
+  let n = 0
+  return async (_url, init) => {
+    const body = JSON.parse(String(init?.body)) as Body
+    if (!body.review_server) return Response.json(previewOf(body))
+    n++
+    return Response.json(
+      previewOf(body, {
+        server: operation({ id: `op_${n}`, review: `review_${n}` }),
+      })
+    )
+  }
+}
+
+function deploys(asked: ReturnType<typeof stub>) {
+  return asked
+    .filter((a) => a.method === "POST" && a.url.pathname.endsWith("/ai/models"))
+    .map((a) => a.body as Body)
+}
+
+it("recovers from a review that expired before the deploy", async () => {
+  const stale =
+    "The GPU server's review is more than five minutes old. Preview the deploy again."
+  let tries = 0
+  const asked = routes({
+    [previewPath]: reviewsNumbered(),
+    [deployPath]: () => {
+      tries++
+      return tries === 1
+        ? Response.json(
+            { code: "model-server-review", message: stale },
+            { status: 422 }
+          )
+        : Response.json(
+            {
+              deployment: {
+                id: "aimodel_1",
+                phase: "waiting_for_server",
+                project_id: "proj_1",
+                environment_id: "env_stg",
+                resource: "qwen2-5-7b-instruct",
+              },
+            },
+            { status: 201 }
+          )
+    },
+  })
+  const { dialog } = await openDialog()
+  await reviewAndCreate(dialog)
+
+  // The server's sentence, what to press, and the old review gone.
+  expect(await within(dialog).findByText(stale)).toBeInTheDocument()
+  expect(
+    within(dialog).getByText("Review the server again.")
+  ).toBeInTheDocument()
+  expect(within(dialog).queryByTestId("server-review")).toBeNull()
+  const create = within(dialog).getByRole("button", {
+    name: "Create the server and plan it",
+  })
+  expect(create).toBeDisabled()
+  const review = within(dialog).getByRole("button", { name: "Review server" })
+  await waitFor(() => expect(review).toBeEnabled())
+
+  // A new review clears the refusal, and the deploy carries it.
+  await userEvent.click(review)
+  await within(dialog).findByTestId("server-review")
+  expect(within(dialog).queryByText(stale)).toBeNull()
+  expect(within(dialog).queryByText("Review the server again.")).toBeNull()
+  await waitFor(() => expect(create).toBeEnabled())
+  await userEvent.click(create)
+  await waitFor(() => expect(deploys(asked)).toHaveLength(2))
+  expect(deploys(asked).map((b) => b.server)).toEqual([
+    { cloud_id: "cloud_1", operation_id: "op_1", review: "review_1" },
+    { cloud_id: "cloud_1", operation_id: "op_2", review: "review_2" },
+  ])
+})
+
+it("clears what the last deploy said once the server is reviewed again", async () => {
+  const refused =
+    "The GPU server would take the cloud past its capacity limit of 2 NVIDIA L40S GPUs: 2 are counted and it needs 1 more. An admin can raise the limit, then deploy the model again."
+  routes({
+    [previewPath]: reviewsNumbered(),
+    [deployPath]: () =>
+      Response.json(
+        { code: "model-capacity", message: refused },
+        { status: 422 }
+      ),
+  })
+  const { dialog } = await openDialog()
+  await reviewAndCreate(dialog)
+  expect(await within(dialog).findByText(refused)).toBeInTheDocument()
+  const review = within(dialog).getByRole("button", { name: "Review server" })
+  await waitFor(() => expect(review).toBeEnabled())
+  await userEvent.click(review)
+  await within(dialog).findByTestId("server-review")
+  expect(within(dialog).queryByText(refused)).toBeNull()
+  expect(
+    within(dialog).queryByRole("link", {
+      name: "Open the Cloud's Capacity tab",
+    })
+  ).toBeNull()
+})
+
+it("sends one review and one deploy for two quick clicks", async () => {
+  let release = () => {}
+  const held = new Promise<void>((resolve) => {
+    release = resolve
+  })
+  const asked = routes({
+    [previewPath]: reviewsNumbered(),
+    [deployPath]: async () => {
+      await held
+      return Response.json(
+        {
+          plan_id: "plan_1",
+          deployment: { id: "aimodel_1", phase: "planned" },
+        },
+        { status: 201 }
+      )
+    },
+  })
+  const { dialog } = await openDialog()
+  await chooseServerSize(dialog)
+  const review = await within(dialog).findByRole("button", {
+    name: "Review server",
+  })
+  await waitFor(() => expect(review).toBeEnabled())
+  // Both clicks land before React draws the first one's state.
+  act(() => {
+    review.click()
+    review.click()
+  })
+  await within(dialog).findByTestId("server-review")
+  expect(previews(asked).filter((b) => b.review_server)).toHaveLength(1)
+
+  const create = within(dialog).getByRole("button", {
+    name: "Create the server and plan it",
+  })
+  await waitFor(() => expect(create).toBeEnabled())
+  act(() => {
+    create.click()
+    create.click()
+  })
+  release()
+  await waitFor(() => expect(deploys(asked)).toHaveLength(1))
+  // Nothing else follows once the first has answered.
+  await new Promise((resolve) => setTimeout(resolve, 50))
+  expect(deploys(asked)).toHaveLength(1)
+})
+
+it("says the server may already be approved when the deploy fails after it", async () => {
+  routes({
+    [previewPath]: reviewsNumbered(),
+    [deployPath]: () =>
+      Response.json({ message: "internal error" }, { status: 500 }),
+  })
+  const { dialog } = await openDialog()
+  await reviewAndCreate(dialog)
+  expect(
+    await within(dialog).findByText(
+      "Loomplane couldn't confirm the deploy. The GPU server may already be approved and on its way."
+    )
+  ).toBeInTheDocument()
+  expect(
+    within(dialog).getByText("Check the model page before you deploy again.")
+  ).toBeInTheDocument()
+  expect(dialog).not.toHaveTextContent("The model wasn't deployed.")
+})
+
+it("says a deploy without a new server wasn't made when it fails", async () => {
+  routes({
+    [deployPath]: () =>
+      Response.json({ message: "internal error" }, { status: 500 }),
+  })
+  const { dialog } = await openDialog()
+  await userEvent.click(
+    await within(dialog).findByRole("button", { name: "Choose gpu-box" })
+  )
+  const plan = within(dialog).getByRole("button", { name: "Plan it" })
+  await waitFor(() => expect(plan).toBeEnabled())
+  await userEvent.click(plan)
+  expect(
+    await within(dialog).findByText("The model wasn't deployed.")
+  ).toBeInTheDocument()
+  expect(dialog).not.toHaveTextContent("may already be approved")
 })
