@@ -214,6 +214,7 @@ function SearchBox({
       <input
         data-page-search
         type="search"
+        maxLength={100}
         value={text}
         onChange={(e) => setText(e.target.value)}
         placeholder="Search models"

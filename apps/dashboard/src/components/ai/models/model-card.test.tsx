@@ -77,3 +77,8 @@ it("turns Deploy off with the reason for someone who can't", () => {
     "Ask a workspace admin for permission to deploy models."
   )
 })
+
+it("keeps Deploy off until there's somewhere to deploy to", () => {
+  render(<ModelCard entry={entry} />)
+  expect(screen.getByRole("button", { name: "Deploy" })).toBeDisabled()
+})

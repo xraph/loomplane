@@ -14,11 +14,15 @@ import { forgeClient } from "@/client/runtime"
 import { setFeatures } from "@/lib/features"
 import { createDashboardRouter } from "@/router"
 
+const access = vi.hoisted(() => ({ edit: true }))
 vi.mock("@/lib/organization", () => ({
   useOrganization: () => ({
     session: { orgId: "org" },
     organizations: [{ id: "org", name: "Acme Inc", slug: "acme" }],
-    can: () => true,
+    can: (permission: string) =>
+      permission === "ai:edit" || permission === "ai:manage"
+        ? access.edit
+        : true,
   }),
 }))
 vi.mock("@/components/site-header", () => ({ SiteHeader: () => null }))
@@ -135,6 +139,7 @@ afterEach(() => {
   vi.unstubAllGlobals()
   forgeClient.clear()
   setFeatures({ ai: false })
+  access.edit = true
 })
 
 it("redirects /ai/models to / when AI is off", async () => {
@@ -400,4 +405,101 @@ it("shows a shared empty state when nothing is deployed", async () => {
     screen.getByRole("button", { name: "Browse the registry" })
   )
   await waitFor(() => expect(router.state.location.search).toEqual({}))
+})
+
+function registryAsks(asked: URL[]) {
+  return asked
+    .filter((u) => u.pathname === "/api/v1/ai/models/registry")
+    .map((u) => Object.fromEntries(u.searchParams))
+}
+
+it("searches once typing stops, and keeps the search in the URL", async () => {
+  const asked = stub({
+    "/api/v1/ai/models/registry": () => Response.json(registry),
+    "/api/v1/ai/models/deployments": () => Response.json({ models: [] }),
+  })
+  const router = open("/ai/models")
+  const box = await screen.findByRole("searchbox", { name: "Search models" })
+  await userEvent.type(box, "llama ")
+  await waitFor(() =>
+    expect(registryAsks(asked)).toContainEqual({ q: "llama" })
+  )
+  // One request for the whole word, after the pause, not one per key.
+  await new Promise((r) => setTimeout(r, 400))
+  expect(registryAsks(asked).filter((q) => "q" in q)).toEqual([{ q: "llama" }])
+  expect(router.state.location.search).toEqual({ q: "llama " })
+  expect(box).toHaveValue("llama ")
+})
+
+it("restores the search and switches from the URL", async () => {
+  const asked = stub({
+    "/api/v1/ai/models/registry": () => Response.json(registry),
+    "/api/v1/ai/models/deployments": () => Response.json({ models: [] }),
+  })
+  open("/ai/models?q=llama&commercial=true")
+  expect(
+    await screen.findByRole("searchbox", { name: "Search models" })
+  ).toHaveValue("llama")
+  expect(
+    screen.getByRole("switch", { name: "Commercial use only" })
+  ).toBeChecked()
+  await waitFor(() =>
+    expect(registryAsks(asked)).toContainEqual({
+      q: "llama",
+      commercial: "true",
+    })
+  )
+})
+
+it("shows a member the registry without the ways to deploy", async () => {
+  access.edit = false
+  stub({
+    "/api/v1/ai/models/registry": () => Response.json(registry),
+    "/api/v1/ai/models/deployments": () => Response.json({ models: [] }),
+  })
+  open("/ai/models")
+  const card = await screen.findByRole("article", {
+    name: "Qwen2.5 7B Instruct",
+  })
+  expect(
+    screen.queryByRole("region", { name: "Any Hugging Face model" })
+  ).toBeNull()
+  const deploy = within(card).getByRole("button", { name: "Deploy" })
+  expect(deploy).toBeDisabled()
+  expect(deploy).toHaveAttribute(
+    "title",
+    "Ask a workspace admin for permission to deploy models."
+  )
+  expect(
+    screen.getByText("Ask a workspace admin for permission to deploy models.")
+  ).toBeInTheDocument()
+})
+
+it("says why a deployed model failed", async () => {
+  stub({
+    "/api/v1/ai/models/registry": () => Response.json(registry),
+    "/api/v1/projects": projects,
+    "/api/v1/ai/models/deployments": () =>
+      Response.json({
+        models: [
+          status({
+            state: "failed",
+            gpu: { kind: "nvidia-l4", count: 1 },
+            message: "The engine ran out of GPU memory loading the weights.",
+            hint: "Pick a smaller quantization, then retry.",
+          }),
+        ],
+      }),
+  })
+  open("/ai/models?tab=deployed")
+  const reason = await screen.findByText(
+    "The engine ran out of GPU memory loading the weights."
+  )
+  expect(reason).toHaveAttribute(
+    "title",
+    "The engine ran out of GPU memory loading the weights. Pick a smaller quantization, then retry."
+  )
+  // Labelled at every width, for a screen reader on a wide screen too.
+  const row = reason.closest("li") as HTMLElement
+  expect(within(row).getByText("This month")).toBeInTheDocument()
 })

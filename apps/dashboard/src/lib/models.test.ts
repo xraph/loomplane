@@ -201,6 +201,13 @@ describe("the URL", () => {
     expect(
       registryQuery({ tab: "deployed", task: "chat", fits: true })
     ).toEqual({ task: "chat", fits: true })
+    // The box keeps what was typed; the registry is asked without the
+    // spaces around it.
+    expect(registryQuery({ q: "  llama  ", commercial: true })).toEqual({
+      q: "llama",
+      commercial: true,
+    })
+    expect(registryQuery({ q: "   " })).toEqual({})
   })
 
   it("reads a pasted repo and catches a pasted token", () => {

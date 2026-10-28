@@ -107,7 +107,7 @@ export function ModelCard({
         <Button
           size="sm"
           onClick={onDeploy}
-          disabled={!!deployBlocked}
+          disabled={!onDeploy || !!deployBlocked}
           title={deployBlocked}
         >
           Deploy

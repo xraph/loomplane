@@ -126,7 +126,7 @@ function Restricted() {
         </ZeroStateMedia>
         <ZeroStateTitle>Models are restricted</ZeroStateTitle>
         <ZeroStateDescription>
-          Ask your workspace owner for access to AI in this workspace.
+          Ask a workspace admin for access to AI in this workspace.
         </ZeroStateDescription>
       </ZeroStateHeader>
     </ZeroState>
@@ -164,12 +164,7 @@ function Registry({
   const filtered = Object.keys(registryQuery(search)).length > 0
   return (
     <div className="grid gap-5">
-      {editor && (
-        <HFInspect
-          onDeploy={onDeploy}
-          deployBlocked={onDeploy ? undefined : blocked}
-        />
-      )}
+      {editor && <HFInspect onDeploy={onDeploy} />}
       <ModelFilters
         search={search}
         counts={data?.counts}
@@ -370,6 +365,8 @@ function DeployedRow({
     ? `${project ?? "Project"} / ${environment}`
     : `${environment}, added to the manifest by hand`
   const title = m.entry.title || m.deployment?.resource || "Model"
+  // Why it failed and what to try, in full on hover.
+  const trouble = [m.message, m.hint].filter(Boolean).join(" ")
   return (
     <li className="grid gap-x-4 gap-y-1.5 border-t px-4 py-3 first:border-t-0 lg:grid-cols-[minmax(0,2fr)_minmax(0,1.5fr)_minmax(0,1.3fr)_8.5rem_7rem_7rem] lg:items-center">
       <div className="grid min-w-0 gap-0.5">
@@ -404,9 +401,19 @@ function DeployedRow({
           <span className="text-muted-foreground"> on {m.connectionName}</span>
         )}
       </span>
-      <span>
-        <StatusPill tone={state.tone}>{state.label}</StatusPill>
-      </span>
+      <div className="grid min-w-0 gap-1">
+        <span title={trouble || undefined} className="w-fit">
+          <StatusPill tone={state.tone}>{state.label}</StatusPill>
+        </span>
+        {state.tone === "failed" && m.message && (
+          <span
+            title={trouble}
+            className="line-clamp-2 text-[11.5px] leading-snug text-destructive"
+          >
+            {m.message}
+          </span>
+        )}
+      </div>
       {cost.kind === "cpu" ? (
         // Never $0.00: a CPU model's cost is its server's.
         <span className="text-[12.5px] text-muted-foreground lg:col-span-2 lg:text-right">
@@ -416,7 +423,9 @@ function DeployedRow({
         <div className="flex items-center justify-between gap-3 text-[12.5px] lg:contents">
           <Cost label={cost.hourly} detail={cost.detail} kind={cost.kind} />
           <span className="text-right">
-            <span className="text-muted-foreground lg:hidden">This month </span>
+            <span className="text-muted-foreground lg:sr-only">
+              This month{" "}
+            </span>
             <span
               className={
                 cost.kind === "unknown"
