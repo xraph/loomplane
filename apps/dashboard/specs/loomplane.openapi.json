@@ -13982,6 +13982,12 @@
           "placement": {
             "type": "string"
           },
+          "settings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SettingInfo"
+            }
+          },
           "targets": {
             "type": "array",
             "items": {
@@ -19446,6 +19452,32 @@
           },
           "required": {
             "type": "boolean"
+          }
+        }
+      },
+      "SettingInfo": {
+        "type": "object",
+        "required": [
+          "name",
+          "title",
+          "pattern",
+          "required"
+        ],
+        "properties": {
+          "default": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "pattern": {
+            "type": "string"
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "title": {
+            "type": "string"
           }
         }
       },

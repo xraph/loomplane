@@ -388,6 +388,18 @@ type KindInfo struct {
 	ConsumerOptions []ConsumerOption `json:"consumer_options,omitempty"`
 	// Feature is the server feature the kind belongs to, or "" for none.
 	Feature string `json:"feature,omitempty"`
+	// Settings are the values a resource of the kind sets under
+	// resources.<name>.settings, for a form that edits them.
+	Settings []SettingInfo `json:"settings,omitempty"`
+}
+
+// SettingInfo is the public part of a Setting.
+type SettingInfo struct {
+	Name     string `json:"name"`
+	Title    string `json:"title"`
+	Pattern  string `json:"pattern"`
+	Required bool   `json:"required"`
+	Default  string `json:"default,omitempty"`
 }
 
 // DependencyInfo is the public part of a Dependency.

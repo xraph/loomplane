@@ -415,6 +415,31 @@ func (s *PgStore) SetHuggingFaceToken(ctx context.Context, orgID, hint, account 
 	return huggingFaceToken(hf, setAt), nil
 }
 
+// huggingFaceLockPrefix keys the advisory lock of a workspace's Hugging
+// Face token, hashed with the org ID to the lock's 64-bit key.
+const huggingFaceLockPrefix = "loomplane-ai-huggingface-token:"
+
+// LockHuggingFaceToken implements Store with a transaction-scoped advisory
+// lock. It locks no row, so fn's own writes to the settings row, on other
+// connections, don't wait on it.
+func (s *PgStore) LockHuggingFaceToken(ctx context.Context, orgID string, fn func(ctx context.Context) error) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("lock the Hugging Face token: %w", err)
+	}
+	defer rollback(tx)
+	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, huggingFaceLockPrefix+orgID); err != nil {
+		return fmt.Errorf("lock the Hugging Face token: %w", err)
+	}
+	if ferr := fn(ctx); ferr != nil {
+		return ferr
+	}
+	if err = tx.Commit(); err != nil {
+		return fmt.Errorf("unlock the Hugging Face token: %w", err)
+	}
+	return nil
+}
+
 // ClearHuggingFaceToken implements Store.
 func (s *PgStore) ClearHuggingFaceToken(ctx context.Context, orgID string) error {
 	_, err := s.db.Exec(ctx, `UPDATE loomplane_ai_settings

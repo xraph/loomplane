@@ -368,3 +368,139 @@ func TestVaultHuggingFaceTokensKeepOnePerWorkspace(t *testing.T) {
 		t.Errorf("second Delete = %v", err)
 	}
 }
+
+// pausingStore is a memStore whose SetHuggingFaceToken waits for release
+// when it's given pauseHint, after telling entered.
+type pausingStore struct {
+	*memStore
+	pauseHint string
+	entered   chan struct{}
+	release   chan struct{}
+}
+
+func (p *pausingStore) SetHuggingFaceToken(ctx context.Context, orgID, hint, account string) (*HuggingFaceToken, error) {
+	if hint == p.pauseHint {
+		close(p.entered)
+		<-p.release
+	}
+	return p.memStore.SetHuggingFaceToken(ctx, orgID, hint, account)
+}
+
+// Two puts at once: the first has written its value to Vault and not yet
+// its details when the second arrives. Under the token lock the second
+// waits, so the hint saved last is the hint of the value in Vault.
+func TestConcurrentTokenPutsStayMatched(t *testing.T) {
+	ctx := context.Background()
+	h := newHFHarness(t)
+	store := &pausingStore{memStore: h.store, pauseHint: "hf_…AAAA", entered: make(chan struct{}), release: make(chan struct{})}
+	svc := NewService(Deps{Store: store, Keys: h.keys, HuggingFace: h.tokens, Authz: roleAuthz{}, Audit: h.audit, Projects: memProjects{}})
+	svc.SetTokenChecker(h.checker)
+
+	first := make(chan error, 1)
+	go func() {
+		_, err := svc.PutHuggingFaceToken(ctx, admin, "hf_firstTOKENvalueAAAA")
+		first <- err
+	}()
+	<-store.entered
+	second := make(chan error, 1)
+	go func() {
+		_, err := svc.PutHuggingFaceToken(ctx, admin, "hf_secondTOKENvalueBBBB")
+		second <- err
+	}()
+	select {
+	case err := <-second:
+		t.Fatalf("the second put finished while the first held the lock: %v", err)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(store.release)
+	if err := <-first; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-second; err != nil {
+		t.Fatal(err)
+	}
+	sec, err := h.vault.Get(ctx, "org/huggingface-token", VaultAppID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	st, _ := h.store.Settings(ctx, "org")
+	if st.HuggingFace == nil || st.HuggingFace.Hint != huggingFaceHint(string(sec.Value)) {
+		t.Errorf("hint %+v beside the value ending %s", st.HuggingFace, string(sec.Value)[len(sec.Value)-4:])
+	}
+}
+
+// pausingGated is a GatedModels that, once, tells entered and waits for
+// release before it answers, so a test can start a deploy mid-delete.
+type pausingGated struct {
+	mu      sync.Mutex
+	models  []string
+	entered chan struct{}
+	release chan struct{}
+	paused  bool
+}
+
+func (g *pausingGated) GatedDeployments(context.Context, string) ([]string, error) {
+	g.mu.Lock()
+	pause := !g.paused
+	g.paused = true
+	g.mu.Unlock()
+	if pause {
+		close(g.entered)
+		<-g.release
+	}
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	return append([]string(nil), g.models...), nil
+}
+
+// A delete checks for gated deployments and then clears the token. A
+// gated deploy that starts between the two waits for the delete under the
+// token lock, and then sees no token, so it can't record a deployment the
+// check missed.
+func TestGatedDeployWaitsForATokenDelete(t *testing.T) {
+	ctx := context.Background()
+	h := newHFHarness(t)
+	if _, err := h.svc.PutHuggingFaceToken(ctx, admin, hfToken); err != nil {
+		t.Fatal(err)
+	}
+	gated := &pausingGated{entered: make(chan struct{}), release: make(chan struct{})}
+	h.svc.SetGatedModels(gated)
+
+	deleted := make(chan error, 1)
+	go func() { deleted <- h.svc.DeleteHuggingFaceToken(ctx, admin) }()
+	<-gated.entered
+
+	deployed := make(chan int64, 1)
+	go func() {
+		_ = h.svc.WithHuggingFaceToken(ctx, "org", func(_ context.Context, revision int64) error {
+			if revision != 0 {
+				gated.mu.Lock()
+				gated.models = append(gated.models, "llama-8b in shop/staging")
+				gated.mu.Unlock()
+			}
+			deployed <- revision
+			return nil
+		})
+	}()
+	select {
+	case rev := <-deployed:
+		t.Fatalf("a gated deploy ran mid-delete with token revision %d", rev)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(gated.release)
+	if err := <-deleted; err != nil {
+		t.Fatal(err)
+	}
+	if rev := <-deployed; rev != 0 {
+		t.Errorf("the deploy after the delete saw token revision %d", rev)
+	}
+
+	// With a token, the deploy gets its revision.
+	if _, err := h.svc.PutHuggingFaceToken(ctx, admin, hfToken); err != nil {
+		t.Fatal(err)
+	}
+	var got int64
+	if err := h.svc.WithHuggingFaceToken(ctx, "org", func(_ context.Context, revision int64) error { got = revision; return nil }); err != nil || got == 0 {
+		t.Errorf("with a token: revision %d, %v", got, err)
+	}
+}

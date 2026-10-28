@@ -155,20 +155,49 @@ func (s *Service) PutHuggingFaceToken(ctx context.Context, p security.Principal,
 	case err != nil:
 		return nil, withoutToken(fmt.Errorf("check the Hugging Face token: %w", err), token)
 	}
-	if perr := s.hfTokens.Put(ctx, p.OrgID, token); perr != nil {
-		return nil, withoutToken(perr, token)
-	}
-	hf, err := s.store.SetHuggingFaceToken(ctx, p.OrgID, huggingFaceHint(token), account)
+	// The value and its details are written under the workspace's token
+	// lock, so two puts, or a put and a delete, can't leave one token's hint
+	// beside another's value.
+	var hf *HuggingFaceToken
+	err = s.store.LockHuggingFaceToken(ctx, p.OrgID, func(ctx context.Context) error {
+		if perr := s.hfTokens.Put(ctx, p.OrgID, token); perr != nil {
+			return withoutToken(perr, token)
+		}
+		var serr error
+		if hf, serr = s.store.SetHuggingFaceToken(ctx, p.OrgID, huggingFaceHint(token), account); serr != nil {
+			return fmt.Errorf("the Hugging Face token is in Vault, but its details weren't saved: %w", serr)
+		}
+		return nil
+	})
 	if err != nil {
-		return nil, fmt.Errorf("the Hugging Face token is in Vault, but its details weren't saved: %w", err)
+		return nil, withoutToken(err, token)
 	}
 	s.record(ctx, p, "ai.huggingface_token.put", "", map[string]any{"account": hf.Account, "revision": hf.Revision})
 	return hf, nil
 }
 
+// WithHuggingFaceToken runs fn under the workspace's Hugging Face token
+// lock, with the token's revision, 0 when none is set, and returns fn's
+// error. A gated model's deployment is recorded in fn, so a delete of the
+// token, which checks for gated deployments under the same lock, either
+// sees it or happens before fn starts and leaves revision 0.
+func (s *Service) WithHuggingFaceToken(ctx context.Context, orgID string, fn func(ctx context.Context, revision int64) error) error {
+	return s.store.LockHuggingFaceToken(ctx, orgID, func(ctx context.Context) error {
+		revision, err := s.HuggingFaceTokenRevision(ctx, orgID)
+		if err != nil {
+			return err
+		}
+		return fn(ctx, revision)
+	})
+}
+
 // DeleteHuggingFaceToken deletes the workspace's Hugging Face token.
 // ai:manage. ErrInUse, naming them, while gated models that download with
 // it are deployed. Deleting when there's none is not an error.
+//
+// The check and the delete hold the workspace's token lock, which a gated
+// model's deploy takes to record itself (WithHuggingFaceToken), so no
+// deploy slips in between them.
 func (s *Service) DeleteHuggingFaceToken(ctx context.Context, p security.Principal) error {
 	if err := s.authz.Require(ctx, p, security.AIManage, ""); err != nil {
 		return err
@@ -176,6 +205,12 @@ func (s *Service) DeleteHuggingFaceToken(ctx context.Context, p security.Princip
 	if s.hfTokens == nil {
 		return errors.New("aisettings: Hugging Face tokens aren't configured")
 	}
+	return s.store.LockHuggingFaceToken(ctx, p.OrgID, func(ctx context.Context) error {
+		return s.deleteHuggingFaceToken(ctx, p)
+	})
+}
+
+func (s *Service) deleteHuggingFaceToken(ctx context.Context, p security.Principal) error {
 	st, err := s.store.Settings(ctx, p.OrgID)
 	if err != nil {
 		return err

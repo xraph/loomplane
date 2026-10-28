@@ -48,6 +48,7 @@ var (
 // revision check, SetBudget bumping the revision and refusing a budget
 // below the allocations, and SetAllocation refusing to pass the budget.
 type memStore struct {
+	hfLocks     sync.Map // org -> *sync.Mutex
 	mu          sync.Mutex
 	settings    map[string]Settings
 	keys        map[string]map[string]ProviderKey
@@ -251,6 +252,16 @@ func (m *memStore) SetHuggingFaceToken(_ context.Context, orgID, hint, account s
 	m.settings[orgID] = s
 	hf := *s.HuggingFace
 	return &hf, nil
+}
+
+// LockHuggingFaceToken holds one mutex per org while fn runs, as the
+// Postgres store's advisory lock does.
+func (m *memStore) LockHuggingFaceToken(ctx context.Context, orgID string, fn func(ctx context.Context) error) error {
+	v, _ := m.hfLocks.LoadOrStore(orgID, &sync.Mutex{})
+	mu, _ := v.(*sync.Mutex)
+	mu.Lock()
+	defer mu.Unlock()
+	return fn(ctx)
 }
 
 func (m *memStore) ClearHuggingFaceToken(_ context.Context, orgID string) error {

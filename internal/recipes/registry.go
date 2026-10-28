@@ -291,6 +291,9 @@ func (k Kind) info() KindInfo {
 	}
 	info.ConsumerOptions = slices.Clone(k.ConsumerOptions)
 	info.Feature = k.Feature
+	for _, s := range k.Settings {
+		info.Settings = append(info.Settings, SettingInfo(s))
+	}
 	return info
 }
 

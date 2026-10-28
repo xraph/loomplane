@@ -447,3 +447,68 @@ func TestHuggingFaceTokenMetadata(t *testing.T) {
 		t.Fatalf("token after a budget change: %+v, %v", got.HuggingFace, err)
 	}
 }
+
+// One workspace's token lock holders run one at a time, and another
+// workspace's don't wait for them. The holder's own writes to the settings
+// row, on other connections, don't wait on the lock either.
+func TestHuggingFaceTokenLockSerializesAWorkspace(t *testing.T) {
+	ctx := context.Background()
+	s, _ := scratchStore(t)
+
+	held := make(chan struct{})
+	release := make(chan struct{})
+	first := make(chan error, 1)
+	go func() {
+		first <- s.LockHuggingFaceToken(ctx, "org_a", func(ctx context.Context) error {
+			// A write to the row while holding the lock.
+			if _, err := s.SetHuggingFaceToken(ctx, "org_a", "hf_…aaaa", "rex"); err != nil {
+				return err
+			}
+			close(held)
+			<-release
+			return nil
+		})
+	}()
+	<-held
+
+	second := make(chan struct{})
+	go func() {
+		_ = s.LockHuggingFaceToken(ctx, "org_a", func(context.Context) error {
+			close(second)
+			return nil
+		})
+	}()
+	other := make(chan error, 1)
+	go func() { other <- s.LockHuggingFaceToken(ctx, "org_b", func(context.Context) error { return nil }) }()
+	select {
+	case err := <-other:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("another workspace waited for org_a's lock")
+	}
+	select {
+	case <-second:
+		t.Fatal("a second holder ran while org_a's lock was held")
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(release)
+	if err := <-first; err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-second:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the second holder never ran")
+	}
+
+	// An error from fn comes back, and the lock is let go.
+	boom := errors.New("boom")
+	if err := s.LockHuggingFaceToken(ctx, "org_a", func(context.Context) error { return boom }); !errors.Is(err, boom) {
+		t.Errorf("fn's error: %v", err)
+	}
+	if err := s.LockHuggingFaceToken(ctx, "org_a", func(context.Context) error { return nil }); err != nil {
+		t.Errorf("after an error: %v", err)
+	}
+}

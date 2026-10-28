@@ -1351,6 +1351,7 @@ export interface KindInfo {
   name: string;
   outputs?: OutputInfo[];
   placement: string;
+  settings?: SettingInfo[];
   targets: string[];
   title: string;
   versions: string[];
@@ -2931,6 +2932,14 @@ export interface Setting {
   key: string;
   label: string;
   required?: boolean;
+}
+
+export interface SettingInfo {
+  default?: string;
+  name: string;
+  pattern: string;
+  required: boolean;
+  title: string;
 }
 
 export interface SetupStep {

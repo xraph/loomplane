@@ -64,4 +64,9 @@ type Store interface {
 	// token, bumping the token's revision. Clearing when there's none is not
 	// an error.
 	ClearHuggingFaceToken(ctx context.Context, orgID string) error
+	// LockHuggingFaceToken runs fn while it holds the workspace's Hugging
+	// Face token lock, and returns fn's error. One workspace's holders run
+	// one at a time, across every replica; other workspaces don't wait. fn
+	// may use the store, which doesn't take the lock itself.
+	LockHuggingFaceToken(ctx context.Context, orgID string, fn func(ctx context.Context) error) error
 }

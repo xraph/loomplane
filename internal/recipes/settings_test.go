@@ -173,3 +173,33 @@ func TestWeightCacheSizeMB(t *testing.T) {
 		t.Errorf("no size setting: %d", got)
 	}
 }
+
+// Ruling M17: the kinds list says what settings a kind takes, so a form
+// can show them, and a kind without settings lists none.
+func TestKindInfoListsSettings(t *testing.T) {
+	var model, postgres *recipes.KindInfo
+	for _, info := range recipes.Default().Kinds() {
+		switch info.Name {
+		case recipes.ModelLlamaCPPKind:
+			model = &info
+		case "postgres":
+			postgres = &info
+		}
+	}
+	if model == nil || postgres == nil {
+		t.Fatal("the kinds list has no model-llamacpp or postgres")
+	}
+	k, _ := recipes.Default().Kind(recipes.ModelLlamaCPPKind)
+	if len(model.Settings) != len(k.Settings) || len(k.Settings) == 0 {
+		t.Fatalf("model-llamacpp lists %d settings, the kind has %d", len(model.Settings), len(k.Settings))
+	}
+	for i, s := range k.Settings {
+		want := recipes.SettingInfo(s)
+		if model.Settings[i] != want {
+			t.Errorf("setting %d: %+v, want %+v", i, model.Settings[i], want)
+		}
+	}
+	if len(postgres.Settings) != 0 {
+		t.Errorf("postgres lists settings %+v", postgres.Settings)
+	}
+}
