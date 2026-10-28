@@ -581,6 +581,52 @@ func TestFromSettingsRefusesContextBeyondTheModel(t *testing.T) {
 	}
 }
 
+// The context window a model is served at comes from the Spec, not the
+// stored max_model_len: a pooling model keeps what was asked for in its
+// setting, but vLLM serves min(context, 8192).
+func TestContextWindowIsWhatIsServed(t *testing.T) {
+	ctx := context.Background()
+	r := registry.Default()
+
+	pe, pq := curated(t, "BAAI/bge-m3", "bf16") // context_length 8194
+	stored := Settings(Spec{Entry: pe, Quantization: pq, ServedName: "bge", MaxModelLen: 32768, GPUs: 1})
+	if stored["max_model_len"] != "32768" {
+		t.Fatalf("stored max_model_len = %q, want the requested 32768", stored["max_model_len"])
+	}
+	spec, err := FromSettings(ctx, r, nil, "org_1", stored, 1, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := spec.ContextWindow(); got != 8192 {
+		t.Errorf("pooling ContextWindow = %d, want 8192", got)
+	}
+	args, err := Args(spec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Contains(args, "--max-model-len="+strconv.Itoa(spec.ContextWindow())) {
+		t.Errorf("Args = %q, want the window ContextWindow reports", args)
+	}
+
+	// A pooling model shorter than the cap is served at its own context,
+	// even when less was asked for.
+	short := pe
+	short.ContextLength = 512
+	if got := (Spec{Entry: short, Quantization: pq, MaxModelLen: 256}).ContextWindow(); got != 512 {
+		t.Errorf("short pooling ContextWindow = %d, want 512", got)
+	}
+
+	// Anything that generates text is served at what was asked for.
+	ce, cq := curated(t, "Qwen/Qwen2.5-7B-Instruct", "bf16")
+	chat, err := FromSettings(ctx, r, nil, "org_1", Settings(Spec{Entry: ce, Quantization: cq, ServedName: "qwen", MaxModelLen: 16384}), 1, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := chat.ContextWindow(); got != 16384 {
+		t.Errorf("chat ContextWindow = %d, want 16384", got)
+	}
+}
+
 func TestFromSettingsChecksTheCustomPin(t *testing.T) {
 	ctx := context.Background()
 	r := registry.Default()

@@ -37,10 +37,12 @@ type Endpoint struct {
 	// Provider is ProviderName(Resource).
 	Provider string
 	// BaseURL is the guard's URL and "/v1".
-	BaseURL                              string
-	APIKey                               string
-	ServedName                           string
-	Task                                 registry.Task
+	BaseURL    string
+	APIKey     string
+	ServedName string
+	Task       registry.Task
+	// ContextWindow is engines.Spec.ContextWindow: for a pooling model the
+	// window it's served at, not its stored max_model_len.
 	ContextWindow, MaxOutput, Dimensions int
 	// Alias is the entry's default alias.
 	Alias string

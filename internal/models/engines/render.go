@@ -52,6 +52,18 @@ const poolingContextCap = 8192
 // with on Kubernetes.
 const minCacheMB = 20480
 
+// ContextWindow is the longest context the model is served at: MaxModelLen,
+// except for a pooling model (embedding or rerank only), which is served at
+// min(its context, 8192) whatever MaxModelLen says. The resource's
+// max_model_len setting keeps the value that was asked for, so read the
+// window from here, never from the setting.
+func (s Spec) ContextWindow() int {
+	if poolingOnly(s.Entry.Tasks) {
+		return min(s.Entry.ContextLength, poolingContextCap)
+	}
+	return s.MaxModelLen
+}
+
 // Args returns the engine's arguments, one per line of engine.args, after
 // the binary. Every argument is checked: none holds a line break, since
 // the wrapper reads one argument per line, and every flag is one the pinned
@@ -92,10 +104,7 @@ func vllmArgs(s Spec) ([]string, error) {
 	e, q := s.Entry, s.Quantization
 	repo, revision := weightsRepo(e, q)
 	pooling := poolingOnly(e.Tasks)
-	maxLen := s.MaxModelLen
-	if pooling {
-		maxLen = min(e.ContextLength, poolingContextCap)
-	}
+	maxLen := s.ContextWindow()
 	args := []string{
 		repo,
 		"--revision=" + revision,
