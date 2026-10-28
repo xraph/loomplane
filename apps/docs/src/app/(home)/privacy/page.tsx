@@ -1,0 +1,209 @@
+import type { Metadata } from "next";
+import Link from "next/link";
+import { Mail, operator, PolicyPage } from "@/components/landing/policy";
+
+export const metadata: Metadata = {
+  title: "Privacy policy",
+  description:
+    "What the Loomplane app and the hosted service keep about you, where it goes, and how to get it deleted.",
+};
+
+export default function PrivacyPage() {
+  return (
+    <PolicyPage
+      id="privacy-title"
+      crumb="Privacy"
+      title="Your data,"
+      thread="and where it goes."
+      lede={
+        <>
+          There are no ads, no analytics and no tracking in the Loomplane app.
+          This page says what it does keep, where that lives, and how you get it
+          removed.
+        </>
+      }
+      updated="October 28, 2026"
+    >
+      <h2>Who this covers</h2>
+      <p>
+        {operator} is run by Rex Raphael, an independent developer, and
+        publishes the Loomplane app for iOS and Android. {operator} also runs
+        Loomplane's hosted service at <code>app.loomplane.com</code> and this
+        website, <code>loomplane.dev</code>. In this policy, "we" and "us" mean{" "}
+        {operator}.
+      </p>
+      <p>
+        Loomplane is also software you can run yourself. When you connect the
+        app to a Loomplane that your company or someone else hosts, that server
+        belongs to them. We never see what passes between your phone and it, and
+        their own privacy policy covers what they keep. Ask whoever runs it.
+      </p>
+
+      <h2>What stays on your phone</h2>
+      <p>
+        The app keeps a few things so you don't have to sign in every time you
+        open it. All of it sits in the platform's secure storage: the Keychain
+        on iOS, and storage encrypted with the Android Keystore on Android.
+      </p>
+      <ul>
+        <li>
+          The address of each Loomplane server you sign in to, and the public
+          key it gives the app.
+        </li>
+        <li>
+          Your session token for each of those servers, the email address you
+          signed in with, and the workspace you last used.
+        </li>
+        <li>
+          Your settings for this phone: theme, accent colour, which notices you
+          want, quiet hours, and whether production actions ask for Face ID or
+          your fingerprint.
+        </li>
+      </ul>
+      <p>
+        Signing out of a server removes its session from your phone. Deleting
+        the app removes the rest on Android. iOS can keep Keychain items after
+        an app is deleted, so sign out first if you want them gone straight
+        away.
+      </p>
+      <p>
+        When the app asks for Face ID, Touch ID or your fingerprint, your phone
+        does the check. The app only learns whether it passed. Your face and
+        fingerprints never reach the app or us.
+      </p>
+
+      <h2>What leaves your phone</h2>
+      <p>
+        The app talks to the Loomplane server you choose, over HTTPS (plain HTTP
+        only for a server on your own network). It sends your sign-in details
+        and session token, and the actions you take, like approving a plan or
+        marking a notification read. It shows you what that server sends back.
+      </p>
+      <p>
+        The first time it opens, the app downloads its typeface, Geist, from
+        Google Fonts. Google receives your IP address for that request, as for
+        any web request, and{" "}
+        <a href="https://policies.google.com/privacy">
+          Google's privacy policy
+        </a>{" "}
+        covers it.
+      </p>
+      <p>
+        Some screens open a page in your browser, on your server's dashboard or
+        on this site. Your browser handles those like any other web page.
+      </p>
+      <p>
+        The app doesn't contain advertising, analytics or crash-reporting
+        services, and it doesn't use your location, contacts, photos, camera or
+        microphone.
+      </p>
+
+      <h2>What the hosted service keeps</h2>
+      <p>
+        If you use Loomplane at <code>app.loomplane.com</code>, from the app or
+        the web, we keep what it needs to work:
+      </p>
+      <ul>
+        <li>
+          Your name, email address, a hash of your password (never the password
+          itself), and any passkeys or sign-in methods you add.
+        </li>
+        <li>
+          The organizations you belong to, their members and roles, and their
+          projects, manifests, plans, deployments, variables and secrets, along
+          with the cloud accounts and repositories you connect.
+        </li>
+        <li>
+          An audit trail of changes (who, what and when), deployment logs, and
+          notifications.
+        </li>
+        <li>
+          IP addresses, browser or app version, and sign-in times, which we use
+          to keep accounts safe and stop abuse.
+        </li>
+      </ul>
+      <p>
+        Secrets and cloud credentials are encrypted before they're stored. The{" "}
+        <Link href="/security">security page</Link> explains how.
+      </p>
+
+      <h2>How we use it</h2>
+      <p>
+        To run the service you asked for: sign you in, show you your projects,
+        and carry out the plans and deployments you approve. To send the emails
+        you've chosen to get, such as deployment notices and invitations. To
+        keep the service secure and fix what breaks. We don't sell your data,
+        and we don't use it for advertising.
+      </p>
+
+      <h2>Who else handles it</h2>
+      <p>
+        We use a small number of providers to run the hosted service, such as
+        the cloud company that hosts it and the service that delivers its email.
+        They process data only to provide those services to us.
+      </p>
+      <p>
+        When you connect a cloud account, a repository host or another
+        integration, Loomplane sends that provider what's needed to do what you
+        asked, like the configuration for a deployment you approved. Their own
+        terms cover what they do with it.
+      </p>
+      <p>
+        We'll disclose data if the law requires it, and we'll tell you first
+        when the law allows.
+      </p>
+
+      <h2>How long we keep it</h2>
+      <p>
+        Your account data stays while your account is open. When you delete your
+        account, your name, email address, password and sign-in methods are
+        erased at once, and your sessions and API keys stop working. Backups
+        that still hold a copy expire within 30 days. Workspaces and their
+        projects belong to the organization, so they stay for its other members,
+        and their member lists and audit trails show an anonymous ID where your
+        name used to be. A record of the terms and consents you accepted is kept
+        as proof of what you agreed to.
+      </p>
+      <p>
+        The <Link href="/delete-account">account deletion page</Link> has the
+        steps.
+      </p>
+
+      <h2>Your rights</h2>
+      <p>
+        Wherever you live, you can ask us for a copy of the data we hold about
+        you, ask us to correct it, or ask us to delete it. Depending on where
+        you live (the EU, the UK and California, for example), the law may give
+        you further rights, such as objecting to how we use your data or
+        complaining to your data protection authority. Email <Mail /> from the
+        address on your account and we'll answer within 30 days.
+      </p>
+
+      <h2>Where it's stored</h2>
+      <p>
+        The hosted service runs in the United States. If you use it from
+        somewhere else, your data is transferred there, with the protections
+        this policy describes.
+      </p>
+
+      <h2>Children</h2>
+      <p>
+        Loomplane is a tool for software teams and isn't meant for children. You
+        need to be at least 16 to create an account. If you think a child has
+        given us data, email us and we'll delete it.
+      </p>
+
+      <h2>Changes</h2>
+      <p>
+        When this policy changes, we'll update it here and change the date at
+        the top. If a change matters to how your data is used, we'll also tell
+        you by email or in the app before it takes effect.
+      </p>
+
+      <h2>Contact</h2>
+      <p>
+        Questions or requests about your data go to <Mail />.
+      </p>
+    </PolicyPage>
+  );
+}
