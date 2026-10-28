@@ -344,7 +344,8 @@ func TestWaitingListsEveryOrg(t *testing.T) {
 	if err := st.Create(ctx, planned); err != nil {
 		t.Fatal(err)
 	}
-	waiting, err := st.Waiting(ctx)
+	var lister WaitingLister = st
+	waiting, err := lister.Waiting(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -357,6 +358,43 @@ func TestWaitingListsEveryOrg(t *testing.T) {
 	}
 	if strings.Join(got, " ") != "org_b/env_1 org_a/env_1" {
 		t.Fatalf("waiting: %v", got)
+	}
+}
+
+// TestAccrueCountsAnIntervalOnce: two runs that worked out the same interval
+// from the same read can't both add it.
+func TestAccrueCountsAnIntervalOnce(t *testing.T) {
+	st, _ := scratchStore(t)
+	ctx := t.Context()
+	d := llamaRow("org_a", "env_1")
+	d.Phase = PhaseActive
+	if err := st.Create(ctx, d); err != nil {
+		t.Fatal(err)
+	}
+	at := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
+	first, second := *d, *d // both read the never-accrued row
+	if err := st.Accrue(ctx, &first, "2026-11", "3.2000", at); err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Accrue(ctx, &second, "2026-11", "3.2000", at.Add(time.Second)); !errors.Is(err, ErrStale) {
+		t.Fatalf("a second accrual from the same read: err = %v, want ErrStale", err)
+	}
+	if second.MonthCostUSD != "0.0000" || !second.AccruedAt.IsZero() {
+		t.Fatalf("a refused accrual changed its row: %s %v", second.MonthCostUSD, second.AccruedAt)
+	}
+	got, err := st.Get(ctx, "org_a", "proj_1", "env_1", "llama")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.MonthCostUSD != "3.2000" || !got.AccruedAt.Equal(at) {
+		t.Fatalf("stored: %s %v, want 3.2000 at %v", got.MonthCostUSD, got.AccruedAt, at)
+	}
+	// Reading again lets the next interval in.
+	if err = st.Accrue(ctx, got, "2026-11", "1.0000", at.Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if got.MonthCostUSD != "4.2000" {
+		t.Fatalf("after a fresh read: %s", got.MonthCostUSD)
 	}
 }
 
@@ -373,8 +411,17 @@ func TestAccrueTakesTheRowLock(t *testing.T) {
 	errs := make(chan error, writers)
 	for range writers {
 		go func() {
-			own := *d
-			errs <- st.Accrue(ctx, &own, "2026-11", "0.0125", time.Now())
+			// Each run reads the row again when another got there first.
+			for {
+				own, err := st.Get(ctx, "org_a", "proj_1", "env_1", "llama")
+				if err == nil {
+					err = st.Accrue(ctx, own, "2026-11", "0.0125", time.Now())
+				}
+				if !errors.Is(err, ErrStale) {
+					errs <- err
+					return
+				}
+			}
 		}()
 	}
 	for range writers {

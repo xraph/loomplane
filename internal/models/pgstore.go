@@ -26,7 +26,10 @@ type PgStore struct {
 // NewPgStore returns a Store over db.
 func NewPgStore(db *pgdriver.PgDB) *PgStore { return &PgStore{db: db, now: time.Now} }
 
-var _ Store = (*PgStore)(nil)
+var (
+	_ Store         = (*PgStore)(nil)
+	_ WaitingLister = (*PgStore)(nil)
+)
 
 // Money goes in and out as text, so no amount passes through a float.
 const deploymentColumns = `id, org_id, project_id, environment_id, resource, entry_id, quantization, engine,
@@ -185,7 +188,7 @@ func (s *PgStore) ListProject(ctx context.Context, orgID, projectID string) ([]*
 		WHERE org_id = $1 AND project_id = $2 ORDER BY environment_id, resource`, orgID, projectID)
 }
 
-// Waiting implements Store. It's the one read across organizations: the
+// Waiting implements WaitingLister. It's the one read across organizations: the
 // job that carries waiting deployments on runs for all of them.
 func (s *PgStore) Waiting(ctx context.Context) ([]*Deployment, error) {
 	return s.list(ctx, `SELECT `+deploymentColumns+` FROM loomplane_ai_model_deployments
@@ -290,14 +293,28 @@ func (s *PgStore) Accrue(ctx context.Context, d *Deployment, month, addUSD strin
 	}
 	defer rollback(tx)
 
-	var storedMonth, storedCost string
-	err = tx.QueryRow(ctx, `SELECT month, month_cost_usd::text FROM loomplane_ai_model_deployments
-		WHERE org_id = $1 AND id = $2 FOR UPDATE`, d.OrgID, d.ID).Scan(&storedMonth, &storedCost)
+	// The caller's AccruedAt is the last accrual it saw. A zero one is a
+	// row never accrued, stored as NULL.
+	var read *time.Time
+	if !d.AccruedAt.IsZero() {
+		t := d.AccruedAt.UTC()
+		read = &t
+	}
+	var (
+		storedMonth, storedCost string
+		sameRead                bool
+	)
+	err = tx.QueryRow(ctx, `SELECT month, month_cost_usd::text, accrued_at IS NOT DISTINCT FROM $3::timestamptz
+		FROM loomplane_ai_model_deployments
+		WHERE org_id = $1 AND id = $2 FOR UPDATE`, d.OrgID, d.ID, read).Scan(&storedMonth, &storedCost, &sameRead)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return ErrNotFound
 	}
 	if err != nil {
 		return fmt.Errorf("lock model deployment: %w", err)
+	}
+	if !sameRead {
+		return fmt.Errorf("%w: it was accrued again since it was read", ErrStale)
 	}
 	var total int64
 	switch {

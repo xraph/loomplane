@@ -52,7 +52,8 @@ const poolingContextCap = 8192
 // with on Kubernetes.
 const minCacheMB = 20480
 
-// ContextWindow is the longest context the model is served at: MaxModelLen,
+// ContextWindow is the context window Loomplane advertises for the model
+// (TEI may serve more for some entries): MaxModelLen,
 // except for a pooling model (embedding or rerank only), which is served at
 // min(its context, 8192) whatever MaxModelLen says. The resource's
 // max_model_len setting keeps the value that was asked for, so read the

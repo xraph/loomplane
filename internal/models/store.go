@@ -93,9 +93,8 @@ type Deployment struct {
 	UpdatedAt        time.Time `json:"updated_at"`
 }
 
-// Store keeps model deployments. Every read and write but Waiting is
-// scoped to an organization: another organization's row reads as
-// ErrNotFound.
+// Store keeps model deployments. Every read and write is scoped to an
+// organization: another organization's row reads as ErrNotFound.
 type Store interface {
 	// Create inserts d with Revision 1, giving it an ID when it has none.
 	// ErrConflict when its org, project, environment and resource already
@@ -108,9 +107,6 @@ type Store interface {
 	List(ctx context.Context, orgID string) ([]*Deployment, error)
 	// ListProject lists one project's rows by environment and resource.
 	ListProject(ctx context.Context, orgID, projectID string) ([]*Deployment, error)
-	// Waiting lists the rows waiting for a server in every organization,
-	// oldest change first, for the job that carries them on.
-	Waiting(ctx context.Context) ([]*Deployment, error)
 	// Update writes d over the row with d's org and ID when the stored
 	// Revision is d.Revision, and bumps it. ErrStale otherwise. It never
 	// changes the row's project, environment, resource or month's cost:
@@ -120,10 +116,22 @@ type Store interface {
 	Delete(ctx context.Context, orgID, projectID, environmentID, resource string) error
 	// Accrue adds addUSD to the row's cost for month under the row's lock,
 	// starting from zero when month is newer than the stored one, and sets
-	// AccruedAt to at. A month older than the stored one is ErrStale.
+	// AccruedAt to at. A month older than the stored one is ErrStale, and so
+	// is a d.AccruedAt that isn't the stored one: d must come from the read
+	// the interval was worked out from, so two runs over the same interval
+	// count it once.
 	// Accrual leaves Revision alone, so it never makes an edit stale. On
 	// success d holds the new month, cost and AccruedAt.
 	Accrue(ctx context.Context, d *Deployment, month, addUSD string, at time.Time) error
+}
+
+// WaitingLister is the one read across organizations, for the reconcile
+// cron that carries waiting deployments on. It's apart from Store so no
+// request path can reach another organization's rows by accident.
+type WaitingLister interface {
+	// Waiting lists the rows waiting for a server in every organization,
+	// oldest change first.
+	Waiting(ctx context.Context) ([]*Deployment, error)
 }
 
 // Money is decimal text, parsed to whole ten-thousandths of a dollar for
