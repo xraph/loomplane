@@ -1218,7 +1218,8 @@ func TestPreviewRefusesATopLevelFile(t *testing.T) {
 		Settings: settings, Environments: map[string]manifest.ResourceSettings{"staging": on()},
 	})
 	pv, err := d.svc.Preview(context.Background(), member, projectID, productID, DeployInput{
-		EntryID: qwen7B, Resource: "llm", Quantization: "bf16", Target: onGPU2("nvidia-l40s"),
+		EntryID: qwen7B, Resource: "llm", Quantization: "bf16",
+		Target: TargetChoice{Source: TargetConnection, ConnectionID: gpuConn2, GPU: &provider.GPURequest{Kind: "nvidia-l40s"}},
 	})
 	if err != nil {
 		t.Fatal(err)

@@ -885,21 +885,21 @@ func (s *Service) moveResource(ctx context.Context, p security.Principal, projec
 	}
 	var from string
 	rev, err := s.decideEdit(ctx, p, projectID, fmt.Sprintf("moving %s in %s", pv.Resource, env.Name), func(m *manifests.Revision) (manifests.EditInput, error) {
-		cur, err := modelIn(m.Manifest, env, pv.Resource)
-		if err != nil {
-			return manifests.EditInput{}, err
+		cur, merr := modelIn(m.Manifest, env, pv.Resource)
+		if merr != nil {
+			return manifests.EditInput{}, merr
 		}
 		settings := moveSettings(cur, pv)
-		refusal, err := s.cacheRefusal(ctx, p.OrgID, env, cur, pv, settings)
-		if err != nil {
-			return manifests.EditInput{}, err
+		refusal, cerr := s.cacheRefusal(ctx, p.OrgID, env, cur, pv, settings)
+		if cerr != nil {
+			return manifests.EditInput{}, cerr
 		}
 		if refusal != "" {
 			return manifests.EditInput{}, fmt.Errorf("%w: %s", ErrInvalid, refusal)
 		}
-		update, err := moveUpdate(liveIn(m.Manifest.Resources[pv.Resource], live), cur, env.Name, m.Manifest.Defaults, pv, settings)
-		if err != nil {
-			return manifests.EditInput{}, err
+		update, uerr := moveUpdate(liveIn(m.Manifest.Resources[pv.Resource], live), cur, env.Name, m.Manifest.Defaults, pv, settings)
+		if uerr != nil {
+			return manifests.EditInput{}, uerr
 		}
 		from = cur.Target
 		return manifests.EditInput{UpdateResource: update}, nil
