@@ -3,18 +3,18 @@ package models
 import (
 	"context"
 	"errors"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
-
-	"gopkg.in/yaml.v3"
 
 	"github.com/xraph/loomplane/internal/gpus"
 	"github.com/xraph/loomplane/internal/manifests"
 	"github.com/xraph/loomplane/internal/models/engines"
 	"github.com/xraph/loomplane/internal/recipes"
 	"github.com/xraph/loomplane/internal/security"
+	"github.com/xraph/loomplane/pkg/manifest"
 )
 
 // AI settings asks before it deletes the token which deployments download
@@ -247,37 +247,179 @@ func repinnedLlama(t *testing.T, d *deploySetup) {
 	}
 }
 
-// Ruling M27: moving to the new pin rewrites the resource in every
-// environment it runs in, so someone who may change staging's models
-// can't use it to change production's.
-func TestMoveToPinStaysInItsEnvironment(t *testing.T) {
-	ctx := context.Background()
-	d := newDeploy(t, deployRegistry(t, strings.Repeat("e", 40), ""), deployer, []gpus.GPUTarget{l40sServer()})
-	repinnedLlama(t, d)
-	// Someone has turned it on in production by hand.
+// staleLlama puts llama-8b in the manifest with the settings of a
+// registry pin older than the one d's registry has, on gpu-box, with the
+// environment blocks envs.
+func staleLlama(t *testing.T, d *deploySetup, envs map[string]manifest.ResourceSettings) {
+	t.Helper()
+	old := deployRegistry(t, llamaRev, "")
+	e, _ := old.Entry(llama8BID)
+	q, _ := e.Quantization("bf16")
+	putResource(t, d, "llama-8b", manifest.Resource{
+		Kind: recipes.ModelVLLMKind, Provider: "server", Target: gpuConn, Version: "0.31", GPU: &manifest.GPU{Kind: "nvidia-l40s", Count: 1},
+		Settings: engines.Settings(engines.Spec{Entry: e, Quantization: q, ServedName: llama8BID, MaxModelLen: 16384, GPUs: 1}), Environments: envs,
+	})
+}
+
+// revisionIn is the weights revision env's copy of llama-8b runs.
+func revisionIn(t *testing.T, d *deploySetup, env string) string {
+	t.Helper()
 	m := current(t, d)
-	r := m.Resources["llama-8b"]
-	r.Environments["production"] = r.Environments["staging"]
-	m.Resources["llama-8b"] = r
-	raw, err := yaml.Marshal(m)
+	return m.Resources["llama-8b"].In(env, m.Defaults).Settings["revision"]
+}
+
+// Review Focus 4 and Decision 5: moving staging's copy to the new pin
+// takes staging's permission alone and leaves production's copy, its
+// plans and its weights alone.
+func TestMoveToPinChangesOnlyItsEnvironment(t *testing.T) {
+	ctx := context.Background()
+	newRev := strings.Repeat("e", 40)
+	d := newDeploy(t, deployRegistry(t, newRev, ""), deployer, []gpus.GPUTarget{l40sServer()})
+	staleLlama(t, d, map[string]manifest.ResourceSettings{"staging": on(), "production": on()})
+	production := &Deployment{OrgID: "org", ProjectID: projectID, EnvironmentID: productID, Resource: "llama-8b", EntryID: llama8BID,
+		Quantization: "bf16", Engine: "vllm", Phase: PhaseActive, PlanID: "plan_production"}
+	if err := d.rows.Create(ctx, production); err != nil {
+		t.Fatal(err)
+	}
+	edits := d.recordEdits()
+
+	// ai:edit only, and production needs ai:manage.
+	res, err := d.svc.MoveToPin(ctx, member, projectID, stagingID, "llama-8b")
 	if err != nil {
 		t.Fatal(err)
 	}
-	mf := manifests.NewService(d.revisions, memProjects{}, aiAdmin, nil)
-	if _, _, err = mf.Save(ctx, member, projectID, manifests.SaveInput{YAML: string(raw)}); err != nil {
-		t.Fatal(err)
+	if len(edits.edits) != 1 || edits.edits[0].UpdateResource == nil {
+		t.Fatalf("edits %+v", edits.edits)
 	}
-	before := d.revisions.count()
-
-	_, err = d.svc.MoveToPin(ctx, member, projectID, stagingID, "llama-8b")
-	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "also runs in production") {
-		t.Fatalf("an ai:edit holder moved a model production runs: %v", err)
+	u := edits.edits[0].UpdateResource
+	if u.Resource != "llama-8b" || u.Environment != "staging" || u.Settings["revision"] != newRev || u.Settings["model"] != llama8BID ||
+		u.Settings["file"] != "" || u.Target != nil || u.Provider != nil || u.GPU != nil || u.Enabled != nil {
+		t.Errorf("update %+v", u)
 	}
-	if d.revisions.count() != before || len(d.plans.asked) != 0 || len(d.audit.events) != 0 {
-		t.Error("the refused move wrote something")
+	if len(d.plans.asked) != 1 || d.plans.asked[0].Environment != "staging" || res.PlanID == "" {
+		t.Errorf("plans %+v", d.plans.asked)
+	}
+	if got := revisionIn(t, d, "staging"); got != newRev {
+		t.Errorf("staging runs %s", got)
+	}
+	if got := revisionIn(t, d, "production"); got != llamaRev {
+		t.Errorf("production runs %s", got)
 	}
 	if got := current(t, d).Resources["llama-8b"].Settings["revision"]; got != llamaRev {
-		t.Errorf("production's revision is %s now", got)
+		t.Errorf("the top level says %s", got)
+	}
+	if after, _ := d.rows.Get(ctx, "org", projectID, productID, "llama-8b"); after.Revision != production.Revision || after.PlanID != "plan_production" {
+		t.Errorf("production's row %+v", after)
+	}
+	if _, err = d.svc.MoveToPin(ctx, member, projectID, productID, "llama-8b"); !errors.Is(err, security.ErrForbidden) {
+		t.Errorf("ai:edit in production: %v", err)
+	}
+}
+
+// Review Focus 4: each environment says whether its own copy has an
+// update.
+func TestUpdateAvailablePerEnvironment(t *testing.T) {
+	ctx := context.Background()
+	d := newDeploy(t, deployRegistry(t, strings.Repeat("e", 40), ""), deployer, []gpus.GPUTarget{l40sServer()}, boxes()...)
+	staleLlama(t, d, map[string]manifest.ResourceSettings{"staging": on(), "production": on()})
+	if _, err := d.svc.MoveToPin(ctx, member, projectID, stagingID, "llama-8b"); err != nil {
+		t.Fatal(err)
+	}
+	staging, err := d.svc.Status(ctx, member, projectID, stagingID, "llama-8b")
+	if err != nil || staging.UpdateAvailable || staging.Pin != nil {
+		t.Errorf("staging: %+v, %v", staging, err)
+	}
+	production, err := d.svc.Status(ctx, member, projectID, productID, "llama-8b")
+	if err != nil || !production.UpdateAvailable || production.Pin == nil || !strings.Contains(production.Pin.Message, "llama-8b runs") {
+		t.Errorf("production: %+v, %v", production, err)
+	}
+	if pin, perr := d.svc.CheckPin(ctx, member, projectID, productID, "llama-8b"); perr != nil || !pin.UpdateAvailable {
+		t.Errorf("production's pin: %+v, %v", pin, perr)
+	}
+}
+
+// Decision 6: a pin move rewrites the top level when the environment is
+// the last one that reads the pin from there, and its own block
+// otherwise.
+func TestMoveToPinLastReaderRewritesTheTopLevel(t *testing.T) {
+	ctx := context.Background()
+	newRev := strings.Repeat("e", 40)
+	d := newDeploy(t, deployRegistry(t, newRev, ""), deployer, []gpus.GPUTarget{l40sServer()})
+	staleLlama(t, d, map[string]manifest.ResourceSettings{"staging": on(), "production": on()})
+	if _, err := d.svc.MoveToPin(ctx, member, projectID, stagingID, "llama-8b"); err != nil {
+		t.Fatal(err)
+	}
+	edits := d.recordEdits()
+	d.svc.d.Authz = aiAdmin
+	if _, err := d.svc.MoveToPin(ctx, member, projectID, productID, "llama-8b"); err != nil {
+		t.Fatal(err)
+	}
+	if len(edits.edits) != 1 || edits.edits[0].UpdateResource.Environment != "" || edits.edits[0].UpdateResource.Settings["revision"] != newRev {
+		t.Fatalf("production's edit %+v", edits.edits[0].UpdateResource)
+	}
+	if len(d.plans.asked) != 2 || d.plans.asked[1].Environment != "production" {
+		t.Errorf("plans %+v", d.plans.asked)
+	}
+	llama := current(t, d).Resources["llama-8b"]
+	if llama.Settings["revision"] != newRev || llama.Environments["staging"].Settings["revision"] != newRev || revisionIn(t, d, "staging") != newRev {
+		t.Errorf("after production's move %+v", llama)
+	}
+
+	// A model in one environment keeps today's YAML: the top level.
+	d = newDeploy(t, deployRegistry(t, newRev, ""), deployer, []gpus.GPUTarget{l40sServer()})
+	staleLlama(t, d, map[string]manifest.ResourceSettings{"staging": on()})
+	edits = d.recordEdits()
+	if _, err := d.svc.MoveToPin(ctx, member, projectID, stagingID, "llama-8b"); err != nil {
+		t.Fatal(err)
+	}
+	if u := edits.edits[0].UpdateResource; u.Environment != "" || current(t, d).Resources["llama-8b"].Environments["staging"].Settings != nil {
+		t.Errorf("one environment: %+v", u)
+	}
+
+	// Production's own stale override moves in production's block, under
+	// staging's current top level.
+	d = newDeploy(t, deployRegistry(t, newRev, ""), aiAdmin, []gpus.GPUTarget{l40sServer()})
+	production := on()
+	production.Settings = map[string]string{"revision": llamaRev}
+	staleLlama(t, d, map[string]manifest.ResourceSettings{"staging": on(), "production": production})
+	m := *current(t, d)
+	top := m.Resources["llama-8b"]
+	top.Settings = maps.Clone(top.Settings)
+	top.Settings["revision"] = newRev
+	putResource(t, d, "llama-8b", top)
+	edits = d.recordEdits()
+	if _, err := d.svc.MoveToPin(ctx, member, projectID, productID, "llama-8b"); err != nil {
+		t.Fatal(err)
+	}
+	if u := edits.edits[0].UpdateResource; u.Environment != "production" || revisionIn(t, d, "production") != newRev {
+		t.Errorf("production's override: %+v", u)
+	}
+}
+
+func TestSoleReader(t *testing.T) {
+	raw := manifest.Resource{Target: "c1", Settings: map[string]string{"model": "m", "revision": "r"}, Environments: map[string]manifest.ResourceSettings{
+		"staging": on(), "production": {Enabled: on().Enabled, Target: "c2", Settings: map[string]string{"model": "m2", "revision": "r2"}},
+		"dev": {Target: "c3"}, // off: it reads nothing
+	}}
+	for _, c := range []struct {
+		env  string
+		keys []string
+		want bool
+	}{
+		{"staging", []string{"target"}, true},                        // production has its own target
+		{"staging", []string{"model", "revision", "file"}, true},     // and its own pin; nobody sets file
+		{"production", []string{"target"}, false},                    // its block sets it
+		{"staging", []string{"max_model_len"}, true},                 // the top level doesn't set it
+		{"staging", []string{"gpu", "provider"}, true},               // nor these
+		{"production", []string{"model", "revision", "file"}, false}, // its block sets them
+	} {
+		if got := soleReader(raw, c.env, c.keys...); got != c.want {
+			t.Errorf("soleReader(%s, %v) = %v", c.env, c.keys, got)
+		}
+	}
+	raw.Settings["max_model_len"] = "8192"
+	if soleReader(raw, "staging", "max_model_len") {
+		t.Error("production reads the top-level context")
 	}
 }
 

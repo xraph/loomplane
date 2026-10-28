@@ -10,6 +10,8 @@ import (
 	"github.com/xraph/loomplane/internal/catalogstate"
 	"github.com/xraph/loomplane/internal/gpus"
 	"github.com/xraph/loomplane/internal/models/registry"
+	"github.com/xraph/loomplane/internal/recipes"
+	"github.com/xraph/loomplane/pkg/manifest"
 )
 
 func TestProviderName(t *testing.T) {
@@ -124,5 +126,32 @@ func TestEndpointsSkipOtherConnections(t *testing.T) {
 		if !slices.Contains(skipped, want) {
 			t.Errorf("%s not skipped: %+v", name, skipped)
 		}
+	}
+}
+
+// Each environment runs its own copy: a caller in production reaches
+// production's, and staging's copy of the same model isn't skipped as
+// running elsewhere.
+func TestEndpointsListTheCallersCopyOnly(t *testing.T) {
+	ctx := context.Background()
+	targets, conns := copyServers()
+	d := newDeploy(t, deployRegistry(t, llamaRev, ""), aiAdmin, targets, conns...)
+	production := on()
+	production.Target = gpuConn2
+	putLLM(t, d, map[string]manifest.ResourceSettings{"staging": on(), "production": production})
+	llmRow(t, d, stagingID)
+	row := llmRow(t, d, productID)
+	d.facts.runningOn(gpuConn, stagingID, "llm", recipes.ModelVLLMKind, llmSettings(t), 1)
+	d.facts.runningOn(gpuConn2, productID, "llm", recipes.ModelVLLMKind, llmSettings(t), 1)
+
+	got, skipped, err := d.svc.Endpoints(ctx, "org", projectID, Placement{EnvironmentID: productID, ConnectionID: gpuConn2, Provider: "server"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].EnvironmentID != productID || got[0].Deployment != row.ID || got[0].Resource != "llm" {
+		t.Errorf("endpoints %+v", got)
+	}
+	if len(skipped) != 0 {
+		t.Errorf("skipped %+v", skipped)
 	}
 }

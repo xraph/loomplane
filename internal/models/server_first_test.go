@@ -1352,6 +1352,43 @@ func TestMoveOntoANewServerWaitsForIt(t *testing.T) {
 	}
 }
 
+// Review Focus 3: staging's copy moving onto a new GPU server waits for
+// one server, and once it's up moves staging's copy alone. Production's
+// copy, row and plan stay where they are.
+func TestMoveOneCopyOntoANewServer(t *testing.T) {
+	ctx := context.Background()
+	sf := newServerFirst(t, cloudAdmin)
+	sf.qwenOnGPUBox(t)
+	res, err := sf.svc.Deploy(ctx, member, projectID, productID, DeployInput{EntryID: qwen7B, Target: onGPU("nvidia-l40s")})
+	if err != nil || res.Deployment.Resource != "qwen2-5-7b-instruct" {
+		t.Fatalf("production: %+v, %v", res, err)
+	}
+	production, _ := sf.rows.Get(ctx, "org", projectID, productID, "qwen2-5-7b-instruct")
+	pv, err := sf.moveOntoNewServer(t)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sf.servers.succeed(pv.Server.ID)
+	sf.gpusReady(provider.GPUStatusReady)
+	if err = sf.svc.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	m := current(t, sf.deploySetup)
+	r := m.Resources["qwen2-5-7b-instruct"]
+	if r.For("staging", m.Defaults).Target != newConn || r.For("production", m.Defaults).Target != gpuConn || !enabledIn(r, "production") {
+		t.Errorf("after staging's move %+v", r)
+	}
+	if after, _ := sf.rows.Get(ctx, "org", projectID, productID, "qwen2-5-7b-instruct"); after.Revision != production.Revision || after.PlanID != production.PlanID {
+		t.Errorf("production's row %+v", after)
+	}
+	if previews, applies, _ := sf.servers.calls(); previews != 1 || applies != 1 {
+		t.Errorf("%d reviews, %d applies", previews, applies)
+	}
+	if last := sf.plans.asked[len(sf.plans.asked)-1]; last.Environment != "staging" {
+		t.Errorf("plans %+v", sf.plans.asked)
+	}
+}
+
 // Cancelling a move puts the model back as it was, and says the server
 // it approved is coming. A move whose server the capacity policy refuses
 // puts it back too.

@@ -270,27 +270,35 @@ func (s *Service) status(ctx context.Context, p security.Principal, projectID st
 	if err != nil {
 		return nil, err
 	}
+	// raw is the resource as the manifest has it, and r the copy env
+	// runs: its own target, GPU and settings.
+	var raw manifest.Resource
 	var r *manifest.Resource
 	if m != nil {
-		if res, ok := m.Resources[resource]; ok && recipes.IsModelKind(res.Kind) && enabledIn(res, env.Name) {
-			r = &res
+		if res, ok := m.Resources[resource]; ok && recipes.IsModelKind(res.Kind) {
+			raw = res
+			if enabledIn(res, env.Name) {
+				here := res.In(env.Name, m.Defaults)
+				r = &here
+			}
 		}
 	}
 	if r == nil && row == nil {
 		return nil, fmt.Errorf("%w: %s has no model %s", ErrNotFound, env.Name, resource)
 	}
 	now := s.d.Now()
+	rows, _ := s.projectRows(ctx, p.OrgID, projectID, "")
 	st := &Status{
 		Deployment: row, ProjectID: projectID, Resource: resource,
-		Environments: []Reach{homeReach(env)}, Linked: []LinkedService{},
-		MonthToDateUSD: monthToDate(row, now),
+		Environments: copiesOf(raw, s.environmentsOf(ctx, p.OrgID, projectID, env), env, waitingIn(rows, resource)),
+		Linked:       []LinkedService{}, MonthToDateUSD: monthToDate(row, now),
 	}
 
 	settings, override := map[string]string{}, ""
 	switch {
 	case r != nil:
 		st.Kind, settings, st.ConnectionID = r.Kind, r.Settings, r.Target
-		if g := r.For(env.Name, m.Defaults).GPU; g != nil {
+		if g := r.GPU; g != nil {
 			st.GPU = &provider.GPURequest{Kind: g.Kind, Count: g.Count}
 		}
 		if pin, perr := pinStatusOf(s.pinOf(resource, *r)); perr == nil && pin.UpdateAvailable {
@@ -397,7 +405,7 @@ func (s *Service) status(ctx context.Context, p security.Principal, projectID st
 	return st, nil
 }
 
-// homeReach is the one environment a model runs in, and reaches.
+// homeReach is the environment of a model that runs in that one alone.
 func homeReach(env *projects.Environment) Reach {
 	return Reach{EnvironmentID: env.ID, Environment: env.Name, Mode: ReachHome,
 		Message: "Runs in " + env.Name + ". Services there link to it and get MODEL_URL and MODEL_API_KEY."}
@@ -682,15 +690,10 @@ func (s *Service) MovePreview(ctx context.Context, p security.Principal, project
 // moveRequest reads the model a move moves and turns the move into the
 // deploy it amounts to.
 func (s *Service) moveRequest(ctx context.Context, p security.Principal, projectID string, env *projects.Environment, resource string, in MoveInput) (*Deployment, DeployInput, error) {
-	r, err := s.modelResource(ctx, p, projectID, env, resource)
+	// r is env's copy: the move's edit changes it alone (moveResource).
+	r, _, err := s.modelResource(ctx, p, projectID, env, resource)
 	if err != nil {
 		return nil, DeployInput{}, err
-	}
-	// The edit changes the resource in every environment it runs in, and
-	// the permission covers only env.
-	if others := otherEnvironments(r, env.Name); len(others) > 0 {
-		return nil, DeployInput{}, fmt.Errorf("%w: %s also runs in %s, and moving it would move it there too. Edit its target in the manifest instead",
-			ErrInvalid, resource, strings.Join(others, " and "))
 	}
 	row, err := s.rowOf(ctx, p.OrgID, projectID, env.ID, resource)
 	if err != nil {
@@ -847,13 +850,13 @@ func (s *Service) plan(ctx context.Context, p security.Principal, projectID stri
 	return &DeployResult{PlanID: plan.ID}, nil
 }
 
-// moveResource makes a move's one manifest edit: the resource's provider,
-// target, GPUs and settings for the preview's target. It keeps the served
-// name, so callers keep asking for the same model, and never shrinks the
-// weight cache. A setting the new quantization doesn't have, a GGUF file,
-// is deleted.
+// moveResource makes a move's one manifest edit: the provider, target,
+// GPUs and settings of env's copy for the preview's target (moveUpdate).
+// It keeps the served name, so callers keep asking for the same model,
+// and never shrinks the weight cache. A setting the new quantization
+// doesn't have, a GGUF file, is deleted.
 func (s *Service) moveResource(ctx context.Context, p security.Principal, projectID string, env *projects.Environment, pv *DeployPreview) (*manifests.Revision, error) {
-	cur, err := s.modelResource(ctx, p, projectID, env, pv.Resource)
+	cur, m, err := s.modelResource(ctx, p, projectID, env, pv.Resource)
 	if err != nil {
 		return nil, err
 	}
@@ -871,13 +874,7 @@ func (s *Service) moveResource(ctx context.Context, p security.Principal, projec
 			settings[name] = ""
 		}
 	}
-	update := &manifests.ResourceUpdateInput{Resource: pv.Resource, Provider: &pv.Target.Provider, Target: &pv.Target.ConnectionID, Settings: settings}
-	switch {
-	case pv.GPU != nil:
-		update.GPU = &manifest.GPU{Kind: pv.GPU.Kind, Count: pv.GPU.Count}
-	case cur.GPU != nil:
-		update.ClearGPU = true
-	}
+	update := moveUpdate(m.Resources[pv.Resource], cur, env.Name, m.Defaults, pv, settings)
 	rev, _, err := s.d.Manifests.Edit(ctx, p, projectID, manifests.EditInput{UpdateResource: update})
 	if err != nil {
 		return nil, err
@@ -887,6 +884,40 @@ func (s *Service) moveResource(ctx context.Context, p security.Principal, projec
 		"quantization": pv.quant.ID, "manifest_revision": rev.Revision,
 	})
 	return rev, nil
+}
+
+// moveUpdate is a move's edit of raw for env, whose copy is cur, to the
+// preview's target with settings. It edits the top level, as a model in
+// one environment always has, when env is the only environment raw runs
+// in that reads every field the edit changes there (soleReader), so no
+// other copy moves. Otherwise it edits env's own block, writing only what
+// env doesn't already read.
+func moveUpdate(raw, cur manifest.Resource, env string, d manifest.Defaults, pv *DeployPreview, settings map[string]string) *manifests.ResourceUpdateInput {
+	top := &manifests.ResourceUpdateInput{Resource: pv.Resource, Provider: &pv.Target.Provider, Target: &pv.Target.ConnectionID, Settings: settings}
+	var gpu *manifest.GPU
+	switch {
+	case pv.GPU != nil:
+		gpu = &manifest.GPU{Kind: pv.GPU.Kind, Count: pv.GPU.Count}
+		top.GPU = gpu
+	case cur.GPU != nil:
+		top.ClearGPU = true
+	}
+	changed := []string{"target"}
+	if pv.Target.Provider != raw.Provider {
+		changed = append(changed, "provider")
+	}
+	if (gpu == nil) != (raw.GPU == nil) || (gpu != nil && *gpu != *raw.GPU) {
+		changed = append(changed, "gpu")
+	}
+	for _, key := range slices.Sorted(maps.Keys(settings)) {
+		if settings[key] != raw.Settings[key] {
+			changed = append(changed, key)
+		}
+	}
+	if soleReader(raw, env, changed...) {
+		return top
+	}
+	return environmentUpdate(raw, env, d, pv, settings)
 }
 
 // moveServerFirst moves the model onto a GPU server Loomplane creates
@@ -901,7 +932,7 @@ func (s *Service) moveServerFirst(ctx context.Context, p security.Principal, pro
 	op := pv.Server
 	if row == nil {
 		// A model added by hand gets its row now, as it runs.
-		r, err := s.modelResource(ctx, p, projectID, env, pv.Resource)
+		r, _, err := s.modelResource(ctx, p, projectID, env, pv.Resource)
 		if err != nil {
 			return nil, err
 		}
@@ -949,11 +980,15 @@ func (s *Service) moveServerFirst(ctx context.Context, p security.Principal, pro
 	return res, err
 }
 
-// Remove takes the model out of the manifest and plans its environment.
-// It refuses, with ErrInUse, while a service needs it, naming each one.
-// The row goes once the plan is made. The weights stay on the server as
-// retained storage, and the result says so. It needs WriteNeed of the
-// environment.
+// Remove takes the environment's copy of the model out and plans the
+// environment. While other environments run the model, it turns the
+// environment off in the resource and clears its block (removalUpdate),
+// and goes ahead even when services there link to it (Decision 4): their
+// plan warns need-off for each one, and the result says so. Removing the
+// last environment removes the resource, and refuses, with ErrInUse,
+// while a service needs it, naming each one. The row goes once the plan
+// is made. The weights stay on the server as retained storage, and the
+// result says so. It needs WriteNeed of the environment.
 func (s *Service) Remove(ctx context.Context, p security.Principal, projectID, environmentID, resource string) (*DeployResult, error) {
 	env, err := s.environment(ctx, p.OrgID, projectID, environmentID)
 	if err != nil {
@@ -980,41 +1015,49 @@ func (s *Service) Remove(ctx context.Context, p security.Principal, projectID, e
 	if !ok || !recipes.IsModelKind(r.Kind) || !enabledIn(r, env.Name) {
 		return nil, fmt.Errorf("%w: %s has no model %s", ErrNotFound, env.Name, resource)
 	}
-	if others := otherEnvironments(r, env.Name); len(others) > 0 {
-		return nil, fmt.Errorf("%w: %s also runs in %s, and removing it would remove it there too. Edit the manifest instead",
-			ErrInvalid, resource, strings.Join(others, " and "))
-	}
-	if users := servicesNeeding(rev.Manifest, resource); len(users) > 0 {
+	users := servicesNeeding(rev.Manifest, resource)
+	last := !slices.ContainsFunc(slices.Collect(maps.Keys(r.Environments)), func(name string) bool { return name != env.Name && enabledIn(r, name) })
+	if last && len(users) > 0 {
 		verb, them := "links", "it"
 		if len(users) > 1 {
 			verb, them = "link", "them"
 		}
 		return nil, fmt.Errorf("%w: %s in %s %s to it. Unlink %s first", ErrInUse, joinNames(users), env.Name, verb, them)
 	}
-	server := s.connectionNames(ctx, p)[r.Target]
+	server := s.connectionNames(ctx, p)[r.For(env.Name, rev.Manifest.Defaults).Target]
 	if server == "" && row != nil {
 		server = row.ServerName
 	}
-	edited, _, err := s.d.Manifests.Edit(ctx, p, projectID, manifests.EditInput{RemoveResource: resource})
+	edit := manifests.EditInput{RemoveResource: resource}
+	if !last {
+		edit = manifests.EditInput{UpdateResource: removalUpdate(r, env.Name)}
+		edit.UpdateResource.Resource = resource
+	}
+	edited, _, err := s.d.Manifests.Edit(ctx, p, projectID, edit)
 	if err != nil {
 		return nil, err
 	}
-	s.audit(ctx, p, projectID, "ai.model.remove", map[string]any{
-		"resource": resource, "environment": env.Name, "manifest_revision": edited.Revision,
-	})
+	attrs := map[string]any{"resource": resource, "environment": env.Name, "manifest_revision": edited.Revision}
+	if !last {
+		attrs["removes_environment"] = true
+	}
+	s.audit(ctx, p, projectID, "ai.model.remove", attrs)
 	plan, err := s.d.Plans.Create(ctx, p, projectID, planning.CreatePlanInput{Environment: env.Name, Catalog: edited.Manifest.CatalogOnly()})
 	if err != nil {
-		perr := &PlanAfterEditError{Resource: resource, Environment: env.Name, Removal: true, err: err}
+		perr := &PlanAfterEditError{Resource: resource, Environment: env.Name, Removal: true, copyOnly: !last, err: err}
 		if row == nil {
 			return nil, perr
 		}
-		row.Message = fmt.Sprintf("The manifest no longer has %s. Plan %s from the project to remove it.", resource, env.Name)
+		row.Message = perr.removed() + fmt.Sprintf(" Plan %s from the project to remove it.", env.Name)
 		if uerr := s.d.Store.Update(context.WithoutCancel(ctx), row); uerr != nil {
 			return &DeployResult{Deployment: row}, errors.Join(perr, uerr)
 		}
 		return &DeployResult{Deployment: row}, perr
 	}
 	res := &DeployResult{PlanID: plan.ID, Deployment: row, Message: weightsStay(resource, server, createdServer(row))}
+	if !last && len(users) > 0 {
+		res.Message += " " + needOff(users, resource, env.Name)
+	}
 	if row != nil {
 		if derr := s.d.Store.Delete(ctx, row.OrgID, row.ProjectID, row.EnvironmentID, row.Resource); derr != nil && !errors.Is(derr, ErrNotFound) {
 			s.modelsChanged(ctx, p.OrgID, projectID)
@@ -1023,6 +1066,36 @@ func (s *Service) Remove(ctx context.Context, p security.Principal, projectID, e
 	}
 	s.modelsChanged(ctx, p.OrgID, projectID)
 	return res, nil
+}
+
+// removalUpdate takes env's copy of raw out and leaves the rest of raw
+// alone: env turned off, and its block's target, provider, GPU and
+// settings cleared, so the block says only enabled: false. The caller
+// sets Resource.
+func removalUpdate(raw manifest.Resource, env string) *manifests.ResourceUpdateInput {
+	off, none := false, ""
+	u := &manifests.ResourceUpdateInput{Environment: env, Enabled: &off, Target: &none, Provider: &none}
+	block := raw.Environments[env]
+	u.ClearGPU = block.GPU != nil
+	for _, key := range slices.Sorted(maps.Keys(block.Settings)) {
+		if u.Settings == nil {
+			u.Settings = map[string]string{}
+		}
+		u.Settings[key] = ""
+	}
+	return u
+}
+
+// needOff says that the services users of env lose MODEL_URL once the
+// plan that removes env's copy of resource is approved, and that the plan
+// warns need-off for them.
+func needOff(users []string, resource, env string) string {
+	verb, them := "gets", "it"
+	if len(users) > 1 {
+		verb, them = "get", "them"
+	}
+	return fmt.Sprintf("%s in %s %s no MODEL_URL once this plan is approved. The plan warns need-off for %s until you deploy %s to %s again or unlink %s.",
+		joinNames(users), env, verb, them, resource, env, them)
 }
 
 // weightsStay says what a removed model leaves on its server, and when

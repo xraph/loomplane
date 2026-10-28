@@ -113,8 +113,9 @@ const maxOutputCap = 8192
 // Endpoints lists the project's ready models a caller at from can reach,
 // with what a gateway needs to call each one, and says in Skipped why each
 // other model is out. Until models are shared across environments, those
-// are the models running in from.EnvironmentID on from's server or
-// cluster; a model elsewhere is skipped with "runs in <environment>".
+// are the copies running in from.EnvironmentID on from's server or
+// cluster; a model with no copy there is skipped with "runs in
+// <environment>".
 // Rerank and speech models are included; W1's adapter keeps the tasks the
 // gateway routes.
 //
@@ -149,11 +150,26 @@ func (s *Service) Endpoints(ctx context.Context, orgID, projectID string, from P
 	type candidate struct {
 		resource, deployment string
 	}
+	// Each environment runs its own copy, so another environment's row is
+	// skipped as running there only when from's environment has no copy
+	// of that model: no row and no binding.
+	ours := map[string]bool{}
+	for _, d := range rows {
+		if d.EnvironmentID == from.EnvironmentID {
+			ours[d.Resource] = true
+		}
+	}
+	for _, b := range bindings {
+		if b.Subject == planning.ResourceSubject {
+			ours[b.Name] = true
+		}
+	}
 	var here []candidate
 	var skipped []Skipped
 	seen := map[string]bool{}
 	for _, d := range rows {
 		switch {
+		case d.EnvironmentID != from.EnvironmentID && ours[d.Resource]:
 		case d.EnvironmentID != from.EnvironmentID:
 			skipped = append(skipped, Skipped{Resource: d.Resource, EnvironmentID: d.EnvironmentID, Reason: "runs in " + envName(d.EnvironmentID)})
 		case (d.Phase == PhaseWaitingForServer || d.Phase == PhaseNeedsAttention) && (d.Request == nil || d.Request.Moving == nil):

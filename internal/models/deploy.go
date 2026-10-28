@@ -176,13 +176,24 @@ type PlanAfterEditError struct {
 	// Repin is true for MoveToPin's edit, Move for Move's and Removal for
 	// Remove's.
 	Repin, Move, Removal bool
-	err                  error
+	// copyOnly is true for a Removal of one environment's copy, the
+	// resource running on in the others.
+	copyOnly bool
+	err      error
+}
+
+// removed says what a Removal's edit did to the manifest.
+func (e *PlanAfterEditError) removed() string {
+	if e.copyOnly {
+		return fmt.Sprintf("The manifest no longer runs %s in %s.", e.Resource, e.Environment)
+	}
+	return fmt.Sprintf("The manifest no longer has %s.", e.Resource)
 }
 
 func (e *PlanAfterEditError) Error() string {
 	switch {
 	case e.Removal:
-		return fmt.Sprintf("The manifest no longer has %s. Plan %s from the project to remove it. Planning failed: %v", e.Resource, e.Environment, e.err)
+		return fmt.Sprintf("%s Plan %s from the project to remove it. Planning failed: %v", e.removed(), e.Environment, e.err)
 	case e.Move:
 		return fmt.Sprintf("The manifest has %s on its new target now. Plan %s from the project to move it. Planning failed: %v", e.Resource, e.Environment, e.err)
 	}
@@ -501,8 +512,8 @@ func (s *Service) environmentsOf(ctx context.Context, orgID, projectID string, e
 
 // copiesOf is how each environment reaches its copy of the resource raw:
 // here first, then by name every other environment raw runs in or whose
-// copy waits for its GPU server (waiting holds their IDs). A model that
-// runs in here alone says so as it always has.
+// copy waits for its GPU server (waiting holds their IDs). A model in
+// here alone says so as it always has.
 func copiesOf(raw manifest.Resource, envs []*projects.Environment, here *projects.Environment, waiting map[string]bool) []Reach {
 	reach := func(env *projects.Environment) Reach {
 		msg := fmt.Sprintf("Runs in %s. Services in %s link to this copy.", env.Name, env.Name)
@@ -519,7 +530,7 @@ func copiesOf(raw manifest.Resource, envs []*projects.Environment, here *project
 			out = append(out, reach(other))
 		}
 	}
-	if len(out) == 1 && (enabledIn(raw, here.Name) || !waiting[here.ID]) {
+	if len(out) == 1 {
 		return []Reach{homeReach(here)}
 	}
 	return out
@@ -1019,8 +1030,20 @@ func placementEdit(m *manifest.Manifest, env string, pv *DeployPreview) (in mani
 // served_name are never written per environment, so the model has one
 // name everywhere.
 func placementUpdate(raw manifest.Resource, env string, d manifest.Defaults, pv *DeployPreview) *manifests.ResourceUpdateInput {
-	on, target := true, pv.Target.ConnectionID
-	u := &manifests.ResourceUpdateInput{Resource: pv.Resource, Environment: env, Enabled: &on, Target: &target}
+	on := true
+	u := environmentUpdate(raw, env, d, pv, engines.Settings(pv.spec))
+	u.Enabled = &on
+	return u
+}
+
+// environmentUpdate is an edit of env's block of raw that puts env's copy
+// on the preview's target with settings: its target, and the provider,
+// GPU and each setting where they differ from what env reads now. A
+// setting set to "" is deleted from the block when the block has it.
+// entry and served_name are never written per environment.
+func environmentUpdate(raw manifest.Resource, env string, d manifest.Defaults, pv *DeployPreview, settings map[string]string) *manifests.ResourceUpdateInput {
+	target := pv.Target.ConnectionID
+	u := &manifests.ResourceUpdateInput{Resource: pv.Resource, Environment: env, Target: &target}
 	view := raw.For(env, d)
 	if cloud := pv.Target.Provider; cloud != view.Provider {
 		u.Provider = &cloud
@@ -1031,15 +1054,19 @@ func placementUpdate(raw manifest.Resource, env string, d manifest.Defaults, pv 
 			u.GPU = &gpu
 		}
 	}
-	settings := engines.Settings(pv.spec)
+	block := raw.Environments[env].Settings
 	for _, key := range slices.Sorted(maps.Keys(settings)) {
-		if key == "entry" || key == "served_name" || settings[key] == view.Settings[key] {
+		value := settings[key]
+		if key == "entry" || key == "served_name" || value == view.Settings[key] {
+			continue
+		}
+		if _, set := block[key]; value == "" && !set {
 			continue
 		}
 		if u.Settings == nil {
 			u.Settings = map[string]string{}
 		}
-		u.Settings[key] = settings[key]
+		u.Settings[key] = value
 	}
 	return u
 }

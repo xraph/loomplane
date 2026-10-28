@@ -16,6 +16,7 @@ import (
 	"github.com/xraph/loomplane/internal/gpus"
 	"github.com/xraph/loomplane/internal/notifications"
 	"github.com/xraph/loomplane/internal/recipes"
+	"github.com/xraph/loomplane/pkg/manifest"
 )
 
 // fakeBudget records the budget notices queued, and fails while err is set.
@@ -427,5 +428,32 @@ func TestAccrualSplitsAtTheMonthBoundary(t *testing.T) {
 	log.totals = nil
 	if d = b.accrue(t, jan1); !slices.Equal(log.totals, []string{"2026-12 2.6354"}) || d.Month != "2026-12" {
 		t.Errorf("on the boundary: totals %v, row %s %s", log.totals, d.Month, d.MonthCostUSD)
+	}
+}
+
+// Each environment's copy accrues from its own row and binding, at its
+// own server's price.
+func TestAccrueChargesEachEnvironmentCopy(t *testing.T) {
+	ctx := context.Background()
+	targets := []gpus.GPUTarget{l40sOn(gpuConn, "gpu-box", 0.80), l40sOn(gpuConn2, "gpu-box-2", 2.00)}
+	d := newDeploy(t, deployRegistry(t, llamaRev, ""), aiAdmin, targets, boxes()...)
+	production := on()
+	production.Target = gpuConn2
+	putLLM(t, d, map[string]manifest.ResourceSettings{"staging": on(), "production": production})
+	llmRow(t, d, stagingID)
+	llmRow(t, d, productID)
+	d.facts.runningOn(gpuConn, stagingID, "llm", recipes.ModelVLLMKind, llmSettings(t), 1)
+	d.facts.runningOn(gpuConn2, productID, "llm", recipes.ModelVLLMKind, llmSettings(t), 1)
+	d.svc.d.Waiting, d.svc.d.Prices, d.svc.d.Budget = d.rows, pricesOf{d.targets}, &fakeBudget{}
+
+	for _, at := range []time.Time{nov3, nov3.Add(time.Hour)} {
+		if err := d.svc.Accrue(ctx, at); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for env, want := range map[string]string{stagingID: "0.8000", productID: "2.0000"} {
+		if row, err := d.rows.Get(ctx, "org", projectID, env, "llm"); err != nil || row.MonthCostUSD != want {
+			t.Errorf("%s: %+v, %v, want %s", env, row, err, want)
+		}
 	}
 }

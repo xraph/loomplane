@@ -7,7 +7,6 @@ import (
 	"maps"
 	"slices"
 	"strconv"
-	"strings"
 
 	"github.com/xraph/loomplane/internal/manifests"
 	"github.com/xraph/loomplane/internal/models/engines"
@@ -66,7 +65,7 @@ func (s *Service) pinOf(resource string, r manifest.Resource) error {
 }
 
 // CheckPin says whether a model resource in the environment has an update
-// from a registry re-pin. ai:read.
+// from a registry re-pin, as that environment runs it. ai:read.
 func (s *Service) CheckPin(ctx context.Context, p security.Principal, projectID, environmentID, resource string) (*PinStatus, error) {
 	if err := s.d.Authz.Require(ctx, p, security.AIRead, ""); err != nil {
 		return nil, err
@@ -75,39 +74,46 @@ func (s *Service) CheckPin(ctx context.Context, p security.Principal, projectID,
 	if err != nil {
 		return nil, err
 	}
-	r, err := s.modelResource(ctx, p, projectID, env, resource)
+	here, _, err := s.modelResource(ctx, p, projectID, env, resource)
 	if err != nil {
 		return nil, err
 	}
-	return pinStatusOf(s.pinOf(resource, r))
+	return pinStatusOf(s.pinOf(resource, here))
 }
 
 // modelResource reads a model resource that runs in env from the
-// project's current manifest.
-func (s *Service) modelResource(ctx context.Context, p security.Principal, projectID string, env *projects.Environment, resource string) (manifest.Resource, error) {
+// project's current manifest m, and returns it as env runs it: here is
+// m.Resources[resource].In(env.Name, m.Defaults).
+func (s *Service) modelResource(ctx context.Context, p security.Principal, projectID string, env *projects.Environment, resource string) (here manifest.Resource, m *manifest.Manifest, err error) {
 	if s.d.Manifests == nil {
-		return manifest.Resource{}, errors.New("models: manifests aren't configured")
+		return manifest.Resource{}, nil, errors.New("models: manifests aren't configured")
 	}
 	rev, err := s.d.Manifests.Current(ctx, p, projectID)
 	if err != nil {
-		return manifest.Resource{}, err
+		return manifest.Resource{}, nil, err
 	}
 	r, ok := rev.Manifest.Resources[resource]
 	if !ok || !recipes.IsModelKind(r.Kind) {
-		return manifest.Resource{}, fmt.Errorf("%w: the manifest has no model %s", ErrNotFound, resource)
+		return manifest.Resource{}, nil, fmt.Errorf("%w: the manifest has no model %s", ErrNotFound, resource)
 	}
 	if !enabledIn(r, env.Name) {
-		return manifest.Resource{}, fmt.Errorf("%w: %s doesn't run in %s", ErrNotFound, resource, env.Name)
+		return manifest.Resource{}, nil, fmt.Errorf("%w: %s doesn't run in %s", ErrNotFound, resource, env.Name)
 	}
-	return r, nil
+	return r.In(env.Name, rev.Manifest.Defaults), rev.Manifest, nil
 }
 
 // MoveToPin is the one-click fix for a model deployed before a registry
-// re-pin: it sets the resource's model, revision and file settings to the
-// weights the registry pins now, grows its weight cache when the new
-// weights need more, and plans the environment. The plan shows the change
-// for review like any other. It needs WriteNeed of the environment, and
-// refuses a resource that's already on its pin.
+// re-pin: it sets the model, revision and file settings of the
+// environment's copy to the weights the registry pins now, grows its
+// weight cache when the new weights need more, and plans the environment.
+// The plan shows the change for review like any other.
+//
+// It changes that environment's copy alone (Decision 5): the edit goes
+// where only this environment reads the pin from (pinUpdate), so the other
+// environments keep their weights, their rows and their open plans, and
+// show the update on their own page until it's moved from there. It needs
+// WriteNeed of the environment, and refuses a copy that's already on its
+// pin.
 func (s *Service) MoveToPin(ctx context.Context, p security.Principal, projectID, environmentID, resource string) (*DeployResult, error) {
 	env, err := s.environment(ctx, p.OrgID, projectID, environmentID)
 	if err != nil {
@@ -119,36 +125,21 @@ func (s *Service) MoveToPin(ctx context.Context, p security.Principal, projectID
 	if s.d.Plans == nil {
 		return nil, errors.New("models: planning isn't configured")
 	}
-	r, err := s.modelResource(ctx, p, projectID, env, resource)
+	here, m, err := s.modelResource(ctx, p, projectID, env, resource)
 	if err != nil {
 		return nil, err
 	}
-	// The edit rewrites the resource's settings in every environment it
-	// runs in, and the permission above covers only env. A model runs in
-	// one environment, so another one there is a hand edit, and moving it
-	// from here would change that environment without its permission.
-	if others := otherEnvironments(r, env.Name); len(others) > 0 {
-		return nil, fmt.Errorf("%w: %s also runs in %s, and moving it to the new pin would change it there too. Edit its settings in the manifest instead",
-			ErrInvalid, resource, strings.Join(others, " and "))
-	}
-	e, q, ok := registryQuantization(s.d.Registry, r.Settings)
+	e, q, ok := registryQuantization(s.d.Registry, here.Settings)
 	if !ok {
 		return nil, fmt.Errorf("%w: %s doesn't run a registry quantization, so there's no pin to move it to", ErrInvalid, resource)
 	}
 	var repinned *RepinnedError
-	if err = checkPin(resource, e, q, r.Settings); !errors.As(err, &repinned) {
-		return nil, fmt.Errorf("%w: %s already runs the weights the registry pins", ErrInvalid, resource)
+	if err = checkPin(resource, e, q, here.Settings); !errors.As(err, &repinned) {
+		return nil, fmt.Errorf("%w: %s already runs the weights the registry pins in %s", ErrInvalid, resource, env.Name)
 	}
-	// A setting set to "" is deleted, which is what a file the new pin
-	// doesn't have needs.
-	settings := map[string]string{"model": repinned.Model, "revision": repinned.Revision, "file": repinned.File}
-	need := engines.CacheMB(q.WeightBytes)
-	if have, perr := strconv.ParseInt(r.Settings["cache_mb"], 10, 64); perr != nil || have < need {
-		settings["cache_mb"] = strconv.FormatInt(need, 10)
-	}
-	rev, _, err := s.d.Manifests.Edit(ctx, p, projectID, manifests.EditInput{
-		UpdateResource: &manifests.ResourceUpdateInput{Resource: resource, Settings: settings},
-	})
+	update := pinUpdate(m.Resources[resource], env.Name, repinned, engines.CacheMB(q.WeightBytes))
+	update.Resource = resource
+	rev, _, err := s.d.Manifests.Edit(ctx, p, projectID, manifests.EditInput{UpdateResource: update})
 	if err != nil {
 		return nil, err
 	}
@@ -178,14 +169,66 @@ func (s *Service) MoveToPin(ctx context.Context, p security.Principal, projectID
 	return &DeployResult{PlanID: plan.ID, Deployment: row}, nil
 }
 
-// otherEnvironments lists, by name, the environments other than env that
-// the resource runs in.
-func otherEnvironments(r manifest.Resource, env string) []string {
-	var out []string
-	for _, name := range slices.Sorted(maps.Keys(r.Environments)) {
-		if name != env && enabledIn(r, name) {
-			out = append(out, name)
+// pinUpdate is MoveToPin's one edit of raw for env (Decision 6): the new
+// pin's model, revision and file ("" deletes a file the pin doesn't
+// have), and cache_mb when env's copy has less than needCacheMB. It
+// rewrites the top level when env is the last environment running raw
+// that reads those keys from there (soleReader), and env's own block
+// otherwise. The caller sets Resource.
+func pinUpdate(raw manifest.Resource, env string, repinned *RepinnedError, needCacheMB int64) *manifests.ResourceUpdateInput {
+	settings := map[string]string{"model": repinned.Model, "revision": repinned.Revision, "file": repinned.File}
+	keys := []string{"model", "revision", "file"}
+	have, err := strconv.ParseInt(raw.For(env, manifest.Defaults{}).Settings["cache_mb"], 10, 64)
+	if err != nil || have < needCacheMB {
+		settings["cache_mb"] = strconv.FormatInt(needCacheMB, 10)
+		// A grown cache at the top level would grow another copy's too.
+		keys = append(keys, "cache_mb")
+	}
+	u := &manifests.ResourceUpdateInput{Settings: settings}
+	if !soleReader(raw, env, keys...) {
+		u.Environment = env
+	}
+	return u
+}
+
+// soleReader reports whether env is the only environment raw runs in
+// that reads any of keys from raw's top level, so an edit of those keys
+// there changes env's copy alone. An environment reads a key from the top
+// level when the top level sets it and the environment's block doesn't.
+// "target", "provider" and "gpu" are fields of the block; any other key
+// is one of its settings. It's false when env's own block sets one of
+// keys, since a top-level edit wouldn't reach env then.
+func soleReader(raw manifest.Resource, env string, keys ...string) bool {
+	sets := func(target, provider string, gpu *manifest.GPU, settings map[string]string, key string) bool {
+		switch key {
+		case "target":
+			return target != ""
+		case "provider":
+			return provider != ""
+		case "gpu":
+			return gpu != nil
+		}
+		_, ok := settings[key]
+		return ok
+	}
+	inBlock := func(name, key string) bool {
+		o := raw.Environments[name]
+		return sets(o.Target, o.Provider, o.GPU, o.Settings, key)
+	}
+	for _, key := range keys {
+		if inBlock(env, key) {
+			return false
 		}
 	}
-	return out
+	for _, name := range slices.Sorted(maps.Keys(raw.Environments)) {
+		if name == env || !enabledIn(raw, name) {
+			continue
+		}
+		for _, key := range keys {
+			if sets(raw.Target, raw.Provider, raw.GPU, raw.Settings, key) && !inBlock(name, key) {
+				return false
+			}
+		}
+	}
+	return true
 }

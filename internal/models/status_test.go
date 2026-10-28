@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -16,12 +17,15 @@ import (
 	"github.com/xraph/loomplane/internal/catalogstate"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/gpus"
+	"github.com/xraph/loomplane/internal/graph"
 	"github.com/xraph/loomplane/internal/manifests"
 	"github.com/xraph/loomplane/internal/models/engines"
 	"github.com/xraph/loomplane/internal/models/registry"
 	"github.com/xraph/loomplane/internal/planning"
+	"github.com/xraph/loomplane/internal/providers"
 	"github.com/xraph/loomplane/internal/recipes"
 	"github.com/xraph/loomplane/internal/security"
+	"github.com/xraph/loomplane/pkg/discovery"
 	"github.com/xraph/loomplane/pkg/manifest"
 	"github.com/xraph/loomplane/pkg/provider"
 )
@@ -714,5 +718,326 @@ func TestMoveCreditsOnlyTheGPUsItsEngineHolds(t *testing.T) {
 	d.facts.running(stagingID, llamaResource, r.Kind, r.Settings, 1)
 	if _, err = d.svc.Move(ctx, member, projectID, stagingID, llamaResource, MoveInput{Target: onGPU("nvidia-l40s"), MaxModelLen: 16384}); err != nil {
 		t.Errorf("move on its own GPU: %v", err)
+	}
+}
+
+// Second and third servers with one free L40S each.
+const (
+	gpuConn3 = "conn_gpu3"
+	gpuConn4 = "conn_gpu4"
+)
+
+// l40sOn is a server with one free L40S at hourly dollars an hour.
+func l40sOn(id, name string, hourly float64) gpus.GPUTarget {
+	t := l40sServer()
+	t.ConnectionID, t.Name, t.HourlyUSD = id, name, hourly
+	return t
+}
+
+// copyServers are gpu-box and gpu-box-2 to 4, all with a free L40S at
+// $1.57 an hour, and cpu-box.
+func copyServers() ([]gpus.GPUTarget, []*connections.Connection) {
+	targets := []gpus.GPUTarget{l40sServer(), l40sOn(gpuConn2, "gpu-box-2", 1.57), l40sOn(gpuConn3, "gpu-box-3", 1.57), l40sOn(gpuConn4, "gpu-box-4", 1.57)}
+	conns := boxes()
+	for _, t := range targets[1:] {
+		conns = append(conns, &connections.Connection{ID: t.ConnectionID, Name: t.Name, Cloud: connections.Server, Status: connections.StatusReady})
+	}
+	return targets, conns
+}
+
+// on is an environment block that turns a resource on there.
+func on() manifest.ResourceSettings {
+	yes := true
+	return manifest.ResourceSettings{Enabled: &yes}
+}
+
+// llmSettings are Qwen 7B's bf16 settings on one GPU with a context of
+// 8192.
+func llmSettings(t *testing.T) map[string]string {
+	t.Helper()
+	e := mustEntry(t, qwen7B)
+	q, _ := e.Quantization("bf16")
+	return engines.Settings(engines.Spec{Entry: e, Quantization: q, ServedName: qwen7B, MaxModelLen: 8192, GPUs: 1})
+}
+
+// putLLM saves llm, Qwen 7B bf16 on vLLM on gpu-box's L40S with a context
+// of 8192, with the environment blocks envs.
+func putLLM(t *testing.T, d *deploySetup, envs map[string]manifest.ResourceSettings) {
+	t.Helper()
+	putResource(t, d, "llm", manifest.Resource{
+		Kind: recipes.ModelVLLMKind, Provider: "server", Target: gpuConn, Version: "0.31", GPU: &manifest.GPU{Kind: "nvidia-l40s", Count: 1},
+		Settings: llmSettings(t), Environments: envs,
+	})
+}
+
+// putResource saves r as the manifest's resource name.
+func putResource(t *testing.T, d *deploySetup, name string, r manifest.Resource) {
+	t.Helper()
+	m := *current(t, d)
+	m.Resources = maps.Clone(m.Resources)
+	if m.Resources == nil {
+		m.Resources = map[string]manifest.Resource{}
+	}
+	m.Resources[name] = r
+	if _, _, err := manifests.NewService(d.revisions, memProjects{}, aiAdmin, nil).Save(context.Background(), member, projectID, manifests.SaveInput{Manifest: &m}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// llmRow records a row for llm in env, as a deploy there would have.
+func llmRow(t *testing.T, d *deploySetup, env string) *Deployment {
+	t.Helper()
+	row := &Deployment{OrgID: "org", ProjectID: projectID, EnvironmentID: env, Resource: "llm", EntryID: qwen7B, Quantization: "bf16",
+		Engine: "vllm", Phase: PhaseActive}
+	if err := d.rows.Create(context.Background(), row); err != nil {
+		t.Fatal(err)
+	}
+	return row
+}
+
+func TestStatusReadsTheEnvironmentsCopy(t *testing.T) {
+	ctx := context.Background()
+	targets, conns := copyServers()
+	d := newDeploy(t, deployRegistry(t, llamaRev, ""), aiAdmin, targets, conns...)
+	production := on()
+	production.Target, production.Settings = gpuConn2, map[string]string{"max_model_len": "4096"}
+	putLLM(t, d, map[string]manifest.ResourceSettings{"staging": on(), "production": production})
+
+	st, err := d.svc.Status(ctx, member, projectID, productID, "llm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if st.ConnectionID != gpuConn2 || st.ConnectionName != "gpu-box-2" || st.MaxModelLen != 4096 || st.Cost.HourlyUSD != "1.5700" {
+		t.Errorf("production's copy: %q %q, context %d, cost %+v", st.ConnectionID, st.ConnectionName, st.MaxModelLen, st.Cost)
+	}
+	want := []Reach{
+		{EnvironmentID: productID, Environment: "production", Mode: ReachHome, Message: "Runs in production. Services in production link to this copy."},
+		{EnvironmentID: stagingID, Environment: "staging", Mode: ReachHome, Message: "Runs in staging. Services in staging link to this copy."},
+	}
+	if !slices.Equal(st.Environments, want) {
+		t.Errorf("environments %+v", st.Environments)
+	}
+
+	st, err = d.svc.Status(ctx, member, projectID, stagingID, "llm")
+	if err != nil || st.ConnectionID != gpuConn || st.MaxModelLen != 8192 || len(st.Environments) != 2 || st.Environments[0].Environment != "staging" {
+		t.Errorf("staging's copy: %+v, %v", st, err)
+	}
+}
+
+func TestListShowsEachEnvironmentCopy(t *testing.T) {
+	ctx := context.Background()
+	targets, conns := copyServers()
+	d := newDeploy(t, deployRegistry(t, llamaRev, ""), aiAdmin, targets, conns...)
+	production := on()
+	production.Target = gpuConn2
+	putLLM(t, d, map[string]manifest.ResourceSettings{"staging": on(), "production": production})
+	llmRow(t, d, stagingID)
+	llmRow(t, d, productID)
+
+	list, err := d.svc.List(ctx, member)
+	if err != nil || len(list) != 2 {
+		t.Fatalf("list %+v, %v", list, err)
+	}
+	got := map[string]string{}
+	for _, st := range list {
+		got[st.Deployment.EnvironmentID] = st.ConnectionID
+	}
+	if !maps.Equal(got, map[string]string{stagingID: gpuConn, productID: gpuConn2}) {
+		t.Errorf("copies %v", got)
+	}
+}
+
+// Review Focus 3: moving one environment's copy leaves the other's alone.
+func TestMoveOneEnvironmentLeavesTheOther(t *testing.T) {
+	ctx := context.Background()
+	moveTo := func(conn string) MoveInput {
+		return MoveInput{Target: TargetChoice{Source: TargetConnection, ConnectionID: conn, GPU: &provider.GPURequest{Kind: "nvidia-l40s"}},
+			Quantization: "bf16", MaxModelLen: 8192}
+	}
+	targets, conns := copyServers()
+	d := newDeploy(t, deployRegistry(t, llamaRev, ""), aiAdmin, targets, conns...)
+	production := on()
+	production.Target = gpuConn2
+	putLLM(t, d, map[string]manifest.ResourceSettings{"staging": on(), "production": production})
+	edits := d.recordEdits()
+
+	// Production has a target of its own: its block moves.
+	if _, err := d.svc.Move(ctx, member, projectID, productID, "llm", moveTo(gpuConn3)); err != nil {
+		t.Fatal(err)
+	}
+	if len(edits.edits) != 1 || edits.edits[0].UpdateResource == nil {
+		t.Fatalf("edits %+v", edits.edits)
+	}
+	if u := edits.edits[0].UpdateResource; u.Environment != "production" || *u.Target != gpuConn3 || u.Provider != nil || u.GPU != nil || len(u.Settings) != 0 || u.Enabled != nil {
+		t.Errorf("production's move %+v", u)
+	}
+	m := current(t, d)
+	llm := m.Resources["llm"]
+	if llm.Target != gpuConn || llm.For("staging", m.Defaults).Target != gpuConn || llm.For("production", m.Defaults).Target != gpuConn3 {
+		t.Errorf("after production's move %+v", llm)
+	}
+	if len(d.plans.asked) != 1 || d.plans.asked[0].Environment != "production" {
+		t.Errorf("plans %+v", d.plans.asked)
+	}
+
+	// No other environment reads the top-level target: staging moves it.
+	if _, err := d.svc.Move(ctx, member, projectID, stagingID, "llm", moveTo(gpuConn4)); err != nil {
+		t.Fatal(err)
+	}
+	if u := edits.edits[1].UpdateResource; u.Environment != "" || *u.Target != gpuConn4 {
+		t.Errorf("staging's move %+v", u)
+	}
+	m = current(t, d)
+	llm = m.Resources["llm"]
+	if llm.Target != gpuConn4 || llm.For("production", m.Defaults).Target != gpuConn3 || !maps.Equal(llm.For("production", m.Defaults).Settings, llmSettings(t)) {
+		t.Errorf("after staging's move %+v", llm)
+	}
+	if len(d.plans.asked) != 2 || d.plans.asked[1].Environment != "staging" {
+		t.Errorf("plans %+v", d.plans.asked)
+	}
+
+	// Production reading the top-level target keeps it: staging's block
+	// moves.
+	putLLM(t, d, map[string]manifest.ResourceSettings{"staging": on(), "production": on()})
+	if _, err := d.svc.Move(ctx, member, projectID, stagingID, "llm", moveTo(gpuConn4)); err != nil {
+		t.Fatal(err)
+	}
+	if u := edits.edits[2].UpdateResource; u.Environment != "staging" || *u.Target != gpuConn4 {
+		t.Errorf("staging's move beside production %+v", u)
+	}
+	m = current(t, d)
+	if llm = m.Resources["llm"]; llm.Target != gpuConn || llm.For("production", m.Defaults).Target != gpuConn || llm.For("staging", m.Defaults).Target != gpuConn4 {
+		t.Errorf("after staging's move beside production %+v", llm)
+	}
+}
+
+// moveUpdate edits the top level only when no other copy reads what it
+// changes there.
+func TestMoveUpdateLeavesSharedSettings(t *testing.T) {
+	e := mustEntry(t, qwen7B)
+	q, _ := e.Quantization("bf16")
+	settings := llmSettings(t)
+	raw := manifest.Resource{Kind: recipes.ModelVLLMKind, Provider: "server", Target: gpuConn, GPU: &manifest.GPU{Kind: "nvidia-l40s", Count: 1},
+		Settings: settings, Environments: map[string]manifest.ResourceSettings{"staging": on(), "production": {Enabled: on().Enabled, Target: gpuConn2}}}
+	longer := engines.Settings(engines.Spec{Entry: e, Quantization: q, ServedName: qwen7B, MaxModelLen: 16384, GPUs: 1})
+	pv := &DeployPreview{Resource: "llm", Target: TargetChoice{ConnectionID: gpuConn3, Provider: "server"}, GPU: &provider.GPURequest{Kind: "nvidia-l40s", Count: 1}}
+	cur := raw.In("staging", manifest.Defaults{})
+
+	// Production reads the top-level context, so staging's longer one goes
+	// in its block.
+	u := moveUpdate(raw, cur, "staging", manifest.Defaults{}, pv, maps.Clone(longer))
+	if u.Environment != "staging" || *u.Target != gpuConn3 || !maps.Equal(u.Settings, map[string]string{"max_model_len": "16384"}) {
+		t.Errorf("a longer context beside production: %+v", u)
+	}
+	// With production's own context, the top level is staging's alone.
+	raw.Environments["production"] = manifest.ResourceSettings{Enabled: on().Enabled, Target: gpuConn2, Settings: map[string]string{"max_model_len": "8192"}}
+	if u = moveUpdate(raw, cur, "staging", manifest.Defaults{}, pv, maps.Clone(longer)); u.Environment != "" || u.Settings["max_model_len"] != "16384" {
+		t.Errorf("production on its own context: %+v", u)
+	}
+}
+
+// Review Focus 3 and Decision 4: removing one environment's copy turns it
+// off there and leaves the resource, the other copy and its row alone,
+// even while a service there links to it.
+func TestRemoveOneEnvironmentKeepsTheResource(t *testing.T) {
+	ctx := context.Background()
+	targets, conns := copyServers()
+	d := newDeploy(t, deployRegistry(t, llamaRev, ""), aiAdmin, targets, conns...)
+	production := on()
+	production.Target, production.Settings = gpuConn2, map[string]string{"max_model_len": "4096"}
+	putLLM(t, d, map[string]manifest.ResourceSettings{"staging": on(), "production": production})
+	saveServices(t, d, map[string]manifest.Service{"checkout": linkedService("go:cmd/checkout", "llm")})
+	staged := llmRow(t, d, stagingID)
+	llmRow(t, d, productID)
+	edits := d.recordEdits()
+
+	res, err := d.svc.Remove(ctx, member, projectID, productID, "llm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(edits.edits) != 1 || edits.edits[0].RemoveResource != "" || edits.edits[0].UpdateResource == nil {
+		t.Fatalf("edits %+v", edits.edits)
+	}
+	u := edits.edits[0].UpdateResource
+	if u.Resource != "llm" || u.Environment != "production" || u.Enabled == nil || *u.Enabled || u.Target == nil || *u.Target != "" ||
+		!maps.Equal(u.Settings, map[string]string{"max_model_len": ""}) {
+		t.Errorf("update %+v", u)
+	}
+	m := current(t, d)
+	llm := m.Resources["llm"]
+	if !enabledIn(llm, "staging") || enabledIn(llm, "production") || llm.Environments["production"].Target != "" ||
+		len(llm.Environments["production"].Settings) != 0 || llm.Target != gpuConn {
+		t.Errorf("manifest %+v", llm)
+	}
+	if len(d.plans.asked) != 1 || d.plans.asked[0].Environment != "production" || res.PlanID == "" {
+		t.Errorf("plans %+v", d.plans.asked)
+	}
+	if _, err = d.rows.Get(ctx, "org", projectID, productID, "llm"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("production's row: %v", err)
+	}
+	if after, gerr := d.rows.Get(ctx, "org", projectID, stagingID, "llm"); gerr != nil || after.Revision != staged.Revision {
+		t.Errorf("staging's row: %+v, %v", after, gerr)
+	}
+	want := "checkout in production gets no MODEL_URL once this plan is approved. The plan warns need-off for it until you deploy llm to production again or unlink it."
+	if !strings.Contains(res.Message, "weights stay on gpu-box-2 as retained storage") || !strings.HasSuffix(res.Message, " "+want) {
+		t.Errorf("message %q", res.Message)
+	}
+
+	// Production's plan, from the manifest as the remove left it, warns
+	// need-off for checkout. Staging's doesn't.
+	needOff := func(env string) bool {
+		r := planCopies(t, m, env)
+		return slices.ContainsFunc(r.Warnings, func(f planning.Finding) bool { return f.Code == "need-off" && f.Name == "checkout" })
+	}
+	if !needOff("production") || needOff("staging") {
+		t.Errorf("need-off: production %v, staging %v", needOff("production"), needOff("staging"))
+	}
+}
+
+// planCopies is the planner's result for env from m, with checkout in the
+// repository.
+func planCopies(t *testing.T, m *manifest.Manifest, env string) *planning.Result {
+	t.Helper()
+	g := &graph.Graph{Services: []graph.Service{{ID: "svc:go:cmd/checkout", Name: "checkout", Kind: graph.HTTPService, Deployable: true,
+		Ecosystem: discovery.Go, Path: "cmd/checkout", Entrypoint: "cmd/checkout", Ports: []int{8080}, Image: "Dockerfile", Context: "."}}}
+	return planning.Compute(planning.Input{Environment: env, Graph: g, Manifest: m, Providers: providers.Registry(), Kinds: recipes.Default()})
+}
+
+// Review Focus 3: removing the last environment removes the resource, and
+// a service that needs it stops that.
+func TestRemoveLastEnvironmentRemovesTheResource(t *testing.T) {
+	ctx := context.Background()
+	targets, conns := copyServers()
+	d := newDeploy(t, deployRegistry(t, llamaRev, ""), aiAdmin, targets, conns...)
+	putLLM(t, d, map[string]manifest.ResourceSettings{"staging": on()})
+	saveServices(t, d, map[string]manifest.Service{"checkout": linkedService("go:cmd/checkout", "llm")})
+	edits := d.recordEdits()
+	if _, err := d.svc.Remove(ctx, member, projectID, stagingID, "llm"); !errors.Is(err, ErrInUse) || len(edits.edits) != 0 {
+		t.Errorf("linked: %v, edits %+v", err, edits.edits)
+	}
+	saveServices(t, d, map[string]manifest.Service{})
+	if _, err := d.svc.Remove(ctx, member, projectID, stagingID, "llm"); err != nil {
+		t.Fatal(err)
+	}
+	if len(edits.edits) != 1 || edits.edits[0].RemoveResource != "llm" || edits.edits[0].UpdateResource != nil {
+		t.Errorf("edits %+v", edits.edits)
+	}
+	if _, ok := current(t, d).Resources["llm"]; ok {
+		t.Error("the manifest still has llm")
+	}
+}
+
+func TestRemovalUpdateClearsTheBlock(t *testing.T) {
+	block := on()
+	block.Target, block.Provider, block.GPU = gpuConn2, "kubernetes", &manifest.GPU{Kind: "nvidia-h100", Count: 1}
+	block.Settings = map[string]string{"quantization": "awq-int4", "cache_mb": "20000"}
+	raw := manifest.Resource{Environments: map[string]manifest.ResourceSettings{"production": block, "staging": on()}}
+	u := removalUpdate(raw, "production")
+	if u.Environment != "production" || u.Enabled == nil || *u.Enabled || *u.Target != "" || *u.Provider != "" || !u.ClearGPU ||
+		!maps.Equal(u.Settings, map[string]string{"quantization": "", "cache_mb": ""}) {
+		t.Errorf("update %+v", u)
+	}
+	if u = removalUpdate(raw, "staging"); u.ClearGPU || u.Settings != nil {
+		t.Errorf("a bare block %+v", u)
 	}
 }
