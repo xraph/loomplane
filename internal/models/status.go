@@ -1073,9 +1073,9 @@ func (s *Service) moveServerFirst(ctx context.Context, p security.Principal, pro
 }
 
 // Remove takes the environment's copy of the model out and plans the
-// environment. While other environments run the model, it turns the
-// environment off in the resource and clears its block (removalUpdate),
-// and goes ahead even when services there link to it (Decision 4): their
+// environment. While other environments run the model, or have a copy
+// that waits for its GPU server, it turns the environment off in the
+// resource and clears its block (removalUpdate), and goes ahead even when services there link to it (Decision 4): their
 // plan warns need-off for each one, and the result says so. Removing the
 // last environment removes the resource, and refuses, with ErrInUse,
 // while a service needs it, naming each one. The row goes once the plan
@@ -1115,7 +1115,14 @@ func (s *Service) Remove(ctx context.Context, p security.Principal, projectID, e
 			return manifests.EditInput{}, fmt.Errorf("%w: %s has no model %s", ErrNotFound, env.Name, resource)
 		}
 		users = servicesNeeding(m, resource)
-		last = !slices.ContainsFunc(slices.Collect(maps.Keys(r.Environments)), func(name string) bool { return name != env.Name && enabledIn(r, name) })
+		// A copy that waits for its GPU server is another copy too: the
+		// resource stays for it to join once the server is up.
+		waiting, werr := s.waitingElsewhere(ctx, p.OrgID, projectID, env, resource)
+		if werr != nil {
+			return manifests.EditInput{}, werr
+		}
+		last = len(waiting) == 0 &&
+			!slices.ContainsFunc(slices.Collect(maps.Keys(r.Environments)), func(name string) bool { return name != env.Name && enabledIn(r, name) })
 		if last && len(users) > 0 {
 			verb, them := "links", "it"
 			if len(users) > 1 {
@@ -1170,6 +1177,21 @@ func (s *Service) Remove(ctx context.Context, p security.Principal, projectID, e
 	}
 	s.modelsChanged(ctx, p.OrgID, projectID)
 	return res, nil
+}
+
+// waitingElsewhere is the IDs of the environments other than env whose
+// copy of resource waits for its GPU server.
+func (s *Service) waitingElsewhere(ctx context.Context, orgID, projectID string, env *projects.Environment, resource string) (map[string]bool, error) {
+	if s.d.Store == nil {
+		return nil, nil
+	}
+	rows, err := s.d.Store.ListProject(ctx, orgID, projectID)
+	if err != nil {
+		return nil, err
+	}
+	waiting := waitingIn(rows, resource)
+	delete(waiting, env.ID)
+	return waiting, nil
 }
 
 // removalUpdate takes env's copy of raw out and leaves the rest of raw

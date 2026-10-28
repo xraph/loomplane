@@ -1144,6 +1144,38 @@ func TestRemoveRacedTwiceIsAConflict(t *testing.T) {
 	}
 }
 
+// Final review M1: a copy that waits for its GPU server in staging is
+// another copy, so removing production's keeps llm for staging to join,
+// even while checkout links to it.
+func TestRemoveKeepsTheResourceForAWaitingCopy(t *testing.T) {
+	ctx := context.Background()
+	targets, conns := copyServers()
+	d := newDeploy(t, deployRegistry(t, llamaRev, ""), aiAdmin, targets, conns...)
+	putLLM(t, d, map[string]manifest.ResourceSettings{"production": on()})
+	saveServices(t, d, map[string]manifest.Service{"checkout": linkedService("go:cmd/checkout", "llm")})
+	llmRow(t, d, productID)
+	waiting := llmRow(t, d, stagingID)
+	waiting.Phase = PhaseWaitingForServer
+	if err := d.rows.Update(ctx, waiting); err != nil {
+		t.Fatal(err)
+	}
+	edits := d.recordEdits()
+
+	res, err := d.svc.Remove(ctx, member, projectID, productID, "llm")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(edits.edits) != 1 || edits.edits[0].UpdateResource == nil || edits.edits[0].UpdateResource.Environment != "production" {
+		t.Fatalf("edits %+v", edits.edits)
+	}
+	if llm, ok := current(t, d).Resources["llm"]; !ok || enabledIn(llm, "production") {
+		t.Errorf("manifest %+v", llm)
+	}
+	if !strings.Contains(res.Message, "checkout in production gets no MODEL_URL") {
+		t.Errorf("message %q", res.Message)
+	}
+}
+
 func TestRemovalUpdateClearsTheBlock(t *testing.T) {
 	block := on()
 	block.Target, block.Provider, block.GPU = gpuConn2, "kubernetes", &manifest.GPU{Kind: "nvidia-h100", Count: 1}

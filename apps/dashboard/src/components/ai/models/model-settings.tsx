@@ -164,8 +164,15 @@ function Remove({
   const [refused, setRefused] = useState("")
   const server = status.connectionName || "its server"
   const here = status.environments[0]?.environment || "this environment"
-  // The environments that keep their own copy when this one goes.
-  const others = listOf(status.environments.slice(1).map((e) => e.environment))
+  // The environments that keep their own copy when this one goes: one
+  // that runs it, and one whose copy still waits for its GPU server, which
+  // the server keeps the model for.
+  const otherNames = status.environments.slice(1).map((e) => e.environment)
+  const others = listOf(otherNames)
+  const kept =
+    otherNames.length > 1
+      ? `Its copies in ${others} stay.`
+      : `Its copy in ${others} stays.`
   // Each service in this environment that links to the model loses
   // MODEL_URL once the plan is approved. With no other copy, the server
   // refuses instead and says to unlink it first.
@@ -193,7 +200,7 @@ function Remove({
         text:
           message ||
           (others
-            ? `The plan removes ${status.resource} from ${here}. It keeps running in ${others}. Its downloaded weights stay on ${server} as retained storage.`
+            ? `The plan removes ${status.resource} from ${here}. ${kept} Its downloaded weights stay on ${server} as retained storage.`
             : `The plan removes ${status.resource}. Its downloaded weights stay on ${server} as retained storage.`),
         tone: message && costsMoney(message) ? "weld" : undefined,
         planId: res.planId,
@@ -211,7 +218,7 @@ function Remove({
       title="Remove"
       description={
         others
-          ? `Take ${here}'s copy of ${status.resource} out of the manifest and plan ${here}. It keeps running in ${others}.`
+          ? `Take ${here}'s copy of ${status.resource} out of the manifest and plan ${here}. ${kept}`
           : `Take ${status.resource} out of the manifest and plan its environment. A service that links to it has to be unlinked first.`
       }
     >
@@ -238,7 +245,7 @@ function Remove({
             <AlertDialogTitle>Remove {status.resource}?</AlertDialogTitle>
             <AlertDialogDescription>
               {others
-                ? `Removes ${status.resource} from ${here}. It keeps running in ${others}.`
+                ? `Removes ${status.resource} from ${here}. ${kept}`
                 : "The model stops."}{" "}
               The downloaded weights stay on {server} as retained storage.
             </AlertDialogDescription>

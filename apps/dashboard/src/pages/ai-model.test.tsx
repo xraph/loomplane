@@ -956,11 +956,39 @@ it("says removing keeps the other copies", async () => {
   )
   const confirm = await screen.findByRole("alertdialog")
   expect(confirm).toHaveTextContent(
-    "Removes qwen2-5-7b-instruct from production. It keeps running in staging."
+    "Removes qwen2-5-7b-instruct from production. Its copy in staging stays."
   )
   expect(
     within(confirm).queryByRole("group", { name: "Linked services" })
   ).toBeNull()
+})
+
+it("counts a copy that waits for its GPU server as one that stays", async () => {
+  prodRoutes({
+    environments: [
+      copies[0],
+      {
+        ...copies[1],
+        message:
+          "Waits for its GPU server in staging. Services in staging link to this copy once it runs.",
+      },
+    ],
+    linked: [
+      { environment: "production", service: "checkout", reachable: true },
+    ],
+  })
+  await openModel(`${prodPage}&tab=settings`)
+  const remove = screen.getByRole("region", { name: "Remove" })
+  await userEvent.click(
+    within(remove).getByRole("button", { name: "Remove qwen2-5-7b-instruct" })
+  )
+  const confirm = await screen.findByRole("alertdialog")
+  expect(confirm).toHaveTextContent(
+    "Removes qwen2-5-7b-instruct from production. Its copy in staging stays."
+  )
+  expect(
+    within(confirm).getByRole("group", { name: "Linked services" })
+  ).toHaveTextContent("checkout gets no MODEL_URL in production")
 })
 
 it("warns which services lose MODEL_URL before removing", async () => {
@@ -997,7 +1025,7 @@ it("warns which services lose MODEL_URL before removing", async () => {
   await waitFor(() => expect(removed).toBe(true))
   expect(
     await screen.findByText(
-      "The plan removes qwen2-5-7b-instruct from production. It keeps running in staging. Its downloaded weights stay on gpu-box as retained storage."
+      "The plan removes qwen2-5-7b-instruct from production. Its copy in staging stays. Its downloaded weights stay on gpu-box as retained storage."
     )
   ).toBeInTheDocument()
 
