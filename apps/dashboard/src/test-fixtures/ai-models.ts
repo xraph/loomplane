@@ -326,7 +326,7 @@ export function operation(over: Record<string, unknown> = {}) {
     expires_at: "2026-11-03T10:15:00Z",
     input: {
       kind: "create",
-      name: "checkout-qwen2-5-7b-instruct-gpu",
+      name: "checkout-qwen2-5-7b-instruct-staging-gpu",
       region: "tor1",
       size: "gpu-l40sx1-48gb",
       cloud_revision: 3,

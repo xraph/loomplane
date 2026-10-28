@@ -7,6 +7,9 @@ import { setFeatures } from "@/lib/features"
 import {
   deployPath,
   dialogRoutes,
+  modelPath,
+  modelRoutes,
+  modelStatus,
   open,
   operation,
   preview,
@@ -65,7 +68,7 @@ type Body = {
 // makes.
 function previewOf(body: Body, over: Record<string, unknown> = {}) {
   if (body.target.source === "server_size") {
-    const name = "checkout-qwen2-5-7b-instruct-gpu"
+    const name = "checkout-qwen2-5-7b-instruct-staging-gpu"
     return body.review_server
       ? preview({
           target: body.target,
@@ -182,7 +185,7 @@ it("defaults to the best quantization that fits and shows its context limit", as
 it("explains reach per environment", async () => {
   routes()
   const { dialog } = await openDialog()
-  // Under M1 a model runs in one environment, and only its services link.
+  // Each environment runs its own copy, and only its services link to it.
   expect(
     await within(dialog).findByText(
       "Runs in staging. Services in staging can link to it."
@@ -342,7 +345,7 @@ it("creates a GPU server first for admins and shows its review", async () => {
 
   await userEvent.click(review)
   expect(await within(dialog).findByTestId("server-review")).toHaveTextContent(
-    "Create checkout-qwen2-5-7b-instruct-gpu in tor1 · $1.57/hr"
+    "Create checkout-qwen2-5-7b-instruct-staging-gpu in tor1 · $1.57/hr"
   )
   expect(dialog).toHaveTextContent(
     "It bills from the moment it's created until you delete it in Infrastructure"
@@ -800,4 +803,94 @@ it("says a deploy without a new server wasn't made when it fails", async () => {
     await within(dialog).findByText("The model wasn't deployed.")
   ).toBeInTheDocument()
   expect(dialog).not.toHaveTextContent("may already be approved")
+})
+
+// The model page's "Deploy to another environment", for a model that runs
+// in staging: production gets its own copy of the same resource.
+const prodPreviewPath =
+  "POST /api/v1/projects/proj_1/environments/env_prod/ai/models/preview"
+
+function addsTo(body: Body) {
+  return preview({
+    target: body.target,
+    adds_to: "qwen2-5-7b-instruct",
+    environments: [
+      {
+        environment: "production",
+        environment_id: "env_prod",
+        mode: "home",
+        message:
+          "Adds production to qwen2-5-7b-instruct. Services in production link to this copy.",
+      },
+      {
+        environment: "staging",
+        environment_id: "env_stg",
+        mode: "home",
+        message: "Runs in staging. Services in staging link to this copy.",
+      },
+    ],
+  })
+}
+
+async function openAddDialog() {
+  const asked = stub({
+    ...modelRoutes(),
+    [modelPath]: () => Response.json(modelStatus()),
+    [prodPreviewPath]: async (_url, init) =>
+      Response.json(addsTo(JSON.parse(String(init?.body)) as Body)),
+  })
+  open("/projects/proj_1/ai/models/qwen2-5-7b-instruct?environment=env_stg")
+  await userEvent.click(
+    await screen.findByRole("button", {
+      name: "Deploy to another environment",
+    })
+  )
+  const dialog = await screen.findByRole("dialog")
+  return { asked, dialog }
+}
+
+it("adds an environment to a model that runs elsewhere", async () => {
+  const { asked, dialog } = await openAddDialog()
+  // Staging runs it already, so the dialog starts on production.
+  expect(
+    await within(dialog).findByRole("combobox", { name: "Environment" })
+  ).toHaveTextContent("production")
+  await userEvent.click(
+    await within(dialog).findByRole("button", { name: "Choose gpu-box" })
+  )
+  expect(
+    await within(dialog).findByText(
+      "Adds production to qwen2-5-7b-instruct. It keeps running in staging. Each environment runs its own copy, on its own server, at its own cost."
+    )
+  ).toBeInTheDocument()
+  // The server's sentence for production says the same, so it shows once.
+  expect(
+    within(dialog).queryByText(
+      "Adds production to qwen2-5-7b-instruct. Services in production link to this copy."
+    )
+  ).toBeNull()
+  const sent = previews(asked).at(-1) as Body & { resource?: string }
+  expect(sent.resource).toBe("qwen2-5-7b-instruct")
+  // Money rules hold: the cost shows, and Plan it waits for the preview.
+  expect(within(dialog).getByTestId("deploy-cost")).toHaveTextContent("$1.57")
+  await waitFor(() =>
+    expect(
+      within(dialog).getByRole("button", { name: "Plan it" })
+    ).toBeEnabled()
+  )
+})
+
+it("disables environments the model already runs in", async () => {
+  const { dialog } = await openAddDialog()
+  await userEvent.click(
+    await within(dialog).findByRole("combobox", { name: "Environment" })
+  )
+  const staging = await screen.findByRole("option", {
+    name: "staging (runs there)",
+  })
+  expect(staging).toHaveAttribute("aria-disabled", "true")
+  await userEvent.click(staging)
+  expect(
+    within(dialog).getByRole("combobox", { name: "Environment" })
+  ).toHaveTextContent("production")
 })

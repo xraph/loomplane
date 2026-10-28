@@ -1,6 +1,8 @@
 // One deployed model: how it's doing and what it costs, what a service
-// that links to it writes to call it, and moving or removing it.
-import { LockIcon, SearchIcon } from "lucide-react"
+// that links to it writes to call it, and moving or removing it. A model
+// can run its own copy in several environments of its project; the page
+// shows one of them, with links to the others.
+import { LockIcon, PlusIcon, SearchIcon } from "lucide-react"
 import { useState } from "react"
 
 import { statusOf } from "@/client/errors"
@@ -9,7 +11,9 @@ import {
   useEnvironmentsList,
   useProjectsGet,
 } from "@/client/forge/loomplane/hooks"
+import type { Environment, ModelsStatus } from "@/client/forge/loomplane/types"
 import { useQuery, useRefetchWhile } from "@/client/hooks"
+import { DeployModelDialog } from "@/components/ai/models/deploy-model-dialog"
 import { ModelExample } from "@/components/ai/models/model-example"
 import {
   ModelOverview,
@@ -33,6 +37,7 @@ import {
   ZeroStateTitle,
 } from "@/components/zero-state"
 import { modelState } from "@/lib/models"
+import { useOrganization } from "@/lib/organization"
 import { Link } from "@/lib/router"
 import { cn } from "@/lib/utils"
 
@@ -98,6 +103,7 @@ export function AIModel({
             // Who may change it depends on the environment's kind, so the
             // page waits for it, unless it can't be read.
             environmentsKnown={environments.status !== "pending"}
+            environments={environments.data?.environments ?? []}
             projectName={project.data?.name}
             tab={tab}
             onTab={onTab}
@@ -116,6 +122,7 @@ function Model({
   environmentName,
   production,
   environmentsKnown,
+  environments,
   projectName,
   tab,
   onTab,
@@ -127,6 +134,7 @@ function Model({
   environmentName?: string
   production: boolean
   environmentsKnown: boolean
+  environments: Environment[]
   projectName?: string
   tab: ModelTab
   onTab: (tab: ModelTab) => void
@@ -188,7 +196,22 @@ function Model({
             </>
           ) : undefined
         }
-      />
+        actions={
+          <DeployElsewhere
+            status={s}
+            projectId={projectId}
+            environments={environments}
+          />
+        }
+      >
+        <EnvironmentSwitcher
+          status={s}
+          projectId={projectId}
+          resource={resource}
+          environmentId={environmentId}
+          environments={environments}
+        />
+      </PageHeading>
       <Tabs
         value={tab}
         onValueChange={(v) => onTab(v as ModelTab)}
@@ -211,6 +234,98 @@ function Model({
           <ModelSettings {...props} />
         </TabsContent>
       </Tabs>
+    </>
+  )
+}
+
+/**
+ * EnvironmentSwitcher links each environment the model runs its own copy
+ * in, in the project's order, when there's more than one.
+ */
+function EnvironmentSwitcher({
+  status,
+  projectId,
+  resource,
+  environmentId,
+  environments,
+}: {
+  status: ModelsStatus
+  projectId: string
+  resource: string
+  environmentId: string
+  environments: Environment[]
+}) {
+  if (status.environments.length < 2) return null
+  const order = (id: string) => {
+    const i = environments.findIndex((e) => e.id === id)
+    return i < 0 ? environments.length : i
+  }
+  const copies = [...status.environments].sort(
+    (a, b) => order(a.environmentId) - order(b.environmentId)
+  )
+  return (
+    <nav
+      aria-label="Environments"
+      className="mt-2 flex max-w-full flex-wrap items-center gap-1.5"
+    >
+      {copies.map((e) => {
+        const current = e.environmentId === environmentId
+        return (
+          <Link
+            key={e.environmentId}
+            to="/projects/$id/ai/models/$resource"
+            params={{ id: projectId, resource }}
+            search={{ environment: e.environmentId }}
+            aria-current={current ? "page" : undefined}
+            className={cn(
+              "inline-flex h-7 max-w-full items-center rounded-full px-3 text-[12.5px] font-medium ring-1 transition-colors",
+              current
+                ? "bg-foreground text-background ring-foreground"
+                : "text-muted-foreground ring-border hover:bg-muted hover:text-foreground"
+            )}
+          >
+            <span className="truncate">{e.environment}</span>
+          </Link>
+        )
+      })}
+    </nav>
+  )
+}
+
+/**
+ * DeployElsewhere adds another of the project's environments to the model,
+ * for someone who may deploy models, while there's one it doesn't run in.
+ */
+function DeployElsewhere({
+  status,
+  projectId,
+  environments,
+}: {
+  status: ModelsStatus
+  projectId: string
+  environments: Environment[]
+}) {
+  const { can } = useOrganization()
+  const [open, setOpen] = useState(false)
+  const runsIn = status.environments.map((e) => e.environmentId)
+  const left = environments.some((e) => !runsIn.includes(e.id))
+  if (!status.entry.id || !left || !(can("ai:edit") || can("ai:manage")))
+    return null
+  return (
+    <>
+      <Button variant="outline" onClick={() => setOpen(true)}>
+        <PlusIcon aria-hidden="true" />
+        Deploy to another environment
+      </Button>
+      {open && (
+        <DeployModelDialog
+          entryId={status.entry.id}
+          projectId={projectId}
+          resource={status.resource}
+          runsIn={runsIn}
+          onClose={() => setOpen(false)}
+        />
+      )}
     </>
   )
 }
@@ -283,7 +398,8 @@ function PickEnvironment({
         </ZeroStateMedia>
         <ZeroStateTitle>Which environment?</ZeroStateTitle>
         <ZeroStateDescription>
-          A model runs in one environment. Pick the one {resource} runs in.
+          Each environment runs its own copy of {resource}. Pick the one to
+          open.
         </ZeroStateDescription>
       </ZeroStateHeader>
       <ZeroStateContent>

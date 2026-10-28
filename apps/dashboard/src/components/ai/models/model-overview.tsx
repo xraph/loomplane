@@ -44,6 +44,7 @@ import {
   dollars,
   engineName,
   engineOfKind,
+  listOf,
   modelState,
   monthLabel,
   shortPin,
@@ -310,6 +311,13 @@ function UpdateAvailable({
     failed?: boolean
   }>()
   const pin = status.pin ? shortPin(status.pin) : "the new pin"
+  const here = status.environments[0]?.environment || "its environment"
+  // Each environment moves to the new pin from its own page.
+  const others = status.environments.slice(1).map((e) => e.environment)
+  const alone =
+    others.length > 0
+      ? `Moves ${here} only. ${listOf(others)} ${others.length > 1 ? "keep their" : "keeps its"} weights until you move ${others.length > 1 ? "them from their" : "it from its"} own page.`
+      : undefined
 
   const once = useOnce()
   const go = () => once("move-to-pin", goNow)
@@ -349,6 +357,11 @@ function UpdateAvailable({
             {status.pin?.message ||
               "The registry now pins other weights for this model."}
           </p>
+          {alone && (
+            <p className="text-[13px] text-pretty text-muted-foreground">
+              {alone}
+            </p>
+          )}
         </div>
         <Button
           size="sm"
@@ -380,10 +393,9 @@ function UpdateAvailable({
             </AlertDialogTitle>
             <AlertDialogDescription>
               Loomplane points {status.resource} at the weights the registry
-              pins now and plans{" "}
-              {status.environments[0]?.environment || "its environment"}. It
-              keeps serving the weights it has until you approve the plan and
-              the new ones are loaded.
+              pins now and plans {here}. It keeps serving the weights it has
+              until you approve the plan and the new ones are loaded.
+              {alone && ` ${alone}`}
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -752,8 +764,8 @@ function FieldRow({
 
 function LinkedServices({ status, projectId }: ModelProps) {
   const { can } = useOrganization()
-  // A model runs in one environment, so its services there are the ones
-  // that link to it.
+  // Each environment runs its own copy, so this environment's services are
+  // the ones that link to this copy.
   const home = status.environments[0]?.environment ?? ""
   const reachable = status.linked.filter((l) => l.environment === home || !home)
   return (

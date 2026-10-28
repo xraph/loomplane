@@ -1,13 +1,13 @@
 ---
 title: Models
-description: Browse the model registry, deploy a model in one click on a GPU or a server you have, link services to it, and move or remove it later.
+description: Browse the model registry, deploy a model in one click on a GPU or a server you have, run it in more than one environment, link services to it, and move or remove it later.
 ---
 
 import { Step, Steps } from 'fumadocs-ui/components/steps';
 
 Open **AI**, then **Models**. The **Registry** tab lists the open models Loomplane knows how to serve, and the **Deployed** tab lists the ones running in your projects, with what each costs per hour and this month.
 
-A model you deploy runs in one environment of one project, on a server or cluster you connected, or on a DigitalOcean GPU server Loomplane creates for it. Services in that environment link to it and call it with `MODEL_URL` and `MODEL_API_KEY`.
+A model you deploy belongs to one project and runs in the environments you deploy it to, each environment running its own copy on a server or cluster you connected, or on a DigitalOcean GPU server Loomplane creates for it. Services in an environment link to that environment's copy and call it with `MODEL_URL` and `MODEL_API_KEY`.
 
 ## The registry
 
@@ -84,6 +84,8 @@ Choose **Deploy** on a card or a model's page.
 
 Under **Where**, pick the project and the environment. The dialog says "Runs in staging. Services in staging can link to it." The project needs a saved manifest first.
 
+To add an environment to a model that's already deployed, open its page and choose **Deploy to another environment**. You get the same dialog for the same model, and the environments it runs in already read "(runs there)" and can't be picked.
+
 </Step>
 <Step>
 
@@ -106,13 +108,13 @@ Nothing runs before that. **Plan it** adds the model to the project's `loomplane
 
 You need `ai:edit` to deploy to an environment that isn't production, and `ai:manage` for production. The dialog tells you when you can't.
 
-A model already running in that environment is refused ("llm already runs Qwen2.5 7B Instruct in staging."). The same model in another environment of the project gets its own resource, named after the model, or after the model and the environment when that name is taken.
+A model already running in that environment is refused ("llm already runs Qwen2.5 7B Instruct in staging."). Deploying a model the project already runs to another environment adds that environment to the same resource: the dialog says "Adds production to llm.", and production gets its own copy on the server you pick, with its own key, cost and budget. The copy has to run on the same engine as the others. Pick a CPU server for a model that runs on vLLM in staging and the dialog refuses it, and tells you to pick a target the model runs on as it is, or deploy it as a separately named model.
 
 ### On a new GPU server
 
 When you pick a **New server**, Loomplane creates a DigitalOcean GPU Droplet for the model first. The Droplet bills from the moment it exists, so creating it is a step of its own:
 
-1. **Review server** asks DigitalOcean for the size's price and shows the server Loomplane would create, named after the project and the model, such as `shop-qwen2-5-7b-instruct-gpu`, in its region and at its hourly price. Nothing is created yet.
+1. **Review server** asks DigitalOcean for the size's price and shows the server Loomplane would create, named after the project, the model and the environment, such as `shop-qwen2-5-7b-instruct-staging-gpu`, in its region and at its hourly price. Nothing is created yet.
 2. **Create the server and plan it** approves that server. The review is good for five minutes, so a stale one asks you to review again.
 
 Only admins can review and create GPU servers (`organization_cloud:manage`). Anyone else sees "An admin creates GPU servers. Ask one to deploy this, or pick a server you have." The DigitalOcean account has to be in the environment's Cloud, too.
@@ -146,9 +148,50 @@ resources:
         enabled: true
 ```
 
-Model kinds run only in the environments where they're enabled, which is how a model stays in one environment. The settings must match the registry's pin for the entry: a `model`, `revision` or GGUF `file` that differs from it is refused. `cache_mb` sizes a GPU model's weight cache on Kubernetes, 20,480 MB by default.
+Model kinds run only in the environments where they're enabled, and each of those environments runs its own copy. The settings must match the registry's pin for the entry: a `model`, `revision` or GGUF `file` that differs from it is refused. `cache_mb` sizes a GPU model's weight cache on Kubernetes, 20,480 MB by default.
 
 A model you add to the manifest by hand shows on the Models page too, with its state and its hourly price. Loomplane keeps no budget or price override for it, and it isn't counted in the month's spend.
+
+## Run it in more than one environment
+
+Here's the model above running in staging and production. Production has its own block, which says only what's different there:
+
+```yaml
+resources:
+  qwen2-5-7b-instruct:
+    kind: model-vllm
+    version: "0.31"
+    provider: server
+    target: conn_01jabc...
+    gpu: { kind: nvidia-l4, count: 1 }
+    settings:
+      entry: Qwen/Qwen2.5-7B-Instruct
+      model: Qwen/Qwen2.5-7B-Instruct
+      revision: a09a35458c702b33eeacc393d103063234e8bc28
+      quantization: bf16
+      served_name: Qwen/Qwen2.5-7B-Instruct
+      max_model_len: "32768"
+      cache_mb: "20480"
+    environments:
+      staging:
+        enabled: true
+      production:
+        enabled: true
+        target: <production GPU server connection ID>
+        gpu: { kind: nvidia-h100, count: 1 }
+        settings:
+          max_model_len: "16384"
+```
+
+Staging reads everything from the top level. Production reads the top level too, except where its block says otherwise, so its copy runs on its own server, on an H100, with a 16,384 token context. Each copy has its own server, its own `MODEL_API_KEY`, its own cost and its own budget alert, and its own row on the **Deployed** tab. A service that needs `qwen2-5-7b-instruct` lists that one name, and in each environment it gets that environment's `MODEL_URL`.
+
+A few rules for the blocks:
+
+- `target` is optional at the top level. Each environment needs one, from its own block or from the top level, and when neither has one, only that environment's plan stops and asks for it. A block that runs the model on another provider doesn't take the top-level target with it.
+- One model runs on one engine everywhere. If production needs another engine, say llama.cpp on a CPU server while staging runs vLLM on a GPU, deploy it to production as a separately named model.
+- When Loomplane adds an environment, the block's `settings` get only what differs from the top level: `quantization`, `model`, `revision`, `file`, `max_model_len` or `cache_mb`. It never writes `entry` or `served_name` there, so your code asks for the same model name in every environment.
+
+The model page shows one environment's copy at a time. When the model runs in more than one, the header links each of them.
 
 ## Link a service
 
@@ -187,7 +230,7 @@ print(reply.choices[0].message.content)
 
 The `model` field is the name the model is served as, its Hugging Face repo unless `served_name` says otherwise. The model page's **Example** tab has curl, Python and JavaScript for the model's own tasks: embeddings at `/v1/embeddings` (with the query prefix the model wants, such as `"query: "`, when the registry knows it), reranking at `POST $MODEL_URL/rerank`, and transcription at `POST $MODEL_URL/v1/audio/transcriptions`.
 
-A service that needs the model in an environment where it doesn't run gets a `need-off` warning on that environment's plans, saying it gets no `MODEL_URL` there because the model doesn't run there. The warning doesn't block those deploys. It suggests enabling the model in that environment, which would run a second copy on the same target.
+A service that needs the model in an environment where it doesn't run gets a `need-off` warning on that environment's plans, saying it gets no `MODEL_URL` there because the model doesn't run there. The warning doesn't block those deploys. It says how to fix it: "Deploy qwen2-5-7b-instruct to production from its model page."
 
 ## Any Hugging Face model
 
@@ -238,13 +281,17 @@ The **Overview** tab also shows where it runs, its engine and version, its quant
 
 When a Loomplane release pins new weights for a model's registry entry, its page shows **Update available** with what changed. **Move to** the new pin plans the change. The model keeps serving the weights it has until you approve the plan and the new ones are loaded. Planning the model's environment without moving it fails with a sentence that says to do this first, so the change never happens silently.
 
+A pin move changes only the environment you move it from. When the model runs in staging and production and you move production, the page says "Moves production only. staging keeps its weights until you move it from its own page." Staging keeps its weights and keeps showing **Update available** until you move it from staging's page.
+
 ### Move it
 
-**Settings**, then **Move**, runs the model on another GPU, server or cluster, or with another quantization or context. It's the deploy dialog again, new GPU server and review included. The model keeps its name, so linked services keep their `MODEL_URL`, and it keeps running where it is until the move is deployed. While a move waits for a new GPU server, the page shows what that server costs, since both bill once it's up. A server Loomplane created for the model's old place keeps billing after the move until you delete it in **Infrastructure**, and the page says so.
+**Settings**, then **Move**, runs this environment's copy on another GPU, server or cluster, or with another quantization or context. The other environments keep their copies as they are. It's the deploy dialog again, new GPU server and review included. The model keeps its name, so linked services keep their `MODEL_URL`, and it keeps running where it is until the move is deployed. While a move waits for a new GPU server, the page shows what that server costs, since both bill once it's up. A server Loomplane created for the model's old place keeps billing after the move until you delete it in **Infrastructure**, and the page says so.
 
 ### Remove it
 
-**Settings**, then **Remove**, takes the model out of the manifest and plans its environment. It's refused while a service links to it ("checkout in staging links to it. Unlink it first."). The downloaded weights stay on the server as retained storage, so deploying the model there again doesn't download them again. Delete them from the server's storage when you no longer need them. If Loomplane created the GPU server for this model, the server isn't removed with it, and keeps costing money until you delete it in **Infrastructure**.
+**Settings**, then **Remove**, takes out the environment you're looking at and plans it. When the model runs in other environments too, that's all it removes: the dialog says "Removes llm from production. It keeps running in staging." A service in production that links to the model goes on linking to it, gets no `MODEL_URL` there once the plan is approved, and the plan warns `need-off` for it. The remove dialog lists those services before you confirm.
+
+Removing the last environment removes the model from the manifest. That one is refused while a service links to it ("checkout in staging links to it. Unlink it first."). The downloaded weights stay on the server as retained storage, so deploying the model there again doesn't download them again. Delete them from the server's storage when you no longer need them. If Loomplane created the GPU server for this model, the server isn't removed with it, and keeps costing money until you delete it in **Infrastructure**.
 
 Move, remove, retry and cancel need the same permission as deploying: `ai:edit`, or `ai:manage` in production. Linking a service is a manifest edit, so it needs `project:update`.
 

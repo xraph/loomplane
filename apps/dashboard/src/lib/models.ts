@@ -559,3 +559,9 @@ export function shortPin(pin: {
   const file = pin.file ? ` (${pin.file})` : ""
   return `${pin.model || "the new pin"}${at}${file}`
 }
+
+/** listOf joins names the way a sentence does: "a", "a and b", "a, b and c". */
+export function listOf(names: string[]): string {
+  if (names.length < 2) return names.join("")
+  return `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}`
+}

@@ -98,18 +98,20 @@ it("shows waiting for server, then planned, then ready", async () => {
     modelStatus({
       state: "waiting_for_server",
       message:
-        "The GPU server checkout-qwen-gpu is being created. The model deploys once it's up.",
+        "The GPU server checkout-qwen2-5-7b-instruct-staging-gpu is being created. The model deploys once it's up.",
       internal_url: undefined,
       deployment: deployment({
         phase: "waiting_for_server",
-        server_name: "checkout-qwen-gpu",
+        server_name: "checkout-qwen2-5-7b-instruct-staging-gpu",
       }),
     })
   )
   await openModel()
   const state = screen.getByRole("region", { name: "State" })
   expect(within(state).getByText("Waiting for a server")).toBeInTheDocument()
-  expect(state).toHaveTextContent("checkout-qwen-gpu is being created")
+  expect(state).toHaveTextContent(
+    "checkout-qwen2-5-7b-instruct-staging-gpu is being created"
+  )
   expect(within(state).getByRole("button", { name: "Cancel" })).toBeEnabled()
 
   fresh()
@@ -580,7 +582,7 @@ it("sends one retry, one cancel, one move to the pin and one removal for two qui
 
 it("shows the server's sentence after a cancel", async () => {
   const approved =
-    "checkout-qwen-gpu was already approved and is being created. Delete it in Infrastructure if you don't want it: it costs money once it's up."
+    "checkout-qwen2-5-7b-instruct-staging-gpu was already approved and is being created. Delete it in Infrastructure if you don't want it: it costs money once it's up."
   routes(
     modelStatus({
       state: "waiting_for_server",
@@ -663,7 +665,7 @@ it("shows MODEL_URL examples for each task", async () => {
 
 it("removes the model after asking, and says what stays", async () => {
   const stays =
-    "The plan removes qwen2-5-7b-instruct. Its downloaded weights stay on gpu-box as retained storage, so deploying it there again doesn't download them again. Delete them from the server's storage when you no longer need them. Loomplane created checkout-qwen-gpu for this model, and it keeps running and costs money until you delete it in Infrastructure."
+    "The plan removes qwen2-5-7b-instruct. Its downloaded weights stay on gpu-box as retained storage, so deploying it there again doesn't download them again. Delete them from the server's storage when you no longer need them. Loomplane created checkout-qwen2-5-7b-instruct-staging-gpu for this model, and it keeps running and costs money until you delete it in Infrastructure."
   let removed = false
   routes(modelStatus(), {
     [`DELETE ${modelPath}`]: () => {
@@ -731,7 +733,7 @@ type MoveBody = {
 
 it("moves onto a new GPU server through its review, and says the old one still bills", async () => {
   const bills =
-    "checkout-qwen-gpu keeps running and costs money until you delete it in Infrastructure."
+    "checkout-qwen2-5-7b-instruct-staging-gpu keeps running and costs money until you delete it in Infrastructure."
   let n = 0
   const asked = routes(modelStatus(), {
     [`POST ${modelPath}/move-preview`]: async (_url, init) => {
@@ -742,7 +744,7 @@ it("moves onto a new GPU server through its review, and says the old one still b
         return Response.json(
           preview({
             target: body.target,
-            target_name: "checkout-qwen-gpu-2",
+            target_name: "checkout-qwen2-5-7b-instruct-staging-gpu-2",
             can_deploy: false,
             server_review_needed: true,
           })
@@ -751,7 +753,7 @@ it("moves onto a new GPU server through its review, and says the old one still b
       return Response.json(
         preview({
           target: body.target,
-          target_name: "checkout-qwen-gpu-2",
+          target_name: "checkout-qwen2-5-7b-instruct-staging-gpu-2",
           server: operation({ id: `op_${n}`, review: `review_${n}` }),
         })
       )
@@ -857,4 +859,201 @@ it("sends a pasted repo's queries to its card for the prefix", async () => {
   expect(
     within(embeddings).getByLabelText("Embeddings in curl")
   ).toHaveTextContent('"input": ["How do I reset my password?"]')
+})
+
+// The same model's copies in staging and production, from production's
+// page: production first, as the server sends it.
+const prodPath =
+  "/api/v1/projects/proj_1/environments/env_prod/ai/models/qwen2-5-7b-instruct"
+const prodPage =
+  "/projects/proj_1/ai/models/qwen2-5-7b-instruct?environment=env_prod"
+const copies = [
+  {
+    environment: "production",
+    environment_id: "env_prod",
+    mode: "home",
+    message: "Runs in production. Services in production link to this copy.",
+  },
+  {
+    environment: "staging",
+    environment_id: "env_stg",
+    mode: "home",
+    message: "Runs in staging. Services in staging link to this copy.",
+  },
+]
+
+function prodRoutes(
+  over: Record<string, unknown> = {},
+  extra: Record<string, Handler> = {}
+) {
+  return stub({
+    ...modelRoutes(),
+    [prodPath]: () =>
+      Response.json(
+        modelStatus({
+          environments: copies,
+          deployment: deployment({ environment_id: "env_prod" }),
+          ...over,
+        })
+      ),
+    ...extra,
+  })
+}
+
+it("switches between a model's environments", async () => {
+  prodRoutes()
+  await openModel(prodPage)
+  const nav = screen.getByRole("navigation", { name: "Environments" })
+  const links = within(nav).getAllByRole("link")
+  expect(links.map((l) => l.textContent)).toEqual(["staging", "production"])
+  expect(links[0].getAttribute("href")).toMatch(/\?environment=env_stg$/)
+  expect(links[1].getAttribute("href")).toMatch(/\?environment=env_prod$/)
+  expect(links[1]).toHaveAttribute("aria-current", "page")
+  expect(links[0]).not.toHaveAttribute("aria-current")
+
+  // One environment, no switcher.
+  fresh()
+  routes()
+  await openModel()
+  expect(screen.queryByRole("navigation", { name: "Environments" })).toBeNull()
+})
+
+it("offers deploying to another environment", async () => {
+  routes()
+  await openModel()
+  await userEvent.click(
+    screen.getByRole("button", { name: "Deploy to another environment" })
+  )
+  const dialog = await screen.findByRole("dialog")
+  expect(
+    await within(dialog).findByRole("combobox", { name: "Environment" })
+  ).toHaveTextContent("production")
+
+  // It runs in every environment of the project already.
+  fresh()
+  prodRoutes()
+  await openModel(prodPage)
+  expect(
+    screen.queryByRole("button", { name: "Deploy to another environment" })
+  ).toBeNull()
+
+  // Someone who can't deploy models isn't offered it.
+  fresh()
+  perms.granted = new Set(["ai:read"])
+  routes(modelStatus({ can_edit: false }))
+  await openModel()
+  expect(
+    screen.queryByRole("button", { name: "Deploy to another environment" })
+  ).toBeNull()
+})
+
+it("says removing keeps the other copies", async () => {
+  prodRoutes()
+  await openModel(`${prodPage}&tab=settings`)
+  const remove = screen.getByRole("region", { name: "Remove" })
+  await userEvent.click(
+    within(remove).getByRole("button", { name: "Remove qwen2-5-7b-instruct" })
+  )
+  const confirm = await screen.findByRole("alertdialog")
+  expect(confirm).toHaveTextContent(
+    "Removes qwen2-5-7b-instruct from production. It keeps running in staging."
+  )
+  expect(
+    within(confirm).queryByRole("group", { name: "Linked services" })
+  ).toBeNull()
+})
+
+it("warns which services lose MODEL_URL before removing", async () => {
+  let removed = false
+  prodRoutes(
+    {
+      linked: [
+        { environment: "production", service: "checkout", reachable: true },
+      ],
+    },
+    {
+      [`DELETE ${prodPath}`]: () => {
+        removed = true
+        return Response.json({ plan_id: "plan_rm" })
+      },
+    }
+  )
+  await openModel(`${prodPage}&tab=settings`)
+  const remove = screen.getByRole("region", { name: "Remove" })
+  await userEvent.click(
+    within(remove).getByRole("button", { name: "Remove qwen2-5-7b-instruct" })
+  )
+  const confirm = await screen.findByRole("alertdialog")
+  expect(
+    within(confirm).getByRole("group", { name: "Linked services" })
+  ).toHaveTextContent(
+    "checkout gets no MODEL_URL in production once the plan is approved. The plan warns need-off for it."
+  )
+  const go = within(confirm).getByRole("button", {
+    name: "Remove qwen2-5-7b-instruct",
+  })
+  expect(go).toBeEnabled()
+  await userEvent.click(go)
+  await waitFor(() => expect(removed).toBe(true))
+  expect(
+    await screen.findByText(
+      "The plan removes qwen2-5-7b-instruct from production. It keeps running in staging. Its downloaded weights stay on gpu-box as retained storage."
+    )
+  ).toBeInTheDocument()
+
+  // In its last environment the server refuses instead, and the page
+  // keeps today's copy.
+  fresh()
+  routes(
+    modelStatus({
+      linked: [
+        { environment: "staging", service: "checkout", reachable: true },
+      ],
+    })
+  )
+  await openModel(`${page}&tab=settings`)
+  await userEvent.click(
+    within(screen.getByRole("region", { name: "Remove" })).getByRole("button", {
+      name: "Remove qwen2-5-7b-instruct",
+    })
+  )
+  const last = await screen.findByRole("alertdialog")
+  expect(last).toHaveTextContent("The model stops.")
+  expect(
+    within(last).queryByRole("group", { name: "Linked services" })
+  ).toBeNull()
+})
+
+it("says a pin move changes only this environment", async () => {
+  prodRoutes({
+    update_available: true,
+    pin: {
+      update_available: true,
+      model: "Qwen/Qwen2.5-7B-Instruct",
+      revision: "c".repeat(40),
+    },
+  })
+  await openModel(prodPage)
+  const banner = screen.getByRole("region", { name: "Update available" })
+  expect(banner).toHaveTextContent(
+    "Moves production only. staging keeps its weights until you move it from its own page."
+  )
+  expect(
+    within(banner).getByRole("button", {
+      name: "Move to Qwen/Qwen2.5-7B-Instruct at ccccccc",
+    })
+  ).toBeEnabled()
+
+  // With one environment, the banner doesn't mention others.
+  fresh()
+  routes(
+    modelStatus({
+      update_available: true,
+      pin: { update_available: true, model: "Qwen/Qwen2.5-7B-Instruct" },
+    })
+  )
+  await openModel()
+  expect(
+    screen.getByRole("region", { name: "Update available" })
+  ).not.toHaveTextContent("only")
 })

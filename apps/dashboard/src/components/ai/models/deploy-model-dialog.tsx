@@ -4,6 +4,10 @@
 // the model gets its own "Review server" step, for admins only: that review
 // asks the provider and records it in Infrastructure, so it's sent from
 // that button and never on a change of the form.
+//
+// From a deployed model's page it adds an environment to that model: the
+// environments it runs in already can't be picked, and the new one gets its
+// own copy, on its own server, at its own cost.
 import { useEffect, useRef, useState } from "react"
 
 import { statusOf } from "@/client/errors"
@@ -54,7 +58,7 @@ import {
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { gpuTitle } from "@/lib/gpu"
-import { runsOnOf, type RunsOn } from "@/lib/models"
+import { listOf, runsOnOf, type RunsOn } from "@/lib/models"
 import { useOrganization } from "@/lib/organization"
 import { useNavigate } from "@/lib/router"
 
@@ -65,6 +69,13 @@ type Props = {
   quantization?: string
   projectId?: string
   environmentId?: string
+  /**
+   * The deployed model this adds an environment to, sent as the preview's
+   * and the deploy's resource.
+   */
+  resource?: string
+  /** Environment IDs the model already runs in: they can't be picked. */
+  runsIn?: string[]
   onClose: () => void
   /** Called once the deploy went through, with its plan when it made one. */
   onPlanned?: (planId?: string) => void
@@ -142,6 +153,8 @@ function DeployForm({
   quantization,
   projectId,
   environmentId,
+  resource,
+  runsIn = [],
   onClose,
   onPlanned,
 }: Props & { entry: EntryDetail }) {
@@ -168,10 +181,12 @@ function DeployForm({
   const mayWrite = (e: Environment) =>
     can(e.kind === "production" ? "ai:manage" : "ai:edit")
   const [environment, setEnvironment] = useState(environmentId ?? "")
+  // An environment the model runs in already is never the one deployed to.
+  const choosable = envList.filter((e) => !runsIn.includes(e.id))
   const env =
-    envList.find((e) => e.id === environment) ??
-    envList.find(mayWrite) ??
-    envList[0]
+    choosable.find((e) => e.id === environment) ??
+    choosable.find(mayWrite) ??
+    choosable[0]
 
   // What runs, and where.
   const options = [
@@ -202,6 +217,7 @@ function DeployForm({
   const body: DeployInputBody | undefined = choice && {
     entryId: entry.id,
     target: choice,
+    ...(resource ? { resource } : {}),
     ...(quant ? { quantization: quant } : {}),
     ...(maxModelLen > 0 ? { maxModelLen } : {}),
     ...(budget.trim() ? { monthlyBudgetUsd: budget.trim() } : {}),
@@ -416,6 +432,14 @@ function DeployForm({
     )
 
   const blockedEnv = env && !mayWrite(env)
+  // What this deploy adds, once the preview for this environment says.
+  const adds =
+    pv?.addsTo && pv.environments[0]?.environmentId === env?.id ? pv : undefined
+  const others = adds
+    ? adds.environments
+        .filter((e) => e.environmentId !== env?.id)
+        .map((e) => e.environment)
+    : []
   const shown = size ? (reviewed ?? pv) : pv
   const ready = size
     ? !!reviewed?.server && reviewed.canDeploy
@@ -437,14 +461,17 @@ function DeployForm({
             <Skeleton className="h-9 w-full" />
           ) : projectList.length === 0 ? (
             <p className="text-[13px] text-muted-foreground">
-              Create a project first. A model runs in one of its environments.
+              Create a project first. A model runs in its environments.
             </p>
           ) : (
             <div className="grid gap-2 sm:grid-cols-2">
               <Choice
                 label="Project"
                 value={chosenProject}
-                items={projectList.map((p) => ({ value: p.id, label: p.name }))}
+                items={projectList
+                  // Adding an environment stays in the model's project.
+                  .filter((p) => !resource || p.id === projectId)
+                  .map((p) => ({ value: p.id, label: p.name }))}
                 onChange={(v) =>
                   change(() => {
                     setProject(v)
@@ -464,17 +491,37 @@ function DeployForm({
                 <Choice
                   label="Environment"
                   value={env?.id ?? ""}
-                  items={envList.map((e) => ({ value: e.id, label: e.name }))}
+                  items={envList.map((e) =>
+                    runsIn.includes(e.id)
+                      ? {
+                          value: e.id,
+                          label: `${e.name} (runs there)`,
+                          disabled: true,
+                        }
+                      : { value: e.id, label: e.name }
+                  )}
                   onChange={(v) => change(() => setEnvironment(v))}
                 />
               )}
             </div>
           )}
-          {env && (
+          {env && adds ? (
+            <p className="text-[12.5px] text-pretty text-muted-foreground">
+              Adds {env.name} to {adds.addsTo}.
+              {others.length > 0 && ` It keeps running in ${listOf(others)}.`}{" "}
+              Each environment runs its own copy, on its own server, at its own
+              cost.
+            </p>
+          ) : env ? (
             <p className="text-[12.5px] text-muted-foreground">
               Runs in {env.name}. Services in {env.name} can link to it.
             </p>
-          )}
+          ) : envState?.data && runsIn.length > 0 ? (
+            <p className="text-[12.5px] text-pretty text-muted-foreground">
+              {resource ?? "This model"} runs in every environment of this
+              project already.
+            </p>
+          ) : null}
           {blockedEnv && (
             <Note tone="weld">
               {env.kind === "production"

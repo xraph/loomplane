@@ -145,7 +145,7 @@ export function Choice({
 }: {
   label: string
   value: string
-  items: { value: string; label: string }[]
+  items: { value: string; label: string; disabled?: boolean }[]
   onChange: (v: string) => void
 }) {
   return (
@@ -159,7 +159,7 @@ export function Choice({
       </SelectTrigger>
       <SelectContent>
         {items.map((i) => (
-          <SelectItem key={i.value} value={i.value}>
+          <SelectItem key={i.value} value={i.value} disabled={i.disabled}>
             {i.label}
           </SelectItem>
         ))}
@@ -513,7 +513,8 @@ export function Summary({
           )}
         </div>
       )}
-      {pv?.environments[0]?.message && (
+      {/* Adding an environment, the Where section says what it adds. */}
+      {!pv?.addsTo && pv?.environments[0]?.message && (
         <p className="text-[12.5px] text-muted-foreground">
           {pv.environments[0].message}
         </p>
