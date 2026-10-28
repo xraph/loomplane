@@ -485,12 +485,21 @@ func keepEmpty(m *yaml.Node, key string) func() {
 			return
 		}
 		// A block mapping emptied by the edit encodes as {} after the
-		// key, so the key's comment moves behind it.
+		// key, so the key's comment moves behind it. Left on the key, it
+		// would come out after whatever the encoder writes next. When
+		// both carry one, the two join on the {} line.
 		old.Style = yaml.FlowStyle
 		for i := 0; i+1 < len(m.Content); i += 2 {
-			if k := m.Content[i]; k.Value == key && k.LineComment != "" && old.LineComment == "" {
-				old.LineComment, k.LineComment = k.LineComment, ""
+			k := m.Content[i]
+			if k.Value != key || k.LineComment == "" {
+				continue
 			}
+			if old.LineComment == "" {
+				old.LineComment = k.LineComment
+			} else {
+				old.LineComment = k.LineComment + " " + old.LineComment
+			}
+			k.LineComment = ""
 		}
 	}
 }

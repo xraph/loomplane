@@ -785,6 +785,39 @@ resources:
 	}
 }
 
+// TestWithResourceUpdateJoinsCommentsOnAnEmptiedBlock: when the key and
+// the block it holds both carry a line comment, emptying the block puts
+// the two together after the {}, never one of them on the next line.
+func TestWithResourceUpdateJoinsCommentsOnAnEmptiedBlock(t *testing.T) {
+	const doc = `version: 1
+resources:
+  llm:
+    environments:
+      production: # its own server
+        {target: c2} # until the move
+    kind: sample
+    target: c1
+`
+	empty := ""
+	out, err := WithResourceUpdate([]byte(doc), "llm", ResourceUpdate{Environment: "production", Target: &empty})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(out), "production: {} # its own server # until the move\n") {
+		t.Errorf("want both comments on the production line:\n%s", out)
+	}
+	if strings.Count(string(out), "#") != 2 {
+		t.Errorf("a comment moved onto another key:\n%s", out)
+	}
+	m, err := Parse(out)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	if got := m.Resources["llm"]; got.Target != "c1" || got.Environments["production"].Target != "" {
+		t.Errorf("llm = %+v\n%s", got, out)
+	}
+}
+
 func TestWithResourceUpdateInOneEnvironment(t *testing.T) {
 	const doc = `version: 1
 resources:

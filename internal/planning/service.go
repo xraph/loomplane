@@ -801,7 +801,7 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 				finding.Name = dbGatewayName
 			}
 		case composedLookup:
-			finding = Finding{Code: "cloud-target", Subject: ResourceSubject, Name: composed[0], Path: "resources." + composed[0] + ".target", Message: resolutionErr.Error()}
+			finding = Finding{Code: "cloud-target", Subject: ResourceSubject, Name: composed[0], Path: overridePath(rev.Manifest.Resources[composed[0]], composed[0], plan.Environment, "target"), Message: resolutionErr.Error()}
 		}
 		result = &Result{Problems: []Finding{finding}, Actions: []Action{}, Connections: map[string]string{}}
 	} else {

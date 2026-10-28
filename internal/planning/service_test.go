@@ -402,6 +402,17 @@ func TestCreatePlanReportsACloudLookupFailureOnTheComposedResource(t *testing.T)
 	if f := result.Problems[0]; f.Code != "cloud-target" || f.Subject != ResourceSubject || f.Name != "edge" || f.Path != "resources.edge.target" || f.Message != "cloud assignments are unavailable" {
 		t.Fatalf("finding: %+v", f)
 	}
+
+	// Production's own target is where production's finding points.
+	doc = "version: 1\nresources:\n  edge:\n    kind: sample\n    provider: server\n    target: " + targetA + "\n    environments:\n      production: {target: " + targetB + "}\n"
+	service, plan, _ = edgeService(t, doc)
+	service.cloudProfiles = failingResolver{}
+	if result, _, err = service.compute(t.Context(), plan); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Problems) != 1 || result.Problems[0].Path != "resources.edge.environments.production.target" {
+		t.Fatalf("finding: %+v", result.Problems)
+	}
 }
 
 // refusingAuthz fails the test on any check: the paths below refuse the

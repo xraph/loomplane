@@ -376,3 +376,33 @@ func TestEnvironmentCacheResizePath(t *testing.T) {
 		t.Fatalf("resize in production: %+v", r.Problems)
 	}
 }
+
+// TestManagedResourceRefusesAnEnvironmentTarget: a managed provider takes
+// no target connection, so a target in production's block is refused at
+// that block's path, in production alone. A production block that moves
+// a server resource onto a managed provider leaves the top-level target
+// behind (For drops it), so production has nothing to refuse.
+func TestManagedResourceRefusesAnEnvironmentTarget(t *testing.T) {
+	in := managedCatalogInput(t, "cloud-sql")
+	in.Manifest = parse(t, "version: 1\nresources:\n  database:\n    kind: postgres\n    provider: cloud-sql\n    version: '17'\n    region: europe-west1\n"+
+		"    environments:\n      production: {target: "+targetB+"}\n")
+	const path = "resources.database.environments.production.target"
+	if r := Compute(in); r.Executable || !hasFinding(r.Problems, "resource-target-unsupported", path) {
+		t.Fatalf("production: want resource-target-unsupported at %s, got %+v", path, r.Problems)
+	}
+	in.Environment = "staging"
+	if r := Compute(in); slices.ContainsFunc(r.Problems, func(f Finding) bool { return f.Code == "resource-target-unsupported" }) {
+		t.Fatalf("staging: %+v", r.Problems)
+	}
+
+	in = managedCatalogInput(t, "cloud-sql")
+	in.Manifest = parse(t, "version: 1\nresources:\n  database:\n    kind: postgres\n    provider: server\n    target: "+targetA+"\n    version: '17'\n"+
+		"    environments:\n      production: {provider: cloud-sql, region: europe-west1}\n")
+	r := Compute(in)
+	if slices.ContainsFunc(r.Problems, func(f Finding) bool { return f.Code == "resource-target-unsupported" }) {
+		t.Fatalf("production on cloud-sql kept the top-level target: %+v", r.Problems)
+	}
+	if !r.Executable || len(r.Actions) != 1 || r.Actions[0].Resource.Managed == nil || r.Actions[0].Resource.Target != "" {
+		t.Fatalf("want a managed production copy with no target: %+v", r)
+	}
+}

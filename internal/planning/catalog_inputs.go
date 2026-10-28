@@ -19,8 +19,9 @@ type CatalogInputs interface {
 	// into its components from outside the manifest. r is the resource as
 	// the plan's own manifest revision has it, which may not be the
 	// project's latest, and as the plan's environment runs it: that
-	// environment's target, GPU and settings (manifest.Resource.In). It holds no secret, and neither does its error: the
-	// error's text reaches the plan's failure reason and the API.
+	// environment's target, GPU and settings (manifest.Resource.In). It
+	// holds no secret, and neither does its error: the error's text
+	// reaches the plan's failure reason and the API.
 	Digest(ctx context.Context, orgID, projectID, environmentID, resource string, r manifest.Resource) (map[string]string, error)
 }
 
