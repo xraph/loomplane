@@ -18,11 +18,14 @@ import {
 } from "@/client/forge/loomplane/hooks"
 import type {
   Binding,
+  CloudinfraRoute,
   Environment,
   Project,
   ProjectView,
 } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
+import { AddHostnameDialog } from "@/components/domains/add-hostname-dialog"
+import { useRouteLifecycle } from "@/components/domains/use-route-lifecycle"
 import { Page, PageHeading } from "@/components/page"
 import {
   ExcludeDialog,
@@ -38,6 +41,16 @@ import { ServiceAddress } from "@/components/service-address"
 import { useShell } from "@/components/shell"
 import { SiteHeader } from "@/components/site-header"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
 import { Badge } from "@/components/ui/badge"
 import { Button, buttonVariants } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
@@ -449,13 +462,12 @@ function Loaded({
               <Domains
                 row={row}
                 env={env}
-                hostnames={routes
-                  .filter(
-                    (r) =>
-                      r.input.service === name &&
-                      r.input.environmentId === env.id
-                  )
-                  .map((r) => ({ host: r.input.hostname, status: r.status }))}
+                projectId={project.id}
+                routes={routes.filter(
+                  (r) =>
+                    r.input.service === name && r.input.environmentId === env.id
+                )}
+                mayRoute={can("infrastructure:modify")}
               />
               <Uses
                 project={project}
@@ -856,28 +868,46 @@ function Dot({ tone }: { tone: "live" | "waiting" | "idle" | "failed" }) {
 }
 
 function Domains({
+  projectId,
   row,
   env,
-  hostnames,
+  routes,
+  mayRoute,
 }: {
+  projectId: string
   row: ServiceRow
   env: Environment
-  hostnames: { host: string; status: string }[]
+  routes: CloudinfraRoute[]
+  mayRoute: boolean
 }) {
   const binding = row.deployed[env.name]
+  const [adding, setAdding] = useState(false)
+  const [removing, setRemoving] = useState<CloudinfraRoute>()
   const ok = (status: string) => /active|ready|live|ok|serving/i.test(status)
+  const name = row.service.name
   return (
     <section aria-label="Domains" className={card}>
       <div className={cardHead}>
         <h2 className="text-sm font-semibold">Domains</h2>
-        <Link
-          to="/domains"
-          className="text-[12.5px] font-medium text-primary hover:underline"
-        >
-          Add a domain
-        </Link>
+        <span className="flex items-center gap-3">
+          <Link
+            to="/domains"
+            className="text-[12.5px] text-muted-foreground hover:text-foreground hover:underline"
+          >
+            Manage domains
+          </Link>
+          {mayRoute && (
+            <button
+              type="button"
+              onClick={() => setAdding(true)}
+              className="text-[12.5px] font-medium text-primary hover:underline"
+            >
+              Add a domain
+            </button>
+          )}
+        </span>
       </div>
-      {hostnames.length === 0 && !binding?.url ? (
+      {routes.length === 0 && !binding?.url ? (
         <p className="px-4 py-3 text-[12.5px] text-muted-foreground">
           {binding
             ? `None routed to it in ${env.name}.`
@@ -885,19 +915,29 @@ function Domains({
         </p>
       ) : (
         <ul>
-          {hostnames.map((h) => (
+          {routes.map((r) => (
             <li
-              key={h.host}
+              key={r.id}
               className="grid gap-0.5 border-b px-4 py-2.5 last:border-b-0"
             >
               <span className="flex min-w-0 items-center gap-2">
-                <Dot tone={ok(h.status) ? "live" : "waiting"} />
-                <span className="truncate font-mono text-[12.5px] font-medium">
-                  {h.host}
+                <Dot tone={ok(r.status) ? "live" : "waiting"} />
+                <span className="min-w-0 flex-1 truncate font-mono text-[12.5px] font-medium">
+                  {r.input.hostname}
                 </span>
+                {mayRoute && (
+                  <button
+                    type="button"
+                    aria-label={`Remove ${r.input.hostname}`}
+                    onClick={() => setRemoving(r)}
+                    className="shrink-0 text-xs text-muted-foreground hover:text-destructive hover:underline"
+                  >
+                    Remove
+                  </button>
+                )}
               </span>
               <span className="pl-[15px] text-xs text-muted-foreground">
-                Custom · {h.status ? h.status.replaceAll("_", " ") : "routed"}
+                Custom · {r.status ? r.status.replaceAll("_", " ") : "routed"}
               </span>
             </li>
           ))}
@@ -917,7 +957,86 @@ function Domains({
           )}
         </ul>
       )}
+      <AddHostnameDialog
+        projectId={projectId}
+        environment={env}
+        service={name}
+        ports={row.service.ports ?? []}
+        deployed={!!binding}
+        open={adding}
+        onOpenChange={setAdding}
+      />
+      {removing && (
+        <RemoveHostname
+          projectId={projectId}
+          route={removing}
+          service={name}
+          onClose={() => setRemoving(undefined)}
+        />
+      )}
     </section>
+  )
+}
+
+/** RemoveHostname confirms, then removes one custom hostname's route. */
+function RemoveHostname({
+  projectId,
+  route,
+  service,
+  onClose,
+}: {
+  projectId: string
+  route: CloudinfraRoute
+  service: string
+  onClose(): void
+}) {
+  const lifecycle = useRouteLifecycle(projectId)
+  const host = route.input.hostname
+  const remove = async () => {
+    try {
+      await lifecycle.remove(route)
+      // not in the mock
+      toast.success(`Loomplane is removing ${host} from ${service}.`)
+      onClose()
+    } catch {
+      // useRouteLifecycle words the refusal, shown below.
+    }
+  }
+  return (
+    <AlertDialog
+      open
+      onOpenChange={(open) => {
+        if (!open) onClose()
+      }}
+    >
+      <AlertDialogContent>
+        <AlertDialogHeader>
+          <AlertDialogTitle>Remove {host}?</AlertDialogTitle>
+          {/* not in the mock */}
+          <AlertDialogDescription>
+            Loomplane removes its DNS record and stops sending its traffic to{" "}
+            {service}. You can add it again later.
+          </AlertDialogDescription>
+        </AlertDialogHeader>
+        {lifecycle.error && (
+          <p role="alert" className="text-[12.5px] text-destructive">
+            {lifecycle.error}
+          </p>
+        )}
+        <AlertDialogFooter>
+          <AlertDialogCancel disabled={lifecycle.pending}>
+            Cancel
+          </AlertDialogCancel>
+          <AlertDialogAction
+            variant="destructive"
+            disabled={lifecycle.pending}
+            onClick={() => void remove()}
+          >
+            Remove
+          </AlertDialogAction>
+        </AlertDialogFooter>
+      </AlertDialogContent>
+    </AlertDialog>
   )
 }
 
