@@ -1,7 +1,7 @@
 // Package ai is the Forge extension for Loomplane's AI section: the
-// workspace AI settings, and the model kinds' catalog hooks and plan
-// inputs. The platform registers it only when ai.enabled is on, so with AI
-// off none of it exists.
+// workspace AI settings, the model kinds' catalog hooks and plan inputs,
+// and the models API. The platform registers it only when ai.enabled is
+// on, so with AI off none of it exists, routes included.
 package ai
 
 import (
@@ -77,17 +77,20 @@ type accruePayload struct{}
 type Extension struct {
 	*forge.BaseExtension
 	cfg      config.Config
+	engineOf func() *engine.Engine
 	settings *aisettings.Service
 	models   *models.Service
 	hooks    *models.Hooks
 	engine   *engine.Engine
 }
 
-// New returns the extension.
-func New(cfg config.Config) *Extension {
+// New returns the extension. engineOf returns the dispatch extension's
+// engine once it has registered.
+func New(cfg config.Config, engineOf func() *engine.Engine) *Extension {
 	return &Extension{
 		BaseExtension: forge.NewBaseExtension(Name, "0.1.0", "AI settings and models"),
 		cfg:           cfg,
+		engineOf:      engineOf,
 	}
 }
 
@@ -102,7 +105,8 @@ func (e *Extension) Dependencies() []string {
 
 // Register builds the settings service over its own Vault app, the
 // models service, and the model kinds' hooks and inputs, adds the hooks
-// and inputs to planning's maps, and provides both services.
+// and inputs to planning's maps, provides both services, and serves the
+// models API.
 func (e *Extension) Register(fapp forge.App) error {
 	if err := e.BaseExtension.Register(fapp); err != nil {
 		return err
@@ -168,7 +172,11 @@ func (e *Extension) Register(fapp forge.App) error {
 	if err := forge.ProvideValue(c, e.settings); err != nil {
 		return fmt.Errorf("provide the AI settings: %w", err)
 	}
-	return nil
+	guard, gerr := forge.InjectType[identity.Guard](c)
+	if gerr != nil {
+		return fmt.Errorf("ai needs the identity extension's guard: %w", gerr)
+	}
+	return mountModels(fapp.Router(), guard, e.models, e.settings)
 }
 
 // registerModels builds the models service over what the planning and
@@ -176,8 +184,9 @@ func (e *Extension) Register(fapp forge.App) error {
 // AI settings, has project and environment deletions take their model
 // rows, and provides it.
 //
-// The Hub is huggingface.co. The ai.models.huggingface_url key that points
-// it at a mirror comes with the models API.
+// The Hub is ai.models.huggingface_url, huggingface.co unless the operator
+// points it at a mirror. Config refuses one that isn't https, except on a
+// loopback host, since the workspace's token is sent there.
 func (e *Extension) registerModels(c forge.Container, authz *security.Authorizer, auditor projects.Auditor, store *models.PgStore, pg *pgdriver.PgDB) error {
 	mf, err := forge.InjectType[*manifests.Service](c)
 	if err != nil {
@@ -223,14 +232,18 @@ func (e *Extension) registerModels(c forge.Container, authz *security.Authorizer
 	if err != nil {
 		return fmt.Errorf("ai needs the planning extension's resource secrets: %w", err)
 	}
-	e.engine, err = forge.InjectType[*engine.Engine](c)
-	if err != nil {
-		return fmt.Errorf("ai needs the dispatch extension's engine: %w", err)
+	// The engine comes from the dispatch extension itself, as planning's
+	// does. Resolving it from the container instead starts it, before the
+	// database is migrated, and the dispatch extension then starts it a
+	// second time, leaking the first wake listener's connection so the
+	// process never finishes stopping.
+	if e.engineOf != nil {
+		e.engine = e.engineOf()
 	}
 	if e.engine == nil {
 		return errors.New("ai needs the dispatch extension's engine")
 	}
-	hub := hfhub.New(hfhub.DefaultURL, nil)
+	hub := hfhub.New(e.cfg.AI.Models.HuggingFaceURL, nil)
 	planStore, runStore := planning.NewPgStore(pg), deployments.NewPgStore(pg)
 	deployed := &models.DeployedFacts{
 		ListBindings: planStore.ListBindings, ListPlans: planStore.ListPlans, ListRuns: runStore.ListDeployments,

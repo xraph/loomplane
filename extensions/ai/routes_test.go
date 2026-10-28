@@ -2,7 +2,10 @@ package ai_test
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/xraph/chronicle"
@@ -15,6 +18,7 @@ import (
 	"github.com/xraph/grove/drivers/pgdriver"
 
 	aiext "github.com/xraph/loomplane/extensions/ai"
+	"github.com/xraph/loomplane/extensions/identity"
 	"github.com/xraph/loomplane/internal/aisettings"
 	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/cloudprofiles"
@@ -40,6 +44,39 @@ func extensionNames(cfg config.Config) []string {
 		names = append(names, ext.Name())
 	}
 	return names
+}
+
+// With AI off, the platform registers only the extension that quiets the
+// AI schedules. It serves no route, so the models API answers 404.
+func TestModelRoutesAbsentWhenAIIsOff(t *testing.T) {
+	var cfg config.Config
+	if names := extensionNames(cfg); slices.Contains(names, aiext.Name) {
+		t.Fatalf("AI off, and the platform registers %v", names)
+	}
+	dispatcher, err := dispatch.New(dispatch.WithStore(memory.New()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	eng, err := engine.Build(dispatcher)
+	if err != nil {
+		t.Fatal(err)
+	}
+	app := forge.New(forge.WithAppName("ai-off-routes"))
+	if err = aiext.NewOff(func() *engine.Engine { return eng }).Register(app); err != nil {
+		t.Fatal(err)
+	}
+	for _, info := range app.Router().Routes() {
+		if strings.Contains(info.Path, "/ai/") {
+			t.Errorf("AI off serves %s %s", info.Method, info.Path)
+		}
+	}
+	for _, path := range []string{"/api/v1/ai/models/registry", "/api/v1/ai/settings", "/api/v1/ai/models/deployments"} {
+		out := httptest.NewRecorder()
+		app.Router().ServeHTTP(out, httptest.NewRequestWithContext(t.Context(), http.MethodGet, path, nil))
+		if out.Code != http.StatusNotFound {
+			t.Errorf("AI off: GET %s answered %d", path, out.Code)
+		}
+	}
 }
 
 func TestRoutesAreAbsentWhenAIIsOff(t *testing.T) {
@@ -101,7 +138,7 @@ func TestModelHooksAreRegistered(t *testing.T) {
 		forge.ProvideValue(c, new(deployments.VaultResourceSecrets)),
 		forge.ProvideValue(c, new(notifications.Service)),
 		forge.ProvideValue[security.PrincipalVerifier](c, rejectAll{}),
-		forge.ProvideValue(c, eng),
+		forge.ProvideValue(c, identity.Guard{}),
 	} {
 		if provide != nil {
 			t.Fatal(provide)
@@ -110,7 +147,7 @@ func TestModelHooksAreRegistered(t *testing.T) {
 	var cfg config.Config
 	cfg.AI.Enabled = true
 	cfg.SecretKey = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
-	ext := aiext.New(cfg)
+	ext := aiext.New(cfg, func() *engine.Engine { return eng })
 	if err = ext.Register(app); err != nil {
 		t.Fatal(err)
 	}
@@ -164,6 +201,16 @@ func TestModelHooksAreRegistered(t *testing.T) {
 	}
 	if svc, err := forge.InjectType[*models.Service](c); err != nil || svc == nil {
 		t.Errorf("the models service not provided: %v", err)
+	}
+	// And it serves the models API.
+	served := 0
+	for _, info := range app.Router().Routes() {
+		if strings.HasPrefix(info.Name, "aiModels.") || strings.HasPrefix(info.Name, "aiModelDeployments.") || strings.HasPrefix(info.Name, "aiSettings.") {
+			served++
+		}
+	}
+	if served != 17 {
+		t.Errorf("%d AI routes on the app's router", served)
 	}
 }
 

@@ -1,0 +1,3 @@
+import type { Codec } from '../codec-runtime';
+
+export const codec_Result: Codec = {"kind": "object", "fields": {"detail": {"ts": "detail"}, "engine": {"ts": "engine"}, "engine_version": {"ts": "engineVersion"}, "entry": {"ts": "entry"}, "gpu_kind": {"ts": "gpuKind"}, "gpus": {"ts": "gpus"}, "max_model_len": {"ts": "maxModelLen"}, "outcome": {"ts": "outcome"}, "quantization": {"ts": "quantization"}, "ran_at": {"ts": "ranAt"}, "revision": {"ts": "revision"}, "run": {"ts": "run"}}, "required": ["detail", "engine", "engine_version", "entry", "gpu_kind", "gpus", "max_model_len", "outcome", "quantization", "ran_at", "revision", "run"]};

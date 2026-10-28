@@ -185,6 +185,10 @@ federation:
 # The AI section (models) is opt-in.
 ai:
   enabled: "${LOOMPLANE_AI_ENABLED:-false}"
+  models:
+    # The Hugging Face Hub, or a mirror of it. The workspace's Hugging Face
+    # token is sent here, so it must be https (http only for localhost).
+    huggingface_url: "${LOOMPLANE_AI_MODELS_HUGGINGFACE_URL:-https://huggingface.co}"
 
 # The database gateway. Its snapshots are signed with the Ed25519 keys in
 # this file: private (0600), as an absolute path, holding one key as

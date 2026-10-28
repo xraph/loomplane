@@ -10,9 +10,17 @@
 import { query, mutation } from '@forge-go/client-core';
 import { ops } from './ops';
 
-import type { APIKeyList, ActivitySummary, Analysis, AnalysisGraph, AnalysisList, Backup, BackupList, BindingList, Board, CatalogKindList, CatalogconnectEndpoint, CloudProjectGrantList, CloudSyncList, CloudTargetList, CloudinfraRoute, CloudinfraRouteStatus, ConnectedRepositoryList, Connection, ConnectionList, ConnectionsCloudList, ConsumerKey, DeliveryList, DeployedList, Deployment, DeploymentList, DiscoverySummary, DomainOfferList, DomainOperationList, DomainOverview, DomainRouteList, EndpointList, Environment, EnvironmentCloud, EnvironmentConnections, EnvironmentList, FabriqKeyList, FailedCleanup, GPUInventory, GPUTargetList, GatewayList, GitHubInstallation, GitHubStatus, IdentitySession, InfrastructureStatus, KeylessSetup, LogPage, ManifestDraft, NativeInventory, NativePITRWindow, NativeRecoveryCopies, NativeRecoverySources, NativeRestore, NativeRetentionPolicy, NativeRetentionPolicyState, NativeRetirement, NativeRetirementPage, NotificationList, OctopusStatus, Operation, OperationList, OrgInvitationList, OrgMemberList, Plan, PlanList, PlanningCloudList, Policy, PolicyList, Pool, PoolList, Preferences, Preview, Profile, Project, ProjectDomainList, ProjectList, ProjectView, ProjectZoneList, ProviderList, ProviderZoneList, PublicConfig, Rebuild, RebuildList, Registration, RegistrationExtensionList, RegistrationList, Resolution, Restore, RestoreList, RetentionPolicy, RetentionPolicyHistory, RetentionPolicyState, RetentionPreview, Retirement, RetirementHistory, RetirementPage, Revision, RevisionList, RouteOperation, RouteSummary, Server, ServerList, ServerOptions, ServerUsage, SignInAppList, Snapshot, Source, SourceList, SpendReport, Status, StorageVolumeList, Sync, Target, Tenant, TenantList, TrafficReport, Variable, VariableList, WebhookEndpointList, Zone, ZoneList } from './types';
+import type { APIKeyList, ActivitySummary, Analysis, AnalysisGraph, AnalysisList, Backup, BackupList, BindingList, Board, Card, CatalogKindList, CatalogconnectEndpoint, CloudProjectGrantList, CloudSyncList, CloudTargetList, CloudinfraRoute, CloudinfraRouteStatus, ConnectedRepositoryList, Connection, ConnectionList, ConnectionsCloudList, ConsumerKey, DeliveryList, DeployedList, Deployment, DeploymentList, DiscoverySummary, DomainOfferList, DomainOperationList, DomainOverview, DomainRouteList, EndpointList, EntryDetail, Environment, EnvironmentCloud, EnvironmentConnections, EnvironmentList, FabriqKeyList, FailedCleanup, GPUInventory, GPUTargetList, GatewayList, GitHubInstallation, GitHubStatus, IdentitySession, InfrastructureStatus, KeylessSetup, LogPage, ManifestDraft, ModelDeploymentList, ModelsStatus, NativeInventory, NativePITRWindow, NativeRecoveryCopies, NativeRecoverySources, NativeRestore, NativeRetentionPolicy, NativeRetentionPolicyState, NativeRetirement, NativeRetirementPage, NotificationList, OctopusStatus, Operation, OperationList, OrgInvitationList, OrgMemberList, Plan, PlanList, PlanningCloudList, Policy, PolicyList, Pool, PoolList, Preferences, Preview, Profile, Project, ProjectDomainList, ProjectList, ProjectView, ProjectZoneList, ProviderList, ProviderZoneList, PublicConfig, Rebuild, RebuildList, Registration, RegistrationExtensionList, RegistrationList, RegistryList, Resolution, Restore, RestoreList, RetentionPolicy, RetentionPolicyHistory, RetentionPolicyState, RetentionPreview, Retirement, RetirementHistory, RetirementPage, Revision, RevisionList, RouteOperation, RouteSummary, Server, ServerList, ServerOptions, ServerUsage, SignInAppList, Snapshot, Source, SourceList, SpendReport, Status, StorageVolumeList, Sync, Target, Tenant, TenantList, TrafficReport, Variable, VariableList, View, WebhookEndpointList, Zone, ZoneList } from './types';
 
 export const useActivityGet = query<ActivitySummary>(ops['activity.get']);
+export const useAiModelDeploymentsList = query<ModelDeploymentList>(ops['aiModelDeployments.list']);
+export const useAiModelsInspect = mutation<EntryDetail, EntryDetail>(ops['aiModels.inspect']);
+export const useAiModelsRegistry = query<RegistryList>(ops['aiModels.registry']);
+export const useAiModelsCard = query<Card>(ops['aiModels.card']);
+export const useAiModelsEntry = query<EntryDetail>(ops['aiModels.entry']);
+export const useAiSettingsGet = query<View>(ops['aiSettings.get']);
+export const useAiSettingsPutHuggingFaceToken = mutation(ops['aiSettings.putHuggingFaceToken']);
+export const useAiSettingsDeleteHuggingFaceToken = mutation(ops['aiSettings.deleteHuggingFaceToken']);
 export const useAnalysesGet = query<Analysis>(ops['analyses.get']);
 export const useAnalysesGraph = query<AnalysisGraph>(ops['analyses.graph']);
 export const useApiKeysList = query<APIKeyList>(ops['apiKeys.list']);
@@ -220,6 +228,15 @@ export const useDomainRoutesStatus = query<CloudinfraRouteStatus>(ops['domainRou
 export const useDomainRoutesUpdateTtl = mutation<CloudinfraRoute, CloudinfraRoute>(ops['domainRoutes.updateTTL']);
 export const useDomainRoutesVerify = mutation<RouteOperation, RouteOperation>(ops['domainRoutes.verify']);
 export const useDomainsProject = query<ProjectDomainList>(ops['domains.project']);
+export const useAiModelsDeploy = mutation(ops['aiModels.deploy']);
+export const useAiModelsPreview = mutation(ops['aiModels.preview']);
+export const useAiModelDeploymentsGet = query<ModelsStatus>(ops['aiModelDeployments.get']);
+export const useAiModelDeploymentsUpdate = mutation(ops['aiModelDeployments.update']);
+export const useAiModelDeploymentsRemove = mutation(ops['aiModelDeployments.remove']);
+export const useAiModelDeploymentsMove = mutation(ops['aiModelDeployments.move']);
+export const useAiModelDeploymentsMovePreview = mutation(ops['aiModelDeployments.movePreview']);
+export const useAiModelDeploymentsRetry = mutation(ops['aiModelDeployments.retry']);
+export const useAiModelDeploymentsCancel = mutation(ops['aiModelDeployments.cancel']);
 export const useCatalogAdminOpen = mutation(ops['catalogAdmin.open']);
 export const useFabriqStatus = query<Status>(ops['fabriq.status']);
 export const useFabriqKeysList = query<FabriqKeyList>(ops['fabriqKeys.list']);

@@ -158,7 +158,7 @@ func Extensions(cfg config.Config) []forge.Extension {
 	// The AI section exists only when ai.enabled is on: with it off, no AI
 	// route, hook or setting is registered at all.
 	if cfg.AI.Enabled {
-		exts = append(exts, aiext.New(cfg))
+		exts = append(exts, aiext.New(cfg, jobs.Engine))
 	} else {
 		// What AI scheduled while it was on stays in the database and keeps
 		// firing; this gives those jobs handlers that do nothing, and adds

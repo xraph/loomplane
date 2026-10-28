@@ -31,6 +31,329 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly aiModelDeployments = {
+    /**
+     * Stop a model that's waiting for its GPU server; a server already approved stays in Infrastructure
+     */
+    cancel: async (projectId: string, environmentId: string, resource: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CancelResult> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/ai/models/${encodeURIComponent(String(resource))}/waiting`;
+      const config: RequestConfig = {
+        method: 'DELETE',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CancelResult"],
+      };
+
+      return this.request<types.CancelResult>(config);
+    },
+
+    /**
+     * A model's state, cost, budget and the services that link to it
+     */
+    get: async (projectId: string, environmentId: string, resource: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ModelsStatus> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/ai/models/${encodeURIComponent(String(resource))}`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ModelsStatus"],
+      };
+
+      return this.request<types.ModelsStatus>(config);
+    },
+
+    /**
+     * Every model deployed in the projects you can read, with its state and cost
+     */
+    list: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ModelDeploymentList> => {
+      let __path = `/api/v1/ai/models/deployments`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ModelDeploymentList"],
+      };
+
+      return this.request<types.ModelDeploymentList>(config);
+    },
+
+    /**
+     * Move a model to another server, cluster or new GPU server and plan its environment
+     * For a server size target, send server with the cloud_id, operation_id and review of the GPU server a preview with review_server true returned, within five minutes of that review. The deployment then waits for the server, and Loomplane plans the model onto it once it's up.
+     */
+    move: async (projectId: string, environmentId: string, resource: string, body: types.ModelsMoveInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.DeployResult> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/ai/models/${encodeURIComponent(String(resource))}/move`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["ModelsMoveInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["DeployResult"],
+      };
+
+      return this.request<types.DeployResult>(config);
+    },
+
+    /**
+     * What moving a model to another server, cluster or new GPU server would do
+     * Writes nothing, except the review of a GPU server when review_server is true, which only an admin may ask for. The rules are a deploy preview's.
+     */
+    movePreview: async (projectId: string, environmentId: string, resource: string, body: types.ModelsMoveInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.DeployPreview> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/ai/models/${encodeURIComponent(String(resource))}/move-preview`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["ModelsMoveInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["DeployPreview"],
+      };
+
+      return this.request<types.DeployPreview>(config);
+    },
+
+    /**
+     * Take a model out of the manifest and plan its environment; its weights stay on the server
+     */
+    remove: async (projectId: string, environmentId: string, resource: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.DeployResult> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/ai/models/${encodeURIComponent(String(resource))}`;
+      const config: RequestConfig = {
+        method: 'DELETE',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["DeployResult"],
+      };
+
+      return this.request<types.DeployResult>(config);
+    },
+
+    /**
+     * Try a model that failed to start, or whose GPU server needs attention, again
+     */
+    retry: async (projectId: string, environmentId: string, resource: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ModelsStatus> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/ai/models/${encodeURIComponent(String(resource))}/retry`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ModelsStatus"],
+      };
+
+      return this.request<types.ModelsStatus>(config);
+    },
+
+    /**
+     * Change a model's monthly budget or its hourly price, without changing what runs
+     */
+    update: async (projectId: string, environmentId: string, resource: string, body: types.ModelsUpdateInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ModelsStatus> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/ai/models/${encodeURIComponent(String(resource))}`;
+      const config: RequestConfig = {
+        method: 'PATCH',
+        url: __path,
+        body,
+        bodyCodec: CODECS["ModelsUpdateInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ModelsStatus"],
+      };
+
+      return this.request<types.ModelsStatus>(config);
+    },
+
+  };
+
+  public readonly aiModels = {
+    /**
+     * A model's card from Hugging Face, as Markdown
+     */
+    card: async (id?: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Card> => {
+      let __path = `/api/v1/ai/models/registry/card`;
+      const queryParams: Record<string, any> = {};
+      queryParams['id'] = id;
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Card"],
+      };
+
+      return this.request<types.Card>(config);
+    },
+
+    /**
+     * Deploy a model in this environment: add it to the manifest and plan the environment, or create its GPU server first
+     * For a server size target, send server with the cloud_id, operation_id and review of the GPU server a preview with review_server true returned, within five minutes of that review. The deployment then waits for the server, and Loomplane plans the model onto it once it's up.
+     */
+    deploy: async (projectId: string, environmentId: string, body: types.DeployInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.DeployResult> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/ai/models`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["DeployInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["DeployResult"],
+      };
+
+      return this.request<types.DeployResult>(config);
+    },
+
+    /**
+     * One model with its quantizations and where each fits
+     */
+    entry: async (id?: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.EntryDetail> => {
+      let __path = `/api/v1/ai/models/registry/entry`;
+      const queryParams: Record<string, any> = {};
+      queryParams['id'] = id;
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["EntryDetail"],
+      };
+
+      return this.request<types.EntryDetail>(config);
+    },
+
+    /**
+     * Read any Hugging Face model, pin it to a commit and work out where it fits
+     */
+    inspect: async (body: types.InspectInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.EntryDetail> => {
+      let __path = `/api/v1/ai/models/inspect`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["InspectInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["EntryDetail"],
+      };
+
+      return this.request<types.EntryDetail>(config);
+    },
+
+    /**
+     * What deploying a model in this environment would do, what it costs and what stops it
+     * Writes nothing. A server size target is priced from its list price and comes back with server_review_needed and can_deploy false. Send the same body with review_server true to review the GPU server: only an admin may, and it records the review in Infrastructure and returns it as server, priced by the provider. Deploy then sends server set from it within five minutes.
+     */
+    preview: async (projectId: string, environmentId: string, body: types.DeployInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.DeployPreview> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/ai/models/preview`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["DeployInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["DeployPreview"],
+      };
+
+      return this.request<types.DeployPreview>(config);
+    },
+
+    /**
+     * The models Loomplane can deploy, filtered by task, size, license, fit and whether they were tested
+     */
+    registry: async (q?: string, task?: string, size?: string, license?: string, commercial?: boolean, fits?: boolean, tested?: boolean, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RegistryList> => {
+      let __path = `/api/v1/ai/models/registry`;
+      const queryParams: Record<string, any> = {};
+      queryParams['q'] = q;
+      queryParams['task'] = task;
+      queryParams['size'] = size;
+      queryParams['license'] = license;
+      queryParams['commercial'] = commercial;
+      queryParams['fits'] = fits;
+      queryParams['tested'] = tested;
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["RegistryList"],
+      };
+
+      return this.request<types.RegistryList>(config);
+    },
+
+  };
+
+  public readonly aiSettings = {
+    /**
+     * Delete the workspace's Hugging Face token, unless a deployed gated model downloads with it
+     */
+    deleteHuggingFaceToken: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<void> => {
+      let __path = `/api/v1/ai/settings/huggingface-token`;
+      const config: RequestConfig = {
+        method: 'DELETE',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        allowEmptyBody: true,
+      };
+
+      await this.request(config);
+    },
+
+    /**
+     * The workspace's AI settings, without any secret, and whether you can change them
+     */
+    get: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.View> => {
+      let __path = `/api/v1/ai/settings`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["View"],
+      };
+
+      return this.request<types.View>(config);
+    },
+
+    /**
+     * Check a Hugging Face token with Hugging Face and save it as the workspace's; it's never shown again
+     */
+    putHuggingFaceToken: async (body: types.HuggingFaceTokenInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.HuggingFaceToken> => {
+      let __path = `/api/v1/ai/settings/huggingface-token`;
+      const config: RequestConfig = {
+        method: 'PUT',
+        url: __path,
+        body,
+        bodyCodec: CODECS["HuggingFaceTokenInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["HuggingFaceToken"],
+      };
+
+      return this.request<types.HuggingFaceToken>(config);
+    },
+
+  };
+
   public readonly analyses = {
     /**
      * Analyze the project's repositories, or the ones named

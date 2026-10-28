@@ -9853,6 +9853,772 @@
           }
         }
       }
+    },
+    "/api/v1/ai/models/deployments": {
+      "get": {
+        "tags": [
+          "AI models"
+        ],
+        "summary": "Every model deployed in the projects you can read, with its state and cost",
+        "operationId": "aiModelDeployments.list",
+        "responses": {
+          "200": {
+            "description": "The models",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelDeploymentList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ai/models/inspect": {
+      "post": {
+        "tags": [
+          "AI models"
+        ],
+        "summary": "Read any Hugging Face model, pin it to a commit and work out where it fits",
+        "operationId": "aiModels.inspect",
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/InspectInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The model as Loomplane would deploy it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EntryDetail"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ai/models/registry": {
+      "get": {
+        "tags": [
+          "AI models"
+        ],
+        "summary": "The models Loomplane can deploy, filtered by task, size, license, fit and whether they were tested",
+        "operationId": "aiModels.registry",
+        "parameters": [
+          {
+            "name": "q",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "task",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "size",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "license",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "commercial",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "fits",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "boolean"
+            }
+          },
+          {
+            "name": "tested",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "boolean"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The entries and their counts by task",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RegistryList"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ai/models/registry/card": {
+      "get": {
+        "tags": [
+          "AI models"
+        ],
+        "summary": "A model's card from Hugging Face, as Markdown",
+        "operationId": "aiModels.card",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The card",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Card"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ai/models/registry/entry": {
+      "get": {
+        "tags": [
+          "AI models"
+        ],
+        "summary": "One model with its quantizations and where each fits",
+        "operationId": "aiModels.entry",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The model",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EntryDetail"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ai/settings": {
+      "get": {
+        "tags": [
+          "AI"
+        ],
+        "summary": "The workspace's AI settings, without any secret, and whether you can change them",
+        "operationId": "aiSettings.get",
+        "responses": {
+          "200": {
+            "description": "The settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/View"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/ai/settings/huggingface-token": {
+      "put": {
+        "tags": [
+          "AI"
+        ],
+        "summary": "Check a Hugging Face token with Hugging Face and save it as the workspace's; it's never shown again",
+        "operationId": "aiSettings.putHuggingFaceToken",
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/HuggingFaceTokenInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The token's hint and account",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HuggingFaceToken"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "AI"
+        ],
+        "summary": "Delete the workspace's Hugging Face token, unless a deployed gated model downloads with it",
+        "operationId": "aiSettings.deleteHuggingFaceToken",
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{projectId}/environments/{environmentId}/ai/models": {
+      "post": {
+        "tags": [
+          "AI models"
+        ],
+        "summary": "Deploy a model in this environment: add it to the manifest and plan the environment, or create its GPU server first",
+        "description": "For a server size target, send server with the cloud_id, operation_id and review of the GPU server a preview with review_server true returned, within five minutes of that review. The deployment then waits for the server, and Loomplane plans the model onto it once it's up.",
+        "operationId": "aiModels.deploy",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "description": "Path parameter: projectId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "environmentId",
+            "in": "path",
+            "description": "Path parameter: environmentId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeployInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The deployment and its plan",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeployResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Why it can't be deployed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{projectId}/environments/{environmentId}/ai/models/preview": {
+      "post": {
+        "tags": [
+          "AI models"
+        ],
+        "summary": "What deploying a model in this environment would do, what it costs and what stops it",
+        "description": "Writes nothing. A server size target is priced from its list price and comes back with server_review_needed and can_deploy false. Send the same body with review_server true to review the GPU server: only an admin may, and it records the review in Infrastructure and returns it as server, priced by the provider. Deploy then sends server set from it within five minutes.",
+        "operationId": "aiModels.preview",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "description": "Path parameter: projectId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "environmentId",
+            "in": "path",
+            "description": "Path parameter: environmentId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DeployInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The preview",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeployPreview"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{projectId}/environments/{environmentId}/ai/models/{resource}": {
+      "get": {
+        "tags": [
+          "AI models"
+        ],
+        "summary": "A model's state, cost, budget and the services that link to it",
+        "operationId": "aiModelDeployments.get",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "description": "Path parameter: projectId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "environmentId",
+            "in": "path",
+            "description": "Path parameter: environmentId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "resource",
+            "in": "path",
+            "description": "Path parameter: resource",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The model",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelsStatus"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "AI models"
+        ],
+        "summary": "Take a model out of the manifest and plan its environment; its weights stay on the server",
+        "operationId": "aiModelDeployments.remove",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "description": "Path parameter: projectId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "environmentId",
+            "in": "path",
+            "description": "Path parameter: environmentId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "resource",
+            "in": "path",
+            "description": "Path parameter: resource",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The plan, and what stays behind",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeployResult"
+                }
+              }
+            }
+          }
+        }
+      },
+      "patch": {
+        "tags": [
+          "AI models"
+        ],
+        "summary": "Change a model's monthly budget or its hourly price, without changing what runs",
+        "operationId": "aiModelDeployments.update",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "description": "Path parameter: projectId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "environmentId",
+            "in": "path",
+            "description": "Path parameter: environmentId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "resource",
+            "in": "path",
+            "description": "Path parameter: resource",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModelsUpdateInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The model",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelsStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{projectId}/environments/{environmentId}/ai/models/{resource}/move": {
+      "post": {
+        "tags": [
+          "AI models"
+        ],
+        "summary": "Move a model to another server, cluster or new GPU server and plan its environment",
+        "description": "For a server size target, send server with the cloud_id, operation_id and review of the GPU server a preview with review_server true returned, within five minutes of that review. The deployment then waits for the server, and Loomplane plans the model onto it once it's up.",
+        "operationId": "aiModelDeployments.move",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "description": "Path parameter: projectId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "environmentId",
+            "in": "path",
+            "description": "Path parameter: environmentId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "resource",
+            "in": "path",
+            "description": "Path parameter: resource",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModelsMoveInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The deployment and its plan",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeployResult"
+                }
+              }
+            }
+          },
+          "422": {
+            "description": "Why it can't be moved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Problem"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{projectId}/environments/{environmentId}/ai/models/{resource}/move-preview": {
+      "post": {
+        "tags": [
+          "AI models"
+        ],
+        "summary": "What moving a model to another server, cluster or new GPU server would do",
+        "description": "Writes nothing, except the review of a GPU server when review_server is true, which only an admin may ask for. The rules are a deploy preview's.",
+        "operationId": "aiModelDeployments.movePreview",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "description": "Path parameter: projectId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "environmentId",
+            "in": "path",
+            "description": "Path parameter: environmentId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "resource",
+            "in": "path",
+            "description": "Path parameter: resource",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ModelsMoveInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The preview",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeployPreview"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{projectId}/environments/{environmentId}/ai/models/{resource}/retry": {
+      "post": {
+        "tags": [
+          "AI models"
+        ],
+        "summary": "Try a model that failed to start, or whose GPU server needs attention, again",
+        "operationId": "aiModelDeployments.retry",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "description": "Path parameter: projectId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "environmentId",
+            "in": "path",
+            "description": "Path parameter: environmentId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "resource",
+            "in": "path",
+            "description": "Path parameter: resource",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The model",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelsStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{projectId}/environments/{environmentId}/ai/models/{resource}/waiting": {
+      "delete": {
+        "tags": [
+          "AI models"
+        ],
+        "summary": "Stop a model that's waiting for its GPU server; a server already approved stays in Infrastructure",
+        "operationId": "aiModelDeployments.cancel",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "description": "Path parameter: projectId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "environmentId",
+            "in": "path",
+            "description": "Path parameter: environmentId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "resource",
+            "in": "path",
+            "description": "Path parameter: resource",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "What's left behind",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CancelResult"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -21492,6 +22258,1297 @@
         "properties": {
           "ai": {
             "type": "boolean"
+          }
+        }
+      },
+      "Allocation": {
+        "type": "object",
+        "required": [
+          "scope",
+          "label",
+          "monthly_budget_usd",
+          "updated_at"
+        ],
+        "properties": {
+          "environment_id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "monthly_budget_usd": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "scope": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "CancelResult": {
+        "type": "object",
+        "properties": {
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "Card": {
+        "type": "object",
+        "required": [
+          "markdown",
+          "source_url"
+        ],
+        "properties": {
+          "markdown": {
+            "type": "string"
+          },
+          "note": {
+            "type": "string"
+          },
+          "source_url": {
+            "type": "string"
+          }
+        }
+      },
+      "Cost": {
+        "type": "object",
+        "required": [
+          "hourly_usd",
+          "known",
+          "estimate",
+          "source",
+          "share",
+          "monthly_usd"
+        ],
+        "properties": {
+          "estimate": {
+            "type": "boolean"
+          },
+          "hourly_usd": {
+            "type": "string"
+          },
+          "known": {
+            "type": "boolean"
+          },
+          "monthly_usd": {
+            "type": "string"
+          },
+          "share": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          }
+        }
+      },
+      "DeployInputBody": {
+        "type": "object",
+        "required": [
+          "entry_id",
+          "target"
+        ],
+        "properties": {
+          "entry_id": {
+            "type": "string"
+          },
+          "max_model_len": {
+            "type": "integer"
+          },
+          "monthly_budget_usd": {
+            "type": "string"
+          },
+          "quantization": {
+            "type": "string"
+          },
+          "resource": {
+            "type": "string"
+          },
+          "review_server": {
+            "type": "boolean"
+          },
+          "server": {
+            "type": "object",
+            "required": [
+              "cloud_id",
+              "operation_id",
+              "review"
+            ],
+            "properties": {
+              "cloud_id": {
+                "type": "string"
+              },
+              "operation_id": {
+                "type": "string"
+              },
+              "review": {
+                "type": "string"
+              }
+            }
+          },
+          "target": {
+            "type": "object",
+            "required": [
+              "source",
+              "connection_id"
+            ],
+            "properties": {
+              "connection_id": {
+                "type": "string"
+              },
+              "gpu": {
+                "$ref": "#/components/schemas/GPURequest"
+              },
+              "provider": {
+                "type": "string"
+              },
+              "region": {
+                "type": "string"
+              },
+              "size_id": {
+                "type": "string"
+              },
+              "source": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      },
+      "DeployPreview": {
+        "type": "object",
+        "required": [
+          "entry",
+          "quantization",
+          "kind",
+          "version",
+          "target",
+          "target_name",
+          "fit",
+          "max_model_len",
+          "resource",
+          "cost",
+          "environments",
+          "gated",
+          "token_ready",
+          "problems",
+          "can_deploy"
+        ],
+        "properties": {
+          "can_deploy": {
+            "type": "boolean"
+          },
+          "cost": {
+            "$ref": "#/components/schemas/Cost"
+          },
+          "entry": {
+            "$ref": "#/components/schemas/EntrySummary"
+          },
+          "environments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Reach"
+            }
+          },
+          "fit": {
+            "$ref": "#/components/schemas/Fit"
+          },
+          "gated": {
+            "type": "boolean"
+          },
+          "gpu": {
+            "$ref": "#/components/schemas/GPURequest"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "max_model_len": {
+            "type": "integer"
+          },
+          "problems": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Problem"
+            }
+          },
+          "quantization": {
+            "type": "string"
+          },
+          "resource": {
+            "type": "string"
+          },
+          "server": {
+            "$ref": "#/components/schemas/Operation"
+          },
+          "server_review_needed": {
+            "type": "boolean"
+          },
+          "target": {
+            "$ref": "#/components/schemas/TargetChoice"
+          },
+          "target_name": {
+            "type": "string"
+          },
+          "token_ready": {
+            "type": "boolean"
+          },
+          "version": {
+            "type": "string"
+          }
+        }
+      },
+      "DeployResult": {
+        "type": "object",
+        "properties": {
+          "deployment": {
+            "$ref": "#/components/schemas/ModelsDeployment"
+          },
+          "message": {
+            "type": "string"
+          },
+          "plan_id": {
+            "type": "string"
+          }
+        }
+      },
+      "Embeddings": {
+        "type": "object",
+        "required": [
+          "mode",
+          "model",
+          "dimensions"
+        ],
+        "properties": {
+          "deployment": {
+            "type": "string"
+          },
+          "dimensions": {
+            "type": "integer"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          }
+        }
+      },
+      "EntryDetail": {
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "publisher",
+          "summary",
+          "family",
+          "tasks",
+          "parameters",
+          "context_length",
+          "license",
+          "gated",
+          "verification",
+          "tested_on",
+          "min_gpu_memory_gib",
+          "cpu",
+          "revision",
+          "quantizations",
+          "hugging_face_url"
+        ],
+        "properties": {
+          "context_length": {
+            "type": "integer"
+          },
+          "cpu": {
+            "type": "boolean"
+          },
+          "family": {
+            "type": "string"
+          },
+          "fits_here": {
+            "type": "boolean"
+          },
+          "fits_notice": {
+            "type": "string"
+          },
+          "gated": {
+            "type": "boolean"
+          },
+          "hugging_face_url": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "license": {
+            "$ref": "#/components/schemas/LicenseInfo"
+          },
+          "min_gpu_memory_gib": {
+            "type": "integer"
+          },
+          "parameters": {
+            "type": "integer"
+          },
+          "publisher": {
+            "type": "string"
+          },
+          "quantizations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/QuantizationView"
+            }
+          },
+          "revision": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "tasks": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "tested_on": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "title": {
+            "type": "string"
+          },
+          "verification": {
+            "type": "string"
+          }
+        }
+      },
+      "EntrySummary": {
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "publisher",
+          "summary",
+          "family",
+          "tasks",
+          "parameters",
+          "context_length",
+          "license",
+          "gated",
+          "verification",
+          "tested_on",
+          "min_gpu_memory_gib",
+          "cpu"
+        ],
+        "properties": {
+          "context_length": {
+            "type": "integer"
+          },
+          "cpu": {
+            "type": "boolean"
+          },
+          "family": {
+            "type": "string"
+          },
+          "fits_here": {
+            "type": "boolean"
+          },
+          "gated": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "license": {
+            "$ref": "#/components/schemas/LicenseInfo"
+          },
+          "min_gpu_memory_gib": {
+            "type": "integer"
+          },
+          "parameters": {
+            "type": "integer"
+          },
+          "publisher": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "tasks": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "tested_on": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "title": {
+            "type": "string"
+          },
+          "verification": {
+            "type": "string"
+          }
+        }
+      },
+      "Fit": {
+        "type": "object",
+        "required": [
+          "gpu_kind",
+          "need",
+          "status"
+        ],
+        "properties": {
+          "gpu_kind": {
+            "type": "string"
+          },
+          "need": {
+            "$ref": "#/components/schemas/Need"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "result": {
+            "$ref": "#/components/schemas/Result"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "GPURequest": {
+        "type": "object",
+        "required": [
+          "kind",
+          "count"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer"
+          },
+          "kind": {
+            "type": "string"
+          }
+        }
+      },
+      "HuggingFaceToken": {
+        "type": "object",
+        "required": [
+          "hint",
+          "account",
+          "set_at",
+          "revision"
+        ],
+        "properties": {
+          "account": {
+            "type": "string"
+          },
+          "hint": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "set_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "HuggingFaceTokenInputBody": {
+        "type": "object",
+        "required": [
+          "token"
+        ],
+        "properties": {
+          "token": {
+            "type": "string"
+          }
+        }
+      },
+      "InspectInputBody": {
+        "type": "object",
+        "required": [
+          "repo"
+        ],
+        "properties": {
+          "repo": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
+          }
+        }
+      },
+      "LicenseInfo": {
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "url",
+          "commercial"
+        ],
+        "properties": {
+          "commercial": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string"
+          },
+          "note": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string"
+          }
+        }
+      },
+      "LinkedService": {
+        "type": "object",
+        "required": [
+          "environment",
+          "service",
+          "reachable"
+        ],
+        "properties": {
+          "environment": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "reachable": {
+            "type": "boolean"
+          },
+          "service": {
+            "type": "string"
+          }
+        }
+      },
+      "ModelDeploymentList": {
+        "properties": {
+          "models": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/ModelsStatus"
+                },
+                {
+                  "type": "object",
+                  "nullable": true,
+                  "enum": [
+                    null
+                  ]
+                }
+              ]
+            }
+          }
+        },
+        "required": [
+          "models"
+        ],
+        "type": "object",
+        "x-forge-envelope": "models"
+      },
+      "ModelsDeployment": {
+        "properties": {
+          "accrued_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "engine": {
+            "type": "string"
+          },
+          "entry_id": {
+            "type": "string"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "hourly_usd_override": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "month": {
+            "type": "string"
+          },
+          "month_cost_usd": {
+            "type": "string"
+          },
+          "monthly_budget_usd": {
+            "type": "string"
+          },
+          "phase": {
+            "type": "string"
+          },
+          "plan_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "quantization": {
+            "type": "string"
+          },
+          "resource": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "server_cloud_id": {
+            "type": "string"
+          },
+          "server_name": {
+            "type": "string"
+          },
+          "server_operation_id": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        },
+        "required": [
+          "id",
+          "project_id",
+          "environment_id",
+          "resource",
+          "entry_id",
+          "quantization",
+          "engine",
+          "phase",
+          "month",
+          "month_cost_usd",
+          "accrued_at",
+          "revision",
+          "created_at",
+          "updated_at"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/internal/models.Deployment"
+      },
+      "ModelsMoveInputBody": {
+        "properties": {
+          "max_model_len": {
+            "type": "integer"
+          },
+          "quantization": {
+            "type": "string"
+          },
+          "review_server": {
+            "type": "boolean"
+          },
+          "server": {
+            "type": "object",
+            "required": [
+              "cloud_id",
+              "operation_id",
+              "review"
+            ],
+            "properties": {
+              "cloud_id": {
+                "type": "string"
+              },
+              "operation_id": {
+                "type": "string"
+              },
+              "review": {
+                "type": "string"
+              }
+            }
+          },
+          "target": {
+            "type": "object",
+            "required": [
+              "source",
+              "connection_id"
+            ],
+            "properties": {
+              "connection_id": {
+                "type": "string"
+              },
+              "gpu": {
+                "$ref": "#/components/schemas/GPURequest"
+              },
+              "provider": {
+                "type": "string"
+              },
+              "region": {
+                "type": "string"
+              },
+              "size_id": {
+                "type": "string"
+              },
+              "source": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "required": [
+          "target"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/internal/models.MoveInput"
+      },
+      "ModelsStatus": {
+        "properties": {
+          "can_edit": {
+            "type": "boolean"
+          },
+          "connection_id": {
+            "type": "string"
+          },
+          "connection_name": {
+            "type": "string"
+          },
+          "cost": {
+            "$ref": "#/components/schemas/Cost"
+          },
+          "deployment": {
+            "$ref": "#/components/schemas/ModelsDeployment"
+          },
+          "engine_version": {
+            "type": "string"
+          },
+          "entry": {
+            "$ref": "#/components/schemas/EntrySummary"
+          },
+          "environments": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Reach"
+            }
+          },
+          "gpu": {
+            "$ref": "#/components/schemas/GPURequest"
+          },
+          "hint": {
+            "type": "string"
+          },
+          "internal_url": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "linked": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/LinkedService"
+            }
+          },
+          "max_model_len": {
+            "type": "integer"
+          },
+          "message": {
+            "type": "string"
+          },
+          "month_to_date_usd": {
+            "type": "string"
+          },
+          "move_cost": {
+            "$ref": "#/components/schemas/Cost"
+          },
+          "pin": {
+            "$ref": "#/components/schemas/PinStatus"
+          },
+          "plan_id": {
+            "type": "string"
+          },
+          "projected_usd": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string"
+          },
+          "update_available": {
+            "type": "boolean"
+          },
+          "verification": {
+            "$ref": "#/components/schemas/Fit"
+          }
+        },
+        "required": [
+          "state",
+          "entry",
+          "kind",
+          "engine_version",
+          "verification",
+          "connection_id",
+          "connection_name",
+          "max_model_len",
+          "environments",
+          "linked",
+          "cost",
+          "month_to_date_usd",
+          "projected_usd",
+          "update_available",
+          "can_edit"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/internal/models.Status"
+      },
+      "ModelsUpdateInputBody": {
+        "properties": {
+          "hourly_usd_override": {
+            "type": "string"
+          },
+          "monthly_budget_usd": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "revision"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/internal/models.UpdateInput"
+      },
+      "Need": {
+        "type": "object",
+        "required": [
+          "per_gpu_gib",
+          "max_model_len",
+          "gpus"
+        ],
+        "properties": {
+          "gpus": {
+            "type": "integer"
+          },
+          "max_model_len": {
+            "type": "integer"
+          },
+          "per_gpu_gib": {
+            "type": "number"
+          },
+          "ram_gib": {
+            "type": "number"
+          }
+        }
+      },
+      "OpenCompatModel": {
+        "type": "object",
+        "required": [
+          "id",
+          "task",
+          "input_per_million",
+          "output_per_million"
+        ],
+        "properties": {
+          "context_window": {
+            "type": "integer"
+          },
+          "dimensions": {
+            "type": "integer"
+          },
+          "embedding_per_million": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string"
+          },
+          "input_per_million": {
+            "type": "string"
+          },
+          "max_output": {
+            "type": "integer"
+          },
+          "output_per_million": {
+            "type": "string"
+          },
+          "task": {
+            "type": "string"
+          }
+        }
+      },
+      "PinStatus": {
+        "type": "object",
+        "required": [
+          "update_available"
+        ],
+        "properties": {
+          "file": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
+          },
+          "update_available": {
+            "type": "boolean"
+          }
+        }
+      },
+      "Problem": {
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
+      "ProviderKey": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "name",
+          "type",
+          "projects",
+          "revision",
+          "created_by",
+          "updated_by",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "type": "string"
+          },
+          "fields": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "key_hint": {
+            "type": "string"
+          },
+          "models": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/OpenCompatModel"
+            }
+          },
+          "name": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "projects": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "type": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_by": {
+            "type": "string"
+          }
+        }
+      },
+      "QuantizationView": {
+        "type": "object",
+        "required": [
+          "id",
+          "engine",
+          "weight_bytes",
+          "fits"
+        ],
+        "properties": {
+          "args": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "engine": {
+            "type": "string"
+          },
+          "file": {
+            "type": "string"
+          },
+          "fits": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Fit"
+            }
+          },
+          "id": {
+            "type": "string"
+          },
+          "min_gpu_memory_gib": {
+            "type": "integer"
+          },
+          "min_memory_gib": {
+            "type": "integer"
+          },
+          "repo": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
+          },
+          "weight_bytes": {
+            "type": "integer"
+          }
+        }
+      },
+      "Reach": {
+        "type": "object",
+        "required": [
+          "environment_id",
+          "environment",
+          "mode"
+        ],
+        "properties": {
+          "environment": {
+            "type": "string"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "mode": {
+            "type": "string"
+          }
+        }
+      },
+      "RegistryList": {
+        "type": "object",
+        "required": [
+          "entries",
+          "counts"
+        ],
+        "properties": {
+          "counts": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EntrySummary"
+            }
+          },
+          "fits_notice": {
+            "type": "string"
+          }
+        }
+      },
+      "Result": {
+        "type": "object",
+        "required": [
+          "entry",
+          "quantization",
+          "revision",
+          "gpu_kind",
+          "gpus",
+          "max_model_len",
+          "engine",
+          "engine_version",
+          "outcome",
+          "detail",
+          "ran_at",
+          "run"
+        ],
+        "properties": {
+          "detail": {
+            "type": "string"
+          },
+          "engine": {
+            "type": "string"
+          },
+          "engine_version": {
+            "type": "string"
+          },
+          "entry": {
+            "type": "string"
+          },
+          "gpu_kind": {
+            "type": "string"
+          },
+          "gpus": {
+            "type": "integer"
+          },
+          "max_model_len": {
+            "type": "integer"
+          },
+          "outcome": {
+            "type": "string"
+          },
+          "quantization": {
+            "type": "string"
+          },
+          "ran_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "revision": {
+            "type": "string"
+          },
+          "run": {
+            "type": "string"
+          }
+        }
+      },
+      "TargetChoice": {
+        "type": "object",
+        "required": [
+          "source",
+          "connection_id"
+        ],
+        "properties": {
+          "connection_id": {
+            "type": "string"
+          },
+          "gpu": {
+            "$ref": "#/components/schemas/GPURequest"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "region": {
+            "type": "string"
+          },
+          "size_id": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          }
+        }
+      },
+      "View": {
+        "type": "object",
+        "required": [
+          "org_id",
+          "monthly_budget_usd",
+          "embeddings",
+          "revision",
+          "updated_at",
+          "provider_keys",
+          "allocations",
+          "allocated_usd",
+          "unallocated_usd",
+          "can_manage"
+        ],
+        "properties": {
+          "allocated_usd": {
+            "type": "string"
+          },
+          "allocations": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/Allocation"
+                },
+                {
+                  "type": "object",
+                  "nullable": true,
+                  "enum": [
+                    null
+                  ]
+                }
+              ]
+            }
+          },
+          "can_manage": {
+            "type": "boolean"
+          },
+          "embeddings": {
+            "$ref": "#/components/schemas/Embeddings"
+          },
+          "huggingface": {
+            "$ref": "#/components/schemas/HuggingFaceToken"
+          },
+          "monthly_budget_usd": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "provider_keys": {
+            "type": "array",
+            "items": {
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/ProviderKey"
+                },
+                {
+                  "type": "object",
+                  "nullable": true,
+                  "enum": [
+                    null
+                  ]
+                }
+              ]
+            }
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "unallocated_usd": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "updated_by": {
+            "type": "string"
           }
         }
       }

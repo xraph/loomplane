@@ -88,6 +88,15 @@ export interface AddSourceInputBody {
   root?: string;
 }
 
+export interface Allocation {
+  environmentId?: string;
+  label: string;
+  monthlyBudgetUsd: string;
+  projectId?: string;
+  scope: string;
+  updatedAt: string;
+}
+
 export interface Amount {
   currency: string;
   days: Point[];
@@ -278,6 +287,16 @@ export interface BuildTarget {
   image?: string;
   registry?: string;
   registrySettings?: Record<string, any>;
+}
+
+export interface CancelResult {
+  message?: string;
+}
+
+export interface Card {
+  markdown: string;
+  note?: string;
+  sourceUrl: string;
 }
 
 export interface CatalogKindList {
@@ -645,6 +664,15 @@ export interface ConsumerOption {
   title: string;
 }
 
+export interface Cost {
+  estimate: boolean;
+  hourlyUsd: string;
+  known: boolean;
+  monthlyUsd: string;
+  share: string;
+  source: string;
+}
+
 export interface CreateEnvironmentInputBody {
   kind?: string;
   name: string;
@@ -790,6 +818,55 @@ export interface DependencyInfo {
   name: string;
   optional: boolean;
   title: string;
+}
+
+export interface DeployInputBody {
+  entryId: string;
+  maxModelLen?: number;
+  monthlyBudgetUsd?: string;
+  quantization?: string;
+  resource?: string;
+  reviewServer?: boolean;
+  server?: {
+  cloudId: string;
+  operationId: string;
+  review: string;
+};
+  target: {
+  connectionId: string;
+  gpu?: GPURequest;
+  provider?: string;
+  region?: string;
+  sizeId?: string;
+  source: string;
+};
+}
+
+export interface DeployPreview {
+  canDeploy: boolean;
+  cost: Cost;
+  entry: EntrySummary;
+  environments: Reach[];
+  fit: Fit;
+  gated: boolean;
+  gpu?: GPURequest;
+  kind: string;
+  maxModelLen: number;
+  problems: Problem[];
+  quantization: string;
+  resource: string;
+  server?: Operation;
+  serverReviewNeeded?: boolean;
+  target: TargetChoice;
+  targetName: string;
+  tokenReady: boolean;
+  version: string;
+}
+
+export interface DeployResult {
+  deployment?: ModelsDeployment;
+  message?: string;
+  planId?: string;
 }
 
 export interface DeployedList {
@@ -965,12 +1042,60 @@ export interface EditInputBody {
 };
 }
 
+export interface Embeddings {
+  deployment?: string;
+  dimensions: number;
+  mode: string;
+  model: string;
+  provider?: string;
+}
+
 export interface EndpointList {
   endpoints: (CatalogconnectEndpoint | null)[];
 }
 
 export interface EnrollmentBody {
   hostKey: string;
+}
+
+export interface EntryDetail {
+  contextLength: number;
+  cpu: boolean;
+  family: string;
+  fitsHere?: boolean;
+  fitsNotice?: string;
+  gated: boolean;
+  huggingFaceUrl: string;
+  id: string;
+  license: LicenseInfo;
+  minGpuMemoryGib: number;
+  parameters: number;
+  publisher: string;
+  quantizations: QuantizationView[];
+  revision: string;
+  summary: string;
+  tasks: string[];
+  testedOn: string[];
+  title: string;
+  verification: string;
+}
+
+export interface EntrySummary {
+  contextLength: number;
+  cpu: boolean;
+  family: string;
+  fitsHere?: boolean;
+  gated: boolean;
+  id: string;
+  license: LicenseInfo;
+  minGpuMemoryGib: number;
+  parameters: number;
+  publisher: string;
+  summary: string;
+  tasks: string[];
+  testedOn: string[];
+  title: string;
+  verification: string;
 }
 
 export interface EnvLink {
@@ -1107,6 +1232,14 @@ export interface Finding {
   subject?: string;
 }
 
+export interface Fit {
+  gpuKind: string;
+  need: Need;
+  reason?: string;
+  result?: Result;
+  status: string;
+}
+
 export interface GPUDevice {
   index: number;
   kind: string;
@@ -1135,6 +1268,11 @@ export interface GPUNodeGroup {
   product?: string;
   tolerations?: GPUToleration[];
   total: number;
+}
+
+export interface GPURequest {
+  count: number;
+  kind: string;
 }
 
 export interface GPUTarget {
@@ -1269,6 +1407,17 @@ export interface HostnameUse {
   status: CloudinfraRouteStatus;
 }
 
+export interface HuggingFaceToken {
+  account: string;
+  hint: string;
+  revision: number;
+  setAt: string;
+}
+
+export interface HuggingFaceTokenInputBody {
+  token: string;
+}
+
 export interface IdentitySession {
   orgId: string;
   permissions: string[];
@@ -1290,6 +1439,11 @@ export interface InfrastructureStatus {
   engine: string;
   providers: ProviderStatus[];
   store: string;
+}
+
+export interface InspectInputBody {
+  repo: string;
+  revision?: string;
 }
 
 export interface InstanceRouteStats {
@@ -1361,6 +1515,21 @@ export interface KubernetesRule {
   apiGroups: string[];
   resources: string[];
   verbs: string[];
+}
+
+export interface LicenseInfo {
+  commercial: boolean;
+  id: string;
+  note?: string;
+  title: string;
+  url: string;
+}
+
+export interface LinkedService {
+  environment: string;
+  message?: string;
+  reachable: boolean;
+  service: string;
 }
 
 export interface Log {
@@ -1443,6 +1612,85 @@ export interface ManifestEndpoint {
 export interface ManifestGPU {
   count: number;
   kind: string;
+}
+
+export interface ModelDeploymentList {
+  models: (ModelsStatus | null)[];
+}
+
+export interface ModelsDeployment {
+  accruedAt: string;
+  createdAt: string;
+  engine: string;
+  entryId: string;
+  environmentId: string;
+  hourlyUsdOverride?: string;
+  id: string;
+  message?: string;
+  month: string;
+  monthCostUsd: string;
+  monthlyBudgetUsd?: string;
+  phase: string;
+  planId?: string;
+  projectId: string;
+  quantization: string;
+  resource: string;
+  revision: number;
+  serverCloudId?: string;
+  serverName?: string;
+  serverOperationId?: string;
+  updatedAt: string;
+}
+
+export interface ModelsMoveInputBody {
+  maxModelLen?: number;
+  quantization?: string;
+  reviewServer?: boolean;
+  server?: {
+  cloudId: string;
+  operationId: string;
+  review: string;
+};
+  target: {
+  connectionId: string;
+  gpu?: GPURequest;
+  provider?: string;
+  region?: string;
+  sizeId?: string;
+  source: string;
+};
+}
+
+export interface ModelsStatus {
+  canEdit: boolean;
+  connectionId: string;
+  connectionName: string;
+  cost: Cost;
+  deployment?: ModelsDeployment;
+  engineVersion: string;
+  entry: EntrySummary;
+  environments: Reach[];
+  gpu?: GPURequest;
+  hint?: string;
+  internalUrl?: string;
+  kind: string;
+  linked: LinkedService[];
+  maxModelLen: number;
+  message?: string;
+  monthToDateUsd: string;
+  moveCost?: Cost;
+  pin?: PinStatus;
+  planId?: string;
+  projectedUsd: string;
+  state: string;
+  updateAvailable: boolean;
+  verification: Fit;
+}
+
+export interface ModelsUpdateInputBody {
+  hourlyUsdOverride?: string;
+  monthlyBudgetUsd?: string;
+  revision: number;
 }
 
 export interface MoveInput {
@@ -1685,6 +1933,13 @@ export interface NativeSource {
   state: string;
 }
 
+export interface Need {
+  gpus: number;
+  maxModelLen: number;
+  perGpuGib: number;
+  ramGib?: number;
+}
+
 export interface NewKeyBody {
   access: string;
   expiresInDays?: number;
@@ -1762,6 +2017,17 @@ export interface OctopusloomRoute {
   service: string;
   stripPrefix: boolean;
   updatedAt: string;
+}
+
+export interface OpenCompatModel {
+  contextWindow?: number;
+  dimensions?: number;
+  embeddingPerMillion?: string;
+  id: string;
+  inputPerMillion: string;
+  maxOutput?: number;
+  outputPerMillion: string;
+  task: string;
 }
 
 export interface Operation {
@@ -1855,6 +2121,14 @@ export interface Package {
   requires?: Requirement[];
   runtime?: string;
   source?: string;
+}
+
+export interface PinStatus {
+  file?: string;
+  message?: string;
+  model?: string;
+  revision?: string;
+  updateAvailable: boolean;
 }
 
 export interface Placement {
@@ -2046,6 +2320,11 @@ export interface Preview {
   revision: string;
 }
 
+export interface Problem {
+  code: string;
+  message: string;
+}
+
 export interface Profile {
   createdAt: string;
   defaultPlacement: DefaultPlacement | null;
@@ -2133,6 +2412,22 @@ export interface Provider {
   title: string;
 }
 
+export interface ProviderKey {
+  createdAt: string;
+  createdBy: string;
+  fields?: Record<string, any>;
+  id: string;
+  keyHint?: string;
+  models?: OpenCompatModel[];
+  name: string;
+  orgId: string;
+  projects: string[];
+  revision: number;
+  type: string;
+  updatedAt: string;
+  updatedBy: string;
+}
+
 export interface ProviderList {
   providers: Provider[];
 }
@@ -2162,11 +2457,31 @@ export interface PublicConfig {
   publishableKey: string;
 }
 
+export interface QuantizationView {
+  args?: string[];
+  engine: string;
+  file?: string;
+  fits: Fit[];
+  id: string;
+  minGpuMemoryGib?: number;
+  minMemoryGib?: number;
+  repo?: string;
+  revision?: string;
+  weightBytes: number;
+}
+
 export interface RDSRecoveryNetwork {
   securityGroupId: string;
   subnetGroup: string;
   verifierGroupId: string;
   vpcId: string;
+}
+
+export interface Reach {
+  environment: string;
+  environmentId: string;
+  message?: string;
+  mode: string;
 }
 
 export interface RealtimeForgeGap {
@@ -2313,6 +2628,12 @@ export interface RegistrationList {
   registrations: (Registration | null)[];
 }
 
+export interface RegistryList {
+  counts: Record<string, any>;
+  entries: EntrySummary[];
+  fitsNotice?: string;
+}
+
 export interface RemoveRouteInputBody {
   revision: number;
 }
@@ -2440,6 +2761,21 @@ export interface RestoreInputBody {
 
 export interface RestoreList {
   restores: Restore[];
+}
+
+export interface Result {
+  detail: string;
+  engine: string;
+  engineVersion: string;
+  entry: string;
+  gpuKind: string;
+  gpus: number;
+  maxModelLen: number;
+  outcome: string;
+  quantization: string;
+  ranAt: string;
+  revision: string;
+  run: string;
 }
 
 export interface RetainedPoolStorage {
@@ -3161,6 +3497,15 @@ export interface Target {
   updatedAt: string;
 }
 
+export interface TargetChoice {
+  connectionId: string;
+  gpu?: GPURequest;
+  provider?: string;
+  region?: string;
+  sizeId?: string;
+  source: string;
+}
+
 export interface Tenant {
   createdAt: string;
   id: string;
@@ -3259,6 +3604,21 @@ export interface Variable {
 
 export interface VariableList {
   variables: Variable[];
+}
+
+export interface View {
+  allocatedUsd: string;
+  allocations: (Allocation | null)[];
+  canManage: boolean;
+  embeddings: Embeddings;
+  huggingface?: HuggingFaceToken;
+  monthlyBudgetUsd: string;
+  orgId: string;
+  providerKeys: (ProviderKey | null)[];
+  revision: number;
+  unallocatedUsd: string;
+  updatedAt: string;
+  updatedBy?: string;
 }
 
 export interface Volume {

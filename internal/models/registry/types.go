@@ -41,9 +41,11 @@ type License struct {
 
 // LicenseInfo describes one license the registry knows.
 type LicenseInfo struct {
-	ID, Title, URL string
-	Commercial     bool
-	Note           string
+	ID         string `json:"id"`
+	Title      string `json:"title"`
+	URL        string `json:"url"`
+	Commercial bool   `json:"commercial"`
+	Note       string `json:"note,omitempty"`
 }
 
 // Each Llama and Qwen license caps commercial use by monthly active users.

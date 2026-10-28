@@ -330,6 +330,7 @@ func Defaults() Config {
 		Planning: PlanningConfig{ApprovalWindow: approvalWindow},
 		Drift:    DriftConfig{Interval: 30 * time.Minute},
 		Worker:   WorkerConfig{HTTPAddr: ":8781"},
+		AI:       AIConfig{Models: AIModelsConfig{HuggingFaceURL: DefaultHuggingFaceURL}},
 	}
 }
 
@@ -437,6 +438,7 @@ func FromSource(src Getter) (Config, error) {
 	r.names(&c.Providers.Paused, "providers.paused")
 	r.boolean(&c.Federation.Enabled, "federation.enabled")
 	r.boolean(&c.AI.Enabled, "ai.enabled")
+	r.str(&c.AI.Models.HuggingFaceURL, "ai.models.huggingface_url")
 	r.boolean(&c.Federation.Runtime.Enabled, "federation.runtime.enabled")
 	r.str(&c.Federation.Runtime.ListenAddress, "federation.runtime.listen_address")
 	r.str(&c.Federation.Runtime.OrganizationID, "federation.runtime.organization_id")
@@ -465,7 +467,7 @@ func FromSource(src Getter) (Config, error) {
 // Validate reports settings Loomplane can't run with.
 func (c *Config) Validate() error {
 	var errs []error
-	errs = append(errs, c.Notifications.Validate(c.Environment), c.Federation.Validate())
+	errs = append(errs, c.Notifications.Validate(c.Environment), c.Federation.Validate(), c.AI.Models.Validate())
 	switch c.Environment {
 	case EnvDevelopment, EnvStaging, EnvProduction:
 	default:
