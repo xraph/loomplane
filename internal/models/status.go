@@ -544,9 +544,10 @@ func (s *Service) connectionNames(ctx context.Context, p security.Principal) map
 	return out
 }
 
-// linked lists the services that need the model and whether each reaches
-// it. A model runs in one environment until the gateway, so that's the
-// one: a service there reaches it on the same server or cluster.
+// linked lists the services that need the model and run in env, and
+// whether each reaches it. A model runs in one environment until the
+// gateway, so that's the one: a service there reaches it on the same
+// server or cluster.
 func linked(env *projects.Environment, m *manifest.Manifest, resource, modelConn string, names map[string]string, bindings []*planning.Binding) []LinkedService {
 	out := []LinkedService{}
 	if m == nil {
@@ -560,7 +561,9 @@ func linked(env *projects.Environment, m *manifest.Manifest, resource, modelConn
 	}
 	for _, svcName := range slices.Sorted(maps.Keys(m.Services)) {
 		svc := m.Services[svcName]
-		if !slices.Contains(svc.Needs, resource) {
+		// A service that's off in env never runs there, so it doesn't
+		// reach the model there either, and loses nothing when it goes.
+		if !slices.Contains(svc.Needs, resource) || !manifest.On(svc.For(env.Name, m.Defaults).Enabled) {
 			continue
 		}
 		ls := LinkedService{Environment: env.Name, Service: svcName}

@@ -364,10 +364,16 @@ func TestStatusListsLinkedServices(t *testing.T) {
 	ctx := context.Background()
 	d := newDeploy(t, deployRegistry(t, llamaRev, ""), aiAdmin, []gpus.GPUTarget{l40sServer()}, boxes()...)
 	deployLlama(t, d, productID)
+	// worker needs the model and is off in production, so it never runs
+	// there and isn't listed (final review M3).
+	worker := linkedService("go:cmd/worker", llamaResource)
+	no := false
+	worker.Environments = map[string]manifest.Settings{"production": {Enabled: &no}}
 	saveServices(t, d, map[string]manifest.Service{
 		"checkout": linkedService("go:cmd/checkout", llamaResource),
 		"api":      linkedService("go:cmd/api", llamaResource),
 		"web":      linkedService("go:cmd/web"),
+		"worker":   worker,
 	})
 	d.facts.bindService(productID, "checkout", gpuConn)
 	d.facts.bindService(productID, "api", cpuConn)
