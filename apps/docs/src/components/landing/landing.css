@@ -3226,3 +3226,48 @@
   letter-spacing: -0.06em;
   color: hsl(212 45% 88%);
 }
+
+/* Privacy, terms and account deletion: long text at a reading width. */
+.lp .policy {
+  max-width: 72ch;
+  padding: 8px 0 96px;
+  color: var(--ink-2);
+  font-weight: 300;
+  font-size: 16.5px;
+  line-height: 1.65;
+}
+.lp .policy .updated {
+  font-family: var(--f-mono);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.lp .policy h2 {
+  margin: 48px 0 0;
+  color: var(--ink);
+  font-size: 22px;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+.lp .policy p,
+.lp .policy ul,
+.lp .policy ol {
+  margin: 14px 0 0;
+}
+.lp .policy ul,
+.lp .policy ol {
+  padding-left: 22px;
+}
+.lp .policy li + li {
+  margin-top: 8px;
+}
+.lp .policy b {
+  color: var(--ink);
+  font-weight: 500;
+}
+.lp .policy a {
+  color: var(--blue-ink);
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}

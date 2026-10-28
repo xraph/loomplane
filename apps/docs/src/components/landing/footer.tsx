@@ -31,7 +31,12 @@ const columns = [
   },
   {
     title: "Project",
-    links: [{ href: githubUrl, text: "GitHub" }],
+    links: [
+      { href: githubUrl, text: "GitHub" },
+      { href: "/privacy", text: "Privacy" },
+      { href: "/terms", text: "Terms" },
+      { href: "/delete-account", text: "Delete your account" },
+    ],
   },
 ];
 
