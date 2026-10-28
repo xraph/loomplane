@@ -389,3 +389,43 @@ func TestNewBudgetGetsItsOwnNotices(t *testing.T) {
 		t.Errorf("the same budget saved again sent %+v", b.budget.notices())
 	}
 }
+
+// accrueLog records each month's total as Accrue leaves it.
+type accrueLog struct {
+	*memDeployments
+	totals []string // "2026-11 0.0654"
+}
+
+func (l *accrueLog) Accrue(ctx context.Context, d *Deployment, month, addUSD string, at time.Time) error {
+	if err := l.memDeployments.Accrue(ctx, d, month, addUSD, at); err != nil {
+		return err
+	}
+	l.totals = append(l.totals, d.Month+" "+d.MonthCostUSD)
+	return nil
+}
+
+// Ruling M42: a run that crosses midnight UTC at the start of a month
+// gives the minutes before it to the month they ran in, before the new
+// month starts from its own minutes. At $1.57 an hour, 150 seconds is
+// 0.0654 on each side.
+func TestAccrualSplitsAtTheMonthBoundary(t *testing.T) {
+	b := newBudget(t, recipes.ModelVLLMKind, 1)
+	log := &accrueLog{memDeployments: b.rows}
+	b.svc.d.Store = log
+	dec1 := time.Date(2026, 12, 1, 0, 0, 0, 0, time.UTC)
+	b.spent(t, "10", dec1.Add(-150*time.Second))
+	d := b.accrue(t, dec1.Add(150*time.Second))
+	if !slices.Equal(log.totals, []string{"2026-11 10.0654", "2026-12 0.0654"}) {
+		t.Errorf("totals %v", log.totals)
+	}
+	if d.Month != "2026-12" || d.MonthCostUSD != "0.0654" || !d.AccruedAt.Equal(dec1.Add(150*time.Second)) {
+		t.Errorf("row %s %s %v", d.Month, d.MonthCostUSD, d.AccruedAt)
+	}
+	// A run on the boundary itself closes the month and starts nothing.
+	jan1 := time.Date(2027, 1, 1, 0, 0, 0, 0, time.UTC)
+	b.spent(t, "1", jan1.Add(-time.Hour))
+	log.totals = nil
+	if d = b.accrue(t, jan1); !slices.Equal(log.totals, []string{"2026-12 2.6354"}) || d.Month != "2026-12" {
+		t.Errorf("on the boundary: totals %v, row %s %s", log.totals, d.Month, d.MonthCostUSD)
+	}
+}

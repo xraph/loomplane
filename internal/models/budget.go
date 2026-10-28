@@ -108,9 +108,16 @@ func (s *Service) accrueOrg(ctx context.Context, orgID string, now time.Time) er
 	return errors.Join(errs...)
 }
 
-// accrueRow adds what d cost from its last accrual, or the start of the
-// month when that's later, up to now, and sends its budget notices. A
-// read that fails accrues nothing, so the next run counts the time.
+// accrueRow adds what d cost from its last accrual up to now, and sends
+// its budget notices. A read that fails accrues nothing, so the next run
+// counts the time.
+//
+// An interval that crosses midnight UTC at the start of a month is split
+// there. The part before it goes to the month it ran in, which the row
+// still holds, so that month's total is whole before the new month resets
+// it. The row keeps only one month, so that total isn't shown anywhere
+// after the reset, and no budget notice goes out for those minutes. The
+// part after it starts the new month.
 func (s *Service) accrueRow(ctx context.Context, d *Deployment, now time.Time, prices func() ([]gpus.GPUTarget, error)) error {
 	if !d.AccruedAt.IsZero() && !now.After(d.AccruedAt) {
 		return nil
@@ -119,30 +126,50 @@ func (s *Service) accrueRow(ctx context.Context, d *Deployment, now time.Time, p
 	if err != nil {
 		return err
 	}
-	var add int64
-	at := now
-	if !d.AccruedAt.IsZero() && cost.Known {
-		hourly, perr := costAmount.parse(cost.HourlyUSD)
-		if perr != nil {
-			return perr
+	if d.AccruedAt.IsZero() || !cost.Known {
+		// The first sight starts the clock, and an unknown price adds
+		// nothing: either way the clock moves on to now.
+		if aerr := s.d.Store.Accrue(ctx, d, monthOf(now), formatUSD(0), now); aerr != nil {
+			return aerr
 		}
-		from := d.AccruedAt
-		if start := monthStart(now); from.Before(start) {
-			from = start
-		}
-		// Whole seconds are counted, and the clock stops at the last one, so
-		// the part of a second left over counts in the next run.
-		seconds := int64(now.Sub(from) / time.Second)
-		if seconds <= 0 {
-			return nil
-		}
-		add = (hourly*seconds + 1800) / 3600
-		at = from.Add(time.Duration(seconds) * time.Second)
+		return s.budgetNotice(ctx, d, cost, now)
 	}
-	if aerr := s.d.Store.Accrue(ctx, d, monthOf(now), formatUSD(add), at); aerr != nil {
-		return aerr
+	hourly, err := costAmount.parse(cost.HourlyUSD)
+	if err != nil {
+		return err
+	}
+	if end := monthStart(d.AccruedAt).AddDate(0, 1, 0); !now.Before(end) {
+		// The last month's minutes, up to its end.
+		if _, aerr := s.accrueSpan(ctx, d, hourly, d.AccruedAt, end, monthOf(d.AccruedAt)); aerr != nil {
+			return aerr
+		}
+	}
+	from := d.AccruedAt
+	if start := monthStart(now); from.Before(start) {
+		// A row that missed whole months starts this one at its start.
+		from = start
+	}
+	added, err := s.accrueSpan(ctx, d, hourly, from, now, monthOf(now))
+	if err != nil || !added {
+		return err
 	}
 	return s.budgetNotice(ctx, d, cost, now)
+}
+
+// accrueSpan adds what d cost at hourly ten-thousandths of a dollar from
+// from to to, to month. Whole seconds are counted, and the clock stops at
+// the last one, so the part of a second left over counts in the next run.
+// added is false when there wasn't a whole second to count.
+func (s *Service) accrueSpan(ctx context.Context, d *Deployment, hourly int64, from, to time.Time, month string) (added bool, err error) {
+	seconds := int64(to.Sub(from) / time.Second)
+	if seconds <= 0 {
+		return false, nil
+	}
+	add := (hourly*seconds + 1800) / 3600
+	if err = s.d.Store.Accrue(ctx, d, month, formatUSD(add), from.Add(time.Duration(seconds)*time.Second)); err != nil {
+		return false, err
+	}
+	return true, nil
 }
 
 // runningCost is what d's GPUs cost per hour while it runs, from the

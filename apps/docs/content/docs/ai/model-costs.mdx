@@ -33,7 +33,7 @@ An unknown price is never shown as $0.00, and it's never added in as zero. The m
 
 ## This month and the projection
 
-Every five minutes, Loomplane adds what each model cost since the last count to its month. A model counts while it's **Deploying** or **Ready**, at the price of the GPUs its engine actually holds, or of the whole server when Loomplane created that server for it and nothing else holds a GPU there. Months are calendar months in UTC.
+Every five minutes, Loomplane adds what each model cost since the last count to its month. A model counts while it's **Deploying** or **Ready**, at the price of the GPUs its engine actually holds, or of the whole server when Loomplane created that server for it and nothing else holds a GPU there. Months are calendar months in UTC. A count that runs past midnight UTC on the first gives the minutes before midnight to the month that's ending, then starts the new month from zero. Those last minutes don't send a budget alert, and once the new month starts, the page shows only the new month.
 
 **Projected** is this month so far plus the hourly price for every hour left in the month. The deploy dialog quotes a simpler figure before anything runs: the hourly price times 730, as "about $1,146/mo while it runs".
 
