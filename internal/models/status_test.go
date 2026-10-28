@@ -1064,9 +1064,9 @@ func TestRemovalUpdateClearsTheBlock(t *testing.T) {
 	}
 }
 
-// onKubernetes says resource's engine in env runs on the kube cluster,
-// with its weights on a Kubernetes volume.
-func onKubernetes(d *deploySetup, env, resource string, settings map[string]string) {
+// onKubernetes says resource's engine in staging runs on the kube
+// cluster, with its weights on a Kubernetes volume.
+func onKubernetes(d *deploySetup, resource string, settings map[string]string) {
 	component := planning.ResourceConfig{Kind: recipes.ModelVLLMKind, Component: &planning.ComponentConfig{Kind: recipes.ModelVLLMKind, Resource: resource, Settings: settings,
 		Component: recipes.ResolvedComponent{Component: recipes.Component{Name: recipes.ModelEngine, WeightCache: &recipes.WeightCache{MountPath: "/cache", KubernetesSizeMB: 1024, SizeSetting: "cache_mb"}}}}}
 	engine, _ := json.Marshal(component)
@@ -1075,7 +1075,7 @@ func onKubernetes(d *deploySetup, env, resource string, settings map[string]stri
 	if d.facts.bindings == nil {
 		d.facts.bindings = map[string][]*planning.Binding{}
 	}
-	d.facts.bindings[env] = append(d.facts.bindings[env], &planning.Binding{Subject: planning.ResourceSubject,
+	d.facts.bindings[stagingID] = append(d.facts.bindings[stagingID], &planning.Binding{Subject: planning.ResourceSubject,
 		Name: planning.ComponentActionName(resource, recipes.ModelEngine), Provider: connections.Kubernetes, ConnectionID: kubeConn, Config: engine})
 }
 
@@ -1090,7 +1090,7 @@ func TestMoveRefusesToGrowAKubernetesCache(t *testing.T) {
 	settings["cache_mb"] = "1024"
 	putResource(t, d, "llm", manifest.Resource{Kind: recipes.ModelVLLMKind, Provider: "kubernetes", Target: kubeConn, Version: "0.31",
 		GPU: &manifest.GPU{Kind: "nvidia-l40s", Count: 1}, Settings: settings, Environments: map[string]manifest.ResourceSettings{"staging": on()}})
-	onKubernetes(d, stagingID, "llm", settings)
+	onKubernetes(d, "llm", settings)
 	revisions := d.revisions.count()
 	in := MoveInput{Target: TargetChoice{Source: TargetConnection, ConnectionID: kubeConn, GPU: &provider.GPURequest{Kind: "nvidia-l40s"}}, Quantization: "bf16", MaxModelLen: 16384}
 	_, err := d.svc.Move(ctx, member, projectID, stagingID, "llm", in)
@@ -1099,5 +1099,63 @@ func TestMoveRefusesToGrowAKubernetesCache(t *testing.T) {
 	}
 	if d.revisions.count() != revisions || len(d.plans.asked) != 0 {
 		t.Error("the refused move wrote something")
+	}
+}
+
+// The move's preview shows the same refusal, so it never offers a move
+// Move refuses. A model with no cache_mb has the recipe's cache, which is
+// enough for weights that need no more, so that move goes ahead.
+func TestMovePreviewShowsTheKubernetesCacheRefusal(t *testing.T) {
+	ctx := context.Background()
+	kube := l40sOn(kubeConn, "kube", 1.57)
+	kube.Cloud = connections.Kubernetes
+	d := newDeploy(t, deployRegistry(t, llamaRev, ""), aiAdmin, []gpus.GPUTarget{kube}, cpuCluster())
+	settings := llmSettings(t)
+	settings["cache_mb"] = "1024"
+	put := func() {
+		putResource(t, d, "llm", manifest.Resource{Kind: recipes.ModelVLLMKind, Provider: "kubernetes", Target: kubeConn, Version: "0.31",
+			GPU: &manifest.GPU{Kind: "nvidia-l40s", Count: 1}, Settings: settings, Environments: map[string]manifest.ResourceSettings{"staging": on()}})
+	}
+	put()
+	onKubernetes(d, "llm", settings)
+	in := MoveInput{Target: TargetChoice{Source: TargetConnection, ConnectionID: kubeConn, GPU: &provider.GPURequest{Kind: "nvidia-l40s"}}, Quantization: "bf16", MaxModelLen: 16384}
+	pv, err := d.svc.MovePreview(ctx, member, projectID, stagingID, "llm", in)
+	want := Problem{Code: ProblemTarget, Message: "llm keeps its weight cache on a Kubernetes volume, which can't grow in place, and bf16 needs a bigger one. Remove llm from staging and deploy it again to move it."}
+	if err != nil || pv.CanDeploy || len(pv.Problems) != 1 || pv.Problems[0] != want {
+		t.Fatalf("preview: %+v, %v", pv, err)
+	}
+	_, err = d.svc.Move(ctx, member, projectID, stagingID, "llm", in)
+	if !errors.Is(err, ErrInvalid) || err.Error() != want.Message {
+		t.Errorf("move: %v", err)
+	}
+
+	delete(settings, "cache_mb")
+	put()
+	if pv, err = d.svc.MovePreview(ctx, member, projectID, stagingID, "llm", in); err != nil || !pv.CanDeploy || len(pv.Problems) != 0 {
+		t.Fatalf("the recipe's cache: %+v, %v", pv, err)
+	}
+	if _, err = d.svc.Move(ctx, member, projectID, stagingID, "llm", in); err != nil {
+		t.Errorf("move with the recipe's cache: %v", err)
+	}
+}
+
+func TestCacheGrows(t *testing.T) {
+	for _, c := range []struct {
+		settings map[string]string
+		need     int64
+		want     bool
+	}{
+		{map[string]string{}, 20480, false},                    // the recipe's 20480 MB
+		{map[string]string{}, 30720, true},                     // more than it
+		{map[string]string{"cache_mb": "1024"}, 20480, true},   // a smaller one set by hand
+		{map[string]string{"cache_mb": "40960"}, 30720, false}, // big enough
+		{map[string]string{"cache_mb": "big"}, 20480, false},   // not a size: the recipe's
+	} {
+		if got := cacheGrows(recipes.ModelVLLMKind, c.settings, c.need); got != c.want {
+			t.Errorf("cacheGrows(%v, %d) = %v", c.settings, c.need, got)
+		}
+	}
+	if got := defaultCacheMB(recipes.ModelVLLMKind); got != engines.MinCacheMB {
+		t.Errorf("the vLLM recipe's cache is %d MB", got)
 	}
 }

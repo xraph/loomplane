@@ -426,16 +426,67 @@ func TestSoleReader(t *testing.T) {
 // where the top level has none, changes nothing there.
 func TestPinUpdateLeavesSharedSettings(t *testing.T) {
 	repinned := &RepinnedError{Model: "m", Revision: "new"}
-	raw := manifest.Resource{Settings: map[string]string{"model": "m", "revision": "old"}, Environments: map[string]manifest.ResourceSettings{
+	raw := manifest.Resource{Kind: recipes.ModelVLLMKind, Settings: map[string]string{"model": "m", "revision": "old"}, Environments: map[string]manifest.ResourceSettings{
 		"staging": on(), "production": {Enabled: on().Enabled, Settings: map[string]string{"model": "m", "revision": "new", "file": ""}},
 	}}
-	u := pinUpdate(raw, "staging", repinned, 20480)
-	if u.Environment != "staging" || u.Settings["cache_mb"] != "20480" {
-		t.Errorf("a grown cache beside production: %+v", u)
+	u, err := pinUpdate(raw, "staging", repinned, 30720)
+	if err != nil || u.Environment != "staging" || u.Settings["cache_mb"] != "30720" {
+		t.Errorf("a grown cache beside production: %+v, %v", u, err)
 	}
-	raw.Settings["cache_mb"] = "30000"
-	if u = pinUpdate(raw, "staging", repinned, 20480); u.Environment != "" || u.Settings["file"] != "" {
-		t.Errorf("a cache that's big enough: %+v", u)
+	// With no cache_mb, staging has the recipe's 20480 MB, which is
+	// enough for weights that need that much.
+	if u, err = pinUpdate(raw, "staging", repinned, 20480); err != nil || u.Environment != "" || u.Settings["cache_mb"] != "" {
+		t.Errorf("the recipe's cache: %+v, %v", u, err)
+	}
+	raw.Settings["cache_mb"] = "40960"
+	if u, err = pinUpdate(raw, "staging", repinned, 30720); err != nil || u.Environment != "" || u.Settings["file"] != "" {
+		t.Errorf("a cache that's big enough: %+v, %v", u, err)
+	}
+}
+
+// A block can't say "no file", so a pin with no file that has to go in
+// staging's block, while the top level names a file production reads, is
+// refused: deleting staging's key would leave staging on that file. When
+// only staging's block names a file, deleting it leaves staging with
+// none.
+func TestPinUpdateToAPinWithNoFile(t *testing.T) {
+	repinned := &RepinnedError{Model: "m", Revision: "new"}
+	raw := manifest.Resource{Kind: recipes.ModelVLLMKind, Settings: map[string]string{"model": "m", "revision": "old", "file": "old.gguf"},
+		Environments: map[string]manifest.ResourceSettings{"staging": on(), "production": on()}}
+	want := "the registry's new pin has no file, and staging would still read file old.gguf from the top level of the model's manifest entry, which its other environments run. Remove the model from staging and deploy it again to move to the new pin"
+	if u, err := pinUpdate(raw, "staging", repinned, 20480); !errors.Is(err, ErrInvalid) || !strings.HasSuffix(err.Error(), want) {
+		t.Errorf("the top level's file: %+v, %v", u, err)
+	}
+	// In one environment, the top level's file goes.
+	raw.Environments = map[string]manifest.ResourceSettings{"staging": on()}
+	if u, err := pinUpdate(raw, "staging", repinned, 20480); err != nil || u.Environment != "" || u.Settings["file"] != "" {
+		t.Errorf("one environment: %+v, %v", u, err)
+	}
+
+	raw.Settings = map[string]string{"model": "m", "revision": "old"}
+	staging := on()
+	staging.Settings = map[string]string{"file": "old.gguf"}
+	raw.Environments = map[string]manifest.ResourceSettings{"staging": staging, "production": on()}
+	u, err := pinUpdate(raw, "staging", repinned, 20480)
+	if err != nil || u.Environment != "staging" {
+		t.Fatalf("staging's own file: %+v, %v", u, err)
+	}
+	doc, err := manifest.Marshal(&manifest.Manifest{Version: 1, Resources: map[string]manifest.Resource{"llm": raw}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doc, err = manifest.WithResourceUpdate(doc, "llm", manifest.ResourceUpdate{Environment: u.Environment, Settings: u.Settings}); err != nil {
+		t.Fatal(err)
+	}
+	m, err := manifest.Parse(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := m.Resources["llm"].For("staging", m.Defaults).Settings; got["file"] != "" || got["revision"] != "new" {
+		t.Errorf("staging after the move: %v", got)
+	}
+	if got := m.Resources["llm"].For("production", m.Defaults).Settings; got["revision"] != "old" {
+		t.Errorf("production after the move: %v", got)
 	}
 }
 
@@ -450,7 +501,7 @@ func TestMoveToPinRefusesToGrowAKubernetesCache(t *testing.T) {
 	r.Settings = maps.Clone(r.Settings)
 	r.Settings["cache_mb"] = "1024"
 	putResource(t, d, "llama-8b", r)
-	onKubernetes(d, stagingID, "llama-8b", r.Settings)
+	onKubernetes(d, "llama-8b", r.Settings)
 	revisions := d.revisions.count()
 	_, err := d.svc.MoveToPin(ctx, member, projectID, stagingID, "llama-8b")
 	want := "llama-8b keeps its weight cache on a Kubernetes volume, which can't grow in place. Remove llama-8b from staging and deploy it again to move to the new pin"
@@ -464,6 +515,44 @@ func TestMoveToPinRefusesToGrowAKubernetesCache(t *testing.T) {
 	d.facts.bindings = nil
 	if _, err = d.svc.MoveToPin(ctx, member, projectID, stagingID, "llama-8b"); err != nil || current(t, d).Resources["llama-8b"].Settings["cache_mb"] == "1024" {
 		t.Errorf("on a server: %v", err)
+	}
+}
+
+// A model with no cache_mb on Kubernetes has the recipe's cache, which
+// holds the new pin's weights when they need no more: the move goes ahead
+// and writes no cache size.
+func TestMoveToPinKeepsTheRecipesKubernetesCache(t *testing.T) {
+	ctx := context.Background()
+	d := newDeploy(t, deployRegistry(t, strings.Repeat("e", 40), ""), deployer, []gpus.GPUTarget{l40sServer()})
+	staleLlama(t, d, map[string]manifest.ResourceSettings{"staging": on()})
+	r := current(t, d).Resources["llama-8b"]
+	r.Settings = maps.Clone(r.Settings)
+	delete(r.Settings, "cache_mb")
+	putResource(t, d, "llama-8b", r)
+	onKubernetes(d, "llama-8b", r.Settings)
+	if _, err := d.svc.MoveToPin(ctx, member, projectID, stagingID, "llama-8b"); err != nil {
+		t.Fatal(err)
+	}
+	if got := current(t, d).Resources["llama-8b"].Settings; got["cache_mb"] != "" || got["revision"] != strings.Repeat("e", 40) {
+		t.Errorf("after the move %v", got)
+	}
+}
+
+// The refusal of TestPinUpdateToAPinWithNoFile comes before any edit.
+func TestMoveToPinRefusesToLeaveATopLevelFile(t *testing.T) {
+	ctx := context.Background()
+	d := newDeploy(t, deployRegistry(t, strings.Repeat("e", 40), ""), deployer, []gpus.GPUTarget{l40sServer()})
+	staleLlama(t, d, map[string]manifest.ResourceSettings{"staging": on(), "production": on()})
+	r := current(t, d).Resources["llama-8b"]
+	r.Settings = maps.Clone(r.Settings)
+	r.Settings["file"] = "old.gguf"
+	putResource(t, d, "llama-8b", r)
+	revisions := d.revisions.count()
+	if _, err := d.svc.MoveToPin(ctx, member, projectID, stagingID, "llama-8b"); !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "staging would still read file old.gguf") {
+		t.Errorf("move to pin: %v", err)
+	}
+	if d.revisions.count() != revisions || len(d.plans.asked) != 0 {
+		t.Error("the refused move wrote something")
 	}
 }
 

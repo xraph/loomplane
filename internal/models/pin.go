@@ -139,7 +139,7 @@ func (s *Service) MoveToPin(ctx context.Context, p security.Principal, projectID
 		return nil, fmt.Errorf("%w: %s already runs the weights the registry pins in %s", ErrInvalid, resource, env.Name)
 	}
 	need := engines.CacheMB(q.WeightBytes)
-	if cacheGrows(here.Settings, need) {
+	if cacheGrows(here.Kind, here.Settings, need) {
 		fixed, ferr := s.fixedCache(ctx, p.OrgID, env.ID, resource, "")
 		if ferr != nil {
 			return nil, ferr
@@ -149,7 +149,10 @@ func (s *Service) MoveToPin(ctx context.Context, p security.Principal, projectID
 				ErrInvalid, resource, resource, env.Name)
 		}
 	}
-	update := pinUpdate(m.Resources[resource], env.Name, repinned, need)
+	update, err := pinUpdate(m.Resources[resource], env.Name, repinned, need)
+	if err != nil {
+		return nil, err
+	}
 	update.Resource = resource
 	rev, _, err := s.d.Manifests.Edit(ctx, p, projectID, manifests.EditInput{UpdateResource: update})
 	if err != nil {
@@ -187,9 +190,14 @@ func (s *Service) MoveToPin(ctx context.Context, p security.Principal, projectID
 // rewrites the top level when env is the last environment running raw
 // that reads those keys from there (soleReader), and env's own block
 // otherwise. The caller sets Resource.
-func pinUpdate(raw manifest.Resource, env string, repinned *RepinnedError, needCacheMB int64) *manifests.ResourceUpdateInput {
+//
+// A block can't say "no file": "" deletes the block's key, and env would
+// read the top level's file again. So a move to a pin with no file is
+// refused when it has to go in env's block and the top level names a
+// file, before anything is written.
+func pinUpdate(raw manifest.Resource, env string, repinned *RepinnedError, needCacheMB int64) (*manifests.ResourceUpdateInput, error) {
 	settings := map[string]string{"model": repinned.Model, "revision": repinned.Revision, "file": repinned.File}
-	if cacheGrows(raw.For(env, manifest.Defaults{}).Settings, needCacheMB) {
+	if cacheGrows(raw.Kind, raw.For(env, manifest.Defaults{}).Settings, needCacheMB) {
 		settings["cache_mb"] = strconv.FormatInt(needCacheMB, 10)
 	}
 	// What the edit changes: a key whose new value differs from the top
@@ -205,10 +213,17 @@ func pinUpdate(raw manifest.Resource, env string, repinned *RepinnedError, needC
 		}
 	}
 	u := &manifests.ResourceUpdateInput{Settings: settings}
-	if !soleReader(raw, env, keys...) {
-		u.Environment = env
+	if soleReader(raw, env, keys...) {
+		return u, nil
 	}
-	return u
+	u.Environment = env
+	for _, key := range keys {
+		if settings[key] == "" && raw.Settings[key] != "" {
+			return nil, fmt.Errorf("%w: the registry's new pin has no %s, and %s would still read %s %s from the top level of the model's manifest entry, which its other environments run. Remove the model from %s and deploy it again to move to the new pin",
+				ErrInvalid, key, env, key, raw.Settings[key], env)
+		}
+	}
+	return u, nil
 }
 
 // fixedCache reports whether env's deployed engine of resource keeps its
@@ -230,11 +245,35 @@ func (s *Service) fixedCache(ctx context.Context, orgID, environmentID, resource
 		(connectionID == "" || b.ConnectionID == connectionID), nil
 }
 
-// cacheGrows reports whether settings' weight cache is smaller than
-// needMB, or has no size yet.
-func cacheGrows(settings map[string]string, needMB int64) bool {
+// cacheGrows reports whether the weight cache of a kind resource with
+// settings is smaller than needMB: its cache_mb, or with none the size
+// the kind's recipe starts the cache at.
+func cacheGrows(kind string, settings map[string]string, needMB int64) bool {
 	have, err := strconv.ParseInt(settings["cache_mb"], 10, 64)
-	return err != nil || have < needMB
+	if err != nil {
+		have = defaultCacheMB(kind)
+	}
+	return have < needMB
+}
+
+// defaultCacheMB is the weight cache a model kind's engine starts with on
+// Kubernetes, the KubernetesSizeMB of its recipe, or the smallest cache
+// for a kind the recipes don't have.
+func defaultCacheMB(kind string) int64 {
+	k, ok := recipes.Default().Kind(kind)
+	if !ok {
+		return engines.MinCacheMB
+	}
+	for _, c := range k.Components {
+		switch {
+		case c.Name != recipes.ModelEngine:
+		case c.WeightCache != nil:
+			return int64(c.WeightCache.KubernetesSizeMB)
+		case c.Volume != nil:
+			return int64(c.Volume.KubernetesSizeMB)
+		}
+	}
+	return engines.MinCacheMB
 }
 
 // soleReader reports whether env is the only environment raw runs in

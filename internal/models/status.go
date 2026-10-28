@@ -679,6 +679,9 @@ func (s *Service) MovePreview(ctx context.Context, p security.Principal, project
 	if err != nil {
 		return nil, err
 	}
+	if cerr := s.cacheProblem(ctx, p, projectID, env, pv); cerr != nil {
+		return nil, cerr
+	}
 	allowed, err := s.d.Authz.Allowed(ctx, p, writeNeed(env))
 	if err != nil {
 		return nil, err
@@ -751,6 +754,9 @@ func (s *Service) Move(ctx context.Context, p security.Principal, projectID, env
 	pv, err := s.preview(ctx, p, projectID, env, din, true)
 	if err != nil {
 		return nil, err
+	}
+	if cerr := s.cacheProblem(ctx, p, projectID, env, pv); cerr != nil {
+		return nil, cerr
 	}
 	if len(pv.Problems) > 0 {
 		return nil, &ProblemError{Problem: pv.Problems[0]}
@@ -860,6 +866,31 @@ func (s *Service) moveResource(ctx context.Context, p security.Principal, projec
 	if err != nil {
 		return nil, err
 	}
+	settings := moveSettings(cur, pv)
+	refusal, err := s.cacheRefusal(ctx, p.OrgID, env, cur, pv, settings)
+	if err != nil {
+		return nil, err
+	}
+	if refusal != "" {
+		return nil, fmt.Errorf("%w: %s", ErrInvalid, refusal)
+	}
+	update := moveUpdate(m.Resources[pv.Resource], cur, env.Name, m.Defaults, pv, settings)
+	rev, _, err := s.d.Manifests.Edit(ctx, p, projectID, manifests.EditInput{UpdateResource: update})
+	if err != nil {
+		return nil, err
+	}
+	s.audit(ctx, p, projectID, "ai.model.move", map[string]any{
+		"resource": pv.Resource, "environment": env.Name, "from": cur.Target, "target": pv.Target.ConnectionID,
+		"quantization": pv.quant.ID, "manifest_revision": rev.Revision,
+	})
+	return rev, nil
+}
+
+// moveSettings are the settings a move to pv's target and quantization
+// gives env's copy cur: the new quantization's, with cur's served name,
+// cur's weight cache when it's bigger, and "" for each setting of cur's
+// the new quantization doesn't have, which the edit deletes.
+func moveSettings(cur manifest.Resource, pv *DeployPreview) map[string]string {
 	settings := engines.Settings(pv.spec)
 	if served := cur.Settings["served_name"]; served != "" {
 		settings["served_name"] = served
@@ -874,26 +905,46 @@ func (s *Service) moveResource(ctx context.Context, p security.Principal, projec
 			settings[name] = ""
 		}
 	}
-	if need, nerr := strconv.ParseInt(settings["cache_mb"], 10, 64); nerr == nil && cacheGrows(cur.Settings, need) {
-		fixed, ferr := s.fixedCache(ctx, p.OrgID, env.ID, pv.Resource, pv.Target.ConnectionID)
-		if ferr != nil {
-			return nil, ferr
-		}
-		if fixed {
-			return nil, fmt.Errorf("%w: %s keeps its weight cache on a Kubernetes volume, which can't grow in place, and %s needs a bigger one. Remove %s from %s and deploy it again to move it",
-				ErrInvalid, pv.Resource, pv.Quantization, pv.Resource, env.Name)
-		}
+	return settings
+}
+
+// cacheRefusal says why env's copy cur can't move to pv's target with
+// settings, "" when it can: the new quantization needs a bigger weight
+// cache than cur has, and cur keeps it on a Kubernetes volume on that
+// same cluster, which can't grow in place. A move onto another target
+// gets a new volume.
+func (s *Service) cacheRefusal(ctx context.Context, orgID string, env *projects.Environment, cur manifest.Resource, pv *DeployPreview, settings map[string]string) (string, error) {
+	need, err := strconv.ParseInt(settings["cache_mb"], 10, 64)
+	if err != nil || !cacheGrows(cur.Kind, cur.Settings, need) {
+		return "", nil
 	}
-	update := moveUpdate(m.Resources[pv.Resource], cur, env.Name, m.Defaults, pv, settings)
-	rev, _, err := s.d.Manifests.Edit(ctx, p, projectID, manifests.EditInput{UpdateResource: update})
+	fixed, err := s.fixedCache(ctx, orgID, env.ID, pv.Resource, pv.Target.ConnectionID)
+	if err != nil || !fixed {
+		return "", err
+	}
+	return fmt.Sprintf("%s keeps its weight cache on a Kubernetes volume, which can't grow in place, and %s needs a bigger one. Remove %s from %s and deploy it again to move it",
+		pv.Resource, pv.Quantization, pv.Resource, env.Name), nil
+}
+
+// cacheProblem adds cacheRefusal to a move's preview as a problem, so the
+// preview never offers a move that Move refuses. A preview that already
+// has a problem has no settings to check.
+func (s *Service) cacheProblem(ctx context.Context, p security.Principal, projectID string, env *projects.Environment, pv *DeployPreview) error {
+	if len(pv.Problems) > 0 || pv.Target.Source == TargetServerSize {
+		return nil
+	}
+	cur, _, err := s.modelResource(ctx, p, projectID, env, pv.Resource)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	s.audit(ctx, p, projectID, "ai.model.move", map[string]any{
-		"resource": pv.Resource, "environment": env.Name, "from": cur.Target, "target": pv.Target.ConnectionID,
-		"quantization": pv.quant.ID, "manifest_revision": rev.Revision,
-	})
-	return rev, nil
+	refusal, err := s.cacheRefusal(ctx, p.OrgID, env, cur, pv, moveSettings(cur, pv))
+	if err != nil {
+		return err
+	}
+	if refusal != "" {
+		pv.Problems = append(pv.Problems, Problem{Code: ProblemTarget, Message: refusal + "."})
+	}
+	return nil
 }
 
 // moveUpdate is a move's edit of raw for env, whose copy is cur, to the
