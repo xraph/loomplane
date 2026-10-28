@@ -11855,9 +11855,7 @@
             "x-forge-id": true
           },
           "automatic_expansion": {
-            "type": "boolean",
-            "readOnly": true,
-            "description": "Whether this Loomplane server adds servers to pools on its own. Read-only: a save never takes it."
+            "type": "boolean"
           },
           "policy": {
             "$ref": "#/components/schemas/CapacityPolicy"

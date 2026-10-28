@@ -75,7 +75,7 @@ func TestCloudCapacityStaleRevisionIsExplained(t *testing.T) {
 
 func TestBlockLineGPU(t *testing.T) {
 	got := blockLine(client.CapacityBlock{Reason: "hard_limit", Resource: "gpus:nvidia-l4", Limit: 2, Counted: 2, Requested: 1})
-	want := "nvidia-l4 GPUs is at the limit: 2 of 2 counted, 1 more needed"
+	want := "NVIDIA L4 GPUs is at this Cloud's limit: 2 of 2 counted, 1 more needed."
 	if got != want {
 		t.Fatalf("got %q", got)
 	}
@@ -89,9 +89,10 @@ func TestBlockLineUsesUsageUnits(t *testing.T) {
 		block client.CapacityBlock
 		want  string
 	}{
-		{client.CapacityBlock{Reason: "hard_limit", Resource: "cpu_millis", Counted: 4000, Limit: 8000, Requested: 500}, "CPU is at the limit: 4 cores of 8 cores counted, 0.5 cores more needed"},
-		{client.CapacityBlock{Reason: "hard_limit", Resource: "memory_bytes", Counted: 6 << 30, Limit: 8 << 30, Requested: 3 << 30}, "Memory is at the limit: 6.0 GiB of 8.0 GiB counted, 3.0 GiB more needed"},
-		{client.CapacityBlock{Reason: "hard_limit", Resource: "servers", Counted: 3, Limit: 3, Requested: 1}, "Servers is at the limit: 3 of 3 counted, 1 more needed"},
+		{client.CapacityBlock{Reason: "hard_limit", Resource: "cpu_millis", Counted: 4000, Limit: 8000, Requested: 500}, "CPU is at this Cloud's limit: 4 cores of 8 cores counted, 0.5 cores more needed."},
+		{client.CapacityBlock{Reason: "hard_limit", Resource: "memory_bytes", Counted: 6 << 30, Limit: 8 << 30, Requested: 3 << 30}, "Memory is at this Cloud's limit: 6.0 GiB of 8.0 GiB counted, 3.0 GiB more needed."},
+		{client.CapacityBlock{Reason: "hard_limit", Resource: "servers", Counted: 3, Limit: 3, Requested: 1}, "Servers is at this Cloud's limit: 3 of 3 counted, 1 more needed."},
+		{client.CapacityBlock{Reason: "hard_limit", Resource: "servers", PoolID: "p", Counted: 2, Limit: 2, Requested: 1}, "Servers is at this pool's limit: 2 of 2 counted, 1 more needed."},
 	} {
 		if got := blockLine(tc.block); got != tc.want {
 			t.Errorf("got %q, want %q", got, tc.want)
@@ -103,7 +104,7 @@ func TestBlockLineUsesUsageUnits(t *testing.T) {
 // change: the line says no server will be added and what to do.
 func TestBlockLineRolloutOff(t *testing.T) {
 	got := blockLine(client.CapacityBlock{Reason: "review_required", Resource: "rollout"})
-	if got != "Automatic provisioning is off on this Loomplane server, so no server will be added. Add or adopt one yourself." {
+	if got != "Automatic expansion is off on this Loomplane server, so no server will be added. Add or adopt one yourself." {
 		t.Fatalf("got %q", got)
 	}
 	if got := blockLine(client.CapacityBlock{Reason: "review_required"}); got != "This deployment's plan changed. Review it again." {
@@ -150,7 +151,7 @@ func TestFollowStopsAtPausedWithResumeHint(t *testing.T) {
 		t.Fatal(err)
 	}
 	s := out.String()
-	if !strings.Contains(s, "Servers is at the limit: 3 of 3 counted, 1 more needed") || !strings.Contains(s, "loomctl resume d1 --revision 5") {
+	if !strings.Contains(s, "Servers is at this Cloud's limit: 3 of 3 counted, 1 more needed.") || !strings.Contains(s, "loomctl resume d1 --revision 5") {
 		t.Fatalf("got\n%s", s)
 	}
 }

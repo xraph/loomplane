@@ -120,7 +120,7 @@ describe("blockText", () => {
     [
       "review_required",
       "rollout",
-      "Automatic provisioning is off on this Loomplane server, so no server will be added. Add or adopt one yourself.",
+      "Automatic expansion is off on this Loomplane server, so no server will be added. Add or adopt one yourself.",
     ],
     ["something_new", "", "something new"],
   ])("explains %s (%s)", (reason, resource, want) => {

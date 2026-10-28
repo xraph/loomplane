@@ -299,7 +299,7 @@ export function checkRule(
 }
 
 export const fillText =
-  "Set the most this Cloud may hold for servers, vCPU, memory and storage before you save. A saved limit applies to servers you create, adopt or resize too, so 0 means none."
+  "Set the most this Cloud may hold for servers, vCPU, memory and storage before you save. A saved limit applies to servers you create, adopt or resize too, so 0 means none. To keep this Cloud without limits, leave the policy unsaved."
 
 /** cloudValues reads the Cloud's typed ceilings into API units. */
 export function cloudValues(d: Draft, base: CapacityPolicy) {

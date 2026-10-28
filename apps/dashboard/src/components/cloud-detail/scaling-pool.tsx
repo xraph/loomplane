@@ -52,6 +52,8 @@ import { RuleFields } from "./capacity-rule"
 
 const unsavedText =
   "Save or discard your changes to the growth policy first. A new pool is created with the policy as it's saved."
+// Named as the growth policy's switch is labelled, so you can find it.
+const turnsOnText = "Creating it also turns on Let pools on this Cloud grow."
 const offText =
   "Automatic expansion isn't on for this Loomplane yet, so this pool stays empty until you add a server to it. You can still create it."
 
@@ -224,11 +226,16 @@ function ScalingPoolForm({
       }}
     >
       <p className="text-[12.5px] leading-relaxed text-muted-foreground">
-        {automatic
-          ? policy.enabled
-            ? "Pools on this Cloud may grow already."
-            : "Creating it lets pools on this Cloud grow."
-          : offText}
+        {[
+          automatic ? "" : offText,
+          policy.enabled
+            ? automatic
+              ? "Pools on this Cloud may grow already."
+              : ""
+            : turnsOnText,
+        ]
+          .filter(Boolean)
+          .join(" ")}
       </p>
       <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
         <Field label="Pool name">

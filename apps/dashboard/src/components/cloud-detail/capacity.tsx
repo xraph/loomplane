@@ -72,7 +72,14 @@ import { RunsOn } from "./targets"
 
 const GIB = 2 ** 30
 
-// The 422 a save gets when the server has no sentence of its own for it.
+// The generic start of a 422 the server gives without a sentence of its own.
+const invalid = /^invalid infrastructure request:?/i
+const sentence = (s: string) => {
+  const t = s.charAt(0).toUpperCase() + s.slice(1)
+  return /[.!?]$/.test(t) ? t : `${t}.`
+}
+
+// The 422 a save gets when the server has no reason of its own for it.
 const invalidText =
   "The policy wasn't saved. Check that each pool may grow to no more servers than the Cloud allows, and that its account still offers the region, image and sizes you chose."
 
@@ -253,11 +260,10 @@ function PolicyEditor({
         // policy loads underneath.
         setStale(true)
         void reload().catch(() => undefined)
-      } else if (
-        statusOf(err) === 422 &&
-        /^invalid infrastructure request/i.test(raw)
-      ) {
-        setError(invalidText)
+      } else if (statusOf(err) === 422 && invalid.test(raw)) {
+        // The server's own reason, when it gave one after the generic text.
+        const detail = raw.replace(invalid, "").trim()
+        setError(detail ? sentence(detail) : invalidText)
       } else {
         setError(
           messageOf(

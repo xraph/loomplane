@@ -38,7 +38,7 @@ export function conflictText(err: unknown): string {
  * The server and loomctl say the same.
  */
 export const rolloutOffText =
-  "Automatic provisioning is off on this Loomplane server, so no server will be added. Add or adopt one yourself."
+  "Automatic expansion is off on this Loomplane server, so no server will be added. Add or adopt one yourself."
 
 function words(raw: string): string {
   return raw.replace(/_/g, " ")

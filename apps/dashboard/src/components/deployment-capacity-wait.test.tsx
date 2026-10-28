@@ -184,7 +184,7 @@ it("says automatic provisioning is off, not that the plan changed", () => {
   })
   expect(
     screen.getByText(
-      "Automatic provisioning is off on this Loomplane server, so no server will be added. Add or adopt one yourself."
+      "Automatic expansion is off on this Loomplane server, so no server will be added. Add or adopt one yourself."
     )
   ).toBeInTheDocument()
   expect(screen.queryByText(/plan changed/)).toBeNull()

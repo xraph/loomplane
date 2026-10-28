@@ -10,13 +10,14 @@ import (
 	"github.com/xraph/forge/cli"
 
 	"github.com/xraph/loomplane/pkg/client"
+	"github.com/xraph/loomplane/pkg/provider"
 )
 
 var humanFlag = cli.NewBoolFlag("human", "", "Print one line per dimension instead of JSON", false)
 
 // rolloutOffText matches the dashboard's and the server's sentence for a
 // deployment that needs a server while automatic expansion is off.
-const rolloutOffText = "Automatic provisioning is off on this Loomplane server, so no server will be added. Add or adopt one yourself."
+const rolloutOffText = "Automatic expansion is off on this Loomplane server, so no server will be added. Add or adopt one yourself."
 
 const staleCapacity = "this changed since you opened it; fetch the current version and try again"
 
@@ -364,9 +365,17 @@ func blockLabel(resource string) string {
 	case resource == "frontends":
 		return "Frontends"
 	case strings.HasPrefix(resource, "gpus:"):
-		return strings.TrimPrefix(resource, "gpus:") + " GPUs"
+		kind := strings.TrimPrefix(resource, "gpus:")
+		if k, ok := provider.LookupAcceleratorKind(kind); ok {
+			kind = k.Title
+		}
+		return kind + " GPUs"
 	}
-	return strings.ReplaceAll(resource, "_", " ")
+	w := strings.ReplaceAll(resource, "_", " ")
+	if w == "" {
+		return w
+	}
+	return strings.ToUpper(w[:1]) + w[1:]
 }
 
 // blockLine says in a sentence why capacity wasn't granted.
@@ -374,7 +383,12 @@ func blockLine(b client.CapacityBlock) string {
 	label := blockLabel(b.Resource)
 	switch b.Reason {
 	case "hard_limit":
-		return fmt.Sprintf("%s is at the limit: %s of %s counted, %s more needed", label, amountText(b.Resource, b.Counted), amountText(b.Resource, b.Limit), amountText(b.Resource, b.Requested))
+		// The server's sentence, in the units printUsage uses.
+		scope := "this Cloud's"
+		if b.PoolID != "" {
+			scope = "this pool's"
+		}
+		return fmt.Sprintf("%s is at %s limit: %s of %s counted, %s more needed.", label, scope, amountText(b.Resource, b.Counted), amountText(b.Resource, b.Limit), amountText(b.Resource, b.Requested))
 	case "expansion_approval":
 		return "Waiting for a Cloud manager to approve a new server."
 	case "provisioning":

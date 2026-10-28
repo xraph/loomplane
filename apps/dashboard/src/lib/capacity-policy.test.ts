@@ -61,6 +61,9 @@ describe("check", () => {
     const r = check(d, never, [], [])
     expect(r.policy).toBeUndefined()
     expect(r.problems.join(" ")).toMatch(/before you save/)
+    expect(r.problems.join(" ")).toMatch(
+      /To keep this Cloud without limits, leave the policy unsaved\./
+    )
   })
 
   it("names the limits still missing before pools may grow", () => {

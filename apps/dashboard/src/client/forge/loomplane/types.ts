@@ -429,7 +429,6 @@ export interface CapacityPolicyInputBody {
 }
 
 export interface CapacityPolicyView {
-  /** Whether this Loomplane server adds servers to pools on its own. Read-only: a save never takes it. */
   automaticExpansion: boolean;
   cloudId: string;
   policy?: CapacityPolicy;

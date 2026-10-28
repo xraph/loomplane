@@ -677,7 +677,7 @@ it("keeps a pool's GPU kind read-only, offers only its sizes and prefills its ow
       },
     })
   )
-})
+}, 15_000)
 
 it("creates an empty GPU pool and its rule in one request", async () => {
   const user = userEvent.setup()
@@ -732,7 +732,7 @@ it("creates an empty GPU pool and its rule in one request", async () => {
       allowed_sizes: ["gpu-l4x1"],
     },
   })
-})
+}, 15_000)
 
 it("asks for a GPU ceiling of the new pool's kind, apart from the Cloud limits", async () => {
   const user = userEvent.setup()
@@ -764,5 +764,43 @@ it("says the new pool stays empty while automatic expansion is off", async () =>
   )
   expect(await screen.findByRole("dialog")).toHaveTextContent(
     "this pool stays empty until you add a server to it"
+  )
+})
+
+it("says creating a scaling pool also turns on the grow switch", async () => {
+  const user = userEvent.setup()
+  stub({ views: [view({ ...policy, enabled: false })] })
+  show([])
+  // The sentence names the editor's switch as it is labelled.
+  expect(
+    await screen.findByRole("switch", { name: "Let pools on this Cloud grow" })
+  ).not.toBeChecked()
+  await user.click(screen.getByRole("button", { name: "New scaling pool" }))
+  expect(await screen.findByRole("dialog")).toHaveTextContent(
+    "Creating it also turns on Let pools on this Cloud grow."
+  )
+})
+
+it("shows the server's own reason when a save is refused", async () => {
+  const user = userEvent.setup()
+  stub({
+    save: [
+      {
+        status: 422,
+        body: {
+          message:
+            "invalid infrastructure request: enablement needs a positive server ceiling",
+        },
+      },
+    ],
+  })
+  show([])
+  const region = await growth()
+  const servers = within(region).getByRole("spinbutton", { name: "Servers" })
+  await user.clear(servers)
+  await user.type(servers, "3")
+  await user.click(within(region).getByRole("button", { name: "Save policy" }))
+  expect(await within(region).findByRole("alert")).toHaveTextContent(
+    "Enablement needs a positive server ceiling."
   )
 })

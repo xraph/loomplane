@@ -12,7 +12,7 @@ import (
 // RolloutOffText is why a deployment waits while automatic expansion is
 // off on this server and it needs a server Loomplane won't add. The
 // dashboard and loomctl say the same.
-const RolloutOffText = "Automatic provisioning is off on this Loomplane server, so no server will be added. Add or adopt one yourself."
+const RolloutOffText = "Automatic expansion is off on this Loomplane server, so no server will be added. Add or adopt one yourself."
 
 var blockLabels = map[string]string{
 	"servers":       "Servers",
