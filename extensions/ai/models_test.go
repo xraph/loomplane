@@ -458,6 +458,9 @@ func TestDeployBodyCannotSetMoving(t *testing.T) {
 func jsonFields(t reflect.Type) []string {
 	var out []string
 	for f := range t.Fields() {
+		if !f.IsExported() {
+			continue // never JSON
+		}
 		name, _, _ := strings.Cut(f.Tag.Get("json"), ",")
 		out = append(out, name+":"+f.Type.String())
 	}
