@@ -695,6 +695,21 @@
               "gateway": {
                 "description": "Turn the database gateway on or off for this Postgres resource in this environment. Wins over the resource's own gateway.",
                 "type": "boolean"
+              },
+              "target": {
+                "type": "string",
+                "description": "The checked server connection this environment runs the resource on. Replaces the resource's target; an environment that changes the provider doesn't keep the resource's."
+              },
+              "settings": {
+                "description": "Settings for this environment. Each one replaces the resource's setting of the same name; the rest come from the resource.",
+                "type": "object",
+                "propertyNames": {
+                  "pattern": "^[a-z][a-z0-9_]{0,31}$"
+                },
+                "additionalProperties": {
+                  "type": "string",
+                  "maxLength": 1024
+                }
               }
             }
           }

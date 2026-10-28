@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"regexp"
 	"slices"
 	"sort"
@@ -372,6 +373,14 @@ type ResourceSettings struct {
 	Gateway *bool `json:"gateway,omitempty" yaml:"gateway,omitempty"`
 	// GPU replaces the resource's GPU request. Gateways can't use it.
 	GPU *GPU `json:"gpu,omitempty" yaml:"gpu,omitempty"`
+	// Target replaces the resource's target in this environment. An
+	// environment that moves the resource to another provider doesn't keep
+	// the resource's own target. Gateways can't use it.
+	Target string `json:"target,omitempty" yaml:"target,omitempty"`
+	// Settings replace the resource's settings one by one: each key set
+	// here wins, and the rest come from the resource. Gateways can't use
+	// them.
+	Settings map[string]string `json:"settings,omitempty" yaml:"settings,omitempty"`
 }
 
 // Ignore lists what analysis found that the application doesn't use, so
@@ -613,6 +622,7 @@ func (m *Manifest) Validate() error {
 			checkToken(add, epath+".region", "region", o.Region)
 			checkGatewayKind(add, epath, r.Kind, o.Gateway)
 			checkGPU(add, epath+".gpu", o.GPU)
+			checkResourceSettings(add, epath+".settings", o.Settings)
 		}
 		checkGPU(add, path+".gpu", r.GPU)
 		checkResourceSettings(add, path+".settings", r.Settings)
@@ -1017,6 +1027,7 @@ func (m *Manifest) validateGateways(add func(string, string, ...any)) {
 			if o.GPU != nil {
 				add(epath+".gpu", "a gateway can't use GPUs")
 			}
+			checkNoTargetOrSettings(add, epath, o)
 		}
 	}
 }
@@ -1042,6 +1053,18 @@ func (m *Manifest) validateDatabaseGateway(add func(string, string, ...any)) {
 		checkToken(add, epath+".provider", "provider", o.Provider)
 		checkToken(add, epath+".region", "region", o.Region)
 		checkNoGateway(add, epath, o.Gateway)
+		checkNoTargetOrSettings(add, epath, o)
+	}
+}
+
+// checkNoTargetOrSettings refuses the overrides only a resource can use
+// on a gateway's or the database gateway's environment.
+func checkNoTargetOrSettings(add func(string, string, ...any), path string, o ResourceSettings) {
+	if o.Target != "" {
+		add(path+".target", "a gateway can't use a target")
+	}
+	if o.Settings != nil {
+		add(path+".settings", "a gateway can't use settings")
 	}
 }
 
@@ -1160,20 +1183,71 @@ func cloudTagDefaults(out Settings, d Defaults) Settings {
 	return out
 }
 
-// For returns a resource's settings in an environment, the same way.
+// For returns a resource's settings in an environment, the same way. The
+// environment's target replaces the resource's, and an environment that
+// moves the resource to another provider doesn't keep the resource's
+// target. Each setting the environment sets replaces that one setting.
+// Settings is a new map, nil when there are none.
 func (r Resource) For(env string, d Defaults) ResourceSettings {
 	out := ResourceSettings{}
 	out.Provider, out.Region = place(r.Provider, r.Region, d)
 	out.GPU = r.GPU
+	out.Target = r.Target
 	o, ok := r.Environments[env]
 	if !ok {
+		out.Settings = mergeSettings(r.Settings, nil)
 		return out
 	}
 	if o.GPU != nil {
 		out.GPU = o.GPU
 	}
+	if o.Provider != "" && o.Provider != out.Provider {
+		out.Target = ""
+	}
+	if o.Target != "" {
+		out.Target = o.Target
+	}
+	out.Settings = mergeSettings(r.Settings, o.Settings)
 	out.Provider, out.Region = override(out.Provider, out.Region, o.Provider, o.Region, d)
 	out.Enabled = o.Enabled
+	return out
+}
+
+// In returns the resource as env runs it: the target, GPU and settings
+// For resolves, and the environment's provider and region when it sets
+// them. It doesn't fill in the defaults, so r.In(env, d).For(env, d) is
+// r.For(env, d). Environments stay, so On and GatewayIn read the same.
+func (r Resource) In(env string, d Defaults) Resource {
+	s := r.For(env, d)
+	out := r
+	out.Target, out.GPU, out.Settings = s.Target, s.GPU, s.Settings
+	o, ok := r.Environments[env]
+	if !ok {
+		return out
+	}
+	if o.Provider != "" {
+		// A region belongs to a provider, so moving to another one
+		// leaves the resource's region behind, as For does.
+		if provider, _ := place(r.Provider, r.Region, d); o.Provider != provider {
+			out.Region = ""
+		}
+		out.Provider = o.Provider
+	}
+	if o.Region != "" {
+		out.Region = o.Region
+	}
+	return out
+}
+
+// mergeSettings returns a new map of base with each key in over replacing
+// it, or nil when both are empty.
+func mergeSettings(base, over map[string]string) map[string]string {
+	if len(base) == 0 && len(over) == 0 {
+		return nil
+	}
+	out := make(map[string]string, len(base)+len(over))
+	maps.Copy(out, base)
+	maps.Copy(out, over)
 	return out
 }
 

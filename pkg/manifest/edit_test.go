@@ -684,3 +684,83 @@ services:
 		}
 	}
 }
+
+func TestWithResourceUpdateInOneEnvironment(t *testing.T) {
+	const doc = `version: 1
+resources:
+  # keep me
+  llm:
+    kind: sample
+    provider: server
+    target: c1
+    settings: {model: acme/x}
+`
+	on := true
+	target := "c2"
+	gpu := &GPU{Kind: "nvidia-l4", Count: 1}
+	out, err := WithResourceUpdate([]byte(doc), "llm", ResourceUpdate{
+		Environment: "production", Enabled: &on, Target: &target, GPU: &gpu,
+		Settings: map[string]string{"quantization": "awq"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := Parse(out)
+	if err != nil {
+		t.Fatalf("%v\n%s", err, out)
+	}
+	llm := m.Resources["llm"]
+	want := ResourceSettings{Enabled: &on, Target: "c2", GPU: &GPU{Kind: "nvidia-l4", Count: 1}, Settings: map[string]string{"quantization": "awq"}}
+	if got := llm.Environments["production"]; !reflect.DeepEqual(got, want) {
+		t.Errorf("production = %+v, want %+v\n%s", got, want, out)
+	}
+	if llm.Target != "c1" || llm.GPU != nil || !reflect.DeepEqual(llm.Settings, map[string]string{"model": "acme/x"}) {
+		t.Errorf("the top level changed: %+v\n%s", llm, out)
+	}
+	if !strings.Contains(string(out), "# keep me") {
+		t.Errorf("lost a comment:\n%s", out)
+	}
+
+	// Deleting the environment's last setting takes its settings key away.
+	out, err = WithResourceUpdate(out, "llm", ResourceUpdate{Environment: "production", Settings: map[string]string{"quantization": ""}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, _ = Parse(out)
+	if got := m.Resources["llm"].Environments["production"]; got.Settings != nil || got.Target != "c2" || got.Enabled == nil {
+		t.Errorf("production = %+v\n%s", got, out)
+	}
+	if strings.Contains(string(out), "quantization") {
+		t.Errorf("the setting is still there:\n%s", out)
+	}
+
+	// An environment the update leaves empty goes, and so does the
+	// environments key when it was the last.
+	var none *GPU
+	empty, enabledOff := "", false
+	out, err = WithResourceUpdate([]byte(doc), "llm", ResourceUpdate{Environment: "staging", Target: &empty, GPU: &none})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(out), "environments") {
+		t.Errorf("left an empty environment:\n%s", out)
+	}
+	out, err = WithResourceUpdate([]byte(doc), "llm", ResourceUpdate{Environment: "staging", Enabled: &enabledOff})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, _ = Parse(out)
+	if s := m.Resources["llm"].Environments["staging"]; s.Enabled == nil || *s.Enabled {
+		t.Errorf("staging = %+v\n%s", s, out)
+	}
+
+	if _, err := WithResourceUpdate([]byte(doc), "llm", ResourceUpdate{Enabled: &on}); !errors.Is(err, ErrInvalid) {
+		t.Errorf("enabled without an environment: %v", err)
+	}
+	if _, err := WithResourceUpdate([]byte(doc), "llm", ResourceUpdate{Environment: "Prod!", Target: &target}); !errors.Is(err, ErrInvalid) {
+		t.Errorf("a bad environment name: %v", err)
+	}
+	if _, err := WithResourceUpdate([]byte(doc), "llm", ResourceUpdate{Environment: "production", Settings: map[string]string{"Bad": "x"}}); err == nil {
+		t.Error("a bad setting name was written to an environment")
+	}
+}

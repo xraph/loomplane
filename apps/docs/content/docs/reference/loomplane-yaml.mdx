@@ -106,9 +106,11 @@ The dashboard and `POST /projects/:id/manifest/edits` can change these in place 
 | `target` | The `conn_...` of the checked server or Kubernetes connection a catalog resource runs on |
 | `uses` | Where a catalog resource gets each dependency |
 | `settings` | Values a catalog kind takes, by setting name. Names follow the need option rule; a value is up to 1024 characters. The kind says which settings it has and what each must look like, and that's checked when you plan |
-| `environments` | `provider`, `region` or `enabled` by environment name |
+| `environments` | `provider`, `region`, `enabled`, `gpu`, `target` or `settings` by environment name |
 
-`POST /projects/:id/manifest/edits` can change a resource in place as well. `update_resource` sets its `provider`, `target`, `gpu` or `settings`, leaving out what you don't send. A setting sent as `""` is deleted, and `clear_gpu` drops the GPU. `remove_resource` takes the resource out, but not while a service needs it or another resource uses it: unlink those first.
+An environment's `target` replaces the resource's, and an environment that changes the provider doesn't keep the resource's target. Each setting an environment sets replaces that one setting, and the rest come from the resource.
+
+`POST /projects/:id/manifest/edits` can change a resource in place as well. `update_resource` sets its `provider`, `target`, `gpu` or `settings`, leaving out what you don't send. A setting sent as `""` is deleted, and `clear_gpu` drops the GPU. Send `environment` with it and the change goes under that environment instead, where `enabled` turns the resource on or off. `remove_resource` takes the resource out, but not while a service needs it or another resource uses it: unlink those first.
 
 ### uses
 

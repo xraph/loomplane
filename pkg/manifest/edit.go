@@ -396,6 +396,13 @@ func gpuNode(g GPU) *yaml.Node {
 // ResourceUpdate changes an existing resource. A nil field keeps what is
 // there.
 type ResourceUpdate struct {
+	// Environment, when set, writes Provider, Target, GPU and Settings
+	// under environments.<Environment>, creating it if it's missing,
+	// instead of on the resource itself.
+	Environment string
+	// Enabled turns the resource on or off in Environment. It needs
+	// Environment.
+	Enabled *bool
 	// Provider and Target replace the resource's own; "" removes it.
 	Provider, Target *string
 	// GPU replaces the resource's GPU request, or removes it when it
@@ -407,15 +414,53 @@ type ResourceUpdate struct {
 
 // WithResourceUpdate changes an existing resource in place, keeping its
 // comments and the order of its fields. An unknown resource is an error.
+// An environment block the update leaves empty is removed.
 func WithResourceUpdate(doc []byte, resource string, u ResourceUpdate) ([]byte, error) {
 	root, file, err := mapping(doc)
 	if err != nil {
 		return nil, err
 	}
+	if u.Environment == "" && u.Enabled != nil {
+		return nil, fmt.Errorf("%w: say which environment to turn resources.%s on or off in", ErrInvalid, resource)
+	}
+	if u.Environment != "" && !envRE.MatchString(u.Environment) {
+		return nil, fmt.Errorf("%w: %q isn't an environment name", ErrInvalid, u.Environment)
+	}
 	res, err := editTarget(root, "resources", resource)
 	if err != nil {
 		return nil, err
 	}
+	dst, path := res, "resources."+resource
+	var envs *yaml.Node
+	if u.Environment != "" {
+		if envs, err = editMapping(res, "environments"); err != nil {
+			return nil, fmt.Errorf("%w: %s.%w", ErrInvalid, path, err)
+		}
+		if dst, err = editMapping(envs, u.Environment); err != nil {
+			return nil, fmt.Errorf("%w: %s.environments.%w", ErrInvalid, path, err)
+		}
+		path += ".environments." + u.Environment
+		if u.Enabled != nil {
+			setChild(dst, "enabled", &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!bool", Value: strconv.FormatBool(*u.Enabled)})
+		}
+	}
+	if err := updateResourceFields(dst, path, u); err != nil {
+		return nil, err
+	}
+	if envs != nil {
+		if len(dst.Content) == 0 {
+			removeChild(envs, u.Environment)
+		}
+		if len(envs.Content) == 0 {
+			removeChild(res, "environments")
+		}
+	}
+	return encode(file)
+}
+
+// updateResourceFields writes an update's provider, target, GPU and
+// settings into dst, the resource or one of its environments.
+func updateResourceFields(dst *yaml.Node, path string, u ResourceUpdate) error {
 	for _, field := range []struct {
 		key   string
 		value *string
@@ -424,22 +469,22 @@ func WithResourceUpdate(doc []byte, resource string, u ResourceUpdate) ([]byte, 
 		switch {
 		case value == nil:
 		case *value == "":
-			removeChild(res, key)
+			removeChild(dst, key)
 		default:
-			setChild(res, key, scalar(*value))
+			setChild(dst, key, scalar(*value))
 		}
 	}
 	if u.GPU != nil {
 		if *u.GPU == nil {
-			removeChild(res, "gpu")
+			removeChild(dst, "gpu")
 		} else {
-			setChild(res, "gpu", gpuNode(**u.GPU))
+			setChild(dst, "gpu", gpuNode(**u.GPU))
 		}
 	}
 	if len(u.Settings) > 0 {
-		settings, err := editMapping(res, "settings")
+		settings, err := editMapping(dst, "settings")
 		if err != nil {
-			return nil, fmt.Errorf("%w: resources.%s.%w", ErrInvalid, resource, err)
+			return fmt.Errorf("%w: %s.%w", ErrInvalid, path, err)
 		}
 		for _, key := range sortedKeys(u.Settings) {
 			if u.Settings[key] == "" {
@@ -449,10 +494,10 @@ func WithResourceUpdate(doc []byte, resource string, u ResourceUpdate) ([]byte, 
 			}
 		}
 		if len(settings.Content) == 0 {
-			removeChild(res, "settings")
+			removeChild(dst, "settings")
 		}
 	}
-	return encode(file)
+	return nil
 }
 
 // WithoutResource removes a resource. It refuses while a service needs it

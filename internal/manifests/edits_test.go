@@ -261,3 +261,43 @@ func TestEditUpdateAndRemoveResource(t *testing.T) {
 		}
 	})
 }
+
+func TestEditUpdatesOneEnvironment(t *testing.T) {
+	const base = "version: 1\nresources:\n  # The model.\n  llm:\n    kind: sample\n    provider: server\n    target: conn_1\n"
+	edit := func(t *testing.T, in EditInput) (*Revision, *editStore, error) {
+		t.Helper()
+		store := &editStore{current: &Revision{Revision: 1, YAML: base}}
+		store.reads = 1
+		svc := NewService(store, editProjects{}, editAuth{}, nil)
+		rev, _, err := svc.Edit(context.Background(), security.Principal{}, "p", in)
+		return rev, store, err
+	}
+
+	_, store, err := edit(t, EditInput{UpdateResource: &ResourceUpdateInput{Resource: "llm", Environment: "nowhere"}})
+	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "the project has no environment called nowhere") || store.writes != 0 {
+		t.Fatalf("unknown environment: %v, %d writes", err, store.writes)
+	}
+
+	on := true
+	target := "conn_2"
+	rev, store, err := edit(t, EditInput{UpdateResource: &ResourceUpdateInput{
+		Resource: "llm", Environment: " production ", Enabled: &on, Target: &target,
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	llm := rev.Manifest.Resources["llm"]
+	if got := llm.Environments["production"]; got.Target != "conn_2" || got.Enabled == nil || !*got.Enabled || store.writes != 1 {
+		t.Fatalf("production %+v, %d writes, want one new revision\n%s", got, store.writes, rev.YAML)
+	}
+	if llm.Target != "conn_1" {
+		t.Fatalf("the top-level target changed to %q\n%s", llm.Target, rev.YAML)
+	}
+	if !strings.Contains(rev.YAML, "# The model.") {
+		t.Fatalf("lost a comment:\n%s", rev.YAML)
+	}
+
+	if _, store, err := edit(t, EditInput{UpdateResource: &ResourceUpdateInput{Resource: "llm", Enabled: &on}}); !errors.Is(err, manifest.ErrInvalid) || store.writes != 0 {
+		t.Fatalf("enabled without an environment: %v, %d writes", err, store.writes)
+	}
+}

@@ -118,14 +118,19 @@ type EditInput struct {
 // ResourceUpdateInput changes an existing resource. A field left out
 // keeps what is there; Provider or Target set to "" removes it. ClearGPU
 // removes the GPU request, and can't be sent with GPU. Each setting is
-// set, and a setting set to "" is deleted.
+// set, and a setting set to "" is deleted. Environment, one of the
+// project's environments, makes the change in that environment's block
+// instead of on the resource; Enabled turns the resource on or off there,
+// and needs Environment.
 type ResourceUpdateInput struct {
-	Resource string            `json:"resource"`
-	Provider *string           `json:"provider,omitempty"`
-	Target   *string           `json:"target,omitempty"`
-	GPU      *manifest.GPU     `json:"gpu,omitempty"`
-	ClearGPU bool              `json:"clear_gpu,omitempty"`
-	Settings map[string]string `json:"settings,omitempty"`
+	Resource    string            `json:"resource"`
+	Environment string            `json:"environment,omitempty"`
+	Enabled     *bool             `json:"enabled,omitempty"`
+	Provider    *string           `json:"provider,omitempty"`
+	Target      *string           `json:"target,omitempty"`
+	GPU         *manifest.GPU     `json:"gpu,omitempty"`
+	ClearGPU    bool              `json:"clear_gpu,omitempty"`
+	Settings    map[string]string `json:"settings,omitempty"`
 }
 
 // ServiceLink names a service and something it needs. Link adds the need,
@@ -190,7 +195,7 @@ func (s *Service) Edit(ctx context.Context, p security.Principal, projectID stri
 	case in.AddResource != nil:
 		out, err = s.addResource(ctx, p.OrgID, projectID, []byte(cur.YAML), in.AddResource)
 	case in.UpdateResource != nil:
-		out, err = updateResource([]byte(cur.YAML), in.UpdateResource)
+		out, err = s.updateResource(ctx, p.OrgID, projectID, []byte(cur.YAML), in.UpdateResource)
 	case in.RemoveResource != "":
 		out, err = manifest.WithoutResource([]byte(cur.YAML), strings.TrimSpace(in.RemoveResource))
 	case in.Ignore != "":
@@ -221,12 +226,8 @@ func (s *Service) addResource(ctx context.Context, orgID, projectID string, doc 
 	name := strings.TrimSpace(r.Name)
 	environment := strings.TrimSpace(r.EnabledIn)
 	if environment != "" {
-		envs, err := s.projects.ListEnvironments(ctx, orgID, projectID)
-		if err != nil {
+		if err := s.checkEnvironment(ctx, orgID, projectID, environment); err != nil {
 			return nil, err
-		}
-		if !slices.ContainsFunc(envs, func(e *projects.Environment) bool { return e.Name == environment }) {
-			return nil, fmt.Errorf("%w: the project has no environment called %s", ErrInvalid, environment)
 		}
 	}
 	out, err := manifest.WithResource(doc, name, manifest.Resource{
@@ -239,12 +240,34 @@ func (s *Service) addResource(ctx context.Context, orgID, projectID string, doc 
 	return manifest.WithResourceEnabled(out, name, environment, true)
 }
 
-// updateResource changes an existing resource's YAML.
-func updateResource(doc []byte, in *ResourceUpdateInput) ([]byte, error) {
+// checkEnvironment refuses an environment the project doesn't have.
+func (s *Service) checkEnvironment(ctx context.Context, orgID, projectID, name string) error {
+	envs, err := s.projects.ListEnvironments(ctx, orgID, projectID)
+	if err != nil {
+		return err
+	}
+	if !slices.ContainsFunc(envs, func(e *projects.Environment) bool { return e.Name == name }) {
+		return fmt.Errorf("%w: the project has no environment called %s", ErrInvalid, name)
+	}
+	return nil
+}
+
+// updateResource changes an existing resource's YAML, on the resource or
+// in one of the project's environments.
+func (s *Service) updateResource(ctx context.Context, orgID, projectID string, doc []byte, in *ResourceUpdateInput) ([]byte, error) {
 	if in.ClearGPU && in.GPU != nil {
 		return nil, fmt.Errorf("%w: send gpu or clear_gpu, not both", ErrInvalid)
 	}
-	u := manifest.ResourceUpdate{Provider: in.Provider, Target: in.Target, Settings: in.Settings}
+	environment := strings.TrimSpace(in.Environment)
+	if environment != "" {
+		if err := s.checkEnvironment(ctx, orgID, projectID, environment); err != nil {
+			return nil, err
+		}
+	}
+	u := manifest.ResourceUpdate{
+		Environment: environment, Enabled: in.Enabled,
+		Provider: in.Provider, Target: in.Target, Settings: in.Settings,
+	}
 	switch {
 	case in.ClearGPU:
 		var none *manifest.GPU

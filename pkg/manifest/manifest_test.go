@@ -4,7 +4,9 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"maps"
 	"os"
+	"path/filepath"
 	"reflect"
 	"regexp"
 	"slices"
@@ -292,6 +294,21 @@ func TestSchema_matchesTypes(t *testing.T) {
 		{"environment", props(defs["environment"]), Environment{}},
 		{"release", props(defs["release"]), Release{}},
 		{"thresholds", props(defs["thresholds"]), Thresholds{}},
+	}
+	// Only a resource's environment can name a target or take settings;
+	// a gateway's and the database gateway's can't.
+	for _, k := range []string{"target", "settings"} {
+		if !slices.Contains(props(envOverride), k) {
+			t.Errorf("the resource environment block has no %s", k)
+		}
+		for name, block := range map[string]any{
+			"gateway":          defs["gateway"].(map[string]any)["properties"].(map[string]any)["environments"].(map[string]any)["additionalProperties"],
+			"database gateway": schema["properties"].(map[string]any)["database_gateway"].(map[string]any)["properties"].(map[string]any)["environments"].(map[string]any)["additionalProperties"],
+		} {
+			if slices.Contains(props(block), k) {
+				t.Errorf("the %s environment block has %s", name, k)
+			}
+		}
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -964,5 +981,290 @@ func TestResourceSettingsParse(t *testing.T) {
 		if _, err := Parse([]byte(bad)); !errors.Is(err, ErrInvalid) {
 			t.Errorf("%s: Parse: %v", name, err)
 		}
+	}
+}
+
+func TestResourceForTakesTheEnvironmentsTarget(t *testing.T) {
+	tests := []struct {
+		name         string
+		resource     Resource
+		wantTarget   string
+		wantSettings map[string]string
+	}{
+		{
+			name:       "no environment block",
+			resource:   Resource{Kind: "sample", Provider: "server", Target: "c1"},
+			wantTarget: "c1",
+		},
+		{
+			name: "the environment's target",
+			resource: Resource{Kind: "sample", Provider: "server", Target: "c1", Environments: map[string]ResourceSettings{
+				"production": {Target: "c2"},
+			}},
+			wantTarget: "c2",
+		},
+		{
+			name: "another provider drops the inherited target",
+			resource: Resource{Kind: "sample", Provider: "server", Target: "c1", Environments: map[string]ResourceSettings{
+				"production": {Provider: "kubernetes"},
+			}},
+			wantTarget: "",
+		},
+		{
+			name: "the same provider keeps it",
+			resource: Resource{Kind: "sample", Provider: "server", Target: "c1", Environments: map[string]ResourceSettings{
+				"production": {Provider: "server"},
+			}},
+			wantTarget: "c1",
+		},
+		{
+			name: "each setting the environment sets replaces that one",
+			resource: Resource{Kind: "sample", Settings: map[string]string{"a": "1", "b": "2"}, Environments: map[string]ResourceSettings{
+				"production": {Settings: map[string]string{"b": "3"}},
+			}},
+			wantSettings: map[string]string{"a": "1", "b": "3"},
+		},
+		{
+			name: "no settings anywhere",
+			resource: Resource{Kind: "sample", Environments: map[string]ResourceSettings{
+				"production": {Target: "c2"},
+			}},
+			wantTarget: "c2",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			before := maps.Clone(tt.resource.Settings)
+			got := tt.resource.For("production", Defaults{})
+			if got.Target != tt.wantTarget {
+				t.Errorf("Target = %q, want %q", got.Target, tt.wantTarget)
+			}
+			if !reflect.DeepEqual(got.Settings, tt.wantSettings) {
+				t.Errorf("Settings = %#v, want %#v", got.Settings, tt.wantSettings)
+			}
+			if !reflect.DeepEqual(tt.resource.Settings, before) {
+				t.Errorf("the resource's settings changed to %v", tt.resource.Settings)
+			}
+			// The result is a map of its own: writing to it leaves the
+			// resource alone.
+			if got.Settings != nil {
+				got.Settings["a"] = "changed"
+				if !reflect.DeepEqual(tt.resource.Settings, before) {
+					t.Errorf("For's settings alias the resource's: %v", tt.resource.Settings)
+				}
+			}
+		})
+	}
+}
+
+// envCopiesDoc moves resources between providers, regions and targets in
+// some environments, on top of defaults, so In has every case to match.
+const envCopiesDoc = `version: 1
+defaults:
+  provider: cloud-run
+  region: us-central1
+services:
+  api:
+    source: services/api
+    needs: [llm, db, cache]
+resources:
+  llm:
+    kind: sample
+    provider: server
+    target: conn_a
+    region: fra1
+    gpu: {kind: nvidia-l4, count: 1}
+    settings: {model: acme/x, quantization: fp16}
+    environments:
+      production:
+        target: conn_b
+        gpu: {kind: nvidia-l40s, count: 2}
+        settings: {quantization: awq}
+      staging:
+        provider: kubernetes
+        region: eu
+      preview:
+        enabled: false
+      qa:
+        provider: server
+  db:
+    kind: postgres
+    region: us-east1
+    environments:
+      production:
+        provider: cloud-sql
+      staging:
+        provider: cloud-run
+  cache:
+    kind: redis
+    provider: memorystore
+    environments:
+      staging:
+        provider: cloud-run
+        region: europe-west1
+`
+
+func TestResourceInMatchesFor(t *testing.T) {
+	docs := map[string]string{
+		"example":                    example,
+		"commented":                  commented,
+		"needsDoc":                   needsDoc,
+		"modelDoc":                   modelDoc,
+		"databaseGatewayDoc":         databaseGatewayDoc,
+		"gpuResourceDoc":             gpuResourceDoc,
+		"needOptionsDoc":             needOptionsDoc,
+		"pscManifest":                pscManifest,
+		"applicationNetworkManifest": applicationNetworkManifest,
+		"federationExample":          federationExample,
+		"envCopiesDoc":               envCopiesDoc,
+	}
+	files, err := filepath.Glob("testdata/*.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range files {
+		data, readErr := os.ReadFile(f)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		docs[f] = string(data)
+	}
+	checked := 0
+	for _, name := range slices.Sorted(maps.Keys(docs)) {
+		m, parseErr := Parse([]byte(docs[name]))
+		if parseErr != nil {
+			continue
+		}
+		for _, rname := range m.ResourceNames() {
+			r := m.Resources[rname]
+			envs := append(sortedKeys(r.Environments), "nowhere")
+			for _, env := range envs {
+				in := r.In(env, m.Defaults)
+				if got, want := in.For(env, m.Defaults), r.For(env, m.Defaults); !reflect.DeepEqual(got, want) {
+					t.Errorf("%s: resources.%s in %s: In(...).For = %+v, For = %+v", name, rname, env, got, want)
+				}
+				if !reflect.DeepEqual(in.Environments, r.Environments) || On(in.For(env, m.Defaults).Enabled) != On(r.For(env, m.Defaults).Enabled) || in.GatewayIn(env) != r.GatewayIn(env) {
+					t.Errorf("%s: resources.%s in %s: In changed what On or GatewayIn read", name, rname, env)
+				}
+				o := r.Environments[env]
+				if o.Target == "" && o.Settings == nil && o.Provider == "" {
+					if in.Target != r.Target || !reflect.DeepEqual(in.Settings, r.Settings) {
+						t.Errorf("%s: resources.%s in %s: In = target %q settings %v, want the resource's %q %v", name, rname, env, in.Target, in.Settings, r.Target, r.Settings)
+					}
+				}
+				checked++
+			}
+		}
+	}
+	if checked < 20 {
+		t.Fatalf("checked %d resource environments; the fixtures should give more", checked)
+	}
+
+	// The copies doc: production runs its own copy on conn_b with its own
+	// GPU and quantization, staging moves to a cluster without the server's
+	// target or region, and qa keeps both.
+	m, err := Parse([]byte(envCopiesDoc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	llm := m.Resources["llm"]
+	prod := llm.In("production", m.Defaults)
+	if prod.Target != "conn_b" || prod.GPU.Kind != "nvidia-l40s" || !reflect.DeepEqual(prod.Settings, map[string]string{"model": "acme/x", "quantization": "awq"}) {
+		t.Errorf("production = %+v", prod)
+	}
+	if llm.Target != "conn_a" || llm.Settings["quantization"] != "fp16" {
+		t.Errorf("In changed the resource: %+v", llm)
+	}
+	if st := llm.In("staging", m.Defaults); st.Provider != "kubernetes" || st.Region != "eu" || st.Target != "" {
+		t.Errorf("staging = %+v", st)
+	}
+	if qa := llm.In("qa", m.Defaults); qa.Provider != "server" || qa.Region != "fra1" || qa.Target != "conn_a" {
+		t.Errorf("qa = %+v", qa)
+	}
+	// db's default provider is cloud-run, so staging naming it keeps the
+	// region, and production's move to cloud-sql leaves it behind.
+	if st := m.Resources["db"].In("staging", m.Defaults); st.Provider != "cloud-run" || st.Region != "us-east1" {
+		t.Errorf("db in staging = %+v, want cloud-run in us-east1", st)
+	}
+	if p := m.Resources["db"].In("production", m.Defaults); p.Provider != "cloud-sql" || p.Region != "" {
+		t.Errorf("db in production = %+v, want cloud-sql with no region", p)
+	}
+}
+
+func TestValidateEnvironmentTargetAndSettings(t *testing.T) {
+	const services = "services:\n  web: {source: a}\n"
+	tests := []struct {
+		name, doc, path, message string
+	}{
+		{
+			"a bad setting name in an environment",
+			"version: 1\nresources:\n  llm: {kind: sample, environments: {production: {settings: {Bad: x}}}}\n",
+			"resources.llm.environments.production.settings.Bad",
+			"the name must be a lower case letter",
+		},
+		{
+			"a long setting in an environment",
+			"version: 1\nresources:\n  llm: {kind: sample, environments: {production: {settings: {model: " + strings.Repeat("x", MaxSettingValue+1) + "}}}}\n",
+			"resources.llm.environments.production.settings.model",
+			"characters; the most is",
+		},
+		{
+			"a gateway's target",
+			"version: 1\n" + services + "gateways:\n  web:\n    routes: [{path: /, to: web}]\n    environments: {production: {target: c1}}\n",
+			"gateways.web.environments.production.target",
+			"a gateway can't use a target",
+		},
+		{
+			"a gateway's settings",
+			"version: 1\n" + services + "gateways:\n  web:\n    routes: [{path: /, to: web}]\n    environments: {production: {settings: {model: x}}}\n",
+			"gateways.web.environments.production.settings",
+			"a gateway can't use settings",
+		},
+		{
+			"the database gateway's target",
+			"version: 1\ndatabase_gateway:\n  provider: cloud-run\n  environments: {production: {target: c1}}\n",
+			"database_gateway.environments.production.target",
+			"a gateway can't use a target",
+		},
+		{
+			"the database gateway's settings",
+			"version: 1\ndatabase_gateway:\n  provider: cloud-run\n  environments: {production: {settings: {}}}\n",
+			"database_gateway.environments.production.settings",
+			"a gateway can't use settings",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := Parse([]byte(tt.doc))
+			var ps Problems
+			if !errors.As(err, &ps) {
+				t.Fatalf("Parse err = %v, want problems", err)
+			}
+			found := false
+			for _, p := range ps {
+				if p.Path == tt.path && strings.Contains(p.Message, tt.message) {
+					found = true
+				}
+			}
+			if !found {
+				t.Errorf("no problem at %s saying %q: %v", tt.path, tt.message, err)
+			}
+			if schemaAccepts(t, tt.doc) == nil {
+				t.Error("the schema accepts it")
+			}
+		})
+	}
+
+	// A resource's environment takes both, and so does the schema.
+	ok := "version: 1\nresources:\n  llm:\n    kind: sample\n    target: c1\n    environments:\n      production: {target: c2, settings: {quantization: awq}}\n"
+	m, err := Parse([]byte(ok))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := m.Resources["llm"].Environments["production"]; got.Target != "c2" || got.Settings["quantization"] != "awq" {
+		t.Errorf("production = %+v", got)
+	}
+	if err := schemaAccepts(t, ok); err != nil {
+		t.Errorf("schema: %v", err)
 	}
 }
