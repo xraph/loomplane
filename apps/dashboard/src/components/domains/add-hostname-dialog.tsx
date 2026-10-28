@@ -48,6 +48,14 @@ export function AddHostnameDialog({
   open: boolean
   onOpenChange(open: boolean): void
 }) {
+  // Each opening starts fresh. The body stays mounted while the dialog
+  // animates closed, so it's keyed by opening rather than unmounted.
+  const [opening, setOpening] = useState(0)
+  const [wasOpen, setWasOpen] = useState(open)
+  if (open !== wasOpen) {
+    setWasOpen(open)
+    if (open) setOpening((n) => n + 1)
+  }
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
@@ -61,16 +69,15 @@ export function AddHostnameDialog({
             Point a hostname at {service} in {environment.name}.
           </DialogDescription>
         </DialogHeader>
-        {open && (
-          <Body
-            projectId={projectId}
-            environment={environment}
-            service={service}
-            ports={ports}
-            deployed={deployed}
-            onClose={() => onOpenChange(false)}
-          />
-        )}
+        <Body
+          key={opening}
+          projectId={projectId}
+          environment={environment}
+          service={service}
+          ports={ports}
+          deployed={deployed}
+          onClose={() => onOpenChange(false)}
+        />
       </DialogContent>
     </Dialog>
   )
@@ -203,9 +210,9 @@ function Body({
         setError(op.message || "The route wasn't applied.")
         return
       }
-      // not in the mock
+      // not in the mock. The route is still being set up when apply answers.
       toast.success(
-        `${value.hostname} now points at ${service} in ${environment.name}.`
+        `Loomplane is pointing ${value.hostname} at ${service} in ${environment.name}.`
       )
       onClose()
     } catch {
@@ -260,7 +267,7 @@ function Body({
             </Select>
           </div>
         )}
-        {record?.name && (
+        {record?.value && (
           <div
             role="group"
             aria-labelledby={`${ids}-record`}
@@ -276,7 +283,9 @@ function Body({
               <dt className="text-muted-foreground">Type</dt>
               <dd className="font-mono break-all">{record.type}</dd>
               <dt className="text-muted-foreground">Name</dt>
-              <dd className="font-mono break-all">{record.name}</dd>
+              {/* Relative to the zone, as the server writes it; "@" is the
+                  apex, the usual name at a DNS provider. */}
+              <dd className="font-mono break-all">{record.name || "@"}</dd>
               <dt className="text-muted-foreground">Value</dt>
               <dd className="font-mono break-all">{record.value}</dd>
             </dl>

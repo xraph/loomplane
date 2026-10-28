@@ -926,14 +926,16 @@ function Domains({
                   {r.input.hostname}
                 </span>
                 {mayRoute && (
-                  <button
+                  <Button
                     type="button"
+                    size="xs"
+                    variant="ghost"
                     aria-label={`Remove ${r.input.hostname}`}
                     onClick={() => setRemoving(r)}
-                    className="shrink-0 text-xs text-muted-foreground hover:text-destructive hover:underline"
+                    className="-my-1 shrink-0 text-muted-foreground hover:text-destructive"
                   >
                     Remove
-                  </button>
+                  </Button>
                 )}
               </span>
               <span className="pl-[15px] text-xs text-muted-foreground">

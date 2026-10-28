@@ -463,6 +463,40 @@ test("a failed attach says why and keeps the dialog open", async () => {
   ])
 })
 
+test("attach shows the apex record as @", async () => {
+  serve({
+    board: board(),
+    domainRoutes: domainRoutes(),
+    write: (w) => {
+      if (!w.path.endsWith("/preview")) return undefined
+      const op = operation("routeop_1", "preview")
+      // The server names records relative to the zone: "" is the apex.
+      return json({
+        ...op,
+        desired_record: {
+          ...(op.desired_record as Record<string, unknown>),
+          type: "A",
+          name: "",
+          value: "203.0.113.10",
+        },
+      })
+    },
+  })
+  mount(<DomainsPanel {...panelProps()} />)
+  await userEvent.click(
+    await screen.findByRole("button", { name: "Attach a domain" })
+  )
+  const dialog = await screen.findByRole("dialog", { name: "Attach a domain" })
+  await within(dialog).findByRole("textbox", { name: "Subdomain" })
+  await userEvent.click(within(dialog).getByRole("button", { name: "Preview" }))
+  const record = await within(dialog).findByRole("group", {
+    name: "DNS record",
+  })
+  expect(within(record).getByText("@")).toBeVisible()
+  expect(within(record).getByText("203.0.113.10")).toBeVisible()
+  expect(within(dialog).getByRole("button", { name: "Attach" })).toBeVisible()
+})
+
 test("changing the hostname after a preview previews again", async () => {
   serve({ board: board(), domainRoutes: domainRoutes() })
   mount(<DomainsPanel {...panelProps()} />)

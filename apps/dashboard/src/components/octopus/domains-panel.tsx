@@ -603,7 +603,7 @@ function AttachDialog({
                 out.
               </span>
             </div>
-            {record?.name && (
+            {record?.value && (
               <div
                 role="group"
                 aria-labelledby={`${ids}-record`}
@@ -616,7 +616,8 @@ function AttachDialog({
                   DNS record
                 </span>
                 <span className="flex flex-wrap gap-x-3 gap-y-0.5 font-mono text-[12.5px] leading-relaxed break-all">
-                  <span>{record.name}</span>
+                  {/* The server names records relative to the zone. */}
+                  <span>{record.name || "@"}</span>
                   <span className="text-muted-foreground">{record.type}</span>
                   <span>{record.value}</span>
                 </span>
