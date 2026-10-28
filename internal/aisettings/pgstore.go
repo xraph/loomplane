@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/xraph/grove/driver"
 	"github.com/xraph/grove/drivers/pgdriver"
 	"go.jetify.com/typeid/v2"
@@ -18,10 +19,23 @@ import (
 type PgStore struct {
 	db  *pgdriver.PgDB
 	now func() time.Time
+	// tokenLockWait is how long LockHuggingFaceToken waits for the lock.
+	tokenLockWait time.Duration
 }
 
 // NewPgStore returns a Store over db.
-func NewPgStore(db *pgdriver.PgDB) *PgStore { return &PgStore{db: db, now: time.Now} }
+func NewPgStore(db *pgdriver.PgDB) *PgStore {
+	return &PgStore{db: db, now: time.Now, tokenLockWait: defaultTokenLockWait}
+}
+
+// defaultTokenLockWait is how long a Hugging Face token lock waiter waits.
+// Each waiter holds a pool connection while it waits, and the holder's fn
+// takes another, so waiters give up instead of using up the pool.
+const defaultTokenLockWait = 10 * time.Second
+
+// pgLockNotAvailable is Postgres's lock_not_available: lock_timeout ran
+// out.
+const pgLockNotAvailable = "55P03"
 
 var _ Store = (*PgStore)(nil)
 
@@ -421,14 +435,23 @@ const huggingFaceLockPrefix = "loomplane-ai-huggingface-token:"
 
 // LockHuggingFaceToken implements Store with a transaction-scoped advisory
 // lock. It locks no row, so fn's own writes to the settings row, on other
-// connections, don't wait on it.
+// connections, don't wait on it. The transaction's lock_timeout bounds the
+// wait to tokenLockWait.
 func (s *PgStore) LockHuggingFaceToken(ctx context.Context, orgID string, fn func(ctx context.Context) error) error {
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return fmt.Errorf("lock the Hugging Face token: %w", err)
 	}
 	defer rollback(tx)
+	wait := fmt.Sprintf("%dms", max(s.tokenLockWait.Milliseconds(), 1))
+	if _, err = tx.Exec(ctx, `SELECT set_config('lock_timeout', $1, true)`, wait); err != nil {
+		return fmt.Errorf("lock the Hugging Face token: %w", err)
+	}
 	if _, err = tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtextextended($1, 0))`, huggingFaceLockPrefix+orgID); err != nil {
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == pgLockNotAvailable {
+			return fmt.Errorf("%w: another change that uses it is still running. Try again in a moment", ErrBusy)
+		}
 		return fmt.Errorf("lock the Hugging Face token: %w", err)
 	}
 	if ferr := fn(ctx); ferr != nil {

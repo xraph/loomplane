@@ -47,6 +47,8 @@ func TestFailMapsServiceErrors(t *testing.T) {
 		// Busy and changed underneath.
 		{planning.ErrConflict, http.StatusConflict, codeBusy, ""},
 		{cloudinfra.ErrBusy, http.StatusConflict, codeBusy, ""},
+		{fmt.Errorf("%w: another change that uses it is still running. Try again in a moment", aisettings.ErrBusy), http.StatusConflict, codeBusy,
+			"another change that uses it is still running. Try again in a moment"},
 		{manifests.ErrConflict, http.StatusConflict, codeStale, ""},
 		{fmt.Errorf("apply: %w", cloudinfra.ErrConflict), http.StatusConflict, codeStale, ""},
 

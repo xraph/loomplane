@@ -12,6 +12,8 @@ var (
 	ErrStale          = errors.New("the workspace AI settings changed since they were read")
 	ErrOverBudget     = errors.New("over the workspace AI budget")
 	ErrUnderAllocated = errors.New("the workspace AI budget is below what is already allocated")
+	// ErrBusy is a Hugging Face token lock a caller waited too long for.
+	ErrBusy = errors.New("the workspace's Hugging Face token is busy")
 )
 
 // Store keeps workspace AI settings, provider key metadata and budget
@@ -67,6 +69,7 @@ type Store interface {
 	// LockHuggingFaceToken runs fn while it holds the workspace's Hugging
 	// Face token lock, and returns fn's error. One workspace's holders run
 	// one at a time, across every replica; other workspaces don't wait. fn
-	// may use the store, which doesn't take the lock itself.
+	// may use the store, which doesn't take the lock itself. A caller that
+	// waits too long for the lock gets ErrBusy, and fn doesn't run.
 	LockHuggingFaceToken(ctx context.Context, orgID string, fn func(ctx context.Context) error) error
 }

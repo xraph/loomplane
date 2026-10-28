@@ -82,7 +82,7 @@ var sentinels = []sentinelClass{
 	{http.StatusConflict, codeStale, []error{
 		models.ErrStale, aisettings.ErrStale, manifests.ErrConflict, planning.ErrStale, planning.ErrSuperseded, cloudinfra.ErrConflict,
 	}},
-	{http.StatusConflict, codeBusy, []error{planning.ErrConflict, cloudinfra.ErrBusy, cloudinfra.ErrPending}},
+	{http.StatusConflict, codeBusy, []error{planning.ErrConflict, cloudinfra.ErrBusy, cloudinfra.ErrPending, aisettings.ErrBusy}},
 	{http.StatusConflict, codeConflict, []error{models.ErrConflict}},
 	{http.StatusNotFound, codeNotFound, []error{
 		models.ErrNotFound, models.ErrEntryNotFound, aisettings.ErrNotFound, projects.ErrNotFound, projects.ErrEnvironmentNotFound,

@@ -503,6 +503,31 @@ func TestHuggingFaceTokenLockSerializesAWorkspace(t *testing.T) {
 		t.Fatal("the second holder never ran")
 	}
 
+	// A waiter gives up once the lock's wait runs out, so waiters never
+	// use up the pool, and the holder carries on.
+	release = make(chan struct{})
+	held = make(chan struct{})
+	go func() {
+		first <- s.LockHuggingFaceToken(ctx, "org_a", func(context.Context) error {
+			close(held)
+			<-release
+			return nil
+		})
+	}()
+	<-held
+	s.tokenLockWait = 300 * time.Millisecond
+	ran := false
+	started := time.Now()
+	err := s.LockHuggingFaceToken(ctx, "org_a", func(context.Context) error { ran = true; return nil })
+	if !errors.Is(err, ErrBusy) || ran || time.Since(started) > 5*time.Second {
+		t.Errorf("waiter past its wait: %v, ran %v, after %v", err, ran, time.Since(started))
+	}
+	s.tokenLockWait = defaultTokenLockWait
+	close(release)
+	if err = <-first; err != nil {
+		t.Fatal(err)
+	}
+
 	// An error from fn comes back, and the lock is let go.
 	boom := errors.New("boom")
 	if err := s.LockHuggingFaceToken(ctx, "org_a", func(context.Context) error { return boom }); !errors.Is(err, boom) {
