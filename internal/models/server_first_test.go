@@ -19,6 +19,7 @@ import (
 	"github.com/xraph/loomplane/internal/manifests"
 	"github.com/xraph/loomplane/internal/notifications"
 	"github.com/xraph/loomplane/internal/projects"
+	"github.com/xraph/loomplane/internal/recipes"
 	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/pkg/provider"
 )
@@ -1616,6 +1617,74 @@ func TestWaitingModelKeepsItsName(t *testing.T) {
 	r := m.Resources["qwen2-5-7b-instruct"]
 	if len(m.Resources) != 1 || r.Target != gpuConn || !enabledIn(r, "production") || !enabledIn(r, "staging") ||
 		r.For("staging", m.Defaults).Target != newConn {
+		t.Errorf("resources %+v", m.Resources)
+	}
+}
+
+// Ruling E3: a copy waiting for its GPU server in staging has no manifest
+// resource yet, and a deploy of the same model to production joins it all
+// the same: its name, and its kind, so a target that would run another
+// kind is refused before anything is spent.
+func TestDeployJoinsAWaitingCopy(t *testing.T) {
+	ctx := context.Background()
+	sf := newServerFirst(t, cloudAdmin)
+	in := DeployInput{EntryID: qwen7B, Resource: "llm", Target: onSize(), ReviewServer: true}
+	review, err := sf.svc.Preview(ctx, member, projectID, stagingID, in)
+	if err != nil || len(review.Problems) != 0 || review.Server == nil {
+		t.Fatalf("staging's review: %+v, %v", review, err)
+	}
+	in.ReviewServer, in.Server = false, &ServerApproval{CloudID: review.Server.CloudID, OperationID: review.Server.ID, Review: review.Server.Review}
+	if _, err = sf.svc.Deploy(ctx, member, projectID, stagingID, in); err != nil {
+		t.Fatal(err)
+	}
+	sf.targets.targets = append(sf.targets.targets, l40sServer())
+	*sf.conns = append(*sf.conns, cpuServer())
+
+	gpu := DeployInput{EntryID: qwen7B, Target: onGPU("nvidia-l40s")}
+	pv, err := sf.svc.Preview(ctx, member, projectID, productID, gpu)
+	if err != nil || len(pv.Problems) != 0 || pv.Resource != "llm" || pv.AddsTo != "llm" || pv.Kind != recipes.ModelVLLMKind {
+		t.Fatalf("production on gpu-box: %q adds to %q as %q %+v, %v", pv.Resource, pv.AddsTo, pv.Kind, pv.Problems, err)
+	}
+	want := []Reach{
+		{EnvironmentID: productID, Environment: "production", Mode: ReachHome, Message: "Adds production to llm. Services in production link to this copy."},
+		{EnvironmentID: stagingID, Environment: "staging", Mode: ReachHome, Message: "Waits for its GPU server in staging. Services in staging link to this copy once it runs."},
+	}
+	if !slices.Equal(pv.Environments, want) {
+		t.Errorf("environments %+v", pv.Environments)
+	}
+
+	// On CPU it would run as llama.cpp: refused, with nothing written.
+	previews, applies, _ := sf.servers.calls()
+	revisions := sf.revisions.count()
+	cpu := DeployInput{EntryID: qwen7B, Target: TargetChoice{Source: TargetConnection, ConnectionID: cpuConn}}
+	pv, err = sf.svc.Preview(ctx, member, projectID, productID, cpu)
+	wantKind := "llm runs as vLLM model in its other environments, and on cpu-box it would run as llama.cpp model. Pick a target it runs on as vLLM model, or deploy it as a separately named model."
+	if err != nil || !slices.Equal(codes(pv), []string{ProblemEngine}) || pv.Problems[0].Message != wantKind || pv.CanDeploy {
+		t.Errorf("production on cpu-box: %+v, %v", pv.Problems, err)
+	}
+	var refused *ProblemError
+	if _, err = sf.svc.Deploy(ctx, member, projectID, productID, cpu); !errors.As(err, &refused) || refused.Problem.Code != ProblemEngine {
+		t.Errorf("deploy on cpu-box: %v", err)
+	}
+	if p, a, _ := sf.servers.calls(); p != previews || a != applies || sf.revisions.count() != revisions || len(sf.rows.rows) != 1 {
+		t.Errorf("the refusal wrote: %d reviews, %d applies, %d revisions, %d rows", p, a, sf.revisions.count(), len(sf.rows.rows))
+	}
+
+	// On gpu-box it joins, and staging's server-up joins production's.
+	res, err := sf.svc.Deploy(ctx, member, projectID, productID, gpu)
+	if err != nil || res.Deployment.Resource != "llm" {
+		t.Fatalf("production on gpu-box: %+v, %v", res, err)
+	}
+	sf.servers.succeed(review.Server.ID)
+	sf.gpusReady(provider.GPUStatusReady)
+	if err = sf.svc.Reconcile(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if d, gerr := sf.rows.Get(ctx, "org", projectID, stagingID, "llm"); gerr != nil || d.Phase != PhasePlanned || d.PlanID == "" {
+		t.Errorf("staging once its server is up: %+v, %v", d, gerr)
+	}
+	m := current(t, sf.deploySetup)
+	if r := m.Resources["llm"]; len(m.Resources) != 1 || !enabledIn(r, "staging") || !enabledIn(r, "production") {
 		t.Errorf("resources %+v", m.Resources)
 	}
 }

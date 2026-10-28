@@ -464,36 +464,99 @@ func (s *Service) checkName(ctx context.Context, p security.Principal, projectID
 		pv.Problems = append(pv.Problems, *refused)
 		return
 	}
-	if !join {
+	r, there := m.Resources[chosen]
+	switch {
+	case join:
+		pv.AddsTo, pv.joinKind, pv.servedName = chosen, r.Kind, r.Settings["served_name"]
+	case !there:
+		// A copy of the same model waiting for its GPU server in another
+		// environment has no manifest resource yet, and the deploy joins
+		// it all the same: the same name, and the same kind, refused here
+		// before anything is spent when this target would run another.
+		w := waitingCopy(rows, e.ID, env.ID, chosen)
+		if w == nil {
+			return
+		}
+		pv.AddsTo, pv.joinKind = chosen, waitingKind(w)
+	default:
 		return
 	}
-	r := m.Resources[chosen]
-	pv.AddsTo, pv.joinKind, pv.servedName = chosen, r.Kind, r.Settings["served_name"]
-	pv.Environments = s.copiesOf(ctx, p.OrgID, projectID, env, chosen, r)
+	envs := s.environmentsOf(ctx, p.OrgID, projectID, env)
+	pv.Environments = copiesOf(r, envs, env, waitingIn(rows, chosen))
+	pv.Environments[0].Message = fmt.Sprintf("Adds %s to %s. Services in %s link to this copy.", env.Name, chosen, env.Name)
 }
 
-// copiesOf is how each environment reaches the resource name, r, once env
-// runs it too: env first, then the environments r already runs in, by
-// name.
-func (s *Service) copiesOf(ctx context.Context, orgID, projectID string, env *projects.Environment, name string, r manifest.Resource) []Reach {
-	out := []Reach{{EnvironmentID: env.ID, Environment: env.Name, Mode: ReachHome,
-		Message: fmt.Sprintf("Adds %s to %s. Services in %s link to this copy.", env.Name, name, env.Name)}}
+// environmentsOf is the project's environments, or env alone when they
+// can't be read.
+func (s *Service) environmentsOf(ctx context.Context, orgID, projectID string, env *projects.Environment) []*projects.Environment {
 	if s.d.Projects == nil {
-		return out
+		return []*projects.Environment{env}
 	}
 	envs, err := s.d.Projects.ListEnvironments(ctx, orgID, projectID)
 	if err != nil {
-		return out
+		return []*projects.Environment{env}
 	}
+	return envs
+}
+
+// copiesOf is how each environment reaches its copy of the resource raw:
+// here first, then by name every other environment raw runs in or whose
+// copy waits for its GPU server (waiting holds their IDs). A model that
+// runs in here alone says so as it always has.
+func copiesOf(raw manifest.Resource, envs []*projects.Environment, here *projects.Environment, waiting map[string]bool) []Reach {
+	reach := func(env *projects.Environment) Reach {
+		msg := fmt.Sprintf("Runs in %s. Services in %s link to this copy.", env.Name, env.Name)
+		if !enabledIn(raw, env.Name) && waiting[env.ID] {
+			msg = fmt.Sprintf("Waits for its GPU server in %s. Services in %s link to this copy once it runs.", env.Name, env.Name)
+		}
+		return Reach{EnvironmentID: env.ID, Environment: env.Name, Mode: ReachHome, Message: msg}
+	}
+	out := []Reach{reach(here)}
+	envs = slices.Clone(envs)
 	slices.SortFunc(envs, func(a, b *projects.Environment) int { return strings.Compare(a.Name, b.Name) })
 	for _, other := range envs {
-		if other.ID == env.ID || !enabledIn(r, other.Name) {
-			continue
+		if other.ID != here.ID && (enabledIn(raw, other.Name) || waiting[other.ID]) {
+			out = append(out, reach(other))
 		}
-		out = append(out, Reach{EnvironmentID: other.ID, Environment: other.Name, Mode: ReachHome,
-			Message: fmt.Sprintf("Runs in %s on its own target. Services in %s link to that copy.", other.Name, other.Name)})
+	}
+	if len(out) == 1 && (enabledIn(raw, here.Name) || !waiting[here.ID]) {
+		return []Reach{homeReach(here)}
 	}
 	return out
+}
+
+// waitingIn is the IDs of the environments whose copy of resource waits
+// for its GPU server, from the project's rows.
+func waitingIn(rows []*Deployment, resource string) map[string]bool {
+	out := map[string]bool{}
+	for _, d := range rows {
+		if d.Resource == resource && waitsForServer(d) {
+			out[d.EnvironmentID] = true
+		}
+	}
+	return out
+}
+
+// waitingCopy is the row of a copy of the entry named resource that waits
+// for its GPU server in an environment other than envID, nil for none.
+func waitingCopy(rows []*Deployment, entryID, envID, resource string) *Deployment {
+	for _, d := range rows {
+		if d.Resource == resource && d.EntryID == entryID && d.EnvironmentID != envID && waitsForServer(d) {
+			return d
+		}
+	}
+	return nil
+}
+
+// waitingKind is the model kind a waiting copy runs as once its server is
+// up: its engine, on the GPU it asked for or on CPU. "" when the row
+// doesn't say.
+func waitingKind(d *Deployment) string {
+	if d.Request == nil {
+		return ""
+	}
+	kind, _ := recipes.ModelKindFor(d.Engine, d.Request.Target.GPU != nil)
+	return kind
 }
 
 // chooseName is the resource a deploy of e to env runs as, and whether
@@ -508,8 +571,10 @@ func (s *Service) copiesOf(ctx context.Context, orgID, projectID string, env *pr
 //     ProblemNameTaken; otherwise asked is a new resource. A row of e in
 //     another environment is the same model, so it doesn't block it.
 //  3. With no name asked, a model resource of e in m is joined:
-//     DefaultResource(e) first, else the first by name. Otherwise
-//     DefaultResource(e) when it's free, else the first free of
+//     DefaultResource(e) first, else the first by name. With none, the
+//     name of a copy of e waiting for its GPU server in another
+//     environment, the first by name that's free, so the copies share it.
+//     Otherwise DefaultResource(e) when it's free, else the first free of
 //     "<default>-2", "<default>-3" and so on.
 func chooseName(m *manifest.Manifest, rows []*Deployment, e registry.Entry, env *projects.Environment, asked string) (name string, join bool, p *Problem) {
 	names := slices.Sorted(maps.Keys(m.Resources))
@@ -550,6 +615,11 @@ func chooseName(m *manifest.Manifest, rows []*Deployment, e registry.Entry, env 
 	}
 	if i := slices.IndexFunc(names, ours); i >= 0 {
 		return names[i], true, nil
+	}
+	for _, d := range rows {
+		if d.EntryID == e.ID && d.EnvironmentID != env.ID && waitsForServer(d) && clash(d.Resource) == nil {
+			return d.Resource, false, nil
+		}
 	}
 	if clash(def) == nil {
 		return def, false, nil
