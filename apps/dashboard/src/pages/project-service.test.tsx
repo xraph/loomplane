@@ -91,7 +91,8 @@ function operation(status: string, over: Json = {}): Json {
       id: "",
       zone_id: "zone_dev",
       type: "A",
-      name: "shop.acme.dev",
+      // Relative to the zone, as the server writes it.
+      name: "shop",
       value: "203.0.113.10",
       ttl: 300,
     },
@@ -261,9 +262,12 @@ test("adds a domain to a service", async () => {
   const record = await within(dialog).findByRole("group", {
     name: "DNS record",
   })
-  expect(record).toHaveTextContent("shop.acme.dev")
-  expect(record).toHaveTextContent("A")
-  expect(record).toHaveTextContent("203.0.113.10")
+  expect(within(record).getByText("A")).toBeVisible()
+  expect(within(record).getByText("shop")).toBeVisible()
+  expect(within(record).getByText("203.0.113.10")).toBeVisible()
+  expect(record).toHaveTextContent(
+    "Loomplane writes this record when you add the domain, then issues a certificate."
+  )
 
   routes = [route("shop.acme.dev", { status: "pending" })]
   await userEvent.click(
@@ -280,7 +284,7 @@ test("adds a domain to a service", async () => {
     expect(screen.queryByRole("dialog", { name: "Add a domain" })).toBeNull()
   )
   expect(toasts.toast.success).toHaveBeenCalledWith(
-    "shop.acme.dev now points at web in production."
+    "Loomplane is pointing shop.acme.dev at web in production."
   )
   expect(await within(card).findByText("shop.acme.dev")).toBeVisible()
 })
@@ -380,4 +384,159 @@ test("says a service not deployed here gets a hostname once it deploys", async (
   )
   expect(within(dialog).queryByRole("button", { name: "Preview" })).toBeNull()
   expect(writes).toEqual([])
+})
+
+const record = (name: string) =>
+  operation("preview", {
+    desired_record: {
+      id: "",
+      zone_id: "zone_org",
+      type: "A",
+      name,
+      value: "203.0.113.10",
+      ttl: 300,
+    },
+  })
+
+test("shows the apex record an external domain needs", async () => {
+  const writes = serve({
+    domains: [
+      {
+        zone_id: "zone_org",
+        name: "acme.org",
+        mode: "external",
+        verified: true,
+        wildcards: false,
+        hostnames: [],
+      },
+    ],
+    write: (w) => (w.path.endsWith("/preview") ? json(record("")) : undefined),
+  })
+  const dialog = await openDialog()
+  // The hostname starts at the domain's apex.
+  expect(
+    await within(dialog).findByTestId("resulting-hostname")
+  ).toHaveTextContent("acme.org")
+  await userEvent.click(within(dialog).getByRole("button", { name: "Preview" }))
+  const shown = await within(dialog).findByRole("group", { name: "DNS record" })
+  expect(within(shown).getByText("@")).toBeVisible()
+  expect(within(shown).getByText("203.0.113.10")).toBeVisible()
+  expect(shown).toHaveTextContent(
+    "Add this record at your DNS provider. The route starts serving once it resolves and the certificate is issued."
+  )
+  expect(
+    within(dialog).getByRole("button", { name: "Add domain" })
+  ).toBeVisible()
+  expect(posts(writes).map((w) => (w.body as Json).hostname)).toEqual([
+    "acme.org",
+  ])
+})
+
+test("changing the port or name after a preview previews again", async () => {
+  const writes = serve({ ports: [8080, 9090] })
+  const dialog = await openDialog()
+  const subdomain = await within(dialog).findByRole("textbox", {
+    name: "Subdomain",
+  })
+  await userEvent.type(subdomain, "shop")
+  await userEvent.click(within(dialog).getByRole("button", { name: "Preview" }))
+  await within(dialog).findByRole("button", { name: "Add domain" })
+
+  await userEvent.click(within(dialog).getByRole("combobox", { name: "Port" }))
+  await userEvent.click(await screen.findByRole("option", { name: "9090" }))
+  expect(within(dialog).queryByRole("group", { name: "DNS record" })).toBeNull()
+  await userEvent.click(within(dialog).getByRole("button", { name: "Preview" }))
+  await within(dialog).findByRole("button", { name: "Add domain" })
+
+  await userEvent.type(subdomain, "2")
+  await userEvent.click(within(dialog).getByRole("button", { name: "Preview" }))
+  await vi.waitFor(() =>
+    expect(
+      posts(writes).map((w) => [
+        w.path.split("/").at(-1),
+        (w.body as Json).hostname,
+        (w.body as Json).port,
+      ])
+    ).toEqual([
+      ["preview", "shop.acme.dev", 8080],
+      ["preview", "shop.acme.dev", 9090],
+      ["preview", "shop2.acme.dev", 9090],
+    ])
+  )
+})
+
+test("a failed apply says why and keeps the dialog open", async () => {
+  serve({
+    write: (w) =>
+      w.path.endsWith("/apply")
+        ? json(
+            operation("failed", {
+              message: "The DNS provider refused the record.",
+            })
+          )
+        : undefined,
+  })
+  const dialog = await openDialog()
+  await userEvent.type(
+    await within(dialog).findByRole("textbox", { name: "Subdomain" }),
+    "shop"
+  )
+  await userEvent.click(within(dialog).getByRole("button", { name: "Preview" }))
+  await userEvent.click(
+    await within(dialog).findByRole("button", { name: "Add domain" })
+  )
+  expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+    "The DNS provider refused the record."
+  )
+  expect(within(dialog).getByRole("button", { name: "Preview" })).toBeVisible()
+  expect(toasts.toast.success).not.toHaveBeenCalled()
+})
+
+test("a refused apply goes back to Preview", async () => {
+  const writes = serve({
+    write: (w) =>
+      w.path.endsWith("/apply")
+        ? json({ message: "This review expired. Preview it again." }, 409)
+        : undefined,
+  })
+  const dialog = await openDialog()
+  await userEvent.type(
+    await within(dialog).findByRole("textbox", { name: "Subdomain" }),
+    "shop"
+  )
+  await userEvent.click(within(dialog).getByRole("button", { name: "Preview" }))
+  await userEvent.click(
+    await within(dialog).findByRole("button", { name: "Add domain" })
+  )
+  expect(await within(dialog).findByRole("alert")).toHaveTextContent(
+    "This review expired. Preview it again."
+  )
+  await userEvent.click(within(dialog).getByRole("button", { name: "Preview" }))
+  await vi.waitFor(() =>
+    expect(posts(writes).map((w) => w.path.split("/").at(-1))).toEqual([
+      "preview",
+      "apply",
+      "preview",
+    ])
+  )
+})
+
+test("reopening the dialog starts from a fresh preview", async () => {
+  serve()
+  let dialog = await openDialog()
+  await userEvent.type(
+    await within(dialog).findByRole("textbox", { name: "Subdomain" }),
+    "shop"
+  )
+  await userEvent.click(within(dialog).getByRole("button", { name: "Preview" }))
+  await within(dialog).findByRole("button", { name: "Add domain" })
+  await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }))
+  await vi.waitFor(() =>
+    expect(screen.queryByRole("dialog", { name: "Add a domain" })).toBeNull()
+  )
+  dialog = await openDialog()
+  expect(
+    await within(dialog).findByRole("button", { name: "Preview" })
+  ).toBeVisible()
+  expect(within(dialog).queryByRole("group", { name: "DNS record" })).toBeNull()
 })

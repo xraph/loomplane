@@ -22,11 +22,15 @@ import { useInvalidate, useMutation } from "@/client/hooks"
 export type Route = CloudinfraRoute
 
 // The server's bare invalid-request text names nothing a person can fix.
+// In front of a reason it's noise, and the reason is kept as written: it
+// often starts with a hostname, which mustn't be capitalized.
 function refusal(err: unknown, fallback: string): string {
   const raw = err instanceof Error ? err.message : ""
-  return /^invalid infrastructure request\.?$/i.test(raw)
-    ? fallback
-    : messageOf(err, fallback)
+  if (/^invalid infrastructure request\.?$/i.test(raw)) return fallback
+  const reason = raw.replace(/^invalid infrastructure request:\s*/i, "")
+  if (reason !== raw && reason)
+    return /[.!?]$/.test(reason) ? reason : `${reason}.`
+  return messageOf(err, fallback)
 }
 
 export function useRouteLifecycle(projectId: string): {

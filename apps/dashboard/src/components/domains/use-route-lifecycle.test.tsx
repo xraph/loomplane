@@ -186,4 +186,12 @@ it("says what the server refused", async () => {
   expect(result.current.error).toBe(
     "Check the hostname and port, then preview again."
   )
+  // The sentinel in front of a reason is dropped, and the reason kept as written.
+  message =
+    "Invalid infrastructure request: x.a.acme.dev belongs to a.acme.dev. Pick that domain for it, or ask an admin to grant it to this project"
+  input.hostname = "x.a.acme.dev"
+  await act(() => expect(result.current.preview(input)).rejects.toThrow())
+  expect(result.current.error).toBe(
+    "x.a.acme.dev belongs to a.acme.dev. Pick that domain for it, or ask an admin to grant it to this project."
+  )
 })
