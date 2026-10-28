@@ -83,6 +83,10 @@ Pools can also grow by creating GPU Droplets themselves, inside a GPU ceiling fo
 - Each GPU pool has its own ceiling for its kind, and it can't go above the Cloud's.
 - If one server's GPUs can't be read, growth of GPU capacity pauses until a check on that server succeeds. Nothing buys another GPU on a guess.
 
+## Models
+
+With the [AI section](/docs/ai) on, you don't have to write a GPU request yourself to run an open model. The Models page lists models with where each one fits, and deploying one picks the GPU kind and count, writes the resource into your manifest and plans it. It can run on any server or cluster above that Loomplane can see GPUs on, or on a DigitalOcean GPU Droplet it creates for the model after an admin reviews the price. See [Models](/docs/ai/models) and [What models cost](/docs/ai/model-costs).
+
 ## AWS, GCP and Azure
 
 GPU nodes on EKS, GKE and AKS clusters are recognized by their instance type and priced from reference prices, which are estimates. Loomplane doesn't create GPU virtual machines on these clouds yet. You bring the cluster and Loomplane places work on it, using the Kubernetes rules above.
@@ -104,7 +108,7 @@ services:
       gpu: { kind: nvidia-l4, count: 1 }
 ```
 
-Catalog resources take the same `gpu` field under `resources.<name>`, with `kind` and `count`, and only NVIDIA kinds. No catalog kind uses it yet. GPU catalog kinds arrive with the model registry, so there's no example to copy for now.
+Catalog resources take the same `gpu` field under `resources.<name>`, with `kind` and `count`, and only NVIDIA kinds. The model kinds (`model-vllm` and `model-llamacpp-gpu`) are the ones that use it today. [Models](/docs/ai/models#what-a-deploy-writes) shows what a model resource looks like.
 
 `count` runs from 1 to 8. `kind` is one of these IDs:
 

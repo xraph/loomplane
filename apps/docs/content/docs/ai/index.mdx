@@ -1,0 +1,39 @@
+---
+title: AI overview
+description: What the AI section does today, who can see it, and how to turn it on for your Loomplane server.
+---
+
+The AI section runs open models on your own servers and clusters. You pick a model from Loomplane's registry, or paste any Hugging Face repo, choose a GPU or a server, and Loomplane adds the model to your project's manifest and plans it like any other workload. Services in the same environment link to it and get two variables, `MODEL_URL` and `MODEL_API_KEY`, which they use to call it.
+
+Everything runs on infrastructure you connected. Loomplane's control plane never hosts a model, and your services' requests to one never pass through Loomplane.
+
+## Turn it on
+
+The section is off until an operator turns it on for the server. Set this and restart Loomplane:
+
+```bash
+export LOOMPLANE_AI_ENABLED=true
+```
+
+An **AI** group then shows in the sidebar for everyone with `ai:read`, which is every role from Viewer up. It holds two pages:
+
+- **Models**, where you browse the registry, deploy a model and see what each deployed model costs. See [Models](/docs/ai/models) and [What models cost](/docs/ai/model-costs).
+- **Settings**, which holds the workspace's Hugging Face token for gated models. See [AI settings](/docs/ai/settings).
+
+[AI settings](/docs/ai/settings#turning-ai-off) also covers what happens to running models if you turn the section off again.
+
+## Who can do what
+
+| Permission | Held by | What it allows here |
+|---|---|---|
+| `ai:read` | Viewer and up | See the AI pages, the registry, deployed models and their costs |
+| `ai:edit` | Developer and up | Deploy, move, retry and remove models in environments that aren't production, and set their budget and price |
+| `ai:manage` | Admin and up | All of that in production too, and the Hugging Face token |
+
+Creating a DigitalOcean GPU server for a model is a separate thing. It needs `organization_cloud:manage`, which admins hold, because the server bills from the moment it exists. And a model deploy makes a plan, so someone with `deployment:approve` still approves it before anything runs.
+
+## What isn't here yet
+
+A gateway that serves several models behind one address, and agents that use them, are planned for later. Until the gateway exists, a model runs in the one environment you deploy it to, and only services in that environment link to it. If staging and production both need a model, deploy it to each, and each copy holds its own GPU.
+
+The [MCP server](/docs/agents/mcp-server) under AI agents is a different thing: it lets a coding agent such as Claude Code drive Loomplane. It works whether or not the AI section is on.

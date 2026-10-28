@@ -107,6 +107,13 @@ These have no variable wired in `config.yaml`. Set them in `config.local.yaml`.
 
 `providers.paused` also accepts a YAML list, in place of the variable.
 
+## AI
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `LOOMPLANE_AI_ENABLED` | `false` | Turns on the [AI section](/docs/ai) (`ai.enabled`): the Models and AI settings pages, their API and the model kinds. Off, a plan with a model resource gets a `catalog-feature-off` problem, and models already running keep running |
+| `LOOMPLANE_AI_MODELS_HUGGINGFACE_URL` | `https://huggingface.co` | The Hugging Face Hub, or a mirror of it, that Loomplane reads repos, model cards and gated checks from (`ai.models.huggingface_url`). The workspace's Hugging Face token is sent there, so it must be https, with plain http allowed only for `localhost` or a loopback address. A user, query or fragment stops startup. Engines still download weights from `huggingface.co` |
+
 ## Process and container
 
 | Variable | Meaning |

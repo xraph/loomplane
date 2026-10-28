@@ -1,0 +1,65 @@
+---
+title: AI settings
+description: Turn the AI section on, add the Hugging Face token gated models download with, and point Loomplane at a Hugging Face mirror.
+---
+
+The AI section has two kinds of settings. The server's live in `config.yaml` and the environment, and an operator sets them. The workspace's live on the **AI settings** page, and a workspace admin sets them.
+
+## Turning AI on
+
+```bash
+export LOOMPLANE_AI_ENABLED=true
+```
+
+or, in `config.local.yaml`:
+
+```yaml
+ai:
+  enabled: true
+```
+
+Restart Loomplane afterwards. It's off by default. With it off, the sidebar has no AI group, the `/api/v1/ai/...` routes don't exist, and the model kinds can't be planned.
+
+### Turning AI off
+
+Turning it off stops nothing. Models you deployed keep running on their servers and keep costing what they cost, since nothing in Loomplane stops a workload on its own. What changes is planning: any plan of an environment whose manifest still has a model resource gets a `catalog-feature-off` problem, which blocks it, until you turn AI back on or take the model out of `loomplane.yaml`. Remove your models from the Models page first if you mean to switch the section off for good.
+
+## The Hugging Face token
+
+Some models are gated on Hugging Face: you accept their license there before you can download them. Loomplane downloads gated weights with one token per workspace, which you add under **AI**, then **Settings**.
+
+1. On Hugging Face, accept the model's license with the account you'll use.
+2. Create a token with read access at `huggingface.co/settings/tokens`.
+3. Paste it into **Token** and choose **Save**.
+
+Loomplane checks the token with Hugging Face before it saves it, so a token Hugging Face refuses is refused here too ("Hugging Face didn't accept this token."). A token has to start with `hf_`.
+
+Once saved, the token is write-only. The page shows its last four characters, the Hugging Face account it belongs to and when it was set, and never the token itself, not even to the admin who saved it. Saving a new one replaces it.
+
+Public models deploy without a token. A gated model without one can't be deployed: the deploy dialog says so and links here, or tells you to ask an admin.
+
+Only workspace admins (`ai:manage`) can change the token. Everyone else with `ai:read` sees the same summary and a note saying who can.
+
+### Removing it
+
+**Remove token** deletes it. Loomplane refuses while a deployed gated model still downloads with it, and names each one, such as "llama-8b in shop/production". Remove those models first, or add a new token instead, which replaces the old one in place.
+
+A new token changes what a gated model's engine starts with, so the next plan of its environment shows an update for it. Approve that plan to restart the engine with the new token.
+
+### Where it goes
+
+The token is kept in Vault, never in the database. Loomplane itself sends it only to the Hugging Face host in `ai.models.huggingface_url`, to check whose it is and to read gated or private repos. When a gated model deploys, the token goes into a file only that model's engine can read, and the engine sends it to `huggingface.co` to download the weights. It never appears in a plan, a log, an error or the audit log. [The security model](/docs/operations/security-model#models) has the details.
+
+## A Hugging Face mirror
+
+`ai.models.huggingface_url` (`LOOMPLANE_AI_MODELS_HUGGINGFACE_URL`) is where Loomplane reads Hugging Face: a pasted repo's metadata and `config.json`, model cards, and the gated checks. It defaults to `https://huggingface.co`.
+
+```yaml
+ai:
+  models:
+    huggingface_url: https://hf-mirror.example.com
+```
+
+It has to be https, because the workspace's token is sent there. Plain http works only for `localhost` or a loopback address. A URL with a user, a query or a fragment stops Loomplane at startup.
+
+The mirror covers what Loomplane reads. Engines still download weights from `huggingface.co`, so the servers that run your models need to reach it.

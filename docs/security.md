@@ -30,6 +30,8 @@ An API key acts as the member who made it, with their role, in their organizatio
 | Passwords | authsome, as bcrypt hashes | Nobody |
 | SMTP credentials | Herald, encrypted with a purpose-specific key derived from `secret_key` | Delivery engine only |
 | Webhook signing secrets | Relay store wrapper, encrypted with a separate derived key | Signer; one-time response on create or rotation |
+| The Hugging Face token | Vault, under the `loomplane-ai-credentials` app, encrypted with a key of its own derived from `secret_key` | Loomplane, to call Hugging Face, and a gated model's engine, through a file only it reads |
+| Model API keys | Vault, like the database passwords Loomplane generates | Deployments, to hand to the model's guard, its engine and the services that link to it |
 
 Read APIs never return stored credential values. New API keys and webhook signing secrets appear once when you create or rotate them; the audit trail records keys, names and the last four characters of an API key, never a value. Secrets reach a service through the cloud's own secret store: Secret Manager on Cloud Run, Secrets Manager on ECS, sensitive variables on Vercel, readable by that service's runtime identity only. They never pass through Ctrl Plane, which stores what it's given as plain JSON.
 
@@ -58,6 +60,31 @@ The Role covers every Service and endpoint in the namespace, though, not just th
 On a Docker server Octopus watches nothing. Loomplane registers each opted-in service with it over the private admin port, with the FARP token Octopus requires for every registration.
 
 Octopus's credentials are the four secrets Loomplane generates for it: the admin password, the admin session secret, the admin API token and the FARP token. They live in Vault, reach Octopus as secrets, and never appear in its config file, which names the FARP token only by placeholder, or in the Routes, Domains, Discovery or Settings tabs. Its admin port is never routed publicly, and every domain route to it refuses `/__farp`, `/_farp` and `/admin`.
+
+## Models
+
+With the AI section on (`ai.enabled`), Loomplane deploys open models onto your servers and clusters. Each one runs as two containers: an inference engine and a guard in front of it.
+
+The engine listens only on the environment's private network, and its port is never routed. The guard is a Caddy server, and its port is the only one that can be. It answers `/health` to anyone, so probes need no key, and refuses every other request with a 401 unless it carries `Authorization: Bearer <key>` with the model's key. Its admin API is off and its config has no log directive, so nothing writes a request's `Authorization` header anywhere. The config holds no secret: Caddy reads the key and the engine's address from its environment.
+
+The key is generated per model: 32 random bytes, base64url, with an `lpm_` prefix. It lives in Vault like a generated database password. Services that link to the model get it as `MODEL_API_KEY`, the guard reads it as `LOOMPLANE_MODEL_KEY`, and vLLM and llama.cpp get it as `VLLM_API_KEY` and `LLAMA_API_KEY`, so they refuse a request without it even from inside the network. The Text Embeddings Inference engine isn't given the key, so for those models the guard is the only check. No API response, page or log shows the key.
+
+### The Hugging Face token
+
+Gated weights download with one Hugging Face token per workspace, which is write-only:
+
+- Only admins (`ai:manage`) can set or remove it. Saving checks it with Hugging Face first, and a token that isn't `hf_` followed by printable characters is refused before anything is sent.
+- The value goes to Vault, under the Vault app `loomplane-ai-credentials` at `<org id>/huggingface-token`, encrypted with a key derived from `secret_key` under the label `loomplane/vault ai credentials v1`, which no other Vault app shares. The database keeps only `hf_…` with the last four characters, the account it belongs to, when it was set and a revision number.
+- It never appears in an API response, a plan, a log line, an error or the audit trail. The audit records the account and the revision. Errors that might quote it have it taken out, and wrap nothing that holds it.
+- Removing it is refused while a deployed gated model still downloads with it. The check and the deploy of a gated model hold the same lock, so neither slips past the other.
+
+Loomplane sends the token only to the Hugging Face host in `ai.models.huggingface_url`, which has to be https unless it's a loopback address. A redirect off that host is refused, except a file download to Hugging Face's own CDNs (`cdn-lfs*.huggingface.co`, `cas-bridge.xethub.hf.co`), which goes without the token. A pasted repo is read anonymously first, and with the token only when it's gated or private.
+
+When a gated model deploys, the token goes into the engine's `/etc/loomplane/hf/token`, mode 0400, and nowhere else: never an argument, never a variable a plan records. On a server the file is written into the container before it starts. On Kubernetes it comes from the workload's runtime Secret. The engine's start script exports it as `HF_TOKEN` to the engine's own process, and the engine downloads the weights from `huggingface.co`. A model whose weights aren't gated gets an empty file. Plans record the token's revision, never the token, so a new token plans an update of each gated model. Anyone with Docker access to that server, or who can read Secrets in that namespace, can read the file.
+
+### Repository code
+
+A model pasted from Hugging Face never runs its repository's own Python: one whose `config.json` needs it (`auto_map`) is refused. A registry entry can set `trust_remote_code`, but only after that code was reviewed at the commit the entry pins, and nothing in a manifest can turn it on, since model settings take no engine arguments.
 
 ## What runs where
 

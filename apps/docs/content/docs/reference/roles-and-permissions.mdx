@@ -24,12 +24,14 @@ An X means the role holds it.
 |---|---|---|---|---|
 | `project:read`, `environment:read`, `deployment:read`, `infrastructure:read`, `cloud_account:read`, `member:read`, `variable:read` | X | X | X | X |
 | `destination:read`, `network:read`, `service_backup:read` | X | X | X | X |
+| `ai:read` | X | X | X | X |
 | `project:create`, `project:update` | | X | X | X |
 | `environment:manage` | | X | X | X |
 | `deployment:create` (request a plan) | | X | X | X |
 | `analysis:run` | | X | X | X |
 | `variable:manage` (project and service variables) | | X | X | X |
 | `access_grant:propose` | | X | X | X |
+| `ai:edit`, `ai:tool_secret`, `ai:publish_nonproduction` | | X | X | X |
 | `deployment:approve` | | | X | X |
 | `project:delete` | | | X | X |
 | `infrastructure:modify` | | | X | X |
@@ -40,11 +42,14 @@ An X means the role holds it.
 | `repository:connect` (GitHub installations) | | | X | X |
 | `organization_variable:manage` | | | X | X |
 | `service_backup:manage`, `service_restore:manage` | | | X | X |
+| `ai:manage` | | | X | X |
 | `destination:manage`, `network:manage`, `service_export:manage`, `access_grant:approve`, `access_grant:revoke`, `federation_trust:manage` | | | X | X |
 | `organization:administer` | | | | X |
 | `service_backup:retire` | | | | X |
 
 The `destination`, `network`, `service_export`, `access_grant` and `federation_trust` permissions belong to federation, which isn't ready for production.
+
+The `ai` permissions belong to the [AI section](/docs/ai). Today `ai:read` lets you see its pages and the models deployed in your projects, `ai:edit` lets you deploy and change models outside production, and `ai:manage` does that in production and sets the workspace's Hugging Face token. `ai:tool_secret` and `ai:publish_nonproduction` are held already and guard nothing yet.
 
 A secret variable's value isn't readable by anyone, whatever their role.
 

@@ -1,0 +1,255 @@
+---
+title: Models
+description: Browse the model registry, deploy a model in one click on a GPU or a server you have, link services to it, and move or remove it later.
+---
+
+import { Step, Steps } from 'fumadocs-ui/components/steps';
+
+Open **AI**, then **Models**. The **Registry** tab lists the open models Loomplane knows how to serve, and the **Deployed** tab lists the ones running in your projects, with what each costs per hour and this month.
+
+A model you deploy runs in one environment of one project, on a server or cluster you connected, or on a DigitalOcean GPU server Loomplane creates for it. Services in that environment link to it and call it with `MODEL_URL` and `MODEL_API_KEY`.
+
+## The registry
+
+Each card shows the model's publisher, its size in parameters, its context window, its license, what it does (chat, reasoning, code, vision, embeddings, reranking or speech to text) and what it needs to run, such as "Needs 22 GB GPU, or runs on CPU". A badge says how sure Loomplane is that it runs, which the next section explains.
+
+Search by name, or narrow the list:
+
+- **Task**, **Size** (under 4B up to over 100B parameters) and **License**.
+- **Commercial use only** keeps models whose license Loomplane knows and that allow commercial use. A license it doesn't know never counts.
+- **Fits my GPUs** keeps models that fit a GPU or a server your workspace has, or a GPU server it can create. If Loomplane can't read your targets, it says "Couldn't check your GPUs." and shows everything.
+- **Tested only** keeps models a qualification run served.
+
+Open a card for the model's page. It lists each quantization (the weights Loomplane can serve, each pinned to a Hugging Face commit), where each one fits, the license, and the model card from Hugging Face. **Deploy** is there and on the card.
+
+Every entry and every quantization is pinned to a 40-character commit SHA, never to `main`, so the weights you deploy today are the weights you deploy next month.
+
+## Tested, estimated, failed and untested
+
+Every model, and every GPU it might run on, carries one of these:
+
+| Badge | What it means |
+|---|---|
+| **Tested on** a GPU | Loomplane's qualification job deployed this quantization on that GPU kind, with the engine version Loomplane ships, and served real requests from it |
+| **Estimated** | The memory math says it fits. Nobody has run it there |
+| **Failed on** a GPU | A qualification run on that GPU failed. Loomplane won't offer it there, whatever the math says |
+| **Untested** | You pasted it from Hugging Face. No qualification run will ever check it |
+| **Doesn't fit** | The memory math says it won't fit, with the reason |
+
+An estimate never reads as tested. A test counts only for the GPU kind it ran on, the engine version Loomplane ships today and the weights revision the registry pins. When Loomplane moves to a new engine release, or the registry re-pins a model's weights, its fits go back to **Estimated** until a run proves them again. A passed run at a shorter context than Loomplane would serve proves nothing about the longer one, so that doesn't count either.
+
+### How models get tested
+
+The qualification job runs in Loomplane's own CI, in a DigitalOcean account kept for it alone, never in your workspace or with your credentials. Once a week it creates one GPU Droplet (the GPU kind rotates through the RTX 4000 Ada, the L40S and the H100), starts a sample of registry models on it with the engines Loomplane ships, and calls each one the way your service would: a streamed chat completion, an embedding of the right length, a rerank, a transcription. Then it deletes the Droplet. Each result records the GPU, the GPU count, the context, the engine version and what it measured, or why it failed, and the results ship in the next Loomplane release. Results older than 30 days are run again.
+
+Until a run covers a model, it reads **Estimated**, which is what the memory math alone can promise.
+
+### How fit is estimated
+
+For vLLM, the memory one GPU needs is:
+
+- the weights, divided by the number of GPUs,
+- plus the KV cache for the context, at 2 bytes a value, split across GPUs only as far as the model's KV heads allow,
+- plus overhead: 1.5 GiB (1 GiB for embedding and rerank models), 8% of that GPU's share of the weights, and another 1 GiB for vision and speech models' encoders.
+
+That has to fit in 90% of the GPU's memory, since vLLM gets `--gpu-memory-utilization 0.90`. Loomplane tries 1, 2, 4 and then 8 GPUs and takes the smallest count that fits. It serves the longest context that fits, rounded down to a multiple of 1024, at least 4096 tokens (or the model's own limit if that's shorter) and at most 32,768. Embedding and rerank models keep no KV cache and serve up to 8,192 tokens.
+
+Here's an 8B model with 16 GiB of bf16 weights, 32 layers, 8 KV heads and a head size of 128. Each token of context takes 128 KiB of KV cache. On an NVIDIA L4 (24 GiB, so 21.6 GiB usable) the overhead is 2.78 GiB, and at 4,096 tokens the model needs 16 + 0.5 + 2.78 = 19.28 GiB. It fits. The room left over holds 23,101 tokens, so Loomplane serves 22,528. On an RTX 4000 Ada (20 GiB, 18 GiB usable) it doesn't fit on one GPU. Its card says "Needs 22 GB GPU", which is 19.28 divided by 0.9, rounded up.
+
+The GPU also has to be new enough. vLLM needs CUDA compute capability 7.5, which rules out the V100, and `fp8` and `mxfp4` weights need 8.0, which rules out the T4 as well. llama.cpp runs on 6.1 and up. A GPU kind Loomplane has no compute capability for never fits.
+
+On CPU, a model needs 1.1 times its weights, plus its KV cache, plus 0.5 GiB. That has to fit in 3.5 GiB for Text Embeddings Inference and 7 GiB for llama.cpp, which leaves the operating system room in the 4,096 MB and 8,192 MB those containers reserve. llama.cpp on CPU serves 8,192 tokens.
+
+## The engines
+
+Loomplane runs each model with one of three inference servers, picked by the quantization:
+
+| Engine | Runs on | Serves | Manifest kind |
+|---|---|---|---|
+| vLLM 0.31 | NVIDIA GPU | Chat, reasoning, code, vision, embeddings and speech to text, from safetensors | `model-vllm` |
+| Text Embeddings Inference 1.9 | CPU | Embedding and rerank models | `model-tei` |
+| llama.cpp b11580 | CPU or NVIDIA GPU | Models as a single GGUF file (`Q8_0`, `MXFP4` or `Q4_K_M`) | `model-llamacpp`, `model-llamacpp-gpu` |
+
+A model that has both kinds of quantization gives you a **GPU** and **CPU** switch in the deploy dialog. Images are pinned by digest. The GPU images are amd64 only, so a GPU model can't run on an Arm server.
+
+## Deploy a model
+
+<Steps>
+<Step>
+
+Choose **Deploy** on a card or a model's page.
+
+</Step>
+<Step>
+
+Under **Where**, pick the project and the environment. The dialog says "Runs in staging. Services in staging can link to it." The project needs a saved manifest first.
+
+</Step>
+<Step>
+
+Pick where it runs. For a GPU model the list shows your connected servers and clusters with GPUs, how many are free (or how many a cluster has per node) and what they cost, and, when the environment's Cloud has a DigitalOcean account, GPU server sizes Loomplane can create, marked **New server**. A target the model doesn't fit says why and can't be picked. For a CPU model, pick a ready server or cluster.
+
+</Step>
+<Step>
+
+Pick a quantization, or leave it and Loomplane takes the first that fits. Set **Context in tokens**, or leave it for the most that fits, up to 32,768. **Budget alert** is optional; see [What models cost](/docs/ai/model-costs).
+
+</Step>
+<Step>
+
+Read the summary at the bottom: what it costs per hour and roughly per month, and anything that stops the deploy. Then choose **Plan it**.
+
+</Step>
+</Steps>
+
+Nothing runs before that. **Plan it** adds the model to the project's `loomplane.yaml` and plans the environment, and the plan waits for approval like any other. Once it's approved, the engine downloads the weights and loads them, which for a big model takes a while. Loomplane waits up to two hours for vLLM, an hour for llama.cpp and 30 minutes for Text Embeddings Inference before it calls a start failed.
+
+You need `ai:edit` to deploy to an environment that isn't production, and `ai:manage` for production. The dialog tells you when you can't.
+
+A model already running in that environment is refused ("llm already runs Qwen2.5 7B Instruct in staging."). The same model in another environment of the project gets its own resource, named after the model, or after the model and the environment when that name is taken.
+
+### On a new GPU server
+
+When you pick a **New server**, Loomplane creates a DigitalOcean GPU Droplet for the model first. The Droplet bills from the moment it exists, so creating it is a step of its own:
+
+1. **Review server** asks DigitalOcean for the size's price and shows the server Loomplane would create, named after the project and the model, such as `shop-qwen2-5-7b-instruct-gpu`, in its region and at its hourly price. Nothing is created yet.
+2. **Create the server and plan it** approves that server. The review is good for five minutes, so a stale one asks you to review again.
+
+Only admins can review and create GPU servers (`organization_cloud:manage`). Anyone else sees "An admin creates GPU servers. Ask one to deploy this, or pick a server you have." The DigitalOcean account has to be in the environment's Cloud, too.
+
+The model then shows **Waiting for a server**. Once the server is up and has passed its GPU checks, Loomplane adds the model to the manifest and makes the plan. The server bills from the moment it's created until you delete it in **Infrastructure**, whether the model gets traffic or not, and whether the model is still there or not.
+
+The Cloud's capacity policy applies to these servers like any other. When it holds a server back for now (an approval still to come, capacity still to grow, a count that's out of date) the model keeps waiting and says why, with a link to the Cloud's **Capacity** tab for admins. When it refuses (no ceiling for that GPU kind, a ceiling that would be passed, a provider quota with no room) the deploy is refused with the reason. **Cancel** on a waiting model stops the wait. If the server was already approved, it says so, and you delete the server in **Infrastructure**.
+
+## What a deploy writes
+
+A deploy is one edit to `loomplane.yaml`. You can read it, and you could have written it yourself:
+
+```yaml
+resources:
+  qwen2-5-7b-instruct:
+    kind: model-vllm
+    version: "0.31"
+    provider: server
+    target: conn_01jabc...
+    gpu: { kind: nvidia-l4, count: 1 }
+    settings:
+      entry: Qwen/Qwen2.5-7B-Instruct
+      model: Qwen/Qwen2.5-7B-Instruct
+      revision: a09a35458c702b33eeacc393d103063234e8bc28
+      quantization: bf16
+      served_name: Qwen/Qwen2.5-7B-Instruct
+      max_model_len: "32768"
+      cache_mb: "20480"
+    environments:
+      staging:
+        enabled: true
+```
+
+Model kinds run only in the environments where they're enabled, which is how a model stays in one environment. The settings must match the registry's pin for the entry: a `model`, `revision` or GGUF `file` that differs from it is refused. `cache_mb` sizes a GPU model's weight cache on Kubernetes, 20,480 MB by default.
+
+A model you add to the manifest by hand shows on the Models page too, with its state and its hourly price. Loomplane keeps no budget or price override for it, and it isn't counted in the month's spend.
+
+## Link a service
+
+On the model's page, under **Linked services**, choose **Link a service** and pick one. That adds the model to the service's `needs`, which you can also write yourself:
+
+```yaml
+services:
+  api:
+    needs: [qwen2-5-7b-instruct]
+```
+
+On its next release in that environment the service gets two variables:
+
+- `MODEL_URL`, the model's address on the environment's private network.
+- `MODEL_API_KEY`, the key the model's guard checks. Loomplane generates it and never shows it.
+
+The service has to run on the same server or cluster as the model. **Linked services** says **Reachable** when it does, and when it doesn't, why: "api runs on edge-1, and qwen2-5-7b-instruct runs on gpu-1. Run them on the same server or cluster."
+
+Chat models speak the OpenAI API, so the `openai` package works with `MODEL_URL` plus `/v1`:
+
+```python
+import os
+from openai import OpenAI
+
+client = OpenAI(
+    base_url=os.environ["MODEL_URL"] + "/v1",
+    api_key=os.environ["MODEL_API_KEY"],
+)
+
+reply = client.chat.completions.create(
+    model="Qwen/Qwen2.5-7B-Instruct",
+    messages=[{"role": "user", "content": "Say hello."}],
+)
+print(reply.choices[0].message.content)
+```
+
+The `model` field is the name the model is served as, its Hugging Face repo unless `served_name` says otherwise. The model page's **Example** tab has curl, Python and JavaScript for the model's own tasks: embeddings at `/v1/embeddings` (with the query prefix the model wants, such as `"query: "`, when the registry knows it), reranking at `POST $MODEL_URL/rerank`, and transcription at `POST $MODEL_URL/v1/audio/transcriptions`.
+
+A service that needs the model in an environment where it doesn't run gets a `need-off` warning on that environment's plans, saying it gets no `MODEL_URL` there because the model doesn't run there. The warning doesn't block those deploys. It suggests enabling the model in that environment, which would run a second copy on the same target. To pick where production's copy runs, deploy the model to production from the Models page.
+
+## Any Hugging Face model
+
+Above the registry, **Any Hugging Face model** takes a repo (`owner/name`) or its page's address. **Check** reads the repo at its current commit, works out what it needs from its `config.json` and its weights, and shows it as a card marked **Untested**, which you deploy like any other. It's kept for your workspace for an hour, and stored once you deploy it. You need `ai:edit` to use it.
+
+Loomplane reads the repo anonymously, and uses the workspace's Hugging Face token only for a gated or private one. Paste a token in this box by mistake and it's caught before it's sent anywhere.
+
+What it can serve:
+
+- single-file GGUF weights ending in `Q8_0`, `MXFP4` or `Q4_K_M`, with llama.cpp,
+- safetensors (or `pytorch_model` `.bin`) weights of an architecture the pinned vLLM knows,
+- embedding and rerank models Text Embeddings Inference knows, with weights under 1.5 GiB, on CPU.
+
+What it refuses, with the reason:
+
+- a model whose `config.json` points at Python in its own repo (`auto_map`). Loomplane never runs repository code for a pasted model ("needs code from its repository to run, and Loomplane doesn't run repository code for pasted models"). A registry entry can, but only after that code was reviewed at the commit the entry pins.
+- a task Loomplane doesn't serve, or a repo that doesn't say on Hugging Face what it does.
+- an architecture no shipped engine knows, or a `config.json` that doesn't give the layer count, heads or context length the memory math needs.
+- a GGUF split into parts, which llama.cpp can't download.
+
+On Kubernetes, a llama.cpp model on CPU also needs its weights to fit the 20,480 MB volume the CPU kinds get there.
+
+## Gated models
+
+A gated model needs the workspace's Hugging Face token, from an account that has accepted the model's license. Without one, the deploy dialog says the model is gated and links to [AI settings](/docs/ai/settings#the-hugging-face-token). With one, it says "Gated on Hugging Face. The workspace's token can download it." If the account never accepted the license, the engine's download fails, and the model page tells you which license to accept, then **Retry**.
+
+## The model page
+
+Open a row on the **Deployed** tab. The header says the model's state:
+
+| State | What's happening |
+|---|---|
+| **Planned** | The plan that deploys it waits for approval |
+| **Waiting for a server** | Its GPU server is being created, or held back by the capacity policy, with the reason |
+| **Deploying** | Downloading and loading weights |
+| **Ready** | Serving. The page shows the address linked services reach it at |
+| **Failed** | It didn't start. The page says why and what to try |
+| **Update failed** | A change didn't start, and the version deployed before is still running, so linked services keep working |
+| **Needs attention** | Its GPU server failed or took too long. Fix or retry the server in **Infrastructure**, then **Retry** here |
+
+**Retry** plans the environment again for a model that failed to start, from the manifest as it is. For a model whose server needs attention, it waits for the same server again: Loomplane never creates a second one.
+
+When the engine runs out of GPU memory, the page says so ("The model didn't fit in GPU memory at 22528 tokens. Try a shorter context or a smaller quantization.") and offers **Move it with a shorter context**.
+
+The **Overview** tab also shows where it runs, its engine and version, its quantization, its context, its badge on the GPU it runs on, its [cost](/docs/ai/model-costs) and its linked services.
+
+### Update available
+
+When a Loomplane release pins new weights for a model's registry entry, its page shows **Update available** with what changed. **Move to** the new pin plans the change. The model keeps serving the weights it has until you approve the plan and the new ones are loaded. Planning the model's environment without moving it fails with a sentence that says to do this first, so the change never happens silently.
+
+### Move it
+
+**Settings**, then **Move**, runs the model on another GPU, server or cluster, or with another quantization or context. It's the deploy dialog again, new GPU server and review included. The model keeps its name, so linked services keep their `MODEL_URL`, and it keeps running where it is until the move is deployed. While a move waits for a new GPU server, the page shows what that server costs, since both bill once it's up. A server Loomplane created for the model's old place keeps billing after the move until you delete it in **Infrastructure**, and the page says so.
+
+### Remove it
+
+**Settings**, then **Remove**, takes the model out of the manifest and plans its environment. It's refused while a service links to it ("checkout in staging links to it. Unlink it first."). The downloaded weights stay on the server as retained storage, so deploying the model there again doesn't download them again. Delete them from the server's storage when you no longer need them. If Loomplane created the GPU server for this model, the server isn't removed with it, and keeps costing money until you delete it in **Infrastructure**.
+
+Move, remove, retry and cancel need the same permission as deploying: `ai:edit`, or `ai:manage` in production. Linking a service is a manifest edit, so it needs `project:update`.
+
+## On a Docker server
+
+`docker ps` shows a llama.cpp engine as `unhealthy`. Its image's own health check looks at a port the engine doesn't listen on. Loomplane checks the engine's `/health` itself, so ignore it.
+
+Each model is two containers: the engine and a guard in front of it. Only the guard's port is ever routed, and it refuses any request without `Authorization: Bearer $MODEL_API_KEY`, except `/health`. See [GPUs](/docs/clouds/gpus) for what a server or cluster needs before it can run GPU work at all.

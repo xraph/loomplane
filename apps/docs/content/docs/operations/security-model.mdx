@@ -25,6 +25,8 @@ An API key acts as the member who made it, with their role, and never more. A re
 | SMTP credentials | Herald, encrypted with a purpose-specific key derived from `secret_key` | The delivery engine only |
 | Webhook signing secrets | Relay store wrapper, encrypted with a separate derived key | The signer. One-time response on create or rotation |
 | Keyless signing keys | Vault, under an app of their own, encrypted with a key derived from `secret_key` | The issuer, to sign tokens. Only the public halves are published |
+| The Hugging Face token | Vault, under `loomplane-ai-credentials`, encrypted with a key of its own derived from `secret_key` | Loomplane, to call Hugging Face, and the engine of a gated model, through a file only it reads |
+| Model API keys | Vault, like generated database passwords | Deployments, to hand to the model's guard, its engine and the services that link to it |
 
 Read APIs never return stored credential values. New API keys and webhook signing secrets appear once, when you create or rotate them. The audit trail records key names and the last four characters of an API key, never a value.
 
@@ -39,6 +41,18 @@ For a [keyless connection](/docs/clouds/keyless), Loomplane is an OpenID Connect
 The keys are 2048-bit RSA and sign with RS256. A new one is made every 30 days and published a day before it signs, and the old one stays published for a day after it retires, so a cloud's cached copy always has the key in use. The private halves stay in Vault. Discovery and the JWKS at `/.well-known/` carry public keys only and need no session.
 
 A token lasts 10 minutes and names one connection in its subject, `org:{organization ID}:connection:{connection ID}`, which the cloud's trust has to match exactly. Loomplane signs only when it's handed a ticket the issuer made for that subject and audience, and a credential you paste that's shaped like a keyless handout is refused before it gets that far. Neither a token nor a ticket ever reaches an API response, a log or the audit trail.
+
+## Models
+
+Each model Loomplane deploys runs as two containers: an inference engine and a guard in front of it. The engine listens only on the environment's private network, and its port is never routed. The guard is a Caddy server whose port is the only one that can be. It answers `/health` to anyone, so probes need no key, and refuses every other request with a 401 unless it carries `Authorization: Bearer` and the model's key. Its admin API is off and it has no log directive, so nothing writes a request's `Authorization` header anywhere.
+
+The key is 32 random bytes, base64url, starting `lpm_`, generated per model. Linked services get it as `MODEL_API_KEY`, the guard reads it from its environment, and vLLM and llama.cpp get it too, so they refuse a request without it even from inside the network. The Text Embeddings Inference engine isn't given the key, so for those models the guard is the only check. No API response, page or log shows the key.
+
+The workspace's Hugging Face token is write-only. Saving it checks it with Hugging Face first. Its value goes to Vault, under the `loomplane-ai-credentials` app with a key label (`loomplane/vault ai credentials v1`) no other Vault app shares, and the database keeps only `hf_…` with its last four characters, the account it belongs to and when it was set. It never appears in an API response, a plan, a log, an error or the audit trail, which records the account and the token's revision. Only admins (`ai:manage`) can set or remove it, and removing it is refused while a deployed gated model still downloads with it.
+
+Loomplane sends the token only to the Hugging Face host in `ai.models.huggingface_url`, which must be https unless it's a loopback address. Every redirect off that host is refused, except a file download to Hugging Face's own CDNs, which goes without the token. A pasted repo is read anonymously first. When a gated model deploys, the token goes into the engine's `/etc/loomplane/hf/token` (mode 0400) and nowhere else: not an argument, not a variable a plan records. The engine exports it as `HF_TOKEN` to its own process and downloads from `huggingface.co`. A plan records only the token's revision, so a new token shows as an update. Anyone with Docker access to that server, or who can read Secrets in that namespace on Kubernetes, can read the file.
+
+Models pasted from Hugging Face never run their repository's own code. A registry entry may, but only code reviewed at the commit the entry pins, and nothing a manifest sets can turn it on.
 
 ## What runs where
 
