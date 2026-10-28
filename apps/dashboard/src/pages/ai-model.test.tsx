@@ -1073,7 +1073,7 @@ it("says a pin move changes only this environment", async () => {
   await openModel(prodPage)
   const banner = screen.getByRole("region", { name: "Update available" })
   expect(banner).toHaveTextContent(
-    "Moves production only. staging keeps its weights until you move it from its own page."
+    "Moves production only. Each environment moves from its own page."
   )
   expect(
     within(banner).getByRole("button", {

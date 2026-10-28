@@ -44,7 +44,6 @@ import {
   dollars,
   engineName,
   engineOfKind,
-  listOf,
   modelState,
   monthLabel,
   shortPin,
@@ -313,10 +312,9 @@ function UpdateAvailable({
   const pin = status.pin ? shortPin(status.pin) : "the new pin"
   const here = status.environments[0]?.environment || "its environment"
   // Each environment moves to the new pin from its own page.
-  const others = status.environments.slice(1).map((e) => e.environment)
   const alone =
-    others.length > 0
-      ? `Moves ${here} only. ${listOf(others)} ${others.length > 1 ? "keep their" : "keeps its"} weights until you move ${others.length > 1 ? "them from their" : "it from its"} own page.`
+    status.environments.length > 1
+      ? `Moves ${here} only. Each environment moves from its own page.`
       : undefined
 
   const once = useOnce()
