@@ -38,6 +38,7 @@ import { Route as ProjectsIdRouteImport } from "./routes/projects.$id"
 import { Route as ServicesIndexRouteImport } from "./routes/services.index"
 import { Route as ServicesKindRouteImport } from "./routes/services.$kind"
 import { Route as AiModelsIndexRouteImport } from "./routes/ai.models.index"
+import { Route as AiModelsSplatRouteImport } from "./routes/ai.models.$"
 import { Route as CloudsAccountsIdRouteImport } from "./routes/clouds.accounts.$id"
 import { Route as IntegrationsGithubSetupRouteImport } from "./routes/integrations.github.setup"
 import { Route as IntegrationsOauthCallbackRouteImport } from "./routes/integrations.oauth.callback"
@@ -189,6 +190,11 @@ const AiModelsIndexRoute = AiModelsIndexRouteImport.update({
   path: "/ai/models/",
   getParentRoute: () => rootRouteImport,
 } as any)
+const AiModelsSplatRoute = AiModelsSplatRouteImport.update({
+  id: "/ai/models/$",
+  path: "/ai/models/$",
+  getParentRoute: () => rootRouteImport,
+} as any)
 const CloudsAccountsIdRoute = CloudsAccountsIdRouteImport.update({
   id: "/clouds/accounts/$id",
   path: "/clouds/accounts/$id",
@@ -247,6 +253,7 @@ export interface FileRoutesByFullPath {
   "/integrations/": typeof IntegrationsIndexRoute
   "/projects/": typeof ProjectsIndexRoute
   "/services/": typeof ServicesIndexRoute
+  "/ai/models/$": typeof AiModelsSplatRoute
   "/clouds/accounts/$id": typeof CloudsAccountsIdRoute
   "/integrations/github/setup": typeof IntegrationsGithubSetupRoute
   "/integrations/oauth/callback": typeof IntegrationsOauthCallbackRoute
@@ -283,6 +290,7 @@ export interface FileRoutesByTo {
   "/integrations": typeof IntegrationsIndexRoute
   "/projects": typeof ProjectsIndexRoute
   "/services": typeof ServicesIndexRoute
+  "/ai/models/$": typeof AiModelsSplatRoute
   "/clouds/accounts/$id": typeof CloudsAccountsIdRoute
   "/integrations/github/setup": typeof IntegrationsGithubSetupRoute
   "/integrations/oauth/callback": typeof IntegrationsOauthCallbackRoute
@@ -320,6 +328,7 @@ export interface FileRoutesById {
   "/integrations/": typeof IntegrationsIndexRoute
   "/projects/": typeof ProjectsIndexRoute
   "/services/": typeof ServicesIndexRoute
+  "/ai/models/$": typeof AiModelsSplatRoute
   "/clouds/accounts/$id": typeof CloudsAccountsIdRoute
   "/integrations/github/setup": typeof IntegrationsGithubSetupRoute
   "/integrations/oauth/callback": typeof IntegrationsOauthCallbackRoute
@@ -358,6 +367,7 @@ export interface FileRouteTypes {
     | "/integrations/"
     | "/projects/"
     | "/services/"
+    | "/ai/models/$"
     | "/clouds/accounts/$id"
     | "/integrations/github/setup"
     | "/integrations/oauth/callback"
@@ -394,6 +404,7 @@ export interface FileRouteTypes {
     | "/integrations"
     | "/projects"
     | "/services"
+    | "/ai/models/$"
     | "/clouds/accounts/$id"
     | "/integrations/github/setup"
     | "/integrations/oauth/callback"
@@ -430,6 +441,7 @@ export interface FileRouteTypes {
     | "/integrations/"
     | "/projects/"
     | "/services/"
+    | "/ai/models/$"
     | "/clouds/accounts/$id"
     | "/integrations/github/setup"
     | "/integrations/oauth/callback"
@@ -467,6 +479,7 @@ export interface RootRouteChildren {
   IntegrationsIndexRoute: typeof IntegrationsIndexRoute
   ProjectsIndexRoute: typeof ProjectsIndexRoute
   ServicesIndexRoute: typeof ServicesIndexRoute
+  AiModelsSplatRoute: typeof AiModelsSplatRoute
   CloudsAccountsIdRoute: typeof CloudsAccountsIdRoute
   IntegrationsGithubSetupRoute: typeof IntegrationsGithubSetupRoute
   IntegrationsOauthCallbackRoute: typeof IntegrationsOauthCallbackRoute
@@ -680,6 +693,13 @@ declare module "@tanstack/react-router" {
       preLoaderRoute: typeof AiModelsIndexRouteImport
       parentRoute: typeof rootRouteImport
     }
+    "/ai/models/$": {
+      id: "/ai/models/$"
+      path: "/ai/models/$"
+      fullPath: "/ai/models/$"
+      preLoaderRoute: typeof AiModelsSplatRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     "/clouds/accounts/$id": {
       id: "/clouds/accounts/$id"
       path: "/clouds/accounts/$id"
@@ -747,6 +767,7 @@ const rootRouteChildren: RootRouteChildren = {
   IntegrationsIndexRoute: IntegrationsIndexRoute,
   ProjectsIndexRoute: ProjectsIndexRoute,
   ServicesIndexRoute: ServicesIndexRoute,
+  AiModelsSplatRoute: AiModelsSplatRoute,
   CloudsAccountsIdRoute: CloudsAccountsIdRoute,
   IntegrationsGithubSetupRoute: IntegrationsGithubSetupRoute,
   IntegrationsOauthCallbackRoute: IntegrationsOauthCallbackRoute,

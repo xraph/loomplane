@@ -13,6 +13,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest"
 import { forgeClient } from "@/client/runtime"
 import { setFeatures } from "@/lib/features"
 import { createDashboardRouter } from "@/router"
+import { dialogRoutes } from "@/test-fixtures/ai-models"
 
 const access = vi.hoisted(() => ({ edit: true }))
 vi.mock("@/lib/organization", () => ({
@@ -521,4 +522,29 @@ it("says why a deployed model failed", async () => {
   // Labelled at every width, for a screen reader on a wide screen too.
   const row = reason.closest("li") as HTMLElement
   expect(within(row).getByText("This month")).toBeInTheDocument()
+})
+
+it("opens the deploy dialog from a card, and links the card to its page", async () => {
+  stub({
+    ...dialogRoutes(),
+    "/api/v1/ai/models/registry": () => Response.json(registry),
+  })
+  open("/ai/models")
+  const card = await screen.findByRole("article", {
+    name: "Qwen2.5 7B Instruct",
+  })
+  expect(
+    within(card).getByRole("link", { name: "Qwen2.5 7B Instruct" })
+  ).toHaveAttribute("href", "/ai/models/Qwen/Qwen2.5-7B-Instruct")
+
+  await userEvent.click(within(card).getByRole("button", { name: "Deploy" }))
+  const dialog = await screen.findByRole("dialog", {
+    name: "Deploy Qwen2.5 7B Instruct",
+  })
+  // It loads the entry it was opened for.
+  expect(
+    await within(dialog).findByRole("radio", { name: /bf16/ })
+  ).toBeInTheDocument()
+  await userEvent.click(within(dialog).getByRole("button", { name: "Cancel" }))
+  await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull())
 })

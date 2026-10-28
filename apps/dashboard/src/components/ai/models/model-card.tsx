@@ -6,15 +6,19 @@ import type { EntrySummary } from "@/client/forge/loomplane/types"
 import { VerificationBadge } from "@/components/ai/models/verification-badge"
 import { Button } from "@/components/ui/button"
 import { formatContext, formatParams, gpuNeed, taskLabel } from "@/lib/models"
+import { Link } from "@/lib/router"
 import { cn } from "@/lib/utils"
 
 export function ModelCard({
   entry,
   onDeploy,
   deployBlocked,
+  linked,
   className,
 }: {
   entry: EntrySummary
+  /** The title links to the model's page, for a registry entry. */
+  linked?: boolean
   onDeploy?: () => void
   /** Why Deploy is off for you, such as a missing permission. */
   deployBlocked?: string
@@ -43,7 +47,17 @@ export function ModelCard({
             className="truncate text-[14.5px] font-semibold"
             title={entry.title}
           >
-            {entry.title}
+            {linked ? (
+              <Link
+                to="/ai/models/$"
+                params={{ _splat: entry.id }}
+                className="hover:underline"
+              >
+                {entry.title}
+              </Link>
+            ) : (
+              entry.title
+            )}
           </h3>
           <p className="truncate text-[12.5px] text-muted-foreground">
             {entry.publisher}

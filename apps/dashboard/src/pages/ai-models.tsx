@@ -231,6 +231,7 @@ function Registry({
             <ModelCard
               key={e.id}
               entry={e}
+              linked
               onDeploy={onDeploy ? () => onDeploy(e) : undefined}
               deployBlocked={blocked}
             />

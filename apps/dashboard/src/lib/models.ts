@@ -5,6 +5,7 @@ import type {
   EntrySummary,
   Fit,
   ModelsStatus,
+  QuantizationView,
 } from "@/client/forge/loomplane/types"
 import { gpuTitle } from "@/lib/gpu"
 
@@ -350,4 +351,98 @@ export function repoOf(input: string): string | undefined {
  */
 export function looksLikeToken(input: string): boolean {
   return /^\s*hf_[A-Za-z0-9]{8,}\s*$/.test(input)
+}
+
+/* ------------------------------------------------------------------------ */
+/* Deploying                                                                  */
+
+/** Where an engine runs: vLLM on a GPU, TEI on CPU, llama.cpp on either. */
+export type RunsOn = "gpu" | "cpu"
+
+export function runsOnOf(engine: string): RunsOn[] {
+  switch (engine) {
+    case "vllm":
+      return ["gpu"]
+    case "tei":
+      return ["cpu"]
+    case "llamacpp":
+      return ["gpu", "cpu"]
+  }
+  return []
+}
+
+/** engineName is an engine as people write it: "vLLM", "llama.cpp". */
+export function engineName(engine: string): string {
+  return engineNames[engine] ?? engine
+}
+
+/** fitsStatus reports whether a fit can be offered: never failed or no-fit. */
+export function fitsStatus(fit: Pick<Fit, "status"> | undefined): boolean {
+  return (
+    !!fit &&
+    (fit.status === "tested" ||
+      fit.status === "estimated" ||
+      fit.status === "untested")
+  )
+}
+
+/** fitOn is a quantization's fit on one GPU kind, or on "cpu". */
+export function fitOn(q: QuantizationView, kind: string): Fit | undefined {
+  return q.fits.find((f) => f.gpuKind === kind)
+}
+
+/**
+ * gpuMemoryOf is the GPU memory one GPU needs for q, in GiB. The registry
+ * says it for vLLM; a llama.cpp GGUF has none, so it's the smallest one-GPU
+ * need from its fits, which the server works out with FitOn and the memory
+ * math. undefined when nothing fits on one GPU.
+ */
+export function gpuMemoryOf(q: QuantizationView): number | undefined {
+  if (q.minGpuMemoryGib && q.minGpuMemoryGib > 0) return q.minGpuMemoryGib
+  const needs = q.fits
+    .filter((f) => f.gpuKind !== "cpu" && fitsStatus(f) && f.need.gpus === 1)
+    .map((f) => f.need.perGpuGib)
+    .filter((n) => n > 0)
+  return needs.length ? Math.min(...needs) : undefined
+}
+
+/** weightSize is a download size in gigabytes: 15000000000 is "15.0 GB". */
+export function weightSize(bytes: number): string {
+  if (!bytes || bytes <= 0) return "unknown"
+  return `${(bytes / 1e9).toFixed(1)} GB`
+}
+
+/**
+ * DeployCost is what the deploy dialog's footer says a model costs. An
+ * unknown price is never $0, a CPU model's cost is its server's, and an
+ * estimate says so.
+ */
+export type DeployCost = {
+  line: string
+  note?: string
+  kind: CostLabel["kind"]
+}
+
+export function deployCost(cost: Cost, server?: string): DeployCost {
+  const label = costLabel(cost, server)
+  if (label.kind === "cpu") return { line: label.detail, kind: "cpu" }
+  if (label.kind === "unknown")
+    return {
+      line: "Price unknown",
+      note: "Loomplane doesn't know what this GPU costs. Set its hourly price after deploy.",
+      kind: "unknown",
+    }
+  const monthly = amount(cost.monthlyUsd)
+  const month =
+    monthly === undefined
+      ? ""
+      : `, about $${Math.round(monthly).toLocaleString("en-US")}/mo while it runs`
+  return {
+    line: `${label.hourly}${month}`,
+    note:
+      label.kind === "estimate"
+        ? "An estimate from the list price, not a bill."
+        : undefined,
+    kind: label.kind,
+  }
 }
