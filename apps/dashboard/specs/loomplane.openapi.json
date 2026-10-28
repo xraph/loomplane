@@ -10619,6 +10619,56 @@
           }
         }
       }
+    },
+    "/api/v1/projects/{projectId}/environments/{environmentId}/ai/models/{resource}/move-to-pin": {
+      "post": {
+        "tags": [
+          "AI models"
+        ],
+        "summary": "Move a model deployed before a registry re-pin to the weights the registry pins now, and plan its environment",
+        "operationId": "aiModelDeployments.moveToPin",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "description": "Path parameter: projectId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "environmentId",
+            "in": "path",
+            "description": "Path parameter: environmentId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "resource",
+            "in": "path",
+            "description": "Path parameter: resource",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The plan that updates it",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DeployResult"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {

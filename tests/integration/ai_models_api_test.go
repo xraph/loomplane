@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"os"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -111,6 +112,7 @@ func TestModelsAPIPublishedContract(t *testing.T) {
 		env + "/{resource}/move-preview":        {"post"},
 		env + "/{resource}/move":                {"post"},
 		env + "/{resource}/retry":               {"post"},
+		env + "/{resource}/move-to-pin":         {"post"},
 		env + "/{resource}/waiting":             {"delete"},
 		"/api/v1/ai/settings":                   {"get"},
 		"/api/v1/ai/settings/huggingface-token": {"put", "delete"},
@@ -156,9 +158,102 @@ func TestModelsAPIPublishedContract(t *testing.T) {
 			}
 		}
 	}
+	// The committed spec, which the dashboard's client is generated from,
+	// is grafted by hand. Every AI path the app serves, and every schema
+	// those paths reach, must be in it as served, so drift fails here.
+	committedRaw, err := os.ReadFile("../../apps/dashboard/specs/loomplane.openapi.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	served, committed := openAPIDoc(t, raw), openAPIDoc(t, committedRaw)
+	todo := map[string]bool{}
+	for path, item := range served.Paths {
+		if !strings.Contains(path, "/ai/") {
+			continue
+		}
+		if !jsonEqual(item, committed.Paths[path]) {
+			t.Errorf("the committed spec's %s differs from the served one", path)
+		}
+		schemaRefs(item, todo)
+	}
+	seen := map[string]bool{}
+	for len(todo) > 0 {
+		for name := range todo {
+			delete(todo, name)
+			if seen[name] {
+				continue
+			}
+			seen[name] = true
+			if !jsonEqual(served.Components.Schemas[name], committed.Components.Schemas[name]) {
+				t.Errorf("the committed spec's schema %s differs from the served one", name)
+			}
+			schemaRefs(served.Components.Schemas[name], todo)
+		}
+	}
+	if len(seen) == 0 {
+		t.Error("the AI paths reach no schema")
+	}
 	if output := os.Getenv("LOOMPLANE_TEST_OPENAPI_OUTPUT"); output != "" {
 		if err := os.WriteFile(output, raw, 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
+}
+
+// openAPIDocument is the parts of an OpenAPI document the contract compares.
+type openAPIDocument struct {
+	Paths      map[string]json.RawMessage `json:"paths"`
+	Components struct {
+		Schemas map[string]json.RawMessage `json:"schemas"`
+	} `json:"components"`
+}
+
+func openAPIDoc(t *testing.T, raw []byte) openAPIDocument {
+	t.Helper()
+	var doc openAPIDocument
+	if err := json.Unmarshal(raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	return doc
+}
+
+// jsonEqual compares two JSON values whatever their key order and layout.
+// A missing value (nil) equals nothing.
+func jsonEqual(a, b json.RawMessage) bool {
+	if a == nil || b == nil {
+		return false
+	}
+	var x, y any
+	if json.Unmarshal(a, &x) != nil || json.Unmarshal(b, &y) != nil {
+		return false
+	}
+	return reflect.DeepEqual(x, y)
+}
+
+// schemaRefs adds the name of every component schema raw refers to.
+func schemaRefs(raw json.RawMessage, into map[string]bool) {
+	var v any
+	if json.Unmarshal(raw, &v) != nil {
+		return
+	}
+	var walk func(any)
+	walk = func(v any) {
+		switch t := v.(type) {
+		case map[string]any:
+			for k, x := range t {
+				if ref, ok := x.(string); ok && k == "$ref" {
+					if name, found := strings.CutPrefix(ref, "#/components/schemas/"); found {
+						into[name] = true
+					}
+					continue
+				}
+				walk(x)
+			}
+		case []any:
+			for _, x := range t {
+				walk(x)
+			}
+		}
+	}
+	walk(v)
 }

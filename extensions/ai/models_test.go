@@ -127,6 +127,13 @@ func (f *fakeModels) Move(_ context.Context, p security.Principal, projectID, en
 	return &models.DeployResult{PlanID: "plan_2"}, nil
 }
 
+func (f *fakeModels) MoveToPin(_ context.Context, p security.Principal, projectID, environmentID, resource string) (*models.DeployResult, error) {
+	if err := f.record("moveToPin", p, projectID, "/", environmentID, "/", resource); err != nil {
+		return nil, err
+	}
+	return &models.DeployResult{PlanID: "plan_4"}, nil
+}
+
 func (f *fakeModels) Retry(_ context.Context, p security.Principal, projectID, environmentID, resource string) (*models.Status, error) {
 	if err := f.record("retry", p, projectID, "/", environmentID, "/", resource); err != nil {
 		return nil, err
@@ -191,6 +198,7 @@ var calls = []call{
 	{http.MethodPatch, envBase + "/llm", `{"monthly_budget_usd":"250.00","revision":3}`},
 	{http.MethodPost, envBase + "/llm/move-preview", `{"target":{"source":"connection","connection_id":"conn_2"},"review_server":true}`},
 	{http.MethodPost, envBase + "/llm/move", `{"target":{"source":"connection","connection_id":"conn_2"}}`},
+	{http.MethodPost, envBase + "/llm/move-to-pin", ""},
 	{http.MethodPost, envBase + "/llm/retry", ""},
 	{http.MethodDelete, envBase + "/llm/waiting", ""},
 	{http.MethodDelete, envBase + "/llm", ""},
@@ -251,6 +259,7 @@ func TestModelRoutesRegistered(t *testing.T) {
 		"aiModelDeployments.update":         "PATCH " + p + "/:resource",
 		"aiModelDeployments.movePreview":    "POST " + p + "/:resource/move-preview",
 		"aiModelDeployments.move":           "POST " + p + "/:resource/move",
+		"aiModelDeployments.moveToPin":      "POST " + p + "/:resource/move-to-pin",
 		"aiModelDeployments.retry":          "POST " + p + "/:resource/retry",
 		"aiModelDeployments.cancel":         "DELETE " + p + "/:resource/waiting",
 		"aiModelDeployments.remove":         "DELETE " + p + "/:resource",
@@ -301,7 +310,7 @@ func TestModelRoutesRegistered(t *testing.T) {
 func TestModelRoutesCallTheService(t *testing.T) {
 	m, s := &fakeModels{}, &fakeSettings{}
 	r := mounted(t, nil, m, s)
-	wantCodes := map[int]int{6: http.StatusCreated, 16: http.StatusNoContent}
+	wantCodes := map[int]int{6: http.StatusCreated, 17: http.StatusNoContent}
 	for i, c := range calls {
 		out := do(t, r, c, member)
 		want, ok := wantCodes[i]
@@ -327,6 +336,7 @@ func TestModelRoutesCallTheService(t *testing.T) {
 		"update org_1 usr_1 proj_1/env_1/llm 250.00 3",
 		"movePreview org_1 usr_1 proj_1/env_1/llm conn_2 true",
 		"move org_1 usr_1 proj_1/env_1/llm conn_2",
+		"moveToPin org_1 usr_1 proj_1/env_1/llm",
 		"retry org_1 usr_1 proj_1/env_1/llm",
 		"cancel org_1 usr_1 proj_1/env_1/llm",
 		"remove org_1 usr_1 proj_1/env_1/llm",
@@ -343,7 +353,7 @@ func TestModelRoutesCallTheService(t *testing.T) {
 		t.Errorf("list: %s", body)
 	}
 	// A cancel says what it leaves behind.
-	out = do(t, r, calls[12], member)
+	out = do(t, r, calls[13], member)
 	if !strings.Contains(out.Body.String(), "gpu-box was already approved") {
 		t.Errorf("cancel: %s", out.Body.String())
 	}
@@ -730,6 +740,7 @@ func TestViewerCannotDeploy(t *testing.T) {
 		{as(security.RoleViewer), envBase, http.StatusForbidden},
 		{as(security.RoleViewer), envBase + "/llm/move", http.StatusForbidden},
 		{as(security.RoleViewer), envBase + "/llm/retry", http.StatusForbidden},
+		{as(security.RoleViewer), envBase + "/llm/move-to-pin", http.StatusForbidden},
 		{as(security.RoleDeveloper), "/api/v1/projects/proj_1/environments/env_prod/ai/models", http.StatusForbidden},
 		{&security.Principal{OrgID: "org_2", UserID: security.RoleAdmin}, envBase, http.StatusNotFound},
 	} {

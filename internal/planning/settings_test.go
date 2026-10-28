@@ -179,6 +179,19 @@ func TestOptInKindRunsOnlyWhereEnabled(t *testing.T) {
 	}
 }
 
+// A service on another server than the opt-in model it needs, in the
+// environment the model runs in, can't dial its private address, so the
+// plan stops with database-across-targets for the service.
+func TestOptInResourceOnAnotherTargetIsAProblem(t *testing.T) {
+	doc := optInLLM + "services:\n  checkout: {source: cmd/api, provider: server, target: " + targetB + ", public: false, needs: [llm]}\n"
+	staging := optInPlan(t, "staging", doc)
+	if staging.Executable || !slices.ContainsFunc(staging.Problems, func(f Finding) bool {
+		return f.Code == "database-across-targets" && f.Subject == ServiceSubject && f.Name == "checkout"
+	}) {
+		t.Fatalf("checkout on another server: executable %v, problems %+v", staging.Executable, staging.Problems)
+	}
+}
+
 func TestOptInResourceIsOffForNeeds(t *testing.T) {
 	doc := optInLLM + "services:\n  checkout: {source: cmd/api, provider: server, target: " + targetA + ", public: false, needs: [llm]}\n"
 

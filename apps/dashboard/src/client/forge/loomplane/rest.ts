@@ -119,6 +119,22 @@ export class RESTClient extends Client {
     },
 
     /**
+     * Move a model deployed before a registry re-pin to the weights the registry pins now, and plan its environment
+     */
+    moveToPin: async (projectId: string, environmentId: string, resource: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.DeployResult> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/ai/models/${encodeURIComponent(String(resource))}/move-to-pin`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["DeployResult"],
+      };
+
+      return this.request<types.DeployResult>(config);
+    },
+
+    /**
      * Take a model out of the manifest and plan its environment; its weights stay on the server
      */
     remove: async (projectId: string, environmentId: string, resource: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.DeployResult> => {

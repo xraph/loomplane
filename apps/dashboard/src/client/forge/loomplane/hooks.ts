@@ -235,6 +235,7 @@ export const useAiModelDeploymentsUpdate = mutation(ops['aiModelDeployments.upda
 export const useAiModelDeploymentsRemove = mutation(ops['aiModelDeployments.remove']);
 export const useAiModelDeploymentsMove = mutation(ops['aiModelDeployments.move']);
 export const useAiModelDeploymentsMovePreview = mutation(ops['aiModelDeployments.movePreview']);
+export const useAiModelDeploymentsMoveToPin = mutation(ops['aiModelDeployments.moveToPin']);
 export const useAiModelDeploymentsRetry = mutation(ops['aiModelDeployments.retry']);
 export const useAiModelDeploymentsCancel = mutation(ops['aiModelDeployments.cancel']);
 export const useCatalogAdminOpen = mutation(ops['catalogAdmin.open']);

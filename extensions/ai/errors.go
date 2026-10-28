@@ -176,21 +176,24 @@ func planFailed(plan *models.PlanAfterEditError) error {
 }
 
 // planFailedBecause answers msg, a PlanAfterEditError's sentence, which
-// says to plan from the project and ends with ": " and inner's text. When
-// the plan failed for a reason fail knows, it answers with that status and
-// says why; otherwise the reason is left out, since it may be internal.
+// says to plan from the project and ends with ": " and inner's text. The
+// inner text is always replaced: when the plan failed for a reason fail
+// knows, by fail's own sentence for it, with its status, so what Hugging
+// Face said never reaches the reply; otherwise it's left out, since it may
+// be internal.
 func planFailedBecause(msg string, inner error) error {
 	if inner == nil {
 		return refuse(http.StatusConflict, codePlanFailed, msg)
 	}
+	head := strings.TrimSuffix(msg, ": "+inner.Error())
 	out := typed(inner)
 	if out == nil {
 		out = known(inner)
 	}
 	if out != nil {
-		return refuse(out.status, codePlanFailed, msg)
+		return refuse(out.status, codePlanFailed, head+": "+out.body.Message)
 	}
-	return refuse(http.StatusConflict, codePlanFailed, strings.TrimSuffix(msg, ": "+inner.Error())+".")
+	return refuse(http.StatusConflict, codePlanFailed, head+".")
 }
 
 // sentence is err's text without sentinel's in front: "invalid model

@@ -112,6 +112,9 @@ func TestPlanFailureSaysWhatToDo(t *testing.T) {
 		{fmt.Errorf("%w (deployment:create)", security.ErrForbidden), http.StatusForbidden, head + ": " + security.ErrForbidden.Error() + " (deployment:create)"},
 		{errors.New("pq: connection reset by 10.0.0.7"), http.StatusConflict, head + "."},
 		{nil, http.StatusConflict, head},
+		// What Hugging Face said is replaced with fail's sentence.
+		{fmt.Errorf("read the weights: %w: 500 Internal Server Error: upstream hf-node-7 said hf_tokentoken", hfhub.ErrUnavailable), http.StatusBadGateway, head + ": " + hubUnavailable},
+		{fmt.Errorf("%w: x/y has no config.json", models.ErrInvalid), http.StatusUnprocessableEntity, head + ": x/y has no config.json"},
 	} {
 		msg := head
 		if c.inner != nil {
@@ -121,6 +124,9 @@ func TestPlanFailureSaysWhatToDo(t *testing.T) {
 		var api *apiError
 		if !errors.As(got, &api) || api.status != c.want || api.body.Code != codePlanFailed || api.body.Message != c.msg {
 			t.Errorf("%v: %#v", c.inner, got)
+		}
+		if strings.Contains(api.body.Message, "hf-node-7") || strings.Contains(api.body.Message, "hf_tokentoken") {
+			t.Errorf("Hugging Face's text in %q", api.body.Message)
 		}
 	}
 	got := fail(&models.PlanAfterEditError{Resource: "llm", Environment: "staging", Removal: true})

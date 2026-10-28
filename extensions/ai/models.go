@@ -30,6 +30,7 @@ type modelsAPI interface {
 	Update(ctx context.Context, p security.Principal, projectID, environmentID, resource string, in models.UpdateInput) (*models.Status, error)
 	MovePreview(ctx context.Context, p security.Principal, projectID, environmentID, resource string, in models.MoveInput) (*models.DeployPreview, error)
 	Move(ctx context.Context, p security.Principal, projectID, environmentID, resource string, in models.MoveInput) (*models.DeployResult, error)
+	MoveToPin(ctx context.Context, p security.Principal, projectID, environmentID, resource string) (*models.DeployResult, error)
 	Retry(ctx context.Context, p security.Principal, projectID, environmentID, resource string) (*models.Status, error)
 	CancelWaiting(ctx context.Context, p security.Principal, projectID, environmentID, resource string) (*models.CancelResult, error)
 	Remove(ctx context.Context, p security.Principal, projectID, environmentID, resource string) (*models.DeployResult, error)
@@ -207,6 +208,11 @@ func mountModels(r forge.Router, guard identity.Guard, m modelsAPI, s settingsAP
 			forge.WithRequestSchema(models.MoveInput{}),
 			forge.WithResponseSchema(http.StatusOK, "The deployment and its plan", models.DeployResult{}),
 			forge.WithResponseSchema(http.StatusUnprocessableEntity, "Why it can't be moved", models.Problem{}),
+		}},
+		{http.MethodPost, env + "/:resource/move-to-pin", h.moveToPin, []forge.RouteOption{
+			forge.WithName("aiModelDeployments.moveToPin"),
+			forge.WithSummary("Move a model deployed before a registry re-pin to the weights the registry pins now, and plan its environment"),
+			forge.WithResponseSchema(http.StatusOK, "The plan that updates it", models.DeployResult{}),
 		}},
 		{http.MethodPost, env + "/:resource/retry", h.retry, []forge.RouteOption{
 			forge.WithName("aiModelDeployments.retry"),
@@ -485,6 +491,16 @@ func (h modelHandlers) move(c forge.Context) error {
 	}
 	w := where(c)
 	out, err := h.models.Move(c.Request().Context(), p, w.project, w.environment, w.resource, in)
+	return answer(c, http.StatusOK, out, err)
+}
+
+func (h modelHandlers) moveToPin(c forge.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	w := where(c)
+	out, err := h.models.MoveToPin(c.Request().Context(), p, w.project, w.environment, w.resource)
 	return answer(c, http.StatusOK, out, err)
 }
 

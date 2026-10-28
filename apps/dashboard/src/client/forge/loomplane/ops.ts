@@ -1981,6 +1981,13 @@ export const ops = {
     bodyCodec: CODECS['ModelsMoveInputBody'],
     responseCodec: CODECS['DeployPreview'],
   },
+  'aiModelDeployments.moveToPin': {
+    method: 'POST',
+    path: '/api/v1/projects/{projectId}/environments/{environmentId}/ai/models/{resource}/move-to-pin',
+    provides: [],
+    invalidates: [],
+    responseCodec: CODECS['DeployResult'],
+  },
   'aiModelDeployments.retry': {
     method: 'POST',
     path: '/api/v1/projects/{projectId}/environments/{environmentId}/ai/models/{resource}/retry',

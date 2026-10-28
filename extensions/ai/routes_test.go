@@ -209,7 +209,7 @@ func TestModelHooksAreRegistered(t *testing.T) {
 			served++
 		}
 	}
-	if served != 17 {
+	if served != 18 {
 		t.Errorf("%d AI routes on the app's router", served)
 	}
 }
