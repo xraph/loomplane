@@ -234,6 +234,18 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 			forge.WithSummary("Run a failed deployment's failed and skipped steps again, with the plan that was approved"),
 			forge.WithResponseSchema(http.StatusOK, "The deployment, running again", deployments.Deployment{}),
 		}},
+		{http.MethodPost, "/deployments/:id/capacity/resume", e.resumeCapacity, []forge.RouteOption{
+			forge.WithName("deployments.resumeCapacity"),
+			forge.WithSummary("Check capacity again for a deployment paused waiting for it; the deployment keeps its steps and retries"),
+			forge.WithRequestSchema(CapacityWaitInput{}),
+			forge.WithResponseSchema(http.StatusOK, "The deployment, running again", deployments.Deployment{}),
+		}},
+		{http.MethodPost, "/deployments/:id/capacity/cancel", e.cancelCapacity, []forge.RouteOption{
+			forge.WithName("deployments.cancelCapacity"),
+			forge.WithSummary("Cancel a deployment paused waiting for capacity; steps that finished stay as they are"),
+			forge.WithRequestSchema(CapacityWaitInput{}),
+			forge.WithResponseSchema(http.StatusOK, "The cancelled deployment", deployments.Deployment{}),
+		}},
 		{http.MethodGet, "/plans/:id/deployment", e.planDeployment, []forge.RouteOption{
 			forge.WithName("deployments.forPlan"),
 			forge.WithSummary("The deployment an approved plan started"),

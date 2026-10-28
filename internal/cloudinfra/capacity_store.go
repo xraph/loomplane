@@ -52,19 +52,37 @@ func (s *PgStore) SaveCapacityPolicy(ctx context.Context, policy *CapacityPolicy
 	if checkErr := lockCapacityCloud(ctx, tx, policy.OrgID, policy.CloudID); checkErr != nil {
 		return checkErr
 	}
+	if checkErr := s.saveCapacityPolicyTx(ctx, tx, policy, previous); checkErr != nil {
+		return checkErr
+	}
+	return tx.Commit()
+}
+
+// capacityPolicyRevisionTx answers ErrConflict unless the Cloud's saved policy
+// is at previous. A Cloud with no policy is at revision zero.
+func capacityPolicyRevisionTx(ctx context.Context, tx driver.Tx, org, cloud string, previous int64) error {
 	var revision int64
-	err = tx.QueryRow(ctx, `SELECT revision FROM loomplane_cloud_capacity_policies WHERE org_id=$1 AND cloud_id=$2`, policy.OrgID, policy.CloudID).Scan(&revision)
+	err := tx.QueryRow(ctx, `SELECT revision FROM loomplane_cloud_capacity_policies WHERE org_id=$1 AND cloud_id=$2`, org, cloud).Scan(&revision)
 	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 		return err
 	}
 	if revision != previous {
 		return ErrConflict
 	}
-	if checkErr := capacityPolicyScopes(ctx, tx, policy); checkErr != nil {
-		return checkErr
+	return nil
+}
+
+// saveCapacityPolicyTx writes policy over revision previous inside tx. The
+// caller holds lockCapacityCloud and commits.
+func (s *PgStore) saveCapacityPolicyTx(ctx context.Context, tx driver.Tx, policy *CapacityPolicy, previous int64) error {
+	if err := capacityPolicyRevisionTx(ctx, tx, policy.OrgID, policy.CloudID, previous); err != nil {
+		return err
 	}
-	if checkErr := s.backfillFrontendSlots(ctx, tx, policy); checkErr != nil {
-		return checkErr
+	if err := capacityPolicyScopes(ctx, tx, policy); err != nil {
+		return err
+	}
+	if err := s.backfillFrontendSlots(ctx, tx, policy); err != nil {
+		return err
 	}
 	raw, err := json.Marshal(policy)
 	if err != nil {
@@ -75,10 +93,7 @@ func (s *PgStore) SaveCapacityPolicy(ctx context.Context, policy *CapacityPolicy
 		return err
 	}
 	_, err = tx.Exec(ctx, `INSERT INTO loomplane_cloud_capacity_policies(org_id,cloud_id,revision,enabled,require_expansion_approval,servers,cpu_millis,memory_bytes,storage_bytes,body,authority) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) ON CONFLICT(org_id,cloud_id) DO UPDATE SET revision=excluded.revision,enabled=excluded.enabled,require_expansion_approval=excluded.require_expansion_approval,servers=excluded.servers,cpu_millis=excluded.cpu_millis,memory_bytes=excluded.memory_bytes,storage_bytes=excluded.storage_bytes,body=excluded.body,authority=excluded.authority,updated_at=now()`, policy.OrgID, policy.CloudID, policy.Revision, policy.Enabled, policy.RequireExpansionApproval, policy.Limits.Servers, policy.Limits.CPUMillis, policy.Limits.MemoryBytes, policy.Limits.StorageBytes, raw, authority)
-	if err != nil {
-		return storeError(err)
-	}
-	return tx.Commit()
+	return storeError(err)
 }
 
 func capacityPolicyScopes(ctx context.Context, tx driver.Tx, policy *CapacityPolicy) error {
@@ -115,14 +130,16 @@ func capacityPolicyScopes(ctx context.Context, tx driver.Tx, policy *CapacityPol
 	}
 	for _, limit := range policy.FrontendLimits {
 		var targetProvider string
+		// A limit kept after its target was deleted or changed names the target,
+		// so someone saving a policy file they read earlier knows what to drop.
 		if err := tx.QueryRow(ctx, `SELECT provider FROM loomplane_cloud_targets WHERE org_id=$1 AND cloud_id=$2 AND id=$3 AND runtime='managed' FOR SHARE`, policy.OrgID, policy.CloudID, limit.TargetID).Scan(&targetProvider); err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
-				return ErrInvalid
+				return invalidSentence("The frontend limit for target %s names no managed target on this Cloud. Remove that limit and save again.", limit.TargetID)
 			}
 			return err
 		}
 		if !frontendProviders[targetProvider] {
-			return ErrInvalid
+			return invalidSentence("Target %s doesn't host frontends, so it can't take a frontend limit. Remove that limit and save again.", limit.TargetID)
 		}
 	}
 	return nil

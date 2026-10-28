@@ -370,11 +370,12 @@ func (s *Service) blockExpansion(ctx context.Context, st *PgStore, e *Expansion,
 	return st.saveExpansion(ctx, e, token)
 }
 func (s *Service) ApproveExpansion(ctx context.Context, p security.Principal, cloud, id string, expectedRevision int64) (*Expansion, error) {
-	if _, authErr := s.authorizeCapacityPrincipal(ctx, p, cloud); authErr != nil {
-		return nil, authErr
-	}
+	// A read-only key is refused as forbidden before its saved authority is checked.
 	if p.ReadOnly {
 		return nil, security.ErrForbidden
+	}
+	if _, authErr := s.authorizeCapacityPrincipal(ctx, p, cloud); authErr != nil {
+		return nil, authErr
 	}
 	st, ok := s.Store.(*PgStore)
 	if !ok {

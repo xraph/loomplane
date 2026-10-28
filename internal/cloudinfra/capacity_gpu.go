@@ -245,6 +245,13 @@ func validateGPUPolicyShape(policy CapacityPolicy) error {
 		if pool.Limits.GPUKind != pool.AcceleratorKind {
 			return fmt.Errorf("%w: a pool's GPU ceiling must be for its own kind", ErrInvalid)
 		}
+		// Pool ceilings count every dimension, so a GPU ceiling alone would
+		// read as zero servers, CPU, memory and storage and block the pool.
+		for i, n := range capacityValues(*pool.Limits) {
+			if n <= 0 {
+				return invalidSentence("A pool GPU ceiling needs the pool's %s ceiling too. Copy the Cloud's ceilings to keep them as they are.", capacityCeilingNames[i])
+			}
+		}
 		if cloud, ok := kinds[pool.AcceleratorKind]; ok && pool.Limits.GPUs > cloud {
 			return fmt.Errorf("%w: pool ceilings exceed Cloud ceilings", ErrInvalid)
 		}

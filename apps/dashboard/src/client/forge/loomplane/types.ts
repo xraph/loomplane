@@ -343,6 +343,14 @@ export interface CanaryVerdict {
   windowStart: string;
 }
 
+export interface CapacityAccountSnapshot {
+  accountId: string;
+  checkedAt: string;
+  provider: string;
+  provisioned: CapacityResources;
+  quota: CapacityQuota;
+}
+
 export interface CapacityBlock {
   cloudId: string;
   counted: number;
@@ -386,6 +394,14 @@ export interface CapacityIntent {
   templateHash: string;
 }
 
+export interface CapacityObservation {
+  checkedAt: string;
+  cpuMillis?: number;
+  freeStorageBytes?: number;
+  memoryBytes?: number;
+  storageBytes?: number;
+}
+
 export interface CapacityPolicy {
   cloudId: string;
   enabled: boolean;
@@ -404,8 +420,38 @@ export interface CapacityPolicyInputBody {
 }
 
 export interface CapacityPolicyView {
+  /** Whether this Loomplane server adds servers to pools on its own. Read-only: a save never takes it. */
   automaticExpansion: boolean;
+  cloudId: string;
   policy?: CapacityPolicy;
+}
+
+export interface CapacityQuota {
+  cpuMillis?: number;
+  memoryBytes?: number;
+  servers?: number;
+  storageBytes?: number;
+}
+
+export interface CapacityRecord {
+  accountId: string;
+  checkedAt: string;
+  gpuKind?: string;
+  gpus?: number;
+  kind: string;
+  observation?: CapacityObservation;
+  provider: string;
+  resourceId: string;
+  resources: CapacityResources;
+  serverId?: string;
+  serverStateRevision: number;
+}
+
+export interface CapacityResources {
+  cpuMillis?: number;
+  memoryBytes?: number;
+  servers?: number;
+  storageBytes?: number;
 }
 
 export interface CapacityTemplatePin {
@@ -413,10 +459,32 @@ export interface CapacityTemplatePin {
   connectionGeneration: number;
 }
 
+export interface CapacityUsage {
+  accounts: CapacityAccountSnapshot[];
+  allocatable: CapacityResources;
+  checkedAt: string;
+  cloudId: string;
+  fresh: boolean;
+  frontends: FrontendUsage[];
+  gpus: GPUUsage[];
+  headroom: CapacityResources;
+  observed: CapacityResources;
+  observedStorageBytes: number | null;
+  pending: CapacityResources;
+  provisioned: CapacityResources;
+  records: CapacityRecord[];
+  reserved: CapacityResources;
+  systemReserve: CapacityResources;
+}
+
 export interface CapacityWait {
   blocks: CapacityBlock[];
   createdAt: string;
   revision: number;
+}
+
+export interface CapacityWaitInputBody {
+  expectedRevision: number;
 }
 
 export interface CatalogKindList {
@@ -1282,7 +1350,7 @@ export interface Expansion {
 }
 
 export interface ExpansionList {
-  expansions: (Expansion | null)[];
+  expansions: Expansion[];
 }
 
 export interface FabriqKeyList {
@@ -1355,6 +1423,15 @@ export interface FrontendLimit {
   targetId: string;
 }
 
+export interface FrontendUsage {
+  active: number;
+  counted: number;
+  maximum?: number;
+  pending: number;
+  retained: number;
+  targetId: string;
+}
+
 export interface GPUDevice {
   index: number;
   kind: string;
@@ -1424,6 +1501,14 @@ export interface GPUToleration {
   key: string;
   operator: string;
   value?: string;
+}
+
+export interface GPUUsage {
+  kind: string;
+  limit: number | null;
+  pending: number;
+  provisioned: number | null;
+  reserved: number;
 }
 
 export interface GatewayList {
@@ -3085,6 +3170,19 @@ export interface SaveInputBody {
 export interface Scale {
   max: number;
   min: number;
+}
+
+export interface ScalingPool {
+  policy?: CapacityPolicy;
+  pool?: Pool;
+}
+
+export interface ScalingPoolInputBody {
+  acceleratorKind?: string;
+  expectedRevision: number;
+  name: string;
+  policy: CapacityPolicy;
+  template: PoolExpansionPolicy;
 }
 
 export interface Server {

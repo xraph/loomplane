@@ -8,7 +8,7 @@ export const op_cloudCapacity_approveExpansion = {
   entity: 'Expansion',
   rootType: 'Expansion',
   provides: ['Expansion:{id}'],
-  invalidates: ['Expansion[]'],
+  invalidates: ['CapacityUsage:{cloudId}', 'Expansion[]'],
   bodyCodec: codec_ApproveExpansionInputBody,
   responseCodec: codec_Expansion,
 } as const satisfies OperationMeta;

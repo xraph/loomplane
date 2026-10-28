@@ -8,6 +8,7 @@ import (
 	"github.com/xraph/forge"
 
 	"github.com/xraph/loomplane/extensions/identity"
+	"github.com/xraph/loomplane/internal/apikeys"
 	infra "github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/connections"
@@ -66,11 +67,23 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 		{http.MethodPost, "/infrastructure-operations/:operationId/apply", "infrastructureOperations.apply", e.apply, infra.ApplyInput{}, infra.Operation{}, http.StatusAccepted},
 		{http.MethodPost, "/infrastructure-operations/:operationId/cancel", "infrastructureOperations.cancel", e.cancelOperation, nil, infra.Operation{}, http.StatusOK},
 		{http.MethodPost, "/infrastructure-operations/:operationId/retry", "infrastructureOperations.retry", e.retry, nil, infra.Operation{}, http.StatusAccepted},
+		{http.MethodPost, "/scaling-pools", "cloudCapacity.createScalingPool", e.createScalingPool, infra.ScalingPoolInput{}, infra.ScalingPool{}, http.StatusOK},
+		{http.MethodGet, "/capacity-usage", "cloudCapacity.usage", e.capacityUsage, nil, infra.CapacityUsage{}, http.StatusOK},
+		{http.MethodPost, "/capacity-usage/refresh", "cloudCapacity.refresh", e.refreshCapacity, nil, infra.CapacityUsage{}, http.StatusOK},
+	}
+	// A policy save or an approval changes the Cloud's counted usage too.
+	invalidates := map[string][]string{
+		"cloudCapacity.savePolicy":        {"CapacityUsage:{cloudId}"},
+		"cloudCapacity.approveExpansion":  {"CapacityUsage:{cloudId}"},
+		"cloudCapacity.createScalingPool": {"CapacityPolicyView:{cloudId}", "CapacityUsage:{cloudId}"},
 	}
 	for _, rt := range routes {
 		opts := []forge.RouteOption{forge.WithName(rt.name), forge.WithSummary(rt.name), forge.WithResponseSchema(rt.status, "Result", rt.response)}
 		if rt.request != nil {
 			opts = append(opts, forge.WithRequestSchema(rt.request))
+		}
+		if tags := invalidates[rt.name]; len(tags) != 0 {
+			opts = append(opts, forge.WithInvalidates(tags...))
 		}
 		var err error
 		if rt.method == http.MethodGet {
@@ -95,6 +108,13 @@ func result(c forge.Context, status int, value any, err error) error {
 	if err == nil {
 		return c.JSON(status, value)
 	}
+	// A capacity block is a refusal the person can act on, not a conflict to
+	// reload: it answers 422 with the block's sentence. ErrBusy and a moved
+	// revision stay 409.
+	var admission *infra.CapacityAdmissionError
+	if errors.As(err, &admission) {
+		return forge.NewHTTPError(http.StatusUnprocessableEntity, admission.Block.Sentence())
+	}
 	code := security.StatusFor(err)
 	switch {
 	case errors.Is(err, infra.ErrInvalid), errors.Is(err, provider.ErrInfrastructureInvalid), errors.Is(err, infra.ErrWildcardUnsupported):
@@ -103,7 +123,8 @@ func result(c forge.Context, status int, value any, err error) error {
 		code = http.StatusNotFound
 	case errors.Is(err, infra.ErrConflict), errors.Is(err, infra.ErrBusy), errors.Is(err, provider.ErrInfrastructureDrift):
 		code = http.StatusConflict
-	case errors.Is(err, provider.ErrInfrastructureScope):
+	// A key whose saved authority can't act for capacity is refused, not a server error.
+	case errors.Is(err, provider.ErrInfrastructureScope), errors.Is(err, apikeys.ErrRejected):
 		code = http.StatusForbidden
 	case errors.Is(err, provider.ErrInfrastructureUnsupported):
 		code = http.StatusUnprocessableEntity

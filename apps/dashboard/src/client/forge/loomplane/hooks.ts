@@ -10,7 +10,7 @@
 import { query, mutation } from '@forge-go/client-core';
 import { ops } from './ops';
 
-import type { APIKeyList, ActivitySummary, Analysis, AnalysisGraph, AnalysisList, Backup, BackupList, BindingList, Board, CanaryReport, CapacityPolicyView, CatalogKindList, CatalogconnectEndpoint, CloudProjectGrantList, CloudSyncList, CloudTargetList, CloudinfraRoute, CloudinfraRouteStatus, ConnectedRepositoryList, Connection, ConnectionList, ConnectionsCloudList, ConsumerKey, DeliveryList, DeployedList, Deployment, DeploymentList, DiscoverySource, DiscoverySummary, DomainDetail, DomainOfferList, DomainOperationList, DomainOverview, DomainRouteList, EndpointList, Environment, EnvironmentCloud, EnvironmentConnections, EnvironmentList, Expansion, ExpansionList, FabriqKeyList, FailedCleanup, GPUInventory, GPUTargetList, GatewayList, GitHubInstallation, GitHubStatus, IdentitySession, InfrastructureStatus, KeylessSetup, LogPage, ManifestDraft, NativeInventory, NativePITRWindow, NativeRecoveryCopies, NativeRecoverySources, NativeRestore, NativeRetentionPolicy, NativeRetentionPolicyState, NativeRetirement, NativeRetirementPage, NotificationList, OctopusStatus, Operation, OperationList, OrgInvitationList, OrgMemberList, Plan, PlanList, PlanningCloudList, Policy, PolicyList, Pool, PoolList, Preferences, Preview, Profile, Project, ProjectDomainList, ProjectList, ProjectView, ProjectZoneList, ProviderList, ProviderZoneList, PublicConfig, Rebuild, RebuildList, Registration, RegistrationExtensionList, RegistrationList, Resolution, Restore, RestoreList, RetentionPolicy, RetentionPolicyHistory, RetentionPolicyState, RetentionPreview, Retirement, RetirementHistory, RetirementPage, Revision, RevisionList, RouteOperation, RouteSummary, Server, ServerList, ServerOptions, ServerUsage, SignInAppList, Snapshot, SourceList, SpendReport, Status, StorageVolumeList, Sync, Target, Tenant, TenantList, TrafficReport, Usage, Variable, VariableList, WebhookEndpointList, Zone, ZoneList } from './types';
+import type { APIKeyList, ActivitySummary, Analysis, AnalysisGraph, AnalysisList, Backup, BackupList, BindingList, Board, CanaryReport, CapacityPolicyView, CapacityUsage, CatalogKindList, CatalogconnectEndpoint, CloudProjectGrantList, CloudSyncList, CloudTargetList, CloudinfraRoute, CloudinfraRouteStatus, ConnectedRepositoryList, Connection, ConnectionList, ConnectionsCloudList, ConsumerKey, DeliveryList, DeployedList, Deployment, DeploymentList, DiscoverySource, DiscoverySummary, DomainDetail, DomainOfferList, DomainOperationList, DomainOverview, DomainRouteList, EndpointList, Environment, EnvironmentCloud, EnvironmentConnections, EnvironmentList, Expansion, ExpansionList, FabriqKeyList, FailedCleanup, GPUInventory, GPUTargetList, GatewayList, GitHubInstallation, GitHubStatus, IdentitySession, InfrastructureStatus, KeylessSetup, LogPage, ManifestDraft, NativeInventory, NativePITRWindow, NativeRecoveryCopies, NativeRecoverySources, NativeRestore, NativeRetentionPolicy, NativeRetentionPolicyState, NativeRetirement, NativeRetirementPage, NotificationList, OctopusStatus, Operation, OperationList, OrgInvitationList, OrgMemberList, Plan, PlanList, PlanningCloudList, Policy, PolicyList, Pool, PoolList, Preferences, Preview, Profile, Project, ProjectDomainList, ProjectList, ProjectView, ProjectZoneList, ProviderList, ProviderZoneList, PublicConfig, Rebuild, RebuildList, Registration, RegistrationExtensionList, RegistrationList, Resolution, Restore, RestoreList, RetentionPolicy, RetentionPolicyHistory, RetentionPolicyState, RetentionPreview, Retirement, RetirementHistory, RetirementPage, Revision, RevisionList, RouteOperation, RouteSummary, Server, ServerList, ServerOptions, ServerUsage, SignInAppList, Snapshot, SourceList, SpendReport, Status, StorageVolumeList, Sync, Target, Tenant, TenantList, TrafficReport, Usage, Variable, VariableList, WebhookEndpointList, Zone, ZoneList } from './types';
 
 export const useActivityGet = query<ActivitySummary>(ops['activity.get']);
 export const useAnalysesGet = query<Analysis>(ops['analyses.get']);
@@ -41,7 +41,9 @@ export const useOrganizationCloudsGet = query<Profile>(ops['organizationClouds.g
 export const useOrganizationCloudsUpdate = mutation<Profile, Profile>(ops['organizationClouds.update']);
 export const useOrganizationCloudsDelete = mutation(ops['organizationClouds.delete']);
 export const useCloudCapacityGetPolicy = query<CapacityPolicyView>(ops['cloudCapacity.getPolicy']);
-export const useCloudCapacitySavePolicy = mutation(ops['cloudCapacity.savePolicy']);
+export const useCloudCapacitySavePolicy = mutation<CapacityPolicyView, CapacityPolicyView>(ops['cloudCapacity.savePolicy']);
+export const useCloudCapacityUsage = query<CapacityUsage>(ops['cloudCapacity.usage']);
+export const useCloudCapacityRefresh = mutation<CapacityUsage, CapacityUsage>(ops['cloudCapacity.refresh']);
 export const useOrganizationCloudsSetDefaultPlacement = mutation<Profile, Profile>(ops['organizationClouds.setDefaultPlacement']);
 export const useCloudCapacityListExpansions = query<ExpansionList>(ops['cloudCapacity.listExpansions']);
 export const useCloudCapacityApproveExpansion = mutation<Expansion, Expansion>(ops['cloudCapacity.approveExpansion']);
@@ -60,6 +62,7 @@ export const useCloudPoolsUpdate = mutation<Pool, Pool>(ops['cloudPools.update']
 export const useOrganizationCloudsListGrants = query<CloudProjectGrantList>(ops['organizationClouds.listGrants']);
 export const useOrganizationCloudsGrantProject = mutation(ops['organizationClouds.grantProject']);
 export const useOrganizationCloudsRevokeProject = mutation(ops['organizationClouds.revokeProject']);
+export const useCloudCapacityCreateScalingPool = mutation(ops['cloudCapacity.createScalingPool']);
 export const useCloudServersOptions = query<ServerOptions>(ops['cloudServers.options']);
 export const useCloudServersList = query<ServerList>(ops['cloudServers.list']);
 export const useCloudServersPreview = mutation<Operation, Operation>(ops['cloudServers.preview']);
@@ -91,6 +94,8 @@ export const useConnectionKeylessReplace = mutation<Connection, Connection>(ops[
 export const useConnectionStorageList = query<StorageVolumeList>(ops['connectionStorage.list']);
 export const useDeploymentsGet = query<Deployment>(ops['deployments.get']);
 export const useDeploymentsCanary = query<CanaryReport>(ops['deployments.canary']);
+export const useDeploymentsCancelCapacity = mutation<Deployment, Deployment>(ops['deployments.cancelCapacity']);
+export const useDeploymentsResumeCapacity = mutation<Deployment, Deployment>(ops['deployments.resumeCapacity']);
 export const useDeploymentsCleanup = query<FailedCleanup>(ops['deployments.cleanup']);
 export const useDeploymentsCleanupApply = mutation(ops['deployments.cleanupApply']);
 export const useDeploymentsCleanupPreview = mutation(ops['deployments.cleanupPreview']);

@@ -1666,6 +1666,73 @@
               }
             }
           }
+        },
+        "x-forge-invalidates": [
+          "CapacityUsage:{cloudId}"
+        ]
+      }
+    },
+    "/api/v1/clouds/{cloudId}/capacity-usage": {
+      "get": {
+        "tags": [
+          "Cloud infrastructure"
+        ],
+        "summary": "cloudCapacity.usage",
+        "operationId": "cloudCapacity.usage",
+        "parameters": [
+          {
+            "name": "cloudId",
+            "in": "path",
+            "description": "Path parameter: cloudId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapacityUsage"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/clouds/{cloudId}/capacity-usage/refresh": {
+      "post": {
+        "tags": [
+          "Cloud infrastructure"
+        ],
+        "summary": "cloudCapacity.refresh",
+        "operationId": "cloudCapacity.refresh",
+        "parameters": [
+          {
+            "name": "cloudId",
+            "in": "path",
+            "description": "Path parameter: cloudId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CapacityUsage"
+                }
+              }
+            }
+          }
         }
       }
     },
@@ -1750,7 +1817,57 @@
               }
             }
           }
-        }
+        },
+        "x-forge-invalidates": [
+          "CapacityUsage:{cloudId}"
+        ]
+      }
+    },
+    "/api/v1/clouds/{cloudId}/scaling-pools": {
+      "post": {
+        "tags": [
+          "Cloud infrastructure"
+        ],
+        "summary": "cloudCapacity.createScalingPool",
+        "operationId": "cloudCapacity.createScalingPool",
+        "parameters": [
+          {
+            "name": "cloudId",
+            "in": "path",
+            "description": "Path parameter: cloudId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScalingPoolInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScalingPool"
+                }
+              }
+            }
+          }
+        },
+        "x-forge-invalidates": [
+          "CapacityPolicyView:{cloudId}",
+          "CapacityUsage:{cloudId}"
+        ]
       }
     },
     "/api/v1/clouds/{cloudId}/servers/preview": {
@@ -2769,6 +2886,92 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/CanaryReport"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/deployments/{id}/capacity/cancel": {
+      "post": {
+        "tags": [
+          "Plans"
+        ],
+        "summary": "Cancel a deployment paused waiting for capacity; steps that finished stay as they are",
+        "operationId": "deployments.cancelCapacity",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CapacityWaitInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The cancelled deployment",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Deployment"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/deployments/{id}/capacity/resume": {
+      "post": {
+        "tags": [
+          "Plans"
+        ],
+        "summary": "Check capacity again for a deployment paused waiting for it; the deployment keeps its steps and retries",
+        "operationId": "deployments.resumeCapacity",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CapacityWaitInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The deployment, running again",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Deployment"
                 }
               }
             }
@@ -11365,6 +11568,34 @@
           }
         }
       },
+      "CapacityAccountSnapshot": {
+        "type": "object",
+        "required": [
+          "provider",
+          "account_id",
+          "provisioned",
+          "quota",
+          "checked_at"
+        ],
+        "properties": {
+          "account_id": {
+            "type": "string"
+          },
+          "checked_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "provisioned": {
+            "$ref": "#/components/schemas/CapacityResources"
+          },
+          "quota": {
+            "$ref": "#/components/schemas/CapacityQuota"
+          }
+        }
+      },
       "CapacityBlock": {
         "type": "object",
         "required": [
@@ -11522,6 +11753,30 @@
           }
         }
       },
+      "CapacityObservation": {
+        "type": "object",
+        "required": [
+          "checked_at"
+        ],
+        "properties": {
+          "checked_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "cpu_millis": {
+            "type": "integer"
+          },
+          "free_storage_bytes": {
+            "type": "integer"
+          },
+          "memory_bytes": {
+            "type": "integer"
+          },
+          "storage_bytes": {
+            "type": "integer"
+          }
+        }
+      },
       "CapacityPolicy": {
         "type": "object",
         "required": [
@@ -11591,14 +11846,103 @@
       "CapacityPolicyView": {
         "type": "object",
         "required": [
+          "cloud_id",
           "automatic_expansion"
         ],
         "properties": {
+          "cloud_id": {
+            "type": "string",
+            "x-forge-id": true
+          },
           "automatic_expansion": {
-            "type": "boolean"
+            "type": "boolean",
+            "readOnly": true,
+            "description": "Whether this Loomplane server adds servers to pools on its own. Read-only: a save never takes it."
           },
           "policy": {
             "$ref": "#/components/schemas/CapacityPolicy"
+          }
+        }
+      },
+      "CapacityQuota": {
+        "type": "object",
+        "properties": {
+          "cpu_millis": {
+            "type": "integer"
+          },
+          "memory_bytes": {
+            "type": "integer"
+          },
+          "servers": {
+            "type": "integer"
+          },
+          "storage_bytes": {
+            "type": "integer"
+          }
+        }
+      },
+      "CapacityRecord": {
+        "type": "object",
+        "required": [
+          "kind",
+          "provider",
+          "account_id",
+          "resource_id",
+          "server_state_revision",
+          "resources",
+          "checked_at"
+        ],
+        "properties": {
+          "account_id": {
+            "type": "string"
+          },
+          "checked_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "gpu_kind": {
+            "type": "string"
+          },
+          "gpus": {
+            "type": "integer"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "observation": {
+            "$ref": "#/components/schemas/CapacityObservation"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "resource_id": {
+            "type": "string"
+          },
+          "resources": {
+            "$ref": "#/components/schemas/CapacityResources"
+          },
+          "server_id": {
+            "type": "string"
+          },
+          "server_state_revision": {
+            "type": "integer"
+          }
+        }
+      },
+      "CapacityResources": {
+        "type": "object",
+        "properties": {
+          "cpu_millis": {
+            "type": "integer"
+          },
+          "memory_bytes": {
+            "type": "integer"
+          },
+          "servers": {
+            "type": "integer"
+          },
+          "storage_bytes": {
+            "type": "integer"
           }
         }
       },
@@ -11614,6 +11958,88 @@
           },
           "connection_generation": {
             "type": "integer"
+          }
+        }
+      },
+      "CapacityUsage": {
+        "type": "object",
+        "required": [
+          "cloud_id",
+          "accounts",
+          "records",
+          "provisioned",
+          "pending",
+          "reserved",
+          "observed",
+          "system_reserve",
+          "allocatable",
+          "headroom",
+          "observed_storage_bytes",
+          "checked_at",
+          "fresh",
+          "gpus",
+          "frontends"
+        ],
+        "properties": {
+          "accounts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CapacityAccountSnapshot"
+            }
+          },
+          "allocatable": {
+            "$ref": "#/components/schemas/CapacityResources"
+          },
+          "checked_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "cloud_id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "fresh": {
+            "type": "boolean"
+          },
+          "frontends": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/FrontendUsage"
+            }
+          },
+          "gpus": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GPUUsage"
+            }
+          },
+          "headroom": {
+            "$ref": "#/components/schemas/CapacityResources"
+          },
+          "observed": {
+            "$ref": "#/components/schemas/CapacityResources"
+          },
+          "observed_storage_bytes": {
+            "type": "integer",
+            "nullable": true
+          },
+          "pending": {
+            "$ref": "#/components/schemas/CapacityResources"
+          },
+          "provisioned": {
+            "$ref": "#/components/schemas/CapacityResources"
+          },
+          "records": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/CapacityRecord"
+            }
+          },
+          "reserved": {
+            "$ref": "#/components/schemas/CapacityResources"
+          },
+          "system_reserve": {
+            "$ref": "#/components/schemas/CapacityResources"
           }
         }
       },
@@ -11636,6 +12062,17 @@
             "format": "date-time"
           },
           "revision": {
+            "type": "integer"
+          }
+        }
+      },
+      "CapacityWaitInputBody": {
+        "type": "object",
+        "required": [
+          "expected_revision"
+        ],
+        "properties": {
+          "expected_revision": {
             "type": "integer"
           }
         }
@@ -14592,18 +15029,7 @@
           "expansions": {
             "type": "array",
             "items": {
-              "oneOf": [
-                {
-                  "$ref": "#/components/schemas/Expansion"
-                },
-                {
-                  "type": "object",
-                  "nullable": true,
-                  "enum": [
-                    null
-                  ]
-                }
-              ]
+              "$ref": "#/components/schemas/Expansion"
             }
           }
         },
@@ -14833,6 +15259,36 @@
         ],
         "properties": {
           "maximum": {
+            "type": "integer"
+          },
+          "target_id": {
+            "type": "string"
+          }
+        }
+      },
+      "FrontendUsage": {
+        "type": "object",
+        "required": [
+          "target_id",
+          "counted",
+          "active",
+          "pending",
+          "retained"
+        ],
+        "properties": {
+          "active": {
+            "type": "integer"
+          },
+          "counted": {
+            "type": "integer"
+          },
+          "maximum": {
+            "type": "integer"
+          },
+          "pending": {
+            "type": "integer"
+          },
+          "retained": {
             "type": "integer"
           },
           "target_id": {
@@ -15091,6 +15547,35 @@
           },
           "value": {
             "type": "string"
+          }
+        }
+      },
+      "GPUUsage": {
+        "type": "object",
+        "required": [
+          "kind",
+          "provisioned",
+          "pending",
+          "reserved",
+          "limit"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string"
+          },
+          "limit": {
+            "type": "integer",
+            "nullable": true
+          },
+          "pending": {
+            "type": "integer"
+          },
+          "provisioned": {
+            "type": "integer",
+            "nullable": true
+          },
+          "reserved": {
+            "type": "integer"
           }
         }
       },
@@ -20952,6 +21437,43 @@
           },
           "min": {
             "type": "integer"
+          }
+        }
+      },
+      "ScalingPool": {
+        "type": "object",
+        "properties": {
+          "policy": {
+            "$ref": "#/components/schemas/CapacityPolicy"
+          },
+          "pool": {
+            "$ref": "#/components/schemas/Pool"
+          }
+        }
+      },
+      "ScalingPoolInputBody": {
+        "type": "object",
+        "required": [
+          "name",
+          "expected_revision",
+          "policy",
+          "template"
+        ],
+        "properties": {
+          "accelerator_kind": {
+            "type": "string"
+          },
+          "expected_revision": {
+            "type": "integer"
+          },
+          "name": {
+            "type": "string"
+          },
+          "policy": {
+            "$ref": "#/components/schemas/CapacityPolicy"
+          },
+          "template": {
+            "$ref": "#/components/schemas/PoolExpansionPolicy"
           }
         }
       },

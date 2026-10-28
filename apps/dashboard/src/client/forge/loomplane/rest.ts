@@ -342,6 +342,24 @@ export class RESTClient extends Client {
     },
 
     /**
+     * cloudCapacity.createScalingPool
+     */
+    createScalingPool: async (cloudId: string, body: types.ScalingPoolInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ScalingPool> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/scaling-pools`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["ScalingPoolInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ScalingPool"],
+      };
+
+      return this.request<types.ScalingPool>(config);
+    },
+
+    /**
      * cloudCapacity.getPolicy
      */
     getPolicy: async (cloudId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CapacityPolicyView> => {
@@ -374,6 +392,22 @@ export class RESTClient extends Client {
     },
 
     /**
+     * cloudCapacity.refresh
+     */
+    refresh: async (cloudId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CapacityUsage> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/capacity-usage/refresh`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CapacityUsage"],
+      };
+
+      return this.request<types.CapacityUsage>(config);
+    },
+
+    /**
      * cloudCapacity.savePolicy
      */
     savePolicy: async (cloudId: string, body: types.CapacityPolicyInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CapacityPolicyView> => {
@@ -389,6 +423,22 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.CapacityPolicyView>(config);
+    },
+
+    /**
+     * cloudCapacity.usage
+     */
+    usage: async (cloudId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CapacityUsage> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/capacity-usage`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CapacityUsage"],
+      };
+
+      return this.request<types.CapacityUsage>(config);
     },
 
   };
@@ -1451,6 +1501,24 @@ export class RESTClient extends Client {
     },
 
     /**
+     * Cancel a deployment paused waiting for capacity; steps that finished stay as they are
+     */
+    cancelCapacity: async (id: string, body: types.CapacityWaitInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Deployment> => {
+      let __path = `/api/v1/deployments/${encodeURIComponent(String(id))}/capacity/cancel`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["CapacityWaitInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Deployment"],
+      };
+
+      return this.request<types.Deployment>(config);
+    },
+
+    /**
      */
     cleanup: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.FailedCleanup> => {
       let __path = `/api/v1/deployments/${encodeURIComponent(String(id))}/cleanup`;
@@ -1595,6 +1663,24 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.LogPage>(config);
+    },
+
+    /**
+     * Check capacity again for a deployment paused waiting for it; the deployment keeps its steps and retries
+     */
+    resumeCapacity: async (id: string, body: types.CapacityWaitInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Deployment> => {
+      let __path = `/api/v1/deployments/${encodeURIComponent(String(id))}/capacity/resume`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["CapacityWaitInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Deployment"],
+      };
+
+      return this.request<types.Deployment>(config);
     },
 
     /**

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/xraph/grove/driver"
 	"go.jetify.com/typeid/v2"
 
 	"github.com/xraph/loomplane/internal/security"
@@ -157,6 +158,15 @@ func (s *PgStore) SavePool(ctx context.Context, p *Pool, previous int64) error {
 	if checkErr := lockCapacityCloud(ctx, tx, p.OrgID, p.CloudID); checkErr != nil {
 		return checkErr
 	}
+	if checkErr := savePoolTx(ctx, tx, p, previous); checkErr != nil {
+		return checkErr
+	}
+	return tx.Commit()
+}
+
+// savePoolTx writes p over revision previous inside tx. The caller holds
+// lockCapacityCloud and commits.
+func savePoolTx(ctx context.Context, tx driver.Tx, p *Pool, previous int64) error {
 	// Policy saves take the same Cloud lock, so the template can't change under this check.
 	policy, err := capacityPolicyTx(ctx, tx, p.OrgID, p.CloudID)
 	if err != nil {
@@ -287,7 +297,7 @@ func (s *PgStore) SavePool(ctx context.Context, p *Pool, previous int64) error {
 			return storeError(err)
 		}
 	}
-	return tx.Commit()
+	return nil
 }
 func memberIDs(members []PoolMember) []string {
 	ids := make([]string, len(members))
