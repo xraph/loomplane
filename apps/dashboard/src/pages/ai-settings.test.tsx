@@ -122,6 +122,13 @@ it("keeps the Hugging Face token write-only", async () => {
   ).toBeInTheDocument()
   const section = screen.getByRole("region", { name: "Hugging Face token" })
   expect(within(section).getByText("No token yet")).toBeInTheDocument()
+  // It names no model the registry doesn't gate.
+  expect(
+    within(section).getByText(
+      /Gated or private Hugging Face models download with it\./
+    )
+  ).toBeInTheDocument()
+  expect(within(section).queryByText(/Llama|Gemma/)).toBeNull()
 
   const field = within(section).getByLabelText("Token")
   expect(field).toHaveAttribute("type", "password")

@@ -112,7 +112,7 @@ function HuggingFaceSection({
           Hugging Face token
         </h2>
         <p className="max-w-[64ch] text-[13px] leading-relaxed text-pretty text-muted-foreground">
-          Gated models, such as Llama and Gemma, download with it. Loomplane
+          Gated or private Hugging Face models download with it. Loomplane
           keeps it encrypted and never shows it again.
         </p>
       </div>
