@@ -1,0 +1,92 @@
+name: Qualify models
+
+# Once a week this deploys a rotating sample of registry models on one real
+# GPU Droplet, probes each one, deletes the Droplet and opens a pull request
+# with what passed and failed. It spends real money, so:
+#
+# - it runs only on the schedule or by hand, never on a pull request, so a
+#   fork's code never reaches the token;
+# - the job needs the model-qualification environment, whose required
+#   reviewer approves every run, and which holds the secrets
+#   QUALIFY_DO_TOKEN (a DigitalOcean token for the qualification account
+#   alone) and QUALIFY_HF_TOKEN (a read-only Hugging Face token for gated
+#   weights);
+# - the QUALIFY_DO_ACCOUNT_UUID repository variable names that account, the
+#   job refuses a token from any other, and a repository without it (a fork)
+#   skips the job;
+# - the monthly and per-run caps in .github/qualification.yaml are checked
+#   before the Droplet starts, before every sample and every five minutes;
+# - the Droplet is deleted however the run ends, and a sweep afterwards
+#   deletes anything tagged loomplane-qualify that's left.
+
+on:
+  schedule:
+    - cron: "0 6 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One qualification job at a time, this one or the daily sweep, so a sweep
+# never deletes a running job's Droplet.
+concurrency:
+  group: model-qualification
+  cancel-in-progress: false
+
+jobs:
+  qualify:
+    name: Qualify a sample of models
+    if: ${{ vars.QUALIFY_DO_ACCOUNT_UUID != '' && github.event_name != 'pull_request' }}
+    runs-on: ubuntu-latest
+    environment: model-qualification
+    timeout-minutes: 330
+    permissions:
+      contents: write
+      pull-requests: write
+    env:
+      QUALIFY_DO_ACCOUNT_UUID: ${{ vars.QUALIFY_DO_ACCOUNT_UUID }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Qualify this week's sample
+        env:
+          QUALIFY_DO_TOKEN: ${{ secrets.QUALIFY_DO_TOKEN }}
+          QUALIFY_HF_TOKEN: ${{ secrets.QUALIFY_HF_TOKEN }}
+        run: go run ./cmd/loomplane-qualify run --config .github/qualification.yaml --confirm --out results.json
+
+      - name: Delete anything the run left
+        if: ${{ always() }}
+        env:
+          QUALIFY_DO_TOKEN: ${{ secrets.QUALIFY_DO_TOKEN }}
+        run: go run ./cmd/loomplane-qualify sweep --config .github/qualification.yaml
+
+      - name: Merge the results
+        id: merge
+        if: ${{ !cancelled() && hashFiles('results.json') != '' }}
+        run: |
+          go run ./cmd/loomplane-qualify merge --summary summary.md results.json
+          go test ./internal/models/registry -count=1
+
+      - name: Open a pull request with the results
+        if: ${{ !cancelled() && steps.merge.outcome == 'success' }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          date=$(date -u +%Y-%m-%d)
+          kind=$(jq -r .kind results.json)
+          branch="qualification/${date}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add internal/models/registry/data/qualification.yaml
+          if git diff --cached --quiet; then
+            echo "No new results to record."
+            exit 0
+          fi
+          git commit -m "Record qualification results for ${kind}, ${date}"
+          git push origin "$branch"
+          gh pr create --head "$branch" --title "Qualification results for ${kind}, ${date}" --body-file summary.md

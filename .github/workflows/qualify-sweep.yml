@@ -1,0 +1,40 @@
+name: Sweep qualification Droplets
+
+# Every day, delete every Droplet tagged loomplane-qualify and every SSH key
+# named lpq-* in the qualification account, so nothing a crashed or
+# cancelled qualification run left keeps billing. It creates nothing and
+# spends nothing. It shares the qualification job's concurrency group, so
+# it never runs while a qualification run is using its Droplet.
+
+on:
+  schedule:
+    - cron: "30 5 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: model-qualification
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    name: Delete leftover qualification Droplets
+    if: ${{ vars.QUALIFY_DO_ACCOUNT_UUID != '' && github.event_name != 'pull_request' }}
+    runs-on: ubuntu-latest
+    environment: model-qualification
+    timeout-minutes: 20
+    env:
+      QUALIFY_DO_ACCOUNT_UUID: ${{ vars.QUALIFY_DO_ACCOUNT_UUID }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      - name: Delete everything the qualification job tagged
+        env:
+          QUALIFY_DO_TOKEN: ${{ secrets.QUALIFY_DO_TOKEN }}
+        run: go run ./cmd/loomplane-qualify sweep --config .github/qualification.yaml --only-expired=false

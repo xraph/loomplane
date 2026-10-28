@@ -1,0 +1,25 @@
+# The model qualification job's settings (cmd/loomplane-qualify, run by
+# .github/workflows/qualify-models.yml). Each run buys one one-GPU Droplet
+# in a DigitalOcean account kept for this job alone, qualifies a sample of
+# registry models on it, and deletes it.
+#
+# account_uuid stays empty here. The workflow passes the account's UUID
+# from the QUALIFY_DO_ACCOUNT_UUID repository variable, and the job refuses
+# a token that belongs to any other account.
+account_uuid: ""
+region: tor1
+# The run's GPU kind rotates through these by ISO week.
+gpu_kinds:
+  - nvidia-rtx-4000-ada
+  - nvidia-l40s
+  - nvidia-h100-80gb
+# Hard caps, in dollars. A Droplet never starts if its cost for the rest of
+# the run could take this month's spend in the account past the monthly cap,
+# or this run's spend past the per-run cap, and a running job stops and
+# deletes its Droplet when either cap is reached.
+monthly_cap_usd: "150.00"
+run_cap_usd: "25.00"
+max_run_hours: 4
+samples_per_run: 8
+# A result older than this is run again.
+stale_after_days: 30

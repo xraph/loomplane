@@ -172,19 +172,19 @@ for attempt in range(180):
 		// before the server enrolls. A failure here still enrolls the server,
 		// and its GPU check then says why it can't take GPU work.
 		packages = []string{"python3", "iproute2", "ca-certificates", "curl", "gnupg"}
-		runcmd = []any{[]string{"bash", "-c", nvidiaToolkitScript}, []string{"systemctl", "enable", "--now", "docker"}, []string{"nvidia-ctk", "runtime", "configure", "--runtime=docker"}, []string{"systemctl", "restart", "docker"}, []string{"python3", "/root/loomplane-enroll.py"}}
+		runcmd = []any{[]string{"bash", "-c", NVIDIAToolkitScript}, []string{"systemctl", "enable", "--now", "docker"}, []string{"nvidia-ctk", "runtime", "configure", "--runtime=docker"}, []string{"systemctl", "restart", "docker"}, []string{"python3", "/root/loomplane-enroll.py"}}
 	}
 	document := map[string]any{"package_update": true, "groups": []string{"docker"}, "packages": packages, "users": []any{"default", map[string]any{"name": "loomplane", "groups": []string{"docker"}, "shell": "/bin/bash", "ssh_authorized_keys": []string{strings.TrimSpace(string(ssh.MarshalAuthorizedKey(signer.PublicKey())))}}}, "write_files": []any{map[string]any{"path": "/root/loomplane-enroll.py", "permissions": "0600", "content": script}}, "runcmd": runcmd}
 	encoded, err := json.Marshal(document)
 	return "#cloud-config\n" + string(encoded), err
 }
 
-// nvidiaToolkitScript prepares a GPU-ready image for containers. It installs
+// NVIDIAToolkitScript prepares a GPU-ready image for containers. It installs
 // Docker only when the image has none, so an engine the image ships stays,
 // then installs the NVIDIA Container Toolkit from NVIDIA's apt repository
 // unless nvidia-ctk is already there. It never installs a driver. Any failed
 // step stops the script, and the server's GPU check then says what's missing.
-const nvidiaToolkitScript = `set -euo pipefail
+const NVIDIAToolkitScript = `set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 if ! command -v docker >/dev/null 2>&1; then
   apt-get -o DPkg::Lock::Timeout=300 update

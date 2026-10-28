@@ -1,4 +1,4 @@
-.PHONY: help up down stack dev dev-api dev-dashboard build build-api build-dashboard run vuln fuzz build-cli build-agent \
+.PHONY: help up down stack dev dev-api dev-dashboard build build-api build-dashboard run vuln fuzz build-cli build-agent build-qualify \
 	image helm-lint k8s-manifest test-kubernetes test test-go test-dashboard test-integration acceptance acceptance-infrastructure acceptance-catalog lint lint-go lint-dashboard \
 	lint-fix fmt fmt-go fmt-dashboard vet gen-client check-client setup clean \
 	h b r t ti c f l lf v d
@@ -53,6 +53,9 @@ build-agent: ## Build the destination observer and signed-policy receiver
 
 build-cli: ## Build bin/loomctl, the command-line client
 	go build $(LDFLAGS) -o bin/loomctl ./cmd/loomctl
+
+build-qualify: ## Build bin/loomplane-qualify, the model qualification job (its run command costs money)
+	go build $(LDFLAGS) -o bin/loomplane-qualify ./cmd/loomplane-qualify
 
 build-dashboard: ## Build the dashboard into apps/dashboard/dist
 	pnpm --dir $(DASHBOARD_DIR) build
