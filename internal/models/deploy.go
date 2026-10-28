@@ -203,7 +203,12 @@ func (s *Service) Preview(ctx context.Context, p security.Principal, projectID, 
 	if err != nil {
 		return nil, err
 	}
-	pv.CanDeploy = len(pv.Problems) == 0 && s.d.Authz.Require(ctx, p, writeNeed(env), "") == nil
+	// Preview only reads, so it asks without repairing anything.
+	allowed, err := s.d.Authz.Allowed(ctx, p, writeNeed(env))
+	if err != nil {
+		return nil, err
+	}
+	pv.CanDeploy = len(pv.Problems) == 0 && allowed
 	return pv, nil
 }
 

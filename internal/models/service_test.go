@@ -5,7 +5,10 @@ import (
 	"errors"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 
 	"github.com/xraph/loomplane/internal/gpus"
 	"github.com/xraph/loomplane/internal/manifests"
@@ -99,13 +102,66 @@ func TestReaperDeletesADeletedEnvironmentsRows(t *testing.T) {
 	if left, _ = rows.List(ctx, "org"); len(left) != 1 || left[0].ProjectID != "prj_other" {
 		t.Errorf("after the project: %+v", left)
 	}
-	// Nothing to do, and a failed read, return nothing to run.
-	if f := r.Reap(ctx, "org", "prj_empty", ""); f != nil {
-		t.Error("a project with no models got a cleanup")
-	}
+	// A failed read before the deletion is said, and the cleanup still
+	// runs; failing again after it, the rows stay and that's said too.
 	warned = nil
-	if f := (&Reaper{Store: failingList{rows}, Warn: r.Warn}).Reap(ctx, "org", projectID, ""); f != nil || len(warned) != 1 {
-		t.Errorf("failed read: cleanup %v, warnings %v", f != nil, warned)
+	after = (&Reaper{Store: failingList{rows}, Warn: r.Warn}).Reap(ctx, "org", projectID, "")
+	if after == nil || len(warned) != 1 {
+		t.Fatalf("failed read: cleanup %v, warnings %v", after != nil, warned)
+	}
+	after(ctx)
+	if len(warned) != 2 || !strings.Contains(warned[1], "their rows stay") {
+		t.Errorf("failed read after the deletion: %v", warned)
+	}
+}
+
+// Ruling M27: the cleanup lists the rows again once the deletion has
+// happened, so a deploy that wrote its row between the first read and the
+// deletion leaves no orphan behind.
+func TestReaperTakesARowWrittenDuringTheDeletion(t *testing.T) {
+	ctx := context.Background()
+	rows := &memDeployments{}
+	r := &Reaper{Store: rows}
+	after := r.Reap(ctx, "org", projectID, stagingID)
+	if after == nil {
+		t.Fatal("no cleanup for an environment with no models yet")
+	}
+	late := &Deployment{OrgID: "org", ProjectID: projectID, EnvironmentID: stagingID, Resource: "late", EntryID: llama8BID,
+		Quantization: "bf16", Engine: "vllm", Phase: PhasePlanned}
+	kept := &Deployment{OrgID: "org", ProjectID: projectID, EnvironmentID: productID, Resource: "kept", EntryID: llama8BID,
+		Quantization: "bf16", Engine: "vllm", Phase: PhasePlanned}
+	for _, d := range []*Deployment{late, kept} {
+		if err := rows.Create(ctx, d); err != nil {
+			t.Fatal(err)
+		}
+	}
+	after(ctx)
+	left, _ := rows.List(ctx, "org")
+	if len(left) != 1 || left[0].Resource != "kept" {
+		t.Errorf("left %+v", left)
+	}
+}
+
+// Ruling M27: an orphan row whose environment is gone never holds the
+// Hugging Face token, so it can't block the token's delete.
+func TestGatedDeploymentsSkipsAGoneEnvironment(t *testing.T) {
+	ctx := context.Background()
+	d := newDeploy(t, deployRegistry(t, llamaRev, ""), aiAdmin, []gpus.GPUTarget{l40sServer()})
+	for _, env := range []string{stagingID, "env_gone"} {
+		row := &Deployment{OrgID: "org", ProjectID: projectID, EnvironmentID: env, Resource: "llama-8b", EntryID: llama8BID,
+			Quantization: "bf16", Engine: "vllm", Phase: PhasePlanned}
+		if err := d.rows.Create(ctx, row); err != nil {
+			t.Fatal(err)
+		}
+	}
+	gone := &Deployment{OrgID: "org", ProjectID: "prj_gone", EnvironmentID: "env_x", Resource: "llama-8b", EntryID: llama8BID,
+		Quantization: "bf16", Engine: "vllm", Phase: PhaseWaitingForServer}
+	if err := d.rows.Create(ctx, gone); err != nil {
+		t.Fatal(err)
+	}
+	got, err := d.svc.GatedDeployments(ctx, "org")
+	if err != nil || !slices.Equal(got, []string{"llama-8b in shop/staging"}) {
+		t.Errorf("gated deployments %v, %v", got, err)
 	}
 }
 
@@ -171,6 +227,117 @@ func TestMoveToTheNewPin(t *testing.T) {
 	}
 	if _, err = d.svc.CheckPin(ctx, member, projectID, stagingID, "api"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("a service: %v", err)
+	}
+}
+
+// repinnedLlama puts llama-8b in the manifest, running in staging, with
+// the settings of a registry pin older than the one d's registry has.
+func repinnedLlama(t *testing.T, d *deploySetup) {
+	t.Helper()
+	old := deployRegistry(t, llamaRev, "")
+	e, _ := old.Entry(llama8BID)
+	q, _ := e.Quantization("bf16")
+	settings := engines.Settings(engines.Spec{Entry: e, Quantization: q, ServedName: llama8BID, MaxModelLen: 16384, GPUs: 1})
+	mf := manifests.NewService(d.revisions, memProjects{}, aiAdmin, nil)
+	if _, _, err := mf.Edit(context.Background(), member, projectID, manifests.EditInput{AddResource: &manifests.NewResource{
+		Name: "llama-8b", Kind: recipes.ModelVLLMKind, Provider: "server", Target: gpuConn, Version: "0.31", Settings: settings,
+		EnabledIn: "staging",
+	}}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Ruling M27: moving to the new pin rewrites the resource in every
+// environment it runs in, so someone who may change staging's models
+// can't use it to change production's.
+func TestMoveToPinStaysInItsEnvironment(t *testing.T) {
+	ctx := context.Background()
+	d := newDeploy(t, deployRegistry(t, strings.Repeat("e", 40), ""), deployer, []gpus.GPUTarget{l40sServer()})
+	repinnedLlama(t, d)
+	// Someone has turned it on in production by hand.
+	m := current(t, d)
+	r := m.Resources["llama-8b"]
+	r.Environments["production"] = r.Environments["staging"]
+	m.Resources["llama-8b"] = r
+	raw, err := yaml.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mf := manifests.NewService(d.revisions, memProjects{}, aiAdmin, nil)
+	if _, _, err = mf.Save(ctx, member, projectID, manifests.SaveInput{YAML: string(raw)}); err != nil {
+		t.Fatal(err)
+	}
+	before := d.revisions.count()
+
+	_, err = d.svc.MoveToPin(ctx, member, projectID, stagingID, "llama-8b")
+	if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "also runs in production") {
+		t.Fatalf("an ai:edit holder moved a model production runs: %v", err)
+	}
+	if d.revisions.count() != before || len(d.plans.asked) != 0 || len(d.audit.events) != 0 {
+		t.Error("the refused move wrote something")
+	}
+	if got := current(t, d).Resources["llama-8b"].Settings["revision"]; got != llamaRev {
+		t.Errorf("production's revision is %s now", got)
+	}
+}
+
+// Ruling M27: a move whose plan fails leaves the row saying what to do,
+// as a deploy's does.
+func TestMoveToPinSaysWhatToDoWhenPlanningFails(t *testing.T) {
+	ctx := context.Background()
+	d := newDeploy(t, deployRegistry(t, strings.Repeat("e", 40), ""), deployer, []gpus.GPUTarget{l40sServer()})
+	repinnedLlama(t, d)
+	row := &Deployment{OrgID: "org", ProjectID: projectID, EnvironmentID: stagingID, Resource: "llama-8b", EntryID: llama8BID,
+		Quantization: "bf16", Engine: "vllm", Phase: PhaseActive}
+	if err := d.rows.Create(ctx, row); err != nil {
+		t.Fatal(err)
+	}
+	d.plans.err = errors.New("the planner is down")
+	got, err := d.svc.MoveToPin(ctx, member, projectID, stagingID, "llama-8b")
+	var perr *PlanAfterEditError
+	if !errors.As(err, &perr) || !perr.Repin {
+		t.Fatalf("plan failure: %v", err)
+	}
+	want := "The manifest has llama-8b on the registry's new pin now. Plan staging from the project to update it."
+	if got == nil || got.Deployment == nil || got.Deployment.Message != want {
+		t.Errorf("result %+v", got)
+	}
+	if stored, _ := d.rows.Get(ctx, "org", projectID, stagingID, "llama-8b"); stored.Message != want {
+		t.Errorf("stored message %q", stored.Message)
+	}
+}
+
+// requireCounter is an Authorizer that grants perms and counts what was
+// required of it, so a test can tell an answer from an action.
+type requireCounter struct {
+	perms
+	mu       sync.Mutex
+	required []security.Permission
+}
+
+func (r *requireCounter) Require(ctx context.Context, p security.Principal, perm security.Permission, id string) error {
+	r.mu.Lock()
+	r.required = append(r.required, perm)
+	r.mu.Unlock()
+	return r.perms.Require(ctx, p, perm, id)
+}
+
+// Ruling M27: Preview only reads. Whether the caller may deploy is asked
+// with Allowed, which never repairs a member's roles, not Require.
+func TestPreviewAsksWithoutRepairing(t *testing.T) {
+	authz := &requireCounter{perms: deployer}
+	d := newDeploy(t, deployRegistry(t, llamaRev, ""), authz, []gpus.GPUTarget{l40sServer()})
+	d.grantLlama()
+	in := DeployInput{EntryID: llama8BID, Target: onGPU("nvidia-l40s")}
+	pv, err := d.svc.Preview(context.Background(), member, projectID, stagingID, in)
+	if err != nil || !pv.CanDeploy {
+		t.Fatalf("staging: can deploy %v, %v", pv != nil && pv.CanDeploy, err)
+	}
+	if pv, err = d.svc.Preview(context.Background(), member, projectID, productID, in); err != nil || pv.CanDeploy {
+		t.Fatalf("production: %v", err)
+	}
+	if slices.Contains(authz.required, security.AIEdit) || slices.Contains(authz.required, security.AIManage) {
+		t.Errorf("Preview required %v", authz.required)
 	}
 }
 

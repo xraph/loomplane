@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/xraph/loomplane/internal/manifests"
 	"github.com/xraph/loomplane/internal/models/engines"
@@ -120,6 +123,14 @@ func (s *Service) MoveToPin(ctx context.Context, p security.Principal, projectID
 	if err != nil {
 		return nil, err
 	}
+	// The edit rewrites the resource's settings in every environment it
+	// runs in, and the permission above covers only env. A model runs in
+	// one environment, so another one there is a hand edit, and moving it
+	// from here would change that environment without its permission.
+	if others := otherEnvironments(r, env.Name); len(others) > 0 {
+		return nil, fmt.Errorf("%w: %s also runs in %s, and moving it to the new pin would change it there too. Edit its settings in the manifest instead",
+			ErrInvalid, resource, strings.Join(others, " and "))
+	}
 	e, q, ok := registryQuantization(s.d.Registry, r.Settings)
 	if !ok {
 		return nil, fmt.Errorf("%w: %s doesn't run a registry quantization, so there's no pin to move it to", ErrInvalid, resource)
@@ -145,15 +156,36 @@ func (s *Service) MoveToPin(ctx context.Context, p security.Principal, projectID
 		"resource": resource, "environment": env.Name, "entry": e.ID, "quantization": q.ID,
 		"from": repinned.Asked, "to": weights(repinned.Model, repinned.Revision, repinned.File),
 	})
-	plan, err := s.d.Plans.Create(ctx, p, projectID, planning.CreatePlanInput{Environment: env.Name, Catalog: rev.Manifest.CatalogOnly()})
-	if err != nil {
-		return nil, &PlanAfterEditError{Resource: resource, Environment: env.Name, Repin: true, err: err}
-	}
-	out := &DeployResult{PlanID: plan.ID}
+	var row *Deployment
 	if s.d.Store != nil {
 		if d, gerr := s.d.Store.Get(ctx, p.OrgID, projectID, env.ID, resource); gerr == nil {
-			out.Deployment = d
+			row = d
 		}
 	}
-	return out, nil
+	plan, err := s.d.Plans.Create(ctx, p, projectID, planning.CreatePlanInput{Environment: env.Name, Catalog: rev.Manifest.CatalogOnly()})
+	if err != nil {
+		perr := &PlanAfterEditError{Resource: resource, Environment: env.Name, Repin: true, err: err}
+		if row == nil {
+			return nil, perr
+		}
+		// As Deploy does, the row says what to do, so the page shows it.
+		row.Message = fmt.Sprintf("The manifest has %s on the registry's new pin now. Plan %s from the project to update it.", resource, env.Name)
+		if uerr := s.d.Store.Update(context.WithoutCancel(ctx), row); uerr != nil {
+			return &DeployResult{Deployment: row}, errors.Join(perr, uerr)
+		}
+		return &DeployResult{Deployment: row}, perr
+	}
+	return &DeployResult{PlanID: plan.ID, Deployment: row}, nil
+}
+
+// otherEnvironments lists, by name, the environments other than env that
+// the resource runs in.
+func otherEnvironments(r manifest.Resource, env string) []string {
+	var out []string
+	for _, name := range slices.Sorted(maps.Keys(r.Environments)) {
+		if name != env && enabledIn(r, name) {
+			out = append(out, name)
+		}
+	}
+	return out
 }

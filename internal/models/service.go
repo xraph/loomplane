@@ -94,6 +94,15 @@ func (s *Service) GatedDeployments(ctx context.Context, orgID string) ([]string,
 	}
 	var out []string
 	for _, d := range rows {
+		// A row whose environment is gone is an orphan the Reaper missed:
+		// nothing will download for it, so it can't hold the token.
+		gone, err := s.environmentGone(ctx, d)
+		if err != nil {
+			return nil, err
+		}
+		if gone {
+			continue
+		}
 		v, err := s.lookup(ctx, orgID, d.EntryID)
 		if errors.Is(err, ErrEntryNotFound) {
 			continue
@@ -107,6 +116,19 @@ func (s *Service) GatedDeployments(ctx context.Context, orgID string) ([]string,
 	}
 	slices.Sort(out)
 	return out, nil
+}
+
+// environmentGone reports whether d's environment, or its project, has
+// been deleted.
+func (s *Service) environmentGone(ctx context.Context, d *Deployment) (bool, error) {
+	_, err := s.environment(ctx, d.OrgID, d.ProjectID, d.EnvironmentID)
+	switch {
+	case errors.Is(err, projects.ErrEnvironmentNotFound), errors.Is(err, projects.ErrNotFound):
+		return true, nil
+	case err != nil:
+		return false, err
+	}
+	return false, nil
 }
 
 // label names a deployment as "<resource> in <project>/<environment>",
@@ -138,41 +160,50 @@ type Reaper struct {
 // Reap implements projects.Reaper. It reads the rows before the deletion,
 // and says now which of them were waiting for a server, so a GPU server
 // that's still being created, and costs money once it's up, isn't
-// forgotten with them. Once the deletion has happened it deletes the rows.
+// forgotten with them. Once the deletion has happened it lists the rows
+// again and deletes what it finds, so a row written between the two reads
+// goes too.
 func (r *Reaper) Reap(ctx context.Context, orgID, projectID, environmentID string) func(context.Context) {
 	rows, err := r.Store.ListProject(ctx, orgID, projectID)
 	if err != nil {
-		r.warn("read the model deployments of a project or environment being deleted, so their rows stay", err)
-		return nil
+		r.warn("read the model deployments of a project or environment being deleted before the deletion", err)
 	}
-	var gone []*Deployment
 	for _, d := range rows {
 		if environmentID != "" && d.EnvironmentID != environmentID {
 			continue
 		}
-		gone = append(gone, d)
-		if d.ServerOperationID == "" || (d.Phase != PhaseWaitingForServer && d.Phase != PhaseNeedsAttention) {
-			continue
-		}
-		server := d.ServerName
-		if server == "" {
-			server = "its GPU server"
-		}
-		r.warn(fmt.Sprintf("%s was waiting for a GPU server when its environment was deleted", d.Resource),
-			fmt.Errorf("loomplane was creating %s for %s (cloud %s, operation %s), and the deletion doesn't stop it. "+
-				"Once it's up it shows on the cloud's servers and costs money until you delete it",
-				server, d.Resource, d.ServerCloudID, d.ServerOperationID))
-	}
-	if len(gone) == 0 {
-		return nil
+		r.warnWaiting(d)
 	}
 	return func(ctx context.Context) {
-		for _, d := range gone {
+		rows, err := r.Store.ListProject(ctx, orgID, projectID)
+		if err != nil {
+			r.warn("read the model deployments of a deleted project or environment, so their rows stay", err)
+			return
+		}
+		for _, d := range rows {
+			if environmentID != "" && d.EnvironmentID != environmentID {
+				continue
+			}
 			if err := r.Store.Delete(ctx, d.OrgID, d.ProjectID, d.EnvironmentID, d.Resource); err != nil && !errors.Is(err, ErrNotFound) {
 				r.warn(fmt.Sprintf("delete the model deployment %s of a deleted environment", d.Resource), err)
 			}
 		}
 	}
+}
+
+// warnWaiting says that d was waiting for a GPU server, when it was.
+func (r *Reaper) warnWaiting(d *Deployment) {
+	if d.ServerOperationID == "" || (d.Phase != PhaseWaitingForServer && d.Phase != PhaseNeedsAttention) {
+		return
+	}
+	server := d.ServerName
+	if server == "" {
+		server = "its GPU server"
+	}
+	r.warn(fmt.Sprintf("%s was waiting for a GPU server when its environment was deleted", d.Resource),
+		fmt.Errorf("loomplane was creating %s for %s (cloud %s, operation %s), and the deletion doesn't stop it. "+
+			"Once it's up it shows on the cloud's servers and costs money until you delete it",
+			server, d.Resource, d.ServerCloudID, d.ServerOperationID))
 }
 
 func (r *Reaper) warn(msg string, err error) {

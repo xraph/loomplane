@@ -52,9 +52,11 @@ type ConnectionLister interface {
 }
 
 // Authorizer decides whether a principal may act. *security.Authorizer is
-// the real one.
+// the real one. Require is for acting, and may repair a member's roles;
+// Allowed only answers, for what a page offers, and never repairs.
 type Authorizer interface {
 	Require(ctx context.Context, p security.Principal, perm security.Permission, resourceID string) error
+	Allowed(ctx context.Context, p security.Principal, perm security.Permission) (bool, error)
 }
 
 // Deps are what the models service reads.

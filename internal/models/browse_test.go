@@ -96,6 +96,10 @@ func (a perms) Require(_ context.Context, _ security.Principal, perm security.Pe
 	return fmt.Errorf("%w (%s)", security.ErrForbidden, perm.Name())
 }
 
+func (a perms) Allowed(_ context.Context, _ security.Principal, perm security.Permission) (bool, error) {
+	return slices.Contains(a, perm), nil
+}
+
 var (
 	developer = perms{security.AIRead, security.AIEdit, security.InfrastructureRead, security.CloudAccountRead}
 	viewer    = perms{security.AIRead, security.InfrastructureRead, security.CloudAccountRead}
