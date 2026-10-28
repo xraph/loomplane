@@ -1269,6 +1269,90 @@ func TestAGoneEnvironmentsBlockIsNoOtherCopy(t *testing.T) {
 	}
 }
 
+// waitingLLM records a row for llm in env that waits for its GPU server,
+// as an add there would have; moving, when set, makes it a move's.
+func waitingLLM(t *testing.T, d *deploySetup, env string, moving *MovingFrom) {
+	t.Helper()
+	row := llmRow(t, d, env)
+	row.Phase, row.Request = PhaseWaitingForServer, &DeployInput{EntryID: qwen7B, Resource: "llm", Moving: moving}
+	if err := d.rows.Update(context.Background(), row); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// Ruling E8: production's copy is removed while staging's waits, which
+// keeps llm for staging (M1). Cancelling staging's wait leaves llm
+// running nowhere, so it goes from the manifest too. While checkout
+// needs it, it stays, and the cancel says to unlink checkout first. A
+// failed wait, one that needs attention, is cleaned up the same way.
+func TestCancelRemovesAModelLeftInNoEnvironment(t *testing.T) {
+	ctx := context.Background()
+	for _, c := range []struct {
+		linked bool
+		phase  string
+	}{{false, PhaseWaitingForServer}, {true, PhaseWaitingForServer}, {false, PhaseNeedsAttention}} {
+		linked := c.linked
+		targets, conns := copyServers()
+		d := newDeploy(t, deployRegistry(t, llamaRev, ""), aiAdmin, targets, conns...)
+		putLLM(t, d, map[string]manifest.ResourceSettings{"production": on()})
+		if linked {
+			saveServices(t, d, map[string]manifest.Service{"checkout": linkedService("go:cmd/checkout", "llm")})
+		}
+		llmRow(t, d, productID)
+		waitingLLM(t, d, stagingID, nil)
+		if _, err := d.svc.Remove(ctx, member, projectID, productID, "llm"); err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := current(t, d).Resources["llm"]; !ok {
+			t.Fatal("Remove took llm out while staging waits for it")
+		}
+		if c.phase == PhaseNeedsAttention {
+			row, gerr := d.rows.Get(ctx, "org", projectID, stagingID, "llm")
+			if gerr != nil {
+				t.Fatal(gerr)
+			}
+			row.Phase = PhaseNeedsAttention
+			if uerr := d.rows.Update(ctx, row); uerr != nil {
+				t.Fatal(uerr)
+			}
+		}
+
+		res, err := d.svc.CancelWaiting(ctx, member, projectID, stagingID, "llm")
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, kept := current(t, d).Resources["llm"]
+		want := "llm stays in the project's manifest, running in no environment, because checkout needs it. Unlink it first, then remove llm from the manifest."
+		switch {
+		case !linked && (kept || res.Message != ""):
+			t.Errorf("%s, unlinked: kept %v, message %q", c.phase, kept, res.Message)
+		case linked && (!kept || res.Message != want):
+			t.Errorf("linked: kept %v, message %q", kept, res.Message)
+		}
+	}
+}
+
+// A cancelled move leaves the model where it runs, in the manifest.
+func TestCancelledMoveLeavesTheResource(t *testing.T) {
+	ctx := context.Background()
+	targets, conns := copyServers()
+	d := newDeploy(t, deployRegistry(t, llamaRev, ""), aiAdmin, targets, conns...)
+	putLLM(t, d, map[string]manifest.ResourceSettings{"staging": on()})
+	waitingLLM(t, d, stagingID, &MovingFrom{Kind: recipes.ModelVLLMKind, ConnectionID: gpuConn, Phase: PhaseActive})
+	edits := d.recordEdits()
+
+	res, err := d.svc.CancelWaiting(ctx, member, projectID, stagingID, "llm")
+	if err != nil || res.Message != "" {
+		t.Fatalf("cancel: %+v, %v", res, err)
+	}
+	if llm, ok := current(t, d).Resources["llm"]; !ok || !enabledIn(llm, "staging") || len(edits.edits) != 0 {
+		t.Errorf("manifest %+v, edits %+v", llm, edits.edits)
+	}
+	if row, gerr := d.rows.Get(ctx, "org", projectID, stagingID, "llm"); gerr != nil || row.Phase != PhaseActive {
+		t.Errorf("row %+v, %v", row, gerr)
+	}
+}
+
 func TestRemovalUpdateClearsTheBlock(t *testing.T) {
 	block := on()
 	block.Target, block.Provider, block.GPU = gpuConn2, "kubernetes", &manifest.GPU{Kind: "nvidia-h100", Count: 1}

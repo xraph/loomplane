@@ -17,6 +17,7 @@ import (
 	"github.com/xraph/loomplane/internal/gpus"
 	"github.com/xraph/loomplane/internal/manifests"
 	"github.com/xraph/loomplane/internal/projects"
+	"github.com/xraph/loomplane/internal/recipes"
 	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/pkg/provider"
 )
@@ -121,8 +122,9 @@ func operationCost(op *cloudinfra.Operation) Cost {
 // serverNameFor is the name of the GPU server a deploy creates for
 // resource's copy in environment of the project:
 // "<project slug>-<resource>-<environment>-gpu", a DNS label of at most
-// 63 characters. Each environment's copy runs on its own server, so the
-// environment keeps two of them from coming out as "-gpu" and "-gpu-2".
+// 63 characters. Each environment's copy gets a server of its own name,
+// so the environment keeps two of them from coming out as "-gpu" and
+// "-gpu-2".
 // A name that's too long keeps "-<environment>-gpu" whole and shortens the
 // slug and the resource instead: the longer one first, down to an even
 // share each.
@@ -559,14 +561,18 @@ func capacityResource(resource string) string {
 type CancelResult struct {
 	// Message says the GPU server was already approved, so it's coming or
 	// up and costs money until someone deletes it, or that Loomplane
-	// couldn't tell. Empty when no server was approved.
+	// couldn't tell. It also says when the model stays in the manifest,
+	// running in no environment, and what to do about it. Empty when
+	// there's nothing to say.
 	Message string `json:"message,omitempty"`
 }
 
 // CancelWaiting stops a deployment that's waiting for its GPU server, or
 // needs attention there. The row goes; the server, if Loomplane created
 // one, stays on the cloud's servers until someone deletes it from
-// Infrastructure. It needs WriteNeed of the environment.
+// Infrastructure. A cancelled add that leaves the model running in no
+// environment takes it out of the manifest too (removeUnused). It needs
+// WriteNeed of the environment.
 //
 // The cron may approve a paused server's review while the row is being
 // deleted, so the operation is read again once the row is gone: when it
@@ -581,18 +587,94 @@ func (s *Service) CancelWaiting(ctx context.Context, p security.Principal, proje
 		return nil, fmt.Errorf("%w: only a model waiting for its GPU server can be cancelled", ErrInvalid)
 	}
 	waiting := *d
+	left := ""
 	if d.Request != nil && d.Request.Moving != nil {
 		// A move's model still runs where it was: the row goes back to it.
 		if uerr := s.restoreMove(ctx, d); uerr != nil {
 			return nil, uerr
 		}
-	} else if derr := s.d.Store.Delete(ctx, d.OrgID, d.ProjectID, d.EnvironmentID, d.Resource); derr != nil {
-		return nil, derr
+	} else {
+		if derr := s.d.Store.Delete(ctx, d.OrgID, d.ProjectID, d.EnvironmentID, d.Resource); derr != nil {
+			return nil, derr
+		}
+		left = s.removeUnused(ctx, p, projectID, d.EnvironmentID, resource)
 	}
 	s.audit(ctx, p, projectID, "ai.model.cancel", map[string]any{
 		"resource": resource, "server": waiting.ServerName, "cloud_id": waiting.ServerCloudID, "operation_id": waiting.ServerOperationID,
 	})
-	return &CancelResult{Message: s.serverAfterCancel(ctx, p, &waiting)}, nil
+	msg := strings.TrimSpace(s.serverAfterCancel(ctx, p, &waiting) + " " + left)
+	return &CancelResult{Message: msg}, nil
+}
+
+// errKeep is a cancel's cleanup deciding to leave the manifest as it is.
+var errKeep = errors.New("models: nothing to clean up")
+
+// removeUnused takes resource out of the manifest after a cancelled add
+// in environmentID, when that add was the last thing it was there for: a
+// model that runs in none of the project's environments (Remove keeps it
+// for a waiting copy, M1) and that no other environment's copy waits
+// for. The edit is decided from the revision it's made to (decideEdit).
+// While a service needs it, it stays, and the sentence returned says to
+// unlink it first: the cancel itself goes ahead, since the server it
+// stops costs money. A cleanup that fails leaves the cancel done and says
+// what's left.
+func (s *Service) removeUnused(ctx context.Context, p security.Principal, projectID, environmentID, resource string) string {
+	if s.d.Manifests == nil {
+		return ""
+	}
+	live, err := s.liveEnvironments(ctx, p.OrgID, projectID)
+	if err != nil {
+		return s.leftInManifest(resource, err)
+	}
+	others, err := s.waitingElsewhere(ctx, p.OrgID, projectID, &projects.Environment{ID: environmentID}, resource, live)
+	if err != nil {
+		return s.leftInManifest(resource, err)
+	}
+	if len(others) > 0 {
+		return ""
+	}
+	var users []string
+	rev, err := s.decideEdit(ctx, p, projectID, "removing "+resource+" after the cancel", func(cur *manifests.Revision) (manifests.EditInput, error) {
+		r, ok := cur.Manifest.Resources[resource]
+		if !ok || !recipes.IsModelKind(r.Kind) {
+			return manifests.EditInput{}, errKeep
+		}
+		r = liveIn(r, live)
+		for name := range r.Environments {
+			if enabledIn(r, name) {
+				return manifests.EditInput{}, errKeep
+			}
+		}
+		if users = servicesNeeding(cur.Manifest, resource); len(users) > 0 {
+			return manifests.EditInput{}, errKeep
+		}
+		return manifests.EditInput{RemoveResource: resource}, nil
+	})
+	switch {
+	case errors.Is(err, errKeep) && len(users) > 0:
+		verb, them := "needs", "it"
+		if len(users) > 1 {
+			verb, them = "need", "them"
+		}
+		return fmt.Sprintf("%s stays in the project's manifest, running in no environment, because %s %s it. Unlink %s first, then remove %s from the manifest.",
+			resource, joinNames(users), verb, them, resource)
+	case errors.Is(err, errKeep):
+		return ""
+	case err != nil:
+		return s.leftInManifest(resource, err)
+	}
+	s.audit(ctx, p, projectID, "ai.model.remove", map[string]any{"resource": resource, "after_cancel": true, "manifest_revision": rev.Revision})
+	s.modelsChanged(ctx, p.OrgID, projectID)
+	return ""
+}
+
+// leftInManifest says that a cancel's cleanup couldn't take resource out
+// of the manifest, and logs why.
+func (s *Service) leftInManifest(resource string, err error) string {
+	if s.d.Warn != nil {
+		s.d.Warn(resource+" wasn't removed from the manifest after a cancel", err)
+	}
+	return fmt.Sprintf("%s stays in the project's manifest, running in no environment. Remove it from the manifest when you no longer need it.", resource)
 }
 
 // restoreMove puts a deployment whose move onto a new GPU server was
