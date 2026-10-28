@@ -196,6 +196,21 @@ function PolicyEditor({
     draft.gpuLimits?.find((g) => g.kind === kind)?.maximum ?? 0
   const submit = async () => {
     setError("")
+    // Growing needs a ceiling on every dimension; say which ones are missing.
+    const missing = [
+      ["servers", limits.servers],
+      ["vCPU", limits.cpuMillis],
+      ["memory", limits.memoryBytes],
+      ["storage", limits.storageBytes],
+    ]
+      .filter(([, n]) => !n)
+      .map(([name]) => name)
+    if (draft.enabled && missing.length) {
+      setError(
+        `To let pools grow, set the most this Cloud may hold for ${missing.join(", ")}.`
+      )
+      return
+    }
     try {
       await save.mutateAsync({
         path: { cloudId },
@@ -206,10 +221,12 @@ function PolicyEditor({
       setError(
         statusOf(err) === 409
           ? "Someone saved this policy meanwhile. Reload to see theirs."
-          : messageOf(
-              err,
-              "The policy wasn't saved. Turning growth on needs every limit above zero, and a rule for each pool that may grow."
-            )
+          : statusOf(err) === 422
+            ? "The policy wasn't saved. Check that each pool may grow to no more servers than the Cloud allows, and that its account still offers the region, image and sizes you chose."
+            : messageOf(
+                err,
+                "The policy wasn't saved. Turning growth on needs every limit above zero, and a rule for each pool that may grow."
+              )
       )
     }
   }
@@ -249,6 +266,7 @@ function PolicyEditor({
                   </span>
                 </span>
                 <Switch
+                  aria-label="Let pools on this Cloud grow"
                   checked={draft.enabled}
                   onCheckedChange={(enabled) => setDraft({ ...draft, enabled })}
                 />
@@ -268,6 +286,7 @@ function PolicyEditor({
                   </span>
                 </span>
                 <Switch
+                  aria-label="Ask before adding a server"
                   checked={draft.requireExpansionApproval}
                   onCheckedChange={(requireExpansionApproval) =>
                     setDraft({ ...draft, requireExpansionApproval })
