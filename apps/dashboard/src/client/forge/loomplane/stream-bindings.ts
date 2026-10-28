@@ -238,6 +238,15 @@ export const streams = [
   {
     kind: 'entity',
     channel: '/api/v1/realtime/events',
+    message: 'cloud_capacity.updated',
+    entity: 'CapacityChange',
+    intent: 'patch',
+    invalidates: ['CapacityPolicyView:{cloud_id}', 'CapacityUsage:{cloud_id}', 'Expansion[]'],
+    decode: (payload: unknown) => decode(payload, CODECS['CapacityChange']),
+  },
+  {
+    kind: 'entity',
+    channel: '/api/v1/realtime/events',
     message: 'build.log',
     entity: 'Log',
     intent: 'upsert',
@@ -486,6 +495,15 @@ export const streams = [
     intent: 'patch',
     invalidates: ['Sync', 'Sync[]', 'EnvironmentCloud'],
     decode: (payload: unknown) => decode(payload, CODECS['CloudSyncEvent']),
+  },
+  {
+    kind: 'entity',
+    channel: '/api/v1/realtime/ws',
+    message: 'cloud_capacity.updated',
+    entity: 'CapacityChange',
+    intent: 'patch',
+    invalidates: ['CapacityPolicyView:{cloud_id}', 'CapacityUsage:{cloud_id}', 'Expansion[]'],
+    decode: (payload: unknown) => decode(payload, CODECS['CapacityChange']),
   },
   {
     kind: 'entity',

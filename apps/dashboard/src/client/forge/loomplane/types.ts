@@ -364,6 +364,15 @@ export interface CapacityBlock {
   targetId: string;
 }
 
+export interface CapacityChange {
+  cloudId: string;
+  entityId: string;
+  kind: string;
+  orgId: string;
+  revision: number;
+  status?: string;
+}
+
 export interface CapacityDemand {
   architecture: string;
   cloudId: string;

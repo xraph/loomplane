@@ -104,6 +104,15 @@
           "title": "cloud.updated event",
           "summary": "SSE event: cloud.updated"
         },
+        "cloud_capacity.updated": {
+          "payload": {
+            "$ref": "#/components/schemas/CapacityChange"
+          },
+          "contentType": "text/event-stream",
+          "name": "cloud_capacity.updated",
+          "title": "cloud_capacity.updated event",
+          "summary": "SSE event: cloud_capacity.updated"
+        },
         "cloud_sync.updated": {
           "payload": {
             "$ref": "#/components/schemas/CloudSyncEvent"
@@ -548,6 +557,17 @@
           "type": "github.com/xraph/loomplane/internal/cloudprofiles.CloudSyncEvent"
         },
         {
+          "entityType": "CapacityChange",
+          "intent": "patch",
+          "invalidates": [
+            "CapacityPolicyView:{cloud_id}",
+            "CapacityUsage:{cloud_id}",
+            "Expansion[]"
+          ],
+          "message": "cloud_capacity.updated",
+          "type": "github.com/xraph/loomplane/internal/cloudinfra.CapacityChange"
+        },
+        {
           "entityType": "Log",
           "intent": "upsert",
           "invalidates": [
@@ -840,6 +860,17 @@
           "type": "github.com/xraph/loomplane/internal/cloudprofiles.CloudSyncEvent"
         },
         {
+          "entityType": "CapacityChange",
+          "intent": "patch",
+          "invalidates": [
+            "CapacityPolicyView:{cloud_id}",
+            "CapacityUsage:{cloud_id}",
+            "Expansion[]"
+          ],
+          "message": "cloud_capacity.updated",
+          "type": "github.com/xraph/loomplane/internal/cloudinfra.CapacityChange"
+        },
+        {
           "entityType": "Log",
           "intent": "upsert",
           "invalidates": [
@@ -903,6 +934,9 @@
         },
         {
           "$ref": "#/channels/api-v1-realtime-events/messages/cloud.updated"
+        },
+        {
+          "$ref": "#/channels/api-v1-realtime-events/messages/cloud_capacity.updated"
         },
         {
           "$ref": "#/channels/api-v1-realtime-events/messages/cloud_sync.updated"
@@ -1383,6 +1417,36 @@
             "type": "boolean"
           },
           "target_id": {
+            "type": "string"
+          }
+        }
+      },
+      "CapacityChange": {
+        "type": "object",
+        "required": [
+          "org_id",
+          "cloud_id",
+          "kind",
+          "entity_id",
+          "revision"
+        ],
+        "properties": {
+          "cloud_id": {
+            "type": "string"
+          },
+          "entity_id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "status": {
             "type": "string"
           }
         }
@@ -5743,6 +5807,42 @@
         "name": "cloud.updated",
         "title": "cloud.updated event",
         "summary": "SSE event: cloud.updated"
+      },
+      "api-v1-realtime-eventscloud_capacity.updated": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "org_id",
+            "cloud_id",
+            "kind",
+            "entity_id",
+            "revision"
+          ],
+          "properties": {
+            "cloud_id": {
+              "type": "string"
+            },
+            "entity_id": {
+              "type": "string"
+            },
+            "kind": {
+              "type": "string"
+            },
+            "org_id": {
+              "type": "string"
+            },
+            "revision": {
+              "type": "integer"
+            },
+            "status": {
+              "type": "string"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "cloud_capacity.updated",
+        "title": "cloud_capacity.updated event",
+        "summary": "SSE event: cloud_capacity.updated"
       },
       "api-v1-realtime-eventscloud_sync.updated": {
         "payload": {

@@ -129,3 +129,19 @@ func TestRealtimeCanaryVerdictDeletion(t *testing.T) {
 		t.Fatalf("subscription naming dep_a: %+v %v", got, err)
 	}
 }
+
+func TestCapacityEventsNeedCloudManager(t *testing.T) {
+	input := []store.Event{{Type: "cloud_capacity.updated", EntityID: "cloud", Data: json.RawMessage(`{"org_id":"org","cloud_id":"cloud","kind":"policy","entity_id":"cloud","revision":2}`)}}
+	p := security.Principal{OrgID: "org", UserID: "usr"}
+	e := &Extension{authz: permissionFixture{denied: security.CloudAccountRead}}
+	got, err := e.filter(t.Context(), p, Subscription{}, input)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("Cloud manager lost the capacity event: %+v %v", got, err)
+	}
+	// Reading cloud accounts isn't managing the Cloud.
+	e.authz = permissionFixture{denied: security.OrganizationCloudManage}
+	got, err = e.filter(t.Context(), p, Subscription{}, input)
+	if err != nil || len(got) != 0 {
+		t.Fatalf("cloud_account:read holder received a capacity event: %+v %v", got, err)
+	}
+}

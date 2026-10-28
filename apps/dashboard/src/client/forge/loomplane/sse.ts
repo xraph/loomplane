@@ -271,6 +271,15 @@ export class RealtimeEventsSSEClient extends EventEmitter {
           }
         });
 
+        this.eventSource.addEventListener('cloud_capacity.updated', (event: MessageEvent) => {
+          try {
+            const data: types.CapacityChange = decode(JSON.parse(event.data), "CapacityChange");
+            this.emit('cloud_capacity.updated', data);
+          } catch (error) {
+            this.emit('error', error);
+          }
+        });
+
         this.eventSource.addEventListener('cloud_sync.updated', (event: MessageEvent) => {
           try {
             const data: types.CloudSyncEvent = decode(JSON.parse(event.data), "CloudSyncEvent");
@@ -639,6 +648,22 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    */
   offCloudUpdated(handler: (data: types.Profile) => void): void {
     this.off('cloud.updated', handler);
+  }
+
+  /**
+   * Register a handler for cloud_capacity.updated events.
+   * @param handler - Function to call when cloud_capacity.updated event is received
+   */
+  onCloudCapacityUpdated(handler: (data: types.CapacityChange) => void): void {
+    this.on('cloud_capacity.updated', handler);
+  }
+
+  /**
+   * Remove a handler for cloud_capacity.updated events.
+   * @param handler - The handler to remove
+   */
+  offCloudCapacityUpdated(handler: (data: types.CapacityChange) => void): void {
+    this.off('cloud_capacity.updated', handler);
   }
 
   /**

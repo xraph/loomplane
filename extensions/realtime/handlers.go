@@ -55,6 +55,8 @@ func permission(event string) security.Permission {
 		return security.InfrastructureRead
 	case "connection", "cloud", "cloud_target", "environment_cloud":
 		return security.CloudAccountRead
+	case "cloud_capacity":
+		return security.OrganizationCloudManage
 	default:
 		return security.ProjectRead
 	}
