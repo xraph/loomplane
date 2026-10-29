@@ -22,7 +22,7 @@ With it unset, a fresh instance stores "on" when setup completes. An instance th
 
 When the waitlist is on, the sign-up screen becomes "join the waitlist" and asks for an email only. People get in with an approved waitlist entry or an organization invitation. Invitations always work, so anyone who can invite someone can widen access. When it's off, anyone can sign up, as before.
 
-You approve or reject entries on the Waitlist page of the console. Approved people get an email with a sign-up link, if mail is configured (see [Email and deployment notifications](#email-and-deployment-notifications)). Approval still works without mail; you'd pass the news on yourself.
+You approve or reject entries on the Waitlist page of the console. Approved people get an email with a sign-up link, if mail is configured (see [Email and deployment notifications](#email-and-deployment-notifications)). Approval still works without mail, but then you have to tell people yourself.
 
 ## The console
 
@@ -37,9 +37,9 @@ From it you can:
 - approve or reject waitlist entries
 - read apps, environments, settings and roles
 
-It's read-only for those last four. You can't delete the app, change settings, toggle sign-in methods, assign roles or delete users from there.
+Those last four are read-only. You can't delete the app, change settings, toggle sign-in methods, assign roles or delete users from there.
 
-Pick your own path per instance if you like, but the role check is what protects the console, not the path. Platform admins have equal powers, so one can ban another, the owner included. Keep the list short.
+Pick your own path per instance if you like. The role check protects the console, and the path doesn't. Platform admins have equal powers, so one can ban another, the owner included. Keep the list short.
 
 ## Granting platform access on an existing instance
 

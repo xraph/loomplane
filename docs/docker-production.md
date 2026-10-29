@@ -102,7 +102,7 @@ you to `/setup`, where you create the first account and organization. See
 
 | Variable                       | Default      | What it does                                                                                           |
 | ------------------------------ | ------------ | ------------------------------------------------------------------------------------------------------ |
-| `LOOMPLANE_WAITLIST_ENABLED`   | unset        | `true` or `false` forces the sign-up waitlist on or off. Unset uses the stored setting, on for a new instance. |
+| `LOOMPLANE_WAITLIST_ENABLED`   | unset        | `true` or `false` forces the waitlist on or off. Unset uses the stored setting. |
 | `LOOMPLANE_CONSOLE_PATH`       | `/__console` | Where platform admins reach the console. One path segment starting with `__`.                           |
 
 An instance that existed before the waitlist stays open after you upgrade
