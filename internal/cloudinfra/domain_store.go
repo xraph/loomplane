@@ -18,6 +18,7 @@ import (
 	"github.com/xraph/loomplane/internal/clouds/owned"
 	"github.com/xraph/loomplane/internal/clouds/server"
 	"github.com/xraph/loomplane/internal/security"
+	"github.com/xraph/loomplane/pkg/provider"
 )
 
 var _ DomainStore = (*PgStore)(nil)
@@ -275,20 +276,24 @@ func scanKubernetesRouteBinding(row pgx.Row) (RouteBinding, error) {
 // A platform binding is a service its provider's platform runs and routes
 // itself, so it rests on its app and the ready connection it was deployed
 // with, Cloud or not. A resource, such as a database, never takes a route.
-var platformRouteBindingQuery = `SELECT b.id,b.external_id,c.id,c.generation,b.provider,coalesce(b.config->>'public',''),coalesce(b.config->>'port','')
+var platformRouteBindingQuery = `SELECT b.id,b.external_id,c.id,c.generation,b.provider,coalesce(b.config->>'public',''),coalesce(b.config->>'port',''),coalesce(b.config->>'execution','')
  FROM loomplane_bindings b
  JOIN loomplane_environments e ON e.org_id=b.org_id AND e.project_id=b.project_id AND e.id=b.environment_id
  JOIN loomplane_cloud_connections c ON c.org_id=b.org_id AND c.id=b.connection_id AND c.cloud=b.provider AND c.status='ready'
  WHERE b.org_id=$1 AND b.project_id=$2 AND b.environment_id=$3 AND b.name=$4 AND b.subject='service' AND b.provider=ANY($5)`
 
 // scanPlatformRouteBinding refuses a service its platform won't route to
-// on port, so preview and apply both refuse it.
+// on port, so preview and apply both refuse it. A static site is refused
+// first: it has no port, and no deploy gives it one.
 func scanPlatformRouteBinding(row pgx.Row, port int) (RouteBinding, error) {
 	out := RouteBinding{Backend: RouteBackendPlatform}
-	var public, servicePort string
-	err := row.Scan(&out.BindingID, &out.ExternalID, &out.ConnectionID, &out.ConnectionGeneration, &out.Provider, &public, &servicePort)
+	var public, servicePort, execution string
+	err := row.Scan(&out.BindingID, &out.ExternalID, &out.ConnectionID, &out.ConnectionGeneration, &out.Provider, &public, &servicePort, &execution)
 	if err != nil {
 		return out, storeError(err)
+	}
+	if execution == string(provider.Static) {
+		return out, platformRefusal(ErrInvalid, platformStaticSite)
 	}
 	if out.ExternalID == "" {
 		return out, platformRefusal(ErrConflict, platformNoApp)

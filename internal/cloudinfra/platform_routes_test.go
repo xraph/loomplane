@@ -751,3 +751,34 @@ func TestPlatformRouteRefusalsKeepTheirSentence(t *testing.T) {
 		}
 	})
 }
+
+// platformRow is a row of platformRouteBindingQuery.
+type platformRow []string
+
+func (r platformRow) Scan(dest ...any) error {
+	for i, d := range dest {
+		if n, ok := d.(*int64); ok {
+			*n = 1
+			continue
+		}
+		*d.(*string) = r[i]
+	}
+	return nil
+}
+
+// A static site gets its own refusal, ahead of any about its port, which
+// the planner never gives one.
+func TestPlatformRouteBindingRefusesStaticSites(t *testing.T) {
+	for name, row := range map[string]platformRow{
+		"deployed":     {"b_site", "app-4", "conn_do", "", "digitalocean", "true", "", "static"},
+		"not deployed": {"b_site", "", "conn_do", "", "digitalocean", "true", "", "static"},
+	} {
+		_, err := scanPlatformRouteBinding(row, 8080)
+		if !errors.Is(err, ErrInvalid) || err.Error() != "Hostnames on App Platform static sites aren't supported yet." {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+	if _, err := scanPlatformRouteBinding(platformRow{"b_web", "app-1", "conn_do", "", "digitalocean", "true", "8080", "container"}, 8080); err != nil {
+		t.Fatal("a container", err)
+	}
+}

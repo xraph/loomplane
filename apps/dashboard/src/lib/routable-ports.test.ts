@@ -47,6 +47,27 @@ it("offers no port for a private App Platform service, and says why", () => {
   })
 })
 
+it("offers no port for an App Platform static site, and says why", () => {
+  for (const config of [
+    { execution: "static", workload: "static-site", public: true },
+    { execution: "static", public: false, port: 8080 },
+  ])
+    expect(routablePorts([8080], binding("digitalocean", config))).toEqual({
+      ports: [],
+      reason: "Hostnames on App Platform static sites aren't supported yet.",
+    })
+  expect(
+    routablePorts(
+      [8080],
+      binding("digitalocean", {
+        execution: "container",
+        public: true,
+        port: 8080,
+      })
+    )
+  ).toEqual({ ports: [8080] })
+})
+
 it("blocks an App Platform binding whose config can't be read", () => {
   for (const config of ["not json", "null", "", "5", "[]", '"public"'])
     expect(routablePorts([8080], binding("digitalocean", config))).toEqual({

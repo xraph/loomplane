@@ -122,6 +122,8 @@ func TestPlatformRouteBindingQuery(t *testing.T) {
 	binding("service", "worker", "app-2", "conn_do", `{"port":8080,"public":false}`)
 	binding("service", "api", "app-3", "conn_off", `{"port":8080,"public":true}`)
 	binding("resource", "db", "db/cluster-1", "conn_do", `{"port":25060,"public":true}`)
+	// The planner gives a static site no port, and App Platform serves it.
+	binding("service", "site", "app-4", "conn_do", `{"execution":"static","workload":"static-site","public":true}`)
 	st := NewPgStore(pg)
 	in := RouteInput{EnvironmentID: "prod", Service: "web", Port: 8080}
 
@@ -149,6 +151,9 @@ func TestPlatformRouteBindingQuery(t *testing.T) {
 	private := in
 	private.Service = "worker"
 	refused("a private service", private, "This service is private on App Platform, so no hostname can reach it. Make it public in the manifest and deploy it first.")
+	site := in
+	site.Service = "site"
+	refused("a static site", site, "Hostnames on App Platform static sites aren't supported yet.")
 	for _, service := range []string{"api", "db"} {
 		missing := in
 		missing.Service = service

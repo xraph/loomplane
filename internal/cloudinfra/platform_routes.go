@@ -61,6 +61,7 @@ const (
 	platformWildcards      = "Wildcard hostnames aren't supported on App Platform yet."
 	platformNoPort         = "This service has no public port on App Platform. Set port in the manifest and deploy it first."
 	platformNoApp          = "This service has no app on App Platform yet. Deploy it first."
+	platformStaticSite     = "Hostnames on App Platform static sites aren't supported yet."
 	platformHandoff        = "Moving a hostname between App Platform apps comes later. Remove it and add it again."
 )
 

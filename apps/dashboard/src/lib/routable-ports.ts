@@ -1,6 +1,7 @@
 // Which ports a hostname can point at. The discovery graph lists every port
 // a service declares, but on App Platform only the one the app listens on is
-// reachable, and only when the service is public.
+// reachable, and only when the service is public. Static sites can't take a
+// hostname there yet.
 import type {
   Binding,
   DNSRecord,
@@ -10,6 +11,9 @@ import type {
 const privateReason =
   "This service is private on App Platform, so no hostname can reach it. Make it public in the manifest and deploy it first."
 
+const staticReason =
+  "Hostnames on App Platform static sites aren't supported yet."
+
 const noPortReason =
   "This service has no public port on App Platform. Set port in the manifest and deploy it first."
 
@@ -18,7 +22,7 @@ export function routablePorts(
   binding?: Binding
 ): { ports: number[]; reason?: string } {
   if (binding?.provider !== "digitalocean") return { ports: servicePorts }
-  let config: { port?: unknown; public?: unknown } | null
+  let config: { execution?: unknown; port?: unknown; public?: unknown } | null
   try {
     config = JSON.parse(binding.config)
   } catch {
@@ -28,6 +32,8 @@ export function routablePorts(
   // object, so an unreadable config is a private service to it.
   if (!config || typeof config !== "object" || Array.isArray(config))
     return { ports: [], reason: privateReason }
+  // The backend refuses a static site before it looks at anything else.
+  if (config.execution === "static") return { ports: [], reason: staticReason }
   // The backend reads both as text, so "true" and "8080" count.
   if (String(config.public) !== "true")
     return { ports: [], reason: privateReason }
