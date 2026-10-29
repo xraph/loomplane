@@ -597,8 +597,11 @@ func TestZoneProofListingFailureKeepsTheReceipt(t *testing.T) {
 		t.Fatalf("receipt not kept: %+v", stored)
 	}
 	env.dns.listErr = nil
-	if _, err = env.svc.VerifyZone(t.Context(), proofManager, zone.ID); !errors.Is(err, ErrConflict) || env.stored(t, zone.ID).ProofPublishError != "" {
-		t.Fatal("error not cleared once the record was found", err)
+	// Found at the provider, the listing failure gives way to why public
+	// DNS still doesn't show the record.
+	_, err = env.svc.VerifyZone(t.Context(), proofManager, zone.ID)
+	if msg := env.stored(t, zone.ID).ProofPublishError; !errors.Is(err, ErrConflict) || strings.Contains(msg, "couldn't read") || !strings.Contains(msg, "Vercel lists the TXT record") {
+		t.Fatal("listing failure not replaced once the record was found", err, msg)
 	}
 }
 
@@ -809,5 +812,29 @@ func TestVerifiedZonesAreRecheckedOnceAfterAStart(t *testing.T) {
 	env.resolver.values = []string{zone.ProofValue}
 	if err := env.svc.CheckZoneProofs(t.Context()); err != nil || !env.stored(t, zone.ID).ProofCheckedAt.Equal(checked) {
 		t.Fatal("rechecked twice in one pass window", err)
+	}
+}
+
+func TestProofListedButNotServedSaysSo(t *testing.T) {
+	env := newProofEnv(t, "vercel")
+	zone := env.create(t, "managed")
+	env.resolver.values = []string{zone.ProofValue}
+	if _, err := env.svc.VerifyZone(t.Context(), proofManager, zone.ID); err != nil {
+		t.Fatal(err)
+	}
+	// Vercel still lists the record, but its nameservers stopped serving
+	// it, as when the domain moves to another team.
+	env.resolver.values = nil
+	env.now = env.now.Add(zoneProofRelistAfter)
+	if _, err := env.svc.VerifyZone(t.Context(), proofManager, zone.ID); !errors.Is(err, ErrConflict) {
+		t.Fatal(err)
+	}
+	stored := env.stored(t, zone.ID)
+	if env.dns.writes != 1 || !strings.Contains(stored.ProofPublishError, "Vercel lists the TXT record _loomplane.shop.example.com") || !strings.Contains(stored.ProofPublishError, "Vercel account Loomplane connects to") {
+		t.Fatalf("writes=%d error=%q", env.dns.writes, stored.ProofPublishError)
+	}
+	env.resolver.values = []string{zone.ProofValue}
+	if _, err := env.svc.VerifyZone(t.Context(), proofManager, zone.ID); err != nil || env.stored(t, zone.ID).ProofPublishError != "" {
+		t.Fatal("explanation kept once the record showed", err)
 	}
 }

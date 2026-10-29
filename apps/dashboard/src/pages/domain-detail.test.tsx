@@ -421,6 +421,24 @@ it("says a verified domain's TXT record is gone and publishes it again", async (
   ])
 })
 
+it("says why a missing record Vercel still lists isn't served", async () => {
+  const why =
+    "Vercel lists the TXT record _loomplane.loomplane.com, but public DNS still doesn't show it. Check that loomplane.com's DNS is served from the Vercel account Loomplane connects to, then check again."
+  stubFetch({
+    [detailPath("loomplane.com")]: detailWith(
+      zoneWith("loomplane.com", [], {
+        proof: true,
+        published: true,
+        missing: true,
+        publishError: why,
+      })
+    ),
+  })
+  open("zone-loomplane.com")
+  const status = await section("Status")
+  expect(within(status).getByText(why)).toBeTruthy()
+})
+
 it("checks the domain whose record a subdomain lost", async () => {
   const domain = zoneWith("loomplane.com", [], {
     proof: true,

@@ -110,6 +110,12 @@ function MissingProof({ zone, through }: { zone: Zone; through: string }) {
           This is {through}&apos;s record.
         </p>
       )}
+      {/* Why Loomplane couldn't publish it, or why what it published isn't served. */}
+      {zone.proofPublishError && (
+        <p className="text-[13px] leading-normal text-foreground/80">
+          {zone.proofPublishError}
+        </p>
+      )}
       <CheckAgain zone={zone} />
       <details className="text-[12.5px] text-muted-foreground">
         <summary className="cursor-pointer select-none">Record details</summary>

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -163,7 +164,13 @@ func TestDNSManagedProofRequiresProviderAndPublicControl(t *testing.T) {
 	if _, err := svc.VerifyZone(t.Context(), p, "zone"); !errors.Is(err, ErrConflict) {
 		t.Fatalf("public absence: %v", err)
 	}
-	if !checkedOnly(before, st.zone) {
+	// Vercel lists the record public DNS doesn't show, and the zone says so.
+	after := st.zone
+	if !strings.Contains(after.ProofPublishError, "Vercel lists the TXT record") {
+		t.Fatalf("unserved record not explained: %q", after.ProofPublishError)
+	}
+	after.ProofPublishError = ""
+	if !checkedOnly(before, after) {
 		t.Fatal("failed managed proof changed verification")
 	}
 	r.err = nil

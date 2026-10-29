@@ -347,7 +347,7 @@ func (s *Service) checkZoneProof(ctx context.Context, st DomainStore, zone *Zone
 	var missing *ProofMissingError
 	switch {
 	case checkErr == nil:
-		zone.VerifiedAt, zone.ProofMissingAt = zone.ProofCheckedAt, time.Time{}
+		zone.VerifiedAt, zone.ProofMissingAt, zone.ProofPublishError = zone.ProofCheckedAt, time.Time{}, ""
 	case zone.ownVerified() && zone.ProofMissingAt.IsZero() && errors.As(checkErr, &missing):
 		zone.ProofMissingAt = zone.ProofCheckedAt
 	}
@@ -375,7 +375,7 @@ func (s *Service) republishMissingProof(ctx context.Context, st DomainStore, zon
 	}
 	for _, r := range records {
 		if r.ID == zone.ProofRecord.ID {
-			zone.ProofPublishError = ""
+			zone.ProofPublishError = unservedProofMessage(zone)
 			return false, nil
 		}
 	}
@@ -385,7 +385,7 @@ func (s *Service) republishMissingProof(ctx context.Context, st DomainStore, zon
 	}
 	if owned != nil && owned.Value == zone.ProofRecord.Value {
 		// The same record under the ID the provider rotated it to.
-		zone.ProofRecord, zone.ProofPublishError = owned, ""
+		zone.ProofRecord, zone.ProofPublishError = owned, unservedProofMessage(zone)
 		return false, st.SaveZone(ctx, zone)
 	}
 	zone.ProofRecord = nil
@@ -393,6 +393,15 @@ func (s *Service) republishMissingProof(ctx context.Context, st DomainStore, zon
 		return false, publishErr
 	}
 	return zone.proofPublished(), nil
+}
+
+// unservedProofMessage is a record the provider lists that public DNS still
+// doesn't show, a while after it was written. The provider then isn't the
+// one serving the domain's DNS, as when it moved to another Vercel team.
+func unservedProofMessage(zone *Zone) string {
+	host := dnsProviderName(zone.Provider)
+	return host + " lists the TXT record " + zone.ProofName + ", but public DNS still doesn't show it. " +
+		"Check that " + zone.Name + "'s DNS is served from the " + host + " account Loomplane connects to, then check again."
 }
 
 // zoneProofDue is a zone the background still checks, with no write inside
