@@ -2,11 +2,14 @@ package notifications
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"net/url"
 	"time"
 
 	"github.com/xraph/authsome/bridge"
 	"github.com/xraph/herald/id"
+	heraldstore "github.com/xraph/herald/store"
 	"github.com/xraph/herald/template"
 )
 
@@ -29,7 +32,11 @@ func (s *Service) seedTemplates(ctx context.Context) error {
 	if err := s.herald.SeedDefaultTemplates(ctx, appID); err != nil {
 		return err
 	}
-	if existing, _ := s.mailStore.GetTemplateBySlug(ctx, appID, waitlistApprovedSlug, "email"); existing != nil {
+	existing, err := s.mailStore.GetTemplateBySlug(ctx, appID, waitlistApprovedSlug, "email")
+	if err != nil && !errors.Is(err, heraldstore.ErrTemplateNotFound) {
+		return fmt.Errorf("look up the waitlist approval template: %w", err)
+	}
+	if existing != nil {
 		return nil
 	}
 	now := time.Now()

@@ -29,7 +29,7 @@ func (m approvalMailer) UpdateEntryStatus(ctx context.Context, entryID id.Waitli
 		return nil
 	}
 	// The approval is saved. Mail trouble must not undo it or fail the request.
-	entry, err := m.Store.GetEntry(ctx, entryID)
+	entry, err := m.GetEntry(ctx, entryID)
 	if err != nil {
 		m.log.Warn("waitlist approval mail skipped: entry lookup failed", forge.F("error", err.Error()))
 		return nil
