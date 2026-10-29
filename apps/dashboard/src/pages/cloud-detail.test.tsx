@@ -113,6 +113,7 @@ function fixture({
   unused = false,
   profile = {} as Record<string, unknown>,
   syncs = [] as unknown[],
+  clusterOperations = [] as unknown[],
 } = {}) {
   const writes: { method: string; path: string; body: unknown }[] = []
   const reads: string[] = []
@@ -194,6 +195,14 @@ function fixture({
       if (path === "/api/v1/clouds/c/expansions") body = { expansions: [] }
       if (path === "/api/v1/clouds/c/capacity-usage") body = capacityUsage
       if (path === "/api/v1/clouds/c/operations") body = { operations: [] }
+      if (path === "/api/v1/clouds/c/cluster-operations") {
+        const offset = Number(url.searchParams.get("cursor") || 0)
+        body = {
+          items: clusterOperations.slice(offset, offset + 50),
+          next_cursor:
+            offset + 50 < clusterOperations.length ? String(offset + 50) : "",
+        }
+      }
       if (path === "/api/v1/members") body = { members: [] }
       if (path.endsWith("/environments")) body = { environments: [] }
       if (path === "/api/v1/providers")
@@ -684,4 +693,38 @@ it("refreshes published targets and account metadata on live sync without reload
   expect(
     state.reads.filter((path) => path === "/api/v1/connections").length
   ).toBeGreaterThan(1)
+})
+
+it("keeps cluster operations beyond the first history page reachable", async () => {
+  const clusterOperations = Array.from({ length: 51 }, (_, i) => ({
+    id: `cluster-op-${i}`,
+    cloud_id: "c",
+    kind: "create",
+    status: i === 50 ? "needs_attention" : "succeeded",
+    input: { spec: { name: `workers-${i}` }, ref: {} },
+    created_at: new Date(Date.UTC(2026, 9, 1, 0, i)).toISOString(),
+  }))
+  fixture({ clusterOperations })
+  show()
+  await openTab("Changes")
+  await userEvent.click(await screen.findByRole("radio", { name: "clusters" }))
+  await screen.findByRole("link", { name: "Create cluster: workers-49" })
+  expect(
+    screen.queryByRole("link", { name: "Create cluster: workers-50" })
+  ).not.toBeInTheDocument()
+  await userEvent.click(
+    screen.getByRole("button", { name: "Next cluster changes" })
+  )
+  const saved = await screen.findByRole("link", {
+    name: "Create cluster: workers-50",
+  })
+  expect(saved).toHaveAttribute(
+    "href",
+    "/clouds/c?tab=servers&clusterOperation=cluster-op-50"
+  )
+  await screen.findByText("Needs attention")
+  await userEvent.click(
+    screen.getByRole("button", { name: "First cluster changes" })
+  )
+  await screen.findByRole("link", { name: "Create cluster: workers-0" })
 })

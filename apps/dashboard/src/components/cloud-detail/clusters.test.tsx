@@ -74,7 +74,12 @@ const operation = {
   revision: 1,
   kind: "create",
   input: {
-    spec: { name: "workers" },
+    spec: {
+      name: "workers",
+      node_pools: [
+        { name: "workers", size: "s-2vcpu-4gb", count: 3, autoscale: false },
+      ],
+    },
     ref: {},
     provider: "digitalocean",
     attachment: { project_id: "project" },
@@ -185,4 +190,20 @@ it("clears recovery guidance when a cached operation succeeds live", async () =>
   expect(
     screen.queryByText(/Provider resources may still exist/)
   ).not.toBeInTheDocument()
+})
+
+it("shows saved fixed node pool scope before applying after reload", async () => {
+  window.history.replaceState(null, "", "/?clusterOperation=op")
+  vi.stubGlobal("fetch", (input: RequestInfo | URL) =>
+    Promise.resolve(
+      Response.json(
+        String(input).includes("cluster-operations") ? operation : { items: [] }
+      )
+    )
+  )
+  mount(<Clusters cloud={cloud} />)
+  await screen.findByRole("button", { name: "Apply reviewed setup" })
+  expect(screen.getByText(/workers: 3 × s-2vcpu-4gb/)).toHaveTextContent(
+    "Fixed capacity"
+  )
 })

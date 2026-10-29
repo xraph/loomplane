@@ -2,7 +2,9 @@
 """Exercise a reviewed, bounded disposable cluster qualification run."""
 
 import argparse
+import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -51,6 +53,21 @@ def validate(config):
     return config
 
 
+def fingerprint(value):
+    return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
+
+def scope_fingerprint(config):
+    return fingerprint({key: config[key] for key in ("api_url", "cloud_id", "account_id", "project_id",
+                                                    "region", "input", "max_nodes", "max_node_hourly_micro_usd")})
+
+def matches_input(expected, actual):
+    if isinstance(expected, dict):
+        return isinstance(actual, dict) and all(key in actual and matches_input(value, actual[key]) for key, value in expected.items())
+    if isinstance(expected, list):
+        return isinstance(actual, list) and len(expected) == len(actual) and all(matches_input(left, right) for left, right in zip(expected, actual))
+    return expected == actual
+
+
 class Runner:
     def __init__(self, config, state_path, token, request=None, command=None):
         self.config = validate(config)
@@ -61,8 +78,10 @@ class Runner:
         self.state = json.loads(self.path.read_text()) if self.path.exists() else {
             "cloud_id": config["cloud_id"], "account_id": config["account_id"],
             "project_id": config["project_id"], "completed": [], "live_qualified": False,
-            "general_purchase_rollout": False,
+            "general_purchase_rollout": False, "scope_fingerprint": scope_fingerprint(config),
         }
+        if self.state.get("scope_fingerprint") != scope_fingerprint(config):
+            raise ValueError("Saved qualification configuration differs or lacks a scope fingerprint; do not accept this review")
         for key in ("cloud_id", "account_id", "project_id"):
             if self.state[key] != config[key]:
                 raise ValueError("Saved qualification scope does not match")
@@ -114,17 +133,42 @@ class Runner:
         self.state["completed"].append(step)
         self.save()
 
+    def validate_review(self, review):
+        if review.get("id") != self.state["operation_id"] or review.get("digest") != self.state["digest"]:
+            raise ValueError("Saved review identity changed")
+        if review.get("cloud_id") != self.config["cloud_id"] or not matches_input(self.config["input"], review.get("input")):
+            raise ValueError("Saved review input differs from the configured scope")
+        source = review["input"]
+        validate({**self.config, "input": source})
+        estimate = review.get("estimated_node_hourly_micro_usd")
+        unknown = review.get("unknown_costs")
+        if (isinstance(estimate, bool) or not isinstance(estimate, (int, float)) or
+                not math.isfinite(estimate) or estimate <= 0 or
+                not isinstance(unknown, list) or
+                any(not isinstance(cost, str) or cost.startswith("nodes:") for cost in unknown)):
+            raise ValueError("Every selected node pool requires a known positive price before paid qualification")
+        if estimate > self.config["max_node_hourly_micro_usd"]:
+            raise ValueError("Reviewed node cost exceeds the disposable bound")
+        reviewed = fingerprint({"input": source, "digest": review["digest"], "cost": estimate, "unknown_costs": unknown})
+        if self.state.get("review_fingerprint", reviewed) != reviewed:
+            raise ValueError("Authoritative saved review changed")
+        self.state["review_fingerprint"] = reviewed
+        self.save()
+
     def run(self):
         if self.state["completed"] == list(STEPS):
             return self.state
         if "operation_id" not in self.state:
             review = self.request("POST", "/clusters/preview", self.config["input"])
-            if review["estimated_node_hourly_micro_usd"] > self.config["max_node_hourly_micro_usd"]:
-                raise ValueError("Reviewed node cost exceeds the disposable bound")
             self.state.update(operation_id=review["id"], digest=review["digest"])
             self.save()
         operation = "/cluster-operations/" + self.state["operation_id"]
-        self.request("POST", operation + "/apply", {"review": self.state["digest"]})
+        current = self.request("GET", operation)
+        if current["status"] == "preview":
+            self.validate_review(current)
+            self.request("POST", operation + "/apply", {"review": self.state["digest"]})
+        elif current["status"] not in ("accepted", "running", "waiting_provider", "succeeded"):
+            raise RuntimeError("Saved operation requires recovery: " + current["status"])
         # Restart after acceptance, before observing the durable runtime outcome.
         self.state.setdefault("resource_id", "")
         self.run_step("restart_worker")

@@ -1,5 +1,5 @@
 // One history for a Cloud: every reviewed move of a target, the default or an
-// environment, and every server operation, newest first, in plain words.
+// environment, and server and cluster operations, newest first within each page.
 import type { UseQueryResult } from "@forge-go/client-react"
 import { ArrowRightIcon } from "lucide-react"
 import { useState, type ReactNode } from "react"
@@ -124,10 +124,20 @@ function WithOperations(props: ChangesProps) {
   const operations = useQuery(api.useInfrastructureOperationsList, {
     path: { cloudId: props.scope.cloud.id },
   })
+  const [clusterCursor, setClusterCursor] = useState("")
   const clusters = useQuery(api.useClusterOperationsList, {
     path: { cloudId: props.scope.cloud.id },
+    query: { cursor: clusterCursor, limit: 50 },
   })
-  return <ChangeList {...props} operations={operations} clusters={clusters} />
+  return (
+    <ChangeList
+      {...props}
+      operations={operations}
+      clusters={clusters}
+      clusterCursor={clusterCursor}
+      setClusterCursor={setClusterCursor}
+    />
+  )
 }
 
 function ChangeList({
@@ -137,9 +147,13 @@ function ChangeList({
   onChanged,
   operations,
   clusters,
+  clusterCursor = "",
+  setClusterCursor,
 }: ChangesProps & {
   operations?: UseQueryResult<OperationList>
   clusters?: UseQueryResult<CloudClusterOperationPage>
+  clusterCursor?: string
+  setClusterCursor?: (cursor: string) => void
 }) {
   const org = !!operations
   const [filter, setFilter] = useState<
@@ -188,7 +202,7 @@ function ChangeList({
     <section aria-label="Changes" className="grid gap-3">
       <CloudSectionHead
         title="Changes to this Cloud"
-        description="Every move of a target or the default, every environment joining or leaving, and every server change. Environments keep serving their current release until a move finishes."
+        description="Every move of a target or the default, every environment joining or leaving, and every server or cluster change. Environments keep serving their current release until a move finishes."
       >
         {org && (
           <div
@@ -229,7 +243,7 @@ function ChangeList({
       ) : entries.length === 0 ? (
         <CloudEmpty kind="list" icon={ActivityIcon} title="No changes yet">
           Moving a target or the default, choosing this Cloud for an
-          environment, and server changes appear here.
+          environment, and server or cluster changes appear here.
         </CloudEmpty>
       ) : (
         <Rows>
@@ -272,24 +286,54 @@ function ChangeList({
           )}
         </Rows>
       )}
-      {filter !== "servers" && (syncs.data?.next || before) && (
-        <div className="flex gap-2">
-          {syncs.data?.next && (
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => setBefore(syncs.data?.next ?? "")}
-            >
-              Older changes
-            </Button>
-          )}
-          {before && (
-            <Button size="sm" variant="ghost" onClick={() => setBefore("")}>
-              Newest changes
-            </Button>
-          )}
-        </div>
-      )}
+      {(filter === "all" || filter === "clusters") &&
+        setClusterCursor &&
+        (clusters?.data?.nextCursor || clusterCursor) && (
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs text-muted-foreground">
+              Cluster history pages
+            </span>
+            {clusters?.data?.nextCursor && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() =>
+                  setClusterCursor(clusters.data?.nextCursor ?? "")
+                }
+              >
+                Next cluster changes
+              </Button>
+            )}
+            {clusterCursor && (
+              <Button
+                size="sm"
+                variant="ghost"
+                onClick={() => setClusterCursor("")}
+              >
+                First cluster changes
+              </Button>
+            )}
+          </div>
+        )}
+      {(filter === "all" || filter === "placement") &&
+        (syncs.data?.next || before) && (
+          <div className="flex gap-2">
+            {syncs.data?.next && (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setBefore(syncs.data?.next ?? "")}
+              >
+                Older changes
+              </Button>
+            )}
+            {before && (
+              <Button size="sm" variant="ghost" onClick={() => setBefore("")}>
+                Newest changes
+              </Button>
+            )}
+          </div>
+        )}
     </section>
   )
 }

@@ -259,6 +259,17 @@ export function ClusterOperationDetail({
                 {op.input.spec.networkId || "Existing provider network"}
               </span>
             </Row>
+            {(op.input.spec.nodePools ?? []).map((pool) => (
+              <Row key={pool.name}>
+                <span>Node pool</span>
+                <span className="max-w-full break-words">
+                  {pool.name}: {pool.count} × {pool.size}.{" "}
+                  {pool.autoscale
+                    ? `Provider autoscaling (${pool.min} to ${pool.max}); not managed by Loomplane`
+                    : "Fixed capacity; autoscaling off"}
+                </span>
+              </Row>
+            ))}
             {op.input.workerImage && (
               <Row>
                 <span>Worker image</span>
