@@ -210,6 +210,8 @@ func (r *Adapters) RegisterCluster(name string, reader provider.ClusterReader, o
 		switch operation {
 		case provider.ClusterDiscovery, provider.ClusterOptionsRead:
 			supported = true
+		case provider.ClusterDeletion:
+			_, supported = reader.(provider.ClusterRetirer)
 		case provider.ClusterCreation:
 			_, supported = reader.(provider.ClusterCreator)
 		case provider.ClusterMutationObservation:
@@ -237,7 +239,7 @@ func (r *Adapters) RegisterCluster(name string, reader provider.ClusterReader, o
 func (r *Adapters) Cluster(name string, operation provider.InfrastructureCapability) (provider.ClusterReader, error) {
 	reader := r.clusters[name]
 	switch operation {
-	case provider.ClusterDiscovery, provider.ClusterOptionsRead, provider.ClusterCreation, provider.ClusterMutationObservation, provider.ClusterBootstrapAccess, provider.ClusterConfigurationUpdate, provider.ClusterUpgrade, provider.NodePoolCreation, provider.NodePoolUpdate, provider.NodePoolDeletion:
+	case provider.ClusterDeletion, provider.ClusterDiscovery, provider.ClusterOptionsRead, provider.ClusterCreation, provider.ClusterMutationObservation, provider.ClusterBootstrapAccess, provider.ClusterConfigurationUpdate, provider.ClusterUpgrade, provider.NodePoolCreation, provider.NodePoolUpdate, provider.NodePoolDeletion:
 		if reader != nil && slices.Contains(r.capabilities[name], operation) {
 			return reader, nil
 		}

@@ -137,6 +137,11 @@ func (s *PgStore) AttemptClusterCreate(ctx context.Context, o *ClusterOperation)
 	if checkErr := clusterPinsTx(ctx, tx, o); checkErr != nil {
 		return checkErr
 	}
+	if retirementKind(o.Kind) {
+		if err := retirementPinsTx(ctx, tx, o); err != nil {
+			return err
+		}
+	}
 	if maintenanceKind(o.Kind) {
 		if err := maintenancePinsTx(ctx, tx, o); err != nil {
 			return err

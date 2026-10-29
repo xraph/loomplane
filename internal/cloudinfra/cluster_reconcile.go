@@ -48,6 +48,9 @@ func (s *Service) ReconcileClusterOperation(ctx context.Context, org, id string,
 	if err != nil {
 		return s.clusterAttention(ctx, o, "Current approval or account authority is unavailable.")
 	}
+	if retirementKind(o.Kind) {
+		return s.reconcileClusterRetirement(call, o, reader, access)
+	}
 	if maintenanceKind(o.Kind) {
 		return s.reconcileClusterMaintenance(call, o, reader, access)
 	}

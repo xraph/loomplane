@@ -156,5 +156,14 @@ func saveClusterSteps(ctx context.Context, tx driver.Tx, o *ClusterOperation) er
 	if count != len(o.Steps) {
 		return ErrConflict
 	}
+	if retirementKind(o.Kind) {
+		raw, err := json.Marshal(o)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO loomplane_cluster_retirement_receipts(org_id,cloud_id,operation_id,resource_id,revision,body) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(org_id,operation_id) DO UPDATE SET revision=excluded.revision,body=excluded.body,updated_at=now() WHERE loomplane_cluster_retirement_receipts.revision<excluded.revision`, o.OrgID, o.CloudID, o.ID, o.Input.ResourceID, o.Revision, raw); err != nil {
+			return err
+		}
+	}
 	return appendClusterEvent(ctx, tx, o)
 }

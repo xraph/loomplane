@@ -24,6 +24,7 @@ type AttachmentInput struct {
 }
 
 type ClusterInput struct {
+	Retirement                    *ClusterRetirementInput  `json:"retirement,omitempty"`
 	Maintenance                   *ClusterMaintenanceInput `json:"maintenance,omitempty"`
 	ManagementQualificationDigest string                   `json:"management_qualification_digest"`
 	ManagementEvidenceID          string                   `json:"management_evidence_id"`
