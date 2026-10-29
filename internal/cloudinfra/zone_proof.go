@@ -81,6 +81,12 @@ func (z *Zone) proofPublished() bool {
 	return z.ProofRecord != nil && !z.ProofPublishAttempted && z.ProofRecord.Value == z.ProofValue
 }
 
+// proofLive is a proof Loomplane may still publish: a verified zone's for
+// as long as the zone stays, a pending one's until it expires.
+func (z *Zone) proofLive(now time.Time) bool {
+	return z.ownVerified() || now.Before(z.ProofExpiresAt)
+}
+
 // proofWriteInFlight is an unanswered write still inside its grace window.
 func (z *Zone) proofWriteInFlight(now time.Time) bool {
 	return z.ProofPublishAttempted && now.Sub(z.ProofPublishAttemptedAt) < zoneProofCheckEvery
@@ -98,7 +104,7 @@ func (s *Service) publishZoneProof(ctx context.Context, st DomainStore, zone *Zo
 	ctx, cancel := context.WithTimeout(ctx, zoneProofWriteTimeout)
 	defer cancel()
 	now := s.now().UTC()
-	if zone.Mode != "managed" || !zone.hasControlProof() || zone.proofPublished() || !now.Before(zone.ProofExpiresAt) || zone.proofWriteInFlight(now) {
+	if zone.Mode != "managed" || !zone.hasControlProof() || zone.proofPublished() || !zone.proofLive(now) || zone.proofWriteInFlight(now) {
 		return nil
 	}
 	if zone.ownVerified() && zone.ProofRecord == nil && zone.ProofPublishAttemptedAt.IsZero() {
@@ -323,7 +329,7 @@ func (s *Service) checkZoneProof(ctx context.Context, st DomainStore, zone *Zone
 	now := s.now().UTC()
 	// A record written a while ago that public DNS still doesn't show may
 	// be gone at the provider. One written in this pass is just new.
-	if errors.Is(checkErr, ErrConflict) && !wrote && zone.Mode == "managed" && zone.proofPublished() && now.Before(zone.ProofExpiresAt) && now.Sub(zone.ProofPublishAttemptedAt) >= zoneProofRelistAfter {
+	if errors.Is(checkErr, ErrConflict) && !wrote && zone.Mode == "managed" && zone.proofPublished() && zone.proofLive(now) && now.Sub(zone.ProofPublishAttemptedAt) >= zoneProofRelistAfter {
 		republished, reclaimErr := s.republishMissingProof(ctx, st, zone)
 		switch {
 		case reclaimErr != nil:

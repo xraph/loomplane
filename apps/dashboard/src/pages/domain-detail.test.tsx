@@ -354,6 +354,34 @@ it("shows TXT instructions and checks again", async () => {
   ])
 })
 
+it("checks a verified domain's TXT record again", async () => {
+  const writes = stubFetch({
+    [detailPath("loomplane.com")]: detailWith(
+      zoneWith("loomplane.com", [], { proof: true, published: true })
+    ),
+    "POST /api/v1/dns-zones/zone-loomplane.com/verify": () =>
+      Response.json({ message: "the record is gone" }, { status: 409 }),
+  })
+  open("zone-loomplane.com")
+  const status = await section("Status")
+  expect(within(status).getByText(/^Verified\./)).toBeTruthy()
+  await userEvent.click(
+    within(status).getByRole("button", { name: "Check again" })
+  )
+  expect(
+    await within(status).findByText(
+      "Checked just now. The record isn't visible yet."
+    )
+  ).toBeTruthy()
+  expect(writes).toEqual([
+    {
+      method: "POST",
+      path: "/api/v1/dns-zones/zone-loomplane.com/verify",
+      body: undefined,
+    },
+  ])
+})
+
 it("publishes a managed zone's TXT record instead of asking for it", async () => {
   stubFetch({
     [detailPath("acme.dev")]: detailWith(

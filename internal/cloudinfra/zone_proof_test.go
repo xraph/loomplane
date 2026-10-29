@@ -631,3 +631,53 @@ func TestCreateZoneUnderADomainHasNoProofOfItsOwn(t *testing.T) {
 		t.Fatalf("subdomains read as verified through example.com: %+v %v", zones, err)
 	}
 }
+
+func TestVerifiedZoneProofDeletedAfterItsWindowIsPublishedAgain(t *testing.T) {
+	env := newProofEnv(t, "vercel")
+	zone := env.create(t, "managed")
+	env.resolver.values = []string{zone.ProofValue}
+	if _, err := env.svc.VerifyZone(t.Context(), proofManager, zone.ID); err != nil {
+		t.Fatal(err)
+	}
+	first := *env.stored(t, zone.ID).ProofRecord
+
+	// Weeks later someone deletes it at the provider. The window a pending
+	// proof has to verify is long over, but this one already did.
+	env.dns.records = env.dns.records[:1]
+	env.resolver.values = nil
+	env.now = env.now.Add(30 * 24 * time.Hour)
+	if _, err := env.svc.VerifyZone(t.Context(), proofManager, zone.ID); !errors.Is(err, ErrConflict) {
+		t.Fatal(err)
+	}
+	proofs := env.dns.proofs()
+	stored := env.stored(t, zone.ID)
+	if env.dns.writes != 2 || len(proofs) != 1 || proofs[0].ID == first.ID || stored.ProofRecord == nil || *stored.ProofRecord != proofs[0] {
+		t.Fatalf("writes=%d proofs=%+v receipt=%+v", env.dns.writes, proofs, stored.ProofRecord)
+	}
+}
+
+func TestMissingProofSaysWhichRecordAndWhatToDo(t *testing.T) {
+	for _, mode := range []string{"managed", "external"} {
+		t.Run(mode, func(t *testing.T) {
+			env := newProofEnv(t, "vercel")
+			zone := env.create(t, mode)
+			env.resolver.values = []string{zone.ProofValue}
+			if _, err := env.svc.VerifyZone(t.Context(), proofManager, zone.ID); err != nil {
+				t.Fatal(err)
+			}
+			env.resolver.values = []string{"someone-else"}
+			err := env.svc.verifyZoneControl(t.Context(), env.stored(t, zone.ID))
+			var missing *ProofMissingError
+			if !errors.Is(err, ErrConflict) || !errors.As(err, &missing) {
+				t.Fatalf("got %v", err)
+			}
+			msg := err.Error()
+			if !strings.Contains(msg, "_loomplane.shop.example.com") || !strings.Contains(msg, "shop.example.com under Domains") || !strings.Contains(msg, "Check again") {
+				t.Fatal(msg)
+			}
+			if wantsHost := strings.Contains(msg, "DNS host"); wantsHost != (mode == "external") {
+				t.Fatal("wrong remedy for", mode, msg)
+			}
+		})
+	}
+}

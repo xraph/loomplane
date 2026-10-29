@@ -7,6 +7,7 @@ import { useConnectionsList } from "@/client/forge/loomplane/hooks"
 import type { DomainDetail, Zone } from "@/client/forge/loomplane/types"
 import { useQuery } from "@/client/hooks"
 import {
+  CheckAgain,
   ManagedProof,
   RenewProof,
   TxtInstructions,
@@ -59,9 +60,13 @@ export function DomainStatus({ detail }: { detail: DomainDetail }) {
       {ready
         ? // Inherited verification is said above.
           !domain.proofZoneId && (
-            <p className="px-4 py-3 text-[13px] leading-normal text-foreground/80">
-              Verified. Projects you grant it to can point hostnames at it.
-            </p>
+            <div className="flex flex-col gap-2.5 px-4 py-3">
+              <p className="text-[13px] leading-normal text-foreground/80">
+                Verified. Projects you grant it to can point hostnames at it.
+              </p>
+              {/* Not in the mock: a record deleted since is published again. */}
+              {z?.proofName && <CheckAgain zone={z} />}
+            </div>
           )
         : proving && (
             <div>

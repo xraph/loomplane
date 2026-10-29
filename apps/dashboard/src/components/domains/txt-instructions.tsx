@@ -204,7 +204,7 @@ function useCheckAgain(zone: Zone) {
   return { check, pending: verify.isPending }
 }
 
-function CheckAgain({ zone }: { zone: Zone }) {
+export function CheckAgain({ zone }: { zone: Zone }) {
   const { check: verify, pending } = useCheckAgain(zone)
   const now = useClock()
   const [note, setNote] = useState("")
