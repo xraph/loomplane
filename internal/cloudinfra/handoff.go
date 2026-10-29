@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"slices"
 	"time"
@@ -31,6 +32,9 @@ type HandoffInput struct {
 // Kubernetes routes have no retained source to hand off from or to.
 var errKubernetesHandoff = &provider.UnsupportedCapabilityError{Provider: "kubernetes", Capability: provider.IngressManagement}
 
+// Nor can a platform route move between apps yet.
+var errPlatformHandoff = fmt.Errorf("%w: %s", ErrInvalid, platformHandoff)
+
 // PrepareRouteHandoff runs after the destination binding is committed, while
 // the deployment runner retains the previous instance in Replaced.
 func (s *Service) PrepareRouteHandoff(ctx context.Context, p security.Principal, project, id string, in HandoffInput) (*RouteOperation, error) {
@@ -51,6 +55,9 @@ func (s *Service) PrepareRouteHandoff(ctx context.Context, p security.Principal,
 	if source.Binding.BackendName() == RouteBackendKubernetes {
 		return nil, errKubernetesHandoff
 	}
+	if source.Binding.BackendName() == RouteBackendPlatform {
+		return nil, errPlatformHandoff
+	}
 	if source.Revision != in.Revision || source.Status != "ready" {
 		return nil, ErrConflict
 	}
@@ -62,6 +69,9 @@ func (s *Service) PrepareRouteHandoff(ctx context.Context, p security.Principal,
 	}
 	if binding.BackendName() == RouteBackendKubernetes {
 		return nil, errKubernetesHandoff
+	}
+	if binding.BackendName() == RouteBackendPlatform {
+		return nil, errPlatformHandoff
 	}
 	if reflect.DeepEqual(binding, source.Binding) {
 		return nil, ErrInvalid

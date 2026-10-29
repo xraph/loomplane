@@ -2,7 +2,11 @@ package cloudinfra
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
+	"net/http"
+	"slices"
 	"strconv"
 	"time"
 
@@ -54,6 +58,9 @@ const (
 	platformPrivateService = "This service is private on App Platform, so no hostname can reach it. Make it public in the manifest and deploy it first."
 	platformBlockedPaths   = "Blocked paths aren't supported on App Platform yet."
 	platformWildcards      = "Wildcard hostnames aren't supported on App Platform yet."
+	platformNoPort         = "This service has no public port on App Platform. Set port in the manifest and deploy it first."
+	platformNoApp          = "This service has no app on App Platform yet. Deploy it first."
+	platformHandoff        = "Moving a hostname between App Platform apps comes later. Remove it and add it again."
 )
 
 // platformProviders are the bindings whose services route on their
@@ -104,6 +111,9 @@ func routeReceipts(list []provider.DNSRecord, single *provider.DNSRecord) []prov
 func checkPlatformService(public, port string, want int) error {
 	if public != "true" {
 		return fmt.Errorf("%w: %s", ErrInvalid, platformPrivateService)
+	}
+	if port == "" {
+		return fmt.Errorf("%w: %s", ErrInvalid, platformNoPort)
 	}
 	if port != strconv.Itoa(want) {
 		return fmt.Errorf("%w: %s", ErrInvalid, "App Platform routes a hostname only to this service's public port, "+port+".")
@@ -174,4 +184,117 @@ func (s *Service) platformDNSRecords(ctx context.Context, zone *Zone, route Rout
 		out = append(out, record)
 	}
 	return out, nil
+}
+
+// executePlatformRoute puts the hostname on the app, then writes the DNS
+// records the platform asked for, then checks the three agree. Removal runs
+// the other way round.
+func (s *Service) executePlatformRoute(ctx context.Context, st DomainStore, op *RouteOperation, zone *Zone) error {
+	route := &op.Route
+	if op.Kind != "apply" && op.Kind != "verify" && op.Kind != "remove" {
+		return &provider.UnsupportedCapabilityError{Provider: route.Binding.Provider, Capability: provider.IngressManagement}
+	}
+	adapter, cred, err := s.platformRoute(ctx, *route, op.Kind == "remove")
+	if err != nil {
+		return err
+	}
+	hostname := route.Input.Hostname
+	if op.Kind != "verify" {
+		commit, commitErr := st.RouteBindingCommit(ctx, route.OrgID, route.Binding.BindingID)
+		// A removal outlives its service's binding. With no commit to
+		// check, the platform refuses any deployment it would start.
+		if commitErr != nil && (op.Kind != "remove" || !errors.Is(commitErr, ErrNotFound)) {
+			return commitErr
+		}
+		if op.Kind == "remove" {
+			if checkErr := adapter.Detach(ctx, cred, route.Binding, hostname, commit); checkErr != nil {
+				return checkErr
+			}
+			if checkErr := s.deleteRouteRecords(ctx, op, zone); checkErr != nil {
+				return checkErr
+			}
+			route.Status = "removed"
+			route.UpdatedAt = s.now().UTC()
+			return st.PublishRoute(ctx, op)
+		}
+		if checkErr := adapter.Attach(ctx, cred, route.Binding, hostname, commit); checkErr != nil {
+			return checkErr
+		}
+		if checkErr := s.applyRouteRecords(ctx, st, op, zone); checkErr != nil {
+			return checkErr
+		}
+	}
+	records := op.desiredRecords()
+	if len(records) == 0 {
+		// A check keeps no records of its own: ask for them again.
+		if records, err = s.platformDNSRecords(ctx, zone, *route); err != nil {
+			return err
+		}
+	}
+	status, err := adapter.Status(ctx, cred, route.Binding, hostname)
+	if err != nil {
+		return err
+	}
+	route.Verification = s.verifyPlatformRoute(ctx, *route, records, status)
+	route.Status = "waiting"
+	if route.Verification.DNS && route.Verification.TLS && route.Verification.Backend {
+		route.Status = "ready"
+	}
+	route.UpdatedAt = s.now().UTC()
+	if checkErr := st.PublishRoute(ctx, op); checkErr != nil {
+		return checkErr
+	}
+	if route.Status != "ready" {
+		return ErrPending
+	}
+	return nil
+}
+
+// verifyPlatformRoute checks that DNS gives the records the platform asked
+// for, that the hostname serves a trusted certificate, and that the platform
+// routes it to the app.
+func (s *Service) verifyPlatformRoute(ctx context.Context, route Route, records []provider.DNSRecord, status PlatformDomainStatus) RouteVerification {
+	out := RouteVerification{CheckedAt: s.now().UTC(), CertState: status.CertState}
+	hostname := route.Input.Hostname
+	out.DNS = len(records) > 0
+	var addresses []net.IPAddr
+	var resolved bool
+	for _, record := range records {
+		if !out.DNS {
+			break
+		}
+		if record.Type == "CNAME" {
+			out.DNS = s.cnameReaches(ctx, hostname, record.Value)
+			continue
+		}
+		if !resolved {
+			var lookupErr error
+			addresses, lookupErr = s.domainResolver().LookupIPAddr(ctx, hostname)
+			resolved, out.DNS = true, lookupErr == nil
+		}
+		out.DNS = out.DNS && slices.ContainsFunc(addresses, func(a net.IPAddr) bool { return a.IP.Equal(net.ParseIP(record.Value)) })
+	}
+	if !out.DNS {
+		out.DNSError = "DNS does not resolve to the records the platform asked for."
+	}
+	notAfter, code, err := s.routeHTTPS(ctx, hostname)
+	if err == nil {
+		out.CertExpires = notAfter
+		out.TLS = notAfter.After(s.now().Add(24 * time.Hour))
+	}
+	if !out.TLS {
+		out.TLSError = "A trusted certificate for this hostname with at least 24 hours remaining is not available."
+		if status.CertState == "failed" && status.Message != "" {
+			out.TLSError = "The certificate could not be issued: " + truncate(status.Message, 300)
+		}
+	}
+	out.Backend = err == nil && status.Attached && code != http.StatusBadGateway && code != http.StatusServiceUnavailable && code != http.StatusGatewayTimeout
+	switch {
+	case out.Backend:
+	case !status.Attached:
+		out.BackendError = "The platform doesn't have this hostname on the app."
+	default:
+		out.BackendError = "The hostname did not answer an HTTPS request without a gateway error."
+	}
+	return out
 }

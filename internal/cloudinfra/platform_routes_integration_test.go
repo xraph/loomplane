@@ -5,6 +5,7 @@ package cloudinfra
 import (
 	"context"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -182,6 +183,30 @@ func TestPlatformRouteBindingQuery(t *testing.T) {
 	}
 	if routeBackend != "platform" || connection != "conn_do" || serverID != "" {
 		t.Fatal("stored route", routeBackend, connection, serverID)
+	}
+	// A removal takes the receipts the route's unfinished apply wrote.
+	active, err := st.RouteOperation(ctx, "org", "routeop_www")
+	if err != nil {
+		t.Fatal(err)
+	}
+	active.Status = "waiting"
+	active.Receipts = []provider.DNSRecord{{ID: "r1", Name: "www", Type: "A", Value: "192.0.2.1", TTL: 60}, {ID: "r2", Name: "www", Type: "AAAA", Value: "2001:db8::1", TTL: 60}}
+	if err = st.SaveRouteOperation(ctx, active); err != nil {
+		t.Fatal(err)
+	}
+	stored, err := st.Route(ctx, "org", "shop", "route_www")
+	if err != nil {
+		t.Fatal(err)
+	}
+	removal := &RouteOperation{ID: "routeop_rm", Route: *stored, Kind: "remove", Status: "pending", Attempt: 1, Revision: 1, Receipts: stored.Receipts, Principal: security.Principal{OrgID: "org", UserID: "usr"}}
+	if err = st.AcceptRoute(ctx, removal); err != nil {
+		t.Fatal("removal", err)
+	}
+	if !slices.Equal(removal.Receipts, active.Receipts) {
+		t.Fatalf("removal receipts: %+v", removal.Receipts)
+	}
+	if cancelled, readErr := st.RouteOperation(ctx, "org", "routeop_www"); readErr != nil || cancelled.Status != "cancelled" {
+		t.Fatal("the apply wasn't cancelled", readErr)
 	}
 	// A service made private after the preview is refused at apply.
 	must(`UPDATE loomplane_bindings SET config='{"port":8080,"public":false}' WHERE id='b_web'`)

@@ -79,6 +79,13 @@ func routeLockKey(route Route) string {
 	return "ingress/" + route.OrgID + "/" + route.Binding.ServerID
 }
 
+// noServerIngress reports a route with no server ingress config: one on a
+// cluster, or on a platform that routes it itself.
+func noServerIngress(route Route) bool {
+	backend := route.Binding.BackendName()
+	return backend == RouteBackendKubernetes || backend == RouteBackendPlatform
+}
+
 type Route struct {
 	ID           string              `json:"id" forge:"id"`
 	OrgID        string              `json:"org_id"`
@@ -451,7 +458,7 @@ func (s *Service) RemoveRoute(ctx context.Context, p security.Principal, project
 	if err != nil {
 		return nil, err
 	}
-	op := &RouteOperation{ID: opID, Route: *route, Kind: "remove", Status: "pending", Attempt: 1, Revision: 1, Receipt: route.Receipt, Principal: p}
+	op := &RouteOperation{ID: opID, Route: *route, Kind: "remove", Status: "pending", Attempt: 1, Revision: 1, Receipt: route.Receipt, Receipts: route.Receipts, Principal: p}
 	if checkErr := s.Store.WithOperationLock(ctx, routeLockKey(*route), func() error { return st.AcceptRoute(ctx, op) }); checkErr != nil {
 		return nil, checkErr
 	}

@@ -71,7 +71,7 @@ func (a *appPlatformDomains) Attach(ctx context.Context, cred provider.Infrastru
 		return err
 	}
 	if hasAppDomain(app.Spec, hostname) {
-		return nil
+		return appLiveCommit(app, hostname, "adding", reviewedCommit)
 	}
 	spec := app.Spec
 	spec.Domains = append(append([]digitalocean.AppDomainSpec{}, spec.Domains...), digitalocean.AppDomainSpec{Domain: hostname, Type: digitalocean.AppDomainAlias})
@@ -86,11 +86,11 @@ func (a *appPlatformDomains) Detach(ctx context.Context, cred provider.Infrastru
 	if err != nil {
 		return err
 	}
-	if !hasAppDomain(app.Spec, hostname) {
-		return nil
-	}
 	if err := appDeploying(app, hostname); err != nil {
 		return err
+	}
+	if !hasAppDomain(app.Spec, hostname) {
+		return appLiveCommit(app, hostname, "removing", reviewedCommit)
 	}
 	spec := app.Spec
 	spec.Domains = nil
@@ -127,7 +127,7 @@ func (a *appPlatformDomains) update(ctx context.Context, cred provider.Infrastru
 	if !errors.As(err, &mismatch) {
 		return err
 	}
-	refused := "App Platform started a deployment of a newer commit than the reviewed one. Deploy the service to finish " + verb + " " + hostname + "."
+	refused := appCommitRefusal(verb, hostname)
 	live := mismatch.Deployment != nil && mismatch.Deployment.Phase == digitalocean.PhaseActive
 	if !live {
 		if cancelErr := a.client.CancelDeployment(ctx, cred.Token, b.ExternalID, own.ID); cancelErr != nil {
@@ -212,6 +212,25 @@ func hasAppDomain(spec digitalocean.AppSpec, hostname string) bool {
 		}
 	}
 	return false
+}
+
+// appLiveCommit lets a change with nothing left to do finish only while the
+// app's live deployment built the reviewed commit. A wait that was cut short,
+// or an update that showed no deployment, may have left another commit live.
+// The deployment before it isn't known here, so there's nothing to roll back
+// to: the service's next deploy puts the reviewed commit back.
+func appLiveCommit(app *digitalocean.App, hostname, verb, reviewedCommit string) error {
+	if app.ActiveDeployment == nil {
+		return appDeploymentNotice(hostname)
+	}
+	if !app.ActiveDeployment.Built(reviewedCommit) {
+		return fmt.Errorf("%w: %s", ErrConflict, appCommitRefusal(verb, hostname))
+	}
+	return nil
+}
+
+func appCommitRefusal(verb, hostname string) string {
+	return "App Platform started a deployment of a newer commit than the reviewed one. Deploy the service to finish " + verb + " " + hostname + "."
 }
 
 // appDeploying holds a change to an app's domains until its current

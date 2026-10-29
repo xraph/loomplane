@@ -331,6 +331,17 @@ func (d *Deployment) components() []Deployed {
 	return out
 }
 
+// Built reports whether every component of d was built from commit, as
+// WaitDeployment decides for a deployment that went live.
+func (d *Deployment) Built(commit string) bool {
+	for _, comp := range d.components() {
+		if !sameCommit(comp.SourceCommitHash, commit) {
+			return false
+		}
+	}
+	return true
+}
+
 // FindApp finds the account's app called name.
 func (c *Client) FindApp(ctx context.Context, token, name string) (*App, error) {
 	for page := 1; ; page++ {

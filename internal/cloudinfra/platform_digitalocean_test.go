@@ -149,8 +149,13 @@ func TestAppPlatformRecordsNeedAnAddress(t *testing.T) {
 	}
 }
 
+// liveDeployment is an active deployment of web built from commit.
+func liveDeployment(id, commit string) map[string]any {
+	return map[string]any{"id": id, "phase": "ACTIVE", "services": []any{map[string]any{"name": "web", "source_commit_hash": commit}}}
+}
+
 func TestAppPlatformAttachAddsAnAliasDomainOnce(t *testing.T) {
-	f, a := newFakeDOApp(t, map[string]any{"id": "app-1", "spec": map[string]any{"name": "web"}})
+	f, a := newFakeDOApp(t, map[string]any{"id": "app-1", "spec": map[string]any{"name": "web"}, "active_deployment": liveDeployment("dep-prev", platformApproved)})
 	for range 2 {
 		if err := a.Attach(t.Context(), doAppCred(), doAppBinding(), "app.example.com", platformApproved); err != nil {
 			t.Fatal(err)
@@ -355,7 +360,7 @@ func TestAppPlatformStatusMapsPhases(t *testing.T) {
 }
 
 func TestAppPlatformDetachRemovesOnlyItsHostname(t *testing.T) {
-	f, a := newFakeDOApp(t, map[string]any{"id": "app-1", "spec": map[string]any{"name": "web", "domains": []any{
+	f, a := newFakeDOApp(t, map[string]any{"id": "app-1", "active_deployment": liveDeployment("dep-prev", platformApproved), "spec": map[string]any{"name": "web", "domains": []any{
 		map[string]any{"domain": "app.example.com", "type": "ALIAS"},
 		map[string]any{"domain": "other.example.com", "type": "ALIAS"},
 	}}})
@@ -375,6 +380,69 @@ func TestAppPlatformDetachRemovesOnlyItsHostname(t *testing.T) {
 
 func TestAppPlatformDetachOfAMissingAppIsDone(t *testing.T) {
 	f, a := newFakeDOApp(t, map[string]any{"id": "app-1"})
+	f.missing = true
+	if err := a.Detach(t.Context(), doAppCred(), doAppBinding(), "app.example.com", platformApproved); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// An attach or detach with nothing left to change still refuses an app whose
+// live deployment didn't build the reviewed commit, such as one an
+// interrupted wait never checked.
+func TestAppPlatformIdempotentCallsCheckTheLiveCommit(t *testing.T) {
+	const other = "ffffffffffffffffffffffffffffffffffffffff"
+	withDomain := func(active map[string]any) map[string]any {
+		app := map[string]any{"id": "app-1", "spec": map[string]any{"name": "web", "domains": []any{map[string]any{"domain": "app.example.com", "type": "ALIAS"}}}}
+		if active != nil {
+			app["active_deployment"] = active
+		}
+		return app
+	}
+	without := func(active map[string]any) map[string]any {
+		app := map[string]any{"id": "app-1", "spec": map[string]any{"name": "web"}}
+		if active != nil {
+			app["active_deployment"] = active
+		}
+		return app
+	}
+	for _, c := range []struct {
+		name string
+		app  map[string]any
+		call func(*appPlatformDomains) error
+		verb string
+	}{
+		{"attach", withDomain(liveDeployment("dep-1", other)), func(a *appPlatformDomains) error {
+			return a.Attach(t.Context(), doAppCred(), doAppBinding(), "app.example.com", platformApproved)
+		}, "adding"},
+		{"detach", without(liveDeployment("dep-1", other)), func(a *appPlatformDomains) error {
+			return a.Detach(t.Context(), doAppCred(), doAppBinding(), "app.example.com", platformApproved)
+		}, "removing"},
+	} {
+		f, a := newFakeDOApp(t, c.app)
+		err := c.call(a)
+		want := "App Platform started a deployment of a newer commit than the reviewed one. Deploy the service to finish " + c.verb + " app.example.com."
+		if !errors.Is(err, ErrConflict) || err.Error() != ErrConflict.Error()+": "+want {
+			t.Fatalf("%s on an unreviewed commit: %v", c.name, err)
+		}
+		if len(f.puts) != 0 || len(f.canceled) != 0 || len(f.rollbacks) != 0 {
+			t.Fatalf("%s: puts %d, canceled %v, rollbacks %v", c.name, len(f.puts), f.canceled, f.rollbacks)
+		}
+		// A shortened hash of the reviewed commit is the same commit.
+		_, a = newFakeDOApp(t, c.app)
+		c.app["active_deployment"] = liveDeployment("dep-1", platformApproved[:12])
+		if err = c.call(a); err != nil {
+			t.Fatalf("%s on the reviewed commit: %v", c.name, err)
+		}
+		// With nothing live, it waits.
+		delete(c.app, "active_deployment")
+		_, a = newFakeDOApp(t, c.app)
+		var notice *routeNoticeError
+		if err = c.call(a); !errors.Is(err, ErrPending) || !errors.As(err, &notice) {
+			t.Fatalf("%s with nothing live: %v", c.name, err)
+		}
+	}
+	// An app that's gone is still done.
+	f, a := newFakeDOApp(t, without(nil))
 	f.missing = true
 	if err := a.Detach(t.Context(), doAppCred(), doAppBinding(), "app.example.com", platformApproved); err != nil {
 		t.Fatal(err)

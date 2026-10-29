@@ -92,7 +92,8 @@ func DeriveRouteStatus(route Route, zone *Zone, latest *RouteOperation, now time
 	}
 	if v.TLS {
 		out.Certificate = DomainReady
-		if v.CertState == "issuing" || v.CertExpires.Before(now.Add(certificateRenewalWindow)) {
+		// A certificate whose expiry wasn't read isn't renewing.
+		if v.CertState == "issuing" || (!v.CertExpires.IsZero() && v.CertExpires.Before(now.Add(certificateRenewalWindow))) {
 			out.Certificate = DomainRenewing
 		}
 	}

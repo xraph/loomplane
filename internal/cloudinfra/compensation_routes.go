@@ -148,8 +148,9 @@ func (s *Service) ReconcileCompensationRoutes(ctx context.Context, p security.Pr
 		if source.OrgID != p.OrgID || source.ProjectID != in.ProjectID || source.Input.EnvironmentID != in.EnvironmentID || source.Input.Service != in.Service {
 			return ErrInvalid
 		}
-		// A Kubernetes route was never handed off, as in ReconcileReleaseRoutes.
-		if source.Binding.BackendName() == RouteBackendKubernetes {
+		// A Kubernetes or platform route was never handed off, as in
+		// ReconcileReleaseRoutes.
+		if noServerIngress(source) {
 			continue
 		}
 		preparedID := releasePrepareID(in.Key, source.ID)

@@ -291,7 +291,7 @@ func scanPlatformRouteBinding(row pgx.Row, port int) (RouteBinding, error) {
 		return out, storeError(err)
 	}
 	if out.ExternalID == "" {
-		return out, fmt.Errorf("%w: the service has no app on its platform yet; deploy it first", ErrConflict)
+		return out, fmt.Errorf("%w: %s", ErrConflict, platformNoApp)
 	}
 	return out, checkPlatformService(public, servicePort, port)
 }
@@ -529,6 +529,10 @@ func (s *PgStore) AcceptRoute(ctx context.Context, op *RouteOperation) error {
 					} else if active.PreviousReceipt != nil {
 						op.Receipt = active.PreviousReceipt
 					}
+					// A platform operation keeps every record it wrote.
+					if active.Receipts != nil {
+						op.Receipts = active.Receipts
+					}
 					op.CancelledIngress = active.CancelledIngress
 					if active.DesiredConfig != nil {
 						op.CancelledIngress = &IngressTransition{Desired: *active.DesiredConfig, Previous: active.PreviousConfig, Applied: active.AppliedConfig}
@@ -607,15 +611,15 @@ func (s *PgStore) PublishRoute(ctx context.Context, op *RouteOperation) error {
 		return err
 	}
 	defer rollback(tx)
-	// A Kubernetes route has no server ingress config to fence on; the route
-	// lock and the revisions below order its workers.
-	if op.Route.Binding.BackendName() != RouteBackendKubernetes {
+	// A Kubernetes or platform route has no server ingress config to fence
+	// on; the route lock and the revisions below order its workers.
+	if !noServerIngress(op.Route) {
 		var generation int64
 		if checkErr := tx.QueryRow(ctx, `SELECT generation FROM loomplane_ingress_configs WHERE org_id=$1 AND server_id=$2 AND generation=$3 FOR UPDATE`, op.Route.OrgID, op.Route.Binding.ServerID, op.Generation).Scan(&generation); checkErr != nil {
 			return ErrConflict
 		}
 	}
-	op.Route.Receipt = op.Receipt
+	op.Route.Receipt, op.Route.Receipts = op.Receipt, op.Receipts
 	op.Route.OperationID = op.ID
 	prior := op.Route.Revision
 	op.Route.Revision++
@@ -643,7 +647,7 @@ func (s *PgStore) PublishRoute(ctx context.Context, op *RouteOperation) error {
 }
 
 func (s *PgStore) BeginIngress(ctx context.Context, op *RouteOperation) (*IngressState, error) {
-	if op.Route.Binding.BackendName() == RouteBackendKubernetes {
+	if noServerIngress(op.Route) {
 		if err := s.SaveRouteOperation(ctx, op); err != nil {
 			return nil, err
 		}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"slices"
 
 	"github.com/xraph/loomplane/pkg/provider"
 )
@@ -133,4 +134,61 @@ func (s *Service) applyRouteDNS(ctx context.Context, st DomainStore, op *RouteOp
 	op.Receipt = &receipt
 	// Persist the returned record version before another update or deletion.
 	return st.SaveRouteOperation(ctx, op)
+}
+
+// applyRouteRecords writes each desired record the operation holds no
+// receipt for, saving each receipt before the next write so a crash never
+// loses one. An external zone's owner writes its records.
+func (s *Service) applyRouteRecords(ctx context.Context, st DomainStore, op *RouteOperation, zone *Zone) error {
+	if zone.Mode == "external" {
+		return nil
+	}
+	adapter, cred, err := s.zoneCredential(ctx, zone)
+	if err != nil {
+		return err
+	}
+	for _, want := range op.desiredRecords() {
+		receipts := op.receipts()
+		if slices.ContainsFunc(receipts, func(r provider.DNSRecord) bool {
+			return r.Name == want.Name && r.Type == want.Type && sameAddress(r.Value, want.Value)
+		}) {
+			continue
+		}
+		// DNSAttempted marks a write whose receipt isn't saved yet.
+		reconcile := op.DNSAttempted
+		op.DNSAttempted = true
+		if checkErr := st.SaveRouteOperation(ctx, op); checkErr != nil {
+			return checkErr
+		}
+		receipt, upsertErr := adapter.UpsertRecord(ctx, cred, provider.DNSUpsertRequest{Zone: zone.ProviderZone, Record: want, ReconcileOnly: reconcile, Siblings: receipts})
+		if upsertErr != nil {
+			return upsertErr
+		}
+		op.Receipts = append(slices.Clone(receipts), receipt)
+		op.DNSAttempted = false
+		if checkErr := st.SaveRouteOperation(ctx, op); checkErr != nil {
+			return checkErr
+		}
+	}
+	return nil
+}
+
+// deleteRouteRecords deletes every record the operation holds a receipt
+// for. One already gone counts as deleted.
+func (s *Service) deleteRouteRecords(ctx context.Context, op *RouteOperation, zone *Zone) error {
+	receipts := op.receipts()
+	if zone.Mode == "external" || len(receipts) == 0 {
+		return nil
+	}
+	adapter, cred, err := s.zoneCredentialFor(ctx, zone, true)
+	if err != nil {
+		return err
+	}
+	for _, receipt := range receipts {
+		deleteErr := adapter.DeleteRecord(ctx, cred, provider.DNSDeleteRequest{Zone: zone.ProviderZone, Expected: receipt})
+		if deleteErr != nil && !errors.Is(deleteErr, provider.ErrInfrastructureNotFound) {
+			return deleteErr
+		}
+	}
+	return nil
 }

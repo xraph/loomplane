@@ -48,7 +48,7 @@ func (s *Service) VerifyRoute(ctx context.Context, p security.Principal, project
 	if err != nil {
 		return nil, err
 	}
-	op := &RouteOperation{ID: opID, Route: *route, Kind: "verify", Status: "pending", Attempt: 1, Revision: 1, Receipt: route.Receipt, Principal: p}
+	op := &RouteOperation{ID: opID, Route: *route, Kind: "verify", Status: "pending", Attempt: 1, Revision: 1, Receipt: route.Receipt, Receipts: route.Receipts, Principal: p}
 	if checkErr := st.AcceptRoute(ctx, op); checkErr != nil {
 		return nil, checkErr
 	}
@@ -159,6 +159,9 @@ func (s *Service) executeRoute(ctx context.Context, st DomainStore, op *RouteOpe
 	}
 	if route.Binding.BackendName() == RouteBackendKubernetes {
 		return s.executeKubernetesRoute(ctx, st, op, zone)
+	}
+	if route.Binding.BackendName() == RouteBackendPlatform {
+		return s.executePlatformRoute(ctx, st, op, zone)
 	}
 	if op.Kind == "prepare" && op.Source != nil && op.Source.Binding.ServerID != op.Route.Binding.ServerID {
 		if checkErr := s.prepareSourceIngress(ctx, st, op); checkErr != nil {

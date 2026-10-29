@@ -293,6 +293,12 @@ func TestRegistryChecksIndividualOperations(t *testing.T) {
 	if _, err := builtins.Registrar("cloudflare"); err != nil {
 		t.Fatalf("cloudflare registrar missing: %v", err)
 	}
+	if _, err := builtins.Platform("digitalocean"); err != nil {
+		t.Fatalf("app platform missing: %v", err)
+	}
+	if _, err := builtins.Platform("vercel"); !errors.Is(err, provider.ErrInfrastructureUnsupported) {
+		t.Fatalf("vercel platform: %v", err)
+	}
 	for _, name := range []string{"vercel", "digitalocean"} {
 		if _, err := builtins.Registrar(name); !errors.Is(err, provider.ErrInfrastructureUnsupported) {
 			t.Fatalf("%s registrar: %v", name, err)
