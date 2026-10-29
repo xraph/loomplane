@@ -91,9 +91,15 @@ func (d doksCluster) observation(account string) (provider.ClusterObservation, e
 		pool := provider.NodePoolSpec{ID: p.ID, Name: p.Name, Size: p.Size, Count: p.Count, Min: p.MinNodes, Max: p.MaxNodes, Autoscale: p.AutoScale, Labels: p.Labels, Taints: p.Taints}
 		for _, tag := range p.Tags {
 			if strings.HasPrefix(tag, "loomplane-operation:") {
+				if pool.OperationID != "" {
+					return provider.ClusterObservation{}, provider.ErrInfrastructureIdentity
+				}
 				pool.OperationID = strings.TrimPrefix(tag, "loomplane-operation:")
 			}
 			if strings.HasPrefix(tag, "loomplane-request:") {
+				if pool.RequestDigest != "" {
+					return provider.ClusterObservation{}, provider.ErrInfrastructureIdentity
+				}
 				pool.RequestDigest = strings.TrimPrefix(tag, "loomplane-request:")
 			}
 		}

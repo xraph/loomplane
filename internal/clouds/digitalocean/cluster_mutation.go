@@ -20,11 +20,13 @@ func validateDOKSSpec(spec provider.ClusterSpec) error {
 		return provider.ErrInfrastructureInvalid
 	}
 	names := map[string]bool{}
+	total := 0
 	for _, p := range spec.NodePools {
-		if p.ID != "" || p.OperationID != "" || p.RequestDigest != "" || p.Name == "" || names[p.Name] || p.Size == "" || p.Count < 1 || p.Autoscale || p.Min != 0 || p.Max != 0 || p.ProviderOptions != nil {
+		if p.ID != "" || p.OperationID != "" || p.RequestDigest != "" || p.Name == "" || names[p.Name] || p.Size == "" || p.Count < 1 || p.Count > 512-total || p.Autoscale || p.Min != 0 || p.Max != 0 || p.ProviderOptions != nil {
 			return provider.ErrInfrastructureInvalid
 		}
 		names[p.Name] = true
+		total += p.Count
 	}
 	return nil
 }
@@ -45,7 +47,7 @@ func (c *Client) CreateCluster(ctx context.Context, access provider.AccountAcces
 	}
 	pools := make([]map[string]any, 0, len(spec.NodePools))
 	for _, p := range spec.NodePools {
-		pools = append(pools, map[string]any{"name": p.Name, "size": p.Size, "count": p.Count, "auto_scale": false, "labels": p.Labels, "taints": p.Taints})
+		pools = append(pools, map[string]any{"name": p.Name, "size": p.Size, "count": p.Count, "auto_scale": false, "labels": p.Labels, "taints": p.Taints, "tags": []string{"loomplane-operation:" + spec.OperationID, "loomplane-request:" + provider.ClusterPoolRequestDigest(spec, p)}})
 	}
 	request := map[string]any{"name": spec.Name, "region": spec.Region, "version": spec.Version, "vpc_uuid": spec.NetworkID, "ha": spec.HA, "auto_upgrade": false, "node_pools": pools, "tags": []string{"loomplane-operation:" + spec.OperationID, "loomplane-request:" + receipt.RequestDigest}}
 	if spec.Maintenance.Day != "" || spec.Maintenance.StartTime != "" {

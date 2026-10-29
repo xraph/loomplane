@@ -193,3 +193,8 @@ func ClusterRequestDigest(spec ClusterSpec) string {
 
 // ClusterSpecValidator checks provider-specific fields before purchase approval.
 type ClusterSpecValidator interface{ ValidateClusterSpec(ClusterSpec) error }
+
+// ClusterPoolRequestDigest binds one logical pool to an immutable create request.
+func ClusterPoolRequestDigest(spec ClusterSpec, pool NodePoolSpec) string {
+	return ClusterRequestDigest(ClusterSpec{OperationID: spec.OperationID, Region: spec.Region, Name: pool.Name, NodePools: []NodePoolSpec{pool}})
+}

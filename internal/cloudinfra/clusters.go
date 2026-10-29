@@ -198,7 +198,7 @@ func clusterDigest(in ClusterInput) string {
 }
 
 func (s *Service) PreviewCluster(ctx context.Context, p security.Principal, cloud string, in ClusterInput) (*ClusterOperation, error) {
-	if in.PriceDigest != "" {
+	if in.PriceDigest != "" || in.BudgetReview != nil || in.EnvelopeReview != nil {
 		return nil, ErrInvalid
 	}
 	if err := s.clusterEnabled(); err != nil {
@@ -247,6 +247,9 @@ func (s *Service) PreviewCluster(ctx context.Context, p security.Principal, clou
 		if in.Kind == "node-pool-create" {
 			in.Maintenance.Pool.OperationID = id
 			in.Maintenance.Pool.RequestDigest = maintenanceHash(in.Maintenance.Pool)
+			if checkErr := prepareMaintenanceEnvelope(&in, capacity); checkErr != nil {
+				return nil, checkErr
+			}
 		}
 	case "create":
 		if in.ResourceID != "" || in.Ref != (provider.ClusterRef{}) || in.ResourceRevision != 0 || in.Spec.OperationID != "" {
@@ -285,6 +288,10 @@ func (s *Service) PreviewCluster(ctx context.Context, p security.Principal, clou
 		in.Spec.OperationID = id
 		in.Spec.ReconcileOnly = false
 		in.OptionsCheckedAt = options.CheckedAt
+		in.EnvelopeReview, err = prepareCreateEnvelopes(in, options)
+		if err != nil {
+			return nil, err
+		}
 		if validator, ok := reader.(provider.ClusterSpecValidator); ok {
 			if checkErr := validator.ValidateClusterSpec(in.Spec); checkErr != nil {
 				return nil, checkErr

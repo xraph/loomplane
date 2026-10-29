@@ -110,7 +110,7 @@ func (s *PgStore) reserveInfrastructureCapacity(ctx context.Context, tx driver.T
 		return nil, err
 	}
 	if p.Revision == 0 {
-		return nil, nil
+		return legacyClusterPolicyGate(ctx, tx, d.OrgID, d.CloudID, operationID)
 	}
 	if d.PolicyRevision != 0 && d.PolicyRevision != p.Revision {
 		return capacityBlock(p, d, "review_required", "policy"), nil
@@ -118,6 +118,19 @@ func (s *PgStore) reserveInfrastructureCapacity(ctx context.Context, tx driver.T
 	o, err := scanOperation(tx.QueryRow(ctx, `SELECT body,principal FROM loomplane_infrastructure_operations WHERE org_id=$1 AND cloud_id=$2 AND id=$3`, d.OrgID, d.CloudID, operationID))
 	if err != nil {
 		return nil, err
+	}
+	if p.Budget != nil {
+		reviewMoney, priceErr := serverBudgetMoney(ctx, tx, o)
+		if priceErr != nil {
+			return nil, priceErr
+		}
+		review, e := scopedBudgetReviewTx(ctx, tx, o.OrgID, o.CloudID, o.Provider, o.AccountID, o.ID, reviewMoney, p, nil)
+		if e != nil {
+			return nil, e
+		}
+		if e := checkBudgetReview(p, o.BudgetReview, review, o.Input.AcknowledgeUnknownCosts); e != nil {
+			return nil, e
+		}
 	}
 	var existing []byte
 	var reservationStatus string
@@ -220,6 +233,14 @@ func (s *PgStore) reserveInfrastructureCapacity(ctx context.Context, tx driver.T
 			}
 		}
 	}
+	localEnvelope, accountEnvelope, err := envelopeUsage(ctx, tx, d.OrgID, d.CloudID, o.Provider, o.AccountID, operationID)
+	if err != nil {
+		return nil, err
+	}
+	used, err = sumResources(used, capacityResources(localEnvelope))
+	if err != nil {
+		return nil, err
+	}
 	if b := checkCapacityLimit(p, d, used, delta, capacityResources(p.Limits), "hard_limit"); b != nil {
 		return b, nil
 	}
@@ -313,6 +334,10 @@ func (s *PgStore) reserveInfrastructureCapacity(ctx context.Context, tx driver.T
 					return nil, err
 				}
 			}
+		}
+		accountUsed, err = sumResources(accountUsed, capacityResources(accountEnvelope))
+		if err != nil {
+			return nil, err
 		}
 		// Adoption changes Cloud attribution, but does not consume provider quota.
 		if o.Input.Kind != "adopt" {
@@ -438,6 +463,13 @@ func (s *PgStore) reserveOperationCapacity(ctx context.Context, tx driver.Tx, o 
 		return err
 	}
 	if p.Revision == 0 {
+		block, checkErr := legacyClusterPolicyGate(ctx, tx, o.OrgID, o.CloudID, o.ID)
+		if checkErr != nil {
+			return checkErr
+		}
+		if block != nil {
+			return &CapacityAdmissionError{Block: *block}
+		}
 		return nil
 	}
 	d := CapacityDemand{OrgID: o.OrgID, CloudID: o.CloudID}

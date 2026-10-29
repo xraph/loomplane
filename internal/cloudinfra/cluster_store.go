@@ -67,6 +67,25 @@ func (s *PgStore) CreateClusterPreview(ctx context.Context, o *ClusterOperation)
 	if checkErr := lockCapacityCloud(ctx, tx, o.OrgID, o.CloudID); checkErr != nil {
 		return checkErr
 	}
+	if checkErr := prepareTemporaryHoldTx(ctx, tx, o); checkErr != nil {
+		return checkErr
+	}
+	policy, err := capacityPolicyTx(ctx, tx, o.OrgID, o.CloudID)
+	if err != nil {
+		return err
+	}
+	if o.CapacityTarget.Servers > 0 {
+		o.Input.BudgetReview, err = scopedBudgetReviewTx(ctx, tx, o.OrgID, o.CloudID, o.Input.Provider, o.Input.AccountID, o.ID, o.MoneyEstimate, policy, o.Input.EnvelopeReview)
+		if err != nil {
+			return err
+		}
+		if o.Input.BudgetReview != nil || o.Input.EnvelopeReview != nil {
+			o.Digest = clusterDigest(o.Input)
+			for i := range o.Steps {
+				o.Steps[i].RequestDigest = o.Digest
+			}
+		}
+	}
 	raw, err := json.Marshal(o)
 	if err != nil {
 		return err

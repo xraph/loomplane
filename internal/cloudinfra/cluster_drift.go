@@ -53,11 +53,13 @@ func (s *Service) ObserveClusterDrift(ctx context.Context, p security.Principal,
 			next.CAHash = previous.CAHash
 			observation.CAHash = previous.CAHash
 		}
-		if maintenanceHash(previous) == maintenanceHash(next) {
+		if maintenanceHash(previous) == maintenanceHash(next) && observation.ObservedAt.Equal(r.Observation.ObservedAt) {
 			return r, nil
 		}
+		if maintenanceHash(previous) != maintenanceHash(next) {
+			r.Status = "drifted"
+		}
 		r.Observation = &observation
-		r.Status = "drifted"
 	}
 	r.Revision++
 	r.ObservedRevision++

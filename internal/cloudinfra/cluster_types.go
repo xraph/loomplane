@@ -24,6 +24,8 @@ type AttachmentInput struct {
 }
 
 type ClusterInput struct {
+	BudgetReview                  *BudgetReview          `json:"budget_review,omitempty"`
+	EnvelopeReview                *ClusterEnvelopeReview `json:"envelope_review,omitempty"`
 	costEvidence                  *MoneyEstimate
 	PriceDigest                   string                   `json:"price_digest,omitempty"`
 	Retirement                    *ClusterRetirementInput  `json:"retirement,omitempty"`

@@ -175,6 +175,9 @@ func (s *PgStore) SaveClusterCapacity(ctx context.Context, r *ManagedResource, s
 	if count != 1 {
 		return ErrConflict
 	}
+	if err := settleClusterEnvelopes(ctx, tx, current, snapshot, ""); err != nil {
+		return err
+	}
 	return tx.Commit()
 }
 

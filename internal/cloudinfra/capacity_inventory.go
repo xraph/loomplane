@@ -137,6 +137,21 @@ func (s *Service) refreshCapacity(ctx context.Context, org, cloud string) (*Capa
 			cursor = page.NextCursor
 		}
 	}
+	expectedRetained := map[string]string{}
+	if retained, ok := s.Store.(retainedEnvelopeAccountStore); ok {
+		references, readErr := retained.retainedEnvelopeAccounts(ctx, org, cloud)
+		if readErr != nil {
+			return nil, readErr
+		}
+		for _, ref := range references {
+			identity := ref.Provider + "/" + ref.AccountID
+			if previous := expectedRetained[ref.ConnectionID]; previous != "" && previous != identity {
+				return nil, provider.ErrInfrastructureIdentity
+			}
+			expectedRetained[ref.ConnectionID] = identity
+			connectionIDs[ref.ConnectionID] = true
+		}
+	}
 	accounts := map[string]provider.CapacityInventory{}
 	catalogs := map[string]provider.ServerOptions{}
 	// Only an account holding a managed server without a current price has its
@@ -162,6 +177,9 @@ func (s *Service) refreshCapacity(ctx context.Context, org, cloud string) (*Capa
 			return nil, e
 		}
 		key := credential.Provider + "/" + credential.AccountID
+		if expected := expectedRetained[id]; expected != "" && expected != key {
+			return nil, provider.ErrInfrastructureIdentity
+		}
 		if _, exists := accounts[key]; exists {
 			continue
 		}
@@ -751,6 +769,12 @@ func (s *PgStore) SaveCapacityInventory(ctx context.Context, org, cloud string, 
 		if n != 1 {
 			return ErrConflict
 		}
+		if checkErr := saveAccountMembership(ctx, tx, org, account); checkErr != nil {
+			return checkErr
+		}
+		if checkErr := settleDeletedClusterEnvelopes(ctx, tx, org, account); checkErr != nil {
+			return checkErr
+		}
 	}
 
 	persisted, readErr := capacityRecordsTx(ctx, tx, org, cloud)
@@ -787,6 +811,7 @@ func (s *PgStore) CapacityScopes(ctx context.Context) ([]CapacityScope, error) {
 
 func summarizeAccount(snapshot provider.CapacityInventory) (CapacityAccountSnapshot, error) {
 	out := CapacityAccountSnapshot{Provider: snapshot.Provider, AccountID: snapshot.AccountID, Provisioned: capacityResources(ResourceVector{}), Quota: snapshot.Quota, CheckedAt: snapshot.CheckedAt}
+	out.membership = &accountMembership{Complete: true, Provider: snapshot.Provider, AccountID: snapshot.AccountID, CheckedAt: snapshot.CheckedAt, Servers: append([]provider.CapacityServer{}, snapshot.Servers...)}
 	seen := map[string]bool{}
 	for _, host := range snapshot.Servers {
 		if host.ID == "" || seen["server:"+host.ID] {

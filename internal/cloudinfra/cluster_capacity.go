@@ -23,9 +23,21 @@ import (
 // reserveClusterCapacity uses the same reservation rows counted by server admission.
 // The whole vector stays reserved until a later verified inventory handover.
 func (s *PgStore) reserveClusterCapacity(ctx context.Context, tx driver.Tx, o *ClusterOperation) error {
+	if err := checkAutomaticEnvelopePrices(o); err != nil {
+		return err
+	}
 	p, err := capacityPolicyTx(ctx, tx, o.OrgID, o.CloudID)
 	if err != nil {
 		return err
+	}
+	if p.Budget != nil {
+		review, e := scopedBudgetReviewTx(ctx, tx, o.OrgID, o.CloudID, o.Input.Provider, o.Input.AccountID, o.ID, o.MoneyEstimate, p, o.Input.EnvelopeReview)
+		if e != nil {
+			return e
+		}
+		if e := checkBudgetReview(p, o.Input.BudgetReview, review, o.Input.AcknowledgeUnknownCosts); e != nil {
+			return e
+		}
 	}
 	d := CapacityDemand{OrgID: o.OrgID, CloudID: o.CloudID, PolicyRevision: o.Input.PolicyRevision}
 	blocked := func(reason, resource string) error {
@@ -82,7 +94,19 @@ func (s *PgStore) reserveClusterCapacity(ctx context.Context, tx driver.Tx, o *C
 			}
 		}
 	}
-	if b := checkCapacityLimit(p, d, used, v, capacityResources(p.Limits), "hard_limit"); b != nil {
+	localEnvelope, accountEnvelope, err := envelopeUsage(ctx, tx, o.OrgID, o.CloudID, o.Input.Provider, o.Input.AccountID, o.ID)
+	if err != nil {
+		return err
+	}
+	used, err = sumResources(used, capacityResources(localEnvelope))
+	if err != nil {
+		return err
+	}
+	admitted, err := clusterEnvelopeAdmissionDelta(ctx, tx, o, v)
+	if err != nil {
+		return err
+	}
+	if b := checkCapacityLimit(p, d, used, admitted, capacityResources(p.Limits), "hard_limit"); b != nil {
 		return &CapacityAdmissionError{Block: *b}
 	}
 	var raw []byte
@@ -100,6 +124,9 @@ func (s *PgStore) reserveClusterCapacity(ctx context.Context, tx driver.Tx, o *C
 	if !freshCapacity(account.CheckedAt, time.Now()) {
 		return blocked("stale_inventory", "account")
 	}
+	if account.Quota.Servers == nil {
+		return blocked("stale_inventory", "provider_quota")
+	}
 	accountUsed := account.Provisioned
 	for _, r := range reservations {
 		if r.reservation.OperationID != o.ID && r.reservation.Provider == o.Input.Provider && r.reservation.AccountID == o.Input.AccountID {
@@ -109,20 +136,27 @@ func (s *PgStore) reserveClusterCapacity(ctx context.Context, tx driver.Tx, o *C
 			}
 		}
 	}
+	accountUsed, err = sumResources(accountUsed, capacityResources(accountEnvelope))
+	if err != nil {
+		return err
+	}
 	quota := CapacityResources{Servers: account.Quota.Servers, CPUMillis: account.Quota.CPUMillis, MemoryBytes: account.Quota.MemoryBytes, StorageBytes: account.Quota.StorageBytes}
-	if b := checkCapacityLimit(p, d, accountUsed, v, quota, "provider_quota"); b != nil {
+	if b := checkCapacityLimit(p, d, accountUsed, admitted, quota, "provider_quota"); b != nil {
 		return &CapacityAdmissionError{Block: *b}
 	}
 	if existing {
-		return nil
+		return s.reserveReviewedEnvelopes(ctx, tx, o)
 	}
-	r := infrastructureReservation{OperationID: o.ID, ClusterOperationID: o.ID, Provider: o.Input.Provider, AccountID: o.Input.AccountID, Delta: v, Target: v, CreatedAt: time.Now().UTC()}
+	r := infrastructureReservation{OperationID: o.ID, ClusterOperationID: o.ID, ManagedResourceID: o.Input.ResourceID, Provider: o.Input.Provider, AccountID: o.Input.AccountID, Delta: v, Target: v, CreatedAt: time.Now().UTC()}
 	raw, err = json.Marshal(r)
 	if err != nil {
 		return err
 	}
 	_, err = tx.Exec(ctx, `INSERT INTO loomplane_cloud_capacity_reservations(org_id,cloud_id,id,policy_revision,intent_hash,servers,cpu_millis,memory_bytes,storage_bytes,status,body) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,'reserved',$10)`, o.OrgID, o.CloudID, o.ID, p.Revision, o.Digest, v.Servers, v.CPUMillis, v.MemoryBytes, v.StorageBytes, raw)
-	return storeError(err)
+	if err != nil {
+		return storeError(err)
+	}
+	return s.reserveReviewedEnvelopes(ctx, tx, o)
 }
 
 // AttemptClusterCreate fences the worker and rechecks admission with the marker.
@@ -212,6 +246,12 @@ func (s *PgStore) SaveClusterAccount(ctx context.Context, org, cloud string, acc
 	_, err = tx.Exec(ctx, `INSERT INTO loomplane_cloud_capacity_accounts(org_id,provider,account_id,servers,cpu_millis,memory_bytes,storage_bytes,quota_servers,quota_cpu_millis,quota_memory_bytes,quota_storage_bytes,checked_at,body) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) ON CONFLICT(org_id,provider,account_id) DO UPDATE SET servers=excluded.servers,cpu_millis=excluded.cpu_millis,memory_bytes=excluded.memory_bytes,storage_bytes=excluded.storage_bytes,quota_servers=excluded.quota_servers,quota_cpu_millis=excluded.quota_cpu_millis,quota_memory_bytes=excluded.quota_memory_bytes,quota_storage_bytes=excluded.quota_storage_bytes,checked_at=excluded.checked_at,body=excluded.body WHERE loomplane_cloud_capacity_accounts.checked_at<=excluded.checked_at`, org, account.Provider, account.AccountID, account.Provisioned.Servers, account.Provisioned.CPUMillis, account.Provisioned.MemoryBytes, account.Provisioned.StorageBytes, account.Quota.Servers, account.Quota.CPUMillis, account.Quota.MemoryBytes, account.Quota.StorageBytes, account.CheckedAt, raw)
 	if err != nil {
 		return err
+	}
+	if checkErr := saveAccountMembership(ctx, tx, org, account); checkErr != nil {
+		return checkErr
+	}
+	if checkErr := settleDeletedClusterEnvelopes(ctx, tx, org, account); checkErr != nil {
+		return checkErr
 	}
 	return tx.Commit()
 }
