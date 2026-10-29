@@ -44,7 +44,15 @@ func (s *PgStore) AcceptClusterOperation(ctx context.Context, o *ClusterOperatio
 		o.ReservationIDs = []string{o.ID}
 	} else {
 		var active bool
-		if checkErr := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_cluster_operations WHERE org_id=$1 AND body->'input'->>'provider'=$2 AND body->'input'->>'account_id'=$3 AND body->'input'->'ref'->>'id'=$4 AND status IN ('accepted','running','waiting_provider','needs_attention'))`, o.OrgID, o.Input.Provider, o.Input.AccountID, o.Input.Ref.ID).Scan(&active); checkErr != nil {
+		if checkErr := tx.QueryRow(ctx, `SELECT EXISTS(
+ SELECT 1 FROM loomplane_cluster_operations o
+ LEFT JOIN loomplane_managed_resources r ON r.org_id=o.org_id AND r.id=o.resource_id
+ WHERE o.org_id=$1 AND o.body->'input'->>'provider'=$2 AND o.body->'input'->>'account_id'=$3
+ AND o.status IN ('accepted','running','waiting_provider','needs_attention')
+ AND (o.body->'input'->'ref'->>'id'=$4
+ OR (r.provider=$2 AND r.account_id=$3 AND r.external_id=$4)
+ OR EXISTS(SELECT 1 FROM jsonb_array_elements(coalesce(o.body->'receipts','[]'::jsonb)) receipt WHERE receipt->'ref'->>'account_id'=$3 AND receipt->'ref'->>'id'=$4)
+ OR EXISTS(SELECT 1 FROM loomplane_cluster_operation_steps step WHERE step.org_id=o.org_id AND step.operation_id=o.id AND step.body->>'remote_resource_id'=$4)))`, o.OrgID, o.Input.Provider, o.Input.AccountID, o.Input.Ref.ID).Scan(&active); checkErr != nil {
 			return checkErr
 		}
 		if active {

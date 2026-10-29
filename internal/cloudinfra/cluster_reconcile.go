@@ -13,8 +13,8 @@ import (
 )
 
 func (s *Service) ReconcileClusterOperation(ctx context.Context, org, id string, heartbeat func([]byte) error) error {
-	if err := s.clusterEnabled(); err != nil {
-		return err
+	if s.Clusters == nil {
+		return ErrInvalid
 	}
 	store, ok := s.Clusters.(ClusterLifecycleStore)
 	if !ok {
@@ -34,7 +34,16 @@ func (s *Service) ReconcileClusterOperation(ctx context.Context, org, id string,
 	}
 	call, cancel := context.WithTimeout(ctx, 45*time.Second)
 	defer cancel()
-	reader, access, err := s.clusterAuthority(call, o.Principal, o.CloudID, o.Input)
+	var reader provider.ClusterReader
+	var access provider.AccountAccess
+	switch {
+	case clusterObservationOnly(o):
+		reader, access, err = s.clusterRecoveryAccount(call, o)
+	case !s.ManagedClusters.Enabled:
+		return s.clusterAttention(ctx, o, "Managed cluster mutations are disabled.")
+	default:
+		reader, access, err = s.clusterAuthority(call, o.Principal, o.CloudID, o.Input)
+	}
 	if err != nil {
 		return s.clusterAttention(ctx, o, "Current approval or account authority is unavailable.")
 	}
@@ -43,11 +52,11 @@ func (s *Service) ReconcileClusterOperation(ctx context.Context, org, id string,
 		if len(o.Steps) != 2 {
 			return ErrInvalid
 		}
-		creator, yes := reader.(provider.ClusterCreator)
-		if !yes {
-			return ErrInvalid
-		}
 		if o.Steps[0].State == "pending" {
+			creator, yes := reader.(provider.ClusterCreator)
+			if !yes {
+				return ErrInvalid
+			}
 			if o.EstimatedNodeHourlyMicroUSD > s.ManagedClusters.MaxNodeHourlyMicroUSD {
 				return s.clusterAttention(ctx, o, "Qualification cost ceiling changed. Review is required.")
 			}
@@ -70,6 +79,10 @@ func (s *Service) ReconcileClusterOperation(ctx context.Context, org, id string,
 			// Revalidate membership after live reads, before the durable mutation marker.
 			if _, _, err = s.clusterAuthority(call, o.Principal, o.CloudID, o.Input); err != nil {
 				return s.clusterAttention(ctx, o, "Current approval or account authority is unavailable.")
+			}
+
+			if checkErr := s.recheckClusterManagement(call, o); checkErr != nil {
+				return s.clusterAttention(ctx, o, checkErr.Error())
 			}
 			if checkErr := store.AttemptClusterCreate(ctx, o); checkErr != nil {
 				return checkErr

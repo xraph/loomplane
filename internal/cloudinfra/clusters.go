@@ -190,6 +190,10 @@ func (s *Service) PreviewCluster(ctx context.Context, p security.Principal, clou
 		if checkErr := s.clusterPurchaseGate(p, in); checkErr != nil {
 			return nil, checkErr
 		}
+		in.ManagementQualificationDigest, in.ManagementEvidenceID, err = s.probeClusterManagement(ctx, p.OrgID, in)
+		if err != nil {
+			return nil, err
+		}
 		if checkErr := s.Adapters.Require(in.Provider, provider.ClusterCreation); checkErr != nil {
 			return nil, checkErr
 		}
@@ -294,6 +298,9 @@ func (s *Service) ApplyCluster(ctx context.Context, p security.Principal, cloud,
 		if checkErr := s.clusterPurchaseGate(p, o.Input); checkErr != nil {
 			return nil, checkErr
 		}
+		if checkErr := s.recheckClusterManagement(ctx, o); checkErr != nil {
+			return nil, checkErr
+		}
 		call, cancel := context.WithTimeout(ctx, 45*time.Second)
 		defer cancel()
 		options, e := reader.Options(call, access, o.Input.Spec.Region)
@@ -361,7 +368,7 @@ func (s *Service) controlCluster(ctx context.Context, p security.Principal, clou
 	return o, err
 }
 func (s *Service) RecoverClusterOperations(ctx context.Context) error {
-	if err := s.clusterEnabled(); err != nil {
+	if s.Clusters == nil {
 		return nil
 	}
 	if s.ClusterWorkflow == nil {
@@ -373,7 +380,7 @@ func (s *Service) RecoverClusterOperations(ctx context.Context) error {
 	}
 	var failures []error
 	for _, o := range operations {
-		if o.NextAttemptAt.After(s.now()) {
+		if (!s.ManagedClusters.Enabled && !clusterObservationOnly(o)) || o.NextAttemptAt.After(s.now()) {
 			continue
 		}
 		if err := s.ClusterWorkflow.StartClusterOperation(ctx, o.OrgID, o.ID, o.Attempt); err != nil {

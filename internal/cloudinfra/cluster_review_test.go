@@ -4,6 +4,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/pkg/provider"
 )
@@ -50,5 +51,17 @@ func TestClusterAdoptionKeepsExternalOwnership(t *testing.T) {
 	in.Kind = "adopt-managed"
 	if _, err := s.PreviewCluster(t.Context(), p, "cloud", in); err == nil {
 		t.Fatal("managed adoption inferred ownership")
+	}
+}
+
+func TestClusterCallerCannotQualifyManagementPath(t *testing.T) {
+	s, _, adapter, _, p, in := clusterFixture(t)
+	s.ManagedClusters.ManagementProbe = config.ManagedClusterManagementProbeConfig{}
+	// The caller's flag is already true. No server-owned path evidence exists.
+	if _, err := s.PreviewCluster(t.Context(), p, "cloud", in); err == nil {
+		t.Fatal("caller flag bypassed absent management qualification")
+	}
+	if adapter.creates != 0 {
+		t.Fatal("management preflight created provider resources")
 	}
 }

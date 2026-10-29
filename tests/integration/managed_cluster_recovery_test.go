@@ -145,3 +145,46 @@ func TestManagedClusterRecoveryAdmissionAndFences(t *testing.T) {
 		t.Fatal("retained cluster reservation did not consume Cloud ceiling")
 	}
 }
+
+func TestManagedClusterRecoveryAdoptionCannotOverlapCreate(t *testing.T) {
+	for _, evidence := range []string{"resource", "receipt", "step"} {
+		t.Run(evidence, func(t *testing.T) {
+			db := managedClusterDB(t)
+			store, _ := managedClusterStore(t, db)
+			if _, err := db.Exec(t.Context(), `UPDATE loomplane_cloud_connections SET cloud='digitalocean',generation=1 WHERE id='conn'`); err != nil {
+				t.Fatal(err)
+			}
+			ref := provider.ClusterRef{ID: "remote", AccountID: "account", Region: "nyc1", Incarnation: "physical"}
+			resource := &cloudinfra.ManagedResource{ID: "cluster", OrgID: "org", CloudID: "cloud", Kind: "cluster", Provider: "digitalocean", AccountID: "account", ExternalID: ref.ID, Incarnation: ref.Incarnation, Ownership: "managed", Status: "running", Revision: 1, CreationReceipt: &provider.ClusterMutation{OperationID: "create", Ref: ref}}
+			if _, err := store.ClaimManagedResource(t.Context(), resource, 0); err != nil {
+				t.Fatal(err)
+			}
+			now := time.Now().UTC()
+			creation := &cloudinfra.ClusterOperation{ID: "create", OrgID: "org", CloudID: "cloud", Kind: "create", SchemaVersion: 1, Status: "preview", Revision: 1, Digest: "create-digest", Input: cloudinfra.ClusterInput{Kind: "create", Provider: "digitalocean", AccountID: "account", ConnectionID: "conn", CloudRevision: 1, ConnectionGeneration: 1}, CreatedAt: now, ExpiresAt: now.Add(time.Minute), Steps: []cloudinfra.ClusterStep{{Name: "provider", State: "pending", RequestDigest: "create-digest"}}}
+			if err := store.CreateClusterPreview(t.Context(), creation); err != nil {
+				t.Fatal(err)
+			}
+			creation.Revision++
+			creation.Status = "needs_attention"
+			switch evidence {
+			case "resource":
+				creation.ResourceID = resource.ID
+			case "receipt":
+				creation.Receipts = []provider.ClusterMutation{{OperationID: "create", Ref: ref}}
+			case "step":
+				creation.Steps[0].RemoteResourceID = ref.ID
+				creation.Steps[0].State = "observed"
+			}
+			if err := store.SaveClusterCheckpoint(t.Context(), creation, 1); err != nil {
+				t.Fatal(err)
+			}
+			adoption := &cloudinfra.ClusterOperation{ID: "adopt", OrgID: "org", CloudID: "cloud", Kind: "adopt-managed", SchemaVersion: 1, Status: "preview", Revision: 1, Digest: "adopt-digest", Input: cloudinfra.ClusterInput{Kind: "adopt-managed", Provider: "digitalocean", AccountID: "account", ConnectionID: "conn", CloudRevision: 1, ConnectionGeneration: 1, Ref: ref, ResourceID: resource.ID, ResourceRevision: 1}, CreatedAt: now, ExpiresAt: now.Add(time.Minute)}
+			if err := store.CreateClusterPreview(t.Context(), adoption); err != nil {
+				t.Fatal(err)
+			}
+			if err := store.AcceptClusterOperation(t.Context(), adoption, 2); !errors.Is(err, cloudinfra.ErrBusy) {
+				t.Fatalf("active create identified by %s permitted adoption: %v", evidence, err)
+			}
+		})
+	}
+}

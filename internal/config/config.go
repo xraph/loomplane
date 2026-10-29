@@ -442,6 +442,12 @@ func FromSource(src Getter) (Config, error) {
 	r.str(&c.Clouds.ACMEDirectory, "clouds.acme_directory")
 	r.boolean(&c.Clouds.KubernetesInCluster, "clouds.kubernetes_in_cluster")
 	r.boolean(&c.Clouds.ManagedClusters.Enabled, "clouds.managed_clusters.enabled")
+	r.str(&c.Clouds.ManagedClusters.ManagementProbe.Provider, "clouds.managed_clusters.management_probe.provider")
+	r.str(&c.Clouds.ManagedClusters.ManagementProbe.NetworkID, "clouds.managed_clusters.management_probe.network_id")
+	r.str(&c.Clouds.ManagedClusters.ManagementProbe.EvidenceID, "clouds.managed_clusters.management_probe.evidence_id")
+	r.str(&c.Clouds.ManagedClusters.ManagementProbe.URL, "clouds.managed_clusters.management_probe.url")
+	r.str(&c.Clouds.ManagedClusters.ManagementProbe.SPKISHA256, "clouds.managed_clusters.management_probe.spki_sha256")
+	r.str(&c.Clouds.ManagedClusters.ManagementProbe.ExpiresAt, "clouds.managed_clusters.management_probe.expires_at")
 	r.str(&c.Clouds.ManagedClusters.QualificationOrgID, "clouds.managed_clusters.qualification_org_id")
 	r.str(&c.Clouds.ManagedClusters.QualificationOperatorID, "clouds.managed_clusters.qualification_operator_id")
 	r.str(&c.Clouds.ManagedClusters.QualificationAccountID, "clouds.managed_clusters.qualification_account_id")
@@ -778,6 +784,7 @@ func (r *reader) duration(dst *time.Duration, key string) {
 // ManagedClustersConfig restricts purchases to explicitly scoped qualification runs.
 // General purchase rollout requires the retirement qualification in the lifecycle plan.
 type ManagedClustersConfig struct {
+	ManagementProbe         ManagedClusterManagementProbeConfig
 	MaxNodeHourlyMicroUSD   int64
 	Enabled                 bool
 	QualificationOrgID      string
@@ -787,3 +794,17 @@ type ManagedClustersConfig struct {
 	MaxNodes                int
 	MaxAccountCreates       int
 }
+
+// ManagedClusterManagementProbeConfig identifies an operator-qualified existing
+// management path. Its material does not belong in API reviews or logs.
+type ManagedClusterManagementProbeConfig struct {
+	Provider   string `json:"-"`
+	NetworkID  string `json:"-"`
+	EvidenceID string `json:"-"`
+	URL        string `json:"-"`
+	SPKISHA256 string `json:"-"`
+	ExpiresAt  string `json:"-"`
+}
+
+func (ManagedClusterManagementProbeConfig) String() string     { return "[management path qualification]" }
+func (c ManagedClusterManagementProbeConfig) GoString() string { return c.String() }

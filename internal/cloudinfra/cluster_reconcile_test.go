@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -141,6 +142,7 @@ func (clusterClouds) SetProjectGrant(context.Context, string, string, string, []
 }
 
 type clusterProvider struct {
+	observations     int
 	observeErr       error
 	creates          int
 	ambiguous, empty bool
@@ -169,6 +171,7 @@ func (a *clusterProvider) CreateCluster(_ context.Context, _ provider.AccountAcc
 	return provider.ClusterMutation{OperationID: spec.OperationID, Kind: "create", Ref: clusterObservation().Ref, RequestDigest: a.digest}, nil
 }
 func (a *clusterProvider) ObserveClusterMutation(_ context.Context, _ provider.AccountAccess, m provider.ClusterMutation) (provider.ClusterObservation, error) {
+	a.observations++
 	if a.observeErr != nil {
 		return provider.ClusterObservation{}, a.observeErr
 	}
@@ -193,6 +196,7 @@ func clusterFixture(t *testing.T) (*Service, *clusterMemory, *clusterProvider, *
 		t.Fatal(err)
 	}
 	s := NewService(Deps{Clusters: store, Authz: auth, Clouds: clusterClouds{}, Connections: &doksCredentials{org: "org", status: connections.StatusReady, generation: 1}, Adapters: adapters, ManagedClusters: config.ManagedClustersConfig{Enabled: true, QualificationOrgID: "org", QualificationOperatorID: "manager", QualificationAccountID: "account", QualificationRegion: "nyc1", MaxNodes: 3, MaxNodeHourlyMicroUSD: 1_000_000}})
+	qualifyClusterFixture(t, s)
 	in := ClusterInput{Kind: "create", Provider: "digitalocean", ConnectionID: "conn", AccountID: "account", ConnectionGeneration: 1, CloudRevision: 1, OptionsDigest: "options", PolicyRevision: 1, ManagementReachable: true, AcknowledgeNodeCosts: true, AcknowledgeUnknownCosts: true, WorkerImage: "worker@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Spec: provider.ClusterSpec{Name: "cluster", Region: "nyc1", Version: "v1", NetworkID: "network", NodePools: []provider.NodePoolSpec{{Name: "workers", Size: "s-2", Count: 2}}}, Attachment: &AttachmentInput{ProjectID: "proj", Namespace: "ns", ServiceAccountName: "runtime", TargetSlug: "worker", CloudRevision: 1, GrantRevision: 1}}
 	return s, store, adapter, auth, security.Principal{OrgID: "org", UserID: "manager"}, in
 }
@@ -326,5 +330,97 @@ func TestClusterConflictingReceiptNeedsOperatorRecovery(t *testing.T) {
 	}
 	if store.op.Status != "needs_attention" || adapter.creates != 1 {
 		t.Fatalf("conflicting receipt: %s", store.op.Status)
+	}
+}
+
+func TestClusterRevocationAfterLostReceiptStillObserves(t *testing.T) {
+	s, store, adapter, auth, p, in := clusterFixture(t)
+	o := acceptCluster(t, s, p, in)
+	store.crashReceipt = true
+	adapter.afterCreate = func() { auth.revoked = true }
+	if err := s.ReconcileClusterOperation(t.Context(), p.OrgID, o.ID, nil); err == nil {
+		t.Fatal("expected receipt checkpoint loss")
+	}
+	store.restart()
+	if err := s.ReconcileClusterOperation(t.Context(), p.OrgID, o.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	if adapter.creates != 1 || store.resource == nil || store.op.Status != "needs_attention" || store.op.Steps[1].State != "pending" || store.op.Principal != p || len(store.op.ReservationIDs) != 1 {
+		t.Fatalf("revoked approval stranded accepted resource or gained new authority: %+v", store.op)
+	}
+}
+
+func TestClusterDisabledFeatureRecoversOnlyAttemptedCreates(t *testing.T) {
+	for _, attempted := range []bool{false, true} {
+		t.Run(fmt.Sprint(attempted), func(t *testing.T) {
+			s, store, adapter, _, p, in := clusterFixture(t)
+			o := acceptCluster(t, s, p, in)
+			if attempted {
+				store.crashReceipt = true
+				if err := s.ReconcileClusterOperation(t.Context(), p.OrgID, o.ID, nil); err == nil {
+					t.Fatal("expected lost receipt")
+				}
+				store.restart()
+			}
+			s.ManagedClusters.Enabled = false
+			if err := s.ReconcileClusterOperation(t.Context(), p.OrgID, o.ID, nil); err != nil {
+				t.Fatal(err)
+			}
+			if attempted {
+				if adapter.creates != 1 || store.resource == nil || store.op.Steps[1].State != "pending" {
+					t.Fatal("disabled feature stranded accepted effect or enabled enrollment")
+				}
+			} else if adapter.creates != 0 || store.resource != nil {
+				t.Fatal("disabled feature allowed new effect")
+			}
+		})
+	}
+}
+
+func TestClusterReadOnlyRecoveryStillPinsParentGeneration(t *testing.T) {
+	s, store, adapter, auth, p, in := clusterFixture(t)
+	o := acceptCluster(t, s, p, in)
+	store.crashReceipt = true
+	if err := s.ReconcileClusterOperation(t.Context(), p.OrgID, o.ID, nil); err == nil {
+		t.Fatal("expected lost receipt")
+	}
+	store.restart()
+	auth.revoked = true
+	s.ManagedClusters.Enabled = false
+	s.Connections.(*doksCredentials).generation++
+	if err := s.ReconcileClusterOperation(t.Context(), p.OrgID, o.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	if adapter.creates != 1 || adapter.observations != 0 || store.resource != nil || store.op.Status != "needs_attention" {
+		t.Fatal("replacement connection authorized observation")
+	}
+}
+
+type clusterRecoveryWorkflow struct{ calls int }
+
+func (w *clusterRecoveryWorkflow) StartClusterOperation(context.Context, string, string, int) error {
+	w.calls++
+	return nil
+}
+func (m *clusterMemory) ListPendingClusterOperations(context.Context) ([]*ClusterOperation, error) {
+	return []*ClusterOperation{cloneCluster(m.op)}, nil
+}
+func TestClusterDisabledFeatureSchedulesOnlyAcceptedEffects(t *testing.T) {
+	s, store, _, _, p, in := clusterFixture(t)
+	o := acceptCluster(t, s, p, in)
+	workflow := &clusterRecoveryWorkflow{}
+	s.ClusterWorkflow = workflow
+	s.ManagedClusters.Enabled = false
+	if err := s.RecoverClusterOperations(t.Context()); err != nil || workflow.calls != 0 {
+		t.Fatal("disabled scheduler started new work", err)
+	}
+	s.ManagedClusters.Enabled = true
+	store.crashReceipt = true
+	if err := s.ReconcileClusterOperation(t.Context(), p.OrgID, o.ID, nil); err == nil {
+		t.Fatal("expected lost receipt")
+	}
+	s.ManagedClusters.Enabled = false
+	if err := s.RecoverClusterOperations(t.Context()); err != nil || workflow.calls != 1 {
+		t.Fatal("disabled scheduler stranded accepted effect", err)
 	}
 }
