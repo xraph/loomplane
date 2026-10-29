@@ -107,6 +107,13 @@ export function Infrastructure() {
     <>
       <SiteHeader crumbs={[{ label: "Infrastructure" }]} />
       <Page>
+        <p className="text-xs text-muted-foreground">
+          Manage Kubernetes cluster setup in{" "}
+          <Link to="/clouds" className="underline">
+            Clouds
+          </Link>
+          . Granted project targets appear with their runtime resources below.
+        </p>
         <PageHeading
           title="Infrastructure"
           description="Connected servers, Kubernetes clusters and cloud accounts, with the services running on each."

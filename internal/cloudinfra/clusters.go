@@ -256,6 +256,7 @@ func (s *Service) PreviewCluster(ctx context.Context, p security.Principal, clou
 	if checkErr := s.Clusters.CreateClusterPreview(ctx, o); checkErr != nil {
 		return nil, checkErr
 	}
+	s.recordCluster(ctx, "cloud.cluster.preview", o)
 	return o, nil
 }
 func (s *Service) validateClusterAdoption(ctx context.Context, org, cloud string, in ClusterInput) error {
@@ -334,6 +335,7 @@ func (s *Service) ApplyCluster(ctx context.Context, p security.Principal, cloud,
 	if checkErr := store.AcceptClusterOperation(ctx, o, s.clusterCreateLimit()); checkErr != nil {
 		return nil, checkErr
 	}
+	s.recordCluster(ctx, "cloud.cluster.accept", o)
 	if s.ClusterWorkflow != nil {
 		if checkErr := s.ClusterWorkflow.StartClusterOperation(ctx, o.OrgID, o.ID, o.Attempt); checkErr != nil {
 			return o, checkErr
@@ -373,6 +375,7 @@ func (s *Service) controlCluster(ctx context.Context, p security.Principal, clou
 	if err != nil {
 		return nil, err
 	}
+	s.recordCluster(ctx, "cloud.cluster.control", o)
 	if !cancel && s.ClusterWorkflow != nil {
 		err = s.ClusterWorkflow.StartClusterOperation(ctx, o.OrgID, o.ID, o.Attempt)
 	}

@@ -50,6 +50,7 @@ func streamBindings() forge.RouteOption {
 		forge.Emits[cloudprofiles.Target]("cloud_target.updated").As(forge.StreamUpsert), forge.Emits[cloudprofiles.Target]("cloud_target.deleted"),
 		forge.Emits[cloudprofiles.EnvironmentCloudEvent]("environment_cloud.updated").Invalidates("EnvironmentCloud"),
 		forge.Emits[cloudprofiles.CloudSyncEvent]("cloud_sync.updated").Invalidates("Sync", "Sync[]", "EnvironmentCloud"),
+		forge.Emits[cloudinfra.ClusterChange]("cloud_cluster.updated").Invalidates("CloudCluster", "CloudClusterPage", "CloudClusterOperation", "CloudClusterOperationPage", "Target", "Target[]", "Connection", "Connection[]", "Profile", "Profile[]"),
 		forge.Emits[cloudinfra.CapacityChange]("cloud_capacity.updated").Invalidates("CapacityPolicyView:{cloud_id}", "CapacityUsage:{cloud_id}", "Expansion[]"),
 		forge.Emits[store.Log]("build.log").As(forge.StreamUpsert), forge.Emits[store.Collection]("build.collection").As(forge.StreamUpsert),
 	)
@@ -76,7 +77,7 @@ func (e *Extension) routes(router forge.Router) error {
 		"deployment.updated": deployments.Deployment{}, "deployment.deleted": deployments.Deployment{}, "canary_verdict.updated": deployments.CanaryVerdict{}, "canary_verdict.deleted": deployments.CanaryVerdict{}, "build.log": store.Log{}, "build.collection": store.Collection{},
 		"cloud.updated": cloudprofiles.Profile{}, "cloud.deleted": cloudprofiles.Profile{}, "cloud_target.updated": cloudprofiles.Target{}, "cloud_target.deleted": cloudprofiles.Target{},
 		"environment_cloud.updated": cloudprofiles.EnvironmentCloudEvent{}, "cloud_sync.updated": cloudprofiles.CloudSyncEvent{},
-		"cloud_capacity.updated": cloudinfra.CapacityChange{}, "realtime.snapshot": Snapshot{}, forge.EventResumed: forge.ResumedPayload{}, forge.EventGap: forge.GapPayload{}, "realtime.status": Status{},
+		"cloud_cluster.updated": cloudinfra.ClusterChange{}, "cloud_capacity.updated": cloudinfra.CapacityChange{}, "realtime.snapshot": Snapshot{}, forge.EventResumed: forge.ResumedPayload{}, forge.EventGap: forge.GapPayload{}, "realtime.status": Status{},
 	}), streamBindings())
 }
 

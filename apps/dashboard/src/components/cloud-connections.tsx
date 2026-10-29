@@ -327,16 +327,20 @@ function ConnectionRow({
                 <RefreshCwIcon />
                 Check again
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setReplacing(true)}>
-                Replace credential
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                variant="destructive"
-                onClick={() => setRemoving(true)}
-              >
-                Remove
-              </DropdownMenuItem>
+              {c.method !== "managed_kubernetes" && (
+                <>
+                  <DropdownMenuItem onClick={() => setReplacing(true)}>
+                    Replace credential
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    variant="destructive"
+                    onClick={() => setRemoving(true)}
+                  >
+                    Remove
+                  </DropdownMenuItem>
+                </>
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
         )}

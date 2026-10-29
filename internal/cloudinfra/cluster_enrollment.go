@@ -76,7 +76,7 @@ func (s *Service) clusterBootstrapChecked(ctx context.Context, o *ClusterOperati
 	if err != nil {
 		return nil, err
 	}
-	if observation.Ref != r.Observation.Ref || observation.State != "running" || observation.Endpoint == "" || observation.CAHash == "" || observation.Endpoint != r.Observation.Endpoint || observation.CAHash != r.Observation.CAHash {
+	if observation.Ref != r.Observation.Ref || observation.State != "running" || observation.Endpoint == "" || observation.Endpoint != r.Observation.Endpoint || (observation.CAHash != "" && r.Observation.CAHash != "" && observation.CAHash != r.Observation.CAHash) {
 		return nil, ErrConflict
 	}
 	bootstrap, ok := reader.(provider.ClusterBootstrap)
@@ -92,12 +92,34 @@ func (s *Service) clusterBootstrapChecked(ctx context.Context, o *ClusterOperati
 		return nil, err
 	}
 	ca := sha256.Sum256(accessMaterial.CAData)
-	if accessMaterial.Endpoint != observation.Endpoint || hex.EncodeToString(ca[:]) != observation.CAHash || !accessMaterial.ExpiresAt.After(s.now().Add(time.Minute)) {
+	fingerprint := hex.EncodeToString(ca[:])
+	if accessMaterial.Endpoint != observation.Endpoint || (observation.CAHash != "" && fingerprint != observation.CAHash) || (r.Observation.CAHash != "" && fingerprint != r.Observation.CAHash) || !accessMaterial.ExpiresAt.After(s.now().Add(time.Minute)) {
 		return nil, ErrConflict
 	}
 	in := o.Input.Attachment
-	if in.TrustFingerprint != "" && in.TrustFingerprint != observation.CAHash || in.EndpointFingerprint != "" && in.EndpointFingerprint != endpointFingerprint(observation.Endpoint) {
+	if in.TrustFingerprint != "" && in.TrustFingerprint != fingerprint || in.EndpointFingerprint != "" && in.EndpointFingerprint != endpointFingerprint(observation.Endpoint) {
 		return nil, ErrConflict
+	}
+	// Discovery may omit the CA. Pin authenticated bootstrap trust before runtime effects.
+	if r.Observation.CAHash == "" {
+		store, yes := s.Clusters.(ClusterLifecycleStore)
+		if !yes || o.Status == "succeeded" {
+			return nil, ErrConflict
+		}
+		if checkErr := checkpoint(); checkErr != nil {
+			return nil, checkErr
+		}
+		old := o.Revision
+		r.Revision++
+		r.ObservedRevision = r.Revision
+		r.Observation.CAHash = fingerprint
+		r.UpdatedAt = s.now().UTC()
+		o.Enrollment.ResourceRevision = r.Revision
+		o.Revision++
+		o.UpdatedAt = s.now().UTC()
+		if checkErr := store.CheckpointClusterResource(ctx, o, r, old); checkErr != nil {
+			return nil, checkErr
+		}
 	}
 	raw, err := clientcmd.Write(clientapi.Config{Clusters: map[string]*clientapi.Cluster{"bootstrap": {Server: accessMaterial.Endpoint, CertificateAuthorityData: accessMaterial.CAData}}, AuthInfos: map[string]*clientapi.AuthInfo{"bootstrap": {Token: accessMaterial.Token, ClientCertificateData: accessMaterial.ClientCertificate, ClientKeyData: accessMaterial.ClientKey}}, Contexts: map[string]*clientapi.Context{"bootstrap": {Cluster: "bootstrap", AuthInfo: "bootstrap", Namespace: in.Namespace}}, CurrentContext: "bootstrap"})
 	if err != nil {
@@ -154,21 +176,21 @@ func (s *Service) enrollClusterOperation(ctx context.Context, o *ClusterOperatio
 	}
 	client, err := s.clusterBootstrap(ctx, o, r)
 	if err != nil {
-		return err
+		return &clusterEnrollmentError{reason: "runtime_bootstrap_unavailable", cause: err}
 	}
 	if checkErr := client.CheckEnrollmentPrerequisites(ctx, o.Input.Attachment.Prerequisites.RequireIngress || o.Input.Attachment.Prerequisites.RequireTLS, o.Input.Attachment.Prerequisites.RequireTLS); checkErr != nil {
-		return checkErr
+		return &clusterEnrollmentError{reason: "runtime_permissions_unavailable", cause: checkErr}
 	}
 	checkpoint := func(call context.Context, state *kubernetes.EnrollmentState) error {
 		o.Enrollment.State = *state
 		return s.enrollmentCheckpoint(call, o)
 	}
 	if checkErr := kubernetes.EnrollRuntime(ctx, client.Kube, enrollmentRequest(o), &o.Enrollment.State, checkpoint); checkErr != nil {
-		return checkErr
+		return &clusterEnrollmentError{reason: "runtime_namespace_setup_failed", cause: checkErr}
 	}
 	raw, expiry, err := s.enrollmentToken(ctx, o, client)
 	if err != nil {
-		return err
+		return &clusterEnrollmentError{reason: "runtime_token_unavailable", cause: err}
 	}
 	cfg, err := kubernetes.ParseConfig(raw, map[string]string{"namespace": o.Input.Attachment.Namespace, "ingress_address": o.Input.Attachment.Prerequisites.IngressAddress})
 	if err != nil {

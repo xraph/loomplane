@@ -74,5 +74,7 @@ func (s *Service) ClusterOptions(ctx context.Context, p security.Principal, clou
 	if options.Digest == "" || options.CheckedAt.IsZero() || age < 0 || age >= 5*time.Minute {
 		return provider.ClusterOptions{}, provider.ErrInfrastructureInvalid
 	}
+	options.AccountID = access.AccountID
+	options.ConnectionGeneration = access.Generation
 	return options, nil
 }

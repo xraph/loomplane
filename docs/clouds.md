@@ -353,3 +353,27 @@ During a routed release, old and new compute can coexist while DNS changes and c
 If a legacy runtime lacks a trusted current container/release receipt, redeploy it through the reviewed deployment flow before attaching a route. DNS-only retries cannot repair missing runtime identity. Stop every older app and worker binary before running the migrations and start only the upgraded binaries afterward. Mixed versions with unfenced writers are unsupported.
 
 The Go client exposes typed Cloud, server, pool, zone and route operations through the same authenticated transport as `loomctl`. Infrastructure operations live under `/api/v1/clouds/:cloudId`; zones under `/api/v1/dns-zones`; project route operations under `/api/v1/projects/:projectId/domain-routes` and `/route-operations`. Review inputs, revisions and cleanup authority remain enforced by those APIs.
+
+## Review Kubernetes cluster setup
+
+Use Infrastructure, Clusters inside an organization Cloud. The existing `servers` tab URL still opens Infrastructure. Project members use their granted targets; cluster discovery, account details and lifecycle operations require organization Cloud management permission.
+
+The CLI follows the existing `cloud-servers` naming convention:
+
+```sh
+loomctl cloud-clusters list cloud_...
+loomctl cloud-clusters show cloud_... resource_...
+loomctl cloud-clusters options cloud_... conn_... --region nyc1
+loomctl cloud-clusters discover conn_... --cursor next-page
+loomctl cloud-clusters preview cloud_... --file cluster.json
+loomctl cloud-clusters apply cloud_... operation-id --review exact-digest --yes --wait --timeout 10m
+loomctl cloud-clusters operation cloud_... operation-id --wait --timeout 10m
+loomctl cloud-clusters retry cloud_... operation-id --wait --timeout 10m
+loomctl cloud-clusters cancel cloud_... operation-id
+```
+
+A wait timeout prints the latest saved checkpoint. Keep its operation ID and resume it; creating another preview is not a recovery step for an accepted operation. Retry rechecks current authority, and a stale review requires fresh options and another review. Cancellation does not promise provider deletion.
+
+Preview accepts `create`, `adopt-external` or `adopt-managed`. Pin the Cloud revision, connection generation, verified account identity, options digest and capacity policy revision. Runtime attachment input also pins the project grant revision, namespace, target slug and service account. Managed adoption requires the saved managed resource ID and revision with its creation receipt. External adoption preserves external lifecycle ownership. The public API has no raw cluster enrollment endpoint.
+
+The optional qualification runner is `tests/acceptance/managed-clusters/run.py`. It requires a disposable configuration, explicit account/project/region bounds, fixed node and cost ceilings, a digest-pinned worker image, and commands for worker restart, deployment/readiness, access revocation/restoration and cleanup inventory. Commands return scoped JSON evidence; the runner rejects mismatched identities and nonempty cleanup inventory. Run its fixture tests with `python3 -m unittest discover -s tests/acceptance/managed-clusters`. Paid execution additionally requires `--execute-paid-disposable-qualification`, a private state path and `LOOMPLANE_QUALIFICATION_TOKEN`. Those fixture tests make no provider purchases and establish no live qualification.

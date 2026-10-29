@@ -139,7 +139,7 @@ type enrollmentServiceFixture struct {
 	originalInput []byte
 }
 
-func newEnrollmentServiceFixture(t *testing.T) *enrollmentServiceFixture {
+func newEnrollmentServiceFixture(t *testing.T, unknownCA ...bool) *enrollmentServiceFixture {
 	t.Helper()
 	path := os.Getenv("LOOMPLANE_TEST_MANAGED_KUBECONFIG")
 	if path == "" {
@@ -166,6 +166,9 @@ func newEnrollmentServiceFixture(t *testing.T) *enrollmentServiceFixture {
 	auth := embedded.AuthInfos[selected.AuthInfo]
 	ca := sha256.Sum256(cluster.CertificateAuthorityData)
 	observation := provider.ClusterObservation{Ref: provider.ClusterRef{ID: "kind", AccountID: "account", Region: "local", Incarnation: "kind-incarnation"}, Endpoint: cluster.Server, CAHash: hex.EncodeToString(ca[:]), State: "running", ObservedAt: time.Now().UTC()}
+	if len(unknownCA) > 0 && unknownCA[0] {
+		observation.CAHash = ""
+	}
 	db := managedClusterDB(t)
 	store, clouds := managedClusterStore(t, db)
 	pg := openPg(t, db.Config().ConnString())
@@ -302,7 +305,7 @@ func (f *enrollmentServiceFixture) handout(credentials *connections.Service, a *
 func TestManagedClusterEnrollmentServiceRestart(t *testing.T) {
 	for _, stage := range []string{"namespace", "rbac", "vault", "publication"} {
 		t.Run(stage, func(t *testing.T) {
-			f := newEnrollmentServiceFixture(t)
+			f := newEnrollmentServiceFixture(t, true)
 			crashStore := &enrollmentCrashStore{PgStore: f.store, stage: stage}
 			vault := f.vault()
 			if stage == "vault" {
@@ -519,5 +522,33 @@ func TestManagedClusterEnrollmentServiceRenewalRecovery(t *testing.T) {
 				t.Fatal("renewal changed runtime ownership")
 			}
 		})
+	}
+}
+
+func TestManagedClusterEnrollmentUnknownDiscoveryCA(t *testing.T) {
+	f := newEnrollmentServiceFixture(t, true)
+	svc, credentials := f.service(f.store, f.vault())
+	if err := svc.ReconcileClusterOperation(t.Context(), "org", f.op.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	attachment := f.attachment()
+	resource, err := f.store.GetManagedResource(t.Context(), "org", "cluster")
+	if err != nil {
+		t.Fatal(err)
+	}
+	expected := sha256.Sum256(f.provider.access.CAData)
+	if resource.Observation.CAHash != hex.EncodeToString(expected[:]) || resource.ObservedRevision != resource.Revision || attachment.TrustFingerprint != resource.Observation.CAHash {
+		t.Fatal("bootstrap trust was not durably pinned before publication")
+	}
+	// Discovery continues to omit CA material, as DigitalOcean does.
+	f.handout(credentials, attachment)
+	f.forceRenewal(attachment)
+	_, freshCredentials := f.service(cloudinfra.NewPgStore(f.pg), f.vault())
+	f.handout(freshCredentials, attachment)
+	attachment = f.attachment()
+	f.forceRenewal(attachment)
+	f.provider.access.CAData = []byte("changed-provider-bootstrap-trust")
+	if _, raw, checkErr := freshCredentials.Credential(t.Context(), "org", attachment.RuntimeConnectionID); checkErr == nil || len(raw) != 0 {
+		t.Fatal("renewal accepted changed bootstrap trust")
 	}
 }

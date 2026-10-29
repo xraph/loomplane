@@ -159,3 +159,9 @@ Apply and Remove run as operations because builds and databases take minutes. Lo
 ## Testing one
 
 `internal/plugins` has the client Loomplane uses, and its tests run it against `sdk.Handler` with a fake provider: that's the quickest check that a provider speaks the protocol. `tests/integration/plugin_test.go` goes further, connecting the example's cloud, then planning, deploying, re-planning and removing a site through a running Loomplane.
+
+### Kubernetes cluster lifecycle
+
+DigitalOcean exposes cluster discovery and live cluster options separately from creation authority. Organization managers can review cluster setup in Clouds, Infrastructure, Clusters or through `loomctl cloud-clusters`. Project grants expose runtime targets without granting provider lifecycle management.
+
+Managed DOKS creation remains disabled by default and restricted to configured qualification operators. New clusters support private digest-pinned workers with project-owned renewable access. Adoption can verify existing HTTP and TLS prerequisites, but managed namespace storage and builds remain unsupported. Installed adapter capability is not live qualification, and general purchases require the later cleanup qualification gate. See [DigitalOcean](digitalocean.md#managed-kubernetes-worker-clusters) for the current boundaries.

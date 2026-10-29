@@ -27,6 +27,7 @@ func (s *Service) ReconcileClusterOperation(ctx context.Context, org, id string,
 	if err != nil {
 		return err
 	}
+	defer func() { s.recordCluster(ctx, "cloud.cluster.reconcile", o) }()
 	if heartbeat != nil {
 		if checkErr := heartbeat([]byte(`{"cluster_operation":true}`)); checkErr != nil {
 			return checkErr
@@ -49,7 +50,7 @@ func (s *Service) ReconcileClusterOperation(ctx context.Context, org, id string,
 	}
 	if len(o.Steps) == 2 && o.Steps[0].State == "completed" && o.Input.Attachment != nil && !o.CancelRequested {
 		if checkErr := s.enrollClusterOperation(call, o); checkErr != nil {
-			return s.clusterAttention(ctx, o, "Runtime enrollment requires recovery: "+checkErr.Error())
+			return s.clusterAttention(ctx, o, clusterEnrollmentReason(checkErr))
 		}
 		return nil
 	}
@@ -94,6 +95,7 @@ func (s *Service) ReconcileClusterOperation(ctx context.Context, org, id string,
 			}
 			spec := o.Input.Spec
 			receipt, e := creator.CreateCluster(call, access, spec)
+			s.recordCluster(ctx, "cloud.cluster.provider_effect_attempted", o)
 			if e != nil {
 				return s.clusterWait(ctx, o, e)
 			}
@@ -167,7 +169,7 @@ func (s *Service) ReconcileClusterOperation(ctx context.Context, org, id string,
 	}
 	if o.Input.Attachment != nil && observation.State == "running" && !o.CancelRequested {
 		if checkErr := s.enrollClusterOperation(call, o); checkErr != nil {
-			return s.clusterAttention(ctx, o, "Runtime enrollment requires recovery: "+checkErr.Error())
+			return s.clusterAttention(ctx, o, clusterEnrollmentReason(checkErr))
 		}
 	}
 	return nil

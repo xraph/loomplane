@@ -7,6 +7,8 @@ import { useState, type ReactNode } from "react"
 import { messageOf } from "@/client/errors"
 import * as api from "@/client/forge/loomplane/hooks"
 import type {
+  CloudClusterOperation,
+  CloudClusterOperationPage,
   Connection,
   Operation,
   OperationList,
@@ -20,6 +22,8 @@ import {
   CloudError,
   CloudSectionHead,
   Rows,
+  Row,
+  StatePill,
   stateTone,
   useInfrastructureRefresh,
 } from "@/components/cloud-targets/infrastructure-ui"
@@ -98,6 +102,7 @@ const serverVerbs: Record<string, string> = {
 type Entry =
   | { kind: "placement"; at: number; sync: Sync }
   | { kind: "servers"; at: number; op: Operation }
+  | { kind: "clusters"; at: number; op: CloudClusterOperation }
 
 type ChangesProps = {
   scope: CloudScope
@@ -119,7 +124,10 @@ function WithOperations(props: ChangesProps) {
   const operations = useQuery(api.useInfrastructureOperationsList, {
     path: { cloudId: props.scope.cloud.id },
   })
-  return <ChangeList {...props} operations={operations} />
+  const clusters = useQuery(api.useClusterOperationsList, {
+    path: { cloudId: props.scope.cloud.id },
+  })
+  return <ChangeList {...props} operations={operations} clusters={clusters} />
 }
 
 function ChangeList({
@@ -128,11 +136,15 @@ function ChangeList({
   connections,
   onChanged,
   operations,
+  clusters,
 }: ChangesProps & {
   operations?: UseQueryResult<OperationList>
+  clusters?: UseQueryResult<CloudClusterOperationPage>
 }) {
   const org = !!operations
-  const [filter, setFilter] = useState<"all" | "placement" | "servers">("all")
+  const [filter, setFilter] = useState<
+    "all" | "placement" | "servers" | "clusters"
+  >("all")
   const [before, setBefore] = useState("")
   const syncs = useScopedSyncs(scope, before)
   const ops = (operations?.data?.operations ?? []).filter(
@@ -149,6 +161,11 @@ function ChangeList({
       at: Date.parse(sync.createdAt),
       sync,
     })),
+    ...(clusters?.data?.items ?? []).map((op) => ({
+      kind: "clusters" as const,
+      at: Date.parse(op.createdAt),
+      op,
+    })),
     ...ops.map((op) => ({
       kind: "servers" as const,
       at: Date.parse(op.createdAt),
@@ -160,9 +177,13 @@ function ChangeList({
   const reload = () => {
     void syncs.refetch()
     void operations?.refetch()
+    void clusters?.refetch()
     onChanged()
   }
-  const failed = syncs.status === "error" || operations?.status === "error"
+  const failed =
+    syncs.status === "error" ||
+    operations?.status === "error" ||
+    clusters?.status === "error"
   return (
     <section aria-label="Changes" className="grid gap-3">
       <CloudSectionHead
@@ -175,7 +196,7 @@ function ChangeList({
             aria-label="Show"
             className="flex gap-0.5 rounded-lg bg-muted p-[3px]"
           >
-            {(["all", "placement", "servers"] as const).map((f) => (
+            {(["all", "placement", "servers", "clusters"] as const).map((f) => (
               <button
                 key={f}
                 type="button"
@@ -197,11 +218,13 @@ function ChangeList({
       </CloudSectionHead>
       {failed ? (
         <QueryError
-          error={syncs.error ?? operations?.error}
+          error={syncs.error ?? operations?.error ?? clusters?.error}
           fallback="This Cloud's changes couldn't be loaded."
           retry={async () => reload()}
         />
-      ) : !syncs.data || (operations && !operations.data) ? (
+      ) : !syncs.data ||
+        (operations && !operations.data) ||
+        (clusters && !clusters.data) ? (
         <Skeleton className="h-32 rounded-xl" />
       ) : entries.length === 0 ? (
         <CloudEmpty kind="list" icon={ActivityIcon} title="No changes yet">
@@ -220,6 +243,24 @@ function ChangeList({
                 connections={connections}
                 onChanged={reload}
               />
+            ) : e.kind === "clusters" ? (
+              <Row key={e.op.id}>
+                <div className="min-w-0 flex-1">
+                  <a
+                    className="text-sm font-medium break-words hover:underline"
+                    href={`/clouds/${scope.cloud.id}?tab=servers&clusterOperation=${encodeURIComponent(e.op.id)}`}
+                  >
+                    {e.op.kind === "create"
+                      ? "Create cluster"
+                      : "Adopt cluster"}
+                    : {e.op.input.spec.name || e.op.input.ref.id}
+                  </a>
+                  <p className="text-xs text-muted-foreground">
+                    {dateTime(Date.parse(e.op.createdAt))}
+                  </p>
+                </div>
+                <StatePill status={e.op.status} />
+              </Row>
             ) : (
               <OperationEntry
                 key={e.op.id}

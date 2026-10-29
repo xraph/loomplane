@@ -156,5 +156,5 @@ func saveClusterSteps(ctx context.Context, tx driver.Tx, o *ClusterOperation) er
 	if count != len(o.Steps) {
 		return ErrConflict
 	}
-	return nil
+	return appendClusterEvent(ctx, tx, o)
 }

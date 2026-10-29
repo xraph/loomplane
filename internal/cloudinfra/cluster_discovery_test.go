@@ -116,3 +116,22 @@ func TestDOKSInstalledReadCapabilities(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestClusterOptionsPublishProviderIdentityForReview(t *testing.T) {
+	reader := &doksReader{checked: time.Now(), account: "account"}
+	adapters := NewAdapters()
+	if err := adapters.RegisterCluster("digitalocean", reader); err != nil {
+		t.Fatal(err)
+	}
+	svc := NewService(Deps{Connections: &doksCredentials{org: "org", status: connections.StatusReady, generation: 7}, Adapters: adapters, Authz: cleanupTestAuth{}, Clouds: capacityAPIClouds{}})
+	options, err := svc.ClusterOptions(t.Context(), security.Principal{OrgID: "org", UserID: "manager"}, "cloud", "conn", "nyc1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.AccountID != "account" || options.ConnectionGeneration != 7 || options.Digest != "digest" {
+		t.Fatalf("review identity %+v", options)
+	}
+	if options.AccountID == connections.AccountIdentity("digitalocean", "", map[string]string{"account_uuid": "account"}) {
+		t.Fatal("provider account replaced with generic connection fingerprint")
+	}
+}

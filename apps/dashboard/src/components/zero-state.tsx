@@ -9,7 +9,7 @@ import {
 import { EmptyIcon } from "@/components/icons"
 import { cn } from "@/lib/utils"
 
-type Variant = "panel" | "inline"
+type Variant = "panel" | "inline" | "compact"
 
 // The header draws the preview on the page and only the icon inside a card.
 const VariantContext = createContext<{ variant: Variant; preview: boolean }>({
@@ -28,6 +28,7 @@ const zeroStateVariants = cva(
         panel: "items-center rounded-[14px] px-6 py-10 text-center",
         // Already inside a card, so just the content.
         inline: "items-start p-5 text-left",
+        compact: "items-start gap-3 py-5 text-left",
       },
     },
     defaultVariants: { variant: "panel" },
@@ -97,7 +98,11 @@ function ZeroStateHeader({
       )}
       {...props}
     >
-      {variant === "panel" && preview ? <Preview>{media}</Preview> : media}
+      {(variant === "panel" || variant === "compact") && preview ? (
+        <Preview>{media}</Preview>
+      ) : (
+        media
+      )}
       {rest}
     </div>
   )

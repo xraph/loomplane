@@ -112,14 +112,16 @@ type ClusterNodeSize struct {
 }
 
 type ClusterOptions struct {
-	NodeSizeFacts   []ClusterNodeSize       `json:"node_size_facts"`
-	Versions        []string                `json:"versions"`
-	Regions         []string                `json:"regions"`
-	NodeSizes       []string                `json:"node_sizes"`
-	Networks        []string                `json:"networks"`
-	Digest          string                  `json:"digest"`
-	CheckedAt       time.Time               `json:"checked_at"`
-	ProviderOptions *ClusterProviderOptions `json:"provider_options,omitempty"`
+	AccountID            string                  `json:"account_id"`
+	ConnectionGeneration int64                   `json:"connection_generation"`
+	NodeSizeFacts        []ClusterNodeSize       `json:"node_size_facts"`
+	Versions             []string                `json:"versions"`
+	Regions              []string                `json:"regions"`
+	NodeSizes            []string                `json:"node_sizes"`
+	Networks             []string                `json:"networks"`
+	Digest               string                  `json:"digest"`
+	CheckedAt            time.Time               `json:"checked_at"`
+	ProviderOptions      *ClusterProviderOptions `json:"provider_options,omitempty"`
 }
 
 // ClusterMutation may identify the durable request marker before a remote ID exists.

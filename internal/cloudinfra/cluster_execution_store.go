@@ -110,6 +110,9 @@ func (s *PgStore) LeaseClusterOperation(ctx context.Context, org, id, owner stri
 	if err != nil {
 		return nil, err
 	}
+	if checkErr := appendClusterEvent(ctx, tx, o); checkErr != nil {
+		return nil, checkErr
+	}
 	if checkErr := tx.Commit(); checkErr != nil {
 		return nil, checkErr
 	}
@@ -163,6 +166,9 @@ func (s *PgStore) ControlClusterOperation(ctx context.Context, org, cloud, id st
 	_, err = tx.Exec(ctx, `UPDATE loomplane_cluster_operations SET fencing_epoch=$4,revision=$5,status=$6,body=$7,updated_at=now() WHERE org_id=$1 AND cloud_id=$2 AND id=$3`, org, cloud, id, o.FencingEpoch, o.Revision, o.Status, raw)
 	if err != nil {
 		return nil, err
+	}
+	if checkErr := appendClusterEvent(ctx, tx, o); checkErr != nil {
+		return nil, checkErr
 	}
 	if checkErr := tx.Commit(); checkErr != nil {
 		return nil, checkErr

@@ -42,7 +42,7 @@ func (s *Service) ResolveManagedCredential(ctx context.Context, c connections.Co
 	if err != nil {
 		return empty, err
 	}
-	if observed.Ref != r.Observation.Ref || observed.State != "running" || observed.Endpoint != c.Details["endpoint"] || observed.CAHash != a.TrustFingerprint {
+	if observed.Ref != r.Observation.Ref || observed.State != "running" || observed.Endpoint != c.Details["endpoint"] || (observed.CAHash != "" && observed.CAHash != a.TrustFingerprint) {
 		return empty, connections.ErrChanged
 	}
 	raw, err := s.revealManagedCredential(ctx, a.OrgID, a.VaultKey, a.CredentialExpiry)
@@ -85,7 +85,14 @@ func (s *Service) ResolveManagedCredential(ctx context.Context, c connections.Co
 	}
 	return connections.ManagedCredential{Kubeconfig: raw, ExpiresAt: a.CredentialExpiry, TrustRevision: a.TrustRevision, CredentialVersion: a.CredentialVersion}, nil
 }
-func (s *Service) refreshManagedCredential(ctx context.Context, o *ClusterOperation, r *ManagedResource, a *RuntimeAttachment) ([]byte, error) {
+func (s *Service) refreshManagedCredential(ctx context.Context, o *ClusterOperation, r *ManagedResource, a *RuntimeAttachment) (credential []byte, renewalErr error) {
+	defer func() {
+		reason := "runtime_credential_renewed"
+		if renewalErr != nil {
+			reason = "runtime_credential_renewal_failed"
+		}
+		s.recordClusterOutcome(ctx, "cloud.cluster.renewal", o, reason)
+	}()
 	store, ok := s.Clusters.(ClusterCredentialStore)
 	if !ok {
 		return nil, ErrInvalid

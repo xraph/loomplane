@@ -1,5 +1,6 @@
 import { ClientProvider } from "@forge-go/client-react"
 import {
+  act,
   cleanup,
   render,
   screen,
@@ -10,6 +11,7 @@ import userEvent from "@testing-library/user-event"
 import { afterEach, expect, it, vi } from "vitest"
 
 import { forgeClient } from "@/client/runtime"
+import { publishLiveState } from "@/lib/realtime-state"
 
 import { CloudDetail } from "./cloud-detail"
 
@@ -30,6 +32,13 @@ vi.mock("@/lib/router", () => ({
 }))
 afterEach(() => {
   manager = true
+  publishLiveState({
+    status: "stale",
+    transport: "ws",
+    lastSync: 0,
+    gap: false,
+  })
+  window.history.replaceState(null, "", "/")
   cleanup()
   vi.unstubAllGlobals()
   forgeClient.clear()
@@ -264,10 +273,26 @@ function fixture({
             },
           ],
         }
+      if (path === "/api/v1/clouds/c/cluster-operations/saved")
+        body = {
+          id: "saved",
+          cloud_id: "c",
+          status: "needs_attention",
+          digest: "review",
+          input: { spec: { name: "Saved worker" }, ref: {} },
+          steps: [],
+          unknown_costs: [],
+        }
       return Response.json(body)
     }
   )
-  return { writes, reads }
+  return {
+    writes,
+    reads,
+    publishTargets: () => {
+      noTargets = false
+    },
+  }
 }
 
 const show = (project?: string, tab?: "capacity") =>
@@ -345,7 +370,7 @@ it("shows a project member only the project's share, read-only", async () => {
     screen.queryByRole("tab", { name: /^Projects/ })
   ).not.toBeInTheDocument()
   expect(
-    screen.queryByRole("tab", { name: /^Servers/ })
+    screen.queryByRole("tab", { name: /^Infrastructure/ })
   ).not.toBeInTheDocument()
   expect(
     screen.queryByRole("tab", { name: /^Settings/ })
@@ -620,8 +645,43 @@ it("opens on the Capacity tab with usage, the policy, pools and expansions", asy
   ).toBeInTheDocument()
   await waitFor(() => expect(reads).toContain("/api/v1/clouds/c/expansions"))
   // Capacity lives on its own tab; Servers doesn't mount a second copy.
-  await openTab("Servers")
+  await openTab("Infrastructure")
   expect(
     screen.queryByRole("region", { name: "Capacity usage" })
   ).not.toBeInTheDocument()
+})
+
+it("reloads a saved cluster operation on Infrastructure without issuing creation", async () => {
+  window.history.replaceState(null, "", "/clouds/c?clusterOperation=saved")
+  const { reads, writes } = fixture()
+  show()
+  expect(await screen.findByText("Saved worker")).toBeInTheDocument()
+  expect(screen.getByRole("tab", { name: /^Infrastructure/ })).toHaveAttribute(
+    "aria-selected",
+    "true"
+  )
+  expect(reads.some((path) => path.includes("cluster-operations/saved"))).toBe(
+    true
+  )
+  expect(writes).toEqual([])
+})
+
+it("refreshes published targets and account metadata on live sync without reloading", async () => {
+  const state = fixture({ noTargets: true })
+  show()
+  await openTab("Targets")
+  await screen.findByText("No targets yet")
+  state.publishTargets()
+  act(() =>
+    publishLiveState({
+      status: "live",
+      transport: "ws",
+      lastSync: 42,
+      gap: false,
+    })
+  )
+  await screen.findByText("Frontend")
+  expect(
+    state.reads.filter((path) => path === "/api/v1/connections").length
+  ).toBeGreaterThan(1)
 })
