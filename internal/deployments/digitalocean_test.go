@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
@@ -163,6 +164,30 @@ func doJob(cfg *planning.ServiceConfig, ref string) *Job {
 func apiConfig() *planning.ServiceConfig {
 	return &planning.ServiceConfig{Source: "services/api", Image: "services/api/Dockerfile", Port: 8080, Public: true,
 		Workload: provider.HTTPService, Execution: provider.Container, Size: &manifest.Size{CPU: 1, Memory: 1024}, Scale: &manifest.Scale{Min: 2, Max: 2}}
+}
+
+func TestEnsureAppKeepsTheAppsDomains(t *testing.T) {
+	f, client := newFakeAppPlatform(t)
+	f.apps["app-api-production-23456789"] = map[string]any{
+		"name": "api-production-23456789",
+		"domains": []any{
+			map[string]any{"domain": "app.example.com", "type": "ALIAS"},
+			map[string]any{"domain": "hand.example.com", "type": "PRIMARY"},
+		},
+	}
+	if _, err := newDO(client).Apply(t.Context(), doJob(apiConfig(), "release")); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.specs) != 1 {
+		t.Fatalf("specs %v", f.specs)
+	}
+	want := []any{
+		map[string]any{"domain": "app.example.com", "type": "ALIAS"},
+		map[string]any{"domain": "hand.example.com", "type": "PRIMARY"},
+	}
+	if got := f.specs[0]["domains"]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("domains %v, want %v", got, want)
+	}
 }
 
 func TestDigitalOcean_deploysTheApprovedCommitFromItsBranch(t *testing.T) {
