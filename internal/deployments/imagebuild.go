@@ -110,6 +110,9 @@ func (b *ImageBuilder) Build(ctx context.Context, job *Job, state *ImageArtifact
 	if job.Action.Service == nil || job.Action.Service.BuildTarget == nil || state == nil || save == nil {
 		return "", errors.New("the service needs reviewed remote build settings")
 	}
+	if job.Action.Service.ManagedKubernetesBuild() {
+		return b.buildInKubernetes(ctx, job, state, save)
+	}
 	target := job.Action.Service.BuildTarget
 	reused := reusedReference(job.Action.Service) != ""
 	collector := job.Collector("image-build", job.LogAttempt())

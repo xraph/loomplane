@@ -190,6 +190,10 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 	if err != nil {
 		return nil, err
 	}
+	pullSecret, err := c.managedPullSecret(ctx, spec.Image, name, identity, labels[owned.LabelConnection])
+	if err != nil {
+		return nil, err
+	}
 	// The account comes first so a refused rule changes nothing else.
 	account, err := r.applyAccess(ctx, c, iid, labels)
 	if err != nil {
@@ -210,7 +214,12 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 	if selected := c.Config.Details["image_pull_secret"]; selected != "" {
 		pulls = append(pulls, corev1.LocalObjectReference{Name: selected})
 	}
-	if old.pull != nil {
+	if pullSecret != nil {
+		if pullErr := c.applyManagedPull(ctx, pullSecret, old.pull); pullErr != nil {
+			return nil, pullErr
+		}
+		pulls = append(pulls, corev1.LocalObjectReference{Name: pullSecret.Name})
+	} else if old.pull != nil {
 		if checkErr := c.Kube.CoreV1().Secrets(ns).Delete(ctx, old.pull.Name, deleteOwnedOptions(old.pull)); checkErr != nil {
 			return nil, checkErr
 		}

@@ -236,6 +236,10 @@ function TargetRow({
     row.section === "services" &&
     (selected?.cloud === "server" || selected?.cloud === "kubernetes")
   const accounts = connections.data?.connections ?? []
+  const managedRegistry =
+    selected?.cloud === "kubernetes"
+      ? accounts.find((c) => c.id === value.target)?.details.registry_hostname
+      : undefined
   const buildChange = (patch: NonNullable<PlacementFields["build"]>) =>
     change({ build: { ...value.build, ...patch } })
   const endpointChange = (patch: NonNullable<PlacementFields["endpoint"]>) =>
@@ -478,7 +482,9 @@ function TargetRow({
             automatic={
               selected?.cloud === "server"
                 ? "Use target server"
-                : "Choose a builder"
+                : managedRegistry
+                  ? "Build in cluster"
+                  : "Cluster default or SSH builder"
             }
             onChange={(builder) => buildChange({ builder })}
           />
@@ -492,9 +498,22 @@ function TargetRow({
                   (!!value.build?.image && c.details.pull === "ready"))
             )}
             disabled={disabled}
-            automatic="No registry selected"
+            automatic={
+              managedRegistry && !value.build?.builder && !value.build?.image
+                ? "Managed cluster registry"
+                : "No registry selected"
+            }
             onChange={(registry) => buildChange({ registry })}
           />
+          {managedRegistry &&
+            !value.build?.builder &&
+            !value.build?.registry &&
+            !value.build?.image && (
+              <p className="text-xs text-muted-foreground sm:col-span-2 xl:col-span-3">
+                Builds run in this cluster and publish to {managedRegistry}.
+                Loomplane manages the registry and image pull secrets.
+              </p>
+            )}
           <label className="grid gap-1.5 text-[12.5px] font-medium">
             Build context
             <Input

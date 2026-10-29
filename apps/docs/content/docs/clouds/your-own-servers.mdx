@@ -48,9 +48,39 @@ services:
       registry: conn_registry
 ```
 
-A source build for Kubernetes needs an SSH/Docker builder and an OCI registry that both the builder and the cluster can reach. Or give it an existing image pinned as `registry/repository@sha256:...` in `build.image`.
+A source build can use the SSH/Docker builder and registry shown above, or you can let the cluster build and store its images.
 
-For private images, enter the name of an existing namespace Secret in the connection's `image_pull_secret` setting. You manage its credentials and rotation. Rollback and removal leave that Secret alone, and names starting with `lp-` are reserved for Loomplane's own objects.
+### Managed cluster builds
+
+In the Kubernetes connection, set `registry_hostname` to a hostname you control, such as `images.example.com`. Point its DNS at the cluster's ingress and set `ingress_address`, a retained `storage_class`, and `architecture` (`amd64` or `arm64`). Your cluster needs cert-manager, an ingress controller, and permission to create Jobs and exec into their pods.
+
+Leave the builder and registry empty on each service:
+
+```yaml
+version: 1
+services:
+  api:
+    source: go:cmd/api
+    provider: kubernetes
+    target: conn_cluster
+    port: 8080
+    public: false
+    build: { context: . }
+```
+
+Your first approved deployment creates a persistent registry with 20 GiB of retained storage, generated authentication, an Ingress and a cert-manager certificate. Loomplane uploads the approved source to a rootless BuildKit Job, publishes its image, and deploys by digest. It creates the image pull Secret for each workload. Failed rollouts restore the previous pull Secret along with the workload.
+
+Build Jobs have a 30-minute deadline and a one-hour finished-job TTL if normal cleanup is interrupted. They receive no application secrets, service account token or host Docker socket. The nodes need user namespaces, and the namespace must allow BuildKit's unconfined seccomp and AppArmor profiles. Restricted Pod Security policies require a dedicated namespace with an appropriate policy.
+
+The hostname must resolve and its certificate must be trusted from both pods and nodes. HTTP-01 certificate issuance needs the DNS record in place before deployment. Large uploads are configured for ingress-nginx; other ingress controllers need equivalent upload limits and HTTPS enforcement.
+
+The connection shares one registry and its generated Basic credentials. Use separate namespaces and connections for workloads that must not share image access. Workload pull credentials refresh on deployment; they do not expire automatically. Removing a service retains the registry and its images. You manage image retention, backups, garbage collection and final registry removal. Its single replica depends on your storage driver for recovery.
+
+### External images and builders
+
+Keep an explicit `build.builder` and `build.registry` to use your existing build infrastructure. To skip source builds, give `build.image` an existing image pinned as `registry/repository@sha256:...`.
+
+For private images from an external registry, enter the name of an existing namespace Secret in the connection's `image_pull_secret` setting. You manage its credentials and rotation. Rollback and removal leave that Secret alone, and names starting with `lp-` are reserved for Loomplane's own objects.
 
 Forge HTTP apps without a Dockerfile can use a generated Go build, and a repository Dockerfile takes precedence over it. A private dependency needs a supported network path between its targets. Picking destinations doesn't create a cross-cluster network.
 

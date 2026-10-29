@@ -10,9 +10,17 @@ For SSH, you need a Linux Docker daemon, an existing private key and the server'
 
 For Kubernetes, use a self-contained HTTPS kubeconfig with an embedded CA and token or client certificate. File references, exec authentication, insecure TLS and impersonation are rejected. Select an existing namespace; Loomplane pins its UID and checks permissions for workloads, services and secrets. Public HTTP services need your ingress controller, hostname and an existing TLS secret. CPU autoscaling also needs the metrics API.
 
-A source build for Kubernetes needs an SSH/Docker builder and an OCI registry reachable by both builder and cluster. You can instead provide an existing image pinned as `registry/repository@sha256:...`.
+A Kubernetes connection can build and host images in its own namespace. Set `registry_hostname` under Integrations, point that hostname at the cluster's ingress, and select a retained `storage_class`, an `architecture` (`amd64` or `arm64`) and `ingress_address`. Your cluster needs cert-manager and an ingress controller. Leave `build.builder` and `build.registry` empty on services that use this setup. The first approved deployment provisions a registry Deployment, Service, 20 GiB PVC, generated credentials, Ingress and certificate. You don't need an SSH builder or a separate registry connection.
 
-For private Kubernetes images, enter an existing namespace Secret name in the connection's `image_pull_secret` setting. You manage its credentials and rotation. Loomplane checks its name and registry Secret type through a Table response with `includeObject=None`, then references it in the Pod. Rollback and removal preserve that external Secret. Names beginning with `lp-` are reserved for Loomplane's own objects.
+Each build runs the approved source archive in a temporary rootless BuildKit Job, publishes the image and records its digest. Build jobs have a 30-minute deadline, no service account token or host socket, and a one-hour finished-job TTL as a cleanup fallback. Rootless BuildKit needs user namespaces and permits unconfined seccomp and AppArmor profiles inside its build container. A cluster enforcing Restricted Pod Security needs a dedicated namespace with a compatible policy. It never falls back to privileged Docker.
+
+Loomplane creates a workload-owned image pull Secret for images in the managed registry and restores it with the previous workload if rollout fails. The registry is shared by the connection. Its generated Basic credentials grant access to the registry, so use separate namespaces and connections for workloads that must not share image access. Credentials do not expire automatically. The registry's authentication Secret is the source for workload copies, which are refreshed on deployment. Service removal deletes its pull Secret but retains shared registry credentials and image storage. Image retention, registry backups, garbage collection and final registry removal remain operator tasks.
+
+The registry hostname must resolve from build pods and cluster nodes, and its certificate must be trusted by both. cert-manager uses the existing HTTP-01 issuer; DNS must point at ingress before deployment. Loomplane sets large-upload annotations for ingress-nginx. Configure equivalent upload limits and HTTPS enforcement when using another ingress controller. The registry uses a single replica and a retained volume, so availability and recovery depend on your storage driver.
+
+You can still select an SSH/Docker builder and an OCI registry reachable by both builder and cluster. You can also provide an existing image pinned as `registry/repository@sha256:...`.
+
+For private images from an external registry, enter an existing namespace Secret name in the connection's `image_pull_secret` setting. You manage its credentials and rotation. Loomplane checks its name and registry Secret type through a Table response with `includeObject=None`, then references it in the Pod. Rollback and removal preserve that external Secret. Names beginning with `lp-` are reserved for Loomplane's own objects.
 
 Docker publishing and server pulls accept a direct registry bearer token or a repository token obtained through your reviewed token service. Username/password connections need a Bearer token exchange for authenticated Docker operations. Basic-only credentials can check registry API access, but cannot be delegated to Docker. Kubernetes uses your existing pull Secret for native authentication; it cannot consume a direct bearer token from a generic Docker configuration Secret. See [Docker's registry token contract](https://github.com/moby/moby/blob/v28.0.0/api/types/registry/authconfig.go) and [Kubernetes image authentication](https://kubernetes.io/docs/concepts/containers/images/#specifying-imagepullsecrets-on-a-pod).
 
@@ -58,6 +66,7 @@ Three providers can hold your DNS for the [domains](domains.md) you bring or reg
 | Target | Collection |
 | --- | --- |
 | SSH/Docker and Kubernetes source builds | Docker/BuildKit output from the selected SSH builder |
+| Managed Kubernetes source builds | BuildKit output from the cluster build Job |
 | Vercel | Streamed deployment build events |
 | Cloud Run | Polled Cloud Build entries from Cloud Logging |
 | ECS on Fargate | Polled CodeBuild output from its exact CloudWatch log stream |

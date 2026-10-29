@@ -159,5 +159,14 @@ func configFor(rc *rest.Config, contextName, namespace string, caData []byte, se
 		}
 		details["image_pull_secret"] = name
 	}
+	if host := strings.TrimSpace(settings["registry_hostname"]); host != "" {
+		if len(validation.IsDNS1123Subdomain(host)) != 0 || !strings.Contains(host, ".") {
+			return nil, fmt.Errorf("%w: registry_hostname must be a DNS hostname reachable by cluster nodes", ErrInvalid)
+		}
+		if details["storage_class"] == "" || details["architecture"] == "" || details["ingress_address"] == "" {
+			return nil, fmt.Errorf("%w: managed builds need storage_class, architecture and ingress_address", ErrInvalid)
+		}
+		details["registry_hostname"] = host
+	}
 	return &Config{REST: rc, Namespace: namespace, Context: contextName, Details: details}, nil
 }

@@ -25,6 +25,99 @@ afterEach(() => {
   forgeClient.clear()
 })
 
+it("offers managed Kubernetes builds without separate connection selections", async () => {
+  const manifest: Manifest = {
+    version: 1,
+    services: {
+      api: {
+        source: "go:cmd/api",
+        provider: "kubernetes",
+        target: "conn_cluster",
+        public: false,
+      },
+    },
+  }
+  vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+    const url = String(input)
+    let body: unknown = {}
+    if (url.endsWith("/graph"))
+      body = {
+        graph: {
+          sources: [],
+          services: [
+            {
+              id: "svc:go:cmd/api",
+              entrypoint: "cmd/api",
+              path: ".",
+              kind: "http-service",
+              deployable: true,
+            },
+          ],
+        },
+      }
+    if (url.endsWith("/providers"))
+      body = {
+        providers: [
+          {
+            name: "kubernetes",
+            title: "Kubernetes",
+            cloud: "kubernetes",
+            available: true,
+            runs: [{ workload: "http-service" }],
+          },
+        ],
+      }
+    if (url.endsWith("/connections"))
+      body = {
+        connections: [
+          {
+            id: "conn_cluster",
+            name: "Cluster",
+            cloud: "kubernetes",
+            status: "ready",
+            details: { registry_hostname: "images.example.com" },
+          },
+        ],
+      }
+    return new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    })
+  })
+  render(
+    <ClientProvider client={forgeClient}>
+      <DeploymentTargets
+        projectId="p"
+        manifest={manifest}
+        environments={[{ id: "env", name: "production" } as Environment]}
+        environment="production"
+        onEnvironment={() => {}}
+      />
+    </ClientProvider>
+  )
+  expect(
+    await screen.findByText(
+      /Builds run in this cluster and publish to images.example.com/
+    )
+  ).toBeVisible()
+  expect(
+    screen.getByRole("combobox", { name: "Builder for api" })
+  ).toHaveTextContent("Build in cluster")
+  expect(
+    screen.getByRole("combobox", { name: "Registry for api" })
+  ).toHaveTextContent("Managed cluster registry")
+  await userEvent.type(
+    screen.getByRole("textbox", { name: "Image for api" }),
+    "public.example.com/api@sha256:" + "a".repeat(64)
+  )
+  expect(
+    screen.queryByText(/Builds run in this cluster/)
+  ).not.toBeInTheDocument()
+  expect(
+    screen.getByRole("combobox", { name: "Builder for api" })
+  ).toBeDisabled()
+})
+
 it("saves an owned target, builder and registry while preserving the build context", async () => {
   const manifest: Manifest = {
     version: 1,

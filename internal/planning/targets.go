@@ -21,7 +21,7 @@ func ReviewedConnectionSettings(cloud string, details map[string]string) map[str
 	case "server":
 		keys = []string{"host", "port", "user", "host_key", "docker_socket", "advertise_host", "architecture", "docker_id"}
 	case "kubernetes":
-		keys = []string{"endpoint", "context", "namespace", "namespace_uid", "cluster_ca", "tls_server_name", "ingress_class", "ingress_domain", "tls_secret", "image_pull_secret", "architecture", "storage_class", "storage_class_uid", "storage_provisioner", "storage_binding", "storage_reclaim", "storage_expansion", "persistent_storage"}
+		keys = []string{"endpoint", "context", "namespace", "namespace_uid", "cluster_ca", "tls_server_name", "ingress_class", "ingress_address", "ingress_domain", "tls_secret", "image_pull_secret", "architecture", "storage_class", "storage_class_uid", "storage_provisioner", "storage_binding", "storage_reclaim", "storage_expansion", "persistent_storage", "registry_hostname"}
 	case "registry":
 		keys = []string{"endpoint", "repository", "auth_endpoint", "registry_ca"}
 	}
@@ -102,7 +102,13 @@ func (p *planner) configureTarget(name, base string, prov *provider.Provider, se
 		b = &manifest.Build{}
 	}
 	build := &BuildTarget{Builder: b.Builder, Registry: b.Registry, Image: b.Image}
-	if build.Image == "" {
+	cfg.BuildTarget = build
+	if cfg.ManagedKubernetesBuild() {
+		p.warn(Finding{Code: "managed-kubernetes-build", Subject: ServiceSubject, Name: name, Path: base + ".build", Message: "This cluster builds with rootless BuildKit and shares a persistent registry across its connection. The first deployment provisions a 20 GiB retained volume, registry credentials and a TLS ingress. Your registry hostname must resolve to that ingress. Removing a service retains its images."})
+		if c == nil || c.Details["managed_builds"] != "ready" {
+			p.problem(Finding{Code: "kubernetes-build-unavailable", Subject: ServiceSubject, Name: name, Path: base + ".build", Message: "Check this cluster's managed build setup under Integrations. It needs retained storage, cert-manager, ingress, and build pod permissions."})
+		}
+	} else if build.Image == "" {
 		if build.Builder == "" && prov.Cloud == "server" {
 			build.Builder = cfg.Target
 		}
@@ -151,6 +157,24 @@ func (p *planner) configureTarget(name, base string, prov *provider.Provider, se
 	if cfg.Public && prov.Cloud == "kubernetes" && c != nil && c.Details["ingress"] != "ready" {
 		p.problem(Finding{Code: "ingress-unavailable", Subject: ServiceSubject, Name: name, Path: base + ".endpoint", Message: "This connection needs namespace ingress permissions to deploy a public service. Check the connection after granting them."})
 	}
+}
+
+// ManagedKubernetesBuild uses the cluster's managed registry when the service
+// has no explicit external builder, registry or existing image.
+func (c *ServiceConfig) ManagedKubernetesBuild() bool {
+	return c != nil && c.Provider == "kubernetes" && c.TargetSettings["registry_hostname"] != "" && c.BuildTarget != nil && c.BuildTarget.Builder == "" && c.BuildTarget.Registry == "" && c.BuildTarget.Image == ""
+}
+
+// ImageRegistry identifies the registry across promotions without pretending
+// that a cluster's managed registry is a separate credential connection.
+func (c *ServiceConfig) ImageRegistry() string {
+	if c.ManagedKubernetesBuild() {
+		return "kubernetes/" + c.Target + "/" + c.TargetSettings["namespace_uid"] + "/" + c.TargetSettings["registry_hostname"]
+	}
+	if c != nil && c.BuildTarget != nil {
+		return c.BuildTarget.Registry
+	}
+	return ""
 }
 
 func sameTargetNetwork(a, b *ServiceConfig, cloudA, cloudB string) bool {

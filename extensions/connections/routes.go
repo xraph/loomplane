@@ -54,6 +54,7 @@ type CloudForm struct {
 // kubernetesPlacement are the settings a Kubernetes connection takes
 // besides its kubeconfig, whichever way it's connected.
 var kubernetesPlacement = []sdk.Setting{
+	{Key: "registry_hostname", Label: "Managed build registry hostname (optional, enables in-cluster builds)"},
 	{Key: "image_pull_secret", Label: "Existing image pull Secret (optional)"},
 	{Key: "storage_class", Label: "Retained storage class (optional)"},
 	{Key: "architecture", Label: "Persistent service architecture (amd64 or arm64)"},
@@ -86,7 +87,7 @@ func (e *Extension) clouds(ctx context.Context, p security.Principal) (CloudList
 			Help:     "Use a PEM private key, or JSON with private_key and passphrase. Your SSH user needs access to an existing Linux Docker daemon. Copy the server's public host key from a trusted source.",
 			Settings: []sdk.Setting{{Key: "host", Label: "SSH host", Required: true}, {Key: "port", Label: "SSH port (default 22)"}, {Key: "user", Label: "SSH user", Required: true}, {Key: "host_key", Label: "Public host key", Required: true}, {Key: "docker_socket", Label: "Docker socket (default /var/run/docker.sock)"}, {Key: "advertise_host", Label: "Published address (optional)"}}},
 		{Cloud: connections.Kubernetes, Title: "Kubernetes", Credential: "Self-contained kubeconfig",
-			Help:              "Use an HTTPS API with an embedded CA and token or client certificate. The namespace must already exist. File references and executable authentication plugins are refused. For private images, select an existing namespace pull Secret that you manage. Persistent services need a retained storage class and an explicit amd64 or arm64 architecture.",
+			Help:              "Use an HTTPS API with an embedded CA and token or client certificate. The namespace must already exist. Set a registry hostname to enable managed in-cluster builds and pull secrets. Point its DNS at your ingress; this needs cert-manager, retained storage and an explicit amd64 or arm64 architecture. Leave it empty to use an SSH builder and external registry. External private images use your existing namespace pull Secret.",
 			Settings:          append([]sdk.Setting{{Key: "context", Label: "Context (optional)"}, {Key: "namespace", Label: "Namespace (defaults to kubeconfig)"}}, kubernetesPlacement...),
 			InClusterSettings: append([]sdk.Setting{{Key: "namespace", Label: "Namespace", Required: true}}, kubernetesPlacement...)},
 		{Cloud: connections.Registry, Title: "Image registry", Credential: "Credential JSON", //nolint:gosec // Form label, not a credential.
