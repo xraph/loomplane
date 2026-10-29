@@ -88,7 +88,10 @@ func (e *Extension) Register(app forge.App) error {
 	if err != nil {
 		return err
 	}
-	return e.routes(app.Router(), guard)
+	if err := e.routes(app.Router(), guard); err != nil {
+		return err
+	}
+	return e.pushRoutes(app.Router(), guard)
 }
 func (e *Extension) Start(ctx context.Context) error {
 	if err := e.svc.Run(ctx); err != nil {

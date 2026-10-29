@@ -16,6 +16,7 @@ import (
 	"github.com/xraph/grove/drivers/pgdriver"
 	"github.com/xraph/herald"
 	emaildriver "github.com/xraph/herald/driver/email"
+	"github.com/xraph/herald/driver/push"
 	"github.com/xraph/herald/message"
 	"github.com/xraph/herald/provider"
 	heraldstore "github.com/xraph/herald/store"
@@ -59,7 +60,7 @@ func New(cfg config.Config, db *grove.DB) (*Service, error) {
 		return nil, err
 	}
 	ms := privateHeraldStore{Store: heraldpg.New(db)}
-	h, err := herald.New(herald.WithStore(ms), herald.WithCredentialKey("lp1", mailKey), herald.WithDriver(&emaildriver.SMTPDriver{}))
+	h, err := herald.New(herald.WithStore(ms), herald.WithCredentialKey("lp1", mailKey), herald.WithDriver(&emaildriver.SMTPDriver{}), herald.WithDriver(&push.SealedDriver{}), herald.WithDeviceStore(heraldpg.New(db)))
 	if err != nil {
 		return nil, err
 	}
@@ -86,6 +87,9 @@ func (s *Service) Prepare(ctx context.Context) error {
 
 func (s *Service) prepare(ctx context.Context) error {
 	if err := s.seedTemplates(ctx); err != nil {
+		return err
+	}
+	if err := s.preparePush(ctx); err != nil {
 		return err
 	}
 	if !s.MailEnabled() {

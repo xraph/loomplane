@@ -48,14 +48,14 @@ require (
 	github.com/xraph/confy v1.1.0
 	github.com/xraph/ctrlplane v1.8.1
 	github.com/xraph/dispatch v1.9.3
-	github.com/xraph/forge v1.13.0
+	github.com/xraph/forge v1.13.2
 	github.com/xraph/forge/extensions/conduit v1.13.0
 	github.com/xraph/go-utils v1.5.0
-	github.com/xraph/grove v1.10.0
-	github.com/xraph/grove/drivers/pgdriver v1.10.0
-	github.com/xraph/grove/drivers/sqlitedriver v1.10.0
+	github.com/xraph/grove v1.10.1
+	github.com/xraph/grove/drivers/pgdriver v1.10.1
+	github.com/xraph/grove/drivers/sqlitedriver v1.10.1
 	github.com/xraph/grove/extension v1.10.0
-	github.com/xraph/herald v1.8.1
+	github.com/xraph/herald v1.9.0
 	github.com/xraph/keysmith v1.8.1
 	github.com/xraph/relay v1.8.1
 	github.com/xraph/trove v1.8.1
@@ -227,7 +227,7 @@ require (
 	github.com/xraph/farp/discovery v1.3.1 // indirect
 	github.com/xraph/forge/extensions/auth v1.13.0 // indirect
 	github.com/xraph/forge/extensions/discovery v1.13.0 // indirect
-	github.com/xraph/grove/drivers/mongodriver v1.9.1 // indirect
+	github.com/xraph/grove/drivers/mongodriver v1.10.1 // indirect
 	github.com/xraph/grove/kv v1.9.1 // indirect
 	github.com/xraph/grove/kv/drivers/redisdriver v1.9.1 // indirect
 	github.com/xraph/ledger v1.8.1 // indirect
