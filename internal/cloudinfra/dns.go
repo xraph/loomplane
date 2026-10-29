@@ -17,9 +17,12 @@ func (s *Service) zoneCredentialFor(ctx context.Context, zone *Zone, cleanup boo
 	if err != nil {
 		return nil, provider.InfrastructureCredential{}, err
 	}
-	if conn.OrgID != zone.OrgID || (!cleanup && conn.Generation != zone.ConnectionGeneration) || conn.Cloud != zone.Provider {
+	if conn.OrgID != zone.OrgID || (!cleanup && conn.Generation < zone.ConnectionGeneration) || conn.Cloud != zone.Provider {
 		return nil, provider.InfrastructureCredential{}, ErrConflict
 	}
+	// A renewed credential keeps the zone, but only once the provider shows
+	// it the same hosted zone in the same account, as cleanup always checks.
+	verify := cleanup || conn.Generation != zone.ConnectionGeneration
 	credential, err := Credential(conn, raw)
 	if err != nil {
 		return nil, credential, err
@@ -28,7 +31,7 @@ func (s *Service) zoneCredentialFor(ctx context.Context, zone *Zone, cleanup boo
 		return nil, credential, provider.ErrInfrastructureIdentity
 	}
 	adapter, err := s.Adapters.DNS(zone.Provider)
-	if err == nil && cleanup {
+	if err == nil && verify {
 		current, checkErr := adapter.GetZone(ctx, credential, zone.ProviderZone.Name)
 		if checkErr != nil {
 			return nil, credential, checkErr
