@@ -16,6 +16,8 @@ import (
 
 	"github.com/xraph/herald"
 	"github.com/xraph/herald/device"
+	"github.com/xraph/herald/driver"
+	"github.com/xraph/herald/message"
 
 	"github.com/xraph/loomplane/internal/security"
 )
@@ -25,6 +27,8 @@ var ErrPushFailed = errors.New("push delivery failed")
 
 // ErrTooSoon means a test push was asked for again before the wait was over.
 var ErrTooSoon = errors.New("wait a moment before sending another test")
+
+const testPushEvery = 10 * time.Second
 
 const (
 	maxDevicesPerUser = 20
@@ -312,4 +316,63 @@ func (s *Service) DeleteDevice(ctx context.Context, p security.Principal, id str
 // setting: a deleted account loses its phones either way.
 func (s *Service) DeleteUserDevices(ctx context.Context, userID string) error {
 	return s.herald.DeleteUserDevices(ctx, s.cfg.Identity.AppID, userID)
+}
+
+// TestPushResult says what became of a test push.
+type TestPushResult struct {
+	Status string `json:"status"` // "sent" or "quiet_hours"
+}
+
+// TestPush sends a short notice to one of the caller's phones, at most once
+// every ten seconds per phone.
+func (s *Service) TestPush(ctx context.Context, p security.Principal, deviceID string) (TestPushResult, error) {
+	if err := s.deviceWriter(p); err != nil {
+		return TestPushResult{}, err
+	}
+	d, err := s.ownedDevice(ctx, p, deviceID)
+	if err != nil {
+		return TestPushResult{}, err
+	}
+	now := time.Now()
+	s.testMu.Lock()
+	if last, ok := s.testPushed[d.ID]; ok && now.Sub(last) < testPushEvery {
+		s.testMu.Unlock()
+		return TestPushResult{}, ErrTooSoon
+	}
+	if s.testPushed == nil {
+		s.testPushed = map[string]time.Time{}
+	}
+	for id, at := range s.testPushed {
+		if now.Sub(at) >= testPushEvery {
+			delete(s.testPushed, id)
+		}
+	}
+	s.testPushed[d.ID] = now
+	s.testMu.Unlock()
+
+	data := envelopeData(envelopeInput{Server: strings.TrimRight(s.cfg.PublicURL, "/"), OrgID: p.OrgID, Kind: "test", Path: "/notifications", SentAt: now,
+		Push: &Push{Class: ClassUpdate, Urgency: driver.UrgencyActive, Category: CategoryUpdate}})
+	const title, body = "Test notification", "Push notifications work on this phone."
+	res, err := s.herald.Send(ctx, &herald.SendRequest{
+		AppID: s.cfg.Identity.AppID, OrgID: p.OrgID, UserID: p.UserID, Channel: "push", Subject: title, Body: body,
+		Push: &driver.PushOptions{Urgency: driver.UrgencyActive, Kind: driver.PushKindShow, CollapseID: collapseID("notice:test:" + d.ID), TTL: 5 * time.Minute,
+			ThreadID: p.OrgID, Category: CategoryUpdate, Data: data},
+		DeviceFilter: func(c *device.Device) bool { return c.ID == d.ID },
+	})
+	if err != nil {
+		slog.WarnContext(ctx, "test push failed", "device", d.ID, "error", err)
+		return TestPushResult{}, ErrPushFailed
+	}
+	for _, r := range res.Devices {
+		if r.DeviceID != d.ID {
+			continue
+		}
+		switch r.Status {
+		case message.StatusSent:
+			return TestPushResult{Status: "sent"}, nil
+		case message.StatusSuppressed:
+			return TestPushResult{Status: "quiet_hours"}, nil
+		}
+	}
+	return TestPushResult{}, ErrPushFailed
 }

@@ -25,6 +25,10 @@ func (e *Extension) pushRoutes(r forge.Router, guard identity.Guard) error {
 		forge.WithResponseSchema(http.StatusOK, "The updated phone", notifications.PushDevice{})); err != nil {
 		return err
 	}
+	if err := g.POST("/devices/:id/test", e.testPush, forge.WithName("push.devices.test"), forge.WithSummary("Send a test notification to a phone"),
+		forge.WithResponseSchema(http.StatusAccepted, "What became of the test", notifications.TestPushResult{})); err != nil {
+		return err
+	}
 	return g.DELETE("/devices/:id", e.deleteDevice, forge.WithName("push.devices.delete"), forge.WithSummary("Stop sending push notifications to a phone"),
 		forge.WithNoContentResponse())
 }
@@ -82,4 +86,16 @@ func (e *Extension) pushConfig(c forge.Context) error {
 		return fail(err)
 	}
 	return c.JSON(http.StatusOK, out)
+}
+
+func (e *Extension) testPush(c forge.Context) error {
+	p, err := principal(c)
+	if err != nil {
+		return err
+	}
+	out, err := e.svc.TestPush(c.Request().Context(), p, c.Param("id"))
+	if err != nil {
+		return fail(err)
+	}
+	return c.JSON(http.StatusAccepted, out)
 }

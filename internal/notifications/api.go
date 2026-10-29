@@ -184,7 +184,11 @@ func (s *Service) MarkRead(ctx context.Context, p security.Principal, value stri
 	if err := s.requireReader(ctx, p, n); err != nil {
 		return err
 	}
-	return s.mailStore.MarkRead(ctx, parsed)
+	if err := s.mailStore.MarkRead(ctx, parsed); err != nil {
+		return err
+	}
+	s.withdrawRead(ctx, p.UserID, n.Metadata)
+	return nil
 }
 
 // domainNotice is a renewal or registration notice, which belongs to the

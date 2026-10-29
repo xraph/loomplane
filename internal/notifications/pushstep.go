@@ -376,3 +376,60 @@ func (s *Service) deliverPush(ctx context.Context, item *outboxItem, plan *pushP
 	}
 	return s.finishPush(ctx, item)
 }
+
+// withdrawal is a read notice to take back from the phones that got it.
+type withdrawal struct {
+	userID, orgID, collapse string
+	devices                 []string
+}
+
+// withdraw asks Herald to remove a notification from phones, once and in the
+// background. It is best effort: a failure is logged and not retried, and
+// Shutdown waits for it.
+func (s *Service) withdraw(item withdrawal) {
+	s.wg.Add(1)
+	go func() {
+		defer s.wg.Done()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_, err := s.herald.Send(ctx, &herald.SendRequest{
+			AppID: s.cfg.Identity.AppID, OrgID: item.orgID, UserID: item.userID, Channel: "push",
+			Push:         &driver.PushOptions{Kind: driver.PushKindWithdraw, CollapseID: item.collapse, Urgency: driver.UrgencyPassive, TTL: 24 * time.Hour},
+			DeviceFilter: func(d *device.Device) bool { return slices.Contains(item.devices, d.ID) },
+		})
+		if err != nil {
+			slog.WarnContext(ctx, "withdraw push failed", "collapse", item.collapse, "error", err)
+		}
+	}()
+}
+
+// withdrawRead takes a notice back from the phones that showed it. The
+// outbox row is found by the inbox item's outbox_id, its primary key.
+func (s *Service) withdrawRead(ctx context.Context, userID string, meta map[string]string) {
+	if !s.PushEnabled() || meta["outbox_id"] == "" {
+		return
+	}
+	var collapse string
+	var raw []byte
+	err := s.pg.QueryRow(ctx, `SELECT push_collapse,push_devices FROM loomplane_notification_outbox WHERE id=$1 AND push_state='sent'`, meta["outbox_id"]).Scan(&collapse, &raw)
+	if err != nil {
+		if !errors.Is(err, pgx.ErrNoRows) {
+			slog.WarnContext(ctx, "look up a pushed notice to withdraw", "error", err)
+		}
+		return
+	}
+	var results map[string]string
+	if json.Unmarshal(raw, &results) != nil || collapse == "" {
+		return
+	}
+	var sent []string
+	for id, status := range results {
+		if status == string(message.StatusSent) {
+			sent = append(sent, id)
+		}
+	}
+	if len(sent) > 0 {
+		slices.Sort(sent)
+		s.withdraw(withdrawal{userID: userID, orgID: meta["org_id"], collapse: collapse, devices: sent})
+	}
+}

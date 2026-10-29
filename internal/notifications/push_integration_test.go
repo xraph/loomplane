@@ -6,6 +6,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"testing"
 	"time"
 
@@ -462,4 +463,122 @@ func TestBrokenPushProviderStillSendsEmailOnce(t *testing.T) {
 	if !row.complete || row.state != PushSent || len(messages) != 1 || len(gw.handles()) != 1 {
 		t.Fatalf("after the retry: %+v, %d emails, %d sends", row, len(messages), len(gw.handles()))
 	}
+}
+
+func asUserA() security.Principal { return security.Principal{UserID: "user-a", OrgID: "org-a"} }
+
+func TestTestPushReachesOnlyThatDevice(t *testing.T) {
+	svc, gw, _, _ := pushRig(t)
+	gw.register(t, svc, "h1.a")
+	b := gw.register(t, svc, "h1.b")
+	got, err := svc.TestPush(t.Context(), asUserA(), b.ID)
+	if err != nil || got.Status != "sent" {
+		t.Fatalf("result: %+v %v", got, err)
+	}
+	sends := gw.taken()
+	if len(sends) != 1 || sends[0].Handle != "h1.b" {
+		t.Fatalf("gateway sends: %v", gw.handles())
+	}
+	env := sends[0].Env
+	if env.Title != "Test notification" || env.Body != "Push notifications work on this phone." || env.Category != "update" || sends[0].Body.CollapseID != collapseID("notice:test:"+b.ID) || env.Data["kind"] != "test" || env.Data["path"] != "/notifications" {
+		t.Fatalf("send: %+v", sends[0])
+	}
+}
+
+func TestTestPushInQuietHours(t *testing.T) {
+	svc, gw, _, _ := pushRig(t)
+	a := gw.register(t, svc, "h1.a")
+	now := time.Now().UTC()
+	quiet := QuietHours{Start: now.Add(-time.Hour).Format("15:04"), End: now.Add(time.Hour).Format("15:04")}
+	if _, err := svc.UpdateDevice(t.Context(), asUserA(), a.ID, UpdateDeviceInput{QuietHours: OptionalQuietHours{Set: true, Value: &quiet}}); err != nil {
+		t.Fatal(err)
+	}
+	got, err := svc.TestPush(t.Context(), asUserA(), a.ID)
+	if err != nil || got.Status != "quiet_hours" || len(gw.taken()) != 0 {
+		t.Fatalf("result: %+v %v, sends %d", got, err, len(gw.taken()))
+	}
+}
+
+func TestTestPushTwiceIsTooSoon(t *testing.T) {
+	svc, gw, _, _ := pushRig(t)
+	a := gw.register(t, svc, "h1.a")
+	if _, err := svc.TestPush(t.Context(), asUserA(), a.ID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.TestPush(t.Context(), asUserA(), a.ID); !errors.Is(err, ErrTooSoon) {
+		t.Fatalf("second: %v", err)
+	}
+}
+
+func TestTestPushOnSomeoneElsesDevice(t *testing.T) {
+	svc, gw, _, _ := pushRig(t)
+	a := gw.register(t, svc, "h1.a")
+	if _, err := svc.TestPush(t.Context(), security.Principal{UserID: "user-b", OrgID: "org-a"}, a.ID); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("err: %v", err)
+	}
+}
+
+func TestMarkReadWithdrawsFromPhonesThatGotIt(t *testing.T) {
+	svc, gw, _, _ := pushRig(t)
+	ctx := t.Context()
+	gw.register(t, svc, "h1.a")
+	gw.register(t, svc, "h1.b")
+	failDeployment(t, svc, "env-a")
+	if err := svc.drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	list, err := svc.List(ctx, asUserA())
+	if err != nil || len(list.Items) != 1 {
+		t.Fatalf("inbox: %+v %v", list, err)
+	}
+	if err = svc.MarkRead(ctx, asUserA(), list.Items[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if err = svc.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+	sends := gw.taken()
+	if len(sends) != 4 {
+		t.Fatalf("gateway sends: %v", gw.handles())
+	}
+	for _, s := range sends[2:] {
+		if s.Body.Kind != "withdraw" || s.Body.CollapseID != collapseID("deployment:deployment-a") || s.Body.Sealed != "" {
+			t.Fatalf("withdraw: %+v", s.Body)
+		}
+	}
+}
+
+func TestMarkReadOfUnpushedNoticeSendsNothing(t *testing.T) {
+	svc, gw, _, _ := pushRig(t)
+	ctx := t.Context()
+	gw.register(t, svc, "h1.a")
+	if _, err := svc.UpdateDevice(ctx, asUserA(), svc.firstDevice(t), UpdateDeviceInput{Settings: map[string]string{"level.staging": "off"}}); err != nil {
+		t.Fatal(err)
+	}
+	failDeployment(t, svc, "env-a")
+	if err := svc.drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	list, err := svc.List(ctx, asUserA())
+	if err != nil || len(list.Items) != 1 {
+		t.Fatalf("inbox: %+v %v", list, err)
+	}
+	if err = svc.MarkRead(ctx, asUserA(), list.Items[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if err = svc.Shutdown(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if row := userRow(t, svc); row.state != PushSkipped || len(gw.taken()) != 0 {
+		t.Fatalf("row %+v, sends %d", row, len(gw.taken()))
+	}
+}
+
+func (s *Service) firstDevice(t *testing.T) string {
+	t.Helper()
+	list, err := s.herald.ListDevices(t.Context(), "app", "user-a")
+	if err != nil || len(list) == 0 {
+		t.Fatalf("devices: %v %v", list, err)
+	}
+	return list[0].ID
 }

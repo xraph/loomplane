@@ -49,6 +49,8 @@ type Service struct {
 	workerErr  error
 	cancel     context.CancelFunc
 	wg         sync.WaitGroup
+	testMu     sync.Mutex
+	testPushed map[string]time.Time // last test push by device ID
 }
 
 func New(cfg config.Config, db *grove.DB) (*Service, error) {
@@ -143,8 +145,8 @@ func (s *Service) Run(ctx context.Context) error {
 func (s *Service) Shutdown(ctx context.Context) error {
 	if s.cancel != nil {
 		s.cancel()
-		s.wg.Wait()
 	}
+	s.wg.Wait()
 	s.relay.Stop(ctx)
 	return nil
 }
