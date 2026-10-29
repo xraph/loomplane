@@ -68,6 +68,13 @@ var (
 	ErrNoSources     = errors.New("this project has no repositories; add one first")
 	ErrNeverDeployed = errors.New("a repository this plan holds back has never been deployed here")
 	ErrNotRunning    = errors.New("the environment you promote from runs nothing yet; deploy it first")
+
+	ErrNoPreviousRelease = errors.New("this environment has no earlier successful release to roll back to")
+	ErrReleaseRunning    = errors.New("a deployment is running in this environment; wait for it to finish, or cancel it, before rolling back")
+	// ErrCanaryReverted is a rollback of a deployment whose canary already
+	// returned traffic to the baseline, or failed to settle it. The error
+	// returned says which.
+	ErrCanaryReverted = errors.New("the canary already dealt with this release")
 )
 
 // Op is what an action does.
@@ -593,15 +600,18 @@ type DeployedRepository struct {
 	DeployedAt time.Time `json:"deployed_at"`
 }
 
-// ReleaseRecord is one succeeded deployment of an environment: a release
-// a rollback can return to. Kind is its plan's kind.
+// ReleaseRecord is one deployment of an environment. A succeeded one is a
+// release a rollback can return to. Kind is its plan's kind.
 type ReleaseRecord struct {
 	DeploymentID string
 	PlanID       string
 	Kind         string
 	Status       string
+	// CanaryStatus is the deployment's canary status, "" without a canary.
+	CanaryStatus string
 	StartedAt    time.Time
-	FinishedAt   time.Time
+	// FinishedAt is zero while the deployment runs.
+	FinishedAt time.Time
 }
 
 // ReleasedImage is what one service ran after a release: the image it
@@ -635,6 +645,9 @@ type ReleaseHistory interface {
 	// before `before` (zero: no bound), newest first, leaving out Cloud
 	// sync and catalog plans.
 	Releases(ctx context.Context, orgID, environmentID string, before time.Time, limit int) ([]ReleaseRecord, error)
+	// Latest returns an environment's newest deployment whatever its
+	// status, leaving out Cloud sync and catalog plans, or ErrNotFound.
+	Latest(ctx context.Context, orgID, environmentID string) (*ReleaseRecord, error)
 	// ReleasedImages returns, per service action name, the newest
 	// succeeded step at or before upTo.
 	ReleasedImages(ctx context.Context, orgID, environmentID string, upTo time.Time) (map[string]ReleasedImage, error)
@@ -860,6 +873,9 @@ type Store interface {
 	// released (nil when none is recorded) and the commit of each of its
 	// repositories, read in one snapshot.
 	DeployedState(ctx context.Context, orgID, environmentID string) (*DeployedManifest, []*DeployedSource, error)
+	// RolledBackPlans returns the plans a rollback in the environment
+	// undid: the target of each rollback plan whose deployment succeeded.
+	RolledBackPlans(ctx context.Context, orgID, environmentID string) (map[string]bool, error)
 }
 
 // Digest returns a hex SHA-256 of v's JSON. Go's JSON is deterministic for

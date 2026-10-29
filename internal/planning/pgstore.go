@@ -397,6 +397,31 @@ func (s *PgStore) RampingCanary(ctx context.Context, orgID, environmentID string
 	return id, nil
 }
 
+// RolledBackPlans implements Store. Plans never succeed themselves, so a
+// rollback counts once its deployment has.
+func (s *PgStore) RolledBackPlans(ctx context.Context, orgID, environmentID string) (map[string]bool, error) {
+	rows, err := s.db.Query(ctx, `SELECT DISTINCT p.rollback->>'target_plan_id'
+		FROM loomplane_plans p JOIN loomplane_deployments d ON d.org_id = p.org_id AND d.plan_id = p.id
+		WHERE p.org_id = $1 AND p.kind = 'rollback' AND p.environment_id = $2 AND d.status = 'succeeded'
+			AND coalesce(p.rollback->>'target_plan_id', '') <> ''`, orgID, environmentID)
+	if err != nil {
+		return nil, fmt.Errorf("list rolled back plans: %w", err)
+	}
+	defer rows.Close() // read-only; Err below reports iteration failures
+	out := map[string]bool{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, fmt.Errorf("scan rolled back plan: %w", err)
+		}
+		out[id] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("list rolled back plans: %w", err)
+	}
+	return out, nil
+}
+
 // FailPlanning implements Store.
 func (s *PgStore) FailPlanning(ctx context.Context, orgID, id, reason string, now time.Time) error {
 	if _, err := s.db.Exec(ctx, `UPDATE loomplane_plans SET status = 'failed', error = $3, planned_at = $4

@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/pkg/provider"
 )
@@ -59,11 +61,11 @@ func (h *History) releases(ctx context.Context, orgID, environmentID string, bou
 	if !bound.IsZero() {
 		at = &bound
 	}
-	rows, err := h.Store.db.Query(ctx, `SELECT d.id, d.plan_id, p.kind, d.status, d.started_at, d.finished_at, d.steps
+	rows, err := h.Store.db.Query(ctx, `SELECT `+recordColumns+`, d.steps
 		FROM loomplane_deployments d JOIN loomplane_plans p ON p.org_id = d.org_id AND p.id = d.plan_id
 		WHERE d.org_id = $1 AND d.environment_id = $2 AND d.status = 'succeeded' AND d.finished_at IS NOT NULL
 			AND ($3::timestamptz IS NULL OR d.finished_at < $3 OR ($5 AND d.finished_at = $3))
-			AND coalesce(p.result->>'cloud_sync_id', '') = '' AND NOT p.catalog
+			AND `+releasePlans+`
 		ORDER BY d.finished_at DESC, d.id DESC LIMIT $4`, orgID, environmentID, at, limit, inclusive)
 	if err != nil {
 		return nil, fmt.Errorf("list releases: %w", err)
@@ -73,19 +75,56 @@ func (h *History) releases(ctx context.Context, orgID, environmentID string, bou
 	for rows.Next() {
 		var r release
 		var raw []byte
-		if scanErr := rows.Scan(&r.DeploymentID, &r.PlanID, &r.Kind, &r.Status, &r.StartedAt, &r.FinishedAt, &raw); scanErr != nil {
+		var finished *time.Time
+		if scanErr := rows.Scan(&r.DeploymentID, &r.PlanID, &r.Kind, &r.Status, &r.CanaryStatus, &r.StartedAt, &finished, &raw); scanErr != nil {
 			return nil, fmt.Errorf("scan release: %w", scanErr)
 		}
 		if r.steps, err = decodeSteps(raw); err != nil {
 			return nil, fmt.Errorf("decode steps of %s: %w", r.DeploymentID, err)
 		}
-		r.StartedAt, r.FinishedAt = r.StartedAt.UTC(), r.FinishedAt.UTC()
+		r.settle(finished)
 		out = append(out, r)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("list releases: %w", err)
 	}
 	return out, nil
+}
+
+// recordColumns are a planning.ReleaseRecord's columns, in its order, of
+// deployment d and its plan p.
+const recordColumns = `d.id, d.plan_id, p.kind, d.status, coalesce(d.canary->>'status', ''), d.started_at, d.finished_at`
+
+// releasePlans leaves out plan p when it's a Cloud sync or catalog plan,
+// whose deployment changes where or what infrastructure runs, not the
+// application.
+const releasePlans = `coalesce(p.result->>'cloud_sync_id', '') = '' AND NOT p.catalog`
+
+// settle stores the times in UTC, finished zero while the deployment runs.
+func (r *release) settle(finished *time.Time) {
+	r.StartedAt = r.StartedAt.UTC()
+	if finished != nil {
+		r.FinishedAt = finished.UTC()
+	}
+}
+
+// Latest implements planning.ReleaseHistory.
+func (h *History) Latest(ctx context.Context, orgID, environmentID string) (*planning.ReleaseRecord, error) {
+	var r release
+	var finished *time.Time
+	err := h.Store.db.QueryRow(ctx, `SELECT `+recordColumns+`
+		FROM loomplane_deployments d JOIN loomplane_plans p ON p.org_id = d.org_id AND p.id = d.plan_id
+		WHERE d.org_id = $1 AND d.environment_id = $2 AND `+releasePlans+`
+		ORDER BY d.started_at DESC, d.id DESC LIMIT 1`, orgID, environmentID).
+		Scan(&r.DeploymentID, &r.PlanID, &r.Kind, &r.Status, &r.CanaryStatus, &r.StartedAt, &finished)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, fmt.Errorf("%w: nothing has deployed to this environment", planning.ErrNotFound)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get the newest deployment: %w", err)
+	}
+	r.settle(finished)
+	return &r.ReleaseRecord, nil
 }
 
 // ReleasedImages implements planning.ReleaseHistory. It walks back from

@@ -161,6 +161,75 @@ func TestPgStore_rollbackSpecRoundTrip(t *testing.T) {
 	}
 }
 
+// RolledBackPlans names the plans a rollback in the environment undid:
+// only a rollback whose deployment succeeded counts.
+func TestPgStore_rolledBackPlans(t *testing.T) {
+	ctx, store, pg := promotionDB(t)
+	if got, err := store.RolledBackPlans(ctx, "org", "env_b"); err != nil || got == nil || len(got) != 0 {
+		t.Fatalf("before any rollback: %v %v", got, err)
+	}
+	plan := func(id, env, kind, target string) {
+		t.Helper()
+		var spec []byte
+		if kind == KindRollback {
+			var err error
+			if spec, err = json.Marshal(Rollback{Reason: "bad", Trigger: TriggerManual, TargetPlanID: target}); err != nil {
+				t.Fatal(err)
+			}
+		}
+		envName := map[string]string{"env_a": "staging", "env_b": "production"}[env]
+		if _, err := pg.Exec(ctx, `INSERT INTO loomplane_plans (id, org_id, project_id, environment_id, environment, status, manifest_id,
+			manifest_revision, kind, rollback, created_by, created_at)
+			VALUES ($1, 'org', 'proj', $2, $3, 'approved', 'man_1', 1, $4, $5, 'usr', now())`, id, env, envName, kind, spec); err != nil {
+			t.Fatal(err)
+		}
+	}
+	deploy := func(id, planID, env, status string) {
+		t.Helper()
+		envName := map[string]string{"env_a": "staging", "env_b": "production"}[env]
+		var finished *time.Time
+		if status != "running" {
+			now := time.Now()
+			finished = &now
+		}
+		if _, err := pg.Exec(ctx, `INSERT INTO loomplane_deployments (id, org_id, project_id, environment_id, environment, plan_id,
+			commit_sha, status, started_by, started_at, finished_at)
+			VALUES ($1, 'org', 'proj', $2, $3, $4, 'abc', $5, 'usr', now(), $6)`, id, env, envName, planID, status, finished); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, id := range []string{"plan_r1", "plan_r2", "plan_r3", "plan_r4", "plan_r5"} {
+		plan(id, "env_b", KindRelease, "")
+	}
+	plan("plan_rb_ok", "env_b", KindRollback, "plan_r1")
+	deploy("dep_rb_ok", "plan_rb_ok", "env_b", "succeeded")
+	plan("plan_rb_failed", "env_b", KindRollback, "plan_r2")
+	deploy("dep_rb_failed", "plan_rb_failed", "env_b", "failed")
+	plan("plan_rb_running", "env_b", KindRollback, "plan_r3")
+	deploy("dep_rb_running", "plan_rb_running", "env_b", "running")
+	// A rollback plan nobody approved has no deployment.
+	plan("plan_rb_open", "env_b", KindRollback, "plan_r4")
+	// Staging's rollback is staging's.
+	plan("plan_rb_staging", "env_a", KindRollback, "plan_r5")
+	deploy("dep_rb_staging", "plan_rb_staging", "env_a", "succeeded")
+	// A release's deployment succeeding undoes nothing.
+	deploy("dep_r5", "plan_r5", "env_b", "succeeded")
+
+	got, err := store.RolledBackPlans(ctx, "org", "env_b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := map[string]bool{"plan_r1": true}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("production rolled back %v, want %v", got, want)
+	}
+	if got, err = store.RolledBackPlans(ctx, "org", "env_a"); err != nil || !reflect.DeepEqual(got, map[string]bool{"plan_r5": true}) {
+		t.Fatalf("staging rolled back %v, %v", got, err)
+	}
+	if got, err = store.RolledBackPlans(ctx, "org-2", "env_b"); err != nil || len(got) != 0 {
+		t.Fatalf("another organization rolled back %v, %v", got, err)
+	}
+}
+
 func TestRealtimePlanEventCarriesPromotionFields(t *testing.T) {
 	ctx, store, pg := promotionDB(t)
 	now := time.Now().UTC().Truncate(time.Microsecond)

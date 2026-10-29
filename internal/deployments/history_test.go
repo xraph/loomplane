@@ -5,6 +5,7 @@ package deployments
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -19,7 +20,9 @@ import (
 	"github.com/xraph/loomplane/database/migrations"
 	"github.com/xraph/loomplane/internal/ops"
 	"github.com/xraph/loomplane/internal/planning"
+	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/providers"
+	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/pkg/provider"
 )
 
@@ -80,11 +83,14 @@ func historyDB(t *testing.T) (context.Context, *History, *pgdriver.PgDB) {
 
 // historyRelease is one plan of an environment and its deployment, which
 // finishes with status at finished, or stays running when finished is
-// zero.
+// zero. A rollback plan carries what it rolls back; canary is the
+// deployment's canary status, "" without one.
 type historyRelease struct {
 	plan, deployment, env, kind string
 	catalog                     bool
 	syncID                      string
+	rollback                    *planning.Rollback
+	canary                      string
 	actions                     []planning.Action
 	steps                       []Step
 	status                      string
@@ -108,19 +114,29 @@ func (r historyRelease) record(ctx context.Context, t *testing.T, h *History, pg
 	if err != nil {
 		t.Fatal(err)
 	}
+	var spec []byte
+	if r.rollback != nil {
+		if spec, err = json.Marshal(r.rollback); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if _, err = pg.Exec(ctx, `INSERT INTO loomplane_plans (id, org_id, project_id, environment_id, environment, status, manifest_id,
-		manifest_revision, result, catalog, kind, created_by, created_at)
-		VALUES ($1, 'org', 'proj', $2, $3, 'approved', 'man_1', 1, $4, $5, $6, 'usr', now())`,
-		r.plan, r.env, env, result, r.catalog, kind); err != nil {
+		manifest_revision, result, catalog, kind, rollback, created_by, created_at)
+		VALUES ($1, 'org', 'proj', $2, $3, 'approved', 'man_1', 1, $4, $5, $6, $7, 'usr', now())`,
+		r.plan, r.env, env, result, r.catalog, kind, spec); err != nil {
 		t.Fatal(err)
 	}
 	started := r.finished.Add(-5 * time.Minute)
 	if r.finished.IsZero() {
 		started = time.Date(2026, 10, 24, 13, 0, 0, 0, time.UTC)
 	}
+	var canary *Canary
+	if r.canary != "" {
+		canary = &Canary{Status: r.canary}
+	}
 	if _, err = h.Store.CreateDeployment(ctx, &Deployment{
 		ID: r.deployment, OrgID: "org", ProjectID: "proj", EnvironmentID: r.env, Environment: env, PlanID: r.plan,
-		Status: StatusRunning, Steps: r.steps, StartedBy: "usr", StartedAt: started,
+		Status: StatusRunning, Steps: r.steps, StartedBy: "usr", StartedAt: started, Canary: canary,
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -277,5 +293,115 @@ func TestHistory_releasedImagesNeedTheProviders(t *testing.T) {
 	h.Providers = nil
 	if _, err := h.ReleasedImages(ctx, "org", "env_b", at(12, 0)); err == nil || !strings.Contains(err.Error(), "provider registry") {
 		t.Fatalf("err %v", err)
+	}
+}
+
+func TestHistory_carriesCanaryStatus(t *testing.T) {
+	ctx, h, pg := historyDB(t)
+	for _, r := range []historyRelease{
+		{plan: "plan_1", deployment: "dep_1", env: "env_b", status: StatusSucceeded, finished: at(10, 0)},
+		{plan: "plan_2", deployment: "dep_2", env: "env_b", canary: CanaryPromoted, status: StatusSucceeded, finished: at(11, 0)},
+		{plan: "plan_3", deployment: "dep_3", env: "env_b", canary: CanaryRolledBack, status: StatusFailed, finished: at(12, 0)},
+	} {
+		r.record(ctx, t, h, pg)
+	}
+	got, err := h.Releases(ctx, "org", "env_b", time.Time{}, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 2 || got[0].CanaryStatus != CanaryPromoted || got[1].CanaryStatus != "" {
+		t.Fatalf("releases %+v", got)
+	}
+	latest, err := h.Latest(ctx, "org", "env_b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if latest.DeploymentID != "dep_3" || latest.CanaryStatus != CanaryRolledBack {
+		t.Fatalf("latest %+v", latest)
+	}
+}
+
+func TestHistory_latestIsTheNewestDeploymentWhateverItsStatus(t *testing.T) {
+	ctx, h, pg := historyDB(t)
+	if _, err := h.Latest(ctx, "org", "env_b"); !errors.Is(err, planning.ErrNotFound) {
+		t.Fatalf("an environment nothing deployed: %v", err)
+	}
+	for _, r := range []historyRelease{
+		{plan: "plan_1", deployment: "dep_1", env: "env_b", status: StatusSucceeded, finished: at(10, 0)},
+		{plan: "plan_2", deployment: "dep_2", env: "env_b", status: StatusFailed, finished: at(11, 0)},
+	} {
+		r.record(ctx, t, h, pg)
+	}
+	want := planning.ReleaseRecord{DeploymentID: "dep_2", PlanID: "plan_2", Kind: planning.KindRelease, Status: StatusFailed, StartedAt: at(10, 55), FinishedAt: at(11, 0)}
+	if got, err := h.Latest(ctx, "org", "env_b"); err != nil || !reflect.DeepEqual(*got, want) {
+		t.Fatalf("latest %+v, %v", got, err)
+	}
+	// A Cloud sync, a catalog plan and another environment's deployment
+	// aren't production's releases; a running deployment is, and has no
+	// finish yet.
+	for _, r := range []historyRelease{
+		{plan: "plan_sync", deployment: "dep_sync", env: "env_b", syncID: "sync_1", status: StatusSucceeded, finished: at(12, 10)},
+		{plan: "plan_cat", deployment: "dep_cat", env: "env_b", catalog: true, status: StatusSucceeded, finished: at(12, 20)},
+		{plan: "plan_a", deployment: "dep_a", env: "env_a", status: StatusSucceeded, finished: at(12, 30)},
+	} {
+		r.record(ctx, t, h, pg)
+	}
+	if got, err := h.Latest(ctx, "org", "env_b"); err != nil || got.DeploymentID != "dep_2" {
+		t.Fatalf("latest after a sync and a catalog plan %+v, %v", got, err)
+	}
+	historyRelease{plan: "plan_4", deployment: "dep_4", env: "env_b"}.record(ctx, t, h, pg)
+	want = planning.ReleaseRecord{DeploymentID: "dep_4", PlanID: "plan_4", Kind: planning.KindRelease, Status: StatusRunning, StartedAt: at(13, 0)}
+	if got, err := h.Latest(ctx, "org", "env_b"); err != nil || !reflect.DeepEqual(*got, want) {
+		t.Fatalf("latest while one runs %+v, %v", got, err)
+	}
+	if _, err := h.Latest(ctx, "org-2", "env_b"); !errors.Is(err, planning.ErrNotFound) {
+		t.Fatalf("another organization's latest: %v", err)
+	}
+}
+
+// TestRollbackTarget_rollingBackTwice: R1, R2, a rollback of R2, then R3.
+// Rolling R3 back restores the rollback of R2, which is R1's state, never
+// R2; once that rollback succeeded, both R2 and R3 count as rolled back.
+func TestRollbackTarget_rollingBackTwice(t *testing.T) {
+	ctx, h, pg := historyDB(t)
+	plans := planning.NewPgStore(pg)
+	svc := planning.NewService(planning.Deps{
+		Store: plans, Projects: projects.NewPgStore(pg), History: h, Providers: providers.Registry(), Authz: allowAll{},
+	})
+	for _, r := range []historyRelease{
+		{plan: "plan_1", deployment: "dep_1", env: "env_b", status: StatusSucceeded, finished: at(10, 0)},
+		{plan: "plan_2", deployment: "dep_2", env: "env_b", status: StatusSucceeded, finished: at(11, 0)},
+		{plan: "plan_2r", deployment: "dep_2r", env: "env_b", kind: planning.KindRollback, status: StatusSucceeded, finished: at(11, 30),
+			rollback: &planning.Rollback{Trigger: planning.TriggerManual, TargetDeploymentID: "dep_2", TargetPlanID: "plan_2",
+				RestoreDeploymentID: "dep_1", RestorePlanID: "plan_1", RestoreFinishedAt: at(10, 0)}},
+		{plan: "plan_3", deployment: "dep_3", env: "env_b", status: StatusSucceeded, finished: at(12, 0)},
+	} {
+		r.record(ctx, t, h, pg)
+	}
+	p := security.Principal{UserID: "usr", OrgID: "org"}
+	got, err := svc.RollbackTarget(ctx, p, "proj", "production", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Target.DeploymentID != "dep_3" || got.Restore.DeploymentID != "dep_2r" || got.Restore.Kind != planning.KindRollback {
+		t.Fatalf("target %+v restore %+v, want dep_3 and dep_2r", got.Target, got.Restore)
+	}
+	restore, err := plans.GetPlan(ctx, "org", got.Restore.PlanID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restore.Rollback == nil || restore.Rollback.RestorePlanID != "plan_1" {
+		t.Fatalf("the restored rollback %+v doesn't hold R1's state", restore.Rollback)
+	}
+
+	historyRelease{plan: "plan_3r", deployment: "dep_3r", env: "env_b", kind: planning.KindRollback, status: StatusSucceeded, finished: at(12, 30),
+		rollback: &planning.Rollback{Trigger: planning.TriggerManual, TargetDeploymentID: "dep_3", TargetPlanID: "plan_3",
+			RestoreDeploymentID: "dep_2r", RestorePlanID: "plan_2r", RestoreFinishedAt: at(11, 30)}}.record(ctx, t, h, pg)
+	rolledBack, err := plans.RolledBackPlans(ctx, "org", "env_b")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := map[string]bool{"plan_2": true, "plan_3": true}; !reflect.DeepEqual(rolledBack, want) {
+		t.Fatalf("rolled back %v, want %v", rolledBack, want)
 	}
 }

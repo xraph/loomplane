@@ -31,6 +31,10 @@ func (h *fakeHistory) Releases(context.Context, string, string, time.Time, int) 
 	return nil, nil
 }
 
+func (h *fakeHistory) Latest(context.Context, string, string) (*ReleaseRecord, error) {
+	return nil, ErrNotFound
+}
+
 func (h *fakeHistory) ReleasedImages(_ context.Context, _, environmentID string, _ time.Time) (map[string]ReleasedImage, error) {
 	h.asked = append(h.asked, environmentID)
 	out := map[string]ReleasedImage{}
