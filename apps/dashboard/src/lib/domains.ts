@@ -21,6 +21,7 @@ export type DomainState =
   | "failed"
   | "renewing"
   | "cleanup_pending"
+  | "proof_missing"
 
 /** The pill colors from the mock. None of them follow the accent. */
 export type PillTone = "ok" | "warn" | "idle" | "failed" | "own"
@@ -272,6 +273,8 @@ export function providerLabel(z: ZoneOverview): string {
 }
 
 export function zoneDNSLabel(z: ZoneOverview): string {
+  // Not in the mock: verified, but a check found the record gone since.
+  if (z.state === "proof_missing") return "TXT record missing"
   if (z.state !== "ready") {
     // Not in the mock: "Awaiting verification" for a zone with no TXT proof
     // yet, such as one verified before proofs were required, and

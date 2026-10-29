@@ -16,6 +16,8 @@ const (
 	DomainFailed               DomainState = "failed"
 	DomainRenewing             DomainState = "renewing"
 	DomainCleanupPending       DomainState = "cleanup_pending"
+	// DomainProofMissing is a verified zone whose record a check found gone.
+	DomainProofMissing DomainState = "proof_missing"
 )
 
 const (

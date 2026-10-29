@@ -92,6 +92,7 @@ function zone(
       projectIds: [],
       proofCheckedAt: "0001-01-01T00:00:00Z",
       proofExpiresAt: "2026-10-02T00:00:00Z",
+      proofMissingAt: "0001-01-01T00:00:00Z",
       proofName: "_loomplane.acme.dev",
       proofPublishAttemptedAt: "0001-01-01T00:00:00Z",
       proofValue: "loomplane=zone-token",
@@ -248,6 +249,10 @@ describe("zones", () => {
     const legacy = zone({}, false)
     legacy.zone = { ...legacy.zone!, proofName: undefined }
     expect(zoneDNSLabel(legacy)).toBe("Awaiting verification")
+    // Verified, but a check found the record gone since.
+    expect(zoneDNSLabel(zone({ state: "proof_missing" }))).toBe(
+      "TXT record missing"
+    )
   })
 
   it("follows the TXT record Loomplane publishes for a managed zone", () => {

@@ -129,7 +129,8 @@ func (e *Extension) Start(context.Context) error {
 				e.Logger().Warn("Recover domain registrations", forge.F("error", err.Error()))
 			}
 			// Each managed zone waiting on its TXT proof is looked at no more
-			// than every two minutes, however often this runs.
+			// than every two minutes, however often this runs, and each
+			// verified zone's record once a day.
 			if err := e.svc.CheckZoneProofs(ctx); err != nil && ctx.Err() == nil {
 				e.Logger().Warn("Check domain zone proofs", forge.F("error", err.Error()))
 			}

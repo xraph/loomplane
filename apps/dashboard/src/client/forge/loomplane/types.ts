@@ -4204,6 +4204,7 @@ export interface Zone {
   projectIds: string[];
   proofCheckedAt: string;
   proofExpiresAt: string;
+  proofMissingAt: string;
   proofName?: string;
   proofPublishAttempted?: boolean;
   proofPublishAttemptedAt: string;

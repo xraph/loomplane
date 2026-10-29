@@ -117,6 +117,10 @@ func zoneState(zone *Zone) DomainState {
 	if !zone.verified() {
 		return DomainAwaitingVerification
 	}
+	// A subdomain reads the record of the zone that proves it.
+	if !zone.proofZone().ProofMissingAt.IsZero() {
+		return DomainProofMissing
+	}
 	return DomainReady
 }
 

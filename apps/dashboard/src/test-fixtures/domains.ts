@@ -53,6 +53,8 @@ export function zoneWith(
     subdomains?: string[]
     /** The name of the zone whose TXT record proves this one. */
     proofZone?: string
+    /** A check found the record that proves it gone from public DNS. */
+    missing?: boolean
   } = {}
 ) {
   const proof = options.proof ?? options.external
@@ -85,6 +87,7 @@ export function zoneWith(
       proof_publish_error: options.publishError ?? "",
       proof_checked_at: zero,
       proof_expires_at: zero,
+      proof_missing_at: options.missing ? "2026-10-28T23:00:00Z" : zero,
       provider_zone: options.external
         ? {}
         : {
@@ -96,7 +99,11 @@ export function zoneWith(
       revision: 2,
       verified_at: verified ? "2026-10-01T00:00:00Z" : zero,
     },
-    state: verified ? "ready" : "awaiting_verification",
+    state: !verified
+      ? "awaiting_verification"
+      : options.missing
+        ? "proof_missing"
+        : "ready",
     wildcards: false,
     registration_id: options.registration ?? "",
     parent_zone_id: options.parent ? zoneID(options.parent) : undefined,

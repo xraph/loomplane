@@ -37,6 +37,9 @@ type Zone struct {
 	ProofExpiresAt       time.Time        `json:"proof_expires_at"`
 	ProofCheckedAt       time.Time        `json:"proof_checked_at"`
 	VerifiedAt           time.Time        `json:"verified_at"`
+	// ProofMissingAt is when a check of a verified zone last found its
+	// record gone from public DNS. A check that finds it clears it.
+	ProofMissingAt time.Time `json:"proof_missing_at"`
 	// ProofRecord is the receipt for the TXT record Loomplane published for
 	// a managed zone's proof. Only that exact record is ever changed.
 	ProofRecord *provider.DNSRecord `json:"proof_record,omitempty"`
@@ -167,7 +170,18 @@ func (s *Service) CreateZone(ctx context.Context, p security.Principal, in ZoneI
 	}
 	// A subdomain is verified through its domain, so it gets no proof of
 	// its own: nothing is published for it or checked in the background.
-	ownProof := nearestAncestor(name, p.OrgID, zones) == nil
+	ancestor := nearestAncestor(name, p.OrgID, zones)
+	ownProof := ancestor == nil
+	if ancestor != nil {
+		// It's verified by its domain's record, so that record has to be
+		// in public DNS now, not just when the domain was verified.
+		LinkZoneParents(zones)
+		if proof := ancestor.proofZone(); proof.ownVerified() {
+			if checkErr := s.verifyZoneProof(ctx, proof); checkErr != nil {
+				return nil, checkErr
+			}
+		}
+	}
 	var zone *Zone
 	if in.Mode == "managed" {
 		zone, err = s.createManagedZone(ctx, p, name, in.ConnectionID, in.ProjectIDs, ownProof)

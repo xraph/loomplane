@@ -32,7 +32,15 @@ func TestZoneProofsDueQuery(t *testing.T) {
 	zone("stale", "org", "managed", func(z *Zone) { z.ProofCheckedAt = now.Add(-10 * time.Minute) })
 	zone("edge", "org", "managed", func(z *Zone) { z.ProofCheckedAt = checkedBefore })
 	zone("recent", "org", "managed", func(z *Zone) { z.ProofCheckedAt = now.Add(-time.Minute) })
+	// A verified zone's own record is checked daily, and every pass while
+	// it's missing. One verified before proofs were required has none.
 	zone("verified", "org", "managed", func(z *Zone) { z.VerifiedAt = now.Add(-time.Hour) })
+	zone("today", "org", "managed", func(z *Zone) { z.VerifiedAt, z.ProofCheckedAt = now.Add(-48*time.Hour), now.Add(-time.Hour) })
+	zone("missing", "org", "managed", func(z *Zone) {
+		z.VerifiedAt, z.ProofCheckedAt, z.ProofMissingAt = now.Add(-48*time.Hour), now.Add(-3*time.Minute), now.Add(-time.Hour)
+	})
+	zone("hosted", "org", "external", func(z *Zone) { z.VerifiedAt, z.ProofCheckedAt = now.Add(-48*time.Hour), now.Add(-30*time.Hour) })
+	zone("legacy", "org", "managed", func(z *Zone) { z.VerifiedAt, z.ProofName, z.ProofValue = now.Add(-48*time.Hour), "", "" })
 	zone("expired", "org", "managed", func(z *Zone) { z.ProofExpiresAt = now })
 	zone("external", "org", "external", nil)
 	zone("theirs", "other", "managed", func(z *Zone) { z.ProofCheckedAt = now.Add(-5 * time.Minute) })
@@ -62,10 +70,10 @@ func TestZoneProofsDueQuery(t *testing.T) {
 		}
 	}
 	// Longest unchecked first, across organizations.
-	if want := []string{"never", "settled", "stale", "theirs", "edge"}; !slices.Equal(ids, want) {
+	if want := []string{"never", "verified", "hosted", "settled", "stale", "theirs", "missing", "edge"}; !slices.Equal(ids, want) {
 		t.Fatalf("due %v, want %v", ids, want)
 	}
-	if due, err = st.ZoneProofsDue(ctx, now, checkedBefore, 2); err != nil || len(due) != 2 || due[0].ID != "never" || due[1].ID != "settled" {
+	if due, err = st.ZoneProofsDue(ctx, now, checkedBefore, 2); err != nil || len(due) != 2 || due[0].ID != "never" || due[1].ID != "verified" {
 		t.Fatalf("limit: %v %v", due, err)
 	}
 }

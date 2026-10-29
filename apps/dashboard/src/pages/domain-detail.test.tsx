@@ -382,6 +382,89 @@ it("checks a verified domain's TXT record again", async () => {
   ])
 })
 
+it("says a verified domain's TXT record is gone and publishes it again", async () => {
+  const gone = zoneWith("loomplane.com", [], {
+    proof: true,
+    published: true,
+    missing: true,
+  })
+  // Long past the 24 hours a pending proof has, which doesn't matter here.
+  gone.zone.proof_expires_at = "2026-10-02T00:00:00Z"
+  const writes = stubFetch({
+    [detailPath("loomplane.com")]: detailWith(gone),
+    "POST /api/v1/dns-zones/zone-loomplane.com/verify": () =>
+      Response.json({ message: "the record is gone" }, { status: 409 }),
+  })
+  open("zone-loomplane.com")
+  const status = await section("Status")
+  expect(screen.getByText("TXT record missing")).toBeTruthy()
+  expect(
+    within(status).getByText(
+      /can't find _loomplane\.loomplane\.com in public DNS any more/
+    )
+  ).toBeTruthy()
+  expect(within(status).queryByRole("button", { name: /Renew/ })).toBeNull()
+  await userEvent.click(
+    within(status).getByRole("button", { name: "Check again" })
+  )
+  expect(
+    await within(status).findByText(
+      "Checked just now. The record isn't visible yet."
+    )
+  ).toBeTruthy()
+  expect(writes).toEqual([
+    {
+      method: "POST",
+      path: "/api/v1/dns-zones/zone-loomplane.com/verify",
+      body: undefined,
+    },
+  ])
+})
+
+it("checks the domain whose record a subdomain lost", async () => {
+  const domain = zoneWith("loomplane.com", [], {
+    proof: true,
+    published: true,
+    missing: true,
+    subdomains: ["app.loomplane.com"],
+  })
+  const writes = stubFetch({
+    [detailPath("app.loomplane.com")]: detailWith(
+      zoneWith("app.loomplane.com", [], {
+        parent: "loomplane.com",
+        proofZone: "loomplane.com",
+        missing: true,
+      }),
+      { parent: domain, proofZone: domain }
+    ),
+    "POST /api/v1/dns-zones/zone-loomplane.com/verify": () =>
+      Response.json({ message: "the record is gone" }, { status: 409 }),
+  })
+  open("zone-app.loomplane.com")
+  const status = await section("Status")
+  expect(
+    within(status).getByText(/can't find _loomplane\.loomplane\.com/)
+  ).toBeTruthy()
+  expect(
+    within(status).getByText("This is loomplane.com's record.")
+  ).toBeTruthy()
+  // Its domain's record is what's gone, so a proof of its own isn't offered.
+  expect(
+    within(status).queryByRole("button", {
+      name: "Verify it on its own instead",
+    })
+  ).toBeNull()
+  await userEvent.click(
+    within(status).getByRole("button", { name: "Check again" })
+  )
+  await within(status).findByText(
+    "Checked just now. The record isn't visible yet."
+  )
+  expect(writes.map((w) => w.path)).toEqual([
+    "/api/v1/dns-zones/zone-loomplane.com/verify",
+  ])
+})
+
 it("publishes a managed zone's TXT record instead of asking for it", async () => {
   stubFetch({
     [detailPath("acme.dev")]: detailWith(

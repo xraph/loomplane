@@ -123,20 +123,28 @@ func zoneBodyTime(field string) string {
 	return "(CASE WHEN " + value + ` ~ '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d+)?(Z|[+-]\d{2}:\d{2})$' THEN (` + value + ")::timestamptz END)"
 }
 
-// ZoneProofsDue reads managed zones whose proof the background still checks,
+// ZoneProofsDue reads zones whose proof the background still checks,
 // across organizations. It serves the background check only. Unset times are
 // stored as Go's zero time, which sorts before any check. A row whose times
 // don't parse is left out, and one that doesn't decode is skipped, rather
 // than failing the pass.
 func (s *PgStore) ZoneProofsDue(ctx context.Context, now, checkedBefore time.Time, limit int) ([]*Zone, error) {
 	zero := "'0001-01-01T00:00:00Z'::timestamptz"
+	// zoneProofDue's rule: a managed zone's pending proof until it expires,
+	// and any verified zone's own record daily, or every pass while it's
+	// missing.
 	rows, err := s.db.Query(ctx, `SELECT body FROM loomplane_dns_zones
- WHERE body->>'mode'='managed'
- AND `+zoneBodyTime("verified_at")+` <= `+zero+`
- AND `+zoneBodyTime("proof_expires_at")+` > $1
- AND `+zoneBodyTime("proof_checked_at")+` <= $2
- AND NOT (coalesce(body->>'proof_publish_attempted','false')='true' AND coalesce(`+zoneBodyTime("proof_publish_attempted_at")+`,`+zero+`) > $2)
- ORDER BY `+zoneBodyTime("proof_checked_at")+`, id LIMIT $3`, now, checkedBefore, limit)
+ WHERE NOT (coalesce(body->>'proof_publish_attempted','false')='true' AND coalesce(`+zoneBodyTime("proof_publish_attempted_at")+`,`+zero+`) > $2)
+ AND ((body->>'mode'='managed'
+   AND `+zoneBodyTime("verified_at")+` <= `+zero+`
+   AND `+zoneBodyTime("proof_expires_at")+` > $1
+   AND `+zoneBodyTime("proof_checked_at")+` <= $2)
+  OR (`+zoneBodyTime("verified_at")+` > `+zero+`
+   AND body->>'proof_name' = '_loomplane.'||(body->>'name')
+   AND coalesce(body->>'proof_value','') <> ''
+   AND `+zoneBodyTime("proof_expires_at")+` > `+zero+`
+   AND `+zoneBodyTime("proof_checked_at")+` <= CASE WHEN coalesce(`+zoneBodyTime("proof_missing_at")+`,`+zero+`) > `+zero+` THEN $2 ELSE $4 END))
+ ORDER BY `+zoneBodyTime("proof_checked_at")+`, id LIMIT $3`, now, checkedBefore, limit, now.Add(-zoneProofRecheckEvery))
 	if err != nil {
 		return nil, err
 	}

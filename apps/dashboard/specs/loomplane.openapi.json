@@ -25753,6 +25753,7 @@
           "proof_expires_at",
           "proof_checked_at",
           "verified_at",
+          "proof_missing_at",
           "proof_publish_attempted_at",
           "revision"
         ],
@@ -25793,6 +25794,10 @@
             "format": "date-time"
           },
           "proof_expires_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "proof_missing_at": {
             "type": "string",
             "format": "date-time"
           },

@@ -111,7 +111,13 @@ func TestDNSProofFailuresPreserveVerification(t *testing.T) {
 			} else if !errors.Is(err, tc.err) || errors.Is(err, ErrConflict) {
 				t.Fatalf("resolver failure changed: %v", err)
 			}
-			if st.saves != 1 || !checkedOnly(before, st.zone) {
+			// Only a record public DNS answered without reads as missing.
+			if st.zone.ProofMissingAt.IsZero() == tc.conflict {
+				t.Fatal("missing record not recorded, or a resolver failure taken for one")
+			}
+			after := st.zone
+			after.ProofMissingAt = time.Time{}
+			if st.saves != 1 || !checkedOnly(before, after) {
 				t.Fatal("failure changed stored verification")
 			}
 		})

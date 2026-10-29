@@ -9,6 +9,7 @@ import { useQuery } from "@/client/hooks"
 import {
   CheckAgain,
   ManagedProof,
+  ProofTable,
   RenewProof,
   TxtInstructions,
 } from "@/components/domains/txt-instructions"
@@ -19,13 +20,15 @@ export function DomainStatus({ detail }: { detail: DomainDetail }) {
   const { domain, parent, proofZone } = detail
   const z = domain.zone
   const ready = domain.state === "ready"
+  // Verified, but the record that proves it is gone from public DNS.
+  const missing = domain.state === "proof_missing"
   // A subdomain without a proof of its own waits on the zone whose is.
   const proving = proofZone?.zone ?? z
   // The zone that proves a nested subdomain can be further up than its
   // parent, and the line names that one.
   const through = proofZone?.zone ?? parent?.zone
   // Waiting on another zone's proof, it can take one of its own instead.
-  const waiting = !ready && !!domain.proofZoneId && !!through
+  const waiting = !ready && !missing && !!domain.proofZoneId && !!through
   return (
     <div className="divide-y divide-border/70">
       {parent?.zone && (
@@ -34,7 +37,7 @@ export function DomainStatus({ detail }: { detail: DomainDetail }) {
             Part of <ZoneLink zone={parent.zone} />
             {domain.proofZoneId &&
               through &&
-              (ready ? (
+              (ready || missing ? (
                 through.id === parent.zone.id ? (
                   " · verified through it"
                 ) : (
@@ -57,28 +60,63 @@ export function DomainStatus({ detail }: { detail: DomainDetail }) {
           )}
         </div>
       )}
-      {ready
-        ? // Inherited verification is said above.
-          !domain.proofZoneId && (
-            <div className="flex flex-col gap-2.5 px-4 py-3">
-              <p className="text-[13px] leading-normal text-foreground/80">
-                Verified. Projects you grant it to can point hostnames at it.
-              </p>
-              {/* Not in the mock: a record deleted since is published again. */}
-              {z?.proofName && <CheckAgain zone={z} />}
-            </div>
+      {missing
+        ? proving && (
+            <MissingProof
+              zone={proving}
+              through={proofZone?.zone ? proofZone.zone.name : ""}
+            />
           )
-        : proving && (
-            <div>
-              {proofZone?.zone && (
-                <p className="px-4 pt-3 text-[13px] leading-normal text-foreground/80">
-                  This is {proofZone.zone.name}&apos;s record.
+        : ready
+          ? // Inherited verification is said above.
+            !domain.proofZoneId && (
+              <div className="flex flex-col gap-2.5 px-4 py-3">
+                <p className="text-[13px] leading-normal text-foreground/80">
+                  Verified. Projects you grant it to can point hostnames at it.
                 </p>
-              )}
-              <Proof zone={proving} />
-            </div>
-          )}
+                {/* Not in the mock: a record deleted since is published again. */}
+                {z?.proofName && <CheckAgain zone={z} />}
+              </div>
+            )
+          : proving && (
+              <div>
+                {proofZone?.zone && (
+                  <p className="px-4 pt-3 text-[13px] leading-normal text-foreground/80">
+                    This is {proofZone.zone.name}&apos;s record.
+                  </p>
+                )}
+                <Proof zone={proving} />
+              </div>
+            )}
       {z && <Hosting zone={z} label={providerLabel(domain)} />}
+    </div>
+  )
+}
+
+// Not in the mock: a verified zone whose record a check found gone. Its
+// value still counts, so it's published or added again, never renewed.
+function MissingProof({ zone, through }: { zone: Zone; through: string }) {
+  return (
+    <div className="flex flex-col gap-2.5 px-4 py-3">
+      <p className="text-[13px] leading-normal text-foreground/80">
+        Loomplane can&apos;t find {zone.proofName} in public DNS any more, so
+        new hostnames can&apos;t use it.{" "}
+        {zone.mode === "managed"
+          ? "Check again publishes it again."
+          : "Add it back at the domain's DNS host, then check again."}
+      </p>
+      {through && (
+        <p className="text-[13px] leading-normal text-foreground/80">
+          This is {through}&apos;s record.
+        </p>
+      )}
+      <CheckAgain zone={zone} />
+      <details className="text-[12.5px] text-muted-foreground">
+        <summary className="cursor-pointer select-none">Record details</summary>
+        <div className="pt-2">
+          <ProofTable zone={zone} />
+        </div>
+      </details>
     </div>
   )
 }

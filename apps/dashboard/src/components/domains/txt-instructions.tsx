@@ -144,7 +144,7 @@ function proofExpired(zone: Zone, now: number): boolean {
   )
 }
 
-function ProofTable({ zone }: { zone: Zone }) {
+export function ProofTable({ zone }: { zone: Zone }) {
   const cell = "font-mono break-all"
   return (
     <div
