@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math"
 	"reflect"
 	"slices"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"k8s.io/apimachinery/pkg/util/validation"
 
 	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/security"
@@ -80,7 +82,16 @@ func (s *Service) clusterAuthority(ctx context.Context, p security.Principal, cl
 		if a.ProjectID == "" || a.Namespace == "" || a.ServiceAccountName == "" || a.TargetSlug == "" || a.CloudRevision != in.CloudRevision || a.ResourceRevision != in.ResourceRevision {
 			return nil, access, ErrInvalid
 		}
+		if checkErr := supportedClusterPrerequisites(a.Prerequisites); checkErr != nil {
+			return nil, access, checkErr
+		}
+		if len(validation.IsDNS1123Label(a.Namespace)) != 0 || len(validation.IsDNS1123Label(a.ServiceAccountName)) != 0 || len(validation.IsDNS1123Label(a.TargetSlug)) != 0 || a.AdoptNamespace && a.NamespaceUID == "" || !a.AdoptNamespace && a.NamespaceUID != "" {
+			return nil, access, ErrInvalid
+		}
 		prereq := a.Prerequisites
+		if in.Kind == "create" && (prereq.RequireIngress || prereq.RequireTLS || prereq.IngressAddress != "") {
+			return nil, access, fmt.Errorf("%w: new managed clusters support private workers; existing ingress and TLS prerequisites require cluster adoption", ErrInvalid)
+		}
 		if (prereq.RequireBuilds && prereq.RegistryHostname == "") || ((prereq.RequireIngress || prereq.RequireTLS) && prereq.IngressAddress == "") || (prereq.RequirePersistentStorage && prereq.StorageClass == "") {
 			return nil, access, ErrInvalid
 		}

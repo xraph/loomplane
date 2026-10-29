@@ -25,6 +25,9 @@ func ReviewedConnectionSettings(cloud string, details map[string]string) map[str
 	case "registry":
 		keys = []string{"endpoint", "repository", "auth_endpoint", "registry_ca"}
 	}
+	if details["managed_attachment_id"] != "" {
+		keys = append(keys, "managed_attachment_id", "managed_project_id", "managed_resource_id")
+	}
 	var out map[string]string
 	for _, k := range keys {
 		if v := details[k]; v != "" {
@@ -49,6 +52,8 @@ func (p *planner) targetConnection(name, path, role, cloud, id string) *Connecti
 		code, message = role+"-gone", fmt.Sprintf("%s names a %s connection that isn't in this organization. Choose an existing connection.", name, role)
 	case p.in.Connections[i].Cloud != cloud:
 		code, message = role+"-cloud", fmt.Sprintf("%s needs a %s %s, but %s is a %s connection.", name, cloudTitle(cloud), role, p.in.Connections[i].Name, cloudTitle(p.in.Connections[i].Cloud))
+	case p.in.Connections[i].Details["managed_attachment_id"] != "" && (p.in.ProjectID == "" || p.in.Connections[i].Details["managed_project_id"] != p.in.ProjectID):
+		code, message = role+"-project", "This managed namespace belongs to another project."
 	case !p.in.Connections[i].Ready && (!pullOnly || !p.in.Connections[i].PullReady):
 		code, message = role+"-not-ready", fmt.Sprintf("%s's %s connection %s isn't ready. Check it under Integrations.", name, role, p.in.Connections[i].Name)
 	default:

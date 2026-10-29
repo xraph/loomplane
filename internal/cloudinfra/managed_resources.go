@@ -41,6 +41,8 @@ type ResourceRelation struct {
 }
 
 type RuntimeAttachment struct {
+	OperationID         string                      `json:"operation_id"`
+	VaultKey            string                      `json:"vault_key"`
 	SchemaVersion       int                         `json:"schema_version"`
 	CreatedAt           time.Time                   `json:"created_at"`
 	UpdatedAt           time.Time                   `json:"updated_at"`

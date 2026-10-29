@@ -344,7 +344,7 @@ func (s *Service) CreateTarget(ctx context.Context, p security.Principal, projec
 	if in.PoolID == "" && in.Runtime != "managed" {
 		return nil, ErrInvalid
 	}
-	if placementErr := s.placement(ctx, p.OrgID, in); placementErr != nil {
+	if placementErr := s.placement(ctx, p.OrgID, in, projectID); placementErr != nil {
 		return nil, placementErr
 	}
 	tags, err := normalizeTags(in.Tags)
@@ -363,7 +363,7 @@ func (s *Service) CreateTarget(ctx context.Context, p security.Principal, projec
 	s.record(ctx, p, projectID, "cloud_target.create", map[string]any{"cloud_id": cloudID, "target_id": target.ID, "revision": target.Revision, "tags": tags})
 	return target, nil
 }
-func (s *Service) placement(ctx context.Context, orgID string, in CreateTargetInput) error {
+func (s *Service) placement(ctx context.Context, orgID string, in CreateTargetInput, projectIDs ...string) error {
 	if in.PoolID != "" {
 		return nil
 	}
@@ -383,6 +383,13 @@ func (s *Service) placement(ctx context.Context, orgID string, in CreateTargetIn
 	}
 	for _, c := range all {
 		if c.ID == in.ConnectionID && c.OrgID == orgID && c.Cloud == capability.Cloud && c.Status == connections.StatusReady {
+			projectID := ""
+			if len(projectIDs) > 0 {
+				projectID = projectIDs[0]
+			}
+			if !connections.ManagedProjectAllowed(c, projectID) {
+				return ErrInvalid
+			}
 			return nil
 		}
 	}

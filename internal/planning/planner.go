@@ -23,7 +23,8 @@ const DefaultPort = 8080
 
 // Input is everything a plan is made from.
 type Input struct {
-	Routes []cloudinfra.Route
+	ProjectID string
+	Routes    []cloudinfra.Route
 	// Zones are the verified DNS zones granted to the project. The
 	// database gateway names its hosts in one of them.
 	Zones []cloudinfra.ProjectZone

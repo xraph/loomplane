@@ -809,7 +809,8 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 		maps.Copy(placed, placements)
 		maps.Copy(placed, composedPlacements(resolved, plan.Environment, composed, assignment, options))
 		result = Compute(Input{
-			Catalog: plan.Catalog, Routes: routes, Zones: zones, DatabaseGatewayTrust: trust,
+			ProjectID: plan.ProjectID,
+			Catalog:   plan.Catalog, Routes: routes, Zones: zones, DatabaseGatewayTrust: trust,
 			Federation: federation, CloudPlacements: placed, UnverifiedPlacements: unverifiedPlacements(resolved, plan.Environment, composed, assignment, options), CapacityIntents: intents,
 			Environment: plan.Environment, Graph: g, Manifest: resolved, Providers: s.providers, Bindings: bindings,
 			Connections: options, Chosen: chosen, Held: held, Excluded: excluded,

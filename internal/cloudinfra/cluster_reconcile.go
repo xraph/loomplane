@@ -47,6 +47,12 @@ func (s *Service) ReconcileClusterOperation(ctx context.Context, org, id string,
 	if err != nil {
 		return s.clusterAttention(ctx, o, "Current approval or account authority is unavailable.")
 	}
+	if len(o.Steps) == 2 && o.Steps[0].State == "completed" && o.Input.Attachment != nil && !o.CancelRequested {
+		if checkErr := s.enrollClusterOperation(call, o); checkErr != nil {
+			return s.clusterAttention(ctx, o, "Runtime enrollment requires recovery: "+checkErr.Error())
+		}
+		return nil
+	}
 	var observation provider.ClusterObservation
 	if o.Kind == "create" {
 		if len(o.Steps) != 2 {
@@ -156,7 +162,15 @@ func (s *Service) ReconcileClusterOperation(ctx context.Context, org, id string,
 	expected := o.Revision
 	o.Revision++
 	o.UpdatedAt = now
-	return store.CheckpointClusterResource(ctx, o, r, expected)
+	if checkErr := store.CheckpointClusterResource(ctx, o, r, expected); checkErr != nil {
+		return checkErr
+	}
+	if o.Input.Attachment != nil && observation.State == "running" && !o.CancelRequested {
+		if checkErr := s.enrollClusterOperation(call, o); checkErr != nil {
+			return s.clusterAttention(ctx, o, "Runtime enrollment requires recovery: "+checkErr.Error())
+		}
+	}
+	return nil
 }
 func (s *Service) clusterObservedResource(ctx context.Context, o *ClusterOperation, observation provider.ClusterObservation) (*ManagedResource, error) {
 	id := o.ResourceID

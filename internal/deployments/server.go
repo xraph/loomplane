@@ -122,6 +122,9 @@ func (e *OwnedTarget) connection(ctx context.Context, org, connection string, la
 	if c == nil || c.ID != connection || c.OrgID != org || c.Cloud != e.Cloud || c.Status != connections.StatusReady {
 		return nil, nil, errors.New("the recorded target connection is not ready")
 	}
+	if !connections.ManagedProjectAllowed(c, labels[owned.LabelProject]) {
+		return nil, nil, errors.New("the managed namespace belongs to another project")
+	}
 	var reviewed map[string]string
 	if checkErr := json.Unmarshal([]byte(labels[owned.LabelSettings]), &reviewed); checkErr != nil {
 		return nil, nil, errors.New("the target has no reviewed placement")

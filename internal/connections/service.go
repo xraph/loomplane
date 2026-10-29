@@ -40,13 +40,14 @@ type Auditor interface {
 
 // Service is the connection API.
 type Service struct {
-	store    Store
-	secrets  Secrets
-	checkers map[string]Checker
-	authz    Authorizer
-	audit    Auditor
-	now      func() time.Time
-	warn     func(msg string, err error)
+	ManagedCredentials ManagedCredentialResolver
+	store              Store
+	secrets            Secrets
+	checkers           map[string]Checker
+	authz              Authorizer
+	audit              Auditor
+	now                func() time.Time
+	warn               func(msg string, err error)
 	// Telemetry counts credential checks. It may be nil.
 	Telemetry *telemetry.Recorder
 
@@ -302,6 +303,12 @@ func (s *Service) Recheck(ctx context.Context, p security.Principal, id string) 
 	if identityErr := recordedOwnedIdentity(c); identityErr != nil {
 		return nil, identityErr
 	}
+	if c.Method == MethodManagedKubernetes {
+		if _, checkErr := s.managedCredential(ctx, c); checkErr != nil {
+			return nil, checkErr
+		}
+		return c, nil
+	}
 	checker, err := s.checker(c.Cloud)
 	if err != nil {
 		return nil, err
@@ -417,6 +424,9 @@ func (s *Service) replace(ctx context.Context, p security.Principal, id string, 
 	if err != nil {
 		return nil, err
 	}
+	if c.Method == MethodManagedKubernetes || c.Details["managed_attachment_id"] != "" {
+		return nil, ErrInUse
+	}
 	if identityErr := recordedOwnedIdentity(c); identityErr != nil {
 		return nil, identityErr
 	}
@@ -494,6 +504,9 @@ func (s *Service) Delete(ctx context.Context, p security.Principal, id string) e
 	if err != nil {
 		return err
 	}
+	if c.Method == MethodManagedKubernetes || c.Details["managed_attachment_id"] != "" {
+		return ErrInUse
+	}
 	if err := s.store.DeleteConnection(ctx, p.OrgID, id); err != nil {
 		return err
 	}
@@ -535,6 +548,10 @@ func (s *Service) Credential(ctx context.Context, orgID, id string) (*Connection
 		}
 	} else if c.Method == MethodKeyless {
 		if cred, err = s.keylessHandout(ctx, c); err != nil {
+			return nil, nil, err
+		}
+	} else if c.Method == MethodManagedKubernetes {
+		if cred, err = s.managedCredential(ctx, c); err != nil {
 			return nil, nil, err
 		}
 	} else if c.Method == MethodInCluster {

@@ -3,6 +3,7 @@ package cloudinfra
 import (
 	"time"
 
+	"github.com/xraph/loomplane/internal/clouds/kubernetes"
 	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/pkg/provider"
 )
@@ -57,6 +58,7 @@ type ClusterStep struct {
 }
 
 type ClusterOperation struct {
+	Enrollment                  *ClusterEnrollment         `json:"enrollment,omitempty"`
 	EstimatedNodeHourlyMicroUSD int64                      `json:"estimated_node_hourly_micro_usd"`
 	UnknownCosts                []string                   `json:"unknown_costs"`
 	CapacityTarget              ResourceVector             `json:"capacity_target"`
@@ -95,4 +97,16 @@ type AttachmentPrerequisites struct {
 	RequireBuilds            bool   `json:"require_builds"`
 	RequireIngress           bool   `json:"require_ingress"`
 	RequireTLS               bool   `json:"require_tls"`
+}
+
+// ClusterEnrollment records materialized identities separately from approval input.
+type ClusterEnrollment struct {
+	RetiredVaultKeys    []string                   `json:"retired_vault_keys,omitempty"`
+	AttachmentID        string                     `json:"attachment_id"`
+	RuntimeConnectionID string                     `json:"runtime_connection_id"`
+	TargetID            string                     `json:"target_id"`
+	ResourceRevision    int64                      `json:"resource_revision"`
+	State               kubernetes.EnrollmentState `json:"state"`
+	VaultKey            string                     `json:"vault_key,omitempty"`
+	CredentialExpiry    time.Time                  `json:"credential_expiry,omitempty,omitzero"`
 }
