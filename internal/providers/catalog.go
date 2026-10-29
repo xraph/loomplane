@@ -1,6 +1,7 @@
 // Package providers is Loomplane's catalog of deployment targets: the
 // clouds and platforms a plan can name, described with pkg/provider.
 //
+// Infrastructure capability declarations do not establish runtime readiness.
 // Nothing here talks to a cloud: internal/deployments has the adapters.
 // A target without one, or one paused in the configuration, is described
 // but not available, and plans that use it are for review only.

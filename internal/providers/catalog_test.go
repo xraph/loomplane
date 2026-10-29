@@ -315,3 +315,17 @@ func TestModelKindsAreOfferedOnlyWithAI(t *testing.T) {
 		}
 	}
 }
+
+func TestClusterContractsDoNotAdvertiseBuiltinSupport(t *testing.T) {
+	for _, target := range Catalog() {
+		for _, capability := range target.Infrastructure {
+			switch capability {
+			case provider.ClusterDiscovery, provider.ClusterOptionsRead, provider.ClusterCreation, provider.ClusterMutationObservation, provider.ClusterBootstrapAccess:
+				t.Fatalf("%s advertises uninstalled cluster capability %s", target.Name, capability)
+			}
+		}
+		if target.Name == "digitalocean" && (target.Model != provider.Build || target.Title != "DigitalOcean App Platform") {
+			t.Fatal("cluster contracts changed the App Platform target")
+		}
+	}
+}
