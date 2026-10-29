@@ -351,3 +351,76 @@ func TestManagedClusterTargetAttachmentScope(t *testing.T) {
 		t.Fatalf("deleted attachment remains eligible: %v %v", assignment, err)
 	}
 }
+
+func TestManagedClusterAttachmentRejectsNamespaceRename(t *testing.T) {
+	db := managedClusterDB(t)
+	store, _ := managedClusterStore(t, db)
+	resource := &cloudinfra.ManagedResource{ID: "cluster", OrgID: "org", CloudID: "cloud", Kind: "cluster", Provider: "digitalocean", AccountID: "account", ExternalID: "external", Incarnation: "physical", Ownership: "external", Status: "ready", Revision: 1}
+	if _, err := store.ClaimManagedResource(t.Context(), resource, 0); err != nil {
+		t.Fatal(err)
+	}
+	original := &cloudinfra.RuntimeAttachment{ID: "attachment", OrgID: "org", CloudID: "cloud", ClusterID: "cluster", ProjectID: "proj", Namespace: "app", NamespaceUID: "ns-uid", ServiceAccountUID: "sa-uid", RuntimeConnectionID: "conn", Revision: 1}
+	if err := store.SaveRuntimeAttachment(t.Context(), original, 0); err != nil {
+		t.Fatal(err)
+	}
+	changed, err := store.GetRuntimeAttachment(t.Context(), "org", "attachment")
+	if err != nil {
+		t.Fatal(err)
+	}
+	changed.Namespace = "other"
+	changed.Revision++
+	if err = store.SaveRuntimeAttachment(t.Context(), changed, 1); !errors.Is(err, cloudinfra.ErrConflict) {
+		t.Fatalf("namespace rename accepted: %v", err)
+	}
+	saved, err := store.GetRuntimeAttachment(t.Context(), "org", "attachment")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Namespace != original.Namespace || saved.Revision != 1 {
+		t.Fatalf("rejected rename changed stored attachment: %+v", saved)
+	}
+	var namespace, bodyNamespace string
+	var revision int64
+	if err = db.QueryRow(t.Context(), `SELECT namespace,body->>'namespace',revision FROM loomplane_runtime_attachments WHERE id='attachment'`).Scan(&namespace, &bodyNamespace, &revision); err != nil {
+		t.Fatal(err)
+	}
+	if namespace != "app" || bodyNamespace != "app" || revision != 1 {
+		t.Fatalf("attachment row changed: %s %s %d", namespace, bodyNamespace, revision)
+	}
+}
+
+func TestManagedClusterCheckpointRejectsDuplicateSteps(t *testing.T) {
+	db := managedClusterDB(t)
+	store, _ := managedClusterStore(t, db)
+	attempted := time.Now().UTC()
+	original := &cloudinfra.ClusterOperation{ID: "op", OrgID: "org", CloudID: "cloud", Kind: "create", SchemaVersion: 1, Digest: "review", Revision: 1, Status: "preview", Steps: []cloudinfra.ClusterStep{
+		{Name: "a", State: "pending", RequestDigest: "request-a"},
+		{Name: "b", State: "attempted", RequestDigest: "request-b", AttemptedAt: &attempted, RemoteOperationID: "remote-b"},
+	}}
+	if err := store.CreateClusterPreview(t.Context(), original); err != nil {
+		t.Fatal(err)
+	}
+	changed := *original
+	changed.Revision = 2
+	changed.Status = "accepted"
+	duplicate := original.Steps[0]
+	duplicate.State = "completed"
+	changed.Steps = []cloudinfra.ClusterStep{duplicate, duplicate}
+	if err := store.SaveClusterCheckpoint(t.Context(), &changed, 1); !errors.Is(err, cloudinfra.ErrInvalid) {
+		t.Fatalf("duplicate checkpoint accepted: %v", err)
+	}
+	saved, err := store.GetClusterOperation(t.Context(), "org", "cloud", "op")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if saved.Revision != 1 || saved.Status != "preview" || len(saved.Steps) != 2 || saved.Steps[0].State != "pending" || saved.Steps[1].Name != "b" || saved.Steps[1].AttemptedAt == nil || saved.Steps[1].RemoteOperationID != "remote-b" {
+		t.Fatalf("rejected checkpoint changed operation: %+v", saved)
+	}
+	var state, receipt string
+	if err = db.QueryRow(t.Context(), `SELECT a.state,b.body->>'remote_operation_id' FROM loomplane_cluster_operation_steps a JOIN loomplane_cluster_operation_steps b ON b.org_id=a.org_id AND b.operation_id=a.operation_id WHERE a.operation_id='op' AND a.name='a' AND b.name='b'`).Scan(&state, &receipt); err != nil {
+		t.Fatal(err)
+	}
+	if state != "pending" || receipt != "remote-b" {
+		t.Fatalf("rejected checkpoint changed durable steps: %s %s", state, receipt)
+	}
+}

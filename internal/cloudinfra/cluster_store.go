@@ -121,6 +121,14 @@ func (s *PgStore) SaveClusterCheckpoint(ctx context.Context, o *ClusterOperation
 	return tx.Commit()
 }
 func saveClusterSteps(ctx context.Context, tx driver.Tx, o *ClusterOperation) error {
+	seen := make(map[string]struct{}, len(o.Steps))
+	for _, step := range o.Steps {
+		if _, exists := seen[step.Name]; exists {
+			return ErrInvalid
+		}
+		seen[step.Name] = struct{}{}
+	}
+
 	for _, step := range o.Steps {
 		raw, err := json.Marshal(step)
 		if err != nil {
