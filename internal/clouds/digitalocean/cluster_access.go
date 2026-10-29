@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/xraph/loomplane/pkg/provider"
@@ -47,11 +48,14 @@ func (c *Client) BootstrapCluster(ctx context.Context, access provider.AccountAc
 		return empty, infrastructureError(err, "kubernetes:access_cluster")
 	}
 	endpoint, err := url.Parse(response.Server)
-	if err != nil || endpoint.Scheme != "https" || endpoint.Host == "" || endpoint.User != nil {
+	if err != nil || endpoint.Scheme != "https" || endpoint.Hostname() == "" || endpoint.User != nil || endpoint.RawQuery != "" || endpoint.Fragment != "" {
 		return empty, provider.ErrInfrastructureInvalid
 	}
 	ca, err := base64.StdEncoding.DecodeString(response.CA)
-	if err != nil || len(ca) == 0 {
+	if err != nil || len(ca) == 0 || !x509.NewCertPool().AppendCertsFromPEM(ca) {
+		return empty, provider.ErrInfrastructureInvalid
+	}
+	if response.Token != "" && (strings.TrimSpace(response.Token) == "" || strings.ContainsAny(response.Token, "\r\n\t ")) {
 		return empty, provider.ErrInfrastructureInvalid
 	}
 	out := provider.BootstrapAccess{Endpoint: response.Server, CAData: ca, Token: response.Token, ExpiresAt: response.ExpiresAt}

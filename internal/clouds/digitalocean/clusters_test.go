@@ -86,9 +86,10 @@ func TestDOKSDiscoveryNoMutation(t *testing.T) {
 	}
 }
 func TestDOKSBootstrapExpiryAndRedaction(t *testing.T) {
+	ca := doksTestCA(t)
 	expiry := time.Now().Add(2 * time.Minute).UTC().Truncate(time.Second)
 	c := doksFixture(t, func(w http.ResponseWriter, _ *http.Request) {
-		_ = json.NewEncoder(w).Encode(map[string]any{"server": "https://cluster.example", "certificate_authority_data": "Y2E=", "token": "private-token", "expires_at": expiry})
+		_ = json.NewEncoder(w).Encode(map[string]any{"server": "https://cluster.example", "certificate_authority_data": ca, "token": "private-token", "expires_at": expiry})
 	})
 	access, err := c.BootstrapCluster(t.Context(), doksAccess(), provider.ClusterRef{ID: "cluster", AccountID: "account"}, 10*time.Minute)
 	if err != nil || !access.ExpiresAt.Equal(expiry) {
@@ -124,10 +125,11 @@ func TestDOKSErrors(t *testing.T) {
 }
 
 func TestDOKSBootstrapRejectsUnprovenExpiry(t *testing.T) {
+	ca := doksTestCA(t)
 	for _, expiry := range []string{"", time.Now().Add(-time.Minute).UTC().Format(time.RFC3339), time.Now().Add(24 * time.Hour).UTC().Format(time.RFC3339)} {
 		t.Run(expiry, func(t *testing.T) {
 			c := doksFixture(t, func(w http.ResponseWriter, _ *http.Request) {
-				response := map[string]any{"server": "https://cluster.example", "certificate_authority_data": "Y2E=", "token": "private-token"}
+				response := map[string]any{"server": "https://cluster.example", "certificate_authority_data": ca, "token": "private-token"}
 				if expiry != "" {
 					response["expires_at"] = expiry
 				}

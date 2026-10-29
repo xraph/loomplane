@@ -95,6 +95,7 @@ func (c *Client) Options(ctx context.Context, access provider.AccountAccess, reg
 }
 func (c *Client) clusterSizeFacts(ctx context.Context, access provider.AccountAccess, region string, allow map[string]bool, out *provider.ClusterOptions) error {
 	seen := map[string]bool{}
+	state := doksPageState{}
 	for page := 1; page <= infrastructureMaxPages; page++ {
 		var response struct {
 			Sizes []struct {
@@ -105,7 +106,7 @@ func (c *Client) clusterSizeFacts(ctx context.Context, access provider.AccountAc
 				PriceHourly         *float64 `json:"price_hourly"`
 				PriceMonthly        *float64 `json:"price_monthly"`
 			} `json:"sizes"`
-			Links infrastructureLinks `json:"links"`
+			doksPageEvidence
 		}
 		q := url.Values{"page": {strconv.Itoa(page)}, "per_page": {strconv.Itoa(pageSize)}}
 		if err := c.do(ctx, string(access.Credential), http.MethodGet, "/v2/sizes", q, nil, &response); err != nil {
@@ -129,7 +130,7 @@ func (c *Client) clusterSizeFacts(ctx context.Context, access provider.AccountAc
 			out.NodeSizes = append(out.NodeSizes, v.Slug)
 			out.NodeSizeFacts = append(out.NodeSizeFacts, provider.ClusterNodeSize{ID: v.Slug, CPUs: v.Vcpus, MemoryMiB: v.Memory, DiskGB: v.Disk, Regions: v.Regions, HourlyUSD: v.PriceHourly, MonthlyUSD: v.PriceMonthly})
 		}
-		next, err := clusterNext(response.Links.Pages.Next, page)
+		next, err := state.next(response.doksPageEvidence, page, len(response.Sizes))
 		if err != nil {
 			return err
 		}
@@ -141,10 +142,11 @@ func (c *Client) clusterSizeFacts(ctx context.Context, access provider.AccountAc
 }
 func (c *Client) clusterNetworks(ctx context.Context, access provider.AccountAccess, region string, out *provider.ClusterOptions) error {
 	seen := map[string]bool{}
+	state := doksPageState{}
 	for page := 1; page <= infrastructureMaxPages; page++ {
 		var response struct {
-			VPCs  []struct{ ID, Region string } `json:"vpcs"`
-			Links infrastructureLinks           `json:"links"`
+			VPCs []struct{ ID, Region string } `json:"vpcs"`
+			doksPageEvidence
 		}
 		q := url.Values{"page": {strconv.Itoa(page)}, "per_page": {strconv.Itoa(pageSize)}}
 		if err := c.do(ctx, string(access.Credential), http.MethodGet, "/v2/vpcs", q, nil, &response); err != nil {
@@ -162,7 +164,7 @@ func (c *Client) clusterNetworks(ctx context.Context, access provider.AccountAcc
 				out.Networks = append(out.Networks, v.ID)
 			}
 		}
-		next, err := clusterNext(response.Links.Pages.Next, page)
+		next, err := state.next(response.doksPageEvidence, page, len(response.VPCs))
 		if err != nil {
 			return err
 		}

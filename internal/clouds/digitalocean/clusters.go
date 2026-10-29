@@ -32,11 +32,7 @@ func clusterNext(next string, page int) (string, error) {
 	if next == "" {
 		return "", nil
 	}
-	u, err := url.Parse(next)
-	if err != nil {
-		return "", provider.ErrInfrastructurePagination
-	}
-	n, err := clusterPage(u.Query().Get("page"))
+	n, err := doksLinkPage(next)
 	if err != nil || n != page+1 {
 		return "", provider.ErrInfrastructurePagination
 	}
@@ -99,8 +95,8 @@ func (c *Client) ListClusters(ctx context.Context, access provider.AccountAccess
 		return out, identityErr
 	}
 	var response struct {
-		Clusters []doksCluster       `json:"kubernetes_clusters"`
-		Links    infrastructureLinks `json:"links"`
+		Clusters []doksCluster `json:"kubernetes_clusters"`
+		doksPageEvidence
 	}
 	q := url.Values{"page": {strconv.Itoa(page)}, "per_page": {strconv.Itoa(pageSize)}}
 	if err = c.do(ctx, string(access.Credential), http.MethodGet, "/v2/kubernetes/clusters", q, nil, &response); err != nil {
@@ -109,7 +105,8 @@ func (c *Client) ListClusters(ctx context.Context, access provider.AccountAccess
 	if response.Clusters == nil || len(response.Clusters) > pageSize {
 		return out, provider.ErrInfrastructurePagination
 	}
-	out.NextCursor, err = clusterNext(response.Links.Pages.Next, page)
+	state := doksPageState{}
+	out.NextCursor, err = state.next(response.doksPageEvidence, page, len(response.Clusters))
 	if err != nil {
 		return out, err
 	}
