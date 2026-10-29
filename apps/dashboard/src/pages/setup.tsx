@@ -15,7 +15,6 @@ import {
 } from "@/components/ui/field"
 import { Input } from "@/components/ui/input"
 import { Spinner } from "@/components/ui/spinner"
-import { Link } from "@/lib/router"
 
 /**
  * SetupPage creates the first account and its organization on a fresh
@@ -28,6 +27,7 @@ export function SetupPage() {
   const [password, setPassword] = useState("")
   const [confirm, setConfirm] = useState("")
   const [organization, setOrganization] = useState("")
+  const [mismatch, setMismatch] = useState(false)
   const [error, setError] = useState("")
   const [done, setDone] = useState(false)
   const [taken, setTaken] = useState(false)
@@ -35,8 +35,9 @@ export function SetupPage() {
 
   const submit = async (e: FormEvent) => {
     e.preventDefault()
-    if (password !== confirm) {
-      setError("Passwords don't match.")
+    const mismatched = password !== confirm
+    setMismatch(mismatched)
+    if (mismatched) {
       return
     }
     setError("")
@@ -79,12 +80,14 @@ export function SetupPage() {
       {taken ? (
         <Field data-invalid>
           <FieldError>This instance is already set up.</FieldError>
-          <Link
-            to="/sign-in"
+          {/* A full load: the app still thinks setup is pending until it
+              reads the public config again, and would send you back here. */}
+          <a
+            href="/sign-in"
             className={buttonVariants({ variant: "link", size: "sm" })}
           >
             Sign in
-          </Link>
+          </a>
         </Field>
       ) : (
         <form onSubmit={submit}>
@@ -122,7 +125,7 @@ export function SetupPage() {
                 required
               />
             </Field>
-            <Field data-invalid={!!error || undefined}>
+            <Field data-invalid={mismatch || undefined}>
               <FieldLabel htmlFor="setup-confirm">Confirm password</FieldLabel>
               <Input
                 id="setup-confirm"
@@ -131,8 +134,14 @@ export function SetupPage() {
                 onChange={(e) => setConfirm(e.target.value)}
                 autoComplete="new-password"
                 required
-                aria-invalid={!!error || undefined}
+                aria-invalid={mismatch || undefined}
+                aria-describedby={mismatch ? "setup-confirm-error" : undefined}
               />
+              {mismatch && (
+                <FieldError id="setup-confirm-error">
+                  Passwords don't match.
+                </FieldError>
+              )}
             </Field>
             <Field>
               <FieldLabel htmlFor="setup-organization">
@@ -145,9 +154,9 @@ export function SetupPage() {
                 autoComplete="organization"
                 required
               />
-              {error && <FieldError>{error}</FieldError>}
             </Field>
             <Field>
+              {error && <FieldError>{error}</FieldError>}
               <Button type="submit" disabled={busy}>
                 {busy && <Spinner />}
                 Create account

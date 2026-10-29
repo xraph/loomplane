@@ -14,9 +14,12 @@ vi.mock("@/client/forge/loomplane/hooks", () => ({ useSetupComplete: {} }))
 vi.mock("@/client/hooks", () => ({
   useMutation: () => ({ mutateAsync: mocks.complete, isPending: false }),
 }))
+// A client-side link is marked, so a test can tell it from a full load.
 vi.mock("@/lib/router", () => ({
   Link: ({ to, children }: { to: string; children: React.ReactNode }) => (
-    <a href={to}>{children}</a>
+    <a href={to} data-client-route="">
+      {children}
+    </a>
   ),
 }))
 vi.mock("@/components/brand-logo", () => ({ BrandLogo: () => null }))
@@ -69,8 +72,32 @@ describe("SetupPage", () => {
   it("refuses mismatched passwords without a request", async () => {
     render(<SetupPage />)
     await fill("something else")
-    expect(screen.getByText("Passwords don't match.")).toBeInTheDocument()
+    const confirm = screen.getByLabelText("Confirm password")
+    expect(confirm).toHaveAttribute("aria-invalid", "true")
+    expect(confirm).toHaveAccessibleDescription("Passwords don't match.")
+    expect(screen.getByLabelText("Organization name")).not.toHaveAttribute(
+      "aria-invalid"
+    )
     expect(mocks.complete).not.toHaveBeenCalled()
+  })
+
+  it("shows a server error without blaming the confirmation", async () => {
+    mocks.complete.mockRejectedValue(
+      Object.assign(
+        new Error("the organization's name can be at most 64 characters"),
+        { statusCode: 400 }
+      )
+    )
+    render(<SetupPage />)
+    await fill()
+    expect(
+      await screen.findByText(
+        "The organization's name can be at most 64 characters."
+      )
+    ).toBeInTheDocument()
+    expect(screen.getByLabelText("Confirm password")).not.toHaveAttribute(
+      "aria-invalid"
+    )
   })
 
   it("points to sign-in when setup is already done", async () => {
@@ -84,10 +111,11 @@ describe("SetupPage", () => {
     expect(
       await screen.findByText("This instance is already set up.")
     ).toBeInTheDocument()
-    expect(screen.getByRole("link", { name: "Sign in" })).toHaveAttribute(
-      "href",
-      "/sign-in"
-    )
+    // A full load, not a client route: the app still has setup as pending
+    // and would send a client route straight back here.
+    const signIn = screen.getByRole("link", { name: "Sign in" })
+    expect(signIn).toHaveAttribute("href", "/sign-in")
+    expect(signIn).not.toHaveAttribute("data-client-route")
   })
 
   it("reloads onto the dashboard on success", async () => {
