@@ -248,6 +248,15 @@
           "title": "manifest.updated event",
           "summary": "SSE event: manifest.updated"
         },
+        "notification.created": {
+          "payload": {
+            "$ref": "#/components/schemas/NotificationCreated"
+          },
+          "contentType": "text/event-stream",
+          "name": "notification.created",
+          "title": "notification.created event",
+          "summary": "SSE event: notification.created"
+        },
         "plan.deleted": {
           "payload": {
             "$ref": "#/components/schemas/Plan"
@@ -631,6 +640,15 @@
           "type": "github.com/xraph/loomplane/internal/cloudinfra.CapacityChange"
         },
         {
+          "entityType": "NotificationCreated",
+          "intent": "upsert",
+          "invalidates": [
+            "NotificationList"
+          ],
+          "message": "notification.created",
+          "type": "github.com/xraph/loomplane/internal/notifications.NotificationCreated"
+        },
+        {
           "entityType": "Log",
           "intent": "upsert",
           "invalidates": [
@@ -970,6 +988,15 @@
           "type": "github.com/xraph/loomplane/internal/cloudinfra.CapacityChange"
         },
         {
+          "entityType": "NotificationCreated",
+          "intent": "upsert",
+          "invalidates": [
+            "NotificationList"
+          ],
+          "message": "notification.created",
+          "type": "github.com/xraph/loomplane/internal/notifications.NotificationCreated"
+        },
+        {
           "entityType": "Log",
           "intent": "upsert",
           "invalidates": [
@@ -1081,6 +1108,9 @@
         },
         {
           "$ref": "#/channels/api-v1-realtime-events/messages/manifest.updated"
+        },
+        {
+          "$ref": "#/channels/api-v1-realtime-events/messages/notification.created"
         },
         {
           "$ref": "#/channels/api-v1-realtime-events/messages/plan.deleted"
@@ -2906,6 +2936,21 @@
         ],
         "type": "object",
         "x-forge-type": "github.com/xraph/loomplane/pkg/manifest.GPU"
+      },
+      "NotificationCreated": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          }
+        }
       },
       "Output": {
         "type": "object",
@@ -7094,6 +7139,27 @@
         "name": "manifest.updated",
         "title": "manifest.updated event",
         "summary": "SSE event: manifest.updated"
+      },
+      "api-v1-realtime-eventsnotification.created": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "id",
+            "org_id"
+          ],
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "org_id": {
+              "type": "string"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "notification.created",
+        "title": "notification.created event",
+        "summary": "SSE event: notification.created"
       },
       "api-v1-realtime-eventsplan.deleted": {
         "payload": {

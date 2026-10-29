@@ -5077,6 +5077,99 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly push = {
+    config: {
+      /**
+       * How this server sends push notifications
+       */
+      get: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.PushConfig> => {
+        let __path = `/api/v1/push/config`;
+        const config: RequestConfig = {
+          method: 'GET',
+          url: __path,
+          signal: options?.signal,
+          retry: options?.retry,
+          responseCodec: CODECS["PushConfig"],
+        };
+
+        return this.request<types.PushConfig>(config);
+      },
+
+    },
+
+    devices: {
+      /**
+       * Register this phone for push notifications
+       */
+      create: async (body: types.RegisterDeviceInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.PushDevice> => {
+        let __path = `/api/v1/push/devices`;
+        const config: RequestConfig = {
+          method: 'POST',
+          url: __path,
+          body,
+          bodyCodec: CODECS["RegisterDeviceInputBody"],
+          signal: options?.signal,
+          retry: options?.retry,
+          responseCodec: CODECS["PushDevice"],
+        };
+
+        return this.request<types.PushDevice>(config);
+      },
+
+      /**
+       * Stop sending push notifications to a phone
+       */
+      delete: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<void> => {
+        let __path = `/api/v1/push/devices/${encodeURIComponent(String(id))}`;
+        const config: RequestConfig = {
+          method: 'DELETE',
+          url: __path,
+          signal: options?.signal,
+          retry: options?.retry,
+          allowEmptyBody: true,
+        };
+
+        await this.request(config);
+      },
+
+      /**
+       * Send a test notification to a phone
+       */
+      test: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.TestPushResult> => {
+        let __path = `/api/v1/push/devices/${encodeURIComponent(String(id))}/test`;
+        const config: RequestConfig = {
+          method: 'POST',
+          url: __path,
+          signal: options?.signal,
+          retry: options?.retry,
+          responseCodec: CODECS["TestPushResult"],
+        };
+
+        return this.request<types.TestPushResult>(config);
+      },
+
+      /**
+       * Change a phone's time zone, quiet hours or settings
+       */
+      update: async (id: string, body: types.UpdateDeviceInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.PushDevice> => {
+        let __path = `/api/v1/push/devices/${encodeURIComponent(String(id))}`;
+        const config: RequestConfig = {
+          method: 'PUT',
+          url: __path,
+          body,
+          bodyCodec: CODECS["UpdateDeviceInputBody"],
+          signal: options?.signal,
+          retry: options?.retry,
+          responseCodec: CODECS["PushDevice"],
+        };
+
+        return this.request<types.PushDevice>(config);
+      },
+
+    },
+
+  };
+
   public readonly realtime = {
     /**
      */

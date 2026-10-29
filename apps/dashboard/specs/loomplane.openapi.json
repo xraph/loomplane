@@ -11172,6 +11172,157 @@
         }
       }
     },
+    "/api/v1/push/config": {
+      "get": {
+        "tags": [
+          "Push"
+        ],
+        "summary": "How this server sends push notifications",
+        "operationId": "push.config.get",
+        "responses": {
+          "200": {
+            "description": "How this server sends push notifications",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PushConfig"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/push/devices": {
+      "post": {
+        "tags": [
+          "Push"
+        ],
+        "summary": "Register this phone for push notifications",
+        "operationId": "push.devices.create",
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegisterDeviceInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The registered phone",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PushDevice"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/push/devices/{id}": {
+      "put": {
+        "tags": [
+          "Push"
+        ],
+        "summary": "Change a phone's time zone, quiet hours or settings",
+        "operationId": "push.devices.update",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateDeviceInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The updated phone",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PushDevice"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "Push"
+        ],
+        "summary": "Stop sending push notifications to a phone",
+        "operationId": "push.devices.delete",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "No Content"
+          }
+        }
+      }
+    },
+    "/api/v1/push/devices/{id}/test": {
+      "post": {
+        "tags": [
+          "Push"
+        ],
+        "summary": "Send a test notification to a phone",
+        "operationId": "push.devices.test",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "What became of the test",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TestPushResult"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/realtime/events": {
       "get": {
         "tags": [
@@ -23003,10 +23154,10 @@
       },
       "PreferenceInputBody": {
         "type": "object",
-        "required": [
-          "deployment_email"
-        ],
         "properties": {
+          "agent_email": {
+            "type": "boolean"
+          },
           "deployment_email": {
             "type": "boolean"
           }
@@ -23016,9 +23167,13 @@
         "type": "object",
         "required": [
           "deployment_email",
+          "agent_email",
           "mail_enabled"
         ],
         "properties": {
+          "agent_email": {
+            "type": "boolean"
+          },
           "deployment_email": {
             "type": "boolean"
           },
@@ -23646,6 +23801,84 @@
           }
         }
       },
+      "PushConfig": {
+        "type": "object",
+        "required": [
+          "enabled",
+          "gateway_url",
+          "server_key",
+          "key_id"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "gateway_url": {
+            "type": "string"
+          },
+          "key_id": {
+            "type": "string"
+          },
+          "server_key": {
+            "type": "string"
+          }
+        }
+      },
+      "PushDevice": {
+        "type": "object",
+        "required": [
+          "id",
+          "platform",
+          "name",
+          "time_zone",
+          "settings",
+          "created_at",
+          "last_seen_at",
+          "quiet_hours"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string"
+          },
+          "last_seen_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "name": {
+            "type": "string"
+          },
+          "platform": {
+            "type": "string"
+          },
+          "quiet_hours": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/QuietHours"
+              },
+              {
+                "type": "object",
+                "nullable": true,
+                "enum": [
+                  null
+                ]
+              }
+            ]
+          },
+          "settings": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "time_zone": {
+            "type": "string"
+          }
+        }
+      },
       "QuantizationView": {
         "type": "object",
         "required": [
@@ -23690,6 +23923,21 @@
           },
           "weight_bytes": {
             "type": "integer"
+          }
+        }
+      },
+      "QuietHours": {
+        "type": "object",
+        "required": [
+          "start",
+          "end"
+        ],
+        "properties": {
+          "end": {
+            "type": "string"
+          },
+          "start": {
+            "type": "string"
           }
         }
       },
@@ -23907,6 +24155,40 @@
             "type": "string"
           },
           "field": {
+            "type": "string"
+          }
+        }
+      },
+      "RegisterDeviceInputBody": {
+        "type": "object",
+        "required": [
+          "handle",
+          "public_key",
+          "platform",
+          "name",
+          "time_zone",
+          "settings"
+        ],
+        "properties": {
+          "handle": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "platform": {
+            "type": "string"
+          },
+          "public_key": {
+            "type": "string"
+          },
+          "settings": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "time_zone": {
             "type": "string"
           }
         }
@@ -27747,6 +28029,21 @@
         "type": "object",
         "x-forge-envelope": "tenants"
       },
+      "TestPushResult": {
+        "type": "object",
+        "required": [
+          "status"
+        ],
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "sent",
+              "quiet_hours"
+            ]
+          }
+        }
+      },
       "Thresholds": {
         "type": "object",
         "required": [
@@ -27873,6 +28170,34 @@
             "type": "string"
           },
           "reason": {
+            "type": "string"
+          }
+        }
+      },
+      "UpdateDeviceInputBody": {
+        "type": "object",
+        "properties": {
+          "quiet_hours": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/QuietHours"
+              },
+              {
+                "type": "object",
+                "nullable": true,
+                "enum": [
+                  null
+                ]
+              }
+            ]
+          },
+          "settings": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "time_zone": {
             "type": "string"
           }
         }

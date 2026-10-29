@@ -274,6 +274,15 @@ export const streams = [
   {
     kind: 'entity',
     channel: '/api/v1/realtime/events',
+    message: 'notification.created',
+    entity: 'NotificationCreated',
+    intent: 'upsert',
+    invalidates: ['NotificationList'],
+    decode: (payload: unknown) => decode(payload, CODECS['NotificationCreated']),
+  },
+  {
+    kind: 'entity',
+    channel: '/api/v1/realtime/events',
     message: 'build.log',
     entity: 'Log',
     intent: 'upsert',
@@ -558,6 +567,15 @@ export const streams = [
     intent: 'patch',
     invalidates: ['CapacityPolicyView:{cloud_id}', 'CapacityUsage:{cloud_id}', 'Expansion[]'],
     decode: (payload: unknown) => decode(payload, CODECS['CapacityChange']),
+  },
+  {
+    kind: 'entity',
+    channel: '/api/v1/realtime/ws',
+    message: 'notification.created',
+    entity: 'NotificationCreated',
+    intent: 'upsert',
+    invalidates: ['NotificationList'],
+    decode: (payload: unknown) => decode(payload, CODECS['NotificationCreated']),
   },
   {
     kind: 'entity',

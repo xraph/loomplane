@@ -2774,6 +2774,11 @@ export interface Notification {
   title: string;
 }
 
+export interface NotificationCreated {
+  id: string;
+  orgId: string;
+}
+
 export interface NotificationList {
   items: Notification[];
   mailEnabled: boolean;
@@ -3133,10 +3138,12 @@ export interface Port {
 }
 
 export interface PreferenceInputBody {
-  deploymentEmail: boolean;
+  agentEmail?: boolean;
+  deploymentEmail?: boolean;
 }
 
 export interface Preferences {
+  agentEmail: boolean;
   deploymentEmail: boolean;
   mailEnabled: boolean;
 }
@@ -3301,6 +3308,24 @@ export interface PublicConfig {
   waitlist: boolean;
 }
 
+export interface PushConfig {
+  enabled: boolean;
+  gatewayUrl: string;
+  keyId: string;
+  serverKey: string;
+}
+
+export interface PushDevice {
+  createdAt: string;
+  id: string;
+  lastSeenAt: string;
+  name: string;
+  platform: string;
+  quietHours: QuietHours | null;
+  settings: Record<string, string>;
+  timeZone: string;
+}
+
 export interface QuantizationView {
   args?: string[];
   engine: string;
@@ -3312,6 +3337,11 @@ export interface QuantizationView {
   repo?: string;
   revision?: string;
   weightBytes: number;
+}
+
+export interface QuietHours {
+  end: string;
+  start: string;
 }
 
 export interface RDSRecoveryNetwork {
@@ -3413,6 +3443,15 @@ export interface Ref {
   component?: string;
   dependency?: string;
   field: string;
+}
+
+export interface RegisterDeviceInputBody {
+  handle: string;
+  name: string;
+  platform: string;
+  publicKey: string;
+  settings: Record<string, string>;
+  timeZone: string;
 }
 
 export interface Registration {
@@ -4542,6 +4581,10 @@ export interface TenantList {
   tenants: Tenant[];
 }
 
+export interface TestPushResult {
+  status: "sent" | "quiet_hours";
+}
+
 export interface Thresholds {
   errorRate: number;
   errorRateDelta: number;
@@ -4576,6 +4619,12 @@ export interface UnwatchedService {
   name: string;
   provider: string;
   reason: string;
+}
+
+export interface UpdateDeviceInputBody {
+  quietHours?: QuietHours | null;
+  settings?: Record<string, string>;
+  timeZone?: string;
 }
 
 export interface UpdateProjectInputBody {
