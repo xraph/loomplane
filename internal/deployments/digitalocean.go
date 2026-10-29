@@ -297,8 +297,14 @@ func (d *DigitalOcean) ensureApp(ctx context.Context, token string, spec digital
 		app, err = d.Client.CreateApp(ctx, token, spec)
 	} else {
 		// Domains belong to the hostnames routes attach, not to the
-		// deploy, so an update carries over whatever the app has.
-		spec.Domains = app.Spec.Domains
+		// deploy, so an update carries over whatever the app has. They're
+		// read from the app itself: the list FindApp reads needn't carry
+		// them.
+		current, getErr := d.Client.GetApp(ctx, token, app.ID)
+		if getErr != nil {
+			return nil, getErr
+		}
+		spec.Domains = current.Spec.Domains
 		app, err = d.Client.UpdateApp(ctx, token, app.ID, spec)
 	}
 	if err != nil {

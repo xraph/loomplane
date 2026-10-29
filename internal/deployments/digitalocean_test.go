@@ -3,6 +3,7 @@ package deployments
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -68,9 +69,16 @@ func (f *fakeAppPlatform) serve(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == "/v2/apps":
+		// The list is a summary: nothing promises it carries an app's
+		// domains, so this one never does.
 		out := make([]any, 0, len(f.apps))
 		for id := range f.apps {
-			out = append(out, app(id))
+			a := app(id)
+			if spec, ok := a["spec"].(map[string]any); ok {
+				a["spec"] = maps.Clone(spec)
+				delete(a["spec"].(map[string]any), "domains")
+			}
+			out = append(out, a)
 		}
 		reply(200, map[string]any{"apps": out})
 	case r.Method == http.MethodPost && r.URL.Path == "/v2/apps":
@@ -166,6 +174,8 @@ func apiConfig() *planning.ServiceConfig {
 		Workload: provider.HTTPService, Execution: provider.Container, Size: &manifest.Size{CPU: 1, Memory: 1024}, Scale: &manifest.Scale{Min: 2, Max: 2}}
 }
 
+// The app's domains are read from the app itself, which the list of apps
+// FindApp reads may leave them out of.
 func TestEnsureAppKeepsTheAppsDomains(t *testing.T) {
 	f, client := newFakeAppPlatform(t)
 	f.apps["app-api-production-23456789"] = map[string]any{
