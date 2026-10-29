@@ -2457,6 +2457,79 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly domainEdge = {
+    /**
+     * domainEdge.get
+     */
+    get: async (projectId: string, routeId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.EdgeState> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/domain-routes/${encodeURIComponent(String(routeId))}/edge`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["EdgeState"],
+      };
+
+      return this.request<types.EdgeState>(config);
+    },
+
+    /**
+     * domainEdge.purge
+     */
+    purge: async (projectId: string, routeId: string, body: types.EdgePurgeInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.EdgeState> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/domain-routes/${encodeURIComponent(String(routeId))}/edge/purge`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["EdgePurgeInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["EdgeState"],
+      };
+
+      return this.request<types.EdgeState>(config);
+    },
+
+    /**
+     * domainEdge.retry
+     */
+    retry: async (projectId: string, routeId: string, body: types.RemoveRouteInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.EdgeState> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/domain-routes/${encodeURIComponent(String(routeId))}/edge/retry`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["RemoveRouteInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["EdgeState"],
+      };
+
+      return this.request<types.EdgeState>(config);
+    },
+
+    /**
+     * domainEdge.update
+     */
+    update: async (projectId: string, routeId: string, body: types.EdgeInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.EdgeState> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/domain-routes/${encodeURIComponent(String(routeId))}/edge`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["EdgeInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["EdgeState"],
+      };
+
+      return this.request<types.EdgeState>(config);
+    },
+
+  };
+
   public readonly domainRegistration = {
     /**
      * domainRegistration.check

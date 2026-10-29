@@ -189,13 +189,14 @@ type DNSZoneSpec struct {
 // on update, so persist the returned receipt before further mutation or cleanup.
 // An empty Name means the zone apex, and names are relative to the zone.
 type DNSRecord struct {
-	ID     string `json:"id"`
-	ZoneID string `json:"zone_id"`
-	Name   string `json:"name"`
-	Type   string `json:"type"`
-	Value  string `json:"value"`
-	TTL    int    `json:"ttl"`
-	Owner  string `json:"owner,omitempty"`
+	Proxied bool   `json:"proxied,omitempty"`
+	ID      string `json:"id"`
+	ZoneID  string `json:"zone_id"`
+	Name    string `json:"name"`
+	Type    string `json:"type"`
+	Value   string `json:"value"`
+	TTL     int    `json:"ttl"`
+	Owner   string `json:"owner,omitempty"`
 }
 
 // DNSUpsertRequest creates only if Expected is nil and the name is unclaimed.

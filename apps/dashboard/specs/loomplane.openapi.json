@@ -11832,6 +11832,201 @@
           "ManagedRegistryView"
         ]
       }
+    },
+    "/api/v1/projects/{projectId}/domain-routes/{routeId}/edge": {
+      "get": {
+        "tags": [
+          "Domains"
+        ],
+        "summary": "domainEdge.get",
+        "operationId": "domainEdge.get",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "description": "Path parameter: projectId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "routeId",
+            "in": "path",
+            "description": "Path parameter: routeId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EdgeState"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Domains"
+        ],
+        "summary": "domainEdge.update",
+        "operationId": "domainEdge.update",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "description": "Path parameter: projectId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "routeId",
+            "in": "path",
+            "description": "Path parameter: routeId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EdgeInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EdgeState"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{projectId}/domain-routes/{routeId}/edge/purge": {
+      "post": {
+        "tags": [
+          "Domains"
+        ],
+        "summary": "domainEdge.purge",
+        "operationId": "domainEdge.purge",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "description": "Path parameter: projectId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "routeId",
+            "in": "path",
+            "description": "Path parameter: routeId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EdgePurgeInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EdgeState"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{projectId}/domain-routes/{routeId}/edge/retry": {
+      "post": {
+        "tags": [
+          "Domains"
+        ],
+        "summary": "domainEdge.retry",
+        "operationId": "domainEdge.retry",
+        "parameters": [
+          {
+            "name": "projectId",
+            "in": "path",
+            "description": "Path parameter: projectId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "routeId",
+            "in": "path",
+            "description": "Path parameter: routeId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RemoveRouteInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EdgeState"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -16013,6 +16208,9 @@
           },
           "owner": {
             "type": "string"
+          },
+          "proxied": {
+            "type": "boolean"
           },
           "ttl": {
             "type": "integer"
@@ -27773,6 +27971,175 @@
           },
           "remove_setup": {
             "type": "boolean"
+          }
+        }
+      },
+      "EdgeInputBody": {
+        "type": "object",
+        "required": [
+          "revision",
+          "policy"
+        ],
+        "properties": {
+          "policy": {
+            "type": "object",
+            "required": [
+              "enabled",
+              "invalidate_on_deploy",
+              "rules"
+            ],
+            "properties": {
+              "enabled": {
+                "type": "boolean"
+              },
+              "invalidate_on_deploy": {
+                "type": "boolean"
+              },
+              "rules": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/EdgeRule"
+                }
+              }
+            }
+          },
+          "revision": {
+            "type": "integer"
+          }
+        }
+      },
+      "EdgePurgeInputBody": {
+        "type": "object",
+        "required": [
+          "revision",
+          "urls"
+        ],
+        "properties": {
+          "revision": {
+            "type": "integer"
+          },
+          "urls": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "EdgeRule": {
+        "type": "object",
+        "required": [
+          "path_prefix",
+          "mode",
+          "edge_ttl",
+          "browser_ttl"
+        ],
+        "properties": {
+          "browser_ttl": {
+            "type": "integer"
+          },
+          "edge_ttl": {
+            "type": "integer"
+          },
+          "mode": {
+            "type": "string"
+          },
+          "path_prefix": {
+            "type": "string"
+          }
+        }
+      },
+      "EdgeState": {
+        "type": "object",
+        "required": [
+          "route_id",
+          "org_id",
+          "project_id",
+          "revision",
+          "policy",
+          "status",
+          "message",
+          "kind",
+          "requested_at",
+          "applied_at",
+          "last_purge_at"
+        ],
+        "properties": {
+          "applied_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "desired": {
+            "$ref": "#/components/schemas/DNSRecord"
+          },
+          "invalidation_error": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "last_deployment_id": {
+            "type": "string"
+          },
+          "last_purge_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "message": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "policy": {
+            "$ref": "#/components/schemas/EdgePolicy"
+          },
+          "prior": {
+            "$ref": "#/components/schemas/DNSRecord"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "requested_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "route_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "urls": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "EdgePolicy": {
+        "type": "object",
+        "required": [
+          "enabled",
+          "invalidate_on_deploy",
+          "rules"
+        ],
+        "properties": {
+          "enabled": {
+            "type": "boolean"
+          },
+          "invalidate_on_deploy": {
+            "type": "boolean"
+          },
+          "rules": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EdgeRule"
+            }
           }
         }
       }

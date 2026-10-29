@@ -378,6 +378,9 @@ func (s *PgStore) AcceptRoute(ctx context.Context, op *RouteOperation) error {
 	if checkErr := cloudprofiles.LockOrganization(ctx, tx, route.OrgID); checkErr != nil {
 		return checkErr
 	}
+	if checkErr := guardEdgeRoute(ctx, tx, route, op.Kind); checkErr != nil {
+		return checkErr
+	}
 	if checkErr := guardRouteAttachment(ctx, tx, route, op.Kind); checkErr != nil {
 		return checkErr
 	}

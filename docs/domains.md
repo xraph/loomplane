@@ -82,6 +82,34 @@ Create a second Cloudflare token with Zone Read and DNS Edit on that one zone, a
 
 These checks run when you attach it and again every time Loomplane writes the token to a server or cluster. So if someone widens the token in Cloudflare later, the next write refuses it. See [security.md](security.md#dns-challenge-credentials) for where it ends up.
 
+## Global CDN and edge caching
+
+Open a service's **Domains** section and choose **CDN & cache** beside its hostname. You can also open these settings from the domain's hostname list. Enable the CDN, add the paths you want cached and save. The status stays **Applying** until Cloudflare accepts the rules, DNS change and purge. If an operation fails, its reason stays visible with actions to retry or disable the CDN and recover.
+
+This works for frontend and backend services with ready Loomplane domain routes on SSH/Docker servers or Kubernetes. You need an exact hostname on a managed Cloudflare zone granted to the project. Wildcard routes, external DNS zones and provider-generated addresses cannot attach a CDN through this control. Add a supported custom hostname first.
+
+Use your existing zone connection. Its token needs Zone Read, DNS Edit, Cache Rules Edit, Cache Purge and Zone Settings Read on the zone. Set the zone's SSL/TLS mode to **Full (strict)** in Cloudflare. Loomplane checks that setting before enabling proxying; it does not change the zone's TLS settings. Cloudflare must have an active edge certificate covering your hostname, and your origin must keep its trusted certificate. Cloudflare plan limits and charges still apply.
+
+You can save up to six ordered path-prefix rules per hostname:
+
+| Behavior | What it does |
+| --- | --- |
+| Respect origin | Makes the path eligible for caching when your app sends explicit cache headers. Without them, Cloudflare bypasses cache. |
+| Public content | Overrides origin cache headers with your edge and browser TTLs. Use this only for content shared by every visitor. |
+| Bypass cache | Sends matching requests to the origin. |
+
+Later rules win. Prefixes are literal: `/api/public` also matches `/api/publicity`, so use `/api/public/` when you mean that directory. Unmatched paths bypass cache, as do requests with cookies or authorization headers, methods other than GET and HEAD, blocked route paths, certificate challenges and React Server Component requests. Keep request-specific or sensitive content out of public rules. Public mode overrides `private` and `no-store`; those headers are protected by respect-origin mode, not by a public TTL override.
+
+Edge TTLs accept 60 seconds through one year. Browser TTLs accept zero through the edge TTL. Your Cloudflare plan may enforce a higher minimum or a lower rule count across the zone. A temporary bypass rule protects each hostname while Loomplane replaces its own rules, so leave room for one extra rule during updates. Loomplane preserves rules owned by other applications. Manage overlapping rules, Workers and other caching settings in Cloudflare with care, since they can change the resulting cache behavior.
+
+**Purge URLs** clears up to 30 exact HTTP or HTTPS URLs on this hostname. **Purge hostname** clears its cached content. Neither action clears the whole zone or another service's hostname. Browser caches survive a Cloudflare purge, so use versioned asset URLs when browsers cache assets for a long time.
+
+Turn on **Purge this hostname after successful deployments** to invalidate it after the matching service deploys successfully in the same project and environment. Failed, running and unrelated deployments do not trigger purges. Loomplane records each invalidation durably, resumes it after restart and retries failures with increasing delays, up to an hour. The panel shows the last purge and any deployment purge error. Disabling deployment invalidation stops queued work that has not started.
+
+CDN settings and purge actions use the project's infrastructure permissions. Workers recheck the saved actor, zone grant, DNS proof and connection identity before changing Cloudflare. Enabling proxying stores a receipt with Cloudflare's automatic 300-second DNS TTL. Route handoffs and rollbacks retain proxying. Disable the CDN before removing the hostname; this restores direct DNS and removes Loomplane's cache rules.
+
+The provider protocol, database recovery and dashboard flows have local automated coverage. Live Cloudflare permissions, plan limits, certificate coverage, cache HIT/MISS behavior and purge propagation need verification against your test zone before rollout. Cloudflare's [Cache Rules API](https://developers.cloudflare.com/cache/how-to/cache-rules/create-api/) and [purge reference](https://developers.cloudflare.com/api/resources/cache/methods/purge/) describe the provider operations.
+
 ## Kubernetes routes
 
 A service on a Kubernetes connection can take hostnames under any domain your project is granted, with the same DNS records and receipts as a server. Loomplane makes an Ingress for each hostname and asks cert-manager for the certificate.

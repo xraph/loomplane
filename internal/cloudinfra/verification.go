@@ -475,6 +475,9 @@ func (s *Service) verifyRouteDestination(ctx context.Context, c *server.Client, 
 	for _, address := range addresses {
 		out.DNS = out.DNS && address.IP.Equal(net.ParseIP(route.Binding.Address))
 	}
+	if route.Receipt != nil && route.Receipt.Proxied {
+		out.DNS = err == nil && len(addresses) > 0 && s.verifyProxiedRouteDNS(ctx, route)
+	}
 	if !out.DNS {
 		out.DNSError = "DNS does not resolve exclusively to the accepted server address."
 	}

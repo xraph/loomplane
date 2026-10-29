@@ -76,11 +76,11 @@ Replace those connection IDs with the ones you saved. Forge HTTP apps without a 
 
 ## DNS and domains
 
-Three providers can hold your DNS for the [domains](domains.md) you bring or register. Cloudflare only does DNS and registration here, so it runs none of your services:
+Three providers can hold your DNS for the [domains](domains.md) you bring or register. Cloudflare also provides an optional global CDN and edge cache for managed service hostnames. Your service still runs on its existing deployment target:
 
 | Provider | DNS | Registration | Compute |
 | --- | --- | --- | --- |
-| Cloudflare | Zones and records, and the DNS challenge for wildcard certificates | Through Cloudflare Registrar, in your own account | None |
+| Cloudflare | Zones and records, wildcard certificate challenges, and optional CDN/cache rules for exact service hostnames | Through Cloudflare Registrar, in your own account | None |
 | DigitalOcean | Zones and records | None | App Platform and Managed Databases |
 | Vercel | Zones and records | None | Vercel |
 

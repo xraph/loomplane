@@ -139,6 +139,9 @@ func (e *Extension) Start(context.Context) error {
 		defer ticker.Stop()
 		var swept time.Time
 		for {
+			if err := e.svc.RecoverEdges(ctx); err != nil && ctx.Err() == nil {
+				e.Logger().Warn("Recover CDN operations", forge.F("error", err.Error()))
+			}
 			if err := e.svc.RecoverRoutes(ctx); err != nil && ctx.Err() == nil {
 				e.Logger().Warn("Recover domain route operations", forge.F("error", err.Error()))
 			}
