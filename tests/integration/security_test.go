@@ -41,11 +41,7 @@ func TestSecurity_organizationsAndRolesHoldEverywhere(t *testing.T) {
 
 	signUp := func(email string) *client {
 		c := &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
-		var auth struct {
-			SessionToken string `json:"session_token"`
-		}
-		c.must(http.StatusCreated, http.MethodPost, "/authsome/v1/signup", map[string]string{"email": email, "password": "Correct-horse-battery-9"}, &auth)
-		c.token = auth.SessionToken
+		account(t, c, email)
 		return c
 	}
 	newOrg := func(c *client, slug string) string {

@@ -1189,12 +1189,8 @@ func liveSetup(t *testing.T, database, callback, runID string, progress *livePro
 		}
 	}()
 	c := &client{t: t, base: running.srv.URL, key: cfg.Identity.PublishableKey, observeStatus: func(status int) { progress.observeHTTP(t, status) }}
-	var auth struct {
-		SessionToken string `json:"session_token"`
-	}
 	progress.step(t, "signup")
-	c.must(http.StatusCreated, http.MethodPost, "/authsome/v1/signup", map[string]string{"email": "live@example.test", "password": "Correct-horse-battery-9"}, &auth)
-	c.token = auth.SessionToken
+	firstAccount(t, c, "live@example.test", "Correct-horse-battery-9")
 	progress.step(t, "organization_create")
 	var org struct{ ID string }
 	c.must(http.StatusCreated, http.MethodPost, "/authsome/v1/orgs", map[string]string{"name": runID, "slug": runID}, &org)

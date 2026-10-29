@@ -206,11 +206,7 @@ func TestAcceptanceOctopus(t *testing.T) {
 	// before Loomplane stops.
 	t.Cleanup(r.stop)
 	c := &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
-	var auth struct {
-		SessionToken string `json:"session_token"`
-	}
-	c.must(http.StatusCreated, http.MethodPost, "/authsome/v1/signup", map[string]string{"email": "octopus-acceptance@example.test", "password": "Acceptance-Octopus-42"}, &auth)
-	c.token = auth.SessionToken
+	firstAccount(t, c, "octopus-acceptance@example.test", "Acceptance-Octopus-42")
 	var org struct {
 		ID string `json:"id"`
 	}

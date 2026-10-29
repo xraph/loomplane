@@ -135,10 +135,12 @@ func countRows(t *testing.T, dsn, query string) int {
 
 const liveUsers = `SELECT count(*) FROM authsome_users WHERE deleted_at IS NULL`
 
+// freshSetup starts a fresh instance as a deploy would: with no waitlist
+// override unless the test sets one.
 func freshSetup(t *testing.T, cfg *config.Config) (*running, *setupClient) {
 	t.Helper()
 	cfg.Database.URL = freshDatabase(t)
-	r := start(t, *cfg)
+	r := startStoredWaitlist(t, *cfg)
 	return r, &setupClient{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
 }
 

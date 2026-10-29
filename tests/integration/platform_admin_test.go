@@ -18,6 +18,8 @@ func TestGrantPlatformAdmin(t *testing.T) {
 	r := start(t, cfg)
 	defer r.stop()
 	c := &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
+	// Setup makes its account platform owner, so Ada signs up after it.
+	firstAccount(t, &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}, "owner@example.com", "Correct-horse-battery-9")
 	c.must(http.StatusCreated, http.MethodPost, "/authsome/v1/signup", map[string]string{"email": "ada@example.com", "password": "Correct-horse-battery-9"}, nil)
 
 	ctx := t.Context()
