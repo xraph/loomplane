@@ -29,6 +29,8 @@ func (s *Service) pushPlanFor(ctx context.Context, item *outboxItem, msg *outbox
 		return plan, nil
 	case KindPlanWaiting, KindPlanDecided:
 		return s.planPush(ctx, item, plan)
+	case KindReleaseRolledBack, KindReleaseRevertFailed, KindReleaseProgress:
+		return s.releasePush(ctx, item, plan)
 	}
 	var n noticePayload
 	if err := json.Unmarshal(item.payload, &n); err != nil {

@@ -13,7 +13,9 @@ func TestCanaryReleasesMigration(t *testing.T) {
 	conn, ex := scratch(t)
 	ctx := t.Context()
 	// Everything else goes first, so canary_releases is the last one applied
-	// and one rollback undoes exactly it, whatever sorts after it.
+	// and one rollback undoes exactly it, whatever sorts after it. The
+	// release notices trigger watches the canary column, so it waits for
+	// canary_releases and comes off first.
 	historical := migrate.NewGroup(GroupName)
 	for _, step := range Group().Migrations() {
 		if step.Name != "managed_workload_protocol" {
@@ -22,7 +24,7 @@ func TestCanaryReleasesMigration(t *testing.T) {
 	}
 	others := migrate.NewGroup(GroupName)
 	for _, step := range historical.Migrations() {
-		if step.Name != "canary_releases" {
+		if step.Name != "canary_releases" && step.Name != "release_notices" {
 			others.MustRegister(step)
 		}
 	}
@@ -78,8 +80,13 @@ func TestCanaryReleasesMigration(t *testing.T) {
 		t.Fatal("down stranded a deployment-v4 run")
 	}
 	exec(t, conn, `DELETE FROM loomplane_deployment_workflow_runs`)
-	// The orchestrator rolls back the canary's own version.
+	// The orchestrator rolls back the release notices that watch the canary
+	// column, then the canary's own version.
 	res, err := o.Rollback(ctx)
+	if err != nil || len(res.Rollback) != 1 || res.Rollback[0].Name != "release_notices" {
+		t.Fatalf("rollback of the release notices: %+v %v", res, err)
+	}
+	res, err = o.Rollback(ctx)
 	if err != nil || len(res.Rollback) != 1 || res.Rollback[0].Version != "20261104000100" || res.Rollback[0].Name != "canary_releases" {
 		t.Fatalf("rollback: %+v %v", res, err)
 	}

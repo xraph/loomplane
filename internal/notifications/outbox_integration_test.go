@@ -85,7 +85,7 @@ func notificationDatabase(t *testing.T) *grove.DB {
 		`CREATE TABLE loomplane_projects(id TEXT PRIMARY KEY,org_id TEXT NOT NULL,name TEXT NOT NULL DEFAULT '')`,
 		`CREATE TABLE loomplane_environments(id TEXT PRIMARY KEY,org_id TEXT NOT NULL,project_id TEXT NOT NULL,name TEXT NOT NULL DEFAULT '',kind TEXT NOT NULL DEFAULT 'staging')`,
 		`CREATE TABLE authsome_organizations(id TEXT PRIMARY KEY,name TEXT NOT NULL DEFAULT '')`,
-		`CREATE TABLE loomplane_deployments(id TEXT PRIMARY KEY,org_id TEXT NOT NULL,project_id TEXT NOT NULL,environment_id TEXT NOT NULL,plan_id TEXT NOT NULL,started_by TEXT NOT NULL,status TEXT NOT NULL,retries INT NOT NULL DEFAULT 0,error TEXT NOT NULL DEFAULT '')`,
+		`CREATE TABLE loomplane_deployments(id TEXT PRIMARY KEY,org_id TEXT NOT NULL,project_id TEXT NOT NULL,environment_id TEXT NOT NULL,plan_id TEXT NOT NULL,started_by TEXT NOT NULL,status TEXT NOT NULL,retries INT NOT NULL DEFAULT 0,error TEXT NOT NULL DEFAULT '',canary JSONB)`,
 		`INSERT INTO authsome_users(id,app_id,email)VALUES('user-a','app','user-a@example.com'),('user-b','app','user-b@example.com')`,
 		`INSERT INTO authsome_members(org_id,user_id)VALUES('org-a','user-a'),('org-b','user-b')`,
 		`INSERT INTO loomplane_projects(id,org_id)VALUES('project-a','org-a'),('project-b','org-b')`,

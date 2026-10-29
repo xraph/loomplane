@@ -116,7 +116,7 @@ func (s *Service) wirePayload(item *outboxItem) ([]byte, error) {
 		return s.modelBudgetWire(item)
 	case kindRenewal, kindRegistration:
 		return s.domainWire(item)
-	case KindPlanWaiting, KindPlanDecided:
+	case KindPlanWaiting, KindPlanDecided, KindReleaseRolledBack, KindReleaseRevertFailed, KindReleaseProgress:
 		// The trigger wrote the wire payload as the row's own.
 		return item.payload, nil
 	default:
@@ -163,6 +163,8 @@ func (s *Service) process(ctx context.Context, item *outboxItem) error {
 		build = domainMessage
 	case KindPlanWaiting, KindPlanDecided:
 		build = func(i *outboxItem) (*outboxMessage, error) { return s.planMessage(ctx, i) }
+	case KindReleaseRolledBack, KindReleaseRevertFailed, KindReleaseProgress:
+		build = func(i *outboxItem) (*outboxMessage, error) { return s.releaseMessage(ctx, i) }
 	}
 	d, err := build(item)
 	if err != nil {
