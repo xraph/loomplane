@@ -187,7 +187,7 @@ func TestPlatformPreviewRefusesPrivateServicesAndOtherPorts(t *testing.T) {
 		{"private without a port", "false", "", "This service is private on App Platform, so no hostname can reach it. Make it public in the manifest and deploy it first."},
 	} {
 		err := checkPlatformService(c.public, c.port, 8080)
-		if !errors.Is(err, ErrInvalid) || err.Error() != ErrInvalid.Error()+": "+c.want {
+		if !errors.Is(err, ErrInvalid) || err.Error() != c.want {
 			t.Fatalf("%s: %v", c.name, err)
 		}
 	}
@@ -709,4 +709,45 @@ func TestRouteStatusReadsAZeroCertificateExpiryAsReady(t *testing.T) {
 	if status := DeriveRouteStatus(route, zone, nil, now); status.Certificate != DomainRenewing {
 		t.Fatalf("about to expire: %+v", status)
 	}
+}
+
+// A refusal the platform gives, or that the service's binding gives when it
+// is resolved again, reaches the operation in its own words.
+func TestPlatformRouteRefusalsKeepTheirSentence(t *testing.T) {
+	t.Run("the platform's", func(t *testing.T) {
+		svc, st, _, _, _ := platformApplyFixture(t, "www.example.com", subdomainRecords())
+		f, adapter := newFakeDOApp(t, map[string]any{"id": "app-1", "spec": map[string]any{"name": "web"}, "active_deployment": map[string]any{"id": "dep-prev", "phase": "ACTIVE"}})
+		f.updated, f.builtCommit, f.phase = "dep-1", "ffffffffffffffffffffffffffffffffffffffff", "BUILDING"
+		dns, err := svc.Adapters.DNS("digitalocean")
+		if err != nil {
+			t.Fatal(err)
+		}
+		registry := NewAdapters()
+		if err = registry.RegisterDNS("digitalocean", dns); err != nil {
+			t.Fatal(err)
+		}
+		if err = registry.RegisterPlatform("digitalocean", adapter); err != nil {
+			t.Fatal(err)
+		}
+		svc.Adapters = registry
+		st.commit = platformApproved
+		if err = svc.ReconcileRoute(t.Context(), "org", st.op.ID, nil); err != nil {
+			t.Fatal(err)
+		}
+		want := "App Platform started a deployment of a newer commit than the reviewed one. Deploy the service, then retry the hostname."
+		if st.op.Status != "failed" || st.op.Message != want {
+			t.Fatalf("operation %s: %q", st.op.Status, st.op.Message)
+		}
+	})
+	t.Run("the binding's", func(t *testing.T) {
+		svc, st, platform, _, _ := platformApplyFixture(t, "www.example.com", subdomainRecords())
+		refusing := refusingStore{st, checkPlatformService("false", "8080", 8080)}
+		svc.Store, svc.Domains = refusing, refusing
+		if err := svc.ReconcileRoute(t.Context(), "org", st.op.ID, nil); err != nil {
+			t.Fatal(err)
+		}
+		if st.op.Status != "failed" || st.op.Message != platformPrivateService || len(platform.calls) != 0 {
+			t.Fatalf("operation %s: %q, calls %q", st.op.Status, st.op.Message, platform.calls)
+		}
+	})
 }

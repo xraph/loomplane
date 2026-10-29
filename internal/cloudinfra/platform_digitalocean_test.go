@@ -155,7 +155,7 @@ func TestAppPlatformRecordsForSubdomainAndApex(t *testing.T) {
 func TestAppPlatformRecordsNeedAnAddress(t *testing.T) {
 	_, a := newFakeDOApp(t, map[string]any{"id": "app-1", "spec": map[string]any{"name": "web"}})
 	_, err := a.Records(t.Context(), doAppCred(), doAppBinding(), "app.example.com", false)
-	if !errors.Is(err, ErrConflict) || !strings.Contains(err.Error(), "App Platform hasn't given this app an address yet. Deploy it, then add the hostname.") {
+	if !errors.Is(err, ErrConflict) || err.Error() != "App Platform hasn't given this app an address yet. Deploy it, then add the hostname." {
 		t.Fatalf("err = %v", err)
 	}
 }
@@ -211,8 +211,8 @@ func TestAppPlatformAttachCancelsAnUnreviewedDeploymentBeforeItIsLive(t *testing
 	f, a := newFakeDOApp(t, map[string]any{"id": "app-1", "spec": map[string]any{"name": "web"}, "active_deployment": map[string]any{"id": "dep-prev", "phase": "ACTIVE"}})
 	f.updated, f.builtCommit, f.phase = "dep-1", "ffffffffffffffffffffffffffffffffffffffff", "BUILDING"
 	err := a.Attach(t.Context(), doAppCred(), doAppBinding(), "app.example.com", platformApproved)
-	want := "App Platform started a deployment of a newer commit than the reviewed one. Deploy the service to finish adding app.example.com."
-	if !errors.Is(err, ErrConflict) || !strings.Contains(err.Error(), want) {
+	want := "App Platform started a deployment of a newer commit than the reviewed one. Deploy the service, then retry the hostname."
+	if !errors.Is(err, ErrConflict) || err.Error() != want {
 		t.Fatalf("err = %v", err)
 	}
 	if len(f.canceled) != 1 || !strings.Contains(f.canceled[0], "dep-1") || len(f.rollbacks) != 0 {
@@ -227,7 +227,7 @@ func TestAppPlatformAttachRollsBackAnUnreviewedDeploymentThatWentLive(t *testing
 	f, a := newFakeDOApp(t, map[string]any{"id": "app-1", "spec": map[string]any{"name": "web"}, "active_deployment": map[string]any{"id": "dep-prev", "phase": "ACTIVE"}})
 	f.updated, f.builtCommit = "dep-1", "ffffffffffffffffffffffffffffffffffffffff"
 	err := a.Attach(t.Context(), doAppCred(), doAppBinding(), "app.example.com", platformApproved)
-	if !errors.Is(err, ErrConflict) || !strings.Contains(err.Error(), "Deploy the service to finish adding app.example.com.") {
+	if !errors.Is(err, ErrConflict) || err.Error() != appCommitRefusal {
 		t.Fatalf("err = %v", err)
 	}
 	if len(f.canceled) != 0 || len(f.rollbacks) != 1 || f.rollbacks[0] != "dep-prev" {
@@ -239,7 +239,8 @@ func TestAppPlatformAttachWithNothingToRollBackToSaysSo(t *testing.T) {
 	f, a := newFakeDOApp(t, map[string]any{"id": "app-1", "spec": map[string]any{"name": "web"}})
 	f.updated, f.builtCommit = "dep-1", "ffffffffffffffffffffffffffffffffffffffff"
 	err := a.Attach(t.Context(), doAppCred(), doAppBinding(), "app.example.com", platformApproved)
-	if !errors.Is(err, ErrConflict) || len(f.canceled) != 0 || len(f.rollbacks) != 0 {
+	want := "App Platform deployed a newer commit than the reviewed one, and there's nothing to roll the app back to. Deploy the service, then retry the hostname."
+	if !errors.Is(err, ErrConflict) || err.Error() != want || len(f.canceled) != 0 || len(f.rollbacks) != 0 {
 		t.Fatalf("err %v, canceled %v, rollbacks %v", err, f.canceled, f.rollbacks)
 	}
 }
@@ -294,7 +295,7 @@ func TestAppPlatformDetachRollsBackAnUnreviewedDeploymentThatWentLive(t *testing
 	}}})
 	f.updated, f.builtCommit = "dep-1", "ffffffffffffffffffffffffffffffffffffffff"
 	err := a.Detach(t.Context(), doAppCred(), doAppBinding(), "app.example.com", platformApproved)
-	if !errors.Is(err, ErrConflict) || !strings.Contains(err.Error(), "finish removing app.example.com") {
+	if !errors.Is(err, ErrConflict) || err.Error() != appCommitRefusal {
 		t.Fatalf("err = %v", err)
 	}
 	if len(f.canceled) != 0 || len(f.rollbacks) != 1 || f.rollbacks[0] != "dep-prev" {

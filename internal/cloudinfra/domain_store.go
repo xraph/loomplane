@@ -291,7 +291,7 @@ func scanPlatformRouteBinding(row pgx.Row, port int) (RouteBinding, error) {
 		return out, storeError(err)
 	}
 	if out.ExternalID == "" {
-		return out, fmt.Errorf("%w: %s", ErrConflict, platformNoApp)
+		return out, platformRefusal(ErrConflict, platformNoApp)
 	}
 	return out, checkPlatformService(public, servicePort, port)
 }

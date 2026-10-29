@@ -20,7 +20,12 @@ func newAppPlatformDomains(client *digitalocean.Client) *appPlatformDomains {
 	return &appPlatformDomains{client: client}
 }
 
-const appNoAddress = "App Platform hasn't given this app an address yet. Deploy it, then add the hostname."
+// Refusals the adapter gives. A deployment of another commit is stopped,
+// and the service's own deploy puts the reviewed commit back.
+const (
+	appNoAddress     = "App Platform hasn't given this app an address yet. Deploy it, then add the hostname."
+	appCommitRefusal = "App Platform started a deployment of a newer commit than the reviewed one. Deploy the service, then retry the hostname."
+)
 
 var _ PlatformDomains = (*appPlatformDomains)(nil)
 
@@ -41,7 +46,7 @@ func (a *appPlatformDomains) Records(ctx context.Context, cred provider.Infrastr
 	}
 	host := ingressHost(app.DefaultIngress)
 	if host == "" {
-		return nil, fmt.Errorf("%w: %s", ErrConflict, appNoAddress)
+		return nil, platformRefusal(ErrConflict, appNoAddress)
 	}
 	return []PlatformRecord{{Type: "CNAME", Value: host}}, nil
 }
@@ -76,7 +81,7 @@ func (a *appPlatformDomains) Attach(ctx context.Context, cred provider.Infrastru
 	if app == nil {
 		return appLiveCommit(before, hostname, reviewedCommit)
 	}
-	return a.settle(ctx, cred, b, before, app, hostname, "adding", reviewedCommit)
+	return a.settle(ctx, cred, b, before, app, reviewedCommit)
 }
 
 func (a *appPlatformDomains) Detach(ctx context.Context, cred provider.InfrastructureCredential, b RouteBinding, hostname, reviewedCommit string) error {
@@ -104,7 +109,7 @@ func (a *appPlatformDomains) Detach(ctx context.Context, cred provider.Infrastru
 	if app == nil {
 		return nil
 	}
-	return a.settle(ctx, cred, b, before, app, hostname, "removing", reviewedCommit)
+	return a.settle(ctx, cred, b, before, app, reviewedCommit)
 }
 
 // change reads the app and writes back the spec edit makes of it, holding
@@ -139,7 +144,7 @@ func (a *appPlatformDomains) change(ctx context.Context, cred provider.Infrastru
 // is, and the spec change stays for the service's next deploy to carry.
 // before is the app as it was read just ahead of the update, for the
 // deployment to roll back to.
-func (a *appPlatformDomains) settle(ctx context.Context, cred provider.InfrastructureCredential, b RouteBinding, before, app *digitalocean.App, hostname, verb, reviewedCommit string) error {
+func (a *appPlatformDomains) settle(ctx context.Context, cred provider.InfrastructureCredential, b RouteBinding, before, app *digitalocean.App, reviewedCommit string) error {
 	if app.PendingDeployment == nil && app.InProgressDeployment == nil {
 		return nil
 	}
@@ -154,7 +159,7 @@ func (a *appPlatformDomains) settle(ctx context.Context, cred provider.Infrastru
 	if !errors.As(err, &mismatch) {
 		return err
 	}
-	refused := appCommitRefusal(verb, hostname)
+	refused := platformRefusal(ErrConflict, appCommitRefusal)
 	live := mismatch.Deployment != nil && mismatch.Deployment.Phase == digitalocean.PhaseActive
 	if !live {
 		if cancelErr := a.client.CancelDeployment(ctx, cred.Token, b.ExternalID, own.ID); cancelErr != nil {
@@ -167,17 +172,17 @@ func (a *appPlatformDomains) settle(ctx context.Context, cred provider.Infrastru
 			return getErr
 		}
 		if d.Phase != digitalocean.PhaseActive {
-			return fmt.Errorf("%w: %s", ErrConflict, refused)
+			return refused
 		}
 	}
 	// It went live, so cancelling does nothing: put the app back.
 	if before.ActiveDeployment == nil {
-		return fmt.Errorf("%w: %s", ErrConflict, "App Platform deployed a newer commit than the reviewed one, and there's nothing to roll the app back to. Redeploy an approved plan.")
+		return platformRefusal(ErrConflict, "App Platform deployed a newer commit than the reviewed one, and there's nothing to roll the app back to. Deploy the service, then retry the hostname.")
 	}
 	if rollbackErr := a.client.Rollback(ctx, cred.Token, b.ExternalID, before.ActiveDeployment.ID); rollbackErr != nil {
 		return fmt.Errorf("rolling back the app after a deployment of a newer commit than the reviewed one: %w", rollbackErr)
 	}
-	return fmt.Errorf("%w: %s", ErrConflict, refused)
+	return refused
 }
 
 func (a *appPlatformDomains) Status(ctx context.Context, cred provider.InfrastructureCredential, b RouteBinding, hostname string) (PlatformDomainStatus, error) {
@@ -261,10 +266,6 @@ func appLiveCommit(app *digitalocean.App, hostname, reviewedCommit string) error
 		return &routeNoticeError{err: ErrPending, message: "App Platform is running a different commit than the reviewed one. Loomplane checks again once this service's deploy finishes. If none is running, deploy the service."}
 	}
 	return nil
-}
-
-func appCommitRefusal(verb, hostname string) string {
-	return "App Platform started a deployment of a newer commit than the reviewed one. Deploy the service to finish " + verb + " " + hostname + "."
 }
 
 // appDeploying holds a change to an app's domains until its current

@@ -53,7 +53,8 @@ type RouteCost struct {
 }
 
 // Refusals for routes App Platform can't serve. The private and port ones
-// come from ResolveRouteBinding, so they hold on every recheck.
+// come from ResolveRouteBinding, so they hold on every recheck, and reach
+// the operation through platformRefusal.
 const (
 	platformPrivateService = "This service is private on App Platform, so no hostname can reach it. Make it public in the manifest and deploy it first."
 	platformBlockedPaths   = "Blocked paths aren't supported on App Platform yet."
@@ -105,18 +106,24 @@ func routeReceipts(list []provider.DNSRecord, single *provider.DNSRecord) []prov
 	return nil
 }
 
+// platformRefusal is a refusal whose sentence is its whole text, so a
+// preview and an operation both show it as written.
+func platformRefusal(kind error, sentence string) error {
+	return &routeNoticeError{err: kind, message: sentence}
+}
+
 // checkPlatformService refuses a service App Platform gives no public
 // address, or a port other than the one it routes. public and port are the
 // binding config's, as text.
 func checkPlatformService(public, port string, want int) error {
 	if public != "true" {
-		return fmt.Errorf("%w: %s", ErrInvalid, platformPrivateService)
+		return platformRefusal(ErrInvalid, platformPrivateService)
 	}
 	if port == "" {
-		return fmt.Errorf("%w: %s", ErrInvalid, platformNoPort)
+		return platformRefusal(ErrInvalid, platformNoPort)
 	}
 	if port != strconv.Itoa(want) {
-		return fmt.Errorf("%w: %s", ErrInvalid, "App Platform routes a hostname only to this service's public port, "+port+".")
+		return platformRefusal(ErrInvalid, "App Platform routes a hostname only to this service's public port, "+port+".")
 	}
 	return nil
 }

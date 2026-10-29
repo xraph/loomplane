@@ -87,7 +87,7 @@ What happens next depends on who runs the domain's DNS. If Loomplane manages it,
 
 Loomplane adds the hostname to the app as an alias domain, which leaves the app's own address alone, and DigitalOcean issues the certificate. The hostname shows **Issuing** until DigitalOcean reports the certificate active.
 
-If the app is mid-deployment when you add the hostname, Loomplane waits for that deployment to finish first. Adding a hostname can make App Platform start a deployment of its own. Loomplane checks that it built the commit you reviewed. If it didn't, Loomplane cancels it, or rolls back if it already went live, and asks you to deploy the service.
+If the app is mid-deployment when you add the hostname, Loomplane waits for that deployment to finish first. Adding a hostname can make App Platform start a deployment of its own. Loomplane checks that it built the commit you reviewed. If it didn't, Loomplane cancels it, or rolls back if it already went live, and asks you to deploy the service and then retry the hostname. If the app runs a different commit from the one you reviewed, the hostname waits until the service's deploy finishes.
 
 Deploys keep the app's hostnames, including any you added in DigitalOcean's control panel.
 

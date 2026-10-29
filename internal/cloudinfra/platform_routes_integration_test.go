@@ -139,7 +139,7 @@ func TestPlatformRouteBindingQuery(t *testing.T) {
 	refused := func(name string, in RouteInput, sentence string) {
 		t.Helper()
 		b, resolveErr := st.ResolveRouteBinding(ctx, "org", "shop", in)
-		if !errors.Is(resolveErr, ErrInvalid) || resolveErr.Error() != ErrInvalid.Error()+": "+sentence {
+		if !errors.Is(resolveErr, ErrInvalid) || resolveErr.Error() != sentence {
 			t.Fatalf("%s: %+v %v", name, b, resolveErr)
 		}
 	}
