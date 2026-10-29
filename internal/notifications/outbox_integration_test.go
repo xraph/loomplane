@@ -86,6 +86,12 @@ func notificationDatabase(t *testing.T) *grove.DB {
 		`CREATE TABLE loomplane_environments(id TEXT PRIMARY KEY,org_id TEXT NOT NULL,project_id TEXT NOT NULL,name TEXT NOT NULL DEFAULT '',kind TEXT NOT NULL DEFAULT 'staging')`,
 		`CREATE TABLE authsome_organizations(id TEXT PRIMARY KEY,name TEXT NOT NULL DEFAULT '')`,
 		`CREATE TABLE loomplane_deployments(id TEXT PRIMARY KEY,org_id TEXT NOT NULL,project_id TEXT NOT NULL,environment_id TEXT NOT NULL,plan_id TEXT NOT NULL,started_by TEXT NOT NULL,status TEXT NOT NULL,retries INT NOT NULL DEFAULT 0,error TEXT NOT NULL DEFAULT '',canary JSONB)`,
+		// loomplane_append_event stands in for the realtime migration's
+		// function: same arguments, rows land in test_events.
+		`CREATE TABLE test_events(org_id TEXT NOT NULL,project_id TEXT NOT NULL DEFAULT '',type TEXT NOT NULL,entity_id TEXT NOT NULL DEFAULT '',data JSONB NOT NULL)`,
+		`CREATE FUNCTION loomplane_append_event(org TEXT,project TEXT,event_type TEXT,entity TEXT,payload JSONB) RETURNS BIGINT LANGUAGE plpgsql AS $$ BEGIN
+			IF org IS NULL OR org='' THEN RAISE EXCEPTION 'invalid realtime event'; END IF;
+			INSERT INTO test_events(org_id,project_id,type,entity_id,data) VALUES (org,project,event_type,entity,payload); RETURN 1; END $$`,
 		`INSERT INTO authsome_users(id,app_id,email)VALUES('user-a','app','user-a@example.com'),('user-b','app','user-b@example.com')`,
 		`INSERT INTO authsome_members(org_id,user_id)VALUES('org-a','user-a'),('org-b','user-b')`,
 		`INSERT INTO loomplane_projects(id,org_id)VALUES('project-a','org-a'),('project-b','org-b')`,

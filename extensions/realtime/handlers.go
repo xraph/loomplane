@@ -92,6 +92,31 @@ func (e *Extension) filter(ctx context.Context, p security.Principal, sub Subscr
 	out := []store.Event{}
 	grants := map[string]bool{}
 	for _, event := range events {
+		// A notification belongs to one person. It needs no permission, only
+		// the right recipient, and the recipient never sees the user ID.
+		if strings.HasPrefix(event.Type, "notification.") {
+			var doc map[string]json.RawMessage
+			if err := json.Unmarshal(event.Data, &doc); err != nil {
+				return nil, err
+			}
+			var user string
+			if raw, ok := doc["user_id"]; ok {
+				if err := json.Unmarshal(raw, &user); err != nil {
+					return nil, err
+				}
+			}
+			if user == "" || user != p.UserID {
+				continue
+			}
+			delete(doc, "user_id")
+			data, err := json.Marshal(doc)
+			if err != nil {
+				return nil, err
+			}
+			event.Data = data
+			out = append(out, event)
+			continue
+		}
 		if event.ProjectID != "" && len(sub.ProjectIDs) != 0 && !slices.Contains(sub.ProjectIDs, event.ProjectID) {
 			continue
 		}

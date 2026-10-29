@@ -174,3 +174,24 @@ func TestClusterEventsRequireOrganizationManagement(t *testing.T) {
 		t.Fatalf("project subscriber saw lifecycle event: %+v %v", got, err)
 	}
 }
+
+func TestNotificationEventsReachOnlyTheirRecipient(t *testing.T) {
+	input := []store.Event{{Type: "notification.created", EntityID: "hinb_1", Data: json.RawMessage(`{"id":"hinb_1","org_id":"org_a","user_id":"usr_b"}`)}}
+	// The permission check is skipped: even a principal denied everything
+	// still gets its own notification.
+	e := &Extension{authz: permissionFixture{denied: security.ProjectRead}}
+	got, err := e.filter(t.Context(), security.Principal{OrgID: "org_a", UserID: "usr_a"}, Subscription{}, input)
+	if err != nil || len(got) != 0 {
+		t.Fatalf("another user's notification leaked: %+v %v", got, err)
+	}
+	got, err = e.filter(t.Context(), security.Principal{OrgID: "org_a", UserID: "usr_b"}, Subscription{}, input)
+	if err != nil || len(got) != 1 {
+		t.Fatalf("recipient: %+v %v", got, err)
+	}
+	if string(got[0].Data) != `{"id":"hinb_1","org_id":"org_a"}` {
+		t.Fatalf("data: %s", got[0].Data)
+	}
+	if string(input[0].Data) != `{"id":"hinb_1","org_id":"org_a","user_id":"usr_b"}` {
+		t.Fatal("filter changed the stored event")
+	}
+}

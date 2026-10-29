@@ -29,6 +29,13 @@ type Notification struct {
 	Status      string    `json:"status"`
 	EmailStatus string    `json:"email_status"`
 }
+
+// NotificationCreated is the stream event that says a new inbox item exists.
+// It carries no text: the app refetches the list.
+type NotificationCreated struct {
+	ID    string `json:"id"`
+	OrgID string `json:"org_id"`
+}
 type NotificationList struct {
 	Items       []Notification `json:"items"`
 	MailEnabled bool           `json:"mail_enabled"`

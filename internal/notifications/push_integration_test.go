@@ -629,3 +629,44 @@ func TestTestPushGatewayRefusal(t *testing.T) {
 		t.Fatalf("err: %v", err)
 	}
 }
+
+func TestInboxRowAppendsNotificationCreated(t *testing.T) {
+	svc, _, _, _ := pushRig(t)
+	ctx := t.Context()
+	failDeployment(t, svc, "env-a")
+	if err := svc.drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	list, err := svc.List(ctx, security.Principal{OrgID: "org-a", UserID: "user-a"})
+	if err != nil || len(list.Items) != 1 {
+		t.Fatalf("inbox: %+v %v", list, err)
+	}
+	var n int
+	var org, entity, data string
+	if err = svc.pg.QueryRow(ctx, `SELECT count(*),coalesce(max(org_id),''),coalesce(max(entity_id),''),coalesce(max(data::text),'') FROM test_events WHERE type='notification.created'`).Scan(&n, &org, &entity, &data); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 || org != "org-a" || entity != list.Items[0].ID {
+		t.Fatalf("events: %d %s %s", n, org, entity)
+	}
+	var payload map[string]string
+	if err = json.Unmarshal([]byte(data), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload["id"] != list.Items[0].ID || payload["org_id"] != "org-a" || payload["user_id"] != "user-a" || len(payload) != 3 {
+		t.Fatalf("payload: %v", payload)
+	}
+	// A recipient who got no inbox item adds no event.
+	err = Enqueue(ctx, svc.pg, Notice{Kind: KindAgentReport, OrgID: "org-a", ProjectID: "project-a", SubjectID: "report_1:taken", Recipients: []string{"user-a"},
+		Title: "Ada took the report", Body: "Ada took over.", Path: "/agent/reports/report_1", PushOnly: true,
+		Push: &Push{Class: ClassUpdate, Urgency: driver.UrgencyPassive, Category: CategoryUpdate, Actions: []string{ActionOpen}, Collapse: "report:report_1", Production: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = svc.drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err = svc.pg.QueryRow(ctx, `SELECT count(*) FROM test_events WHERE type='notification.created'`).Scan(&n); err != nil || n != 1 {
+		t.Fatalf("push-only notice appended an event: %d %v", n, err)
+	}
+}
