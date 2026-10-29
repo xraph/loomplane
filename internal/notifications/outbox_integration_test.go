@@ -101,9 +101,10 @@ func notificationDatabase(t *testing.T) *grove.DB {
 	}
 	// The cloud_sign_in and notification_kinds migrations both add the
 	// outbox's kind column. This helper only runs the notifications
-	// migration, so it runs notification_kinds as well.
+	// migration, so it runs notification_kinds as well, then
+	// generic_notices, which adds the subject and the agent email switch.
 	for _, m := range migrations.Group().Migrations() {
-		if m.Name == "notification_kinds" {
+		if m.Name == "notification_kinds" || m.Name == "generic_notices" {
 			if err = m.Up(ctx, executor); err != nil {
 				t.Fatal(err)
 			}
@@ -497,7 +498,8 @@ func TestPostgresEmailExhaustionRecoveryAndDeliveryTimeOptOut(t *testing.T) {
 	if err = svc.Health(ctx); err != nil {
 		t.Fatalf("health did not recover: %v", err)
 	}
-	if _, err = svc.SetPreferences(ctx, p, PreferenceInput{DeploymentEmail: false}); err != nil {
+	off := false
+	if _, err = svc.SetPreferences(ctx, p, PreferenceInput{DeploymentEmail: &off}); err != nil {
 		t.Fatal(err)
 	}
 	insert("deployment-opt-out")
@@ -565,7 +567,8 @@ func TestRenewalOutboxDeliversToCloudManagersOnly(t *testing.T) {
 	manager := security.Principal{OrgID: "org-a", UserID: "user-a"}
 	// The renewal email is about the user's money, so it ignores the
 	// deployment email preference.
-	if _, err := svc.SetPreferences(ctx, manager, PreferenceInput{DeploymentEmail: false}); err != nil {
+	off := false
+	if _, err := svc.SetPreferences(ctx, manager, PreferenceInput{DeploymentEmail: &off}); err != nil {
 		t.Fatal(err)
 	}
 	notice := RenewalNotice{OrgID: "org-a", RegistrationID: "reg_1", Domain: "acme.dev", RenewsOn: time.Date(2026, 11, 30, 0, 0, 0, 0, time.UTC), Currency: "USD", RenewalCost: "10.11"}

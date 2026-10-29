@@ -33,6 +33,7 @@ type DeploymentPayload struct {
 }
 type outboxItem struct {
 	id, org, user, owner   string
+	subject                string
 	kind                   string
 	payload, wire          []byte
 	inboxDone, webhookDone bool
@@ -72,7 +73,7 @@ func (s *Service) drain(ctx context.Context) error {
 }
 func (s *Service) claim(ctx context.Context) (*outboxItem, error) {
 	item := &outboxItem{owner: rand.Text()}
-	err := s.pg.QueryRow(ctx, `UPDATE loomplane_notification_outbox SET lease_owner=$1,lease_until=clock_timestamp()+interval '2 minutes',attempts=attempts+1 WHERE id=(SELECT id FROM loomplane_notification_outbox WHERE completed_at IS NULL AND attempts<10 AND next_attempt_at<=clock_timestamp() AND (lease_until IS NULL OR lease_until<clock_timestamp()) ORDER BY next_attempt_at,created_at,id FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING id,org_id,user_id,kind,payload,wire_payload,inbox_done,webhook_done,email_state,attempts,created_at`, item.owner).Scan(&item.id, &item.org, &item.user, &item.kind, &item.payload, &item.wire, &item.inboxDone, &item.webhookDone, &item.emailState, &item.attempts, &item.created)
+	err := s.pg.QueryRow(ctx, `UPDATE loomplane_notification_outbox SET lease_owner=$1,lease_until=clock_timestamp()+interval '2 minutes',attempts=attempts+1 WHERE id=(SELECT id FROM loomplane_notification_outbox WHERE completed_at IS NULL AND attempts<10 AND next_attempt_at<=clock_timestamp() AND (lease_until IS NULL OR lease_until<clock_timestamp()) ORDER BY next_attempt_at,created_at,id FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING id,org_id,user_id,kind,subject_id,payload,wire_payload,inbox_done,webhook_done,email_state,attempts,created_at`, item.owner).Scan(&item.id, &item.org, &item.user, &item.kind, &item.subject, &item.payload, &item.wire, &item.inboxDone, &item.webhookDone, &item.emailState, &item.attempts, &item.created)
 	return item, err
 }
 
@@ -89,15 +90,21 @@ type outboxMessage struct {
 	// need is the organization permission the notice is sent under, when
 	// project read isn't it: ai:manage for a model's budget notice.
 	need *security.Permission
+	// generic marks a notice queued with Enqueue: project read when it has
+	// a project, otherwise membership, then needName when it has one.
+	generic  bool
+	needName string
 }
 
 func (s *Service) wirePayload(item *outboxItem) ([]byte, error) {
 	switch item.kind {
-	case kindDeployment:
+	case KindDeployment:
 	case kindModelBudget:
 		return s.modelBudgetWire(item)
-	default:
+	case kindRenewal, kindRegistration:
 		return s.domainWire(item)
+	default:
+		return s.noticeWire(item)
 	}
 	var payload DeploymentPayload
 	if err := json.Unmarshal(item.payload, &payload); err != nil {
@@ -130,12 +137,14 @@ func (s *Service) process(ctx context.Context, item *outboxItem) error {
 		}
 		item.wire = wire
 	}
-	build := domainMessage
+	build := genericMessage
 	switch item.kind {
-	case kindDeployment:
+	case KindDeployment:
 		build = deploymentMessage
 	case kindModelBudget:
 		build = modelBudgetMessage
+	case kindRenewal, kindRegistration:
+		build = domainMessage
 	}
 	d, err := build(item)
 	if err != nil {
@@ -161,7 +170,7 @@ func (s *Service) process(ctx context.Context, item *outboxItem) error {
 		item.webhookDone = true
 	}
 	p := security.Principal{OrgID: item.org, UserID: item.user}
-	email, authorized, err := s.recipient(ctx, p, d.project, d.need)
+	email, authorized, err := s.recipient(ctx, p, d)
 	if err != nil {
 		return err
 	}
@@ -190,7 +199,7 @@ func (s *Service) process(ctx context.Context, item *outboxItem) error {
 	}
 	enabled := d.alwaysEmail
 	if !enabled {
-		if enabled, err = s.emailPreference(ctx, p); err != nil {
+		if enabled, err = s.emailPreference(ctx, p, item.kind); err != nil {
 			return err
 		}
 	}
@@ -209,9 +218,11 @@ func (s *Service) process(ctx context.Context, item *outboxItem) error {
 // recipient rechecks the grant a notice is sent under: project read for a
 // deployment, organization cloud management for a domain notice, and need
 // when the notice names one, as a model's budget notice does with
-// ai:manage.
-func (s *Service) recipient(ctx context.Context, p security.Principal, project string, need *security.Permission) (address string, authorized bool, err error) {
+// ai:manage. A notice queued with Enqueue needs project read when it has a
+// project, then its own need.
+func (s *Service) recipient(ctx context.Context, p security.Principal, d *outboxMessage) (address string, authorized bool, err error) {
 	var email string
+	project, need := d.project, d.need
 	if project == "" {
 		err = s.pg.QueryRow(ctx, `SELECT u.email FROM authsome_users u JOIN authsome_members m ON m.user_id=u.id WHERE m.org_id=$1 AND u.id=$2 AND u.app_id=$3 AND u.deleted_at IS NULL AND NOT u.banned LIMIT 1`, p.OrgID, p.UserID, s.cfg.Identity.AppID).Scan(&email)
 	} else {
@@ -226,19 +237,38 @@ func (s *Service) recipient(ctx context.Context, p security.Principal, project s
 	if s.authz == nil {
 		return "", false, fmt.Errorf("notifications authorization unavailable")
 	}
-	permission, resource := security.ProjectRead, project
+	type grant struct {
+		permission security.Permission
+		resource   string
+	}
+	var grants []grant
 	switch {
+	case d.generic:
+		if project != "" {
+			grants = append(grants, grant{security.ProjectRead, project})
+		}
+		named, needErr := parseNeed(d.needName)
+		if needErr != nil {
+			return "", false, needErr
+		}
+		if named != nil {
+			grants = append(grants, grant{*named, ""})
+		}
 	case need != nil:
-		permission, resource = *need, ""
+		grants = append(grants, grant{*need, ""})
 	case project == "":
-		permission, resource = security.OrganizationCloudManage, p.OrgID
+		grants = append(grants, grant{security.OrganizationCloudManage, p.OrgID})
+	default:
+		grants = append(grants, grant{security.ProjectRead, project})
 	}
-	err = s.authz.Require(ctx, p, permission, resource)
-	if errors.Is(err, security.ErrForbidden) || errors.Is(err, security.ErrNotMember) {
-		return "", false, nil
-	}
-	if err != nil {
-		return "", false, err
+	for _, g := range grants {
+		err = s.authz.Require(ctx, p, g.permission, g.resource)
+		if errors.Is(err, security.ErrForbidden) || errors.Is(err, security.ErrNotMember) {
+			return "", false, nil
+		}
+		if err != nil {
+			return "", false, err
+		}
 	}
 	return email, true, nil
 }

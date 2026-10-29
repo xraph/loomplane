@@ -169,7 +169,7 @@ func (s *Service) processConnection(ctx context.Context, item *outboxItem) error
 	if item.emailState != "pending" {
 		return nil
 	}
-	enabled, err := s.emailPreference(ctx, p)
+	enabled, err := s.emailPreference(ctx, p, kindConnection)
 	if err != nil {
 		return err
 	}
