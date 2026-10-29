@@ -2,6 +2,7 @@ package digitalocean
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -87,5 +88,46 @@ func TestDOKSCreateBoundedAndRetryAfter(t *testing.T) {
 	cancel()
 	if _, err = c.CreateCluster(ctx, doksAccess(), spec); !errors.Is(err, context.Canceled) || posts != 1 {
 		t.Fatalf("cancelled call: %d %v", posts, err)
+	}
+}
+
+func TestDOKSCreatePoolMarkers(t *testing.T) {
+	spec := provider.ClusterSpec{OperationID: "multi", Name: "cluster", Region: "nyc1", Version: "v1", NetworkID: "network", NodePools: []provider.NodePoolSpec{{Name: "one", Size: "small", Count: 1}, {Name: "two", Size: "small", Count: 1}}}
+	seen := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v2/account" {
+			_, _ = fmt.Fprint(w, `{"account":{"uuid":"account"}}`)
+			return
+		}
+		var body struct {
+			Pools []struct {
+				Tags []string `json:"tags"`
+			} `json:"node_pools"`
+		}
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+			w.WriteHeader(400)
+			return
+		}
+		if len(body.Pools) != 2 {
+			t.Error("missing pools")
+			w.WriteHeader(400)
+			return
+		}
+		for i, pool := range body.Pools {
+			if len(pool.Tags) != 2 || pool.Tags[0] != "loomplane-operation:multi" || pool.Tags[1] != "loomplane-request:"+provider.ClusterPoolRequestDigest(spec, spec.NodePools[i]) {
+				t.Error("pool lacks exact marker", pool)
+			}
+		}
+		if body.Pools[0].Tags[1] == body.Pools[1].Tags[1] {
+			t.Error("pool markers collide")
+		}
+		seen = true
+		_, _ = fmt.Fprint(w, `{"kubernetes_cluster":{"id":"cluster","region":"nyc1","created_at":"2026-10-29T00:00:00Z","status":{"state":"provisioning"}}}`)
+	}))
+	defer server.Close()
+	_, err := New(server.URL).CreateCluster(t.Context(), doksAccess(), spec)
+	if err != nil || !seen {
+		t.Fatal(err, seen)
 	}
 }

@@ -25,10 +25,12 @@ var namespaceRE = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
 
 // Config keeps credentials in REST only. Details contains safe display fields.
 type Config struct {
-	REST      *rest.Config
-	Namespace string
-	Context   string
-	Details   map[string]string
+	// ManagedWorkload is set only after resolving a persisted managed attachment.
+	ManagedWorkload bool
+	REST            *rest.Config
+	Namespace       string
+	Context         string
+	Details         map[string]string
 }
 
 // ParseConfig accepts embedded credentials only, with no ambient loading
@@ -164,6 +166,9 @@ func configFor(rc *rest.Config, contextName, namespace string, caData []byte, se
 			return nil, fmt.Errorf("%w: registry_hostname must be a DNS hostname reachable by cluster nodes", ErrInvalid)
 		}
 		details["registry_hostname"] = host
+		if optionErr := registrySetupOptions(settings, details); optionErr != nil {
+			return nil, optionErr
+		}
 		mode := strings.TrimSpace(settings["registry_setup"])
 		if mode == "" {
 			mode = "automatic"

@@ -2,7 +2,7 @@ package cloudinfra
 
 import (
 	"context"
-	"reflect"
+	"maps"
 	"slices"
 	"time"
 
@@ -13,6 +13,7 @@ func (s *Service) reconcileClusterMaintenance(ctx context.Context, o *ClusterOpe
 	if len(o.Steps) != 2 || o.Input.Maintenance == nil {
 		return ErrInvalid
 	}
+	ctx = s.withClusterMaintenanceFence(ctx, o)
 	m := o.Input.Maintenance
 	if o.Steps[0].State == "pending" {
 		if o.CancelRequested {
@@ -195,7 +196,7 @@ func maintenanceConverged(o *ClusterOperation, observation provider.ClusterObser
 			} else if pool.ID != m.PoolID {
 				continue
 			}
-			if pool.ID == "" || pool.Name != m.Pool.Name || pool.Count != m.Pool.Count || pool.Size != m.Pool.Size || pool.Autoscale != m.Pool.Autoscale || !reflect.DeepEqual(pool.Labels, m.Pool.Labels) || !reflect.DeepEqual(pool.Taints, m.Pool.Taints) {
+			if pool.ID == "" || pool.Name != m.Pool.Name || pool.Count != m.Pool.Count || pool.Size != m.Pool.Size || pool.Autoscale != m.Pool.Autoscale || !maps.Equal(pool.Labels, m.Pool.Labels) || !slices.Equal(pool.Taints, m.Pool.Taints) {
 				return false
 			}
 			matches++

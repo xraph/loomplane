@@ -63,9 +63,14 @@ func (s *Service) clusterAuthority(ctx context.Context, p security.Principal, cl
 			return nil, access, err
 		}
 	}
-	if maintenanceKind(in.Kind) {
+	if maintenanceKind(in.Kind) || in.Kind == "adopt-external" || in.Kind == "adopt-managed" {
 		if err := s.Authz.Require(ctx, p, security.ClusterManage, ""); err != nil {
 			return nil, access, err
+		}
+	}
+	if retirementKind(in.Kind) {
+		if checkErr := s.Authz.Require(ctx, p, security.ClusterDelete, ""); checkErr != nil {
+			return nil, access, checkErr
 		}
 	}
 	profile, err := s.authorize(ctx, p, cloud)
@@ -74,6 +79,9 @@ func (s *Service) clusterAuthority(ctx context.Context, p security.Principal, cl
 	}
 	if profile.Revision != in.CloudRevision {
 		return nil, access, ErrConflict
+	}
+	if checkErr := s.Authz.Require(ctx, p, security.CloudAccountManage, ""); checkErr != nil {
+		return nil, access, checkErr
 	}
 	reader, access, err := s.clusterAccount(ctx, p, in.ConnectionID, provider.ClusterDiscovery)
 	if err != nil {
@@ -176,6 +184,11 @@ func clusterVector(in ClusterInput, options provider.ClusterOptions) (ResourceVe
 	return v, nil
 }
 func clusterDigest(in ClusterInput) string {
+	if in.Retirement != nil {
+		copyInput := *in.Retirement
+		copyInput.Inventory.ObservedAt = time.Time{}
+		in.Retirement = &copyInput
+	}
 	raw, err := json.Marshal(in)
 	if err != nil {
 		return ""
@@ -185,6 +198,9 @@ func clusterDigest(in ClusterInput) string {
 }
 
 func (s *Service) PreviewCluster(ctx context.Context, p security.Principal, cloud string, in ClusterInput) (*ClusterOperation, error) {
+	if in.PriceDigest != "" || in.BudgetReview != nil || in.EnvelopeReview != nil {
+		return nil, ErrInvalid
+	}
 	if err := s.clusterEnabled(); err != nil {
 		return nil, err
 	}
@@ -199,6 +215,27 @@ func (s *Service) PreviewCluster(ctx context.Context, p security.Principal, clou
 	var nodeCost int64
 	var unknownCosts []string
 	switch in.Kind {
+	case "retire-cluster", "detach-runtime":
+		if in.Retirement == nil || in.Retirement.ReviewDigest == "" || in.Attachment != nil || in.Maintenance != nil || !reflect.DeepEqual(in.Spec, provider.ClusterSpec{}) {
+			return nil, ErrInvalid
+		}
+		review, checkErr := s.prepareClusterRetirement(ctx, p, cloud, in, reader, access, "")
+		if checkErr != nil {
+			return nil, checkErr
+		}
+		if len(review.Blockers) > 0 {
+			return nil, &provider.ClusterLifecycleBlockedError{Reason: review.Blockers[0]}
+		}
+		if review.Digest != in.Retirement.ReviewDigest {
+			return nil, ErrConflict
+		}
+		if in.Kind == "retire-cluster" {
+			if checkErr := s.Adapters.Require(in.Provider, provider.ClusterDeletion); checkErr != nil {
+				return nil, checkErr
+			}
+		}
+		in.Retirement.Inventory = review.Inventory
+		in.Retirement.ResourceFingerprint = review.ResourceFingerprint
 	case "node-pool-create", "node-pool-update", "node-pool-delete", "cluster-upgrade", "cluster-configure":
 		if in.Maintenance != nil && (in.Maintenance.ObservationDigest != "" || in.Maintenance.Pool != nil && (in.Maintenance.Pool.OperationID != "" || in.Maintenance.Pool.RequestDigest != "")) {
 			return nil, ErrInvalid
@@ -210,6 +247,9 @@ func (s *Service) PreviewCluster(ctx context.Context, p security.Principal, clou
 		if in.Kind == "node-pool-create" {
 			in.Maintenance.Pool.OperationID = id
 			in.Maintenance.Pool.RequestDigest = maintenanceHash(in.Maintenance.Pool)
+			if checkErr := prepareMaintenanceEnvelope(&in, capacity); checkErr != nil {
+				return nil, checkErr
+			}
 		}
 	case "create":
 		if in.ResourceID != "" || in.Ref != (provider.ClusterRef{}) || in.ResourceRevision != 0 || in.Spec.OperationID != "" {
@@ -240,9 +280,18 @@ func (s *Service) PreviewCluster(ctx context.Context, p security.Principal, clou
 		if err != nil {
 			return nil, err
 		}
+		estimate, estimateErr := s.clusterMoney(ctx, in, options, reader, access)
+		if estimateErr != nil {
+			return nil, estimateErr
+		}
+		in.costEvidence = &estimate
 		in.Spec.OperationID = id
 		in.Spec.ReconcileOnly = false
 		in.OptionsCheckedAt = options.CheckedAt
+		in.EnvelopeReview, err = prepareCreateEnvelopes(in, options)
+		if err != nil {
+			return nil, err
+		}
 		if validator, ok := reader.(provider.ClusterSpecValidator); ok {
 			if checkErr := validator.ValidateClusterSpec(in.Spec); checkErr != nil {
 				return nil, checkErr
@@ -265,14 +314,29 @@ func (s *Service) PreviewCluster(ctx context.Context, p security.Principal, clou
 		return nil, ErrInvalid
 	}
 	now := s.now().UTC()
+	if in.costEvidence != nil {
+		in.PriceDigest = in.costEvidence.PriceDigest
+	}
 	digest := clusterDigest(in)
 	if digest == "" {
 		return nil, ErrInvalid
 	}
 	o := &ClusterOperation{ID: id, OrgID: p.OrgID, CloudID: cloud, Kind: in.Kind, SchemaVersion: 1, Input: in, Digest: digest, Revision: 1, Status: "preview", Principal: p, CapacityTarget: capacity, EstimatedNodeHourlyMicroUSD: nodeCost, UnknownCosts: unknownCosts, CreatedAt: now, UpdatedAt: now, ExpiresAt: now.Add(15 * time.Minute), Steps: []ClusterStep{{Name: "provider", State: "pending", RequestDigest: digest}, {Name: "enrollment", State: "pending", RequestDigest: digest}}}
+	o.MoneyEstimate = in.costEvidence
 	if maintenanceKind(in.Kind) {
 		o.ResourceID = in.ResourceID
 		o.Steps[1].Name = "verification"
+	}
+	if retirementKind(in.Kind) {
+		o.ResourceID = in.ResourceID
+		o.Steps[1].Name = "verification"
+		if in.Kind == "detach-runtime" {
+			o.Steps = []ClusterStep{{Name: "disable", State: "pending", RequestDigest: digest}}
+			for _, obj := range in.Retirement.Attachment.RBACObjects {
+				o.Steps = append(o.Steps, ClusterStep{Name: obj.Kind + "/" + obj.Namespace + "/" + obj.Name, State: "pending", RequestDigest: digest})
+			}
+			o.Steps = append(o.Steps, ClusterStep{Name: "vault", State: "pending", RequestDigest: digest})
+		}
 	}
 	if checkErr := s.Clusters.CreateClusterPreview(ctx, o); checkErr != nil {
 		return nil, checkErr
@@ -345,6 +409,32 @@ func (s *Service) ApplyCluster(ctx context.Context, p security.Principal, cloud,
 		}
 		if options.Digest != o.Input.OptionsDigest || s.now().Sub(options.CheckedAt) >= 5*time.Minute || options.CheckedAt.After(s.now()) {
 			return nil, ErrConflict
+		}
+		if o.Input.PriceDigest != "" {
+			estimate, estimateErr := s.clusterMoney(call, o.Input, options, reader, access)
+			if estimateErr != nil {
+				return nil, estimateErr
+			}
+			if o.MoneyEstimate == nil || estimate.PriceDigest != o.Input.PriceDigest || estimate.PriceDigest != o.MoneyEstimate.PriceDigest {
+				return nil, ErrConflict
+			}
+			o.Input.costEvidence = &estimate
+		}
+	} else if retirementKind(o.Kind) {
+		review, checkErr := s.prepareClusterRetirement(ctx, p, cloud, o.Input, reader, access, o.ID)
+		if checkErr != nil {
+			return nil, checkErr
+		}
+		if len(review.Blockers) > 0 {
+			return nil, ErrBusy
+		}
+		if review.Digest != o.Input.Retirement.ReviewDigest {
+			return nil, ErrConflict
+		}
+		if o.Kind == "retire-cluster" {
+			if checkErr := s.Adapters.Require(o.Input.Provider, provider.ClusterDeletion); checkErr != nil {
+				return nil, checkErr
+			}
 		}
 	} else if maintenanceKind(o.Kind) {
 		capacity, cost, _, checkErr := s.prepareMaintenance(ctx, p, cloud, &o.Input, reader, access)
@@ -440,26 +530,12 @@ func (s *Service) RecoverClusterOperations(ctx context.Context) error {
 
 // clusterCosts estimates nodes only. Unknown charges stay itemized in the review.
 func clusterCosts(in ClusterInput, options provider.ClusterOptions, limit int64) (nodeMicroUSD int64, unknownCosts []string, err error) {
-	var total int64
-	unknown := []string{"control_plane", "network_egress", "load_balancers", "persistent_storage"}
-	for _, pool := range in.Spec.NodePools {
-		for _, size := range options.NodeSizeFacts {
-			if size.ID != pool.Size {
-				continue
-			}
-			if size.HourlyUSD == nil {
-				unknown = append(unknown, "nodes:"+pool.Name)
-				continue
-			}
-			amount := math.Ceil(*size.HourlyUSD * 1_000_000 * float64(pool.Count))
-			if math.IsNaN(amount) || math.IsInf(amount, 0) || amount < 0 || amount >= float64(math.MaxInt64) {
-				return 0, nil, ErrInvalid
-			}
-			if total > limit || int64(amount) > limit-total {
-				return 0, nil, ErrInvalid
-			}
-			total += int64(amount)
-		}
+	estimate, err := clusterNodeMoney(in, options, 1)
+	if err != nil {
+		return 0, nil, err
 	}
-	return total, unknown, nil
+	if limit < 0 || estimate.HourlyMicroUSD > limit {
+		return 0, nil, ErrInvalid
+	}
+	return estimate.HourlyMicroUSD, estimate.MissingComponents, nil
 }

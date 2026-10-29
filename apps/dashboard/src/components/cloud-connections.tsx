@@ -39,6 +39,7 @@ import type {
 } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
 import { CloudGlyph } from "@/components/cloud-glyph"
+import { RegistryOperations } from "@/components/registry-operations"
 import {
   ClusterBuildSetup,
   clusterSetupWaiting,
@@ -354,6 +355,7 @@ function ConnectionRow({
         )}
       </div>
       <ClusterBuildSetup connection={c} />
+      <RegistryOperations connection={c} mayManage={mayManage} />
       {c.status === "incomplete" && c.cloud === "aws" && (
         <Alert className="border-weld/50">
           <AlertTitle>

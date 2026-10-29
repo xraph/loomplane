@@ -2,9 +2,10 @@ package digitalocean
 
 import (
 	"context"
+	"maps"
 	"net/http"
 	"net/url"
-	"reflect"
+	"slices"
 	"strings"
 
 	"github.com/xraph/loomplane/pkg/provider"
@@ -72,7 +73,7 @@ func (c *Client) UpdateNodePool(ctx context.Context, a provider.AccountAccess, r
 	if current.Autoscale {
 		return receipt, &provider.ClusterLifecycleBlockedError{Reason: "native_count_owner"}
 	}
-	if spec.Size != current.Size || spec.Name != current.Name || !reflect.DeepEqual(spec.Labels, current.Labels) || !reflect.DeepEqual(spec.Taints, current.Taints) {
+	if spec.Size != current.Size || spec.Name != current.Name || !maps.Equal(spec.Labels, current.Labels) || !slices.Equal(spec.Taints, current.Taints) {
 		return receipt, provider.ErrInfrastructureUnsupported
 	}
 	if spec.Count < current.Count {

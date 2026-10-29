@@ -2301,6 +2301,24 @@ export interface ManagedRecord {
   zoneId: string;
 }
 
+export interface ManagedRegistryBackup {
+  createdAt: string;
+  id: string;
+  size: number;
+}
+
+export interface ManagedRegistryView {
+  action: string;
+  backups: ManagedRegistryBackup[];
+  connectionId: string;
+  dnsReady: boolean;
+  generation: number;
+  hostname: string;
+  message: string;
+  phase: string;
+  status: string;
+}
+
 export interface Manifest {
   databaseGateway?: DatabaseGateway;
   defaults?: Defaults;
@@ -3394,6 +3412,15 @@ export interface RegistrationInputBody {
 
 export interface RegistrationList {
   registrations: (Registration | null)[];
+}
+
+export interface RegistryActionInputBody {
+  backupId?: string;
+  deleteData?: boolean;
+  generation: number;
+  hostname: string;
+  kind: string;
+  removeSetup?: boolean;
 }
 
 export interface RegistryList {

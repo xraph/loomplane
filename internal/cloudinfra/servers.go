@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/xraph/loomplane/internal/backupfiles"
 	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/clouds/server"
 	"github.com/xraph/loomplane/internal/config"
@@ -84,21 +85,24 @@ type RuntimeHealth struct {
 // ServerInput describes exactly one reviewed lifecycle change. Adoption refers
 // to an existing pinned SSH connection and never transfers provider ownership.
 type ServerInput struct {
-	Kind            string `json:"kind"`
-	ServerID        string `json:"server_id,omitempty"`
-	ConnectionID    string `json:"connection_id,omitempty"`
-	Name            string `json:"name,omitempty"`
-	Region          string `json:"region,omitempty"`
-	Size            string `json:"size,omitempty"`
-	Image           string `json:"image,omitempty"`
-	CloudRevision   int64  `json:"cloud_revision"`
-	ServerRevision  int64  `json:"server_revision,omitempty"`
-	ConfirmAdoption bool   `json:"confirm_adoption,omitempty"`
+	AcknowledgeUnknownCosts bool   `json:"acknowledge_unknown_costs,omitempty"`
+	Kind                    string `json:"kind"`
+	ServerID                string `json:"server_id,omitempty"`
+	ConnectionID            string `json:"connection_id,omitempty"`
+	Name                    string `json:"name,omitempty"`
+	Region                  string `json:"region,omitempty"`
+	Size                    string `json:"size,omitempty"`
+	Image                   string `json:"image,omitempty"`
+	CloudRevision           int64  `json:"cloud_revision"`
+	ServerRevision          int64  `json:"server_revision,omitempty"`
+	ConfirmAdoption         bool   `json:"confirm_adoption,omitempty"`
 }
 
 // Operation retains the immutable review and public execution checkpoints.
 // Bootstrap credentials are stored only in Vault, keyed by this operation ID.
 type Operation struct {
+	BudgetReview         *BudgetReview                   `json:"budget_review,omitempty"`
+	MoneyEstimate        *MoneyEstimate                  `json:"money_estimate,omitempty"`
 	CapacityTarget       *ResourceVector                 `json:"capacity_target,omitempty"`
 	CapacityCheckedAt    time.Time                       `json:"capacity_checked_at,omitempty,omitzero"`
 	AbsenceConfirmedAt   time.Time                       `json:"absence_confirmed_at,omitempty,omitzero"`
@@ -155,6 +159,7 @@ type Runtime interface {
 }
 
 type Deps struct {
+	RegistryFiles           *backupfiles.Store
 	ManagedClusters         config.ManagedClustersConfig
 	ClusterWorkflow         ClusterWorkflow
 	Clusters                ClusterStore

@@ -66,6 +66,7 @@ func (s *ControllerStore) RecordController(ctx context.Context, r ControllerRece
 		expected := old
 		expected.DeploymentGeneration = r.DeploymentGeneration
 		expected.RuntimeRevision = r.RuntimeRevision
+		expected.ReleaseID = r.ReleaseID
 		if expected != r || r.DeploymentGeneration <= old.DeploymentGeneration {
 			return ErrOwned
 		}

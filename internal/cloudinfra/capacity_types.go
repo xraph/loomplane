@@ -20,6 +20,7 @@ type ResourceVector struct {
 }
 
 type CapacityPolicy struct {
+	Budget                   *CapacityBudget `json:"budget,omitempty"`
 	authority                *security.Principal
 	OrgID                    string                `json:"org_id"`
 	CloudID                  string                `json:"cloud_id"`
@@ -155,6 +156,7 @@ type CapacityObservation struct {
 // CapacityAccountSnapshot contains account totals, without unrelated resource
 // identities or credentials. The quota and each resource fact may be unknown.
 type CapacityAccountSnapshot struct {
+	membership  *accountMembership
 	Provider    string                 `json:"provider"`
 	AccountID   string                 `json:"account_id"`
 	Provisioned CapacityResources      `json:"provisioned"`

@@ -47,6 +47,41 @@ func (c *Client) discoverManagedSetup(ctx context.Context, out *Result) error {
 		if out.Details["registry_ingress"] == "managed" {
 			expected = append(expected, "loomplane-ingress")
 		}
+		if out.Details["registry_storage"] == "local-path" {
+			expected = append(expected, "loomplane-local-path")
+		}
+		if out.Details["registry_network"] == "metallb" {
+			expected = append(expected, "loomplane-metallb-controller")
+		}
+		if out.Details["registry_storage"] == "longhorn" {
+			expected = append(expected, "longhorn-driver-deployer")
+			if err := c.discoverLonghorn(ctx, missing); err != nil {
+				return err
+			}
+		}
+		if out.Details["registry_storage"] == "longhorn" || out.Details["registry_network"] == "metallb" {
+			sets, listErr := c.Kube.AppsV1().DaemonSets(bootstrapNamespace).List(ctx, metav1.ListOptions{LabelSelector: bootstrapOwner})
+			if listErr != nil {
+				return listErr
+			}
+			for _, name := range []string{"longhorn-manager", "loomplane-metallb-speaker"} {
+				if name == "longhorn-manager" && out.Details["registry_storage"] != "longhorn" {
+					continue
+				}
+				if name == "loomplane-metallb-speaker" && out.Details["registry_network"] != "metallb" {
+					continue
+				}
+				ready := false
+				for _, set := range sets.Items {
+					if set.Name == name && set.Status.ObservedGeneration >= set.Generation && set.Status.DesiredNumberScheduled > 0 && set.Status.NumberReady == set.Status.DesiredNumberScheduled {
+						ready = true
+					}
+				}
+				if !ready {
+					missing("cluster setup: waiting for " + name + "; check node storage or network prerequisites")
+				}
+			}
+		}
 		for _, name := range expected {
 			found := false
 			for _, deployment := range deployments.Items {

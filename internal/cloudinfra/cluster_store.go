@@ -67,6 +67,25 @@ func (s *PgStore) CreateClusterPreview(ctx context.Context, o *ClusterOperation)
 	if checkErr := lockCapacityCloud(ctx, tx, o.OrgID, o.CloudID); checkErr != nil {
 		return checkErr
 	}
+	if checkErr := prepareTemporaryHoldTx(ctx, tx, o); checkErr != nil {
+		return checkErr
+	}
+	policy, err := capacityPolicyTx(ctx, tx, o.OrgID, o.CloudID)
+	if err != nil {
+		return err
+	}
+	if o.CapacityTarget.Servers > 0 {
+		o.Input.BudgetReview, err = scopedBudgetReviewTx(ctx, tx, o.OrgID, o.CloudID, o.Input.Provider, o.Input.AccountID, o.ID, o.MoneyEstimate, policy, o.Input.EnvelopeReview)
+		if err != nil {
+			return err
+		}
+		if o.Input.BudgetReview != nil || o.Input.EnvelopeReview != nil {
+			o.Digest = clusterDigest(o.Input)
+			for i := range o.Steps {
+				o.Steps[i].RequestDigest = o.Digest
+			}
+		}
+	}
 	raw, err := json.Marshal(o)
 	if err != nil {
 		return err
@@ -110,7 +129,7 @@ func checkpointClusterTx(ctx context.Context, tx driver.Tx, o *ClusterOperation,
 	if err != nil {
 		return err
 	}
-	tag, err := tx.Exec(ctx, `UPDATE loomplane_cluster_operations SET status=$4,revision=$5,body=$6,fencing_epoch=$7,updated_at=now(),resource_id=nullif($11,'') WHERE org_id=$1 AND cloud_id=$2 AND id=$3 AND revision=$8 AND digest=$9 AND fencing_epoch=$7 AND (fencing_epoch=0 OR (body->>'lease_owner'=$6::jsonb->>'lease_owner' AND (body->>'lease_expires_at')::timestamptz>clock_timestamp())) AND body->'input'=$6::jsonb->'input' AND principal=$10::jsonb AND body->'capacity_target'=$6::jsonb->'capacity_target' AND body->'kind'=$6::jsonb->'kind' AND body->'schema_version'=$6::jsonb->'schema_version' AND body->'expires_at'=$6::jsonb->'expires_at' AND body->'created_at'=$6::jsonb->'created_at' AND (resource_id IS NULL OR resource_id=nullif($11,''))`, o.OrgID, o.CloudID, o.ID, o.Status, o.Revision, raw, o.FencingEpoch, expectedRevision, o.Digest, principal, o.ResourceID)
+	tag, err := tx.Exec(ctx, `UPDATE loomplane_cluster_operations SET status=$4,revision=$5,body=$6,fencing_epoch=$7,updated_at=now(),resource_id=nullif($11,'') WHERE org_id=$1 AND cloud_id=$2 AND id=$3 AND revision=$8 AND digest=$9 AND fencing_epoch=$7 AND (fencing_epoch=0 OR (body->>'lease_owner'=$6::jsonb->>'lease_owner' AND (body->>'lease_expires_at')::timestamptz>clock_timestamp())) AND body->'money_estimate' IS NOT DISTINCT FROM $6::jsonb->'money_estimate' AND body->'input'=$6::jsonb->'input' AND principal=$10::jsonb AND body->'capacity_target'=$6::jsonb->'capacity_target' AND body->'kind'=$6::jsonb->'kind' AND body->'schema_version'=$6::jsonb->'schema_version' AND body->'expires_at'=$6::jsonb->'expires_at' AND body->'created_at'=$6::jsonb->'created_at' AND (resource_id IS NULL OR resource_id=nullif($11,''))`, o.OrgID, o.CloudID, o.ID, o.Status, o.Revision, raw, o.FencingEpoch, expectedRevision, o.Digest, principal, o.ResourceID)
 	if err != nil {
 		return storeError(err)
 	}
@@ -155,6 +174,15 @@ func saveClusterSteps(ctx context.Context, tx driver.Tx, o *ClusterOperation) er
 	}
 	if count != len(o.Steps) {
 		return ErrConflict
+	}
+	if retirementKind(o.Kind) {
+		raw, err := json.Marshal(o)
+		if err != nil {
+			return err
+		}
+		if _, err := tx.Exec(ctx, `INSERT INTO loomplane_cluster_retirement_receipts(org_id,cloud_id,operation_id,resource_id,revision,body) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT(org_id,operation_id) DO UPDATE SET revision=excluded.revision,body=excluded.body,updated_at=now() WHERE loomplane_cluster_retirement_receipts.revision<excluded.revision`, o.OrgID, o.CloudID, o.ID, o.Input.ResourceID, o.Revision, raw); err != nil {
+			return err
+		}
 	}
 	return appendClusterEvent(ctx, tx, o)
 }

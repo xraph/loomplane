@@ -5087,6 +5087,43 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly registries = {
+    /**
+     * Queue registry maintenance
+     */
+    action: async (connectionId: string, body: types.RegistryActionInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ManagedRegistryView> => {
+      let __path = `/api/v1/connections/${encodeURIComponent(String(connectionId))}/registry/actions`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["RegistryActionInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ManagedRegistryView"],
+      };
+
+      return this.request<types.ManagedRegistryView>(config);
+    },
+
+    /**
+     * Read registry DNS, maintenance and backups
+     */
+    get: async (connectionId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ManagedRegistryView> => {
+      let __path = `/api/v1/connections/${encodeURIComponent(String(connectionId))}/registry`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ManagedRegistryView"],
+      };
+
+      return this.request<types.ManagedRegistryView>(config);
+    },
+
+  };
+
   public readonly retentionPolicies = {
     /**
      */

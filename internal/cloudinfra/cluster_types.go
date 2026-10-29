@@ -24,6 +24,11 @@ type AttachmentInput struct {
 }
 
 type ClusterInput struct {
+	BudgetReview                  *BudgetReview          `json:"budget_review,omitempty"`
+	EnvelopeReview                *ClusterEnvelopeReview `json:"envelope_review,omitempty"`
+	costEvidence                  *MoneyEstimate
+	PriceDigest                   string                   `json:"price_digest,omitempty"`
+	Retirement                    *ClusterRetirementInput  `json:"retirement,omitempty"`
 	Maintenance                   *ClusterMaintenanceInput `json:"maintenance,omitempty"`
 	ManagementQualificationDigest string                   `json:"management_qualification_digest"`
 	ManagementEvidenceID          string                   `json:"management_evidence_id"`
@@ -59,6 +64,7 @@ type ClusterStep struct {
 }
 
 type ClusterOperation struct {
+	MoneyEstimate               *MoneyEstimate             `json:"money_estimate,omitempty"`
 	Enrollment                  *ClusterEnrollment         `json:"enrollment,omitempty"`
 	EstimatedNodeHourlyMicroUSD int64                      `json:"estimated_node_hourly_micro_usd"`
 	UnknownCosts                []string                   `json:"unknown_costs"`

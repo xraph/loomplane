@@ -18,7 +18,7 @@ import (
 )
 
 func TestRuntimeRecordsControllerAfterReadiness(t *testing.T) {
-	for _, fail := range []string{"", "readiness", "record"} {
+	for _, fail := range []string{"", "readiness", "record", "managed"} {
 		t.Run(fail, func(t *testing.T) {
 			iid := id.New(id.PrefixInstance)
 			client := fake.NewClientset()
@@ -29,7 +29,7 @@ func TestRuntimeRecordsControllerAfterReadiness(t *testing.T) {
 				d.ResourceVersion = "7"
 				return false, nil, nil
 			})
-			cfg := &Config{Namespace: "apps", Details: map[string]string{"namespace_uid": "namespace-uid", "cluster_ca": strings.Repeat("a", 64)}}
+			cfg := &Config{ManagedWorkload: fail == "managed", Namespace: "apps", Details: map[string]string{"namespace_uid": "namespace-uid", "cluster_ca": strings.Repeat("a", 64)}}
 			labels := map[string]string{owned.LabelOrg: "org", owned.LabelProject: "project", owned.LabelEnvironment: "env", owned.LabelConnection: "connection", owned.LabelService: "api", owned.LabelPlan: "plan", owned.LabelRuntime: "runtime-ref", owned.LabelRevision: "release"}
 			image := "registry.example/api@sha256:" + strings.Repeat("b", 64)
 			ready := false
@@ -44,6 +44,12 @@ func TestRuntimeRecordsControllerAfterReadiness(t *testing.T) {
 				return nil
 			}, RecordController: func(_ context.Context, receipt ControllerReceipt) error {
 				records++
+				if fail == "managed" && receipt.ReleaseID != WorkloadReleaseID(labels[owned.LabelRuntime], labels[owned.LabelRevision]) {
+					t.Fatal("managed release marker absent")
+				}
+				if fail != "managed" && receipt.ReleaseID != "" {
+					t.Fatal("static receipt changed")
+				}
 				if !ready || !receipt.Valid() || receipt.InstanceID != iid.String() || receipt.DeploymentUID != "controller-uid" || receipt.DeploymentGeneration != 3 || receipt.PlanID != "plan" || receipt.RuntimeRef != "runtime-ref" || receipt.Image != image || receipt.Container != "main" || receipt.ServiceID != "api" || receipt.ServiceAccount != "default" || receipt.ClusterCA != cfg.Details["cluster_ca"] {
 					t.Fatalf("incorrect receipt: %+v", receipt)
 				}
@@ -53,7 +59,7 @@ func TestRuntimeRecordsControllerAfterReadiness(t *testing.T) {
 				return nil
 			}}
 			_, err := r.Apply(t.Context(), iid, cpprovider.ServiceSpec{Name: "main", Image: image}, labels)
-			if (err != nil) != (fail != "") {
+			if (err != nil) != (fail != "" && fail != "managed") {
 				t.Fatal(err)
 			}
 			expected := 1
@@ -63,7 +69,7 @@ func TestRuntimeRecordsControllerAfterReadiness(t *testing.T) {
 			if records != expected {
 				t.Fatal("recording order", records)
 			}
-			if fail != "" {
+			if fail != "" && fail != "managed" {
 				if _, getErr := client.AppsV1().Deployments("apps").Get(t.Context(), WorkloadName(iid), metav1.GetOptions{}); getErr == nil {
 					t.Fatal("failed operation did not roll back")
 				}

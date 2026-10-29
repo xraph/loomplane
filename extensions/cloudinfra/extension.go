@@ -10,6 +10,7 @@ import (
 	"github.com/xraph/forge"
 	"github.com/xraph/grove"
 	"github.com/xraph/grove/drivers/pgdriver"
+	troveext "github.com/xraph/trove/extension"
 	"github.com/xraph/vault/crypto"
 	"github.com/xraph/vault/secret"
 	vaultpg "github.com/xraph/vault/store/postgres"
@@ -18,6 +19,7 @@ import (
 	"github.com/xraph/loomplane/extensions/identity"
 	notificationsext "github.com/xraph/loomplane/extensions/notifications"
 	projectsext "github.com/xraph/loomplane/extensions/projects"
+	"github.com/xraph/loomplane/internal/backupfiles"
 	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/config"
@@ -47,7 +49,7 @@ func New(cfg config.Config, workflows *orchestration.Deployments) *Extension {
 	return &Extension{BaseExtension: forge.NewBaseExtension(Name, "0.1.0", "Cloud server infrastructure"), cfg: cfg, workflows: workflows}
 }
 func (*Extension) Dependencies() []string {
-	return []string{connectionsext.Name, identity.Name, projectsext.Name, notificationsext.DeliveryName}
+	return []string{troveext.ExtensionName, connectionsext.Name, identity.Name, projectsext.Name, notificationsext.DeliveryName}
 }
 func (e *Extension) Register(app forge.App) error {
 	if err := e.BaseExtension.Register(app); err != nil {
@@ -99,6 +101,11 @@ func (e *Extension) Register(app forge.App) error {
 	e.svc = cloudinfra.NewService(cloudinfra.Deps{ManagedClusters: e.cfg.Clouds.ManagedClusters, Clusters: cloudinfra.NewPgStore(pg), ClusterWorkflow: e.workflows, CapacityPrincipal: principal, CapacityDemandWakeup: e.workflows, Store: cloudinfra.NewPgStore(pg), Clouds: cloudprofiles.NewPgStore(pg), Connections: creds, RuntimeConnections: connections.NewPgStore(pg), Secrets: secrets, Authz: authz, Adapters: cloudinfra.BuiltinAdapters(cloudinfra.Endpoints{DigitalOcean: e.cfg.Clouds.DigitalOceanEndpoint, Vercel: e.cfg.Clouds.VercelEndpoint, Cloudflare: e.cfg.Clouds.CloudflareEndpoint, CloudflareRegistrarSandbox: e.cfg.Clouds.CloudflareRegistrarSandbox, Lock: pglock.For(pg)}), Workflow: e.workflows, Notices: notices, EnrollmentURL: endpoint, ACMEDirectory: e.cfg.Clouds.ACMEDirectory, Audit: projectsext.NewAuditor(audit, e.cfg.Identity.AppID, e.Logger()),
 		Warn: func(msg string, err error) { e.Logger().Warn(msg, forge.F("error", err.Error())) }})
 	creds.ManagedCredentials = e.svc
+	files, filesErr := forge.InjectType[*backupfiles.Store](c)
+	if filesErr != nil {
+		return filesErr
+	}
+	e.svc.RegistryFiles = files
 	e.workflows.BindInfrastructure(e.svc)
 	e.workflows.BindClusters(e.svc)
 	if err = forge.ProvideValue(c, e.svc); err != nil {
@@ -112,6 +119,23 @@ func (e *Extension) Start(context.Context) error {
 	e.done = make(chan struct{})
 	go func() {
 		defer close(e.done)
+		registryDone := make(chan struct{})
+		go func() {
+			defer close(registryDone)
+			ticker := time.NewTicker(time.Minute)
+			defer ticker.Stop()
+			for {
+				if err := e.svc.RecoverManagedRegistries(ctx); err != nil && ctx.Err() == nil {
+					e.Logger().Warn("Reconcile managed registries", forge.F("error", err.Error()))
+				}
+				select {
+				case <-ctx.Done():
+					return
+				case <-ticker.C:
+				}
+			}
+		}()
+		defer func() { <-registryDone }()
 		ticker := time.NewTicker(30 * time.Second)
 		defer ticker.Stop()
 		var swept time.Time

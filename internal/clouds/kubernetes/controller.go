@@ -2,6 +2,7 @@ package kubernetes
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/hex"
 	"strings"
 
@@ -18,6 +19,7 @@ import (
 // observation. It contains no credentials and does not authorize issuance.
 type ControllerReceipt struct {
 	domain.Scope
+	ReleaseID            string `json:"release_id,omitempty"`
 	ConnectionID         string `json:"connection_id"`
 	InstanceID           string `json:"instance_id"`
 	PlanID               string `json:"plan_id"`
@@ -35,6 +37,9 @@ type ControllerReceipt struct {
 }
 
 func (r ControllerReceipt) Valid() bool {
+	if r.ReleaseID != "" && r.ReleaseID != WorkloadReleaseID(r.RuntimeRef, r.RuntimeRevision) {
+		return false
+	}
 	for _, v := range []string{r.OrgID, r.ProjectID, r.EnvironmentID, r.ConnectionID, r.PlanID, r.ServiceID, r.NamespaceUID, r.DeploymentUID} {
 		if !domain.ValidIdentitySegment(v) {
 			return false
@@ -57,8 +62,27 @@ func (r *Runtime) recordController(ctx context.Context, c *Client, iid id.ID, sp
 		account = "default"
 	}
 	receipt := ControllerReceipt{Scope: domain.Scope{OrgID: labels[owned.LabelOrg], ProjectID: labels[owned.LabelProject], EnvironmentID: labels[owned.LabelEnvironment]}, ConnectionID: labels[owned.LabelConnection], InstanceID: iid.String(), PlanID: labels[owned.LabelPlan], RuntimeRef: labels[owned.LabelRuntime], ServiceID: labels[owned.LabelService], Container: spec.Name, Image: spec.Image, Namespace: d.Namespace, NamespaceUID: c.Config.Details["namespace_uid"], ClusterCA: c.Config.Details["cluster_ca"], ServiceAccount: account, DeploymentUID: string(d.UID), DeploymentGeneration: d.Generation, RuntimeRevision: labels[owned.LabelRevision]}
+	if c.Config.ManagedWorkload {
+		receipt.ReleaseID = d.Spec.Template.Annotations[WorkloadReleaseAnnotation]
+		if receipt.ReleaseID != WorkloadReleaseID(receipt.RuntimeRef, receipt.RuntimeRevision) {
+			return ErrOwned
+		}
+	}
 	if !receipt.Valid() {
 		return ErrOwned
 	}
 	return r.RecordController(ctx, receipt)
+}
+
+// WorkloadReleaseAnnotation binds the durable runtime attempt to its pod template.
+const WorkloadReleaseAnnotation = "loomplane.io/capacity-release"
+
+// WorkloadReleaseID hashes only server-owned attempt identities, never template
+// contents or secrets. Retries reuse the same marker across lost responses.
+func WorkloadReleaseID(runtimeRef, runtimeRevision string) string {
+	if runtimeRef == "" || runtimeRevision == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(runtimeRef + "\x00" + runtimeRevision))
+	return hex.EncodeToString(sum[:])
 }

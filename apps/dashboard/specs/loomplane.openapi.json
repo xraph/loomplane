@@ -11754,6 +11754,84 @@
           }
         }
       }
+    },
+    "/api/v1/connections/{connectionId}/registry": {
+      "get": {
+        "tags": [
+          "Managed registries"
+        ],
+        "summary": "Read registry DNS, maintenance and backups",
+        "operationId": "registries.get",
+        "parameters": [
+          {
+            "name": "connectionId",
+            "in": "path",
+            "description": "Path parameter: connectionId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Registry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagedRegistryView"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/connections/{connectionId}/registry/actions": {
+      "post": {
+        "operationId": "registries.action",
+        "parameters": [
+          {
+            "name": "connectionId",
+            "in": "path",
+            "description": "Path parameter: connectionId",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RegistryActionInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Registry",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ManagedRegistryView"
+                }
+              }
+            }
+          }
+        },
+        "summary": "Queue registry maintenance",
+        "tags": [
+          "Managed registries"
+        ],
+        "x-forge-invalidates": [
+          "ManagedRegistryView"
+        ]
+      }
     }
   },
   "components": {
@@ -27647,6 +27725,100 @@
           },
           "revision": {
             "type": "integer"
+          }
+        }
+      },
+      "ManagedRegistryBackup": {
+        "type": "object",
+        "required": [
+          "id",
+          "created_at",
+          "size"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer"
+          }
+        }
+      },
+      "ManagedRegistryView": {
+        "type": "object",
+        "required": [
+          "connection_id",
+          "generation",
+          "hostname",
+          "status",
+          "message",
+          "action",
+          "phase",
+          "dns_ready",
+          "backups"
+        ],
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "backups": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ManagedRegistryBackup"
+            }
+          },
+          "connection_id": {
+            "type": "string"
+          },
+          "dns_ready": {
+            "type": "boolean"
+          },
+          "generation": {
+            "type": "integer"
+          },
+          "hostname": {
+            "type": "string"
+          },
+          "message": {
+            "type": "string"
+          },
+          "phase": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "RegistryActionInputBody": {
+        "type": "object",
+        "required": [
+          "kind",
+          "generation",
+          "hostname"
+        ],
+        "properties": {
+          "backup_id": {
+            "type": "string"
+          },
+          "delete_data": {
+            "type": "boolean"
+          },
+          "generation": {
+            "type": "integer"
+          },
+          "hostname": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "remove_setup": {
+            "type": "boolean"
           }
         }
       }

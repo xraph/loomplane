@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -112,7 +113,9 @@ func TestClusterUpgradeUnsupportedPath(t *testing.T) {
 }
 
 type maintenanceProvider struct {
-	bootstrap provider.BootstrapAccess
+	bootstrapCalls  int
+	beforeBootstrap func()
+	bootstrap       provider.BootstrapAccess
 	*clusterProvider
 	observation provider.ClusterObservation
 	effects     int
@@ -299,9 +302,13 @@ func (m *maintenanceMemory) SaveClusterCheckpoint(ctx context.Context, o *Cluste
 	return m.clusterMemory.SaveClusterCheckpoint(ctx, o, revision)
 }
 func (p *maintenanceProvider) BootstrapCluster(ctx context.Context, a provider.AccountAccess, _ provider.ClusterRef, _ time.Duration) (provider.BootstrapAccess, error) {
+	if p.beforeBootstrap != nil {
+		p.beforeBootstrap()
+	}
 	if err := a.BeforeEffect(ctx); err != nil {
 		return provider.BootstrapAccess{}, err
 	}
+	p.bootstrapCalls++
 	return p.bootstrap, nil
 }
 func (p *maintenanceProvider) CheckClusterLifecycle(_ context.Context, _ provider.AccountAccess, _ provider.ClusterRef, kind, version string) error {
@@ -310,7 +317,8 @@ func (p *maintenanceProvider) CheckClusterLifecycle(_ context.Context, _ provide
 	}
 	return nil
 }
-func TestClusterUpgradeEmptyManagedClusterDurableEffect(t *testing.T) {
+func emptyMaintenanceFixture(t *testing.T) (*Service, *maintenanceMemory, *maintenanceProvider, security.Principal, *ClusterOperation) {
+	t.Helper()
 	s, base, adapter, _, principal, in := maintenanceFixture(t)
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -352,6 +360,10 @@ func TestClusterUpgradeEmptyManagedClusterDurableEffect(t *testing.T) {
 	in.Kind = "cluster-upgrade"
 	in.Maintenance = &ClusterMaintenanceInput{ObservedRevision: 1, Version: "1.36.1-do.0", DrainDigest: review.Digest, Window: &ClusterMaintenanceWindow{Timezone: "UTC", LocalStart: time.Now().UTC().Format("2006-01-02T15:04"), DurationSeconds: 3600}}
 	op := acceptCluster(t, s, principal, in)
+	return s, store, adapter, principal, op
+}
+func TestClusterUpgradeEmptyManagedClusterDurableEffect(t *testing.T) {
+	s, store, adapter, principal, op := emptyMaintenanceFixture(t)
 	if err := s.ReconcileClusterOperation(t.Context(), principal.OrgID, op.ID, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -413,5 +425,64 @@ func TestClusterMaintenanceRecoveryKeepsStableAttachmentIdentity(t *testing.T) {
 	attachment := &RuntimeAttachment{OperationID: old.ID, ClusterID: store.resource.ID, TrustFingerprint: "stable-trust", EndpointFingerprint: endpointFingerprint("https://stable.example")}
 	if !clusterAttachmentPins(old, store.resource, attachment) {
 		t.Fatal("benign resource revision invalidated successful attachment")
+	}
+}
+
+func TestClusterMaintenanceEmptyCollectionsConverge(t *testing.T) {
+	desired := &provider.NodePoolSpec{Name: "workers", Size: "size", Count: 2, OperationID: "op", RequestDigest: "request"}
+	op := &ClusterOperation{ID: "op", Kind: "node-pool-create", Input: ClusterInput{Maintenance: &ClusterMaintenanceInput{Pool: desired}}}
+	observation := provider.ClusterObservation{State: "running", Pools: []provider.NodePoolSpec{{ID: "pool", Name: "workers", Size: "size", Count: 2, OperationID: "op", RequestDigest: "request", Labels: map[string]string{}, Taints: []provider.NodePoolTaint{}}}}
+	if !maintenanceConverged(op, observation) {
+		t.Fatal("empty provider collections strand successful pool")
+	}
+}
+func TestClusterMaintenanceBootstrapRequiresInstalledCapability(t *testing.T) {
+	s, _, adapter, p, _ := emptyMaintenanceFixture(t)
+	before := adapter.bootstrapCalls
+	s.Adapters = NewAdapters()
+	if err := s.Adapters.RegisterCluster("digitalocean", adapter, provider.ClusterUpgrade); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.PreviewClusterDrain(t.Context(), p, "cloud", "cluster", ""); !errors.Is(err, provider.ErrInfrastructureUnsupported) {
+		t.Fatalf("uninstalled bootstrap: %v", err)
+	}
+	if adapter.bootstrapCalls != before {
+		t.Fatal("uninstalled bootstrap minted credentials")
+	}
+}
+func TestClusterMaintenanceNestedBootstrapFence(t *testing.T) {
+	for _, action := range []string{"cancel", "lease", "capability", "retain"} {
+		t.Run(action, func(t *testing.T) {
+			s, store, adapter, p, op := emptyMaintenanceFixture(t)
+			before := adapter.bootstrapCalls
+			entered := make(chan struct{})
+			release := make(chan struct{})
+			var once sync.Once
+			adapter.beforeBootstrap = func() { once.Do(func() { close(entered); <-release }) }
+			done := make(chan error, 1)
+			go func() { done <- s.ReconcileClusterOperation(t.Context(), p.OrgID, op.ID, nil) }()
+			<-entered
+			switch action {
+			case "cancel":
+				store.op.CancelRequested = true
+				store.op.FencingEpoch++
+			case "lease":
+				store.op.FencingEpoch++
+			case "capability":
+				s.Adapters = NewAdapters()
+				if err := s.Adapters.RegisterCluster("digitalocean", adapter, provider.ClusterUpgrade); err != nil {
+					t.Fatal(err)
+				}
+			}
+			close(release)
+			err := <-done
+			if action == "retain" {
+				if err != nil || adapter.bootstrapCalls == before || adapter.effects != 1 {
+					t.Fatalf("retained authority failed: %v", err)
+				}
+			} else if adapter.bootstrapCalls != before || adapter.effects != 0 {
+				t.Fatal("lost lifecycle authority minted management credentials")
+			}
+		})
 	}
 }

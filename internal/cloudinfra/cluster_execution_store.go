@@ -59,6 +59,11 @@ func (s *PgStore) AcceptClusterOperation(ctx context.Context, o *ClusterOperatio
 			return ErrBusy
 		}
 	}
+	if retirementKind(o.Kind) {
+		if err := retirementPinsTx(ctx, tx, o); err != nil {
+			return err
+		}
+	}
 	if maintenanceKind(o.Kind) {
 		if err := maintenancePinsTx(ctx, tx, o); err != nil {
 			return err

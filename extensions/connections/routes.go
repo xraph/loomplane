@@ -61,6 +61,12 @@ var kubernetesPlacement = []sdk.Setting{
 	{Key: "ingress_class", Label: "Ingress class for routes (optional)"},
 	{Key: "ingress_address", Label: "Ingress address override (optional, IP or hostname)"},
 	{Key: "registry_setup", Label: "Registry setup (automatic or existing, optional)"},
+	{Key: "registry_storage", Label: "Storage driver (existing, local-path or longhorn)"},
+	{Key: "registry_network", Label: "Ingress network (load-balancer, node or metallb)"},
+	{Key: "ingress_node", Label: "Ingress node (optional for a single-node cluster)"},
+	{Key: "load_balancer_addresses", Label: "MetalLB pool (unused CIDRs or IP ranges, comma separated)"},
+	{Key: "registry_dns", Label: "Registry DNS (automatic or manual)"},
+	{Key: "registry_maintenance", Label: "Registry maintenance (automatic or manual)"},
 }
 
 // CloudList is the body of GET /api/v1/connection-clouds.
@@ -88,7 +94,7 @@ func (e *Extension) clouds(ctx context.Context, p security.Principal) (CloudList
 			Help:     "Use a PEM private key, or JSON with private_key and passphrase. Your SSH user needs access to an existing Linux Docker daemon. Copy the server's public host key from a trusted source.",
 			Settings: []sdk.Setting{{Key: "host", Label: "SSH host", Required: true}, {Key: "port", Label: "SSH port (default 22)"}, {Key: "user", Label: "SSH user", Required: true}, {Key: "host_key", Label: "Public host key", Required: true}, {Key: "docker_socket", Label: "Docker socket (default /var/run/docker.sock)"}, {Key: "advertise_host", Label: "Published address (optional)"}}},
 		{Cloud: connections.Kubernetes, Title: "Kubernetes", Credential: "Self-contained kubeconfig",
-			Help:              "Use an HTTPS API with an embedded CA and token or client certificate. The namespace must already exist. Set a registry hostname and save to install missing ingress and cert-manager components, create a retained copy of your default storage class, and detect architecture and ingress address. Automatic setup needs cluster-admin permissions and an installed storage provisioner. It can provision a billable load balancer. Point the hostname's DNS at the discovered address. Existing controllers are reused. Use registry_setup=existing to manage prerequisites yourself. Recheck while controllers or the load balancer are starting.",
+			Help:              "Use an HTTPS API with an embedded CA and token or client certificate. Set a registry hostname to create a missing namespace and install ingress and cert-manager. Existing storage and load balancers are reused by default. For bare clusters, choose local-path storage and node ingress, or Longhorn storage and MetalLB with an unused address pool. Longhorn needs three Linux nodes with its host prerequisites. Automatic setup needs cluster-admin permissions and may create a billable load balancer. Connect a verified organization DNS zone for automatic records. Backups use Loomplane backup storage. Maintenance briefly pauses registry access. Use registry_setup=existing, registry_dns=manual or registry_maintenance=manual to manage those parts yourself.",
 			Settings:          append([]sdk.Setting{{Key: "context", Label: "Context (optional)"}, {Key: "namespace", Label: "Namespace (defaults to kubeconfig)"}}, kubernetesPlacement...),
 			InClusterSettings: append([]sdk.Setting{{Key: "namespace", Label: "Namespace", Required: true}}, kubernetesPlacement...)},
 		{Cloud: connections.Registry, Title: "Image registry", Credential: "Credential JSON", //nolint:gosec // Form label, not a credential.

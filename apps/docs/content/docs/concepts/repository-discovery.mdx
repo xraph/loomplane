@@ -57,3 +57,13 @@ Driver evidence records the backend and the source line, never the credentials o
 ## Re-analysis on push
 
 With the GitHub App's webhook on, a push to a repository's default branch re-analyzes every source tracking it, so your next plan has the new commit without anyone pressing Analyze. [Private repositories](/docs/guides/private-repositories) covers the setup.
+
+## Vite React Server Components
+
+Loomplane recognizes `@vitejs/plugin-rsc` apps as `vite-rsc` web apps when the package has a Vite config or runs Vite in its scripts. You do not need an `index.html`. A dependency without app configuration or scripts stays library evidence.
+
+For dynamic RSC, provide a production `start` script or a Dockerfile. Your server must serve the client assets and the RSC/SSR output from the same build, listen on `0.0.0.0`, and respect the configured port. Use `NODE_ENV=production` for production builds. The plugin's `vite preview` command is for previewing a build; define your production server explicitly.
+
+The existing Node build paths and container targets handle these applications. Remote SSH and Kubernetes source builds require a Dockerfile, as they do for other Node apps. Dynamic deployment to Vercel is blocked until an adapter can package the server correctly. If your app generates all its pages at build time, explicitly select `kind: static-site` and verify the target's publish-directory convention.
+
+The repository includes a complete Node server and Dockerfile under `examples/vite-rsc`. Detection reads files without executing your Vite config.

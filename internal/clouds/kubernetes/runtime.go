@@ -230,6 +230,16 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 		return nil, err
 	}
 	template.Labels = maps.Clone(identity)
+	if c.Config.ManagedWorkload {
+		release := WorkloadReleaseID(labels[owned.LabelRuntime], labels[owned.LabelRevision])
+		if release == "" {
+			return nil, ErrOwned
+		}
+		if template.Annotations == nil {
+			template.Annotations = map[string]string{}
+		}
+		template.Annotations[WorkloadReleaseAnnotation] = release
+	}
 
 	replicas := int32(1)
 	if raw := labels[owned.LabelReplicas]; raw != "" {
@@ -637,6 +647,16 @@ func (r *Runtime) restore(ctx context.Context, c *Client, iid id.ID, labels map[
 		if err := r.restorePersistent(ctx, c, iid, labels, old.stateful); err != nil {
 			return err
 		}
+	}
+	// A rollback snapshot may predate credential rotation. Restore the current
+	// managed credential while retaining the workload's original secret identity.
+	if old.pull != nil && c.Config.Details["registry_hostname"] != "" && old.pull.Labels[owned.LabelConnection] != "" {
+		auth, err := c.registrySecret(ctx, labels[owned.LabelOrg], old.pull.Labels[owned.LabelConnection], false)
+		if err != nil {
+			return err
+		}
+		old.pull = old.pull.DeepCopy()
+		old.pull.Data[corev1.DockerConfigJsonKey] = auth.Data["config.json"]
 	}
 	ns, name := c.Config.Namespace, WorkloadName(iid)
 	var failures error
