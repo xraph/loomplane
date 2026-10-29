@@ -3,7 +3,9 @@ package deployments
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -167,5 +169,41 @@ func TestRunner_armsAWatchOnARetriedFinish(t *testing.T) {
 	}
 	if got := watches.log(); len(got) != 0 {
 		t.Fatalf("a replayed failure asked the watch %v", got)
+	}
+}
+
+// failingWatches can't prepare: its reads fail.
+type failingWatches struct{ armed int }
+
+func (w *failingWatches) Prepare(context.Context, *Deployment, *planning.Plan) (WatchDecision, error) {
+	return WatchDecision{}, errors.New("read the manifest: connection reset by 10.0.0.7 with password=hunter2")
+}
+
+func (w *failingWatches) Arm(context.Context, *Deployment, WatchDecision) error {
+	w.armed++
+	return nil
+}
+
+// A watch that can't be prepared never fails the finish: it logs the
+// error's type and the IDs, never its text, and arms nothing.
+func TestRunner_aPrepareErrorDoesntFailTheFinish(t *testing.T) {
+	exec := &recorder{url: answering(t, http.StatusOK)}
+	r, store, _ := newRunner(t, webAndAPI(), exec, fakeVariables{})
+	watches := &failingWatches{}
+	var warnings []string
+	r.watches = watches
+	r.warn = func(msg string) { warnings = append(warnings, msg) }
+	id, err := runAll(t, r, webAndAPI())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d, _ := store.GetDeployment(t.Context(), "org_1", id); d.Status != StatusSucceeded {
+		t.Fatalf("status %s", d.Status)
+	}
+	if watches.armed != 0 || len(warnings) != 1 {
+		t.Fatalf("armed %d, warnings %v", watches.armed, warnings)
+	}
+	if w := warnings[0]; !strings.Contains(w, id) || !strings.Contains(w, "org_1") || !strings.Contains(w, "*errors.errorString") || strings.Contains(w, "hunter2") {
+		t.Fatalf("warning %q", w)
 	}
 }

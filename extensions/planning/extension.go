@@ -494,6 +494,7 @@ func (e *Extension) Register(fapp forge.App) error {
 		Observers:            observers,
 		Health:               health,
 		Watches:              watches,
+		Warn:                 func(msg string) { log.Warn(msg) },
 	})
 	// Deleting a project or environment takes its database gateways' records
 	// with it, and this deletes their keys from Vault and warns about a

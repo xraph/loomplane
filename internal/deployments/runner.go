@@ -237,6 +237,7 @@ type Runner struct {
 	resources      ResourceSecrets
 	health         releasehealth.Reader
 	watches        WatchHook
+	warn           func(msg string)
 	dbGateways     DatabaseGatewayStore
 	dbTrust        func() ([]plane.TrustKey, error)
 	publicURL      string
@@ -294,6 +295,9 @@ type RunnerDeps struct {
 	// Watches arms a post-deploy watch for each deployment that succeeds.
 	// It may be nil: then nothing is watched.
 	Watches WatchHook
+	// Warn logs what the runner carries on past, such as a watch it
+	// couldn't prepare. It may be nil.
+	Warn func(msg string)
 }
 
 // Release is a service binding a deployment step wrote, or deleted
@@ -322,7 +326,7 @@ func NewRunner(d RunnerDeps) *Runner {
 		authz: d.Authz, backupPolicies: d.BackupPolicies,
 		capacity: d.Capacity, cloudSyncAuth: d.CloudSyncAuth, routes: d.Routes,
 		cloudProfiles: d.CloudProfiles, store: d.Store, plans: d.Plans, credentials: d.Credentials, variables: d.Variables,
-		sources: d.Sources, providers: d.Providers, executors: d.Executors, catalogHooks: d.CatalogHooks, observers: d.Observers, resources: d.Resources, health: d.Health, watches: d.Watches, telemetry: d.Telemetry, logs: d.Logs,
+		sources: d.Sources, providers: d.Providers, executors: d.Executors, catalogHooks: d.CatalogHooks, observers: d.Observers, resources: d.Resources, health: d.Health, watches: d.Watches, warn: d.Warn, telemetry: d.Telemetry, logs: d.Logs,
 		dbGateways: d.DatabaseGateways, dbTrust: d.DatabaseGatewayTrust, publicURL: d.PublicURL,
 		http: &http.Client{Timeout: 15 * time.Second}, now: time.Now, verifyWait: 3 * time.Minute,
 	}
@@ -1808,11 +1812,7 @@ func (r *Runner) Finish(ctx context.Context, orgID, deploymentID, reason string)
 	}
 	var watch WatchDecision
 	if reason == "" && d.Status != StatusFailed {
-		decision, prepareErr := r.prepareWatch(ctx, d)
-		if prepareErr != nil {
-			return prepareErr
-		}
-		watch = decision
+		watch = r.prepareWatch(ctx, d)
 		if cleanupErr := r.finishRoutedRelease(ctx, d); cleanupErr != nil {
 			return cleanupErr
 		}

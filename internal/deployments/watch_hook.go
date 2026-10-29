@@ -2,6 +2,7 @@ package deployments
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/xraph/loomplane/internal/planning"
@@ -29,16 +30,26 @@ type WatchHook interface {
 	Arm(ctx context.Context, d *Deployment, decision WatchDecision) error
 }
 
-// prepareWatch asks the watch hook about d, when there is one.
-func (r *Runner) prepareWatch(ctx context.Context, d *Deployment) (WatchDecision, error) {
+// prepareWatch asks the watch hook about d, when there is one. A watch
+// it can't prepare never fails the finish: it logs the error's type and
+// the IDs, since the error's text may say more than a log should, and
+// arms nothing.
+func (r *Runner) prepareWatch(ctx context.Context, d *Deployment) WatchDecision {
 	if r.watches == nil {
-		return WatchDecision{}, nil
+		return WatchDecision{}
 	}
 	plan, err := r.plans.GetPlan(ctx, d.OrgID, d.PlanID)
-	if err != nil {
-		return WatchDecision{}, err
+	var decision WatchDecision
+	if err == nil {
+		decision, err = r.watches.Prepare(ctx, d, plan)
 	}
-	return r.watches.Prepare(ctx, d, plan)
+	if err != nil {
+		if r.warn != nil {
+			r.warn(fmt.Sprintf("no post-deploy watch for deployment %s of organization %s: preparing it failed with %T", d.ID, d.OrgID, err))
+		}
+		return WatchDecision{}
+	}
+	return decision
 }
 
 // armWatch arms the watch for settled, the deployment as stored once it
@@ -54,9 +65,5 @@ func (r *Runner) armWatch(ctx context.Context, settled *Deployment, decision Wat
 // finish found stored succeeded: the finish that stored it may have
 // failed before it armed one.
 func (r *Runner) rearmWatch(ctx context.Context, settled *Deployment) error {
-	decision, err := r.prepareWatch(ctx, settled)
-	if err != nil {
-		return err
-	}
-	return r.armWatch(ctx, settled, decision)
+	return r.armWatch(ctx, settled, r.prepareWatch(ctx, settled))
 }
