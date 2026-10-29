@@ -170,11 +170,75 @@ func (c *Client) Account(ctx context.Context, token string) (*Account, error) {
 
 // AppSpec is an App Platform app: one region, and the components in it.
 type AppSpec struct {
-	Name        string      `json:"name"`
-	Region      string      `json:"region,omitempty"`
-	Services    []Component `json:"services,omitempty"`
-	Workers     []Component `json:"workers,omitempty"`
-	StaticSites []Component `json:"static_sites,omitempty"`
+	Name        string          `json:"name"`
+	Region      string          `json:"region,omitempty"`
+	Services    []Component     `json:"services,omitempty"`
+	Workers     []Component     `json:"workers,omitempty"`
+	StaticSites []Component     `json:"static_sites,omitempty"`
+	Domains     []AppDomainSpec `json:"domains,omitempty"`
+}
+
+// AppDomainSpec is a hostname an app answers on. Type is DEFAULT (the
+// ondigitalocean.app one), PRIMARY or ALIAS. Loomplane adds custom
+// hostnames as ALIAS, so the app's primary domain stays as it was. Zone
+// is the DigitalOcean DNS domain, set only when DigitalOcean manages the
+// records. MinimumTLSVersion is "1.2" or "1.3". Per the API reference
+// (docs.digitalocean.com/reference/api/reference/apps/, read 2026-10-29).
+type AppDomainSpec struct {
+	Domain            string `json:"domain"`
+	Type              string `json:"type,omitempty"`
+	Wildcard          bool   `json:"wildcard,omitempty"`
+	Zone              string `json:"zone,omitempty"`
+	MinimumTLSVersion string `json:"minimum_tls_version,omitempty"`
+}
+
+// AppDomainAlias is the type of a hostname that isn't the app's primary.
+const AppDomainAlias = "ALIAS"
+
+// App domain phases. The API reference also lists UNKNOWN.
+const (
+	AppDomainPending     = "PENDING"
+	AppDomainConfiguring = "CONFIGURING"
+	AppDomainActive      = "ACTIVE"
+	AppDomainError       = "ERROR"
+)
+
+// AppIngressIPv4 and AppIngressIPv6 are App Platform's shared public
+// ingress addresses, for A and AAAA records on a hostname that can't be
+// a CNAME. From "How to Add Static IP Addresses to App Platform Apps"
+// (docs.digitalocean.com/products/app-platform/how-to/add-ip-address/),
+// read 2026-10-29.
+var (
+	AppIngressIPv4 = []string{"162.159.140.98", "172.66.0.96"}
+	AppIngressIPv6 = []string{"2606:4700:7::60", "2a06:98c1:58::60"}
+)
+
+// AppDomain is a hostname on a live app, and how far along its DNS and
+// certificate setup is.
+type AppDomain struct {
+	ID                   string             `json:"id"`
+	Spec                 AppDomainSpec      `json:"spec"`
+	Phase                string             `json:"phase"`
+	Progress             *AppDomainProgress `json:"progress,omitempty"`
+	CertificateExpiresAt time.Time          `json:"certificate_expires_at"`
+}
+
+// AppDomainProgress is the steps App Platform takes to bring a domain up,
+// such as verify-cname, ensure-ssl-txt-record and ensure-certificate.
+type AppDomainProgress struct {
+	Steps []AppDomainStep `json:"steps"`
+}
+
+// AppDomainStep is one of them. Reason is only set on a step that failed.
+type AppDomainStep struct {
+	Name      string    `json:"name"`
+	Status    string    `json:"status"`
+	StartedAt time.Time `json:"started_at"`
+	EndedAt   time.Time `json:"ended_at"`
+	Reason    *struct {
+		Code    string `json:"code"`
+		Message string `json:"message"`
+	} `json:"reason,omitempty"`
 }
 
 // Component is a service, worker or static site, and how App Platform
@@ -226,6 +290,7 @@ type App struct {
 	ActiveDeployment     *Deployment `json:"active_deployment"`
 	InProgressDeployment *Deployment `json:"in_progress_deployment"`
 	PendingDeployment    *Deployment `json:"pending_deployment"`
+	Domains              []AppDomain `json:"domains,omitempty"`
 }
 
 // Deployment phases.

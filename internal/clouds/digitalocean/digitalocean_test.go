@@ -215,3 +215,53 @@ func TestRollback_skipsThePin(t *testing.T) {
 		t.Fatalf("rollback body %v", got)
 	}
 }
+
+func TestUpdateAppSendsDomains(t *testing.T) {
+	f, c := newFake(t)
+	var got map[string]any
+	f.on("PUT /v2/apps/app-1", func(w http.ResponseWriter, _ *http.Request, body map[string]any) {
+		got = body
+		reply(w, 200, map[string]any{"app": map[string]any{"id": "app-1"}})
+	})
+	spec := AppSpec{Name: "shop", Domains: []AppDomainSpec{{Domain: "app.example.com", Type: AppDomainAlias}}}
+	if _, err := c.UpdateApp(context.Background(), "dop_v1_good", "app-1", spec); err != nil {
+		t.Fatalf("UpdateApp: %v", err)
+	}
+	s, _ := got["spec"].(map[string]any)
+	want := `[{"domain":"app.example.com","type":"ALIAS"}]`
+	b, _ := json.Marshal(s["domains"])
+	if string(b) != want {
+		t.Errorf("spec.domains = %s, want %s", b, want)
+	}
+}
+
+func TestGetAppDecodesDomains(t *testing.T) {
+	f, c := newFake(t)
+	f.on("GET /v2/apps/app-1", func(w http.ResponseWriter, _ *http.Request, _ map[string]any) {
+		reply(w, 200, map[string]any{"app": map[string]any{"id": "app-1", "domains": []any{map[string]any{
+			"id":                     "dom-1",
+			"spec":                   map[string]any{"domain": "app.example.com", "type": "ALIAS"},
+			"phase":                  "CONFIGURING",
+			"certificate_expires_at": "2027-01-29T23:59:59Z",
+			"progress": map[string]any{"steps": []any{map[string]any{
+				"name": "verify-cname", "status": "PENDING"}}},
+		}}}})
+	})
+	app, err := c.GetApp(context.Background(), "dop_v1_good", "app-1")
+	if err != nil {
+		t.Fatalf("GetApp: %v", err)
+	}
+	if len(app.Domains) != 1 {
+		t.Fatalf("domains = %d, want 1", len(app.Domains))
+	}
+	d := app.Domains[0]
+	if d.Phase != AppDomainConfiguring || d.Spec.Domain != "app.example.com" {
+		t.Errorf("domain = %+v", d)
+	}
+	if d.CertificateExpiresAt.Year() != 2027 {
+		t.Errorf("certificate_expires_at = %v", d.CertificateExpiresAt)
+	}
+	if d.Progress == nil || len(d.Progress.Steps) != 1 || d.Progress.Steps[0].Name != "verify-cname" {
+		t.Errorf("progress = %+v", d.Progress)
+	}
+}
