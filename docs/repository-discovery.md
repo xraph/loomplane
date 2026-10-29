@@ -33,3 +33,13 @@ Registered extension constructors and literal driver options, such as `grove.Wit
 Configuration follows the app's declared name and project config directory: `config/<app>.yaml` or `.yml`, then app-local `config.yaml` or `.yml`, then shared project defaults for registered extensions. An app-specific embedded backend or disabled extension overrides its shared default. In-memory and local-file backends do not request managed infrastructure.
 
 Driver evidence records the selected backend and source line without copying credentials or connection strings. Malformed configuration and unsupported drivers produce notes. Dynamic factories, interface dispatch, environment-dependent selection, and runtime plugins can require explicit declarations or review; analysis never evaluates them to guess a backend.
+
+## Vite React Server Components
+
+Loomplane recognizes `@vitejs/plugin-rsc` apps as `vite-rsc` web apps when the package has a Vite config or runs Vite in its scripts. You do not need an `index.html`. A dependency without app configuration or scripts stays library evidence.
+
+For dynamic RSC, provide a production `start` script or a Dockerfile. Your server must serve the client assets and the RSC/SSR output from the same build, listen on `0.0.0.0`, and respect the configured port. Use `NODE_ENV=production` for production builds. The plugin's `vite preview` command is for previewing a build; define your production server explicitly.
+
+The existing Node build paths and container targets handle these applications. Remote SSH and Kubernetes source builds require a Dockerfile, as they do for other Node apps. Dynamic deployment to Vercel is blocked until an adapter can package the server correctly. If your app generates all its pages at build time, explicitly select `kind: static-site` and verify the target's publish-directory convention.
+
+See [the deployable Vite RSC example](../examples/vite-rsc/README.md) for a complete Node server and Dockerfile. Detection reads files without executing your Vite config.

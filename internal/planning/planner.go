@@ -716,6 +716,7 @@ func (p *planner) desired(name, base string, s manifest.Service, gs *graph.Servi
 	}
 	p.checkRender(name, base, cfg)
 	p.checkAzure(name, base, cfg)
+	p.checkViteRSC(name, base, cfg, gs.Requires)
 	return &Action{
 		ID: actionID(ServiceSubject, name), Subject: ServiceSubject, Name: name,
 		Provider: prov.Name, Region: cfg.Region, Engine: prov.Engine(runs), Creates: runs.Creates,
