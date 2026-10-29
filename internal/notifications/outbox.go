@@ -65,6 +65,8 @@ func (s *Service) drain(ctx context.Context) error {
 				diagnostic = "email delivery failed"
 			case errors.Is(err, ErrPushFailed):
 				diagnostic = "push delivery failed"
+			case errors.Is(err, errWaitingPush):
+				diagnostic = errWaitingPush.Error()
 			}
 			if _, saveErr := s.pg.Exec(ctx, `UPDATE loomplane_notification_outbox SET last_error=$3,lease_until=NULL,lease_owner='',next_attempt_at=clock_timestamp()+($4 * interval '1 second'),email_state=CASE WHEN attempts>=10 AND email_state='pending' THEN 'failed' ELSE email_state END,push_state=CASE WHEN attempts>=10 AND push_state='pending' THEN 'failed' ELSE push_state END WHERE id=$1 AND lease_owner=$2`, item.id, item.owner, diagnostic, int(retryDelay(item.attempts).Seconds())); saveErr != nil {
 				return saveErr
@@ -114,6 +116,9 @@ func (s *Service) wirePayload(item *outboxItem) ([]byte, error) {
 		return s.modelBudgetWire(item)
 	case kindRenewal, kindRegistration:
 		return s.domainWire(item)
+	case KindPlanWaiting, KindPlanDecided:
+		// The trigger wrote the wire payload as the row's own.
+		return item.payload, nil
 	default:
 		return s.noticeWire(item)
 	}
@@ -156,6 +161,8 @@ func (s *Service) process(ctx context.Context, item *outboxItem) error {
 		build = modelBudgetMessage
 	case kindRenewal, kindRegistration:
 		build = domainMessage
+	case KindPlanWaiting, KindPlanDecided:
+		build = func(i *outboxItem) (*outboxMessage, error) { return s.planMessage(ctx, i) }
 	}
 	d, err := build(item)
 	if err != nil {
@@ -181,6 +188,11 @@ func (s *Service) process(ctx context.Context, item *outboxItem) error {
 		item.webhookDone = true
 	}
 	p := security.Principal{OrgID: item.org, UserID: item.user}
+	if item.kind == KindPlanDecided {
+		if readErr := s.readWaiting(ctx, item); readErr != nil {
+			return readErr
+		}
+	}
 	email, authorized, err := s.recipient(ctx, p, d)
 	if err != nil {
 		return err
@@ -189,6 +201,12 @@ func (s *Service) process(ctx context.Context, item *outboxItem) error {
 		_, err = s.pg.Exec(ctx, `UPDATE loomplane_notification_outbox SET inbox_done=TRUE,email_state='skipped',push_state='skipped' WHERE id=$1 AND lease_owner=$2`, item.id, item.owner)
 		return err
 	}
+	stale := false
+	if item.kind == KindPlanWaiting && !item.inboxDone {
+		if stale, err = s.stale(ctx, item); err != nil {
+			return err
+		}
+	}
 	if !item.inboxDone {
 		inboxID, idErr := notificationID(item.id)
 		if idErr != nil {
@@ -196,7 +214,7 @@ func (s *Service) process(ctx context.Context, item *outboxItem) error {
 		}
 		_, err = s.mailStore.GetNotification(ctx, inboxID)
 		if errors.Is(err, heraldstore.ErrNotificationNotFound) {
-			err = s.mailStore.CreateNotification(ctx, &inbox.Notification{ID: inboxID, AppID: s.cfg.Identity.AppID, UserID: item.user, Type: d.inboxType, Title: d.title, Body: d.body, ActionURL: d.actionURL, CreatedAt: item.created, Metadata: d.metadata})
+			err = s.mailStore.CreateNotification(ctx, &inbox.Notification{ID: inboxID, AppID: s.cfg.Identity.AppID, UserID: item.user, Type: d.inboxType, Title: d.title, Body: d.body, ActionURL: d.actionURL, CreatedAt: item.created, Metadata: d.metadata, Read: stale, ReadAt: readTime(stale)})
 		}
 		if err != nil {
 			return err
@@ -205,6 +223,11 @@ func (s *Service) process(ctx context.Context, item *outboxItem) error {
 			return err
 		}
 		item.inboxID = inboxID.String()
+		if stale {
+			// Decided before anyone was told: there is nothing to email or push.
+			_, err = s.pg.Exec(ctx, `UPDATE loomplane_notification_outbox SET email_state='skipped',push_state='skipped' WHERE id=$1 AND lease_owner=$2`, item.id, item.owner)
+			return err
+		}
 	}
 	plan, err := s.pushPlanFor(ctx, item, d)
 	if err != nil {
@@ -299,6 +322,13 @@ func (s *Service) recipient(ctx context.Context, p security.Principal, d *outbox
 		}
 	}
 	return email, true, nil
+}
+func readTime(read bool) *time.Time {
+	if !read {
+		return nil
+	}
+	now := time.Now()
+	return &now
 }
 func notificationID(source string) (heraldid.InboxID, error) {
 	sum := sha256.Sum256([]byte("loomplane/notification/" + source))

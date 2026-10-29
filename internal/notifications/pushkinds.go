@@ -27,6 +27,8 @@ func (s *Service) pushPlanFor(ctx context.Context, item *outboxItem, msg *outbox
 	case kindModelBudget, kindRenewal, kindRegistration, kindConnection:
 		plan.Push = &Push{Class: ClassWorkspace, Toggle: "push.workspace", Urgency: driver.UrgencyActive, Category: CategoryUpdate, Actions: []string{ActionOpen}, TTLSeconds: workspaceTTL}
 		return plan, nil
+	case KindPlanWaiting, KindPlanDecided:
+		return s.planPush(ctx, item, plan)
 	}
 	var n noticePayload
 	if err := json.Unmarshal(item.payload, &n); err != nil {
