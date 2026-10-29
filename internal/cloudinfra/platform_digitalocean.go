@@ -106,9 +106,8 @@ func (a *appPlatformDomains) Detach(ctx context.Context, cred provider.Infrastru
 // has to build the reviewed commit. One of any other commit is cancelled
 // before it's live, or rolled back to what ran before once it is, and the
 // spec change stays for the service's next deploy to carry. before is the
-// app as it was read just ahead of the update: only a deployment it didn't
-// have can be this update's, so a deploy someone else started in between is
-// never waited on or cancelled here.
+// app as it was read just ahead of the update, for the deployment to roll
+// back to.
 func (a *appPlatformDomains) update(ctx context.Context, cred provider.InfrastructureCredential, b RouteBinding, before *digitalocean.App, spec digitalocean.AppSpec, hostname, verb, reviewedCommit string) error {
 	app, err := a.client.UpdateApp(ctx, cred.Token, b.ExternalID, spec)
 	if err != nil {
@@ -117,12 +116,11 @@ func (a *appPlatformDomains) update(ctx context.Context, cred provider.Infrastru
 	if app.PendingDeployment == nil && app.InProgressDeployment == nil {
 		return nil
 	}
-	// An update's deployment queues behind a running one, so it shows as
-	// pending. One that's alone and in progress can't be told from a deploy
-	// that started in between.
+	// An update's deployment queues behind a running one, so with both
+	// slots set it's the pending one. Otherwise it's the one running.
 	own := app.PendingDeployment
-	if own == nil || deploymentIn(before, own.ID) {
-		return appDeploymentNotice(hostname)
+	if own == nil {
+		own = app.InProgressDeployment
 	}
 	_, err = a.client.WaitDeployment(ctx, cred.Token, b.ExternalID, own.ID, reviewedCommit)
 	var mismatch *digitalocean.CommitMismatchError
@@ -130,11 +128,20 @@ func (a *appPlatformDomains) update(ctx context.Context, cred provider.Infrastru
 		return err
 	}
 	refused := "App Platform started a deployment of a newer commit than the reviewed one. Deploy the service to finish " + verb + " " + hostname + "."
-	if mismatch.Deployment == nil || mismatch.Deployment.Phase != digitalocean.PhaseActive {
+	live := mismatch.Deployment != nil && mismatch.Deployment.Phase == digitalocean.PhaseActive
+	if !live {
 		if cancelErr := a.client.CancelDeployment(ctx, cred.Token, b.ExternalID, own.ID); cancelErr != nil {
 			return cancelErr
 		}
-		return fmt.Errorf("%w: %s", ErrConflict, refused)
+		// A deployment in a late phase can go live before the cancel lands,
+		// which App Platform answers as if it had.
+		d, getErr := a.client.GetDeployment(ctx, cred.Token, b.ExternalID, own.ID)
+		if getErr != nil {
+			return getErr
+		}
+		if d.Phase != digitalocean.PhaseActive {
+			return fmt.Errorf("%w: %s", ErrConflict, refused)
+		}
 	}
 	// It went live, so cancelling does nothing: put the app back.
 	if before.ActiveDeployment == nil {
@@ -144,16 +151,6 @@ func (a *appPlatformDomains) update(ctx context.Context, cred provider.Infrastru
 		return fmt.Errorf("rolling back the app after a deployment of a newer commit than the reviewed one: %w", rollbackErr)
 	}
 	return fmt.Errorf("%w: %s", ErrConflict, refused)
-}
-
-// deploymentIn tells whether app already had the deployment id.
-func deploymentIn(app *digitalocean.App, id string) bool {
-	for _, d := range []*digitalocean.Deployment{app.PendingDeployment, app.InProgressDeployment} {
-		if d != nil && d.ID == id {
-			return true
-		}
-	}
-	return false
 }
 
 func (a *appPlatformDomains) Status(ctx context.Context, cred provider.InfrastructureCredential, b RouteBinding, hostname string) (PlatformDomainStatus, error) {

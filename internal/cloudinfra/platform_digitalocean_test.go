@@ -35,6 +35,8 @@ type fakeDOApp struct {
 	started    string
 	inProgress string
 	rollbacks  []string
+	// liveAfterCancel has the deployment go live before a cancel lands.
+	liveAfterCancel bool
 }
 
 func newFakeDOApp(t *testing.T, app map[string]any) (*fakeDOApp, *appPlatformDomains) {
@@ -80,7 +82,7 @@ func (f *fakeDOApp) serve(w http.ResponseWriter, r *http.Request) {
 		reply(http.StatusOK, map[string]any{"app": f.app})
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v2/apps/app-1/deployments/"):
 		phase := f.phase
-		if phase == "" {
+		if phase == "" || (f.liveAfterCancel && len(f.canceled) > 0) {
 			phase = "ACTIVE"
 		}
 		reply(http.StatusOK, map[string]any{"deployment": map[string]any{
@@ -247,16 +249,26 @@ func TestAppPlatformUpdateLeavesADeploymentItDidNotStartAlone(t *testing.T) {
 	}
 }
 
-func TestAppPlatformUpdateWaitsWhenItCannotTellWhichDeploymentIsItsOwn(t *testing.T) {
-	f, a := newFakeDOApp(t, map[string]any{"id": "app-1", "spec": map[string]any{"name": "web"}})
-	f.updated, f.started = "dep-1", "in_progress"
+func TestAppPlatformUpdateChecksALoneInProgressDeployment(t *testing.T) {
+	f, a := newFakeDOApp(t, map[string]any{"id": "app-1", "spec": map[string]any{"name": "web"}, "active_deployment": map[string]any{"id": "dep-prev", "phase": "ACTIVE"}})
+	f.updated, f.started, f.builtCommit, f.phase = "dep-1", "in_progress", "ffffffffffffffffffffffffffffffffffffffff", "BUILDING"
 	err := a.Attach(t.Context(), doAppCred(), doAppBinding(), "app.example.com", platformApproved)
-	var notice *routeNoticeError
-	if !errors.Is(err, ErrPending) || !errors.As(err, &notice) {
-		t.Fatalf("err = %v", err)
+	if !errors.Is(err, ErrConflict) || len(f.canceled) != 1 || !strings.Contains(f.canceled[0], "dep-1") {
+		t.Fatalf("err %v, canceled %v", err, f.canceled)
 	}
-	if len(f.canceled) != 0 || len(f.rollbacks) != 0 {
-		t.Fatalf("canceled %v, rollbacks %v", f.canceled, f.rollbacks)
+	g, b := newFakeDOApp(t, map[string]any{"id": "app-1", "spec": map[string]any{"name": "web"}})
+	g.updated, g.started = "dep-1", "in_progress"
+	if err := b.Attach(t.Context(), doAppCred(), doAppBinding(), "app.example.com", platformApproved); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAppPlatformRollsBackADeploymentThatWentLiveBeforeTheCancel(t *testing.T) {
+	f, a := newFakeDOApp(t, map[string]any{"id": "app-1", "spec": map[string]any{"name": "web"}, "active_deployment": map[string]any{"id": "dep-prev", "phase": "ACTIVE"}})
+	f.updated, f.builtCommit, f.phase, f.liveAfterCancel = "dep-1", "ffffffffffffffffffffffffffffffffffffffff", "BUILDING", true
+	err := a.Attach(t.Context(), doAppCred(), doAppBinding(), "app.example.com", platformApproved)
+	if !errors.Is(err, ErrConflict) || len(f.canceled) != 1 || len(f.rollbacks) != 1 || f.rollbacks[0] != "dep-prev" {
+		t.Fatalf("err %v, canceled %v, rollbacks %v", err, f.canceled, f.rollbacks)
 	}
 }
 
