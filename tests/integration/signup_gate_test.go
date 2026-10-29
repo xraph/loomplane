@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/url"
 	"slices"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -121,6 +122,39 @@ func TestSignupGate_pendingRefusesEveryone(t *testing.T) {
 				t.Fatalf("%d users after setup, want 1", n)
 			}
 		})
+	}
+}
+
+// The HTTP check only reads the first 64 KiB of a sign-up to find the email.
+// A longer body goes to authsome unread, and the gate's hook inside the
+// engine must still refuse it while setup is pending. The same body is
+// accepted once the instance is set up, so nothing else turned it away.
+func TestSignupGate_hookRefusesLongBodies(t *testing.T) {
+	cfg := config.Defaults()
+	off := false
+	cfg.Identity.Waitlist = &off
+	r, c := freshSetup(t, &cfg)
+	defer r.stop()
+	long := map[string]any{
+		"email":    "mallory@example.com",
+		"password": "Correct-horse-battery-9",
+		"metadata": map[string]string{"pad": strings.Repeat("x", 70<<10)},
+	}
+
+	res := postFrom(t.Context(), http.DefaultClient, c.base+"/authsome/v1/signup", c.key, nextAddress(), long)
+	if res.err != nil || res.status < 300 {
+		t.Fatalf("a long sign-up before setup: %d %v, want it refused", res.status, res.err)
+	}
+	if n := countRows(t, cfg.Database.URL, liveUsers); n != 0 {
+		t.Fatalf("%d users after a long sign-up before setup, want 0", n)
+	}
+
+	if code, body := c.setup(ada); code != http.StatusOK {
+		t.Fatalf("setup: %d %s", code, body)
+	}
+	res = postFrom(t.Context(), http.DefaultClient, c.base+"/authsome/v1/signup", c.key, nextAddress(), long)
+	if res.err != nil || res.status != http.StatusCreated {
+		t.Fatalf("the same long sign-up after setup: %d %s %v, want 201", res.status, res.body, res.err)
 	}
 }
 
@@ -362,7 +396,7 @@ func TestSignupGate_floodIsRateLimited(t *testing.T) {
 	}
 
 	flood := &setupClient{t: t, base: c.base, key: c.key, from: "203.0.113.7"}
-	var codes []int
+	codes := make([]int, 0, 6)
 	for i := range 6 {
 		status, _, _ := flood.send(http.MethodPost, "/authsome/v1/signup",
 			map[string]string{"email": fmt.Sprintf("bot%d@example.com", i), "password": "Correct-horse-battery-9"})

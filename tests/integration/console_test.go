@@ -278,6 +278,10 @@ func TestConsole(t *testing.T) {
 			t.Fatalf("Grace's session: %d %s", status, raw)
 		}
 		requireHidden(t, grace, "Grace")
+		// Signed in, she still isn't told where the console is.
+		if got := grace.publicConfig(); got.ConsolePath != nil {
+			t.Errorf("Grace's public config has the console path: %+v", got)
+		}
 		// Her session as a bearer token gets the same answer.
 		bearer := consoleBearer(t, owner.base, grace.cookie.Value)
 		if bearer != unknown {

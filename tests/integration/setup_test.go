@@ -356,33 +356,34 @@ func TestSetup_race(t *testing.T) {
 	r, c := freshSetup(t, &cfg)
 	defer r.stop()
 
+	// Off the test goroutine, so each result comes back in results rather
+	// than through t. post sends no cookie, so neither sees the other's.
 	var wg sync.WaitGroup
-	codes := make([]int, 2)
-	bodies := make([]string, 2)
+	results := make([]postResult, 2)
 	for i, email := range []string{"ada@example.com", "grace@example.com"} {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			form := map[string]string{"name": "Someone", "email": email, "password": "Correct-horse-battery-9", "organization_name": "Org " + email}
-			// A client of its own each, so the cookie of one isn't the other's.
-			status, raw, _ := (&setupClient{t: t, base: c.base, key: c.key}).send(http.MethodPost, "/api/v1/setup", form)
-			codes[i], bodies[i] = status, string(raw)
+			results[i] = post(t.Context(), http.DefaultClient, c.base+"/api/v1/setup", c.key, form)
 		}()
 	}
 	wg.Wait()
 	ok, refused := 0, 0
-	for i, code := range codes {
+	for i, res := range results {
 		switch {
-		case code == http.StatusOK:
+		case res.err != nil:
+			t.Errorf("request %d: %v", i, res.err)
+		case res.status == http.StatusOK:
 			ok++
-		case code == http.StatusForbidden && strings.Contains(bodies[i], "setup has already been completed"):
+		case res.status == http.StatusForbidden && strings.Contains(res.body, "setup has already been completed"):
 			refused++
 		default:
-			t.Errorf("request %d: %d %s", i, code, bodies[i])
+			t.Errorf("request %d: %d %s", i, res.status, res.body)
 		}
 	}
 	if ok != 1 || refused != 1 {
-		t.Fatalf("racing setups: %d succeeded and %d were refused (%v), want one each", ok, refused, codes)
+		t.Fatalf("racing setups: %d succeeded and %d were refused (%+v), want one each", ok, refused, results)
 	}
 	if n := countRows(t, cfg.Database.URL, liveUsers); n != 1 {
 		t.Fatalf("%d users after racing setups, want 1", n)
