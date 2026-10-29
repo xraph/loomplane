@@ -35,8 +35,10 @@ export default function PrivacyPage() {
       <p>
         Loomplane is also software you can run yourself. When you connect the
         app to a Loomplane that your company or someone else hosts, that server
-        belongs to them. We never see what passes between your phone and it, and
-        their own privacy policy covers what they keep. Ask whoever runs it.
+        belongs to them. Apart from push notifications, which go through our
+        gateway (see <em>Push notifications</em> below), we never see what
+        passes between your phone and that server, and their own privacy policy
+        covers what they keep. Ask whoever runs it.
       </p>
 
       <h2>What stays on your phone</h2>
@@ -103,37 +105,44 @@ export default function PrivacyPage() {
         If you turn notifications on, the app asks your phone for a push token
         (from Apple on iOS, from Google's Firebase Cloud Messaging on Android)
         and makes a key pair. The private key never leaves your phone. The app
-        registers the token with our push gateway at{" "}
-        <code>push.loomplane.com</code>, then gives the Loomplane server you're
-        signed in to the handle the gateway sent back, along with the public
-        key.
+        registers with the push gateway your server names, which is ours at{" "}
+        <code>push.loomplane.com</code> unless whoever runs the server changed
+        it. The gateway receives the token and the key of the Loomplane server
+        the phone will get pushes from (on iPhone, also whether it's a test
+        build), so it knows which server each phone belongs to. It seals those
+        into a handle and keeps nothing. The app then gives the server you're
+        signed in to that handle, along with the public key.
       </p>
       <p>
         That server keeps a record of the phone, tied to your account on it: the
-        public key, the gateway handle, the platform, the model name (something
-        like "Pixel 9"), the time zone, your quiet hours and your notification
-        settings. Signing out on that phone, or deleting your account, deletes
-        the record.
+        public key, the gateway handle, the platform, a name for the phone
+        (something like "Pixel 9"), the time zone, your quiet hours, your
+        notification settings, and when the phone was added and last seen. When
+        you sign out on that phone, the app asks the server to delete the
+        record. Deleting your account deletes it too, and records for phones
+        that can no longer be reached are removed as well. The server also keeps
+        only the 20 phones you used most recently.
       </p>
       <p>
         When the server has something for you, it encrypts the notification to
         your phone's public key before it sends it. The gateway gets the
-        encrypted payload, the push token (sealed inside the handle, so only the
-        gateway can open it), how urgent the message is, what kind it is, a
-        collapse ID that lets a newer notification replace an older one, and
-        which server key signed the request. It can't read the title, the text,
-        your workspace or the buttons. Apple or Google deliver the message to
-        your phone, and your phone decrypts it.
+        encrypted payload, the handle (so only the gateway can open the push
+        token inside it), how urgent the message is, what kind it is, a collapse
+        ID that lets a newer notification replace an older one, and which server
+        key signed the request. It can't read the title, the text, your
+        workspace or the buttons. Apple or Google deliver the message to your
+        phone, and your phone decrypts it. Apple or Google can see that a
+        notification arrived and when, but not what it says.
       </p>
       <p>
-        The gateway stores none of this. Its logs keep a fingerprint of the
-        server's key, the platform, the urgency, the kind, whether delivery
-        worked and how long it took.
+        The gateway doesn't store any of this itself. Its logs keep a
+        fingerprint of the server's key, the platform, the urgency, the kind,
+        whether delivery worked and how long it took.
       </p>
       <p>
         If you run Loomplane yourself, you can turn push off with{" "}
         <code>LOOMPLANE_PUSH_ENABLED</code> or point the server at a gateway of
-        your own. Otherwise a self-hosted or company-run server sends through
+        your own. By default a self-hosted or company-run server sends through
         our gateway, and the same limits apply: we can't see what it says.
       </p>
 
