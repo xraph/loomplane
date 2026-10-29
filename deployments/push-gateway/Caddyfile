@@ -1,0 +1,22 @@
+{
+	email {$ACME_EMAIL}
+}
+
+# No log directive on purpose: Caddy writes no access log, because request
+# metadata isn't wanted here. The gateway logs what it needs.
+{$PUSH_GATEWAY_DOMAIN} {
+	request_body {
+		max_size 64KB
+	}
+
+	# Only the two public routes reach the gateway. Its health check stays
+	# inside the Docker network.
+	@api path /v1/registrations /v1/send
+	handle @api {
+		reverse_proxy push-gateway:8790
+	}
+
+	handle {
+		respond 404
+	}
+}

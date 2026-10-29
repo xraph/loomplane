@@ -1,0 +1,90 @@
+# The Loomplane push gateway behind Caddy, for push.loomplane.com. Setup and
+# key rotation: https://docs.loomplane.com/docs/push-gateway
+#
+# Put the secret files in ./secrets (or PUSH_GATEWAY_SECRETS_DIR):
+#   sealing-key, previous-sealing-key, fcm-service-account.json, apns-key.p8
+# Create empty files for any you don't use. Only Caddy keeps state (its
+# certificates); the gateway has no volume.
+name: loomplane-push-gateway
+
+x-logging: &logging
+  driver: local
+  options:
+    max-size: "10m"
+    max-file: "5"
+
+services:
+  push-gateway:
+    image: ${PUSH_GATEWAY_IMAGE:?Set PUSH_GATEWAY_IMAGE to a release tag or digest}
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    stop_grace_period: 30s
+    pids_limit: 128
+    mem_limit: 256m
+    logging: *logging
+    networks: [backend, egress]
+    environment:
+      PUSH_GATEWAY_ADDR: :8790
+      PUSH_GATEWAY_SEALING_KEY_ID: ${PUSH_GATEWAY_SEALING_KEY_ID:?Set PUSH_GATEWAY_SEALING_KEY_ID, for example k202611}
+      PUSH_GATEWAY_SEALING_KEY_FILE: /run/secrets/sealing_key
+      # Set only together with an ID.
+      PUSH_GATEWAY_PREVIOUS_SEALING_KEY_ID: ${PUSH_GATEWAY_PREVIOUS_SEALING_KEY_ID:-}
+      PUSH_GATEWAY_PREVIOUS_SEALING_KEY_FILE: ${PUSH_GATEWAY_PREVIOUS_SEALING_KEY_ID:+/run/secrets/previous_sealing_key}
+      PUSH_GATEWAY_FCM_CREDENTIALS_FILE: /run/secrets/fcm_service_account
+      # iOS is on only once an APNs key ID is set, so Android can go live
+      # first. The gateway refuses to start with the APNs IDs but no key file,
+      # so keep the key ID and team ID together and unset both to turn iOS off.
+      PUSH_GATEWAY_APNS_KEY_FILE: ${PUSH_GATEWAY_APNS_KEY_ID:+/run/secrets/apns_key}
+      PUSH_GATEWAY_APNS_KEY_ID: ${PUSH_GATEWAY_APNS_KEY_ID:-}
+      PUSH_GATEWAY_APNS_TEAM_ID: ${PUSH_GATEWAY_APNS_TEAM_ID:-}
+      # Sends per second per server key, and sends per minute per device.
+      PUSH_GATEWAY_SERVER_RATE: ${PUSH_GATEWAY_SERVER_RATE:-50}
+      PUSH_GATEWAY_HANDLE_RATE: ${PUSH_GATEWAY_HANDLE_RATE:-30}
+    secrets:
+      - sealing_key
+      - previous_sealing_key
+      - fcm_service_account
+      - apns_key
+
+  caddy:
+    image: ${CADDY_IMAGE:-caddy:2-alpine}
+    restart: unless-stopped
+    depends_on:
+      push-gateway:
+        condition: service_healthy
+    environment:
+      PUSH_GATEWAY_DOMAIN: ${PUSH_GATEWAY_DOMAIN:?Set PUSH_GATEWAY_DOMAIN, push.loomplane.com in production}
+      ACME_EMAIL: ${ACME_EMAIL:?Set ACME_EMAIL for certificate renewal notices}
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks: [backend, egress]
+    mem_limit: 128m
+    security_opt: [no-new-privileges:true]
+    logging: *logging
+
+secrets:
+  sealing_key:
+    file: ${PUSH_GATEWAY_SECRETS_DIR:-./secrets}/sealing-key
+  previous_sealing_key:
+    file: ${PUSH_GATEWAY_SECRETS_DIR:-./secrets}/previous-sealing-key
+  fcm_service_account:
+    file: ${PUSH_GATEWAY_SECRETS_DIR:-./secrets}/fcm-service-account.json
+  apns_key:
+    file: ${PUSH_GATEWAY_SECRETS_DIR:-./secrets}/apns-key.p8
+
+networks:
+  backend:
+    internal: true
+  egress:
+
+volumes:
+  caddy-data:
+  caddy-config:

@@ -1,5 +1,5 @@
 .PHONY: help up down stack dev dev-api dev-dashboard build build-api build-dashboard run vuln fuzz build-cli build-agent build-push-gateway build-qualify \
-	image helm-lint k8s-manifest test-kubernetes test test-go test-dashboard test-integration acceptance acceptance-infrastructure acceptance-catalog lint lint-go lint-dashboard \
+	image image-push-gateway test-push-gateway helm-lint k8s-manifest test-kubernetes test test-go test-dashboard test-integration acceptance acceptance-infrastructure acceptance-catalog lint lint-go lint-dashboard \
 	lint-fix fmt fmt-go fmt-dashboard vet gen-client check-client setup clean \
 	h b r t ti c f l lf v d
 
@@ -72,6 +72,12 @@ run: build ## Build everything and run the API on API_PORT, with the analysis wo
 
 image: ## Build the container image, tagged with the git version
 	docker build -f deployments/docker/Dockerfile --build-arg VERSION=$(VERSION) -t loomplane:$(VERSION) .
+
+image-push-gateway: ## Build the push gateway image, tagged with the git version
+	docker build -f deployments/push-gateway/Dockerfile --build-arg VERSION=$(VERSION) -t loomplane-push-gateway:$(VERSION) .
+
+test-push-gateway: image-push-gateway ## Run the push gateway stack in Docker with throwaway secrets and check it
+	bash scripts/test-push-gateway.sh loomplane-push-gateway:$(VERSION)
 
 helm-lint: ## Lint the Helm chart and validate what it renders (needs helm and kubeconform)
 	bash scripts/check-helm.sh

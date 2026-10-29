@@ -58,6 +58,9 @@ docs/plan.md
 docs/one-click-services-plan.md
 docs/catalog-recovery-verification.md
 
+# The push gateway's secrets never enter git
+deployments/push-gateway/secrets/
+
 # GoReleaser output
 /dist/
 
