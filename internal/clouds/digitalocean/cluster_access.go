@@ -42,6 +42,11 @@ func (c *Client) BootstrapCluster(ctx context.Context, access provider.AccountAc
 		Certificate string    `json:"client_certificate_data"`
 		Key         string    `json:"client_key_data"`
 	}
+	if access.BeforeEffect != nil {
+		if err := access.BeforeEffect(ctx); err != nil {
+			return empty, err
+		}
+	}
 	requestedAt := time.Now()
 	q := url.Values{"expiry_seconds": {strconv.FormatInt(int64(ttl/time.Second), 10)}}
 	if err := c.do(ctx, string(access.Credential), http.MethodGet, "/v2/kubernetes/clusters/"+url.PathEscape(ref.ID)+"/credentials", q, nil, &response); err != nil {

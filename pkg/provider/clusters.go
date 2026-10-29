@@ -17,6 +17,8 @@ type AccountAccess struct {
 	ConnectionID string `json:"-"`
 	Generation   int64  `json:"-"`
 	Credential   []byte `json:"-"`
+	// BeforeEffect must run after adapter preflight and immediately before purchase or credential issuance.
+	BeforeEffect func(context.Context) error `json:"-"`
 }
 
 func (AccountAccess) String() string     { return "[account access]" }

@@ -28,6 +28,14 @@ export function ClusterDetail({
   cluster: CloudCluster
   onBack: () => void
 }) {
+  const operations = useQuery(api.useClusterOperationsList, {
+    path: { cloudId: cluster.cloudId },
+    query: { limit: 50 },
+  })
+  const setup = operations.data?.items?.find(
+    (op) => op.resourceId === cluster.id
+  )
+  const cloudPath = `/clouds/${encodeURIComponent(cluster.cloudId)}`
   return (
     <section className="grid min-w-0 gap-3" aria-label="Cluster details">
       <Button
@@ -62,8 +70,33 @@ export function ClusterDetail({
         </Row>
         <Row>
           <span>Runtime readiness</span>
-          <span>Check the saved setup operation and project target</span>
+          <span className="flex flex-wrap items-center gap-x-3 gap-y-1">
+            <a
+              className="text-primary underline underline-offset-4"
+              href={
+                setup
+                  ? `${cloudPath}?tab=servers&clusterOperation=${encodeURIComponent(setup.id)}`
+                  : `${cloudPath}?tab=changes`
+              }
+            >
+              {setup ? "View setup operation" : "View setup history"}
+            </a>
+            <a
+              className="text-primary underline underline-offset-4"
+              href={`${cloudPath}?tab=targets`}
+            >
+              View Cloud targets
+            </a>
+          </span>
         </Row>
+        {(cluster.observation?.pools ?? []).map((pool) => (
+          <Row key={pool.name}>
+            <span className="min-w-0 break-words">{pool.name}</span>
+            <span className="min-w-0 break-words">
+              {pool.count} × {pool.size}
+            </span>
+          </Row>
+        ))}
         {(cluster.observation?.conditions ?? []).map((condition) => (
           <Row key={condition.type}>
             <span>{condition.type}</span>

@@ -54,6 +54,11 @@ func (c *Client) CreateCluster(ctx context.Context, access provider.AccountAcces
 	var response struct {
 		Cluster doksCluster `json:"kubernetes_cluster"`
 	}
+	if access.BeforeEffect != nil {
+		if err := access.BeforeEffect(ctx); err != nil {
+			return receipt, err
+		}
+	}
 	if err := c.do(ctx, string(access.Credential), http.MethodPost, "/v2/kubernetes/clusters", nil, request, &response); err != nil {
 		return receipt, infrastructureError(err, "kubernetes:create")
 	}

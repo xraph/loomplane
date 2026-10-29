@@ -93,6 +93,15 @@ func (s *Service) ReconcileClusterOperation(ctx context.Context, org, id string,
 			if checkErr := store.AttemptClusterCreate(ctx, o); checkErr != nil {
 				return checkErr
 			}
+			access.BeforeEffect = func(effectCtx context.Context) error {
+				if checkErr := s.clusterPurchaseGate(o.Principal, o.Input); checkErr != nil {
+					return checkErr
+				}
+				if _, _, checkErr := s.clusterAuthority(effectCtx, o.Principal, o.CloudID, o.Input); checkErr != nil {
+					return checkErr
+				}
+				return s.saveCluster(effectCtx, o)
+			}
 			spec := o.Input.Spec
 			receipt, e := creator.CreateCluster(call, access, spec)
 			s.recordCluster(ctx, "cloud.cluster.provider_effect_attempted", o)
@@ -192,6 +201,12 @@ func (s *Service) clusterObservedResource(ctx context.Context, o *ClusterOperati
 		}
 		if r.ExternalID != observation.Ref.ID || r.Incarnation != observation.Ref.Incarnation || r.AccountID != o.Input.AccountID {
 			return nil, ErrConflict
+		}
+		if r.Observation != nil && r.Observation.CAHash != "" {
+			if observation.Endpoint != r.Observation.Endpoint || (observation.CAHash != "" && observation.CAHash != r.Observation.CAHash) {
+				return nil, ErrConflict
+			}
+			observation.CAHash = r.Observation.CAHash
 		}
 		r.Revision++
 	case errors.Is(err, ErrNotFound):

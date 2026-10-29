@@ -3,10 +3,14 @@
 package integration
 
 import (
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
+
+	"github.com/xraph/loomplane/pkg/provider"
 
 	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/connections"
@@ -21,11 +25,14 @@ func TestManagedClusterEnrollmentPublicationAndRenewal(t *testing.T) {
 	}
 	now := time.Now().UTC()
 	resource := &cloudinfra.ManagedResource{ID: "cluster", OrgID: "org", CloudID: "cloud", Kind: "cluster", Provider: "digitalocean", AccountID: "account", ConnectionID: "conn", ExternalID: "remote", Incarnation: "physical", Ownership: "managed", Status: "running", Revision: 1}
+	ref := provider.ClusterRef{ID: "remote", AccountID: "account", Incarnation: "physical"}
+	resource.Observation = &provider.ClusterObservation{Ref: ref, Endpoint: "https://cluster.test", CAHash: "ca-pin"}
 	if _, err := store.ClaimManagedResource(t.Context(), resource, 0); err != nil {
 		t.Fatal(err)
 	}
 	in := &cloudinfra.AttachmentInput{ProjectID: "proj", Namespace: "runtime", ServiceAccountName: "runtime", TargetSlug: "runtime", CloudRevision: 1, GrantRevision: 1, ResourceRevision: 1}
 	op := &cloudinfra.ClusterOperation{ID: "enrollment", OrgID: "org", CloudID: "cloud", ResourceID: "cluster", Kind: "adopt", SchemaVersion: 1, Status: "preview", Revision: 1, Digest: "digest", Principal: security.Principal{OrgID: "org", UserID: "manager"}, Input: cloudinfra.ClusterInput{Attachment: in, Provider: "digitalocean", AccountID: "account", ConnectionID: "conn", CloudRevision: 1, ConnectionGeneration: 1, ResourceRevision: 1}, CreatedAt: now, UpdatedAt: now, ExpiresAt: now.Add(time.Hour), Steps: []cloudinfra.ClusterStep{{Name: "provider", State: "completed", RequestDigest: "digest"}, {Name: "enrollment", State: "pending", RequestDigest: "digest"}}}
+	op.Input.Ref = ref
 	if err := store.CreateClusterPreview(t.Context(), op); err != nil {
 		t.Fatal(err)
 	}
@@ -53,6 +60,8 @@ func TestManagedClusterEnrollmentPublicationAndRenewal(t *testing.T) {
 		t.Fatal("materialization changed reviewed input")
 	}
 	a := &cloudinfra.RuntimeAttachment{ID: "attachment", OrgID: "org", CloudID: "cloud", ClusterID: "cluster", ProjectID: "proj", Namespace: "runtime", NamespaceUID: "ns", ServiceAccountName: "runtime", ServiceAccountUID: "sa", RuntimeConnectionID: "runtime", TrustRevision: 1, Revision: 1, CredentialVersion: 1, CredentialExpiry: now.Add(time.Hour), VaultKey: "version1", OperationID: op.ID}
+	a.TrustFingerprint = "ca-pin"
+	a.EndpointFingerprint = fmt.Sprintf("%x", sha256.Sum256([]byte(resource.Observation.Endpoint)))
 	c := &connections.Connection{ID: "runtime", OrgID: "org", Cloud: connections.Kubernetes, Name: "Runtime", Method: connections.MethodManagedKubernetes, Generation: 1, Status: connections.StatusReady, CreatedAt: now, CreatedBy: "manager", Details: map[string]string{"managed_attachment_id": a.ID, "managed_project_id": "proj", "namespace_uid": "ns"}}
 	leased.Status = "succeeded"
 	leased.Steps[1].State = "completed"

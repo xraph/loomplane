@@ -4,9 +4,9 @@ import userEvent from "@testing-library/user-event"
 import { afterEach, expect, it, vi } from "vitest"
 import { publishLiveState } from "@/lib/realtime-state"
 import { forgeClient } from "@/client/runtime"
-import type { Profile } from "@/client/forge/loomplane/types"
+import type { CloudCluster, Profile } from "@/client/forge/loomplane/types"
 import { Clusters } from "./clusters"
-import { ClusterOperationDetail } from "./cluster-detail"
+import { ClusterDetail, ClusterOperationDetail } from "./cluster-detail"
 const permissions = vi.hoisted(() => ({ allowed: true }))
 vi.mock("@/lib/organization", () => ({
   useOrganization: () => ({ can: () => permissions.allowed }),
@@ -206,4 +206,49 @@ it("shows saved fixed node pool scope before applying after reload", async () =>
   expect(screen.getByText(/workers: 3 × s-2vcpu-4gb/)).toHaveTextContent(
     "Fixed capacity"
   )
+})
+
+it("shows observed pools and navigable setup and Cloud targets", async () => {
+  vi.stubGlobal(
+    "fetch",
+    vi.fn().mockResolvedValue(
+      Response.json({
+        items: [
+          {
+            ...operation,
+            resource_id: "cluster",
+            input: {
+              ...operation.input,
+              attachment: { project_id: "project" },
+            },
+          },
+        ],
+      })
+    )
+  )
+  mount(
+    <ClusterDetail
+      cluster={
+        {
+          id: "cluster",
+          cloudId: "cloud",
+          status: "running",
+          externalId: "provider-cluster",
+          provider: "digitalocean",
+          observation: {
+            ref: { region: "nyc1" },
+            pools: [{ name: "workers", size: "s-2vcpu-4gb", count: 3 }],
+          },
+        } as CloudCluster
+      }
+      onBack={() => {}}
+    />
+  )
+  expect(screen.getByText("3 × s-2vcpu-4gb")).toBeInTheDocument()
+  expect(
+    await screen.findByRole("link", { name: "View setup operation" })
+  ).toHaveAttribute("href", "/clouds/cloud?tab=servers&clusterOperation=op")
+  expect(
+    screen.getByRole("link", { name: "View Cloud targets" })
+  ).toHaveAttribute("href", "/clouds/cloud?tab=targets")
 })

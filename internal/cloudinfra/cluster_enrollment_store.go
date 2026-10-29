@@ -160,11 +160,11 @@ func (s *PgStore) FinishClusterCredentialRefresh(ctx context.Context, a *Runtime
 	if checkErr := clusterPinsTx(ctx, tx, operation); checkErr != nil {
 		return checkErr
 	}
-	var resourceCurrent bool
-	if checkErr := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_managed_resources WHERE org_id=$1 AND id=$2 AND revision=$3 AND deleted_at IS NULL)`, a.OrgID, a.ClusterID, operation.Enrollment.ResourceRevision).Scan(&resourceCurrent); checkErr != nil {
-		return checkErr
+	resource, resourceErr := scanManagedResource(tx.QueryRow(ctx, `SELECT `+managedResourceColumns+` FROM loomplane_managed_resources WHERE org_id=$1 AND id=$2 AND deleted_at IS NULL`, a.OrgID, a.ClusterID))
+	if resourceErr != nil {
+		return resourceErr
 	}
-	if !resourceCurrent {
+	if !clusterAttachmentPins(operation, resource, a) {
 		return ErrConflict
 	}
 	tag, err := tx.Exec(ctx, `UPDATE loomplane_runtime_attachments a SET revision=$3,body=$4 WHERE org_id=$1 AND id=$2 AND revision=$3-1 AND deleted_at IS NULL AND EXISTS(SELECT 1 FROM loomplane_cluster_credential_refresh f WHERE f.org_id=a.org_id AND f.attachment_id=a.id AND f.version=$5 AND f.lease_owner=$6 AND f.vault_key=$7 AND f.lease_until>clock_timestamp())`, a.OrgID, a.ID, a.Revision, raw, r.Version, r.LeaseOwner, r.VaultKey)

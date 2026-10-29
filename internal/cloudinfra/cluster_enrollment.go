@@ -50,10 +50,32 @@ func (s *Service) enrollmentAuthority(ctx context.Context, o *ClusterOperation) 
 	if err != nil {
 		return nil, provider.AccountAccess{}, err
 	}
-	if r.DeletedAt != nil || r.Revision != o.Enrollment.ResourceRevision || r.CloudID != o.CloudID || r.ConnectionID != o.Input.ConnectionID || r.AccountID != o.Input.AccountID {
+	if r.DeletedAt != nil || (o.Status != "succeeded" && r.Revision != o.Enrollment.ResourceRevision) || r.CloudID != o.CloudID || r.ConnectionID != o.Input.ConnectionID || r.AccountID != o.Input.AccountID {
 		return nil, provider.AccountAccess{}, ErrConflict
 	}
+	if o.Status == "succeeded" {
+		a, getErr := s.Clusters.GetRuntimeAttachment(ctx, o.OrgID, o.Enrollment.AttachmentID)
+		if getErr != nil {
+			return nil, provider.AccountAccess{}, getErr
+		}
+		if !clusterAttachmentPins(o, r, a) {
+			return nil, provider.AccountAccess{}, ErrConflict
+		}
+	}
 	return s.clusterAuthority(ctx, o.Principal, o.CloudID, o.Input)
+}
+
+func clusterAttachmentPins(o *ClusterOperation, r *ManagedResource, a *RuntimeAttachment) bool {
+	ref := o.Input.Ref
+	if o.Kind == "create" && len(o.Receipts) == 1 {
+		ref = o.Receipts[0].Ref
+	}
+	return a.DeletedAt == nil && a.OperationID == o.ID && a.ClusterID == r.ID &&
+		r.DeletedAt == nil && r.CloudID == o.CloudID && r.ConnectionID == o.Input.ConnectionID &&
+		r.Provider == o.Input.Provider && r.AccountID == o.Input.AccountID &&
+		r.ExternalID == ref.ID && r.Incarnation == ref.Incarnation && r.Observation != nil &&
+		r.Observation.Ref == ref && r.Observation.CAHash != "" &&
+		r.Observation.CAHash == a.TrustFingerprint && endpointFingerprint(r.Observation.Endpoint) == a.EndpointFingerprint
 }
 func (s *Service) enrollmentCheckpoint(ctx context.Context, o *ClusterOperation) error {
 	if _, _, checkErr := s.enrollmentAuthority(ctx, o); checkErr != nil {
@@ -87,6 +109,7 @@ func (s *Service) clusterBootstrapChecked(ctx context.Context, o *ClusterOperati
 	if checkErr := checkpoint(); checkErr != nil {
 		return nil, checkErr
 	}
+	access.BeforeEffect = func(context.Context) error { return checkpoint() }
 	accessMaterial, err := bootstrap.BootstrapCluster(ctx, access, observation.Ref, kubernetes.RuntimeTokenLifetime)
 	if err != nil {
 		return nil, err

@@ -552,3 +552,115 @@ func TestManagedClusterEnrollmentUnknownDiscoveryCA(t *testing.T) {
 		t.Fatal("renewal accepted changed bootstrap trust")
 	}
 }
+
+func TestManagedClusterSecondNamespaceTrustAndCredentials(t *testing.T) {
+	for _, change := range []string{"unchanged", "bootstrap-ca", "endpoint"} {
+		t.Run(change, func(t *testing.T) {
+			f := newEnrollmentServiceFixture(t, true)
+			svc, credentials := f.service(f.store, f.vault())
+			if err := svc.ReconcileClusterOperation(t.Context(), "org", f.op.ID, nil); err != nil {
+				t.Fatal(err)
+			}
+			first := f.attachment()
+			f.handout(credentials, first)
+			resource, err := f.store.GetManagedResource(t.Context(), "org", "cluster")
+			if err != nil {
+				t.Fatal(err)
+			}
+			pinnedCA, pinnedEndpoint := resource.Observation.CAHash, resource.Observation.Endpoint
+			input := f.op.Input
+			attachment := *input.Attachment
+			input.Attachment = &attachment
+			input.ResourceRevision = resource.Revision
+			attachment.ResourceRevision = resource.Revision
+			attachment.Namespace = "second-" + uuid.NewString()[:8]
+			attachment.TargetSlug = "second-worker"
+			if _, err = f.sql.Exec(t.Context(), `INSERT INTO loomplane_projects(id,org_id,name,slug,status,created_by,created_at,updated_at) VALUES('proj-two','org','Two','two','ready','usr',now(),now())`); err != nil {
+				t.Fatal(err)
+			}
+			grantRevision, err := f.clouds.SetProjectGrant(t.Context(), "org", "cloud", "proj-two", nil, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			attachment.ProjectID = "proj-two"
+			attachment.GrantRevision = grantRevision
+			t.Cleanup(func() {
+				_ = f.bootstrap.Kube.CoreV1().Namespaces().Delete(context.Background(), attachment.Namespace, metav1.DeleteOptions{})
+			})
+			second, err := svc.PreviewCluster(t.Context(), f.principal, "cloud", input)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err = svc.ApplyCluster(t.Context(), f.principal, "cloud", second.ID, cloudinfra.ApplyInput{Review: second.Digest}); err != nil {
+				t.Fatal(err)
+			}
+			if change == "bootstrap-ca" {
+				f.provider.access.CAData = []byte("different authenticated provider CA")
+			}
+			if change == "endpoint" {
+				f.provider.observation.Endpoint = "https://replacement.test"
+				f.provider.access.Endpoint = f.provider.observation.Endpoint
+			}
+			reconcileErr := svc.ReconcileClusterOperation(t.Context(), "org", second.ID, nil)
+			saved, err := f.store.GetClusterOperation(t.Context(), "org", "cloud", second.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			current, err := f.store.GetManagedResource(t.Context(), "org", "cluster")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if current.Observation.CAHash != pinnedCA || current.Observation.Endpoint != pinnedEndpoint {
+				t.Fatal("second enrollment replaced established trust")
+			}
+			if change != "unchanged" {
+				if saved.Status == "succeeded" {
+					t.Fatal("changed trust published another attachment")
+				}
+				var count int
+				if err = f.sql.QueryRow(t.Context(), `SELECT count(*) FROM loomplane_runtime_attachments`).Scan(&count); err != nil || count != 1 {
+					t.Fatal("changed trust published runtime access", err)
+				}
+				return
+			}
+			if reconcileErr != nil || saved.Status != "succeeded" {
+				t.Fatal("second namespace failed", reconcileErr, saved.Status, saved.Error)
+			}
+			secondAttachment, err := f.store.GetRuntimeAttachment(t.Context(), "org", saved.Enrollment.AttachmentID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				_ = kubernetes.RetireRuntimeRBAC(context.Background(), f.bootstrap.Kube, kubernetes.EnrollmentRequest{AttachmentID: saved.Enrollment.AttachmentID, Namespace: attachment.Namespace, ServiceAccountName: "runtime"}, saved.Enrollment.State)
+			})
+			f.handout(credentials, secondAttachment)
+			f.handout(credentials, first)
+			f.forceRenewal(first)
+			f.handout(credentials, first)
+			renewed := f.attachment()
+			if renewed.CredentialVersion != first.CredentialVersion+1 {
+				t.Fatal("first attachment did not renew after second publication")
+			}
+			f.provider.observation.Ref.Incarnation = "replacement"
+			if _, raw, e := credentials.Credential(t.Context(), "org", first.RuntimeConnectionID); e == nil || len(raw) != 0 {
+				t.Fatal("cluster replacement allowed handout")
+			}
+			f.provider.observation.Ref.Incarnation = input.Ref.Incarnation
+			if _, err = f.clouds.SetProjectGrant(t.Context(), "org", "cloud", "proj-two", nil, true); err != nil {
+				t.Fatal(err)
+			}
+			if _, raw, e := credentials.Credential(t.Context(), "org", secondAttachment.RuntimeConnectionID); e == nil || len(raw) != 0 {
+				t.Fatal("revoked project grant allowed handout")
+			}
+			f.handout(credentials, renewed)
+			if _, err = f.sql.Exec(t.Context(), `UPDATE loomplane_cloud_connections SET generation=generation+1 WHERE id='conn'`); err != nil {
+				t.Fatal(err)
+			}
+			for _, a := range []*cloudinfra.RuntimeAttachment{first, secondAttachment} {
+				if _, raw, e := credentials.Credential(t.Context(), "org", a.RuntimeConnectionID); e == nil || len(raw) != 0 {
+					t.Fatal("revoked parent allowed handout")
+				}
+			}
+		})
+	}
+}
