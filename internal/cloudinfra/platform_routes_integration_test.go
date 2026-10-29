@@ -219,3 +219,77 @@ func TestPlatformRouteBindingQuery(t *testing.T) {
 		t.Fatal("another app at apply", err)
 	}
 }
+
+// TestApplyRouteRecordsSavesEveryReceipt runs applyRouteRecords through the
+// database store: each record's receipt is saved as it clears the
+// operation's DNS attempt, so the guard lets the next record through.
+func TestApplyRouteRecordsSavesEveryReceipt(t *testing.T) {
+	pg := routeBindingDatabase(t)
+	ctx := t.Context()
+	routeOperationConnection(t, pg)
+	op := &RouteOperation{ID: "routeop_apex", Kind: "apply", Status: "running", Revision: 1, Principal: security.Principal{OrgID: "org", UserID: "usr"},
+		DesiredRecords: []provider.DNSRecord{{ZoneID: "zone", Name: "www", Type: "A", Value: "192.0.2.1", TTL: 60, Owner: routeRecordOwner("route_apex", 0)},
+			{ZoneID: "zone", Name: "www", Type: "A", Value: "192.0.2.2", TTL: 60, Owner: routeRecordOwner("route_apex", 1)}},
+		Route: Route{ID: "route_apex", OrgID: "org", ProjectID: "shop", Binding: platformBinding(), Status: "pending", OperationID: "routeop_apex", Revision: 1}}
+	body, principal, _, err := routeBytes(op)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pg.Exec(ctx, `INSERT INTO loomplane_route_operations(id,org_id,project_id,route_id,server_id,cloud_id,status,revision,body,principal) VALUES($1,'org','shop','route_apex','','','running',1,$2,$3)`, op.ID, body, principal); err != nil {
+		t.Fatal(err)
+	}
+	dns := &routeDNSAdapter{ownership: true}
+	registry := NewAdapters()
+	if err = registry.RegisterDNS("digitalocean", dns); err != nil {
+		t.Fatal(err)
+	}
+	st := NewPgStore(pg)
+	svc := NewService(Deps{Store: st, Domains: st, Adapters: registry, Connections: routeDNSCredentials{"digitalocean"}})
+	zone := &Zone{ID: "zone", OrgID: "org", Name: "example.com", Mode: "managed", ConnectionID: "dns", ConnectionGeneration: 1, Provider: "digitalocean", AccountID: "account",
+		RecordOwnership: true, ProviderZone: provider.DNSZone{ID: "zone", Name: "example.com"}}
+	if err = svc.applyRouteRecords(ctx, st, op, zone); err != nil {
+		t.Fatal("applying the records:", err, "after", dns.writes, "writes")
+	}
+	stored, err := st.RouteOperation(ctx, "org", op.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(stored.Receipts) != 2 || stored.Receipts[0].Value != "192.0.2.1" || stored.Receipts[1].Value != "192.0.2.2" || stored.DNSAttempted || dns.writes != 2 {
+		t.Fatalf("stored receipts %+v, attempted %v, writes %d", stored.Receipts, stored.DNSAttempted, dns.writes)
+	}
+}
+
+// TestRouteIntentGuardClearsADNSAttemptOnlyWithAReceipt pins the guard's
+// rule for dns_attempted: it clears only when a new receipt is saved with it.
+func TestRouteIntentGuardClearsADNSAttemptOnlyWithAReceipt(t *testing.T) {
+	pg := routeBindingDatabase(t)
+	ctx := t.Context()
+	routeOperationConnection(t, pg)
+	body := `{"kind":"apply","status":"running","route":{"status":"pending","hostname":"p.example.com","binding":{"connection_id":"conn_do"}},"dns_attempted":true,"receipts":[{"id":"r1"}]}`
+	if _, err := pg.Exec(ctx, `INSERT INTO loomplane_route_operations(id,org_id,project_id,route_id,server_id,cloud_id,status,revision,body,principal) VALUES('op_1','org','shop','route_p','','','running',1,$1::jsonb,'{}')`, body); err != nil {
+		t.Fatal(err)
+	}
+	for name, update := range map[string]string{
+		"without a receipt":         `jsonb_set(body,'{dns_attempted}','false')`,
+		"with the same receipts":    `jsonb_set(jsonb_set(body,'{dns_attempted}','false'),'{receipts}','[{"id":"r2"}]')`,
+		"with the receipts dropped": `jsonb_set(body,'{dns_attempted}','false') - 'receipts'`,
+	} {
+		err := pgExec(ctx, pg, `UPDATE loomplane_route_operations SET body=`+update+` WHERE id='op_1'`)
+		if err == nil || !strings.Contains(err.Error(), "DNS attempt cannot be cleared") {
+			t.Fatalf("cleared %s: %v", name, err)
+		}
+	}
+	if err := pgExec(ctx, pg, `UPDATE loomplane_route_operations SET body=jsonb_set(jsonb_set(body,'{dns_attempted}','false'),'{receipts}','[{"id":"r1"},{"id":"r2"}]') WHERE id='op_1'`); err != nil {
+		t.Fatal("cleared with a new receipt:", err)
+	}
+}
+
+// routeOperationConnection is the ready DigitalOcean connection conn_do, which
+// a running route operation's binding counts as a use of.
+func routeOperationConnection(t *testing.T, pg *pgdriver.PgDB) {
+	t.Helper()
+	now := time.Now().UTC()
+	if err := connections.NewPgStore(pg).CreateConnection(t.Context(), &connections.Connection{ID: "conn_do", OrgID: "org", Cloud: "digitalocean", Name: "DO", Status: connections.StatusReady, Details: map[string]string{"account_uuid": "account"}, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+}

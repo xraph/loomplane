@@ -9,8 +9,10 @@ import (
 
 // A platform route (an app platform app's domain) rests on a ready cloud
 // connection and no server, and the DNS records its operation writes are
-// kept as receipts on the operation and on its route. Everything else in
-// both functions is as the migrations before left it.
+// kept as receipts on the operation and on its route. An operation's DNS
+// attempt clears only as it saves a new receipt, so each record of a list
+// starts an attempt of its own. Everything else in both functions is as the
+// migrations before left it.
 func init() {
 	App.Add(
 		func(ctx context.Context, db *migrate.DB) error {
@@ -80,7 +82,10 @@ BEGIN
 	THEN
 		RAISE EXCEPTION 'route intent is immutable' USING ERRCODE='23514';
 	END IF;
-	IF OLD.body->>'dns_attempted'='true' AND NEW.body->>'dns_attempted'<>'true' THEN
+	-- A record list's attempt clears with the receipt of the record it wrote.
+	IF OLD.body->>'dns_attempted'='true' AND NEW.body->>'dns_attempted'<>'true'
+		AND jsonb_array_length(coalesce(nullif(NEW.body->'receipts','null'::jsonb),'[]'::jsonb)) <= jsonb_array_length(coalesce(nullif(OLD.body->'receipts','null'::jsonb),'[]'::jsonb))
+	THEN
 		RAISE EXCEPTION 'DNS attempt cannot be cleared' USING ERRCODE='23514';
 	END IF;
 	RETURN NEW;
