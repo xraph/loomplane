@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"slices"
 	"testing"
 	"time"
 
@@ -523,10 +524,31 @@ func TestMarkReadWithdrawsFromPhonesThatGotIt(t *testing.T) {
 	ctx := t.Context()
 	gw.register(t, svc, "h1.a")
 	gw.register(t, svc, "h1.b")
+	c := gw.register(t, svc, "h1.c")
+	gw.registerFor(t, svc, "user-b", "h1.other")
+	if _, err := svc.UpdateDevice(ctx, asUserA(), c.ID, UpdateDeviceInput{Settings: map[string]string{"level.staging": "off"}}); err != nil {
+		t.Fatal(err)
+	}
 	failDeployment(t, svc, "env-a")
 	if err := svc.drain(ctx); err != nil {
 		t.Fatal(err)
 	}
+	row := userRow(t, svc)
+	if row.state != PushSent || len(row.devices) != 2 || row.devices[c.ID] != "" {
+		t.Fatalf("row: %+v", row)
+	}
+	all, err := svc.herald.ListDevices(ctx, "app", "user-a")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var want []string
+	for _, d := range all {
+		if row.devices[d.ID] == "sent" {
+			want = append(want, d.Address)
+		}
+	}
+	slices.Sort(want)
+	before := len(gw.taken())
 	list, err := svc.List(ctx, asUserA())
 	if err != nil || len(list.Items) != 1 {
 		t.Fatalf("inbox: %+v %v", list, err)
@@ -534,17 +556,24 @@ func TestMarkReadWithdrawsFromPhonesThatGotIt(t *testing.T) {
 	if err = svc.MarkRead(ctx, asUserA(), list.Items[0].ID); err != nil {
 		t.Fatal(err)
 	}
+	deadline := time.Now().Add(5 * time.Second)
+	for len(gw.taken()) < before+len(want) && time.Now().Before(deadline) {
+		time.Sleep(20 * time.Millisecond)
+	}
 	if err = svc.Shutdown(ctx); err != nil {
 		t.Fatal(err)
 	}
-	sends := gw.taken()
-	if len(sends) != 4 {
-		t.Fatalf("gateway sends: %v", gw.handles())
-	}
-	for _, s := range sends[2:] {
+	sent := gw.taken()[before:]
+	got := make([]string, 0, len(sent))
+	for _, s := range sent {
 		if s.Body.Kind != "withdraw" || s.Body.CollapseID != collapseID("deployment:deployment-a") || s.Body.Sealed != "" {
 			t.Fatalf("withdraw: %+v", s.Body)
 		}
+		got = append(got, s.Handle)
+	}
+	slices.Sort(got)
+	if len(want) != 2 || !slices.Equal(got, want) {
+		t.Fatalf("withdrew from %v, want %v", got, want)
 	}
 }
 
@@ -581,4 +610,22 @@ func (s *Service) firstDevice(t *testing.T) string {
 		t.Fatalf("devices: %v %v", list, err)
 	}
 	return list[0].ID
+}
+
+func TestTestPushWithPushOff(t *testing.T) {
+	svc, gw, _, _ := pushRig(t)
+	a := gw.register(t, svc, "h1.a")
+	svc.cfg.Push.Enabled = false
+	if _, err := svc.TestPush(t.Context(), asUserA(), a.ID); !errors.Is(err, ErrPushDisabled) || len(gw.taken()) != 0 {
+		t.Fatalf("err: %v, sends %d", err, len(gw.taken()))
+	}
+}
+
+func TestTestPushGatewayRefusal(t *testing.T) {
+	svc, gw, _, _ := pushRig(t)
+	a := gw.register(t, svc, "h1.a")
+	gw.answer("h1.a", 500)
+	if _, err := svc.TestPush(t.Context(), asUserA(), a.ID); !errors.Is(err, ErrPushFailed) {
+		t.Fatalf("err: %v", err)
+	}
 }

@@ -100,6 +100,12 @@ func (g *fakeGateway) handles() []string {
 // register adds an Android phone for the user and remembers its key.
 func (g *fakeGateway) register(t *testing.T, svc *Service, handle string) PushDevice {
 	t.Helper()
+	return g.registerFor(t, svc, "user-a", handle)
+}
+
+// registerFor adds an Android phone for the named user.
+func (g *fakeGateway) registerFor(t *testing.T, svc *Service, user, handle string) PushDevice {
+	t.Helper()
 	key, err := ecdh.X25519().GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -107,7 +113,7 @@ func (g *fakeGateway) register(t *testing.T, svc *Service, handle string) PushDe
 	g.mu.Lock()
 	g.keys[handle] = key
 	g.mu.Unlock()
-	d, err := svc.RegisterDevice(t.Context(), security.Principal{UserID: "user-a", OrgID: "org-a"}, RegisterDeviceInput{
+	d, err := svc.RegisterDevice(t.Context(), security.Principal{UserID: user, OrgID: "org-a"}, RegisterDeviceInput{
 		Handle: handle, PublicKey: base64.StdEncoding.EncodeToString(key.PublicKey().Bytes()), Platform: "android", Name: handle, TimeZone: "UTC"})
 	if err != nil {
 		t.Fatal(err)

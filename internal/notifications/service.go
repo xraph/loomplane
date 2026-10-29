@@ -49,6 +49,10 @@ type Service struct {
 	workerErr  error
 	cancel     context.CancelFunc
 	wg         sync.WaitGroup
+	closeMu    sync.Mutex // guards closed, stopCtx and stopCancel
+	closed     bool       // set once Shutdown starts, so nothing new joins wg
+	stopCtx    context.Context
+	stopCancel context.CancelFunc
 	testMu     sync.Mutex
 	testPushed map[string]time.Time // last test push by device ID
 }
@@ -143,12 +147,43 @@ func (s *Service) Run(ctx context.Context) error {
 	return nil
 }
 func (s *Service) Shutdown(ctx context.Context) error {
+	s.closeMu.Lock()
+	s.closed = true
+	if s.stopCancel != nil {
+		s.stopCancel()
+	}
+	s.closeMu.Unlock()
 	if s.cancel != nil {
 		s.cancel()
 	}
-	s.wg.Wait()
+	done := make(chan struct{})
+	go func() {
+		s.wg.Wait()
+		close(done)
+	}()
+	var err error
+	select {
+	case <-done:
+	case <-ctx.Done():
+		err = ctx.Err()
+	}
 	s.relay.Stop(ctx)
-	return nil
+	return err
+}
+
+// startBackground registers a goroutine with wg and returns the context
+// Shutdown cancels. It reports false once Shutdown has begun.
+func (s *Service) startBackground() (context.Context, bool) {
+	s.closeMu.Lock()
+	defer s.closeMu.Unlock()
+	if s.closed {
+		return nil, false
+	}
+	if s.stopCtx == nil {
+		s.stopCtx, s.stopCancel = context.WithCancel(context.Background())
+	}
+	s.wg.Add(1)
+	return s.stopCtx, true
 }
 func (s *Service) Health(ctx context.Context) error {
 	if err := s.mailStore.Ping(ctx); err != nil {

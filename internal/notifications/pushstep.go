@@ -384,13 +384,17 @@ type withdrawal struct {
 }
 
 // withdraw asks Herald to remove a notification from phones, once and in the
-// background. It is best effort: a failure is logged and not retried, and
-// Shutdown waits for it.
+// background. It is best effort: a failure is logged and not retried.
+// Shutdown cancels it and waits, and a withdraw asked for after Shutdown
+// began does nothing.
 func (s *Service) withdraw(item withdrawal) {
-	s.wg.Add(1)
+	parent, ok := s.startBackground()
+	if !ok {
+		return
+	}
 	go func() {
 		defer s.wg.Done()
-		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		ctx, cancel := context.WithTimeout(parent, 10*time.Second)
 		defer cancel()
 		_, err := s.herald.Send(ctx, &herald.SendRequest{
 			AppID: s.cfg.Identity.AppID, OrgID: item.orgID, UserID: item.userID, Channel: "push",
@@ -419,7 +423,8 @@ func (s *Service) withdrawRead(ctx context.Context, userID string, meta map[stri
 		return
 	}
 	var results map[string]string
-	if json.Unmarshal(raw, &results) != nil || collapse == "" {
+	if err = json.Unmarshal(raw, &results); err != nil || collapse == "" {
+		slog.WarnContext(ctx, "pushed notice can't be withdrawn: its outbox row is unreadable", "outbox", meta["outbox_id"], "empty_collapse", collapse == "", "error", err)
 		return
 	}
 	var sent []string
