@@ -10,6 +10,7 @@ import (
 
 	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/cloudprofiles"
+	"github.com/xraph/loomplane/internal/orchestration"
 	"github.com/xraph/loomplane/internal/security"
 )
 
@@ -138,6 +139,7 @@ func (s *Service) PrepareClusterWorkloadDemands(ctx context.Context, plan *Plan,
 		}
 		d.Input.ReviewDigest = digest
 		cfg.ClusterDemand = d
+		result.RequiredRuntimeProtocol = orchestration.ManagedWorkloadProtocol
 		a.ConnectionID = in.ConnectionID
 	}
 	return nil

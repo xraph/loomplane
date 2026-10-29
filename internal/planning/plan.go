@@ -486,11 +486,12 @@ type Summary struct {
 
 // Result is what the planner decides.
 type Result struct {
-	CloudSyncID string    `json:"cloud_sync_id,omitempty"`
-	Actions     []Action  `json:"actions"`
-	Problems    []Finding `json:"problems"`
-	Warnings    []Finding `json:"warnings"`
-	Summary     Summary   `json:"summary"`
+	RequiredRuntimeProtocol string    `json:"required_runtime_protocol,omitempty"`
+	CloudSyncID             string    `json:"cloud_sync_id,omitempty"`
+	Actions                 []Action  `json:"actions"`
+	Problems                []Finding `json:"problems"`
+	Warnings                []Finding `json:"warnings"`
+	Summary                 Summary   `json:"summary"`
 	// Executable says whether Loomplane could carry the plan out: no
 	// problems, and an adapter for every provider it uses.
 	Executable bool `json:"executable"`
@@ -645,8 +646,9 @@ type ReleaseHistory interface {
 // Plan is one plan for one environment of a project, pinned to one commit
 // of each repository and the manifest revision it was made from.
 type Plan struct {
-	CloudSyncID string `json:"cloud_sync_id,omitempty"`
-	Catalog     bool   `json:"catalog"`
+	RequiredRuntimeProtocol string `json:"required_runtime_protocol,omitempty"`
+	CloudSyncID             string `json:"cloud_sync_id,omitempty"`
+	Catalog                 bool   `json:"catalog"`
 	// Kind is KindRelease, KindPromotion or KindRollback. JSON tags of the
 	// fields below equal their column names: the realtime trigger
 	// serialises rows with to_jsonb.
@@ -699,6 +701,7 @@ func (p *Plan) Open() bool { return p.Status == StatusPlanning || p.Status == St
 
 func (p *Plan) setResult(r *Result) {
 	p.CloudSyncID = r.CloudSyncID
+	p.RequiredRuntimeProtocol = r.RequiredRuntimeProtocol
 	p.Actions, p.Problems, p.Warnings = r.Actions, r.Problems, r.Warnings
 	p.Summary, p.Executable, p.Connections = r.Summary, r.Executable, r.Connections
 	p.Leftovers, p.Artifacts, p.Release = r.Leftovers, r.Artifacts, r.Release
@@ -707,8 +710,9 @@ func (p *Plan) setResult(r *Result) {
 // result is what planning decided for the plan, as the store keeps it.
 func (p *Plan) result() Result {
 	return Result{
-		CloudSyncID: p.CloudSyncID,
-		Actions:     p.Actions, Problems: p.Problems, Warnings: p.Warnings, Summary: p.Summary, Executable: p.Executable,
+		CloudSyncID:             p.CloudSyncID,
+		RequiredRuntimeProtocol: p.RequiredRuntimeProtocol,
+		Actions:                 p.Actions, Problems: p.Problems, Warnings: p.Warnings, Summary: p.Summary, Executable: p.Executable,
 		Connections: p.Connections, Leftovers: p.Leftovers, Artifacts: p.Artifacts, Release: p.Release,
 	}
 }
