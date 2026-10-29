@@ -245,7 +245,7 @@ func TestDeployment_showsItsWatch(t *testing.T) {
 		want  []string
 	}{
 		{"watching", watchJSON("watching", "", "", "", false, `[{"name":"api","provider":"render","verdict":"pass","reason":"","op":"update"}]`),
-			[]string{"Watch: watching until " + until + " (api on Render: pass)"}},
+			[]string{"Watch: watching until " + until + " (api on render: pass)"}},
 		{"rolled back", watchJSON("rolled_back", "fail", "api: 4.1% of the candidate's requests failed; the ceiling is 1%.", "plan_r", false, `[]`),
 			[]string{"Watch: breached (api: 4.1% of the candidate's requests failed; the ceiling is 1%.), rolled back by plan_r (Loomplane automation)"}},
 		{"inconclusive", watchJSON("inconclusive", "inconclusive", "api: The candidate served 120 requests; at least 200 are needed to judge it.", "", true, `[]`),

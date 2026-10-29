@@ -236,10 +236,10 @@ func watchLine(w *client.ReleaseWatch) string {
 }
 
 // serviceOn is a service and the provider it runs on, such as "api on
-// Render".
+// cloud-run", by the provider's ID as the rest of loomctl prints it.
 func serviceOn(name, provider string) string {
 	if provider == "" {
 		return name
 	}
-	return name + " on " + strings.ToUpper(provider[:1]) + provider[1:]
+	return name + " on " + provider
 }
