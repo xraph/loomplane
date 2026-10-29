@@ -237,6 +237,7 @@ func (e *Extension) buildEngine(db *grove.DB) (*authsome.Engine, error) {
 		authsome.WithPlugin(recoveryNotifications(e.cfg)),
 		authsome.WithPlugin(e.orgs),
 		authsome.WithPlugin(security.NewSync(e.authz)),
+		authsome.WithPlugin(notifications.NewAccountCleanup(e.notifications)),
 		authsome.WithPlugin(e.waitlist),
 		// Last, so it judges a sign-up the other plugins have accepted.
 		authsome.WithPlugin(e.gate),

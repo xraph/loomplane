@@ -62,6 +62,10 @@ func fail(err error) error {
 	switch {
 	case errors.Is(err, notifications.ErrPushDisabled):
 		return forge.NewHTTPError(http.StatusNotFound, "push notifications are turned off on this server")
+	case errors.Is(err, notifications.ErrTooSoon):
+		return forge.NewHTTPError(http.StatusTooManyRequests, err.Error())
+	case errors.Is(err, notifications.ErrPushFailed):
+		return forge.NewHTTPError(http.StatusBadGateway, "the push gateway didn't accept the test")
 	case errors.Is(err, notifications.ErrInvalid):
 		return forge.NewHTTPError(http.StatusBadRequest, err.Error())
 	case errors.Is(err, notifications.ErrNotFound):

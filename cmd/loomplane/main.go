@@ -19,6 +19,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	_ "time/tzdata" // zone data for push device time zones on hosts without zoneinfo
 
 	"github.com/joho/godotenv"
 	"github.com/xraph/forge"
