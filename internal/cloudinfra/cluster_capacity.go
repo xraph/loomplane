@@ -137,8 +137,15 @@ func (s *PgStore) AttemptClusterCreate(ctx context.Context, o *ClusterOperation)
 	if checkErr := clusterPinsTx(ctx, tx, o); checkErr != nil {
 		return checkErr
 	}
-	if checkErr := s.reserveClusterCapacity(ctx, tx, o); checkErr != nil {
-		return checkErr
+	if maintenanceKind(o.Kind) {
+		if err := maintenancePinsTx(ctx, tx, o); err != nil {
+			return err
+		}
+	}
+	if o.Kind == "create" || o.CapacityTarget.Servers > 0 {
+		if checkErr := s.reserveClusterCapacity(ctx, tx, o); checkErr != nil {
+			return checkErr
+		}
 	}
 	now := time.Now().UTC()
 	o.Steps[0].State = "attempted"

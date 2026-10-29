@@ -24,9 +24,10 @@ type AttachmentInput struct {
 }
 
 type ClusterInput struct {
-	ManagementQualificationDigest string `json:"management_qualification_digest"`
-	ManagementEvidenceID          string `json:"management_evidence_id"`
-	PolicyRevision                int64  `json:"policy_revision"`
+	Maintenance                   *ClusterMaintenanceInput `json:"maintenance,omitempty"`
+	ManagementQualificationDigest string                   `json:"management_qualification_digest"`
+	ManagementEvidenceID          string                   `json:"management_evidence_id"`
+	PolicyRevision                int64                    `json:"policy_revision"`
 	// ManagementReachable is caller acknowledgement, never path evidence.
 	ManagementReachable     bool                 `json:"management_reachable"`
 	AcknowledgeUnknownCosts bool                 `json:"acknowledge_unknown_costs"`

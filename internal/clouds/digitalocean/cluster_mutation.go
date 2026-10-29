@@ -21,7 +21,7 @@ func validateDOKSSpec(spec provider.ClusterSpec) error {
 	}
 	names := map[string]bool{}
 	for _, p := range spec.NodePools {
-		if p.Name == "" || names[p.Name] || p.Size == "" || p.Count < 1 || p.Autoscale || p.Min != 0 || p.Max != 0 || p.ProviderOptions != nil {
+		if p.ID != "" || p.OperationID != "" || p.RequestDigest != "" || p.Name == "" || names[p.Name] || p.Size == "" || p.Count < 1 || p.Autoscale || p.Min != 0 || p.Max != 0 || p.ProviderOptions != nil {
 			return provider.ErrInfrastructureInvalid
 		}
 		names[p.Name] = true

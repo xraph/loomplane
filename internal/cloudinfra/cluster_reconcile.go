@@ -48,6 +48,9 @@ func (s *Service) ReconcileClusterOperation(ctx context.Context, org, id string,
 	if err != nil {
 		return s.clusterAttention(ctx, o, "Current approval or account authority is unavailable.")
 	}
+	if maintenanceKind(o.Kind) {
+		return s.reconcileClusterMaintenance(call, o, reader, access)
+	}
 	if len(o.Steps) == 2 && o.Steps[0].State == "completed" && o.Input.Attachment != nil && !o.CancelRequested {
 		if checkErr := s.enrollClusterOperation(call, o); checkErr != nil {
 			return s.clusterAttention(ctx, o, clusterEnrollmentReason(checkErr))
@@ -216,6 +219,9 @@ func (s *Service) clusterObservedResource(ctx context.Context, o *ClusterOperati
 	}
 	r.CloudID = o.CloudID
 	r.ConnectionID = o.Input.ConnectionID
+	if maintenanceKind(o.Kind) {
+		r.ObservedRevision = r.Revision
+	}
 	r.Status = observation.State
 	r.Observation = &observation
 	r.ObservedAt = observation.ObservedAt

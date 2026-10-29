@@ -626,7 +626,7 @@ func TestClusterReaderOnlyRegistration(t *testing.T) {
 }
 
 func TestClusterCapabilitiesRequireImplementedInterfaces(t *testing.T) {
-	for _, capability := range []provider.InfrastructureCapability{provider.ClusterCreation, provider.ClusterMutationObservation, provider.ClusterBootstrapAccess, provider.ClusterUpdate, provider.ClusterUpgrade, provider.ClusterDeletion, provider.NodePoolCreation, provider.NodePoolUpdate, provider.NodePoolDeletion, provider.ClusterCapacityObservation, "unknown"} {
+	for _, capability := range []provider.InfrastructureCapability{provider.ClusterCreation, provider.ClusterMutationObservation, provider.ClusterBootstrapAccess, provider.ClusterConfigurationUpdate, provider.ClusterUpgrade, provider.ClusterDeletion, provider.NodePoolCreation, provider.NodePoolUpdate, provider.NodePoolDeletion, provider.ClusterCapacityObservation, "unknown"} {
 		r := cloudinfra.NewAdapters()
 		if err := r.RegisterCluster("fixture", fixtureClusterReader{}, capability); !errors.Is(err, provider.ErrInfrastructureUnsupported) {
 			t.Fatalf("%s: %v", capability, err)

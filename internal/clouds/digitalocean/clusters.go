@@ -49,17 +49,21 @@ func clusterRef(access provider.AccountAccess, ref provider.ClusterRef) error {
 }
 
 type doksCluster struct {
-	Tags      []string `json:"tags"`
-	Name      string   `json:"name"`
-	ID        string   `json:"id"`
-	Region    string   `json:"region"`
-	Version   string   `json:"version"`
-	Endpoint  string   `json:"endpoint"`
-	CreatedAt string   `json:"created_at"`
-	Status    struct {
+	Maintenance provider.ClusterMaintenance `json:"maintenance_policy"`
+	HA          bool                        `json:"ha"`
+	Tags        []string                    `json:"tags"`
+	Name        string                      `json:"name"`
+	ID          string                      `json:"id"`
+	Region      string                      `json:"region"`
+	Version     string                      `json:"version"`
+	Endpoint    string                      `json:"endpoint"`
+	CreatedAt   string                      `json:"created_at"`
+	Status      struct {
 		State string `json:"state"`
 	} `json:"status"`
 	NodePools []struct {
+		Tags      []string                 `json:"tags"`
+		ID        string                   `json:"id"`
 		Name      string                   `json:"name"`
 		Size      string                   `json:"size"`
 		Count     int                      `json:"count"`
@@ -78,9 +82,18 @@ func (d doksCluster) observation(account string) (provider.ClusterObservation, e
 	if _, err := time.Parse(time.RFC3339, d.CreatedAt); err != nil {
 		return provider.ClusterObservation{}, provider.ErrInfrastructureInvalid
 	}
-	out := provider.ClusterObservation{Name: d.Name, Ref: provider.ClusterRef{ID: d.ID, AccountID: account, Region: d.Region, Incarnation: d.CreatedAt}, Endpoint: d.Endpoint, Version: d.Version, State: d.Status.State, ObservedAt: time.Now().UTC(), Pools: []provider.NodePoolSpec{}}
+	out := provider.ClusterObservation{Maintenance: d.Maintenance, HA: d.HA, Name: d.Name, Ref: provider.ClusterRef{ID: d.ID, AccountID: account, Region: d.Region, Incarnation: d.CreatedAt}, Endpoint: d.Endpoint, Version: d.Version, State: d.Status.State, ObservedAt: time.Now().UTC(), Pools: []provider.NodePoolSpec{}}
 	for _, p := range d.NodePools {
-		out.Pools = append(out.Pools, provider.NodePoolSpec{Name: p.Name, Size: p.Size, Count: p.Count, Min: p.MinNodes, Max: p.MaxNodes, Autoscale: p.AutoScale, Labels: p.Labels, Taints: p.Taints})
+		pool := provider.NodePoolSpec{ID: p.ID, Name: p.Name, Size: p.Size, Count: p.Count, Min: p.MinNodes, Max: p.MaxNodes, Autoscale: p.AutoScale, Labels: p.Labels, Taints: p.Taints}
+		for _, tag := range p.Tags {
+			if strings.HasPrefix(tag, "loomplane-operation:") {
+				pool.OperationID = strings.TrimPrefix(tag, "loomplane-operation:")
+			}
+			if strings.HasPrefix(tag, "loomplane-request:") {
+				pool.RequestDigest = strings.TrimPrefix(tag, "loomplane-request:")
+			}
+		}
+		out.Pools = append(out.Pools, pool)
 	}
 	return out, nil
 }

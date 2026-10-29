@@ -46,6 +46,8 @@ var (
 	DeploymentCreate  = Permission{"deployment", "create"}
 	DeploymentApprove = Permission{"deployment", "approve"}
 
+	ClusterManage = Permission{"cluster", "manage"}
+
 	InfrastructureRead   = Permission{"infrastructure", "read"}
 	InfrastructureModify = Permission{"infrastructure", "modify"}
 
@@ -100,7 +102,7 @@ func Catalog() []RoleDef {
 		AIEdit, AIToolSecret, AIPublishNonProduction,
 	)
 	admin := append(clone(developer),
-		OrganizationCloudManage, BackupManage, RestoreManage, ProjectDelete, DeploymentApprove, InfrastructureModify, CloudAccountManage, SecretManage, MemberManage,
+		OrganizationCloudManage, ClusterManage, BackupManage, RestoreManage, ProjectDelete, DeploymentApprove, InfrastructureModify, CloudAccountManage, SecretManage, MemberManage,
 		RepositoryConnect, OrganizationVariableManage, DestinationManage, NetworkManage, ExportManage, GrantApprove, GrantRevoke, TrustManage,
 		AIManage,
 	)

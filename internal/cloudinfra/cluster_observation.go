@@ -7,11 +7,11 @@ import (
 	"github.com/xraph/loomplane/pkg/provider"
 )
 
-// clusterObservationOnly permits inspection of a durable attempted create, never
+// clusterObservationOnly permits inspection of a durable attempted effect, never
 // a new effect. The original principal remains immutable and cannot authorize
 // enrollment or another mutation after revocation.
 func clusterObservationOnly(o *ClusterOperation) bool {
-	return o.Kind == "create" && o.ID != "" && o.Input.Spec.OperationID == o.ID && len(o.Steps) == 2 && o.Steps[0].Name == "provider" && o.Steps[0].State != "pending" && o.Steps[0].AttemptedAt != nil && o.Steps[0].RequestDigest == o.Digest
+	return (maintenanceKind(o.Kind) && o.Input.Maintenance != nil && o.Input.Ref.ID != "" || o.Kind == "create" && o.ID != "" && o.Input.Spec.OperationID == o.ID) && len(o.Steps) == 2 && o.Steps[0].Name == "provider" && o.Steps[0].State != "pending" && o.Steps[0].AttemptedAt != nil && o.Steps[0].RequestDigest == o.Digest
 }
 
 // clusterRecoveryAccount reads only the pinned request's account. It cannot

@@ -63,6 +63,11 @@ func (s *Service) clusterAuthority(ctx context.Context, p security.Principal, cl
 			return nil, access, err
 		}
 	}
+	if maintenanceKind(in.Kind) {
+		if err := s.Authz.Require(ctx, p, security.ClusterManage, ""); err != nil {
+			return nil, access, err
+		}
+	}
 	profile, err := s.authorize(ctx, p, cloud)
 	if err != nil {
 		return nil, access, err
@@ -125,7 +130,7 @@ func (s *Service) clusterPurchaseGate(p security.Principal, in ClusterInput) err
 	}
 	var count int
 	for _, pool := range in.Spec.NodePools {
-		if pool.Autoscale || pool.Min != 0 || pool.Max != 0 || pool.Count < 1 || pool.Count > c.MaxNodes-count {
+		if pool.ID != "" || pool.OperationID != "" || pool.RequestDigest != "" || pool.Autoscale || pool.Min != 0 || pool.Max != 0 || pool.Count < 1 || pool.Count > c.MaxNodes-count {
 			return ErrInvalid
 		}
 		count += pool.Count
@@ -194,6 +199,18 @@ func (s *Service) PreviewCluster(ctx context.Context, p security.Principal, clou
 	var nodeCost int64
 	var unknownCosts []string
 	switch in.Kind {
+	case "node-pool-create", "node-pool-update", "node-pool-delete", "cluster-upgrade", "cluster-configure":
+		if in.Maintenance != nil && (in.Maintenance.ObservationDigest != "" || in.Maintenance.Pool != nil && (in.Maintenance.Pool.OperationID != "" || in.Maintenance.Pool.RequestDigest != "")) {
+			return nil, ErrInvalid
+		}
+		capacity, nodeCost, unknownCosts, err = s.prepareMaintenance(ctx, p, cloud, &in, reader, access)
+		if err != nil {
+			return nil, err
+		}
+		if in.Kind == "node-pool-create" {
+			in.Maintenance.Pool.OperationID = id
+			in.Maintenance.Pool.RequestDigest = maintenanceHash(in.Maintenance.Pool)
+		}
 	case "create":
 		if in.ResourceID != "" || in.Ref != (provider.ClusterRef{}) || in.ResourceRevision != 0 || in.Spec.OperationID != "" {
 			return nil, ErrInvalid
@@ -253,6 +270,10 @@ func (s *Service) PreviewCluster(ctx context.Context, p security.Principal, clou
 		return nil, ErrInvalid
 	}
 	o := &ClusterOperation{ID: id, OrgID: p.OrgID, CloudID: cloud, Kind: in.Kind, SchemaVersion: 1, Input: in, Digest: digest, Revision: 1, Status: "preview", Principal: p, CapacityTarget: capacity, EstimatedNodeHourlyMicroUSD: nodeCost, UnknownCosts: unknownCosts, CreatedAt: now, UpdatedAt: now, ExpiresAt: now.Add(15 * time.Minute), Steps: []ClusterStep{{Name: "provider", State: "pending", RequestDigest: digest}, {Name: "enrollment", State: "pending", RequestDigest: digest}}}
+	if maintenanceKind(in.Kind) {
+		o.ResourceID = in.ResourceID
+		o.Steps[1].Name = "verification"
+	}
 	if checkErr := s.Clusters.CreateClusterPreview(ctx, o); checkErr != nil {
 		return nil, checkErr
 	}
@@ -324,6 +345,19 @@ func (s *Service) ApplyCluster(ctx context.Context, p security.Principal, cloud,
 		}
 		if options.Digest != o.Input.OptionsDigest || s.now().Sub(options.CheckedAt) >= 5*time.Minute || options.CheckedAt.After(s.now()) {
 			return nil, ErrConflict
+		}
+	} else if maintenanceKind(o.Kind) {
+		capacity, cost, _, checkErr := s.prepareMaintenance(ctx, p, cloud, &o.Input, reader, access)
+		if checkErr != nil {
+			return nil, checkErr
+		}
+		if capacity != o.CapacityTarget || cost != o.EstimatedNodeHourlyMicroUSD {
+			return nil, ErrConflict
+		}
+		if capacity.Servers > 0 {
+			if err := s.refreshClusterAccount(ctx, o, reader, access); err != nil {
+				return nil, err
+			}
 		}
 	} else if checkErr := s.validateClusterAdoption(ctx, p.OrgID, cloud, o.Input); checkErr != nil {
 		return nil, checkErr

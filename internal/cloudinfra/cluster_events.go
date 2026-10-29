@@ -59,6 +59,9 @@ func ClusterPublicReason(o *ClusterOperation) string {
 	if o == nil {
 		return ""
 	}
+	if maintenanceKind(o.Kind) && o.Status == "succeeded" {
+		return "maintenance_verified"
+	}
 	if o.Error == "" {
 		if len(o.Steps) > 1 && o.Steps[1].State == "completed" {
 			return "runtime_enrollment_verified"

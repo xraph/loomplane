@@ -71,6 +71,9 @@ type NodePoolTaint struct {
 }
 
 type NodePoolSpec struct {
+	OperationID     string                  `json:"operation_id,omitempty"`
+	RequestDigest   string                  `json:"request_digest,omitempty"`
+	ID              string                  `json:"id,omitempty"`
 	Name            string                  `json:"name"`
 	Size            string                  `json:"size"`
 	Count           int                     `json:"count"`
@@ -90,15 +93,17 @@ type ClusterCondition struct {
 
 // ClusterObservation describes provider state, independently of runtime readiness.
 type ClusterObservation struct {
-	Name       string             `json:"name"`
-	Ref        ClusterRef         `json:"ref"`
-	Endpoint   string             `json:"endpoint"`
-	CAHash     string             `json:"ca_hash"`
-	Version    string             `json:"version"`
-	State      string             `json:"state"`
-	Pools      []NodePoolSpec     `json:"pools"`
-	Conditions []ClusterCondition `json:"conditions"`
-	ObservedAt time.Time          `json:"observed_at"`
+	Maintenance ClusterMaintenance `json:"maintenance,omitempty"`
+	HA          bool               `json:"ha,omitempty"`
+	Name        string             `json:"name"`
+	Ref         ClusterRef         `json:"ref"`
+	Endpoint    string             `json:"endpoint"`
+	CAHash      string             `json:"ca_hash"`
+	Version     string             `json:"version"`
+	State       string             `json:"state"`
+	Pools       []NodePoolSpec     `json:"pools"`
+	Conditions  []ClusterCondition `json:"conditions"`
+	ObservedAt  time.Time          `json:"observed_at"`
 }
 
 // ClusterNodeSize carries live capacity facts for a provider-supported node size.
@@ -128,6 +133,7 @@ type ClusterOptions struct {
 
 // ClusterMutation may identify the durable request marker before a remote ID exists.
 type ClusterMutation struct {
+	PoolID        string     `json:"pool_id,omitempty"`
 	OperationID   string     `json:"operation_id"`
 	Ref           ClusterRef `json:"ref"`
 	Kind          string     `json:"kind"`

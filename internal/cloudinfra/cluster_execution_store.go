@@ -59,6 +59,17 @@ func (s *PgStore) AcceptClusterOperation(ctx context.Context, o *ClusterOperatio
 			return ErrBusy
 		}
 	}
+	if maintenanceKind(o.Kind) {
+		if err := maintenancePinsTx(ctx, tx, o); err != nil {
+			return err
+		}
+		if o.CapacityTarget.Servers > 0 {
+			if err := s.reserveClusterCapacity(ctx, tx, o); err != nil {
+				return err
+			}
+			o.ReservationIDs = []string{o.ID}
+		}
+	}
 	o.Status = "accepted"
 	o.Attempt = 1
 	o.Revision++

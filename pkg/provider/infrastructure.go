@@ -23,7 +23,7 @@ const (
 	ClusterCreation            InfrastructureCapability = "cluster:create"
 	ClusterMutationObservation InfrastructureCapability = "cluster:observe"
 	ClusterBootstrapAccess     InfrastructureCapability = "cluster:bootstrap"
-	ClusterUpdate              InfrastructureCapability = "cluster:update"
+	ClusterConfigurationUpdate InfrastructureCapability = "cluster:update"
 	ClusterUpgrade             InfrastructureCapability = "cluster:upgrade"
 	ClusterDeletion            InfrastructureCapability = "cluster:delete"
 	NodePoolCreation           InfrastructureCapability = "node-pool:create"
