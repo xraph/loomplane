@@ -145,15 +145,15 @@ func EnrollRuntime(ctx context.Context, k kubeclient.Interface, in EnrollmentReq
 		obj, getErr := item.get()
 		if apierrors.IsNotFound(getErr) && state.Objects[item.kind] == "" {
 			state.Attempted[item.kind] = true
-			if checkErr := checkpoint(ctx, state); checkErr != nil {
-				return checkErr
-			}
-			// Namespace identity is checked again after the authority checkpoint.
+			// Finish identity reads before the final authority and lease checkpoint.
 			serviceAccount := ""
 			if state.ServiceAccountUID != "" {
 				serviceAccount = in.ServiceAccountName
 			}
 			if checkErr := VerifyRuntimeIdentity(ctx, k, in.Namespace, state.NamespaceUID, serviceAccount, state.ServiceAccountUID); checkErr != nil {
+				return checkErr
+			}
+			if checkErr := checkpoint(ctx, state); checkErr != nil {
 				return checkErr
 			}
 			obj, getErr = item.create()

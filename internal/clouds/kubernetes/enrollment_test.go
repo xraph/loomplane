@@ -158,3 +158,39 @@ func TestManagedClusterEnrollmentRevocation(t *testing.T) {
 		}
 	}
 }
+
+func TestManagedClusterEnrollmentRevocationDuringIdentityRead(t *testing.T) {
+	for _, resource := range []string{"namespaces", "serviceaccounts"} {
+		for _, reason := range []string{"membership revoked", "operation cancelled", "lease expired"} {
+			t.Run(resource+"/"+reason, func(t *testing.T) {
+				k, in, state := enrollmentFixture()
+				denied := errors.New(reason)
+				revoked := false
+				k.PrependReactor("get", resource, func(ktesting.Action) (bool, runtime.Object, error) {
+					if resource == "namespaces" && state.NamespaceUID != "" || resource == "serviceaccounts" && state.ServiceAccountUID != "" {
+						revoked = true
+					}
+					return false, nil, nil
+				})
+				err := EnrollRuntime(t.Context(), k, in, state, func(context.Context, *EnrollmentState) error {
+					if revoked {
+						return denied
+					}
+					return nil
+				})
+				if !errors.Is(err, denied) {
+					t.Fatalf("authority loss: %v", err)
+				}
+				forbidden := "serviceaccounts"
+				if resource == "serviceaccounts" {
+					forbidden = "roles"
+				}
+				for _, action := range k.Actions() {
+					if action.GetVerb() == "create" && action.GetResource().Resource == forbidden {
+						t.Fatal("runtime object created after authority changed during identity GET")
+					}
+				}
+			})
+		}
+	}
+}
