@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"maps"
 	"reflect"
 	"slices"
 	"sort"
@@ -207,7 +208,7 @@ func (s *Service) prepareMaintenance(ctx context.Context, p security.Principal, 
 		if current.Autoscale {
 			return zero, 0, nil, &provider.ClusterLifecycleBlockedError{Reason: "native_count_owner"}
 		}
-		if current.Name != m.Pool.Name || current.Size != m.Pool.Size || !reflect.DeepEqual(current.Labels, m.Pool.Labels) || !reflect.DeepEqual(current.Taints, m.Pool.Taints) {
+		if current.Name != m.Pool.Name || current.Size != m.Pool.Size || !maps.Equal(current.Labels, m.Pool.Labels) || !slices.Equal(current.Taints, m.Pool.Taints) {
 			return zero, 0, nil, provider.ErrInfrastructureUnsupported
 		}
 		if m.Pool.Count == current.Count {

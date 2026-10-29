@@ -5,6 +5,7 @@ package integration
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -185,5 +186,75 @@ func TestManagedClusterMaintenancePreservesLegacyEmptyPlan(t *testing.T) {
 	}
 	if _, err := deployments.NewPgStore(f.db).CreateDeployment(t.Context(), d); err != nil {
 		t.Fatalf("legacy empty plan rejected: %v", err)
+	}
+}
+
+func TestManagedClusterMaintenancePlainKeepDoesNotFence(t *testing.T) {
+	for _, maintenanceFirst := range []bool{false, true} {
+		t.Run(fmt.Sprint(maintenanceFirst), func(t *testing.T) {
+			f, o, d := maintenanceAdmissionFixture(t)
+			if _, err := f.sql.Exec(t.Context(), `UPDATE loomplane_plans SET result=jsonb_set(result,'{actions}','[{"id":"service:kept","name":"kept","subject":"service","op":"keep","connection_id":"runtime-1"},{"id":"service:changed","name":"changed","subject":"service","op":"update","connection_id":"runtime-2"}]') WHERE id=$1`, d.PlanID); err != nil {
+				t.Fatal(err)
+			}
+			if maintenanceFirst {
+				if err := f.store.AcceptClusterOperation(t.Context(), o, 2); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := deployments.NewPgStore(f.db).CreateDeployment(t.Context(), d); err != nil {
+				t.Fatal("plain keep blocked unrelated deployment", err)
+			}
+			if !maintenanceFirst {
+				if err := f.store.AcceptClusterOperation(t.Context(), o, 2); err != nil {
+					t.Fatal("plain keep blocked maintenance", err)
+				}
+			}
+		})
+	}
+}
+func TestManagedClusterMaintenanceRetryCapacityLockOrder(t *testing.T) {
+	f, _, d := maintenanceAdmissionFixture(t)
+	d.Status = deployments.StatusFailed
+	st := deployments.NewPgStore(f.db)
+	if _, err := st.CreateDeployment(t.Context(), d); err != nil {
+		t.Fatal(err)
+	}
+	tx, err := f.sql.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(context.Background())
+	var holder int
+	if err = tx.QueryRow(t.Context(), `SELECT pg_backend_pid()`).Scan(&holder); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = tx.Exec(t.Context(), `SELECT pg_advisory_xact_lock(hashtextextended('cloud-organization/org',0))`); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { _, reopenErr := st.Reopen(t.Context(), "org", d.ID); done <- reopenErr }()
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		var waiting bool
+		if err = tx.QueryRow(t.Context(), `SELECT EXISTS(SELECT 1 FROM pg_stat_activity WHERE datname=current_database() AND wait_event='advisory' AND $1=ANY(pg_blocking_pids(pid)))`, holder).Scan(&waiting); err != nil {
+			t.Fatal(err)
+		}
+		if waiting {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("retry did not reach organization gate")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	_, lockErr := tx.Exec(t.Context(), `SELECT id FROM loomplane_deployments WHERE id=$1 FOR UPDATE NOWAIT`, d.ID)
+	if err = tx.Rollback(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err = <-done; err != nil {
+		t.Fatal(err)
+	}
+	if lockErr != nil {
+		t.Fatalf("retry held row while waiting for capacity organization gate: %v", lockErr)
 	}
 }

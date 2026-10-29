@@ -209,6 +209,9 @@ func (s *Service) observeClusterManagement(ctx context.Context, p security.Princ
 	if observation.Ref != r.Observation.Ref || observation.Endpoint == "" || observation.Endpoint != r.Observation.Endpoint || r.Observation.CAHash == "" {
 		return facts, ErrConflict
 	}
+	if checkErr := s.Adapters.Require(in.Provider, provider.ClusterBootstrapAccess); checkErr != nil {
+		return facts, checkErr
+	}
 	bootstrap, ok := reader.(provider.ClusterBootstrap)
 	if !ok {
 		return facts, provider.ErrInfrastructureUnsupported
@@ -220,6 +223,9 @@ func (s *Service) observeClusterManagement(ctx context.Context, p security.Princ
 		return facts, checkErr
 	}
 	access.BeforeEffect = func(effectCtx context.Context) error {
+		if checkErr := s.Adapters.Require(in.Provider, provider.ClusterBootstrapAccess); checkErr != nil {
+			return checkErr
+		}
 		if _, _, checkErr := s.clusterAuthority(effectCtx, p, cloud, in); checkErr != nil {
 			return checkErr
 		}
@@ -236,7 +242,10 @@ func (s *Service) observeClusterManagement(ctx context.Context, p security.Princ
 		at := s.now().UTC()
 		record.Steps[0].State = "attempted"
 		record.Steps[0].AttemptedAt = &at
-		return s.saveCluster(effectCtx, record)
+		if checkErr := s.saveCluster(effectCtx, record); checkErr != nil {
+			return checkErr
+		}
+		return checkClusterMaintenanceFence(effectCtx)
 	}
 	material, err := bootstrap.BootstrapCluster(ctx, access, in.Ref, 5*time.Minute)
 	if err != nil {

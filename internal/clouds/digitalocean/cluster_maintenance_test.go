@@ -88,7 +88,7 @@ func TestClusterMaintenanceEffectsRequireFinalGuard(t *testing.T) {
 	if _, err := c.UpdateCluster(t.Context(), a, maintenanceRef(), change); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := c.UpdateNodePool(t.Context(), a, maintenanceRef(), "pool", provider.NodePoolSpec{Name: "workers", Size: "s-2", Count: 3}); err != nil {
+	if _, err := c.UpdateNodePool(t.Context(), a, maintenanceRef(), "pool", provider.NodePoolSpec{Name: "workers", Size: "s-2", Count: 3, Labels: map[string]string{}, Taints: []provider.NodePoolTaint{}}); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := c.CreateNodePool(t.Context(), a, maintenanceRef(), provider.NodePoolSpec{Name: "new", Size: "s-2", Count: 1, OperationID: "operation", RequestDigest: strings.Repeat("a", 64)}); err != nil {

@@ -12,6 +12,7 @@ import (
 	"github.com/xraph/grove/drivers/pgdriver"
 
 	"github.com/xraph/loomplane/internal/cloudinfra"
+	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/orchestration"
 	"github.com/xraph/loomplane/internal/page"
 	"github.com/xraph/loomplane/internal/planning"
@@ -209,6 +210,9 @@ func (s *PgStore) UpdateStep(ctx context.Context, orgID, id string, step Step) (
 // Finish implements Store. A deployment that's already settled stays as
 // it is.
 func (s *PgStore) Finish(ctx context.Context, orgID, id, status, reason string, at time.Time) error {
+	if status != StatusSucceeded && status != StatusFailed && status != StatusCancelled {
+		return errors.New("deployment finish requires a terminal status")
+	}
 	if key := orchestration.FinalizationKey(ctx); key != "" {
 		return s.finishActivity(ctx, orgID, id, key, status, reason, at)
 	}
@@ -238,6 +242,10 @@ func (s *PgStore) Reopen(ctx context.Context, orgID, id string) (ok bool, err er
 		return false, fmt.Errorf("begin: %w", err)
 	}
 	defer func() { err = rollback(tx, err) }()
+	// Status admission and capacity transitions take this gate before the row.
+	if lockErr := cloudprofiles.LockOrganization(ctx, tx, orgID); lockErr != nil {
+		return false, lockErr
+	}
 	var raw, rawCanary []byte
 	err = tx.QueryRow(ctx, `SELECT steps, canary FROM loomplane_deployments
 		WHERE org_id = $1 AND id = $2 AND status = 'failed' FOR UPDATE`, orgID, id).Scan(&raw, &rawCanary)
