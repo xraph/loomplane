@@ -256,6 +256,11 @@ func NewMCPServer(c *client.Client, version string, opts MCPOptions) *mcp.Server
 			d, err := c.Deployment(ctx, in.DeploymentID)
 			return nil, d, err
 		})
+	mcp.AddTool(s, &mcp.Tool{Name: "get_release_watch", Description: "How a deployment is watched after it finishes: its status and verdict, the verdict on each changed service, the services it can't watch, and the rollback plan if it breached. A deployment with no watch answers not found. Unverified means missing evidence, so ask a person.", Annotations: readOnly()},
+		func(ctx context.Context, _ *mcp.CallToolRequest, in deploymentInput) (*mcp.CallToolResult, *client.ReleaseWatch, error) {
+			w, err := c.ReleaseWatch(ctx, in.DeploymentID)
+			return nil, w, err
+		})
 	mcp.AddTool(s, &mcp.Tool{Name: "deployment_for_plan", Description: "The deployment an approved plan started.", Annotations: readOnly()},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in planInput) (*mcp.CallToolResult, *client.Deployment, error) {
 			d, err := c.DeploymentForPlan(ctx, in.PlanID)

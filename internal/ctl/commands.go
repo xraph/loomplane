@@ -405,7 +405,11 @@ func (a *App) show(ctx cli.CommandContext) error {
 	return nil
 }
 
-func (a *App) printPlan(p *client.Plan) {
+func (a *App) printPlan(p *client.Plan) { a.printPlanWith(p, "") }
+
+// printPlanWith prints a plan with a promotion's soak line, when there is
+// one, after what it deploys.
+func (a *App) printPlanWith(p *client.Plan, soak string) {
 	a.printf("Plan %s for %s: %s\n", p.ID, p.Environment, p.Status)
 	if line := kindLine(p); line != "" {
 		a.printf("%s\n", line)
@@ -436,6 +440,9 @@ func (a *App) printPlan(p *client.Plan) {
 		for _, x := range p.Artifacts {
 			a.printf("  %s\n", artifactLine(x))
 		}
+	}
+	if soak != "" {
+		a.printf("\n%s\n", soak)
 	}
 	for _, l := range p.Leftovers {
 		a.printf("\n%s\n", leftoverLine(l))
@@ -634,6 +641,7 @@ func (a *App) printDeployment(ctx cli.CommandContext, c *client.Client, d *clien
 	if d.Canary != nil {
 		a.printCanary(ctx, c, d)
 	}
+	a.printWatch(ctx, c, d)
 }
 
 // releaseLine says how a plan rolls out. A canary that no service in the

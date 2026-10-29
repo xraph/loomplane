@@ -146,6 +146,7 @@ func TestRollbackRoutes(t *testing.T) {
 		err  error
 		code int
 	}{
+		{fmt.Errorf("production: %w", planning.ErrNotRunning), http.StatusConflict},
 		{planning.ErrNoPreviousRelease, http.StatusConflict},
 		{planning.ErrReleaseRunning, http.StatusConflict},
 		{fmt.Errorf("the canary already returned production to the baseline: %w", planning.ErrCanaryReverted), http.StatusConflict},

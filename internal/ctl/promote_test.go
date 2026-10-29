@@ -2,11 +2,13 @@ package ctl
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"reflect"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 const (
@@ -26,6 +28,21 @@ const (
 		"artifacts":[{"service":"web","reused":true,"reference":"gcr.io/acme/web@sha256:def","from":"production"}]}`
 )
 
+const (
+	deployment9   = `{"id":"dep_9","project_id":"proj_1","plan_id":"plan_9","environment":"production","status":"succeeded","steps":[{"action_id":"service:api","name":"api","op":"update","provider":"render","status":"succeeded"}]}`
+	soakHealthy   = `{"environment":"staging","running":true,"since":"2026-10-29T08:00:00Z","duration":9000000000000,"healthy":true,"unverified":false,"reasons":[],"services":[{"name":"api","provider":"render","verdict":"pass","reason":""}]}`
+	soakUnhealthy = `{"environment":"staging","running":true,"since":"2026-10-29T08:00:00Z","duration":3600000000000,"healthy":false,"unverified":false,"reasons":["api: 4.1% of the candidate's requests failed; the ceiling is 1%."],"services":[{"name":"api","provider":"render","verdict":"fail","reason":"4.1% of the candidate's requests failed; the ceiling is 1%."}]}`
+)
+
+// watchJSON is a release watch as the server sends it.
+func watchJSON(status, verdict, reason, rollbackPlan string, unverified bool, services string) string {
+	return `{"id":"rw_1","org_id":"org_1","project_id":"proj_1","environment_id":"env_1","environment":"production","deployment_id":"dep_9","plan_id":"plan_9",
+		"status":"` + status + `","verdict":"` + verdict + `","reason":"` + reason + `","thresholds":{},"services":` + services + `,"unwatched":[],"held":[],"held_released":false,
+		"unverified":` + fmt.Sprint(unverified) + `,"rollback_plan_id":"` + rollbackPlan + `","rollback_approved_at":null,
+		"starts_at":"2026-10-29T14:00:00Z","ends_at":"2026-10-29T14:15:00Z","bound_at":"2026-10-29T14:30:00Z","checked_at":null,"settled_at":null,
+		"created_at":"2026-10-29T14:00:00Z","updated_at":"2026-10-29T14:00:00Z"}`
+}
+
 // releaseAPI is a fake Loomplane for promotions and rollbacks. It records
 // each request and the body of each POST, and never approves.
 type releaseAPI struct {
@@ -35,6 +52,8 @@ type releaseAPI struct {
 	approved bool
 	target   string // the rollback target's answer; empty means rollbackTarget
 	status   int    // the rollback target's status; 0 means 200
+	soak     string // the promotion's soak; empty means a healthy one
+	watch    string // dep_9's watch; empty means it has none (404)
 }
 
 func (f *releaseAPI) handler(t *testing.T) http.HandlerFunc {
@@ -58,6 +77,20 @@ func (f *releaseAPI) handler(t *testing.T) http.HandlerFunc {
 		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/projects/proj_1/plans":
 			w.WriteHeader(http.StatusCreated)
 			_, _ = w.Write([]byte(`{"id":"plan_1","status":"planning"}`))
+		case r.URL.Path == "/api/v1/plans/plan_1/soak":
+			if f.soak == "" {
+				f.soak = soakHealthy
+			}
+			_, _ = w.Write([]byte(f.soak))
+		case r.URL.Path == "/api/v1/deployments/dep_9":
+			_, _ = w.Write([]byte(deployment9))
+		case r.URL.Path == "/api/v1/deployments/dep_9/watch":
+			if f.watch == "" {
+				w.WriteHeader(http.StatusNotFound)
+				_, _ = w.Write([]byte(`{"error":"release watch not found"}`))
+				return
+			}
+			_, _ = w.Write([]byte(f.watch))
 		case r.URL.Path == "/api/v1/plans/plan_1":
 			_, _ = w.Write([]byte(promotionPlan))
 		case r.URL.Path == "/api/v1/projects/proj_1/environments/production/rollback-target":
@@ -201,5 +234,97 @@ func TestRollback_refusesBeforePlanning(t *testing.T) {
 		if strings.HasPrefix(c, "POST") {
 			t.Fatalf("planned a rollback after a refusal: %v", api.calls)
 		}
+	}
+}
+
+func TestDeployment_showsItsWatch(t *testing.T) {
+	until := time.Date(2026, 10, 29, 14, 15, 0, 0, time.UTC).Local().Format("15:04")
+	for _, tc := range []struct {
+		name  string
+		watch string
+		want  []string
+	}{
+		{"watching", watchJSON("watching", "", "", "", false, `[{"name":"api","provider":"render","verdict":"pass","reason":"","op":"update"}]`),
+			[]string{"Watch: watching until " + until + " (api on Render: pass)"}},
+		{"rolled back", watchJSON("rolled_back", "fail", "api: 4.1% of the candidate's requests failed; the ceiling is 1%.", "plan_r", false, `[]`),
+			[]string{"Watch: breached (api: 4.1% of the candidate's requests failed; the ceiling is 1%.), rolled back by plan_r (Loomplane automation)"}},
+		{"inconclusive", watchJSON("inconclusive", "inconclusive", "api: The candidate served 120 requests; at least 200 are needed to judge it.", "", true, `[]`),
+			[]string{"Watch: inconclusive, release unverified (api: The candidate served 120 requests; at least 200 are needed to judge it.)"}},
+		{"blocked", watchJSON("rollback_blocked", "fail", "Loomplane couldn't roll the release back: nothing to restore", "", false, `[]`),
+			[]string{"Watch: breached, rollback blocked (Loomplane couldn't roll the release back: nothing to restore)"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			api := &releaseAPI{watch: tc.watch}
+			app, out := canaryApp(t, api.handler(t))
+			if err := app.Run([]string{"deployment", "dep_9"}); err != nil {
+				t.Fatalf("run: %v\n%s", err, out)
+			}
+			for _, want := range tc.want {
+				if !strings.Contains(out.String(), want) {
+					t.Fatalf("missing %q in:\n%s", want, out)
+				}
+			}
+		})
+	}
+
+	// A deployment with no watch prints nothing about one.
+	api := &releaseAPI{}
+	app, out := canaryApp(t, api.handler(t))
+	if err := app.Run([]string{"deployment", "dep_9"}); err != nil {
+		t.Fatalf("run: %v\n%s", err, out)
+	}
+	if strings.Contains(out.String(), "Watch") {
+		t.Fatalf("printed a watch for none:\n%s", out)
+	}
+}
+
+func TestPromote_showsTheSoak(t *testing.T) {
+	api := &releaseAPI{}
+	app, out := canaryApp(t, api.handler(t))
+	if err := app.Run([]string{"promote", "shop"}); err != nil {
+		t.Fatalf("run: %v\n%s", err, out)
+	}
+	if !strings.Contains(out.String(), "staging has run these commits for 2h30m, healthy") || !strings.HasSuffix(out.String(), "Approve it with: loomctl approve plan_1\n") {
+		t.Fatalf("healthy soak:\n%s", out)
+	}
+
+	api = &releaseAPI{soak: soakUnhealthy}
+	app, out = canaryApp(t, api.handler(t))
+	if err := app.Run([]string{"promote", "shop"}); err != nil {
+		t.Fatalf("run: %v\n%s", err, out)
+	}
+	if want := "staging has run these commits for 1h, not healthy: api: 4.1% of the candidate's requests failed; the ceiling is 1%."; !strings.Contains(out.String(), want) {
+		t.Fatalf("missing %q in:\n%s", want, out)
+	}
+
+	// --json prints the plan alone, and --no-wait has no plan to judge yet.
+	for _, args := range [][]string{{"promote", "shop", "--json"}, {"promote", "shop", "--no-wait"}} {
+		api = &releaseAPI{}
+		app, out = canaryApp(t, api.handler(t))
+		if err := app.Run(args); err != nil {
+			t.Fatalf("run: %v\n%s", err, out)
+		}
+		for _, c := range api.calls {
+			if strings.HasSuffix(c, "/soak") {
+				t.Fatalf("%v read the soak: %v", args, api.calls)
+			}
+		}
+	}
+}
+
+func TestRollback_jsonPrintsThePlanAlone(t *testing.T) {
+	api := &releaseAPI{}
+	app, out := canaryApp(t, api.handler(t))
+	if err := app.Run([]string{"rollback", "shop", "--reason", "5xx", "--json"}); err != nil {
+		t.Fatalf("run: %v\n%s", err, out)
+	}
+	var plan map[string]any
+	if err := json.Unmarshal(out.Bytes(), &plan); err != nil || plan["id"] != "plan_r" {
+		t.Fatalf("--json printed %s: %v", out, err)
+	}
+	// The preview is for people; --json doesn't fetch what it won't print.
+	want := []string{"GET /api/v1/projects", "POST /api/v1/projects/proj_1/rollbacks", "GET /api/v1/plans/plan_r"}
+	if !reflect.DeepEqual(api.calls, want) {
+		t.Fatalf("calls %v", api.calls)
 	}
 }

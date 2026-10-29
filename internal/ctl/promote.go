@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/xraph/forge/cli"
 
@@ -65,11 +66,13 @@ func (a *App) rollback(ctx cli.CommandContext) error {
 		return err
 	}
 	env, deployment := ctx.String("env"), ctx.String("deployment")
-	target, err := c.RollbackTarget(ctxOf(ctx), p.ID, env, deployment)
-	if err != nil {
-		return err
-	}
+	// The preview is for people; --json prints the plan alone, so it
+	// doesn't fetch the target.
 	if !ctx.Bool("json") {
+		target, terr := c.RollbackTarget(ctxOf(ctx), p.ID, env, deployment)
+		if terr != nil {
+			return terr
+		}
 		a.printf("Rolls %s back from %s to %s\n", target.Environment, target.Target.DeploymentID, target.Restore.DeploymentID)
 		for _, cm := range target.Commits {
 			if cm.From != cm.To {
@@ -96,8 +99,30 @@ func (a *App) finishPlan(ctx cli.CommandContext, c *client.Client, plan *client.
 	if ctx.Bool("json") {
 		return a.json(plan)
 	}
-	a.printPlan(plan)
+	a.printPlanWith(plan, a.soakLine(ctx, c, plan))
 	return nil
+}
+
+// soakLine says how long the promotion's source environment has run the
+// commits the plan moves, once the plan is planned. Anything but a
+// promotion has none, and a soak that can't be read leaves the plan as it
+// is.
+func (a *App) soakLine(ctx cli.CommandContext, c *client.Client, plan *client.Plan) string {
+	if plan.Kind != client.KindPromotion || plan.Planning() {
+		return ""
+	}
+	s, err := c.Soak(ctxOf(ctx), plan.ID)
+	switch {
+	case errors.Is(err, client.ErrNotFound):
+		return ""
+	case err != nil:
+		return "Soak: couldn't be read (" + err.Error() + ")"
+	case !s.Running:
+		return fmt.Sprintf("Soak: %s doesn't run these commits yet: %s", s.Environment, strings.Join(s.Reasons, "; "))
+	case s.Healthy:
+		return fmt.Sprintf("Soak: %s has run these commits for %s, healthy", s.Environment, holdText(s.Duration.Round(time.Minute)))
+	}
+	return fmt.Sprintf("Soak: %s has run these commits for %s, not healthy: %s", s.Environment, holdText(s.Duration.Round(time.Minute)), strings.Join(s.Reasons, "; "))
 }
 
 // shortSHA is a commit at the seven characters Plan.Commits shows.
@@ -107,15 +132,15 @@ func shortSHA(sha string) string { return sha[:min(7, len(sha))] }
 // release.
 func kindLine(p *client.Plan) string {
 	switch {
-	case p.Kind == "promotion":
+	case p.Kind == client.KindPromotion:
 		line := fmt.Sprintf("Promotes %s to %s", p.From, p.Environment)
 		if commits := p.Commits(); commits != "" {
 			line += ": " + commits
 		}
 		return line
-	case p.Kind == "rollback" && p.Rollback != nil:
+	case p.Kind == client.KindRollback && p.Rollback != nil:
 		line := fmt.Sprintf("Rollback of %s, restoring %s", p.Rollback.TargetDeploymentID, p.Rollback.RestoreDeploymentID)
-		if p.Rollback.Trigger != "" && p.Rollback.Trigger != "manual" {
+		if p.Rollback.Trigger != "" && p.Rollback.Trigger != client.RollbackTriggerManual {
 			line += ", started by " + client.AutomationName
 		}
 		return line + ": " + p.Rollback.Reason
@@ -155,4 +180,66 @@ func leftoverLine(l client.Leftover) string {
 		line += "\n  " + l.Reason
 	}
 	return line
+}
+
+// printWatch prints how a deployment's post-deploy watch is going or
+// ended. A deployment with no watch prints nothing, and a watch that
+// can't be read leaves the deployment as it is.
+func (a *App) printWatch(ctx cli.CommandContext, c *client.Client, d *client.Deployment) {
+	w, err := c.ReleaseWatch(ctxOf(ctx), d.ID)
+	switch {
+	case errors.Is(err, client.ErrNotFound):
+		return
+	case err != nil:
+		a.printf("\nWatch: couldn't be read (%s)\n", err)
+		return
+	}
+	a.printf("\nWatch: %s\n", watchLine(w))
+	for _, u := range w.Unwatched {
+		a.printf("  %s: %s\n", serviceOn(u.Name, u.Provider), u.Reason)
+	}
+}
+
+// watchLine says where a watch stands.
+func watchLine(w *client.ReleaseWatch) string {
+	switch w.Status {
+	case client.WatchWatching:
+		line := "watching until " + w.EndsAt.Local().Format("15:04")
+		if len(w.Services) == 0 {
+			return line
+		}
+		parts := make([]string, 0, len(w.Services))
+		for _, s := range w.Services {
+			verdict := s.Verdict
+			if verdict == "" {
+				verdict = "not judged yet"
+			}
+			parts = append(parts, serviceOn(s.Name, s.Provider)+": "+verdict)
+		}
+		return line + " (" + strings.Join(parts, ", ") + ")"
+	case client.WatchPassed:
+		return "passed"
+	case client.WatchInconclusive:
+		return "inconclusive, release unverified (" + w.Reason + ")"
+	case client.WatchSuperseded:
+		return "superseded by a newer release"
+	case client.WatchRollingBack:
+		return "breached (" + w.Reason + "), rolling back with " + w.RollbackPlanID
+	case client.WatchRolledBack:
+		return "breached (" + w.Reason + "), rolled back by " + w.RollbackPlanID + " (" + client.AutomationName + ")"
+	case client.WatchRollbackBlocked:
+		return "breached, rollback blocked (" + w.Reason + ")"
+	case client.WatchRollbackFailed:
+		return "breached, rollback failed (" + w.Reason + ")"
+	}
+	return w.Status
+}
+
+// serviceOn is a service and the provider it runs on, such as "api on
+// Render".
+func serviceOn(name, provider string) string {
+	if provider == "" {
+		return name
+	}
+	return name + " on " + strings.ToUpper(provider[:1]) + provider[1:]
 }

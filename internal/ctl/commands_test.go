@@ -310,3 +310,27 @@ func TestMCP_rollbackNeedsAllowDeploy(t *testing.T) {
 		t.Fatalf("plan %+v, approved %v", plan, api.approved)
 	}
 }
+
+func TestMCP_getReleaseWatch(t *testing.T) {
+	api := &releaseAPI{watch: watchJSON("watching", "", "", "", false, `[{"name":"api","provider":"render","verdict":"pass","reason":"","op":"update"}]`)}
+	// Read-only: offered without --allow-deploy.
+	cs := mcpAgent(t, api.handler(t), MCPOptions{})
+	res, err := cs.ListTools(t.Context(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var found *mcp.Tool
+	for _, tl := range res.Tools {
+		if tl.Name == "get_release_watch" {
+			found = tl
+		}
+	}
+	if found == nil || found.Annotations == nil || !found.Annotations.ReadOnlyHint {
+		t.Fatalf("get_release_watch %+v", found)
+	}
+	var w client.ReleaseWatch
+	callTool(t, cs, "get_release_watch", map[string]any{"deployment_id": "dep_9"}, &w)
+	if w.ID != "rw_1" || w.Status != client.WatchWatching || len(w.Services) != 1 || w.Services[0].Verdict != "pass" {
+		t.Fatalf("watch %+v", w)
+	}
+}

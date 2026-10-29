@@ -649,6 +649,104 @@ func (c *Client) Soak(ctx context.Context, planID string) (*Soak, error) {
 	return &s, c.do(ctx, http.MethodGet, "/api/v1/plans/"+esc(planID)+"/soak", nil, &s)
 }
 
+// Plan kinds, as Plan.Kind says.
+const (
+	KindRelease   = "release"
+	KindPromotion = "promotion"
+	KindRollback  = "rollback"
+)
+
+// RollbackTriggerManual is Rollback.Trigger for a rollback a person asked
+// for. Any other trigger is Loomplane automation.
+const RollbackTriggerManual = "manual"
+
+// Release watch statuses.
+const (
+	WatchWatching        = "watching"
+	WatchPassed          = "passed"
+	WatchInconclusive    = "inconclusive"
+	WatchSuperseded      = "superseded"
+	WatchRollingBack     = "rolling_back"
+	WatchRolledBack      = "rolled_back"
+	WatchRollbackBlocked = "rollback_blocked"
+	WatchRollbackFailed  = "rollback_failed"
+)
+
+// WatchedService is one service a release watch judges.
+type WatchedService struct {
+	Name     string `json:"name"`
+	Provider string `json:"provider"`
+	// Verdict is pass, fail or inconclusive; empty before the first check.
+	Verdict string `json:"verdict"`
+	Reason  string `json:"reason"`
+}
+
+// UnwatchedService is a changed service a watch can't judge, and why.
+type UnwatchedService struct {
+	Name     string `json:"name"`
+	Provider string `json:"provider"`
+	Reason   string `json:"reason"`
+}
+
+// ReleaseWatch is how a deployment is watched after it finishes: the
+// verdict on each changed service and any automatic rollback.
+type ReleaseWatch struct {
+	ID           string `json:"id"`
+	DeploymentID string `json:"deployment_id"`
+	PlanID       string `json:"plan_id"`
+	Environment  string `json:"environment"`
+	Status       string `json:"status"`
+	// Verdict is pass, fail or inconclusive; empty while undecided.
+	Verdict string `json:"verdict"`
+	Reason  string `json:"reason"`
+	// Unverified is missing evidence: a changed service wasn't watched, or
+	// the watch ended without enough to judge by.
+	Unverified     bool               `json:"unverified"`
+	RollbackPlanID string             `json:"rollback_plan_id"`
+	Services       []WatchedService   `json:"services,omitempty"`
+	Unwatched      []UnwatchedService `json:"unwatched,omitempty"`
+	StartsAt       time.Time          `json:"starts_at"`
+	EndsAt         time.Time          `json:"ends_at"`
+	BoundAt        time.Time          `json:"bound_at"`
+	SettledAt      *time.Time         `json:"settled_at"`
+}
+
+// Open reports whether the watch still has work to do.
+func (w *ReleaseWatch) Open() bool {
+	return w.Status == WatchWatching || w.Status == WatchRollingBack
+}
+
+// ReleaseWatch reads a deployment's post-deploy watch. A deployment with
+// none answers ErrNotFound.
+func (c *Client) ReleaseWatch(ctx context.Context, deploymentID string) (*ReleaseWatch, error) {
+	var w ReleaseWatch
+	return &w, c.do(ctx, http.MethodGet, "/api/v1/deployments/"+esc(deploymentID)+"/watch", nil, &w)
+}
+
+// WatchCoverage is what a release in an environment would be watched for.
+type WatchCoverage struct {
+	Environment string `json:"environment"`
+	// Duration is how long, in nanoseconds; 0 arms no watch.
+	Duration time.Duration `json:"duration"`
+	// Canary are the services a canary would ramp, which the watch leaves
+	// to it.
+	Canary   []string `json:"canary,omitempty"`
+	Services []struct {
+		Name      string `json:"name"`
+		Provider  string `json:"provider"`
+		Watchable bool   `json:"watchable"`
+		Reason    string `json:"reason,omitempty"`
+	} `json:"services,omitempty"`
+	Unverified bool `json:"unverified"`
+}
+
+// WatchCoverage reads what a release in the environment would be watched
+// for.
+func (c *Client) WatchCoverage(ctx context.Context, projectID, environment string) (*WatchCoverage, error) {
+	var w WatchCoverage
+	return &w, c.do(ctx, http.MethodGet, "/api/v1/projects/"+esc(projectID)+"/environments/"+esc(environment)+"/watch-coverage", nil, &w)
+}
+
 // --- Deployments ---
 
 // Step is one action of a deployment, as it went.
