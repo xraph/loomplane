@@ -539,9 +539,20 @@ export function useClock(interval = 60000): number {
 
 /** subdomainName is the zone a label adds under parent: "api.eu.loomplane.com". */
 export function subdomainName(label: string, parent: string): string {
-  const l = label.trim().toLowerCase()
+  const l = subdomainLabel(label, parent)
   const p = parent.trim().toLowerCase()
   return l ? `${l}.${p}` : p
+}
+
+/**
+ * subdomainLabel: the label as typed, without the domain's own name when
+ * the whole name was typed instead. The domain alone leaves "".
+ */
+export function subdomainLabel(label: string, parent: string): string {
+  const l = label.trim().toLowerCase()
+  const p = parent.trim().toLowerCase()
+  if (l === p) return ""
+  return l.endsWith(`.${p}`) ? l.slice(0, -p.length - 1) : l
 }
 
 const dnsLabel63 = /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/

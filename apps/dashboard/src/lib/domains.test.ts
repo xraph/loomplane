@@ -33,6 +33,7 @@ import {
   runsOnLabel,
   sameHosting,
   stateTone,
+  subdomainLabel,
   subdomainName,
   usedByLabel,
   validSubdomainLabel,
@@ -682,6 +683,15 @@ describe("adding and removing", () => {
       "api.eu.loomplane.com"
     )
     expect(subdomainName("  App ", "Loomplane.com")).toBe("app.loomplane.com")
+    // The whole name typed in the label field isn't doubled.
+    expect(subdomainName("app.loomplane.com", "loomplane.com")).toBe(
+      "app.loomplane.com"
+    )
+    expect(subdomainLabel("API.eu.Loomplane.com ", "loomplane.com")).toBe(
+      "api.eu"
+    )
+    // The domain on its own leaves no label, which isn't a subdomain.
+    expect(subdomainLabel("loomplane.com", "loomplane.com")).toBe("")
     for (const ok of ["app", "api.eu", "a1-b", "x"])
       expect(validSubdomainLabel(ok)).toBe(true)
     for (const bad of [

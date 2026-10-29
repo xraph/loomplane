@@ -24,7 +24,11 @@ import {
 import { Spinner } from "@/components/ui/spinner"
 import { Switch } from "@/components/ui/switch"
 import { cloudLabel } from "@/lib/clouds"
-import { subdomainName, validSubdomainLabel } from "@/lib/domains"
+import {
+  subdomainLabel,
+  subdomainName,
+  validSubdomainLabel,
+} from "@/lib/domains"
 
 // The providers Loomplane writes route records with.
 const hosts = ["cloudflare", "digitalocean", "vercel"]
@@ -71,7 +75,7 @@ export function AddSubdomainDialog({
   const add = async () => {
     if (create.isPending) return
     setError("")
-    if (!validSubdomainLabel(label)) {
+    if (!validSubdomainLabel(subdomainLabel(label, domain.name))) {
       setError("Enter a label like app or api.eu.")
       return
     }
