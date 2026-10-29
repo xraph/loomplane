@@ -57,7 +57,7 @@ const (
 
 var (
 	sealingKeyIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,32}$`)
-	appleIDPattern      = regexp.MustCompile(`^[A-Za-z0-9]{10}$`)
+	appleIDPattern      = regexp.MustCompile(`^[A-Z0-9]{10}$`)
 )
 
 // Variables that only mean something with their platform's key file.
