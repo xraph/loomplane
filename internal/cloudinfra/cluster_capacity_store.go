@@ -81,6 +81,7 @@ func (s *Service) ObserveClusterCapacity(ctx context.Context, p security.Princip
 	if err != nil {
 		return nil, err
 	}
+	snapshot.SchedulingProfiles = BuildClusterSchedulingProfiles(snapshot, *r.Observation, inventory, s.now())
 	snapshot.ResourceID = r.ID
 	snapshot.ObservationRevision = revision
 	if readErr != nil {

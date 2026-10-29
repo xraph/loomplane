@@ -19,24 +19,25 @@ import (
 // ClusterWorkloadInput pins a reviewed maximum, including every guaranteed HPA
 // replica. Runtime release proof is bound after execution creates its receipt.
 type ClusterWorkloadInput struct {
-	ID              string                `json:"id"`
-	OrgID           string                `json:"org_id"`
-	CloudID         string                `json:"cloud_id"`
-	ResourceID      string                `json:"resource_id"`
-	TargetID        string                `json:"target_id"`
-	AttachmentID    string                `json:"attachment_id"`
-	ProjectID       string                `json:"project_id"`
-	EnvironmentID   string                `json:"environment_id"`
-	ConnectionID    string                `json:"connection_id"`
-	PlanID          string                `json:"plan_id"`
-	ActionID        string                `json:"action_id"`
-	Service         string                `json:"service"`
-	RuntimeRef      string                `json:"runtime_ref"`
-	RuntimeRevision string                `json:"runtime_revision"`
-	ReleaseID       string                `json:"release_id"`
-	ReviewDigest    string                `json:"review_digest"`
-	TrustRevision   int64                 `json:"trust_revision"`
-	Maximum         ClusterWorkloadVector `json:"maximum"`
+	Native          *ClusterNativeWorkload `json:"native,omitempty"`
+	ID              string                 `json:"id"`
+	OrgID           string                 `json:"org_id"`
+	CloudID         string                 `json:"cloud_id"`
+	ResourceID      string                 `json:"resource_id"`
+	TargetID        string                 `json:"target_id"`
+	AttachmentID    string                 `json:"attachment_id"`
+	ProjectID       string                 `json:"project_id"`
+	EnvironmentID   string                 `json:"environment_id"`
+	ConnectionID    string                 `json:"connection_id"`
+	PlanID          string                 `json:"plan_id"`
+	ActionID        string                 `json:"action_id"`
+	Service         string                 `json:"service"`
+	RuntimeRef      string                 `json:"runtime_ref"`
+	RuntimeRevision string                 `json:"runtime_revision"`
+	ReleaseID       string                 `json:"release_id"`
+	ReviewDigest    string                 `json:"review_digest"`
+	TrustRevision   int64                  `json:"trust_revision"`
+	Maximum         ClusterWorkloadVector  `json:"maximum"`
 }
 
 type ClusterWorkloadHold struct {
@@ -74,6 +75,13 @@ func (s *PgStore) ReserveClusterWorkload(ctx context.Context, tx driver.Tx, in C
 	if checkErr := guard(ctx, tx, in); checkErr != nil {
 		return nil, checkErr
 	}
+	var additional ClusterWorkloadVector
+	if in.Native != nil {
+		additional, err = s.nativeWorkloadSupply(ctx, tx, in, snapshot, additional)
+		if err != nil {
+			return nil, err
+		}
+	}
 	holds, err := clusterWorkloadHolds(ctx, tx, in.OrgID, in.ResourceID)
 	if err != nil {
 		return nil, err
@@ -89,6 +97,12 @@ func (s *PgStore) ReserveClusterWorkload(ctx context.Context, tx driver.Tx, in C
 	usage, supply, err := clusterWorkloadAdmission(ctx, tx, snapshot, holds)
 	if err != nil {
 		return nil, err
+	}
+	if in.Native != nil {
+		supply, err = clusterWorkloadUsage(supply, []clusterWorkloadCoverage{{Maximum: additional}})
+		if err != nil {
+			return nil, err
+		}
 	}
 	usage, err = clusterWorkloadUsage(usage, []clusterWorkloadCoverage{{Maximum: in.Maximum}})
 	if err != nil {
@@ -144,6 +158,9 @@ func clusterWorkloadScope(ctx context.Context, tx driver.Tx, in ClusterWorkloadI
 		return out, ErrInvalid
 	}
 	if !out.Fresh(time.Now()) || !out.WorkloadsComplete || out.ResourceFingerprint != retirementResourceFingerprint(resource) {
+		if in.Native != nil {
+			return out, nativeTemplateBlock()
+		}
 		return out, &CapacityAdmissionError{Block: CapacityBlock{Reason: "workload_inventory_incomplete", Resource: "workload", CloudID: in.CloudID, TargetID: in.TargetID, Retryable: true}}
 	}
 	return out, nil

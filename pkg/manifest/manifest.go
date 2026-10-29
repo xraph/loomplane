@@ -173,6 +173,8 @@ type Build struct {
 
 // Settings are what a service sets, and what an environment can override.
 type Settings struct {
+	// CapacityMode chooses managed workload reservation semantics.
+	CapacityMode string `json:"capacity_mode,omitempty" yaml:"capacity_mode,omitempty"`
 	// CloudSQLNetwork is the explicit application route for PSC attachments.
 	CloudSQLNetwork *providercontract.CloudSQLApplicationNetwork `json:"cloud_sql_network,omitempty" yaml:"cloud_sql_network,omitempty"`
 	// CloudTarget names a target in the environment's assigned Cloud.
@@ -817,6 +819,9 @@ func checkSettings(add func(string, string, ...any), path string, s Settings) {
 	if s.Port < 0 || s.Port > MaxPort {
 		add(path+".port", "must be between 1 and %d", MaxPort)
 	}
+	if s.CapacityMode != "" && s.CapacityMode != "guaranteed" && s.CapacityMode != "best_effort" {
+		add(path+".capacity_mode", "must be guaranteed or best_effort")
+	}
 	if s.Scale != nil {
 		switch {
 		case s.Scale.Min < 0:
@@ -1149,6 +1154,9 @@ func (s Service) For(env string, d Defaults) Settings {
 	}
 	if o.Port != 0 {
 		out.Port = o.Port
+	}
+	if o.CapacityMode != "" {
+		out.CapacityMode = o.CapacityMode
 	}
 	if o.Scale != nil {
 		out.Scale = o.Scale

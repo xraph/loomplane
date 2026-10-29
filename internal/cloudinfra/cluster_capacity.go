@@ -293,6 +293,7 @@ type ClusterNodeCapacity struct {
 }
 
 type ClusterCapacitySnapshot struct {
+	SchedulingProfiles  []ClusterSchedulingProfile  `json:"scheduling_profiles,omitempty"`
 	Workloads           []ClusterObservedWorkload   `json:"workloads,omitempty"`
 	WorkloadsComplete   bool                        `json:"workloads_complete,omitempty"`
 	ResourceFingerprint string                      `json:"resource_fingerprint"`

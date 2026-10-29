@@ -1619,6 +1619,7 @@ func (p *planner) serviceConfig(name, base string, gs *graph.Service, prov *prov
 	}
 	if prov.Scaling || prov.Cloud == "server" {
 		cfg.Scale, cfg.Size = set.Scale, set.Size
+		cfg.CapacityMode = set.CapacityMode
 	} else if set.Scale != nil || set.Size != nil {
 		p.warn(Finding{
 			Code: "scaling-ignored", Subject: ServiceSubject, Name: name, Path: base,

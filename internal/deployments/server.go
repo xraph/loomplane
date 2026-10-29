@@ -645,6 +645,9 @@ func ownedSpec(job *Job, image string, state ownedState) (sp cpprovider.ServiceS
 			sp.Resources.CPUMillis = 100
 		}
 	}
+	if job.Action.Provider == "kubernetes" {
+		sp.Resources.CPUMillis, sp.Resources.MemoryMB = planning.OwnedWorkloadResources(cfg)
+	}
 	labels[owned.LabelManageIngress] = strconv.FormatBool(cfg.Public)
 	if cfg.Farp != nil && job.Connection.Cloud == connections.Kubernetes {
 		// Octopus finds a Kubernetes service by the Service's labels and

@@ -141,6 +141,8 @@ type AppliedInputs struct {
 }
 
 type ServiceConfig struct {
+	CapacityMode   string                     `json:"capacity_mode,omitempty"`
+	ClusterDemand  *ClusterWorkloadDemand     `json:"cluster_demand,omitempty"`
 	FrontendDemand *cloudinfra.FrontendDemand `json:"frontend_demand,omitempty"`
 	CapacityIntent *CapacityIntent            `json:"capacity_intent,omitempty"`
 	AppliedInputs  *AppliedInputs             `json:"applied_inputs,omitempty"`

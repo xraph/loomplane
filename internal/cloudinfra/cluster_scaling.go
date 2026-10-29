@@ -399,3 +399,8 @@ func (s *Service) recoverClusterScaling(ctx context.Context) error {
 	}
 	return result
 }
+
+// CheckClusterWorkloadCapacity preserves the default-off admission boundary.
+func (s *Service) CheckClusterWorkloadCapacity(context.Context) error {
+	return s.clusterScalingEnabled()
+}
