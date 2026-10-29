@@ -40,6 +40,7 @@ func BuiltinAdapters(e Endpoints) *Adapters {
 	r := NewAdapters()
 	d := digitalocean.New(e.DigitalOcean)
 	r.servers["digitalocean"] = d
+	r.clusters["digitalocean"] = d
 	r.dns["digitalocean"] = d
 	r.dns["vercel"] = vercel.New(e.Vercel)
 	cf := cloudflare.New(e.Cloudflare, e.CloudflareRegistrarSandbox)

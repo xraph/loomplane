@@ -86,6 +86,7 @@ type ClusterCondition struct {
 
 // ClusterObservation describes provider state, independently of runtime readiness.
 type ClusterObservation struct {
+	Name       string             `json:"name"`
 	Ref        ClusterRef         `json:"ref"`
 	Endpoint   string             `json:"endpoint"`
 	CAHash     string             `json:"ca_hash"`
@@ -96,7 +97,20 @@ type ClusterObservation struct {
 	ObservedAt time.Time          `json:"observed_at"`
 }
 
+// ClusterNodeSize carries live capacity facts for a provider-supported node size.
+// A nil price means the provider did not supply one.
+type ClusterNodeSize struct {
+	ID         string   `json:"id"`
+	CPUs       int      `json:"cpus"`
+	MemoryMiB  int      `json:"memory_mib"`
+	DiskGB     int      `json:"disk_gb"`
+	HourlyUSD  *float64 `json:"hourly_usd,omitempty"`
+	MonthlyUSD *float64 `json:"monthly_usd,omitempty"`
+	Regions    []string `json:"regions"`
+}
+
 type ClusterOptions struct {
+	NodeSizeFacts   []ClusterNodeSize       `json:"node_size_facts"`
 	Versions        []string                `json:"versions"`
 	Regions         []string                `json:"regions"`
 	NodeSizes       []string                `json:"node_sizes"`

@@ -316,12 +316,23 @@ func TestModelKindsAreOfferedOnlyWithAI(t *testing.T) {
 	}
 }
 
-func TestClusterContractsDoNotAdvertiseBuiltinSupport(t *testing.T) {
+func TestClusterContractsAdvertiseInstalledBuiltinSupport(t *testing.T) {
 	for _, target := range Catalog() {
 		for _, capability := range target.Infrastructure {
 			switch capability {
-			case provider.ClusterDiscovery, provider.ClusterOptionsRead, provider.ClusterCreation, provider.ClusterMutationObservation, provider.ClusterBootstrapAccess:
-				t.Fatalf("%s advertises uninstalled cluster capability %s", target.Name, capability)
+			case provider.ClusterDiscovery, provider.ClusterOptionsRead, provider.ClusterBootstrapAccess:
+				if target.Name != "digitalocean" {
+					t.Fatalf("%s advertises uninstalled cluster capability %s", target.Name, capability)
+				}
+			case provider.ClusterCreation, provider.ClusterMutationObservation:
+				t.Fatalf("%s advertises uninstalled cluster mutation capability %s", target.Name, capability)
+			}
+		}
+		if target.Name == "digitalocean" {
+			for _, capability := range []provider.InfrastructureCapability{provider.ClusterDiscovery, provider.ClusterOptionsRead, provider.ClusterBootstrapAccess} {
+				if !slices.Contains(target.Infrastructure, capability) {
+					t.Fatalf("DigitalOcean is missing installed capability %s", capability)
+				}
 			}
 		}
 		if target.Name == "digitalocean" && (target.Model != provider.Build || target.Title != "DigitalOcean App Platform") {

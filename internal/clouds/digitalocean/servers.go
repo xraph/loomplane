@@ -351,6 +351,7 @@ func (c *Client) DeleteServer(ctx context.Context, credential provider.Infrastru
 // InfrastructureCapabilities lists the implemented account APIs.
 func InfrastructureCapabilities() []provider.InfrastructureCapability {
 	return []provider.InfrastructureCapability{
+		provider.ClusterBootstrapAccess, provider.ClusterDiscovery, provider.ClusterOptionsRead,
 		provider.DNSRecordDeletion, provider.DNSRecordDiscovery, provider.DNSRecordUpsert, provider.DNSZoneCreation, provider.DNSZoneDiscovery,
 		provider.ServerDeletion, provider.ServerDiscovery, provider.ServerProvisioning, provider.ServerResize,
 	}
