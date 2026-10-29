@@ -319,9 +319,11 @@ const (
 	approvalWindow    = 7 * 24 * time.Hour
 )
 
-// cookieName is a cookie name as RFC 6265 allows it: a token.
+// consolePath is a console mount path (see ConsoleConfig.Path for why it
+// starts with __).
 var consolePath = regexp.MustCompile(`^/__[a-z0-9][a-z0-9-]{2,62}$`)
 
+// cookieName is a cookie name as RFC 6265 allows it: a token.
 var cookieName = regexp.MustCompile("^[A-Za-z0-9!#$%&'*+.^_`|~-]+$")
 
 // Defaults are the settings used when nothing overrides them.
