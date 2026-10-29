@@ -37,6 +37,8 @@ x-environment: &environment
   # Empty leaves the waitlist to the instance; true or false forces it.
   LOOMPLANE_WAITLIST_ENABLED: ${LOOMPLANE_WAITLIST_ENABLED:-}
   LOOMPLANE_CONSOLE_PATH: ${LOOMPLANE_CONSOLE_PATH:-/__console}
+  LOOMPLANE_PUSH_ENABLED: ${LOOMPLANE_PUSH_ENABLED:-true}
+  LOOMPLANE_PUSH_GATEWAY_URL: ${LOOMPLANE_PUSH_GATEWAY_URL:-https://push.loomplane.com}
 
 services:
   postgres:

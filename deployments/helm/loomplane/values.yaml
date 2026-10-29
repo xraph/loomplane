@@ -94,6 +94,12 @@ notifications:
   smtpTLS: true
   from: ""
 
+# Phone notifications go through a gateway. Only XRaph's gateway can reach the
+# store app. Turn push off and the app hides its push settings.
+push:
+  enabled: true
+  gatewayUrl: https://push.loomplane.com
+
 # Comma-separated CIDRs of the proxies in front of Loomplane, so sign-in rate
 # limits see real client addresses. Empty trusts private ranges, which covers
 # an ingress controller inside the cluster.

@@ -74,6 +74,7 @@ type Config struct {
 	AI            AIConfig
 	Providers     ProvidersConfig
 	DBGateway     DBGatewayConfig
+	Push          PushConfig
 }
 
 // DBGatewayConfig is the control plane's side of the database gateway.
@@ -356,6 +357,7 @@ func Defaults() Config {
 		Drift:    DriftConfig{Interval: 30 * time.Minute},
 		Worker:   WorkerConfig{HTTPAddr: ":8781"},
 		AI:       AIConfig{Models: AIModelsConfig{HuggingFaceURL: DefaultHuggingFaceURL}},
+		Push:     PushConfig{Enabled: true, GatewayURL: DefaultPushGatewayURL},
 	}
 }
 
@@ -497,6 +499,8 @@ func FromSource(src Getter) (Config, error) {
 	r.str(&c.Federation.Identity.TrustDomain, "federation.identity.trust_domain")
 	r.str(&c.Federation.Identity.AdminSocket, "federation.identity.admin_socket")
 	r.str(&c.DBGateway.SigningKeyFile, "dbgateway.signing_key_file")
+	r.boolean(&c.Push.Enabled, "push.enabled")
+	r.str(&c.Push.GatewayURL, "push.gateway_url")
 
 	if err := errors.Join(r.errs...); err != nil {
 		return Config{}, err
@@ -510,7 +514,7 @@ func FromSource(src Getter) (Config, error) {
 // Validate reports settings Loomplane can't run with.
 func (c *Config) Validate() error {
 	var errs []error
-	errs = append(errs, c.Notifications.Validate(c.Environment), c.Federation.Validate(), c.AI.Models.Validate())
+	errs = append(errs, c.Notifications.Validate(c.Environment), c.Federation.Validate(), c.AI.Models.Validate(), c.Push.Validate(c.Environment))
 	switch c.Environment {
 	case EnvDevelopment, EnvStaging, EnvProduction:
 	default:

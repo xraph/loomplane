@@ -67,6 +67,15 @@ An empty host disables email. Setting a username, password or sender without a h
 | `LOOMPLANE_NOTIFICATIONS_FROM` | Unset | A single sender address |
 | `LOOMPLANE_NOTIFICATIONS_SMTP_TLS` | `false` | Implicit TLS, commonly on port 465. Production requires it |
 
+## Push notifications
+
+Loomplane can send phone notifications through a gateway that hands them to Apple and Google. A gateway address must use `https`, with no user info, query or fragment. Development also allows `http`.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `LOOMPLANE_PUSH_ENABLED` | `true` | Turn it off and the app hides push settings for this server |
+| `LOOMPLANE_PUSH_GATEWAY_URL` | `https://push.loomplane.com` | The gateway that hands notifications to Apple and Google. Only XRaph's gateway can reach the store app |
+
 ## Cloud sign-in
 
 | Variable | Default | What it does |
