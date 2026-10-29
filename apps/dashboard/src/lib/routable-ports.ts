@@ -22,16 +22,23 @@ export function routablePorts(
   try {
     config = JSON.parse(binding.config)
   } catch {
-    return { ports: servicePorts }
+    return { ports: [], reason: privateReason }
   }
-  if (!config || typeof config !== "object") return { ports: servicePorts }
+  // The backend reads config->>'public', which is NULL for anything but an
+  // object, so an unreadable config is a private service to it.
+  if (!config || typeof config !== "object" || Array.isArray(config))
+    return { ports: [], reason: privateReason }
   // The backend reads both as text, so "true" and "8080" count.
   if (String(config.public) !== "true")
     return { ports: [], reason: privateReason }
-  const port = Number(config.port)
-  if (!Number.isInteger(port) || port <= 0)
-    return { ports: [], reason: noPortReason }
-  return { ports: [port] }
+  const { port } = config
+  const digits =
+    typeof port === "number"
+      ? Number.isInteger(port) && port > 0
+      : typeof port === "string" && /^\d+$/.test(port)
+  const value = digits ? Number(port) : 0
+  if (value <= 0) return { ports: [], reason: noPortReason }
+  return { ports: [value] }
 }
 
 /** Every DNS record an operation wants, old single-record operations included. */

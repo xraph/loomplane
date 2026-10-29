@@ -47,11 +47,25 @@ it("offers no port for a private App Platform service, and says why", () => {
   })
 })
 
-it("falls back to the graph's ports when the config can't be read", () => {
-  for (const config of ["not json", "null", "", "5"])
+it("blocks an App Platform binding whose config can't be read", () => {
+  for (const config of ["not json", "null", "", "5", "[]", '"public"'])
     expect(routablePorts([8080], binding("digitalocean", config))).toEqual({
-      ports: [8080],
+      ports: [],
+      reason:
+        "This service is private on App Platform, so no hostname can reach it. Make it public in the manifest and deploy it first.",
     })
+})
+
+it("takes a port only as a positive integer or digits", () => {
+  for (const port of [true, [8080], " 8080 ", "+80", "-80", "8e3", 80.5])
+    expect(
+      routablePorts([8080], binding("digitalocean", { public: true, port }))
+        .ports
+    ).toEqual([])
+  expect(
+    routablePorts([1], binding("digitalocean", { public: true, port: "8080" }))
+      .ports
+  ).toEqual([8080])
 })
 
 it("offers no port when a public App Platform service has none", () => {
