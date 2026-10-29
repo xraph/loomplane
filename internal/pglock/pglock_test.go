@@ -138,3 +138,18 @@ func TestDo_rejectsMissingArguments(t *testing.T) {
 		t.Fatal("Do accepted a nil database")
 	}
 }
+
+// For holds the named lock while fn runs, as Do does, so another replica
+// can't take it in that time.
+func TestFor_holdsTheNamedLock(t *testing.T) {
+	ctx := t.Context()
+	dsn := scratchDB(t)
+	pg, other := open(t, dsn), open(t, dsn)
+	var free bool
+	err := For(pg)(ctx, "digitalocean-app/app-1", func(ctx context.Context) error {
+		return other.QueryRow(ctx, `SELECT pg_try_advisory_lock(hashtextextended($1, 0))`, "digitalocean-app/app-1").Scan(&free)
+	})
+	if err != nil || free {
+		t.Fatalf("another replica took the lock: %v %v", free, err)
+	}
+}

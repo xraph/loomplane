@@ -1,6 +1,7 @@
 package cloudinfra
 
 import (
+	"context"
 	"fmt"
 	"slices"
 	"sort"
@@ -34,12 +35,17 @@ type Endpoints struct {
 	// CloudflareRegistrarSandbox sends Cloudflare registrar calls to its
 	// sandbox, which never charges anyone.
 	CloudflareRegistrarSandbox bool
+	// Lock is the named lock every replica shares, as digitalocean.Client
+	// takes it. The deploy runner's DigitalOcean client must share it too,
+	// so a hostname change and a deploy take turns at an app's spec.
+	Lock func(ctx context.Context, name string, fn func(context.Context) error) error
 }
 
 // BuiltinAdapters preserves the application's configured provider endpoints.
 func BuiltinAdapters(e Endpoints) *Adapters {
 	r := NewAdapters()
 	d := digitalocean.New(e.DigitalOcean)
+	d.Lock = e.Lock
 	r.servers["digitalocean"] = d
 	r.clusters["digitalocean"] = d
 	r.dns["digitalocean"] = d

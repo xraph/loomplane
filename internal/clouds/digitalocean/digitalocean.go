@@ -50,6 +50,21 @@ type Client struct {
 	http     *http.Client
 	// poll is how often a deployment or a database is checked.
 	poll time.Duration
+	// Lock runs fn while it holds the lock called name, waiting its turn.
+	// Every Loomplane replica's clients must share it, as pglock.For's
+	// do. Nil holds nothing, which is only safe with one writer.
+	Lock func(ctx context.Context, name string, fn func(context.Context) error) error
+}
+
+// WithApp runs fn while it holds app appID's spec. A deploy and a hostname
+// change each read the spec, change it and write it back, so either would
+// undo the other's change if they interleaved. It waits for the other one
+// to finish rather than failing.
+func (c *Client) WithApp(ctx context.Context, appID string, fn func(context.Context) error) error {
+	if c.Lock == nil {
+		return fn(ctx)
+	}
+	return c.Lock(ctx, "digitalocean-app/"+appID, fn)
 }
 
 // New returns a Client. An empty endpoint means DigitalOcean's own; any

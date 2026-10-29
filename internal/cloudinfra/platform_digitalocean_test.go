@@ -1,12 +1,14 @@
 package cloudinfra
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -37,11 +39,15 @@ type fakeDOApp struct {
 	rollbacks  []string
 	// liveAfterCancel has the deployment go live before a cancel lands.
 	liveAfterCancel bool
+	// held reports whether the client's lock is held, and locked records
+	// it for the first call of each method and path.
+	held   func() bool
+	locked map[string]bool
 }
 
 func newFakeDOApp(t *testing.T, app map[string]any) (*fakeDOApp, *appPlatformDomains) {
 	t.Helper()
-	f := &fakeDOApp{app: app, builtCommit: platformApproved}
+	f := &fakeDOApp{app: app, builtCommit: platformApproved, locked: map[string]bool{}}
 	srv := httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(srv.Close)
 	return f, newAppPlatformDomains(digitalocean.New(srv.URL))
@@ -54,6 +60,11 @@ func (f *fakeDOApp) serve(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(status)
 		_ = json.NewEncoder(w).Encode(v)
+	}
+	if call := r.Method + " " + r.URL.Path; f.held != nil {
+		if _, seen := f.locked[call]; !seen {
+			f.locked[call] = f.held()
+		}
 	}
 	if f.missing {
 		reply(http.StatusNotFound, map[string]any{"id": "not_found", "message": "not found"})
@@ -446,5 +457,49 @@ func TestAppPlatformIdempotentCallsCheckTheLiveCommit(t *testing.T) {
 	f.missing = true
 	if err := a.Detach(t.Context(), doAppCred(), doAppBinding(), "app.example.com", platformApproved); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// Attach and Detach hold the app from reading its spec until they've written
+// it, as a deploy does, so neither undoes the other. Neither holds it while
+// the deployment the change started runs.
+func TestAppPlatformChangesHoldTheApp(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		app  map[string]any
+		call func(*appPlatformDomains) error
+	}{
+		{"attach", map[string]any{"id": "app-1", "spec": map[string]any{"name": "web"}}, func(a *appPlatformDomains) error {
+			return a.Attach(t.Context(), doAppCred(), doAppBinding(), "app.example.com", platformApproved)
+		}},
+		{"detach", map[string]any{"id": "app-1", "spec": map[string]any{"name": "web", "domains": []any{map[string]any{"domain": "app.example.com", "type": "ALIAS"}}}}, func(a *appPlatformDomains) error {
+			return a.Detach(t.Context(), doAppCred(), doAppBinding(), "app.example.com", platformApproved)
+		}},
+	} {
+		f, a := newFakeDOApp(t, c.app)
+		f.updated = "dep-1"
+		var held atomic.Bool
+		var names []string
+		a.client.Lock = func(ctx context.Context, name string, fn func(context.Context) error) error {
+			names = append(names, name)
+			held.Store(true)
+			defer held.Store(false)
+			return fn(ctx)
+		}
+		f.held = held.Load
+		if err := c.call(a); err != nil {
+			t.Fatal(c.name, err)
+		}
+		if len(names) != 1 || names[0] != "digitalocean-app/app-1" {
+			t.Fatalf("%s: locks %v", c.name, names)
+		}
+		for _, call := range []string{"GET /v2/apps/app-1", "PUT /v2/apps/app-1"} {
+			if locked, seen := f.locked[call]; !seen || !locked {
+				t.Fatalf("%s: %s seen %v, under the lock %v", c.name, call, seen, locked)
+			}
+		}
+		if locked, seen := f.locked["GET /v2/apps/app-1/deployments/dep-1"]; !seen || locked {
+			t.Fatalf("%s: the deployment's wait seen %v, under the lock %v", c.name, seen, locked)
+		}
 	}
 }

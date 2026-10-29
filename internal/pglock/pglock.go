@@ -41,3 +41,11 @@ func Do(ctx context.Context, pg *pgdriver.PgDB, name string, fn func(context.Con
 	}
 	return nil
 }
+
+// For is Do on pg, for code that takes named locks without holding the
+// database itself, such as a provider client.
+func For(pg *pgdriver.PgDB) func(ctx context.Context, name string, fn func(context.Context) error) error {
+	return func(ctx context.Context, name string, fn func(context.Context) error) error {
+		return Do(ctx, pg, name, fn)
+	}
+}

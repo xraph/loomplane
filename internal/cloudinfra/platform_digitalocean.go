@@ -63,56 +63,79 @@ func ingressHost(ingress string) string {
 }
 
 func (a *appPlatformDomains) Attach(ctx context.Context, cred provider.InfrastructureCredential, b RouteBinding, hostname, reviewedCommit string) error {
-	app, err := a.client.GetApp(ctx, cred.Token, b.ExternalID)
+	before, app, err := a.change(ctx, cred, b, hostname, func(spec digitalocean.AppSpec) (digitalocean.AppSpec, bool) {
+		if hasAppDomain(spec, hostname) {
+			return spec, false
+		}
+		spec.Domains = append(append([]digitalocean.AppDomainSpec{}, spec.Domains...), digitalocean.AppDomainSpec{Domain: hostname, Type: digitalocean.AppDomainAlias})
+		return spec, true
+	})
 	if err != nil {
 		return err
 	}
-	if err := appDeploying(app, hostname); err != nil {
-		return err
+	if app == nil {
+		return appLiveCommit(before, hostname, "adding", reviewedCommit)
 	}
-	if hasAppDomain(app.Spec, hostname) {
-		return appLiveCommit(app, hostname, "adding", reviewedCommit)
-	}
-	spec := app.Spec
-	spec.Domains = append(append([]digitalocean.AppDomainSpec{}, spec.Domains...), digitalocean.AppDomainSpec{Domain: hostname, Type: digitalocean.AppDomainAlias})
-	return a.update(ctx, cred, b, app, spec, hostname, "adding", reviewedCommit)
+	return a.settle(ctx, cred, b, before, app, hostname, "adding", reviewedCommit)
 }
 
 func (a *appPlatformDomains) Detach(ctx context.Context, cred provider.InfrastructureCredential, b RouteBinding, hostname, reviewedCommit string) error {
-	app, err := a.client.GetApp(ctx, cred.Token, b.ExternalID)
+	before, app, err := a.change(ctx, cred, b, hostname, func(spec digitalocean.AppSpec) (digitalocean.AppSpec, bool) {
+		if !hasAppDomain(spec, hostname) {
+			return spec, false
+		}
+		domains := spec.Domains
+		spec.Domains = nil
+		for _, d := range domains {
+			if !strings.EqualFold(d.Domain, hostname) {
+				spec.Domains = append(spec.Domains, d)
+			}
+		}
+		return spec, true
+	})
 	if digitalocean.IsNotFound(err) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	if err := appDeploying(app, hostname); err != nil {
-		return err
+	if app == nil {
+		return appLiveCommit(before, hostname, "removing", reviewedCommit)
 	}
-	if !hasAppDomain(app.Spec, hostname) {
-		return appLiveCommit(app, hostname, "removing", reviewedCommit)
-	}
-	spec := app.Spec
-	spec.Domains = nil
-	for _, d := range app.Spec.Domains {
-		if !strings.EqualFold(d.Domain, hostname) {
-			spec.Domains = append(spec.Domains, d)
-		}
-	}
-	return a.update(ctx, cred, b, app, spec, hostname, "removing", reviewedCommit)
+	return a.settle(ctx, cred, b, before, app, hostname, "removing", reviewedCommit)
 }
 
-// update writes the spec. App Platform may start a deployment for it, which
-// has to build the reviewed commit. One of any other commit is cancelled
-// before it's live, or rolled back to what ran before once it is, and the
-// spec change stays for the service's next deploy to carry. before is the
-// app as it was read just ahead of the update, for the deployment to roll
-// back to.
-func (a *appPlatformDomains) update(ctx context.Context, cred provider.InfrastructureCredential, b RouteBinding, before *digitalocean.App, spec digitalocean.AppSpec, hostname, verb, reviewedCommit string) error {
-	app, err := a.client.UpdateApp(ctx, cred.Token, b.ExternalID, spec)
-	if err != nil {
-		return err
-	}
+// change reads the app and writes back the spec edit makes of it, holding
+// the app in between so a deploy can't write over it, nor it over a
+// deploy. edit says false when the spec has what it wants already, and
+// the app comes back nil. before is the app as it was read.
+func (a *appPlatformDomains) change(ctx context.Context, cred provider.InfrastructureCredential, b RouteBinding, hostname string, edit func(digitalocean.AppSpec) (digitalocean.AppSpec, bool)) (before, app *digitalocean.App, err error) {
+	err = a.client.WithApp(ctx, b.ExternalID, func(ctx context.Context) error {
+		var getErr error
+		if before, getErr = a.client.GetApp(ctx, cred.Token, b.ExternalID); getErr != nil {
+			return getErr
+		}
+		if checkErr := appDeploying(before, hostname); checkErr != nil {
+			return checkErr
+		}
+		spec, changed := edit(before.Spec)
+		if !changed {
+			return nil
+		}
+		var updateErr error
+		app, updateErr = a.client.UpdateApp(ctx, cred.Token, b.ExternalID, spec)
+		return updateErr
+	})
+	return before, app, err
+}
+
+// settle checks the deployment App Platform may have started for a spec
+// change, which has to build the reviewed commit. One of any other commit
+// is cancelled before it's live, or rolled back to what ran before once it
+// is, and the spec change stays for the service's next deploy to carry.
+// before is the app as it was read just ahead of the update, for the
+// deployment to roll back to.
+func (a *appPlatformDomains) settle(ctx context.Context, cred provider.InfrastructureCredential, b RouteBinding, before, app *digitalocean.App, hostname, verb, reviewedCommit string) error {
 	if app.PendingDeployment == nil && app.InProgressDeployment == nil {
 		return nil
 	}
@@ -122,7 +145,7 @@ func (a *appPlatformDomains) update(ctx context.Context, cred provider.Infrastru
 	if own == nil {
 		own = app.InProgressDeployment
 	}
-	_, err = a.client.WaitDeployment(ctx, cred.Token, b.ExternalID, own.ID, reviewedCommit)
+	_, err := a.client.WaitDeployment(ctx, cred.Token, b.ExternalID, own.ID, reviewedCommit)
 	var mismatch *digitalocean.CommitMismatchError
 	if !errors.As(err, &mismatch) {
 		return err

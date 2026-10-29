@@ -67,6 +67,7 @@ import (
 	"github.com/xraph/loomplane/internal/manifests"
 	"github.com/xraph/loomplane/internal/octopusloom"
 	"github.com/xraph/loomplane/internal/orchestration"
+	"github.com/xraph/loomplane/internal/pglock"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/plugins"
 	"github.com/xraph/loomplane/internal/projects"
@@ -235,6 +236,9 @@ func (e *Extension) Register(fapp forge.App) error {
 	if transports.CloudSQLDNS != nil {
 		google = google.WithDNSResolver(transports.CloudSQLDNS)
 	}
+	// Hostname changes take the same lock on an app's spec as its deploys.
+	appPlatform := digitalocean.New(e.cfg.Clouds.DigitalOceanEndpoint)
+	appPlatform.Lock = pglock.For(pg)
 	executors := map[string]deployments.Executor{
 		"cloud-run": &deployments.CloudRun{
 			Google:      google,
@@ -243,7 +247,7 @@ func (e *Extension) Register(fapp forge.App) error {
 		},
 		"vercel":               &deployments.Vercel{Client: vercel.New(e.cfg.Clouds.VercelEndpoint)},
 		"render":               &deployments.Render{Client: render.New(e.cfg.Clouds.RenderEndpoint)},
-		"digitalocean":         &deployments.DigitalOcean{Client: digitalocean.New(e.cfg.Clouds.DigitalOceanEndpoint)},
+		"digitalocean":         &deployments.DigitalOcean{Client: appPlatform},
 		"azure-container-apps": &deployments.Azure{Client: azureClient()},
 		"azure-database":       &deployments.AzureDatabase{Client: azureClient()},
 		"azure-managed-redis":  &deployments.AzureRedis{Client: azureClient()},
