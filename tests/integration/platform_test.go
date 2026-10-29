@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/xraph/forge"
 
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/platform"
@@ -86,9 +87,19 @@ type running struct {
 
 func start(t *testing.T, cfg config.Config, configure ...func(*httptest.Server)) *running {
 	t.Helper()
+	return startApp(t, cfg, nil, configure...)
+}
+
+// startApp is start with a chance to reach into the built app, prepare,
+// before it starts: a test that needs a fault injected sets it there.
+func startApp(t *testing.T, cfg config.Config, prepare func(forge.App), configure ...func(*httptest.Server)) *running {
+	t.Helper()
 	app, err := platform.New(cfg)
 	if err != nil {
 		t.Fatalf("build app: %v", err)
+	}
+	if prepare != nil {
+		prepare(app)
 	}
 	// Started the way forge.App.Run starts it, on a context that outlives
 	// Start: Dispatch's durable worker runs on the context Start gets, so a

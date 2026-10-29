@@ -36,6 +36,7 @@ import (
 	"github.com/xraph/authsome/plugins/organization"
 	"github.com/xraph/authsome/plugins/password"
 	"github.com/xraph/authsome/ratelimit"
+	"github.com/xraph/authsome/rbac"
 	"github.com/xraph/authsome/settings"
 	authstore "github.com/xraph/authsome/store"
 	authpg "github.com/xraph/authsome/store/postgres"
@@ -53,6 +54,7 @@ import (
 
 	"github.com/xraph/loomplane/internal/apikeys"
 	"github.com/xraph/loomplane/internal/config"
+	"github.com/xraph/loomplane/internal/instance"
 	"github.com/xraph/loomplane/internal/notifications"
 	"github.com/xraph/loomplane/internal/pglock"
 	"github.com/xraph/loomplane/internal/security"
@@ -92,8 +94,17 @@ type Extension struct {
 	keys          *apikeys.Service
 	telemetry     *telemetry.Recorder
 	notifications *notifications.Service
+	instance      *instance.Settings
+	// platformRoles reads users' platform roles in Loomplane's app.
+	// authsome's engine finds the app from the request, which Loomplane's
+	// own routes don't carry, so this asks Warden for the app directly.
+	platformRoles rbac.Store
 	resetBusy     atomic.Bool
 	router        forge.Router
+
+	// createOrgHook stands between setup and the organization plugin when
+	// set. Only integration builds set it (export_integration.go).
+	createOrgHook setupOrgHook
 }
 
 // New returns the identity extension.
@@ -126,11 +137,13 @@ func (e *Extension) Register(fapp forge.App) error {
 		return fmt.Errorf("identity needs notification delivery: %w", err)
 	}
 	e.pg = pgdriver.Unwrap(db)
+	e.instance = instance.New(e.pg)
 	e.store = authpg.New(db)
 	wstore := wardenpg.New(db)
 	if e.warden, err = warden.NewEngine(warden.WithStore(wstore), warden.WithLogger(e.Logger())); err != nil {
 		return fmt.Errorf("warden: %w", err)
 	}
+	e.platformRoles = rbac.NewWardenStore(e.warden)
 	if e.audit, err = chronicle.New(
 		chronicle.WithStore(chronstore.NewAdapter(chronpg.New(db))),
 		chronicle.WithLogger(e.Logger()),

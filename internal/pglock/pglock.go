@@ -14,6 +14,11 @@ import (
 // boot together seed one at a time.
 const StartupSeed = "loomplane-startup-seed"
 
+// FirstRunSetup is the lock first-run setup holds while it checks that the
+// instance has no users and creates the first one, so two setups can't
+// both find it empty.
+const FirstRunSetup = "loomplane-first-run-setup"
+
 // Do runs fn while this process holds the advisory lock called name. A
 // replica that asks while another holds it waits its turn, so two replicas
 // starting together can't both look for a row, find nothing, and create it.
