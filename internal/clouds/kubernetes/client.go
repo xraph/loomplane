@@ -96,6 +96,9 @@ func (c *Client) Check(ctx context.Context) (*Result, error) {
 	default:
 		out.Details["namespace_uid"] = string(ns.UID)
 	}
+	if setupErr := c.discoverManagedSetup(ctx, out); setupErr != nil {
+		return nil, setupErr
+	}
 	for _, resource := range []struct {
 		group, name string
 		verbs       []string
@@ -147,7 +150,11 @@ func (c *Client) Check(ctx context.Context) (*Result, error) {
 		return nil, postgresErr
 	}
 	// Routes are optional, so what they need is a detail and never Missing.
-	routes, err := c.CheckRoutePrerequisites(ctx)
+	routeClient := *c
+	routeConfig := *c.Config
+	routeConfig.Details = out.Details
+	routeClient.Config = &routeConfig
+	routes, err := routeClient.CheckRoutePrerequisites(ctx)
 	if err != nil {
 		return nil, err
 	}

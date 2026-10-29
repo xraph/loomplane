@@ -163,10 +163,26 @@ func configFor(rc *rest.Config, contextName, namespace string, caData []byte, se
 		if len(validation.IsDNS1123Subdomain(host)) != 0 || !strings.Contains(host, ".") {
 			return nil, fmt.Errorf("%w: registry_hostname must be a DNS hostname reachable by cluster nodes", ErrInvalid)
 		}
-		if details["storage_class"] == "" || details["architecture"] == "" || details["ingress_address"] == "" {
-			return nil, fmt.Errorf("%w: managed builds need storage_class, architecture and ingress_address", ErrInvalid)
-		}
 		details["registry_hostname"] = host
+		mode := strings.TrimSpace(settings["registry_setup"])
+		if mode == "" {
+			mode = "automatic"
+			if details["storage_class"] != "" && details["architecture"] != "" && details["ingress_address"] != "" {
+				mode = "existing"
+			}
+		}
+		if mode != "automatic" && mode != "existing" {
+			return nil, fmt.Errorf("%w: registry_setup must be automatic or existing", ErrInvalid)
+		}
+		details["registry_setup"] = mode
+		for _, key := range []string{"registry_cert_manager", "registry_ingress"} {
+			if value := settings[key]; value == "managed" || value == "existing" {
+				details[key] = value
+			}
+		}
+		if settings["registry_ingress_address"] == "automatic" {
+			details["registry_ingress_address"] = "automatic"
+		}
 	}
 	return &Config{REST: rc, Namespace: namespace, Context: contextName, Details: details}, nil
 }

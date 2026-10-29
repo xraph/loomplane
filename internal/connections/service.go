@@ -234,6 +234,10 @@ func (s *Service) create(ctx context.Context, p security.Principal, id, cloud, n
 	if checked == nil {
 		checked = cred
 	}
+	settings, err = prepareConnection(ctx, checker, checked, settings)
+	if err != nil {
+		return nil, err
+	}
 	res, err := s.check(ctx, cloud, checker, checked, settings)
 	if err != nil {
 		return nil, err
@@ -455,16 +459,34 @@ func (s *Service) replace(ctx context.Context, p security.Principal, id string, 
 	if settings == nil {
 		settings = c.Details
 	}
+	if c.Cloud == Kubernetes && strings.TrimSpace(settings["ingress_address"]) != c.Details["ingress_address"] {
+		settings = maps.Clone(settings)
+		delete(settings, "registry_ingress_address")
+	}
 	if checked == nil {
 		checked = cred
 	}
-	res, err := s.check(ctx, c.Cloud, checker, checked, settings)
+	res, err := s.checkPreparationIdentity(ctx, c.Cloud, checker, checked, settings)
 	if err != nil {
 		return nil, err
 	}
 	after := AccountIdentity(c.Cloud, res.Account, res.Details)
 	if before == "" || after == "" || before != after {
 		return nil, fmt.Errorf("%w: the verified account changed; create a new connection to change placement", ErrInvalid)
+	}
+	// Verify the replacement's immutable identity before allowing setup writes.
+	if _, ok := checker.(connectionPreparer); ok {
+		settings, err = prepareConnection(ctx, checker, checked, settings)
+		if err != nil {
+			return nil, err
+		}
+		res, err = s.check(ctx, c.Cloud, checker, checked, settings)
+		if err != nil {
+			return nil, err
+		}
+		if AccountIdentity(c.Cloud, res.Account, res.Details) != before {
+			return nil, fmt.Errorf("%w: cluster identity changed during setup", ErrInvalid)
+		}
 	}
 	// Persistent stores serialize secret writes and invalidate old approvals first.
 	replace := func() error {

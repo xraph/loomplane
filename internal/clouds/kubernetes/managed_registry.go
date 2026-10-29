@@ -102,6 +102,12 @@ func (c *Client) checkManagedBuildPermissions(ctx context.Context, out *Result) 
 		return nil
 	}
 	missing := []string{}
+	if out.Details["architecture"] == "" {
+		missing = append(missing, "managed builds: supported node architecture")
+	}
+	if out.Details["registry_setup_status"] == "waiting" {
+		missing = append(missing, "managed builds: cluster setup is waiting")
+	}
 	if out.Details["persistent_storage"] != "ready" {
 		missing = append(missing, "managed builds: retained persistent storage")
 	}

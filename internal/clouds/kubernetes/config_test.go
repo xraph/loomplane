@@ -36,7 +36,7 @@ func testCA(t *testing.T) []byte {
 	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: s.Certificate().Raw})
 }
 
-func TestConfigManagedRegistryRequiresExplicitClusterSetup(t *testing.T) {
+func TestConfigManagedRegistryAcceptsHostnameOnly(t *testing.T) {
 	raw := kubeconfig(t, "https://cluster.example.com", testCA(t))
 	settings := map[string]string{"registry_hostname": "images.example.com", "storage_class": "retained", "architecture": "arm64", "ingress_address": "203.0.113.10"}
 	c, err := ParseConfig(raw, settings)
@@ -46,10 +46,14 @@ func TestConfigManagedRegistryRequiresExplicitClusterSetup(t *testing.T) {
 	for _, key := range []string{"storage_class", "architecture", "ingress_address"} {
 		value := settings[key]
 		delete(settings, key)
-		if _, err = ParseConfig(raw, settings); err == nil {
-			t.Fatalf("accepted managed builds without %s", key)
+		if _, err = ParseConfig(raw, settings); err != nil {
+			t.Fatalf("hostname-only setup rejected without %s: %v", key, err)
 		}
 		settings[key] = value
+	}
+	minimal, err := ParseConfig(raw, map[string]string{"registry_hostname": "images.example.com"})
+	if err != nil || minimal.Details["registry_setup"] != "automatic" {
+		t.Fatalf("automatic setup: %v", err)
 	}
 	for _, host := range []string{"http://images.example.com", "*.example.com", "images.example.com/repository", "images"} {
 		settings["registry_hostname"] = host
