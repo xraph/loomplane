@@ -236,6 +236,7 @@ type Runner struct {
 	backupPolicies BackupPolicyInstaller
 	resources      ResourceSecrets
 	health         releasehealth.Reader
+	watches        WatchHook
 	dbGateways     DatabaseGatewayStore
 	dbTrust        func() ([]plane.TrustKey, error)
 	publicURL      string
@@ -290,6 +291,9 @@ type RunnerDeps struct {
 	// Health reads a service's health from its cloud's own monitoring,
 	// which a canary is judged on. It may be nil when nothing ramps.
 	Health releasehealth.Reader
+	// Watches arms a post-deploy watch for each deployment that succeeds.
+	// It may be nil: then nothing is watched.
+	Watches WatchHook
 }
 
 // Release is a service binding a deployment step wrote, or deleted
@@ -318,7 +322,7 @@ func NewRunner(d RunnerDeps) *Runner {
 		authz: d.Authz, backupPolicies: d.BackupPolicies,
 		capacity: d.Capacity, cloudSyncAuth: d.CloudSyncAuth, routes: d.Routes,
 		cloudProfiles: d.CloudProfiles, store: d.Store, plans: d.Plans, credentials: d.Credentials, variables: d.Variables,
-		sources: d.Sources, providers: d.Providers, executors: d.Executors, catalogHooks: d.CatalogHooks, observers: d.Observers, resources: d.Resources, health: d.Health, telemetry: d.Telemetry, logs: d.Logs,
+		sources: d.Sources, providers: d.Providers, executors: d.Executors, catalogHooks: d.CatalogHooks, observers: d.Observers, resources: d.Resources, health: d.Health, watches: d.Watches, telemetry: d.Telemetry, logs: d.Logs,
 		dbGateways: d.DatabaseGateways, dbTrust: d.DatabaseGatewayTrust, publicURL: d.PublicURL,
 		http: &http.Client{Timeout: 15 * time.Second}, now: time.Now, verifyWait: 3 * time.Minute,
 	}
@@ -1802,7 +1806,13 @@ func (r *Runner) Finish(ctx context.Context, orgID, deploymentID, reason string)
 	if d.Status == StatusPaused || d.Status == StatusCancelled {
 		return nil
 	}
+	var watch WatchDecision
 	if reason == "" && d.Status != StatusFailed {
+		decision, prepareErr := r.prepareWatch(ctx, d)
+		if prepareErr != nil {
+			return prepareErr
+		}
+		watch = decision
 		if cleanupErr := r.finishRoutedRelease(ctx, d); cleanupErr != nil {
 			return cleanupErr
 		}
@@ -1843,7 +1853,10 @@ func (r *Runner) Finish(ctx context.Context, orgID, deploymentID, reason string)
 	if settled.Status != StatusSucceeded {
 		return nil
 	}
-	return r.recordDeployed(ctx, d, now)
+	if recordErr := r.recordDeployed(ctx, d, now); recordErr != nil {
+		return recordErr
+	}
+	return r.armWatch(ctx, settled, watch)
 }
 
 // recordDeployed records the commit of each repository a deployment's plan

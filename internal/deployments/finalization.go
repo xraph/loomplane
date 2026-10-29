@@ -38,7 +38,10 @@ func (r *Runner) replayFinalization(ctx context.Context, d *Deployment, reason s
 	}
 	// A successful finish can still owe repository bookkeeping after its commit.
 	if generation == d.Retries && reason == "" && d.Status == StatusSucceeded && d.FinishedAt != nil {
-		return true, r.recordDeployed(ctx, d, *d.FinishedAt)
+		if recordErr := r.recordDeployed(ctx, d, *d.FinishedAt); recordErr != nil {
+			return true, recordErr
+		}
+		return true, r.rearmWatch(ctx, d)
 	}
 	return true, nil
 }
