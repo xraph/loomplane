@@ -76,13 +76,12 @@ func (s *Service) ReconcileClusterOperation(ctx context.Context, org, id string,
 			if err = s.refreshClusterAccount(call, o, reader, access); err != nil {
 				return s.clusterWait(ctx, o, err)
 			}
-			// Revalidate membership after live reads, before the durable mutation marker.
-			if _, _, err = s.clusterAuthority(call, o.Principal, o.CloudID, o.Input); err != nil {
-				return s.clusterAttention(ctx, o, "Current approval or account authority is unavailable.")
-			}
-
 			if checkErr := s.recheckClusterManagement(call, o); checkErr != nil {
 				return s.clusterAttention(ctx, o, checkErr.Error())
+			}
+			// Revalidate authority after all live reads, including the management probe.
+			if _, _, err = s.clusterAuthority(call, o.Principal, o.CloudID, o.Input); err != nil {
+				return s.clusterAttention(ctx, o, "Current approval or account authority is unavailable.")
 			}
 			if checkErr := store.AttemptClusterCreate(ctx, o); checkErr != nil {
 				return checkErr
