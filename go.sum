@@ -679,6 +679,8 @@ github.com/xraph/grove/kv/drivers/redisdriver v1.9.1 h1:k8PF6DcYLBUq5GXr8AF94ui/
 github.com/xraph/grove/kv/drivers/redisdriver v1.9.1/go.mod h1:iW0FOUNFeFi6VBw8OQpV8wUr2U/D/Xyv006NKc1ae9Y=
 github.com/xraph/herald v1.9.0 h1:VPapbw64S+2fT+Sofji4lW0FUCRx789H0uiwXEjV9jo=
 github.com/xraph/herald v1.9.0/go.mod h1:qkmFWHr1gw+Mnpez1YTh35i3zOLOqgBpkgSNssFJQ7Q=
+github.com/xraph/herald/drivers/apns v1.9.0 h1:WDDtjiiKGaRW56OwzRvwoRPohwa5XnfwLCTazKJm4IU=
+github.com/xraph/herald/drivers/apns v1.9.0/go.mod h1:MUbgvOsvjcda3SGf4LjQLtLQrsVflAbZAXKnpiBBU78=
 github.com/xraph/keysmith v1.8.1 h1:svsM2mRJn3fJ9jysa5DBnnvAW8FQyDng1Ph8W8oqFaw=
 github.com/xraph/keysmith v1.8.1/go.mod h1:o75mBfdPN0AbtTa2BoB5EWRyHrTkacZfq5ib6bq17mI=
 github.com/xraph/ledger v1.8.1 h1:8UlyyPgnBW2sx1jT41nfscZvp4j+M8V0HmhZNcUoGAo=

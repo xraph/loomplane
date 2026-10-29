@@ -11,11 +11,22 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
+	"io"
+	"log/slog"
 	"maps"
+	"net"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/xraph/herald/pushgateway"
 )
 
 func env(vars map[string]string) func(string) string {
@@ -310,8 +321,12 @@ func TestRunRejectsBadConfig(t *testing.T) {
 
 func TestRunAcceptsGoodConfig(t *testing.T) {
 	_, e := writeSecrets(t)
+	e["PUSH_GATEWAY_ADDR"] = "127.0.0.1:0"
+	e["PUSH_GATEWAY_FCM_BASE_URL"] = "http://fcm.test"
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
 	var out, errb bytes.Buffer
-	if code := run(context.Background(), nil, env(e), &out, &errb); code != 0 {
+	if code := run(ctx, nil, env(e), &out, &errb); code != 0 {
 		t.Errorf("code = %d, stderr %q", code, errb.String())
 	}
 }
@@ -343,5 +358,164 @@ func TestLoadConfigRejectsOrphanedPlatformSettings(t *testing.T) {
 				t.Fatalf("err = %v, want %q", err, want)
 			}
 		})
+	}
+}
+
+func TestGatewayConfig(t *testing.T) {
+	_, e := writeSecrets(t)
+	prevDir := t.TempDir()
+	e["PUSH_GATEWAY_PREVIOUS_SEALING_KEY_ID"] = "k2026a"
+	e["PUSH_GATEWAY_PREVIOUS_SEALING_KEY_FILE"] = writeFile(t, prevDir, "prev.key", []byte(b64Key(t, 32)))
+	e["PUSH_GATEWAY_FCM_BASE_URL"] = "http://fcm.test"
+	e["PUSH_GATEWAY_APNS_BASE_URL"] = "http://apns.test"
+	c, err := loadConfig(env(e))
+	if err != nil {
+		t.Fatal(err)
+	}
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	g := gatewayConfig(c, logger)
+
+	want := []pushgateway.SealingKey{{ID: "k2026b", Key: c.SealingKeys[0].Key}, {ID: "k2026a", Key: c.SealingKeys[1].Key}}
+	if !reflect.DeepEqual(g.SealingKeys, want) {
+		t.Errorf("SealingKeys = %v", g.SealingKeys)
+	}
+	if g.Android.Driver.Name() != "fcm" || g.Android.Credentials["service_account"] != string(c.FCM.ServiceAccount) {
+		t.Errorf("Android = %+v", g.Android)
+	}
+	if want := map[string]string{"project_id": "loomplane-test", "base_url": "http://fcm.test"}; !maps.Equal(g.Android.Settings, want) {
+		t.Errorf("Android settings = %v", g.Android.Settings)
+	}
+	if g.IOS.Driver.Name() != "apns" || g.IOS.Credentials["private_key"] != string(c.APNs.PrivateKey) {
+		t.Errorf("IOS = %+v", g.IOS)
+	}
+	wantIOS := map[string]string{"key_id": "ABCDE12345", "team_id": "TEAM123456", "bundle_id": "com.loomplane.app", "base_url": "http://apns.test"}
+	if !maps.Equal(g.IOS.Settings, wantIOS) {
+		t.Errorf("IOS settings = %v", g.IOS.Settings)
+	}
+	if g.ServerPerSecond != 50 || g.HandlePerMinute != 30 || g.Logger != logger {
+		t.Errorf("rates/logger = %v %v %v", g.ServerPerSecond, g.HandlePerMinute, g.Logger)
+	}
+	if g.PlaceholderTitle != "Loomplane" || g.PlaceholderBody != "New notification" {
+		t.Errorf("placeholders = %q %q", g.PlaceholderTitle, g.PlaceholderBody)
+	}
+
+	c.FCM = nil
+	c.APNs.BaseURL = ""
+	g = gatewayConfig(c, logger)
+	if g.Android != nil {
+		t.Errorf("Android = %+v, want nil", g.Android)
+	}
+	if _, ok := g.IOS.Settings["base_url"]; ok {
+		t.Errorf("IOS settings has base_url: %v", g.IOS.Settings)
+	}
+	c.APNs = nil
+	if g = gatewayConfig(c, logger); g.IOS != nil {
+		t.Errorf("IOS = %+v, want nil", g.IOS)
+	}
+}
+
+func TestHandlerHealth(t *testing.T) {
+	var gotPath string
+	called := 0
+	stub := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		called++
+		gotPath = r.URL.Path
+	})
+	h := newHandler(stub)
+	do := func(method, path string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequestWithContext(context.Background(), method, path, nil))
+		return rec
+	}
+	if rec := do(http.MethodGet, "/_/health"); rec.Code != 200 || rec.Body.String() != "ok\n" {
+		t.Errorf("health = %d %q", rec.Code, rec.Body.String())
+	}
+	if rec := do(http.MethodPost, "/_/health"); rec.Code != http.StatusMethodNotAllowed {
+		t.Errorf("POST health = %d", rec.Code)
+	}
+	if rec := do(http.MethodGet, "/nope"); rec.Code != http.StatusNotFound || called != 0 {
+		t.Errorf("/nope = %d, called %d", rec.Code, called)
+	}
+	do(http.MethodPost, "/v1/send")
+	if called != 1 || gotPath != "/v1/send" {
+		t.Errorf("called %d with %q", called, gotPath)
+	}
+}
+
+func TestHandlerLimitsBody(t *testing.T) {
+	var readErr error
+	stub := http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		_, readErr = io.ReadAll(r.Body)
+	})
+	h := newHandler(stub)
+	req := httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/v1/send", bytes.NewReader(make([]byte, maxBody+1)))
+	h.ServeHTTP(httptest.NewRecorder(), req)
+	if !errors.As(readErr, new(*http.MaxBytesError)) {
+		t.Errorf("readErr = %v", readErr)
+	}
+}
+
+func TestServeFinishesInFlight(t *testing.T) {
+	ln, err := (&net.ListenConfig{}).Listen(context.Background(), "tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	started, release := make(chan struct{}), make(chan struct{})
+	h := http.HandlerFunc(func(_ http.ResponseWriter, _ *http.Request) {
+		close(started)
+		<-release
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	logger := slog.New(slog.NewJSONHandler(io.Discard, nil))
+	served := make(chan error, 1)
+	go func() { served <- serve(ctx, ln, h, logger) }()
+
+	status := make(chan int, 1)
+	go func() {
+		req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "http://"+ln.Addr().String()+"/", nil)
+		if err != nil {
+			status <- -1
+			return
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			status <- -1
+			return
+		}
+		resp.Body.Close()
+		status <- resp.StatusCode
+	}()
+	<-started
+	cancel()
+	time.Sleep(100 * time.Millisecond)
+	if conn, err := (&net.Dialer{Timeout: time.Second}).DialContext(context.Background(), "tcp", ln.Addr().String()); err == nil {
+		conn.Close()
+		t.Error("new connection accepted after shutdown began")
+	}
+	close(release)
+	if got := <-status; got != 200 {
+		t.Errorf("in-flight status = %d", got)
+	}
+	if err := <-served; err != nil {
+		t.Errorf("serve = %v", err)
+	}
+}
+
+func TestGatewayImportsNoServerPackages(t *testing.T) {
+	cmd := exec.CommandContext(context.Background(), "go", "list", "-deps", "./cmd/loomplane-push-gateway")
+	cmd.Dir = "../.."
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatal(err)
+	}
+	const self = "github.com/xraph/loomplane/"
+	for _, pkg := range strings.Fields(string(out)) {
+		if !strings.HasPrefix(pkg, self) {
+			continue
+		}
+		if pkg != self+"cmd/loomplane-push-gateway" && pkg != self+"internal/buildinfo" {
+			t.Errorf("gateway imports %s", pkg)
+		}
 	}
 }

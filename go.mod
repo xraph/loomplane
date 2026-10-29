@@ -56,6 +56,7 @@ require (
 	github.com/xraph/grove/drivers/sqlitedriver v1.10.1
 	github.com/xraph/grove/extension v1.10.0
 	github.com/xraph/herald v1.9.0
+	github.com/xraph/herald/drivers/apns v1.9.0
 	github.com/xraph/keysmith v1.8.1
 	github.com/xraph/relay v1.8.1
 	github.com/xraph/trove v1.8.1

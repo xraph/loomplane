@@ -1,4 +1,4 @@
-.PHONY: help up down stack dev dev-api dev-dashboard build build-api build-dashboard run vuln fuzz build-cli build-agent build-qualify \
+.PHONY: help up down stack dev dev-api dev-dashboard build build-api build-dashboard run vuln fuzz build-cli build-agent build-push-gateway build-qualify \
 	image helm-lint k8s-manifest test-kubernetes test test-go test-dashboard test-integration acceptance acceptance-infrastructure acceptance-catalog lint lint-go lint-dashboard \
 	lint-fix fmt fmt-go fmt-dashboard vet gen-client check-client setup clean \
 	h b r t ti c f l lf v d
@@ -42,7 +42,7 @@ dev-api: ## Run only the API with hot reload
 dev-dashboard: ## Run only the dashboard's dev server, proxying the API
 	LOOMPLANE_API_URL=http://localhost:$(API_PORT) pnpm --dir $(DASHBOARD_DIR) dev
 
-build: build-dashboard build-api build-cli build-agent ## Build the dashboard, API, worker, agent and loomctl
+build: build-dashboard build-api build-cli build-agent build-push-gateway ## Build the dashboard, API, worker, agent, push gateway and loomctl
 
 build-api: ## Build bin/loomplane and bin/loomplane-worker
 	go build $(LDFLAGS) -o bin/loomplane ./cmd/loomplane
@@ -54,6 +54,9 @@ build-firecracker: ## Build standalone Firecracker host and guest agents for Lin
 
 build-agent: ## Build the destination observer and signed-policy receiver
 	go build $(LDFLAGS) -o bin/loomplane-agent ./cmd/loomplane-agent
+
+build-push-gateway: ## Build bin/loomplane-push-gateway, the push gateway XRaph runs at push.loomplane.com
+	go build $(LDFLAGS) -o bin/loomplane-push-gateway ./cmd/loomplane-push-gateway
 
 build-cli: ## Build bin/loomctl, the command-line client
 	go build $(LDFLAGS) -o bin/loomctl ./cmd/loomctl
