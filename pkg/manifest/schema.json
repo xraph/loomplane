@@ -216,6 +216,11 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 1000000
+        },
+        "watch": {
+          "description": "How long to watch each release's health after it finishes, in whole minutes up to 24h, such as 15m or 1h. 0 turns the watch off. Defaults to 15m for canary and blue_green, and off for direct. A breach rolls the release back.",
+          "type": "string",
+          "pattern": "^(?:0|[0-9]+(?:h|m|h[0-9]+m))$"
         }
       }
     },

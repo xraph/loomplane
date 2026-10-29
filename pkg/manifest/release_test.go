@@ -209,3 +209,33 @@ func TestReleaseRoundTrips(t *testing.T) {
 		t.Errorf("Marshal isn't stable:\n%s\n%s", out, out2)
 	}
 }
+
+func TestReleaseWatch(t *testing.T) {
+	for _, tt := range []struct{ release, watch string }{
+		{"      strategy: direct\n      watch: 20m\n", "20m"},
+		{"      strategy: canary\n      watch: \"0\"\n", "0"},
+		{"      strategy: blue_green\n      watch: 1h30m\n", "1h30m"},
+		{"      strategy: canary\n      watch: 24h\n", "24h"},
+	} {
+		m, err := Parse([]byte(releaseManifest(tt.release)))
+		if err != nil {
+			t.Fatalf("%q: %v", tt.release, err)
+		}
+		if got := m.Environments["production"].Release.Watch; got != tt.watch {
+			t.Errorf("%q: watch %q, want %q", tt.release, got, tt.watch)
+		}
+	}
+	for _, tt := range []struct{ watch, message string }{
+		{"25h", "can be at most 24h"},
+		{"soon", "isn't a duration such as 15m or 1h"},
+		{"90s", "is whole minutes"},
+		{"-5m", "can't be negative"},
+	} {
+		_, err := Parse([]byte(releaseManifest("      strategy: canary\n      watch: " + tt.watch + "\n")))
+		var ps Problems
+		if !errors.As(err, &ps) || len(ps) != 1 || ps[0].Path != "environments.production.release.watch" ||
+			!strings.Contains(err.Error(), "release.watch: ") || !strings.Contains(ps[0].Message, tt.message) {
+			t.Errorf("watch %q: got %v, want one problem at release.watch saying %q", tt.watch, err, tt.message)
+		}
+	}
+}

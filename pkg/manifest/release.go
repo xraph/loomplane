@@ -21,6 +21,7 @@ const (
 	MaxReleaseSteps    = 10
 	MinHold            = time.Minute
 	MaxHold            = 24 * time.Hour
+	MaxWatch           = 24 * time.Hour
 	DefaultHold        = 10 * time.Minute
 	DefaultMinRequests = 200
 	MaxMinRequests     = 1_000_000
@@ -56,6 +57,10 @@ type Release struct {
 	Hold        string      `json:"hold,omitempty" yaml:"hold,omitempty"`
 	Thresholds  *Thresholds `json:"thresholds,omitempty" yaml:"thresholds,omitempty"`
 	MinRequests int         `json:"min_requests,omitempty" yaml:"min_requests,omitempty"`
+	// Watch is how long Loomplane watches a release's health after it
+	// finishes, as a Go duration of whole minutes up to 24h. "0" turns the
+	// watch off; unset watches canary and blue_green releases for 15m.
+	Watch string `json:"watch,omitempty" yaml:"watch,omitempty"`
 }
 
 // Thresholds are what health may reach before a release is judged bad.
@@ -144,6 +149,23 @@ func parseHold(s string) (time.Duration, error) {
 	return d, nil
 }
 
+// ParseWatch reads a release's watch: a Go duration of whole minutes, 0 to
+// 24h, where 0 turns the watch off.
+func ParseWatch(s string) (time.Duration, error) {
+	d, err := time.ParseDuration(s)
+	switch {
+	case err != nil:
+		return 0, fmt.Errorf("%q isn't a duration such as 15m or 1h", s)
+	case d < 0:
+		return 0, fmt.Errorf("%q can't be negative", s)
+	case d%time.Minute != 0:
+		return 0, fmt.Errorf("%q is whole minutes, such as 15m", s)
+	case d > MaxWatch:
+		return 0, fmt.Errorf("%q can be at most 24h", s)
+	}
+	return d, nil
+}
+
 func (m *Manifest) validateEnvironments(add func(path, format string, args ...any)) {
 	for _, env := range sortedKeys(m.Environments) {
 		path := "environments." + env
@@ -179,6 +201,11 @@ func validateRelease(add func(path, format string, args ...any), path string, r 
 			add(path+".hold", "only a canary has a hold")
 		} else if _, err := parseHold(r.Hold); err != nil {
 			add(path+".hold", "%v", err)
+		}
+	}
+	if r.Watch != "" {
+		if _, err := ParseWatch(r.Watch); err != nil {
+			add(path+".watch", "%v", err)
 		}
 	}
 	if r.MinRequests != 0 && (r.MinRequests < 1 || r.MinRequests > MaxMinRequests) {
