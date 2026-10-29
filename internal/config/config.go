@@ -59,6 +59,7 @@ type Config struct {
 
 	Database      DatabaseConfig
 	Identity      IdentityConfig
+	Console       ConsoleConfig
 	Notifications NotificationsConfig
 	Dashboard     DashboardConfig
 	Orchestration OrchestrationConfig
@@ -197,6 +198,17 @@ type IdentityConfig struct {
 	// kept in. Cookies are shared by every port on a host, so two authsome
 	// apps on one host need different names, or each replaces the other's.
 	SessionCookie string
+	// Waitlist turns the sign-up waitlist on or off. Nil leaves it to the
+	// instance's stored setting.
+	Waitlist *bool
+}
+
+// ConsoleConfig configures the hidden Forge console.
+type ConsoleConfig struct {
+	// Path is where the console is mounted. It's one segment that starts
+	// with __, so it can't collide with the dashboard's routes, /api/,
+	// /authsome/, /_/, /.well-known/ or /catalog-admin/.
+	Path string
 }
 
 // DashboardConfig is the web dashboard Loomplane serves.
@@ -308,6 +320,8 @@ const (
 )
 
 // cookieName is a cookie name as RFC 6265 allows it: a token.
+var consolePath = regexp.MustCompile(`^/__[a-z0-9][a-z0-9-]{2,62}$`)
+
 var cookieName = regexp.MustCompile("^[A-Za-z0-9!#$%&'*+.^_`|~-]+$")
 
 // Defaults are the settings used when nothing overrides them.
@@ -324,6 +338,7 @@ func Defaults() Config {
 			PublishableKey: "pk_test_loomplane_dev",
 			SessionCookie:  "loomplane_session",
 		},
+		Console:       ConsoleConfig{Path: "/__console"},
 		Notifications: NotificationsConfig{SMTPPort: 1025},
 		Dashboard:     DashboardConfig{Dir: "apps/dashboard/dist"},
 		Orchestration: OrchestrationConfig{
@@ -398,6 +413,8 @@ func FromSource(src Getter) (Config, error) {
 	r.str(&c.Identity.PublishableKey, "identity.publishable_key")
 	r.boolean(&c.Identity.RequireEmailVerification, "identity.require_email_verification")
 	r.str(&c.Identity.SessionCookie, "identity.session_cookie")
+	r.optionalBool(&c.Identity.Waitlist, "identity.waitlist")
+	r.str(&c.Console.Path, "console.path")
 	r.str(&c.Notifications.SMTPHost, "notifications.smtp_host")
 	r.integer(&c.Notifications.SMTPPort, "notifications.smtp_port")
 	r.str(&c.Notifications.SMTPUsername, "notifications.smtp_username")
@@ -496,6 +513,9 @@ func (c *Config) Validate() error {
 	}
 	if !cookieName.MatchString(c.Identity.SessionCookie) {
 		errs = append(errs, fmt.Errorf("identity.session_cookie must be a cookie name (letters, digits and !#$%%&'*+-.^_`|~), got %q", c.Identity.SessionCookie))
+	}
+	if !consolePath.MatchString(c.Console.Path) {
+		errs = append(errs, fmt.Errorf("console.path must be one segment starting with __ (like /__console), got %q", c.Console.Path))
 	}
 	if u, err := url.Parse(c.PublicURL); err != nil || u.Scheme == "" || u.Host == "" {
 		errs = append(errs, fmt.Errorf("public_url must be an absolute URL, got %q", c.PublicURL))
@@ -749,6 +769,20 @@ func (r *reader) boolean(dst *bool, key string) {
 		*dst = false
 	default:
 		r.fail(key, "true or false", v)
+	}
+}
+
+// optionalBool reads a bool that stays nil when it isn't set, so "off" and
+// "not set" differ.
+func (r *reader) optionalBool(dst **bool, key string) {
+	if _, ok := r.raw(key); !ok {
+		return
+	}
+	var b bool
+	n := len(r.errs)
+	r.boolean(&b, key)
+	if len(r.errs) == n {
+		*dst = &b
 	}
 }
 
