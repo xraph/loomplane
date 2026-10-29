@@ -18,6 +18,11 @@ import (
 // dueLimit is how many watches one tick claims.
 const dueLimit = 50
 
+// tickBudget is how long one tick works on the watches it claimed: well
+// inside the lease Due claims them for, so the next tick can't take one up
+// while this one still works on it.
+const tickBudget = claimAfter * 4 / 5
+
 // maxSpan is the longest window a release's health is read over.
 const maxSpan = 24 * time.Hour
 
@@ -29,6 +34,8 @@ const automationDenied = "Loomplane automation can't approve deployments in this
 // rolling_back one's rollback plan and deployment. Dispatch's
 // loomplane.release-watch cron job runs it every minute.
 func (s *Service) Tick(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, tickBudget)
+	defer cancel()
 	now := s.now().UTC()
 	due, err := s.store.Due(ctx, now, dueLimit)
 	if err != nil {
@@ -36,6 +43,10 @@ func (s *Service) Tick(ctx context.Context) error {
 	}
 	var errs []error
 	for _, w := range due {
+		// What's left rests out its claim and the next tick takes it up.
+		if ctx.Err() != nil {
+			break
+		}
 		var tickErr error
 		switch w.Status {
 		case StatusWatching:
@@ -61,7 +72,7 @@ func (s *Service) judge(ctx context.Context, w *Watch, now time.Time) error {
 		return err
 	}
 	if newer != "" {
-		return s.settle(ctx, w, now, StatusSuperseded, w.Verdict, newer)
+		return s.supersede(ctx, w, now, newer)
 	}
 	// Metrics arrive late; the first minute after the release is judged
 	// once it can be read.
@@ -186,14 +197,28 @@ func (s *Service) breach(ctx context.Context, w *Watch, now time.Time, svc *Watc
 // automation. A refusal settles the watch rollback_blocked; anything else
 // is tried again on the next tick.
 func (s *Service) createRollback(ctx context.Context, w *Watch, now time.Time) error {
-	plan, err := s.rollbacks.CreateAutomaticRollback(ctx, w.OrgID, w.DeploymentID, planning.AutomaticRollbackInput{
-		Trigger: planning.TriggerWatch, Reason: w.Reason, WatchID: w.ID,
-	})
+	// A tick that planned it and lost the save, or overlapped this one,
+	// left the plan: take it up rather than plan another.
+	existing, err := s.store.RollbackPlan(ctx, w.OrgID, w.ID)
+	if err != nil {
+		return err
+	}
+	var plan *planning.Plan
+	if existing != "" {
+		plan, err = s.plans.GetPlan(ctx, w.OrgID, existing)
+	} else {
+		plan, err = s.rollbacks.CreateAutomaticRollback(ctx, w.OrgID, w.DeploymentID, planning.AutomaticRollbackInput{
+			Trigger: planning.TriggerWatch, Reason: w.Reason, WatchID: w.ID,
+		})
+	}
 	if err != nil {
 		if !refused(err) {
 			return fmt.Errorf("plan the rollback: %w", err)
 		}
 		s.auditBreach(ctx, w, nil, err)
+		if newer := s.startedSince(ctx, w, err); newer != "" {
+			return s.supersede(ctx, w, now, newer)
+		}
 		return s.settle(ctx, w, now, StatusRollbackBlocked, w.Verdict, "Loomplane couldn't roll the release back: "+err.Error())
 	}
 	w.RollbackPlanID, w.UpdatedAt = plan.ID, now
@@ -202,6 +227,30 @@ func (s *Service) createRollback(ctx context.Context, w *Watch, now time.Time) e
 	}
 	s.auditBreach(ctx, w, plan, nil)
 	return nil
+}
+
+// startedSince says why a newer release that started after the tick
+// judged supersedes w, when planning's refusal says one did: a running
+// deployment, or one that isn't the newest any more. It's "" for any
+// other refusal.
+func (s *Service) startedSince(ctx context.Context, w *Watch, refusal error) string {
+	if !errors.Is(refusal, planning.ErrReleaseRunning) && !errors.Is(refusal, planning.ErrInvalid) {
+		return ""
+	}
+	if newer, err := s.superseded(ctx, w); err == nil && newer != "" {
+		return newer
+	}
+	if errors.Is(refusal, planning.ErrReleaseRunning) {
+		return "A newer release started before the rollback could be planned, so this one isn't rolled back."
+	}
+	return ""
+}
+
+// supersede settles w superseded. Its release was never fully judged, so
+// it's unverified.
+func (s *Service) supersede(ctx context.Context, w *Watch, now time.Time, reason string) error {
+	w.Unverified = true
+	return s.settle(ctx, w, now, StatusSuperseded, w.Verdict, reason)
 }
 
 // refused reports whether planning refused the rollback for good.
@@ -221,6 +270,11 @@ func refused(err error) bool {
 // it's ready, as Loomplane automation, then waits for its deployment.
 func (s *Service) rollBack(ctx context.Context, w *Watch, now time.Time) error {
 	if w.RollbackPlanID == "" {
+		// Save first, so of two ticks that overlap only one goes on.
+		w.UpdatedAt = now
+		if err := s.store.Save(ctx, w); err != nil {
+			return err
+		}
 		return s.createRollback(ctx, w, now)
 	}
 	plan, err := s.plans.GetPlan(ctx, w.OrgID, w.RollbackPlanID)

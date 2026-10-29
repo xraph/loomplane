@@ -140,7 +140,9 @@ type Coverage struct {
 }
 
 // ReleaseEvidence is what the watch says about an environment's current
-// release. Unverified true means missing evidence: ask a person.
+// release. Unverified true means missing evidence: ask a person. Verified
+// isn't healthy: a watch that breached is settled with verdict fail, so
+// read Status and Verdict too.
 type ReleaseEvidence struct {
 	Environment  string `json:"environment"`
 	DeploymentID string `json:"deployment_id"`

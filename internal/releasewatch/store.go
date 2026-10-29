@@ -21,4 +21,7 @@ type Store interface {
 	// Save writes w when its Revision is still the stored one and bumps
 	// it, or returns ErrConflict.
 	Save(ctx context.Context, w *Watch) error
+	// RollbackPlan returns the newest rollback plan made for a watch, or
+	// "" when there is none.
+	RollbackPlan(ctx context.Context, orgID, watchID string) (string, error)
 }

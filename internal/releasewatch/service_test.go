@@ -297,6 +297,18 @@ func TestEvidence(t *testing.T) {
 		t.Fatalf("rollback evidence %+v", got)
 	}
 
+	// A watch a newer release superseded never judged its release, so the
+	// release stays unverified while it's the newest that succeeded.
+	sup := watching(t)
+	sup.history.push(planning.ReleaseRecord{DeploymentID: "dep_2", PlanID: "plan_2", Kind: planning.KindRelease, Status: deployments.StatusFailed, StartedAt: finished.Add(time.Minute)})
+	if w := sup.tickAt(t, firstJudged); w.Status != StatusSuperseded || !w.Unverified {
+		t.Fatalf("superseded watch %+v", w)
+	}
+	got, _ = sup.svc.Evidence(t.Context(), ada, "proj", "production")
+	if !got.Watched || got.DeploymentID != "dep_1" || got.Status != StatusSuperseded || !got.Settled || !got.Unverified {
+		t.Fatalf("superseded evidence %+v", got)
+	}
+
 	empty := newRig(t, "      strategy: canary\n")
 	got, _ = empty.svc.Evidence(t.Context(), ada, "proj", "production")
 	if got.Watched || !got.Unverified || got.DeploymentID != "" || got.Reason != "production has no release yet" {

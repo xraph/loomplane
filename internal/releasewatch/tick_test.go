@@ -415,3 +415,67 @@ func TestTick_createdServicesAreJudgedOnTheThresholds(t *testing.T) {
 		t.Fatalf("watch %+v", w)
 	}
 }
+
+// A tick that planned the rollback but lost the watch's save before it
+// recorded the plan, or overlapped another tick, leaves a plan for the
+// watch: the next tick takes it up instead of planning another.
+func TestTick_takesUpARollbackPlanAlreadyMade(t *testing.T) {
+	r := watching(t)
+	w := r.store.only(t)
+	w.Status, w.Verdict, w.Reason = StatusRollingBack, string(releasehealth.Fail), "api: "+failing
+	if err := r.store.Save(t.Context(), w); err != nil {
+		t.Fatal(err)
+	}
+	r.rollbacks.status = planning.StatusReady
+	if _, err := r.rollbacks.CreateAutomaticRollback(t.Context(), "org", "dep_1", planning.AutomaticRollbackInput{Trigger: planning.TriggerWatch, Reason: w.Reason, WatchID: w.ID}); err != nil {
+		t.Fatal(err)
+	}
+	r.tickAt(t, firstJudged)
+	r.tickAt(t, firstJudged+time.Minute)
+	w = r.tickAt(t, firstJudged+2*time.Minute)
+	if len(r.rollbacks.created) != 1 || !slices.Equal(r.rollbacks.approved, []string{"plan_rb1"}) || w.RollbackPlanID != "plan_rb1" || w.RollbackApprovedAt == nil {
+		t.Fatalf("created %d, approved %v, watch %+v", len(r.rollbacks.created), r.rollbacks.approved, w)
+	}
+}
+
+// Planning refuses a rollback when a newer release started after the
+// tick judged: that release supersedes the watch.
+func TestTick_aNewerReleaseThatStartsMidTickSupersedes(t *testing.T) {
+	r := watching(t)
+	r.candidates(failed)
+	r.rollbacks.createErr = planning.ErrReleaseRunning
+	w := r.tickAt(t, firstJudged)
+	if w.Status != StatusSuperseded || !w.Unverified || w.SettledAt == nil {
+		t.Fatalf("watch %+v", w)
+	}
+
+	r = watching(t)
+	r.candidates(failed)
+	r.rollbacks.createErr = fmt.Errorf("%w: deployment dep_1 isn't the newest in production; roll back the newest release first", planning.ErrInvalid)
+	r.rollbacks.onCreate = func() {
+		r.history.push(planning.ReleaseRecord{DeploymentID: "dep_2", PlanID: "plan_2", Kind: planning.KindRelease, Status: deployments.StatusSucceeded, StartedAt: finished.Add(4 * time.Minute)})
+	}
+	w = r.tickAt(t, firstJudged)
+	if w.Status != StatusSuperseded || !w.Unverified || w.Reason != "A newer release, dep_2, started before the watch finished, so this one isn't judged or rolled back." {
+		t.Fatalf("watch %+v", w)
+	}
+}
+
+// A tick works under a deadline inside the lease Due claims with, so the
+// next minute's tick never takes up a watch this one still works on.
+func TestTick_finishesInsideTheClaimLease(t *testing.T) {
+	r := watching(t)
+	before := time.Now()
+	r.tickAt(t, firstJudged)
+	r.reader.mu.Lock()
+	deadlines := append([]time.Time(nil), r.reader.deadlines...)
+	r.reader.mu.Unlock()
+	if len(deadlines) == 0 {
+		t.Fatal("nothing was read")
+	}
+	for _, d := range deadlines {
+		if d.IsZero() || d.After(before.Add(tickBudget).Add(time.Second)) || tickBudget >= claimAfter {
+			t.Fatalf("read with deadline %v, budget %s, lease %s", d, tickBudget, claimAfter)
+		}
+	}
+}

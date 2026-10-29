@@ -9,9 +9,10 @@ import (
 
 // A release watch is one succeeded release's post-deploy watch: which
 // services it judges, its verdicts, and the automatic rollback a breach
-// planned. A deployment has at most one. Each row is a realtime
-// release_watch event, through the generic state event trigger, whose
-// function this leaves as it is.
+// planned. A deployment has at most one. Each insert, delete and save is
+// a realtime release_watch event, through the generic state event trigger,
+// whose function this leaves as it is. A save bumps revision; a tick that
+// only claims a watch stamps checked_at without one, and emits nothing.
 func init() {
 	App.Add(
 		func(ctx context.Context, db *migrate.DB) error {
@@ -79,16 +80,24 @@ func init() {
 			}
 
 			_, err = db.Exec(ctx, `CREATE OR REPLACE TRIGGER loomplane_state_event
-AFTER INSERT OR UPDATE OR DELETE ON loomplane_release_watches
+AFTER INSERT OR DELETE ON loomplane_release_watches
 FOR EACH ROW EXECUTE FUNCTION loomplane_state_event_trigger('release_watch')`)
 			if err != nil {
 				return fmt.Errorf("create trigger loomplane_state_event on loomplane_release_watches: %w", err)
+			}
+			_, err = db.Exec(ctx, `CREATE OR REPLACE TRIGGER loomplane_state_event_update
+AFTER UPDATE ON loomplane_release_watches
+FOR EACH ROW WHEN (OLD.revision IS DISTINCT FROM NEW.revision)
+EXECUTE FUNCTION loomplane_state_event_trigger('release_watch')`)
+			if err != nil {
+				return fmt.Errorf("create trigger loomplane_state_event_update on loomplane_release_watches: %w", err)
 			}
 			return nil
 		},
 		func(ctx context.Context, db *migrate.DB) error {
 			_, err := db.Exec(ctx, `DO $$ BEGIN
 	IF to_regclass('loomplane_release_watches') IS NOT NULL THEN
+		DROP TRIGGER IF EXISTS loomplane_state_event_update ON loomplane_release_watches;
 		DROP TRIGGER IF EXISTS loomplane_state_event ON loomplane_release_watches;
 	END IF;
 END $$`)

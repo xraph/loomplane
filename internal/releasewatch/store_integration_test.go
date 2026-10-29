@@ -203,6 +203,31 @@ func TestPgStore_saveRefusesAStaleRevision(t *testing.T) {
 	}
 }
 
+func TestPgStore_findsAWatchsRollbackPlan(t *testing.T) {
+	ctx, store, pg := watchDB(t, 1)
+	if id, err := store.RollbackPlan(ctx, "org", "watch_0"); err != nil || id != "" {
+		t.Fatalf("before any plan %q %v", id, err)
+	}
+	for _, stmt := range []string{
+		`INSERT INTO loomplane_plans(id,org_id,project_id,environment_id,environment,status,manifest_id,manifest_revision,created_by,created_at,kind,rollback)
+			VALUES('plan_rb_old','org','proj','env_p','production','superseded','man_1',1,'usr',now()-interval '1 minute','rollback','{"trigger":"watch","watch_id":"watch_0"}')`,
+		`INSERT INTO loomplane_plans(id,org_id,project_id,environment_id,environment,status,manifest_id,manifest_revision,created_by,created_at,kind,rollback)
+			VALUES('plan_rb','org','proj','env_p','production','ready','man_1',1,'usr',now(),'rollback','{"trigger":"watch","watch_id":"watch_0"}')`,
+		`INSERT INTO loomplane_plans(id,org_id,project_id,environment_id,environment,status,manifest_id,manifest_revision,created_by,created_at,kind,rollback)
+			VALUES('plan_rb_other','org','proj','env_p','production','rejected','man_1',1,'usr',now(),'rollback','{"trigger":"watch","watch_id":"watch_9"}')`,
+	} {
+		if _, err := pg.Exec(ctx, stmt); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if id, err := store.RollbackPlan(ctx, "org", "watch_0"); err != nil || id != "plan_rb" {
+		t.Fatalf("plan %q %v", id, err)
+	}
+	if id, err := store.RollbackPlan(ctx, "other", "watch_0"); err != nil || id != "" {
+		t.Fatalf("another organization's %q %v", id, err)
+	}
+}
+
 func TestReleaseWatchEvents(t *testing.T) {
 	ctx, store, pg := watchDB(t, 1)
 	w := storedWatch(0, time.Now())
@@ -230,6 +255,38 @@ func TestReleaseWatchEvents(t *testing.T) {
 	if !slices.Equal(got, want) {
 		t.Fatalf("events %v, want %v", got, want)
 	}
+	// Claiming a watch stamps it without a save, which tells nobody
+	// anything.
+	if due, dueErr := store.Due(ctx, time.Now(), 10); dueErr != nil || len(due) != 0 {
+		t.Fatalf("due %d %v", len(due), dueErr)
+	}
+	open := storedWatch(1, time.Now())
+	if _, err = pg.Exec(ctx, `INSERT INTO loomplane_plans(id,org_id,project_id,environment_id,environment,status,manifest_id,manifest_revision,created_by,created_at)
+		VALUES('plan_1','org','proj','env_p','production','approved','man_1',1,'usr',now())`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = pg.Exec(ctx, `INSERT INTO loomplane_deployments (id, org_id, project_id, environment_id, environment, plan_id, commit_sha, status, started_by, started_at, finished_at)
+		VALUES ('dep_1', 'org', 'proj', 'env_p', 'production', 'plan_1', 'c', 'succeeded', 'usr', now(), now())`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.Insert(ctx, open); err != nil {
+		t.Fatal(err)
+	}
+	count := func() int {
+		var n int
+		if scanErr := pg.QueryRow(ctx, `SELECT count(*) FROM loomplane_events WHERE type LIKE 'release_watch.%'`).Scan(&n); scanErr != nil {
+			t.Fatal(scanErr)
+		}
+		return n
+	}
+	before := count()
+	if due, dueErr := store.Due(ctx, time.Now(), 10); dueErr != nil || len(due) != 1 {
+		t.Fatalf("due %d %v", len(due), dueErr)
+	}
+	if after := count(); after != before {
+		t.Fatalf("a claim emitted %d events", after-before)
+	}
+
 	if _, err = pg.Exec(ctx, `DELETE FROM loomplane_deployments WHERE id='dep_0'`); err != nil {
 		t.Fatal(err)
 	}

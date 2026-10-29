@@ -19,10 +19,23 @@ import (
 	"github.com/xraph/loomplane/pkg/manifest"
 )
 
-// memWatches is a Store in memory. Due claims every open watch.
+// memWatches is a Store in memory. Due claims every open watch. It finds
+// rollback plans among plans.
 type memWatches struct {
-	mu sync.Mutex
-	w  map[string]*Watch
+	mu    sync.Mutex
+	w     map[string]*Watch
+	plans *fakePlans
+}
+
+func (m *memWatches) RollbackPlan(_ context.Context, orgID, watchID string) (string, error) {
+	m.plans.mu.Lock()
+	defer m.plans.mu.Unlock()
+	for _, p := range m.plans.plans {
+		if p.OrgID == orgID && p.Rollback != nil && p.Rollback.WatchID == watchID {
+			return p.ID, nil
+		}
+	}
+	return "", nil
 }
 
 func copyWatch(w *Watch) *Watch {
@@ -262,14 +275,17 @@ type read struct {
 
 // fakeReader answers each binding with a function of the window.
 type fakeReader struct {
-	mu     sync.Mutex
-	reads  []read
-	answer func(binding string, w releasehealth.Window) (releasehealth.Health, error)
+	mu        sync.Mutex
+	reads     []read
+	deadlines []time.Time
+	answer    func(binding string, w releasehealth.Window) (releasehealth.Health, error)
 }
 
-func (f *fakeReader) Health(_ context.Context, orgID, bindingID, revision string, w releasehealth.Window) (releasehealth.Health, error) {
+func (f *fakeReader) Health(ctx context.Context, orgID, bindingID, revision string, w releasehealth.Window) (releasehealth.Health, error) {
 	f.mu.Lock()
 	f.reads = append(f.reads, read{orgID, bindingID, revision, w})
+	deadline, _ := ctx.Deadline()
+	f.deadlines = append(f.deadlines, deadline)
 	answer := f.answer
 	f.mu.Unlock()
 	if answer == nil {
@@ -305,6 +321,8 @@ type fakeRollbacks struct {
 	approveErr error
 	// status is what a created plan starts as.
 	status string
+	// onCreate runs inside the next create, before it answers.
+	onCreate func()
 }
 
 func (f *fakeRollbacks) CreateAutomaticRollback(_ context.Context, orgID, deploymentID string, in planning.AutomaticRollbackInput) (*planning.Plan, error) {
@@ -312,6 +330,10 @@ func (f *fakeRollbacks) CreateAutomaticRollback(_ context.Context, orgID, deploy
 	defer f.mu.Unlock()
 	f.created = append(f.created, in)
 	f.createdFor = append(f.createdFor, orgID+"/"+deploymentID)
+	if hook := f.onCreate; hook != nil {
+		f.onCreate = nil
+		hook()
+	}
 	if f.createErr != nil {
 		return nil, f.createErr
 	}
@@ -470,7 +492,7 @@ func newRig(t *testing.T, release string) *rig {
 	}
 	plans := &fakePlans{plans: map[string]*planning.Plan{}, bindings: map[string][]*planning.Binding{}}
 	r := &rig{
-		store: &memWatches{}, plans: plans, history: &fakeHistory{}, reader: &fakeReader{},
+		store: &memWatches{plans: plans}, plans: plans, history: &fakeHistory{}, reader: &fakeReader{},
 		rollbacks: &fakeRollbacks{plans: plans}, deployments: &fakeDeployments{}, authz: &fakeAuthz{}, audit: &fakeAudit{},
 		clock:     &clock{now: finished},
 		manifests: fakeManifests{revs: map[string]*manifest.Manifest{"man_1": m, "man_latest": m}},

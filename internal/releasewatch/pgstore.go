@@ -173,3 +173,17 @@ func (s *PgStore) Save(ctx context.Context, w *Watch) error {
 	w.Revision++
 	return nil
 }
+
+// RollbackPlan implements Store.
+func (s *PgStore) RollbackPlan(ctx context.Context, orgID, watchID string) (string, error) {
+	var id string
+	err := s.db.QueryRow(ctx, `SELECT id FROM loomplane_plans WHERE org_id=$1 AND kind='rollback' AND rollback->>'watch_id'=$2
+		ORDER BY created_at DESC, id DESC LIMIT 1`, orgID, watchID).Scan(&id)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", nil
+	}
+	if err != nil {
+		return "", fmt.Errorf("find the watch's rollback plan: %w", err)
+	}
+	return id, nil
+}

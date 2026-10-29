@@ -33,6 +33,13 @@ func TestReleaseWatchesMigration(t *testing.T) {
 	if got := strs(t, conn, `SELECT unwatched::text||'|'||held::text||'|'||held_released::text||'|'||unverified::text||'|'||revision::text||'|'||rollback_plan_id FROM loomplane_release_watches`); len(got) != 1 || got[0] != "[]|[]|false|false|1|" {
 		t.Fatalf("defaults: %v", got)
 	}
+	// A claim stamps checked_at without a save and emits nothing; a save
+	// bumps the revision and emits.
+	exec(t, conn, `UPDATE loomplane_release_watches SET checked_at=now() WHERE id='watch_1'`)
+	exec(t, conn, `UPDATE loomplane_release_watches SET status='passed', revision=revision+1 WHERE id='watch_1'`)
+	if got := strs(t, conn, `SELECT data->>'status' FROM loomplane_events WHERE type='release_watch.updated' ORDER BY sequence`); len(got) != 2 || got[0] != "watching" || got[1] != "passed" {
+		t.Fatalf("update events: %v", got)
+	}
 	for _, sql := range []string{watch("watch_again", "dep_1", "watching"), watch("watch_odd", "dep_2", "maybe")} {
 		if _, err := conn.Exec(ctx, sql); err == nil {
 			t.Fatalf("constraint accepted %s", sql)
@@ -47,6 +54,9 @@ func TestReleaseWatchesMigration(t *testing.T) {
 	}
 
 	down(t, ex, "release_watches", "release_watches")
+	if got := strs(t, conn, `SELECT count(*)::text FROM pg_trigger WHERE tgname IN ('loomplane_state_event','loomplane_state_event_update') AND tgrelid=to_regclass('loomplane_release_watches')`); len(got) != 1 || got[0] != "0" {
+		t.Fatalf("down left triggers: %v", got)
+	}
 	if got := strs(t, conn, `SELECT coalesce(to_regclass('loomplane_release_watches')::text,'gone')`); got[0] != "gone" {
 		t.Fatalf("down left the table: %v", got)
 	}
