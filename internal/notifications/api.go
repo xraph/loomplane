@@ -374,7 +374,7 @@ func (s *Service) RetryExhausted(ctx context.Context, p security.Principal) erro
 	if err := s.require(ctx, p, security.MemberManage, ""); err != nil {
 		return err
 	}
-	_, err := s.pg.Exec(ctx, `UPDATE loomplane_notification_outbox SET attempts=0,next_attempt_at=clock_timestamp(),email_state=CASE WHEN email_state='failed' THEN 'pending' ELSE email_state END,last_error='' WHERE id IN(SELECT id FROM loomplane_notification_outbox WHERE org_id=$1 AND completed_at IS NULL AND attempts>=10 AND (lease_until IS NULL OR lease_until<clock_timestamp()) ORDER BY created_at LIMIT 100)`, p.OrgID)
+	_, err := s.pg.Exec(ctx, `UPDATE loomplane_notification_outbox SET attempts=0,next_attempt_at=clock_timestamp(),email_state=CASE WHEN email_state='failed' THEN 'pending' ELSE email_state END,push_state=CASE WHEN push_state='failed' THEN 'pending' ELSE push_state END,last_error='' WHERE id IN(SELECT id FROM loomplane_notification_outbox WHERE org_id=$1 AND completed_at IS NULL AND attempts>=10 AND (lease_until IS NULL OR lease_until<clock_timestamp()) ORDER BY created_at LIMIT 100)`, p.OrgID)
 	if err == nil {
 		s.recordAudit(ctx, p, "notification.retry", p.OrgID)
 	}

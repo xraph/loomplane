@@ -43,6 +43,7 @@ type Service struct {
 	relay      *relay.Relay
 	relayStore *encryptedRelayStore
 	authz      Authorizer
+	pushCover  PushCover
 	audit      func(context.Context, security.Principal, string, string)
 	statusMu   sync.RWMutex
 	workerErr  error

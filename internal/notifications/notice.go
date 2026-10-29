@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/xraph/grove/driver"
@@ -48,6 +49,13 @@ type Notice struct {
 	// Need is the permission, as "resource:action", each recipient must
 	// hold when the notice is delivered. Empty for none.
 	Need string
+	// Push says how the notice reaches phones. Nil sends no push.
+	Push *Push
+	// PushOnly writes no inbox item and sends no webhook or email. It
+	// needs Push.
+	PushOnly bool
+	// Delay holds the first attempt back.
+	Delay time.Duration
 }
 
 // Querier runs one query on the database or inside a transaction.
@@ -64,6 +72,7 @@ type noticePayload struct {
 	Path      string            `json:"path"`
 	Metadata  map[string]string `json:"metadata"`
 	Need      string            `json:"need"`
+	Push      *Push             `json:"push,omitempty"`
 }
 
 // noticeWire is the payload plus the link, fixed on first delivery.
@@ -91,6 +100,9 @@ func Enqueue(ctx context.Context, q Execer, n Notice) error {
 	if _, err := parseNeed(n.Need); err != nil {
 		return err
 	}
+	if err := validatePush(n); err != nil {
+		return err
+	}
 	var users []string
 	for _, user := range n.Recipients {
 		if user != "" && !slices.Contains(users, user) {
@@ -104,7 +116,7 @@ func Enqueue(ctx context.Context, q Execer, n Notice) error {
 	if meta == nil {
 		meta = map[string]string{}
 	}
-	payload, err := json.Marshal(noticePayload{ProjectID: n.ProjectID, SubjectID: n.SubjectID, Title: n.Title, Body: n.Body, Path: n.Path, Metadata: meta, Need: n.Need})
+	payload, err := json.Marshal(noticePayload{ProjectID: n.ProjectID, SubjectID: n.SubjectID, Title: n.Title, Body: n.Body, Path: n.Path, Metadata: meta, Need: n.Need, Push: n.Push})
 	if err != nil {
 		return err
 	}
@@ -112,10 +124,39 @@ func Enqueue(ctx context.Context, q Execer, n Notice) error {
 	for i, user := range users {
 		ids[i] = noticeID(n.Kind, n.SubjectID, user)
 	}
-	_, err = q.Exec(ctx, `INSERT INTO loomplane_notification_outbox(id,org_id,project_id,user_id,deployment_id,attempt,payload,kind,subject_id)
- SELECT k.id,$1,$2,k.user_id,k.id,0,$3::jsonb,$4,$5 FROM unnest($6::text[],$7::text[]) AS k(id,user_id)
- ON CONFLICT(deployment_id,attempt) DO NOTHING`, n.OrgID, n.ProjectID, string(payload), n.Kind, n.SubjectID, ids, users)
+	_, err = q.Exec(ctx, `INSERT INTO loomplane_notification_outbox(id,org_id,project_id,user_id,deployment_id,attempt,payload,kind,subject_id,inbox_done,webhook_done,email_state,next_attempt_at)
+ SELECT k.id,$1,$2,k.user_id,k.id,0,$3::jsonb,$4,$5,$8,$8,CASE WHEN $8 THEN 'skipped' ELSE 'pending' END,clock_timestamp()+($9::float8 * interval '1 second') FROM unnest($6::text[],$7::text[]) AS k(id,user_id)
+ ON CONFLICT(deployment_id,attempt) DO NOTHING`, n.OrgID, n.ProjectID, string(payload), n.Kind, n.SubjectID, ids, users, n.PushOnly, n.Delay.Seconds())
 	return err
+}
+
+// validatePush checks the parts of a notice that decide what a phone shows.
+func validatePush(n Notice) error {
+	if n.PushOnly && n.Push == nil {
+		return fmt.Errorf("%w: a push-only notice needs a push", ErrInvalid)
+	}
+	if n.Delay < 0 {
+		return fmt.Errorf("%w: a notice delay can't be negative", ErrInvalid)
+	}
+	p := n.Push
+	if p == nil {
+		return nil
+	}
+	if !slices.Contains([]string{ClassNeedsYou, ClassAlert, ClassUpdate, ClassWorkspace}, p.Class) {
+		return fmt.Errorf("%w: unknown push class %q", ErrInvalid, p.Class)
+	}
+	if !slices.Contains([]string{CategoryAlert, CategoryApproval, CategoryAgent, CategoryUpdate}, p.Category) {
+		return fmt.Errorf("%w: unknown push category %q", ErrInvalid, p.Category)
+	}
+	if !p.Urgency.Valid() {
+		return fmt.Errorf("%w: unknown push urgency %q", ErrInvalid, p.Urgency)
+	}
+	if p.Toggle != "" {
+		if _, ok := DefaultSettings[p.Toggle]; !ok || strings.HasPrefix(p.Toggle, "level.") {
+			return fmt.Errorf("%w: unknown push toggle %q", ErrInvalid, p.Toggle)
+		}
+	}
+	return nil
 }
 
 func noticeID(kind, subject, user string) string { return kind + ":" + subject + ":" + user }

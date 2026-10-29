@@ -147,7 +147,7 @@ func (s *Service) processConnection(ctx context.Context, item *outboxItem) error
 		return err
 	}
 	if !member {
-		_, err = s.pg.Exec(ctx, `UPDATE loomplane_notification_outbox SET inbox_done=TRUE,email_state='skipped' WHERE id=$1 AND lease_owner=$2`, item.id, item.owner)
+		_, err = s.pg.Exec(ctx, `UPDATE loomplane_notification_outbox SET inbox_done=TRUE,email_state='skipped',push_state='skipped' WHERE id=$1 AND lease_owner=$2`, item.id, item.owner)
 		return err
 	}
 	if !item.inboxDone {
@@ -162,10 +162,29 @@ func (s *Service) processConnection(ctx context.Context, item *outboxItem) error
 		if err != nil {
 			return err
 		}
-		if _, err = s.pg.Exec(ctx, `UPDATE loomplane_notification_outbox SET inbox_done=TRUE WHERE id=$1 AND lease_owner=$2`, item.id, item.owner); err != nil {
+		if _, err = s.pg.Exec(ctx, `UPDATE loomplane_notification_outbox SET inbox_done=TRUE,inbox_id=$3 WHERE id=$1 AND lease_owner=$2`, item.id, item.owner, inboxID.String()); err != nil {
 			return err
 		}
+		item.inboxID = inboxID.String()
 	}
+	msg := &outboxMessage{inboxType: kind, title: title, body: body, actionURL: url}
+	plan, err := s.pushPlanFor(ctx, item, msg)
+	if err != nil {
+		return err
+	}
+	pushErr := s.pushStep(ctx, item, plan)
+	if pushErr != nil && !errors.Is(pushErr, ErrPushFailed) {
+		return pushErr
+	}
+	if err := s.connectionEmail(ctx, item, p, email, subject, mail); err != nil {
+		return err
+	}
+	return pushErr
+}
+
+// connectionEmail sends a connection notice's email unless it was already
+// sent or skipped.
+func (s *Service) connectionEmail(ctx context.Context, item *outboxItem, p security.Principal, email, subject, mail string) error {
 	if item.emailState != "pending" {
 		return nil
 	}

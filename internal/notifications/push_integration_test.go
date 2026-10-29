@@ -3,11 +3,15 @@
 package notifications
 
 import (
+	"context"
 	"encoding/base64"
+	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/xraph/grove"
 	"github.com/xraph/herald/credential"
+	"github.com/xraph/herald/driver"
 
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/security"
@@ -108,5 +112,316 @@ func TestRotatedSecretMovesKeyIDAndProvider(t *testing.T) {
 	}
 	if seeds[0] != base64.StdEncoding.EncodeToString(seed.Seed()) {
 		t.Fatal("provider kept the old signing key")
+	}
+}
+
+// pushRig is a service with push on, one member (user-a) in org-a, a project
+// and a staging and a production environment, and a fake gateway.
+func pushRig(t *testing.T) (*Service, *fakeGateway, *allowedProjects, <-chan string) {
+	t.Helper()
+	db := notificationDatabase(t)
+	ctx := t.Context()
+	gw := newFakeGateway(t)
+	host, port, messages := smtpSink(t)
+	cfg := config.Config{PublicURL: "https://loomplane.example.com/", SecretKey: base64.StdEncoding.EncodeToString(make([]byte, 32)), Identity: config.IdentityConfig{AppID: "app"},
+		Notifications: config.NotificationsConfig{SMTPHost: host, SMTPPort: port, From: "loomplane@example.com"}, Push: config.PushConfig{Enabled: true, GatewayURL: gw.URL}}
+	svc, err := New(cfg, db)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = svc.mailStore.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err = svc.relayStore.Migrate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err = svc.Prepare(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err = svc.registerEventTypes(ctx); err != nil {
+		t.Fatal(err)
+	}
+	authz := &allowedProjects{}
+	svc.SetAuthorizer(authz)
+	for _, q := range []string{
+		`UPDATE loomplane_projects SET name='Atlas' WHERE id='project-a'`,
+		`INSERT INTO loomplane_environments(id,org_id,project_id,name,kind)VALUES('env-a','org-a','project-a','staging','staging'),('env-p','org-a','project-a','production','production')`,
+		`INSERT INTO authsome_organizations(id,name)VALUES('org-a','Acme')`,
+	} {
+		if _, err = svc.pg.Exec(ctx, q); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return svc, gw, authz, messages
+}
+
+func failDeployment(t *testing.T, svc *Service, env string) {
+	t.Helper()
+	if _, err := svc.pg.Exec(t.Context(), `INSERT INTO loomplane_deployments(id,org_id,project_id,environment_id,plan_id,started_by,status)VALUES('deployment-a','org-a','project-a',$1,'plan-a','user-a','failed')`, env); err != nil {
+		t.Fatal(err)
+	}
+}
+
+type pushRow struct {
+	state, collapse, emailState, inboxID, lastError string
+	devices                                         map[string]string
+	inboxDone, complete                             bool
+}
+
+func userRow(t *testing.T, svc *Service) pushRow {
+	t.Helper()
+	var r pushRow
+	var raw []byte
+	err := svc.pg.QueryRow(t.Context(), `SELECT push_state,push_collapse,email_state,inbox_id,last_error,push_devices,inbox_done,completed_at IS NOT NULL FROM loomplane_notification_outbox WHERE user_id='user-a'`).
+		Scan(&r.state, &r.collapse, &r.emailState, &r.inboxID, &r.lastError, &raw, &r.inboxDone, &r.complete)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = json.Unmarshal(raw, &r.devices); err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+
+func TestDeploymentFailurePushesASealedEnvelope(t *testing.T) {
+	svc, gw, _, _ := pushRig(t)
+	ctx := t.Context()
+	gw.register(t, svc, "h1.a")
+	failDeployment(t, svc, "env-a")
+	if err := svc.drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	sends := gw.taken()
+	if len(sends) != 1 {
+		t.Fatalf("gateway sends: %d", len(sends))
+	}
+	send := sends[0]
+	if send.Body.Urgency != "active" || send.Body.CollapseID != collapseID("deployment:deployment-a") || send.Body.Kind != "show" || send.Body.TTLSeconds != 43200 {
+		t.Fatalf("send: %+v", send.Body)
+	}
+	list, err := svc.List(ctx, security.Principal{OrgID: "org-a", UserID: "user-a"})
+	if err != nil || len(list.Items) != 1 {
+		t.Fatalf("inbox: %+v %v", list, err)
+	}
+	env := send.Env
+	if env.Title != "Atlas: deployment to staging failed" || env.Category != "alert" || env.Thread != "project-a" {
+		t.Fatalf("envelope: %+v", env)
+	}
+	for key, want := range map[string]string{"kind": "deployment.failed", "class": "alert", "actions": "open,retry", "inbox_id": list.Items[0].ID, "subject": "deployment-a", "org": "org-a", "org_name": "Acme",
+		"server": "https://loomplane.example.com", "path": "/deployments/plan-a", "project": "project-a", "environment": "staging", "urgency": "active"} {
+		if env.Data[key] != want {
+			t.Errorf("data[%s] = %q, want %q", key, env.Data[key], want)
+		}
+	}
+	if row := userRow(t, svc); row.state != PushSent || row.collapse != send.Body.CollapseID || row.inboxID != list.Items[0].ID || !row.complete {
+		t.Fatalf("row: %+v", row)
+	}
+}
+
+func TestLevelAndToggleFiltering(t *testing.T) {
+	svc, gw, _, _ := pushRig(t)
+	ctx := t.Context()
+	a := gw.register(t, svc, "h1.a")
+	b := gw.register(t, svc, "h1.b")
+	if _, err := svc.UpdateDevice(ctx, security.Principal{UserID: "user-a", OrgID: "org-a"}, a.ID, UpdateDeviceInput{Settings: map[string]string{"level.staging": "off"}}); err != nil {
+		t.Fatal(err)
+	}
+	failDeployment(t, svc, "env-a")
+	if err := svc.drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := gw.handles(); len(got) != 1 || got[0] != "h1.b" {
+		t.Fatalf("gateway sends: %v", got)
+	}
+	row := userRow(t, svc)
+	if len(row.devices) != 1 || row.devices[b.ID] != "sent" || row.state != PushSent {
+		t.Fatalf("row: %+v", row)
+	}
+}
+
+func TestQuietHoursHoldBackNonCritical(t *testing.T) {
+	svc, gw, _, _ := pushRig(t)
+	ctx := t.Context()
+	a := gw.register(t, svc, "h1.a")
+	now := time.Now().UTC()
+	quiet := QuietHours{Start: now.Add(-time.Hour).Format("15:04"), End: now.Add(time.Hour).Format("15:04")}
+	if _, err := svc.UpdateDevice(ctx, security.Principal{UserID: "user-a", OrgID: "org-a"}, a.ID, UpdateDeviceInput{QuietHours: OptionalQuietHours{Set: true, Value: &quiet}}); err != nil {
+		t.Fatal(err)
+	}
+	failDeployment(t, svc, "env-a")
+	if err := svc.drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := gw.handles(); len(got) != 0 {
+		t.Fatalf("gateway sends: %v", got)
+	}
+	if row := userRow(t, svc); row.devices[a.ID] != "suppressed" || row.state != PushSkipped {
+		t.Fatalf("row: %+v", row)
+	}
+}
+
+func TestPushRetryReachesOnlyFailedDevices(t *testing.T) {
+	svc, gw, _, messages := pushRig(t)
+	ctx := t.Context()
+	a := gw.register(t, svc, "h1.a")
+	b := gw.register(t, svc, "h1.b")
+	gw.answer("h1.b", 500)
+	failDeployment(t, svc, "env-a")
+	if err := svc.drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := gw.handles(); len(got) != 2 {
+		t.Fatalf("first drain sends: %v", got)
+	}
+	row := userRow(t, svc)
+	if row.complete || row.state != PushPending || row.lastError != "push delivery failed" || row.devices[a.ID] != "sent" || row.devices[b.ID] != "failed" || row.emailState != "sent" {
+		t.Fatalf("after the first drain: %+v", row)
+	}
+	if _, err := svc.pg.Exec(ctx, `UPDATE loomplane_notification_outbox SET next_attempt_at=clock_timestamp()`); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := gw.handles(); len(got) != 3 || got[2] != "h1.b" {
+		t.Fatalf("after the retry: %v", got)
+	}
+	row = userRow(t, svc)
+	if !row.complete || row.state != PushSent || row.emailState != "sent" || row.devices[b.ID] != "sent" {
+		t.Fatalf("after the retry: %+v", row)
+	}
+	list, err := svc.List(ctx, security.Principal{OrgID: "org-a", UserID: "user-a"})
+	if err != nil || len(list.Items) != 1 {
+		t.Fatalf("inbox: %+v %v", list, err)
+	}
+	if len(messages) != 1 {
+		t.Fatalf("emails: %d", len(messages))
+	}
+}
+
+func TestGoneDeviceIsDeleted(t *testing.T) {
+	svc, gw, _, _ := pushRig(t)
+	ctx := t.Context()
+	gw.register(t, svc, "h1.a")
+	gw.answer("h1.a", 410)
+	failDeployment(t, svc, "env-a")
+	if err := svc.drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	left, err := svc.herald.ListDevices(ctx, "app", "user-a")
+	if err != nil || len(left) != 0 {
+		t.Fatalf("devices: %v %v", left, err)
+	}
+	if row := userRow(t, svc); !row.complete || row.state != PushSkipped {
+		t.Fatalf("row: %+v", row)
+	}
+}
+
+func TestLostPermissionStopsPushes(t *testing.T) {
+	svc, gw, authz, _ := pushRig(t)
+	gw.register(t, svc, "h1.a")
+	authz.denied.Store(true)
+	failDeployment(t, svc, "env-a")
+	if err := svc.drain(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := gw.handles(); len(got) != 0 {
+		t.Fatalf("gateway sends: %v", got)
+	}
+	if row := userRow(t, svc); row.state != PushSkipped || !row.inboxDone {
+		t.Fatalf("row: %+v", row)
+	}
+}
+
+func TestPushOffSkipsThePushStep(t *testing.T) {
+	svc, gw, _, _ := pushRig(t)
+	gw.register(t, svc, "h1.a")
+	svc.cfg.Push.Enabled = false
+	failDeployment(t, svc, "env-a")
+	if err := svc.drain(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := gw.handles(); len(got) != 0 {
+		t.Fatalf("gateway sends: %v", got)
+	}
+	if row := userRow(t, svc); row.state != PushSkipped || !row.complete {
+		t.Fatalf("row: %+v", row)
+	}
+}
+
+type coverAll struct{ asked []CoverQuery }
+
+func (c *coverAll) Covers(_ context.Context, q CoverQuery) (bool, error) {
+	c.asked = append(c.asked, q)
+	return true, nil
+}
+
+func TestCoveredPushKeepsInboxAndEmail(t *testing.T) {
+	svc, gw, _, _ := pushRig(t)
+	gw.register(t, svc, "h1.a")
+	cover := &coverAll{}
+	svc.SetPushCover(cover)
+	failDeployment(t, svc, "env-p")
+	if err := svc.drain(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := gw.handles(); len(got) != 0 {
+		t.Fatalf("gateway sends: %v", got)
+	}
+	want := CoverQuery{OrgID: "org-a", Kind: "deployment.failed", SubjectID: "deployment-a", ProjectID: "project-a", EnvironmentID: "env-p", Production: true}
+	if len(cover.asked) != 1 || cover.asked[0] != want {
+		t.Fatalf("cover asked: %+v", cover.asked)
+	}
+	row := userRow(t, svc)
+	if row.state != PushSkipped || row.emailState != "sent" || row.inboxID == "" {
+		t.Fatalf("row: %+v", row)
+	}
+}
+
+func TestWorkspaceNoticePushes(t *testing.T) {
+	svc, gw, _, _ := pushRig(t)
+	svc.SetAuthorizer(cloudManagers{"user-a": true})
+	gw.register(t, svc, "h1.a")
+	if err := svc.EnqueueRenewalNotice(t.Context(), RenewalNotice{OrgID: "org-a", RegistrationID: "reg_1", Domain: "acme.dev", RenewsOn: time.Date(2026, 11, 30, 0, 0, 0, 0, time.UTC)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.drain(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	sends := gw.taken()
+	if len(sends) != 1 {
+		t.Fatalf("gateway sends: %d", len(sends))
+	}
+	if d := sends[0].Env.Data; d["class"] != "workspace" || d["urgency"] != "active" || d["kind"] != "domain.renewal" || sends[0].Env.Category != "update" || sends[0].Body.Urgency != "active" {
+		t.Fatalf("envelope: %+v", sends[0].Env)
+	}
+}
+
+func TestGenericNoticePushOnlyWritesNoInbox(t *testing.T) {
+	svc, gw, _, _ := pushRig(t)
+	gw.register(t, svc, "h1.a")
+	err := Enqueue(t.Context(), svc.pg, Notice{Kind: KindAgentReport, OrgID: "org-a", ProjectID: "project-a", SubjectID: "report_1:taken", Recipients: []string{"user-a"},
+		Title: "Ada took the report", Body: "Ada took over.", Path: "/agent/reports/report_1", PushOnly: true,
+		Push: &Push{Class: ClassUpdate, Urgency: driver.UrgencyPassive, Category: CategoryUpdate, Actions: []string{ActionOpen}, Collapse: "report:report_1", Production: true, Data: map[string]string{"taken_by": "Ada"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = svc.drain(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	sends := gw.taken()
+	if len(sends) != 1 {
+		t.Fatalf("gateway sends: %d", len(sends))
+	}
+	data := sends[0].Env.Data
+	if id, ok := data["inbox_id"]; !ok || id != "" || data["taken_by"] != "Ada" || data["kind"] != KindAgentReport || sends[0].Body.CollapseID != collapseID("report:report_1") {
+		t.Fatalf("envelope: %+v", sends[0])
+	}
+	list, err := svc.List(t.Context(), security.Principal{OrgID: "org-a", UserID: "user-a"})
+	if err != nil || len(list.Items) != 0 {
+		t.Fatalf("inbox: %+v %v", list, err)
+	}
+	if row := userRow(t, svc); row.emailState != "skipped" || row.state != PushSent || row.inboxID != "" || !row.complete {
+		t.Fatalf("row: %+v", row)
 	}
 }

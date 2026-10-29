@@ -40,6 +40,9 @@ type outboxItem struct {
 	emailState             string
 	attempts               int
 	created                time.Time
+	pushState, inboxID     string
+	// pushDevices is what each phone got so far, by device ID.
+	pushDevices map[string]string
 }
 
 func (s *Service) drain(ctx context.Context) error {
@@ -57,10 +60,13 @@ func (s *Service) drain(ctx context.Context) error {
 		if err != nil {
 			// No provider replies, addresses or payloads are retained in diagnostics.
 			diagnostic := "notification delivery failed"
-			if errors.Is(err, ErrDeliveryFailed) {
+			switch {
+			case errors.Is(err, ErrDeliveryFailed):
 				diagnostic = "email delivery failed"
+			case errors.Is(err, ErrPushFailed):
+				diagnostic = "push delivery failed"
 			}
-			if _, saveErr := s.pg.Exec(ctx, `UPDATE loomplane_notification_outbox SET last_error=$3,lease_until=NULL,lease_owner='',next_attempt_at=clock_timestamp()+($4 * interval '1 second'),email_state=CASE WHEN attempts>=10 AND email_state='pending' THEN 'failed' ELSE email_state END WHERE id=$1 AND lease_owner=$2`, item.id, item.owner, diagnostic, int(retryDelay(item.attempts).Seconds())); saveErr != nil {
+			if _, saveErr := s.pg.Exec(ctx, `UPDATE loomplane_notification_outbox SET last_error=$3,lease_until=NULL,lease_owner='',next_attempt_at=clock_timestamp()+($4 * interval '1 second'),email_state=CASE WHEN attempts>=10 AND email_state='pending' THEN 'failed' ELSE email_state END,push_state=CASE WHEN attempts>=10 AND push_state='pending' THEN 'failed' ELSE push_state END WHERE id=$1 AND lease_owner=$2`, item.id, item.owner, diagnostic, int(retryDelay(item.attempts).Seconds())); saveErr != nil {
 				return saveErr
 			}
 			continue
@@ -73,8 +79,13 @@ func (s *Service) drain(ctx context.Context) error {
 }
 func (s *Service) claim(ctx context.Context) (*outboxItem, error) {
 	item := &outboxItem{owner: rand.Text()}
-	err := s.pg.QueryRow(ctx, `UPDATE loomplane_notification_outbox SET lease_owner=$1,lease_until=clock_timestamp()+interval '2 minutes',attempts=attempts+1 WHERE id=(SELECT id FROM loomplane_notification_outbox WHERE completed_at IS NULL AND attempts<10 AND next_attempt_at<=clock_timestamp() AND (lease_until IS NULL OR lease_until<clock_timestamp()) ORDER BY next_attempt_at,created_at,id FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING id,org_id,user_id,kind,subject_id,payload,wire_payload,inbox_done,webhook_done,email_state,attempts,created_at`, item.owner).Scan(&item.id, &item.org, &item.user, &item.kind, &item.subject, &item.payload, &item.wire, &item.inboxDone, &item.webhookDone, &item.emailState, &item.attempts, &item.created)
-	return item, err
+	var devices []byte
+	err := s.pg.QueryRow(ctx, `UPDATE loomplane_notification_outbox SET lease_owner=$1,lease_until=clock_timestamp()+interval '2 minutes',attempts=attempts+1 WHERE id=(SELECT id FROM loomplane_notification_outbox WHERE completed_at IS NULL AND attempts<10 AND next_attempt_at<=clock_timestamp() AND (lease_until IS NULL OR lease_until<clock_timestamp()) ORDER BY next_attempt_at,created_at,id FOR UPDATE SKIP LOCKED LIMIT 1) RETURNING id,org_id,user_id,kind,subject_id,payload,wire_payload,inbox_done,webhook_done,email_state,attempts,created_at,push_state,push_devices,inbox_id`, item.owner).Scan(&item.id, &item.org, &item.user, &item.kind, &item.subject, &item.payload, &item.wire, &item.inboxDone, &item.webhookDone, &item.emailState, &item.attempts, &item.created, &item.pushState, &devices, &item.inboxID)
+	if err != nil {
+		return item, err
+	}
+	item.pushDevices = map[string]string{}
+	return item, json.Unmarshal(devices, &item.pushDevices)
 }
 
 // outboxMessage is what one outbox row sends, whatever its kind.
@@ -175,7 +186,7 @@ func (s *Service) process(ctx context.Context, item *outboxItem) error {
 		return err
 	}
 	if !authorized {
-		_, err = s.pg.Exec(ctx, `UPDATE loomplane_notification_outbox SET inbox_done=TRUE,email_state='skipped' WHERE id=$1 AND lease_owner=$2`, item.id, item.owner)
+		_, err = s.pg.Exec(ctx, `UPDATE loomplane_notification_outbox SET inbox_done=TRUE,email_state='skipped',push_state='skipped' WHERE id=$1 AND lease_owner=$2`, item.id, item.owner)
 		return err
 	}
 	if !item.inboxDone {
@@ -190,13 +201,33 @@ func (s *Service) process(ctx context.Context, item *outboxItem) error {
 		if err != nil {
 			return err
 		}
-		if _, err = s.pg.Exec(ctx, `UPDATE loomplane_notification_outbox SET inbox_done=TRUE WHERE id=$1 AND lease_owner=$2`, item.id, item.owner); err != nil {
+		if _, err = s.pg.Exec(ctx, `UPDATE loomplane_notification_outbox SET inbox_done=TRUE,inbox_id=$3 WHERE id=$1 AND lease_owner=$2`, item.id, item.owner, inboxID.String()); err != nil {
 			return err
 		}
+		item.inboxID = inboxID.String()
 	}
+	plan, err := s.pushPlanFor(ctx, item, d)
+	if err != nil {
+		return err
+	}
+	pushErr := s.pushStep(ctx, item, plan)
+	if pushErr != nil && !errors.Is(pushErr, ErrPushFailed) {
+		return pushErr
+	}
+	// A phone that didn't take the push fails the row after the email, so
+	// the retry never mails twice.
+	if err := s.emailStep(ctx, item, p, email, d); err != nil {
+		return err
+	}
+	return pushErr
+}
+
+// emailStep sends the row's email unless it was already sent or skipped.
+func (s *Service) emailStep(ctx context.Context, item *outboxItem, p security.Principal, email string, d *outboxMessage) error {
 	if item.emailState != "pending" {
 		return nil
 	}
+	var err error
 	enabled := d.alwaysEmail
 	if !enabled {
 		if enabled, err = s.emailPreference(ctx, p, item.kind); err != nil {
