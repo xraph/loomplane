@@ -80,6 +80,9 @@ func buildGateway(t *testing.T) string {
 		}
 	})
 	if buildSkip {
+		if os.Getenv("CI") != "" {
+			t.Fatalf("gateway did not build in time: %v", errBuild)
+		}
 		t.Skipf("gateway did not build in time, most likely a cold build cache: %v", errBuild)
 	}
 	if errBuild != nil {
