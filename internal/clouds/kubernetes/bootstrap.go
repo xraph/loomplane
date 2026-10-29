@@ -11,6 +11,7 @@ import (
 	"maps"
 	"slices"
 	"strings"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	storagev1 "k8s.io/api/storage/v1"
@@ -32,9 +33,10 @@ const bootstrapIngress = "loomplane"
 //go:embed bootstrap-data/*
 var bootstrapData embed.FS
 
-var bootstrapVersions = map[string]string{"cert-manager.yaml": "cert-manager-v1.21.3-r1", "traefik.yaml": "traefik-42.1.3-r1"}
+var bootstrapVersions = map[string]string{"longhorn-uninstall.yaml": "longhorn-v1.13.0-r1", "longhorn-post-upgrade.yaml": "longhorn-v1.13.0-r1", "cert-manager.yaml": "cert-manager-v1.21.3-r1", "traefik.yaml": "traefik-42.1.3-r1", "local-path.yaml": "local-path-v0.0.37-r1", "longhorn.yaml": "longhorn-v1.13.0-r1", "metallb.yaml": "metallb-v0.16.1-r1"}
 
 var bootstrapResources = map[string]schema.GroupVersionResource{
+	"Job":                            {Group: "batch", Version: "v1", Resource: "jobs"},
 	"Namespace":                      {Version: "v1", Resource: "namespaces"},
 	"ServiceAccount":                 {Version: "v1", Resource: "serviceaccounts"},
 	"Service":                        {Version: "v1", Resource: "services"},
@@ -48,6 +50,13 @@ var bootstrapResources = map[string]schema.GroupVersionResource{
 	"ValidatingWebhookConfiguration": {Group: "admissionregistration.k8s.io", Version: "v1", Resource: "validatingwebhookconfigurations"},
 	"IngressClass":                   {Group: "networking.k8s.io", Version: "v1", Resource: "ingressclasses"},
 	"StorageClass":                   {Group: "storage.k8s.io", Version: "v1", Resource: "storageclasses"},
+	"ConfigMap":                      {Version: "v1", Resource: "configmaps"},
+	"Secret":                         {Version: "v1", Resource: "secrets"},
+	"DaemonSet":                      {Group: "apps", Version: "v1", Resource: "daemonsets"},
+	"PriorityClass":                  {Group: "scheduling.k8s.io", Version: "v1", Resource: "priorityclasses"},
+	"NetworkPolicy":                  {Group: "networking.k8s.io", Version: "v1", Resource: "networkpolicies"},
+	"IPAddressPool":                  {Group: "metallb.io", Version: "v1beta1", Resource: "ipaddresspools"},
+	"L2Advertisement":                {Group: "metallb.io", Version: "v1beta1", Resource: "l2advertisements"},
 }
 
 // BootstrapManagedBuild installs missing prerequisites only when a connection
@@ -57,8 +66,9 @@ func (c *Client) BootstrapManagedBuild(ctx context.Context) error {
 	if c.Config.Details["registry_hostname"] == "" || c.Config.Details["registry_setup"] == "existing" {
 		return nil
 	}
-	if _, err := c.Kube.CoreV1().Namespaces().Get(ctx, c.Config.Namespace, metav1.GetOptions{}); err != nil {
-		return err
+	_, namespaceErr := c.Kube.CoreV1().Namespaces().Get(ctx, c.Config.Namespace, metav1.GetOptions{})
+	if namespaceErr != nil && !apierrors.IsNotFound(namespaceErr) {
+		return namespaceErr
 	}
 	system, err := c.Kube.CoreV1().Namespaces().Get(ctx, "kube-system", metav1.GetOptions{})
 	if err != nil {
@@ -72,7 +82,7 @@ func (c *Client) BootstrapManagedBuild(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	storage, err := c.buildStorage(ctx)
+	storage, storageObjects, err := c.setupStorage(ctx, owner)
 	if err != nil {
 		return err
 	}
@@ -88,6 +98,9 @@ func (c *Client) BootstrapManagedBuild(ctx context.Context) error {
 		}
 		installIngress = class.Labels[bootstrapOwner] == owner
 	}
+	if !installIngress && (c.Config.Details["registry_network"] == "node" || c.Config.Details["registry_network"] == "metallb") {
+		return errors.New("node and MetalLB setup require a Loomplane-owned ingress class")
+	}
 	certObjects, err := bootstrapObjects("cert-manager.yaml", owner)
 	if err != nil {
 		return err
@@ -97,9 +110,16 @@ func (c *Client) BootstrapManagedBuild(ctx context.Context) error {
 		return err
 	}
 	var objects []*unstructured.Unstructured
-	if installCert || installIngress {
+	if apierrors.IsNotFound(namespaceErr) {
+		if strings.HasPrefix(c.Config.Namespace, "kube-") || c.Config.Namespace == bootstrapNamespace {
+			return errors.New("select an application namespace for managed builds")
+		}
+		objects = append(objects, bootstrapNS(c.Config.Namespace, owner))
+	}
+	if installCert || installIngress || len(storageObjects) > 0 {
 		objects = append(objects, &unstructured.Unstructured{Object: map[string]any{"apiVersion": "v1", "kind": "Namespace", "metadata": map[string]any{"name": bootstrapNamespace, "labels": map[string]any{bootstrapOwner: owner}, "annotations": map[string]any{bootstrapBundle: "namespace-v1"}}}})
 	}
+	objects = append(objects, storageObjects...)
 	if installCert {
 		objects = append(objects, certObjects...)
 	}
@@ -107,6 +127,33 @@ func (c *Client) BootstrapManagedBuild(ctx context.Context) error {
 		bundle, e := bootstrapObjects("traefik.yaml", owner)
 		if e != nil {
 			return e
+		}
+		if c.Config.Details["registry_network"] == "node" {
+			node, address, nodeErr := c.nodeIngress(ctx)
+			if nodeErr != nil {
+				return nodeErr
+			}
+			if configureErr := configureNodeIngress(bundle, node, address); configureErr != nil {
+				return configureErr
+			}
+			c.Config.Details["ingress_address"] = address
+			delete(c.Config.Details, "registry_ingress_address")
+		}
+		for _, object := range bundle {
+			annotations := object.GetAnnotations()
+			mode := c.Config.Details["registry_network"]
+			if mode == "" {
+				mode = "load-balancer"
+			}
+			annotations["loomplane.bootstrap.network"] = mode
+			object.SetAnnotations(annotations)
+		}
+		if c.Config.Details["registry_network"] == "metallb" {
+			metallb, loadErr := c.metallbSetup(ctx, owner, bundle)
+			if loadErr != nil {
+				return loadErr
+			}
+			objects = append(objects, metallb...)
 		}
 		objects = append(objects, bundle...)
 		ingress = bootstrapIngress
@@ -147,7 +194,7 @@ func (c *Client) BootstrapManagedBuild(ctx context.Context) error {
 	}
 	for _, object := range missing {
 		api := c.bootstrapAPI(object)
-		if _, e := api.Create(ctx, object, metav1.CreateOptions{}); apierrors.IsAlreadyExists(e) {
+		if e := createBootstrapObject(ctx, api, object); apierrors.IsAlreadyExists(e) {
 			old, getErr := api.Get(ctx, object.GetName(), metav1.GetOptions{})
 			if getErr != nil {
 				return getErr
@@ -172,11 +219,41 @@ func (c *Client) BootstrapManagedBuild(ctx context.Context) error {
 	return nil
 }
 
+func bootstrapNS(name, owner string) *unstructured.Unstructured {
+	return &unstructured.Unstructured{Object: map[string]any{"apiVersion": "v1", "kind": "Namespace", "metadata": map[string]any{"name": name, "labels": map[string]any{bootstrapOwner: owner}, "annotations": map[string]any{bootstrapBundle: "namespace-v1"}}}}
+}
+
 func bootstrapOwned(old, want *unstructured.Unstructured) error {
 	if old.GetDeletionTimestamp() != nil || old.GetLabels()[bootstrapOwner] != want.GetLabels()[bootstrapOwner] || old.GetAnnotations()[bootstrapBundle] != want.GetAnnotations()[bootstrapBundle] {
 		return fmt.Errorf("%w: cluster setup will not replace %s %s", ErrOwned, want.GetKind(), want.GetName())
 	}
+	if desired := want.GetAnnotations()["loomplane.bootstrap.network"]; desired != "" {
+		current := old.GetAnnotations()["loomplane.bootstrap.network"]
+		if current == "" {
+			current = "load-balancer"
+		}
+		if current != desired {
+			return errors.New("ingress network mode changed; remove unused managed ingress before selecting another mode")
+		}
+	}
 	return nil
+}
+
+func createBootstrapObject(ctx context.Context, api dynamic.ResourceInterface, object *unstructured.Unstructured) error {
+	for {
+		_, err := api.Create(ctx, object, metav1.CreateOptions{})
+		if object.GetKind() != "IPAddressPool" && object.GetKind() != "L2Advertisement" {
+			return err
+		}
+		if !apierrors.IsInternalError(err) && !apierrors.IsServiceUnavailable(err) && !apierrors.IsNotFound(err) && !apierrors.IsTimeout(err) {
+			return err
+		}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(time.Second):
+		}
+	}
 }
 
 func (c *Client) bootstrapAPI(object *unstructured.Unstructured) dynamic.ResourceInterface {

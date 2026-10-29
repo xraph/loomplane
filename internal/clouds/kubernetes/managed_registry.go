@@ -187,10 +187,16 @@ func registryCredentials(secret *corev1.Secret, name, host string) (*ManagedRegi
 	auth := config.Auths[host].Auth
 	raw, err := base64.StdEncoding.DecodeString(auth)
 	user, password, ok := strings.Cut(string(raw), ":")
-	if err != nil || !ok || user != "loomplane" || len(password) < 32 {
+	if err != nil || !ok || (user != "loomplane" && !strings.HasPrefix(user, "loomplane-")) || len(password) < 32 {
 		return nil, errors.New("managed registry credentials do not match its hostname")
 	}
-	hash := strings.TrimSpace(strings.TrimPrefix(string(secret.Data["htpasswd"]), "loomplane:"))
+	hash := ""
+	for _, line := range strings.Split(string(secret.Data["htpasswd"]), "\n") {
+		if strings.HasPrefix(line, user+":") {
+			hash = strings.TrimPrefix(line, user+":")
+			break
+		}
+	}
 	if bcrypt.CompareHashAndPassword([]byte(hash), []byte(password)) != nil {
 		return nil, errors.New("managed registry password does not match its authentication database")
 	}
@@ -264,6 +270,9 @@ func (c *Client) EnsureManagedRegistry(ctx context.Context, org, connection stri
 	if deploymentErr == nil {
 		if checkErr := managedOwner(oldDeployment, identity, host); checkErr != nil {
 			return nil, checkErr
+		}
+		if oldDeployment.Annotations[registryMaintenance] != "" {
+			return nil, ErrRegistryPending
 		}
 	}
 	oldClaim, claimErr := c.Kube.CoreV1().PersistentVolumeClaims(ns).Get(ctx, name, metav1.GetOptions{})

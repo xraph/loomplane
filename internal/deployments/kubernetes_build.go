@@ -18,6 +18,20 @@ import (
 )
 
 func (b *ImageBuilder) buildInKubernetes(ctx context.Context, job *Job, state *ImageArtifact, save func() error) (reference string, err error) {
+	if locker, ok := job.BuildCredentials.(interface {
+		WithRegistryLock(context.Context, string, string, func() error) error
+	}); ok {
+		err = locker.WithRegistryLock(ctx, job.Deployment.OrgID, job.Action.Service.Target, func() error {
+			var buildErr error
+			reference, buildErr = b.buildInKubernetesLocked(ctx, job, state, save)
+			return buildErr
+		})
+		return reference, err
+	}
+	return b.buildInKubernetesLocked(ctx, job, state, save)
+}
+
+func (b *ImageBuilder) buildInKubernetesLocked(ctx context.Context, job *Job, state *ImageArtifact, save func() error) (reference string, err error) {
 	ctx, cancel := context.WithTimeout(ctx, 45*time.Minute)
 	defer cancel()
 	cfg := job.Action.Service

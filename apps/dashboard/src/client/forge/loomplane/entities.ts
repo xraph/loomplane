@@ -54,6 +54,8 @@ export const entities = {
   'GitHubStatus': { fields: { 'installations': 'GitHubInstallation' } },
   'Log': { idField: 'id' },
   'LogPage': { fields: { 'logs': 'Log' } },
+  'ManagedRegistryBackup': { idField: 'id' },
+  'ManagedRegistryView': { fields: { 'backups': 'ManagedRegistryBackup' } },
   'ManifestDraft': { idField: 'projectId' },
   'ModelsStatus': { fields: { 'entry': 'EntrySummary' } },
   'NativeInventory': { fields: { 'points': 'NativePoint', 'source': 'NativeSource' } },

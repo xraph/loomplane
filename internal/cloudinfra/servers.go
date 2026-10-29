@@ -5,6 +5,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/xraph/loomplane/internal/backupfiles"
 	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/clouds/server"
 	"github.com/xraph/loomplane/internal/config"
@@ -155,6 +156,7 @@ type Runtime interface {
 }
 
 type Deps struct {
+	RegistryFiles           *backupfiles.Store
 	ManagedClusters         config.ManagedClustersConfig
 	ClusterWorkflow         ClusterWorkflow
 	Clusters                ClusterStore

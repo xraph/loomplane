@@ -21,7 +21,17 @@ export function ClusterBuildSetup({ connection }: { connection: Connection }) {
     <div className="grid min-w-0 gap-2 text-xs">
       {address && (
         <p className="break-words text-muted-foreground">
-          Point <code>{hostname}</code> to <code>{address}</code> in DNS.
+          {connection.details.registry_dns === "manual" ? (
+            <>
+              Point <code>{hostname}</code> to <code>{address}</code> in DNS.
+            </>
+          ) : (
+            <>
+              Registry DNS target: <code>{hostname}</code> to{" "}
+              <code>{address}</code>. Open Registry operations to check
+              automatic DNS setup.
+            </>
+          )}
         </p>
       )}
       {connection.status === "incomplete" && (

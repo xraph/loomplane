@@ -552,6 +552,15 @@ func (s *Service) Credential(ctx context.Context, orgID, id string) (*Connection
 	if err != nil {
 		return nil, nil, err
 	}
+	if c.Cloud == Kubernetes && c.Details["registry_hostname"] != "" {
+		if registry, ok := s.store.(interface {
+			RegistryAccessAllowed(context.Context, string, string) error
+		}); ok {
+			if accessErr := registry.RegistryAccessAllowed(ctx, orgID, id); accessErr != nil {
+				return nil, nil, accessErr
+			}
+		}
+	}
 	if c.Message == replacementInProgressMessage || (c.Status != StatusReady && !RegistryPullReady(c)) {
 		return nil, nil, fmt.Errorf("%w: %s is %s", ErrNotReady, c.Name, c.Status)
 	}

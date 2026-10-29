@@ -164,6 +164,9 @@ func configFor(rc *rest.Config, contextName, namespace string, caData []byte, se
 			return nil, fmt.Errorf("%w: registry_hostname must be a DNS hostname reachable by cluster nodes", ErrInvalid)
 		}
 		details["registry_hostname"] = host
+		if optionErr := registrySetupOptions(settings, details); optionErr != nil {
+			return nil, optionErr
+		}
 		mode := strings.TrimSpace(settings["registry_setup"])
 		if mode == "" {
 			mode = "automatic"

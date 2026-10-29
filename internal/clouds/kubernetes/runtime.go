@@ -638,6 +638,16 @@ func (r *Runtime) restore(ctx context.Context, c *Client, iid id.ID, labels map[
 			return err
 		}
 	}
+	// A rollback snapshot may predate credential rotation. Restore the current
+	// managed credential while retaining the workload's original secret identity.
+	if old.pull != nil && c.Config.Details["registry_hostname"] != "" && old.pull.Labels[owned.LabelConnection] != "" {
+		auth, err := c.registrySecret(ctx, labels[owned.LabelOrg], old.pull.Labels[owned.LabelConnection], false)
+		if err != nil {
+			return err
+		}
+		old.pull = old.pull.DeepCopy()
+		old.pull.Data[corev1.DockerConfigJsonKey] = auth.Data["config.json"]
+	}
 	ns, name := c.Config.Namespace, WorkloadName(iid)
 	var failures error
 	for _, entry := range []struct {
