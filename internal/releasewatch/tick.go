@@ -26,6 +26,14 @@ const tickBudget = claimAfter * 4 / 5
 // maxSpan is the longest window a release's health is read over.
 const maxSpan = 24 * time.Hour
 
+// automationCantCreate is why a person has to roll a breached release
+// back when Loomplane automation may not plan deployments.
+const automationCantCreate = "Loomplane automation can't create deployments in this project; roll the release back yourself"
+
+// neverStarted is how long after a watch's bound an approved rollback
+// may take to start deploying before the watch gives up on it.
+const neverStarted = time.Hour
+
 // automationDenied is why a rollback waits for a person when Loomplane
 // automation may not approve it.
 const automationDenied = "Loomplane automation can't approve deployments in this organization; approve the rollback plan yourself"
@@ -205,28 +213,33 @@ func (s *Service) createRollback(ctx context.Context, w *Watch, now time.Time) e
 	}
 	var plan *planning.Plan
 	if existing != "" {
+		// The tick that planned it audited the breach.
 		plan, err = s.plans.GetPlan(ctx, w.OrgID, existing)
 	} else {
 		plan, err = s.rollbacks.CreateAutomaticRollback(ctx, w.OrgID, w.DeploymentID, planning.AutomaticRollbackInput{
 			Trigger: planning.TriggerWatch, Reason: w.Reason, WatchID: w.ID,
 		})
+		// Audited as planned, whatever becomes of the save below, so the
+		// breach is recorded once.
+		if err == nil || refused(err) {
+			s.auditBreach(ctx, w, plan, err)
+		}
 	}
 	if err != nil {
 		if !refused(err) {
 			return fmt.Errorf("plan the rollback: %w", err)
 		}
-		s.auditBreach(ctx, w, nil, err)
 		if newer := s.startedSince(ctx, w, err); newer != "" {
 			return s.supersede(ctx, w, now, newer)
 		}
-		return s.settle(ctx, w, now, StatusRollbackBlocked, w.Verdict, "Loomplane couldn't roll the release back: "+err.Error())
+		reason := "Loomplane couldn't roll the release back: " + err.Error()
+		if errors.Is(err, security.ErrForbidden) {
+			reason = automationCantCreate
+		}
+		return s.settle(ctx, w, now, StatusRollbackBlocked, w.Verdict, reason)
 	}
 	w.RollbackPlanID, w.UpdatedAt = plan.ID, now
-	if saveErr := s.store.Save(ctx, w); saveErr != nil {
-		return saveErr
-	}
-	s.auditBreach(ctx, w, plan, nil)
-	return nil
+	return s.store.Save(ctx, w)
 }
 
 // startedSince says why a newer release that started after the tick
@@ -337,6 +350,9 @@ func (s *Service) approve(ctx context.Context, w *Watch, now time.Time, plan *pl
 func (s *Service) followDeployment(ctx context.Context, w *Watch, now time.Time, plan *planning.Plan) error {
 	d, err := s.deployments.ForPlan(ctx, w.OrgID, plan.ID)
 	if errors.Is(err, deployments.ErrNotFound) {
+		if !now.Before(w.BoundAt.Add(neverStarted)) {
+			return s.settle(ctx, w, now, StatusRollbackFailed, w.Verdict, "the rollback deployment never started")
+		}
 		return nil
 	}
 	if err != nil {

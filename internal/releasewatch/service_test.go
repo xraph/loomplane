@@ -353,3 +353,15 @@ func TestForDeployment(t *testing.T) {
 		t.Fatalf("denied %v", err)
 	}
 }
+
+// An environment without a release block arms nothing, and Prepare reads
+// nothing to say so: the plan pinned no release.
+func TestPrepare_readsNothingWithoutAReleaseBlock(t *testing.T) {
+	r := newRig(t, "")
+	delete(r.manifests.revs, "man_1")
+	plan := release(service("api", "render", planning.Update))
+	decision, err := r.svc.Prepare(t.Context(), succeeded(plan), plan)
+	if err != nil || decision.Armed {
+		t.Fatalf("prepare %+v %v", decision, err)
+	}
+}

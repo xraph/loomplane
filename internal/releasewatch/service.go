@@ -110,14 +110,16 @@ func NewService(d Deps) *Service {
 // inside the finish activity, which has a minute in all.
 const probeTimeout = 15 * time.Second
 
-// Prepare decides whether a deployment of plan gets a watch. A rollback,
-// a Cloud sync and a catalog plan never do, and neither does a deployment
-// that failed or whose canary didn't promote. Otherwise it does when the
+// Prepare decides whether a deployment of plan gets a watch. A plan made
+// without a release block never does, and Prepare reads nothing to say
+// so. Nor do a rollback, a Cloud sync, a catalog plan, a deployment that
+// failed or one whose canary didn't promote. Otherwise it does when the
 // environment's release block watches (in the manifest the plan was made
 // from, so what was reviewed) and the release changed a service its
 // canary didn't ramp.
 func (s *Service) Prepare(ctx context.Context, d *deployments.Deployment, plan *planning.Plan) (deployments.WatchDecision, error) {
-	if !watchedRelease(d, plan) {
+	// Planning pins the environment's release block on the plan.
+	if plan == nil || plan.Release == nil || !watchedRelease(d, plan) {
 		return deployments.WatchDecision{}, nil
 	}
 	settings, err := s.settings(ctx, plan)

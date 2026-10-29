@@ -479,3 +479,99 @@ func TestTick_finishesInsideTheClaimLease(t *testing.T) {
 		}
 	}
 }
+
+// An approved rollback whose deployment never shows up settles an hour
+// after the watch's bound.
+func TestTick_aRollbackThatNeverStartsFails(t *testing.T) {
+	r := watching(t)
+	r.candidates(failed)
+	r.rollbacks.status = planning.StatusApproved
+	r.tickAt(t, firstJudged)
+	if w := r.tickAt(t, watchBounded+time.Hour-time.Second); w.Status != StatusRollingBack {
+		t.Fatalf("watch %+v before the hour", w)
+	}
+	w := r.tickAt(t, watchBounded+time.Hour)
+	if w.Status != StatusRollbackFailed || w.Reason != "the rollback deployment never started" || w.SettledAt == nil {
+		t.Fatalf("watch %+v", w)
+	}
+}
+
+// Without deployment:create the automation can't plan the rollback, and
+// the reason says a person has to.
+func TestTick_automationThatCantCreateDeployments(t *testing.T) {
+	r := watching(t)
+	r.candidates(failed)
+	r.rollbacks.createErr = fmt.Errorf("%w (deployment:create)", security.ErrForbidden)
+	w := r.tickAt(t, firstJudged)
+	if w.Status != StatusRollbackBlocked || w.Reason != "Loomplane automation can't create deployments in this project; roll the release back yourself" {
+		t.Fatalf("watch %+v", w)
+	}
+}
+
+// The breach is audited once, when the rollback is planned, even if the
+// save that records the plan is lost; the tick that takes the plan up
+// doesn't audit it again.
+func TestTick_auditsABreachOnce(t *testing.T) {
+	r := watching(t)
+	r.candidates(failed)
+	lost := false
+	r.store.failSave = func(w *Watch) error {
+		if w.RollbackPlanID != "" && !lost {
+			lost = true
+			return errors.New("connection reset")
+		}
+		return nil
+	}
+	r.clock.set(finished.Add(firstJudged))
+	if err := r.svc.Tick(t.Context()); err == nil {
+		t.Fatal("the lost save was swallowed")
+	}
+	if e := r.audit.find("release_watch.breach"); e == nil || e.Attributes["rollback_plan_id"] != "plan_rb1" {
+		t.Fatalf("the breach went unaudited with its save: %v", r.audit.actions())
+	}
+	w := r.tickAt(t, firstJudged+time.Minute)
+	if w.RollbackPlanID != "plan_rb1" || len(r.rollbacks.created) != 1 {
+		t.Fatalf("watch %+v, created %d", w, len(r.rollbacks.created))
+	}
+	r.tickAt(t, firstJudged+2*time.Minute)
+	breaches := 0
+	for _, a := range r.audit.actions() {
+		if a == "release_watch.breach" {
+			breaches++
+		}
+	}
+	if breaches != 1 {
+		t.Fatalf("audited %d breaches: %v", breaches, r.audit.actions())
+	}
+}
+
+// Loomplane approved the rollback, then lost the save that says so: the
+// next tick finds the plan approved and follows it without approving
+// again.
+func TestTick_followsAnApprovalWhoseSaveWasLost(t *testing.T) {
+	r := watching(t)
+	r.candidates(failed)
+	r.rollbacks.status = planning.StatusReady
+	r.tickAt(t, firstJudged)
+	r.store.failSave = func(w *Watch) error {
+		if w.RollbackApprovedAt != nil {
+			return errors.New("connection reset")
+		}
+		return nil
+	}
+	r.clock.set(finished.Add(firstJudged + time.Minute))
+	if err := r.svc.Tick(t.Context()); err == nil {
+		t.Fatal("the lost save was swallowed")
+	}
+	r.store.failSave = nil
+	if w := r.store.only(t); w.RollbackApprovedAt != nil || len(r.rollbacks.approved) != 1 {
+		t.Fatalf("watch %+v, approved %v", w, r.rollbacks.approved)
+	}
+	// The decision reached the plan's workflow.
+	r.plans.setStatus("plan_rb1", planning.StatusApproved)
+	r.deployments.put(&deployments.Deployment{ID: "dep_rb", PlanID: "plan_rb1", Status: deployments.StatusSucceeded})
+	w := r.tickAt(t, firstJudged+2*time.Minute)
+	if w.Status != StatusRolledBack || len(r.rollbacks.approved) != 1 {
+		t.Fatalf("watch %+v, approved %v", w, r.rollbacks.approved)
+	}
+}

@@ -25,6 +25,9 @@ type memWatches struct {
 	mu    sync.Mutex
 	w     map[string]*Watch
 	plans *fakePlans
+	// failSave, when it returns an error, fails that save, as a lost
+	// connection would.
+	failSave func(w *Watch) error
 }
 
 func (m *memWatches) RollbackPlan(_ context.Context, orgID, watchID string) (string, error) {
@@ -114,6 +117,11 @@ func (m *memWatches) Save(_ context.Context, w *Watch) error {
 	have := m.w[w.ID]
 	if have == nil || have.Revision != w.Revision {
 		return ErrConflict
+	}
+	if m.failSave != nil {
+		if err := m.failSave(w); err != nil {
+			return err
+		}
 	}
 	w.Revision++
 	m.w[w.ID] = copyWatch(w)
@@ -541,6 +549,11 @@ func succeeded(plan *planning.Plan) *deployments.Deployment {
 // settled deployment. It records the deployment in the history.
 func (r *rig) arm(t *testing.T, plan *planning.Plan, d *deployments.Deployment) {
 	t.Helper()
+	// Planning pins the environment's release block on every plan made
+	// under one.
+	if resolved, ok := r.manifests.revs["man_1"].ReleaseFor(plan.Environment); ok && plan.Release == nil {
+		plan.Release = &planning.Release{Strategy: resolved.Strategy, Thresholds: releasehealth.DefaultThresholds()}
+	}
 	r.plans.put(plan)
 	r.history.push(planning.ReleaseRecord{
 		DeploymentID: d.ID, PlanID: plan.ID, Kind: plan.Kind, Status: d.Status, StartedAt: d.StartedAt, FinishedAt: *d.FinishedAt,
