@@ -390,7 +390,7 @@ func (r *Runner) promote(ctx context.Context, d *Deployment, plan *planning.Plan
 	if step.StartedAt != nil {
 		r.telemetry.StepFinished(a.Provider, string(a.Op), StepSucceeded, finished.Sub(*step.StartedAt))
 	}
-	step.Status, step.URL, step.Image, step.FinishedAt = StepSucceeded, out.URL, out.Image, &finished
+	step.Status, step.URL, step.Image, step.Revision, step.FinishedAt = StepSucceeded, out.URL, out.Image, out.Revision, &finished
 	step.Message = doneMessage(step)
 	return r.store.UpdateStep(ctx, d.OrgID, d.ID, *step)
 }
