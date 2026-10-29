@@ -145,3 +145,23 @@ func TestCapacityEventsNeedCloudManager(t *testing.T) {
 		t.Fatalf("cloud_account:read holder received a capacity event: %+v %v", got, err)
 	}
 }
+
+// A release watch event reaches anyone who may read the project's
+// deployments.
+func TestRealtimeReleaseWatchPermission(t *testing.T) {
+	for _, event := range []string{"release_watch.updated", "release_watch.deleted"} {
+		if got := permission(event); got != security.DeploymentRead {
+			t.Fatalf("%s needs %s", event, got)
+		}
+	}
+	input := []store.Event{{ProjectID: "proj_a", Type: "release_watch.updated", Data: json.RawMessage(`{"deployment_id":"dep_a"}`)}}
+	p := security.Principal{OrgID: "org_a", UserID: "usr_a"}
+	e := &Extension{authz: permissionFixture{denied: security.DeploymentRead}}
+	if got, err := e.filter(t.Context(), p, Subscription{ProjectIDs: []string{"proj_a"}}, input); err != nil || len(got) != 0 {
+		t.Fatalf("without deployment:read: %+v %v", got, err)
+	}
+	e.authz = permissionFixture{}
+	if got, err := e.filter(t.Context(), p, Subscription{ProjectIDs: []string{"proj_a"}}, input); err != nil || len(got) != 1 {
+		t.Fatalf("with deployment:read: %+v %v", got, err)
+	}
+}

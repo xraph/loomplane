@@ -74,6 +74,7 @@ import (
 	"github.com/xraph/loomplane/internal/realtime"
 	"github.com/xraph/loomplane/internal/recipes"
 	"github.com/xraph/loomplane/internal/recovery"
+	"github.com/xraph/loomplane/internal/releasewatch"
 	"github.com/xraph/loomplane/internal/repositories"
 	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/internal/telemetry"
@@ -415,10 +416,11 @@ func (e *Extension) Register(fapp forge.App) error {
 	// A promotion analyzes a commit its source environment runs that
 	// nothing analyzed, on the same queue as any analysis.
 	commits := &discovery.CommitAnalyzer{Store: discovery.NewPgStore(pg), Enqueue: orchestration.NewEnqueuer(e.engineOf()), Audit: auditor}
+	history := &deployments.History{Store: deployStore, Plans: planStore, Providers: catalog}
 	e.plans = planning.NewService(planning.Deps{
 		Capacity: routeService, CapacityTemplates: routeService, CapacityPrincipal: principal,
 		Store: planStore, Projects: prj, Analyses: discovery.NewPgStore(pg), Commits: commits, Manifests: e.manifests,
-		History:       &deployments.History{Store: deployStore, Plans: planStore, Providers: catalog},
+		History:       history,
 		CloudProfiles: e.cloudStore, CloudSyncWorkflow: e.deployments,
 		Providers: catalog, Connections: clouds, Authz: authz, Workflow: e.deployments, Audit: auditor,
 		Window: e.cfg.Planning.ApprovalWindow, Telemetry: metrics, DatabaseGatewayTrust: databaseGatewayTrust(c),
@@ -465,6 +467,14 @@ func (e *Extension) Register(fapp forge.App) error {
 		return nil
 	}
 	gatewayStore := dbgateway.NewStore(pg)
+	// A canary and the post-deploy watch read health the same way.
+	health := &deployments.HealthReader{Bindings: planStore, Credentials: clouds, Meters: revisionMeters(executors)}
+	// The deploy-finish activity arms a watch for each release that
+	// succeeds; the release-watch job judges it and rolls back a breach.
+	watches := releasewatch.NewService(releasewatch.Deps{
+		Store: releasewatch.NewPgStore(pg), Rollbacks: e.plans, Plans: planStore, Deployments: deployStore, History: history,
+		Health: health, Manifests: e.manifests, Projects: prj, Routes: cloudinfra.NewPgStore(pg), Authz: authz, Audit: auditor,
+	})
 	runner := deployments.NewRunner(deployments.RunnerDeps{
 		Authz: authz, BackupPolicies: e.backups,
 		Logs: logStore, Routes: routeService, Capacity: e.plans,
@@ -482,7 +492,8 @@ func (e *Extension) Register(fapp forge.App) error {
 		Telemetry:            metrics,
 		CatalogHooks:         catalogHooks,
 		Observers:            observers,
-		Health:               &deployments.HealthReader{Bindings: planStore, Credentials: clouds, Meters: revisionMeters(executors)},
+		Health:               health,
+		Watches:              watches,
 	})
 	// Deleting a project or environment takes its database gateways' records
 	// with it, and this deletes their keys from Vault and warns about a
@@ -517,6 +528,7 @@ func (e *Extension) Register(fapp forge.App) error {
 		Warn: func(msg string, err error) { log.Warn(msg, forge.F("error", err.Error())) },
 	}))
 	engine.Register(e.engineOf(), orchestration.ConnectionRefreshJob(clouds))
+	e.registerReleaseWatch(watches)
 	if err := e.backupRoutes(fapp.Router(), guard); err != nil {
 		return err
 	}
@@ -547,6 +559,12 @@ func (e *Extension) Register(fapp forge.App) error {
 	}
 	if err := forge.ProvideValue(c, e.plans); err != nil {
 		return fmt.Errorf("provide the planning service: %w", err)
+	}
+	if err := forge.ProvideValue(c, watches); err != nil {
+		return fmt.Errorf("provide the release watches: %w", err)
+	}
+	if err := watchRoutes(fapp.Router(), guard, watches); err != nil {
+		return err
 	}
 	if err := forge.ProvideValue(c, targets); err != nil {
 		return fmt.Errorf("provide the GPU targets: %w", err)
@@ -602,6 +620,9 @@ func (e *Extension) Start(ctx context.Context) error {
 	}
 	if err := e.scheduleBackupReconciliation(ctx); err != nil {
 		return err
+	}
+	if err := e.scheduleReleaseWatch(ctx); err != nil {
+		return fmt.Errorf("schedule the release watch: %w", err)
 	}
 	if err := e.scheduleFabriqRebuilds(ctx); err != nil {
 		return err
@@ -674,12 +695,12 @@ func fail(err error) error {
 	switch {
 	case errors.Is(err, cloudprofiles.ErrNotFound), errors.Is(err, recovery.ErrNotFound), errors.Is(err, catalogconnect.ErrNotFound), errors.Is(err, planning.ErrNotFound), errors.Is(err, projects.ErrNotFound), errors.Is(err, connections.ErrNotFound),
 		errors.Is(err, deployments.ErrNotFound), errors.Is(err, deployments.ErrComponentNotFound), errors.Is(err, catalogproxy.ErrNotFound),
-		errors.Is(err, projects.ErrEnvironmentNotFound), errors.Is(err, manifests.ErrNotFound):
+		errors.Is(err, projects.ErrEnvironmentNotFound), errors.Is(err, manifests.ErrNotFound), errors.Is(err, releasewatch.ErrNotFound):
 		return forge.NewHTTPError(http.StatusNotFound, err.Error())
 	case errors.Is(err, deployments.ErrCleanupConflict), errors.Is(err, cloudprofiles.ErrConflict), errors.Is(err, cloudprofiles.ErrExists), errors.Is(err, cloudprofiles.ErrInUse), errors.Is(err, cloudprofiles.ErrBusy), errors.Is(err, recovery.ErrConflict), errors.Is(err, planning.ErrConflict), errors.Is(err, manifests.ErrConflict), errors.Is(err, deployments.ErrNotFailed), errors.Is(err, deployments.ErrCapacityWaitConflict),
 		errors.Is(err, planning.ErrStale), errors.Is(err, planning.ErrSuperseded), errors.Is(err, planning.ErrNotReady),
 		errors.Is(err, catalogconnect.ErrInUse), errors.Is(err, planning.ErrNotRunning), errors.Is(err, planning.ErrNoPreviousRelease),
-		errors.Is(err, planning.ErrReleaseRunning), errors.Is(err, planning.ErrCanaryReverted):
+		errors.Is(err, planning.ErrReleaseRunning), errors.Is(err, planning.ErrCanaryReverted), errors.Is(err, releasewatch.ErrConflict):
 		return forge.NewHTTPError(http.StatusConflict, err.Error())
 	case errors.Is(err, planning.ErrNoManifest), errors.Is(err, planning.ErrNoAnalysis), errors.Is(err, discovery.ErrNoGraph),
 		errors.Is(err, planning.ErrNoSources), errors.Is(err, planning.ErrNeverDeployed):

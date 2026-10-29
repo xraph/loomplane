@@ -19,6 +19,7 @@ import (
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/projects"
 	store "github.com/xraph/loomplane/internal/realtime"
+	"github.com/xraph/loomplane/internal/releasewatch"
 	"github.com/xraph/loomplane/internal/security"
 )
 
@@ -46,6 +47,7 @@ func streamBindings() forge.RouteOption {
 		forge.Emits[connections.Connection]("connection.updated").As(forge.StreamUpsert), forge.Emits[connections.Connection]("connection.deleted"),
 		forge.Emits[deployments.Deployment]("deployment.updated").As(forge.StreamUpsert).Invalidates("Deployment[]", "Instance[]"), forge.Emits[deployments.Deployment]("deployment.deleted"),
 		forge.Emits[deployments.CanaryVerdict]("canary_verdict.updated").As(forge.StreamUpsert).Invalidates("CanaryReport"), forge.Emits[deployments.CanaryVerdict]("canary_verdict.deleted").Invalidates("CanaryReport"),
+		forge.Emits[releasewatch.Watch]("release_watch.updated").As(forge.StreamUpsert), forge.Emits[releasewatch.Watch]("release_watch.deleted"),
 		forge.Emits[cloudprofiles.Profile]("cloud.updated").As(forge.StreamUpsert), forge.Emits[cloudprofiles.Profile]("cloud.deleted"),
 		forge.Emits[cloudprofiles.Target]("cloud_target.updated").As(forge.StreamUpsert), forge.Emits[cloudprofiles.Target]("cloud_target.deleted"),
 		forge.Emits[cloudprofiles.EnvironmentCloudEvent]("environment_cloud.updated").Invalidates("EnvironmentCloud"),
@@ -73,7 +75,8 @@ func (e *Extension) routes(router forge.Router) error {
 		"source.updated": discovery.Source{}, "source.deleted": discovery.Source{}, "analysis.updated": discovery.Analysis{}, "analysis.deleted": discovery.Analysis{},
 		"manifest.updated": manifests.Revision{}, "manifest.deleted": manifests.Revision{}, "plan.updated": planning.Plan{}, "plan.deleted": planning.Plan{},
 		"binding.updated": planning.Binding{}, "binding.deleted": planning.Binding{}, "connection.updated": connections.Connection{}, "connection.deleted": connections.Connection{},
-		"deployment.updated": deployments.Deployment{}, "deployment.deleted": deployments.Deployment{}, "canary_verdict.updated": deployments.CanaryVerdict{}, "canary_verdict.deleted": deployments.CanaryVerdict{}, "build.log": store.Log{}, "build.collection": store.Collection{},
+		"deployment.updated": deployments.Deployment{}, "deployment.deleted": deployments.Deployment{}, "canary_verdict.updated": deployments.CanaryVerdict{}, "canary_verdict.deleted": deployments.CanaryVerdict{},
+		"release_watch.updated": releasewatch.Watch{}, "release_watch.deleted": releasewatch.Watch{}, "build.log": store.Log{}, "build.collection": store.Collection{},
 		"cloud.updated": cloudprofiles.Profile{}, "cloud.deleted": cloudprofiles.Profile{}, "cloud_target.updated": cloudprofiles.Target{}, "cloud_target.deleted": cloudprofiles.Target{},
 		"environment_cloud.updated": cloudprofiles.EnvironmentCloudEvent{}, "cloud_sync.updated": cloudprofiles.CloudSyncEvent{},
 		"cloud_capacity.updated": cloudinfra.CapacityChange{}, "realtime.snapshot": Snapshot{}, forge.EventResumed: forge.ResumedPayload{}, forge.EventGap: forge.GapPayload{}, "realtime.status": Status{},

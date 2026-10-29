@@ -415,3 +415,28 @@ func TestCanaryOnCloudRunRefusesFlippingPublic(t *testing.T) {
 		}
 	}
 }
+
+func TestWouldRamp(t *testing.T) {
+	web := &ServiceConfig{Provider: "cloud-run", Port: 8080, Public: true}
+	worker := &ServiceConfig{Provider: "cloud-run", Workload: provider.Worker}
+	for _, tt := range []struct {
+		name     string
+		provider string
+		cfg      *ServiceConfig
+		op       Op
+		routes   []cloudinfra.Route
+		want     bool
+	}{
+		{"an update on Cloud Run", "cloud-run", web, Update, nil, true},
+		{"a new service", "cloud-run", web, Create, nil, false},
+		{"a move", "cloud-run", web, Replace, nil, false},
+		{"Render", "render", &ServiceConfig{Provider: "render", Port: 8080}, Update, nil, false},
+		{"a worker", "cloud-run", worker, Update, nil, false},
+		{"a routed service", "cloud-run", web, Update, []cloudinfra.Route{{ID: "route_1"}}, false},
+		{"no configuration", "cloud-run", nil, Update, nil, false},
+	} {
+		if got := WouldRamp(tt.provider, tt.cfg, tt.op, tt.routes); got != tt.want {
+			t.Errorf("%s: WouldRamp = %v, want %v", tt.name, got, tt.want)
+		}
+	}
+}

@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/releasehealth"
 	"github.com/xraph/loomplane/pkg/manifest"
@@ -135,6 +136,15 @@ func planRelease(in Input, r *Result) {
 			}
 		}
 	}
+}
+
+// WouldRamp reports whether a canary release would ramp an op of a service
+// on target configured as cfg, with routes, by the same rules a plan
+// applies. It doesn't check what a plan alone knows: the connection's
+// canary permissions, or a change to an app-wide setting.
+func WouldRamp(target string, cfg *ServiceConfig, op Op, routes []cloudinfra.Route) bool {
+	a := Action{Op: op, Subject: ServiceSubject, Provider: target, Service: cfg, Routes: routes}
+	return noCanary(Input{}, &Result{}, a) == ""
 }
 
 // noCanary says why a service action can't ramp as a canary, or "" when
