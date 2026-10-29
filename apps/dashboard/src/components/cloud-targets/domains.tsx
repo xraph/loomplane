@@ -22,6 +22,7 @@ import type {
 } from "@/client/forge/loomplane/types"
 import { useMutation, useQuery } from "@/client/hooks"
 import { messageOf, statusOf } from "@/client/errors"
+import { operationRecords } from "@/lib/routable-ports"
 import { Link } from "@/lib/router"
 import { QueryError } from "@/components/query-error"
 import { Button } from "@/components/ui/button"
@@ -930,12 +931,14 @@ export function RouteOperationProgress({
         {operation.kind}: {operation.status} · attempt {operation.attempt}
       </p>
       <p className="break-words">{operation.message}</p>
-      {operation.desiredRecord?.name && (
-        <p className="wrap-anywhere">
-          DNS: {operation.desiredRecord.type} {operation.desiredRecord.name} ={" "}
-          {operation.desiredRecord.value} · TTL {operation.desiredRecord.ttl}s
-        </p>
-      )}
+      {operationRecords(operation)
+        .filter((record) => record.name)
+        .map((record) => (
+          <p key={`${record.type}-${record.value}`} className="wrap-anywhere">
+            DNS: {record.type} {record.name} = {record.value} · TTL {record.ttl}
+            s
+          </p>
+        ))}
       {operation.route?.input.externalTtlSeconds !== undefined && (
         <p>
           Maximum previously served TTL:{" "}
