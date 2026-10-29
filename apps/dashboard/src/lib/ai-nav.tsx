@@ -1,6 +1,6 @@
 // The sidebar's AI group. The pages that make it up add themselves here as
-// they ship.
-import { AISettingsIcon, ModelsIcon } from "@/components/icons"
+// they ship. AI settings live in the main Settings group.
+import { ModelsIcon } from "@/components/icons"
 import type { NavItem } from "@/components/sidebar/nav-main"
 import { Link } from "@/lib/router"
 
@@ -19,13 +19,5 @@ export function aiNavItems(ctx: AINavContext): NavItem[] {
       link: <Link to="/ai/models" />,
       isActive: ctx.path === "/ai/models" || ctx.path.startsWith("/ai/models/"),
     })
-  return [
-    ...items,
-    {
-      title: "Settings",
-      icon: <AISettingsIcon />,
-      link: <Link to="/ai/settings" />,
-      isActive: ctx.path.startsWith("/ai/settings"),
-    },
-  ]
+  return items
 }

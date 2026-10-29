@@ -71,6 +71,7 @@ const settingsPaths = [
   "/cloud-sign-in",
   "/api-keys",
   "/notifications",
+  "/ai/settings",
 ]
 
 export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
@@ -207,6 +208,17 @@ export function AppSidebar(props: ComponentProps<typeof Sidebar>) {
           link: <Link to="/cloud-sign-in" />,
           isActive: path.startsWith("/cloud-sign-in"),
         },
+        // The workspace's AI settings sit with its other settings, so the AI
+        // group below doesn't carry a second "Settings".
+        ...(features.ai && can("ai:read")
+          ? [
+              {
+                title: "AI",
+                link: <Link to="/ai/settings" />,
+                isActive: path.startsWith("/ai/settings"),
+              },
+            ]
+          : []),
         {
           title: "API keys",
           link: <Link to="/api-keys" />,

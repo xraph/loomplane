@@ -120,20 +120,24 @@ it("shows no AI group without ai:read", () => {
   expect(document.querySelector('a[href^="/ai/"]')).toBeNull()
 })
 
-it("shows Settings under AI for members", () => {
+it("keeps AI settings in the workspace's Settings for members", async () => {
   // A developer reads AI and manages none of it.
   access.denied = ["ai:manage"]
   sidebar(true)
-  const label = screen.getByText("AI")
-  const group = label.closest('[data-sidebar="group"]') as HTMLElement
-  expect(group).not.toBeNull()
-  const links = Array.from(group.querySelectorAll("a")).map((a) => [
-    a.textContent?.trim(),
-    a.getAttribute("href"),
-  ])
-  expect(links).toContainEqual(["Settings", "/ai/settings"])
-  // The workspace's own Settings stay in the main group.
-  expect(screen.getAllByText("Settings")).toHaveLength(2)
+  // One Settings in the sidebar, so the AI group can't be mistaken for it.
+  expect(screen.getAllByText("Settings")).toHaveLength(1)
+  await userEvent.click(screen.getByText("Settings"))
+  expect(screen.getByRole("link", { name: "AI" })).toHaveAttribute(
+    "href",
+    "/ai/settings"
+  )
+})
+
+it("leaves AI out of Settings when AI is off", async () => {
+  sidebar(false)
+  await userEvent.click(screen.getByText("Settings"))
+  expect(screen.getByRole("link", { name: "API keys" })).toBeInTheDocument()
+  expect(screen.queryByRole("link", { name: "AI" })).toBeNull()
 })
 
 function aiLinks() {
@@ -149,9 +153,5 @@ function aiLinks() {
 it("adds Models to the AI group", () => {
   access.denied = ["ai:manage"]
   sidebar(true)
-  // Models first, then the AI settings.
-  expect(aiLinks()).toEqual([
-    ["Models", "/ai/models"],
-    ["Settings", "/ai/settings"],
-  ])
+  expect(aiLinks()).toEqual([["Models", "/ai/models"]])
 })
