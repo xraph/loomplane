@@ -70,12 +70,14 @@ func routeDNSRecord(zone *Zone, hostname, address, owner string) (provider.DNSRe
 	}
 	token := ""
 	if zone.RecordOwnership {
-		token = "loomplane:route:" + owner
+		token = routeRecordOwner(owner, 0)
 	}
 	return provider.DNSRecord{ZoneID: zone.ProviderZone.ID, Name: relative, Type: kind, Value: value, TTL: 60, Owner: token}, nil
 }
 
-func (s *Service) preflightRouteDNS(ctx context.Context, zone *Zone, desired provider.DNSRecord) error {
+// preflightRouteDNS refuses records whose names are taken, reading the zone
+// once for all of them.
+func (s *Service) preflightRouteDNS(ctx context.Context, zone *Zone, desired ...provider.DNSRecord) error {
 	if zone.Mode == "external" {
 		return nil
 	}
@@ -87,10 +89,12 @@ func (s *Service) preflightRouteDNS(ctx context.Context, zone *Zone, desired pro
 	if err != nil {
 		return err
 	}
-	for _, record := range records {
-		// A CNAME can't share its name with any other record.
-		if record.Name == desired.Name && (record.Type == "A" || record.Type == "AAAA" || record.Type == "CNAME" || desired.Type == "CNAME") {
-			return provider.ErrInfrastructureDrift
+	for _, want := range desired {
+		for _, record := range records {
+			// A CNAME can't share its name with any other record.
+			if record.Name == want.Name && (record.Type == "A" || record.Type == "AAAA" || record.Type == "CNAME" || want.Type == "CNAME") {
+				return provider.ErrInfrastructureDrift
+			}
 		}
 	}
 	return nil

@@ -479,6 +479,10 @@ func TestRouteLockKey(t *testing.T) {
 	if got := routeLockKey(Route{OrgID: "org", Binding: kubernetesBinding("203.0.113.10")}); got != "ingress/org/kubernetes:conn_k8s" {
 		t.Fatal(got)
 	}
+	// Routes on one app serialize: each change rewrites the app's spec.
+	if got := routeLockKey(Route{OrgID: "org", Binding: platformBinding()}); got != "ingress/org/platform:conn_do/app-1" {
+		t.Fatal(got)
+	}
 }
 
 // untouchedRouteStore fails any call a skipped route must not make.

@@ -272,6 +272,34 @@ func scanKubernetesRouteBinding(row pgx.Row) (RouteBinding, error) {
 	return out, nil
 }
 
+// A platform binding is a service its provider's platform runs and routes
+// itself, so it rests on its app and the ready connection it was deployed
+// with, Cloud or not. A resource, such as a database, never takes a route.
+var platformRouteBindingQuery = `SELECT b.id,b.external_id,c.id,c.generation,b.provider,coalesce(b.config->>'public',''),coalesce(b.config->>'port','')
+ FROM loomplane_bindings b
+ JOIN loomplane_environments e ON e.org_id=b.org_id AND e.project_id=b.project_id AND e.id=b.environment_id
+ JOIN loomplane_cloud_connections c ON c.org_id=b.org_id AND c.id=b.connection_id AND c.cloud=b.provider AND c.status='ready'
+ WHERE b.org_id=$1 AND b.project_id=$2 AND b.environment_id=$3 AND b.name=$4 AND b.subject='service' AND b.provider=ANY($5)`
+
+// scanPlatformRouteBinding refuses a service its platform won't route to
+// on port, so preview and apply both refuse it.
+func scanPlatformRouteBinding(row pgx.Row, port int) (RouteBinding, error) {
+	out := RouteBinding{Backend: RouteBackendPlatform}
+	var public, servicePort string
+	err := row.Scan(&out.BindingID, &out.ExternalID, &out.ConnectionID, &out.ConnectionGeneration, &out.Provider, &public, &servicePort)
+	if err != nil {
+		return out, storeError(err)
+	}
+	if out.ExternalID == "" {
+		return out, fmt.Errorf("%w: the service has no app on its platform yet; deploy it first", ErrConflict)
+	}
+	return out, checkPlatformService(public, servicePort, port)
+}
+
+func platformRouteBindingArgs(org, project string, in RouteInput) []any {
+	return []any{org, project, in.EnvironmentID, in.Service, platformProviders}
+}
+
 // routeBindingBackend is the provider of the binding a route names. A service
 // wins over a catalog component with the same name, as in the binding queries.
 func (s *PgStore) routeBindingBackend(ctx context.Context, org, project string, in RouteInput) (string, error) {
@@ -288,10 +316,19 @@ func (s *PgStore) ResolveRouteBinding(ctx context.Context, org, project string, 
 	if backend == RouteBackendKubernetes {
 		return scanKubernetesRouteBinding(s.db.QueryRow(ctx, kubernetesRouteBindingQuery, org, project, in.EnvironmentID, in.Service, in.CloudID, in.Port))
 	}
+	if slices.Contains(platformProviders, backend) {
+		return scanPlatformRouteBinding(s.db.QueryRow(ctx, platformRouteBindingQuery, platformRouteBindingArgs(org, project, in)...), in.Port)
+	}
 	if in.CloudID == "" {
 		return RouteBinding{}, fmt.Errorf("%w: %s", ErrInvalid, noCloudPlacement)
 	}
 	return scanRouteBinding(s.db.QueryRow(ctx, routeBindingQuery, org, project, in.EnvironmentID, in.Service, in.CloudID, in.Port))
+}
+
+func (s *PgStore) RouteBindingCommit(ctx context.Context, org, bindingID string) (string, error) {
+	var commit string
+	err := s.db.QueryRow(ctx, `SELECT commit_sha FROM loomplane_bindings WHERE org_id=$1 AND id=$2`, org, bindingID).Scan(&commit)
+	return commit, storeError(err)
 }
 
 // A service and a catalog component may share a name. The service wins here
@@ -386,9 +423,12 @@ func (s *PgStore) AcceptRoute(ctx context.Context, op *RouteOperation) error {
 		var current RouteBinding
 		var lookupErr error
 		// The organization lock already orders this with grant changes.
-		if route.Binding.BackendName() == RouteBackendKubernetes {
+		switch route.Binding.BackendName() {
+		case RouteBackendKubernetes:
 			current, lookupErr = scanKubernetesRouteBinding(tx.QueryRow(ctx, kubernetesRouteBindingQuery+" FOR SHARE OF b,c,i", args...))
-		} else {
+		case RouteBackendPlatform:
+			current, lookupErr = scanPlatformRouteBinding(tx.QueryRow(ctx, platformRouteBindingQuery+" FOR SHARE OF b,c", platformRouteBindingArgs(route.OrgID, route.ProjectID, route.Input)...), route.Input.Port)
+		default:
 			current, lookupErr = scanRouteBinding(tx.QueryRow(ctx, routeBindingQuery+" FOR SHARE OF b,g,t,s,c,i", args...))
 		}
 		if lookupErr != nil {

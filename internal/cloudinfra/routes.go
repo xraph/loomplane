@@ -60,13 +60,21 @@ type RouteBinding struct {
 	Namespace    string `json:"namespace,omitempty"`
 	ServiceName  string `json:"service_name,omitempty"`
 	IngressClass string `json:"ingress_class,omitempty"`
+	// A platform binding names its provider and the app it runs as
+	// (ExternalID), on the connection it was deployed with.
+	Provider   string `json:"provider,omitempty"`
+	ExternalID string `json:"external_id,omitempty"`
 }
 
 // routeLockKey serializes the routes that share one ingress: a server's
-// Caddy config, or a Kubernetes connection's namespace.
+// Caddy config, a Kubernetes connection's namespace, or a platform app's
+// spec.
 func routeLockKey(route Route) string {
-	if route.Binding.BackendName() == RouteBackendKubernetes {
+	switch route.Binding.BackendName() {
+	case RouteBackendKubernetes:
 		return "ingress/" + route.OrgID + "/kubernetes:" + route.Binding.ConnectionID
+	case RouteBackendPlatform:
+		return "ingress/" + route.OrgID + "/platform:" + route.Binding.ConnectionID + "/" + route.Binding.ExternalID
 	}
 	return "ingress/" + route.OrgID + "/" + route.Binding.ServerID
 }
@@ -83,8 +91,13 @@ type Route struct {
 	Verification RouteVerification   `json:"verification"`
 	Revision     int64               `json:"revision"`
 	UpdatedAt    time.Time           `json:"updated_at"`
+	// Receipts are a platform route's records. Other routes keep Receipt.
+	Receipts []provider.DNSRecord `json:"receipts,omitempty"`
 }
 
+// RouteOperation keeps a platform route's records in DesiredRecords and
+// Receipts, since one name can take several. Other routes keep the single
+// DesiredRecord and Receipt.
 type RouteOperation struct {
 	CreatedAt          time.Time               `json:"created_at"`
 	Source             *Route                  `json:"source,omitempty"`
@@ -106,6 +119,9 @@ type RouteOperation struct {
 	DesiredRecord      provider.DNSRecord      `json:"desired_record"`
 	PreviousReceipt    *provider.DNSRecord     `json:"previous_receipt,omitempty"`
 	Receipt            *provider.DNSRecord     `json:"receipt,omitempty"`
+	DesiredRecords     []provider.DNSRecord    `json:"desired_records,omitempty"`
+	Receipts           []provider.DNSRecord    `json:"receipts,omitempty"`
+	Cost               *RouteCost              `json:"cost,omitempty"`
 	Notices            []string                `json:"notices,omitempty"`
 	DesiredConfig      *server.IngressConfig   `json:"-"`
 	PreviousConfig     *server.IngressSnapshot `json:"-"`
@@ -149,6 +165,8 @@ type DomainStore interface {
 	// checked no later than checkedBefore, the longest unchecked first.
 	ZoneProofsDue(ctx context.Context, now, checkedBefore, recheckBefore time.Time, limit int) ([]*Zone, error)
 	ResolveRouteBinding(context.Context, string, string, RouteInput) (RouteBinding, error)
+	// RouteBindingCommit is the commit the binding was last deployed from.
+	RouteBindingCommit(ctx context.Context, org, bindingID string) (string, error)
 	// RouteBindingCloud is the binding's Cloud placement, "" when it has none.
 	RouteBindingCloud(ctx context.Context, org, project, environment, service string) (string, error)
 	PreviewRoute(context.Context, *RouteOperation) error
@@ -234,7 +252,13 @@ func (s *Service) PreviewRoute(ctx context.Context, p security.Principal, projec
 	if err != nil {
 		return nil, err
 	}
-	if in.CloudID == "" && binding.BackendName() != RouteBackendKubernetes {
+	switch backend := binding.BackendName(); {
+	case backend == RouteBackendPlatform:
+		// The platform routes the app itself, with or without a Cloud.
+		if checkErr := checkPlatformRoute(in); checkErr != nil {
+			return nil, checkErr
+		}
+	case in.CloudID == "" && backend != RouteBackendKubernetes:
 		return nil, fmt.Errorf("%w: %s", ErrInvalid, noCloudPlacement)
 	}
 	id, err := randomID("route")
@@ -248,11 +272,23 @@ func (s *Service) PreviewRoute(ctx context.Context, p security.Principal, projec
 			return nil, err
 		}
 	}
-	record, err := routeDNSRecord(zone, in.Hostname, binding.Address, id)
+	// A platform route writes the records its platform asks for, in
+	// DesiredRecords. Other routes write one record to their address.
+	var record provider.DNSRecord
+	var platformRecords []provider.DNSRecord
+	if binding.BackendName() == RouteBackendPlatform {
+		platformRecords, err = s.platformDNSRecords(ctx, zone, route)
+	} else {
+		record, err = routeDNSRecord(zone, in.Hostname, binding.Address, id)
+	}
 	if err != nil {
 		return nil, err
 	}
-	if checkErr := s.preflightRouteDNS(ctx, zone, record); checkErr != nil {
+	desired := platformRecords
+	if desired == nil {
+		desired = []provider.DNSRecord{record}
+	}
+	if checkErr := s.preflightRouteDNS(ctx, zone, desired...); checkErr != nil {
 		return nil, checkErr
 	}
 	opID, err := randomID("routeop")
@@ -265,7 +301,7 @@ func (s *Service) PreviewRoute(ctx context.Context, p security.Principal, projec
 	}
 	route.OperationID = opID
 	op := &RouteOperation{ID: opID, Kind: "apply", Status: "preview", Review: review, ExpiresAt: s.now().UTC().Add(15 * time.Minute), Revision: 1, Principal: p,
-		Route: route, DesiredRecord: record, Notices: notices}
+		Route: route, DesiredRecord: record, DesiredRecords: platformRecords, Notices: notices}
 	if checkErr := st.PreviewRoute(ctx, op); checkErr != nil {
 		return nil, checkErr
 	}
@@ -277,9 +313,12 @@ const errUnpublishedProxyImage = wildcardRefusalError("Wildcard routes on server
 // wildcardNotices says what a wildcard route on a server costs: a proxy
 // still on the stock image restarts on the DNS-capable one.
 func (s *Service) wildcardNotices(ctx context.Context, st DomainStore, route Route) ([]string, error) {
-	if route.Binding.BackendName() == RouteBackendKubernetes {
+	switch route.Binding.BackendName() {
+	case RouteBackendKubernetes:
 		// The cluster's DNS-01 Issuer is added on apply; nothing restarts.
 		return nil, nil
+	case RouteBackendPlatform:
+		return nil, fmt.Errorf("%w: %s", ErrInvalid, platformWildcards)
 	}
 	if !s.ingressImagePinned() {
 		return nil, errUnpublishedProxyImage

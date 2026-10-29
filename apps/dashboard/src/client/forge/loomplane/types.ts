@@ -815,6 +815,7 @@ export interface CloudinfraRoute {
   orgId: string;
   projectId: string;
   receipt?: DNSRecord;
+  receipts?: DNSRecord[];
   revision: number;
   status: string;
   updatedAt: string;
@@ -3730,14 +3731,22 @@ export interface RouteBinding {
   connectionGeneration: number;
   connectionId: string;
   containerId: string;
+  externalId?: string;
   ingressClass?: string;
   instanceId: string;
   namespace?: string;
+  provider?: string;
   releaseId: string;
   runtimeId: string;
   serverId: string;
   serviceName?: string;
   targetId: string;
+}
+
+export interface RouteCost {
+  estimate: boolean;
+  monthlyUsd: string;
+  source: string;
 }
 
 export interface RouteInput {
@@ -3764,8 +3773,10 @@ export interface RouteInputBody {
 
 export interface RouteOperation {
   attempt: number;
+  cost?: RouteCost;
   createdAt: string;
   desiredRecord: DNSRecord;
+  desiredRecords?: DNSRecord[];
   dnsAttempted: boolean;
   expiresAt: string;
   generation: number;
@@ -3777,6 +3788,7 @@ export interface RouteOperation {
   notices?: string[];
   previousReceipt?: DNSRecord;
   receipt?: DNSRecord;
+  receipts?: DNSRecord[];
   review: string;
   revision: number;
   route: CloudinfraRoute;

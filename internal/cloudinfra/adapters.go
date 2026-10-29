@@ -18,12 +18,13 @@ type Adapters struct {
 	servers      map[string]provider.ServerAdapter
 	dns          map[string]provider.DNSAdapter
 	registrars   map[string]provider.DomainRegistrar
+	platforms    map[string]PlatformDomains
 	capabilities map[string][]provider.InfrastructureCapability
 }
 
 // NewAdapters creates an empty registry for configured or fixture adapters.
 func NewAdapters() *Adapters {
-	return &Adapters{clusters: map[string]provider.ClusterReader{}, servers: map[string]provider.ServerAdapter{}, dns: map[string]provider.DNSAdapter{}, registrars: map[string]provider.DomainRegistrar{}, capabilities: map[string][]provider.InfrastructureCapability{}}
+	return &Adapters{clusters: map[string]provider.ClusterReader{}, servers: map[string]provider.ServerAdapter{}, dns: map[string]provider.DNSAdapter{}, registrars: map[string]provider.DomainRegistrar{}, platforms: map[string]PlatformDomains{}, capabilities: map[string][]provider.InfrastructureCapability{}}
 }
 
 // Endpoints are the provider API addresses the application is configured
@@ -111,6 +112,15 @@ func (r *Adapters) RegisterRegistrar(name string, adapter provider.DomainRegistr
 	return nil
 }
 
+// RegisterPlatform adds hostnames on a provider's app platform.
+func (r *Adapters) RegisterPlatform(name string, adapter PlatformDomains) error {
+	if name == "" || adapter == nil || r.platforms[name] != nil {
+		return fmt.Errorf("%w: duplicate or empty platform adapter", provider.ErrInfrastructureInvalid)
+	}
+	r.platforms[name] = adapter
+	return nil
+}
+
 // Require checks operation support during preview and again during execution.
 // Installed code does not establish the connection's read or write permission.
 func (r *Adapters) Require(name string, operation provider.InfrastructureCapability) error {
@@ -166,6 +176,14 @@ func (r *Adapters) Registrar(name string) (provider.DomainRegistrar, error) {
 		return adapter, nil
 	}
 	return nil, &provider.UnsupportedCapabilityError{Provider: name, Capability: provider.DomainRegistration}
+}
+
+// Platform returns the hostnames API of a provider's app platform.
+func (r *Adapters) Platform(name string) (PlatformDomains, error) {
+	if adapter := r.platforms[name]; adapter != nil {
+		return adapter, nil
+	}
+	return nil, &provider.UnsupportedCapabilityError{Provider: name, Capability: "domains"}
 }
 
 // Capabilities returns implemented operations, sorted for public API output.

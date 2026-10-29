@@ -14545,6 +14545,12 @@
           "receipt": {
             "$ref": "#/components/schemas/DNSRecord"
           },
+          "receipts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DNSRecord"
+            }
+          },
           "revision": {
             "type": "integer"
           },
@@ -24705,6 +24711,9 @@
           "container_id": {
             "type": "string"
           },
+          "external_id": {
+            "type": "string"
+          },
           "ingress_class": {
             "type": "string"
           },
@@ -24712,6 +24721,9 @@
             "type": "string"
           },
           "namespace": {
+            "type": "string"
+          },
+          "provider": {
             "type": "string"
           },
           "release_id": {
@@ -24727,6 +24739,25 @@
             "type": "string"
           },
           "target_id": {
+            "type": "string"
+          }
+        }
+      },
+      "RouteCost": {
+        "type": "object",
+        "required": [
+          "monthly_usd",
+          "estimate",
+          "source"
+        ],
+        "properties": {
+          "estimate": {
+            "type": "boolean"
+          },
+          "monthly_usd": {
+            "type": "string"
+          },
+          "source": {
             "type": "string"
           }
         }
@@ -24833,12 +24864,21 @@
           "attempt": {
             "type": "integer"
           },
+          "cost": {
+            "$ref": "#/components/schemas/RouteCost"
+          },
           "created_at": {
             "type": "string",
             "format": "date-time"
           },
           "desired_record": {
             "$ref": "#/components/schemas/DNSRecord"
+          },
+          "desired_records": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DNSRecord"
+            }
           },
           "dns_attempted": {
             "type": "boolean"
@@ -24878,6 +24918,12 @@
           },
           "receipt": {
             "$ref": "#/components/schemas/DNSRecord"
+          },
+          "receipts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DNSRecord"
+            }
           },
           "review": {
             "type": "string"
