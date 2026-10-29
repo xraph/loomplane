@@ -14,5 +14,6 @@ config.local.yml
 *.test
 *.out
 .DS_Store
+deployments/push-gateway/secrets/
 docs
 brand

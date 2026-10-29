@@ -1,9 +1,10 @@
 # The Loomplane push gateway behind Caddy, for push.loomplane.com. Setup and
-# key rotation: https://docs.loomplane.com/docs/operations/push-notifications
+# key rotation: https://loomplane.dev/docs/operations/push-notifications
 #
 # Put the secret files in ./secrets (or PUSH_GATEWAY_SECRETS_DIR):
 #   sealing-key, previous-sealing-key, fcm-service-account.json, apns-key.p8
-# Create empty files for any you don't use. Only Caddy keeps state (its
+# fcm-service-account.json is always required: an empty one stops the gateway.
+# Only previous-sealing-key and apns-key.p8 may be empty files. Only Caddy keeps state (its
 # certificates); the gateway has no volume.
 name: loomplane-push-gateway
 
