@@ -27,6 +27,14 @@ type fakeDOApp struct {
 	// builtCommit the commit it reports for it.
 	updated     string
 	builtCommit string
+	// phase is that deployment's phase when it's read, ACTIVE unless set.
+	phase string
+	// started is the slot the update's deployment shows in on the PUT
+	// response, pending unless it's "in_progress". inProgress is another
+	// deployment that was already running when the PUT answered.
+	started    string
+	inProgress string
+	rollbacks  []string
 }
 
 func newFakeDOApp(t *testing.T, app map[string]any) (*fakeDOApp, *appPlatformDomains) {
@@ -60,14 +68,30 @@ func (f *fakeDOApp) serve(w http.ResponseWriter, r *http.Request) {
 		f.puts = append(f.puts, body.Spec)
 		f.app["spec"] = body.Spec
 		if f.updated != "" {
-			f.app["in_progress_deployment"] = map[string]any{"id": f.updated, "phase": "BUILDING"}
+			slot := "pending_deployment"
+			if f.started == "in_progress" {
+				slot = "in_progress_deployment"
+			}
+			f.app[slot] = map[string]any{"id": f.updated, "phase": "PENDING_BUILD"}
+		}
+		if f.inProgress != "" {
+			f.app["in_progress_deployment"] = map[string]any{"id": f.inProgress, "phase": "BUILDING"}
 		}
 		reply(http.StatusOK, map[string]any{"app": f.app})
 	case r.Method == http.MethodGet && strings.HasPrefix(r.URL.Path, "/v2/apps/app-1/deployments/"):
+		phase := f.phase
+		if phase == "" {
+			phase = "ACTIVE"
+		}
 		reply(http.StatusOK, map[string]any{"deployment": map[string]any{
-			"id": f.updated, "phase": "ACTIVE",
+			"id": f.updated, "phase": phase,
 			"services": []map[string]any{{"name": "web", "source_commit_hash": f.builtCommit}},
 		}})
+	case r.Method == http.MethodPost && r.URL.Path == "/v2/apps/app-1/rollback":
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		f.rollbacks = append(f.rollbacks, body["deployment_id"].(string))
+		reply(http.StatusOK, map[string]any{})
 	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/cancel"):
 		f.canceled = append(f.canceled, r.URL.Path)
 		reply(http.StatusOK, map[string]any{})
@@ -165,19 +189,88 @@ func TestAppPlatformAttachWaitsForTheDeploymentItStarts(t *testing.T) {
 	}
 }
 
-func TestAppPlatformAttachCancelsAnUnreviewedDeployment(t *testing.T) {
-	f, a := newFakeDOApp(t, map[string]any{"id": "app-1", "spec": map[string]any{"name": "web"}})
-	f.updated, f.builtCommit = "dep-1", "ffffffffffffffffffffffffffffffffffffffff"
+func TestAppPlatformAttachCancelsAnUnreviewedDeploymentBeforeItIsLive(t *testing.T) {
+	f, a := newFakeDOApp(t, map[string]any{"id": "app-1", "spec": map[string]any{"name": "web"}, "active_deployment": map[string]any{"id": "dep-prev", "phase": "ACTIVE"}})
+	f.updated, f.builtCommit, f.phase = "dep-1", "ffffffffffffffffffffffffffffffffffffffff", "BUILDING"
 	err := a.Attach(t.Context(), doAppCred(), doAppBinding(), "app.example.com", platformApproved)
 	want := "App Platform started a deployment of a newer commit than the reviewed one. Deploy the service to finish adding app.example.com."
 	if !errors.Is(err, ErrConflict) || !strings.Contains(err.Error(), want) {
 		t.Fatalf("err = %v", err)
 	}
-	if len(f.canceled) != 1 || !strings.Contains(f.canceled[0], "dep-1") {
-		t.Fatalf("canceled = %v", f.canceled)
+	if len(f.canceled) != 1 || !strings.Contains(f.canceled[0], "dep-1") || len(f.rollbacks) != 0 {
+		t.Fatalf("canceled %v, rollbacks %v", f.canceled, f.rollbacks)
 	}
 	if len(specDomains(f.app["spec"].(map[string]any))) != 1 {
 		t.Fatal("the domain should stay in the spec")
+	}
+}
+
+func TestAppPlatformAttachRollsBackAnUnreviewedDeploymentThatWentLive(t *testing.T) {
+	f, a := newFakeDOApp(t, map[string]any{"id": "app-1", "spec": map[string]any{"name": "web"}, "active_deployment": map[string]any{"id": "dep-prev", "phase": "ACTIVE"}})
+	f.updated, f.builtCommit = "dep-1", "ffffffffffffffffffffffffffffffffffffffff"
+	err := a.Attach(t.Context(), doAppCred(), doAppBinding(), "app.example.com", platformApproved)
+	if !errors.Is(err, ErrConflict) || !strings.Contains(err.Error(), "Deploy the service to finish adding app.example.com.") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(f.canceled) != 0 || len(f.rollbacks) != 1 || f.rollbacks[0] != "dep-prev" {
+		t.Fatalf("canceled %v, rollbacks %v", f.canceled, f.rollbacks)
+	}
+}
+
+func TestAppPlatformAttachWithNothingToRollBackToSaysSo(t *testing.T) {
+	f, a := newFakeDOApp(t, map[string]any{"id": "app-1", "spec": map[string]any{"name": "web"}})
+	f.updated, f.builtCommit = "dep-1", "ffffffffffffffffffffffffffffffffffffffff"
+	err := a.Attach(t.Context(), doAppCred(), doAppBinding(), "app.example.com", platformApproved)
+	if !errors.Is(err, ErrConflict) || len(f.canceled) != 0 || len(f.rollbacks) != 0 {
+		t.Fatalf("err %v, canceled %v, rollbacks %v", err, f.canceled, f.rollbacks)
+	}
+}
+
+func TestAppPlatformUpdateLeavesADeploymentItDidNotStartAlone(t *testing.T) {
+	f, a := newFakeDOApp(t, map[string]any{"id": "app-1", "spec": map[string]any{"name": "web"}})
+	f.updated, f.inProgress = "dep-own", "dep-other"
+	if err := a.Attach(t.Context(), doAppCred(), doAppBinding(), "app.example.com", platformApproved); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.canceled) != 0 || len(f.rollbacks) != 0 {
+		t.Fatalf("canceled %v, rollbacks %v", f.canceled, f.rollbacks)
+	}
+	// Its own deployment built another commit: that one is refused, and
+	// the other is still not touched.
+	f2, a2 := newFakeDOApp(t, map[string]any{"id": "app-1", "spec": map[string]any{"name": "web"}})
+	f2.updated, f2.inProgress, f2.builtCommit, f2.phase = "dep-own", "dep-other", "ffffffffffffffffffffffffffffffffffffffff", "BUILDING"
+	if err := a2.Attach(t.Context(), doAppCred(), doAppBinding(), "app.example.com", platformApproved); !errors.Is(err, ErrConflict) {
+		t.Fatalf("err = %v", err)
+	}
+	if len(f2.canceled) != 1 || !strings.Contains(f2.canceled[0], "dep-own") {
+		t.Fatalf("canceled %v", f2.canceled)
+	}
+}
+
+func TestAppPlatformUpdateWaitsWhenItCannotTellWhichDeploymentIsItsOwn(t *testing.T) {
+	f, a := newFakeDOApp(t, map[string]any{"id": "app-1", "spec": map[string]any{"name": "web"}})
+	f.updated, f.started = "dep-1", "in_progress"
+	err := a.Attach(t.Context(), doAppCred(), doAppBinding(), "app.example.com", platformApproved)
+	var notice *routeNoticeError
+	if !errors.Is(err, ErrPending) || !errors.As(err, &notice) {
+		t.Fatalf("err = %v", err)
+	}
+	if len(f.canceled) != 0 || len(f.rollbacks) != 0 {
+		t.Fatalf("canceled %v, rollbacks %v", f.canceled, f.rollbacks)
+	}
+}
+
+func TestAppPlatformDetachRollsBackAnUnreviewedDeploymentThatWentLive(t *testing.T) {
+	f, a := newFakeDOApp(t, map[string]any{"id": "app-1", "active_deployment": map[string]any{"id": "dep-prev", "phase": "ACTIVE"}, "spec": map[string]any{"name": "web", "domains": []any{
+		map[string]any{"domain": "app.example.com", "type": "ALIAS"},
+	}}})
+	f.updated, f.builtCommit = "dep-1", "ffffffffffffffffffffffffffffffffffffffff"
+	err := a.Detach(t.Context(), doAppCred(), doAppBinding(), "app.example.com", platformApproved)
+	if !errors.Is(err, ErrConflict) || !strings.Contains(err.Error(), "finish removing app.example.com") {
+		t.Fatalf("err = %v", err)
+	}
+	if len(f.canceled) != 0 || len(f.rollbacks) != 1 || f.rollbacks[0] != "dep-prev" {
+		t.Fatalf("canceled %v, rollbacks %v", f.canceled, f.rollbacks)
 	}
 }
 
