@@ -15,6 +15,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -29,8 +30,6 @@ import (
 	"syscall"
 	"testing"
 	"time"
-
-	"github.com/xraph/herald/driver/push"
 )
 
 const (
@@ -178,7 +177,7 @@ func startGateway(t *testing.T, bin string, environ map[string]string) *gatewayP
 // stop sends SIGTERM and returns the exit code.
 func (p *gatewayProcess) stop(t *testing.T) int {
 	t.Helper()
-	if err := p.cmd.Process.Signal(syscall.SIGTERM); err != nil {
+	if err := p.cmd.Process.Signal(syscall.SIGTERM); err != nil && !errors.Is(err, os.ErrProcessDone) {
 		t.Fatalf("signal gateway: %v", err)
 	}
 	select {
@@ -363,9 +362,10 @@ func send(t *testing.T, base string, signer ed25519.PrivateKey, keyHeader ed2551
 		t.Fatal(err)
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set(push.HeaderKey, b64(keyHeader))
-	req.Header.Set(push.HeaderTimestamp, stamp)
-	req.Header.Set(push.HeaderSignature, b64(ed25519.Sign(signer, push.SignatureBase(stamp, raw))))
+	// Contract C spelled out, not taken from Herald, so drift there fails here.
+	req.Header.Set("X-Herald-Key", b64(keyHeader))
+	req.Header.Set("X-Herald-Timestamp", stamp)
+	req.Header.Set("X-Herald-Signature", b64(ed25519.Sign(signer, []byte(stamp+"."+string(raw)))))
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		t.Fatalf("send: %v", err)
@@ -431,6 +431,16 @@ func sendAccepted(t *testing.T, base string, signer ed25519.PrivateKey, keyHeade
 	}
 }
 
+// assertNoSecrets fails for each needle that appears in logs.
+func assertNoSecrets(t *testing.T, logs string, needles []string) {
+	t.Helper()
+	for _, n := range needles {
+		if strings.Contains(logs, n) {
+			t.Errorf("logs contain %q", n)
+		}
+	}
+}
+
 func gatewayEnv(s secrets, current, previous string, fcm, apns *fakeProvider) map[string]string {
 	vars := map[string]string{
 		"PUSH_GATEWAY_ADDR":             "127.0.0.1:0",
@@ -490,6 +500,14 @@ func TestGatewayBinary(t *testing.T) {
 		return handle
 	}
 	var android, ios string
+	needles := func() []string {
+		n := make([]string, 0, 12+len(handles))
+		n = append(n,
+			"fcm-token-1", iosToken, "fcm-gone", iosGoneToken, sealed, deviceKID, collapseID,
+			s.sealingB64["k2026b"], "PRIVATE KEY", "fake-access-token", b64(pubA), b64(pubB),
+		)
+		return append(n, handles...)
+	}
 
 	t.Run("health", func(t *testing.T) {
 		resp, err := http.Get(p.URL + "/_/health") //nolint:noctx // test against a local process
@@ -662,18 +680,7 @@ func TestGatewayBinary(t *testing.T) {
 	})
 
 	t.Run("logs hold no secrets", func(t *testing.T) {
-		logs := p.logs.String()
-		needles := make([]string, 0, 10+len(handles))
-		needles = append(needles,
-			"fcm-token-1", iosToken, "fcm-gone", iosGoneToken, sealed, deviceKID, collapseID,
-			s.sealingB64["k2026b"], "PRIVATE KEY", "fake-access-token",
-		)
-		needles = append(needles, handles...)
-		for _, n := range needles {
-			if strings.Contains(logs, n) {
-				t.Errorf("logs contain %q", n)
-			}
-		}
+		assertNoSecrets(t, p.logs.String(), needles())
 	})
 
 	t.Run("graceful stop", func(t *testing.T) {
@@ -684,6 +691,7 @@ func TestGatewayBinary(t *testing.T) {
 		if !strings.Contains(p.logs.String(), `"msg":"push gateway stopped"`) {
 			t.Fatalf("no stop line in logs:\n%s", p.logs.String())
 		}
+		assertNoSecrets(t, p.logs.String(), needles())
 	})
 }
 
@@ -702,6 +710,11 @@ func TestGatewayBinaryKeyRotation(t *testing.T) {
 	if got := p1.stop(t); got != 0 {
 		t.Fatalf("process 1 exit code = %d", got)
 	}
+	needles := append(make([]string, 0, 12),
+		"fcm-token-2", "fcm-token-3", sealed, deviceKID, collapseID, b64(pub), handleA,
+		s.sealingB64["k2026a"], s.sealingB64["k2026b"], "PRIVATE KEY", "fake-access-token",
+	)
+	assertNoSecrets(t, p1.logs.String(), needles)
 
 	vars := gatewayEnv(s, "k2026b", "k2026a", fcm, nil)
 	vars["PUSH_GATEWAY_HANDLE_RATE"] = "1"
@@ -719,13 +732,18 @@ func TestGatewayBinaryKeyRotation(t *testing.T) {
 	if code != http.StatusCreated || !strings.HasPrefix(handleB, "h1.k2026b.") {
 		t.Fatalf("register = %d %q", code, handleB)
 	}
+	needles = append(needles, handleB)
 	if got := p2.stop(t); got != 0 {
 		t.Fatalf("process 2 exit code = %d", got)
 	}
+	assertNoSecrets(t, p2.logs.String(), needles)
 
 	p3 := startGateway(t, bin, gatewayEnv(s, "k2026b", "", fcm, nil))
 	sendStatus(t, p3.URL, key, pub, now, sendBody(handleA, "active", "show"), http.StatusGone)
-	p3.stop(t)
+	if got := p3.stop(t); got != 0 {
+		t.Fatalf("process 3 exit code = %d", got)
+	}
+	assertNoSecrets(t, p3.logs.String(), needles)
 }
 
 func TestGatewayBinaryRefusesBadConfig(t *testing.T) {
