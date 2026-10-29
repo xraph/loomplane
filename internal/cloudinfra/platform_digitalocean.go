@@ -171,7 +171,7 @@ func (a *appPlatformDomains) Status(ctx context.Context, cred provider.Infrastru
 		}
 		return PlatformDomainStatus{Attached: true, CertState: "issuing"}, nil
 	}
-	out := PlatformDomainStatus{Attached: true, CertExpires: live.CertificateExpiresAt}
+	out := PlatformDomainStatus{Attached: true, CertExpires: live.CertificateExpiresAt.Time}
 	switch live.Phase {
 	case digitalocean.AppDomainActive:
 		out.CertState = "ready"

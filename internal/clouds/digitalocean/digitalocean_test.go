@@ -265,3 +265,24 @@ func TestGetAppDecodesDomains(t *testing.T) {
 		t.Errorf("progress = %+v", d.Progress)
 	}
 }
+
+func TestGetAppReadsAnEmptyTimestampAsZero(t *testing.T) {
+	f, c := newFake(t)
+	f.on("GET /v2/apps/app-1", func(w http.ResponseWriter, _ *http.Request, _ map[string]any) {
+		reply(w, 200, map[string]any{"app": map[string]any{"id": "app-1", "domains": []any{map[string]any{
+			"spec":                   map[string]any{"domain": "app.example.com", "type": "ALIAS"},
+			"phase":                  "PENDING",
+			"certificate_expires_at": "",
+			"progress": map[string]any{"steps": []any{map[string]any{
+				"name": "verify-cname", "status": "PENDING", "started_at": "", "ended_at": nil}}},
+		}}}})
+	})
+	app, err := c.GetApp(context.Background(), "dop_v1_good", "app-1")
+	if err != nil {
+		t.Fatalf("GetApp: %v", err)
+	}
+	d := app.Domains[0]
+	if !d.CertificateExpiresAt.IsZero() || !d.Progress.Steps[0].StartedAt.IsZero() || !d.Progress.Steps[0].EndedAt.IsZero() {
+		t.Errorf("domain = %+v", d)
+	}
+}

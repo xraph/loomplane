@@ -225,7 +225,20 @@ type AppDomain struct {
 	Spec                 AppDomainSpec      `json:"spec"`
 	Phase                string             `json:"phase"`
 	Progress             *AppDomainProgress `json:"progress,omitempty"`
-	CertificateExpiresAt time.Time          `json:"certificate_expires_at"`
+	CertificateExpiresAt Timestamp          `json:"certificate_expires_at"`
+}
+
+// Timestamp is a time App Platform may send as "" or null before it has
+// one, which reads as the zero time rather than failing the whole app.
+type Timestamp struct{ time.Time }
+
+// UnmarshalJSON implements json.Unmarshaler.
+func (t *Timestamp) UnmarshalJSON(b []byte) error {
+	if s := string(b); s == "null" || s == `""` {
+		t.Time = time.Time{}
+		return nil
+	}
+	return t.Time.UnmarshalJSON(b)
 }
 
 // AppDomainProgress is the steps App Platform takes to bring a domain up,
@@ -238,8 +251,8 @@ type AppDomainProgress struct {
 type AppDomainStep struct {
 	Name      string    `json:"name"`
 	Status    string    `json:"status"`
-	StartedAt time.Time `json:"started_at"`
-	EndedAt   time.Time `json:"ended_at"`
+	StartedAt Timestamp `json:"started_at"`
+	EndedAt   Timestamp `json:"ended_at"`
 	Reason    *struct {
 		Code    string `json:"code"`
 		Message string `json:"message"`
