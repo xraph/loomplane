@@ -347,3 +347,27 @@ func TestReleaseCopyHasNoEmDashes(t *testing.T) {
 		}
 	}
 }
+
+// A notice must never fail the deployment write that caused it, whatever
+// shape the canary JSON takes.
+func TestOddCanaryJSONNeverFailsTheWrite(t *testing.T) {
+	svc, _ := releaseRig(t, "bo")
+	startDeployment(t, svc, "env-a", "cy")
+	for _, doc := range []string{
+		`{"status":"ramping","steps":null,"step":0,"weight":10}`,
+		`{"status":"promoted","steps":null}`,
+		`{"status":"ramping","step":1}`,
+		`{"status":"rolled_back","steps":"x","step":2}`,
+		`{"status":"ramping","steps":{"a":1},"step":0,"weight":null}`,
+		`{"status":"revert_failed"}`,
+		`{"status":"ramping","step":"first","steps":[10]}`,
+		`{"status":null}`,
+		`{}`,
+		`null`,
+		`[]`,
+	} {
+		if _, err := svc.pg.Exec(t.Context(), `UPDATE loomplane_deployments SET canary=$1::jsonb WHERE id='deployment-a'`, doc); err != nil {
+			t.Fatalf("canary %s failed the write: %v", doc, err)
+		}
+	}
+}

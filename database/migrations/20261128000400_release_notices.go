@@ -25,15 +25,16 @@ func init() {
 		func(ctx context.Context, db *migrate.DB) error {
 			if _, err := db.Exec(ctx, `CREATE OR REPLACE FUNCTION loomplane_release_notice() RETURNS TRIGGER LANGUAGE plpgsql AS $$
 DECLARE
-	v_status TEXT := NEW.canary->>'status';
-	v_old TEXT := OLD.canary->>'status';
-	v_step INT := COALESCE((NEW.canary->>'step')::int,-1);
-	v_old_step INT := COALESCE((OLD.canary->>'step')::int,-1);
-	v_count INT := COALESCE(jsonb_array_length(NEW.canary->'steps'),0);
+	v_status TEXT; v_old TEXT; v_step INT; v_old_step INT; v_count INT := 0;
 	v_kind TEXT; v_who TEXT; v_suffix TEXT := ''; v_inbox_done BOOLEAN := FALSE; v_email TEXT := 'pending';
 	v_weight INT := 0; v_previous INT := 0;
 BEGIN
+	v_status := NEW.canary->>'status';
+	v_old := OLD.canary->>'status';
+	v_step := COALESCE((NEW.canary->>'step')::int,-1);
+	v_old_step := COALESCE((OLD.canary->>'step')::int,-1);
 	IF v_status IS NULL THEN RETURN NULL; END IF;
+	IF jsonb_typeof(NEW.canary->'steps')='array' THEN v_count := jsonb_array_length(NEW.canary->'steps'); END IF;
 	IF v_status='rolled_back' AND v_old IS DISTINCT FROM v_status THEN
 		v_kind := 'release.rolled_back'; v_who := 'all';
 		IF v_step>=0 THEN v_weight := COALESCE((NEW.canary->'steps'->>v_step)::int,0); END IF;
@@ -66,6 +67,9 @@ BEGIN
 		SELECT m.user_id FROM authsome_members m WHERE m.org_id=NEW.org_id AND m.role IN ('owner','admin') AND v_who IN ('all','admins')
 	) r
 	ON CONFLICT DO NOTHING;
+	RETURN NULL;
+EXCEPTION WHEN OTHERS THEN
+	-- A notice must never fail the deployment write that caused it.
 	RETURN NULL;
 END $$`); err != nil {
 				return fmt.Errorf("create function loomplane_release_notice: %w", err)
