@@ -34,8 +34,14 @@ func (p PushConfig) Validate(environment string) error {
 	if u.RawQuery != "" || u.ForceQuery || u.Fragment != "" {
 		return errors.New("push.gateway_url can't carry a query or fragment")
 	}
-	if u.Scheme != "https" && (u.Scheme != "http" || environment != EnvDevelopment) {
-		return errors.New("push.gateway_url must use https (http is allowed only in development)")
+	// Mirrors herald's driver/push/sealed.go: http is for a gateway on this
+	// machine only, and only in development.
+	if u.Scheme != "https" && (u.Scheme != "http" || environment != EnvDevelopment || !isLoopbackHost(u.Hostname())) {
+		return errors.New("push.gateway_url must use https (http is allowed only for localhost, 127.0.0.1 and ::1 in development)")
 	}
 	return nil
+}
+
+func isLoopbackHost(h string) bool {
+	return h == "localhost" || h == "127.0.0.1" || h == "::1"
 }

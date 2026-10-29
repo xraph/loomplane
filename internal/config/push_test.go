@@ -31,7 +31,11 @@ func TestPushConfigLoadsAndRejectsUnsafeURLs(t *testing.T) {
 		{"relative", EnvDevelopment, "true", "gw.example.com", "absolute"},
 		{"query", EnvDevelopment, "true", "https://gw.example.com/?a=b", "query"},
 		{"fragment", EnvDevelopment, "true", "https://gw.example.com/#x", "fragment"},
-		{"http in development", EnvDevelopment, "true", "http://localhost:9000", ""},
+		{"http localhost in development", EnvDevelopment, "true", "http://localhost:9000", ""},
+		{"http 127.0.0.1 in development", EnvDevelopment, "true", "http://127.0.0.1:9000", ""},
+		{"http ::1 in development", EnvDevelopment, "true", "http://[::1]:9000", ""},
+		{"http other host in development", EnvDevelopment, "true", "http://gw.internal", "https"},
+		{"http localhost in production", EnvProduction, "true", "http://localhost", "https"},
 		{"https in production", EnvProduction, "true", "https://gw.example.com", ""},
 		{"off with no url", EnvDevelopment, "false", "", ""},
 	}
