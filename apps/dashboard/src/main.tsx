@@ -14,6 +14,7 @@ import { SessionRefreshBridge } from "@/client/session-refresh-bridge"
 import { authStorage, forgetStoredSession } from "@/client/auth-storage"
 import { applyAccent } from "@/lib/accent"
 import { FeaturesProvider, setFeatures } from "@/lib/features"
+import { setInstance } from "@/lib/instance"
 import { captureInvite } from "@/lib/invite"
 import { ThemeProvider } from "@/components/theme-provider.tsx"
 import { Toaster } from "@/components/ui/sonner"
@@ -36,6 +37,11 @@ try {
   setAuthsomeApp(config)
   // Once, before the router's first load runs the routes' feature checks.
   setFeatures(config.features)
+  setInstance({
+    setupPending: config.setupPending,
+    waitlist: config.waitlist,
+    consolePath: config.consolePath,
+  })
   root.render(
     <StrictMode>
       <ThemeProvider>

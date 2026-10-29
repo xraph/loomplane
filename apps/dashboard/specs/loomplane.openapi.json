@@ -11209,6 +11209,57 @@
           }
         }
       }
+    },
+    "/api/v1/setup": {
+      "get": {
+        "tags": [
+          "Identity"
+        ],
+        "summary": "Whether first-run setup is still waiting",
+        "operationId": "setup.status",
+        "responses": {
+          "200": {
+            "description": "Setup status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetupStatus"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Identity"
+        ],
+        "summary": "Create the first account and organization",
+        "operationId": "setup.complete",
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetupRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Setup finished",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetupResponse"
+                }
+              }
+            }
+          }
+        }
+      }
     }
   },
   "components": {
@@ -21654,7 +21705,9 @@
           "publishable_key",
           "app_id",
           "auth_base_path",
-          "features"
+          "features",
+          "setup_pending",
+          "waitlist"
         ],
         "properties": {
           "app_id": {
@@ -21663,11 +21716,20 @@
           "auth_base_path": {
             "type": "string"
           },
+          "console_path": {
+            "type": "string"
+          },
           "features": {
             "$ref": "#/components/schemas/Features"
           },
           "publishable_key": {
             "type": "string"
+          },
+          "setup_pending": {
+            "type": "boolean"
+          },
+          "waitlist": {
+            "type": "boolean"
           }
         }
       },
@@ -25952,6 +26014,55 @@
           },
           "revision": {
             "type": "integer"
+          }
+        }
+      },
+      "SetupStatus": {
+        "type": "object",
+        "required": [
+          "pending"
+        ],
+        "properties": {
+          "pending": {
+            "type": "boolean"
+          }
+        }
+      },
+      "SetupRequest": {
+        "type": "object",
+        "required": [
+          "name",
+          "email",
+          "password",
+          "organization_name"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "organization_name": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string"
+          }
+        }
+      },
+      "SetupResponse": {
+        "type": "object",
+        "required": [
+          "ok",
+          "verification_required"
+        ],
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "verification_required": {
+            "type": "boolean"
           }
         }
       }

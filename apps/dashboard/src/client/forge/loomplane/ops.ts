@@ -2495,6 +2495,21 @@ export const ops = {
     invalidates: [],
     responseCodec: CODECS['IdentitySession'],
   },
+  'setup.status': {
+    method: 'GET',
+    path: '/api/v1/setup',
+    provides: [],
+    invalidates: [],
+    responseCodec: CODECS['SetupStatus'],
+  },
+  'setup.complete': {
+    method: 'POST',
+    path: '/api/v1/setup',
+    provides: [],
+    invalidates: [],
+    bodyCodec: CODECS['SetupRequest'],
+    responseCodec: CODECS['SetupResponse'],
+  },
   'usage.spend': {
     method: 'GET',
     path: '/api/v1/usage/spend',

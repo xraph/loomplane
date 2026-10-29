@@ -5170,6 +5170,43 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly setup = {
+    /**
+     * Create the first account and organization
+     */
+    complete: async (body: types.SetupRequest, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.SetupResponse> => {
+      let __path = `/api/v1/setup`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["SetupRequest"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["SetupResponse"],
+      };
+
+      return this.request<types.SetupResponse>(config);
+    },
+
+    /**
+     * Whether first-run setup is still waiting
+     */
+    status: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.SetupStatus> => {
+      let __path = `/api/v1/setup`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["SetupStatus"],
+      };
+
+      return this.request<types.SetupStatus>(config);
+    },
+
+  };
+
   public readonly sources = {
     /**
      * Attach a repository, or a directory of one, after checking Loomplane can read it
