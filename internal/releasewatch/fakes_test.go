@@ -162,6 +162,13 @@ type fakePlans struct {
 	mu       sync.Mutex
 	plans    map[string]*planning.Plan
 	bindings map[string][]*planning.Binding
+	deployed map[string][]*planning.DeployedSource
+}
+
+func (f *fakePlans) DeployedSources(_ context.Context, _, environmentID string) ([]*planning.DeployedSource, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]*planning.DeployedSource(nil), f.deployed[environmentID]...), nil
 }
 
 func (f *fakePlans) GetPlan(_ context.Context, _, id string) (*planning.Plan, error) {

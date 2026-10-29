@@ -34,6 +34,7 @@ type Rollbacks interface {
 type Plans interface {
 	GetPlan(ctx context.Context, orgID, id string) (*planning.Plan, error)
 	ListBindings(ctx context.Context, orgID, environmentID string) ([]*planning.Binding, error)
+	DeployedSources(ctx context.Context, orgID, environmentID string) ([]*planning.DeployedSource, error)
 }
 
 // Deployments finds the deployment of a rollback plan. deployments.PgStore
