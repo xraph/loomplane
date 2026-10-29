@@ -22,7 +22,7 @@ export default function PrivacyPage() {
           removed.
         </>
       }
-      updated="October 28, 2026"
+      updated="October 29, 2026"
     >
       <h2>Who this covers</h2>
       <p>
@@ -96,6 +96,45 @@ export default function PrivacyPage() {
         The app doesn't contain advertising, analytics or crash-reporting
         services, and it doesn't use your location, contacts, photos, camera or
         microphone.
+      </p>
+
+      <h2>Push notifications</h2>
+      <p>
+        If you turn notifications on, the app asks your phone for a push token
+        (from Apple on iOS, from Google's Firebase Cloud Messaging on Android)
+        and makes a key pair. The private key never leaves your phone. The app
+        registers the token with our push gateway at{" "}
+        <code>push.loomplane.com</code>, then gives the Loomplane server you're
+        signed in to the handle the gateway sent back, along with the public
+        key.
+      </p>
+      <p>
+        That server keeps a record of the phone, tied to your account on it: the
+        public key, the gateway handle, the platform, the model name (something
+        like "Pixel 9"), the time zone, your quiet hours and your notification
+        settings. Signing out on that phone, or deleting your account, deletes
+        the record.
+      </p>
+      <p>
+        When the server has something for you, it encrypts the notification to
+        your phone's public key before it sends it. The gateway gets the
+        encrypted payload, the push token (sealed inside the handle, so only the
+        gateway can open it), how urgent the message is, what kind it is, a
+        collapse ID that lets a newer notification replace an older one, and
+        which server key signed the request. It can't read the title, the text,
+        your workspace or the buttons. Apple or Google deliver the message to
+        your phone, and your phone decrypts it.
+      </p>
+      <p>
+        The gateway stores none of this. Its logs keep a fingerprint of the
+        server's key, the platform, the urgency, the kind, whether delivery
+        worked and how long it took.
+      </p>
+      <p>
+        If you run Loomplane yourself, you can turn push off with{" "}
+        <code>LOOMPLANE_PUSH_ENABLED</code> or point the server at a gateway of
+        your own. Otherwise a self-hosted or company-run server sends through
+        our gateway, and the same limits apply: we can't see what it says.
       </p>
 
       <h2>What the hosted service keeps</h2>
