@@ -507,3 +507,74 @@ func TestClusterEnvelopeLegacyCloudGate(t *testing.T) {
 		})
 	}
 }
+
+func TestClusterCapacityLedgerLegacyFirstAttemptBarrier(t *testing.T) {
+	for _, serverFirst := range []bool{false, true} {
+		t.Run(map[bool]string{false: "cluster_wins", true: "server_wins"}[serverFirst], func(t *testing.T) {
+			f := ledgerFixture(t)
+			if err := cloudprofiles.NewPgStore(ledgerDB(t, f)).CreateProfile(t.Context(), &cloudprofiles.Profile{ID: "peer", OrgID: "org", ProjectID: "proj", Name: "Peer", Revision: 1, CreatedAt: time.Now(), UpdatedAt: time.Now()}); err != nil {
+				t.Fatal(err)
+			}
+			o, err := f.svc.PreviewServer(t.Context(), f.p, "peer", cloudinfra.ServerInput{Kind: "create", Name: "peer-server", ConnectionID: "infra-account", CloudRevision: 1, Region: "region", Size: "small", Image: "ubuntu"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			o.Status = "pending"
+			if err = f.store.Accept(t.Context(), o); err != nil {
+				t.Fatal(err)
+			}
+			early := make(chan error, 1)
+			resume := make(chan struct{})
+			finished := make(chan error, 1)
+			go func() {
+				early <- f.store.EnsureInfrastructureCapacity(t.Context(), o)
+				<-resume
+				o.Attempted = true
+				finished <- f.store.SaveOperation(t.Context(), o)
+			}()
+			if err = <-early; err != nil {
+				close(resume)
+				<-finished
+				t.Fatal(err)
+			}
+			if serverFirst {
+				close(resume)
+				if err = <-finished; err != nil {
+					t.Fatal(err)
+				}
+				var holds int
+				if err = f.sql.QueryRow(t.Context(), `SELECT count(*) FROM loomplane_cloud_capacity_reservations WHERE id=$1 AND status='reserved'`, o.ID).Scan(&holds); err != nil || holds != 1 {
+					t.Fatal("first effect lacks durable hold", holds, err)
+				}
+			}
+			cluster := clusterLedgerPreview(t, f, "barrier-cluster")
+			if _, err = f.sql.Exec(t.Context(), `UPDATE loomplane_cloud_capacity_accounts SET body=jsonb_set(body,'{quota,servers}','1'::jsonb)`); err != nil {
+				t.Fatal(err)
+			}
+			err = f.store.AcceptClusterOperation(t.Context(), cluster, 2)
+			if serverFirst {
+				if err == nil {
+					t.Fatal("cluster ignored unresolved server effect")
+				}
+				// Historical checkpointing remains available after another account user appears.
+				if err = f.store.SaveOperation(t.Context(), o); err != nil {
+					t.Fatal("attempted recovery blocked", err)
+				}
+				return
+			}
+			if err != nil {
+				close(resume)
+				<-finished
+				t.Fatal(err)
+			}
+			close(resume)
+			if err = <-finished; !errors.Is(err, cloudinfra.ErrConflict) {
+				t.Fatal("server crossed first-effect barrier", err)
+			}
+			saved, err := f.store.GetOperation(t.Context(), "org", "peer", o.ID)
+			if err != nil || saved.Attempted {
+				t.Fatal("blocked attempt persisted", saved, err)
+			}
+		})
+	}
+}

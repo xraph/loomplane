@@ -4,8 +4,10 @@ package integration
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -197,5 +199,250 @@ func TestClusterBudgetCloudAttribution(t *testing.T) {
 	}
 	if o.BudgetReview == nil || o.BudgetReview.Estimate.HourlyMicroUSD != 29 {
 		t.Fatal("peer Cloud charge entered local subtotal", o.BudgetReview)
+	}
+}
+
+type budgetClusterCatalog struct {
+	provider.ClusterReader
+	price float64
+}
+
+func (p *budgetClusterCatalog) Options(context.Context, provider.AccountAccess, string) (provider.ClusterOptions, error) {
+	return provider.ClusterOptions{CheckedAt: time.Now(), Digest: "current", NodeSizeFacts: []provider.ClusterNodeSize{{ID: "small", HourlyUSD: &p.price}}}, nil
+}
+
+type mutableBudgetServer struct {
+	*budgetLedgerProvider
+	price float64
+}
+
+func (p *mutableBudgetServer) ServerOptions(ctx context.Context, c provider.InfrastructureCredential) (provider.ServerOptions, error) {
+	options, err := p.budgetLedgerProvider.ServerOptions(ctx, c)
+	for i := range options.Sizes {
+		options.Sizes[i].HourlyUSD = p.price
+	}
+	return options, err
+}
+
+func TestClusterBudgetStaleBaselineRecovery(t *testing.T) {
+	for _, source := range []string{"server", "pending", "envelope"} {
+		t.Run(source, func(t *testing.T) {
+			f := ledgerFixture(t)
+			adapters := cloudinfra.NewAdapters()
+			serverCatalog := &mutableBudgetServer{budgetLedgerProvider: &budgetLedgerProvider{&ledgerProvider{f.provider}}, price: 0.000029}
+			if err := adapters.RegisterServer("digitalocean", serverCatalog); err != nil {
+				t.Fatal(err)
+			}
+			catalog := &budgetClusterCatalog{price: 0.000029}
+			if err := adapters.RegisterCluster("digitalocean", catalog, provider.ClusterDiscovery); err != nil {
+				t.Fatal(err)
+			}
+			f.svc.Adapters = adapters
+			p, err := f.store.GetCapacityPolicy(t.Context(), "org", "cloud")
+			if err != nil {
+				t.Fatal(err)
+			}
+			p.Revision++
+			p.Limits.CPUMillis = 20_000
+			if err = f.store.SaveCapacityPolicy(t.Context(), p, 1); err != nil {
+				t.Fatal(err)
+			}
+			request := ledgerPreview(t, f)
+			request.Status = "preview"
+			request.Input.AcknowledgeUnknownCosts = true
+			old := time.Now().Add(-time.Hour)
+			price := int64(7)
+			identity := "digitalocean/account/old-options/small"
+			money := cloudinfra.MoneyEstimate{HourlyMicroUSD: 7, HorizonSeconds: 3600, HorizonMicroUSD: 7, Known: true, CheckedAt: old, PriceDigest: "old-price", Components: []cloudinfra.MoneyComponent{{Name: "nodes:workers", Source: "provider_options", Identity: identity, Quantity: 1, HourlyMicroUSD: &price}}}
+			switch source {
+			case "server":
+				if err = f.store.SaveServer(t.Context(), &cloudinfra.Server{ID: "old-server", OrgID: "org", CloudID: "cloud", Ownership: "managed", Provider: "digitalocean", AccountID: "account", ConnectionID: "infra-account", ResourceID: "old-vm", Status: "ready", Revision: 1, Size: "small", PricedSize: "small", HourlyPriceKnown: true, HourlyUSD: 0.000007, PriceCheckedAt: old}); err != nil {
+					t.Fatal(err)
+				}
+			case "pending", "envelope":
+				o := clusterLedgerPreview(t, f, "old-cluster")
+				o.Input.PolicyRevision = 2
+				o.Input.Spec.Region = "region"
+				o.MoneyEstimate = &money
+				raw, e := json.Marshal(o)
+				if e != nil {
+					t.Fatal(e)
+				}
+				if _, err = f.sql.Exec(t.Context(), `UPDATE loomplane_cluster_operations SET body=$1 WHERE id=$2`, raw, o.ID); err != nil {
+					t.Fatal(err)
+				}
+				if source == "pending" {
+					if err = f.store.AcceptClusterOperation(t.Context(), o, 2); err != nil {
+						t.Fatal(err)
+					}
+				} else {
+					envelope := cloudinfra.ClusterCapacityEnvelope{ID: "old-envelope", OrgID: "org", CloudID: "cloud", OperationID: o.ID, Provider: "digitalocean", AccountID: "account", Revision: 1, State: "active", Maximum: cloudinfra.ResourceVector{Servers: 1}, Money: money}
+					envelope.Money.Components[0].Name = "nodes"
+					raw, e = json.Marshal(envelope)
+					if e != nil {
+						t.Fatal(e)
+					}
+					if _, err = f.sql.Exec(t.Context(), `INSERT INTO loomplane_cluster_capacity_envelopes(org_id,cloud_id,id,provider,account_id,revision,body) VALUES('org','cloud','old-envelope','digitalocean','account',1,$1)`, raw); err != nil {
+						t.Fatal(err)
+					}
+				}
+			}
+			p.Revision++
+			p.Budget = &cloudinfra.CapacityBudget{MaxHourlyMicroUSD: 1000, MaxHorizonMicroUSD: 1000, HorizonSeconds: 3600}
+			if err = f.store.SaveCapacityPolicy(t.Context(), p, 2); err != nil {
+				t.Fatal(err)
+			}
+			request.ID += "-stale"
+			if err = f.store.CreatePreview(t.Context(), request); err != nil {
+				t.Fatal(err)
+			}
+			if request.BudgetReview.Estimate.CheckedAt.After(old.Add(time.Second)) || request.BudgetReview.Estimate.Known {
+				t.Fatal("stale baseline relabeled fresh", request.BudgetReview)
+			}
+			request.Status = "pending"
+			if err = f.store.Accept(t.Context(), request); !errors.Is(err, cloudinfra.ErrConflict) {
+				t.Fatal("stale known price authorized", err)
+			}
+			fresh, err := f.svc.PreviewServer(t.Context(), f.p, "cloud", cloudinfra.ServerInput{Kind: "create", Name: "fresh-review", ConnectionID: "infra-account", CloudRevision: 1, Region: "region", Size: "small", Image: "ubuntu", AcknowledgeUnknownCosts: true})
+			if err != nil {
+				t.Fatal("reachable baseline refresh failed", err)
+			}
+			if fresh.BudgetReview.Estimate.HourlyMicroUSD != 58 || time.Since(fresh.BudgetReview.Estimate.CheckedAt) > time.Minute {
+				t.Fatal("current tariff not projected", fresh.BudgetReview)
+			}
+			if fresh.BudgetReview.Digest == request.BudgetReview.Digest {
+				t.Fatal("changed tariff retained old review")
+			}
+			catalog.price = 0.000031
+			serverCatalog.price = 0.000031
+			if _, err = f.svc.PreviewServer(t.Context(), f.p, "cloud", cloudinfra.ServerInput{Kind: "create", Name: "changed-tariff", ConnectionID: "infra-account", CloudRevision: 1, Region: "region", Size: "small", Image: "ubuntu", AcknowledgeUnknownCosts: true}); err != nil {
+				t.Fatal(err)
+			}
+			fresh.Status = "pending"
+			var admission *cloudinfra.CapacityAdmissionError
+			if err = f.store.Accept(t.Context(), fresh); !errors.Is(err, cloudinfra.ErrConflict) || errors.As(err, &admission) {
+				t.Fatal("changed baseline tariff did not require new semantic review", err)
+			}
+			if source != "server" {
+				persisted, e := f.store.GetClusterOperation(t.Context(), "org", "cloud", "old-cluster")
+				if e != nil || persisted.MoneyEstimate.HourlyMicroUSD != 7 || persisted.MoneyEstimate.PriceDigest != "old-price" {
+					t.Fatal("refresh rewrote approval", persisted, e)
+				}
+			}
+		})
+	}
+}
+
+func TestClusterBudgetProjectedCategoriesAndPhysicalOverlap(t *testing.T) {
+	f := ledgerFixture(t)
+	request := ledgerPreview(t, f)
+	request.Status = "preview"
+	request.Input.AcknowledgeUnknownCosts = true
+	now := time.Now()
+	price := int64(29)
+	request.MoneyEstimate = &cloudinfra.MoneyEstimate{CheckedAt: now, Components: []cloudinfra.MoneyComponent{
+		{Name: "nodes:private-node", Source: "provider_options", Identity: "private-node", Quantity: 1, HourlyMicroUSD: &price},
+		{Name: "network_egress:private-network", Source: "provider_options", Identity: "private-network", Quantity: 1},
+		{Name: "persistent_storage:private-volume", Source: "provider_options", Identity: "private-volume", Quantity: 1},
+		{Name: "control_plane:private-cluster", Source: "provider_options", Identity: "private-cluster", Quantity: 1},
+	}}
+	if err := f.store.SaveServer(t.Context(), &cloudinfra.Server{ID: "attributed", OrgID: "org", CloudID: "cloud", Ownership: "managed", Provider: "digitalocean", AccountID: "account", ConnectionID: "infra-account", ResourceID: "shared-vm", Status: "ready", Revision: 1, Size: "small", PricedSize: "small", HourlyPriceKnown: true, HourlyUSD: 0.000029, PriceCheckedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	envelope := cloudinfra.ClusterCapacityEnvelope{ID: "overlap", OrgID: "org", CloudID: "cloud", Provider: "digitalocean", AccountID: "account", ResourceID: "cluster", Ref: provider.ClusterRef{ID: "physical"}, Revision: 1, State: "active", CheckedAt: now, NodeIDs: []string{"shared-vm"}, Maximum: cloudinfra.ResourceVector{Servers: 3}, Consumed: cloudinfra.ResourceVector{Servers: 1}, Money: cloudinfra.MoneyEstimate{CheckedAt: now, Components: []cloudinfra.MoneyComponent{{Name: "nodes", Source: "provider_options", Identity: "size", Quantity: 3, HourlyMicroUSD: &price}}}}
+	raw, err := json.Marshal(envelope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = f.sql.Exec(t.Context(), `INSERT INTO loomplane_cluster_capacity_envelopes(org_id,cloud_id,id,provider,account_id,revision,body) VALUES('org','cloud','overlap','digitalocean','account',1,$1)`, raw); err != nil {
+		t.Fatal(err)
+	}
+	p, err := f.store.GetCapacityPolicy(t.Context(), "org", "cloud")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Revision++
+	p.Budget = &cloudinfra.CapacityBudget{MaxHourlyMicroUSD: 1000, MaxHorizonMicroUSD: 1000, HorizonSeconds: 3600}
+	if err = f.store.SaveCapacityPolicy(t.Context(), p, 1); err != nil {
+		t.Fatal(err)
+	}
+	request.ID += "-overlap"
+	if err = f.store.CreatePreview(t.Context(), request); err != nil {
+		t.Fatal(err)
+	}
+	if request.BudgetReview.Estimate.HourlyMicroUSD != 116 {
+		t.Fatal("physical VM charged twice or envelope remainder lost", request.BudgetReview)
+	}
+	categories := map[string]bool{}
+	for _, c := range request.BudgetReview.Estimate.Components {
+		categories[c.Category] = true
+	}
+	for _, kind := range []string{"nodes", "network_egress", "persistent_storage", "control_plane"} {
+		if !categories[kind] {
+			t.Fatal("cost category hidden", kind)
+		}
+	}
+	raw, err = json.Marshal(request.BudgetReview)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(raw), "private-") || strings.Contains(string(raw), "shared-vm") {
+		t.Fatal("private source identity leaked", string(raw))
+	}
+}
+
+func TestClusterBudgetRetainedPriceProvenance(t *testing.T) {
+	for _, expired := range []bool{false, true} {
+		t.Run(map[bool]string{false: "fresh", true: "expired"}[expired], func(t *testing.T) {
+			f := ledgerFixture(t)
+			adapters := cloudinfra.NewAdapters()
+			if err := adapters.RegisterServer("digitalocean", &budgetLedgerProvider{&ledgerProvider{f.provider}}); err != nil {
+				t.Fatal(err)
+			}
+			f.svc.Adapters = adapters
+			now := time.Now()
+			checked := now
+			if expired {
+				checked = now.Add(-time.Hour)
+			}
+			price := int64(7)
+			r := &cloudinfra.ManagedResource{ID: "retired", OrgID: "org", CloudID: "cloud", Kind: "cluster", Provider: "digitalocean", AccountID: "account", ExternalID: "physical", Incarnation: "birth", Ownership: "managed", Status: "deleted", Revision: 1, DeletedAt: &now, RetainedPriceCheckedAt: checked, RetainedResources: []provider.AssociatedResource{{ID: "private-retained", Kind: "volume", EstimatedHourlyMicroUSD: &price}}}
+			if _, err := f.store.ClaimManagedResource(t.Context(), r, 0); err != nil {
+				t.Fatal(err)
+			}
+			p, err := f.store.GetCapacityPolicy(t.Context(), "org", "cloud")
+			if err != nil {
+				t.Fatal(err)
+			}
+			p.Revision++
+			p.Budget = &cloudinfra.CapacityBudget{MaxHourlyMicroUSD: 1000, MaxHorizonMicroUSD: 1000, HorizonSeconds: 3600}
+			if err = f.store.SaveCapacityPolicy(t.Context(), p, 1); err != nil {
+				t.Fatal(err)
+			}
+			current, err := f.svc.PreviewServer(t.Context(), f.p, "cloud", cloudinfra.ServerInput{Kind: "create", Name: "retained-review", ConnectionID: "infra-account", CloudRevision: 1, Region: "region", Size: "small", Image: "ubuntu", AcknowledgeUnknownCosts: true})
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := int64(36)
+			if expired {
+				want = 29
+			}
+			if current.BudgetReview.Estimate.HourlyMicroUSD != want {
+				t.Fatal("retained charge ignored its source timestamp", current.BudgetReview)
+			}
+			found := false
+			for _, c := range current.BudgetReview.Estimate.Components {
+				if c.Source == "retained" {
+					found = c.Category == "persistent_storage" && (c.HourlyMicroUSD == nil) == expired
+				}
+			}
+			if !found {
+				t.Fatal("retained cost category or freshness missing")
+			}
+			current.Status = "pending"
+			if err = f.store.Accept(t.Context(), current); err != nil {
+				t.Fatal("explicit retained cost review has no recovery", err)
+			}
+		})
 	}
 }

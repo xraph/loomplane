@@ -114,6 +114,7 @@ func (s *Service) reconcileClusterRetirement(ctx context.Context, o *ClusterOper
 	r.ObservedRevision++
 	r.UpdatedAt = now
 	r.RetainedResources = nil
+	r.RetainedPriceCheckedAt = o.Input.Retirement.Inventory.ObservedAt
 	for _, item := range o.Input.Retirement.Inventory.Resources {
 		if item.SurvivesClusterDeletion {
 			r.RetainedResources = append(r.RetainedResources, item)

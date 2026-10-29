@@ -440,19 +440,19 @@ func (c *countingCatalog) ServerOptions(context.Context, provider.Infrastructure
 	return gpuOptions(), nil
 }
 
-func TestCatalogReadAtMostHourly(t *testing.T) {
+func TestCatalogReadAtMostFiveMinutes(t *testing.T) {
 	s := NewService(Deps{})
 	now := time.Date(2026, 10, 26, 12, 0, 0, 0, time.UTC)
 	s.now = func() time.Time { return now }
 	adapter := &countingCatalog{fail: true}
-	// A failed read, a rate limit say, is cached too, so the provider isn't asked again within the hour.
+	// A failed read, a rate limit say, is cached too, so the provider isn't asked again within five minutes.
 	for range 3 {
 		if _, ok := s.catalog(t.Context(), "digitalocean/account", adapter, provider.InfrastructureCredential{}); ok {
 			t.Fatal("failed catalog read reported ok")
 		}
 	}
 	if adapter.calls != 1 {
-		t.Fatalf("catalog reads within the hour: %d", adapter.calls)
+		t.Fatalf("catalog reads within five minutes: %d", adapter.calls)
 	}
 	adapter.fail = false
 	now = now.Add(catalogTTL)
@@ -466,9 +466,17 @@ func TestCatalogReadAtMostHourly(t *testing.T) {
 }
 
 func TestNeedsPrice(t *testing.T) {
-	priced := &Server{Ownership: "managed", Provider: "digitalocean", Status: "ready", Size: "c-32", PricedSize: "c-32", HourlyUSD: 1, HourlyPriceKnown: true}
+	priced := &Server{Ownership: "managed", Provider: "digitalocean", Status: "ready", Size: "c-32", PricedSize: "c-32", HourlyUSD: 1, HourlyPriceKnown: true, PriceCheckedAt: time.Now()}
 	if needsPrice(priced) {
 		t.Fatal("a priced server asked for the catalog")
+	}
+	stale := *priced
+	stale.PriceCheckedAt = time.Now().Add(-5 * time.Minute)
+	if !needsPrice(&stale) {
+		t.Fatal("stale price did not request refresh")
+	}
+	if !catalogPrice(&stale, gpuOptions()) || !freshPrice(stale.PriceCheckedAt, time.Now()) {
+		t.Fatal("stale price was not refreshed")
 	}
 	resized := *priced
 	resized.Size = "gpu-h100x1-80gb"

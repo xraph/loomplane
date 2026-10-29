@@ -57,3 +57,45 @@ func TestClusterBudgetReviewPinsProviderFacts(t *testing.T) {
 		t.Fatal("caller chose price authority")
 	}
 }
+
+func TestClusterBudgetCategoryAndSemanticTime(t *testing.T) {
+	now := time.Now().UTC()
+	for _, category := range []string{"network_egress", "persistent_storage", "control_plane", "nodes"} {
+		if got := costCategory("", category+":private-resource"); got != category {
+			t.Fatal(got)
+		}
+	}
+	if got := costCategory("private-provider-name", "secret"); got != "other" {
+		t.Fatal(got)
+	}
+	a, err := moneyEstimate([]MoneyComponent{{Name: "opaque", Category: "nodes", Source: "pending", Identity: "opaque", Quantity: 1, PriceCheckedAt: &now}}, 3600, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	later := now.Add(time.Second)
+	c := a.Components[0]
+	c.PriceCheckedAt = &later
+	b, err := moneyEstimate([]MoneyComponent{c}, 3600, later)
+	if err != nil || a.PriceDigest != b.PriceDigest {
+		t.Fatal("timestamp changed semantic review", err)
+	}
+	c.Category = "persistent_storage"
+	b, err = moneyEstimate([]MoneyComponent{c}, 3600, later)
+	if err != nil || a.PriceDigest == b.PriceDigest {
+		t.Fatal("category missing from semantic review", err)
+	}
+}
+
+func TestClusterBudgetPhysicalNodeOverlap(t *testing.T) {
+	now := time.Now()
+	e := ClusterCapacityEnvelope{Provider: "p", AccountID: "a", ResourceID: "cluster", Ref: provider.ClusterRef{ID: "physical"}, CheckedAt: now, Consumed: ResourceVector{Servers: 2}, Maximum: ResourceVector{Servers: 4}, NodeIDs: []string{"vm1", "vm2"}}
+	servers := map[string]bool{budgetIdentity("p", "a", "vm1"): true, budgetIdentity("p", "other", "vm2"): true}
+	count, ok := distinctEnvelopeNodes(e, servers, now)
+	if !ok || count != 1 || envelopeRemainder(e).Servers != 2 {
+		t.Fatal(count, ok, envelopeRemainder(e))
+	}
+	e.NodeIDs = []string{"vm1", "vm1"}
+	if count, ok = distinctEnvelopeNodes(e, servers, now); ok || count != 2 {
+		t.Fatal("ambiguous membership dropped costs", count, ok)
+	}
+}

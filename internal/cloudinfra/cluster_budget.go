@@ -9,6 +9,7 @@ import (
 	mathbig "math/big"
 	"sort"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/xraph/loomplane/pkg/provider"
@@ -30,11 +31,14 @@ type MoneyEstimate struct {
 
 // MoneyComponent retains the source identity and units behind each charge.
 type MoneyComponent struct {
-	Name           string `json:"name"`
-	Source         string `json:"source"`
-	Identity       string `json:"identity"`
-	Quantity       int64  `json:"quantity"`
-	HourlyMicroUSD *int64 `json:"hourly_micro_usd"`
+	priceProjected bool
+	Category       string     `json:"category,omitempty"`
+	PriceCheckedAt *time.Time `json:"price_checked_at,omitempty"`
+	Name           string     `json:"name"`
+	Source         string     `json:"source"`
+	Identity       string     `json:"identity"`
+	Quantity       int64      `json:"quantity"`
+	HourlyMicroUSD *int64     `json:"hourly_micro_usd"`
 }
 
 type CapacityBudget struct {
@@ -105,7 +109,11 @@ func moneyEstimate(components []MoneyComponent, horizon int64, checked time.Time
 	if product%3600 != 0 {
 		out.HorizonMicroUSD++
 	}
-	raw, err := json.Marshal(out.Components)
+	semantic := append([]MoneyComponent(nil), out.Components...)
+	for i := range semantic {
+		semantic[i].PriceCheckedAt = nil
+	}
+	raw, err := json.Marshal(semantic)
 	if err != nil {
 		return out, err
 	}
@@ -164,7 +172,7 @@ func (s *Service) clusterMoney(ctx context.Context, in ClusterInput, options pro
 		if item.ID == "" || item.Kind == "" {
 			return MoneyEstimate{}, ErrInvalid
 		}
-		estimate.Components = append(estimate.Components, MoneyComponent{Name: "associated:" + item.Kind + ":" + item.ID, Source: "associated_inventory", Identity: in.Provider + "/" + in.AccountID + "/" + item.Incarnation + "/" + item.ID, Quantity: 1, HourlyMicroUSD: item.EstimatedHourlyMicroUSD})
+		estimate.Components = append(estimate.Components, MoneyComponent{Category: costCategory(item.Kind, ""), Name: "associated:" + item.Kind + ":" + item.ID, Source: "associated_inventory", Identity: in.Provider + "/" + in.AccountID + "/" + item.Incarnation + "/" + item.ID, Quantity: 1, HourlyMicroUSD: item.EstimatedHourlyMicroUSD})
 	}
 	if !inventory.Complete {
 		estimate.Components = append(estimate.Components, MoneyComponent{Name: "associated_inventory", Source: "associated_inventory", Identity: in.Ref.ID, Quantity: 1})
@@ -174,4 +182,32 @@ func (s *Service) clusterMoney(ctx context.Context, in ClusterInput, options pro
 		checked = inventory.ObservedAt
 	}
 	return moneyEstimate(estimate.Components, estimate.HorizonSeconds, checked)
+}
+
+// costCategory accepts only public charge kinds. Provider names and resource IDs
+// never become review labels.
+func costCategory(category, name string) string {
+	if category == "" {
+		parts := strings.Split(name, ":")
+		category = parts[0]
+		if category == "associated" && len(parts) > 1 {
+			category = parts[1]
+		}
+	}
+	switch category {
+	case "nodes", "server":
+		return "nodes"
+	case "network_egress", "persistent_storage", "control_plane", "load_balancers":
+		return category
+	case "volume", "storage":
+		return "persistent_storage"
+	case "load_balancer":
+		return "load_balancers"
+	default:
+		return "other"
+	}
+}
+
+func freshPrice(checked, now time.Time) bool {
+	return !checked.IsZero() && !checked.After(now) && now.Sub(checked) < 5*time.Minute
 }

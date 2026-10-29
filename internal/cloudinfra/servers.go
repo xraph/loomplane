@@ -63,7 +63,8 @@ type Server struct {
 	HourlyPriceKnown bool                  `json:"hourly_price_known,omitempty"`
 	// PricedSize is the size the price above belongs to. A server whose size
 	// moved on, or whose price is unknown, is priced again from the catalog.
-	PricedSize string `json:"priced_size,omitempty"`
+	PricedSize     string    `json:"priced_size,omitempty"`
+	PriceCheckedAt time.Time `json:"price_checked_at,omitzero"`
 }
 
 // RuntimeHealth comes from the pinned Docker daemon, never a provider size slug.

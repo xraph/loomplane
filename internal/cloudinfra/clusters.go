@@ -338,6 +338,11 @@ func (s *Service) PreviewCluster(ctx context.Context, p security.Principal, clou
 			o.Steps = append(o.Steps, ClusterStep{Name: "vault", State: "pending", RequestDigest: digest})
 		}
 	}
+	if o.CapacityTarget.Servers > 0 {
+		if checkErr := s.refreshBudgetPrices(ctx, p, cloud); checkErr != nil {
+			return nil, checkErr
+		}
+	}
 	if checkErr := s.Clusters.CreateClusterPreview(ctx, o); checkErr != nil {
 		return nil, checkErr
 	}

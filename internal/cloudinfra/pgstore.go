@@ -180,6 +180,37 @@ func (s *PgStore) SaveOperation(ctx context.Context, o *Operation) error {
 	if checkErr := lockCapacityCloud(ctx, tx, o.OrgID, o.CloudID); checkErr != nil {
 		return checkErr
 	}
+	if o.Attempted && (o.Input.Kind == "create" || o.Input.Kind == "resize") {
+		saved, readErr := scanOperation(tx.QueryRow(ctx, `SELECT body,principal FROM loomplane_infrastructure_operations WHERE org_id=$1 AND cloud_id=$2 AND id=$3`, o.OrgID, o.CloudID, o.ID))
+		if readErr != nil {
+			return readErr
+		}
+		if !saved.Attempted {
+			policy, checkErr := capacityPolicyTx(ctx, tx, saved.OrgID, saved.CloudID)
+			if checkErr != nil {
+				return checkErr
+			}
+			if policy.Budget != nil {
+				money, e := serverBudgetMoney(ctx, tx, saved)
+				if e != nil {
+					return e
+				}
+				current, e := scopedBudgetReviewTx(ctx, tx, saved.OrgID, saved.CloudID, saved.Provider, saved.AccountID, saved.ID, money, policy, nil)
+				if e != nil {
+					return e
+				}
+				if budgetErr := checkBudgetReview(policy, saved.BudgetReview, current, saved.Input.AcknowledgeUnknownCosts); budgetErr != nil {
+					return budgetErr
+				}
+			}
+			if checkErr := s.reserveOperationCapacity(ctx, tx, saved); checkErr != nil {
+				return checkErr
+			}
+			if checkErr := reserveLegacyAttempt(ctx, tx, saved); checkErr != nil {
+				return checkErr
+			}
+		}
+	}
 	previous := o.StateRevision
 	committed := false
 	defer func() {

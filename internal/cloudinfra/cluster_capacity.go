@@ -206,6 +206,11 @@ func (s *PgStore) AttemptClusterCreate(ctx context.Context, o *ClusterOperation)
 }
 
 func (s *Service) refreshClusterAccount(ctx context.Context, o *ClusterOperation, reader provider.ClusterReader, access provider.AccountAccess) error {
+	if !clusterObservationOnly(o) {
+		if err := s.refreshBudgetPrices(ctx, o.Principal, o.CloudID); err != nil {
+			return err
+		}
+	}
 	inventory, ok := reader.(provider.CapacityInventoryAdapter)
 	if !ok {
 		return provider.ErrInfrastructureUnsupported
