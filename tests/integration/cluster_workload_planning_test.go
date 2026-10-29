@@ -37,9 +37,9 @@ func (a managedDemandAuthority) CurrentClusterScalingPolicy(context.Context, str
 	return &a.policy, nil
 }
 
-func managedDemandFixture(t *testing.T) (*poolFixture, *planning.Service, *planning.Plan, *planning.Result, *capacityPlanAuth) {
+func managedDemandFixture(t *testing.T, identity ...map[string]string) (*poolFixture, *planning.Service, *planning.Plan, *planning.Result, *capacityPlanAuth) {
 	t.Helper()
-	f, r, _, _ := clusterWorkloadFixture(t)
+	f, r, _, _ := clusterWorkloadFixture(t, identity...)
 	now := time.Now().UTC()
 	policy := cloudinfra.ClusterScalingPolicy{ID: "scaling-fixture", OrgID: "org", SchemaVersion: 1, Revision: 1, ResourceID: r.ID, PoolID: "pool", Mode: "native", MinNodes: 1, MaxNodes: 3, OperationID: "scaling-operation", CooldownSeconds: 600}
 	r.ScalingPolicies = map[string]cloudinfra.ClusterScalingPolicy{"pool": policy}

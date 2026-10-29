@@ -359,6 +359,7 @@ func clusterWorkloadReceiptCurrent(ctx context.Context, tx driver.Tx, h ClusterW
  AND k.details->>'namespace'=c.body->>'namespace' AND a.body->>'namespace_uid'=$11 AND a.body->>'trust_fingerprint'=$10
  AND a.project_id=b.project_id AND a.cloud_id=$17
  AND a.id=$12 AND a.cluster_id=$13 AND a.deleted_at IS NULL AND a.body->>'trust_revision'=$14
+ AND (NOT EXISTS(SELECT 1 FROM loomplane_plans p WHERE p.org_id=b.org_id AND p.id=b.plan_id AND p.required_runtime_protocol<>'') OR EXISTS(SELECT 1 FROM loomplane_managed_workload_authority ma WHERE ma.org_id=b.org_id AND ma.release_id=c.body->>'release_id' AND ma.epoch=w.generation AND ma.revoked_at IS NULL))
  AND w.project_id=$3 AND w.plan_id=$6 AND w.deployment_id=$15 AND w.generation=$16 AND w.effects_started AND NOT w.legacy_unfenced FOR SHARE OF b,c,w,k,a,i`, in.OrgID, h.BindingID, in.ProjectID, in.EnvironmentID, in.Service, in.PlanID, r.Image, r.RuntimeRef, raw, r.ClusterCA, r.NamespaceUID, in.AttachmentID, in.ResourceID, strconv.FormatInt(in.TrustRevision, 10), a.Deployment, a.Generation, in.CloudID).Scan(&valid)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return false, nil

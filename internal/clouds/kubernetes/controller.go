@@ -52,6 +52,9 @@ func (r ControllerReceipt) Valid() bool {
 
 func (r *Runtime) recordController(ctx context.Context, c *Client, iid id.ID, spec cpprovider.ServiceSpec, labels map[string]string, d *appsv1.Deployment) error {
 	if r.RecordController == nil {
+		if c.Config.ManagedWorkload {
+			return ErrManagedAuthority
+		}
 		return nil
 	}
 	if d == nil || d.Name != WorkloadName(iid) || d.Namespace != c.Config.Namespace || d.DeletionTimestamp != nil || d.ResourceVersion == "" || checkOwner(d, iid, labels) != nil || len(d.Spec.Template.Spec.Containers) != 1 || d.Spec.Template.Spec.Containers[0].Name != spec.Name || d.Spec.Template.Spec.Containers[0].Image != spec.Image || d.Spec.Template.Annotations[owned.LabelRevision] != labels[owned.LabelRevision] {
@@ -70,6 +73,9 @@ func (r *Runtime) recordController(ctx context.Context, c *Client, iid id.ID, sp
 	}
 	if !receipt.Valid() {
 		return ErrOwned
+	}
+	if c.Config.ManagedWorkload {
+		ctx = WithManagedScope(ctx, c.Config.ManagedScope)
 	}
 	return r.RecordController(ctx, receipt)
 }

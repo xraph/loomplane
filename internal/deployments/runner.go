@@ -1782,6 +1782,24 @@ func (r *Runner) bind(ctx context.Context, d *Deployment, a planning.Action, cur
 	if err := r.plans.PutBinding(ctx, b); err != nil {
 		return nil, err
 	}
+	if a.Service != nil && a.Service.ClusterDemand != nil && a.Service.ClusterDemand.Mode == "guaranteed" {
+		st, ok := r.store.(*PgStore)
+		if !ok {
+			return nil, errors.New("managed workload receipt requires durable storage")
+		}
+		tx, err := st.db.BeginTx(ctx, nil)
+		if err != nil {
+			return nil, err
+		}
+		bindErr := cloudinfra.NewPgStore(st.db).BindClusterWorkloadReceipt(ctx, tx, a.Service.ClusterDemand.Input, b.ID)
+		if bindErr == nil {
+			bindErr = tx.Commit()
+		}
+		_ = tx.Rollback() //nolint:errcheck // no-op after commit
+		if bindErr != nil {
+			return nil, bindErr
+		}
+	}
 	return b, nil
 }
 

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"reflect"
 
+	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/clouds/kubernetes"
 	"github.com/xraph/loomplane/internal/clouds/owned"
 	nativepg "github.com/xraph/loomplane/internal/clouds/postgres"
@@ -64,6 +65,34 @@ func (e *OwnedTarget) kubernetesSession(org, connection string) kubernetes.Sessi
 		client.Config.Details = result.Details
 		// Credential resolution verifies the persisted attachment before this session.
 		client.Config.ManagedWorkload = c.Method == connections.MethodManagedKubernetes && c.Details["managed_attachment_id"] != ""
+		if client.Config.ManagedWorkload {
+			if labels[owned.LabelStateful] == "true" || labels[owned.LabelCatalogComponent] != "" {
+				return nil, kubernetes.ErrManagedAuthority
+			}
+			journal, ok := e.Controllers.(*kubernetes.ControllerStore)
+			if !ok {
+				return nil, kubernetes.ErrManagedAuthority
+			}
+			client.Config.ManagedJournal = journal
+			if operation == "apply" && labels[owned.LabelRuntime] != "" && labels[owned.LabelInstance] != "" {
+				attempt, exists := cloudinfra.WorkloadAttemptFrom(ctx)
+				if !exists {
+					return nil, kubernetes.ErrManagedAuthority
+				}
+				scope := kubernetes.ManagedScope{Org: org, Project: labels[owned.LabelProject], Environment: labels[owned.LabelEnvironment], Service: labels[owned.LabelService], Plan: labels[owned.LabelPlan], Deployment: attempt.Deployment, Action: labels[owned.LabelAction], Connection: connection, Instance: labels[owned.LabelInstance], RuntimeRef: labels[owned.LabelRuntime], RuntimeRevision: labels[owned.LabelRevision], Namespace: client.Config.Namespace, NamespaceUID: result.Details["namespace_uid"], ClusterCA: result.Details["cluster_ca"], Epoch: attempt.Generation}
+				scope.Release = kubernetes.WorkloadReleaseID(scope.RuntimeRef, scope.RuntimeRevision)
+				if scope.Org != attempt.Org || scope.Project != attempt.Project || scope.Environment != attempt.Environment || scope.Service != attempt.Service || scope.Plan != attempt.Plan {
+					return nil, kubernetes.ErrManagedAuthority
+				}
+				if checkErr := journal.OpenManagedScope(ctx, scope); checkErr != nil {
+					return nil, checkErr
+				}
+				client.Config.ManagedScope = scope
+			}
+			// Every managed runtime session is fenced. Read-only/preflight and
+			// unintegrated cleanup sessions have no mutation authority.
+			return kubernetes.New(client.Config)
+		}
 		return client, nil
 	}
 }

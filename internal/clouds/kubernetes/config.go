@@ -27,6 +27,8 @@ var namespaceRE = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
 type Config struct {
 	// ManagedWorkload is set only after resolving a persisted managed attachment.
 	ManagedWorkload bool
+	ManagedJournal  ManagedJournal
+	ManagedScope    ManagedScope
 	REST            *rest.Config
 	Namespace       string
 	Context         string
