@@ -7,6 +7,7 @@ import (
 
 	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/clouds/server"
+	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/security"
@@ -154,6 +155,8 @@ type Runtime interface {
 }
 
 type Deps struct {
+	ManagedClusters         config.ManagedClustersConfig
+	ClusterWorkflow         ClusterWorkflow
 	Clusters                ClusterStore
 	CapacityPrincipal       security.PrincipalVerifier
 	CapacityDemandAuthority CapacityDemandAuthority

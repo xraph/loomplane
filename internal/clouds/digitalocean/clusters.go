@@ -49,12 +49,13 @@ func clusterRef(access provider.AccountAccess, ref provider.ClusterRef) error {
 }
 
 type doksCluster struct {
-	Name      string `json:"name"`
-	ID        string `json:"id"`
-	Region    string `json:"region"`
-	Version   string `json:"version"`
-	Endpoint  string `json:"endpoint"`
-	CreatedAt string `json:"created_at"`
+	Tags      []string `json:"tags"`
+	Name      string   `json:"name"`
+	ID        string   `json:"id"`
+	Region    string   `json:"region"`
+	Version   string   `json:"version"`
+	Endpoint  string   `json:"endpoint"`
+	CreatedAt string   `json:"created_at"`
 	Status    struct {
 		State string `json:"state"`
 	} `json:"status"`

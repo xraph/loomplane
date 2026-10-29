@@ -96,6 +96,12 @@ func (s *PgStore) SaveClusterCheckpoint(ctx context.Context, o *ClusterOperation
 	if checkErr := lockCapacityCloud(ctx, tx, o.OrgID, o.CloudID); checkErr != nil {
 		return checkErr
 	}
+	if err := checkpointClusterTx(ctx, tx, o, expectedRevision); err != nil {
+		return err
+	}
+	return tx.Commit()
+}
+func checkpointClusterTx(ctx context.Context, tx driver.Tx, o *ClusterOperation, expectedRevision int64) error {
 	raw, err := json.Marshal(o)
 	if err != nil {
 		return err
@@ -104,7 +110,7 @@ func (s *PgStore) SaveClusterCheckpoint(ctx context.Context, o *ClusterOperation
 	if err != nil {
 		return err
 	}
-	tag, err := tx.Exec(ctx, `UPDATE loomplane_cluster_operations SET status=$4,revision=$5,body=$6,fencing_epoch=$7,updated_at=now(),resource_id=nullif($11,'') WHERE org_id=$1 AND cloud_id=$2 AND id=$3 AND revision=$8 AND digest=$9 AND fencing_epoch<=$7 AND body->'input'=$6::jsonb->'input' AND principal=$10::jsonb AND body->'kind'=$6::jsonb->'kind' AND body->'schema_version'=$6::jsonb->'schema_version' AND body->'expires_at'=$6::jsonb->'expires_at' AND body->'created_at'=$6::jsonb->'created_at' AND (resource_id IS NULL OR resource_id=nullif($11,''))`, o.OrgID, o.CloudID, o.ID, o.Status, o.Revision, raw, o.FencingEpoch, expectedRevision, o.Digest, principal, o.ResourceID)
+	tag, err := tx.Exec(ctx, `UPDATE loomplane_cluster_operations SET status=$4,revision=$5,body=$6,fencing_epoch=$7,updated_at=now(),resource_id=nullif($11,'') WHERE org_id=$1 AND cloud_id=$2 AND id=$3 AND revision=$8 AND digest=$9 AND fencing_epoch=$7 AND (fencing_epoch=0 OR (body->>'lease_owner'=$6::jsonb->>'lease_owner' AND (body->>'lease_expires_at')::timestamptz>clock_timestamp())) AND body->'input'=$6::jsonb->'input' AND principal=$10::jsonb AND body->'capacity_target'=$6::jsonb->'capacity_target' AND body->'kind'=$6::jsonb->'kind' AND body->'schema_version'=$6::jsonb->'schema_version' AND body->'expires_at'=$6::jsonb->'expires_at' AND body->'created_at'=$6::jsonb->'created_at' AND (resource_id IS NULL OR resource_id=nullif($11,''))`, o.OrgID, o.CloudID, o.ID, o.Status, o.Revision, raw, o.FencingEpoch, expectedRevision, o.Digest, principal, o.ResourceID)
 	if err != nil {
 		return storeError(err)
 	}
@@ -115,10 +121,7 @@ func (s *PgStore) SaveClusterCheckpoint(ctx context.Context, o *ClusterOperation
 	if n != 1 {
 		return ErrConflict
 	}
-	if err := saveClusterSteps(ctx, tx, o); err != nil {
-		return err
-	}
-	return tx.Commit()
+	return saveClusterSteps(ctx, tx, o)
 }
 func saveClusterSteps(ctx context.Context, tx driver.Tx, o *ClusterOperation) error {
 	seen := make(map[string]struct{}, len(o.Steps))

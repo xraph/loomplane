@@ -252,6 +252,8 @@ type StorageConfig struct {
 // CloudsConfig configures enrollment callbacks and provider API test overrides.
 // Leave provider API overrides empty for live deployments.
 type CloudsConfig struct {
+	ManagedClusters ManagedClustersConfig
+
 	// EnrollmentURL is the reachable HTTPS callback base for managed servers.
 	// Empty uses PublicURL; local addresses cannot provision remote servers.
 	EnrollmentURL string
@@ -439,6 +441,14 @@ func FromSource(src Getter) (Config, error) {
 	r.boolean(&c.Clouds.CloudflareRegistrarSandbox, "clouds.cloudflare_registrar_sandbox")
 	r.str(&c.Clouds.ACMEDirectory, "clouds.acme_directory")
 	r.boolean(&c.Clouds.KubernetesInCluster, "clouds.kubernetes_in_cluster")
+	r.boolean(&c.Clouds.ManagedClusters.Enabled, "clouds.managed_clusters.enabled")
+	r.str(&c.Clouds.ManagedClusters.QualificationOrgID, "clouds.managed_clusters.qualification_org_id")
+	r.str(&c.Clouds.ManagedClusters.QualificationOperatorID, "clouds.managed_clusters.qualification_operator_id")
+	r.str(&c.Clouds.ManagedClusters.QualificationAccountID, "clouds.managed_clusters.qualification_account_id")
+	r.str(&c.Clouds.ManagedClusters.QualificationRegion, "clouds.managed_clusters.qualification_region")
+	r.integer(&c.Clouds.ManagedClusters.MaxNodes, "clouds.managed_clusters.max_nodes")
+	r.int64(&c.Clouds.ManagedClusters.MaxNodeHourlyMicroUSD, "clouds.managed_clusters.max_node_hourly_micro_usd")
+	r.integer(&c.Clouds.ManagedClusters.MaxAccountCreates, "clouds.managed_clusters.max_account_creates")
 	c.Clouds.OAuth = r.oauthApps(c.Clouds.OAuth, "clouds.oauth")
 	r.plugins(&c.Providers.Plugins, "providers.plugins")
 	r.names(&c.Providers.Paused, "providers.paused")
@@ -763,4 +773,17 @@ func (r *reader) duration(dst *time.Duration, key string) {
 		return
 	}
 	*dst = d
+}
+
+// ManagedClustersConfig restricts purchases to explicitly scoped qualification runs.
+// General purchase rollout requires the retirement qualification in the lifecycle plan.
+type ManagedClustersConfig struct {
+	MaxNodeHourlyMicroUSD   int64
+	Enabled                 bool
+	QualificationOrgID      string
+	QualificationOperatorID string
+	QualificationAccountID  string
+	QualificationRegion     string
+	MaxNodes                int
+	MaxAccountCreates       int
 }

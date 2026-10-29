@@ -2,6 +2,8 @@ package provider
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -168,3 +170,16 @@ type ClusterObserver interface {
 type ClusterBootstrap interface {
 	BootstrapCluster(context.Context, AccountAccess, ClusterRef, time.Duration) (BootstrapAccess, error)
 }
+
+// ClusterRequestDigest binds recovery tags to the exact durable provider request.
+func ClusterRequestDigest(spec ClusterSpec) string {
+	raw, err := json.Marshal(spec)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(raw)
+	return hex.EncodeToString(sum[:])
+}
+
+// ClusterSpecValidator checks provider-specific fields before purchase approval.
+type ClusterSpecValidator interface{ ValidateClusterSpec(ClusterSpec) error }

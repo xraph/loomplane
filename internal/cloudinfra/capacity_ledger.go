@@ -24,14 +24,16 @@ func (e *CapacityAdmissionError) Error() string {
 }
 
 type infrastructureReservation struct {
-	OperationID string         `json:"operation_id"`
-	Provider    string         `json:"provider"`
-	AccountID   string         `json:"account_id"`
-	ServerID    string         `json:"server_id"`
-	PoolID      string         `json:"pool_id"`
-	Delta       ResourceVector `json:"delta"`
-	Target      ResourceVector `json:"target"`
-	CreatedAt   time.Time      `json:"created_at"`
+	ClusterOperationID string         `json:"cluster_operation_id,omitempty"`
+	ManagedResourceID  string         `json:"managed_resource_id,omitempty"`
+	OperationID        string         `json:"operation_id"`
+	Provider           string         `json:"provider"`
+	AccountID          string         `json:"account_id"`
+	ServerID           string         `json:"server_id"`
+	PoolID             string         `json:"pool_id"`
+	Delta              ResourceVector `json:"delta"`
+	Target             ResourceVector `json:"target"`
+	CreatedAt          time.Time      `json:"created_at"`
 }
 
 // Organization serialization also covers accounts shared by several Clouds.

@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"regexp"
 	"strings"
+	"time"
 )
 
 // InfrastructureCapability describes an account API independently of its runtime.
@@ -94,9 +95,10 @@ func (*InfrastructureScopeError) Unwrap() error { return ErrInfrastructureScope 
 // InfrastructureAPIError is safe to persist. Raw remote bodies are excluded.
 // Codes are the provider's numeric error codes, never its messages.
 type InfrastructureAPIError struct {
-	Provider string
-	Status   int
-	Codes    []int
+	RetryAfter time.Duration
+	Provider   string
+	Status     int
+	Codes      []int
 }
 
 func (e *InfrastructureAPIError) Error() string {

@@ -23,19 +23,24 @@ type AttachmentInput struct {
 }
 
 type ClusterInput struct {
-	Kind                 string               `json:"kind"`
-	Provider             string               `json:"provider"`
-	ConnectionID         string               `json:"connection_id"`
-	AccountID            string               `json:"account_id"`
-	ResourceID           string               `json:"resource_id,omitempty"`
-	ResourceRevision     int64                `json:"resource_revision"`
-	ConnectionGeneration int64                `json:"connection_generation"`
-	CloudRevision        int64                `json:"cloud_revision"`
-	OptionsDigest        string               `json:"options_digest"`
-	OptionsCheckedAt     time.Time            `json:"options_checked_at"`
-	Spec                 provider.ClusterSpec `json:"spec"`
-	Ref                  provider.ClusterRef  `json:"ref"`
-	Attachment           *AttachmentInput     `json:"attachment,omitempty"`
+	PolicyRevision          int64                `json:"policy_revision"`
+	ManagementReachable     bool                 `json:"management_reachable"`
+	AcknowledgeUnknownCosts bool                 `json:"acknowledge_unknown_costs"`
+	AcknowledgeNodeCosts    bool                 `json:"acknowledge_node_costs"`
+	WorkerImage             string               `json:"worker_image"`
+	Kind                    string               `json:"kind"`
+	Provider                string               `json:"provider"`
+	ConnectionID            string               `json:"connection_id"`
+	AccountID               string               `json:"account_id"`
+	ResourceID              string               `json:"resource_id,omitempty"`
+	ResourceRevision        int64                `json:"resource_revision"`
+	ConnectionGeneration    int64                `json:"connection_generation"`
+	CloudRevision           int64                `json:"cloud_revision"`
+	OptionsDigest           string               `json:"options_digest"`
+	OptionsCheckedAt        time.Time            `json:"options_checked_at"`
+	Spec                    provider.ClusterSpec `json:"spec"`
+	Ref                     provider.ClusterRef  `json:"ref"`
+	Attachment              *AttachmentInput     `json:"attachment,omitempty"`
 }
 
 type ClusterStep struct {
@@ -49,27 +54,33 @@ type ClusterStep struct {
 }
 
 type ClusterOperation struct {
-	ID             string                     `json:"id"`
-	OrgID          string                     `json:"org_id"`
-	CloudID        string                     `json:"cloud_id"`
-	ResourceID     string                     `json:"resource_id,omitempty"`
-	Kind           string                     `json:"kind"`
-	SchemaVersion  int                        `json:"schema_version"`
-	Input          ClusterInput               `json:"input"`
-	Digest         string                     `json:"digest"`
-	Revision       int64                      `json:"revision"`
-	Status         string                     `json:"status"`
-	Principal      security.Principal         `json:"-"`
-	Receipts       []provider.ClusterMutation `json:"receipts,omitempty"`
-	Steps          []ClusterStep              `json:"steps"`
-	ReservationIDs []string                   `json:"reservation_ids,omitempty"`
-	LeaseOwner     string                     `json:"lease_owner,omitempty"`
-	FencingEpoch   int64                      `json:"fencing_epoch"`
-	LeaseExpiresAt *time.Time                 `json:"lease_expires_at,omitempty"`
-	ExpiresAt      time.Time                  `json:"expires_at"`
-	CreatedAt      time.Time                  `json:"created_at"`
-	UpdatedAt      time.Time                  `json:"updated_at"`
-	Error          string                     `json:"error,omitempty"`
+	EstimatedNodeHourlyMicroUSD int64                      `json:"estimated_node_hourly_micro_usd"`
+	UnknownCosts                []string                   `json:"unknown_costs"`
+	CapacityTarget              ResourceVector             `json:"capacity_target"`
+	Attempt                     int                        `json:"attempt"`
+	CancelRequested             bool                       `json:"cancel_requested"`
+	NextAttemptAt               time.Time                  `json:"next_attempt_at,omitempty,omitzero"`
+	ID                          string                     `json:"id"`
+	OrgID                       string                     `json:"org_id"`
+	CloudID                     string                     `json:"cloud_id"`
+	ResourceID                  string                     `json:"resource_id,omitempty"`
+	Kind                        string                     `json:"kind"`
+	SchemaVersion               int                        `json:"schema_version"`
+	Input                       ClusterInput               `json:"input"`
+	Digest                      string                     `json:"digest"`
+	Revision                    int64                      `json:"revision"`
+	Status                      string                     `json:"status"`
+	Principal                   security.Principal         `json:"-"`
+	Receipts                    []provider.ClusterMutation `json:"receipts,omitempty"`
+	Steps                       []ClusterStep              `json:"steps"`
+	ReservationIDs              []string                   `json:"reservation_ids,omitempty"`
+	LeaseOwner                  string                     `json:"lease_owner,omitempty"`
+	FencingEpoch                int64                      `json:"fencing_epoch"`
+	LeaseExpiresAt              *time.Time                 `json:"lease_expires_at,omitempty"`
+	ExpiresAt                   time.Time                  `json:"expires_at"`
+	CreatedAt                   time.Time                  `json:"created_at"`
+	UpdatedAt                   time.Time                  `json:"updated_at"`
+	Error                       string                     `json:"error,omitempty"`
 }
 
 // AttachmentPrerequisites records the reviewed features enrollment must verify.

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/xraph/grove/driver"
 
 	"github.com/xraph/loomplane/internal/cloudprofiles"
 )
@@ -75,6 +76,16 @@ func (s *PgStore) ClaimManagedResource(ctx context.Context, r *ManagedResource, 
 	if err != nil {
 		return nil, err
 	}
+	claimed, err := claimManagedResourceTx(ctx, tx, r, expectedRevision)
+	if err != nil {
+		return nil, err
+	}
+	if checkErr := tx.Commit(); checkErr != nil {
+		return nil, checkErr
+	}
+	return claimed, nil
+}
+func claimManagedResourceTx(ctx context.Context, tx driver.Tx, r *ManagedResource, expectedRevision int64) (*ManagedResource, error) {
 	raw, err := json.Marshal(r)
 	if err != nil {
 		return nil, err
@@ -97,9 +108,7 @@ func (s *PgStore) ClaimManagedResource(ctx context.Context, r *ManagedResource, 
 	if err != nil {
 		return nil, storeError(err)
 	}
-	if err := tx.Commit(); err != nil {
-		return nil, err
-	}
+
 	claimed := *r
 	return &claimed, nil
 }

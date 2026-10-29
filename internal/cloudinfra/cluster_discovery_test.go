@@ -107,12 +107,12 @@ func TestDOKSOptionsFreshness(t *testing.T) {
 }
 func TestDOKSInstalledReadCapabilities(t *testing.T) {
 	adapters := BuiltinAdapters(Endpoints{})
-	for _, capability := range []provider.InfrastructureCapability{provider.ClusterDiscovery, provider.ClusterOptionsRead, provider.ClusterBootstrapAccess} {
+	for _, capability := range []provider.InfrastructureCapability{provider.ClusterDiscovery, provider.ClusterOptionsRead, provider.ClusterBootstrapAccess, provider.ClusterCreation, provider.ClusterMutationObservation} {
 		if _, err := adapters.Cluster("digitalocean", capability); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if _, err := adapters.Cluster("digitalocean", provider.ClusterCreation); !errors.Is(err, provider.ErrInfrastructureUnsupported) {
+	if _, err := adapters.Cluster("digitalocean", provider.ClusterCreation); err != nil {
 		t.Fatal(err)
 	}
 }
