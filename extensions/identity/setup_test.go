@@ -2,6 +2,7 @@ package identity
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 )
@@ -12,6 +13,33 @@ func TestSetupContextFlag(t *testing.T) {
 	}
 	if !isSetup(withSetup(context.Background())) {
 		t.Fatal("withSetup's context doesn't count as setup")
+	}
+}
+
+func TestSetupDoneRule(t *testing.T) {
+	down := errors.New("database is down")
+	answer := func(v bool, err error) func(context.Context) (bool, error) {
+		return func(context.Context) (bool, error) { return v, err }
+	}
+	tests := []struct {
+		name               string
+		recorded, hasUsers func(context.Context) (bool, error)
+		want, wantErr      bool
+	}{
+		{"nothing recorded and no users", answer(false, nil), answer(false, nil), false, false},
+		{"nothing recorded, users from before the record", answer(false, nil), answer(true, nil), true, false},
+		{"recorded, every user gone", answer(true, nil), answer(false, nil), true, false},
+		{"recorded, users not counted", answer(true, nil), answer(false, down), true, false},
+		{"record unreadable", answer(false, down), answer(true, nil), false, true},
+		{"users uncountable", answer(false, nil), answer(false, down), false, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := setupDoneRule(t.Context(), tt.recorded, tt.hasUsers)
+			if got != tt.want || (err != nil) != tt.wantErr {
+				t.Fatalf("setupDoneRule = %v, %v; want %v, error %v", got, err, tt.want, tt.wantErr)
+			}
+		})
 	}
 }
 

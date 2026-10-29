@@ -391,6 +391,9 @@ func (e *Extension) prepare(ctx context.Context) error {
 	if err := e.engine.Start(ctx); err != nil {
 		return fmt.Errorf("start authsome: %w", err)
 	}
+	if err := e.recordEarlierSetup(ctx); err != nil {
+		return err
+	}
 	if err := e.setting(ctx, "auth.require_email_verification", e.cfg.Identity.RequireEmailVerification); err != nil {
 		return err
 	}

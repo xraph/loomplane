@@ -185,15 +185,15 @@ func signupCheckSlots(poolSize int) int {
 }
 
 // signupPending is setupPending for the gate, which fails the other way:
-// when the users can't be counted, sign-up is refused rather than let
-// through on an instance that may still be waiting for setup.
+// when it can't be told whether setup is done, sign-up is refused rather
+// than let through on an instance that may still be waiting for setup.
 func (e *Extension) signupPending(ctx context.Context) bool {
-	has, err := e.hasUsers(ctx)
+	done, err := e.setupDone(ctx)
 	if err != nil {
-		e.Logger().Error("count users for sign-up", forge.F("error", err.Error()))
+		e.Logger().Error("check for a completed setup before a sign-up", forge.F("error", err.Error()))
 		return true
 	}
-	return !has
+	return !done
 }
 
 // waitlistApproved reports whether email has an approved entry on

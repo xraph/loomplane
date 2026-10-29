@@ -25,7 +25,7 @@ import (
 )
 
 const (
-	// errSetupDone is the refusal once the instance has a user.
+	// errSetupDone is the refusal once setup has been completed.
 	errSetupDone = "setup has already been completed"
 	// maxOrgName is the longest first organization name setup takes.
 	maxOrgName = 64
@@ -110,16 +110,72 @@ func (e *Extension) setupStatus(c forge.Context) error {
 	return c.JSON(http.StatusOK, SetupStatus{Pending: e.setupPending(c.Request().Context())})
 }
 
-// setupPending reports whether Loomplane's app has no users yet. When the
-// count fails it says no, so the dashboard falls back to sign-in rather
-// than offering setup on an instance that may have an owner.
+// setupPending reports whether the instance still waits for setup. When
+// that can't be told it says no, so the dashboard falls back to sign-in
+// rather than offering setup on an instance that may have an owner.
 func (e *Extension) setupPending(ctx context.Context) bool {
-	has, err := e.hasUsers(ctx)
+	done, err := e.setupDone(ctx)
 	if err != nil {
-		e.Logger().Error("count users for setup", forge.F("error", err.Error()))
+		e.Logger().Error("check for a completed setup", forge.F("error", err.Error()))
 		return false
 	}
-	return !has
+	return !done
+}
+
+// setupDone reports whether first-run setup has been completed.
+func (e *Extension) setupDone(ctx context.Context) (bool, error) {
+	return setupDoneRule(ctx, e.instance.SetupCompleted, e.hasUsers)
+}
+
+// setupDoneRule is setupDone's rule: setup is done once the instance has
+// recorded it, whoever has left since, or while the app has a live user
+// (an instance set up before setup kept a record, until Start records it).
+// Users are only counted when there's no record.
+func setupDoneRule(ctx context.Context, recorded, hasUsers func(context.Context) (bool, error)) (bool, error) {
+	done, err := recorded(ctx)
+	if err != nil {
+		return false, fmt.Errorf("read the setup record: %w", err)
+	}
+	if done {
+		return true, nil
+	}
+	return hasUsers(ctx)
+}
+
+// recordEarlierSetup records setup as completed on an instance set up
+// before setup kept a record: one with a live user, or with an
+// organization, which outlives the accounts that made it. A rolled-back
+// setup leaves neither, only a deleted user, so it isn't mistaken for one.
+// It holds the setup lock, so a setup running on another replica is either
+// done or rolled back before this looks.
+func (e *Extension) recordEarlierSetup(ctx context.Context) error {
+	return pglock.Do(ctx, e.pg, pglock.FirstRunSetup, func(ctx context.Context) error {
+		recorded, err := e.instance.SetupCompleted(ctx)
+		if err != nil || recorded {
+			return err
+		}
+		used, err := e.hasUsers(ctx)
+		if err == nil && !used {
+			used, err = e.hasOrganizations(ctx)
+		}
+		if err != nil {
+			return fmt.Errorf("check for an earlier setup: %w", err)
+		}
+		if !used {
+			return nil
+		}
+		return e.instance.MarkSetupCompleted(ctx)
+	})
+}
+
+// hasOrganizations reports whether Loomplane's app has an organization.
+func (e *Extension) hasOrganizations(ctx context.Context) (bool, error) {
+	var has bool
+	err := e.pg.QueryRow(ctx, `SELECT EXISTS (SELECT 1 FROM authsome_organizations WHERE app_id = $1)`, e.cfg.Identity.AppID).Scan(&has)
+	if err != nil {
+		return false, fmt.Errorf("look for organizations: %w", err)
+	}
+	return has, nil
 }
 
 func (e *Extension) hasUsers(ctx context.Context) (bool, error) {
@@ -200,9 +256,9 @@ func orgSlug(name string) string {
 	return b.String()
 }
 
-// completeSetup creates the instance's first account. It succeeds once: the
-// user count is checked again under an advisory lock, so of two setups that
-// race, the second finds the first one's user and is refused.
+// completeSetup creates the instance's first account. It succeeds once:
+// whether setup is done is checked again under an advisory lock, so of two
+// setups that race, the second finds the first one's user and is refused.
 func (e *Extension) completeSetup(c forge.Context) error {
 	var in SetupRequest
 	if err := c.BindJSON(&in); err != nil {
@@ -213,7 +269,11 @@ func (e *Extension) completeSetup(c forge.Context) error {
 		return forge.NewHTTPError(http.StatusBadRequest, err.Error())
 	}
 	// Checked before the lock too, so a set-up instance answers at once.
-	if !e.setupPending(c.Request().Context()) {
+	done, err := e.setupDone(c.Request().Context())
+	if err != nil {
+		return fmt.Errorf("check for a completed setup: %w", err)
+	}
+	if done {
 		return forge.NewHTTPError(http.StatusForbidden, errSetupDone)
 	}
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(c.Request().Context()), setupTimeout)
@@ -221,11 +281,11 @@ func (e *Extension) completeSetup(c forge.Context) error {
 	var out SetupResponse
 	var sess *session.Session
 	err = pglock.Do(ctx, e.pg, pglock.FirstRunSetup, func(ctx context.Context) error {
-		has, cerr := e.hasUsers(ctx)
+		done, cerr := e.setupDone(ctx)
 		if cerr != nil {
-			return cerr
+			return fmt.Errorf("check for a completed setup: %w", cerr)
 		}
-		if has {
+		if done {
 			return forge.NewHTTPError(http.StatusForbidden, errSetupDone)
 		}
 		r := c.Request()
@@ -330,7 +390,9 @@ func (e *Extension) finishSetup(ctx context.Context, appID authid.AppID, u *user
 		return fmt.Errorf("select the first organization: %w", err)
 	}
 	// A new instance starts closed; the config value can still open it.
-	return e.instance.SetWaitlist(ctx, true)
+	// Last, with the waitlist, so a setup that rolls back never records
+	// itself as done.
+	return e.instance.CompleteSetup(ctx, true)
 }
 
 // undoSetup removes what a failed setup made. Each step is tried even if

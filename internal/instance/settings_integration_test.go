@@ -90,3 +90,28 @@ func TestSettings_waitlistRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+func TestSettings_setupRecord(t *testing.T) {
+	s := scratchSettings(t)
+	ctx := t.Context()
+
+	if done, err := s.SetupCompleted(ctx); err != nil || done {
+		t.Fatalf("fresh database: done %v err %v", done, err)
+	}
+	// The backfill leaves the waitlist alone.
+	if err := s.MarkSetupCompleted(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, stored, err := s.Waitlist(ctx); err != nil || stored {
+		t.Fatalf("after MarkSetupCompleted: waitlist stored %v err %v", stored, err)
+	}
+	// Setup's own write sets both, and rewriting either is harmless.
+	if err := s.CompleteSetup(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	done, err := s.SetupCompleted(ctx)
+	on, stored, werr := s.Waitlist(ctx)
+	if err != nil || werr != nil || !done || !on || !stored {
+		t.Fatalf("after CompleteSetup(true): done %v waitlist %v/%v errs %v %v", done, on, stored, err, werr)
+	}
+}

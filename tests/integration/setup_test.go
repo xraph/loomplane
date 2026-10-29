@@ -140,7 +140,15 @@ func countRows(t *testing.T, dsn, query string) int {
 	return n
 }
 
-const liveUsers = `SELECT count(*) FROM authsome_users WHERE deleted_at IS NULL`
+const (
+	liveUsers   = `SELECT count(*) FROM authsome_users WHERE deleted_at IS NULL`
+	setupMarker = `SELECT count(*) FROM loomplane_instance_settings WHERE key = 'setup_completed' AND value::text = 'true'`
+)
+
+// setupStatusBody is GET /api/v1/setup's answer.
+type setupStatusBody struct {
+	Pending bool `json:"pending"`
+}
 
 // freshSetup starts a fresh instance as a deploy would: with no waitlist
 // override unless the test sets one.
@@ -251,6 +259,72 @@ func TestSetup_onlyOnce(t *testing.T) {
 	}
 }
 
+// Any account can delete itself, which leaves only a tombstone. Once every
+// account has gone, the instance must still know it was set up, or the
+// next visitor could make themselves owner of what the old organizations
+// left behind.
+func TestSetup_staysDoneWhenEveryoneLeaves(t *testing.T) {
+	cfg := config.Defaults()
+	r, c := freshSetup(t, &cfg)
+	defer r.stop()
+	if code, body := c.setup(ada); code != http.StatusOK {
+		t.Fatalf("setup: %d %s", code, body)
+	}
+	if status, raw, _ := c.send(http.MethodDelete, "/authsome/v1/me", nil); status != http.StatusOK {
+		t.Fatalf("Ada deletes her account: %d %s", status, raw)
+	}
+	if n := countRows(t, cfg.Database.URL, liveUsers); n != 0 {
+		t.Fatalf("%d live users after the only one deleted her account, want 0", n)
+	}
+
+	anon := &setupClient{t: t, base: c.base, key: c.key}
+	if got := anon.publicConfig(); got.SetupPending {
+		t.Fatalf("public config with every account deleted = %+v, want setup done", got)
+	}
+	var status setupStatusBody
+	anon.get("/api/v1/setup", &status)
+	if status.Pending {
+		t.Fatal("GET /api/v1/setup says pending once every account is deleted")
+	}
+	mallory := map[string]string{"name": "Mallory", "email": "mallory@example.com", "password": "Correct-horse-battery-9", "organization_name": "Evil"}
+	if code, body := anon.setup(mallory); code != http.StatusForbidden || !strings.Contains(body, "setup has already been completed") {
+		t.Fatalf("setup once every account is deleted: %d %s, want 403 setup has already been completed", code, body)
+	}
+	// Sign-up is judged as on any set-up instance, where setup turned the
+	// waitlist on.
+	if status, why := signUp(anon, "mallory@example.com"); status != http.StatusForbidden || why.Type != "waitlist_required" {
+		t.Fatalf("sign-up once every account is deleted: %d %+v, want 403 waitlist_required", status, why)
+	}
+}
+
+// An instance set up before setup kept a record of it has users and
+// nothing stored. Starting it records that it's set up, so it stays that
+// way whoever leaves. Nothing turned its waitlist on, so sign-up stays
+// open, as it was.
+func TestSetup_upgradedInstanceIsMarkedDone(t *testing.T) {
+	cfg := config.Defaults()
+	r, c := freshSetup(t, &cfg)
+	if code, body := c.setup(ada); code != http.StatusOK {
+		r.stop()
+		t.Fatalf("setup: %d %s", code, body)
+	}
+	r.stop()
+	execSQL(t, cfg.Database.URL, `DELETE FROM loomplane_instance_settings`)
+
+	r = startStoredWaitlist(t, cfg)
+	defer r.stop()
+	if n := countRows(t, cfg.Database.URL, setupMarker); n != 1 {
+		t.Fatalf("%d setup records after starting an instance that has users, want 1", n)
+	}
+	anon := &setupClient{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
+	if got := anon.publicConfig(); got.SetupPending || got.Waitlist {
+		t.Fatalf("public config after the upgrade = %+v, want set up with the waitlist off", got)
+	}
+	if status, why := signUp(anon, "grace@example.com"); status != http.StatusCreated {
+		t.Fatalf("a stranger's sign-up after the upgrade: %d %+v, want 201", status, why)
+	}
+}
+
 func TestSetup_validation(t *testing.T) {
 	cfg := config.Defaults()
 	r, c := freshSetup(t, &cfg)
@@ -336,7 +410,7 @@ func TestSetup_rollback(t *testing.T) {
 			return nil
 		})
 	})
-	defer r.stop()
+	defer func() { r.stop() }()
 	c := &setupClient{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
 
 	code, body := c.setup(ada)
@@ -378,6 +452,18 @@ func TestSetup_rollback(t *testing.T) {
 	if platformadmin.Holds(held, cfg.Identity.AppID) {
 		t.Fatalf("the rolled-back user still holds a platform role: %+v", held)
 	}
+	if n := countRows(t, cfg.Database.URL, setupMarker); n != 0 {
+		t.Fatalf("a failed setup recorded the instance as set up (%d)", n)
+	}
+
+	// The rolled-back user's tombstone is no sign of an earlier setup, so a
+	// restart leaves the instance waiting for one.
+	r.stop()
+	r = start(t, cfg)
+	c.base = r.srv.URL
+	if !c.publicConfig().SetupPending {
+		t.Fatal("a restart after a failed setup left the instance set up")
+	}
 
 	// The same person can try again with the same email and organization.
 	if code, body = c.setup(ada); code != http.StatusOK {
@@ -385,6 +471,9 @@ func TestSetup_rollback(t *testing.T) {
 	}
 	if got := c.publicConfig(); got.SetupPending || got.ConsolePath == nil {
 		t.Fatalf("public config after the retry = %+v", got)
+	}
+	if n := countRows(t, cfg.Database.URL, setupMarker); n != 1 {
+		t.Fatalf("%d setup records after the retry, want 1", n)
 	}
 }
 
