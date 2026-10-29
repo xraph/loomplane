@@ -83,6 +83,15 @@ func (p *planner) routedReplacements() bool {
 			}
 			continue
 		}
+		// An App Platform route reaches the service's app by its address, and
+		// an update in place keeps that app and its domains. A new app would
+		// leave the route on one that goes away.
+		if route.Binding.BackendName() == cloudinfra.RouteBackendPlatform {
+			if a.Op != Update {
+				p.problem(Finding{Code: "route-release", Subject: ServiceSubject, Name: a.Name, Message: fmt.Sprintf("%s would get a new App Platform app, which %s doesn't follow. Remove that route, then plan again.", a.Name, route.Input.Hostname)})
+			}
+			continue
+		}
 		a.Routes = append(a.Routes, route)
 		b := p.bindings[a.ID]
 		if err := routedReplacementAllowed(a, b, route); err != nil {
@@ -232,8 +241,9 @@ func (s *PgStore) CurrentReleaseRoutes(ctx context.Context, org, project, enviro
 	}
 	var out []cloudinfra.Route
 	for _, r := range routes {
-		// Releases never carry Kubernetes routes; see routedReplacements.
-		if r.Input.EnvironmentID == environment && r.Input.Service == service && r.Status != "removed" && r.Binding.BackendName() != cloudinfra.RouteBackendKubernetes {
+		// Releases never carry Kubernetes or App Platform routes; see
+		// routedReplacements.
+		if r.Input.EnvironmentID == environment && r.Input.Service == service && r.Status != "removed" && r.Binding.BackendName() != cloudinfra.RouteBackendKubernetes && r.Binding.BackendName() != cloudinfra.RouteBackendPlatform {
 			out = append(out, *r)
 		}
 	}
