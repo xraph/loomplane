@@ -1,0 +1,7 @@
+@import "@forge-go/dashboard-kit/globals.css";
+
+/* The console's components ship Tailwind classes, not a stylesheet: scanning
+   them here keeps this CSS in the console chunk, away from the dashboard. */
+@source "../../node_modules/@forge-go/dashboard-host/src";
+@source "../../node_modules/@forge-go/dashboard-plugin-core/src";
+@source "../../node_modules/@forge-go/dashboard-plugin-authsome/src";
