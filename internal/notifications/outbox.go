@@ -211,10 +211,7 @@ func (s *Service) process(ctx context.Context, item *outboxItem) error {
 		return err
 	}
 	pushErr := s.pushStep(ctx, item, plan)
-	if pushErr != nil && !errors.Is(pushErr, ErrPushFailed) {
-		return pushErr
-	}
-	// A phone that didn't take the push fails the row after the email, so
+	// A push that went wrong fails the row after the email, so
 	// the retry never mails twice.
 	if err := s.emailStep(ctx, item, p, email, d); err != nil {
 		return err

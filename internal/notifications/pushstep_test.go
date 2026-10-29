@@ -8,6 +8,7 @@ import (
 
 	"github.com/xraph/herald/device"
 	"github.com/xraph/herald/driver"
+	"github.com/xraph/herald/driver/push"
 )
 
 func TestCollapseID(t *testing.T) {
@@ -98,5 +99,58 @@ func TestAllowDeviceExplicitDevices(t *testing.T) {
 	}
 	if allowDevice(phone("hdev_b", nil), p) {
 		t.Fatal("an unnamed phone is allowed")
+	}
+}
+
+// worstCase builds the largest Contract E data Loomplane can send, with
+// every cut value made of characters JSON escapes to six bytes.
+func worstCase() (map[string]string, string, string) {
+	escaped := func(n int) string { return strings.Repeat("<", n) }
+	id := strings.Repeat("i", 64)
+	p := &Push{Class: ClassNeedsYou, Urgency: driver.UrgencyTimeSensitive, Category: CategoryApproval, Actions: []string{ActionApprove, ActionReview, ActionOpen, ActionRetry, ActionRollback, ActionAsk, ActionTake},
+		Environment: escaped(200), Data: map[string]string{"revision": escaped(200), "taken_by": escaped(200)}}
+	data := envelopeData(envelopeInput{Server: "https://" + strings.Repeat("a", 300), OrgID: id, OrgName: escaped(300), Kind: strings.Repeat("k", 40), Subject: id, InboxID: id,
+		Path: "/" + strings.Repeat("&", 400), ProjectID: id, Push: p, SentAt: time.Date(2026, 10, 28, 20, 44, 0, 0, time.UTC)})
+	return data, escaped(80) + "é", "<>& " + strings.Repeat("&é", 200)
+}
+
+func TestEnvelopeDataAlonePlusAnyTextFits(t *testing.T) {
+	data, _, _ := worstCase()
+	if got, want := utf8.RuneCountInString(data["org_name"]), maxDataValue; got != want {
+		t.Fatalf("org_name runes: %d", got)
+	}
+	if len(data["path"]) > maxDataPath || !utf8.ValidString(data["path"]) || !strings.HasPrefix(data["path"], "/") {
+		t.Fatalf("path: %q", data["path"])
+	}
+	if _, err := push.MarshalEnvelope(push.Envelope{Category: CategoryApproval, Thread: strings.Repeat("i", 64), Data: data}); err != nil {
+		t.Fatalf("the data alone doesn't fit: %v", err)
+	}
+}
+
+func TestEnvelopeAlwaysFitsHeraldsLimit(t *testing.T) {
+	data, title, body := worstCase()
+	if utf8.RuneCountInString(title) < maxPushTitle || utf8.RuneCountInString(body) < maxPushBody {
+		t.Fatal("the test text is shorter than the limits")
+	}
+	gotTitle, gotBody, err := fitEnvelope(title, body, CategoryApproval, strings.Repeat("i", 64), data)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := push.MarshalEnvelope(push.Envelope{Title: gotTitle, Body: gotBody, Category: CategoryApproval, Thread: strings.Repeat("i", 64), Data: data})
+	if err != nil || len(raw) > push.MaxEnvelopeBytes {
+		t.Fatalf("envelope: %d bytes, %v", len(raw), err)
+	}
+	if gotTitle == "" {
+		t.Fatal("the title was trimmed away")
+	}
+	// Ordinary text isn't touched.
+	if title, body, err = fitEnvelope("Atlas is live", "It took 41 seconds.", CategoryUpdate, "project-a", map[string]string{"kind": "deployment.succeeded"}); err != nil || title != "Atlas is live" || body != "It took 41 seconds." {
+		t.Fatalf("ordinary text changed: %q %q %v", title, body, err)
+	}
+}
+
+func TestCutBytesKeepsValidUTF8(t *testing.T) {
+	if got := cutBytes("ééé", 5); got != "éé" {
+		t.Fatalf("cut: %q", got)
 	}
 }

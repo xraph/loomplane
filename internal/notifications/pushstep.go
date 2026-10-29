@@ -18,6 +18,7 @@ import (
 	"github.com/xraph/herald"
 	"github.com/xraph/herald/device"
 	"github.com/xraph/herald/driver"
+	"github.com/xraph/herald/driver/push"
 	"github.com/xraph/herald/message"
 )
 
@@ -63,6 +64,11 @@ const (
 	// deviceGone is what a row records for a phone Herald dropped because
 	// its address is dead. Asking it again would change nothing.
 	deviceGone = "gone"
+	// The caps below keep the sealed envelope under push.MaxEnvelopeBytes
+	// even when every character is one JSON escapes to six bytes.
+	maxDataValue  = 32  // runes, for any data value Loomplane doesn't bound itself
+	maxDataServer = 160 // bytes
+	maxDataPath   = 120 // bytes
 )
 
 // Push says how a notice reaches phones. On a Notice, nil sends no push.
@@ -119,7 +125,7 @@ func collapseID(subjectKey string) string {
 
 // cut keeps at most n runes of s and always returns valid UTF-8.
 func cut(s string, n int) string {
-	s = strings.ToValidUTF8(s, "")
+	s, n = strings.ToValidUTF8(s, ""), max(n, 0)
 	if utf8.RuneCountInString(s) <= n {
 		return s
 	}
@@ -157,20 +163,61 @@ func allowDevice(d *device.Device, p *Push) bool {
 	return false
 }
 
-// envelopeData is the data a phone reads from a push, Contract E.
+// cutBytes keeps at most n bytes of s and always returns valid UTF-8.
+func cutBytes(s string, n int) string {
+	s = strings.ToValidUTF8(s, "")
+	if len(s) <= n {
+		return s
+	}
+	s = s[:n]
+	for !utf8.ValidString(s) {
+		s = s[:len(s)-1]
+	}
+	return s
+}
+
+// envelopeData is the data a phone reads from a push, Contract E. Values
+// are cut so the envelope can always be sealed: org_name and the extra
+// Push.Data values to 32 runes, path to 120 bytes and server to 160.
 func envelopeData(e envelopeInput) map[string]string {
 	out := map[string]string{}
 	if e.Push != nil {
-		maps.Copy(out, e.Push.Data)
+		for k, v := range e.Push.Data {
+			out[k] = cut(v, maxDataValue)
+		}
 	}
+	e.OrgName = cut(e.OrgName, maxDataValue)
+	e.Path = cutBytes(e.Path, maxDataPath)
+	e.Server = cutBytes(e.Server, maxDataServer)
 	out["server"], out["org"], out["org_name"], out["kind"] = e.Server, e.OrgID, e.OrgName, e.Kind
 	out["subject"], out["inbox_id"], out["path"], out["project"] = e.Subject, e.InboxID, e.Path, e.ProjectID
 	out["sent_at"] = e.SentAt.UTC().Format(time.RFC3339)
 	out["urgency"], out["class"], out["actions"], out["environment"] = "", "", "", ""
 	if e.Push != nil {
-		out["urgency"], out["class"], out["actions"], out["environment"] = string(e.Push.Urgency), e.Push.Class, strings.Join(e.Push.Actions, ","), e.Push.Environment
+		out["urgency"], out["class"], out["actions"], out["environment"] = string(e.Push.Urgency), e.Push.Class, strings.Join(e.Push.Actions, ","), cut(e.Push.Environment, maxDataValue)
 	}
 	return out
+}
+
+// fitEnvelope cuts the title and body to their limits, then trims the body
+// and the title further until Herald can seal the envelope. Characters JSON
+// escapes take up to six bytes each, so the limits alone don't promise it.
+func fitEnvelope(title, body, category, thread string, data map[string]string) (fittedTitle, fittedBody string, err error) {
+	title, body = cut(title, maxPushTitle), cut(body, maxPushBody)
+	for {
+		_, err = push.MarshalEnvelope(push.Envelope{Title: title, Body: body, Category: category, Thread: thread, Data: data})
+		if !errors.Is(err, push.ErrPayloadTooLarge) {
+			return title, body, err
+		}
+		switch {
+		case body != "":
+			body = cut(body, utf8.RuneCountInString(body)-10)
+		case title != "":
+			title = cut(title, utf8.RuneCountInString(title)-10)
+		default:
+			return "", "", err
+		}
+	}
 }
 
 func pushDone(status string) bool {
@@ -194,17 +241,51 @@ func (s *Service) finishPush(ctx context.Context, item *outboxItem) error {
 	if slices.Contains(slices.Collect(maps.Values(item.pushDevices)), string(message.StatusSent)) {
 		state = PushSent
 	}
-	if _, err := s.pg.Exec(ctx, `UPDATE loomplane_notification_outbox SET push_state=$3 WHERE id=$1 AND lease_owner=$2`, item.id, item.owner, state); err != nil {
+	if err := s.pushUpdate(ctx, item, `UPDATE loomplane_notification_outbox SET push_state=$3 WHERE id=$1 AND lease_owner=$2`, state); err != nil {
 		return err
 	}
 	item.pushState = state
 	return nil
 }
 
-// pushStep sends one row's push to the person's phones, once each. It
-// returns ErrPushFailed when a phone didn't take it, after recording the
-// phones that did, so the retry reaches only the rest.
+// pushUpdate runs one of the push step's updates on the row this worker
+// holds. Another worker holding it means the lease ran out mid-step: that is
+// logged by ID and fails the step, and the new holder starts from what the
+// row records.
+func (s *Service) pushUpdate(ctx context.Context, item *outboxItem, query string, args ...any) error {
+	res, err := s.pg.Exec(ctx, query, append([]any{item.id, item.owner}, args...)...)
+	if err != nil {
+		return err
+	}
+	if n, rowsErr := res.RowsAffected(); rowsErr != nil {
+		return rowsErr
+	} else if n == 0 {
+		slog.WarnContext(ctx, "push step lost its lease on an outbox row", "outbox", item.id)
+		return errLeaseLost
+	}
+	return nil
+}
+
+var errLeaseLost = errors.New("outbox lease lost")
+
+// pushStep sends one row's push to the person's phones, once each. Whatever
+// goes wrong comes back wrapping ErrPushFailed, after recording the phones
+// that did get it, so the caller can run the email step and the retry
+// reaches only the rest.
+//
+// A crash between Herald's send and recording push_devices makes the retry
+// send again. Every send of a row carries the same collapse ID, so the
+// phone replaces the first notification and doesn't show two.
 func (s *Service) pushStep(ctx context.Context, item *outboxItem, plan *pushPlan) error {
+	err := s.deliverPush(ctx, item, plan)
+	if err != nil && !errors.Is(err, ErrPushFailed) {
+		slog.WarnContext(ctx, "push step failed", "outbox", item.id, "error", err)
+		return fmt.Errorf("%w: %w", ErrPushFailed, err)
+	}
+	return err
+}
+
+func (s *Service) deliverPush(ctx context.Context, item *outboxItem, plan *pushPlan) error {
 	if item.pushState != PushPending {
 		return nil
 	}
@@ -245,14 +326,17 @@ func (s *Service) pushStep(ctx context.Context, item *outboxItem, plan *pushPlan
 	if thread == "" {
 		thread = item.org
 	}
+	data := envelopeData(envelopeInput{Server: strings.TrimRight(s.cfg.PublicURL, "/"), OrgID: item.org, OrgName: orgName, Kind: plan.Kind, Subject: plan.Subject,
+		InboxID: item.inboxID, Path: plan.Path, ProjectID: plan.ProjectID, Push: p, SentAt: time.Now()})
+	title, body, err := fitEnvelope(plan.Title, plan.Body, p.Category, thread, data)
+	if err != nil {
+		return err
+	}
 	res, err := s.herald.Send(ctx, &herald.SendRequest{
-		AppID: appID, OrgID: item.org, UserID: item.user, Channel: "push",
-		Subject: cut(plan.Title, maxPushTitle), Body: cut(plan.Body, maxPushBody),
+		AppID: appID, OrgID: item.org, UserID: item.user, Channel: "push", Subject: title, Body: body,
 		Push: &driver.PushOptions{
 			Urgency: p.Urgency, Kind: driver.PushKindShow, CollapseID: collapse, TTL: time.Duration(p.TTLSeconds) * time.Second,
-			ThreadID: thread, Category: p.Category,
-			Data: envelopeData(envelopeInput{Server: strings.TrimRight(s.cfg.PublicURL, "/"), OrgID: item.org, OrgName: orgName, Kind: plan.Kind, Subject: plan.Subject,
-				InboxID: item.inboxID, Path: plan.Path, ProjectID: plan.ProjectID, Push: p, SentAt: time.Now()}),
+			ThreadID: thread, Category: p.Category, Data: data,
 		},
 		DeviceFilter: wanted,
 	})
@@ -266,7 +350,9 @@ func (s *Service) pushStep(ctx context.Context, item *outboxItem, plan *pushPlan
 		case message.StatusSent, message.StatusSuppressed:
 			results[r.DeviceID] = string(r.Status)
 		case message.StatusFailed:
-			if strings.Contains(r.Error, "address gone") {
+			// DeviceResult carries only the error text, so a dead address
+			// is recognised by Herald's own sentinel message.
+			if strings.Contains(r.Error, driver.ErrAddressGone.Error()) {
 				results[r.DeviceID] = deviceGone
 				continue
 			}
@@ -279,7 +365,7 @@ func (s *Service) pushStep(ctx context.Context, item *outboxItem, plan *pushPlan
 		if marshalErr != nil {
 			return marshalErr
 		}
-		if _, err = s.pg.Exec(ctx, `UPDATE loomplane_notification_outbox SET push_devices=push_devices||$3::jsonb,push_collapse=$4 WHERE id=$1 AND lease_owner=$2`, item.id, item.owner, string(raw), collapse); err != nil {
+		if err := s.pushUpdate(ctx, item, `UPDATE loomplane_notification_outbox SET push_devices=push_devices||$3::jsonb,push_collapse=$4 WHERE id=$1 AND lease_owner=$2`, string(raw), collapse); err != nil {
 			return err
 		}
 		maps.Copy(item.pushDevices, results)

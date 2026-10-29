@@ -425,3 +425,41 @@ func TestGenericNoticePushOnlyWritesNoInbox(t *testing.T) {
 		t.Fatalf("row: %+v", row)
 	}
 }
+
+func TestBrokenPushProviderStillSendsEmailOnce(t *testing.T) {
+	svc, gw, _, messages := pushRig(t)
+	ctx := t.Context()
+	gw.register(t, svc, "h1.a")
+	list, err := svc.mailStore.ListAllProviders(ctx, "app")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range list {
+		if p.Name == "loomplane-push" {
+			if err = svc.herald.DeleteProvider(ctx, "app", p.ID); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	failDeployment(t, svc, "env-a")
+	if err = svc.drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	row := userRow(t, svc)
+	if row.complete || row.state != PushPending || row.lastError != "push delivery failed" || row.emailState != "sent" || len(messages) != 1 || len(gw.handles()) != 0 {
+		t.Fatalf("after the broken send: %+v, %d emails", row, len(messages))
+	}
+	if err = svc.Prepare(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = svc.pg.Exec(ctx, `UPDATE loomplane_notification_outbox SET next_attempt_at=clock_timestamp()`); err != nil {
+		t.Fatal(err)
+	}
+	if err = svc.drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	row = userRow(t, svc)
+	if !row.complete || row.state != PushSent || len(messages) != 1 || len(gw.handles()) != 1 {
+		t.Fatalf("after the retry: %+v, %d emails, %d sends", row, len(messages), len(gw.handles()))
+	}
+}

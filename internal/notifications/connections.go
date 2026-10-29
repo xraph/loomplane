@@ -173,9 +173,6 @@ func (s *Service) processConnection(ctx context.Context, item *outboxItem) error
 		return err
 	}
 	pushErr := s.pushStep(ctx, item, plan)
-	if pushErr != nil && !errors.Is(pushErr, ErrPushFailed) {
-		return pushErr
-	}
 	if err := s.connectionEmail(ctx, item, p, email, subject, mail); err != nil {
 		return err
 	}
