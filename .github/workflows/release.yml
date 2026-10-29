@@ -10,7 +10,7 @@ name: Release
 #       target "all" tags the commit you ran it from, which must be on
 #       main, and publishes everything. No PAT is needed: the tag, the
 #       GitHub release and every publish job happen in this one run.
-#       target "cli", "docker" or "helm" re-publishes one part of a release
+#       target "cli", "docker", "helm" or "push-gateway" re-publishes one part of a release
 #       that already exists, from its tag, wherever you run it from.
 #
 # What a release publishes:
@@ -26,6 +26,7 @@ name: Release
 #   helm      publish-helm.yml, after docker: the Kubernetes chart on GHCR
 #             (oci://ghcr.io/xraph/charts/loomplane) and on the release,
 #             with the plain manifest for that version
+#   push-gateway  publish-push-gateway.yml: the push gateway image XRaph runs at push.loomplane.com
 #
 # Lint, unit and integration tests gate all of it unless you tick
 # skip-tests, which is for re-publishing a tag that passed them already.
@@ -42,11 +43,11 @@ on:
         required: true
         type: string
       target:
-        description: all cuts a new release. cli, docker or helm re-publishes one part of an existing one.
+        description: all cuts a new release. cli, docker, helm or push-gateway re-publishes one part of an existing one.
         required: true
         type: choice
         default: all
-        options: [all, cli, docker, helm]
+        options: [all, cli, docker, helm, push-gateway]
       skip-tests:
         description: Skip lint and tests (only for a tag that passed them)
         required: false
@@ -72,6 +73,7 @@ jobs:
       cli: ${{ steps.plan.outputs.cli }}
       docker: ${{ steps.plan.outputs.docker }}
       helm: ${{ steps.plan.outputs.helm }}
+      push-gateway: ${{ steps.plan.outputs.push-gateway }}
       skip-tests: ${{ steps.plan.outputs.skip-tests }}
     steps:
       - uses: actions/checkout@v7
@@ -129,12 +131,13 @@ jobs:
             exit 1
           fi
 
-          cli=false docker=false helm=false
+          cli=false docker=false helm=false push_gateway=false
           case "$target" in
-            all) cli=true docker=true helm=true ;;
+            all) cli=true docker=true helm=true push_gateway=true ;;
             cli) cli=true ;;
             docker) docker=true ;;
             helm) helm=true ;;
+            push-gateway) push_gateway=true ;;
           esac
           {
             echo "tag=$tag"
@@ -143,6 +146,7 @@ jobs:
             echo "cli=$cli"
             echo "docker=$docker"
             echo "helm=$helm"
+            echo "push-gateway=$push_gateway"
             echo "skip-tests=$SKIP_TESTS"
           } | tee -a "$GITHUB_OUTPUT"
           {
@@ -155,6 +159,7 @@ jobs:
             echo "| CLI and archives | $cli |"
             echo "| Docker | $docker |"
             echo "| Helm chart | $helm |"
+            echo "| Push gateway | $push_gateway |"
             echo "| Tests | $([ "$SKIP_TESTS" = true ] && echo skipped || echo run) |"
           } >> "$GITHUB_STEP_SUMMARY"
 
@@ -313,5 +318,21 @@ jobs:
       contents: write
       packages: write
     uses: ./.github/workflows/publish-helm.yml
+    with:
+      tag: ${{ needs.plan.outputs.tag }}
+
+  push-gateway:
+    name: Push gateway image
+    needs: [plan, checks, integration, release]
+    if: >-
+      always() && needs.plan.result == 'success' &&
+      needs.plan.outputs.push-gateway == 'true' &&
+      contains(fromJSON('["success","skipped"]'), needs.checks.result) &&
+      contains(fromJSON('["success","skipped"]'), needs.integration.result) &&
+      contains(fromJSON('["success","skipped"]'), needs.release.result)
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/publish-push-gateway.yml
     with:
       tag: ${{ needs.plan.outputs.tag }}

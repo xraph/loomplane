@@ -1,0 +1,139 @@
+name: Publish (push gateway)
+
+# The Loomplane push gateway image, from deployments/push-gateway. release.yml
+# calls it with a tag that already exists and already has a GitHub release.
+# XRaph pins the digest it prints in the host's .env.
+#
+# Each architecture builds on its own native runner and runs the gateway
+# smoke test before anything is pushed. Only a build that passed is pushed,
+# by digest. The publish job joins the digests into one multi-platform
+# manifest and tags it with what scripts/release-image-tags.sh picks. There
+# is no Docker Hub mirror: only XRaph pulls this image.
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: Release tag to build and publish, e.g. v1.2.3.
+        required: true
+        type: string
+
+env:
+  IMAGE: ghcr.io/${{ github.repository }}-push-gateway
+
+jobs:
+  image:
+    name: Build and smoke test (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: amd64
+            runner: ubuntu-24.04
+          - arch: arm64
+            runner: ubuntu-24.04-arm
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag }}
+      - uses: docker/setup-buildx-action@v4
+      - name: Build for smoke test
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: deployments/push-gateway/Dockerfile
+          platforms: linux/${{ matrix.arch }}
+          load: true
+          tags: loomplane-push-gateway:release-test
+          build-args: VERSION=${{ inputs.tag }}
+          cache-from: type=gha,scope=push-gateway-${{ matrix.arch }}
+          cache-to: type=gha,mode=max,scope=push-gateway-${{ matrix.arch }}
+      - run: bash scripts/test-push-gateway.sh loomplane-push-gateway:release-test
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish tested build by digest
+        id: image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: deployments/push-gateway/Dockerfile
+          platforms: linux/${{ matrix.arch }}
+          build-args: VERSION=${{ inputs.tag }}
+          cache-from: type=gha,scope=push-gateway-${{ matrix.arch }}
+          outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
+          provenance: mode=max
+          sbom: true
+          labels: |
+            org.opencontainers.image.source=https://github.com/${{ github.repository }}
+            org.opencontainers.image.version=${{ inputs.tag }}
+      - name: Export digest
+        env:
+          DIGEST: ${{ steps.image.outputs.digest }}
+        run: |
+          mkdir -p digests
+          touch "digests/${DIGEST#sha256:}"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: push-gateway-digest-${{ matrix.arch }}
+          path: digests/*
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    name: Publish manifest
+    needs: image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag }}
+          # Every tag, to tell whether this release is the newest in its line.
+          fetch-depth: 0
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: push-gateway-digest-*
+          path: digests
+          merge-multiple: true
+      - uses: docker/setup-buildx-action@v4
+      - uses: docker/login-action@v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Choose version tags
+        id: tags
+        env:
+          TAG: ${{ inputs.tag }}
+        run: bash scripts/release-image-tags.sh "$TAG" >> "$GITHUB_OUTPUT"
+      - name: Join the digests under the tags
+        env:
+          TAG: ${{ inputs.tag }}
+          VERSION_TAGS: ${{ steps.tags.outputs.tags }}
+        run: |
+          refs=()
+          for digest in digests/*; do refs+=("${IMAGE}@sha256:${digest##*/}"); done
+          tags=()
+          for t in $VERSION_TAGS; do tags+=(--tag "${IMAGE}:${t}"); done
+          docker buildx imagetools create "${tags[@]}" "${refs[@]}"
+          docker buildx imagetools inspect "${IMAGE}:${TAG}"
+          manifest=$(docker buildx imagetools inspect "${IMAGE}:${TAG}" | awk '$1 == "Digest:" {print $2; exit}')
+          test -n "$manifest"
+          {
+            echo "### ${IMAGE}:${TAG}"
+            echo
+            echo "Pin as \`${IMAGE}:${TAG}@${manifest}\`. Per architecture:"
+            echo
+            for digest in digests/*; do echo "- \`${IMAGE}@sha256:${digest##*/}\`"; done
+          } >> "$GITHUB_STEP_SUMMARY"
