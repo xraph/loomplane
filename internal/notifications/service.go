@@ -85,7 +85,7 @@ func (s *Service) Prepare(ctx context.Context) error {
 }
 
 func (s *Service) prepare(ctx context.Context) error {
-	if err := s.herald.SeedDefaultTemplates(ctx, s.cfg.Identity.AppID); err != nil {
+	if err := s.seedTemplates(ctx); err != nil {
 		return err
 	}
 	if !s.MailEnabled() {

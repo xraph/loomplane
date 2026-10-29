@@ -188,7 +188,9 @@ func (e *Extension) buildEngine(db *grove.DB) (*authsome.Engine, error) {
 	e.orgs = organization.New()
 	e.waitlistStore = waitlist.NewPostgresStore(db)
 	e.waitlist = waitlist.New(waitlist.Config{Enabled: false})
-	e.waitlist.SetWaitlistStore(e.waitlistStore)
+	// The sign-up gate reads the raw store. The plugin gets the wrapper so
+	// every approval, from REST or the console, sends the email.
+	e.waitlist.SetWaitlistStore(approvalMailer{Store: e.waitlistStore, send: e.notifications.SendWaitlistApproved, log: e.Logger()})
 	e.gate = e.newSignupGate()
 	tokens, err := security.TokenEncryptor(e.cfg.SecretKey)
 	if err != nil {
