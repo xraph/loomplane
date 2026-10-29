@@ -86,6 +86,16 @@ func (s *Service) ReconcileClusterOperation(ctx context.Context, org, id string,
 			if options.Digest != o.Input.OptionsDigest || options.CheckedAt.IsZero() || s.now().Sub(options.CheckedAt) >= 5*time.Minute || options.CheckedAt.After(s.now()) {
 				return s.clusterAttention(ctx, o, "Provider options changed. Review is required.")
 			}
+			if o.Input.PriceDigest != "" {
+				estimate, estimateErr := s.clusterMoney(call, o.Input, options, reader, access)
+				if estimateErr != nil {
+					return s.clusterWait(ctx, o, estimateErr)
+				}
+				if o.MoneyEstimate == nil || estimate.PriceDigest != o.Input.PriceDigest || estimate.PriceDigest != o.MoneyEstimate.PriceDigest {
+					return s.clusterAttention(ctx, o, "Provider prices changed. Review again.")
+				}
+				o.Input.costEvidence = &estimate
+			}
 			if err = s.refreshClusterAccount(call, o, reader, access); err != nil {
 				return s.clusterWait(ctx, o, err)
 			}

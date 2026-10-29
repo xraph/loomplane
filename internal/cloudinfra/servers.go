@@ -100,6 +100,7 @@ type ServerInput struct {
 // Operation retains the immutable review and public execution checkpoints.
 // Bootstrap credentials are stored only in Vault, keyed by this operation ID.
 type Operation struct {
+	MoneyEstimate        *MoneyEstimate                  `json:"money_estimate,omitempty"`
 	CapacityTarget       *ResourceVector                 `json:"capacity_target,omitempty"`
 	CapacityCheckedAt    time.Time                       `json:"capacity_checked_at,omitempty,omitzero"`
 	AbsenceConfirmedAt   time.Time                       `json:"absence_confirmed_at,omitempty,omitzero"`

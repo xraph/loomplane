@@ -267,7 +267,7 @@ func (s *Service) prepareMaintenance(ctx context.Context, p security.Principal, 
 			return zero, 0, nil, ErrConflict
 		}
 		if in.Kind == "cluster-upgrade" {
-			return s.maintenanceCapacity(ctx, p, *in, reader, access, observation.Pools)
+			return s.maintenanceCapacity(ctx, p, in, reader, access, observation.Pools)
 		}
 	}
 	if delta != nil {
@@ -278,11 +278,11 @@ func (s *Service) prepareMaintenance(ctx context.Context, p security.Principal, 
 			}
 			total += pool.Count
 		}
-		return s.maintenanceCapacity(ctx, p, *in, reader, access, []provider.NodePoolSpec{*delta})
+		return s.maintenanceCapacity(ctx, p, in, reader, access, []provider.NodePoolSpec{*delta})
 	}
 	return zero, 0, nil, nil
 }
-func (s *Service) maintenanceCapacity(ctx context.Context, p security.Principal, in ClusterInput, reader provider.ClusterReader, access provider.AccountAccess, pools []provider.NodePoolSpec) (capacity ResourceVector, nodeCost int64, unknownCosts []string, failure error) {
+func (s *Service) maintenanceCapacity(ctx context.Context, p security.Principal, in *ClusterInput, reader provider.ClusterReader, access provider.AccountAccess, pools []provider.NodePoolSpec) (capacity ResourceVector, nodeCost int64, unknownCosts []string, failure error) {
 	var zero ResourceVector
 	if p.OrgID != s.ManagedClusters.QualificationOrgID || p.UserID != s.ManagedClusters.QualificationOperatorID || in.AccountID != s.ManagedClusters.QualificationAccountID || in.Ref.Region != s.ManagedClusters.QualificationRegion || !in.AcknowledgeNodeCosts || !in.AcknowledgeUnknownCosts {
 		return zero, 0, nil, security.ErrForbidden
@@ -305,7 +305,7 @@ func (s *Service) maintenanceCapacity(ctx context.Context, p security.Principal,
 		return zero, 0, nil, ErrConflict
 	}
 	// The size catalog is independent of the cluster's old network/version options.
-	synthetic := in
+	synthetic := *in
 	synthetic.Spec = provider.ClusterSpec{Region: in.Ref.Region, NodePools: pools}
 	options.Versions = []string{""}
 	options.Networks = []string{""}
@@ -314,5 +314,16 @@ func (s *Service) maintenanceCapacity(ctx context.Context, p security.Principal,
 		return zero, 0, nil, err
 	}
 	cost, unknown, err := clusterCosts(synthetic, options, s.ManagedClusters.MaxNodeHourlyMicroUSD)
-	return v, cost, unknown, err
+	if err != nil {
+		return zero, 0, nil, err
+	}
+	estimate, err := s.clusterMoney(ctx, synthetic, options, reader, access)
+	if err != nil {
+		return zero, 0, nil, err
+	}
+	if in.PriceDigest != "" && in.PriceDigest != estimate.PriceDigest {
+		return zero, 0, nil, ErrConflict
+	}
+	in.costEvidence = &estimate
+	return v, cost, unknown, nil
 }

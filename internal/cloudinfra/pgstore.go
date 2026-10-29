@@ -132,7 +132,7 @@ func (s *PgStore) acceptOperationTx(ctx context.Context, tx driver.Tx, o *Operat
 	if err != nil {
 		return err
 	}
-	tag, err := tx.Exec(ctx, `UPDATE loomplane_infrastructure_operations SET status=$4,body=$5,updated_at=now() WHERE org_id=$1 AND cloud_id=$2 AND id=$3 AND status='preview'`, o.OrgID, o.CloudID, o.ID, o.Status, raw)
+	tag, err := tx.Exec(ctx, `UPDATE loomplane_infrastructure_operations SET status=$4,body=$5,updated_at=now() WHERE org_id=$1 AND cloud_id=$2 AND id=$3 AND status='preview' AND body->'money_estimate' IS NOT DISTINCT FROM $5::jsonb->'money_estimate'`, o.OrgID, o.CloudID, o.ID, o.Status, raw)
 	if err != nil {
 		return storeError(err)
 	}
@@ -168,7 +168,7 @@ func (s *PgStore) SaveOperation(ctx context.Context, o *Operation) error {
 		o.StateRevision = previous
 		return err
 	}
-	tag, err := tx.Exec(ctx, `UPDATE loomplane_infrastructure_operations SET status=$4,body=$5,updated_at=now() WHERE org_id=$1 AND cloud_id=$2 AND id=$3 AND (status<>'preview' OR $4='cancelled') AND coalesce((body->>'state_revision')::bigint,0)=$6`, o.OrgID, o.CloudID, o.ID, o.Status, raw, previous)
+	tag, err := tx.Exec(ctx, `UPDATE loomplane_infrastructure_operations SET status=$4,body=$5,updated_at=now() WHERE org_id=$1 AND cloud_id=$2 AND id=$3 AND (status<>'preview' OR $4='cancelled') AND coalesce((body->>'state_revision')::bigint,0)=$6 AND body->'money_estimate' IS NOT DISTINCT FROM $5::jsonb->'money_estimate'`, o.OrgID, o.CloudID, o.ID, o.Status, raw, previous)
 	if err != nil {
 		o.StateRevision = previous
 		return storeError(err)

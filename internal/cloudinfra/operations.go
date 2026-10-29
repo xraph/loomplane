@@ -167,7 +167,9 @@ func (s *Service) PreviewServer(ctx context.Context, p security.Principal, cloud
 						continue
 					}
 
-					priceOperation(o, size)
+					if priceErr := priceOperation(o, size); priceErr != nil {
+						return nil, priceErr
+					}
 					resources, sizeErr := sizeResources(size)
 					if sizeErr != nil {
 						return nil, sizeErr
@@ -192,7 +194,9 @@ func (s *Service) PreviewServer(ctx context.Context, p security.Principal, cloud
 						continue
 					}
 
-					priceOperation(o, size)
+					if priceErr := priceOperation(o, size); priceErr != nil {
+						return nil, priceErr
+					}
 					resources, sizeErr := sizeResources(size)
 					if sizeErr != nil {
 						return nil, sizeErr
@@ -212,10 +216,29 @@ func (s *Service) PreviewServer(ctx context.Context, p security.Principal, cloud
 
 // priceOperation puts the size's hourly price and GPUs on the review, so the
 // cost is on screen before anyone approves it.
-func priceOperation(o *Operation, size provider.ServerSize) {
+func priceOperation(o *Operation, size provider.ServerSize) error {
 	o.EstimatedHourlyUSD = size.HourlyUSD
 	o.HourlyPriceKnown = size.HourlyPriceKnown
 	o.Accelerator = cloneAccelerator(size.Accelerator)
+	var price *int64
+	if size.HourlyPriceKnown {
+		value, err := hourlyMicroUSD(size.HourlyUSD)
+		if err != nil {
+			return err
+		}
+		price = number(value)
+	}
+	identity := o.Provider + "/" + o.AccountID + "/" + size.ID
+	estimate, err := moneyEstimate([]MoneyComponent{
+		{Name: "server", Source: "provider_options", Identity: identity, Quantity: 1, HourlyMicroUSD: price},
+		{Name: "network_egress", Source: "provider_options", Identity: identity, Quantity: 1},
+		{Name: "persistent_storage", Source: "provider_options", Identity: identity, Quantity: 1},
+	}, 0, o.CreatedAt)
+	if err != nil {
+		return err
+	}
+	o.MoneyEstimate = &estimate
+	return nil
 }
 
 // priceServer gives a server the price and GPUs of the operation that bought or resized it.
