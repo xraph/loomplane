@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/xraph/authsome/account"
 	"github.com/xraph/forge"
@@ -21,6 +22,12 @@ func TestSignupGate(t *testing.T) {
 	on := func(context.Context) bool { return true }
 	off := func(context.Context) bool { return false }
 	lockErr := errors.New("lock timed out")
+	// full is a set of check slots that are all taken.
+	full := func() chan struct{} {
+		slots := make(chan struct{}, 1)
+		slots <- struct{}{}
+		return slots
+	}
 	setupRunning := func(context.Context, func(context.Context) error) (bool, error) { return false, nil }
 	lockBroken := func(context.Context, func(context.Context) error) (bool, error) { return false, lockErr }
 
@@ -75,7 +82,11 @@ func TestSignupGate(t *testing.T) {
 		},
 		"setup's own sign-up while setup holds the lock": {
 			ctx:  withSetup(context.Background()),
-			gate: signupGate{pending: on, waitlistOn: on, approved: no, invited: no, outsideSetup: setupRunning},
+			gate: signupGate{pending: on, waitlistOn: on, approved: no, invited: no, outsideSetup: setupRunning, slots: full()},
+		},
+		"no free check before the timeout, waitlist off": {
+			gate: signupGate{pending: off, waitlistOn: off, approved: yes, invited: yes, slots: full(), timeout: 10 * time.Millisecond},
+			want: context.DeadlineExceeded,
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -85,6 +96,12 @@ func TestSignupGate(t *testing.T) {
 			}
 			if tc.gate.outsideSetup == nil {
 				tc.gate.outsideSetup = noSetup
+			}
+			if tc.gate.slots == nil {
+				tc.gate.slots = make(chan struct{}, 1)
+			}
+			if tc.gate.timeout == 0 {
+				tc.gate.timeout = time.Second
 			}
 			// Every look at the instance happens while setup is kept out.
 			inLock := false
@@ -137,15 +154,21 @@ func noSetup(ctx context.Context, judge func(context.Context) error) (bool, erro
 
 func TestRefuseSignUps(t *testing.T) {
 	waitlistOn := false
-	e := &Extension{gate: &signupGate{
+	e := &Extension{BaseExtension: forge.NewBaseExtension(Name, "test", "test"), gate: &signupGate{
 		outsideSetup: noSetup,
+		slots:        make(chan struct{}, 1),
+		timeout:      time.Second,
 		pending:      func(context.Context) bool { return false },
 		waitlistOn:   func(context.Context) bool { return waitlistOn },
 		approved:     func(context.Context, string) (bool, error) { return false, nil },
 		invited: func(_ context.Context, email string) (bool, error) {
+			if email == "broken@example.com" {
+				return false, errors.New("database is down")
+			}
 			return email == "ada@example.com", nil
 		},
 	}}
+	e.SetLogger(forge.NewNoopLogger())
 	r := forge.NewRouter()
 	r.Use(e.refuseSignUps)
 	// The handler sees the body the middleware read.
@@ -183,6 +206,18 @@ func TestRefuseSignUps(t *testing.T) {
 	}
 	if code, body := post(`{"email":"Ada@Example.com"}`); code != http.StatusCreated || !strings.Contains(body, "Ada@Example.com") {
 		t.Fatalf("an invited address: %d %s, want 201 with the body intact", code, body)
+	}
+	// A check that can't finish refuses here, without reaching authsome.
+	if code, body := post(`{"email":"broken@example.com"}`); code != http.StatusServiceUnavailable || strings.Contains(body, "broken@example.com") {
+		t.Fatalf("a check that failed: %d %s, want 503", code, body)
+	}
+}
+
+func TestSignupCheckSlots(t *testing.T) {
+	for pool, want := range map[int]int{0: 1, 1: 1, 4: 1, 8: 2, 16: 4, 100: 8} {
+		if got := signupCheckSlots(pool); got != want {
+			t.Errorf("signupCheckSlots(%d) = %d, want %d", pool, got, want)
+		}
 	}
 }
 

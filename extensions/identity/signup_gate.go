@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"path"
 	"strings"
+	"time"
 
 	"github.com/xraph/authsome/account"
 	"github.com/xraph/authsome/appclientconfig"
@@ -25,6 +26,13 @@ import (
 // the email. A body longer than this goes to authsome unread, and the gate
 // still checks it inside the engine.
 const signupPeekLimit = 64 << 10
+
+const (
+	// signupCheckTimeout bounds one sign-up check, queueing included.
+	signupCheckTimeout = 5 * time.Second
+	// maxSignupCheckSlots caps signupCheckSlots on a large pool.
+	maxSignupCheckSlots = 8
+)
 
 // signupRefusalError is a sign-up the gate turns away. It answers 403 in the
 // same envelope as authsome's coded errors, so a client can branch on its
@@ -71,6 +79,14 @@ type signupGate struct {
 	// waitlist, so a sign-up judged in that window would see users and no
 	// waitlist, and outlive a setup that then rolls back.
 	outsideSetup func(ctx context.Context, judge func(context.Context) error) (bool, error)
+	// slots caps the checks that run at once. Each holds a connection for
+	// the setup lock while judge looks things up on others, so without a
+	// cap a burst of sign-ups could hold every connection in the pool and
+	// leave every judge waiting for one.
+	slots chan struct{}
+	// timeout bounds a check, the wait for a slot included. A check that
+	// runs out refuses.
+	timeout time.Duration
 }
 
 var (
@@ -90,6 +106,14 @@ func (g *signupGate) OnBeforeSignUp(ctx context.Context, req *account.SignUpRequ
 func (g *signupGate) check(ctx context.Context, email string) error {
 	if isSetup(ctx) {
 		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, g.timeout)
+	defer cancel()
+	select {
+	case g.slots <- struct{}{}:
+		defer func() { <-g.slots }()
+	case <-ctx.Done():
+		return fmt.Errorf("wait for a free sign-up check: %w", ctx.Err())
 	}
 	var verdict error
 	ran, err := g.outsideSetup(ctx, func(ctx context.Context) error {
@@ -137,6 +161,8 @@ func (g *signupGate) judge(ctx context.Context, email string) error {
 // newSignupGate builds the gate on this extension's own lookups.
 func (e *Extension) newSignupGate() *signupGate {
 	return &signupGate{
+		slots:      make(chan struct{}, signupCheckSlots(e.cfg.Database.PoolSize)),
+		timeout:    signupCheckTimeout,
 		pending:    e.signupPending,
 		waitlistOn: e.waitlistOn,
 		approved:   e.waitlistApproved,
@@ -145,6 +171,17 @@ func (e *Extension) newSignupGate() *signupGate {
 			return pglock.TryShared(ctx, e.pg, pglock.FirstRunSetup, judge)
 		},
 	}
+}
+
+// signupCheckSlots is how many sign-up checks may run at once on a pool of
+// poolSize connections: a quarter of it, so the checks' lock connections
+// and the lookups they wait on never take more than half, and at least
+// one. A pool size of 0 is the driver's default, which is at least four.
+func signupCheckSlots(poolSize int) int {
+	if poolSize <= 0 {
+		poolSize = 4
+	}
+	return min(max(poolSize/4, 1), maxSignupCheckSlots)
 }
 
 // signupPending is setupPending for the gate, which fails the other way:
@@ -192,12 +229,18 @@ func (e *Extension) refuseSignUps(next forge.Handler) forge.Handler {
 			// anything it lets through.
 			return next(c)
 		}
+		err := e.gate.check(r.Context(), email)
 		var refusal *signupRefusalError
-		if err := e.gate.check(r.Context(), email); errors.As(err, &refusal) {
+		if errors.As(err, &refusal) {
 			return refusal
 		}
-		// A lookup that failed here runs again in the hook, which fails
-		// the sign-up if it fails again.
+		if err != nil {
+			// A check that couldn't finish refuses too, and isn't run a
+			// second time in the hook, which would double the load of a
+			// burst that caused it.
+			e.Logger().Warn("check a sign-up", forge.F("error", err.Error()))
+			return forge.NewHTTPError(http.StatusServiceUnavailable, "sign-up is busy, try again in a moment")
+		}
 		return next(c)
 	}
 }

@@ -3,9 +3,12 @@
 package integration
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"sync/atomic"
@@ -178,7 +181,7 @@ func TestSignupGate_waitlistOff(t *testing.T) {
 func TestSignupGate_refusedWhileSetupRuns(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.Database.URL = freshDatabase(t)
-	held, release := make(chan struct{}), make(chan error)
+	held, release := make(chan struct{}), make(chan error, 1)
 	var calls atomic.Int32
 	// No waitlist override, as on a deploy that leaves it unset.
 	r := boot(t, cfg, func(app forge.App) {
@@ -198,15 +201,23 @@ func TestSignupGate_refusedWhileSetupRuns(t *testing.T) {
 		})
 	})
 	defer r.stop()
+	// Lets a held setup go if the test stops early, so the app can stop.
+	defer func() {
+		select {
+		case release <- errors.New("test ended"):
+		default:
+		}
+	}()
 	c := &setupClient{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
 
-	finished := make(chan int, 1)
-	go func() {
-		status, _, _ := (&setupClient{t: t, base: c.base, key: c.key}).send(http.MethodPost, "/api/v1/setup", ada)
-		finished <- status
-	}()
+	// Off the test goroutine, so the result comes back over the channel
+	// rather than through t.
+	finished := make(chan postResult, 1)
+	go func() { finished <- post(t.Context(), http.DefaultClient, c.base+"/api/v1/setup", c.key, ada) }()
 	select {
 	case <-held:
+	case res := <-finished:
+		t.Fatalf("setup finished without reaching its organization step: %d %s %v", res.status, res.body, res.err)
 	case <-time.After(time.Minute):
 		t.Fatal("setup never reached its organization step")
 	}
@@ -218,8 +229,8 @@ func TestSignupGate_refusedWhileSetupRuns(t *testing.T) {
 	if status != http.StatusForbidden || why.Error != pendingRefusal || why.Type != "setup_pending" {
 		t.Fatalf("sign-up while setup runs: %d %+v, want 403 %q", status, why, pendingRefusal)
 	}
-	if code := <-finished; code != http.StatusInternalServerError {
-		t.Fatalf("the held setup: %d, want 500", code)
+	if res := <-finished; res.err != nil || res.status != http.StatusInternalServerError {
+		t.Fatalf("the held setup: %d %s %v, want 500", res.status, res.body, res.err)
 	}
 	if n := countRows(t, cfg.Database.URL, liveUsers); n != 0 {
 		t.Fatalf("%d users after setup rolled back, want 0", n)
@@ -232,5 +243,80 @@ func TestSignupGate_refusedWhileSetupRuns(t *testing.T) {
 	}
 	if status, why := signUp(c, "mallory@example.com"); status != http.StatusForbidden || why.Error != waitlistRefusal {
 		t.Fatalf("sign-up after setup: %d %+v, want 403 %q", status, why, waitlistRefusal)
+	}
+}
+
+// postResult is what post got back.
+type postResult struct {
+	status int
+	body   string
+	err    error
+}
+
+// post sends a JSON POST without touching t, so it's safe off the test
+// goroutine.
+func post(ctx context.Context, hc *http.Client, url, key string, body any) postResult {
+	raw, err := json.Marshal(body)
+	if err != nil {
+		return postResult{err: err}
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(raw))
+	if err != nil {
+		return postResult{err: err}
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-Publishable-Key", key)
+	res, err := hc.Do(req)
+	if err != nil {
+		return postResult{err: err}
+	}
+	defer res.Body.Close()
+	out, err := io.ReadAll(res.Body)
+	return postResult{status: res.StatusCode, body: string(out), err: err}
+}
+
+// Each sign-up check holds a connection for the setup lock while it looks
+// things up on others. A burst of them, more than the pool holds, must
+// still finish, refused, and leave the pool serving everyone else.
+func TestSignupGate_burstCantWedgeThePool(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Database.PoolSize = 4
+	r, c := freshSetup(t, &cfg)
+	defer r.stop()
+	if code, body := c.setup(ada); code != http.StatusOK {
+		t.Fatalf("setup: %d %s", code, body)
+	}
+
+	const burst = 40
+	hc := &http.Client{Timeout: 45 * time.Second}
+	results := make(chan postResult, burst)
+	start := time.Now()
+	for i := range burst {
+		go func() {
+			results <- post(t.Context(), hc, c.base+"/authsome/v1/signup", c.key,
+				map[string]string{"email": fmt.Sprintf("bot%d@example.com", i), "password": "Correct-horse-battery-9"})
+		}()
+	}
+	for range burst {
+		res := <-results
+		if res.err != nil {
+			t.Fatalf("a sign-up in a burst of %d never finished: %v", burst, res.err)
+		}
+		// The waitlist is on, so each is refused, or turned away as busy.
+		if res.status != http.StatusForbidden && res.status != http.StatusServiceUnavailable {
+			t.Fatalf("a sign-up in the burst: %d %s, want 403 or 503", res.status, res.body)
+		}
+	}
+	if took := time.Since(start); took > 40*time.Second {
+		t.Fatalf("a burst of %d sign-ups took %s", burst, took)
+	}
+	if n := countRows(t, cfg.Database.URL, liveUsers); n != 1 {
+		t.Fatalf("%d users after the burst, want Ada alone", n)
+	}
+	// The pool is free again: the API and the gate both answer.
+	var session identity.Session
+	c.get("/api/v1/session", &session)
+	if status, why := signUp(c, "grace@example.com"); status != http.StatusForbidden || why.Error != waitlistRefusal {
+		t.Fatalf("sign-up after the burst: %d %+v, want 403 %q", status, why, waitlistRefusal)
 	}
 }
