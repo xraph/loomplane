@@ -93,6 +93,7 @@ data:
   LOOMPLANE_BACKUP_BUCKET: "loomplane-backups"
   LOOMPLANE_GITHUB_API_URL: "https://api.github.com"
   LOOMPLANE_GITHUB_WEB_URL: "https://github.com"
+  LOOMPLANE_CONSOLE_PATH: "/__console"
 
 ---
 # Source: loomplane/templates/service.yaml
@@ -197,7 +198,7 @@ spec:
   template:
     metadata:
       annotations:
-        checksum/config: e435b803e940df61b3e59b907d47c252a433abfc4fa65a983d8934781b797cf0
+        checksum/config: 631f7a4e0fd33c4b9586287423a13867a1890398864dfa8d34fbf0c08c221f18
       labels:
         app.kubernetes.io/name: loomplane
         app.kubernetes.io/instance: loomplane
@@ -354,7 +355,7 @@ spec:
   template:
     metadata:
       annotations:
-        checksum/config: e435b803e940df61b3e59b907d47c252a433abfc4fa65a983d8934781b797cf0
+        checksum/config: 631f7a4e0fd33c4b9586287423a13867a1890398864dfa8d34fbf0c08c221f18
       labels:
         app.kubernetes.io/name: loomplane
         app.kubernetes.io/instance: loomplane

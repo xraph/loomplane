@@ -102,6 +102,14 @@ trustedProxies: ""
 # Comma-separated provider names to pause, e.g. "aws,azure".
 pausedProviders: ""
 
+# true or false forces the sign-up waitlist on or off. Empty leaves it to the
+# instance: first-run setup turns it on, and an instance that existed before
+# first-run setup keeps open sign-up.
+waitlist: ""
+
+# Where platform admins open the console: one path segment starting with __.
+consolePath: /__console
+
 # More LOOMPLANE_ settings, as plain environment variables.
 env: {}
 #   LOOMPLANE_DRIFT_INTERVAL: 6h
