@@ -290,7 +290,10 @@ func (c *Client) EnsureManagedRegistry(ctx context.Context, org, connection stri
 			return nil, checkErr
 		}
 	}
-	service := &corev1.Service{ObjectMeta: meta(name), Spec: corev1.ServiceSpec{Selector: identity, Ports: []corev1.ServicePort{{Name: "registry", Port: 5000, TargetPort: intstr.FromInt32(5000)}}}}
+	serverLabels := maps.Clone(identity)
+	// Builders share the registry's ownership labels, but cannot serve traffic.
+	serverLabels["loomplane.registry.server"] = "true"
+	service := &corev1.Service{ObjectMeta: meta(name), Spec: corev1.ServiceSpec{Selector: serverLabels, Ports: []corev1.ServicePort{{Name: "registry", Port: 5000, TargetPort: intstr.FromInt32(5000)}}}}
 	if _, err = ensureManaged(ctx, c.Kube.CoreV1().Services(ns), service, identity, host); err != nil {
 		return nil, err
 	}
@@ -302,6 +305,7 @@ func (c *Client) EnsureManagedRegistry(ctx context.Context, org, connection stri
 		SecurityContext: &corev1.SecurityContext{AllowPrivilegeEscalation: ptr.To(false), Capabilities: &corev1.Capabilities{Drop: []corev1.Capability{"ALL"}}}}
 	deployment := &appsv1.Deployment{ObjectMeta: meta(name), Spec: appsv1.DeploymentSpec{Replicas: ptr.To(int32(1)), Strategy: appsv1.DeploymentStrategy{Type: appsv1.RecreateDeploymentStrategyType}, Selector: &metav1.LabelSelector{MatchLabels: identity}, Template: corev1.PodTemplateSpec{ObjectMeta: meta(name), Spec: corev1.PodSpec{AutomountServiceAccountToken: ptr.To(false), SecurityContext: &corev1.PodSecurityContext{RunAsUser: ptr.To(int64(1000)), RunAsGroup: ptr.To(int64(1000)), FSGroup: ptr.To(int64(1000)), RunAsNonRoot: ptr.To(true)}, Containers: []corev1.Container{container}, Volumes: []corev1.Volume{{Name: "images", VolumeSource: corev1.VolumeSource{PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{ClaimName: name}}}, {Name: "auth", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: secret.Name, Items: []corev1.KeyToPath{{Key: "htpasswd", Path: "htpasswd"}}}}}}}}}}
 	authDigest := sha256.Sum256(secret.Data["htpasswd"])
+	deployment.Spec.Template.Labels = serverLabels
 	deployment.Spec.Template.Annotations["loomplane.registry.auth"] = fmt.Sprintf("%x", authDigest)
 	if _, err = ensureManaged(ctx, c.Kube.AppsV1().Deployments(ns), deployment, identity, host); err != nil {
 		return nil, err

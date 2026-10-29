@@ -10,6 +10,7 @@ import (
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	kuberuntime "k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/fake"
@@ -84,12 +85,32 @@ func TestClusterBuildApprovedSourceDigestAndCleanup(t *testing.T) {
 				t.Fatal("job does not bound retries, lifetime and cleanup")
 			}
 			podSpec := started.Spec.Template.Spec
+			service, e := kube.CoreV1().Services("selected").Get(t.Context(), registry.Name, metav1.GetOptions{})
+			if e != nil {
+				t.Fatal(e)
+			}
+			selector := labels.SelectorFromSet(service.Spec.Selector)
+			if selector.Matches(labels.Set(started.Spec.Template.Labels)) {
+				t.Fatal("registry traffic can reach a build pod")
+			}
+			server, e := kube.AppsV1().Deployments("selected").Get(t.Context(), registry.Name, metav1.GetOptions{})
+			if e != nil || !selector.Matches(labels.Set(server.Spec.Template.Labels)) {
+				t.Fatalf("registry traffic cannot reach its server: %v", e)
+			}
 			if *podSpec.AutomountServiceAccountToken || *podSpec.SecurityContext.RunAsUser == 0 || podSpec.HostNetwork || podSpec.Containers[0].SecurityContext.Privileged != nil {
 				t.Fatal("build has ambient cluster or host privileges")
 			}
 			jobs, e := kube.BatchV1().Jobs("selected").List(t.Context(), metav1.ListOptions{})
 			if e != nil || len(jobs.Items) != 0 {
 				t.Fatalf("build job leaked: %v", e)
+			}
+			for _, action := range kube.Actions() {
+				if action.Matches("delete", "jobs") {
+					options := action.(kubetesting.DeleteAction).GetDeleteOptions()
+					if options.PropagationPolicy == nil || *options.PropagationPolicy == metav1.DeletePropagationOrphan {
+						t.Fatal("build cleanup can orphan its pod")
+					}
+				}
 			}
 		})
 	}

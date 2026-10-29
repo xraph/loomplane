@@ -104,7 +104,9 @@ func (b *ClusterBuilder) Build(ctx context.Context, in ClusterImageBuild, regist
 	defer func() {
 		cleanup, stop := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		defer stop()
-		removeErr := jobs.Delete(cleanup, podName, deleteOwnedOptions(job))
+		options := deleteOwnedOptions(job)
+		options.PropagationPolicy = ptr.To(metav1.DeletePropagationBackground)
+		removeErr := jobs.Delete(cleanup, podName, options)
 		if !apierrors.IsNotFound(removeErr) {
 			err = errors.Join(err, removeErr)
 		}
