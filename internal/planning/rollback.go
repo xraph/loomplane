@@ -7,6 +7,7 @@ import (
 	"slices"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"go.jetify.com/typeid/v2"
 
@@ -113,7 +114,11 @@ func (s *Service) rollbackTarget(ctx context.Context, orgID string, env *project
 		return nil, refused
 	}
 	// Rolling a rollback back would only bring back the release it undid.
-	if target.Kind == KindRollback {
+	// A failed one is retried: that finishes the move it was approved for.
+	switch {
+	case target.Kind == KindRollback && target.Status == "failed":
+		return nil, fmt.Errorf("%w: the current release is a rollback that failed; retry its deployment %s to finish it, or deploy or promote to move forward", ErrInvalid, target.DeploymentID)
+	case target.Kind == KindRollback:
 		return nil, fmt.Errorf("%w: the current release is a rollback; deploy or promote to move forward", ErrInvalid)
 	}
 	undone, err := s.store.RolledBackPlans(ctx, orgID, env.ID)
@@ -214,7 +219,7 @@ func rollbackReason(reason string) (string, error) {
 	switch {
 	case reason == "":
 		return "", fmt.Errorf("%w: say why you're rolling back", ErrInvalid)
-	case len(reason) > maxNote:
+	case utf8.RuneCountInString(reason) > maxNote:
 		return "", fmt.Errorf("%w: the reason can be at most %d characters", ErrInvalid, maxNote)
 	}
 	return reason, nil
@@ -510,17 +515,22 @@ func leftoverReason(op Op, subject Subject, data bool) string {
 // recorded, or can't be done.
 func appPlatformRollback(a Action, img ReleasedImage, from string) (ArtifactChoice, *ReusedArtifact, *Finding) {
 	choice := ArtifactChoice{Service: a.Name}
-	refuse := func(why string) (ArtifactChoice, *ReusedArtifact, *Finding) {
-		choice.Reason = "App Platform can only roll back to a deployment Loomplane recorded; " + why
-		return choice, nil, &Finding{Code: codeRollbackUnavailable, Subject: ServiceSubject, Name: a.Name, Path: "services." + a.Name, Message: choice.Reason}
+	refuse := func(message string) (ArtifactChoice, *ReusedArtifact, *Finding) {
+		choice.Reason = message
+		return choice, nil, &Finding{Code: codeRollbackUnavailable, Subject: ServiceSubject, Name: a.Name, Path: "services." + a.Name, Message: message}
 	}
+	const recorded = "App Platform can only roll back to a deployment Loomplane recorded; "
 	switch {
+	// The runner moves a replaced service onto a new app, which has no
+	// deployment of the restored release to go back to.
+	case a.Op == Replace:
+		return refuse("App Platform can only roll back an app that still runs " + a.Name + "; the release you're rolling back moved it off App Platform")
 	case img.Service == "" || img.Provider != a.Provider:
-		return refuse(from + " has no App Platform release of " + a.Name + " to return to")
+		return refuse(recorded + from + " has no App Platform release of " + a.Name + " to return to")
 	case img.Revision == "":
-		return refuse("this release predates that")
+		return refuse(recorded + "this release predates that")
 	case img.CommitSHA != a.Service.CommitSHA:
-		return refuse("the deployment it recorded ran " + shortCommit(img.CommitSHA) + ", not " + shortCommit(a.Service.CommitSHA))
+		return refuse(recorded + "the deployment it recorded ran " + shortCommit(img.CommitSHA) + ", not " + shortCommit(a.Service.CommitSHA))
 	}
 	choice.Reused, choice.Revision, choice.From = true, img.Revision, from
 	return choice, &ReusedArtifact{Revision: img.Revision, CommitSHA: img.CommitSHA, FromEnvironment: from, FromDeploymentID: img.DeploymentID}, nil

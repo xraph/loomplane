@@ -71,7 +71,7 @@ func (h *rollbackHistory) ReleasedImages(context.Context, string, string, time.T
 }
 
 // rollbackStore keeps plans in memory. A plan's rollback counts once its
-// deployment succeeded, as the history says.
+// deployment succeeded or failed, as the history says.
 type rollbackStore struct {
 	Store
 	plans   map[string]*Plan
@@ -93,7 +93,7 @@ func (s *rollbackStore) RolledBackPlans(_ context.Context, _, environmentID stri
 			continue
 		}
 		for _, d := range s.history.deployments {
-			if d.PlanID == p.ID && d.Status == "succeeded" {
+			if d.PlanID == p.ID && (d.Status == "succeeded" || d.Status == "failed") {
 				out[p.Rollback.TargetPlanID] = true
 			}
 		}
@@ -228,7 +228,8 @@ func TestRollbackTarget_refusesWhileADeploymentRuns(t *testing.T) {
 func TestRollbackTarget_skipsReleasesThatWereRolledBack(t *testing.T) {
 	r1, r2, r3 := releasePlan("plan_1", "aaa1", "www1"), releasePlan("plan_2", "aaa2", "www2"), releasePlan("plan_3", "aaa3", "www3")
 	r2r := rollbackPlan("plan_2r", r2, r1)
-	// A rollback that failed, or of another plan, undoes nothing it names.
+	// A rollback that failed still undid some of plan_1, so plan_1 is
+	// never restored again either.
 	failed := rollbackPlan("plan_fr", r1, r1)
 	d1 := productionDeployment("d1", "plan_1", KindRelease, "succeeded", rollbackAt(10, 0))
 	d2 := productionDeployment("d2", "plan_2", KindRelease, "succeeded", rollbackAt(11, 0))
@@ -257,12 +258,16 @@ func TestRollbackTarget_refusesToRollBackARollback(t *testing.T) {
 	r2r := rollbackPlan("plan_2r", r2, r1)
 	d1 := productionDeployment("d1", "plan_1", KindRelease, "succeeded", rollbackAt(10, 0))
 	d2 := productionDeployment("d2", "plan_2", KindRelease, "succeeded", rollbackAt(11, 0))
-	for _, status := range []string{"succeeded", "failed"} {
+	for status, want := range map[string]string{
+		"succeeded": "the current release is a rollback; deploy or promote to move forward",
+		// Retrying it finishes the move to d1; planning again would restore d2.
+		"failed": "the current release is a rollback that failed; retry its deployment d2r to finish it, or deploy or promote to move forward",
+	} {
 		d2r := productionDeployment("d2r", "plan_2r", KindRollback, status, rollbackAt(11, 30))
 		w := newRollbackWorld(allowAll{}, []*Plan{r1, r2, r2r}, d1, d2, d2r)
 		for _, id := range []string{"", "d2r"} {
 			_, err := w.target(t, id)
-			if !errors.Is(err, ErrInvalid) || !strings.Contains(err.Error(), "the current release is a rollback; deploy or promote to move forward") {
+			if !errors.Is(err, ErrInvalid) || !strings.HasSuffix(err.Error(), ": "+want) {
 				t.Fatalf("%s rollback, deployment %q: %v", status, id, err)
 			}
 		}
@@ -523,7 +528,12 @@ func TestCreateRollback_needsAReasonAndDeploymentCreate(t *testing.T) {
 			t.Fatalf("%s reason: %v, started %v", name, err, w.workflow.started)
 		}
 	}
-	w := newCreateWorld(t, refuse{security.DeploymentCreate})
+	// The limit is in characters, whatever their encoding.
+	w := newCreateWorld(t, allowAll{})
+	if _, err := w.svc.CreateRollback(t.Context(), person, "proj", RollbackInput{Environment: "production", Reason: strings.Repeat("é", 2000)}); err != nil {
+		t.Fatalf("2000 characters: %v", err)
+	}
+	w = newCreateWorld(t, refuse{security.DeploymentCreate})
 	if _, err := w.svc.CreateRollback(t.Context(), person, "proj", RollbackInput{Environment: "production", Reason: "errors"}); !errors.Is(err, security.ErrForbidden) {
 		t.Fatalf("without deployment:create: %v", err)
 	}
@@ -1050,6 +1060,21 @@ func TestRollback_digitalOceanRollsBackToTheRecordedDeployment(t *testing.T) {
 		t.Fatalf("problem %+v", f)
 	}
 
+	// The release it undoes moved api off App Platform: the app the
+	// recorded deployment ran on is gone, so there's nothing to roll back.
+	img.Revision = "do_dep_7"
+	moved := api
+	moved.Op = Replace
+	result = &Result{Actions: []Action{moved}, Problems: []Finding{}, Executable: true}
+	artifactService().applyArtifacts(plan, result, map[string]ReleasedImage{"api": img}, "production")
+	if len(result.Problems) != 1 || result.Executable || result.Actions[0].Service.Artifact != nil || result.Artifacts[0].Reused {
+		t.Fatalf("replace: problems %+v artifacts %+v", result.Problems, result.Artifacts)
+	}
+	if f := result.Problems[0]; f.Code != "rollback-unavailable" || f.Name != "api" ||
+		f.Message != "App Platform can only roll back an app that still runs api; the release you're rolling back moved it off App Platform" {
+		t.Fatalf("replace problem %+v", f)
+	}
+
 	// A promotion still builds the branch.
 	result = &Result{Actions: []Action{api}}
 	artifactService().applyArtifacts(promotionPlan(), result, map[string]ReleasedImage{"api": img}, "staging")
@@ -1058,7 +1083,8 @@ func TestRollback_digitalOceanRollsBackToTheRecordedDeployment(t *testing.T) {
 	}
 }
 
-// routeStore records which plan's held handoffs each read allowed.
+// routeStore is an environment whose route_1 has a handoff plan_3's
+// release of web still holds, refused as PgStore refuses it.
 type routeStore struct {
 	catalogStore
 	allowed []string
@@ -1066,21 +1092,26 @@ type routeStore struct {
 
 func (s *routeStore) ReleaseRoutes(_ context.Context, _, _, _, allowHeldBy string) ([]cloudinfra.Route, error) {
 	s.allowed = append(s.allowed, allowHeldBy)
-	return nil, nil
+	target := releasePlan("plan_3", "aaa3", "www3")
+	target.Actions = []Action{{ID: "service:web", Routes: []cloudinfra.Route{{ID: "route_1"}}}}
+	if allowHeldBy != target.ID || !heldBy(target)[cloudinfra.ReleasePrepareID("plan_3/service:web", "route_1")] {
+		return nil, errors.New("finish the retained route handoff for shop.example.com before another release")
+	}
+	return []cloudinfra.Route{{ID: "route_1"}}, nil
 }
 
-// A rollback may plan while the release it undoes holds its routes'
-// handoffs; any other plan waits for them.
-func TestRollback_toleratesTheHandoffsItsTargetHolds(t *testing.T) {
+// Until rollbacks restore a held route release (Task 12), a rollback
+// waits for the handoffs the release it undoes holds, like any plan.
+func TestRollback_waitsForTheHandoffsItsTargetHolds(t *testing.T) {
 	store := &routeStore{}
 	s := NewService(Deps{Store: store})
 	rollback := rollbackPlan("plan_r", releasePlan("plan_3", "aaa3", "www3"), releasePlan("plan_1", "aaa1", "www1"))
 	for _, p := range []*Plan{rollback, releasePlan("plan_4", "aaa4", "www4")} {
-		if _, err := s.releaseRoutes(t.Context(), p); err != nil {
-			t.Fatal(err)
+		if _, err := s.releaseRoutes(t.Context(), p); err == nil || !strings.Contains(err.Error(), "finish the retained route handoff for shop.example.com") {
+			t.Fatalf("%s %s: %v", p.Kind, p.ID, err)
 		}
 	}
-	if !slices.Equal(store.allowed, []string{"plan_3", ""}) {
+	if !slices.Equal(store.allowed, []string{"", ""}) {
 		t.Fatalf("allowed %q", store.allowed)
 	}
 
@@ -1134,5 +1165,40 @@ func TestRollback_automationPlansAsItself(t *testing.T) {
 	s.checkBackupPreview(t.Context(), p, &Result{Executable: true, Actions: []Action{{BackupEveryHours: 24}}})
 	if auth.actor != security.SystemPrincipal("org") {
 		t.Fatalf("backup preview checked as %+v", auth.actor)
+	}
+}
+
+// The filter runs before the plan's backup check: a database the bad
+// release removed comes back as a leftover, so an automation that may not
+// manage backups still plans the rollback.
+func TestRollback_filtersBeforeTheBackupCheck(t *testing.T) {
+	doc := "version: 1\nresources:\n  data: {kind: fabriq, provider: server, target: " + targetA + "}\n"
+	auth := &backupGrant{deny: true}
+	s := NewService(Deps{
+		Store: catalogStore{}, Manifests: catalogManifest{revision: &manifests.Revision{Manifest: parse(t, doc)}},
+		Providers: providers.Registry(), Connections: edgeClouds{}, Kinds: recipes.Default(), Authz: auth,
+	})
+	release := &Plan{Catalog: true, OrgID: "org", ProjectID: "project", EnvironmentID: "env", Environment: "production", CreatedBy: security.SystemSubject("org")}
+	planned, _, err := s.compute(t.Context(), release)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasCode(planned.Problems, "backup-policy-permission") {
+		t.Fatalf("a release without backup permission: %v", codes(planned.Problems))
+	}
+
+	rollback := *release
+	rollback.Kind, rollback.Rollback = KindRollback, &Rollback{Reason: "errors", Trigger: TriggerWatch, TargetPlanID: "plan_3"}
+	result, _, err := s.compute(t.Context(), &rollback)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !result.Executable || len(result.Problems) != 0 || result.Summary.Create != 0 || len(result.Leftovers) == 0 {
+		t.Fatalf("rollback: problems %v, summary %+v, leftovers %+v", codes(result.Problems), result.Summary, result.Leftovers)
+	}
+	for _, a := range result.Actions {
+		if a.BackupEveryHours != 0 {
+			t.Fatalf("%s keeps a backup schedule", a.ID)
+		}
 	}
 }

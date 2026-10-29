@@ -877,7 +877,8 @@ type Store interface {
 	// repositories, read in one snapshot.
 	DeployedState(ctx context.Context, orgID, environmentID string) (*DeployedManifest, []*DeployedSource, error)
 	// RolledBackPlans returns the plans a rollback in the environment
-	// undid: the target of each rollback plan whose deployment succeeded.
+	// undid: the target of each rollback plan whose deployment succeeded
+	// or failed, since a failed one still undid some of it.
 	RolledBackPlans(ctx context.Context, orgID, environmentID string) (map[string]bool, error)
 }
 

@@ -63,11 +63,10 @@ func (s *Service) releaseRoutes(ctx context.Context, plan *Plan) ([]cloudinfra.R
 	if !ok {
 		return nil, nil
 	}
-	allowHeldBy := ""
-	if plan.Kind == KindRollback && plan.Rollback != nil {
-		allowHeldBy = plan.Rollback.TargetPlanID
-	}
-	return reader.ReleaseRoutes(ctx, plan.OrgID, plan.ProjectID, plan.EnvironmentID, allowHeldBy)
+	// A rollback waits for the handoffs the release it undoes holds, like
+	// any plan, until it can restore a held route release (Task 12 passes
+	// Rollback.TargetPlanID then).
+	return reader.ReleaseRoutes(ctx, plan.OrgID, plan.ProjectID, plan.EnvironmentID, "")
 }
 
 // ProjectZones returns the verified DNS zones granted to a project, which

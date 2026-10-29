@@ -163,7 +163,8 @@ func TestPgStore_rollbackSpecRoundTrip(t *testing.T) {
 }
 
 // RolledBackPlans names the plans a rollback in the environment undid:
-// only a rollback whose deployment succeeded counts.
+// a rollback whose deployment succeeded or failed counts, since a failed
+// one still undid some of its target.
 func TestPgStore_rolledBackPlans(t *testing.T) {
 	ctx, store, pg := promotionDB(t)
 	if got, err := store.RolledBackPlans(ctx, "org", "env_b"); err != nil || got == nil || len(got) != 0 {
@@ -220,7 +221,8 @@ func TestPgStore_rolledBackPlans(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := map[string]bool{"plan_r1": true}; !reflect.DeepEqual(got, want) {
+	// A failed rollback still undid some of its target.
+	if want := map[string]bool{"plan_r1": true, "plan_r2": true}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("production rolled back %v, want %v", got, want)
 	}
 	if got, err = store.RolledBackPlans(ctx, "org", "env_a"); err != nil || !reflect.DeepEqual(got, map[string]bool{"plan_r5": true}) {

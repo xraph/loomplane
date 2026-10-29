@@ -411,6 +411,33 @@ func TestRollbackTarget_rollingBackTwice(t *testing.T) {
 	}
 }
 
+// TestRollbackTarget_afterAFailedRollback: R1, R2, a rollback of R2 that
+// failed, then R3. The failed rollback still undid some of R2, so rolling
+// R3 back restores R1, never R2.
+func TestRollbackTarget_afterAFailedRollback(t *testing.T) {
+	ctx, h, pg := historyDB(t)
+	svc := planning.NewService(planning.Deps{
+		Store: planning.NewPgStore(pg), Projects: projects.NewPgStore(pg), History: h, Providers: providers.Registry(), Authz: allowAll{},
+	})
+	for _, r := range []historyRelease{
+		{plan: "plan_1", deployment: "dep_1", env: "env_b", status: StatusSucceeded, finished: at(10, 0)},
+		{plan: "plan_2", deployment: "dep_2", env: "env_b", status: StatusSucceeded, finished: at(11, 0)},
+		{plan: "plan_2r", deployment: "dep_2r", env: "env_b", kind: planning.KindRollback, status: StatusFailed, finished: at(11, 30),
+			rollback: &planning.Rollback{Trigger: planning.TriggerManual, TargetDeploymentID: "dep_2", TargetPlanID: "plan_2",
+				RestoreDeploymentID: "dep_1", RestorePlanID: "plan_1", RestoreFinishedAt: at(10, 0)}},
+		{plan: "plan_3", deployment: "dep_3", env: "env_b", status: StatusSucceeded, finished: at(12, 0)},
+	} {
+		r.record(ctx, t, h, pg)
+	}
+	got, err := svc.RollbackTarget(ctx, security.Principal{UserID: "usr", OrgID: "org"}, "proj", "production", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Target.DeploymentID != "dep_3" || got.Restore.DeploymentID != "dep_1" {
+		t.Fatalf("target %+v restore %+v, want dep_3 and dep_1", got.Target, got.Restore)
+	}
+}
+
 // Deployment reads any one deployment, whatever its status or plan, for
 // an automatic rollback that names it.
 func TestHistory_deploymentReadsAnyDeployment(t *testing.T) {
