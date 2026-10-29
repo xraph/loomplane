@@ -95,19 +95,18 @@ func (s *Service) decider(ctx context.Context, by string) (string, error) {
 	case strings.HasPrefix(by, "loomplane:"):
 		return "Loomplane automation", nil
 	}
-	var name, email string
-	err := s.pg.QueryRow(ctx, `SELECT name,email FROM authsome_users WHERE id=$1 AND app_id=$2`, by, s.cfg.Identity.AppID).Scan(&name, &email)
+	var first, last, display, username, email string
+	err := s.pg.QueryRow(ctx, `SELECT first_name,last_name,display_username,username,email FROM authsome_users WHERE id=$1 AND app_id=$2 AND deleted_at IS NULL`, by, s.cfg.Identity.AppID).Scan(&first, &last, &display, &username, &email)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return "someone", nil
 	}
 	if err != nil {
 		return "", err
 	}
-	if name != "" {
-		return name, nil
-	}
-	if email != "" {
-		return email, nil
+	for _, name := range []string{strings.TrimSpace(first + " " + last), strings.TrimSpace(display), strings.TrimSpace(username), strings.TrimSpace(email)} {
+		if name != "" {
+			return name, nil
+		}
 	}
 	return "someone", nil
 }
@@ -122,6 +121,9 @@ func (s *Service) planMessage(ctx context.Context, item *outboxItem) (*outboxMes
 	project, env, _, err := s.planNames(ctx, item, p)
 	if err != nil {
 		return nil, err
+	}
+	if project == "" {
+		project = "A plan"
 	}
 	path := planPath(p.PlanID)
 	url := strings.TrimRight(s.cfg.PublicURL, "/") + path

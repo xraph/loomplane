@@ -80,7 +80,7 @@ func notificationDatabase(t *testing.T) *grove.DB {
 	}
 	t.Cleanup(func() { _ = db.Close() })
 	for _, q := range []string{
-		`CREATE TABLE authsome_users(id TEXT PRIMARY KEY,app_id TEXT NOT NULL,email TEXT NOT NULL,banned BOOLEAN NOT NULL DEFAULT false,deleted_at TIMESTAMPTZ)`,
+		`CREATE TABLE authsome_users(id TEXT PRIMARY KEY,app_id TEXT NOT NULL,email TEXT NOT NULL,first_name TEXT NOT NULL DEFAULT '',last_name TEXT NOT NULL DEFAULT '',username TEXT NOT NULL DEFAULT '',display_username TEXT NOT NULL DEFAULT '',banned BOOLEAN NOT NULL DEFAULT false,deleted_at TIMESTAMPTZ)`,
 		`CREATE TABLE authsome_members(org_id TEXT NOT NULL,user_id TEXT NOT NULL,role TEXT NOT NULL DEFAULT 'admin')`,
 		`CREATE TABLE loomplane_projects(id TEXT PRIMARY KEY,org_id TEXT NOT NULL,name TEXT NOT NULL DEFAULT '')`,
 		`CREATE TABLE loomplane_environments(id TEXT PRIMARY KEY,org_id TEXT NOT NULL,project_id TEXT NOT NULL,name TEXT NOT NULL DEFAULT '',kind TEXT NOT NULL DEFAULT 'staging')`,

@@ -108,14 +108,28 @@ func worstCase() (map[string]string, string, string) {
 	escaped := func(n int) string { return strings.Repeat("<", n) }
 	id := strings.Repeat("i", 64)
 	p := &Push{Class: ClassNeedsYou, Urgency: driver.UrgencyTimeSensitive, Category: CategoryApproval, Actions: []string{ActionApprove, ActionReview, ActionOpen, ActionRetry, ActionRollback, ActionAsk, ActionTake},
-		Environment: escaped(200), Data: map[string]string{"revision": escaped(200), "taken_by": escaped(200)}}
+		Environment: escaped(200), Data: map[string]string{"revision": strings.Repeat("a", 64), "taken_by": escaped(200)}}
 	data := envelopeData(envelopeInput{Server: "https://" + strings.Repeat("a", 300), OrgID: id, OrgName: escaped(300), Kind: strings.Repeat("k", 40), Subject: id, InboxID: id,
 		Path: "/" + strings.Repeat("&", 400), ProjectID: id, Push: p, SentAt: time.Date(2026, 10, 28, 20, 44, 0, 0, time.UTC)})
 	return data, escaped(80) + "é", "<>& " + strings.Repeat("&é", 200)
 }
 
+func TestEnvelopeKeepsAFullPlanRevision(t *testing.T) {
+	revision := strings.Repeat("ab", 32)
+	data := envelopeData(envelopeInput{Push: &Push{Data: map[string]string{"revision": revision, "taken_by": revision}}})
+	if data["revision"] != revision {
+		t.Fatalf("revision cut: %q", data["revision"])
+	}
+	if got := utf8.RuneCountInString(data["taken_by"]); got != maxDataValue {
+		t.Fatalf("other data runes: %d", got)
+	}
+}
+
 func TestEnvelopeDataAlonePlusAnyTextFits(t *testing.T) {
 	data, _, _ := worstCase()
+	if got := utf8.RuneCountInString(data["revision"]); got != maxDataRevision {
+		t.Fatalf("revision runes: %d", got)
+	}
 	if got, want := utf8.RuneCountInString(data["org_name"]), maxDataValue; got != want {
 		t.Fatalf("org_name runes: %d", got)
 	}

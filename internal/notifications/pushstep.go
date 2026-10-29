@@ -66,9 +66,12 @@ const (
 	deviceGone = "gone"
 	// The caps below keep the sealed envelope under push.MaxEnvelopeBytes
 	// even when every character is one JSON escapes to six bytes.
-	maxDataValue  = 32  // runes, for any data value Loomplane doesn't bound itself
-	maxDataServer = 160 // bytes
-	maxDataPath   = 120 // bytes
+	maxDataValue = 32 // runes, for any data value Loomplane doesn't bound itself
+	// maxDataRevision fits a plan's revision, a 64-character SHA-256 digest
+	// that Approve must match exactly, so it can't be cut shorter.
+	maxDataRevision = 64
+	maxDataServer   = 160 // bytes
+	maxDataPath     = 120 // bytes
 )
 
 // Push says how a notice reaches phones. On a Notice, nil sends no push.
@@ -183,7 +186,11 @@ func envelopeData(e envelopeInput) map[string]string {
 	out := map[string]string{}
 	if e.Push != nil {
 		for k, v := range e.Push.Data {
-			out[k] = cut(v, maxDataValue)
+			limit := maxDataValue
+			if k == "revision" {
+				limit = maxDataRevision
+			}
+			out[k] = cut(v, limit)
 		}
 	}
 	e.OrgName = cut(e.OrgName, maxDataValue)

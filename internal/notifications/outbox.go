@@ -202,7 +202,7 @@ func (s *Service) process(ctx context.Context, item *outboxItem) error {
 		return err
 	}
 	stale := false
-	if item.kind == KindPlanWaiting && !item.inboxDone {
+	if item.kind == KindPlanWaiting && (!item.inboxDone || item.pushState == PushPending || item.emailState == "pending") {
 		if stale, err = s.stale(ctx, item); err != nil {
 			return err
 		}
@@ -223,11 +223,12 @@ func (s *Service) process(ctx context.Context, item *outboxItem) error {
 			return err
 		}
 		item.inboxID = inboxID.String()
-		if stale {
-			// Decided before anyone was told: there is nothing to email or push.
-			_, err = s.pg.Exec(ctx, `UPDATE loomplane_notification_outbox SET email_state='skipped',push_state='skipped' WHERE id=$1 AND lease_owner=$2`, item.id, item.owner)
-			return err
-		}
+	}
+	if stale {
+		// Decided before anyone was told, or while the row waited to retry:
+		// there is nothing to email or push.
+		_, err = s.pg.Exec(ctx, `UPDATE loomplane_notification_outbox SET email_state='skipped',push_state='skipped' WHERE id=$1 AND lease_owner=$2`, item.id, item.owner)
+		return err
 	}
 	plan, err := s.pushPlanFor(ctx, item, d)
 	if err != nil {
