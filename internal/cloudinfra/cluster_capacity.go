@@ -4,7 +4,15 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	mathbig "math/big"
+	"sort"
+	"strings"
 	"time"
+
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
+
+	"github.com/xraph/loomplane/internal/clouds/kubernetes"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/xraph/grove/driver"
@@ -39,7 +47,7 @@ func (s *PgStore) reserveClusterCapacity(ctx context.Context, tx driver.Tx, o *C
 	}
 	used := capacityResources(ResourceVector{})
 	for _, r := range records {
-		if !freshCapacity(r.CheckedAt, time.Now()) {
+		if !freshCapacityRecord(r, time.Now()) {
 			return blocked("stale_inventory", "inventory")
 		}
 		used, err = sumResources(used, r.Resources)
@@ -206,4 +214,374 @@ func (s *PgStore) SaveClusterAccount(ctx context.Context, org, cloud string, acc
 		return err
 	}
 	return tx.Commit()
+}
+
+const ClusterCapacityFreshness = 2 * time.Minute
+
+// KubernetesClusterCapacity is read through pinned management access.
+type KubernetesClusterCapacity struct {
+	Provider  string
+	Ref       provider.ClusterRef
+	Inventory kubernetes.CapacityInventory
+}
+
+type ClusterMetricProvenance struct {
+	Source    string    `json:"source"`
+	Identity  string    `json:"identity"`
+	CheckedAt time.Time `json:"checked_at"`
+}
+
+type ClusterNodeCapacity struct {
+	ExternalVMID  string                             `json:"external_vm_id"`
+	NodeUID       string                             `json:"node_uid"`
+	PoolID        string                             `json:"pool_id"`
+	Zone          string                             `json:"zone"`
+	Architecture  string                             `json:"architecture"`
+	Taints        []provider.NodePoolTaint           `json:"taints"`
+	Ready         bool                               `json:"ready"`
+	Unschedulable bool                               `json:"unschedulable"`
+	Provisioned   CapacityResources                  `json:"provisioned"`
+	Allocatable   ClusterResourceMetrics             `json:"allocatable"`
+	Requests      ClusterResourceMetrics             `json:"requests"`
+	GPUKinds      map[string]int64                   `json:"gpu_kinds"`
+	Provenance    map[string]ClusterMetricProvenance `json:"provenance"`
+}
+
+type ClusterCapacitySnapshot struct {
+	ResourceFingerprint string                      `json:"resource_fingerprint"`
+	StorageProvenance   ClusterMetricProvenance     `json:"storage_provenance"`
+	ResourceID          string                      `json:"resource_id"`
+	Provider            string                      `json:"provider"`
+	AccountID           string                      `json:"account_id"`
+	Ref                 provider.ClusterRef         `json:"ref"`
+	ObservationRevision int64                       `json:"observation_revision"`
+	CheckedAt           time.Time                   `json:"checked_at"`
+	Nodes               []ClusterNodeCapacity       `json:"nodes"`
+	Volumes             []ClusterVolumeCapacity     `json:"volumes"`
+	StorageClasses      []ClusterStorageClass       `json:"storage_classes"`
+	Complete            bool                        `json:"complete"`
+	Conditions          []provider.ClusterCondition `json:"conditions"`
+}
+
+func (s ClusterCapacitySnapshot) Fresh(now time.Time) bool {
+	return s.Complete && !s.CheckedAt.IsZero() && !s.CheckedAt.After(now) && now.Sub(s.CheckedAt) <= ClusterCapacityFreshness
+}
+
+// MergeClusterCapacity joins immutable VM IDs. Names only associate pods within this observation.
+func MergeClusterCapacity(p provider.ProviderClusterCapacity, k KubernetesClusterCapacity) (ClusterCapacitySnapshot, error) {
+	out := ClusterCapacitySnapshot{Provider: p.Provider, AccountID: p.Ref.AccountID, Ref: p.Ref, CheckedAt: p.CheckedAt, Complete: p.Complete && k.Inventory.Complete, Nodes: []ClusterNodeCapacity{}, Conditions: p.Conditions}
+	out.StorageProvenance = ClusterMetricProvenance{Source: "kubernetes", Identity: k.Ref.Incarnation, CheckedAt: k.Inventory.CheckedAt}
+	if p.Provider == "" || p.Provider != k.Provider || p.Ref != k.Ref || p.Ref.ID == "" || p.Ref.AccountID == "" || p.Ref.Incarnation == "" {
+		return out, provider.ErrInfrastructureIdentity
+	}
+	if k.Inventory.CheckedAt.Before(out.CheckedAt) {
+		out.CheckedAt = k.Inventory.CheckedAt
+	}
+	missing := func(reason string) {
+		out.Complete = false
+		out.Conditions = append(out.Conditions, provider.ClusterCondition{Type: "capacity", Status: "unknown", Reason: reason})
+	}
+	if !out.Complete {
+		missing("inventory_incomplete")
+	}
+	if err := clusterStorageFacts(&out, k.Inventory); err != nil {
+		return out, err
+	}
+	runtime := map[string]corev1.Node{}
+	uids := map[string]bool{}
+	names := map[string]bool{}
+	for _, n := range k.Inventory.Nodes {
+		prefix := p.Provider + "://"
+		if n.UID == "" || n.Spec.ProviderID == "" || !strings.HasPrefix(n.Spec.ProviderID, prefix) || uids[string(n.UID)] || names[n.Name] {
+			missing("node_identity_unknown")
+			continue
+		}
+		id := strings.TrimPrefix(n.Spec.ProviderID, prefix)
+		if id == "" || strings.Contains(id, "/") {
+			missing("node_mapping_unknown")
+			continue
+		}
+		if _, exists := runtime[id]; exists {
+			return out, provider.ErrInfrastructureIdentity
+		}
+		runtime[id] = n
+		uids[string(n.UID)] = true
+		names[n.Name] = true
+	}
+	seen := map[string]bool{}
+	for _, n := range p.Nodes {
+		if n.ExternalVMID == "" || n.PoolID == "" || seen[n.ExternalVMID] {
+			return out, provider.ErrInfrastructureIdentity
+		}
+		seen[n.ExternalVMID] = true
+		if _, err := sumResources(capacityResources(ResourceVector{}), CapacityResources{CPUMillis: n.CPUMillis, MemoryBytes: n.MemoryBytes, StorageBytes: n.EphemeralStorageBytes}); err != nil {
+			return out, err
+		}
+		node, ok := runtime[n.ExternalVMID]
+		if !ok {
+			missing("node_mapping_unknown")
+		}
+		for _, metric := range []corev1.ResourceName{corev1.ResourceCPU, corev1.ResourceMemory, corev1.ResourceEphemeralStorage} {
+			if quantity, exists := node.Status.Allocatable[metric]; !exists || quantity.Sign() < 0 {
+				missing("allocatable_unknown")
+			}
+		}
+		entry := ClusterNodeCapacity{ExternalVMID: n.ExternalVMID, PoolID: n.PoolID, Zone: node.Labels[corev1.LabelTopologyZone], NodeUID: string(node.UID), Architecture: node.Status.NodeInfo.Architecture, Unschedulable: node.Spec.Unschedulable, Provisioned: CapacityResources{Servers: number(1), CPUMillis: n.CPUMillis, MemoryBytes: n.MemoryBytes, StorageBytes: n.EphemeralStorageBytes}, GPUKinds: map[string]int64{}, Provenance: map[string]ClusterMetricProvenance{}}
+		requestsTotal := corev1.ResourceList{}
+		var podCount int64
+		for _, taint := range node.Spec.Taints {
+			entry.Taints = append(entry.Taints, provider.NodePoolTaint{Key: taint.Key, Value: taint.Value, Effect: string(taint.Effect)})
+		}
+		var conversionErr error
+		entry.Allocatable, conversionErr = clusterResourceMetrics(node.Status.Allocatable)
+		if conversionErr != nil {
+			return out, conversionErr
+		}
+		entry.Provenance["zone"] = ClusterMetricProvenance{Source: "kubernetes", Identity: entry.NodeUID, CheckedAt: k.Inventory.CheckedAt}
+		for _, c := range node.Status.Conditions {
+			if c.Type == corev1.NodeReady {
+				entry.Ready = c.Status == corev1.ConditionTrue
+			}
+		}
+		for metric := range node.Status.Allocatable {
+			if strings.Contains(string(metric), "gpu") {
+				entry.GPUKinds[string(metric)] = entry.Allocatable.Extended[string(metric)]
+			}
+			entry.Provenance["allocatable/"+string(metric)] = ClusterMetricProvenance{Source: "kubernetes", Identity: entry.NodeUID, CheckedAt: k.Inventory.CheckedAt}
+		}
+		for _, metric := range []string{"cpu_millis", "memory_bytes", "ephemeral_storage_bytes"} {
+			entry.Provenance["provisioned/"+metric] = ClusterMetricProvenance{Source: p.Provider, Identity: n.ExternalVMID, CheckedAt: p.CheckedAt}
+		}
+		for _, pod := range k.Inventory.Pods {
+			if pod.Spec.NodeName != node.Name || !ok || pod.Status.Phase == corev1.PodSucceeded || pod.Status.Phase == corev1.PodFailed {
+				continue
+			}
+			podCount++
+			if pod.Spec.Resources != nil {
+				missing("pod_level_accounting_unknown")
+			}
+			// Resizing and restartable init containers need scheduler accounting we do not infer.
+			if len(pod.Status.ContainerStatuses) > 0 {
+				for _, status := range pod.Status.ContainerStatuses {
+					if status.AllocatedResources != nil {
+						missing("pod_resize_accounting_unknown")
+					}
+				}
+			}
+			requests := corev1.ResourceList{}
+			for _, container := range pod.Spec.Containers {
+				addClusterRequests(requests, container.Resources.Requests)
+			}
+			for _, container := range pod.Spec.InitContainers {
+				if container.RestartPolicy != nil {
+					missing("restartable_init_accounting_unknown")
+				}
+				for name, q := range container.Resources.Requests {
+					current := requests[name]
+					if q.Cmp(current) > 0 {
+						requests[name] = q.DeepCopy()
+					}
+				}
+			}
+			addClusterRequests(requests, pod.Spec.Overhead)
+			addClusterRequests(requestsTotal, requests)
+		}
+		requestsTotal[corev1.ResourcePods] = *resource.NewQuantity(podCount, resource.DecimalSI)
+		for _, metric := range []corev1.ResourceName{corev1.ResourceCPU, corev1.ResourceMemory, corev1.ResourceEphemeralStorage} {
+			if _, ok := requestsTotal[metric]; !ok {
+				requestsTotal[metric] = resource.Quantity{}
+			}
+		}
+		entry.Requests, conversionErr = clusterResourceMetrics(requestsTotal)
+		if conversionErr != nil {
+			return out, conversionErr
+		}
+		for metric := range requestsTotal {
+			entry.Provenance["requests/"+string(metric)] = ClusterMetricProvenance{Source: "kubernetes", Identity: entry.NodeUID, CheckedAt: k.Inventory.CheckedAt}
+		}
+		out.Nodes = append(out.Nodes, entry)
+	}
+	for id := range runtime {
+		if !seen[id] {
+			missing("provider_mapping_unknown")
+		}
+	}
+	sort.Slice(out.Nodes, func(i, j int) bool { return out.Nodes[i].ExternalVMID < out.Nodes[j].ExternalVMID })
+	return out, nil
+}
+func addClusterRequests(out, values corev1.ResourceList) {
+	for name, q := range values {
+		current := out[name]
+		current.Add(q)
+		out[name] = current
+	}
+}
+
+func freshCapacityRecord(r CapacityRecord, now time.Time) bool {
+	if r.Kind == "cluster_node" || r.Kind == "cluster_inventory" {
+		return r.ClusterComplete && !r.CheckedAt.IsZero() && !r.CheckedAt.After(now) && now.Sub(r.CheckedAt) <= ClusterCapacityFreshness
+	}
+	return freshCapacity(r.CheckedAt, now)
+}
+func deduplicateClusterCapacity(servers, clusters []CapacityRecord) []CapacityRecord {
+	index := map[string]int{}
+	out := append([]CapacityRecord(nil), servers...)
+	for i, r := range out {
+		index[recordKey(r)] = i
+	}
+	for _, r := range clusters {
+		if i, ok := index[recordKey(r)]; ok {
+			if out[i].ClusterResourceID != "" && out[i].ClusterResourceID != r.ClusterResourceID {
+				r.ClusterComplete = false
+				r.Resources = CapacityResources{}
+			}
+			r.ServerID = out[i].ServerID
+			r.ServerStateRevision = out[i].ServerStateRevision
+			out[i] = r
+		} else {
+			index[recordKey(r)] = len(out)
+			out = append(out, r)
+		}
+	}
+	return out
+}
+
+// ClusterResourceMetrics uses integer units. Nil means the source omitted that dimension.
+type ClusterResourceMetrics struct {
+	CPUMillis             *int64           `json:"cpu_millis"`
+	MemoryBytes           *int64           `json:"memory_bytes"`
+	EphemeralStorageBytes *int64           `json:"ephemeral_storage_bytes"`
+	Pods                  *int64           `json:"pods"`
+	Extended              map[string]int64 `json:"extended"`
+}
+type ClusterTopologyRequirement struct {
+	Key      string   `json:"key"`
+	Operator string   `json:"operator"`
+	Values   []string `json:"values"`
+}
+type ClusterTopologyTerm struct {
+	Expressions []ClusterTopologyRequirement `json:"expressions"`
+	Fields      []ClusterTopologyRequirement `json:"fields"`
+}
+type ClusterVolumeCapacity struct {
+	Name          string                `json:"name"`
+	UID           string                `json:"uid"`
+	Class         string                `json:"class"`
+	CapacityBytes *int64                `json:"capacity_bytes"`
+	ClaimUID      string                `json:"claim_uid"`
+	ReclaimPolicy string                `json:"reclaim_policy"`
+	Phase         string                `json:"phase"`
+	VolumeMode    string                `json:"volume_mode"`
+	Driver        string                `json:"driver"`
+	VolumeHandle  string                `json:"volume_handle"`
+	Topology      []ClusterTopologyTerm `json:"topology"`
+}
+type ClusterStorageClass struct {
+	Name           string                `json:"name"`
+	UID            string                `json:"uid"`
+	Provisioner    string                `json:"provisioner"`
+	BindingMode    string                `json:"binding_mode"`
+	ReclaimPolicy  string                `json:"reclaim_policy"`
+	AllowExpansion *bool                 `json:"allow_expansion"`
+	Topology       []ClusterTopologyTerm `json:"topology"`
+}
+
+func checkedClusterQuantity(q resource.Quantity, scale int64, whole bool) (*int64, error) {
+	value, ok := new(mathbig.Rat).SetString(q.AsDec().String())
+	if !ok || value.Sign() < 0 {
+		return nil, ErrInvalid
+	}
+	value.Mul(value, new(mathbig.Rat).SetInt64(scale))
+	integer, remainder := new(mathbig.Int), new(mathbig.Int)
+	integer.QuoRem(value.Num(), value.Denom(), remainder)
+	if remainder.Sign() != 0 {
+		if whole {
+			return nil, ErrInvalid
+		}
+		integer.Add(integer, mathbig.NewInt(1))
+	}
+	if !integer.IsInt64() {
+		return nil, ErrInvalid
+	}
+	return number(integer.Int64()), nil
+}
+func clusterResourceMetrics(resources corev1.ResourceList) (ClusterResourceMetrics, error) {
+	out := ClusterResourceMetrics{Extended: map[string]int64{}}
+	for name, q := range resources {
+		scale := int64(1)
+		if name == corev1.ResourceCPU {
+			scale = 1000
+		}
+		count := name == corev1.ResourcePods || strings.Contains(string(name), "/")
+		value, err := checkedClusterQuantity(q, scale, count)
+		if err != nil {
+			return out, err
+		}
+		switch name {
+		case corev1.ResourceCPU:
+			out.CPUMillis = value
+		case corev1.ResourceMemory:
+			out.MemoryBytes = value
+		case corev1.ResourceEphemeralStorage:
+			out.EphemeralStorageBytes = value
+		case corev1.ResourcePods:
+			out.Pods = value
+		default:
+			out.Extended[string(name)] = *value
+		}
+	}
+	return out, nil
+}
+func clusterStorageFacts(out *ClusterCapacitySnapshot, inventory kubernetes.CapacityInventory) error {
+	for _, pv := range inventory.Volumes {
+		v := ClusterVolumeCapacity{Name: pv.Name, UID: string(pv.UID), Class: pv.Spec.StorageClassName, ReclaimPolicy: string(pv.Spec.PersistentVolumeReclaimPolicy), Phase: string(pv.Status.Phase)}
+		if q, ok := pv.Spec.Capacity[corev1.ResourceStorage]; ok {
+			var err error
+			v.CapacityBytes, err = checkedClusterQuantity(q, 1, false)
+			if err != nil {
+				return err
+			}
+		}
+		if pv.Spec.ClaimRef != nil {
+			v.ClaimUID = string(pv.Spec.ClaimRef.UID)
+		}
+		if pv.Spec.VolumeMode != nil {
+			v.VolumeMode = string(*pv.Spec.VolumeMode)
+		}
+		if pv.Spec.CSI != nil {
+			v.Driver = pv.Spec.CSI.Driver
+			v.VolumeHandle = pv.Spec.CSI.VolumeHandle
+		}
+		if pv.Spec.NodeAffinity != nil && pv.Spec.NodeAffinity.Required != nil {
+			for _, term := range pv.Spec.NodeAffinity.Required.NodeSelectorTerms {
+				t := ClusterTopologyTerm{}
+				for _, r := range term.MatchExpressions {
+					t.Expressions = append(t.Expressions, ClusterTopologyRequirement{Key: r.Key, Operator: string(r.Operator), Values: append([]string(nil), r.Values...)})
+				}
+				for _, r := range term.MatchFields {
+					t.Fields = append(t.Fields, ClusterTopologyRequirement{Key: r.Key, Operator: string(r.Operator), Values: append([]string(nil), r.Values...)})
+				}
+				v.Topology = append(v.Topology, t)
+			}
+		}
+		out.Volumes = append(out.Volumes, v)
+	}
+	for _, class := range inventory.StorageClasses {
+		c := ClusterStorageClass{Name: class.Name, UID: string(class.UID), Provisioner: class.Provisioner, AllowExpansion: class.AllowVolumeExpansion}
+		if class.VolumeBindingMode != nil {
+			c.BindingMode = string(*class.VolumeBindingMode)
+		}
+		if class.ReclaimPolicy != nil {
+			c.ReclaimPolicy = string(*class.ReclaimPolicy)
+		}
+		for _, term := range class.AllowedTopologies {
+			t := ClusterTopologyTerm{}
+			for _, r := range term.MatchLabelExpressions {
+				t.Expressions = append(t.Expressions, ClusterTopologyRequirement{Key: r.Key, Operator: "In", Values: append([]string(nil), r.Values...)})
+			}
+			c.Topology = append(c.Topology, t)
+		}
+		out.StorageClasses = append(out.StorageClasses, c)
+	}
+	return nil
 }

@@ -199,6 +199,10 @@ func (s *Service) PreviewClusterDrain(ctx context.Context, p security.Principal,
 	return drainReview(r, pool, facts, s.now()), nil
 }
 func (s *Service) observeClusterManagement(ctx context.Context, p security.Principal, cloud string, in ClusterInput, r *ManagedResource, reader provider.ClusterReader, access provider.AccountAccess) (ClusterManagementFacts, error) {
+	return s.observeClusterManagementWith(ctx, p, cloud, in, r, reader, access, readClusterManagement)
+}
+
+func (s *Service) observeClusterManagementWith(ctx context.Context, p security.Principal, cloud string, in ClusterInput, r *ManagedResource, reader provider.ClusterReader, access provider.AccountAccess, read func(context.Context, kubeclient.Interface) (ClusterManagementFacts, error), required ...provider.InfrastructureCapability) (ClusterManagementFacts, error) {
 	var facts ClusterManagementFacts
 	ctx, cancel := context.WithTimeout(ctx, 40*time.Second)
 	defer cancel()
@@ -223,6 +227,11 @@ func (s *Service) observeClusterManagement(ctx context.Context, p security.Princ
 		return facts, checkErr
 	}
 	access.BeforeEffect = func(effectCtx context.Context) error {
+		for _, capability := range required {
+			if checkErr := s.Adapters.Require(in.Provider, capability); checkErr != nil {
+				return checkErr
+			}
+		}
 		if checkErr := s.Adapters.Require(in.Provider, provider.ClusterBootstrapAccess); checkErr != nil {
 			return checkErr
 		}
@@ -260,7 +269,7 @@ func (s *Service) observeClusterManagement(ctx context.Context, p security.Princ
 	if err != nil {
 		return facts, err
 	}
-	facts, err = readClusterManagement(ctx, client)
+	facts, err = read(ctx, client)
 	if err != nil {
 		return facts, &provider.ClusterLifecycleBlockedError{Reason: "management_read_failed"}
 	}

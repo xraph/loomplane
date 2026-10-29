@@ -76,6 +76,19 @@ func TestManagedClusterMaintenanceServiceResponseLossRestart(t *testing.T) {
 	if _, err := store.ClaimManagedResource(t.Context(), r, 0); err != nil {
 		t.Fatal(err)
 	}
+
+	inventoryRevision, inventoryErr := store.BeginClusterCapacityObservation(t.Context(), "org", "cloud", r.ID)
+	if inventoryErr != nil {
+		t.Fatal(inventoryErr)
+	}
+	servers, cpu, memory, disk := int64(1), int64(2000), int64(4<<30), int64(80_000_000_000)
+	inventory := cloudinfra.ClusterCapacitySnapshot{ResourceID: r.ID, Provider: r.Provider, AccountID: r.AccountID, Ref: ref, ObservationRevision: inventoryRevision, CheckedAt: time.Now().UTC(), Complete: true}
+	for _, id := range []string{"node-1", "node-2"} {
+		inventory.Nodes = append(inventory.Nodes, cloudinfra.ClusterNodeCapacity{ExternalVMID: id, NodeUID: id, PoolID: "pool", Provisioned: cloudinfra.CapacityResources{Servers: &servers, CPUMillis: &cpu, MemoryBytes: &memory, StorageBytes: &disk}})
+	}
+	if inventoryErr = store.SaveClusterCapacity(t.Context(), r, inventory); inventoryErr != nil {
+		t.Fatal(inventoryErr)
+	}
 	if err := store.SaveClusterCheckpoint(t.Context(), original, 1); err != nil {
 		t.Fatal(err)
 	}

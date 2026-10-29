@@ -62,6 +62,10 @@ type doksCluster struct {
 		State string `json:"state"`
 	} `json:"status"`
 	NodePools []struct {
+		Nodes []struct {
+			ID        string `json:"id"`
+			DropletID string `json:"droplet_id"`
+		} `json:"nodes"`
 		Tags      []string                 `json:"tags"`
 		ID        string                   `json:"id"`
 		Name      string                   `json:"name"`

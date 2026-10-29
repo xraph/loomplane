@@ -171,7 +171,7 @@ func (s *PgStore) reserveInfrastructureCapacity(ctx context.Context, tx driver.T
 	}
 	used := capacityResources(ResourceVector{})
 	for _, r := range records {
-		if !freshCapacity(r.CheckedAt, time.Now()) {
+		if !freshCapacityRecord(r, time.Now()) {
 			return capacityBlock(p, d, "stale_inventory", "inventory"), nil
 		}
 		if r.Observation != nil && r.ServerID != "" {
@@ -369,15 +369,23 @@ func capacityRecordsTx(ctx context.Context, tx driver.Tx, org, cloud string) ([]
 	for rows.Next() {
 		var r CapacityRecord
 		var raw []byte
-		if err := rows.Scan(&raw); err != nil {
-			return nil, err
+		if checkErr := rows.Scan(&raw); checkErr != nil {
+			return nil, checkErr
 		}
 		if checkErr := json.Unmarshal(raw, &r); checkErr != nil {
 			return nil, checkErr
 		}
 		out = append(out, r)
 	}
-	return out, rows.Err()
+	rows.Close()
+	if checkErr := rows.Err(); checkErr != nil {
+		return nil, checkErr
+	}
+	clusters, err := clusterCapacityRecordsTx(ctx, tx, org, cloud)
+	if err != nil {
+		return nil, err
+	}
+	return deduplicateClusterCapacity(out, clusters), nil
 }
 
 // poolMemberSet lists the servers in a pool.
@@ -647,7 +655,7 @@ func operationCapacityDelta(ctx context.Context, tx driver.Tx, o *Operation, p *
 		if err := json.Unmarshal(raw, &r); err != nil {
 			return ResourceVector{}, err
 		}
-		if !freshCapacity(r.CheckedAt, time.Now()) {
+		if !freshCapacityRecord(r, time.Now()) {
 			return ResourceVector{}, &CapacityAdmissionError{Block: *capacityBlock(p, d, "stale_inventory", "server")}
 		}
 		facts := factValues(r.Resources)
@@ -690,6 +698,8 @@ func capacityInventoryIncomplete(ctx context.Context, tx driver.Tx, org, cloud s
  AND o.body->'input'->>'kind'='delete' AND s.resource_id<>''
  AND o.body->>'provider'=s.provider AND o.body->>'account_id'=s.account_id AND o.body->>'resource_id'=s.resource_id
  AND coalesce(o.body->>'absence_confirmed_at','') NOT IN ('','0001-01-01T00:00:00Z'))
- )`, org, cloud).Scan(&missing)
+ ) OR EXISTS(SELECT 1 FROM loomplane_managed_resources r LEFT JOIN loomplane_cluster_capacity_inventory c ON c.org_id=r.org_id AND c.resource_id=r.id
+ WHERE r.org_id=$1 AND r.cloud_id=$2 AND r.deleted_at IS NULL AND r.kind='cluster'
+ AND (c.body IS NULL OR NOT c.complete OR c.checked_at<now()-interval '2 minutes' OR c.checked_at>now()))`, org, cloud).Scan(&missing)
 	return missing, err
 }
