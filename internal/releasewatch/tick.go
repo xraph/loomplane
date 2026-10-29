@@ -30,9 +30,13 @@ const maxSpan = 24 * time.Hour
 // back when Loomplane automation may not plan deployments.
 const automationCantCreate = "Loomplane automation can't create deployments in this project; roll the release back yourself"
 
-// neverStarted is how long after a watch's bound an approved rollback
-// may take to start deploying before the watch gives up on it.
+// neverStarted is how long a rollback may take to finish planning, from
+// the watch's bound, or to start deploying, from its approval, before the
+// watch gives up on it.
 const neverStarted = time.Hour
+
+// createTimeout bounds planning a rollback, apart from the tick's budget.
+const createTimeout = 30 * time.Second
 
 // automationDenied is why a rollback waits for a person when Loomplane
 // automation may not approve it.
@@ -213,10 +217,22 @@ func (s *Service) createRollback(ctx context.Context, w *Watch, now time.Time) e
 	}
 	var plan *planning.Plan
 	if existing != "" {
-		// The tick that planned it audited the breach.
 		plan, err = s.plans.GetPlan(ctx, w.OrgID, existing)
-	} else {
-		plan, err = s.rollbacks.CreateAutomaticRollback(ctx, w.OrgID, w.DeploymentID, planning.AutomaticRollbackInput{
+		if err != nil {
+			return err
+		}
+		// A dead plan (its planning couldn't start, or it was superseded)
+		// is planned afresh, as a transient failure always was.
+		if !livePlan(plan) {
+			plan = nil
+		}
+	}
+	if plan == nil {
+		// The create runs to its end whatever is left of the tick: cut
+		// off after planning stored the plan, it would leave a dead one.
+		createCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), createTimeout)
+		defer cancel()
+		plan, err = s.rollbacks.CreateAutomaticRollback(createCtx, w.OrgID, w.DeploymentID, planning.AutomaticRollbackInput{
 			Trigger: planning.TriggerWatch, Reason: w.Reason, WatchID: w.ID,
 		})
 		// Audited as planned, whatever becomes of the save below, so the
@@ -240,6 +256,12 @@ func (s *Service) createRollback(ctx context.Context, w *Watch, now time.Time) e
 	}
 	w.RollbackPlanID, w.UpdatedAt = plan.ID, now
 	return s.store.Save(ctx, w)
+}
+
+// livePlan reports whether a rollback plan can still go ahead: the tick
+// that made it audited the breach, and this one takes it up.
+func livePlan(p *planning.Plan) bool {
+	return p.Status == planning.StatusPlanning || p.Status == planning.StatusReady || p.Status == planning.StatusApproved
 }
 
 // startedSince says why a newer release that started after the tick
@@ -298,6 +320,11 @@ func (s *Service) rollBack(ctx context.Context, w *Watch, now time.Time) error {
 		return s.settle(ctx, w, now, StatusRollbackBlocked, w.Verdict, "Loomplane couldn't roll the release back: "+reason)
 	}
 	switch plan.Status {
+	case planning.StatusPlanning:
+		if !now.Before(w.BoundAt.Add(neverStarted)) {
+			return s.settle(ctx, w, now, StatusRollbackFailed, w.Verdict, "the rollback plan never finished planning")
+		}
+		return nil
 	case planning.StatusReady:
 		return s.approve(ctx, w, now, plan)
 	case planning.StatusBlocked:
@@ -350,7 +377,11 @@ func (s *Service) approve(ctx context.Context, w *Watch, now time.Time, plan *pl
 func (s *Service) followDeployment(ctx context.Context, w *Watch, now time.Time, plan *planning.Plan) error {
 	d, err := s.deployments.ForPlan(ctx, w.OrgID, plan.ID)
 	if errors.Is(err, deployments.ErrNotFound) {
-		if !now.Before(w.BoundAt.Add(neverStarted)) {
+		since := w.BoundAt
+		if w.RollbackApprovedAt != nil {
+			since = *w.RollbackApprovedAt
+		}
+		if !now.Before(since.Add(neverStarted)) {
 			return s.settle(ctx, w, now, StatusRollbackFailed, w.Verdict, "the rollback deployment never started")
 		}
 		return nil
@@ -408,5 +439,6 @@ func (s *Service) auditBreach(ctx context.Context, w *Watch, plan *planning.Plan
 	if refusal != nil {
 		event.Outcome, attrs["refused"] = "failure", refusal.Error()
 	}
-	s.audit.Record(ctx, event)
+	// A tick whose budget ran out after the save still records it.
+	s.audit.Record(context.WithoutCancel(ctx), event)
 }

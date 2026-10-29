@@ -439,7 +439,8 @@ func (s *Service) auditSettle(ctx context.Context, w *Watch) {
 	if s.audit == nil {
 		return
 	}
-	s.audit.Record(ctx, projects.AuditEvent{
+	// A tick whose budget ran out after the save still records it.
+	s.audit.Record(context.WithoutCancel(ctx), projects.AuditEvent{
 		Action: "release_watch.settle", Severity: "info", ProjectID: w.ProjectID, Principal: security.SystemPrincipal(w.OrgID),
 		Attributes: map[string]any{
 			"watch_id": w.ID, "deployment_id": w.DeploymentID, "environment": w.Environment,

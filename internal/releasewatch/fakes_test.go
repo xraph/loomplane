@@ -3,6 +3,7 @@ package releasewatch
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"slices"
 	"sync"
@@ -30,15 +31,24 @@ type memWatches struct {
 	failSave func(w *Watch) error
 }
 
+// RollbackPlan returns the newest match, as PgStore orders them: by
+// CreatedAt, then ID.
 func (m *memWatches) RollbackPlan(_ context.Context, orgID, watchID string) (string, error) {
 	m.plans.mu.Lock()
 	defer m.plans.mu.Unlock()
+	var newest *planning.Plan
 	for _, p := range m.plans.plans {
-		if p.OrgID == orgID && p.Rollback != nil && p.Rollback.WatchID == watchID {
-			return p.ID, nil
+		if p.OrgID != orgID || p.Rollback == nil || p.Rollback.WatchID != watchID {
+			continue
+		}
+		if newest == nil || p.CreatedAt.After(newest.CreatedAt) || (p.CreatedAt.Equal(newest.CreatedAt) && p.ID > newest.ID) {
+			newest = p
 		}
 	}
-	return "", nil
+	if newest == nil {
+		return "", nil
+	}
+	return newest.ID, nil
 }
 
 func copyWatch(w *Watch) *Watch {
@@ -182,10 +192,11 @@ func (f *fakePlans) put(p *planning.Plan) {
 	f.plans[p.ID] = p
 }
 
-func (f *fakePlans) setStatus(id, status string) {
+// setStatus moves the first rollback plan, plan_rb1, to status.
+func (f *fakePlans) setStatus(status string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.plans[id].Status = status
+	f.plans["plan_rb1"].Status = status
 }
 
 func (f *fakePlans) movePlan(environmentID, name, planID string) {
@@ -331,6 +342,10 @@ type fakeRollbacks struct {
 	status string
 	// onCreate runs inside the next create, before it answers.
 	onCreate func()
+	// startFails makes the next create store its plan failed and then
+	// return a transient error, as planning does when the plan's workflow
+	// couldn't start.
+	startFails bool
 }
 
 func (f *fakeRollbacks) CreateAutomaticRollback(_ context.Context, orgID, deploymentID string, in planning.AutomaticRollbackInput) (*planning.Plan, error) {
@@ -350,11 +365,20 @@ func (f *fakeRollbacks) CreateAutomaticRollback(_ context.Context, orgID, deploy
 	if status == "" {
 		status = planning.StatusPlanning
 	}
+	failed := f.startFails
+	if failed {
+		f.startFails, status = false, planning.StatusFailed
+	}
 	p := &planning.Plan{
 		ID: id, OrgID: orgID, ProjectID: "proj", EnvironmentID: "env_p", Environment: "production", Kind: planning.KindRollback, Status: status, Executable: true,
 		Rollback: &planning.Rollback{Reason: in.Reason, Trigger: in.Trigger, WatchID: in.WatchID, TargetDeploymentID: deploymentID, RestoreDeploymentID: "dep_0", RestorePlanID: "plan_0"},
 	}
+	p.CreatedAt = time.Date(2026, 10, 29, 0, 0, len(f.created), 0, time.UTC)
 	f.plans.put(p)
+	if failed {
+		p.Error = "Planning couldn't start: dispatch is unavailable"
+		return nil, errors.New("start planning: dispatch is unavailable")
+	}
 	return p, nil
 }
 
@@ -421,12 +445,16 @@ func (f *fakeAuthz) Require(_ context.Context, _ security.Principal, perm securi
 type fakeAudit struct {
 	mu     sync.Mutex
 	events []projects.AuditEvent
+	// ctxErrs are each record's context error, nil while it can still
+	// write.
+	ctxErrs []error
 }
 
-func (f *fakeAudit) Record(_ context.Context, e projects.AuditEvent) {
+func (f *fakeAudit) Record(ctx context.Context, e projects.AuditEvent) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.events = append(f.events, e)
+	f.ctxErrs = append(f.ctxErrs, ctx.Err())
 }
 
 func (f *fakeAudit) actions() []string {

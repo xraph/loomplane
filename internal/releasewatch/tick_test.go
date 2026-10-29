@@ -1,6 +1,7 @@
 package releasewatch
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"slices"
@@ -160,14 +161,14 @@ func TestTick_breachCreatesAndApprovesARollback(t *testing.T) {
 	if len(r.rollbacks.approved) != 0 || len(r.rollbacks.created) != 1 || w.Status != StatusRollingBack {
 		t.Fatalf("approved %v while planning", r.rollbacks.approved)
 	}
-	r.plans.setStatus("plan_rb1", planning.StatusReady)
+	r.plans.setStatus(planning.StatusReady)
 	r.tickAt(t, firstJudged+2*time.Minute)
 	// The decision is on its way; the plan still reads ready.
 	w = r.tickAt(t, firstJudged+3*time.Minute)
 	if !slices.Equal(r.rollbacks.approved, []string{"plan_rb1"}) || w.RollbackApprovedAt == nil {
 		t.Fatalf("approved %v, watch %+v", r.rollbacks.approved, w)
 	}
-	r.plans.setStatus("plan_rb1", planning.StatusApproved)
+	r.plans.setStatus(planning.StatusApproved)
 	w = r.tickAt(t, firstJudged+4*time.Minute)
 	if w.Status != StatusRollingBack {
 		t.Fatalf("watch %+v before the deployment", w)
@@ -568,10 +569,87 @@ func TestTick_followsAnApprovalWhoseSaveWasLost(t *testing.T) {
 		t.Fatalf("watch %+v, approved %v", w, r.rollbacks.approved)
 	}
 	// The decision reached the plan's workflow.
-	r.plans.setStatus("plan_rb1", planning.StatusApproved)
+	r.plans.setStatus(planning.StatusApproved)
 	r.deployments.put(&deployments.Deployment{ID: "dep_rb", PlanID: "plan_rb1", Status: deployments.StatusSucceeded})
 	w := r.tickAt(t, firstJudged+2*time.Minute)
 	if w.Status != StatusRolledBack || len(r.rollbacks.approved) != 1 {
 		t.Fatalf("watch %+v, approved %v", w, r.rollbacks.approved)
+	}
+}
+
+// A create that stored its plan and then failed to start planning leaves
+// a dead plan behind: the next tick plans afresh rather than take it up.
+func TestTick_plansAfreshAfterADeadRollbackPlan(t *testing.T) {
+	r := watching(t)
+	r.candidates(failed)
+	r.rollbacks.startFails = true
+	r.clock.set(finished.Add(firstJudged))
+	if err := r.svc.Tick(t.Context()); err == nil {
+		t.Fatal("the failed start was swallowed")
+	}
+	w := r.tickAt(t, firstJudged+time.Minute)
+	if w.Status != StatusRollingBack || w.RollbackPlanID != "plan_rb2" || len(r.rollbacks.created) != 2 {
+		t.Fatalf("watch %+v after %d creates", w, len(r.rollbacks.created))
+	}
+}
+
+// A rollback plan that never finishes planning settles the watch at the
+// same bound as one that never starts deploying.
+func TestTick_aRollbackPlanStuckPlanningFails(t *testing.T) {
+	r := watching(t)
+	r.candidates(failed)
+	r.tickAt(t, firstJudged)
+	if w := r.tickAt(t, watchBounded+time.Hour-time.Second); w.Status != StatusRollingBack {
+		t.Fatalf("watch %+v before the hour", w)
+	}
+	w := r.tickAt(t, watchBounded+time.Hour)
+	if w.Status != StatusRollbackFailed || w.Reason != "the rollback plan never finished planning" || w.SettledAt == nil {
+		t.Fatalf("watch %+v", w)
+	}
+}
+
+// An approved rollback gets its hour to start from when Loomplane approved
+// it.
+func TestTick_neverStartedCountsFromTheApproval(t *testing.T) {
+	r := watching(t)
+	r.candidates(failed)
+	r.tickAt(t, firstJudged)
+	r.plans.setStatus(planning.StatusReady)
+	approved := watchBounded + 50*time.Minute
+	r.tickAt(t, approved)
+	r.plans.setStatus(planning.StatusApproved)
+	if w := r.tickAt(t, approved+time.Hour-time.Second); w.Status != StatusRollingBack {
+		t.Fatalf("watch %+v an hour after the bound", w)
+	}
+	if w := r.tickAt(t, approved+time.Hour); w.Status != StatusRollbackFailed || w.Reason != "the rollback deployment never started" {
+		t.Fatalf("watch %+v", w)
+	}
+}
+
+// A settle whose tick ran out of budget after the save still audits.
+func TestSettle_auditsAfterTheBudgetRunsOut(t *testing.T) {
+	r := watching(t)
+	w := r.store.only(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	if err := r.svc.settle(ctx, w, finished.Add(firstJudged), StatusPassed, string(releasehealth.Pass), "Every watched service passed."); err != nil {
+		t.Fatal(err)
+	}
+	if len(r.audit.ctxErrs) != 1 || r.audit.ctxErrs[0] != nil {
+		t.Fatalf("audited with %v", r.audit.ctxErrs)
+	}
+}
+
+// The in-memory store finds the newest plan for a watch, as Postgres does.
+func TestMemWatches_rollbackPlanIsTheNewest(t *testing.T) {
+	r := watching(t)
+	for i, at := range []int{3, 1, 2} {
+		r.plans.put(&planning.Plan{
+			ID: fmt.Sprintf("plan_%d", i), OrgID: "org", CreatedAt: finished.Add(time.Duration(at) * time.Minute),
+			Rollback: &planning.Rollback{WatchID: "watch_x"},
+		})
+	}
+	if id, _ := r.store.RollbackPlan(t.Context(), "org", "watch_x"); id != "plan_0" {
+		t.Fatalf("plan %q", id)
 	}
 }
