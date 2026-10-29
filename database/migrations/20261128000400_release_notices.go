@@ -69,7 +69,9 @@ BEGIN
 	ON CONFLICT DO NOTHING;
 	RETURN NULL;
 EXCEPTION WHEN OTHERS THEN
-	-- A notice must never fail the deployment write that caused it.
+	-- A notice must never fail the deployment write that caused it, but a
+	-- dropped notice leaves a trace. Error text and code only, never row data.
+	RAISE WARNING 'loomplane_release_notice failed: % (SQLSTATE %)', SQLERRM, SQLSTATE;
 	RETURN NULL;
 END $$`); err != nil {
 				return fmt.Errorf("create function loomplane_release_notice: %w", err)

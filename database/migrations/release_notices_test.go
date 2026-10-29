@@ -3,6 +3,7 @@
 package migrations
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/xraph/grove/migrate"
@@ -38,6 +39,10 @@ func TestReleaseNoticesMigration(t *testing.T) {
 	}
 	if after := capture(); after[0] == before[0] {
 		t.Fatal("up left the capture function as it was")
+	}
+	// The trigger function keeps the write alive and leaves a warning.
+	if def := strs(t, conn, `SELECT pg_get_functiondef('loomplane_release_notice'::regproc)`); len(def) != 1 || !strings.Contains(def[0], "EXCEPTION WHEN OTHERS") || !strings.Contains(def[0], "RAISE WARNING 'loomplane_release_notice failed: % (SQLSTATE %)', SQLERRM, SQLSTATE") {
+		t.Fatalf("release notice function: %v", def)
 	}
 	down(t, ex, "release_notices")
 	// Running the down again changes nothing.
