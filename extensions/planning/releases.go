@@ -8,6 +8,7 @@ import (
 
 	"github.com/xraph/loomplane/extensions/identity"
 	"github.com/xraph/loomplane/internal/planning"
+	"github.com/xraph/loomplane/internal/releasewatch"
 	"github.com/xraph/loomplane/internal/security"
 )
 
@@ -95,5 +96,32 @@ func releaseRoutes(r forge.Router, guard identity.Guard, svc releaseService) err
 		forge.WithSummary("Plan the environment back to its previous successful release, with a reason; a person approves it like any plan. Data-bearing resources and services stay as they are"),
 		forge.WithRequestSchema(planning.RollbackInput{}),
 		forge.WithResponseSchema(http.StatusCreated, "The rollback plan", planning.Plan{}),
+	)
+}
+
+// soakService is what the soak route asks of the release watch.
+type soakService interface {
+	SoakForPlan(ctx context.Context, p security.Principal, planID string) (*releasewatch.Soak, error)
+}
+
+// soakRoutes registers the route that says how long a promotion's source
+// environment has run the commits the plan moves. It changes nothing.
+func soakRoutes(r forge.Router, guard identity.Guard, svc soakService) error {
+	g := r.Group("/api/v1", forge.WithGroupMiddleware(guard...), forge.WithGroupTags("Plans"))
+	soak := func(c forge.Context) error {
+		p, err := principal(c)
+		if err != nil {
+			return err
+		}
+		s, err := svc.SoakForPlan(c.Request().Context(), p, c.Param("id"))
+		if err != nil {
+			return fail(err)
+		}
+		return c.JSON(http.StatusOK, s)
+	}
+	return g.GET("/plans/:id/soak", soak,
+		forge.WithName("plans.soak"),
+		forge.WithSummary("How long the promotion's source environment has run exactly the commits the plan moves, and whether it ran them healthily; unverified means missing evidence"),
+		forge.WithResponseSchema(http.StatusOK, "The soak", releasewatch.Soak{}),
 	)
 }

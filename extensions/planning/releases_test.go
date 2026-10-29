@@ -9,10 +9,12 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/xraph/forge"
 
 	"github.com/xraph/loomplane/internal/planning"
+	"github.com/xraph/loomplane/internal/releasewatch"
 	"github.com/xraph/loomplane/internal/security"
 )
 
@@ -177,3 +179,43 @@ func TestRollbackRoutes(t *testing.T) {
 
 // The real service sits behind the release routes.
 var _ releaseService = (*planning.Service)(nil)
+
+// fakeSoak answers the soak route, or fails with err.
+type fakeSoak struct {
+	err   error
+	asked []string
+}
+
+func (f *fakeSoak) SoakForPlan(_ context.Context, _ security.Principal, planID string) (*releasewatch.Soak, error) {
+	f.asked = append(f.asked, planID)
+	if f.err != nil {
+		return nil, f.err
+	}
+	return &releasewatch.Soak{Environment: "staging", Running: true, Healthy: true, Duration: 3 * time.Hour}, nil
+}
+
+func TestSoakRoute(t *testing.T) {
+	svc := &fakeSoak{}
+	r := forge.NewRouter()
+	if err := soakRoutes(r, nil, svc); err != nil {
+		t.Fatal(err)
+	}
+	out := send(t, r, http.MethodGet, "/api/v1/plans/plan_p/soak", "", true)
+	var s releasewatch.Soak
+	if out.Code != http.StatusOK || json.Unmarshal(out.Body.Bytes(), &s) != nil || !s.Running || !s.Healthy || s.Environment != "staging" || !reflect.DeepEqual(svc.asked, []string{"plan_p"}) {
+		t.Fatalf("soak: %d %s", out.Code, out.Body.String())
+	}
+	if out = send(t, r, http.MethodGet, "/api/v1/plans/plan_p/soak", "", false); out.Code == http.StatusOK {
+		t.Fatalf("signed out: %d", out.Code)
+	}
+	for err, code := range map[error]int{
+		planning.ErrInvalid:   http.StatusUnprocessableEntity,
+		planning.ErrNotFound:  http.StatusNotFound,
+		security.ErrForbidden: http.StatusForbidden,
+	} {
+		svc.err = err
+		if out = send(t, r, http.MethodGet, "/api/v1/plans/plan_p/soak", "", true); out.Code != code {
+			t.Fatalf("%v: %d", err, out.Code)
+		}
+	}
+}

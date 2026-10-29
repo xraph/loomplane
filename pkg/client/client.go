@@ -616,6 +616,39 @@ func (c *Client) CreateRollback(ctx context.Context, projectID string, in NewRol
 	return &p, c.do(ctx, http.MethodPost, "/api/v1/projects/"+esc(projectID)+"/rollbacks", in, &p)
 }
 
+// SoakService is how one service built from a soak's commits has done.
+type SoakService struct {
+	Name     string `json:"name"`
+	Provider string `json:"provider"`
+	// Verdict is pass, fail or inconclusive.
+	Verdict string `json:"verdict"`
+	Reason  string `json:"reason"`
+}
+
+// Soak says how long a promotion's source environment has run exactly the
+// commits the plan moves, and whether it ran them healthily.
+type Soak struct {
+	Environment string `json:"environment"`
+	// Running is true when the environment runs every commit the plan moves.
+	Running bool      `json:"running"`
+	Since   time.Time `json:"since"`
+	// Duration is how long, in nanoseconds; 0 unless Running.
+	Duration time.Duration `json:"duration"`
+	Healthy  bool          `json:"healthy"`
+	// Unverified is true when the evidence is missing, such as low traffic
+	// or no metrics. A failure is evidence and isn't unverified.
+	Unverified bool          `json:"unverified"`
+	Reasons    []string      `json:"reasons"`
+	Services   []SoakService `json:"services"`
+}
+
+// Soak reads how the promotion plan's source environment has run the
+// commits it moves. Only a promotion has one.
+func (c *Client) Soak(ctx context.Context, planID string) (*Soak, error) {
+	var s Soak
+	return &s, c.do(ctx, http.MethodGet, "/api/v1/plans/"+esc(planID)+"/soak", nil, &s)
+}
+
 // --- Deployments ---
 
 // Step is one action of a deployment, as it went.

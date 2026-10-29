@@ -567,6 +567,9 @@ func (e *Extension) Register(fapp forge.App) error {
 	if err := watchRoutes(fapp.Router(), guard, watches); err != nil {
 		return err
 	}
+	if err := soakRoutes(fapp.Router(), guard, watches); err != nil {
+		return err
+	}
 	if err := forge.ProvideValue(c, targets); err != nil {
 		return fmt.Errorf("provide the GPU targets: %w", err)
 	}

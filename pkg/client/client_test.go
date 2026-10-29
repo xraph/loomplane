@@ -230,3 +230,20 @@ func TestRollbackRequests(t *testing.T) {
 		t.Fatalf("requests %v", paths)
 	}
 }
+
+func TestSoakRequest(t *testing.T) {
+	var path string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		path = r.Method + " " + r.URL.Path
+		_, _ = w.Write([]byte(`{"environment":"staging","running":true,"since":"2026-11-02T10:30:00Z","duration":9000000000000,"healthy":false,"unverified":true,"reasons":["web: low traffic"],"services":[{"name":"web","provider":"render","verdict":"inconclusive","reason":"low traffic"}]}`))
+	}))
+	defer srv.Close()
+	s, err := New(srv.URL, "k").Soak(t.Context(), "plan_p")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path != "GET /api/v1/plans/plan_p/soak" || !s.Running || s.Healthy || !s.Unverified || s.Duration.Hours() != 2.5 || s.Since.IsZero() ||
+		len(s.Services) != 1 || s.Services[0].Verdict != "inconclusive" {
+		t.Fatalf("%s %+v", path, s)
+	}
+}
