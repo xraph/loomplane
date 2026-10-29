@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	authmw "github.com/xraph/authsome/middleware"
+	"github.com/xraph/authsome/rbac"
 	"github.com/xraph/forge"
 
 	"github.com/xraph/loomplane/internal/platformadmin"
@@ -113,12 +114,20 @@ func (e *Extension) holdsPlatformRole(ctx context.Context) bool {
 	if !ok {
 		return false
 	}
-	roles, err := e.platformRoles.ListUserRolesForApp(ctx, e.cfg.Identity.AppID, userID.String())
+	roles, ok := e.appRoles(ctx, userID.String())
+	return ok && platformadmin.Holds(roles, e.cfg.Identity.AppID)
+}
+
+// appRoles reads a user's roles in Loomplane's app, live from Warden rather
+// than from anything stamped on the session. A failure is logged and
+// reported as ok false.
+func (e *Extension) appRoles(ctx context.Context, userID string) (roles []*rbac.Role, ok bool) {
+	roles, err := e.platformRoles.ListUserRolesForApp(ctx, e.cfg.Identity.AppID, userID)
 	if err != nil {
-		e.Logger().Error("read platform roles", forge.F("user_id", userID.String()), forge.F("error", err.Error()))
-		return false
+		e.Logger().Error("read platform roles", forge.F("user_id", userID), forge.F("error", err.Error()))
+		return nil, false
 	}
-	return platformadmin.Holds(roles, e.cfg.Identity.AppID)
+	return roles, true
 }
 
 func (e *Extension) getSession(c forge.Context) error {

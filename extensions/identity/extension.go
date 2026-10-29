@@ -109,6 +109,10 @@ type Extension struct {
 	waitlistStore waitlist.Store
 	gate          *signupGate
 
+	// consoleBase is the console's base path, once the dashboard reports
+	// it (console.go).
+	consoleBase atomic.Value
+
 	// createOrgHook stands between setup and the organization plugin when
 	// set. Only integration builds set it (export_integration.go).
 	createOrgHook setupOrgHook
@@ -179,6 +183,15 @@ func (e *Extension) Register(fapp forge.App) error {
 		forge.ProvideValue(c, RevalidateStream(e.revalidateStream)),
 	); err != nil {
 		return fmt.Errorf("provide identity services: %w", err)
+	}
+	// Global, so it runs before the console's routes, which the dashboard
+	// only registers when it starts (console.go).
+	fapp.Router().UseGlobal(e.consoleGate())
+	if err := forge.OnStarted(fapp, "loomplane-console-unlisted", func(_ context.Context, a forge.App) error {
+		e.unlistConsole(a.Router())
+		return nil
+	}); err != nil {
+		return fmt.Errorf("unlist the console: %w", err)
 	}
 	return e.routes(fapp.Router())
 }
