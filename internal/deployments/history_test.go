@@ -404,4 +404,39 @@ func TestRollbackTarget_rollingBackTwice(t *testing.T) {
 	if want := map[string]bool{"plan_2": true, "plan_3": true}; !reflect.DeepEqual(rolledBack, want) {
 		t.Fatalf("rolled back %v, want %v", rolledBack, want)
 	}
+	// Now the newest release is a rollback, which is never rolled back.
+	if _, err = svc.RollbackTarget(ctx, p, "proj", "production", ""); !errors.Is(err, planning.ErrInvalid) ||
+		!strings.Contains(err.Error(), "the current release is a rollback; deploy or promote to move forward") {
+		t.Fatalf("rolling back the rollback: %v", err)
+	}
+}
+
+// Deployment reads any one deployment, whatever its status or plan, for
+// an automatic rollback that names it.
+func TestHistory_deploymentReadsAnyDeployment(t *testing.T) {
+	ctx, h, pg := historyDB(t)
+	for _, r := range []historyRelease{
+		{plan: "plan_1", deployment: "dep_1", env: "env_b", status: StatusSucceeded, finished: at(10, 0)},
+		{plan: "plan_2", deployment: "dep_2", env: "env_b", canary: CanaryRolledBack, status: StatusFailed, finished: at(11, 0)},
+		{plan: "plan_sync", deployment: "dep_sync", env: "env_b", syncID: "sync_1", status: StatusSucceeded, finished: at(12, 10)},
+		{plan: "plan_3", deployment: "dep_3", env: "env_b"},
+	} {
+		r.record(ctx, t, h, pg)
+	}
+	for id, want := range map[string]planning.ReleaseRecord{
+		"dep_1":    {DeploymentID: "dep_1", PlanID: "plan_1", Kind: planning.KindRelease, Status: StatusSucceeded, StartedAt: at(9, 55), FinishedAt: at(10, 0)},
+		"dep_2":    {DeploymentID: "dep_2", PlanID: "plan_2", Kind: planning.KindRelease, Status: StatusFailed, CanaryStatus: CanaryRolledBack, StartedAt: at(10, 55), FinishedAt: at(11, 0)},
+		"dep_sync": {DeploymentID: "dep_sync", PlanID: "plan_sync", Kind: planning.KindRelease, Status: StatusSucceeded, StartedAt: at(12, 5), FinishedAt: at(12, 10)},
+		"dep_3":    {DeploymentID: "dep_3", PlanID: "plan_3", Kind: planning.KindRelease, Status: StatusRunning, StartedAt: at(13, 0)},
+	} {
+		got, err := h.Deployment(ctx, "org", id)
+		if err != nil || !reflect.DeepEqual(*got, want) {
+			t.Fatalf("%s: %+v, %v", id, got, err)
+		}
+	}
+	for org, id := range map[string]string{"org": "dep_gone", "org-2": "dep_1"} {
+		if _, err := h.Deployment(ctx, org, id); !errors.Is(err, planning.ErrNotFound) {
+			t.Fatalf("%s in %s: %v", id, org, err)
+		}
+	}
 }

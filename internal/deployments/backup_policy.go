@@ -28,14 +28,14 @@ func (r *Runner) checkBackupPolicies(ctx context.Context, plan *planning.Plan, a
 			return errors.New("default backup policy installer is unavailable")
 		}
 	}
-	return planning.RequireBackupPolicyPermission(ctx, r.authz, security.Principal{OrgID: plan.OrgID, UserID: plan.DecidedBy}, plan.ProjectID, actions)
+	return planning.RequireBackupPolicyPermission(ctx, r.authz, security.ActorPrincipal(plan.OrgID, plan.DecidedBy), plan.ProjectID, actions)
 }
 
 func (r *Runner) installBackupPolicy(ctx context.Context, d *Deployment, a planning.Action) error {
 	if a.BackupEveryHours == 0 {
 		return nil
 	}
-	_, err := r.backupPolicies.EnsurePolicy(ctx, security.Principal{OrgID: d.OrgID, UserID: d.StartedBy}, d.ProjectID, recovery.PolicyInput{Environment: d.Environment, Resource: a.Name, EveryHours: a.BackupEveryHours, Enabled: true})
+	_, err := r.backupPolicies.EnsurePolicy(ctx, security.ActorPrincipal(d.OrgID, d.StartedBy), d.ProjectID, recovery.PolicyInput{Environment: d.Environment, Resource: a.Name, EveryHours: a.BackupEveryHours, Enabled: true})
 	if err != nil {
 		return fmt.Errorf("install default backup schedule for %s: %w", a.Name, err)
 	}

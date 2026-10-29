@@ -71,7 +71,7 @@ func (s *ttlReleaseStore) RouteOperation(_ context.Context, _ string, id string)
 	return &v, nil
 }
 func (s *ttlReleaseStore) RouteOperations(context.Context, string, string, string) ([]*RouteOperation, error) {
-	return []*RouteOperation{{ID: "cutover", Kind: "cutover", Status: "succeeded", HandoffID: releasePrepareID("plan/action", s.source.ID), Route: s.destination}}, nil
+	return []*RouteOperation{{ID: "cutover", Kind: "cutover", Status: "succeeded", HandoffID: ReleasePrepareID("plan/action", s.source.ID), Route: s.destination}}, nil
 }
 func (s *ttlReleaseStore) AcceptRoute(_ context.Context, op *RouteOperation) error {
 	s.accepted = op
@@ -94,7 +94,7 @@ func TestReleaseCoordinatorUsesReviewedExternalTTL(t *testing.T) {
 				}
 
 				st.accepted = nil
-				_, err = svc.ReleaseRouteHandoff(t.Context(), security.Principal{OrgID: "org", UserID: "manager"}, "project", releasePrepareID("plan/action", source.ID), 60)
+				_, err = svc.ReleaseRouteHandoff(t.Context(), security.Principal{OrgID: "org", UserID: "manager"}, "project", ReleasePrepareID("plan/action", source.ID), 60)
 				if !errors.Is(err, ErrPending) || st.accepted == nil || st.accepted.NotBefore.Sub(destination.UpdatedAt) != time.Hour {
 					t.Fatal("explicit release reduced persisted bound", err)
 				}

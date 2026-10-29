@@ -25,6 +25,11 @@ const (
 type fakeHistory struct {
 	images map[string]ReleasedImage
 	asked  []string
+	upTo   []time.Time
+}
+
+func (h *fakeHistory) Deployment(context.Context, string, string) (*ReleaseRecord, error) {
+	return nil, ErrNotFound
 }
 
 func (h *fakeHistory) Releases(context.Context, string, string, time.Time, int) ([]ReleaseRecord, error) {
@@ -35,8 +40,8 @@ func (h *fakeHistory) Latest(context.Context, string, string) (*ReleaseRecord, e
 	return nil, ErrNotFound
 }
 
-func (h *fakeHistory) ReleasedImages(_ context.Context, _, environmentID string, _ time.Time) (map[string]ReleasedImage, error) {
-	h.asked = append(h.asked, environmentID)
+func (h *fakeHistory) ReleasedImages(_ context.Context, _, environmentID string, upTo time.Time) (map[string]ReleasedImage, error) {
+	h.asked, h.upTo = append(h.asked, environmentID), append(h.upTo, upTo)
 	out := map[string]ReleasedImage{}
 	for k, v := range h.images {
 		out[k] = v

@@ -23,7 +23,10 @@ type ReleaseRouteRequest struct {
 	Checkpoint                                                  func(cloudprofiles.SyncRoute) error
 }
 
-func releasePrepareID(key, route string) string {
+// ReleasePrepareID is the operation that prepares a release's move of one
+// route, and the handoff it holds until the release lets the source go.
+// key is the plan's ID and the action's, as "plan/action".
+func ReleasePrepareID(key, route string) string {
 	sum := sha256.Sum256([]byte(key + "/" + route))
 	return "routeop_" + hex.EncodeToString(sum[:16])
 }
@@ -44,7 +47,7 @@ func (s *Service) ReconcileReleaseRoutes(ctx context.Context, p security.Princip
 		if source.Binding.BackendName() == RouteBackendKubernetes {
 			continue
 		}
-		progress := cloudprofiles.SyncRoute{RouteID: source.ID, Hostname: source.Input.Hostname, PrepareID: releasePrepareID(in.Key, source.ID)}
+		progress := cloudprofiles.SyncRoute{RouteID: source.ID, Hostname: source.Input.Hostname, PrepareID: ReleasePrepareID(in.Key, source.ID)}
 		reconcile := func(op *RouteOperation) error {
 			return s.reconcileReleaseProgress(ctx, p, op, &progress, in.Checkpoint)
 		}
@@ -53,7 +56,7 @@ func (s *Service) ReconcileReleaseRoutes(ctx context.Context, p security.Princip
 		if drainErr != nil {
 			return drainErr
 		}
-		preparedID := releasePrepareID(in.Key, source.ID)
+		preparedID := ReleasePrepareID(in.Key, source.ID)
 		prepared, readErr := st.RouteOperation(ctx, p.OrgID, preparedID)
 		if errors.Is(readErr, ErrNotFound) {
 			if in.CleanupOnly {

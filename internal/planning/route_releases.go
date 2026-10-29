@@ -11,22 +11,33 @@ import (
 	"github.com/xraph/loomplane/internal/cloudprofiles"
 )
 
-// ReleaseRoutes returns the exact route review used by a release plan.
-func (s *PgStore) ReleaseRoutes(ctx context.Context, org, project, environment string) ([]cloudinfra.Route, error) {
+// ReleaseRoutes returns the exact route review used by a release plan. A
+// route whose handoff a release still holds blocks it, unless the handoff
+// is one plan allowHeldBy prepared: a rollback of that plan may plan while
+// it holds them. "" allows none.
+func (s *PgStore) ReleaseRoutes(ctx context.Context, org, project, environment, allowHeldBy string) ([]cloudinfra.Route, error) {
 	routes, err := cloudinfra.NewPgStore(s.db).Routes(ctx, org, project)
 	if err != nil {
 		return nil, err
+	}
+	allowed := map[string]bool{}
+	if allowHeldBy != "" {
+		held, getErr := s.GetPlan(ctx, org, allowHeldBy)
+		if getErr != nil {
+			return nil, fmt.Errorf("read the plan of the release to roll back: %w", getErr)
+		}
+		allowed = heldBy(held)
 	}
 	out := []cloudinfra.Route{}
 	for _, route := range routes {
 		if route.Input.EnvironmentID != environment || route.Status == "removed" {
 			continue
 		}
-		var held bool
-		if checkErr := s.db.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_route_handoffs WHERE org_id=$1 AND route_id=$2 AND NOT released)`, org, route.ID).Scan(&held); checkErr != nil {
+		var handoff string
+		if checkErr := s.db.QueryRow(ctx, `SELECT coalesce((SELECT id FROM loomplane_route_handoffs WHERE org_id=$1 AND route_id=$2 AND NOT released LIMIT 1), '')`, org, route.ID).Scan(&handoff); checkErr != nil {
 			return nil, checkErr
 		}
-		if held {
+		if handoff != "" && !allowed[handoff] {
 			return nil, fmt.Errorf("finish the retained route handoff for %s before another release", route.Input.Hostname)
 		}
 		out = append(out, *route)
@@ -34,14 +45,29 @@ func (s *PgStore) ReleaseRoutes(ctx context.Context, org, project, environment s
 	return out, nil
 }
 
+// heldBy returns the route handoffs plan's routed releases prepare, by ID.
+func heldBy(plan *Plan) map[string]bool {
+	out := map[string]bool{}
+	for _, a := range plan.Actions {
+		for _, r := range a.Routes {
+			out[cloudinfra.ReleasePrepareID(plan.ID+"/"+a.ID, r.ID)] = true
+		}
+	}
+	return out
+}
+
 func (s *Service) releaseRoutes(ctx context.Context, plan *Plan) ([]cloudinfra.Route, error) {
 	reader, ok := s.store.(interface {
-		ReleaseRoutes(context.Context, string, string, string) ([]cloudinfra.Route, error)
+		ReleaseRoutes(ctx context.Context, org, project, environment, allowHeldBy string) ([]cloudinfra.Route, error)
 	})
 	if !ok {
 		return nil, nil
 	}
-	return reader.ReleaseRoutes(ctx, plan.OrgID, plan.ProjectID, plan.EnvironmentID)
+	allowHeldBy := ""
+	if plan.Kind == KindRollback && plan.Rollback != nil {
+		allowHeldBy = plan.Rollback.TargetPlanID
+	}
+	return reader.ReleaseRoutes(ctx, plan.OrgID, plan.ProjectID, plan.EnvironmentID, allowHeldBy)
 }
 
 // ProjectZones returns the verified DNS zones granted to a project, which

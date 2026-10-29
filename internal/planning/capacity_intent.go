@@ -113,7 +113,7 @@ func (s *Service) futureCapacity(ctx context.Context, plan *Plan, a *cloudprofil
 	if s.capacityTemplates == nil {
 		return nil, fmt.Errorf("%w: capacity template validation is unavailable", ErrUnavailable)
 	}
-	pin, err := s.capacityTemplates.ValidateCapacityTemplate(ctx, security.Principal{OrgID: plan.OrgID, UserID: plan.CreatedBy}, intent.Demand, intent.Template)
+	pin, err := s.capacityTemplates.ValidateCapacityTemplate(ctx, security.ActorPrincipal(plan.OrgID, plan.CreatedBy), intent.Demand, intent.Template)
 	if err != nil {
 		return nil, err
 	}

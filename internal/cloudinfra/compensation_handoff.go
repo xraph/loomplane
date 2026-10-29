@@ -67,7 +67,7 @@ func (s *PgStore) ClaimCompensationHandoff(ctx context.Context, prepared *RouteO
 	if !reflect.DeepEqual(current.Binding, prepared.Source.Binding) && !reflect.DeepEqual(current.Binding, prepared.Route.Binding) {
 		return ErrConflict
 	}
-	if prepared.ID != releasePrepareID(action.Compensation.PlanID+"/"+action.Compensation.ActionID, current.ID) {
+	if prepared.ID != ReleasePrepareID(action.Compensation.PlanID+"/"+action.Compensation.ActionID, current.ID) {
 		return ErrConflict
 	}
 	var sourceMatches bool

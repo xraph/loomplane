@@ -57,7 +57,7 @@ func TestCloudCompensationRollbackUsesLatestReceiptAndRetainsUnknown(t *testing.
 			destination.Revision = 2
 			destination.Binding = RouteBinding{InstanceID: "candidate", Address: "192.0.2.2", ServerID: "candidate-host"}
 			st := &compensationRouteStore{source: source, destination: destination}
-			st.prepared = RouteOperation{ID: releasePrepareID("old/action", source.ID), Kind: "prepare", Source: &source, Route: destination, Status: "succeeded"}
+			st.prepared = RouteOperation{ID: ReleasePrepareID("old/action", source.ID), Kind: "prepare", Source: &source, Route: destination, Status: "succeeded"}
 			st.cutover = RouteOperation{ID: "cutover", Kind: "cutover", HandoffID: st.prepared.ID, Source: &source, Route: destination, Status: "waiting", DNSAttempted: true, Receipt: &provider.DNSRecord{ID: "latest", Owner: "owner", Type: "A", Name: source.Input.Hostname, Value: destination.Binding.Address, TTL: 60}}
 			if unknown {
 				st.cutover.Receipt = nil
@@ -127,7 +127,7 @@ func TestCloudCompensationSameHostBeforePublication(t *testing.T) {
 			candidate := source
 			candidate.Binding.InstanceID = "candidate"
 			st := &compensationReceiptStore{compensationRouteStore: compensationRouteStore{source: source, destination: source}}
-			st.prepared = RouteOperation{ID: releasePrepareID("old/action", source.ID), Kind: "prepare", Source: &source, Route: candidate, Status: "succeeded"}
+			st.prepared = RouteOperation{ID: ReleasePrepareID("old/action", source.ID), Kind: "prepare", Source: &source, Route: candidate, Status: "succeeded"}
 			st.cutover = RouteOperation{ID: "cutover", Kind: "cutover", HandoffID: st.prepared.ID, Source: &source, Route: candidate, Status: "cancelled", DNSAttempted: true, Receipt: &provider.DNSRecord{ID: "latest", Type: "A", Name: source.Input.Hostname, Value: source.Binding.Address, TTL: 60}}
 			if !dns {
 				st.cutover.DNSAttempted = false
@@ -158,7 +158,7 @@ func TestCloudCompensationTrustedTTLAboveReviewedLimit(t *testing.T) {
 			candidate := source
 			candidate.Binding = RouteBinding{InstanceID: "candidate", Address: "192.0.2.2", ServerID: "candidate-host"}
 			st := &compensationReceiptStore{compensationRouteStore: compensationRouteStore{source: source, destination: source}}
-			st.prepared = RouteOperation{ID: releasePrepareID("old/action", source.ID), Kind: "prepare", Source: &source, Route: candidate, Status: "succeeded"}
+			st.prepared = RouteOperation{ID: ReleasePrepareID("old/action", source.ID), Kind: "prepare", Source: &source, Route: candidate, Status: "succeeded"}
 			st.cutover = RouteOperation{ID: "cutover", Kind: "cutover", HandoffID: st.prepared.ID, Source: &source, Route: candidate, Status: "succeeded", DNSAttempted: true, Receipt: &provider.DNSRecord{ID: "latest", Type: "A", Name: source.Input.Hostname, Value: candidate.Binding.Address, TTL: previous}}
 			st.unrelated = []*RouteOperation{{ID: "other-handoff", Kind: "cutover", HandoffID: "other", Source: &source, Route: candidate, Receipt: &provider.DNSRecord{TTL: 180000}}, {ID: "other-backend", Kind: "cutover", HandoffID: st.prepared.ID, Source: &candidate, Route: candidate, Receipt: &provider.DNSRecord{TTL: 180000}}}
 			st.rolled = &RouteOperation{ID: "rollback", Kind: "rollback", HandoffID: st.prepared.ID, Source: &candidate, Route: source, Status: "succeeded", PreviousReceipt: st.cutover.Receipt}

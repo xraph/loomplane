@@ -436,6 +436,10 @@ func TestPublicPathsRefuseTheSystemPrincipal(t *testing.T) {
 			_, err := s.Create(ctx, p, "proj", CreatePlanInput{Environment: "production"})
 			return err
 		},
+		"CreateRollback": func() error {
+			_, err := s.CreateRollback(ctx, p, "proj", RollbackInput{Environment: "production", Reason: "errors"})
+			return err
+		},
 		"Approve": func() error {
 			_, err := s.Approve(ctx, p, "plan", DecideInput{Revision: "r"})
 			return err

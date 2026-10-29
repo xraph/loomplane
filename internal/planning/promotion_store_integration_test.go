@@ -18,6 +18,7 @@ import (
 	"github.com/xraph/grove/drivers/pgdriver"
 
 	"github.com/xraph/loomplane/database/migrations"
+	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/discovery"
 	"github.com/xraph/loomplane/internal/ops"
 )
@@ -404,5 +405,54 @@ func TestDiscoveryPgStore_pinnedAnalysesDontBlockTheBranch(t *testing.T) {
 	}
 	if a, activeErr := analyses.ActiveAnalysis(ctx, "org", "src_1", now.Add(-time.Hour)); activeErr != nil || a.ID != "anl_branch" || a.Pinned {
 		t.Fatalf("running branch analysis %+v %v", a, activeErr)
+	}
+}
+
+// TestPgStore_releaseRoutesAllowsTheTargetsHandoffs: a route whose handoff
+// a release still holds blocks every plan, except a rollback of the plan
+// that prepared that handoff.
+func TestPgStore_releaseRoutesAllowsTheTargetsHandoffs(t *testing.T) {
+	ctx, store, pg := promotionDB(t)
+	route := map[string]any{"id": "route_1", "org_id": "org", "project_id": "proj", "status": "ready",
+		"input": map[string]any{"environment_id": "env_b", "service": "web", "hostname": "shop.example.com"}}
+	body, err := json.Marshal(route)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := json.Marshal(Result{Connections: map[string]string{}, Problems: []Finding{}, Warnings: []Finding{}, Actions: []Action{{ID: "service:web", Op: Replace, Subject: ServiceSubject, Name: "web",
+		Routes: []cloudinfra.Route{{ID: "route_1"}}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stmt := range []struct {
+		sql  string
+		args []any
+	}{
+		// The route's zone, server and connection don't matter here; this
+		// database is the test's own.
+		{`ALTER TABLE loomplane_domain_routes DISABLE TRIGGER USER`, nil},
+		{`INSERT INTO loomplane_domain_routes(id,org_id,project_id,environment_id,cloud_id,server_id,connection_id,zone_id,hostname,status,revision,body)
+			VALUES('route_1','org','proj','env_b','cloud','server','conn','zone','shop.example.com','ready',1,$1)`, []any{body}},
+		{`UPDATE loomplane_plans SET result=$1 WHERE id='plan_old'`, []any{result}},
+		{`INSERT INTO loomplane_route_handoffs(id,org_id,route_id,source_connection_id,destination_connection_id) VALUES($1,'org','route_1','conn','conn')`,
+			[]any{cloudinfra.ReleasePrepareID("plan_old/service:web", "route_1")}},
+	} {
+		if _, err = pg.Exec(ctx, stmt.sql, stmt.args...); err != nil {
+			t.Fatalf("%s: %v", stmt.sql, err)
+		}
+	}
+	if _, err = store.ReleaseRoutes(ctx, "org", "proj", "env_b", ""); err == nil || !strings.Contains(err.Error(), "finish the retained route handoff for shop.example.com") {
+		t.Fatalf("a release while plan_old holds the handoff: %v", err)
+	}
+	routes, err := store.ReleaseRoutes(ctx, "org", "proj", "env_b", "plan_old")
+	if err != nil || len(routes) != 1 || routes[0].ID != "route_1" {
+		t.Fatalf("a rollback of plan_old: %+v, %v", routes, err)
+	}
+	// Another plan's handoff blocks the rollback too.
+	if _, err = pg.Exec(ctx, `UPDATE loomplane_route_handoffs SET id='routeop_other' WHERE route_id='route_1'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.ReleaseRoutes(ctx, "org", "proj", "env_b", "plan_old"); err == nil {
+		t.Fatal("a rollback of plan_old passed another plan's handoff")
 	}
 }

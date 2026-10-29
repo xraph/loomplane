@@ -127,6 +127,24 @@ func (h *History) Latest(ctx context.Context, orgID, environmentID string) (*pla
 	return &r.ReleaseRecord, nil
 }
 
+// Deployment implements planning.ReleaseHistory.
+func (h *History) Deployment(ctx context.Context, orgID, deploymentID string) (*planning.ReleaseRecord, error) {
+	var r release
+	var finished *time.Time
+	err := h.Store.db.QueryRow(ctx, `SELECT `+recordColumns+`
+		FROM loomplane_deployments d JOIN loomplane_plans p ON p.org_id = d.org_id AND p.id = d.plan_id
+		WHERE d.org_id = $1 AND d.id = $2`, orgID, deploymentID).
+		Scan(&r.DeploymentID, &r.PlanID, &r.Kind, &r.Status, &r.CanaryStatus, &r.StartedAt, &finished)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, fmt.Errorf("%w: no deployment %s", planning.ErrNotFound, deploymentID)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("get deployment %s: %w", deploymentID, err)
+	}
+	r.settle(finished)
+	return &r.ReleaseRecord, nil
+}
+
 // ReleasedImages implements planning.ReleaseHistory. It walks back from
 // the newest release at or before upTo (zero: the newest of all), and
 // takes each service from the newest release that deployed it: a release

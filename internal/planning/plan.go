@@ -648,6 +648,9 @@ type ReleaseHistory interface {
 	// Latest returns an environment's newest deployment whatever its
 	// status, leaving out Cloud sync and catalog plans, or ErrNotFound.
 	Latest(ctx context.Context, orgID, environmentID string) (*ReleaseRecord, error)
+	// Deployment returns one deployment whatever its status or plan, or
+	// ErrNotFound. An automatic rollback names the deployment it undoes.
+	Deployment(ctx context.Context, orgID, deploymentID string) (*ReleaseRecord, error)
 	// ReleasedImages returns, per service action name, the newest
 	// succeeded step at or before upTo.
 	ReleasedImages(ctx context.Context, orgID, environmentID string, upTo time.Time) (map[string]ReleasedImage, error)

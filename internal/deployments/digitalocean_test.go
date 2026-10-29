@@ -277,7 +277,7 @@ func TestDigitalOcean_rollsBackWithoutBuilding(t *testing.T) {
 		t.Fatalf("outcome %+v, active %s", out, f.active["app-"+name])
 	}
 	var state doState
-	if err := json.Unmarshal(saved, &state); err != nil || state.DeploymentID != "rb" {
+	if err = json.Unmarshal(saved, &state); err != nil || state.DeploymentID != "rb" {
 		t.Fatalf("checkpoint %s: %v", saved, err)
 	}
 

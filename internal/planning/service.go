@@ -365,14 +365,23 @@ func (s *Service) start(ctx context.Context, p security.Principal, plan *Plan) (
 		return nil, fmt.Errorf("start planning: %w", err)
 	}
 	if s.audit != nil {
-		s.audit.Record(ctx, projects.AuditEvent{
+		event := projects.AuditEvent{
 			Action: "plan.create", Severity: "info", ProjectID: plan.ProjectID, Principal: p,
 			Attributes: map[string]any{
 				"plan_id": plan.ID, "environment": plan.Environment, "sources": lockDescription(plan.Sources),
 				"manifest_revision": plan.ManifestRevision, "superseded": superseded,
 				"kind": plan.Kind, "from": plan.From,
 			},
-		})
+		}
+		if rb := plan.Rollback; rb != nil {
+			event.Action, event.Severity = "plan.rollback.create", "warning"
+			event.Attributes["reason"], event.Attributes["trigger"], event.Attributes["automatic"] = rb.Reason, rb.Trigger, automaticTrigger(rb.Trigger)
+			event.Attributes["target_deployment_id"], event.Attributes["restore_deployment_id"] = rb.TargetDeploymentID, rb.RestoreDeploymentID
+			if rb.WatchID != "" {
+				event.Attributes["watch_id"] = rb.WatchID
+			}
+		}
+		s.audit.Record(ctx, event)
 	}
 	return s.settle(ctx, plan), nil
 }
@@ -821,6 +830,11 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 		result = appliedCloudPlan(bindings, assignment, "", options, s.providers, placements, routes)
 		planRelease(Input{Environment: plan.Environment, Manifest: resolved, Providers: s.providers}, result)
 	}
+	// A rollback changes only services' code and settings, before anything
+	// below reserves capacity or checks permissions for the rest.
+	if plan.Kind == KindRollback {
+		result.Leftovers = rollbackFilter(result, bindings)
+	}
 	// Asked before anything is reserved, so a store that can't tell fails
 	// the plan with nothing to undo.
 	if rampErr := s.rampingCanary(ctx, plan, result); rampErr != nil {
@@ -840,12 +854,12 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 		return nil, "", err
 	}
 	result.Warnings = append(result.Warnings, warnings...)
-	released, reuse, err := s.releasedImages(ctx, plan)
+	released, from, reuse, err := s.releasedImages(ctx, plan)
 	if err != nil {
-		return nil, "", fmt.Errorf("read what %s ran: %w", plan.From, err)
+		return nil, "", fmt.Errorf("read what %s ran: %w", from, err)
 	}
 	if reuse {
-		s.applyArtifacts(plan, result, released, plan.From)
+		s.applyArtifacts(plan, result, released, from)
 	}
 	in := revisionInput{
 		EnvironmentID: plan.EnvironmentID, Environment: plan.Environment, Sources: plan.Sources,
@@ -1105,6 +1119,10 @@ func (s *Service) ApplyDecision(ctx context.Context, orgID, planID string, d orc
 	}
 	if plan.Status != StatusReady {
 		return plan.Status, nil
+	}
+	// Loomplane automation decides only the rollbacks it started.
+	if systemDecision(d) && !automaticRollback(plan) {
+		return "", security.ErrForbidden
 	}
 	now := s.now().UTC()
 	if !d.Approve {
