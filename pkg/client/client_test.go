@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -174,5 +176,57 @@ func TestCapacityWaitRequests(t *testing.T) {
 	defer srv.Close()
 	if _, err := New(srv.URL, "k").ResumeCapacity(t.Context(), "d", 1); !errors.Is(err, ErrConflict) {
 		t.Fatalf("a stale resume: %v", err)
+	}
+}
+
+func TestRollbackRequests(t *testing.T) {
+	var paths []string
+	var body map[string]string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		paths = append(paths, r.Method+" "+r.URL.RequestURI())
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/v1/projects/p1/environments/production/rollback-target":
+			_, _ = w.Write([]byte(`{"environment":"production","target":{"deployment_id":"dep_3","plan_id":"plan_3","kind":"release","status":"succeeded","finished_at":"2026-10-28T10:00:00Z"},"restore":{"deployment_id":"dep_1","plan_id":"plan_1","kind":"promotion","status":"succeeded","finished_at":"2026-10-27T10:00:00Z"},"commits":[{"alias":"web","from":"bbbbbbb","to":"aaaaaaa"}]}`))
+		case r.Method == http.MethodPost && r.URL.Path == "/api/v1/projects/p1/rollbacks":
+			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+				t.Error(err)
+			}
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write([]byte(`{"id":"plan_r","status":"planning","kind":"rollback","rollback":{"reason":"5xx","trigger":"manual","target_deployment_id":"dep_3"},"leftovers":[{"subject":"resource","name":"cache","op":"delete","data_bearing":true,"reason":"Created by the release you're rolling back."}]}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+	c := New(srv.URL, "k")
+
+	target, err := c.RollbackTarget(t.Context(), "p1", "production", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if target.Target.DeploymentID != "dep_3" || target.Restore.DeploymentID != "dep_1" || target.Restore.Kind != "promotion" ||
+		target.Restore.FinishedAt.IsZero() || len(target.Commits) != 1 || target.Commits[0] != (RollbackCommit{Alias: "web", From: "bbbbbbb", To: "aaaaaaa"}) {
+		t.Fatalf("target %+v", target)
+	}
+	if _, err = c.RollbackTarget(t.Context(), "p1", "production", "dep_3"); err != nil {
+		t.Fatal(err)
+	}
+	plan, err := c.CreateRollback(t.Context(), "p1", NewRollback{Environment: "production", Reason: "5xx", DeploymentID: "dep_3"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.Kind != "rollback" || plan.Rollback == nil || plan.Rollback.Reason != "5xx" || len(plan.Leftovers) != 1 || !plan.Leftovers[0].DataBearing {
+		t.Fatalf("plan %+v", plan)
+	}
+	if want := map[string]string{"environment": "production", "reason": "5xx", "deployment_id": "dep_3"}; !maps.Equal(body, want) {
+		t.Fatalf("sent %v", body)
+	}
+	want := []string{
+		"GET /api/v1/projects/p1/environments/production/rollback-target",
+		"GET /api/v1/projects/p1/environments/production/rollback-target?deployment_id=dep_3",
+		"POST /api/v1/projects/p1/rollbacks",
+	}
+	if !slices.Equal(paths, want) {
+		t.Fatalf("requests %v", paths)
 	}
 }

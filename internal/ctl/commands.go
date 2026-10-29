@@ -61,12 +61,15 @@ func (a *App) commands() []cli.Command {
 				cli.WithUsage("manifest save <project> -f loomplane.yaml"),
 				cli.WithFlag(cli.NewStringFlag("file", "f", "The file; - reads standard input", "loomplane.yaml"))))),
 		cli.NewCommand("plan", "Plan a project's manifest for an environment", a.plan,
-			cli.WithUsage("plan <project> --env production [--scope web] [--catalog]"),
+			cli.WithUsage("plan <project> --env production [--from staging] [--scope web] [--catalog]"),
 			cli.WithFlags(
 				cli.NewStringFlag("env", "e", "The environment", "production"),
+				cli.NewStringFlag("from", "", "An environment to promote from: the plan pins the commits it runs", ""),
 				cli.NewStringSliceFlag("scope", "", "A repository the plan moves, by alias; every one if none, and the rest stay as deployed", nil),
 				cli.NewBoolFlag("catalog", "", "Plan standalone resources without a repository", false),
 				cli.NewBoolFlag("no-wait", "", "Start planning and return", false), jsonFlag)),
+		a.promoteCommand(),
+		a.rollbackCommand(),
 		cli.NewCommand("plans", "List a project's plans", a.plans, cli.WithUsage("plans <project>"), cli.WithFlag(jsonFlag)),
 		cli.NewCommand("show", "Show a plan: what it would do, and anything in the way", a.show,
 			cli.WithUsage("show <plan-id>"), cli.WithFlag(jsonFlag)),
@@ -346,7 +349,7 @@ func (a *App) plan(ctx cli.CommandContext) error {
 	if err != nil {
 		return err
 	}
-	plan, err := c.CreatePlan(ctxOf(ctx), p.ID, client.NewPlan{Environment: ctx.String("env"), Scope: ctx.StringSlice("scope"), Catalog: ctx.Bool("catalog")})
+	plan, err := c.CreatePlan(ctxOf(ctx), p.ID, client.NewPlan{Environment: ctx.String("env"), From: ctx.String("from"), Scope: ctx.StringSlice("scope"), Catalog: ctx.Bool("catalog")})
 	if err != nil {
 		return err
 	}
@@ -404,6 +407,9 @@ func (a *App) show(ctx cli.CommandContext) error {
 
 func (a *App) printPlan(p *client.Plan) {
 	a.printf("Plan %s for %s: %s\n", p.ID, p.Environment, p.Status)
+	if line := kindLine(p); line != "" {
+		a.printf("%s\n", line)
+	}
 	if p.Error != "" {
 		a.printf("  %s\n", p.Error)
 	}
@@ -424,6 +430,15 @@ func (a *App) printPlan(p *client.Plan) {
 	}
 	if p.Release != nil {
 		a.printf("\nRelease: %s\n", releaseLine(p.Release))
+	}
+	if len(p.Artifacts) > 0 {
+		a.printf("\nImages:\n")
+		for _, x := range p.Artifacts {
+			a.printf("  %s\n", artifactLine(x))
+		}
+	}
+	for _, l := range p.Leftovers {
+		a.printf("\n%s\n", leftoverLine(l))
 	}
 	for _, f := range p.Problems {
 		a.printf("\nProblem (%s): %s", f.Code, f.Message)

@@ -5,11 +5,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/xraph/forge/cli"
 
 	"github.com/xraph/loomplane/pkg/client"
@@ -224,5 +226,87 @@ func TestPlanPrintsTheRelease(t *testing.T) {
 				t.Errorf("%s: the refusal is hidden:\n%s", tc.name, got)
 			}
 		}
+	}
+}
+
+// mcpAgent connects an MCP client to loomctl's MCP server over a fake API.
+func mcpAgent(t *testing.T, handler http.HandlerFunc, opts MCPOptions) *mcp.ClientSession {
+	t.Helper()
+	srv := httptest.NewServer(handler)
+	t.Cleanup(srv.Close)
+	st, ct := mcp.NewInMemoryTransports()
+	if _, err := NewMCPServer(client.New(srv.URL, "lp_test_key"), "test", opts).Connect(t.Context(), st, nil); err != nil {
+		t.Fatal(err)
+	}
+	cs, err := mcp.NewClient(&mcp.Implementation{Name: "test-agent", Version: "1"}, nil).Connect(t.Context(), ct, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cs.Close() })
+	return cs
+}
+
+func callTool(t *testing.T, cs *mcp.ClientSession, name string, args map[string]any, out any) {
+	t.Helper()
+	res, err := cs.CallTool(t.Context(), &mcp.CallToolParams{Name: name, Arguments: args})
+	if err != nil {
+		t.Fatalf("%s: %v", name, err)
+	}
+	if res.IsError {
+		t.Fatalf("%s: %+v", name, res.Content)
+	}
+	data, err := json.Marshal(res.StructuredContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := json.Unmarshal(data, out); err != nil {
+		t.Fatalf("%s: %v in %s", name, err, data)
+	}
+}
+
+func TestMCP_createPlanTakesFrom(t *testing.T) {
+	api := &releaseAPI{}
+	cs := mcpAgent(t, api.handler(t), MCPOptions{})
+	var plan client.Plan
+	callTool(t, cs, "create_plan", map[string]any{"project": "shop", "environment": "production", "from": "staging"}, &plan)
+	if want := map[string]any{"environment": "production", "from": "staging"}; !reflect.DeepEqual(api.bodies["/api/v1/projects/proj_1/plans"], want) {
+		t.Fatalf("plans.create body %v", api.bodies)
+	}
+	if plan.ID != "plan_1" || plan.Kind != "promotion" || plan.From != "staging" {
+		t.Fatalf("plan %+v", plan)
+	}
+}
+
+func TestMCP_rollbackNeedsAllowDeploy(t *testing.T) {
+	tool := func(cs *mcp.ClientSession, name string) *mcp.Tool {
+		res, err := cs.ListTools(t.Context(), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, tl := range res.Tools {
+			if tl.Name == name {
+				return tl
+			}
+		}
+		return nil
+	}
+	if tool(mcpAgent(t, (&releaseAPI{}).handler(t), MCPOptions{}), "create_rollback") != nil {
+		t.Fatal("create_rollback is offered without --allow-deploy")
+	}
+
+	api := &releaseAPI{}
+	cs := mcpAgent(t, api.handler(t), MCPOptions{AllowDeploy: true})
+	tl := tool(cs, "create_rollback")
+	if tl == nil || tl.Annotations == nil || tl.Annotations.DestructiveHint == nil || !*tl.Annotations.DestructiveHint {
+		t.Fatalf("create_rollback %+v", tl)
+	}
+	var plan client.Plan
+	callTool(t, cs, "create_rollback", map[string]any{"project": "shop", "environment": "production", "reason": "5xx", "deployment_id": "dep_3"}, &plan)
+	if want := map[string]any{"environment": "production", "reason": "5xx", "deployment_id": "dep_3"}; !reflect.DeepEqual(api.bodies["/api/v1/projects/proj_1/rollbacks"], want) {
+		t.Fatalf("rollbacks.create body %v", api.bodies)
+	}
+	// It waits until the plan is planned, and approves nothing.
+	if plan.ID != "plan_r" || plan.Status != "ready" || len(plan.Leftovers) != 1 || api.approved {
+		t.Fatalf("plan %+v, approved %v", plan, api.approved)
 	}
 }

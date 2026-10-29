@@ -32,10 +32,10 @@ func (a *App) mcpCommand() cli.Command {
 
 // MCPOptions decide what an agent may do.
 type MCPOptions struct {
-	// AllowDeploy offers approve_plan and retry_deployment. Without it an
-	// agent can read, analyze, edit the manifest and plan, and a person
-	// approves. The key's own access applies either way: a read-only key
-	// can't plan, whatever this says.
+	// AllowDeploy offers approve_plan, retry_deployment and
+	// create_rollback. Without it an agent can read, analyze, edit the
+	// manifest and plan, and a person approves. The key's own access
+	// applies either way: a read-only key can't plan, whatever this says.
 	AllowDeploy bool
 }
 
@@ -64,6 +64,13 @@ type (
 		Project     string   `json:"project" jsonschema:"the project's slug, name or ID"`
 		Environment string   `json:"environment" jsonschema:"the environment to plan for, such as production"`
 		Scope       []string `json:"scope,omitempty" jsonschema:"the repositories the plan moves, by alias; every one if empty, and the rest stay as deployed"`
+		From        string   `json:"from,omitempty" jsonschema:"An environment to promote from, such as staging: the plan pins the commits it runs"`
+	}
+	createRollbackInput struct {
+		Project      string `json:"project" jsonschema:"the project's slug, name or ID"`
+		Environment  string `json:"environment" jsonschema:"the environment to roll back, such as production"`
+		Reason       string `json:"reason" jsonschema:"why, for the audit trail and whoever approves it"`
+		DeploymentID string `json:"deployment_id,omitempty" jsonschema:"the deployment to undo; it must be the environment's newest, which is the default"`
 	}
 	approveInput struct {
 		PlanID   string `json:"plan_id" jsonschema:"the plan's ID"`
@@ -203,13 +210,13 @@ func NewMCPServer(c *client.Client, version string, opts MCPOptions) *mcp.Server
 			}
 			return nil, manifestOutput{Revision: m.Revision, YAML: m.YAML}, nil
 		})
-	mcp.AddTool(s, &mcp.Tool{Name: "create_plan", Description: "Plan the project's current manifest for an environment: what deploying it would do. Waits until it's planned. Nothing changes until someone approves it.", Annotations: additive()},
+	mcp.AddTool(s, &mcp.Tool{Name: "create_plan", Description: "Plan the project's current manifest for an environment: what deploying it would do. With from, it promotes what that environment runs instead. Waits until it's planned. Nothing changes until someone approves it.", Annotations: additive()},
 		func(ctx context.Context, _ *mcp.CallToolRequest, in createPlanInput) (*mcp.CallToolResult, *client.Plan, error) {
 			p, err := find(ctx, in.Project)
 			if err != nil {
 				return nil, nil, err
 			}
-			plan, err := c.CreatePlan(ctx, p.ID, client.NewPlan{Environment: in.Environment, Scope: in.Scope})
+			plan, err := c.CreatePlan(ctx, p.ID, client.NewPlan{Environment: in.Environment, Scope: in.Scope, From: in.From})
 			if err != nil {
 				return nil, nil, err
 			}
@@ -308,6 +315,19 @@ func NewMCPServer(c *client.Client, version string, opts MCPOptions) *mcp.Server
 			func(ctx context.Context, _ *mcp.CallToolRequest, in deploymentInput) (*mcp.CallToolResult, *client.Deployment, error) {
 				d, err := c.Retry(ctx, in.DeploymentID)
 				return nil, d, err
+			})
+		mcp.AddTool(s, &mcp.Tool{Name: "create_rollback", Description: "Plan an environment back to its previous successful release, saying why. Data-bearing resources and services stay as they are; the plan lists what it leaves. Waits until it's planned. Nothing changes until someone approves it.", Annotations: destructive()},
+			func(ctx context.Context, _ *mcp.CallToolRequest, in createRollbackInput) (*mcp.CallToolResult, *client.Plan, error) {
+				p, err := find(ctx, in.Project)
+				if err != nil {
+					return nil, nil, err
+				}
+				plan, err := c.CreateRollback(ctx, p.ID, client.NewRollback{Environment: in.Environment, Reason: in.Reason, DeploymentID: in.DeploymentID})
+				if err != nil {
+					return nil, nil, err
+				}
+				plan, err = c.WaitPlan(ctx, plan.ID)
+				return nil, plan, err
 			})
 	}
 

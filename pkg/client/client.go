@@ -558,6 +558,64 @@ func (c *Client) Reject(ctx context.Context, planID, note string) (*Plan, error)
 	return &p, c.do(ctx, http.MethodPost, "/api/v1/plans/"+esc(planID)+"/reject", map[string]string{"note": note}, &p)
 }
 
+// ReleaseRef names one release of an environment: its deployment and the
+// plan it carried out.
+type ReleaseRef struct {
+	DeploymentID string    `json:"deployment_id"`
+	PlanID       string    `json:"plan_id"`
+	Kind         string    `json:"kind"`
+	Status       string    `json:"status"`
+	FinishedAt   time.Time `json:"finished_at"`
+}
+
+// RollbackCommit is what a rollback does to one repository: From is the
+// commit the release it undoes deployed, empty when that release didn't
+// know the repository, and To the commit it restores.
+type RollbackCommit struct {
+	Alias string `json:"alias"`
+	From  string `json:"from"`
+	To    string `json:"to"`
+}
+
+// RollbackTarget is what rolling an environment back would undo, the
+// release it would restore, and each repository's commits.
+type RollbackTarget struct {
+	Environment string           `json:"environment"`
+	Target      ReleaseRef       `json:"target"`
+	Restore     ReleaseRef       `json:"restore"`
+	Commits     []RollbackCommit `json:"commits"`
+}
+
+// RollbackTarget says what rolling the environment back would do, without
+// changing anything. deploymentID, when set, must be the environment's
+// newest deployment, which is the default.
+func (c *Client) RollbackTarget(ctx context.Context, projectID, environment, deploymentID string) (*RollbackTarget, error) {
+	path := "/api/v1/projects/" + esc(projectID) + "/environments/" + esc(environment) + "/rollback-target"
+	if deploymentID != "" {
+		path += "?deployment_id=" + url.QueryEscape(deploymentID)
+	}
+	var t RollbackTarget
+	return &t, c.do(ctx, http.MethodGet, path, nil, &t)
+}
+
+// NewRollback asks to roll an environment back to its previous release.
+type NewRollback struct {
+	Environment string `json:"environment"`
+	// Reason says why, for the audit trail and whoever approves it.
+	Reason string `json:"reason"`
+	// DeploymentID is the deployment to undo: the environment's newest,
+	// which is the default.
+	DeploymentID string `json:"deployment_id,omitempty"`
+}
+
+// CreateRollback plans the environment back to its previous release. It's
+// a plan like any other: read it until Planning is false, and a person
+// approves it.
+func (c *Client) CreateRollback(ctx context.Context, projectID string, in NewRollback) (*Plan, error) {
+	var p Plan
+	return &p, c.do(ctx, http.MethodPost, "/api/v1/projects/"+esc(projectID)+"/rollbacks", in, &p)
+}
+
 // --- Deployments ---
 
 // Step is one action of a deployment, as it went.
