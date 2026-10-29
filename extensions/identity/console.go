@@ -49,12 +49,16 @@ type consoleChecker struct{ e *Extension }
 
 var _ dashauth.AuthChecker = consoleChecker{}
 
-// CheckAuth returns the signed-in user, or nil for anyone else.
+// CheckAuth returns the signed-in platform admin, or nil for anyone else.
+// The gate already turns everyone else away; this doesn't rely on it.
 func (c consoleChecker) CheckAuth(ctx context.Context, r *http.Request) (*dashauth.UserInfo, error) {
 	if u, ok := ctx.Value(consoleUserKey{}).(*dashauth.UserInfo); ok {
 		return u, nil
 	}
-	u, _ := c.e.consoleUser(ctx, r)
+	u, admin := c.e.consoleUser(ctx, r)
+	if !admin {
+		return nil, nil
+	}
 	return u, nil
 }
 
