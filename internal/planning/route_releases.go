@@ -64,8 +64,8 @@ func (s *Service) releaseRoutes(ctx context.Context, plan *Plan) ([]cloudinfra.R
 		return nil, nil
 	}
 	// A rollback waits for the handoffs the release it undoes holds, like
-	// any plan, until it can restore a held route release (Task 12 passes
-	// Rollback.TargetPlanID then).
+	// any plan, until a rollback can restore a held route release; it
+	// passes Rollback.TargetPlanID then.
 	return reader.ReleaseRoutes(ctx, plan.OrgID, plan.ProjectID, plan.EnvironmentID, "")
 }
 
