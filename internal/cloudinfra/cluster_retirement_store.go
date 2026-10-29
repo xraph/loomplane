@@ -28,6 +28,7 @@ func retirementDependenciesTx(ctx context.Context, tx driver.Tx, org, resource, 
  UNION SELECT 'binding:'||b.id FROM loomplane_bindings b JOIN attachments a ON a.org_id=b.org_id AND a.runtime_connection_id=b.connection_id
  UNION SELECT 'operation:'||id FROM loomplane_cluster_operations WHERE org_id=$1 AND id<>$4 AND status IN ('accepted','running','waiting_provider','needs_attention') AND (resource_id=$2 OR body->'input'->>'resource_id'=$2)
  UNION SELECT 'reservation:'||id FROM loomplane_cloud_capacity_reservations WHERE org_id=$1 AND status IN ('reserved','committed') AND body->>'managed_resource_id'=$2
+ UNION SELECT 'workload_hold:'||id FROM loomplane_cluster_workload_holds WHERE org_id=$1 AND resource_id=$2 AND NOT released AND ($3='' OR body->'input'->>'attachment_id'=$3)
  UNION SELECT 'credential_refresh:'||f.attachment_id FROM loomplane_cluster_credential_refresh f JOIN attachments a ON a.org_id=f.org_id AND a.id=f.attachment_id WHERE f.lease_until>clock_timestamp()
  UNION SELECT 'deployment:'||d.id FROM loomplane_deployments d WHERE d.org_id=$1 AND d.status NOT IN ('succeeded','failed','cancelled') AND loomplane_plan_uses_cluster(d.org_id,d.plan_id,$2)
  ORDER BY 1`, org, resource, attachment, operation)

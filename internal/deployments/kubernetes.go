@@ -9,6 +9,7 @@ import (
 	"github.com/xraph/loomplane/internal/clouds/owned"
 	nativepg "github.com/xraph/loomplane/internal/clouds/postgres"
 	nativecache "github.com/xraph/loomplane/internal/clouds/redis"
+	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/planning"
 )
 
@@ -61,6 +62,8 @@ func (e *OwnedTarget) kubernetesSession(org, connection string) kubernetes.Sessi
 			return nil, errors.New("this component needs a Role to discover Services; let Loomplane create serviceaccounts, roles and rolebindings in the namespace, and get, list and watch services, endpoints and endpointslices, then check the connection and plan again")
 		}
 		client.Config.Details = result.Details
+		// Credential resolution verifies the persisted attachment before this session.
+		client.Config.ManagedWorkload = c.Method == connections.MethodManagedKubernetes && c.Details["managed_attachment_id"] != ""
 		return client, nil
 	}
 }

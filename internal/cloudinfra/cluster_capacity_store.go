@@ -118,6 +118,16 @@ func (s *PgStore) SaveClusterCapacity(ctx context.Context, r *ManagedResource, s
 	if snapshot.CheckedAt.IsZero() || snapshot.CheckedAt.After(time.Now()) {
 		return ErrInvalid
 	}
+	workloads := map[string]bool{}
+	for _, w := range snapshot.Workloads {
+		if w.PodUID == "" || workloads[w.PodUID] {
+			return ErrInvalid
+		}
+		workloads[w.PodUID] = true
+		if _, err := clusterWorkloadUsage(w.Requests, nil); err != nil {
+			return err
+		}
+	}
 	seen := map[string]bool{}
 	for _, node := range snapshot.Nodes {
 		if node.ExternalVMID == "" || node.PoolID == "" || seen[node.ExternalVMID] || (snapshot.Complete && node.NodeUID == "") {

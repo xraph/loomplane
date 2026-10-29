@@ -25,10 +25,12 @@ var namespaceRE = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
 
 // Config keeps credentials in REST only. Details contains safe display fields.
 type Config struct {
-	REST      *rest.Config
-	Namespace string
-	Context   string
-	Details   map[string]string
+	// ManagedWorkload is set only after resolving a persisted managed attachment.
+	ManagedWorkload bool
+	REST            *rest.Config
+	Namespace       string
+	Context         string
+	Details         map[string]string
 }
 
 // ParseConfig accepts embedded credentials only, with no ambient loading

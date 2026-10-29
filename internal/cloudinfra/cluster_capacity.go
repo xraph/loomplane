@@ -288,6 +288,8 @@ type ClusterNodeCapacity struct {
 }
 
 type ClusterCapacitySnapshot struct {
+	Workloads           []ClusterObservedWorkload   `json:"workloads,omitempty"`
+	WorkloadsComplete   bool                        `json:"workloads_complete,omitempty"`
 	ResourceFingerprint string                      `json:"resource_fingerprint"`
 	StorageProvenance   ClusterMetricProvenance     `json:"storage_provenance"`
 	ResourceID          string                      `json:"resource_id"`
@@ -323,6 +325,11 @@ func MergeClusterCapacity(p provider.ProviderClusterCapacity, k KubernetesCluste
 	}
 	if !out.Complete {
 		missing("inventory_incomplete")
+	}
+	var workloadErr error
+	out.Workloads, out.WorkloadsComplete, workloadErr = clusterWorkloadObservations(k.Inventory)
+	if workloadErr != nil {
+		return out, workloadErr
 	}
 	if err := clusterStorageFacts(&out, k.Inventory); err != nil {
 		return out, err

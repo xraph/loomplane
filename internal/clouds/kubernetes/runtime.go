@@ -230,6 +230,16 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 		return nil, err
 	}
 	template.Labels = maps.Clone(identity)
+	if c.Config.ManagedWorkload {
+		release := WorkloadReleaseID(labels[owned.LabelRuntime], labels[owned.LabelRevision])
+		if release == "" {
+			return nil, ErrOwned
+		}
+		if template.Annotations == nil {
+			template.Annotations = map[string]string{}
+		}
+		template.Annotations[WorkloadReleaseAnnotation] = release
+	}
 
 	replicas := int32(1)
 	if raw := labels[owned.LabelReplicas]; raw != "" {
