@@ -17,7 +17,7 @@ The gateway is a relay. A Loomplane server sends it a message, it hands that to 
 - the TTL,
 - an encrypted payload it can't open (HPKE to a key only the phone holds).
 
-It never sees your workspace, project, titles, bodies or actions. The phone gets a generic "New notification" placeholder from the platform and swaps in the real text after it decrypts the payload.
+It never sees your workspace, project, titles, bodies or actions. On iOS the phone first shows a generic placeholder (title "Loomplane", body "New notification") and swaps in the real text after it decrypts the payload. Android gets a data-only message, and the app builds the notification itself once it decrypts.
 
 The gateway stores nothing. It has no database and no volume. Its logs carry the server key fingerprint, the platform, the urgency, the kind of send, the outcome and the latency, and no handle, token or payload. The source is open under [`cmd/loomplane-push-gateway`](https://github.com/xraph/loomplane/tree/main/cmd/loomplane-push-gateway) in the Loomplane repository.
 
@@ -98,7 +98,7 @@ Compose wants every secret file to exist, so the `touch` creates empty ones for 
 
 The container runs as uid 10001, and Compose bind-mounts each secret with the host's ownership. A file that user can't read stops the gateway from starting. The `chown` and `chmod` above handle it, and they need `sudo` because only root can hand a file to another user. `chmod 0444` works too if you can't `chown`.
 
-Edit `.env` before you start. Set `PUSH_GATEWAY_IMAGE` to a release tag, `PUSH_GATEWAY_DOMAIN` to your hostname, `ACME_EMAIL` to an address for certificate notices, and `PUSH_GATEWAY_SEALING_KEY_ID` to a name for your key. The Compose file turns iOS on only once `PUSH_GATEWAY_APNS_KEY_ID` is set, so keep that and the team ID together.
+Edit `.env` before you start. Set `PUSH_GATEWAY_IMAGE` to the gateway image pinned by the digest from the release summary (`ghcr.io/xraph/loomplane-push-gateway@sha256:...`), not a bare tag, `PUSH_GATEWAY_DOMAIN` to your hostname, `ACME_EMAIL` to an address for certificate notices, and `PUSH_GATEWAY_SEALING_KEY_ID` to a name for your key. The Compose file turns iOS on only once `PUSH_GATEWAY_APNS_KEY_ID` is set, so keep that and the team ID together.
 
 Caddy serves only `/v1/registrations` and `/v1/send`, and answers 404 for everything else. The gateway's health check stays inside the Docker network.
 
@@ -108,9 +108,14 @@ Keep the host's clock synced. The gateway refuses signatures more than 300 secon
 
 Every device handle is sealed under a key the gateway holds. To rotate it:
 
-1. Move the current key file aside: `mv secrets/sealing-key secrets/previous-sealing-key`. Put the old ID in `PUSH_GATEWAY_PREVIOUS_SEALING_KEY_ID`.
-2. Write the new key, with a new ID in `PUSH_GATEWAY_SEALING_KEY_ID`: `(umask 077; openssl rand -base64 32 > secrets/sealing-key)`.
-3. Give the new file the same owner and mode as in Setup: `sudo chown 10001:10001 secrets/sealing-key` and `sudo chmod 0400 secrets/sealing-key`. Without that, uid 10001 can't read it and the gateway won't start.
-4. Run `docker compose up -d`.
+1. Pick a new key ID you have never used, such as `k202702`. Don't reuse an old one: the gateway answers `410` only for an ID it doesn't know, and a known ID with different key bytes gets `400` forever, so those devices never re-register.
+2. Stop the gateway: `docker compose stop push-gateway`.
+3. Move the current key file aside: `mv -f secrets/sealing-key secrets/previous-sealing-key`. The old file is owned by uid 10001 with mode 0400, so `-f` is what lets it replace the empty one. Put the old ID in `PUSH_GATEWAY_PREVIOUS_SEALING_KEY_ID`.
+4. Write the new key: `(umask 077; openssl rand -base64 32 > secrets/sealing-key)`.
+5. Give the new file the same owner and mode as in Setup: `sudo chown 10001:10001 secrets/sealing-key` and `sudo chmod 0400 secrets/sealing-key`. Without that, uid 10001 can't read it and the gateway won't start.
+6. Set the new ID in `PUSH_GATEWAY_SEALING_KEY_ID` in `.env`.
+7. Run `docker compose up -d`.
+
+If you rotate again inside the 90 days, the older key drops out early, because only one previous key is kept. Devices sealed under it get `410` and register again.
 
 Keep the previous key for 90 days. That gives apps time to register again. After that, empty it with `sudo truncate -s 0 secrets/previous-sealing-key` (keep the file, Compose wants it), clear its ID, and run `docker compose up -d` again. Phones that registered during the window carry on. A phone whose handle was sealed under a key the gateway no longer holds gets `410`, its server drops the device, and the app registers again on its next launch.
