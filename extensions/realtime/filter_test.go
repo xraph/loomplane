@@ -195,3 +195,27 @@ func TestNotificationEventsReachOnlyTheirRecipient(t *testing.T) {
 		t.Fatal("filter changed the stored event")
 	}
 }
+
+func TestMalformedNotificationEventsAreSkippedNotFatal(t *testing.T) {
+	ordinary := store.Event{ProjectID: "proj_a", Type: "project.updated"}
+	e := &Extension{authz: permissionFixture{}}
+	p := security.Principal{OrgID: "org_a", UserID: "usr_a"}
+	for name, data := range map[string]string{"not json": `{`, "user id is a number": `{"id":"hinb_1","user_id":7}`, "empty body": ``, "user id is null-like array": `{"user_id":["usr_a"]}`} {
+		got, err := e.filter(t.Context(), p, Subscription{}, []store.Event{{Type: "notification.created", Data: json.RawMessage(data)}, ordinary})
+		if err != nil || len(got) != 1 || got[0].Type != "project.updated" {
+			t.Fatalf("%s: %+v %v", name, got, err)
+		}
+	}
+}
+
+func TestNotificationEventsWithoutAUserReachNobody(t *testing.T) {
+	e := &Extension{authz: permissionFixture{}}
+	for name, data := range map[string]string{"no user_id": `{"id":"hinb_1","org_id":"org_a"}`, "empty user_id": `{"id":"hinb_1","org_id":"org_a","user_id":""}`} {
+		for _, user := range []string{"", "usr_a"} {
+			got, err := e.filter(t.Context(), security.Principal{OrgID: "org_a", UserID: user}, Subscription{}, []store.Event{{Type: "notification.created", Data: json.RawMessage(data)}})
+			if err != nil || len(got) != 0 {
+				t.Fatalf("%s for %q: %+v %v", name, user, got, err)
+			}
+		}
+	}
+}

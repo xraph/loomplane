@@ -62,6 +62,14 @@ func permission(event string) security.Permission {
 	}
 }
 
+// logger is nil when the extension has not been registered, as in unit tests.
+func (e *Extension) logger() forge.Logger {
+	if e.BaseExtension == nil {
+		return nil
+	}
+	return e.Logger()
+}
+
 func (e *Extension) checkScope(ctx context.Context, p security.Principal, sub Subscription) error {
 	for _, id := range sub.ProjectIDs {
 		project, err := e.store.ProjectFor(ctx, p.OrgID, "project", id)
@@ -96,14 +104,18 @@ func (e *Extension) filter(ctx context.Context, p security.Principal, sub Subscr
 		// the right recipient, and the recipient never sees the user ID.
 		if strings.HasPrefix(event.Type, "notification.") {
 			var doc map[string]json.RawMessage
-			if err := json.Unmarshal(event.Data, &doc); err != nil {
-				return nil, err
-			}
 			var user string
-			if raw, ok := doc["user_id"]; ok {
-				if err := json.Unmarshal(raw, &user); err != nil {
-					return nil, err
+			malformed := json.Unmarshal(event.Data, &doc) != nil
+			if raw, ok := doc["user_id"]; !malformed && ok {
+				malformed = json.Unmarshal(raw, &user) != nil
+			}
+			if malformed {
+				// Fail closed for everyone, but never end the stream over one
+				// bad row. The payload stays out of the log.
+				if l := e.logger(); l != nil {
+					l.Warn("realtime skipped a malformed notification event", forge.F("type", event.Type), forge.F("org_id", event.OrgID))
 				}
+				continue
 			}
 			if user == "" || user != p.UserID {
 				continue
