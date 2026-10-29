@@ -54,6 +54,8 @@ type CloudForm struct {
 // kubernetesPlacement are the settings a Kubernetes connection takes
 // besides its kubeconfig, whichever way it's connected.
 var kubernetesPlacement = []sdk.Setting{
+	{Key: "build_workers", Label: "Build workers (shared by default, or dedicated)"},
+	{Key: "build_runtime_class", Label: "Kata build RuntimeClass (required for shared workers)"},
 	{Key: "registry_hostname", Label: "Managed build registry hostname (optional, enables in-cluster builds)"},
 	{Key: "image_pull_secret", Label: "Existing image pull Secret (optional)"},
 	{Key: "storage_class", Label: "Storage class (optional, defaults to the cluster's default)"},
@@ -92,7 +94,7 @@ func (e *Extension) clouds(ctx context.Context, p security.Principal) (CloudList
 			}},
 		{Cloud: connections.Server, Title: "SSH server", Credential: "SSH private key", //nolint:gosec // Form label, not a credential.
 			Help:     "Use a PEM private key, or JSON with private_key and passphrase. Your SSH user needs access to an existing Linux Docker daemon. Copy the server's public host key from a trusted source.",
-			Settings: []sdk.Setting{{Key: "host", Label: "SSH host", Required: true}, {Key: "port", Label: "SSH port (default 22)"}, {Key: "user", Label: "SSH user", Required: true}, {Key: "host_key", Label: "Public host key", Required: true}, {Key: "docker_socket", Label: "Docker socket (default /var/run/docker.sock)"}, {Key: "advertise_host", Label: "Published address (optional)"}}},
+			Settings: []sdk.Setting{{Key: "host", Label: "SSH host", Required: true}, {Key: "port", Label: "SSH port (default 22)"}, {Key: "user", Label: "SSH user", Required: true}, {Key: "host_key", Label: "Public host key", Required: true}, {Key: "docker_socket", Label: "Docker socket (default /var/run/docker.sock)"}, {Key: "advertise_host", Label: "Published address (optional)"}, {Key: "build_workers", Label: "Build workers (set dedicated to allow source builds)"}}},
 		{Cloud: connections.Kubernetes, Title: "Kubernetes", Credential: "Self-contained kubeconfig",
 			Help:              "Use an HTTPS API with an embedded CA and token or client certificate. Set a registry hostname to create a missing namespace and install ingress and cert-manager. Existing storage and load balancers are reused by default. For bare clusters, choose local-path storage and node ingress, or Longhorn storage and MetalLB with an unused address pool. Longhorn needs three Linux nodes with its host prerequisites. Automatic setup needs cluster-admin permissions and may create a billable load balancer. Connect a verified organization DNS zone for automatic records. Backups use Loomplane backup storage. Maintenance briefly pauses registry access. Use registry_setup=existing, registry_dns=manual or registry_maintenance=manual to manage those parts yourself.",
 			Settings:          append([]sdk.Setting{{Key: "context", Label: "Context (optional)"}, {Key: "namespace", Label: "Namespace (defaults to kubeconfig)"}}, kubernetesPlacement...),

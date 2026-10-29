@@ -94,6 +94,7 @@
           "builder": "conn_01m4vewksnea2bwdxwdy5aekhn",
           "builder_settings": {
             "architecture": "arm64",
+            "build_workers": "dedicated",
             "docker_id": "reviewed-daemon",
             "docker_socket": "/var/run/docker.sock",
             "host": "one.example.com",
@@ -219,6 +220,7 @@
           "builder": "conn_01m4vewksnea2bwdxwdy5aekhn",
           "builder_settings": {
             "architecture": "arm64",
+            "build_workers": "dedicated",
             "docker_id": "reviewed-daemon",
             "docker_socket": "/var/run/docker.sock",
             "host": "one.example.com",
@@ -387,6 +389,7 @@
           "builder": "conn_01m4vewksnea2bwdxwdy5aekhn",
           "builder_settings": {
             "architecture": "arm64",
+            "build_workers": "dedicated",
             "docker_id": "reviewed-daemon",
             "docker_socket": "/var/run/docker.sock",
             "host": "one.example.com",
@@ -512,6 +515,7 @@
           "builder": "conn_01m4vewksnea2bwdxwdy5aekhn",
           "builder_settings": {
             "architecture": "arm64",
+            "build_workers": "dedicated",
             "docker_id": "reviewed-daemon",
             "docker_socket": "/var/run/docker.sock",
             "host": "one.example.com",
@@ -637,6 +641,7 @@
           "builder": "conn_01m4vewksnea2bwdxwdy5aekhn",
           "builder_settings": {
             "architecture": "arm64",
+            "build_workers": "dedicated",
             "docker_id": "reviewed-daemon",
             "docker_socket": "/var/run/docker.sock",
             "host": "one.example.com",

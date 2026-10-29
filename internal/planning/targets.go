@@ -6,6 +6,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/xraph/loomplane/internal/buildpolicy"
 	"github.com/xraph/loomplane/pkg/manifest"
 	"github.com/xraph/loomplane/pkg/provider"
 )
@@ -35,6 +36,22 @@ func ReviewedConnectionSettings(cloud string, details map[string]string) map[str
 				out = map[string]string{}
 			}
 			out[k] = v
+		}
+	}
+	return out
+}
+
+// ReviewedBuildSettings pins build policy without changing runtime placement.
+func ReviewedBuildSettings(cloud string, details map[string]string) map[string]string {
+	out := ReviewedConnectionSettings(cloud, details)
+	if cloud == "server" || cloud == "kubernetes" {
+		for _, key := range []string{"build_workers", "build_runtime_class", "build_runtime_identity"} {
+			if value := details[key]; value != "" {
+				if out == nil {
+					out = map[string]string{}
+				}
+				out[key] = value
+			}
 		}
 	}
 	return out
@@ -109,6 +126,12 @@ func (p *planner) configureTarget(name, base string, prov *provider.Provider, se
 	build := &BuildTarget{Builder: b.Builder, Registry: b.Registry, Image: b.Image}
 	cfg.BuildTarget = build
 	if cfg.ManagedKubernetesBuild() {
+		if c != nil {
+			build.BuilderSettings = ReviewedBuildSettings(c.Cloud, c.Details)
+			if err := buildpolicy.Check(c.Details, true, c.Pooled); err != nil {
+				p.problem(Finding{Code: "build-isolation-required", Subject: ServiceSubject, Name: name, Path: base + ".build", Message: err.Error()})
+			}
+		}
 		p.warn(Finding{Code: "managed-kubernetes-build", Subject: ServiceSubject, Name: name, Path: base + ".build", Message: "This cluster builds with rootless BuildKit and shares a persistent registry across its connection. The first deployment provisions a 20 GiB retained volume, registry credentials and a TLS ingress. Your registry hostname must resolve to that ingress. Removing a service retains its images."})
 		if c == nil || c.Details["managed_builds"] != "ready" {
 			p.problem(Finding{Code: "kubernetes-build-unavailable", Subject: ServiceSubject, Name: name, Path: base + ".build", Message: "Check this cluster's managed build setup under Integrations. It needs retained storage, cert-manager, ingress, and build pod permissions."})
@@ -118,7 +141,10 @@ func (p *planner) configureTarget(name, base string, prov *provider.Provider, se
 			build.Builder = cfg.Target
 		}
 		if builder := p.targetConnection(name, base+".build.builder", "builder", "server", build.Builder); builder != nil {
-			build.BuilderSettings = ReviewedConnectionSettings(builder.Cloud, builder.Details)
+			build.BuilderSettings = ReviewedBuildSettings(builder.Cloud, builder.Details)
+			if err := buildpolicy.Check(builder.Details, false, builder.Pooled); err != nil {
+				p.problem(Finding{Code: "build-isolation-required", Subject: ServiceSubject, Name: name, Path: base + ".build.builder", Message: err.Error()})
+			}
 			if cfg.CapacityIntent != nil && builder.Details["architecture"] != cfg.CapacityIntent.Demand.Architecture {
 				p.problem(Finding{Code: "capacity-architecture", Subject: ServiceSubject, Name: name, Path: base + ".build.builder", Message: "The builder must match the approved pool architecture."})
 			}

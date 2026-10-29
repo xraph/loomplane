@@ -13,6 +13,8 @@ import (
 	"strings"
 
 	"golang.org/x/crypto/ssh"
+
+	"github.com/xraph/loomplane/internal/buildpolicy"
 )
 
 var (
@@ -43,6 +45,12 @@ func (c *Config) RecordedDetails(recorded map[string]string) map[string]string {
 
 // ParseConfig accepts a PEM key or a JSON private_key/passphrase pair.
 func ParseConfig(raw []byte, settings map[string]string) (*Config, error) {
+	if err := buildpolicy.ValidateWorkers(settings["build_workers"]); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
+	if settings["build_runtime_class"] != "" {
+		return nil, fmt.Errorf("%w: Kata RuntimeClass requires Kubernetes", ErrInvalid)
+	}
 	if len(raw) == 0 || len(raw) > 256<<10 {
 		return nil, fmt.Errorf("%w: provide an SSH private key", ErrInvalid)
 	}
@@ -100,6 +108,6 @@ func ParseConfig(raw []byte, settings map[string]string) (*Config, error) {
 		return nil, fmt.Errorf("%w: advertised host must be a hostname or IP address", ErrInvalid)
 	}
 	return &Config{Address: net.JoinHostPort(host, strconv.Itoa(port)), User: user, Socket: socket, HostKey: pub, Signer: signer, Details: map[string]string{
-		"host": host, "port": strconv.Itoa(port), "user": user, "host_key": strings.TrimSpace(string(ssh.MarshalAuthorizedKey(pub))), "docker_socket": socket, "advertise_host": advertise,
+		"build_workers": settings["build_workers"], "host": host, "port": strconv.Itoa(port), "user": user, "host_key": strings.TrimSpace(string(ssh.MarshalAuthorizedKey(pub))), "docker_socket": socket, "advertise_host": advertise,
 	}}, nil
 }

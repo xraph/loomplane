@@ -9,6 +9,7 @@ import (
 
 	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
+	nodev1 "k8s.io/api/node/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	kuberuntime "k8s.io/apimachinery/pkg/runtime"
@@ -18,12 +19,15 @@ import (
 )
 
 func TestClusterBuildApprovedSourceDigestAndCleanup(t *testing.T) {
-	for _, failure := range []string{"", "upload", "build", "digest", "cancel"} {
+	for _, failure := range []string{"", "upload", "build", "digest", "cancel", "kata", "fallback", "runtime-changed"} {
 		t.Run(failure, func(t *testing.T) {
 			c := managedRegistryFixture(t)
 			registry, err := c.EnsureManagedRegistry(t.Context(), "org", "conn")
 			if err != nil {
 				t.Fatal(err)
+			}
+			if failure == "kata" || failure == "fallback" || failure == "runtime-changed" {
+				selectKata(t, c)
 			}
 			kube := c.Kube.(*fake.Clientset)
 			var started *batchv1.Job
@@ -34,6 +38,21 @@ func TestClusterBuildApprovedSourceDigestAndCleanup(t *testing.T) {
 				pod := &corev1.Pod{ObjectMeta: job.Spec.Template.ObjectMeta, Spec: job.Spec.Template.Spec, Status: corev1.PodStatus{Phase: corev1.PodRunning}}
 				pod.Name = job.Name + "-pod"
 				pod.UID = types.UID("pod-uid")
+				if failure == "fallback" {
+					pod.Spec.RuntimeClassName = nil
+				}
+				if failure == "runtime-changed" {
+					resource := nodev1.SchemeGroupVersion.WithResource("runtimeclasses")
+					obj, e := kube.Tracker().Get(resource, "", "isolated-builds")
+					if e != nil {
+						t.Fatal(e)
+					}
+					class := obj.(*nodev1.RuntimeClass)
+					class.Handler = "kata-other"
+					if e = kube.Tracker().Update(resource, class, ""); e != nil {
+						t.Fatal(e)
+					}
+				}
 				pod.OwnerReferences = []metav1.OwnerReference{*metav1.NewControllerRef(job, batchv1.SchemeGroupVersion.WithKind("Job"))}
 				return false, nil, kube.Tracker().Create(corev1.SchemeGroupVersion.WithResource("pods"), pod, "selected")
 			})
@@ -75,16 +94,22 @@ func TestClusterBuildApprovedSourceDigestAndCleanup(t *testing.T) {
 				return nil
 			}}
 			digest, err := builder.Build(ctx, ClusterImageBuild{Org: "org", Connection: "conn", Operation: "build-one", Dockerfile: ".loomplane-build/Dockerfile", Image: registry.Host + "/loomplane/api:" + strings.Repeat("a", 24), Source: strings.NewReader("approved archive")}, registry, io.Discard)
-			if (err != nil) != (failure != "") {
+			if (err != nil) != (failure != "" && failure != "kata") {
 				t.Fatalf("unexpected result: %s %v", digest, err)
 			}
-			if failure == "" && (digest != "sha256:"+strings.Repeat("b", 64) || calls != 3) {
+			if (failure == "" || failure == "kata") && (digest != "sha256:"+strings.Repeat("b", 64) || calls != 3) {
 				t.Fatalf("missing published digest: %s", digest)
 			}
 			if started == nil || *started.Spec.BackoffLimit != 0 || *started.Spec.TTLSecondsAfterFinished != 3600 || *started.Spec.ActiveDeadlineSeconds != 1800 {
 				t.Fatal("job does not bound retries, lifetime and cleanup")
 			}
 			podSpec := started.Spec.Template.Spec
+			if failure == "kata" && (podSpec.RuntimeClassName == nil || *podSpec.RuntimeClassName != "isolated-builds") {
+				t.Fatal("Kata was not requested")
+			}
+			if (failure == "fallback" || failure == "runtime-changed") && calls != 0 {
+				t.Fatal("source reached a downgraded runtime")
+			}
 			service, e := kube.CoreV1().Services("selected").Get(t.Context(), registry.Name, metav1.GetOptions{})
 			if e != nil {
 				t.Fatal(e)

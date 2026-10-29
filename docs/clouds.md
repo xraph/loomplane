@@ -354,6 +354,48 @@ If a legacy runtime lacks a trusted current container/release receipt, redeploy 
 
 The Go client exposes typed Cloud, server, pool, zone and route operations through the same authenticated transport as `loomctl`. Infrastructure operations live under `/api/v1/clouds/:cloudId`; zones under `/api/v1/dns-zones`; project route operations under `/api/v1/projects/:projectId/domain-routes` and `/route-operations`. Review inputs, revisions and cleanup authority remain enforced by those APIs.
 
+## Isolate source builds
+
+For shared Kubernetes workers, install Kata Containers on your build nodes and create a RuntimeClass whose handler is `kata` or starts with `kata-`. Set these connection settings under Integrations, or pass them in the connection API's `settings` object:
+
+```json
+{
+  "build_workers": "shared",
+  "build_runtime_class": "kata-qemu"
+}
+```
+
+Use your RuntimeClass's name for `build_runtime_class`. You can select Kata on dedicated workers too. You still need the managed registry settings described below.
+
+Every repository build is treated as untrusted. Omitting `build_workers` means shared, so an existing connection needs either a checked Kata runtime or an explicit `build_workers: dedicated` setting before it can build source again. Use dedicated only when you control the worker and keep it within one trust domain. A repository manifest cannot change this setting. Registered server pool members always count as shared, including another SSH connection to the same Docker daemon.
+
+The connection check reads the RuntimeClass and records its UID, handler, scheduling and overhead. Your approved plan pins those values. Loomplane checks them again before starting a build and before uploading its source, and rejects a running pod whose runtime differs from the requested class. A missing class, denied read, changed configuration or failed VM startup stops the build. There is no fallback to the default container runtime.
+
+The connection credential needs `get` access to the selected cluster-scoped RuntimeClass. Add a ClusterRole rule and bind it to that credential's identity:
+
+```yaml
+apiGroups: [node.k8s.io]
+resources: [runtimeclasses]
+resourceNames: [kata-qemu]
+verbs: [get]
+```
+
+Your cluster administrator must configure the handler to use Kata on every eligible node, provide KVM, and set the RuntimeClass's scheduling constraints for those nodes. A class name alone does not prove VM isolation. Loomplane checks the Kubernetes objects; it does not inspect or attest the host's containerd configuration. Keep cluster administration outside the build tenant's permissions. See [Kata's containerd setup](https://github.com/kata-containers/kata-containers/blob/main/docs/how-to/containerd-kata.md).
+
+Kata protects the build pod's kernel boundary. It does not replace network policy, registry credential scoping or host maintenance. The build pod retains the existing rootless BuildKit configuration, including its unconfined seccomp and AppArmor profiles, inside the selected runtime.
+
+SSH/Docker source builds currently require explicitly dedicated workers. To deploy onto a shared server pool, build on a separate dedicated connection and publish to your registry, or deploy a digest-pinned image. Standalone Firecracker execution is not implemented. Provider-managed builds, such as Cloud Build and CodeBuild, continue using their provider's execution environment.
+
+To verify the build on a disposable Kata cluster, create a local JSON file with `kubeconfig` (a path to a self-contained kubeconfig), `org` and `connection` (the existing Loomplane registry owner), and `settings` containing the connection's namespace, registry hostname, storage and ingress settings, `build_workers: shared`, and `build_runtime_class`. Then run:
+
+```sh
+LOOMPLANE_KATA_TEST_CONFIG=/absolute/path/to/kata-test.json \
+  go test -tags=integration ./internal/clouds/kubernetes \
+  -run '^TestKataBuildIntegration$' -count=1 -timeout=40m
+```
+
+The test requires an existing managed registry. It executes a Dockerfile command, publishes an image and removes its build Job. The smoke-test image remains in that disposable registry for its normal retention. A successful run checks the build flow; host configuration still needs an operator check.
+
 ## Review Kubernetes cluster setup
 
 Use Infrastructure, Clusters inside an organization Cloud. The existing `servers` tab URL still opens Infrastructure. Project members use their granted targets; cluster discovery, account details and lifecycle operations require organization Cloud management permission.

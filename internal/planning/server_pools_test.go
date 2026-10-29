@@ -73,14 +73,14 @@ func TestPoolRelocationPreservesAppliedInputsAndPrivateBoundary(t *testing.T) {
 	cfg.CloudPlacement.Provider = "server"
 	cfg.CloudPlacement.PoolID = "pool"
 	cfg.CloudPlacement.ServerID = "host-old"
-	cfg.BuildTarget = &BuildTarget{Builder: "old", Registry: "registry"}
+	cfg.BuildTarget = &BuildTarget{Builder: "builder", Registry: "registry"}
 	binding.Provider = "server"
 	binding.Config, _ = json.Marshal(cfg)
 	assigned := appliedAssignment("")
 	assigned.Targets[0].Provider = "server"
 	assigned.Targets[0].Runtime = "server"
 	assigned.Targets[0].PoolID = "pool"
-	options := []ConnectionOption{{ID: "old", Cloud: "server", Ready: true, Details: cfg.TargetSettings}, {ID: "new", Cloud: "server", Ready: true, Details: map[string]string{"docker_id": "new", "architecture": "amd64"}}, {ID: "registry", Cloud: "registry", Ready: true, Details: map[string]string{"endpoint": "registry.example", "repository": "app"}}}
+	options := []ConnectionOption{{ID: "builder", Cloud: "server", Ready: true, Details: map[string]string{"build_workers": "dedicated", "docker_id": "builder", "architecture": "amd64"}}, {ID: "old", Cloud: "server", Ready: true, Pooled: true, Details: cfg.TargetSettings}, {ID: "new", Cloud: "server", Ready: true, Details: map[string]string{"docker_id": "new", "architecture": "amd64"}}, {ID: "registry", Cloud: "registry", Ready: true, Details: map[string]string{"endpoint": "registry.example", "repository": "app"}}}
 	pin := *cfg.CloudPlacement
 	pin.ConnectionID = "new"
 	pin.ServerID = "host-new"
@@ -100,7 +100,7 @@ func TestPoolRelocationPreservesAppliedInputsAndPrivateBoundary(t *testing.T) {
 	if planRelease(releaseInput(t, releaseYAML(canaryRelease)), result); warning(result, "canary-unavailable", "api") == nil || result.Release.Ramps("service:api") {
 		t.Fatalf("relocation in a canary environment: %+v, warnings %+v", result.Release, result.Warnings)
 	}
-	withoutRegistry := append([]ConnectionOption{}, options[:2]...)
+	withoutRegistry := append([]ConnectionOption{}, options[:3]...)
 	blocked := appliedCloudPlan([]*Binding{binding}, assigned, "", withoutRegistry, providers.Registry(), map[string]CloudPlacement{"api": pin})
 	if blocked.Executable {
 		t.Fatal("remote builder bypassed required registry")
@@ -150,7 +150,7 @@ func TestRelocationAfterAPromotionBuildsAgain(t *testing.T) {
 	cfg.CloudPlacement.Provider = "server"
 	cfg.CloudPlacement.PoolID = "pool"
 	cfg.CloudPlacement.ServerID = "host-old"
-	cfg.BuildTarget = &BuildTarget{Builder: "old", Registry: "registry"}
+	cfg.BuildTarget = &BuildTarget{Builder: "builder", Registry: "registry"}
 	cfg.Artifact = &ReusedArtifact{Reference: "registry.example/app/api@" + artifactDigest, Digest: artifactDigest, CommitSHA: "original", FromEnvironment: "staging"}
 	binding.Provider = "server"
 	binding.Config, _ = json.Marshal(cfg)
@@ -158,7 +158,7 @@ func TestRelocationAfterAPromotionBuildsAgain(t *testing.T) {
 	assigned.Targets[0].Provider = "server"
 	assigned.Targets[0].Runtime = "server"
 	assigned.Targets[0].PoolID = "pool"
-	options := []ConnectionOption{{ID: "old", Cloud: "server", Ready: true, Details: cfg.TargetSettings}, {ID: "new", Cloud: "server", Ready: true, Details: map[string]string{"docker_id": "new", "architecture": "amd64"}}, {ID: "registry", Cloud: "registry", Ready: true, Details: map[string]string{"endpoint": "registry.example", "repository": "app"}}}
+	options := []ConnectionOption{{ID: "builder", Cloud: "server", Ready: true, Details: map[string]string{"build_workers": "dedicated", "docker_id": "builder", "architecture": "amd64"}}, {ID: "old", Cloud: "server", Ready: true, Pooled: true, Details: cfg.TargetSettings}, {ID: "new", Cloud: "server", Ready: true, Details: map[string]string{"docker_id": "new", "architecture": "amd64"}}, {ID: "registry", Cloud: "registry", Ready: true, Details: map[string]string{"endpoint": "registry.example", "repository": "app"}}}
 	pin := *cfg.CloudPlacement
 	pin.ConnectionID = "new"
 	pin.ServerID = "host-new"

@@ -127,6 +127,9 @@ func ParseConfig(raw []byte, settings map[string]string) (*Config, error) {
 func configFor(rc *rest.Config, contextName, namespace string, caData []byte, settings map[string]string) (*Config, error) {
 	ca := sha256.Sum256(caData)
 	details := map[string]string{"endpoint": rc.Host, "namespace": namespace, "context": contextName, "cluster_ca": hex.EncodeToString(ca[:])}
+	if err := buildIsolationSettings(settings, details); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
 	if architecture := strings.TrimSpace(settings["architecture"]); architecture != "" {
 		if architecture != "amd64" && architecture != "arm64" {
 			return nil, fmt.Errorf("%w: architecture must be amd64 or arm64", ErrInvalid)
