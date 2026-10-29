@@ -298,6 +298,25 @@ export function toRun(plan: Plan, d?: Deployment, project?: Project): Run {
   }
 }
 
+/**
+ * runKindLabel says what kind of move a plan is, in a few words: where a
+ * promotion came from, or that it rolls back. A plain release says nothing.
+ */
+export function runKindLabel(plan: Plan): string {
+  switch (plan.kind) {
+    case "promotion":
+      return plan.fromEnvironment
+        ? `Promoted from ${plan.fromEnvironment}`
+        : "Promotion"
+    case "rollback":
+      // A watch or a canary that failed starts one; a person starts the rest.
+      return plan.rollback?.trigger && plan.rollback.trigger !== "manual"
+        ? "Automatic rollback"
+        : "Rollback"
+  }
+  return ""
+}
+
 /** elapsed is how long a run has taken so far, or took. */
 export function elapsed(r: Run, now: number): number {
   const end = r.finishedAt ? Date.parse(r.finishedAt) : now

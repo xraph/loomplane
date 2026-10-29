@@ -3,6 +3,7 @@
 // search, project, environment and time; the oldest plan waiting on you sits
 // above it so it can be approved without opening it.
 import { DeploymentsIcon, NoMatchIcon } from "@/components/icons"
+import { ArrowFatLinesUpIcon } from "@phosphor-icons/react"
 import {
   ChevronRightIcon,
   ClockIcon,
@@ -16,6 +17,7 @@ import {
 import { type ReactNode, useMemo, useState } from "react"
 
 import { ApprovalCallout } from "@/components/approval"
+import { PromoteDialog } from "@/components/promote-dialog"
 import { QueryError } from "@/components/query-error"
 import { Page, PageHeading } from "@/components/page"
 import {
@@ -135,6 +137,7 @@ export function Deployments({ status }: { status: RunFilter }) {
   const [range, setRange] = useState<Range>("any")
   const [search, setSearch] = useState("")
   const [limit, setLimit] = useState(pageSize)
+  const [promoting, setPromoting] = useState(false)
 
   const envs = useMemo(
     () => [...new Set(runs.map((r) => r.environment))].sort(),
@@ -258,16 +261,25 @@ export function Deployments({ status }: { status: RunFilter }) {
           description="Every deploy across your projects, from plan to live. Search by plan ID, commit, repository or project."
           actions={
             can("deployment:create") && (
-              <Button onClick={() => openDeploy()}>
-                <PlusIcon />
-                New deployment
-                <Kbd className="ml-0.5 bg-primary-foreground/15 text-primary-foreground">
-                  N
-                </Kbd>
-              </Button>
+              <>
+                <Button variant="outline" onClick={() => setPromoting(true)}>
+                  <ArrowFatLinesUpIcon aria-hidden="true" />
+                  Promote
+                </Button>
+                <Button onClick={() => openDeploy()}>
+                  <PlusIcon />
+                  New deployment
+                  <Kbd className="ml-0.5 bg-primary-foreground/15 text-primary-foreground">
+                    N
+                  </Kbd>
+                </Button>
+              </>
             )
           }
         />
+        {can("deployment:create") && (
+          <PromoteDialog open={promoting} onOpenChange={setPromoting} />
+        )}
 
         {waiting[0] && (
           <ApprovalCallout

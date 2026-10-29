@@ -1,6 +1,7 @@
 // One deployment, start to finish: the plan, the decision on it, and each
 // step it took. A run is named by its plan's ID, because a plan exists from
 // the moment someone asks for one and a deployment only once it's approved.
+import { ArrowCounterClockwiseIcon } from "@phosphor-icons/react"
 import {
   CheckIcon,
   ChevronRightIcon,
@@ -33,6 +34,9 @@ import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
 import { FailedDeploymentCleanup } from "@/components/failed-deployment-cleanup"
 import { ApprovalCard } from "@/components/approval"
 import { CanaryPanel } from "@/components/canary"
+import { ReleaseWatchPanel } from "@/components/release-watch"
+import { Artifacts, Leftovers, ReleaseKind } from "@/components/release-plan"
+import { RollbackDialog } from "@/components/rollback-dialog"
 import { DeploymentCapacityWait } from "@/components/deployment-capacity-wait"
 import { showsCanary } from "@/lib/canary"
 import { Page } from "@/components/page"
@@ -50,6 +54,7 @@ import {
 import { ServiceAddress } from "@/components/service-address"
 import { SiteHeader } from "@/components/site-header"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Badge } from "@/components/ui/badge"
 import { Button, buttonVariants } from "@/components/ui/button"
 import {
   Card,
@@ -105,6 +110,7 @@ import { Link, useNavigate } from "@/lib/router"
 import {
   isLive,
   type Run,
+  runKindLabel,
   runLog,
   runStatusText,
   type ThreadStep,
@@ -209,6 +215,9 @@ function Loaded({
             setTab("logs")
           }}
         />
+        {run.deployment?.status === "succeeded" && (
+          <ReleaseWatchPanel deploymentId={run.deployment.id} />
+        )}
         {showsCanary(run) && (
           <CanaryPanel
             deploymentId={run.deployment?.id}
@@ -286,6 +295,9 @@ function Heading({ run, now }: { run: Run; now: number }) {
   const style = run.project ? projectStyle(run.project) : null
   const d = run.deployment
   const moving = run.plan.sources.filter((s) => s.inScope)
+  const kind = runKindLabel(run.plan)
+  const [rollingBack, setRollingBack] = useState(false)
+  const rollback = useRollbackOffer(run)
 
   const planAgain = async () => {
     try {
@@ -343,6 +355,16 @@ function Heading({ run, now }: { run: Run; now: number }) {
             </Link>
           )}
           <EnvBadge env={run.environment} />
+          {kind && (
+            <Badge
+              variant="secondary"
+              className={cn(
+                run.plan.kind === "rollback" && "bg-weld-tint text-weld-ink"
+              )}
+            >
+              {kind}
+            </Badge>
+          )}
         </div>
         <h1 className="text-[22px] leading-tight font-semibold tracking-[-0.025em] text-balance md:text-2xl">
           {run.project?.name ?? "Deploy"} to {run.environment}
@@ -388,6 +410,21 @@ function Heading({ run, now }: { run: Run; now: number }) {
             {retry.isPending ? <Spinner /> : <RotateCcwIcon />}
             Retry
           </Button>
+        )}
+        {rollback && d && (
+          <>
+            <Button variant="outline" onClick={() => setRollingBack(true)}>
+              <ArrowCounterClockwiseIcon aria-hidden="true" />
+              Roll back
+            </Button>
+            <RollbackDialog
+              open={rollingBack}
+              onOpenChange={setRollingBack}
+              projectId={run.projectId}
+              environment={run.environment}
+              deploymentId={d.id}
+            />
+          </>
         )}
         {!isLive(run) && can("deployment:create") && (
           <Button
@@ -442,6 +479,34 @@ function Heading({ run, now }: { run: Run; now: number }) {
         </DropdownMenu>
       </div>
     </header>
+  )
+}
+
+// A deployment that has finished, one way or another. Rolling back waits
+// for a running one to end.
+const finishedStatuses = new Set(["succeeded", "failed", "cancelled"])
+
+/**
+ * useRollbackOffer reports whether the run's deployment can be rolled
+ * back from here: it's finished, no newer deployment of its environment
+ * has started, it isn't a rollback itself, and the person may deploy. The
+ * server still has the last word, and the dialog shows its reason.
+ */
+function useRollbackOffer(run: Run): boolean {
+  const { can } = useOrganization()
+  const d = run.deployment
+  const list = useQuery(useDeploymentsList, { path: { id: run.projectId } })
+  if (!d || !can("deployment:create")) return false
+  if (!finishedStatuses.has(d.status) || run.plan.kind === "rollback")
+    return false
+  const all = list.data?.deployments
+  if (!all) return false
+  const started = Date.parse(d.startedAt)
+  return !all.some(
+    (x) =>
+      x.id !== d.id &&
+      x.environmentId === d.environmentId &&
+      Date.parse(x.startedAt) > started
   )
 }
 
@@ -830,6 +895,7 @@ function PlanTab({ run }: { run: Run }) {
   }
   return (
     <div className="grid gap-4">
+      <ReleaseKind plan={p} />
       <Card className="gap-0 py-0">
         <CardHeader className="flex flex-wrap items-center gap-x-5 gap-y-2 border-b py-4">
           {(["create", "update", "replace", "delete"] as const).map((op) => {
@@ -867,6 +933,8 @@ function PlanTab({ run }: { run: Run }) {
           </div>
         )}
       </Card>
+      <Artifacts artifacts={p.artifacts ?? []} />
+      <Leftovers leftovers={p.leftovers ?? []} />
       {(p.problems.length > 0 || p.warnings.length > 0) && (
         <Card className="gap-3">
           <CardHeader>

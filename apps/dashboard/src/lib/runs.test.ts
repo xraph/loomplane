@@ -1,7 +1,14 @@
 import { describe, expect, it } from "vitest"
 
 import type { Action, Deployment, Plan } from "@/client/forge/loomplane/types"
-import { commitLabel, isLive, matches, runLog, toRun } from "@/lib/runs"
+import {
+  commitLabel,
+  isLive,
+  matches,
+  runKindLabel,
+  runLog,
+  toRun,
+} from "@/lib/runs"
 
 const action = (id: string, step: number, op = "create"): Action => ({
   id,
@@ -260,5 +267,33 @@ describe("helpers", () => {
     expect(matches(r, "PRODUCTION")).toBe(true)
     expect(matches(r, "plan_1")).toBe(true)
     expect(matches(r, "staging")).toBe(false)
+  })
+})
+
+describe("runKindLabel", () => {
+  const rollback = (trigger: string) =>
+    plan("approved", {
+      kind: "rollback",
+      rollback: {
+        reason: "errors up",
+        restoreDeploymentId: "dep_1",
+        restoreFinishedAt: "2026-10-12T09:00:00Z",
+        restorePlanId: "plan_0",
+        targetDeploymentId: "dep_2",
+        targetPlanId: "plan_2",
+        trigger,
+      },
+    })
+
+  it("labels promotions and rollbacks", () => {
+    expect(
+      runKindLabel(
+        plan("ready", { kind: "promotion", fromEnvironment: "staging" })
+      )
+    ).toBe("Promoted from staging")
+    expect(runKindLabel(rollback("watch"))).toBe("Automatic rollback")
+    expect(runKindLabel(rollback("canary"))).toBe("Automatic rollback")
+    expect(runKindLabel(rollback("manual"))).toBe("Rollback")
+    expect(runKindLabel(plan("ready"))).toBe("")
   })
 })
