@@ -1,0 +1,157 @@
+---
+title: Promotion and rollback
+description: Promote what staging runs to production, roll an environment back to its previous release, and let Loomplane watch a release after it deploys.
+---
+
+Three things sit on top of an ordinary release. A promotion deploys to one environment exactly what another environment already runs. A rollback plans an environment back to the release before its current one. And a post-deploy watch keeps judging a release for a while after it goes live, so a bad one can be rolled back without anybody staring at a graph.
+
+All three are plans. Nothing deploys until someone approves, with one exception that's covered under [automatic rollback](#automatic-rollback).
+
+## Promote staging to production
+
+```bash
+loomctl promote my-project
+loomctl promote my-project --from staging --to production --scope web
+loomctl approve <plan-id>
+```
+
+`--from` defaults to `staging` and `--to` to `production`. `loomctl plan my-project --env production --from staging` does the same thing. In the dashboard, open Deployments and choose Promote.
+
+The plan pins what the source environment runs, read in one snapshot. Each repository moves to the commit and analysis its last successful deployment there recorded, with the root and branch that deployment used. Repositories you leave out with `--scope` stay at what the target already runs, and a repository the source doesn't run is held the same way. If a held repository has never been deployed to the target, the plan is refused and tells you to add it to the scope.
+
+A promotion also uses the manifest revision the source environment last deployed with, not the latest one. If you've saved a newer manifest since, the plan carries a `newer-manifest` warning that names both revisions: deploy the new one to staging first if you want it in production. When the source never recorded a revision, the plan uses the latest and warns about that instead.
+
+A repository whose commit nothing has analyzed (the source runs it, but the deployment didn't record an analysis) gets an analysis queued when you ask for the promotion. The plan stays in planning until that finishes, and gives up with the analysis error after about six minutes. When the source recorded no release of a repository and its services run it at more than one commit, the plan is refused and names the commits: deploy one commit of it there first.
+
+You approve a promotion like any plan. If staging releases again before you approve, what the plan would reuse can change, and the approval comes back stale.
+
+### Which images a promotion reuses
+
+Where it can, a promotion deploys the image staging already built, named by its digest, so production runs the bytes you tested and nothing builds twice. The plan lists a choice for every service it builds, reused or not, with the reason.
+
+| Target | Reuses the image | Builds again when |
+|---|---|---|
+| Cloud Run, ECS Fargate | Yes | The conditions below don't hold, or the image sits in another Google Cloud project or region, or another AWS account or region |
+| Azure Container Apps | Yes | The conditions below don't hold, or the image is in another Azure container registry (the region doesn't matter) |
+| Your own servers, Kubernetes | Yes | The conditions below don't hold, or the target pushes to a different registry, or staging built on its server without one |
+| Render, Vercel | No | Always. They build each deployment from the commit themselves |
+| DigitalOcean App Platform | No | Always. App Platform builds the newest commit of its branch, and the reason says a promotion only works while that's still the commit you're promoting |
+
+The conditions, for the first three rows: staging ran the same commit of the service on the same kind of target, built for the same architecture, from the same build inputs (source, Dockerfile, build context, ecosystem, build command and start command), and recorded the image by digest. A release that predates digest-pinned images, or one whose connection can't read digests, has only a tag, so it builds again.
+
+A gateway, a catalog service and a service pinned to an existing image have nothing built from a repository, so there's nothing to reuse. If the target environment's release strategy is `canary`, a reused image is what the canary ramps.
+
+### The staging soak
+
+A promotion plan shows how long the source environment has run exactly the commits you're about to ship, and whether it ran them healthily. The Plan tab in the dashboard has it under Source environment, and `loomctl promote` prints it before the approve line:
+
+```text
+Soak: staging has run these commits for 2h30m, healthy
+```
+
+The clock starts when the last of the commits was deployed to the source. Every service built from those commits is judged over that stretch, up to the last 24 hours, with the target environment's thresholds. A soak has no baseline to compare against, so only two of them count: the error ceiling (`error_rate`) and `min_requests`. The soak is healthy when every one of those services passes.
+
+Unverified means missing evidence. A soak is unverified when the source runs the commits but a service had too little traffic to judge, its cloud reports no metrics to Loomplane, or they've been running for less than a few minutes. A service that exceeded the error ceiling is evidence, so that's reported as not healthy and isn't unverified. If the source doesn't run the commits at all, the line says so and why.
+
+The soak informs your decision and nothing else. It never blocks an approval.
+
+## Roll back an environment
+
+```bash
+loomctl rollback my-project --env production --reason "checkout 500s after release"
+loomctl approve <plan-id>
+```
+
+The reason is required, up to 2,000 characters, and goes in the audit trail and in front of whoever approves. Before it plans, `loomctl rollback` prints which deployment it undoes and which it restores, with each repository's commits. In the dashboard, open the environment's newest deployment and choose Roll back.
+
+A rollback is a normal plan. A developer creates it, an admin approves it, it expires if nobody decides, and it shows up in `loomctl plans` beside everything else. What's different is what it contains.
+
+### What it restores
+
+The previous release is the newest successful deployment of that environment that finished before the one you're undoing started. A rollback's own deployment counts, because it restored a state somebody approved. Cloud syncs and standalone catalog plans don't count, since they change where infrastructure runs and not the application.
+
+A release that an earlier rollback undid is skipped, and so is one whose rollback failed. Say production ran R1, then R2, then R3. Rolling back R3 restores R2. If R2's rollback had failed before R3 shipped, rolling back R3 skips R2 and restores R1. To go to a release that was skipped, promote or deploy it explicitly.
+
+The rollback pins every repository to the commits that release deployed, all of them moving, and uses the manifest revision it deployed with. Services return to that release's image under the same rules as a promotion (the table above), except on DigitalOcean App Platform, where a rollback goes back to the App Platform deployment Loomplane recorded for that release. If there is no such deployment, it predates the record, it ran another commit, or the release you're undoing moved the service off App Platform, the plan has a problem and can't be approved.
+
+### What it leaves alone
+
+A rollback only reverts services' code and settings. It never deletes, replaces or reverts a data-bearing resource, so a database keeps the rows and the schema the bad release left it with.
+
+In practice: an update or replacement of a service that holds no data goes back. Anything else the restore would have done stays as the bad release left it, and the plan lists it under Left in place with the reason. That covers every resource (a bucket, a cache, a database), a service the release created, a service it removed, and any service that runs a catalog recipe or a component with storage.
+
+If a service you're restoring links to a resource the release you're undoing removed, the plan has a problem called `rollback-needs-resource`. A rollback never recreates a resource, so it can't bring that service back. Release a version that creates the resource instead.
+
+A rollback goes back all at once. It never ramps as a canary, even in an environment whose strategy is `canary`, and it arms no watch.
+
+### When it's refused
+
+| Situation | What you do |
+|---|---|
+| A deployment is running or paused in the environment | Wait for it, or cancel it |
+| The environment has no earlier successful release | Nothing to restore. Deploy or promote |
+| The current release is a rollback | Deploy or promote to move forward. Rolling a rollback back would only bring back the release it undid |
+| The current release is a rollback that failed | Retry that rollback deployment, which finishes the move it was approved for |
+| The newest deployment's canary already returned to the baseline | Nothing to roll back |
+| A canary's revert or promotion failed | Fix the traffic split from the deployment, then roll back |
+| You named a deployment that isn't the newest | Roll back the newest first. Naming an older one would undo every release after it |
+| A release still holds a route handoff | Finish the handoff. The rollback waits for it like any other plan |
+
+## Watch a release after it deploys
+
+A canary judges a release while it ramps. The post-deploy watch judges it afterward, from the same cloud monitoring and with the same thresholds, and rolls it back if a service breaches them.
+
+### Turn it on
+
+The watch is a setting of the environment's `release` block in `loomplane.yaml`:
+
+```yaml
+environments:
+  production:
+    release:
+      strategy: direct
+      watch: 30m
+      thresholds:
+        error_rate: 1%
+```
+
+`watch` is a duration in whole minutes, up to `24h`. Leave it out and a `canary` or `blue_green` environment is watched for 15 minutes while a `direct` one isn't watched at all. `watch: "0"` turns it off. The plan pins the watch with the rest of the release block, so changing it gives you a new revision to approve. An environment with no `release` block deploys exactly as it always has: no watch is armed.
+
+### What gets watched
+
+The watch starts when a deployment finishes successfully, and covers the services that release created, updated or replaced. It skips the services a canary ramped, because the canary already judged them. It isn't armed for a rollback, a Cloud sync, a standalone catalog plan, a failed deployment, a canary that didn't promote, or a release that changed no service.
+
+A service can be watched when its cloud reports both requests and errors to Loomplane, which today means Cloud Run, ECS Fargate, Azure Container Apps and Render (the Requests and 5xx columns in the [canary table](/docs/concepts/canary-releases#where-canaries-run)). Services on your own servers and clusters report to your own monitoring, which Loomplane doesn't read. Vercel and DigitalOcean report nothing it can use. Each service the watch can't judge is listed with the reason, and it leaves the release unverified. If none of the changed services can be watched, the watch settles as inconclusive straight away.
+
+The first reading comes about four minutes after the release finishes, because cloud monitoring reports a few minutes late. After that the watch checks every minute. It reads the service's health since the release finished and compares it with the same length of time before the deployment started. A service the release created or moved has no history, so it's judged on the thresholds alone.
+
+| Status | Meaning |
+|---|---|
+| `watching` | The window is still open or the readings aren't decisive yet |
+| `passed` | Every watched service passed through the whole window |
+| `inconclusive` | The watch couldn't decide by 15 minutes after its window ended, usually from too little traffic. The release is unverified and nothing is rolled back |
+| `superseded` | A newer release replaced this one before the watch finished |
+| `rolling_back` | A service breached, and the rollback is being planned, approved or deployed |
+| `rolled_back` | The rollback deployment succeeded |
+| `rollback_blocked` | The rollback couldn't go ahead on its own, and the watch says why |
+| `rollback_failed` | The rollback deployment failed, was cancelled or never started |
+
+A breach doesn't wait for the window to end. One failing service is enough.
+
+Unverified means missing evidence, and it never goes back to false. A release is unverified when a changed service wasn't watched, when the watch settled inconclusive, or when a newer release superseded the watch before it could judge. The release may well be fine, but nobody has the readings to say so, and that's worth a look from you.
+
+A newer release supersedes the watch if it starts while the watch is open, or if it changes a service the watch is judging. The watch stops and settles `superseded`. It doesn't roll back, because rolling back the older release would undo the newer one too.
+
+### Automatic rollback
+
+When a service breaches, Loomplane plans the rollback of that release, using the same rules as a manual one, and approves it itself. The plan's reason names the service and what it measured. The plan says it was started by Loomplane automation, and so does every audit entry it makes: the breach (`release_watch.breach`), the approval (`plan.approve`, marked automatic) and the settled watch (`release_watch.settle`).
+
+This is the one place a plan is approved without a person, and the rules around it are narrow. Loomplane automation holds a role that can read a project, create deployments and approve them, but the planning service lets it create and approve only a rollback that a watch started. Every other plan, and every promotion or manual rollback, refuses it, and no session or API key ever acts as it. If the organization has taken those permissions away, the watch settles `rollback_blocked`, and the rollback plan, if there is one, stays ready for a person to approve.
+
+Planning can also refuse for good, for the reasons in [When it's refused](#when-its-refused), and then the watch settles `rollback_blocked` with the reason. If the rollback plan never finishes planning, or its deployment never starts within an hour, the watch gives up and settles `rollback_failed`. You can find the plan from the watch, and from there you decide.
+
+## Where to see it
+
+On a deployment's page, a Release watch panel shows the status, each watched service's verdict, the services it couldn't watch and why, and the rollback plan if it breached. Roll back sits beside Retry on a deployment that has finished, is the newest in its environment and isn't a rollback itself. The dialog shows what the rollback restores and asks for a reason, and a refusal from the server appears there in plain text.
+
+From a terminal, `loomctl deployment <id>` prints a `Watch:` section, and `loomctl promote` prints the `Soak:` line. An agent reads the watch with `get_release_watch`, and can plan a rollback with `create_rollback` when you start the MCP server with `--allow-deploy`. A person still approves it. See [loomctl](/docs/reference/loomctl), [MCP server](/docs/agents/mcp-server) and the [HTTP API](/docs/reference/http-api).

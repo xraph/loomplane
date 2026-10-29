@@ -39,13 +39,15 @@ You can also install it from the `xraph` Scoop bucket, or unpack a release archi
 
 | Command | What it does |
 |---|---|
-| `plan PROJECT [--env production] [--scope ALIAS] [--catalog] [--no-wait] [--json]` | Plans a manifest for an environment. `--scope` is repeatable. `--catalog` plans standalone resources |
+| `plan PROJECT [--env production] [--from ENV] [--scope ALIAS] [--catalog] [--no-wait] [--json]` | Plans a manifest for an environment. `--from` pins the commits another environment runs, which makes it a promotion. `--scope` is repeatable. `--catalog` plans standalone resources |
+| `promote PROJECT [--from staging] [--to production] [--scope ALIAS] [--no-wait] [--json]` | Plans `--to` to run what `--from` runs, reusing its images where it can. Prints a `Soak:` line with how long `--from` has run those commits and whether it was healthy |
+| `rollback PROJECT --reason TEXT [--env production] [--deployment ID] [--no-wait] [--json]` | Plans an environment back to its previous successful release. `--reason` is required. It prints which deployment it undoes and which it restores, and the plan lists what it leaves in place. `--deployment` has to name the environment's newest |
 | `plans PROJECT [--json]` | Lists a project's plans |
-| `show PLAN_ID [--json]` | Shows what a plan would do and anything in the way, with a `Release:` line when the environment sets a release strategy |
+| `show PLAN_ID [--json]` | Shows what a plan would do and anything in the way, with a `Release:` line when the environment sets a release strategy. A promotion or rollback adds a line saying what it moves, which images it reuses and, for a rollback, what it leaves in place |
 | `approve PLAN_ID [--yes] [--note TEXT] [--no-wait]` | Approves a plan, which deploys it, and follows the deployment |
 | `reject PLAN_ID [--note TEXT]` | Rejects a plan |
 | `deployments PROJECT [--json]` | Lists a project's deployments |
-| `deployment ID [--watch] [--json]` | Shows a deployment step by step. A canary adds a `Canary:` line and a table of the current retry's verdicts (step, weight, service, verdict, errors, latency and reason). When a revert or promotion failed it adds a `NEEDS YOU` line, because traffic may still be split. `--watch` follows it and prints each verdict once as it arrives |
+| `deployment ID [--watch] [--json]` | Shows a deployment step by step. A canary adds a `Canary:` line and a table of the current retry's verdicts (step, weight, service, verdict, errors, latency and reason). When a revert or promotion failed it adds a `NEEDS YOU` line, because traffic may still be split. `--watch` follows it and prints each verdict once as it arrives. A deployment with a post-deploy watch adds a `Watch:` section with the status, each service's verdict and the services it can't watch. The `--watch` flag follows the deployment, and the Watch section is the release watch, which is a different thing |
 | `retry DEPLOYMENT_ID [--no-wait]` | Retries a failed deployment from the step that failed |
 | `status PROJECT [--json]` | What runs each service and resource, with addresses and drift |
 
@@ -86,7 +88,7 @@ Most of these review before they act and apply only with `--yes`. Many take `--w
 
 | Command | What it does |
 |---|---|
-| `mcp [--allow-deploy]` | Serves Loomplane's tools over MCP on standard input and output. `--allow-deploy` also offers `approve_plan` and `retry_deployment`. See [MCP server](/docs/agents/mcp-server) |
+| `mcp [--allow-deploy]` | Serves Loomplane's tools over MCP on standard input and output. `--allow-deploy` also offers `approve_plan`, `retry_deployment` and `create_rollback`. See [MCP server](/docs/agents/mcp-server) |
 
 ## Server commands
 

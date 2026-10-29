@@ -24,12 +24,12 @@ All paths are under `/api/v1`.
 
 | Group | What it covers |
 |---|---|
-| `/projects` | Projects and their sources, environments, analyses, manifest (get, put, draft, edits, revisions), plans, deployments, bindings, graph, variables, backup policies and recovery |
+| `/projects` | Projects and their sources, environments, analyses, manifest (get, put, draft, edits, revisions), plans, rollbacks, release watches, deployments, bindings, graph, variables, backup policies and recovery |
 | `/projects/{id}/clouds`, `/cloud-changes`, `/cloud-syncs` | Project views of Clouds, targets, placement previews and syncs |
 | `/projects/{id}/domain-routes`, `/route-operations` | Domain routes and their operations |
 | `/analyses` | One analysis and its graph |
-| `/plans` | Get a plan, approve it, reject it, read its deployment |
-| `/deployments` | Get a deployment, read its logs and its canary, retry it |
+| `/plans` | Get a plan, approve it, reject it, read its deployment, read a promotion's soak |
+| `/deployments` | Get a deployment, read its logs, its canary and its release watch, retry it |
 | `/variables` | Organization-wide variables |
 | `/connections` | Cloud connections: create, check, replace a credential, delete, read storage |
 | `/connection-clouds`, `/providers` | The cloud types you can connect, and the provider catalog |
@@ -69,6 +69,28 @@ curl -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/json"
 ```
 
 Planning runs in the background. The create call returns the plan at once, so read `GET /api/v1/plans/{id}` until it's done planning. An approval carries the plan's `revision` (and an optional `note`). If the plan's world changed, it comes back stale and nothing happens. The OpenAPI document has the full shapes.
+
+## Promote, roll back and watch
+
+A promotion is a plan with `from`:
+
+```bash
+curl -X POST -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{"environment":"production","from":"staging","scope":["web"]}' "$URL/api/v1/projects/$PROJECT/plans"
+```
+
+`from` pins the commits and manifest revision that environment runs. `scope` still names the repositories that move. The plan comes back with `kind` set to `promotion`, and its `artifacts` say which images it reuses.
+
+| Route | What it does | Needs |
+|---|---|---|
+| `GET /projects/{id}/environments/{environment}/rollback-target` | What a rollback would undo and restore, and each repository's commits. Takes an optional `deployment_id`, which has to be the newest. Changes nothing | `deployment:read` |
+| `POST /projects/{id}/rollbacks` | Plans the environment back to its previous successful release. The body is `{"environment", "reason", "deployment_id"}`, and `reason` is required. Returns the plan with `kind` set to `rollback`, and a person approves it | `deployment:create` |
+| `GET /deployments/{id}/watch` | The deployment's post-deploy watch: its status and verdict, the services it judges and those it can't, and any rollback plan. 404 when it has none | `deployment:read` |
+| `GET /projects/{id}/environments/{environment}/watch-coverage` | How long a release there would be watched, which services a canary would ramp, and whether each other service can be watched | `deployment:read` |
+| `GET /projects/{id}/environments/{environment}/release-evidence` | What the watch says about the environment's current release. `unverified` means missing evidence | `deployment:read` |
+| `GET /plans/{id}/soak` | How long a promotion's source has run exactly the commits the plan moves, and whether healthily. A plan that isn't a promotion returns 422 | `deployment:read` |
+
+A rollback that can't go ahead returns 409 (a deployment is running, there's no earlier release, or the canary already dealt with the release) or 422 (the newest deployment isn't the one you named, or the current release is a rollback), with a message that says what to do. A promotion from an environment that runs nothing returns 409, and one that holds back a repository never deployed to the target returns 412. Watch updates arrive on the realtime stream as `release_watch.updated` events. See [Promotion and rollback](/docs/concepts/promotion-and-rollback).
 
 ## Live events
 
