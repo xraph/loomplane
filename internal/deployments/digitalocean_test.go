@@ -251,6 +251,50 @@ func TestDigitalOcean_refusesACommitNobodyApproved(t *testing.T) {
 	})
 }
 
+// A rollback puts the app back on the deployment the restored release
+// recorded. App Platform keeps that build, so nothing builds again.
+func TestDigitalOcean_rollsBackWithoutBuilding(t *testing.T) {
+	f, client := newFakeAppPlatform(t)
+	job := doJob(apiConfig(), "main")
+	name := DigitalOceanName(job)
+	f.apps["app-"+name] = map[string]any{"name": name}
+	f.active["app-"+name] = "dep-bad-release"
+	job.Binding = &planning.Binding{ExternalID: "app-" + name}
+	cfg := apiConfig()
+	cfg.Artifact = &planning.ReusedArtifact{Revision: "do_dep_7", CommitSHA: doApproved}
+	job.Action.Service = cfg
+	var saved []byte
+	job.Checkpoint = func(b []byte) error { saved = b; return nil }
+	out, err := newDO(client).Apply(t.Context(), job)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(f.rollbacks, []string{"do_dep_7"}) || len(f.created) != 0 || len(f.specs) != 0 {
+		t.Fatalf("rollbacks %v, created %v, specs %d", f.rollbacks, f.created, len(f.specs))
+	}
+	// The rollback's own deployment is what runs, and what's recorded.
+	if out.ExternalID != "app-"+name || out.Revision != "rb" || f.active["app-"+name] != "rb" {
+		t.Fatalf("outcome %+v, active %s", out, f.active["app-"+name])
+	}
+	var state doState
+	if err := json.Unmarshal(saved, &state); err != nil || state.DeploymentID != "rb" {
+		t.Fatalf("checkpoint %s: %v", saved, err)
+	}
+
+	// A rollback whose deployment was built from another commit fails, and
+	// starts nothing else.
+	f, client = newFakeAppPlatform(t)
+	f.apps["app-"+name] = map[string]any{"name": name}
+	f.tip = "ffffffffffffffffffffffffffffffffffffffff"
+	job.Resume = nil
+	if _, err = newDO(client).Apply(t.Context(), job); err == nil || !strings.Contains(err.Error(), "ffffffffffff") {
+		t.Fatalf("err %v", err)
+	}
+	if len(f.created) != 0 || len(f.rollbacks) != 1 {
+		t.Fatalf("created %v rollbacks %v", f.created, f.rollbacks)
+	}
+}
+
 func TestDigitalOcean_workersPrivateServicesAndStaticSites(t *testing.T) {
 	job := doJob(&planning.ServiceConfig{Source: "worker", Ecosystem: "node", Start: "node worker.js", Workload: provider.Worker, Execution: provider.Container}, "")
 	spec := doAppSpec(job, job.Action.Service, "acme/mono", "main")

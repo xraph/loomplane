@@ -374,10 +374,20 @@ func (c *Client) CancelDeployment(ctx context.Context, token, appID, id string) 
 }
 
 // Rollback puts an app back on an earlier deployment, without pinning it,
-// so later deployments still go ahead.
-func (c *Client) Rollback(ctx context.Context, token, appID, deploymentID string) error {
+// so later deployments still go ahead. The rollback is a deployment of its
+// own, which it returns for the caller to wait on.
+func (c *Client) Rollback(ctx context.Context, token, appID, deploymentID string) (*Deployment, error) {
+	var out struct {
+		Deployment Deployment `json:"deployment"`
+	}
 	path := "/v2/apps/" + url.PathEscape(appID) + "/rollback"
-	return c.do(ctx, token, http.MethodPost, path, nil, map[string]any{"deployment_id": deploymentID, "skip_pin": true}, nil)
+	if err := c.do(ctx, token, http.MethodPost, path, nil, map[string]any{"deployment_id": deploymentID, "skip_pin": true}, &out); err != nil {
+		return nil, err
+	}
+	if out.Deployment.ID == "" {
+		return nil, errors.New("digitalocean accepted the rollback without a deployment ID")
+	}
+	return &out.Deployment, nil
 }
 
 // CommitMismatchError is a deployment App Platform built from a commit other

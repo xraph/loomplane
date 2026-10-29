@@ -169,6 +169,9 @@ func (d *DigitalOcean) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 	if job.CommitSHA == "" {
 		return nil, errors.New("app platform deploys a commit, and the deployment has none for this service")
 	}
+	if cfg.Artifact != nil && cfg.Artifact.Revision != "" && job.Binding != nil && job.Binding.ExternalID != "" {
+		return d.rollBack(ctx, token, job, cfg, &state, save)
+	}
 	branch := doBranchFor(job)
 	spec := doAppSpec(job, cfg, repo, branch)
 
@@ -216,6 +219,36 @@ func (d *DigitalOcean) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 		return nil, err
 	}
 	return &Outcome{ExternalID: app.ID, URL: url, Revision: dep.ID}, nil
+}
+
+// rollBack puts the app back on the deployment a rollback plan restores,
+// which App Platform still holds, so nothing builds. The rollback is a
+// deployment of its own, waited on and checked against the restored
+// commit like any other.
+func (d *DigitalOcean) rollBack(ctx context.Context, token string, job *Job, cfg *planning.ServiceConfig, state *doState, save func()) (*Outcome, error) {
+	app := job.Binding.ExternalID
+	if state.AppID != app || state.DeploymentID == "" {
+		job.Progress(StepDeploying, "Rolling App Platform back to deployment "+cfg.Artifact.Revision)
+		dep, err := d.Client.Rollback(ctx, token, app, cfg.Artifact.Revision)
+		if err != nil {
+			return nil, fmt.Errorf("roll %s back on app platform: %w", job.Action.Name, err)
+		}
+		*state = doState{AppID: app, DeploymentID: dep.ID}
+		save()
+	}
+	dep, err := d.Client.WaitDeployment(ctx, token, app, state.DeploymentID, job.CommitSHA)
+	if err != nil {
+		return nil, fmt.Errorf("roll %s back on app platform: %w", job.Action.Name, err)
+	}
+	live, err := d.Client.GetApp(ctx, token, app)
+	if err != nil {
+		return nil, err
+	}
+	url := doAddress(cfg, live)
+	if err := d.waitForDNS(ctx, job, url); err != nil {
+		return nil, err
+	}
+	return &Outcome{ExternalID: live.ID, URL: url, Revision: dep.ID}, nil
 }
 
 // doPublicResolvers are asked directly, so a name looked up too early
@@ -324,7 +357,7 @@ func (d *DigitalOcean) refuse(ctx context.Context, token string, job *Job, state
 	}
 	switch {
 	case state.Previous != "":
-		if err := d.Client.Rollback(ctx, token, state.AppID, state.Previous); err != nil {
+		if _, err := d.Client.Rollback(ctx, token, state.AppID, state.Previous); err != nil {
 			return fmt.Errorf("%w. It went live, and rolling back failed: %w. Roll the app back in DigitalOcean", mm, err)
 		}
 		return fmt.Errorf("%w. It went live, so Loomplane rolled the app back to what ran before. %s", mm, hint)

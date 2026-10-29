@@ -208,10 +208,32 @@ func TestRollback_skipsThePin(t *testing.T) {
 		got = body
 		reply(w, 200, map[string]any{"deployment": map[string]any{"id": "d0"}})
 	})
-	if err := c.Rollback(context.Background(), "dop_v1_good", "app-1", "d0"); err != nil {
+	dep, err := c.Rollback(context.Background(), "dop_v1_good", "app-1", "d0")
+	if err != nil {
 		t.Fatal(err)
 	}
 	if got["deployment_id"] != "d0" || got["skip_pin"] != true {
 		t.Fatalf("rollback body %v", got)
+	}
+	if dep == nil || dep.ID != "d0" {
+		t.Fatalf("rollback deployment %+v", dep)
+	}
+}
+
+// The rollback is a deployment of its own, which the caller waits for.
+func TestRollback_returnsTheRollbackDeployment(t *testing.T) {
+	f, c := newFake(t)
+	f.on("POST /v2/apps/app-1/rollback", func(w http.ResponseWriter, _ *http.Request, _ map[string]any) {
+		reply(w, 200, map[string]any{"deployment": map[string]any{"id": "rb-1", "phase": "PENDING_DEPLOY"}})
+	})
+	dep, err := c.Rollback(context.Background(), "dop_v1_good", "app-1", "do_dep_7")
+	if err != nil || dep.ID != "rb-1" || dep.Phase != "PENDING_DEPLOY" {
+		t.Fatalf("rollback %+v, %v", dep, err)
+	}
+	f.on("POST /v2/apps/app-1/rollback", func(w http.ResponseWriter, _ *http.Request, _ map[string]any) {
+		reply(w, 200, map[string]any{})
+	})
+	if _, err = c.Rollback(context.Background(), "dop_v1_good", "app-1", "do_dep_7"); err == nil {
+		t.Fatal("a rollback without a deployment ID was accepted")
 	}
 }
