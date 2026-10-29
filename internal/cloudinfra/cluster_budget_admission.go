@@ -198,6 +198,12 @@ func scopedBudgetReviewTx(ctx context.Context, tx driver.Tx, org, cloud, provide
 		}
 		key := budgetIdentity(org, "observed_server", server.Provider, server.AccountID, server.ResourceID, server.ID)
 		c := MoneyComponent{Category: "nodes", Name: "observed:" + key, Source: "observed", Identity: key, Quantity: 1}
+		// SSH hosts have no authoritative catalog. Keep their cost unavailable,
+		// without assigning a price or a timestamp that implies one was checked.
+		if server.Provider == "server" {
+			components = append(components, c)
+			continue
+		}
 		checked := server.PriceCheckedAt
 		if fact, ok := prices[serverPriceIdentity(&server)]; ok {
 			checked = fact.CheckedAt

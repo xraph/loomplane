@@ -17,6 +17,7 @@ import (
 
 	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/cloudprofiles"
+	"github.com/xraph/loomplane/internal/connections"
 )
 
 func TestClusterBudgetReviewSurvivesRestart(t *testing.T) {
@@ -444,5 +445,72 @@ func TestClusterBudgetRetainedPriceProvenance(t *testing.T) {
 				t.Fatal("explicit retained cost review has no recovery", err)
 			}
 		})
+	}
+}
+
+func TestClusterBudgetAdoptedServerManualReview(t *testing.T) {
+	f := ledgerFixture(t)
+	adapters := cloudinfra.NewAdapters()
+	if err := adapters.RegisterServer("digitalocean", &budgetLedgerProvider{&ledgerProvider{f.provider}}); err != nil {
+		t.Fatal(err)
+	}
+	f.svc.Adapters = adapters
+	now := time.Now()
+	conn := &connections.Connection{ID: "adopted-budget-host", OrgID: "org", Cloud: "server", Name: "Adopted host", Account: "ssh-host", Status: connections.StatusReady, CreatedAt: now, UpdatedAt: now}
+	if err := f.connections.CreateConnection(t.Context(), conn); err != nil {
+		t.Fatal(err)
+	}
+	host := &cloudinfra.Server{ID: "adopted-budget-host", OrgID: "org", CloudID: "cloud", ConnectionID: conn.ID, Provider: "server", AccountID: "ssh-host", ResourceID: "ssh-daemon", Ownership: "adopted", Status: "ready", Revision: 1}
+	if err := f.store.SaveServer(t.Context(), host); err != nil {
+		t.Fatal(err)
+	}
+	p, err := f.store.GetCapacityPolicy(t.Context(), "org", "cloud")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p.Revision++
+	p.Limits.CPUMillis = 6000
+	p.Budget = &cloudinfra.CapacityBudget{MaxHourlyMicroUSD: 100, MaxHorizonMicroUSD: 100, HorizonSeconds: 3600}
+	if err = f.store.SaveCapacityPolicy(t.Context(), p, 1); err != nil {
+		t.Fatal(err)
+	}
+	zero := cloudinfra.CapacityResources{Servers: inventoryNumber(0), CPUMillis: inventoryNumber(0), MemoryBytes: inventoryNumber(0), StorageBytes: inventoryNumber(0)}
+	record := cloudinfra.CapacityRecord{Kind: "server", Provider: host.Provider, AccountID: host.AccountID, ResourceID: "server:" + host.ResourceID, ServerID: host.ID, ServerStateRevision: host.StateRevision, CheckedAt: now, Resources: cloudinfra.CapacityResources{Servers: inventoryNumber(1), CPUMillis: inventoryNumber(2000), MemoryBytes: inventoryNumber(2 << 30), StorageBytes: inventoryNumber(20_000_000_000)}}
+	ledgerSave(t, f, []cloudinfra.CapacityRecord{record}, []cloudinfra.CapacityAccountSnapshot{{Provider: "digitalocean", AccountID: "account", Provisioned: zero, CheckedAt: now}})
+	preview := func(ack bool) *cloudinfra.Operation {
+		o, e := f.svc.PreviewServer(t.Context(), f.p, "cloud", cloudinfra.ServerInput{Kind: "create", Name: "with-adopted-baseline", ConnectionID: "infra-account", CloudRevision: 1, Region: "region", Size: "small", Image: "ubuntu", AcknowledgeUnknownCosts: ack})
+		if e != nil {
+			t.Fatal(e)
+		}
+		return o
+	}
+	denied := preview(false)
+	if _, err = f.svc.ApplyServerOperation(t.Context(), f.p, "cloud", denied.ID, cloudinfra.ApplyInput{Review: denied.Review}); !errors.Is(err, cloudinfra.ErrConflict) {
+		t.Fatal("unacknowledged unknown baseline admitted", err)
+	}
+	manual := preview(true)
+	if manual.BudgetReview.Estimate.Known || manual.BudgetReview.Estimate.HourlyMicroUSD != 29 || time.Since(manual.BudgetReview.Estimate.CheckedAt) > time.Minute {
+		t.Fatal("unavailable cost made a fresh review stale", manual.BudgetReview)
+	}
+	found := false
+	for _, c := range manual.BudgetReview.Estimate.Components {
+		if c.Source == "observed" {
+			found = c.Category == "nodes" && c.HourlyMicroUSD == nil && c.PriceCheckedAt == nil
+		}
+	}
+	if !found {
+		t.Fatal("unavailable SSH cost lost its explicit unknown component")
+	}
+	accepted, err := f.svc.ApplyServerOperation(t.Context(), f.p, "cloud", manual.ID, cloudinfra.ApplyInput{Review: manual.Review})
+	if err != nil {
+		t.Fatal("manual acknowledgement has no recovery for unavailable SSH price", err)
+	}
+	accepted.Attempted = true
+	if err = f.store.SaveOperation(t.Context(), accepted); err != nil {
+		t.Fatal("first effect rejected acknowledged unavailable baseline", err)
+	}
+	var holds int
+	if err = f.sql.QueryRow(t.Context(), `SELECT count(*) FROM loomplane_cloud_capacity_reservations WHERE id=$1 AND status='reserved'`, accepted.ID).Scan(&holds); err != nil || holds != 1 {
+		t.Fatal("manual growth lacks required capacity hold", holds, err)
 	}
 }
