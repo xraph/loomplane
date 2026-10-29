@@ -41,13 +41,38 @@ const (
 	defaultAddr       = ":8790"
 	defaultBundleID   = "com.loomplane.app"
 	defaultServerRate = 50 // sends per second per server key
-	defaultHandleRate = 30 // sends per minute per handle
+	defaultHandleRate = 30 // sends per minute per device
 )
 
 var (
 	sealingKeyIDPattern = regexp.MustCompile(`^[A-Za-z0-9_-]{1,32}$`)
 	appleIDPattern      = regexp.MustCompile(`^[A-Za-z0-9]{10}$`)
 )
+
+// Variables that only mean something with their platform's key file.
+var (
+	fcmOnlyVars  = []string{"PUSH_GATEWAY_FCM_BASE_URL"}
+	apnsOnlyVars = []string{
+		"PUSH_GATEWAY_APNS_KEY_ID", "PUSH_GATEWAY_APNS_TEAM_ID",
+		"PUSH_GATEWAY_APNS_BUNDLE_ID", "PUSH_GATEWAY_APNS_BASE_URL",
+	}
+)
+
+// orphans reports each variable that is set while the file variable that
+// enables its platform isn't, so a typo in the file variable fails loudly
+// instead of silently turning the platform off.
+func orphans(getenv func(string) string, fileVar string, vars []string) []error {
+	if getenv(fileVar) != "" {
+		return nil
+	}
+	var errs []error
+	for _, v := range vars {
+		if getenv(v) != "" {
+			errs = append(errs, fmt.Errorf("%s is set but %s isn't", v, fileVar))
+		}
+	}
+	return errs
+}
 
 type sealingKey struct {
 	ID  string
@@ -126,6 +151,8 @@ func loadConfig(getenv func(string) string) (config, error) {
 	if fcmFile == "" && apnsFile == "" {
 		fail("set PUSH_GATEWAY_FCM_CREDENTIALS_FILE, PUSH_GATEWAY_APNS_KEY_FILE or both")
 	}
+	errs = append(errs, orphans(getenv, "PUSH_GATEWAY_FCM_CREDENTIALS_FILE", fcmOnlyVars)...)
+	errs = append(errs, orphans(getenv, "PUSH_GATEWAY_APNS_KEY_FILE", apnsOnlyVars)...)
 	if fcmFile != "" {
 		fcm, err := loadFCM(getenv)
 		if err != nil {
@@ -199,10 +226,17 @@ func sealingKeyFrom(getenv func(string) string, idVar, fileVar string, required 
 		if required {
 			errs = append(errs, fmt.Errorf("%s is required", fileVar))
 		}
-	} else if raw, err := readSecret(getenv, fileVar); err != nil {
-		errs = append(errs, err)
-	} else if key, err = base64.StdEncoding.DecodeString(string(raw)); err != nil || len(key) != 32 {
-		errs = append(errs, fmt.Errorf("%s must hold 32 random bytes in base64 (openssl rand -base64 32)", fileVar))
+	} else {
+		raw, err := readSecret(getenv, fileVar)
+		switch {
+		case err != nil:
+			errs = append(errs, err)
+		default:
+			key, err = base64.StdEncoding.DecodeString(string(raw))
+			if err != nil || len(key) != 32 {
+				errs = append(errs, fmt.Errorf("%s must hold 32 random bytes in base64 (openssl rand -base64 32)", fileVar))
+			}
+		}
 	}
 	if len(errs) > 0 {
 		return sealingKey{}, errs
@@ -250,11 +284,12 @@ func loadAPNs(getenv func(string) string) (*apnsConfig, []error) {
 		apns.BundleID = defaultBundleID
 	}
 	raw, err := readSecret(getenv, name)
-	if err != nil {
+	switch {
+	case err != nil:
 		errs = append(errs, err)
-	} else if !isP8(raw) {
+	case !isP8(raw):
 		errs = append(errs, fmt.Errorf("%s isn't an APNs .p8 key", name))
-	} else {
+	default:
 		apns.PrivateKey = raw
 	}
 	if !appleIDPattern.MatchString(apns.KeyID) {

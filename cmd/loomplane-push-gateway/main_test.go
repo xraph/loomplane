@@ -143,6 +143,8 @@ func TestLoadConfigOnePlatform(t *testing.T) {
 	}
 	noAPNs := maps.Clone(e)
 	delete(noAPNs, "PUSH_GATEWAY_APNS_KEY_FILE")
+	delete(noAPNs, "PUSH_GATEWAY_APNS_KEY_ID")
+	delete(noAPNs, "PUSH_GATEWAY_APNS_TEAM_ID")
 	c, err = loadConfig(env(noAPNs))
 	if err != nil || c.APNs != nil || c.FCM == nil {
 		t.Errorf("fcm only: err=%v fcm=%v apns=%v", err, c.FCM, c.APNs)
@@ -311,5 +313,35 @@ func TestRunAcceptsGoodConfig(t *testing.T) {
 	var out, errb bytes.Buffer
 	if code := run(context.Background(), nil, env(e), &out, &errb); code != 0 {
 		t.Errorf("code = %d, stderr %q", code, errb.String())
+	}
+}
+
+func TestLoadConfigRejectsOrphanedPlatformSettings(t *testing.T) {
+	tests := []struct {
+		drop, set, value string
+		keep             string
+	}{
+		{"PUSH_GATEWAY_APNS_KEY_FILE", "PUSH_GATEWAY_APNS_KEY_ID", "ABCDE12345", "fcm"},
+		{"PUSH_GATEWAY_APNS_KEY_FILE", "PUSH_GATEWAY_APNS_TEAM_ID", "TEAM123456", "fcm"},
+		{"PUSH_GATEWAY_APNS_KEY_FILE", "PUSH_GATEWAY_APNS_BUNDLE_ID", "com.example.app", "fcm"},
+		{"PUSH_GATEWAY_APNS_KEY_FILE", "PUSH_GATEWAY_APNS_BASE_URL", "http://127.0.0.1:1", "fcm"},
+		{"PUSH_GATEWAY_FCM_CREDENTIALS_FILE", "PUSH_GATEWAY_FCM_BASE_URL", "http://127.0.0.1:1", "apns"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.set, func(t *testing.T) {
+			_, e := writeSecrets(t)
+			delete(e, tc.drop)
+			e[tc.set] = tc.value
+			if tc.drop == "PUSH_GATEWAY_APNS_KEY_FILE" {
+				delete(e, "PUSH_GATEWAY_APNS_KEY_ID")
+				delete(e, "PUSH_GATEWAY_APNS_TEAM_ID")
+				e[tc.set] = tc.value
+			}
+			want := tc.set + " is set but " + tc.drop + " isn't"
+			_, err := loadConfig(env(e))
+			if err == nil || !strings.Contains(err.Error(), want) {
+				t.Fatalf("err = %v, want %q", err, want)
+			}
+		})
 	}
 }
