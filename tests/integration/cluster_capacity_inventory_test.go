@@ -5,8 +5,11 @@ package integration
 import (
 	"context"
 	"errors"
+	"fmt"
 	"testing"
 	"time"
+
+	"github.com/xraph/loomplane/internal/connections"
 
 	"github.com/xraph/loomplane/pkg/provider"
 
@@ -217,5 +220,181 @@ func TestClusterCapacityInventoryAuthorizedObservation(t *testing.T) {
 	var attempts int
 	if err = f.sql.QueryRow(t.Context(), `SELECT count(*) FROM loomplane_cluster_operations WHERE body->>'kind'='management-observation' AND body->'steps'->0->>'state'='completed'`).Scan(&attempts); err != nil || attempts != 1 {
 		t.Fatal("missing durable management issuance", attempts, err)
+	}
+}
+
+func clusterCapacityInfraSnapshot(t *testing.T, f *infraFixture, vm string) *cloudinfra.ManagedResource {
+	t.Helper()
+	ref := provider.ClusterRef{ID: "physical-cluster", AccountID: "account", Region: "region", Incarnation: "birth"}
+	r := &cloudinfra.ManagedResource{ID: "cluster", OrgID: "org", CloudID: "cloud", Kind: "cluster", Provider: "digitalocean", AccountID: "account", ConnectionID: "infra-account", ExternalID: ref.ID, Incarnation: ref.Incarnation, Ownership: "external", Status: "running", Revision: 1, SchemaVersion: 1, Observation: &provider.ClusterObservation{Ref: ref, Endpoint: "https://cluster.test", CAHash: "ca", State: "running"}}
+	if _, err := f.store.ClaimManagedResource(t.Context(), r, 0); err != nil {
+		t.Fatal(err)
+	}
+	revision, err := f.store.BeginClusterCapacityObservation(t.Context(), "org", "cloud", r.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resources := cloudinfra.CapacityResources{Servers: inventoryNumber(1), CPUMillis: inventoryNumber(2000), MemoryBytes: inventoryNumber(1 << 30), StorageBytes: inventoryNumber(10_000_000_000)}
+	snapshot := cloudinfra.ClusterCapacitySnapshot{ResourceID: r.ID, Provider: r.Provider, AccountID: r.AccountID, Ref: ref, ObservationRevision: revision, CheckedAt: time.Now().UTC(), Complete: true, Nodes: []cloudinfra.ClusterNodeCapacity{{ExternalVMID: vm, NodeUID: "uid", PoolID: "node-pool", Ready: true, Provisioned: resources, Allocatable: cloudinfra.ClusterResourceMetrics{CPUMillis: inventoryNumber(1500), MemoryBytes: inventoryNumber(1 << 30), EphemeralStorageBytes: inventoryNumber(10_000_000_000)}, GPUKinds: map[string]int64{"nvidia.com/gpu": 1}}}}
+	if err = f.store.SaveClusterCapacity(t.Context(), r, snapshot); err != nil {
+		t.Fatal(err)
+	}
+	return r
+}
+func TestClusterCapacityInventoryPreservesServerAccounting(t *testing.T) {
+	f := ledgerFixture(t)
+	server, record := ledgerHost(t, f, "shared", 2000)
+	server.RuntimeConnectionID = "runtime-shared"
+	if err := f.connections.CreateConnection(t.Context(), &connections.Connection{ID: server.RuntimeConnectionID, OrgID: "org", Cloud: "server", Name: "runtime-shared", Account: "runtime-shared", Status: "ready", Details: map[string]string{"docker_id": "runtime-shared"}, CreatedAt: time.Now(), UpdatedAt: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	server.Health = cloudinfra.RuntimeHealth{DockerID: "runtime-shared", EffectiveCPUMillis: 1000, EffectiveMemoryBytes: 1 << 30, GPURuntime: provider.GPUStatusNone, CheckedAt: time.Now()}
+	if err := f.store.SaveServer(t.Context(), server); err != nil {
+		t.Fatal(err)
+	}
+	record.ServerStateRevision = server.StateRevision
+	record.GPUs = inventoryNumber(0)
+	record.Observation = &cloudinfra.CapacityObservation{CPUMillis: inventoryNumber(1000), MemoryBytes: inventoryNumber(1 << 30), StorageBytes: inventoryNumber(10_000_000_000), FreeStorageBytes: inventoryNumber(8_000_000_000), CheckedAt: time.Now()}
+	pool := &cloudinfra.Pool{ID: "shared-pool", OrgID: "org", CloudID: "cloud", Revision: 1, Members: []cloudinfra.PoolMember{{ServerID: server.ID, CPUMillis: 800, MemoryBytes: 1 << 30}}}
+	if err := f.store.SavePool(t.Context(), pool, 0); err != nil {
+		t.Fatal(err)
+	}
+	policy, err := f.store.GetCapacityPolicy(t.Context(), "org", "cloud")
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy.Revision++
+	policy.Pools = []cloudinfra.PoolExpansionPolicy{{PoolID: pool.ID, MaxServers: 4, SystemReserve: cloudinfra.ResourceVector{CPUMillis: 200, MemoryBytes: 128 << 20}}}
+	if err = f.store.SaveCapacityPolicy(t.Context(), policy, 1); err != nil {
+		t.Fatal(err)
+	}
+	ledgerSave(t, f, []cloudinfra.CapacityRecord{record}, nil)
+	clusterCapacityInfraSnapshot(t, f, server.ResourceID)
+	usage, err := f.store.GetCapacityUsage(t.Context(), "org", "cloud")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if usage.Provisioned.Servers == nil || *usage.Provisioned.Servers != 1 || *usage.Provisioned.CPUMillis != 2000 || usage.Observed.CPUMillis == nil || *usage.Observed.CPUMillis != 1000 || *usage.SystemReserve.CPUMillis != 200 || *usage.Allocatable.CPUMillis != 600 {
+		t.Fatalf("independent server accounting lost: %+v", usage)
+	}
+	if len(usage.Records) != 1 || usage.Records[0].ClusterNode == nil || usage.Records[0].ClusterNode.Allocatable.CPUMillis == nil || *usage.Records[0].ClusterNode.Allocatable.CPUMillis != 1500 {
+		t.Fatal("cluster facts lost or VM duplicated")
+	}
+}
+func TestClusterCapacityInventoryGPUAdmission(t *testing.T) {
+	for _, overlap := range []bool{true, false} {
+		t.Run(fmt.Sprint(overlap), func(t *testing.T) {
+			f := gpuCeilingFixture(t)
+			vm := "h100-host"
+			if !overlap {
+				vm = "cluster-only"
+			}
+			clusterCapacityInfraSnapshot(t, f, vm)
+			usage, err := f.store.GetCapacityUsage(t.Context(), "org", "cloud")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(usage.GPUs) != 1 || usage.GPUs[0].Kind != "nvidia-h100-80gb" {
+				t.Fatal("hardware kind fabricated or lost", usage.GPUs)
+			}
+			if overlap {
+				if usage.GPUs[0].Provisioned == nil || *usage.GPUs[0].Provisioned != 1 {
+					t.Fatal("known physical GPU count lost", usage.GPUs)
+				}
+			} else {
+				if usage.GPUs[0].Provisioned != nil || usage.Observed.CPUMillis != nil || usage.ObservedStorageBytes != nil {
+					t.Fatal("cluster-only unmeasured GPU or usage became known", usage)
+				}
+			}
+			block := ensureBlock(t, f, h100Demand(f, t, "cluster"))
+			want := "hard_limit"
+			if !overlap {
+				want = "stale_inventory"
+			}
+			if block.Reason != want || block.Resource != "gpus:nvidia-h100-80gb" {
+				t.Fatalf("GPU ceiling bypass: %+v", block)
+			}
+		})
+	}
+}
+
+type clusterCapacityDriftReader struct {
+	provider.ClusterReader
+	observation provider.ClusterObservation
+	err         error
+}
+
+func (r clusterCapacityDriftReader) GetCluster(context.Context, provider.AccountAccess, provider.ClusterRef) (provider.ClusterObservation, error) {
+	return r.observation, r.err
+}
+func TestClusterCapacityInventoryDriftInvalidatesAdmission(t *testing.T) {
+	for _, state := range []string{"missing", "identity_changed", "benign"} {
+		t.Run(state, func(t *testing.T) {
+			f := ledgerFixture(t)
+			policy, err := f.store.GetCapacityPolicy(t.Context(), "org", "cloud")
+			if err != nil {
+				t.Fatal(err)
+			}
+			policy.Revision++
+			policy.Limits.CPUMillis = 10000
+			if err = f.store.SaveCapacityPolicy(t.Context(), policy, 1); err != nil {
+				t.Fatal(err)
+			}
+			r := clusterCapacityInfraSnapshot(t, f, "cluster-only")
+			initialUsage, initialErr := f.store.GetCapacityUsage(t.Context(), "org", "cloud")
+			if initialErr != nil || initialUsage.Observed.CPUMillis != nil || initialUsage.Observed.MemoryBytes != nil || initialUsage.ObservedStorageBytes != nil {
+				t.Fatal("cluster-only unmeasured observation became zero", initialErr)
+			}
+			nextRevision, issueErr := f.store.BeginClusterCapacityObservation(t.Context(), "org", "cloud", r.ID)
+			if issueErr != nil {
+				t.Fatal(issueErr)
+			}
+			observation := *r.Observation
+			readErr := error(nil)
+			switch state {
+			case "missing":
+				readErr = provider.ErrInfrastructureNotFound
+			case "identity_changed":
+				observation.Ref.Incarnation = "replacement"
+			case "benign":
+				observation.Version = "new-observed-version"
+			}
+			if err = f.svc.Adapters.RegisterCluster("digitalocean", clusterCapacityDriftReader{observation: observation, err: readErr}, provider.ClusterDiscovery); err != nil {
+				t.Fatal(err)
+			}
+			f.svc.Clusters = f.store
+			f.svc.ManagedClusters.Enabled = true
+			f.svc.Authz = enrollmentServiceAuth{}
+			current, err := f.svc.ObserveClusterDrift(t.Context(), f.p, "cloud", r.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			usage, err := f.store.GetCapacityUsage(t.Context(), "org", "cloud")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if state == "benign" {
+				if !usage.Fresh || usage.Provisioned.Servers == nil {
+					t.Fatal("benign observation invalidated physical facts")
+				}
+				return
+			}
+			if current.Status != state || usage.Fresh || usage.Provisioned.Servers != nil {
+				t.Fatal("known missing/replaced cluster remained usable", current.Status, usage)
+			}
+			op := ledgerPreview(t, f)
+			err = f.store.Accept(t.Context(), op)
+			var blocked *cloudinfra.CapacityAdmissionError
+			if !errors.As(err, &blocked) || blocked.Block.Reason != "stale_inventory" || blocked.Block.Resource != "inventory" {
+				t.Fatalf("shared admission accepted invalid cluster: %v", err)
+			}
+			snapshot := cloudinfra.ClusterCapacitySnapshot{ResourceID: current.ID, Provider: current.Provider, AccountID: current.AccountID, Ref: current.Observation.Ref, ObservationRevision: nextRevision, CheckedAt: time.Now(), Complete: true}
+			if saveErr := f.store.SaveClusterCapacity(t.Context(), current, snapshot); !errors.Is(saveErr, cloudinfra.ErrConflict) {
+				t.Fatal("save did not fence invalid identity", saveErr)
+			}
+			if _, err = f.svc.ObserveClusterCapacity(t.Context(), f.p, "cloud", r.ID); !errors.Is(err, cloudinfra.ErrConflict) {
+				t.Fatal("explicit observation did not fence invalid identity", err)
+			}
+		})
 	}
 }

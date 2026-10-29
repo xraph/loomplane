@@ -700,6 +700,6 @@ func capacityInventoryIncomplete(ctx context.Context, tx driver.Tx, org, cloud s
  AND coalesce(o.body->>'absence_confirmed_at','') NOT IN ('','0001-01-01T00:00:00Z'))
  ) OR EXISTS(SELECT 1 FROM loomplane_managed_resources r LEFT JOIN loomplane_cluster_capacity_inventory c ON c.org_id=r.org_id AND c.resource_id=r.id
  WHERE r.org_id=$1 AND r.cloud_id=$2 AND r.deleted_at IS NULL AND r.kind='cluster'
- AND (c.body IS NULL OR NOT c.complete OR c.checked_at<now()-interval '2 minutes' OR c.checked_at>now()))`, org, cloud).Scan(&missing)
+ AND (r.body->>'status' IN ('missing','identity_changed') OR c.body IS NULL OR NOT c.complete OR c.checked_at<now()-interval '2 minutes' OR c.checked_at>now()))`, org, cloud).Scan(&missing)
 	return missing, err
 }

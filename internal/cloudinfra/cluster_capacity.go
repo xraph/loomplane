@@ -418,8 +418,14 @@ func addClusterRequests(out, values corev1.ResourceList) {
 }
 
 func freshCapacityRecord(r CapacityRecord, now time.Time) bool {
-	if r.Kind == "cluster_node" || r.Kind == "cluster_inventory" {
-		return r.ClusterComplete && !r.CheckedAt.IsZero() && !r.CheckedAt.After(now) && now.Sub(r.CheckedAt) <= ClusterCapacityFreshness
+	if r.ClusterResourceID != "" || r.Kind == "cluster_node" || r.Kind == "cluster_inventory" {
+		checked := r.CheckedAt
+		if r.ClusterCheckedAt != nil {
+			checked = *r.ClusterCheckedAt
+		}
+		if !r.ClusterComplete || checked.IsZero() || checked.After(now) || now.Sub(checked) > ClusterCapacityFreshness {
+			return false
+		}
 	}
 	return freshCapacity(r.CheckedAt, now)
 }
@@ -431,13 +437,24 @@ func deduplicateClusterCapacity(servers, clusters []CapacityRecord) []CapacityRe
 	}
 	for _, r := range clusters {
 		if i, ok := index[recordKey(r)]; ok {
-			if out[i].ClusterResourceID != "" && out[i].ClusterResourceID != r.ClusterResourceID {
+			previous := out[i]
+			if previous.ClusterResourceID != "" && previous.ClusterResourceID != r.ClusterResourceID {
 				r.ClusterComplete = false
 				r.Resources = CapacityResources{}
+				r.ClusterConditions = append(r.ClusterConditions, provider.ClusterCondition{Type: "capacity", Status: "unknown", Reason: "multiple_cluster_mapping"})
 			}
-			r.ServerID = out[i].ServerID
-			r.ServerStateRevision = out[i].ServerStateRevision
-			out[i] = r
+			if previous.Kind == "server" {
+				// Keep the daemon's independent measurements, pool accounting and physical GPU facts.
+
+				previous.ClusterResourceID = r.ClusterResourceID
+				previous.ClusterNode = r.ClusterNode
+				previous.ClusterComplete = r.ClusterComplete
+				previous.ClusterCheckedAt = &r.CheckedAt
+				previous.ClusterConditions = r.ClusterConditions
+				out[i] = previous
+			} else {
+				out[i] = r
+			}
 		} else {
 			index[recordKey(r)] = len(out)
 			out = append(out, r)
@@ -584,4 +601,8 @@ func clusterStorageFacts(out *ClusterCapacitySnapshot, inventory kubernetes.Capa
 		out.StorageClasses = append(out.StorageClasses, c)
 	}
 	return nil
+}
+
+func clusterCapacityIdentityInvalid(r *ManagedResource) bool {
+	return r == nil || r.DeletedAt != nil || r.Status == "missing" || r.Status == "identity_changed"
 }

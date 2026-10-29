@@ -356,12 +356,12 @@ func recordGPUsValid(r CapacityRecord) bool {
 }
 
 // inventoryGPUs counts the GPUs of each kind on the Cloud's inventoried
-// servers, once per server. known is false when any server's count is unknown.
+// VMs, once per physical resource. Unknown hardware kinds keep ceilings blocked.
 func inventoryGPUs(records []CapacityRecord) (counts map[string]int64, known bool, err error) {
 	counts, known = map[string]int64{}, true
 	seen := map[string]bool{}
 	for _, r := range records {
-		if r.Kind != "server" {
+		if r.Kind != "server" && r.Kind != "cluster_node" {
 			continue
 		}
 		key := r.ServerID

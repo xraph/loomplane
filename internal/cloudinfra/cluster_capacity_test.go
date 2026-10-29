@@ -52,7 +52,7 @@ func TestClusterCapacityDeduplicatesDroplets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if *usage.Provisioned.Servers != 1 || *usage.Allocatable.CPUMillis != 2000 {
+	if *usage.Provisioned.Servers != 1 || *usage.Records[0].ClusterNode.Allocatable.CPUMillis != 2000 {
 		t.Fatalf("namespace duplication: %+v", usage)
 	}
 	if *snapshot.Nodes[0].Requests.CPUMillis != 200 {
@@ -202,5 +202,31 @@ func TestClusterCapacityPodRequestsAccounting(t *testing.T) {
 	requests := snapshot.Nodes[0].Requests
 	if !snapshot.Complete || *requests.CPUMillis != 550 || *requests.MemoryBytes != 65<<20 || *requests.Pods != 1 {
 		t.Fatalf("init or overhead requests lost: %+v", requests)
+	}
+}
+
+func TestClusterCapacityIndependentServerFreshness(t *testing.T) {
+	now := time.Now().UTC()
+	server := CapacityRecord{Kind: "server", Provider: "digitalocean", AccountID: "a", ResourceID: "server:42", ServerID: "daemon", CheckedAt: now, Observation: &CapacityObservation{CheckedAt: now, CPUMillis: number(1000)}, GPUKind: "nvidia-l4", GPUs: number(1)}
+	cluster := CapacityRecord{Kind: "cluster_node", Provider: "digitalocean", AccountID: "a", ResourceID: "server:42", ClusterResourceID: "cluster", ClusterComplete: true, CheckedAt: now.Add(-3 * time.Minute)}
+	joined := deduplicateClusterCapacity([]CapacityRecord{server}, []CapacityRecord{cluster})[0]
+	if freshCapacityRecord(joined, now) {
+		t.Fatal("new server fact renewed stale cluster inventory")
+	}
+	server.CheckedAt = now.Add(-6 * time.Minute)
+	cluster.CheckedAt = now
+	joined = deduplicateClusterCapacity([]CapacityRecord{server}, []CapacityRecord{cluster})[0]
+	if freshCapacityRecord(joined, now) {
+		t.Fatal("new cluster fact renewed stale server/GPU inventory")
+	}
+	if joined.Observation != server.Observation || joined.GPUKind != server.GPUKind || joined.GPUs != server.GPUs {
+		t.Fatal("independent server facts replaced")
+	}
+	server.CheckedAt = now
+	server.Observation.CheckedAt = now.Add(-6 * time.Minute)
+	joined = deduplicateClusterCapacity([]CapacityRecord{server}, []CapacityRecord{cluster})[0]
+	usage, err := summarizeCapacity([]CapacityRecord{joined}, nil, CapacityPolicy{}, now)
+	if err != nil || usage.Observed.CPUMillis != nil || usage.Fresh {
+		t.Fatal("cluster observation renewed a stale daemon measurement", err)
 	}
 }

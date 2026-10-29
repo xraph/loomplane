@@ -35,7 +35,7 @@ func (s *Service) ObserveClusterCapacity(ctx context.Context, p security.Princip
 	if err != nil {
 		return nil, err
 	}
-	if r.Kind != "cluster" || r.CloudID != cloud || r.DeletedAt != nil || r.Observation == nil {
+	if r.Kind != "cluster" || r.CloudID != cloud || clusterCapacityIdentityInvalid(r) || r.Observation == nil {
 		return nil, ErrConflict
 	}
 	reader, access, err := s.clusterAccount(ctx, p, r.ConnectionID, provider.ClusterCapacityObservation)
@@ -108,7 +108,7 @@ func (s *PgStore) BeginClusterCapacityObservation(ctx context.Context, org, clou
 		return 0, checkErr
 	}
 	var revision int64
-	err = tx.QueryRow(ctx, `INSERT INTO loomplane_cluster_capacity_inventory(org_id,cloud_id,resource_id,issued_revision) SELECT org_id,cloud_id,id,1 FROM loomplane_managed_resources WHERE org_id=$1 AND cloud_id=$2 AND id=$3 AND kind='cluster' AND deleted_at IS NULL ON CONFLICT(org_id,resource_id) DO UPDATE SET issued_revision=loomplane_cluster_capacity_inventory.issued_revision+1 WHERE loomplane_cluster_capacity_inventory.issued_revision<9223372036854775807 RETURNING issued_revision`, org, cloud, resource).Scan(&revision)
+	err = tx.QueryRow(ctx, `INSERT INTO loomplane_cluster_capacity_inventory(org_id,cloud_id,resource_id,issued_revision) SELECT org_id,cloud_id,id,1 FROM loomplane_managed_resources WHERE org_id=$1 AND cloud_id=$2 AND id=$3 AND kind='cluster' AND deleted_at IS NULL AND coalesce(body->>'status','') NOT IN ('missing','identity_changed') ON CONFLICT(org_id,resource_id) DO UPDATE SET issued_revision=loomplane_cluster_capacity_inventory.issued_revision+1 WHERE loomplane_cluster_capacity_inventory.issued_revision<9223372036854775807 RETURNING issued_revision`, org, cloud, resource).Scan(&revision)
 	if err != nil {
 		return 0, storeError(err)
 	}
@@ -156,7 +156,7 @@ func (s *PgStore) SaveClusterCapacity(ctx context.Context, r *ManagedResource, s
 	if err != nil {
 		return err
 	}
-	if current.DeletedAt != nil || current.Revision != r.Revision || retirementResourceFingerprint(current) != retirementResourceFingerprint(r) {
+	if clusterCapacityIdentityInvalid(r) || clusterCapacityIdentityInvalid(current) || current.Revision != r.Revision || retirementResourceFingerprint(current) != retirementResourceFingerprint(r) {
 		return ErrConflict
 	}
 	snapshot.ResourceFingerprint = retirementResourceFingerprint(r)
@@ -203,6 +203,10 @@ func clusterCapacityRecordsTx(ctx context.Context, tx driver.Tx, org, cloud stri
 			snapshot.Complete = false
 			snapshot.Conditions = append(snapshot.Conditions, provider.ClusterCondition{Type: "capacity", Status: "unknown", Reason: "resource_trust_changed"})
 		}
+		if clusterCapacityIdentityInvalid(&current) {
+			snapshot.Complete = false
+			snapshot.Conditions = append(snapshot.Conditions, provider.ClusterCondition{Type: "capacity", Status: "unknown", Reason: "resource_" + current.Status})
+		}
 		records = append(records, clusterCapacityRecords(snapshot)...)
 	}
 	return records, rows.Err()
@@ -210,10 +214,10 @@ func clusterCapacityRecordsTx(ctx context.Context, tx driver.Tx, org, cloud stri
 func clusterCapacityRecords(snapshot ClusterCapacitySnapshot) []CapacityRecord {
 	records := make([]CapacityRecord, 0, len(snapshot.Nodes)+1)
 	for _, node := range snapshot.Nodes {
-		records = append(records, CapacityRecord{Kind: "cluster_node", Provider: snapshot.Provider, AccountID: snapshot.AccountID, ResourceID: "server:" + node.ExternalVMID, Resources: node.Provisioned, CheckedAt: snapshot.CheckedAt, ClusterResourceID: snapshot.ResourceID, ClusterNode: &node, ClusterConditions: snapshot.Conditions, ClusterComplete: snapshot.Complete})
+		records = append(records, CapacityRecord{Kind: "cluster_node", Provider: snapshot.Provider, AccountID: snapshot.AccountID, ResourceID: "server:" + node.ExternalVMID, Resources: node.Provisioned, CheckedAt: snapshot.CheckedAt, ClusterResourceID: snapshot.ResourceID, ClusterNode: &node, ClusterCheckedAt: &snapshot.CheckedAt, ClusterConditions: snapshot.Conditions, ClusterComplete: snapshot.Complete})
 	}
 	if !snapshot.Complete || len(snapshot.Nodes) == 0 {
-		records = append(records, CapacityRecord{Kind: "cluster_inventory", Provider: snapshot.Provider, AccountID: snapshot.AccountID, ResourceID: "cluster:" + snapshot.ResourceID, CheckedAt: snapshot.CheckedAt, ClusterResourceID: snapshot.ResourceID, ClusterConditions: snapshot.Conditions, ClusterComplete: snapshot.Complete, Resources: capacityResources(ResourceVector{})})
+		records = append(records, CapacityRecord{Kind: "cluster_inventory", Provider: snapshot.Provider, AccountID: snapshot.AccountID, ResourceID: "cluster:" + snapshot.ResourceID, CheckedAt: snapshot.CheckedAt, ClusterResourceID: snapshot.ResourceID, ClusterCheckedAt: &snapshot.CheckedAt, ClusterConditions: snapshot.Conditions, ClusterComplete: snapshot.Complete, Resources: capacityResources(ResourceVector{})})
 	}
 	return records
 }

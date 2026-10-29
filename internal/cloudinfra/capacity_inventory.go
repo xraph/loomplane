@@ -23,6 +23,7 @@ const CapacityFreshness = 5 * time.Minute
 // CapacityRecord identifies one attributed physical resource. Pool membership
 // does not create a second record. ResourceID includes the provider kind.
 type CapacityRecord struct {
+	ClusterCheckedAt    *time.Time                  `json:"cluster_checked_at,omitempty"`
 	ClusterConditions   []provider.ClusterCondition `json:"cluster_conditions,omitempty"`
 	ClusterResourceID   string                      `json:"cluster_resource_id,omitempty"`
 	ClusterNode         *ClusterNodeCapacity        `json:"cluster_node,omitempty"`
@@ -486,6 +487,7 @@ func summarizeCapacity(records []CapacityRecord, pools []*Pool, policy CapacityP
 			out.Provisioned = CapacityResources{}
 		}
 		if r.Kind == "cluster_node" {
+			out.Observed = CapacityResources{}
 			if !freshCapacityRecord(r, now) || r.ClusterNode == nil {
 				out.Fresh = false
 				out.Allocatable = CapacityResources{}
