@@ -2551,6 +2551,7 @@ spec:
         args:
         - --port=9120
         - --log-level=info
+        - --lb-class=loomplane.io/metallb
         env:
         - name: METALLB_NODE_NAME
           valueFrom:
@@ -2668,6 +2669,7 @@ spec:
         args:
         - --port=9120
         - --log-level=info
+        - --lb-class=loomplane.io/metallb
         - --webhook-mode=enabled
         env:
         - name: METALLB_POD_NAME

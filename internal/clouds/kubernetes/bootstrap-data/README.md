@@ -45,9 +45,14 @@ helm template loomplane-longhorn longhorn --repo https://charts.longhorn.io \
 
 helm template loomplane-metallb metallb --repo https://metallb.github.io/metallb \
   --version 0.16.1 --namespace loomplane-system --include-crds \
-  --set frrk8s.enabled=false --set speaker.frr.enabled=false
+  --set frrk8s.enabled=false --set speaker.frr.enabled=false \
+  --set loadBalancerClass=loomplane.io/metallb
 ```
 
 Keep Longhorn's post-upgrade and uninstall Jobs in their separate files. They run only through the corresponding maintenance action. Remove `--force` from the uninstall command. Its volume dependency checks must pass before the deletion confirmation setting is enabled. The Longhorn chart digest is `sha256:e57f010d2a8bcf0da5b8b03ffecf49c5bc35ddc2663588ce8f22b7567b6133ed`; MetalLB's is `sha256:fb06bb584fcb7856f15733b2a6a2aff5b61b5c350687e341c163ae24a5938adc`.
 
 For local-path, start with the release's `deploy/local-path-storage.yaml`. Move it to `loomplane-system`, prefix resource names with `loomplane-`, use `/opt/loomplane-local-path`, and create `lp-local-retained` with a Retain policy. Pass the matching configmap name, service account, provisioner name (`loomplane.io/local-path`) and pinned helper image explicitly. Pin every controller, helper and storage engine image to its multi-platform digest after rendering.
+
+MetalLB uses `loomplane.io/metallb` on its controller, speakers and ingress Service so an existing cloud load-balancer controller does not compete for the same Service. When you upgrade a classless installation, ingress pauses while its old provider releases the Service. The migration keeps the ClusterIP and resumes from its saved annotation. Generated address pools, advertisements and retained Longhorn storage classes participate in bundle upgrades too.
+
+Create the retained `lp-longhorn-static` class before the Longhorn controllers and set `default-longhorn-static-storage-class` to that name. This keeps the static class under the same ownership and removal checks as the rest of the installation. Existing unowned classes remain untouched.

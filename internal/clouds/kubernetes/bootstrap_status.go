@@ -55,6 +55,9 @@ func (c *Client) discoverManagedSetup(ctx context.Context, out *Result) error {
 		}
 		if out.Details["registry_storage"] == "longhorn" {
 			expected = append(expected, "longhorn-driver-deployer")
+			if err := c.discoverLonghorn(ctx, missing); err != nil {
+				return err
+			}
 		}
 		if out.Details["registry_storage"] == "longhorn" || out.Details["registry_network"] == "metallb" {
 			sets, listErr := c.Kube.AppsV1().DaemonSets(bootstrapNamespace).List(ctx, metav1.ListOptions{LabelSelector: bootstrapOwner})

@@ -350,18 +350,30 @@ func (c *Client) metallbSetup(ctx context.Context, owner string, ingress []*unst
 		&unstructured.Unstructured{Object: map[string]any{"apiVersion": "metallb.io/v1beta1", "kind": "IPAddressPool", "metadata": meta("loomplane-registry"), "spec": map[string]any{"addresses": values, "autoAssign": false}}},
 		&unstructured.Unstructured{Object: map[string]any{"apiVersion": "metallb.io/v1beta1", "kind": "L2Advertisement", "metadata": meta("loomplane-registry"), "spec": map[string]any{"ipAddressPools": []any{"loomplane-registry"}}}},
 	)
-	for _, o := range ingress {
-		if o.GetKind() == "Service" {
-			annotations := o.GetAnnotations()
-			if annotations == nil {
-				annotations = map[string]string{}
-			}
-			annotations["metallb.io/address-pool"] = "loomplane-registry"
-			o.SetAnnotations(annotations)
-		}
+	if err := configureMetalLBIngress(ingress); err != nil {
+		return nil, err
 	}
 	return objects, nil
 }
+
+func configureMetalLBIngress(objects []*unstructured.Unstructured) error {
+	for _, object := range objects {
+		if object.GetKind() != "Service" {
+			continue
+		}
+		annotations := object.GetAnnotations()
+		if annotations == nil {
+			annotations = map[string]string{}
+		}
+		annotations["metallb.io/address-pool"] = "loomplane-registry"
+		object.SetAnnotations(annotations)
+		if err := unstructured.SetNestedField(object.Object, "loomplane.io/metallb", "spec", "loadBalancerClass"); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func poolContains(pool string, ip netip.Addr) bool {
 	if prefix, err := netip.ParsePrefix(pool); err == nil {
 		return prefix.Contains(ip)

@@ -33,7 +33,7 @@ const bootstrapIngress = "loomplane"
 //go:embed bootstrap-data/*
 var bootstrapData embed.FS
 
-var bootstrapVersions = map[string]string{"longhorn-uninstall.yaml": "longhorn-v1.13.0-r1", "longhorn-post-upgrade.yaml": "longhorn-v1.13.0-r1", "cert-manager.yaml": "cert-manager-v1.21.3-r1", "traefik.yaml": "traefik-42.1.3-r1", "local-path.yaml": "local-path-v0.0.37-r1", "longhorn.yaml": "longhorn-v1.13.0-r1", "metallb.yaml": "metallb-v0.16.1-r1"}
+var bootstrapVersions = map[string]string{"longhorn-uninstall.yaml": "longhorn-v1.13.0-r1", "longhorn-post-upgrade.yaml": "longhorn-v1.13.0-r1", "cert-manager.yaml": "cert-manager-v1.21.3-r1", "traefik.yaml": "traefik-42.1.3-r1", "local-path.yaml": "local-path-v0.0.37-r1", "longhorn.yaml": "longhorn-v1.13.0-r2", "metallb.yaml": "metallb-v0.16.1-r2"}
 
 var bootstrapResources = map[string]schema.GroupVersionResource{
 	"Job":                            {Group: "batch", Version: "v1", Resource: "jobs"},

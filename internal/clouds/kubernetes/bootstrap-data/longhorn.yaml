@@ -1,3 +1,14 @@
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: lp-longhorn-static
+provisioner: driver.longhorn.io
+allowVolumeExpansion: true
+reclaimPolicy: Retain
+volumeBindingMode: Immediate
+parameters:
+  staleReplicaTimeout: "30"
+---
 apiVersion: scheduling.k8s.io/v1
 kind: PriorityClass
 metadata:
@@ -244,6 +255,8 @@ metadata:
     app.kubernetes.io/version: v1.13.0
 data:
   default-setting.yaml: 'default-replica-count: "3"
+
+    default-longhorn-static-storage-class: "lp-longhorn-static"
 
     priority-class: "longhorn-critical"
 

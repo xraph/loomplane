@@ -36,12 +36,26 @@ func (c *Client) UpgradeManagedBootstrap(ctx context.Context) error {
 		if loadErr != nil {
 			return loadErr
 		}
+		switch file {
+		case "metallb.yaml":
+			objects, loadErr = c.metallbSetup(ctx, string(system.UID), nil)
+		case "longhorn.yaml":
+			_, objects, loadErr = c.setupStorage(ctx, string(system.UID))
+		}
+		if loadErr != nil {
+			return loadErr
+		}
 		if file == "traefik.yaml" && c.Config.Details["registry_network"] == "node" {
 			node, address, nodeErr := c.nodeIngress(ctx)
 			if nodeErr != nil {
 				return nodeErr
 			}
 			if configureErr := configureNodeIngress(objects, node, address); configureErr != nil {
+				return configureErr
+			}
+		}
+		if file == "traefik.yaml" && c.Config.Details["registry_network"] == "metallb" {
+			if configureErr := configureMetalLBIngress(objects); configureErr != nil {
 				return configureErr
 			}
 		}
@@ -61,7 +75,18 @@ func (c *Client) UpgradeManagedBootstrap(ctx context.Context) error {
 			}
 			previous := old.GetAnnotations()[bootstrapBundle]
 			target := want.GetAnnotations()[bootstrapBundle]
-			if previous == target {
+			classChanged := false
+			if want.GetKind() == "Service" && c.Config.Details["registry_network"] == "metallb" && file == "traefik.yaml" {
+				oldClass, _, classErr := unstructured.NestedString(old.Object, "spec", "loadBalancerClass")
+				if classErr != nil {
+					return classErr
+				}
+				if oldClass != "" && oldClass != "loomplane.io/metallb" {
+					return ErrOwned
+				}
+				classChanged = oldClass == ""
+			}
+			if previous == target && !classChanged {
 				continue
 			}
 			if !compatibleBootstrapUpgrade(previous, target) {
@@ -82,6 +107,11 @@ func (c *Client) UpgradeManagedBootstrap(ctx context.Context) error {
 		}
 	}
 	for _, object := range updates {
+		if object.GetKind() == "Service" && object.GetName() == "loomplane-ingress" && c.Config.Details["registry_network"] == "metallb" {
+			if migrationErr := c.prepareMetalLBClass(ctx, object); migrationErr != nil {
+				return migrationErr
+			}
+		}
 		if _, err = c.bootstrapAPI(object).Update(ctx, object, metav1.UpdateOptions{}); err != nil {
 			return err
 		}
@@ -215,5 +245,77 @@ func preserveBootstrapRuntime(want, old *unstructured.Unstructured) error {
 			return operationErr
 		}
 	}
+	return nil
+}
+
+// Kubernetes requires leaving LoadBalancer before assigning a class to an
+// existing classless Service. Keep its ClusterIP and wait for the old provider
+// to release its finalizer before enabling MetalLB. The annotation resumes the
+// transition after a restart without discarding another controller's cleanup.
+func (c *Client) prepareMetalLBClass(ctx context.Context, want *unstructured.Unstructured) error {
+	const marker = "loomplane.bootstrap.metallb-class"
+	api := c.bootstrapAPI(want)
+	current, err := api.Get(ctx, want.GetName(), metav1.GetOptions{})
+	if err != nil {
+		return err
+	}
+	if current.GetUID() != want.GetUID() || current.GetLabels()[bootstrapOwner] != want.GetLabels()[bootstrapOwner] || current.GetDeletionTimestamp() != nil {
+		return ErrOwned
+	}
+	class, _, err := unstructured.NestedString(current.Object, "spec", "loadBalancerClass")
+	if err != nil {
+		return err
+	}
+	if class == "loomplane.io/metallb" {
+		return nil
+	}
+	if class != "" || current.GetAnnotations()["loomplane.bootstrap.network"] != "metallb" {
+		return ErrOwned
+	}
+	kind, _, err := unstructured.NestedString(current.Object, "spec", "type")
+	if err != nil {
+		return err
+	}
+	if kind == "LoadBalancer" {
+		annotations := current.GetAnnotations()
+		annotations[marker] = "pending"
+		current.SetAnnotations(annotations)
+		if setErr := unstructured.SetNestedField(current.Object, "ClusterIP", "spec", "type"); setErr != nil {
+			return setErr
+		}
+		for _, field := range []string{"loadBalancerClass", "allocateLoadBalancerNodePorts", "healthCheckNodePort", "externalTrafficPolicy", "loadBalancerIP", "loadBalancerSourceRanges"} {
+			unstructured.RemoveNestedField(current.Object, "spec", field)
+		}
+		ports, _, portsErr := unstructured.NestedSlice(current.Object, "spec", "ports")
+		if portsErr != nil {
+			return portsErr
+		}
+		for _, item := range ports {
+			port, ok := item.(map[string]any)
+			if !ok {
+				return ErrInvalid
+			}
+			delete(port, "nodePort")
+		}
+		if setErr := unstructured.SetNestedSlice(current.Object, ports, "spec", "ports"); setErr != nil {
+			return setErr
+		}
+		if _, err = api.Update(ctx, current, metav1.UpdateOptions{}); err != nil {
+			return err
+		}
+		return ErrRegistryPending
+	}
+	if kind != "ClusterIP" || current.GetAnnotations()[marker] != "pending" {
+		return ErrOwned
+	}
+	if len(current.GetFinalizers()) != 0 {
+		return ErrRegistryPending
+	}
+	if mergeErr := preserveBootstrapRuntime(want, current); mergeErr != nil {
+		return mergeErr
+	}
+	annotations := want.GetAnnotations()
+	delete(annotations, marker)
+	want.SetAnnotations(annotations)
 	return nil
 }

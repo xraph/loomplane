@@ -23,6 +23,8 @@ Automatic setup creates a missing application namespace. You can reuse your exis
 | `registry_network=node` | Ingress on a node's ports 80 and 443 | `ingress_node` when several nodes qualify, plus firewall/NAT access to that node |
 | `registry_network=metallb` | MetalLB with an L2 address pool | An unused LAN range in `load_balancer_addresses`, as CIDRs or start-end ranges |
 
+Longhorn setup waits for its CSI driver and three storage nodes with healthy disks and host prerequisite checks. You can see missing packages, kernel modules and mount requirements in setup status. MetalLB uses a dedicated load-balancer class so it can coexist with another provider. Upgrading an older classless installation briefly pauses ingress while the previous provider releases the Service.
+
 The hostname alone is enough when the cluster already has suitable storage, public routing and a verified organization DNS zone connected to Loomplane. Bare clusters need the choices above because Loomplane cannot infer unused LAN addresses or install host packages. Recheck while controllers or an address are pending. `registry_setup=existing` skips installation. Connections with all three original placement settings keep that behavior unless you choose `automatic`. Retries repair missing owned resources without taking over foreign installations.
 
 DNS automation selects the most specific verified organization zone that contains your registry hostname. It publishes an A, AAAA or CNAME for the discovered ingress address and updates that record when the address changes. The zone's public TXT proof must still be present. Conflicting records are refused, and only the saved owned record can be removed. Use `registry_dns=manual` to manage DNS yourself.

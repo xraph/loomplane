@@ -143,6 +143,15 @@ func (c *Client) RemoveManagedBootstrap(ctx context.Context) error {
 		}
 		for i := range list.Items {
 			item := &list.Items[i]
+			if group == "metallb.io" {
+				derived, statusErr := c.ownedMetalLBStatus(ctx, item, owner)
+				if statusErr != nil {
+					return statusErr
+				}
+				if derived {
+					continue
+				}
+			}
 			if group == "metallb.io" && item.GetLabels()[bootstrapOwner] == owner && item.GetName() == "loomplane-registry" && (plural == "ipaddresspools" || plural == "l2advertisements") {
 				custom = append(custom, item)
 				continue
@@ -166,6 +175,7 @@ func (c *Client) RemoveManagedBootstrap(ctx context.Context) error {
 			if _, e = settings.Update(ctx, setting, metav1.UpdateOptions{}); e != nil {
 				return e
 			}
+			return ErrRegistryPending
 		}
 		if operationErr := c.runLonghornHook(ctx, owner, "uninstall"); operationErr != nil {
 			return operationErr
@@ -255,12 +265,18 @@ func (c *Client) runLonghornHook(ctx context.Context, owner, kind string) error 
 	if succeeded > 0 {
 		return nil
 	}
-	failed, _, failureErr := unstructured.NestedInt64(current.Object, "status", "failed")
+	conditions, _, failureErr := unstructured.NestedSlice(current.Object, "status", "conditions")
 	if failureErr != nil {
 		return failureErr
 	}
-	if failed > 0 {
-		return errors.New("longhorn lifecycle job failed; inspect its logs before retrying")
+	for _, raw := range conditions {
+		condition, ok := raw.(map[string]any)
+		if !ok {
+			return ErrInvalid
+		}
+		if condition["type"] == "Failed" && condition["status"] == "True" {
+			return errors.New("longhorn lifecycle job failed; inspect its logs before retrying")
+		}
 	}
 	return ErrRegistryPending
 }
