@@ -1,5 +1,5 @@
 # The Loomplane push gateway behind Caddy, for push.loomplane.com. Setup and
-# key rotation: https://docs.loomplane.com/docs/push-gateway
+# key rotation: https://docs.loomplane.com/docs/operations/push-notifications
 #
 # Put the secret files in ./secrets (or PUSH_GATEWAY_SECRETS_DIR):
 #   sealing-key, previous-sealing-key, fcm-service-account.json, apns-key.p8
@@ -40,6 +40,8 @@ services:
       PUSH_GATEWAY_APNS_KEY_FILE: ${PUSH_GATEWAY_APNS_KEY_ID:+/run/secrets/apns_key}
       PUSH_GATEWAY_APNS_KEY_ID: ${PUSH_GATEWAY_APNS_KEY_ID:-}
       PUSH_GATEWAY_APNS_TEAM_ID: ${PUSH_GATEWAY_APNS_TEAM_ID:-}
+      # Empty means the binary's default, com.loomplane.app.
+      PUSH_GATEWAY_APNS_BUNDLE_ID: ${PUSH_GATEWAY_APNS_BUNDLE_ID:-}
       # Sends per second per server key, and sends per minute per device.
       PUSH_GATEWAY_SERVER_RATE: ${PUSH_GATEWAY_SERVER_RATE:-50}
       PUSH_GATEWAY_HANDLE_RATE: ${PUSH_GATEWAY_HANDLE_RATE:-30}
