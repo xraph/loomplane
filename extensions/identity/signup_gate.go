@@ -217,12 +217,30 @@ func (e *Extension) waitlistApproved(ctx context.Context, email string) (bool, e
 // authsome's handler runs. authsome turns any error from a BeforeSignUp
 // hook into a 500, so the hook alone can't tell the browser why. The hook
 // still makes the same check inside the engine, for every other way in.
+//
+// authsome limits sign-ups per address on the route, which runs after this.
+// So signupLimit, the same limit on the same budget, runs first: a flood
+// from one address gets 429s before the gate looks anything up, rather than
+// holding its slots or probing for invitations. countedOnce keeps the
+// route's limiter from counting a sign-up the gate let through again.
 func (e *Extension) refuseSignUps(next forge.Handler) forge.Handler {
+	judge := e.judgeSignUp(next)
+	if e.signupLimit != nil {
+		judge = e.signupLimit(countedOnce(judge))
+	}
 	return func(c forge.Context) error {
 		r := c.Request()
 		if r.Method != http.MethodPost || path.Clean(r.URL.Path) != authsomeAPIPath+"/signup" {
 			return next(c)
 		}
+		return judge(c)
+	}
+}
+
+// judgeSignUp runs the gate on a sign-up and answers a refusal itself.
+func (e *Extension) judgeSignUp(next forge.Handler) forge.Handler {
+	return func(c forge.Context) error {
+		r := c.Request()
 		email, ok := peekEmail(r)
 		if !ok {
 			// authsome refuses a body without an email; the hook covers

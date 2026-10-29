@@ -44,6 +44,10 @@ type setupClient struct {
 	base   string
 	key    string
 	cookie *http.Cookie
+	// from, when set, is the address requests say they come from. The test
+	// server's peer is loopback, which authsome trusts as a proxy, so
+	// X-Forwarded-For decides the address its rate limits count.
+	from string
 }
 
 // send makes one request and returns the status, the body and the
@@ -64,6 +68,9 @@ func (c *setupClient) send(method, path string, body any) (int, []byte, []*http.
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Publishable-Key", c.key)
+	if c.from != "" {
+		req.Header.Set("X-Forwarded-For", c.from)
+	}
 	if c.cookie != nil {
 		req.AddCookie(c.cookie)
 	}

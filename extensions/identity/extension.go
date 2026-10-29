@@ -108,6 +108,9 @@ type Extension struct {
 	waitlist      *waitlist.Plugin
 	waitlistStore waitlist.Store
 	gate          *signupGate
+	// signupLimit is authsome's sign-up limit, which refuseSignUps runs
+	// ahead of the gate. Nil when rate limiting is off.
+	signupLimit forge.Middleware
 
 	// consoleBase is the console's base path, once the dashboard reports
 	// it (console.go).
@@ -281,6 +284,7 @@ func (e *Extension) mount(ctx context.Context) error {
 	r.Use(rateLimitScope)
 	r.Use(e.resetFence())
 	r.Use(e.sessionMiddleware()...)
+	e.signupLimit = e.engine.RateLimitMiddleware(e.engine.Config().RateLimit.SignUpLimit)
 	r.Use(e.refuseSignUps)
 	if err := api.New(e.engine, r).RegisterRoutes(r); err != nil {
 		return fmt.Errorf("authsome routes: %w", err)

@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -35,10 +36,16 @@ type refusal struct {
 }
 
 // signUp posts to authsome's own sign-up route, the way the sign-up form
-// does, and returns the status and the refusal when there is one.
+// does, and returns the status and the refusal when there is one. Unless c
+// names an address, each sign-up comes from one of its own, so authsome's
+// per-address limit (three a minute) never decides a test about the gate.
 func signUp(c *setupClient, email string) (int, refusal) {
 	c.t.Helper()
-	status, raw, _ := (&setupClient{t: c.t, base: c.base, key: c.key}).send(http.MethodPost, "/authsome/v1/signup",
+	from := c.from
+	if from == "" {
+		from = nextAddress()
+	}
+	status, raw, _ := (&setupClient{t: c.t, base: c.base, key: c.key, from: from}).send(http.MethodPost, "/authsome/v1/signup",
 		map[string]string{"email": email, "password": "Correct-horse-battery-9"})
 	var out refusal
 	if status >= 300 {
@@ -47,6 +54,14 @@ func signUp(c *setupClient, email string) (int, refusal) {
 		}
 	}
 	return status, out
+}
+
+var addresses atomic.Int32
+
+// nextAddress is a public address no other request in the run has used.
+func nextAddress() string {
+	n := addresses.Add(1)
+	return fmt.Sprintf("198.18.%d.%d", n/250%250, n%250+1)
 }
 
 // clientWaitlist is what authsome's client config, which its sign-up and
@@ -256,6 +271,12 @@ type postResult struct {
 // post sends a JSON POST without touching t, so it's safe off the test
 // goroutine.
 func post(ctx context.Context, hc *http.Client, url, key string, body any) postResult {
+	return postFrom(ctx, hc, url, key, "", body)
+}
+
+// postFrom is post from the address from, when it's set (see
+// setupClient.from).
+func postFrom(ctx context.Context, hc *http.Client, url, key, from string, body any) postResult {
 	raw, err := json.Marshal(body)
 	if err != nil {
 		return postResult{err: err}
@@ -266,6 +287,9 @@ func post(ctx context.Context, hc *http.Client, url, key string, body any) postR
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-Publishable-Key", key)
+	if from != "" {
+		req.Header.Set("X-Forwarded-For", from)
+	}
 	res, err := hc.Do(req)
 	if err != nil {
 		return postResult{err: err}
@@ -277,7 +301,9 @@ func post(ctx context.Context, hc *http.Client, url, key string, body any) postR
 
 // Each sign-up check holds a connection for the setup lock while it looks
 // things up on others. A burst of them, more than the pool holds, must
-// still finish, refused, and leave the pool serving everyone else.
+// still finish, refused, and leave the pool serving everyone else. Each
+// comes from an address of its own, as a distributed burst would, so
+// authsome's per-address limit doesn't turn them away first.
 func TestSignupGate_burstCantWedgeThePool(t *testing.T) {
 	cfg := config.Defaults()
 	cfg.Database.PoolSize = 4
@@ -292,8 +318,9 @@ func TestSignupGate_burstCantWedgeThePool(t *testing.T) {
 	results := make(chan postResult, burst)
 	start := time.Now()
 	for i := range burst {
+		from := nextAddress()
 		go func() {
-			results <- post(t.Context(), hc, c.base+"/authsome/v1/signup", c.key,
+			results <- postFrom(t.Context(), hc, c.base+"/authsome/v1/signup", c.key, from,
 				map[string]string{"email": fmt.Sprintf("bot%d@example.com", i), "password": "Correct-horse-battery-9"})
 		}()
 	}
@@ -318,5 +345,54 @@ func TestSignupGate_burstCantWedgeThePool(t *testing.T) {
 	c.get("/api/v1/session", &session)
 	if status, why := signUp(c, "grace@example.com"); status != http.StatusForbidden || why.Error != waitlistRefusal {
 		t.Fatalf("sign-up after the burst: %d %+v, want 403 %q", status, why, waitlistRefusal)
+	}
+}
+
+// authsome takes three sign-ups a minute from one address. The gate runs
+// in front of that route, so it counts against the same budget first: a
+// flood from one address gets 429s before the gate looks anything up, so
+// it can't hold the gate's few slots or probe for invitations, and a
+// sign-up from anywhere else is still judged.
+func TestSignupGate_floodIsRateLimited(t *testing.T) {
+	cfg := config.Defaults()
+	r, c := freshSetup(t, &cfg)
+	defer r.stop()
+	if code, body := c.setup(ada); code != http.StatusOK {
+		t.Fatalf("setup: %d %s", code, body)
+	}
+
+	flood := &setupClient{t: t, base: c.base, key: c.key, from: "203.0.113.7"}
+	var codes []int
+	for i := range 6 {
+		status, _, _ := flood.send(http.MethodPost, "/authsome/v1/signup",
+			map[string]string{"email": fmt.Sprintf("bot%d@example.com", i), "password": "Correct-horse-battery-9"})
+		codes = append(codes, status)
+	}
+	// The waitlist refuses the first three; the limit turns away the rest.
+	want := []int{http.StatusForbidden, http.StatusForbidden, http.StatusForbidden,
+		http.StatusTooManyRequests, http.StatusTooManyRequests, http.StatusTooManyRequests}
+	if !slices.Equal(codes, want) {
+		t.Fatalf("six sign-ups from one address: %v, want %v", codes, want)
+	}
+	other := &setupClient{t: t, base: c.base, key: c.key, from: "198.51.100.9"}
+	if status, why := signUp(other, "grace@example.com"); status != http.StatusForbidden || why.Type != "waitlist_required" {
+		t.Fatalf("a sign-up from another address during the flood: %d %+v, want 403 waitlist_required", status, why)
+	}
+
+	// A sign-up the gate lets through counts once, not once at the gate and
+	// again on authsome's route: three invited people can sign up from one
+	// address, and only a fourth sign-up is turned away.
+	office := &setupClient{t: t, base: c.base, key: c.key, from: "192.0.2.10"}
+	for i := range 3 {
+		email := fmt.Sprintf("colleague%d@example.com", i)
+		if status, raw, _ := c.send(http.MethodPost, "/api/v1/invitations", map[string]string{"email": email}); status != http.StatusCreated {
+			t.Fatalf("invite %s: %d %s", email, status, raw)
+		}
+		if status, why := signUp(office, email); status != http.StatusCreated {
+			t.Fatalf("invited sign-up %d from one address: %d %+v, want 201", i+1, status, why)
+		}
+	}
+	if status, _ := signUp(office, "mallory@example.com"); status != http.StatusTooManyRequests {
+		t.Fatalf("a fourth sign-up from one address: %d, want 429", status)
 	}
 }

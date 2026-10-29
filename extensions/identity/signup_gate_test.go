@@ -7,10 +7,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/xraph/authsome/account"
+	authmw "github.com/xraph/authsome/middleware"
+	"github.com/xraph/authsome/ratelimit"
 	"github.com/xraph/forge"
 )
 
@@ -210,6 +213,71 @@ func TestRefuseSignUps(t *testing.T) {
 	// A check that can't finish refuses here, without reaching authsome.
 	if code, body := post(`{"email":"broken@example.com"}`); code != http.StatusServiceUnavailable || strings.Contains(body, "broken@example.com") {
 		t.Fatalf("a check that failed: %d %s, want 503", code, body)
+	}
+}
+
+// The route's own limit, which authsome puts on its sign-up route, runs
+// after refuseSignUps. signupLimit runs the same limit on the same budget
+// first, so a flood from one address is throttled before the gate looks
+// anything up, and a sign-up the gate passes is counted once.
+func TestRefuseSignUps_rateLimitFirst(t *testing.T) {
+	var judged atomic.Int32
+	e := &Extension{BaseExtension: forge.NewBaseExtension(Name, "test", "test"), gate: &signupGate{
+		outsideSetup: noSetup,
+		slots:        make(chan struct{}, 1),
+		timeout:      time.Second,
+		pending:      func(context.Context) bool { return false },
+		waitlistOn:   func(context.Context) bool { judged.Add(1); return true },
+		approved:     func(context.Context, string) (bool, error) { return false, nil },
+		invited: func(_ context.Context, email string) (bool, error) {
+			return strings.HasSuffix(email, "@invited.example.com"), nil
+		},
+	}}
+	e.SetLogger(forge.NewNoopLogger())
+	const limit = 3
+	limiter := routeLimiter{Limiter: ratelimit.NewMemoryLimiter()}
+	cfg := authmw.RateLimitConfig{Limit: limit, Window: time.Minute}
+	e.signupLimit = authmw.RateLimit(limiter, cfg)
+	r := forge.NewRouter()
+	r.Use(rateLimitScope)
+	r.Use(e.refuseSignUps)
+	if err := r.POST(authsomeAPIPath+"/signup", func(c forge.Context) error {
+		return c.JSON(http.StatusCreated, map[string]bool{"ok": true})
+	}, forge.WithMiddleware(authmw.RateLimit(limiter, cfg))); err != nil {
+		t.Fatal(err)
+	}
+	post := func(from, email string) int {
+		w := httptest.NewRecorder()
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, authsomeAPIPath+"/signup", strings.NewReader(`{"email":"`+email+`"}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.RemoteAddr = from + ":1234"
+		r.Handler().ServeHTTP(w, req)
+		return w.Code
+	}
+
+	for i := range limit + 3 {
+		want := http.StatusForbidden
+		if i >= limit {
+			want = http.StatusTooManyRequests
+		}
+		if got := post("203.0.113.7", "bot@example.com"); got != want {
+			t.Fatalf("sign-up %d from one address: %d, want %d", i+1, got, want)
+		}
+	}
+	if n := judged.Load(); n != limit {
+		t.Fatalf("the gate judged %d sign-ups of a flood, want %d", n, limit)
+	}
+	if got := post("198.51.100.9", "grace@example.com"); got != http.StatusForbidden {
+		t.Fatalf("another address during the flood: %d, want 403", got)
+	}
+	// Counted once each, so all three fit the budget.
+	for i := range limit {
+		if got := post("192.0.2.10", "ada@invited.example.com"); got != http.StatusCreated {
+			t.Fatalf("invited sign-up %d from one address: %d, want 201", i+1, got)
+		}
+	}
+	if got := post("192.0.2.10", "ada@invited.example.com"); got != http.StatusTooManyRequests {
+		t.Fatalf("a sign-up past the limit: %d, want 429", got)
 	}
 }
 
