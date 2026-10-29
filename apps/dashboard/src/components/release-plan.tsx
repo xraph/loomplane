@@ -2,7 +2,7 @@
 // promotion comes from and how long that environment has run it, why a
 // rollback was asked for, which images are reused or built again, and
 // what a rollback leaves in place.
-import { DatabaseIcon } from "@phosphor-icons/react"
+import { DatabaseIcon } from "lucide-react"
 
 import { usePlansSoak } from "@/client/forge/loomplane/hooks"
 import type {
@@ -201,7 +201,7 @@ export function Leftovers({ leftovers }: { leftovers: Leftover[] }) {
                       toneClass.waiting.ink
                     )}
                   >
-                    <DatabaseIcon aria-hidden="true" />
+                    <DatabaseIcon />
                     Data
                   </Badge>
                 )}

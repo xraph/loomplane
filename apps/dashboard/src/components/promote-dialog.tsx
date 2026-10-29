@@ -2,7 +2,7 @@
 // as staging into production. It's a plan like any other, so nothing moves
 // until someone approves it, and Loomplane reuses the images the source
 // environment already runs wherever it can.
-import { ArrowRightIcon } from "@phosphor-icons/react"
+import { ArrowRightIcon } from "lucide-react"
 import { type FormEvent, useState } from "react"
 import { toast } from "sonner"
 

@@ -3,7 +3,7 @@ import { render, screen, within } from "@testing-library/react"
 import { afterEach, expect, it, vi } from "vitest"
 
 import { forgeClient } from "@/client/runtime"
-import { ReleaseWatchPanel } from "@/components/release-watch"
+import { hhmm, ReleaseWatchPanel } from "@/components/release-watch"
 
 vi.mock("@/lib/router", () => ({
   Link: ({
@@ -29,6 +29,9 @@ const thresholds = {
   min_requests: 200,
   p95_latency_ratio: 1.5,
 }
+
+// 14:15 in whatever zone the tests run in: the panel prints local time.
+const endsAt = new Date(2026, 9, 29, 14, 15).toISOString()
 
 const watch = (over: object) => ({
   id: "rw_1",
@@ -67,7 +70,7 @@ const watch = (over: object) => ({
   rollback_plan_id: "",
   rollback_approved_at: null,
   starts_at: new Date(2026, 9, 29, 14, 0).toISOString(),
-  ends_at: new Date(2026, 9, 29, 14, 15).toISOString(),
+  ends_at: endsAt,
   bound_at: new Date(2026, 9, 29, 14, 0).toISOString(),
   checked_at: null,
   settled_at: null,
@@ -95,7 +98,9 @@ function serve(body: object, status = 200) {
 
 it("shows a running watch with each service's verdict", async () => {
   serve(watch({}))
-  expect(await screen.findByText("Watching until 14:15")).toBeInTheDocument()
+  const until = `Watching until ${hhmm(Date.parse(endsAt))}`
+  expect(until).toBe("Watching until 14:15")
+  expect(await screen.findByText(until)).toBeInTheDocument()
   const services = screen.getByRole("list", { name: "Watched services" })
   const api = within(services).getByText("api").closest("li")!
   expect(api).toHaveTextContent("Passing")
@@ -151,6 +156,49 @@ it("shows a breach and the rollback it started", async () => {
   expect(
     screen.getByRole("link", { name: "Open the rollback" })
   ).toHaveAttribute("href", "/deployments/plan_rb")
+})
+
+it("says a superseded release wasn't judged to the end", async () => {
+  serve(
+    watch({
+      status: "superseded",
+      unwatched: [],
+      unverified: true,
+      settled_at: "2026-10-29T14:10:00Z",
+    })
+  )
+  expect(await screen.findByText("Superseded")).toBeInTheDocument()
+  expect(
+    screen.getByText(
+      "A newer release replaced this one before the watch finished, so it wasn't judged to the end."
+    )
+  ).toBeInTheDocument()
+  expect(screen.getByText("Unverified")).toBeInTheDocument()
+  expect(screen.queryByRole("alert")).not.toBeInTheDocument()
+})
+
+it("raises a rollback that failed", async () => {
+  serve(
+    watch({
+      status: "rollback_failed",
+      verdict: "fail",
+      reason: "the rollback deployment never started",
+      unwatched: [],
+      unverified: false,
+      rollback_plan_id: "plan_rb",
+      settled_at: "2026-10-29T15:10:00Z",
+    })
+  )
+  expect(await screen.findByText("Rollback failed")).toBeInTheDocument()
+  const alert = screen.getByRole("alert")
+  expect(alert).toHaveTextContent(
+    "This release breached its health checks, and the rollback failed. Check the rollback, then retry it or deploy a fix."
+  )
+  expect(alert).toHaveTextContent("the rollback deployment never started")
+  expect(
+    within(alert).getByRole("link", { name: "Open the rollback" })
+  ).toHaveAttribute("href", "/deployments/plan_rb")
+  expect(screen.queryByText("Unverified")).not.toBeInTheDocument()
 })
 
 it("shows nothing for a deployment with no watch", async () => {

@@ -1,7 +1,6 @@
 // One deployment, start to finish: the plan, the decision on it, and each
 // step it took. A run is named by its plan's ID, because a plan exists from
 // the moment someone asks for one and a deployment only once it's approved.
-import { ArrowCounterClockwiseIcon } from "@phosphor-icons/react"
 import {
   CheckIcon,
   ChevronRightIcon,
@@ -14,6 +13,7 @@ import {
   RefreshCwIcon,
   RotateCcwIcon,
   TriangleAlertIcon,
+  Undo2Icon,
   XIcon,
 } from "lucide-react"
 import { type ReactNode, useMemo, useState } from "react"
@@ -34,9 +34,6 @@ import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
 import { FailedDeploymentCleanup } from "@/components/failed-deployment-cleanup"
 import { ApprovalCard } from "@/components/approval"
 import { CanaryPanel } from "@/components/canary"
-import { ReleaseWatchPanel } from "@/components/release-watch"
-import { Artifacts, Leftovers, ReleaseKind } from "@/components/release-plan"
-import { RollbackDialog } from "@/components/rollback-dialog"
 import { DeploymentCapacityWait } from "@/components/deployment-capacity-wait"
 import { showsCanary } from "@/lib/canary"
 import { Page } from "@/components/page"
@@ -51,6 +48,9 @@ import {
   Thread,
   currentStep,
 } from "@/components/runs"
+import { Artifacts, Leftovers, ReleaseKind } from "@/components/release-plan"
+import { ReleaseWatchPanel } from "@/components/release-watch"
+import { RollbackDialog } from "@/components/rollback-dialog"
 import { ServiceAddress } from "@/components/service-address"
 import { SiteHeader } from "@/components/site-header"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -414,7 +414,7 @@ function Heading({ run, now }: { run: Run; now: number }) {
         {rollback && d && (
           <>
             <Button variant="outline" onClick={() => setRollingBack(true)}>
-              <ArrowCounterClockwiseIcon aria-hidden="true" />
+              <Undo2Icon />
               Roll back
             </Button>
             <RollbackDialog

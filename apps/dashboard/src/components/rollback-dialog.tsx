@@ -2,7 +2,7 @@
 // one. The rollback is a plan like any other, so it waits for someone to
 // approve it, and it never deletes, replaces or reverts a resource that
 // holds data, even one the release it undoes created.
-import { ArrowRightIcon } from "@phosphor-icons/react"
+import { ArrowRightIcon } from "lucide-react"
 import { type FormEvent, useState } from "react"
 import { toast } from "sonner"
 

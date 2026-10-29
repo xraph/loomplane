@@ -55,7 +55,7 @@ function isOpen(w: Watch): boolean {
 }
 
 // hhmm is a time of day as loomctl prints it: 24-hour, local.
-function hhmm(ts: number): string {
+export function hhmm(ts: number): string {
   const d = new Date(ts)
   const pad = (n: number) => String(n).padStart(2, "0")
   return `${pad(d.getHours())}:${pad(d.getMinutes())}`

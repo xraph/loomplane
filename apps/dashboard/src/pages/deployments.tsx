@@ -3,8 +3,8 @@
 // search, project, environment and time; the oldest plan waiting on you sits
 // above it so it can be approved without opening it.
 import { DeploymentsIcon, NoMatchIcon } from "@/components/icons"
-import { ArrowFatLinesUpIcon } from "@phosphor-icons/react"
 import {
+  ArrowBigUpDashIcon,
   ChevronRightIcon,
   ClockIcon,
   GitCommitHorizontalIcon,
@@ -263,7 +263,7 @@ export function Deployments({ status }: { status: RunFilter }) {
             can("deployment:create") && (
               <>
                 <Button variant="outline" onClick={() => setPromoting(true)}>
-                  <ArrowFatLinesUpIcon aria-hidden="true" />
+                  <ArrowBigUpDashIcon />
                   Promote
                 </Button>
                 <Button onClick={() => openDeploy()}>

@@ -150,6 +150,31 @@ test("a promotion shows its source, how long it soaked and its images", async ()
   expect(
     await screen.findByText("staging has run these commits for 3h 00m, healthy")
   ).toBeInTheDocument()
+  expect(screen.queryByText("Unverified")).not.toBeInTheDocument()
+})
+
+test("a promotion whose soak lacks evidence is marked unverified", async () => {
+  serve(
+    { ...plan(), kind: "promotion", from_environment: "staging" },
+    {
+      "/plans/plan_1/soak": {
+        environment: "staging",
+        running: true,
+        since: "2026-10-29T11:00:00Z",
+        duration: 40 * 60 * 1e9,
+        healthy: false,
+        unverified: true,
+        reasons: ["web: 30 requests, fewer than the 200 a verdict needs."],
+        services: [],
+      },
+    }
+  )
+  expect(
+    await screen.findByText(
+      "staging has run these commits for 40m 00s, not healthy: web: 30 requests, fewer than the 200 a verdict needs."
+    )
+  ).toBeInTheDocument()
+  expect(screen.getByText("Unverified")).toBeInTheDocument()
 })
 
 test("an automatic rollback names the automation and lists its leftovers", async () => {
