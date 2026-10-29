@@ -5,12 +5,18 @@ package integration
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/url"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/xraph/authsome/organization"
+	"github.com/xraph/forge"
 
+	"github.com/xraph/loomplane/extensions/identity"
 	"github.com/xraph/loomplane/internal/config"
 )
 
@@ -162,5 +168,69 @@ func TestSignupGate_waitlistOff(t *testing.T) {
 	}
 	if status, why := signUp(c, "grace@example.com"); status != http.StatusCreated {
 		t.Fatalf("a stranger's sign-up with the waitlist off: %d %+v, want 201", status, why)
+	}
+}
+
+// Setup's user exists before setup has made its organization or stored the
+// waitlist. A sign-up in that window would see an instance that has users
+// and no waitlist, and if setup then rolled back, the stranger would be
+// left as the only account. Sign-up is refused until setup has finished.
+func TestSignupGate_refusedWhileSetupRuns(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Database.URL = freshDatabase(t)
+	held, release := make(chan struct{}), make(chan error)
+	var calls atomic.Int32
+	// No waitlist override, as on a deploy that leaves it unset.
+	r := boot(t, cfg, func(app forge.App) {
+		ext, err := app.GetExtension(identity.Name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ext.(*identity.Extension).SetSetupOrgHook(func(ctx context.Context, o *organization.Organization, create func(context.Context, *organization.Organization) error) error {
+			if err := create(ctx, o); err != nil {
+				return err
+			}
+			if calls.Add(1) > 1 {
+				return nil
+			}
+			close(held)
+			return <-release
+		})
+	})
+	defer r.stop()
+	c := &setupClient{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
+
+	finished := make(chan int, 1)
+	go func() {
+		status, _, _ := (&setupClient{t: t, base: c.base, key: c.key}).send(http.MethodPost, "/api/v1/setup", ada)
+		finished <- status
+	}()
+	select {
+	case <-held:
+	case <-time.After(time.Minute):
+		t.Fatal("setup never reached its organization step")
+	}
+	if n := countRows(t, cfg.Database.URL, liveUsers); n != 1 {
+		t.Fatalf("%d users while setup is held, want Ada alone", n)
+	}
+	status, why := signUp(c, "mallory@example.com")
+	release <- errors.New("injected organization failure")
+	if status != http.StatusForbidden || why.Error != pendingRefusal || why.Type != "setup_pending" {
+		t.Fatalf("sign-up while setup runs: %d %+v, want 403 %q", status, why, pendingRefusal)
+	}
+	if code := <-finished; code != http.StatusInternalServerError {
+		t.Fatalf("the held setup: %d, want 500", code)
+	}
+	if n := countRows(t, cfg.Database.URL, liveUsers); n != 0 {
+		t.Fatalf("%d users after setup rolled back, want 0", n)
+	}
+
+	// Once setup has finished, sign-up is judged on the finished instance,
+	// where setup turned the waitlist on.
+	if code, body := c.setup(ada); code != http.StatusOK {
+		t.Fatalf("setup after the rollback: %d %s", code, body)
+	}
+	if status, why := signUp(c, "mallory@example.com"); status != http.StatusForbidden || why.Error != waitlistRefusal {
+		t.Fatalf("sign-up after setup: %d %+v, want 403 %q", status, why, waitlistRefusal)
 	}
 }

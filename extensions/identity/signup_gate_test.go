@@ -20,6 +20,9 @@ func TestSignupGate(t *testing.T) {
 	broken := func(context.Context, string) (bool, error) { return false, lookupErr }
 	on := func(context.Context) bool { return true }
 	off := func(context.Context) bool { return false }
+	lockErr := errors.New("lock timed out")
+	setupRunning := func(context.Context, func(context.Context) error) (bool, error) { return false, nil }
+	lockBroken := func(context.Context, func(context.Context) error) (bool, error) { return false, lockErr }
 
 	for name, tc := range map[string]struct {
 		ctx      context.Context
@@ -58,15 +61,54 @@ func TestSignupGate(t *testing.T) {
 			gate: signupGate{pending: off, waitlistOn: on, approved: broken, invited: no},
 			want: lookupErr,
 		},
+		"setup running, waitlist off": {
+			gate: signupGate{pending: off, waitlistOn: off, approved: yes, invited: yes, outsideSetup: setupRunning},
+			want: errSetupPending,
+		},
+		"setup running, invited": {
+			gate: signupGate{pending: off, waitlistOn: on, approved: yes, invited: yes, outsideSetup: setupRunning},
+			want: errSetupPending,
+		},
+		"setup lock fails": {
+			gate: signupGate{pending: off, waitlistOn: off, approved: yes, invited: yes, outsideSetup: lockBroken},
+			want: lockErr,
+		},
+		"setup's own sign-up while setup holds the lock": {
+			ctx:  withSetup(context.Background()),
+			gate: signupGate{pending: on, waitlistOn: on, approved: no, invited: no, outsideSetup: setupRunning},
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			ctx := tc.ctx
 			if ctx == nil {
 				ctx = context.Background()
 			}
+			if tc.gate.outsideSetup == nil {
+				tc.gate.outsideSetup = noSetup
+			}
+			// Every look at the instance happens while setup is kept out.
+			inLock := false
+			lock := tc.gate.outsideSetup
+			tc.gate.outsideSetup = func(ctx context.Context, judge func(context.Context) error) (bool, error) {
+				return lock(ctx, func(ctx context.Context) error {
+					inLock = true
+					defer func() { inLock = false }()
+					return judge(ctx)
+				})
+			}
+			pending := tc.gate.pending
+			tc.gate.pending = func(ctx context.Context) bool {
+				if !inLock {
+					t.Error("counted users outside the setup lock")
+				}
+				return pending(ctx)
+			}
 			var seen []string
 			watch := func(f func(context.Context, string) (bool, error)) func(context.Context, string) (bool, error) {
 				return func(ctx context.Context, email string) (bool, error) {
+					if !inLock {
+						t.Error("looked the address up outside the setup lock")
+					}
 					seen = append(seen, email)
 					return f(ctx, email)
 				}
@@ -88,12 +130,18 @@ func TestSignupGate(t *testing.T) {
 	}
 }
 
+// noSetup stands in for the setup lock when no setup is running.
+func noSetup(ctx context.Context, judge func(context.Context) error) (bool, error) {
+	return true, judge(ctx)
+}
+
 func TestRefuseSignUps(t *testing.T) {
 	waitlistOn := false
 	e := &Extension{gate: &signupGate{
-		pending:    func(context.Context) bool { return false },
-		waitlistOn: func(context.Context) bool { return waitlistOn },
-		approved:   func(context.Context, string) (bool, error) { return false, nil },
+		outsideSetup: noSetup,
+		pending:      func(context.Context) bool { return false },
+		waitlistOn:   func(context.Context) bool { return waitlistOn },
+		approved:     func(context.Context, string) (bool, error) { return false, nil },
 		invited: func(_ context.Context, email string) (bool, error) {
 			return email == "ada@example.com", nil
 		},

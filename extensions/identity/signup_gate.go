@@ -17,6 +17,8 @@ import (
 	"github.com/xraph/authsome/plugin"
 	"github.com/xraph/authsome/plugins/waitlist"
 	"github.com/xraph/forge"
+
+	"github.com/xraph/loomplane/internal/pglock"
 )
 
 // signupPeekLimit is how much of a sign-up body refuseSignUps reads to find
@@ -63,6 +65,12 @@ var (
 type signupGate struct {
 	pending, waitlistOn func(context.Context) bool
 	approved, invited   func(ctx context.Context, email string) (bool, error)
+	// outsideSetup runs judge unless first-run setup is running, and
+	// reports whether it ran. Setup can't start while judge runs. Setup's
+	// user exists before setup has made its organization or stored the
+	// waitlist, so a sign-up judged in that window would see users and no
+	// waitlist, and outlive a setup that then rolls back.
+	outsideSetup func(ctx context.Context, judge func(context.Context) error) (bool, error)
 }
 
 var (
@@ -83,6 +91,23 @@ func (g *signupGate) check(ctx context.Context, email string) error {
 	if isSetup(ctx) {
 		return nil
 	}
+	var verdict error
+	ran, err := g.outsideSetup(ctx, func(ctx context.Context) error {
+		verdict = g.judge(ctx, email)
+		return nil
+	})
+	if err != nil {
+		return fmt.Errorf("check for a running setup: %w", err)
+	}
+	if !ran {
+		return errSetupPending
+	}
+	// Once judged, setup can't start again: either the instance had users,
+	// which setup refuses, or this sign-up was refused.
+	return verdict
+}
+
+func (g *signupGate) judge(ctx context.Context, email string) error {
 	if g.pending(ctx) {
 		return errSetupPending
 	}
@@ -116,6 +141,9 @@ func (e *Extension) newSignupGate() *signupGate {
 		waitlistOn: e.waitlistOn,
 		approved:   e.waitlistApproved,
 		invited:    e.pendingInvitation,
+		outsideSetup: func(ctx context.Context, judge func(context.Context) error) (bool, error) {
+			return pglock.TryShared(ctx, e.pg, pglock.FirstRunSetup, judge)
+		},
 	}
 }
 
