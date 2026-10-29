@@ -154,6 +154,7 @@ type Runtime interface {
 }
 
 type Deps struct {
+	Clusters                ClusterStore
 	CapacityPrincipal       security.PrincipalVerifier
 	CapacityDemandAuthority CapacityDemandAuthority
 	CapacityDemandWakeup    CapacityDemandWakeup
