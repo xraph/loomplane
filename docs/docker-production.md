@@ -102,13 +102,19 @@ you to `/setup`, where you create the first account and organization. See
 
 | Variable                       | Default      | What it does                                                                                           |
 | ------------------------------ | ------------ | ------------------------------------------------------------------------------------------------------ |
-| `LOOMPLANE_WAITLIST_ENABLED`   | unset        | `true` or `false` forces the waitlist on or off. Unset uses the stored setting. |
-| `LOOMPLANE_CONSOLE_PATH`       | `/__console` | Where platform admins reach the console. One path segment starting with `__`.                           |
+| `LOOMPLANE_WAITLIST_ENABLED`   | unset        | `true` or `false` forces the waitlist on or off. Unset or empty uses the stored setting.               |
+| `LOOMPLANE_CONSOLE_PATH`       | `/__console` | Where platform admins reach the console. One path segment starting with `__`.                          |
 
+Put them in `.env` next to the Compose file and both services pick them up.
 An instance that existed before the waitlist stays open after you upgrade
 unless you set `LOOMPLANE_WAITLIST_ENABLED=true`. On an upgraded instance,
-run `loomplane admin grant-platform-admin <email>` once to give someone
-console access; [Running Loomplane](operations.md#the-console) covers both.
+run this once to give someone console access:
+
+```bash
+docker compose exec loomplane loomplane admin grant-platform-admin you@example.com
+```
+
+[Running Loomplane](operations.md#the-console) covers both.
 
 `LOOMPLANE_BACKUP_URL` can point recovery objects at an independent storage
 backend. Without it, they share the local artifact volume. This setting

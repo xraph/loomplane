@@ -162,6 +162,8 @@ upgrade.
 | `database.poolSize` | `16` | Connections each pod keeps open |
 | `configFile` | | `config.local.yaml` for settings only config carries, like provider plugins |
 | `trustedProxies` | private ranges | Proxies whose `X-Forwarded-For` sign-in rate limits believe |
+| `waitlist` | | `true` or `false` forces the sign-up waitlist on or off; empty leaves it to the instance ([Running Loomplane](operations.md#who-can-sign-up)) |
+| `consolePath` | `/__console` | Where platform admins open the console ([Running Loomplane](operations.md#the-console)) |
 | `ingress.blockInternalPaths` | `true` | Sends `/_/health`, `/_/metrics` and `/debug` to a Service with no pods |
 | `metrics.serviceMonitor.enabled` | `false` | Prometheus Operator scraping for both processes |
 | `extraVolumes`, `extraVolumeMounts` | | The SPIRE socket and signing keys for [federation](federation-agent.md) |
