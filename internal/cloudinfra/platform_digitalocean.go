@@ -74,7 +74,7 @@ func (a *appPlatformDomains) Attach(ctx context.Context, cred provider.Infrastru
 		return err
 	}
 	if app == nil {
-		return appLiveCommit(before, hostname, "adding", reviewedCommit)
+		return appLiveCommit(before, hostname, reviewedCommit)
 	}
 	return a.settle(ctx, cred, b, before, app, hostname, "adding", reviewedCommit)
 }
@@ -99,8 +99,10 @@ func (a *appPlatformDomains) Detach(ctx context.Context, cred provider.Infrastru
 	if err != nil {
 		return err
 	}
+	// Gone already: there's nothing to check, and waiting would only
+	// strand the hostname's records.
 	if app == nil {
-		return appLiveCommit(before, hostname, "removing", reviewedCommit)
+		return nil
 	}
 	return a.settle(ctx, cred, b, before, app, hostname, "removing", reviewedCommit)
 }
@@ -108,19 +110,21 @@ func (a *appPlatformDomains) Detach(ctx context.Context, cred provider.Infrastru
 // change reads the app and writes back the spec edit makes of it, holding
 // the app in between so a deploy can't write over it, nor it over a
 // deploy. edit says false when the spec has what it wants already, and
-// the app comes back nil. before is the app as it was read.
+// the app comes back nil. before is the app as it was read. A change
+// waits for a deployment that's running, so it doesn't start another
+// over it.
 func (a *appPlatformDomains) change(ctx context.Context, cred provider.InfrastructureCredential, b RouteBinding, hostname string, edit func(digitalocean.AppSpec) (digitalocean.AppSpec, bool)) (before, app *digitalocean.App, err error) {
 	err = a.client.WithApp(ctx, b.ExternalID, func(ctx context.Context) error {
 		var getErr error
 		if before, getErr = a.client.GetApp(ctx, cred.Token, b.ExternalID); getErr != nil {
 			return getErr
 		}
-		if checkErr := appDeploying(before, hostname); checkErr != nil {
-			return checkErr
-		}
 		spec, changed := edit(before.Spec)
 		if !changed {
 			return nil
+		}
+		if checkErr := appDeploying(before, hostname); checkErr != nil {
+			return checkErr
 		}
 		var updateErr error
 		app, updateErr = a.client.UpdateApp(ctx, cred.Token, b.ExternalID, spec)
@@ -237,17 +241,24 @@ func hasAppDomain(spec digitalocean.AppSpec, hostname string) bool {
 	return false
 }
 
-// appLiveCommit lets a change with nothing left to do finish only while the
-// app's live deployment built the reviewed commit. A wait that was cut short,
-// or an update that showed no deployment, may have left another commit live.
-// The deployment before it isn't known here, so there's nothing to roll back
-// to: the service's next deploy puts the reviewed commit back.
-func appLiveCommit(app *digitalocean.App, hostname, verb, reviewedCommit string) error {
+// appLiveCommit lets an attach with nothing left to change finish only
+// while the app's live deployment built the reviewed commit. A wait that was
+// cut short, or an update that showed no deployment, may have left another
+// commit live, and so does a deploy of the service that hasn't recorded its
+// commit yet. Either way the service's next deploy settles it, so it waits.
+// Without a reviewed commit there's nothing to check.
+func appLiveCommit(app *digitalocean.App, hostname, reviewedCommit string) error {
+	if reviewedCommit == "" {
+		return nil
+	}
+	if err := appDeploying(app, hostname); err != nil {
+		return err
+	}
 	if app.ActiveDeployment == nil {
 		return appDeploymentNotice(hostname)
 	}
 	if !app.ActiveDeployment.Built(reviewedCommit) {
-		return fmt.Errorf("%w: %s", ErrConflict, appCommitRefusal(verb, hostname))
+		return &routeNoticeError{err: ErrPending, message: "App Platform is running a different commit than the reviewed one. Loomplane checks again once this service's deploy finishes. If none is running, deploy the service."}
 	}
 	return nil
 }

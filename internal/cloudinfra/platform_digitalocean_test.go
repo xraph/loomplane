@@ -397,65 +397,70 @@ func TestAppPlatformDetachOfAMissingAppIsDone(t *testing.T) {
 	}
 }
 
-// An attach or detach with nothing left to change still refuses an app whose
-// live deployment didn't build the reviewed commit, such as one an
-// interrupted wait never checked.
+// An attach with nothing left to change finishes only once the app's live
+// deployment built the reviewed commit, and waits until then: a deploy of
+// the service may be about to write the new commit. A detach with nothing
+// left to change has nothing to check, and neither has a call without a
+// reviewed commit.
 func TestAppPlatformIdempotentCallsCheckTheLiveCommit(t *testing.T) {
 	const other = "ffffffffffffffffffffffffffffffffffffffff"
-	withDomain := func(active map[string]any) map[string]any {
-		app := map[string]any{"id": "app-1", "spec": map[string]any{"name": "web", "domains": []any{map[string]any{"domain": "app.example.com", "type": "ALIAS"}}}}
-		if active != nil {
-			app["active_deployment"] = active
+	app := func(inSpec bool, active map[string]any) map[string]any {
+		spec := map[string]any{"name": "web"}
+		if inSpec {
+			spec["domains"] = []any{map[string]any{"domain": "app.example.com", "type": "ALIAS"}}
 		}
-		return app
-	}
-	without := func(active map[string]any) map[string]any {
-		app := map[string]any{"id": "app-1", "spec": map[string]any{"name": "web"}}
+		out := map[string]any{"id": "app-1", "spec": spec}
 		if active != nil {
-			app["active_deployment"] = active
+			out["active_deployment"] = active
 		}
-		return app
+		return out
 	}
+	attach := func(commit string) func(*appPlatformDomains) error {
+		return func(a *appPlatformDomains) error {
+			return a.Attach(t.Context(), doAppCred(), doAppBinding(), "app.example.com", commit)
+		}
+	}
+	detach := func(commit string) func(*appPlatformDomains) error {
+		return func(a *appPlatformDomains) error {
+			return a.Detach(t.Context(), doAppCred(), doAppBinding(), "app.example.com", commit)
+		}
+	}
+	const otherCommit = "App Platform is running a different commit than the reviewed one. Loomplane checks again once this service's deploy finishes. If none is running, deploy the service."
+	const deploying = "App Platform is still deploying this app. Loomplane changes app.example.com when that deployment finishes."
 	for _, c := range []struct {
-		name string
-		app  map[string]any
-		call func(*appPlatformDomains) error
-		verb string
+		name   string
+		app    map[string]any
+		call   func(*appPlatformDomains) error
+		notice string
 	}{
-		{"attach", withDomain(liveDeployment("dep-1", other)), func(a *appPlatformDomains) error {
-			return a.Attach(t.Context(), doAppCred(), doAppBinding(), "app.example.com", platformApproved)
-		}, "adding"},
-		{"detach", without(liveDeployment("dep-1", other)), func(a *appPlatformDomains) error {
-			return a.Detach(t.Context(), doAppCred(), doAppBinding(), "app.example.com", platformApproved)
-		}, "removing"},
+		{"attach on another commit", app(true, liveDeployment("dep-1", other)), attach(platformApproved), otherCommit},
+		{"attach on the reviewed commit", app(true, liveDeployment("dep-1", platformApproved)), attach(platformApproved), ""},
+		// A shortened hash of the reviewed commit is the same commit.
+		{"attach on a short hash of it", app(true, liveDeployment("dep-1", platformApproved[:12])), attach(platformApproved), ""},
+		{"attach with nothing live", app(true, nil), attach(platformApproved), deploying},
+		{"attach with no reviewed commit", app(true, liveDeployment("dep-1", other)), attach(""), ""},
+		{"detach on another commit", app(false, liveDeployment("dep-1", other)), detach(platformApproved), ""},
+		{"detach with nothing live", app(false, nil), detach(platformApproved), ""},
+		// A removal whose service's binding is gone has no commit.
+		{"detach with no reviewed commit", app(false, liveDeployment("dep-1", other)), detach(""), ""},
 	} {
 		f, a := newFakeDOApp(t, c.app)
 		err := c.call(a)
-		want := "App Platform started a deployment of a newer commit than the reviewed one. Deploy the service to finish " + c.verb + " app.example.com."
-		if !errors.Is(err, ErrConflict) || err.Error() != ErrConflict.Error()+": "+want {
-			t.Fatalf("%s on an unreviewed commit: %v", c.name, err)
+		var notice *routeNoticeError
+		switch {
+		case c.notice == "" && err != nil:
+			t.Fatalf("%s: %v", c.name, err)
+		case c.notice != "" && (!errors.Is(err, ErrPending) || !errors.As(err, &notice) || notice.message != c.notice):
+			t.Fatalf("%s: %v", c.name, err)
 		}
 		if len(f.puts) != 0 || len(f.canceled) != 0 || len(f.rollbacks) != 0 {
 			t.Fatalf("%s: puts %d, canceled %v, rollbacks %v", c.name, len(f.puts), f.canceled, f.rollbacks)
 		}
-		// A shortened hash of the reviewed commit is the same commit.
-		_, a = newFakeDOApp(t, c.app)
-		c.app["active_deployment"] = liveDeployment("dep-1", platformApproved[:12])
-		if err = c.call(a); err != nil {
-			t.Fatalf("%s on the reviewed commit: %v", c.name, err)
-		}
-		// With nothing live, it waits.
-		delete(c.app, "active_deployment")
-		_, a = newFakeDOApp(t, c.app)
-		var notice *routeNoticeError
-		if err = c.call(a); !errors.Is(err, ErrPending) || !errors.As(err, &notice) {
-			t.Fatalf("%s with nothing live: %v", c.name, err)
-		}
 	}
 	// An app that's gone is still done.
-	f, a := newFakeDOApp(t, without(nil))
+	f, a := newFakeDOApp(t, app(false, nil))
 	f.missing = true
-	if err := a.Detach(t.Context(), doAppCred(), doAppBinding(), "app.example.com", platformApproved); err != nil {
+	if err := a.Detach(t.Context(), doAppCred(), doAppBinding(), "app.example.com", ""); err != nil {
 		t.Fatal(err)
 	}
 }
