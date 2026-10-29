@@ -48,9 +48,37 @@ it("offers no port for a private App Platform service, and says why", () => {
 })
 
 it("falls back to the graph's ports when the config can't be read", () => {
-  expect(routablePorts([8080], binding("digitalocean", "not json"))).toEqual({
-    ports: [8080],
-  })
+  for (const config of ["not json", "null", "", "5"])
+    expect(routablePorts([8080], binding("digitalocean", config))).toEqual({
+      ports: [8080],
+    })
+})
+
+it("offers no port when a public App Platform service has none", () => {
+  const reason =
+    "This service has no public port on App Platform. Set port in the manifest and deploy it first."
+  for (const config of [
+    { public: true },
+    { public: true, port: 0 },
+    { public: true, port: "web" },
+  ])
+    expect(routablePorts([8080], binding("digitalocean", config))).toEqual({
+      ports: [],
+      reason,
+    })
+})
+
+it("reads public and port as the backend does, as text", () => {
+  expect(
+    routablePorts([80], binding("digitalocean", { public: "false", port: 80 }))
+      .ports
+  ).toEqual([])
+  expect(
+    routablePorts(
+      [80],
+      binding("digitalocean", { public: "true", port: "8080" })
+    )
+  ).toEqual({ ports: [8080] })
 })
 
 it("lists every record an operation wants, or the single one", () => {
