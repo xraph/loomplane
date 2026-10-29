@@ -184,6 +184,11 @@ type AppSpec struct {
 // is the DigitalOcean DNS domain, set only when DigitalOcean manages the
 // records. MinimumTLSVersion is "1.2" or "1.3". Per the API reference
 // (docs.digitalocean.com/reference/api/reference/apps/, read 2026-10-29).
+//
+// Whether an update that changes only domains starts a deployment is not
+// stated in DigitalOcean's docs. The API example's deployment cause of
+// "app spec updated" suggests any spec update deploys, so callers must
+// treat a domains-only update as possibly starting one.
 type AppDomainSpec struct {
 	Domain            string `json:"domain"`
 	Type              string `json:"type,omitempty"`
@@ -205,9 +210,9 @@ const (
 
 // AppIngressIPv4 and AppIngressIPv6 are App Platform's shared public
 // ingress addresses, for A and AAAA records on a hostname that can't be
-// a CNAME. From "How to Add Static IP Addresses to App Platform Apps"
-// (docs.digitalocean.com/products/app-platform/how-to/add-ip-address/),
-// read 2026-10-29.
+// a CNAME. Checked against "How to Add Static IP Addresses to App
+// Platform Apps" (docs.digitalocean.com/products/app-platform/how-to/add-ip-address/)
+// on 2026-10-29.
 var (
 	AppIngressIPv4 = []string{"162.159.140.98", "172.66.0.96"}
 	AppIngressIPv6 = []string{"2606:4700:7::60", "2a06:98c1:58::60"}
