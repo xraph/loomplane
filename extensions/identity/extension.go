@@ -35,6 +35,7 @@ import (
 	authmw "github.com/xraph/authsome/middleware"
 	"github.com/xraph/authsome/plugins/organization"
 	"github.com/xraph/authsome/plugins/password"
+	"github.com/xraph/authsome/plugins/waitlist"
 	"github.com/xraph/authsome/ratelimit"
 	"github.com/xraph/authsome/rbac"
 	"github.com/xraph/authsome/settings"
@@ -102,6 +103,12 @@ type Extension struct {
 	resetBusy     atomic.Bool
 	router        forge.Router
 
+	// waitlist serves authsome's waitlist routes with its own gate off;
+	// gate decides who may sign up (signup_gate.go).
+	waitlist      *waitlist.Plugin
+	waitlistStore waitlist.Store
+	gate          *signupGate
+
 	// createOrgHook stands between setup and the organization plugin when
 	// set. Only integration builds set it (export_integration.go).
 	createOrgHook setupOrgHook
@@ -157,7 +164,7 @@ func (e *Extension) Register(fapp forge.App) error {
 	}
 	e.telemetry = telemetry.New(fapp.Metrics())
 	e.keys = apikeys.New(smith, e.cfg.Identity.AppID, e.authz, keyAuditor{chronicle: e.audit, appID: e.cfg.Identity.AppID, log: e.Logger()})
-	if e.engine, err = e.buildEngine(); err != nil {
+	if e.engine, err = e.buildEngine(db); err != nil {
 		return err
 	}
 	// ProvideValue keys on its type parameter, so each value goes in with
@@ -176,9 +183,13 @@ func (e *Extension) Register(fapp forge.App) error {
 	return e.routes(fapp.Router())
 }
 
-func (e *Extension) buildEngine() (*authsome.Engine, error) {
+func (e *Extension) buildEngine(db *grove.DB) (*authsome.Engine, error) {
 	// Kept: Loomplane's member and invitation routes call its service.
 	e.orgs = organization.New()
+	e.waitlistStore = waitlist.NewPostgresStore(db)
+	e.waitlist = waitlist.New(waitlist.Config{Enabled: false})
+	e.waitlist.SetWaitlistStore(e.waitlistStore)
+	e.gate = e.newSignupGate()
 	tokens, err := security.TokenEncryptor(e.cfg.SecretKey)
 	if err != nil {
 		return nil, err
@@ -208,6 +219,9 @@ func (e *Extension) buildEngine() (*authsome.Engine, error) {
 		authsome.WithPlugin(recoveryNotifications(e.cfg)),
 		authsome.WithPlugin(e.orgs),
 		authsome.WithPlugin(security.NewSync(e.authz)),
+		authsome.WithPlugin(e.waitlist),
+		// Last, so it judges a sign-up the other plugins have accepted.
+		authsome.WithPlugin(e.gate),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("authsome engine: %w", err)
@@ -252,6 +266,7 @@ func (e *Extension) mount(ctx context.Context) error {
 	r.Use(rateLimitScope)
 	r.Use(e.resetFence())
 	r.Use(e.sessionMiddleware()...)
+	r.Use(e.refuseSignUps)
 	if err := api.New(e.engine, r).RegisterRoutes(r); err != nil {
 		return fmt.Errorf("authsome routes: %w", err)
 	}
@@ -363,7 +378,10 @@ func (e *Extension) prepare(ctx context.Context) error {
 	// Global, not per app: authsome only knows a request's app when it
 	// sends the publishable key, which calls to Loomplane's own API don't.
 	// This engine holds Loomplane's app alone, so global is per app anyway.
-	return e.setting(ctx, authsome.SettingCookieName.Def.Key, e.cfg.Identity.SessionCookie)
+	if err := e.setting(ctx, authsome.SettingCookieName.Def.Key, e.cfg.Identity.SessionCookie); err != nil {
+		return err
+	}
+	return e.syncClientConfig(ctx)
 }
 
 // seed creates Loomplane's authsome app and its default environment on the

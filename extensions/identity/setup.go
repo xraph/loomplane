@@ -246,6 +246,11 @@ func (e *Extension) completeSetup(c forge.Context) error {
 	if err != nil {
 		return err
 	}
+	// Setup stored the waitlist setting, and authsome's forms should show
+	// it. Failing to tell them is no reason to fail a finished setup.
+	if serr := e.syncClientConfig(ctx); serr != nil {
+		e.Logger().Error("sync authsome's client config after setup", forge.F("error", serr.Error()))
+	}
 	e.cookieSetter()(c, sess.Token, e.sessionMaxAge())
 	return c.JSON(http.StatusOK, out)
 }
