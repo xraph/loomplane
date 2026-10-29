@@ -108,6 +108,7 @@ export const entities = {
   'TenantList': { fields: { 'tenants': 'Tenant' } },
   'Variable': { idField: 'id' },
   'VariableList': { fields: { 'variables': 'Variable' } },
+  'Watch': { idField: 'id' },
   'WebhookEndpoint': { idField: 'id' },
   'WebhookEndpointList': { fields: { 'items': 'WebhookEndpoint' } },
   'WebhookEndpointSecret': { fields: { 'endpoint': 'WebhookEndpoint' } },

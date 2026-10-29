@@ -4435,7 +4435,7 @@ export class RESTClient extends Client {
     },
 
     /**
-     * Plan an environment from the current manifest and one commit of each repository, replacing its open plan; a scope moves only some of them
+     * Plan an environment from the current manifest and one commit of each repository, or what another environment runs, replacing its open plan; a scope moves only some of them
      */
     create: async (id: string, body: types.CreatePlanInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Plan> => {
       let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/plans`;
@@ -4514,6 +4514,22 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.Plan>(config);
+    },
+
+    /**
+     * How long the promotion's source environment has run exactly the commits the plan moves, and whether it ran them healthily; unverified means missing evidence
+     */
+    soak: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Soak> => {
+      let __path = `/api/v1/plans/${encodeURIComponent(String(id))}/soak`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Soak"],
+      };
+
+      return this.request<types.Soak>(config);
     },
 
   };
@@ -4831,6 +4847,57 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly releaseWatches = {
+    /**
+     * How long a release in the environment would be watched, which services a canary would ramp, and whether each other service can be watched
+     */
+    coverage: async (id: string, environment: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Coverage> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/environments/${encodeURIComponent(String(environment))}/watch-coverage`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Coverage"],
+      };
+
+      return this.request<types.Coverage>(config);
+    },
+
+    /**
+     * What the post-deploy watch says about the environment's current release; unverified means missing evidence
+     */
+    evidence: async (id: string, environment: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ReleaseEvidence> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/environments/${encodeURIComponent(String(environment))}/release-evidence`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ReleaseEvidence"],
+      };
+
+      return this.request<types.ReleaseEvidence>(config);
+    },
+
+    /**
+     * The deployment's post-deploy watch: the services it judges, their verdicts and any automatic rollback; 404 when it has none
+     */
+    forDeployment: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Watch> => {
+      let __path = `/api/v1/deployments/${encodeURIComponent(String(id))}/watch`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Watch"],
+      };
+
+      return this.request<types.Watch>(config);
+    },
+
+  };
+
   public readonly retentionPolicies = {
     /**
      */
@@ -4888,6 +4955,51 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.RetentionPolicy>(config);
+    },
+
+  };
+
+  public readonly rollbacks = {
+    /**
+     * Plan the environment back to its previous successful release, with a reason; a person approves it like any plan. Data-bearing resources and services stay as they are
+     */
+    create: async (id: string, body: types.RollbackInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Plan> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/rollbacks`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["RollbackInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["Plan"],
+      };
+
+      return this.request<types.Plan>(config);
+    },
+
+    /**
+     * What rolling the environment back would undo and restore, and each repository's commits; nothing changes
+     */
+    target: async (id: string, environment: string, deploymentId?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.RollbackTarget> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/environments/${encodeURIComponent(String(environment))}/rollback-target`;
+      const queryParams: Record<string, any> = {};
+      if (deploymentId !== undefined) {
+        queryParams['deployment_id'] = deploymentId;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["RollbackTarget"],
+      };
+
+      return this.request<types.RollbackTarget>(config);
     },
 
   };

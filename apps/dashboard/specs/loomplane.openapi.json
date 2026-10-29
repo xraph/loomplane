@@ -4007,6 +4007,38 @@
         }
       }
     },
+    "/api/v1/deployments/{id}/watch": {
+      "get": {
+        "tags": [
+          "Deployments"
+        ],
+        "summary": "The deployment's post-deploy watch: the services it judges, their verdicts and any automatic rollback; 404 when it has none",
+        "operationId": "releaseWatches.forDeployment",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The release watch",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Watch"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/dns-zones": {
       "get": {
         "tags": [
@@ -5954,6 +5986,38 @@
         }
       }
     },
+    "/api/v1/plans/{id}/soak": {
+      "get": {
+        "tags": [
+          "Plans"
+        ],
+        "summary": "How long the promotion's source environment has run exactly the commits the plan moves, and whether it ran them healthily; unverified means missing evidence",
+        "operationId": "plans.soak",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The soak",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Soak"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects": {
       "get": {
         "tags": [
@@ -7739,6 +7803,136 @@
         }
       }
     },
+    "/api/v1/projects/{id}/environments/{environment}/release-evidence": {
+      "get": {
+        "tags": [
+          "Deployments"
+        ],
+        "summary": "What the post-deploy watch says about the environment's current release; unverified means missing evidence",
+        "operationId": "releaseWatches.evidence",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "environment",
+            "in": "path",
+            "description": "Path parameter: environment",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Release evidence",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReleaseEvidence"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{id}/environments/{environment}/rollback-target": {
+      "get": {
+        "tags": [
+          "Plans"
+        ],
+        "summary": "What rolling the environment back would undo and restore, and each repository's commits; nothing changes",
+        "operationId": "rollbacks.target",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "environment",
+            "in": "path",
+            "description": "Path parameter: environment",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "deployment_id",
+            "in": "query",
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The rollback target",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RollbackTarget"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{id}/environments/{environment}/watch-coverage": {
+      "get": {
+        "tags": [
+          "Deployments"
+        ],
+        "summary": "How long a release in the environment would be watched, which services a canary would ramp, and whether each other service can be watched",
+        "operationId": "releaseWatches.coverage",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "environment",
+            "in": "path",
+            "description": "Path parameter: environment",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Watch coverage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Coverage"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/projects/{id}/exclusions": {
       "post": {
         "tags": [
@@ -8231,7 +8425,7 @@
         "tags": [
           "Plans"
         ],
-        "summary": "Plan an environment from the current manifest and one commit of each repository, replacing its open plan; a scope moves only some of them",
+        "summary": "Plan an environment from the current manifest and one commit of each repository, or what another environment runs, replacing its open plan; a scope moves only some of them",
         "operationId": "plans.create",
         "parameters": [
           {
@@ -8258,6 +8452,49 @@
         "responses": {
           "201": {
             "description": "The plan",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Plan"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/api/v1/projects/{id}/rollbacks": {
+      "post": {
+        "tags": [
+          "Plans"
+        ],
+        "summary": "Plan the environment back to its previous successful release, with a reason; a person approves it like any plan. Data-bearing resources and services stay as they are",
+        "operationId": "rollbacks.create",
+        "parameters": [
+          {
+            "name": "id",
+            "in": "path",
+            "description": "Path parameter: id",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RollbackInputBody"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "The rollback plan",
             "content": {
               "application/json": {
                 "schema": {
@@ -14107,6 +14344,39 @@
           }
         }
       },
+      "Coverage": {
+        "type": "object",
+        "required": [
+          "environment",
+          "duration",
+          "canary",
+          "services",
+          "unverified"
+        ],
+        "properties": {
+          "canary": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "duration": {
+            "type": "integer"
+          },
+          "environment": {
+            "type": "string"
+          },
+          "services": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ServiceCoverage"
+            }
+          },
+          "unverified": {
+            "type": "boolean"
+          }
+        }
+      },
       "CreateEnvironmentInputBody": {
         "type": "object",
         "required": [
@@ -16771,6 +17041,28 @@
         "type": "object",
         "properties": {
           "same_address": {
+            "type": "string"
+          }
+        }
+      },
+      "HeldRoute": {
+        "type": "object",
+        "required": [
+          "service",
+          "key",
+          "route_ids"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "route_ids": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "service": {
             "type": "string"
           }
         }
@@ -22151,6 +22443,73 @@
           }
         }
       },
+      "ReleaseEvidence": {
+        "type": "object",
+        "required": [
+          "environment",
+          "deployment_id",
+          "watched",
+          "settled",
+          "unverified"
+        ],
+        "properties": {
+          "deployment_id": {
+            "type": "string"
+          },
+          "environment": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "settled": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string"
+          },
+          "unverified": {
+            "type": "boolean"
+          },
+          "verdict": {
+            "type": "string"
+          },
+          "watch_id": {
+            "type": "string"
+          },
+          "watched": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ReleaseRef": {
+        "type": "object",
+        "required": [
+          "deployment_id",
+          "plan_id",
+          "kind",
+          "status",
+          "finished_at"
+        ],
+        "properties": {
+          "deployment_id": {
+            "type": "string"
+          },
+          "finished_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "plan_id": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
       "RemoveRouteInputBody": {
         "type": "object",
         "required": [
@@ -23179,6 +23538,69 @@
           },
           "watch_id": {
             "type": "string"
+          }
+        }
+      },
+      "RollbackCommit": {
+        "type": "object",
+        "required": [
+          "alias",
+          "from",
+          "to"
+        ],
+        "properties": {
+          "alias": {
+            "type": "string"
+          },
+          "from": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          }
+        }
+      },
+      "RollbackInputBody": {
+        "type": "object",
+        "required": [
+          "environment",
+          "reason"
+        ],
+        "properties": {
+          "deployment_id": {
+            "type": "string"
+          },
+          "environment": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      },
+      "RollbackTarget": {
+        "type": "object",
+        "required": [
+          "environment",
+          "target",
+          "restore",
+          "commits"
+        ],
+        "properties": {
+          "commits": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RollbackCommit"
+            }
+          },
+          "environment": {
+            "type": "string"
+          },
+          "restore": {
+            "$ref": "#/components/schemas/ReleaseRef"
+          },
+          "target": {
+            "$ref": "#/components/schemas/ReleaseRef"
           }
         }
       },
@@ -24349,6 +24771,28 @@
           }
         }
       },
+      "ServiceCoverage": {
+        "type": "object",
+        "required": [
+          "name",
+          "provider",
+          "watchable"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "watchable": {
+            "type": "boolean"
+          }
+        }
+      },
       "ServicePort": {
         "type": "object",
         "required": [
@@ -24680,6 +25124,75 @@
           "time": {
             "type": "string",
             "format": "date-time"
+          }
+        }
+      },
+      "Soak": {
+        "type": "object",
+        "required": [
+          "environment",
+          "running",
+          "since",
+          "duration",
+          "healthy",
+          "unverified",
+          "reasons",
+          "services"
+        ],
+        "properties": {
+          "duration": {
+            "type": "integer"
+          },
+          "environment": {
+            "type": "string"
+          },
+          "healthy": {
+            "type": "boolean"
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "running": {
+            "type": "boolean"
+          },
+          "services": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SoakService"
+            }
+          },
+          "since": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "unverified": {
+            "type": "boolean"
+          }
+        }
+      },
+      "SoakService": {
+        "type": "object",
+        "required": [
+          "name",
+          "provider",
+          "verdict",
+          "reason"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "verdict": {
+            "type": "string"
           }
         }
       },
@@ -25379,6 +25892,25 @@
           }
         }
       },
+      "UnwatchedService": {
+        "type": "object",
+        "required": [
+          "name",
+          "provider",
+          "reason"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      },
       "UpdateInputBody": {
         "type": "object",
         "required": [
@@ -25610,6 +26142,163 @@
             "type": "integer"
           },
           "mount_path": {
+            "type": "string"
+          }
+        }
+      },
+      "Watch": {
+        "type": "object",
+        "required": [
+          "id",
+          "org_id",
+          "project_id",
+          "environment_id",
+          "environment",
+          "deployment_id",
+          "plan_id",
+          "status",
+          "verdict",
+          "reason",
+          "thresholds",
+          "services",
+          "unwatched",
+          "held",
+          "held_released",
+          "unverified",
+          "rollback_plan_id",
+          "starts_at",
+          "ends_at",
+          "bound_at",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "bound_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "checked_at": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "deployment_id": {
+            "type": "string"
+          },
+          "ends_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "environment": {
+            "type": "string"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "held": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/HeldRoute"
+            }
+          },
+          "held_released": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string",
+            "x-forge-id": true
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "plan_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "rollback_approved_at": {
+            "type": "string"
+          },
+          "rollback_plan_id": {
+            "type": "string"
+          },
+          "services": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WatchedService"
+            }
+          },
+          "settled_at": {
+            "type": "string"
+          },
+          "starts_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string"
+          },
+          "thresholds": {
+            "$ref": "#/components/schemas/Thresholds"
+          },
+          "unverified": {
+            "type": "boolean"
+          },
+          "unwatched": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/UnwatchedService"
+            }
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "verdict": {
+            "type": "string"
+          }
+        }
+      },
+      "WatchedService": {
+        "type": "object",
+        "required": [
+          "name",
+          "provider",
+          "binding_id",
+          "op",
+          "revision",
+          "verdict",
+          "reason"
+        ],
+        "properties": {
+          "binding_id": {
+            "type": "string"
+          },
+          "checked_at": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "op": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "string"
+          },
+          "verdict": {
             "type": "string"
           }
         }

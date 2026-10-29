@@ -892,6 +892,14 @@ export interface Cost {
   source: string;
 }
 
+export interface Coverage {
+  canary: string[];
+  duration: number;
+  environment: string;
+  services: ServiceCoverage[];
+  unverified: boolean;
+}
+
 export interface CreateEnvironmentInputBody {
   kind?: string;
   name: string;
@@ -1769,6 +1777,12 @@ export interface Health {
 
 export interface Held {
   sameAddress?: string;
+}
+
+export interface HeldRoute {
+  key: string;
+  routeIds: string[];
+  service: string;
 }
 
 export interface HostCard {
@@ -3100,6 +3114,26 @@ export interface Release {
   thresholds: Thresholds;
 }
 
+export interface ReleaseEvidence {
+  deploymentId: string;
+  environment: string;
+  reason?: string;
+  settled: boolean;
+  status?: string;
+  unverified: boolean;
+  verdict?: string;
+  watchId?: string;
+  watched: boolean;
+}
+
+export interface ReleaseRef {
+  deploymentId: string;
+  finishedAt: string;
+  kind: string;
+  planId: string;
+  status: string;
+}
+
 export interface RemoveRouteInputBody {
   revision: number;
 }
@@ -3411,6 +3445,25 @@ export interface Rollback {
   targetPlanId: string;
   trigger: string;
   watchId?: string;
+}
+
+export interface RollbackCommit {
+  alias: string;
+  from: string;
+  to: string;
+}
+
+export interface RollbackInputBody {
+  deploymentId?: string;
+  environment: string;
+  reason: string;
+}
+
+export interface RollbackTarget {
+  commits: RollbackCommit[];
+  environment: string;
+  restore: ReleaseRef;
+  target: ReleaseRef;
 }
 
 export interface RouteBinding {
@@ -3745,6 +3798,13 @@ export interface ServiceConfig {
   workload: string;
 }
 
+export interface ServiceCoverage {
+  name: string;
+  provider: string;
+  reason?: string;
+  watchable: boolean;
+}
+
 export interface ServicePort {
   port: number;
   service: string;
@@ -3846,6 +3906,24 @@ export interface SnapshotRecord {
   orgId: string;
   projectId?: string;
   time: string;
+}
+
+export interface Soak {
+  duration: number;
+  environment: string;
+  healthy: boolean;
+  reasons: string[];
+  running: boolean;
+  services: SoakService[];
+  since: string;
+  unverified: boolean;
+}
+
+export interface SoakService {
+  name: string;
+  provider: string;
+  reason: string;
+  verdict: string;
 }
 
 export interface Source {
@@ -4066,6 +4144,12 @@ export interface UnroutableService {
   service: string;
 }
 
+export interface UnwatchedService {
+  name: string;
+  provider: string;
+  reason: string;
+}
+
 export interface UpdateInputBody {
   name: string;
   revision: number;
@@ -4153,6 +4237,45 @@ export interface Volume {
   fsGroup?: number;
   kubernetesSizeMb?: number;
   mountPath: string;
+}
+
+export interface Watch {
+  boundAt: string;
+  checkedAt?: string;
+  createdAt: string;
+  deploymentId: string;
+  endsAt: string;
+  environment: string;
+  environmentId: string;
+  held: HeldRoute[];
+  heldReleased: boolean;
+  id: string;
+  orgId: string;
+  planId: string;
+  projectId: string;
+  reason: string;
+  rollbackApprovedAt?: string;
+  rollbackPlanId: string;
+  services: WatchedService[];
+  settledAt?: string;
+  startsAt: string;
+  status: string;
+  thresholds: Thresholds;
+  unverified: boolean;
+  unwatched: UnwatchedService[];
+  updatedAt: string;
+  verdict: string;
+}
+
+export interface WatchedService {
+  bindingId: string;
+  checkedAt?: string;
+  name: string;
+  op: string;
+  provider: string;
+  reason: string;
+  revision: string;
+  verdict: string;
 }
 
 export interface WebhookEndpoint {

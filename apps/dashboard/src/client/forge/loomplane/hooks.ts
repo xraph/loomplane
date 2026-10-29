@@ -10,7 +10,7 @@
 import { query, mutation } from '@forge-go/client-core';
 import { ops } from './ops';
 
-import type { APIKeyList, ActivitySummary, Analysis, AnalysisGraph, AnalysisList, Backup, BackupList, BindingList, Board, CanaryReport, CapacityPolicyView, CapacityUsage, Card, CatalogKindList, CatalogconnectEndpoint, CloudProjectGrantList, CloudSyncList, CloudTargetList, CloudinfraRoute, CloudinfraRouteStatus, ConnectedRepositoryList, Connection, ConnectionList, ConnectionsCloudList, ConsumerKey, DeliveryList, DeployedList, Deployment, DeploymentList, DiscoverySource, DiscoverySummary, DomainDetail, DomainOfferList, DomainOperationList, DomainOverview, DomainRouteList, EndpointList, EntryDetail, Environment, EnvironmentCloud, EnvironmentConnections, EnvironmentList, Expansion, ExpansionList, FabriqKeyList, FailedCleanup, GPUInventory, GPUTargetList, GatewayList, GitHubInstallation, GitHubStatus, IdentitySession, InfrastructureStatus, KeylessSetup, LogPage, ManifestDraft, ModelDeploymentList, ModelsStatus, NativeInventory, NativePITRWindow, NativeRecoveryCopies, NativeRecoverySources, NativeRestore, NativeRetentionPolicy, NativeRetentionPolicyState, NativeRetirement, NativeRetirementPage, NotificationList, OctopusStatus, Operation, OperationList, OrgInvitationList, OrgMemberList, Plan, PlanList, PlanningCloudList, Policy, PolicyList, Pool, PoolList, Preferences, Preview, Profile, Project, ProjectDomainList, ProjectList, ProjectView, ProjectZoneList, ProviderList, ProviderZoneList, PublicConfig, Rebuild, RebuildList, Registration, RegistrationExtensionList, RegistrationList, RegistryList, Resolution, Restore, RestoreList, RetentionPolicy, RetentionPolicyHistory, RetentionPolicyState, RetentionPreview, Retirement, RetirementHistory, RetirementPage, Revision, RevisionList, RouteOperation, RouteSummary, Server, ServerList, ServerOptions, ServerUsage, SignInAppList, Snapshot, SourceList, SpendReport, Status, StorageVolumeList, Sync, Target, Tenant, TenantList, TrafficReport, Usage, Variable, VariableList, View, WebhookEndpointList, Zone, ZoneList } from './types';
+import type { APIKeyList, ActivitySummary, Analysis, AnalysisGraph, AnalysisList, Backup, BackupList, BindingList, Board, CanaryReport, CapacityPolicyView, CapacityUsage, Card, CatalogKindList, CatalogconnectEndpoint, CloudProjectGrantList, CloudSyncList, CloudTargetList, CloudinfraRoute, CloudinfraRouteStatus, ConnectedRepositoryList, Connection, ConnectionList, ConnectionsCloudList, ConsumerKey, Coverage, DeliveryList, DeployedList, Deployment, DeploymentList, DiscoverySource, DiscoverySummary, DomainDetail, DomainOfferList, DomainOperationList, DomainOverview, DomainRouteList, EndpointList, EntryDetail, Environment, EnvironmentCloud, EnvironmentConnections, EnvironmentList, Expansion, ExpansionList, FabriqKeyList, FailedCleanup, GPUInventory, GPUTargetList, GatewayList, GitHubInstallation, GitHubStatus, IdentitySession, InfrastructureStatus, KeylessSetup, LogPage, ManifestDraft, ModelDeploymentList, ModelsStatus, NativeInventory, NativePITRWindow, NativeRecoveryCopies, NativeRecoverySources, NativeRestore, NativeRetentionPolicy, NativeRetentionPolicyState, NativeRetirement, NativeRetirementPage, NotificationList, OctopusStatus, Operation, OperationList, OrgInvitationList, OrgMemberList, Plan, PlanList, PlanningCloudList, Policy, PolicyList, Pool, PoolList, Preferences, Preview, Profile, Project, ProjectDomainList, ProjectList, ProjectView, ProjectZoneList, ProviderList, ProviderZoneList, PublicConfig, Rebuild, RebuildList, Registration, RegistrationExtensionList, RegistrationList, RegistryList, ReleaseEvidence, Resolution, Restore, RestoreList, RetentionPolicy, RetentionPolicyHistory, RetentionPolicyState, RetentionPreview, Retirement, RetirementHistory, RetirementPage, Revision, RevisionList, RollbackTarget, RouteOperation, RouteSummary, Server, ServerList, ServerOptions, ServerUsage, SignInAppList, Snapshot, Soak, SourceList, SpendReport, Status, StorageVolumeList, Sync, Target, Tenant, TenantList, TrafficReport, Usage, Variable, VariableList, View, Watch, WebhookEndpointList, Zone, ZoneList } from './types';
 
 export const useActivityGet = query<ActivitySummary>(ops['activity.get']);
 export const useAiModelDeploymentsList = query<ModelDeploymentList>(ops['aiModelDeployments.list']);
@@ -110,6 +110,7 @@ export const useDeploymentsCleanupPreview = mutation(ops['deployments.cleanupPre
 export const useDeploymentsCleanupRetry = mutation(ops['deployments.cleanupRetry']);
 export const useDeploymentsLogs = query<LogPage>(ops['deployments.logs']);
 export const useDeploymentsRetry = mutation<Deployment, Deployment>(ops['deployments.retry']);
+export const useReleaseWatchesForDeployment = query<Watch>(ops['releaseWatches.forDeployment']);
 export const useDnsZonesList = query<ZoneList>(ops['dnsZones.list']);
 export const useDnsZonesCreate = mutation<Zone, Zone>(ops['dnsZones.create']);
 export const useDnsZonesDiscover = query<ProviderZoneList>(ops['dnsZones.discover']);
@@ -168,6 +169,7 @@ export const usePlansGet = query<Plan>(ops['plans.get']);
 export const usePlansApprove = mutation<Plan, Plan>(ops['plans.approve']);
 export const useDeploymentsForPlan = query<Deployment>(ops['deployments.forPlan']);
 export const usePlansReject = mutation<Plan, Plan>(ops['plans.reject']);
+export const usePlansSoak = query<Soak>(ops['plans.soak']);
 export const useProjectsList = query<ProjectList>(ops['projects.list']);
 export const useProjectsCreate = mutation<Project, Project>(ops['projects.create']);
 export const useProjectsGet = query<Project>(ops['projects.get']);
@@ -211,6 +213,9 @@ export const useEnvironmentCloudsPreview = mutation<Preview, Preview>(ops['envir
 export const useEnvironmentConnectionsGet = query<EnvironmentConnections>(ops['environmentConnections.get']);
 export const useEnvironmentConnectionsChoose = mutation(ops['environmentConnections.choose']);
 export const useDeployedList = query<DeployedList>(ops['deployed.list']);
+export const useReleaseWatchesEvidence = query<ReleaseEvidence>(ops['releaseWatches.evidence']);
+export const useRollbacksTarget = query<RollbackTarget>(ops['rollbacks.target']);
+export const useReleaseWatchesCoverage = query<Coverage>(ops['releaseWatches.coverage']);
 export const useProjectsExclude = mutation<Project, Project>(ops['projects.exclude']);
 export const useProjectsInclude = mutation<Project, Project>(ops['projects.include']);
 export const useProjectsGraph = query<ProjectView>(ops['projects.graph']);
@@ -223,6 +228,7 @@ export const useNativeRecoveryCopiesList = query<NativeRecoveryCopies>(ops['nati
 export const useNativeRecoverySourcesList = query<NativeRecoverySources>(ops['nativeRecoverySources.list']);
 export const usePlansList = query<PlanList>(ops['plans.list']);
 export const usePlansCreate = mutation<Plan, Plan>(ops['plans.create']);
+export const useRollbacksCreate = mutation<Plan, Plan>(ops['rollbacks.create']);
 export const useServiceRetirementsList = query<RetirementPage>(ops['serviceRetirements.list']);
 export const useServiceBackupsList = query<BackupList>(ops['serviceBackups.list']);
 export const useServiceBackupsCreate = mutation<Backup, Backup>(ops['serviceBackups.create']);

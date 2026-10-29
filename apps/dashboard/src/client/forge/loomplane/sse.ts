@@ -460,6 +460,24 @@ export class RealtimeEventsSSEClient extends EventEmitter {
           }
         });
 
+        this.eventSource.addEventListener('release_watch.deleted', (event: MessageEvent) => {
+          try {
+            const data: types.Watch = decode(JSON.parse(event.data), "Watch");
+            this.emit('release_watch.deleted', data);
+          } catch (error) {
+            this.emit('error', error);
+          }
+        });
+
+        this.eventSource.addEventListener('release_watch.updated', (event: MessageEvent) => {
+          try {
+            const data: types.Watch = decode(JSON.parse(event.data), "Watch");
+            this.emit('release_watch.updated', data);
+          } catch (error) {
+            this.emit('error', error);
+          }
+        });
+
         this.eventSource.addEventListener('source.deleted', (event: MessageEvent) => {
           try {
             const data: types.Source = decode(JSON.parse(event.data), "Source");
@@ -984,6 +1002,38 @@ export class RealtimeEventsSSEClient extends EventEmitter {
    */
   offRealtimeStatus(handler: (data: types.RealtimeRealtimeStatus) => void): void {
     this.off('realtime.status', handler);
+  }
+
+  /**
+   * Register a handler for release_watch.deleted events.
+   * @param handler - Function to call when release_watch.deleted event is received
+   */
+  onReleaseWatchDeleted(handler: (data: types.Watch) => void): void {
+    this.on('release_watch.deleted', handler);
+  }
+
+  /**
+   * Remove a handler for release_watch.deleted events.
+   * @param handler - The handler to remove
+   */
+  offReleaseWatchDeleted(handler: (data: types.Watch) => void): void {
+    this.off('release_watch.deleted', handler);
+  }
+
+  /**
+   * Register a handler for release_watch.updated events.
+   * @param handler - Function to call when release_watch.updated event is received
+   */
+  onReleaseWatchUpdated(handler: (data: types.Watch) => void): void {
+    this.on('release_watch.updated', handler);
+  }
+
+  /**
+   * Remove a handler for release_watch.updated events.
+   * @param handler - The handler to remove
+   */
+  offReleaseWatchUpdated(handler: (data: types.Watch) => void): void {
+    this.off('release_watch.updated', handler);
   }
 
   /**
