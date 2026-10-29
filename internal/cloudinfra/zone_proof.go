@@ -398,15 +398,15 @@ func (s *Service) republishMissingProof(ctx context.Context, st DomainStore, zon
 // zoneProofDue is a zone the background still checks, with no write inside
 // its grace window: a managed one unverified with an unexpired proof and
 // not checked since checkedBefore, or any zone verified with its own record
-// and not checked for zoneProofRecheckEvery, or since checkedBefore while
-// the record is missing.
-func zoneProofDue(zone *Zone, now, checkedBefore time.Time) bool {
+// and not checked since recheckBefore, or since checkedBefore while the
+// record is missing.
+func zoneProofDue(zone *Zone, now, checkedBefore, recheckBefore time.Time) bool {
 	if zone.ProofPublishAttempted && zone.ProofPublishAttemptedAt.After(checkedBefore) {
 		return false
 	}
 	if zone.ownVerified() {
 		if zone.ProofMissingAt.IsZero() {
-			checkedBefore = now.Add(-zoneProofRecheckEvery)
+			checkedBefore = recheckBefore
 		}
 		return !zone.ProofCheckedAt.After(checkedBefore)
 	}
@@ -429,7 +429,13 @@ func (s *Service) CheckZoneProofs(ctx context.Context) error {
 	defer cancel()
 	now := s.now().UTC()
 	checkedBefore := now.Add(-zoneProofCheckEvery)
-	zones, err := st.ZoneProofsDue(pass, now, checkedBefore, zoneProofBatch)
+	// Every verified record once after a start, so a deploy corrects what
+	// changed while it was down, then daily.
+	recheckBefore := now.Add(-zoneProofRecheckEvery)
+	if s.started.After(recheckBefore) {
+		recheckBefore = s.started
+	}
+	zones, err := st.ZoneProofsDue(pass, now, checkedBefore, recheckBefore, zoneProofBatch)
 	if err != nil {
 		return err
 	}
@@ -438,7 +444,7 @@ func (s *Service) CheckZoneProofs(ctx context.Context) error {
 		if pass.Err() != nil {
 			break
 		}
-		if !zoneProofDue(zone, now, checkedBefore) {
+		if !zoneProofDue(zone, now, checkedBefore, recheckBefore) {
 			continue
 		}
 		if checkErr := s.checkZoneProofInBackground(pass, st, zone); checkErr != nil && ctx.Err() == nil {

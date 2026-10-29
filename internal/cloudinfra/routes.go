@@ -147,7 +147,7 @@ type DomainStore interface {
 	// ZoneProofsDue lists, across organizations, at most limit managed
 	// zones that are unverified, with a proof unexpired at now and last
 	// checked no later than checkedBefore, the longest unchecked first.
-	ZoneProofsDue(ctx context.Context, now, checkedBefore time.Time, limit int) ([]*Zone, error)
+	ZoneProofsDue(ctx context.Context, now, checkedBefore, recheckBefore time.Time, limit int) ([]*Zone, error)
 	ResolveRouteBinding(context.Context, string, string, RouteInput) (RouteBinding, error)
 	// RouteBindingCloud is the binding's Cloud placement, "" when it has none.
 	RouteBindingCloud(ctx context.Context, org, project, environment, service string) (string, error)

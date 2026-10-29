@@ -186,7 +186,10 @@ type Deps struct {
 
 type Service struct {
 	Deps
-	now               func() time.Time
+	now func() time.Time
+	// started is when this process made the service. Every verified zone's
+	// record is rechecked once after it, then daily.
+	started           time.Time
 	expansionSchedule *expansionSchedule
 	catalogs          *catalogCache
 	options           *optionsCache
@@ -206,7 +209,7 @@ func NewService(d Deps) *Service {
 	if d.Runtime == nil {
 		d.Runtime = SSHRuntime{}
 	}
-	s := &Service{Deps: d, now: time.Now, expansionSchedule: &expansionSchedule{}, catalogs: &catalogCache{entries: map[string]catalogEntry{}}, options: &optionsCache{entries: map[string]optionsEntry{}}, routeHTTPS: probeRouteHTTPS, ingressImagePinned: server.IngressImagePinned, writeDNSToken: server.WriteIngressDNSToken}
+	s := &Service{Deps: d, now: time.Now, started: time.Now().UTC(), expansionSchedule: &expansionSchedule{}, catalogs: &catalogCache{entries: map[string]catalogEntry{}}, options: &optionsCache{entries: map[string]optionsEntry{}}, routeHTTPS: probeRouteHTTPS, ingressImagePinned: server.IngressImagePinned, writeDNSToken: server.WriteIngressDNSToken}
 	s.kubernetesRoutes = s.openKubernetesRoute
 	s.ingressNeedsUpgrade = s.routeIngressNeedsUpgrade
 	return s

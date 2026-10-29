@@ -58,14 +58,14 @@ func TestZoneProofsDueQuery(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	due, err := st.ZoneProofsDue(ctx, now, checkedBefore, 10)
+	due, err := st.ZoneProofsDue(ctx, now, checkedBefore, now.Add(-zoneProofRecheckEvery), 10)
 	if err != nil {
 		t.Fatal(err)
 	}
 	ids := make([]string, 0, len(due))
 	for _, z := range due {
 		ids = append(ids, z.ID)
-		if !zoneProofDue(z, now, checkedBefore) {
+		if !zoneProofDue(z, now, checkedBefore, now.Add(-zoneProofRecheckEvery)) {
 			t.Fatalf("query and service disagree on %s", z.ID)
 		}
 	}
@@ -73,7 +73,12 @@ func TestZoneProofsDueQuery(t *testing.T) {
 	if want := []string{"never", "verified", "hosted", "settled", "stale", "theirs", "missing", "edge"}; !slices.Equal(ids, want) {
 		t.Fatalf("due %v, want %v", ids, want)
 	}
-	if due, err = st.ZoneProofsDue(ctx, now, checkedBefore, 2); err != nil || len(due) != 2 || due[0].ID != "never" || due[1].ID != "verified" {
+	// After a start, a verified record checked before it is due again.
+	started := now.Add(-30 * time.Minute)
+	if due, err = st.ZoneProofsDue(ctx, now, checkedBefore, started, 20); err != nil || !slices.ContainsFunc(due, func(z *Zone) bool { return z.ID == "today" }) {
+		t.Fatalf("record checked before the start not due: %v %v", due, err)
+	}
+	if due, err = st.ZoneProofsDue(ctx, now, checkedBefore, now.Add(-zoneProofRecheckEvery), 2); err != nil || len(due) != 2 || due[0].ID != "never" || due[1].ID != "verified" {
 		t.Fatalf("limit: %v %v", due, err)
 	}
 }

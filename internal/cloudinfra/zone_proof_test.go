@@ -181,10 +181,10 @@ func (s *overviewStore) RemoveZone(_ context.Context, org, id string, revision i
 	return ErrNotFound
 }
 
-func (s *overviewStore) ZoneProofsDue(_ context.Context, now, checkedBefore time.Time, limit int) ([]*Zone, error) {
+func (s *overviewStore) ZoneProofsDue(_ context.Context, now, checkedBefore, recheckBefore time.Time, limit int) ([]*Zone, error) {
 	out := []*Zone{}
 	for _, zone := range s.zones {
-		if zoneProofDue(zone, now, checkedBefore) && len(out) < limit {
+		if zoneProofDue(zone, now, checkedBefore, recheckBefore) && len(out) < limit {
 			v := *zone
 			out = append(out, &v)
 		}
@@ -625,7 +625,7 @@ func TestCreateZoneUnderADomainHasNoProofOfItsOwn(t *testing.T) {
 		t.Fatalf("external subdomain proof: %+v", external)
 	}
 	// The domain's own record is rechecked; the subdomains have none.
-	due, _ := env.store.ZoneProofsDue(t.Context(), env.now, env.now, 10)
+	due, _ := env.store.ZoneProofsDue(t.Context(), env.now, env.now, env.now, 10)
 	for _, z := range due {
 		if z.ID != "zone_root" {
 			t.Fatalf("a subdomain is background-checked: %s", z.Name)
@@ -760,24 +760,54 @@ func TestVerifiedZoneProofIsRecheckedDailyAndOftenWhileMissing(t *testing.T) {
 		if c.missing {
 			zone.ProofMissingAt = now.Add(-2 * time.Hour)
 		}
-		if got := zoneProofDue(zone, now, checkedBefore); got != c.due {
+		if got := zoneProofDue(zone, now, checkedBefore, now.Add(-zoneProofRecheckEvery)); got != c.due {
 			t.Errorf("checked %v ago, missing=%v: due=%v", c.checked, c.missing, got)
 		}
 	}
 	// One whose DNS its owner runs is checked the same way once verified.
 	external := *zone
 	external.Mode, external.ProofCheckedAt, external.ProofMissingAt = "external", now.Add(-25*time.Hour), time.Time{}
-	if !zoneProofDue(&external, now, checkedBefore) {
+	if !zoneProofDue(&external, now, checkedBefore, now.Add(-zoneProofRecheckEvery)) {
 		t.Error("verified external zone not rechecked")
 	}
 	external.VerifiedAt = time.Time{}
 	external.ProofExpiresAt = now.Add(time.Hour)
-	if zoneProofDue(&external, now, checkedBefore) {
+	if zoneProofDue(&external, now, checkedBefore, now.Add(-zoneProofRecheckEvery)) {
 		t.Error("pending external zone checked in the background")
 	}
 	// A domain verified before proofs were required has no record to check.
 	legacy := &Zone{Mode: "managed", Name: "old.dev", VerifiedAt: now.Add(-time.Hour * 24 * 400)}
-	if zoneProofDue(legacy, now, checkedBefore) {
+	if zoneProofDue(legacy, now, checkedBefore, now.Add(-zoneProofRecheckEvery)) {
 		t.Error("legacy zone due")
+	}
+}
+
+func TestVerifiedZonesAreRecheckedOnceAfterAStart(t *testing.T) {
+	env := newProofEnv(t, "vercel")
+	zone := env.create(t, "managed")
+	env.resolver.values = []string{zone.ProofValue}
+	if _, err := env.svc.VerifyZone(t.Context(), proofManager, zone.ID); err != nil {
+		t.Fatal(err)
+	}
+	// The record goes while Loomplane is down, and it starts an hour after
+	// the last check: well inside the day the daily recheck waits.
+	env.dns.records = env.dns.records[:1]
+	env.resolver.values = nil
+	env.now = env.now.Add(time.Hour)
+	env.svc.started = env.now
+	env.now = env.now.Add(time.Minute)
+	if err := env.svc.CheckZoneProofs(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	stored := env.stored(t, zone.ID)
+	if !stored.ProofCheckedAt.Equal(env.now) || stored.ProofMissingAt.IsZero() || len(env.dns.proofs()) != 1 {
+		t.Fatalf("not rechecked after the start: %+v", stored)
+	}
+	// Checked since the start, it waits for the next pass's two minutes,
+	// then the day, as before.
+	checked := stored.ProofCheckedAt
+	env.resolver.values = []string{zone.ProofValue}
+	if err := env.svc.CheckZoneProofs(t.Context()); err != nil || !env.stored(t, zone.ID).ProofCheckedAt.Equal(checked) {
+		t.Fatal("rechecked twice in one pass window", err)
 	}
 }

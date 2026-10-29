@@ -128,7 +128,7 @@ func zoneBodyTime(field string) string {
 // stored as Go's zero time, which sorts before any check. A row whose times
 // don't parse is left out, and one that doesn't decode is skipped, rather
 // than failing the pass.
-func (s *PgStore) ZoneProofsDue(ctx context.Context, now, checkedBefore time.Time, limit int) ([]*Zone, error) {
+func (s *PgStore) ZoneProofsDue(ctx context.Context, now, checkedBefore, recheckBefore time.Time, limit int) ([]*Zone, error) {
 	zero := "'0001-01-01T00:00:00Z'::timestamptz"
 	// zoneProofDue's rule: a managed zone's pending proof until it expires,
 	// and any verified zone's own record daily, or every pass while it's
@@ -144,7 +144,7 @@ func (s *PgStore) ZoneProofsDue(ctx context.Context, now, checkedBefore time.Tim
    AND coalesce(body->>'proof_value','') <> ''
    AND `+zoneBodyTime("proof_expires_at")+` > `+zero+`
    AND `+zoneBodyTime("proof_checked_at")+` <= CASE WHEN coalesce(`+zoneBodyTime("proof_missing_at")+`,`+zero+`) > `+zero+` THEN $2 ELSE $4 END))
- ORDER BY `+zoneBodyTime("proof_checked_at")+`, id LIMIT $3`, now, checkedBefore, limit, now.Add(-zoneProofRecheckEvery))
+ ORDER BY `+zoneBodyTime("proof_checked_at")+`, id LIMIT $3`, now, checkedBefore, limit, recheckBefore)
 	if err != nil {
 		return nil, err
 	}
