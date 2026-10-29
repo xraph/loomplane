@@ -49,7 +49,7 @@ After you upgrade an instance that already had users, nobody holds a platform ro
 loomplane admin grant-platform-admin you@example.com
 ```
 
-It grants `platform-owner` to that existing user and changes nobody else. Running it twice is safe. Loomplane must have started against the database at least once first, so the roles exist.
+It grants `platform-owner` to that existing user and changes nobody else. Running it twice is safe. Loomplane must have started against the database at least once first.
 
 ## Live deployment state
 
