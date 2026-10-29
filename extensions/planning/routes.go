@@ -164,12 +164,6 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 			forge.WithSummary("The deployment targets a manifest can name, and what each runs and provisions"),
 			forge.WithResponseSchema(http.StatusOK, "Providers", ProviderList{}),
 		}},
-		{http.MethodPost, "/projects/:id/plans", e.createPlan, []forge.RouteOption{
-			forge.WithName("plans.create"),
-			forge.WithSummary("Plan an environment from the current manifest and one commit of each repository, replacing its open plan; a scope moves only some of them"),
-			forge.WithRequestSchema(planning.CreatePlanInput{}),
-			forge.WithResponseSchema(http.StatusCreated, "The plan", planning.Plan{}),
-		}},
 		{http.MethodGet, "/projects/:id/plans", e.listPlans, []forge.RouteOption{
 			forge.WithName("plans.list"),
 			forge.WithSummary("The project's latest plans, newest first"),
@@ -322,6 +316,11 @@ func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
 			}
 		}
 	}
+	// Plans, promotions and rollbacks go through releaseService, so their
+	// handlers are tested on a fake.
+	if err := releaseRoutes(r, guard, e.plans); err != nil {
+		return err
+	}
 	return e.fabriqRoutes(r, guard)
 }
 
@@ -421,22 +420,6 @@ func (e *Extension) listProviders(c forge.Context) error {
 		out.Providers = append(out.Providers, *p)
 	}
 	return c.JSON(http.StatusOK, out)
-}
-
-func (e *Extension) createPlan(c forge.Context) error {
-	p, err := principal(c)
-	if err != nil {
-		return err
-	}
-	var in planning.CreatePlanInput
-	if err = c.BindJSON(&in); err != nil {
-		return forge.NewHTTPError(http.StatusBadRequest, `the body must be JSON: {"environment": "production"}`)
-	}
-	plan, err := e.plans.Create(c.Request().Context(), p, c.Param("id"), in)
-	if err != nil {
-		return fail(err)
-	}
-	return c.JSON(http.StatusCreated, plan)
 }
 
 func (e *Extension) listPlans(c forge.Context) error {
