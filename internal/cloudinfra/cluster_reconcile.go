@@ -40,6 +40,8 @@ func (s *Service) ReconcileClusterOperation(ctx context.Context, org, id string,
 	switch {
 	case clusterObservationOnly(o):
 		reader, access, err = s.clusterRecoveryAccount(call, o)
+	case o.Kind == "node-pool-scaling" && !s.ClusterCapacity.Enabled:
+		return s.clusterAttention(ctx, o, "Cluster capacity mutations are disabled.")
 	case !s.ManagedClusters.Enabled:
 		return s.clusterAttention(ctx, o, "Managed cluster mutations are disabled.")
 	default:

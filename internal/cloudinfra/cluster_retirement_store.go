@@ -27,6 +27,7 @@ func retirementDependenciesTx(ctx context.Context, tx driver.Tx, org, resource, 
  UNION SELECT 'connection_use:'||u.kind||':'||u.owner_id FROM loomplane_connection_uses u JOIN attachments a ON a.org_id=u.org_id AND a.runtime_connection_id=u.connection_id WHERE u.kind NOT IN ('cloud_target')
  UNION SELECT 'binding:'||b.id FROM loomplane_bindings b JOIN attachments a ON a.org_id=b.org_id AND a.runtime_connection_id=b.connection_id
  UNION SELECT 'operation:'||id FROM loomplane_cluster_operations WHERE org_id=$1 AND id<>$4 AND status IN ('accepted','running','waiting_provider','needs_attention') AND (resource_id=$2 OR body->'input'->>'resource_id'=$2)
+ UNION SELECT 'native_policy:'||policy.key FROM loomplane_managed_resources r, jsonb_each(coalesce(r.body->'scaling_policies','{}'::jsonb)) policy WHERE r.org_id=$1 AND r.id=$2 AND $3='' AND policy.value->>'mode'='native' AND policy.value->>'revoked'='false'
  UNION SELECT 'reservation:'||id FROM loomplane_cloud_capacity_reservations WHERE org_id=$1 AND status IN ('reserved','committed') AND body->>'managed_resource_id'=$2
  UNION SELECT 'workload_hold:'||id FROM loomplane_cluster_workload_holds WHERE org_id=$1 AND resource_id=$2 AND NOT released AND ($3='' OR body->'input'->>'attachment_id'=$3)
  UNION SELECT 'credential_refresh:'||f.attachment_id FROM loomplane_cluster_credential_refresh f JOIN attachments a ON a.org_id=f.org_id AND a.id=f.attachment_id WHERE f.lease_until>clock_timestamp()

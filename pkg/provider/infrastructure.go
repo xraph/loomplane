@@ -28,6 +28,7 @@ const (
 	ClusterDeletion            InfrastructureCapability = "cluster:delete"
 	NodePoolCreation           InfrastructureCapability = "node-pool:create"
 	NodePoolUpdate             InfrastructureCapability = "node-pool:update"
+	NodePoolAutoscaling        InfrastructureCapability = "node-pool:autoscaling"
 	NodePoolDeletion           InfrastructureCapability = "node-pool:delete"
 	ClusterCapacityObservation InfrastructureCapability = "cluster:capacity:observe"
 	ServerDiscovery            InfrastructureCapability = "server:discover"

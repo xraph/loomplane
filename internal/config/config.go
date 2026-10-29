@@ -253,6 +253,7 @@ type StorageConfig struct {
 // Leave provider API overrides empty for live deployments.
 type CloudsConfig struct {
 	ManagedClusters ManagedClustersConfig
+	ClusterCapacity ClusterCapacityConfig
 
 	// EnrollmentURL is the reachable HTTPS callback base for managed servers.
 	// Empty uses PublicURL; local addresses cannot provision remote servers.
@@ -442,6 +443,7 @@ func FromSource(src Getter) (Config, error) {
 	r.str(&c.Clouds.ACMEDirectory, "clouds.acme_directory")
 	r.boolean(&c.Clouds.KubernetesInCluster, "clouds.kubernetes_in_cluster")
 	r.boolean(&c.Clouds.ManagedClusters.Enabled, "clouds.managed_clusters.enabled")
+	r.boolean(&c.Clouds.ClusterCapacity.Enabled, "clouds.cluster_capacity.enabled")
 	r.str(&c.Clouds.ManagedClusters.ManagementProbe.Provider, "clouds.managed_clusters.management_probe.provider")
 	r.str(&c.Clouds.ManagedClusters.ManagementProbe.NetworkID, "clouds.managed_clusters.management_probe.network_id")
 	r.str(&c.Clouds.ManagedClusters.ManagementProbe.EvidenceID, "clouds.managed_clusters.management_probe.evidence_id")
@@ -808,3 +810,6 @@ type ManagedClusterManagementProbeConfig struct {
 
 func (ManagedClusterManagementProbeConfig) String() string     { return "[management path qualification]" }
 func (c ManagedClusterManagementProbeConfig) GoString() string { return c.String() }
+
+// ClusterCapacityConfig gates reviewed cluster scaling independently of server automation.
+type ClusterCapacityConfig struct{ Enabled bool }

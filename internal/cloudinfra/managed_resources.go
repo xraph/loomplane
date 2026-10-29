@@ -8,30 +8,31 @@ import (
 
 // ManagedResource retains physical identity after deletion.
 type ManagedResource struct {
-	RetainedPriceCheckedAt time.Time                     `json:"retained_price_checked_at,omitzero"`
-	RetainedResources      []provider.AssociatedResource `json:"retained_resources,omitempty"`
-	SchemaVersion          int                           `json:"schema_version"`
-	CreatedAt              time.Time                     `json:"created_at"`
-	UpdatedAt              time.Time                     `json:"updated_at"`
-	ID                     string                        `json:"id"`
-	OrgID                  string                        `json:"org_id"`
-	CloudID                string                        `json:"cloud_id,omitempty"`
-	Kind                   string                        `json:"kind"`
-	Provider               string                        `json:"provider"`
-	AccountID              string                        `json:"account_id"`
-	ConnectionID           string                        `json:"connection_id,omitempty"`
-	ExternalID             string                        `json:"external_id"`
-	Incarnation            string                        `json:"incarnation"`
-	Ownership              string                        `json:"ownership"`
-	LifecycleAuthority     []string                      `json:"lifecycle_authority"`
-	Revision               int64                         `json:"revision"`
-	DesiredRevision        int64                         `json:"desired_revision"`
-	ObservedRevision       int64                         `json:"observed_revision"`
-	Status                 string                        `json:"status"`
-	CreationReceipt        *provider.ClusterMutation     `json:"creation_receipt,omitempty"`
-	Observation            *provider.ClusterObservation  `json:"observation,omitempty"`
-	ObservedAt             time.Time                     `json:"observed_at"`
-	DeletedAt              *time.Time                    `json:"deleted_at,omitempty"`
+	ScalingPolicies        map[string]ClusterScalingPolicy `json:"scaling_policies,omitempty"`
+	RetainedPriceCheckedAt time.Time                       `json:"retained_price_checked_at,omitzero"`
+	RetainedResources      []provider.AssociatedResource   `json:"retained_resources,omitempty"`
+	SchemaVersion          int                             `json:"schema_version"`
+	CreatedAt              time.Time                       `json:"created_at"`
+	UpdatedAt              time.Time                       `json:"updated_at"`
+	ID                     string                          `json:"id"`
+	OrgID                  string                          `json:"org_id"`
+	CloudID                string                          `json:"cloud_id,omitempty"`
+	Kind                   string                          `json:"kind"`
+	Provider               string                          `json:"provider"`
+	AccountID              string                          `json:"account_id"`
+	ConnectionID           string                          `json:"connection_id,omitempty"`
+	ExternalID             string                          `json:"external_id"`
+	Incarnation            string                          `json:"incarnation"`
+	Ownership              string                          `json:"ownership"`
+	LifecycleAuthority     []string                        `json:"lifecycle_authority"`
+	Revision               int64                           `json:"revision"`
+	DesiredRevision        int64                           `json:"desired_revision"`
+	ObservedRevision       int64                           `json:"observed_revision"`
+	Status                 string                          `json:"status"`
+	CreationReceipt        *provider.ClusterMutation       `json:"creation_receipt,omitempty"`
+	Observation            *provider.ClusterObservation    `json:"observation,omitempty"`
+	ObservedAt             time.Time                       `json:"observed_at"`
+	DeletedAt              *time.Time                      `json:"deleted_at,omitempty"`
 }
 
 type ResourceRelation struct {

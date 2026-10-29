@@ -29,7 +29,7 @@ func maintenancePinsTx(ctx context.Context, tx driver.Tx, o *ClusterOperation) e
 			return &ClusterMaintenanceAdmissionError{Reason: "deployment_in_flight"}
 		}
 	}
-	return nil
+	return scalingPinsTx(ctx, tx, o)
 }
 
 type ClusterMaintenanceAdmissionError struct{ Reason string }

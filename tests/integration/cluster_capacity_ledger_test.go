@@ -82,7 +82,10 @@ func TestClusterEnvelopeSharedAccountRace(t *testing.T) {
 		t.Fatalf("shared server/cluster ceiling winners=%d", winners)
 	}
 }
-func TestClusterCapacityLedgerHandover(t *testing.T)              { clusterEnvelopeHandover(t, false) }
+func TestClusterCapacityLedgerHandover(t *testing.T) { clusterEnvelopeHandover(t, false) }
+func TestClusterScalingZeroInitialEnvelope(t *testing.T) {
+	clusterEnvelopeHandover(t, true, false, true)
+}
 func TestClusterEnvelopeDecreaseWaitsForConvergence(t *testing.T) { clusterEnvelopeHandover(t, true) }
 func TestClusterCapacityLedgerMultiPool(t *testing.T)             { clusterEnvelopeHandover(t, false, true) }
 func clusterEnvelopeHandover(t *testing.T, native bool, multi ...bool) {
@@ -264,6 +267,72 @@ func clusterEnvelopeHandover(t *testing.T, native bool, multi ...bool) {
 		}
 		if envelope.Consumed.Servers != 1 || envelope.Maximum.Servers != 3 || envelope.Pending.Servers != 0 {
 			t.Fatal("native actual/max double-counted", envelope)
+		}
+
+		if len(multi) > 1 && multi[1] {
+			// Exercise scaling admission with no requested nodes. The maximum
+			// remains reserved after bounds convergence and physical handover.
+			if _, checkErr := f.sql.Exec(t.Context(), `UPDATE loomplane_cluster_operations SET status='succeeded',body=jsonb_set(body,'{status}','"succeeded"'::jsonb) WHERE id=$1`, o.ID); checkErr != nil {
+				t.Fatal(checkErr)
+			}
+			if _, checkErr := f.sql.Exec(t.Context(), `UPDATE loomplane_cloud_capacity_accounts SET body=jsonb_set(body,'{quota,servers}','100'::jsonb)`); checkErr != nil {
+				t.Fatal(checkErr)
+			}
+			maximum := envelope.Maximum
+			nativeReview := envelope.Review
+			nativeReview.EnvelopeID = envelope.ID
+			nativeReview.ExpectedRevision = envelope.Revision
+			nativeReview.PoolID = envelope.PoolID
+			nativeReview.Baseline = envelope.Consumed
+			nativeReview.Initial = cloudinfra.ResourceVector{}
+			nativeReview.Money.Known = true
+			nativeReview.Money.CheckedAt = time.Now().UTC()
+			scaling := &cloudinfra.ClusterOperation{ID: "scaling-zero", OrgID: "org", CloudID: "cloud", ResourceID: r.ID, Kind: "node-pool-scaling", SchemaVersion: 1, Status: "preview", Revision: 1, Digest: "scaling-zero", CreatedAt: now, UpdatedAt: now, ExpiresAt: now.Add(time.Minute), CapacityTarget: maximum, MoneyEstimate: &nativeReview.Money, Input: cloudinfra.ClusterInput{Kind: "node-pool-scaling", CloudRevision: 1, ConnectionID: o.Input.ConnectionID, ConnectionGeneration: o.Input.ConnectionGeneration, ResourceID: r.ID, ResourceRevision: r.Revision, Ref: ref, Provider: r.Provider, AccountID: r.AccountID, PolicyRevision: 2, Scaling: &cloudinfra.ClusterScalingPolicy{PoolID: "pool"}, Maintenance: &cloudinfra.ClusterMaintenanceInput{PoolID: "pool", ObservedRevision: r.ObservedRevision}, EnvelopeReview: &cloudinfra.ClusterEnvelopeReview{Automatic: true, Pools: []cloudinfra.ClusterPoolEnvelopeReview{nativeReview}}}, Steps: []cloudinfra.ClusterStep{{Name: "provider", State: "pending", RequestDigest: "scaling-zero"}}}
+			if checkErr := f.store.CreateClusterPreview(t.Context(), scaling); checkErr != nil {
+				t.Fatal(checkErr)
+			}
+			if checkErr := f.store.AcceptClusterOperation(t.Context(), scaling, 2); checkErr != nil {
+				t.Fatal(checkErr)
+			}
+			pending, envelopeErr := f.store.ClusterScalingEnvelope(t.Context(), "org", r.ID, "pool")
+			if envelopeErr != nil || pending.Maximum != maximum || pending.Pending != (cloudinfra.ResourceVector{}) {
+				t.Fatal(pending, envelopeErr)
+			}
+			scaling.Receipts = []provider.ClusterMutation{{Kind: "node-pool-scaling", OperationID: scaling.ID, Ref: ref, PoolID: "pool"}}
+			scaling.Steps[0].State = "completed"
+			scaling.Steps[0].CompletedAt = &before
+			scalingRaw, marshalErr := json.Marshal(scaling)
+			if marshalErr != nil {
+				t.Fatal(marshalErr)
+			}
+			if _, checkErr := f.sql.Exec(t.Context(), `UPDATE loomplane_cluster_operations SET body=$1 WHERE id=$2`, scalingRaw, scaling.ID); checkErr != nil {
+				t.Fatal(checkErr)
+			}
+			now = time.Now().UTC()
+			r.Observation.ObservedAt = now
+			prior := r.Revision
+			r.Revision++
+			if _, checkErr := f.store.ClaimManagedResource(t.Context(), r, prior); checkErr != nil {
+				t.Fatal(checkErr)
+			}
+			membership["checked_at"] = now
+			membershipRaw, marshalErr := json.Marshal(membership)
+			if marshalErr != nil {
+				t.Fatal(marshalErr)
+			}
+			if _, checkErr := f.sql.Exec(t.Context(), `UPDATE loomplane_cloud_capacity_accounts SET membership=$1`, membershipRaw); checkErr != nil {
+				t.Fatal(checkErr)
+			}
+			save()
+			var state string
+			if checkErr := f.sql.QueryRow(t.Context(), `SELECT status FROM loomplane_cloud_capacity_reservations WHERE id=$1`, scaling.ID).Scan(&state); checkErr != nil || state != "materialized" {
+				t.Fatal(state, checkErr)
+			}
+			settled, checkErr := f.store.ClusterScalingEnvelope(t.Context(), "org", r.ID, "pool")
+			if checkErr != nil || settled.Maximum != maximum || settled.Consumed.Servers != 1 || settled.Pending.Servers != 0 {
+				t.Fatal(settled, checkErr)
+			}
+			envelope = *settled
 		}
 		reduced := envelope.Review
 		reduced.EnvelopeID = envelope.ID

@@ -162,6 +162,7 @@ type Runtime interface {
 type Deps struct {
 	RegistryFiles           *backupfiles.Store
 	ManagedClusters         config.ManagedClustersConfig
+	ClusterCapacity         config.ClusterCapacityConfig
 	ClusterWorkflow         ClusterWorkflow
 	Clusters                ClusterStore
 	CapacityPrincipal       security.PrincipalVerifier

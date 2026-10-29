@@ -422,15 +422,16 @@ func catalogPriceAt(v *Server, options provider.ServerOptions, checked time.Time
 	return false
 }
 func (s *Service) recoverCapacity(ctx context.Context) error {
+	clusterErr := s.recoverClusterScaling(ctx)
 	st, ok := s.Store.(capacityRecoveryStore)
 	if !ok {
-		return nil
+		return clusterErr
 	}
 	scopes, err := st.CapacityScopes(ctx)
 	if err != nil {
 		return err
 	}
-	var result error
+	result := clusterErr
 	for _, scope := range scopes {
 		_, e := s.refreshCapacity(ctx, scope.OrgID, scope.CloudID)
 		result = errors.Join(result, e)

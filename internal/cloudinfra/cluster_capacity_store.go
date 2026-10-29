@@ -59,6 +59,9 @@ func (s *Service) ObserveClusterCapacity(ctx context.Context, p security.Princip
 		facts = provider.ProviderClusterCapacity{Provider: r.Provider, Ref: r.Observation.Ref, CheckedAt: s.now().UTC(), Conditions: []provider.ClusterCondition{{Type: "capacity", Status: "unknown", Reason: "provider_read_failed"}}}
 	}
 	in := ClusterInput{Kind: "management-observation", Provider: r.Provider, AccountID: r.AccountID, ConnectionID: r.ConnectionID, ConnectionGeneration: access.Generation, CloudRevision: profile.Revision, ResourceID: r.ID, ResourceRevision: r.Revision, Ref: r.Observation.Ref}
+	if authority, ok := ctx.Value(clusterScalingObservationKey{}).(ClusterScalingObservation); ok {
+		in.ScalingObservation = &authority
+	}
 	var inventory kubernetes.CapacityInventory
 	readErr := providerErr
 	if providerErr == nil {
