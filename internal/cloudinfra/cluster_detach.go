@@ -93,7 +93,7 @@ func (s *Service) detachClient(ctx context.Context, o *ClusterOperation, reader 
 	if checkErr := s.Adapters.Require(o.Input.Provider, provider.ClusterBootstrapAccess); checkErr != nil {
 		return nil, checkErr
 	}
-	r, err := s.retirementResource(ctx, o.Principal, o.CloudID, o.Input)
+	r, err := s.retirementOperationResource(ctx, o)
 	if err != nil {
 		return nil, err
 	}

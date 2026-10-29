@@ -2,6 +2,7 @@ package cloudinfra
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -28,6 +29,7 @@ func (*retirementMemory) DisableClusterAttachment(context.Context, *ClusterOpera
 }
 
 type retirementProvider struct {
+	deferAbsence bool
 	*clusterProvider
 	inventory  provider.AssociatedResourceInventory
 	deletes    int
@@ -56,7 +58,7 @@ func (p *retirementProvider) DeleteCluster(ctx context.Context, a provider.Accou
 		return provider.ClusterMutation{}, provider.ErrInfrastructureIdentity
 	}
 	p.deletes++
-	p.gone = true
+	p.gone = !p.deferAbsence
 	if p.lost {
 		return provider.ClusterMutation{}, provider.ErrInfrastructureAmbiguous
 	}
@@ -128,5 +130,69 @@ func TestClusterRetirementParentConnectionLoss(t *testing.T) {
 	}
 	if adapter.deletes != 0 || store.op.Status != "needs_attention" {
 		t.Fatal("parent loss did not fence retirement", adapter.deletes, store.op.Status)
+	}
+}
+
+func (m *retirementMemory) ClaimManagedResource(_ context.Context, r *ManagedResource, expected int64) (*ManagedResource, error) {
+	if m.resource.Revision != expected {
+		return nil, ErrConflict
+	}
+	m.resource = r
+	return r, nil
+}
+func TestClusterRetirementConfirmedReceiptSurvivesObservation(t *testing.T) {
+	s, store, adapter, _, p, o := retirementService(t)
+	adapter.deferAbsence = true
+	if err := s.ReconcileClusterOperation(t.Context(), p.OrgID, o.ID, nil); err != nil {
+		t.Fatal(err)
+	}
+	if len(store.op.Receipts) != 1 || store.op.Status != "waiting_provider" {
+		t.Fatal("confirmed receipt missing")
+	}
+	adapter.gone = true
+	observed, err := s.ObserveClusterDrift(t.Context(), p, "cloud", o.Input.ResourceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if observed.Status != "missing" || observed.Revision <= o.Input.ResourceRevision {
+		t.Fatal("drift did not persist missing observation")
+	}
+	store.restart()
+	if err := s.ReconcileClusterOperation(t.Context(), p.OrgID, o.ID, nil); err != nil {
+		t.Fatalf("benign observation stranded confirmed retirement: %v", err)
+	}
+	if store.op.Status != "succeeded" || store.resource.DeletedAt == nil || adapter.deletes != 1 {
+		t.Fatal(store.op.Status, adapter.deletes)
+	}
+}
+
+func TestClusterRetirementRecoveryPreservesTrustPins(t *testing.T) {
+	for name, mutate := range map[string]func(*ManagedResource){
+		"endpoint":    func(r *ManagedResource) { r.Observation.Endpoint = "replacement" },
+		"ca":          func(r *ManagedResource) { r.Observation.CAHash = "replacement" },
+		"incarnation": func(r *ManagedResource) { r.Incarnation = "replacement" },
+		"ownership":   func(r *ManagedResource) { r.Ownership = "adopted" },
+		"authority":   func(r *ManagedResource) { r.LifecycleAuthority = []string{"replacement"} },
+		"creation":    func(r *ManagedResource) { r.CreationReceipt.OperationID = "replacement" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			_, store, _, _, _, o := retirementService(t)
+			store.resource.Revision++
+			if err := checkRetirementResourcePins(store.resource, "cloud", o.Input, true); err != nil {
+				t.Fatal("benign revision rejected", err)
+			}
+			mutate(store.resource)
+			if err := checkRetirementResourcePins(store.resource, "cloud", o.Input, true); !errors.Is(err, ErrConflict) {
+				t.Fatal("changed trust admitted", err)
+			}
+		})
+	}
+}
+func TestClusterRetirementLegacyRecoveryFailsClosed(t *testing.T) {
+	_, store, _, _, _, o := retirementService(t)
+	o.Input.Retirement.ResourceFingerprint = ""
+	store.resource.Revision++
+	if err := checkRetirementResourcePins(store.resource, "cloud", o.Input, true); !errors.Is(err, ErrConflict) {
+		t.Fatal("legacy unpinned recovery gained authority", err)
 	}
 }

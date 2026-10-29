@@ -11,12 +11,14 @@ import (
 )
 
 type ClusterRetirementInput struct {
-	ReviewDigest string                               `json:"review_digest"`
-	Inventory    provider.AssociatedResourceInventory `json:"inventory"`
-	Attachment   *RuntimeAttachment                   `json:"attachment,omitempty"`
+	ResourceFingerprint string                               `json:"resource_fingerprint,omitempty"`
+	ReviewDigest        string                               `json:"review_digest"`
+	Inventory           provider.AssociatedResourceInventory `json:"inventory"`
+	Attachment          *RuntimeAttachment                   `json:"attachment,omitempty"`
 }
 
 type ClusterRetirementReview struct {
+	ResourceFingerprint              string                               `json:"resource_fingerprint"`
 	ResourceID                       string                               `json:"resource_id"`
 	Blockers                         []string                             `json:"blockers"`
 	DeletionCandidates               []provider.AssociatedResource        `json:"deletion_candidates"`
@@ -40,7 +42,7 @@ func retirementReview(r *ManagedResource, inventory provider.AssociatedResourceI
 	sort.Slice(inventory.Resources, func(i, j int) bool {
 		return inventory.Resources[i].Kind+inventory.Resources[i].ID < inventory.Resources[j].Kind+inventory.Resources[j].ID
 	})
-	out := &ClusterRetirementReview{ResourceID: r.ID, Blockers: append([]string{}, dependencies...), Inventory: inventory, DeletionCandidates: []provider.AssociatedResource{}, RetainedResources: []provider.AssociatedResource{}, UnknownCosts: []string{}}
+	out := &ClusterRetirementReview{ResourceFingerprint: retirementResourceFingerprint(r), ResourceID: r.ID, Blockers: append([]string{}, dependencies...), Inventory: inventory, DeletionCandidates: []provider.AssociatedResource{}, RetainedResources: []provider.AssociatedResource{}, UnknownCosts: []string{}}
 	if !inventory.Complete || inventory.ObservedAt.IsZero() || inventory.ObservedAt.After(now) || now.Sub(inventory.ObservedAt) >= 2*time.Minute {
 		out.Blockers = append(out.Blockers, "inventory_incomplete")
 	}
@@ -92,12 +94,18 @@ func retirementReview(r *ManagedResource, inventory provider.AssociatedResourceI
 }
 
 func (s *Service) retirementResource(ctx context.Context, p security.Principal, cloud string, in ClusterInput) (*ManagedResource, error) {
+	return s.retirementResourceChecked(ctx, p, cloud, in, false)
+}
+func (s *Service) retirementOperationResource(ctx context.Context, o *ClusterOperation) (*ManagedResource, error) {
+	return s.retirementResourceChecked(ctx, o.Principal, o.CloudID, o.Input, retirementRecoveryStarted(o))
+}
+func (s *Service) retirementResourceChecked(ctx context.Context, p security.Principal, cloud string, in ClusterInput, recovery bool) (*ManagedResource, error) {
 	r, err := s.Clusters.GetManagedResource(ctx, p.OrgID, in.ResourceID)
 	if err != nil {
 		return nil, err
 	}
-	if r.CloudID != cloud || r.DeletedAt != nil || r.Revision != in.ResourceRevision || r.Observation == nil || r.Observation.Ref != in.Ref || r.ExternalID != in.Ref.ID || r.Incarnation != in.Ref.Incarnation || r.ConnectionID != in.ConnectionID || r.Provider != in.Provider || r.AccountID != in.AccountID {
-		return nil, ErrConflict
+	if checkErr := checkRetirementResourcePins(r, cloud, in, recovery); checkErr != nil {
+		return nil, checkErr
 	}
 	if in.Kind == "retire-cluster" {
 		if r.Ownership != "managed" || r.CreationReceipt == nil {
@@ -177,7 +185,7 @@ func (s *Service) prepareClusterRetirement(ctx context.Context, p security.Princ
 		if a.CloudID != cloud || a.ClusterID != r.ID || a.Revision != expected.Revision || a.DeletedAt != nil || maintenanceHash(a) != maintenanceHash(expected) {
 			return nil, ErrConflict
 		}
-		return &ClusterRetirementReview{ResourceID: r.ID, Blockers: dependencies, Digest: maintenanceHash(struct {
+		return &ClusterRetirementReview{ResourceFingerprint: retirementResourceFingerprint(r), ResourceID: r.ID, Blockers: dependencies, Digest: maintenanceHash(struct {
 			Attachment *RuntimeAttachment
 			Revision   int64
 		}{a, r.Revision})}, nil
@@ -196,4 +204,46 @@ func (s *Service) prepareClusterRetirement(ctx context.Context, p security.Princ
 		Generation, CloudRevision int64
 	}{review.Digest, in.ConnectionID, in.ConnectionGeneration, in.CloudRevision})
 	return review, nil
+}
+
+// retirementResourceFingerprint excludes observation revisions and provider state.
+// Trust, ownership and immutable creation evidence remain approval inputs.
+func retirementResourceFingerprint(r *ManagedResource) string {
+	if r == nil || r.Observation == nil {
+		return ""
+	}
+	authority := append([]string(nil), r.LifecycleAuthority...)
+	sort.Strings(authority)
+	return maintenanceHash(struct {
+		Org, Cloud, ID, Kind, Provider, Account, Connection, External, Incarnation, Ownership, Endpoint, CA string
+		Ref                                                                                                 provider.ClusterRef
+		Receipt                                                                                             *provider.ClusterMutation
+		Authority                                                                                           []string
+	}{r.OrgID, r.CloudID, r.ID, r.Kind, r.Provider, r.AccountID, r.ConnectionID, r.ExternalID, r.Incarnation, r.Ownership, r.Observation.Endpoint, r.Observation.CAHash, r.Observation.Ref, r.CreationReceipt, authority})
+}
+func retirementRecoveryStarted(o *ClusterOperation) bool {
+	if o == nil || o.Input.Retirement == nil || len(o.Steps) == 0 {
+		return false
+	}
+	if o.Kind == "detach-runtime" {
+		return o.Steps[0].Name == "disable" && o.Steps[0].State == "completed"
+	}
+	return o.Kind == "retire-cluster" && len(o.Receipts) == 1 && o.Receipts[0].Kind == "retire-cluster" && o.Receipts[0].Ref == o.Input.Ref && o.Receipts[0].OperationID == o.ID && o.Receipts[0].RequestDigest == o.Digest
+}
+func checkRetirementResourcePins(r *ManagedResource, cloud string, in ClusterInput, recovery bool) error {
+	if r == nil || r.CloudID != cloud || r.DeletedAt != nil || r.Status == "identity_changed" || r.Observation == nil || r.Observation.Ref != in.Ref || r.ExternalID != in.Ref.ID || r.Incarnation != in.Ref.Incarnation || r.ConnectionID != in.ConnectionID || r.Provider != in.Provider || r.AccountID != in.AccountID {
+		return ErrConflict
+	}
+	pin := ""
+	if in.Retirement != nil {
+		pin = in.Retirement.ResourceFingerprint
+	}
+	if pin != "" && pin != retirementResourceFingerprint(r) {
+		return ErrConflict
+	}
+	// Earlier unpinned approvals cannot gain new recovery authority retroactively.
+	if r.Revision != in.ResourceRevision && (!recovery || pin == "") {
+		return ErrConflict
+	}
+	return nil
 }

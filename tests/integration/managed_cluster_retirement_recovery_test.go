@@ -16,8 +16,9 @@ import (
 
 type retirementRecoveryProvider struct {
 	maintenanceRecoveryProvider
-	gone, lost bool
-	deletes    int
+	gone, lost   bool
+	deferAbsence bool
+	deletes      int
 }
 
 func (p *retirementRecoveryProvider) AssociatedResources(context.Context, provider.AccountAccess, provider.ClusterRef) (provider.AssociatedResourceInventory, error) {
@@ -37,7 +38,7 @@ func (p *retirementRecoveryProvider) DeleteCluster(ctx context.Context, a provid
 		return provider.ClusterMutation{}, err
 	}
 	p.deletes++
-	p.gone = true
+	p.gone = !p.deferAbsence
 	if p.lost {
 		return provider.ClusterMutation{}, provider.ErrInfrastructureAmbiguous
 	}
@@ -72,7 +73,7 @@ func TestManagedClusterRetirementPersistedRecovery(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			adapter := &retirementRecoveryProvider{maintenanceRecoveryProvider: maintenanceRecoveryProvider{enrollmentKindProvider: enrollmentKindProvider{observation: observed}}, lost: lost}
+			adapter := &retirementRecoveryProvider{maintenanceRecoveryProvider: maintenanceRecoveryProvider{enrollmentKindProvider: enrollmentKindProvider{observation: observed}}, lost: lost, deferAbsence: !lost}
 			makeService := func() *cloudinfra.Service {
 				adapters := cloudinfra.NewAdapters()
 				if err := adapters.RegisterCluster("digitalocean", adapter, provider.ClusterDeletion, provider.ClusterMutationObservation); err != nil {
@@ -97,7 +98,17 @@ func TestManagedClusterRetirementPersistedRecovery(t *testing.T) {
 			if err = svc.ReconcileClusterOperation(t.Context(), "org", op.ID, nil); err != nil {
 				t.Fatal(err)
 			}
-			if lost {
+			if !lost {
+				adapter.gone = true
+				drift, driftErr := svc.ObserveClusterDrift(t.Context(), principal, "cloud", "cluster")
+				if driftErr != nil {
+					t.Fatal(driftErr)
+				}
+				if drift.Status != "missing" || drift.Revision <= in.ResourceRevision {
+					t.Fatal("missing observation was not persisted")
+				}
+			}
+			{
 				if _, err = db.Exec(t.Context(), `UPDATE loomplane_cluster_operations SET body=jsonb_set(jsonb_set(body,'{lease_expires_at}',to_jsonb($2::text)),'{next_attempt_at}',to_jsonb($2::text)) WHERE id=$1`, op.ID, time.Now().Add(-time.Minute).UTC().Format(time.RFC3339Nano)); err != nil {
 					t.Fatal(err)
 				}

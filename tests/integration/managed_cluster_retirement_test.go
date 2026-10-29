@@ -78,6 +78,14 @@ func TestManagedClusterRetirementDetachRetainsExternalData(t *testing.T) {
 	if _, err = f.bootstrap.Kube.CoreV1().ServiceAccounts(a.Namespace).Get(t.Context(), a.ServiceAccountName, metav1.GetOptions{}); !apierrors.IsNotFound(err) {
 		t.Fatal("owned service account retained", err)
 	}
+	f.provider.observation.Version = "external-upgrade"
+	drift, driftErr := svc.ObserveClusterDrift(t.Context(), f.principal, "cloud", a.ClusterID)
+	if driftErr != nil {
+		t.Fatal(driftErr)
+	}
+	if drift.Revision <= o.Input.ResourceRevision || drift.Status != "drifted" {
+		t.Fatal("benign drift was not persisted")
+	}
 	vault.fail = false
 	if _, err = svc.RetryCluster(t.Context(), f.principal, "cloud", o.ID); err != nil {
 		t.Fatal(err)

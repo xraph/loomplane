@@ -232,6 +232,7 @@ func (s *Service) PreviewCluster(ctx context.Context, p security.Principal, clou
 			}
 		}
 		in.Retirement.Inventory = review.Inventory
+		in.Retirement.ResourceFingerprint = review.ResourceFingerprint
 	case "node-pool-create", "node-pool-update", "node-pool-delete", "cluster-upgrade", "cluster-configure":
 		if in.Maintenance != nil && (in.Maintenance.ObservationDigest != "" || in.Maintenance.Pool != nil && (in.Maintenance.Pool.OperationID != "" || in.Maintenance.Pool.RequestDigest != "")) {
 			return nil, ErrInvalid

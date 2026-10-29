@@ -50,13 +50,14 @@ func retirementPinsTx(ctx context.Context, tx driver.Tx, o *ClusterOperation) er
 	if o.Input.Retirement == nil {
 		return ErrInvalid
 	}
-	var valid bool
-	if checkErr := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_managed_resources WHERE org_id=$1 AND cloud_id=$2 AND id=$3 AND revision=$4 AND deleted_at IS NULL AND incarnation=$5)`, o.OrgID, o.CloudID, o.Input.ResourceID, o.Input.ResourceRevision, o.Input.Ref.Incarnation).Scan(&valid); checkErr != nil {
+	resource, err := scanManagedResource(tx.QueryRow(ctx, `SELECT `+managedResourceColumns+` FROM loomplane_managed_resources WHERE org_id=$1 AND cloud_id=$2 AND id=$3`, o.OrgID, o.CloudID, o.Input.ResourceID))
+	if err != nil {
+		return err
+	}
+	if checkErr := checkRetirementResourcePins(resource, o.CloudID, o.Input, retirementRecoveryStarted(o)); checkErr != nil {
 		return checkErr
 	}
-	if !valid {
-		return ErrConflict
-	}
+	var valid bool
 	attachment := ""
 	if o.Kind == "detach-runtime" {
 		a := o.Input.Retirement.Attachment

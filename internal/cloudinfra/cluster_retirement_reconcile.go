@@ -15,7 +15,7 @@ func (s *Service) retirementEffectGuard(ctx context.Context, o *ClusterOperation
 	if _, _, err := s.clusterAuthority(ctx, o.Principal, o.CloudID, o.Input); err != nil {
 		return err
 	}
-	if _, err := s.retirementResource(ctx, o.Principal, o.CloudID, o.Input); err != nil {
+	if _, err := s.retirementOperationResource(ctx, o); err != nil {
 		return err
 	}
 	store, ok := s.Clusters.(ClusterRetirementStore)
@@ -103,12 +103,9 @@ func (s *Service) reconcileClusterRetirement(ctx context.Context, o *ClusterOper
 	if len(o.Receipts) != 1 || o.Receipts[0].Ref != o.Input.Ref || o.Receipts[0].Kind != "retire-cluster" {
 		return s.clusterAttention(ctx, o, "Cluster is absent, but provider deletion acceptance is unconfirmed.")
 	}
-	r, err := s.Clusters.GetManagedResource(ctx, o.OrgID, o.Input.ResourceID)
+	r, err := s.retirementOperationResource(ctx, o)
 	if err != nil {
 		return err
-	}
-	if r.Revision != o.Input.ResourceRevision || r.Incarnation != o.Input.Ref.Incarnation || r.DeletedAt != nil {
-		return ErrConflict
 	}
 	now := s.now().UTC()
 	r.DeletedAt = &now
