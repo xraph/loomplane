@@ -1,237 +1,238 @@
 # Every read registered with the instance console, as
-# "contributor intent@version kind capability". The console gate opens
-# each one unless consoleBlockedQueries in
-# extensions/identity/console_allowlist.go blocks it, so the blocked reads
-# are listed here too. Read consoleReadsFile in console_reads_test.go
-# before you add or change a line.
+# "contributor intent@version kind capability open|blocked". open means the
+# console gate lets a platform admin send it; blocked reads are on
+# consoleBlockedQueries in extensions/identity/console_allowlist.go, or are
+# Ctrl Plane reads infrastructure.ConsoleRead leaves out. Read
+# consoleReadsFile in console_reads_test.go before you add a line or turn
+# one to open.
 
-authsome apps.context@1 query read
-authsome apps.detail@1 query read
-authsome apps.list@1 query read
-authsome auth.config@1 query read
-authsome auth.dynamicConfig@1 query read
-authsome auth.featureToggles@1 query read
-authsome auth.setupStatus@1 query read
-authsome credentials.detail@1 query read
-authsome devices.detail@1 query read
-authsome devices.list@1 query read
-authsome environments.detail@1 query read
-authsome environments.list@1 query read
-authsome formConfigs.list@1 query read
-authsome formConfigs.signup@1 query read
-authsome overview.recentSignups@1 query read
-authsome overview.stats@1 query read
-authsome plugins.list@1 query read
-authsome roles.detail@1 query read
-authsome roles.list@1 query read
-authsome sessions.detail@1 query read
-authsome sessions.list@1 query read
-authsome settings.detail@1 query read
-authsome settings.list@1 query read
-authsome settings.namespace@1 query read
-authsome settings.namespaces@1 query read
-authsome users.detail@1 query read
-authsome users.list@1 query read
-authsome webhooks.detail@1 query read
-authsome webhooks.list@1 query read
-chronicle checkpoints.detail@1 query read
-chronicle checkpoints.list@1 query read
-chronicle erasures.detail@1 query read
-chronicle erasures.list@1 query read
-chronicle erasures.preview@1 query read
-chronicle events.aggregate@1 query read
-chronicle events.byUser@1 query read
-chronicle events.detail@1 query read
-chronicle events.list@1 query read
-chronicle overview.stats@1 query read
-chronicle reports.detail@1 query read
-chronicle reports.export@1 query read
-chronicle reports.list@1 query read
-chronicle retention.archives@1 query read
-chronicle retention.policies@1 query read
-chronicle retention.policyDetail@1 query read
-chronicle retention.preview@1 query read
-chronicle settings.detail@1 query read
-chronicle streams.list@1 query read
-chronicle streams.mine@1 query read
-chronicle verify.event@1 query read
-chronicle verify.run@1 query read
-core-contract apps.list@1 query read
-core-contract audit.list@1 query read
-core-contract audit.tail@1 subscription read
-core-contract extensions.list@1 query read
-core-contract health@1 query read
-core-contract metrics-report@1 query read
-core-contract metrics.summary@1 subscription read
-core-contract overview@1 query read
-core-contract services.detail@1 query read
-core-contract services.list@1 query read
-core-contract traces.detail@1 query read
-core-contract traces.list@1 query read
-ctrlplane audit.list@1 query read
-ctrlplane bootstrap.list@1 query read
-ctrlplane certificates.list@1 query read
-ctrlplane config.detail@1 query read
-ctrlplane datacenters.detail@1 query read
-ctrlplane datacenters.instances@1 query read
-ctrlplane datacenters.list@1 query read
-ctrlplane deployments.detail@1 query read
-ctrlplane deployments.list@1 query read
-ctrlplane deployments.recent@1 query read
-ctrlplane domains.list@1 query read
-ctrlplane events.list@1 query read
-ctrlplane health.checks@1 query read
-ctrlplane health.detail@1 query read
-ctrlplane health.summary@1 query read
-ctrlplane instances.detail@1 query read
-ctrlplane instances.list@1 query read
-ctrlplane providers.list@1 query read
-ctrlplane releases.detail@1 query read
-ctrlplane releases.list@1 query read
-ctrlplane routes.list@1 query read
-ctrlplane secrets.list@1 query read
-ctrlplane session.detail@1 query read
-ctrlplane system.stats@1 query read
-ctrlplane telemetry.detail@1 query read
-ctrlplane templates.detail@1 query read
-ctrlplane templates.list@1 query read
-ctrlplane tenants.detail@1 query read
-ctrlplane tenants.list@1 query read
-ctrlplane tenants.quota@1 query read
-ctrlplane workers.detail@1 query read
-ctrlplane workers.list@1 query read
-ctrlplane workloads.detail@1 query read
-ctrlplane workloads.health@1 query read
-ctrlplane workloads.instances@1 query read
-ctrlplane workloads.list@1 query read
-dispatch artifacts.forJob@1 query read
-dispatch artifacts.get@1 query read
-dispatch artifacts.list@1 query read
-dispatch artifacts.presign@1 query read
-dispatch crons.get@1 query read
-dispatch crons.list@1 query read
-dispatch dlq.counts@1 query read
-dispatch dlq.get@1 query read
-dispatch dlq.list@1 query read
-dispatch dlq.purgePreview@1 query read
-dispatch durable.audit@1 query read
-dispatch durable.build@1 query read
-dispatch durable.capabilities@1 query read
-dispatch durable.chain@1 query read
-dispatch durable.children@1 query read
-dispatch durable.compatibility@1 query read
-dispatch durable.execution@1 query read
-dispatch durable.executions@1 query read
-dispatch durable.history@1 query read
-dispatch durable.hooks@1 query read
-dispatch durable.namespaces@1 query read
-dispatch durable.payload@1 query read
-dispatch durable.query@1 query read
-dispatch durable.queryRemovalCommitStatus@1 query read
-dispatch durable.queryRemovalGuardReceipt@1 query read
-dispatch durable.queryRemovalRevalidation@1 query read
-dispatch durable.queryRuntime@1 query read
-dispatch durable.queryRuntimeRemovalCheck@1 query read
-dispatch durable.tasks@1 query read
-dispatch durable.workerDrainReceipt@1 query read
-dispatch durable.workerStatus@1 query read
-dispatch engine.config@1 query read
-dispatch handlers.get@1 query read
-dispatch handlers.list@1 query read
-dispatch jobs.counts@1 query read
-dispatch jobs.get@1 query read
-dispatch jobs.list@1 query read
-dispatch overview.summary@1 query read
-dispatch queues.get@1 query read
-dispatch queues.list@1 query read
-dispatch workers.get@1 query read
-dispatch workers.list@1 query read
-dispatch workflows.get@1 query read
-dispatch workflows.list@1 query read
-dispatch workflows.replayPreview@1 query read
-herald engine.info@1 query read
-herald inbox.list@1 query read
-herald messages.detail@1 query read
-herald messages.list@1 query read
-herald overview.stats@1 query read
-herald preferences.get@1 query read
-herald providers.detail@1 query read
-herald providers.list@1 query read
-herald scopes.list@1 query read
-herald send.resolve@1 query read
-herald templates.detail@1 query read
-herald templates.list@1 query read
-herald templates.render@1 query read
-herald templates.resolve@1 query read
-keysmith keys.detail@1 query read
-keysmith keys.list@1 query read
-keysmith overview@1 query read
-keysmith policies.detail@1 query read
-keysmith policies.list@1 query read
-keysmith rotations.list@1 query read
-keysmith scopes.list@1 query read
-keysmith settings@1 query read
-keysmith usage.records@1 query read
-keysmith usage.series@1 query read
-notification notification.mappings.list@1 query read
-notification notification.templates.detail@1 query read
-notification notification.templates.list@1 query read
-notification notification.templates.preview@1 query read
-organization orgs.detail@1 query read
-organization orgs.invitations@1 query read
-organization orgs.list@1 query read
-organization orgs.members@1 query read
-password password.policy@1 query read
-relay deliveries.detail@1 query read
-relay deliveries.list@1 query read
-relay dlq.bulkPreview@1 query read
-relay dlq.detail@1 query read
-relay dlq.list@1 query read
-relay endpoints.detail@1 query read
-relay endpoints.list@1 query read
-relay endpoints.resolve@1 query read
-relay eventTypes.detail@1 query read
-relay eventTypes.list@1 query read
-relay eventTypes.match@1 query read
-relay events.detail@1 query read
-relay events.list@1 query read
-relay overview.stats@1 query read
-relay settings.config@1 query read
-trove buckets.list@1 query read
-trove cas.list@1 query read
-trove cas.status@1 query read
-trove middleware.list@1 query read
-trove objects.contentUrl@1 query read
-trove objects.head@1 query read
-trove objects.list@1 query read
-trove stores.list@1 query read
-trove streams.list@1 query read
-trove system.status@1 query read
-waitlist waitlist.counts@1 query read
-waitlist waitlist.detail@1 query read
-waitlist waitlist.list@1 query read
-warden assignments.expiring@1 query read
-warden assignments.list@1 query read
-warden checkLogs.detail@1 query read
-warden checkLogs.list@1 query read
-warden config.detail@1 query read
-warden namespaces.list@1 query read
-warden overview.recentChecks@1 query read
-warden overview.stats@1 query read
-warden permissions.detail@1 query read
-warden permissions.list@1 query read
-warden playground.batchCheck@1 query read
-warden playground.explain@1 query read
-warden policies.detail@1 query read
-warden policies.list@1 query read
-warden policies.validate@1 query read
-warden relations.expand@1 query read
-warden relations.list@1 query read
-warden resourceTypes.detail@1 query read
-warden resourceTypes.graph@1 query read
-warden resourceTypes.list@1 query read
-warden roles.detail@1 query read
-warden roles.list@1 query read
-warden schema.export@1 query read
-warden schema.plan@1 query read
-warden subjects.detail@1 query read
+authsome apps.context@1 query read open
+authsome apps.detail@1 query read open
+authsome apps.list@1 query read open
+authsome auth.config@1 query read open
+authsome auth.dynamicConfig@1 query read blocked
+authsome auth.featureToggles@1 query read open
+authsome auth.setupStatus@1 query read blocked
+authsome credentials.detail@1 query read open
+authsome devices.detail@1 query read open
+authsome devices.list@1 query read open
+authsome environments.detail@1 query read open
+authsome environments.list@1 query read open
+authsome formConfigs.list@1 query read open
+authsome formConfigs.signup@1 query read open
+authsome overview.recentSignups@1 query read open
+authsome overview.stats@1 query read open
+authsome plugins.list@1 query read open
+authsome roles.detail@1 query read open
+authsome roles.list@1 query read open
+authsome sessions.detail@1 query read open
+authsome sessions.list@1 query read open
+authsome settings.detail@1 query read open
+authsome settings.list@1 query read open
+authsome settings.namespace@1 query read open
+authsome settings.namespaces@1 query read open
+authsome users.detail@1 query read open
+authsome users.list@1 query read open
+authsome webhooks.detail@1 query read open
+authsome webhooks.list@1 query read open
+chronicle checkpoints.detail@1 query read open
+chronicle checkpoints.list@1 query read open
+chronicle erasures.detail@1 query read open
+chronicle erasures.list@1 query read open
+chronicle erasures.preview@1 query read open
+chronicle events.aggregate@1 query read open
+chronicle events.byUser@1 query read open
+chronicle events.detail@1 query read open
+chronicle events.list@1 query read open
+chronicle overview.stats@1 query read open
+chronicle reports.detail@1 query read open
+chronicle reports.export@1 query read open
+chronicle reports.list@1 query read open
+chronicle retention.archives@1 query read open
+chronicle retention.policies@1 query read open
+chronicle retention.policyDetail@1 query read open
+chronicle retention.preview@1 query read open
+chronicle settings.detail@1 query read open
+chronicle streams.list@1 query read open
+chronicle streams.mine@1 query read open
+chronicle verify.event@1 query read open
+chronicle verify.run@1 query read open
+core-contract apps.list@1 query read open
+core-contract audit.list@1 query read open
+core-contract audit.tail@1 subscription read open
+core-contract extensions.list@1 query read open
+core-contract health@1 query read open
+core-contract metrics-report@1 query read open
+core-contract metrics.summary@1 subscription read open
+core-contract overview@1 query read open
+core-contract services.detail@1 query read open
+core-contract services.list@1 query read open
+core-contract traces.detail@1 query read open
+core-contract traces.list@1 query read open
+ctrlplane audit.list@1 query read open
+ctrlplane bootstrap.list@1 query read blocked
+ctrlplane certificates.list@1 query read blocked
+ctrlplane config.detail@1 query read open
+ctrlplane datacenters.detail@1 query read blocked
+ctrlplane datacenters.instances@1 query read blocked
+ctrlplane datacenters.list@1 query read blocked
+ctrlplane deployments.detail@1 query read blocked
+ctrlplane deployments.list@1 query read blocked
+ctrlplane deployments.recent@1 query read blocked
+ctrlplane domains.list@1 query read blocked
+ctrlplane events.list@1 query read open
+ctrlplane health.checks@1 query read blocked
+ctrlplane health.detail@1 query read blocked
+ctrlplane health.summary@1 query read blocked
+ctrlplane instances.detail@1 query read blocked
+ctrlplane instances.list@1 query read blocked
+ctrlplane providers.list@1 query read open
+ctrlplane releases.detail@1 query read blocked
+ctrlplane releases.list@1 query read blocked
+ctrlplane routes.list@1 query read blocked
+ctrlplane secrets.list@1 query read blocked
+ctrlplane session.detail@1 query read open
+ctrlplane system.stats@1 query read open
+ctrlplane telemetry.detail@1 query read blocked
+ctrlplane templates.detail@1 query read blocked
+ctrlplane templates.list@1 query read blocked
+ctrlplane tenants.detail@1 query read open
+ctrlplane tenants.list@1 query read open
+ctrlplane tenants.quota@1 query read open
+ctrlplane workers.detail@1 query read open
+ctrlplane workers.list@1 query read open
+ctrlplane workloads.detail@1 query read blocked
+ctrlplane workloads.health@1 query read blocked
+ctrlplane workloads.instances@1 query read blocked
+ctrlplane workloads.list@1 query read blocked
+dispatch artifacts.forJob@1 query read open
+dispatch artifacts.get@1 query read open
+dispatch artifacts.list@1 query read open
+dispatch artifacts.presign@1 query read blocked
+dispatch crons.get@1 query read open
+dispatch crons.list@1 query read open
+dispatch dlq.counts@1 query read open
+dispatch dlq.get@1 query read open
+dispatch dlq.list@1 query read open
+dispatch dlq.purgePreview@1 query read open
+dispatch durable.audit@1 query read open
+dispatch durable.build@1 query read open
+dispatch durable.capabilities@1 query read open
+dispatch durable.chain@1 query read open
+dispatch durable.children@1 query read open
+dispatch durable.compatibility@1 query read open
+dispatch durable.execution@1 query read open
+dispatch durable.executions@1 query read open
+dispatch durable.history@1 query read open
+dispatch durable.hooks@1 query read open
+dispatch durable.namespaces@1 query read open
+dispatch durable.payload@1 query read open
+dispatch durable.query@1 query read open
+dispatch durable.queryRemovalCommitStatus@1 query read open
+dispatch durable.queryRemovalGuardReceipt@1 query read open
+dispatch durable.queryRemovalRevalidation@1 query read open
+dispatch durable.queryRuntime@1 query read open
+dispatch durable.queryRuntimeRemovalCheck@1 query read open
+dispatch durable.tasks@1 query read open
+dispatch durable.workerDrainReceipt@1 query read open
+dispatch durable.workerStatus@1 query read open
+dispatch engine.config@1 query read open
+dispatch handlers.get@1 query read open
+dispatch handlers.list@1 query read open
+dispatch jobs.counts@1 query read open
+dispatch jobs.get@1 query read open
+dispatch jobs.list@1 query read open
+dispatch overview.summary@1 query read open
+dispatch queues.get@1 query read open
+dispatch queues.list@1 query read open
+dispatch workers.get@1 query read open
+dispatch workers.list@1 query read open
+dispatch workflows.get@1 query read open
+dispatch workflows.list@1 query read open
+dispatch workflows.replayPreview@1 query read open
+herald engine.info@1 query read open
+herald inbox.list@1 query read open
+herald messages.detail@1 query read open
+herald messages.list@1 query read open
+herald overview.stats@1 query read open
+herald preferences.get@1 query read open
+herald providers.detail@1 query read open
+herald providers.list@1 query read open
+herald scopes.list@1 query read open
+herald send.resolve@1 query read open
+herald templates.detail@1 query read open
+herald templates.list@1 query read open
+herald templates.render@1 query read open
+herald templates.resolve@1 query read open
+keysmith keys.detail@1 query read open
+keysmith keys.list@1 query read open
+keysmith overview@1 query read open
+keysmith policies.detail@1 query read open
+keysmith policies.list@1 query read open
+keysmith rotations.list@1 query read open
+keysmith scopes.list@1 query read open
+keysmith settings@1 query read open
+keysmith usage.records@1 query read open
+keysmith usage.series@1 query read open
+notification notification.mappings.list@1 query read open
+notification notification.templates.detail@1 query read open
+notification notification.templates.list@1 query read open
+notification notification.templates.preview@1 query read open
+organization orgs.detail@1 query read open
+organization orgs.invitations@1 query read open
+organization orgs.list@1 query read open
+organization orgs.members@1 query read open
+password password.policy@1 query read open
+relay deliveries.detail@1 query read open
+relay deliveries.list@1 query read open
+relay dlq.bulkPreview@1 query read open
+relay dlq.detail@1 query read open
+relay dlq.list@1 query read open
+relay endpoints.detail@1 query read open
+relay endpoints.list@1 query read open
+relay endpoints.resolve@1 query read open
+relay eventTypes.detail@1 query read open
+relay eventTypes.list@1 query read open
+relay eventTypes.match@1 query read open
+relay events.detail@1 query read open
+relay events.list@1 query read open
+relay overview.stats@1 query read open
+relay settings.config@1 query read open
+trove buckets.list@1 query read open
+trove cas.list@1 query read open
+trove cas.status@1 query read open
+trove middleware.list@1 query read open
+trove objects.contentUrl@1 query read blocked
+trove objects.head@1 query read open
+trove objects.list@1 query read open
+trove stores.list@1 query read open
+trove streams.list@1 query read open
+trove system.status@1 query read open
+waitlist waitlist.counts@1 query read open
+waitlist waitlist.detail@1 query read open
+waitlist waitlist.list@1 query read open
+warden assignments.expiring@1 query read open
+warden assignments.list@1 query read open
+warden checkLogs.detail@1 query read open
+warden checkLogs.list@1 query read open
+warden config.detail@1 query read open
+warden namespaces.list@1 query read open
+warden overview.recentChecks@1 query read open
+warden overview.stats@1 query read open
+warden permissions.detail@1 query read open
+warden permissions.list@1 query read open
+warden playground.batchCheck@1 query read open
+warden playground.explain@1 query read open
+warden policies.detail@1 query read open
+warden policies.list@1 query read open
+warden policies.validate@1 query read open
+warden relations.expand@1 query read open
+warden relations.list@1 query read open
+warden resourceTypes.detail@1 query read open
+warden resourceTypes.graph@1 query read open
+warden resourceTypes.list@1 query read open
+warden roles.detail@1 query read open
+warden roles.list@1 query read open
+warden schema.export@1 query read open
+warden schema.plan@1 query read open
+warden subjects.detail@1 query read open

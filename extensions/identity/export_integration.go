@@ -17,3 +17,13 @@ func (e *Extension) SetSetupOrgHook(hook setupOrgHook) {
 func (e *Extension) ConsoleRegistry() contract.Registry {
 	return e.consoleRegistry()
 }
+
+// ConsoleOpens reports whether the console gate lets a platform admin send
+// the registered intent in, as a query or, for a subscription, as one.
+func (e *Extension) ConsoleOpens(contributor string, in contract.Intent) bool {
+	kind := contract.KindQuery
+	if in.Kind == contract.IntentKindSubscription {
+		kind = contract.KindSubscribe
+	}
+	return consoleAllowed(e.consoleRegistry(), contract.Request{Kind: kind, Contributor: contributor, Intent: in.Name, IntentVersion: in.Version})
+}

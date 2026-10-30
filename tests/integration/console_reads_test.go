@@ -16,17 +16,24 @@ import (
 	"github.com/xraph/loomplane/internal/config"
 )
 
-// consoleReadsFile lists every read the console gate opens: each intent a
-// registered contributor declares as a query or with read capability, one
-// "contributor intent@version kind capability" per line.
+// consoleReadsFile lists every read registered with the console, one
+// "contributor intent@version kind capability open|blocked" per line, where
+// open means the console gate lets a platform admin send it.
 //
-// The gate opens every registered read, so a library release that adds or
-// changes one opens it without anyone looking. This test fails until the
-// list matches. Before you add a line, read the intent's handler and its
-// response type, and block it in extensions/identity/console_allowlist.go
-// (consoleBlockedQueries) instead if its response can carry a secret value,
-// a credential, a token, a raw key or hash, or a presigned or signed URL
-// that downloads content.
+// The gate opens every registered read it doesn't block, so a library
+// release that adds or changes one opens it without anyone looking. This
+// test fails until the list matches. Before you add a line, or turn one to
+// open, read the intent's handler and its response type, and block it in
+// extensions/identity/console_allowlist.go (consoleBlockedQueries) instead
+// if its response can carry a secret value, a credential, a token, a raw key
+// or hash, or a presigned or signed URL that downloads content.
+//
+// Two things open data without this list changing, so each needs its own
+// review. A library release can change what an intent returns while keeping
+// its name and version, so read the response types on every library bump,
+// not only the new lines here. And Dispatch's reads all answer 503 today
+// because its operator boundary isn't wired: wiring it opens every Dispatch
+// read on this list at once.
 const consoleReadsFile = "testdata/console_reads.txt"
 
 func TestConsoleReadsReviewed(t *testing.T) {
@@ -55,7 +62,11 @@ func TestConsoleReadsReviewed(t *testing.T) {
 			if in.Kind != contract.IntentKindQuery && in.Capability != contract.CapRead {
 				continue
 			}
-			got = append(got, fmt.Sprintf("%s %s@%d %s %s", m.Contributor.Name, in.Name, in.Version, in.Kind, in.Capability))
+			gate := "blocked"
+			if id.ConsoleOpens(m.Contributor.Name, in) {
+				gate = "open"
+			}
+			got = append(got, fmt.Sprintf("%s %s@%d %s %s %s", m.Contributor.Name, in.Name, in.Version, in.Kind, in.Capability, gate))
 		}
 	}
 	slices.Sort(got)
