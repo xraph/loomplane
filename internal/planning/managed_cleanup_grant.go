@@ -22,6 +22,8 @@ var ErrManagedCleanupUnavailable = errors.New("managed cleanup descendant owners
 type ManagedCleanupSelection struct {
 	Org, Plan, Action, Deployment string
 	TargetIndex                   int
+	FailedReviewID                string
+	ExecutionAttempt              int
 }
 
 // ManagedCleanupGrant remains available after its binding and instance are gone.
@@ -70,6 +72,9 @@ func (s *ManagedCleanupStore) actor(ctx context.Context, p security.Principal, o
 }
 
 func (s *ManagedCleanupStore) loadTarget(ctx context.Context, tx driver.Tx, sel ManagedCleanupSelection) (ManagedCleanupTarget, error) {
+	if sel.FailedReviewID != "" {
+		return s.loadFailedTarget(ctx, tx, sel)
+	}
 	var target ManagedCleanupTarget
 	if sel.Org == "" || sel.Plan == "" || sel.Action == "" || sel.Deployment == "" || sel.TargetIndex < 0 {
 		return target, kube.ErrManagedAuthority
@@ -98,6 +103,9 @@ func (s *ManagedCleanupStore) loadTarget(ctx context.Context, tx driver.Tx, sel 
 // Open revokes application execution before creating independently revocable
 // cleanup authority. Retrying Open never reopens a revoked cleanup grant.
 func (s *ManagedCleanupStore) Open(ctx context.Context, sel ManagedCleanupSelection) (_ *ManagedCleanupGrant, err error) {
+	if sel.FailedReviewID != "" {
+		return s.openFailedGrant(ctx, sel)
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
@@ -111,7 +119,7 @@ func (s *ManagedCleanupStore) Open(ctx context.Context, sel ManagedCleanupSelect
 		return nil, err
 	}
 	var existing string
-	err = tx.QueryRow(ctx, `SELECT id FROM loomplane_managed_cleanup_grants WHERE org_id=$1 AND plan_id=$2 AND action_id=$3 AND deployment_id=$4 AND target_index=$5`, sel.Org, sel.Plan, sel.Action, sel.Deployment, sel.TargetIndex).Scan(&existing)
+	err = tx.QueryRow(ctx, `SELECT id FROM loomplane_managed_cleanup_grants WHERE org_id=$1 AND plan_id=$2 AND action_id=$3 AND deployment_id=$4 AND target_index=$5 AND failed_review_id IS NULL`, sel.Org, sel.Plan, sel.Action, sel.Deployment, sel.TargetIndex).Scan(&existing)
 	if err == nil {
 		grant, e := s.grant(ctx, tx, sel.Org, existing)
 		if e != nil {
@@ -152,6 +160,13 @@ func (s *ManagedCleanupStore) Open(ctx context.Context, sel ManagedCleanupSelect
 }
 
 func (s *ManagedCleanupStore) grant(ctx context.Context, tx driver.Tx, org, id string) (*ManagedCleanupGrant, error) {
+	var failed bool
+	if err := tx.QueryRow(ctx, `SELECT failed_review_id IS NOT NULL FROM loomplane_managed_cleanup_grants WHERE org_id=$1 AND id=$2`, org, id).Scan(&failed); err != nil {
+		return nil, err
+	}
+	if failed {
+		return s.failedGrant(ctx, tx, org, id)
+	}
 	out := &ManagedCleanupGrant{ID: id}
 	out.Selection.Org = org
 	var raw []byte
@@ -175,6 +190,9 @@ func (s *ManagedCleanupStore) Revoke(ctx context.Context, org, id string) (err e
 	defer func() { err = rollback(tx, err) }()
 	if checkErr := cloudprofiles.LockOrganization(ctx, tx, org); checkErr != nil {
 		return checkErr
+	}
+	if _, err = tx.Exec(ctx, `UPDATE loomplane_managed_failed_cleanups SET revoked_at=coalesce(revoked_at,clock_timestamp()),status=CASE WHEN status='pending' THEN 'failed' ELSE status END,revision=revision+1,updated_at=clock_timestamp() WHERE org_id=$1 AND id IN (SELECT failed_review_id FROM loomplane_managed_cleanup_grants WHERE org_id=$1 AND id=$2)`, org, id); err != nil {
+		return err
 	}
 	var saved string
 	err = tx.QueryRow(ctx, `UPDATE loomplane_managed_cleanup_grants SET revoked_at=coalesce(revoked_at,clock_timestamp()),revision=revision+1,updated_at=clock_timestamp() WHERE org_id=$1 AND id=$2 RETURNING id`, org, id).Scan(&saved)

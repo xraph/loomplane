@@ -24,6 +24,8 @@ func IsManagedCleanupContext(ctx context.Context) bool {
 func (d *Deployments) ManagedCleanupOptions(owner string, concurrency int) drt.Options {
 	options := d.ManagedWorkloadOptions(owner, concurrency)
 	options.BuildID = ManagedCleanupBuild
+	options.Workflows[managedFailedCleanupWorkflow] = d.managedCleanupWorkflow
+	options.Activities[managedFailedCleanupActivity] = d.managedCleanupActivity
 	for name, activity := range options.Activities {
 		options.Activities[name] = func(ctx context.Context, info drt.ActivityInfo, raw []byte) ([]byte, error) {
 			return activity(ManagedCleanupContext(ctx), info, raw)

@@ -121,7 +121,7 @@ func guardCleanupRequest(ctx context.Context, tx driver.Tx, target ManagedCleanu
 	if target.Kind == ManagedCleanupRetireDependents {
 		return ErrManagedCleanupUnavailable
 	}
-	if target.Kind != ManagedCleanupRemoveRelease {
+	if target.Kind != ManagedCleanupRemoveRelease && target.Kind != ManagedCleanupAbandonFailed {
 		return kube.ErrManagedAuthority
 	}
 	allowed := map[string]string{"secrets": "", "services": "", "serviceaccounts": "", "deployments": "apps", "horizontalpodautoscalers": "autoscaling", "ingresses": "networking.k8s.io", "roles": "rbac.authorization.k8s.io", "rolebindings": "rbac.authorization.k8s.io"}
