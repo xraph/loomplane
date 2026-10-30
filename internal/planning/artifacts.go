@@ -210,10 +210,7 @@ func (s *Service) reusable(to string, connections map[string]string, a Action, i
 		return choice, nil
 	}
 	if ownsRegistry {
-		registry := ""
-		if cfg.BuildTarget != nil {
-			registry = cfg.BuildTarget.Registry
-		}
+		registry := cfg.ImageRegistry()
 		if registry != img.Registry {
 			choice.Reason = to + " pushes to another registry" + again
 			return choice, nil

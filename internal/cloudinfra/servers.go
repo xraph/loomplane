@@ -5,8 +5,10 @@ import (
 	"errors"
 	"time"
 
+	"github.com/xraph/loomplane/internal/backupfiles"
 	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/clouds/server"
+	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/projects"
 	"github.com/xraph/loomplane/internal/security"
@@ -61,7 +63,8 @@ type Server struct {
 	HourlyPriceKnown bool                  `json:"hourly_price_known,omitempty"`
 	// PricedSize is the size the price above belongs to. A server whose size
 	// moved on, or whose price is unknown, is priced again from the catalog.
-	PricedSize string `json:"priced_size,omitempty"`
+	PricedSize     string    `json:"priced_size,omitempty"`
+	PriceCheckedAt time.Time `json:"price_checked_at,omitzero"`
 }
 
 // RuntimeHealth comes from the pinned Docker daemon, never a provider size slug.
@@ -83,21 +86,24 @@ type RuntimeHealth struct {
 // ServerInput describes exactly one reviewed lifecycle change. Adoption refers
 // to an existing pinned SSH connection and never transfers provider ownership.
 type ServerInput struct {
-	Kind            string `json:"kind"`
-	ServerID        string `json:"server_id,omitempty"`
-	ConnectionID    string `json:"connection_id,omitempty"`
-	Name            string `json:"name,omitempty"`
-	Region          string `json:"region,omitempty"`
-	Size            string `json:"size,omitempty"`
-	Image           string `json:"image,omitempty"`
-	CloudRevision   int64  `json:"cloud_revision"`
-	ServerRevision  int64  `json:"server_revision,omitempty"`
-	ConfirmAdoption bool   `json:"confirm_adoption,omitempty"`
+	AcknowledgeUnknownCosts bool   `json:"acknowledge_unknown_costs,omitempty"`
+	Kind                    string `json:"kind"`
+	ServerID                string `json:"server_id,omitempty"`
+	ConnectionID            string `json:"connection_id,omitempty"`
+	Name                    string `json:"name,omitempty"`
+	Region                  string `json:"region,omitempty"`
+	Size                    string `json:"size,omitempty"`
+	Image                   string `json:"image,omitempty"`
+	CloudRevision           int64  `json:"cloud_revision"`
+	ServerRevision          int64  `json:"server_revision,omitempty"`
+	ConfirmAdoption         bool   `json:"confirm_adoption,omitempty"`
 }
 
 // Operation retains the immutable review and public execution checkpoints.
 // Bootstrap credentials are stored only in Vault, keyed by this operation ID.
 type Operation struct {
+	BudgetReview         *BudgetReview                   `json:"budget_review,omitempty"`
+	MoneyEstimate        *MoneyEstimate                  `json:"money_estimate,omitempty"`
 	CapacityTarget       *ResourceVector                 `json:"capacity_target,omitempty"`
 	CapacityCheckedAt    time.Time                       `json:"capacity_checked_at,omitempty,omitzero"`
 	AbsenceConfirmedAt   time.Time                       `json:"absence_confirmed_at,omitempty,omitzero"`
@@ -154,6 +160,11 @@ type Runtime interface {
 }
 
 type Deps struct {
+	RegistryFiles           *backupfiles.Store
+	ManagedClusters         config.ManagedClustersConfig
+	ClusterCapacity         config.ClusterCapacityConfig
+	ClusterWorkflow         ClusterWorkflow
+	Clusters                ClusterStore
 	CapacityPrincipal       security.PrincipalVerifier
 	CapacityDemandAuthority CapacityDemandAuthority
 	CapacityDemandWakeup    CapacityDemandWakeup

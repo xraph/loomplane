@@ -147,7 +147,7 @@ export function Overview({
         body: s.draining
           ? "Move what still runs on it before you remove it."
           : "Services can't be placed on it until it passes a health check.",
-        action: open("servers", "Open servers"),
+        action: open("servers", "Open infrastructure"),
       })
   if (!project && targets.length === 0 && !fallback)
     problems.push({

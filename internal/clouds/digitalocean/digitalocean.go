@@ -74,9 +74,10 @@ func CheckToken(s string) error {
 
 // APIError is an error response from DigitalOcean.
 type APIError struct {
-	Status  int
-	ID      string
-	Message string
+	RetryAfter time.Duration
+	Status     int
+	ID         string
+	Message    string
 }
 
 func (e *APIError) Error() string {
@@ -121,7 +122,7 @@ func (c *Client) do(ctx context.Context, token, method, path string, query url.V
 		return fmt.Errorf("digitalocean: read response: %w", err)
 	}
 	if res.StatusCode >= 300 {
-		ae := &APIError{Status: res.StatusCode, Message: strings.TrimSpace(string(data))}
+		ae := &APIError{RetryAfter: retryAfter(res.Header.Get("Retry-After")), Status: res.StatusCode, Message: strings.TrimSpace(string(data))}
 		var e struct {
 			ID      string `json:"id"`
 			Message string `json:"message"`
@@ -562,4 +563,14 @@ func (c *Client) DeleteDatabase(ctx context.Context, token, id string) error {
 		return nil
 	}
 	return err
+}
+
+func retryAfter(value string) time.Duration {
+	if seconds, err := strconv.Atoi(value); err == nil && seconds > 0 {
+		return time.Duration(min(seconds, 86400)) * time.Second
+	}
+	if at, err := http.ParseTime(value); err == nil {
+		return max(0, min(time.Until(at), 24*time.Hour))
+	}
+	return 0
 }

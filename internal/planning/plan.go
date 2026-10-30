@@ -105,6 +105,7 @@ const (
 
 // Action is one step of a plan.
 type Action struct {
+	CleanupTargets []ManagedCleanupTarget `json:"cleanup_targets,omitempty"`
 	// BackupEveryHours is a reviewed default for a newly provisioned resource.
 	// It does not change the runtime recipe or overwrite an operator's policy.
 	BackupEveryHours int                `json:"backup_every_hours,omitempty"`
@@ -153,6 +154,8 @@ type AppliedInputs struct {
 }
 
 type ServiceConfig struct {
+	CapacityMode   string                     `json:"capacity_mode,omitempty"`
+	ClusterDemand  *ClusterWorkloadDemand     `json:"cluster_demand,omitempty"`
 	FrontendDemand *cloudinfra.FrontendDemand `json:"frontend_demand,omitempty"`
 	CapacityIntent *CapacityIntent            `json:"capacity_intent,omitempty"`
 	AppliedInputs  *AppliedInputs             `json:"applied_inputs,omitempty"`
@@ -320,6 +323,7 @@ func (c *ServiceConfig) Generated() bool { return c.Gateway != nil || c.Database
 
 // BuildTarget pins the builder, registry and image reviewed in a plan.
 type BuildTarget struct {
+	BuilderCloud     string            `json:"builder_cloud,omitempty"`
 	Builder          string            `json:"builder,omitempty"`
 	Registry         string            `json:"registry,omitempty"`
 	Image            string            `json:"image,omitempty"`
@@ -496,11 +500,12 @@ type Summary struct {
 
 // Result is what the planner decides.
 type Result struct {
-	CloudSyncID string    `json:"cloud_sync_id,omitempty"`
-	Actions     []Action  `json:"actions"`
-	Problems    []Finding `json:"problems"`
-	Warnings    []Finding `json:"warnings"`
-	Summary     Summary   `json:"summary"`
+	RequiredRuntimeProtocol string    `json:"required_runtime_protocol,omitempty"`
+	CloudSyncID             string    `json:"cloud_sync_id,omitempty"`
+	Actions                 []Action  `json:"actions"`
+	Problems                []Finding `json:"problems"`
+	Warnings                []Finding `json:"warnings"`
+	Summary                 Summary   `json:"summary"`
 	// Executable says whether Loomplane could carry the plan out: no
 	// problems, and an adapter for every provider it uses.
 	Executable bool `json:"executable"`
@@ -665,8 +670,9 @@ type ReleaseHistory interface {
 // Plan is one plan for one environment of a project, pinned to one commit
 // of each repository and the manifest revision it was made from.
 type Plan struct {
-	CloudSyncID string `json:"cloud_sync_id,omitempty"`
-	Catalog     bool   `json:"catalog"`
+	RequiredRuntimeProtocol string `json:"required_runtime_protocol,omitempty"`
+	CloudSyncID             string `json:"cloud_sync_id,omitempty"`
+	Catalog                 bool   `json:"catalog"`
 	// Kind is KindRelease, KindPromotion or KindRollback. JSON tags of the
 	// fields below equal their column names: the realtime trigger
 	// serialises rows with to_jsonb.
@@ -719,6 +725,7 @@ func (p *Plan) Open() bool { return p.Status == StatusPlanning || p.Status == St
 
 func (p *Plan) setResult(r *Result) {
 	p.CloudSyncID = r.CloudSyncID
+	p.RequiredRuntimeProtocol = r.RequiredRuntimeProtocol
 	p.Actions, p.Problems, p.Warnings = r.Actions, r.Problems, r.Warnings
 	p.Summary, p.Executable, p.Connections = r.Summary, r.Executable, r.Connections
 	p.Leftovers, p.Artifacts, p.Release = r.Leftovers, r.Artifacts, r.Release
@@ -727,8 +734,9 @@ func (p *Plan) setResult(r *Result) {
 // result is what planning decided for the plan, as the store keeps it.
 func (p *Plan) result() Result {
 	return Result{
-		CloudSyncID: p.CloudSyncID,
-		Actions:     p.Actions, Problems: p.Problems, Warnings: p.Warnings, Summary: p.Summary, Executable: p.Executable,
+		CloudSyncID:             p.CloudSyncID,
+		RequiredRuntimeProtocol: p.RequiredRuntimeProtocol,
+		Actions:                 p.Actions, Problems: p.Problems, Warnings: p.Warnings, Summary: p.Summary, Executable: p.Executable,
 		Connections: p.Connections, Leftovers: p.Leftovers, Artifacts: p.Artifacts, Release: p.Release,
 	}
 }

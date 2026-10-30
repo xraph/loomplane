@@ -314,8 +314,18 @@ func (*Provider) Rollback(context.Context, id.ID, id.ID) error { return ctrlplan
 func (*Provider) Resources(context.Context, id.ID) (*cpprovider.ResourceUsage, error) {
 	return nil, ctrlplane.ErrProviderUnavail
 }
-func (*Provider) Logs(context.Context, id.ID, cpprovider.LogOptions) (io.ReadCloser, error) {
-	return nil, ctrlplane.ErrProviderUnavail
+func (p *Provider) Logs(ctx context.Context, iid id.ID, options cpprovider.LogOptions) (io.ReadCloser, error) {
+	backend, ok := p.Backend.(interface {
+		Logs(context.Context, id.ID, map[string]string, cpprovider.LogOptions) (io.ReadCloser, error)
+	})
+	if !ok {
+		return nil, ctrlplane.ErrProviderUnavail
+	}
+	inst, err := p.Instances.Get(ctx, iid)
+	if err != nil {
+		return nil, err
+	}
+	return backend.Logs(ctx, iid, inst.Labels, options)
 }
 func (*Provider) Exec(context.Context, id.ID, cpprovider.ExecRequest) (*cpprovider.ExecResult, error) {
 	return nil, ctrlplane.ErrProviderUnavail

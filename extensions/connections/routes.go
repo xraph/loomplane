@@ -54,11 +54,21 @@ type CloudForm struct {
 // kubernetesPlacement are the settings a Kubernetes connection takes
 // besides its kubeconfig, whichever way it's connected.
 var kubernetesPlacement = []sdk.Setting{
+	{Key: "build_workers", Label: "Build workers (shared by default, or dedicated)"},
+	{Key: "build_runtime_class", Label: "Kata build RuntimeClass (required for shared workers)"},
+	{Key: "registry_hostname", Label: "Managed build registry hostname (optional, enables in-cluster builds)"},
 	{Key: "image_pull_secret", Label: "Existing image pull Secret (optional)"},
-	{Key: "storage_class", Label: "Retained storage class (optional)"},
-	{Key: "architecture", Label: "Persistent service architecture (amd64 or arm64)"},
+	{Key: "storage_class", Label: "Storage class (optional, defaults to the cluster's default)"},
+	{Key: "architecture", Label: "Architecture override (optional, amd64 or arm64)"},
 	{Key: "ingress_class", Label: "Ingress class for routes (optional)"},
-	{Key: "ingress_address", Label: "Ingress load balancer address (IP or hostname)"},
+	{Key: "ingress_address", Label: "Ingress address override (optional, IP or hostname)"},
+	{Key: "registry_setup", Label: "Registry setup (automatic or existing, optional)"},
+	{Key: "registry_storage", Label: "Storage driver (existing, local-path or longhorn)"},
+	{Key: "registry_network", Label: "Ingress network (load-balancer, node or metallb)"},
+	{Key: "ingress_node", Label: "Ingress node (optional for a single-node cluster)"},
+	{Key: "load_balancer_addresses", Label: "MetalLB pool (unused CIDRs or IP ranges, comma separated)"},
+	{Key: "registry_dns", Label: "Registry DNS (automatic or manual)"},
+	{Key: "registry_maintenance", Label: "Registry maintenance (automatic or manual)"},
 }
 
 // CloudList is the body of GET /api/v1/connection-clouds.
@@ -82,11 +92,12 @@ func (e *Extension) clouds(ctx context.Context, p security.Principal) (CloudList
 				{Key: "role_arn", Label: "Role ARN", Required: true}, {Key: "region", Label: "Region", Required: true},
 				{Key: "certificate_arn", Label: "Certificate ARN (optional)"},
 			}},
+		{Cloud: connections.Firecracker, Title: "Firecracker host", Credential: "Client certificate JSON", Help: "Use JSON with ca, certificate and key PEM strings. Install the Go host agent on a Linux/KVM host and authorize the client certificate for enrollment. Bind the new connection ID on the host before deploying.", Settings: []sdk.Setting{{Key: "endpoint", Label: "Host agent HTTPS endpoint", Required: true}, {Key: "host_id", Label: "Expected host ID", Required: true}}}, //nolint:gosec // This describes credential fields; it contains no credential.
 		{Cloud: connections.Server, Title: "SSH server", Credential: "SSH private key", //nolint:gosec // Form label, not a credential.
 			Help:     "Use a PEM private key, or JSON with private_key and passphrase. Your SSH user needs access to an existing Linux Docker daemon. Copy the server's public host key from a trusted source.",
-			Settings: []sdk.Setting{{Key: "host", Label: "SSH host", Required: true}, {Key: "port", Label: "SSH port (default 22)"}, {Key: "user", Label: "SSH user", Required: true}, {Key: "host_key", Label: "Public host key", Required: true}, {Key: "docker_socket", Label: "Docker socket (default /var/run/docker.sock)"}, {Key: "advertise_host", Label: "Published address (optional)"}}},
+			Settings: []sdk.Setting{{Key: "host", Label: "SSH host", Required: true}, {Key: "port", Label: "SSH port (default 22)"}, {Key: "user", Label: "SSH user", Required: true}, {Key: "host_key", Label: "Public host key", Required: true}, {Key: "docker_socket", Label: "Docker socket (default /var/run/docker.sock)"}, {Key: "advertise_host", Label: "Published address (optional)"}, {Key: "build_workers", Label: "Build workers (set dedicated to allow source builds)"}}},
 		{Cloud: connections.Kubernetes, Title: "Kubernetes", Credential: "Self-contained kubeconfig",
-			Help:              "Use an HTTPS API with an embedded CA and token or client certificate. The namespace must already exist. File references and executable authentication plugins are refused. For private images, select an existing namespace pull Secret that you manage. Persistent services need a retained storage class and an explicit amd64 or arm64 architecture.",
+			Help:              "Use an HTTPS API with an embedded CA and token or client certificate. Set a registry hostname to create a missing namespace and install ingress and cert-manager. Existing storage and load balancers are reused by default. For bare clusters, choose local-path storage and node ingress, or Longhorn storage and MetalLB with an unused address pool. Longhorn needs three Linux nodes with its host prerequisites. Automatic setup needs cluster-admin permissions and may create a billable load balancer. Connect a verified organization DNS zone for automatic records. Backups use Loomplane backup storage. Maintenance briefly pauses registry access. Use registry_setup=existing, registry_dns=manual or registry_maintenance=manual to manage those parts yourself.",
 			Settings:          append([]sdk.Setting{{Key: "context", Label: "Context (optional)"}, {Key: "namespace", Label: "Namespace (defaults to kubeconfig)"}}, kubernetesPlacement...),
 			InClusterSettings: append([]sdk.Setting{{Key: "namespace", Label: "Namespace", Required: true}}, kubernetesPlacement...)},
 		{Cloud: connections.Registry, Title: "Image registry", Credential: "Credential JSON", //nolint:gosec // Form label, not a credential.

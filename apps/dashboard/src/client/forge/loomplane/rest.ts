@@ -837,17 +837,128 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly cloudClusters = {
+    /**
+     * cloudClusters.get
+     */
+    get: async (cloudId: string, clusterId: string, cursor?: string | undefined, limit?: number | undefined, region?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CloudCluster> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/clusters/${encodeURIComponent(String(clusterId))}`;
+      const queryParams: Record<string, any> = {};
+      if (cursor !== undefined) {
+        queryParams['cursor'] = cursor;
+      }
+      if (limit !== undefined) {
+        queryParams['limit'] = limit;
+      }
+      if (region !== undefined) {
+        queryParams['region'] = region;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CloudCluster"],
+      };
+
+      return this.request<types.CloudCluster>(config);
+    },
+
+    /**
+     * cloudClusters.list
+     */
+    list: async (cloudId: string, cursor?: string | undefined, limit?: number | undefined, region?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CloudClusterPage> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/clusters`;
+      const queryParams: Record<string, any> = {};
+      if (cursor !== undefined) {
+        queryParams['cursor'] = cursor;
+      }
+      if (limit !== undefined) {
+        queryParams['limit'] = limit;
+      }
+      if (region !== undefined) {
+        queryParams['region'] = region;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CloudClusterPage"],
+      };
+
+      return this.request<types.CloudClusterPage>(config);
+    },
+
+    /**
+     * cloudClusters.options
+     */
+    options: async (cloudId: string, connectionId: string, cursor?: string | undefined, limit?: number | undefined, region?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ClusterOptions> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/cluster-options/${encodeURIComponent(String(connectionId))}`;
+      const queryParams: Record<string, any> = {};
+      if (cursor !== undefined) {
+        queryParams['cursor'] = cursor;
+      }
+      if (limit !== undefined) {
+        queryParams['limit'] = limit;
+      }
+      if (region !== undefined) {
+        queryParams['region'] = region;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ClusterOptions"],
+      };
+
+      return this.request<types.ClusterOptions>(config);
+    },
+
+    /**
+     * cloudClusters.preview
+     */
+    preview: async (cloudId: string, body: types.ClusterInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CloudClusterOperation> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/clusters/preview`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["ClusterInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CloudClusterOperation"],
+      };
+
+      return this.request<types.CloudClusterOperation>(config);
+    },
+
+  };
+
   public readonly cloudPlacements = {
     /**
      * cloudPlacements.acceptMove
      */
-    acceptMove: async (cloudId: string, body: types.MoveInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.MoveReview> => {
+    acceptMove: async (cloudId: string, body: types.CloudinfraMoveInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.MoveReview> => {
       let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/placements/accept-move`;
       const config: RequestConfig = {
         method: 'POST',
         url: __path,
         body,
-        bodyCodec: CODECS["MoveInputBody"],
+        bodyCodec: CODECS["CloudinfraMoveInputBody"],
         signal: options?.signal,
         retry: options?.retry,
         responseCodec: CODECS["MoveReview"],
@@ -859,13 +970,13 @@ export class RESTClient extends Client {
     /**
      * cloudPlacements.previewMove
      */
-    previewMove: async (cloudId: string, body: types.MoveInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.MoveReview> => {
+    previewMove: async (cloudId: string, body: types.CloudinfraMoveInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.MoveReview> => {
       let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/placements/preview-move`;
       const config: RequestConfig = {
         method: 'POST',
         url: __path,
         body,
-        bodyCodec: CODECS["MoveInputBody"],
+        bodyCodec: CODECS["CloudinfraMoveInputBody"],
         signal: options?.signal,
         retry: options?.retry,
         responseCodec: CODECS["MoveReview"],
@@ -1429,13 +1540,13 @@ export class RESTClient extends Client {
     /**
      * clouds.update
      */
-    update: async (id: string, cloudId: string, body: types.UpdateInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Profile> => {
+    update: async (id: string, cloudId: string, body: types.CloudprofilesUpdateInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Profile> => {
       let __path = `/api/v1/projects/${encodeURIComponent(String(id))}/clouds/${encodeURIComponent(String(cloudId))}`;
       const config: RequestConfig = {
         method: 'PUT',
         url: __path,
         body,
-        bodyCodec: CODECS["UpdateInputBody"],
+        bodyCodec: CODECS["CloudprofilesUpdateInputBody"],
         signal: options?.signal,
         retry: options?.retry,
         responseCodec: CODECS["Profile"],
@@ -1462,6 +1573,119 @@ export class RESTClient extends Client {
 
   };
 
+  public readonly clusterOperations = {
+    /**
+     * clusterOperations.apply
+     */
+    apply: async (cloudId: string, operationId: string, body: types.ApplyInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CloudClusterOperation> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/cluster-operations/${encodeURIComponent(String(operationId))}/apply`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["ApplyInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CloudClusterOperation"],
+      };
+
+      return this.request<types.CloudClusterOperation>(config);
+    },
+
+    /**
+     * clusterOperations.cancel
+     */
+    cancel: async (cloudId: string, operationId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CloudClusterOperation> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/cluster-operations/${encodeURIComponent(String(operationId))}/cancel`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CloudClusterOperation"],
+      };
+
+      return this.request<types.CloudClusterOperation>(config);
+    },
+
+    /**
+     * clusterOperations.get
+     */
+    get: async (cloudId: string, operationId: string, cursor?: string | undefined, limit?: number | undefined, region?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CloudClusterOperation> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/cluster-operations/${encodeURIComponent(String(operationId))}`;
+      const queryParams: Record<string, any> = {};
+      if (cursor !== undefined) {
+        queryParams['cursor'] = cursor;
+      }
+      if (limit !== undefined) {
+        queryParams['limit'] = limit;
+      }
+      if (region !== undefined) {
+        queryParams['region'] = region;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CloudClusterOperation"],
+      };
+
+      return this.request<types.CloudClusterOperation>(config);
+    },
+
+    /**
+     * clusterOperations.list
+     */
+    list: async (cloudId: string, cursor?: string | undefined, limit?: number | undefined, region?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CloudClusterOperationPage> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/cluster-operations`;
+      const queryParams: Record<string, any> = {};
+      if (cursor !== undefined) {
+        queryParams['cursor'] = cursor;
+      }
+      if (limit !== undefined) {
+        queryParams['limit'] = limit;
+      }
+      if (region !== undefined) {
+        queryParams['region'] = region;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CloudClusterOperationPage"],
+      };
+
+      return this.request<types.CloudClusterOperationPage>(config);
+    },
+
+    /**
+     * clusterOperations.retry
+     */
+    retry: async (cloudId: string, operationId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.CloudClusterOperation> => {
+      let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}/cluster-operations/${encodeURIComponent(String(operationId))}/retry`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["CloudClusterOperation"],
+      };
+
+      return this.request<types.CloudClusterOperation>(config);
+    },
+
+  };
+
   public readonly connectionClouds = {
     /**
      * The clouds you can connect, built in or from a provider plugin, and what each asks for
@@ -1477,6 +1701,38 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.ConnectionsCloudList>(config);
+    },
+
+  };
+
+  public readonly connectionClusters = {
+    /**
+     */
+    list: async (connectionId: string, cursor?: string | undefined, limit?: number | undefined, region?: string | undefined, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ClusterPage> => {
+      let __path = `/api/v1/connections/${encodeURIComponent(String(connectionId))}/clusters`;
+      const queryParams: Record<string, any> = {};
+      if (cursor !== undefined) {
+        queryParams['cursor'] = cursor;
+      }
+      if (limit !== undefined) {
+        queryParams['limit'] = limit;
+      }
+      if (region !== undefined) {
+        queryParams['region'] = region;
+      }
+      const queryString = new URLSearchParams(queryParams).toString();
+      if (queryString) {
+        __path += '?' + queryString;
+      }
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ClusterPage"],
+      };
+
+      return this.request<types.ClusterPage>(config);
     },
 
   };
@@ -1842,7 +2098,7 @@ export class RESTClient extends Client {
     /**
      * Cancel a deployment paused waiting for capacity; steps that finished stay as they are
      */
-    cancelCapacity: async (id: string, body: types.CapacityWaitInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Deployment> => {
+    cancelCapacity: async (id: string, body: types.CapacityWaitInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.DeploymentsDeployment> => {
       let __path = `/api/v1/deployments/${encodeURIComponent(String(id))}/capacity/cancel`;
       const config: RequestConfig = {
         method: 'POST',
@@ -1851,10 +2107,10 @@ export class RESTClient extends Client {
         bodyCodec: CODECS["CapacityWaitInputBody"],
         signal: options?.signal,
         retry: options?.retry,
-        responseCodec: CODECS["Deployment"],
+        responseCodec: CODECS["DeploymentsDeployment"],
       };
 
-      return this.request<types.Deployment>(config);
+      return this.request<types.DeploymentsDeployment>(config);
     },
 
     /**
@@ -1922,33 +2178,33 @@ export class RESTClient extends Client {
     /**
      * The deployment an approved plan started
      */
-    forPlan: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Deployment> => {
+    forPlan: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.DeploymentsDeployment> => {
       let __path = `/api/v1/plans/${encodeURIComponent(String(id))}/deployment`;
       const config: RequestConfig = {
         method: 'GET',
         url: __path,
         signal: options?.signal,
         retry: options?.retry,
-        responseCodec: CODECS["Deployment"],
+        responseCodec: CODECS["DeploymentsDeployment"],
       };
 
-      return this.request<types.Deployment>(config);
+      return this.request<types.DeploymentsDeployment>(config);
     },
 
     /**
      * One deployment, with each step's progress
      */
-    get: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Deployment> => {
+    get: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.DeploymentsDeployment> => {
       let __path = `/api/v1/deployments/${encodeURIComponent(String(id))}`;
       const config: RequestConfig = {
         method: 'GET',
         url: __path,
         signal: options?.signal,
         retry: options?.retry,
-        responseCodec: CODECS["Deployment"],
+        responseCodec: CODECS["DeploymentsDeployment"],
       };
 
-      return this.request<types.Deployment>(config);
+      return this.request<types.DeploymentsDeployment>(config);
     },
 
     /**
@@ -2007,7 +2263,7 @@ export class RESTClient extends Client {
     /**
      * Check capacity again for a deployment paused waiting for it; the deployment keeps its steps and retries
      */
-    resumeCapacity: async (id: string, body: types.CapacityWaitInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Deployment> => {
+    resumeCapacity: async (id: string, body: types.CapacityWaitInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.DeploymentsDeployment> => {
       let __path = `/api/v1/deployments/${encodeURIComponent(String(id))}/capacity/resume`;
       const config: RequestConfig = {
         method: 'POST',
@@ -2016,26 +2272,26 @@ export class RESTClient extends Client {
         bodyCodec: CODECS["CapacityWaitInputBody"],
         signal: options?.signal,
         retry: options?.retry,
-        responseCodec: CODECS["Deployment"],
+        responseCodec: CODECS["DeploymentsDeployment"],
       };
 
-      return this.request<types.Deployment>(config);
+      return this.request<types.DeploymentsDeployment>(config);
     },
 
     /**
      * Run a failed deployment's failed and skipped steps again, with the plan that was approved
      */
-    retry: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Deployment> => {
+    retry: async (id: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.DeploymentsDeployment> => {
       let __path = `/api/v1/deployments/${encodeURIComponent(String(id))}/retry`;
       const config: RequestConfig = {
         method: 'POST',
         url: __path,
         signal: options?.signal,
         retry: options?.retry,
-        responseCodec: CODECS["Deployment"],
+        responseCodec: CODECS["DeploymentsDeployment"],
       };
 
-      return this.request<types.Deployment>(config);
+      return this.request<types.DeploymentsDeployment>(config);
     },
 
   };
@@ -2197,6 +2453,79 @@ export class RESTClient extends Client {
       };
 
       return this.request<types.Zone>(config);
+    },
+
+  };
+
+  public readonly domainEdge = {
+    /**
+     * domainEdge.get
+     */
+    get: async (projectId: string, routeId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.EdgeState> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/domain-routes/${encodeURIComponent(String(routeId))}/edge`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["EdgeState"],
+      };
+
+      return this.request<types.EdgeState>(config);
+    },
+
+    /**
+     * domainEdge.purge
+     */
+    purge: async (projectId: string, routeId: string, body: types.EdgePurgeInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.EdgeState> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/domain-routes/${encodeURIComponent(String(routeId))}/edge/purge`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["EdgePurgeInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["EdgeState"],
+      };
+
+      return this.request<types.EdgeState>(config);
+    },
+
+    /**
+     * domainEdge.retry
+     */
+    retry: async (projectId: string, routeId: string, body: types.RemoveRouteInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.EdgeState> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/domain-routes/${encodeURIComponent(String(routeId))}/edge/retry`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["RemoveRouteInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["EdgeState"],
+      };
+
+      return this.request<types.EdgeState>(config);
+    },
+
+    /**
+     * domainEdge.update
+     */
+    update: async (projectId: string, routeId: string, body: types.EdgeInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.EdgeState> => {
+      let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/domain-routes/${encodeURIComponent(String(routeId))}/edge`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["EdgeInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["EdgeState"],
+      };
+
+      return this.request<types.EdgeState>(config);
     },
 
   };
@@ -2761,17 +3090,17 @@ export class RESTClient extends Client {
     /**
      * A hosted Fabriq's stack: its release, entity types and migrations, and whether its console answers
      */
-    status: async (projectId: string, environmentId: string, resource: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Status> => {
+    status: async (projectId: string, environmentId: string, resource: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.FabriqloomStatus> => {
       let __path = `/api/v1/projects/${encodeURIComponent(String(projectId))}/environments/${encodeURIComponent(String(environmentId))}/fabriq/${encodeURIComponent(String(resource))}`;
       const config: RequestConfig = {
         method: 'GET',
         url: __path,
         signal: options?.signal,
         retry: options?.retry,
-        responseCodec: CODECS["Status"],
+        responseCodec: CODECS["FabriqloomStatus"],
       };
 
-      return this.request<types.Status>(config);
+      return this.request<types.FabriqloomStatus>(config);
     },
 
   };
@@ -4382,13 +4711,13 @@ export class RESTClient extends Client {
     /**
      * organizationClouds.update
      */
-    update: async (cloudId: string, body: types.UpdateInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Profile> => {
+    update: async (cloudId: string, body: types.CloudprofilesUpdateInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.Profile> => {
       let __path = `/api/v1/clouds/${encodeURIComponent(String(cloudId))}`;
       const config: RequestConfig = {
         method: 'PUT',
         url: __path,
         body,
-        bodyCodec: CODECS["UpdateInputBody"],
+        bodyCodec: CODECS["CloudprofilesUpdateInputBody"],
         signal: options?.signal,
         retry: options?.retry,
         responseCodec: CODECS["Profile"],
@@ -4843,6 +5172,43 @@ export class RESTClient extends Client {
       };
 
       await this.request(config);
+    },
+
+  };
+
+  public readonly registries = {
+    /**
+     * Queue registry maintenance
+     */
+    action: async (connectionId: string, body: types.RegistryActionInputBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ManagedRegistryView> => {
+      let __path = `/api/v1/connections/${encodeURIComponent(String(connectionId))}/registry/actions`;
+      const config: RequestConfig = {
+        method: 'POST',
+        url: __path,
+        body,
+        bodyCodec: CODECS["RegistryActionInputBody"],
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ManagedRegistryView"],
+      };
+
+      return this.request<types.ManagedRegistryView>(config);
+    },
+
+    /**
+     * Read registry DNS, maintenance and backups
+     */
+    get: async (connectionId: string, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.ManagedRegistryView> => {
+      let __path = `/api/v1/connections/${encodeURIComponent(String(connectionId))}/registry`;
+      const config: RequestConfig = {
+        method: 'GET',
+        url: __path,
+        signal: options?.signal,
+        retry: options?.retry,
+        responseCodec: CODECS["ManagedRegistryView"],
+      };
+
+      return this.request<types.ManagedRegistryView>(config);
     },
 
   };

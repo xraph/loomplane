@@ -126,6 +126,22 @@ clouds:
   cloudflare_endpoint: "${LOOMPLANE_CLOUDFLARE_ENDPOINT:-}"
   cloudflare_registrar_sandbox: "${LOOMPLANE_CLOUDFLARE_REGISTRAR_SANDBOX:-false}"
   acme_directory: "${LOOMPLANE_ACME_DIRECTORY:-}"
+  managed_clusters:
+    management_probe:
+      provider: "${LOOMPLANE_MANAGED_CLUSTERS_MANAGEMENT_PROBE_PROVIDER:-}"
+      network_id: "${LOOMPLANE_MANAGED_CLUSTERS_MANAGEMENT_PROBE_NETWORK_ID:-}"
+      evidence_id: "${LOOMPLANE_MANAGED_CLUSTERS_MANAGEMENT_PROBE_EVIDENCE_ID:-}"
+      url: "${LOOMPLANE_MANAGED_CLUSTERS_MANAGEMENT_PROBE_URL:-}"
+      spki_sha256: "${LOOMPLANE_MANAGED_CLUSTERS_MANAGEMENT_PROBE_SPKI_SHA256:-}"
+      expires_at: "${LOOMPLANE_MANAGED_CLUSTERS_MANAGEMENT_PROBE_EXPIRES_AT:-}"
+    enabled: "${LOOMPLANE_MANAGED_CLUSTERS_ENABLED:-false}"
+    qualification_org_id: "${LOOMPLANE_MANAGED_CLUSTERS_QUALIFICATION_ORG_ID:-}"
+    qualification_operator_id: "${LOOMPLANE_MANAGED_CLUSTERS_QUALIFICATION_OPERATOR_ID:-}"
+    qualification_account_id: "${LOOMPLANE_MANAGED_CLUSTERS_QUALIFICATION_ACCOUNT_ID:-}"
+    qualification_region: "${LOOMPLANE_MANAGED_CLUSTERS_QUALIFICATION_REGION:-}"
+    max_node_hourly_micro_usd: "${LOOMPLANE_MANAGED_CLUSTERS_MAX_NODE_HOURLY_MICRO_USD:-0}"
+    max_nodes: "${LOOMPLANE_MANAGED_CLUSTERS_MAX_NODES:-0}"
+    max_account_creates: "${LOOMPLANE_MANAGED_CLUSTERS_MAX_ACCOUNT_CREATES:-2}"
   # Lets people connect the Kubernetes cluster Loomplane runs in without a
   # kubeconfig. Loomplane deploys there as its own service account, which
   # every organization on this instance then shares, so turn it on only

@@ -40,13 +40,14 @@ type Auditor interface {
 
 // Service is the connection API.
 type Service struct {
-	store    Store
-	secrets  Secrets
-	checkers map[string]Checker
-	authz    Authorizer
-	audit    Auditor
-	now      func() time.Time
-	warn     func(msg string, err error)
+	ManagedCredentials ManagedCredentialResolver
+	store              Store
+	secrets            Secrets
+	checkers           map[string]Checker
+	authz              Authorizer
+	audit              Auditor
+	now                func() time.Time
+	warn               func(msg string, err error)
 	// Telemetry counts credential checks. It may be nil.
 	Telemetry *telemetry.Recorder
 
@@ -233,6 +234,10 @@ func (s *Service) create(ctx context.Context, p security.Principal, id, cloud, n
 	if checked == nil {
 		checked = cred
 	}
+	settings, err = prepareConnection(ctx, checker, checked, settings)
+	if err != nil {
+		return nil, err
+	}
 	res, err := s.check(ctx, cloud, checker, checked, settings)
 	if err != nil {
 		return nil, err
@@ -301,6 +306,12 @@ func (s *Service) Recheck(ctx context.Context, p security.Principal, id string) 
 	}
 	if identityErr := recordedOwnedIdentity(c); identityErr != nil {
 		return nil, identityErr
+	}
+	if c.Method == MethodManagedKubernetes {
+		if _, checkErr := s.managedCredential(ctx, c); checkErr != nil {
+			return nil, checkErr
+		}
+		return c, nil
 	}
 	checker, err := s.checker(c.Cloud)
 	if err != nil {
@@ -417,6 +428,9 @@ func (s *Service) replace(ctx context.Context, p security.Principal, id string, 
 	if err != nil {
 		return nil, err
 	}
+	if c.Method == MethodManagedKubernetes || c.Details["managed_attachment_id"] != "" {
+		return nil, ErrInUse
+	}
 	if identityErr := recordedOwnedIdentity(c); identityErr != nil {
 		return nil, identityErr
 	}
@@ -445,16 +459,34 @@ func (s *Service) replace(ctx context.Context, p security.Principal, id string, 
 	if settings == nil {
 		settings = c.Details
 	}
+	if c.Cloud == Kubernetes && strings.TrimSpace(settings["ingress_address"]) != c.Details["ingress_address"] {
+		settings = maps.Clone(settings)
+		delete(settings, "registry_ingress_address")
+	}
 	if checked == nil {
 		checked = cred
 	}
-	res, err := s.check(ctx, c.Cloud, checker, checked, settings)
+	res, err := s.checkPreparationIdentity(ctx, c.Cloud, checker, checked, settings)
 	if err != nil {
 		return nil, err
 	}
 	after := AccountIdentity(c.Cloud, res.Account, res.Details)
 	if before == "" || after == "" || before != after {
 		return nil, fmt.Errorf("%w: the verified account changed; create a new connection to change placement", ErrInvalid)
+	}
+	// Verify the replacement's immutable identity before allowing setup writes.
+	if _, ok := checker.(connectionPreparer); ok {
+		settings, err = prepareConnection(ctx, checker, checked, settings)
+		if err != nil {
+			return nil, err
+		}
+		res, err = s.check(ctx, c.Cloud, checker, checked, settings)
+		if err != nil {
+			return nil, err
+		}
+		if AccountIdentity(c.Cloud, res.Account, res.Details) != before {
+			return nil, fmt.Errorf("%w: cluster identity changed during setup", ErrInvalid)
+		}
 	}
 	// Persistent stores serialize secret writes and invalidate old approvals first.
 	replace := func() error {
@@ -494,6 +526,9 @@ func (s *Service) Delete(ctx context.Context, p security.Principal, id string) e
 	if err != nil {
 		return err
 	}
+	if c.Method == MethodManagedKubernetes || c.Details["managed_attachment_id"] != "" {
+		return ErrInUse
+	}
 	if err := s.store.DeleteConnection(ctx, p.OrgID, id); err != nil {
 		return err
 	}
@@ -517,6 +552,15 @@ func (s *Service) Credential(ctx context.Context, orgID, id string) (*Connection
 	if err != nil {
 		return nil, nil, err
 	}
+	if c.Cloud == Kubernetes && c.Details["registry_hostname"] != "" {
+		if registry, ok := s.store.(interface {
+			RegistryAccessAllowed(context.Context, string, string) error
+		}); ok {
+			if accessErr := registry.RegistryAccessAllowed(ctx, orgID, id); accessErr != nil {
+				return nil, nil, accessErr
+			}
+		}
+	}
 	if c.Message == replacementInProgressMessage || (c.Status != StatusReady && !RegistryPullReady(c)) {
 		return nil, nil, fmt.Errorf("%w: %s is %s", ErrNotReady, c.Name, c.Status)
 	}
@@ -535,6 +579,10 @@ func (s *Service) Credential(ctx context.Context, orgID, id string) (*Connection
 		}
 	} else if c.Method == MethodKeyless {
 		if cred, err = s.keylessHandout(ctx, c); err != nil {
+			return nil, nil, err
+		}
+	} else if c.Method == MethodManagedKubernetes {
+		if cred, err = s.managedCredential(ctx, c); err != nil {
 			return nil, nil, err
 		}
 	} else if c.Method == MethodInCluster {

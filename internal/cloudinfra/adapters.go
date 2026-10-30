@@ -14,6 +14,7 @@ import (
 // Adapters maps implemented account operations independently of deployment
 // targets. Register adapters at startup; lookups do not mutate the registry.
 type Adapters struct {
+	clusters     map[string]provider.ClusterReader
 	servers      map[string]provider.ServerAdapter
 	dns          map[string]provider.DNSAdapter
 	registrars   map[string]provider.DomainRegistrar
@@ -22,7 +23,7 @@ type Adapters struct {
 
 // NewAdapters creates an empty registry for configured or fixture adapters.
 func NewAdapters() *Adapters {
-	return &Adapters{servers: map[string]provider.ServerAdapter{}, dns: map[string]provider.DNSAdapter{}, registrars: map[string]provider.DomainRegistrar{}, capabilities: map[string][]provider.InfrastructureCapability{}}
+	return &Adapters{clusters: map[string]provider.ClusterReader{}, servers: map[string]provider.ServerAdapter{}, dns: map[string]provider.DNSAdapter{}, registrars: map[string]provider.DomainRegistrar{}, capabilities: map[string][]provider.InfrastructureCapability{}}
 }
 
 // Endpoints are the provider API addresses the application is configured
@@ -39,6 +40,7 @@ func BuiltinAdapters(e Endpoints) *Adapters {
 	r := NewAdapters()
 	d := digitalocean.New(e.DigitalOcean)
 	r.servers["digitalocean"] = d
+	r.clusters["digitalocean"] = d
 	r.dns["digitalocean"] = d
 	r.dns["vercel"] = vercel.New(e.Vercel)
 	cf := cloudflare.New(e.Cloudflare, e.CloudflareRegistrarSandbox)
@@ -176,6 +178,9 @@ func (r *Adapters) Capabilities(name string) []provider.InfrastructureCapability
 // Providers returns the implemented account providers in stable order.
 func (r *Adapters) Providers() []string {
 	names := map[string]bool{}
+	for name := range r.clusters {
+		names[name] = true
+	}
 	for name := range r.servers {
 		names[name] = true
 	}
@@ -191,4 +196,57 @@ func (r *Adapters) Providers() []string {
 	}
 	sort.Strings(result)
 	return result
+}
+
+// RegisterCluster registers reads and explicitly declared optional operations.
+// Implementing an optional method alone does not advertise that operation.
+func (r *Adapters) RegisterCluster(name string, reader provider.ClusterReader, operations ...provider.InfrastructureCapability) error {
+	if name == "" || reader == nil || r.clusters[name] != nil {
+		return fmt.Errorf("%w: duplicate or empty cluster adapter", provider.ErrInfrastructureInvalid)
+	}
+	allowed := []provider.InfrastructureCapability{provider.ClusterDiscovery, provider.ClusterOptionsRead}
+	for _, operation := range operations {
+		supported := false
+		switch operation {
+		case provider.ClusterDiscovery, provider.ClusterOptionsRead:
+			supported = true
+		case provider.ClusterDeletion:
+			_, supported = reader.(provider.ClusterRetirer)
+		case provider.ClusterCreation:
+			_, supported = reader.(provider.ClusterCreator)
+		case provider.ClusterMutationObservation:
+			_, supported = reader.(provider.ClusterObserver)
+		case provider.ClusterConfigurationUpdate, provider.ClusterUpgrade:
+			_, supported = reader.(provider.ClusterMaintainer)
+		case provider.NodePoolAutoscaling:
+			_, supported = reader.(provider.NodePoolScalingManager)
+		case provider.NodePoolCreation, provider.NodePoolUpdate, provider.NodePoolDeletion:
+			_, supported = reader.(provider.NodePoolManager)
+		case provider.ClusterCapacityObservation:
+			_, supported = reader.(provider.ClusterCapacityReader)
+		case provider.ClusterBootstrapAccess:
+			_, supported = reader.(provider.ClusterBootstrap)
+		}
+		if !supported {
+			return &provider.UnsupportedCapabilityError{Provider: name, Capability: operation}
+		}
+		allowed = append(allowed, operation)
+	}
+	if err := r.declare(name, allowed, allowed); err != nil {
+		return err
+	}
+	r.clusters[name] = reader
+	return nil
+}
+
+// Cluster checks installed capability before callers resolve an optional interface.
+func (r *Adapters) Cluster(name string, operation provider.InfrastructureCapability) (provider.ClusterReader, error) {
+	reader := r.clusters[name]
+	switch operation {
+	case provider.NodePoolAutoscaling, provider.ClusterCapacityObservation, provider.ClusterDeletion, provider.ClusterDiscovery, provider.ClusterOptionsRead, provider.ClusterCreation, provider.ClusterMutationObservation, provider.ClusterBootstrapAccess, provider.ClusterConfigurationUpdate, provider.ClusterUpgrade, provider.NodePoolCreation, provider.NodePoolUpdate, provider.NodePoolDeletion:
+		if reader != nil && slices.Contains(r.capabilities[name], operation) {
+			return reader, nil
+		}
+	}
+	return nil, &provider.UnsupportedCapabilityError{Provider: name, Capability: operation}
 }

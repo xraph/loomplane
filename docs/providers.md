@@ -8,11 +8,42 @@ Connect an SSH server, Kubernetes namespace and optional image registry under In
 
 For SSH, you need a Linux Docker daemon, an existing private key and the server's verified public host key. The SSH user needs access to the Docker Unix socket and TCP forwarding for readiness checks. Loomplane does not install Docker or use sudo. Choose a published host port for a public HTTP service; private services use the environment's Docker network. A readiness path checks the application over SSH before its binding changes.
 
-For Kubernetes, use a self-contained HTTPS kubeconfig with an embedded CA and token or client certificate. File references, exec authentication, insecure TLS and impersonation are rejected. Select an existing namespace; Loomplane pins its UID and checks permissions for workloads, services and secrets. Public HTTP services need your ingress controller, hostname and an existing TLS secret. CPU autoscaling also needs the metrics API.
+For Kubernetes, use a self-contained HTTPS kubeconfig with an embedded CA and token or client certificate. File references, exec authentication, insecure TLS and impersonation are rejected. Select a namespace; Loomplane pins its UID and checks permissions for workloads, services and secrets. Public HTTP services need your ingress controller, hostname and an existing TLS secret. CPU autoscaling also needs the metrics API.
 
-A source build for Kubernetes needs an SSH/Docker builder and an OCI registry reachable by both builder and cluster. You can instead provide an existing image pinned as `registry/repository@sha256:...`.
+A Kubernetes connection can build and host images in its own namespace. Set `registry_hostname` under Integrations and save. With cluster-admin permissions, Loomplane installs missing Traefik and cert-manager components in `loomplane-system`, detects a supported Linux architecture, and creates a retained copy of the default dynamic storage class. It reuses existing controllers and leaves the original storage class unchanged. Setup runs when you save, never during a health check. Helm is not required at runtime. Leave `build.builder` and `build.registry` empty on services that use this setup. The first approved deployment provisions a registry Deployment, Service, 20 GiB PVC, generated credentials, Ingress and certificate. You don't need an SSH builder or a separate registry connection.
 
-For private Kubernetes images, enter an existing namespace Secret name in the connection's `image_pull_secret` setting. You manage its credentials and rotation. Loomplane checks its name and registry Secret type through a Table response with `includeObject=None`, then references it in the Pod. Rollback and removal preserve that external Secret. Names beginning with `lp-` are reserved for Loomplane's own objects.
+Automatic setup creates a missing application namespace. You can reuse your existing provisioner and load balancer, or select a bare-cluster setup:
+
+| Setting | What you get | What you supply |
+| --- | --- | --- |
+| `registry_storage=existing` (default) | A retained copy of your dynamic storage class | An installed provisioner; a class name if defaults are ambiguous |
+| `registry_storage=local-path` | A dedicated local-path provisioner and retained storage | A Linux node with disk space. Data does not survive loss of that node |
+| `registry_storage=longhorn` | Longhorn with three storage replicas and retained volumes | Kubernetes 1.34+, three schedulable Linux nodes, and [Longhorn host prerequisites](https://longhorn.io/docs/1.13.0/deploy/install/) |
+| `registry_network=load-balancer` (default) | An ingress LoadBalancer Service | Your cloud's load-balancer controller. Cloud charges may apply |
+| `registry_network=node` | Ingress on a node's ports 80 and 443 | `ingress_node` when several nodes qualify, plus firewall/NAT access to that node |
+| `registry_network=metallb` | MetalLB with an L2 address pool | An unused LAN range in `load_balancer_addresses`, as CIDRs or start-end ranges |
+
+Longhorn setup waits for its CSI driver and three storage nodes with healthy disks and host prerequisite checks. You can see missing packages, kernel modules and mount requirements in setup status. MetalLB uses a dedicated load-balancer class so it can coexist with another provider. Upgrading an older classless installation briefly pauses ingress while the previous provider releases the Service.
+
+The hostname alone is enough when the cluster already has suitable storage, public routing and a verified organization DNS zone connected to Loomplane. Bare clusters need the choices above because Loomplane cannot infer unused LAN addresses or install host packages. Recheck while controllers or an address are pending. `registry_setup=existing` skips installation. Connections with all three original placement settings keep that behavior unless you choose `automatic`. Retries repair missing owned resources without taking over foreign installations.
+
+DNS automation selects the most specific verified organization zone that contains your registry hostname. It publishes an A, AAAA or CNAME for the discovered ingress address and updates that record when the address changes. The zone's public TXT proof must still be present. Conflicting records are refused, and only the saved owned record can be removed. Use `registry_dns=manual` to manage DNS yourself.
+
+Open **Registry operations** on the connection for status, backups and maintenance. Automatic maintenance checks compatible bundled controller updates daily, rotates credentials every 30 days, backs up daily and collects unreferenced blobs weekly. It starts after the first deployment creates the registry. `registry_maintenance=manual` disables the schedule, leaving the same actions available on demand. Upgrades use versions shipped with Loomplane; major and minor migrations require review.
+
+Backups use your existing Loomplane backup storage configuration. Backup, restore and cleanup pause registry access while a helper mounts the image volume. Builds wait for maintenance, and a restarted server resumes the saved operation. Restore verifies the stored checksum and archive paths before replacing files, and first saves the current data. Backups remain available until you remove them from backup storage. If a credential update interrupts an operation, **Review and retry current operation** renews its authority without losing its checkpoint.
+
+Removal refuses active registry consumers. Image storage is retained by default; deleting it requires a fresh backup. You can also request removal of unused managed controllers, but retained volumes, other cluster connections, ingress routes or controller resources block that cleanup. Namespaces and foreign installations remain. Removing a connection alone does not uninstall shared controllers.
+
+Each build runs the approved source archive in a temporary rootless BuildKit Job, publishes the image and records its digest. Build jobs have a 30-minute deadline, no service account token or host socket, and a one-hour finished-job TTL as a cleanup fallback. Rootless BuildKit needs user namespaces and permits unconfined seccomp and AppArmor profiles inside its build container. A cluster enforcing Restricted Pod Security needs a dedicated namespace with a compatible policy. It never falls back to privileged Docker.
+
+Loomplane creates a workload-owned image pull Secret for each managed-registry consumer. Rotation keeps old and new credentials valid for ten minutes while those copies are refreshed. Rollback restores the current credential with the previous workload. The registry's Basic credentials grant access to the whole registry, so use separate namespaces and connections when workloads must not share image access. Service removal deletes its pull Secret but retains shared image storage. Cleanup removes unreferenced blobs; tagged images and digest-pinned manifests stay available for deployments and rollbacks.
+
+The registry hostname must resolve from build pods and cluster nodes, and its certificate must be trusted by both. cert-manager uses the existing HTTP-01 issuer; DNS must point at ingress before deployment. The installed Traefik accepts streamed uploads and redirects HTTP to HTTPS while preserving HTTP-01 challenge routing. Loomplane sets large-upload annotations for ingress-nginx. Configure equivalent upload limits and HTTPS enforcement when supplying another ingress controller. The registry uses a single replica and a retained volume, so availability and recovery depend on your storage driver.
+
+You can still select an SSH/Docker builder and an OCI registry reachable by both builder and cluster. You can also provide an existing image pinned as `registry/repository@sha256:...`.
+
+For private images from an external registry, enter an existing namespace Secret name in the connection's `image_pull_secret` setting. You manage its credentials and rotation. Loomplane checks its name and registry Secret type through a Table response with `includeObject=None`, then references it in the Pod. Rollback and removal preserve that external Secret. Names beginning with `lp-` are reserved for Loomplane's own objects.
 
 Docker publishing and server pulls accept a direct registry bearer token or a repository token obtained through your reviewed token service. Username/password connections need a Bearer token exchange for authenticated Docker operations. Basic-only credentials can check registry API access, but cannot be delegated to Docker. Kubernetes uses your existing pull Secret for native authentication; it cannot consume a direct bearer token from a generic Docker configuration Secret. See [Docker's registry token contract](https://github.com/moby/moby/blob/v28.0.0/api/types/registry/authconfig.go) and [Kubernetes image authentication](https://kubernetes.io/docs/concepts/containers/images/#specifying-imagepullsecrets-on-a-pod).
 
@@ -45,11 +76,11 @@ Replace those connection IDs with the ones you saved. Forge HTTP apps without a 
 
 ## DNS and domains
 
-Three providers can hold your DNS for the [domains](domains.md) you bring or register. Cloudflare only does DNS and registration here, so it runs none of your services:
+Three providers can hold your DNS for the [domains](domains.md) you bring or register. Cloudflare also provides an optional global CDN and edge cache for managed service hostnames. Your service still runs on its existing deployment target:
 
 | Provider | DNS | Registration | Compute |
 | --- | --- | --- | --- |
-| Cloudflare | Zones and records, and the DNS challenge for wildcard certificates | Through Cloudflare Registrar, in your own account | None |
+| Cloudflare | Zones and records, wildcard certificate challenges, and optional CDN/cache rules for exact service hostnames | Through Cloudflare Registrar, in your own account | None |
 | DigitalOcean | Zones and records | None | App Platform and Managed Databases |
 | Vercel | Zones and records | None | Vercel |
 
@@ -58,6 +89,7 @@ Three providers can hold your DNS for the [domains](domains.md) you bring or reg
 | Target | Collection |
 | --- | --- |
 | SSH/Docker and Kubernetes source builds | Docker/BuildKit output from the selected SSH builder |
+| Managed Kubernetes source builds | BuildKit output from the cluster build Job |
 | Vercel | Streamed deployment build events |
 | Cloud Run | Polled Cloud Build entries from Cloud Logging |
 | ECS on Fargate | Polled CodeBuild output from its exact CloudWatch log stream |
@@ -150,3 +182,9 @@ Apply and Remove run as operations because builds and databases take minutes. Lo
 ## Testing one
 
 `internal/plugins` has the client Loomplane uses, and its tests run it against `sdk.Handler` with a fake provider: that's the quickest check that a provider speaks the protocol. `tests/integration/plugin_test.go` goes further, connecting the example's cloud, then planning, deploying, re-planning and removing a site through a running Loomplane.
+
+### Kubernetes cluster lifecycle
+
+DigitalOcean exposes cluster discovery and live cluster options separately from creation authority. Organization managers can review cluster setup in Clouds, Infrastructure, Clusters or through `loomctl cloud-clusters`. Project grants expose runtime targets without granting provider lifecycle management.
+
+Managed DOKS creation remains disabled by default and restricted to configured qualification operators. New clusters support private digest-pinned workers with project-owned renewable access. Adoption can verify existing HTTP and TLS prerequisites, but managed namespace storage and builds remain unsupported. Installed adapter capability is not live qualification, and general purchases require the later cleanup qualification gate. See [DigitalOcean](digitalocean.md#managed-kubernetes-worker-clusters) for the current boundaries.

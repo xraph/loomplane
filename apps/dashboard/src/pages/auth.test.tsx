@@ -1,28 +1,25 @@
 import { render, screen } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
-import type React from "react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
 import { AuthPage } from "@/pages/auth"
 
-const router = vi.hoisted(() => ({ path: "/", navigate: vi.fn() }))
+const router = vi.hoisted(() => ({ navigate: vi.fn() }))
 
 vi.mock("@/lib/router", () => ({
-  usePath: () => router.path,
   useNavigate: () => router.navigate,
 }))
 
-vi.mock("@/components/auth-layout", () => ({
-  AuthLayout: ({ children }: { children: React.ReactNode }) => <>{children}</>,
-}))
 vi.mock("@/components/brand-logo", () => ({ BrandLogo: () => null }))
 
-// authsome's forms talk to the API; these stand in, signing in on a click.
+// Stand in for the API forms so their navigation callbacks can be checked.
 vi.mock("@authsome/ui-components", () => ({
-  SignInForm: ({ onSuccess }: { onSuccess: () => void }) => (
+  SignInForm: ({ onSuccess }: { onSuccess?: () => void }) => (
     <button onClick={onSuccess}>Sign in</button>
   ),
-  SignUpForm: () => null,
+  SignUpForm: ({ onSuccess }: { onSuccess: () => void }) => (
+    <button onClick={onSuccess}>Sign up</button>
+  ),
 }))
 
 beforeEach(() => {
@@ -30,19 +27,18 @@ beforeEach(() => {
 })
 
 describe("AuthPage", () => {
-  it("leaves you on the page you asked for once you sign in", async () => {
-    // GitHub's install redirect: its query carries a one-time code that
-    // only this page can use.
-    router.path = "/integrations/github/setup"
+  it("lets the app restore the destination when authentication changes", async () => {
     render(<AuthPage mode="sign-in" />)
     await userEvent.click(screen.getByRole("button", { name: "Sign in" }))
     expect(router.navigate).not.toHaveBeenCalled()
   })
 
-  it("goes to the overview from the sign-in page itself", async () => {
-    router.path = "/sign-in"
-    render(<AuthPage mode="sign-in" />)
-    await userEvent.click(screen.getByRole("button", { name: "Sign in" }))
-    expect(router.navigate).toHaveBeenCalledWith({ to: "/", replace: true })
+  it("returns to sign-in after creating an account", async () => {
+    render(<AuthPage mode="sign-up" />)
+    await userEvent.click(screen.getByRole("button", { name: "Sign up" }))
+    expect(router.navigate).toHaveBeenCalledWith({
+      to: "/sign-in",
+      replace: true,
+    })
   })
 })

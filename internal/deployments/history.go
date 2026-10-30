@@ -189,9 +189,7 @@ func (h *History) ReleasedImages(ctx context.Context, orgID, environmentID strin
 				Image: s.Image, Revision: s.Revision,
 				DeploymentID: r.DeploymentID, PlanID: r.PlanID, FinishedAt: r.FinishedAt,
 			}
-			if a.Service.BuildTarget != nil {
-				img.Registry = a.Service.BuildTarget.Registry
-			}
+			img.Registry = a.Service.ImageRegistry()
 			out[s.Name] = img
 		}
 	}

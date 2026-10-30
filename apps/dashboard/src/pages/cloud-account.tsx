@@ -202,9 +202,14 @@ export function CloudAccount({ id }: { id: string }) {
                     {check.isPending && <Spinner />}
                     Check again
                   </Button>
-                  <Button variant="outline" onClick={() => setReplacing(true)}>
-                    Replace credential
-                  </Button>
+                  {c.method !== "managed_kubernetes" && (
+                    <Button
+                      variant="outline"
+                      onClick={() => setReplacing(true)}
+                    >
+                      Replace credential
+                    </Button>
+                  )}
                   {canSwitch && (
                     <Button
                       variant="outline"
@@ -234,9 +239,11 @@ export function CloudAccount({ id }: { id: string }) {
                   c.checkedAt ? relative(Date.parse(c.checkedAt), now) : "Never"
                 }
                 note={
-                  c.status === "ready"
-                    ? "Can do everything a deployment needs"
-                    : statusLabels[c.status]
+                  c.method === "managed_kubernetes"
+                    ? "Namespace worker access; HTTP, builds and storage are not established"
+                    : c.status === "ready"
+                      ? "Can do everything a deployment needs"
+                      : statusLabels[c.status]
                 }
               />
               <Stat
@@ -248,14 +255,19 @@ export function CloudAccount({ id }: { id: string }) {
               <Stat
                 label="Can run"
                 value={cloudLabel(c.cloud)}
-                note={cloudPurposes[c.cloud] ?? "Services Loomplane deploys"}
+                note={
+                  c.method === "managed_kubernetes"
+                    ? "Project-owned namespace workers"
+                    : (cloudPurposes[c.cloud] ?? "Services Loomplane deploys")
+                }
               />
               <AccountSpend connectionId={id} />
             </div>
 
-            {(c.cloud === "server" || c.cloud === "kubernetes") && (
-              <GpuInventory connectionId={id} cloud={c.cloud} />
-            )}
+            {c.method !== "managed_kubernetes" &&
+              (c.cloud === "server" || c.cloud === "kubernetes") && (
+                <GpuInventory connectionId={id} cloud={c.cloud} />
+              )}
 
             <section className="overflow-hidden rounded-xl bg-card ring-1 ring-border">
               <h2 className="border-b px-4 py-3 text-sm font-semibold">
@@ -325,7 +337,7 @@ export function CloudAccount({ id }: { id: string }) {
               )}
             </section>
 
-            {manage && (
+            {manage && c.method !== "managed_kubernetes" && (
               <section className="flex flex-wrap items-center gap-3 rounded-xl px-4 py-3.5 ring-1 ring-[color-mix(in_oklch,var(--destructive)_25%,transparent)]">
                 <div className="grid flex-[1_1_360px] gap-1">
                   <h2 className="text-sm font-semibold">Remove {c.name}</h2>

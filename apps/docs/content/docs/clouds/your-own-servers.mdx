@@ -48,9 +48,45 @@ services:
       registry: conn_registry
 ```
 
-A source build for Kubernetes needs an SSH/Docker builder and an OCI registry that both the builder and the cluster can reach. Or give it an existing image pinned as `registry/repository@sha256:...` in `build.image`.
+A source build can use the SSH/Docker builder and registry shown above, or you can let the cluster build and store its images.
 
-For private images, enter the name of an existing namespace Secret in the connection's `image_pull_secret` setting. You manage its credentials and rotation. Rollback and removal leave that Secret alone, and names starting with `lp-` are reserved for Loomplane's own objects.
+### Managed cluster builds
+
+In the Kubernetes connection, set `registry_hostname` to a hostname you control, such as `images.example.com`, and save. You can leave the architecture, storage class, ingress class and ingress address empty. With cluster-admin permissions, Loomplane installs missing Traefik and cert-manager components in `loomplane-system`, detects a schedulable Linux architecture, and creates a retained copy of your default storage class. You don't need Helm on the Loomplane server.
+
+Existing controllers are reused. Setup checks resource ownership and permissions before writing, and a repeated save resumes a partial installation. It does not replace or upgrade someone else's installation. The namespace you connect must already exist, and you still need a working dynamic storage provisioner. If there are several defaults or no default, choose the storage or ingress class explicitly. A retained class keeps the original driver parameters, topology and binding mode without changing your cluster's default class. Retention is not a backup.
+
+The installed ingress requests a load balancer, which can incur cloud charges. While controllers or the load balancer are starting, the connection reports what it is waiting for. Recheck to refresh its state and discover the address. Point your hostname's DNS at that address. DNS is not changed by this setup. Clusters without a load-balancer controller need an `ingress_address` override and a working route to ports 80 and 443. A local cluster's private address does not establish public ACME reachability.
+
+Set `registry_setup: existing` to manage prerequisites yourself. Connections that already provide storage class, architecture and ingress address keep that behavior unless you select `registry_setup: automatic`. Ordinary health checks never install resources. Saving an automatic connection can repair missing owned resources; deleting a connection retains its shared controllers and storage class. Controller upgrades and final removal remain operator tasks.
+
+Leave the builder and registry empty on each service:
+
+```yaml
+version: 1
+services:
+  api:
+    source: go:cmd/api
+    provider: kubernetes
+    target: conn_cluster
+    port: 8080
+    public: false
+    build: { context: . }
+```
+
+Your first approved deployment creates a persistent registry with 20 GiB of retained storage, generated authentication, an Ingress and a cert-manager certificate. Loomplane uploads the approved source to a rootless BuildKit Job, publishes its image, and deploys by digest. It creates the image pull Secret for each workload. Failed rollouts restore the previous pull Secret along with the workload.
+
+Build Jobs have a 30-minute deadline and a one-hour finished-job TTL if normal cleanup is interrupted. They receive no application secrets, service account token or host Docker socket. The nodes need user namespaces, and the namespace must allow BuildKit's unconfined seccomp and AppArmor profiles. Restricted Pod Security policies require a dedicated namespace with an appropriate policy.
+
+The hostname must resolve and its certificate must be trusted from both pods and nodes. HTTP-01 certificate issuance needs the DNS record in place before deployment. The installed Traefik accepts streamed uploads and redirects HTTP to HTTPS, with HTTP-01 challenge routes taking priority. Loomplane also sets large-upload annotations for ingress-nginx. If you supply another controller, configure equivalent upload limits and HTTPS enforcement.
+
+The connection shares one registry and its generated Basic credentials. Use separate namespaces and connections for workloads that must not share image access. Workload pull credentials refresh on deployment; they do not expire automatically. Removing a service retains the registry and its images. You manage image retention, backups, garbage collection and final registry removal. Its single replica depends on your storage driver for recovery.
+
+### External images and builders
+
+Keep an explicit `build.builder` and `build.registry` to use your existing build infrastructure. To skip source builds, give `build.image` an existing image pinned as `registry/repository@sha256:...`.
+
+For private images from an external registry, enter the name of an existing namespace Secret in the connection's `image_pull_secret` setting. You manage its credentials and rotation. Rollback and removal leave that Secret alone, and names starting with `lp-` are reserved for Loomplane's own objects.
 
 Forge HTTP apps without a Dockerfile can use a generated Go build, and a repository Dockerfile takes precedence over it. A private dependency needs a supported network path between its targets. Picking destinations doesn't create a cross-cluster network.
 

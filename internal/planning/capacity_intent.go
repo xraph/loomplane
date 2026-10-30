@@ -225,6 +225,8 @@ func (s *Service) ResolveCapacityIntents(ctx context.Context, org, planID string
 		}
 		var checkErr error
 		switch {
+		case a.Service.ClusterDemand != nil:
+			checkErr = s.resolveClusterWorkload(ctx, st, plan, a)
 		case !HasCapacityIntent(a):
 			connection := s.frontendConnection(a, plan.Connections)
 			if a.Op == Delete || a.Op == Keep || connection == "" || !cloudinfra.ManagedFrontend(a.Provider, a.Service.Workload, a.Service.Execution) {

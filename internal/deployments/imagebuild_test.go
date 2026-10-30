@@ -70,7 +70,7 @@ func imageBuildFixture(t *testing.T, push bool) (*Job, *ImageBuilder, *buildLogF
 		t.Fatal(err)
 	}
 	raw := pem.EncodeToMemory(block)
-	config, err := server.ParseConfig(raw, map[string]string{"host": "builder.example.com", "user": "deploy", "host_key": string(ssh.MarshalAuthorizedKey(signer.PublicKey()))})
+	config, err := server.ParseConfig(raw, map[string]string{"build_workers": "dedicated", "host": "builder.example.com", "user": "deploy", "host_key": string(ssh.MarshalAuthorizedKey(signer.PublicKey()))})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -99,7 +99,7 @@ func imageBuildFixture(t *testing.T, push bool) (*Job, *ImageBuilder, *buildLogF
 	t.Cleanup(registryAPI.Close)
 	registry := &connections.Connection{ID: "conn_registry", OrgID: "org_fixture", Cloud: connections.Registry, Name: "Registry", Status: connections.StatusReady, Details: map[string]string{"endpoint": registryURL, "repository": "team", "api": "ready", "pull": "ready", "push": "ready"}}
 	sink := &buildLogFixture{}
-	job := &Job{Deployment: &Deployment{ID: "dep_fixture", OrgID: "org_fixture", ProjectID: "proj_fixture", EnvironmentID: "env_fixture"}, Action: planning.Action{ID: "service:api", Name: "api", Service: &planning.ServiceConfig{Source: "cmd/api", Image: "Dockerfile", Context: ".", BuildTarget: &planning.BuildTarget{Builder: connection.ID, BuilderSettings: planning.ReviewedConnectionSettings(connection.Cloud, connection.Details)}}}, SourceID: strings.Repeat("a", 40), Env: map[string]string{"RUNTIME_TOKEN": "runtime-private-value"}, Secrets: map[string]bool{"RUNTIME_TOKEN": true}, Logs: sink, Attempt: "1.1", Progress: func(string, string) {}}
+	job := &Job{Deployment: &Deployment{ID: "dep_fixture", OrgID: "org_fixture", ProjectID: "proj_fixture", EnvironmentID: "env_fixture"}, Action: planning.Action{ID: "service:api", Name: "api", Service: &planning.ServiceConfig{Source: "cmd/api", Image: "Dockerfile", Context: ".", BuildTarget: &planning.BuildTarget{Builder: connection.ID, BuilderSettings: planning.ReviewedBuildSettings(connection.Cloud, connection.Details)}}}, SourceID: strings.Repeat("a", 40), Env: map[string]string{"RUNTIME_TOKEN": "runtime-private-value"}, Secrets: map[string]bool{"RUNTIME_TOKEN": true}, Logs: sink, Attempt: "1.1", Progress: func(string, string) {}}
 	job.BuildCredentials = buildCredentialFunc(func(_ context.Context, org, id string) (*connections.Connection, []byte, error) {
 		if org != "org_fixture" {
 			return nil, nil, connections.ErrNotFound

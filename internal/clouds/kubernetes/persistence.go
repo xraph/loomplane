@@ -232,6 +232,13 @@ func (r *Runtime) applyPersistent(ctx context.Context, iid id.ID, spec cpprovide
 	if pull := c.Config.Details["image_pull_secret"]; pull != "" {
 		pulls = append(pulls, corev1.LocalObjectReference{Name: pull})
 	}
+	pullSecret, err := c.managedPullSecret(ctx, spec.Image, name, identity, labels[owned.LabelConnection])
+	if err != nil {
+		return nil, err
+	}
+	if pullSecret != nil {
+		pulls = append(pulls, corev1.LocalObjectReference{Name: pullSecret.Name})
+	}
 	rules, err := accessRules(labels)
 	if err != nil {
 		return nil, err
@@ -311,6 +318,11 @@ func (r *Runtime) applyPersistent(ctx context.Context, iid id.ID, spec cpprovide
 	}
 	// Claims have no owner references and are never rolled back or deleted here.
 	mutated = true
+	if pullSecret != nil {
+		if pullErr := c.applyManagedPull(ctx, pullSecret, old.pull); pullErr != nil {
+			return nil, pullErr
+		}
+	}
 	if old.runtime != nil {
 		secret.ResourceVersion = old.runtime.ResourceVersion
 		_, err = c.Kube.CoreV1().Secrets(ns).Update(ctx, secret, metav1.UpdateOptions{})

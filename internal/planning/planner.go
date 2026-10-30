@@ -23,7 +23,8 @@ const DefaultPort = 8080
 
 // Input is everything a plan is made from.
 type Input struct {
-	Routes []cloudinfra.Route
+	ProjectID string
+	Routes    []cloudinfra.Route
 	// Zones are the verified DNS zones granted to the project. The
 	// database gateway names its hosts in one of them.
 	Zones []cloudinfra.ProjectZone
@@ -715,6 +716,7 @@ func (p *planner) desired(name, base string, s manifest.Service, gs *graph.Servi
 	}
 	p.checkRender(name, base, cfg)
 	p.checkAzure(name, base, cfg)
+	p.checkViteRSC(name, base, cfg, gs.Requires)
 	return &Action{
 		ID: actionID(ServiceSubject, name), Subject: ServiceSubject, Name: name,
 		Provider: prov.Name, Region: cfg.Region, Engine: prov.Engine(runs), Creates: runs.Creates,
@@ -1617,6 +1619,7 @@ func (p *planner) serviceConfig(name, base string, gs *graph.Service, prov *prov
 	}
 	if prov.Scaling || prov.Cloud == "server" {
 		cfg.Scale, cfg.Size = set.Scale, set.Size
+		cfg.CapacityMode = set.CapacityMode
 	} else if set.Scale != nil || set.Size != nil {
 		p.warn(Finding{
 			Code: "scaling-ignored", Subject: ServiceSubject, Name: name, Path: base,

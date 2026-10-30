@@ -1,5 +1,6 @@
 import { ChevronLeftIcon } from "lucide-react"
-import { useState } from "react"
+import { useEffect, useState } from "react"
+import { useLiveState } from "@/lib/realtime-state"
 
 import { CloudsIcon, ProjectsIcon } from "@/components/icons"
 import * as api from "@/client/forge/loomplane/hooks"
@@ -31,7 +32,7 @@ import {
   CloudError,
   useInfrastructureRefresh,
 } from "@/components/cloud-targets/infrastructure-ui"
-import { Servers } from "@/components/cloud-targets/servers"
+import { CloudInfrastructure } from "@/components/cloud-detail/clusters"
 import { Page } from "@/components/page"
 import { QueryError } from "@/components/query-error"
 import { StatusPill, type Tone } from "@/components/runs"
@@ -294,12 +295,27 @@ function CloudPage({
   onChanged: () => void
 }) {
   const { cloud, project } = scope
-  const [tab, setTab] = useState<CloudTab>(initialTab)
+  const [tab, setTab] = useState<CloudTab>(() =>
+    !project &&
+    new URLSearchParams(window.location.search).has("clusterOperation")
+      ? "servers"
+      : initialTab
+  )
   const targets = useScopedTargets(scope)
   const usage = useScopedUsage(scope)
   const syncs = useScopedSyncs(scope)
   const connections = useQuery(api.useConnectionsList)
   const projects = useQuery(api.useProjectsList)
+  const live = useLiveState()
+  const { refetch: refetchTargets } = targets
+  const { refetch: refetchUsage } = usage
+  const { refetch: refetchConnections } = connections
+  useEffect(() => {
+    if (!live.lastSync) return
+    void refetchTargets()
+    void refetchUsage()
+    void refetchConnections()
+  }, [live.lastSync, refetchTargets, refetchUsage, refetchConnections])
   useInfrastructureRefresh(syncs.list.some(movingSync), async () =>
     Promise.allSettled([syncs.refetch(), usage.refetch()])
   )
@@ -359,8 +375,7 @@ function CloudPage({
       },
       {
         id: "servers",
-        label: "Servers",
-        count: servers?.length,
+        label: "Infrastructure",
         show: !project,
       },
       { id: "capacity", label: "Capacity", show: !project },
@@ -473,7 +488,7 @@ function CloudPage({
           )}
           {!project && (
             <TabsContent value="servers">
-              <Servers cloud={cloud} />
+              <CloudInfrastructure cloud={cloud} />
             </TabsContent>
           )}
           {!project && (

@@ -148,6 +148,7 @@ func (r *Runtime) RunJob(ctx context.Context, name string, spec cpprovider.Servi
 		return result, err
 	}
 	var created *batchv1.Job
+	var managedPull *corev1.Secret
 	defer func() {
 		cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		defer cancel()
@@ -162,10 +163,35 @@ func (r *Runtime) RunJob(ctx context.Context, name string, spec cpprovider.Servi
 		if deleteErr := secrets.Delete(cleanup, kept.Name, deleteOwnedOptions(kept)); deleteErr != nil && !apierrors.IsNotFound(deleteErr) {
 			err = errors.Join(err, fmt.Errorf("delete the %s job's runtime values: %w", component, deleteErr))
 		}
+		if managedPull != nil {
+			if deleteErr := secrets.Delete(cleanup, managedPull.Name, deleteOwnedOptions(managedPull)); deleteErr != nil && !apierrors.IsNotFound(deleteErr) {
+				err = errors.Join(err, fmt.Errorf("delete the job's image pull secret: %w", deleteErr))
+			}
+		}
 	}()
 	pulls := []corev1.LocalObjectReference{}
 	if selected := c.Config.Details["image_pull_secret"]; selected != "" {
 		pulls = append(pulls, corev1.LocalObjectReference{Name: selected})
+	}
+	pullSecret, pullErr := c.managedPullSecret(ctx, spec.Image, name, identity, labels[owned.LabelConnection])
+	if pullErr != nil {
+		return result, pullErr
+	}
+	if pullSecret != nil {
+		previous, getErr := secrets.Get(ctx, pullSecret.Name, metav1.GetOptions{})
+		switch {
+		case apierrors.IsNotFound(getErr):
+			previous = nil
+		case getErr != nil:
+			return result, getErr
+		case checkJobOwner(previous, identity) != nil:
+			return result, ErrOwned
+		}
+		if applyErr := c.applyManagedPull(ctx, pullSecret, previous); applyErr != nil {
+			return result, applyErr
+		}
+		managedPull = pullSecret
+		pulls = append(pulls, corev1.LocalObjectReference{Name: pullSecret.Name})
 	}
 	template, _, err := runtimePod(spec, labels, values, runtimeSecret, pulls, "")
 	if err != nil {

@@ -168,6 +168,10 @@ func (s *Service) verifyKubernetesRoute(ctx context.Context, route Route, status
 	} else {
 		out.DNS = s.cnameReaches(ctx, hostname, address)
 	}
+	if route.Receipt != nil && route.Receipt.Proxied {
+		addresses, dnsErr := s.domainResolver().LookupIPAddr(ctx, hostname)
+		out.DNS = dnsErr == nil && len(addresses) > 0 && s.verifyProxiedRouteDNS(ctx, route)
+	}
 	if !out.DNS {
 		out.DNSError = "DNS does not resolve exclusively to the connection's ingress address."
 	}

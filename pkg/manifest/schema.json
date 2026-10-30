@@ -334,6 +334,10 @@
     "settings": {
       "type": "object",
       "properties": {
+        "capacity_mode": {
+          "description": "Managed workload reservation mode. Guaranteed reserves your reviewed replica maximum; best effort grants no fleet expansion.",
+          "enum": ["guaranteed", "best_effort"]
+        },
         "cloud_target": {
           "description": "Named target in this environment's assigned Cloud.",
           "type": "string",

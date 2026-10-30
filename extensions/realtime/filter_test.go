@@ -165,3 +165,12 @@ func TestRealtimeReleaseWatchPermission(t *testing.T) {
 		t.Fatalf("with deployment:read: %+v %v", got, err)
 	}
 }
+
+func TestClusterEventsRequireOrganizationManagement(t *testing.T) {
+	events := []store.Event{{OrgID: "org", Type: "cloud_cluster.updated", Data: json.RawMessage(`{"cloud_id":"cloud","operation_id":"operation","revision":2}`)}}
+	e := &Extension{authz: permissionFixture{denied: security.OrganizationCloudManage}}
+	got, err := e.filter(t.Context(), security.Principal{OrgID: "org", UserID: "project-member"}, Subscription{}, events)
+	if err != nil || len(got) != 0 {
+		t.Fatalf("project subscriber saw lifecycle event: %+v %v", got, err)
+	}
+}

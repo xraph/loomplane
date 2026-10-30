@@ -342,10 +342,14 @@ func (e *Extension) Register(fapp forge.App) error {
 		log.Warn("endpoint checks from a cluster can reach the database", forge.F("error", servicesErr.Error()))
 	}
 	dialGuard := &deployments.DialGuard{Denied: e.cfg.Planning.EndpointDeniedCIDRs, Services: denied}
-	clusterTarget := &deployments.OwnedTarget{Cloud: connections.Kubernetes, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, Controllers: kubernetes.NewControllerStore(pg), Hooks: catalogHooks, Endpoints: e.endpoints, Checker: checker, DialGuard: dialGuard, FilesRevisionKey: filesKey}
+	clusterTarget := &deployments.OwnedTarget{Cloud: connections.Kubernetes, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, Controllers: kubernetes.NewControllerStore(pg).WithClusterCapacity(e.cfg.Clouds.ClusterCapacity.Enabled), Hooks: catalogHooks, Endpoints: e.endpoints, Checker: checker, DialGuard: dialGuard, FilesRevisionKey: filesKey}
+	firecrackerTarget := &deployments.OwnedTarget{Cloud: connections.Firecracker, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, RouteGuard: routeService, FirecrackerAuthority: deployStore}
+	serverTarget.FirecrackerAuthority, clusterTarget.FirecrackerAuthority = deployStore, deployStore
+	firecrackerTarget.Bindings = planStore.ListBindings
+	executors[connections.Firecracker] = firecrackerTarget
 	serverTarget.Bindings, clusterTarget.Bindings = planStore.ListBindings, planStore.ListBindings
 	executors[connections.Server], executors[connections.Kubernetes] = serverTarget, clusterTarget
-	dialer := ownedDialer{credentials: clouds, targets: map[string]*deployments.OwnedTarget{connections.Server: serverTarget, connections.Kubernetes: clusterTarget}}
+	dialer := ownedDialer{credentials: clouds, targets: map[string]*deployments.OwnedTarget{connections.Server: serverTarget, connections.Kubernetes: clusterTarget, connections.Firecracker: firecrackerTarget}}
 	e.endpointDialer = dialer
 	// A kind's own API reaches its running components and generated
 	// secrets through CatalogAccess, which it resolves from the container.
@@ -437,7 +441,7 @@ func (e *Extension) Register(fapp forge.App) error {
 		RDSConnector: transports.RDS, SQLConnector: transports.CloudSQL,
 	}
 
-	if err := e.setupBackups(fapp, pg, prj, planStore, authz, recovery.Targets{connections.Server: serverTarget, connections.Kubernetes: clusterTarget}, nativeDatabases, auditor); err != nil {
+	if err := e.setupBackups(fapp, pg, prj, planStore, authz, recovery.Targets{connections.Server: serverTarget, connections.Kubernetes: clusterTarget, connections.Firecracker: firecrackerTarget}, nativeDatabases, auditor); err != nil {
 		return err
 	}
 

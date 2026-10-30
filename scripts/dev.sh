@@ -27,13 +27,25 @@ WEB_PID=$!
 ) 2>&1 | prefix $'\033[0;33m[worker]\033[0m ' &
 WORKER_PID=$!
 
+# $! is the last command of each pipeline (prefix), but the pipeline's
+# process group is numbered after its first command.
+pgid() { ps -o pgid= -p "$1" | tr -d ' '; }
+API_PGID=$(pgid "$API_PID")
+WEB_PGID=$(pgid "$WEB_PID")
+WORKER_PGID=$(pgid "$WORKER_PID")
+
+# Job control is only for the launches above. Left on, it gives every
+# `sleep` in the poll loop its own group and the terminal with it, so Ctrl-C
+# kills that sleep and never reaches this script's trap.
+set +m
+
 stopping=0
 stop_all() {
 	[ "$stopping" = 1 ] && return
 	stopping=1
-	kill -TERM -"$API_PID" -"$WEB_PID" -"$WORKER_PID" 2>/dev/null
+	kill -TERM -"$API_PGID" -"$WEB_PGID" -"$WORKER_PGID" 2>/dev/null
 	sleep 2
-	kill -KILL -"$API_PID" -"$WEB_PID" -"$WORKER_PID" 2>/dev/null
+	kill -KILL -"$API_PGID" -"$WEB_PGID" -"$WORKER_PGID" 2>/dev/null
 }
 trap 'stop_all; exit 130' INT TERM
 trap 'stop_all' EXIT

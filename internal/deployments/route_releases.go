@@ -226,7 +226,11 @@ func (r *Runner) finalizeReleaseAction(ctx context.Context, d *Deployment, plan 
 
 func (r *Runner) beginWorkloadAttempt(ctx context.Context, d *Deployment, a planning.Action, finalizing bool) (context.Context, func(bool) error, error) {
 	st, ok := r.store.(*PgStore)
-	if !ok || (a.Provider != "server" && (a.Service == nil || !cloudinfra.ManagedFrontend(a.Provider, a.Service.Workload, a.Service.Execution)) && (a.Compensation == nil || !a.Compensation.ServerAttempt)) || (a.Op == planning.Keep && a.Compensation == nil) {
+	managed := a.Service != nil && a.Service.ClusterDemand != nil
+	if managed && (len(a.Routes) > 0 || a.Service.Catalog != nil || a.Service.Component != nil) {
+		return ctx, nil, &cloudinfra.CapacityAdmissionError{Block: cloudinfra.CapacityBlock{Reason: "managed_workload_profile_unqualified"}}
+	}
+	if !ok || (!managed && a.Provider != "server" && a.Provider != "firecracker" && (a.Service == nil || a.Service.BuildTarget == nil || a.Service.BuildTarget.BuilderCloud != "firecracker") && (a.Service == nil || !cloudinfra.ManagedFrontend(a.Provider, a.Service.Workload, a.Service.Execution)) && (a.Compensation == nil || !a.Compensation.ServerAttempt)) || (a.Op == planning.Keep && a.Compensation == nil) {
 		return ctx, func(bool) error { return nil }, nil
 	}
 	infra := cloudinfra.NewPgStore(st.db)
@@ -239,6 +243,20 @@ func (r *Runner) beginWorkloadAttempt(ctx context.Context, d *Deployment, a plan
 		return ctx, nil, err
 	}
 	ctx = attempt.Context(ctx)
+	if managed && a.Service.ClusterDemand.Mode == "guaranteed" {
+		tx, txErr := st.db.BeginTx(ctx, nil)
+		if txErr != nil {
+			return ctx, nil, txErr
+		}
+		attachErr := infra.AttachClusterWorkloadAttempt(ctx, tx, a.Service.ClusterDemand.Input, *attempt)
+		if attachErr == nil {
+			attachErr = tx.Commit()
+		}
+		_ = tx.Rollback() //nolint:errcheck // no-op after commit
+		if attachErr != nil {
+			return ctx, nil, attachErr
+		}
+	}
 	if _, pooled := cloudinfra.ExecutionFrom(ctx); !pooled && a.Provider == "server" {
 		ctx = server.WithEffectFence(ctx, server.EffectFence{Operation: d.OrgID + "/" + d.PlanID + "/" + a.Name, Generation: attempt.Generation})
 	}

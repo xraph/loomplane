@@ -116,10 +116,13 @@ func (s *PgStore) Accept(ctx context.Context, p *Preview, snapshot *Snapshot, sy
 			return nil, storeError(err)
 		}
 	}
-	existing, _, e := readSync(tx.QueryRow(ctx, `SELECT body,snapshot,version FROM loomplane_cloud_syncs WHERE org_id=$1 AND project_id=$2 AND (idempotency_key=$3 OR preview_id=$4) ORDER BY (idempotency_key=$3) DESC LIMIT 1`, p.OrgID, p.ProjectID, key, p.ID))
+	existing, existingSnapshot, e := readSync(tx.QueryRow(ctx, `SELECT body,snapshot,version FROM loomplane_cloud_syncs WHERE org_id=$1 AND project_id=$2 AND (idempotency_key=$3 OR preview_id=$4) ORDER BY (idempotency_key=$3) DESC LIMIT 1`, p.OrgID, p.ProjectID, key, p.ID))
 	if e == nil {
 		if existing.PreviewID != p.ID {
 			return nil, ErrConflict
+		}
+		if checkErr := setManagedCleanupActor(ctx, tx, existingSnapshot, existing); checkErr != nil {
+			return nil, checkErr
 		}
 		return existing, nil
 	}
@@ -134,6 +137,9 @@ func (s *PgStore) Accept(ctx context.Context, p *Preview, snapshot *Snapshot, sy
 		return nil, ErrConflict
 	}
 	if checkErr := validateAcceptedReview(ctx, tx, p, snapshot, sync); checkErr != nil {
+		return nil, checkErr
+	}
+	if checkErr := setManagedCleanupActor(ctx, tx, snapshot, sync); checkErr != nil {
 		return nil, checkErr
 	}
 	// Lock every participant's capacity domain before taking target or environment locks.
@@ -211,7 +217,7 @@ func (s *PgStore) Accept(ctx context.Context, p *Preview, snapshot *Snapshot, sy
 		if decodeErr := json.Unmarshal(current, &target); decodeErr != nil {
 			return nil, decodeErr
 		}
-		if target.Revision != p.Input.Revision || p.Before == nil || target.ConnectionID != p.Before.ConnectionID || target.Provider != p.Before.Provider || target.Region != p.Before.Region || target.Runtime != p.Before.Runtime || target.PoolID != p.Before.PoolID {
+		if target.Revision != p.Input.Revision || p.Before == nil || target.ConnectionID != p.Before.ConnectionID || target.Provider != p.Before.Provider || target.Region != p.Before.Region || target.Runtime != p.Before.Runtime || target.PoolID != p.Before.PoolID || target.ManagedResourceID != p.Before.ManagedResourceID || target.LocationID != p.Before.LocationID {
 			return nil, ErrConflict
 		}
 	}
@@ -335,7 +341,7 @@ func (s *PgStore) Accept(ctx context.Context, p *Preview, snapshot *Snapshot, sy
 		provider, connection, region := defaultColumns(p.AfterDefault)
 		_, err = tx.Exec(ctx, `UPDATE loomplane_cloud_profiles SET default_provider=$4,default_connection_id=$5,default_region=$6,revision=revision+1,updated_at=$7 WHERE org_id=$1 AND $2::text IS NOT NULL AND id=$3`, p.OrgID, p.ProjectID, p.Input.CloudID, provider, connection, region, sync.CreatedAt)
 	case p.Input.TargetID != "":
-		_, err = tx.Exec(ctx, `UPDATE loomplane_cloud_targets SET provider=$5,connection_id=nullif($6,''),region=$7,revision=revision+1,updated_at=$8,runtime=$9,pool_id=nullif($10,'') WHERE org_id=$1 AND $2::text IS NOT NULL AND cloud_id=$3 AND id=$4`, p.OrgID, p.ProjectID, p.Input.CloudID, p.Input.TargetID, p.After.Provider, p.After.ConnectionID, p.After.Region, sync.CreatedAt, cmp.Or(p.After.Runtime, "managed"), p.After.PoolID)
+		_, err = tx.Exec(ctx, `UPDATE loomplane_cloud_targets SET provider=$5,connection_id=nullif($6,''),region=$7,revision=revision+1,updated_at=$8,runtime=$9,pool_id=nullif($10,''),managed_resource_id=nullif($11,''),location_id=nullif($12,'') WHERE org_id=$1 AND $2::text IS NOT NULL AND cloud_id=$3 AND id=$4`, p.OrgID, p.ProjectID, p.Input.CloudID, p.Input.TargetID, p.After.Provider, p.After.ConnectionID, p.After.Region, sync.CreatedAt, cmp.Or(p.After.Runtime, "managed"), p.After.PoolID, p.After.ManagedResourceID, p.After.LocationID)
 	default:
 		_, err = tx.Exec(ctx, `INSERT INTO loomplane_cloud_assignments(org_id,project_id,environment_id,cloud_id,revision) VALUES($1,$2,$3,nullif($4,''),1) ON CONFLICT(org_id,project_id,environment_id) DO UPDATE SET cloud_id=EXCLUDED.cloud_id,revision=loomplane_cloud_assignments.revision+1`, p.OrgID, p.ProjectID, p.Input.EnvironmentID, p.Input.CloudID)
 	}

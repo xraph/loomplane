@@ -326,3 +326,18 @@ func (a *Authorizer) Revoke(ctx context.Context, orgID, userID string) error {
 	a.engine.InvalidateSubject(ctx, orgID, warden.SubjectUser, userID)
 	return nil
 }
+
+// RequireCurrentMembership checks the identity source before a saved approval buys resources.
+func (a *Authorizer) RequireCurrentMembership(ctx context.Context, p Principal) error {
+	if a.members == nil || p.IsServiceAccount() || p.OrgID == "" || p.UserID == "" {
+		return ErrForbidden
+	}
+	_, found, err := a.members(ctx, p.OrgID, p.UserID)
+	if err != nil {
+		return err
+	}
+	if !found {
+		return ErrNotMember
+	}
+	return nil
+}

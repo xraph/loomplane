@@ -3,7 +3,7 @@ import { createFileRoute } from "@tanstack/react-router"
 import type { CloudTab } from "@/components/cloud-detail/overview"
 import { CloudDetail } from "@/pages/cloud-detail"
 
-type Search = { project?: string; tab?: CloudTab }
+type Search = { project?: string; tab?: CloudTab; clusterOperation?: string }
 
 const tabs: CloudTab[] = [
   "overview",
@@ -20,6 +20,10 @@ export const Route = createFileRoute("/clouds/$id")({
   // The project the Cloud belongs to; the list links with it. The tab opens
   // the page on one of its views, such as Capacity from a paused deploy.
   validateSearch: (search: Record<string, unknown>): Search => ({
+    ...(typeof search.clusterOperation === "string" &&
+    search.clusterOperation.length <= 128
+      ? { clusterOperation: search.clusterOperation }
+      : {}),
     ...(typeof search.project === "string" && search.project.length <= 64
       ? { project: search.project }
       : {}),

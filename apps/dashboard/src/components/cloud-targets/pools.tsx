@@ -17,7 +17,7 @@ import type {
   Server,
   Pool,
   PoolInputBody,
-  MoveInputBody,
+  CloudinfraMoveInputBody as MoveInputBody,
   MoveReview,
   ReservationRecovery,
 } from "@/client/forge/loomplane/types"

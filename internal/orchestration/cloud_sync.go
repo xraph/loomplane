@@ -82,7 +82,7 @@ func (d *Deployments) StartCloudSync(ctx context.Context, org, project, id strin
 				return e
 			}
 			if needs {
-				build = CapacityBuild
+				build = CurrentBuild
 				in.ReconcileInterval = capacityInterval
 			}
 		}
@@ -161,9 +161,11 @@ func (d *Deployments) ResumeRelease(ctx context.Context, org, planID string) err
 		}
 		return resumeReleaseOn(ctx, recordedRecovery{releaseRecoveryEngine: eng, workflows: d, org: org, plan: planID}, org, planID)
 	}
-	// A v3 run resumes on v3, as it was approved. Every later build resumes
-	// on CurrentBuild.
-	build, request := CurrentBuild, "resume-release-v4:"+planID
+	// Resume on the original build so historical releases keep their protocol.
+	build, request := current.BuildID, "resume-release-v4:"+planID
+	if current.BuildID == ManagedWorkloadBuild {
+		request = "resume-release-v5:" + planID
+	}
 	if current.BuildID == CapacityBuild {
 		build, request = CapacityBuild, "resume-release-v3:"+planID
 	}

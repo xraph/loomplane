@@ -353,3 +353,73 @@ During a routed release, old and new compute can coexist while DNS changes and c
 If a legacy runtime lacks a trusted current container/release receipt, redeploy it through the reviewed deployment flow before attaching a route. DNS-only retries cannot repair missing runtime identity. Stop every older app and worker binary before running the migrations and start only the upgraded binaries afterward. Mixed versions with unfenced writers are unsupported.
 
 The Go client exposes typed Cloud, server, pool, zone and route operations through the same authenticated transport as `loomctl`. Infrastructure operations live under `/api/v1/clouds/:cloudId`; zones under `/api/v1/dns-zones`; project route operations under `/api/v1/projects/:projectId/domain-routes` and `/route-operations`. Review inputs, revisions and cleanup authority remain enforced by those APIs.
+
+## Isolate source builds
+
+For shared Kubernetes workers, install Kata Containers on your build nodes and create a RuntimeClass whose handler is `kata` or starts with `kata-`. Set these connection settings under Integrations, or pass them in the connection API's `settings` object:
+
+```json
+{
+  "build_workers": "shared",
+  "build_runtime_class": "kata-qemu"
+}
+```
+
+Use your RuntimeClass's name for `build_runtime_class`. You can select Kata on dedicated workers too. You still need the managed registry settings described below.
+
+Every repository build is treated as untrusted. Omitting `build_workers` means shared, so an existing connection needs either a checked Kata runtime or an explicit `build_workers: dedicated` setting before it can build source again. Use dedicated only when you control the worker and keep it within one trust domain. A repository manifest cannot change this setting. Registered server pool members always count as shared, including another SSH connection to the same Docker daemon.
+
+The connection check reads the RuntimeClass and records its UID, handler, scheduling and overhead. Your approved plan pins those values. Loomplane checks them again before starting a build and before uploading its source, and rejects a running pod whose runtime differs from the requested class. A missing class, denied read, changed configuration or failed VM startup stops the build. There is no fallback to the default container runtime.
+
+The connection credential needs `get` access to the selected cluster-scoped RuntimeClass. Add a ClusterRole rule and bind it to that credential's identity:
+
+```yaml
+apiGroups: [node.k8s.io]
+resources: [runtimeclasses]
+resourceNames: [kata-qemu]
+verbs: [get]
+```
+
+Your cluster administrator must configure the handler to use Kata on every eligible node, provide KVM, and set the RuntimeClass's scheduling constraints for those nodes. A class name alone does not prove VM isolation. Loomplane checks the Kubernetes objects; it does not inspect or attest the host's containerd configuration. Keep cluster administration outside the build tenant's permissions. See [Kata's containerd setup](https://github.com/kata-containers/kata-containers/blob/main/docs/how-to/containerd-kata.md).
+
+Kata protects the build pod's kernel boundary. It does not replace network policy, registry credential scoping or host maintenance. The build pod retains the existing rootless BuildKit configuration, including its unconfined seccomp and AppArmor profiles, inside the selected runtime.
+
+SSH/Docker source builds currently require explicitly dedicated workers. To deploy onto a shared server pool, build on a separate dedicated connection and publish to your registry, or deploy a digest-pinned image. Standalone Firecracker execution is not implemented. Provider-managed builds, such as Cloud Build and CodeBuild, continue using their provider's execution environment.
+
+To verify the build on a disposable Kata cluster, create a local JSON file with `kubeconfig` (a path to a self-contained kubeconfig), `org` and `connection` (the existing Loomplane registry owner), and `settings` containing the connection's namespace, registry hostname, storage and ingress settings, `build_workers: shared`, and `build_runtime_class`. Then run:
+
+```sh
+LOOMPLANE_KATA_TEST_CONFIG=/absolute/path/to/kata-test.json \
+  go test -tags=integration ./internal/clouds/kubernetes \
+  -run '^TestKataBuildIntegration$' -count=1 -timeout=40m
+```
+
+The test requires an existing managed registry. It executes a Dockerfile command, publishes an image and removes its build Job. The smoke-test image remains in that disposable registry for its normal retention. A successful run checks the build flow; host configuration still needs an operator check.
+
+## Review Kubernetes cluster setup
+
+Use Infrastructure, Clusters inside an organization Cloud. The existing `servers` tab URL still opens Infrastructure. Project members use their granted targets; cluster discovery, account details and lifecycle operations require organization Cloud management permission.
+
+The CLI follows the existing `cloud-servers` naming convention:
+
+```sh
+loomctl cloud-clusters list cloud_...
+loomctl cloud-clusters show cloud_... resource_...
+loomctl cloud-clusters options cloud_... conn_... --region nyc1
+loomctl cloud-clusters discover conn_... --cursor next-page
+loomctl cloud-clusters preview cloud_... --file cluster.json
+loomctl cloud-clusters apply cloud_... operation-id --review exact-digest --yes --wait --timeout 10m
+loomctl cloud-clusters operation cloud_... operation-id --wait --timeout 10m
+loomctl cloud-clusters retry cloud_... operation-id --wait --timeout 10m
+loomctl cloud-clusters cancel cloud_... operation-id
+```
+
+A wait timeout prints the latest saved checkpoint. Keep its operation ID and resume it; creating another preview is not a recovery step for an accepted operation. Retry rechecks current authority, and a stale review requires fresh options and another review. Cancellation does not promise provider deletion.
+
+Preview accepts `create`, `adopt-external` or `adopt-managed`. Pin the Cloud revision, connection generation, verified account identity, options digest and capacity policy revision. Runtime attachment input also pins the project grant revision, namespace, target slug and service account. Managed adoption requires the saved managed resource ID and revision with its creation receipt. External adoption preserves external lifecycle ownership. The public API has no raw cluster enrollment endpoint.
+
+The optional qualification runner is `tests/acceptance/managed-clusters/run.py`. It requires a disposable configuration, explicit account/project/region bounds, fixed node and cost ceilings, a digest-pinned worker image, and commands for worker restart, deployment/readiness, access revocation/restoration and cleanup inventory. Commands return scoped JSON evidence; the runner rejects mismatched identities and nonempty cleanup inventory. Run its fixture tests with `python3 -m unittest discover -s tests/acceptance/managed-clusters`. Paid execution additionally requires `--execute-paid-disposable-qualification`, a private state path and `LOOMPLANE_QUALIFICATION_TOKEN`. Those fixture tests make no provider purchases and establish no live qualification.
+
+The qualification runner requires known positive node prices before acceptance, even though manual review can acknowledge itemized unknown charges. It reloads the saved review and checks its input and estimate against the configured bounds before applying. Saved state is bound to the API endpoint, account, Cloud, project, region, input, node limit and node-hour ceiling. Changed configurations and older state files without that fingerprint are refused. Recover those operations by their saved ID; starting a new state file can create another review. Already accepted operations resume without another preview or apply.
+
+Changes pages cluster history separately from placement changes. Use Next cluster changes to reach later pages and First cluster changes to return. Saved cluster reviews retain each pool's name, count, size and autoscaling setting.

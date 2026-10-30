@@ -88,7 +88,7 @@ func appliedCloudPlanWithIntents(bindings []*Binding, assignment *cloudprofiles.
 			cfg.Target = ""
 			cfg.TargetSettings = nil
 			cfg.Execution = runs.Execution
-			set := manifest.Settings{Provider: cfg.Provider, Endpoint: cfg.Endpoint, Scale: cfg.Scale, Size: cfg.Size}
+			set := manifest.Settings{Provider: cfg.Provider, Endpoint: cfg.Endpoint, Scale: cfg.Scale, Size: cfg.Size, CapacityMode: cfg.CapacityMode}
 			if cfg.BuildTarget != nil {
 				set.Build = &manifest.Build{Builder: cfg.BuildTarget.Builder, Registry: cfg.BuildTarget.Registry, Image: cfg.BuildTarget.Image, Context: cfg.Context}
 			}
@@ -157,7 +157,7 @@ func appliedCloudPlanWithIntents(bindings []*Binding, assignment *cloudprofiles.
 		}
 		p.in.CloudPlacements[b.Name] = *cfg.CloudPlacement
 		p.checkCloudServer(ServiceSubject, b.Name, "services."+b.Name, *cfg.CloudPlacement)
-		set := manifest.Settings{Provider: cfg.Provider, Region: cfg.Region, Endpoint: cfg.Endpoint, HealthPath: cfg.HealthPath, Scale: cfg.Scale, Size: cfg.Size}
+		set := manifest.Settings{Provider: cfg.Provider, Region: cfg.Region, Endpoint: cfg.Endpoint, HealthPath: cfg.HealthPath, Scale: cfg.Scale, Size: cfg.Size, CapacityMode: cfg.CapacityMode}
 		if OwnedCloud(prov.Cloud) {
 			set.Target = t.ConnectionID
 		}

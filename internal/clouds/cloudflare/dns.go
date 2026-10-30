@@ -306,7 +306,10 @@ func (c *Client) listRecords(ctx context.Context, credential provider.Infrastruc
 // ListRecords reads all records, foreign and proxied ones included, so
 // callers can see what already holds a name.
 func (c *Client) ListRecords(ctx context.Context, credential provider.InfrastructureCredential, zone provider.DNSZone) ([]provider.DNSRecord, error) {
-	records, _, err := c.listRecords(ctx, credential, zone, "")
+	records, proxied, err := c.listRecords(ctx, credential, zone, "")
+	for i := range records {
+		records[i].Proxied = proxied[records[i].ID]
+	}
 	return records, err
 }
 
@@ -340,6 +343,9 @@ func reconcileUpdate(req provider.DNSUpsertRequest, records []provider.DNSRecord
 // Loomplane's only when its comment is the owner token, so a record anyone
 // else made is drift, and so is any proxied one but the exact receipt.
 func (c *Client) UpsertRecord(ctx context.Context, credential provider.InfrastructureCredential, req provider.DNSUpsertRequest) (provider.DNSRecord, error) {
+	if req.Record.Proxied || (req.Expected != nil && req.Expected.Proxied) {
+		return c.upsertEdgeDNS(ctx, credential, req)
+	}
 	receipt := ""
 	if req.Expected != nil {
 		receipt = req.Expected.ID
@@ -396,6 +402,9 @@ func (c *Client) UpsertRecord(ctx context.Context, credential provider.Infrastru
 // DeleteRecord removes the record the exact receipt names, and nothing
 // else. A record already gone is done.
 func (c *Client) DeleteRecord(ctx context.Context, credential provider.InfrastructureCredential, req provider.DNSDeleteRequest) error {
+	if req.Expected.Proxied {
+		return c.deleteEdgeDNS(ctx, credential, req)
+	}
 	if req.Expected.ID == "" || req.Expected.ZoneID != req.Zone.ID || !strings.HasPrefix(req.Expected.Owner, "loomplane:") {
 		return provider.ErrInfrastructureDrift
 	}

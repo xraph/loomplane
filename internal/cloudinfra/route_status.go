@@ -21,8 +21,9 @@ const (
 )
 
 const (
-	RouteBackendServer     = "server"
-	RouteBackendKubernetes = "kubernetes"
+	RouteBackendServer      = "server"
+	RouteBackendFirecracker = "firecracker"
+	RouteBackendKubernetes  = "kubernetes"
 )
 
 // certificateRenewalWindow is when a valid certificate starts reading as renewing.
