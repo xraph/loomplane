@@ -51,9 +51,9 @@ function serve(p: object, more: Record<string, unknown> = {}) {
         : url.endsWith("/projects/proj_1")
           ? { id: "proj_1", name: "Shop", slug: "shop" }
           : {}
-    if (extra && extra[1] === 404)
-      return new Response(JSON.stringify({ message: "not found" }), {
-        status: 404,
+    if (extra && typeof extra[1] === "number")
+      return new Response(JSON.stringify({ message: "refused" }), {
+        status: extra[1],
         headers: { "Content-Type": "application/json" },
       })
     return new Response(JSON.stringify(body), {
@@ -236,6 +236,13 @@ const finished = (id: string, startedAt: string) => ({
   finished_at: startedAt,
 })
 
+const target = {
+  environment: "production",
+  target: { deployment_id: "dep_1", plan_id: "plan_1", kind: "release", status: "succeeded" },
+  restore: { deployment_id: "dep_0", plan_id: "plan_0", kind: "release", status: "succeeded" },
+  commits: [],
+}
+
 test("the newest finished deployment offers a rollback", async () => {
   serve(
     { ...plan(undefined, "approved"), environment_id: "env_1" },
@@ -244,6 +251,7 @@ test("the newest finished deployment offers a rollback", async () => {
       "/projects/proj_1/deployments": {
         deployments: [finished("dep_1", "2026-10-29T10:00:00Z")],
       },
+      "/environments/production/rollback-target": target,
       "/deployments/dep_1/watch": 404,
     }
   )
@@ -263,6 +271,8 @@ test("an older deployment offers no rollback", async () => {
           finished("dep_1", "2026-10-29T10:00:00Z"),
         ],
       },
+      // The server refuses: dep_1 isn't the newest release.
+      "/environments/production/rollback-target": 422,
       "/deployments/dep_1/watch": 404,
     }
   )
@@ -271,4 +281,26 @@ test("an older deployment offers no rollback", async () => {
   expect(
     screen.queryByRole("button", { name: "Roll back" })
   ).not.toBeInTheDocument()
+})
+
+// A Cloud sync or catalog deployment after it isn't a release, so the
+// server still rolls dep_1 back, and the page offers it.
+test("a newer Cloud sync deployment doesn't hide the rollback", async () => {
+  serve(
+    { ...plan(undefined, "approved"), environment_id: "env_1" },
+    {
+      "/plans/plan_1/deployment": finished("dep_1", "2026-10-29T10:00:00Z"),
+      "/projects/proj_1/deployments": {
+        deployments: [
+          finished("dep_sync", "2026-10-29T11:00:00Z"),
+          finished("dep_1", "2026-10-29T10:00:00Z"),
+        ],
+      },
+      "/environments/production/rollback-target": target,
+      "/deployments/dep_1/watch": 404,
+    }
+  )
+  expect(
+    await screen.findByRole("button", { name: "Roll back" })
+  ).toBeInTheDocument()
 })

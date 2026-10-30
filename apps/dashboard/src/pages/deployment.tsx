@@ -28,6 +28,7 @@ import {
   usePlansCreate,
   usePlansGet,
   usePlansList,
+  useRollbacksTarget,
 } from "@/client/forge/loomplane/hooks"
 import type { Action, Finding, Plan } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
@@ -296,8 +297,7 @@ function Heading({ run, now }: { run: Run; now: number }) {
   const d = run.deployment
   const moving = run.plan.sources.filter((s) => s.inScope)
   const kind = runKindLabel(run.plan)
-  const [rollingBack, setRollingBack] = useState(false)
-  const rollback = useRollbackOffer(run)
+  const rollback = mayOfferRollback(run, can("deployment:create"))
 
   const planAgain = async () => {
     try {
@@ -411,21 +411,7 @@ function Heading({ run, now }: { run: Run; now: number }) {
             Retry
           </Button>
         )}
-        {rollback && d && (
-          <>
-            <Button variant="outline" onClick={() => setRollingBack(true)}>
-              <Undo2Icon />
-              Roll back
-            </Button>
-            <RollbackDialog
-              open={rollingBack}
-              onOpenChange={setRollingBack}
-              projectId={run.projectId}
-              environment={run.environment}
-              deploymentId={d.id}
-            />
-          </>
-        )}
+        {rollback && d && <RollbackOffer run={run} deploymentId={d.id} />}
         {!isLive(run) && can("deployment:create") && (
           <Button
             variant="outline"
@@ -487,26 +473,52 @@ function Heading({ run, now }: { run: Run; now: number }) {
 const finishedStatuses = new Set(["succeeded", "failed", "cancelled"])
 
 /**
- * useRollbackOffer reports whether the run's deployment can be rolled
- * back from here: it's finished, no newer deployment of its environment
- * has started, it isn't a rollback itself, and the person may deploy. The
- * server still has the last word, and the dialog shows its reason.
+ * mayOfferRollback reports whether the run's deployment could be rolled
+ * back from here at all: it's finished, it isn't a rollback itself, and
+ * the person may deploy. RollbackOffer asks the server the rest.
  */
-function useRollbackOffer(run: Run): boolean {
-  const { can } = useOrganization()
+function mayOfferRollback(run: Run, canDeploy: boolean): boolean {
   const d = run.deployment
-  const list = useQuery(useDeploymentsList, { path: { id: run.projectId } })
-  if (!d || !can("deployment:create")) return false
-  if (!finishedStatuses.has(d.status) || run.plan.kind === "rollback")
-    return false
-  const all = list.data?.deployments
-  if (!all) return false
-  const started = Date.parse(d.startedAt)
-  return !all.some(
-    (x) =>
-      x.id !== d.id &&
-      x.environmentId === d.environmentId &&
-      Date.parse(x.startedAt) > started
+  return (
+    !!d &&
+    canDeploy &&
+    finishedStatuses.has(d.status) &&
+    run.plan.kind !== "rollback"
+  )
+}
+
+/**
+ * RollbackOffer shows Roll back when the server would roll the deployment
+ * back: it's the environment's newest release. Cloud sync and catalog
+ * deployments after it don't count, as they don't for the server.
+ */
+function RollbackOffer({
+  run,
+  deploymentId,
+}: {
+  run: Run
+  deploymentId: string
+}) {
+  const [open, setOpen] = useState(false)
+  const target = useQuery(useRollbacksTarget, {
+    path: { id: run.projectId, environment: run.environment },
+    query: { deployment_id: deploymentId },
+  })
+  if (target.data === undefined) return null
+  return (
+    <>
+      <Button variant="outline" onClick={() => setOpen(true)}>
+        <Undo2Icon />
+        Roll back
+      </Button>
+      <RollbackDialog
+        open={open}
+        onOpenChange={setOpen}
+        projectId={run.projectId}
+        environment={run.environment}
+        deploymentId={deploymentId}
+      />
+    </>
   )
 }
 

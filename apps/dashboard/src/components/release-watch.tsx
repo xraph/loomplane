@@ -169,12 +169,18 @@ function Services({ w }: { w: Watch }) {
             </span>
           </div>
           <p className="text-[12.5px] text-muted-foreground">
-            Not watched: {u.reason}
+            Not watched: {unwatchedReason(u.reason)}
           </p>
         </li>
       ))}
     </ul>
   )
+}
+
+// unwatchedReason is why a service isn't watched, without the "not
+// watched: " the server starts it with, so the panel says it once.
+function unwatchedReason(reason: string): string {
+  return reason.replace(/^not watched:\s*/i, "")
 }
 
 function WatchBody({ w }: { w: Watch }) {

@@ -61,7 +61,9 @@ const watch = (over: object) => ({
     {
       name: "web",
       provider: "vercel",
-      reason: "Vercel exposes no error counts",
+      // The server's own text, which already says it isn't watched.
+      reason:
+        "not watched: Loomplane reads no request and error counts from Vercel.",
     },
   ],
   held: [],
@@ -105,7 +107,10 @@ it("shows a running watch with each service's verdict", async () => {
   const api = within(services).getByText("api").closest("li")!
   expect(api).toHaveTextContent("Passing")
   const web = within(services).getByText("web").closest("li")!
-  expect(web).toHaveTextContent("Not watched: Vercel exposes no error counts")
+  expect(web).toHaveTextContent(
+    "Not watched: Loomplane reads no request and error counts from Vercel.",
+  )
+  expect(web.textContent?.match(/not watched/gi)).toHaveLength(1)
   expect(screen.getByText("Unverified")).toBeInTheDocument()
 })
 
