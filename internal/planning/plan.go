@@ -93,6 +93,7 @@ const (
 
 // Action is one step of a plan.
 type Action struct {
+	CleanupTargets []ManagedCleanupTarget `json:"cleanup_targets,omitempty"`
 	// BackupEveryHours is a reviewed default for a newly provisioned resource.
 	// It does not change the runtime recipe or overwrite an operator's policy.
 	BackupEveryHours int                `json:"backup_every_hours,omitempty"`
