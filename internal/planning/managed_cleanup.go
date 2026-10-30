@@ -16,22 +16,29 @@ const (
 
 // ManagedCleanupTarget pins the old release you reviewed. It grants no writes.
 type ManagedCleanupTarget struct {
-	Kind                 ManagedCleanupKind      `json:"kind"`
-	Origin               string                  `json:"origin"`
-	ParentBindingID      string                  `json:"parent_binding_id"`
-	SchemaVersion        int                     `json:"schema_version"`
-	Binding              ManagedCleanupBinding   `json:"binding"`
-	Scope                kubernetes.ManagedScope `json:"scope"`
-	AuthorityEpoch       int64                   `json:"authority_epoch"`
-	AuthorityRevision    int64                   `json:"authority_revision"`
-	RevokedAt            *string                 `json:"revoked_at"`
-	AttachmentID         string                  `json:"attachment_id"`
-	AttachmentRevision   int64                   `json:"attachment_revision"`
-	TrustRevision        string                  `json:"trust_revision"`
-	ConnectionGeneration int64                   `json:"connection_generation"`
-	Accepted             []ManagedCleanupOutcome `json:"accepted"`
-	Unresolved           []string                `json:"unresolved"`
-	IdentityCurrent      bool                    `json:"identity_current"`
+	Kind                 ManagedCleanupKind         `json:"kind"`
+	Origin               string                     `json:"origin"`
+	ParentBindingID      string                     `json:"parent_binding_id"`
+	SchemaVersion        int                        `json:"schema_version"`
+	BindingRefs          []ManagedCleanupBindingRef `json:"binding_refs,omitempty"`
+	Binding              ManagedCleanupBinding      `json:"binding"`
+	Scope                kubernetes.ManagedScope    `json:"scope"`
+	AuthorityEpoch       int64                      `json:"authority_epoch"`
+	AuthorityRevision    int64                      `json:"authority_revision"`
+	RevokedAt            *string                    `json:"revoked_at"`
+	AttachmentID         string                     `json:"attachment_id"`
+	AttachmentRevision   int64                      `json:"attachment_revision"`
+	TrustRevision        string                     `json:"trust_revision"`
+	ConnectionGeneration int64                      `json:"connection_generation"`
+	Accepted             []ManagedCleanupOutcome    `json:"accepted"`
+	Unresolved           []string                   `json:"unresolved"`
+	IdentityCurrent      bool                       `json:"identity_current"`
+}
+
+type ManagedCleanupBindingRef struct {
+	Origin          string                `json:"origin"`
+	ParentBindingID string                `json:"parent_binding_id"`
+	Binding         ManagedCleanupBinding `json:"binding"`
 }
 
 type ManagedCleanupBinding struct {

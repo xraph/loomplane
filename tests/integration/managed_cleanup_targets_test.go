@@ -232,6 +232,17 @@ func TestManagedCleanupRetainedTargets(t *testing.T) {
 	if len(targets) != 2 || targets[0].Scope.Release != next.Release || targets[1].Scope.Release != scope.Release || targets[1].Origin != "retained" {
 		t.Fatalf("retained targets: %+v", targets)
 	}
+	result.Actions[0].Op = planning.Update
+	if err = svc.PrepareManagedCleanupTargets(t.Context(), plan, result); err != nil {
+		t.Fatal(err)
+	}
+	if result.Actions[0].CleanupTargets[0].Kind != planning.ManagedCleanupRetireDependents || result.Actions[0].CleanupTargets[1].Kind != planning.ManagedCleanupRemoveRelease {
+		t.Fatal("Update changed distinct retained resource purpose")
+	}
+	result.Actions[0].Op = planning.Delete
+	if err = svc.PrepareManagedCleanupTargets(t.Context(), plan, result); err != nil {
+		t.Fatal(err)
+	}
 	saveCleanupReview(t, f, plan, result)
 	ctx := security.WithPrincipal(t.Context(), security.Principal{OrgID: "org", UserID: "reviewer"})
 	if ok, e := f.plans.Decide(ctx, "org", plan.ID, "approved", "reviewer", "", time.Now()); e != nil || !ok {
@@ -260,7 +271,7 @@ func TestManagedCleanupRetainedTargets(t *testing.T) {
 		t.Fatal(err)
 	}
 	targets = result.Actions[0].CleanupTargets
-	if len(targets) != 2 || targets[1].Scope.Release != scope.Release || targets[1].Kind != "retire_release_dependents" {
+	if len(targets) != 1 || targets[0].Scope.Release != scope.Release || targets[0].Kind != planning.ManagedCleanupRemoveRelease || len(targets[0].BindingRefs) != 2 {
 		t.Fatalf("repeated identity lost old release: %+v", targets)
 	}
 }

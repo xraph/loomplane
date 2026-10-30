@@ -81,7 +81,11 @@ func (j *managedCleanupJournal) Issue(ctx context.Context, scope kube.ManagedSco
 	if checkErr := j.store.guard(ctx, tx, grant.Target, grant.AuthorityRevision); checkErr != nil {
 		return "", checkErr
 	}
-	if checkErr := guardCleanupRequest(ctx, tx, grant.Target, request); checkErr != nil {
+	coowners, err := j.store.cleanupCoowners(ctx, tx, grant)
+	if err != nil {
+		return "", err
+	}
+	if checkErr := guardCleanupRequest(ctx, tx, grant.Target, request, coowners); checkErr != nil {
 		return "", checkErr
 	}
 	issuance, err := typeid.Generate("issuance")
@@ -99,7 +103,7 @@ func (j *managedCleanupJournal) Issue(ctx context.Context, scope kube.ManagedSco
 	// An unresolved cleanup request permits only an exact retry, not progress
 	// to a different object. Every retry remains independently unresolved.
 	var retryOnly bool
-	err = tx.QueryRow(ctx, `SELECT NOT EXISTS(SELECT 1 FROM loomplane_managed_workload_issuances WHERE org_id=$1 AND release_id=$2 AND outcome IS NULL AND (cleanup_grant_id IS NULL OR request<>$3::jsonb))`, scope.Org, scope.Release, req).Scan(&retryOnly)
+	err = tx.QueryRow(ctx, `SELECT NOT EXISTS(SELECT 1 FROM loomplane_managed_workload_issuances WHERE org_id=$1 AND release_id IN (SELECT value->'scope'->>'Release' FROM jsonb_array_elements($2::jsonb)) AND outcome IS NULL AND (cleanup_grant_id IS NULL OR request<>$3::jsonb))`, scope.Org, coowners, req).Scan(&retryOnly)
 	if err != nil || !retryOnly {
 		return "", errors.Join(kube.ErrManagedAuthority, err)
 	}
@@ -110,7 +114,7 @@ func (j *managedCleanupJournal) Issue(ctx context.Context, scope kube.ManagedSco
 	return issuance.String(), tx.Commit()
 }
 
-func guardCleanupRequest(ctx context.Context, tx driver.Tx, target ManagedCleanupTarget, request kube.ManagedRequest) error {
+func guardCleanupRequest(ctx context.Context, tx driver.Tx, target ManagedCleanupTarget, request kube.ManagedRequest, coowners []byte) error {
 	if request.Method != http.MethodDelete || request.Namespace != target.Scope.Namespace || request.Name == "" || request.UID == "" {
 		return kube.ErrManagedAuthority
 	}
@@ -157,12 +161,13 @@ func guardCleanupRequest(ctx context.Context, tx driver.Tx, target ManagedCleanu
 	if _, err = tx.Exec(ctx, `SELECT id FROM loomplane_bindings WHERE org_id=$1 AND ((connection_id=$2 AND external_id=$3) OR (environment_id=$4 AND subject='service' AND name=$5)) FOR SHARE`, target.Scope.Org, target.Scope.Connection, target.Scope.Instance, target.Scope.Environment, target.Scope.Service); err != nil {
 		return err
 	}
-	// A newer release can share names and UIDs. Any such evidence makes
-	// whole-object deletion unavailable, including after binding removal.
-	err = tx.QueryRow(ctx, `SELECT NOT EXISTS(SELECT 1 FROM loomplane_managed_workload_issuances w WHERE w.org_id=$1 AND w.release_id<>$2 AND w.scope->>'Connection'=$3 AND w.scope->>'NamespaceUID'=$4 AND w.request->>'Resource'=$5 AND w.request->>'Name'=$6 AND w.outcome->>'State'='accepted' AND w.outcome->>'UID'=$7)
- AND NOT EXISTS(SELECT 1 FROM loomplane_managed_workload_authority a WHERE a.org_id=$1 AND a.release_id<>$2 AND a.body->>'Connection'=$3 AND a.body->>'Instance'=$8)
- AND NOT EXISTS(SELECT 1 FROM loomplane_bindings b WHERE b.org_id=$1 AND b.connection_id=$3 AND b.external_id=$8 AND b.plan_id<>$9)
- AND NOT EXISTS(SELECT 1 FROM loomplane_workload_controllers c WHERE c.org_id=$1 AND c.connection_id=$3 AND c.instance_id=$8 AND coalesce(c.body->>'release_id','')<>$2 AND c.body->>'deployment_uid'=$7)`, target.Scope.Org, target.Scope.Release, target.Scope.Connection, target.Scope.NamespaceUID, request.Resource, request.Name, request.UID, target.Scope.Instance, target.Scope.Plan).Scan(&valid)
+	// Every observed owner must match a currently checked grant's exact scope.
+	// Unreviewed owners still block, including after binding removal.
+	err = tx.QueryRow(ctx, `WITH owners AS (SELECT value->'scope' AS scope,value->'accepted' AS accepted FROM jsonb_array_elements($8::jsonb))
+ SELECT NOT EXISTS(SELECT 1 FROM loomplane_managed_workload_issuances w WHERE w.org_id=$1 AND (w.scope->>'Connection'=$2 OR w.scope->>'ClusterCA'=$9) AND w.scope->>'NamespaceUID'=$3 AND w.request->>'Resource'=$4 AND w.request->>'Name'=$5 AND w.outcome->>'State'='accepted' AND w.outcome->>'UID'=$6 AND w.cleanup_grant_id IS NULL AND NOT EXISTS(SELECT 1 FROM owners o WHERE o.scope-'Epoch'=w.scope-'Epoch' AND o.scope->>'Release'=w.release_id AND w.epoch=(w.scope->>'Epoch')::bigint AND w.epoch<=(o.scope->>'Epoch')::bigint AND EXISTS(SELECT 1 FROM jsonb_array_elements(o.accepted) reviewed WHERE reviewed->>'id'=w.id AND (reviewed->>'epoch')::bigint=w.epoch AND reviewed->'request'=w.request AND reviewed->'outcome'=w.outcome)))
+ AND NOT EXISTS(SELECT 1 FROM loomplane_managed_workload_authority a WHERE a.org_id=$1 AND (a.body->>'Connection'=$2 OR (a.body->>'ClusterCA'=$9 AND a.body->>'NamespaceUID'=$3)) AND a.body->>'Instance'=$7 AND (a.revoked_at IS NULL OR NOT EXISTS(SELECT 1 FROM owners o WHERE o.scope=a.body AND o.scope->>'Release'=a.release_id)))
+ AND NOT EXISTS(SELECT 1 FROM loomplane_bindings b WHERE b.org_id=$1 AND b.connection_id=$2 AND b.external_id=$7 AND NOT EXISTS(SELECT 1 FROM owners o WHERE o.scope->>'Plan'=b.plan_id AND o.scope->>'Project'=b.project_id AND o.scope->>'Environment'=b.environment_id AND o.scope->>'Service'=b.name AND b.subject='service'))
+ AND NOT EXISTS(SELECT 1 FROM loomplane_workload_controllers c WHERE c.org_id=$1 AND (c.connection_id=$2 OR (c.body->>'cluster_ca'=$9 AND c.body->>'namespace_uid'=$3)) AND c.instance_id=$7 AND c.body->>'deployment_uid'=$6 AND NOT EXISTS(SELECT 1 FROM owners o WHERE o.scope->>'Connection'=c.connection_id AND o.scope->>'Instance'=c.instance_id AND o.scope->>'Release'=c.body->>'release_id' AND o.scope->>'RuntimeRef'=c.runtime_ref AND o.scope->>'RuntimeRevision'=c.body->>'runtime_revision' AND o.scope->>'Plan'=c.body->>'plan_id' AND o.scope->>'Namespace'=c.body->>'namespace' AND o.scope->>'NamespaceUID'=c.body->>'namespace_uid' AND o.scope->>'ClusterCA'=c.body->>'cluster_ca' AND o.scope->>'Project'=c.project_id AND o.scope->>'Environment'=c.environment_id AND o.scope->>'Service'=c.body->>'service_id'))`, target.Scope.Org, target.Scope.Connection, target.Scope.NamespaceUID, request.Resource, request.Name, request.UID, target.Scope.Instance, coowners, target.Scope.ClusterCA).Scan(&valid)
 	if err != nil || !valid {
 		return errors.Join(kube.ErrManagedAuthority, err)
 	}

@@ -35,6 +35,11 @@ type cleanupIssuerFixture struct {
 
 func newCleanupIssuerFixture(t *testing.T, retire bool, keyIDs ...string) *cleanupIssuerFixture {
 	t.Helper()
+	return prepareCleanupIssuerFixture(t, retire, nil, keyIDs...)
+}
+
+func prepareCleanupIssuerFixture(t *testing.T, retire bool, prepare func(*poolFixture, *planning.Service, *planning.Plan, *planning.Result, kube.ManagedScope), keyIDs ...string) *cleanupIssuerFixture {
+	t.Helper()
 	f, svc, plan, result, scope := cleanupTargetFixture(t)
 	application := kube.NewControllerStore(f.db).WithClusterCapacity(true)
 	serviceWrite, err := application.Issue(t.Context(), scope, kube.ManagedRequest{Version: "v1", Resource: "services", Namespace: scope.Namespace, Name: scope.Instance, Method: "POST"})
@@ -43,6 +48,9 @@ func newCleanupIssuerFixture(t *testing.T, retire bool, keyIDs ...string) *clean
 	}
 	if err = application.Resolve(t.Context(), serviceWrite, scope, kube.ManagedOutcome{State: "accepted", UID: "service-uid", ResourceVersion: "1", StatusCode: 201}); err != nil {
 		t.Fatal(err)
+	}
+	if prepare != nil {
+		prepare(f, svc, plan, result, scope)
 	}
 	if err = svc.PrepareManagedCleanupTargets(t.Context(), plan, result); err != nil {
 		t.Fatal(err)

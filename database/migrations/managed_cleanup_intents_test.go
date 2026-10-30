@@ -21,6 +21,9 @@ func TestManagedCleanupIntentsMigration(t *testing.T) {
 	if err := conn.QueryRow(t.Context(), `SELECT loomplane_managed_cleanup_targets('missing','missing','missing','missing','delete')::text`).Scan(&targets); err != nil || targets != "[]" {
 		t.Fatalf("empty targets: %s %v", targets, err)
 	}
+	if err := migration(t, "managed_cleanup_target_closure").Down(t.Context(), executor); err != nil {
+		t.Fatal(err)
+	}
 	if err := migration(t, "managed_cleanup_grants").Down(t.Context(), executor); err != nil {
 		t.Fatal(err)
 	}
