@@ -39,10 +39,16 @@ DigitalOcean asks for four values:
 - `LOOMPLANE_ARTIFACT_BUCKET`: the artifact bucket name.
 - `LOOMPLANE_BACKUP_BUCKET`: the backup bucket name.
 
-DigitalOcean's button officially supports one service, and this template has two (the API and the worker). If the button refuses it, use `doctl` instead. Fill in the four empty values in `app.yaml` before the last command:
+DigitalOcean's button officially supports one service, and this template has two (the API and the worker). If the button refuses it, use `doctl` instead. Fetch the template and pull the app spec out of it (from a checkout, you already have the file):
 
 ```bash
-sed -n '/^spec:/,$p' .do/deploy.template.yaml | sed '1d; s/^  //' > app.yaml
+curl -fsSLO https://raw.githubusercontent.com/xraph/loomplane/main/.do/deploy.template.yaml
+sed -n '/^spec:/,$p' deploy.template.yaml | sed '1d; s/^  //' > app.yaml
+```
+
+Fill in the four empty values in `app.yaml`, then create the app:
+
+```bash
 doctl apps create --spec app.yaml
 ```
 
@@ -56,13 +62,13 @@ Scratch space on App Platform is small, so the worker runs one analysis at a tim
 
 ## Droplet with cloud-init
 
-Open `deployments/digitalocean/cloud-init.yaml` and edit the three values at the top:
+Copy the raw contents of [`cloud-init.yaml`](https://github.com/xraph/loomplane/blob/main/deployments/digitalocean/cloud-init.yaml) from GitHub. The three values sit in the `install.env` block near the top, and they're the only thing you edit:
 
 - `LOOMPLANE_DOMAIN`: the hostname you'll serve Loomplane on.
 - `ACME_EMAIL`: where Let's Encrypt can reach you.
 - `LOOMPLANE_VERSION`: optional. Leave it empty for the newest stable release.
 
-Create an Ubuntu 24.04 Droplet and paste the whole file into the **User data** box under Advanced options. We recommend 8 GB (`s-4vcpu-8gb`, about $48 a month). You can go down to 4 GB (`s-2vcpu-4gb`, about $24), but then add `LOOMPLANE_ANALYSIS_CONCURRENCY=1` to `/srv/loomplane/.env`.
+Create an Ubuntu 24.04 Droplet and paste the whole file into the **User data** box under Advanced options. We recommend 8 GB (`s-4vcpu-8gb`, about $48 a month). You can go down to 4 GB (`s-2vcpu-4gb`, about $24), but then add `LOOMPLANE_ANALYSIS_CONCURRENCY=1` to `/srv/loomplane/.env` and apply it with `cd /srv/loomplane && docker compose up -d`.
 
 Point an A record for your domain at the Droplet's IP. Caddy fetches the certificate once DNS resolves.
 
