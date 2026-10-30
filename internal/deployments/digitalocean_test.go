@@ -372,6 +372,42 @@ func TestDigitalOcean_rollsBackWithoutBuilding(t *testing.T) {
 	}
 }
 
+// A rollback holds the app while it starts, as a deploy does, so a
+// hostname change can't write the spec in between. It doesn't hold it
+// while the rollback's deployment runs.
+func TestDigitalOcean_rollbackHoldsTheAppUntilItStarts(t *testing.T) {
+	f, client := newFakeAppPlatform(t)
+	job := doJob(apiConfig(), "main")
+	name := DigitalOceanName(job)
+	id := "app-" + name
+	f.apps[id] = map[string]any{"name": name}
+	job.Binding = &planning.Binding{ExternalID: id}
+	cfg := apiConfig()
+	cfg.Artifact = &planning.ReusedArtifact{Revision: "do_dep_7", CommitSHA: doApproved}
+	job.Action.Service = cfg
+	var held atomic.Bool
+	var names []string
+	client.Lock = func(ctx context.Context, name string, fn func(context.Context) error) error {
+		names = append(names, name)
+		held.Store(true)
+		defer held.Store(false)
+		return fn(ctx)
+	}
+	f.held = held.Load
+	if _, err := newDO(client).Apply(t.Context(), job); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(names, []string{"digitalocean-app/" + id}) {
+		t.Fatalf("locks %v", names)
+	}
+	if locked, seen := f.locked["POST /v2/apps/"+id+"/rollback"]; !seen || !locked {
+		t.Fatalf("rollback: seen %v, under the lock %v", seen, locked)
+	}
+	if call := "GET /v2/apps/" + id + "/deployments/rb"; f.locked[call] {
+		t.Fatalf("%s ran under the lock", call)
+	}
+}
+
 func TestDigitalOcean_workersPrivateServicesAndStaticSites(t *testing.T) {
 	job := doJob(&planning.ServiceConfig{Source: "worker", Ecosystem: "node", Start: "node worker.js", Workload: provider.Worker, Execution: provider.Container}, "")
 	spec := doAppSpec(job, job.Action.Service, "acme/mono", "main")

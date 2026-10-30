@@ -226,17 +226,24 @@ func (d *DigitalOcean) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 // rollBack puts the app back on the deployment a rollback plan restores,
 // which App Platform still holds, so nothing builds. The rollback is a
 // deployment of its own, waited on and checked against the restored
-// commit like any other.
+// commit like any other. It starts while it holds the app's spec, as a
+// deploy does, so a hostname change can't write the spec in between.
 func (d *DigitalOcean) rollBack(ctx context.Context, token string, job *Job, cfg *planning.ServiceConfig, state *doState, save func()) (*Outcome, error) {
 	app := job.Binding.ExternalID
 	if state.AppID != app || state.DeploymentID == "" {
 		job.Progress(StepDeploying, "Rolling App Platform back to deployment "+cfg.Artifact.Revision)
-		dep, err := d.Client.Rollback(ctx, token, app, cfg.Artifact.Revision)
+		err := d.Client.WithApp(ctx, app, func(ctx context.Context) error {
+			dep, rollbackErr := d.Client.Rollback(ctx, token, app, cfg.Artifact.Revision)
+			if rollbackErr != nil {
+				return rollbackErr
+			}
+			*state = doState{AppID: app, DeploymentID: dep.ID}
+			save()
+			return nil
+		})
 		if err != nil {
 			return nil, fmt.Errorf("roll %s back on app platform: %w", job.Action.Name, err)
 		}
-		*state = doState{AppID: app, DeploymentID: dep.ID}
-		save()
 	}
 	dep, err := d.Client.WaitDeployment(ctx, token, app, state.DeploymentID, job.CommitSHA)
 	if err != nil {
