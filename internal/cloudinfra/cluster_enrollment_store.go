@@ -90,7 +90,7 @@ func (s *PgStore) PublishClusterEnrollment(ctx context.Context, o *ClusterOperat
 		if o.Enrollment.State.AccessInput == nil || o.Enrollment.State.AccessReceipt == nil {
 			return ErrConflict
 		}
-		if err = insertRuntimeAccessTx(ctx, tx, o, *o.Enrollment.State.AccessInput, o.Enrollment.State.AccessReceipt); err != nil {
+		if err := insertRuntimeAccessTx(ctx, tx, o, *o.Enrollment.State.AccessInput, o.Enrollment.State.AccessReceipt); err != nil {
 			return err
 		}
 	}

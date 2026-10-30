@@ -33,7 +33,7 @@ func TestRuntimeAccessWorkerIsolation(t *testing.T) {
 	if _, err = worker.StartExecution(t.Context(), req); err != nil {
 		t.Fatal(err)
 	}
-	var old []*drt.Worker
+	old := make([]*drt.Worker, 0, 5)
 	for _, options := range []drt.Options{d.Options("old", 1), d.CapacityOptions("capacity", 1), d.CanaryOptions("canary", 1), d.ManagedWorkloadOptions("workload", 1), d.ManagedCleanupOptions("cleanup", 1)} {
 		w, e := drt.NewWorker(store, options)
 		if e != nil {

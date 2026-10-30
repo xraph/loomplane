@@ -56,12 +56,12 @@ func (s *Service) runtimeAccessClient(ctx context.Context, p security.Principal,
 	now := s.now().UTC()
 	digest := clusterDigest(in)
 	audit := &ClusterOperation{ID: uuid.NewString(), OrgID: p.OrgID, CloudID: cloud, Kind: "management-observation", SchemaVersion: 1, Input: in, Digest: digest, Revision: 1, Status: "preview", Principal: p, CreatedAt: now, UpdatedAt: now, ExpiresAt: now.Add(time.Minute), Steps: []ClusterStep{{Name: "management-access", State: "pending", RequestDigest: digest}}}
-	if err = s.Clusters.CreateClusterPreview(ctx, audit); err != nil {
-		return nil, err
+	if createErr := s.Clusters.CreateClusterPreview(ctx, audit); createErr != nil {
+		return nil, createErr
 	}
 	check := func(call context.Context) error {
-		if err = s.clusterEnabled(); err != nil {
-			return err
+		if checkErr := s.clusterEnabled(); checkErr != nil {
+			return checkErr
 		}
 		if _, _, checkErr := s.clusterAuthority(call, p, cloud, in); checkErr != nil {
 			return checkErr
@@ -74,7 +74,7 @@ func (s *Service) runtimeAccessClient(ctx context.Context, p security.Principal,
 			return checkErr
 		}
 		if guard != nil {
-			if checkErr = guard(call); checkErr != nil {
+			if checkErr := guard(call); checkErr != nil {
 				return checkErr
 			}
 		}
@@ -87,8 +87,8 @@ func (s *Service) runtimeAccessClient(ctx context.Context, p security.Principal,
 		return nil
 	}
 	access.BeforeEffect = check
-	if err = check(ctx); err != nil {
-		return nil, err
+	if checkErr := check(ctx); checkErr != nil {
+		return nil, checkErr
 	}
 	material, err := bootstrap.BootstrapCluster(ctx, access, in.Ref, 5*time.Minute)
 	if err != nil {
@@ -100,7 +100,7 @@ func (s *Service) runtimeAccessClient(ctx context.Context, p security.Principal,
 	}
 	audit.Status = "succeeded"
 	audit.Steps[0].State = "completed"
-	if err = s.saveCluster(ctx, audit); err != nil {
+	if err := s.saveCluster(ctx, audit); err != nil {
 		return nil, err
 	}
 	cfg := &rest.Config{Host: material.Endpoint, BearerToken: material.Token, Timeout: 10 * time.Second, TLSClientConfig: rest.TLSClientConfig{CAData: material.CAData, CertData: material.ClientCertificate, KeyData: material.ClientKey}}

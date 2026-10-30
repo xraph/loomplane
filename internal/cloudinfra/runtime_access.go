@@ -256,13 +256,13 @@ func (s *Service) checkRuntimeAccessIdentity(ctx context.Context, a *RuntimeAtta
 	if err != nil || pin.RoleUID != record.Input.RoleUID || pin.RoleBindingUID != record.Input.RoleBindingUID || pin.NamespaceUID != record.Input.NamespaceUID || pin.ServiceAccountUID != record.Input.ServiceAccountUID {
 		return nil, errors.Join(kube.ErrCleanupPermissionsUnavailable, err)
 	}
-	if err = kube.VerifyRuntimeIdentity(ctx, client.Kube, a.Namespace, a.NamespaceUID, a.ServiceAccountName, a.ServiceAccountUID); err != nil {
+	if err := kube.VerifyRuntimeIdentity(ctx, client.Kube, a.Namespace, a.NamespaceUID, a.ServiceAccountName, a.ServiceAccountUID); err != nil {
 		return nil, errors.Join(kube.ErrCleanupPermissionsUnavailable, err)
 	}
-	if err = client.CheckRuntimeBoundaries(ctx); err != nil {
+	if err := client.CheckRuntimeBoundaries(ctx); err != nil {
 		return nil, err
 	}
-	if err = client.CheckRuntimeAccess(ctx, record.Input.Profile); err != nil {
+	if err := client.CheckRuntimeAccess(ctx, record.Input.Profile); err != nil {
 		return nil, err
 	}
 	return record, nil
@@ -355,14 +355,14 @@ func (s *Service) verifyUpgradeRuntime(ctx context.Context, facts *runtimeAccess
 	if err != nil {
 		return err
 	}
-	if err = kube.VerifyRuntimeIdentity(ctx, client.Kube, a.Namespace, a.NamespaceUID, a.ServiceAccountName, a.ServiceAccountUID); err != nil {
-		return err
+	if checkErr := kube.VerifyRuntimeIdentity(ctx, client.Kube, a.Namespace, a.NamespaceUID, a.ServiceAccountName, a.ServiceAccountUID); checkErr != nil {
+		return checkErr
 	}
-	if err = client.CheckRuntimeBoundaries(ctx); err != nil {
-		return err
+	if checkErr := client.CheckRuntimeBoundaries(ctx); checkErr != nil {
+		return checkErr
 	}
-	if err = client.CheckRuntimeAccess(ctx, profile); err != nil {
-		return err
+	if checkErr := client.CheckRuntimeAccess(ctx, profile); checkErr != nil {
+		return checkErr
 	}
 	_, _, err = s.enrollmentAuthority(ctx, facts.enrollment)
 	return err
@@ -386,8 +386,8 @@ func (s *Service) QualifiedRuntimeAccess(ctx context.Context, a *RuntimeAttachme
 	if err != nil {
 		return nil, err
 	}
-	if err = s.verifyRuntimeAccessCredential(ctx, a, enrollment, resource, client); err != nil {
-		return nil, err
+	if verifyErr := s.verifyRuntimeAccessCredential(ctx, a, enrollment, resource, client); verifyErr != nil {
+		return nil, verifyErr
 	}
 	store, ok := s.Clusters.(RuntimeAccessStore)
 	if !ok {

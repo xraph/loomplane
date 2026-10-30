@@ -123,8 +123,8 @@ func ReconcileRuntimeAccess(ctx context.Context, k kubeclient.Interface, in prov
 		role.Annotations[RuntimeAccessDigestAnnotation] = digest
 		state.Attempted = true
 		state.NetworkOutcome = "unknown"
-		if err = checkpoint(ctx); err != nil {
-			return err
+		if checkErr := checkpoint(ctx); checkErr != nil {
+			return checkErr
 		}
 		role, err = k.RbacV1().Roles(in.Namespace).Update(ctx, role, metav1.UpdateOptions{})
 		if err != nil {
@@ -134,8 +134,8 @@ func ReconcileRuntimeAccess(ctx context.Context, k kubeclient.Interface, in prov
 			return ErrInvalid
 		}
 		state.NetworkOutcome = "accepted"
-		if err = checkpoint(ctx); err != nil {
-			return err
+		if checkErr := checkpoint(ctx); checkErr != nil {
+			return checkErr
 		}
 	}
 	// Re-read identities and rules after a response, including resumed operations.
@@ -146,8 +146,8 @@ func ReconcileRuntimeAccess(ctx context.Context, k kubeclient.Interface, in prov
 	if !runtimeAccessEffect(role, in, rules, operation, digest) || binding.ResourceVersion != in.RoleBindingResourceVersion || RuntimeBindingDigest(binding) != in.RoleBindingSubjectsRefDigest {
 		return ErrInvalid
 	}
-	if err = checkpoint(ctx); err != nil {
-		return err
+	if checkErr := checkpoint(ctx); checkErr != nil {
+		return checkErr
 	}
 	kind := "observed-role-update"
 	if state.NetworkOutcome == "accepted" {
