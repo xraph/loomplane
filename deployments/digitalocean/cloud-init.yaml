@@ -12,6 +12,8 @@ write_files:
       ACME_EMAIL="ops@example.com"
       # Leave empty for the newest stable release, or pin one such as v0.1.0.
       LOOMPLANE_VERSION=""
+      # Optional. On a 4 GB Droplet set this to 1 to keep analysis memory low.
+      # LOOMPLANE_ANALYSIS_CONCURRENCY=1
 
 runcmd:
   - - bash

@@ -117,7 +117,10 @@ download_bundle() {
   chown -R root:root "$LOOMPLANE_DIR"
   chmod 0755 "$LOOMPLANE_DIR"
   find "$LOOMPLANE_DIR" -mindepth 1 -type d -exec chmod 0755 {} +
-  find "$LOOMPLANE_DIR" -mindepth 1 -type f ! -name .env -exec chmod 0644 {} +
+  find "$LOOMPLANE_DIR" -mindepth 1 -type f ! -name '.env*' -exec chmod 0644 {} +
+  # .env.example is the one .env* file meant to be readable.
+  chmod 0644 "$LOOMPLANE_DIR/.env.example" 2>/dev/null || true
+  find "$LOOMPLANE_DIR" -maxdepth 1 -type f -name '.env.*' ! -name .env.example -exec chmod 0600 {} +
   if [ -f "$LOOMPLANE_DIR/.env" ]; then chmod 0600 "$LOOMPLANE_DIR/.env"; fi
 }
 
@@ -143,6 +146,17 @@ keep_installer() {
   fi
 }
 
+# The bundle and its image are a pair. On an upgrade, point an existing .env
+# at the image the new bundle ships with. Secrets and the domain stay put.
+sync_image() {
+  [ -f "$LOOMPLANE_DIR/.env" ] || return 0
+  local image
+  image=$(sed -n 's/^LOOMPLANE_IMAGE=//p' "$LOOMPLANE_DIR/.env.example" | head -n 1)
+  [ -n "$image" ] || return 0
+  set_env LOOMPLANE_IMAGE "$image"
+  log "set LOOMPLANE_IMAGE to $image"
+}
+
 step_prepare() {
   local version
   version=$(resolve_version)
@@ -154,6 +168,7 @@ step_prepare() {
   if [ -z "$SKIP_DOCKER" ]; then
     pull_images
   fi
+  sync_image
   keep_installer
   log "Loomplane $version is in $LOOMPLANE_DIR"
 }
@@ -168,12 +183,14 @@ get_env() {
 set_env() {
   local file="$LOOMPLANE_DIR/.env" tmp
   tmp=$(mktemp "$LOOMPLANE_DIR/.env.XXXXXX")
+  # shellcheck disable=SC2064
+  trap "rm -f '$tmp'" RETURN
   KEY="$1" VALUE="$2" awk '
     BEGIN { k = ENVIRON["KEY"]; v = ENVIRON["VALUE"]; done = 0 }
     index($0, k "=") == 1 && !done { print k "=" v; done = 1; next }
     { print }
     END { if (!done) print k "=" v }
-  ' "$file" >"$tmp"
+  ' "$file" >"$tmp" || die "couldn't update $file"
   chmod 600 "$tmp"
   mv "$tmp" "$file"
 }
@@ -201,16 +218,31 @@ valid_hostname() {
   [[ "$host" =~ ^([A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?\.)+[A-Za-z]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$ ]]
 }
 
-step_configure() {
+# check_config validates the domain, email and concurrency without touching
+# the system, so `all` can fail before it installs anything.
+check_config() {
   local domain="${LOOMPLANE_DOMAIN:-}" email="${ACME_EMAIL:-}"
-  [ -f "$LOOMPLANE_DIR/.env" ] || die "no .env in $LOOMPLANE_DIR; run 'install.sh secrets' first"
   [ -n "$domain" ] || die "set LOOMPLANE_DOMAIN to the hostname Loomplane will answer on"
   valid_hostname "$domain" \
     || die "LOOMPLANE_DOMAIN must be a bare hostname such as loomplane.example.com, not a URL or path (got: $domain)"
   [[ "$email" =~ ^[^[:space:]@]+@[^[:space:]@]+\.[^[:space:]@]+$ ]] \
     || die "set ACME_EMAIL to a valid email address for certificate notices"
-  [[ "${LOOMPLANE_ANALYSIS_CONCURRENCY:-1}" =~ ^[0-9]+$ ]] \
-    || die "LOOMPLANE_ANALYSIS_CONCURRENCY must be a whole number"
+  case "$domain" in
+    example.com|*.example.com)
+      die "LOOMPLANE_DOMAIN is still the example.com placeholder; set the hostname you'll use (got: $domain)" ;;
+  esac
+  case "$email" in
+    *@example.com)
+      die "ACME_EMAIL is still the example.com placeholder; set a real address for certificate notices (got: $email)" ;;
+  esac
+  [[ "${LOOMPLANE_ANALYSIS_CONCURRENCY:-1}" =~ ^[1-9][0-9]*$ ]] \
+    || die "LOOMPLANE_ANALYSIS_CONCURRENCY must be a whole number of at least 1"
+}
+
+step_configure() {
+  local domain="${LOOMPLANE_DOMAIN:-}" email="${ACME_EMAIL:-}"
+  [ -f "$LOOMPLANE_DIR/.env" ] || die "no .env in $LOOMPLANE_DIR; run 'install.sh secrets' first"
+  check_config
   set_env LOOMPLANE_DOMAIN "$domain"
   set_env ACME_EMAIL "$email"
   if [ -n "${LOOMPLANE_ANALYSIS_CONCURRENCY:-}" ]; then
@@ -247,7 +279,7 @@ main() {
     secrets) step_secrets ;;
     configure) step_configure ;;
     start) step_start ;;
-    all) step_prepare; step_secrets; step_configure; step_start ;;
+    all) check_config; step_prepare; step_secrets; step_configure; step_start ;;
     *) echo "usage: install.sh prepare|secrets|configure|start|all" >&2; exit 2 ;;
   esac
 }

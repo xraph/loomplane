@@ -38,13 +38,13 @@ bad() { echo "FAIL $1" >&2; fail=1; }
 
 # Build the fixture the way publish-docker.yml builds the release bundle.
 build_bundle() {
-  local tag=$1 dir=$srv/$1 bundle=$work/bundle-$1
+  local tag=$1 digest=${2:-sha256:0000} dir=$srv/$1 bundle=$work/bundle-$1
   mkdir -p "$dir" "$bundle"
   cp /repo/deployments/production/compose.yaml /repo/deployments/production/Caddyfile \
     /repo/deployments/production/.env.example "$bundle/"
   cp /repo/docs/docker-production.md "$bundle/README.md"
-  echo "ghcr.io/xraph/loomplane@sha256:0000" >"$bundle/image.txt"
-  sed -i "s|^LOOMPLANE_IMAGE=.*|LOOMPLANE_IMAGE=ghcr.io/xraph/loomplane@sha256:0000|" "$bundle/.env.example"
+  echo "ghcr.io/xraph/loomplane@$digest" >"$bundle/image.txt"
+  sed -i "s|^LOOMPLANE_IMAGE=.*|LOOMPLANE_IMAGE=ghcr.io/xraph/loomplane@$digest|" "$bundle/.env.example"
   tar --owner=1001 --group=1001 --mode=g+w -czf "$dir/loomplane-$tag-docker.tar.gz" -C "$bundle" .
   (cd "$dir" && sha256sum "loomplane-$tag-docker.tar.gz" >SHA256SUMS)
 }
@@ -97,8 +97,8 @@ fi
 if [ "$(stat -c %a "$install_dir/.env")" = "600" ]; then pass ".env is mode 600"; else bad ".env is mode 600"; fi
 
 # 3. configure rejects anything but a bare hostname.
-for bad_domain in "https://x.example.com/" "x.example.com/path"; do
-  if msg=$(LOOMPLANE_DOMAIN=$bad_domain ACME_EMAIL=ops@example.com bash "$installer" configure 2>&1); then
+for bad_domain in "https://x.loomplane.test.invalid/" "x.loomplane.test.invalid/path"; do
+  if msg=$(LOOMPLANE_DOMAIN=$bad_domain ACME_EMAIL=ops@loomplane.test.invalid bash "$installer" configure 2>&1); then
     bad "configure rejects $bad_domain"
   elif [[ "$msg" == *"bare hostname"* ]]; then
     pass "configure rejects $bad_domain"
@@ -108,16 +108,57 @@ for bad_domain in "https://x.example.com/" "x.example.com/path"; do
 done
 
 # 4. configure writes the domain, email and concurrency.
-if LOOMPLANE_DOMAIN=x.example.com ACME_EMAIL=ops@example.com LOOMPLANE_ANALYSIS_CONCURRENCY=3 \
+if LOOMPLANE_DOMAIN=x.loomplane.test.invalid ACME_EMAIL=ops@loomplane.test.invalid LOOMPLANE_ANALYSIS_CONCURRENCY=3 \
   bash "$installer" configure >/dev/null 2>&1 \
-  && grep -q '^LOOMPLANE_DOMAIN=x.example.com$' "$install_dir/.env" \
-  && grep -q '^ACME_EMAIL=ops@example.com$' "$install_dir/.env" \
+  && grep -q '^LOOMPLANE_DOMAIN=x.loomplane.test.invalid$' "$install_dir/.env" \
+  && grep -q '^ACME_EMAIL=ops@loomplane.test.invalid$' "$install_dir/.env" \
   && grep -q '^LOOMPLANE_ANALYSIS_CONCURRENCY=3$' "$install_dir/.env" \
   && [ "$(grep -c '^LOOMPLANE_SECRET_KEY=' "$install_dir/.env")" = 1 ] \
   && [ "$(grep '^LOOMPLANE_SECRET_KEY=' "$install_dir/.env")" = "$key1" ]; then
   pass "configure writes .env"
 else
   bad "configure writes .env"
+fi
+
+# 4b. configure rejects unedited cloud-init placeholders and bad concurrency.
+for pair in "loomplane.example.com|ops@loomplane.test.invalid|placeholder" \
+  "example.com|ops@loomplane.test.invalid|placeholder" \
+  "x.loomplane.test.invalid|ops@example.com|placeholder" \
+  "x.loomplane.test.invalid|ops@loomplane.test.invalid|at least 1"; do
+  IFS='|' read -r d e want <<<"$pair"
+  c=""; [ "$want" = "at least 1" ] && c=0
+  if msg=$(LOOMPLANE_DOMAIN=$d ACME_EMAIL=$e LOOMPLANE_ANALYSIS_CONCURRENCY=$c bash "$installer" configure 2>&1); then
+    bad "configure rejects $d / $e / concurrency '$c'"
+  elif [[ "$msg" == *"$want"* ]]; then
+    pass "configure rejects $d / $e / concurrency '$c'"
+  else
+    bad "configure rejects $d / $e / concurrency '$c' (message: $msg)"
+  fi
+done
+
+# 4c. all validates before it touches the system.
+allfresh=$work/all-fresh
+if msg=$(LOOMPLANE_DIR=$allfresh LOOMPLANE_VERSION=v9.9.9 LOOMPLANE_DOMAIN=loomplane.example.com \
+  ACME_EMAIL=ops@loomplane.test.invalid bash "$installer" all 2>&1); then
+  bad "all rejects placeholders"
+elif [[ "$msg" == *"placeholder"* ]] && [ ! -e "$allfresh" ]; then
+  pass "all fails on placeholders before creating the install dir"
+else
+  bad "all fails on placeholders before creating the install dir (message: $msg)"
+fi
+
+# 4d. Upgrading prepare syncs LOOMPLANE_IMAGE and keeps secrets and config.
+build_bundle v9.9.7 sha256:1111
+if LOOMPLANE_VERSION=v9.9.7 bash "$installer" prepare >"$work/upgrade.log" 2>&1 \
+  && grep -q '^LOOMPLANE_IMAGE=ghcr.io/xraph/loomplane@sha256:1111$' "$install_dir/.env" \
+  && [ "$(grep '^LOOMPLANE_SECRET_KEY=' "$install_dir/.env")" = "$key1" ] \
+  && [ "$(grep '^POSTGRES_PASSWORD=' "$install_dir/.env")" = "$pw1" ] \
+  && grep -q '^LOOMPLANE_DOMAIN=x.loomplane.test.invalid$' "$install_dir/.env" \
+  && [ "$(stat -c %a "$install_dir/.env")" = 600 ] \
+  && [ -z "$(find "$install_dir" -maxdepth 1 -name '.env.??????' | head -n 1)" ]; then
+  pass "prepare on an upgrade syncs LOOMPLANE_IMAGE and keeps secrets"
+else
+  bad "prepare on an upgrade syncs LOOMPLANE_IMAGE and keeps secrets"; cat "$work/upgrade.log" >&2
 fi
 
 # Keep the finished install for the host's `docker compose config` check.

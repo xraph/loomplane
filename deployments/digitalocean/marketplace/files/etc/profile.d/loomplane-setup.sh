@@ -1,3 +1,4 @@
+# shellcheck shell=sh
 # Offer the Loomplane wizard on the first interactive root login. It stays out
 # of the way of scp, sftp and `ssh host command`, which have no terminal.
 case $- in
