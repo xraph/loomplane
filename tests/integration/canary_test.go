@@ -346,7 +346,7 @@ func newCanaryFixture(t *testing.T, yaml string) *canaryFixture {
 	f.workflows.BindRunStore(orchestration.NewPgRunStore(db))
 	// More than one task of a kind at once, so a revert can run while a
 	// weigh the test holds is still in flight.
-	options := f.workflows.CanaryOptions("canary", 4)
+	options := f.workflows.ManagedCleanupOptions("canary", 4)
 	options.PollInterval = 10 * time.Millisecond
 	worker, err := drt.NewWorker(ds, options)
 	if err != nil {

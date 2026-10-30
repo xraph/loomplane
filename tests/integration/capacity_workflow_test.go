@@ -112,7 +112,7 @@ func TestCapacityWorkflowPostgresReplay(t *testing.T) {
 	workflows.BindRunStore(orchestration.NewPgRunStore(f.db))
 	// A new plan starts on the current build, which waits for capacity as
 	// v3 does.
-	options := workflows.CanaryOptions("capacity", 1)
+	options := workflows.ManagedCleanupOptions("capacity", 1)
 	worker, err := drt.NewWorker(ds, options)
 	if err != nil {
 		t.Fatal(err)
