@@ -18,7 +18,10 @@ import (
 type Settings struct {
 	DatabaseURL string
 	Groups      []*migrate.Group
-	Version     string
+	// Optional are migrations, as group:version, that Groups never runs
+	// but a database may have: the schema check counts them as known.
+	Optional []string
+	Version  string
 	// AuthAppID is Loomplane's authsome app, where platform roles live.
 	AuthAppID string
 }
@@ -106,7 +109,7 @@ func Commands(settings func() (Settings, error)) []cli.Command {
 			if err != nil {
 				return err
 			}
-			st, err := SchemaStatus(ctx.Context(), s.DatabaseURL, s.Groups)
+			st, err := SchemaStatusWith(ctx.Context(), s.DatabaseURL, s.Groups, s.Optional)
 			if err != nil {
 				return err
 			}
@@ -132,7 +135,7 @@ func Commands(settings func() (Settings, error)) []cli.Command {
 			if err != nil {
 				return err
 			}
-			if err := CheckCompatible(ctx.Context(), s.DatabaseURL, s.Groups); err != nil {
+			if err := CheckCompatibleWith(ctx.Context(), s.DatabaseURL, s.Groups, s.Optional); err != nil {
 				return err
 			}
 			if err := Migrate(ctx.Context(), s.DatabaseURL, s.Groups); err != nil {
