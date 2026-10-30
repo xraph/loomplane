@@ -59,6 +59,10 @@ func NewService(store Store, authz Authorizer, retry Retrier, audit Auditor) *Se
 // ErrNotFailed is a retry of a deployment that hasn't failed.
 var ErrNotFailed = errors.New("only a failed deployment can be retried")
 
+// ErrStaleRollback is a retry of a rollback refused as stale: it would
+// undo the newer release.
+var ErrStaleRollback = errors.New(StaleRollback)
+
 // Retry runs a failed deployment's failed and skipped steps again, from
 // the first that failed, with the plan that was approved. Steps that
 // succeeded stay as they are. Approving is what lets someone act on the
@@ -70,6 +74,9 @@ func (s *Service) Retry(ctx context.Context, p security.Principal, id string) (*
 	d, err := s.store.GetDeployment(ctx, p.OrgID, id)
 	if err != nil {
 		return nil, err
+	}
+	if d.Status == StatusFailed && d.Error == StaleRollback {
+		return nil, ErrStaleRollback
 	}
 	ok, err := s.store.Reopen(ctx, p.OrgID, id)
 	if err != nil {

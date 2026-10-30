@@ -114,8 +114,8 @@ func (h *History) Latest(ctx context.Context, orgID, environmentID string) (*pla
 	var finished *time.Time
 	err := h.Store.db.QueryRow(ctx, `SELECT `+recordColumns+`
 		FROM loomplane_deployments d JOIN loomplane_plans p ON p.org_id = d.org_id AND p.id = d.plan_id
-		WHERE d.org_id = $1 AND d.environment_id = $2 AND `+releasePlans+`
-		ORDER BY d.started_at DESC, d.id DESC LIMIT 1`, orgID, environmentID).
+		WHERE d.org_id = $1 AND d.environment_id = $2 AND `+releasePlans+` AND NOT (d.status = 'failed' AND d.error = $3)
+		ORDER BY d.started_at DESC, d.id DESC LIMIT 1`, orgID, environmentID, StaleRollback).
 		Scan(&r.DeploymentID, &r.PlanID, &r.Kind, &r.Status, &r.CanaryStatus, &r.StartedAt, &finished)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return nil, fmt.Errorf("%w: nothing has deployed to this environment", planning.ErrNotFound)

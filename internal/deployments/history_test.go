@@ -349,6 +349,16 @@ func TestHistory_latestIsTheNewestDeploymentWhateverItsStatus(t *testing.T) {
 	if got, err := h.Latest(ctx, "org", "env_b"); err != nil || got.DeploymentID != "dep_2" {
 		t.Fatalf("latest after a sync and a catalog plan %+v, %v", got, err)
 	}
+	// A rollback refused as stale deployed nothing, so it isn't the
+	// environment's newest release.
+	historyRelease{plan: "plan_rb", deployment: "dep_rb", env: "env_b", kind: planning.KindRollback,
+		rollback: &planning.Rollback{Trigger: planning.TriggerWatch, TargetPlanID: "plan_2"}, status: StatusFailed, finished: at(12, 40)}.record(ctx, t, h, pg)
+	if _, err := pg.Exec(ctx, `UPDATE loomplane_deployments SET error=$1 WHERE id='dep_rb'`, StaleRollback); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := h.Latest(ctx, "org", "env_b"); err != nil || got.DeploymentID != "dep_2" {
+		t.Fatalf("latest after a stale rollback %+v, %v", got, err)
+	}
 	historyRelease{plan: "plan_4", deployment: "dep_4", env: "env_b"}.record(ctx, t, h, pg)
 	want = planning.ReleaseRecord{DeploymentID: "dep_4", PlanID: "plan_4", Kind: planning.KindRelease, Status: StatusRunning, StartedAt: at(13, 0)}
 	if got, err := h.Latest(ctx, "org", "env_b"); err != nil || !reflect.DeepEqual(*got, want) {

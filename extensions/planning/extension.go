@@ -495,6 +495,7 @@ func (e *Extension) Register(fapp forge.App) error {
 		Health:               health,
 		Watches:              watches,
 		Warn:                 func(msg string) { log.Warn(msg) },
+		History:              history,
 	})
 	// Deleting a project or environment takes its database gateways' records
 	// with it, and this deletes their keys from Vault and warns about a
@@ -701,7 +702,7 @@ func fail(err error) error {
 		errors.Is(err, deployments.ErrNotFound), errors.Is(err, deployments.ErrComponentNotFound), errors.Is(err, catalogproxy.ErrNotFound),
 		errors.Is(err, projects.ErrEnvironmentNotFound), errors.Is(err, manifests.ErrNotFound), errors.Is(err, releasewatch.ErrNotFound):
 		return forge.NewHTTPError(http.StatusNotFound, err.Error())
-	case errors.Is(err, deployments.ErrCleanupConflict), errors.Is(err, cloudprofiles.ErrConflict), errors.Is(err, cloudprofiles.ErrExists), errors.Is(err, cloudprofiles.ErrInUse), errors.Is(err, cloudprofiles.ErrBusy), errors.Is(err, recovery.ErrConflict), errors.Is(err, planning.ErrConflict), errors.Is(err, manifests.ErrConflict), errors.Is(err, deployments.ErrNotFailed), errors.Is(err, deployments.ErrCapacityWaitConflict),
+	case errors.Is(err, deployments.ErrCleanupConflict), errors.Is(err, cloudprofiles.ErrConflict), errors.Is(err, cloudprofiles.ErrExists), errors.Is(err, cloudprofiles.ErrInUse), errors.Is(err, cloudprofiles.ErrBusy), errors.Is(err, recovery.ErrConflict), errors.Is(err, planning.ErrConflict), errors.Is(err, manifests.ErrConflict), errors.Is(err, deployments.ErrNotFailed), errors.Is(err, deployments.ErrCapacityWaitConflict), errors.Is(err, deployments.ErrStaleRollback),
 		errors.Is(err, planning.ErrStale), errors.Is(err, planning.ErrSuperseded), errors.Is(err, planning.ErrNotReady),
 		errors.Is(err, catalogconnect.ErrInUse), errors.Is(err, planning.ErrNotRunning), errors.Is(err, planning.ErrNoPreviousRelease),
 		errors.Is(err, planning.ErrReleaseRunning), errors.Is(err, planning.ErrCanaryReverted), errors.Is(err, releasewatch.ErrConflict):

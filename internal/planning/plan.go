@@ -48,6 +48,11 @@ const (
 	KindRollback  = "rollback"
 )
 
+// StaleRollback is the error of a rollback's deployment that refused to
+// start because a newer release deployed after the rollback was approved.
+// It deployed nothing, so it's no release and undid nothing.
+const StaleRollback = "a newer release deployed after this rollback was approved; plan the rollback again"
+
 // Rollback triggers.
 const (
 	TriggerManual = "manual" // a person asked; approved like any plan
@@ -646,7 +651,8 @@ type ReleaseHistory interface {
 	// sync and catalog plans.
 	Releases(ctx context.Context, orgID, environmentID string, before time.Time, limit int) ([]ReleaseRecord, error)
 	// Latest returns an environment's newest deployment whatever its
-	// status, leaving out Cloud sync and catalog plans, or ErrNotFound.
+	// status, leaving out Cloud sync and catalog plans and a rollback
+	// refused as stale, which deployed nothing, or ErrNotFound.
 	Latest(ctx context.Context, orgID, environmentID string) (*ReleaseRecord, error)
 	// Deployment returns one deployment whatever its status or plan, or
 	// ErrNotFound. An automatic rollback names the deployment it undoes.
@@ -878,7 +884,8 @@ type Store interface {
 	DeployedState(ctx context.Context, orgID, environmentID string) (*DeployedManifest, []*DeployedSource, error)
 	// RolledBackPlans returns the plans a rollback in the environment
 	// undid: the target of each rollback plan whose deployment succeeded
-	// or failed, since a failed one still undid some of it.
+	// or failed, since a failed one still undid some of it. One refused
+	// as stale (StaleRollback) deployed nothing and undid nothing.
 	RolledBackPlans(ctx context.Context, orgID, environmentID string) (map[string]bool, error)
 }
 

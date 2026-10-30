@@ -13,8 +13,10 @@ import (
 	"github.com/xraph/dispatch/durable"
 	drt "github.com/xraph/dispatch/durable/runtime"
 
+	"github.com/xraph/loomplane/internal/cloudprofiles"
 	"github.com/xraph/loomplane/internal/orchestration"
 	"github.com/xraph/loomplane/internal/planning"
+	"github.com/xraph/loomplane/internal/security"
 )
 
 // recordingWatches is a WatchHook that records what it was asked, with
@@ -205,5 +207,139 @@ func TestRunner_aPrepareErrorDoesntFailTheFinish(t *testing.T) {
 	}
 	if w := warnings[0]; !strings.Contains(w, id) || !strings.Contains(w, "org_1") || !strings.Contains(w, "*errors.errorString") || strings.Contains(w, "hunter2") {
 		t.Fatalf("warning %q", w)
+	}
+}
+
+// latestRelease is a release history that answers Latest only.
+type latestRelease struct {
+	mu     sync.Mutex
+	latest *planning.ReleaseRecord
+}
+
+func (h *latestRelease) Latest(context.Context, string, string) (*planning.ReleaseRecord, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.latest == nil {
+		return nil, planning.ErrNotFound
+	}
+	r := *h.latest
+	return &r, nil
+}
+
+func (h *latestRelease) set(r planning.ReleaseRecord) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.latest = &r
+}
+
+// guardedStore is a memStore whose environment a Cloud sync or catalog
+// deployment holds while held is true.
+type guardedStore struct {
+	*memStore
+	held *bool
+}
+
+func (s guardedStore) EnvironmentAvailable(context.Context, string, string, string) (bool, error) {
+	return !*s.held, nil
+}
+
+// A rollback approved while something held the environment starts only
+// once it's free. If a newer release deployed in between, the rollback
+// refuses: its deployment fails saying so, nothing deploys, and what runs
+// stays the newer release.
+func TestRunner_aRollbackRefusesOnceANewerReleaseDeployed(t *testing.T) {
+	plan := webAndAPI()
+	plan.Kind, plan.DecidedBy = planning.KindRollback, security.SystemSubject(plan.OrgID)
+	plan.Rollback = &planning.Rollback{Reason: "errors", Trigger: planning.TriggerWatch, TargetDeploymentID: "dep_bad", TargetPlanID: "plan_bad"}
+	exec := &recorder{url: answering(t, http.StatusOK)}
+	r, store, plans := newRunner(t, plan, exec, fakeVariables{})
+	history := &latestRelease{}
+	history.set(planning.ReleaseRecord{DeploymentID: "dep_bad", PlanID: "plan_bad", Kind: planning.KindRelease, Status: StatusSucceeded})
+	r.history = history
+	held := true
+	r.store = guardedStore{store, &held}
+	plans.bindings["service:api"] = &planning.Binding{ID: "bind_api", Subject: planning.ServiceSubject, Name: "api", Provider: "cloud-run", Revision: "img:promoted", PlanID: "plan_promo"}
+
+	if _, _, err := r.Start(t.Context(), plan.OrgID, plan.ID); !errors.Is(err, cloudprofiles.ErrBusy) {
+		t.Fatalf("held start: %v", err)
+	}
+	// A person's promotion deploys first.
+	history.set(planning.ReleaseRecord{DeploymentID: "dep_promo", PlanID: "plan_promo", Kind: planning.KindPromotion, Status: StatusSucceeded})
+	held = false
+	id, steps, err := r.Start(t.Context(), plan.OrgID, plan.ID)
+	if err != nil || id != "" || steps != nil {
+		t.Fatalf("start: %q %v %v", id, steps, err)
+	}
+	d, err := store.ForPlan(t.Context(), plan.OrgID, plan.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if d.Status != StatusFailed || d.Error != StaleRollback || d.FinishedAt == nil {
+		t.Fatalf("deployment %+v", d)
+	}
+	for _, s := range d.Steps {
+		if s.Status != StepSkipped {
+			t.Fatalf("step %+v", s)
+		}
+	}
+	if len(exec.jobs) != 0 || plans.bindings["service:api"].Revision != "img:promoted" {
+		t.Fatalf("ran %d jobs, api runs %s", len(exec.jobs), plans.bindings["service:api"].Revision)
+	}
+	// Starting again, when the refused deployment is the newest, deploys
+	// nothing either.
+	history.set(planning.ReleaseRecord{DeploymentID: d.ID, PlanID: plan.ID, Kind: planning.KindRollback, Status: StatusFailed})
+	if id, _, err = r.Start(t.Context(), plan.OrgID, plan.ID); err != nil || id != "" {
+		t.Fatalf("second start: %q %v", id, err)
+	}
+}
+
+// A rollback whose target is still the newest release starts, and a
+// retried start finds its own deployment.
+func TestRunner_aFreshRollbackStarts(t *testing.T) {
+	plan := webAndAPI()
+	plan.Kind = planning.KindRollback
+	plan.Rollback = &planning.Rollback{Reason: "errors", Trigger: planning.TriggerManual, TargetDeploymentID: "dep_bad", TargetPlanID: "plan_bad"}
+	r, _, _ := newRunner(t, plan, &recorder{url: answering(t, http.StatusOK)}, fakeVariables{})
+	history := &latestRelease{}
+	history.set(planning.ReleaseRecord{DeploymentID: "dep_bad", PlanID: "plan_bad", Status: StatusSucceeded})
+	r.history = history
+	id, steps, err := r.Start(t.Context(), plan.OrgID, plan.ID)
+	if err != nil || id == "" || len(steps) == 0 {
+		t.Fatalf("start: %q %v %v", id, steps, err)
+	}
+	history.set(planning.ReleaseRecord{DeploymentID: id, PlanID: plan.ID, Kind: planning.KindRollback, Status: StatusRunning})
+	again, _, err := r.Start(t.Context(), plan.OrgID, plan.ID)
+	if err != nil || again != id {
+		t.Fatalf("retried start: %q %v", again, err)
+	}
+}
+
+type permitAll struct{}
+
+func (permitAll) Require(context.Context, security.Principal, security.Permission, string) error {
+	return nil
+}
+
+type countingRetrier struct{ retries int }
+
+func (c *countingRetrier) Retry(context.Context, string, string, string, [][]string) error {
+	c.retries++
+	return nil
+}
+
+// A rollback refused as stale can't be retried: it would undo the newer
+// release. Plan the rollback again instead.
+func TestService_aStaleRollbackCantBeRetried(t *testing.T) {
+	store := &memStore{d: map[string]*Deployment{}}
+	finished := time.Now()
+	store.d["dep_rb"] = &Deployment{ID: "dep_rb", OrgID: "org_1", PlanID: "plan_rb", Status: StatusFailed, Error: StaleRollback, FinishedAt: &finished}
+	retrier := &countingRetrier{}
+	svc := NewService(store, permitAll{}, retrier, nil)
+	_, err := svc.Retry(t.Context(), security.Principal{OrgID: "org_1", UserID: "usr_ada"}, "dep_rb")
+	if !errors.Is(err, ErrStaleRollback) || retrier.retries != 0 {
+		t.Fatalf("retry %v after %d retries", err, retrier.retries)
+	}
+	if d, _ := store.GetDeployment(t.Context(), "org_1", "dep_rb"); d.Status != StatusFailed {
+		t.Fatalf("status %s", d.Status)
 	}
 }

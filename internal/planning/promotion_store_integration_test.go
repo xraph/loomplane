@@ -211,6 +211,12 @@ func TestPgStore_rolledBackPlans(t *testing.T) {
 	deploy("dep_rb_running", "plan_rb_running", "env_b", "running")
 	// A rollback plan nobody approved has no deployment.
 	plan("plan_rb_open", "env_b", KindRollback, "plan_r4")
+	// A rollback refused as stale deployed nothing, so it undid nothing.
+	plan("plan_rb_stale", "env_b", KindRollback, "plan_r4")
+	deploy("dep_rb_stale", "plan_rb_stale", "env_b", "failed")
+	if _, err := pg.Exec(ctx, `UPDATE loomplane_deployments SET error=$1 WHERE id='dep_rb_stale'`, StaleRollback); err != nil {
+		t.Fatal(err)
+	}
 	// Staging's rollback is staging's.
 	plan("plan_rb_staging", "env_a", KindRollback, "plan_r5")
 	deploy("dep_rb_staging", "plan_rb_staging", "env_a", "succeeded")

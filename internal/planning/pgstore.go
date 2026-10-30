@@ -404,7 +404,8 @@ func (s *PgStore) RolledBackPlans(ctx context.Context, orgID, environmentID stri
 	rows, err := s.db.Query(ctx, `SELECT DISTINCT p.rollback->>'target_plan_id'
 		FROM loomplane_plans p JOIN loomplane_deployments d ON d.org_id = p.org_id AND d.plan_id = p.id
 		WHERE p.org_id = $1 AND p.kind = 'rollback' AND p.environment_id = $2 AND d.status IN ('succeeded', 'failed')
-			AND coalesce(p.rollback->>'target_plan_id', '') <> ''`, orgID, environmentID)
+			AND NOT (d.status = 'failed' AND d.error = $3)
+			AND coalesce(p.rollback->>'target_plan_id', '') <> ''`, orgID, environmentID, StaleRollback)
 	if err != nil {
 		return nil, fmt.Errorf("list rolled back plans: %w", err)
 	}

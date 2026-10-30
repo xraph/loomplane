@@ -238,6 +238,7 @@ type Runner struct {
 	health         releasehealth.Reader
 	watches        WatchHook
 	warn           func(msg string)
+	history        LatestRelease
 	dbGateways     DatabaseGatewayStore
 	dbTrust        func() ([]plane.TrustKey, error)
 	publicURL      string
@@ -298,6 +299,16 @@ type RunnerDeps struct {
 	// Warn logs what the runner carries on past, such as a watch it
 	// couldn't prepare. It may be nil.
 	Warn func(msg string)
+	// History tells a rollback whether the release it undoes is still the
+	// environment's newest when it starts. It may be nil: then a rollback
+	// starts unchecked.
+	History LatestRelease
+}
+
+// LatestRelease reads an environment's newest deployment, leaving out
+// Cloud sync and catalog plans. *History is the real one.
+type LatestRelease interface {
+	Latest(ctx context.Context, orgID, environmentID string) (*planning.ReleaseRecord, error)
 }
 
 // Release is a service binding a deployment step wrote, or deleted
@@ -326,7 +337,7 @@ func NewRunner(d RunnerDeps) *Runner {
 		authz: d.Authz, backupPolicies: d.BackupPolicies,
 		capacity: d.Capacity, cloudSyncAuth: d.CloudSyncAuth, routes: d.Routes,
 		cloudProfiles: d.CloudProfiles, store: d.Store, plans: d.Plans, credentials: d.Credentials, variables: d.Variables,
-		sources: d.Sources, providers: d.Providers, executors: d.Executors, catalogHooks: d.CatalogHooks, observers: d.Observers, resources: d.Resources, health: d.Health, watches: d.Watches, warn: d.Warn, telemetry: d.Telemetry, logs: d.Logs,
+		sources: d.Sources, providers: d.Providers, executors: d.Executors, catalogHooks: d.CatalogHooks, observers: d.Observers, resources: d.Resources, health: d.Health, watches: d.Watches, warn: d.Warn, history: d.History, telemetry: d.Telemetry, logs: d.Logs,
 		dbGateways: d.DatabaseGateways, dbTrust: d.DatabaseGatewayTrust, publicURL: d.PublicURL,
 		http: &http.Client{Timeout: 15 * time.Second}, now: time.Now, verifyWait: 3 * time.Minute,
 	}
@@ -369,6 +380,10 @@ func (r *Runner) Start(ctx context.Context, orgID, planID string) (deploymentID 
 			return "", nil, fmt.Errorf("%w: action subject %s is unavailable", ErrNoExecutor, action.Subject)
 		}
 	}
+	stale, err := r.staleRollback(ctx, plan)
+	if err != nil {
+		return "", nil, err
+	}
 	id, err := typeid.Generate("dep")
 	if err != nil {
 		return "", nil, fmt.Errorf("generate deployment id: %w", err)
@@ -396,13 +411,52 @@ func (r *Runner) Start(ctx context.Context, orgID, planID string) (deploymentID 
 		}
 		order[len(order)-1] = append(order[len(order)-1], a.ID)
 	}
+	if stale {
+		// Recorded failed, so people and the watch see why it didn't
+		// deploy; the workflow gets no deployment to carry out.
+		now := r.now().UTC()
+		d.Status, d.Error, d.FinishedAt = StatusFailed, StaleRollback, &now
+		for i := range d.Steps {
+			d.Steps[i].Status, d.Steps[i].Message = StepSkipped, StaleRollback
+		}
+		if _, err = r.store.CreateDeployment(ctx, d); err != nil {
+			return "", nil, err
+		}
+		return "", nil, nil
+	}
 	if d.Canary, err = r.newCanary(ctx, plan, d); err != nil {
 		return "", nil, err
 	}
 	if d, err = r.store.CreateDeployment(ctx, d); err != nil {
 		return "", nil, err
 	}
+	// An earlier start refused it; that refusal stands.
+	if d.Status == StatusFailed && d.Error == StaleRollback {
+		return "", nil, nil
+	}
 	return d.ID, order, nil
+}
+
+// StaleRollback is why a rollback deploys nothing: a newer release
+// deployed after it was approved, and it would undo that one too.
+const StaleRollback = planning.StaleRollback
+
+// staleRollback reports whether plan is a rollback whose target isn't the
+// environment's newest release any more. Approved rollbacks can queue
+// behind a Cloud sync or a catalog deployment while another release goes
+// first. Its own deployment, from an earlier start, counts as current.
+func (r *Runner) staleRollback(ctx context.Context, plan *planning.Plan) (bool, error) {
+	if r.history == nil || plan.Kind != planning.KindRollback || plan.Rollback == nil {
+		return false, nil
+	}
+	latest, err := r.history.Latest(ctx, plan.OrgID, plan.EnvironmentID)
+	if errors.Is(err, planning.ErrNotFound) {
+		return true, nil
+	}
+	if err != nil {
+		return false, fmt.Errorf("read the environment's newest release: %w", err)
+	}
+	return latest.DeploymentID != plan.Rollback.TargetDeploymentID && latest.PlanID != plan.ID, nil
 }
 
 // startGrace is what a step gets on top of its component's start timeout:
