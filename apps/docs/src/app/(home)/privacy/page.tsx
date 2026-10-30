@@ -107,11 +107,11 @@ export default function PrivacyPage() {
         and makes a key pair. The private key never leaves your phone. The app
         registers with the push gateway your server names, which is ours at{" "}
         <code>push.loomplane.com</code> unless whoever runs the server changed
-        it. The gateway receives the token and the key of the Loomplane server
-        the phone will get pushes from (on iPhone, also whether it's a test
-        build), so it knows which server each phone belongs to. It seals those
-        into a handle and keeps nothing. The app then gives the server you're
-        signed in to that handle, along with the public key.
+        it. The gateway receives the token and a fingerprint of the Loomplane
+        server's key (not the key itself), so it knows which server each phone
+        belongs to. On iPhone it also learns whether it's a test build. It seals
+        those into a handle and keeps nothing. The app then gives the server
+        you're signed in to that handle, along with the public key.
       </p>
       <p>
         That server keeps a record of the phone, tied to your account on it: the
@@ -127,8 +127,10 @@ export default function PrivacyPage() {
         When the server has something for you, it encrypts the notification to
         your phone's public key before it sends it. The gateway gets the
         encrypted payload, the handle (so only the gateway can open the push
-        token inside it), how urgent the message is, what kind it is, a collapse
-        ID that lets a newer notification replace an older one, and which server
+        token inside it), how urgent the message is, what kind it is, how long
+        the push may wait to be delivered, a collapse ID that lets a newer
+        notification replace an older one, a key ID for your phone (a stable
+        fingerprint of its public key, sent with every push), and which server
         key signed the request. It can't read the title, the text, your
         workspace or the buttons. Apple or Google deliver the message to your
         phone, and your phone decrypts it. Apple or Google can see that a
@@ -142,8 +144,10 @@ export default function PrivacyPage() {
       <p>
         If you run Loomplane yourself, you can turn push off with{" "}
         <code>LOOMPLANE_PUSH_ENABLED</code> or point the server at a gateway of
-        your own. By default a self-hosted or company-run server sends through
-        our gateway, and the same limits apply: we can't see what it says.
+        your own, though that only works with an app build you publish yourself,
+        because only our gateway reaches the store version of the app. By
+        default a self-hosted or company-run server sends through our gateway,
+        and the same limits apply: we can't see what it says.
       </p>
 
       <h2>What the hosted service keeps</h2>
