@@ -91,7 +91,9 @@ it("connects the cluster Loomplane runs in without a kubeconfig", async () => {
   const namespace = await screen.findByLabelText("Namespace")
   expect(screen.queryByLabelText("Self-contained kubeconfig")).toBeNull()
   // A label that already says optional isn't told so twice.
-  expect(screen.getByLabelText("Retained storage class (optional)")).toBeTruthy()
+  expect(
+    screen.getByLabelText("Retained storage class (optional)")
+  ).toBeTruthy()
 
   const user = userEvent.setup()
   await user.type(screen.getByLabelText("Name"), "This cluster")
