@@ -30,6 +30,8 @@ Two settings control push:
 | `push.enabled` | `LOOMPLANE_PUSH_ENABLED` | `true` |
 | `push.gateway_url` | `LOOMPLANE_PUSH_GATEWAY_URL` | `https://push.loomplane.com` |
 
+The gateway URL must be `https`. The one exception is a gateway on your own machine (`localhost`, `127.0.0.1` or `::1`), where plain `http` is accepted only when the server runs in development. Anywhere else the server rejects an `http` URL.
+
 The server needs outbound HTTPS to the gateway's host, and nothing inbound. With push off, the app says so and hides its push settings. The inbox and email keep working.
 
 A gateway outage loses nothing. The server's outbox retries, and the inbox has every item whether or not a push got through. Here is what the server hears back from a send:
