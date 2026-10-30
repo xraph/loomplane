@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react"
+import { render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import type React from "react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
@@ -213,5 +213,31 @@ describe("SetupPage", () => {
     expect(
       screen.queryByText("This instance is already set up.")
     ).not.toBeInTheDocument()
+  })
+
+  it("shows the token field after a stale link is refused", async () => {
+    mocks.complete.mockRejectedValueOnce(
+      Object.assign(
+        new Error(
+          "a valid setup token is required; find it in the API's log or run loomplane setup-token"
+        ),
+        { statusCode: 403 }
+      )
+    )
+    mocks.complete.mockResolvedValue({ ok: true, verificationRequired: false })
+    visit("?token=stale", true)
+    render(<SetupPage />)
+    expect(screen.queryByLabelText("Setup token")).not.toBeInTheDocument()
+    await fill()
+    expect(
+      await screen.findByText(/A valid setup token is required/)
+    ).toBeInTheDocument()
+    await userEvent.type(screen.getByLabelText("Setup token"), "fresh")
+    await userEvent.click(screen.getByRole("button", { name: "Create account" }))
+    await waitFor(() =>
+      expect(mocks.complete).toHaveBeenLastCalledWith({
+        body: expect.objectContaining({ token: "fresh" }),
+      })
+    )
   })
 })

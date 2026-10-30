@@ -30,8 +30,10 @@ export function SetupPage() {
     () => new URLSearchParams(window.location.search).get("token") ?? ""
   )
   const [typedToken, setTypedToken] = useState("")
-  const askForToken = setupTokenRequired && !linkToken
-  const token = (linkToken || typedToken).trim()
+  // A stale link must not be a dead end: after a refusal, ask for the token.
+  const [tokenRefused, setTokenRefused] = useState(false)
+  const askForToken = setupTokenRequired && (!linkToken || tokenRefused)
+  const token = typedToken.trim() || linkToken.trim()
   const [name, setName] = useState("")
   const [email, setEmail] = useState("")
   const [password, setPassword] = useState("")
@@ -51,6 +53,7 @@ export function SetupPage() {
       return
     }
     setError("")
+    setTokenRefused(false)
     try {
       // The response has no identity for the client to type it by.
       const result = (await complete.mutateAsync({
@@ -71,9 +74,15 @@ export function SetupPage() {
           : "/"
       )
     } catch (err) {
-      if (statusOf(err) === 403 && !/setup token/i.test(messageOf(err, ""))) {
+      // Matches the refusal in extensions/identity/setup.go ("a valid setup
+      // token is required..."). Any other 403 means setup already ran.
+      const refusedToken = /setup token/i.test(messageOf(err, ""))
+      if (statusOf(err) === 403 && !refusedToken) {
         setTaken(true)
         return
+      }
+      if (statusOf(err) === 403 && refusedToken) {
+        setTokenRefused(true)
       }
       setError(messageOf(err, "Setup didn't finish. Try again."))
     }
