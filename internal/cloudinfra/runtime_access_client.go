@@ -100,8 +100,8 @@ func (s *Service) runtimeAccessClient(ctx context.Context, p security.Principal,
 	}
 	audit.Status = "succeeded"
 	audit.Steps[0].State = "completed"
-	if err := s.saveCluster(ctx, audit); err != nil {
-		return nil, err
+	if saveErr := s.saveCluster(ctx, audit); saveErr != nil {
+		return nil, saveErr
 	}
 	cfg := &rest.Config{Host: material.Endpoint, BearerToken: material.Token, Timeout: 10 * time.Second, TLSClientConfig: rest.TLSClientConfig{CAData: material.CAData, CertData: material.ClientCertificate, KeyData: material.ClientKey}}
 	var client kubeclient.Interface
