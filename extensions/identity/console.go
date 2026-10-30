@@ -144,12 +144,13 @@ func (e *Extension) consoleRegistry() contract.Registry {
 // writes.
 func (e *Extension) RegisterContractContributor(disp *dispatcher.Dispatcher, reg contract.Registry, wreg contract.WardenRegistry) error {
 	e.consoleReg.Store(&registryRef{reg})
+	// Each contributor registers on its own: one that fails leaves the rest.
+	var errs []error
 	if err := authcontract.Register(disp, reg, wreg, authcontract.Deps{Engine: e.engine, Brand: "Loomplane"}); err != nil {
-		return fmt.Errorf("authsome contract: %w", err)
+		errs = append(errs, fmt.Errorf("authsome contract: %w", err))
 	}
 	// Plugins register in the order they were added, which is the order
 	// manifests that extend another need.
-	var errs []error
 	for _, p := range e.engine.Plugins().Plugins() {
 		cc, ok := p.(plugin.ContractContributor)
 		if !ok {
