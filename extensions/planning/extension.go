@@ -570,6 +570,9 @@ func (e *Extension) Register(fapp forge.App) error {
 	if err := forge.ProvideValue(c, e.plans); err != nil {
 		return fmt.Errorf("provide the planning service: %w", err)
 	}
+	if err := forge.ProvideValue(c, e.deploys); err != nil {
+		return fmt.Errorf("provide the deployments service: %w", err)
+	}
 	if err := forge.ProvideValue(c, watches); err != nil {
 		return fmt.Errorf("provide the release watches: %w", err)
 	}
