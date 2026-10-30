@@ -91,6 +91,8 @@ type Extension struct {
 	warden        *warden.Engine
 	authz         *security.Authorizer
 	audit         *chronicle.Chronicle
+	auditStore    chronstore.Store
+	smith         *keysmith.Engine
 	engine        *authsome.Engine
 	keys          *apikeys.Service
 	telemetry     *telemetry.Recorder
@@ -161,19 +163,19 @@ func (e *Extension) Register(fapp forge.App) error {
 		return fmt.Errorf("warden: %w", err)
 	}
 	e.platformRoles = rbac.NewWardenStore(e.warden)
+	e.auditStore = chronpg.New(db)
 	if e.audit, err = chronicle.New(
-		chronicle.WithStore(chronstore.NewAdapter(chronpg.New(db))),
+		chronicle.WithStore(chronstore.NewAdapter(e.auditStore)),
 		chronicle.WithLogger(e.Logger()),
 	); err != nil {
 		return fmt.Errorf("chronicle: %w", err)
 	}
 	e.authz = security.NewAuthorizer(e.warden, wstore, e.membership)
-	smith, err := keysmith.NewEngine(keysmith.WithStore(kspg.New(pgdriver.Unwrap(db))))
-	if err != nil {
+	if e.smith, err = keysmith.NewEngine(keysmith.WithStore(kspg.New(pgdriver.Unwrap(db)))); err != nil {
 		return fmt.Errorf("keysmith: %w", err)
 	}
 	e.telemetry = telemetry.New(fapp.Metrics())
-	e.keys = apikeys.New(smith, e.cfg.Identity.AppID, e.authz, keyAuditor{chronicle: e.audit, appID: e.cfg.Identity.AppID, log: e.Logger()})
+	e.keys = apikeys.New(e.smith, e.cfg.Identity.AppID, e.authz, keyAuditor{chronicle: e.audit, appID: e.cfg.Identity.AppID, log: e.Logger()})
 	if e.engine, err = e.buildEngine(db); err != nil {
 		return err
 	}

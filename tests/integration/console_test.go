@@ -226,6 +226,72 @@ func TestConsole(t *testing.T) {
 		}
 	})
 
+	t.Run("every library's reads, none of its writes", func(t *testing.T) {
+		got := consoleCall(owner, http.MethodGet, consoleAPI+"/capabilities", "")
+		var caps struct {
+			Contributors []struct {
+				Name string `json:"name"`
+			} `json:"contributors"`
+		}
+		if got.status != http.StatusOK || json.Unmarshal([]byte(got.body), &caps) != nil {
+			t.Fatalf("capabilities: %+v", got)
+		}
+		registered := map[string]bool{}
+		for _, c := range caps.Contributors {
+			registered[c.Name] = true
+		}
+		for _, name := range []string{
+			"core-contract", "authsome", "waitlist", "organization", "password", "notification",
+			"ctrlplane", "dispatch", "trove", "warden", "chronicle", "herald", "relay", "keysmith",
+		} {
+			if !registered[name] {
+				t.Errorf("capabilities don't list %s: %v", name, registered)
+			}
+		}
+		for _, tc := range []struct {
+			contributor, query, command string
+			// readStatus is what the library itself answers a platform
+			// owner, once the gate has let the read through.
+			readStatus int
+		}{
+			// Warden's own authorizer wants warden:* permissions, which the
+			// platform roles don't grant.
+			{"warden", "overview.stats", "roles.create", http.StatusForbidden},
+			{"chronicle", "overview.stats", "checkpoints.take", http.StatusOK},
+			{"herald", "engine.info", "send.test", http.StatusOK},
+			{"relay", "endpoints.list", "endpoints.create", http.StatusOK},
+			{"keysmith", "settings", "keys.create", http.StatusOK},
+			// ctrlplane's authorizer wants a tenant_id claim, which the
+			// console's principal doesn't carry.
+			{"ctrlplane", "system.stats", "instances.delete", http.StatusForbidden},
+			// Dispatch's operator boundary has no authorizer configured, so
+			// it answers every operator read as unavailable.
+			{"dispatch", "overview.summary", "jobs.cancel", http.StatusServiceUnavailable},
+			{"trove", "stores.list", "buckets.create", http.StatusOK},
+			{"organization", "orgs.list", "orgs.delete", http.StatusOK},
+		} {
+			got := consoleCall(owner, http.MethodPost, consoleAPI, envelope(t, "query", tc.contributor, tc.query, map[string]any{}, ""))
+			if got == unknown || got.status != tc.readStatus {
+				t.Errorf("%s/%s: %+v, want %d", tc.contributor, tc.query, got, tc.readStatus)
+			}
+			cmd := envelope(t, "command", tc.contributor, tc.command, map[string]any{}, csrf)
+			if got := consoleCall(owner, http.MethodPost, consoleAPI, cmd); got != unknown {
+				t.Errorf("%s/%s = %+v, want the unknown-path answer", tc.contributor, tc.command, got)
+			}
+		}
+		// Reads that hand out a download link stay blocked.
+		for _, req := range []string{
+			envelope(t, "query", "trove", "objects.contentUrl", map[string]string{"bucket": "backups", "key": "x"}, ""),
+			envelope(t, "query", "dispatch", "artifacts.presign", map[string]string{"id": "x"}, ""),
+			// A command sent as a query is no read.
+			envelope(t, "query", "keysmith", "keys.create", map[string]any{}, ""),
+		} {
+			if got := consoleCall(owner, http.MethodPost, consoleAPI, req); got != unknown {
+				t.Errorf("POST %s = %+v, want the unknown-path answer", req, got)
+			}
+		}
+	})
+
 	t.Run("approving a waitlist entry", func(t *testing.T) {
 		if status, raw, _ := anon.send(http.MethodPost, "/authsome/v1/waitlist/join", map[string]string{"email": "grace@example.com"}); status >= 300 {
 			t.Fatalf("join the waitlist: %d %s", status, raw)
@@ -278,6 +344,12 @@ func TestConsole(t *testing.T) {
 			t.Fatalf("Grace's session: %d %s", status, raw)
 		}
 		requireHidden(t, grace, "Grace")
+		for _, contributor := range []string{"warden", "chronicle", "herald", "relay", "keysmith", "dispatch"} {
+			req := envelope(t, "query", contributor, "overview.stats", map[string]any{}, "")
+			if got := consoleCall(grace, http.MethodPost, consoleAPI, req); got != unknown {
+				t.Errorf("Grace's %s read = %+v, want the unknown-path answer", contributor, got)
+			}
+		}
 		// Signed in, she still isn't told where the console is.
 		if got := grace.publicConfig(); got.ConsolePath != nil {
 			t.Errorf("Grace's public config has the console path: %+v", got)

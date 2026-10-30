@@ -8,6 +8,8 @@ import (
 
 	"github.com/xraph/chronicle"
 	"github.com/xraph/forge"
+	"github.com/xraph/forge/extensions/dashboard/contract"
+	"github.com/xraph/forge/extensions/dashboard/contract/dispatcher"
 	"github.com/xraph/grove"
 
 	"github.com/xraph/loomplane/extensions/identity"
@@ -102,3 +104,9 @@ func (e *Extension) Start(ctx context.Context) error {
 }
 func (e *Extension) Stop(ctx context.Context) error   { return e.svc.Shutdown(ctx) }
 func (e *Extension) Health(ctx context.Context) error { return e.svc.Health(ctx) }
+
+// RegisterContractContributor implements dashboard.ContractContributorAware:
+// Herald and Relay in the instance console.
+func (e *Extension) RegisterContractContributor(disp *dispatcher.Dispatcher, reg contract.Registry, wreg contract.WardenRegistry) error {
+	return e.svc.RegisterContract(disp, reg, wreg, e.Logger())
+}

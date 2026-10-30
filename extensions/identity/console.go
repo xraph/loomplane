@@ -14,12 +14,15 @@ import (
 	authmw "github.com/xraph/authsome/middleware"
 	"github.com/xraph/authsome/plugin"
 	"github.com/xraph/authsome/rbac"
+	chroniclecontract "github.com/xraph/chronicle/extension/contract"
 	"github.com/xraph/forge"
 	"github.com/xraph/forge/extensions/dashboard"
 	dashauth "github.com/xraph/forge/extensions/dashboard/auth"
 	"github.com/xraph/forge/extensions/dashboard/contract"
 	"github.com/xraph/forge/extensions/dashboard/contract/dispatcher"
 	"github.com/xraph/forge/extensions/dashboard/contract/transport"
+	keysmithcontract "github.com/xraph/keysmith/extension/contract"
+	wardencontract "github.com/xraph/warden/extension/contract"
 
 	"github.com/xraph/loomplane/internal/platformadmin"
 )
@@ -134,9 +137,11 @@ func (e *Extension) consoleRegistry() contract.Registry {
 
 // RegisterContractContributor implements dashboard.ContractContributorAware,
 // as authsome's own extension does: authsome's contributor, then every
-// authsome plugin that contributes one (the waitlist among them). Each
-// registers all of its intents; the console gate decides which can be
-// called, and keeps reg to tell reads from writes.
+// authsome plugin that contributes one (the waitlist among them), then the
+// engines that live here: Warden, Chronicle and Keysmith, each wired as its
+// own Forge extension wires it. Each registers all of its intents; the
+// console gate decides which can be called, and keeps reg to tell reads from
+// writes.
 func (e *Extension) RegisterContractContributor(disp *dispatcher.Dispatcher, reg contract.Registry, wreg contract.WardenRegistry) error {
 	e.consoleReg.Store(&registryRef{reg})
 	if err := authcontract.Register(disp, reg, wreg, authcontract.Deps{Engine: e.engine, Brand: "Loomplane"}); err != nil {
@@ -153,6 +158,32 @@ func (e *Extension) RegisterContractContributor(disp *dispatcher.Dispatcher, reg
 		if err := cc.RegisterContract(disp, reg, wreg, e.engine); err != nil {
 			errs = append(errs, fmt.Errorf("authsome plugin %s contract: %w", p.Name(), err))
 		}
+	}
+	errs = append(errs, e.registerLibraryContracts(disp, reg, wreg))
+	return errors.Join(errs...)
+}
+
+// registerLibraryContracts registers the contributors of the engines the
+// identity extension builds. Platform roles live in Warden under Loomplane's
+// app, so the app is the tenant Warden and Keysmith answer for and the app
+// Chronicle reads; Chronicle reads it app-wide, every organization's events.
+// Organizations' own keys and roles live in their own tenants, which the
+// console has no way to pick yet.
+func (e *Extension) registerLibraryContracts(disp *dispatcher.Dispatcher, reg contract.Registry, wreg contract.WardenRegistry) error {
+	appID := e.cfg.Identity.AppID
+	var errs []error
+	if err := wardencontract.Register(disp, reg, wreg, wardencontract.Deps{Engine: e.warden, DefaultTenantID: appID}); err != nil {
+		errs = append(errs, fmt.Errorf("warden contract: %w", err))
+	}
+	if err := chroniclecontract.Register(disp, reg, wreg, chroniclecontract.Deps{
+		Store: e.auditStore, Chronicle: e.audit, DefaultAppID: appID, Logger: e.Logger(),
+	}); err != nil {
+		errs = append(errs, fmt.Errorf("chronicle contract: %w", err))
+	}
+	if err := keysmithcontract.Register(disp, reg, wreg, keysmithcontract.Deps{
+		Engine: e.smith, DefaultTenantID: appID, DefaultAppID: appID, Logger: e.Logger(),
+	}); err != nil {
+		errs = append(errs, fmt.Errorf("keysmith contract: %w", err))
 	}
 	return errors.Join(errs...)
 }
