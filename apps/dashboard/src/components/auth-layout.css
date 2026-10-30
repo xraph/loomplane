@@ -35,34 +35,6 @@
   justify-content: space-between;
 }
 
-.auth-cross {
-  position: relative;
-  width: 21px;
-  height: 21px;
-  pointer-events: none;
-}
-
-.auth-cross::before,
-.auth-cross::after {
-  content: "";
-  position: absolute;
-  background: color-mix(in oklch, var(--foreground) 30%, transparent);
-}
-
-.auth-cross::before {
-  top: 0;
-  left: 10px;
-  width: 1px;
-  height: 21px;
-}
-
-.auth-cross::after {
-  top: 10px;
-  left: 0;
-  width: 21px;
-  height: 1px;
-}
-
 .auth-content {
   display: flex;
   flex: 1;
@@ -479,10 +451,6 @@
 
   .auth-panel {
     padding: 24px 20px 20px;
-  }
-
-  .auth-cross {
-    display: none;
   }
 }
 

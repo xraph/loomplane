@@ -1,4 +1,4 @@
-.PHONY: help up down stack dev dev-api dev-dashboard build build-api build-dashboard run vuln fuzz build-cli build-agent build-push-gateway build-qualify \
+.PHONY: help up down migrate migrations remigrate stack dev dev-api dev-dashboard build build-api build-dashboard run vuln fuzz build-cli build-agent build-push-gateway build-qualify \
 	image image-push-gateway test-push-gateway helm-lint k8s-manifest test-kubernetes test test-go test-dashboard test-integration acceptance acceptance-infrastructure acceptance-catalog lint lint-go lint-dashboard \
 	lint-fix fmt fmt-go fmt-dashboard vet gen-client check-client setup clean \
 	h b r t ti c f l lf v d
@@ -32,6 +32,27 @@ stack: ## Build the image and run all of Loomplane in Docker on LOOMPLANE_PORT (
 
 down: ## Stop everything compose started (the data volume stays)
 	$(COMPOSE) --profile app down
+
+migrate: ## Apply pending migrations to the database config.local.yaml names
+	go run ./cmd/loomplane migrate
+
+migrations: ## Show applied and pending migrations
+	go run ./cmd/loomplane migrations
+
+# The database remigrate drops: the one compose creates, which
+# config.local.yaml.example points at. The integration tests' databases
+# beside it stay.
+DEV_DATABASE := loomplane
+
+remigrate: ## Drop the compose database and migrate it from scratch (YES=1 skips the prompt)
+	@if [ "$(YES)" != 1 ]; then \
+		printf 'This deletes everything in the compose database "$(DEV_DATABASE)". Continue? [y/N] '; \
+		read -r answer; [ "$$answer" = y ] || [ "$$answer" = Y ] || { echo 'Left it alone.'; exit 1; }; \
+	fi
+	$(COMPOSE) exec -T postgres psql -U loomplane -d postgres -v ON_ERROR_STOP=1 \
+		-c 'DROP DATABASE IF EXISTS "$(DEV_DATABASE)" WITH (FORCE)' \
+		-c 'CREATE DATABASE "$(DEV_DATABASE)" OWNER loomplane'
+	$(MAKE) migrate
 
 dev: ## Run the API (forge dev, hot reload), the analysis worker and the dashboard (Vite)
 	@API_PORT=$(API_PORT) DASHBOARD_DIR=$(DASHBOARD_DIR) bash scripts/dev.sh

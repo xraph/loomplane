@@ -3,7 +3,6 @@ import { useState } from "react"
 import { toast } from "sonner"
 
 import { Alert, AlertDescription } from "@/components/ui/alert"
-import { BrandLogo } from "@/components/brand-logo"
 import { Button } from "@/components/ui/button"
 import { useInstance } from "@/lib/instance"
 import { usePendingInvite } from "@/lib/invite"
@@ -39,7 +38,6 @@ export function AuthPage({
           signUpUrl="/sign-up"
           forgotPasswordUrl="/forgot-password"
           verifyEmailUrl="/verify-email"
-          logo={<BrandLogo />}
           align="left"
           variant="borderless"
           className="auth-card"
@@ -48,7 +46,6 @@ export function AuthPage({
         <>
           <WaitlistForm
             signInUrl="/sign-in"
-            logo={<BrandLogo />}
             align="left"
             variant="borderless"
             className="auth-card"
@@ -64,7 +61,6 @@ export function AuthPage({
       ) : (
         <SignUpForm
           signInUrl="/sign-in"
-          logo={<BrandLogo />}
           align="left"
           variant="borderless"
           className="auth-card"

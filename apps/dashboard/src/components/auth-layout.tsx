@@ -3,6 +3,7 @@ import type { MouseEvent, ReactNode } from "react"
 
 import { AuthLogos } from "@/components/auth-logos"
 import { AuthSilk } from "@/components/auth-silk"
+import { BrandLogo } from "@/components/brand-logo"
 import { ModeToggle } from "@/components/mode-toggle"
 import { XraphMark } from "@/components/xraph-mark"
 
@@ -19,8 +20,8 @@ const authPaths = new Set([
 
 /**
  * Shared frame for account access and the first organization setup, in the
- * landing site's look: the form in a double-bezel card, and the hero's light
- * beside it. It follows the app's light and dark themes.
+ * landing site's look: the logo top left, the form in a double-bezel card,
+ * and the hero's light beside it. It follows the app's light and dark themes.
  *
  * Authsome's forms link between these screens with plain anchors, which would
  * reload the page and restart the frame. Clicks on those links route through
@@ -67,7 +68,7 @@ export function AuthLayout({
       <h1 className="sr-only">{title}</h1>
       <section className="auth-access" aria-label="Account access">
         <header className="auth-toolbar">
-          <span className="auth-cross" aria-hidden="true" />
+          <BrandLogo className="w-34" />
           <ModeToggle />
         </header>
         <div className="auth-content">

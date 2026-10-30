@@ -5,7 +5,6 @@ import { messageOf, statusOf } from "@/client/errors"
 import { useSetupComplete } from "@/client/forge/loomplane/hooks"
 import type { SetupResponse } from "@/client/forge/loomplane/types"
 import { useMutation } from "@/client/hooks"
-import { BrandLogo } from "@/components/brand-logo"
 import { Button, buttonVariants } from "@/components/ui/button"
 import {
   Field,
@@ -72,7 +71,6 @@ export function SetupPage() {
     <AuthCard
       title="Set up Loomplane"
       description="Create the first account. It owns this instance and its first organization."
-      logo={<BrandLogo />}
       align="left"
       variant="borderless"
       className="auth-card"

@@ -153,6 +153,8 @@ Provider plugins are listed under `providers.plugins` in the YAML.
 | Command | |
 |---|---|
 | `make up` / `make down` | Start or stop PostgreSQL |
+| `make migrate` | Apply pending migrations (`make migrations` lists them) |
+| `make remigrate` | Drop the local database and migrate it from scratch, for when a branch left it in a state main can't migrate |
 | `make dev` | The API and dashboard with hot reload |
 | `make build` | `bin/loomplane`, `bin/loomplane-worker` and `bin/loomctl`, with the dashboard built in |
 | `make test` | Go and dashboard unit tests |

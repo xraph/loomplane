@@ -7,7 +7,6 @@ import { useAuth } from "@authsome/ui-react"
 import { useState, type FormEvent } from "react"
 import { toast } from "sonner"
 
-import { BrandLogo } from "@/components/brand-logo"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -39,7 +38,6 @@ export function RecoveryPage({
   return mode === "forgot-password" ? (
     <ForgotPasswordForm
       signInUrl="/sign-in"
-      logo={<BrandLogo />}
       align="left"
       variant="borderless"
       className="auth-card"
@@ -48,7 +46,6 @@ export function RecoveryPage({
     token ? (
       <ResetPasswordForm
         token={token}
-        logo={<BrandLogo />}
         className="auth-card"
         onSuccess={() => {
           // A reset revokes every server session. Clear the SDK's cached state too.
@@ -120,7 +117,6 @@ function VerifyEmail({ initialEmail }: { initialEmail: string }) {
     <AuthCard
       title="Verify your email"
       description="Enter the code from your verification email."
-      logo={<BrandLogo />}
       align="left"
       variant="borderless"
       className="auth-card"

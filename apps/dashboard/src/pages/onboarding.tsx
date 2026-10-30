@@ -2,7 +2,6 @@ import { AuthCard } from "@authsome/ui-components"
 import { useAuth } from "@authsome/ui-react"
 
 import { AuthLayout } from "@/components/auth-layout"
-import { BrandLogo } from "@/components/brand-logo"
 import { OrganizationForm } from "@/components/organization-form"
 import { Button } from "@/components/ui/button"
 
@@ -18,7 +17,6 @@ export function Onboarding({
       <AuthCard
         title="Name your workspace"
         description="Give your team's projects a home. You'll be the owner of this workspace."
-        logo={<BrandLogo />}
         align="left"
         variant="borderless"
         className="auth-card"

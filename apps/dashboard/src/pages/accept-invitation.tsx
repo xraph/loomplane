@@ -10,7 +10,6 @@ import {
 import { useSessionGet } from "@/client/forge/loomplane/hooks"
 import { useInvalidate, useMutation } from "@/client/hooks"
 import { AuthLayout } from "@/components/auth-layout"
-import { BrandLogo } from "@/components/brand-logo"
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import { Spinner } from "@/components/ui/spinner"
@@ -77,7 +76,6 @@ export function AcceptInvitation({ token }: { token: string }) {
       <AuthCard
         title="Join a workspace"
         description={`You've been invited to a workspace on Loomplane${user?.email ? `, as ${user.email}` : ""}.`}
-        logo={<BrandLogo />}
         align="left"
         variant="borderless"
         className="auth-card"
