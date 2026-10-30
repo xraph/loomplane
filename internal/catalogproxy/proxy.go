@@ -116,7 +116,7 @@ func (s *Service) serve(w http.ResponseWriter, r *http.Request) {
 		refuse(w, http.StatusNotFound, msgNotFound)
 		return
 	}
-	ctx, cancel := context.WithDeadline(ctx, end)
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	s.forward(ctx, cancel, w, r, rec, target, token, &url.URL{Path: upPath, RawPath: upRaw, RawQuery: rawQuery})
 }
