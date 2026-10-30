@@ -104,7 +104,8 @@ func (f *fakeDOApp) serve(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&body)
 		f.rollbacks = append(f.rollbacks, body["deployment_id"].(string))
-		reply(http.StatusOK, map[string]any{})
+		// App Platform answers a rollback with the deployment it starts.
+		reply(http.StatusOK, map[string]any{"deployment": map[string]any{"id": "dep-rollback"}})
 	case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/cancel"):
 		f.canceled = append(f.canceled, r.URL.Path)
 		reply(http.StatusOK, map[string]any{})
