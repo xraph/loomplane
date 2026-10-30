@@ -7,6 +7,10 @@ import (
 
 const agentPrefix = "agent:"
 
+// AgentActorName is how people see the AI agent in audit, the dashboard and
+// the CLI.
+const AgentActorName = "Loomplane agent"
+
 // AgentSubject is a workspace's AI agent's subject in an organization. It's
 // also the created_by and decided_by of whatever the agent does.
 func AgentSubject(orgID string) string { return agentPrefix + orgID }
@@ -51,6 +55,26 @@ func (p Principal) Person() (person Principal, ok bool) {
 	}
 	return *p.OnBehalfOf, true
 }
+
+type deploymentRunKey struct{}
+
+// WithDeploymentRun marks ctx as the run of an approved deployment. The
+// deployments runner sets it on each step it carries out, and nothing else
+// should.
+func WithDeploymentRun(ctx context.Context) context.Context {
+	return context.WithValue(ctx, deploymentRunKey{}, true)
+}
+
+// InDeploymentRun reports whether ctx carries WithDeploymentRun's mark.
+func InDeploymentRun(ctx context.Context) bool {
+	v, ok := ctx.Value(deploymentRunKey{}).(bool)
+	return ok && v
+}
+
+// deploymentRunOnly reports whether the agent may use perm only in a
+// deployment run. A deployment the agent approved runs as the agent alone
+// and changes infrastructure; nothing else the agent does may.
+func deploymentRunOnly(perm Permission) bool { return perm == InfrastructureModify }
 
 // AgentCall is the agent's tool call an action happens in, for the audit
 // log.

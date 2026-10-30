@@ -28,6 +28,7 @@ import (
 	"github.com/xraph/loomplane/internal/orchestration"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/releasehealth"
+	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/internal/telemetry"
 	"github.com/xraph/loomplane/pkg/provider"
 )
@@ -348,6 +349,10 @@ func NewRunner(d RunnerDeps) *Runner {
 // run. A plan that isn't executable deploys nothing, and Start returns no
 // deployment: approving it recorded a decision.
 func (r *Runner) Start(ctx context.Context, orgID, planID string) (deploymentID string, steps [][]string, err error) {
+	// Each step the deployment workflow runs is marked, so a deployment
+	// the agent approved may change infrastructure as the agent, and
+	// nothing else the agent does may.
+	ctx = security.WithDeploymentRun(ctx)
 	plan, err := r.plans.GetPlan(ctx, orgID, planID)
 	if err != nil {
 		return "", nil, err
@@ -528,6 +533,7 @@ func SourceKey(orgID, projectID, alias, sha string) string {
 // FetchSource stores the commit of each repository the deployment moves as
 // an artifact, once. A retry skips what an earlier attempt stored.
 func (r *Runner) FetchSource(ctx context.Context, orgID, deploymentID string) error {
+	ctx = security.WithDeploymentRun(ctx)
 	d, err := r.store.GetDeployment(ctx, orgID, deploymentID)
 	if err != nil {
 		return err
@@ -632,6 +638,7 @@ func (r *Runner) retainsCheckpoint(providerName string) bool {
 // checkpoint an earlier attempt saved, or nil; heartbeat saves one and
 // tells Dispatch the activity is alive.
 func (r *Runner) Run(ctx context.Context, orgID, deploymentID, actionID string, resume []byte, heartbeat func([]byte) error) (runErr error) {
+	ctx = security.WithDeploymentRun(ctx)
 	// A guard can reject work after the initial deployment read. Report the
 	// durable wait state to workflow callers without converting it to Retry.
 	defer func() {
@@ -1872,6 +1879,7 @@ func (r *Runner) bind(ctx context.Context, d *Deployment, a planning.Action, cur
 // as what the environment runs; a repository the plan held keeps what it
 // had.
 func (r *Runner) Finish(ctx context.Context, orgID, deploymentID, reason string) error {
+	ctx = security.WithDeploymentRun(ctx)
 	d, err := r.store.GetDeployment(ctx, orgID, deploymentID)
 	if err != nil {
 		return err

@@ -12,6 +12,7 @@ import (
 	"github.com/xraph/loomplane/internal/orchestration"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/releasehealth"
+	"github.com/xraph/loomplane/internal/security"
 )
 
 // candidateUp is a ramping step's message once its candidate is up.
@@ -260,6 +261,7 @@ func promoted(d *Deployment, svc CanaryService) bool {
 // CanaryRamp implements orchestration.CanaryDeployer. A deployment without
 // a canary has an empty ramp, which the workflow skips.
 func (r *Runner) CanaryRamp(ctx context.Context, orgID, deploymentID string) (orchestration.CanaryRamp, error) {
+	ctx = security.WithDeploymentRun(ctx)
 	d, err := r.store.GetDeployment(ctx, orgID, deploymentID)
 	if err != nil {
 		return orchestration.CanaryRamp{}, err
@@ -278,6 +280,7 @@ func (r *Runner) CanaryRamp(ctx context.Context, orgID, deploymentID string) (or
 // last one took it, which the step's hold counts from. A service an
 // earlier attempt promoted already runs the release, so it's left alone.
 func (r *Runner) CanaryWeigh(ctx context.Context, orgID, deploymentID string, step, weight int) (time.Time, error) {
+	ctx = security.WithDeploymentRun(ctx)
 	d, plan, err := r.canaryDeployment(ctx, orgID, deploymentID)
 	if err != nil {
 		return time.Time{}, err
@@ -326,6 +329,7 @@ func (r *Runner) CanaryWeigh(ctx context.Context, orgID, deploymentID string, st
 // service already promoted is left as it is, so a retry carries on where
 // one failed.
 func (r *Runner) CanaryPromote(ctx context.Context, orgID, deploymentID string) error {
+	ctx = security.WithDeploymentRun(ctx)
 	d, plan, err := r.canaryDeployment(ctx, orgID, deploymentID)
 	if err != nil {
 		return err
@@ -407,6 +411,7 @@ func (r *Runner) promote(ctx context.Context, d *Deployment, plan *planning.Plan
 // canary already settled isn't reverted again: rolled_back is done, and
 // revert_failed was given up on when its deployment failed.
 func (r *Runner) CanaryRevert(ctx context.Context, orgID, deploymentID, reason string) error {
+	ctx = security.WithDeploymentRun(ctx)
 	d, plan, err := r.canaryDeployment(ctx, orgID, deploymentID)
 	if err != nil {
 		return err
@@ -529,6 +534,7 @@ func (r *Runner) revert(ctx context.Context, d *Deployment, plan *planning.Plan,
 // revert_failed with why traffic may still be split, and stops holding its
 // environment. A canary already settled is left as it is.
 func (r *Runner) CanarySettle(ctx context.Context, orgID, deploymentID, reason string) error {
+	ctx = security.WithDeploymentRun(ctx)
 	d, err := r.store.GetDeployment(ctx, orgID, deploymentID)
 	if err != nil {
 		return err

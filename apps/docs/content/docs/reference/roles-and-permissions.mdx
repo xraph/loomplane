@@ -80,19 +80,20 @@ Warden isn't the only limit. The code refuses it everywhere a person works: it c
 
 A workspace that turns the AI agent on gets a second identity that isn't a person. Its ID is `agent:` followed by your organization's ID, and that's what you'll see as `created_by` or `decided_by` on anything it does. It holds one Warden role, `agent`, as a service account.
 
-Loomplane writes that role only when you turn the agent on, and only into your organization. Turning the agent off takes the role away from it. Each time you turn it on again, the role is reset to the list below, so a Loomplane upgrade that changes it reaches you then. The role is what a developer holds, minus `ai:tool_secret` and `ai:publish_nonproduction`, plus `deployment:approve`:
+Loomplane writes that role only when you turn the agent on, and only into your organization. Turning the agent off takes the role away from it. Each time you turn it on again, the role is reset to the list below, so a Loomplane upgrade that changes it reaches you then. The role is what a developer holds, minus `ai:tool_secret` and `ai:publish_nonproduction`, plus `deployment:approve` and `infrastructure:modify`:
 
 | Permission | Why |
 |---|---|
 | Everything a viewer holds, `agent:use` included | To read what it's asked about |
 | `project:create`, `project:update`, `environment:manage`, `deployment:create`, `analysis:run`, `variable:manage`, `access_grant:propose`, `ai:edit` | To do a developer's work when you ask |
 | `deployment:approve` | To approve a plan |
+| `infrastructure:modify`, only while running a deployment it approved | A deployment the agent approved runs as the agent, and deploying it writes to your infrastructure |
 
-It never holds an admin's permissions beyond approving. It can't set secrets, delete a project, change cloud accounts or members, or retire a backup, and no session or API key can sign in as it.
+Beyond approving, it holds no admin permission you can use through it. `infrastructure:modify` is checked in code as well as in Warden: Loomplane refuses it to the agent everywhere except the deployment of a plan it approved, so a chat or any other agent work can't change your infrastructure with it. It can't set secrets, delete a project, change cloud accounts or members, or retire a backup, and no session or API key can sign in as it.
 
 When you chat with the agent, it acts for you. Every check then asks about both of you, and the agent may do something only when you could do it yourself and its role allows it too. So a viewer's chat can read but never deploy, and an owner's chat still can't set a secret. A read-only API key makes the agent read-only as well. When it works alone, outside a chat, its role is the only limit.
 
-Its audit events carry `actor: agent`. In a chat they also carry `on_behalf_of` (the person it acted for), and when they come from one of its tools, `task_id`, `run_id` and `tool`.
+Its audit events carry `actor: agent` and `actor_name: Loomplane agent`. In a chat they also carry `on_behalf_of` (the person it acted for), and when they come from one of its tools, `task_id`, `run_id` and `tool`.
 
 ## Where this is enforced
 

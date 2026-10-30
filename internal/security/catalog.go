@@ -128,7 +128,9 @@ const RoleAgent = "agent"
 
 // AgentRole is what the AI agent may do: what a developer may, less setting
 // tool secrets and publishing AI without approval, plus approving a
-// deployment. Acting for a person, it may also do only what they may.
+// deployment and changing infrastructure. The Authorizer allows the last
+// only while a deployment the agent approved runs. Acting for a person, it
+// may also do only what they may.
 func AgentRole() RoleDef {
 	var perms []Permission
 	for _, p := range developerPermissions() {
@@ -139,7 +141,7 @@ func AgentRole() RoleDef {
 	return RoleDef{
 		Slug: RoleAgent, Name: "AI agent",
 		Description: "The workspace's AI agent. Never a member's role",
-		Permissions: append(perms, DeploymentApprove),
+		Permissions: append(perms, DeploymentApprove, InfrastructureModify),
 	}
 }
 

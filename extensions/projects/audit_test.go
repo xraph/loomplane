@@ -86,8 +86,11 @@ func TestAuditAttributesAgentCalls(t *testing.T) {
 	recorder.Record(ctx, projects.AuditEvent{Action: "plan.approve", ProjectID: "project", Principal: security.AgentPrincipal("o", &ada), Attributes: map[string]any{"run_id": "forged", "plan_id": "plan_1"}})
 	// The agent alone, outside a tool call.
 	recorder.Record(t.Context(), projects.AuditEvent{Action: "plan.create", ProjectID: "project", Principal: security.AgentPrincipal("o", nil)})
+	// A call that names only its run records only the run.
+	runOnly := security.WithAgentCall(t.Context(), security.AgentCall{RunID: "arun_2"})
+	recorder.Record(runOnly, projects.AuditEvent{Action: "plan.reject", ProjectID: "project", Principal: security.AgentPrincipal("o", nil)})
 	result, err := mem.Query(t.Context(), &audit.Query{AppID: "app"})
-	if err != nil || len(result.Events) != 2 {
+	if err != nil || len(result.Events) != 3 {
 		t.Fatalf("audit query: %+v %v", result, err)
 	}
 	byAction := map[string]*audit.Event{}
@@ -98,19 +101,31 @@ func TestAuditAttributesAgentCalls(t *testing.T) {
 	if call == nil || call.UserID != "agent:o" {
 		t.Fatalf("agent call event %+v", call)
 	}
-	want := map[string]any{"actor": "agent", "on_behalf_of": "usr_ada", "run_id": "arun_1", "task_id": "atask_1", "tool": "approve_plan", "plan_id": "plan_1"}
+	want := map[string]any{"actor": "agent", "actor_name": security.AgentActorName, "on_behalf_of": "usr_ada", "run_id": "arun_1", "task_id": "atask_1", "tool": "approve_plan", "plan_id": "plan_1"}
 	for k, v := range want {
 		if call.Metadata[k] != v {
 			t.Errorf("metadata %s = %v, want %v (all %v)", k, call.Metadata[k], v, call.Metadata)
 		}
 	}
+	if security.AgentActorName != "Loomplane agent" {
+		t.Fatalf("AgentActorName = %q", security.AgentActorName)
+	}
 	alone := byAction["plan.create"]
-	if alone == nil || alone.UserID != "agent:o" || alone.Metadata["actor"] != "agent" {
+	if alone == nil || alone.UserID != "agent:o" || alone.Metadata["actor"] != "agent" || alone.Metadata["actor_name"] != security.AgentActorName {
 		t.Fatalf("agent event %+v", alone)
 	}
 	for _, k := range []string{"on_behalf_of", "run_id", "task_id", "tool"} {
 		if _, ok := alone.Metadata[k]; ok {
 			t.Errorf("the agent alone has %s: %v", k, alone.Metadata)
+		}
+	}
+	partial := byAction["plan.reject"]
+	if partial == nil || partial.Metadata["run_id"] != "arun_2" {
+		t.Fatalf("run-only event %+v", partial)
+	}
+	for _, k := range []string{"task_id", "tool"} {
+		if _, ok := partial.Metadata[k]; ok {
+			t.Errorf("a run-only call recorded a blank %s: %v", k, partial.Metadata)
 		}
 	}
 }

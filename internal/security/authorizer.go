@@ -174,6 +174,11 @@ func (a *Authorizer) check(ctx context.Context, p Principal, perm Permission, re
 	if p.IsAgent() && p.UserID != AgentSubject(p.OrgID) {
 		return nil, fmt.Errorf("%w (%s)", ErrForbidden, perm.Name())
 	}
+	// Its role holds infrastructure:modify for the deployments it approved,
+	// which run as it alone. Anywhere else, it doesn't change infrastructure.
+	if p.IsAgent() && deploymentRunOnly(perm) && !InDeploymentRun(ctx) {
+		return nil, fmt.Errorf("%w (%s): the agent changes infrastructure only while running a deployment it approved", ErrForbidden, perm.Name())
+	}
 	// Retirement destroys recovery bytes. A cached Warden assignment alone
 	// cannot authorize it when a membership hook has failed or is delayed,
 	// and only a person who owns the organization may do it.

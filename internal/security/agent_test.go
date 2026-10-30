@@ -410,25 +410,33 @@ func TestAssignAgentNeedsAnOrganization(t *testing.T) {
 
 func TestAgentRoleHasNoAdminPermissions(t *testing.T) {
 	got := AgentRole().Permissions
-	for _, p := range []Permission{DeploymentApprove, DeploymentCreate, ProjectCreate, VariableManage, AgentUse, AIEdit} {
+	for _, p := range []Permission{DeploymentApprove, DeploymentCreate, ProjectCreate, VariableManage, AgentUse, AIEdit, InfrastructureModify} {
 		if !slices.Contains(got, p) {
 			t.Errorf("AgentRole lacks %s", p.Name())
 		}
 	}
 	for _, p := range []Permission{
-		SecretManage, RepositoryConnect, CloudAccountManage, OrganizationCloudManage, ProjectDelete, InfrastructureModify,
+		SecretManage, RepositoryConnect, CloudAccountManage, OrganizationCloudManage, ProjectDelete,
 		MemberManage, OrganizationAdminister, BackupRetire, AIManage, AIToolSecret, AIPublishNonProduction,
 	} {
 		if slices.Contains(got, p) {
 			t.Errorf("AgentRole holds %s", p.Name())
 		}
 	}
-	// Of everything above a developer, the agent holds only deployment
-	// approval.
+	// Of everything above a developer, the agent holds deployment approval,
+	// and infrastructure:modify only for running a deployment it approved.
 	developer := rolePermissions(t, RoleDeveloper)
 	for _, p := range got {
-		if !slices.Contains(developer, p) && p != DeploymentApprove {
+		if !slices.Contains(developer, p) && p != DeploymentApprove && !deploymentRunOnly(p) {
 			t.Errorf("AgentRole holds %s, which developers don't", p.Name())
+		}
+	}
+	if !deploymentRunOnly(InfrastructureModify) {
+		t.Error("the agent modifies infrastructure outside a deployment run")
+	}
+	for _, p := range AllPermissions() {
+		if p != InfrastructureModify && deploymentRunOnly(p) {
+			t.Errorf("%s is limited to deployment runs", p.Name())
 		}
 	}
 	seen := map[Permission]bool{}
@@ -463,9 +471,13 @@ func TestAgentThroughWarden(t *testing.T) {
 	if err := a.AssignAgent(ctx, org); err != nil {
 		t.Fatal(err)
 	}
+	run := WithDeploymentRun(ctx)
 	for _, perm := range AgentRole().Permissions {
-		if err := a.Require(ctx, agent, perm, "proj_1"); err != nil {
+		if err := a.Require(run, agent, perm, "proj_1"); err != nil {
 			t.Errorf("agent can't %s: %v", perm.Name(), err)
+		}
+		if err := a.Require(ctx, agent, perm, "proj_1"); (err != nil) != deploymentRunOnly(perm) {
+			t.Errorf("agent %s outside a deployment run: %v", perm.Name(), err)
 		}
 	}
 	for _, perm := range []Permission{ProjectDelete, MemberManage, SecretManage, InfrastructureModify, AIManage} {
@@ -519,5 +531,64 @@ func TestAgentCallContext(t *testing.T) {
 	got, ok := AgentCallFrom(WithAgentCall(t.Context(), want))
 	if !ok || got != want {
 		t.Fatalf("AgentCallFrom = %+v, %v, want %+v", got, ok, want)
+	}
+}
+
+// TestAgentModifiesInfrastructureOnlyInADeploymentRun: the agent holds
+// infrastructure:modify for the deployments it approved, which run as it
+// alone, and the Authorizer refuses it everywhere else.
+func TestAgentModifiesInfrastructureOnlyInADeploymentRun(t *testing.T) {
+	ctx := t.Context()
+	run := WithDeploymentRun(ctx)
+	if InDeploymentRun(ctx) || !InDeploymentRun(run) {
+		t.Fatal("the deployment run marker")
+	}
+	a := newAuthorizer(t, map[string]string{alice: MemberOwner, bob: MemberViewer})
+	if err := a.AssignAgent(ctx, org); err != nil {
+		t.Fatal(err)
+	}
+	agent := AgentPrincipal(org, nil)
+	err := a.Require(ctx, agent, InfrastructureModify, "proj_1")
+	if !errors.Is(err, ErrForbidden) || !strings.Contains(err.Error(), InfrastructureModify.Name()) {
+		t.Fatalf("agent outside a deployment run: %v, want ErrForbidden naming the permission", err)
+	}
+	if ok, allowedErr := a.Allowed(ctx, agent, InfrastructureModify); ok || allowedErr != nil {
+		t.Fatalf("Allowed outside a deployment run = %v, %v", ok, allowedErr)
+	}
+	if err = a.Require(run, agent, InfrastructureModify, "proj_1"); err != nil {
+		t.Fatalf("agent in a deployment run: %v", err)
+	}
+	if ok, allowedErr := a.Allowed(run, agent, InfrastructureModify); !ok || allowedErr != nil {
+		t.Fatalf("Allowed in a deployment run = %v, %v", ok, allowedErr)
+	}
+	// Reading needs no marker.
+	if err = a.Require(ctx, agent, InfrastructureRead, "proj_1"); err != nil {
+		t.Fatalf("agent reads infrastructure: %v", err)
+	}
+	// Acting for a person, the person must hold it too, marker or not.
+	if err = a.Require(run, AgentPrincipal(org, &Principal{UserID: bob, OrgID: org}), InfrastructureModify, "proj_1"); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("agent for a viewer in a run: %v, want ErrForbidden", err)
+	}
+	if err = a.Require(ctx, AgentPrincipal(org, &Principal{UserID: alice, OrgID: org}), InfrastructureModify, "proj_1"); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("agent for an owner outside a run: %v, want ErrForbidden", err)
+	}
+	// People and the automation don't need or gain anything from it.
+	for _, c := range []context.Context{ctx, run} {
+		if err = a.Require(c, Principal{UserID: alice, OrgID: org}, InfrastructureModify, "proj_1"); err != nil {
+			t.Fatalf("owner: %v", err)
+		}
+		if err = a.Require(c, Principal{UserID: bob, OrgID: org}, InfrastructureModify, "proj_1"); !errors.Is(err, ErrForbidden) {
+			t.Fatalf("viewer: %v, want ErrForbidden", err)
+		}
+		if err = a.Require(c, SystemPrincipal(org), InfrastructureModify, "proj_1"); err != nil {
+			t.Fatalf("automation: %v", err)
+		}
+	}
+	// Turned off, it holds nothing, in a run or not.
+	if err = a.RevokeAgent(ctx, org); err != nil {
+		t.Fatal(err)
+	}
+	if err = a.Require(run, agent, InfrastructureModify, "proj_1"); !errors.Is(err, ErrForbidden) {
+		t.Fatalf("revoked agent in a run: %v, want ErrForbidden", err)
 	}
 }
