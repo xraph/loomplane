@@ -39,6 +39,10 @@ data:
   {{- with .Values.pausedProviders }}
   LOOMPLANE_PAUSED_PROVIDERS: {{ . | quote }}
   {{- end }}
+  {{- if ne (toString .Values.waitlist) "" }}
+  LOOMPLANE_WAITLIST_ENABLED: {{ .Values.waitlist | toString | quote }}
+  {{- end }}
+  LOOMPLANE_CONSOLE_PATH: {{ .Values.consolePath | quote }}
   {{- with .Values.trustedProxies }}
   AUTHSOME_TRUSTED_PROXIES: {{ . | quote }}
   {{- end }}

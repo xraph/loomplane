@@ -196,6 +196,9 @@ one replica and no shared volume.
 {{- if and .Values.storage.persistence.enabled (gt (int $replicas) 1) (not (has "ReadWriteMany" .Values.storage.persistence.accessModes)) -}}
 {{- fail "storage.persistence with more than one replica needs the ReadWriteMany access mode." -}}
 {{- end -}}
+{{- if not (has (toString .Values.waitlist) (list "" "true" "false")) -}}
+{{- fail "waitlist must be true, false or empty." -}}
+{{- end -}}
 {{- if .Values.inCluster.enabled -}}
 {{- if not .Values.inCluster.namespaces -}}
 {{- fail "inCluster.enabled needs at least one namespace in inCluster.namespaces for Loomplane to deploy into." -}}

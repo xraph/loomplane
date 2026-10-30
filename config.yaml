@@ -36,6 +36,11 @@ identity:
   # by every port on a host, so another authsome app on the same host needs
   # a different name, or each signs the other out.
   session_cookie: "${LOOMPLANE_SESSION_COOKIE:-loomplane_session}"
+  # Unset leaves it to the instance's stored setting. true or false forces it.
+  waitlist: "${LOOMPLANE_WAITLIST_ENABLED:-}"
+
+console:
+  path: "${LOOMPLANE_CONSOLE_PATH:-/__console}"
 
 notifications:
   # Empty host disables email. For local Mailpit use 127.0.0.1:1025.

@@ -44,6 +44,9 @@ refuses "deploying into this cluster with no namespace to deploy into" --set pub
 refuses "deploying into Loomplane's own namespace" --namespace loomplane --set publicURL=https://x.example \
 	--set secrets.secretKey="$key" --set secrets.databaseURL=postgres://x --set storage.url=s3://b \
 	--set inCluster.enabled=true --set 'inCluster.namespaces={loomplane}'
+refuses "a waitlist that isn't true, false or empty" --set publicURL=https://x.example \
+	--set secrets.secretKey="$key" --set secrets.databaseURL=postgres://x --set storage.url=s3://b \
+	--set waitlist=sometimes
 
 rendered=$(mktemp)
 trap 'rm -f "$rendered"' EXIT

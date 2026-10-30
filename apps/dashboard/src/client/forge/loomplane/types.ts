@@ -3280,8 +3280,11 @@ export interface Provisions {
 export interface PublicConfig {
   appId: string;
   authBasePath: string;
+  consolePath?: string;
   features: Features;
   publishableKey: string;
+  setupPending: boolean;
+  waitlist: boolean;
 }
 
 export interface QuantizationView {
@@ -4202,6 +4205,22 @@ export interface SettingInfo {
   pattern: string;
   required: boolean;
   title: string;
+}
+
+export interface SetupRequest {
+  email: string;
+  name: string;
+  organizationName: string;
+  password: string;
+}
+
+export interface SetupResponse {
+  ok: boolean;
+  verificationRequired: boolean;
+}
+
+export interface SetupStatus {
+  pending: boolean;
 }
 
 export interface SetupStep {

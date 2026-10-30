@@ -76,5 +76,5 @@ func settings() (ops.Settings, error) {
 	if err != nil {
 		return ops.Settings{}, err
 	}
-	return ops.Settings{DatabaseURL: cfg.Database.URL, Groups: migrations.All(), Version: buildinfo.Version}, nil
+	return ops.Settings{DatabaseURL: cfg.Database.URL, Groups: migrations.All(), Version: buildinfo.Version, AuthAppID: cfg.Identity.AppID}, nil
 }

@@ -129,11 +129,13 @@ k run prober --image="$image" --image-pull-policy=Never --restart=Never \
 	json="Content-Type: application/json"
 	# authsome wants the app'"'"'s publishable key; the chart keeps the default.
 	pk="X-Publishable-Key: pk_test_loomplane_dev"
-	signup=$(wget -qO- --header "$json" --header "$pk" --post-data "{\"email\":\"ha@loomplane.test\",\"password\":\"Correct-horse-battery-9\",\"first_name\":\"Ha\"}" $base/authsome/v1/signup) || { echo setup-failed signup; sleep 600; exit 1; }
-	token=$(echo "$signup" | sed -n "s/.*\"session_token\":\"\([^\"]*\)\".*/\1/p")
+	# A fresh instance takes its first account through setup, which also
+	# makes the organization and leaves the session in it. The session
+	# comes back as a cookie, and its token works as a bearer token too.
+	setup=$(wget -S -O /dev/null --header "$json" --header "$pk" --post-data "{\"name\":\"Ha\",\"email\":\"ha@loomplane.test\",\"password\":\"Correct-horse-battery-9\",\"organization_name\":\"HA\"}" $base/api/v1/setup 2>&1) || { echo setup-failed setup; sleep 600; exit 1; }
+	token=$(echo "$setup" | sed -n "s/.*[Ss]et-[Cc]ookie: loomplane_session=\([^;]*\).*/\1/p" | head -1)
+	[ -n "$token" ] || { echo setup-failed no session cookie; sleep 600; exit 1; }
 	auth="Authorization: Bearer $token"
-	org=$(wget -qO- --header "$json" --header "$pk" --header "$auth" --post-data "{\"name\":\"HA\",\"slug\":\"ha\"}" $base/authsome/v1/orgs | grep -o "\"id\":\"[^\"]*\"" | head -1 | cut -d\" -f4)
-	wget -qO /dev/null --header "$json" --header "$pk" --header "$auth" --post-data "{\"org_id\":\"$org\"}" $base/authsome/v1/me/switch-org || { echo setup-failed switch-org; sleep 600; exit 1; }
 	echo ready
 	while true; do
 		# The dashboard and an authenticated, database-backed API call: what
