@@ -15,7 +15,10 @@ func reserveLegacyAttempt(ctx context.Context, tx driver.Tx, o *Operation) error
 	if err != nil || p.Revision != 0 || o.Provider == "server" {
 		return err
 	}
-	if o.CapacityTarget == nil || !nonnegativeCapacity(*o.CapacityTarget) {
+	if o.CapacityTarget == nil {
+		return nil
+	}
+	if !nonnegativeCapacity(*o.CapacityTarget) {
 		return ErrConflict
 	}
 	// The full resized target is a conservative hold until inventory settles it.
