@@ -61,9 +61,11 @@ docker compose exec loomplane loomplane setup-token
 ```
 
 Open that link, create your account and organization, then connect a
-repository. Once setup is done the command prints `Setup is complete.` Caddy obtains and renews the TLS certificate and
-forwards WebSocket and SSE traffic to the API. Health and metrics routes
-are blocked at the public proxy.
+repository. Once setup is done the command prints `Setup is complete.`
+
+Caddy obtains and renews the TLS certificate and forwards WebSocket and SSE
+traffic to the API. Health and metrics routes are blocked at the public
+proxy.
 
 If GHCR requires authentication, run `docker login ghcr.io` with a token
 that can read the package. A newly published package may need its visibility
