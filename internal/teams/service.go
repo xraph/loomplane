@@ -33,6 +33,7 @@ type Service struct {
 	members security.MembershipFunc
 	audit   Auditor
 	log     func(msg string, err error)
+	batch   int // how many queued people one Drain takes; drainBatch
 }
 
 // NewService returns a Service.
@@ -41,7 +42,7 @@ func NewService(d Deps) *Service {
 	if log == nil {
 		log = func(string, error) {}
 	}
-	return &Service{db: d.DB, authz: d.Authz, members: d.Members, audit: d.Audit, log: log}
+	return &Service{db: d.DB, authz: d.Authz, members: d.Members, audit: d.Audit, log: log, batch: drainBatch}
 }
 
 // List is every team in the caller's workspace, with members and grants.
@@ -299,13 +300,25 @@ func (s *Service) Leave(ctx context.Context, orgID, userID string) error {
 	return nil
 }
 
+// Requeue queues the person for the teams.sync job without syncing them.
+// It's the security.Requeuer the member removal runs when its last revoke
+// fails: the job's sync of someone who is no longer a member revokes
+// everything they hold. Like Leave it never syncs.
+func (s *Service) Requeue(ctx context.Context, orgID, userID string) error {
+	if _, err := queuePerson(ctx, s.db, orgID, userID); err != nil {
+		return err
+	}
+	return nil
+}
+
 // Drain syncs up to drainBatch queued people, oldest first: what a failed
 // or interrupted sync left behind. It's the teams.sync job's body. It never
 // waits on a person's lock (TrySync): a person whose sync is running
-// elsewhere stays queued for the next run. A failed sync is logged and its
-// row stays. Drain fails only when it can't read the queue.
+// elsewhere keeps their place for the next run. A failed sync is logged and
+// its row goes to the back of the queue. Drain fails only when it can't
+// read the queue.
 func (s *Service) Drain(ctx context.Context) error {
-	rows, err := due(ctx, s.db, drainBatch)
+	rows, err := due(ctx, s.db, s.batch)
 	if err != nil {
 		return err
 	}
@@ -317,6 +330,11 @@ func (s *Service) Drain(ctx context.Context) error {
 		ran, err := s.authz.TrySync(ctx, row.orgID, row.userID)
 		if err != nil {
 			s.log("sync roles from the queue", fmt.Errorf("org %s user %s: %w", row.orgID, row.userID, err))
+			// To the back of the queue, so rows that fail every time can't
+			// fill each batch and keep newer ones from ever being synced.
+			if err = toBack(ctx, s.db, row); err != nil {
+				s.log("move a failed sync to the back of the queue", fmt.Errorf("org %s user %s: %w", row.orgID, row.userID, err))
+			}
 			continue
 		}
 		if ran {

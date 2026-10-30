@@ -260,7 +260,9 @@ type queued struct {
 
 // queueUpsert ends every insert into the queue: a person already queued
 // gets a new queued_at, so a sync that started before this change can't
-// take their row away.
+// take their row away. An insert of several people orders them by
+// (org_id, user_id), so two changes that share people lock their rows in
+// the same order and can't deadlock.
 const queueUpsert = ` ON CONFLICT (org_id, user_id) DO UPDATE SET queued_at = clock_timestamp()
 	RETURNING org_id, user_id, queued_at`
 
@@ -289,7 +291,8 @@ func queuePerson(ctx context.Context, tx querier, orgID, userID string) ([]queue
 // someone who has left only revokes what they still hold.
 func queueTeam(ctx context.Context, tx querier, orgID, teamID string) ([]queued, error) {
 	return scanQueued(tx.Query(ctx, `INSERT INTO loomplane_authz_sync (org_id, user_id)
-		SELECT DISTINCT tm.org_id, tm.user_id FROM loomplane_team_members tm WHERE tm.team_id = $1 AND tm.org_id = $2`+queueUpsert,
+		SELECT DISTINCT tm.org_id, tm.user_id FROM loomplane_team_members tm WHERE tm.team_id = $1 AND tm.org_id = $2
+		ORDER BY tm.org_id, tm.user_id`+queueUpsert,
 		teamID, orgID))
 }
 
@@ -299,7 +302,8 @@ func queueProject(ctx context.Context, tx querier, orgID, projectID string) ([]q
 	return scanQueued(tx.Query(ctx, `INSERT INTO loomplane_authz_sync (org_id, user_id)
 		SELECT DISTINCT tm.org_id, tm.user_id FROM loomplane_team_grants g
 		JOIN loomplane_team_members tm ON tm.team_id = g.team_id AND tm.org_id = g.org_id
-		WHERE g.org_id = $1 AND g.project_id = $2`+queueUpsert, orgID, projectID))
+		WHERE g.org_id = $1 AND g.project_id = $2
+		ORDER BY tm.org_id, tm.user_id`+queueUpsert, orgID, projectID))
 }
 
 // dequeue removes the person's row only if nobody queued them again since
@@ -307,6 +311,14 @@ func queueProject(ctx context.Context, tx querier, orgID, projectID string) ([]q
 func dequeue(ctx context.Context, q querier, row queued) error {
 	_, err := q.Exec(ctx, `DELETE FROM loomplane_authz_sync WHERE org_id = $1 AND user_id = $2 AND queued_at = $3`,
 		row.orgID, row.userID, row.queuedAt)
+	return err
+}
+
+// toBack gives a row a new queued_at, unless someone queued the person
+// again since (their row already moved).
+func toBack(ctx context.Context, q querier, row queued) error {
+	_, err := q.Exec(ctx, `UPDATE loomplane_authz_sync SET queued_at = clock_timestamp()
+		WHERE org_id = $1 AND user_id = $2 AND queued_at = $3`, row.orgID, row.userID, row.queuedAt)
 	return err
 }
 

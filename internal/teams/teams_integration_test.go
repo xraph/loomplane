@@ -113,6 +113,7 @@ type fakeAuthz struct {
 	syncs     []string // "org/user"
 	trySyncs  []string
 	failSyncs int             // fail the next n syncs
+	failUsers map[string]bool // every sync of these users fails
 	busy      map[string]bool // TrySync reports these users busy
 	onSync    func(ctx context.Context, orgID, userID string)
 	probe     *pgdriver.PgDB
@@ -149,8 +150,8 @@ func (f *fakeAuthz) Require(ctx context.Context, p security.Principal, perm secu
 func (f *fakeAuthz) record(ctx context.Context, list *[]string, orgID, userID string) error {
 	f.mu.Lock()
 	*list = append(*list, orgID+"/"+userID)
-	fail := f.failSyncs > 0
-	if fail {
+	fail := f.failSyncs > 0 || f.failUsers[userID]
+	if f.failSyncs > 0 {
 		f.failSyncs--
 	}
 	onSync := f.onSync
@@ -246,7 +247,7 @@ func newRigOn(t *testing.T, dsn string, pg, membersDB *pgdriver.PgDB) *rig {
 	t.Helper()
 	r := &rig{
 		t: t, url: dsn, db: pg,
-		authz: &fakeAuthz{managers: map[string]bool{ada: true, bo: true}, busy: map[string]bool{}},
+		authz: &fakeAuthz{managers: map[string]bool{ada: true, bo: true}, busy: map[string]bool{}, failUsers: map[string]bool{}},
 		audit: &fakeAudit{},
 	}
 	members := func(ctx context.Context, orgID, userID string) (string, bool, error) {
@@ -850,6 +851,65 @@ func TestDrainSkipsABusyPerson(t *testing.T) {
 	}
 	if SyncJob(r.svc).Name != JobSync || JobSync != "teams.sync" {
 		t.Fatalf("job name %q", SyncJob(r.svc).Name)
+	}
+}
+
+// A row whose sync fails goes to the back of the queue, so a batch of rows
+// that fail every time can't keep newer ones from ever being drained. A
+// busy row keeps its place.
+func TestDrainMovesAFailedRowToTheBack(t *testing.T) {
+	ctx := context.Background()
+	r := newRig(t)
+	r.svc.batch = 1
+	r.exec(`INSERT INTO loomplane_authz_sync(org_id,user_id,queued_at) VALUES('o','ausr_grace',now()-interval '2 minutes'),('o','ausr_vi',now()-interval '1 minute')`)
+	r.authz.failUsers[grace] = true
+	if err := r.svc.Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.strs(`SELECT user_id FROM loomplane_authz_sync ORDER BY queued_at`); !slices.Equal(got, []string{vi, grace}) {
+		t.Fatalf("queue order %v, want Vi then the failed Grace", got)
+	}
+	if err := r.svc.Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if q := r.queue(); !slices.Equal(q, []string{org + "/" + grace}) {
+		t.Fatalf("queue %v, want Vi drained past the failing row", q)
+	}
+
+	// Busy keeps its place: it isn't failing, it's waiting its turn.
+	r.authz.failUsers[grace] = false
+	r.exec(`INSERT INTO loomplane_authz_sync(org_id,user_id) VALUES('o','ausr_vi')`)
+	r.authz.busy[grace] = true
+	if err := r.svc.Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got := r.strs(`SELECT user_id FROM loomplane_authz_sync ORDER BY queued_at`); !slices.Equal(got, []string{grace, vi}) {
+		t.Fatalf("queue order %v, want the busy Grace still first", got)
+	}
+}
+
+// Requeue is the member removal's fallback when its last revoke fails: it
+// queues the person without syncing, and the next Drain syncs them.
+func TestRequeueQueuesWithoutSyncing(t *testing.T) {
+	ctx := context.Background()
+	r := newRig(t)
+	if err := r.svc.Requeue(ctx, org, grace); err != nil {
+		t.Fatal(err)
+	}
+	if q, s := r.queue(), r.authz.synced(); !slices.Equal(q, []string{org + "/" + grace}) || len(s) != 0 {
+		t.Fatalf("queue %v, synced %v", q, s)
+	}
+	if err := r.svc.Requeue(ctx, org, grace); err != nil {
+		t.Fatalf("queueing twice: %v", err)
+	}
+	if err := r.svc.Drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if s := r.authz.trySynced(); !slices.Equal(s, []string{org + "/" + grace}) {
+		t.Fatalf("Drain synced %v", s)
+	}
+	if q := r.queue(); len(q) != 0 {
+		t.Fatalf("queue %v", q)
 	}
 }
 
