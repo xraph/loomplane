@@ -14,9 +14,15 @@ import (
 // RegisterContract registers Herald's and Relay's dashboard contributors over
 // the engines this service runs, as their own Forge extensions wire them, for
 // the instance console. Herald answers for Loomplane's app, where the mail
-// provider and templates live. Both read through the stores the service
-// wraps, so a message's body and a webhook's signing secret stay out of
-// what they return.
+// provider and templates live.
+//
+// What keeps secrets out differs. Herald reads through privateHeraldStore,
+// which never stores a message's recipient, subject or body, and its
+// provider reads report how each credential is protected, never its value.
+// Relay's store decrypts a webhook's signing secret on every read
+// (encryptedRelayStore), so the secret is in memory; only Relay's endpoint
+// response types, which have no field for it, keep it out of the console.
+// The console integration test checks both.
 func (s *Service) RegisterContract(disp *dispatcher.Dispatcher, reg contract.Registry, wreg contract.WardenRegistry, logger forge.Logger) error {
 	var errs []error
 	if err := heraldcontract.Register(disp, reg, wreg, heraldcontract.Deps{Herald: s.herald, DefaultAppID: s.cfg.Identity.AppID, Logger: logger}); err != nil {
