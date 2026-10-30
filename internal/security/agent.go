@@ -59,8 +59,9 @@ func (p Principal) Person() (person Principal, ok bool) {
 type deploymentRunKey struct{}
 
 // WithDeploymentRun marks ctx as the run of an approved deployment. The
-// deployments runner sets it on each step it carries out, and nothing else
-// should.
+// deployments package sets it on each step it carries out and on the
+// cleanup of what a failed one left, and nothing else may (a guard test
+// enforces it).
 func WithDeploymentRun(ctx context.Context) context.Context {
 	return context.WithValue(ctx, deploymentRunKey{}, true)
 }

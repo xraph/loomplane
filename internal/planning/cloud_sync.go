@@ -45,6 +45,12 @@ func (s *Service) authorizeCloudSync(ctx context.Context, p security.Principal, 
 	if err := refuseAutomation(p); err != nil {
 		return err
 	}
+	// A Cloud sync moves production workloads. The agent holds
+	// deployment:approve, but a sync isn't a deployment it approved, so its
+	// infrastructure writes would be refused halfway.
+	if p.IsAgent() {
+		return fmt.Errorf("%w: %s doesn't change where a project runs", security.ErrForbidden, security.AgentActorName)
+	}
 	if project == "" {
 		return s.authz.Require(ctx, p, security.OrganizationCloudManage, p.OrgID)
 	}

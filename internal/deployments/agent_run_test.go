@@ -12,6 +12,7 @@ import (
 	"github.com/xraph/warden"
 	wardenmemory "github.com/xraph/warden/store/memory"
 
+	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/infrastructure"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/security"
@@ -102,5 +103,53 @@ func TestAgentApprovedDeploymentWritesInfrastructure(t *testing.T) {
 	ctx := infrastructure.WithPrincipal(t.Context(), security.AgentPrincipal(plan.OrgID, nil))
 	if _, err = cpauth.RequireAuthorized(ctx, provider, "instances.create", "inst_api", ""); !errors.Is(err, ctrlplane.ErrForbidden) {
 		t.Fatalf("an agent write outside a deployment run: %v, want forbidden", err)
+	}
+}
+
+// serverCredentials reveals server connections in the organization.
+type serverCredentials struct{ org string }
+
+func (c serverCredentials) Credential(_ context.Context, _, id string) (*connections.Connection, []byte, error) {
+	return &connections.Connection{ID: id, OrgID: c.org, Cloud: connections.Server, Status: connections.StatusReady}, []byte("secret-" + id), nil
+}
+
+// ctrlCleaner removes a pooled workload through Ctrl Plane as the job's
+// principal, as the server executor does.
+type ctrlCleaner struct {
+	recorder
+	provider cpauth.Provider
+	cleaned  int
+}
+
+func (*ctrlCleaner) PreparePoolEffects(context.Context, *Job) error { return nil }
+
+func (c *ctrlCleaner) CleanupPoolWorkload(ctx context.Context, job *Job, _ []byte, _ func([]byte) error) error {
+	if _, err := cpauth.RequireAuthorized(infrastructure.WithPrincipal(ctx, principal(job)), c.provider, "instances.delete", "inst_"+job.Action.Name, ""); err != nil {
+		return err
+	}
+	c.cleaned++
+	return nil
+}
+
+// A person cleans up a pooled reservation the agent's deployment left, and
+// its removal runs as the agent, who approved it.
+func TestAgentApprovedPoolCleanupWritesInfrastructure(t *testing.T) {
+	plan := webAndAPI()
+	plan.DecidedBy = security.AgentSubject(plan.OrgID)
+	plan.Actions = []planning.Action{{ID: "service:api", Op: planning.Create, Subject: planning.ServiceSubject, Name: "api", Provider: "server", ConnectionID: "conn_s", Step: 1,
+		Service: &planning.ServiceConfig{Provider: "server", Service: "svc:go:services/api", CloudPlacement: &planning.CloudPlacement{CloudID: "cloud_1", PoolID: "pool_1"}}}}
+	provider := infrastructure.NewAuthProvider()
+	provider.Bind(func(context.Context, string) (string, string, error) { return "", "", errors.New("no sessions here") }, agentAuthorizer(t, plan.OrgID))
+	exec := &ctrlCleaner{provider: provider}
+	r, store, _ := newRunner(t, plan, exec, nil)
+	r.executors["server"] = exec
+	r.credentials = serverCredentials{org: plan.OrgID}
+	store.d["dep_1"] = &Deployment{ID: "dep_1", OrgID: plan.OrgID, ProjectID: plan.ProjectID, EnvironmentID: plan.EnvironmentID, PlanID: plan.ID,
+		Status: StatusFailed, StartedBy: plan.DecidedBy, Steps: []Step{{ActionID: "service:api", Name: "api", Status: StepFailed}}}
+	if err := r.CleanupPoolReservation(t.Context(), plan.OrgID, plan.ID, "api", nil, func([]byte) error { return nil }); err != nil {
+		t.Fatalf("cleanup of the agent's pooled reservation: %v", err)
+	}
+	if exec.cleaned != 1 {
+		t.Fatalf("cleaned %d times, want 1", exec.cleaned)
 	}
 }
