@@ -240,7 +240,7 @@ func TestLoad_analysisConcurrencyZeroFailsValidation(t *testing.T) {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), raw, 0o600); err != nil {
+	if err = os.WriteFile(filepath.Join(dir, "config.yaml"), raw, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("LOOMPLANE_DATABASE_URL", testDSN)
