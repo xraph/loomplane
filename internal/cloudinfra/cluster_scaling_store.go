@@ -12,7 +12,7 @@ import (
 
 func (s *PgStore) ClusterScalingEnvelope(ctx context.Context, org, resource, pool string) (*ClusterCapacityEnvelope, error) {
 	var raw []byte
-	err := s.db.QueryRow(ctx, `SELECT body FROM loomplane_cluster_capacity_envelopes WHERE org_id=$1 AND body->>'resource_id'=$2 AND body->>'pool_id'=$3 AND body->>'state'<>'released'`, org, resource, pool).Scan(&raw)
+	err := s.db.QueryRow(ctx, `SELECT body FROM loomplane_cluster_capacity_envelopes WHERE org_id=$1 AND resource_id=$2 AND pool_id=$3 AND (body->>'state'<>'released' OR body->'schema_version' IS DISTINCT FROM '1'::jsonb)`, org, resource, pool).Scan(&raw)
 	if err != nil {
 		return nil, storeError(err)
 	}

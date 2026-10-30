@@ -277,7 +277,7 @@ func TestClusterBudgetStaleBaselineRecovery(t *testing.T) {
 						t.Fatal(err)
 					}
 				} else {
-					envelope := cloudinfra.ClusterCapacityEnvelope{ID: "old-envelope", OrgID: "org", CloudID: "cloud", OperationID: o.ID, Provider: "digitalocean", AccountID: "account", Revision: 1, State: "active", Maximum: cloudinfra.ResourceVector{Servers: 1}, Money: money}
+					envelope := cloudinfra.ClusterCapacityEnvelope{SchemaVersion: 1, ID: "old-envelope", OrgID: "org", CloudID: "cloud", OperationID: o.ID, Provider: "digitalocean", AccountID: "account", Revision: 1, State: "active", Maximum: cloudinfra.ResourceVector{Servers: 1}, Money: money}
 					envelope.Money.Components[0].Name = "nodes"
 					raw, e = json.Marshal(envelope)
 					if e != nil {
@@ -350,7 +350,7 @@ func TestClusterBudgetProjectedCategoriesAndPhysicalOverlap(t *testing.T) {
 	if err := f.store.SaveServer(t.Context(), &cloudinfra.Server{ID: "attributed", OrgID: "org", CloudID: "cloud", Ownership: "managed", Provider: "digitalocean", AccountID: "account", ConnectionID: "infra-account", ResourceID: "shared-vm", Status: "ready", Revision: 1, Size: "small", PricedSize: "small", HourlyPriceKnown: true, HourlyUSD: 0.000029, PriceCheckedAt: now}); err != nil {
 		t.Fatal(err)
 	}
-	envelope := cloudinfra.ClusterCapacityEnvelope{ID: "overlap", OrgID: "org", CloudID: "cloud", Provider: "digitalocean", AccountID: "account", ResourceID: "cluster", Ref: provider.ClusterRef{ID: "physical"}, Revision: 1, State: "active", CheckedAt: now, NodeIDs: []string{"shared-vm"}, Maximum: cloudinfra.ResourceVector{Servers: 3}, Consumed: cloudinfra.ResourceVector{Servers: 1}, Money: cloudinfra.MoneyEstimate{CheckedAt: now, Components: []cloudinfra.MoneyComponent{{Name: "nodes", Source: "provider_options", Identity: "size", Quantity: 3, HourlyMicroUSD: &price}}}}
+	envelope := cloudinfra.ClusterCapacityEnvelope{SchemaVersion: 1, ID: "overlap", OrgID: "org", CloudID: "cloud", Provider: "digitalocean", AccountID: "account", ResourceID: "cluster", Ref: provider.ClusterRef{ID: "physical"}, Revision: 1, State: "active", CheckedAt: now, NodeIDs: []string{"shared-vm"}, Maximum: cloudinfra.ResourceVector{Servers: 3}, Consumed: cloudinfra.ResourceVector{Servers: 1}, Money: cloudinfra.MoneyEstimate{CheckedAt: now, Components: []cloudinfra.MoneyComponent{{Name: "nodes", Source: "provider_options", Identity: "size", Quantity: 3, HourlyMicroUSD: &price}}}}
 	raw, err := json.Marshal(envelope)
 	if err != nil {
 		t.Fatal(err)

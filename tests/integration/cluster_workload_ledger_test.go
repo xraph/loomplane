@@ -91,6 +91,22 @@ func workloadTx(t *testing.T, f *poolFixture, fn func(driver.Tx) error) error {
 	}
 	return tx.Commit()
 }
+func readWorkloadMetadata(t *testing.T, f *poolFixture, in cloudinfra.ClusterWorkloadInput, revision int64) cloudinfra.ClusterWorkloadHold {
+	t.Helper()
+	var raw []byte
+	if err := f.sql.QueryRow(t.Context(), `SELECT body FROM loomplane_cluster_workload_holds WHERE org_id=$1 AND id=$2`, in.OrgID, in.ID).Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	var hold cloudinfra.ClusterWorkloadHold
+	if err := json.Unmarshal(raw, &hold); err != nil {
+		t.Fatal(err)
+	}
+	if hold.SchemaVersion != 1 || hold.Revision != revision || hold.UpdatedAt.Before(hold.CreatedAt) {
+		t.Fatalf("invalid metadata: %+v", hold)
+	}
+	return hold
+}
+
 func TestClusterWorkloadLedgerHandover(t *testing.T) {
 	f, r, in, receipt := clusterWorkloadFixture(t)
 	reserve := func(tx driver.Tx) error {
@@ -100,8 +116,13 @@ func TestClusterWorkloadLedgerHandover(t *testing.T) {
 	if err := workloadTx(t, f, reserve); err != nil {
 		t.Fatal(err)
 	}
+	first := readWorkloadMetadata(t, f, in, 1)
 	if err := workloadTx(t, f, reserve); err != nil {
 		t.Fatal("replay", err)
+	}
+	replay := readWorkloadMetadata(t, f, in, 1)
+	if first.UpdatedAt != replay.UpdatedAt {
+		t.Fatal("reservation replay advanced metadata")
 	}
 	attempt, err := f.store.BeginWorkloadAttempt(t.Context(), cloudinfra.WorkloadAttempt{Org: in.OrgID, Project: in.ProjectID, Environment: in.EnvironmentID, Service: in.Service, Plan: in.PlanID, Deployment: "deployment"}, nil, false)
 	if err != nil {
@@ -109,6 +130,16 @@ func TestClusterWorkloadLedgerHandover(t *testing.T) {
 	}
 	if err = workloadTx(t, f, func(tx driver.Tx) error { return f.store.AttachClusterWorkloadAttempt(t.Context(), tx, in, *attempt) }); err != nil {
 		t.Fatal(err)
+	}
+	attached := readWorkloadMetadata(t, f, in, 2)
+	if attached.CreatedAt != first.CreatedAt || !attached.UpdatedAt.After(first.UpdatedAt) {
+		t.Fatal("attempt metadata did not advance")
+	}
+	if err = workloadTx(t, f, func(tx driver.Tx) error { return f.store.AttachClusterWorkloadAttempt(t.Context(), tx, in, *attempt) }); err != nil {
+		t.Fatal(err)
+	}
+	if repeated := readWorkloadMetadata(t, f, in, 2); repeated.UpdatedAt != attached.UpdatedAt {
+		t.Fatal("attempt replay advanced metadata")
 	}
 	if err = f.store.MarkWorkloadEffects(t.Context(), *attempt); err != nil {
 		t.Fatal(err)
@@ -131,6 +162,18 @@ func TestClusterWorkloadLedgerHandover(t *testing.T) {
 		return f.store.BindClusterWorkloadReceipt(t.Context(), tx, in, "cluster-binding")
 	}); err != nil {
 		t.Fatal(err)
+	}
+	bound := readWorkloadMetadata(t, f, in, 3)
+	if bound.CreatedAt != first.CreatedAt || !bound.UpdatedAt.After(attached.UpdatedAt) {
+		t.Fatal("receipt metadata did not advance")
+	}
+	if err = workloadTx(t, f, func(tx driver.Tx) error {
+		return f.store.BindClusterWorkloadReceipt(t.Context(), tx, in, "cluster-binding")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if repeated := readWorkloadMetadata(t, f, in, 3); repeated.UpdatedAt != bound.UpdatedAt {
+		t.Fatal("receipt replay advanced metadata")
 	}
 	pod := cloudinfra.ClusterObservedWorkload{PodUID: "pod", NamespaceUID: receipt.NamespaceUID, DeploymentUID: receipt.DeploymentUID, DeploymentGeneration: 1, ReplicaSetUID: "rs", ReleaseID: receipt.ReleaseID, Requests: cloudinfra.ClusterWorkloadVector{CPUMillis: 500, MemoryBytes: 500, Pods: 1}}
 	external := cloudinfra.ClusterObservedWorkload{PodUID: "external", Requests: cloudinfra.ClusterWorkloadVector{CPUMillis: 200, MemoryBytes: 200, Pods: 1}}
@@ -243,6 +286,9 @@ func TestClusterWorkloadLedgerUnstartedRelease(t *testing.T) {
 			var released bool
 			if err = f.sql.QueryRow(t.Context(), `SELECT released FROM loomplane_cluster_workload_holds WHERE id=$1`, in.ID).Scan(&released); err != nil {
 				t.Fatal(err)
+			}
+			if mode == "settled" {
+				readWorkloadMetadata(t, f, in, 3)
 			}
 			if released != (mode == "settled") {
 				t.Fatal("incorrect durable release", released)

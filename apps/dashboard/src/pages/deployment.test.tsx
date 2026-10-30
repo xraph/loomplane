@@ -238,8 +238,18 @@ const finished = (id: string, startedAt: string) => ({
 
 const target = {
   environment: "production",
-  target: { deployment_id: "dep_1", plan_id: "plan_1", kind: "release", status: "succeeded" },
-  restore: { deployment_id: "dep_0", plan_id: "plan_0", kind: "release", status: "succeeded" },
+  target: {
+    deployment_id: "dep_1",
+    plan_id: "plan_1",
+    kind: "release",
+    status: "succeeded",
+  },
+  restore: {
+    deployment_id: "dep_0",
+    plan_id: "plan_0",
+    kind: "release",
+    status: "succeeded",
+  },
   commits: [],
 }
 

@@ -38,6 +38,7 @@ type ClusterPoolEnvelopeReview struct {
 	Money            MoneyEstimate  `json:"money"`
 }
 type ClusterCapacityEnvelope struct {
+	SchemaVersion        int                       `json:"schema_version"`
 	PriorMaximum         *ResourceVector           `json:"prior_maximum,omitempty"`
 	PriorMoney           *MoneyEstimate            `json:"prior_money,omitempty"`
 	NodeIDs              []string                  `json:"node_ids,omitempty"`
@@ -224,7 +225,7 @@ func (s *PgStore) writeClusterEnvelope(ctx context.Context, tx driver.Tx, in Clu
 	if in.Review.Key == "" || in.Review.Unit.Servers != 1 || !nonnegativeCapacity(in.Review.Maximum) || !capacityFits(in.Review.Initial, in.Review.Maximum) {
 		return nil, ErrInvalid
 	}
-	e := &ClusterCapacityEnvelope{ID: in.EnvelopeID, OrgID: in.OrgID, CloudID: in.CloudID, OperationID: o.ID, ResourceID: in.ResourceID, Provider: in.Provider, AccountID: in.AccountID, PoolID: in.Review.PoolID, Review: in.Review, Maximum: in.Review.Maximum, DesiredMaximum: in.Review.Maximum, Consumed: in.Review.Baseline, Pending: in.Review.Initial, Money: in.Review.Money, PolicyRevision: p.Revision, Revision: 1, State: "pending", RequestedAt: time.Now().UTC()}
+	e := &ClusterCapacityEnvelope{SchemaVersion: 1, ID: in.EnvelopeID, OrgID: in.OrgID, CloudID: in.CloudID, OperationID: o.ID, ResourceID: in.ResourceID, Provider: in.Provider, AccountID: in.AccountID, PoolID: in.Review.PoolID, Review: in.Review, Maximum: in.Review.Maximum, DesiredMaximum: in.Review.Maximum, Consumed: in.Review.Baseline, Pending: in.Review.Initial, Money: in.Review.Money, PolicyRevision: p.Revision, Revision: 1, State: "pending", RequestedAt: time.Now().UTC()}
 	// Only reserveClusterCapacity may create standing authority. Its pending hold
 	// proves the shared ceiling admission happened inside this same transaction.
 	var admitted bool

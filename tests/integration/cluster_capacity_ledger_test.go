@@ -538,7 +538,7 @@ func TestClusterEnvelopeLegacyCloudGate(t *testing.T) {
 					t.Fatal(checkErr)
 				}
 			case "standing":
-				e := cloudinfra.ClusterCapacityEnvelope{ID: "standing", OrgID: "org", CloudID: "cloud", Provider: "digitalocean", AccountID: "account", Revision: 1, State: "active", Maximum: cloudinfra.ResourceVector{Servers: 3, CPUMillis: 6000}, Consumed: cloudinfra.ResourceVector{Servers: 1, CPUMillis: 2000}}
+				e := cloudinfra.ClusterCapacityEnvelope{SchemaVersion: 1, ID: "standing", OrgID: "org", CloudID: "cloud", Provider: "digitalocean", AccountID: "account", Revision: 1, State: "active", Maximum: cloudinfra.ResourceVector{Servers: 3, CPUMillis: 6000}, Consumed: cloudinfra.ResourceVector{Servers: 1, CPUMillis: 2000}}
 				raw, err := json.Marshal(e)
 				if err != nil {
 					t.Fatal(err)

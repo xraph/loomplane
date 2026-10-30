@@ -50,7 +50,7 @@ func (s *PgStore) budgetPriceSources(ctx context.Context, org, cloud string) ([]
 	rows, err := s.db.Query(ctx, `SELECT 'server',body FROM loomplane_cloud_servers WHERE org_id=$1 AND cloud_id=$2 AND status NOT IN ('deleted','disconnected')
  UNION ALL SELECT 'operation',o.body FROM loomplane_infrastructure_operations o JOIN loomplane_cloud_capacity_reservations r ON r.org_id=o.org_id AND r.cloud_id=o.cloud_id AND r.id=o.id WHERE o.org_id=$1 AND o.cloud_id=$2 AND r.status IN ('reserved','committed')
  UNION ALL SELECT 'cluster',o.body FROM loomplane_cluster_operations o WHERE o.org_id=$1 AND o.cloud_id=$2 AND (EXISTS(SELECT 1 FROM loomplane_cloud_capacity_reservations r WHERE r.org_id=o.org_id AND r.cloud_id=o.cloud_id AND r.id=o.id AND r.status IN ('reserved','committed')) OR EXISTS(SELECT 1 FROM loomplane_cluster_capacity_envelopes e WHERE e.org_id=o.org_id AND e.cloud_id=o.cloud_id AND e.body->>'operation_id'=o.id AND e.body->>'state'<>'released'))
- UNION ALL SELECT 'envelope',body FROM loomplane_cluster_capacity_envelopes WHERE org_id=$1 AND cloud_id=$2 AND body->>'state'<>'released'`, org, cloud)
+ UNION ALL SELECT 'envelope',body FROM loomplane_cluster_capacity_envelopes WHERE org_id=$1 AND cloud_id=$2 AND (body->>'state'<>'released' OR body->'schema_version' IS DISTINCT FROM '1'::jsonb)`, org, cloud)
 	if err != nil {
 		return nil, err
 	}

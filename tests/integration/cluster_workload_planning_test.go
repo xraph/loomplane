@@ -63,7 +63,7 @@ func managedDemandFixture(t *testing.T, identity ...map[string]string) (*poolFix
 	if err = f.store.SaveClusterCapacity(t.Context(), r, snapshot); err != nil {
 		t.Fatal(err)
 	}
-	envelope := cloudinfra.ClusterCapacityEnvelope{ID: "envelope", OrgID: "org", CloudID: "cloud", ResourceID: r.ID, Provider: r.Provider, AccountID: r.AccountID, PoolID: "pool", Ref: r.Observation.Ref, Maximum: cloudinfra.ResourceVector{Servers: 3}, DesiredMaximum: cloudinfra.ResourceVector{Servers: 3}, State: "active", CheckedAt: now}
+	envelope := cloudinfra.ClusterCapacityEnvelope{SchemaVersion: 1, ID: "envelope", OrgID: "org", CloudID: "cloud", ResourceID: r.ID, Provider: r.Provider, AccountID: r.AccountID, PoolID: "pool", Ref: r.Observation.Ref, Maximum: cloudinfra.ResourceVector{Servers: 3}, DesiredMaximum: cloudinfra.ResourceVector{Servers: 3}, State: "active", CheckedAt: now}
 	raw, _ := json.Marshal(envelope)
 	if _, err = f.sql.Exec(t.Context(), `INSERT INTO loomplane_cluster_capacity_envelopes(org_id,cloud_id,id,resource_id,provider,account_id,pool_id,revision,body) VALUES('org','cloud','envelope','cluster','digitalocean','account','pool',1,$1)`, raw); err != nil {
 		t.Fatal(err)

@@ -108,7 +108,7 @@ it("shows a running watch with each service's verdict", async () => {
   expect(api).toHaveTextContent("Passing")
   const web = within(services).getByText("web").closest("li")!
   expect(web).toHaveTextContent(
-    "Not watched: Loomplane reads no request and error counts from Vercel.",
+    "Not watched: Loomplane reads no request and error counts from Vercel."
   )
   expect(web.textContent?.match(/not watched/gi)).toHaveLength(1)
   expect(screen.getByText("Unverified")).toBeInTheDocument()

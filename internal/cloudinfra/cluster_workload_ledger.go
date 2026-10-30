@@ -41,11 +41,14 @@ type ClusterWorkloadInput struct {
 }
 
 type ClusterWorkloadHold struct {
-	Input     ClusterWorkloadInput          `json:"input"`
-	CreatedAt time.Time                     `json:"created_at"`
-	Attempt   *WorkloadAttempt              `json:"attempt,omitempty"`
-	BindingID string                        `json:"binding_id,omitempty"`
-	Receipt   *kubernetes.ControllerReceipt `json:"receipt,omitempty"`
+	SchemaVersion int                           `json:"schema_version"`
+	Revision      int64                         `json:"revision"`
+	UpdatedAt     time.Time                     `json:"updated_at"`
+	Input         ClusterWorkloadInput          `json:"input"`
+	CreatedAt     time.Time                     `json:"created_at"`
+	Attempt       *WorkloadAttempt              `json:"attempt,omitempty"`
+	BindingID     string                        `json:"binding_id,omitempty"`
+	Receipt       *kubernetes.ControllerReceipt `json:"receipt,omitempty"`
 }
 
 // ClusterWorkloadGuard must lock and compare the immutable approved demand to
@@ -114,13 +117,18 @@ func (s *PgStore) ReserveClusterWorkload(ctx context.Context, tx driver.Tx, in C
 			return nil, &CapacityAdmissionError{Block: CapacityBlock{Reason: "workload_capacity"}}
 		}
 	}
-	hold := &ClusterWorkloadHold{Input: in, CreatedAt: time.Now().UTC()}
+	now := time.Now().UTC()
+	hold := &ClusterWorkloadHold{SchemaVersion: 1, Revision: 1, UpdatedAt: now, Input: in, CreatedAt: now}
 	raw, err := json.Marshal(hold)
 	if err != nil {
 		return nil, err
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO loomplane_cluster_workload_holds(org_id,cloud_id,resource_id,id,plan_id,service,release_id,body) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, in.OrgID, in.CloudID, in.ResourceID, in.ID, in.PlanID, in.Service, in.ReleaseID, raw)
-	return hold, storeError(err)
+	err = tx.QueryRow(ctx, `INSERT INTO loomplane_cluster_workload_holds(org_id,cloud_id,resource_id,id,plan_id,service,release_id,body) VALUES($1,$2,$3,$4,$5,$6,$7,$8) RETURNING body`, in.OrgID, in.CloudID, in.ResourceID, in.ID, in.PlanID, in.Service, in.ReleaseID, raw).Scan(&raw)
+	if err != nil {
+		return nil, storeError(err)
+	}
+	err = json.Unmarshal(raw, hold)
+	return hold, err
 }
 
 func clusterWorkloadScope(ctx context.Context, tx driver.Tx, in ClusterWorkloadInput) (ClusterCapacitySnapshot, error) {
@@ -287,8 +295,11 @@ func saveClusterWorkloadHold(ctx context.Context, tx driver.Tx, h *ClusterWorklo
 	if err != nil {
 		return err
 	}
-	_, err = tx.Exec(ctx, `UPDATE loomplane_cluster_workload_holds SET body=$3 WHERE org_id=$1 AND id=$2 AND NOT released`, h.Input.OrgID, h.Input.ID, raw)
-	return err
+	err = tx.QueryRow(ctx, `UPDATE loomplane_cluster_workload_holds SET body=$3 WHERE org_id=$1 AND id=$2 AND NOT released RETURNING body`, h.Input.OrgID, h.Input.ID, raw).Scan(&raw)
+	if err != nil {
+		return storeError(err)
+	}
+	return json.Unmarshal(raw, h)
 }
 
 func (s *PgStore) BindClusterWorkloadReceipt(ctx context.Context, tx driver.Tx, in ClusterWorkloadInput, bindingID string) error {
