@@ -5,7 +5,6 @@ import authsomePlugin, {
 import chroniclePlugin from "@forge-go/dashboard-plugin-chronicle"
 import corePlugin from "@forge-go/dashboard-plugin-core"
 import ctrlplanePlugin from "@forge-go/dashboard-plugin-ctrlplane"
-import dispatchPlugin from "@forge-go/dashboard-plugin-dispatch"
 import heraldPlugin from "@forge-go/dashboard-plugin-herald"
 import keysmithPlugin from "@forge-go/dashboard-plugin-keysmith"
 import relayPlugin from "@forge-go/dashboard-plugin-relay"
@@ -15,14 +14,17 @@ import wardenPlugin from "@forge-go/dashboard-plugin-warden"
 import "./console.css"
 
 // Module scope: the dashboard memoizes on object identity. A plugin shows
-// only while the server registers a contributor of the same name. Vault
-// isn't here: Loomplane keeps several Vault apps and the console has none
-// to show yet.
+// only while the server registers a contributor of the same name.
+//
+// Two are left out on purpose. Vault: Loomplane keeps six Vault apps, all
+// holding secrets, and the plugin can show only one, so which one (if any)
+// is the owner's decision, not something to add back casually. Dispatch:
+// its operator reads need its durable delivery audit, which Loomplane
+// doesn't wire yet, so every page would answer 503.
 const plugins = [
   corePlugin,
   authsomePlugin,
   ctrlplanePlugin,
-  dispatchPlugin,
   trovePlugin,
   wardenPlugin,
   chroniclePlugin,

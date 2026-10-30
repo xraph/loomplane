@@ -4,10 +4,11 @@ allowBuilds:
   esbuild: true
   msw: false
 
-# Forge's own client packages, published with the Go module they match
-# (forge v1.13.0). pnpm holds back releases younger than its minimum age, so
-# these two are let through by name. Drop the entries once 1.13.0 is old
-# enough to pass on its own.
+# Forge's own packages, published with the Go modules they match: the client
+# packages at 1.13.0 (forge v1.13.0) and the dashboard host, kit, runtime and
+# plugins at 0.3.0. pnpm holds back releases younger than its minimum age, so
+# each is let through by name. Drop an entry once its release is old enough
+# to pass on its own.
 minimumReleaseAgeExclude:
   - '@forge-go/client-core@1.13.0'
   - '@forge-go/client-react@1.13.0'
@@ -17,7 +18,6 @@ minimumReleaseAgeExclude:
   - '@forge-go/dashboard-plugin-chronicle@0.3.0'
   - '@forge-go/dashboard-plugin-core@0.3.0'
   - '@forge-go/dashboard-plugin-ctrlplane@0.3.0'
-  - '@forge-go/dashboard-plugin-dispatch@0.3.0'
   - '@forge-go/dashboard-plugin-herald@0.3.0'
   - '@forge-go/dashboard-plugin-keysmith@0.3.0'
   - '@forge-go/dashboard-plugin-relay@0.3.0'

@@ -33,7 +33,6 @@
     "@forge-go/dashboard-plugin-chronicle": "0.3.0",
     "@forge-go/dashboard-plugin-core": "0.3.0",
     "@forge-go/dashboard-plugin-ctrlplane": "0.3.0",
-    "@forge-go/dashboard-plugin-dispatch": "0.3.0",
     "@forge-go/dashboard-plugin-herald": "0.3.0",
     "@forge-go/dashboard-plugin-keysmith": "0.3.0",
     "@forge-go/dashboard-plugin-relay": "0.3.0",
