@@ -19,7 +19,7 @@ func TestTeamsMigration(t *testing.T) {
 	exec(t, conn,
 		`INSERT INTO loomplane_projects(id,org_id,name,slug,status,created_by,created_at,updated_at) VALUES('proj_a','o','A','a','ready','u',now(),now())`,
 		`INSERT INTO loomplane_teams(id,org_id,name,slug,created_by) VALUES('team_a','o','Payments','payments','u')`,
-		`INSERT INTO loomplane_team_members(team_id,org_id,user_id,added_by) VALUES('team_a','o','ausr_1','u')`,
+		`INSERT INTO loomplane_team_members(team_id,org_id,user_id,member_id,added_by) VALUES('team_a','o','ausr_1','amem_1','u')`,
 		`INSERT INTO loomplane_team_grants(id,team_id,org_id,role,project_id,created_by) VALUES('g1','team_a','o','admin',NULL,'u')`,
 		`INSERT INTO loomplane_team_grants(id,team_id,org_id,role,project_id,created_by) VALUES('g2','team_a','o','developer','proj_a','u')`,
 	)
@@ -32,7 +32,9 @@ func TestTeamsMigration(t *testing.T) {
 		`INSERT INTO loomplane_teams(id,org_id,name,slug,created_by) VALUES('team_x','o','Other','payments','u')`,
 		`INSERT INTO loomplane_team_grants(id,team_id,org_id,role,project_id,created_by) VALUES('g4','team_a','o','viewer',NULL,'u')`,
 		`INSERT INTO loomplane_team_grants(id,team_id,org_id,role,project_id,created_by) VALUES('g5','team_a','o','viewer','proj_a','u')`,
-		`INSERT INTO loomplane_team_members(team_id,org_id,user_id,added_by) VALUES('team_a','o','ausr_1','u')`,
+		`INSERT INTO loomplane_team_members(team_id,org_id,user_id,member_id,added_by) VALUES('team_a','o','ausr_1','amem_1','u')`,
+		// A membership row names the authsome member it was added for.
+		`INSERT INTO loomplane_team_members(team_id,org_id,user_id,added_by) VALUES('team_a','o','ausr_2','u')`,
 	} {
 		if _, err := conn.Exec(t.Context(), sql); err == nil {
 			t.Fatalf("constraint accepted %s", sql)

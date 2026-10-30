@@ -11,9 +11,11 @@ import (
 // people whose Warden assignments need recomputing.
 //
 // These tables are Loomplane's own. authsome's authsome_teams stays unused
-// and Loomplane blocks its routes. A row in loomplane_team_members grants
-// nothing without a current authsome_members row, so a person who leaves the
-// workspace keeps no team rights even if a membership row survives.
+// and Loomplane blocks its routes. A row in loomplane_team_members names the
+// authsome member it was added for (member_id), and grants nothing unless
+// that member row still exists. A person who leaves and is invited back gets
+// a new member ID, so a membership row that survived their leaving matches
+// nothing and gives them no team rights.
 //
 // A grant with a NULL project_id applies to the whole workspace; at most one
 // grant exists per team and project, and at most one workspace grant per
@@ -42,6 +44,7 @@ func init() {
 					migrate.References("loomplane_teams", "id"), migrate.OnDelete(migrate.Cascade)).
 				Column("org_id", migrate.Text, migrate.NotNull()).
 				Column("user_id", migrate.Text, migrate.NotNull()).
+				Column("member_id", migrate.Text, migrate.NotNull()).
 				Column("added_by", migrate.Text, migrate.NotNull()).
 				Column("added_at", migrate.Timestamp, migrate.NotNull(), migrate.DefaultExpr("now()")).
 				PrimaryKey("team_id", "user_id").
