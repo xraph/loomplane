@@ -122,6 +122,8 @@ func Extensions(cfg config.Config) []forge.Extension {
 
 	jobs.WithBuild(deployments.ManagedWorkloadOptions(owner(), cfg.Orchestration.Concurrency), func(w *drt.Worker) { deployments.BindWorker(orchestration.ManagedWorkloadBuild, w) })
 
+	jobs.WithBuild(deployments.ManagedCleanupOptions(owner(), cfg.Orchestration.Concurrency), func(w *drt.Worker) { deployments.BindWorker(orchestration.ManagedCleanupBuild, w) })
+
 	// Provider plugins, described when the first extension that needs
 	// them registers.
 	plugs := plugins.NewSet(cfg.Providers.Plugins)

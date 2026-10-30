@@ -1,6 +1,8 @@
 package deployments
 
 import (
+	"context"
+	"errors"
 	"testing"
 
 	"github.com/xraph/loomplane/internal/orchestration"
@@ -35,5 +37,27 @@ func TestManagedProtocolRunnerStartRejectsLegacy(t *testing.T) {
 	}
 	if _, _, err := r.Start(orchestration.CapacityContext(t.Context()), p.OrgID, p.ID); err == nil {
 		t.Fatal("v3 Start accepted managed plan")
+	}
+}
+
+func TestManagedCleanupDirectGuard(t *testing.T) {
+	for _, demand := range []bool{false, true} {
+		action := planning.Action{CleanupTargets: []planning.ManagedCleanupTarget{{SchemaVersion: 1}}}
+		if demand {
+			action.Service = &planning.ServiceConfig{ClusterDemand: &planning.ClusterWorkloadDemand{}}
+		}
+		p := &planning.Plan{RequiredRuntimeProtocol: orchestration.ManagedCleanupProtocol, Actions: []planning.Action{action}}
+		for _, ctx := range []context.Context{t.Context(), orchestration.CapacityContext(t.Context()), orchestration.ManagedWorkloadContext(t.Context())} {
+			if err := legacyCapacityGuard(ctx, p); !errors.Is(err, ErrManagedCleanupProtocol) {
+				t.Fatalf("old context accepted cleanup: %v", err)
+			}
+		}
+		if err := legacyCapacityGuard(orchestration.ManagedCleanupContext(t.Context()), p); err != nil {
+			t.Fatal(err)
+		}
+		p.RequiredRuntimeProtocol = orchestration.ManagedWorkloadProtocol
+		if err := legacyCapacityGuard(orchestration.ManagedCleanupContext(t.Context()), p); !errors.Is(err, ErrManagedCleanupReviewRequired) {
+			t.Fatalf("historical plan skipped fresh review: %v", err)
+		}
 	}
 }

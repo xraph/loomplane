@@ -134,7 +134,7 @@ func prepareAcceptedPlans(sync *cloudprofiles.Sync, snapshot *cloudprofiles.Snap
 		if err != nil {
 			return err
 		}
-		result, err := json.Marshal(Result{CloudSyncID: sync.ID, Actions: plan.Actions, Problems: plan.Problems, Warnings: plan.Warnings, Summary: plan.Summary, Executable: plan.Executable, Connections: plan.Connections})
+		result, err := json.Marshal(Result{CloudSyncID: sync.ID, RequiredRuntimeProtocol: plan.RequiredRuntimeProtocol, Actions: plan.Actions, Problems: plan.Problems, Warnings: plan.Warnings, Summary: plan.Summary, Executable: plan.Executable, Connections: plan.Connections})
 		if err != nil {
 			return err
 		}

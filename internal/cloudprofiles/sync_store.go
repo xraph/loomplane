@@ -654,7 +654,7 @@ func validateAcceptedReview(ctx context.Context, tx driver.Tx, p *Preview, snaps
    $1::jsonb->>'org_id'=$3 AND $1::jsonb->>'project_id'=$4 AND $1::jsonb->>'environment_id'=$5
    AND $1::jsonb->>'revision'=$6 AND coalesce($1::jsonb->>'manifest_id','')=$7 AND coalesce(($1::jsonb->>'manifest_revision')::int,0)=$8
    AND $2::jsonb->>'cloud_sync_id'=$9
-   AND ($2::jsonb-'cloud_sync_id')=jsonb_build_object('actions',$1::jsonb->'actions','problems',$1::jsonb->'problems','warnings',$1::jsonb->'warnings','summary',$1::jsonb->'summary','executable',$1::jsonb->'executable','connections',$1::jsonb->'connections')
+   AND ($2::jsonb-'cloud_sync_id')=(jsonb_build_object('actions',$1::jsonb->'actions','problems',$1::jsonb->'problems','warnings',$1::jsonb->'warnings','summary',$1::jsonb->'summary','executable',$1::jsonb->'executable','connections',$1::jsonb->'connections') || CASE WHEN coalesce($1::jsonb->>'required_runtime_protocol','')='' THEN '{}'::jsonb ELSE jsonb_build_object('required_runtime_protocol',$1::jsonb->'required_runtime_protocol') END)
    AND ($2::jsonb->>'executable')::boolean`, []byte(env.Plan), []byte(accepted.Result), p.OrgID, ParticipantProject(env.ProjectID, p.ProjectID), env.EnvironmentID, accepted.Revision, accepted.ManifestID, accepted.ManifestRevision, sync.ID).Scan(&matches); checkErr != nil {
 			return checkErr
 		}

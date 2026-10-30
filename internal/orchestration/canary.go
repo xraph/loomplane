@@ -17,7 +17,7 @@ const (
 	CanaryBuild = "deployment-v4"
 	// CurrentBuild is what new plan, retry and resume-release runs start
 	// on. A retry keeps its plan's build.
-	CurrentBuild = ManagedWorkloadBuild
+	CurrentBuild = ManagedCleanupBuild
 
 	ActivityCanaryRamp    = "loomplane.canary.ramp.v4"
 	ActivityCanaryWeigh   = "loomplane.canary.weigh.v4"

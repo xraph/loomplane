@@ -31,7 +31,7 @@ func guardManagedScope(ctx context.Context, tx driver.Tx, s ManagedScope) error 
  JOIN loomplane_deployments d ON d.org_id=p.org_id AND d.id=w.deployment_id AND d.plan_id=p.id AND d.status='running'
  JOIN loomplane_cloud_connections c ON c.org_id=p.org_id AND c.id=i.body->'input'->>'connection_id'
  WHERE p.org_id=$1 AND p.project_id=$2 AND p.environment_id=$3 AND p.id=$4 AND i.service=$5 AND w.deployment_id=$6 AND w.generation=$7
- AND w.active AND NOT w.settled AND NOT w.legacy_unfenced AND p.status='approved' AND p.required_runtime_protocol='managed-workload-journal-v1'
+ AND w.active AND NOT w.settled AND NOT w.legacy_unfenced AND p.status='approved' AND p.required_runtime_protocol IN ('managed-workload-journal-v1','managed-cleanup-journal-v1')
  AND loomplane_cluster_workload_scope_current(p,i.body) AND i.body->'input'->>'action_id'=$8 AND c.id=$9
  AND c.details->>'namespace'=$10 AND c.details->>'namespace_uid'=$11 AND c.details->>'cluster_ca'=$12
  AND NOT EXISTS(SELECT 1 FROM loomplane_deployments d WHERE d.org_id=p.org_id AND d.id=w.deployment_id AND d.status IN ('cancelled','paused'))

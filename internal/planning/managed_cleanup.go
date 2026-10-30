@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 
 	"github.com/xraph/loomplane/internal/clouds/kubernetes"
+	"github.com/xraph/loomplane/internal/orchestration"
 )
 
 type ManagedCleanupKind string
@@ -75,6 +76,9 @@ func (s *Service) PrepareManagedCleanupTargets(ctx context.Context, plan *Plan, 
 		}
 		if err := json.Unmarshal(raw, &action.CleanupTargets); err != nil {
 			return err
+		}
+		if len(action.CleanupTargets) > 0 {
+			result.RequiredRuntimeProtocol = orchestration.ManagedCleanupProtocol
 		}
 		for _, target := range action.CleanupTargets {
 			if !target.IdentityCurrent {

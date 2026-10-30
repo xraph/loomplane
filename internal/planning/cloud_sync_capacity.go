@@ -26,6 +26,9 @@ func (s *Service) CloudSyncNeedsCapacity(ctx context.Context, org, project, id s
 		if decodeErr := json.Unmarshal(env.Plan, &p); decodeErr != nil {
 			return false, decodeErr
 		}
+		if p.RequiredRuntimeProtocol != "" {
+			return true, nil
+		}
 		for _, a := range p.Actions {
 			if HasCapacityIntent(a) {
 				return true, nil

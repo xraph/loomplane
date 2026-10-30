@@ -163,6 +163,9 @@ func (d *Deployments) ResumeRelease(ctx context.Context, org, planID string) err
 	}
 	// Resume on the original build so historical releases keep their protocol.
 	build, request := current.BuildID, "resume-release-v4:"+planID
+	if current.BuildID == ManagedCleanupBuild {
+		request = "resume-release-v6:" + planID
+	}
 	if current.BuildID == ManagedWorkloadBuild {
 		request = "resume-release-v5:" + planID
 	}

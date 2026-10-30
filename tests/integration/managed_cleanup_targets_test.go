@@ -312,6 +312,7 @@ func cleanupSyncFixture(t *testing.T) (*poolFixture, *planning.Service, *cloudpr
 	plan.Executable = true
 	plan.Actions = result.Actions
 	plan.Connections = result.Connections
+	plan.RequiredRuntimeProtocol = result.RequiredRuntimeProtocol
 	var err error
 	plan.Revision, err = planning.Digest(plan.Actions)
 	if err != nil {
