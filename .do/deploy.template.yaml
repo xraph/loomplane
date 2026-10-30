@@ -4,16 +4,20 @@
 # DigitalOcean Spaces. Before you deploy, create two Spaces buckets and a
 # Spaces access key, then fill in the prompts:
 #
-#   LOOMPLANE_STORAGE_URL    s3://ACCESS_KEY:SECRET_KEY@us-east-1/BUCKET?endpoint=https://REGION.digitaloceanspaces.com&path_style=true
-#                            Keep us-east-1 as written: it is the signing
-#                            region Spaces expects. Put your real region
-#                            (nyc3, ams3, sgp1, ...) only in the endpoint.
-#                            BUCKET is your artifact bucket name.
+#   LOOMPLANE_STORAGE_URL      s3://ACCESS_KEY:SECRET_KEY@us-east-1/BUCKET?endpoint=https://REGION.digitaloceanspaces.com&path_style=true
+#                              #                              Keep us-east-1 as written: it is the signing
+#                              #                              region Spaces expects. Put your real region
+#                              #                              (nyc3, ams3, sgp1, ...) only in the endpoint.
+#                              #                              The driver needs a BUCKET segment in the URL, but
+#                              #                              Loomplane uses LOOMPLANE_ARTIFACT_BUCKET and
+#                              #                              LOOMPLANE_BACKUP_BUCKET for the real buckets.
+#                              #                              Make the URL's BUCKET match
+#                              #                              LOOMPLANE_ARTIFACT_BUCKET.
 #   LOOMPLANE_ARTIFACT_BUCKET  the artifact Spaces bucket
 #   LOOMPLANE_BACKUP_BUCKET    the backup Spaces bucket
 #   LOOMPLANE_SECRET_KEY       base64 of 32 random bytes: openssl rand -base64 32
-#                            Keep a copy. Losing it makes stored
-#                            credentials unrecoverable.
+#                              #                              Keep a copy. Losing it makes stored
+#                              #                              credentials unrecoverable.
 #
 # Backups use the same Spaces account (LOOMPLANE_BACKUP_URL defaults to the
 # storage URL), so it is not set here. The database is a dev database, fine
@@ -79,6 +83,9 @@ spec:
           scope: RUN_TIME
         - key: LOOMPLANE_ANALYSIS_CONCURRENCY
           value: "1"
+          scope: RUN_TIME
+        - key: LOOMPLANE_ANALYSIS_WORK_DIR
+          value: /var/lib/loomplane-work
           scope: RUN_TIME
   ingress:
     rules:

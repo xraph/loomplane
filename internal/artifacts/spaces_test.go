@@ -11,8 +11,10 @@ import (
 )
 
 // A DigitalOcean Spaces URL signs with us-east-1 and names the real region
-// in the endpoint. Open must reach the endpoint, not AWS, and address the
-// bucket in the path.
+// in the endpoint. This proves Open honors the endpoint (not AWS), signs
+// with the URL's key and the us-east-1 region, and takes the bucket from
+// the Bucket setting, not the URL's bucket segment (the driver only needs
+// one to be present). It does not test path versus virtual-host style.
 func TestOpenSpacesStyleURL(t *testing.T) {
 	var mu sync.Mutex
 	var seen []string
@@ -26,7 +28,7 @@ func TestOpenSpacesStyleURL(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	dsn := "s3://KEY:SECRET@us-east-1/loomplane-artifacts?endpoint=" + srv.URL + "&path_style=true"
+	dsn := "s3://KEY:SECRET@us-east-1/spaces-url-bucket?endpoint=" + srv.URL + "&path_style=true"
 	s, err := Open(t.Context(), dsn)
 	if err != nil {
 		t.Fatal(err)
@@ -39,8 +41,8 @@ func TestOpenSpacesStyleURL(t *testing.T) {
 		t.Fatal("no request reached the endpoint")
 	}
 	for _, p := range seen {
-		if !strings.HasPrefix(strings.SplitN(p, " ", 2)[1], "/loomplane-artifacts") {
-			t.Errorf("request %q not addressed to the bucket path", p)
+		if !strings.HasPrefix(strings.SplitN(p, " ", 2)[1], "/"+Bucket) {
+			t.Errorf("request %q not addressed to the artifacts bucket", p)
 		}
 	}
 	if !strings.Contains(auth, "Credential=KEY/") || !strings.Contains(auth, "/us-east-1/s3/") {
