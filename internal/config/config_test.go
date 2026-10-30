@@ -204,6 +204,53 @@ func TestLoad_poolSizeFromEnvironment(t *testing.T) {
 	}
 }
 
+func TestLoad_analysisConcurrencyFromEnvironment(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		name, env string
+		want      int
+	}{
+		{"default", "", 2},
+		{"set", "1", 1},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.WriteFile(filepath.Join(dir, "config.yaml"), raw, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			t.Setenv("LOOMPLANE_DATABASE_URL", testDSN)
+			t.Setenv("LOOMPLANE_ANALYSIS_CONCURRENCY", tt.env)
+			c, err := Load(dir)
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if c.Analysis.Concurrency != tt.want {
+				t.Fatalf("analysis concurrency %d, want %d", c.Analysis.Concurrency, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoad_analysisConcurrencyZeroFailsValidation(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "..", "config.yaml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "config.yaml"), raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("LOOMPLANE_DATABASE_URL", testDSN)
+	t.Setenv("LOOMPLANE_ANALYSIS_CONCURRENCY", "0")
+	_, err = Load(dir)
+	if err == nil || !strings.Contains(err.Error(), "analysis.concurrency must be at least 1") {
+		t.Fatalf("Load error %v, want analysis.concurrency must be at least 1", err)
+	}
+}
+
 func TestLoad_requiresConfigFile(t *testing.T) {
 	if _, err := Load(t.TempDir()); err == nil {
 		t.Fatal("Load succeeded without config.yaml")

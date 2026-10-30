@@ -748,6 +748,9 @@ func (r *reader) integer(dst *int, key string) {
 		*dst = t
 	case int64:
 		*dst = int(t)
+	case bool:
+		// confy turns "1" and "0" variables into bools, so read them as numbers.
+		*dst = map[bool]int{true: 1, false: 0}[t]
 	case float64:
 		if t != float64(int(t)) {
 			r.fail(key, "a whole number", v)

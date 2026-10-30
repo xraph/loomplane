@@ -93,7 +93,7 @@ analysis:
   # Where checkouts are extracted while they're analyzed. Empty means the
   # system's temporary directory.
   work_dir: "${LOOMPLANE_ANALYSIS_WORK_DIR:-}"
-  concurrency: 2
+  concurrency: "${LOOMPLANE_ANALYSIS_CONCURRENCY:-2}"
 
 # Deployment planning.
 planning:
