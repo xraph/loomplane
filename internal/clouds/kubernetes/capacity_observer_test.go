@@ -39,3 +39,12 @@ func TestClusterCapacityObserverPagination(t *testing.T) {
 		t.Fatal("pagination silently truncated")
 	}
 }
+
+func TestClusterScalingDaemonObserverDenied(t *testing.T) {
+	client := fake.NewClientset()
+	client.PrependReactor("list", "daemonsets", func(ktesting.Action) (bool, runtime.Object, error) { return true, nil, errors.New("forbidden") })
+	facts, err := ReadCapacityInventory(t.Context(), client)
+	if err == nil || facts.Complete {
+		t.Fatal("missing DaemonSet evidence became complete inventory")
+	}
+}

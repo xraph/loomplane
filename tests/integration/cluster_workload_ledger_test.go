@@ -26,12 +26,18 @@ import (
 	"github.com/xraph/loomplane/pkg/provider"
 )
 
-func clusterWorkloadFixture(t *testing.T) (*poolFixture, *cloudinfra.ManagedResource, cloudinfra.ClusterWorkloadInput, kube.ControllerReceipt) {
+func clusterWorkloadFixture(t *testing.T, identity ...map[string]string) (*poolFixture, *cloudinfra.ManagedResource, cloudinfra.ClusterWorkloadInput, kube.ControllerReceipt) {
 	t.Helper()
 	f := newPoolFixture(t)
 	now := time.Now().UTC()
 	ca := strings.Repeat("a", 64)
-	c := &connections.Connection{ID: "cluster-runtime", OrgID: "org", Cloud: "kubernetes", Method: connections.MethodManagedKubernetes, Name: "cluster-runtime", Status: "ready", Details: map[string]string{"namespace": "apps", "namespace_uid": "namespace", "cluster_ca": ca, "managed_attachment_id": "attachment", "managed_resource_id": "cluster"}, CreatedAt: now, UpdatedAt: now}
+	namespace, namespaceUID := "apps", "namespace"
+	if len(identity) > 0 {
+		ca = identity[0]["cluster_ca"]
+		namespace = identity[0]["namespace"]
+		namespaceUID = identity[0]["namespace_uid"]
+	}
+	c := &connections.Connection{ID: "cluster-runtime", OrgID: "org", Cloud: "kubernetes", Method: connections.MethodManagedKubernetes, Name: "cluster-runtime", Status: "ready", Details: map[string]string{"namespace": namespace, "namespace_uid": namespaceUID, "cluster_ca": ca, "managed_attachment_id": "attachment", "managed_resource_id": "cluster"}, CreatedAt: now, UpdatedAt: now}
 	if err := connections.NewPgStore(f.db).CreateConnection(t.Context(), c); err != nil {
 		t.Fatal(err)
 	}
@@ -40,7 +46,7 @@ func clusterWorkloadFixture(t *testing.T) (*poolFixture, *cloudinfra.ManagedReso
 	if _, err := f.store.ClaimManagedResource(t.Context(), r, 0); err != nil {
 		t.Fatal(err)
 	}
-	a := &cloudinfra.RuntimeAttachment{ID: "attachment", OrgID: "org", CloudID: "cloud", ClusterID: r.ID, ProjectID: "proj", Namespace: "apps", NamespaceUID: "namespace", ServiceAccountUID: "account", RuntimeConnectionID: c.ID, TrustFingerprint: ca, TrustRevision: 1, Revision: 1}
+	a := &cloudinfra.RuntimeAttachment{ID: "attachment", OrgID: "org", CloudID: "cloud", ClusterID: r.ID, ProjectID: "proj", Namespace: namespace, NamespaceUID: namespaceUID, ServiceAccountUID: "account", RuntimeConnectionID: c.ID, TrustFingerprint: ca, TrustRevision: 1, Revision: 1}
 	if err := f.store.SaveRuntimeAttachment(t.Context(), a, 0); err != nil {
 		t.Fatal(err)
 	}
@@ -51,7 +57,7 @@ func clusterWorkloadFixture(t *testing.T) (*poolFixture, *cloudinfra.ManagedReso
 	acceptFuture(t, f, "workload")
 	in := cloudinfra.ClusterWorkloadInput{ID: "hold", OrgID: "org", CloudID: "cloud", ResourceID: r.ID, TargetID: "cluster-target", AttachmentID: a.ID, ProjectID: "proj", EnvironmentID: "env", ConnectionID: c.ID, PlanID: "workload", Service: "api", ActionID: "service:api", RuntimeRef: "org/env/api/runtime_attempt", RuntimeRevision: "deployment/service:api", ReviewDigest: "review", TrustRevision: 1, Maximum: cloudinfra.ClusterWorkloadVector{CPUMillis: 1000, MemoryBytes: 1000, Pods: 2}}
 	in.ReleaseID = kube.WorkloadReleaseID(in.RuntimeRef, in.RuntimeRevision)
-	receipt := kube.ControllerReceipt{Scope: domain.Scope{OrgID: in.OrgID, ProjectID: in.ProjectID, EnvironmentID: in.EnvironmentID}, ConnectionID: c.ID, InstanceID: id.New(id.PrefixInstance).String(), PlanID: in.PlanID, RuntimeRef: in.RuntimeRef, ServiceID: in.Service, Container: "app", Image: "registry.example/app@sha256:" + strings.Repeat("b", 64), Namespace: "apps", NamespaceUID: a.NamespaceUID, ClusterCA: ca, ServiceAccount: "default", DeploymentUID: "deployment-uid", DeploymentGeneration: 1, RuntimeRevision: in.RuntimeRevision, ReleaseID: in.ReleaseID}
+	receipt := kube.ControllerReceipt{Scope: domain.Scope{OrgID: in.OrgID, ProjectID: in.ProjectID, EnvironmentID: in.EnvironmentID}, ConnectionID: c.ID, InstanceID: id.New(id.PrefixInstance).String(), PlanID: in.PlanID, RuntimeRef: in.RuntimeRef, ServiceID: in.Service, Container: "app", Image: "registry.example/app@sha256:" + strings.Repeat("b", 64), Namespace: namespace, NamespaceUID: a.NamespaceUID, ClusterCA: ca, ServiceAccount: "default", DeploymentUID: "deployment-uid", DeploymentGeneration: 1, RuntimeRevision: in.RuntimeRevision, ReleaseID: in.ReleaseID}
 	clusterWorkloadSnapshot(t, f, r, nil)
 	in.RuntimeRef, in.RuntimeRevision, in.ReleaseID = "", "", ""
 	return f, r, in, receipt
@@ -107,7 +113,7 @@ func TestClusterWorkloadLedgerHandover(t *testing.T) {
 	if err = f.store.MarkWorkloadEffects(t.Context(), *attempt); err != nil {
 		t.Fatal(err)
 	}
-	if err = kube.NewControllerStore(f.db).RecordController(t.Context(), receipt); err != nil {
+	if err = saveLedgerReceiptFixture(t, f, receipt); err != nil {
 		t.Fatal(err)
 	}
 	if _, err = f.sql.Exec(t.Context(), `INSERT INTO loomplane_bindings(id,org_id,project_id,environment_id,subject,name,provider,engine,external_id,connection_id,revision,plan_id,created_at,updated_at) VALUES('cluster-binding','org','proj','env','service','api','kubernetes','ctrlplane',$1,$2,$3,$4,now(),now())`, receipt.InstanceID, in.ConnectionID, receipt.Image, in.PlanID); err != nil {
@@ -160,7 +166,7 @@ func TestClusterWorkloadLedgerHandover(t *testing.T) {
 				newer.DeploymentGeneration++
 				newer.RuntimeRevision = "new-release"
 				newer.ReleaseID = kube.WorkloadReleaseID(newer.RuntimeRef, newer.RuntimeRevision)
-				if err := kube.NewControllerStore(f.db).RecordController(t.Context(), newer); err != nil {
+				if err := saveLedgerReceiptFixture(t, f, newer); err != nil {
 					t.Fatal(err)
 				}
 				want = 1700
@@ -342,4 +348,16 @@ func TestClusterWorkloadLedgerSharedSupplyRace(t *testing.T) {
 	if winners != 1 {
 		t.Fatalf("atomic shared supply admitted %d winners", winners)
 	}
+}
+
+// This fixture exercises accounting joins independently of runtime issuance.
+// Managed runtime acceptance and receipt fencing are covered by the real journal test.
+func saveLedgerReceiptFixture(t *testing.T, f *poolFixture, r kube.ControllerReceipt) error {
+	t.Helper()
+	raw, err := json.Marshal(r)
+	if err != nil {
+		return err
+	}
+	_, err = f.sql.Exec(t.Context(), `INSERT INTO loomplane_workload_controllers(org_id,project_id,environment_id,connection_id,instance_id,runtime_ref,body) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT(org_id,connection_id,instance_id,runtime_ref) DO UPDATE SET body=EXCLUDED.body`, r.OrgID, r.ProjectID, r.EnvironmentID, r.ConnectionID, r.InstanceID, r.RuntimeRef, raw)
+	return err
 }

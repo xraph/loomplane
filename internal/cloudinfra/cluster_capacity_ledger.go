@@ -526,7 +526,11 @@ func settleClusterEnvelopes(ctx context.Context, tx driver.Tx, r *ManagedResourc
 		for _, review := range o.Input.EnvelopeReview.Pools {
 			for _, candidate := range envelopes {
 				if candidate.OperationID == o.ID && candidate.Review.Key == review.Key && candidate.State == "active" && candidate.Pending == (ResourceVector{}) && candidate.ResourceID == r.ID {
-					covered, err = addCapacity(covered, review.Initial)
+					credit := review.Initial
+					if o.Kind == "node-pool-scaling" {
+						credit = o.CapacityTarget
+					}
+					covered, err = addCapacity(covered, credit)
 					if err != nil {
 						return err
 					}
@@ -585,23 +589,35 @@ func prepareMaintenanceEnvelope(in *ClusterInput, capacity ResourceVector) error
 	if err != nil || verified != capacity {
 		return ErrInvalid
 	}
-	var component *MoneyComponent
-	for _, c := range in.costEvidence.Components {
-		if c.Name == "nodes:"+pool.Name {
-			copyComponent := c
-			copyComponent.Name = "nodes"
-			component = &copyComponent
-		}
-	}
-	if component == nil {
-		return ErrInvalid
-	}
-	money, err := moneyEstimate([]MoneyComponent{*component}, in.costEvidence.HorizonSeconds, in.costEvidence.CheckedAt)
+	money, err := clusterPoolEnvelopeMoney(in.costEvidence, pool.Name)
 	if err != nil {
 		return err
 	}
 	in.EnvelopeReview = &ClusterEnvelopeReview{Pools: []ClusterPoolEnvelopeReview{{Key: pool.Name, RequestDigest: pool.RequestDigest, Maximum: capacity, Initial: capacity, Unit: unit, Money: money}}}
 	return nil
+}
+
+// clusterPoolEnvelopeMoney keeps the standing node maximum separate from non-node review costs.
+func clusterPoolEnvelopeMoney(estimate *MoneyEstimate, poolName string) (MoneyEstimate, error) {
+	if estimate == nil {
+		return MoneyEstimate{}, ErrInvalid
+	}
+	var component *MoneyComponent
+	for _, candidate := range estimate.Components {
+		if candidate.Name != "nodes:"+poolName {
+			continue
+		}
+		if component != nil {
+			return MoneyEstimate{}, ErrInvalid
+		}
+		copyComponent := candidate
+		copyComponent.Name = "nodes"
+		component = &copyComponent
+	}
+	if component == nil {
+		return MoneyEstimate{}, ErrInvalid
+	}
+	return moneyEstimate([]MoneyComponent{*component}, estimate.HorizonSeconds, estimate.CheckedAt)
 }
 
 func prepareTemporaryHoldTx(ctx context.Context, tx driver.Tx, o *ClusterOperation) error {
@@ -757,6 +773,9 @@ func clusterEnvelopeAdmissionDelta(ctx context.Context, tx driver.Tx, o *Cluster
 	}
 	if !capacityFits(covered, requested) {
 		return ResourceVector{}, ErrInvalid
+	}
+	if o.Kind == "node-pool-scaling" {
+		return growth, nil
 	}
 	return addCapacity(positiveCapacityDelta(requested, covered), growth)
 }

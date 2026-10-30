@@ -21,8 +21,9 @@ const (
 )
 
 const (
-	RouteBackendServer     = "server"
-	RouteBackendKubernetes = "kubernetes"
+	RouteBackendServer      = "server"
+	RouteBackendFirecracker = "firecracker"
+	RouteBackendKubernetes  = "kubernetes"
 	// RouteBackendPlatform is a hostname on an app the provider's platform
 	// routes itself, such as DigitalOcean App Platform.
 	RouteBackendPlatform = "platform"

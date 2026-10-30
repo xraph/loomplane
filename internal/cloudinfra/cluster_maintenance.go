@@ -63,7 +63,7 @@ func resolveMaintenanceWindow(w *ClusterMaintenanceWindow) error {
 }
 func maintenanceKind(kind string) bool {
 	switch kind {
-	case "node-pool-create", "node-pool-update", "node-pool-delete", "cluster-upgrade", "cluster-configure":
+	case "node-pool-scaling", "node-pool-create", "node-pool-update", "node-pool-delete", "cluster-upgrade", "cluster-configure":
 		return true
 	}
 	return false
@@ -72,6 +72,8 @@ func maintenanceCapability(kind string) provider.InfrastructureCapability {
 	switch kind {
 	case "node-pool-create":
 		return provider.NodePoolCreation
+	case "node-pool-scaling":
+		return provider.NodePoolAutoscaling
 	case "node-pool-update":
 		return provider.NodePoolUpdate
 	case "node-pool-delete":
@@ -170,6 +172,9 @@ func (s *Service) prepareMaintenance(ctx context.Context, p security.Principal, 
 		m.ObservationDigest = observedDigest
 	} else if m.ObservationDigest != observedDigest {
 		return zero, 0, nil, ErrConflict
+	}
+	if in.Kind == "node-pool-scaling" {
+		return s.prepareScaling(ctx, p, in, reader, access, r, observation)
 	}
 	if m.Window != nil {
 		if checkErr := resolveMaintenanceWindow(m.Window); checkErr != nil {

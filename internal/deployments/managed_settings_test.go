@@ -24,7 +24,7 @@ func TestManagedConnectionAdvertiseHostDefaultsAndOverrides(t *testing.T) {
 				} else {
 					connection.Details["advertise_host"] = advertise
 				}
-				job.Action.Service.BuildTarget.BuilderSettings = planning.ReviewedConnectionSettings(connection.Cloud, connection.Details)
+				job.Action.Service.BuildTarget.BuilderSettings = planning.ReviewedBuildSettings(connection.Cloud, connection.Details)
 				if purpose == "builder" {
 					_, _, client, sessionErr := builder.builderSession(t.Context(), job)
 					if sessionErr != nil {
@@ -59,7 +59,7 @@ func TestManagedConnectionRejectsRecordedIdentityDrift(t *testing.T) {
 					connection.Details = maps.Clone(connection.Details)
 					delete(connection.Details, "advertise_host")
 					connection.Details[key] = value
-					job.Action.Service.BuildTarget.BuilderSettings = planning.ReviewedConnectionSettings(connection.Cloud, connection.Details)
+					job.Action.Service.BuildTarget.BuilderSettings = planning.ReviewedBuildSettings(connection.Cloud, connection.Details)
 					if purpose == "builder" {
 						_, _, client, sessionErr := builder.builderSession(t.Context(), job)
 						if sessionErr == nil {
@@ -90,7 +90,11 @@ func TestManagedConnectionRejectsChangedReviewedSettings(t *testing.T) {
 				if err != nil {
 					t.Fatal(err)
 				}
-				reviewed, _ := json.Marshal(job.Action.Service.BuildTarget.BuilderSettings)
+				settings := job.Action.Service.BuildTarget.BuilderSettings
+				if purpose == "runtime" {
+					settings = planning.ReviewedConnectionSettings(connection.Cloud, connection.Details)
+				}
+				reviewed, _ := json.Marshal(settings)
 				connection.Details = maps.Clone(connection.Details)
 				connection.Details[key] = "changed-since-review"
 				if purpose == "builder" {

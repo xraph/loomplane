@@ -50,7 +50,7 @@ func TestRuntimeRecordsControllerAfterReadiness(t *testing.T) {
 				if fail != "managed" && receipt.ReleaseID != "" {
 					t.Fatal("static receipt changed")
 				}
-				if !ready || !receipt.Valid() || receipt.InstanceID != iid.String() || receipt.DeploymentUID != "controller-uid" || receipt.DeploymentGeneration != 3 || receipt.PlanID != "plan" || receipt.RuntimeRef != "runtime-ref" || receipt.Image != image || receipt.Container != "main" || receipt.ServiceID != "api" || receipt.ServiceAccount != "default" || receipt.ClusterCA != cfg.Details["cluster_ca"] {
+				if (fail != "managed" && !ready) || (fail == "managed" && ready) || !receipt.Valid() || receipt.InstanceID != iid.String() || receipt.DeploymentUID != "controller-uid" || receipt.DeploymentGeneration != 3 || receipt.PlanID != "plan" || receipt.RuntimeRef != "runtime-ref" || receipt.Image != image || receipt.Container != "main" || receipt.ServiceID != "api" || receipt.ServiceAccount != "default" || receipt.ClusterCA != cfg.Details["cluster_ca"] {
 					t.Fatalf("incorrect receipt: %+v", receipt)
 				}
 				if fail == "record" {

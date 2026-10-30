@@ -1985,6 +1985,9 @@
           "owner": {
             "type": "string"
           },
+          "proxied": {
+            "type": "boolean"
+          },
           "ttl": {
             "type": "integer"
           },

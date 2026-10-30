@@ -198,7 +198,7 @@ func clusterDigest(in ClusterInput) string {
 }
 
 func (s *Service) PreviewCluster(ctx context.Context, p security.Principal, cloud string, in ClusterInput) (*ClusterOperation, error) {
-	if in.PriceDigest != "" || in.BudgetReview != nil || in.EnvelopeReview != nil {
+	if in.PriceDigest != "" || in.BudgetReview != nil || in.EnvelopeReview != nil || in.ScalingObservation != nil || in.Scaling != nil && in.Kind != "node-pool-scaling" {
 		return nil, ErrInvalid
 	}
 	if err := s.clusterEnabled(); err != nil {
@@ -236,7 +236,7 @@ func (s *Service) PreviewCluster(ctx context.Context, p security.Principal, clou
 		}
 		in.Retirement.Inventory = review.Inventory
 		in.Retirement.ResourceFingerprint = review.ResourceFingerprint
-	case "node-pool-create", "node-pool-update", "node-pool-delete", "cluster-upgrade", "cluster-configure":
+	case "node-pool-scaling", "node-pool-create", "node-pool-update", "node-pool-delete", "cluster-upgrade", "cluster-configure":
 		if in.Maintenance != nil && (in.Maintenance.ObservationDigest != "" || in.Maintenance.Pool != nil && (in.Maintenance.Pool.OperationID != "" || in.Maintenance.Pool.RequestDigest != "")) {
 			return nil, ErrInvalid
 		}
@@ -336,6 +336,11 @@ func (s *Service) PreviewCluster(ctx context.Context, p security.Principal, clou
 				o.Steps = append(o.Steps, ClusterStep{Name: obj.Kind + "/" + obj.Namespace + "/" + obj.Name, State: "pending", RequestDigest: digest})
 			}
 			o.Steps = append(o.Steps, ClusterStep{Name: "vault", State: "pending", RequestDigest: digest})
+		}
+	}
+	if o.CapacityTarget.Servers > 0 {
+		if checkErr := s.refreshBudgetPrices(ctx, p, cloud); checkErr != nil {
+			return nil, checkErr
 		}
 	}
 	if checkErr := s.Clusters.CreateClusterPreview(ctx, o); checkErr != nil {

@@ -26,11 +26,16 @@ var namespaceRE = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
 // Config keeps credentials in REST only. Details contains safe display fields.
 type Config struct {
 	// ManagedWorkload is set only after resolving a persisted managed attachment.
-	ManagedWorkload bool
-	REST            *rest.Config
-	Namespace       string
-	Context         string
-	Details         map[string]string
+	ManagedWorkload    bool
+	ManagedProfile     ManagedRuntimeProfile
+	ManagedIdentity    ManagedRuntimeIdentity
+	ManagedLegacyGuard ManagedLegacyGuard
+	ManagedJournal     ManagedJournal
+	ManagedScope       ManagedScope
+	REST               *rest.Config
+	Namespace          string
+	Context            string
+	Details            map[string]string
 }
 
 // ParseConfig accepts embedded credentials only, with no ambient loading
@@ -127,6 +132,9 @@ func ParseConfig(raw []byte, settings map[string]string) (*Config, error) {
 func configFor(rc *rest.Config, contextName, namespace string, caData []byte, settings map[string]string) (*Config, error) {
 	ca := sha256.Sum256(caData)
 	details := map[string]string{"endpoint": rc.Host, "namespace": namespace, "context": contextName, "cluster_ca": hex.EncodeToString(ca[:])}
+	if err := buildIsolationSettings(settings, details); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
 	if architecture := strings.TrimSpace(settings["architecture"]); architecture != "" {
 		if architecture != "amd64" && architecture != "arm64" {
 			return nil, fmt.Errorf("%w: architecture must be amd64 or arm64", ErrInvalid)
@@ -190,4 +198,8 @@ func configFor(rc *rest.Config, contextName, namespace string, caData []byte, se
 		}
 	}
 	return &Config{REST: rc, Namespace: namespace, Context: contextName, Details: details}, nil
+}
+
+func (c *Config) journalRequired() bool {
+	return c.ManagedWorkload && c.ManagedProfile != ManagedProfileLegacy
 }

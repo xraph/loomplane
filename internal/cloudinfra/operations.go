@@ -208,6 +208,11 @@ func (s *Service) PreviewServer(ctx context.Context, p security.Principal, cloud
 			}
 		}
 	}
+	if o.Input.Kind == "create" || o.Input.Kind == "resize" {
+		if checkErr := s.refreshBudgetPrices(ctx, p, cloud); checkErr != nil {
+			return nil, checkErr
+		}
+	}
 	if checkErr := s.Store.CreatePreview(ctx, o); checkErr != nil {
 		return nil, checkErr
 	}
@@ -247,6 +252,9 @@ func priceServer(v *Server, o *Operation) {
 	v.HourlyUSD = o.EstimatedHourlyUSD
 	v.HourlyPriceKnown = o.HourlyPriceKnown
 	v.PricedSize = o.Input.Size
+	if o.MoneyEstimate != nil {
+		v.PriceCheckedAt = o.MoneyEstimate.CheckedAt
+	}
 }
 
 func cloneAccelerator(a *provider.Accelerator) *provider.Accelerator {
@@ -325,6 +333,11 @@ func (s *Service) ApplyServerOperation(ctx context.Context, p security.Principal
 	o.Status = "pending"
 	o.Attempt = 1
 	o.UpdatedAt = s.now().UTC()
+	if o.Input.Kind == "create" || o.Input.Kind == "resize" {
+		if checkErr := s.refreshBudgetPrices(ctx, p, cloud); checkErr != nil {
+			return nil, checkErr
+		}
+	}
 	if checkErr := s.Store.Accept(ctx, o); checkErr != nil {
 		return nil, checkErr
 	}
@@ -478,6 +491,11 @@ func (s *Service) execute(ctx context.Context, o *Operation) error {
 		}
 	}
 	if !o.Attempted {
+		if o.Input.Kind == "create" || o.Input.Kind == "resize" {
+			if checkErr := s.refreshBudgetPrices(ctx, o.Principal, o.CloudID); checkErr != nil {
+				return checkErr
+			}
+		}
 		if capacity, ok := s.Store.(interface {
 			EnsureInfrastructureCapacity(context.Context, *Operation) error
 		}); ok {

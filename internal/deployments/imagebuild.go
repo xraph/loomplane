@@ -17,9 +17,11 @@ import (
 
 	"go.jetify.com/typeid/v2"
 
+	"github.com/xraph/loomplane/internal/buildpolicy"
 	"github.com/xraph/loomplane/internal/clouds/registry"
 	"github.com/xraph/loomplane/internal/clouds/server"
 	"github.com/xraph/loomplane/internal/connections"
+	fc "github.com/xraph/loomplane/internal/firecracker"
 	"github.com/xraph/loomplane/internal/planning"
 )
 
@@ -84,7 +86,8 @@ type ImageArtifact struct {
 }
 
 type ImageBuilder struct {
-	Dial func(context.Context, *server.Config) (*server.Client, error)
+	FirecrackerAuthority fc.Issuer
+	Dial                 func(context.Context, *server.Config) (*server.Client, error)
 }
 
 func (b *ImageBuilder) connection(ctx context.Context, job *Job, id, cloud string, settings map[string]string, pull bool) (*connections.Connection, []byte, error) {
@@ -98,7 +101,7 @@ func (b *ImageBuilder) connection(ctx context.Context, job *Job, id, cloud strin
 	if c == nil || c.ID != id || c.OrgID != job.Deployment.OrgID || c.Cloud != cloud || (c.Status != connections.StatusReady && (!pull || !connections.RegistryPullReady(c))) {
 		return nil, nil, errors.New("the reviewed build connection is not ready in this organization")
 	}
-	if !reflect.DeepEqual(settings, planning.ReviewedConnectionSettings(c.Cloud, c.Details)) {
+	if !reflect.DeepEqual(settings, planning.ReviewedBuildSettings(c.Cloud, c.Details)) {
 		return nil, nil, errors.New("build connection settings changed since review; plan again")
 	}
 	return c, raw, nil
@@ -165,6 +168,9 @@ func (b *ImageBuilder) Build(ctx context.Context, job *Job, state *ImageArtifact
 			return "", saveErr
 		}
 		return state.Reference, nil
+	}
+	if target.BuilderCloud == connections.Firecracker {
+		return b.buildInFirecracker(ctx, job, state, save, registryConfig)
 	}
 	if job.SourceID == "" || job.Source == nil {
 		return "", errors.New("the approved source artifact is missing")
@@ -379,6 +385,18 @@ func (b *ImageBuilder) builderSession(ctx context.Context, job *Job) (*connectio
 	if err != nil {
 		return nil, nil, nil, err
 	}
+	pooled := false
+	if reader, ok := job.BuildCredentials.(interface {
+		BuildWorkerShared(context.Context, string, string) (bool, error)
+	}); ok {
+		pooled, err = reader.BuildWorkerShared(ctx, job.Deployment.OrgID, builder.ID)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+	}
+	if checkErr := buildpolicy.Check(builder.Details, false, pooled); checkErr != nil {
+		return nil, nil, nil, checkErr
+	}
 	config, err := server.ParseConfig(raw, builder.Details)
 	if err != nil {
 		return nil, nil, nil, err
@@ -393,7 +411,7 @@ func (b *ImageBuilder) builderSession(ctx context.Context, job *Job) (*connectio
 		return nil, nil, nil, err
 	}
 	details, missing, err := client.Check(ctx)
-	if err != nil || len(missing) > 0 || !reflect.DeepEqual(planning.ReviewedConnectionSettings(connections.Server, recorded), planning.ReviewedConnectionSettings(connections.Server, details)) {
+	if err != nil || len(missing) > 0 || !reflect.DeepEqual(planning.ReviewedBuildSettings(connections.Server, recorded), planning.ReviewedBuildSettings(connections.Server, details)) {
 		_ = client.Close()
 		return nil, nil, nil, errors.New("the builder identity or Docker capabilities changed; restore the recorded connection")
 	}

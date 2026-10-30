@@ -22,7 +22,7 @@ import (
 func managedRegistryFixture(t *testing.T) *Client {
 	t.Helper()
 	c := fakeRouteClient(t, &storagev1.StorageClass{ObjectMeta: metav1.ObjectMeta{Name: "retained", UID: "storage-uid"}, Provisioner: "test.csi", ReclaimPolicy: ptr.To(corev1.PersistentVolumeReclaimRetain), VolumeBindingMode: ptr.To(storagev1.VolumeBindingWaitForFirstConsumer)})
-	c.Config.Details = map[string]string{"registry_hostname": "images.example.com", "namespace_uid": "namespace-uid", "storage_class": "retained", "storage_class_uid": "storage-uid", "architecture": "amd64", "managed_builds": "ready", "ingress_class": "nginx"}
+	c.Config.Details = map[string]string{"build_workers": "dedicated", "registry_hostname": "images.example.com", "namespace_uid": "namespace-uid", "storage_class": "retained", "storage_class_uid": "storage-uid", "architecture": "amd64", "managed_builds": "ready", "ingress_class": "nginx"}
 	return c
 }
 

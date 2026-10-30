@@ -265,7 +265,7 @@ func (s *Service) PreviewRoute(ctx context.Context, p security.Principal, projec
 		if checkErr := checkPlatformRoute(in); checkErr != nil {
 			return nil, checkErr
 		}
-	case in.CloudID == "" && backend != RouteBackendKubernetes:
+	case in.CloudID == "" && backend == RouteBackendServer:
 		return nil, fmt.Errorf("%w: %s", ErrInvalid, noCloudPlacement)
 	}
 	id, err := randomID("route")
@@ -321,6 +321,8 @@ const errUnpublishedProxyImage = wildcardRefusalError("Wildcard routes on server
 // still on the stock image restarts on the DNS-capable one.
 func (s *Service) wildcardNotices(ctx context.Context, st DomainStore, route Route) ([]string, error) {
 	switch route.Binding.BackendName() {
+	case RouteBackendFirecracker:
+		return nil, fmt.Errorf("%w: Firecracker managed TLS requires an exact hostname", ErrInvalid)
 	case RouteBackendKubernetes:
 		// The cluster's DNS-01 Issuer is added on apply; nothing restarts.
 		return nil, nil

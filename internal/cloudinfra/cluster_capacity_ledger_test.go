@@ -58,7 +58,7 @@ func TestClusterEnvelopeReviewPinsMaximum(t *testing.T) {
 }
 
 func TestClusterBudgetAutomaticUnknownWithoutPolicy(t *testing.T) {
-	o := &ClusterOperation{Input: ClusterInput{EnvelopeReview: &ClusterEnvelopeReview{Automatic: true}}}
+	o := &ClusterOperation{Input: ClusterInput{AcknowledgeUnknownCosts: true, EnvelopeReview: &ClusterEnvelopeReview{Automatic: true}}}
 	if checkAutomaticEnvelopePrices(o) == nil {
 		t.Fatal("missing budget policy authorized unknown automatic cost")
 	}

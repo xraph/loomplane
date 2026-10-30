@@ -14,8 +14,14 @@ func TestCanaryReleasesMigration(t *testing.T) {
 	ctx := t.Context()
 	// Everything else goes first, so canary_releases is the last one applied
 	// and one rollback undoes exactly it, whatever sorts after it.
-	others := migrate.NewGroup(GroupName)
+	historical := migrate.NewGroup(GroupName)
 	for _, step := range Group().Migrations() {
+		if step.Name != "managed_workload_protocol" {
+			historical.MustRegister(step)
+		}
+	}
+	others := migrate.NewGroup(GroupName)
+	for _, step := range historical.Migrations() {
 		if step.Name != "canary_releases" {
 			others.MustRegister(step)
 		}
@@ -23,7 +29,7 @@ func TestCanaryReleasesMigration(t *testing.T) {
 	if _, err := migrate.NewOrchestrator(ex, others).Migrate(ctx); err != nil {
 		t.Fatalf("up others: %v", err)
 	}
-	o := migrate.NewOrchestrator(ex, Group())
+	o := migrate.NewOrchestrator(ex, historical)
 	if _, err := o.Migrate(ctx); err != nil {
 		t.Fatalf("up: %v", err)
 	}

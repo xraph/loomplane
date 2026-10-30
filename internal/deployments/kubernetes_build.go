@@ -37,7 +37,7 @@ func (b *ImageBuilder) buildInKubernetesLocked(ctx context.Context, job *Job, st
 	cfg := job.Action.Service
 	collector := job.Collector("kubernetes-build", job.LogAttempt())
 	defer func() { err = collector.safeError(err) }()
-	connection, raw, err := b.connection(ctx, job, cfg.Target, connections.Kubernetes, cfg.TargetSettings, false)
+	connection, raw, err := b.connection(ctx, job, cfg.Target, connections.Kubernetes, cfg.BuildTarget.BuilderSettings, false)
 	if err != nil {
 		return "", err
 	}
@@ -54,7 +54,7 @@ func (b *ImageBuilder) buildInKubernetesLocked(ctx context.Context, job *Job, st
 	if err != nil {
 		return "", err
 	}
-	if len(checked.Missing) != 0 || checked.Details["managed_builds"] != "ready" || !reflect.DeepEqual(planning.ReviewedConnectionSettings(connections.Kubernetes, checked.Details), cfg.TargetSettings) {
+	if len(checked.Missing) != 0 || checked.Details["managed_builds"] != "ready" || !reflect.DeepEqual(planning.ReviewedBuildSettings(connections.Kubernetes, checked.Details), cfg.BuildTarget.BuilderSettings) {
 		return "", errors.New("the cluster identity or managed build setup changed; check the connection and plan again")
 	}
 	client.Config.Details = checked.Details

@@ -770,9 +770,9 @@ func TestCanaryActivitiesNeedACanaryDeployer(t *testing.T) {
 // routedWorkflows has an engine for DeploymentBuild and a worker for each
 // later build, all on one store.
 type routedWorkflows struct {
-	store  *memory.Store
-	d      *Deployments
-	w3, w4 *drt.Worker
+	store      *memory.Store
+	d          *Deployments
+	w3, w4, w5 *drt.Worker
 }
 
 func newRoutedWorkflows(t *testing.T) *routedWorkflows {
@@ -793,6 +793,10 @@ func newRoutedWorkflows(t *testing.T) *routedWorkflows {
 	if r.w4, err = drt.NewWorker(r.store, r.d.CanaryOptions("v4", 1)); err != nil {
 		t.Fatal(err)
 	}
+	if r.w5, err = drt.NewWorker(r.store, r.d.ManagedWorkloadOptions("v5", 1)); err != nil {
+		t.Fatal(err)
+	}
+	r.d.BindWorker(ManagedWorkloadBuild, r.w5)
 	r.d.BindWorker(CanaryBuild, r.w4)
 	r.d.BindWorker(CapacityBuild, r.w3)
 	return r

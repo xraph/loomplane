@@ -148,7 +148,7 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 	if err != nil {
 		return nil, err
 	}
-	c, err := r.Session(ctx, owned.ForOperation(labels, "apply"))
+	c, err := r.session(ctx, iid, owned.ForOperation(labels, "apply"))
 	if err != nil {
 		return nil, err
 	}
@@ -165,7 +165,9 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 	}
 	mutated := false
 	defer func() {
-		if err == nil || !mutated {
+		// Managed rollback needs separate cleanup authority. Keep its accepted
+		// and uncertain effects for that protocol instead of replaying snapshots.
+		if err == nil || !mutated || c.Config.journalRequired() {
 			return
 		}
 		rollback, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
@@ -230,7 +232,7 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 		return nil, err
 	}
 	template.Labels = maps.Clone(identity)
-	if c.Config.ManagedWorkload {
+	if c.Config.journalRequired() {
 		release := WorkloadReleaseID(labels[owned.LabelRuntime], labels[owned.LabelRevision])
 		if release == "" {
 			return nil, ErrOwned
@@ -294,6 +296,11 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 	if err != nil {
 		return nil, err
 	}
+	if c.Config.journalRequired() {
+		if recordErr := r.recordController(ctx, c, iid, spec, labels, deployment); recordErr != nil {
+			return nil, recordErr
+		}
+	}
 	if labels[owned.LabelPublic] == "true" {
 		if len(servicePorts) == 0 || labels[owned.LabelHostname] == "" {
 			return nil, errors.New("a public Kubernetes service needs a hostname and port")
@@ -351,8 +358,10 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 	if checkErr := wait(ctx, c, name); checkErr != nil {
 		return nil, checkErr
 	}
-	if recordErr := r.recordController(ctx, c, iid, spec, labels, deployment); recordErr != nil {
-		return nil, recordErr
+	if !c.Config.journalRequired() {
+		if recordErr := r.recordController(ctx, c, iid, spec, labels, deployment); recordErr != nil {
+			return nil, recordErr
+		}
 	}
 	if dropErr := r.dropAccess(ctx, c, iid, labels); dropErr != nil {
 		return nil, dropErr
@@ -422,7 +431,7 @@ func deploymentReady(d *appsv1.Deployment) bool {
 }
 
 func (r *Runtime) Status(ctx context.Context, iid id.ID, labels map[string]string) (*cpprovider.InstanceStatus, error) {
-	c, err := r.Session(ctx, owned.ForOperation(labels, "read"))
+	c, err := r.session(ctx, iid, owned.ForOperation(labels, "read"))
 	if err != nil {
 		return nil, err
 	}
@@ -460,7 +469,7 @@ func (r *Runtime) Status(ctx context.Context, iid id.ID, labels map[string]strin
 }
 
 func (r *Runtime) Remove(ctx context.Context, iid id.ID, labels map[string]string) error {
-	c, err := r.Session(ctx, owned.ForOperation(labels, "remove"))
+	c, err := r.session(ctx, iid, owned.ForOperation(labels, "remove"))
 	if err != nil {
 		return err
 	}
@@ -538,7 +547,7 @@ func (r *Runtime) SetRunning(ctx context.Context, iid id.ID, labels map[string]s
 	if running {
 		operation = "start"
 	}
-	c, err := r.Session(ctx, owned.ForOperation(labels, operation))
+	c, err := r.session(ctx, iid, owned.ForOperation(labels, operation))
 	if err != nil {
 		return err
 	}
@@ -581,7 +590,7 @@ func (r *Runtime) Scale(ctx context.Context, iid id.ID, labels map[string]string
 	if spec.Replicas < 0 || spec.Replicas > 10000 {
 		return errors.New("invalid Kubernetes replica count")
 	}
-	c, err := r.Session(ctx, owned.ForOperation(labels, "scale"))
+	c, err := r.session(ctx, iid, owned.ForOperation(labels, "scale"))
 	if err != nil {
 		return err
 	}
@@ -810,4 +819,10 @@ func runtimeAutoscaler(iid id.ID, labels map[string]string, ns string) (*autosca
 	minimum, utilization := int32(minCount), int32(80)
 	hpa := &autoscalingv2.HorizontalPodAutoscaler{ObjectMeta: metav1.ObjectMeta{Name: WorkloadName(iid), Namespace: ns, Labels: objectLabels(iid, labels)}, Spec: autoscalingv2.HorizontalPodAutoscalerSpec{ScaleTargetRef: autoscalingv2.CrossVersionObjectReference{APIVersion: "apps/v1", Kind: "Deployment", Name: WorkloadName(iid)}, MinReplicas: &minimum, MaxReplicas: int32(maxCount), Metrics: []autoscalingv2.MetricSpec{{Type: autoscalingv2.ResourceMetricSourceType, Resource: &autoscalingv2.ResourceMetricSource{Name: corev1.ResourceCPU, Target: autoscalingv2.MetricTarget{Type: autoscalingv2.UtilizationMetricType, AverageUtilization: &utilization}}}}}}
 	return hpa, nil
+}
+
+func (r *Runtime) session(ctx context.Context, iid id.ID, labels map[string]string) (*Client, error) {
+	labels = maps.Clone(labels)
+	labels[owned.LabelInstance] = iid.String()
+	return r.Session(ctx, labels)
 }

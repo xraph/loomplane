@@ -22,6 +22,7 @@ import (
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/utils/ptr"
 
+	"github.com/xraph/loomplane/internal/buildpolicy"
 	"github.com/xraph/loomplane/internal/clouds/owned"
 )
 
@@ -127,6 +128,12 @@ func (c *Client) checkManagedBuildPermissions(ctx context.Context, out *Result) 
 		}
 	}
 	out.Details["managed_builds"] = "ready"
+	if policyErr := buildpolicy.Check(out.Details, true, false); policyErr != nil {
+		out.Details["managed_builds"] = "unavailable"
+		if out.Details["build_isolation_error"] == "" {
+			out.Details["build_isolation_error"] = policyErr.Error()
+		}
+	}
 	if len(missing) > 0 {
 		out.Details["managed_builds"] = "unavailable"
 		out.Missing = append(out.Missing, missing...)

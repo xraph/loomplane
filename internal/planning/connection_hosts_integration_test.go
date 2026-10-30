@@ -15,6 +15,7 @@ import (
 	"github.com/xraph/grove/drivers/pgdriver"
 
 	"github.com/xraph/loomplane/database/migrations"
+	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/ops"
 )
 
@@ -104,6 +105,17 @@ func TestPgStore_connectionHosts(t *testing.T) {
 	}
 	if !reflect.DeepEqual(hosts, want) {
 		t.Fatalf("hosts: %+v", hosts)
+	}
+	buildStore := connections.NewPgStore(pg)
+	for _, id := range []string{"direct", "elsewhere", "shared", "pool-runtime", "gone", "cluster"} {
+		shared, checkErr := buildStore.BuildWorkerShared(ctx, "org", id)
+		if checkErr != nil || shared != want[id].Pooled {
+			t.Fatalf("build worker %s: %v %v", id, shared, checkErr)
+		}
+		foreign, checkErr := buildStore.BuildWorkerShared(ctx, "org-2", id)
+		if checkErr != nil || foreign {
+			t.Fatalf("foreign build worker %s: %v %v", id, foreign, checkErr)
+		}
 	}
 	pooled, err := store.PooledConnections(ctx, "org")
 	if err != nil {

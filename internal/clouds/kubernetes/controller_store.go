@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/xraph/grove/drivers/pgdriver"
@@ -11,7 +12,10 @@ import (
 
 var ErrControllerMissing = errors.New("no trusted Kubernetes controller receipt")
 
-type ControllerStore struct{ db *pgdriver.PgDB }
+type ControllerStore struct {
+	db              *pgdriver.PgDB
+	capacityEnabled bool
+}
 
 func NewControllerStore(db *pgdriver.PgDB) *ControllerStore { return &ControllerStore{db: db} }
 
@@ -31,6 +35,30 @@ func (s *ControllerStore) RecordController(ctx context.Context, r ControllerRece
 			err = errors.Join(err, rollbackErr)
 		}
 	}()
+	if checkErr := lockManagedOrganization(ctx, tx, r.OrgID); checkErr != nil {
+		return checkErr
+	}
+	if r.ReleaseID != "" {
+		scope, ok := ctx.Value(managedScopeKey{}).(ManagedScope)
+		if !ok || scope.Release != r.ReleaseID || scope.Instance != r.InstanceID || scope.RuntimeRef != r.RuntimeRef || scope.RuntimeRevision != r.RuntimeRevision || scope.Org != r.OrgID || scope.Connection != r.ConnectionID || scope.Project != r.ProjectID || scope.Environment != r.EnvironmentID || scope.Service != r.ServiceID || scope.Plan != r.PlanID || scope.Namespace != r.Namespace || scope.NamespaceUID != r.NamespaceUID || scope.ClusterCA != r.ClusterCA {
+			return ErrManagedAuthority
+		}
+		if checkErr := lockManagedOrganization(ctx, tx, scope.Org); checkErr != nil {
+			return checkErr
+		}
+		if checkErr := guardManagedScope(ctx, tx, scope); checkErr != nil {
+			return checkErr
+		}
+		rawScope, marshalErr := json.Marshal(scope)
+		if marshalErr != nil {
+			return marshalErr
+		}
+		var current bool
+		err = tx.QueryRow(ctx, `SELECT true FROM loomplane_managed_workload_authority a WHERE a.org_id=$1 AND a.release_id=$2 AND a.epoch=$3 AND a.body=$4 AND a.revoked_at IS NULL AND EXISTS(SELECT 1 FROM loomplane_managed_workload_issuances i WHERE i.org_id=a.org_id AND i.release_id=a.release_id AND i.epoch=a.epoch AND i.scope=a.body AND i.request->>'Resource'='deployments' AND i.outcome->>'State'='accepted' AND i.outcome->>'UID'=$5 AND i.outcome->>'Generation'=$6) FOR UPDATE OF a`, scope.Org, scope.Release, scope.Epoch, rawScope, r.DeploymentUID, strconv.FormatInt(r.DeploymentGeneration, 10)).Scan(&current)
+		if err != nil || !current {
+			return errors.Join(ErrManagedAuthority, err)
+		}
+	}
 	var details []byte
 	if readErr := tx.QueryRow(ctx, `SELECT c.details FROM loomplane_cloud_connections c JOIN loomplane_environments e ON e.org_id=c.org_id WHERE c.org_id=$1 AND c.id=$2 AND c.cloud='kubernetes' AND c.status='ready' AND e.project_id=$3 AND e.id=$4 FOR SHARE OF c,e`, r.OrgID, r.ConnectionID, r.ProjectID, r.EnvironmentID).Scan(&details); readErr != nil {
 		return readErr
@@ -38,6 +66,11 @@ func (s *ControllerStore) RecordController(ctx context.Context, r ControllerRece
 	var identity map[string]string
 	if json.Unmarshal(details, &identity) != nil || identity["cluster_ca"] != r.ClusterCA || identity["namespace_uid"] != r.NamespaceUID || identity["namespace"] != r.Namespace {
 		return ErrOwned
+	}
+	if identity["managed_attachment_id"] != "" && r.ReleaseID == "" {
+		if checkErr := s.checkLegacyManagedWrite(ctx, tx, runtimeIdentityForReceipt(r)); checkErr != nil {
+			return checkErr
+		}
 	}
 	raw, err := json.Marshal(r)
 	if err != nil {

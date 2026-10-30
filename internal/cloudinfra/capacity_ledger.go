@@ -24,6 +24,7 @@ func (e *CapacityAdmissionError) Error() string {
 }
 
 type infrastructureReservation struct {
+	LegacyAttempt      bool           `json:"legacy_attempt,omitempty"`
 	ClusterOperationID string         `json:"cluster_operation_id,omitempty"`
 	ManagedResourceID  string         `json:"managed_resource_id,omitempty"`
 	OperationID        string         `json:"operation_id"`

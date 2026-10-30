@@ -84,7 +84,7 @@ func (s *Service) reconcileClusterMaintenance(ctx context.Context, o *ClusterOpe
 		if err != nil {
 			return s.clusterWait(ctx, o, err)
 		}
-		if receipt.Ref != o.Input.Ref || receipt.Kind != o.Kind || o.Kind == "node-pool-create" && (receipt.PoolID == "" || receipt.OperationID != o.ID) || (o.Kind == "node-pool-update" || o.Kind == "node-pool-delete") && receipt.PoolID != m.PoolID {
+		if receipt.Ref != o.Input.Ref || receipt.Kind != o.Kind || o.Kind == "node-pool-create" && (receipt.PoolID == "" || receipt.OperationID != o.ID) || (o.Kind == "node-pool-update" || o.Kind == "node-pool-delete" || o.Kind == "node-pool-scaling") && receipt.PoolID != m.PoolID {
 			return s.clusterAttention(ctx, o, "Maintenance receipt identity changed.")
 		}
 		receipt.OperationID = o.ID
@@ -119,6 +119,16 @@ func (s *Service) reconcileClusterMaintenance(ctx context.Context, o *ClusterOpe
 			r.LifecycleAuthority = append(r.LifecycleAuthority, capability)
 		}
 	}
+	if o.Kind == "node-pool-scaling" {
+		policy := *o.Input.Scaling
+		policy.OperationID = o.ID
+		policy.Revoked = policy.Mode == "manual"
+		policy.UpdatedAt = s.now().UTC()
+		if r.ScalingPolicies == nil {
+			r.ScalingPolicies = map[string]ClusterScalingPolicy{}
+		}
+		r.ScalingPolicies[policy.PoolID] = policy
+	}
 	o.ResourceID = r.ID
 	o.Status = "succeeded"
 	if o.CancelRequested {
@@ -144,6 +154,12 @@ func executeClusterMaintenance(ctx context.Context, reader provider.ClusterReade
 		return provider.ClusterMutation{}, ErrInvalid
 	}
 	switch in.Kind {
+	case "node-pool-scaling":
+		adapter, ok := reader.(provider.NodePoolScalingManager)
+		if !ok || in.Scaling == nil {
+			return provider.ClusterMutation{}, ErrInvalid
+		}
+		return adapter.UpdateNodePoolScaling(ctx, access, in.Ref, in.Scaling.PoolID, provider.NodePoolScaling{Native: in.Scaling.Mode == "native", Min: in.Scaling.MinNodes, Max: in.Scaling.MaxNodes})
 	case "cluster-upgrade", "cluster-configure":
 		adapter, ok := reader.(provider.ClusterMaintainer)
 		if !ok {
@@ -175,6 +191,8 @@ func maintenanceConverged(o *ClusterOperation, observation provider.ClusterObser
 	}
 	m := o.Input.Maintenance
 	switch o.Kind {
+	case "node-pool-scaling":
+		return scalingConverged(o.Input.Scaling, observation)
 	case "cluster-upgrade":
 		return observation.Version == m.Version
 	case "cluster-configure":

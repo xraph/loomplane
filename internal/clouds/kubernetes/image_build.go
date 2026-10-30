@@ -34,7 +34,7 @@ type ClusterImageBuild struct {
 	Source                                        io.Reader
 }
 
-// ClusterBuilder runs one isolated rootless BuildKit pod per build attempt.
+// ClusterBuilder runs one rootless BuildKit pod per attempt, with Kata when selected.
 type ClusterBuilder struct {
 	Client *Client
 	Exec   func(context.Context, *Client, *corev1.Pod, []string, io.Reader, io.Writer, string) error
@@ -44,6 +44,9 @@ func (b *ClusterBuilder) Build(ctx context.Context, in ClusterImageBuild, regist
 	c := b.Client
 	if c == nil || in.Operation == "" || in.Source == nil || in.Dockerfile != ".loomplane-build/Dockerfile" || registry == nil || !strings.HasPrefix(in.Image, registry.Host+"/loomplane/") || !buildImageName.MatchString(in.Image) {
 		return "", errors.New("invalid reviewed Kubernetes build inputs")
+	}
+	if checkErr := c.verifyBuildIsolation(ctx); checkErr != nil {
+		return "", checkErr
 	}
 	architecture := c.Config.Details["architecture"]
 	if architecture != "amd64" && architecture != "arm64" {
@@ -96,6 +99,9 @@ func (b *ClusterBuilder) Build(ctx context.Context, in ClusterImageBuild, regist
 				Resources:       corev1.ResourceRequirements{Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("500m"), corev1.ResourceMemory: resource.MustParse("512Mi")}, Limits: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("2"), corev1.ResourceMemory: resource.MustParse("4Gi"), corev1.ResourceEphemeralStorage: resource.MustParse("20Gi")}},
 				VolumeMounts:    []corev1.VolumeMount{{Name: "source", MountPath: "/workspace"}, {Name: "state", MountPath: "/home/user/.local/share/buildkit"}, {Name: "registry", MountPath: "/registry", ReadOnly: true}}}},
 			Volumes: []corev1.Volume{{Name: "source", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{SizeLimit: ptr.To(resource.MustParse("2Gi"))}}}, {Name: "state", VolumeSource: corev1.VolumeSource{EmptyDir: &corev1.EmptyDirVolumeSource{SizeLimit: ptr.To(resource.MustParse("18Gi"))}}}, {Name: "registry", VolumeSource: corev1.VolumeSource{Secret: &corev1.SecretVolumeSource{SecretName: registry.Name + "-auth", Items: []corev1.KeyToPath{{Key: "config.json", Path: "config.json"}}, DefaultMode: ptr.To(int32(0o440))}}}}}}
+	if class := c.Config.Details["build_runtime_class"]; class != "" {
+		pod.Spec.RuntimeClassName = ptr.To(class)
+	}
 	job := &batchv1.Job{ObjectMeta: pod.ObjectMeta, Spec: batchv1.JobSpec{BackoffLimit: ptr.To(int32(0)), ActiveDeadlineSeconds: ptr.To(int64(1800)), TTLSecondsAfterFinished: ptr.To(int32(3600)), Template: corev1.PodTemplateSpec{ObjectMeta: pod.ObjectMeta, Spec: pod.Spec}}}
 	job, err = jobs.Create(ctx, job, metav1.CreateOptions{})
 	if err != nil {
@@ -137,12 +143,18 @@ func (b *ClusterBuilder) Build(ctx context.Context, in ClusterImageBuild, regist
 				return false, errors.New("the build pod stopped before accepting source")
 			}
 			if current.Status.Phase == corev1.PodRunning {
+				if ptr.Deref(current.Spec.RuntimeClassName, "") != c.Config.Details["build_runtime_class"] || current.Spec.HostNetwork || current.Spec.HostPID || current.Spec.HostIPC {
+					return false, errors.New("the admitted build pod changed its isolation settings")
+				}
 				pod = current
 				return true, nil
 			}
 		}
 		return false, nil
 	}); checkErr != nil {
+		return "", checkErr
+	}
+	if checkErr := c.verifyBuildIsolation(ctx); checkErr != nil {
 		return "", checkErr
 	}
 	exec := b.Exec

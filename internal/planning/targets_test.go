@@ -39,6 +39,14 @@ func infrastructureProviders(t *testing.T) *provider.Registry {
 
 func infrastructureConnection(t *testing.T, id, cloud string, details map[string]string) ConnectionOption {
 	t.Helper()
+	if cloud == "server" || cloud == "kubernetes" {
+		if details == nil {
+			details = map[string]string{}
+		}
+		if _, ok := details["build_workers"]; !ok {
+			details["build_workers"] = "dedicated"
+		}
+	}
 	data, err := json.Marshal(map[string]any{"ID": id, "Name": id, "Cloud": cloud, "Ready": true, "Details": details})
 	if err != nil {
 		t.Fatal(err)

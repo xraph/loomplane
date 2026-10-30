@@ -28,7 +28,7 @@ func checkBudgetReview(p *CapacityPolicy, saved, current *BudgetReview, acknowle
 	if p.Budget == nil {
 		return nil
 	}
-	if saved == nil || current == nil || saved.PolicyRevision != p.Revision || saved.Digest != current.Digest || !freshCapacity(current.Estimate.CheckedAt, time.Now()) {
+	if saved == nil || current == nil || saved.PolicyRevision != p.Revision || saved.Digest != current.Digest || !freshPrice(current.Estimate.CheckedAt, time.Now()) {
 		return ErrConflict
 	}
 	if !current.Estimate.Known && !acknowledge {
@@ -47,10 +47,25 @@ func scopedBudgetReviewTx(ctx context.Context, tx driver.Tx, org, cloud, provide
 		return nil, nil
 	}
 	now := time.Now().UTC()
+	prices, priceErr := budgetPricesTx(ctx, tx, org, cloud)
+	if priceErr != nil {
+		return nil, priceErr
+	}
 	components := []MoneyComponent{}
+	oldest := now
+	stalePrice := false
+	notePrice := func(checked time.Time) {
+		if !freshPrice(checked, now) {
+			stalePrice = true
+		}
+		if checked.Before(oldest) {
+			oldest = checked
+		}
+	}
+
 	addUnknown := func(source string, identity any) {
 		key := budgetIdentity(org, source, identity)
-		components = append(components, MoneyComponent{Name: source + ":" + key, Source: source, Identity: key, Quantity: 1})
+		components = append(components, MoneyComponent{Category: "other", Name: source + ":" + key, Source: source, Identity: key, Quantity: 1})
 	}
 	addEstimate := func(source, id string, estimate *MoneyEstimate) {
 		if estimate == nil {
@@ -58,6 +73,23 @@ func scopedBudgetReviewTx(ctx context.Context, tx driver.Tx, org, cloud, provide
 			return
 		}
 		for _, c := range estimate.Components {
+			checked := estimate.CheckedAt
+			if c.PriceCheckedAt != nil {
+				checked = *c.PriceCheckedAt
+			}
+			category := costCategory(c.Category, c.Name)
+			if category == "nodes" {
+				if fact, ok := prices[c.Identity]; ok && !c.priceProjected {
+					checked = fact.CheckedAt
+					c.HourlyMicroUSD = fact.HourlyMicroUSD
+				}
+				notePrice(checked)
+			}
+			c.PriceCheckedAt = &checked
+			if !freshPrice(checked, now) {
+				c.HourlyMicroUSD = nil
+			}
+			c.Category = costCategory(c.Category, c.Name)
 			key := budgetIdentity(org, source, id, c.Name)
 			c.Name = source + ":" + key
 			c.Source = source
@@ -93,8 +125,23 @@ func scopedBudgetReviewTx(ctx context.Context, tx driver.Tx, org, cloud, provide
 					break
 				}
 			}
-			price := review.Money.HourlyMicroUSD
-			known := review.Money.Known
+			projectedReview, projectionErr := projectNodeMoney(review.Money, prices)
+			if projectionErr != nil {
+				return nil, projectionErr
+			}
+			price := projectedReview.HourlyMicroUSD
+			checked := projectedReview.CheckedAt
+			known := projectedReview.Known
+			if prior != nil {
+				projected, e := projectNodeMoney(*prior, prices)
+				if e != nil {
+					return nil, e
+				}
+				prior = &projected
+				if prior.CheckedAt.Before(checked) {
+					checked = prior.CheckedAt
+				}
+			}
 			if prior != nil {
 				known = known && prior.Known
 				price = max(0, price-prior.HourlyMicroUSD)
@@ -103,7 +150,7 @@ func scopedBudgetReviewTx(ctx context.Context, tx driver.Tx, org, cloud, provide
 			if known {
 				unitPrice = number(price)
 			}
-			copyRequest.Components = append(copyRequest.Components, MoneyComponent{Name: "envelope:" + review.Key, Source: "reviewed_envelope", Identity: review.Money.PriceDigest, Quantity: 1, HourlyMicroUSD: unitPrice})
+			copyRequest.Components = append(copyRequest.Components, MoneyComponent{Category: "nodes", PriceCheckedAt: &checked, Name: "envelope:" + review.Key, Source: "reviewed_envelope", Identity: review.Money.PriceDigest, Quantity: 1, HourlyMicroUSD: unitPrice})
 		}
 		request = &copyRequest
 	}
@@ -123,6 +170,8 @@ func scopedBudgetReviewTx(ctx context.Context, tx driver.Tx, org, cloud, provide
 		}
 		exposure = &a
 	}
+	physicalServers := map[string]bool{}
+	seenServers := map[string]bool{}
 	// Charges follow Cloud attribution across every provider. Retained associated
 	// charges survive a cluster's tombstone.
 	rows, err := tx.Query(ctx, `SELECT body FROM loomplane_cloud_servers WHERE org_id=$1 AND cloud_id=$2 AND status NOT IN ('deleted','disconnected') ORDER BY id`, org, cloud)
@@ -140,9 +189,31 @@ func scopedBudgetReviewTx(ctx context.Context, tx driver.Tx, org, cloud, provide
 			rows.Close()
 			return nil, checkErr
 		}
+		physical := budgetIdentity(server.Provider, server.AccountID, server.ResourceID)
+		if server.ResourceID != "" && seenServers[physical] {
+			addUnknown("node_membership", physical)
+		}
+		if server.ResourceID != "" {
+			seenServers[physical] = true
+		}
 		key := budgetIdentity(org, "observed_server", server.Provider, server.AccountID, server.ResourceID, server.ID)
-		c := MoneyComponent{Name: "observed:" + key, Source: "observed", Identity: key, Quantity: 1}
-		if server.HourlyPriceKnown && server.PricedSize == server.Size {
+		c := MoneyComponent{Category: "nodes", Name: "observed:" + key, Source: "observed", Identity: key, Quantity: 1}
+		// SSH hosts have no authoritative catalog. Keep their cost unavailable,
+		// without assigning a price or a timestamp that implies one was checked.
+		if server.Provider == "server" {
+			components = append(components, c)
+			continue
+		}
+		checked := server.PriceCheckedAt
+		if fact, ok := prices[serverPriceIdentity(&server)]; ok {
+			checked = fact.CheckedAt
+			if freshPrice(checked, now) {
+				c.HourlyMicroUSD = fact.HourlyMicroUSD
+			}
+		}
+		notePrice(checked)
+		c.PriceCheckedAt = &checked
+		if _, current := prices[serverPriceIdentity(&server)]; !current && server.HourlyPriceKnown && server.PricedSize == server.Size && freshPrice(server.PriceCheckedAt, now) {
 			price, e := hourlyMicroUSD(server.HourlyUSD)
 			if e != nil {
 				rows.Close()
@@ -151,6 +222,9 @@ func scopedBudgetReviewTx(ctx context.Context, tx driver.Tx, org, cloud, provide
 			c.HourlyMicroUSD = &price
 		}
 		components = append(components, c)
+		if server.ResourceID != "" && c.HourlyMicroUSD != nil {
+			physicalServers[physical] = true
+		}
 	}
 	rows.Close()
 	if checkErr := rows.Err(); checkErr != nil {
@@ -186,7 +260,12 @@ func scopedBudgetReviewTx(ctx context.Context, tx driver.Tx, org, cloud, provide
 				continue
 			}
 			retained[key] = true
-			components = append(components, MoneyComponent{Name: "retained:" + key, Source: "retained", Identity: key, Quantity: 1, HourlyMicroUSD: item.EstimatedHourlyMicroUSD})
+			var retainedPrice *int64
+			if freshPrice(r.RetainedPriceCheckedAt, now) {
+				retainedPrice = item.EstimatedHourlyMicroUSD
+				notePrice(r.RetainedPriceCheckedAt)
+			}
+			components = append(components, MoneyComponent{Category: costCategory(item.Kind, ""), Name: "retained:" + key, Source: "retained", Identity: key, Quantity: 1, HourlyMicroUSD: retainedPrice, PriceCheckedAt: &r.RetainedPriceCheckedAt})
 		}
 	}
 	rows.Close()
@@ -255,15 +334,36 @@ func scopedBudgetReviewTx(ctx context.Context, tx driver.Tx, org, cloud, provide
 			e.Money = *e.PriorMoney
 			e.Pending = ResourceVector{}
 		}
-		if e.CloudID != cloud {
+		if e.CloudID != cloud || e.State == "released" {
 			continue
 		}
-		if e.Consumed.Servers > 0 {
-			priced, priceErr := envelopeRemainderMoney(e, e.Consumed.Servers)
+		observed, verified := distinctEnvelopeNodes(e, physicalServers, now)
+		if e.Consumed.Servers > 0 && !verified {
+			addUnknown("node_membership", e.ID)
+		}
+		if observed > 0 {
+			priced, priceErr := envelopeRemainderMoney(e, observed)
 			if priceErr != nil {
 				return nil, priceErr
 			}
 			addEstimate("observed_envelope", e.ID, &priced)
+			if verified {
+				known := true
+				for _, c := range priced.Components {
+					if fact, ok := prices[c.Identity]; ok {
+						if fact.HourlyMicroUSD == nil || !freshPrice(fact.CheckedAt, now) {
+							known = false
+						}
+					} else if c.HourlyMicroUSD == nil || !freshPrice(priced.CheckedAt, now) {
+						known = false
+					}
+				}
+				if known {
+					for _, id := range e.NodeIDs {
+						physicalServers[budgetIdentity(e.Provider, e.AccountID, id)] = true
+					}
+				}
+			}
 		}
 		remainder := envelopeRemainder(e)
 		if remainder.Servers == 0 {
@@ -275,7 +375,10 @@ func scopedBudgetReviewTx(ctx context.Context, tx driver.Tx, org, cloud, provide
 		}
 		addEstimate("envelope", e.ID, &estimate)
 	}
-	estimate, err := moneyEstimate(components, policy.Budget.HorizonSeconds, now)
+	if stalePrice {
+		oldest = time.Time{}
+	}
+	estimate, err := moneyEstimate(components, policy.Budget.HorizonSeconds, oldest)
 	if err != nil {
 		return nil, err
 	}
@@ -296,19 +399,64 @@ func serverBudgetMoney(ctx context.Context, tx driver.Tx, o *Operation) (*MoneyE
 	if checkErr := json.Unmarshal(raw, &server); checkErr != nil {
 		return nil, checkErr
 	}
-	if !server.HourlyPriceKnown || server.PricedSize != server.Size {
-		return o.MoneyEstimate, nil
-	}
-	oldPrice, err := hourlyMicroUSD(server.HourlyUSD)
+	prices, err := budgetPricesTx(ctx, tx, o.OrgID, o.CloudID)
 	if err != nil {
 		return nil, err
+	}
+	var oldPrice *int64
+	oldChecked := server.PriceCheckedAt
+	if fact, ok := prices[serverPriceIdentity(&server)]; ok {
+		oldPrice = fact.HourlyMicroUSD
+		oldChecked = fact.CheckedAt
+	} else if server.HourlyPriceKnown && server.PricedSize == server.Size {
+		value, e := hourlyMicroUSD(server.HourlyUSD)
+		if e != nil {
+			return nil, e
+		}
+		oldPrice = number(value)
 	}
 	estimate := *o.MoneyEstimate
 	estimate.Components = append([]MoneyComponent(nil), estimate.Components...)
 	for i, c := range estimate.Components {
-		if c.Name == "server" && c.HourlyMicroUSD != nil {
-			estimate.Components[i].HourlyMicroUSD = number(max(0, *c.HourlyMicroUSD-oldPrice))
+		if c.Name != "server" {
+			continue
 		}
+		checked := estimate.CheckedAt
+		if fact, ok := prices[c.Identity]; ok {
+			c.HourlyMicroUSD = fact.HourlyMicroUSD
+			checked = fact.CheckedAt
+		}
+		if freshPrice(oldChecked, time.Now()) && oldPrice != nil && c.HourlyMicroUSD != nil {
+			c.HourlyMicroUSD = number(max(0, *c.HourlyMicroUSD-*oldPrice))
+			if oldChecked.Before(checked) {
+				checked = oldChecked
+			}
+		}
+		c.PriceCheckedAt = &checked
+		c.priceProjected = true
+		estimate.Components[i] = c
 	}
 	return &estimate, nil
+}
+
+// NodeIDs are written only after settlement verifies physical account membership.
+func distinctEnvelopeNodes(e ClusterCapacityEnvelope, servers map[string]bool, now time.Time) (int64, bool) {
+	count := e.Consumed.Servers
+	if count == 0 {
+		return 0, true
+	}
+	if e.ResourceID == "" || e.Ref.ID == "" || e.Provider == "" || e.AccountID == "" || !freshClusterEnvelopeEvidence(e.CheckedAt, now) || int64(len(e.NodeIDs)) != count {
+		return count, false
+	}
+	seen := map[string]bool{}
+	for _, id := range e.NodeIDs {
+		if id == "" || seen[id] {
+			return e.Consumed.Servers, false
+		}
+		seen[id] = true
+		if servers[budgetIdentity(e.Provider, e.AccountID, id)] {
+			count--
+		}
+	}
+	return count, true
 }

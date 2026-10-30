@@ -259,6 +259,7 @@ func catalogWith(kinds *recipes.Registry, features map[string]bool) []provider.P
 			// internal/clouds/azure).
 			Available: true,
 		},
+		{Name: "firecracker", Title: "Firecracker microVM", Cloud: "firecracker", BuildLogs: "polled", Description: "Runs stateless applications and isolated builds in microVMs on a Linux host.", Model: provider.Instance, Runs: containerWorkloads("Firecracker microVM"), Available: true},
 		{
 			Name: "server", Title: "Existing server", Cloud: "server",
 			BuildLogs:   "streamed",

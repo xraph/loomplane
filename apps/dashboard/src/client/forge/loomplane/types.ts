@@ -1228,6 +1228,7 @@ export interface DNSRecord {
   id: string;
   name: string;
   owner?: string;
+  proxied?: boolean;
   ttl: number;
   type: string;
   value: string;
@@ -1521,6 +1522,52 @@ export interface Edge {
   from: string;
   kind: string;
   to: string;
+}
+
+export interface EdgeInputBody {
+  policy: {
+  enabled: boolean;
+  invalidateOnDeploy: boolean;
+  rules: EdgeRule[];
+};
+  revision: number;
+}
+
+export interface EdgePolicy {
+  enabled: boolean;
+  invalidateOnDeploy: boolean;
+  rules: EdgeRule[];
+}
+
+export interface EdgePurgeInputBody {
+  revision: number;
+  urls: string[];
+}
+
+export interface EdgeRule {
+  browserTtl: number;
+  edgeTtl: number;
+  mode: string;
+  pathPrefix: string;
+}
+
+export interface EdgeState {
+  appliedAt: string;
+  desired?: DNSRecord;
+  invalidationError?: string;
+  kind: string;
+  lastDeploymentId?: string;
+  lastPurgeAt: string;
+  message: string;
+  orgId: string;
+  policy: EdgePolicy;
+  prior?: DNSRecord;
+  projectId: string;
+  requestedAt: string;
+  revision: number;
+  routeId: string;
+  status: string;
+  urls?: string[];
 }
 
 export interface EditInputBody {

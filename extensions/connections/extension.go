@@ -136,6 +136,7 @@ func (e *Extension) Register(fapp forge.App) error {
 		connections.Azure:        connections.AzureChecker{Client: azureClient},
 		connections.Cloudflare:   connections.CloudflareChecker{Client: cloudflare.New(e.cfg.Clouds.CloudflareEndpoint, e.cfg.Clouds.CloudflareRegistrarSandbox)},
 		connections.Server:       connections.ServerChecker{},
+		connections.Firecracker:  connections.FirecrackerChecker{},
 		connections.Kubernetes:   connections.KubernetesChecker{},
 		connections.Registry:     connections.RegistryChecker{},
 	}

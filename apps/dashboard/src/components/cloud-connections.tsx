@@ -570,8 +570,7 @@ function ConnectForm({
   // cluster comes first: it connects as Loomplane's own service account, so
   // there's no kubeconfig to paste. A replaced connection keeps the kind of
   // credential it has.
-  const inClusterOffered =
-    !replacing && !!entry?.methods.includes("in_cluster")
+  const inClusterOffered = !replacing && !!entry?.methods.includes("in_cluster")
   const inClusterOn = inClusterOffered && tokenFor !== cloud
   const [extraSettings, setExtraSettings] = useState<Record<string, string>>(
     () => ({ ...(replacing?.details ?? {}) }) as Record<string, string>
