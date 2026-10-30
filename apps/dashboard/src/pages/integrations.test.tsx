@@ -13,6 +13,7 @@ vi.mock("@/lib/router", () => ({
   Link: ({ children, to }: { children: React.ReactNode; to: string }) => (
     <a href={to}>{children}</a>
   ),
+  useNavigate: () => vi.fn(),
 }))
 vi.mock("@/components/site-header", () => ({ SiteHeader: () => null }))
 
