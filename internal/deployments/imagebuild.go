@@ -21,6 +21,7 @@ import (
 	"github.com/xraph/loomplane/internal/clouds/registry"
 	"github.com/xraph/loomplane/internal/clouds/server"
 	"github.com/xraph/loomplane/internal/connections"
+	fc "github.com/xraph/loomplane/internal/firecracker"
 	"github.com/xraph/loomplane/internal/planning"
 )
 
@@ -85,7 +86,8 @@ type ImageArtifact struct {
 }
 
 type ImageBuilder struct {
-	Dial func(context.Context, *server.Config) (*server.Client, error)
+	FirecrackerAuthority fc.Issuer
+	Dial                 func(context.Context, *server.Config) (*server.Client, error)
 }
 
 func (b *ImageBuilder) connection(ctx context.Context, job *Job, id, cloud string, settings map[string]string, pull bool) (*connections.Connection, []byte, error) {
@@ -166,6 +168,9 @@ func (b *ImageBuilder) Build(ctx context.Context, job *Job, state *ImageArtifact
 			return "", saveErr
 		}
 		return state.Reference, nil
+	}
+	if target.BuilderCloud == connections.Firecracker {
+		return b.buildInFirecracker(ctx, job, state, save, registryConfig)
 	}
 	if job.SourceID == "" || job.Source == nil {
 		return "", errors.New("the approved source artifact is missing")

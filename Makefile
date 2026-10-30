@@ -48,6 +48,10 @@ build-api: ## Build bin/loomplane and bin/loomplane-worker
 	go build $(LDFLAGS) -o bin/loomplane ./cmd/loomplane
 	go build $(LDFLAGS) -o bin/loomplane-worker ./cmd/loomplane-worker
 
+build-firecracker: ## Build standalone Firecracker host and guest agents for Linux
+	CGO_ENABLED=0 GOOS=linux go build $(LDFLAGS) -o bin/loomplane-host-agent ./cmd/loomplane-host-agent
+	CGO_ENABLED=0 GOOS=linux go build $(LDFLAGS) -o bin/loomplane-guest-agent ./cmd/loomplane-guest-agent
+
 build-agent: ## Build the destination observer and signed-policy receiver
 	go build $(LDFLAGS) -o bin/loomplane-agent ./cmd/loomplane-agent
 

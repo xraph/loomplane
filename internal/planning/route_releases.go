@@ -77,9 +77,9 @@ func (p *planner) routedReplacements() bool {
 		// A Kubernetes route reaches its Service by name, so an update in
 		// place keeps serving it with no handoff. A new runtime would leave
 		// the route on a Service that goes away.
-		if route.Binding.BackendName() == cloudinfra.RouteBackendKubernetes {
+		if route.Binding.BackendName() == cloudinfra.RouteBackendKubernetes || route.Binding.BackendName() == cloudinfra.RouteBackendFirecracker {
 			if a.Op != Update {
-				p.problem(Finding{Code: "route-release", Subject: ServiceSubject, Name: a.Name, Message: fmt.Sprintf("%s would get a new runtime, which %s doesn't follow on Kubernetes. Remove that route, then plan again.", a.Name, route.Input.Hostname)})
+				p.problem(Finding{Code: "route-release", Subject: ServiceSubject, Name: a.Name, Message: fmt.Sprintf("%s would get a new runtime, which %s doesn't follow on this connection. Remove that route, then plan again.", a.Name, route.Input.Hostname)})
 			}
 			continue
 		}
@@ -233,7 +233,7 @@ func (s *PgStore) CurrentReleaseRoutes(ctx context.Context, org, project, enviro
 	var out []cloudinfra.Route
 	for _, r := range routes {
 		// Releases never carry Kubernetes routes; see routedReplacements.
-		if r.Input.EnvironmentID == environment && r.Input.Service == service && r.Status != "removed" && r.Binding.BackendName() != cloudinfra.RouteBackendKubernetes {
+		if r.Input.EnvironmentID == environment && r.Input.Service == service && r.Status != "removed" && r.Binding.BackendName() == cloudinfra.RouteBackendServer {
 			out = append(out, *r)
 		}
 	}

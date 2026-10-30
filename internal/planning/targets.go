@@ -12,7 +12,9 @@ import (
 )
 
 // OwnedCloud identifies targets with a separate connection for each service.
-func OwnedCloud(cloud string) bool { return cloud == "server" || cloud == "kubernetes" }
+func OwnedCloud(cloud string) bool {
+	return cloud == "server" || cloud == "kubernetes" || cloud == "firecracker"
+}
 
 // ReviewedConnectionSettings copies only placement settings. Credential and
 // permission-check metadata can change without changing a destination.
@@ -23,6 +25,8 @@ func ReviewedConnectionSettings(cloud string, details map[string]string) map[str
 		keys = []string{"host", "port", "user", "host_key", "docker_socket", "advertise_host", "architecture", "docker_id"}
 	case "kubernetes":
 		keys = []string{"endpoint", "context", "namespace", "namespace_uid", "cluster_ca", "tls_server_name", "ingress_class", "ingress_address", "ingress_domain", "tls_secret", "image_pull_secret", "architecture", "storage_class", "storage_class_uid", "storage_provisioner", "storage_binding", "storage_reclaim", "storage_expansion", "persistent_storage", "registry_hostname"}
+	case "firecracker":
+		keys = []string{"endpoint", "host_id", "host_ca", "architecture", "runtime_identity", "ingress_address"}
 	case "registry":
 		keys = []string{"endpoint", "repository", "auth_endpoint", "registry_ca"}
 	}
@@ -119,6 +123,16 @@ func (p *planner) configureTarget(name, base string, prov *provider.Provider, se
 		cfg.TargetSettings = ReviewedConnectionSettings(c.Cloud, c.Details)
 	}
 	p.serviceGPU(name, base, prov, set, cfg, c)
+	if prov.Cloud == "firecracker" {
+		if c != nil {
+			if err := buildpolicy.CheckBackend(c.Details, c.Cloud, c.Pooled); err != nil {
+				p.problem(Finding{Code: "runtime-isolation-required", Subject: ServiceSubject, Name: name, Path: base + ".target", Message: err.Error()})
+			}
+		}
+		if cfg.Catalog != nil || cfg.Component != nil || cfg.GPU != nil || (set.Size != nil && set.Size.GPU != nil) {
+			p.problem(Finding{Code: "firecracker-stateless-only", Subject: ServiceSubject, Name: name, Path: base, Message: "Firecracker supports stateless application services without catalog compositions or GPUs."})
+		}
+	}
 	b := set.Build
 	if b == nil {
 		b = &manifest.Build{}
@@ -137,19 +151,29 @@ func (p *planner) configureTarget(name, base string, prov *provider.Provider, se
 			p.problem(Finding{Code: "kubernetes-build-unavailable", Subject: ServiceSubject, Name: name, Path: base + ".build", Message: "Check this cluster's managed build setup under Integrations. It needs retained storage, cert-manager, ingress, and build pod permissions."})
 		}
 	} else if build.Image == "" {
-		if build.Builder == "" && prov.Cloud == "server" {
+		if build.Builder == "" && (prov.Cloud == "server" || prov.Cloud == "firecracker") {
 			build.Builder = cfg.Target
 		}
-		if builder := p.targetConnection(name, base+".build.builder", "builder", "server", build.Builder); builder != nil {
+		builderCloud := "server"
+		for _, option := range p.in.Connections {
+			if option.ID == build.Builder && option.Cloud == "firecracker" {
+				builderCloud = "firecracker"
+				build.BuilderCloud = builderCloud
+			}
+		}
+		if builder := p.targetConnection(name, base+".build.builder", "builder", builderCloud, build.Builder); builder != nil {
 			build.BuilderSettings = ReviewedBuildSettings(builder.Cloud, builder.Details)
-			if err := buildpolicy.Check(builder.Details, false, builder.Pooled); err != nil {
+			if err := buildpolicy.CheckBackend(builder.Details, builder.Cloud, builder.Pooled); err != nil {
 				p.problem(Finding{Code: "build-isolation-required", Subject: ServiceSubject, Name: name, Path: base + ".build.builder", Message: err.Error()})
+			}
+			if (prov.Cloud == "firecracker" || builder.Cloud == "firecracker") && c != nil && builder.Details["architecture"] != c.Details["architecture"] {
+				p.problem(Finding{Code: "build-architecture", Subject: ServiceSubject, Name: name, Path: base + ".build.builder", Message: "Choose a builder with the same architecture as the application host."})
 			}
 			if cfg.CapacityIntent != nil && builder.Details["architecture"] != cfg.CapacityIntent.Demand.Architecture {
 				p.problem(Finding{Code: "capacity-architecture", Subject: ServiceSubject, Name: name, Path: base + ".build.builder", Message: "The builder must match the approved pool architecture."})
 			}
 		}
-		if prov.Cloud == "kubernetes" || build.Builder != cfg.Target {
+		if prov.Cloud == "kubernetes" || builderCloud == "firecracker" || build.Builder != cfg.Target {
 			p.targetConnection(name, base+".build.registry", "registry", "registry", build.Registry)
 		}
 	}
@@ -170,7 +194,7 @@ func (p *planner) configureTarget(name, base string, prov *provider.Provider, se
 	if cfg.Image == "" && b.Context != "" {
 		cfg.Context = b.Context
 	}
-	if prov.Cloud == "server" && cfg.Scale != nil && (cfg.Scale.Min != 1 || cfg.Scale.Max != 1) {
+	if (prov.Cloud == "server" || prov.Cloud == "firecracker") && cfg.Scale != nil && (cfg.Scale.Min != 1 || cfg.Scale.Max != 1) {
 		p.problem(Finding{Code: "server-scale", Subject: ServiceSubject, Name: name, Path: base + ".scale", Message: "An existing server runs one container per service. Use min: 1 and max: 1, or choose Kubernetes for replicas."})
 	}
 	if prov.Cloud == "kubernetes" && cfg.Scale != nil && cfg.Scale.Min != cfg.Scale.Max && (c == nil || c.Details["hpa"] != "ready") {
@@ -179,7 +203,7 @@ func (p *planner) configureTarget(name, base string, prov *provider.Provider, se
 	if prov.Cloud == "kubernetes" && cfg.Scale != nil && cfg.Scale.Min != cfg.Scale.Max && cfg.Scale.Min == 0 {
 		p.problem(Finding{Code: "hpa-minimum", Subject: ServiceSubject, Name: name, Path: base + ".scale.min", Message: "CPU-based Kubernetes autoscaling needs at least one replica. Choose min: 1 or a fixed replica count."})
 	}
-	if cfg.Public && prov.Cloud == "server" && (cfg.Endpoint == nil || cfg.Endpoint.HostPort == 0) {
+	if cfg.Public && (prov.Cloud == "server" || prov.Cloud == "firecracker") && (cfg.Endpoint == nil || cfg.Endpoint.HostPort == 0) {
 		p.problem(Finding{Code: "host-port-required", Subject: ServiceSubject, Name: name, Path: base + ".endpoint.host_port", Message: "Choose the host port this server publishes for the service."})
 	}
 	if cfg.Public && prov.Cloud == "kubernetes" && (cfg.Endpoint == nil || cfg.Endpoint.Hostname == "") {
@@ -215,6 +239,9 @@ func sameTargetNetwork(a, b *ServiceConfig, cloudA, cloudB string) bool {
 	if a.Target == b.Target {
 		return true
 	}
+	if cloudA == "firecracker" {
+		return a.TargetSettings["host_id"] != "" && a.TargetSettings["host_id"] == b.TargetSettings["host_id"] && a.TargetSettings["host_ca"] == b.TargetSettings["host_ca"]
+	}
 	if cloudA == "server" {
 		return a.TargetSettings["docker_id"] != "" && a.TargetSettings["docker_id"] == b.TargetSettings["docker_id"]
 	}
@@ -227,10 +254,13 @@ func (p *planner) checkTargetPlacements() {
 	for _, name := range slices.Sorted(maps.Keys(p.services)) {
 		a := p.services[name]
 		cfg := a.Service
-		if cfg == nil || a.Provider != "server" || !cfg.Public || cfg.Endpoint == nil || cfg.Endpoint.HostPort == 0 {
+		if cfg == nil || (a.Provider != "server" && a.Provider != "firecracker") || !cfg.Public || cfg.Endpoint == nil || cfg.Endpoint.HostPort == 0 {
 			continue
 		}
 		scope := cfg.TargetSettings["docker_id"]
+		if a.Provider == "firecracker" {
+			scope = "firecracker:" + cfg.TargetSettings["host_id"]
+		}
 		if scope == "" {
 			scope = cfg.Target
 		}

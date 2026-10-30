@@ -310,6 +310,7 @@ func (c *ServiceConfig) Generated() bool { return c.Gateway != nil || c.Database
 
 // BuildTarget pins the builder, registry and image reviewed in a plan.
 type BuildTarget struct {
+	BuilderCloud     string            `json:"builder_cloud,omitempty"`
 	Builder          string            `json:"builder,omitempty"`
 	Registry         string            `json:"registry,omitempty"`
 	Image            string            `json:"image,omitempty"`

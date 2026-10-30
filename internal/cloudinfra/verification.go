@@ -157,6 +157,9 @@ func (s *Service) executeRoute(ctx context.Context, st DomainStore, op *RouteOpe
 			return checkErr
 		}
 	}
+	if route.Binding.BackendName() == RouteBackendFirecracker {
+		return s.executeFirecrackerRoute(ctx, st, op, zone)
+	}
 	if route.Binding.BackendName() == RouteBackendKubernetes {
 		return s.executeKubernetesRoute(ctx, st, op, zone)
 	}

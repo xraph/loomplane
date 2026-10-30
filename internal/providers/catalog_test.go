@@ -63,10 +63,10 @@ func TestRegistry_capabilities(t *testing.T) {
 		got  []string
 		want []string
 	}{
-		{"web apps", names(r.Running(provider.WebApp)), []string{"vercel", "cloud-run", "ecs-fargate", "render", "digitalocean", "azure-container-apps", "server", "kubernetes"}},
-		{"http services", names(r.Running(provider.HTTPService)), []string{"cloud-run", "ecs-fargate", "render", "digitalocean", "azure-container-apps", "server", "kubernetes"}},
-		{"static sites", names(r.Running(provider.StaticSite)), []string{"vercel", "render", "digitalocean", "azure-container-apps", "server", "kubernetes"}},
-		{"workers", names(r.Running(provider.Worker)), []string{"ecs-fargate", "render", "digitalocean", "azure-container-apps", "server", "kubernetes"}},
+		{"web apps", names(r.Running(provider.WebApp)), []string{"vercel", "cloud-run", "ecs-fargate", "render", "digitalocean", "azure-container-apps", "firecracker", "server", "kubernetes"}},
+		{"http services", names(r.Running(provider.HTTPService)), []string{"cloud-run", "ecs-fargate", "render", "digitalocean", "azure-container-apps", "firecracker", "server", "kubernetes"}},
+		{"static sites", names(r.Running(provider.StaticSite)), []string{"vercel", "render", "digitalocean", "azure-container-apps", "firecracker", "server", "kubernetes"}},
+		{"workers", names(r.Running(provider.Worker)), []string{"ecs-fargate", "render", "digitalocean", "azure-container-apps", "firecracker", "server", "kubernetes"}},
 		{"postgres", names(r.Provisioning("postgres")), []string{"render", "digitalocean", "cloud-sql", "rds", "azure-database", "server", "kubernetes"}},
 		{"mysql", names(r.Provisioning("mysql")), []string{"digitalocean", "cloud-sql", "rds", "azure-database", "server"}},
 		{"mariadb", names(r.Provisioning("mariadb")), []string{"server"}},

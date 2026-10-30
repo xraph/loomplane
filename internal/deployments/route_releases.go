@@ -230,7 +230,7 @@ func (r *Runner) beginWorkloadAttempt(ctx context.Context, d *Deployment, a plan
 	if managed && (len(a.Routes) > 0 || a.Service.Catalog != nil || a.Service.Component != nil) {
 		return ctx, nil, &cloudinfra.CapacityAdmissionError{Block: cloudinfra.CapacityBlock{Reason: "managed_workload_profile_unqualified"}}
 	}
-	if !ok || (!managed && a.Provider != "server" && (a.Service == nil || !cloudinfra.ManagedFrontend(a.Provider, a.Service.Workload, a.Service.Execution)) && (a.Compensation == nil || !a.Compensation.ServerAttempt)) || (a.Op == planning.Keep && a.Compensation == nil) {
+	if !ok || (!managed && a.Provider != "server" && a.Provider != "firecracker" && (a.Service == nil || a.Service.BuildTarget == nil || a.Service.BuildTarget.BuilderCloud != "firecracker") && (a.Service == nil || !cloudinfra.ManagedFrontend(a.Provider, a.Service.Workload, a.Service.Execution)) && (a.Compensation == nil || !a.Compensation.ServerAttempt)) || (a.Op == planning.Keep && a.Compensation == nil) {
 		return ctx, func(bool) error { return nil }, nil
 	}
 	infra := cloudinfra.NewPgStore(st.db)

@@ -285,6 +285,9 @@ func (s *PgStore) ResolveRouteBinding(ctx context.Context, org, project string, 
 	if err != nil {
 		return RouteBinding{}, err
 	}
+	if backend == RouteBackendFirecracker {
+		return scanFirecrackerRouteBinding(s.db.QueryRow(ctx, firecrackerRouteBindingQuery, org, project, in.EnvironmentID, in.Service, in.CloudID, in.Port))
+	}
 	if backend == RouteBackendKubernetes {
 		return scanKubernetesRouteBinding(s.db.QueryRow(ctx, kubernetesRouteBindingQuery, org, project, in.EnvironmentID, in.Service, in.CloudID, in.Port))
 	}
@@ -389,9 +392,12 @@ func (s *PgStore) AcceptRoute(ctx context.Context, op *RouteOperation) error {
 		var current RouteBinding
 		var lookupErr error
 		// The organization lock already orders this with grant changes.
-		if route.Binding.BackendName() == RouteBackendKubernetes {
+		switch route.Binding.BackendName() {
+		case RouteBackendFirecracker:
+			current, lookupErr = scanFirecrackerRouteBinding(tx.QueryRow(ctx, firecrackerRouteBindingQuery+" FOR SHARE OF b,c,i", args...))
+		case RouteBackendKubernetes:
 			current, lookupErr = scanKubernetesRouteBinding(tx.QueryRow(ctx, kubernetesRouteBindingQuery+" FOR SHARE OF b,c,i", args...))
-		} else {
+		default:
 			current, lookupErr = scanRouteBinding(tx.QueryRow(ctx, routeBindingQuery+" FOR SHARE OF b,g,t,s,c,i", args...))
 		}
 		if lookupErr != nil {

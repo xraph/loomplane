@@ -33,3 +33,14 @@ func Check(details map[string]string, kubernetes, pooled bool) error {
 	}
 	return nil
 }
+
+// CheckBackend accepts only isolation evidence produced by the selected backend.
+func CheckBackend(details map[string]string, backend string, pooled bool) error {
+	if backend == "firecracker" {
+		if details["build_isolation"] != "ready" || len(details["runtime_identity"]) != 64 || details["host_id"] == "" {
+			return errors.New("the Firecracker host must pass its isolation check before accepting source")
+		}
+		return nil
+	}
+	return Check(details, backend == "kubernetes", pooled)
+}

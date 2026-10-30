@@ -1,0 +1,22 @@
+#!/bin/sh
+set -eu
+mount -t proc proc /proc
+mount -t sysfs sysfs /sys
+mount -t devtmpfs devtmpfs /dev
+mount -t tmpfs -o mode=755,nosuid,nodev tmpfs /run
+mount -t tmpfs -o mode=1777,nosuid,nodev tmpfs /tmp
+mount -t cgroup2 none /sys/fs/cgroup
+mkdir -p /run/loomplane
+mount -t ext4 -o nosuid,nodev /dev/vdb /scratch
+mkdir -p /scratch/containerd /run/containerd
+# /etc/resolv.conf in the immutable image points to this tmpfs file.
+printf 'nameserver 127.0.0.53\noptions timeout:2 attempts:2\n' > /run/resolv.conf
+ip link set lo up
+containerd --root /scratch/containerd --state /run/containerd &
+tries=0
+while [ ! -S /run/containerd/containerd.sock ]; do
+ tries=$((tries + 1))
+ [ "$tries" -lt 30 ] || exit 1
+ sleep 1
+done
+exec /usr/local/bin/loomplane-guest-agent
