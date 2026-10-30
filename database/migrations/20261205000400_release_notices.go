@@ -35,7 +35,10 @@ BEGIN
 	v_old_step := COALESCE((OLD.canary->>'step')::int,-1);
 	IF v_status IS NULL THEN RETURN NULL; END IF;
 	IF jsonb_typeof(NEW.canary->'steps')='array' THEN v_count := jsonb_array_length(NEW.canary->'steps'); END IF;
-	IF v_status='rolled_back' AND v_old IS DISTINCT FROM v_status THEN
+	IF v_status='rolled_back' AND v_old IS DISTINCT FROM v_status AND v_step<0 THEN
+		-- No traffic moved, so the deployment's own failure notice stands alone.
+		RETURN NULL;
+	ELSIF v_status='rolled_back' AND v_old IS DISTINCT FROM v_status THEN
 		v_kind := 'release.rolled_back'; v_who := 'all';
 		IF v_step>=0 THEN v_weight := COALESCE((NEW.canary->'steps'->>v_step)::int,0); END IF;
 	ELSIF v_status='revert_failed' AND v_old IS DISTINCT FROM v_status THEN

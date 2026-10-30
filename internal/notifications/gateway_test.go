@@ -35,6 +35,17 @@ type fakeGateway struct {
 	keys  map[string]*ecdh.PrivateKey // by handle
 	sends []gatewaySend
 	reply map[string][]int // statuses to answer a handle with, in order
+	block chan struct{}    // while set, sends wait here until it closes
+}
+
+// hang makes the gateway hold every send until the returned function runs.
+func (g *fakeGateway) hang() (release func()) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+	ch := make(chan struct{})
+	g.block = ch
+	var once sync.Once
+	return func() { once.Do(func() { close(ch) }) }
 }
 
 func newFakeGateway(t *testing.T) *fakeGateway {
@@ -50,6 +61,16 @@ func (g *fakeGateway) serve(w http.ResponseWriter, r *http.Request) {
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || r.URL.Path != "/v1/send" {
 		http.Error(w, `{"error":"bad request"}`, http.StatusBadRequest)
 		return
+	}
+	g.mu.Lock()
+	block := g.block
+	g.mu.Unlock()
+	if block != nil {
+		select {
+		case <-block:
+		case <-r.Context().Done():
+			return
+		}
 	}
 	g.mu.Lock()
 	defer g.mu.Unlock()

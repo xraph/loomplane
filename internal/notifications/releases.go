@@ -44,13 +44,9 @@ func releasePath(planID string) string { return "/deployments/" + planID }
 func releaseCopy(kind string, p releasePayload, project, environment string) (title, body string) {
 	switch kind {
 	case KindReleaseRolledBack:
-		body = "The new release failed its health check at " + fmt.Sprint(p.Weight) + "%, so Loomplane moved all traffic back to the previous one."
-		if p.Weight <= 0 {
-			body = "The new release failed its health check, so Loomplane moved all traffic back to the previous one."
-		}
-		return project + ": canary rolled back in " + environment, body
+		return project + ": canary rolled back in " + environment, rollbackCopy(p, "so Loomplane moved all traffic back to the previous one.")
 	case KindReleaseRevertFailed:
-		return project + ": rollback failed in " + environment, "The canary failed its health check and Loomplane couldn't move traffic back. Some requests may still reach the new release."
+		return project + ": rollback failed in " + environment, rollbackCopy(p, "and Loomplane couldn't move traffic back. Some requests may still reach the new release.")
 	}
 	if p.Status == canaryPromoted {
 		return project + ": release promoted in " + environment, "Every canary step passed and the new release takes all traffic."
@@ -60,6 +56,22 @@ func releaseCopy(kind string, p releasePayload, project, environment string) (ti
 		return title, fmt.Sprintf("Loomplane sent %d%% of traffic to the new release and is watching its health.", p.Weight)
 	}
 	return title, fmt.Sprintf("It held up at %d%%, so Loomplane moved it to %d%%.", p.PreviousWeight, p.Weight)
+}
+
+// rollbackCopy says what failed from the canary step and traffic share, and
+// ends with the reason the deployment gave when it has one. It never claims
+// a cause it doesn't know, so the outcome comes before the reason and a long
+// reason is the part that gets cut.
+func rollbackCopy(p releasePayload, outcome string) string {
+	what := "The new release failed"
+	if p.Step >= 0 && p.Weight > 0 {
+		what = fmt.Sprintf("The new release failed at canary step %d (%d%% of traffic)", p.Step+1, p.Weight)
+	}
+	body := what + ", " + outcome
+	if r := strings.TrimSpace(p.Reason); r != "" {
+		body += " Reason: " + r
+	}
+	return body
 }
 
 // releaseMessage is what a release notice sends: an inbox item and an email

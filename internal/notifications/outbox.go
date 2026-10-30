@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -63,10 +64,10 @@ func (s *Service) drain(ctx context.Context) error {
 			switch {
 			case errors.Is(err, ErrDeliveryFailed):
 				diagnostic = "email delivery failed"
-			case errors.Is(err, ErrPushFailed):
-				diagnostic = "push delivery failed"
 			case errors.Is(err, errWaitingPush):
 				diagnostic = errWaitingPush.Error()
+			case errors.Is(err, ErrPushFailed):
+				diagnostic = "push delivery failed"
 			}
 			if _, saveErr := s.pg.Exec(ctx, `UPDATE loomplane_notification_outbox SET last_error=$3,lease_until=NULL,lease_owner='',next_attempt_at=clock_timestamp()+($4 * interval '1 second'),email_state=CASE WHEN attempts>=10 AND email_state='pending' THEN 'failed' ELSE email_state END,push_state=CASE WHEN attempts>=10 AND push_state='pending' THEN 'failed' ELSE push_state END WHERE id=$1 AND lease_owner=$2`, item.id, item.owner, diagnostic, int(retryDelay(item.attempts).Seconds())); saveErr != nil {
 				return saveErr
@@ -107,6 +108,9 @@ type outboxMessage struct {
 	// a project, otherwise membership, then needName when it has one.
 	generic  bool
 	needName string
+	// releaseCovers marks a failed deployment whose canary rollback notice
+	// says it already: the inbox item stays, push and email are skipped.
+	releaseCovers bool
 }
 
 func (s *Service) wirePayload(item *outboxItem) ([]byte, error) {
@@ -134,10 +138,16 @@ func deploymentMessage(item *outboxItem) (*outboxMessage, error) {
 	if err := json.Unmarshal(item.wire, &payload); err != nil {
 		return nil, err
 	}
+	// An owner or admin copy of a production failure has a different row ID
+	// from the starter's, and mustn't claim they started it.
+	lead := "Your deployment " + payload.Status + "."
+	if item.id != fmt.Sprintf("%s:%d", payload.DeploymentID, payload.Attempt) {
+		lead = "A deployment in your organization " + payload.Status + "."
+	}
 	return &outboxMessage{sourceKey: item.id, event: "deployment." + payload.Status, project: payload.ProjectID, inboxType: "deployment." + payload.Status, title: "Deployment " + payload.Status,
 		body: "A deployment attempt finished. Open the deployment to review its result.", actionURL: payload.URL,
 		metadata: map[string]string{"org_id": item.org, "project_id": payload.ProjectID, "status": payload.Status, "outbox_id": item.id},
-		subject:  "Loomplane deployment " + payload.Status, emailBody: "Your deployment " + payload.Status + ".\n\nReview the deployment: " + payload.URL}, nil
+		subject:  "Loomplane deployment " + payload.Status, emailBody: lead + "\n\nReview the deployment: " + payload.URL}, nil
 }
 func (s *Service) process(ctx context.Context, item *outboxItem) error {
 	if item.kind == kindConnection {
@@ -232,18 +242,30 @@ func (s *Service) process(ctx context.Context, item *outboxItem) error {
 		_, err = s.pg.Exec(ctx, `UPDATE loomplane_notification_outbox SET email_state='skipped',push_state='skipped' WHERE id=$1 AND lease_owner=$2`, item.id, item.owner)
 		return err
 	}
-	plan, err := s.pushPlanFor(ctx, item, d)
+	if item.kind == KindDeployment {
+		if d.releaseCovers, err = s.releaseCovers(ctx, item); err != nil {
+			return err
+		}
+	}
+	// Email goes first and push gets its own bounded context, so a slow
+	// gateway can't delay or starve the email. Both steps checkpoint, so a
+	// retry sends neither twice. A push that went wrong, planning included,
+	// fails the row after the email.
+	if mailErr := s.emailStep(ctx, item, p, email, d); mailErr != nil {
+		return mailErr
+	}
+	pushCtx, cancel := context.WithTimeout(ctx, pushStepTimeout)
+	defer cancel()
+	plan, err := s.pushPlanFor(pushCtx, item, d)
 	if err != nil {
-		return err
+		slog.WarnContext(ctx, "plan a push failed", "outbox", item.id, "error", err)
+		return fmt.Errorf("%w: %w", ErrPushFailed, err)
 	}
-	pushErr := s.pushStep(ctx, item, plan)
-	// A push that went wrong fails the row after the email, so
-	// the retry never mails twice.
-	if err := s.emailStep(ctx, item, p, email, d); err != nil {
-		return err
-	}
-	return pushErr
+	return s.pushStep(pushCtx, item, plan)
 }
+
+// pushStepTimeout bounds one row's push, whatever the gateway does.
+var pushStepTimeout = 20 * time.Second
 
 // emailStep sends the row's email unless it was already sent or skipped.
 func (s *Service) emailStep(ctx context.Context, item *outboxItem, p security.Principal, email string, d *outboxMessage) error {
@@ -257,7 +279,7 @@ func (s *Service) emailStep(ctx context.Context, item *outboxItem, p security.Pr
 			return err
 		}
 	}
-	if !enabled || !s.MailEnabled() {
+	if !enabled || !s.MailEnabled() || d.releaseCovers {
 		_, err = s.pg.Exec(ctx, `UPDATE loomplane_notification_outbox SET email_state='skipped' WHERE id=$1 AND lease_owner=$2`, item.id, item.owner)
 		return err
 	}

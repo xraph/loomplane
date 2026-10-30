@@ -19,6 +19,9 @@ const (
 // pushPlanFor says what a row pushes. Nil means nothing: the kind has no
 // push, or its notice asked for none.
 func (s *Service) pushPlanFor(ctx context.Context, item *outboxItem, msg *outboxMessage) (*pushPlan, error) {
+	if msg.releaseCovers {
+		return nil, nil
+	}
 	plan := &pushPlan{Title: msg.title, Body: msg.body, ProjectID: msg.project, Kind: msg.inboxType,
 		Path: strings.TrimPrefix(msg.actionURL, strings.TrimRight(s.cfg.PublicURL, "/"))}
 	switch item.kind {
@@ -85,4 +88,28 @@ func (s *Service) deploymentPush(ctx context.Context, item *outboxItem, plan *pu
 // fallbackTitle is the title to use when a project or environment is gone.
 func fallbackTitle(plan *pushPlan) string {
 	return "Deployment " + strings.TrimPrefix(plan.Kind, "deployment.")
+}
+
+// releaseCovers says whether a failed deployment's release notice is the
+// notice for this row's person: the canary rolled back after traffic moved,
+// or its revert failed and the person is an owner or admin, who get that
+// notice. A rollback before any traffic moved queues no release notice, so
+// the plain failure stands alone then.
+func (s *Service) releaseCovers(ctx context.Context, item *outboxItem) (bool, error) {
+	var payload DeploymentPayload
+	if err := json.Unmarshal(item.wire, &payload); err != nil {
+		return false, err
+	}
+	if payload.Status != "failed" {
+		return false, nil
+	}
+	var covered bool
+	err := s.pg.QueryRow(ctx, `SELECT COALESCE(
+ (canary->>'status'='rolled_back' AND COALESCE((canary->>'step')::int,-1)>=0)
+ OR (canary->>'status'='revert_failed' AND EXISTS (SELECT 1 FROM authsome_members m WHERE m.org_id=$2 AND m.user_id=$3 AND m.role IN ('owner','admin'))),FALSE)
+ FROM loomplane_deployments WHERE id=$1 AND org_id=$2`, payload.DeploymentID, item.org, item.user).Scan(&covered)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return false, nil
+	}
+	return covered, err
 }

@@ -118,7 +118,7 @@ func TestCanaryRollbackNotifiesStarterApproverAndAdmins(t *testing.T) {
 	if s.Body.Urgency != "time_sensitive" || s.Env.Category != "alert" || s.Body.CollapseID != collapseID("release:deployment-a") || s.Env.Data["actions"] != "open" {
 		t.Fatalf("send: %+v %+v", s.Body, s.Env)
 	}
-	if s.Env.Title != "Atlas: canary rolled back in production" || !strings.Contains(s.Env.Body, "failed its health check at 25%") {
+	if s.Env.Title != "Atlas: canary rolled back in production" || !strings.Contains(s.Env.Body, "failed at canary step 2 (25% of traffic)") {
 		t.Fatalf("copy: %q %q", s.Env.Title, s.Env.Body)
 	}
 	for key, want := range map[string]string{"kind": "release.rolled_back", "subject": "deployment-a", "path": "/deployments/plan-a", "class": "alert"} {
@@ -368,6 +368,126 @@ func TestOddCanaryJSONNeverFailsTheWrite(t *testing.T) {
 	} {
 		if _, err := svc.pg.Exec(t.Context(), `UPDATE loomplane_deployments SET canary=$1::jsonb WHERE id='deployment-a'`, doc); err != nil {
 			t.Fatalf("canary %s failed the write: %v", doc, err)
+		}
+	}
+}
+
+// failedCanary fails the deployment the way the runner does: the canary
+// settles as rolled back, then the deployment is marked failed.
+func failedCanary(t *testing.T, svc *Service, step, weight int) {
+	t.Helper()
+	startDeployment(t, svc, "env-p", "cy")
+	if step >= 0 {
+		canary(t, svc, "ramping", step, weight)
+	}
+	canary(t, svc, "rolled_back", step, 0)
+	if _, err := svc.pg.Exec(t.Context(), `UPDATE loomplane_deployments SET status='failed'`); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// emailsSent counts the emails the user's rows sent, by kind.
+func emailsSent(t *testing.T, svc *Service, user string) map[string]int {
+	t.Helper()
+	rows, err := svc.pg.Query(t.Context(), `SELECT kind FROM loomplane_notification_outbox WHERE user_id=$1 AND email_state='sent'`, user)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	out := map[string]int{}
+	for rows.Next() {
+		var k string
+		if err = rows.Scan(&k); err != nil {
+			t.Fatal(err)
+		}
+		out[k]++
+	}
+	return out
+}
+
+func TestCanaryFailedBeforeTrafficMovedIsOneNotice(t *testing.T) {
+	svc, gw := releaseRig(t, "bo")
+	quietPhone(t, svc, gw, "cy")
+	failedCanary(t, svc, -1, 0)
+	if got := releaseUsers(t, svc, KindReleaseRolledBack); len(got) != 0 {
+		t.Fatalf("a rollback with no traffic moved queued %v", got)
+	}
+	if err := svc.drain(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	sends := gw.taken()
+	if len(sends) != 1 || sends[0].Env.Data["kind"] != "deployment.failed" || sends[0].Body.CollapseID != collapseID("deployment:deployment-a") {
+		t.Fatalf("sends: %+v", sends)
+	}
+	if got := emailsSent(t, svc, "cy"); got[KindDeployment] != 1 || len(got) != 1 {
+		t.Fatalf("emails: %v", got)
+	}
+}
+
+func TestCanaryRolledBackAfterTrafficMovedIsOneNoticeAndTellsTheTruth(t *testing.T) {
+	svc, gw := releaseRig(t, "bo")
+	quietPhone(t, svc, gw, "cy")
+	failedCanary(t, svc, 1, 25)
+	if err := svc.drain(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	// The ramp's own progress push came first; the failure is one more.
+	if failed := ofKind(gw.taken(), "deployment.failed"); len(failed) != 0 {
+		t.Fatalf("the deployment's own failure pushed too: %d", len(failed))
+	}
+	sends := ofKind(gw.taken(), KindReleaseRolledBack)
+	if len(sends) != 1 {
+		t.Fatalf("sends: %+v", sends)
+	}
+	body := sends[0].Env.Body
+	if !strings.Contains(body, "failed at canary step 2 (25% of traffic)") || !strings.Contains(body, "Reason: error rate 9%") || strings.Contains(body, "health check") {
+		t.Fatalf("copy: %q", body)
+	}
+	if got := emailsSent(t, svc, "cy"); got[KindReleaseRolledBack] != 1 || len(got) != 1 {
+		t.Fatalf("emails: %v", got)
+	}
+	var state, email string
+	if err := svc.pg.QueryRow(t.Context(), `SELECT push_state,email_state FROM loomplane_notification_outbox WHERE user_id='cy' AND kind=$1`, KindDeployment).Scan(&state, &email); err != nil || state != PushSkipped || email != "skipped" {
+		t.Fatalf("deployment row: %s %s %v", state, email, err)
+	}
+	items, err := svc.mailStore.ListNotifications(t.Context(), "app", "cy", 50, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if failed := slices.DeleteFunc(items, func(n *inbox.Notification) bool { return n.Type != "deployment.failed" }); len(failed) != 1 {
+		t.Fatalf("the failure keeps its inbox item: %d", len(failed))
+	}
+}
+
+func TestRollbackCopyNamesTheStepNotAHealthCheck(t *testing.T) {
+	_, body := releaseCopy(KindReleaseRolledBack, releasePayload{Step: 0, Weight: 10}, "Atlas", "production")
+	if !strings.Contains(body, "step 1 (10% of traffic)") || strings.Contains(body, "health check") {
+		t.Fatalf("body: %q", body)
+	}
+	_, body = releaseCopy(KindReleaseRevertFailed, releasePayload{Step: -1, Reason: "boom"}, "Atlas", "production")
+	if strings.Contains(body, "health check") || !strings.HasSuffix(body, "Reason: boom") {
+		t.Fatalf("body: %q", body)
+	}
+}
+
+func TestAdminCopyOfAProductionFailureDoesNotClaimTheyStartedIt(t *testing.T) {
+	svc, _ := releaseRig(t, "bo")
+	startDeployment(t, svc, "env-p", "cy")
+	if _, err := svc.pg.Exec(t.Context(), `UPDATE loomplane_deployments SET status='failed'`); err != nil {
+		t.Fatal(err)
+	}
+	for user, want := range map[string]string{"cy": "Your deployment failed.", "ada": "A deployment in your organization failed."} {
+		var raw []byte
+		var id string
+		if err := svc.pg.QueryRow(t.Context(), `SELECT id,payload FROM loomplane_notification_outbox WHERE user_id=$1 AND kind=$2`, user, KindDeployment).Scan(&id, &raw); err != nil {
+			t.Fatal(err)
+		}
+		d, err := deploymentMessage(&outboxItem{id: id, wire: raw})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.HasPrefix(d.emailBody, want) {
+			t.Errorf("%s: %q", user, d.emailBody)
 		}
 	}
 }

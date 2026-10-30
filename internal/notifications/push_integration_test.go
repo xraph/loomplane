@@ -670,3 +670,66 @@ func TestInboxRowAppendsNotificationCreated(t *testing.T) {
 		t.Fatalf("push-only notice appended an event: %d %v", n, err)
 	}
 }
+
+func TestHungGatewayNeverDelaysTheEmail(t *testing.T) {
+	svc, gw, _, messages := pushRig(t)
+	ctx := t.Context()
+	old := pushStepTimeout
+	pushStepTimeout = 300 * time.Millisecond
+	t.Cleanup(func() { pushStepTimeout = old })
+	release := gw.hang()
+	t.Cleanup(release)
+	gw.register(t, svc, "h1.a")
+	gw.register(t, svc, "h1.b")
+	failDeployment(t, svc, "env-a")
+	start := time.Now()
+	if err := svc.drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if took := time.Since(start); took > 5*time.Second {
+		t.Fatalf("the drain took %s", took)
+	}
+	row := userRow(t, svc)
+	if row.complete || row.state != PushPending || row.emailState != "sent" || row.lastError != "push delivery failed" || len(messages) != 1 {
+		t.Fatalf("after the hang: %+v, %d emails", row, len(messages))
+	}
+	release()
+	if _, err := svc.pg.Exec(ctx, `UPDATE loomplane_notification_outbox SET next_attempt_at=clock_timestamp()`); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.drain(ctx); err != nil {
+		t.Fatal(err)
+	}
+	row = userRow(t, svc)
+	if !row.complete || row.state != PushSent || len(messages) != 1 {
+		t.Fatalf("after the retry: %+v, %d emails", row, len(messages))
+	}
+}
+
+func TestRetryExhaustedSkipsPushesOlderThanTheirTTL(t *testing.T) {
+	svc, gw, _, _ := pushRig(t)
+	ctx := t.Context()
+	gw.register(t, svc, "h1.a")
+	failDeployment(t, svc, "env-a")
+	if _, err := svc.pg.Exec(ctx, `UPDATE loomplane_notification_outbox SET push_state='failed',attempts=10,created_at=clock_timestamp()-interval '13 hours'`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := svc.pg.Exec(ctx, `INSERT INTO authsome_members(org_id,user_id,role)VALUES('org-a','user-a','owner') ON CONFLICT DO NOTHING`); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.RetryExhausted(ctx, asUserA()); err != nil {
+		t.Fatal(err)
+	}
+	if row := userRow(t, svc); row.state != PushSkipped {
+		t.Fatalf("an old failed push: %+v", row)
+	}
+	if _, err := svc.pg.Exec(ctx, `UPDATE loomplane_notification_outbox SET push_state='failed',attempts=10,created_at=clock_timestamp()-interval '1 hour'`); err != nil {
+		t.Fatal(err)
+	}
+	if err := svc.RetryExhausted(ctx, asUserA()); err != nil {
+		t.Fatal(err)
+	}
+	if row := userRow(t, svc); row.state != PushPending {
+		t.Fatalf("a fresh failed push: %+v", row)
+	}
+}
