@@ -19,7 +19,33 @@ import (
 func init() {
 	App.Add(
 		func(ctx context.Context, db *migrate.DB) error {
-			if _, err := db.Exec(ctx, `CREATE OR REPLACE FUNCTION loomplane_plan_notice() RETURNS TRIGGER LANGUAGE plpgsql AS $$
+			if _, err := db.Exec(ctx, planNoticeFunction0300); err != nil {
+				return fmt.Errorf("create function loomplane_plan_notice: %w", err)
+			}
+			if _, err := db.Exec(ctx, `CREATE OR REPLACE TRIGGER loomplane_plan_notice
+AFTER UPDATE OF status ON loomplane_plans
+FOR EACH ROW WHEN (OLD.status IS DISTINCT FROM NEW.status)
+EXECUTE FUNCTION loomplane_plan_notice()`); err != nil {
+				return fmt.Errorf("create trigger loomplane_plan_notice: %w", err)
+			}
+			return nil
+		},
+		func(ctx context.Context, db *migrate.DB) error {
+			if _, err := db.Exec(ctx, `DROP TRIGGER IF EXISTS loomplane_plan_notice ON loomplane_plans`); err != nil {
+				return fmt.Errorf("drop trigger loomplane_plan_notice: %w", err)
+			}
+			if _, err := db.Exec(ctx, `DROP FUNCTION IF EXISTS loomplane_plan_notice()`); err != nil {
+				return fmt.Errorf("drop function loomplane_plan_notice: %w", err)
+			}
+			return nil
+		},
+	)
+}
+
+// planNoticeFunction0300 is loomplane_plan_notice() as this migration
+// wrote it. The teams migration (20261207000700) replaces the function and
+// its down puts this one back, so the text lives here once.
+const planNoticeFunction0300 = `CREATE OR REPLACE FUNCTION loomplane_plan_notice() RETURNS TRIGGER LANGUAGE plpgsql AS $$
 BEGIN
 	IF OLD.status='planning' AND NEW.status='ready' THEN
 		INSERT INTO loomplane_notification_outbox(id,org_id,project_id,user_id,deployment_id,attempt,payload,kind,subject_id,inbox_done,webhook_done,email_state,next_attempt_at)
@@ -43,25 +69,4 @@ EXCEPTION WHEN OTHERS THEN
 	-- notice leaves a trace. Error text and code only, never row data.
 	RAISE WARNING 'loomplane_plan_notice failed: % (SQLSTATE %)', SQLERRM, SQLSTATE;
 	RETURN NULL;
-END $$`); err != nil {
-				return fmt.Errorf("create function loomplane_plan_notice: %w", err)
-			}
-			if _, err := db.Exec(ctx, `CREATE OR REPLACE TRIGGER loomplane_plan_notice
-AFTER UPDATE OF status ON loomplane_plans
-FOR EACH ROW WHEN (OLD.status IS DISTINCT FROM NEW.status)
-EXECUTE FUNCTION loomplane_plan_notice()`); err != nil {
-				return fmt.Errorf("create trigger loomplane_plan_notice: %w", err)
-			}
-			return nil
-		},
-		func(ctx context.Context, db *migrate.DB) error {
-			if _, err := db.Exec(ctx, `DROP TRIGGER IF EXISTS loomplane_plan_notice ON loomplane_plans`); err != nil {
-				return fmt.Errorf("drop trigger loomplane_plan_notice: %w", err)
-			}
-			if _, err := db.Exec(ctx, `DROP FUNCTION IF EXISTS loomplane_plan_notice()`); err != nil {
-				return fmt.Errorf("drop function loomplane_plan_notice: %w", err)
-			}
-			return nil
-		},
-	)
-}
+END $$`

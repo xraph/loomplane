@@ -13,8 +13,15 @@ func TestTeamsMigration(t *testing.T) {
 		t.Fatalf("version %q", m.Version)
 	}
 	conn, db := scratch(t)
+	// The plan notice function as 0300 wrote it, which the down restores.
+	exec(t, conn, planNoticeFunction0300)
+	planNotice := `SELECT pg_get_functiondef('loomplane_plan_notice'::regproc)`
+	before := strs(t, conn, planNotice)
 	// Running the up again changes nothing.
 	up(t, db, "create_projects", "teams", "teams")
+	if got := strs(t, conn, planNotice); len(got) != 1 || !strings.Contains(got[0], "loomplane_team_members") {
+		t.Fatalf("up left the plan notice without teams: %v", got)
+	}
 
 	exec(t, conn,
 		`INSERT INTO loomplane_projects(id,org_id,name,slug,status,created_by,created_at,updated_at) VALUES('proj_a','o','A','a','ready','u',now(),now())`,
@@ -74,6 +81,9 @@ func TestTeamsMigration(t *testing.T) {
 	}
 	if got := strs(t, conn, `SELECT count(*)||'' FROM information_schema.columns WHERE table_name='loomplane_projects' AND column_name='responsible_team_id'`); len(got) != 1 || got[0] != "0" {
 		t.Fatalf("down left the column: %v", got)
+	}
+	if got := strs(t, conn, planNotice); len(got) != 1 || strings.Contains(got[0], "loomplane_team_members") || got[0] != before[0] {
+		t.Fatalf("down didn't restore the 0300 plan notice: %v", got)
 	}
 	up(t, db, "teams")
 }
