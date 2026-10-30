@@ -94,12 +94,17 @@ BEGIN
 	ON CONFLICT(deployment_id,attempt) DO NOTHING;
 
 	IF NEW.status='failed' AND EXISTS (SELECT 1 FROM loomplane_environments e WHERE e.id=NEW.environment_id AND e.kind='production') THEN
-		INSERT INTO loomplane_notification_outbox(id,org_id,project_id,user_id,deployment_id,attempt,payload,webhook_done)
-		SELECT NEW.id||':'||NEW.retries||':'||m.user_id,NEW.org_id,NEW.project_id,m.user_id,NEW.id||':'||NEW.retries||':'||m.user_id,NEW.retries,
-			jsonb_build_object('deployment_id',NEW.id,'project_id',NEW.project_id,'environment_id',NEW.environment_id,
-			'plan_id',NEW.plan_id,'status',NEW.status,'attempt',NEW.retries),TRUE
-		FROM (SELECT DISTINCT user_id FROM authsome_members WHERE org_id=NEW.org_id AND role IN ('owner','admin') AND user_id<>NEW.started_by) m
-		ON CONFLICT DO NOTHING;
+		BEGIN
+			INSERT INTO loomplane_notification_outbox(id,org_id,project_id,user_id,deployment_id,attempt,payload,webhook_done)
+			SELECT NEW.id||':'||NEW.retries||':'||m.user_id,NEW.org_id,NEW.project_id,m.user_id,NEW.id||':'||NEW.retries||':'||m.user_id,NEW.retries,
+				jsonb_build_object('deployment_id',NEW.id,'project_id',NEW.project_id,'environment_id',NEW.environment_id,
+				'plan_id',NEW.plan_id,'status',NEW.status,'attempt',NEW.retries),TRUE
+			FROM (SELECT DISTINCT user_id FROM authsome_members WHERE org_id=NEW.org_id AND role IN ('owner','admin') AND user_id<>NEW.started_by) m
+			ON CONFLICT DO NOTHING;
+		EXCEPTION WHEN OTHERS THEN
+			-- The admin lookup must never fail the deployment write.
+			RAISE WARNING 'loomplane_notification_capture failed: % (SQLSTATE %)', SQLERRM, SQLSTATE;
+		END;
 	END IF;
 
 	RETURN NULL;

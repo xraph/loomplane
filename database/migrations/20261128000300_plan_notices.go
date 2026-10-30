@@ -38,6 +38,11 @@ BEGIN
 		ON CONFLICT(deployment_id,attempt) DO NOTHING;
 	END IF;
 	RETURN NULL;
+EXCEPTION WHEN OTHERS THEN
+	-- A notice must never fail the plan write that caused it, but a dropped
+	-- notice leaves a trace. Error text and code only, never row data.
+	RAISE WARNING 'loomplane_plan_notice failed: % (SQLSTATE %)', SQLERRM, SQLSTATE;
+	RETURN NULL;
 END $$`); err != nil {
 				return fmt.Errorf("create function loomplane_plan_notice: %w", err)
 			}
