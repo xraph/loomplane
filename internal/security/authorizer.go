@@ -52,11 +52,13 @@ type Authorizer struct {
 	now     func() time.Time
 
 	// Teams (teams.go): where Sync reads team grants, the per-person lock
-	// it takes, and the slots that bound how many syncs hold that lock at
-	// once. All are set once at startup; nil means none.
-	teamGrants TeamGrants
-	syncLock   LockFunc
-	syncSlots  chan struct{}
+	// it takes (and TrySync's version of it, which never waits), and the
+	// slots that bound how many syncs hold that lock at once. All are set
+	// once at startup; nil means none.
+	teamGrants  TeamGrants
+	syncLock    LockFunc
+	syncTryLock TryLockFunc
+	syncSlots   chan struct{}
 
 	// ensured remembers the tenants whose catalog this process has already
 	// written, so steady-state checks don't touch the catalog at all.
