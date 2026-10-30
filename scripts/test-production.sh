@@ -88,4 +88,27 @@ test "$("${compose[@]}" exec -T postgres psql -U loomplane -d loomplane -Atc 'SE
 "${compose[@]}" exec -T loomplane-worker wget -qO /dev/null http://127.0.0.1:8781/_/health
 curl --insecure --fail --silent --show-error --retry 5 --retry-delay 1 "$url/" >"$scratch/restarted.html"
 grep -q '<html' "$scratch/restarted.html"
-echo "Production smoke passed: HTTPS, dashboard, authentication, probes, backup and persistence."
+
+# The setup token is derived from the secret key and survives the restart.
+# Setup runs through the real endpoint with it, and the token is then gone.
+setup_token=$("${compose[@]}" exec -T loomplane loomplane setup-token --raw | tr -d '\r\n')
+if ! [[ "$setup_token" =~ ^[a-z2-7]{32}$ ]]; then
+  echo "setup-token --raw didn't print a setup token (got: ${setup_token:0:40})" >&2
+  exit 1
+fi
+setup_body() {
+  printf '{"name":"Smoke Admin","email":"admin@smoke.test","password":"Correct-Horse-Battery-9-Staple","organization_name":"Smoke","token":"%s"}' "$1"
+}
+setup_status() {
+  curl --insecure --silent --output "$scratch/setup.json" --write-out '%{http_code}' \
+    -X POST -H 'Content-Type: application/json' -d "$(setup_body "$1")" "$url/api/v1/setup"
+}
+test "$(setup_status aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa)" = 403
+test "$(setup_status "$setup_token")" = 200 || { cat "$scratch/setup.json" >&2; exit 1; }
+"${compose[@]}" exec -T loomplane loomplane setup-token | grep -q 'Setup is complete\.'
+done_raw=$("${compose[@]}" exec -T loomplane loomplane setup-token --raw | tr -d '\r\n')
+if [[ "$done_raw" =~ ^[a-z2-7]{32}$ ]]; then
+  echo "setup-token --raw still prints a token after setup" >&2
+  exit 1
+fi
+echo "Production smoke passed: HTTPS, dashboard, authentication, probes, backup, persistence and setup token."

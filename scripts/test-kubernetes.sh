@@ -118,7 +118,7 @@ echo "$leader_pod leads"
 
 step "Probe through the Service"
 setup_token=$(k exec deploy/"$release" -- loomplane setup-token --raw | tr -d '\r\n')
-[ -n "$setup_token" ] || fail "loomplane setup-token printed nothing"
+[[ "$setup_token" =~ ^[a-z2-7]{32}$ ]] || fail "loomplane setup-token --raw didn't print a setup token (got: ${setup_token:0:40})"
 k delete pod prober --ignore-not-found --wait >/dev/null
 # shellcheck disable=SC2016 # The prober's shell expands these, not this one.
 # On the control plane with the fixtures, so the drain below never moves the
