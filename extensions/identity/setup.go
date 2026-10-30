@@ -22,11 +22,15 @@ import (
 
 	"github.com/xraph/loomplane/internal/instance"
 	"github.com/xraph/loomplane/internal/pglock"
+	"github.com/xraph/loomplane/internal/setuptoken"
 )
 
 const (
 	// errSetupDone is the refusal once setup has been completed.
 	errSetupDone = "setup has already been completed"
+	// errSetupToken is the refusal when production setup comes without the
+	// instance's setup token.
+	errSetupToken = "a valid setup token is required; find it in the API's log or run loomplane setup-token"
 	// maxOrgName is the longest first organization name setup takes.
 	maxOrgName = 64
 	// setupRateLimit is how many setup attempts one address gets a minute.
@@ -51,6 +55,9 @@ type SetupRequest struct {
 	Email            string `json:"email"`
 	Password         string `json:"password"`
 	OrganizationName string `json:"organization_name"`
+	// Token is the setup token a production instance asks for. Development
+	// ignores it.
+	Token string `json:"token,omitempty"`
 }
 
 // SetupResponse is what a finished setup returns. The session itself is in
@@ -108,6 +115,15 @@ func (e *Extension) setupRoutes(r forge.Router) error {
 
 func (e *Extension) setupStatus(c forge.Context) error {
 	return c.JSON(http.StatusOK, SetupStatus{Pending: e.setupPending(c.Request().Context())})
+}
+
+// setupTokenOK reports whether token lets setup go ahead: always in
+// development, otherwise only the token derived from the secret key.
+func (e *Extension) setupTokenOK(token string) bool {
+	if e.cfg.IsDevelopment() {
+		return true
+	}
+	return setuptoken.Matches(e.cfg.SecretKey, token)
 }
 
 // setupPending reports whether the instance still waits for setup. When
@@ -267,6 +283,11 @@ func (e *Extension) completeSetup(c forge.Context) error {
 	email, err := validSetup(&in)
 	if err != nil {
 		return forge.NewHTTPError(http.StatusBadRequest, err.Error())
+	}
+	// Before any database read, so a guess costs the caller nothing to
+	// refuse and tells them nothing about the instance.
+	if !e.setupTokenOK(in.Token) {
+		return forge.NewHTTPError(http.StatusForbidden, errSetupToken)
 	}
 	// Checked before the lock too, so a set-up instance answers at once.
 	done, err := e.setupDone(c.Request().Context())
