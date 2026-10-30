@@ -1,0 +1,36 @@
+#!/usr/bin/env bash
+# First-login wizard: asks for the domain and email, then starts Loomplane.
+# Usage: loomplane-setup [--force]
+set -euo pipefail
+
+dir="${LOOMPLANE_DIR:-/srv/loomplane}"
+installer="${LOOMPLANE_INSTALLER:-/usr/local/lib/loomplane/install.sh}"
+
+if [ "$(id -u)" -ne 0 ]; then
+  echo "loomplane-setup: run this as root (try: sudo loomplane-setup)" >&2
+  exit 1
+fi
+
+force=""
+case "${1:-}" in
+  "") ;;
+  --force) force=1 ;;
+  *) echo "usage: loomplane-setup [--force]" >&2; exit 2 ;;
+esac
+
+if [ -f "$dir/.configured" ] && [ -z "$force" ]; then
+  echo "loomplane-setup: Loomplane is already set up. Run loomplane-setup --force to run it again." >&2
+  exit 1
+fi
+
+read -r -p "Domain Loomplane will answer on (for example loomplane.example.com): " domain
+read -r -p "Email for certificate notices: " email
+
+export LOOMPLANE_DIR="$dir" LOOMPLANE_DOMAIN="$domain" ACME_EMAIL="$email"
+bash "$installer" secrets
+bash "$installer" configure
+bash "$installer" start
+
+echo
+echo "Point an A record for $domain at this Droplet if you haven't yet."
+echo "Copy $dir/.env somewhere safe. It holds the secret key, and losing it makes stored credentials unrecoverable."
