@@ -31,12 +31,14 @@ type ManagedOutcome struct {
 }
 
 type ManagedIssuance struct {
-	ID         string
-	Scope      ManagedScope
-	Request    ManagedRequest
-	Outcome    *ManagedOutcome
-	IssuedAt   time.Time
-	ResolvedAt *time.Time
+	CleanupGrantID       string `json:",omitempty"`
+	CleanupGrantRevision int64  `json:",omitempty"`
+	ID                   string
+	Scope                ManagedScope
+	Request              ManagedRequest
+	Outcome              *ManagedOutcome
+	IssuedAt             time.Time
+	ResolvedAt           *time.Time
 }
 
 // ManagedJournal records issuance before transmission. Resolve must retain exact

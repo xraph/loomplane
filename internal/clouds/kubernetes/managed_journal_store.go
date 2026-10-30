@@ -188,7 +188,7 @@ func (s *ControllerStore) RevokeManagedScope(ctx context.Context, scope ManagedS
 // ManagedIssuances returns safe historical outcomes across all attempt epochs.
 // An unresolved entry remains unresolved after revocation and later successes.
 func (s *ControllerStore) ManagedIssuances(ctx context.Context, org, release string) ([]ManagedIssuance, error) {
-	rows, err := s.db.Query(ctx, `SELECT id,scope,request,outcome,issued_at,resolved_at FROM loomplane_managed_workload_issuances WHERE org_id=$1 AND release_id=$2 ORDER BY issued_at,id`, org, release)
+	rows, err := s.db.Query(ctx, `SELECT id,scope,request,outcome,issued_at,resolved_at,coalesce(cleanup_grant_id,''),coalesce(cleanup_grant_revision,0) FROM loomplane_managed_workload_issuances WHERE org_id=$1 AND release_id=$2 ORDER BY issued_at,id`, org, release)
 	if err != nil {
 		return nil, err
 	}
@@ -197,7 +197,7 @@ func (s *ControllerStore) ManagedIssuances(ctx context.Context, org, release str
 	for rows.Next() {
 		var v ManagedIssuance
 		var scope, request, outcome []byte
-		if checkErr := rows.Scan(&v.ID, &scope, &request, &outcome, &v.IssuedAt, &v.ResolvedAt); checkErr != nil {
+		if checkErr := rows.Scan(&v.ID, &scope, &request, &outcome, &v.IssuedAt, &v.ResolvedAt, &v.CleanupGrantID, &v.CleanupGrantRevision); checkErr != nil {
 			return nil, checkErr
 		}
 		if checkErr := json.Unmarshal(scope, &v.Scope); checkErr != nil {
