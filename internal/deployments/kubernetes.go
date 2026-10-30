@@ -38,6 +38,13 @@ func (e *OwnedTarget) kubernetesSession(org, connection string) kubernetes.Sessi
 		if err != nil {
 			return nil, err
 		}
+		// Attachment identity comes from validated credential storage, not the
+		// Kubernetes API. Keep it alongside the freshly checked cluster facts.
+		if c.Method == connections.MethodManagedKubernetes {
+			for _, key := range []string{"managed_attachment_id", "managed_project_id", "managed_resource_id"} {
+				result.Details[key] = c.Details[key]
+			}
+		}
 		if len(result.Missing) > 0 || !reflect.DeepEqual(planning.ReviewedConnectionSettings(e.Cloud, result.Details), planning.ReviewedConnectionSettings(e.Cloud, c.Details)) {
 			return nil, errors.New("cluster identity or namespace permissions changed; check the connection and plan again")
 		}
@@ -66,31 +73,47 @@ func (e *OwnedTarget) kubernetesSession(org, connection string) kubernetes.Sessi
 		// Credential resolution verifies the persisted attachment before this session.
 		client.Config.ManagedWorkload = c.Method == connections.MethodManagedKubernetes && c.Details["managed_attachment_id"] != ""
 		if client.Config.ManagedWorkload {
-			if labels[owned.LabelStateful] == "true" || labels[owned.LabelCatalogComponent] != "" {
-				return nil, kubernetes.ErrManagedAuthority
-			}
 			journal, ok := e.Controllers.(*kubernetes.ControllerStore)
 			if !ok {
 				return nil, kubernetes.ErrManagedAuthority
 			}
 			client.Config.ManagedJournal = journal
-			if operation == "apply" && labels[owned.LabelRuntime] != "" && labels[owned.LabelInstance] != "" {
-				attempt, exists := cloudinfra.WorkloadAttemptFrom(ctx)
-				if !exists {
-					return nil, kubernetes.ErrManagedAuthority
+			client.Config.ManagedProfile = kubernetes.ManagedProfileJournal
+			// Incomplete preflight identities get a read-only fenced client.
+			if labels[owned.LabelRuntime] != "" && labels[owned.LabelInstance] != "" {
+				identity := kubernetes.ManagedRuntimeIdentity{Org: org, Project: labels[owned.LabelProject], Environment: labels[owned.LabelEnvironment], Service: labels[owned.LabelService], Plan: labels[owned.LabelPlan], Connection: connection, Instance: labels[owned.LabelInstance], RuntimeRef: labels[owned.LabelRuntime], RuntimeRevision: labels[owned.LabelRevision], Namespace: client.Config.Namespace, NamespaceUID: result.Details["namespace_uid"], ClusterCA: result.Details["cluster_ca"]}
+				profile, profileErr := journal.ManagedProfileFor(ctx, identity)
+				if profileErr != nil {
+					return nil, profileErr
 				}
-				scope := kubernetes.ManagedScope{Org: org, Project: labels[owned.LabelProject], Environment: labels[owned.LabelEnvironment], Service: labels[owned.LabelService], Plan: labels[owned.LabelPlan], Deployment: attempt.Deployment, Action: labels[owned.LabelAction], Connection: connection, Instance: labels[owned.LabelInstance], RuntimeRef: labels[owned.LabelRuntime], RuntimeRevision: labels[owned.LabelRevision], Namespace: client.Config.Namespace, NamespaceUID: result.Details["namespace_uid"], ClusterCA: result.Details["cluster_ca"], Epoch: attempt.Generation}
-				scope.Release = kubernetes.WorkloadReleaseID(scope.RuntimeRef, scope.RuntimeRevision)
-				if scope.Org != attempt.Org || scope.Project != attempt.Project || scope.Environment != attempt.Environment || scope.Service != attempt.Service || scope.Plan != attempt.Plan {
-					return nil, kubernetes.ErrManagedAuthority
+				if profile == kubernetes.ManagedProfileLegacy {
+					if operation != "read" {
+						if checkErr := journal.CheckLegacyManagedWrite(ctx, identity); checkErr != nil {
+							return nil, checkErr
+						}
+					}
+					client.Config.ManagedProfile = profile
+					client.Config.ManagedIdentity = identity
+					client.Config.ManagedLegacyGuard = journal
+				} else if operation == "apply" {
+					if labels[owned.LabelStateful] == "true" || labels[owned.LabelCatalogComponent] != "" {
+						return nil, kubernetes.ErrManagedAuthority
+					}
+					attempt, exists := cloudinfra.WorkloadAttemptFrom(ctx)
+					if !exists {
+						return nil, kubernetes.ErrManagedAuthority
+					}
+					scope := kubernetes.ManagedScope{Org: org, Project: identity.Project, Environment: identity.Environment, Service: identity.Service, Plan: identity.Plan, Deployment: attempt.Deployment, Action: labels[owned.LabelAction], Connection: connection, Instance: identity.Instance, RuntimeRef: identity.RuntimeRef, RuntimeRevision: identity.RuntimeRevision, Namespace: client.Config.Namespace, NamespaceUID: result.Details["namespace_uid"], ClusterCA: result.Details["cluster_ca"], Epoch: attempt.Generation}
+					scope.Release = kubernetes.WorkloadReleaseID(scope.RuntimeRef, scope.RuntimeRevision)
+					if scope.Org != attempt.Org || scope.Project != attempt.Project || scope.Environment != attempt.Environment || scope.Service != attempt.Service || scope.Plan != attempt.Plan {
+						return nil, kubernetes.ErrManagedAuthority
+					}
+					if checkErr := journal.OpenManagedScope(ctx, scope); checkErr != nil {
+						return nil, checkErr
+					}
+					client.Config.ManagedScope = scope
 				}
-				if checkErr := journal.OpenManagedScope(ctx, scope); checkErr != nil {
-					return nil, checkErr
-				}
-				client.Config.ManagedScope = scope
 			}
-			// Every managed runtime session is fenced. Read-only/preflight and
-			// unintegrated cleanup sessions have no mutation authority.
 			return kubernetes.New(client.Config)
 		}
 		return client, nil

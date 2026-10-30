@@ -52,7 +52,7 @@ func (r ControllerReceipt) Valid() bool {
 
 func (r *Runtime) recordController(ctx context.Context, c *Client, iid id.ID, spec cpprovider.ServiceSpec, labels map[string]string, d *appsv1.Deployment) error {
 	if r.RecordController == nil {
-		if c.Config.ManagedWorkload {
+		if c.Config.journalRequired() {
 			return ErrManagedAuthority
 		}
 		return nil
@@ -65,7 +65,7 @@ func (r *Runtime) recordController(ctx context.Context, c *Client, iid id.ID, sp
 		account = "default"
 	}
 	receipt := ControllerReceipt{Scope: domain.Scope{OrgID: labels[owned.LabelOrg], ProjectID: labels[owned.LabelProject], EnvironmentID: labels[owned.LabelEnvironment]}, ConnectionID: labels[owned.LabelConnection], InstanceID: iid.String(), PlanID: labels[owned.LabelPlan], RuntimeRef: labels[owned.LabelRuntime], ServiceID: labels[owned.LabelService], Container: spec.Name, Image: spec.Image, Namespace: d.Namespace, NamespaceUID: c.Config.Details["namespace_uid"], ClusterCA: c.Config.Details["cluster_ca"], ServiceAccount: account, DeploymentUID: string(d.UID), DeploymentGeneration: d.Generation, RuntimeRevision: labels[owned.LabelRevision]}
-	if c.Config.ManagedWorkload {
+	if c.Config.journalRequired() {
 		receipt.ReleaseID = d.Spec.Template.Annotations[WorkloadReleaseAnnotation]
 		if receipt.ReleaseID != WorkloadReleaseID(receipt.RuntimeRef, receipt.RuntimeRevision) {
 			return ErrOwned
@@ -74,7 +74,7 @@ func (r *Runtime) recordController(ctx context.Context, c *Client, iid id.ID, sp
 	if !receipt.Valid() {
 		return ErrOwned
 	}
-	if c.Config.ManagedWorkload {
+	if c.Config.journalRequired() {
 		ctx = WithManagedScope(ctx, c.Config.ManagedScope)
 	}
 	return r.RecordController(ctx, receipt)

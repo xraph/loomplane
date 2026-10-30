@@ -12,7 +12,10 @@ import (
 
 var ErrControllerMissing = errors.New("no trusted Kubernetes controller receipt")
 
-type ControllerStore struct{ db *pgdriver.PgDB }
+type ControllerStore struct {
+	db              *pgdriver.PgDB
+	capacityEnabled bool
+}
 
 func NewControllerStore(db *pgdriver.PgDB) *ControllerStore { return &ControllerStore{db: db} }
 
@@ -32,6 +35,9 @@ func (s *ControllerStore) RecordController(ctx context.Context, r ControllerRece
 			err = errors.Join(err, rollbackErr)
 		}
 	}()
+	if checkErr := lockManagedOrganization(ctx, tx, r.OrgID); checkErr != nil {
+		return checkErr
+	}
 	if r.ReleaseID != "" {
 		scope, ok := ctx.Value(managedScopeKey{}).(ManagedScope)
 		if !ok || scope.Release != r.ReleaseID || scope.Instance != r.InstanceID || scope.RuntimeRef != r.RuntimeRef || scope.RuntimeRevision != r.RuntimeRevision || scope.Org != r.OrgID || scope.Connection != r.ConnectionID || scope.Project != r.ProjectID || scope.Environment != r.EnvironmentID || scope.Service != r.ServiceID || scope.Plan != r.PlanID || scope.Namespace != r.Namespace || scope.NamespaceUID != r.NamespaceUID || scope.ClusterCA != r.ClusterCA {
@@ -62,7 +68,9 @@ func (s *ControllerStore) RecordController(ctx context.Context, r ControllerRece
 		return ErrOwned
 	}
 	if identity["managed_attachment_id"] != "" && r.ReleaseID == "" {
-		return ErrManagedAuthority
+		if checkErr := s.checkLegacyManagedWrite(ctx, tx, runtimeIdentityForReceipt(r)); checkErr != nil {
+			return checkErr
+		}
 	}
 	raw, err := json.Marshal(r)
 	if err != nil {

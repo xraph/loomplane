@@ -79,7 +79,7 @@ func TestManagedWorkloadJournalRealPending(t *testing.T) {
 			iid := id.New(id.PrefixInstance)
 			scope := kube.ManagedScope{Org: "org", Project: "proj", Environment: "env", Service: "api", Plan: plan.ID, Deployment: attempt.Deployment, Action: "service:api", Connection: "cluster-runtime", Instance: iid.String(), RuntimeRef: "org/env/api/runtime_journal", RuntimeRevision: attempt.Deployment + "/service:api", Namespace: namespace, NamespaceUID: string(ns.UID), ClusterCA: ca, Epoch: attempt.Generation}
 			scope.Release = kube.WorkloadReleaseID(scope.RuntimeRef, scope.RuntimeRevision)
-			journal := kube.NewControllerStore(f.db)
+			journal := kube.NewControllerStore(f.db).WithClusterCapacity(true)
 			if err = journal.OpenManagedScope(ctx, scope); err != nil {
 				t.Fatal(err)
 			}
@@ -134,6 +134,48 @@ func TestManagedWorkloadJournalRealPending(t *testing.T) {
 			if (mode == "guaranteed" && holds != 1) || (mode == "best_effort" && holds != 0) {
 				t.Fatalf("hold mode %s count %d", mode, holds)
 			}
+			disabled := journal.WithClusterCapacity(false)
+			identity := kube.ManagedRuntimeIdentity{Org: scope.Org, Project: scope.Project, Environment: scope.Environment, Service: scope.Service, Plan: scope.Plan, Connection: scope.Connection, Instance: scope.Instance, RuntimeRef: scope.RuntimeRef, RuntimeRevision: scope.RuntimeRevision, Namespace: scope.Namespace, NamespaceUID: scope.NamespaceUID, ClusterCA: scope.ClusterCA}
+			profile, profileErr := disabled.ManagedProfileFor(ctx, identity)
+			if profileErr != nil || profile != kube.ManagedProfileJournal {
+				t.Fatalf("disabled profile downgraded: %s %v", profile, profileErr)
+			}
+			if err = disabled.OpenManagedScope(ctx, scope); !errors.Is(err, kube.ErrManagedCapacityDisabled) {
+				t.Fatalf("disabled scope opened: %v", err)
+			}
+			if _, err = disabled.Issue(ctx, scope, entries[0].Request); !errors.Is(err, kube.ErrManagedCapacityDisabled) {
+				t.Fatalf("disabled journal write: %v", err)
+			}
+			if _, err = f.sql.Exec(ctx, `INSERT INTO loomplane_plans(id,org_id,project_id,environment_id,environment,status,revision,manifest_id,manifest_revision,result,executable,created_by,created_at) SELECT 'journal-legacy',org_id,project_id,environment_id,environment,'ready','legacy-review',manifest_id,manifest_revision,(result-'required_runtime_protocol') #- '{actions,0,service,cluster_demand}',true,created_by,now() FROM loomplane_plans WHERE id=$1`, plan.ID); err != nil {
+				t.Fatal(err)
+			}
+			acceptFuture(t, f, "journal-legacy")
+			spoofed := identity
+			spoofed.Plan, spoofed.RuntimeRef = "journal-legacy", "org/env/api/runtime_other"
+			profile, profileErr = disabled.ManagedProfileFor(ctx, spoofed)
+			if profileErr != nil || profile != kube.ManagedProfileJournal {
+				t.Fatalf("legacy labels hid persisted authority: %s %v", profile, profileErr)
+			}
+			if err = disabled.CheckLegacyManagedWrite(ctx, spoofed); !errors.Is(err, kube.ErrManagedAuthority) {
+				t.Fatalf("legacy labels downgraded authority: %v", err)
+			}
+			stripped := *receipt
+			stripped.ReleaseID = ""
+			if err = disabled.RecordController(ctx, stripped); !errors.Is(err, kube.ErrManagedAuthority) {
+				t.Fatalf("stripped journal receipt accepted: %v", err)
+			}
+			legacyConfig := *cfg
+			legacyConfig.ManagedProfile, legacyConfig.ManagedIdentity, legacyConfig.ManagedLegacyGuard = kube.ManagedProfileLegacy, identity, disabled
+			staleClient, clientErr := kube.New(&legacyConfig)
+			if clientErr != nil {
+				t.Fatal(clientErr)
+			}
+			if _, err = staleClient.Kube.AppsV1().Deployments(namespace).Update(ctx, deployment, metav1.UpdateOptions{}); !errors.Is(err, kube.ErrManagedAuthority) {
+				t.Fatalf("caller legacy flag bypassed saved journal identity: %v", err)
+			}
+			if _, err = staleClient.Kube.AppsV1().Deployments(namespace).Get(ctx, deployment.Name, metav1.GetOptions{}); err != nil {
+				t.Fatalf("disabled profile lost read recovery: %v", err)
+			}
 			request := entries[0].Request
 			unresolved, err := journal.Issue(ctx, scope, request)
 			if err != nil {
@@ -175,10 +217,10 @@ func TestManagedWorkloadJournalRealPending(t *testing.T) {
 			if err = journal.RecordController(kube.WithManagedScope(ctx, scope), *receipt); err == nil {
 				t.Fatal("late receipt revived authority")
 			}
-			if err = journal.Resolve(ctx, delayed, oldScope, *entries[0].Outcome); err != nil {
+			if err = disabled.Resolve(ctx, delayed, oldScope, *entries[0].Outcome); err != nil {
 				t.Fatal("accepted delayed outcome lost", err)
 			}
-			authority, err := journal.GetManagedAuthority(ctx, scope.Org, scope.Release)
+			authority, err := disabled.GetManagedAuthority(ctx, scope.Org, scope.Release)
 			if err != nil || authority.Scope != scope || authority.RevokedAt == nil {
 				t.Fatalf("authority recovery: %+v %v", authority, err)
 			}
@@ -189,7 +231,7 @@ func TestManagedWorkloadJournalRealPending(t *testing.T) {
 			if err = f.sql.QueryRow(ctx, `SELECT settled FROM loomplane_workload_attempts WHERE org_id='org' AND service='api'`).Scan(&settled); err != nil || settled {
 				t.Fatalf("uncertain issuance settled: %t %v", settled, err)
 			}
-			saved, err := journal.ManagedIssuances(ctx, scope.Org, scope.Release)
+			saved, err := disabled.ManagedIssuances(ctx, scope.Org, scope.Release)
 			if err != nil {
 				t.Fatal(err)
 			}

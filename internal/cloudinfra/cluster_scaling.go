@@ -404,3 +404,7 @@ func (s *Service) recoverClusterScaling(ctx context.Context) error {
 func (s *Service) CheckClusterWorkloadCapacity(context.Context) error {
 	return s.clusterScalingEnabled()
 }
+
+// ClusterWorkloadCapacityEnabled distinguishes the additive capacity profile
+// from basic managed deployments, which do not reserve capacity.
+func (s *Service) ClusterWorkloadCapacityEnabled() bool { return s.ClusterCapacity.Enabled }

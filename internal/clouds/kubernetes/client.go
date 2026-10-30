@@ -48,8 +48,10 @@ func New(cfg *Config) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create Kubernetes transport: %w", err)
 	}
-	if cfg.ManagedWorkload {
+	if cfg.journalRequired() {
 		httpClient.Transport = &managedTransport{next: httpClient.Transport, journal: cfg.ManagedJournal, scope: cfg.ManagedScope}
+	} else if cfg.ManagedWorkload {
+		httpClient.Transport = &managedLegacyTransport{next: httpClient.Transport, guard: cfg.ManagedLegacyGuard, identity: cfg.ManagedIdentity}
 	}
 	httpClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	client, err := kubeclient.NewForConfigAndClient(rc, httpClient)

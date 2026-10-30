@@ -341,7 +341,7 @@ func (e *Extension) Register(fapp forge.App) error {
 		log.Warn("endpoint checks from a cluster can reach the database", forge.F("error", servicesErr.Error()))
 	}
 	dialGuard := &deployments.DialGuard{Denied: e.cfg.Planning.EndpointDeniedCIDRs, Services: denied}
-	clusterTarget := &deployments.OwnedTarget{Cloud: connections.Kubernetes, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, Controllers: kubernetes.NewControllerStore(pg), Hooks: catalogHooks, Endpoints: e.endpoints, Checker: checker, DialGuard: dialGuard, FilesRevisionKey: filesKey}
+	clusterTarget := &deployments.OwnedTarget{Cloud: connections.Kubernetes, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, Controllers: kubernetes.NewControllerStore(pg).WithClusterCapacity(e.cfg.Clouds.ClusterCapacity.Enabled), Hooks: catalogHooks, Endpoints: e.endpoints, Checker: checker, DialGuard: dialGuard, FilesRevisionKey: filesKey}
 	serverTarget.Bindings, clusterTarget.Bindings = planStore.ListBindings, planStore.ListBindings
 	executors[connections.Server], executors[connections.Kubernetes] = serverTarget, clusterTarget
 	dialer := ownedDialer{credentials: clouds, targets: map[string]*deployments.OwnedTarget{connections.Server: serverTarget, connections.Kubernetes: clusterTarget}}

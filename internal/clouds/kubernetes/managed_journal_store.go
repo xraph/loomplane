@@ -46,6 +46,9 @@ func guardManagedScope(ctx context.Context, tx driver.Tx, s ManagedScope) error 
 // OpenManagedScope binds the saved runtime identity to the approved demand.
 // A takeover may advance the epoch, but a revoked release can never reopen.
 func (s *ControllerStore) OpenManagedScope(ctx context.Context, scope ManagedScope) error {
+	if !s.capacityEnabled {
+		return ErrManagedCapacityDisabled
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -84,6 +87,9 @@ func (s *ControllerStore) OpenManagedScope(ctx context.Context, scope ManagedSco
 }
 
 func (s *ControllerStore) Issue(ctx context.Context, scope ManagedScope, request ManagedRequest) (string, error) {
+	if !s.capacityEnabled {
+		return "", ErrManagedCapacityDisabled
+	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return "", err

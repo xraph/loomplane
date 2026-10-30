@@ -27,6 +27,7 @@ type managedDemandAuthority struct {
 func (a managedDemandAuthority) EnsureCapacity(context.Context, cloudinfra.CapacityDemand) (*cloudinfra.CapacityDecision, error) {
 	return nil, errors.New("server expansion must not run")
 }
+func (a managedDemandAuthority) ClusterWorkloadCapacityEnabled() bool { return !a.disabled }
 func (a managedDemandAuthority) CheckClusterWorkloadCapacity(context.Context) error {
 	if a.disabled {
 		return cloudinfra.ErrConflict

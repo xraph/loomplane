@@ -26,13 +26,16 @@ var namespaceRE = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
 // Config keeps credentials in REST only. Details contains safe display fields.
 type Config struct {
 	// ManagedWorkload is set only after resolving a persisted managed attachment.
-	ManagedWorkload bool
-	ManagedJournal  ManagedJournal
-	ManagedScope    ManagedScope
-	REST            *rest.Config
-	Namespace       string
-	Context         string
-	Details         map[string]string
+	ManagedWorkload    bool
+	ManagedProfile     ManagedRuntimeProfile
+	ManagedIdentity    ManagedRuntimeIdentity
+	ManagedLegacyGuard ManagedLegacyGuard
+	ManagedJournal     ManagedJournal
+	ManagedScope       ManagedScope
+	REST               *rest.Config
+	Namespace          string
+	Context            string
+	Details            map[string]string
 }
 
 // ParseConfig accepts embedded credentials only, with no ambient loading
@@ -195,4 +198,8 @@ func configFor(rc *rest.Config, contextName, namespace string, caData []byte, se
 		}
 	}
 	return &Config{REST: rc, Namespace: namespace, Context: contextName, Details: details}, nil
+}
+
+func (c *Config) journalRequired() bool {
+	return c.ManagedWorkload && c.ManagedProfile != ManagedProfileLegacy
 }

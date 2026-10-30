@@ -27,6 +27,7 @@ type ClusterWorkloadDemand struct {
 
 type clusterWorkloadAuthority interface {
 	CheckClusterWorkloadCapacity(context.Context) error
+	ClusterWorkloadCapacityEnabled() bool
 	CurrentClusterScalingPolicy(context.Context, string, string, string, string) (*cloudinfra.ClusterScalingPolicy, error)
 }
 
@@ -50,12 +51,18 @@ func (s *Service) PrepareClusterWorkloadDemands(ctx context.Context, plan *Plan,
 			continue
 		}
 		cfg := a.Service
-		if cfg.CloudPlacement == nil || cfg.CloudPlacement.TargetID == "" {
-			return workloadBlock("managed_target_required")
-		}
 		authority, ok := s.capacity.(clusterWorkloadAuthority)
 		if !ok {
 			return ErrUnavailable
+		}
+		if !authority.ClusterWorkloadCapacityEnabled() {
+			if cfg.CapacityMode != "" || cfg.ClusterDemand != nil {
+				return workloadBlock("cluster_capacity_disabled")
+			}
+			continue
+		}
+		if cfg.CloudPlacement == nil || cfg.CloudPlacement.TargetID == "" {
+			return workloadBlock("managed_target_required")
 		}
 		if err := authority.CheckClusterWorkloadCapacity(ctx); err != nil {
 			return err

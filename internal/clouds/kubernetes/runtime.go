@@ -167,7 +167,7 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 	defer func() {
 		// Managed rollback needs separate cleanup authority. Keep its accepted
 		// and uncertain effects for that protocol instead of replaying snapshots.
-		if err == nil || !mutated || c.Config.ManagedWorkload {
+		if err == nil || !mutated || c.Config.journalRequired() {
 			return
 		}
 		rollback, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
@@ -232,7 +232,7 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 		return nil, err
 	}
 	template.Labels = maps.Clone(identity)
-	if c.Config.ManagedWorkload {
+	if c.Config.journalRequired() {
 		release := WorkloadReleaseID(labels[owned.LabelRuntime], labels[owned.LabelRevision])
 		if release == "" {
 			return nil, ErrOwned
@@ -296,7 +296,7 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 	if err != nil {
 		return nil, err
 	}
-	if c.Config.ManagedWorkload {
+	if c.Config.journalRequired() {
 		if recordErr := r.recordController(ctx, c, iid, spec, labels, deployment); recordErr != nil {
 			return nil, recordErr
 		}
@@ -358,7 +358,7 @@ func (r *Runtime) Apply(ctx context.Context, iid id.ID, spec cpprovider.ServiceS
 	if checkErr := wait(ctx, c, name); checkErr != nil {
 		return nil, checkErr
 	}
-	if !c.Config.ManagedWorkload {
+	if !c.Config.journalRequired() {
 		if recordErr := r.recordController(ctx, c, iid, spec, labels, deployment); recordErr != nil {
 			return nil, recordErr
 		}
