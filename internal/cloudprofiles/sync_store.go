@@ -116,10 +116,13 @@ func (s *PgStore) Accept(ctx context.Context, p *Preview, snapshot *Snapshot, sy
 			return nil, storeError(err)
 		}
 	}
-	existing, _, e := readSync(tx.QueryRow(ctx, `SELECT body,snapshot,version FROM loomplane_cloud_syncs WHERE org_id=$1 AND project_id=$2 AND (idempotency_key=$3 OR preview_id=$4) ORDER BY (idempotency_key=$3) DESC LIMIT 1`, p.OrgID, p.ProjectID, key, p.ID))
+	existing, existingSnapshot, e := readSync(tx.QueryRow(ctx, `SELECT body,snapshot,version FROM loomplane_cloud_syncs WHERE org_id=$1 AND project_id=$2 AND (idempotency_key=$3 OR preview_id=$4) ORDER BY (idempotency_key=$3) DESC LIMIT 1`, p.OrgID, p.ProjectID, key, p.ID))
 	if e == nil {
 		if existing.PreviewID != p.ID {
 			return nil, ErrConflict
+		}
+		if checkErr := setManagedCleanupActor(ctx, tx, existingSnapshot, existing); checkErr != nil {
+			return nil, checkErr
 		}
 		return existing, nil
 	}
@@ -134,6 +137,9 @@ func (s *PgStore) Accept(ctx context.Context, p *Preview, snapshot *Snapshot, sy
 		return nil, ErrConflict
 	}
 	if checkErr := validateAcceptedReview(ctx, tx, p, snapshot, sync); checkErr != nil {
+		return nil, checkErr
+	}
+	if checkErr := setManagedCleanupActor(ctx, tx, snapshot, sync); checkErr != nil {
 		return nil, checkErr
 	}
 	// Lock every participant's capacity domain before taking target or environment locks.

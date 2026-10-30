@@ -839,6 +839,10 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 		result.Problems = append(result.Problems, Finding{Code: "cluster-capacity", Message: workloadErr.Error()})
 		result.Executable = false
 	}
+	if cleanupErr := s.PrepareManagedCleanupTargets(ctx, plan, result); cleanupErr != nil {
+		result.Problems = append(result.Problems, Finding{Code: "managed-cleanup", Message: cleanupErr.Error()})
+		result.Executable = false
+	}
 	s.checkBackupPreview(ctx, plan, result)
 	warnings, err := s.promotionWarnings(ctx, plan, rev.Revision)
 	if err != nil {

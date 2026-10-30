@@ -402,6 +402,9 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 		if workloadErr := s.PrepareClusterWorkloadDemands(ctx, &frontendPlan, result); workloadErr != nil {
 			preview.Blockers = append(preview.Blockers, env.Name+": "+workloadErr.Error())
 		}
+		if cleanupErr := s.PrepareManagedCleanupTargets(ctx, &frontendPlan, result); cleanupErr != nil {
+			preview.Blockers = append(preview.Blockers, env.Name+": "+cleanupErr.Error())
+		}
 		plan.setResult(result)
 		for _, finding := range result.Problems {
 			preview.Blockers = append(preview.Blockers, env.Name+": "+finding.Name+": "+finding.Message)
@@ -603,7 +606,7 @@ func (s *Service) ApplyCloudChange(ctx context.Context, p security.Principal, pr
 	if planErr := prepareAcceptedPlans(sync, snapshot); planErr != nil {
 		return nil, planErr
 	}
-	sync, err = st.Accept(ctx, preview, snapshot, sync, key)
+	sync, err = st.Accept(security.WithPrincipal(ctx, p), preview, snapshot, sync, key)
 	if err != nil {
 		return nil, err
 	}
