@@ -606,7 +606,9 @@ func newReleaseFixture(t *testing.T, yaml string) *releaseFixture {
 	}
 	workflows.Bind(f.service, f.ramp, func() *engine.Engine { return eng })
 	workflows.BindRunStore(orchestration.NewPgRunStore(db))
-	options := workflows.CanaryOptions("release", 4)
+	// New plans start on CurrentBuild, the managed workload build, which
+	// runs the canary build's workflows.
+	options := workflows.ManagedWorkloadOptions("release", 4)
 	options.PollInterval = 10 * time.Millisecond
 	worker, err := drt.NewWorker(ds, options)
 	if err != nil {
