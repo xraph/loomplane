@@ -79,6 +79,8 @@ type kubeRouteStore struct {
 	// ancestors are the organization's other zones, such as zone's domain.
 	ancestors []*Zone
 	binding   RouteBinding
+	// commit is the binding's reviewed commit.
+	commit    string
 	route     *Route
 	op        RouteOperation
 	locks     []string
@@ -109,6 +111,9 @@ func (s *kubeRouteStore) RouteBindingCloud(context.Context, string, string, stri
 func (s *kubeRouteStore) ResolveRouteBinding(context.Context, string, string, RouteInput) (RouteBinding, error) {
 	return s.binding, nil
 }
+func (s *kubeRouteStore) RouteBindingCommit(context.Context, string, string) (string, error) {
+	return s.commit, nil
+}
 func (s *kubeRouteStore) PreviewRoute(_ context.Context, op *RouteOperation) error {
 	s.op = *op
 	return nil
@@ -130,7 +135,7 @@ func (s *kubeRouteStore) BeginIngress(_ context.Context, op *RouteOperation) (*I
 	return &IngressState{}, nil
 }
 func (s *kubeRouteStore) PublishRoute(_ context.Context, op *RouteOperation) error {
-	op.Route.Receipt, op.Route.OperationID = op.Receipt, op.ID
+	op.Route.Receipt, op.Route.Receipts, op.Route.OperationID = op.Receipt, op.Receipts, op.ID
 	op.Route.Revision++
 	route := op.Route
 	s.route, s.op, s.published = &route, *op, s.published+1
@@ -477,6 +482,10 @@ func TestRouteLockKey(t *testing.T) {
 		t.Fatal(got)
 	}
 	if got := routeLockKey(Route{OrgID: "org", Binding: kubernetesBinding("203.0.113.10")}); got != "ingress/org/kubernetes:conn_k8s" {
+		t.Fatal(got)
+	}
+	// Routes on one app serialize: each change rewrites the app's spec.
+	if got := routeLockKey(Route{OrgID: "org", Binding: platformBinding()}); got != "ingress/org/platform:conn_do/app-1" {
 		t.Fatal(got)
 	}
 }

@@ -1,5 +1,10 @@
 import { useAuth } from "@authsome/ui-react"
-import { Outlet, useRouter, useRouterState } from "@tanstack/react-router"
+import {
+  Navigate,
+  Outlet,
+  useRouter,
+  useRouterState,
+} from "@tanstack/react-router"
 import { useCallback, useEffect } from "react"
 
 import { messageOf } from "@/client/errors"
@@ -13,11 +18,13 @@ import { Button } from "@/components/ui/button"
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar"
 import { PageLoading, WorkspaceNotFound } from "@/components/route-feedback"
 import { OrganizationGate, useOrganization } from "@/lib/organization"
+import { useInstance } from "@/lib/instance"
 import { usePendingInvite } from "@/lib/invite"
 import { usePath } from "@/lib/router"
 import { AcceptInvitation } from "@/pages/accept-invitation"
 import { AuthPage } from "@/pages/auth"
 import { Onboarding } from "@/pages/onboarding"
+import { SetupPage } from "@/pages/setup"
 import { RealtimeProvider } from "@/lib/realtime-provider"
 import { isUnprefixed, requestedWorkspace } from "@/lib/workspace-url"
 
@@ -28,6 +35,8 @@ const recoveryPaths = ["/forgot-password", "/reset-password", "/verify-email"]
 // below, so moving between them swaps the card and keeps the frame mounted.
 function authTitle(path: string) {
   switch (path) {
+    case "/setup":
+      return "Set up Loomplane"
     case "/sign-up":
       return "Create your Loomplane account"
     case "/forgot-password":
@@ -45,8 +54,23 @@ export function App() {
   const path = usePath()
 
   const invite = usePendingInvite()
+  const { setupPending } = useInstance()
 
   if (isLoading) return <PageLoading />
+  // A fresh instance has nobody to sign in as: every address leads to setup,
+  // in the one frame, so the card swaps without the layout remounting.
+  if (setupPending && !isAuthenticated) {
+    return (
+      <AuthLayout title={authTitle("/setup")}>
+        {path !== "/setup" && <Navigate to="/setup" replace />}
+        <SetupPage />
+      </AuthLayout>
+    )
+  }
+  // Setup is done, or you're signed in: there's nothing to set up.
+  if (!setupPending && path === "/setup") {
+    return <Navigate to="/sign-in" replace />
+  }
   if (recoveryPaths.includes(path)) {
     return (
       <AuthLayout title={authTitle(path)}>

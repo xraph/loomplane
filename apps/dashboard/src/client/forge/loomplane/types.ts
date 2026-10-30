@@ -815,6 +815,7 @@ export interface CloudinfraRoute {
   orgId: string;
   projectId: string;
   receipt?: DNSRecord;
+  receipts?: DNSRecord[];
   revision: number;
   status: string;
   updatedAt: string;
@@ -3293,8 +3294,11 @@ export interface Provisions {
 export interface PublicConfig {
   appId: string;
   authBasePath: string;
+  consolePath?: string;
   features: Features;
   publishableKey: string;
+  setupPending: boolean;
+  waitlist: boolean;
 }
 
 export interface QuantizationView {
@@ -3857,14 +3861,22 @@ export interface RouteBinding {
   connectionGeneration: number;
   connectionId: string;
   containerId: string;
+  externalId?: string;
   ingressClass?: string;
   instanceId: string;
   namespace?: string;
+  provider?: string;
   releaseId: string;
   runtimeId: string;
   serverId: string;
   serviceName?: string;
   targetId: string;
+}
+
+export interface RouteCost {
+  estimate: boolean;
+  monthlyUsd: string;
+  source: string;
 }
 
 export interface RouteInput {
@@ -3891,8 +3903,10 @@ export interface RouteInputBody {
 
 export interface RouteOperation {
   attempt: number;
+  cost?: RouteCost;
   createdAt: string;
   desiredRecord: DNSRecord;
+  desiredRecords?: DNSRecord[];
   dnsAttempted: boolean;
   expiresAt: string;
   generation: number;
@@ -3904,6 +3918,7 @@ export interface RouteOperation {
   notices?: string[];
   previousReceipt?: DNSRecord;
   receipt?: DNSRecord;
+  receipts?: DNSRecord[];
   review: string;
   revision: number;
   route: CloudinfraRoute;
@@ -4250,6 +4265,22 @@ export interface SettingInfo {
   pattern: string;
   required: boolean;
   title: string;
+}
+
+export interface SetupRequest {
+  email: string;
+  name: string;
+  organizationName: string;
+  password: string;
+}
+
+export interface SetupResponse {
+  ok: boolean;
+  verificationRequired: boolean;
+}
+
+export interface SetupStatus {
+  pending: boolean;
 }
 
 export interface SetupStep {

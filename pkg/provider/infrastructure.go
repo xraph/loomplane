@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/netip"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 )
@@ -211,6 +212,9 @@ type DNSUpsertRequest struct {
 	Record        DNSRecord  `json:"record"`
 	Expected      *DNSRecord `json:"expected,omitempty"`
 	ReconcileOnly bool       `json:"-"`
+	// Siblings are records the caller already wrote on this name, such as
+	// an apex's other addresses. While they match, they aren't drift.
+	Siblings []DNSRecord `json:"-"`
 }
 
 // DNSDeleteRequest deletes only the exact recorded prior resource.
@@ -334,6 +338,9 @@ func PlanDNSUpsert(req DNSUpsertRequest, records []DNSRecord, ownerComments bool
 			continue
 		}
 		if r.Type != req.Record.Type && r.Type != "CNAME" && req.Record.Type != "CNAME" {
+			continue
+		}
+		if slices.ContainsFunc(req.Siblings, func(sibling DNSRecord) bool { return sibling.ID == r.ID && MatchDNSPrior(sibling, r) == nil }) {
 			continue
 		}
 		desired := req.Record

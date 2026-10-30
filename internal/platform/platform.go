@@ -22,6 +22,7 @@ import (
 	drt "github.com/xraph/dispatch/durable/runtime"
 	dispatchext "github.com/xraph/dispatch/extension"
 	"github.com/xraph/forge"
+	"github.com/xraph/forge/extensions/dashboard"
 	"github.com/xraph/grove"
 	groveDriver "github.com/xraph/grove/driver"
 	"github.com/xraph/grove/drivers/pgdriver"
@@ -169,7 +170,28 @@ func Extensions(cfg config.Config) []forge.Extension {
 		// nothing else of the AI section.
 		exts = append(exts, aiext.NewOff(jobs.Engine))
 	}
+	exts = append(exts, console(exts))
 	return append(exts, web.New(cfg.Dashboard.Dir, "/api/", cfg.Identity.BasePath+"/", "/_/", "/.well-known/", "/catalog-admin/"))
+}
+
+// console is the Forge dashboard's API, mounted for platform admins as the
+// instance console. The identity extension signs people in to it, gates
+// every request to it and decides which intents it may call.
+//
+// While it starts, the dashboard asks every other extension for its
+// contributors, so it depends on all of them: each has registered and
+// started by then.
+func console(others []forge.Extension) forge.Extension {
+	ext, ok := dashboard.NewExtension(dashboard.WithBasePath(identity.ConsoleBasePath), dashboard.WithEnableAuth(true)).(*dashboard.Extension)
+	if !ok {
+		panic("dashboard.NewExtension no longer returns *dashboard.Extension")
+	}
+	deps := make([]string, 0, len(others))
+	for _, o := range others {
+		deps = append(deps, o.Name())
+	}
+	ext.SetDependencies(deps)
+	return ext
 }
 
 // NewWorker builds loomplane-worker: the process that analyzes

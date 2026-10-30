@@ -2,6 +2,61 @@
 
 What it takes to keep a Loomplane running: backups, restores, upgrades, and knowing when something goes wrong. The commands here are `loomplane` commands, run with the same configuration the server runs with.
 
+## First run
+
+A new instance has no users, so every signed-out dashboard page sends you to `/setup`. Give it your name, email, password and the name of your first organization. Loomplane creates you as a normal user who also holds the `platform-owner` role, creates the organization with you as its owner, and signs you in.
+
+Setup works once. After it, `GET /api/v1/setup` reports `{"pending": false}` and `POST /api/v1/setup` is refused with a 403. The instance keeps a record that it was set up, so that stays true even if every account is deleted later. Until setup has run, the server refuses every other sign-up, so nobody can get in ahead of you. Open a new instance in a browser as soon as it's up.
+
+## Who can sign up
+
+`LOOMPLANE_WAITLIST_ENABLED` (config key `identity.waitlist`) decides whether sign-up is open or goes through a waitlist.
+
+| Value   | What happens                                                                              |
+| ------- | ----------------------------------------------------------------------------------------- |
+| unset   | The instance's stored setting decides                                                     |
+| `true`  | The waitlist is on, whatever is stored                                                    |
+| `false` | Anyone can sign up, whatever is stored                                                    |
+
+With it unset, a fresh instance stores "on" when setup completes. An instance that existed before this release has nothing stored, so it stays open after you upgrade. Set `true` if you want the waitlist there.
+
+When the waitlist is on, the sign-up screen becomes "join the waitlist" and asks for an email only. People get in with an approved waitlist entry or an organization invitation. Invitations always work, so anyone who can invite someone can widen access. When it's off, anyone can sign up, as before.
+
+You approve or reject entries in the console (see [below](#the-console)): open it, pick **Authsome** in the scope switcher in the console's header, then open **Waitlist**. Approved people get an email with a sign-up link, if mail is configured (see [Email and deployment notifications](#email-and-deployment-notifications)). Approval still works without mail, but then you have to tell people yourself.
+
+## The console
+
+The console is the Forge dashboard, served at `LOOMPLANE_CONSOLE_PATH` (config key `console.path`). The default is `/__console`. The value must be a single path segment starting with `__`, such as `/__ops-7f3`. Its API lives under `/api/_console`.
+
+Only users holding `platform-owner` or `platform-admin` can open it. To everyone else it looks like a page that doesn't exist, and they get a 404. Nothing in the dashboard links to it, so bookmark it. Unless you changed it, it's at `/__console`.
+
+Most of what you'll want is under **Authsome** in the header's scope switcher. From there you can:
+
+- view, ban and unban users (**Users**)
+- view and revoke sessions
+- approve or reject waitlist entries (**Waitlist**)
+- read apps, environments, settings and roles
+
+Apps, environments, settings and roles are read-only. You can't delete the app, change settings, toggle sign-in methods, assign roles or delete users from there.
+
+Pick your own path per instance if you like. The role check protects the console, and the path doesn't. Platform admins have equal powers, so one can ban another, the owner included. Keep the list short.
+
+## Granting platform access on an existing instance
+
+After you upgrade an instance that already had users, nobody holds a platform role, so nobody can open the console. Run this once, with the same configuration and database the server uses:
+
+```bash
+loomplane admin grant-platform-admin you@example.com
+```
+
+Under the [production Compose stack](docker-production.md), run it in the API container, which already has that configuration:
+
+```bash
+docker compose exec loomplane loomplane admin grant-platform-admin you@example.com
+```
+
+It grants `platform-owner` to that existing user and changes nobody else. Running it twice is safe. Loomplane must have started against the database at least once first.
+
 ## Live deployment state
 
 Proxy `/api/v1/realtime/ws` with WebSocket upgrades and leave `/api/v1/realtime/events` unbuffered for SSE. Both routes use the same authenticated Forge contracts and organization-scoped cursor. The dashboard falls back to SSE after a WebSocket failure, then to REST recovery when the stream is stale. A Live badge confirms a recent status heartbeat; a disconnected page must not be treated as current.

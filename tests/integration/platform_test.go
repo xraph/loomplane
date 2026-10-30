@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/xraph/forge"
 
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/platform"
@@ -86,9 +87,39 @@ type running struct {
 
 func start(t *testing.T, cfg config.Config, configure ...func(*httptest.Server)) *running {
 	t.Helper()
+	return startApp(t, cfg, nil, configure...)
+}
+
+// startApp is start with a chance to reach into the built app, prepare,
+// before it starts: a test that needs a fault injected sets it there.
+//
+// The waitlist is off unless the test sets it, so a second person can sign
+// up the way most tests need. startStoredWaitlist leaves it unset instead.
+func startApp(t *testing.T, cfg config.Config, prepare func(forge.App), configure ...func(*httptest.Server)) *running {
+	t.Helper()
+	if cfg.Identity.Waitlist == nil {
+		off := false
+		cfg.Identity.Waitlist = &off
+	}
+	return boot(t, cfg, prepare, configure...)
+}
+
+// startStoredWaitlist is start with no waitlist override, so the instance's
+// stored setting decides, as it does on a deploy that leaves
+// LOOMPLANE_WAITLIST_ENABLED unset.
+func startStoredWaitlist(t *testing.T, cfg config.Config, configure ...func(*httptest.Server)) *running {
+	t.Helper()
+	return boot(t, cfg, nil, configure...)
+}
+
+func boot(t *testing.T, cfg config.Config, prepare func(forge.App), configure ...func(*httptest.Server)) *running {
+	t.Helper()
 	app, err := platform.New(cfg)
 	if err != nil {
 		t.Fatalf("build app: %v", err)
+	}
+	if prepare != nil {
+		prepare(app)
 	}
 	// Started the way forge.App.Run starts it, on a context that outlives
 	// Start: Dispatch's durable worker runs on the context Start gets, so a
@@ -225,19 +256,7 @@ func TestPlatform_projectLifecycleSurvivesRestart(t *testing.T) {
 
 	c.must(http.StatusUnauthorized, http.MethodGet, "/api/v1/projects", nil, nil)
 
-	var auth struct {
-		SessionToken string `json:"session_token"`
-	}
-	c.must(http.StatusCreated, http.MethodPost, "/authsome/v1/signup", map[string]string{
-		"email": "ada@example.com", "password": "Correct-horse-battery-9", "first_name": "Ada",
-	}, &auth)
-	if auth.SessionToken == "" {
-		t.Fatal("sign-up returned no session token")
-	}
-	c.token = auth.SessionToken
-
-	// No organization yet, so nothing org-scoped is allowed.
-	c.must(http.StatusForbidden, http.MethodGet, "/api/v1/session", nil, nil)
+	firstAccount(t, c, "ada@example.com", "Correct-horse-battery-9")
 
 	var org struct {
 		ID string `json:"id"`
@@ -324,11 +343,7 @@ func TestPlatform_membersOnlySeeTheirOrganization(t *testing.T) {
 
 	signUpWithOrg := func(email, orgSlug string) *client {
 		c := &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
-		var auth struct {
-			SessionToken string `json:"session_token"`
-		}
-		c.must(http.StatusCreated, http.MethodPost, "/authsome/v1/signup", map[string]string{"email": email, "password": "Correct-horse-battery-9"}, &auth)
-		c.token = auth.SessionToken
+		account(t, c, email)
 		var org struct {
 			ID string `json:"id"`
 		}
@@ -408,11 +423,7 @@ func TestPlatform_invitationMakesADeveloper(t *testing.T) {
 
 	signUp := func(email string) *client {
 		c := &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
-		var auth struct {
-			SessionToken string `json:"session_token"`
-		}
-		c.must(http.StatusCreated, http.MethodPost, "/authsome/v1/signup", map[string]string{"email": email, "password": "Correct-horse-battery-9", "first_name": strings.Split(email, "@")[0]}, &auth)
-		c.token = auth.SessionToken
+		account(t, c, email)
 		return c
 	}
 

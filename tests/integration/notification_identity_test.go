@@ -32,11 +32,7 @@ func TestNotifications_invitationWithoutMailKeepsOneUseManualLink(t *testing.T) 
 	r := start(t, cfg)
 	defer r.stop()
 	c := &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
-	var auth struct {
-		SessionToken string `json:"session_token"`
-	}
-	c.must(http.StatusCreated, http.MethodPost, "/authsome/v1/signup", map[string]string{"email": "owner@example.com", "password": "Correct-horse-battery-9"}, &auth)
-	c.token = auth.SessionToken
+	firstAccount(t, c, "owner@example.com", "Correct-horse-battery-9")
 	var org struct {
 		ID string `json:"id"`
 	}
@@ -69,12 +65,10 @@ func TestNotifications_recoveryDeliversTrustedLinkAndRevokesSessions(t *testing.
 	r := start(t, cfg)
 	defer r.stop()
 	c := &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
-	var auth struct {
-		SessionToken string `json:"session_token"`
-	}
-	c.must(http.StatusCreated, http.MethodPost, "/authsome/v1/signup", map[string]string{"email": "recover@example.com", "password": "Correct-horse-battery-9"}, &auth)
+	firstAccount(t, c, "recover@example.com", "Correct-horse-battery-9")
 	_ = mail.next(t) // Authsome also requests email verification on signup.
-	oldToken := auth.SessionToken
+	oldToken := c.token
+	c.token = ""
 	var known, unknown struct {
 		Status string `json:"status"`
 	}
@@ -134,7 +128,8 @@ func TestNotifications_emailVerificationDeliversUsableCode(t *testing.T) {
 	r := start(t, cfg)
 	defer r.stop()
 	c := &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
-	c.must(http.StatusCreated, http.MethodPost, "/authsome/v1/signup", map[string]string{"email": "verify@example.com", "password": "Correct-horse-battery-9"}, nil)
+	firstAccount(t, c, "verify@example.com", "Correct-horse-battery-9")
+	c.token = ""
 	raw := mail.next(t)
 	link := recoveryLink(t, raw, "/verify-email")
 	if link.Host != "console.loomplane.test" || link.Query().Get("email") != "verify@example.com" {
@@ -255,12 +250,8 @@ func TestNotifications_invitationEmailReportsDeliveryFailure(t *testing.T) {
 	r := start(t, cfg)
 	defer r.stop()
 	c := &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
-	var auth struct {
-		SessionToken string `json:"session_token"`
-	}
-	c.must(http.StatusCreated, http.MethodPost, "/authsome/v1/signup", map[string]string{"email": "inviter@example.com", "password": "Correct-horse-battery-9"}, &auth)
+	firstAccount(t, c, "inviter@example.com", "Correct-horse-battery-9")
 	_ = mail.next(t) // Authsome also requests email verification on signup.
-	c.token = auth.SessionToken
 	var org struct {
 		ID string `json:"id"`
 	}
@@ -312,7 +303,8 @@ func TestNotifications_recoveryTokenHasOneConcurrentRedeemer(t *testing.T) {
 	r := start(t, cfg)
 	defer r.stop()
 	c := &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
-	c.must(http.StatusCreated, http.MethodPost, "/authsome/v1/signup", map[string]string{"email": "race@example.com", "password": "Correct-horse-battery-9"}, nil)
+	firstAccount(t, c, "race@example.com", "Correct-horse-battery-9")
+	c.token = ""
 	_ = mail.next(t) // Authsome also requests email verification on signup.
 	c.must(http.StatusOK, http.MethodPost, "/authsome/v1/forgot-password", map[string]string{"email": "race@example.com"}, nil)
 	token := recoveryLink(t, mail.next(t), "/reset-password").Query().Get("token")

@@ -1914,6 +1914,12 @@
           "receipt": {
             "$ref": "#/components/schemas/DNSRecord"
           },
+          "receipts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DNSRecord"
+            }
+          },
           "revision": {
             "type": "integer"
           },
@@ -3540,6 +3546,9 @@
           "container_id": {
             "type": "string"
           },
+          "external_id": {
+            "type": "string"
+          },
           "ingress_class": {
             "type": "string"
           },
@@ -3547,6 +3556,9 @@
             "type": "string"
           },
           "namespace": {
+            "type": "string"
+          },
+          "provider": {
             "type": "string"
           },
           "release_id": {

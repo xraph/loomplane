@@ -96,11 +96,7 @@ func TestAcceptanceCatalogComposed(t *testing.T) {
 	r := start(t, cfg)
 	defer r.stop()
 	c := &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
-	var auth struct {
-		SessionToken string `json:"session_token"`
-	}
-	c.must(http.StatusCreated, http.MethodPost, "/authsome/v1/signup", map[string]string{"email": "catalog-acceptance@example.test", "password": "Acceptance-Catalog-42"}, &auth)
-	c.token = auth.SessionToken
+	firstAccount(t, c, "catalog-acceptance@example.test", "Acceptance-Catalog-42")
 	var org struct {
 		ID string `json:"id"`
 	}

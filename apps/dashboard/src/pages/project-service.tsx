@@ -93,6 +93,7 @@ import {
   stateOf,
 } from "@/lib/project-services"
 import { isReady } from "@/lib/projects"
+import { routablePorts } from "@/lib/routable-ports"
 import { Link, useNavigate } from "@/lib/router"
 import { type Run, runStatusText } from "@/lib/runs"
 import { useRuns } from "@/lib/use-runs"
@@ -882,6 +883,7 @@ function Domains({
   mayRoute: boolean
 }) {
   const binding = row.deployed[env.name]
+  const routable = routablePorts(row.service.ports ?? [], binding)
   const [adding, setAdding] = useState(false)
   const [removing, setRemoving] = useState<CloudinfraRoute>()
   const ok = (status: string) => /active|ready|live|ok|serving/i.test(status)
@@ -970,7 +972,8 @@ function Domains({
         projectId={projectId}
         environment={env}
         service={name}
-        ports={row.service.ports ?? []}
+        ports={routable.ports}
+        blocked={routable.reason}
         deployed={!!binding}
         open={adding}
         onOpenChange={setAdding}

@@ -40,13 +40,7 @@ func TestModelsAPIPublishedContract(t *testing.T) {
 	c = &client{t: t, base: app.srv.URL, key: on.Identity.PublishableKey}
 	c.must(http.StatusUnauthorized, http.MethodGet, "/api/v1/ai/models/registry", nil, nil)
 
-	var auth struct {
-		SessionToken string `json:"session_token"`
-	}
-	c.must(http.StatusCreated, http.MethodPost, "/authsome/v1/signup", map[string]string{
-		"email": "ada@example.com", "password": "Correct-horse-battery-9", "first_name": "Ada",
-	}, &auth)
-	c.token = auth.SessionToken
+	firstAccount(t, c, "ada@example.com", "Correct-horse-battery-9")
 	var org struct {
 		ID string `json:"id"`
 	}

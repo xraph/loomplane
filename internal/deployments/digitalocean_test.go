@@ -3,13 +3,16 @@ package deployments
 import (
 	"context"
 	"encoding/json"
+	"maps"
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"regexp"
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -37,11 +40,15 @@ type fakeAppPlatform struct {
 	rollbacks   []string
 	deleted     []string
 	databases   map[string]map[string]any
+	// held reports whether the client's lock is held, and locked records
+	// it for the first call of each method and path.
+	held   func() bool
+	locked map[string]bool
 }
 
 func newFakeAppPlatform(t *testing.T) (*fakeAppPlatform, *digitalocean.Client) {
 	t.Helper()
-	f := &fakeAppPlatform{tip: doApproved, liveAt: "BUILDING", apps: map[string]map[string]any{}, active: map[string]string{}, databases: map[string]map[string]any{}}
+	f := &fakeAppPlatform{tip: doApproved, liveAt: "BUILDING", apps: map[string]map[string]any{}, active: map[string]string{}, databases: map[string]map[string]any{}, locked: map[string]bool{}}
 	srv := httptest.NewServer(http.HandlerFunc(f.serve))
 	t.Cleanup(srv.Close)
 	return f, digitalocean.New(srv.URL)
@@ -57,6 +64,11 @@ func (f *fakeAppPlatform) serve(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewDecoder(r.Body).Decode(&body)
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if call := r.Method + " " + r.URL.Path; f.held != nil {
+		if _, seen := f.locked[call]; !seen {
+			f.locked[call] = f.held()
+		}
+	}
 	app := func(id string) map[string]any {
 		a := map[string]any{"id": id, "spec": f.apps[id], "live_url": "https://" + id + ".ondigitalocean.app"}
 		if dep := f.active[id]; dep != "" {
@@ -67,9 +79,16 @@ func (f *fakeAppPlatform) serve(w http.ResponseWriter, r *http.Request) {
 	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
 	switch {
 	case r.Method == http.MethodGet && r.URL.Path == "/v2/apps":
+		// The list is a summary: nothing promises it carries an app's
+		// domains, so this one never does.
 		out := make([]any, 0, len(f.apps))
 		for id := range f.apps {
-			out = append(out, app(id))
+			a := app(id)
+			if spec, ok := a["spec"].(map[string]any); ok {
+				a["spec"] = maps.Clone(spec)
+				delete(a["spec"].(map[string]any), "domains")
+			}
+			out = append(out, a)
 		}
 		reply(200, map[string]any{"apps": out})
 	case r.Method == http.MethodPost && r.URL.Path == "/v2/apps":
@@ -163,6 +182,64 @@ func doJob(cfg *planning.ServiceConfig, ref string) *Job {
 func apiConfig() *planning.ServiceConfig {
 	return &planning.ServiceConfig{Source: "services/api", Image: "services/api/Dockerfile", Port: 8080, Public: true,
 		Workload: provider.HTTPService, Execution: provider.Container, Size: &manifest.Size{CPU: 1, Memory: 1024}, Scale: &manifest.Scale{Min: 2, Max: 2}}
+}
+
+// The app's domains are read from the app itself, which the list of apps
+// FindApp reads may leave them out of.
+func TestEnsureAppKeepsTheAppsDomains(t *testing.T) {
+	f, client := newFakeAppPlatform(t)
+	f.apps["app-api-production-23456789"] = map[string]any{
+		"name": "api-production-23456789",
+		"domains": []any{
+			map[string]any{"domain": "app.example.com", "type": "ALIAS"},
+			map[string]any{"domain": "hand.example.com", "type": "PRIMARY"},
+		},
+	}
+	if _, err := newDO(client).Apply(t.Context(), doJob(apiConfig(), "release")); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.specs) != 1 {
+		t.Fatalf("specs %v", f.specs)
+	}
+	want := []any{
+		map[string]any{"domain": "app.example.com", "type": "ALIAS"},
+		map[string]any{"domain": "hand.example.com", "type": "PRIMARY"},
+	}
+	if got := f.specs[0]["domains"]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("domains %v, want %v", got, want)
+	}
+}
+
+// A deploy holds the app from reading its domains until it has started its
+// deployment, so a hostname change can't write the spec in between. It
+// doesn't hold it while the build runs.
+func TestEnsureAppHoldsTheAppUntilItDeploys(t *testing.T) {
+	f, client := newFakeAppPlatform(t)
+	const id = "app-api-production-23456789"
+	f.apps[id] = map[string]any{"name": "api-production-23456789"}
+	var held atomic.Bool
+	var names []string
+	client.Lock = func(ctx context.Context, name string, fn func(context.Context) error) error {
+		names = append(names, name)
+		held.Store(true)
+		defer held.Store(false)
+		return fn(ctx)
+	}
+	f.held = held.Load
+	if _, err := newDO(client).Apply(t.Context(), doJob(apiConfig(), "release")); err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(names, []string{"digitalocean-app/" + id}) {
+		t.Fatalf("locks %v", names)
+	}
+	for _, call := range []string{"GET /v2/apps/" + id, "PUT /v2/apps/" + id, "POST /v2/apps/" + id + "/deployments"} {
+		if locked, seen := f.locked[call]; !seen || !locked {
+			t.Fatalf("%s: seen %v, under the lock %v", call, seen, locked)
+		}
+	}
+	if call := "GET /v2/apps/" + id + "/deployments/dep-" + id; f.locked[call] {
+		t.Fatalf("%s ran under the lock", call)
+	}
 }
 
 func TestDigitalOcean_deploysTheApprovedCommitFromItsBranch(t *testing.T) {

@@ -66,11 +66,7 @@ func testPluginLifecycle(t *testing.T, logs bool) {
 	defer r.stop()
 
 	c := &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}
-	var auth struct {
-		SessionToken string `json:"session_token"`
-	}
-	c.must(http.StatusCreated, http.MethodPost, "/authsome/v1/signup", map[string]string{"email": "ada@example.com", "password": "Correct-horse-battery-9"}, &auth)
-	c.token = auth.SessionToken
+	firstAccount(t, c, "ada@example.com", "Correct-horse-battery-9")
 	var org struct {
 		ID string `json:"id"`
 	}

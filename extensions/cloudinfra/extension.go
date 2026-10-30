@@ -26,6 +26,7 @@ import (
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/notifications"
 	"github.com/xraph/loomplane/internal/orchestration"
+	"github.com/xraph/loomplane/internal/pglock"
 	"github.com/xraph/loomplane/internal/security"
 )
 
@@ -97,7 +98,7 @@ func (e *Extension) Register(app forge.App) error {
 	if err != nil {
 		return err
 	}
-	e.svc = cloudinfra.NewService(cloudinfra.Deps{ClusterCapacity: e.cfg.Clouds.ClusterCapacity, ManagedClusters: e.cfg.Clouds.ManagedClusters, Clusters: cloudinfra.NewPgStore(pg), ClusterWorkflow: e.workflows, CapacityPrincipal: principal, CapacityDemandWakeup: e.workflows, Store: cloudinfra.NewPgStore(pg), Clouds: cloudprofiles.NewPgStore(pg), Connections: creds, RuntimeConnections: connections.NewPgStore(pg), Secrets: secrets, Authz: authz, Adapters: cloudinfra.BuiltinAdapters(cloudinfra.Endpoints{DigitalOcean: e.cfg.Clouds.DigitalOceanEndpoint, Vercel: e.cfg.Clouds.VercelEndpoint, Cloudflare: e.cfg.Clouds.CloudflareEndpoint, CloudflareRegistrarSandbox: e.cfg.Clouds.CloudflareRegistrarSandbox}), Workflow: e.workflows, Notices: notices, EnrollmentURL: endpoint, ACMEDirectory: e.cfg.Clouds.ACMEDirectory, Audit: projectsext.NewAuditor(audit, e.cfg.Identity.AppID, e.Logger()),
+	e.svc = cloudinfra.NewService(cloudinfra.Deps{ClusterCapacity: e.cfg.Clouds.ClusterCapacity, ManagedClusters: e.cfg.Clouds.ManagedClusters, Clusters: cloudinfra.NewPgStore(pg), ClusterWorkflow: e.workflows, CapacityPrincipal: principal, CapacityDemandWakeup: e.workflows, Store: cloudinfra.NewPgStore(pg), Clouds: cloudprofiles.NewPgStore(pg), Connections: creds, RuntimeConnections: connections.NewPgStore(pg), Secrets: secrets, Authz: authz, Adapters: cloudinfra.BuiltinAdapters(cloudinfra.Endpoints{DigitalOcean: e.cfg.Clouds.DigitalOceanEndpoint, Vercel: e.cfg.Clouds.VercelEndpoint, Cloudflare: e.cfg.Clouds.CloudflareEndpoint, CloudflareRegistrarSandbox: e.cfg.Clouds.CloudflareRegistrarSandbox, Lock: pglock.For(pg)}), Workflow: e.workflows, Notices: notices, EnrollmentURL: endpoint, ACMEDirectory: e.cfg.Clouds.ACMEDirectory, Audit: projectsext.NewAuditor(audit, e.cfg.Identity.AppID, e.Logger()),
 		Warn: func(msg string, err error) { e.Logger().Warn(msg, forge.F("error", err.Error())) }})
 	creds.ManagedCredentials = e.svc
 	files, filesErr := forge.InjectType[*backupfiles.Store](c)

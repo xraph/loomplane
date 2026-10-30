@@ -42,9 +42,9 @@ func (s *Service) ReconcileReleaseRoutes(ctx context.Context, p security.Princip
 		if source.OrgID != p.OrgID || source.ProjectID != in.ProjectID || source.Input.EnvironmentID != in.EnvironmentID || source.Input.Service != in.Service {
 			return ErrInvalid
 		}
-		// A Kubernetes route follows its Service by name, so a release has
-		// nothing to hand off.
-		if source.Binding.BackendName() == RouteBackendKubernetes {
+		// A Kubernetes route follows its Service by name, and a platform
+		// route its app, so a release has nothing to hand off.
+		if noServerIngress(source) {
 			continue
 		}
 		progress := cloudprofiles.SyncRoute{RouteID: source.ID, Hostname: source.Input.Hostname, PrepareID: ReleasePrepareID(in.Key, source.ID)}

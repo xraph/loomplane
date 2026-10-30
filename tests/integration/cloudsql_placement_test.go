@@ -18,11 +18,7 @@ func TestCloudSQLRoutePlacementPersistsThroughAPI(t *testing.T) {
 	cfg.Storage.URL = "file://" + t.TempDir()
 	app := start(t, cfg)
 	c := &client{t: t, base: app.srv.URL, key: cfg.Identity.PublishableKey}
-	var auth struct {
-		SessionToken string `json:"session_token"`
-	}
-	c.must(http.StatusCreated, http.MethodPost, "/authsome/v1/signup", map[string]string{"email": "route@example.com", "password": "Correct-horse-battery-9"}, &auth)
-	c.token = auth.SessionToken
+	firstAccount(t, c, "route@example.com", "Correct-horse-battery-9")
 	var org struct {
 		ID string `json:"id"`
 	}

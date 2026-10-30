@@ -16,6 +16,11 @@ func recoveryNotifications(cfg config.Config) *notification.Plugin {
 	for action := range notification.DefaultMappings() {
 		mappings[action] = &notification.Mapping{Enabled: false}
 	}
+	// The waitlist plugin contributes its own mappings unless these exist.
+	// Approval mail goes through approvalMailer instead.
+	for _, action := range []string{hook.ActionWaitlistJoin, hook.ActionWaitlistApprove, hook.ActionWaitlistReject} {
+		mappings[action] = &notification.Mapping{Enabled: false}
+	}
 	mappings[hook.ActionPasswordReset] = &notification.Mapping{Template: "auth.password-reset", Channels: []string{"email"}, Enabled: true}
 	mappings[hook.ActionPasswordChange] = &notification.Mapping{Template: "auth.password-changed", Channels: []string{"email"}, Enabled: true}
 	mappings[hook.ActionEmailVerificationRequested] = &notification.Mapping{Template: "auth.email-verification", Channels: []string{"email"}, Enabled: true}

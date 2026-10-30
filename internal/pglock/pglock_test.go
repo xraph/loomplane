@@ -138,3 +138,66 @@ func TestDo_rejectsMissingArguments(t *testing.T) {
 		t.Fatal("Do accepted a nil database")
 	}
 }
+
+// For holds the named lock while fn runs, as Do does, so another replica
+// can't take it in that time.
+func TestFor_holdsTheNamedLock(t *testing.T) {
+	ctx := t.Context()
+	dsn := scratchDB(t)
+	pg, other := open(t, dsn), open(t, dsn)
+	var free bool
+	err := For(pg)(ctx, "digitalocean-app/app-1", func(ctx context.Context) error {
+		return other.QueryRow(ctx, `SELECT pg_try_advisory_lock(hashtextextended($1, 0))`, "digitalocean-app/app-1").Scan(&free)
+	})
+	if err != nil || free {
+		t.Fatalf("another replica took the lock: %v %v", free, err)
+	}
+}
+
+// TryShared runs alongside other shared holders, but never while Do holds
+// the same lock, and it says so rather than wait.
+func TestTryShared_neverRunsDuringDo(t *testing.T) {
+	ctx := t.Context()
+	dsn := scratchDB(t)
+	first, second := open(t, dsn), open(t, dsn)
+	const name = "loomplane-test-shared"
+
+	// Two shared holders don't keep each other out.
+	ran, err := TryShared(ctx, first, name, func(ctx context.Context) error {
+		inner, ierr := TryShared(ctx, second, name, func(context.Context) error { return nil })
+		if ierr != nil || !inner {
+			return fmt.Errorf("a second shared holder was kept out: ran=%v err=%w", inner, ierr)
+		}
+		return nil
+	})
+	if err != nil || !ran {
+		t.Fatalf("TryShared with nobody holding the lock: ran=%v err=%v", ran, err)
+	}
+
+	// While Do holds it, TryShared doesn't run fn and doesn't wait.
+	err = Do(ctx, first, name, func(ctx context.Context) error {
+		start := time.Now()
+		inner, terr := TryShared(ctx, second, name, func(context.Context) error { return nil })
+		if terr != nil || inner {
+			return fmt.Errorf("TryShared during Do: ran=%v err=%w, want not run", inner, terr)
+		}
+		if waited := time.Since(start); waited > 2*time.Second {
+			return fmt.Errorf("TryShared waited %s for Do", waited)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// An error from fn comes back, and the lock is let go.
+	boom := errors.New("judge failed")
+	if ran, err = TryShared(ctx, second, name, func(context.Context) error { return boom }); !ran || !errors.Is(err, boom) {
+		t.Fatalf("TryShared with a failing fn: ran=%v err=%v", ran, err)
+	}
+	waited, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err = Do(waited, first, name, func(context.Context) error { return nil }); err != nil {
+		t.Fatalf("lock still held after TryShared: %v", err)
+	}
+}

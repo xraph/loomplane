@@ -96,8 +96,8 @@ func (s *Service) DomainDetail(ctx context.Context, p security.Principal, zoneID
 	return out, nil
 }
 
-// managedRecords lists the proof receipts of the zones in family and the
-// receipts of the routes under them, by name then type.
+// managedRecords lists the proof receipts of the zones in family and every
+// receipt of the routes under them, by name then type.
 func managedRecords(family map[string]*Zone, routes []*Route, uses map[string][]HostnameUse) []ManagedRecord {
 	out := []ManagedRecord{}
 	for _, zone := range family {
@@ -107,17 +107,18 @@ func managedRecords(family map[string]*Zone, routes []*Route, uses map[string][]
 	}
 	for _, route := range routes {
 		zone, ok := family[route.Input.ZoneID]
-		if !ok || route.Receipt == nil {
+		if !ok {
 			continue
 		}
-		r := route.Receipt
-		record := ManagedRecord{Kind: "route", ZoneID: zone.ID, Type: r.Type, Name: recordName(r, zone), Value: r.Value, TTL: r.TTL, RouteID: route.ID, Hostname: route.Input.Hostname, ProjectID: route.ProjectID}
+		project := ""
 		for _, use := range uses[zone.ID] {
 			if use.RouteID == route.ID {
-				record.ProjectName = use.ProjectName
+				project = use.ProjectName
 			}
 		}
-		out = append(out, record)
+		for _, r := range route.receipts() {
+			out = append(out, ManagedRecord{Kind: "route", ZoneID: zone.ID, Type: r.Type, Name: recordName(&r, zone), Value: r.Value, TTL: r.TTL, RouteID: route.ID, Hostname: route.Input.Hostname, ProjectID: route.ProjectID, ProjectName: project})
+		}
 	}
 	slices.SortFunc(out, func(a, b ManagedRecord) int {
 		return cmp.Or(cmp.Compare(a.Name, b.Name), cmp.Compare(a.Type, b.Type), cmp.Compare(a.ZoneID, b.ZoneID), cmp.Compare(a.RouteID, b.RouteID))

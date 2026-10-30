@@ -81,9 +81,10 @@ func (s *Service) hostnameUses(ctx context.Context, st DomainStore, org string, 
 	now := s.now().UTC()
 	out := map[string][]HostnameUse{}
 	for _, route := range routes {
-		// Server routes run on the server; Kubernetes routes on the cluster's connection.
+		// Server routes run on the server; Kubernetes and platform routes on
+		// their connection.
 		runtime := route.Binding.ServerID
-		if route.Binding.BackendName() == RouteBackendKubernetes {
+		if noServerIngress(*route) {
 			runtime = route.Binding.ConnectionID
 		}
 		runsOn := runtimes[runtime]

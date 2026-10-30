@@ -28,6 +28,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select"
+import { operationRecords } from "@/lib/routable-ports"
 import { Link } from "@/lib/router"
 
 export function AddHostnameDialog({
@@ -35,6 +36,7 @@ export function AddHostnameDialog({
   environment,
   service,
   ports,
+  blocked,
   deployed = true,
   open,
   onOpenChange,
@@ -43,6 +45,8 @@ export function AddHostnameDialog({
   environment: { id: string; name: string }
   service: string
   ports: number[]
+  /** Why no port can take a hostname, when the platform says so. */
+  blocked?: string
   /** The service runs in this environment, so a route has a binding. */
   deployed?: boolean
   open: boolean
@@ -75,6 +79,7 @@ export function AddHostnameDialog({
           environment={environment}
           service={service}
           ports={ports}
+          blocked={blocked}
           deployed={deployed}
           onClose={() => onOpenChange(false)}
         />
@@ -109,6 +114,7 @@ function Body({
   environment,
   service,
   ports,
+  blocked,
   deployed,
   onClose,
 }: {
@@ -116,6 +122,7 @@ function Body({
   environment: { id: string; name: string }
   service: string
   ports: number[]
+  blocked?: string
   deployed: boolean
   onClose(): void
 }) {
@@ -138,8 +145,8 @@ function Body({
     return (
       <Notice onClose={onClose}>
         <p>
-          {service} doesn&apos;t expose a port, so it can&apos;t take a
-          hostname.
+          {blocked ??
+            `${service} doesn't expose a port, so it can't take a hostname.`}
         </p>
       </Notice>
     )
@@ -184,7 +191,7 @@ function Body({
     preview.for.port === port
       ? preview.op
       : undefined
-  const record = current?.desiredRecord
+  const records = current ? operationRecords(current) : []
   const external =
     list?.find((d) => d.zoneId === value.zoneId)?.mode === "external"
 
@@ -267,7 +274,7 @@ function Body({
             </Select>
           </div>
         )}
-        {record?.value && (
+        {records.some((r) => r.value) && (
           <div
             role="group"
             aria-labelledby={`${ids}-record`}
@@ -277,28 +284,42 @@ function Body({
               id={`${ids}-record`}
               className="text-[11.5px] font-medium tracking-[0.04em] text-muted-foreground uppercase"
             >
-              DNS record
+              {records.length > 1 ? "DNS records" : "DNS record"}
             </span>
-            <dl className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-[12.5px] leading-relaxed">
-              <dt className="text-muted-foreground">Type</dt>
-              <dd className="font-mono break-all">{record.type}</dd>
-              <dt className="text-muted-foreground">Name</dt>
-              {/* Relative to the zone, as the server writes it; "@" is the
-                  apex, the usual name at a DNS provider. */}
-              <dd className="font-mono break-all">{record.name || "@"}</dd>
-              <dt className="text-muted-foreground">Value</dt>
-              <dd className="font-mono break-all">{record.value}</dd>
-            </dl>
+            {records.map((record) => (
+              <dl
+                key={`${record.type}-${record.value}`}
+                className="grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-[12.5px] leading-relaxed"
+              >
+                <dt className="text-muted-foreground">Type</dt>
+                <dd className="font-mono break-all">{record.type}</dd>
+                <dt className="text-muted-foreground">Name</dt>
+                {/* Relative to the zone, as the server writes it; "@" is the
+                    apex, the usual name at a DNS provider. */}
+                <dd className="font-mono break-all">{record.name || "@"}</dd>
+                <dt className="text-muted-foreground">Value</dt>
+                <dd className="font-mono break-all">{record.value}</dd>
+              </dl>
+            ))}
             {/* not in the mock */}
             <span className="text-xs text-muted-foreground">
-              {external
-                ? "Add this record at your DNS provider. The route starts serving once it resolves and the certificate is issued."
-                : "Loomplane writes this record when you add the domain, then issues a certificate."}
+              {records.length > 1
+                ? external
+                  ? "Add these records at your DNS provider. The route starts serving once they resolve and the certificate is issued."
+                  : "Loomplane writes these records when you add the domain, then issues a certificate."
+                : external
+                  ? "Add this record at your DNS provider. The route starts serving once it resolves and the certificate is issued."
+                  : "Loomplane writes this record when you add the domain, then issues a certificate."}
             </span>
           </div>
         )}
         {current?.message && (
           <p className="text-xs text-muted-foreground">{current.message}</p>
+        )}
+        {current?.cost && (
+          <p className="text-xs text-muted-foreground">
+            {`$${current.cost.monthlyUsd} a month${current.cost.estimate ? " (estimate)" : ""}`}
+          </p>
         )}
         {(current?.notices ?? []).map((n) => (
           <p key={n} className="text-xs text-muted-foreground">

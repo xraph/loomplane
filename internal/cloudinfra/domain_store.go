@@ -18,6 +18,7 @@ import (
 	"github.com/xraph/loomplane/internal/clouds/owned"
 	"github.com/xraph/loomplane/internal/clouds/server"
 	"github.com/xraph/loomplane/internal/security"
+	"github.com/xraph/loomplane/pkg/provider"
 )
 
 var _ DomainStore = (*PgStore)(nil)
@@ -272,6 +273,38 @@ func scanKubernetesRouteBinding(row pgx.Row) (RouteBinding, error) {
 	return out, nil
 }
 
+// A platform binding is a service its provider's platform runs and routes
+// itself, so it rests on its app and the ready connection it was deployed
+// with, Cloud or not. A resource, such as a database, never takes a route.
+var platformRouteBindingQuery = `SELECT b.id,b.external_id,c.id,c.generation,b.provider,coalesce(b.config->>'public',''),coalesce(b.config->>'port',''),coalesce(b.config->>'execution','')
+ FROM loomplane_bindings b
+ JOIN loomplane_environments e ON e.org_id=b.org_id AND e.project_id=b.project_id AND e.id=b.environment_id
+ JOIN loomplane_cloud_connections c ON c.org_id=b.org_id AND c.id=b.connection_id AND c.cloud=b.provider AND c.status='ready'
+ WHERE b.org_id=$1 AND b.project_id=$2 AND b.environment_id=$3 AND b.name=$4 AND b.subject='service' AND b.provider=ANY($5)`
+
+// scanPlatformRouteBinding refuses a service its platform won't route to
+// on port, so preview and apply both refuse it. A static site is refused
+// first: it has no port, and no deploy gives it one.
+func scanPlatformRouteBinding(row pgx.Row, port int) (RouteBinding, error) {
+	out := RouteBinding{Backend: RouteBackendPlatform}
+	var public, servicePort, execution string
+	err := row.Scan(&out.BindingID, &out.ExternalID, &out.ConnectionID, &out.ConnectionGeneration, &out.Provider, &public, &servicePort, &execution)
+	if err != nil {
+		return out, storeError(err)
+	}
+	if execution == string(provider.Static) {
+		return out, platformRefusal(ErrInvalid, platformStaticSite)
+	}
+	if out.ExternalID == "" {
+		return out, platformRefusal(ErrConflict, platformNoApp)
+	}
+	return out, checkPlatformService(public, servicePort, port)
+}
+
+func platformRouteBindingArgs(org, project string, in RouteInput) []any {
+	return []any{org, project, in.EnvironmentID, in.Service, platformProviders}
+}
+
 // routeBindingBackend is the provider of the binding a route names. A service
 // wins over a catalog component with the same name, as in the binding queries.
 func (s *PgStore) routeBindingBackend(ctx context.Context, org, project string, in RouteInput) (string, error) {
@@ -291,10 +324,19 @@ func (s *PgStore) ResolveRouteBinding(ctx context.Context, org, project string, 
 	if backend == RouteBackendKubernetes {
 		return scanKubernetesRouteBinding(s.db.QueryRow(ctx, kubernetesRouteBindingQuery, org, project, in.EnvironmentID, in.Service, in.CloudID, in.Port))
 	}
+	if slices.Contains(platformProviders, backend) {
+		return scanPlatformRouteBinding(s.db.QueryRow(ctx, platformRouteBindingQuery, platformRouteBindingArgs(org, project, in)...), in.Port)
+	}
 	if in.CloudID == "" {
 		return RouteBinding{}, fmt.Errorf("%w: %s", ErrInvalid, noCloudPlacement)
 	}
 	return scanRouteBinding(s.db.QueryRow(ctx, routeBindingQuery, org, project, in.EnvironmentID, in.Service, in.CloudID, in.Port))
+}
+
+func (s *PgStore) RouteBindingCommit(ctx context.Context, org, bindingID string) (string, error) {
+	var commit string
+	err := s.db.QueryRow(ctx, `SELECT commit_sha FROM loomplane_bindings WHERE org_id=$1 AND id=$2`, org, bindingID).Scan(&commit)
+	return commit, storeError(err)
 }
 
 // A service and a catalog component may share a name. The service wins here
@@ -397,6 +439,8 @@ func (s *PgStore) AcceptRoute(ctx context.Context, op *RouteOperation) error {
 			current, lookupErr = scanFirecrackerRouteBinding(tx.QueryRow(ctx, firecrackerRouteBindingQuery+" FOR SHARE OF b,c,i", args...))
 		case RouteBackendKubernetes:
 			current, lookupErr = scanKubernetesRouteBinding(tx.QueryRow(ctx, kubernetesRouteBindingQuery+" FOR SHARE OF b,c,i", args...))
+		case RouteBackendPlatform:
+			current, lookupErr = scanPlatformRouteBinding(tx.QueryRow(ctx, platformRouteBindingQuery+" FOR SHARE OF b,c", platformRouteBindingArgs(route.OrgID, route.ProjectID, route.Input)...), route.Input.Port)
 		default:
 			current, lookupErr = scanRouteBinding(tx.QueryRow(ctx, routeBindingQuery+" FOR SHARE OF b,g,t,s,c,i", args...))
 		}
@@ -498,6 +542,10 @@ func (s *PgStore) AcceptRoute(ctx context.Context, op *RouteOperation) error {
 					} else if active.PreviousReceipt != nil {
 						op.Receipt = active.PreviousReceipt
 					}
+					// A platform operation keeps every record it wrote.
+					if active.Receipts != nil {
+						op.Receipts = active.Receipts
+					}
 					op.CancelledIngress = active.CancelledIngress
 					if active.DesiredConfig != nil {
 						op.CancelledIngress = &IngressTransition{Desired: *active.DesiredConfig, Previous: active.PreviousConfig, Applied: active.AppliedConfig}
@@ -576,15 +624,15 @@ func (s *PgStore) PublishRoute(ctx context.Context, op *RouteOperation) error {
 		return err
 	}
 	defer rollback(tx)
-	// A Kubernetes route has no server ingress config to fence on; the route
-	// lock and the revisions below order its workers.
-	if op.Route.Binding.BackendName() != RouteBackendKubernetes {
+	// A Kubernetes or platform route has no server ingress config to fence
+	// on; the route lock and the revisions below order its workers.
+	if !noServerIngress(op.Route) {
 		var generation int64
 		if checkErr := tx.QueryRow(ctx, `SELECT generation FROM loomplane_ingress_configs WHERE org_id=$1 AND server_id=$2 AND generation=$3 FOR UPDATE`, op.Route.OrgID, op.Route.Binding.ServerID, op.Generation).Scan(&generation); checkErr != nil {
 			return ErrConflict
 		}
 	}
-	op.Route.Receipt = op.Receipt
+	op.Route.Receipt, op.Route.Receipts = op.Receipt, op.Receipts
 	op.Route.OperationID = op.ID
 	prior := op.Route.Revision
 	op.Route.Revision++
@@ -612,7 +660,7 @@ func (s *PgStore) PublishRoute(ctx context.Context, op *RouteOperation) error {
 }
 
 func (s *PgStore) BeginIngress(ctx context.Context, op *RouteOperation) (*IngressState, error) {
-	if op.Route.Binding.BackendName() == RouteBackendKubernetes {
+	if noServerIngress(op.Route) {
 		if err := s.SaveRouteOperation(ctx, op); err != nil {
 			return nil, err
 		}

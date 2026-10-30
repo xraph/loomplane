@@ -177,23 +177,25 @@ func (d *DigitalOcean) Apply(ctx context.Context, job *Job) (*Outcome, error) {
 
 	if state.DeploymentID == "" {
 		job.Progress(StepDeploying, "Setting up the App Platform app")
-		app, aerr := d.ensureApp(ctx, token, spec)
+		aerr := d.ensureApp(ctx, token, spec, func(ctx context.Context, app *digitalocean.App) error {
+			state.AppID = app.ID
+			if checkpointErr := checkpointCloudIdentity(job, state); checkpointErr != nil {
+				return checkpointErr
+			}
+			if app.ActiveDeployment != nil {
+				state.Previous = app.ActiveDeployment.ID
+			}
+			dep, derr := d.Client.CreateDeployment(ctx, token, app.ID)
+			if derr != nil {
+				return fmt.Errorf("deploy %s on app platform: %w", spec.Name, derr)
+			}
+			state.DeploymentID = dep.ID
+			save()
+			return nil
+		})
 		if aerr != nil {
 			return nil, aerr
 		}
-		state.AppID = app.ID
-		if checkpointErr := checkpointCloudIdentity(job, state); checkpointErr != nil {
-			return nil, checkpointErr
-		}
-		if app.ActiveDeployment != nil {
-			state.Previous = app.ActiveDeployment.ID
-		}
-		dep, derr := d.Client.CreateDeployment(ctx, token, app.ID)
-		if derr != nil {
-			return nil, fmt.Errorf("deploy %s on app platform: %w", spec.Name, derr)
-		}
-		state.DeploymentID = dep.ID
-		save()
 	}
 	job.Progress(StepBuilding, "Building "+branch+" on App Platform")
 	job.Collector(state.DeploymentID, job.LogAttempt()).RecordState(ctx, "", "unavailable", "App Platform's build logs are on the app's Activity tab in DigitalOcean. Progress remains available.")
@@ -318,30 +320,53 @@ func resolvePublicly(ctx context.Context, host string) error {
 }
 
 // ensureApp creates the app, or updates the one already called spec.Name
-// to match spec. Either can start a deployment of App Platform's own,
-// which is cancelled: the only one that runs is the one Apply starts and
-// checks.
-func (d *DigitalOcean) ensureApp(ctx context.Context, token string, spec digitalocean.AppSpec) (*digitalocean.App, error) {
-	app, err := d.Client.FindApp(ctx, token, spec.Name)
+// to match spec, then calls deploy to start the deployment. Either can
+// start a deployment of App Platform's own, which is cancelled: the only
+// one that runs is the one deploy starts and Apply checks. An existing app
+// is held from reading its domains until deploy returns, so a hostname
+// change can't write the spec in between and lose either change.
+func (d *DigitalOcean) ensureApp(ctx context.Context, token string, spec digitalocean.AppSpec, deploy func(context.Context, *digitalocean.App) error) error {
+	found, err := d.Client.FindApp(ctx, token, spec.Name)
 	if err != nil {
-		return nil, err
+		return err
 	}
-	if app == nil {
-		app, err = d.Client.CreateApp(ctx, token, spec)
-	} else {
-		app, err = d.Client.UpdateApp(ctx, token, app.ID, spec)
+	if found == nil {
+		// No route has a hostname on an app that didn't exist.
+		app, createErr := d.Client.CreateApp(ctx, token, spec)
+		if createErr != nil {
+			return createErr
+		}
+		return d.startDeployment(ctx, token, spec.Name, app, deploy)
 	}
-	if err != nil {
-		return nil, err
-	}
+	return d.Client.WithApp(ctx, found.ID, func(ctx context.Context) error {
+		// Domains belong to the hostnames routes attach, not to the
+		// deploy, so an update carries over whatever the app has. They're
+		// read from the app itself: the list FindApp reads needn't carry
+		// them.
+		current, getErr := d.Client.GetApp(ctx, token, found.ID)
+		if getErr != nil {
+			return getErr
+		}
+		spec.Domains = current.Spec.Domains
+		app, updateErr := d.Client.UpdateApp(ctx, token, found.ID, spec)
+		if updateErr != nil {
+			return updateErr
+		}
+		return d.startDeployment(ctx, token, spec.Name, app, deploy)
+	})
+}
+
+// startDeployment cancels the deployments App Platform started of its own
+// for a create or update, then calls deploy.
+func (d *DigitalOcean) startDeployment(ctx context.Context, token, name string, app *digitalocean.App, deploy func(context.Context, *digitalocean.App) error) error {
 	for _, dep := range []*digitalocean.Deployment{app.PendingDeployment, app.InProgressDeployment} {
 		if dep != nil && dep.ID != "" {
 			if err := d.Client.CancelDeployment(ctx, token, app.ID, dep.ID); err != nil {
-				return nil, fmt.Errorf("cancel app platform's own deployment of %s: %w", spec.Name, err)
+				return fmt.Errorf("cancel app platform's own deployment of %s: %w", name, err)
 			}
 		}
 	}
-	return app, nil
+	return deploy(ctx, app)
 }
 
 // refuse stops a deployment built from the wrong commit: cancelled before

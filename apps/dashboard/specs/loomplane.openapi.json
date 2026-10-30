@@ -11992,6 +11992,57 @@
         }
       }
     },
+    "/api/v1/setup": {
+      "get": {
+        "tags": [
+          "Identity"
+        ],
+        "summary": "Whether first-run setup is still waiting",
+        "operationId": "setup.status",
+        "responses": {
+          "200": {
+            "description": "Setup status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetupStatus"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "Identity"
+        ],
+        "summary": "Create the first account and organization",
+        "operationId": "setup.complete",
+        "requestBody": {
+          "description": "Request body",
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SetupRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Setup finished",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SetupResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/api/v1/connections/{connectionId}/registry": {
       "get": {
         "tags": [
@@ -15054,6 +15105,12 @@
           },
           "receipt": {
             "$ref": "#/components/schemas/DNSRecord"
+          },
+          "receipts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DNSRecord"
+            }
           },
           "revision": {
             "type": "integer"
@@ -23561,7 +23618,9 @@
           "publishable_key",
           "app_id",
           "auth_base_path",
-          "features"
+          "features",
+          "setup_pending",
+          "waitlist"
         ],
         "properties": {
           "app_id": {
@@ -23570,11 +23629,20 @@
           "auth_base_path": {
             "type": "string"
           },
+          "console_path": {
+            "type": "string"
+          },
           "features": {
             "$ref": "#/components/schemas/Features"
           },
           "publishable_key": {
             "type": "string"
+          },
+          "setup_pending": {
+            "type": "boolean"
+          },
+          "waitlist": {
+            "type": "boolean"
           }
         }
       },
@@ -25403,6 +25471,9 @@
           "container_id": {
             "type": "string"
           },
+          "external_id": {
+            "type": "string"
+          },
           "ingress_class": {
             "type": "string"
           },
@@ -25410,6 +25481,9 @@
             "type": "string"
           },
           "namespace": {
+            "type": "string"
+          },
+          "provider": {
             "type": "string"
           },
           "release_id": {
@@ -25425,6 +25499,25 @@
             "type": "string"
           },
           "target_id": {
+            "type": "string"
+          }
+        }
+      },
+      "RouteCost": {
+        "type": "object",
+        "required": [
+          "monthly_usd",
+          "estimate",
+          "source"
+        ],
+        "properties": {
+          "estimate": {
+            "type": "boolean"
+          },
+          "monthly_usd": {
+            "type": "string"
+          },
+          "source": {
             "type": "string"
           }
         }
@@ -25531,12 +25624,21 @@
           "attempt": {
             "type": "integer"
           },
+          "cost": {
+            "$ref": "#/components/schemas/RouteCost"
+          },
           "created_at": {
             "type": "string",
             "format": "date-time"
           },
           "desired_record": {
             "$ref": "#/components/schemas/DNSRecord"
+          },
+          "desired_records": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DNSRecord"
+            }
           },
           "dns_attempted": {
             "type": "boolean"
@@ -25576,6 +25678,12 @@
           },
           "receipt": {
             "$ref": "#/components/schemas/DNSRecord"
+          },
+          "receipts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DNSRecord"
+            }
           },
           "review": {
             "type": "string"
@@ -28566,6 +28674,55 @@
           },
           "revision": {
             "type": "integer"
+          }
+        }
+      },
+      "SetupStatus": {
+        "type": "object",
+        "required": [
+          "pending"
+        ],
+        "properties": {
+          "pending": {
+            "type": "boolean"
+          }
+        }
+      },
+      "SetupRequest": {
+        "type": "object",
+        "required": [
+          "name",
+          "email",
+          "password",
+          "organization_name"
+        ],
+        "properties": {
+          "email": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "organization_name": {
+            "type": "string"
+          },
+          "password": {
+            "type": "string"
+          }
+        }
+      },
+      "SetupResponse": {
+        "type": "object",
+        "required": [
+          "ok",
+          "verification_required"
+        ],
+        "properties": {
+          "ok": {
+            "type": "boolean"
+          },
+          "verification_required": {
+            "type": "boolean"
           }
         }
       },
