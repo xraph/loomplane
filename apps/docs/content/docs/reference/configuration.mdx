@@ -122,6 +122,19 @@ These have no variable wired in `config.yaml`. Set them in `config.local.yaml`.
 |---|---|---|
 | `LOOMPLANE_AI_ENABLED` | `false` | Turns on the [AI section](/docs/ai) (`ai.enabled`): the Models and AI settings pages, their API and the model kinds. Off, a plan with a model resource gets a `catalog-feature-off` problem, and models already running keep running |
 | `LOOMPLANE_AI_MODELS_HUGGINGFACE_URL` | `https://huggingface.co` | The Hugging Face Hub, or a mirror of it, that Loomplane reads repos, model cards and gated checks from, and that model engines download weights from (`ai.models.huggingface_url`). The workspace's Hugging Face token is sent there, so it must be https, with plain http allowed only for `localhost` or a loopback address. A user, query or fragment stops startup. vLLM and Text Embeddings Inference get a mirror as `HF_ENDPOINT`, and llama.cpp fetches its GGUF from it |
+| `LOOMPLANE_AI_PROVIDER` | `anthropic` | The provider the infra agent uses by default (`ai.provider`): `anthropic`, `openai` or `openai-compatible`. Only read when `ai.enabled` is on |
+| `LOOMPLANE_AI_API_KEY` | empty | The server's API key for that provider (`ai.api_key`). It's optional even with the agent on, because a workspace can bring its own key. Loomplane never logs it or serves it to the dashboard |
+| `LOOMPLANE_AI_BASE_URL` | empty | The provider's endpoint (`ai.base_url`). You need it for `openai-compatible`, and it overrides the default endpoint for the others. It must be http(s) without a user or password, and https in production unless it's `localhost` |
+| `LOOMPLANE_AI_MODEL` | `claude-sonnet-5-5` | The agent's default model (`ai.model`). It isn't the `ai.models` registry block below, which only says where model weights come from. The agent uses `claude-haiku-5-5` for cheap summarising steps |
+| `LOOMPLANE_AI_EMBEDDING_PROVIDER` | empty | The provider for retrieval embeddings (`ai.knowledge.embedding_provider`): `openai` or `openai-compatible`. Anthropic has no embeddings API, so it can't be used. Empty turns retrieval off |
+| `LOOMPLANE_AI_EMBEDDING_API_KEY` | empty | The key for the embedding provider (`ai.knowledge.embedding_api_key`). Never logged or served |
+| `LOOMPLANE_AI_EMBEDDING_BASE_URL` | empty | The embedding endpoint (`ai.knowledge.embedding_base_url`). Required for `openai-compatible` |
+| `LOOMPLANE_AI_EMBEDDING_MODEL` | empty | The embedding model (`ai.knowledge.embedding_model`). Required once a provider is set. Pick one whose native size is at most 2000 dimensions, such as `text-embedding-3-small` |
+| `LOOMPLANE_AI_EMBEDDING_DIMENSIONS` | `1536` | The vector size (`ai.knowledge.dimensions`), from 1 to 2000. It must match the embedding model, and every workspace shares it, because the vector column has one fixed size. `text-embedding-3-small` at 1536 is the default |
+
+With `ai.enabled` on, Loomplane checks these at startup and names the key that's wrong. With it off, none of them are checked, so a stray variable can't stop a server that doesn't run the agent.
+
+`ai.prices` has no variable. Set it in `config.local.yaml` as a list of `{provider, model, input_per_million, output_per_million}`, in decimal USD such as `"3"` or `"0.80"`. The agent uses server prices only: nexus's own catalog, plus the models you list here. A price a workspace sets on its own provider key doesn't apply to the agent, so a model nexus doesn't know needs an entry here. Each provider and model pair can appear once.
 
 ## Process and container
 
