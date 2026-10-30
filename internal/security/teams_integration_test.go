@@ -222,8 +222,9 @@ func TestMemberRemoveOnPostgres(t *testing.T) {
 		f.setGrants(user)
 		return errors.New("teams store is down")
 	})
-	if err := s.OnBeforeMemberRemove(ctx, &organization.Member{OrgID: orgID, UserID: userID}); err == nil {
-		t.Fatal("the leaver's error was lost")
+	// The leaver's error is logged and the removal goes ahead.
+	if err := s.OnBeforeMemberRemove(ctx, &organization.Member{OrgID: orgID, UserID: userID}); err != nil {
+		t.Fatalf("a leaver error blocked the removal: %v", err)
 	}
 	if rows := f.assignments(t, user); len(rows) != 0 {
 		t.Fatalf("a removed member holds %d rows", len(rows))

@@ -193,14 +193,97 @@ func TestMemberRemoveRevokesAgainAfterTheDelete(t *testing.T) {
 		t.Fatalf("unknown member after-hook = %v, locks %v", err, locks)
 	}
 
-	// A before-hook that fails aborts the removal, so nothing is kept for
-	// an after-hook that will never come.
+	// A failing leaver doesn't stop the removal, and the after-hook still
+	// gets to revoke.
 	f.setMember(user, MemberAdmin)
 	s.SetLeaver(func(context.Context, string, string) error { return errors.New("teams store is down") })
-	if err = s.OnBeforeMemberRemove(ctx, m); err == nil {
-		t.Fatal("a failing leaver didn't fail the before-hook")
+	if err = s.OnBeforeMemberRemove(ctx, m); err != nil {
+		t.Fatalf("a failing leaver failed the before-hook: %v", err)
 	}
-	if _, kept := s.leaving.Load(memberID.String()); kept {
+	if _, kept := s.leaving.Load(memberID.String()); !kept {
+		t.Fatal("a removal that goes ahead left nothing for the after-hook")
+	}
+
+	// A before-hook that fails (here, its lock) aborts the removal, so
+	// nothing is kept for an after-hook that will never come.
+	other := authid.NewMemberID()
+	f.a.SetSyncLock(func(context.Context, string, func(context.Context) error) error {
+		return errors.New("database is down")
+	})
+	if err = s.OnBeforeMemberRemove(ctx, &organization.Member{ID: other, OrgID: orgID, UserID: userID}); err == nil {
+		t.Fatal("a failing lock didn't fail the before-hook")
+	}
+	if _, kept := s.leaving.Load(other.String()); kept {
 		t.Fatal("an aborted removal left its member ID behind")
+	}
+}
+
+// When the after-hook's revoke fails, nothing would revoke the person
+// again: authsome only logs the error. The person is queued instead, and
+// the queue's sync of a non-member revokes everything.
+func TestFailedAfterRevokeIsRequeued(t *testing.T) {
+	ctx := context.Background()
+	orgID, userID, memberID := authid.NewOrgID(), authid.NewUserID(), authid.NewMemberID()
+	store := memory.New()
+	eng, err := warden.NewEngine(warden.WithStore(store))
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := newTeamFixture(t, eng, store, orgID.String())
+	user := userID.String()
+	f.setMember(user, MemberAdmin)
+	s := NewSync(f.a)
+	var queued []string
+	s.SetRequeuer(func(_ context.Context, o, u string) error {
+		queued = append(queued, o+"/"+u)
+		return nil
+	})
+	m := &organization.Member{ID: memberID, OrgID: orgID, UserID: userID}
+
+	// A good revoke queues nobody.
+	if err = s.OnBeforeMemberRemove(ctx, m); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.OnAfterMemberRemove(ctx, memberID); err != nil || len(queued) != 0 {
+		t.Fatalf("good after-hook = %v, queued %v", err, queued)
+	}
+
+	if err = s.OnBeforeMemberRemove(ctx, m); err != nil {
+		t.Fatal(err)
+	}
+	lockErr := errors.New("database is down")
+	f.a.SetSyncLock(func(context.Context, string, func(context.Context) error) error { return lockErr })
+	if err = s.OnAfterMemberRemove(ctx, memberID); !errors.Is(err, lockErr) {
+		t.Fatalf("after-hook = %v, want the lock's error", err)
+	}
+	if want := []string{f.org + "/" + user}; !slices.Equal(queued, want) {
+		t.Fatalf("queued %v, want %v", queued, want)
+	}
+}
+
+// SetSyncLocks sets both locks at once, so they can't be wired apart.
+func TestSetSyncLocksSetsBoth(t *testing.T) {
+	ctx := context.Background()
+	f := memTeamFixture(t)
+	f.setMember(alice, MemberViewer)
+	var used []string
+	f.a.SetSyncLocks(
+		func(ctx context.Context, _ string, fn func(context.Context) error) error {
+			used = append(used, "lock")
+			return fn(ctx)
+		},
+		func(ctx context.Context, _ string, fn func(context.Context) error) (bool, error) {
+			used = append(used, "try")
+			return true, fn(ctx)
+		},
+	)
+	if err := f.a.Sync(ctx, org, alice); err != nil {
+		t.Fatal(err)
+	}
+	if ran, err := f.a.TrySync(ctx, org, alice); err != nil || !ran {
+		t.Fatalf("TrySync = %v, %v", ran, err)
+	}
+	if !slices.Equal(used, []string{"lock", "try"}) {
+		t.Fatalf("locks used %v", used)
 	}
 }

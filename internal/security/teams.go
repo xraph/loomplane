@@ -62,10 +62,18 @@ func (a *Authorizer) SetTeamGrants(g TeamGrants) { a.teamGrants = g }
 
 // SetSyncLock sets the lock Sync takes per person. nil runs unlocked, which
 // only unit tests do. Set the try-lock on the same locks too
-// (SetSyncTryLock), or TrySync refuses to run.
+// (SetSyncLocks sets both), or TrySync refuses to run.
 func (a *Authorizer) SetSyncLock(l LockFunc) {
 	a.syncLock = l
 	a.ensureSyncSlots()
+}
+
+// SetSyncLocks sets the lock Sync takes per person and TrySync's version
+// of the same lock, which never waits. Wire both through it: TrySync
+// refuses to run with only the first.
+func (a *Authorizer) SetSyncLocks(lock LockFunc, try TryLockFunc) {
+	a.SetSyncLock(lock)
+	a.SetSyncTryLock(try)
 }
 
 // SetSyncTryLock sets the lock TrySync takes per person: the same lock as
@@ -356,3 +364,11 @@ type Leaver func(ctx context.Context, orgID, userID string) error
 // SetLeaver sets what OnBeforeMemberRemove runs before it revokes the
 // member's roles. nil skips it.
 func (s *Sync) SetLeaver(l Leaver) { s.leaver = l }
+
+// Requeuer queues a person for a later sync. The teams service's Requeue
+// fits. Like a Leaver, it must never sync anyone itself.
+type Requeuer func(ctx context.Context, orgID, userID string) error
+
+// SetRequeuer sets what OnAfterMemberRemove runs when its revoke fails.
+// nil skips it.
+func (s *Sync) SetRequeuer(r Requeuer) { s.requeue = r }

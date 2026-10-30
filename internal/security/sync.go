@@ -3,6 +3,7 @@ package security
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"sync"
 
 	authid "github.com/xraph/authsome/id"
@@ -20,8 +21,9 @@ import (
 // repairs that on the member's next request. The "before remove" hook is
 // different: its error aborts the removal (see OnBeforeMemberRemove).
 type Sync struct {
-	authz  *Authorizer
-	leaver Leaver // takes a leaving member out of their teams (teams.go)
+	authz   *Authorizer
+	leaver  Leaver   // takes a leaving member out of their teams (teams.go)
+	requeue Requeuer // queues a person whose after-removal revoke failed
 
 	// leaving maps the ID of a member being removed to who they are, from
 	// the before-hook to the after-hook, which carries only the ID.
@@ -71,24 +73,29 @@ func (s *Sync) OnAfterMemberRoleChange(ctx context.Context, m *organization.Memb
 // every role away. The after-hook (OnAfterMemberRemove) carries only the
 // member's ID, so this hook also remembers who is leaving for it.
 //
-// authsome aborts the removal when this hook fails: the person stays a
-// member, and whatever this hook already revoked comes back on their next
-// request through Require's repair. Revoke runs even when the leaver
-// failed, so nobody is left holding rights in that case either. It runs
-// under the person's sync lock, so a sync that read their teams before the
-// leaver ran finishes first and its rows go too. If the lock can't be had,
-// it revokes anyway, and the lock's error aborts the removal.
+// A leaver error is logged and never blocks the removal: a team row left
+// behind names a membership authsome is about to delete, and the teams
+// service's reads join on it, so the row grants nothing, now or after a
+// re-invite.
+//
+// Revoke runs under the person's sync lock, so a sync that read their teams
+// before the leaver ran finishes first and its rows go too. If the lock
+// can't be had, it revokes anyway and returns the lock's error. authsome
+// aborts the removal when this hook fails: the person stays a member, and
+// whatever this hook already revoked comes back on their next request
+// through Require's repair.
 func (s *Sync) OnBeforeMemberRemove(ctx context.Context, m *organization.Member) error {
 	orgID, userID := m.OrgID.String(), m.UserID.String()
-	var leaveErr error
 	if s.leaver != nil {
-		leaveErr = s.leaver(ctx, orgID, userID)
+		if err := s.leaver(ctx, orgID, userID); err != nil {
+			slog.ErrorContext(ctx, "take a leaving member out of their teams", "org", orgID, "user", userID, "error", err)
+		}
 	}
-	err := errors.Join(leaveErr, s.revokeLocked(ctx, orgID, userID))
-	if err == nil {
-		s.leaving.Store(m.ID.String(), leavingMember{orgID: orgID, userID: userID})
+	if err := s.revokeLocked(ctx, orgID, userID); err != nil {
+		return err
 	}
-	return err
+	s.leaving.Store(m.ID.String(), leavingMember{orgID: orgID, userID: userID})
+	return nil
 }
 
 // OnAfterMemberRemove revokes the member's roles again, under their lock,
@@ -97,7 +104,9 @@ func (s *Sync) OnBeforeMemberRemove(ctx context.Context, m *organization.Member)
 // repair from one of their own requests, or the teams queue) could write
 // their member role back. Any sync after the delete finds no membership
 // and revokes, and the lock makes one that started in the window finish
-// first. authsome only logs this hook's error.
+// first. authsome only logs this hook's error, so when the revoke fails the
+// person is queued (SetRequeuer), and the queue's sync of a non-member
+// revokes everything.
 func (s *Sync) OnAfterMemberRemove(ctx context.Context, memberID authid.MemberID) error {
 	v, ok := s.leaving.LoadAndDelete(memberID.String())
 	if !ok {
@@ -107,7 +116,11 @@ func (s *Sync) OnAfterMemberRemove(ctx context.Context, memberID authid.MemberID
 	if !ok {
 		return nil
 	}
-	return s.revokeLocked(ctx, who.orgID, who.userID)
+	err := s.revokeLocked(ctx, who.orgID, who.userID)
+	if err != nil && s.requeue != nil {
+		err = errors.Join(err, s.requeue(ctx, who.orgID, who.userID))
+	}
+	return err
 }
 
 // revokeLocked revokes the person's roles under their sync lock, and

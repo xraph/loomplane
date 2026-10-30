@@ -613,12 +613,10 @@ func TestMemberRemoveLeavesTeamsThenRevokes(t *testing.T) {
 			}
 			return leaveErr
 		})
-		err := s.OnBeforeMemberRemove(ctx, m)
-		if leaveErr == nil && err != nil {
-			t.Fatalf("member remove: %v", err)
-		}
-		if leaveErr != nil && !errors.Is(err, leaveErr) {
-			t.Fatalf("member remove = %v, want the leaver's error", err)
+		// A leaver error is logged, never fatal: leftover team rows join
+		// no membership, so they can't outlive the removal.
+		if err := s.OnBeforeMemberRemove(ctx, m); err != nil {
+			t.Fatalf("member remove with leaver error %v: %v", leaveErr, err)
 		}
 		if !slices.Equal(events, []string{"leave", "lock"}) {
 			t.Fatalf("events %v, want the leaver then the locked revoke", events)
