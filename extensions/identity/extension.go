@@ -398,9 +398,7 @@ func (e *Extension) prepare(ctx context.Context) error {
 		return fmt.Errorf("start authsome: %w", err)
 	}
 	// After authsome's bootstrap, which applies the platform roles.
-	if err := e.grantConsoleReads(ctx); err != nil {
-		return err
-	}
+	e.grantConsoleReads(ctx)
 	if err := e.recordEarlierSetup(ctx); err != nil {
 		return err
 	}

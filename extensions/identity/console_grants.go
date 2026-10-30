@@ -4,10 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"slices"
 	"time"
 
 	"github.com/xraph/authsome/rbac"
+	"github.com/xraph/forge"
 	"github.com/xraph/warden"
 	wardenid "github.com/xraph/warden/id"
 	"github.com/xraph/warden/permission"
@@ -36,34 +36,28 @@ var consoleWardenReads = []struct{ resource, action string }{
 // consoleReaderRoles are the platform roles the console admits.
 var consoleReaderRoles = []string{rbac.PlatformOwnerSlug, rbac.PlatformAdminSlug}
 
+// platformNamespace is the Warden namespace authsome's bootstrap puts the
+// platform roles in (its platform.warden).
+const platformNamespace = "platform"
+
 // grantConsoleReads gives the platform roles Warden's read grants, so the
 // console's Warden pages answer them. It runs on every start, after
 // authsome's bootstrap has applied the platform roles, under the startup
-// lock, and adds only what's missing.
-func (e *Extension) grantConsoleReads(ctx context.Context) error {
+// lock, and adds only what's missing. The console is a convenience, so
+// nothing here stops Loomplane starting: a role it can't find or grant is
+// logged and skipped.
+func (e *Extension) grantConsoleReads(ctx context.Context) {
 	tenant := e.cfg.Identity.AppID
-	store := e.warden.Store()
-	roles, err := store.ListRoles(ctx, &role.ListFilter{TenantID: tenant})
-	if err != nil {
-		return fmt.Errorf("list platform roles: %w", err)
-	}
-	found := map[string]bool{}
-	for _, r := range roles {
-		if !slices.Contains(consoleReaderRoles, r.Slug) {
-			continue
-		}
-		found[r.Slug] = true
-		if err := e.grantRoleConsoleReads(ctx, r); err != nil {
-			return err
-		}
-	}
 	for _, slug := range consoleReaderRoles {
-		if !found[slug] {
-			return fmt.Errorf("grant console reads: no %s role in Warden", slug)
+		r, err := e.warden.Store().GetRoleBySlug(ctx, tenant, platformNamespace, slug)
+		if err == nil {
+			err = e.grantRoleConsoleReads(ctx, r)
+		}
+		if err != nil {
+			e.Logger().Warn("the console's Warden pages won't answer this role", forge.F("role", slug), forge.F("error", err.Error()))
 		}
 	}
 	e.warden.InvalidateTenant(ctx, tenant)
-	return nil
 }
 
 func (e *Extension) grantRoleConsoleReads(ctx context.Context, r *role.Role) error {
