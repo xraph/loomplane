@@ -58,8 +58,9 @@ build {
   sources = ["source.digitalocean.loomplane"]
 
   # A fresh Droplet is still running cloud-init and unattended upgrades.
+  # Exit 2 means done with recoverable errors, which is fine here.
   provisioner "shell" {
-    inline = ["cloud-init status --wait"]
+    inline = ["cloud-init status --wait || [ $? -eq 2 ]"]
   }
 
   provisioner "file" {
