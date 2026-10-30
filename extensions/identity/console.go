@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"slices"
 	"strings"
 
 	authcontract "github.com/xraph/authsome/extension/contract"
@@ -25,6 +26,7 @@ import (
 	wardencontract "github.com/xraph/warden/extension/contract"
 
 	"github.com/xraph/loomplane/internal/platformadmin"
+	"github.com/xraph/loomplane/internal/security"
 )
 
 // ConsoleBasePath is where the Forge dashboard's API, the instance console,
@@ -207,8 +209,16 @@ func (e *Extension) consoleGate() forge.Middleware {
 			}
 			ctx := r.Context()
 			u, admin := e.consoleUser(ctx, r)
-			if !admin || !consoleRequestAllowed(e.consoleRegistry(), r, rest) {
+			if !admin {
 				return writeConsoleNotFound(c.Response())
+			}
+			allowed, read := consoleRequestAllowed(e.consoleRegistry(), r, rest)
+			if !allowed {
+				return writeConsoleNotFound(c.Response())
+			}
+			if read {
+				ctx = security.WithConsoleRead(ctx)
+				u = consoleReader(u)
 			}
 			c.WithContext(context.WithValue(ctx, consoleUserKey{}, u))
 			return next(c)
@@ -263,24 +273,28 @@ func segments(path string) []string {
 // consoleRequestAllowed decides a platform admin's request by the dashboard
 // route it's for. Routes the console doesn't use, including any a later
 // Forge release adds, are refused. reg is the dashboard's contract registry.
-func consoleRequestAllowed(reg contract.Registry, r *http.Request, rest []string) bool {
+// read says the request is an allowed contract query.
+func consoleRequestAllowed(reg contract.Registry, r *http.Request, rest []string) (allowed, read bool) {
 	route := r.Method + " " + strings.Join(rest, "/")
 	switch route {
 	case "POST api/dashboard/v1":
 		var req contract.Request
-		return decodeConsoleBody(r, &req) && consoleAllowed(reg, req)
+		if !decodeConsoleBody(r, &req) || !consoleAllowed(reg, req) {
+			return false, false
+		}
+		return true, req.Kind == contract.KindQuery
 	case "POST api/dashboard/v1/stream/control":
 		var msg transport.ControlMessage
 		if !decodeConsoleBody(r, &msg) {
-			return false
+			return false, false
 		}
 		switch msg.Op {
 		case "subscribe":
-			return consoleAllowed(reg, contract.Request{Kind: contract.KindSubscribe, Contributor: msg.Contributor, Intent: msg.Intent})
+			return consoleAllowed(reg, contract.Request{Kind: contract.KindSubscribe, Contributor: msg.Contributor, Intent: msg.Intent}), false
 		case "unsubscribe":
-			return true
+			return true, false
 		}
-		return false
+		return false, false
 	case "GET api/dashboard/v1/principal",
 		"GET api/dashboard/v1/capabilities",
 		"GET api/dashboard/v1/csrf",
@@ -288,9 +302,25 @@ func consoleRequestAllowed(reg contract.Registry, r *http.Request, rest []string
 		"GET export/json",
 		"GET export/csv",
 		"GET export/prometheus":
-		return true
+		return true, false
 	}
-	return false
+	return false, false
+}
+
+// ctrlplaneSystemAdmin is the role Ctrl Plane reads as a system admin.
+const ctrlplaneSystemAdmin = "system:admin"
+
+// consoleReader is u for one console read. Ctrl Plane keeps each
+// organization's data in that organization's tenant and the console has no
+// organization, so a read reaches Ctrl Plane as a system admin: it answers
+// the cross-tenant views (tenants, providers, system stats) and finds no
+// rows for a tenant it isn't given. Its policy check passes on the read
+// mark the gate puts beside it (security.WithConsoleRead). Commands never
+// get either.
+func consoleReader(u *dashauth.UserInfo) *dashauth.UserInfo {
+	read := *u
+	read.Roles = append(slices.Clone(u.Roles), ctrlplaneSystemAdmin)
+	return &read
 }
 
 // decodeConsoleBody reads the request body, decodes it into v and puts the

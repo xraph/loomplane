@@ -88,10 +88,17 @@ func (a *AuthProvider) Authenticate(ctx context.Context, token string) (*cpauth.
 // needs infrastructure:read, any other action infrastructure:modify. Claims
 // naming the organization's Loomplane automation come only from
 // WithPrincipal (Authenticate refuses them), so they're checked as it.
+//
+// A read the instance console's gate admitted for a platform admin is
+// allowed as it is: it names no organization to check it in, and the gate
+// lets no Ctrl Plane command through.
 func (a *AuthProvider) Authorize(ctx context.Context, req cpauth.AuthzRequest) (bool, error) {
 	_, authz := a.bound()
 	if authz == nil {
 		return false, nil
+	}
+	if security.IsConsoleRead(ctx) {
+		return true, nil
 	}
 	perm := security.InfrastructureModify
 	switch strings.ToLower(req.Action) {

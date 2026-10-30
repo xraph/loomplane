@@ -12,6 +12,8 @@ import (
 	"testing"
 	"time"
 
+	heraldid "github.com/xraph/herald/id"
+
 	"github.com/xraph/loomplane/internal/config"
 )
 
@@ -210,10 +212,14 @@ func TestConsole(t *testing.T) {
 			}
 		}
 		// A subscription outside the core contributor is refused before the
-		// stream is even looked up.
-		sub := `{"streamID":"x","op":"subscribe","subscriptionID":"1","contributor":"authsome","intent":"users.list"}`
-		if got := consoleCall(owner, http.MethodPost, consoleAPI+"/stream/control", sub); got != unknown {
-			t.Errorf("subscribe to authsome = %+v, want the unknown-path answer", got)
+		// stream is even looked up, a library's as much as authsome's.
+		for _, sub := range []string{
+			`{"streamID":"x","op":"subscribe","subscriptionID":"1","contributor":"authsome","intent":"users.list"}`,
+			`{"streamID":"x","op":"subscribe","subscriptionID":"2","contributor":"keysmith","intent":"keys.list"}`,
+		} {
+			if got := consoleCall(owner, http.MethodPost, consoleAPI+"/stream/control", sub); got != unknown {
+				t.Errorf("subscribe %s = %+v, want the unknown-path answer", sub, got)
+			}
 		}
 		// So is anything under the console that isn't a route it uses.
 		for _, path := range []string{"/api/_console", "/api/_console/nothing/here", "/api/_console/index.html"} {
@@ -254,18 +260,19 @@ func TestConsole(t *testing.T) {
 			// owner, once the gate has let the read through.
 			readStatus int
 		}{
-			// Warden's own authorizer wants warden:* permissions, which the
-			// platform roles don't grant.
-			{"warden", "overview.stats", "roles.create", http.StatusForbidden},
+			// The platform roles hold Warden's read grants and nothing else.
+			{"warden", "overview.stats", "roles.create", http.StatusOK},
+			{"warden", "roles.list", "roles.delete", http.StatusOK},
 			{"chronicle", "overview.stats", "checkpoints.take", http.StatusOK},
 			{"herald", "engine.info", "send.test", http.StatusOK},
 			{"relay", "endpoints.list", "endpoints.create", http.StatusOK},
 			{"keysmith", "settings", "keys.create", http.StatusOK},
-			// ctrlplane's authorizer wants a tenant_id claim, which the
-			// console's principal doesn't carry.
-			{"ctrlplane", "system.stats", "instances.delete", http.StatusForbidden},
-			// Dispatch's operator boundary has no authorizer configured, so
-			// it answers every operator read as unavailable.
+			// A console read reaches Ctrl Plane as a system admin.
+			{"ctrlplane", "system.stats", "instances.delete", http.StatusOK},
+			{"ctrlplane", "tenants.list", "tenants.delete", http.StatusOK},
+			// Dispatch's operator boundary isn't configured: it needs
+			// Dispatch's durable delivery audit, so it answers every operator
+			// read as unavailable.
 			{"dispatch", "overview.summary", "jobs.cancel", http.StatusServiceUnavailable},
 			{"trove", "stores.list", "buckets.create", http.StatusOK},
 			{"organization", "orgs.list", "orgs.delete", http.StatusOK},
@@ -288,6 +295,46 @@ func TestConsole(t *testing.T) {
 		} {
 			if got := consoleCall(owner, http.MethodPost, consoleAPI, req); got != unknown {
 				t.Errorf("POST %s = %+v, want the unknown-path answer", req, got)
+			}
+		}
+	})
+
+	t.Run("library reads keep secrets out", func(t *testing.T) {
+		// A webhook endpoint, whose signing secret Loomplane stores encrypted
+		// and Relay's store hands back decrypted.
+		status, raw, _ := owner.send(http.MethodPost, "/api/v1/notifications/webhooks", map[string]string{"url": "https://93.184.216.34/console-test"})
+		var hook struct {
+			Endpoint struct {
+				ID string `json:"id"`
+			} `json:"endpoint"`
+			Secret string `json:"secret"`
+		}
+		if status != http.StatusOK || json.Unmarshal(raw, &hook) != nil || hook.Endpoint.ID == "" || hook.Secret == "" {
+			t.Fatalf("create a webhook: %d %s", status, raw)
+		}
+		// A mail provider whose credential is stored as it is, so the stored
+		// value is the secret itself.
+		const credential = "console-test-provider-secret"
+		providerID := heraldid.NewProviderID().String()
+		execSQL(t, cfg.Database.URL, `INSERT INTO herald_providers (id, app_id, name, channel, driver, credentials, settings, priority, enabled, created_at, updated_at)
+			VALUES ($1, $2, 'console-test', 'email', 'smtp', $3, '{"host":"smtp.example.com"}', 9, false, now(), now())`,
+			providerID, cfg.Identity.AppID, `{"username":"console-test","password":"`+credential+`"}`)
+		for _, tc := range []struct {
+			contributor, intent string
+			payload             any
+			mustShow, secret    string
+		}{
+			{"relay", "endpoints.list", map[string]any{}, hook.Endpoint.ID, hook.Secret},
+			{"relay", "endpoints.detail", map[string]string{"id": hook.Endpoint.ID}, hook.Endpoint.ID, hook.Secret},
+			{"herald", "providers.list", map[string]any{}, providerID, credential},
+			{"herald", "providers.detail", map[string]string{"id": providerID}, providerID, credential},
+		} {
+			got := consoleCall(owner, http.MethodPost, consoleAPI, envelope(t, "query", tc.contributor, tc.intent, tc.payload, ""))
+			if got.status != http.StatusOK || !strings.Contains(got.body, tc.mustShow) {
+				t.Fatalf("%s/%s: %+v, want 200 naming %s", tc.contributor, tc.intent, got, tc.mustShow)
+			}
+			if strings.Contains(got.body, tc.secret) {
+				t.Errorf("%s/%s returns the stored secret: %s", tc.contributor, tc.intent, got.body)
 			}
 		}
 	})

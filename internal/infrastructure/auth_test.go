@@ -114,3 +114,26 @@ func TestAuthProvider_authorizesTheAutomationAsItself(t *testing.T) {
 		t.Fatalf("a person was authorized as %+v", got)
 	}
 }
+
+func TestAuthProvider_allowsConsoleReads(t *testing.T) {
+	authz := &fakeAuthz{}
+	a := NewAuthProvider()
+	// Unbound, nothing is allowed, a console read included.
+	read := security.WithConsoleRead(context.Background())
+	if ok, err := a.Authorize(read, cpauth.AuthzRequest{SubjectID: "ausr_1", Action: "system.stats"}); ok || err != nil {
+		t.Fatalf("an unbound provider allowed a console read: %v %v", ok, err)
+	}
+	a.Bind(func(context.Context, string) (string, string, error) { return "", "", nil }, authz)
+	// The console gate admitted the read, for a platform admin, with no
+	// organization to check it in.
+	if ok, err := a.Authorize(read, cpauth.AuthzRequest{SubjectID: "ausr_1", Action: "system.stats"}); !ok || err != nil {
+		t.Fatalf("a console read: %v %v, want allowed", ok, err)
+	}
+	if len(authz.calls) != 0 {
+		t.Fatalf("a console read asked Warden: %+v", authz.calls)
+	}
+	// The same request without the gate's mark is an ordinary one.
+	if ok, err := a.Authorize(context.Background(), cpauth.AuthzRequest{SubjectID: "ausr_1", Action: "system.stats"}); ok || err != nil {
+		t.Fatalf("an unmarked request: %v %v, want refused", ok, err)
+	}
+}

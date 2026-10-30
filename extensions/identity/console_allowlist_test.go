@@ -5,9 +5,11 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 
+	dashauth "github.com/xraph/forge/extensions/dashboard/auth"
 	"github.com/xraph/forge/extensions/dashboard/contract"
 )
 
@@ -257,8 +259,14 @@ func TestConsoleRequestAllowed(t *testing.T) {
 		"the base itself":      {http.MethodGet, "", "", false},
 	} {
 		r := httptest.NewRequestWithContext(t.Context(), tc.method, "/", strings.NewReader(tc.body))
-		if got := consoleRequestAllowed(reg, r, segments(tc.rest)); got != tc.want {
+		got, read := consoleRequestAllowed(reg, r, segments(tc.rest))
+		if got != tc.want {
 			t.Errorf("%s: allowed = %v, want %v", name, got, tc.want)
+		}
+		// Only an allowed contract query is a read: the one kind of request
+		// Ctrl Plane takes as the console's.
+		if wantRead := name == "allowed query" || name == "library read"; read != wantRead {
+			t.Errorf("%s: read = %v, want %v", name, read, wantRead)
 		}
 		// What the handler reads next is what the gate read.
 		if tc.want && tc.method == http.MethodPost {
@@ -267,5 +275,18 @@ func TestConsoleRequestAllowed(t *testing.T) {
 				t.Errorf("%s: body after the gate = %q (%v), want %q", name, left, err, tc.body)
 			}
 		}
+	}
+}
+
+func TestConsoleReader(t *testing.T) {
+	u := &dashauth.UserInfo{Subject: "ausr_1", Roles: []string{"platform-admin"}}
+	got := consoleReader(u)
+	if !slices.Contains(got.Roles, "system:admin") || !slices.Contains(got.Roles, "platform-admin") || got.Subject != "ausr_1" {
+		t.Fatalf("consoleReader = %+v", got)
+	}
+	// The gate's own user is left as it was, for the requests that aren't
+	// reads.
+	if len(u.Roles) != 1 {
+		t.Fatalf("consoleReader changed its argument: %+v", u)
 	}
 }
