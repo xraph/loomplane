@@ -3,6 +3,11 @@
 dir="${LOOMPLANE_DIR:-/srv/loomplane}"
 
 echo
+if [ ! -f /var/lib/cloud/instance/boot-finished ]; then
+  echo "Loomplane is still installing. Follow /var/log/cloud-init-output.log."
+  echo
+  exit 0
+fi
 if [ ! -f "$dir/.configured" ]; then
   echo "Run loomplane-setup to finish installing Loomplane."
   echo

@@ -30,6 +30,19 @@ RELEASE_BASE_URL="${LOOMPLANE_RELEASE_BASE_URL:-https://github.com/${REPO}/relea
 API_URL="${LOOMPLANE_API_URL:-https://api.github.com}"
 SKIP_DOCKER="${LOOMPLANE_SKIP_DOCKER:-}"
 
+# Fresh Ubuntu Droplets often have unattended-upgrades holding the dpkg lock.
+APT_LOCK_WAIT=600
+apt_get() { apt-get -o "DPkg::Lock::Timeout=$APT_LOCK_WAIT" "$@"; }
+apt_update() {
+  local try
+  for try in 1 2 3 4; do
+    apt_get update -qq && return 0
+    log "apt-get update failed (attempt $try), retrying"
+    sleep 5
+  done
+  die "apt-get update kept failing"
+}
+
 log() { echo "loomplane-install: $*" >&2; }
 die() { log "$*"; exit 1; }
 
@@ -53,8 +66,8 @@ install_docker() {
   fi
   log "installing Docker Engine and the Compose plugin"
   export DEBIAN_FRONTEND=noninteractive
-  apt-get update -qq
-  apt-get install -y -qq ca-certificates curl
+  apt_update
+  apt_get install -y -qq ca-certificates curl
   install -m 0755 -d /etc/apt/keyrings
   curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
   chmod a+r /etc/apt/keyrings/docker.asc
@@ -67,15 +80,15 @@ Suites: ${suite}
 Components: stable
 Signed-By: /etc/apt/keyrings/docker.asc
 DOCKER
-  apt-get update -qq
-  apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+  apt_update
+  apt_get install -y -qq docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
   systemctl enable --now docker
 }
 
 configure_firewall() {
   log "allowing ports 22, 80 and 443 through ufw"
   export DEBIAN_FRONTEND=noninteractive
-  apt-get install -y -qq ufw
+  apt_get install -y -qq ufw
   ufw allow 22/tcp >/dev/null
   ufw allow 80/tcp >/dev/null
   ufw allow 443/tcp >/dev/null
@@ -98,7 +111,14 @@ download_bundle() {
   (cd "$tmp" && sha256sum -c check >/dev/null 2>&1) \
     || die "checksum mismatch for $tarball; refusing to install it"
   mkdir -p "$LOOMPLANE_DIR"
-  tar -xzf "$tmp/$tarball" -C "$LOOMPLANE_DIR"
+  # The bundle is built by a CI user (uid 1001). Never keep its owner or
+  # modes: that uid is the second user anyone creates on a Droplet.
+  tar --no-same-owner --no-same-permissions -xzf "$tmp/$tarball" -C "$LOOMPLANE_DIR"
+  chown -R root:root "$LOOMPLANE_DIR"
+  chmod 0755 "$LOOMPLANE_DIR"
+  find "$LOOMPLANE_DIR" -mindepth 1 -type d -exec chmod 0755 {} +
+  find "$LOOMPLANE_DIR" -mindepth 1 -type f ! -name .env -exec chmod 0644 {} +
+  if [ -f "$LOOMPLANE_DIR/.env" ]; then chmod 0600 "$LOOMPLANE_DIR/.env"; fi
 }
 
 pull_images() {
@@ -210,7 +230,18 @@ step_start() {
   log ".env holds your secret key. Copy $LOOMPLANE_DIR/.env somewhere safe: without it stored credentials can't be recovered."
 }
 
+# Hold one lock for the whole run so cloud-init and loomplane-setup can't
+# install at the same time. The test hook LOOMPLANE_LOCK_FILE moves the lock.
+take_lock() {
+  local lock="${LOOMPLANE_LOCK_FILE:-/run/loomplane-install.lock}"
+  exec 9>"$lock" || die "couldn't open $lock"
+  flock -n 9 || die "another Loomplane install is running (lock $lock); wait for it to finish"
+}
+
 main() {
+  case "${1:-}" in
+    prepare|secrets|configure|start|all) take_lock ;;
+  esac
   case "${1:-}" in
     prepare) step_prepare ;;
     secrets) step_secrets ;;

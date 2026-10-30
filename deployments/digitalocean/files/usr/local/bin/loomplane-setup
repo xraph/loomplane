@@ -27,6 +27,10 @@ read -r -p "Domain Loomplane will answer on (for example loomplane.example.com):
 read -r -p "Email for certificate notices: " email
 
 export LOOMPLANE_DIR="$dir" LOOMPLANE_DOMAIN="$domain" ACME_EMAIL="$email"
+if [ ! -f "$dir/.env.example" ]; then
+  echo "loomplane-setup: no Loomplane bundle in $dir; run $installer prepare first" >&2
+  exit 1
+fi
 bash "$installer" secrets
 bash "$installer" configure
 bash "$installer" start

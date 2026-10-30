@@ -26,7 +26,7 @@ fi
 # ---- inside the container ----
 export DEBIAN_FRONTEND=noninteractive
 apt-get update -qq >/dev/null
-apt-get install -y -qq curl python3 openssl ca-certificates >/dev/null
+apt-get install -y -qq curl python3 util-linux openssl ca-certificates >/dev/null
 
 installer=/repo/deployments/digitalocean/install.sh
 work=$(mktemp -d)
@@ -45,7 +45,7 @@ build_bundle() {
   cp /repo/docs/docker-production.md "$bundle/README.md"
   echo "ghcr.io/xraph/loomplane@sha256:0000" >"$bundle/image.txt"
   sed -i "s|^LOOMPLANE_IMAGE=.*|LOOMPLANE_IMAGE=ghcr.io/xraph/loomplane@sha256:0000|" "$bundle/.env.example"
-  tar -czf "$dir/loomplane-$tag-docker.tar.gz" -C "$bundle" .
+  tar --owner=1001 --group=1001 --mode=g+w -czf "$dir/loomplane-$tag-docker.tar.gz" -C "$bundle" .
   (cd "$dir" && sha256sum "loomplane-$tag-docker.tar.gz" >SHA256SUMS)
 }
 build_bundle v9.9.9
@@ -70,6 +70,15 @@ if LOOMPLANE_VERSION=v9.9.9 bash "$installer" prepare >"$work/prepare.log" 2>&1 
   pass "prepare extracts the bundle"
 else
   bad "prepare extracts the bundle"; cat "$work/prepare.log" >&2
+fi
+
+# 1b. The install is root-owned and not writable by group or others, even
+# though the fixture tarball was built as uid 1001 with group-writable files.
+bad_perm=$(find "$install_dir" \( ! -user root -o ! -group root -o -perm /022 \) | head -n 3)
+if [ -z "$bad_perm" ] && [ "$(stat -c %U "$install_dir/compose.yaml")" = root ]; then
+  pass "install is root-owned and not group or world writable"
+else
+  bad "install is root-owned and not group or world writable: $bad_perm"
 fi
 
 # 2. secrets is idempotent and keeps .env private.
@@ -135,6 +144,20 @@ elif [[ "$msg" == *"checksum"* ]] && [ ! -e "$tampered/compose.yaml" ]; then
 else
   bad "tampered bundle fails the checksum (message: $msg)"
 fi
+
+# 6b. A second install while one holds the lock fails fast.
+export LOOMPLANE_LOCK_FILE=$work/install.lock
+flock "$LOOMPLANE_LOCK_FILE" sleep 5 &
+sleep 0.5
+if msg=$(bash "$installer" secrets 2>&1); then
+  bad "concurrent install is refused"
+elif [[ "$msg" == *"another Loomplane install is running"* ]]; then
+  pass "concurrent install is refused"
+else
+  bad "concurrent install is refused (message: $msg)"
+fi
+kill %2 2>/dev/null || true
+unset LOOMPLANE_LOCK_FILE
 
 # 7. A malformed version is refused before any download.
 if LOOMPLANE_DIR=$work/badver LOOMPLANE_VERSION='v1/../x' bash "$installer" prepare >/dev/null 2>&1; then
