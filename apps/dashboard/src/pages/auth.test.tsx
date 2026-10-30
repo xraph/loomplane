@@ -35,7 +35,11 @@ vi.mock("@authsome/ui-components", () => ({
 beforeEach(() => {
   router.navigate.mockReset()
   invite.token = undefined
-  setInstance({ setupPending: false, waitlist: false })
+  setInstance({
+    setupPending: false,
+    waitlist: false,
+    setupTokenRequired: false,
+  })
   window.history.replaceState(null, "", "/")
 })
 
@@ -57,7 +61,11 @@ describe("AuthPage", () => {
 
   describe("sign-up with the waitlist on", () => {
     beforeEach(() => {
-      setInstance({ setupPending: false, waitlist: true })
+      setInstance({
+        setupPending: false,
+        waitlist: true,
+        setupTokenRequired: false,
+      })
     })
 
     it("asks to join the waitlist instead of taking a password", () => {

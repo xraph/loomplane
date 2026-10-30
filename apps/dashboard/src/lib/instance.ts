@@ -7,12 +7,14 @@ export type Instance = {
   setupPending: boolean
   /** Sign-up needs an invitation or an approved waitlist entry. */
   waitlist: boolean
+  /** Setup needs the one-time token from the API's log. */
+  setupTokenRequired: boolean
   /** Where the instance console lives. Platform admins only. */
   consolePath?: string
 }
 
 const current: { instance: Instance } = {
-  instance: { setupPending: false, waitlist: false },
+  instance: { setupPending: false, waitlist: false, setupTokenRequired: false },
 }
 
 /**
