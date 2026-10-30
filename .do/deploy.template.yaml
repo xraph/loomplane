@@ -1,0 +1,102 @@
+# Deploy to DigitalOcean App Platform.
+#
+# App Platform has no persistent disks, so artifacts and backups live in
+# DigitalOcean Spaces. Before you deploy, create two Spaces buckets and a
+# Spaces access key, then fill in the prompts:
+#
+#   LOOMPLANE_STORAGE_URL    s3://ACCESS_KEY:SECRET_KEY@us-east-1/BUCKET?endpoint=https://REGION.digitaloceanspaces.com&path_style=true
+#                            Keep us-east-1 as written: it is the signing
+#                            region Spaces expects. Put your real region
+#                            (nyc3, ams3, sgp1, ...) only in the endpoint.
+#                            BUCKET is your artifact bucket name.
+#   LOOMPLANE_ARTIFACT_BUCKET  the artifact Spaces bucket
+#   LOOMPLANE_BACKUP_BUCKET    the backup Spaces bucket
+#   LOOMPLANE_SECRET_KEY       base64 of 32 random bytes: openssl rand -base64 32
+#                            Keep a copy. Losing it makes stored
+#                            credentials unrecoverable.
+#
+# Backups use the same Spaces account (LOOMPLANE_BACKUP_URL defaults to the
+# storage URL), so it is not set here. The database is a dev database, fine
+# for trying Loomplane. Attach a managed PostgreSQL cluster for real use.
+#
+# Finish setup at the URL the API logs on start (".../setup?token=..."), or
+# run `loomplane setup-token` in the API console.
+spec:
+  name: loomplane
+  envs:
+    - key: LOOMPLANE_ENVIRONMENT
+      value: production
+      scope: RUN_TIME
+    - key: LOOMPLANE_PUBLIC_URL
+      value: ${APP_URL}
+      scope: RUN_TIME
+    - key: LOOMPLANE_DATABASE_URL
+      value: ${db.DATABASE_URL}
+      scope: RUN_TIME
+    - key: LOOMPLANE_SECRET_KEY
+      scope: RUN_TIME
+      type: SECRET
+    - key: LOOMPLANE_STORAGE_URL
+      scope: RUN_TIME
+      type: SECRET
+    - key: LOOMPLANE_ARTIFACT_BUCKET
+      scope: RUN_TIME
+    - key: LOOMPLANE_BACKUP_BUCKET
+      scope: RUN_TIME
+  databases:
+    - name: db
+      engine: PG
+      production: false
+  services:
+    - name: loomplane
+      image:
+        registry_type: GHCR
+        registry: xraph
+        repository: loomplane
+        tag: latest
+      http_port: 8780
+      instance_count: 1
+      instance_size_slug: apps-s-1vcpu-1gb
+      health_check:
+        http_path: /_/health
+        port: 8780
+      envs:
+        - key: LOOMPLANE_HTTP_ADDR
+          value: ":8780"
+          scope: RUN_TIME
+  workers:
+    - name: loomplane-worker
+      image:
+        registry_type: GHCR
+        registry: xraph
+        repository: loomplane
+        tag: latest
+      instance_count: 1
+      instance_size_slug: apps-s-1vcpu-2gb
+      envs:
+        - key: LOOMPLANE_PROCESS
+          value: worker
+          scope: RUN_TIME
+        - key: LOOMPLANE_ANALYSIS_CONCURRENCY
+          value: "1"
+          scope: RUN_TIME
+  ingress:
+    rules:
+      - match:
+          path:
+            prefix: /_/metrics
+        redirect:
+          uri: /
+          redirect_code: 302
+      - match:
+          path:
+            prefix: /debug
+        redirect:
+          uri: /
+          redirect_code: 302
+      - match:
+          path:
+            prefix: /
+        component:
+          name: loomplane
+          preserve_path_prefix: true
