@@ -64,6 +64,9 @@ func (s *PgStore) CreateClusterPreview(ctx context.Context, o *ClusterOperation)
 		return err
 	}
 	defer rollback(tx)
+	if protocolErr := runtimeAccessProtocolTx(ctx, tx); protocolErr != nil {
+		return protocolErr
+	}
 	if checkErr := lockCapacityCloud(ctx, tx, o.OrgID, o.CloudID); checkErr != nil {
 		return checkErr
 	}
@@ -112,6 +115,9 @@ func (s *PgStore) SaveClusterCheckpoint(ctx context.Context, o *ClusterOperation
 		return err
 	}
 	defer rollback(tx)
+	if protocolErr := runtimeAccessProtocolTx(ctx, tx); protocolErr != nil {
+		return protocolErr
+	}
 	if checkErr := lockCapacityCloud(ctx, tx, o.OrgID, o.CloudID); checkErr != nil {
 		return checkErr
 	}

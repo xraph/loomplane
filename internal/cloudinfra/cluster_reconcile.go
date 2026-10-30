@@ -28,6 +28,12 @@ func (s *Service) ReconcileClusterOperation(ctx context.Context, org, id string,
 		return err
 	}
 	defer func() { s.recordCluster(ctx, "cloud.cluster.reconcile", o) }()
+	if (o.Kind == RuntimeAccessUpgrade) != (ctx.Value(runtimeAccessContextKey{}) == true) {
+		return ErrInvalid
+	}
+	if o.Kind != "create" && o.Kind != "adopt-external" && o.Kind != "adopt-managed" && o.Kind != RuntimeAccessUpgrade && !retirementKind(o.Kind) && !maintenanceKind(o.Kind) {
+		return ErrInvalid
+	}
 	if heartbeat != nil {
 		if checkErr := heartbeat([]byte(`{"cluster_operation":true}`)); checkErr != nil {
 			return checkErr
@@ -49,6 +55,9 @@ func (s *Service) ReconcileClusterOperation(ctx context.Context, org, id string,
 	}
 	if err != nil {
 		return s.clusterAttention(ctx, o, "Current approval or account authority is unavailable.")
+	}
+	if o.Kind == RuntimeAccessUpgrade {
+		return s.reconcileRuntimeAccess(call, o, reader, access)
 	}
 	if retirementKind(o.Kind) {
 		return s.reconcileClusterRetirement(call, o, reader, access)

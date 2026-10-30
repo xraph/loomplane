@@ -46,6 +46,9 @@ func (s *PgStore) PublishClusterEnrollment(ctx context.Context, o *ClusterOperat
 		return err
 	}
 	defer rollback(tx)
+	if protocolErr := runtimeAccessProtocolTx(ctx, tx); protocolErr != nil {
+		return protocolErr
+	}
 	if checkErr := lockCapacityCloud(ctx, tx, o.OrgID, o.CloudID); checkErr != nil {
 		return checkErr
 	}
@@ -82,6 +85,14 @@ func (s *PgStore) PublishClusterEnrollment(ctx context.Context, o *ClusterOperat
 	o.UpdatedAt = time.Now().UTC()
 	if checkErr := checkpointClusterTx(ctx, tx, o, old); checkErr != nil {
 		return checkErr
+	}
+	if o.Input.Attachment.RuntimeAccess != nil {
+		if o.Enrollment.State.AccessInput == nil || o.Enrollment.State.AccessReceipt == nil {
+			return ErrConflict
+		}
+		if err = insertRuntimeAccessTx(ctx, tx, o, *o.Enrollment.State.AccessInput, o.Enrollment.State.AccessReceipt); err != nil {
+			return err
+		}
 	}
 	return tx.Commit()
 }

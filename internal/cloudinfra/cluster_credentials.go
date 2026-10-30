@@ -3,6 +3,7 @@ package cloudinfra
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"time"
 
 	"github.com/google/uuid"
@@ -32,7 +33,7 @@ func (s *Service) ResolveManagedCredential(ctx context.Context, c connections.Co
 	}
 	reader, access, err := s.enrollmentAuthority(ctx, o)
 	if err != nil {
-		return empty, err
+		return empty, errors.Join(ErrRuntimeCredentialDelegationUnavailable, err)
 	}
 	r, err := s.Clusters.GetManagedResource(ctx, a.OrgID, a.ClusterID)
 	if err != nil {
@@ -74,7 +75,7 @@ func (s *Service) ResolveManagedCredential(ctx context.Context, c connections.Co
 	}
 	s.cleanupManagedCredentialOrphans(ctx, a, o)
 	if _, _, checkErr := s.enrollmentAuthority(ctx, o); checkErr != nil {
-		return empty, checkErr
+		return empty, errors.Join(ErrRuntimeCredentialDelegationUnavailable, checkErr)
 	}
 	current, err := s.Clusters.GetRuntimeAttachment(ctx, a.OrgID, a.ID)
 	if err != nil {
@@ -82,6 +83,9 @@ func (s *Service) ResolveManagedCredential(ctx context.Context, c connections.Co
 	}
 	if current.DeletedAt != nil || current.Revision != a.Revision || current.TrustRevision != a.TrustRevision || current.CredentialVersion != a.CredentialVersion {
 		return empty, connections.ErrChanged
+	}
+	if checkErr := s.verifyRuntimeAccessCredential(ctx, a, o, r, runtimeClient); checkErr != nil {
+		return empty, checkErr
 	}
 	return connections.ManagedCredential{Kubeconfig: raw, ExpiresAt: a.CredentialExpiry, TrustRevision: a.TrustRevision, CredentialVersion: a.CredentialVersion}, nil
 }

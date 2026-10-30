@@ -10,22 +10,24 @@ import (
 )
 
 type AttachmentInput struct {
-	TargetSlug          string                  `json:"target_slug"`
-	CloudRevision       int64                   `json:"cloud_revision"`
-	ResourceRevision    int64                   `json:"resource_revision"`
-	GrantRevision       int64                   `json:"grant_revision"`
-	TrustFingerprint    string                  `json:"trust_fingerprint"`
-	EndpointFingerprint string                  `json:"endpoint_fingerprint"`
-	Prerequisites       AttachmentPrerequisites `json:"prerequisites"`
-	ProjectID           string                  `json:"project_id"`
-	Namespace           string                  `json:"namespace"`
-	NamespaceUID        string                  `json:"namespace_uid,omitempty"`
-	ServiceAccountName  string                  `json:"service_account_name"`
-	AdoptNamespace      bool                    `json:"adopt_namespace"`
+	RuntimeAccess       *provider.RuntimeAccessProfile `json:"runtime_access,omitempty"`
+	TargetSlug          string                         `json:"target_slug"`
+	CloudRevision       int64                          `json:"cloud_revision"`
+	ResourceRevision    int64                          `json:"resource_revision"`
+	GrantRevision       int64                          `json:"grant_revision"`
+	TrustFingerprint    string                         `json:"trust_fingerprint"`
+	EndpointFingerprint string                         `json:"endpoint_fingerprint"`
+	Prerequisites       AttachmentPrerequisites        `json:"prerequisites"`
+	ProjectID           string                         `json:"project_id"`
+	Namespace           string                         `json:"namespace"`
+	NamespaceUID        string                         `json:"namespace_uid,omitempty"`
+	ServiceAccountName  string                         `json:"service_account_name"`
+	AdoptNamespace      bool                           `json:"adopt_namespace"`
 }
 
 type ClusterInput struct {
-	PolicyRevision int64 `json:"policy_revision"`
+	RuntimeAccess  *provider.RuntimeAccessInput `json:"runtime_access,omitempty"`
+	PolicyRevision int64                        `json:"policy_revision"`
 	// ManagementReachable is caller acknowledgement, never path evidence.
 	ManagementReachable     bool                 `json:"management_reachable"`
 	AcknowledgeUnknownCosts bool                 `json:"acknowledge_unknown_costs"`

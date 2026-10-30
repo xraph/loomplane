@@ -15,7 +15,10 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	kubeclient "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
+
 	clientapi "k8s.io/client-go/tools/clientcmd/api"
+
+	"github.com/xraph/loomplane/pkg/provider"
 )
 
 const RuntimeTokenLifetime = time.Hour
@@ -25,12 +28,16 @@ const projectLabel = "loomplane.io/project"
 
 // EnrollmentState contains identity receipts, never credentials.
 type EnrollmentState struct {
-	NamespaceUID      string            `json:"namespace_uid"`
-	ServiceAccountUID string            `json:"service_account_uid"`
-	Objects           map[string]string `json:"objects"`
-	Attempted         map[string]bool   `json:"attempted"`
+	AccessInput       *provider.RuntimeAccessInput `json:"access_input,omitempty"`
+	AccessReceipt     *RuntimeAccessReceipt        `json:"access_receipt,omitempty"`
+	NamespaceUID      string                       `json:"namespace_uid"`
+	ServiceAccountUID string                       `json:"service_account_uid"`
+	Objects           map[string]string            `json:"objects"`
+	Attempted         map[string]bool              `json:"attempted"`
 }
 type EnrollmentRequest struct {
+	RuntimeAccess                                                        *provider.RuntimeAccessProfile
+	OperationID, RequestDigest                                           string
 	RequireIngress, RequireTLS                                           bool
 	AttachmentID, ProjectID, Namespace, NamespaceUID, ServiceAccountName string
 	AdoptNamespace                                                       bool
@@ -95,14 +102,16 @@ func EnrollRuntime(ctx context.Context, k kubeclient.Interface, in EnrollmentReq
 	}
 	meta := metav1.ObjectMeta{Name: in.ServiceAccountName, Namespace: in.Namespace, Labels: labels}
 	disabled := false
-	role := &rbacv1.Role{ObjectMeta: meta, Rules: append(RuntimeRoleRules(), rbacv1.PolicyRule{APIGroups: []string{""}, Resources: []string{"serviceaccounts"}, ResourceNames: []string{in.ServiceAccountName}, Verbs: []string{"get"}})}
-	if in.RequireIngress {
-		role.Rules = append(role.Rules, rbacv1.PolicyRule{APIGroups: []string{"networking.k8s.io"}, Resources: []string{"ingresses"}, Verbs: []string{"get", "list", "create", "update", "patch", "delete"}})
+	rules, err := EnrollmentRoleRules(in)
+	if err != nil {
+		return err
 	}
-	if in.RequireTLS {
-		for _, permission := range routePermissions {
-			role.Rules = append(role.Rules, rbacv1.PolicyRule{APIGroups: []string{permission.group}, Resources: []string{permission.resource}, Verbs: permission.verbs})
+	role := &rbacv1.Role{ObjectMeta: meta, Rules: rules}
+	if in.RuntimeAccess != nil {
+		if in.OperationID == "" || in.RequestDigest == "" {
+			return ErrInvalid
 		}
+		role.Annotations = map[string]string{RuntimeAccessOperationAnnotation: in.OperationID, RuntimeAccessDigestAnnotation: in.RequestDigest}
 	}
 	sa := &corev1.ServiceAccount{ObjectMeta: meta, AutomountServiceAccountToken: &disabled}
 	binding := &rbacv1.RoleBinding{ObjectMeta: meta, RoleRef: rbacv1.RoleRef{APIGroup: "rbac.authorization.k8s.io", Kind: "Role", Name: meta.Name}, Subjects: []rbacv1.Subject{{Kind: "ServiceAccount", Name: meta.Name, Namespace: in.Namespace}}}
@@ -178,6 +187,25 @@ func EnrollRuntime(ctx context.Context, k kubeclient.Interface, in EnrollmentReq
 		if item.kind == "ServiceAccount" {
 			state.ServiceAccountUID = string(actual.GetUID())
 		}
+		if checkErr := checkpoint(ctx, state); checkErr != nil {
+			return checkErr
+		}
+	}
+	if in.RuntimeAccess != nil {
+		pin := provider.RuntimeAccessInput{AttachmentID: in.AttachmentID, AttachmentRevision: 1, ProjectID: in.ProjectID, Namespace: in.Namespace, NamespaceUID: state.NamespaceUID, ServiceAccountName: in.ServiceAccountName, ServiceAccountUID: state.ServiceAccountUID, RoleName: in.ServiceAccountName, RoleUID: state.Objects["Role"], RoleBindingName: in.ServiceAccountName, RoleBindingUID: state.Objects["RoleBinding"], Profile: *in.RuntimeAccess}
+		actual, binding, readErr := ReadRuntimeAccess(ctx, k, pin)
+		if readErr != nil {
+			return readErr
+		}
+		if !reflect.DeepEqual(actual.Rules, rules) || actual.Annotations[RuntimeAccessOperationAnnotation] != in.OperationID || actual.Annotations[RuntimeAccessDigestAnnotation] != in.RequestDigest {
+			return ErrInvalid
+		}
+		pin.RoleResourceVersion = actual.ResourceVersion
+		pin.RoleRulesDigest = RuntimeAccessDigest(actual.Rules)
+		pin.RoleBindingResourceVersion = binding.ResourceVersion
+		pin.RoleBindingSubjectsRefDigest = RuntimeBindingDigest(binding)
+		state.AccessInput = &pin
+		state.AccessReceipt = &RuntimeAccessReceipt{Kind: "enrolled-role", RoleUID: pin.RoleUID, ResourceVersion: actual.ResourceVersion, RulesDigest: pin.RoleRulesDigest, OperationID: in.OperationID, RequestDigest: in.RequestDigest, ObservedAt: time.Now().UTC()}
 		if checkErr := checkpoint(ctx, state); checkErr != nil {
 			return checkErr
 		}
@@ -292,6 +320,8 @@ func (c *Client) CheckRuntimeBoundaries(ctx context.Context) error {
 		{"", "rbac.authorization.k8s.io", "clusterrolebindings", "create"},
 		{c.Config.Namespace, "rbac.authorization.k8s.io", "rolebindings", "create"},
 		{other, "", "secrets", "get"}, {other, "apps", "deployments", "create"},
+		{c.Config.Namespace, "", "pods", "create"}, {c.Config.Namespace, "", "pods/exec", "create"},
+		{c.Config.Namespace, "apps", "replicasets", "create"}, {c.Config.Namespace, "apps", "replicasets", "update"}, {c.Config.Namespace, "apps", "replicasets", "patch"},
 	} {
 		allowed, err := c.allowedIn(ctx, check.namespace, check.group, check.resource, check.verb)
 		if err != nil {

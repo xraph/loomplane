@@ -10,6 +10,7 @@ import (
 	"github.com/xraph/forge"
 
 	"github.com/xraph/loomplane/internal/cloudprofiles"
+	"github.com/xraph/loomplane/internal/clouds/kubernetes"
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/security"
@@ -160,5 +161,17 @@ func TestClusterPublicSuccessIsNotAnError(t *testing.T) {
 		if got.Error != "" {
 			t.Fatalf("%s outcome presented as error: %s", status, got.Error)
 		}
+	}
+}
+
+func TestRuntimeAccessPublicReview(t *testing.T) {
+	input := &provider.RuntimeAccessInput{AttachmentID: "attachment", RoleUID: "reviewed-role", Profile: provider.RuntimeAccessProfile{SchemaVersion: 1, CleanupDependents: true}}
+	op := &infra.ClusterOperation{Kind: infra.RuntimeAccessUpgrade, Input: infra.ClusterInput{RuntimeAccess: input}, RuntimeAccess: &kubernetes.RuntimeAccessState{NetworkOutcome: "private-network-history"}}
+	raw, err := json.Marshal(publicClusterOperation(op))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "reviewed-role") || strings.Contains(string(raw), "private-network-history") {
+		t.Fatalf("public access review: %s", raw)
 	}
 }

@@ -63,7 +63,7 @@ func (s *Service) clusterAuthority(ctx context.Context, p security.Principal, cl
 			return nil, access, err
 		}
 	}
-	if maintenanceKind(in.Kind) || in.Kind == "adopt-external" || in.Kind == "adopt-managed" {
+	if in.Kind == RuntimeAccessUpgrade || maintenanceKind(in.Kind) || in.Kind == "adopt-external" || in.Kind == "adopt-managed" {
 		if err := s.Authz.Require(ctx, p, security.ClusterManage, ""); err != nil {
 			return nil, access, err
 		}
@@ -92,6 +92,9 @@ func (s *Service) clusterAuthority(ctx context.Context, p security.Principal, cl
 	}
 	if in.Attachment != nil {
 		a := in.Attachment
+		if a.RuntimeAccess != nil && !a.RuntimeAccess.Valid() {
+			return nil, access, ErrInvalid
+		}
 		if a.ProjectID == "" || a.Namespace == "" || a.ServiceAccountName == "" || a.TargetSlug == "" || a.CloudRevision != in.CloudRevision || a.ResourceRevision != in.ResourceRevision {
 			return nil, access, ErrInvalid
 		}
@@ -198,7 +201,7 @@ func clusterDigest(in ClusterInput) string {
 }
 
 func (s *Service) PreviewCluster(ctx context.Context, p security.Principal, cloud string, in ClusterInput) (*ClusterOperation, error) {
-	if in.PriceDigest != "" || in.BudgetReview != nil || in.EnvelopeReview != nil || in.ScalingObservation != nil || in.Scaling != nil && in.Kind != "node-pool-scaling" {
+	if in.RuntimeAccess != nil && in.Kind != RuntimeAccessUpgrade || in.PriceDigest != "" || in.BudgetReview != nil || in.EnvelopeReview != nil || in.ScalingObservation != nil || in.Scaling != nil && in.Kind != "node-pool-scaling" {
 		return nil, ErrInvalid
 	}
 	if err := s.clusterEnabled(); err != nil {
@@ -215,6 +218,13 @@ func (s *Service) PreviewCluster(ctx context.Context, p security.Principal, clou
 	var nodeCost int64
 	var unknownCosts []string
 	switch in.Kind {
+	case RuntimeAccessUpgrade:
+		if in.RuntimeAccess == nil || in.RuntimeAccess.AttachmentID == "" || *in.RuntimeAccess != (provider.RuntimeAccessInput{AttachmentID: in.RuntimeAccess.AttachmentID, Profile: in.RuntimeAccess.Profile}) {
+			return nil, ErrInvalid
+		}
+		if err = s.prepareRuntimeAccess(ctx, p, cloud, &in, reader, access); err != nil {
+			return nil, err
+		}
 	case "retire-cluster", "detach-runtime":
 		if in.Retirement == nil || in.Retirement.ReviewDigest == "" || in.Attachment != nil || in.Maintenance != nil || !reflect.DeepEqual(in.Spec, provider.ClusterSpec{}) {
 			return nil, ErrInvalid
@@ -323,6 +333,10 @@ func (s *Service) PreviewCluster(ctx context.Context, p security.Principal, clou
 	}
 	o := &ClusterOperation{ID: id, OrgID: p.OrgID, CloudID: cloud, Kind: in.Kind, SchemaVersion: 1, Input: in, Digest: digest, Revision: 1, Status: "preview", Principal: p, CapacityTarget: capacity, EstimatedNodeHourlyMicroUSD: nodeCost, UnknownCosts: unknownCosts, CreatedAt: now, UpdatedAt: now, ExpiresAt: now.Add(15 * time.Minute), Steps: []ClusterStep{{Name: "provider", State: "pending", RequestDigest: digest}, {Name: "enrollment", State: "pending", RequestDigest: digest}}}
 	o.MoneyEstimate = in.costEvidence
+	if in.Kind == RuntimeAccessUpgrade {
+		o.ResourceID = in.ResourceID
+		o.Steps = []ClusterStep{{Name: "runtime-access", State: "pending", RequestDigest: digest}}
+	}
 	if maintenanceKind(in.Kind) {
 		o.ResourceID = in.ResourceID
 		o.Steps[1].Name = "verification"
@@ -425,6 +439,14 @@ func (s *Service) ApplyCluster(ctx context.Context, p security.Principal, cloud,
 			}
 			o.Input.costEvidence = &estimate
 		}
+	} else if o.Kind == RuntimeAccessUpgrade {
+		reviewed := *o.Input.RuntimeAccess
+		if err = s.prepareRuntimeAccess(ctx, p, cloud, &o.Input, reader, access); err != nil {
+			return nil, err
+		}
+		if reviewed != *o.Input.RuntimeAccess {
+			return nil, ErrConflict
+		}
 	} else if retirementKind(o.Kind) {
 		review, checkErr := s.prepareClusterRetirement(ctx, p, cloud, o.Input, reader, access, o.ID)
 		if checkErr != nil {
@@ -466,7 +488,7 @@ func (s *Service) ApplyCluster(ctx context.Context, p security.Principal, cloud,
 	}
 	s.recordCluster(ctx, "cloud.cluster.accept", o)
 	if s.ClusterWorkflow != nil {
-		if checkErr := s.ClusterWorkflow.StartClusterOperation(ctx, o.OrgID, o.ID, o.Attempt); checkErr != nil {
+		if checkErr := s.startClusterOperation(ctx, o); checkErr != nil {
 			return o, checkErr
 		}
 	}
@@ -506,7 +528,7 @@ func (s *Service) controlCluster(ctx context.Context, p security.Principal, clou
 	}
 	s.recordCluster(ctx, "cloud.cluster.control", o)
 	if !cancel && s.ClusterWorkflow != nil {
-		err = s.ClusterWorkflow.StartClusterOperation(ctx, o.OrgID, o.ID, o.Attempt)
+		err = s.startClusterOperation(ctx, o)
 	}
 	return o, err
 }
@@ -526,7 +548,7 @@ func (s *Service) RecoverClusterOperations(ctx context.Context) error {
 		if (!s.ManagedClusters.Enabled && !clusterObservationOnly(o)) || o.NextAttemptAt.After(s.now()) {
 			continue
 		}
-		if err := s.ClusterWorkflow.StartClusterOperation(ctx, o.OrgID, o.ID, o.Attempt); err != nil {
+		if err := s.startClusterOperation(ctx, o); err != nil {
 			failures = append(failures, err)
 		}
 	}

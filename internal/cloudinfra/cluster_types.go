@@ -9,25 +9,27 @@ import (
 )
 
 type AttachmentInput struct {
-	TargetSlug          string                  `json:"target_slug"`
-	CloudRevision       int64                   `json:"cloud_revision"`
-	ResourceRevision    int64                   `json:"resource_revision"`
-	GrantRevision       int64                   `json:"grant_revision"`
-	TrustFingerprint    string                  `json:"trust_fingerprint"`
-	EndpointFingerprint string                  `json:"endpoint_fingerprint"`
-	Prerequisites       AttachmentPrerequisites `json:"prerequisites"`
-	ProjectID           string                  `json:"project_id"`
-	Namespace           string                  `json:"namespace"`
-	NamespaceUID        string                  `json:"namespace_uid,omitempty"`
-	ServiceAccountName  string                  `json:"service_account_name"`
-	AdoptNamespace      bool                    `json:"adopt_namespace"`
+	RuntimeAccess       *provider.RuntimeAccessProfile `json:"runtime_access,omitempty"`
+	TargetSlug          string                         `json:"target_slug"`
+	CloudRevision       int64                          `json:"cloud_revision"`
+	ResourceRevision    int64                          `json:"resource_revision"`
+	GrantRevision       int64                          `json:"grant_revision"`
+	TrustFingerprint    string                         `json:"trust_fingerprint"`
+	EndpointFingerprint string                         `json:"endpoint_fingerprint"`
+	Prerequisites       AttachmentPrerequisites        `json:"prerequisites"`
+	ProjectID           string                         `json:"project_id"`
+	Namespace           string                         `json:"namespace"`
+	NamespaceUID        string                         `json:"namespace_uid,omitempty"`
+	ServiceAccountName  string                         `json:"service_account_name"`
+	AdoptNamespace      bool                           `json:"adopt_namespace"`
 }
 
 type ClusterInput struct {
-	ScalingObservation            *ClusterScalingObservation `json:"scaling_observation,omitempty"`
-	Scaling                       *ClusterScalingPolicy      `json:"scaling,omitempty"`
-	BudgetReview                  *BudgetReview              `json:"budget_review,omitempty"`
-	EnvelopeReview                *ClusterEnvelopeReview     `json:"envelope_review,omitempty"`
+	RuntimeAccess                 *provider.RuntimeAccessInput `json:"runtime_access,omitempty"`
+	ScalingObservation            *ClusterScalingObservation   `json:"scaling_observation,omitempty"`
+	Scaling                       *ClusterScalingPolicy        `json:"scaling,omitempty"`
+	BudgetReview                  *BudgetReview                `json:"budget_review,omitempty"`
+	EnvelopeReview                *ClusterEnvelopeReview       `json:"envelope_review,omitempty"`
 	costEvidence                  *MoneyEstimate
 	PriceDigest                   string                   `json:"price_digest,omitempty"`
 	Retirement                    *ClusterRetirementInput  `json:"retirement,omitempty"`
@@ -66,35 +68,36 @@ type ClusterStep struct {
 }
 
 type ClusterOperation struct {
-	MoneyEstimate               *MoneyEstimate             `json:"money_estimate,omitempty"`
-	Enrollment                  *ClusterEnrollment         `json:"enrollment,omitempty"`
-	EstimatedNodeHourlyMicroUSD int64                      `json:"estimated_node_hourly_micro_usd"`
-	UnknownCosts                []string                   `json:"unknown_costs"`
-	CapacityTarget              ResourceVector             `json:"capacity_target"`
-	Attempt                     int                        `json:"attempt"`
-	CancelRequested             bool                       `json:"cancel_requested"`
-	NextAttemptAt               time.Time                  `json:"next_attempt_at,omitempty,omitzero"`
-	ID                          string                     `json:"id"`
-	OrgID                       string                     `json:"org_id"`
-	CloudID                     string                     `json:"cloud_id"`
-	ResourceID                  string                     `json:"resource_id,omitempty"`
-	Kind                        string                     `json:"kind"`
-	SchemaVersion               int                        `json:"schema_version"`
-	Input                       ClusterInput               `json:"input"`
-	Digest                      string                     `json:"digest"`
-	Revision                    int64                      `json:"revision"`
-	Status                      string                     `json:"status"`
-	Principal                   security.Principal         `json:"-"`
-	Receipts                    []provider.ClusterMutation `json:"receipts,omitempty"`
-	Steps                       []ClusterStep              `json:"steps"`
-	ReservationIDs              []string                   `json:"reservation_ids,omitempty"`
-	LeaseOwner                  string                     `json:"lease_owner,omitempty"`
-	FencingEpoch                int64                      `json:"fencing_epoch"`
-	LeaseExpiresAt              *time.Time                 `json:"lease_expires_at,omitempty"`
-	ExpiresAt                   time.Time                  `json:"expires_at"`
-	CreatedAt                   time.Time                  `json:"created_at"`
-	UpdatedAt                   time.Time                  `json:"updated_at"`
-	Error                       string                     `json:"error,omitempty"`
+	RuntimeAccess               *kubernetes.RuntimeAccessState `json:"runtime_access,omitempty"`
+	MoneyEstimate               *MoneyEstimate                 `json:"money_estimate,omitempty"`
+	Enrollment                  *ClusterEnrollment             `json:"enrollment,omitempty"`
+	EstimatedNodeHourlyMicroUSD int64                          `json:"estimated_node_hourly_micro_usd"`
+	UnknownCosts                []string                       `json:"unknown_costs"`
+	CapacityTarget              ResourceVector                 `json:"capacity_target"`
+	Attempt                     int                            `json:"attempt"`
+	CancelRequested             bool                           `json:"cancel_requested"`
+	NextAttemptAt               time.Time                      `json:"next_attempt_at,omitempty,omitzero"`
+	ID                          string                         `json:"id"`
+	OrgID                       string                         `json:"org_id"`
+	CloudID                     string                         `json:"cloud_id"`
+	ResourceID                  string                         `json:"resource_id,omitempty"`
+	Kind                        string                         `json:"kind"`
+	SchemaVersion               int                            `json:"schema_version"`
+	Input                       ClusterInput                   `json:"input"`
+	Digest                      string                         `json:"digest"`
+	Revision                    int64                          `json:"revision"`
+	Status                      string                         `json:"status"`
+	Principal                   security.Principal             `json:"-"`
+	Receipts                    []provider.ClusterMutation     `json:"receipts,omitempty"`
+	Steps                       []ClusterStep                  `json:"steps"`
+	ReservationIDs              []string                       `json:"reservation_ids,omitempty"`
+	LeaseOwner                  string                         `json:"lease_owner,omitempty"`
+	FencingEpoch                int64                          `json:"fencing_epoch"`
+	LeaseExpiresAt              *time.Time                     `json:"lease_expires_at,omitempty"`
+	ExpiresAt                   time.Time                      `json:"expires_at"`
+	CreatedAt                   time.Time                      `json:"created_at"`
+	UpdatedAt                   time.Time                      `json:"updated_at"`
+	Error                       string                         `json:"error,omitempty"`
 }
 
 // AttachmentPrerequisites records the reviewed features enrollment must verify.

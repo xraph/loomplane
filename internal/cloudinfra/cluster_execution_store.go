@@ -17,6 +17,9 @@ func (s *PgStore) AcceptClusterOperation(ctx context.Context, o *ClusterOperatio
 		return err
 	}
 	defer rollback(tx)
+	if protocolErr := runtimeAccessProtocolTx(ctx, tx); protocolErr != nil {
+		return protocolErr
+	}
 	if checkErr := lockCapacityCloud(ctx, tx, o.OrgID, o.CloudID); checkErr != nil {
 		return checkErr
 	}
@@ -59,6 +62,11 @@ func (s *PgStore) AcceptClusterOperation(ctx context.Context, o *ClusterOperatio
 			return ErrBusy
 		}
 	}
+	if o.Kind == RuntimeAccessUpgrade {
+		if err := runtimeAccessPinsTx(ctx, tx, o); err != nil {
+			return err
+		}
+	}
 	if retirementKind(o.Kind) {
 		if err := retirementPinsTx(ctx, tx, o); err != nil {
 			return err
@@ -97,6 +105,9 @@ func (s *PgStore) LeaseClusterOperation(ctx context.Context, org, id, owner stri
 		return nil, err
 	}
 	defer rollback(tx)
+	if protocolErr := runtimeAccessProtocolTx(ctx, tx); protocolErr != nil {
+		return nil, protocolErr
+	}
 	if checkErr := lockCapacityCloud(ctx, tx, org, cloud); checkErr != nil {
 		return nil, checkErr
 	}
@@ -140,6 +151,9 @@ func (s *PgStore) ControlClusterOperation(ctx context.Context, org, cloud, id st
 		return nil, err
 	}
 	defer rollback(tx)
+	if protocolErr := runtimeAccessProtocolTx(ctx, tx); protocolErr != nil {
+		return nil, protocolErr
+	}
 	if checkErr := lockCapacityCloud(ctx, tx, org, cloud); checkErr != nil {
 		return nil, checkErr
 	}
@@ -197,6 +211,9 @@ func (s *PgStore) CheckpointClusterResource(ctx context.Context, o *ClusterOpera
 		return err
 	}
 	defer rollback(tx)
+	if protocolErr := runtimeAccessProtocolTx(ctx, tx); protocolErr != nil {
+		return protocolErr
+	}
 	if checkErr := lockCapacityCloud(ctx, tx, o.OrgID, o.CloudID); checkErr != nil {
 		return checkErr
 	}

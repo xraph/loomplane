@@ -37,7 +37,7 @@ func endpointFingerprint(endpoint string) string {
 }
 func enrollmentRequest(o *ClusterOperation) kubernetes.EnrollmentRequest {
 	in := o.Input.Attachment
-	return kubernetes.EnrollmentRequest{AttachmentID: o.Enrollment.AttachmentID, ProjectID: in.ProjectID, Namespace: in.Namespace, NamespaceUID: in.NamespaceUID, ServiceAccountName: in.ServiceAccountName, AdoptNamespace: in.AdoptNamespace, RequireIngress: in.Prerequisites.RequireIngress || in.Prerequisites.RequireTLS, RequireTLS: in.Prerequisites.RequireTLS}
+	return kubernetes.EnrollmentRequest{RuntimeAccess: in.RuntimeAccess, OperationID: o.ID, RequestDigest: o.Digest, AttachmentID: o.Enrollment.AttachmentID, ProjectID: in.ProjectID, Namespace: in.Namespace, NamespaceUID: in.NamespaceUID, ServiceAccountName: in.ServiceAccountName, AdoptNamespace: in.AdoptNamespace, RequireIngress: in.Prerequisites.RequireIngress || in.Prerequisites.RequireTLS, RequireTLS: in.Prerequisites.RequireTLS}
 }
 func (s *Service) enrollmentAuthority(ctx context.Context, o *ClusterOperation) (provider.ClusterReader, provider.AccountAccess, error) {
 	if checkErr := s.clusterEnabled(); checkErr != nil {
@@ -225,6 +225,11 @@ func (s *Service) enrollClusterOperation(ctx context.Context, o *ClusterOperatio
 	}
 	if checkErr := runtimeClient.CheckRuntimeBoundaries(ctx); checkErr != nil {
 		return checkErr
+	}
+	if profile := o.Input.Attachment.RuntimeAccess; profile != nil {
+		if checkErr := runtimeClient.CheckRuntimeAccess(ctx, *profile); checkErr != nil {
+			return checkErr
+		}
 	}
 	result, err := runtimeClient.Check(ctx)
 	if err != nil {

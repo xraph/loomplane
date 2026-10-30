@@ -59,6 +59,9 @@ func ClusterPublicReason(o *ClusterOperation) string {
 	if o == nil {
 		return ""
 	}
+	if o.Kind == RuntimeAccessUpgrade && o.Status == "succeeded" {
+		return "runtime_access_verified"
+	}
 	if maintenanceKind(o.Kind) && o.Status == "succeeded" {
 		return "maintenance_verified"
 	}
@@ -77,7 +80,7 @@ func ClusterPublicReason(o *ClusterOperation) string {
 		return ""
 	}
 	switch o.Error {
-	case "runtime_bootstrap_unavailable", "runtime_permissions_unavailable", "runtime_namespace_setup_failed", "runtime_token_unavailable", "runtime_setup_incomplete":
+	case "cleanup_permissions_unavailable", "runtime_access_identity_changed", "runtime_access_authority_unavailable", "runtime_access_update_unconfirmed", "runtime_bootstrap_unavailable", "runtime_permissions_unavailable", "runtime_namespace_setup_failed", "runtime_token_unavailable", "runtime_setup_incomplete":
 		return o.Error
 	}
 	switch o.Status {

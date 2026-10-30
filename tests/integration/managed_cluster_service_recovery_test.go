@@ -140,6 +140,9 @@ type enrollmentServiceFixture struct {
 }
 
 func newEnrollmentServiceFixture(t *testing.T, unknownCA ...bool) *enrollmentServiceFixture {
+	return newEnrollmentServiceFixtureWithProfile(t, nil, unknownCA...)
+}
+func newEnrollmentServiceFixtureWithProfile(t *testing.T, profile *provider.RuntimeAccessProfile, unknownCA ...bool) *enrollmentServiceFixture {
 	t.Helper()
 	path := os.Getenv("LOOMPLANE_TEST_MANAGED_KUBECONFIG")
 	if path == "" {
@@ -185,7 +188,7 @@ func newEnrollmentServiceFixture(t *testing.T, unknownCA ...bool) *enrollmentSer
 		t.Fatal(err)
 	}
 	namespace := "service-" + uuid.NewString()[:8]
-	input := cloudinfra.ClusterInput{Kind: "adopt-external", Provider: "digitalocean", ConnectionID: "conn", AccountID: "account", ConnectionGeneration: 1, CloudRevision: 1, ResourceID: "cluster", ResourceRevision: 1, Ref: observation.Ref, Attachment: &cloudinfra.AttachmentInput{ProjectID: "proj", Namespace: namespace, ServiceAccountName: "runtime", TargetSlug: "worker", CloudRevision: 1, ResourceRevision: 1, GrantRevision: 1}}
+	input := cloudinfra.ClusterInput{Kind: "adopt-external", Provider: "digitalocean", ConnectionID: "conn", AccountID: "account", ConnectionGeneration: 1, CloudRevision: 1, ResourceID: "cluster", ResourceRevision: 1, Ref: observation.Ref, Attachment: &cloudinfra.AttachmentInput{RuntimeAccess: profile, ProjectID: "proj", Namespace: namespace, ServiceAccountName: "runtime", TargetSlug: "worker", CloudRevision: 1, ResourceRevision: 1, GrantRevision: 1}}
 	svc, _ := f.service(store, vault)
 	op, err := svc.PreviewCluster(t.Context(), f.principal, "cloud", input)
 	if err != nil {
