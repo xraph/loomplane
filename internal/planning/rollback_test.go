@@ -1100,7 +1100,7 @@ func (s *routeStore) ReleaseRoutes(_ context.Context, _, _, _, allowHeldBy strin
 	return []cloudinfra.Route{{ID: "route_1"}}, nil
 }
 
-// Until rollbacks restore a held route release (Task 12), a rollback
+// Until rollbacks restore a held route release, a rollback
 // waits for the handoffs the release it undoes holds, like any plan.
 func TestRollback_waitsForTheHandoffsItsTargetHolds(t *testing.T) {
 	store := &routeStore{}
