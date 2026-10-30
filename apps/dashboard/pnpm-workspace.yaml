@@ -11,6 +11,20 @@ allowBuilds:
 minimumReleaseAgeExclude:
   - '@forge-go/client-core@1.13.0'
   - '@forge-go/client-react@1.13.0'
+  - '@forge-go/dashboard-host@0.3.0'
+  - '@forge-go/dashboard-kit@0.3.0'
+  - '@forge-go/dashboard-plugin-authsome@0.3.0'
+  - '@forge-go/dashboard-plugin-chronicle@0.3.0'
+  - '@forge-go/dashboard-plugin-core@0.3.0'
+  - '@forge-go/dashboard-plugin-ctrlplane@0.3.0'
+  - '@forge-go/dashboard-plugin-dispatch@0.3.0'
+  - '@forge-go/dashboard-plugin-herald@0.3.0'
+  - '@forge-go/dashboard-plugin-keysmith@0.3.0'
+  - '@forge-go/dashboard-plugin-relay@0.3.0'
+  - '@forge-go/dashboard-plugin-trove@0.3.0'
+  - '@forge-go/dashboard-plugin-warden@0.3.0'
+  - '@forge-go/dashboard-plugin@0.3.0'
+  - '@forge-go/dashboard-runtime@0.3.0'
 
 patchedDependencies:
   # Loomplane's cookie sessions. AuthManager takes session: "cookie", which
