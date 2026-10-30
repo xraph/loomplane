@@ -233,7 +233,9 @@ describe("SetupPage", () => {
       await screen.findByText(/A valid setup token is required/)
     ).toBeInTheDocument()
     await userEvent.type(screen.getByLabelText("Setup token"), "fresh")
-    await userEvent.click(screen.getByRole("button", { name: "Create account" }))
+    await userEvent.click(
+      screen.getByRole("button", { name: "Create account" })
+    )
     await waitFor(() =>
       expect(mocks.complete).toHaveBeenLastCalledWith({
         body: expect.objectContaining({ token: "fresh" }),
