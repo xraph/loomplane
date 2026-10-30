@@ -212,11 +212,11 @@ func (e *Extension) consoleGate() forge.Middleware {
 			if !admin {
 				return writeConsoleNotFound(c.Response())
 			}
-			allowed, read := consoleRequestAllowed(e.consoleRegistry(), r, rest)
+			allowed, ctrlplaneRead := consoleRequestAllowed(e.consoleRegistry(), r, rest)
 			if !allowed {
 				return writeConsoleNotFound(c.Response())
 			}
-			if read {
+			if ctrlplaneRead {
 				ctx = security.WithConsoleRead(ctx)
 				u = consoleReader(u)
 			}
@@ -273,8 +273,9 @@ func segments(path string) []string {
 // consoleRequestAllowed decides a platform admin's request by the dashboard
 // route it's for. Routes the console doesn't use, including any a later
 // Forge release adds, are refused. reg is the dashboard's contract registry.
-// read says the request is an allowed contract query.
-func consoleRequestAllowed(reg contract.Registry, r *http.Request, rest []string) (allowed, read bool) {
+// ctrlplaneRead says the request is an allowed Ctrl Plane query, the one
+// kind of request that reaches Ctrl Plane as the console's read.
+func consoleRequestAllowed(reg contract.Registry, r *http.Request, rest []string) (allowed, ctrlplaneRead bool) {
 	route := r.Method + " " + strings.Join(rest, "/")
 	switch route {
 	case "POST api/dashboard/v1":
@@ -282,7 +283,7 @@ func consoleRequestAllowed(reg contract.Registry, r *http.Request, rest []string
 		if !decodeConsoleBody(r, &req) || !consoleAllowed(reg, req) {
 			return false, false
 		}
-		return true, req.Kind == contract.KindQuery
+		return true, req.Kind == contract.KindQuery && req.Contributor == ctrlplaneContributor
 	case "POST api/dashboard/v1/stream/control":
 		var msg transport.ControlMessage
 		if !decodeConsoleBody(r, &msg) {
@@ -310,13 +311,14 @@ func consoleRequestAllowed(reg contract.Registry, r *http.Request, rest []string
 // ctrlplaneSystemAdmin is the role Ctrl Plane reads as a system admin.
 const ctrlplaneSystemAdmin = "system:admin"
 
-// consoleReader is u for one console read. Ctrl Plane keeps each
-// organization's data in that organization's tenant and the console has no
-// organization, so a read reaches Ctrl Plane as a system admin: it answers
-// the cross-tenant views (tenants, providers, system stats) and finds no
-// rows for a tenant it isn't given. Its policy check passes on the read
-// mark the gate puts beside it (security.WithConsoleRead). Commands never
-// get either.
+// consoleReader is u for one console read of Ctrl Plane. Ctrl Plane keeps
+// each organization's data in that organization's tenant and the console has
+// no organization, so the read reaches Ctrl Plane as a system admin with no
+// tenant. Some of Ctrl Plane's stores take that as every tenant (workloads,
+// env included), which is why the gate opens only the reads about Ctrl Plane
+// itself (infrastructure.ConsoleRead). Its policy check passes on the read
+// mark the gate puts beside it (security.WithConsoleRead). No other
+// contributor's request, and no command, gets either.
 func consoleReader(u *dashauth.UserInfo) *dashauth.UserInfo {
 	read := *u
 	read.Roles = append(slices.Clone(u.Roles), ctrlplaneSystemAdmin)

@@ -118,22 +118,49 @@ func TestAuthProvider_authorizesTheAutomationAsItself(t *testing.T) {
 func TestAuthProvider_allowsConsoleReads(t *testing.T) {
 	authz := &fakeAuthz{}
 	a := NewAuthProvider()
+	admin := &cpauth.Claims{SubjectID: "ausr_1", Roles: []string{"system:admin"}}
+	read := cpauth.WithClaims(security.WithConsoleRead(context.Background()), admin)
+	req := cpauth.AuthzRequest{SubjectID: "ausr_1", Action: "system.stats"}
 	// Unbound, nothing is allowed, a console read included.
-	read := security.WithConsoleRead(context.Background())
-	if ok, err := a.Authorize(read, cpauth.AuthzRequest{SubjectID: "ausr_1", Action: "system.stats"}); ok || err != nil {
+	if ok, err := a.Authorize(read, req); ok || err != nil {
 		t.Fatalf("an unbound provider allowed a console read: %v %v", ok, err)
 	}
 	a.Bind(func(context.Context, string) (string, string, error) { return "", "", nil }, authz)
-	// The console gate admitted the read, for a platform admin, with no
-	// organization to check it in.
-	if ok, err := a.Authorize(read, cpauth.AuthzRequest{SubjectID: "ausr_1", Action: "system.stats"}); !ok || err != nil {
+	// The console gate admitted the read, for a platform admin, as a system
+	// admin with no organization to check it in.
+	if ok, err := a.Authorize(read, req); !ok || err != nil {
 		t.Fatalf("a console read: %v %v, want allowed", ok, err)
 	}
 	if len(authz.calls) != 0 {
 		t.Fatalf("a console read asked Warden: %+v", authz.calls)
 	}
-	// The same request without the gate's mark is an ordinary one.
-	if ok, err := a.Authorize(context.Background(), cpauth.AuthzRequest{SubjectID: "ausr_1", Action: "system.stats"}); ok || err != nil {
-		t.Fatalf("an unmarked request: %v %v, want refused", ok, err)
+	for name, tc := range map[string]struct {
+		ctx context.Context
+		req cpauth.AuthzRequest
+	}{
+		"no console mark":        {cpauth.WithClaims(context.Background(), admin), req},
+		"no claims":              {security.WithConsoleRead(context.Background()), req},
+		"not a system admin":     {cpauth.WithClaims(security.WithConsoleRead(context.Background()), &cpauth.Claims{SubjectID: "ausr_1"}), req},
+		"claims name a tenant":   {cpauth.WithClaims(security.WithConsoleRead(context.Background()), &cpauth.Claims{SubjectID: "ausr_1", TenantID: "aorg_1", Roles: []string{"system:admin"}}), req},
+		"request names a tenant": {read, cpauth.AuthzRequest{SubjectID: "ausr_1", TenantID: "aorg_1", Action: "system.stats"}},
+		"a tenant's read":        {read, cpauth.AuthzRequest{SubjectID: "ausr_1", Action: "workloads.list"}},
+		"a write":                {read, cpauth.AuthzRequest{SubjectID: "ausr_1", Action: "tenants.delete"}},
+	} {
+		if ok, err := a.Authorize(tc.ctx, tc.req); ok || err != nil {
+			t.Errorf("%s: %v %v, want refused", name, ok, err)
+		}
+	}
+}
+
+func TestConsoleRead(t *testing.T) {
+	for intent, want := range map[string]bool{
+		"session.detail": true, "system.stats": true, "tenants.list": true, "tenants.detail": true, "tenants.quota": true,
+		"providers.list": true, "workers.list": true, "workers.detail": true, "events.list": true, "config.detail": true, "audit.list": true,
+		"workloads.list": false, "workloads.detail": false, "instances.list": false, "secrets.list": false, "deployments.list": false,
+		"tenants.delete": false, "": false,
+	} {
+		if got := ConsoleRead(intent); got != want {
+			t.Errorf("ConsoleRead(%q) = %v, want %v", intent, got, want)
+		}
 	}
 }

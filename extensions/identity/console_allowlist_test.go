@@ -32,7 +32,7 @@ func consoleTestRegistry(t *testing.T) contract.Registry {
 		"organization": {"orgs.list": q, "orgs.delete": cmd},
 		"notification": {"notification.templates.list": q},
 		"password":     {"password.policy": q},
-		"ctrlplane":    {"system.stats": q, "secrets.list": q, "instances.delete": cmd},
+		"ctrlplane":    {"system.stats": q, "tenants.list": q, "secrets.list": q, "workloads.list": q, "workloads.detail": q, "instances.delete": cmd},
 		"dispatch":     {"jobs.list": q, "overview.summary": q, "artifacts.presign": q, "jobs.cancel": cmd},
 		"trove":        {"buckets.list": q, "objects.list": q, "objects.contentUrl": q, "objects.delete": cmd, "objects.presign": cmd},
 		"warden":       {"roles.list": q, "overview.stats": q, "roles.create": cmd, "schema.apply": cmd},
@@ -114,7 +114,13 @@ func TestConsoleAllowed(t *testing.T) {
 		{"nobody", "overview", q, false},
 		// The library contributors: reads open, commands blocked.
 		{"ctrlplane", "system.stats", q, true},
-		{"ctrlplane", "secrets.list", q, true},
+		{"ctrlplane", "tenants.list", q, true},
+		// Ctrl Plane reads an organization's resources across every
+		// organization from the console, env included, so only its reads
+		// about itself are open.
+		{"ctrlplane", "secrets.list", q, false},
+		{"ctrlplane", "workloads.list", q, false},
+		{"ctrlplane", "workloads.detail", q, false},
 		{"ctrlplane", "instances.delete", cmd, false},
 		{"dispatch", "jobs.list", q, true},
 		{"dispatch", "overview.summary", q, true},
@@ -246,6 +252,8 @@ func TestConsoleRequestAllowed(t *testing.T) {
 		"subscribe to core":    {http.MethodPost, control, `{"streamID":"s","op":"subscribe","subscriptionID":"1","contributor":"core-contract","intent":"metrics.summary"}`, true},
 		"subscribe elsewhere":  {http.MethodPost, control, `{"streamID":"s","op":"subscribe","subscriptionID":"1","contributor":"dispatch","intent":"jobs.tail"}`, false},
 		"library read":         {http.MethodPost, contractPath, envelope("keysmith", "keys.list", contract.KindQuery), true},
+		"ctrlplane read":       {http.MethodPost, contractPath, envelope("ctrlplane", "system.stats", contract.KindQuery), true},
+		"ctrlplane workloads":  {http.MethodPost, contractPath, envelope("ctrlplane", "workloads.list", contract.KindQuery), false},
 		"library command":      {http.MethodPost, contractPath, envelope("keysmith", "keys.create", contract.KindCommand), false},
 		"unsubscribe":          {http.MethodPost, control, `{"streamID":"s","op":"unsubscribe","subscriptionID":"1"}`, true},
 		"unknown op":           {http.MethodPost, control, `{"streamID":"s","op":"other"}`, false},
@@ -263,10 +271,10 @@ func TestConsoleRequestAllowed(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("%s: allowed = %v, want %v", name, got, tc.want)
 		}
-		// Only an allowed contract query is a read: the one kind of request
-		// Ctrl Plane takes as the console's.
-		if wantRead := name == "allowed query" || name == "library read"; read != wantRead {
-			t.Errorf("%s: read = %v, want %v", name, read, wantRead)
+		// Only an allowed Ctrl Plane query reaches Ctrl Plane as the
+		// console's read.
+		if wantRead := name == "ctrlplane read"; read != wantRead {
+			t.Errorf("%s: ctrlplane read = %v, want %v", name, read, wantRead)
 		}
 		// What the handler reads next is what the gate read.
 		if tc.want && tc.method == http.MethodPost {

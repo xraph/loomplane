@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	cpid "github.com/xraph/ctrlplane/id"
 	heraldid "github.com/xraph/herald/id"
 
 	"github.com/xraph/loomplane/internal/config"
@@ -335,6 +336,26 @@ func TestConsole(t *testing.T) {
 			}
 			if strings.Contains(got.body, tc.secret) {
 				t.Errorf("%s/%s returns the stored secret: %s", tc.contributor, tc.intent, got.body)
+			}
+		}
+	})
+
+	t.Run("ctrl plane's tenant reads stay closed", func(t *testing.T) {
+		// Another organization's workload, its env holding a secret. A
+		// console read reaches Ctrl Plane with no tenant, and its workload
+		// store takes that as every tenant.
+		const secret = "console-test-workload-secret"
+		workload := cpid.New(cpid.PrefixWorkload).String()
+		execSQL(t, cfg.Database.URL, `INSERT INTO cp_workloads (id, tenant_id, name, slug, datacenter_id, provider_name, region, kind, services, labels, template_id, current_release_id, replica_count, previous_replicas, state, created_at, updated_at)
+			VALUES ($1, 'aorg_console_test_other', 'api', 'api', $2, 'kubernetes', 'local', 'deployment', $3, '{}', '', '', 1, 0, 'running', now(), now())`,
+			workload, cpid.New(cpid.PrefixDatacenter).String(), `[{"name":"api","image":"example/api:1","env":{"DATABASE_URL":"postgres://app:`+secret+`@db/app"}}]`)
+		for _, req := range []string{
+			envelope(t, "query", "ctrlplane", "workloads.list", map[string]any{}, ""),
+			envelope(t, "query", "ctrlplane", "workloads.detail", map[string]string{"id": workload}, ""),
+		} {
+			got := consoleCall(owner, http.MethodPost, consoleAPI, req)
+			if got != unknown || strings.Contains(got.body, secret) {
+				t.Errorf("POST %s = %+v, want the unknown-path answer", req, got)
 			}
 		}
 	})

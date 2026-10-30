@@ -1,6 +1,10 @@
 package identity
 
-import "github.com/xraph/forge/extensions/dashboard/contract"
+import (
+	"github.com/xraph/forge/extensions/dashboard/contract"
+
+	"github.com/xraph/loomplane/internal/infrastructure"
+)
 
 // coreContributor is the Forge dashboard's own contributor. Its intents only
 // read: health, metrics, traces, the dashboard's audit log.
@@ -43,12 +47,17 @@ var consoleBlockedQueries = map[consoleIntent]string{
 	{"dispatch", "artifacts.presign"}: "a download link to a job's artifact",
 }
 
+// ctrlplaneContributor is Ctrl Plane's contributor. Its reads reach Ctrl
+// Plane as a system admin with no tenant, which some of its stores take as
+// every tenant, so only the reads infrastructure.ConsoleRead lists are open.
+const ctrlplaneContributor = "ctrlplane"
+
 // consoleAllowed reports whether the console may send req. reg is the
 // dashboard's contract registry, nil until the dashboard hands it over.
 //
 // A query is allowed when reg has it as a read under the version the
 // dashboard will resolve, for any contributor registered there, unless it's
-// on consoleBlockedQueries. Subscriptions are the core contributor's alone,
+// on consoleBlockedQueries or is a Ctrl Plane read the console doesn't make. Subscriptions are the core contributor's alone,
 // and a command must be on consoleCommands. Forge's own `requires` rules and
 // each library's authorizer still run after this.
 func consoleAllowed(reg contract.Registry, req contract.Request) bool {
@@ -56,6 +65,9 @@ func consoleAllowed(reg contract.Registry, req contract.Request) bool {
 	switch req.Kind {
 	case contract.KindQuery:
 		if _, blocked := consoleBlockedQueries[key]; blocked {
+			return false
+		}
+		if req.Contributor == ctrlplaneContributor && !infrastructure.ConsoleRead(req.Intent) {
 			return false
 		}
 		return registeredRead(reg, req)
