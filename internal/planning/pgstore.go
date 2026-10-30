@@ -399,13 +399,13 @@ func (s *PgStore) RampingCanary(ctx context.Context, orgID, environmentID string
 
 // RolledBackPlans implements Store. Plans never succeed themselves, so a
 // rollback counts once its deployment has finished, succeeded or failed:
-// a failed one still undid some of its target.
+// a failed one still undid some of its target, and one refused as stale
+// still says its target was judged bad, so no later rollback restores it.
 func (s *PgStore) RolledBackPlans(ctx context.Context, orgID, environmentID string) (map[string]bool, error) {
 	rows, err := s.db.Query(ctx, `SELECT DISTINCT p.rollback->>'target_plan_id'
 		FROM loomplane_plans p JOIN loomplane_deployments d ON d.org_id = p.org_id AND d.plan_id = p.id
 		WHERE p.org_id = $1 AND p.kind = 'rollback' AND p.environment_id = $2 AND d.status IN ('succeeded', 'failed')
-			AND NOT (d.status = 'failed' AND d.error = $3)
-			AND coalesce(p.rollback->>'target_plan_id', '') <> ''`, orgID, environmentID, StaleRollback)
+			AND coalesce(p.rollback->>'target_plan_id', '') <> ''`, orgID, environmentID)
 	if err != nil {
 		return nil, fmt.Errorf("list rolled back plans: %w", err)
 	}

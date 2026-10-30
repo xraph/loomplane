@@ -211,7 +211,8 @@ func TestPgStore_rolledBackPlans(t *testing.T) {
 	deploy("dep_rb_running", "plan_rb_running", "env_b", "running")
 	// A rollback plan nobody approved has no deployment.
 	plan("plan_rb_open", "env_b", KindRollback, "plan_r4")
-	// A rollback refused as stale deployed nothing, so it undid nothing.
+	// A rollback refused as stale deployed nothing, but its target was still
+	// judged bad, so no later rollback may restore it.
 	plan("plan_rb_stale", "env_b", KindRollback, "plan_r4")
 	deploy("dep_rb_stale", "plan_rb_stale", "env_b", "failed")
 	if _, err := pg.Exec(ctx, `UPDATE loomplane_deployments SET error=$1 WHERE id='dep_rb_stale'`, StaleRollback); err != nil {
@@ -227,8 +228,9 @@ func TestPgStore_rolledBackPlans(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// A failed rollback still undid some of its target.
-	if want := map[string]bool{"plan_r1": true, "plan_r2": true}; !reflect.DeepEqual(got, want) {
+	// A failed rollback still undid some of its target, and a stale one's
+	// target stays rolled back.
+	if want := map[string]bool{"plan_r1": true, "plan_r2": true, "plan_r4": true}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("production rolled back %v, want %v", got, want)
 	}
 	if got, err = store.RolledBackPlans(ctx, "org", "env_a"); err != nil || !reflect.DeepEqual(got, map[string]bool{"plan_r5": true}) {

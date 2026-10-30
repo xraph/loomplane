@@ -51,7 +51,7 @@ const (
 // StaleRollback is the error of a rollback's deployment that refused to
 // start because a newer release deployed after the rollback was approved.
 // It deployed nothing, so it's no release and undid nothing.
-const StaleRollback = "a newer release deployed after this rollback was approved; plan the rollback again"
+const StaleRollback = "a newer release deployed after this rollback was approved, so it deployed nothing; roll back again only if you mean to undo that newer release"
 
 // Rollback triggers.
 const (
@@ -885,7 +885,8 @@ type Store interface {
 	// RolledBackPlans returns the plans a rollback in the environment
 	// undid: the target of each rollback plan whose deployment succeeded
 	// or failed, since a failed one still undid some of it. One refused
-	// as stale (StaleRollback) deployed nothing and undid nothing.
+	// as stale (StaleRollback) deployed nothing, but its target still
+	// counts: it was judged bad, so no later rollback restores it.
 	RolledBackPlans(ctx context.Context, orgID, environmentID string) (map[string]bool, error)
 }
 
