@@ -67,6 +67,10 @@ test "$(curl --insecure --silent --output /dev/null --write-out '%{http_code}' "
 # shellcheck disable=SC2016 # Expanded by the shell inside the container.
 "${compose[@]}" exec -T loomplane sh -ec \
   'test "$(id -u)" = 10001; test "$LOOMPLANE_ENVIRONMENT" = production; test ! -w /etc/loomplane; echo persistent > /var/lib/loomplane/smoke-marker'
+# The worker unpacks checkouts on a disk volume, not the 1 GiB RAM-backed /tmp.
+# shellcheck disable=SC2016 # Expanded by the shell inside the container.
+"${compose[@]}" exec -T loomplane-worker sh -ec \
+  'test "$LOOMPLANE_ANALYSIS_WORK_DIR" = /var/lib/loomplane-work; dd if=/dev/zero of=/var/lib/loomplane-work/probe bs=1M count=1100; rm /var/lib/loomplane-work/probe'
 "${compose[@]}" exec -T postgres psql -U loomplane -d loomplane -v ON_ERROR_STOP=1 \
   <<'SQL'
 CREATE TABLE release_smoke (value text);

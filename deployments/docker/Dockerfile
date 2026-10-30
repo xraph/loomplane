@@ -57,8 +57,8 @@ RUN --mount=type=cache,id=loomplane-gomod,target=/go/pkg/mod \
 FROM alpine:${ALPINE_VERSION}
 RUN apk add --no-cache ca-certificates tzdata \
  && adduser -D -H -u 10001 loomplane \
- && mkdir -p /var/lib/loomplane \
- && chown loomplane:loomplane /var/lib/loomplane
+ && mkdir -p /var/lib/loomplane /var/lib/loomplane-work \
+ && chown loomplane:loomplane /var/lib/loomplane /var/lib/loomplane-work
 COPY --from=api /out/loomplane /out/loomplane-worker /usr/local/bin/
 COPY --from=dashboard /src/apps/dashboard/dist /usr/share/loomplane/dashboard
 COPY --chmod=0755 deployments/docker/entrypoint.sh /usr/local/bin/loomplane-entrypoint
