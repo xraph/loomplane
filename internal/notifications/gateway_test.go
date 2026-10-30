@@ -118,5 +118,11 @@ func (g *fakeGateway) registerFor(t *testing.T, svc *Service, user, handle strin
 	if err != nil {
 		t.Fatal(err)
 	}
+	// New phones get 22:00 to 07:00 quiet hours. Clear them so what a test
+	// sees never depends on the hour it runs; quiet-hours tests set their own.
+	d, err = svc.UpdateDevice(t.Context(), security.Principal{UserID: user, OrgID: "org-a"}, d.ID, UpdateDeviceInput{QuietHours: OptionalQuietHours{Set: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
 	return d
 }
