@@ -59,6 +59,7 @@ import (
 	"github.com/xraph/loomplane/internal/notifications"
 	"github.com/xraph/loomplane/internal/pglock"
 	"github.com/xraph/loomplane/internal/security"
+	"github.com/xraph/loomplane/internal/setuptoken"
 	"github.com/xraph/loomplane/internal/telemetry"
 )
 
@@ -267,8 +268,23 @@ func (e *Extension) Start(ctx context.Context) error {
 	if err := e.mount(ctx); err != nil {
 		return err
 	}
+	e.logSetupLink(ctx)
 	e.MarkStarted()
 	return nil
+}
+
+// logSetupLink tells the operator, in production while setup is pending,
+// where to open setup. A failure is logged; it never stops the start.
+func (e *Extension) logSetupLink(ctx context.Context) {
+	if e.cfg.IsDevelopment() || !e.setupPending(ctx) {
+		return
+	}
+	token, err := setuptoken.Derive(e.cfg.SecretKey)
+	if err != nil {
+		e.Logger().Error("derive the setup token", forge.F("error", err.Error()))
+		return
+	}
+	e.Logger().Warn("setup is waiting", forge.F("url", setuptoken.Link(e.cfg.PublicURL, token)))
 }
 
 // setting sets one of authsome's settings for the whole engine.

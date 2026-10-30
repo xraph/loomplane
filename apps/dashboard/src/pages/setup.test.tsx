@@ -1,8 +1,9 @@
-import { render, screen } from "@testing-library/react"
+import { render, screen, waitFor } from "@testing-library/react"
 import userEvent from "@testing-library/user-event"
 import type React from "react"
 import { beforeEach, describe, expect, it, vi } from "vitest"
 
+import { setInstance } from "@/lib/instance"
 import { SetupPage } from "@/pages/setup"
 
 const mocks = vi.hoisted(() => ({
@@ -44,8 +45,21 @@ vi.mock("@authsome/ui-components", () => ({
 beforeEach(() => {
   mocks.complete.mockReset()
   mocks.assign.mockReset()
-  vi.stubGlobal("location", { ...window.location, assign: mocks.assign })
+  visit("")
 })
+
+function visit(search: string, tokenRequired = false) {
+  setInstance({
+    setupPending: true,
+    waitlist: false,
+    setupTokenRequired: tokenRequired,
+  })
+  vi.stubGlobal("location", {
+    ...window.location,
+    search,
+    assign: mocks.assign,
+  })
+}
 
 async function fill(confirm = "correct horse battery") {
   await userEvent.type(screen.getByLabelText("Name"), "Ada Lovelace")
@@ -139,6 +153,91 @@ describe("SetupPage", () => {
     await fill()
     expect(mocks.assign).toHaveBeenCalledWith(
       "/verify-email?email=ada%40example.com"
+    )
+  })
+
+  it("sends the token from the link", async () => {
+    mocks.complete.mockResolvedValue({ ok: true, verificationRequired: false })
+    visit("?token=abc", true)
+    render(<SetupPage />)
+    expect(screen.queryByLabelText("Setup token")).not.toBeInTheDocument()
+    await fill()
+    expect(mocks.complete).toHaveBeenCalledWith({
+      body: expect.objectContaining({ token: "abc" }),
+    })
+  })
+
+  it("asks for the token when required and missing", async () => {
+    mocks.complete.mockResolvedValue({ ok: true, verificationRequired: false })
+    visit("", true)
+    render(<SetupPage />)
+    const field = screen.getByLabelText("Setup token")
+    expect(field).toHaveAccessibleDescription(
+      "Find it in the API's log, or run loomplane setup-token on the server."
+    )
+    await userEvent.type(field, "mfrggzdfmztwq2lknnwg23tpobyxe43u")
+    await fill()
+    expect(mocks.complete).toHaveBeenCalledWith({
+      body: expect.objectContaining({
+        token: "mfrggzdfmztwq2lknnwg23tpobyxe43u",
+      }),
+    })
+  })
+
+  it("has no token field in development", async () => {
+    mocks.complete.mockResolvedValue({ ok: true, verificationRequired: false })
+    visit("", false)
+    render(<SetupPage />)
+    expect(screen.queryByLabelText("Setup token")).not.toBeInTheDocument()
+    await fill()
+    const body = mocks.complete.mock.calls[0][0].body
+    expect(body).not.toHaveProperty("token")
+  })
+
+  it("shows the server's message when the token is wrong", async () => {
+    mocks.complete.mockRejectedValue(
+      Object.assign(
+        new Error(
+          "a valid setup token is required; find it in the API's log or run loomplane setup-token"
+        ),
+        { statusCode: 403 }
+      )
+    )
+    visit("", true)
+    render(<SetupPage />)
+    await userEvent.type(screen.getByLabelText("Setup token"), "wrong")
+    await fill()
+    expect(
+      await screen.findByText(/A valid setup token is required/)
+    ).toBeInTheDocument()
+    expect(
+      screen.queryByText("This instance is already set up.")
+    ).not.toBeInTheDocument()
+  })
+
+  it("shows the token field after a stale link is refused", async () => {
+    mocks.complete.mockRejectedValueOnce(
+      Object.assign(
+        new Error(
+          "a valid setup token is required; find it in the API's log or run loomplane setup-token"
+        ),
+        { statusCode: 403 }
+      )
+    )
+    mocks.complete.mockResolvedValue({ ok: true, verificationRequired: false })
+    visit("?token=stale", true)
+    render(<SetupPage />)
+    expect(screen.queryByLabelText("Setup token")).not.toBeInTheDocument()
+    await fill()
+    expect(
+      await screen.findByText(/A valid setup token is required/)
+    ).toBeInTheDocument()
+    await userEvent.type(screen.getByLabelText("Setup token"), "fresh")
+    await userEvent.click(screen.getByRole("button", { name: "Create account" }))
+    await waitFor(() =>
+      expect(mocks.complete).toHaveBeenLastCalledWith({
+        body: expect.objectContaining({ token: "fresh" }),
+      })
     )
   })
 })

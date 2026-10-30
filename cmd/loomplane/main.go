@@ -7,6 +7,7 @@
 //	loomplane restore      restore the database from a backup
 //	loomplane migrations   show applied and pending migrations
 //	loomplane migrate      apply pending migrations
+//	loomplane setup-token  print the link that finishes first-run setup
 //	loomplane --help       list every command
 //
 // Keep this package to this one file: `forge dev` builds main.go on its
@@ -77,5 +78,5 @@ func settings() (ops.Settings, error) {
 	if err != nil {
 		return ops.Settings{}, err
 	}
-	return ops.Settings{DatabaseURL: cfg.Database.URL, Groups: migrations.All(), Version: buildinfo.Version, AuthAppID: cfg.Identity.AppID}, nil
+	return ops.Settings{DatabaseURL: cfg.Database.URL, Groups: migrations.All(), Version: buildinfo.Version, AuthAppID: cfg.Identity.AppID, SecretKey: cfg.SecretKey, PublicURL: cfg.PublicURL}, nil
 }

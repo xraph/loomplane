@@ -10,7 +10,7 @@ name: Release
 #       target "all" tags the commit you ran it from, which must be on
 #       main, and publishes everything. No PAT is needed: the tag, the
 #       GitHub release and every publish job happen in this one run.
-#       target "cli", "docker", "helm" or "push-gateway" re-publishes one part of a release
+#       target "cli", "docker", "helm", "digitalocean" or "push-gateway" re-publishes one part of a release
 #       that already exists, from its tag, wherever you run it from.
 #
 # What a release publishes:
@@ -26,6 +26,9 @@ name: Release
 #   helm      publish-helm.yml, after docker: the Kubernetes chart on GHCR
 #             (oci://ghcr.io/xraph/charts/loomplane) and on the release,
 #             with the plain manifest for that version
+#   digitalocean  publish-digitalocean.yml, after docker: the DigitalOcean
+#             Marketplace 1-Click snapshot, for stable tags when the
+#             DIGITALOCEAN_TOKEN secret is set
 #   push-gateway  publish-push-gateway.yml: the push gateway image XRaph runs at push.loomplane.com
 #
 # Lint, unit and integration tests gate all of it unless you tick
@@ -43,11 +46,11 @@ on:
         required: true
         type: string
       target:
-        description: all cuts a new release. cli, docker, helm or push-gateway re-publishes one part of an existing one.
+        description: all cuts a new release. cli, docker, helm, digitalocean or push-gateway re-publishes one part of an existing one.
         required: true
         type: choice
         default: all
-        options: [all, cli, docker, helm, push-gateway]
+        options: [all, cli, docker, helm, digitalocean, push-gateway]
       skip-tests:
         description: Skip lint and tests (only for a tag that passed them)
         required: false
@@ -73,6 +76,7 @@ jobs:
       cli: ${{ steps.plan.outputs.cli }}
       docker: ${{ steps.plan.outputs.docker }}
       helm: ${{ steps.plan.outputs.helm }}
+      digitalocean: ${{ steps.plan.outputs.digitalocean }}
       push-gateway: ${{ steps.plan.outputs.push-gateway }}
       skip-tests: ${{ steps.plan.outputs.skip-tests }}
     steps:
@@ -131,12 +135,13 @@ jobs:
             exit 1
           fi
 
-          cli=false docker=false helm=false push_gateway=false
+          cli=false docker=false helm=false digitalocean=false push_gateway=false
           case "$target" in
-            all) cli=true docker=true helm=true push_gateway=true ;;
+            all) cli=true docker=true helm=true digitalocean=true push_gateway=true ;;
             cli) cli=true ;;
             docker) docker=true ;;
             helm) helm=true ;;
+            digitalocean) digitalocean=true ;;
             push-gateway) push_gateway=true ;;
           esac
           {
@@ -146,6 +151,7 @@ jobs:
             echo "cli=$cli"
             echo "docker=$docker"
             echo "helm=$helm"
+            echo "digitalocean=$digitalocean"
             echo "push-gateway=$push_gateway"
             echo "skip-tests=$SKIP_TESTS"
           } | tee -a "$GITHUB_OUTPUT"
@@ -159,6 +165,7 @@ jobs:
             echo "| CLI and archives | $cli |"
             echo "| Docker | $docker |"
             echo "| Helm chart | $helm |"
+            echo "| DigitalOcean 1-Click | $digitalocean |"
             echo "| Push gateway | $push_gateway |"
             echo "| Tests | $([ "$SKIP_TESTS" = true ] && echo skipped || echo run) |"
           } >> "$GITHUB_STEP_SUMMARY"
@@ -320,6 +327,24 @@ jobs:
     uses: ./.github/workflows/publish-helm.yml
     with:
       tag: ${{ needs.plan.outputs.tag }}
+
+  digitalocean:
+    name: DigitalOcean 1-Click
+    # After docker, so the image bakes in a release whose images exist.
+    needs: [plan, checks, release, docker]
+    if: >-
+      always() && needs.plan.result == 'success' &&
+      needs.plan.outputs.digitalocean == 'true' &&
+      contains(fromJSON('["success","skipped"]'), needs.checks.result) &&
+      contains(fromJSON('["success","skipped"]'), needs.release.result) &&
+      contains(fromJSON('["success","skipped"]'), needs.docker.result)
+    permissions:
+      contents: read
+    uses: ./.github/workflows/publish-digitalocean.yml
+    with:
+      tag: ${{ needs.plan.outputs.tag }}
+    secrets:
+      DIGITALOCEAN_TOKEN: ${{ secrets.DIGITALOCEAN_TOKEN }}
 
   push-gateway:
     name: Push gateway image

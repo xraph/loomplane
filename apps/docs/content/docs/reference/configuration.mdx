@@ -35,6 +35,7 @@ The config directory is the current directory, or `LOOMPLANE_CONFIG_DIR`. The Do
 | `LOOMPLANE_PAUSED_PROVIDERS` | Unset | Comma-separated target names whose plans are review only. A name that isn't a target stops startup |
 | `LOOMPLANE_WORKER_HTTP_ADDR` | `:8781` | Where `loomplane-worker` serves its health checks |
 | `LOOMPLANE_ANALYSIS_WORK_DIR` | System temp directory | Where checkouts are extracted during analysis |
+| `LOOMPLANE_ANALYSIS_CONCURRENCY` | `2` | Analyses one worker runs at once. At least 1. Each can unpack up to 2 GiB |
 
 Loomplane's own host, its database, its API and its provider plugins are always refused by endpoint checks, as are loopback, link-local and `0.0.0.0/8` addresses, AWS's IPv6 metadata service, and the NAT64 forms of all of these. Other private ranges are dialable, since real endpoints live there.
 
@@ -109,7 +110,6 @@ These have no variable wired in `config.yaml`. Set them in `config.local.yaml`.
 | `database.pool_size` | `16` | Open connections. `0` keeps the driver's default |
 | `orchestration.concurrency` | `4` | Jobs one process runs at once. At least 1 |
 | `orchestration.poll_interval` | `1s` | How often idle workers look for jobs |
-| `analysis.concurrency` | `2` | Analyses one worker runs at once. At least 1 |
 | `identity.base_path` | `/authsome` | Where authsome's API is mounted |
 | `identity.require_email_verification` | `false` | Whether sign-in waits for a verified email |
 | `providers.plugins` | `[]` | A list of `{url, token}`. See [Provider plugins](/docs/extending/provider-plugins) |

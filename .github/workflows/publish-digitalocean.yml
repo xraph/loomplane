@@ -1,0 +1,100 @@
+name: Publish (DigitalOcean)
+
+# The DigitalOcean Marketplace half of a release. release.yml calls it with a
+# tag that already has a GitHub release, after the images for that tag are
+# published.
+#
+# It builds the 1-Click snapshot with Packer (loomplane-v1.2.3), then deletes
+# the oldest loomplane-v* snapshots so only the newest three stay on the
+# account. The snapshot isn't live until you submit it in the Vendor Portal.
+#
+# Set the DIGITALOCEAN_TOKEN secret (read and write access) to turn this on.
+# Without it, and for prerelease tags, the job skips.
+
+on:
+  workflow_call:
+    inputs:
+      tag:
+        description: Release tag to build the snapshot for, e.g. v1.2.3.
+        required: true
+        type: string
+    secrets:
+      DIGITALOCEAN_TOKEN:
+        description: DigitalOcean API token that can create and delete Droplets and snapshots.
+        required: false
+
+env:
+  PACKER_DIR: deployments/digitalocean/marketplace
+  KEEP_SNAPSHOTS: "3"
+
+jobs:
+  snapshot:
+    name: Build the 1-Click snapshot
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - name: Check this release gets a snapshot
+        id: gate
+        env:
+          TAG: ${{ inputs.tag }}
+          DIGITALOCEAN_TOKEN: ${{ secrets.DIGITALOCEAN_TOKEN }}
+        run: |
+          if [ -z "$DIGITALOCEAN_TOKEN" ]; then
+            echo "::notice::DIGITALOCEAN_TOKEN isn't set, so no 1-Click snapshot is built."
+          elif [[ "$TAG" == *-* ]]; then
+            echo "::notice::$TAG is a prerelease, so no 1-Click snapshot is built."
+          else
+            echo "build=true" >> "$GITHUB_OUTPUT"
+          fi
+      - if: steps.gate.outputs.build == 'true'
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ inputs.tag }}
+      - if: steps.gate.outputs.build == 'true'
+        uses: hashicorp/setup-packer@v3
+        with:
+          version: 1.11.2
+      - if: steps.gate.outputs.build == 'true'
+        name: Build the snapshot
+        working-directory: ${{ env.PACKER_DIR }}
+        env:
+          DIGITALOCEAN_TOKEN: ${{ secrets.DIGITALOCEAN_TOKEN }}
+          TAG: ${{ inputs.tag }}
+        run: |
+          packer init .
+          packer build -var "loomplane_version=$TAG" .
+      - if: steps.gate.outputs.build == 'true'
+        uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_TOKEN }}
+      - if: steps.gate.outputs.build == 'true'
+        name: Prune old snapshots and report
+        env:
+          TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          snapshots=$(doctl compute snapshot list --resource droplet -o json)
+
+          id=$(jq -r --arg name "loomplane-$TAG" '[.[] | select(.name == $name)][0].id // empty' <<<"$snapshots")
+          if [ -z "$id" ]; then
+            echo "::error::Packer finished but loomplane-$TAG isn't in the snapshot list."
+            exit 1
+          fi
+
+          # Newest first. ISO 8601 timestamps sort as text. Nothing is
+          # selected when there are $KEEP_SNAPSHOTS or fewer.
+          stale=$(jq -r --argjson keep "$KEEP_SNAPSHOTS" \
+            '[.[] | select(.name | startswith("loomplane-v"))] | sort_by(.created_at) | reverse | .[$keep:][] | .id' \
+            <<<"$snapshots")
+          for old in $stale; do
+            echo "Deleting old snapshot $old"
+            doctl compute snapshot delete "$old" --force
+          done
+
+          {
+            echo "### DigitalOcean 1-Click snapshot"
+            echo
+            echo "Built \`loomplane-$TAG\` as snapshot \`$id\`. Submit it in the Vendor Portal to publish it to the Marketplace."
+          } >> "$GITHUB_STEP_SUMMARY"

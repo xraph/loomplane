@@ -3305,6 +3305,7 @@ export interface PublicConfig {
   features: Features;
   publishableKey: string;
   setupPending: boolean;
+  setupTokenRequired: boolean;
   waitlist: boolean;
 }
 
@@ -4311,6 +4312,7 @@ export interface SetupRequest {
   name: string;
   organizationName: string;
   password: string;
+  token?: string;
 }
 
 export interface SetupResponse {

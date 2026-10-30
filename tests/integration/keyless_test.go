@@ -31,6 +31,7 @@ import (
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/connections"
 	"github.com/xraph/loomplane/internal/issuer"
+	"github.com/xraph/loomplane/internal/setuptoken"
 )
 
 // keylessApp is a Loomplane app whose public URL is where it really
@@ -568,7 +569,16 @@ func TestKeyless_offWithoutAUsableIssuer(t *testing.T) {
 	r := start(t, cfg)
 	defer r.stop()
 	a := &keylessApp{running: r, url: r.srv.URL, c: &client{t: t, base: r.srv.URL, key: cfg.Identity.PublishableKey}}
-	signedIn(t, a.c)
+	// Staging asks for the setup token, as production does.
+	token, err := setuptoken.Derive(cfg.SecretKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	form := map[string]string{"token": token}
+	for k, v := range ada {
+		form[k] = v
+	}
+	a.c.token = setUp(t, a.c, form)
 
 	for cloud, f := range keylessForms(a) {
 		if slices.Contains(f.Methods, connections.MethodKeyless) {

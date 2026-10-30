@@ -23775,6 +23775,7 @@
           "auth_base_path",
           "features",
           "setup_pending",
+          "setup_token_required",
           "waitlist"
         ],
         "properties": {
@@ -23794,6 +23795,9 @@
             "type": "string"
           },
           "setup_pending": {
+            "type": "boolean"
+          },
+          "setup_token_required": {
             "type": "boolean"
           },
           "waitlist": {
@@ -29032,6 +29036,9 @@
             "type": "string"
           },
           "password": {
+            "type": "string"
+          },
+          "token": {
             "type": "string"
           }
         }

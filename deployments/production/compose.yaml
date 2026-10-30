@@ -98,6 +98,11 @@ services:
     environment:
       <<: *environment
       LOOMPLANE_WORKER_HTTP_ADDR: :8781
+      # Checkouts unpack here, on disk. /tmp is a 1 GiB RAM-backed mount.
+      LOOMPLANE_ANALYSIS_WORK_DIR: /var/lib/loomplane-work
+      LOOMPLANE_ANALYSIS_CONCURRENCY: ${LOOMPLANE_ANALYSIS_CONCURRENCY:-2}
+    volumes:
+      - analysis-work:/var/lib/loomplane-work
     mem_limit: 2g
     healthcheck:
       test: [CMD, wget, -qO, /dev/null, "http://127.0.0.1:8781/_/health"]
@@ -135,5 +140,6 @@ networks:
 volumes:
   postgres-data:
   artifact-data:
+  analysis-work:
   caddy-data:
   caddy-config:

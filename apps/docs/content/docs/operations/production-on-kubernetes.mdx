@@ -59,7 +59,14 @@ kubectl -n loomplane rollout status deploy/loomplane
 helm test loomplane -n loomplane
 ```
 
-Open your hostname and create the first account. It owns the instance.
+Setup needs a one-time token. The first API pod logs it as a `setup is waiting` warning with a `url` field, and you can print the link again from any API pod:
+
+```bash
+kubectl -n loomplane exec deploy/loomplane -- loomplane setup-token
+# Finish setup at https://loomplane.example.com/setup?token=...
+```
+
+Open that link and create the first account. It owns the instance.
 
 The proxy buffering and timeout annotations matter: the dashboard streams live events over server-sent events and a WebSocket. The chart also sends `/_/health`, `/_/metrics` and `/debug` to a Service with no pods, so the public ingress refuses them. Prefer the Gateway API? Set `httpRoute.enabled` and `httpRoute.parentRefs` instead of `ingress`.
 

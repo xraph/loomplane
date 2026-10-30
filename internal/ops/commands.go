@@ -21,6 +21,9 @@ type Settings struct {
 	Version     string
 	// AuthAppID is Loomplane's authsome app, where platform roles live.
 	AuthAppID string
+	// SecretKey and PublicURL give the one-time setup link.
+	SecretKey string
+	PublicURL string
 }
 
 // Commands are loomplane's operational commands. settings is called when
@@ -141,6 +144,21 @@ func Commands(settings func() (Settings, error)) []cli.Command {
 			fmt.Println("The database is up to date.")
 			return nil
 		}),
+		cli.NewCommand("setup-token", "Print the link that finishes first-run setup", func(ctx cli.CommandContext) error {
+			s, err := settings()
+			if err != nil {
+				return err
+			}
+			out, err := SetupTokenOutput(ctx.Context(), s, ctx.Bool("raw"))
+			if err != nil {
+				return err
+			}
+			fmt.Println(out)
+			return nil
+		},
+			cli.WithUsage("loomplane setup-token [--raw]"),
+			cli.WithFlag(cli.NewBoolFlag("raw", "", "Print the token alone, for scripts", false)),
+		),
 		cli.NewCommand("admin", "Manage who runs this Loomplane instance", func(cli.CommandContext) error {
 			return errors.New("use a subcommand: loomplane admin grant-platform-admin <email>")
 		},

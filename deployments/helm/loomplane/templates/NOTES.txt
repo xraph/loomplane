@@ -15,8 +15,12 @@ for it. Follow along with:
 
 {{- if or .Values.ingress.enabled .Values.httpRoute.enabled }}
 
-Then open {{ .Values.publicURL }} and create the first account. It owns the
-instance.
+Setup needs a one-time token. Print the link and open it to create the first
+account, which owns the instance:
+
+  kubectl -n {{ .Release.Namespace }} exec deploy/{{ include "loomplane.fullname" . }} -- loomplane setup-token
+
+The first API pod also logs it as a "setup is waiting" warning.
 {{- else }}
 
 Nothing routes outside traffic to it yet: enable ingress or httpRoute, or try

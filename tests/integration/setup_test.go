@@ -21,6 +21,7 @@ import (
 	"github.com/xraph/loomplane/extensions/identity"
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/platformadmin"
+	"github.com/xraph/loomplane/internal/setuptoken"
 )
 
 // ada is the setup form a fresh instance gets in these tests.
@@ -32,9 +33,10 @@ var ada = map[string]string{
 }
 
 type publicConfig struct {
-	SetupPending bool    `json:"setup_pending"`
-	Waitlist     bool    `json:"waitlist"`
-	ConsolePath  *string `json:"console_path"`
+	SetupPending       bool    `json:"setup_pending"`
+	SetupTokenRequired bool    `json:"setup_token_required"`
+	Waitlist           bool    `json:"waitlist"`
+	ConsolePath        *string `json:"console_path"`
 }
 
 // setupClient talks to the API the way the dashboard does in a browser:
@@ -241,6 +243,48 @@ func TestSetup_freshInstance(t *testing.T) {
 	}
 	if !platformadmin.Holds(held, cfg.Identity.AppID) {
 		t.Fatalf("Ada holds no platform role: %+v", held)
+	}
+}
+
+// A production instance won't let the first visitor take it: setup needs
+// the token derived from the secret key.
+func TestSetup_productionNeedsToken(t *testing.T) {
+	cfg := config.Defaults()
+	cfg.Environment = config.EnvProduction
+	r, c := freshSetup(t, &cfg)
+	defer r.stop()
+
+	if got := c.publicConfig(); !got.SetupPending || !got.SetupTokenRequired {
+		t.Fatalf("fresh production public config = %+v, want pending and token required", got)
+	}
+	code, body := c.setup(ada)
+	if code != http.StatusForbidden || !strings.Contains(body, "a valid setup token is required") {
+		t.Fatalf("setup without a token: %d %s, want 403 a valid setup token is required", code, body)
+	}
+	wrong := map[string]string{"token": "nope"}
+	for k, v := range ada {
+		wrong[k] = v
+	}
+	if code, body := c.setup(wrong); code != http.StatusForbidden {
+		t.Fatalf("setup with a wrong token: %d %s, want 403", code, body)
+	}
+	if n := countRows(t, cfg.Database.URL, liveUsers); n != 0 {
+		t.Fatalf("%d users after refused setups, want 0", n)
+	}
+
+	token, err := setuptoken.Derive(cfg.SecretKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	form := map[string]string{"token": token}
+	for k, v := range ada {
+		form[k] = v
+	}
+	if code, body := c.setup(form); code != http.StatusOK {
+		t.Fatalf("setup with the token: %d %s, want 200", code, body)
+	}
+	if got := c.publicConfig(); got.SetupPending || got.SetupTokenRequired {
+		t.Fatalf("public config after setup = %+v, want not pending and no token required", got)
 	}
 }
 
