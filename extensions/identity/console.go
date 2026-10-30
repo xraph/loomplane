@@ -120,12 +120,25 @@ func (e *Extension) RegisterDashboardAuth(d *dashboard.Extension) {
 	d.SetRequiredRoles([]string{rbac.PlatformOwnerSlug, rbac.PlatformAdminSlug})
 }
 
+// registryRef holds the dashboard's contract registry for the gate.
+type registryRef struct{ contract.Registry }
+
+// consoleRegistry is the dashboard's contract registry, or nil before the
+// dashboard has started.
+func (e *Extension) consoleRegistry() contract.Registry {
+	if r := e.consoleReg.Load(); r != nil {
+		return r.Registry
+	}
+	return nil
+}
+
 // RegisterContractContributor implements dashboard.ContractContributorAware,
 // as authsome's own extension does: authsome's contributor, then every
 // authsome plugin that contributes one (the waitlist among them). Each
 // registers all of its intents; the console gate decides which can be
-// called.
+// called, and keeps reg to tell reads from writes.
 func (e *Extension) RegisterContractContributor(disp *dispatcher.Dispatcher, reg contract.Registry, wreg contract.WardenRegistry) error {
+	e.consoleReg.Store(&registryRef{reg})
 	if err := authcontract.Register(disp, reg, wreg, authcontract.Deps{Engine: e.engine, Brand: "Loomplane"}); err != nil {
 		return fmt.Errorf("authsome contract: %w", err)
 	}
@@ -162,7 +175,7 @@ func (e *Extension) consoleGate() forge.Middleware {
 			}
 			ctx := r.Context()
 			u, admin := e.consoleUser(ctx, r)
-			if !admin || !consoleRequestAllowed(r, rest) {
+			if !admin || !consoleRequestAllowed(e.consoleRegistry(), r, rest) {
 				return writeConsoleNotFound(c.Response())
 			}
 			c.WithContext(context.WithValue(ctx, consoleUserKey{}, u))
@@ -217,13 +230,13 @@ func segments(path string) []string {
 
 // consoleRequestAllowed decides a platform admin's request by the dashboard
 // route it's for. Routes the console doesn't use, including any a later
-// Forge release adds, are refused.
-func consoleRequestAllowed(r *http.Request, rest []string) bool {
+// Forge release adds, are refused. reg is the dashboard's contract registry.
+func consoleRequestAllowed(reg contract.Registry, r *http.Request, rest []string) bool {
 	route := r.Method + " " + strings.Join(rest, "/")
 	switch route {
 	case "POST api/dashboard/v1":
 		var req contract.Request
-		return decodeConsoleBody(r, &req) && consoleAllowed(req)
+		return decodeConsoleBody(r, &req) && consoleAllowed(reg, req)
 	case "POST api/dashboard/v1/stream/control":
 		var msg transport.ControlMessage
 		if !decodeConsoleBody(r, &msg) {
@@ -231,7 +244,7 @@ func consoleRequestAllowed(r *http.Request, rest []string) bool {
 		}
 		switch msg.Op {
 		case "subscribe":
-			return consoleAllowed(contract.Request{Kind: contract.KindSubscribe, Contributor: msg.Contributor, Intent: msg.Intent})
+			return consoleAllowed(reg, contract.Request{Kind: contract.KindSubscribe, Contributor: msg.Contributor, Intent: msg.Intent})
 		case "unsubscribe":
 			return true
 		}

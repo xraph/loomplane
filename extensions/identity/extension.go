@@ -115,6 +115,9 @@ type Extension struct {
 	// consoleBase is the console's base path, once the dashboard reports
 	// it (console.go).
 	consoleBase atomic.Value
+	// consoleReg is the dashboard's contract registry, once the dashboard
+	// hands it over (console.go). The gate reads intents' kinds from it.
+	consoleReg atomic.Pointer[registryRef]
 
 	// createOrgHook stands between setup and the organization plugin when
 	// set. Only integration builds set it (export_integration.go).
