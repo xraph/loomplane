@@ -2,6 +2,7 @@ package security
 
 import (
 	"context"
+	"errors"
 
 	"github.com/xraph/authsome/organization"
 	"github.com/xraph/authsome/plugin"
@@ -16,7 +17,8 @@ import (
 // sync leaves the member without a role. Authorizer.Require repairs that on
 // the member's next request.
 type Sync struct {
-	authz *Authorizer
+	authz  *Authorizer
+	leaver Leaver // takes a leaving member out of their teams (teams.go)
 }
 
 // NewSync returns the plugin.
@@ -54,9 +56,28 @@ func (s *Sync) OnAfterMemberRoleChange(ctx context.Context, m *organization.Memb
 	return s.authz.Assign(ctx, m.OrgID.String(), m.UserID.String(), RoleForMember(string(m.Role)), "authsome:member.role_change")
 }
 
-// OnBeforeMemberRemove takes the member's role away. It's the "before" hook
-// because the "after" one only carries the member's ID, not who left which
-// organization.
+// OnBeforeMemberRemove takes the member out of their teams, then takes
+// every role away. It's the "before" hook because the "after" one only
+// carries the member's ID, not who left which organization.
+//
+// Revoke runs even when the leaver fails: a leftover team membership grants
+// nothing once the membership is gone (team grants join authsome's
+// members), but a leftover assignment would. It runs under the person's
+// sync lock, so a sync that read their teams before the leaver ran finishes
+// first and its rows go too. If the lock can't be had, it revokes anyway.
 func (s *Sync) OnBeforeMemberRemove(ctx context.Context, m *organization.Member) error {
-	return s.authz.Revoke(ctx, m.OrgID.String(), m.UserID.String())
+	orgID, userID := m.OrgID.String(), m.UserID.String()
+	var leaveErr error
+	if s.leaver != nil {
+		leaveErr = s.leaver(ctx, orgID, userID)
+	}
+	revoked := false
+	revokeErr := s.authz.withPersonLock(ctx, orgID, userID, func(ctx context.Context) error {
+		revoked = true
+		return s.authz.Revoke(ctx, orgID, userID)
+	})
+	if !revoked {
+		revokeErr = errors.Join(revokeErr, s.authz.Revoke(ctx, orgID, userID))
+	}
+	return errors.Join(leaveErr, revokeErr)
 }
