@@ -51,8 +51,17 @@ docker compose up -d --wait --wait-timeout 240
 docker compose ps
 ```
 
-Open `https://YOUR_HOSTNAME`. Create your account and organization, then
-connect a repository. Caddy obtains and renews the TLS certificate and
+Open `https://YOUR_HOSTNAME`. Setup needs a one-time token, so get the link
+first. The API logs it as a `setup is waiting` warning with a `url` field,
+and `loomplane setup-token` prints the same link:
+
+```bash
+docker compose exec loomplane loomplane setup-token
+# Finish setup at https://YOUR_HOSTNAME/setup?token=...
+```
+
+Open that link, create your account and organization, then connect a
+repository. Once setup is done the command prints `Setup is complete.` Caddy obtains and renews the TLS certificate and
 forwards WebSocket and SSE traffic to the API. Health and metrics routes
 are blocked at the public proxy.
 
@@ -65,7 +74,8 @@ changed to public in GitHub before anonymous pulls work.
 The API runs migrations before it becomes healthy. Compose starts the
 analysis worker after that check passes. Both run as UID 10001 with a read-only
 root filesystem, dropped capabilities, a PID limit and a temporary `/tmp`.
-The API gets a writable artifact volume. Neither container gets the host's
+The API gets a writable artifact volume, and the worker gets its own scratch
+volume for repository checkouts. Neither container gets the host's
 Docker socket; connections to deployment targets use Loomplane's normal
 credential and approval flow.
 
@@ -73,8 +83,17 @@ credential and approval flow.
 | --------------- | --------------------------------------------------------------- |
 | `postgres-data` | Accounts, credentials, jobs, deployment state and audit records |
 | `artifact-data` | Deployment source artifacts and local recovery objects          |
+| `analysis-work` | The worker's scratch space for repository checkouts             |
 | `caddy-data`    | TLS certificates and Caddy's certificate authority state        |
 | `caddy-config`  | Caddy's saved runtime configuration                             |
+
+One analysis can unpack up to 2 GiB of source, which is more than the
+1 GiB RAM-backed `/tmp`, so checkouts go to `analysis-work` on disk. Keep a
+few GiB free on the host for it. The worker runs two analyses at once by
+default. Set `LOOMPLANE_ANALYSIS_CONCURRENCY` in `.env` to change that (the
+minimum is 1). Each extra analysis needs more disk and more memory, so raise
+the worker's `mem_limit` in `compose.yaml` along with it. The volume is only
+scratch space, so you don't need to back it up.
 
 Volume names carry the Compose project prefix `loomplane-production`.
 Keep that project name stable across upgrades. `docker compose down` keeps
@@ -97,7 +116,8 @@ implicit TLS, usually on port 465. Verify delivery with your mail provider
 before relying on account recovery.
 
 Open Loomplane in a browser after the first start. A new instance sends
-you to `/setup`, where you create the first account and organization. See
+you to `/setup`, where you enter the setup token (see above) and create the
+first account and organization. See
 [Running Loomplane](operations.md#first-run) for what setup does.
 
 | Variable                       | Default      | What it does                                                                                           |

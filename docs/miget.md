@@ -26,7 +26,11 @@ Then create the stack in Miget:
    memory, raise the worker's `ram` in `compose.miget.yaml` first.
 4. Deploy, wait for both builds, and open the `loomplane` app's URL.
 
-Create your account and organization, then connect a repository.
+Setup needs a one-time token. The `loomplane` app logs it as a `setup is
+waiting` warning with a `url` field, a link that opens `/setup` with the token
+filled in. If the log has scrolled away, run `loomplane setup-token` in a shell
+on that app and it prints the link again. Then create your account and
+organization, and connect a repository.
 
 Loomplane derives its encryption keys from that secret, and stored
 credentials can't be decrypted without it, so set it once and leave it alone

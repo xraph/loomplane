@@ -4,9 +4,20 @@ What it takes to keep a Loomplane running: backups, restores, upgrades, and know
 
 ## First run
 
-A new instance has no users, so every signed-out dashboard page sends you to `/setup`. Give it your name, email, password and the name of your first organization. Loomplane creates you as a normal user who also holds the `platform-owner` role, creates the organization with you as its owner, and signs you in.
+A new instance has no users, so every signed-out dashboard page sends you to `/setup`. In production the page also asks for a setup token, so a stranger who finds your hostname first can't claim the instance. Give it the token, your name, email, password and the name of your first organization. Loomplane creates you as a normal user who also holds the `platform-owner` role, creates the organization with you as its owner, and signs you in.
 
-Setup works once. After it, `GET /api/v1/setup` reports `{"pending": false}` and `POST /api/v1/setup` is refused with a 403. The instance keeps a record that it was set up, so that stays true even if every account is deleted later. Until setup has run, the server refuses every other sign-up, so nobody can get in ahead of you. Open a new instance in a browser as soon as it's up.
+Setup works once. After it, `GET /api/v1/setup` reports `{"pending": false}` and `POST /api/v1/setup` is refused with a 403. The instance keeps a record that it was set up, so that stays true even if every account is deleted later. Until setup has run, the server refuses every other sign-up.
+
+### The setup token
+
+Production derives the token from `LOOMPLANE_SECRET_KEY`, so it's the same on every start and every replica, and you never have to store it. While setup is pending, the API logs a `setup is waiting` warning on start, and its `url` field is a link that opens `/setup` with the token filled in. You can also print the link yourself:
+
+```bash
+loomplane setup-token
+# Finish setup at https://loomplane.example.com/setup?token=...
+```
+
+Add `--raw` to print only the token, for a script. Once setup is done, both forms print `Setup is complete.` instead. Run the command with the same configuration the server uses; on the production Docker stack that's `docker compose exec loomplane loomplane setup-token`. Development needs no token.
 
 ## Who can sign up
 

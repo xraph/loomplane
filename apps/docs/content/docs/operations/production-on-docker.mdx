@@ -39,20 +39,30 @@ docker compose up -d --wait --wait-timeout 240
 docker compose ps
 ```
 
-Open `https://YOUR_HOSTNAME`, create your account and organization, then connect a repository. Caddy gets and renews the certificate and forwards WebSocket and SSE traffic to the API. Health and metrics routes are blocked at the public proxy.
+Open `https://YOUR_HOSTNAME`. Setup needs a one-time token, so get the link first. The API logs it as a `setup is waiting` warning with a `url` field, and `loomplane setup-token` prints the same link:
+
+```bash
+docker compose exec loomplane loomplane setup-token
+# Finish setup at https://YOUR_HOSTNAME/setup?token=...
+```
+
+Open that link, create your account and organization, then connect a repository. Once setup is done the command prints `Setup is complete.` The token comes from `LOOMPLANE_SECRET_KEY`, so it stays the same across restarts. Caddy gets and renews the certificate and forwards WebSocket and SSE traffic to the API. Health and metrics routes are blocked at the public proxy.
 
 If GHCR requires authentication, run `docker login ghcr.io` with a token that can read the package. A newly published package may need its visibility set to public in GitHub before anonymous pulls work.
 
 ## Configuration and storage
 
-The API runs migrations before it becomes healthy, and Compose starts the worker after that check passes. Both run as UID 10001 with a read-only root filesystem, dropped capabilities, a PID limit and a temporary `/tmp`. The API gets a writable artifact volume. Neither container gets the host's Docker socket. Connections to deployment targets use Loomplane's normal credential and approval flow.
+The API runs migrations before it becomes healthy, and Compose starts the worker after that check passes. Both run as UID 10001 with a read-only root filesystem, dropped capabilities, a PID limit and a temporary `/tmp`. The API gets a writable artifact volume, and the worker gets its own scratch volume for repository checkouts. Neither container gets the host's Docker socket. Connections to deployment targets use Loomplane's normal credential and approval flow.
 
 | Volume | Contents |
 |---|---|
 | `postgres-data` | Accounts, credentials, jobs, deployment state and audit records |
 | `artifact-data` | Deployment source artifacts and local recovery objects |
+| `analysis-work` | The worker's scratch space for repository checkouts |
 | `caddy-data` | TLS certificates and Caddy's certificate authority state |
 | `caddy-config` | Caddy's saved runtime configuration |
+
+One analysis can unpack up to 2 GiB of source, which is more than the 1 GiB RAM-backed `/tmp`, so checkouts go to `analysis-work` on disk. Keep a few GiB free on the host for it. The worker runs two analyses at once by default. Set `LOOMPLANE_ANALYSIS_CONCURRENCY` in `.env` to change that (the minimum is 1). Each extra analysis needs more disk and more memory, so raise the worker's `mem_limit` in `compose.yaml` along with it. The volume is only scratch space, so you don't need to back it up.
 
 Volume names carry the Compose project prefix `loomplane-production`, so keep that project name stable across upgrades. `docker compose down` keeps the data, and `docker compose down --volumes` deletes it.
 
