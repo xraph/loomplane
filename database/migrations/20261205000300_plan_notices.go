@@ -15,7 +15,7 @@ import (
 //
 // The roles are the ones security.MemberRolesWith(DeploymentApprove) lists,
 // and a Go test pins that list. The 'owner','admin' list in the function
-// below must match notifications.MemberRolesWith(deployment:approve).
+// below must match security.MemberRolesWith(deployment:approve).
 func init() {
 	App.Add(
 		func(ctx context.Context, db *migrate.DB) error {

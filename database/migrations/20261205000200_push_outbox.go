@@ -10,7 +10,8 @@ import (
 // An outbox row gains a push step. push_state says where it stands,
 // push_devices remembers what each phone got so a retried row never pushes
 // twice, and push_collapse is the collapse ID the push used. inbox_id is
-// the inbox item the row wrote, and the trigger on it tells the realtime
+// the inbox item the row wrote (the column is older than this migration, so
+// Down leaves it), and the trigger on it tells the realtime
 // stream a notification exists. Rows that were already finished never push.
 func init() {
 	App.Add(
@@ -44,7 +45,6 @@ END $$`,
 			for _, q := range []string{
 				`DROP TRIGGER IF EXISTS loomplane_notification_created ON loomplane_notification_outbox`,
 				`DROP FUNCTION IF EXISTS loomplane_notification_created()`,
-				`ALTER TABLE loomplane_notification_outbox DROP COLUMN IF EXISTS inbox_id`,
 				`ALTER TABLE loomplane_notification_outbox DROP COLUMN IF EXISTS push_collapse`,
 				`ALTER TABLE loomplane_notification_outbox DROP COLUMN IF EXISTS push_devices`,
 				`ALTER TABLE loomplane_notification_outbox DROP COLUMN IF EXISTS push_state`,
