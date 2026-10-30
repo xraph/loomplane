@@ -35,6 +35,10 @@ const automationCantCreate = "Loomplane automation can't create deployments in t
 // watch gives up on it.
 const neverStarted = time.Hour
 
+// rollbackStale is why a person has to roll a breached release back when
+// its rollback plan went stale for a reason other than a newer release.
+const rollbackStale = "the rollback plan went stale before it could deploy; roll the release back yourself"
+
 // createTimeout bounds planning a rollback, apart from the tick's budget.
 const createTimeout = 30 * time.Second
 
@@ -335,8 +339,23 @@ func (s *Service) rollBack(ctx context.Context, w *Watch, now time.Time) error {
 		return blocked(reason)
 	case planning.StatusFailed:
 		return blocked(plan.Error)
-	case planning.StatusRejected, planning.StatusExpired, planning.StatusSuperseded:
+	case planning.StatusRejected, planning.StatusExpired:
 		return blocked("its plan was " + plan.Status + ".")
+	case planning.StatusSuperseded:
+		// Someone planned the environment again; the release is theirs
+		// to move.
+		return s.supersede(ctx, w, now, "A newer plan for "+w.Environment+" superseded the rollback plan before it deployed.")
+	case planning.StatusStale:
+		// What's deployed changed after the rollback was planned. When a
+		// newer release is why, the release is that one's.
+		newer, err := s.superseded(ctx, w)
+		if err != nil {
+			return err
+		}
+		if newer != "" {
+			return s.supersede(ctx, w, now, newer)
+		}
+		return s.settle(ctx, w, now, StatusRollbackBlocked, w.Verdict, rollbackStale)
 	case planning.StatusApproved:
 		// Approving a plan that can't deploy records the decision and
 		// deploys nothing.
@@ -344,8 +363,9 @@ func (s *Service) rollBack(ctx context.Context, w *Watch, now time.Time) error {
 			return blocked("its plan has nothing it can deploy.")
 		}
 		return s.followDeployment(ctx, w, now, plan)
+	default:
+		return blocked(fmt.Sprintf("its plan is %q, which Loomplane doesn't expect.", plan.Status))
 	}
-	return nil
 }
 
 // approve approves a ready rollback plan once. When the automation may
@@ -393,6 +413,18 @@ func (s *Service) followDeployment(ctx context.Context, w *Watch, now time.Time,
 	case deployments.StatusSucceeded:
 		return s.settle(ctx, w, now, StatusRolledBack, w.Verdict, w.Reason)
 	case deployments.StatusFailed:
+		// The runner refused it because a newer release deployed first:
+		// the release is that one's now.
+		if d.Error == deployments.StaleRollback {
+			newer, err := s.superseded(ctx, w)
+			if err != nil {
+				return err
+			}
+			if newer == "" {
+				newer = "A newer release deployed after the rollback was approved, so this one isn't rolled back."
+			}
+			return s.supersede(ctx, w, now, newer)
+		}
 		return s.settle(ctx, w, now, StatusRollbackFailed, w.Verdict, "The rollback deployment failed: "+d.Error)
 	case deployments.StatusCancelled:
 		return s.settle(ctx, w, now, StatusRollbackFailed, w.Verdict, "The rollback deployment was cancelled.")

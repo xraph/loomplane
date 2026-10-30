@@ -653,3 +653,66 @@ func TestMemWatches_rollbackPlanIsTheNewest(t *testing.T) {
 		t.Fatalf("plan %q", id)
 	}
 }
+
+// rollingBack is a watching rig whose breach planned plan_rb1, then moved
+// to status.
+func rollingBack(t *testing.T, status string) *rig {
+	t.Helper()
+	r := watching(t)
+	r.candidates(failed)
+	r.tickAt(t, firstJudged)
+	r.plans.setStatus(status)
+	return r
+}
+
+// A rollback plan that went stale because a newer release deployed
+// leaves the release to that one.
+func TestTick_aStaleRollbackPlanAfterANewerRelease(t *testing.T) {
+	r := rollingBack(t, planning.StatusStale)
+	r.history.push(planning.ReleaseRecord{DeploymentID: "dep_2", PlanID: "plan_2", Kind: planning.KindPromotion, Status: deployments.StatusSucceeded, StartedAt: finished.Add(5 * time.Minute)})
+	w := r.tickAt(t, firstJudged+time.Minute)
+	if w.Status != StatusSuperseded || !w.Unverified || w.SettledAt == nil {
+		t.Fatalf("watch %+v", w)
+	}
+}
+
+// A rollback plan that went stale for any other reason leaves the
+// rollback to a person.
+func TestTick_aStaleRollbackPlan(t *testing.T) {
+	r := rollingBack(t, planning.StatusStale)
+	w := r.tickAt(t, firstJudged+time.Minute)
+	if w.Status != StatusRollbackBlocked || w.Reason != "the rollback plan went stale before it could deploy; roll the release back yourself" {
+		t.Fatalf("watch %+v", w)
+	}
+}
+
+// A plan status the watch doesn't know never leaves it waiting.
+func TestTick_aRollbackPlanInAnUnknownStatus(t *testing.T) {
+	r := rollingBack(t, "archived")
+	w := r.tickAt(t, firstJudged+time.Minute)
+	if w.Status != StatusRollbackBlocked || w.Reason != `Loomplane couldn't roll the release back: its plan is "archived", which Loomplane doesn't expect.` {
+		t.Fatalf("watch %+v", w)
+	}
+}
+
+// A person's newer plan superseded the rollback plan: the release is
+// theirs to move, so the watch is superseded, not blocked.
+func TestTick_aPersonsPlanSupersedesTheRollback(t *testing.T) {
+	r := rollingBack(t, planning.StatusSuperseded)
+	w := r.tickAt(t, firstJudged+time.Minute)
+	if w.Status != StatusSuperseded || !w.Unverified || w.Reason != "A newer plan for production superseded the rollback plan before it deployed." {
+		t.Fatalf("watch %+v", w)
+	}
+}
+
+// The runner refused the approved rollback because a newer release
+// deployed first: the watch is superseded.
+func TestTick_aRollbackRefusedAsStaleSupersedes(t *testing.T) {
+	r := rollingBack(t, planning.StatusApproved)
+	r.history.push(planning.ReleaseRecord{DeploymentID: "dep_2", PlanID: "plan_2", Kind: planning.KindPromotion, Status: deployments.StatusSucceeded, StartedAt: finished.Add(5 * time.Minute)})
+	r.deployments.put(&deployments.Deployment{ID: "dep_rb", PlanID: "plan_rb1", Status: deployments.StatusFailed, Error: deployments.StaleRollback})
+	w := r.tickAt(t, firstJudged+time.Minute)
+	if w.Status != StatusSuperseded || !w.Unverified || w.Reason != "A newer release, dep_2, started before the watch finished, so this one isn't judged or rolled back." {
+		t.Fatalf("watch %+v", w)
+	}
+}
