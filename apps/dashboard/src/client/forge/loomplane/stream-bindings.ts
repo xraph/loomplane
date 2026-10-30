@@ -238,6 +238,15 @@ export const streams = [
   {
     kind: 'entity',
     channel: '/api/v1/realtime/events',
+    message: 'cloud_cluster.updated',
+    entity: 'ClusterChange',
+    intent: 'patch',
+    invalidates: ['CloudCluster', 'CloudClusterPage', 'CloudClusterOperation', 'CloudClusterOperationPage', 'Target', 'Target[]', 'Connection', 'Connection[]', 'Profile', 'Profile[]'],
+    decode: (payload: unknown) => decode(payload, CODECS['ClusterChange']),
+  },
+  {
+    kind: 'entity',
+    channel: '/api/v1/realtime/events',
     message: 'cloud_capacity.updated',
     entity: 'CapacityChange',
     intent: 'patch',
@@ -495,6 +504,15 @@ export const streams = [
     intent: 'patch',
     invalidates: ['Sync', 'Sync[]', 'EnvironmentCloud'],
     decode: (payload: unknown) => decode(payload, CODECS['CloudSyncEvent']),
+  },
+  {
+    kind: 'entity',
+    channel: '/api/v1/realtime/ws',
+    message: 'cloud_cluster.updated',
+    entity: 'ClusterChange',
+    intent: 'patch',
+    invalidates: ['CloudCluster', 'CloudClusterPage', 'CloudClusterOperation', 'CloudClusterOperationPage', 'Target', 'Target[]', 'Connection', 'Connection[]', 'Profile', 'Profile[]'],
+    decode: (payload: unknown) => decode(payload, CODECS['ClusterChange']),
   },
   {
     kind: 'entity',

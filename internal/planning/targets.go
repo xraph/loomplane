@@ -6,12 +6,15 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/xraph/loomplane/internal/buildpolicy"
 	"github.com/xraph/loomplane/pkg/manifest"
 	"github.com/xraph/loomplane/pkg/provider"
 )
 
 // OwnedCloud identifies targets with a separate connection for each service.
-func OwnedCloud(cloud string) bool { return cloud == "server" || cloud == "kubernetes" }
+func OwnedCloud(cloud string) bool {
+	return cloud == "server" || cloud == "kubernetes" || cloud == "firecracker"
+}
 
 // ReviewedConnectionSettings copies only placement settings. Credential and
 // permission-check metadata can change without changing a destination.
@@ -21,9 +24,14 @@ func ReviewedConnectionSettings(cloud string, details map[string]string) map[str
 	case "server":
 		keys = []string{"host", "port", "user", "host_key", "docker_socket", "advertise_host", "architecture", "docker_id"}
 	case "kubernetes":
-		keys = []string{"endpoint", "context", "namespace", "namespace_uid", "cluster_ca", "tls_server_name", "ingress_class", "ingress_domain", "tls_secret", "image_pull_secret", "architecture", "storage_class", "storage_class_uid", "storage_provisioner", "storage_binding", "storage_reclaim", "storage_expansion", "persistent_storage"}
+		keys = []string{"endpoint", "context", "namespace", "namespace_uid", "cluster_ca", "tls_server_name", "ingress_class", "ingress_address", "ingress_domain", "tls_secret", "image_pull_secret", "architecture", "storage_class", "storage_class_uid", "storage_provisioner", "storage_binding", "storage_reclaim", "storage_expansion", "persistent_storage", "registry_hostname"}
+	case "firecracker":
+		keys = []string{"endpoint", "host_id", "host_ca", "architecture", "runtime_identity", "ingress_address"}
 	case "registry":
 		keys = []string{"endpoint", "repository", "auth_endpoint", "registry_ca"}
+	}
+	if details["managed_attachment_id"] != "" {
+		keys = append(keys, "managed_attachment_id", "managed_project_id", "managed_resource_id")
 	}
 	var out map[string]string
 	for _, k := range keys {
@@ -32,6 +40,22 @@ func ReviewedConnectionSettings(cloud string, details map[string]string) map[str
 				out = map[string]string{}
 			}
 			out[k] = v
+		}
+	}
+	return out
+}
+
+// ReviewedBuildSettings pins build policy without changing runtime placement.
+func ReviewedBuildSettings(cloud string, details map[string]string) map[string]string {
+	out := ReviewedConnectionSettings(cloud, details)
+	if cloud == "server" || cloud == "kubernetes" {
+		for _, key := range []string{"build_workers", "build_runtime_class", "build_runtime_identity"} {
+			if value := details[key]; value != "" {
+				if out == nil {
+					out = map[string]string{}
+				}
+				out[key] = value
+			}
 		}
 	}
 	return out
@@ -49,6 +73,8 @@ func (p *planner) targetConnection(name, path, role, cloud, id string) *Connecti
 		code, message = role+"-gone", fmt.Sprintf("%s names a %s connection that isn't in this organization. Choose an existing connection.", name, role)
 	case p.in.Connections[i].Cloud != cloud:
 		code, message = role+"-cloud", fmt.Sprintf("%s needs a %s %s, but %s is a %s connection.", name, cloudTitle(cloud), role, p.in.Connections[i].Name, cloudTitle(p.in.Connections[i].Cloud))
+	case p.in.Connections[i].Details["managed_attachment_id"] != "" && (p.in.ProjectID == "" || p.in.Connections[i].Details["managed_project_id"] != p.in.ProjectID):
+		code, message = role+"-project", "This managed namespace belongs to another project."
 	case !p.in.Connections[i].Ready && (!pullOnly || !p.in.Connections[i].PullReady):
 		code, message = role+"-not-ready", fmt.Sprintf("%s's %s connection %s isn't ready. Check it under Integrations.", name, role, p.in.Connections[i].Name)
 	default:
@@ -97,22 +123,57 @@ func (p *planner) configureTarget(name, base string, prov *provider.Provider, se
 		cfg.TargetSettings = ReviewedConnectionSettings(c.Cloud, c.Details)
 	}
 	p.serviceGPU(name, base, prov, set, cfg, c)
+	if prov.Cloud == "firecracker" {
+		if c != nil {
+			if err := buildpolicy.CheckBackend(c.Details, c.Cloud, c.Pooled); err != nil {
+				p.problem(Finding{Code: "runtime-isolation-required", Subject: ServiceSubject, Name: name, Path: base + ".target", Message: err.Error()})
+			}
+		}
+		if cfg.Catalog != nil || cfg.Component != nil || cfg.GPU != nil || (set.Size != nil && set.Size.GPU != nil) {
+			p.problem(Finding{Code: "firecracker-stateless-only", Subject: ServiceSubject, Name: name, Path: base, Message: "Firecracker supports stateless application services without catalog compositions or GPUs."})
+		}
+	}
 	b := set.Build
 	if b == nil {
 		b = &manifest.Build{}
 	}
 	build := &BuildTarget{Builder: b.Builder, Registry: b.Registry, Image: b.Image}
-	if build.Image == "" {
-		if build.Builder == "" && prov.Cloud == "server" {
+	cfg.BuildTarget = build
+	if cfg.ManagedKubernetesBuild() {
+		if c != nil {
+			build.BuilderSettings = ReviewedBuildSettings(c.Cloud, c.Details)
+			if err := buildpolicy.Check(c.Details, true, c.Pooled); err != nil {
+				p.problem(Finding{Code: "build-isolation-required", Subject: ServiceSubject, Name: name, Path: base + ".build", Message: err.Error()})
+			}
+		}
+		p.warn(Finding{Code: "managed-kubernetes-build", Subject: ServiceSubject, Name: name, Path: base + ".build", Message: "This cluster builds with rootless BuildKit and shares a persistent registry across its connection. The first deployment provisions a 20 GiB retained volume, registry credentials and a TLS ingress. Your registry hostname must resolve to that ingress. Removing a service retains its images."})
+		if c == nil || c.Details["managed_builds"] != "ready" {
+			p.problem(Finding{Code: "kubernetes-build-unavailable", Subject: ServiceSubject, Name: name, Path: base + ".build", Message: "Check this cluster's managed build setup under Integrations. It needs retained storage, cert-manager, ingress, and build pod permissions."})
+		}
+	} else if build.Image == "" {
+		if build.Builder == "" && (prov.Cloud == "server" || prov.Cloud == "firecracker") {
 			build.Builder = cfg.Target
 		}
-		if builder := p.targetConnection(name, base+".build.builder", "builder", "server", build.Builder); builder != nil {
-			build.BuilderSettings = ReviewedConnectionSettings(builder.Cloud, builder.Details)
+		builderCloud := "server"
+		for _, option := range p.in.Connections {
+			if option.ID == build.Builder && option.Cloud == "firecracker" {
+				builderCloud = "firecracker"
+				build.BuilderCloud = builderCloud
+			}
+		}
+		if builder := p.targetConnection(name, base+".build.builder", "builder", builderCloud, build.Builder); builder != nil {
+			build.BuilderSettings = ReviewedBuildSettings(builder.Cloud, builder.Details)
+			if err := buildpolicy.CheckBackend(builder.Details, builder.Cloud, builder.Pooled); err != nil {
+				p.problem(Finding{Code: "build-isolation-required", Subject: ServiceSubject, Name: name, Path: base + ".build.builder", Message: err.Error()})
+			}
+			if (prov.Cloud == "firecracker" || builder.Cloud == "firecracker") && c != nil && builder.Details["architecture"] != c.Details["architecture"] {
+				p.problem(Finding{Code: "build-architecture", Subject: ServiceSubject, Name: name, Path: base + ".build.builder", Message: "Choose a builder with the same architecture as the application host."})
+			}
 			if cfg.CapacityIntent != nil && builder.Details["architecture"] != cfg.CapacityIntent.Demand.Architecture {
 				p.problem(Finding{Code: "capacity-architecture", Subject: ServiceSubject, Name: name, Path: base + ".build.builder", Message: "The builder must match the approved pool architecture."})
 			}
 		}
-		if prov.Cloud == "kubernetes" || build.Builder != cfg.Target {
+		if prov.Cloud == "kubernetes" || builderCloud == "firecracker" || build.Builder != cfg.Target {
 			p.targetConnection(name, base+".build.registry", "registry", "registry", build.Registry)
 		}
 	}
@@ -133,7 +194,7 @@ func (p *planner) configureTarget(name, base string, prov *provider.Provider, se
 	if cfg.Image == "" && b.Context != "" {
 		cfg.Context = b.Context
 	}
-	if prov.Cloud == "server" && cfg.Scale != nil && (cfg.Scale.Min != 1 || cfg.Scale.Max != 1) {
+	if (prov.Cloud == "server" || prov.Cloud == "firecracker") && cfg.Scale != nil && (cfg.Scale.Min != 1 || cfg.Scale.Max != 1) {
 		p.problem(Finding{Code: "server-scale", Subject: ServiceSubject, Name: name, Path: base + ".scale", Message: "An existing server runs one container per service. Use min: 1 and max: 1, or choose Kubernetes for replicas."})
 	}
 	if prov.Cloud == "kubernetes" && cfg.Scale != nil && cfg.Scale.Min != cfg.Scale.Max && (c == nil || c.Details["hpa"] != "ready") {
@@ -142,7 +203,7 @@ func (p *planner) configureTarget(name, base string, prov *provider.Provider, se
 	if prov.Cloud == "kubernetes" && cfg.Scale != nil && cfg.Scale.Min != cfg.Scale.Max && cfg.Scale.Min == 0 {
 		p.problem(Finding{Code: "hpa-minimum", Subject: ServiceSubject, Name: name, Path: base + ".scale.min", Message: "CPU-based Kubernetes autoscaling needs at least one replica. Choose min: 1 or a fixed replica count."})
 	}
-	if cfg.Public && prov.Cloud == "server" && (cfg.Endpoint == nil || cfg.Endpoint.HostPort == 0) {
+	if cfg.Public && (prov.Cloud == "server" || prov.Cloud == "firecracker") && (cfg.Endpoint == nil || cfg.Endpoint.HostPort == 0) {
 		p.problem(Finding{Code: "host-port-required", Subject: ServiceSubject, Name: name, Path: base + ".endpoint.host_port", Message: "Choose the host port this server publishes for the service."})
 	}
 	if cfg.Public && prov.Cloud == "kubernetes" && (cfg.Endpoint == nil || cfg.Endpoint.Hostname == "") {
@@ -153,12 +214,33 @@ func (p *planner) configureTarget(name, base string, prov *provider.Provider, se
 	}
 }
 
+// ManagedKubernetesBuild uses the cluster's managed registry when the service
+// has no explicit external builder, registry or existing image.
+func (c *ServiceConfig) ManagedKubernetesBuild() bool {
+	return c != nil && c.Provider == "kubernetes" && c.TargetSettings["registry_hostname"] != "" && c.BuildTarget != nil && c.BuildTarget.Builder == "" && c.BuildTarget.Registry == "" && c.BuildTarget.Image == ""
+}
+
+// ImageRegistry identifies the registry across promotions without pretending
+// that a cluster's managed registry is a separate credential connection.
+func (c *ServiceConfig) ImageRegistry() string {
+	if c.ManagedKubernetesBuild() {
+		return "kubernetes/" + c.Target + "/" + c.TargetSettings["namespace_uid"] + "/" + c.TargetSettings["registry_hostname"]
+	}
+	if c != nil && c.BuildTarget != nil {
+		return c.BuildTarget.Registry
+	}
+	return ""
+}
+
 func sameTargetNetwork(a, b *ServiceConfig, cloudA, cloudB string) bool {
 	if a == nil || b == nil || cloudA != cloudB || !OwnedCloud(cloudA) || a.Target == "" || b.Target == "" {
 		return false
 	}
 	if a.Target == b.Target {
 		return true
+	}
+	if cloudA == "firecracker" {
+		return a.TargetSettings["host_id"] != "" && a.TargetSettings["host_id"] == b.TargetSettings["host_id"] && a.TargetSettings["host_ca"] == b.TargetSettings["host_ca"]
 	}
 	if cloudA == "server" {
 		return a.TargetSettings["docker_id"] != "" && a.TargetSettings["docker_id"] == b.TargetSettings["docker_id"]
@@ -172,10 +254,13 @@ func (p *planner) checkTargetPlacements() {
 	for _, name := range slices.Sorted(maps.Keys(p.services)) {
 		a := p.services[name]
 		cfg := a.Service
-		if cfg == nil || a.Provider != "server" || !cfg.Public || cfg.Endpoint == nil || cfg.Endpoint.HostPort == 0 {
+		if cfg == nil || (a.Provider != "server" && a.Provider != "firecracker") || !cfg.Public || cfg.Endpoint == nil || cfg.Endpoint.HostPort == 0 {
 			continue
 		}
 		scope := cfg.TargetSettings["docker_id"]
+		if a.Provider == "firecracker" {
+			scope = "firecracker:" + cfg.TargetSettings["host_id"]
+		}
 		if scope == "" {
 			scope = cfg.Target
 		}

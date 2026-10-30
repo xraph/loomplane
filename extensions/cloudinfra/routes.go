@@ -38,6 +38,12 @@ type route struct {
 }
 
 func (e *Extension) routes(r forge.Router, guard identity.Guard) error {
+	if err := e.registryRoutes(r, guard); err != nil {
+		return err
+	}
+	if err := e.clusterRoutes(r, guard); err != nil {
+		return err
+	}
 	if err := e.domainRoutes(r, guard); err != nil {
 		return err
 	}

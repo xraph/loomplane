@@ -30,6 +30,7 @@ import (
 	"github.com/xraph/loomplane/internal/clouds/registry"
 	"github.com/xraph/loomplane/internal/clouds/server"
 	"github.com/xraph/loomplane/internal/connections"
+	fc "github.com/xraph/loomplane/internal/firecracker"
 	"github.com/xraph/loomplane/internal/infrastructure"
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/recipes"
@@ -46,7 +47,8 @@ const labelImage = owned.LabelImage
 // OwnedTarget keeps the existing Ctrl Plane lifecycle and stores runtime
 // credentials in Vault. Its adapters read the selected connection on each call.
 type OwnedTarget struct {
-	RouteGuard RuntimeRemovalGuard
+	RouteGuard           RuntimeRemovalGuard
+	FirecrackerAuthority fc.Issuer
 
 	Cloud       string
 	Ctrl        CtrlPlane
@@ -122,6 +124,9 @@ func (e *OwnedTarget) connection(ctx context.Context, org, connection string, la
 	if c == nil || c.ID != connection || c.OrgID != org || c.Cloud != e.Cloud || c.Status != connections.StatusReady {
 		return nil, nil, errors.New("the recorded target connection is not ready")
 	}
+	if !connections.ManagedProjectAllowed(c, labels[owned.LabelProject]) {
+		return nil, nil, errors.New("the managed namespace belongs to another project")
+	}
 	var reviewed map[string]string
 	if checkErr := json.Unmarshal([]byte(labels[owned.LabelSettings]), &reviewed); checkErr != nil {
 		return nil, nil, errors.New("the target has no reviewed placement")
@@ -194,6 +199,24 @@ func (e *OwnedTarget) ComponentTransport(ctx context.Context, b *planning.Bindin
 	}
 	labels := owned.ForOperation(inst.Labels, "read")
 	switch e.Cloud {
+	case connections.Firecracker:
+		client, sessionErr := e.firecrackerSession(ctx, b.OrgID, b.ConnectionID, labels)
+		if sessionErr != nil {
+			return nil, nil, sessionErr
+		}
+		record, readErr := client.Inspect(ctx, fcScope(iid, labels))
+		if readErr != nil {
+			client.Close()
+			return nil, nil, readErr
+		}
+		if record.Current == nil || record.Current.Spec.Port != port {
+			client.Close()
+			return nil, nil, fc.ErrInvalid
+		}
+		transport := &http.Transport{DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			return client.DialService(ctx, readFirecracker(record))
+		}}
+		return transport, closerFunc(func() error { transport.CloseIdleConnections(); client.Close(); return nil }), nil
 	case connections.Server:
 		client, sessionErr := e.serverSession(b.OrgID, b.ConnectionID)(ctx, labels)
 		if sessionErr != nil {
@@ -311,6 +334,8 @@ func (e *OwnedTarget) Register(org, connection string) string {
 		backend = e.Backend(org, connection)
 	case e.Cloud == connections.Server:
 		backend = &server.Runtime{Session: e.serverSession(org, connection), Values: e.values, Ports: e.Ports, GPULocks: e.GPULocks}
+	case e.Cloud == connections.Firecracker:
+		backend = &firecrackerBackend{target: e, org: org, connection: connection}
 	default:
 		backend = e.kubernetesBackend(org, connection)
 	}
@@ -443,7 +468,7 @@ func (e *OwnedTarget) Apply(ctx context.Context, job *Job) (out *Outcome, err er
 	}
 	builder := e.Builder
 	if builder == nil {
-		builder = &ImageBuilder{Dial: e.ServerDial}
+		builder = &ImageBuilder{Dial: e.ServerDial, FirecrackerAuthority: e.FirecrackerAuthority}
 	}
 	if state.EffectStage == "" && len(job.Resume) == 0 {
 		state.EffectStage = "building"
@@ -618,7 +643,7 @@ func ownedSpec(job *Job, image string, state ownedState) (sp cpprovider.ServiceS
 		labels[owned.LabelScaleMin] = strconv.Itoa(cfg.Scale.Min)
 		labels[owned.LabelScaleMax] = strconv.Itoa(cfg.Scale.Max)
 	}
-	if job.Action.Provider == "server" && cfg.Component == nil {
+	if (job.Action.Provider == "server" || job.Action.Provider == "firecracker") && cfg.Component == nil {
 		cpu, memory, err := planning.ServerResources(cfg.Size)
 		if err == nil {
 			sp.Resources.CPUMillis = int(cpu)
@@ -641,6 +666,9 @@ func ownedSpec(job *Job, image string, state ownedState) (sp cpprovider.ServiceS
 		if sp.Resources.CPUMillis == 0 {
 			sp.Resources.CPUMillis = 100
 		}
+	}
+	if job.Action.Provider == "kubernetes" {
+		sp.Resources.CPUMillis, sp.Resources.MemoryMB = planning.OwnedWorkloadResources(cfg)
 	}
 	labels[owned.LabelManageIngress] = strconv.FormatBool(cfg.Public)
 	if cfg.Farp != nil && job.Connection.Cloud == connections.Kubernetes {
@@ -699,6 +727,13 @@ func (e *OwnedTarget) validateTarget(ctx context.Context, labels map[string]stri
 			return err
 		}
 		return c.Close()
+	}
+	if e.Cloud == connections.Firecracker {
+		c, err := e.firecrackerSession(ctx, org, connection, labels)
+		if c != nil {
+			c.Close()
+		}
+		return err
 	}
 	_, err := e.kubernetesSession(org, connection)(ctx, labels)
 	return err

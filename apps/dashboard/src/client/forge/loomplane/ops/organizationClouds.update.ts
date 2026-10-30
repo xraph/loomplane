@@ -1,6 +1,6 @@
 import type { OperationMeta } from '../ops';
+import { codec_CloudprofilesUpdateInputBody } from '../codecs/CloudprofilesUpdateInputBody';
 import { codec_Profile } from '../codecs/Profile';
-import { codec_UpdateInputBody } from '../codecs/UpdateInputBody';
 
 export const op_organizationClouds_update = {
   method: 'PUT',
@@ -9,6 +9,6 @@ export const op_organizationClouds_update = {
   rootType: 'Profile',
   provides: ['Profile:{id}'],
   invalidates: ['Profile[]'],
-  bodyCodec: codec_UpdateInputBody,
+  bodyCodec: codec_CloudprofilesUpdateInputBody,
   responseCodec: codec_Profile,
 } as const satisfies OperationMeta;

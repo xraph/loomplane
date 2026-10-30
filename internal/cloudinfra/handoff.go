@@ -88,6 +88,10 @@ func (s *Service) PrepareRouteHandoff(ctx context.Context, p security.Principal,
 			return nil, ErrInvalid
 		}
 		desired.ID, desired.Owner = source.Receipt.ID, source.Receipt.Owner
+		desired.Proxied = source.Receipt.Proxied
+		if desired.Proxied {
+			desired.TTL = 300
+		}
 	}
 	destination := *source
 	destination.Input, destination.Binding = input, binding
@@ -176,6 +180,10 @@ func (s *Service) RollbackRoute(ctx context.Context, p security.Principal, proje
 	}
 	if receipt != nil {
 		record.ID, record.Owner = receipt.ID, receipt.Owner
+		record.Proxied = receipt.Proxied
+		if record.Proxied {
+			record.TTL = 300
+		}
 		// A failed pre-DNS cutover leaves the source record unchanged, including TTL.
 		if !cutover.DNSAttempted && receipt.Value == source.Binding.Address {
 			record = *receipt

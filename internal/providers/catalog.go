@@ -1,6 +1,7 @@
 // Package providers is Loomplane's catalog of deployment targets: the
 // clouds and platforms a plan can name, described with pkg/provider.
 //
+// Infrastructure capability declarations do not establish runtime readiness.
 // Nothing here talks to a cloud: internal/deployments has the adapters.
 // A target without one, or one paused in the configuration, is described
 // but not available, and plans that use it are for review only.
@@ -258,6 +259,7 @@ func catalogWith(kinds *recipes.Registry, features map[string]bool) []provider.P
 			// internal/clouds/azure).
 			Available: true,
 		},
+		{Name: "firecracker", Title: "Firecracker microVM", Cloud: "firecracker", BuildLogs: "polled", Description: "Runs stateless applications and isolated builds in microVMs on a Linux host.", Model: provider.Instance, Runs: containerWorkloads("Firecracker microVM"), Available: true},
 		{
 			Name: "server", Title: "Existing server", Cloud: "server",
 			BuildLogs:   "streamed",

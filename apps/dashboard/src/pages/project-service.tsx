@@ -25,6 +25,7 @@ import type {
 } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
 import { AddHostnameDialog } from "@/components/domains/add-hostname-dialog"
+import { EdgeCacheButton } from "@/components/domains/edge-cache-dialog"
 import { useRouteLifecycle } from "@/components/domains/use-route-lifecycle"
 import { Page, PageHeading } from "@/components/page"
 import {
@@ -925,6 +926,12 @@ function Domains({
                 <span className="min-w-0 flex-1 truncate font-mono text-[12.5px] font-medium">
                   {r.input.hostname}
                 </span>
+                <EdgeCacheButton
+                  projectId={projectId}
+                  routeId={r.id}
+                  hostname={r.input.hostname}
+                  writable={mayRoute}
+                />
                 {mayRoute && (
                   <Button
                     type="button"

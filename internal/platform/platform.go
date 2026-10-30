@@ -120,6 +120,8 @@ func Extensions(cfg config.Config) []forge.Extension {
 	jobs.WithCapacity(deployments.CapacityOptions(owner(), cfg.Orchestration.Concurrency), deployments.BindCapacityWorker)
 	jobs.WithBuild(deployments.CanaryOptions(owner(), cfg.Orchestration.Concurrency), func(w *drt.Worker) { deployments.BindWorker(orchestration.CanaryBuild, w) })
 
+	jobs.WithBuild(deployments.ManagedWorkloadOptions(owner(), cfg.Orchestration.Concurrency), func(w *drt.Worker) { deployments.BindWorker(orchestration.ManagedWorkloadBuild, w) })
+
 	// Provider plugins, described when the first extension that needs
 	// them registers.
 	plugs := plugins.NewSet(cfg.Providers.Plugins)

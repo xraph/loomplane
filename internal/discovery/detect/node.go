@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"path"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -51,6 +52,7 @@ type nodeFramework struct {
 // second look (see nodeRefine).
 var nodeFrameworks = map[string]nodeFramework{
 	"next":                  {"next", discovery.Web},
+	"@vitejs/plugin-rsc":    {"vite-rsc", discovery.Web},
 	"nuxt":                  {"nuxt", discovery.Web},
 	"@remix-run/react":      {"remix", discovery.Web},
 	"@react-router/dev":     {"react-router", discovery.Web},
@@ -370,6 +372,14 @@ func nodeUnit(repo discovery.Repo, r *discovery.Report, p *nodePackage, byName m
 	}
 	nodeRefine(repo, p, &u)
 	nodeAppEvidence(repo, p, &u)
+	// RSC builds serve requests at runtime. An optional index.html does not
+	// make the same application a static Vite site.
+	for _, fw := range u.Frameworks {
+		if fw.Name == "vite-rsc" && fw.Confidence == discovery.Likely {
+			u.Frameworks = slices.DeleteFunc(u.Frameworks, func(f discovery.Framework) bool { return f.Name == "vite" })
+			break
+		}
+	}
 	sort.Slice(u.DependsOn, func(i, j int) bool { return u.DependsOn[i].Unit < u.DependsOn[j].Unit })
 	sortFrameworks(u.Frameworks)
 	sortResources(u.Resources)
@@ -419,6 +429,7 @@ func nodeRefine(repo discovery.Repo, p *nodePackage, u *discovery.Unit) {
 // shared package that only uses the framework's APIs (a component library
 // on Next.js) has none.
 var nodeAppConfigs = map[string][]string{
+	"vite-rsc":       {"vite.config.ts", "vite.config.js", "vite.config.mts", "vite.config.mjs", "vite.config.cts", "vite.config.cjs"},
 	"next":           {"next.config.js", "next.config.mjs", "next.config.ts", "next.config.cjs"},
 	"nuxt":           {"nuxt.config.ts", "nuxt.config.js", "nuxt.config.mjs"},
 	"remix":          {"remix.config.js", "vite.config.ts", "vite.config.js"},
@@ -439,7 +450,8 @@ var nodeAppConfigs = map[string][]string{
 
 // nodeAppCommands are the CLIs an app's scripts run.
 var nodeAppCommands = map[string]string{
-	"next": "next", "nuxt": "nuxt", "remix": "remix", "react-router": "react-router", "sveltekit": "vite",
+	"vite-rsc": "vite",
+	"next":     "next", "nuxt": "nuxt", "remix": "remix", "react-router": "react-router", "sveltekit": "vite",
 	"astro": "astro", "gatsby": "gatsby", "create-react-app": "react-scripts", "angular": "ng",
 	"vue-cli": "vue-cli-service", "docusaurus": "docusaurus", "vitepress": "vitepress",
 	"tanstack-start": "vinxi", "solid-start": "vinxi", "qwik-city": "vite",

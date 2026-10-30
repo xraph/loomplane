@@ -809,7 +809,8 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 		maps.Copy(placed, placements)
 		maps.Copy(placed, composedPlacements(resolved, plan.Environment, composed, assignment, options))
 		result = Compute(Input{
-			Catalog: plan.Catalog, Routes: routes, Zones: zones, DatabaseGatewayTrust: trust,
+			ProjectID: plan.ProjectID,
+			Catalog:   plan.Catalog, Routes: routes, Zones: zones, DatabaseGatewayTrust: trust,
 			Federation: federation, CloudPlacements: placed, UnverifiedPlacements: unverifiedPlacements(resolved, plan.Environment, composed, assignment, options), CapacityIntents: intents,
 			Environment: plan.Environment, Graph: g, Manifest: resolved, Providers: s.providers, Bindings: bindings,
 			Connections: options, Chosen: chosen, Held: held, Excluded: excluded,
@@ -832,6 +833,10 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 	}
 	if frontendErr := s.pinFrontendDemands(ctx, plan, result); frontendErr != nil {
 		result.Problems = append(result.Problems, Finding{Code: "frontend-governance", Message: frontendErr.Error()})
+		result.Executable = false
+	}
+	if workloadErr := s.PrepareClusterWorkloadDemands(ctx, plan, result); workloadErr != nil {
+		result.Problems = append(result.Problems, Finding{Code: "cluster-capacity", Message: workloadErr.Error()})
 		result.Executable = false
 	}
 	s.checkBackupPreview(ctx, plan, result)

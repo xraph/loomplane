@@ -113,6 +113,15 @@
           "title": "cloud_capacity.updated event",
           "summary": "SSE event: cloud_capacity.updated"
         },
+        "cloud_cluster.updated": {
+          "payload": {
+            "$ref": "#/components/schemas/ClusterChange"
+          },
+          "contentType": "text/event-stream",
+          "name": "cloud_cluster.updated",
+          "title": "cloud_cluster.updated event",
+          "summary": "SSE event: cloud_cluster.updated"
+        },
         "cloud_sync.updated": {
           "payload": {
             "$ref": "#/components/schemas/CloudSyncEvent"
@@ -557,6 +566,24 @@
           "type": "github.com/xraph/loomplane/internal/cloudprofiles.CloudSyncEvent"
         },
         {
+          "entityType": "ClusterChange",
+          "intent": "patch",
+          "invalidates": [
+            "CloudCluster",
+            "CloudClusterPage",
+            "CloudClusterOperation",
+            "CloudClusterOperationPage",
+            "Target",
+            "Target[]",
+            "Connection",
+            "Connection[]",
+            "Profile",
+            "Profile[]"
+          ],
+          "message": "cloud_cluster.updated",
+          "type": "github.com/xraph/loomplane/internal/cloudinfra.ClusterChange"
+        },
+        {
           "entityType": "CapacityChange",
           "intent": "patch",
           "invalidates": [
@@ -860,6 +887,24 @@
           "type": "github.com/xraph/loomplane/internal/cloudprofiles.CloudSyncEvent"
         },
         {
+          "entityType": "ClusterChange",
+          "intent": "patch",
+          "invalidates": [
+            "CloudCluster",
+            "CloudClusterPage",
+            "CloudClusterOperation",
+            "CloudClusterOperationPage",
+            "Target",
+            "Target[]",
+            "Connection",
+            "Connection[]",
+            "Profile",
+            "Profile[]"
+          ],
+          "message": "cloud_cluster.updated",
+          "type": "github.com/xraph/loomplane/internal/cloudinfra.ClusterChange"
+        },
+        {
           "entityType": "CapacityChange",
           "intent": "patch",
           "invalidates": [
@@ -937,6 +982,9 @@
         },
         {
           "$ref": "#/channels/api-v1-realtime-events/messages/cloud_capacity.updated"
+        },
+        {
+          "$ref": "#/channels/api-v1-realtime-events/messages/cloud_cluster.updated"
         },
         {
           "$ref": "#/channels/api-v1-realtime-events/messages/cloud_sync.updated"
@@ -1417,36 +1465,6 @@
             "type": "boolean"
           },
           "target_id": {
-            "type": "string"
-          }
-        }
-      },
-      "CapacityChange": {
-        "type": "object",
-        "required": [
-          "org_id",
-          "cloud_id",
-          "kind",
-          "entity_id",
-          "revision"
-        ],
-        "properties": {
-          "cloud_id": {
-            "type": "string"
-          },
-          "entity_id": {
-            "type": "string"
-          },
-          "kind": {
-            "type": "string"
-          },
-          "org_id": {
-            "type": "string"
-          },
-          "revision": {
-            "type": "integer"
-          },
-          "status": {
             "type": "string"
           }
         }
@@ -1961,6 +1979,9 @@
           "owner": {
             "type": "string"
           },
+          "proxied": {
+            "type": "boolean"
+          },
           "ttl": {
             "type": "integer"
           },
@@ -2221,6 +2242,60 @@
           }
         }
       },
+      "Exclusion": {
+        "type": "object",
+        "required": [
+          "kind",
+          "match",
+          "reason",
+          "keep_running",
+          "created_by",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "created_by": {
+            "type": "string"
+          },
+          "keep_running": {
+            "type": "boolean"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "match": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      },
+      "FarpConfig": {
+        "type": "object",
+        "required": [
+          "gateway",
+          "port"
+        ],
+        "properties": {
+          "gateway": {
+            "type": "string"
+          },
+          "metadata": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "port": {
+            "type": "integer"
+          }
+        }
+      },
       "Federation": {
         "type": "object",
         "properties": {
@@ -2286,6 +2361,112 @@
             "type": "string"
           },
           "subject": {
+            "type": "string"
+          }
+        }
+      },
+      "FrontendDemand": {
+        "type": "object",
+        "required": [
+          "org_id",
+          "cloud_id",
+          "target_id",
+          "project_id",
+          "environment_id",
+          "service",
+          "plan_id",
+          "provider",
+          "connection_id",
+          "account_id",
+          "target_revision",
+          "connection_generation",
+          "grant_revision"
+        ],
+        "properties": {
+          "account_id": {
+            "type": "string"
+          },
+          "cloud_id": {
+            "type": "string"
+          },
+          "connection_generation": {
+            "type": "integer"
+          },
+          "connection_id": {
+            "type": "string"
+          },
+          "environment_id": {
+            "type": "string"
+          },
+          "grant_revision": {
+            "type": "integer"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "plan_id": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "service": {
+            "type": "string"
+          },
+          "target_id": {
+            "type": "string"
+          },
+          "target_revision": {
+            "type": "integer"
+          }
+        }
+      },
+      "GPUPlacement": {
+        "type": "object",
+        "required": [
+          "kind",
+          "count"
+        ],
+        "properties": {
+          "count": {
+            "type": "integer"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "node_selector": {
+            "type": "object",
+            "additionalProperties": true
+          },
+          "tolerations": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/GPUToleration"
+            }
+          }
+        }
+      },
+      "GPUToleration": {
+        "type": "object",
+        "required": [
+          "key",
+          "operator",
+          "effect"
+        ],
+        "properties": {
+          "effect": {
+            "type": "string"
+          },
+          "key": {
+            "type": "string"
+          },
+          "operator": {
+            "type": "string"
+          },
+          "value": {
             "type": "string"
           }
         }
@@ -2622,6 +2803,22 @@
           }
         }
       },
+      "ManifestGPU": {
+        "properties": {
+          "count": {
+            "type": "integer"
+          },
+          "kind": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "kind",
+          "count"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/pkg/manifest.GPU"
+      },
       "Output": {
         "type": "object",
         "required": [
@@ -2882,6 +3079,24 @@
             "type": "integer"
           }
         }
+      },
+      "RecipesGPU": {
+        "properties": {
+          "count": {
+            "type": "integer"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "min_memory_gib": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "count"
+        ],
+        "type": "object",
+        "x-forge-type": "github.com/xraph/loomplane/internal/recipes.GPU"
       },
       "Ref": {
         "type": "object",
@@ -3428,14 +3643,23 @@
           "execution": {
             "type": "string"
           },
+          "farp": {
+            "$ref": "#/components/schemas/FarpConfig"
+          },
           "framework": {
             "type": "string"
+          },
+          "frontend_demand": {
+            "$ref": "#/components/schemas/FrontendDemand"
           },
           "gateway": {
             "type": "array",
             "items": {
               "$ref": "#/components/schemas/GatewayRoute"
             }
+          },
+          "gpu": {
+            "$ref": "#/components/schemas/GPUPlacement"
           },
           "health_path": {
             "type": "string"
@@ -3488,15 +3712,6 @@
           },
           "workload": {
             "type": "string"
-          },
-          "farp": {
-            "$ref": "#/components/schemas/FarpConfig"
-          },
-          "frontend_demand": {
-            "$ref": "#/components/schemas/FrontendDemand"
-          },
-          "gpu": {
-            "$ref": "#/components/schemas/GPUPlacement"
           }
         }
       },
@@ -3721,6 +3936,24 @@
             "type": "integer"
           },
           "mount_path": {
+            "type": "string"
+          }
+        }
+      },
+      "WeightCache": {
+        "type": "object",
+        "required": [
+          "mount_path",
+          "kubernetes_size_mb"
+        ],
+        "properties": {
+          "kubernetes_size_mb": {
+            "type": "integer"
+          },
+          "mount_path": {
+            "type": "string"
+          },
+          "size_setting": {
             "type": "string"
           }
         }
@@ -4049,6 +4282,67 @@
           }
         }
       },
+      "CapacityChange": {
+        "type": "object",
+        "required": [
+          "org_id",
+          "cloud_id",
+          "kind",
+          "entity_id",
+          "revision"
+        ],
+        "properties": {
+          "cloud_id": {
+            "type": "string"
+          },
+          "entity_id": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "org_id": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "ClusterChange": {
+        "type": "object",
+        "required": [
+          "operation_id",
+          "cloud_id",
+          "resource_id",
+          "revision",
+          "status",
+          "reason"
+        ],
+        "properties": {
+          "cloud_id": {
+            "type": "string"
+          },
+          "operation_id": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "resource_id": {
+            "type": "string"
+          },
+          "revision": {
+            "type": "integer"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
       "CloudSyncEvent": {
         "type": "object",
         "required": [
@@ -4134,6 +4428,12 @@
           "id": {
             "type": "string",
             "x-forge-id": true
+          },
+          "location_id": {
+            "type": "string"
+          },
+          "managed_resource_id": {
+            "type": "string"
           },
           "name": {
             "type": "string"
@@ -4827,218 +5127,6 @@
             "items": {
               "type": "string"
             }
-          }
-        }
-      },
-      "FarpConfig": {
-        "type": "object",
-        "required": [
-          "gateway",
-          "port"
-        ],
-        "properties": {
-          "gateway": {
-            "type": "string"
-          },
-          "metadata": {
-            "type": "object",
-            "additionalProperties": true
-          },
-          "port": {
-            "type": "integer"
-          }
-        }
-      },
-      "Exclusion": {
-        "type": "object",
-        "required": [
-          "kind",
-          "match",
-          "reason",
-          "keep_running",
-          "created_by",
-          "created_at"
-        ],
-        "properties": {
-          "created_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "created_by": {
-            "type": "string"
-          },
-          "keep_running": {
-            "type": "boolean"
-          },
-          "kind": {
-            "type": "string"
-          },
-          "match": {
-            "type": "string"
-          },
-          "name": {
-            "type": "string"
-          },
-          "reason": {
-            "type": "string"
-          }
-        }
-      },
-      "FrontendDemand": {
-        "type": "object",
-        "required": [
-          "org_id",
-          "cloud_id",
-          "target_id",
-          "project_id",
-          "environment_id",
-          "service",
-          "plan_id",
-          "provider",
-          "connection_id",
-          "account_id",
-          "target_revision",
-          "connection_generation",
-          "grant_revision"
-        ],
-        "properties": {
-          "account_id": {
-            "type": "string"
-          },
-          "cloud_id": {
-            "type": "string"
-          },
-          "connection_generation": {
-            "type": "integer"
-          },
-          "connection_id": {
-            "type": "string"
-          },
-          "environment_id": {
-            "type": "string"
-          },
-          "grant_revision": {
-            "type": "integer"
-          },
-          "org_id": {
-            "type": "string"
-          },
-          "plan_id": {
-            "type": "string"
-          },
-          "project_id": {
-            "type": "string"
-          },
-          "provider": {
-            "type": "string"
-          },
-          "service": {
-            "type": "string"
-          },
-          "target_id": {
-            "type": "string"
-          },
-          "target_revision": {
-            "type": "integer"
-          }
-        }
-      },
-      "GPUPlacement": {
-        "type": "object",
-        "required": [
-          "kind",
-          "count"
-        ],
-        "properties": {
-          "count": {
-            "type": "integer"
-          },
-          "kind": {
-            "type": "string"
-          },
-          "node_selector": {
-            "type": "object",
-            "additionalProperties": true
-          },
-          "tolerations": {
-            "type": "array",
-            "items": {
-              "$ref": "#/components/schemas/GPUToleration"
-            }
-          }
-        }
-      },
-      "GPUToleration": {
-        "type": "object",
-        "required": [
-          "key",
-          "operator",
-          "effect"
-        ],
-        "properties": {
-          "effect": {
-            "type": "string"
-          },
-          "key": {
-            "type": "string"
-          },
-          "operator": {
-            "type": "string"
-          },
-          "value": {
-            "type": "string"
-          }
-        }
-      },
-      "ManifestGPU": {
-        "properties": {
-          "count": {
-            "type": "integer"
-          },
-          "kind": {
-            "type": "string"
-          }
-        },
-        "required": [
-          "kind",
-          "count"
-        ],
-        "type": "object",
-        "x-forge-type": "github.com/xraph/loomplane/pkg/manifest.GPU"
-      },
-      "RecipesGPU": {
-        "properties": {
-          "count": {
-            "type": "integer"
-          },
-          "kind": {
-            "type": "string"
-          },
-          "min_memory_gib": {
-            "type": "integer"
-          }
-        },
-        "required": [
-          "count"
-        ],
-        "type": "object",
-        "x-forge-type": "github.com/xraph/loomplane/internal/recipes.GPU"
-      },
-      "WeightCache": {
-        "type": "object",
-        "required": [
-          "mount_path",
-          "kubernetes_size_mb"
-        ],
-        "properties": {
-          "kubernetes_size_mb": {
-            "type": "integer"
-          },
-          "mount_path": {
-            "type": "string"
-          },
-          "size_setting": {
-            "type": "string"
           }
         }
       }
@@ -5874,6 +5962,43 @@
         "title": "cloud_capacity.updated event",
         "summary": "SSE event: cloud_capacity.updated"
       },
+      "api-v1-realtime-eventscloud_cluster.updated": {
+        "payload": {
+          "type": "object",
+          "required": [
+            "operation_id",
+            "cloud_id",
+            "resource_id",
+            "revision",
+            "status",
+            "reason"
+          ],
+          "properties": {
+            "cloud_id": {
+              "type": "string"
+            },
+            "operation_id": {
+              "type": "string"
+            },
+            "reason": {
+              "type": "string"
+            },
+            "resource_id": {
+              "type": "string"
+            },
+            "revision": {
+              "type": "integer"
+            },
+            "status": {
+              "type": "string"
+            }
+          }
+        },
+        "contentType": "text/event-stream",
+        "name": "cloud_cluster.updated",
+        "title": "cloud_cluster.updated event",
+        "summary": "SSE event: cloud_cluster.updated"
+      },
       "api-v1-realtime-eventscloud_sync.updated": {
         "payload": {
           "type": "object",
@@ -5967,6 +6092,12 @@
               "type": "string",
               "x-forge-id": true
             },
+            "location_id": {
+              "type": "string"
+            },
+            "managed_resource_id": {
+              "type": "string"
+            },
             "name": {
               "type": "string"
             },
@@ -6044,6 +6175,12 @@
             "id": {
               "type": "string",
               "x-forge-id": true
+            },
+            "location_id": {
+              "type": "string"
+            },
+            "managed_resource_id": {
+              "type": "string"
             },
             "name": {
               "type": "string"

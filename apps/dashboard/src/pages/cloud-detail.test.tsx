@@ -1,5 +1,6 @@
 import { ClientProvider } from "@forge-go/client-react"
 import {
+  act,
   cleanup,
   render,
   screen,
@@ -10,6 +11,7 @@ import userEvent from "@testing-library/user-event"
 import { afterEach, expect, it, vi } from "vitest"
 
 import { forgeClient } from "@/client/runtime"
+import { publishLiveState } from "@/lib/realtime-state"
 
 import { CloudDetail } from "./cloud-detail"
 
@@ -30,6 +32,13 @@ vi.mock("@/lib/router", () => ({
 }))
 afterEach(() => {
   manager = true
+  publishLiveState({
+    status: "stale",
+    transport: "ws",
+    lastSync: 0,
+    gap: false,
+  })
+  window.history.replaceState(null, "", "/")
   cleanup()
   vi.unstubAllGlobals()
   forgeClient.clear()
@@ -104,6 +113,7 @@ function fixture({
   unused = false,
   profile = {} as Record<string, unknown>,
   syncs = [] as unknown[],
+  clusterOperations = [] as unknown[],
 } = {}) {
   const writes: { method: string; path: string; body: unknown }[] = []
   const reads: string[] = []
@@ -185,6 +195,14 @@ function fixture({
       if (path === "/api/v1/clouds/c/expansions") body = { expansions: [] }
       if (path === "/api/v1/clouds/c/capacity-usage") body = capacityUsage
       if (path === "/api/v1/clouds/c/operations") body = { operations: [] }
+      if (path === "/api/v1/clouds/c/cluster-operations") {
+        const offset = Number(url.searchParams.get("cursor") || 0)
+        body = {
+          items: clusterOperations.slice(offset, offset + 50),
+          next_cursor:
+            offset + 50 < clusterOperations.length ? String(offset + 50) : "",
+        }
+      }
       if (path === "/api/v1/members") body = { members: [] }
       if (path.endsWith("/environments")) body = { environments: [] }
       if (path === "/api/v1/providers")
@@ -264,10 +282,26 @@ function fixture({
             },
           ],
         }
+      if (path === "/api/v1/clouds/c/cluster-operations/saved")
+        body = {
+          id: "saved",
+          cloud_id: "c",
+          status: "needs_attention",
+          digest: "review",
+          input: { spec: { name: "Saved worker" }, ref: {} },
+          steps: [],
+          unknown_costs: [],
+        }
       return Response.json(body)
     }
   )
-  return { writes, reads }
+  return {
+    writes,
+    reads,
+    publishTargets: () => {
+      noTargets = false
+    },
+  }
 }
 
 const show = (project?: string, tab?: "capacity") =>
@@ -345,7 +379,7 @@ it("shows a project member only the project's share, read-only", async () => {
     screen.queryByRole("tab", { name: /^Projects/ })
   ).not.toBeInTheDocument()
   expect(
-    screen.queryByRole("tab", { name: /^Servers/ })
+    screen.queryByRole("tab", { name: /^Infrastructure/ })
   ).not.toBeInTheDocument()
   expect(
     screen.queryByRole("tab", { name: /^Settings/ })
@@ -620,8 +654,77 @@ it("opens on the Capacity tab with usage, the policy, pools and expansions", asy
   ).toBeInTheDocument()
   await waitFor(() => expect(reads).toContain("/api/v1/clouds/c/expansions"))
   // Capacity lives on its own tab; Servers doesn't mount a second copy.
-  await openTab("Servers")
+  await openTab("Infrastructure")
   expect(
     screen.queryByRole("region", { name: "Capacity usage" })
   ).not.toBeInTheDocument()
+})
+
+it("reloads a saved cluster operation on Infrastructure without issuing creation", async () => {
+  window.history.replaceState(null, "", "/clouds/c?clusterOperation=saved")
+  const { reads, writes } = fixture()
+  show()
+  expect(await screen.findByText("Saved worker")).toBeInTheDocument()
+  expect(screen.getByRole("tab", { name: /^Infrastructure/ })).toHaveAttribute(
+    "aria-selected",
+    "true"
+  )
+  expect(reads.some((path) => path.includes("cluster-operations/saved"))).toBe(
+    true
+  )
+  expect(writes).toEqual([])
+})
+
+it("refreshes published targets and account metadata on live sync without reloading", async () => {
+  const state = fixture({ noTargets: true })
+  show()
+  await openTab("Targets")
+  await screen.findByText("No targets yet")
+  state.publishTargets()
+  act(() =>
+    publishLiveState({
+      status: "live",
+      transport: "ws",
+      lastSync: 42,
+      gap: false,
+    })
+  )
+  await screen.findByText("Frontend")
+  expect(
+    state.reads.filter((path) => path === "/api/v1/connections").length
+  ).toBeGreaterThan(1)
+})
+
+it("keeps cluster operations beyond the first history page reachable", async () => {
+  const clusterOperations = Array.from({ length: 51 }, (_, i) => ({
+    id: `cluster-op-${i}`,
+    cloud_id: "c",
+    kind: "create",
+    status: i === 50 ? "needs_attention" : "succeeded",
+    input: { spec: { name: `workers-${i}` }, ref: {} },
+    created_at: new Date(Date.UTC(2026, 9, 1, 0, i)).toISOString(),
+  }))
+  fixture({ clusterOperations })
+  show()
+  await openTab("Changes")
+  await userEvent.click(await screen.findByRole("radio", { name: "clusters" }))
+  await screen.findByRole("link", { name: "Create cluster: workers-49" })
+  expect(
+    screen.queryByRole("link", { name: "Create cluster: workers-50" })
+  ).not.toBeInTheDocument()
+  await userEvent.click(
+    screen.getByRole("button", { name: "Next cluster changes" })
+  )
+  const saved = await screen.findByRole("link", {
+    name: "Create cluster: workers-50",
+  })
+  expect(saved).toHaveAttribute(
+    "href",
+    "/clouds/c?tab=servers&clusterOperation=cluster-op-50"
+  )
+  await screen.findByText("Needs attention")
+  await userEvent.click(
+    screen.getByRole("button", { name: "First cluster changes" })
+  )
+  await screen.findByRole("link", { name: "Create cluster: workers-0" })
 })

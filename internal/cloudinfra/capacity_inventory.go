@@ -23,15 +23,20 @@ const CapacityFreshness = 5 * time.Minute
 // CapacityRecord identifies one attributed physical resource. Pool membership
 // does not create a second record. ResourceID includes the provider kind.
 type CapacityRecord struct {
-	Kind                string               `json:"kind"`
-	Provider            string               `json:"provider"`
-	AccountID           string               `json:"account_id"`
-	ResourceID          string               `json:"resource_id"`
-	ServerID            string               `json:"server_id,omitempty"`
-	ServerStateRevision int64                `json:"server_state_revision"`
-	Resources           CapacityResources    `json:"resources"`
-	Observation         *CapacityObservation `json:"observation,omitempty"`
-	CheckedAt           time.Time            `json:"checked_at"`
+	ClusterCheckedAt    *time.Time                  `json:"cluster_checked_at,omitempty"`
+	ClusterConditions   []provider.ClusterCondition `json:"cluster_conditions,omitempty"`
+	ClusterResourceID   string                      `json:"cluster_resource_id,omitempty"`
+	ClusterNode         *ClusterNodeCapacity        `json:"cluster_node,omitempty"`
+	ClusterComplete     bool                        `json:"cluster_complete,omitempty"`
+	Kind                string                      `json:"kind"`
+	Provider            string                      `json:"provider"`
+	AccountID           string                      `json:"account_id"`
+	ResourceID          string                      `json:"resource_id"`
+	ServerID            string                      `json:"server_id,omitempty"`
+	ServerStateRevision int64                       `json:"server_state_revision"`
+	Resources           CapacityResources           `json:"resources"`
+	Observation         *CapacityObservation        `json:"observation,omitempty"`
+	CheckedAt           time.Time                   `json:"checked_at"`
 	// GPUKind and GPUs count a server's GPUs. A nil GPUs is a count
 	// Loomplane couldn't read, which is never taken as zero.
 	GPUKind string `json:"gpu_kind,omitempty"`
@@ -111,10 +116,46 @@ func (s *Service) refreshCapacity(ctx context.Context, org, cloud string) (*Capa
 			connectionIDs[pool.ConnectionID] = true
 		}
 	}
+	if s.Clusters != nil {
+		cursor := ""
+		for pageNo := 0; pageNo < 100; pageNo++ {
+			page, e := s.Clusters.ListManagedResources(ctx, org, cloud, cursor, 100)
+			if e != nil {
+				return nil, e
+			}
+			for _, r := range page.Items {
+				if r.DeletedAt == nil && r.Kind == "cluster" && r.ConnectionID != "" {
+					connectionIDs[r.ConnectionID] = true
+				}
+			}
+			if page.NextCursor == "" {
+				break
+			}
+			if page.NextCursor == cursor || pageNo == 99 {
+				return nil, provider.ErrInfrastructurePagination
+			}
+			cursor = page.NextCursor
+		}
+	}
+	expectedRetained := map[string]string{}
+	if retained, ok := s.Store.(retainedEnvelopeAccountStore); ok {
+		references, readErr := retained.retainedEnvelopeAccounts(ctx, org, cloud)
+		if readErr != nil {
+			return nil, readErr
+		}
+		for _, ref := range references {
+			identity := ref.Provider + "/" + ref.AccountID
+			if previous := expectedRetained[ref.ConnectionID]; previous != "" && previous != identity {
+				return nil, provider.ErrInfrastructureIdentity
+			}
+			expectedRetained[ref.ConnectionID] = identity
+			connectionIDs[ref.ConnectionID] = true
+		}
+	}
 	accounts := map[string]provider.CapacityInventory{}
 	catalogs := map[string]provider.ServerOptions{}
-	// Only an account holding a managed server without a current price has its
-	// catalog read, so a Cloud whose servers are priced makes no catalog calls.
+	catalogTimes := map[string]time.Time{}
+	// Refresh the catalog when a managed server has missing or stale price facts.
 	unpriced := map[string]bool{}
 	for _, v := range servers {
 		if needsPrice(v) {
@@ -136,6 +177,9 @@ func (s *Service) refreshCapacity(ctx context.Context, org, cloud string) (*Capa
 			return nil, e
 		}
 		key := credential.Provider + "/" + credential.AccountID
+		if expected := expectedRetained[id]; expected != "" && expected != key {
+			return nil, provider.ErrInfrastructureIdentity
+		}
 		if _, exists := accounts[key]; exists {
 			continue
 		}
@@ -158,6 +202,9 @@ func (s *Service) refreshCapacity(ctx context.Context, org, cloud string) (*Capa
 		if unpriced[key] {
 			if options, ok := s.catalog(ctx, key, adapter, credential); ok {
 				catalogs[key] = options
+				s.catalogs.mu.Lock()
+				catalogTimes[key] = s.catalogs.entries[key].at
+				s.catalogs.mu.Unlock()
 			}
 		}
 	}
@@ -177,7 +224,7 @@ func (s *Service) refreshCapacity(ctx context.Context, org, cloud string) (*Capa
 			}
 			v = checked
 		}
-		if options, ok := catalogs[v.Provider+"/"+v.AccountID]; ok && needsPrice(v) && catalogPrice(v, options) {
+		if options, ok := catalogs[v.Provider+"/"+v.AccountID]; ok && needsPrice(v) && catalogPriceAt(v, options, catalogTimes[v.Provider+"/"+v.AccountID]) {
 			// A price is a display estimate. A server that changed under the
 			// refresh keeps its stored facts, and the next refresh prices it.
 			if e := s.Store.SaveServer(ctx, v); errors.Is(e, ErrConflict) {
@@ -242,6 +289,11 @@ func (s *Service) refreshCapacity(ctx context.Context, org, cloud string) (*Capa
 				}
 			}
 			for _, old := range prior {
+				if old.Kind == "cluster_node" && old.Provider == snapshot.Provider && old.AccountID == snapshot.AccountID {
+					for _, id := range volume.ServerIDs {
+						attributed = attributed || old.ResourceID == "server:"+id
+					}
+				}
 				attributed = attributed || (old.Kind == "volume" && old.Provider == snapshot.Provider && old.AccountID == snapshot.AccountID && old.ResourceID == "volume:"+volume.ID)
 			}
 			if attributed {
@@ -298,7 +350,7 @@ func (s *Service) refreshCapacity(ctx context.Context, org, cloud string) (*Capa
 
 // catalogTTL bounds how often a provider catalog is read for prices. DigitalOcean
 // serves it over several paginated requests on the same token as inventory.
-const catalogTTL = time.Hour
+const catalogTTL = 5 * time.Minute
 
 type catalogEntry struct {
 	options provider.ServerOptions
@@ -332,7 +384,7 @@ func (s *Service) catalog(ctx context.Context, key string, adapter provider.Serv
 	}
 	entry = catalogEntry{options: options, ok: err == nil, at: now}
 	if err != nil {
-		s.warn("Couldn't read the server catalog for prices; the next read is in an hour", err)
+		s.warn("Couldn't read the server catalog for prices; the next read is in five minutes", err)
 	}
 	s.catalogs.mu.Lock()
 	s.catalogs.entries[key] = entry
@@ -345,35 +397,41 @@ func needsPrice(v *Server) bool {
 	if v.Ownership != "managed" || v.Provider == "server" || v.Status == "deleted" || v.Status == "disconnected" {
 		return false
 	}
-	return !v.HourlyPriceKnown || v.PricedSize != v.Size
+	return !v.HourlyPriceKnown || v.PricedSize != v.Size || !freshPrice(v.PriceCheckedAt, time.Now())
 }
 
 // catalogPrice updates a managed server's hourly price and GPUs from the
 // catalog row for its size. It reports whether anything changed. A size the
 // catalog no longer lists keeps its last known facts.
 func catalogPrice(v *Server, options provider.ServerOptions) bool {
+	return catalogPriceAt(v, options, time.Now().UTC())
+}
+
+func catalogPriceAt(v *Server, options provider.ServerOptions, checked time.Time) bool {
 	for _, size := range options.Sizes {
 		if size.ID != v.Size {
 			continue
 		}
-		if v.PricedSize == size.ID && v.HourlyUSD == size.HourlyUSD && v.HourlyPriceKnown == size.HourlyPriceKnown && reflect.DeepEqual(v.Accelerator, size.Accelerator) {
+		if freshPrice(v.PriceCheckedAt, time.Now()) && v.PricedSize == size.ID && v.HourlyUSD == size.HourlyUSD && v.HourlyPriceKnown == size.HourlyPriceKnown && reflect.DeepEqual(v.Accelerator, size.Accelerator) {
 			return false
 		}
+		v.PriceCheckedAt = checked
 		v.HourlyUSD, v.HourlyPriceKnown, v.Accelerator, v.PricedSize = size.HourlyUSD, size.HourlyPriceKnown, cloneAccelerator(size.Accelerator), size.ID
 		return true
 	}
 	return false
 }
 func (s *Service) recoverCapacity(ctx context.Context) error {
+	clusterErr := s.recoverClusterScaling(ctx)
 	st, ok := s.Store.(capacityRecoveryStore)
 	if !ok {
-		return nil
+		return clusterErr
 	}
 	scopes, err := st.CapacityScopes(ctx)
 	if err != nil {
 		return err
 	}
-	var result error
+	result := clusterErr
 	for _, scope := range scopes {
 		_, e := s.refreshCapacity(ctx, scope.OrgID, scope.CloudID)
 		result = errors.Join(result, e)
@@ -450,7 +508,30 @@ func summarizeCapacity(records []CapacityRecord, pools []*Pool, policy CapacityP
 		if err != nil {
 			return nil, err
 		}
-		out.Fresh = out.Fresh && freshCapacity(r.CheckedAt, now)
+		out.Fresh = out.Fresh && freshCapacityRecord(r, now)
+		if r.ClusterResourceID != "" && !r.ClusterComplete {
+			out.Allocatable = CapacityResources{}
+			out.Provisioned = CapacityResources{}
+		}
+		if r.Kind == "cluster_node" {
+			out.Observed = CapacityResources{}
+			if !freshCapacityRecord(r, now) || r.ClusterNode == nil {
+				out.Fresh = false
+				out.Allocatable = CapacityResources{}
+			} else {
+				node := r.ClusterNode
+
+				available := CapacityResources{Servers: number(1), CPUMillis: node.Allocatable.CPUMillis, MemoryBytes: node.Allocatable.MemoryBytes, StorageBytes: node.Allocatable.EphemeralStorageBytes}
+				if !node.Ready || node.Unschedulable {
+					available = capacityResources(ResourceVector{})
+				}
+				out.Allocatable, err = sumResources(out.Allocatable, available)
+				if err != nil {
+					return nil, err
+				}
+			}
+			continue
+		}
 		if r.Kind != "server" {
 			continue
 		}
@@ -548,24 +629,19 @@ func CapacityHostFits(observation CapacityObservation, reserved ResourceVector, 
 }
 
 func (s *PgStore) ListCapacityInventory(ctx context.Context, org, cloud string) ([]CapacityRecord, error) {
-	rows, err := s.db.Query(ctx, `SELECT body FROM loomplane_cloud_capacity_inventory WHERE org_id=$1 AND cloud_id=$2 ORDER BY id`, org, cloud)
+	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-	var out []CapacityRecord
-	for rows.Next() {
-		var raw []byte
-		var r CapacityRecord
-		if e := rows.Scan(&raw); e != nil {
-			return nil, e
-		}
-		if e := json.Unmarshal(raw, &r); e != nil {
-			return nil, e
-		}
-		out = append(out, r)
+	defer rollback(tx)
+	records, err := capacityRecordsTx(ctx, tx, org, cloud)
+	if err != nil {
+		return nil, err
 	}
-	return out, rows.Err()
+	if checkErr := tx.Commit(); checkErr != nil {
+		return nil, checkErr
+	}
+	return records, nil
 }
 
 // BeginCapacityRefresh issues an ordering token before any provider or runtime
@@ -702,6 +778,12 @@ func (s *PgStore) SaveCapacityInventory(ctx context.Context, org, cloud string, 
 		if n != 1 {
 			return ErrConflict
 		}
+		if checkErr := saveAccountMembership(ctx, tx, org, account); checkErr != nil {
+			return checkErr
+		}
+		if checkErr := settleDeletedClusterEnvelopes(ctx, tx, org, account); checkErr != nil {
+			return checkErr
+		}
 	}
 
 	persisted, readErr := capacityRecordsTx(ctx, tx, org, cloud)
@@ -720,7 +802,7 @@ func observedStorage(r CapacityRecord) *int64 {
 	return r.Observation.StorageBytes
 }
 func (s *PgStore) CapacityScopes(ctx context.Context) ([]CapacityScope, error) {
-	rows, err := s.db.Query(ctx, `SELECT org_id,cloud_id FROM loomplane_cloud_capacity_policies UNION SELECT org_id,cloud_id FROM loomplane_cloud_servers WHERE status IN ('ready','unhealthy') ORDER BY 1,2`)
+	rows, err := s.db.Query(ctx, `SELECT org_id,cloud_id FROM loomplane_cloud_capacity_policies UNION SELECT org_id,cloud_id FROM loomplane_cloud_servers WHERE status IN ('ready','unhealthy') UNION SELECT org_id,cloud_id FROM loomplane_managed_resources WHERE cloud_id IS NOT NULL AND deleted_at IS NULL ORDER BY 1,2`)
 	if err != nil {
 		return nil, err
 	}
@@ -738,6 +820,7 @@ func (s *PgStore) CapacityScopes(ctx context.Context) ([]CapacityScope, error) {
 
 func summarizeAccount(snapshot provider.CapacityInventory) (CapacityAccountSnapshot, error) {
 	out := CapacityAccountSnapshot{Provider: snapshot.Provider, AccountID: snapshot.AccountID, Provisioned: capacityResources(ResourceVector{}), Quota: snapshot.Quota, CheckedAt: snapshot.CheckedAt}
+	out.membership = &accountMembership{Complete: true, Provider: snapshot.Provider, AccountID: snapshot.AccountID, CheckedAt: snapshot.CheckedAt, Servers: append([]provider.CapacityServer{}, snapshot.Servers...)}
 	seen := map[string]bool{}
 	for _, host := range snapshot.Servers {
 		if host.ID == "" || seen["server:"+host.ID] {

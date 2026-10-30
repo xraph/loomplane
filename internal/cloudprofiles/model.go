@@ -40,17 +40,19 @@ type DefaultPlacement struct {
 
 // Target is one immutable slug and its desired deployment placement.
 type Target struct {
-	Runtime      string `json:"runtime"`
-	PoolID       string `json:"pool_id,omitempty"`
-	ID           string `json:"id" forge:"id"`
-	OrgID        string `json:"org_id"`
-	ProjectID    string `json:"project_id"`
-	CloudID      string `json:"cloud_id"`
-	Name         string `json:"name"`
-	DisplayName  string `json:"display_name"`
-	Provider     string `json:"provider"`
-	ConnectionID string `json:"connection_id"`
-	Region       string `json:"region"`
+	ManagedResourceID string `json:"managed_resource_id,omitempty"`
+	LocationID        string `json:"location_id,omitempty"`
+	Runtime           string `json:"runtime"`
+	PoolID            string `json:"pool_id,omitempty"`
+	ID                string `json:"id" forge:"id"`
+	OrgID             string `json:"org_id"`
+	ProjectID         string `json:"project_id"`
+	CloudID           string `json:"cloud_id"`
+	Name              string `json:"name"`
+	DisplayName       string `json:"display_name"`
+	Provider          string `json:"provider"`
+	ConnectionID      string `json:"connection_id"`
+	Region            string `json:"region"`
 	// Tags let a manifest select this target by what it is rather than its name.
 	Tags      []string  `json:"tags"`
 	Revision  int64     `json:"revision"`

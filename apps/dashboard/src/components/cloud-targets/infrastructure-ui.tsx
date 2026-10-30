@@ -76,13 +76,15 @@ export function CloudEmpty({
   title: string
   children: ReactNode
   action?: ReactNode
-  kind?: "list" | "notice" | "inline"
+  kind?: "list" | "notice" | "inline" | "compact"
   icon?: ComponentType<{ className?: string }>
 }) {
   return (
     <ZeroState
-      variant={kind === "inline" ? "inline" : "panel"}
-      preview={kind === "list"}
+      variant={
+        kind === "compact" ? "compact" : kind === "inline" ? "inline" : "panel"
+      }
+      preview={kind === "list" || kind === "compact"}
       className={kind === "inline" ? "gap-3 px-0 py-2" : undefined}
     >
       <ZeroStateHeader>

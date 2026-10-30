@@ -39,6 +39,11 @@ import type {
 } from "@/client/forge/loomplane/types"
 import { useInvalidate, useMutation, useQuery } from "@/client/hooks"
 import { CloudGlyph } from "@/components/cloud-glyph"
+import { RegistryOperations } from "@/components/registry-operations"
+import {
+  ClusterBuildSetup,
+  clusterSetupWaiting,
+} from "@/components/cluster-build-setup"
 import { KeylessSetup } from "@/components/keyless-setup"
 import { MetricCard } from "@/components/metric-card"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -256,7 +261,9 @@ function ConnectionRow({
       toast.success(
         next.status === "ready"
           ? `${c.name} is ready`
-          : `${c.name} is still ${statusLabels[next.status]?.toLowerCase() ?? next.status}`
+          : clusterSetupWaiting(next)
+            ? `${c.name} is waiting for cluster setup`
+            : `${c.name} is still ${statusLabels[next.status]?.toLowerCase() ?? next.status}`
       )
     } catch (err) {
       toast.error(messageOf(err, "The connection couldn't be checked."))
@@ -278,7 +285,9 @@ function ConnectionRow({
         <div className="grid min-w-0 flex-1 gap-0.5">
           <span className="truncate text-[13px] font-medium">{c.name}</span>
           <span className="truncate text-xs text-muted-foreground">
-            {statusLabels[c.status] ?? c.status}
+            {clusterSetupWaiting(c)
+              ? "Waiting for cluster setup"
+              : (statusLabels[c.status] ?? c.status)}
             {c.account && (
               <>
                 {" · "}
@@ -327,20 +336,26 @@ function ConnectionRow({
                 <RefreshCwIcon />
                 Check again
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => setReplacing(true)}>
-                Replace credential
-              </DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                variant="destructive"
-                onClick={() => setRemoving(true)}
-              >
-                Remove
-              </DropdownMenuItem>
+              {c.method !== "managed_kubernetes" && (
+                <>
+                  <DropdownMenuItem onClick={() => setReplacing(true)}>
+                    Replace credential
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem
+                    variant="destructive"
+                    onClick={() => setRemoving(true)}
+                  >
+                    Remove
+                  </DropdownMenuItem>
+                </>
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
         )}
       </div>
+      <ClusterBuildSetup connection={c} />
+      <RegistryOperations connection={c} mayManage={mayManage} />
       {c.status === "incomplete" && c.cloud === "aws" && (
         <Alert className="border-weld/50">
           <AlertTitle>
@@ -356,27 +371,31 @@ function ConnectionRow({
           </AlertDescription>
         </Alert>
       )}
-      {c.status === "incomplete" && c.cloud !== "aws" && (
-        <Alert className="border-weld/50">
-          <AlertTitle>
-            It works, but can&apos;t do everything a deployment needs
-          </AlertTitle>
-          <AlertDescription className="grid gap-2">
-            <p>
-              Grant {email ? <code className="font-mono">{email}</code> : "it"}{" "}
-              {roles.length === 1 ? "this role" : "these roles"} on {c.account},
-              then check again:
-            </p>
-            <ul className="grid gap-1">
-              {roles.map((r) => (
-                <li key={r.role}>
-                  {r.title} <code className="font-mono text-xs">{r.role}</code>
-                </li>
-              ))}
-            </ul>
-          </AlertDescription>
-        </Alert>
-      )}
+      {c.status === "incomplete" &&
+        c.cloud !== "aws" &&
+        !(c.cloud === "kubernetes" && c.details.registry_hostname) && (
+          <Alert className="border-weld/50">
+            <AlertTitle>
+              It works, but can&apos;t do everything a deployment needs
+            </AlertTitle>
+            <AlertDescription className="grid gap-2">
+              <p>
+                Grant{" "}
+                {email ? <code className="font-mono">{email}</code> : "it"}{" "}
+                {roles.length === 1 ? "this role" : "these roles"} on{" "}
+                {c.account}, then check again:
+              </p>
+              <ul className="grid gap-1">
+                {roles.map((r) => (
+                  <li key={r.role}>
+                    {r.title}{" "}
+                    <code className="font-mono text-xs">{r.role}</code>
+                  </li>
+                ))}
+              </ul>
+            </AlertDescription>
+          </Alert>
+        )}
       {c.status === "failed" && c.message && (
         <Alert variant="destructive">
           <AlertDescription>{c.message}</AlertDescription>
@@ -557,6 +576,14 @@ function ConnectForm({
   const [extraSettings, setExtraSettings] = useState<Record<string, string>>(
     () => ({ ...(replacing?.details ?? {}) }) as Record<string, string>
   )
+  const setupCluster =
+    cloud === "kubernetes" &&
+    !!extraSettings.registry_hostname?.trim() &&
+    extraSettings.registry_setup !== "existing" &&
+    (extraSettings.registry_setup === "automatic" ||
+      !extraSettings.storage_class ||
+      !extraSettings.architecture ||
+      !extraSettings.ingress_address)
   // What the cloud asks for before sign-in, like Google's project. Until
   // someone types, a replaced connection shows the values it already has.
   const [signInValues, setSignInValues] = useState<Record<string, string>>({})
@@ -1110,7 +1137,13 @@ function ConnectForm({
             {!signIn && !keylessOn && !keylessFirst && (
               <Button type="submit" disabled={busy}>
                 {busy && <Spinner />}
-                {replacing ? "Check and replace" : "Check and connect"}
+                {setupCluster
+                  ? replacing
+                    ? "Set up and replace"
+                    : "Set up and connect"
+                  : replacing
+                    ? "Check and replace"
+                    : "Check and connect"}
               </Button>
             )}
           </DialogFooter>

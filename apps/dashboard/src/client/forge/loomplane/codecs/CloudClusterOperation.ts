@@ -1,0 +1,7 @@
+import type { Codec } from '../codec-runtime';
+import { codec_CloudClusterOperation_steps } from './CloudClusterOperation.steps';
+import { codec_CloudClusterOperation_unknown_costs } from './CloudClusterOperation.unknown_costs';
+import { codec_ClusterEnrollmentSummary } from './ClusterEnrollmentSummary';
+import { codec_ClusterInput } from './ClusterInput';
+
+export const codec_CloudClusterOperation: Codec = {"kind": "object", "fields": {"attempt": {"ts": "attempt"}, "cancel_requested": {"ts": "cancelRequested"}, "cloud_id": {"ts": "cloudId"}, "created_at": {"ts": "createdAt"}, "digest": {"ts": "digest"}, "enrollment": {"ts": "enrollment", "codec": () => codec_ClusterEnrollmentSummary}, "error": {"ts": "error"}, "estimated_node_hourly_micro_usd": {"ts": "estimatedNodeHourlyMicroUsd"}, "expires_at": {"ts": "expiresAt"}, "id": {"ts": "id"}, "input": {"ts": "input", "codec": () => codec_ClusterInput}, "kind": {"ts": "kind"}, "resource_id": {"ts": "resourceId"}, "revision": {"ts": "revision"}, "status": {"ts": "status"}, "steps": {"ts": "steps", "codec": () => codec_CloudClusterOperation_steps}, "unknown_costs": {"ts": "unknownCosts", "codec": () => codec_CloudClusterOperation_unknown_costs}, "updated_at": {"ts": "updatedAt"}}, "required": ["attempt", "cancel_requested", "cloud_id", "created_at", "digest", "error", "estimated_node_hourly_micro_usd", "expires_at", "id", "input", "kind", "resource_id", "revision", "status", "steps", "unknown_costs", "updated_at"]};

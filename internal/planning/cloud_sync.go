@@ -399,6 +399,9 @@ func (s *Service) previewCloudChange(ctx context.Context, p security.Principal, 
 		if frontendErr := s.pinFrontendDemands(ctx, &frontendPlan, result); frontendErr != nil {
 			preview.Blockers = append(preview.Blockers, env.Name+": "+frontendErr.Error())
 		}
+		if workloadErr := s.PrepareClusterWorkloadDemands(ctx, &frontendPlan, result); workloadErr != nil {
+			preview.Blockers = append(preview.Blockers, env.Name+": "+workloadErr.Error())
+		}
 		plan.setResult(result)
 		for _, finding := range result.Problems {
 			preview.Blockers = append(preview.Blockers, env.Name+": "+finding.Name+": "+finding.Message)

@@ -455,7 +455,7 @@ func TestPoolGPUMismatchIsAProblem(t *testing.T) {
 			if tc.manifest != "" {
 				size = "size: {cpu: 4, memory: 16384, " + tc.manifest + "}"
 			}
-			m := parse(t, "version: 1\nservices:\n  web: {source: cmd/api, public: false, cloud_target: shared, "+size+"}\n")
+			m := parse(t, "version: 1\nservices:\n  web: {source: cmd/api, public: false, cloud_target: shared, build: {image: 'example.com/api@sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'}, "+size+"}\n")
 			pool := &cloudinfra.Placement{PoolID: "pool", PoolRevision: 3, ServerID: "host", ServerRevision: 2, ConnectionID: "runtime", ConnectionGeneration: 1, CPUMillis: 4000, MemoryBytes: 16384 << 20, GPUKind: tc.kind, GPUs: tc.gpus}
 			resolved, pins, err := ResolveCloudTargets(m, "production", assigned, options, map[string]*cloudinfra.Placement{"web": pool})
 			if err != nil {

@@ -45,6 +45,28 @@ func scanOperation(row pgx.Row) (*Operation, error) {
 	return &o, nil
 }
 func (s *PgStore) CreatePreview(ctx context.Context, o *Operation) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return err
+	}
+	defer rollback(tx)
+	if checkErr := lockCapacityCloud(ctx, tx, o.OrgID, o.CloudID); checkErr != nil {
+		return checkErr
+	}
+	policy, err := capacityPolicyTx(ctx, tx, o.OrgID, o.CloudID)
+	if err != nil {
+		return err
+	}
+	if policy.Budget != nil && (o.Input.Kind == "create" || o.Input.Kind == "resize" || o.Input.Kind == "adopt") {
+		reviewMoney, priceErr := serverBudgetMoney(ctx, tx, o)
+		if priceErr != nil {
+			return priceErr
+		}
+		o.BudgetReview, err = scopedBudgetReviewTx(ctx, tx, o.OrgID, o.CloudID, o.Provider, o.AccountID, o.ID, reviewMoney, policy, nil)
+		if err != nil {
+			return err
+		}
+	}
 	raw, err := json.Marshal(o)
 	if err != nil {
 		return err
@@ -53,8 +75,11 @@ func (s *PgStore) CreatePreview(ctx context.Context, o *Operation) error {
 	if err != nil {
 		return err
 	}
-	_, err = s.db.Exec(ctx, `INSERT INTO loomplane_infrastructure_operations(id,org_id,cloud_id,server_id,status,body,principal) VALUES($1,$2,$3,$4,$5,$6,$7)`, o.ID, o.OrgID, o.CloudID, o.ServerID, o.Status, raw, p)
-	return storeError(err)
+	_, err = tx.Exec(ctx, `INSERT INTO loomplane_infrastructure_operations(id,org_id,cloud_id,server_id,status,body,principal) VALUES($1,$2,$3,$4,$5,$6,$7)`, o.ID, o.OrgID, o.CloudID, o.ServerID, o.Status, raw, p)
+	if err != nil {
+		return storeError(err)
+	}
+	return tx.Commit()
 }
 func (s *PgStore) GetOperation(ctx context.Context, org, cloud, id string) (*Operation, error) {
 	return scanOperation(s.db.QueryRow(ctx, `SELECT body,principal FROM loomplane_infrastructure_operations WHERE org_id=$1 AND cloud_id=$2 AND id=$3`, org, cloud, id))
@@ -132,7 +157,7 @@ func (s *PgStore) acceptOperationTx(ctx context.Context, tx driver.Tx, o *Operat
 	if err != nil {
 		return err
 	}
-	tag, err := tx.Exec(ctx, `UPDATE loomplane_infrastructure_operations SET status=$4,body=$5,updated_at=now() WHERE org_id=$1 AND cloud_id=$2 AND id=$3 AND status='preview'`, o.OrgID, o.CloudID, o.ID, o.Status, raw)
+	tag, err := tx.Exec(ctx, `UPDATE loomplane_infrastructure_operations SET status=$4,body=$5,updated_at=now() WHERE org_id=$1 AND cloud_id=$2 AND id=$3 AND status='preview' AND body->'money_estimate' IS NOT DISTINCT FROM $5::jsonb->'money_estimate' AND body->'budget_review' IS NOT DISTINCT FROM $5::jsonb->'budget_review'`, o.OrgID, o.CloudID, o.ID, o.Status, raw)
 	if err != nil {
 		return storeError(err)
 	}
@@ -155,6 +180,37 @@ func (s *PgStore) SaveOperation(ctx context.Context, o *Operation) error {
 	if checkErr := lockCapacityCloud(ctx, tx, o.OrgID, o.CloudID); checkErr != nil {
 		return checkErr
 	}
+	if o.Attempted && (o.Input.Kind == "create" || o.Input.Kind == "resize") {
+		saved, readErr := scanOperation(tx.QueryRow(ctx, `SELECT body,principal FROM loomplane_infrastructure_operations WHERE org_id=$1 AND cloud_id=$2 AND id=$3`, o.OrgID, o.CloudID, o.ID))
+		if readErr != nil {
+			return readErr
+		}
+		if !saved.Attempted {
+			policy, checkErr := capacityPolicyTx(ctx, tx, saved.OrgID, saved.CloudID)
+			if checkErr != nil {
+				return checkErr
+			}
+			if policy.Budget != nil {
+				money, e := serverBudgetMoney(ctx, tx, saved)
+				if e != nil {
+					return e
+				}
+				current, e := scopedBudgetReviewTx(ctx, tx, saved.OrgID, saved.CloudID, saved.Provider, saved.AccountID, saved.ID, money, policy, nil)
+				if e != nil {
+					return e
+				}
+				if budgetErr := checkBudgetReview(policy, saved.BudgetReview, current, saved.Input.AcknowledgeUnknownCosts); budgetErr != nil {
+					return budgetErr
+				}
+			}
+			if checkErr := s.reserveOperationCapacity(ctx, tx, saved); checkErr != nil {
+				return checkErr
+			}
+			if checkErr := reserveLegacyAttempt(ctx, tx, saved); checkErr != nil {
+				return checkErr
+			}
+		}
+	}
 	previous := o.StateRevision
 	committed := false
 	defer func() {
@@ -168,7 +224,7 @@ func (s *PgStore) SaveOperation(ctx context.Context, o *Operation) error {
 		o.StateRevision = previous
 		return err
 	}
-	tag, err := tx.Exec(ctx, `UPDATE loomplane_infrastructure_operations SET status=$4,body=$5,updated_at=now() WHERE org_id=$1 AND cloud_id=$2 AND id=$3 AND (status<>'preview' OR $4='cancelled') AND coalesce((body->>'state_revision')::bigint,0)=$6`, o.OrgID, o.CloudID, o.ID, o.Status, raw, previous)
+	tag, err := tx.Exec(ctx, `UPDATE loomplane_infrastructure_operations SET status=$4,body=$5,updated_at=now() WHERE org_id=$1 AND cloud_id=$2 AND id=$3 AND (status<>'preview' OR $4='cancelled') AND coalesce((body->>'state_revision')::bigint,0)=$6 AND body->'money_estimate' IS NOT DISTINCT FROM $5::jsonb->'money_estimate' AND body->'budget_review' IS NOT DISTINCT FROM $5::jsonb->'budget_review'`, o.OrgID, o.CloudID, o.ID, o.Status, raw, previous)
 	if err != nil {
 		o.StateRevision = previous
 		return storeError(err)

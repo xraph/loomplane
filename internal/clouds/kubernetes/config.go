@@ -25,10 +25,17 @@ var namespaceRE = regexp.MustCompile(`^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$`)
 
 // Config keeps credentials in REST only. Details contains safe display fields.
 type Config struct {
-	REST      *rest.Config
-	Namespace string
-	Context   string
-	Details   map[string]string
+	// ManagedWorkload is set only after resolving a persisted managed attachment.
+	ManagedWorkload    bool
+	ManagedProfile     ManagedRuntimeProfile
+	ManagedIdentity    ManagedRuntimeIdentity
+	ManagedLegacyGuard ManagedLegacyGuard
+	ManagedJournal     ManagedJournal
+	ManagedScope       ManagedScope
+	REST               *rest.Config
+	Namespace          string
+	Context            string
+	Details            map[string]string
 }
 
 // ParseConfig accepts embedded credentials only, with no ambient loading
@@ -125,6 +132,9 @@ func ParseConfig(raw []byte, settings map[string]string) (*Config, error) {
 func configFor(rc *rest.Config, contextName, namespace string, caData []byte, settings map[string]string) (*Config, error) {
 	ca := sha256.Sum256(caData)
 	details := map[string]string{"endpoint": rc.Host, "namespace": namespace, "context": contextName, "cluster_ca": hex.EncodeToString(ca[:])}
+	if err := buildIsolationSettings(settings, details); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrInvalid, err)
+	}
 	if architecture := strings.TrimSpace(settings["architecture"]); architecture != "" {
 		if architecture != "amd64" && architecture != "arm64" {
 			return nil, fmt.Errorf("%w: architecture must be amd64 or arm64", ErrInvalid)
@@ -159,5 +169,37 @@ func configFor(rc *rest.Config, contextName, namespace string, caData []byte, se
 		}
 		details["image_pull_secret"] = name
 	}
+	if host := strings.TrimSpace(settings["registry_hostname"]); host != "" {
+		if len(validation.IsDNS1123Subdomain(host)) != 0 || !strings.Contains(host, ".") {
+			return nil, fmt.Errorf("%w: registry_hostname must be a DNS hostname reachable by cluster nodes", ErrInvalid)
+		}
+		details["registry_hostname"] = host
+		if optionErr := registrySetupOptions(settings, details); optionErr != nil {
+			return nil, optionErr
+		}
+		mode := strings.TrimSpace(settings["registry_setup"])
+		if mode == "" {
+			mode = "automatic"
+			if details["storage_class"] != "" && details["architecture"] != "" && details["ingress_address"] != "" {
+				mode = "existing"
+			}
+		}
+		if mode != "automatic" && mode != "existing" {
+			return nil, fmt.Errorf("%w: registry_setup must be automatic or existing", ErrInvalid)
+		}
+		details["registry_setup"] = mode
+		for _, key := range []string{"registry_cert_manager", "registry_ingress"} {
+			if value := settings[key]; value == "managed" || value == "existing" {
+				details[key] = value
+			}
+		}
+		if settings["registry_ingress_address"] == "automatic" {
+			details["registry_ingress_address"] = "automatic"
+		}
+	}
 	return &Config{REST: rc, Namespace: namespace, Context: contextName, Details: details}, nil
+}
+
+func (c *Config) journalRequired() bool {
+	return c.ManagedWorkload && c.ManagedProfile != ManagedProfileLegacy
 }

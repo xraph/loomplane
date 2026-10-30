@@ -23,6 +23,7 @@ func (a *App) commands() []cli.Command {
 		a.cloudTargetsCommand(),
 		a.cloudSyncsCommand(),
 		a.cloudServersCommand(),
+		a.cloudClustersCommand(),
 		a.cloudPoolsCommand(),
 		a.cloudCapacityCommand(),
 		a.dnsZonesCommand(),

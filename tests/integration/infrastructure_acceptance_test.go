@@ -307,6 +307,7 @@ func TestAcceptanceInfrastructure(t *testing.T) {
 		t.Fatal("invalid acceptance ownership record")
 	}
 	credential, settings := fixtureSSH(t, state)
+	settings["build_workers"] = "dedicated"
 	kubeconfig, err := os.ReadFile(state.Kubeconfig)
 	if err != nil {
 		t.Fatal(err)

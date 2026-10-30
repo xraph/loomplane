@@ -192,6 +192,31 @@ export interface AttachDefaults {
   service: string;
 }
 
+export interface AttachmentInput {
+  adoptNamespace: boolean;
+  cloudRevision: number;
+  endpointFingerprint: string;
+  grantRevision: number;
+  namespace: string;
+  namespaceUid?: string;
+  prerequisites: AttachmentPrerequisites;
+  projectId: string;
+  resourceRevision: number;
+  serviceAccountName: string;
+  targetSlug: string;
+  trustFingerprint: string;
+}
+
+export interface AttachmentPrerequisites {
+  ingressAddress?: string;
+  registryHostname?: string;
+  requireBuilds: boolean;
+  requireIngress: boolean;
+  requirePersistentStorage: boolean;
+  requireTls: boolean;
+  storageClass?: string;
+}
+
 export interface AutoRenewInputBody {
   autoRenew: boolean;
   revision: number;
@@ -438,7 +463,17 @@ export interface CapacityPolicy {
 
 export interface CapacityPolicyInputBody {
   expectedRevision: number;
-  policy: CapacityPolicy;
+  policy: {
+  cloudId: string;
+  enabled: boolean;
+  frontendLimits: FrontendLimit[];
+  gpuLimits?: GPULimit[];
+  limits: ResourceVector;
+  orgId: string;
+  pools: PoolExpansionPolicy[];
+  requireExpansionApproval: boolean;
+  revision: number;
+};
 }
 
 export interface CapacityPolicyView {
@@ -619,6 +654,52 @@ export interface CloudAdoption {
   revision: string;
 }
 
+export interface CloudCluster {
+  accountId: string;
+  cloudId: string;
+  connectionId: string;
+  externalId: string;
+  id: string;
+  lifecycleAuthority: string[];
+  observation?: ClusterObservation;
+  ownership: string;
+  provider: string;
+  revision: number;
+  status: string;
+  updatedAt: string;
+}
+
+export interface CloudClusterOperation {
+  attempt: number;
+  cancelRequested: boolean;
+  cloudId: string;
+  createdAt: string;
+  digest: string;
+  enrollment?: ClusterEnrollmentSummary;
+  error: string;
+  estimatedNodeHourlyMicroUsd: number;
+  expiresAt: string;
+  id: string;
+  input: ClusterInput;
+  kind: string;
+  resourceId: string;
+  revision: number;
+  status: string;
+  steps: ClusterStep[];
+  unknownCosts: string[];
+  updatedAt: string;
+}
+
+export interface CloudClusterOperationPage {
+  items: CloudClusterOperation[];
+  nextCursor?: string;
+}
+
+export interface CloudClusterPage {
+  items: CloudCluster[];
+  nextCursor?: string;
+}
+
 export interface CloudCompensation {
   actionId: string;
   candidate: Binding;
@@ -717,6 +798,15 @@ export interface CloudTargetList {
   targets: (Target | null)[];
 }
 
+export interface CloudinfraMoveInputBody {
+  destinationServerId: string;
+  environmentId: string;
+  poolId: string;
+  projectId: string;
+  review?: string;
+  service: string;
+}
+
 export interface CloudinfraRoute {
   binding: RouteBinding;
   id: string;
@@ -753,6 +843,184 @@ export interface CloudprofilesCreateInputBody {
   region: string;
 };
   name: string;
+}
+
+export interface CloudprofilesUpdateInputBody {
+  name: string;
+  revision: number;
+}
+
+export interface ClusterChange {
+  cloudId: string;
+  operationId: string;
+  reason: string;
+  resourceId: string;
+  revision: number;
+  status: string;
+}
+
+export interface ClusterCondition {
+  reason?: string;
+  status: string;
+  type: string;
+}
+
+export interface ClusterEnrollmentSummary {
+  attachmentId: string;
+  credentialExpiry: string;
+  runtimeConnectionId: string;
+  runtimeVerified: boolean;
+  targetId: string;
+}
+
+export interface ClusterInput {
+  accountId: string;
+  acknowledgeNodeCosts: boolean;
+  acknowledgeUnknownCosts: boolean;
+  attachment?: AttachmentInput;
+  cloudRevision: number;
+  connectionGeneration: number;
+  connectionId: string;
+  kind: string;
+  managementReachable: boolean;
+  optionsCheckedAt: string;
+  optionsDigest: string;
+  policyRevision: number;
+  provider: string;
+  ref: ClusterRef;
+  resourceId?: string;
+  resourceRevision: number;
+  spec: ClusterSpec;
+  workerImage: string;
+}
+
+export interface ClusterInputBody {
+  accountId: string;
+  acknowledgeNodeCosts: boolean;
+  acknowledgeUnknownCosts: boolean;
+  attachment?: {
+  adoptNamespace: boolean;
+  cloudRevision: number;
+  endpointFingerprint: string;
+  grantRevision: number;
+  namespace: string;
+  namespaceUid?: string;
+  prerequisites: AttachmentPrerequisites;
+  projectId: string;
+  resourceRevision: number;
+  serviceAccountName: string;
+  targetSlug: string;
+  trustFingerprint: string;
+};
+  cloudRevision: number;
+  connectionGeneration: number;
+  connectionId: string;
+  kind: string;
+  managementReachable: boolean;
+  optionsCheckedAt: string;
+  optionsDigest: string;
+  policyRevision: number;
+  provider: string;
+  ref: {
+  accountId: string;
+  id: string;
+  incarnation: string;
+  region: string;
+};
+  resourceId?: string;
+  resourceRevision: number;
+  spec: {
+  ha: boolean;
+  maintenance: ClusterMaintenance;
+  name: string;
+  networkId: string;
+  nodePools: NodePoolSpec[];
+  operationId: string;
+  providerOptions?: ClusterProviderOptions;
+  region: string;
+  version: string;
+};
+  workerImage: string;
+}
+
+export interface ClusterMaintenance {
+  day: string;
+  startTime: string;
+}
+
+export interface ClusterNodeSize {
+  cpus: number;
+  diskGb: number;
+  hourlyUsd?: number;
+  id: string;
+  memoryMib: number;
+  monthlyUsd?: number;
+  regions: string[];
+}
+
+export interface ClusterObservation {
+  caHash: string;
+  conditions: ClusterCondition[];
+  endpoint: string;
+  name: string;
+  observedAt: string;
+  pools: NodePoolSpec[];
+  ref: ClusterRef;
+  state: string;
+  version: string;
+}
+
+export interface ClusterOptions {
+  accountId: string;
+  checkedAt: string;
+  connectionGeneration: number;
+  digest: string;
+  networks: string[];
+  nodeSizeFacts: ClusterNodeSize[];
+  nodeSizes: string[];
+  providerOptions?: ClusterProviderOptions;
+  regions: string[];
+  versions: string[];
+}
+
+export interface ClusterPage {
+  items: ClusterObservation[];
+  nextCursor?: string;
+}
+
+export interface ClusterProviderOptions {
+  payload: string;
+  provider: string;
+  version: number;
+}
+
+export interface ClusterRef {
+  accountId: string;
+  id: string;
+  incarnation: string;
+  region: string;
+}
+
+export interface ClusterSpec {
+  ha: boolean;
+  maintenance: ClusterMaintenance;
+  name: string;
+  networkId: string;
+  nodePools: NodePoolSpec[];
+  operationId: string;
+  providerOptions?: ClusterProviderOptions;
+  region: string;
+  version: string;
+}
+
+export interface ClusterStep {
+  attemptedAt?: string;
+  completedAt?: string;
+  name: string;
+  remoteOperationId?: string;
+  remoteResourceId?: string;
+  requestDigest: string;
+  state: string;
 }
 
 export interface Collection {
@@ -959,6 +1227,7 @@ export interface DNSRecord {
   id: string;
   name: string;
   owner?: string;
+  proxied?: boolean;
   ttl: number;
   type: string;
   value: string;
@@ -1132,8 +1401,28 @@ export interface DeploymentCounts {
 }
 
 export interface DeploymentList {
-  deployments: Deployment[];
+  deployments: DeploymentsDeployment[];
   next?: string;
+}
+
+export interface DeploymentsDeployment {
+  canary?: Canary;
+  capacityWait?: CapacityWait;
+  commitSha: string;
+  environment: string;
+  environmentId: string;
+  error: string;
+  finishedAt?: string;
+  id: string;
+  orgId: string;
+  planId: string;
+  projectId: string;
+  retries: number;
+  sources: SourceArtifact[];
+  startedAt: string;
+  startedBy: string;
+  status: string;
+  steps: Step[];
 }
 
 export interface DiscoveredService {
@@ -1234,7 +1523,54 @@ export interface Edge {
   to: string;
 }
 
+export interface EdgeInputBody {
+  policy: {
+  enabled: boolean;
+  invalidateOnDeploy: boolean;
+  rules: EdgeRule[];
+};
+  revision: number;
+}
+
+export interface EdgePolicy {
+  enabled: boolean;
+  invalidateOnDeploy: boolean;
+  rules: EdgeRule[];
+}
+
+export interface EdgePurgeInputBody {
+  revision: number;
+  urls: string[];
+}
+
+export interface EdgeRule {
+  browserTtl: number;
+  edgeTtl: number;
+  mode: string;
+  pathPrefix: string;
+}
+
+export interface EdgeState {
+  appliedAt: string;
+  desired?: DNSRecord;
+  invalidationError?: string;
+  kind: string;
+  lastDeploymentId?: string;
+  lastPurgeAt: string;
+  message: string;
+  orgId: string;
+  policy: EdgePolicy;
+  prior?: DNSRecord;
+  projectId: string;
+  requestedAt: string;
+  revision: number;
+  routeId: string;
+  status: string;
+  urls?: string[];
+}
+
 export interface EditInputBody {
+  baseRevision?: number;
   addResource?: {
   enabledIn?: string;
   gpu?: ManifestGPU;
@@ -1264,17 +1600,17 @@ export interface EditInputBody {
   name: string;
   provider?: string;
   region?: string;
+  scale?: Scale;
   section: string;
+  size?: SizeEdit;
   target?: string;
 };
   removeResource?: string;
-  scale?: Scale;
   setUse?: {
   dependency: string;
   resource: string;
   use: Use;
 };
-  size?: SizeEdit;
   unlink?: {
   need: string;
   options?: Record<string, any>;
@@ -1507,6 +1843,17 @@ export interface ExpansionList {
 
 export interface FabriqKeyList {
   keys: ConsumerKey[];
+}
+
+export interface FabriqloomStatus {
+  entityTypes: number;
+  keysReportUse: boolean;
+  kind: string;
+  migrations: number;
+  migrationsKnown: boolean;
+  reachable: boolean;
+  reason?: string;
+  version: string;
 }
 
 export interface FailedCleanup {
@@ -2000,6 +2347,24 @@ export interface ManagedRecord {
   zoneId: string;
 }
 
+export interface ManagedRegistryBackup {
+  createdAt: string;
+  id: string;
+  size: number;
+}
+
+export interface ManagedRegistryView {
+  action: string;
+  backups: ManagedRegistryBackup[];
+  connectionId: string;
+  dnsReady: boolean;
+  generation: number;
+  hostname: string;
+  message: string;
+  phase: string;
+  status: string;
+}
+
 export interface Manifest {
   databaseGateway?: DatabaseGateway;
   defaults?: Defaults;
@@ -2115,15 +2480,6 @@ export interface ModelsUpdateInputBody {
 }
 
 export interface MoveInput {
-  destinationServerId: string;
-  environmentId: string;
-  poolId: string;
-  projectId: string;
-  review?: string;
-  service: string;
-}
-
-export interface MoveInputBody {
   destinationServerId: string;
   environmentId: string;
   poolId: string;
@@ -2365,6 +2721,24 @@ export interface NewKeyBody {
   access: string;
   expiresInDays?: number;
   name: string;
+}
+
+export interface NodePoolSpec {
+  autoscale: boolean;
+  count: number;
+  labels?: Record<string, any>;
+  max: number;
+  min: number;
+  name: string;
+  providerOptions?: ClusterProviderOptions;
+  size: string;
+  taints?: NodePoolTaint[];
+}
+
+export interface NodePoolTaint {
+  effect: string;
+  key: string;
+  value: string;
 }
 
 export interface Note {
@@ -3089,6 +3463,15 @@ export interface RegistrationList {
   registrations: (Registration | null)[];
 }
 
+export interface RegistryActionInputBody {
+  backupId?: string;
+  deleteData?: boolean;
+  generation: number;
+  hostname: string;
+  kind: string;
+  removeSetup?: boolean;
+}
+
 export interface RegistryList {
   counts: Record<string, any>;
   entries: EntrySummary[];
@@ -3564,8 +3947,31 @@ export interface ScalingPoolInputBody {
   acceleratorKind?: string;
   expectedRevision: number;
   name: string;
-  policy: CapacityPolicy;
-  template: PoolExpansionPolicy;
+  policy: {
+  cloudId: string;
+  enabled: boolean;
+  frontendLimits: FrontendLimit[];
+  gpuLimits?: GPULimit[];
+  limits: ResourceVector;
+  orgId: string;
+  pools: PoolExpansionPolicy[];
+  requireExpansionApproval: boolean;
+  revision: number;
+};
+  template: {
+  acceleratorKind?: string;
+  allowedSizes: string[];
+  architecture: string;
+  bootstrapSize: string;
+  connectionId: string;
+  image: string;
+  limits?: ResourceVector;
+  maxServers: number;
+  minServers: number;
+  poolId: string;
+  region: string;
+  systemReserve: ResourceVector;
+};
 }
 
 export interface Server {
@@ -3924,17 +4330,6 @@ export interface StartAnalysisInputBody {
   sources?: string[];
 }
 
-export interface Status {
-  entityTypes: number;
-  keysReportUse: boolean;
-  kind: string;
-  migrations: number;
-  migrationsKnown: boolean;
-  reachable: boolean;
-  reason?: string;
-  version: string;
-}
-
 export interface Step {
   actionId: string;
   finishedAt?: string;
@@ -4020,6 +4415,8 @@ export interface Target {
   createdAt: string;
   displayName: string;
   id: string;
+  locationId?: string;
+  managedResourceId?: string;
   name: string;
   orgId: string;
   poolId?: string;
@@ -4083,11 +4480,6 @@ export interface UnreachableAccount {
 export interface UnroutableService {
   reason: string;
   service: string;
-}
-
-export interface UpdateInputBody {
-  name: string;
-  revision: number;
 }
 
 export interface UpdateProjectInputBody {

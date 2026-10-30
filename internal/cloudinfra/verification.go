@@ -157,6 +157,9 @@ func (s *Service) executeRoute(ctx context.Context, st DomainStore, op *RouteOpe
 			return checkErr
 		}
 	}
+	if route.Binding.BackendName() == RouteBackendFirecracker {
+		return s.executeFirecrackerRoute(ctx, st, op, zone)
+	}
 	if route.Binding.BackendName() == RouteBackendKubernetes {
 		return s.executeKubernetesRoute(ctx, st, op, zone)
 	}
@@ -474,6 +477,9 @@ func (s *Service) verifyRouteDestination(ctx context.Context, c *server.Client, 
 	out.DNS = err == nil && len(addresses) > 0
 	for _, address := range addresses {
 		out.DNS = out.DNS && address.IP.Equal(net.ParseIP(route.Binding.Address))
+	}
+	if route.Receipt != nil && route.Receipt.Proxied {
+		out.DNS = err == nil && len(addresses) > 0 && s.verifyProxiedRouteDNS(ctx, route)
 	}
 	if !out.DNS {
 		out.DNSError = "DNS does not resolve exclusively to the accepted server address."

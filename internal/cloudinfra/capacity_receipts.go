@@ -43,6 +43,9 @@ func reconcileCapacityReservations(ctx context.Context, tx driver.Tx, org, cloud
 			continue
 		}
 		r := scoped.reservation
+		if r.ClusterOperationID != "" {
+			continue
+		}
 		var resource string
 		if err = tx.QueryRow(ctx, `SELECT body->>'resource_id' FROM loomplane_infrastructure_operations WHERE org_id=$1 AND cloud_id=$2 AND id=$3`, org, cloud, r.OperationID).Scan(&resource); err != nil {
 			return storeError(err)

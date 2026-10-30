@@ -48,6 +48,11 @@ func New(cfg *Config) (*Client, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create Kubernetes transport: %w", err)
 	}
+	if cfg.journalRequired() {
+		httpClient.Transport = &managedTransport{next: httpClient.Transport, journal: cfg.ManagedJournal, scope: cfg.ManagedScope}
+	} else if cfg.ManagedWorkload {
+		httpClient.Transport = &managedLegacyTransport{next: httpClient.Transport, guard: cfg.ManagedLegacyGuard, identity: cfg.ManagedIdentity}
+	}
 	httpClient.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 	client, err := kubeclient.NewForConfigAndClient(rc, httpClient)
 	if err != nil {
@@ -95,6 +100,9 @@ func (c *Client) Check(ctx context.Context) (*Result, error) {
 		return nil, fmt.Errorf("read the selected namespace: %w", err)
 	default:
 		out.Details["namespace_uid"] = string(ns.UID)
+	}
+	if setupErr := c.discoverManagedSetup(ctx, out); setupErr != nil {
+		return nil, setupErr
 	}
 	for _, resource := range []struct {
 		group, name string
@@ -147,7 +155,11 @@ func (c *Client) Check(ctx context.Context) (*Result, error) {
 		return nil, postgresErr
 	}
 	// Routes are optional, so what they need is a detail and never Missing.
-	routes, err := c.CheckRoutePrerequisites(ctx)
+	routeClient := *c
+	routeConfig := *c.Config
+	routeConfig.Details = out.Details
+	routeClient.Config = &routeConfig
+	routes, err := routeClient.CheckRoutePrerequisites(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -162,6 +174,10 @@ func (c *Client) Check(ctx context.Context) (*Result, error) {
 		return nil, err
 	}
 	if err := c.checkAccessPermissions(ctx, out); err != nil {
+		return nil, err
+	}
+	c.checkBuildIsolation(ctx, out)
+	if err := c.checkManagedBuildPermissions(ctx, out); err != nil {
 		return nil, err
 	}
 	inv, gpuErr := c.GPUs(ctx)

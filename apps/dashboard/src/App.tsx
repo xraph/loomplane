@@ -10,6 +10,7 @@ import { useCallback, useEffect } from "react"
 import { messageOf } from "@/client/errors"
 import { AppSidebar } from "@/components/app-sidebar"
 import { AppStatusBar } from "@/components/app-status-bar"
+import { AuthRedirect } from "@/components/auth-redirect"
 import { AuthLayout } from "@/components/auth-layout"
 import { ShellProvider } from "@/components/shell"
 import { SystemAddress, SystemPage } from "@/components/system-page"
@@ -78,6 +79,7 @@ export function App() {
     )
   }
   if (!isAuthenticated) {
+    if (!authPaths.includes(path)) return <AuthRedirect />
     return (
       <AuthLayout title={authTitle(path)}>
         <AuthPage
@@ -91,7 +93,7 @@ export function App() {
       </AuthLayout>
     )
   }
-  if (authPaths.includes(path)) return <Navigate to="/" replace />
+  if (authPaths.includes(path)) return <AuthRedirect authenticated />
   if (invite) return <AcceptInvitation token={invite} />
   // An invitation link without its token: the route says so on a page of
   // its own, since no workspace is involved yet.

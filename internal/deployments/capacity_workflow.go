@@ -46,6 +46,9 @@ func (r *Runner) AssessWorkflowCapacity(ctx context.Context, org, id string) (or
 }
 
 func deferredPlan(plan *planning.Plan) bool {
+	if plan.RequiredRuntimeProtocol != "" {
+		return true
+	}
 	for _, a := range plan.Actions {
 		if planning.HasCapacityIntent(a) {
 			return true
@@ -54,6 +57,16 @@ func deferredPlan(plan *planning.Plan) bool {
 	return false
 }
 func legacyCapacityGuard(ctx context.Context, plan *planning.Plan) error {
+	required := plan.RequiredRuntimeProtocol
+	for _, a := range plan.Actions {
+		if a.Service != nil && a.Service.ClusterDemand != nil && required == "" {
+			return errors.New("managed workload is missing its required execution protocol; plan again")
+		}
+	}
+	if required != "" && (required != orchestration.ManagedWorkloadProtocol || !orchestration.IsManagedWorkloadContext(ctx)) {
+		return errors.New("managed workload requires a compatible journal workflow")
+	}
+
 	if deferredPlan(plan) && !orchestration.IsCapacityContext(ctx) {
 		return errors.New("deferred capacity requires a v3 workflow; plan again")
 	}

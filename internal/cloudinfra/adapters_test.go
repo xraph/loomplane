@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/xraph/loomplane/internal/cloudinfra"
 	"github.com/xraph/loomplane/internal/clouds/cloudflare"
@@ -582,5 +583,112 @@ func TestDNSAdapterConformance(t *testing.T) {
 				t.Fatalf("cancel: %v", err)
 			}
 		})
+	}
+}
+
+type fixtureClusterReader struct{}
+
+func (fixtureClusterReader) Options(context.Context, provider.AccountAccess, string) (provider.ClusterOptions, error) {
+	return provider.ClusterOptions{}, nil
+}
+func (fixtureClusterReader) ListClusters(context.Context, provider.AccountAccess, string) (provider.ClusterPage, error) {
+	return provider.ClusterPage{}, nil
+}
+func (fixtureClusterReader) GetCluster(context.Context, provider.AccountAccess, provider.ClusterRef) (provider.ClusterObservation, error) {
+	return provider.ClusterObservation{}, nil
+}
+
+type fixtureClusterCreator struct{ fixtureClusterReader }
+
+func (fixtureClusterCreator) CreateCluster(context.Context, provider.AccountAccess, provider.ClusterSpec) (provider.ClusterMutation, error) {
+	return provider.ClusterMutation{}, nil
+}
+
+func TestClusterReaderOnlyRegistration(t *testing.T) {
+	r := cloudinfra.NewAdapters()
+	if err := r.RegisterCluster("reader", fixtureClusterReader{}); err != nil {
+		t.Fatal(err)
+	}
+	for _, capability := range []provider.InfrastructureCapability{provider.ClusterDiscovery, provider.ClusterOptionsRead} {
+		if _, err := r.Cluster("reader", capability); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := r.Cluster("reader", provider.ClusterCreation); !errors.Is(err, provider.ErrInfrastructureUnsupported) {
+		t.Fatal(err)
+	}
+	if !slices.Equal(r.Providers(), []string{"reader"}) {
+		t.Fatal(r.Providers())
+	}
+	if err := r.RegisterCluster("reader", fixtureClusterReader{}); !errors.Is(err, provider.ErrInfrastructureInvalid) {
+		t.Fatal(err)
+	}
+}
+
+func TestClusterCapabilitiesRequireImplementedInterfaces(t *testing.T) {
+	for _, capability := range []provider.InfrastructureCapability{provider.ClusterCreation, provider.ClusterMutationObservation, provider.ClusterBootstrapAccess, provider.ClusterConfigurationUpdate, provider.ClusterUpgrade, provider.ClusterDeletion, provider.NodePoolCreation, provider.NodePoolUpdate, provider.NodePoolDeletion, provider.ClusterCapacityObservation, "unknown"} {
+		r := cloudinfra.NewAdapters()
+		if err := r.RegisterCluster("fixture", fixtureClusterReader{}, capability); !errors.Is(err, provider.ErrInfrastructureUnsupported) {
+			t.Fatalf("%s: %v", capability, err)
+		}
+		if len(r.Providers()) != 0 || len(r.Capabilities("fixture")) != 0 {
+			t.Fatal("partial registration")
+		}
+	}
+	r := cloudinfra.NewAdapters()
+	if err := r.RegisterCluster("creator", fixtureClusterCreator{}, provider.ClusterCreation); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Cluster("creator", provider.ClusterCreation); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.RegisterCluster("undeclared", fixtureClusterCreator{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Cluster("undeclared", provider.ClusterCreation); !errors.Is(err, provider.ErrInfrastructureUnsupported) {
+		t.Fatal(err)
+	}
+	if _, err := r.Cluster("missing", provider.ClusterDiscovery); !errors.Is(err, provider.ErrInfrastructureUnsupported) {
+		t.Fatal(err)
+	}
+}
+
+type fixtureClusterOperations struct{ fixtureClusterCreator }
+
+func (fixtureClusterOperations) ObserveClusterMutation(context.Context, provider.AccountAccess, provider.ClusterMutation) (provider.ClusterObservation, error) {
+	return provider.ClusterObservation{}, nil
+}
+func (fixtureClusterOperations) BootstrapCluster(context.Context, provider.AccountAccess, provider.ClusterRef, time.Duration) (provider.BootstrapAccess, error) {
+	return provider.BootstrapAccess{}, nil
+}
+
+func TestClusterOptionalOperationsAndAtomicRegistration(t *testing.T) {
+	r := cloudinfra.NewAdapters()
+	capabilities := []provider.InfrastructureCapability{provider.ClusterCreation, provider.ClusterMutationObservation, provider.ClusterBootstrapAccess}
+	if err := r.RegisterCluster("all", fixtureClusterOperations{}, capabilities...); err != nil {
+		t.Fatal(err)
+	}
+	for _, capability := range capabilities {
+		if _, err := r.Cluster("all", capability); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := r.Cluster("all", provider.ServerDiscovery); !errors.Is(err, provider.ErrInfrastructureUnsupported) {
+		t.Fatal(err)
+	}
+	if err := r.RegisterCluster("partial", fixtureClusterOperations{}, provider.ClusterCreation, "unknown"); !errors.Is(err, provider.ErrInfrastructureUnsupported) {
+		t.Fatal(err)
+	}
+	if len(r.Capabilities("partial")) != 0 {
+		t.Fatal("failed registration advertised capabilities")
+	}
+	if err := r.RegisterCluster("partial", fixtureClusterReader{}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.RegisterCluster("", fixtureClusterReader{}); !errors.Is(err, provider.ErrInfrastructureInvalid) {
+		t.Fatal(err)
+	}
+	if err := r.RegisterCluster("nil", nil); !errors.Is(err, provider.ErrInfrastructureInvalid) {
+		t.Fatal(err)
 	}
 }

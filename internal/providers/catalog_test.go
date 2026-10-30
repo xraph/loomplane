@@ -63,10 +63,10 @@ func TestRegistry_capabilities(t *testing.T) {
 		got  []string
 		want []string
 	}{
-		{"web apps", names(r.Running(provider.WebApp)), []string{"vercel", "cloud-run", "ecs-fargate", "render", "digitalocean", "azure-container-apps", "server", "kubernetes"}},
-		{"http services", names(r.Running(provider.HTTPService)), []string{"cloud-run", "ecs-fargate", "render", "digitalocean", "azure-container-apps", "server", "kubernetes"}},
-		{"static sites", names(r.Running(provider.StaticSite)), []string{"vercel", "render", "digitalocean", "azure-container-apps", "server", "kubernetes"}},
-		{"workers", names(r.Running(provider.Worker)), []string{"ecs-fargate", "render", "digitalocean", "azure-container-apps", "server", "kubernetes"}},
+		{"web apps", names(r.Running(provider.WebApp)), []string{"vercel", "cloud-run", "ecs-fargate", "render", "digitalocean", "azure-container-apps", "firecracker", "server", "kubernetes"}},
+		{"http services", names(r.Running(provider.HTTPService)), []string{"cloud-run", "ecs-fargate", "render", "digitalocean", "azure-container-apps", "firecracker", "server", "kubernetes"}},
+		{"static sites", names(r.Running(provider.StaticSite)), []string{"vercel", "render", "digitalocean", "azure-container-apps", "firecracker", "server", "kubernetes"}},
+		{"workers", names(r.Running(provider.Worker)), []string{"ecs-fargate", "render", "digitalocean", "azure-container-apps", "firecracker", "server", "kubernetes"}},
 		{"postgres", names(r.Provisioning("postgres")), []string{"render", "digitalocean", "cloud-sql", "rds", "azure-database", "server", "kubernetes"}},
 		{"mysql", names(r.Provisioning("mysql")), []string{"digitalocean", "cloud-sql", "rds", "azure-database", "server"}},
 		{"mariadb", names(r.Provisioning("mariadb")), []string{"server"}},
@@ -312,6 +312,29 @@ func TestModelKindsAreOfferedOnlyWithAI(t *testing.T) {
 		}
 		if _, ok := p.Provisioning(recipes.ModelTEIKind); ok != features[recipes.FeatureAI] {
 			t.Errorf("features %v: server provisions %s = %v", features, recipes.ModelTEIKind, ok)
+		}
+	}
+}
+
+func TestClusterContractsAdvertiseInstalledBuiltinSupport(t *testing.T) {
+	for _, target := range Catalog() {
+		for _, capability := range target.Infrastructure {
+			switch capability {
+			case provider.ClusterDiscovery, provider.ClusterOptionsRead, provider.ClusterBootstrapAccess, provider.ClusterCreation, provider.ClusterMutationObservation:
+				if target.Name != "digitalocean" {
+					t.Fatalf("%s advertises uninstalled cluster capability %s", target.Name, capability)
+				}
+			}
+		}
+		if target.Name == "digitalocean" {
+			for _, capability := range []provider.InfrastructureCapability{provider.ClusterDiscovery, provider.ClusterOptionsRead, provider.ClusterBootstrapAccess, provider.ClusterCreation, provider.ClusterMutationObservation} {
+				if !slices.Contains(target.Infrastructure, capability) {
+					t.Fatalf("DigitalOcean is missing installed capability %s", capability)
+				}
+			}
+		}
+		if target.Name == "digitalocean" && (target.Model != provider.Build || target.Title != "DigitalOcean App Platform") {
+			t.Fatal("cluster contracts changed the App Platform target")
 		}
 	}
 }

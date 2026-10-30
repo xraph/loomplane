@@ -22,6 +22,7 @@ const (
 	DigitalOcean = "digitalocean"
 	Azure        = "azure"
 	Server       = "server"
+	Firecracker  = "firecracker"
 	Kubernetes   = "kubernetes"
 	Registry     = "registry"
 	Cloudflare   = "cloudflare"

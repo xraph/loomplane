@@ -264,6 +264,9 @@ type StorageConfig struct {
 // CloudsConfig configures enrollment callbacks and provider API test overrides.
 // Leave provider API overrides empty for live deployments.
 type CloudsConfig struct {
+	ManagedClusters ManagedClustersConfig
+	ClusterCapacity ClusterCapacityConfig
+
 	// EnrollmentURL is the reachable HTTPS callback base for managed servers.
 	// Empty uses PublicURL; local addresses cannot provision remote servers.
 	EnrollmentURL string
@@ -458,6 +461,21 @@ func FromSource(src Getter) (Config, error) {
 	r.boolean(&c.Clouds.CloudflareRegistrarSandbox, "clouds.cloudflare_registrar_sandbox")
 	r.str(&c.Clouds.ACMEDirectory, "clouds.acme_directory")
 	r.boolean(&c.Clouds.KubernetesInCluster, "clouds.kubernetes_in_cluster")
+	r.boolean(&c.Clouds.ManagedClusters.Enabled, "clouds.managed_clusters.enabled")
+	r.boolean(&c.Clouds.ClusterCapacity.Enabled, "clouds.cluster_capacity.enabled")
+	r.str(&c.Clouds.ManagedClusters.ManagementProbe.Provider, "clouds.managed_clusters.management_probe.provider")
+	r.str(&c.Clouds.ManagedClusters.ManagementProbe.NetworkID, "clouds.managed_clusters.management_probe.network_id")
+	r.str(&c.Clouds.ManagedClusters.ManagementProbe.EvidenceID, "clouds.managed_clusters.management_probe.evidence_id")
+	r.str(&c.Clouds.ManagedClusters.ManagementProbe.URL, "clouds.managed_clusters.management_probe.url")
+	r.str(&c.Clouds.ManagedClusters.ManagementProbe.SPKISHA256, "clouds.managed_clusters.management_probe.spki_sha256")
+	r.str(&c.Clouds.ManagedClusters.ManagementProbe.ExpiresAt, "clouds.managed_clusters.management_probe.expires_at")
+	r.str(&c.Clouds.ManagedClusters.QualificationOrgID, "clouds.managed_clusters.qualification_org_id")
+	r.str(&c.Clouds.ManagedClusters.QualificationOperatorID, "clouds.managed_clusters.qualification_operator_id")
+	r.str(&c.Clouds.ManagedClusters.QualificationAccountID, "clouds.managed_clusters.qualification_account_id")
+	r.str(&c.Clouds.ManagedClusters.QualificationRegion, "clouds.managed_clusters.qualification_region")
+	r.integer(&c.Clouds.ManagedClusters.MaxNodes, "clouds.managed_clusters.max_nodes")
+	r.int64(&c.Clouds.ManagedClusters.MaxNodeHourlyMicroUSD, "clouds.managed_clusters.max_node_hourly_micro_usd")
+	r.integer(&c.Clouds.ManagedClusters.MaxAccountCreates, "clouds.managed_clusters.max_account_creates")
 	c.Clouds.OAuth = r.oauthApps(c.Clouds.OAuth, "clouds.oauth")
 	r.plugins(&c.Providers.Plugins, "providers.plugins")
 	r.names(&c.Providers.Paused, "providers.paused")
@@ -800,3 +818,34 @@ func (r *reader) duration(dst *time.Duration, key string) {
 	}
 	*dst = d
 }
+
+// ManagedClustersConfig restricts purchases to explicitly scoped qualification runs.
+// General purchase rollout requires the retirement qualification in the lifecycle plan.
+type ManagedClustersConfig struct {
+	ManagementProbe         ManagedClusterManagementProbeConfig
+	MaxNodeHourlyMicroUSD   int64
+	Enabled                 bool
+	QualificationOrgID      string
+	QualificationOperatorID string
+	QualificationAccountID  string
+	QualificationRegion     string
+	MaxNodes                int
+	MaxAccountCreates       int
+}
+
+// ManagedClusterManagementProbeConfig identifies an operator-qualified existing
+// management path. Its material does not belong in API reviews or logs.
+type ManagedClusterManagementProbeConfig struct {
+	Provider   string `json:"-"`
+	NetworkID  string `json:"-"`
+	EvidenceID string `json:"-"`
+	URL        string `json:"-"`
+	SPKISHA256 string `json:"-"`
+	ExpiresAt  string `json:"-"`
+}
+
+func (ManagedClusterManagementProbeConfig) String() string     { return "[management path qualification]" }
+func (c ManagedClusterManagementProbeConfig) GoString() string { return c.String() }
+
+// ClusterCapacityConfig gates reviewed cluster scaling independently of server automation.
+type ClusterCapacityConfig struct{ Enabled bool }

@@ -1,0 +1,5 @@
+import type { Codec } from '../codec-runtime';
+import { codec_ResourceVector } from './ResourceVector';
+import { codec_ScalingPoolInputBody_template_allowed_sizes } from './ScalingPoolInputBody.template.allowed_sizes';
+
+export const codec_ScalingPoolInputBody_template: Codec = {"kind": "object", "fields": {"accelerator_kind": {"ts": "acceleratorKind"}, "allowed_sizes": {"ts": "allowedSizes", "codec": () => codec_ScalingPoolInputBody_template_allowed_sizes}, "architecture": {"ts": "architecture"}, "bootstrap_size": {"ts": "bootstrapSize"}, "connection_id": {"ts": "connectionId"}, "image": {"ts": "image"}, "limits": {"ts": "limits", "codec": () => codec_ResourceVector}, "max_servers": {"ts": "maxServers"}, "min_servers": {"ts": "minServers"}, "pool_id": {"ts": "poolId"}, "region": {"ts": "region"}, "system_reserve": {"ts": "systemReserve", "codec": () => codec_ResourceVector}}, "required": ["allowed_sizes", "architecture", "bootstrap_size", "connection_id", "image", "max_servers", "min_servers", "pool_id", "region", "system_reserve"]};
