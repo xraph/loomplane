@@ -120,12 +120,19 @@ func (t *managedTransport) request(req *http.Request) (ManagedRequest, error) {
 			return out, ErrManagedAuthority
 		}
 		out.Name, out.UID = m.Name, string(m.UID)
+		out.ResourceVersion = m.ResourceVersion
 	case http.MethodDelete:
 		var options metav1.DeleteOptions
 		if out.Name == "" || json.Unmarshal(body, &options) != nil || options.Preconditions == nil || options.Preconditions.UID == nil || *options.Preconditions.UID == "" {
 			return out, ErrManagedAuthority
 		}
 		out.UID = string(*options.Preconditions.UID)
+		if options.Preconditions.ResourceVersion != nil {
+			out.ResourceVersion = *options.Preconditions.ResourceVersion
+			if out.ResourceVersion == "" {
+				return out, ErrManagedAuthority
+			}
+		}
 	default:
 		// No current application path uses PATCH or subresources. Refuse unknown
 		// mutations until their ownership and outcome semantics are implemented.

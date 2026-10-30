@@ -115,9 +115,17 @@ func TestManagedCleanupIssuerRecovery(t *testing.T) {
 		t.Fatal(checkErr)
 	}
 	j := f.store.Journal("org", g.ID)
+	f.request.ResourceVersion = "checked-version"
 	unknown, err := j.Issue(f.ctx, f.scope, f.request)
 	if err != nil {
 		t.Fatal(err)
+	}
+	for _, version := range []string{"", "newer-version"} {
+		changed := f.request
+		changed.ResourceVersion = version
+		if _, err = j.Issue(f.ctx, f.scope, changed); err == nil {
+			t.Fatal("unknown cleanup allowed changed resourceVersion")
+		}
 	}
 	other := f.request
 	other.Resource = "services"

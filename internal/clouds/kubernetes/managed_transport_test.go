@@ -116,3 +116,54 @@ func TestManagedResponseRequiresExactOutcome(t *testing.T) {
 		t.Fatal("exact delete acceptance lost")
 	}
 }
+
+func TestManagedTransportDeleteResourceVersion(t *testing.T) {
+	scope := transportScope()
+	iid, _ := id.ParseWithPrefix(scope.Instance, id.PrefixInstance)
+	name := WorkloadName(iid)
+	transport := &managedTransport{scope: scope}
+	for _, tc := range []struct {
+		name, preconditions, version string
+		denied                       bool
+	}{
+		{name: "historical", preconditions: `{"uid":"owned"}`},
+		{name: "versioned", preconditions: `{"uid":"owned","resourceVersion":"42"}`, version: "42"},
+		{name: "empty", preconditions: `{"uid":"owned","resourceVersion":""}`, denied: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			body := `{"preconditions":` + tc.preconditions + `}`
+			req := httptest.NewRequestWithContext(t.Context(), http.MethodDelete, "/apis/apps/v1/namespaces/"+scope.Namespace+"/deployments/"+name, strings.NewReader(body))
+			got, err := transport.request(req)
+			if tc.denied {
+				if !errors.Is(err, ErrManagedAuthority) {
+					t.Fatalf("invalid precondition: %v", err)
+				}
+				return
+			}
+			if err != nil || got.UID != "owned" || got.ResourceVersion != tc.version {
+				t.Fatalf("preconditions lost: %+v %v", got, err)
+			}
+		})
+	}
+}
+
+func TestManagedRequestHistoricalJSON(t *testing.T) {
+	const historical = `{"Group":"apps","Version":"v1","Resource":"deployments","Namespace":"apps","Name":"owned","Method":"DELETE","UID":"uid"}`
+	var request ManagedRequest
+	if err := json.Unmarshal([]byte(historical), &request); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(request)
+	if err != nil || string(raw) != historical {
+		t.Fatalf("historical request changed: %s %v", raw, err)
+	}
+	request.ResourceVersion = "42"
+	raw, err = json.Marshal(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var recovered ManagedRequest
+	if err = json.Unmarshal(raw, &recovered); err != nil || recovered != request {
+		t.Fatalf("versioned request changed: %+v %v", recovered, err)
+	}
+}

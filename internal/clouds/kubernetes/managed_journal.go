@@ -20,6 +20,7 @@ type ManagedScope struct {
 type ManagedRequest struct {
 	Group, Version, Resource, Namespace, Name, Method string
 	UID                                               string
+	ResourceVersion                                   string `json:",omitempty"`
 }
 
 type ManagedOutcome struct {
