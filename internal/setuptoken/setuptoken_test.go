@@ -34,6 +34,18 @@ func TestDeriveIsStable(t *testing.T) {
 	}
 }
 
+func TestDeriveKnownAnswer(t *testing.T) {
+	const k = "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="
+	const want = "737wzfewgo5pdfdpsvvw72fxlw6pdnnl"
+	got, err := Derive(k)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != want {
+		t.Fatalf("Derive = %q, want %q", got, want)
+	}
+}
+
 func TestDeriveDiffersByKey(t *testing.T) {
 	a, _ := Derive(key(1))
 	b, _ := Derive(key(2))
@@ -65,8 +77,13 @@ func TestMatchesForgivesCopyPaste(t *testing.T) {
 func TestMatchesRefuses(t *testing.T) {
 	k := key(3)
 	tok, _ := Derive(k)
+	near := "b" + tok[1:]
+	if tok[0] == 'b' {
+		near = "c" + tok[1:]
+	}
 	cases := map[string]struct{ key, tok string }{
 		"wrong token": {k, strings.Repeat("a", 32)},
+		"near miss":   {k, near},
 		"empty token": {k, ""},
 		"blank token": {k, "  \n"},
 		"bad key":     {"short", tok},
