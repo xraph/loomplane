@@ -374,3 +374,33 @@ func TestDeciderNames(t *testing.T) {
 		}
 	}
 }
+
+func TestDecidedReachesAPhoneThatGotTheWaitingPushWhileAnotherFailed(t *testing.T) {
+	svc, gw, _ := planRig(t)
+	gw.registerFor(t, svc, "bo", "h1.a")
+	gw.registerFor(t, svc, "bo", "h1.b")
+	gw.answer("h1.b", 500)
+	newPlan(t, svc, "env-p", "ada")
+	setPlan(t, svc, "ready", "")
+	release(t, svc)
+	if err := svc.drain(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	var state string
+	if err := svc.pg.QueryRow(t.Context(), `SELECT push_state FROM loomplane_notification_outbox WHERE kind=$1 AND user_id='bo'`, KindPlanWaiting).Scan(&state); err != nil || state != PushPending {
+		t.Fatalf("waiting row: %s %v", state, err)
+	}
+	// The waiting row ran out of tries with one phone still failing.
+	if _, err := svc.pg.Exec(t.Context(), `UPDATE loomplane_notification_outbox SET push_state='failed',completed_at=clock_timestamp(),attempts=10 WHERE kind=$1 AND user_id='bo'`, KindPlanWaiting); err != nil {
+		t.Fatal(err)
+	}
+	before := len(gw.taken())
+	setPlan(t, svc, "approved", "ada")
+	if err := svc.drain(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	sends := gw.taken()[before:]
+	if len(sends) != 1 || sends[0].Handle != "h1.a" || sends[0].Env.Category != "update" || sends[0].Env.Body != "Approved by Ada Lovelace." {
+		t.Fatalf("decided sends: %+v", sends)
+	}
+}

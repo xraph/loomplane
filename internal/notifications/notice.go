@@ -156,6 +156,11 @@ func validatePush(n Notice) error {
 			return fmt.Errorf("%w: unknown push toggle %q", ErrInvalid, p.Toggle)
 		}
 	}
+	for k := range p.Data {
+		if k != "revision" && k != "taken_by" {
+			return fmt.Errorf("%w: unknown push data key %q", ErrInvalid, k)
+		}
+	}
 	return nil
 }
 

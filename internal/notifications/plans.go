@@ -164,7 +164,9 @@ func (s *Service) planPush(ctx context.Context, item *outboxItem, plan *pushPlan
 			Collapse: collapse, Environment: env, Production: production, TTLSeconds: planPushTTL, Data: map[string]string{"revision": p.Revision}, Coverable: true}
 		return plan, nil
 	}
-	// A decided notice goes only to the phones the waiting push reached.
+	// A decided notice goes only to the phones the waiting push reached,
+	// whatever state the waiting row ended in: a phone that got it while
+	// another failed still shows Approve.
 	var state, inboxID string
 	var attempts int
 	var raw []byte
@@ -181,8 +183,6 @@ func (s *Service) planPush(ctx context.Context, item *outboxItem, plan *pushPlan
 		return nil, nil
 	case state == PushPending:
 		return nil, errWaitingPush
-	case state != PushSent:
-		return nil, nil
 	}
 	reached := map[string]string{}
 	if err := json.Unmarshal(raw, &reached); err != nil {
@@ -198,7 +198,7 @@ func (s *Service) planPush(ctx context.Context, item *outboxItem, plan *pushPlan
 		return nil, nil
 	}
 	item.inboxID = inboxID
-	plan.Push = &Push{Class: ClassUpdate, Urgency: driver.UrgencyPassive, Category: CategoryApproval, Actions: []string{ActionOpen},
+	plan.Push = &Push{Class: ClassUpdate, Urgency: driver.UrgencyPassive, Category: CategoryUpdate, Actions: []string{ActionOpen},
 		Collapse: collapse, Environment: env, Production: production, TTLSeconds: planPushTTL, Devices: devices}
 	return plan, nil
 }

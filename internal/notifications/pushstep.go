@@ -422,7 +422,7 @@ func (s *Service) withdrawRead(ctx context.Context, userID string, meta map[stri
 	}
 	var collapse string
 	var raw []byte
-	err := s.pg.QueryRow(ctx, `SELECT push_collapse,push_devices FROM loomplane_notification_outbox WHERE id=$1 AND push_state='sent'`, meta["outbox_id"]).Scan(&collapse, &raw)
+	err := s.pg.QueryRow(ctx, `SELECT push_collapse,push_devices FROM loomplane_notification_outbox WHERE id=$1 AND user_id=$2 AND push_state<>'pending'`, meta["outbox_id"], userID).Scan(&collapse, &raw)
 	if err != nil {
 		if !errors.Is(err, pgx.ErrNoRows) {
 			slog.WarnContext(ctx, "look up a pushed notice to withdraw", "error", err)

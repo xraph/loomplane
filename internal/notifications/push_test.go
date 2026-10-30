@@ -4,7 +4,10 @@ import (
 	"context"
 	"crypto/ed25519"
 	"encoding/base64"
+	"errors"
 	"testing"
+
+	"github.com/xraph/herald/driver"
 
 	"github.com/xraph/loomplane/internal/config"
 	"github.com/xraph/loomplane/internal/security"
@@ -48,5 +51,18 @@ func TestPushConfigNeedsASignedInPerson(t *testing.T) {
 	svc := &Service{cfg: config.Config{SecretKey: base64.StdEncoding.EncodeToString(make([]byte, 32)), Push: config.PushConfig{Enabled: true}}}
 	if _, err := svc.PushConfig(context.Background(), security.Principal{}); err == nil {
 		t.Fatal("anonymous caller got the config")
+	}
+}
+
+func TestValidatePushRejectsUnknownDataKeys(t *testing.T) {
+	ok := Notice{Push: &Push{Class: ClassUpdate, Category: CategoryUpdate, Urgency: driver.UrgencyPassive, Data: map[string]string{"revision": "r", "taken_by": "u"}}}
+	if err := validatePush(ok); err != nil {
+		t.Fatalf("known keys: %v", err)
+	}
+	for _, key := range []string{"server", "org", "path", "inbox_id"} {
+		bad := Notice{Push: &Push{Class: ClassUpdate, Category: CategoryUpdate, Urgency: driver.UrgencyPassive, Data: map[string]string{key: "x"}}}
+		if err := validatePush(bad); !errors.Is(err, ErrInvalid) {
+			t.Errorf("%s: %v", key, err)
+		}
 	}
 }
