@@ -5743,15 +5743,15 @@ export class RESTClient extends Client {
 
   public readonly setup = {
     /**
-     * Create the first account and organization
+     * Create the first account, make it the platform owner, and create its organization
      */
-    complete: async (body: types.SetupRequest, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.SetupResponse> => {
+    complete: async (body: types.SetupRequestBody, options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.SetupResponse> => {
       let __path = `/api/v1/setup`;
       const config: RequestConfig = {
         method: 'POST',
         url: __path,
         body,
-        bodyCodec: CODECS["SetupRequest"],
+        bodyCodec: CODECS["SetupRequestBody"],
         signal: options?.signal,
         retry: options?.retry,
         responseCodec: CODECS["SetupResponse"],
@@ -5761,7 +5761,7 @@ export class RESTClient extends Client {
     },
 
     /**
-     * Whether first-run setup is still waiting
+     * Whether this instance still waits for its first account
      */
     status: async (options?: { signal?: AbortSignal; retry?: { maxAttempts?: number } }): Promise<types.SetupStatus> => {
       let __path = `/api/v1/setup`;

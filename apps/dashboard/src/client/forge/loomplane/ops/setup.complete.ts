@@ -1,5 +1,5 @@
 import type { OperationMeta } from '../ops';
-import { codec_SetupRequest } from '../codecs/SetupRequest';
+import { codec_SetupRequestBody } from '../codecs/SetupRequestBody';
 import { codec_SetupResponse } from '../codecs/SetupResponse';
 
 export const op_setup_complete = {
@@ -7,6 +7,6 @@ export const op_setup_complete = {
   path: '/api/v1/setup',
   provides: [],
   invalidates: [],
-  bodyCodec: codec_SetupRequest,
+  bodyCodec: codec_SetupRequestBody,
   responseCodec: codec_SetupResponse,
 } as const satisfies OperationMeta;

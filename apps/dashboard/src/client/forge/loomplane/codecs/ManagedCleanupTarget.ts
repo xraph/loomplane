@@ -1,0 +1,8 @@
+import type { Codec } from '../codec-runtime';
+import { codec_ManagedCleanupBinding } from './ManagedCleanupBinding';
+import { codec_ManagedCleanupTarget_accepted } from './ManagedCleanupTarget.accepted';
+import { codec_ManagedCleanupTarget_binding_refs } from './ManagedCleanupTarget.binding_refs';
+import { codec_ManagedCleanupTarget_unresolved } from './ManagedCleanupTarget.unresolved';
+import { codec_ManagedScope } from './ManagedScope';
+
+export const codec_ManagedCleanupTarget: Codec = {"kind": "object", "fields": {"accepted": {"ts": "accepted", "codec": () => codec_ManagedCleanupTarget_accepted}, "attachment_id": {"ts": "attachmentId"}, "attachment_revision": {"ts": "attachmentRevision"}, "authority_epoch": {"ts": "authorityEpoch"}, "authority_revision": {"ts": "authorityRevision"}, "binding": {"ts": "binding", "codec": () => codec_ManagedCleanupBinding}, "binding_refs": {"ts": "bindingRefs", "codec": () => codec_ManagedCleanupTarget_binding_refs}, "connection_generation": {"ts": "connectionGeneration"}, "identity_current": {"ts": "identityCurrent"}, "kind": {"ts": "kind"}, "origin": {"ts": "origin"}, "parent_binding_id": {"ts": "parentBindingId"}, "revoked_at": {"ts": "revokedAt"}, "schema_version": {"ts": "schemaVersion"}, "scope": {"ts": "scope", "codec": () => codec_ManagedScope}, "trust_revision": {"ts": "trustRevision"}, "unresolved": {"ts": "unresolved", "codec": () => codec_ManagedCleanupTarget_unresolved}}, "required": ["accepted", "attachment_id", "attachment_revision", "authority_epoch", "authority_revision", "binding", "connection_generation", "identity_current", "kind", "origin", "parent_binding_id", "schema_version", "scope", "trust_revision", "unresolved"]};

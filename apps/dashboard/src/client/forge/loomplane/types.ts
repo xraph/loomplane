@@ -46,6 +46,7 @@ export interface Action {
   adoptCloudPlacement?: boolean;
   backupEveryHours?: number;
   changes?: Change[];
+  cleanupTargets?: ManagedCleanupTarget[];
   cloudAdoption?: CloudAdoption;
   compensation?: CloudCompensation;
   connectionId?: string;
@@ -202,6 +203,7 @@ export interface AttachmentInput {
   prerequisites: AttachmentPrerequisites;
   projectId: string;
   resourceRevision: number;
+  runtimeAccess?: RuntimeAccessProfile;
   serviceAccountName: string;
   targetSlug: string;
   trustFingerprint: string;
@@ -306,6 +308,15 @@ export interface BoardRoute {
   syncError?: string;
 }
 
+export interface BudgetReview {
+  accountExposure?: CapacityAccountSnapshot;
+  accountScope: string;
+  cloudId: string;
+  digest: string;
+  estimate: MoneyEstimate;
+  policyRevision: number;
+}
+
 export interface Build {
   builder?: string;
   context?: string;
@@ -322,6 +333,7 @@ export interface BuildSystem {
 
 export interface BuildTarget {
   builder?: string;
+  builderCloud?: string;
   builderSettings?: Record<string, any>;
   image?: string;
   registry?: string;
@@ -402,6 +414,12 @@ export interface CapacityBlock {
   targetId: string;
 }
 
+export interface CapacityBudget {
+  horizonSeconds: number;
+  maxHorizonMicroUsd: number;
+  maxHourlyMicroUsd: number;
+}
+
 export interface CapacityChange {
   cloudId: string;
   entityId: string;
@@ -450,6 +468,7 @@ export interface CapacityObservation {
 }
 
 export interface CapacityPolicy {
+  budget?: CapacityBudget;
   cloudId: string;
   enabled: boolean;
   frontendLimits: FrontendLimit[];
@@ -464,6 +483,7 @@ export interface CapacityPolicy {
 export interface CapacityPolicyInputBody {
   expectedRevision: number;
   policy: {
+  budget?: CapacityBudget;
   cloudId: string;
   enabled: boolean;
   frontendLimits: FrontendLimit[];
@@ -492,6 +512,11 @@ export interface CapacityQuota {
 export interface CapacityRecord {
   accountId: string;
   checkedAt: string;
+  clusterCheckedAt?: string;
+  clusterComplete?: boolean;
+  clusterConditions?: ClusterCondition[];
+  clusterNode?: ClusterNodeCapacity;
+  clusterResourceId?: string;
   gpuKind?: string;
   gpus?: number;
   kind: string;
@@ -637,13 +662,18 @@ export interface ChooseConnectionInputBody {
 }
 
 export interface CleanupReview {
+  blockers?: string[];
   connectionId: string;
   deploymentId: string;
   effect: string;
+  previousReviewId?: string;
   provider: string;
   region: string;
   resource: string;
+  reviewSequence?: number;
   revision: string;
+  targets?: ManagedCleanupTarget[];
+  variant?: string;
 }
 
 export interface CloudAdoption {
@@ -891,6 +921,7 @@ export interface ClusterInput {
   ref: ClusterRef;
   resourceId?: string;
   resourceRevision: number;
+  runtimeAccess?: RuntimeAccessInput;
   spec: ClusterSpec;
   workerImage: string;
 }
@@ -909,6 +940,7 @@ export interface ClusterInputBody {
   prerequisites: AttachmentPrerequisites;
   projectId: string;
   resourceRevision: number;
+  runtimeAccess?: RuntimeAccessProfile;
   serviceAccountName: string;
   targetSlug: string;
   trustFingerprint: string;
@@ -930,6 +962,26 @@ export interface ClusterInputBody {
 };
   resourceId?: string;
   resourceRevision: number;
+  runtimeAccess?: {
+  attachmentId: string;
+  attachmentRevision: number;
+  capabilityRevision: number;
+  grantRevision: number;
+  namespace: string;
+  namespaceUid: string;
+  profile: RuntimeAccessProfile;
+  projectId: string;
+  roleBindingName: string;
+  roleBindingResourceVersion: string;
+  roleBindingSubjectsRefDigest: string;
+  roleBindingUid: string;
+  roleName: string;
+  roleResourceVersion: string;
+  roleRulesDigest: string;
+  roleUid: string;
+  serviceAccountName: string;
+  serviceAccountUid: string;
+};
   spec: {
   ha: boolean;
   maintenance: ClusterMaintenance;
@@ -949,6 +1001,30 @@ export interface ClusterMaintenance {
   startTime: string;
 }
 
+export interface ClusterNativeWorkload {
+  maximumNodes: number;
+  policyId: string;
+  policyRevision: number;
+  poolId: string;
+  profileDigest: string;
+}
+
+export interface ClusterNodeCapacity {
+  allocatable: ClusterResourceMetrics;
+  architecture: string;
+  externalVmId: string;
+  gpuKinds: Record<string, any>;
+  nodeUid: string;
+  poolId: string;
+  provenance: Record<string, any>;
+  provisioned: CapacityResources;
+  ready: boolean;
+  requests: ClusterResourceMetrics;
+  taints: NodePoolTaint[];
+  unschedulable: boolean;
+  zone: string;
+}
+
 export interface ClusterNodeSize {
   cpus: number;
   diskGb: number;
@@ -963,6 +1039,8 @@ export interface ClusterObservation {
   caHash: string;
   conditions: ClusterCondition[];
   endpoint: string;
+  ha?: boolean;
+  maintenance?: ClusterMaintenance;
   name: string;
   observedAt: string;
   pools: NodePoolSpec[];
@@ -1002,6 +1080,25 @@ export interface ClusterRef {
   region: string;
 }
 
+export interface ClusterResourceMetrics {
+  cpuMillis?: number;
+  ephemeralStorageBytes?: number;
+  extended: Record<string, any>;
+  memoryBytes?: number;
+  pods?: number;
+}
+
+export interface ClusterSchedulingProfile {
+  allocatable: ClusterWorkloadVector;
+  architecture: string;
+  available: ClusterWorkloadVector;
+  digest: string;
+  overhead: ClusterWorkloadVector;
+  poolId: string;
+  templateDigest: string;
+  zone: string;
+}
+
 export interface ClusterSpec {
   ha: boolean;
   maintenance: ClusterMaintenance;
@@ -1022,6 +1119,44 @@ export interface ClusterStep {
   remoteResourceId?: string;
   requestDigest: string;
   state: string;
+}
+
+export interface ClusterWorkloadDemand {
+  connectionGeneration: number;
+  input: ClusterWorkloadInput;
+  mode: string;
+  placement: CloudPlacement;
+  profile?: ClusterSchedulingProfile;
+  schemaVersion: number;
+}
+
+export interface ClusterWorkloadInput {
+  actionId: string;
+  attachmentId: string;
+  cloudId: string;
+  connectionId: string;
+  environmentId: string;
+  id: string;
+  maximum: ClusterWorkloadVector;
+  native?: ClusterNativeWorkload;
+  orgId: string;
+  planId: string;
+  projectId: string;
+  releaseId: string;
+  resourceId: string;
+  reviewDigest: string;
+  runtimeRef: string;
+  runtimeRevision: string;
+  service: string;
+  targetId: string;
+  trustRevision: number;
+}
+
+export interface ClusterWorkloadVector {
+  cpuMillis: number;
+  ephemeralStorageBytes: number;
+  memoryBytes: number;
+  pods: number;
 }
 
 export interface Collection {
@@ -1869,8 +2004,11 @@ export interface FailedCleanup {
   attempt: number;
   deploymentId: string;
   error?: string;
+  reviewId?: string;
+  reviewSequence?: number;
   revision: string;
   status: string;
+  variant?: string;
 }
 
 export interface FailedCleanupInputBody {
@@ -2322,6 +2460,48 @@ export interface LogPage {
   next: string;
 }
 
+export interface ManagedCleanupBinding {
+  connectionId: string;
+  externalId: string;
+  id: string;
+  planId: string;
+  revision: string;
+  updatedAt: string;
+}
+
+export interface ManagedCleanupBindingRef {
+  binding: ManagedCleanupBinding;
+  origin: string;
+  parentBindingId: string;
+}
+
+export interface ManagedCleanupOutcome {
+  epoch: number;
+  id: string;
+  outcome: ManagedOutcome;
+  request: ManagedRequest;
+}
+
+export interface ManagedCleanupTarget {
+  accepted: ManagedCleanupOutcome[];
+  attachmentId: string;
+  attachmentRevision: number;
+  authorityEpoch: number;
+  authorityRevision: number;
+  binding: ManagedCleanupBinding;
+  bindingRefs?: ManagedCleanupBindingRef[];
+  connectionGeneration: number;
+  identityCurrent: boolean;
+  kind: string;
+  origin: string;
+  parentBindingId: string;
+  revokedAt?: string;
+  schemaVersion: number;
+  scope: ManagedScope;
+  trustRevision: string;
+  unresolved: string[];
+}
+
 export interface ManagedDatabaseConfig {
   accountIdentity: string;
   cloudSqlPsc?: CloudSQLSourceEndpoint;
@@ -2347,6 +2527,14 @@ export interface ManagedDatabaseProfile {
   storageGb: number;
   storageType: string;
   version: string;
+}
+
+export interface ManagedOutcome {
+  generation: number;
+  resourceVersion: string;
+  state: string;
+  statusCode: number;
+  uid: string;
 }
 
 export interface ManagedRecord {
@@ -2378,6 +2566,36 @@ export interface ManagedRegistryView {
   message: string;
   phase: string;
   status: string;
+}
+
+export interface ManagedRequest {
+  group: string;
+  method: string;
+  name: string;
+  namespace: string;
+  resource: string;
+  resourceVersion?: string;
+  uid: string;
+  version: string;
+}
+
+export interface ManagedScope {
+  action: string;
+  clusterCa: string;
+  connection: string;
+  deployment: string;
+  environment: string;
+  epoch: number;
+  instance: string;
+  namespace: string;
+  namespaceUid: string;
+  org: string;
+  plan: string;
+  project: string;
+  release: string;
+  runtimeRef: string;
+  runtimeRevision: string;
+  service: string;
 }
 
 export interface Manifest {
@@ -2492,6 +2710,27 @@ export interface ModelsUpdateInputBody {
   hourlyUsdOverride?: string;
   monthlyBudgetUsd?: string;
   revision: number;
+}
+
+export interface MoneyComponent {
+  category?: string;
+  hourlyMicroUsd?: number;
+  identity: string;
+  name: string;
+  priceCheckedAt?: string;
+  quantity: number;
+  source: string;
+}
+
+export interface MoneyEstimate {
+  checkedAt: string;
+  components: MoneyComponent[];
+  horizonMicroUsd: number;
+  horizonSeconds: number;
+  hourlyMicroUsd: number;
+  known: boolean;
+  missingComponents: string[];
+  priceDigest: string;
 }
 
 export interface MoveInput {
@@ -2741,11 +2980,14 @@ export interface NewKeyBody {
 export interface NodePoolSpec {
   autoscale: boolean;
   count: number;
+  id?: string;
   labels?: Record<string, any>;
   max: number;
   min: number;
   name: string;
+  operationId?: string;
   providerOptions?: ClusterProviderOptions;
+  requestDigest?: string;
   size: string;
   taints?: NodePoolTaint[];
 }
@@ -2853,6 +3095,7 @@ export interface Operation {
   attempt: number;
   attempted: boolean;
   bootstrapExpiresAt: string;
+  budgetReview?: BudgetReview;
   capacityCheckedAt?: string;
   capacityTarget?: ResourceVector;
   cloudId: string;
@@ -2868,6 +3111,7 @@ export interface Operation {
   id: string;
   input: ServerInput;
   message: string;
+  moneyEstimate?: MoneyEstimate;
   orgId: string;
   ownership: string;
   provider: string;
@@ -2994,6 +3238,7 @@ export interface Plan {
   problems: Finding[];
   projectId: string;
   release?: Release;
+  requiredRuntimeProtocol?: string;
   revision: string;
   rollback?: Rollback;
   sources: PlanSource[];
@@ -3322,8 +3567,8 @@ export interface PushDevice {
   lastSeenAt: string;
   name: string;
   platform: string;
-  quietHours: QuietHours | null;
-  settings: Record<string, string>;
+  quietHours?: QuietHours;
+  settings: Record<string, any>;
   timeZone: string;
 }
 
@@ -3451,7 +3696,7 @@ export interface RegisterDeviceInputBody {
   name: string;
   platform: string;
   publicKey: string;
-  settings: Record<string, string>;
+  settings: Record<string, any>;
   timeZone: string;
 }
 
@@ -4005,6 +4250,33 @@ export interface Runs {
   workload: string;
 }
 
+export interface RuntimeAccessInput {
+  attachmentId: string;
+  attachmentRevision: number;
+  capabilityRevision: number;
+  grantRevision: number;
+  namespace: string;
+  namespaceUid: string;
+  profile: RuntimeAccessProfile;
+  projectId: string;
+  roleBindingName: string;
+  roleBindingResourceVersion: string;
+  roleBindingSubjectsRefDigest: string;
+  roleBindingUid: string;
+  roleName: string;
+  roleResourceVersion: string;
+  roleRulesDigest: string;
+  roleUid: string;
+  serviceAccountName: string;
+  serviceAccountUid: string;
+}
+
+export interface RuntimeAccessProfile {
+  cleanupDependents: boolean;
+  hpa: boolean;
+  schemaVersion: number;
+}
+
 export interface RuntimeHealth {
   architecture: string;
   checkedAt: string;
@@ -4053,6 +4325,7 @@ export interface ScalingPoolInputBody {
   expectedRevision: number;
   name: string;
   policy: {
+  budget?: CapacityBudget;
   cloudId: string;
   enabled: boolean;
   frontendLimits: FrontendLimit[];
@@ -4094,6 +4367,7 @@ export interface Server {
   name: string;
   orgId: string;
   ownership: string;
+  priceCheckedAt: string;
   pricedSize?: string;
   provider: string;
   region: string;
@@ -4117,6 +4391,7 @@ export interface ServerImage {
 }
 
 export interface ServerInput {
+  acknowledgeUnknownCosts?: boolean;
   cloudRevision: number;
   confirmAdoption?: boolean;
   connectionId?: string;
@@ -4130,6 +4405,7 @@ export interface ServerInput {
 }
 
 export interface ServerInputBody {
+  acknowledgeUnknownCosts?: boolean;
   cloudRevision: number;
   confirmAdoption?: boolean;
   connectionId?: string;
@@ -4224,9 +4500,11 @@ export interface ServiceConfig {
   build?: string;
   buildTarget?: BuildTarget;
   capacityIntent?: CapacityIntent;
+  capacityMode?: string;
   catalog?: Recipe;
   cloudPlacement?: CloudPlacement;
   cloudSqlNetwork?: CloudSQLApplicationNetwork;
+  clusterDemand?: ClusterWorkloadDemand;
   commitSha?: string;
   component?: ComponentConfig;
   context?: string;
@@ -4307,7 +4585,7 @@ export interface SettingInfo {
   title: string;
 }
 
-export interface SetupRequest {
+export interface SetupRequestBody {
   email: string;
   name: string;
   organizationName: string;
@@ -4584,7 +4862,7 @@ export interface TenantList {
 }
 
 export interface TestPushResult {
-  status: "sent" | "quiet_hours";
+  status: string;
 }
 
 export interface Thresholds {
@@ -4624,8 +4902,11 @@ export interface UnwatchedService {
 }
 
 export interface UpdateDeviceInputBody {
-  quietHours?: QuietHours | null;
-  settings?: Record<string, string>;
+  quietHours: {
+  set: boolean;
+  value?: QuietHours;
+};
+  settings?: Record<string, any>;
   timeZone?: string;
 }
 

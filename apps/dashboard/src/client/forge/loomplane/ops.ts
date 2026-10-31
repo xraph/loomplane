@@ -2733,7 +2733,7 @@ export const ops = {
     path: '/api/v1/setup',
     provides: [],
     invalidates: [],
-    bodyCodec: CODECS['SetupRequest'],
+    bodyCodec: CODECS['SetupRequestBody'],
     responseCodec: CODECS['SetupResponse'],
   },
   'usage.spend': {
