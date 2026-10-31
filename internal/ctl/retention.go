@@ -6,7 +6,7 @@ import (
 
 	"github.com/xraph/forge/cli"
 
-	"github.com/xraph/loomplane/internal/recovery"
+	"github.com/xraph/loomplane/pkg/client"
 )
 
 func (a *App) previewBackupRetention(ctx cli.CommandContext) error {
@@ -45,15 +45,17 @@ func retentionSettingFlags() []cli.Flag {
 	return []cli.Flag{cli.NewStringFlag("older-than-days", "", "Only consider backups completed before this age in days", "30"), cli.NewStringFlag("keep-last", "", "Minimum number of newest successful points to retain", "7")}
 }
 
-func retentionSettings(ctx cli.CommandContext) (recovery.RetentionInput, error) {
+func retentionSettings(ctx cli.CommandContext) (client.RetentionSettings, error) {
 	days, err := strconv.Atoi(ctx.String("older-than-days"))
 	if err != nil {
-		return recovery.RetentionInput{}, errors.New("older-than-days must be an integer")
+		return client.RetentionSettings{}, errors.New("older-than-days must be an integer")
 	}
 	keep, err := strconv.Atoi(ctx.String("keep-last"))
 	if err != nil {
-		return recovery.RetentionInput{}, errors.New("keep-last must be an integer")
+		return client.RetentionSettings{}, errors.New("keep-last must be an integer")
 	}
-	input := recovery.RetentionInput{OlderThanDays: days, KeepLast: keep}
-	return input, input.Validate()
+	if days < 1 || days > 3650 || keep < 1 || keep > 1000 {
+		return client.RetentionSettings{}, errors.New("invalid recovery request: retention requires 1-3650 days and 1-1000 retained points")
+	}
+	return client.RetentionSettings{OlderThanDays: days, KeepLast: keep}, nil
 }

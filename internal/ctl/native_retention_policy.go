@@ -7,7 +7,6 @@ import (
 
 	"github.com/xraph/forge/cli"
 
-	"github.com/xraph/loomplane/internal/recovery"
 	"github.com/xraph/loomplane/pkg/client"
 )
 
@@ -98,7 +97,7 @@ func (a *App) nativeRetentionPolicyHistory(ctx cli.CommandContext) error {
 	if err != nil {
 		return err
 	}
-	if checkErr := (recovery.RetentionPolicyHistoryInput{Before: in.Before, Limit: in.Limit}).Validate(); checkErr != nil {
+	if checkErr := validateHistoryBeforeCursor(in.Before); checkErr != nil {
 		return checkErr
 	}
 	c, err := a.client()

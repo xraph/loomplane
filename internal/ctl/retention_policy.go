@@ -7,7 +7,6 @@ import (
 
 	"github.com/xraph/forge/cli"
 
-	"github.com/xraph/loomplane/internal/recovery"
 	"github.com/xraph/loomplane/pkg/client"
 )
 
@@ -102,8 +101,8 @@ func (a *App) retentionPolicyHistory(ctx cli.CommandContext) error {
 	if err != nil {
 		return err
 	}
-	if checkErr := (recovery.RetentionPolicyHistoryInput{Before: in.Before, Limit: in.Limit}).Validate(); checkErr != nil {
-		return errors.New("before must be a canonical positive integer cursor from the preceding response")
+	if checkErr := validateHistoryBeforeCursor(in.Before); checkErr != nil {
+		return checkErr
 	}
 	c, err := a.client()
 	if err != nil {
@@ -114,4 +113,15 @@ func (a *App) retentionPolicyHistory(ctx cli.CommandContext) error {
 		return err
 	}
 	return a.json(page)
+}
+
+func validateHistoryBeforeCursor(raw string) error {
+	if raw == "" {
+		return nil
+	}
+	before, err := strconv.ParseInt(raw, 10, 64)
+	if err != nil || before <= 0 || strconv.FormatInt(before, 10) != raw {
+		return errors.New("before must be a canonical positive integer cursor from the preceding response")
+	}
+	return nil
 }
