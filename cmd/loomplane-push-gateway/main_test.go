@@ -457,6 +457,19 @@ func TestHandlerLimitsBody(t *testing.T) {
 	if !errors.As(readErr, new(*http.MaxBytesError)) {
 		t.Errorf("readErr = %v", readErr)
 	}
+
+	// Even when the inner handler stops reading early (Herald caps /v1/send at
+	// 16 KiB), newHandler drains up to maxBody before returning so a reverse
+	// proxy enforcing a 64 KB limit trips its own 413 instead of forwarding 400.
+	body := bytes.NewReader(make([]byte, maxBody+1024))
+	early := newHandler(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.CopyN(io.Discard, r.Body, 16<<10)
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	early.ServeHTTP(httptest.NewRecorder(), httptest.NewRequestWithContext(context.Background(), http.MethodPost, "/v1/send", body))
+	if got := int(body.Size()) - body.Len(); got != maxBody+1 {
+		t.Errorf("drained %d bytes, want %d", got, maxBody+1)
+	}
 }
 
 func TestServeFinishesInFlight(t *testing.T) {
