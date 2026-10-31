@@ -35,6 +35,7 @@ data:
   LOOMPLANE_NOTIFICATIONS_SMTP_TLS: {{ .Values.notifications.smtpTLS | toString | quote }}
   LOOMPLANE_NOTIFICATIONS_FROM: {{ .Values.notifications.from | quote }}
   {{- end }}
+  LOOMPLANE_AI_ENABLED: {{ .Values.ai.enabled | toString | quote }}
   LOOMPLANE_PUSH_ENABLED: {{ .Values.push.enabled | toString | quote }}
   LOOMPLANE_PUSH_GATEWAY_URL: {{ .Values.push.gatewayUrl | quote }}
   {{- if .Values.inCluster.enabled }}

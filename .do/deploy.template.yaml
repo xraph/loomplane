@@ -48,6 +48,38 @@ spec:
     - key: LOOMPLANE_DATABASE_POOL_SIZE
       value: "5"
       scope: RUN_TIME
+    - key: LOOMPLANE_AI_ENABLED
+      value: "true"
+      scope: RUN_TIME
+    # Optional sign-in apps so people can connect a cloud by signing in. Set
+    # the ID and secret of a cloud together, or leave both empty.
+    - key: LOOMPLANE_DIGITALOCEAN_OAUTH_CLIENT_ID
+      scope: RUN_TIME
+    - key: LOOMPLANE_DIGITALOCEAN_OAUTH_CLIENT_SECRET
+      scope: RUN_TIME
+      type: SECRET
+    - key: LOOMPLANE_VERCEL_OAUTH_CLIENT_ID
+      scope: RUN_TIME
+    - key: LOOMPLANE_VERCEL_OAUTH_CLIENT_SECRET
+      scope: RUN_TIME
+      type: SECRET
+    - key: LOOMPLANE_VERCEL_OAUTH_SLUG
+      scope: RUN_TIME
+    - key: LOOMPLANE_GCP_OAUTH_CLIENT_ID
+      scope: RUN_TIME
+    - key: LOOMPLANE_GCP_OAUTH_CLIENT_SECRET
+      scope: RUN_TIME
+      type: SECRET
+    - key: LOOMPLANE_AZURE_OAUTH_CLIENT_ID
+      scope: RUN_TIME
+    - key: LOOMPLANE_AZURE_OAUTH_CLIENT_SECRET
+      scope: RUN_TIME
+      type: SECRET
+    # Optional. true or false forces the sign-up waitlist on or off; leave it
+    # out to use the instance's stored setting.
+    # - key: LOOMPLANE_WAITLIST_ENABLED
+    #   value: "true"
+    #   scope: RUN_TIME
     - key: LOOMPLANE_SECRET_KEY
       scope: RUN_TIME
       type: SECRET

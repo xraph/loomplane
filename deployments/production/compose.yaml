@@ -26,6 +26,7 @@ x-environment: &environment
   LOOMPLANE_SECRET_KEY: ${LOOMPLANE_SECRET_KEY:?Generate a key with openssl rand -base64 32}
   # Generate a hex password so it is safe in a PostgreSQL URL.
   LOOMPLANE_DATABASE_URL: postgres://loomplane:${POSTGRES_PASSWORD:?Generate a password with openssl rand -hex 32}@postgres:5432/loomplane?sslmode=disable
+  LOOMPLANE_AI_ENABLED: ${LOOMPLANE_AI_ENABLED:-false}
   LOOMPLANE_GITHUB_API_URL: ${LOOMPLANE_GITHUB_API_URL:-https://api.github.com}
   LOOMPLANE_GITHUB_WEB_URL: ${LOOMPLANE_GITHUB_WEB_URL:-https://github.com}
   LOOMPLANE_GITHUB_APP_ID: ${LOOMPLANE_GITHUB_APP_ID:-}

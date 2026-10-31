@@ -99,6 +99,9 @@ notifications:
 
 # Phone notifications go through a gateway. Only XRaph's gateway can reach the
 # store app. Turn push off and the app hides its push settings.
+ai:
+  enabled: false
+
 push:
   enabled: true
   gatewayUrl: https://push.loomplane.com
