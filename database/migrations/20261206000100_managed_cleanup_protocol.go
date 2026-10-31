@@ -21,8 +21,8 @@ CREATE OR REPLACE FUNCTION loomplane_managed_protocol_plan() RETURNS trigger LAN
 DECLARE required text; managed boolean; cleanup boolean;
 BEGIN
  required:=coalesce(NEW.result->>'required_runtime_protocol','');
- managed:=EXISTS(SELECT 1 FROM jsonb_array_elements(coalesce(NEW.result->'actions','[]'::jsonb)) a WHERE a->'service'->'cluster_demand' IS NOT NULL AND a->'service'->'cluster_demand'<>'null'::jsonb);
- cleanup:=EXISTS(SELECT 1 FROM jsonb_array_elements(coalesce(NEW.result->'actions','[]'::jsonb)) a WHERE jsonb_array_length(coalesce(a->'cleanup_targets','[]'::jsonb))>0);
+ managed:=EXISTS(SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(NEW.result->'actions')='array' THEN NEW.result->'actions' ELSE '[]'::jsonb END) a WHERE a->'service'->'cluster_demand' IS NOT NULL AND a->'service'->'cluster_demand'<>'null'::jsonb);
+ cleanup:=EXISTS(SELECT 1 FROM jsonb_array_elements(CASE WHEN jsonb_typeof(NEW.result->'actions')='array' THEN NEW.result->'actions' ELSE '[]'::jsonb END) a WHERE jsonb_array_length(CASE WHEN jsonb_typeof(a->'cleanup_targets')='array' THEN a->'cleanup_targets' ELSE '[]'::jsonb END)>0);
  IF cleanup AND required<>'managed-cleanup-journal-v1' AND (TG_OP='INSERT' OR NEW.result IS DISTINCT FROM OLD.result) THEN RAISE EXCEPTION 'managed cleanup requires fresh review' USING ERRCODE='23514'; END IF;
  IF required NOT IN ('','managed-workload-journal-v1','managed-cleanup-journal-v1') OR (managed AND required='') THEN RAISE EXCEPTION 'managed workload protocol required' USING ERRCODE='23514'; END IF;
  IF TG_OP='UPDATE' AND OLD.required_runtime_protocol<>'' AND required<>OLD.required_runtime_protocol THEN RAISE EXCEPTION 'managed workload protocol is immutable' USING ERRCODE='23514'; END IF;
