@@ -80,3 +80,16 @@ func TestBus_catchupWakesReadersAfterAMissedNotification(t *testing.T) {
 		t.Fatal("no bounded durable catchup wake-up")
 	}
 }
+
+func TestCapPool(t *testing.T) {
+	for in, want := range map[string]string{
+		"postgres://u:p@h:25060/db?sslmode=require": "postgres://u:p@h:25060/db?sslmode=require&pool_max_conns=2",
+		"postgres://u:p@h/db":                       "postgres://u:p@h/db?pool_max_conns=2",
+		"host=h dbname=db":                          "host=h dbname=db pool_max_conns=2",
+		"postgres://h/db?pool_max_conns=9":          "postgres://h/db?pool_max_conns=9",
+	} {
+		if got := capPool(in); got != want {
+			t.Errorf("capPool(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

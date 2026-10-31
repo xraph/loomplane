@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -41,12 +43,34 @@ type Bus struct {
 	wg              sync.WaitGroup
 }
 
+// brokerMaxConns bounds the connections conduit's own pool opens. It ignores
+// database.pool_size, and pgx's default of at least four per process would
+// exhaust a small managed cluster once the API and worker both run.
+const brokerMaxConns = 2
+
+// capPool adds pool_max_conns to the DSN given to conduit. pgxpool strips it
+// before connecting, but a plain pgx.Connect rejects it, so only conduit
+// gets this form.
+func capPool(dsn string) string {
+	if strings.Contains(dsn, "pool_max_conns") {
+		return dsn
+	}
+	if strings.HasPrefix(dsn, "postgres://") || strings.HasPrefix(dsn, "postgresql://") {
+		sep := "?"
+		if strings.Contains(dsn, "?") {
+			sep = "&"
+		}
+		return dsn + sep + "pool_max_conns=" + strconv.Itoa(brokerMaxConns)
+	}
+	return dsn + " pool_max_conns=" + strconv.Itoa(brokerMaxConns)
+}
+
 func NewBus(dsn, instance string) (*Bus, error) {
 	cfg := conduit.Config{Identity: conduit.Identity{Namespace: "loomplane", ServiceID: "realtime", InstanceID: instance},
 		Streams:       map[string]conduit.StreamConfig{"events": {Name: "events", Provider: "postgres", Subjects: []string{wakeupEvent.Name}, MaxAge: 5 * time.Minute, MaxMessages: 100000}},
 		Subscriptions: map[string]conduit.SubscriptionConfig{"realtime": {Stream: "events", Mode: conduit.Broadcast, Durable: false, MaxInFlight: 16, Concurrency: 1, MaxAttempts: 1}},
 	}
-	r, err := conduit.New(cfg, conduit.WithProvider("postgres", conduitpg.New(conduitpg.Options{URL: dsn, Schema: "loomplane_realtime_broker", PollInterval: 200 * time.Millisecond})))
+	r, err := conduit.New(cfg, conduit.WithProvider("postgres", conduitpg.New(conduitpg.Options{URL: capPool(dsn), Schema: "loomplane_realtime_broker", PollInterval: 200 * time.Millisecond})))
 	if err != nil {
 		return nil, err
 	}
