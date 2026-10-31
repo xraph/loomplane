@@ -20,8 +20,9 @@
 #                              credentials unrecoverable.
 #
 # Backups use the same Spaces account (LOOMPLANE_BACKUP_URL defaults to the
-# storage URL), so it is not set here. The database is a dev database, fine
-# for trying Loomplane. Attach a managed PostgreSQL cluster for real use.
+# storage URL), so it is not set here. The database is a managed PostgreSQL
+# cluster (production: true). A dev database can't run Loomplane: its role
+# can't create the realtime broker schema.
 #
 # Finish setup at the URL the API logs on start (".../setup?token=..."), or
 # run `loomplane setup-token` in the API console.
@@ -37,6 +38,11 @@ spec:
     - key: LOOMPLANE_DATABASE_URL
       value: ${db.DATABASE_URL}
       scope: RUN_TIME
+    # The smallest managed cluster allows about 25 connections, shared by the
+    # API, the worker and the realtime broker.
+    - key: LOOMPLANE_DATABASE_POOL_SIZE
+      value: "5"
+      scope: RUN_TIME
     - key: LOOMPLANE_SECRET_KEY
       scope: RUN_TIME
       type: SECRET
@@ -50,7 +56,7 @@ spec:
   databases:
     - name: db
       engine: PG
-      production: false
+      production: true
   services:
     - name: loomplane
       image:
