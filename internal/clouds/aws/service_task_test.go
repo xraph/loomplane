@@ -3,8 +3,11 @@ package aws
 import (
 	"context"
 	"maps"
+	"net"
+	"net/http"
 	"slices"
 	"testing"
+	"time"
 
 	sdk "github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/service/ecs"
@@ -107,5 +110,60 @@ func TestPrincipalARNNamesAnAssumedRolesRole(t *testing.T) {
 	}
 	if got := PrincipalARN(awstest.ARN); got != awstest.ARN {
 		t.Fatalf("user %q", got)
+	}
+}
+
+// lagWriteConn pauses after delivering the tail of a >4 KiB request to the
+// socket, so the server's response header arrives and smithy-go closes the
+// request body before net/http's writeLoop runs its post-body discard copy,
+// while the response body is still being read.
+type lagWriteConn struct {
+	net.Conn
+	reads int
+}
+
+func (c *lagWriteConn) Write(p []byte) (int, error) {
+	n, err := c.Conn.Write(p)
+	if n > 0 && n < 4096 {
+		time.Sleep(10 * time.Millisecond)
+	}
+	return n, err
+}
+
+func (c *lagWriteConn) Read(p []byte) (int, error) {
+	c.reads++
+	if c.reads == 2 {
+		time.Sleep(20 * time.Millisecond)
+	}
+	return c.Conn.Read(p)
+}
+
+func TestMissingOfDoesNotRetryWhenResponseArrivesBeforeWriteLoopFinishes(t *testing.T) {
+	fake := awstest.NewIAM(t, "elasticloadbalancing:ModifyListener")
+	key, err := ParseKey([]byte(awstest.Key))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var dialer net.Dialer
+	tr := &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			conn, dialErr := dialer.DialContext(ctx, network, addr)
+			if dialErr != nil {
+				return nil, dialErr
+			}
+			return &lagWriteConn{Conn: conn}, nil
+		},
+	}
+	t.Cleanup(tr.CloseIdleConnections)
+	c := New(fake.URL)
+	c.httpClient = &http.Client{Transport: tr}
+
+	asked := append(slices.Clone(Actions), CanaryActions...)
+	missing, checked, err := c.MissingOf(t.Context(), key, "us-east-1", awstest.ARN, asked)
+	if err != nil || !checked || !slices.Equal(missing, []string{"elasticloadbalancing:ModifyListener"}) {
+		t.Fatalf("missing %v, checked %v, err %v", missing, checked, err)
+	}
+	if got := fake.Asked(); len(got) != 1 {
+		t.Fatalf("asked %d times: %v", len(got), got)
 	}
 }

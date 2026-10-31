@@ -8,11 +8,14 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"net/http"
 	"regexp"
 	"slices"
 	"strings"
 
 	sdk "github.com/aws/aws-sdk-go-v2/aws"
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/iam"
 	"github.com/aws/aws-sdk-go-v2/service/sts"
@@ -134,6 +137,8 @@ type Client struct {
 	// minter mints a keyless key's tokens. Without one a keyless key gets
 	// no credentials.
 	minter keyless.Minter
+	// httpClient replaces the base HTTP client when set, for tests.
+	httpClient sdk.HTTPClient
 }
 
 // New returns a Client. An empty endpoint means AWS's own.
@@ -143,7 +148,7 @@ func New(endpoint string) *Client { return &Client{endpoint: strings.TrimRight(e
 // key assumes its role, and assumes it again with a fresh token when the
 // role's credentials expire.
 func (c *Client) Config(key *Key, region string) sdk.Config {
-	cfg := sdk.Config{Region: region}
+	cfg := sdk.Config{Region: region, HTTPClient: c.newHTTPClient()}
 	if key.Keyless() {
 		cfg.Credentials = sdk.NewCredentialsCache(c.webIdentity(key, region), func(o *sdk.CredentialsCacheOptions) { o.ExpiryWindow = renewBefore })
 	} else {
@@ -153,6 +158,31 @@ func (c *Client) Config(key *Key, region string) sdk.Config {
 		cfg.BaseEndpoint = sdk.String(c.endpoint)
 	}
 	return cfg
+}
+
+// bodyReader hides io.WriterTo on a request body. smithy-go wraps a
+// seekable request stream in a safeWriteToReadCloser whose WriteTo
+// returns io.EOF once ClientHandler closes the body on receiving the
+// response header; if net/http's writeLoop reaches its post-body
+// io.Copy(io.Discard, body) after that Close, io.Copy returns WriteTo's
+// io.EOF as a write error and closes the connection while the response
+// body is still being read.
+type bodyReader struct{ io.ReadCloser }
+
+type httpClient struct{ base sdk.HTTPClient }
+
+func (c *Client) newHTTPClient() sdk.HTTPClient {
+	if c.httpClient != nil {
+		return httpClient{base: c.httpClient}
+	}
+	return httpClient{base: awshttp.NewBuildableClient()}
+}
+
+func (c httpClient) Do(req *http.Request) (*http.Response, error) {
+	if req.Body != nil {
+		req.Body = bodyReader{req.Body}
+	}
+	return c.base.Do(req)
 }
 
 // Identity is who an access key acts as.
