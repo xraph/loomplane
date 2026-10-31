@@ -43,7 +43,10 @@ console:
   path: "${LOOMPLANE_CONSOLE_PATH:-/__console}"
 
 notifications:
-  # Empty host disables email. For local Mailpit use 127.0.0.1:1025.
+  # Sends through Resend's HTTP API. Set this or smtp_host, not both. Needs
+  # "from" on a domain verified in Resend.
+  resend_api_key: "${LOOMPLANE_NOTIFICATIONS_RESEND_API_KEY:-}"
+  # Empty host (with no Resend key) disables email. For local Mailpit use 127.0.0.1:1025.
   smtp_host: "${LOOMPLANE_NOTIFICATIONS_SMTP_HOST:-}"
   smtp_port: "${LOOMPLANE_NOTIFICATIONS_SMTP_PORT:-1025}"
   smtp_username: "${LOOMPLANE_NOTIFICATIONS_SMTP_USERNAME:-}"

@@ -26,7 +26,9 @@ data:
   {{- with .Values.github.clientID }}
   LOOMPLANE_GITHUB_CLIENT_ID: {{ . | quote }}
   {{- end }}
-  {{- if .Values.notifications.smtpHost }}
+  {{- if .Values.secrets.resendApiKey }}
+  LOOMPLANE_NOTIFICATIONS_FROM: {{ .Values.notifications.from | quote }}
+  {{- else if .Values.notifications.smtpHost }}
   LOOMPLANE_NOTIFICATIONS_SMTP_HOST: {{ .Values.notifications.smtpHost | quote }}
   LOOMPLANE_NOTIFICATIONS_SMTP_PORT: {{ .Values.notifications.smtpPort | toString | quote }}
   LOOMPLANE_NOTIFICATIONS_SMTP_USERNAME: {{ .Values.notifications.smtpUsername | quote }}

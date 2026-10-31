@@ -67,7 +67,7 @@ func New(cfg config.Config, db *grove.DB) (*Service, error) {
 		return nil, err
 	}
 	ms := privateHeraldStore{Store: heraldpg.New(db)}
-	h, err := herald.New(herald.WithStore(ms), herald.WithCredentialKey("lp1", mailKey), herald.WithDriver(&emaildriver.SMTPDriver{}), herald.WithDriver(&push.SealedDriver{}), herald.WithDeviceStore(heraldpg.New(db)))
+	h, err := herald.New(herald.WithStore(ms), herald.WithCredentialKey("lp1", mailKey), herald.WithDriver(&emaildriver.SMTPDriver{}), herald.WithDriver(&emaildriver.ResendDriver{}), herald.WithDriver(&push.SealedDriver{}), herald.WithDeviceStore(heraldpg.New(db)))
 	if err != nil {
 		return nil, err
 	}
@@ -85,7 +85,7 @@ func (s *Service) SetAuthorizer(a Authorizer) { s.authz = a }
 func (s *Service) MailEnabled() bool          { return s.cfg.Notifications.MailEnabled() }
 
 // Prepare is called after central migrations and before Authsome starts. It
-// configures exactly one application-owned SMTP provider and seeds templates.
+// configures exactly one application-owned mail provider (SMTP or Resend) and seeds templates.
 // Replicas that start together take turns: the provider has no unique
 // constraint, so two at once would each find none and create one.
 func (s *Service) Prepare(ctx context.Context) error {
@@ -103,20 +103,42 @@ func (s *Service) prepare(ctx context.Context) error {
 		return nil
 	}
 	n := s.cfg.Notifications
+	name, driverName := "loomplane-smtp", "smtp"
 	creds := map[string]string{"username": n.SMTPUsername, "password": n.SMTPPassword}
 	settings := map[string]string{"host": n.SMTPHost, "port": strconv.Itoa(n.SMTPPort), "use_tls": strconv.FormatBool(n.SMTPTLS), "from": n.From}
+	if n.ResendAPIKey != "" {
+		name, driverName = "loomplane-resend", "resend"
+		creds = map[string]string{"api_key": n.ResendAPIKey}
+		settings = map[string]string{"from": n.From}
+	}
 	list, err := s.mailStore.ListAllProviders(ctx, s.cfg.Identity.AppID)
 	if err != nil {
 		return err
 	}
+	found := false
 	for _, p := range list {
-		if p.Name == "loomplane-smtp" {
+		switch p.Name {
+		case name:
+			found = true
 			enabled := true
-			_, err = s.herald.UpdateProvider(ctx, s.cfg.Identity.AppID, p.ID, herald.ProviderUpdate{SetCredentials: creds, SetSettings: settings, Enabled: &enabled})
-			return err
+			if _, err = s.herald.UpdateProvider(ctx, s.cfg.Identity.AppID, p.ID, herald.ProviderUpdate{SetCredentials: creds, SetSettings: settings, Enabled: &enabled}); err != nil {
+				return err
+			}
+		case "loomplane-smtp", "loomplane-resend":
+			// Exactly one application-owned mail provider stays enabled.
+			if !p.Enabled {
+				continue
+			}
+			enabled := false
+			if _, err = s.herald.UpdateProvider(ctx, s.cfg.Identity.AppID, p.ID, herald.ProviderUpdate{Enabled: &enabled}); err != nil {
+				return err
+			}
 		}
 	}
-	return s.herald.CreateProvider(ctx, &provider.Provider{AppID: s.cfg.Identity.AppID, Name: "loomplane-smtp", Channel: "email", Driver: "smtp", Credentials: creds, Settings: settings, Enabled: true})
+	if found {
+		return nil
+	}
+	return s.herald.CreateProvider(ctx, &provider.Provider{AppID: s.cfg.Identity.AppID, Name: name, Channel: "email", Driver: driverName, Credentials: creds, Settings: settings, Enabled: true})
 }
 func (s *Service) Run(ctx context.Context) error {
 	if err := s.registerEventTypes(ctx); err != nil {

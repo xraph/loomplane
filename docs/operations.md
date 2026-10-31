@@ -186,7 +186,9 @@ A journal can also go dirty for a reason that still matters: the host rebooting 
 
 Open Notifications to read deployment results, change your deployment email preference and, as an owner or admin, manage signed webhooks. Deployment mail goes to the person who started the deployment. Loomplane checks their current organization membership and project access before delivery. Account recovery and verification mail do not follow that deployment preference.
 
-An empty SMTP host disables email. Invitations then show a manual link and explicitly report that email is disabled. To test delivery with Mailpit:
+Loomplane sends mail through Resend or SMTP. To use Resend, set `LOOMPLANE_NOTIFICATIONS_RESEND_API_KEY` and `LOOMPLANE_NOTIFICATIONS_FROM`, with the sender on a domain verified in Resend. Set either the Resend key or an SMTP host, not both. Resend uses HTTPS, so it needs no SMTP port or TLS setting.
+
+With neither a Resend key nor an SMTP host, email is disabled. Invitations then show a manual link and explicitly report that email is disabled. To test delivery with Mailpit:
 
 ```sh
 docker run --rm --name loomplane-mailpit \

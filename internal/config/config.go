@@ -422,6 +422,7 @@ func FromSource(src Getter) (Config, error) {
 	r.str(&c.Identity.SessionCookie, "identity.session_cookie")
 	r.optionalBool(&c.Identity.Waitlist, "identity.waitlist")
 	r.str(&c.Console.Path, "console.path")
+	r.str(&c.Notifications.ResendAPIKey, "notifications.resend_api_key")
 	r.str(&c.Notifications.SMTPHost, "notifications.smtp_host")
 	r.integer(&c.Notifications.SMTPPort, "notifications.smtp_port")
 	r.str(&c.Notifications.SMTPUsername, "notifications.smtp_username")

@@ -19,6 +19,11 @@
 #                              Keep a copy. Losing it makes stored
 #                              credentials unrecoverable.
 #
+#   LOOMPLANE_NOTIFICATIONS_RESEND_API_KEY  optional: Resend API key for email
+#   LOOMPLANE_NOTIFICATIONS_FROM            a bare address such as no-reply@example.com
+#                              (no display name), on a domain verified in Resend
+#                              Leave both empty to run without email.
+#
 # Backups use the same Spaces account (LOOMPLANE_BACKUP_URL defaults to the
 # storage URL), so it is not set here. The database is a managed PostgreSQL
 # cluster (production: true). A dev database can't run Loomplane: its role
@@ -49,6 +54,11 @@ spec:
     - key: LOOMPLANE_STORAGE_URL
       scope: RUN_TIME
       type: SECRET
+    - key: LOOMPLANE_NOTIFICATIONS_RESEND_API_KEY
+      scope: RUN_TIME
+      type: SECRET
+    - key: LOOMPLANE_NOTIFICATIONS_FROM
+      scope: RUN_TIME
     - key: LOOMPLANE_ARTIFACT_BUCKET
       scope: RUN_TIME
     - key: LOOMPLANE_BACKUP_BUCKET

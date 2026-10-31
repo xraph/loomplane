@@ -32,7 +32,8 @@ secrets:
   # the chart creates none. It holds the variables below by their LOOMPLANE_
   # names: LOOMPLANE_SECRET_KEY and LOOMPLANE_DATABASE_URL at least, plus
   # LOOMPLANE_STORAGE_URL, LOOMPLANE_BACKUP_URL,
-  # LOOMPLANE_NOTIFICATIONS_SMTP_PASSWORD, LOOMPLANE_GITHUB_PRIVATE_KEY,
+  # LOOMPLANE_NOTIFICATIONS_RESEND_API_KEY, LOOMPLANE_NOTIFICATIONS_SMTP_PASSWORD,
+  # LOOMPLANE_GITHUB_PRIVATE_KEY,
   # LOOMPLANE_GITHUB_CLIENT_SECRET and LOOMPLANE_GITHUB_WEBHOOK_SECRET when
   # you use them.
   existingSecret: ""
@@ -43,6 +44,8 @@ secrets:
   secretKey: ""
   # postgres://USER:PASSWORD@HOST:5432/DATABASE?sslmode=require
   databaseURL: ""
+  # Sends mail through Resend (set notifications.from too). Overrides SMTP.
+  resendApiKey: ""
   smtpPassword: ""
   githubPrivateKey: ""
   githubClientSecret: ""

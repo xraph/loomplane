@@ -112,8 +112,9 @@ repositories. See the repository's [GitHub App guide](https://github.com/xraph/l
 You can put a multiline PEM in a single-quoted `.env` value. Set the webhook
 secret in both Loomplane and GitHub.
 
-Email is disabled until you configure SMTP. Set the SMTP host, credentials
-and sender for password recovery and email notifications. Production uses
+Email is disabled until you configure it. Set `LOOMPLANE_NOTIFICATIONS_RESEND_API_KEY`
+and `LOOMPLANE_NOTIFICATIONS_FROM` to use Resend, or the SMTP host, credentials
+and sender, for password recovery and email notifications. Production SMTP uses
 implicit TLS, usually on port 465. Verify delivery with your mail provider
 before relying on account recovery.
 
