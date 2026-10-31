@@ -371,9 +371,17 @@ func TestCapacityWorkflowCloudSyncRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	workflows.BindCapacityWorker(worker)
+	currentOptions := workflows.CapacityOptions("sync-current", 1)
+	currentOptions.BuildID = orchestration.CurrentBuild
+	currentWorker, err := drt.NewWorker(ds, currentOptions)
+	if err != nil {
+		t.Fatal(err)
+	}
+	workflows.BindWorker(orchestration.CurrentBuild, currentWorker)
 	if err = workflows.StartCloudSync(t.Context(), "org", "", accepted.ID, accepted.Attempt); err != nil {
 		t.Fatal(err)
 	}
+	pumpWorkflow(t, currentWorker)
 	pumpWorkflow(t, worker)
 	if len(executor.calls) != 0 {
 		t.Fatalf("mixed sync had premature effects: %v", executor.calls)
@@ -383,7 +391,7 @@ func TestCapacityWorkflowCloudSyncRestart(t *testing.T) {
 		t.Fatalf("sync wait: %+v %v", dep, err)
 	}
 	route, err := orchestration.NewPgRunStore(f.db).ForDeployment(t.Context(), "org", dep.ID)
-	if err != nil || route.Request.WorkflowType != "loomplane.cloud.sync.v1" || route.Request.BuildID != orchestration.CapacityBuild {
+	if err != nil || route.Request.WorkflowType != "loomplane.cloud.sync.v1" || route.Request.BuildID != orchestration.CurrentBuild {
 		t.Fatalf("participant route: %+v %v", route, err)
 	}
 	if _, err = f.sql.Exec(t.Context(), `INSERT INTO loomplane_server_pool_members(org_id,pool_id,server_id,cpu_millis,memory_bytes) VALUES('org','next-pool','server-2',2000,2147483648)`); err != nil {
@@ -404,6 +412,7 @@ func TestCapacityWorkflowCloudSyncRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	pumpWorkflow(t, worker)
+	pumpWorkflow(t, currentWorker)
 	sync, _, err := f.clouds.GetSync(t.Context(), "org", "", accepted.ID)
 	if err != nil || sync.Status != cloudprofiles.SyncSucceeded {
 		execution, _ := ds.GetExecution(t.Context(), route.Request.Key)
@@ -421,6 +430,7 @@ func TestCapacityWorkflowCloudSyncRestart(t *testing.T) {
 	if err = workflows.StartCloudSync(t.Context(), "org", "", accepted.ID, accepted.Attempt); err != nil {
 		t.Fatal(err)
 	}
+	pumpWorkflow(t, currentWorker)
 	pumpWorkflow(t, worker)
 	if executor.calls["env"] != 1 || executor.calls["second-env"] != 1 {
 		t.Fatal("duplicate sync repeated effects")
