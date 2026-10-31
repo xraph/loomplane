@@ -102,7 +102,13 @@ func Extensions(cfg config.Config) []forge.Extension {
 	// repository's code. Its handlers go to Dispatch now; the planning
 	// extension binds them to the planner when it registers.
 	deployments := orchestration.NewDeployments()
-	jobs := newJobs(deployments.Options(owner(), cfg.Orchestration.Concurrency),
+	withPoll := func(opts drt.Options) drt.Options {
+		if opts.PollInterval <= 0 {
+			opts.PollInterval = cfg.Orchestration.PollInterval
+		}
+		return opts
+	}
+	jobs := newJobs(withPoll(deployments.Options(owner(), cfg.Orchestration.Concurrency)),
 		dispatchext.WithConcurrency(cfg.Orchestration.Concurrency),
 		dispatchext.WithPollInterval(cfg.Orchestration.PollInterval),
 		dispatchext.WithQueues([]string{"default", orchestration.Queue}),
@@ -117,14 +123,14 @@ func Extensions(cfg config.Config) []forge.Extension {
 		dispatchext.WithDisableRoutes(),
 		dispatchext.WithDisableMigrate(),
 	)
-	jobs.WithCapacity(deployments.CapacityOptions(owner(), cfg.Orchestration.Concurrency), deployments.BindCapacityWorker)
-	jobs.WithBuild(deployments.CanaryOptions(owner(), cfg.Orchestration.Concurrency), func(w *drt.Worker) { deployments.BindWorker(orchestration.CanaryBuild, w) })
+	jobs.WithCapacity(withPoll(deployments.CapacityOptions(owner(), cfg.Orchestration.Concurrency)), deployments.BindCapacityWorker)
+	jobs.WithBuild(withPoll(deployments.CanaryOptions(owner(), cfg.Orchestration.Concurrency)), func(w *drt.Worker) { deployments.BindWorker(orchestration.CanaryBuild, w) })
 
-	jobs.WithBuild(deployments.ManagedWorkloadOptions(owner(), cfg.Orchestration.Concurrency), func(w *drt.Worker) { deployments.BindWorker(orchestration.ManagedWorkloadBuild, w) })
+	jobs.WithBuild(withPoll(deployments.ManagedWorkloadOptions(owner(), cfg.Orchestration.Concurrency)), func(w *drt.Worker) { deployments.BindWorker(orchestration.ManagedWorkloadBuild, w) })
 
-	jobs.WithBuild(deployments.ManagedCleanupOptions(owner(), cfg.Orchestration.Concurrency), func(w *drt.Worker) { deployments.BindWorker(orchestration.ManagedCleanupBuild, w) })
+	jobs.WithBuild(withPoll(deployments.ManagedCleanupOptions(owner(), cfg.Orchestration.Concurrency)), func(w *drt.Worker) { deployments.BindWorker(orchestration.ManagedCleanupBuild, w) })
 
-	jobs.WithBuild(deployments.RuntimeAccessOptions(owner(), cfg.Orchestration.Concurrency), func(w *drt.Worker) { deployments.BindWorker(orchestration.RuntimeAccessBuild, w) })
+	jobs.WithBuild(withPoll(deployments.RuntimeAccessOptions(owner(), cfg.Orchestration.Concurrency)), func(w *drt.Worker) { deployments.BindWorker(orchestration.RuntimeAccessBuild, w) })
 
 	// Provider plugins, described when the first extension that needs
 	// them registers.

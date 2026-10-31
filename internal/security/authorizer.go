@@ -176,6 +176,8 @@ func (a *Authorizer) repair(ctx context.Context, p Principal) (bool, error) {
 	return true, nil
 }
 
+const ensureTenantTimeout = 30 * time.Second
+
 // EnsureTenant writes the role catalog into the organization's tenant. It's
 // idempotent, and it brings an existing tenant's roles up to the current
 // catalog, so a Loomplane upgrade that grows a role reaches every org. It
@@ -193,7 +195,9 @@ func (a *Authorizer) EnsureTenant(ctx context.Context, orgID string) error {
 		if _, done := a.ensured.Load(orgID); done {
 			return nil, nil
 		}
-		return nil, a.ensureTenant(ctx, orgID)
+		ensureCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), ensureTenantTimeout)
+		defer cancel()
+		return nil, a.ensureTenant(ensureCtx, orgID)
 	})
 	select {
 	case <-ctx.Done():
@@ -205,23 +209,11 @@ func (a *Authorizer) EnsureTenant(ctx context.Context, orgID string) error {
 
 func (a *Authorizer) ensureTenant(ctx context.Context, orgID string) error {
 	now := a.now().UTC()
-	for _, perm := range AllPermissions() {
-		if err := a.ensurePermission(ctx, orgID, perm, now); err != nil {
-			return err
-		}
+	if err := a.ensurePermissions(ctx, orgID, now); err != nil {
+		return err
 	}
-	for _, def := range append(Catalog(), SystemRole()) {
-		r, err := a.ensureRole(ctx, orgID, def, now)
-		if err != nil {
-			return err
-		}
-		refs := make([]permission.Ref, 0, len(def.Permissions))
-		for _, perm := range def.Permissions {
-			refs = append(refs, permission.Ref{NamespacePath: rootNamespace, Name: perm.Name()})
-		}
-		if err := a.store.SetRolePermissions(ctx, orgID, r.ID, refs); err != nil {
-			return fmt.Errorf("set permissions of role %s in %s: %w", def.Slug, orgID, err)
-		}
+	if err := a.ensureRoles(ctx, orgID, now); err != nil {
+		return err
 	}
 	system := SystemSubject(orgID)
 	if err := a.assign(ctx, orgID, warden.SubjectServiceAcct, system, RoleSystem, "loomplane"); err != nil {
@@ -231,6 +223,92 @@ func (a *Authorizer) ensureTenant(ctx context.Context, orgID string) error {
 	a.engine.InvalidateSubject(ctx, orgID, warden.SubjectServiceAcct, system)
 	a.ensured.Store(orgID, struct{}{})
 	return nil
+}
+
+func (a *Authorizer) ensurePermissions(ctx context.Context, orgID string, now time.Time) error {
+	existing, err := a.store.ListPermissions(ctx, &permission.ListFilter{TenantID: orgID})
+	if err != nil {
+		return fmt.Errorf("list permissions in %s: %w", orgID, err)
+	}
+	have := make(map[string]struct{}, len(existing))
+	for _, p := range existing {
+		if p.NamespacePath == rootNamespace {
+			have[p.Name] = struct{}{}
+		}
+	}
+	for _, perm := range AllPermissions() {
+		if _, ok := have[perm.Name()]; ok {
+			continue
+		}
+		if permErr := a.ensurePermission(ctx, orgID, perm, now); permErr != nil {
+			return permErr
+		}
+	}
+	return nil
+}
+
+func (a *Authorizer) ensureRoles(ctx context.Context, orgID string, now time.Time) error {
+	existing, err := a.store.ListRoles(ctx, &role.ListFilter{TenantID: orgID})
+	if err != nil {
+		return fmt.Errorf("list roles in %s: %w", orgID, err)
+	}
+	bySlug := make(map[string]*role.Role, len(existing))
+	for _, r := range existing {
+		if r.NamespacePath == rootNamespace {
+			bySlug[r.Slug] = r
+		}
+	}
+	defs := append(Catalog(), SystemRole())
+	roles := make([]*role.Role, len(defs))
+	roleIDs := make([]wardenid.RoleID, 0, len(defs))
+	for i, def := range defs {
+		r, ok := bySlug[def.Slug]
+		if !ok {
+			var roleErr error
+			if r, roleErr = a.ensureRole(ctx, orgID, def, now); roleErr != nil {
+				return roleErr
+			}
+		}
+		roles[i] = r
+		roleIDs = append(roleIDs, r.ID)
+	}
+	granted, err := a.store.ListRolePermissionsForRoles(ctx, orgID, roleIDs)
+	if err != nil {
+		return fmt.Errorf("list role permissions in %s: %w", orgID, err)
+	}
+	for i, def := range defs {
+		r := roles[i]
+		if sameRolePermissions(granted[r.ID], def.Permissions) {
+			continue
+		}
+		refs := make([]permission.Ref, 0, len(def.Permissions))
+		for _, perm := range def.Permissions {
+			refs = append(refs, permission.Ref{NamespacePath: rootNamespace, Name: perm.Name()})
+		}
+		if setErr := a.store.SetRolePermissions(ctx, orgID, r.ID, refs); setErr != nil {
+			return fmt.Errorf("set permissions of role %s in %s: %w", def.Slug, orgID, setErr)
+		}
+	}
+	return nil
+}
+
+func sameRolePermissions(held []*permission.Permission, want []Permission) bool {
+	if len(held) != len(want) {
+		return false
+	}
+	have := make(map[string]struct{}, len(held))
+	for _, p := range held {
+		if p == nil || p.NamespacePath != rootNamespace {
+			return false
+		}
+		have[p.Name] = struct{}{}
+	}
+	for _, p := range want {
+		if _, ok := have[p.Name()]; !ok {
+			return false
+		}
+	}
+	return true
 }
 
 func (a *Authorizer) ensurePermission(ctx context.Context, orgID string, perm Permission, now time.Time) error {

@@ -160,7 +160,11 @@ func (e *Extension) Register(fapp forge.App) error {
 	e.instance = instance.New(e.pg)
 	e.store = authpg.New(db)
 	wstore := wardenpg.New(db)
-	if e.warden, err = warden.NewEngine(warden.WithStore(wstore), warden.WithLogger(e.Logger())); err != nil {
+	if e.warden, err = warden.NewEngine(
+		warden.WithStore(wstore),
+		warden.WithCache(warden.NewMemoryCache()),
+		warden.WithLogger(e.Logger()),
+	); err != nil {
 		return fmt.Errorf("warden: %w", err)
 	}
 	e.platformRoles = rbac.NewWardenStore(e.warden)
