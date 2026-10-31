@@ -51,7 +51,7 @@ doctl apps create --spec app.yaml
 
 When the first deploy finishes, open the `loomplane` component's Runtime Logs and find the `setup is waiting` line. Its `url` field opens `/setup` with the one-time token filled in. You can also open the component's Console and run `loomplane setup-token` to get the link again. Then create your account and organization.
 
-The template creates a DigitalOcean Managed PostgreSQL cluster (billed separately). App Platform's dev databases don't work: Loomplane needs to create a schema, and the dev database role isn't allowed to. To use a cluster you already have, set `cluster_name` under the `db` database in the app spec.
+The template uses a DigitalOcean Managed PostgreSQL cluster (billed separately), because App Platform's dev databases don't work: Loomplane needs to create a schema, and the dev database role isn't allowed to. App Platform can't create a production database from a template, so create the cluster first, named `loomplane-db`, or set `cluster_name` under the `db` database to the name of a cluster you already have.
 
 App Platform can't follow an image tag, so the template uses `:latest`. To upgrade, redeploy the app. To stay on one version, change the tag to a release such as `v1.2.3`. The template redirects `/_/metrics` and `/debug` to `/`, so neither is reachable from outside.
 

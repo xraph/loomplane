@@ -116,6 +116,10 @@ spec:
     - name: db
       engine: PG
       production: true
+      # App Platform can't create a production database from a template. Create
+      # a Managed PostgreSQL cluster with this name first, or change it to the
+      # name of one you already have.
+      cluster_name: loomplane-db
   services:
     - name: loomplane
       image:
