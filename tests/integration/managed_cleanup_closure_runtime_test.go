@@ -154,7 +154,11 @@ func TestManagedCleanupClosureSharedRuntimeFailure(t *testing.T) {
 	if grant == nil {
 		t.Fatal("missing old grant")
 	}
-	request := kube.ManagedRequest{Group: "apps", Version: "v1", Resource: "deployments", Namespace: namespace, Name: kube.WorkloadName(iid), UID: first.DeploymentUID, Method: "DELETE"}
+	live, err := admin.Kube.AppsV1().Deployments(namespace).Get(t.Context(), kube.WorkloadName(iid), metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := kube.ManagedRequest{Group: "apps", Version: "v1", Resource: "deployments", Namespace: namespace, Name: kube.WorkloadName(iid), UID: first.DeploymentUID, ResourceVersion: live.ResourceVersion, Method: "DELETE"}
 	if _, err = cleanup.Journal("org", grant.ID).Issue(ctx, scope, request); err != nil {
 		t.Fatalf("shared runtime receipt issuance: %v", err)
 	}

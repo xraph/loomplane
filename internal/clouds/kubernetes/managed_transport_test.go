@@ -167,3 +167,64 @@ func TestManagedRequestHistoricalJSON(t *testing.T) {
 		t.Fatalf("versioned request changed: %+v %v", recovered, err)
 	}
 }
+
+func TestManagedCleanupTransportOptions(t *testing.T) {
+	scope := transportScope()
+	path := "/apis/apps/v1/namespaces/apps/replicasets/old-rs"
+	preconditions := `"preconditions":{"uid":"old","resourceVersion":"5"}`
+	for _, tc := range []struct {
+		options, query string
+		allowed        bool
+	}{
+		{options: `"propagationPolicy":"Orphan"`, allowed: true},
+		{options: `"propagationPolicy":"Foreground"`},
+		{options: `"propagationPolicy":"Background"`},
+		{options: `"dryRun":["All"],"propagationPolicy":"Orphan"`},
+		{options: `"ignoreStoreReadErrorWithClusterBreakingPotential":true,"propagationPolicy":"Orphan"`},
+		{options: `"propagationPolicy":"Orphan"`, query: "?dryRun=All"},
+	} {
+		body := "{" + preconditions + "," + tc.options + "}"
+		request := httptest.NewRequestWithContext(t.Context(), http.MethodDelete, path+tc.query, strings.NewReader(body))
+		cleanup := &managedTransport{scope: scope, cleanup: true}
+		r, err := cleanup.request(request)
+		if tc.allowed != (err == nil) || tc.allowed && r.PropagationPolicy != "Orphan" {
+			t.Fatalf("%s %s: %+v %v", tc.options, tc.query, r, err)
+		}
+		app := &managedTransport{scope: scope}
+		if _, err = app.request(request); !errors.Is(err, ErrManagedAuthority) {
+			t.Fatal("application transport accepted ReplicaSet DELETE")
+		}
+	}
+}
+
+type cleanupTransportTestJournal struct {
+	memoryManagedJournal
+	scope ManagedScope
+}
+
+func (j *cleanupTransportTestJournal) ManagedCleanupScope() ManagedScope { return j.scope }
+
+func TestManagedCleanupTransportCannotDowngrade(t *testing.T) {
+	scope := transportScope()
+	journal := &cleanupTransportTestJournal{scope: scope}
+	cfg := &Config{REST: &rest.Config{Host: "https://127.0.0.1"}, Namespace: scope.Namespace, ManagedWorkload: true, ManagedProfile: ManagedProfileJournal, ManagedJournal: journal, ManagedScope: scope}
+	if _, err := New(cfg); err != nil {
+		t.Fatal(err)
+	}
+	for _, which := range []string{"legacy", "static", "wrong-release", "historical-journal"} {
+		copyConfig := *cfg
+		switch which {
+		case "legacy":
+			copyConfig.ManagedProfile = ManagedProfileLegacy
+		case "static":
+			copyConfig.ManagedWorkload = false
+		case "wrong-release":
+			copyConfig.ManagedScope.Release = "wrong"
+		case "historical-journal":
+			copyConfig.ManagedJournal = &cleanupTransportTestJournal{}
+		}
+		if _, err := New(&copyConfig); !errors.Is(err, ErrManagedAuthority) {
+			t.Fatalf("%s accepted: %v", which, err)
+		}
+	}
+}

@@ -22,6 +22,7 @@ type managedTransport struct {
 	next    http.RoundTripper
 	journal ManagedJournal
 	scope   ManagedScope
+	cleanup bool
 }
 
 func (t *managedTransport) RoundTrip(req *http.Request) (*http.Response, error) {
@@ -88,6 +89,16 @@ func (t *managedTransport) request(req *http.Request) (ManagedRequest, error) {
 		out.Name = parts[3]
 	}
 	allowed := map[string]string{"secrets": "", "services": "", "serviceaccounts": "", "deployments": "apps", "horizontalpodautoscalers": "autoscaling", "ingresses": "networking.k8s.io", "roles": "rbac.authorization.k8s.io", "rolebindings": "rbac.authorization.k8s.io"}
+	descendant := t.cleanup && (out.Resource == "pods" || out.Resource == "replicasets")
+	query := req.URL.Query()
+	delete(query, "timeout")
+	if t.cleanup && (req.Method != http.MethodDelete || len(query) > 0) {
+		return out, ErrManagedAuthority
+	}
+	if descendant {
+		allowed["pods"] = ""
+		allowed["replicasets"] = "apps"
+	}
 	group, ok := allowed[out.Resource]
 	validVersion := out.Version == "v1" || out.Resource == "horizontalpodautoscalers" && out.Version == "v2"
 	if !ok || group != out.Group || !validVersion {
@@ -122,11 +133,27 @@ func (t *managedTransport) request(req *http.Request) (ManagedRequest, error) {
 		out.Name, out.UID = m.Name, string(m.UID)
 		out.ResourceVersion = m.ResourceVersion
 	case http.MethodDelete:
-		var options metav1.DeleteOptions
-		if out.Name == "" || json.Unmarshal(body, &options) != nil || options.Preconditions == nil || options.Preconditions.UID == nil || *options.Preconditions.UID == "" {
+		var options struct {
+			metav1.TypeMeta
+			Preconditions     *metav1.Preconditions       `json:"preconditions,omitempty"`
+			PropagationPolicy *metav1.DeletionPropagation `json:"propagationPolicy,omitempty"`
+		}
+		decoder := json.NewDecoder(bytes.NewReader(body))
+		if t.cleanup {
+			decoder.DisallowUnknownFields()
+		}
+		if out.Name == "" || decoder.Decode(&options) != nil || !errors.Is(decoder.Decode(&struct{}{}), io.EOF) || options.Preconditions == nil || options.Preconditions.UID == nil || *options.Preconditions.UID == "" {
 			return out, ErrManagedAuthority
 		}
 		out.UID = string(*options.Preconditions.UID)
+		if t.cleanup {
+			if options.PropagationPolicy != nil {
+				out.PropagationPolicy = string(*options.PropagationPolicy)
+			}
+			if out.PropagationPolicy != string(metav1.DeletePropagationOrphan) {
+				return out, ErrManagedAuthority
+			}
+		}
 		if options.Preconditions.ResourceVersion != nil {
 			out.ResourceVersion = *options.Preconditions.ResourceVersion
 			if out.ResourceVersion == "" {
@@ -137,6 +164,12 @@ func (t *managedTransport) request(req *http.Request) (ManagedRequest, error) {
 		// No current application path uses PATCH or subresources. Refuse unknown
 		// mutations until their ownership and outcome semantics are implemented.
 		return out, ErrManagedAuthority
+	}
+	if t.cleanup && out.ResourceVersion == "" {
+		return out, ErrManagedAuthority
+	}
+	if descendant {
+		return out, nil
 	}
 	iid, err := id.ParseWithPrefix(t.scope.Instance, id.PrefixInstance)
 	if err != nil {

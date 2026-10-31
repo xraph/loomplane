@@ -41,6 +41,10 @@ func New(cfg *Config) (*Client, error) {
 	if cfg == nil || cfg.REST == nil || cfg.Namespace == "" {
 		return nil, ErrInvalid
 	}
+	cleanup, restricted := cfg.ManagedJournal.(interface{ ManagedCleanupScope() ManagedScope })
+	if restricted && (!cfg.journalRequired() || !managedScopeValid(cfg.ManagedScope) || cleanup.ManagedCleanupScope() != cfg.ManagedScope) {
+		return nil, ErrManagedAuthority
+	}
 	rc := rest.CopyConfig(cfg.REST)
 	rc.Timeout, rc.QPS, rc.Burst = 15*time.Second, 20, 40
 	rc.ContentType, rc.AcceptContentTypes = "application/json", "application/json"
@@ -49,7 +53,7 @@ func New(cfg *Config) (*Client, error) {
 		return nil, fmt.Errorf("create Kubernetes transport: %w", err)
 	}
 	if cfg.journalRequired() {
-		httpClient.Transport = &managedTransport{next: httpClient.Transport, journal: cfg.ManagedJournal, scope: cfg.ManagedScope}
+		httpClient.Transport = &managedTransport{next: httpClient.Transport, journal: cfg.ManagedJournal, scope: cfg.ManagedScope, cleanup: restricted}
 	} else if cfg.ManagedWorkload {
 		httpClient.Transport = &managedLegacyTransport{next: httpClient.Transport, guard: cfg.ManagedLegacyGuard, identity: cfg.ManagedIdentity}
 	}

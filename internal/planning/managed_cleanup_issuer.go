@@ -34,6 +34,10 @@ func (s *ManagedCleanupStore) guard(ctx context.Context, tx driver.Tx, target Ma
  AND rt.body->>'namespace_uid'=a.body->>'NamespaceUID' AND rt.body->>'trust_fingerprint'=a.body->>'ClusterCA'
  FOR UPDATE OF a FOR SHARE OF i,t,c,g,mr,cn,rt`, scope.Org, scope.Release, scope.Epoch, raw, revision, target.AttachmentID, target.AttachmentRevision, target.TrustRevision, target.ConnectionGeneration).Scan(&valid)
 	if err != nil || !valid {
+		var stale bool
+		if e := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM loomplane_runtime_attachments WHERE org_id=$1 AND id=$2 AND revision<>$3)`, scope.Org, target.AttachmentID, target.AttachmentRevision).Scan(&stale); e == nil && stale {
+			return errors.Join(kube.ErrManagedAuthority, ErrCleanupReviewStale, err)
+		}
 		return errors.Join(kube.ErrManagedAuthority, err)
 	}
 	// Cleanup retries remain separate unresolved records. Only unresolved
@@ -54,11 +58,48 @@ func (s *ManagedCleanupStore) Journal(org, id string) kube.ManagedJournal {
 type managedCleanupJournal struct {
 	store   *ManagedCleanupStore
 	org, id string
+	session *cleanupSession
 }
 
+// ManagedCleanupScope binds the transport to the session that verified the
+// current credential. A journal opened for historical evidence cannot send.
+func (j *managedCleanupJournal) ManagedCleanupScope() kube.ManagedScope {
+	if j.session == nil {
+		return kube.ManagedScope{}
+	}
+	return j.session.grant.Target.Scope
+}
 func (j *managedCleanupJournal) Issue(ctx context.Context, scope kube.ManagedScope, request kube.ManagedRequest) (id string, err error) {
 	if scope.Org != j.org {
 		return "", kube.ErrManagedAuthority
+	}
+	var children []byte
+	var evidence *ManagedCleanupDescendantEvidence
+	if j.session != nil {
+		if checkErr := j.session.check(ctx, request); checkErr != nil {
+			return "", checkErr
+		}
+		if request.Resource == "pods" || request.Resource == "replicasets" {
+			e, readErr := j.session.ReadCleanupDescendant(ctx, j.session.grant.Target, request)
+			if readErr != nil {
+				return "", readErr
+			}
+			evidence = &e
+		} else {
+			if checkErr := j.session.checkWhole(ctx, request); checkErr != nil {
+				return "", checkErr
+			}
+			if request.Resource == "deployments" {
+				chain, readErr := j.session.readChildren(ctx, request)
+				if readErr != nil {
+					return "", readErr
+				}
+				children, err = json.Marshal(chain)
+				if err != nil {
+					return "", err
+				}
+			}
+		}
 	}
 	tx, err := j.store.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -85,7 +126,20 @@ func (j *managedCleanupJournal) Issue(ctx context.Context, scope kube.ManagedSco
 	if err != nil {
 		return "", err
 	}
-	if checkErr := guardCleanupRequest(ctx, tx, grant.Target, request, coowners); checkErr != nil {
+	if j.session != nil {
+		var revision int64
+		if err = tx.QueryRow(ctx, `SELECT revision FROM loomplane_runtime_access WHERE org_id=$1 AND attachment_id=$2 ORDER BY revision DESC LIMIT 1 FOR SHARE`, scope.Org, grant.Target.AttachmentID).Scan(&revision); err != nil || revision != j.session.capability {
+			return "", errors.Join(ErrCleanupReviewStale, err)
+		}
+	}
+	if evidence != nil {
+		if grant.Target.Kind != ManagedCleanupRetireDependents {
+			return "", kube.ErrManagedAuthority
+		}
+		if checkErr := guardDescendant(ctx, tx, grant.Target, request, *evidence); checkErr != nil {
+			return "", checkErr
+		}
+	} else if checkErr := guardCleanupRequest(ctx, tx, grant.Target, request, coowners); checkErr != nil {
 		return "", checkErr
 	}
 	issuance, err := typeid.Generate("issuance")
@@ -107,7 +161,7 @@ func (j *managedCleanupJournal) Issue(ctx context.Context, scope kube.ManagedSco
 	if err != nil || !retryOnly {
 		return "", errors.Join(kube.ErrManagedAuthority, err)
 	}
-	_, err = tx.Exec(ctx, `INSERT INTO loomplane_managed_workload_issuances(id,org_id,release_id,epoch,scope,request,cleanup_grant_id,cleanup_grant_revision) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, issuance.String(), scope.Org, scope.Release, scope.Epoch, raw, req, grant.ID, grant.Revision)
+	_, err = tx.Exec(ctx, `INSERT INTO loomplane_managed_workload_issuances(id,org_id,release_id,epoch,scope,request,cleanup_grant_id,cleanup_grant_revision,cleanup_children) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9)`, issuance.String(), scope.Org, scope.Release, scope.Epoch, raw, req, grant.ID, grant.Revision, children)
 	if err != nil {
 		return "", err
 	}
@@ -115,7 +169,7 @@ func (j *managedCleanupJournal) Issue(ctx context.Context, scope kube.ManagedSco
 }
 
 func guardCleanupRequest(ctx context.Context, tx driver.Tx, target ManagedCleanupTarget, request kube.ManagedRequest, coowners []byte) error {
-	if request.Method != http.MethodDelete || request.Namespace != target.Scope.Namespace || request.Name == "" || request.UID == "" {
+	if request.Method != http.MethodDelete || request.Namespace != target.Scope.Namespace || request.Name == "" || request.UID == "" || request.ResourceVersion == "" {
 		return kube.ErrManagedAuthority
 	}
 	if target.Kind == ManagedCleanupRetireDependents {

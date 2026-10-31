@@ -84,10 +84,16 @@ func (s *Service) ResolveManagedCredential(ctx context.Context, c connections.Co
 	if current.DeletedAt != nil || current.Revision != a.Revision || current.TrustRevision != a.TrustRevision || current.CredentialVersion != a.CredentialVersion {
 		return empty, connections.ErrChanged
 	}
-	if checkErr := s.verifyRuntimeAccessCredential(ctx, a, o, r, runtimeClient); checkErr != nil {
-		return empty, checkErr
+	record, err := s.verifyRuntimeAccessCredential(ctx, a, o, r, runtimeClient)
+	if err != nil {
+		return empty, err
 	}
-	return connections.ManagedCredential{Kubeconfig: raw, ExpiresAt: a.CredentialExpiry, TrustRevision: a.TrustRevision, CredentialVersion: a.CredentialVersion}, nil
+	credential := connections.ManagedCredential{Kubeconfig: raw, ExpiresAt: a.CredentialExpiry, TrustRevision: a.TrustRevision, CredentialVersion: a.CredentialVersion, AttachmentRevision: a.Revision}
+	if record != nil {
+		credential.AccessRevision = record.Revision
+		credential.HPA = record.Input.Profile.HPA
+	}
+	return credential, nil
 }
 func (s *Service) refreshManagedCredential(ctx context.Context, o *ClusterOperation, r *ManagedResource, a *RuntimeAttachment) (credential []byte, renewalErr error) {
 	defer func() {
