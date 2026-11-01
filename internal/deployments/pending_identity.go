@@ -117,6 +117,9 @@ func removePendingOrBound(ctx context.Context, exec Executor, job *Job, bound *p
 }
 
 func (r *Runner) canResolvePendingAction(a planning.Action) bool {
+	if a.Resource != nil && a.Resource.ExistingResource != nil {
+		return false
+	}
 	if a.Op == planning.Replace {
 		return true
 	}

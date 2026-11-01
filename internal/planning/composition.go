@@ -62,6 +62,9 @@ func (p *planner) kinds() *recipes.Registry {
 // whether a resource is on goes through here.
 func resourceOn(kinds *recipes.Registry, r manifest.Resource, environment string, d manifest.Defaults) bool {
 	enabled := r.For(environment, d).Enabled
+	if r.ExistingResource != "" && len(r.Environments) > 0 {
+		return enabled != nil && *enabled
+	}
 	if kinds == nil {
 		kinds = recipes.Default()
 	}
@@ -455,6 +458,10 @@ func (p *planner) dependencies(name, base string, r manifest.Resource, kind reci
 		case !on:
 		case u.Resource != "":
 			choice = DependencyChoice{Mode: DependencyResource, Resource: u.Resource, Kind: m.Resources[u.Resource].Kind}
+			if connected := p.resources[u.Resource]; connected != nil && connected.Resource != nil && connected.Resource.ExistingResource != nil {
+				pin := *connected.Resource.ExistingResource
+				choice.Mode, choice.External, choice.ExistingResource = DependencyExternal, pin.EndpointID, &pin
+			}
 		case u.External != "":
 			// Endpoint checks decide whether it's usable.
 			choice = DependencyChoice{Mode: DependencyExternal, External: u.External}
@@ -469,10 +476,16 @@ func (p *planner) dependencies(name, base string, r manifest.Resource, kind reci
 			choice = was
 		} else {
 			p.checkConnected(name, path, dep, choice)
-			p.checkExternal(name, path, kind, dep, choice, r.Target, prov.Cloud)
+			p.checkExternal(name, path, kind, dep, choice, connection.ID, prov.Cloud)
 		}
 		choices[dep.Name] = choice
 		switch choice.Mode {
+		case DependencyExternal:
+			if choice.ExistingResource != nil {
+				if a := p.resources[choice.Resource]; a != nil {
+					uses = append(uses, a.ID)
+				}
+			}
 		case DependencyResource:
 			if a := p.resources[choice.Resource]; a != nil {
 				uses = append(uses, a.ID)
@@ -532,7 +545,7 @@ func firstKind(dep recipes.Dependency) string {
 // checkConnected reports a connected manifest resource the dependency
 // can't use: one of another kind, one that's off, or one on another target.
 func (p *planner) checkConnected(name, path string, dep recipes.Dependency, choice DependencyChoice) {
-	if choice.Mode != DependencyResource {
+	if choice.Mode != DependencyResource && (choice.Mode != DependencyExternal || choice.ExistingResource == nil) {
 		return
 	}
 	path += ".resource"
@@ -553,6 +566,9 @@ func (p *planner) checkConnected(name, path string, dep recipes.Dependency, choi
 		}
 		return // otherwise a problem says why it couldn't be planned
 	}
+	if connected.Resource != nil && connected.Resource.ExistingResource != nil {
+		return
+	}
 	if connected.Resource == nil || !p.sameTarget(name, connected) {
 		p.problem(Finding{
 			Code: "catalog-connect-across-targets", Subject: ResourceSubject, Name: name, Path: path,
@@ -568,7 +584,11 @@ func (p *planner) checkExternal(name, path string, kind recipes.Kind, dep recipe
 	if choice.Mode != DependencyExternal {
 		return
 	}
-	path += ".external"
+	if choice.ExistingResource != nil {
+		path += ".resource"
+	} else {
+		path += ".external"
+	}
 	finding := func(code, message string) Finding {
 		return Finding{Code: code, Subject: ResourceSubject, Name: name, Path: path, Message: message}
 	}
@@ -582,7 +602,7 @@ func (p *planner) checkExternal(name, path string, kind recipes.Kind, dep recipe
 	}
 	id := choice.External
 	check, ok := p.in.Endpoints[endpointKey(id, connection, *dep.External, catalogconnect.ConsumerOf(kind, dep.Name))]
-	if !ok {
+	if !ok && choice.ExistingResource == nil {
 		check, ok = p.in.Endpoints[id]
 	}
 	label := "endpoint " + id
@@ -809,6 +829,10 @@ func (p *planner) boundChoices(name string) map[string]DependencyChoice {
 func switched(was, now DependencyChoice) bool {
 	if was.Mode == DependencyOff || now.Mode == DependencyOff {
 		return false
+	}
+	if was.ExistingResource != nil || now.ExistingResource != nil {
+		a, b := was.ExistingResource, now.ExistingResource
+		return was.Mode != now.Mode || a == nil || b == nil || a.ResourceID != b.ResourceID || a.AccountIdentity != b.AccountIdentity || a.ExternalID != b.ExternalID || a.Incarnation != b.Incarnation || was.Kind != now.Kind
 	}
 	return was.Mode != now.Mode || was.Resource != now.Resource || was.External != now.External
 }

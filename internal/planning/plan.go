@@ -385,14 +385,16 @@ type EnvLink struct {
 
 // ResourceConfig is everything a resource is provisioned from.
 type ResourceConfig struct {
-	Target         string                 `json:"target,omitempty"`
-	TargetSettings map[string]string      `json:"target_settings,omitempty"`
-	Catalog        *recipes.Recipe        `json:"catalog,omitempty"`
-	Managed        *ManagedDatabaseConfig `json:"managed,omitempty"`
-	Provider       string                 `json:"provider"`
-	Region         string                 `json:"region,omitempty"`
-	Kind           string                 `json:"kind"`
-	Version        string                 `json:"version,omitempty"`
+	ExistingResource *ExistingResourceConfig `json:"existing_resource,omitempty"`
+	AccountIdentity  string                  `json:"account_identity,omitempty"`
+	Target           string                  `json:"target,omitempty"`
+	TargetSettings   map[string]string       `json:"target_settings,omitempty"`
+	Catalog          *recipes.Recipe         `json:"catalog,omitempty"`
+	Managed          *ManagedDatabaseConfig  `json:"managed,omitempty"`
+	Provider         string                  `json:"provider"`
+	Region           string                  `json:"region,omitempty"`
+	Kind             string                  `json:"kind"`
+	Version          string                  `json:"version,omitempty"`
 	// Composition is set on the action for a composed catalog resource
 	// itself, and Component on each of its components' actions.
 	Composition *CompositionConfig `json:"composition,omitempty"`
@@ -427,7 +429,8 @@ const (
 // DependencyChoice is where a composed catalog resource gets one
 // dependency.
 type DependencyChoice struct {
-	Mode string `json:"mode"`
+	ExistingResource *ExistingResourceConfig `json:"existing_resource,omitempty"`
+	Mode             string                  `json:"mode"`
 	// Resource is the action name: ComponentActionName(parent, dependency)
 	// for a new one, the manifest name for a connected resource.
 	Resource string `json:"resource,omitempty"`

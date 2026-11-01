@@ -43,7 +43,7 @@ type Checker struct {
 	Probers map[string]Prober
 }
 
-var engineTitles = map[string]string{EnginePostgres: "PostgreSQL", EngineRedis: "Redis"}
+var engineTitles = map[string]string{EnginePostgres: "PostgreSQL", EngineRedis: "Redis", EngineMySQL: "MySQL"}
 
 // EngineTitle names an engine the way checks word it: "PostgreSQL",
 // "Redis".
@@ -87,8 +87,8 @@ func (c *Checker) CheckDSN(ctx context.Context, dsn string, req recipes.Requirem
 	if dial == nil {
 		return nil, errors.New("check a DSN: no dialer")
 	}
-	if req.Engine != EnginePostgres && req.Engine != EngineRedis {
-		return nil, fmt.Errorf("%w: Loomplane checks postgres and redis endpoints, not %q", ErrInvalid, req.Engine)
+	if req.Engine != EnginePostgres && req.Engine != EngineRedis && req.Engine != EngineMySQL {
+		return nil, fmt.Errorf("%w: Loomplane checks postgres, mysql and redis endpoints, not %q", ErrInvalid, req.Engine)
 	}
 	dsn = strings.TrimSpace(dsn)
 	e := &Endpoint{Engine: req.Engine}

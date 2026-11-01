@@ -71,6 +71,8 @@ import (
 	"github.com/xraph/loomplane/internal/planning"
 	"github.com/xraph/loomplane/internal/plugins"
 	"github.com/xraph/loomplane/internal/projects"
+	"github.com/xraph/loomplane/internal/providerinventory"
+	"github.com/xraph/loomplane/internal/providerresources"
 	"github.com/xraph/loomplane/internal/providers"
 	"github.com/xraph/loomplane/internal/realtime"
 	"github.com/xraph/loomplane/internal/recipes"
@@ -104,6 +106,8 @@ type Extension struct {
 	restoreTargets      func(context.Context) error
 	cloudProfiles       *cloudprofiles.Service
 	endpoints           *catalogconnect.Service
+	providerResources   *providerresources.Service
+	resourceRefresh     *providerResourceRefresh
 	catalogAdmin        *catalogproxy.Service
 	fabriq              *fabriqloom.Service
 	endpointChecks      *catalogconnect.Checker
@@ -309,6 +313,14 @@ func (e *Extension) Register(fapp forge.App) error {
 	}
 	// An external endpoint's DSN is a resource credential too.
 	e.endpoints = catalogconnect.NewService(catalogconnect.NewPgStore(pg), resourceSecrets, authz)
+	inventoryClients := &providerinventory.Clients{DigitalOcean: appPlatform, Azure: azureClient(), AWS: awsClient(), Google: google, Render: render.New(e.cfg.Clouds.RenderEndpoint)}
+	e.providerResources = providerresources.NewService(providerresources.Deps{
+		Store: providerresources.NewPgStore(pg), Connections: clouds,
+		Reader:    inventoryClients,
+		Endpoints: e.endpoints, Authorizer: authz, Organizations: providerResourceOrganizations(pg), Usage: providerResourceUsage(pg, clouds),
+	})
+	e.resourceRefresh = newProviderResourceRefresh(e.providerResources, clouds, inventoryClients.Supports, func(err error) { log.Warn("refresh provider resource inventory", forge.F("error", err.Error())) })
+	clouds.Checked = e.resourceRefresh.checked
 	e.endpoints.Audit = endpointAuditor{chronicle: audit, appID: e.cfg.Identity.AppID, log: log}
 	e.endpoints.OrphanedDSN = func(_ context.Context, vaultKey string, err error) {
 		log.Warn("a deleted catalog endpoint's DSN is still in Vault; delete it by its key", forge.F("vault_key", vaultKey), forge.F("error", err.Error()))
@@ -322,6 +334,7 @@ func (e *Extension) Register(fapp forge.App) error {
 	// the target each resource runs on, and each release checks them again.
 	checker := &catalogconnect.Checker{Endpoints: e.endpoints, Probers: map[string]catalogconnect.Prober{
 		catalogconnect.EnginePostgres: catalogconnect.PostgresProber{}, catalogconnect.EngineRedis: catalogconnect.RedisProber{},
+		catalogconnect.EngineMySQL: catalogconnect.MySQLProber{},
 	}}
 	e.endpointChecks = checker
 	// catalogHooks are what composed catalog kinds do beyond their
@@ -349,6 +362,7 @@ func (e *Extension) Register(fapp forge.App) error {
 	clusterTarget := &deployments.OwnedTarget{Cloud: connections.Kubernetes, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, Controllers: kubernetes.NewControllerStore(pg).WithClusterCapacity(e.cfg.Clouds.ClusterCapacity.Enabled), Hooks: catalogHooks, Endpoints: e.endpoints, Checker: checker, DialGuard: dialGuard, FilesRevisionKey: filesKey}
 	firecrackerTarget := &deployments.OwnedTarget{Cloud: connections.Firecracker, Ctrl: ctrl, Credentials: clouds, Secrets: resourceSecrets, RouteGuard: routeService, FirecrackerAuthority: deployStore}
 	serverTarget.FirecrackerAuthority, clusterTarget.FirecrackerAuthority = deployStore, deployStore
+	serverTarget.ExistingResources, clusterTarget.ExistingResources = e.providerResources, e.providerResources
 	firecrackerTarget.Bindings = planStore.ListBindings
 	executors[connections.Firecracker] = firecrackerTarget
 	serverTarget.Bindings, clusterTarget.Bindings = planStore.ListBindings, planStore.ListBindings
@@ -432,11 +446,12 @@ func (e *Extension) Register(fapp forge.App) error {
 		CloudProfiles: e.cloudStore, CloudSyncWorkflow: e.deployments,
 		Providers: catalog, Connections: clouds, Authz: authz, Workflow: e.deployments, Audit: auditor,
 		Window: e.cfg.Planning.ApprovalWindow, Telemetry: metrics, DatabaseGatewayTrust: databaseGatewayTrust(c),
-		Warn:          func(msg string, err error) { log.Warn(msg, forge.F("error", err.Error())) },
-		Endpoints:     checker,
-		Dialer:        dialer,
-		Features:      e.features,
-		CatalogInputs: catalogInputs,
+		Warn:              func(msg string, err error) { log.Warn(msg, forge.F("error", err.Error())) },
+		Endpoints:         checker,
+		ExistingResources: e.providerResources,
+		Dialer:            dialer,
+		Features:          e.features,
+		CatalogInputs:     catalogInputs,
 	})
 
 	routeService.CapacityDemandAuthority = e.plans
@@ -484,6 +499,7 @@ func (e *Extension) Register(fapp forge.App) error {
 		Health: health, Manifests: e.manifests, Projects: prj, Routes: cloudinfra.NewPgStore(pg), Authz: authz, Audit: auditor,
 	})
 	runner := deployments.NewRunner(deployments.RunnerDeps{
+		ExistingResources: e.providerResources, ExistingEndpoints: checker, ExistingDialer: dialer,
 		Authz: authz, BackupPolicies: e.backups,
 		Logs: logStore, Routes: routeService, Capacity: e.plans,
 		CloudProfiles: e.cloudStore, CloudSyncAuth: e.plans,
@@ -534,7 +550,8 @@ func (e *Extension) Register(fapp forge.App) error {
 	e.deployments.BindFailedCleanups(e.failedCleanups)
 	// Drift is checked on Dispatch's cron leader, so one replica checks.
 	engine.Register(e.engineOf(), orchestration.DriftJob(&deployments.DriftChecker{
-		Store: planStore, Credentials: clouds, Executors: executors, Telemetry: metrics, Canaries: deployStore,
+		ExistingResources: e.providerResources,
+		Store:             planStore, Credentials: clouds, Executors: executors, Telemetry: metrics, Canaries: deployStore,
 		Warn: func(msg string, err error) { log.Warn(msg, forge.F("error", err.Error())) },
 	}))
 	engine.Register(e.engineOf(), orchestration.ConnectionRefreshJob(clouds))
@@ -543,6 +560,9 @@ func (e *Extension) Register(fapp forge.App) error {
 		return err
 	}
 	if err := e.cloudRoutes(fapp.Router(), guard); err != nil {
+		return err
+	}
+	if err := e.providerResourceRoutes(fapp.Router(), guard); err != nil {
 		return err
 	}
 	readings := usage.NewService(usage.Deps{
@@ -643,12 +663,20 @@ func (e *Extension) Start(ctx context.Context) error {
 	if err := e.startCloudRecovery(ctx, 30*time.Second); err != nil {
 		return err
 	}
+	if e.resourceRefresh != nil {
+		e.resourceRefresh.start(ctx)
+	}
 	e.MarkStarted()
 	return nil
 }
 
 // Stop closes the artifact storage.
 func (e *Extension) Stop(ctx context.Context) error {
+	if e.resourceRefresh != nil {
+		if err := e.resourceRefresh.stop(ctx); err != nil {
+			return err
+		}
+	}
 	if e.cloudRecoveryCancel != nil {
 		e.cloudRecoveryCancel()
 		select {

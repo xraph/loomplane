@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/xraph/loomplane/internal/planning"
+	"github.com/xraph/loomplane/internal/providerresources"
+	"github.com/xraph/loomplane/internal/security"
 	"github.com/xraph/loomplane/internal/telemetry"
 )
 
@@ -24,6 +26,9 @@ type DriftStore interface {
 // fixing drift is a plan, approved like any other, so there's one
 // authority that changes anything.
 type DriftChecker struct {
+	ExistingResources interface {
+		Get(context.Context, security.Principal, string) (*providerresources.ProviderResource, error)
+	}
 	Store       DriftStore
 	Credentials Credentials
 	Executors   map[string]Executor
@@ -100,6 +105,23 @@ func (c *DriftChecker) Check(ctx context.Context) (DriftReport, error) {
 // no adapter, no connection on record, a connection that isn't ready, or
 // a cloud that didn't answer. Those change nothing.
 func (c *DriftChecker) check(ctx context.Context, b *planning.Binding, warn func(string, error)) (drift, msg string, ok bool) {
+	if planning.ExistingResourceBinding(b) {
+		pin, err := decodeExistingBinding(b)
+		if err != nil || c.ExistingResources == nil {
+			return "", "", false
+		}
+		record, err := c.ExistingResources.Get(ctx, security.SystemPrincipal(b.OrgID), pin.ResourceID)
+		if err != nil || record == nil || record.ObservationState == "stale" {
+			return "", "", false
+		}
+		if record.Status == "missing" {
+			return planning.DriftMissing, "The external resource is missing from its complete provider inventory.", true
+		}
+		if record.Incarnation != pin.Incarnation || record.ExternalID != pin.ExternalID || record.AccountIdentity != pin.AccountIdentity || record.EndpointID != pin.EndpointID || record.EndpointRevision != pin.EndpointRevision || record.Revision != pin.Revision {
+			return planning.DriftChanged, "The external resource identity or connection changed. Review its attachment again.", true
+		}
+		return "", "", true
+	}
 	exec := c.Executors[b.Provider]
 	if exec == nil || b.ConnectionID == "" {
 		return "", "", false

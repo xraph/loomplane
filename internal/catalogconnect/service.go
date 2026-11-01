@@ -82,8 +82,8 @@ func (s *Service) create(ctx context.Context, p security.Principal, in CreateInp
 	if name == "" || utf8.RuneCountInString(name) > maxName {
 		return nil, fmt.Errorf("%w: an endpoint needs a name of at most %d characters", ErrInvalid, maxName)
 	}
-	if in.Engine != EnginePostgres && in.Engine != EngineRedis {
-		return nil, fmt.Errorf("%w: Loomplane connects postgres and redis endpoints, not %q", ErrInvalid, in.Engine)
+	if in.Engine != EnginePostgres && in.Engine != EngineRedis && in.Engine != EngineMySQL {
+		return nil, fmt.Errorf("%w: Loomplane connects postgres, mysql and redis endpoints, not %q", ErrInvalid, in.Engine)
 	}
 	e := &Endpoint{OrgID: p.OrgID, Name: name, Engine: in.Engine, CreatedBy: p.UserID, CreatedAt: s.now().UTC(), Revision: 1}
 	if err := parseDSN(e, in.DSN); err != nil {

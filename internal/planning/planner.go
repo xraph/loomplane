@@ -23,8 +23,10 @@ const DefaultPort = 8080
 
 // Input is everything a plan is made from.
 type Input struct {
-	ProjectID string
-	Routes    []cloudinfra.Route
+	ExistingResources      map[string]ExistingResourceCheck
+	ExistingResourceChecks map[string]EndpointCheck
+	ProjectID              string
+	Routes                 []cloudinfra.Route
 	// Zones are the verified DNS zones granted to the project. The
 	// database gateway names its hosts in one of them.
 	Zones []cloudinfra.ProjectZone
@@ -504,6 +506,14 @@ func (p *planner) planResources() {
 		base := "resources." + name
 		set := r.For(p.in.Environment, m.Defaults)
 		if !p.resourceOn(name) || p.noLinkKind(name, base, r) {
+			continue
+		}
+		if r.ExistingResource != "" {
+			p.planExistingResource(name, base, r)
+			continue
+		}
+		if ExistingResourceBinding(p.bindings[actionID(ResourceSubject, name)]) {
+			p.problem(Finding{Code: "resource-ownership-change", Subject: ResourceSubject, Name: name, Path: base, Message: "Create a separate managed resource. An external attachment cannot take lifecycle ownership in place."})
 			continue
 		}
 		if r.CloudSQLPSC != nil && (r.Kind != "postgres" || set.Provider != "cloud-sql" || r.Version != "17" || !r.CloudSQLPSC.Valid(set.Region)) {
@@ -1747,7 +1757,7 @@ func (p *planner) link(name string, a *Action) {
 			if dep == nil {
 				switch {
 				case p.resourceOn(need):
-				case p.kinds().EnvironmentOptIn(r.Kind):
+				case r.ExistingResource != "" || p.kinds().EnvironmentOptIn(r.Kind):
 					// It runs only where it's enabled, so a service that
 					// needs it elsewhere runs without it, and the other
 					// environments keep deploying.
@@ -1784,6 +1794,10 @@ func (p *planner) link(name string, a *Action) {
 					p.problem(Finding{Code: "database-across-targets", Subject: ServiceSubject, Name: name, Path: base, Message: message})
 					continue
 				}
+			}
+			if dep.Resource != nil && dep.Resource.ExistingResource != nil {
+				p.linkExistingResource(name, a, need, key, base, dep)
+				continue
 			}
 			if r.GatewayIn(p.in.Environment) {
 				// The service reaches it through the database gateway's
@@ -2403,17 +2417,29 @@ func (p *planner) planDeletes() {
 			if of.last {
 				step = last + 3
 			}
-			if !of.stateless {
+			if !of.stateless && !ExistingResourceBinding(b) {
 				p.warn(Finding{
 					Code: "data-loss", Subject: ResourceSubject, Name: b.Name, Path: "resources",
 					Message: fmt.Sprintf("Deleting %s deletes its data.", b.Name),
 				})
 			}
 		}
-		connectionID := p.deleteThrough(b)
+		connectionID := b.ConnectionID
+		if !ExistingResourceBinding(b) {
+			connectionID = p.deleteThrough(b)
+		}
+		var resource *ResourceConfig
+		if ExistingResourceBinding(b) {
+			resource = &ResourceConfig{}
+			if err := json.Unmarshal(b.Config, resource); err != nil {
+				p.problem(Finding{Code: "existing-resource-invalid", Subject: b.Subject, Name: b.Name, Path: "resources", Message: "The saved external attachment cannot be read. Its cloud resource remains unchanged."})
+				continue
+			}
+			reason += " Disconnect the attachment; the resource remains in its provider account."
+		}
 		p.actions = append(p.actions, &Action{
 			ID: id, Op: Delete, Subject: b.Subject, Name: b.Name, Provider: b.Provider, Region: b.Region, ConnectionID: connectionID,
-			Engine: b.Engine, Creates: p.creates(b), Reason: reason, Step: step,
+			Engine: b.Engine, Creates: p.creates(b), Reason: reason, Step: step, Resource: resource,
 		})
 	}
 }

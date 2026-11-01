@@ -218,8 +218,11 @@ type Sources interface {
 // Runner carries out approved plans, one activity at a time. Its methods
 // are the deployment workflow's activities after approval.
 type Runner struct {
-	capacity CapacityResolver
-	routes   ReleaseRoutes
+	existingResources planning.ExistingResourceResolver
+	existingEndpoints planning.EndpointChecker
+	existingDialer    planning.TargetDialer
+	capacity          CapacityResolver
+	routes            ReleaseRoutes
 
 	cloudSyncAuth  CloudSyncAuthorizer
 	cloudProfiles  cloudprofiles.Resolver
@@ -252,6 +255,9 @@ type Runner struct {
 
 // RunnerDeps are what a Runner needs.
 type RunnerDeps struct {
+	ExistingResources planning.ExistingResourceResolver
+	ExistingEndpoints planning.EndpointChecker
+	ExistingDialer    planning.TargetDialer
 	// Authz and BackupPolicies recheck and install reviewed backup defaults.
 	Authz          Authorizer
 	BackupPolicies BackupPolicyInstaller
@@ -334,6 +340,7 @@ type ReleaseObserver interface {
 // NewRunner returns a Runner.
 func NewRunner(d RunnerDeps) *Runner {
 	return &Runner{
+		existingResources: d.ExistingResources, existingEndpoints: d.ExistingEndpoints, existingDialer: d.ExistingDialer,
 		authz: d.Authz, backupPolicies: d.BackupPolicies,
 		capacity: d.Capacity, cloudSyncAuth: d.CloudSyncAuth, routes: d.Routes,
 		cloudProfiles: d.CloudProfiles, store: d.Store, plans: d.Plans, credentials: d.Credentials, variables: d.Variables,
@@ -873,6 +880,14 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 	if a.Subject != planning.ServiceSubject && a.Subject != planning.ResourceSubject {
 		return fmt.Errorf("%w: action subject %s is unavailable", ErrNoExecutor, a.Subject)
 	}
+	around, err := r.environmentBindings(ctx, d, a.ID)
+	if err != nil {
+		return err
+	}
+	current, resources := around.current, around.resources
+	if (a.Resource != nil && a.Resource.ExistingResource != nil) || planning.ExistingResourceBinding(current) {
+		return r.runExistingResource(ctx, d, plan, a, current, step, progress)
+	}
 	if a.Op == planning.Keep && a.AdoptCloudPlacement {
 		return r.adoptCloudPlacement(ctx, d, plan, a, step, heartbeat)
 	}
@@ -884,11 +899,6 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 	if err != nil {
 		return err
 	}
-	around, err := r.environmentBindings(ctx, d, a.ID)
-	if err != nil {
-		return err
-	}
-	current, resources := around.current, around.resources
 	deleting := a.Op == planning.Delete
 	if deleting && current == nil {
 		return nil
@@ -924,6 +934,9 @@ func (r *Runner) run(ctx context.Context, d *Deployment, plan *planning.Plan, a 
 		}
 		if a.Service != nil && !reflect.DeepEqual(a.Service.TargetSettings, planning.ReviewedConnectionSettings(conn.Cloud, conn.Details)) {
 			return fmt.Errorf("the target settings for %s changed since this plan was reviewed; plan again", a.Name)
+		}
+		if a.Resource != nil && a.Resource.AccountIdentity != "" && a.Resource.AccountIdentity != connections.AccountIdentity(conn.Cloud, conn.Account, conn.Details) {
+			return fmt.Errorf("the reviewed account for %s changed; check the connection and plan again", a.Name)
 		}
 	}
 	if validationErr := r.validateCloudPlacement(ctx, plan, a, conn); validationErr != nil {
@@ -1234,6 +1247,9 @@ func (r *Runner) deployInputs(ctx context.Context, job *Job, around *environment
 	if a.Service == nil {
 		return nil
 	}
+	if err := r.verifyExistingServiceAccess(ctx, job, around.resources); err != nil {
+		return err
+	}
 	if !a.Service.Generated() {
 		job.Source = func(ctx context.Context) (io.ReadCloser, int64, error) {
 			return r.appliedSource(ctx, d, a)
@@ -1249,7 +1265,7 @@ func (r *Runner) deployInputs(ctx context.Context, job *Job, around *environment
 		return err
 	}
 	for _, link := range a.Service.Env {
-		if b := around.resources[link.From]; link.Subject == planning.ResourceSubject && b != nil {
+		if b := around.resources[link.From]; link.Subject == planning.ResourceSubject && b != nil && !planning.ExistingResourceBinding(b) {
 			job.Attach = append(job.Attach, b)
 		}
 	}
@@ -1473,6 +1489,9 @@ func (r *Runner) removeReplaced(ctx context.Context, job *Job, bound, own *plann
 // done reports whether to stop recording it: it's gone, or nothing here
 // could ever reach it.
 func (r *Runner) removeOne(ctx context.Context, job *Job, old *planning.Binding, rc *replaceCheckpoint, heartbeat func([]byte) error) (done bool, err error) {
+	if planning.ExistingResourceBinding(old) {
+		return true, nil
+	}
 	a := job.Action
 	exec, ok := r.executors[old.Provider]
 	// Deleting the action deletes the binding that tracks the old one, so

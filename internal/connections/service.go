@@ -50,6 +50,9 @@ type Service struct {
 	warn               func(msg string, err error)
 	// Telemetry counts credential checks. It may be nil.
 	Telemetry *telemetry.Recorder
+	// Checked receives a detached public snapshot after a ready account is saved.
+	// It runs synchronously, so callers should enqueue bounded background work.
+	Checked func(context.Context, security.Principal, Connection)
 
 	// Signing in to a cloud. The extension sets these.
 	Providers   map[string]Provider
@@ -611,4 +614,20 @@ func (s *Service) record(ctx context.Context, action string, p security.Principa
 	if s.audit != nil {
 		s.audit.Record(ctx, action, p, c)
 	}
+	if s.Checked == nil || c == nil || c.Status != StatusReady {
+		return
+	}
+	switch action {
+	case "cloud_connection.create", "cloud_connection.check", "cloud_connection.replace":
+	default:
+		return
+	}
+	snapshot := *c
+	snapshot.Details = maps.Clone(c.Details)
+	snapshot.Missing = slices.Clone(c.Missing)
+	if c.CheckedAt != nil {
+		checkedAt := *c.CheckedAt
+		snapshot.CheckedAt = &checkedAt
+	}
+	s.Checked(ctx, p, snapshot)
 }

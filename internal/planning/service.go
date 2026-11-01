@@ -136,6 +136,7 @@ type Service struct {
 	dbTrust           func() ([]plane.TrustKey, error)
 	kinds             *recipes.Registry
 	endpoints         EndpointChecker
+	existingResources ExistingResourceResolver
 	dialer            TargetDialer
 	features          map[string]bool
 	inputs            CatalogInputMap
@@ -183,8 +184,9 @@ type Deps struct {
 	Kinds *recipes.Registry
 	// Endpoints checks the external endpoints composed resources connect,
 	// through Dialer. Without either, no external endpoint can be used.
-	Endpoints EndpointChecker
-	Dialer    TargetDialer
+	Endpoints         EndpointChecker
+	ExistingResources ExistingResourceResolver
+	Dialer            TargetDialer
 	// Features are the server features that are on, by name, such as
 	// {"ai": true}. Nil has every feature off. A plan refuses a kind of a
 	// feature that's off.
@@ -211,7 +213,7 @@ func NewService(d Deps) *Service {
 		cloudProfiles: d.CloudProfiles, store: d.Store, projects: d.Projects, analyses: d.Analyses, commits: d.Commits, history: d.History, manifests: d.Manifests,
 		providers: d.Providers, clouds: d.Connections, authz: d.Authz, workflow: d.Workflow, audit: d.Audit,
 		window: d.Window, now: time.Now, sleep: waitFor, warn: warn, telemetry: d.Telemetry, dbTrust: d.DatabaseGatewayTrust,
-		kinds: d.Kinds, endpoints: d.Endpoints, dialer: d.Dialer,
+		kinds: d.Kinds, endpoints: d.Endpoints, existingResources: d.ExistingResources, dialer: d.Dialer,
 		features: d.Features, inputs: d.CatalogInputs,
 	}
 }
@@ -817,13 +819,20 @@ func (s *Service) compute(ctx context.Context, plan *Plan) (*Result, string, err
 		placed := map[string]CloudPlacement{}
 		maps.Copy(placed, placements)
 		maps.Copy(placed, composedPlacements(resolved, plan.Environment, composed, assignment, options))
+		existing, existingChecks := s.checkExistingResources(ctx, plan, resolved, options, chosen, placed, g, bindings)
+		endpointChecks := s.checkEndpoints(ctx, plan.OrgID, plan.Environment, resolved)
+		if endpointChecks == nil {
+			endpointChecks = map[string]EndpointCheck{}
+		}
+		maps.Copy(endpointChecks, existingChecks)
 		result = Compute(Input{
-			ProjectID: plan.ProjectID,
-			Catalog:   plan.Catalog, Routes: routes, Zones: zones, DatabaseGatewayTrust: trust,
+			ProjectID:         plan.ProjectID,
+			ExistingResources: existing, ExistingResourceChecks: existingChecks,
+			Catalog: plan.Catalog, Routes: routes, Zones: zones, DatabaseGatewayTrust: trust,
 			Federation: federation, CloudPlacements: placed, UnverifiedPlacements: unverifiedPlacements(resolved, plan.Environment, composed, assignment, options), CapacityIntents: intents,
 			Environment: plan.Environment, Graph: g, Manifest: resolved, Providers: s.providers, Bindings: bindings,
 			Connections: options, Chosen: chosen, Held: held, Excluded: excluded,
-			Kinds: s.kinds, Endpoints: s.checkEndpoints(ctx, plan.OrgID, plan.Environment, resolved),
+			Kinds: s.kinds, Endpoints: endpointChecks,
 			FabriqPostgres: fabriqPostgres, Features: s.features, Inputs: inputs,
 		})
 	}

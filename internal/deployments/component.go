@@ -816,7 +816,13 @@ func (r *compositionReads) recheck(ctx context.Context, dependency string) error
 	if choice.Mode != planning.DependencyExternal || r.external[dependency] != "" {
 		return nil
 	}
-	dsn, err := r.e.recheckEndpoint(ctx, r.job, r.kind, dependency, choice.External)
+	var dsn string
+	var err error
+	if choice.ExistingResource != nil {
+		dsn, err = r.e.recheckInventoryEndpoint(ctx, r.job, r.kind, dependency, choice)
+	} else {
+		dsn, err = r.e.recheckEndpoint(ctx, r.job, r.kind, dependency, choice.External)
+	}
 	if err != nil {
 		return err
 	}
@@ -1086,6 +1092,61 @@ func (e *OwnedTarget) recheckEndpoint(ctx context.Context, job *Job, kind recipe
 	}
 	if err != nil {
 		return "", fmt.Errorf("endpoint %s couldn't be checked: %s", endpoint.Name, withoutDSN(err.Error(), dsn))
+	}
+	if problem := endpointProblem(endpoint, report); problem != "" {
+		return "", errors.New(withoutDSN(problem, dsn))
+	}
+	return dsn, nil
+}
+
+// recheckInventoryEndpoint probes the exact access material returned by the
+// current project grant, keeping provider identity and access revisions pinned.
+func (e *OwnedTarget) recheckInventoryEndpoint(ctx context.Context, job *Job, kind recipes.Kind, dependency string, choice planning.DependencyChoice) (string, error) {
+	pin := choice.ExistingResource
+	i := slices.IndexFunc(kind.Dependencies, func(d recipes.Dependency) bool { return d.Name == dependency })
+	checker, checkable := e.Checker.(interface {
+		CheckDSN(context.Context, string, recipes.Requirement, catalogconnect.DialFunc) (*catalogconnect.Report, error)
+	})
+	if pin == nil || choice.Resource == "" || choice.External != pin.EndpointID || pin.ResourceID == "" || pin.Revision < 1 || pin.EndpointRevision < 1 || pin.AccountIdentity == "" || pin.ExternalID == "" || pin.Incarnation == "" || i < 0 || kind.Dependencies[i].External == nil || !checkable || e.ExistingResources == nil || job.Deployment == nil || job.Plan == nil || job.Connection == nil {
+		return "", errors.New("the inventory dependency's approved access verifier is unavailable; review the deployment again")
+	}
+	actor := job.Plan.DecidedBy
+	if actor == "" {
+		actor = job.Plan.CreatedBy
+	}
+	if actor == "" {
+		return "", errors.New("the inventory dependency has no approving principal")
+	}
+	org := job.Deployment.OrgID
+	principal := security.ActorPrincipal(org, actor)
+	record, endpoint, dsn, err := e.ExistingResources.ResolveProject(ctx, principal, job.Deployment.ProjectID, job.Deployment.EnvironmentID, pin.ResourceID, pin.Revision)
+	if err != nil || record == nil || endpoint == nil || dsn == "" || record.ID != pin.ResourceID || record.OrgID != org || record.Revision != pin.Revision || record.AccountIdentity != pin.AccountIdentity || record.ExternalID != pin.ExternalID || record.Incarnation != pin.Incarnation || record.EndpointID != pin.EndpointID || record.EndpointRevision != pin.EndpointRevision || endpoint.ID != pin.EndpointID || endpoint.OrgID != org || endpoint.Revision != pin.EndpointRevision {
+		return "", errors.New("the inventory dependency's project grant or access changed; review the deployment again")
+	}
+	requirement := *kind.Dependencies[i].External
+	engine := record.Kind
+	if engine == "valkey" {
+		engine = "redis"
+	}
+	if engine != endpoint.Engine || endpoint.Engine != requirement.Engine || (endpoint.TLS != catalogconnect.TLSRequire && endpoint.TLS != catalogconnect.TLSVerifyFull) {
+		return "", errors.New("the inventory dependency does not satisfy its engine and TLS requirements")
+	}
+	dialFrom := e.endpointDial
+	if dialFrom == nil {
+		dialFrom = e.TargetDial
+	}
+	dial, closer, err := dialFrom(ctx, org, job.Connection.ID)
+	if err != nil {
+		return "", errors.New("the deployment target could not verify the inventory dependency")
+	}
+	report, err := checker.CheckDSN(catalogconnect.WithConsumer(ctx, catalogconnect.ConsumerOf(kind, dependency)), dsn, requirement, dial)
+	if closer != nil {
+		if closeErr := closer.Close(); err == nil && closeErr != nil {
+			err = closeErr
+		}
+	}
+	if err != nil {
+		return "", errors.New("the inventory dependency's endpoint check failed")
 	}
 	if problem := endpointProblem(endpoint, report); problem != "" {
 		return "", errors.New(withoutDSN(problem, dsn))

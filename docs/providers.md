@@ -1,5 +1,17 @@
 # Writing a provider
 
+## Provider resources
+
+Open Resources to sync databases, caches and buckets from connected accounts, including resources you created outside Loomplane. You can filter the inventory by account and kind, inspect the last observation and see its deployment consumers. A successful account check queues discovery; tracked accounts refresh every 15 minutes. Failed or partial syncs retain previous observations and show their status.
+
+Create resource uses the installed provider catalog and opens the normal deployment review. DigitalOcean, Azure and Render reuse their existing adapter defaults for capacity, access and retention. RDS and Cloud SQL keep their reviewed managed profiles. These settings are not new provider sizing controls.
+
+To use an external database or cache, save matching application credentials in Resources, select the project and environment, and review its manifest reference. Credentials stay in Vault. The reference stays off in other environments until you enable it there. Subsequent deployments use the saved project and environment grant; inventory access alone grants no credential access.
+
+External attachments have no cloud lifecycle authority. Disconnecting one removes its local binding and deployment access material while the provider resource remains. Unknown physical identity, missing credentials or an unavailable network verifier blocks attachment. Bucket discovery does not supply a database-style DSN or claim workload access.
+
+External connection checks use the installed target verifiers. SSH checks dial through the selected server. The existing Kubernetes verifier dials from Loomplane and does not prove a namespace's egress policy. Other native application platforms need an installed network verifier before these external references can be attached; their existing native resource creation paths remain available.
+
 A provider is a deployment target: somewhere Loomplane can run a service or provision a resource. Loomplane ships with Cloud Run, Vercel, ECS on Fargate, Render, DigitalOcean App Platform, Azure Container Apps, SSH/Docker servers and Kubernetes for services, and Cloud SQL, RDS, Memorystore, ElastiCache, Cloud Storage, S3, DigitalOcean Managed Databases, Azure Database for PostgreSQL and MySQL, and Azure Managed Redis for resources. The [DigitalOcean guide](digitalocean.md) covers how App Platform deploys an approved commit when it can only build a branch, and the [Azure guide](azure.md) covers the service principal Container Apps deploys with and the databases it makes. You can add your own without changing Loomplane: write a provider plugin, run it, and point Loomplane at it.
 
 ## Your servers and clusters

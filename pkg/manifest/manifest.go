@@ -277,6 +277,8 @@ const MaxGPUs = 8
 
 // Resource is a backing service the application needs, such as Postgres.
 type Resource struct {
+	// ExistingResource attaches inventory without owning its cloud lifecycle.
+	ExistingResource string `json:"existing_resource,omitempty" yaml:"existing_resource,omitempty"`
 	// CloudSQLPSC opts a PostgreSQL 17 source into a reviewed manual PSC endpoint.
 	CloudSQLPSC *providercontract.CloudSQLSourceEndpoint `json:"cloud_sql_psc,omitempty" yaml:"cloud_sql_psc,omitempty"`
 	// Kind is what it is: postgres, mysql, redis and so on, the names
@@ -419,14 +421,15 @@ func (h Held) WarnSameAddress() bool { return h.SameAddress == SameAddressWarn }
 var serviceKinds = []string{"http-service", "web-app", "static-site", "worker"}
 
 var (
-	cloudTargetRE = regexp.MustCompile(`^[a-z][a-z0-9]*(-[a-z0-9]+)*$`)
-	nameRE        = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
-	farpPathRE    = regexp.MustCompile(`^/[A-Za-z0-9/._~%+:@!$&'()*,;=-]*$`)
-	farpCapRE     = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
-	envRE         = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
-	tokenRE       = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
-	gpuKindRE     = regexp.MustCompile(`^[a-z0-9-]+$`)
-	kindRE        = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
+	inventoryResourceRE = regexp.MustCompile(`^providerresource_[a-f0-9]{64}$`)
+	cloudTargetRE       = regexp.MustCompile(`^[a-z][a-z0-9]*(-[a-z0-9]+)*$`)
+	nameRE              = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
+	farpPathRE          = regexp.MustCompile(`^/[A-Za-z0-9/._~%+:@!$&'()*,;=-]*$`)
+	farpCapRE           = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
+	envRE               = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
+	tokenRE             = regexp.MustCompile(`^[a-z0-9][a-z0-9-]{0,62}$`)
+	gpuKindRE           = regexp.MustCompile(`^[a-z0-9-]+$`)
+	kindRE              = regexp.MustCompile(`^[a-z][a-z0-9-]{0,39}$`)
 	// versionRE allows what engines call versions: 17, 8.4, 7.2.4-alpine.
 	versionRE = regexp.MustCompile(`^[0-9A-Za-z][0-9A-Za-z._-]{0,31}$`)
 	routeRE   = regexp.MustCompile(`^/(?:[A-Za-z0-9._~-]+(?:/[A-Za-z0-9._~-]+)*/?)?$`)
@@ -605,6 +608,19 @@ func (m *Manifest) Validate() error {
 			add(path+".kind", "%q isn't a resource kind", r.Kind)
 		}
 		checkToken(add, path+".provider", "provider", r.Provider)
+		if r.ExistingResource != "" {
+			if !inventoryResourceRE.MatchString(r.ExistingResource) {
+				add(path+".existing_resource", "must name a synced provider resource")
+			}
+			if r.Provider != "" || r.Target != "" || r.Region != "" || r.Version != "" || r.Gateway != nil || r.CloudSQLPSC != nil || r.GPU != nil || len(r.Uses) > 0 || len(r.Settings) > 0 {
+				add(path, "an existing resource accepts kind and existing_resource, without creation or lifecycle settings")
+			}
+			for env, o := range r.Environments {
+				if o.Provider != "" || o.Target != "" || o.Region != "" || o.Gateway != nil || o.GPU != nil || len(o.Settings) > 0 {
+					add(path+".environments."+env, "an existing resource only accepts an enabled override")
+				}
+			}
+		}
 		checkToken(add, path+".region", "region", r.Region)
 		if r.CloudSQLPSC != nil && (r.Provider != "cloud-sql" || r.Kind != "postgres" || r.Version != "17" || !r.CloudSQLPSC.Valid(r.Region)) {
 			add(path+".cloud_sql_psc", "requires explicit cloud-sql PostgreSQL 17 placement and a manual PSC endpoint in the resource region")

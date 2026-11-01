@@ -638,6 +638,11 @@
             }
           }
         },
+        "existing_resource": {
+          "description": "Synced provider resource to attach without taking lifecycle ownership.",
+          "type": "string",
+          "pattern": "^providerresource_[a-f0-9]{64}$"
+        },
         "kind": {
           "$ref": "#/$defs/kind"
         },
@@ -646,7 +651,7 @@
         },
         "target": {
           "type": "string",
-          "description": "Checked server connection for a catalog resource."
+          "description": "Checked provider account or runtime connection for this resource."
         },
         "region": {
           "$ref": "#/$defs/region"

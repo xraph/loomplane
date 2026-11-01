@@ -47,6 +47,7 @@ const labelImage = owned.LabelImage
 // OwnedTarget keeps the existing Ctrl Plane lifecycle and stores runtime
 // credentials in Vault. Its adapters read the selected connection on each call.
 type OwnedTarget struct {
+	ExistingResources    planning.ExistingProjectResourceResolver
 	RouteGuard           RuntimeRemovalGuard
 	FirecrackerAuthority fc.Issuer
 
