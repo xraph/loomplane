@@ -172,3 +172,34 @@ func TestClusterScalingServiceRejectsWrongPoolReceipt(t *testing.T) {
 		t.Fatalf("wrong pool receipt released ownership: %s", store.op.Status)
 	}
 }
+
+func TestClusterScalingGrowthOwnership(t *testing.T) {
+	prior := ClusterScalingPolicy{ID: "policy", PoolID: "p", Mode: "manual", Revoked: true, CooldownSeconds: 600}
+	r := &ManagedResource{ScalingPolicies: map[string]ClusterScalingPolicy{"p": prior}}
+	op := &ClusterOperation{Kind: "node-pool-update", Input: ClusterInput{Maintenance: &ClusterMaintenanceInput{PoolID: "p"}}, CapacityTarget: ResourceVector{Servers: 1}}
+	check := func(want int64) {
+		t.Helper()
+		sec, err := poolGrowthCooldown(op, r)
+		if err != nil || sec != want {
+			t.Fatalf("got cooldown %d, want %d: %v", sec, want, err)
+		}
+	}
+	check(600)
+	op.CapacityTarget.Servers = 0
+	check(0)
+	op.Kind = "node-pool-scaling"
+	next := prior
+	next.Mode = "native"
+	next.MinNodes, next.MaxNodes = 1, 3
+	next.CooldownSeconds = 120
+	op.Input.Scaling = &next
+	check(120)
+	prior = next
+	prior.Revoked = false
+	r.ScalingPolicies["p"] = prior
+	check(0)
+	next.MinNodes = 2
+	check(120)
+	next.Mode = "manual"
+	check(0)
+}

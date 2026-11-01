@@ -2,6 +2,8 @@ package cloudinfra
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"maps"
 	"slices"
 	"time"
@@ -46,6 +48,12 @@ func (s *Service) reconcileClusterMaintenance(ctx context.Context, o *ClusterOpe
 			return ErrInvalid
 		}
 		if checkErr := store.AttemptClusterCreate(ctx, o); checkErr != nil {
+			var cooling *clusterGrowthCooldownError
+			if errors.As(checkErr, &cooling) {
+				o.Status = "waiting_provider"
+				o.NextAttemptAt = cooling.until
+				return s.saveCluster(ctx, o)
+			}
 			return checkErr
 		}
 		access.BeforeEffect = func(effectCtx context.Context) error {
@@ -146,7 +154,11 @@ func (s *Service) reconcileClusterMaintenance(ctx context.Context, o *ClusterOpe
 	if !ok {
 		return ErrInvalid
 	}
-	return store.CheckpointClusterResource(ctx, o, r, old)
+	if err := store.CheckpointClusterResource(ctx, o, r, old); err != nil {
+		return err
+	}
+	s.wakeCapacityCloud(ctx, o.OrgID, o.CloudID, fmt.Sprintf("cluster-maintenance:%s:%d", o.ID, o.Revision))
+	return nil
 }
 func executeClusterMaintenance(ctx context.Context, reader provider.ClusterReader, access provider.AccountAccess, in ClusterInput) (provider.ClusterMutation, error) {
 	m := in.Maintenance

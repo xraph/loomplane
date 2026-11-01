@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/xraph/grove/driver"
@@ -126,6 +127,7 @@ func (s *Service) ObserveClusterCapacity(ctx context.Context, p security.Princip
 	if checkErr := st.SaveClusterCapacity(ctx, r, snapshot); checkErr != nil {
 		return nil, checkErr
 	}
+	s.wakeCapacityCloud(ctx, p.OrgID, cloud, fmt.Sprintf("cluster-capacity:%s:%d", r.ID, revision))
 	return &snapshot, nil
 }
 

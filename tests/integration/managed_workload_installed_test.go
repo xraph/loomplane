@@ -153,6 +153,13 @@ func installedApplication(ctx context.Context, t *testing.T, e *enrollmentServic
 		}
 	}
 	ns := e.attachment().Namespace
+	var releasePressure func()
+	if mode == "guaranteed" {
+		if cfg.ClusterDemand.Input.Native == nil || cfg.ClusterDemand.Input.Native.MaximumNodes <= 1 {
+			t.Fatal("missing reviewed future node supply")
+		}
+		releasePressure = reserveKindCPU(ctx, t, e.bootstrap.Kube, ns, cfg.BuildTarget.Image)
+	}
 	quotas := e.bootstrap.Kube.CoreV1().ResourceQuotas(ns)
 	quota, err := quotas.Create(ctx, &corev1.ResourceQuota{ObjectMeta: metav1.ObjectMeta{Name: "fixture-readiness"}, Spec: corev1.ResourceQuotaSpec{Hard: corev1.ResourceList{corev1.ResourcePods: apiresource.MustParse("0")}}}, metav1.CreateOptions{})
 	if err != nil {
@@ -221,6 +228,10 @@ func installedApplication(ctx context.Context, t *testing.T, e *enrollmentServic
 	quota.Spec.Hard[corev1.ResourcePods] = apiresource.MustParse("10")
 	if _, err = quotas.Update(ctx, quota, metav1.UpdateOptions{}); err != nil {
 		t.Fatal(err)
+	}
+	if releasePressure != nil {
+		requireSchedulerShortage(call, t, e.bootstrap.Kube, pending, receipt.ReleaseID)
+		releasePressure()
 	}
 	select {
 	case err = <-done:

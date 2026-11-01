@@ -194,6 +194,9 @@ func (s *PgStore) AttemptClusterCreate(ctx context.Context, o *ClusterOperation)
 			return checkErr
 		}
 	}
+	if checkErr := recordClusterGrowthTx(ctx, tx, o); checkErr != nil {
+		return checkErr
+	}
 	now := time.Now().UTC()
 	o.Steps[0].State = "attempted"
 	o.Steps[0].AttemptedAt = &now
